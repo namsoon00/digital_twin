@@ -11,6 +11,7 @@ from digital_twin.domain.accounts import AccountConfig
 from digital_twin.domain.events import INVESTMENT_CALENDAR_EVENT_SAVED, ONTOLOGY_REASONING_REQUESTED
 from digital_twin.domain.investment_calendar import InvestmentCalendarEvent, utc_iso
 from digital_twin.domain.message_types import INVESTMENT_CALENDAR_REMINDER
+from digital_twin.domain.notification_ai_gate_validation import build_notification_ai_gate_prompt
 
 
 class MemoryCalendarStore:
@@ -138,10 +139,17 @@ class InvestmentCalendarServiceTests(unittest.TestCase):
         self.assertEqual(60, job.context["reminderOffsetMinutes"])
         self.assertIn("투자 영향", job.text)
         self.assertIn("확인할 것", job.text)
+        self.assertIn("계정 성향", job.text)
+        self.assertIn("균형형", job.text)
         self.assertIn("centralBank", job.context["eventType"])
         self.assertIn("investmentImpact", job.context)
         self.assertIn("watchItems", job.context)
+        self.assertEqual("balanced", job.context["investmentStrategyProfile"])
+        self.assertEqual("균형형", job.context["investmentStrategyProfileLabel"])
+        self.assertIn("investmentStrategyGuidance", job.context)
         self.assertTrue(job.context["watchItems"])
+        prompt = build_notification_ai_gate_prompt(job.context)
+        self.assertIn("계정의 투자 성향은 균형형", prompt)
 
 
 if __name__ == "__main__":

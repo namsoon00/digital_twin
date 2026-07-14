@@ -9,6 +9,7 @@ from ..domain.events import DomainEvent, RESEARCH_EVIDENCE_COLLECTED
 from ..domain.market_data import number
 from ..domain.message_types import NEWS_DIGEST
 from ..domain.investment_research import NewsCollectionTarget
+from ..domain.investment_strategy_guidance import merge_strategy_context, strategy_message_lines
 from ..domain.news_analysis import analysis_payload_requires_refresh, classify_news_relevance, clean_article_summary_noise, relation_scope_is_investable
 from ..domain.notifications import NotificationJob, notification_debug_number
 from ..domain.portfolio import utc_now_iso
@@ -520,7 +521,7 @@ class NewsDigestEnqueuer:
         severity = "ALERT" if max(materiality_scores or [0]) >= 80 or impact_label(primary) == "위험" else "WATCH"
         article_items = [article_digest_context_item(item) for item in items]
         article_keys = sorted({key for item in items for key in article_identity_keys(item)})
-        return {
+        context = {
             "messageType": NEWS_DIGEST,
             "accountId": account.account_id,
             "accountLabel": account.label,
@@ -546,9 +547,12 @@ class NewsDigestEnqueuer:
                 "materialityScores": materiality_scores,
             },
         }
+        return merge_strategy_context(context, account)
 
     def message_text(self, account: AccountConfig, items: List[Dict[str, object]], event: DomainEvent, tracking_number: str = "") -> str:
         reference = latest_timestamp(items)
+        strategy_context = merge_strategy_context({}, account)
+        strategy_lines = strategy_message_lines(strategy_context)
         symbols = []
         seen_symbol_lines = set()
         for item in items:
@@ -610,6 +614,9 @@ class NewsDigestEnqueuer:
             "• 기준시각: " + html_text(kst_datetime_text(reference)),
             "• 신규 중요 뉴스: " + str(len(items)) + "건",
             "• 목적: 다음 장 시작 전 가격 반응과 거래량을 확인하기 위한 준비 알림입니다.",
+            "",
+            "계정 성향 기준",
+            *(html_text(line) for line in strategy_lines),
             "",
             "먼저 볼 것",
             *(symbols or ["• 대상 종목을 확인하세요."]),

@@ -3,6 +3,7 @@ import re
 from typing import Dict, List, Optional, Tuple
 
 from .accounts import message_delivery_profile, normalize_message_delivery_level
+from .investment_strategy_guidance import merge_strategy_context, strategy_guidance_context
 from .notification_ai import (
     active_investment_opinion_value,
     build_notification_ai_opinion,
@@ -507,6 +508,7 @@ def ai_decision_input_packet(
     opinion_execution_plan = active_opinion.get("executionPlan") if isinstance(active_opinion.get("executionPlan"), dict) else {}
     execution_plan = relation_execution_plan or opinion_execution_plan
     decision_drivers = execution_plan.get("decisionDrivers") if isinstance(execution_plan.get("decisionDrivers"), list) else []
+    strategy_context = strategy_guidance_context(context=context)
     return {
         "decisionMode": AI_DECISION_MODE,
         "finalDecisionOwner": "aiResponse",
@@ -543,6 +545,8 @@ def ai_decision_input_packet(
         "precomputedExecutionPlanCandidate": execution_plan,
         "ontologyDecisionDrivers": decision_drivers,
         "messageDeliveryProfile": delivery_profile,
+        "investmentStrategy": strategy_context.get("investmentStrategy"),
+        "investmentStrategyGuidance": strategy_context.get("investmentStrategyGuidance"),
         "targetPositionRole": target_position_role(context),
         "actionPolicy": relation_context.get("actionPolicy") or execution_plan.get("actionPolicy") or "",
         "allowedActions": relation_context.get("allowedActions") or execution_plan.get("allowedActions") or [],
@@ -550,11 +554,14 @@ def ai_decision_input_packet(
     }
 
 def build_notification_ai_gate_prompt(context: Dict[str, object]) -> str:
-    context = dict(context or {})
+    context = merge_strategy_context(dict(context or {}))
     message_type = str(context.get("messageType") or context.get("rule") or "notification")
     prompt_context = notification_ai_prompt_context(message_type, context)
     delivery_profile = delivery_profile_from_context(context)
     decision_input = ai_decision_input_packet(context, prompt_context, delivery_profile)
+    strategy_context = strategy_guidance_context(context=context)
+    strategy_guidance = strategy_context.get("investmentStrategyGuidance") or {}
+    strategy_label = str(strategy_context.get("investmentStrategyProfileLabel") or "")
     payload = {
         "messageType": message_type,
         "target": context.get("displayTarget") or context.get("target") or context.get("title") or "",
@@ -567,6 +574,8 @@ def build_notification_ai_gate_prompt(context: Dict[str, object]) -> str:
         "promptContext": prompt_context,
         "aiDecisionInput": decision_input,
         "messageDeliveryProfile": delivery_profile,
+        "investmentStrategy": strategy_context.get("investmentStrategy"),
+        "investmentStrategyGuidance": strategy_guidance,
     }
     return "\n".join([
         "너는 자동 주문자가 아니라 최종 투자 의견을 판단하는 AI 분석가다.",
@@ -589,6 +598,8 @@ def build_notification_ai_gate_prompt(context: Dict[str, object]) -> str:
         "사용자에게 보이는 문장에는 snake_case, camelCase, true/false, entryAllocationRoom, entrySupportCount, entryExternalRiskBlocked 같은 내부 변수명을 쓰지 않는다. 반드시 쉬운 한국어 문장으로 풀어쓴다.",
         "어려운 표현은 피한다. '기준선 이탈'은 '주요 평균선 아래로 내려감', '추세 훼손'은 '가격 흐름 약화', '하락 가속'은 '하락 속도 증가', '괴리'는 '차이'처럼 바꿔 쓴다. 왕초보에게는 '중기 회복' 대신 '최근보다 조금 긴 기간의 가격 회복', '중기 방어선' 대신 '최근보다 조금 긴 기간의 버티는 가격대'처럼 풀어 쓴다.",
         "계정의 메시지 전달 수준은 " + str(delivery_profile.get("label") or "") + "이다. " + str(delivery_profile.get("promptInstruction") or ""),
+        "계정의 투자 성향은 " + strategy_label + "이다. " + str(strategy_guidance.get("stance") or "") + " " + str(strategy_guidance.get("response") or ""),
+        "투자 성향은 행동의 경계 조건이다. 성향이 공격형이어도 자동 주문 지시처럼 쓰지 말고, 안정형이면 손실 제한·현금 여력·비중 한도를 먼저 확인한다.",
         "반대 근거, 부족 데이터 영향, 무효화 조건, 다음 확인 조건을 반드시 포함한다.",
         "응답 JSON이 최종 메시지의 원천이다. 설명 문장 없이 JSON 객체 하나만 출력한다.",
         "스키마:",

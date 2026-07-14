@@ -13,6 +13,7 @@ from ..domain.events import (
 )
 from ..domain.fact_changes import fact_signature, research_evidence_fact_payload
 from ..domain.investment_research import ResearchEvidence
+from ..domain.investment_strategy_guidance import append_strategy_block, merge_strategy_context
 from ..domain.model_review import ModelReviewJob
 from ..domain.notification_rules import (
     DEFAULT_NOTIFICATION_RULES,
@@ -177,6 +178,41 @@ class MySQLMonitoringCycleRecorder(MySQLOperationalConnection):
         if self.monitor_store is None:
             self.monitor_store = MySQLMonitorStore(settings)
 
+    def account_context_map(self) -> Dict[str, AccountConfig]:
+        try:
+            with self.connect() as connection:
+                rows = connection.execute(
+                    """
+                    SELECT id, label, provider, enabled, watchlist_symbols, quiet_hours_enabled,
+                           quiet_hours_start, quiet_hours_end, quiet_hours_timezone,
+                           message_delivery_level, investment_strategy_profile
+                    FROM service_accounts
+                    """
+                ).fetchall()
+        except Exception:  # noqa: BLE001 - monitoring delivery should continue without strategy lookup.
+            rows = []
+        accounts: Dict[str, AccountConfig] = {}
+        for row in rows:
+            account = AccountConfig(
+                account_id=row["id"],
+                label=row["label"],
+                provider=row["provider"],
+                base_url=self.runtime_settings.get("tossApiBaseUrl", ""),
+                client_id="",
+                client_secret="",
+                account_seq="",
+                watchlist_symbols=split_symbols(row["watchlist_symbols"] or ""),
+                enabled=bool(row["enabled"]),
+                quiet_hours_enabled=bool(row["quiet_hours_enabled"]),
+                quiet_hours_start=row["quiet_hours_start"] or "22:00",
+                quiet_hours_end=row["quiet_hours_end"] or "05:00",
+                quiet_hours_timezone=row["quiet_hours_timezone"] or "Asia/Seoul",
+                message_delivery_level=row["message_delivery_level"] or self.runtime_settings.get("messageDeliveryLevel", "absoluteBeginner"),
+                investment_strategy_profile=row["investment_strategy_profile"] or self.runtime_settings.get("investmentStrategyProfile", "balanced"),
+            )
+            accounts[account.account_id] = account
+        return accounts
+
     def record_cycle(self, account_ids: List[str], snapshots: List[AccountSnapshot], alert_events: List[AlertEvent], dry_run: bool = False):
         if dry_run:
             return MonitoringCycleRecordResult(False, 0, "dry-run")
@@ -188,13 +224,17 @@ class MySQLMonitoringCycleRecorder(MySQLOperationalConnection):
         sent_entries: Dict[str, str] = {}
         notification_store = MySQLNotificationJobStore(self.runtime_settings)
         model_review_store = MySQLModelReviewJobStore(self.runtime_settings)
+        account_contexts = self.account_context_map() if alert_events else {}
         with self.transaction() as connection:
             for snapshot in snapshots:
                 insert_domain_event_with_connection(connection, snapshot_collected_event(snapshot))
             if alert_source_event:
                 insert_domain_event_with_connection(connection, alert_source_event)
                 for event in alert_events:
-                    context = alert_context(event)
+                    account_context = account_contexts.get(event.account_id)
+                    context = merge_strategy_context(alert_context(event), account_context, self.runtime_settings)
+                    if str(event.rule or "") == "investmentInsight":
+                        context = append_strategy_block(context)
                     message = MySQLNotificationTemplateStore(self.runtime_settings).render(event.rule, context)
                     job = NotificationJob.create(
                         message,

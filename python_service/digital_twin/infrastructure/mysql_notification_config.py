@@ -263,6 +263,8 @@ class MySQLNotificationRuleStore(MySQLOperationalConnection):
             if not default:
                 continue
             legacy_field = "ontologyInsight.insightType" if default.field == "ontologyInsight.dispatchInsightType" else default.field
+            if condition.condition_id == "insight_action_changed":
+                legacy_field = "activeInvestmentOpinion.actionLabel,activeInvestmentOpinion.action,actionLabel,action,ontologyInsight.actionLabel,ontologyInsight.action"
             if condition.field == legacy_field and condition.field != default.field:
                 condition.field = default.field
                 changed = True

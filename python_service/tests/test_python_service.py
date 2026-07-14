@@ -6060,7 +6060,12 @@ class PythonServiceTests(unittest.TestCase):
         self.assertIn("new_relation_event", bypass_ids)
         self.assertIn("insight_profit_loss_improved", bypass_ids)
         insight_change = next(condition for condition in rule.similarity_bypass_conditions if condition.condition_id == "insight_type_changed")
+        action_change = next(condition for condition in rule.similarity_bypass_conditions if condition.condition_id == "insight_action_changed")
         self.assertEqual("ontologyInsight.dispatchInsightType", insight_change.field)
+        self.assertEqual(
+            "notificationAiValidatedResponse.actionLabel,notificationAiValidatedResponse.action,aiOpinion.actionLabel,aiOpinion.action",
+            action_change.field,
+        )
         self.assertEqual(
             ["messageType", "accountId", "ontologyInsight.subject", "ontologyInsight.dispatchInsightType", "ontologyInsight.semanticSignature"],
             rule.similarity_fields,
@@ -6120,6 +6125,8 @@ class PythonServiceTests(unittest.TestCase):
             payload = condition.to_dict()
             if payload.get("id") == "insight_type_changed":
                 payload["field"] = "ontologyInsight.insightType"
+            if payload.get("id") == "insight_action_changed":
+                payload["field"] = "activeInvestmentOpinion.actionLabel,activeInvestmentOpinion.action,actionLabel,action,ontologyInsight.actionLabel,ontologyInsight.action"
             legacy_conditions.append(payload)
         mysql_execute(
             db_path,
@@ -6137,12 +6144,17 @@ class PythonServiceTests(unittest.TestCase):
 
         migrated = TestNotificationRuleStore(db_path).get("investmentInsight")
         insight_change = next(condition for condition in migrated.similarity_bypass_conditions if condition.condition_id == "insight_type_changed")
+        action_change = next(condition for condition in migrated.similarity_bypass_conditions if condition.condition_id == "insight_action_changed")
 
         self.assertEqual(
             ["messageType", "accountId", "ontologyInsight.subject", "ontologyInsight.dispatchInsightType", "ontologyInsight.semanticSignature"],
             migrated.similarity_fields,
         )
         self.assertEqual("ontologyInsight.dispatchInsightType", insight_change.field)
+        self.assertEqual(
+            "notificationAiValidatedResponse.actionLabel,notificationAiValidatedResponse.action,aiOpinion.actionLabel,aiOpinion.action",
+            action_change.field,
+        )
         self.assertIn("semantic_signature_changed", {condition.condition_id for condition in migrated.similarity_bypass_conditions})
 
     def test_symbol_universe_parsers_and_store_support_market_catalog(self):
@@ -10354,6 +10366,127 @@ class PythonServiceTests(unittest.TestCase):
         self.assertFalse(decision.should_send)
         self.assertEqual("cooldown", decision.state_decision)
         self.assertFalse(decision.similarity_bypassed)
+
+    def test_investment_insight_state_cooldown_ignores_precomputed_action_only_change(self):
+        rule = default_notification_rule("investmentInsight")
+        job = NotificationJob.create(
+            "애플 인사이트",
+            account_id="main",
+            message_type="investmentInsight",
+            context={
+                "severity": "WATCH",
+                "body": "애플 보유 유지",
+                "symbol": "AAPL",
+                "ontologyInsight": {
+                    "subject": "AAPL",
+                    "insightType": "holdingPositionCommon",
+                    "dispatchInsightType": "holdingPositionCommon",
+                    "score": 76,
+                    "noveltyScore": 25,
+                    "confidence": 68,
+                    "semanticSignature": "subject=AAPL|dispatchType=holdingPositionCommon|sourceSignalTypes=holdingTiming|relationRuleIds=execution.capacity.small.v1|materialSourceEventKeys=",
+                },
+                "activeInvestmentOpinion": {
+                    "action": "TRIM",
+                    "actionLabel": "분할매도",
+                },
+                "sourceSignalTypes": ["holdingTiming"],
+            },
+        )
+        previous_context = {
+            "severity": "WATCH",
+            "ontologyInsight": {
+                "subject": "AAPL",
+                "insightType": "holdingPositionCommon",
+                "dispatchInsightType": "holdingPositionCommon",
+                "score": 76,
+                "noveltyScore": 25,
+                "confidence": 68,
+                "semanticSignature": "subject=AAPL|dispatchType=holdingPositionCommon|sourceSignalTypes=holdingTiming|relationRuleIds=execution.capacity.small.v1|materialSourceEventKeys=",
+            },
+            "activeInvestmentOpinion": {
+                "action": "SELL",
+                "actionLabel": "매도",
+            },
+            "sourceSignalTypes": ["holdingTiming"],
+        }
+        decision = evaluate_notification_rule(job, rule)
+
+        decision = apply_state_cooldown_rule(
+            decision,
+            rule,
+            sent_count=1,
+            previous_score=decision.score,
+            previous_context=previous_context,
+            last_sent_at=utc_now_iso(),
+            last_sent_age_minutes=5,
+            job=job,
+        )
+
+        self.assertFalse(decision.should_send)
+        self.assertEqual("cooldown", decision.state_decision)
+        self.assertFalse(decision.similarity_bypassed)
+
+    def test_investment_insight_state_cooldown_allows_validated_ai_action_change(self):
+        rule = default_notification_rule("investmentInsight")
+        job = NotificationJob.create(
+            "애플 인사이트",
+            account_id="main",
+            message_type="investmentInsight",
+            context={
+                "severity": "WATCH",
+                "body": "애플 최종 판단 변경",
+                "symbol": "AAPL",
+                "ontologyInsight": {
+                    "subject": "AAPL",
+                    "insightType": "holdingPositionCommon",
+                    "dispatchInsightType": "holdingPositionCommon",
+                    "score": 76,
+                    "noveltyScore": 25,
+                    "confidence": 68,
+                    "semanticSignature": "subject=AAPL|dispatchType=holdingPositionCommon|sourceSignalTypes=holdingTiming|relationRuleIds=execution.capacity.small.v1|materialSourceEventKeys=",
+                },
+                "notificationAiValidatedResponse": {
+                    "action": "TRIM",
+                    "actionLabel": "분할축소",
+                },
+                "sourceSignalTypes": ["holdingTiming"],
+            },
+        )
+        previous_context = {
+            "severity": "WATCH",
+            "ontologyInsight": {
+                "subject": "AAPL",
+                "insightType": "holdingPositionCommon",
+                "dispatchInsightType": "holdingPositionCommon",
+                "score": 76,
+                "noveltyScore": 25,
+                "confidence": 68,
+                "semanticSignature": "subject=AAPL|dispatchType=holdingPositionCommon|sourceSignalTypes=holdingTiming|relationRuleIds=execution.capacity.small.v1|materialSourceEventKeys=",
+            },
+            "notificationAiValidatedResponse": {
+                "action": "HOLD",
+                "actionLabel": "보유",
+            },
+            "sourceSignalTypes": ["holdingTiming"],
+        }
+        decision = evaluate_notification_rule(job, rule)
+
+        decision = apply_state_cooldown_rule(
+            decision,
+            rule,
+            sent_count=1,
+            previous_score=decision.score,
+            previous_context=previous_context,
+            last_sent_at=utc_now_iso(),
+            last_sent_age_minutes=5,
+            job=job,
+        )
+
+        self.assertTrue(decision.should_send)
+        self.assertEqual("material_change", decision.state_decision)
+        self.assertTrue(decision.similarity_bypassed)
+        self.assertIn("판단 액션 변경", decision.state_reason)
 
     def test_investment_insight_state_cooldown_ignores_stale_processing_jobs(self):
         db_path = test_store_seed(self.temp.name)

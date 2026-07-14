@@ -697,7 +697,7 @@ class NotificationDataQualityPolicyTests(unittest.TestCase):
                 "severity": "WATCH",
                 "symbol": "MSTR",
                 "profitLossRate": 6.0,
-                "activeInvestmentOpinion": {"actionLabel": "분할축소"},
+                "notificationAiValidatedResponse": {"actionLabel": "분할축소"},
                 "ontologyInsight": {"subject": "MSTR", "dispatchInsightType": "riskManagement", "score": 70, "noveltyScore": 20},
                 "sourceSignalTypes": ["holdingTiming"],
             },
@@ -711,7 +711,7 @@ class NotificationDataQualityPolicyTests(unittest.TestCase):
             previous_score=decision.score,
             previous_context={
                 "profitLossRate": 6.2,
-                "activeInvestmentOpinion": {"actionLabel": "보유"},
+                "notificationAiValidatedResponse": {"actionLabel": "보유"},
                 "ontologyInsight": {"subject": "MSTR", "dispatchInsightType": "riskManagement"},
                 "sourceSignalTypes": ["holdingTiming"],
             },

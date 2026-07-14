@@ -233,8 +233,8 @@ def default_similarity_bypass_conditions(message_type: str) -> List["SimilarityB
                 "insight_action_changed",
                 "판단 액션 변경",
                 "field_changed_any",
-                field="activeInvestmentOpinion.actionLabel,activeInvestmentOpinion.action,actionLabel,action,ontologyInsight.actionLabel,ontologyInsight.action",
-                description="AI 또는 모델의 우선 행동이 바뀌면 반복이어도 보냅니다.",
+                field="notificationAiValidatedResponse.actionLabel,notificationAiValidatedResponse.action,aiOpinion.actionLabel,aiOpinion.action",
+                description="최종 AI 판단의 우선 행동이 바뀌면 반복이어도 보냅니다. 사전 계산 후보 변화만으로는 보내지 않습니다.",
             ),
         ]
     if key == "holdingTiming":

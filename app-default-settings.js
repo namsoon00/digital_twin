@@ -13,6 +13,7 @@
     kisMarketSignalGapSeconds: "0.35",
     kisMarketSignalPreferLiveDuringMarketHours: "1",
     kisMarketSignalLiveRefreshSeconds: "60",
+    kisMarketSignalUnchangedStaleCount: "3",
     notifyProvider: "",
     telegramBotToken: "",
     telegramChatId: "",

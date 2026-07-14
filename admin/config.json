@@ -13,7 +13,7 @@
     "공유 미리보기에서는 서버 설정과 계정 DB 쓰기를 차단합니다."
   ],
   "localData": {
-    "generatedAt": "2026-07-14T00:18:29.513247Z",
+    "generatedAt": "2026-07-14T00:25:35.592606Z",
     "sources": {
       "operationalDbBackend": "mysql",
       "settings": "data/settings.json",
@@ -86,10 +86,16 @@
       "kisMarketSignalMaxSymbols": "20",
       "kisMarketSignalCacheMinutes": "3",
       "kisMarketSignalGapSeconds": "0.35",
+      "kisMarketSignalPreferLiveDuringMarketHours": "1",
+      "kisMarketSignalLiveRefreshSeconds": "60",
+      "kisMarketSignalUnchangedStaleCount": "3",
       "marketDataMaxAgeMinutes": "240",
       "dataFreshnessEnabled": "1",
       "dataFreshnessDefaultMaxAgeMinutes": "10",
       "dataFreshnessQuoteMaxAgeMinutes": "10",
+      "dataFreshnessKisPriceMaxAgeMinutes": "3",
+      "dataFreshnessKisMicrostructureMaxAgeMinutes": "2",
+      "dataFreshnessKisInvestorMaxAgeMinutes": "5",
       "dataFreshnessExternalMaxAgeMinutes": "10",
       "dataFreshnessExternalEquityMaxAgeMinutes": "10",
       "dataFreshnessExternalCryptoMaxAgeMinutes": "10",
@@ -770,6 +776,12 @@
           "type": "number",
           "default": "5",
           "unit": "minutes"
+        },
+        {
+          "key": "kisMarketSignalUnchangedStaleCount",
+          "label": "KIS 동일 수급값 stale 판정 횟수",
+          "type": "number",
+          "default": "3"
         },
         {
           "key": "dataFreshnessExternalMaxAgeMinutes",
@@ -1682,5 +1694,5 @@
       ]
     }
   ],
-  "buildId": "6723763ed717"
+  "buildId": "c6c1d23de366"
 }

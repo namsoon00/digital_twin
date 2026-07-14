@@ -252,6 +252,15 @@ class MySQLNotificationRuleStore(MySQLOperationalConnection):
         if current.similarity_fields in known_legacy_fields and current.similarity_fields != default_rule.similarity_fields:
             current.similarity_fields = list(default_rule.similarity_fields)
             changed = True
+        if str(current.message_type or "") == "investmentInsight":
+            filtered_conditions = [
+                condition
+                for condition in current.similarity_bypass_conditions
+                if condition.condition_id != "semantic_signature_changed"
+            ]
+            if len(filtered_conditions) != len(current.similarity_bypass_conditions):
+                current.similarity_bypass_conditions = filtered_conditions
+                changed = True
         defaults = {condition.condition_id: condition for condition in default_rule.similarity_bypass_conditions}
         current_ids = {condition.condition_id for condition in current.similarity_bypass_conditions}
         for condition in default_rule.similarity_bypass_conditions:

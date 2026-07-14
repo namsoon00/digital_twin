@@ -6056,7 +6056,7 @@ class PythonServiceTests(unittest.TestCase):
         bypass_ids = {condition.condition_id for condition in rule.similarity_bypass_conditions}
         self.assertIn("ontology_novelty_score", condition_ids)
         self.assertIn("insight_type_changed", bypass_ids)
-        self.assertIn("semantic_signature_changed", bypass_ids)
+        self.assertNotIn("semantic_signature_changed", bypass_ids)
         self.assertIn("new_relation_event", bypass_ids)
         self.assertIn("insight_profit_loss_improved", bypass_ids)
         insight_change = next(condition for condition in rule.similarity_bypass_conditions if condition.condition_id == "insight_type_changed")
@@ -6155,7 +6155,7 @@ class PythonServiceTests(unittest.TestCase):
             "notificationAiValidatedResponse.actionLabel,notificationAiValidatedResponse.action,aiOpinion.actionLabel,aiOpinion.action",
             action_change.field,
         )
-        self.assertIn("semantic_signature_changed", {condition.condition_id for condition in migrated.similarity_bypass_conditions})
+        self.assertNotIn("semantic_signature_changed", {condition.condition_id for condition in migrated.similarity_bypass_conditions})
 
     def test_symbol_universe_parsers_and_store_support_market_catalog(self):
         nasdaq_text = "\n".join([
@@ -10306,7 +10306,7 @@ class PythonServiceTests(unittest.TestCase):
         self.assertEqual("cooldown", decision.state_decision)
         self.assertFalse(decision.similarity_bypassed)
 
-    def test_investment_insight_state_cooldown_allows_semantic_relation_path_change(self):
+    def test_investment_insight_state_cooldown_suppresses_relation_path_only_change(self):
         rule = default_notification_rule("investmentInsight")
         job = NotificationJob.create(
             "보유 포지션 인사이트",
@@ -10358,10 +10358,9 @@ class PythonServiceTests(unittest.TestCase):
             job=job,
         )
 
-        self.assertTrue(decision.should_send)
-        self.assertEqual("material_change", decision.state_decision)
-        self.assertTrue(decision.similarity_bypassed)
-        self.assertIn("관계 경로 변경", decision.state_reason)
+        self.assertFalse(decision.should_send)
+        self.assertEqual("cooldown", decision.state_decision)
+        self.assertFalse(decision.similarity_bypassed)
 
     def test_investment_insight_state_cooldown_does_not_bypass_when_previous_semantic_signature_missing(self):
         rule = default_notification_rule("investmentInsight")

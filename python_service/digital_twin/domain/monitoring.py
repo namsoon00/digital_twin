@@ -80,6 +80,8 @@ def ontology_inference_failure_stage(reason_code: object, status: object, detail
         return "ABox 검증"
     if code == "missingProjection":
         return "온톨로지 투영 생성"
+    if code == "projectionSaveFailed":
+        return graph_store_label((detail or {}).get("graphStore")) + " 투영 저장"
     if code == "ruleboxExecutionFailed" or (rulebox_status and rulebox_status not in {"ok", "partial"}):
         return "RuleBox 실행"
     if typedb_read_status and typedb_read_status not in {"ok", "partial"}:
@@ -873,6 +875,12 @@ class RealtimeMonitor(MonitoringSampleDataMixin, MonitoringPositionContextMixin,
             if summary:
                 reason += ": " + summary
             return "invalidABox", reason, common
+        projection_status = str(projection.get("status") or "").strip().lower()
+        if projection_status and projection_status not in {"ok", "partial"}:
+            reason = graph_store_label(graph_store) + " projection 저장 실패"
+            if common.get("projectionReason"):
+                reason += ": " + str(common.get("projectionReason"))
+            return "projectionSaveFailed", reason, common
         if not inference:
             detail = ontology_inference_failure_detail("missingInferenceBox", common["status"], common)
             reason = graph_store_label(graph_store) + " InferenceBox 응답이 없습니다"

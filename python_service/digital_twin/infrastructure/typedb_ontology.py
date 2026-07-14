@@ -1,6 +1,7 @@
 import copy
 import hashlib
 import json
+import math
 import time
 import uuid
 from typing import Dict, Iterable, List, Tuple
@@ -44,7 +45,10 @@ def typedb_string(value: object) -> str:
 
 def typedb_number(value: object):
     parsed = number_or_none(value)
-    return None if parsed is None else float(parsed)
+    if parsed is None:
+        return None
+    numeric = float(parsed)
+    return numeric if math.isfinite(numeric) else None
 
 
 def typedb_bool(value: object) -> bool:

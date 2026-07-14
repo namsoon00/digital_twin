@@ -2332,6 +2332,18 @@ class PythonServiceTests(unittest.TestCase):
         self.assertIn("attribute ontology-id, value string", schema)
         self.assertTrue(any("insert $r isa ontology-assertion" in query for query in queries))
         self.assertTrue(any("ontology-reasoning-card" in query for query in queries))
+
+        nan_query = repository.node_insert_query({
+            "id": "fact-change:STRC:market-data-update:volumeRatio",
+            "label": "STRC volumeRatio 변경",
+            "kind": "fact-change",
+            "ontologyBox": "ABox",
+            "valueNumber": float("nan"),
+            "materialityScore": float("inf"),
+            "propertiesJson": "{}",
+        }, utc_now_iso())
+        self.assertNotIn("ontology-value-number nan", nan_query)
+        self.assertNotIn("ontology-materiality-score inf", nan_query)
         self.assertGreater(len(repository.rows_for_reasoning_cards(graph)), 0)
         self.assertTrue(any('has ontology-relation-type "HOLDS"' in query for query in queries))
         self.assertFalse(NullTypeDBOntologyGraphRepository().save_graph(graph)["saved"])
@@ -4881,6 +4893,71 @@ class PythonServiceTests(unittest.TestCase):
         self.assertTrue(any("RuleBox 실행 실패: timed out" in line for line in inference_event.lines))
         self.assertEqual("error", inference_event.metadata["ontologyInference"]["ruleboxExecutionStatus"])
         self.assertEqual("timed out", inference_event.metadata["ontologyInference"]["ruleboxExecutionReason"])
+
+    def test_events_explain_typedb_projection_save_failure_when_repeated(self):
+        position = normalize_position({
+            "symbol": "STRC",
+            "name": "스트래티지 스트레치 우선주(9.00%)",
+            "market": "US",
+            "currency": "USD",
+            "marketValue": 2000,
+            "quantity": 23,
+            "sellableQuantity": 23,
+            "averagePrice": 84,
+            "currentPrice": 88,
+            "profitLossRate": 4.8,
+            "sector": "디지털자산",
+        })
+        portfolio = portfolio_summary([position])
+        metadata = {
+            "ontology": {
+                "typedb": {
+                    "saved": False,
+                    "status": "error",
+                    "graphStore": "typedb",
+                    "projectionMode": "abox-facts-only-typedb-rulebox",
+                    "reason": "TypeQL syntax error near fact-change:STRC:market-data-update:volumeRatio",
+                    "ruleboxBootstrap": {"status": "ready", "ruleCount": 23},
+                    "aboxValidation": {"status": "valid", "errorCount": 0, "warningCount": 0},
+                },
+            },
+        }
+        first_snapshot = AccountSnapshot(
+            "main",
+            "메인",
+            "toss",
+            "live",
+            "토스 계좌 동기화",
+            utc_now_iso(),
+            portfolio,
+            [position],
+            decisions_for_positions([position], portfolio),
+            metadata=deepcopy(metadata),
+        )
+        first_events = RealtimeMonitor().events_for_snapshot(first_snapshot, {})
+        self.assertFalse(any(event.rule == "ontologyInferenceMissing" for event in first_events))
+        snapshot = AccountSnapshot(
+            "main",
+            "메인",
+            "toss",
+            "live",
+            "토스 계좌 동기화",
+            utc_now_iso(),
+            portfolio,
+            [position],
+            decisions_for_positions([position], portfolio),
+            metadata=deepcopy(metadata),
+        )
+
+        events = RealtimeMonitor().events_for_snapshot(snapshot, first_snapshot.to_monitor_state())
+        inference_event = next(event for event in events if event.rule == "ontologyInferenceMissing")
+        line_text = "\n".join(inference_event.lines)
+
+        self.assertEqual("projectionSaveFailed", inference_event.metadata["missingInferenceReasonCode"])
+        self.assertIn("TypeDB projection 저장 실패", inference_event.metadata["missingInferenceReason"])
+        self.assertIn("fact-change:STRC:market-data-update:volumeRatio", inference_event.metadata["missingInferenceReason"])
+        self.assertIn("실패 단계 TypeDB 투영 저장", line_text)
+        self.assertIn("projectionReason=TypeQL syntax error", line_text)
 
     def test_events_explain_typedb_inferencebox_read_error_when_repeated(self):
         position = normalize_position({

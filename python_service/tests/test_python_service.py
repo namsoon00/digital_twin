@@ -9597,6 +9597,82 @@ class PythonServiceTests(unittest.TestCase):
         self.assertIn("수익 보호형 분할축소", message)
         self.assertIn("BTC 민감 종목", message)
 
+    def test_profitable_position_with_ma5_recovery_softens_high_confidence_sell(self):
+        context = {
+            "messageType": "investmentInsight",
+            "headline": "[관찰] 💰 스트래티지: 매도 우선 점검",
+            "displayTarget": "스트래티지 / Strategy / MSTR",
+            "messageDeliveryLevel": "absoluteBeginner",
+            "referenceDate": "2026-07-15 06:40 KST",
+            "sentTime": "2026-07-15 06:41 KST",
+            "rawLines": "\n".join([
+                "현재가: $97.69",
+                "평균매입가: $88.9",
+                "수익률: +9.9%",
+                "보유 수량: 230주",
+                "추세: 5일선 $94.44보다 3.4% 높음, 20일선 $100.11보다 2.4% 낮음, 60일선 $140.37보다 30.4% 낮음",
+                "수급: 거래량 9,471,192(원본 0.4x · 시간보정 0.4x), 거래액 $1,050,906,655",
+            ]),
+            "metadata": {
+                "ontologyRelationContext": {
+                    "facts": {
+                        "symbol": "MSTR",
+                        "profitLossRate": 9.9,
+                        "currentPrice": 97.69,
+                        "ma5": 94.44,
+                        "ma5Distance": 3.4,
+                        "ma20": 100.11,
+                        "ma20Distance": -2.4,
+                        "ma60": 140.37,
+                        "ma60Distance": -30.4,
+                        "rawVolumeRatio": 0.4,
+                        "timeAdjustedVolumeRatio": 0.4,
+                    },
+                    "executionPlan": {
+                        "riskSignals": ["20일선과 60일선 아래"],
+                        "counterSignals": ["5일선보다 3.4% 높아 단기 반등은 살아 있음"],
+                        "decisionDrivers": [
+                            {
+                                "category": "trend",
+                                "direction": "support",
+                                "importance": 58,
+                                "summary": "현재가가 5일 평균보다 높아 아주 짧은 가격 흐름은 살아 있습니다.",
+                                "dataKeys": ["ma5Distance"],
+                            },
+                            {
+                                "category": "trend",
+                                "direction": "risk",
+                                "importance": 90,
+                                "summary": "현재가가 20일 평균보다 2.4% 낮고 60일 평균보다 30.4% 낮습니다.",
+                                "dataKeys": ["ma20Distance", "ma60Distance"],
+                            },
+                        ],
+                    },
+                }
+            },
+        }
+
+        response = validated_response_from_payload(context, {
+            "action": "SELL",
+            "confidence": 92,
+            "summary": "주요 평균선 아래라 매도 의견입니다.",
+            "opinion": "보유 물량 매도 기준을 먼저 확인하세요.",
+            "evidence": ["현재 가격이 20일 평균과 60일 평균보다 낮습니다."],
+            "counterEvidence": ["거래량이 평균 이하라 투매 확정은 아닙니다."],
+            "nextChecks": ["20일 평균선 회복 여부 확인"],
+            "referenceDate": "2026-07-15 06:40 KST",
+        }, source="Codex AI")
+        enriched = context_with_validated_ai_response(context, response)
+        message = enriched["telegramMessage"]
+
+        self.assertEqual("TRIM", response.action)
+        self.assertEqual("분할축소", response.action_label)
+        self.assertIn("5일 평균보다 3.4% 높아", " ".join(response.counter_evidence))
+        self.assertIn("전량 매도보다 분할축소", " ".join(response.counter_evidence))
+        self.assertIn("<b>지금 할 일</b>: <code>분할축소</code>", message)
+        self.assertIn("5일선보다 3.4% 높아", message)
+        self.assertNotIn("<b>지금 할 일</b>: <code>매도</code>", message)
+
     def test_notification_ai_gate_prompt_requires_user_friendly_language(self):
         prompt = build_notification_ai_gate_prompt({
             "messageType": "investmentInsight",

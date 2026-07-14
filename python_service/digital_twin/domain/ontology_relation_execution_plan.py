@@ -414,6 +414,7 @@ def execution_plan_from_relation_context(
         allowed_action_codes = allowed_action_codes or list(WATCHLIST_ALLOWED_ACTIONS)
         blocked_action_codes = blocked_action_codes or list(WATCHLIST_BLOCKED_ACTIONS)
     pnl = float(facts.get("profitLossRate") or 0)
+    ma5_distance = float(facts.get("ma5Distance") or 0)
     ma20_distance = float(facts.get("ma20Distance") or 0)
     ma60_distance = float(facts.get("ma60Distance") or 0)
     raw_volume_ratio = _float_value(facts.get("rawVolumeRatio") if facts.get("rawVolumeRatio") is not None else facts.get("volumeRatio"))
@@ -439,6 +440,10 @@ def execution_plan_from_relation_context(
         _append_unique(risk_signals, "수익률 " + ("%.1f" % pnl) + "%")
         if ma20_distance < 0:
             _append_unique(risk_signals, "20일선보다 " + ("%.1f" % abs(ma20_distance)) + "% 낮음")
+        if ma5_distance > 0:
+            _append_unique(counter_signals, "5일선보다 " + ("%.1f" % abs(ma5_distance)) + "% 높아 단기 반등은 살아 있음")
+        elif ma5_distance < 0:
+            _append_unique(risk_signals, "5일선보다 " + ("%.1f" % abs(ma5_distance)) + "% 낮아 단기 반등 부족")
         if ma60_distance < 0:
             _append_unique(risk_signals, "60일선보다 " + ("%.1f" % abs(ma60_distance)) + "% 낮음")
             _append_unique(strengthen_conditions, "60일선 아래 상태가 유지되면 손절·축소 강도를 높임")
@@ -464,6 +469,11 @@ def execution_plan_from_relation_context(
         primary_action = "TRIM_REVIEW"
         primary_label = "분할매도/수익 보호 기준 검토"
         _append_unique(risk_signals, "수익 구간에서 추세 약화")
+        if ma5_distance > 0:
+            _append_unique(counter_signals, "5일선보다 " + ("%.1f" % abs(ma5_distance)) + "% 높아 단기 반등은 살아 있음")
+            _append_unique(weaken_conditions, "5일선 위를 유지하고 20일선 회복이 확인되면 보유 유지로 완화")
+        elif ma5_distance < 0:
+            _append_unique(risk_signals, "5일선보다 " + ("%.1f" % abs(ma5_distance)) + "% 낮아 단기 반등 부족")
         _append_unique(blocked_actions, "목표·추세 확인 없는 일괄 매도")
         _append_unique(strengthen_conditions, "20일선 회복 실패와 거래량 증가가 이어지면 분할매도 강도 상향")
         _append_unique(weaken_conditions, "20일선 회복과 수급 개선이 확인되면 보유 유지로 완화")

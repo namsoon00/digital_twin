@@ -1,6 +1,6 @@
 import json
 import re
-from typing import Dict, List, Tuple
+from typing import Dict, List, Optional, Tuple
 
 from .accounts import message_delivery_profile, normalize_message_delivery_level
 from .notification_ai import (
@@ -225,10 +225,94 @@ def signed_percent_from_text(value: object) -> float:
     except ValueError:
         return 0.0
 
+def _optional_number(value: object) -> Optional[float]:
+    try:
+        return float(str(value).replace(",", "").strip())
+    except (TypeError, ValueError):
+        return None
+
+def relation_facts_value(context: Dict[str, object]) -> Dict[str, object]:
+    relation_context = relation_context_value(context or {})
+    facts = relation_context.get("facts") if isinstance(relation_context.get("facts"), dict) else {}
+    if facts:
+        return facts
+    opinion = active_investment_opinion_value(context or {})
+    if isinstance(opinion, dict) and isinstance(opinion.get("facts"), dict):
+        return opinion.get("facts") or {}
+    return {}
+
+def relation_fact_number(context: Dict[str, object], key: str) -> Optional[float]:
+    return _optional_number(relation_facts_value(context).get(key))
+
+def profit_loss_rate_for_context(context: Dict[str, object]) -> float:
+    for key in ("profitLossRate", "profit_loss_rate"):
+        value = relation_fact_number(context, key)
+        if value is not None:
+            return value
+    return signed_percent_from_text(_line_after_colon(_raw_lines(context or {}), "수익률") or _line_after_colon(_raw_lines(context or {}), "손익"))
+
+def volume_ratio_for_context(context: Dict[str, object]) -> Optional[float]:
+    for key in ("timeAdjustedVolumeRatio", "rawVolumeRatio", "volumeRatio"):
+        value = relation_fact_number(context, key)
+        if value is not None:
+            return value
+    return None
+
+def short_term_trend_text(ma5_distance: float) -> str:
+    amount = abs(round(float(ma5_distance or 0), 1))
+    if ma5_distance >= 0:
+        return "현재가가 5일 평균보다 " + str(amount).rstrip("0").rstrip(".") + "% 높아 아주 짧은 가격 흐름은 살아 있습니다."
+    return "현재가가 5일 평균보다 " + str(amount).rstrip("0").rstrip(".") + "% 낮아 아주 짧은 가격 흐름은 약합니다."
+
+def add_short_term_trend_evidence(context: Dict[str, object], action: str, evidence: List[str], counter: List[str]) -> None:
+    ma5_distance = relation_fact_number(context, "ma5Distance")
+    if ma5_distance is None:
+        return
+    text = short_term_trend_text(ma5_distance)
+    if action in {"SELL", "TRIM"} and ma5_distance >= 0:
+        append_unique_text(counter, text, 180)
+    elif action in {"BUY", "ADD", "HOLD"} and ma5_distance < 0:
+        append_unique_text(counter, text, 180)
+    else:
+        append_unique_text(evidence, text, 180)
+
+def soften_profitable_short_term_recovery_sell(context: Dict[str, object], response: NotificationAIValidatedResponse) -> NotificationAIValidatedResponse:
+    if response.action != "SELL":
+        return response
+    pnl = profit_loss_rate_for_context(context)
+    ma5_distance = relation_fact_number(context, "ma5Distance")
+    if pnl <= 0 or ma5_distance is None or ma5_distance < 0.8:
+        return response
+    ma20_distance = relation_fact_number(context, "ma20Distance")
+    volume_ratio = volume_ratio_for_context(context)
+    if ma20_distance is not None and ma20_distance <= -8 and volume_ratio is not None and volume_ratio >= 1.3:
+        return response
+    response.action = "TRIM"
+    response.action_label = ACTION_LABELS["TRIM"]
+    reason = (
+        "수익 구간이고 현재가가 5일 평균보다 "
+        + str(abs(round(ma5_distance, 1))).rstrip("0").rstrip(".")
+        + "% 높아 단기 반등 신호가 있습니다. 전량 매도보다 분할축소로 완화했습니다."
+    )
+    if ma20_distance is not None and ma20_distance < 0:
+        reason += " 다만 20일 평균 아래라 보유만으로 낮추지는 않습니다."
+    append_unique_text(response.counter_evidence, short_term_trend_text(ma5_distance), 180)
+    append_unique_text(response.counter_evidence, reason, 180)
+    append_unique_text(response.validation_warnings, reason, 180)
+    if response.summary:
+        response.summary = response.summary.replace("매도", "분할축소")
+    if response.opinion and "매도" in response.opinion:
+        response.opinion = response.opinion.replace("매도", "분할축소")
+    elif response.opinion:
+        response.opinion = response.opinion + " 다만 5일 평균 위 반등이 있어 전량 매도보다 분할축소로 봅니다."
+    else:
+        response.opinion = "5일 평균 위 반등이 있어 전량 매도보다 분할축소로 봅니다."
+    return response
+
 def soften_low_confidence_sell(context: Dict[str, object], response: NotificationAIValidatedResponse) -> NotificationAIValidatedResponse:
     if response.action != "SELL":
         return response
-    pnl = signed_percent_from_text(_line_after_colon(_raw_lines(context or {}), "수익률") or _line_after_colon(_raw_lines(context or {}), "손익"))
+    pnl = profit_loss_rate_for_context(context)
     if pnl <= 0 or response.confidence >= 70:
         return response
     response.action = "TRIM"
@@ -494,6 +578,7 @@ def build_notification_ai_gate_prompt(context: Dict[str, object]) -> str:
         "관계 규칙명, 점수, 사전 계산 후보는 판단 재료로만 쓰고, 사용자에게 보이는 문장에서는 가격·수급·뉴스·공시·반대 근거를 비교한 결론을 먼저 말한다.",
         "relationshipDatabaseInference.decisionDrivers는 온톨로지 실행계획이 고른 핵심 판단 축이다. 이 항목을 먼저 읽고, 방향(risk/support/counter/neutral), 중요도, dataKeys를 근거·반대근거·다음 확인에 반영한다.",
         "executionPlan.addBuyAssessment가 있으면 손실 구간 추가매수 판단을 별도 섹션처럼 취급한다. 외국인·기관 동반 순매수는 먼저 매도 강도를 낮추는 반대 근거이며, ADD는 addBuyAssessment.stage가 ADD_BUY_REVIEW이고 가격·거래 회복·뉴스 리스크·비중 한도가 설명될 때만 고른다.",
+        "5일선은 아주 짧은 가격 타이밍 근거다. 20일선·60일선과 방향이 다르면 반드시 반대 근거에 넣는다. 보유 종목이 수익 구간이고 5일선 위에 있으면 SELL을 고르기 전에 분할축소 또는 보유 재확인이 더 맞는지 비교한다.",
         "evidence에는 가능한 한 숫자나 원문 제목을 넣는다. '가격 흐름이 약하다'처럼 뻔한 말만 쓰지 말고 현재가/평단가/수익률/5일선/20일선/60일선/거래량/BTC/금리/환율/뉴스 제목 중 제공된 값을 구체적으로 연결한다.",
         "MSTR, STRC 등 비트코인 민감 종목이면 BTC 24시간·7일 변동과 보유 종목 가격 반응을 비교한다. 뉴스·공시 제목에 매각, 처분, 실적, 자금조달, 소송, 규제 같은 사건이 있으면 그 사건을 evidence 또는 counterEvidence에 반드시 반영한다.",
         "BUY, ADD, HOLD, TRIM, SELL, AVOID 중 하나를 반드시 고르되 자동 주문 지시처럼 쓰지 않는다.",
@@ -566,6 +651,7 @@ def validated_response_from_payload(
         warnings.append("AI 응답에 반대 근거가 없어 관계 분석 데이터에서 반대 근거를 보강했습니다.")
     if not counter:
         counter.append("제공 데이터 안에서 뚜렷한 반대 근거가 부족해 판단 강도를 보수적으로 봅니다.")
+    add_short_term_trend_evidence(context, action, evidence, counter)
     raw_invalidation = str(payload.get("invalidationCondition") or payload.get("invalidation_condition") or "").strip()
     invalidation = soften_order_language(watchlist_friendly_text(context, user_friendly_ai_text(raw_invalidation or fallback.invalidation_condition or default_invalidation_for_action(action))))
     raw_next_checks = payload.get("nextChecks") or payload.get("next_checks") or []
@@ -616,7 +702,7 @@ def validated_response_from_payload(
     confidence = min(original_confidence, cap)
     if confidence < original_confidence:
         warnings.append("AI 확신도 " + str(round(original_confidence, 1)) + "%를 검증 기준에 따라 " + str(round(confidence, 1)) + "%로 낮췄습니다.")
-    return soften_low_confidence_sell(context, NotificationAIValidatedResponse(
+    response = NotificationAIValidatedResponse(
         action=action,
         action_label=action_label_for_target(context, action),
         confidence=confidence,
@@ -637,7 +723,9 @@ def validated_response_from_payload(
         validation_warnings=warnings,
         source=source,
         raw_response=raw_response,
-    ))
+    )
+    response = soften_profitable_short_term_recovery_sell(context, response)
+    return soften_low_confidence_sell(context, response)
 
 def validated_response_from_text(context: Dict[str, object], text: str, source: str = "ai") -> NotificationAIValidatedResponse:
     return validated_response_from_payload(context, parse_ai_response_json(text), raw_response=str(text or ""), source=source)

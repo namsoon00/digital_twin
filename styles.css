@@ -20517,3 +20517,262 @@ html[data-theme="dark"] .ontology-graph-expanded-toolbar .icon-button.danger {
     margin-bottom: var(--ds-panel-pad-y);
   }
 }
+
+/* Desktop no-three-line rhythm: keep PC command surfaces from collapsing into mobile-like stacks. */
+@media (min-width: 861px) {
+  .shell > .topbar {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) auto;
+    align-items: center;
+    gap: 16px;
+    min-height: 58px;
+    padding: 8px 0;
+  }
+
+  .shell > .topbar .eyebrow {
+    display: none;
+  }
+
+  .shell > .topbar h1,
+  .shell > .topbar .subtle,
+  .loading-source-row strong,
+  .loading-source-row em {
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  .shell > .topbar h1 {
+    font-size: clamp(21px, 1.7vw, 26px);
+    line-height: 1.06;
+  }
+
+  .shell > .topbar .subtle {
+    max-width: min(78ch, 72vw);
+    line-height: 1.2;
+  }
+
+  .loading-grid {
+    grid-template-columns: minmax(0, 1fr) minmax(320px, 0.42fr);
+    gap: 16px;
+  }
+
+  .loading-source-row {
+    grid-template-columns: auto minmax(0, 1fr);
+    min-height: 44px;
+    padding: 10px 12px;
+  }
+
+  .loading-source-row > div {
+    min-width: 0;
+  }
+}
+
+@media (min-width: 1181px) {
+  .app-nav {
+    overflow: hidden;
+  }
+
+  .app-nav-command,
+  .app-nav-command.no-mode,
+  .app-nav-command.has-mode {
+    align-items: center;
+    min-height: 50px;
+    max-height: 58px;
+    padding: 8px 10px;
+  }
+
+  .app-nav-command.has-mode {
+    grid-template-columns: minmax(260px, 0.34fr) auto minmax(340px, 1fr) minmax(180px, 0.24fr) auto;
+  }
+
+  .app-nav-command.no-mode {
+    grid-template-columns: minmax(260px, 0.34fr) minmax(340px, 1fr) minmax(180px, 0.24fr) auto;
+  }
+
+  .app-nav-command-kicker {
+    display: none;
+  }
+
+  .app-nav-current,
+  .app-nav-routine span,
+  .panel-head > div,
+  .account-board-title,
+  .notification-command-head > div {
+    min-width: 0;
+  }
+
+  .app-nav-current {
+    gap: 3px;
+  }
+
+  .app-nav-current strong,
+  .app-nav-current em,
+  .app-nav-flow .page-flow-node em,
+  .app-nav-flow .page-flow-node strong,
+  .app-nav-routine em,
+  .app-nav-routine strong,
+  .panel-head h2,
+  .panel-head .subtle,
+  .panel-head span:not(.metric):not(.tone-chip):not(.status-pill),
+  .account-board-title strong,
+  .account-board-title span,
+  .account-control-metric strong,
+  .account-control-metric span,
+  .account-control-metric em,
+  .notification-command-head h2,
+  .notification-command-head span:not(.tone-chip) {
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+
+  .app-nav-current strong,
+  .app-nav-current em,
+  .app-nav-flow .page-flow-node em,
+  .app-nav-flow .page-flow-node strong,
+  .app-nav-routine em,
+  .account-board-title strong,
+  .account-board-title span,
+  .account-control-metric strong,
+  .account-control-metric span,
+  .account-control-metric em,
+  .notification-command-head h2,
+  .notification-command-head span:not(.tone-chip) {
+    white-space: nowrap;
+  }
+
+  .app-nav-routine {
+    grid-template-columns: minmax(0, 1fr) auto;
+    max-width: 100%;
+  }
+
+  .app-nav-routine > span:first-child {
+    display: none;
+  }
+
+  .app-nav-routine strong {
+    max-width: 28ch;
+  }
+
+  .app-nav-routine-action {
+    max-width: 13ch;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+
+  .app-nav-flow .page-flow-spine {
+    flex-wrap: nowrap;
+  }
+
+  .app-nav-flow .page-flow-node {
+    flex: 1 1 0;
+    max-width: 33.333%;
+  }
+
+  .app-nav-flow .page-flow-node em {
+    flex: 0 0 auto;
+  }
+
+  .app-nav-flow .page-flow-node strong {
+    flex: 1 1 auto;
+  }
+
+  .account-section-tabs button,
+  .notification-section-tabs button,
+  .ontology-section-tabs button,
+  .strategy-section-tabs button,
+  .feed-section-tabs button {
+    min-width: 0;
+    min-height: 46px;
+    padding: 8px 10px;
+  }
+
+  .account-section-tabs strong,
+  .notification-section-tabs strong,
+  .ontology-section-tabs strong,
+  .strategy-section-tabs strong,
+  .feed-section-tabs strong,
+  .account-section-tabs span,
+  .notification-section-tabs span,
+  .ontology-section-tabs span,
+  .strategy-section-tabs span,
+  .feed-section-tabs span {
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  .panel-head {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) auto;
+    align-items: center;
+  }
+
+  .panel-head .subtle,
+  .panel-head span:not(.metric):not(.tone-chip):not(.status-pill) {
+    display: -webkit-box;
+    -webkit-line-clamp: 1;
+    -webkit-box-orient: vertical;
+    white-space: normal;
+  }
+
+  .account-command-grid,
+  .account-quality-ledger {
+    grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+  }
+
+  .account-command-grid > *,
+  .account-quality-ledger > * {
+    min-width: 0;
+  }
+
+  .account-history-panel .account-command-grid,
+  .account-command-panel .account-command-grid {
+    grid-template-columns: repeat(4, minmax(0, 1fr));
+  }
+
+  .account-history-panel,
+  .accounts-view .account-history-panel {
+    grid-column: 1 / -1;
+  }
+}
+
+@media (min-width: 1181px) and (max-width: 1560px) {
+  .app-nav-command.has-mode,
+  .app-nav-command.no-mode {
+    grid-template-columns: minmax(230px, 0.4fr) auto minmax(0, 1fr) auto;
+  }
+
+  .app-nav-command.no-mode {
+    grid-template-columns: minmax(230px, 0.4fr) minmax(0, 1fr) auto;
+  }
+
+  .app-nav-command .page-command-metrics {
+    display: none;
+  }
+
+  .app-nav-routine-reason {
+    display: none;
+  }
+
+  .app-nav-flow .page-flow-node em {
+    display: none;
+  }
+
+  .account-section-tabs span,
+  .notification-section-tabs span,
+  .ontology-section-tabs span,
+  .strategy-section-tabs span,
+  .feed-section-tabs span {
+    display: none;
+  }
+
+  .account-history-panel .account-command-grid,
+  .account-command-panel .account-command-grid,
+  .account-quality-ledger {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}

@@ -355,6 +355,61 @@ def quote_staleness_reason(position: Position) -> str:
             return token
     return ""
 
+
+def market_signal_stage(position: Position, stage: str) -> Dict[str, object]:
+    coverage = position.market_signal_coverage if isinstance(position.market_signal_coverage, dict) else {}
+    item = coverage.get(stage) if isinstance(coverage.get(stage), dict) else {}
+    return dict(item or {})
+
+
+def add_market_signal_latency_concepts(graph: PortfolioOntology, stock_id: str, position: Position, source: str) -> None:
+    symbol = symbol_key(position)
+    investor = market_signal_stage(position, "investor")
+    if not investor:
+        return
+    status = str(investor.get("status") or "").strip()
+    latency_status = str(investor.get("latencyStatus") or "").strip()
+    if not (
+        investor.get("realTime") is False
+        or latency_status
+        or status in {"stale", "unknown"}
+    ):
+        return
+    reason = str(
+        investor.get("latencyReason")
+        or investor.get("staleReason")
+        or investor.get("reason")
+        or "투자자별 수급은 장중 누적·지연 가능 데이터입니다."
+    ).strip()
+    latency_id = add_entity(graph, "data-latency", symbol + ":investor-flow", (position.name or symbol) + " 투자자 수급 지연 특성", {
+        "tboxClass": "DataLatency",
+        "tboxClasses": ["Observation", "DataQuality", "DataFreshness", "DataLatency", "DataQualitySignal"],
+        "symbol": symbol,
+        "stage": "investor",
+        "status": status,
+        "realTime": bool(investor.get("realTime")) if "realTime" in investor else None,
+        "cadence": str(investor.get("cadence") or ""),
+        "latencyStatus": latency_status,
+        "latencyLabel": str(investor.get("latencyLabel") or "투자자별 수급 지연 가능"),
+        "reason": reason,
+        "sourceFetchedAt": str(investor.get("fetchedAt") or ""),
+        "sourceAsOf": str(investor.get("sourceAsOf") or ""),
+        "unchangedCount": number(investor.get("unchangedCount")),
+        "source": source,
+    })
+    properties = {
+        "source": source,
+        "polarity": "counter",
+        "opinionImpact": 3.0 if status not in {"stale", "unknown"} else 8.0,
+        "aiInfluenceLabel": str(investor.get("latencyLabel") or "투자자별 수급 지연 가능"),
+        "dataScope": "market-microstructure",
+        "scope": "investor-flow",
+    }
+    add_relation(graph, stock_id, latency_id, "HAS_DATA_QUALITY", weight=0.76, properties=properties)
+    add_relation(graph, stock_id, latency_id, "HAS_DATA_FRESHNESS", weight=0.76, properties=properties)
+    add_relation(graph, latency_id, stock_id, "WEIGHTED_BY_CONFIDENCE", weight=0.76, properties={**properties, "confidenceImpact": "decrease"})
+
+
 def add_metric_concepts(graph: PortfolioOntology, stock_id: str, position: Position, source: str) -> None:
     symbol = symbol_key(position)
     for field_name, label, tbox_class, relation_type, kind, public_key in METRIC_CONCEPTS:
@@ -413,6 +468,7 @@ def add_metric_concepts(graph: PortfolioOntology, stock_id: str, position: Posit
         quality_properties.update({"polarity": "risk", "opinionImpact": round((60 - quality) * 0.2, 2)})
     add_relation(graph, stock_id, quality_id, "HAS_OBSERVATION", weight=round(quality / 100, 4), properties=quality_properties)
     add_relation(graph, stock_id, quality_id, "HAS_DATA_QUALITY", weight=round(quality / 100, 4), properties=quality_properties)
+    add_market_signal_latency_concepts(graph, stock_id, position, source)
 
 def add_data_source_concept(graph: PortfolioOntology, stock_id: str, position: Position, source: str) -> None:
     label = str(position.quote_source or position.data_quality or source or "runtime-data")

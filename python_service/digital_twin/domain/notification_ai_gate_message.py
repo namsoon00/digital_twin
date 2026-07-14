@@ -393,6 +393,26 @@ def _html_multiline_rows(title: str, value: object) -> List[str]:
     result.extend("• " + html.escape(row, quote=False) for row in rows)
     return result
 
+
+def data_quality_warning_rows(context: Dict[str, object], limit: int = 3) -> List[str]:
+    facts = relation_facts(context or {})
+    warnings = facts.get("dataQualityWarnings") if isinstance(facts.get("dataQualityWarnings"), list) else []
+    rows: List[str] = []
+    for item in warnings:
+        if not isinstance(item, dict):
+            continue
+        label = str(item.get("label") or item.get("key") or "").strip()
+        effect = str(item.get("effect") or item.get("reason") or "").strip()
+        if not label and not effect:
+            continue
+        text = effect if label and label in effect else (label + ": " + effect if label and effect else label or effect)
+        if text and text not in rows:
+            rows.append(text)
+        if len(rows) >= limit:
+            break
+    return rows
+
+
 def _point_text(value: object) -> str:
     number = _number(value)
     if not number:
@@ -663,6 +683,10 @@ def execution_telegram_message(context: Dict[str, object], response: Notificatio
         parts.extend(["", "<b>계산 후보와 다른 점</b>", *difference_rows])
     if current_state_rows:
         parts.extend(["", "<b>현재 상태</b>", *current_state_rows])
+    quality_rows = data_quality_warning_rows(context, 3)
+    if quality_rows:
+        parts.extend(["", "<b>데이터 신뢰도</b>"])
+        parts.extend("• " + html.escape(item, quote=False) for item in quality_rows)
     context_rows = context_specific_insight_rows(context, response, 4)
     if context_rows:
         parts.extend(["", "<b>이번 알림에서 봐야 할 것</b>"])
@@ -719,6 +743,10 @@ def execution_telegram_message_absolute_beginner(context: Dict[str, object], res
         parts.extend(["", "<b>AI가 다르게 본 점</b>", *difference_rows])
     if current_state_rows:
         parts.extend(["", "<b>현재 상황</b>", *current_state_rows])
+    quality_rows = data_quality_warning_rows(context, 2)
+    if quality_rows:
+        parts.extend(["", "<b>데이터 신뢰도</b>"])
+        parts.extend("• " + html.escape(_friendly_text(item), quote=False) for item in quality_rows)
     context_rows = context_specific_insight_rows(context, response, 3)
     if context_rows:
         parts.extend(["", "<b>이번 알림에서 봐야 할 것</b>"])

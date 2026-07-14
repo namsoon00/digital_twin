@@ -78,6 +78,11 @@ INVESTOR_RAW_KEYS = [
     "prsn_ntby_qty",
     "prsn_ntby_tr_pbmn",
 ]
+INVESTOR_LATENCY_LABEL = "KIS 장중 누적·지연 가능"
+INVESTOR_LATENCY_REASON = (
+    "KIS 투자자별 수급은 장중 누적 또는 공급자 지연 가능 데이터로 다룹니다. "
+    "현재가·호가처럼 실시간 체결 확정값으로 보지 않습니다."
+)
 
 JsonFetcher = Callable[[str, str, Dict[str, str], Optional[Dict[str, object]], Optional[Dict[str, str]], int], Dict[str, object]]
 
@@ -223,6 +228,12 @@ def stage_coverage(
     if session:
         payload["marketSession"] = str(session.get("key") or "")
         payload["marketSessionLabel"] = str(session.get("label") or "")
+    if stage == "investor" and status == "available":
+        payload["realTime"] = False
+        payload["cadence"] = "intraday-cumulative"
+        payload["latencyStatus"] = "delayed-or-batched"
+        payload["latencyLabel"] = INVESTOR_LATENCY_LABEL
+        payload["latencyReason"] = INVESTOR_LATENCY_REASON
     return payload
 
 

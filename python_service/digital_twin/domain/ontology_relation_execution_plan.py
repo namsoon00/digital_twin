@@ -315,6 +315,19 @@ def decision_drivers_from_relation_context(
             ["missingData", "dataAvailability"],
         )
 
+    quality_warning_labels = [str(item.get("label") or item.get("key") or "") for item in facts.get("dataQualityWarnings") or [] if isinstance(item, dict)]
+    if quality_warning_labels:
+        _append_driver(
+            rows,
+            seen,
+            "dataQualityWarning",
+            "counter",
+            "데이터 품질 주의",
+            "실시간 확정값이 아닌 근거가 있어 판단 강도를 낮춥니다: " + ", ".join(quality_warning_labels[:4]),
+            58,
+            ["dataQualityWarnings", "dataAvailability"],
+        )
+
     active_labels = _active_rule_labels(matches)
     if active_labels:
         _append_driver(

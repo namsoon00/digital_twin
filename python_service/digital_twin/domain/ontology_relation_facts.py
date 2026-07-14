@@ -357,6 +357,20 @@ def _missing(key: str, label: str, effect: str, status: str = "missing", source:
     return item
 
 
+def _data_quality_warning(key: str, label: str, effect: str, status: str = "warning", source: str = "") -> Dict[str, str]:
+    item = {"key": key, "label": label, "effect": effect, "status": status}
+    if source:
+        item["source"] = source
+    return item
+
+
+def _coverage_item(coverage: Dict[str, object], stage: str) -> Dict[str, object]:
+    if not isinstance(coverage, dict):
+        return {}
+    item = coverage.get(stage)
+    return item if isinstance(item, dict) else {}
+
+
 def _coverage_status(
     coverage: Dict[str, object],
     stage: str,
@@ -366,12 +380,14 @@ def _coverage_status(
     quote_hint: str = "",
 ) -> str:
     if isinstance(coverage, dict) and coverage:
-        item = coverage.get(stage) if isinstance(coverage.get(stage), dict) else {}
+        item = _coverage_item(coverage, stage)
         fields = set(str(field) for field in (item.get("fields") or []))
         non_zero_fields = set(str(field) for field in (item.get("nonZeroFields") or []))
+        status = str(item.get("status") or "").strip()
+        if status in {"stale", "unknown"}:
+            return status
         if any(key in fields for key in keys):
             return "available" if any(key in non_zero_fields for key in keys) or value else "zero"
-        status = str(item.get("status") or "").strip()
         if status in {"empty", "missing"}:
             return status
     if value:
@@ -388,11 +404,40 @@ def _availability(status: str, source: str = "") -> Dict[str, str]:
     return item
 
 
+def _availability_with_coverage(status: str, source: str, coverage: Dict[str, object], stage: str) -> Dict[str, object]:
+    item: Dict[str, object] = _availability(status, source)
+    stage_item = _coverage_item(coverage, stage)
+    for key in [
+        "realTime",
+        "cadence",
+        "latencyStatus",
+        "latencyLabel",
+        "latencyReason",
+        "staleReason",
+        "reason",
+        "sourceAsOf",
+        "fetchedAt",
+        "unchangedCount",
+    ]:
+        if key in stage_item and stage_item.get(key) not in (None, ""):
+            item[key] = stage_item.get(key)
+    return item
+
+
 def _missing_penalty(item: Dict[str, object]) -> float:
     status = str(item.get("status") or "missing")
     if status in {"zero", "proxy", "empty"}:
         return 6.0
     return 12.0
+
+
+def _warning_penalty(item: Dict[str, object]) -> float:
+    status = str(item.get("status") or "warning")
+    if status == "stale":
+        return 8.0
+    if status == "unknown":
+        return 6.0
+    return 3.0
 
 
 def moving_average_distance_text(label: str, distance: float) -> str:
@@ -654,10 +699,33 @@ def position_signal_facts(
     if execution_volume_status != "available" and execution_direction_proxy:
         execution_volume_status = "proxy"
     facts["dataAvailability"] = {
-        "tradeStrength": _availability(trade_strength_status, "KIS ccnl"),
-        "executionVolume": _availability(execution_volume_status, "KIS ccnl/orderbook"),
-        "investorFlow": _availability(investor_flow_status, "KIS investor"),
+        "tradeStrength": _availability_with_coverage(trade_strength_status, "KIS ccnl", market_signal_coverage, "ccnl"),
+        "executionVolume": _availability_with_coverage(execution_volume_status, "KIS ccnl/orderbook", market_signal_coverage, "ccnl"),
+        "investorFlow": _availability_with_coverage(investor_flow_status, "KIS investor", market_signal_coverage, "investor"),
     }
+    data_quality_warnings: List[Dict[str, str]] = []
+    investor_coverage = _coverage_item(market_signal_coverage, "investor")
+    investor_latency = str(investor_coverage.get("latencyStatus") or "").strip()
+    investor_latency_reason = str(
+        investor_coverage.get("latencyReason")
+        or investor_coverage.get("staleReason")
+        or investor_coverage.get("reason")
+        or ""
+    ).strip()
+    if expects_kr_signals and investor_flow_status in {"available", "stale", "unknown"} and (
+        investor_coverage.get("realTime") is False
+        or investor_latency
+        or investor_flow_status in {"stale", "unknown"}
+    ):
+        latency_label = str(investor_coverage.get("latencyLabel") or "투자자별 수급 지연 가능").strip()
+        effect = investor_latency_reason or "투자자별 수급은 장중 누적·지연 가능 데이터라 현재가·호가 같은 실시간 체결 근거로 과신하지 않습니다."
+        data_quality_warnings.append(_data_quality_warning(
+            "investorFlowLatency",
+            latency_label,
+            effect,
+            investor_flow_status if investor_flow_status in {"stale", "unknown"} else "latency",
+            "KIS investor",
+        ))
     if expects_kr_signals and trade_strength_status != "available":
         if trade_strength_status == "zero":
             effect = "체결강도 응답은 있었지만 0으로 들어와 체결 압력 근거로 쓰지 않습니다."
@@ -684,8 +752,15 @@ def position_signal_facts(
         missing.append(_missing("investorFlow", "투자자별 수급", effect, investor_flow_status, "KIS investor"))
     if facts["isBtcSensitive"] and not btc:
         missing.append(_missing("btcMarket", "비트코인 시장 데이터", "비트코인 민감 종목의 외부 연동 위험을 확인하지 못합니다."))
-    data_quality = clamp(100.0 - sum(_missing_penalty(item) for item in missing), 35.0, 100.0)
+    data_quality = clamp(
+        100.0
+        - sum(_missing_penalty(item) for item in missing)
+        - sum(_warning_penalty(item) for item in data_quality_warnings),
+        35.0,
+        100.0,
+    )
     facts["missingData"] = missing
+    facts["dataQualityWarnings"] = data_quality_warnings
     facts["dataQualityScore"] = data_quality
     return facts
 

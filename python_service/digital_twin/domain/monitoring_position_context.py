@@ -463,6 +463,26 @@ class MonitoringPositionContextMixin:
             return label + ": 금액 " + self.investor_amount_text(net_amount, currency)
         return ""
 
+    def investor_coverage_note(self, position: Dict[str, object]) -> str:
+        coverage = position.get("market_signal_coverage")
+        if not isinstance(coverage, dict) or not coverage:
+            coverage = position.get("marketSignalCoverage")
+        if not isinstance(coverage, dict):
+            return ""
+        investor = coverage.get("investor") if isinstance(coverage.get("investor"), dict) else {}
+        if not investor:
+            return ""
+        status = str(investor.get("status") or "").strip()
+        if status == "stale":
+            reason = str(investor.get("staleReason") or investor.get("reason") or "").strip()
+            return "신선도 주의" + (" - " + reason if reason else "")
+        latency_label = str(investor.get("latencyLabel") or "").strip()
+        if investor.get("realTime") is False or latency_label:
+            return (latency_label or "장중 누적·지연 가능") + " · 현재가·호가와 같은 실시간 체결 데이터 아님"
+        if investor.get("unchangedCount") not in (None, "", 0):
+            return "이전 조회와 같은 투자자 수급 값 " + str(investor.get("unchangedCount")) + "회 연속"
+        return ""
+
     def investor_context_line(self, position: Dict[str, object]) -> str:
         currency = self.position_currency(position)
         foreign_buy = self.investor_value(position, "foreign_buy_volume", "foreignBuyVolume")
@@ -485,6 +505,9 @@ class MonitoringPositionContextMixin:
         parts = [summary for summary in summaries if summary]
         if not parts:
             return ""
+        note = self.investor_coverage_note(position)
+        if note:
+            parts.insert(0, note)
         return "투자자:\n" + "\n".join(parts)
 
     def holding_action_text(self, decision_text: str, pnl_rate: float) -> str:

@@ -663,7 +663,11 @@ class PythonServiceTests(unittest.TestCase):
         self.assertEqual(700, cached["foreignNetVolume"])
         self.assertEqual(50, cached["bidAskImbalance"])
         self.assertEqual("available", enriched.market_signal_coverage["investor"]["status"])
+        self.assertIs(False, enriched.market_signal_coverage["investor"]["realTime"])
+        self.assertEqual("delayed-or-batched", enriched.market_signal_coverage["investor"]["latencyStatus"])
+        self.assertIn("실시간 체결 확정값", enriched.market_signal_coverage["investor"]["latencyReason"])
         self.assertEqual("available", cached["marketSignalCoverage"]["investor"]["status"])
+        self.assertIs(False, cached["marketSignalCoverage"]["investor"]["realTime"])
         self.assertEqual(["/oauth2/tokenP", "/uapi/domestic-stock/v1/quotations/inquire-price", "/uapi/domestic-stock/v1/quotations/inquire-ccnl", "/uapi/domestic-stock/v1/quotations/inquire-investor", "/uapi/domestic-stock/v1/quotations/inquire-asking-price-exp-ccn"], [item[1] for item in calls])
 
     def test_kis_market_signal_provider_does_not_treat_price_foreign_zero_as_investor_flow(self):
@@ -1733,6 +1737,18 @@ class PythonServiceTests(unittest.TestCase):
             "volume": 245000,
             "volumeRatio": 1.4,
             "sector": "반도체",
+            "marketSignalCoverage": {
+                "investor": {
+                    "status": "available",
+                    "fields": ["foreignNetVolume", "institutionNetVolume"],
+                    "nonZeroFields": ["foreignNetVolume"],
+                    "realTime": False,
+                    "cadence": "intraday-cumulative",
+                    "latencyStatus": "delayed-or-batched",
+                    "latencyLabel": "KIS 장중 누적·지연 가능",
+                    "latencyReason": "KIS 투자자별 수급은 장중 누적 또는 공급자 지연 가능 데이터입니다.",
+                }
+            },
         })
         platform = normalize_position({
             "symbol": "AAPL",
@@ -1824,6 +1840,7 @@ class PythonServiceTests(unittest.TestCase):
         self.assertIn("FlowObservation", payload["tbox"]["classes"])
         self.assertIn("MarketRisk", payload["tbox"]["classes"])
         self.assertIn("DataQualityRisk", payload["tbox"]["classes"])
+        self.assertIn("DataLatency", payload["tbox"]["classes"])
         self.assertIn("RuntimeSetting", payload["tbox"]["classes"])
         self.assertIn("DataPipeline", payload["tbox"]["classes"])
         self.assertIn("CollectionSchedule", payload["tbox"]["classes"])
@@ -1887,6 +1904,7 @@ class PythonServiceTests(unittest.TestCase):
         self.assertTrue(any(item.relation_type == "EXPOSED_TO" for item in graph.relations))
         self.assertTrue(any(item.relation_type == "HAS_PRICE" for item in graph.relations))
         self.assertTrue(any(item.relation_type == "HAS_DATA_QUALITY" for item in graph.relations))
+        self.assertTrue(any(item.relation_type == "HAS_DATA_FRESHNESS" for item in graph.relations))
         self.assertTrue(any(item.relation_type == "HAS_MODEL_SCORE" for item in graph.relations))
         self.assertTrue(any(item.relation_type == "HAS_PIPELINE" for item in graph.relations))
         self.assertTrue(any(item.relation_type == "HAS_OBSERVATION" for item in graph.relations))
@@ -1922,6 +1940,7 @@ class PythonServiceTests(unittest.TestCase):
         self.assertTrue(any(item.kind == "notification-dispatch" for item in graph.entities))
         self.assertFalse(any(item.kind == "execution-plan" for item in graph.entities))
         self.assertTrue(any(item.kind == "trend-scenario" for item in graph.entities))
+        self.assertTrue(any(item.kind == "data-latency" for item in graph.entities))
         self.assertTrue(any(item.kind == "price-bar" for item in graph.entities))
         self.assertTrue(any(item.kind == "key-level" for item in graph.entities))
         self.assertTrue(any(item.kind == "liquidity-profile" for item in graph.entities))
@@ -3739,6 +3758,57 @@ class PythonServiceTests(unittest.TestCase):
         self.assertEqual("zero", investor_item["status"])
         self.assertIn("응답은 있었지만", investor_item["effect"])
         self.assertEqual("zero", context["facts"]["dataAvailability"]["investorFlow"]["status"])
+
+    def test_ontology_relation_reasoning_marks_investor_flow_latency_without_missing_data(self):
+        position = Position(
+            symbol="005930",
+            name="삼성전자",
+            market="KR",
+            currency="KRW",
+            market_value=1000000,
+            profit_loss_rate=-9.2,
+            sellable_quantity=10,
+            current_price=254000,
+            ma20=314950,
+            ma60=291175,
+            ma20_distance=-19.4,
+            ma60_distance=-12.8,
+            trade_strength=104.8,
+            buy_volume=1200,
+            sell_volume=900,
+            foreign_net_volume=-716994,
+            institution_net_volume=-3246131,
+            individual_net_volume=4206987,
+            quote_status="KIS 현재가, 체결강도, 방향별 체결량, 투자자별 수급 반영",
+            market_signal_coverage={
+                "ccnl": {
+                    "stage": "ccnl",
+                    "status": "available",
+                    "fields": ["tradeStrength", "buyVolume", "sellVolume"],
+                    "nonZeroFields": ["tradeStrength", "buyVolume", "sellVolume"],
+                },
+                "investor": {
+                    "stage": "investor",
+                    "status": "available",
+                    "fields": ["foreignNetVolume", "institutionNetVolume", "individualNetVolume"],
+                    "nonZeroFields": ["foreignNetVolume", "institutionNetVolume", "individualNetVolume"],
+                    "realTime": False,
+                    "latencyStatus": "delayed-or-batched",
+                    "latencyLabel": "KIS 장중 누적·지연 가능",
+                    "latencyReason": "KIS 투자자별 수급은 장중 누적 또는 공급자 지연 가능 데이터입니다.",
+                },
+            },
+        )
+        context = evaluate_position_relation_rules(position, portfolio_summary([position], fx_rates={"KRW": 1}))
+
+        missing_labels = [item["label"] for item in context["missingData"]]
+        warnings = context["facts"]["dataQualityWarnings"]
+
+        self.assertNotIn("투자자별 수급", missing_labels)
+        self.assertEqual("available", context["facts"]["dataAvailability"]["investorFlow"]["status"])
+        self.assertIs(False, context["facts"]["dataAvailability"]["investorFlow"]["realTime"])
+        self.assertTrue(any(item["key"] == "investorFlowLatency" for item in warnings))
+        self.assertLess(context["facts"]["dataQualityScore"], 100)
 
     def test_ontology_settings_drive_rule_metadata_and_ai_prompt_template(self):
         position = Position(
@@ -8411,6 +8481,55 @@ class PythonServiceTests(unittest.TestCase):
         self.assertEqual(0, rendered.count("<b>알림 정보</b>"))
         self.assertNotIn("• <b>분석</b>: <code>AI 투자 판단 / test AI</code>", rendered)
 
+    def test_validated_ai_message_shows_data_quality_warnings_separately_from_missing_data(self):
+        context = {
+            "messageType": "investmentInsight",
+            "messageDeliveryLevel": "absoluteBeginner",
+            "headline": "[관찰] 🛡️ 삼성전자: 분할축소 우선 점검",
+            "displayTarget": "삼성전자 / 005930",
+            "rawLines": "\n".join([
+                "현재가: 254,000원",
+                "평균매입가: 327,000원",
+                "수익률: -22.5%",
+                "수급: 거래량 19,944,482(1.3x), 체결강도 104.8",
+                "투자자: KIS 장중 누적·지연 가능 · 현재가·호가와 같은 실시간 체결 데이터 아님",
+                "외국인: 순매도 716,994주",
+                "기관: 순매도 3,246,131주",
+            ]),
+            "ontologyRelationContext": {
+                "graphStoreUsed": True,
+                "inferenceBoxUsed": True,
+                "source": "typedbInferenceBox",
+                "decision": {"basis": "typedbInferenceBox"},
+                "facts": {
+                    "dataQualityWarnings": [{
+                        "key": "investorFlowLatency",
+                        "label": "KIS 장중 누적·지연 가능",
+                        "effect": "KIS 투자자별 수급은 장중 누적 또는 공급자 지연 가능 데이터라 현재가·호가처럼 실시간 체결 확정값으로 보지 않습니다.",
+                    }],
+                },
+                "missingData": [],
+            },
+        }
+        response = validated_response_from_payload(context, {
+            "action": "TRIM",
+            "confidence": 88,
+            "summary": "분할축소가 더 맞습니다.",
+            "opinion": "일부 비중을 줄이는 기준을 먼저 정하세요.",
+            "evidence": ["손실 -22.5%", "20일선 아래"],
+            "counterEvidence": ["체결강도는 단기 받침"],
+            "invalidationCondition": "20일선 회복 시 약해집니다.",
+            "nextChecks": ["매도 가능 수량 확인"],
+            "missingDataImpact": [],
+            "sourceUrls": ["https://example.test/kis-investor-flow"],
+        }, source="test AI")
+
+        message = context_with_validated_ai_response(context, response)["telegramMessage"]
+
+        self.assertIn("<b>데이터 신뢰도</b>", message)
+        self.assertIn("실시간 체결 확정값으로 보지 않습니다", message)
+        self.assertNotIn("<b>데이터 빈 곳</b>", message)
+
     def test_notification_render_appends_short_tracking_number_only(self):
         rendered = render_notification(
             NotificationTemplate("investmentInsight", "{telegramMessage}"),
@@ -11108,6 +11227,16 @@ class PythonServiceTests(unittest.TestCase):
         self.assertIn("금액 +2,836억 원", corrected_investor_line)
         self.assertIn("개인: 순매수 2,031,705주", corrected_investor_line)
         self.assertIn("금액 +5,837억 원", corrected_investor_line)
+        position["marketSignalCoverage"] = {
+            "investor": {
+                "status": "available",
+                "realTime": False,
+                "latencyLabel": "KIS 장중 누적·지연 가능",
+            }
+        }
+        delayed_investor_line = monitor.investor_context_line(position)
+        self.assertIn("KIS 장중 누적·지연 가능", delayed_investor_line)
+        self.assertIn("실시간 체결 데이터 아님", delayed_investor_line)
         position.update({
             "quantity": 12,
             "sellable_quantity": 9,

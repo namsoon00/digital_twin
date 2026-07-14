@@ -270,6 +270,11 @@ def confidence_cap_for_response(
         lower(82.0, "의견이 약해지는 조건이 없어 확신도를 제한했습니다.")
     if missing_labels:
         lower(80.0, "부족 데이터가 있어 확신도를 제한했습니다.")
+    relation_context = relation_context_value(context or {})
+    relation_facts = relation_context.get("facts") if isinstance(relation_context.get("facts"), dict) else {}
+    quality_warnings = relation_facts.get("dataQualityWarnings") if isinstance(relation_facts.get("dataQualityWarnings"), list) else []
+    if quality_warnings:
+        lower(88.0, "실시간 확정값이 아닌 데이터 품질 경고가 있어 확신도를 제한했습니다.")
     freshness = (context or {}).get("dataFreshness") if isinstance((context or {}).get("dataFreshness"), dict) else {}
     freshness_status = str((context or {}).get("dataFreshnessStatus") or freshness.get("status") or "").strip().lower()
     freshness_decision = str((context or {}).get("dataFreshnessDecision") or "").strip().lower()

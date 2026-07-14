@@ -266,6 +266,15 @@ function checkFrontendAdminRender() {
       /\.notifications-view \.notification-diagnostics-summary-panel \.notification-diagnostics-grid\s*\{[\s\S]*grid-template-columns: repeat\(3, minmax\(0, 1fr\)\);/.test(styles),
     "PC 알림 탭의 상단 콘솔/진단 패널 레이아웃 보정 계약이 없습니다."
   );
+  assertOk(
+    styles.indexOf("Desktop no-three-line rhythm") >= 0 &&
+      /\.shell > \.topbar h1,[\s\S]*\.loading-source-row em\s*\{[\s\S]*white-space: nowrap;/.test(styles) &&
+      /\.app-nav-command-kicker\s*\{[\s\S]*display: none;/.test(styles) &&
+      /\.app-nav-routine-reason\s*\{[\s\S]*display: none;/.test(styles) &&
+      /\.account-history-panel \.account-command-grid,[\s\S]*\.account-command-panel \.account-command-grid\s*\{[\s\S]*grid-template-columns: repeat\(4, minmax\(0, 1fr\)\);/.test(styles) &&
+      /max-width: 1560px\)[\s\S]*\.account-history-panel \.account-command-grid,[\s\S]*\.account-quality-ledger\s*\{[\s\S]*grid-template-columns: repeat\(2, minmax\(0, 1fr\)\);/.test(styles),
+    "PC 화면의 상단/탭/계정 카드가 3줄 리듬으로 무너지는 것을 막는 최종 계약이 없습니다."
+  );
   assertOk(styles.indexOf("Professional finance top navigation shell") >= 0 && styles.indexOf("grid-template-columns: minmax(0, 1fr)") >= 0, "PC shell이 단일 컬럼 상단 탭형 작업 영역으로 전환되지 않습니다.");
   assertOk(/Professional finance top navigation shell[\s\S]*\.app-nav[\s\S]*grid-template-columns: minmax\(180px, 0\.17fr\) minmax\(0, 1fr\) minmax\(108px, auto\);/.test(styles), "PC 상단 금융 탭 네비게이션 3구획 구조가 없습니다.");
   assertOk(styles.indexOf(".app-nav-command") >= 0 && styles.indexOf(".app-nav-flow") >= 0 && styles.indexOf(".app-nav-mode") >= 0, "PC 상단 통합 command rail 스타일 정의가 없습니다.");

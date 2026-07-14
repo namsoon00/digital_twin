@@ -222,7 +222,20 @@ function checkFrontendAdminRender() {
   assertOk(/\.monitor-primary-state,[\s\S]*\.monitor-runtime-row,[\s\S]*\.monitor-alert-summary,[\s\S]*\.monitor-ledger-cell,[\s\S]*\.monitoring-detail-metric,[\s\S]*\{[\s\S]*padding: var\(--ds-row-pad-y\) var\(--ds-row-pad-x\);/.test(mobileSpacingAuditLayer), "모바일 모니터링 내부 카드 padding 보정이 없습니다.");
   assertOk(/\.admin-monitoring-panel \.monitor-primary-state\s*\{[\s\S]*min-height: 132px;[\s\S]*padding: var\(--ds-panel-pad-y\) var\(--ds-panel-pad-x\);/.test(mobileSpacingAuditLayer), "모바일 대표 모니터링 상태 카드의 구조적 여백 보정이 없습니다.");
   assertOk(styles.indexOf("@media (max-width: 1180px) and (min-width: 981px)") >= 0 && styles.indexOf("@media (max-width: 980px) and (min-width: 861px)") >= 0, "PC/태블릿 레이아웃 분기 규칙이 없습니다.");
-  assertOk(styles.indexOf("--ds-shell-width: 1720px") >= 0 && styles.indexOf("--ds-content-width: 1880px") >= 0 && styles.indexOf("--ds-top-nav-height: 104px") >= 0, "PC 중심 상단 통합 금융 콘솔 레이아웃 토큰이 없습니다.");
+  assertOk(
+    styles.indexOf("--ds-shell-width: 1720px") >= 0 &&
+      styles.indexOf("--ds-content-width: 1760px") >= 0 &&
+      styles.indexOf("--ds-page-content-width: 1680px") >= 0 &&
+      styles.indexOf("--ds-desktop-page-gutter: clamp(40px, 4.8vw, 92px)") >= 0 &&
+      styles.indexOf("--ds-top-nav-height: 104px") >= 0,
+    "PC 중심 상단 통합 금융 콘솔 레이아웃 토큰이 없습니다."
+  );
+  assertOk(
+    styles.indexOf("Desktop comfort rail") >= 0 &&
+      /\.managed-page\s*\{[\s\S]*max-width: var\(--ds-page-content-width\);[\s\S]*justify-self: center;/.test(styles) &&
+      /\.account-balance-audit \.source-stack\.compact\s*\{[\s\S]*grid-template-columns: repeat\(2, minmax\(0, 1fr\)\);/.test(styles),
+    "PC comfort rail과 계좌 검증 감사 레저 구조가 없습니다."
+  );
   assertOk(styles.indexOf("Professional finance top navigation shell") >= 0 && styles.indexOf("grid-template-columns: minmax(0, 1fr)") >= 0, "PC shell이 단일 컬럼 상단 탭형 작업 영역으로 전환되지 않습니다.");
   assertOk(/Professional finance top navigation shell[\s\S]*\.app-nav[\s\S]*grid-template-columns: minmax\(180px, 0\.17fr\) minmax\(0, 1fr\) minmax\(108px, auto\);/.test(styles), "PC 상단 금융 탭 네비게이션 3구획 구조가 없습니다.");
   assertOk(styles.indexOf(".app-nav-command") >= 0 && styles.indexOf(".app-nav-flow") >= 0 && styles.indexOf(".app-nav-mode") >= 0, "PC 상단 통합 command rail 스타일 정의가 없습니다.");

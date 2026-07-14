@@ -106,8 +106,12 @@ class ExternalApiGuard:
         failure_threshold: int,
         cooldown_minutes: int,
         retry_delay_seconds: float = 0.25,
+        shared_rate_limit_key: str = "",
+        shared_rate_limit_seconds: int = 0,
+        shared_rate_limit_label: str = "",
     ):
         entry = self.entry(key)
+        shared_entry = self.entry(shared_rate_limit_key) if shared_rate_limit_key else None
         now = self.now()
         opened_until = parse_iso(str(entry.get("openedUntil") or ""))
         if opened_until and opened_until > now:
@@ -115,6 +119,15 @@ class ExternalApiGuard:
         last_request_at = parse_iso(str(entry.get("lastRequestAt") or ""))
         if rate_limit_seconds and last_request_at and now - last_request_at < timedelta(seconds=rate_limit_seconds):
             raise ExternalRateLimited("local rate limit active")
+        if shared_entry is not None:
+            shared_last_request_at = parse_iso(str(shared_entry.get("lastRequestAt") or ""))
+            if (
+                shared_rate_limit_seconds
+                and shared_last_request_at
+                and now - shared_last_request_at < timedelta(seconds=shared_rate_limit_seconds)
+            ):
+                label_suffix = " (" + shared_rate_limit_label + ")" if shared_rate_limit_label else ""
+                raise ExternalRateLimited("local rate limit active" + label_suffix)
 
         last_error: Exception = RuntimeError("unknown error")
         max_attempts = max(1, int(attempts or 1))
@@ -125,6 +138,9 @@ class ExternalApiGuard:
                 entry["failures"] = 0
                 entry["lastError"] = ""
                 entry["openedUntil"] = ""
+                if shared_entry is not None:
+                    shared_entry["lastRequestAt"] = now.isoformat().replace("+00:00", "Z")
+                    shared_entry["lastLabel"] = label
                 return result
             except Exception as error:  # noqa: BLE001 - external adapters normalize vendor failures.
                 last_error = error
@@ -136,6 +152,10 @@ class ExternalApiGuard:
         entry["lastRequestAt"] = now.isoformat().replace("+00:00", "Z")
         entry["failures"] = failures
         entry["lastError"] = api_error_text(last_error)
+        if shared_entry is not None:
+            shared_entry["lastRequestAt"] = now.isoformat().replace("+00:00", "Z")
+            shared_entry["lastLabel"] = label
+            shared_entry["lastError"] = api_error_text(last_error)
         if failures >= max(1, int(failure_threshold or 1)):
             entry["openedUntil"] = (now + timedelta(minutes=max(1, int(cooldown_minutes or 1)))).isoformat().replace("+00:00", "Z")
         raise RuntimeError(label + " 실패 · " + api_error_text(last_error))

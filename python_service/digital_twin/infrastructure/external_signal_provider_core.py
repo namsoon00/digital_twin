@@ -135,6 +135,7 @@ class ExternalSignalCoreMixin:
             "newsMax": str(self.settings.get("externalNewsMaxSymbols") or "3"),
             "newsLookbackHours": str(self.settings.get("externalNewsLookbackHours") or "48"),
             "fxRateSourceVersion": "alpha-vantage-currency-exchange-v1",
+            "alphaRateLimitSeconds": str(self.settings.get("externalAlphaRateLimitSeconds") or "15"),
             "secMappings": symbol_assignments(self.settings.get("externalSecCompanyCiks") or ""),
             "dartLookbackDays": str(self.settings.get("externalDartLookbackDays") or "14"),
             "dartMappings": symbol_assignments(self.settings.get("externalDartCorpCodes") or ""),
@@ -221,6 +222,7 @@ class ExternalSignalCoreMixin:
 
     def guarded_call(self, source: str, target: str, fetch: Callable[[], object]):
         guard = ExternalApiGuard(self.provider_state, sleep=self.sleep)
+        shared_key = "alpha-vantage:provider" if self.is_alpha_vantage_source(source) else ""
         return guard.call(
             source.lower().replace(" ", "-") + ":" + target,
             source + " " + target,
@@ -229,7 +231,14 @@ class ExternalSignalCoreMixin:
             rate_limit_seconds=self.int_setting("externalApiRateLimitSeconds", 60, 0),
             failure_threshold=self.int_setting("externalApiCircuitFailures", 2, 1),
             cooldown_minutes=self.int_setting("externalApiCircuitCooldownMinutes", 30, 1),
+            shared_rate_limit_key=shared_key,
+            shared_rate_limit_seconds=self.int_setting("externalAlphaRateLimitSeconds", 15, 0) if shared_key else 0,
+            shared_rate_limit_label="Alpha Vantage provider" if shared_key else "",
         )
+
+    def is_alpha_vantage_source(self, source: str) -> bool:
+        normalized = str(source or "").strip().lower().replace("_", "-").replace(" ", "-")
+        return normalized.startswith("alpha-vantage")
 
     def limited_targets(self, signals: Dict[str, object], source: str, values: List[str], limit_key: str, fallback: int) -> List[str]:
         limit = self.int_setting(limit_key, fallback, 1)

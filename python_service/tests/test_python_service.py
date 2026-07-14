@@ -6928,6 +6928,7 @@ class PythonServiceTests(unittest.TestCase):
             "externalFredSeries": "DGS10",
             "externalCryptoIds": "bitcoin",
             "externalAlphaMaxSymbols": "2",
+            "externalAlphaRateLimitSeconds": "0",
             "externalSecMaxSymbols": "2",
             "externalNewsMaxSymbols": "2",
             "externalSecCompanyCiks": "AAPL=0000320193",
@@ -7456,6 +7457,55 @@ class PythonServiceTests(unittest.TestCase):
         self.assertEqual(130.25, first["equityQuotes"]["AAPL"]["price"])
         self.assertTrue(any("local rate limit" in item["message"] for item in second["statuses"]))
 
+    def test_external_signal_provider_rate_limits_alpha_vantage_across_endpoints(self):
+        calls = []
+
+        def fake_fetch(url, headers=None):
+            calls.append(url)
+            if "NEWS_SENTIMENT" in url:
+                return {"feed": []}
+            return {"Global Quote": {
+                "05. price": "130.25",
+                "06. volume": "58000000",
+                "07. latest trading day": "2026-07-01",
+                "09. change": "5.25",
+                "10. change percent": "4.2%",
+            }}
+
+        provider = ExternalSignalProvider(
+            settings={
+                "alphaVantageApiKey": "alpha-key",
+                "externalApiRetryAttempts": "1",
+                "externalApiRateLimitSeconds": "0",
+                "externalAlphaRateLimitSeconds": "3600",
+                "externalApiCircuitFailures": "2",
+                "externalApiCircuitCooldownMinutes": "30",
+                "externalCoinGeckoEnabled": "0",
+                "externalFredEnabled": "0",
+                "externalDartEnabled": "0",
+                "externalSecEnabled": "0",
+                "externalFxRateEnabled": "0",
+                "externalNewsEnabled": "1",
+                "externalNewsProvider": "alpha_vantage",
+            },
+            cache=TestExternalSignalCache(test_store_seed(self.temp.name)),
+            fetch_json=fake_fetch,
+            sleep=lambda _: None,
+        )
+        positions = [normalize_position({"symbol": "AAPL", "market": "US", "currency": "USD", "name": "Apple"})]
+
+        signals = provider.fetch_signals(positions)
+
+        self.assertEqual(1, len(calls))
+        self.assertEqual(130.25, signals["equityQuotes"]["AAPL"]["price"])
+        self.assertEqual({}, signals["newsHeadlines"])
+        self.assertIn("alpha-vantage:provider", provider.provider_state)
+        self.assertTrue(any(
+            item["source"] == "Alpha Vantage News"
+            and "local rate limit active (Alpha Vantage provider)" in item["message"]
+            for item in signals["statuses"]
+        ))
+
     def test_external_signal_provider_opens_circuit_after_repeated_failures(self):
         calls = []
 
@@ -7468,6 +7518,7 @@ class PythonServiceTests(unittest.TestCase):
                 "alphaVantageApiKey": "alpha-key",
                 "externalApiRetryAttempts": "1",
                 "externalApiRateLimitSeconds": "0",
+                "externalAlphaRateLimitSeconds": "0",
                 "externalApiCircuitFailures": "2",
                 "externalApiCircuitCooldownMinutes": "30",
             },

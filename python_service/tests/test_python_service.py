@@ -1459,6 +1459,7 @@ class PythonServiceTests(unittest.TestCase):
         self.assertIn("ontologyRelationRules", status["settings"])
         self.assertIn("aiPromptTemplates", status["settings"])
         self.assertIn("aiPromptPolicy", status["settings"])
+        self.assertIn("kisMarketSignalUnchangedStaleCount", status["settings"])
         self.assertTrue(status["configured"]["kisAppKey"])
         self.assertTrue(status["configured"]["kisAppSecret"])
         self.assertNotIn("kisAccountNo", status["configured"])
@@ -11290,6 +11291,12 @@ class PythonServiceTests(unittest.TestCase):
         self.assertTrue(payload["buildId"])
         self.assertTrue(any(page["id"] == "model-review" for page in payload["pages"]))
         self.assertIn("clientSecret", encoded)
+        field_keys = {
+            field["key"]
+            for page in payload["pages"]
+            for field in page.get("fields", [])
+        }
+        self.assertIn("kisMarketSignalUnchangedStaleCount", field_keys)
         self.assertEqual(1, payload["localData"]["accountCount"])
         self.assertEqual(["AAPL", "005930"], payload["localData"]["accounts"][0]["watchlistSymbols"])
         self.assertTrue(payload["localData"]["accounts"][0]["clientSecret"])

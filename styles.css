@@ -17725,8 +17725,9 @@ html[data-theme="dark"] .ontology-graph-expanded-toolbar .icon-button.danger {
 :root {
   --ds-top-nav-height: 104px;
   --ds-top-nav-tab-height: 34px;
-  --ds-content-width: 1880px;
-  --ds-desktop-page-gutter: clamp(24px, 3vw, 56px);
+  --ds-content-width: 1760px;
+  --ds-page-content-width: 1680px;
+  --ds-desktop-page-gutter: clamp(40px, 4.8vw, 92px);
 }
 
 .console-shell .topbar,
@@ -19973,5 +19974,154 @@ html[data-theme="dark"] .ontology-graph-expanded-toolbar .icon-button.danger {
   .system-detail-grid,
   .settings-detail-grid {
     grid-template-columns: minmax(0, 1fr);
+  }
+}
+
+/* Desktop comfort rail: keep wide finance screens readable instead of edge-to-edge. */
+@media (min-width: 1181px) {
+  .console-shell {
+    row-gap: 14px;
+  }
+
+  .managed-page {
+    width: 100%;
+    max-width: var(--ds-page-content-width);
+    justify-self: center;
+  }
+
+  .app-nav {
+    padding: 10px 12px;
+  }
+
+  .app-nav-command,
+  .app-nav-command.has-mode {
+    grid-template-columns: minmax(240px, 0.32fr) auto minmax(320px, 0.5fr) minmax(260px, 0.32fr) minmax(340px, 0.42fr);
+    gap: 10px;
+    min-height: 44px;
+    padding: 8px 10px;
+  }
+
+  .app-nav-command.no-mode {
+    grid-template-columns: minmax(240px, 0.34fr) minmax(320px, 0.56fr) minmax(260px, 0.34fr) minmax(340px, 0.42fr);
+  }
+
+  .app-nav-flow .page-flow-node strong {
+    max-width: 16ch;
+  }
+
+  .app-nav-current em {
+    max-width: 38ch;
+  }
+
+  .app-nav-routine {
+    grid-template-columns: minmax(110px, 0.52fr) minmax(0, 1fr) auto;
+  }
+
+  .account-balance-panel {
+    width: 100%;
+    max-width: 1520px;
+    justify-self: center;
+  }
+
+  .account-balance-panel .panel-head {
+    grid-template-columns: minmax(0, 1fr) auto;
+    min-height: 66px;
+    padding: 16px 22px;
+    border-bottom: 1px solid var(--ds-card-border);
+  }
+
+  .account-balance-audit {
+    gap: 0;
+  }
+
+  .account-balance-audit > .account-board-title {
+    padding: 16px 22px 12px;
+    border-bottom: 1px solid var(--ds-card-border);
+    background: linear-gradient(180deg, var(--ds-card-head-bg), var(--panel));
+  }
+
+  .account-balance-audit > .account-board-title span {
+    max-width: 58ch;
+    text-align: left;
+  }
+
+  .account-balance-audit .account-balance-grid {
+    grid-template-columns: repeat(4, minmax(0, 1fr));
+    gap: 12px;
+    padding: 18px 22px;
+    border-top: 0;
+    background: color-mix(in srgb, var(--panel) 92%, var(--panel-soft) 8%);
+  }
+
+  .account-balance-audit .account-control-metric {
+    min-height: 88px;
+    padding: 14px 16px;
+    background: var(--panel);
+  }
+
+  .account-balance-audit .account-control-metric strong {
+    font-size: 20px;
+    line-height: 1.16;
+  }
+
+  .account-balance-audit .source-stack.compact {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 0 28px;
+    padding: 14px 22px 18px;
+    border-top: 1px solid var(--ds-card-border);
+    background: var(--panel);
+  }
+
+  .account-balance-audit .source-row {
+    display: grid;
+    grid-template-columns: minmax(118px, 0.38fr) minmax(0, 1fr);
+    align-items: start;
+    gap: 10px;
+    min-height: 0;
+    padding: 11px 0;
+    border: 0;
+    border-bottom: 1px solid color-mix(in srgb, var(--line) 82%, transparent);
+    border-radius: 0;
+    background: transparent;
+    box-shadow: none;
+  }
+
+  .account-balance-audit .source-row:nth-last-child(-n + 2) {
+    border-bottom: 0;
+  }
+
+  .account-balance-audit .source-row span {
+    color: var(--muted);
+    font-size: 12px;
+    font-weight: 900;
+    line-height: 1.35;
+  }
+
+  .account-balance-audit .source-row strong {
+    justify-self: start;
+    color: var(--ink);
+    font-size: 13px;
+    font-weight: 900;
+    line-height: 1.42;
+    text-align: left;
+  }
+}
+
+@media (min-width: 1181px) and (max-width: 1460px) {
+  .account-balance-audit .account-balance-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .account-balance-audit .source-stack.compact {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .account-balance-audit .source-row:nth-last-child(-n + 2) {
+    border-bottom: 1px solid color-mix(in srgb, var(--line) 82%, transparent);
+  }
+
+  .account-balance-audit .source-row:last-child {
+    border-bottom: 0;
   }
 }

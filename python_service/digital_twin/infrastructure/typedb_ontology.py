@@ -103,6 +103,21 @@ def rulebox_runtime_metadata(rules_payload: List[Dict[str, object]]) -> Dict[str
     }
 
 
+def rulebox_structural_fingerprint(rules_payload: List[Dict[str, object]]) -> Dict[str, Tuple[int, int]]:
+    fingerprint: Dict[str, Tuple[int, int]] = {}
+    for rule in rules_payload or []:
+        if not isinstance(rule, dict):
+            continue
+        rule_id = str(rule.get("rule_id") or rule.get("ruleId") or "").strip()
+        if not rule_id:
+            continue
+        fingerprint[rule_id] = (
+            len(rule.get("conditions") or []),
+            len(rule.get("derivations") or []),
+        )
+    return fingerprint
+
+
 def node_boxes(graph: PortfolioOntology) -> List[str]:
     boxes = {
         str((item.properties or {}).get("ontologyBox") or "ABox")
@@ -649,6 +664,7 @@ class TypeDBOntologyGraphRepository(GraphStoreOntologyRowMapperMixin):
             "anyConditionMinCount": int(number_or_none(merged.get("anyConditionMinCount")) or 1),
             "enabled": bool(merged.get("enabled", True)),
             "conditionId": str(merged.get("conditionId") or condition.get("condition_id") or ""),
+            "conditionIndex": int(number_or_none(merged.get("conditionIndex")) or 0),
             "conditionKind": str(condition.get("kind") or merged.get("conditionKind") or ""),
             "conditionField": str(condition.get("field") or merged.get("conditionField") or ""),
             "conditionOperator": str(condition.get("operator") or merged.get("conditionOperator") or ""),
@@ -1114,6 +1130,7 @@ relation ontology-assertion,
         except ValueError as error:
             return {"configured": True, "saved": False, "seeded": False, "status": "invalid-rulebox", "graphStore": "typedb", "reason": str(error)}
         rules = list(rules)
+        rules_payload = rulebox_rules_to_payload(rules)
         self._last_rules = rules
         result = self.save_graph(ontology_seed_graph(rules))
         result.update({
@@ -1123,6 +1140,51 @@ relation ontology-assertion,
             "ruleCount": len(rules),
             "graphStore": "typedb",
         })
+        if typedb_bool(payload.get("replaceRuleBox")) and result.get("saved"):
+            expected_rulebox = rulebox_runtime_metadata(rules_payload)
+            rulebox_result = self.save_rulebox({"rules": rules_payload})
+            expected_structure = rulebox_structural_fingerprint(rules_payload)
+            active_rules_payload = rulebox_result.get("rules") if isinstance(rulebox_result.get("rules"), list) else []
+            active_structure = rulebox_structural_fingerprint(active_rules_payload)
+            active_rule_count = int(number_or_none(rulebox_result.get("ruleCount") or rulebox_result.get("ruleboxRuleCount")) or 0)
+            active_rule_hash = str(rulebox_result.get("ruleboxRulesHash") or "")
+            hash_matched = active_rule_hash == expected_rulebox["ruleboxRulesHash"]
+            replace_verified = (
+                bool(rulebox_result.get("saved"))
+                and str(rulebox_result.get("status") or "") == "ok"
+                and active_rule_count == len(rules_payload)
+                and active_structure == expected_structure
+            )
+            result.update({
+                "ruleBoxReplaceRequested": True,
+                "ruleBoxReplaced": replace_verified,
+                "ruleBoxHashMatched": hash_matched,
+                "activeRuleBoxRuleCount": active_rule_count,
+                "expectedRuleBoxRuleCount": len(rules_payload),
+                "activeRuleBoxShortHash": str(rulebox_result.get("ruleboxShortHash") or active_rule_hash[:12]),
+                "expectedRuleBoxShortHash": expected_rulebox["ruleboxShortHash"],
+                "ruleBoxReplaceResult": {
+                    "saved": bool(rulebox_result.get("saved")),
+                    "status": rulebox_result.get("status") or "",
+                    "reason": rulebox_result.get("reason") or "",
+                    "ruleCount": active_rule_count,
+                    "conditionCount": int(number_or_none(rulebox_result.get("conditionCount") or rulebox_result.get("ruleboxConditionCount")) or 0),
+                    "derivationCount": int(number_or_none(rulebox_result.get("derivationCount") or rulebox_result.get("ruleboxDerivationCount")) or 0),
+                    "ruleboxShortHash": str(rulebox_result.get("ruleboxShortHash") or active_rule_hash[:12]),
+                },
+            })
+            if replace_verified and typedb_bool(payload.get("clearInference")):
+                result["clearInferenceResult"] = self.clear_inferencebox()
+            if not replace_verified:
+                result.update({
+                    "saved": False,
+                    "seeded": False,
+                    "status": rulebox_result.get("status") or "rulebox-replace-failed",
+                    "reason": (
+                        "RuleBox replace requested but active RuleBox did not match the seeded rules. "
+                        + str(rulebox_result.get("reason") or "")
+                    ).strip(),
+                })
         return result
 
     def rulebox_snapshot(self) -> Dict[str, object]:

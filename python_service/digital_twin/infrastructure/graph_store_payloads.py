@@ -62,9 +62,34 @@ def condition_target_level_types(condition: Dict[str, object]) -> List[str]:
     filters = condition.get("target_property_filters") if isinstance(condition.get("target_property_filters"), dict) else {}
     return list_of_strings(filters.get("levelType"))
 
+KNOWN_TARGET_FILTER_KEYS = {
+    "field",
+    "levelType",
+    "dataScope",
+    "domainScope",
+    "relationScope",
+    "group",
+    "scope",
+    "eventType",
+    "polarity",
+    "materialityPassed",
+    "minMaterialityScore",
+    "minValue",
+    "maxValue",
+    "tboxClass",
+    "tboxClasses",
+}
+
 def condition_target_filter_values(condition: Dict[str, object], key: str) -> List[str]:
     filters = condition.get("target_property_filters") if isinstance(condition.get("target_property_filters"), dict) else {}
-    return list_of_strings(filters.get(key))
+    values = list_of_strings(filters.get(key))
+    if values or key != "field":
+        return values
+    return [
+        str(filter_key)
+        for filter_key, value in filters.items()
+        if str(filter_key or "") not in KNOWN_TARGET_FILTER_KEYS and value not in (None, "", [], {})
+    ]
 
 def condition_target_filter_bool(condition: Dict[str, object], key: str):
     filters = condition.get("target_property_filters") if isinstance(condition.get("target_property_filters"), dict) else {}
@@ -166,6 +191,7 @@ class GraphStoreOntologyRowMapperMixin:
                 "nativeTypeDbReasoned": bool(properties.get("nativeTypeDbReasoned")),
                 "enabled": bool(properties.get("enabled")) if "enabled" in properties else False,
                 "conditionId": str(properties.get("conditionId") or condition.get("condition_id") or ""),
+                "conditionIndex": int(properties.get("conditionIndex") or 0),
                 "conditionKind": str(condition.get("kind") or ""),
                 "conditionField": str(condition.get("field") or ""),
                 "conditionOperator": str(condition.get("operator") or ""),

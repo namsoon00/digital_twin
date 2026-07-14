@@ -6,6 +6,7 @@ from .macro_context import macro_context_facts
 from .market_data import clamp, number
 from . import news_analysis as news_domain
 from .accounts import investment_strategy_profile
+from .instrument_profiles import instrument_profile_for_position
 from .ontology_relation_contracts import BTC_SENSITIVE_SYMBOLS
 from .portfolio import PortfolioSummary, Position, expects_kr_microstructure_signals
 from .volume_time_adjustment import volume_pace_snapshot
@@ -455,6 +456,7 @@ def _loss_smart_money_facts(facts: Dict[str, object]) -> Dict[str, object]:
     trend_recovery = bool(facts.get("supportRetest") or facts.get("recoveryAttempt") or number(facts.get("priceChangeRate")) >= 1.0)
     news_clear = direct_risk_news == 0
     position_weight_ok = not position_weight or position_weight <= max_position_weight
+    avoid_averaging_down = bool(facts.get("avoidAveragingDown"))
     recovery_flags = {
         "5일선 회복": ma5_recovered,
         "20일선 회복": ma20_recovered,
@@ -478,15 +480,6 @@ def _loss_smart_money_facts(facts: Dict[str, object]) -> Dict[str, object]:
     elif loss_active and joint_inflow:
         stage = "FLOW_DEFENSE"
         label = "매도 강도 완화"
-        if direct_risk_news:
-            blocked_reasons.append("직접 악재 뉴스 있음")
-        if not position_weight_ok:
-            blocked_reasons.append("종목 비중이 투자 성향 한도보다 큼")
-        if recovery_count < watch_min:
-            blocked_reasons.append("회복 확인 신호 부족")
-        if recovery_count >= watch_min:
-            stage = "ADD_BUY_WATCH"
-            label = "추가매수 관찰"
         review_ready = (
             allow_review
             and recovery_count >= review_min
@@ -494,6 +487,21 @@ def _loss_smart_money_facts(facts: Dict[str, object]) -> Dict[str, object]:
             and position_weight_ok
             and (ma20_recovered or (ma5_recovered and ma60_supported))
         )
+        profile_blocks_loss_add = avoid_averaging_down and not review_ready
+        if direct_risk_news:
+            blocked_reasons.append("직접 악재 뉴스 있음")
+        if not position_weight_ok:
+            blocked_reasons.append("종목 비중이 투자 성향 한도보다 큼")
+        if profile_blocks_loss_add:
+            blocked_reasons.append("종목 타입 정책상 손실 구간 추가매수 회피")
+        if recovery_count < watch_min:
+            blocked_reasons.append("회복 확인 신호 부족")
+        if recovery_count >= watch_min and not profile_blocks_loss_add:
+            stage = "ADD_BUY_WATCH"
+            label = "추가매수 관찰"
+        elif recovery_count >= watch_min and profile_blocks_loss_add:
+            stage = "FLOW_DEFENSE"
+            label = "수급 방어 관찰"
         if review_ready:
             stage = "ADD_BUY_REVIEW"
             label = "조건부 추가매수 검토"
@@ -803,6 +811,18 @@ def position_signal_facts(
         "secFiling": dict(sec_context or {}) if isinstance(sec_context, dict) else {},
         "expectsKrMicrostructureSignals": expects_kr_microstructure_signals(position.market, position.currency, symbol),
     }
+    profile = instrument_profile_for_position(position, settings)
+    facts.update({
+        "instrumentProfile": profile.to_dict(),
+        "instrumentProfileLabel": profile.label,
+        "instrumentArchetypes": list(profile.archetypes),
+        "instrumentPositionIntent": profile.position_intent,
+        "instrumentSensitivities": dict(profile.sensitivities),
+        "instrumentPolicies": dict(profile.policies),
+        "allowAddOnStrength": profile.allow_add_on_strength,
+        "trimOnTrendBreak": profile.trim_on_trend_break,
+        "avoidAveragingDown": profile.avoid_averaging_down,
+    })
     research_by_id = {}
     for item in research_evidence_from_facts(symbol, facts) + research_evidence_from_external_signals(symbol, external_signals):
         research_by_id[item.evidence_id] = item.to_dict()

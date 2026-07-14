@@ -223,6 +223,93 @@ def rate_sensitive_position(position: Position) -> bool:
     )
 
 
+def crypto_sensitive_position(position: Position) -> bool:
+    market = str(position.market or "").upper().strip()
+    currency = str(position.currency or "").upper().strip()
+    sector = str(position.sector or "").lower().strip()
+    symbol = str(position.symbol or "").upper().strip()
+    name = str(position.name or "").lower().strip()
+    return (
+        symbol in {"MSTR", "STRC", "COIN", "MARA", "RIOT", "CLSK", "HUT", "BITF"}
+        or any(token in sector for token in ["디지털자산", "crypto", "bitcoin", "비트코인"])
+        or any(token in name for token in ["strategy", "bitcoin", "crypto", "스트래티지", "비트코인"])
+        or (market in {"US", "USA", "NASDAQ", "NYSE"} and currency == "USD" and "디지털" in sector)
+    )
+
+
+def macro_series_value(macro: Dict[str, object], series_id: str) -> float:
+    series = macro.get("series") if isinstance(macro.get("series"), dict) else {}
+    item = series.get(series_id) if isinstance(series.get(series_id), dict) else {}
+    return number(item.get("value"))
+
+
+def macro_delta_bp(macro: Dict[str, object], key: str) -> float:
+    candidates = [
+        key + "DeltaBp",
+        key[0].lower() + key[1:] + "DeltaBp" if key else "",
+    ]
+    for candidate in candidates:
+        if candidate and macro.get(candidate) not in (None, ""):
+            return number(macro.get(candidate))
+    return 0.0
+
+
+def macro_regime_profile(macro: Dict[str, object]) -> Dict[str, object]:
+    if not isinstance(macro, dict):
+        return {}
+    dgs10 = macro_series_value(macro, "DGS10")
+    dgs2 = macro_series_value(macro, "DGS2")
+    dff = macro_series_value(macro, "DFF")
+    spread = number(macro.get("yieldSpread10y2y")) if macro.get("yieldSpread10y2y") not in (None, "") else dgs10 - dgs2
+    if not any([dgs10, dgs2, dff, spread]):
+        return {}
+    dgs10_delta = macro_delta_bp(macro, "dgs10")
+    spread_delta = macro_delta_bp(macro, "yieldSpread10y2y")
+    high_rate = bool(dgs10 and dgs10 >= 4.5)
+    inverted_curve = bool(spread < 0)
+    rate_shock = bool(max(abs(dgs10_delta), abs(spread_delta)) >= 15)
+    if high_rate and inverted_curve:
+        regime = "high-rate-inverted-curve"
+        label = "고금리·역전 수익률곡선"
+        polarity = "risk"
+        impact = 9.0
+    elif high_rate:
+        regime = "high-rate"
+        label = "고금리 레짐"
+        polarity = "risk"
+        impact = 7.0
+    elif inverted_curve:
+        regime = "inverted-curve"
+        label = "역전 수익률곡선"
+        polarity = "risk"
+        impact = 6.5
+    elif rate_shock:
+        regime = "rate-shock"
+        label = "금리 변화 확대"
+        polarity = "risk"
+        impact = 6.0
+    else:
+        regime = "rate-context"
+        label = "금리 맥락"
+        polarity = "context"
+        impact = 0.0
+    return {
+        "regime": regime,
+        "label": label,
+        "polarity": polarity,
+        "opinionImpact": impact,
+        "dgs10": round(dgs10, 4),
+        "dgs2": round(dgs2, 4),
+        "dff": round(dff, 4),
+        "yieldSpread10y2y": round(spread, 4),
+        "dgs10DeltaBp": round(dgs10_delta, 2),
+        "yieldSpreadDeltaBp": round(spread_delta, 2),
+        "highRate": high_rate,
+        "invertedCurve": inverted_curve,
+        "rateShock": rate_shock,
+    }
+
+
 def add_external_signal_concepts(
     graph: PortfolioOntology,
     portfolio_node_id: str,
@@ -259,6 +346,23 @@ def add_portfolio_macro_and_cross_asset_concepts(
 ) -> None:
     macro = external_signals.get("macro") if isinstance(external_signals.get("macro"), dict) else {}
     series = macro.get("series") if isinstance(macro.get("series"), dict) else {}
+    regime = macro_regime_profile(macro)
+    if regime:
+        regime_id = add_entity(graph, "macro-regime", "rates", str(regime.get("label") or "거시 레짐"), {
+            "tboxClass": "MacroRegime",
+            "tboxClasses": ["Observation", "ExternalObservation", "ExternalSignal", "MacroIndicator", "MacroRegime", "MacroSignal", "RegimeRisk"],
+            "source": "macro",
+            **regime,
+        })
+        regime_props = {
+            "source": "macro",
+            "polarity": str(regime.get("polarity") or "context"),
+            "opinionImpact": number(regime.get("opinionImpact")),
+            "aiInfluenceLabel": str(regime.get("label") or "거시 레짐"),
+            "dataScope": "macro",
+        }
+        add_relation(graph, portfolio_node_id, regime_id, "HAS_MACRO_REGIME", weight=0.78, properties=regime_props)
+        add_relation(graph, regime_id, portfolio_node_id, "AFFECTS", weight=0.70, properties=regime_props)
     for series_id, item in sorted(series.items()):
         if not isinstance(item, dict):
             continue
@@ -320,22 +424,115 @@ def add_portfolio_macro_and_cross_asset_concepts(
     for coin_id, item in sorted(crypto.items()):
         if not isinstance(item, dict):
             continue
+        symbol = str(item.get("symbol") or coin_id).upper().strip()
+        name = str(item.get("name") or coin_id)
         change24h = number(item.get("change24h"))
         change7d = number(item.get("change7d"))
+        price = number(item.get("price"))
+        volume24h = number(item.get("volume24h"))
+        asset_id = add_entity(graph, "crypto-asset", symbol or str(coin_id), name, {
+            "tboxClass": "CryptoAsset",
+            "tboxClasses": ["Instrument", "CryptoAsset"],
+            "symbol": symbol,
+            "coinId": str(coin_id),
+            "provider": str(item.get("provider") or "CoinGecko"),
+        })
         crypto_id = add_entity(graph, "crypto-market-signal", str(coin_id), str(item.get("name") or coin_id), {
             "tboxClass": "CryptoMarketSignal",
             "tboxClasses": ["Observation", "ExternalObservation", "ExternalSignal", "CryptoMarketSignal", "CryptoSignal"],
             "provider": str(item.get("provider") or "CoinGecko"),
-            "symbol": str(item.get("symbol") or "").upper(),
-            "price": round(number(item.get("price")), 4),
+            "symbol": symbol,
+            "price": round(price, 4),
             "change24h": round(change24h, 2),
             "change7d": round(change7d, 2),
-            "volume24h": round(number(item.get("volume24h")), 2),
+            "volume24h": round(volume24h, 2),
+            "marketCap": round(number(item.get("marketCap")), 2),
+            "lastUpdated": str(item.get("lastUpdated") or ""),
         })
         magnitude = max(abs(change24h), abs(change7d))
-        props = {"source": "cryptoMarkets", "polarity": "risk" if magnitude >= 4 else "context", "opinionImpact": min(12.0, magnitude) if magnitude >= 4 else 0.0, "aiInfluenceLabel": str(item.get("name") or coin_id) + " 변동성"}
+        props = {
+            "source": "cryptoMarkets",
+            "symbol": symbol,
+            "polarity": "risk" if magnitude >= 4 else "context",
+            "opinionImpact": min(12.0, magnitude) if magnitude >= 4 else 0.0,
+            "aiInfluenceLabel": name + " 변동성",
+            "dataScope": "crypto",
+        }
+        price_id = add_entity(graph, "price-bar", symbol + ":crypto:latest", name + " 현재 가격", {
+            "tboxClass": "PriceBar",
+            "tboxClasses": ["Observation", "PriceObservation", "PriceBar"],
+            "symbol": symbol,
+            "coinId": str(coin_id),
+            "close": round(price, 4),
+            "changeRate": round(change24h, 2),
+            "volume": round(volume24h, 2),
+            "observedAt": str(item.get("lastUpdated") or ""),
+            "provider": str(item.get("provider") or "CoinGecko"),
+        })
+        path_id = add_entity(graph, "price-path", symbol + ":crypto:1h-24h-7d", name + " 가격 경로", {
+            "tboxClass": "PricePath",
+            "tboxClasses": ["Observation", "PriceObservation", "PricePath", "CryptoMarketSignal"],
+            "symbol": symbol,
+            "coinId": str(coin_id),
+            "change1h": round(number(item.get("change1h")), 2),
+            "change24h": round(change24h, 2),
+            "change7d": round(change7d, 2),
+            "pathState": crypto_path_state(change24h, change7d),
+            "provider": str(item.get("provider") or "CoinGecko"),
+        })
+        volume_id = add_entity(graph, "volume-profile", symbol + ":crypto", name + " 거래량 프로파일", {
+            "tboxClass": "VolumeProfile",
+            "tboxClasses": ["Observation", "VolumeObservation", "FlowObservation", "VolumeProfile", "TradeFlow", "FlowSignal"],
+            "symbol": symbol,
+            "coinId": str(coin_id),
+            "volume24h": round(volume24h, 2),
+            "marketCap": round(number(item.get("marketCap")), 2),
+            "turnoverPct": round((volume24h / number(item.get("marketCap"))) * 100, 3) if volume24h and number(item.get("marketCap")) else 0.0,
+            "provider": str(item.get("provider") or "CoinGecko"),
+        })
+        liquidity_id = add_entity(graph, "liquidity-profile", symbol + ":crypto", name + " 크립토 유동성", {
+            "tboxClass": "LiquidityProfile",
+            "tboxClasses": ["Risk", "LiquidityRisk", "LiquidityProfile"],
+            "symbol": symbol,
+            "coinId": str(coin_id),
+            "volume24h": round(volume24h, 2),
+            "marketCap": round(number(item.get("marketCap")), 2),
+            "liquidityScore": round(min(100.0, (volume24h / 1000000000) * 8), 2) if volume24h else 0.0,
+            "provider": str(item.get("provider") or "CoinGecko"),
+        })
+        quality_id = add_entity(graph, "data-quality", symbol + ":crypto", name + " 크립토 데이터 품질", {
+            "tboxClass": "DataQuality",
+            "tboxClasses": ["Observation", "DataQuality", "DataQualitySignal"],
+            "symbol": symbol,
+            "provider": str(item.get("provider") or "CoinGecko"),
+            "hasPrice": bool(price),
+            "hasVolume24h": bool(volume24h),
+            "hasChange24h": item.get("change24h") not in (None, ""),
+            "lastUpdated": str(item.get("lastUpdated") or ""),
+            "dataScope": "crypto",
+        })
         add_relation(graph, portfolio_node_id, crypto_id, "HAS_EXTERNAL_SIGNAL", weight=1.0, properties=props)
+        add_relation(graph, portfolio_node_id, asset_id, "HAS_CRYPTO_EXPOSURE", weight=0.72, properties=props)
+        add_relation(graph, asset_id, crypto_id, "HAS_EXTERNAL_SIGNAL", weight=1.0, properties=props)
+        add_relation(graph, asset_id, price_id, "HAS_PRICE", weight=1.0, properties=props)
+        add_relation(graph, asset_id, path_id, "HAS_PRICE_PATH", weight=1.0, properties=props)
+        add_relation(graph, asset_id, volume_id, "HAS_TRADE_FLOW", weight=1.0, properties={**props, "polarity": "context"})
+        add_relation(graph, asset_id, liquidity_id, "HAS_LIQUIDITY_PROFILE", weight=0.72, properties={**props, "polarity": "context"})
+        add_relation(graph, asset_id, quality_id, "HAS_DATA_QUALITY", weight=0.84, properties={**props, "polarity": "context", "opinionImpact": 0.0})
         add_relation(graph, crypto_id, portfolio_node_id, "AFFECTS", weight=min(1.0, magnitude / 10), properties=props)
+        add_relation(graph, path_id, crypto_id, "CONFIRMS_SIGNAL", weight=0.76, properties=props)
+
+
+def crypto_path_state(change24h: float, change7d: float) -> str:
+    if change24h <= -4 and change7d <= -8:
+        return "selloff-continues"
+    if change24h >= 4 and change7d >= 8:
+        return "rally-continues"
+    if change24h >= 3 and change7d < 0:
+        return "rebound-after-weakness"
+    if change24h <= -3 and change7d > 0:
+        return "pullback-after-strength"
+    return "mixed"
 
 
 def add_external_signal_quality_concepts(graph: PortfolioOntology, portfolio_node_id: str, external_signals: Dict[str, object]) -> None:
@@ -386,6 +583,7 @@ def add_position_macro_context_concepts(
     runtime_context: Dict[str, object],
 ) -> None:
     weight = round(position_weight(position, portfolio) / 100, 4) if is_holding_position(position) else 0.15
+    context_weight = max(0.15, weight or 0.15)
     currency = str(position.currency or "").upper().strip()
     for pair, item in sorted(fx_rate_entries(external_signals, runtime_context).items()):
         base = str(item.get("base") or "").upper()
@@ -400,10 +598,24 @@ def add_position_macro_context_concepts(
             "aiInfluenceLabel": pair_label + " 환율 민감도",
             "rate": round(number(item.get("rate")), 6),
         }
-        add_relation(graph, stock_id, rate_id, "HAS_FX_EXPOSURE", weight=weight or 0.15, properties=props)
+        add_relation(graph, stock_id, rate_id, "HAS_FX_EXPOSURE", weight=context_weight, properties=props)
         add_relation(graph, rate_id, stock_id, "AFFECTS", weight=0.62, properties=props)
     if not rate_sensitive_position(position):
+        add_position_crypto_exposure_concepts(graph, stock_id, position, external_signals, weight)
         return
+    macro = external_signals.get("macro") if isinstance(external_signals, dict) and isinstance(external_signals.get("macro"), dict) else {}
+    regime = macro_regime_profile(macro)
+    if regime:
+        regime_id = entity_id("macro-regime", "rates")
+        props = {
+            "source": "macro",
+            "polarity": str(regime.get("polarity") or "context"),
+            "opinionImpact": number(regime.get("opinionImpact")),
+            "aiInfluenceLabel": str(regime.get("label") or "거시 레짐") + " 민감도",
+            "dataScope": "macro",
+        }
+        add_relation(graph, stock_id, regime_id, "HAS_MACRO_REGIME", weight=context_weight, properties=props)
+        add_relation(graph, regime_id, stock_id, "AFFECTS", weight=0.60, properties=props)
     for series_id, rate_id in sorted(interest_rate_signal_ids(external_signals).items()):
         is_curve = series_id == "YIELDSPREAD10Y2Y"
         props = {
@@ -413,8 +625,55 @@ def add_position_macro_context_concepts(
         }
         if series_id in {"DGS10", "DGS2", "DFF"}:
             props["rateSeriesId"] = series_id
-        add_relation(graph, stock_id, rate_id, "HAS_RATE_SENSITIVITY", weight=weight or 0.15, properties=props)
+        add_relation(graph, stock_id, rate_id, "HAS_RATE_SENSITIVITY", weight=context_weight, properties=props)
         add_relation(graph, rate_id, stock_id, "AFFECTS", weight=0.58 if is_curve else 0.62, properties=props)
+    add_position_crypto_exposure_concepts(graph, stock_id, position, external_signals, weight)
+
+
+def add_position_crypto_exposure_concepts(
+    graph: PortfolioOntology,
+    stock_id: str,
+    position: Position,
+    external_signals: Dict[str, object],
+    weight: float,
+) -> None:
+    if not crypto_sensitive_position(position):
+        return
+    crypto = external_signals.get("cryptoMarkets") if isinstance(external_signals, dict) and isinstance(external_signals.get("cryptoMarkets"), dict) else {}
+    if not crypto:
+        return
+    symbol = str(position.symbol or "").upper().strip()
+    for coin_id, item in sorted(crypto.items()):
+        if not isinstance(item, dict):
+            continue
+        coin_symbol = str(item.get("symbol") or coin_id).upper().strip()
+        if coin_symbol not in {"BTC", "ETH"} and str(coin_id).lower() not in {"bitcoin", "ethereum"}:
+            continue
+        change24h = number(item.get("change24h"))
+        change7d = number(item.get("change7d"))
+        magnitude = max(abs(change24h), abs(change7d))
+        exposure_id = add_entity(graph, "crypto-exposure", symbol + ":" + coin_symbol, (position.name or symbol) + " " + coin_symbol + " 노출", {
+            "tboxClass": "CryptoExposure",
+            "tboxClasses": ["Risk", "VolatilityRisk", "CryptoExposure"],
+            "symbol": symbol,
+            "cryptoSymbol": coin_symbol,
+            "coinId": str(coin_id),
+            "change24h": round(change24h, 2),
+            "change7d": round(change7d, 2),
+            "pathState": crypto_path_state(change24h, change7d),
+            "exposureBasis": "business-model-or-sector",
+        })
+        props = {
+            "source": "cryptoMarkets",
+            "symbol": symbol,
+            "cryptoSymbol": coin_symbol,
+            "polarity": "risk" if magnitude >= 4 else "context",
+            "opinionImpact": min(10.0, magnitude) if magnitude >= 4 else 0.0,
+            "aiInfluenceLabel": coin_symbol + " 가격 경로 노출",
+            "dataScope": "crypto",
+        }
+        add_relation(graph, stock_id, exposure_id, "HAS_CRYPTO_EXPOSURE", weight=max(0.18, weight or 0.15), properties=props)
+        add_relation(graph, exposure_id, entity_id("crypto-asset", coin_symbol), "AFFECTS", weight=0.62, properties=props)
 
 
 def symbol_external_signal_items(external_signals: Dict[str, object], symbol: str) -> List[Dict[str, object]]:

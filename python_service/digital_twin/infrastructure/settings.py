@@ -5,6 +5,7 @@ from pathlib import Path
 from typing import Dict
 
 from ..domain.accounts import configured
+from ..domain.instrument_profiles import default_instrument_profiles_text
 from ..domain.ontology_relation_reasoning import (
     DEFAULT_RELATION_THRESHOLDS,
     default_ai_prompt_policy_text,
@@ -51,6 +52,7 @@ TEXT_SETTING_KEYS = [
     "lossCutScoreFormula",
     "notificationScoreFormula",
     "ontologyRelationRules",
+    "instrumentProfiles",
     "aiPromptTemplates",
     "aiPromptPolicy",
     "modelName",
@@ -329,6 +331,7 @@ DEFAULT_STRATEGY_SETTINGS = {
     "lossCutScoreFormula": DEFAULT_LOSS_CUT_SCORE_FORMULA,
     "notificationScoreFormula": DEFAULT_NOTIFICATION_SCORE_FORMULA,
     "ontologyRelationRules": default_ontology_relation_reasoning_text(),
+    "instrumentProfiles": default_instrument_profiles_text(),
     "aiPromptTemplates": default_ai_prompt_templates_text(),
     "aiPromptPolicy": default_ai_prompt_policy_text(),
     "notificationAiGateEnabled": "1",
@@ -624,7 +627,7 @@ def runtime_settings() -> Dict[str, str]:
         "externalCryptoIds": value("externalCryptoIds", "EXTERNAL_CRYPTO_IDS", "bitcoin,ethereum"),
         "externalAlphaMaxSymbols": value("externalAlphaMaxSymbols", "EXTERNAL_ALPHA_MAX_SYMBOLS", "3"),
         "externalAlphaRateLimitSeconds": value("externalAlphaRateLimitSeconds", "EXTERNAL_ALPHA_RATE_LIMIT_SECONDS", "15"),
-        "externalAlphaFundamentalsEnabled": value("externalAlphaFundamentalsEnabled", "EXTERNAL_ALPHA_FUNDAMENTALS_ENABLED", "0"),
+        "externalAlphaFundamentalsEnabled": value("externalAlphaFundamentalsEnabled", "EXTERNAL_ALPHA_FUNDAMENTALS_ENABLED", "1"),
         "externalAlphaFundamentalsMaxSymbols": value("externalAlphaFundamentalsMaxSymbols", "EXTERNAL_ALPHA_FUNDAMENTALS_MAX_SYMBOLS", "1"),
         "externalSecEnabled": value("externalSecEnabled", "EXTERNAL_SEC_ENABLED", "1"),
         "externalSecMaxSymbols": value("externalSecMaxSymbols", "EXTERNAL_SEC_MAX_SYMBOLS", "3"),

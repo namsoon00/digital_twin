@@ -528,6 +528,7 @@ def evaluate_position_relation_rules(
     winner_add_buy_ready = (
         is_holding
         and pnl >= 3.0
+        and bool(facts.get("allowAddOnStrength", True))
         and bool(facts.get("ma5"))
         and ma5_distance >= max(entry_ma5_min, 0.0)
         and bool(facts.get("ma20"))
@@ -560,6 +561,7 @@ def evaluate_position_relation_rules(
                 "거래량 배율 " + ("%.1f" % volume_ratio) + "x" if volume_ratio else "거래량 배율 미확인",
                 "확인 신호 " + str(winner_add_support_count) + "/8",
                 "보유 비중 " + ("%.1f" % position_weight) + "%",
+                "종목 타입 정책상 상승 구간 추가매수 검토 허용",
                 "즉시 몰아사기보다 소액 분할 추가매수 검토",
             ],
             missing_labels,

@@ -285,6 +285,19 @@ function checkFrontendAdminRender() {
       /:where\([\s\S]*\.symbol-result-row,[\s\S]*\.notification-decision-row,[\s\S]*\.feed-impact-card,[\s\S]*\.research-evidence-item,[\s\S]*\.investment-action-row[\s\S]*\)\s*\{[\s\S]*padding: var\(--ds-card-comfort-pad-y\) var\(--ds-card-comfort-pad-x\);[\s\S]*border-left-width: 4px;/.test(styles),
     "PC 카드 간격/내부 여백을 최종 레이어에서 복원하는 계약이 없습니다."
   );
+  assertOk(
+    styles.indexOf("Desktop QA density pass") >= 0 &&
+      /--ds-page-gap: 24px;/.test(styles) &&
+      /--ds-card-comfort-gap: 16px;/.test(styles) &&
+      /--ds-pc-type-panel-title: 18px;/.test(styles) &&
+      /\.panel-head h2\s*\{[\s\S]*font-size: var\(--ds-pc-type-panel-title\);/.test(styles) &&
+      /\.managed-page,[\s\S]*\.system-view\s*\{[\s\S]*gap: var\(--ds-page-gap\);/.test(styles) &&
+      /:is\([\s\S]*\.loading-source-list,[\s\S]*\.loading-shell-preview[\s\S]*\)\s*\{[\s\S]*gap: var\(--ds-card-comfort-gap\);/.test(styles) &&
+      /:is\([\s\S]*\.account-card strong,[\s\S]*\.loading-source-row strong[\s\S]*\)\s*\{[\s\S]*font-size: var\(--ds-pc-type-card-title\);/.test(styles) &&
+      /\[data-card-type="metric-cell"\],[\s\S]*\.inline-detail-metrics > \*\s*\{[\s\S]*min-height: 92px;/.test(styles) &&
+      /\.notification-decision-row\s*\{[\s\S]*min-height: 104px;/.test(styles),
+    "PC 최종 QA 밀도 레이어의 간격/폰트/카드 높이 계약이 없습니다."
+  );
   assertOk(styles.indexOf("Professional finance top navigation shell") >= 0 && styles.indexOf("grid-template-columns: minmax(0, 1fr)") >= 0, "PC shell이 단일 컬럼 상단 탭형 작업 영역으로 전환되지 않습니다.");
   assertOk(/Professional finance top navigation shell[\s\S]*\.app-nav[\s\S]*grid-template-columns: minmax\(180px, 0\.17fr\) minmax\(0, 1fr\) minmax\(108px, auto\);/.test(styles), "PC 상단 금융 탭 네비게이션 3구획 구조가 없습니다.");
   assertOk(styles.indexOf(".app-nav-command") >= 0 && styles.indexOf(".app-nav-flow") >= 0 && styles.indexOf(".app-nav-mode") >= 0, "PC 상단 통합 command rail 스타일 정의가 없습니다.");

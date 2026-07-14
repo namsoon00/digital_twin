@@ -1,6 +1,7 @@
 from typing import Dict, List
 
 from .market_data import number
+from .instrument_profiles import instrument_profile_for_position
 from .ontology_contracts import PortfolioOntology
 from .ontology_schema import add_entity, add_relation
 from .portfolio import PortfolioSummary, Position
@@ -42,6 +43,106 @@ def factor_labels_for_position(position: Position) -> List[str]:
     if symbol in {"MSTR", "STRC", "COIN", "MARA", "RIOT", "CLSK", "HUT", "BITF"}:
         labels.append("비트코인 민감도")
     return unique_list(labels)
+
+
+def profile_settings_from_runtime(runtime_context: Dict[str, object] = None) -> Dict[str, object]:
+    if not isinstance(runtime_context, dict):
+        return {}
+    settings = runtime_context.get("settings")
+    if isinstance(settings, dict):
+        return settings
+    return runtime_context
+
+
+def add_instrument_profile_concepts(
+    graph: PortfolioOntology,
+    stock_id: str,
+    portfolio_node_id: str,
+    position: Position,
+    runtime_context: Dict[str, object] = None,
+) -> None:
+    profile = instrument_profile_for_position(position, profile_settings_from_runtime(runtime_context))
+    symbol = symbol_key(position)
+    profile_id = add_entity(graph, "instrument-profile", symbol, profile.label, {
+        "tboxClass": "InstrumentProfile",
+        "symbol": symbol,
+        "label": profile.label,
+        "archetypes": list(profile.archetypes),
+        "positionIntent": profile.position_intent,
+        "sensitivities": dict(profile.sensitivities),
+        "policies": dict(profile.policies),
+        "allowAddOnStrength": profile.allow_add_on_strength,
+        "trimOnTrendBreak": profile.trim_on_trend_break,
+        "avoidAveragingDown": profile.avoid_averaging_down,
+        "source": profile.source,
+    })
+    add_relation(graph, stock_id, profile_id, "HAS_INSTRUMENT_PROFILE", weight=1.0, properties={
+        "source": "instrument-profile",
+        "aiInfluenceLabel": profile.label,
+        "positionIntent": profile.position_intent,
+    })
+    add_relation(graph, portfolio_node_id, profile_id, "HAS_INSTRUMENT_PROFILE", weight=0.5, properties={
+        "source": "instrument-profile",
+        "symbol": symbol,
+    })
+
+    intent_id = add_entity(graph, "position-intent", profile.position_intent, profile.position_intent, {
+        "tboxClass": "PositionIntent",
+        "intent": profile.position_intent,
+    })
+    add_relation(graph, profile_id, intent_id, "HAS_POSITION_INTENT", weight=1.0, properties={"source": "instrument-profile"})
+
+    for archetype in profile.archetypes:
+        archetype_id = add_entity(graph, "investment-archetype", archetype, archetype, {
+            "tboxClass": "InvestmentArchetype",
+            "tboxClasses": ["InvestmentArchetype", archetype],
+            "archetype": archetype,
+        })
+        add_relation(graph, profile_id, archetype_id, "HAS_ARCHETYPE", weight=1.0, properties={
+            "source": "instrument-profile",
+            "aiInfluenceLabel": archetype + " 타입",
+        })
+        add_relation(graph, stock_id, archetype_id, "HAS_ARCHETYPE", weight=0.8, properties={
+            "source": "instrument-profile",
+            "aiInfluenceLabel": archetype + " 타입",
+        })
+
+    for factor, level in sorted(profile.sensitivities.items()):
+        factor_key = symbol + ":" + str(factor)
+        label = str(factor) + " 민감도 " + str(level)
+        sensitivity_id = add_entity(graph, "factor-sensitivity", factor_key, label, {
+            "tboxClass": "FactorSensitivity",
+            "tboxClasses": ["FactorSensitivity", "FactorExposure"],
+            "symbol": symbol,
+            "factor": factor,
+            "level": level,
+        })
+        add_relation(graph, profile_id, sensitivity_id, "HAS_FACTOR_SENSITIVITY", weight=1.0, properties={
+            "source": "instrument-profile",
+            "factor": factor,
+            "level": level,
+            "aiInfluenceLabel": label,
+        })
+        add_relation(graph, stock_id, sensitivity_id, "HAS_FACTOR_SENSITIVITY", weight=0.75, properties={
+            "source": "instrument-profile",
+            "factor": factor,
+            "level": level,
+        })
+
+    policy_id = add_entity(graph, "instrument-policy", symbol, profile.label + " 행동 정책", {
+        "tboxClass": "ActionPolicy",
+        "tboxClasses": ["ActionPolicy", "InvestorProfilePolicy"],
+        "symbol": symbol,
+        "allowAddOnStrength": profile.allow_add_on_strength,
+        "trimOnTrendBreak": profile.trim_on_trend_break,
+        "avoidAveragingDown": profile.avoid_averaging_down,
+    })
+    add_relation(graph, profile_id, policy_id, "USES_INSTRUMENT_POLICY", weight=1.0, properties={
+        "source": "instrument-profile",
+        "allowAddOnStrength": profile.allow_add_on_strength,
+        "trimOnTrendBreak": profile.trim_on_trend_break,
+        "avoidAveragingDown": profile.avoid_averaging_down,
+    })
 
 
 def benchmark_for_position(position: Position) -> (str, str):

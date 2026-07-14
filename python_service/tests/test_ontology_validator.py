@@ -54,6 +54,111 @@ class OntologyValidatorTests(unittest.TestCase):
         self.assertEqual("valid", quality.payload["validation"]["status"])
         self.assertEqual(0, quality.payload["scores"]["validationPenalty"])
 
+    def test_portfolio_ontology_records_coverage_gap_as_abox_fact(self):
+        position = Position(
+            symbol="005930",
+            name="삼성전자",
+            market="KR",
+            currency="KRW",
+            market_value=1000000,
+            quantity=10,
+            current_price=100000,
+            ma20=104000,
+            ma60=99000,
+            sector="반도체",
+        )
+        graph = build_portfolio_ontology(
+            [position],
+            portfolio_summary([position], fx_rates={"KRW": 1}),
+            include_reasoning_outputs=False,
+        )
+
+        coverage_gaps = [item for item in graph.entities if item.kind == "coverage-gap"]
+        coverage_relations = [item for item in graph.relations if item.relation_type == "HAS_COVERAGE_GAP"]
+
+        self.assertTrue(coverage_gaps)
+        self.assertIn("externalEvidence", coverage_gaps[0].properties["missingCategories"])
+        self.assertTrue(coverage_relations)
+        self.assertEqual("CoverageGap", coverage_gaps[0].properties["tboxClass"])
+        self.assertEqual("valid", validate_ontology(graph).status)
+
+    def test_portfolio_ontology_materializes_crypto_macro_and_valuation_contexts(self):
+        position = Position(
+            symbol="MSTR",
+            name="Strategy",
+            market="NASDAQ",
+            currency="USD",
+            market_value=5000,
+            quantity=5,
+            average_price=900,
+            current_price=980,
+            profit_loss_rate=8.9,
+            ma20=940,
+            ma60=870,
+            volume=1200000,
+            volume_ratio=1.4,
+            trading_value=900000000,
+            sector="디지털자산",
+        )
+        graph = build_portfolio_ontology(
+            [position],
+            portfolio_summary([position], fx_rates={"USD": 1400, "KRW": 1}),
+            external_signals={
+                "cryptoMarkets": {
+                    "bitcoin": {
+                        "provider": "CoinGecko",
+                        "symbol": "BTC",
+                        "name": "Bitcoin",
+                        "price": 120000,
+                        "marketCap": 2200000000000,
+                        "volume24h": 45000000000,
+                        "change1h": 1.2,
+                        "change24h": -5.5,
+                        "change7d": -11.0,
+                    }
+                },
+                "macro": {
+                    "series": {
+                        "DGS10": {"provider": "FRED", "value": 4.75},
+                        "DGS2": {"provider": "FRED", "value": 4.55},
+                    },
+                    "yieldSpread10y2y": 0.20,
+                },
+                "companyOverviews": {
+                    "MSTR": {
+                        "provider": "Alpha Vantage",
+                        "name": "Strategy",
+                        "sector": "Technology",
+                        "industry": "Software",
+                        "marketCapitalization": 10000000000,
+                        "revenueTTM": 500000000,
+                        "peRatio": 65,
+                        "beta": 1.8,
+                    }
+                },
+            },
+        )
+
+        kinds = {item.kind for item in graph.entities}
+        relation_types = {item.relation_type for item in graph.relations}
+        rule_ids = {
+            (item.properties or {}).get("ruleId")
+            for item in graph.relations
+            if (item.properties or {}).get("ontologyBox") == "InferenceBox"
+        }
+
+        self.assertIn("crypto-asset", kinds)
+        self.assertIn("price-path", kinds)
+        self.assertIn("macro-regime", kinds)
+        self.assertIn("crypto-exposure", kinds)
+        self.assertIn("valuation-assumption", kinds)
+        self.assertIn("HAS_CRYPTO_EXPOSURE", relation_types)
+        self.assertIn("HAS_MACRO_REGIME", relation_types)
+        self.assertIn("HAS_VALUATION", relation_types)
+        self.assertIn("graph.crypto.exposure.volatility_risk.v1", rule_ids)
+        self.assertIn("graph.macro.regime.risk.v1", rule_ids)
+        self.assertEqual("valid", validate_ontology(graph).status)
+
     def test_account_investment_strategy_profile_is_normalized(self):
         account = AccountConfig.from_dict(
             {

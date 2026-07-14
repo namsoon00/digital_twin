@@ -14,7 +14,6 @@ from ..domain.ontology_rulebox_governance import (
 from ..domain.ontology_rulebox_projection import add_rulebox_concepts
 from ..domain.ontology_schema import default_tbox_metadata, normalize_tbox_metadata, tbox_entities, tbox_relations
 from .graph_store_payloads import (
-    bool_or_none,
     condition_relation_filter_bool,
     condition_relation_filter_number,
     condition_relation_filter_values,
@@ -22,9 +21,6 @@ from .graph_store_payloads import (
     condition_target_filter_number,
     condition_target_filter_values,
     condition_target_level_types,
-    derivation_decision_stage,
-    derivation_stage_priority,
-    group_relation_rows,
     list_of_strings,
     number_or_none,
     safe_relation_type,
@@ -181,11 +177,11 @@ def build_rulebox_rules_from_rows(
 ) -> List[GraphInferenceRule]:
     conditions_by_rule: Dict[str, List[Dict[str, object]]] = {}
     derivations_by_rule: Dict[str, List[Dict[str, object]]] = {}
-    for row in condition_rows:
+    for row in sorted(condition_rows, key=rule_component_sort_key("conditionIndex", "conditionId")):
         rule_id = str(row.get("ruleId") or "")
         if rule_id:
             conditions_by_rule.setdefault(rule_id, []).append(condition_payload_from_row(row))
-    for row in derivation_rows:
+    for row in sorted(derivation_rows, key=rule_component_sort_key("derivationIndex", "derivationTargetKey")):
         rule_id = str(row.get("ruleId") or "")
         if rule_id:
             derivations_by_rule.setdefault(rule_id, []).append(derivation_payload_from_row(row))
@@ -213,6 +209,15 @@ def build_rulebox_rules_from_rows(
         except ValueError:
             continue
     return rules
+
+def rule_component_sort_key(index_field: str, fallback_field: str):
+    def sort_key(row: Dict[str, object]):
+        index = number_or_none(row.get(index_field))
+        if index is None:
+            index = 999999
+        return (str(row.get("ruleId") or ""), int(index), str(row.get(fallback_field) or row.get("id") or ""))
+
+    return sort_key
 
 def condition_payload_from_row(row: Dict[str, object]) -> Dict[str, object]:
     props = json_object(row.get("propertiesJson"))
@@ -273,18 +278,18 @@ def condition_payload_from_row(row: Dict[str, object]) -> Dict[str, object]:
                 relation_filters[filter_key] = row.get(row_key)
     return {
         "condition_id": str(row.get("conditionId") or condition.get("condition_id") or ""),
-        "kind": str(row.get("kind") or condition.get("kind") or ""),
-        "description": str(row.get("description") or condition.get("description") or ""),
-        "field": str(row.get("field") or condition.get("field") or ""),
-        "operator": str(row.get("operator") or condition.get("operator") or "=="),
-        "role": str(row.get("role") or condition.get("role") or "required"),
+        "kind": str(condition.get("kind") or row.get("conditionKind") or row.get("kind") or ""),
+        "description": str(condition.get("description") or row.get("description") or ""),
+        "field": str(condition.get("field") or row.get("field") or ""),
+        "operator": str(condition.get("operator") or row.get("operator") or "=="),
+        "role": str(condition.get("role") or row.get("role") or "required"),
         "value": condition.get("value") if "value" in condition else (row.get("valueNumber") if row.get("valueNumber") is not None else row.get("valueString")),
-        "relation_type": str(row.get("relationType") or condition.get("relation_type") or ""),
-        "direction": str(row.get("direction") or condition.get("direction") or "out"),
-        "target_kind": str(row.get("targetKind") or condition.get("target_kind") or ""),
+        "relation_type": str(condition.get("relation_type") or row.get("relationType") or ""),
+        "direction": str(condition.get("direction") or row.get("direction") or "out"),
+        "target_kind": str(condition.get("target_kind") or row.get("targetKind") or ""),
         "target_property_filters": target_filters,
         "relation_property_filters": relation_filters,
-        "min_weight": float(row.get("minWeight") or condition.get("min_weight") or 0),
+        "min_weight": float(condition.get("min_weight") or row.get("minWeight") or 0),
     }
 
 def derivation_payload_from_row(row: Dict[str, object]) -> Dict[str, object]:
@@ -295,8 +300,8 @@ def derivation_payload_from_row(row: Dict[str, object]) -> Dict[str, object]:
         "target_kind": str(row.get("targetKind") or derivation.get("target_kind") or ""),
         "target_key": str(row.get("targetKey") or derivation.get("target_key") or ""),
         "target_label": str(row.get("targetLabel") or derivation.get("target_label") or row.get("label") or ""),
-        "tbox_class": str(row.get("tboxClass") or derivation.get("tbox_class") or ""),
-        "tbox_classes": list_of_strings(row.get("tboxClasses") or derivation.get("tbox_classes") or []),
+        "tbox_class": str(row.get("derivationTboxClass") or derivation.get("tbox_class") or row.get("tboxClass") or ""),
+        "tbox_classes": list_of_strings(row.get("derivationTboxClasses") or derivation.get("tbox_classes") or row.get("tboxClasses") or []),
         "polarity": str(row.get("polarity") or derivation.get("polarity") or "context"),
         "risk_impact": float(row.get("riskImpact") or derivation.get("risk_impact") or 0),
         "support_impact": float(row.get("supportImpact") or derivation.get("support_impact") or 0),

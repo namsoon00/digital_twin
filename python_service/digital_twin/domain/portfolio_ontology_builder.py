@@ -67,7 +67,9 @@ from .portfolio_ontology_market_concepts import (
     trend_dynamic_facts,
     trend_score,
 )
+from .portfolio_ontology_coverage import add_coverage_gap_concepts
 from .portfolio_ontology_exposure_concepts import (
+    add_instrument_profile_concepts,
     add_market_exposure_concepts,
     add_portfolio_factor_exposure_concepts,
     add_position_factor_concepts,
@@ -291,6 +293,7 @@ def build_portfolio_ontology(
             add_legacy_model_score_concepts(graph, stock_id, symbol, legacy)
         add_symbol_external_signal_concepts(graph, stock_id, symbol, external_signals)
         add_position_factor_concepts(graph, stock_id, portfolio_node_id, position, portfolio)
+        add_instrument_profile_concepts(graph, stock_id, portfolio_node_id, position, runtime_context)
         add_position_macro_context_concepts(graph, stock_id, position, portfolio, external_signals, runtime_context)
         add_fact_change_concepts(graph, stock_id, symbol, position, source, runtime_context)
         add_trend_transition_concepts(
@@ -478,6 +481,7 @@ def build_portfolio_ontology(
                 "aiInfluenceLabel": opinion.contradictions[0],
             })))
     add_decision_item_concepts(graph, runtime_context)
+    add_coverage_gap_concepts(graph, observed_positions, portfolio_id)
     if include_reasoning_outputs:
         apply_graph_reasoning(graph)
     if not include_reasoning_outputs:

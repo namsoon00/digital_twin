@@ -16016,6 +16016,14 @@ html[data-theme="dark"] .ontology-graph-expanded-toolbar .icon-button.danger {
   margin-top: 0;
 }
 
+.setting-field-help {
+  display: block;
+  font-size: 0.76rem;
+  line-height: 1.45;
+  color: var(--muted);
+  word-break: keep-all;
+}
+
 .setting-field:has(.form-control-shell input:focus),
 .setting-field:has(.form-control-shell select:focus),
 .setting-field:has(.form-control-shell textarea:focus) {
@@ -21017,5 +21025,280 @@ html[data-theme="dark"] .ontology-graph-expanded-toolbar .icon-button.danger {
   .account-command-layout .account-quality-ledger {
     gap: var(--ds-card-comfort-gap);
     padding-top: var(--ds-card-comfort-gap);
+  }
+}
+
+/* Desktop QA density pass: 100-point PC card rhythm and readable type scale. */
+@media (min-width: 1181px) {
+  :root {
+    --ds-page-gap: 24px;
+    --ds-section-gap: 20px;
+    --ds-panel-pad-x: 24px;
+    --ds-panel-pad-y: 20px;
+    --ds-row-pad-x: 20px;
+    --ds-row-pad-y: 16px;
+    --ds-card-comfort-gap: 16px;
+    --ds-card-comfort-pad-x: 20px;
+    --ds-card-comfort-pad-y: 16px;
+    --ds-pc-type-page-title: 26px;
+    --ds-pc-type-panel-title: 18px;
+    --ds-pc-type-card-title: 15px;
+    --ds-pc-type-body: 14px;
+    --ds-pc-type-supporting: 13px;
+    --ds-pc-type-caption: 12px;
+  }
+
+  .workspace-main {
+    padding-bottom: 40px;
+  }
+
+  .managed-page,
+  .admin-grid,
+  .home-view,
+  .accounts-view,
+  .notifications-view,
+  .strategy-view,
+  .feed-view,
+  .symbol-universe-view,
+  .watchlist-view,
+  .ontology-experiments-view,
+  .settings-view,
+  .system-view {
+    gap: var(--ds-page-gap);
+  }
+
+  .panel {
+    border-radius: var(--ds-radius-panel);
+  }
+
+  .panel-head {
+    min-height: 72px;
+    padding: var(--ds-panel-pad-y) var(--ds-panel-pad-x);
+  }
+
+  .panel-head h2 {
+    font-size: var(--ds-pc-type-panel-title);
+    line-height: 1.22;
+  }
+
+  .panel-head .label,
+  .panel-head .subtle,
+  .panel-head span:not(.metric):not(.tone-chip):not(.status-pill) {
+    font-size: var(--ds-pc-type-supporting);
+  }
+
+  .topbar h1,
+  .app-nav-current strong {
+    font-size: var(--ds-pc-type-page-title);
+  }
+
+  .app-nav-current em,
+  .topbar .subtle {
+    font-size: var(--ds-pc-type-supporting);
+  }
+
+  .loading-grid,
+  .symbol-result-workbench,
+  .feed-impact-workbench,
+  .research-evidence-workbench,
+  .investment-action-workbench,
+  .account-command-layout,
+  .account-balance-audit,
+  .notification-command-center,
+  .settings-detail-grid,
+  .system-detail-grid {
+    gap: var(--ds-page-gap);
+  }
+
+  :is(
+    .account-card-list,
+    .watch-account-list,
+    .account-watch-symbol-list,
+    .monitoring-instrument-list,
+    .symbol-result-list,
+    .alert-list,
+    .notification-decision-list,
+    .notification-template-list,
+    .admin-message-list,
+    .investment-evidence-list,
+    .investment-action-list,
+    .investment-lineage-list,
+    .feed-impact-grid,
+    .research-evidence-list,
+    .source-stack,
+    .account-command-grid,
+    .account-quality-ledger,
+    .settings-diagnostic-grid,
+    .admin-stat-grid,
+    .lab-stats-grid,
+    .work-detail-grid,
+    .work-detail-metric-row,
+    .inline-detail-grid,
+    .inline-detail-list,
+    .ontology-experiment-list,
+    .ontology-experiment-recommendations,
+    .ontology-experiment-card-metrics,
+    .notification-diagnostics-grid,
+    .rule-strip,
+    .loading-source-list,
+    .loading-shell-preview
+  ) {
+    gap: var(--ds-card-comfort-gap);
+  }
+
+  .panel > :is(
+    .account-card-list,
+    .watch-account-list,
+    .account-watch-symbol-list,
+    .monitoring-instrument-list,
+    .symbol-result-list,
+    .alert-list,
+    .notification-decision-list,
+    .notification-template-list,
+    .admin-message-list,
+    .investment-evidence-list,
+    .investment-action-list,
+    .investment-lineage-list,
+    .feed-impact-grid,
+    .research-evidence-list,
+    .source-stack,
+    .account-command-grid,
+    .account-quality-ledger,
+    .settings-diagnostic-grid,
+    .admin-stat-grid,
+    .lab-stats-grid,
+    .loading-source-list,
+    .loading-shell-preview
+  ) {
+    padding: var(--ds-panel-pad-y) var(--ds-panel-pad-x);
+  }
+
+  :is(
+    .account-card,
+    .watch-account-row,
+    .account-watch-symbol-row,
+    .monitoring-instrument-row,
+    .symbol-result-row,
+    .notification-decision-row,
+    .feed-impact-card,
+    .research-evidence-item,
+    .investment-action-row,
+    .investment-lineage-row,
+    .service-account-row,
+    .work-detail-card,
+    .work-detail-row,
+    .work-detail-section,
+    .inline-detail-card,
+    .inline-detail-row,
+    .inline-detail-block,
+    .ontology-experiment-card,
+    .ontology-experiment-recommendation,
+    .system-detail-disclosure,
+    .settings-detail-disclosure,
+    .loading-source-row
+  ) {
+    padding: var(--ds-card-comfort-pad-y) var(--ds-card-comfort-pad-x);
+    border-radius: var(--ds-radius-panel);
+  }
+
+  :is(
+    .account-card strong,
+    .watch-account-row strong,
+    .account-watch-symbol-main strong,
+    .account-watch-symbol-side strong,
+    .symbol-result-main strong,
+    .notification-decision-target,
+    .feed-impact-card-head strong,
+    .research-evidence-item h3,
+    .investment-action-main strong,
+    .work-detail-card strong,
+    .work-detail-row strong,
+    .inline-detail-card strong,
+    .inline-detail-block strong,
+    .ontology-experiment-card strong,
+    .ontology-experiment-recommendation strong,
+    .loading-source-row strong
+  ) {
+    font-size: var(--ds-pc-type-card-title);
+    line-height: 1.28;
+  }
+
+  :is(
+    .account-card span,
+    .watch-account-row span,
+    .account-watch-symbol-main span,
+    .account-watch-symbol-side span,
+    .symbol-result-main p,
+    .notification-decision-row p,
+    .feed-impact-body p,
+    .research-evidence-main p,
+    .investment-action-row p,
+    .investment-action-checks span,
+    .investment-action-meta span,
+    .work-detail-card p,
+    .work-detail-row span,
+    .work-detail-row em,
+    .inline-detail-card p,
+    .inline-detail-block p,
+    .loading-source-row em
+  ) {
+    font-size: var(--ds-pc-type-supporting);
+    line-height: 1.48;
+  }
+
+  :is(
+    .tone-chip,
+    .status-pill,
+    .chip,
+    .account-provider-badge,
+    .notification-score-route span,
+    .notification-score-route em,
+    .page-command-kicker,
+    .app-nav-flow .page-flow-node em
+  ) {
+    font-size: var(--ds-pc-type-caption);
+  }
+
+  [data-card-type="metric-cell"],
+  .account-control-metric,
+  .notification-ops-cell,
+  .investment-calendar-kpi,
+  .investment-calendar-type-strip span,
+  .work-detail-metric-row > *,
+  .inline-detail-metrics > * {
+    min-height: 92px;
+    padding: 16px 18px;
+  }
+
+  [data-card-type="metric-cell"] strong,
+  .account-control-metric strong,
+  .notification-ops-cell strong,
+  .investment-calendar-kpi em,
+  .work-detail-metric-row strong {
+    font-size: 24px;
+    line-height: 1.08;
+  }
+
+  .notification-decision-list {
+    display: grid;
+    gap: var(--ds-card-comfort-gap);
+    padding: var(--ds-panel-pad-y) var(--ds-panel-pad-x);
+  }
+
+  .notification-decision-row {
+    min-height: 104px;
+  }
+
+  .symbol-result-workbench .symbol-result-list,
+  .feed-impact-workbench .feed-impact-grid,
+  .research-evidence-workbench .research-evidence-list,
+  .investment-action-workbench .investment-action-list {
+    gap: var(--ds-card-comfort-gap);
+  }
+
+  .feed-impact-workbench .feed-impact-card,
+  .research-evidence-workbench .research-evidence-item,
+  .investment-action-workbench .investment-action-row {
+    padding: var(--ds-card-comfort-pad-y) var(--ds-card-comfort-pad-x);
   }
 }

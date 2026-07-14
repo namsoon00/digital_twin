@@ -243,6 +243,61 @@ def add_news_ai_analysis_concept(
         add_relation(graph, analysis_id, conflict_id, "HAS_DATA_QUALITY", weight=round(max(0.42, relation_weight), 4), evidence_ids=[evidence_id], properties=conflict_props)
 
 
+def add_news_quality_risk_concepts(
+    graph: PortfolioOntology,
+    stock_id: str,
+    event_id: str,
+    item: object,
+    props: Dict[str, object],
+    relation_weight: float,
+) -> None:
+    if str(getattr(item, "kind", "") or "").lower() != "news":
+        return
+    raw_payload = getattr(item, "raw_payload", {}) if isinstance(getattr(item, "raw_payload", {}), dict) else {}
+    analysis = raw_payload.get("aiAnalysis") if isinstance(raw_payload.get("aiAnalysis"), dict) else {}
+    read_scope = str(analysis.get("readScope") or raw_payload.get("readScope") or "").strip()
+    relation_scope = str(raw_payload.get("relationScope") or analysis.get("relationScope") or "").strip()
+    direct_mention = raw_payload.get("directMention")
+    needs_review = bool(analysis.get("needsReview") or raw_payload.get("needsReview"))
+    reasons = []
+    if read_scope in {"title+rss-summary", "title-only", "rss-summary"}:
+        reasons.append("article-body-missing")
+    if relation_scope == "direct" and direct_mention is False:
+        reasons.append("direct-subject-unconfirmed")
+    if needs_review:
+        reasons.append("analysis-needs-review")
+    if not reasons:
+        return
+    evidence_id = str(getattr(item, "evidence_id", "") or "")
+    risk_score = min(9.0, 3.0 + len(reasons) * 1.6)
+    quality_id = add_entity(graph, "article-quality-risk", evidence_id or str(getattr(item, "title", "") or ""), "기사 근거 품질 제한: " + str(getattr(item, "title", "") or ""), {
+        "tboxClass": "ArticleQualityRisk",
+        "tboxClasses": ["Risk", "DataQualityRisk", "ArticleQualityRisk", "NewsEvent", "DataQualitySignal"],
+        "symbol": str(getattr(item, "symbol", "") or ""),
+        "sourceEvidenceId": evidence_id,
+        "dataScope": "news-quality",
+        "relationScope": relation_scope,
+        "readScope": read_scope,
+        "directMention": direct_mention,
+        "needsReview": needs_review,
+        "qualityReasons": reasons,
+        "riskImpact": risk_score,
+        "opinionImpact": risk_score,
+    })
+    quality_props = {
+        **props,
+        "source": "news-quality-gate",
+        "polarity": "risk",
+        "dataScope": "news-quality",
+        "scope": "news-quality",
+        "riskImpact": risk_score,
+        "opinionImpact": risk_score,
+        "aiInfluenceLabel": "뉴스 근거 품질 제한: " + ", ".join(reasons),
+    }
+    add_relation(graph, stock_id, quality_id, "HAS_DATA_QUALITY", weight=round(max(0.42, relation_weight), 4), evidence_ids=[evidence_id], properties=quality_props)
+    add_relation(graph, event_id, quality_id, "HAS_DATA_QUALITY", weight=round(max(0.42, relation_weight), 4), evidence_ids=[evidence_id], properties=quality_props)
+
+
 def add_research_evidence_concepts(
     graph: PortfolioOntology,
     stock_id: str,
@@ -320,6 +375,7 @@ def add_research_evidence_concepts(
         add_relation(graph, event_id, stock_id, "MENTIONS_INSTRUMENT", weight=relation_weight, evidence_ids=[item.evidence_id], properties=props)
         add_research_document_concept(graph, stock_id, event_id, thesis_id, active_opinion_id, item, props, relation_weight)
         add_news_ai_analysis_concept(graph, stock_id, event_id, item, props, relation_weight)
+        add_news_quality_risk_concepts(graph, stock_id, event_id, item, props, relation_weight)
         if relation_scope in {"peer", "sector", "market"}:
             add_relation(graph, event_id, stock_id, "AFFECTS", weight=relation_weight, evidence_ids=[item.evidence_id], properties=props)
         event_type = str(raw_payload.get("eventType") or "").strip()

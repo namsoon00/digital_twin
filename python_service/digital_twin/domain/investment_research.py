@@ -735,7 +735,10 @@ def support_risk_scores(evidence: List[ResearchEvidence], relation_context: Dict
         }:
             support += min(18.0, score * 0.22)
             continue
-        if relation_type in {"AVERAGING_DOWN_RISK"} or rule_id == "holding.averaging_down.risk_guard.v1":
+        if relation_type in {"AVERAGING_DOWN_RISK"} or rule_id in {
+            "holding.averaging_down.risk_guard.v1",
+            "graph.instrument_profile.averaging_down_policy.v1",
+        }:
             risk += min(22.0, score * 0.28)
             continue
         if any(token in combined for token in ["ENTRY_WAIT", "ENTRY_RISK", "LOSS", "RISK", "DISCLOSURE", "CONCENTRATION", "리스크", "손실", "매도", "하락", "대기", "보류", "차단"]):

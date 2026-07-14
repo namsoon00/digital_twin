@@ -220,11 +220,23 @@ class TypeDBOntologyRepositoryTests(unittest.TestCase):
 
     def test_typedb_rulebox_snapshot_reads_persisted_typeql_rows(self):
         repository = TypeDBOntologyGraphRepository("127.0.0.1:1729")
-        graph = rulebox_graph_from_rules(default_graph_inference_rules()[:2])
-        entity_rows = repository.rows_for_entities(graph)
+        expected_rules = default_graph_inference_rules()[:2]
+        graph = rulebox_graph_from_rules(expected_rules)
+        entity_rows = [
+            {
+                "id": row["id"],
+                "label": row["label"],
+                "kind": row["kind"],
+                "updatedAt": "2026-07-10T00:00:00Z",
+                "json": row["propertiesJson"],
+            }
+            for row in repository.rows_for_entities(graph)
+            if row["ontologyBox"] == "RuleBox"
+        ]
+        typedb_entity_rows = repository.entity_rows_from_typeql(entity_rows, "RuleBox")
         relation_rows = repository.rows_for_relations(graph)
 
-        with patch.object(repository, "read_entity_rows", return_value=entity_rows), patch.object(repository, "read_relation_rows", return_value=relation_rows):
+        with patch.object(repository, "read_entity_rows", return_value=list(reversed(typedb_entity_rows))), patch.object(repository, "read_relation_rows", return_value=relation_rows):
             snapshot = repository.rulebox_snapshot()
 
         self.assertEqual("ok", snapshot["status"])
@@ -233,6 +245,70 @@ class TypeDBOntologyRepositoryTests(unittest.TestCase):
         self.assertGreaterEqual(snapshot["ruleCount"], 1)
         self.assertFalse(snapshot["defaultsFallbackUsed"])
         self.assertEqual("typedb-rulebox-materialization", snapshot["nativeReasoningProfile"]["reasoningModel"])
+        expected_payload = [rule.to_dict() for rule in expected_rules]
+        self.assertEqual(len(expected_payload), snapshot["ruleCount"])
+        self.assertEqual(
+            sorted(rule["rule_id"] for rule in expected_payload),
+            sorted(rule["rule_id"] for rule in snapshot["rules"]),
+        )
+        first_rule = next(item for item in snapshot["rules"] if item["rule_id"] == expected_payload[0]["rule_id"])
+        self.assertEqual(expected_payload[0]["conditions"][0]["condition_id"], first_rule["conditions"][0]["condition_id"])
+        self.assertEqual(expected_payload[0]["derivations"][0]["tbox_class"], first_rule["derivations"][0]["tbox_class"])
+
+    def test_typedb_seed_ontology_replaces_rulebox_when_requested(self):
+        class CapturingSeedRepository(TypeDBOntologyGraphRepository):
+            def __init__(self):
+                super().__init__("127.0.0.1:1729")
+                self.saved_graphs = []
+                self.rulebox_payloads = []
+                self.inference_clear_count = 0
+
+            def save_graph(self, graph):
+                self.saved_graphs.append(graph)
+                return {
+                    "configured": True,
+                    "saved": True,
+                    "status": "ok",
+                    "graphStore": "typedb",
+                    "entityCount": len(graph.entities),
+                    "relationCount": len(graph.relations),
+                }
+
+            def save_rulebox(self, payload=None):
+                self.rulebox_payloads.append(dict(payload or {}))
+                rules = payload.get("rules") if isinstance(payload, dict) else []
+                from digital_twin.infrastructure.typedb_ontology import rulebox_runtime_metadata
+
+                metadata = rulebox_runtime_metadata(rules)
+                return {
+                    "configured": True,
+                    "saved": True,
+                    "status": "ok",
+                    "graphStore": "typedb",
+                    "rules": rules,
+                    "ruleCount": len(rules),
+                    "conditionCount": metadata["ruleboxConditionCount"],
+                    "derivationCount": metadata["ruleboxDerivationCount"],
+                    "ruleboxRulesHash": metadata["ruleboxRulesHash"],
+                    "ruleboxShortHash": metadata["ruleboxShortHash"],
+                }
+
+            def clear_inferencebox(self):
+                self.inference_clear_count += 1
+                return {"configured": True, "status": "ok", "graphStore": "typedb"}
+
+        repository = CapturingSeedRepository()
+
+        result = repository.seed_ontology({"replaceRuleBox": True, "clearInference": True})
+
+        self.assertEqual("ok", result["status"])
+        self.assertTrue(result["saved"])
+        self.assertTrue(result["ruleBoxReplaced"])
+        self.assertEqual(1, len(repository.rulebox_payloads))
+        self.assertEqual(len(default_graph_inference_rules()), len(repository.rulebox_payloads[0]["rules"]))
+        self.assertEqual(result["expectedRuleBoxRuleCount"], result["activeRuleBoxRuleCount"])
+        self.assertEqual(result["expectedRuleBoxShortHash"], result["activeRuleBoxShortHash"])
+        self.assertEqual(1, repository.inference_clear_count)
 
     def test_typedb_rule_condition_rows_keep_node_kind_separate_from_condition_kind(self):
         repository = TypeDBOntologyGraphRepository("127.0.0.1:1729")

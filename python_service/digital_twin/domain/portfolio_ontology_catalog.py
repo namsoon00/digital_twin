@@ -39,6 +39,7 @@ SETTING_CONCEPT_TYPES = {
     "ontologyRelationRules": ("AlertRule", "HAS_ALERT_RULE"),
     "aiPromptTemplates": ("PromptTemplate", "HAS_PROMPT_TEMPLATE"),
     "aiPromptPolicy": ("NotificationPolicy", "HAS_NOTIFICATION_POLICY"),
+    "instrumentProfiles": ("InstrumentProfile", "HAS_INSTRUMENT_PROFILE"),
     "alertThresholds": ("Threshold", "HAS_THRESHOLD"),
     "relationRuleThresholds": ("Threshold", "HAS_THRESHOLD"),
     "modelDecisionThresholds": ("Threshold", "HAS_THRESHOLD"),
@@ -119,7 +120,7 @@ FACTOR_BENCHMARKS = {
 }
 
 SECTOR_FACTORS = {
-    "반도체": ["AI 인프라", "반도체 사이클", "수출 민감"],
+    "반도체": ["AI 인프라", "HBM/메모리 사이클", "반도체 사이클", "수출 민감"],
     "AI/플랫폼": ["AI/플랫폼 성장", "금리 민감 성장주", "광고·클라우드 수요"],
     "모빌리티": ["전기차 수요", "경기 민감 소비재"],
     "디지털자산": ["크립토 유동성", "위험자산 심리"],

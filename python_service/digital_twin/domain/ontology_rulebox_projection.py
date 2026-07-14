@@ -44,13 +44,14 @@ def add_rulebox_concepts(graph: PortfolioOntology, rules: Iterable[GraphInferenc
             weight=1.0,
             properties=rulebox_relation_properties("DEFINES_RULE", {"ruleId": rule.rule_id}),
         ))
-        for condition in rule.conditions:
+        for condition_index, condition in enumerate(rule.conditions):
             condition_id = entity_id("rule-condition", rule.rule_id + ":" + condition.condition_id)
             graph.entities.append(OntologyEntity(condition_id, condition.description, "rule-condition", rulebox_properties({
                 "tboxClass": "RuleCondition",
                 "tboxClasses": ["RuleCondition", "ValidationRule"],
                 "ruleId": rule.rule_id,
                 "conditionId": condition.condition_id,
+                "conditionIndex": condition_index,
                 "condition": condition.to_dict(),
             })))
             graph.relations.append(OntologyRelation(

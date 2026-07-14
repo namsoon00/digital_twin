@@ -145,6 +145,35 @@ def decision_drivers_from_relation_context(
     rows: List[Dict[str, object]] = []
     seen = set()
 
+    profile_label = str(facts.get("instrumentProfileLabel") or "").strip()
+    archetypes = [str(item) for item in (facts.get("instrumentArchetypes") or []) if str(item or "").strip()]
+    position_intent = str(facts.get("instrumentPositionIntent") or "").strip()
+    if profile_label or archetypes:
+        policy_bits = []
+        if facts.get("allowAddOnStrength"):
+            policy_bits.append("오르는 구간의 소액 추가매수 검토 가능")
+        if facts.get("trimOnTrendBreak"):
+            policy_bits.append("평균 가격 이탈 시 분할축소 점검")
+        if facts.get("avoidAveragingDown"):
+            policy_bits.append("손실 구간 물타기 회피")
+        summary = (profile_label or "종목 프로필") + "입니다."
+        if archetypes:
+            summary += " 타입: " + ", ".join(archetypes[:3]) + "."
+        if position_intent:
+            summary += " 계좌 안 역할: " + position_intent + "."
+        if policy_bits:
+            summary += " 정책: " + ", ".join(policy_bits[:3]) + "."
+        _append_driver(
+            rows,
+            seen,
+            "instrumentProfile",
+            "neutral",
+            "종목 타입",
+            summary,
+            58,
+            ["instrumentProfile", "instrumentArchetypes", "instrumentPolicies"],
+        )
+
     pnl = _float_value(facts.get("profitLossRate"))
     if facts.get("isHolding") and pnl < 0:
         _append_driver(

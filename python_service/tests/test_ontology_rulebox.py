@@ -5,6 +5,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from digital_twin.domain.ontology_prompting import prompt_payload
+from digital_twin.domain.instrument_profiles import parse_instrument_profiles_text
 from digital_twin.domain.ontology_rulebox_catalog import default_graph_inference_rules
 from digital_twin.domain.portfolio_ontology_builder import build_portfolio_ontology
 from digital_twin.domain.portfolio import Position
@@ -69,6 +70,39 @@ class OntologyRuleBoxTests(unittest.TestCase):
         )
         portfolio = portfolio_summary([position], account_cash=200000)
         return build_portfolio_ontology([position], portfolio, portfolio_id="rulebox-flow-test")
+
+    def profitable_momentum_graph(self, symbol="MSTR", settings=None):
+        position = Position(
+            symbol=symbol,
+            name="Strategy" if symbol == "MSTR" else "Tesla",
+            market="US",
+            currency="USD",
+            quantity=10,
+            sellable_quantity=10,
+            average_price=88,
+            current_price=105,
+            market_value=1050,
+            profit_loss=170,
+            profit_loss_rate=19.3,
+            change_rate=2.2,
+            ma5=101,
+            ma20=100,
+            ma60=95,
+            ma20_distance=5.0,
+            ma60_distance=10.5,
+            volume_ratio=1.3,
+            trade_strength=108,
+            bid_ask_imbalance=12,
+            trading_value=100000000,
+            sector="디지털자산" if symbol == "MSTR" else "모빌리티",
+        )
+        portfolio = portfolio_summary([position], account_cash=10000, fx_rates={"USD": 1400})
+        return build_portfolio_ontology(
+            [position],
+            portfolio,
+            portfolio_id="rulebox-profile-" + symbol.lower(),
+            runtime_context={"settings": settings or {}},
+        )
 
     def data_quality_gap_graph(self):
         position = Position(
@@ -724,16 +758,47 @@ class OntologyRuleBoxTests(unittest.TestCase):
             for item in condition_rows
             if item["id"] == "rule-condition:graph.winner_momentum.add_buy_review.v1:ma5-reclaim"
         )
+        winner_add_profile = next(
+            item
+            for item in condition_rows
+            if item["id"] == "rule-condition:graph.winner_momentum.add_buy_review.v1:instrument-profile-allows-strength-add"
+        )
         winner_add_volume = next(
             item
             for item in condition_rows
             if item["id"] == "rule-condition:graph.winner_momentum.add_buy_review.v1:volume-confirmation"
+        )
+        profile_averaging_policy = next(
+            item
+            for item in condition_rows
+            if item["id"] == "rule-condition:graph.instrument_profile.averaging_down_policy.v1:profile-avoid-averaging-down"
+        )
+        coverage_gap = next(
+            item
+            for item in condition_rows
+            if item["id"] == "rule-condition:graph.coverage.gap.confidence_limit.v1:coverage-gap"
+        )
+        macro_regime = next(
+            item
+            for item in condition_rows
+            if item["id"] == "rule-condition:graph.macro.regime.risk.v1:macro-regime-risk"
+        )
+        crypto_exposure = next(
+            item
+            for item in condition_rows
+            if item["id"] == "rule-condition:graph.crypto.exposure.volatility_risk.v1:crypto-exposure-risk"
+        )
+        news_quality = next(
+            item
+            for item in condition_rows
+            if item["id"] == "rule-condition:graph.news.quality.confidence_limit.v1:news-quality-risk"
         )
 
         self.assertIn("graph.materiality.alert_candidate.v1", rule_ids)
         self.assertIn("graph.loss_smart_money.defense.v1", rule_ids)
         self.assertIn("graph.loss_smart_money.add_buy_review.v1", rule_ids)
         self.assertIn("graph.winner_momentum.add_buy_review.v1", rule_ids)
+        self.assertIn("graph.instrument_profile.averaging_down_policy.v1", rule_ids)
         self.assertIn("graph.averaging_down.risk_guard.v1", rule_ids)
         self.assertIn("graph.holding.trend_transition.risk.v1", rule_ids)
         self.assertIn("graph.watchlist.trend_transition.support.v1", rule_ids)
@@ -749,6 +814,11 @@ class OntologyRuleBoxTests(unittest.TestCase):
         self.assertIn("graph.factor.position_crowding.v1", rule_ids)
         self.assertIn("graph.benchmark.beta.context.v1", rule_ids)
         self.assertIn("graph.price.reclaim.thesis_support.v1", rule_ids)
+        self.assertIn("graph.coverage.gap.confidence_limit.v1", rule_ids)
+        self.assertIn("graph.macro.regime.risk.v1", rule_ids)
+        self.assertIn("graph.crypto.exposure.volatility_risk.v1", rule_ids)
+        self.assertIn("graph.news.quality.confidence_limit.v1", rule_ids)
+        self.assertIn("graph.valuation.high_beta_or_expensive.review.v1", rule_ids)
         self.assertIn("graph.portfolio.concentration.review.v1", rule_ids)
         self.assertEqual(["support"], support_transition["conditionRelationPolarities"])
         self.assertEqual(["risk"], risk_transition["conditionRelationPolarities"])
@@ -790,9 +860,23 @@ class OntologyRuleBoxTests(unittest.TestCase):
         self.assertEqual("not", add_buy_gap_guard["conditionRole"])
         self.assertEqual("RECLAIMS_LEVEL", winner_add_ma5["conditionRelationType"])
         self.assertEqual(["ma5"], winner_add_ma5["conditionTargetLevelTypes"])
+        self.assertEqual("HAS_INSTRUMENT_PROFILE", winner_add_profile["conditionRelationType"])
+        self.assertEqual("instrument-profile", winner_add_profile["conditionTargetKind"])
+        self.assertEqual(["allowAddOnStrength"], winner_add_profile["conditionTargetFields"])
         self.assertEqual("any", winner_add_volume["conditionRole"])
         self.assertEqual(["volumeRatio"], winner_add_volume["conditionTargetFields"])
         self.assertEqual(1.0, winner_add_volume["conditionTargetMinValue"])
+        self.assertEqual("HAS_INSTRUMENT_PROFILE", profile_averaging_policy["conditionRelationType"])
+        self.assertEqual(["avoidAveragingDown"], profile_averaging_policy["conditionTargetFields"])
+        self.assertEqual("HAS_COVERAGE_GAP", coverage_gap["conditionRelationType"])
+        self.assertEqual("coverage-gap", coverage_gap["conditionTargetKind"])
+        self.assertEqual(4.0, coverage_gap["conditionRelationMinRiskImpact"])
+        self.assertEqual("HAS_MACRO_REGIME", macro_regime["conditionRelationType"])
+        self.assertEqual(["risk"], macro_regime["conditionRelationPolarities"])
+        self.assertEqual("HAS_CRYPTO_EXPOSURE", crypto_exposure["conditionRelationType"])
+        self.assertEqual("crypto-exposure", crypto_exposure["conditionTargetKind"])
+        self.assertEqual("HAS_DATA_QUALITY", news_quality["conditionRelationType"])
+        self.assertEqual(["news-quality"], news_quality["conditionTargetDataScopes"])
 
     def test_rulebox_admin_payload_roundtrips_to_graph(self):
         rules = default_graph_inference_rules()
@@ -812,6 +896,48 @@ class OntologyRuleBoxTests(unittest.TestCase):
         self.assertFalse(any((item.properties or {}).get("ontologyBox") == "TBox" for item in graph.entities))
         self.assertTrue(all((item.properties or {}).get("ontologyBox") == "RuleBox" for item in graph.entities))
         self.assertTrue(all((item.properties or {}).get("ontologyBox") == "RuleBox" for item in graph.relations))
+
+    def test_instrument_profile_is_projected_to_abox(self):
+        graph = self.profitable_momentum_graph("MSTR")
+        profiles = [item for item in graph.entities if item.kind == "instrument-profile"]
+        profile = next(item for item in profiles if (item.properties or {}).get("symbol") == "MSTR")
+        relation_types = [item.relation_type for item in graph.relations if item.source == "stock:MSTR" or item.target == profile.entity_id]
+
+        self.assertIn("BitcoinProxy", profile.properties["archetypes"])
+        self.assertTrue(profile.properties["allowAddOnStrength"])
+        self.assertIn("HAS_INSTRUMENT_PROFILE", relation_types)
+        self.assertTrue(any(item.relation_type == "HAS_ARCHETYPE" and item.source == "stock:MSTR" for item in graph.relations))
+
+    def test_instrument_profile_policy_controls_winner_add_buy_rulebox(self):
+        mstr_graph = self.profitable_momentum_graph("MSTR")
+        tsla_graph = self.profitable_momentum_graph("TSLA")
+
+        mstr_actions = [
+            item
+            for item in mstr_graph.relations
+            if item.relation_type == "ALLOWS_ACTION"
+            and "winner-momentum-add-buy" in str(item.target)
+        ]
+        tsla_actions = [
+            item
+            for item in tsla_graph.relations
+            if item.relation_type == "ALLOWS_ACTION"
+            and "winner-momentum-add-buy" in str(item.target)
+        ]
+
+        self.assertTrue(mstr_actions)
+        self.assertEqual([], tsla_actions)
+
+    def test_instrument_profile_text_parser(self):
+        profiles = parse_instrument_profiles_text(
+            "ABC|테스트 성장주|GrowthStock,PlatformGrowth|core|rate:medium,fx:high|allowAddOnStrength=0,trimOnTrendBreak=1"
+        )
+
+        profile = profiles["ABC"]
+        self.assertEqual(["GrowthStock", "PlatformGrowth"], profile.archetypes)
+        self.assertFalse(profile.allow_add_on_strength)
+        self.assertTrue(profile.trim_on_trend_break)
+        self.assertEqual("high", profile.sensitivities["fx"])
 
     def test_watchlist_rulebox_templates_carry_entry_only_action_policy(self):
         rules = default_graph_inference_rules()

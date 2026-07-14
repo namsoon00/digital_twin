@@ -322,7 +322,7 @@ def admin_preview_config() -> Dict[str, object]:
                     {"key": "notifyLinkUrl", "label": "알림 링크 URL", "type": "url", "default": "http://127.0.0.1:3000?tab=notifications"},
                     {"key": "alphaVantageApiKey", "label": "Alpha Vantage API Key", "type": "secret", "masked": True},
                     {"key": "externalAlphaEnabled", "label": "Alpha Vantage 수집 사용", "type": "toggle", "default": "1"},
-                    {"key": "externalAlphaFundamentalsEnabled", "label": "Alpha Vantage 펀더멘털 수집", "type": "toggle", "default": "0"},
+                    {"key": "externalAlphaFundamentalsEnabled", "label": "Alpha Vantage 펀더멘털 수집", "type": "toggle", "default": "1"},
                     {"key": "externalAlphaFundamentalsMaxSymbols", "label": "펀더멘털 조회 종목 수", "type": "number", "default": "1"},
                     {"key": "coingeckoApiKey", "label": "CoinGecko API Key", "type": "secret", "masked": True},
                     {"key": "externalCoinGeckoEnabled", "label": "CoinGecko 수집 사용", "type": "toggle", "default": "1"},

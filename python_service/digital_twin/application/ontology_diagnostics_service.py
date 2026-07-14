@@ -7,6 +7,7 @@ from ..domain.events import (
 )
 from ..domain.notifications import NotificationJob, notification_debug_number
 from ..domain.portfolio import utc_now_iso
+from ..domain.portfolio_ontology_coverage import CATEGORY_LABELS, CATEGORY_RELATIONS
 
 
 class OntologyDiagnosticsService:
@@ -183,57 +184,78 @@ class OntologyDiagnosticsService:
             stock_symbols = [item for item in stock_symbols if item in clean_symbols]
         relation_types_by_symbol: Dict[str, set] = {symbol: set() for symbol in stock_symbols}
         entity_classes_by_symbol: Dict[str, set] = {symbol: set() for symbol in stock_symbols}
+        source_by_symbol: Dict[str, str] = {symbol: "" for symbol in stock_symbols}
         for entity in entities:
             symbol = self.row_symbol(entity)
             if symbol in entity_classes_by_symbol:
                 tbox_class = str(entity.get("tboxClass") or "")
+                tbox_classes = entity.get("tboxClasses") if isinstance(entity.get("tboxClasses"), list) else []
                 kind = str(entity.get("kind") or entity.get("nodeKind") or "")
                 if tbox_class:
                     entity_classes_by_symbol[symbol].add(tbox_class)
+                for class_name in tbox_classes:
+                    if str(class_name or "").strip():
+                        entity_classes_by_symbol[symbol].add(str(class_name))
                 if kind:
                     entity_classes_by_symbol[symbol].add(kind)
+                if entity.get("source"):
+                    source_by_symbol[symbol] = str(entity.get("source") or "")
         for relation in relations:
             symbol = self.row_symbol(relation) or self.symbol_from_relation_endpoints(relation)
             if symbol in relation_types_by_symbol:
                 relation_type = str(relation.get("type") or relation.get("relationType") or "").upper().strip()
                 if relation_type:
                     relation_types_by_symbol[symbol].add(relation_type)
-        required = {
-            "price": {"HAS_PRICE"},
-            "trendPath": {"HAS_PRICE_PATH", "HAS_TREND_PHASE", "HAS_TREND_TRANSITION"},
-            "tradeFlow": {"HAS_TRADE_FLOW"},
-            "liquidity": {"HAS_LIQUIDITY_PROFILE"},
-            "execution": {"HAS_EXECUTION_METRIC", "HAS_EXECUTION_CAPACITY"},
-            "dataQuality": {"HAS_DATA_QUALITY"},
-            "externalEvidence": {"HAS_RESEARCH_EVIDENCE", "HAS_EVENT_EVIDENCE", "HAS_DISCLOSURE", "MENTIONS"},
-        }
         rows = []
-        total_expected = len(required)
+        all_required_categories = sorted(CATEGORY_RELATIONS.keys())
         total_present = 0
+        total_expected = 0
         for symbol in stock_symbols:
             relation_types = relation_types_by_symbol.get(symbol) or set()
-            present = sorted(name for name, relation_set in required.items() if relation_types.intersection(relation_set))
+            required = self.required_categories_for_symbol(
+                entity_classes_by_symbol.get(symbol) or set(),
+                source_by_symbol.get(symbol) or "",
+            )
+            present = sorted(name for name in required if relation_types.intersection(CATEGORY_RELATIONS.get(name, set())))
             missing = sorted(name for name in required if name not in present)
             total_present += len(present)
+            total_expected += len(required)
             rows.append({
                 "symbol": symbol,
                 "present": present,
                 "missing": missing,
+                "missingLabels": [CATEGORY_LABELS.get(name, name) for name in missing],
                 "relationTypes": sorted(relation_types)[:40],
                 "entityClasses": sorted(entity_classes_by_symbol.get(symbol) or [])[:30],
-                "coverageRatio": round(len(present) / total_expected, 3) if total_expected else 1.0,
+                "requiredCategories": required,
+                "coverageRatio": round(len(present) / max(1, len(required)), 3),
             })
-        coverage_ratio = round(total_present / max(1, total_expected * max(1, len(stock_symbols))), 3)
+        coverage_ratio = round(total_present / max(1, total_expected), 3)
         status = "ok" if stock_symbols and coverage_ratio >= 0.75 else ("warning" if stock_symbols else "empty")
+        coverage_gap_count = len([
+            item for item in entities
+            if str(item.get("kind") or item.get("nodeKind") or "") == "coverage-gap"
+            or str(item.get("tboxClass") or "") == "CoverageGap"
+        ])
         return {
             "status": status,
             "entityCount": len(entities),
             "relationCount": len(relations),
             "symbolCount": len(stock_symbols),
             "coverageRatio": coverage_ratio,
-            "requiredCategories": sorted(required.keys()),
+            "requiredCategories": all_required_categories,
+            "coverageGapCount": coverage_gap_count,
             "symbols": rows[:80],
         }
+
+    def required_categories_for_symbol(self, classes: set, source: str) -> List[str]:
+        class_values = {str(item or "") for item in (classes or set())}
+        if {"CryptoAsset", "crypto-asset", "CryptoMarketSignal", "crypto-market-signal"}.intersection(class_values):
+            return ["price", "trendPath", "tradeFlow", "liquidity", "dataQuality", "externalEvidence"]
+        base = ["price", "trendPath", "tradeFlow", "dataQuality", "externalEvidence", "macroRegime"]
+        if str(source or "").lower() == "watchlist" or "WatchlistCandidate" in class_values:
+            return base + ["valuation"]
+        return base + ["liquidity", "execution", "valuation"]
 
     def abox_symbols(self, entities: List[Dict[str, object]], relations: List[Dict[str, object]]) -> List[str]:
         values = set()

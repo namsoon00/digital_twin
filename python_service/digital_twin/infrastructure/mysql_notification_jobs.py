@@ -164,16 +164,16 @@ class MySQLNotificationJobStore(MySQLOperationalConnection):
 
     def sent_article_history_limit(self) -> int:
         try:
-            return max(20, min(500, int(self.runtime_settings.get("sentArticleFilterHistoryLimit") or 250)))
+            return max(20, min(300, int(self.runtime_settings.get("sentArticleFilterHistoryLimit") or 120)))
         except (TypeError, ValueError):
-            return 250
+            return 120
 
     def sent_article_history_keys_with_connection(self, connection, job: NotificationJob):
         if not self.sent_article_filter_enabled():
             return set()
         account_id = str(job.account_id or "").strip()
-        clauses = ["status IN ('done', 'pending', 'processing')"]
-        params: List[object] = []
+        clauses = ["status IN ('done', 'pending', 'processing')", "message_type IN (%s, %s)"]
+        params: List[object] = [NEWS_DIGEST, INVESTMENT_INSIGHT]
         if account_id:
             clauses.append("account_id = %s")
             params.append(account_id)
@@ -190,10 +190,13 @@ class MySQLNotificationJobStore(MySQLOperationalConnection):
         ).fetchall()
         keys = set()
         for row in rows:
-            previous = NotificationJob.from_dict(_json_loads(row["payload_json"], {}))
-            if previous.job_id == job.job_id:
+            previous_payload = _json_loads(row["payload_json"], {})
+            if str(previous_payload.get("jobId") or previous_payload.get("job_id") or "") == job.job_id:
                 continue
-            keys.update(collect_article_identity_keys_from_context(previous.context or {}))
+            context = previous_payload.get("context") if isinstance(previous_payload.get("context"), dict) else {}
+            keys.update(collect_article_identity_keys_from_context(context, max_depth=7, max_nodes=600, max_keys=800))
+            if len(keys) >= 800:
+                break
         return keys
 
     def article_driven_job(self, job: NotificationJob) -> bool:

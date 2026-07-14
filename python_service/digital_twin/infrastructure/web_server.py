@@ -2382,11 +2382,14 @@ class ReusableThreadingHTTPServer(ThreadingHTTPServer):
 def serve(host: str = "", port: int = 3000):
     selected_host = host or os.environ.get("HOST") or "127.0.0.1"
     selected_port = int(port or os.environ.get("PORT") or 3000)
+    allow_port_fallback = str(os.environ.get("ALLOW_PORT_FALLBACK") or "").strip().lower() in {"1", "true", "yes", "on"}
     while True:
         try:
             server = ReusableThreadingHTTPServer((selected_host, selected_port), DigitalTwinHandler)
             break
         except OSError:
+            if not allow_port_fallback:
+                raise
             selected_port += 1
     display_host = "127.0.0.1" if selected_host in {"", "0.0.0.0"} else selected_host
     print("Orbit Alpha Python server running at http://" + display_host + ":" + str(selected_port), flush=True)

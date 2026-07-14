@@ -69,6 +69,49 @@ class SentArticleFilterTests(unittest.TestCase):
         self.assertEqual(2, result.before_count)
         self.assertEqual(1, result.after_count)
 
+    def test_collects_precomputed_identity_keys_without_deep_context_scan(self):
+        context = {
+            "newsDigest": {
+                "articleKeys": ["url:alreadycomputed"],
+                "items": [{"identityKeys": ["title:itemcomputed"]}],
+            },
+            "veryDeep": {
+                "level1": {
+                    "level2": {
+                        "level3": {
+                            "level4": {
+                                "kind": "news",
+                                "title": "This should be skipped by the shallow scan",
+                                "url": "https://example.test/deep",
+                            }
+                        }
+                    }
+                }
+            },
+        }
+
+        keys = collect_article_identity_keys_from_context(context, max_depth=2, max_nodes=20)
+
+        self.assertIn("url:alreadycomputed", keys)
+        self.assertIn("title:itemcomputed", keys)
+        self.assertFalse(any(key.startswith("evidence:") for key in keys))
+
+    def test_collect_context_respects_node_budget(self):
+        context = {
+            "researchEvidence": [
+                {
+                    "kind": "news",
+                    "title": "Apple services revenue expands faster than expected " + str(index),
+                    "url": "https://example.test/apple-" + str(index),
+                }
+                for index in range(50)
+            ]
+        }
+
+        keys = collect_article_identity_keys_from_context(context, max_nodes=8, max_keys=20)
+
+        self.assertLessEqual(len(keys), 20)
+
 
 if __name__ == "__main__":
     unittest.main()

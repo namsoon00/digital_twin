@@ -1,9 +1,12 @@
 import html
 import json
 import re
+import signal
+import threading
 import urllib.parse
 import urllib.request
 import xml.etree.ElementTree as ET
+from contextlib import contextmanager
 from datetime import datetime, timedelta, timezone
 from email.utils import parsedate_to_datetime
 from html.parser import HTMLParser
@@ -40,6 +43,10 @@ GOOGLE_NEWS_BODY_NOISE = [
 ]
 
 
+class NewsProviderTimeout(TimeoutError):
+    pass
+
+
 def default_json_fetcher(url: str, headers: Dict[str, str] = None, timeout: float = 8.0) -> object:
     request = urllib.request.Request(url, headers=headers or {})
     with urllib.request.urlopen(request, timeout=max(0.5, float(timeout or 8.0))) as response:
@@ -62,6 +69,14 @@ def split_csv(raw: object, fallback: Iterable[str]) -> List[str]:
 def int_setting(settings: Dict[str, str], key: str, fallback: int, lower: int = 0, upper: int = 100000) -> int:
     try:
         parsed = int(float(str(settings.get(key) or "").strip()))
+    except ValueError:
+        parsed = fallback
+    return max(lower, min(upper, parsed))
+
+
+def float_setting(settings: Dict[str, str], key: str, fallback: float, lower: float = 0.0, upper: float = 100000.0) -> float:
+    try:
+        parsed = float(str(settings.get(key) or "").strip())
     except ValueError:
         parsed = fallback
     return max(lower, min(upper, parsed))
@@ -234,6 +249,41 @@ class NewsSourceGateway:
     def min_relevance_score(self) -> float:
         return float(int_setting(self.settings, "newsCollectionMinRelevanceScore", 35, 0, 100))
 
+    def provider_timeout_seconds(self, provider: str) -> float:
+        normalized = str(provider or "").strip().lower().replace("-", "_")
+        if normalized == "gdelt":
+            return float_setting(self.settings, "newsCollectionGdeltTimeoutSeconds", 4.0, 0.5, 30.0)
+        return float_setting(
+            self.settings,
+            "newsCollectionProviderTimeoutSeconds",
+            float_setting(self.settings, "newsCollectionTimeoutSeconds", 8.0, 0.5, 60.0),
+            0.5,
+            60.0,
+        )
+
+    @contextmanager
+    def provider_deadline(self, provider: str):
+        seconds = self.provider_timeout_seconds(provider)
+        can_alarm = threading.current_thread() is threading.main_thread() and hasattr(signal, "setitimer")
+        if not can_alarm or seconds <= 0:
+            yield
+            return
+        previous_handler = signal.getsignal(signal.SIGALRM)
+        previous_timer = signal.getitimer(signal.ITIMER_REAL)
+
+        def timeout_handler(_signum, _frame):
+            raise NewsProviderTimeout(str(provider) + " provider timeout after " + str(round(seconds, 2)) + "s")
+
+        signal.signal(signal.SIGALRM, timeout_handler)
+        signal.setitimer(signal.ITIMER_REAL, seconds)
+        try:
+            yield
+        finally:
+            signal.setitimer(signal.ITIMER_REAL, 0)
+            signal.signal(signal.SIGALRM, previous_handler)
+            if previous_timer and previous_timer[0] > 0:
+                signal.setitimer(signal.ITIMER_REAL, previous_timer[0], previous_timer[1])
+
     def article_body_enabled(self) -> bool:
         return truthy(self.settings.get("newsCollectionArticleBodyEnabled"), True)
 
@@ -354,9 +404,14 @@ class NewsSourceGateway:
         items: List[ResearchEvidence] = []
         statuses: List[Dict[str, object]] = []
         seen = set()
+        limit = self.per_symbol_limit()
         for provider in self.providers():
+            remaining = max(0, limit - len(items))
+            if remaining <= 0:
+                break
             try:
-                fetched = self.fetch_provider(provider, target)
+                with self.provider_deadline(provider):
+                    fetched = self.fetch_provider(provider, target)
                 saved = 0
                 for item in fetched:
                     key = item.url or item.title
@@ -365,7 +420,7 @@ class NewsSourceGateway:
                     seen.add(key)
                     items.append(item)
                     saved += 1
-                    if saved >= self.per_symbol_limit():
+                    if saved >= remaining:
                         break
                 statuses.append({"source": provider, "symbol": target.normalized_symbol(), "ok": True, "count": saved})
             except Exception as error:  # noqa: BLE001 - one feed must not stop the collection cycle.

@@ -4,6 +4,7 @@ import os
 import socket
 import sys
 import tempfile
+import time
 import unittest
 import urllib.error
 import urllib.parse
@@ -7152,6 +7153,86 @@ class PythonServiceTests(unittest.TestCase):
         self.assertEqual("body", items[0].raw_payload["articleReadStatus"])
         self.assertTrue(items[0].raw_payload["articleFacts"]["bodyAvailable"])
         self.assertEqual({"google_rss_us": 0, "yahoo_finance": 1}, {item["source"]: item["count"] for item in statuses})
+
+    def test_news_source_gateway_skips_gdelt_when_primary_provider_fills_limit(self):
+        published = datetime.now(timezone.utc).strftime("%a, %d %b %Y %H:%M:%S GMT")
+
+        def fake_text(url, headers=None):
+            if "feeds.finance.yahoo.com" in url:
+                return (
+                    "<rss><channel><item>"
+                    "<title>Apple shares rise after services update</title>"
+                    "<link>https://finance.yahoo.com/news/apple-services</link>"
+                    "<pubDate>" + published + "</pubDate>"
+                    "<description>Apple services revenue and margin update</description>"
+                    "</item></channel></rss>"
+                )
+            return (
+                "<html><body><article>"
+                "<p>Apple shares rose after services revenue and margins improved more than analysts expected.</p>"
+                "<p>Investors are watching whether recurring revenue can support earnings growth.</p>"
+                "</article></body></html>"
+            )
+
+        def fake_json(_url, headers=None):
+            raise AssertionError("GDELT should not be called after Yahoo fills the symbol limit")
+
+        gateway = NewsSourceGateway({
+            "newsCollectionProviders": "yahoo_finance,gdelt",
+            "newsCollectionPerSymbolLimit": "1",
+            "newsCollectionLookbackMinutes": "1440",
+            "newsCollectionMinRelevanceScore": "35",
+        }, fetch_text=fake_text, fetch_json=fake_json)
+
+        items, statuses = gateway.collect_for_target(NewsCollectionTarget("AAPL", "Apple", "NASDAQ", "USD", "Technology"))
+
+        self.assertEqual(1, len(items))
+        self.assertEqual(["yahoo_finance"], [item["source"] for item in statuses])
+        self.assertEqual("Yahoo Finance RSS", items[0].raw_payload["provider"])
+
+    def test_news_source_gateway_times_out_gdelt_and_falls_back_to_yahoo(self):
+        published = datetime.now(timezone.utc).strftime("%a, %d %b %Y %H:%M:%S GMT")
+
+        def slow_json(_url, headers=None):
+            time.sleep(2)
+            return {"articles": []}
+
+        def fake_text(url, headers=None):
+            if "feeds.finance.yahoo.com" in url:
+                return (
+                    "<rss><channel><item>"
+                    "<title>Apple shares rise after services update</title>"
+                    "<link>https://finance.yahoo.com/news/apple-services</link>"
+                    "<pubDate>" + published + "</pubDate>"
+                    "<description>Apple services revenue and margin update</description>"
+                    "</item></channel></rss>"
+                )
+            return (
+                "<html><body><article>"
+                "<p>Apple shares rose after services revenue and margins improved more than analysts expected.</p>"
+                "<p>Investors are watching whether recurring revenue can support earnings growth.</p>"
+                "</article></body></html>"
+            )
+
+        gateway = NewsSourceGateway({
+            "newsCollectionProviders": "gdelt,yahoo_finance",
+            "newsCollectionPerSymbolLimit": "2",
+            "newsCollectionLookbackMinutes": "1440",
+            "newsCollectionMinRelevanceScore": "35",
+            "newsCollectionGdeltTimeoutSeconds": "0.5",
+        }, fetch_text=fake_text, fetch_json=slow_json)
+
+        started = time.monotonic()
+        items, statuses = gateway.collect_for_target(NewsCollectionTarget("AAPL", "Apple", "NASDAQ", "USD", "Technology"))
+        elapsed = time.monotonic() - started
+
+        self.assertLess(elapsed, 1.5)
+        self.assertEqual(1, len(items))
+        self.assertEqual("Yahoo Finance RSS", items[0].raw_payload["provider"])
+        self.assertFalse(statuses[0]["ok"])
+        self.assertEqual("gdelt", statuses[0]["source"])
+        self.assertIn("timeout", statuses[0]["message"])
+        self.assertEqual("yahoo_finance", statuses[1]["source"])
 
     def test_yahoo_finance_rss_maps_kr_symbol_to_yahoo_suffix(self):
         published = datetime.now(timezone.utc).strftime("%a, %d %b %Y %H:%M:%S GMT")

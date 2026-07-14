@@ -2,6 +2,7 @@ import hashlib
 import html
 import re
 from dataclasses import dataclass, field
+from functools import lru_cache
 from typing import Dict, Iterable, List, Set, Tuple
 from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
 
@@ -45,6 +46,9 @@ ARTICLE_MARKER_KEYS = {
 }
 URL_KEYS = {"url", "sourceUrl", "sourceURL", "source_url", "link"}
 SOURCE_URL_LIST_KEYS = {"sourceUrls", "source_urls"}
+DEFAULT_CONTEXT_SCAN_MAX_DEPTH = 8
+DEFAULT_CONTEXT_SCAN_MAX_NODES = 1200
+DEFAULT_CONTEXT_SCAN_MAX_KEYS = 800
 
 
 @dataclass
@@ -94,12 +98,17 @@ def normalize_article_url(value: object) -> str:
     ))
 
 
-def normalize_article_title_for_identity(value: object) -> str:
+@lru_cache(maxsize=4096)
+def _normalize_article_title_for_identity_cached(value: str) -> str:
     title = html.unescape(normalized_article_title(value))
     title = re.sub(r"^\s*(?:\[[^\]]{1,20}\]\s*)+", "", title)
     title = re.sub(r"^(속보|단독|종합|특징주|update|breaking)\s*[:：-]?\s*", "", title, flags=re.IGNORECASE)
     title = re.sub(r"[^0-9A-Za-z가-힣%$₩]+", " ", title)
     return " ".join(title.casefold().split()).strip()
+
+
+def normalize_article_title_for_identity(value: object) -> str:
+    return _normalize_article_title_for_identity_cached(_text(value)[:800])
 
 
 def _nested_dicts(item: Dict[str, object]) -> List[Dict[str, object]]:
@@ -174,21 +183,56 @@ def news_digest_article_item(context: Dict[str, object]) -> Dict[str, object]:
     }
 
 
-def collect_article_identity_keys_from_context(context: Dict[str, object]) -> Set[str]:
+def _add_precomputed_article_identity_keys(value: object, keys: Set[str]) -> None:
+    if not isinstance(value, dict):
+        return
+    raw_keys = value.get("identityKeys") or value.get("articleKeys")
+    if isinstance(raw_keys, list):
+        for raw_key in raw_keys:
+            text = _text(raw_key)
+            if text:
+                keys.add(text)
+    digest = value.get("newsDigest") if isinstance(value.get("newsDigest"), dict) else {}
+    digest_keys = digest.get("articleKeys") if isinstance(digest.get("articleKeys"), list) else []
+    for raw_key in digest_keys:
+        text = _text(raw_key)
+        if text:
+            keys.add(text)
+
+
+def _scan_budget_exhausted(visited: List[int], keys: Set[str], max_nodes: int, max_keys: int) -> bool:
+    return visited[0] >= max_nodes or len(keys) >= max_keys
+
+
+def collect_article_identity_keys_from_context(
+    context: Dict[str, object],
+    max_depth: int = DEFAULT_CONTEXT_SCAN_MAX_DEPTH,
+    max_nodes: int = DEFAULT_CONTEXT_SCAN_MAX_NODES,
+    max_keys: int = DEFAULT_CONTEXT_SCAN_MAX_KEYS,
+) -> Set[str]:
     keys: Set[str] = set()
+    visited = [0]
 
     def visit(value: object, path: Tuple[str, ...] = ()) -> None:
+        if _scan_budget_exhausted(visited, keys, max_nodes, max_keys) or len(path) > max_depth:
+            return
+        visited[0] += 1
         if isinstance(value, dict):
+            _add_precomputed_article_identity_keys(value, keys)
             if is_article_like(value, path):
                 keys.update(article_identity_keys(value))
             digest_item = news_digest_article_item(value)
             if digest_item:
                 keys.update(article_identity_keys(digest_item))
+            if _scan_budget_exhausted(visited, keys, max_nodes, max_keys):
+                return
             for key, child in value.items():
                 visit(child, path + (str(key),))
         elif isinstance(value, list):
-            for child in value:
+            for child in value[:max_nodes]:
                 visit(child, path)
+                if _scan_budget_exhausted(visited, keys, max_nodes, max_keys):
+                    break
 
     visit(context or {})
     return keys

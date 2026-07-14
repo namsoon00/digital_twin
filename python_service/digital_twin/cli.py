@@ -97,6 +97,16 @@ def print_message_type_report(events: List[AlertEvent], skipped: List[str]) -> N
         print("Skipped " + item)
 
 
+def monitor_progress_printer(stage: str, payload: Dict[str, object]) -> None:
+    print(
+        "monitorProgress="
+        + str(stage or "")
+        + " "
+        + json.dumps(payload or {}, ensure_ascii=False, sort_keys=True),
+        flush=True,
+    )
+
+
 def build_handoff_message(summary: str, commit: str = "", validation: str = "", push: str = "", details: str = "") -> str:
     lines = [
         "타입: workHandoff",
@@ -183,7 +193,10 @@ def monitor_command(args) -> int:
             print("Account monitor jobs: disabled")
         return 0
 
-    runner = build_monitor_runner(accounts)
+    runner = build_monitor_runner(
+        accounts,
+        progress_callback=monitor_progress_printer if args.monitor_action == "once" else None,
+    )
     if args.monitor_action == "once":
         runner.run_once(dry_run=args.dry_run, force=args.force)
         return 0

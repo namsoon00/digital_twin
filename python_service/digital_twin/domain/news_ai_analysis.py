@@ -165,6 +165,59 @@ def article_facts(payload: Dict[str, object]) -> Dict[str, object]:
     return facts if isinstance(facts, dict) else {}
 
 
+def normalized_impact_polarity(value: object) -> str:
+    text = str(value or "").strip().lower()
+    if text in {"support", "positive", "bullish", "호재", "긍정", "positive_news"}:
+        return "support"
+    if text in {"risk", "negative", "bearish", "악재", "부정", "negative_news"}:
+        return "risk"
+    if text in {"mixed", "혼재"}:
+        return "mixed"
+    if text in {"context", "neutral", "중립"}:
+        return "context"
+    return ""
+
+
+def news_analysis_conflict_payload(
+    payload: Dict[str, object],
+    facts_payload: Dict[str, object],
+    ai_impact_polarity: object,
+) -> Dict[str, object]:
+    ai_polarity = normalized_impact_polarity(ai_impact_polarity)
+    if ai_polarity not in {"support", "risk"}:
+        return {}
+    candidates = [
+        ("기존 주가 영향", payload.get("stockImpactPolarity")),
+        ("기존 주가 영향", payload.get("stockImpact")),
+        ("기사 사실", facts_payload.get("stockImpactPolarity")),
+        ("기사 사실", facts_payload.get("stockImpact")),
+        ("기사 사실", facts_payload.get("impactPolarity")),
+    ]
+    for source, value in candidates:
+        existing_polarity = normalized_impact_polarity(value)
+        if existing_polarity not in {"support", "risk"}:
+            continue
+        if existing_polarity == ai_polarity:
+            return {}
+        return {
+            "analysisConflict": True,
+            "analysisConflictSource": source,
+            "analysisConflictExistingPolarity": existing_polarity,
+            "analysisConflictAiPolarity": ai_polarity,
+            "analysisConflictReasonKo": (
+                source
+                + "은 "
+                + IMPACT_LABELS.get(existing_polarity, existing_polarity)
+                + "로 표시됐지만 기사 AI 분석은 "
+                + IMPACT_LABELS.get(ai_polarity, ai_polarity)
+                + "로 판단했습니다."
+            ),
+            "dataQualityRisk": "article-ai-impact-conflict",
+            "dataQualityRiskScore": 7.0,
+        }
+    return {}
+
+
 def article_text_parts(evidence: ResearchEvidence) -> Tuple[str, str, str, str]:
     payload = analysis_payload_from_evidence(evidence)
     facts = article_facts(payload)
@@ -441,6 +494,19 @@ def apply_news_ai_analysis(evidence: ResearchEvidence, analysis_payload: Dict[st
         article_facts_payload["readStatusLabel"] = news_domain.article_read_status_label("feed-summary")
         article_facts_payload["missingBodyReason"] = article_facts_payload.get("missingBodyReason") or news_domain.article_missing_body_reason("feed-summary", "")
         payload["articleFacts"] = article_facts_payload
+    conflict_payload = news_analysis_conflict_payload(payload, article_facts_payload, impact_polarity)
+    for key in [
+        "analysisConflict",
+        "analysisConflictSource",
+        "analysisConflictExistingPolarity",
+        "analysisConflictAiPolarity",
+        "analysisConflictReasonKo",
+        "dataQualityRisk",
+        "dataQualityRiskScore",
+    ]:
+        payload.pop(key, None)
+    if conflict_payload:
+        payload.update(conflict_payload)
     payload["aiAnalysis"] = analysis_dict
     payload["articleAiAnalysisVersion"] = NEWS_AI_ANALYSIS_VERSION
     payload["articleSummaryKo"] = summary.get("briefKo") or summary.get("oneLineKo") or payload.get("articleSummaryKo") or evidence.summary

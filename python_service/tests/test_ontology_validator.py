@@ -130,6 +130,12 @@ class OntologyValidatorTests(unittest.TestCase):
         self.assertIn("HAS_INVESTOR_PROFILE", relation_types)
         self.assertIn("USES_INVESTMENT_STRATEGY_PROFILE", relation_types)
         self.assertIn("HAS_POSITION_ROLE", relation_types)
+        self.assertIn("HAS_RISK_BUDGET", relation_types)
+        self.assertIn("HAS_PROFIT_POLICY", relation_types)
+        self.assertTrue(any(item.source == "stock:000660" and item.relation_type == "HAS_RISK_BUDGET" for item in graph.relations))
+        self.assertTrue(any(item.source == "stock:000660" and item.relation_type == "HAS_PROFIT_POLICY" for item in graph.relations))
+        self.assertTrue(any(item.source == "stock:NVDA" and item.relation_type == "HAS_POSITION_ROLE" for item in graph.relations))
+        self.assertTrue(any(item.source == "stock:NVDA" and item.relation_type == "EVALUATED_UNDER_STRATEGY" for item in graph.relations))
         self.assertEqual("capitalPreservation", strategy_profiles[-1].properties["profile"])
         self.assertEqual("valid", validate_ontology(graph).status)
 

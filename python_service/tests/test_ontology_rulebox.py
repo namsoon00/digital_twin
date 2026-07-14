@@ -281,10 +281,21 @@ class OntologyRuleBoxTests(unittest.TestCase):
             for item in inference_relations
             if item.source == "stock:005930" and item.relation_type == "HAS_INFERRED_RISK"
         ]
+        loss_trace = next(
+            item
+            for item in graph.entities
+            if item.kind == "inference-trace" and (item.properties or {}).get("ruleId") == "graph.loss_guard.breakdown.v1"
+        )
+        matched_ids = [
+            item.get("conditionId")
+            for item in ((loss_trace.properties or {}).get("matchedConditions") or [])
+            if isinstance(item, dict)
+        ]
         opinion = graph.opinion_for_symbol("005930")
 
         self.assertTrue(any((item.properties or {}).get("ruleId") == "graph.loss_guard.breakdown.v1" for item in rule_entities))
         self.assertTrue(loss_guard_relations)
+        self.assertIn("strategy-risk-budget", matched_ids)
         self.assertTrue(any(item.kind == "relation-rule" and (item.properties or {}).get("ruleId") == "holding.loss_guard.breakdown.v1" for item in graph.entities))
         self.assertTrue(any(item.kind == "inference-trace" for item in graph.entities))
         self.assertTrue(any(item.kind == "inference-trace" for item in graph.evidence))
@@ -658,6 +669,11 @@ class OntologyRuleBoxTests(unittest.TestCase):
             for item in condition_rows
             if item["id"] == "rule-condition:graph.data_quality.microstructure_gap.v1:microstructure-missing"
         )
+        news_analysis_conflict = next(
+            item
+            for item in condition_rows
+            if item["id"] == "rule-condition:graph.data_quality.news_analysis_conflict.v1:news-analysis-conflict"
+        )
         execution_slippage = next(
             item
             for item in condition_rows
@@ -673,6 +689,21 @@ class OntologyRuleBoxTests(unittest.TestCase):
             for item in condition_rows
             if item["id"] == "rule-condition:graph.portfolio.concentration.review.v1:sector-concentration-risk"
         )
+        strategy_risk_budget = next(
+            item
+            for item in condition_rows
+            if item["id"] == "rule-condition:graph.loss_guard.breakdown.v1:strategy-risk-budget"
+        )
+        strategy_profit_policy = next(
+            item
+            for item in condition_rows
+            if item["id"] == "rule-condition:graph.profit_protect.trend_break.v1:strategy-profit-policy"
+        )
+        watchlist_strategy_role = next(
+            item
+            for item in condition_rows
+            if item["id"] == "rule-condition:graph.watchlist.trend_transition.support.v1:watchlist-strategy-role"
+        )
 
         self.assertIn("graph.materiality.alert_candidate.v1", rule_ids)
         self.assertIn("graph.holding.trend_transition.risk.v1", rule_ids)
@@ -684,6 +715,7 @@ class OntologyRuleBoxTests(unittest.TestCase):
         self.assertIn("graph.news.direct_material_context.v1", rule_ids)
         self.assertIn("graph.disclosure.event_risk.v1", rule_ids)
         self.assertIn("graph.data_quality.action_block.v1", rule_ids)
+        self.assertIn("graph.data_quality.news_analysis_conflict.v1", rule_ids)
         self.assertIn("graph.execution.liquidity_or_slippage_block.v1", rule_ids)
         self.assertIn("graph.factor.position_crowding.v1", rule_ids)
         self.assertIn("graph.benchmark.beta.context.v1", rule_ids)
@@ -704,12 +736,20 @@ class OntologyRuleBoxTests(unittest.TestCase):
         self.assertEqual(60.0, direct_news_context["conditionTargetMinMaterialityScore"])
         self.assertTrue(fact_change_gate["conditionTargetMaterialityPassed"])
         self.assertEqual(["market-microstructure"], microstructure_gap["conditionTargetDataScopes"])
+        self.assertEqual(["news-analysis-conflict"], news_analysis_conflict["conditionTargetDataScopes"])
+        self.assertEqual(5.0, news_analysis_conflict["conditionRelationMinRiskImpact"])
         self.assertEqual("any", execution_slippage["conditionRole"])
         self.assertEqual(["slippageRiskScore"], execution_slippage["conditionTargetFields"])
         self.assertEqual(70.0, execution_slippage["conditionTargetMinValue"])
         self.assertEqual("not", price_reclaim_not["conditionRole"])
         self.assertEqual("any", portfolio_concentration["conditionRole"])
         self.assertEqual(["ConcentrationRisk"], portfolio_concentration["conditionTargetTboxClasses"])
+        self.assertEqual("HAS_RISK_BUDGET", strategy_risk_budget["conditionRelationType"])
+        self.assertEqual("risk-budget", strategy_risk_budget["conditionTargetKind"])
+        self.assertEqual("HAS_PROFIT_POLICY", strategy_profit_policy["conditionRelationType"])
+        self.assertEqual("profit-policy", strategy_profit_policy["conditionTargetKind"])
+        self.assertEqual("HAS_POSITION_ROLE", watchlist_strategy_role["conditionRelationType"])
+        self.assertEqual("position-role", watchlist_strategy_role["conditionTargetKind"])
 
     def test_rulebox_admin_payload_roundtrips_to_graph(self):
         rules = default_graph_inference_rules()

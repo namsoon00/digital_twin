@@ -20,6 +20,7 @@ from digital_twin.domain.news_analysis import (
 from digital_twin.domain.news_ai_analysis import apply_news_ai_analysis, local_news_ai_analysis, normalize_ai_analysis
 from digital_twin.domain.ontology_contracts import PortfolioOntology
 from digital_twin.domain.ontology_relation_reasoning import research_evidence_facts
+from digital_twin.domain.ontology_schema import add_entity
 from digital_twin.domain.portfolio_ontology_research_concepts import add_research_evidence_concepts
 
 
@@ -223,6 +224,67 @@ class NewsAnalysisDomainTests(unittest.TestCase):
         self.assertEqual("악재", updated.raw_payload["stockImpactLabel"])
         self.assertEqual("feed-summary", updated.raw_payload["articleReadStatus"])
         self.assertTrue(updated.raw_payload["aiAnalysis"]["summary"]["briefKo"])
+
+    def test_ai_article_analysis_conflict_becomes_ontology_data_quality_risk(self):
+        evidence = ResearchEvidence(
+            "research:AAPL:news:conflict",
+            "AAPL",
+            "news",
+            "Reuters",
+            "Apple faces lawsuit pressure despite AI partnership optimism",
+            "소송 부담과 AI 기대가 섞인 기사입니다.",
+            "https://example.test/apple-conflict",
+            "2026-07-13T07:31:00Z",
+            "support",
+            78,
+            0.82,
+            "2026-07-13T07:31:00Z",
+            raw_payload={
+                "relationScope": "direct",
+                "relevanceScore": 96,
+                "materialityScore": 78,
+                "materialityPassed": True,
+                "stockImpactPolarity": "support",
+                "stockImpactLabel": "호재",
+                "articleFacts": {
+                    "stockImpactPolarity": "support",
+                    "bodyAvailable": True,
+                },
+            },
+        )
+
+        updated = apply_news_ai_analysis(evidence, {
+            "status": "ok",
+            "impactPolarity": "risk",
+            "impactLabelKo": "악재",
+            "confidence": 0.8,
+            "materialityScore": 82,
+            "relationScope": "direct",
+            "eventType": "regulation",
+            "summary": {"briefKo": "소송 부담이 투자심리에 부담입니다."},
+            "riskSignals": ["소송"],
+        })
+        graph = PortfolioOntology("news-conflict")
+        stock_id = add_entity(graph, "stock", "AAPL", "Apple", {
+            "tboxClass": "Stock",
+            "symbol": "AAPL",
+            "source": "holding",
+        })
+        add_research_evidence_concepts(
+            graph,
+            stock_id,
+            "",
+            "",
+            "AAPL",
+            {},
+            {"researchEvidence": {"AAPL": [updated.to_dict()]}},
+        )
+
+        self.assertTrue(updated.raw_payload["analysisConflict"])
+        self.assertEqual("support", updated.raw_payload["analysisConflictExistingPolarity"])
+        self.assertEqual("risk", updated.raw_payload["analysisConflictAiPolarity"])
+        self.assertTrue(any(item.kind == "article-analysis-conflict" for item in graph.entities))
+        self.assertTrue(any(item.source == stock_id and item.relation_type == "HAS_DATA_QUALITY" for item in graph.relations))
 
     def test_ai_article_analysis_summarizes_title_rss_facts_for_legal_article(self):
         target = NewsCollectionTarget("AAPL", "Apple", "NASDAQ", "USD", "AI/플랫폼")

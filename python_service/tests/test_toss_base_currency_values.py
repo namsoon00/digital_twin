@@ -6,7 +6,11 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from digital_twin.domain.market_data import normalize_position
 from digital_twin.domain.monitoring import RealtimeMonitor
-from digital_twin.domain.portfolio_calculations import portfolio_summary, runtime_fx_currencies_from_external_signals
+from digital_twin.domain.portfolio_calculations import (
+    apply_position_base_currency_values,
+    portfolio_summary,
+    runtime_fx_currencies_from_external_signals,
+)
 from digital_twin.domain.volume_time_adjustment import volume_pace_snapshot
 from digital_twin.infrastructure.toss_snapshots import currency_rates_from_external_signals
 
@@ -177,6 +181,48 @@ class TossBaseCurrencyValueTests(unittest.TestCase):
         self.assertEqual(1425.5, rates["USD"])
         self.assertAlmostEqual(2097.6 * 1425.5, summary.total)
         self.assertEqual("종목 평가금액: $2,098 (약 299만 원)", line)
+
+    def test_live_fx_backfills_position_base_currency_fields_before_snapshot_storage(self):
+        position = normalize_position(
+            {
+                "symbol": "MSTR",
+                "market": "US",
+                "currency": "USD",
+                "quantity": 230,
+                "currentPrice": 94.55,
+                "marketValue": 21746.5,
+                "profitLoss": 1299.24,
+                "evaluationAmount": 0,
+                "exchangeRate": 0,
+            }
+        )
+        external_signals = {
+            "fxRates": {
+                "USDKRW": {
+                    "provider": "Alpha Vantage",
+                    "base": "USD",
+                    "quote": "KRW",
+                    "rate": 1418.2,
+                }
+            }
+        }
+        rates = currency_rates_from_external_signals({"fxRates": "KRW=1\nUSD=1400"}, external_signals)
+
+        apply_position_base_currency_values(
+            [position],
+            rates,
+            runtime_fx_currencies_from_external_signals(external_signals),
+        )
+        summary = portfolio_summary(
+            [position],
+            fx_rates=rates,
+            runtime_fx_currencies=runtime_fx_currencies_from_external_signals(external_signals),
+        )
+
+        self.assertEqual(1418.2, position.exchange_rate)
+        self.assertAlmostEqual(21746.5 * 1418.2, position.market_value_krw)
+        self.assertAlmostEqual(1299.24 * 1418.2, position.profit_loss_krw)
+        self.assertAlmostEqual(position.market_value_krw, summary.total)
 
     def test_volume_pace_snapshot_adjusts_raw_volume_ratio_by_market_session_time(self):
         pace = volume_pace_snapshot(

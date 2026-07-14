@@ -110,6 +110,35 @@ def position_value_in_base(
     return value_in_base(position.market_value, currency, rates)
 
 
+def apply_position_base_currency_values(
+    positions: Iterable[Position],
+    fx_rates: Dict[str, float] = None,
+    runtime_fx_currencies: Iterable[str] = None,
+) -> List[Position]:
+    rates = normalized_fx_rates(fx_rates)
+    runtime_currencies = {str(item or "").upper() for item in (runtime_fx_currencies or [])}
+    position_list = list(positions or [])
+    for position in position_list:
+        currency = str(position.currency or "KRW").upper()
+        rate = rates.get(currency) or 0.0
+        if currency == "KRW":
+            position.exchange_rate = 1.0
+            if number(getattr(position, "market_value_krw", 0.0)) <= 0 and number(position.market_value) > 0:
+                position.market_value_krw = number(position.market_value)
+            if number(getattr(position, "profit_loss_krw", 0.0)) == 0 and number(position.profit_loss) != 0:
+                position.profit_loss_krw = number(position.profit_loss)
+            continue
+        if rate > 0:
+            position.exchange_rate = rate
+            should_refresh_base_value = currency in runtime_currencies or number(getattr(position, "market_value_krw", 0.0)) <= 0
+            if should_refresh_base_value and number(position.market_value) > 0:
+                position.market_value_krw = value_in_base(position.market_value, currency, rates)
+            should_refresh_profit_loss = currency in runtime_currencies or number(getattr(position, "profit_loss_krw", 0.0)) == 0
+            if should_refresh_profit_loss and number(position.profit_loss) != 0:
+                position.profit_loss_krw = value_in_base(position.profit_loss, currency, rates)
+    return position_list
+
+
 def portfolio_summary(
     positions: Iterable[Position],
     account_cash: float = 0.0,

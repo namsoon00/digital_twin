@@ -194,6 +194,8 @@ def add_account_investment_strategy_concepts(
     add_relation(graph, profile_id, profit_policy_id, "HAS_PROFIT_POLICY", weight=1.0, properties={"source": "account-context"})
     return {
         "profileId": profile_id,
+        "riskBudgetId": risk_budget_id,
+        "profitPolicyId": profit_policy_id,
         "profile": profile,
     }
 
@@ -219,6 +221,7 @@ def role_label(role_key: str) -> str:
 def add_position_strategy_role_concepts(
     graph: PortfolioOntology,
     position_node_id: str,
+    stock_node_id: str,
     strategy_context: Dict[str, object],
     position: Position,
 ) -> None:
@@ -226,8 +229,20 @@ def add_position_strategy_role_concepts(
         return
     profile = strategy_context.get("profile") if isinstance(strategy_context.get("profile"), dict) else {}
     profile_id = str(strategy_context.get("profileId") or "")
+    risk_budget_id = str(strategy_context.get("riskBudgetId") or "")
+    profit_policy_id = str(strategy_context.get("profitPolicyId") or "")
     profile_key = str(profile.get("profile") or "balanced")
     role_key = role_key_for_position(position, profile)
+    strategy_relation_props = {
+        "source": "account-strategy",
+        "profile": profile_key,
+        "role": role_key,
+        "positionSource": position_source(position),
+        "lossTolerancePct": number(profile.get("lossTolerancePct")),
+        "profitProtectionPct": number(profile.get("profitProtectionPct")),
+        "watchlistActionPolicy": profile.get("watchlistActionPolicy"),
+        "holdingActionPolicy": profile.get("holdingActionPolicy"),
+    }
     role_id = add_entity(graph, "position-role", profile_key + ":" + role_key, role_label(role_key), {
         "tboxClass": "PositionRole",
         "profile": profile_key,
@@ -238,9 +253,18 @@ def add_position_strategy_role_concepts(
         "watchlistActionPolicy": profile.get("watchlistActionPolicy"),
         "holdingActionPolicy": profile.get("holdingActionPolicy"),
     })
-    add_relation(graph, position_node_id, role_id, "HAS_POSITION_ROLE", weight=1.0, properties={"source": "account-strategy"})
+    for node_id in [position_node_id, stock_node_id]:
+        if not node_id:
+            continue
+        add_relation(graph, node_id, role_id, "HAS_POSITION_ROLE", weight=1.0, properties=strategy_relation_props)
+        if risk_budget_id:
+            add_relation(graph, node_id, risk_budget_id, "HAS_RISK_BUDGET", weight=1.0, properties=strategy_relation_props)
+        if profit_policy_id:
+            add_relation(graph, node_id, profit_policy_id, "HAS_PROFIT_POLICY", weight=1.0, properties=strategy_relation_props)
+        if profile_id:
+            add_relation(graph, node_id, profile_id, "EVALUATED_UNDER_STRATEGY", weight=1.0, properties=strategy_relation_props)
     if profile_id:
-        add_relation(graph, position_node_id, profile_id, "EVALUATED_UNDER_STRATEGY", weight=1.0, properties={"source": "account-strategy"})
+        add_relation(graph, profile_id, role_id, "HAS_POSITION_ROLE", weight=1.0, properties={"source": "account-strategy", "profile": profile_key, "role": role_key})
 
 def runtime_settings(runtime_context: Dict[str, object]) -> Dict[str, object]:
     settings = runtime_context.get("settings") if isinstance(runtime_context, dict) else {}

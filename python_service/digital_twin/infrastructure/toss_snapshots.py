@@ -10,7 +10,12 @@ from ..domain.accounts import AccountConfig
 from ..domain.data_freshness import combine_quality
 from ..domain.market_data import known_stock, normalize_position, number, pct_distance, technical_indicators_from_candles
 from ..domain.portfolio import AccountSnapshot, Position, utc_now_iso
-from ..domain.portfolio_calculations import fx_rates_with_external_signals, portfolio_summary, runtime_fx_currencies_from_external_signals
+from ..domain.portfolio_calculations import (
+    apply_position_base_currency_values,
+    fx_rates_with_external_signals,
+    portfolio_summary,
+    runtime_fx_currencies_from_external_signals,
+)
 from ..domain.strategy import decisions_for_positions
 from .external_signals import ExternalSignalProvider
 from .kis_market_signals import KISMarketSignalProvider
@@ -788,12 +793,16 @@ def build_snapshot(account: AccountConfig, external_settings: Optional[Dict[str,
     positions, watchlist = kis_provider.enrich_collections(positions, watchlist)
     external_signals = ExternalSignalProvider(settings=settings).signals_for_positions(positions + watchlist)
     account_context = account.ontology_account_context()
+    fx_rates = currency_rates_from_external_signals(settings, external_signals)
+    runtime_fx_currencies = runtime_fx_currencies_from_external_signals(external_signals)
+    positions = apply_position_base_currency_values(positions, fx_rates, runtime_fx_currencies)
+    watchlist = apply_position_base_currency_values(watchlist, fx_rates, runtime_fx_currencies)
     portfolio = portfolio_summary(
         positions,
         cash,
         currency,
-        currency_rates_from_external_signals(settings, external_signals),
-        runtime_fx_currencies_from_external_signals(external_signals),
+        fx_rates,
+        runtime_fx_currencies,
     )
     decisions = decisions_for_positions(
         positions,

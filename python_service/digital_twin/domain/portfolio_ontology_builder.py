@@ -258,7 +258,7 @@ def build_portfolio_ontology(
         elif watchlist_id:
             add_relation(graph, watchlist_id, position_id, "HAS_POSITION", weight=0.15, properties={"source": source})
         add_relation(graph, position_id, stock_id, "REPRESENTS_STOCK", weight=1.0, properties={"source": source})
-        add_position_strategy_role_concepts(graph, position_id, strategy_context, position)
+        add_position_strategy_role_concepts(graph, position_id, stock_id, strategy_context, position)
         for kind, label in [("market", position.market or "unknown"), ("currency", position.currency or "unknown")]:
             tbox_class = "Market" if kind == "market" else "Currency"
             graph.entities.append(OntologyEntity(entity_id(kind, label), label, kind, abox_properties({"tboxClass": tbox_class})))

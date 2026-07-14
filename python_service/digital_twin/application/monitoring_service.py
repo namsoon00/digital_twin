@@ -1,7 +1,7 @@
 import inspect
 import uuid
 from datetime import datetime, timedelta, timezone
-from typing import Callable, Iterable, List
+from typing import Callable, Dict, Iterable, List
 
 from ..domain.accounts import AccountConfig
 from ..domain.events import alerts_detected_event, monitoring_cycle_completed_event, snapshot_collected_event
@@ -25,6 +25,7 @@ class MonitorRunner:
         account_job_interval_seconds: int = 180,
         account_job_lock_seconds: int = 600,
         worker_id: str = "",
+        progress_callback: Callable[[str, Dict[str, object]], None] = None,
     ):
         self.accounts = list(accounts)
         self.account_map = {account.account_id: account for account in self.accounts}
@@ -40,21 +41,33 @@ class MonitorRunner:
         self.account_job_interval_seconds = max(30, int(account_job_interval_seconds or 180))
         self.account_job_lock_seconds = max(60, int(account_job_lock_seconds or 600))
         self.worker_id = worker_id or ("monitor-" + uuid.uuid4().hex[:12])
+        self.progress_callback = progress_callback
 
     def run_once(self, dry_run: bool = False, force: bool = False, symbol_filter: Iterable[str] = None) -> List[AlertEvent]:
         if self.use_account_job_queue(dry_run, force, symbol_filter):
             return self.run_due_account_jobs()
         return self.run_all_accounts_once(dry_run=dry_run, force=force, symbol_filter=symbol_filter)
 
+    def progress(self, stage: str, **payload) -> None:
+        if not self.progress_callback:
+            return
+        try:
+            self.progress_callback(stage, dict(payload or {}))
+        except Exception:
+            return
+
     def use_account_job_queue(self, dry_run: bool, force: bool, symbol_filter: Iterable[str] = None) -> bool:
         return bool(self.account_job_store) and not dry_run and not force and not list(symbol_filter or [])
 
     def run_all_accounts_once(self, dry_run: bool = False, force: bool = False, symbol_filter: Iterable[str] = None) -> List[AlertEvent]:
+        self.progress("monitor.start", accountCount=len(self.accounts), dryRun=bool(dry_run), force=bool(force))
         all_events: List[AlertEvent] = []
         snapshots = []
         allowed_symbols = set(str(symbol or "").upper().strip() for symbol in (symbol_filter or []) if str(symbol or "").strip())
         for account in self.accounts:
+            self.progress("account.start", accountId=account.account_id, label=account.label)
             snapshot, events = self.collect_account_events(account, allowed_symbols=allowed_symbols, dry_run=dry_run, force=force)
+            self.progress("account.done", accountId=account.account_id, eventCount=len(events), mode=snapshot.mode, status=snapshot.status)
             snapshots.append(snapshot)
             if not self.use_cycle_recorder(dry_run):
                 self.publish(snapshot_collected_event(snapshot))
@@ -70,19 +83,23 @@ class MonitorRunner:
                 dry_run=dry_run,
             )
             if not all_events:
-                print("No Python realtime monitoring events.")
+                self.progress("monitor.no_events")
+            self.progress("monitor.completed", snapshotCount=len(snapshots), eventCount=len(all_events), cycleRecorder=True)
             return all_events
         if all_events:
             alert_event = alerts_detected_event(all_events)
             self.publish(alert_event)
+            self.progress("send.start", eventCount=len(all_events), dryRun=bool(dry_run))
             result = self.send_alert_events(all_events, dry_run=dry_run, source_event=alert_event)
+            self.progress("send.done", delivered=bool(result.delivered), label=getattr(result, "label", ""), reason=getattr(result, "reason", ""))
             self.publish_cycle_completed(snapshots, all_events, dry_run, result.delivered)
             if dry_run:
+                self.progress("monitor.completed", snapshotCount=len(snapshots), eventCount=len(all_events), delivered=bool(result.delivered))
                 return all_events
             if result.delivered:
                 self.store.mark_sent(all_events)
         else:
-            print("No Python realtime monitoring events.")
+            self.progress("monitor.no_events")
             self.publish_cycle_completed(snapshots, all_events, dry_run, False)
         if not dry_run:
             for snapshot in snapshots:
@@ -90,6 +107,7 @@ class MonitorRunner:
                 snapshot.metadata.pop("monitorStateHistory", None)
                 self.store.save_snapshot(snapshot)
             self.store.write()
+        self.progress("monitor.completed", snapshotCount=len(snapshots), eventCount=len(all_events))
         return all_events
 
     def run_due_account_jobs(self) -> List[AlertEvent]:
@@ -101,8 +119,9 @@ class MonitorRunner:
             default_interval_seconds=self.account_job_interval_seconds,
         )
         if not jobs:
-            print("No due account monitor jobs.")
+            self.progress("jobs.none_due")
             return []
+        self.progress("jobs.claimed", jobCount=len(jobs))
         all_events: List[AlertEvent] = []
         for job in jobs:
             account = self.account_map.get(job.account_id)
@@ -122,11 +141,13 @@ class MonitorRunner:
                     str(error)[:500],
                     self.next_account_run_at(self.failure_backoff_seconds(job)),
                 )
+                self.progress("account.failed", accountId=job.account_id, reason=str(error)[:180])
         if not all_events:
-            print("No Python realtime monitoring events.")
+            self.progress("monitor.no_events")
         return all_events
 
     def run_single_account_job(self, account: AccountConfig, job: MonitorAccountJob) -> List[AlertEvent]:
+        self.progress("account.start", accountId=account.account_id, label=account.label, job=True)
         snapshot, events = self.collect_account_events(account, allowed_symbols=set(), dry_run=False, force=False)
         if self.cycle_recorder:
             snapshot.metadata.pop("previousMonitorState", None)
@@ -146,6 +167,7 @@ class MonitorRunner:
             self.store.save_snapshot(snapshot)
             self.store.write()
         self.account_job_store.mark_done(account.account_id, self.next_account_run_at(self.account_job_interval_seconds))
+        self.progress("account.done", accountId=account.account_id, eventCount=len(events), job=True)
         return events
 
     def collect_account_events(
@@ -155,7 +177,16 @@ class MonitorRunner:
         dry_run: bool = False,
         force: bool = False,
     ):
+        self.progress("snapshot.start", accountId=account.account_id)
         snapshot = self.snapshot_builder(account)
+        self.progress(
+            "snapshot.done",
+            accountId=account.account_id,
+            mode=snapshot.mode,
+            status=snapshot.status,
+            positionCount=len(snapshot.positions or []),
+            watchlistCount=len(snapshot.watchlist or []),
+        )
         previous = self.store.previous.get(snapshot.account_id) or {}
         snapshot.metadata["previousMonitorState"] = self.compact_previous_state(previous)
         snapshot.metadata["monitorStateHistory"] = self.compact_monitor_history(
@@ -165,11 +196,22 @@ class MonitorRunner:
         # Dry-run still needs graph inference to simulate the same investment
         # judgement path as live monitoring; delivery and monitor persistence
         # remain gated by dry_run below.
+        self.progress("ontology_projection.start", accountId=account.account_id)
         self.record_ontology_projection(snapshot)
+        projection = snapshot.metadata.get("ontology", {}).get("projection") if isinstance(snapshot.metadata.get("ontology"), dict) else {}
+        self.progress(
+            "ontology_projection.done",
+            accountId=account.account_id,
+            status=projection.get("status") if isinstance(projection, dict) else "",
+            graphStore=projection.get("graphStore") if isinstance(projection, dict) else "",
+        )
         events = self.monitor.events_for_snapshot(snapshot, previous)
+        self.progress("events.detected", accountId=account.account_id, eventCount=len(events))
         if allowed_symbols:
             events = self.filter_events_by_symbol(events, allowed_symbols)
+            self.progress("events.filtered", accountId=account.account_id, eventCount=len(events), symbolCount=len(allowed_symbols))
         events = self.monitor.apply_cadence(events, self.store, force=force)
+        self.progress("events.ready", accountId=account.account_id, eventCount=len(events), force=bool(force))
         return snapshot, events
 
     def next_account_run_at(self, seconds: int) -> str:

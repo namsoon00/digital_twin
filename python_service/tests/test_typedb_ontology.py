@@ -329,7 +329,14 @@ class TypeDBOntologyRepositoryTests(unittest.TestCase):
             "symbol": "005930",
             "levelType": "ma20",
         }))
+        graph.entities.append(OntologyEntity("risk-budget:main", "리스크 예산", "risk-budget", {
+            "ontologyBox": "ABox",
+            "tboxClass": "RiskBudget",
+        }))
         graph.relations.append(OntologyRelation("stock:005930", "level:005930:ma20", "BREAKS_LEVEL", 0.8, properties={
+            "ontologyBox": "ABox",
+        }))
+        graph.relations.append(OntologyRelation("stock:005930", "risk-budget:main", "HAS_RISK_BUDGET", 1.0, properties={
             "ontologyBox": "ABox",
         }))
         rule_snapshot = {
@@ -449,7 +456,14 @@ class TypeDBOntologyRepositoryTests(unittest.TestCase):
             "symbol": "005930",
             "levelType": "ma20",
         }))
+        graph.entities.append(OntologyEntity("risk-budget:main", "리스크 예산", "risk-budget", {
+            "ontologyBox": "ABox",
+            "tboxClass": "RiskBudget",
+        }))
         graph.relations.append(OntologyRelation("stock:005930", "level:005930:ma20", "BREAKS_LEVEL", 0.8, properties={
+            "ontologyBox": "ABox",
+        }))
+        graph.relations.append(OntologyRelation("stock:005930", "risk-budget:main", "HAS_RISK_BUDGET", 1.0, properties={
             "ontologyBox": "ABox",
         }))
         rule_snapshot = {

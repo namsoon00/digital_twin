@@ -63,6 +63,13 @@ def event_relation_properties(item: object) -> Dict[str, object]:
         "sourcePlatform",
         "entityLinks",
         "qualityGate",
+        "analysisConflict",
+        "analysisConflictSource",
+        "analysisConflictExistingPolarity",
+        "analysisConflictAiPolarity",
+        "analysisConflictReasonKo",
+        "dataQualityRisk",
+        "dataQualityRiskScore",
     ]:
         if key in raw_payload:
             props[key] = raw_payload.get(key)
@@ -208,6 +215,32 @@ def add_news_ai_analysis_concept(
     add_relation(graph, event_id, analysis_id, "HAS_ANALYSIS", weight=relation_weight, evidence_ids=[evidence_id], properties={**props, "source": "article-ai-analysis"})
     add_relation(graph, analysis_id, event_id, "EXPLAINS", weight=relation_weight, evidence_ids=[evidence_id], properties={**props, "source": "article-ai-analysis"})
     add_relation(graph, analysis_id, stock_id, "AFFECTS", weight=relation_weight, evidence_ids=[evidence_id], properties={**props, "source": "article-ai-analysis"})
+    if raw_payload.get("analysisConflict"):
+        risk_score = number(raw_payload.get("dataQualityRiskScore")) or 7.0
+        conflict_id = add_entity(graph, "article-analysis-conflict", evidence_id or str(getattr(item, "title", "") or ""), "뉴스 영향 분석 충돌: " + str(getattr(item, "title", "") or ""), {
+            "tboxClass": "DataQualityRisk",
+            "tboxClasses": ["Risk", "DataQualityRisk", "ArticleAIAnalysis", "DataQualitySignal"],
+            "symbol": str(getattr(item, "symbol", "") or ""),
+            "sourceEvidenceId": evidence_id,
+            "dataScope": "news-analysis-conflict",
+            "riskImpact": risk_score,
+            "opinionImpact": risk_score,
+            "analysisConflictSource": raw_payload.get("analysisConflictSource"),
+            "analysisConflictExistingPolarity": raw_payload.get("analysisConflictExistingPolarity"),
+            "analysisConflictAiPolarity": raw_payload.get("analysisConflictAiPolarity"),
+            "analysisConflictReasonKo": raw_payload.get("analysisConflictReasonKo"),
+            "dataQualityRisk": raw_payload.get("dataQualityRisk"),
+        })
+        conflict_props = {
+            **props,
+            "source": "article-ai-analysis-conflict",
+            "dataScope": "news-analysis-conflict",
+            "riskImpact": risk_score,
+            "opinionImpact": risk_score,
+            "aiInfluenceLabel": raw_payload.get("analysisConflictReasonKo") or "뉴스 영향 분석 충돌",
+        }
+        add_relation(graph, stock_id, conflict_id, "HAS_DATA_QUALITY", weight=round(max(0.42, relation_weight), 4), evidence_ids=[evidence_id], properties=conflict_props)
+        add_relation(graph, analysis_id, conflict_id, "HAS_DATA_QUALITY", weight=round(max(0.42, relation_weight), 4), evidence_ids=[evidence_id], properties=conflict_props)
 
 
 def add_research_evidence_concepts(

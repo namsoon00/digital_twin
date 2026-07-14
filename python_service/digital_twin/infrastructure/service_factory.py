@@ -1,6 +1,6 @@
 import os
 import uuid
-from typing import Iterable
+from typing import Callable, Dict, Iterable
 
 from ..application.flow_lens_service import FlowLensService
 from ..application.investment_analysis_service import InvestmentAnalysisService
@@ -72,7 +72,11 @@ def monitor_account_job_store_from_settings(settings):
     return stores.monitor_account_job_store(settings)
 
 
-def build_monitor_runner(accounts: Iterable[AccountConfig], event_publisher=None) -> MonitorRunner:
+def build_monitor_runner(
+    accounts: Iterable[AccountConfig],
+    event_publisher=None,
+    progress_callback: Callable[[str, Dict[str, object]], None] = None,
+) -> MonitorRunner:
     settings = runtime_settings()
     store = stores.monitor_store(settings)
     ontology_quality_store = stores.ontology_quality_sample_store(settings)
@@ -95,6 +99,7 @@ def build_monitor_runner(accounts: Iterable[AccountConfig], event_publisher=None
         account_job_interval_seconds=interval_seconds,
         account_job_lock_seconds=int(settings.get("monitorAccountLockSeconds") or os.environ.get("MONITOR_ACCOUNT_LOCK_SECONDS") or max(600, interval_seconds * 4)),
         worker_id=os.environ.get("MONITOR_WORKER_ID") or ("monitor-" + uuid.uuid4().hex[:12]),
+        progress_callback=progress_callback,
     )
 
 

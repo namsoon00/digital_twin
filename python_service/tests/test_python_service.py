@@ -4504,8 +4504,49 @@ class PythonServiceTests(unittest.TestCase):
         self.assertEqual(first_insight["cadenceKey"], second_insight["cadenceKey"])
         self.assertEqual(first_insight["sourceEventKeys"], second_insight["sourceEventKeys"])
         self.assertEqual(["main:watchlist-ontology:005380:riskWatch:data.conflict.v1+trend.breakdown_acceleration.v1"], first_insight["sourceEventKeys"])
+        self.assertEqual(["trend.breakdown_acceleration.v1"], first_insight["semanticComponents"]["relationRuleIds"])
+        self.assertEqual(first_insight["semanticSignature"], second_insight["semanticSignature"])
+        self.assertIn("relationRuleIds=trend.breakdown_acceleration.v1", first_insight["semanticSignature"])
         self.assertEqual("95", first_insight["scoreBucket"])
         self.assertEqual("100", second_insight["scoreBucket"])
+
+    def test_investment_insight_semantic_signature_includes_material_news_event(self):
+        snapshot = AccountSnapshot(
+            "main",
+            "메인",
+            "toss",
+            "live",
+            "ok",
+            utc_now_iso(),
+            portfolio_summary([]),
+        )
+        event = AlertEvent(
+            "main",
+            "메인",
+            "ALERT",
+            "watchlistOntologySignal",
+            "main:watchlist-news:005930:news:article-123:82",
+            "삼성전자",
+            ["상태: 뉴스 리스크 점검 (82점)"],
+            "005930",
+            metadata={
+                "watchlistOntologySignalType": "riskWatch",
+                "watchlistSignalScore": 82,
+                "ontologyRelationContext": self.graph_relation_context(
+                    "005930",
+                    "뉴스 리스크 점검",
+                    82,
+                    rule_id="news.event.risk.v1",
+                ),
+                "dataFreshness": self.fresh_data_freshness("unit-test-position"),
+            },
+        )
+
+        insight = build_investment_insight_events(snapshot, [event])[0].metadata["ontologyInsight"]
+
+        self.assertEqual(["news.event.risk.v1"], insight["semanticComponents"]["relationRuleIds"])
+        self.assertEqual(["main:watchlist-news:005930:news:article-123"], insight["semanticComponents"]["materialSourceEventKeys"])
+        self.assertIn("materialSourceEventKeys=main:watchlist-news:005930:news:article-123", insight["semanticSignature"])
 
     def test_holding_investment_insight_uses_common_dispatch_policy(self):
         snapshot = AccountSnapshot(
@@ -6015,11 +6056,15 @@ class PythonServiceTests(unittest.TestCase):
         bypass_ids = {condition.condition_id for condition in rule.similarity_bypass_conditions}
         self.assertIn("ontology_novelty_score", condition_ids)
         self.assertIn("insight_type_changed", bypass_ids)
+        self.assertIn("semantic_signature_changed", bypass_ids)
         self.assertIn("new_relation_event", bypass_ids)
         self.assertIn("insight_profit_loss_improved", bypass_ids)
         insight_change = next(condition for condition in rule.similarity_bypass_conditions if condition.condition_id == "insight_type_changed")
         self.assertEqual("ontologyInsight.dispatchInsightType", insight_change.field)
-        self.assertEqual(["messageType", "accountId", "ontologyInsight.subject", "ontologyInsight.dispatchInsightType"], rule.similarity_fields)
+        self.assertEqual(
+            ["messageType", "accountId", "ontologyInsight.subject", "ontologyInsight.dispatchInsightType", "ontologyInsight.semanticSignature"],
+            rule.similarity_fields,
+        )
         job = NotificationJob.create(
             "관계 인사이트",
             account_id="main",
@@ -6029,6 +6074,7 @@ class PythonServiceTests(unittest.TestCase):
                 "ontologyInsight": {
                     "subject": "AAPL",
                     "insightType": "contradictionDetected",
+                    "dispatchInsightType": "contradictionDetected",
                     "score": 72,
                     "noveltyScore": 82,
                     "confidence": 74,
@@ -6041,6 +6087,7 @@ class PythonServiceTests(unittest.TestCase):
             "ontologyInsight": {
                 "subject": "AAPL",
                 "insightType": "riskIncrease",
+                "dispatchInsightType": "riskIncrease",
                 "score": 60,
                 "noveltyScore": 64,
                 "confidence": 70,
@@ -6091,8 +6138,12 @@ class PythonServiceTests(unittest.TestCase):
         migrated = TestNotificationRuleStore(db_path).get("investmentInsight")
         insight_change = next(condition for condition in migrated.similarity_bypass_conditions if condition.condition_id == "insight_type_changed")
 
-        self.assertEqual(["messageType", "accountId", "ontologyInsight.subject", "ontologyInsight.dispatchInsightType"], migrated.similarity_fields)
+        self.assertEqual(
+            ["messageType", "accountId", "ontologyInsight.subject", "ontologyInsight.dispatchInsightType", "ontologyInsight.semanticSignature"],
+            migrated.similarity_fields,
+        )
         self.assertEqual("ontologyInsight.dispatchInsightType", insight_change.field)
+        self.assertIn("semantic_signature_changed", {condition.condition_id for condition in migrated.similarity_bypass_conditions})
 
     def test_symbol_universe_parsers_and_store_support_market_catalog(self):
         nasdaq_text = "\n".join([
@@ -10185,6 +10236,118 @@ class PythonServiceTests(unittest.TestCase):
             previous_context=previous_context,
             last_sent_at=utc_now_iso(),
             last_sent_age_minutes=10,
+            job=job,
+        )
+
+        self.assertFalse(decision.should_send)
+        self.assertEqual("cooldown", decision.state_decision)
+        self.assertFalse(decision.similarity_bypassed)
+
+    def test_investment_insight_state_cooldown_allows_semantic_relation_path_change(self):
+        rule = default_notification_rule("investmentInsight")
+        job = NotificationJob.create(
+            "보유 포지션 인사이트",
+            account_id="main",
+            message_type="investmentInsight",
+            context={
+                "severity": "ALERT",
+                "body": "삼성전자 관계 경로 변경",
+                "symbol": "005930",
+                "ontologyInsight": {
+                    "subject": "005930",
+                    "insightType": "riskIncrease",
+                    "dispatchInsightType": "holdingPositionCommon",
+                    "score": 84,
+                    "noveltyScore": 25,
+                    "confidence": 82,
+                    "semanticSignature": "subject=005930|dispatchType=holdingPositionCommon|sourceSignalTypes=holdingTiming|relationRuleIds=flow.liquidity.risk.v1|materialSourceEventKeys=",
+                    "sourceSignalTypes": ["holdingTiming"],
+                    "sourceEventKeys": [],
+                },
+                "sourceSignalTypes": ["holdingTiming"],
+            },
+        )
+        previous_context = {
+            "severity": "ALERT",
+            "ontologyInsight": {
+                "subject": "005930",
+                "insightType": "riskIncrease",
+                "dispatchInsightType": "holdingPositionCommon",
+                "score": 84,
+                "noveltyScore": 25,
+                "confidence": 82,
+                "semanticSignature": "subject=005930|dispatchType=holdingPositionCommon|sourceSignalTypes=holdingTiming|relationRuleIds=loss.guard.breakdown.v1|materialSourceEventKeys=",
+                "sourceSignalTypes": ["holdingTiming"],
+                "sourceEventKeys": [],
+            },
+            "sourceSignalTypes": ["holdingTiming"],
+        }
+        decision = evaluate_notification_rule(job, rule)
+
+        decision = apply_state_cooldown_rule(
+            decision,
+            rule,
+            sent_count=1,
+            previous_score=decision.score,
+            previous_context=previous_context,
+            last_sent_at=utc_now_iso(),
+            last_sent_age_minutes=5,
+            job=job,
+        )
+
+        self.assertTrue(decision.should_send)
+        self.assertEqual("material_change", decision.state_decision)
+        self.assertTrue(decision.similarity_bypassed)
+        self.assertIn("관계 경로 변경", decision.state_reason)
+
+    def test_investment_insight_state_cooldown_does_not_bypass_when_previous_semantic_signature_missing(self):
+        rule = default_notification_rule("investmentInsight")
+        job = NotificationJob.create(
+            "보유 포지션 인사이트",
+            account_id="main",
+            message_type="investmentInsight",
+            context={
+                "severity": "ALERT",
+                "body": "삼성전자 반복 상태",
+                "symbol": "005930",
+                "ontologyInsight": {
+                    "subject": "005930",
+                    "insightType": "riskIncrease",
+                    "dispatchInsightType": "holdingPositionCommon",
+                    "score": 84,
+                    "noveltyScore": 25,
+                    "confidence": 82,
+                    "semanticSignature": "subject=005930|dispatchType=holdingPositionCommon|sourceSignalTypes=holdingTiming|relationRuleIds=loss.guard.breakdown.v1|materialSourceEventKeys=",
+                    "sourceSignalTypes": ["holdingTiming"],
+                    "sourceEventKeys": [],
+                },
+                "sourceSignalTypes": ["holdingTiming"],
+            },
+        )
+        previous_context = {
+            "severity": "ALERT",
+            "ontologyInsight": {
+                "subject": "005930",
+                "insightType": "riskIncrease",
+                "dispatchInsightType": "holdingPositionCommon",
+                "score": 84,
+                "noveltyScore": 25,
+                "confidence": 82,
+                "sourceSignalTypes": ["holdingTiming"],
+                "sourceEventKeys": [],
+            },
+            "sourceSignalTypes": ["holdingTiming"],
+        }
+        decision = evaluate_notification_rule(job, rule)
+
+        decision = apply_state_cooldown_rule(
+            decision,
+            rule,
+            sent_count=1,
+            previous_score=decision.score,
+            previous_context=previous_context,
+            last_sent_at=utc_now_iso(),
+            last_sent_age_minutes=5,
             job=job,
         )
 

@@ -541,6 +541,12 @@ def similarity_bypass_match(
         if current and not previous:
             return True, label + " 신규 " + current
         return False, ""
+    if condition_type == "field_changed_existing":
+        current = normalize_fingerprint_part(field_value(context, field))
+        previous = normalize_fingerprint_part(field_value(previous_context, field))
+        if current and previous and current != previous:
+            return True, label + " " + previous + " -> " + current
+        return False, ""
     if condition_type == "field_changed_any":
         fields = candidate_fields(field, ACTION_FIELD_CANDIDATES)
         current = first_normalized_field_value(context, fields)
@@ -816,7 +822,12 @@ def apply_state_cooldown_rule(
             matched, reason = similarity_bypass_match(condition, job=job, previous_context=previous_context, decision=decision, previous_score=previous_score)
             if matched:
                 decision.state_decision = "material_change"
-                change_label = "의미 있는 회복" if condition.condition_type == "profit_loss_improved_gte" else "의미 있는 추가 확대"
+                if condition.condition_id == "semantic_signature_changed":
+                    change_label = "관계 경로 변경"
+                elif condition.condition_type == "profit_loss_improved_gte":
+                    change_label = "의미 있는 회복"
+                else:
+                    change_label = "의미 있는 추가 확대"
                 decision.state_reason = change_label + ": " + reason
                 decision.similarity_bypassed = True
                 decision.similarity_bypass_reason = reason

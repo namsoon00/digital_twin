@@ -277,6 +277,28 @@ def stable_source_event_key(value: object) -> str:
     return VOLATILE_SCORE_SUFFIX.sub("", str(value or "").strip())
 
 
+def relation_rule_ids(events: Iterable[AlertEvent]) -> List[str]:
+    ids: List[str] = []
+    for event in events or []:
+        relation_context = event_relation_context(event)
+        rules = relation_context.get("activeRules") or relation_context.get("matchedRules") or []
+        for item in rules:
+            if not isinstance(item, dict):
+                continue
+            rule_id = str(item.get("ruleId") or item.get("rule_id") or "").strip()
+            if rule_id and rule_id not in ids:
+                ids.append(rule_id)
+        metadata = event.metadata if isinstance(event.metadata, dict) else {}
+        for item in metadata.get("watchlistActiveRelationRules") or metadata.get("activeRelationRules") or []:
+            if isinstance(item, dict):
+                rule_id = str(item.get("ruleId") or item.get("rule_id") or "").strip()
+            else:
+                rule_id = str(item or "").strip()
+            if rule_id and rule_id not in ids:
+                ids.append(rule_id)
+    return ids
+
+
 def compact_relation_event_token(value: object) -> str:
     text = stable_source_event_key(value)
     text = re.sub(r"[^0-9A-Za-z가-힣:_./-]+", "-", text).strip("-")
@@ -320,6 +342,43 @@ def relation_news_event_tokens(relation_context: Dict[str, object], limit: int =
 def relation_news_event_key_suffix(relation_context: Dict[str, object], limit: int = 3) -> str:
     tokens = relation_news_event_tokens(relation_context, limit=limit)
     return "news:" + "+".join(tokens) if tokens else ""
+
+
+def material_relation_event_keys(events: Iterable[AlertEvent]) -> List[str]:
+    keys: List[str] = []
+    for event in events or []:
+        key = stable_source_event_key(event.key)
+        if any(marker in key.lower() for marker in [":news:", ":article:", ":rss:", ":disclosure:", ":dart:", ":filing:", ":sec:"]):
+            if key not in keys:
+                keys.append(key)
+        relation_context = event_relation_context(event)
+        suffix = relation_news_event_key_suffix(relation_context)
+        if suffix and suffix not in keys:
+            keys.append(suffix)
+    return keys
+
+
+def insight_semantic_components(
+    subject: str,
+    dispatch_type: str,
+    source_types: List[str],
+    events: List[AlertEvent],
+) -> Dict[str, List[str]]:
+    return {
+        "subject": [str(subject or "").strip().upper() or "portfolio"],
+        "dispatchType": [str(dispatch_type or "").strip()],
+        "sourceSignalTypes": sorted(set(str(item or "").strip() for item in source_types or [] if str(item or "").strip())),
+        "relationRuleIds": sorted(set(relation_rule_ids(events))),
+        "materialSourceEventKeys": sorted(set(material_relation_event_keys(events))),
+    }
+
+
+def insight_semantic_signature(components: Dict[str, List[str]]) -> str:
+    parts = []
+    for key in ["subject", "dispatchType", "sourceSignalTypes", "relationRuleIds", "materialSourceEventKeys"]:
+        values = [str(item or "").strip() for item in components.get(key) or [] if str(item or "").strip()]
+        parts.append(key + "=" + "+".join(values))
+    return "|".join(parts)
 
 
 def compact_source_line(event: AlertEvent) -> str:
@@ -487,6 +546,8 @@ def build_investment_insight_events(snapshot: AccountSnapshot, signal_events: It
         policy_source_key = dispatch_source_key(source_key, source_types)
         score_bucket = str(int(round(score / 5.0) * 5))
         insight_id = ":".join([snapshot.account_id, "ontology-insight", subject, insight_type, source_key])
+        semantic_components = insight_semantic_components(subject, policy_dispatch_type, source_types, events)
+        semantic_signature = insight_semantic_signature(semantic_components)
         criteria = [
             "설정: 온톨로지 관계 그래프에서 의미 있는 투자 인사이트가 생성될 때",
             "감지: " + ", ".join(source_labels) + " · 관계 강도 " + compact_number(round(score, 1)) + "점 · 신뢰도 " + compact_number(round(confidence, 1)) + "%",
@@ -508,6 +569,8 @@ def build_investment_insight_events(snapshot: AccountSnapshot, signal_events: It
                 "severity": highest_severity(events),
                 "sourceSignalTypes": source_types,
                 "scoreBucket": score_bucket,
+                "semanticSignature": semantic_signature,
+                "semanticComponents": semantic_components,
                 "sourceEventKeys": [stable_source_event_key(event.key) for event in events],
                 "thesis": thesis,
                 "nextCheck": next_check,

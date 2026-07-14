@@ -6,15 +6,24 @@ from ..domain.events import market_data_collected_event, ontology_reasoning_requ
 from ..domain.fact_changes import market_fact_change
 from ..domain.materiality import market_change_materiality
 from ..domain.portfolio import utc_now_iso
-from ..infrastructure.kis_market_signals import KIS_CACHE_ACCOUNT_ID, KIS_CACHE_PROVIDER
-from ..infrastructure.kis_realtime_ws import KISRealtimeSymbolSelector, KISRealtimeWebSocketClient, int_setting
+
+KIS_CACHE_PROVIDER = "kis"
+KIS_CACHE_ACCOUNT_ID = "__market_signals__"
+
+
+def int_setting(settings: Dict[str, str], key: str, fallback: int, minimum: int = 0, maximum: int = 100000) -> int:
+    try:
+        value = int(str((settings or {}).get(key) or fallback))
+    except (TypeError, ValueError):
+        value = fallback
+    return max(minimum, min(maximum, value))
 
 
 class KISRealtimeWebSocketRunner:
     def __init__(
         self,
-        client: KISRealtimeWebSocketClient,
-        symbol_selector: KISRealtimeSymbolSelector,
+        client,
+        symbol_selector,
         quote_cache,
         settings: Dict[str, str],
         event_publisher=None,

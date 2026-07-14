@@ -170,6 +170,13 @@ def default_similarity_bypass_conditions(message_type: str) -> List["SimilarityB
                 description="위험, 기회, 데이터 품질처럼 발송 정책 분류가 바뀌면 보냅니다.",
             ),
             SimilarityBypassCondition(
+                "semantic_signature_changed",
+                "관계 의미 경로 변경",
+                "field_changed_existing",
+                field="ontologyInsight.semanticSignature",
+                description="이전 인사이트와 현재 인사이트가 모두 의미 서명을 갖고 있고 관계 규칙·근거 경로가 달라진 경우만 보냅니다.",
+            ),
+            SimilarityBypassCondition(
                 "relation_score_delta",
                 "관계 강도 변화",
                 "abs_number_delta_gte",
@@ -620,7 +627,7 @@ def default_notification_rule(message_type: str) -> NotificationRuleConfig:
     similarity_fields = list(DEFAULT_SIMILARITY_FIELDS)
     if key == INVESTMENT_INSIGHT:
         conditions.extend(NotificationRuleCondition.from_dict(condition.to_dict()) for condition in ontology_insight_conditions())
-        similarity_fields = ["messageType", "accountId", "ontologyInsight.subject", "ontologyInsight.dispatchInsightType"]
+        similarity_fields = ["messageType", "accountId", "ontologyInsight.subject", "ontologyInsight.dispatchInsightType", "ontologyInsight.semanticSignature"]
     if key == NEWS_DIGEST:
         similarity_fields = ["messageType", "accountId", "newsDigest.primaryEvidenceId"]
     if key == INVESTMENT_CALENDAR_REMINDER:

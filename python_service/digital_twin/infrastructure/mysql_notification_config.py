@@ -236,7 +236,20 @@ class MySQLNotificationRuleStore(MySQLOperationalConnection):
             "ontologyInsight.insightType" if field == "ontologyInsight.dispatchInsightType" else field
             for field in default_rule.similarity_fields
         ]
-        if current.similarity_fields == legacy_fields and current.similarity_fields != default_rule.similarity_fields:
+        legacy_dispatch_fields = [
+            "messageType",
+            "accountId",
+            "ontologyInsight.subject",
+            "ontologyInsight.dispatchInsightType",
+        ]
+        legacy_insight_fields = [
+            "messageType",
+            "accountId",
+            "ontologyInsight.subject",
+            "ontologyInsight.insightType",
+        ]
+        known_legacy_fields = [legacy_fields, legacy_dispatch_fields, legacy_insight_fields]
+        if current.similarity_fields in known_legacy_fields and current.similarity_fields != default_rule.similarity_fields:
             current.similarity_fields = list(default_rule.similarity_fields)
             changed = True
         defaults = {condition.condition_id: condition for condition in default_rule.similarity_bypass_conditions}

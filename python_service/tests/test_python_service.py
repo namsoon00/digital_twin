@@ -195,6 +195,39 @@ class PythonServiceTests(unittest.TestCase):
         self.assertTrue(cached["marketSignalCoverage"]["ccnl"]["realTime"])
         self.assertTrue(cached["marketSignalCoverage"]["orderbook"]["realTime"])
 
+    def test_kis_realtime_websocket_approval_uses_circuit_breaker(self):
+        calls = []
+        KIS_REALTIME_API_GUARD_STATE.clear()
+
+        def fail_http_json(_url, _body, _headers, _timeout):
+            calls.append("approval")
+            raise urllib.error.URLError("approval unavailable")
+
+        client = KISRealtimeWebSocketClient(
+            {
+                "kisBaseUrl": "https://kis.example.test",
+                "kisWebSocketUrl": "ws://kis.example.test:21000",
+                "kisAppKey": "app",
+                "kisAppSecret": "secret",
+                "externalApiRetryAttempts": "1",
+                "externalApiCircuitFailures": "2",
+                "externalApiCircuitCooldownMinutes": "30",
+            },
+            quote_cache=TestMarketQuoteCache(test_store_seed(self.temp.name)),
+            http_json=fail_http_json,
+        )
+
+        try:
+            for _ in range(2):
+                with self.assertRaises(RuntimeError):
+                    client.fetch_approval_key()
+            with self.assertRaises(ExternalCircuitOpen):
+                client.fetch_approval_key()
+        finally:
+            KIS_REALTIME_API_GUARD_STATE.clear()
+
+        self.assertEqual(2, len(calls))
+
     def test_kis_realtime_websocket_collect_subscribes_price_and_orderbook(self):
         cache = TestMarketQuoteCache(test_store_seed(self.temp.name))
         sent = []

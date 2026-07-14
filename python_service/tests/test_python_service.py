@@ -11901,6 +11901,87 @@ class PythonServiceTests(unittest.TestCase):
         self.assertEqual("done", jobs[0].status)
         self.assertEqual("investmentInsight", jobs[0].message_type)
 
+    def test_investment_insight_test_send_records_typedb_projection_before_type_check(self):
+        registry = AccountRegistry()
+        account = AccountConfig("main", "메인", "toss", "https://example.test", "client", "secret", "1", ["005930"])
+        registry.upsert(account)
+        position = normalize_position({
+            "symbol": "005930",
+            "name": "삼성전자",
+            "market": "KR",
+            "currency": "KRW",
+            "marketValue": 720000,
+            "quantity": 10,
+            "sellableQuantity": 10,
+            "averagePrice": 80000,
+            "currentPrice": 72000,
+            "profitLossRate": -10,
+            "sector": "반도체",
+        })
+        portfolio = portfolio_summary([position], 1000000, "KRW")
+        snapshot = AccountSnapshot(
+            "main",
+            "메인",
+            "toss",
+            "live",
+            "토스 계좌 동기화",
+            utc_now_iso(),
+            portfolio,
+            [position],
+            decisions_for_positions([position], portfolio),
+        )
+        projection_metadata = self.inferencebox_metadata("005930", "graph.loss_guard.breakdown.v1", "lossControl", "손실 방어 추론")
+        projection_metadata["ontology"]["typedb"].update({
+            "saved": True,
+            "status": "ok",
+            "graphStore": "typedb",
+            "projectionMode": "abox-facts-only-typedb-rulebox",
+            "ruleboxExecution": {"status": "ok", "reasoningMode": "typedb-rulebox-materialized"},
+        })
+        projection_metadata["ontology"]["typedb"]["inferenceBox"].update({
+            "source": "typedbInferenceBox",
+            "graphStore": "typedb",
+            "status": "ok",
+            "relationCount": 1,
+            "traceCount": 1,
+            "nativeRelationCount": 1,
+        })
+        recorder_calls = []
+        sent_messages = []
+
+        class FakeProjectionRecorder:
+            def __init__(self, *args, **kwargs):
+                pass
+
+            def record_snapshot(self, target_snapshot):
+                recorder_calls.append(target_snapshot.account_id)
+                target_snapshot.metadata.update(deepcopy(projection_metadata))
+                return target_snapshot.metadata["ontology"]["typedb"]
+
+        class FakeNotifier:
+            def send(self, text):
+                sent_messages.append(text)
+                return SimpleNamespace(delivered=True, reason="")
+
+        save_runtime_settings({
+            "notificationAiGateEnabled": "0",
+            "dartDisclosureAiAnalysisEnabled": "0",
+        })
+        with mock.patch("digital_twin.infrastructure.web_server.build_snapshot", return_value=snapshot), \
+                mock.patch("digital_twin.infrastructure.web_server.PortfolioOntologyProjectionRecorder", FakeProjectionRecorder), \
+                mock.patch("digital_twin.infrastructure.service_factory.notifier_for_account", return_value=FakeNotifier()):
+            status, payload = notification_template_test_payload({"messageType": "investmentInsight", "bypassPolicy": True})
+
+        self.assertEqual(200, status)
+        self.assertTrue(payload["delivered"])
+        self.assertNotEqual("ontologyInferenceMissing", payload.get("blockedBy"))
+        self.assertEqual(["main"], recorder_calls)
+        self.assertTrue(sent_messages)
+        jobs = TestNotificationJobStore().jobs()
+        self.assertEqual(1, len(jobs))
+        self.assertEqual("typedbInferenceBox", jobs[0].context["ontologyInference"]["source"])
+        self.assertNotIn("Neo4j", jobs[0].text)
+
     def test_investment_insight_test_send_blocks_when_inference_missing(self):
         registry = AccountRegistry()
         account = AccountConfig("main", "메인", "toss", "https://example.test", "client", "secret", "1", ["005930"])
@@ -11931,13 +12012,29 @@ class PythonServiceTests(unittest.TestCase):
             decisions_for_positions([position], portfolio),
         )
 
-        with mock.patch("digital_twin.infrastructure.web_server.build_snapshot", return_value=snapshot):
+        class MissingProjectionRecorder:
+            def __init__(self, *args, **kwargs):
+                pass
+
+            def record_snapshot(self, target_snapshot):
+                target_snapshot.metadata.setdefault("ontology", {})["projection"] = {
+                    "saved": False,
+                    "status": "error",
+                    "graphStore": "typedb",
+                    "reason": "unit projection failed",
+                }
+                return target_snapshot.metadata["ontology"]["projection"]
+
+        with mock.patch("digital_twin.infrastructure.web_server.build_snapshot", return_value=snapshot), \
+                mock.patch("digital_twin.infrastructure.web_server.PortfolioOntologyProjectionRecorder", MissingProjectionRecorder):
             status, payload = notification_template_test_payload({"messageType": "investmentInsight", "bypassPolicy": True})
 
         self.assertEqual(409, status)
         self.assertFalse(payload["delivered"])
         self.assertEqual("ontologyInferenceMissing", payload["blockedBy"])
         self.assertEqual("ontologyInferenceMissing", payload["event"]["messageType"])
+        self.assertIn("TypeDB", "\n".join(payload["event"]["lines"]))
+        self.assertNotIn("Neo4j", "\n".join(payload["event"]["lines"]))
 
     def test_notification_template_test_send_rejects_demo_snapshot_by_default(self):
         registry = AccountRegistry()

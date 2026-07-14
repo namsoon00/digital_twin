@@ -61,6 +61,7 @@ from ..domain.portfolio import utc_now_iso
 from ..infrastructure.event_bus import default_event_bus
 from ..infrastructure.mock_market import mock_market_payload, mock_market_scenario_list
 from ..infrastructure.ontology_graph_store import ontology_repository_from_settings
+from ..infrastructure.ontology_projection import PortfolioOntologyProjectionRecorder
 from ..infrastructure import operational_store as stores
 from ..infrastructure.service_factory import build_investment_calendar_service, build_notification_queue_runner, build_ontology_lab_service, build_rule_change_candidate_service, build_symbol_universe_service, flow_lens_snapshot, investment_analysis_snapshot
 from ..infrastructure.settings import ROOT_DIR, runtime_settings, save_runtime_settings
@@ -1183,8 +1184,33 @@ def selected_notification_test_account(payload: Dict[str, object]):
     return accounts[0]
 
 
+def attach_notification_test_ontology_projection(snapshot, settings: Dict[str, str]) -> None:
+    metadata = snapshot.metadata if isinstance(snapshot.metadata, dict) else {}
+    ontology = metadata.get("ontology") if isinstance(metadata.get("ontology"), dict) else {}
+    existing_projection = ontology.get("projection") or ontology.get("typedb")
+    if isinstance(existing_projection, dict) and isinstance(existing_projection.get("inferenceBox"), dict):
+        return
+    try:
+        recorder = PortfolioOntologyProjectionRecorder(
+            ontology_repository_from_settings(settings),
+            quality_store=stores.ontology_quality_sample_store(settings),
+            settings=settings,
+            source="notification-test",
+        )
+        recorder.record_snapshot(snapshot)
+    except Exception as error:  # noqa: BLE001 - test dispatch should report TypeDB readiness instead of crashing.
+        snapshot.metadata.setdefault("ontology", {})["projection"] = {
+            "saved": False,
+            "status": "error",
+            "graphStore": "typedb",
+            "reason": "notification test TypeDB projection failed: " + str(error)[:160],
+        }
+
+
 def notification_test_event(message_type: str, snapshot):
-    monitor = RealtimeMonitor(runtime_settings())
+    settings = runtime_settings()
+    attach_notification_test_ontology_projection(snapshot, settings)
+    monitor = RealtimeMonitor(settings)
     events = monitor.type_check_events_for_snapshot(snapshot)
     for event in events:
         if event.rule == message_type:

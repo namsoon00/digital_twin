@@ -16873,6 +16873,11 @@
         '<label class="setting-field wide">',
         '<span class="setting-field-label">환율 설정</span>',
         '<div class="form-control-shell"><textarea data-setting="fxRates" rows="2" autocomplete="off" placeholder="USD=1400">' + escapeHtml(settingValue("fxRates") || defaultSettings.fxRates) + '</textarea></div>',
+        '</label>',
+        '<label class="setting-field wide">',
+        '<span class="setting-field-label">종목별 투자 타입 프로필</span>',
+        '<span class="setting-field-help">형식: 심볼|설명|타입들|의도|민감도|정책. 예: MSTR|비트코인 프록시 성장주|BitcoinProxy,HighVolatilityGrowth|trading|btc:high,fx:high|allowAddOnStrength=1,trimOnTrendBreak=1</span>',
+        '<div class="form-control-shell"><textarea data-setting="instrumentProfiles" rows="8" autocomplete="off" placeholder="MSTR|비트코인 프록시 성장주|BitcoinProxy,HighVolatilityGrowth|trading|btc:high|allowAddOnStrength=1">' + escapeHtml(settingValue("instrumentProfiles") || defaultSettings.instrumentProfiles) + '</textarea></div>',
         '</label>'
       ].join(""), "mapping"),
       '</div>',

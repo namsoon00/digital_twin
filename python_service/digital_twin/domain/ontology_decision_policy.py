@@ -12,6 +12,8 @@ def decision_stage_from_action(action_group: str, action_level: str) -> str:
         return "PROFIT_SPLIT" if level in {"action", "urgent"} else "PROFIT_PARTIAL"
     if group == "entry":
         return "ENTRY_READY" if level in {"action", "urgent"} else "ENTRY_SPLIT_BUY" if level == "review" else "ENTRY_WATCH"
+    if group == "addBuy":
+        return "ADD_BUY_REVIEW" if level in {"review", "action", "urgent"} else "ADD_BUY_WATCH"
     if group == "entryWait":
         return "ENTRY_WAIT" if level in {"review", "action", "urgent"} else "ENTRY_WATCH"
     if group == "entryRisk":
@@ -55,6 +57,8 @@ def relation_stage_priority(relation: Dict[str, object]) -> int:
         "NEWS_RISK": 36,
         "NEWS_CONFIRMATION": 31,
         "FLOW_DEFENSE": 35,
+        "ADD_BUY_REVIEW": 35,
+        "ADD_BUY_WATCH": 24,
         "ENTRY_READY": 35,
         "ENTRY_SPLIT_BUY": 30,
         "ENTRY_WAIT": 26,

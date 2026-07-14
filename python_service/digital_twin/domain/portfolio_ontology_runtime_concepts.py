@@ -168,6 +168,10 @@ def add_account_investment_strategy_concepts(
         "maxPositionWeightPct": number(profile.get("maxPositionWeightPct")),
         "maxSectorWeightPct": number(profile.get("maxSectorWeightPct")),
         "fxExposureReviewPct": number(profile.get("fxExposureReviewPct")),
+        "addBuyPolicy": profile.get("addBuyPolicy"),
+        "addBuyWatchSignalMin": number(profile.get("addBuyWatchSignalMin")),
+        "addBuyReviewSignalMin": number(profile.get("addBuyReviewSignalMin")),
+        "allowLossAddBuyReview": bool(profile.get("allowLossAddBuyReview")),
         "defaultHoldingRole": profile.get("defaultHoldingRole"),
         "watchlistActionPolicy": profile.get("watchlistActionPolicy"),
         "holdingActionPolicy": profile.get("holdingActionPolicy"),
@@ -181,11 +185,16 @@ def add_account_investment_strategy_concepts(
         "maxPositionWeightPct": number(profile.get("maxPositionWeightPct")),
         "maxSectorWeightPct": number(profile.get("maxSectorWeightPct")),
         "fxExposureReviewPct": number(profile.get("fxExposureReviewPct")),
+        "addBuyPolicy": profile.get("addBuyPolicy"),
+        "addBuyWatchSignalMin": number(profile.get("addBuyWatchSignalMin")),
+        "addBuyReviewSignalMin": number(profile.get("addBuyReviewSignalMin")),
+        "allowLossAddBuyReview": bool(profile.get("allowLossAddBuyReview")),
     })
     profit_policy_id = add_entity(graph, "profit-policy", profile_key, str(profile.get("label") or "투자 전략") + " 수익 보호 기준", {
         "tboxClass": "ProfitPolicy",
         "profile": profile_key,
         "profitProtectionPct": number(profile.get("profitProtectionPct")),
+        "addBuyPolicy": profile.get("addBuyPolicy"),
         "holdingActionPolicy": profile.get("holdingActionPolicy"),
     })
     add_relation(graph, account_node_id, profile_id, "HAS_INVESTOR_PROFILE", weight=1.0, properties={"source": "account-context"})
@@ -240,6 +249,10 @@ def add_position_strategy_role_concepts(
         "positionSource": position_source(position),
         "lossTolerancePct": number(profile.get("lossTolerancePct")),
         "profitProtectionPct": number(profile.get("profitProtectionPct")),
+        "addBuyPolicy": profile.get("addBuyPolicy"),
+        "addBuyWatchSignalMin": number(profile.get("addBuyWatchSignalMin")),
+        "addBuyReviewSignalMin": number(profile.get("addBuyReviewSignalMin")),
+        "allowLossAddBuyReview": bool(profile.get("allowLossAddBuyReview")),
         "watchlistActionPolicy": profile.get("watchlistActionPolicy"),
         "holdingActionPolicy": profile.get("holdingActionPolicy"),
     }
@@ -250,6 +263,10 @@ def add_position_strategy_role_concepts(
         "source": position_source(position),
         "lossTolerancePct": number(profile.get("lossTolerancePct")),
         "profitProtectionPct": number(profile.get("profitProtectionPct")),
+        "addBuyPolicy": profile.get("addBuyPolicy"),
+        "addBuyWatchSignalMin": number(profile.get("addBuyWatchSignalMin")),
+        "addBuyReviewSignalMin": number(profile.get("addBuyReviewSignalMin")),
+        "allowLossAddBuyReview": bool(profile.get("allowLossAddBuyReview")),
         "watchlistActionPolicy": profile.get("watchlistActionPolicy"),
         "holdingActionPolicy": profile.get("holdingActionPolicy"),
     })

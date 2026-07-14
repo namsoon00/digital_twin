@@ -61,6 +61,43 @@ def _active_rule_labels(matches: List[OntologyRuleMatch]) -> List[str]:
     ]
 
 
+def _add_buy_assessment_from_facts(facts: Dict[str, object]) -> Dict[str, object]:
+    facts = facts or {}
+    stage = str(facts.get("addBuyEligibilityStage") or "NONE")
+    label = str(facts.get("addBuyEligibilityLabel") or "").strip() or "추가매수 판단 대상 아님"
+    recovery_count = int(_float_value(facts.get("lossRecoverySignalCount")))
+    watch_min = int(_float_value(facts.get("addBuyWatchSignalMin")) or 0)
+    review_min = int(_float_value(facts.get("addBuyReviewSignalMin")) or 0)
+    blockers = [str(item) for item in (facts.get("addBuyBlockedReasons") or []) if str(item or "").strip()]
+    opened = [str(item) for item in (facts.get("lossRecoverySignalLabels") or []) if str(item or "").strip()]
+    profile = str(facts.get("investmentStrategyProfileLabel") or facts.get("investmentStrategyProfile") or "").strip()
+    if stage == "NONE":
+        status_text = "추가매수 판단 대상이 아닙니다."
+    elif stage == "ADD_BUY_REVIEW":
+        status_text = "외국인·기관 동반 순매수와 회복 확인이 겹쳐 소액 분할 추가매수 검토 여지가 있습니다."
+    elif stage == "ADD_BUY_WATCH":
+        status_text = "외국인·기관 동반 순매수가 있어 추가매수 후보로 관찰하되, 검토 단계에는 아직 확인이 더 필요합니다."
+    elif stage == "FLOW_DEFENSE":
+        status_text = "외국인·기관 동반 순매수가 매도 강도를 낮추는 근거지만, 추가매수 판단은 아직 열리지 않았습니다."
+    else:
+        status_text = "회복 확인이 부족해 추가매수는 보류합니다."
+    next_checks = []
+    if stage in {"ADD_BUY_REVIEW", "ADD_BUY_WATCH", "FLOW_DEFENSE", "ADD_BUY_BLOCKED"}:
+        next_checks.append("20일선 회복, 거래량 동반 반등, 직접 악재 뉴스 해소, 비중 한도를 함께 확인")
+    return {
+        "stage": stage,
+        "label": label,
+        "statusText": status_text,
+        "investmentProfile": profile,
+        "recoverySignalCount": recovery_count,
+        "watchSignalMin": watch_min,
+        "reviewSignalMin": review_min,
+        "openedReasons": opened[:6],
+        "blockedReasons": blockers[:5],
+        "nextChecks": next_checks,
+    }
+
+
 def _append_driver(
     rows: List[Dict[str, object]],
     seen: set,
@@ -241,6 +278,21 @@ def decision_drivers_from_relation_context(
             "외국인과 기관 합산 흐름은 " + ("순매수 " if smart_money > 0 else "순매도 ") + _plain_number(abs(smart_money)) + "주입니다.",
             58 + min(24, abs(_float_value(facts.get("investorFlowScore"))) * 0.25),
             ["foreignNetVolume", "institutionNetVolume", "smartMoneyNetVolume", "investorFlowScore"],
+        )
+    add_buy_stage = str(facts.get("addBuyEligibilityStage") or "")
+    if facts.get("isHolding") and _float_value(facts.get("profitLossRate")) < 0 and add_buy_stage not in {"", "NONE"}:
+        _append_driver(
+            rows,
+            seen,
+            "addBuy",
+            "support" if add_buy_stage in {"FLOW_DEFENSE", "ADD_BUY_WATCH", "ADD_BUY_REVIEW"} else "risk",
+            "추가매수 판단",
+            str(facts.get("addBuyEligibilityLabel") or "추가매수 보류")
+            + " · 회복 확인 "
+            + _plain_number(facts.get("lossRecoverySignalCount"))
+            + "개",
+            54 + min(28, _float_value(facts.get("lossRecoverySignalCount")) * 5),
+            ["addBuyEligibilityStage", "lossRecoverySignalCount", "jointSmartMoneyInflow", "investmentStrategyProfile"],
         )
 
     btc24 = _float_value(facts.get("btcChange24h"))
@@ -430,6 +482,15 @@ def execution_plan_from_relation_context(
         _append_unique(strengthen_conditions, "5일선 위 유지, 거래량 증가, 20/60일선 회복이 함께 유지되면 진입 강도 상향")
         _append_unique(weaken_conditions, "5일선 재이탈, 60일선 이탈, 금리·환율 부담 확대 또는 부정 공시가 나오면 매수 후보 해제")
         _append_unique(next_checks, "첫 진입 가격, 손절 기준, 추가매수 조건, 환율 기준 확인")
+    elif action_group == "addBuy":
+        primary_action = "ADD_BUY_REVIEW"
+        primary_label = "조건부 추가매수 검토"
+        _append_unique(blocked_actions, "확인 없는 일괄 추가매수")
+        _append_unique(support_signals, "외국인·기관 동반 순매수와 회복 확인 신호가 함께 나타남")
+        _append_unique(counter_signals, "손실 구간이라 평균단가 낮추기보다 분할 조건과 무효화 조건이 우선")
+        _append_unique(strengthen_conditions, "20일선 위 유지, 거래량 동반 반등, 직접 악재 뉴스 부재가 이어지면 검토 강도 상향")
+        _append_unique(weaken_conditions, "20일선 재이탈, 동반 순매수 약화, 직접 악재 뉴스 발생 시 추가매수 검토 해제")
+        _append_unique(next_checks, "추가매수 예정 금액, 보유 비중 한도, 손실 제한선, 20일선 유지 여부 확인")
     elif action_group == "entryWait":
         primary_action = "WAIT_FOR_ENTRY_CONFIRMATION"
         primary_label = "신규 진입 대기, 조건 재확인"
@@ -531,6 +592,22 @@ def execution_plan_from_relation_context(
         _append_unique(next_checks, "USD/KRW, 외화 노출 비중, 현지 통화 기준 주가 변화를 나눠 확인")
         _append_unique(weaken_conditions, "환율이 기준 구간으로 돌아오거나 외화 노출이 줄면 신호 약화")
 
+    add_buy_assessment = _add_buy_assessment_from_facts(facts)
+    add_buy_stage = str(add_buy_assessment.get("stage") or "")
+    if facts.get("isHolding") and pnl < 0 and add_buy_stage not in {"", "NONE"}:
+        if add_buy_stage == "ADD_BUY_REVIEW":
+            _append_unique(support_signals, str(add_buy_assessment.get("statusText") or "조건부 추가매수 검토 여지"))
+            _append_unique(next_checks, "추가매수는 소액 분할, 비중 한도, 손실 제한선을 먼저 정한 뒤 검토")
+        elif add_buy_stage in {"ADD_BUY_WATCH", "FLOW_DEFENSE"}:
+            _append_unique(counter_signals, str(add_buy_assessment.get("statusText") or "수급 방어 근거 확인"))
+            _append_unique(blocked_actions, "회복 확인 전 일괄 추가매수")
+        elif add_buy_stage == "ADD_BUY_BLOCKED":
+            _append_unique(blocked_actions, "회복 확인 없는 추가매수")
+        for reason in list(add_buy_assessment.get("blockedReasons") or [])[:3]:
+            _append_unique(risk_signals, "추가매수 보류 사유: " + str(reason))
+        for check in list(add_buy_assessment.get("nextChecks") or [])[:2]:
+            _append_unique(next_checks, str(check))
+
     if target_role == WATCHLIST_TARGET_ROLE:
         _append_unique(blocked_actions, "관심종목에는 추가매수·분할축소·매도 같은 보유종목 행동을 적용하지 않음")
         if primary_action in {
@@ -596,6 +673,7 @@ def execution_plan_from_relation_context(
         "nextChecks": next_checks[:5],
         "missingDataImpact": missing_impact[:5],
         "decisionDrivers": decision_drivers,
+        "addBuyAssessment": add_buy_assessment,
         "sourceFacts": {
             "currentPrice": facts.get("currentPrice"),
             "targetRole": target_role,
@@ -618,6 +696,20 @@ def execution_plan_from_relation_context(
             "individualBuyVolume": facts.get("individualBuyVolume"),
             "individualSellVolume": facts.get("individualSellVolume"),
             "individualNetVolume": facts.get("individualNetVolume"),
+            "smartMoneyNetVolume": facts.get("smartMoneyNetVolume"),
+            "jointSmartMoneyInflow": facts.get("jointSmartMoneyInflow"),
+            "jointSmartMoneyOutflow": facts.get("jointSmartMoneyOutflow"),
+            "lossSeverityBand": facts.get("lossSeverityBand"),
+            "lossSmartMoneyDefenseActive": facts.get("lossSmartMoneyDefenseActive"),
+            "lossRecoverySignalCount": facts.get("lossRecoverySignalCount"),
+            "lossRecoverySignalLabels": list(facts.get("lossRecoverySignalLabels") or [])[:8],
+            "addBuyEligibilityStage": facts.get("addBuyEligibilityStage"),
+            "addBuyEligibilityLabel": facts.get("addBuyEligibilityLabel"),
+            "addBuyBlockedReasons": list(facts.get("addBuyBlockedReasons") or [])[:5],
+            "investmentStrategyProfile": facts.get("investmentStrategyProfile"),
+            "investmentStrategyProfileLabel": facts.get("investmentStrategyProfileLabel"),
+            "positionWeight": round(float(facts.get("positionWeight") or 0), 2),
+            "positionAccountWeight": round(float(facts.get("positionAccountWeight") or 0), 2),
             "positionToTradingValuePct": round(float(facts.get("positionToTradingValuePct") or 0), 2),
             "exitDaysAtTenPctADV": round(float(facts.get("exitDaysAtTenPctADV") or 0), 2),
             "liquidityRiskScore": round(float(facts.get("liquidityRiskScore") or 0), 1),

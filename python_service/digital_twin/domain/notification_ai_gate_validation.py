@@ -493,6 +493,7 @@ def build_notification_ai_gate_prompt(context: Dict[str, object]) -> str:
         "summary와 opinion의 첫 문장은 관계 규칙 이름이나 점수 요약이 아니라 AI가 독립적으로 고른 최종 판단과 그 이유여야 한다.",
         "관계 규칙명, 점수, 사전 계산 후보는 판단 재료로만 쓰고, 사용자에게 보이는 문장에서는 가격·수급·뉴스·공시·반대 근거를 비교한 결론을 먼저 말한다.",
         "relationshipDatabaseInference.decisionDrivers는 온톨로지 실행계획이 고른 핵심 판단 축이다. 이 항목을 먼저 읽고, 방향(risk/support/counter/neutral), 중요도, dataKeys를 근거·반대근거·다음 확인에 반영한다.",
+        "executionPlan.addBuyAssessment가 있으면 손실 구간 추가매수 판단을 별도 섹션처럼 취급한다. 외국인·기관 동반 순매수는 먼저 매도 강도를 낮추는 반대 근거이며, ADD는 addBuyAssessment.stage가 ADD_BUY_REVIEW이고 가격·거래 회복·뉴스 리스크·비중 한도가 설명될 때만 고른다.",
         "evidence에는 가능한 한 숫자나 원문 제목을 넣는다. '가격 흐름이 약하다'처럼 뻔한 말만 쓰지 말고 현재가/평단가/수익률/5일선/20일선/60일선/거래량/BTC/금리/환율/뉴스 제목 중 제공된 값을 구체적으로 연결한다.",
         "MSTR, STRC 등 비트코인 민감 종목이면 BTC 24시간·7일 변동과 보유 종목 가격 반응을 비교한다. 뉴스·공시 제목에 매각, 처분, 실적, 자금조달, 소송, 규제 같은 사건이 있으면 그 사건을 evidence 또는 counterEvidence에 반드시 반영한다.",
         "BUY, ADD, HOLD, TRIM, SELL, AVOID 중 하나를 반드시 고르되 자동 주문 지시처럼 쓰지 않는다.",

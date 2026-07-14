@@ -5,6 +5,7 @@ from .investment_research import research_evidence_from_external_signals, resear
 from .macro_context import macro_context_facts
 from .market_data import clamp, number
 from . import news_analysis as news_domain
+from .accounts import investment_strategy_profile
 from .ontology_relation_contracts import BTC_SENSITIVE_SYMBOLS
 from .portfolio import PortfolioSummary, Position, expects_kr_microstructure_signals
 from .volume_time_adjustment import volume_pace_snapshot
@@ -24,6 +25,13 @@ def _position_weight(position: Position, portfolio: PortfolioSummary) -> float:
     return (number(position.market_value) / invested) * 100.0
 
 
+def _position_account_weight(position: Position, portfolio: PortfolioSummary) -> float:
+    total = number(portfolio.total)
+    if total <= 0:
+        return 0.0
+    return (number(position.market_value) / total) * 100.0
+
+
 def _investor_flow(position: Position) -> Dict[str, float]:
     if not _investor_flow_values_reliable(position):
         return {
@@ -36,6 +44,9 @@ def _investor_flow(position: Position) -> Dict[str, float]:
             "smartMoneyNetVolume": 0.0,
             "investorFlowBase": 0.0,
             "investorFlowScore": 0.0,
+            "jointSmartMoneyInflow": False,
+            "jointSmartMoneyOutflow": False,
+            "smartMoneyDirection": "unknown",
         }
     foreign_volume = number(position.foreign_net_volume) or number(position.foreign_buy_volume) - number(position.foreign_sell_volume)
     institution_volume = number(position.institution_net_volume) or number(position.institution_buy_volume) - number(position.institution_sell_volume)
@@ -46,6 +57,8 @@ def _investor_flow(position: Position) -> Dict[str, float]:
     base = abs(foreign) + abs(institution) + abs(individual)
     smart_money = foreign + institution
     score = clamp((smart_money - individual * 0.35) / base * 100.0, -100.0, 100.0) if base else 0.0
+    joint_inflow = foreign > 0 and institution > 0
+    joint_outflow = foreign < 0 and institution < 0
     return {
         "foreignNetVolume": foreign_volume,
         "institutionNetVolume": institution_volume,
@@ -56,6 +69,9 @@ def _investor_flow(position: Position) -> Dict[str, float]:
         "smartMoneyNetVolume": smart_money,
         "investorFlowBase": base,
         "investorFlowScore": score,
+        "jointSmartMoneyInflow": joint_inflow,
+        "jointSmartMoneyOutflow": joint_outflow,
+        "smartMoneyDirection": "joint_inflow" if joint_inflow else "joint_outflow" if joint_outflow else "mixed",
     }
 
 
@@ -376,6 +392,125 @@ def _btc_market(external_signals: Dict[str, object]) -> Dict[str, object]:
     return {}
 
 
+def _investment_strategy_facts(
+    external_signals: Optional[Dict[str, object]] = None,
+    account_context: Optional[Dict[str, object]] = None,
+    settings: Optional[Dict[str, object]] = None,
+) -> Dict[str, object]:
+    external_signals = external_signals or {}
+    settings = settings or {}
+    context = account_context if isinstance(account_context, dict) else {}
+    if not context and isinstance(external_signals.get("accountContext"), dict):
+        context = external_signals.get("accountContext") or {}
+    profile_payload = context.get("investmentStrategy") if isinstance(context.get("investmentStrategy"), dict) else {}
+    profile_key = (
+        profile_payload.get("profile")
+        or context.get("investmentStrategyProfile")
+        or settings.get("investmentStrategyProfile")
+    )
+    profile = investment_strategy_profile(profile_key)
+    return {
+        "investmentStrategyProfile": profile.get("profile"),
+        "investmentStrategyProfileLabel": profile.get("label"),
+        "investmentRiskTolerance": profile.get("riskTolerance"),
+        "strategyLossTolerancePct": number(profile.get("lossTolerancePct")),
+        "strategyMaxPositionWeightPct": number(profile.get("maxPositionWeightPct")),
+        "strategyMaxSectorWeightPct": number(profile.get("maxSectorWeightPct")),
+        "strategyAddBuyPolicy": profile.get("addBuyPolicy"),
+        "strategyAddBuyWatchSignalMin": int(number(profile.get("addBuyWatchSignalMin")) or 3),
+        "strategyAddBuyReviewSignalMin": int(number(profile.get("addBuyReviewSignalMin")) or 5),
+        "strategyAllowLossAddBuyReview": bool(profile.get("allowLossAddBuyReview")),
+    }
+
+
+def _loss_severity_band(pnl: float, loss_tolerance: float) -> str:
+    if pnl >= 0:
+        return "not_loss"
+    tolerance = abs(loss_tolerance or -8.0)
+    loss = abs(pnl)
+    if loss >= max(20.0, tolerance * 2.0):
+        return "large_loss"
+    if loss >= tolerance:
+        return "loss_control"
+    return "mild_loss"
+
+
+def _loss_smart_money_facts(facts: Dict[str, object]) -> Dict[str, object]:
+    pnl = number(facts.get("profitLossRate"))
+    loss_tolerance = number(facts.get("strategyLossTolerancePct")) or -8.0
+    max_position_weight = number(facts.get("strategyMaxPositionWeightPct")) or 25.0
+    watch_min = int(number(facts.get("strategyAddBuyWatchSignalMin")) or 3)
+    review_min = int(number(facts.get("strategyAddBuyReviewSignalMin")) or 5)
+    allow_review = bool(facts.get("strategyAllowLossAddBuyReview"))
+    is_holding = bool(facts.get("isHolding"))
+    joint_inflow = bool(facts.get("jointSmartMoneyInflow"))
+    direct_risk_news = int(number(facts.get("directRiskNewsCount")))
+    position_weight = number(facts.get("positionAccountWeight")) or number(facts.get("positionWeight"))
+    ma5_recovered = bool(facts.get("ma5")) and number(facts.get("ma5Distance")) >= 0
+    ma20_recovered = bool(facts.get("ma20")) and number(facts.get("ma20Distance")) >= 0
+    ma60_supported = bool(facts.get("ma60")) and number(facts.get("ma60Distance")) >= -1.0
+    volume_confirmed = number(facts.get("volumeRatio")) >= 1.0
+    trade_confirmed = number(facts.get("tradeStrength")) >= 100
+    bid_confirmed = number(facts.get("bidAskImbalance")) >= 5
+    trend_recovery = bool(facts.get("supportRetest") or facts.get("recoveryAttempt") or number(facts.get("priceChangeRate")) >= 1.0)
+    news_clear = direct_risk_news == 0
+    position_weight_ok = not position_weight or position_weight <= max_position_weight
+    recovery_flags = {
+        "5일선 회복": ma5_recovered,
+        "20일선 회복": ma20_recovered,
+        "60일선 부근 지지": ma60_supported,
+        "거래량 확인": volume_confirmed,
+        "체결강도 확인": trade_confirmed,
+        "매수 호가 우위": bid_confirmed,
+        "가격 회복 시도": trend_recovery,
+        "직접 악재 뉴스 없음": news_clear,
+    }
+    recovery_count = sum(1 for value in recovery_flags.values() if value)
+    loss_active = is_holding and pnl < 0
+    stage = "NONE"
+    label = "추가매수 판단 대상 아님"
+    blocked_reasons: List[str] = []
+    opened_reasons = [key for key, value in recovery_flags.items() if value]
+    if loss_active and not joint_inflow:
+        stage = "ADD_BUY_BLOCKED"
+        label = "추가매수 보류"
+        blocked_reasons.append("외국인·기관 동반 순매수 없음")
+    elif loss_active and joint_inflow:
+        stage = "FLOW_DEFENSE"
+        label = "매도 강도 완화"
+        if direct_risk_news:
+            blocked_reasons.append("직접 악재 뉴스 있음")
+        if not position_weight_ok:
+            blocked_reasons.append("종목 비중이 투자 성향 한도보다 큼")
+        if recovery_count < watch_min:
+            blocked_reasons.append("회복 확인 신호 부족")
+        if recovery_count >= watch_min:
+            stage = "ADD_BUY_WATCH"
+            label = "추가매수 관찰"
+        review_ready = (
+            allow_review
+            and recovery_count >= review_min
+            and news_clear
+            and position_weight_ok
+            and (ma20_recovered or (ma5_recovered and ma60_supported))
+        )
+        if review_ready:
+            stage = "ADD_BUY_REVIEW"
+            label = "조건부 추가매수 검토"
+    return {
+        "lossSeverityBand": _loss_severity_band(pnl, loss_tolerance),
+        "lossSmartMoneyDefenseActive": bool(loss_active and joint_inflow),
+        "lossRecoverySignalCount": recovery_count,
+        "lossRecoverySignalLabels": opened_reasons,
+        "addBuyEligibilityStage": stage,
+        "addBuyEligibilityLabel": label,
+        "addBuyBlockedReasons": blocked_reasons,
+        "addBuyWatchSignalMin": watch_min,
+        "addBuyReviewSignalMin": review_min,
+        "addBuyPolicy": facts.get("strategyAddBuyPolicy"),
+    }
+
+
 def _missing(key: str, label: str, effect: str, status: str = "missing", source: str = "") -> Dict[str, str]:
     item = {"key": key, "label": label, "effect": effect, "status": status}
     if source:
@@ -567,6 +702,8 @@ def position_signal_facts(
     external_signals: Optional[Dict[str, object]] = None,
     previous_state: Optional[Dict[str, object]] = None,
     previous_decision: Optional[Dict[str, object]] = None,
+    account_context: Optional[Dict[str, object]] = None,
+    settings: Optional[Dict[str, object]] = None,
 ) -> Dict[str, object]:
     external_signals = external_signals or {}
     trend = _trend_facts(position)
@@ -627,6 +764,7 @@ def position_signal_facts(
         "averagePrice": number(position.average_price),
         "sectorRatio": _sector_ratio(position, portfolio),
         "positionWeight": _position_weight(position, portfolio),
+        "positionAccountWeight": _position_account_weight(position, portfolio),
         "tradeStrength": number(position.trade_strength),
         "volume": number(position.volume),
         "volumeRatio": number(position.volume_ratio),
@@ -672,10 +810,12 @@ def position_signal_facts(
     facts.update(research_evidence_facts(facts["researchEvidence"]))
     facts.update(trend)
     facts.update(flow)
+    facts.update(_investment_strategy_facts(external_signals, account_context, settings))
     facts.update(_temporal_facts(position, previous_state, previous_decision))
     facts.update(_liquidity_facts(position))
     facts.update(_external_quality_facts(external_signals))
     facts.update(macro_context_facts(position, portfolio, external_signals))
+    facts.update(_loss_smart_money_facts(facts))
     missing: List[Dict[str, str]] = []
     if not facts["currentPrice"]:
         missing.append(_missing("currentPrice", "현재가", "가격·이동평균 관계 판단 신뢰도가 낮아집니다."))

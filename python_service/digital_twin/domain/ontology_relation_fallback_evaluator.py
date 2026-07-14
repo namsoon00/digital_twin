@@ -33,7 +33,14 @@ def evaluate_position_relation_rules(
     settings = settings or {}
     relation_definitions = relation_rule_definitions_from_settings(settings)
     thresholds = _thresholds(settings)
-    facts = position_signal_facts(position, portfolio, external_signals, previous_state, previous_decision)
+    facts = position_signal_facts(
+        position,
+        portfolio,
+        external_signals,
+        previous_state,
+        previous_decision,
+        settings=settings,
+    )
     missing_labels = [str(item.get("label") or item.get("key") or "") for item in facts.get("missingData") or []]
     matches: List[OntologyRuleMatch] = []
     data_quality = float(facts.get("dataQualityScore") or 0)
@@ -60,6 +67,9 @@ def evaluate_position_relation_rules(
     support_retest = bool(facts.get("supportRetest"))
     recovery_attempt = bool(facts.get("recoveryAttempt"))
     breakdown_acceleration = bool(facts.get("breakdownAcceleration"))
+    joint_smart_money_inflow = bool(facts.get("jointSmartMoneyInflow"))
+    loss_recovery_signal_count = int(number(facts.get("lossRecoverySignalCount")))
+    add_buy_stage = str(facts.get("addBuyEligibilityStage") or "")
     disclosure = facts.get("dartDisclosure")
     has_disclosure = isinstance(disclosure, dict) and bool(disclosure)
     news = facts.get("newsHeadlines")
@@ -612,6 +622,74 @@ def evaluate_position_relation_rules(
             definitions=relation_definitions,
         ))
 
+    if is_holding and pnl < 0 and joint_smart_money_inflow:
+        score = (
+            52
+            + min(18, max(0.0, flow_score) * 0.28)
+            + min(10, abs(pnl) * 0.4)
+            + min(10, loss_recovery_signal_count * 2)
+        )
+        matches.append(_match(
+            "holding.loss_smart_money.defense.v1",
+            score,
+            data_quality,
+            [
+                "손익률 " + ("%.1f" % pnl) + "%",
+                "외국인·기관 동반 순매수",
+                "투자자 수급 점수 " + ("%.1f" % flow_score),
+                "회복 확인 신호 " + str(loss_recovery_signal_count) + "개",
+                "투자 성향 " + str(facts.get("investmentStrategyProfileLabel") or facts.get("investmentStrategyProfile") or "-"),
+            ],
+            missing_labels,
+            definitions=relation_definitions,
+        ))
+    if add_buy_stage == "ADD_BUY_WATCH":
+        score = 55 + min(18, max(0.0, flow_score) * 0.24) + min(12, loss_recovery_signal_count * 3)
+        matches.append(_match(
+            "holding.loss_smart_money.reversal_watch.v1",
+            score,
+            data_quality,
+            [
+                "외국인·기관 동반 순매수",
+                "회복 확인 신호 " + str(loss_recovery_signal_count) + "/" + str(facts.get("addBuyReviewSignalMin") or "-"),
+                "아직 추가매수는 관찰 단계",
+                "막는 이유 " + " · ".join(str(item) for item in list(facts.get("addBuyBlockedReasons") or [])[:3]) if facts.get("addBuyBlockedReasons") else "",
+            ],
+            missing_labels,
+            definitions=relation_definitions,
+        ))
+    if add_buy_stage == "ADD_BUY_REVIEW":
+        score = 68 + min(16, max(0.0, flow_score) * 0.18) + min(12, loss_recovery_signal_count * 2)
+        matches.append(_match(
+            "holding.loss_smart_money.add_buy_review.v1",
+            score,
+            data_quality,
+            [
+                "외국인·기관 동반 순매수",
+                "회복 확인 신호 " + str(loss_recovery_signal_count) + "개",
+                "직접 악재 뉴스 없음",
+                "투자 성향 " + str(facts.get("investmentStrategyProfileLabel") or facts.get("investmentStrategyProfile") or "-"),
+                "즉시 몰아사기보다 소액 분할 검토",
+            ],
+            missing_labels,
+            definitions=relation_definitions,
+        ))
+    if is_holding and pnl < 0 and add_buy_stage == "ADD_BUY_BLOCKED":
+        score = 54 + min(18, abs(pnl) * 0.9) + min(10, max(0.0, 3 - loss_recovery_signal_count) * 3)
+        matches.append(_match(
+            "holding.averaging_down.risk_guard.v1",
+            score,
+            data_quality,
+            [
+                "손익률 " + ("%.1f" % pnl) + "%",
+                "추가매수 판단 " + str(facts.get("addBuyEligibilityLabel") or "보류"),
+                "막는 이유 " + " · ".join(str(item) for item in list(facts.get("addBuyBlockedReasons") or [])[:3]),
+                "회복 확인 전 평균단가 낮추기 금지",
+            ],
+            missing_labels,
+            definitions=relation_definitions,
+        ))
+
     loss_threshold = float(thresholds.get("lossRateLow", -8.0) or -8.0)
     loss_buffer = abs(float(thresholds.get("lossRateBufferPct", 1.0) or 0.0))
     volume_confirm_ratio = float(thresholds.get("lossGuardVolumeConfirmRatio", 0.8))
@@ -641,6 +719,8 @@ def evaluate_position_relation_rules(
         score = 58 + min(24, abs(min(pnl, loss_threshold)) * 1.5) + (10 if ma20_distance <= -5 else 0)
         if weak_near_threshold:
             score -= weak_evidence_penalty
+        if joint_smart_money_inflow:
+            score -= min(14, 4 + loss_recovery_signal_count * 2)
         matches.append(_match(
             "holding.loss_guard.breakdown.v1",
             score,
@@ -653,6 +733,7 @@ def evaluate_position_relation_rules(
                 moving_average_distance_text("60일선", ma60_distance),
                 "거래량 배율 " + ("%.1f" % volume_ratio) + "x",
                 "확인 신호 " + str(confirmation_count) + "/5",
+                "외국인·기관 동반 순매수로 방어 강도 일부 완화" if joint_smart_money_inflow else "",
                 ("약한 확인 신호 감점 -" + ("%.1f" % weak_evidence_penalty) + "점") if weak_near_threshold else "",
             ],
             missing_labels,

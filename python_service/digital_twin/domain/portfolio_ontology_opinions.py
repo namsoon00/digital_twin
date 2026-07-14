@@ -50,6 +50,9 @@ def build_position_opinion(
     sector_weight = sector_ratio(portfolio, position.sector)
     trend = trend_score(position)
     flow = smart_money_score(position)
+    foreign_net = number(position.foreign_net_volume) or number(position.foreign_buy_volume) - number(position.foreign_sell_volume)
+    institution_net = number(position.institution_net_volume) or number(position.institution_buy_volume) - number(position.institution_sell_volume)
+    joint_inflow = foreign_net > 0 and institution_net > 0
     quality = data_quality_score(position)
     supporting: List[str] = []
     contradictions: List[str] = []
@@ -76,6 +79,9 @@ def build_position_opinion(
     elif flow >= 25:
         supporting.append("외국인·기관 수급 관계가 우호적")
         opportunities.append("외국인·기관 수급이 보유 이유를 뒷받침")
+    if pnl < 0 and joint_inflow:
+        supporting.append("손실 구간에서 외국인·기관 동반 순매수가 매도 강도를 낮추는 반대 근거")
+        opportunities.append("추가매수는 가격·거래 회복 확인 후 조건부 검토")
     if quality < 60:
         contradictions.append("핵심 데이터가 부족해 AI 판단 신뢰도가 낮음")
 

@@ -9531,6 +9531,7 @@
     var strengthen = compactPlanList(plan.strengthenConditions, 3);
     var weaken = compactPlanList(plan.weakenConditions, 3);
     var nextChecks = compactPlanList(plan.nextChecks, 4);
+    var addBuy = renderAddBuyAssessment(plan.addBuyAssessment);
     var primary = plan.primaryActionLabel || plan.primaryAction || "실행 판단 대기";
     var meta = [plan.decisionStage, plan.actionGroup, plan.actionLevel].filter(Boolean).join(" · ");
     return [
@@ -9539,12 +9540,33 @@
       '<strong>' + escapeHtml(primary) + '</strong>',
       '<span>' + escapeHtml(meta || "실행 조건 확인") + '</span>',
       '</div>',
+      addBuy,
       '<div class="reasoning-execution-grid">',
       renderReasoningCardList("다음 확인", nextChecks),
       renderReasoningCardList("보류 조건", blocked),
       renderReasoningCardList("강화 조건", strengthen),
       renderReasoningCardList("약화 조건", weaken),
       '</div>',
+      '</div>'
+    ].join("");
+  }
+
+  function renderAddBuyAssessment(assessment) {
+    if (!assessment || typeof assessment !== "object") return "";
+    var stage = String(assessment.stage || "").trim();
+    if (!stage || stage === "NONE") return "";
+    var blockers = compactPlanList(assessment.blockedReasons, 2);
+    var opened = compactPlanList(assessment.openedReasons, 2);
+    var detail = [
+      assessment.statusText || assessment.label || "",
+      opened.length ? "확인 " + opened.join(" · ") : "",
+      blockers.length ? "보류 " + blockers.join(" · ") : ""
+    ].filter(Boolean).join(" / ");
+    return [
+      '<div class="reasoning-execution-addbuy">',
+      '<strong>추가매수 판단</strong>',
+      '<span>' + escapeHtml([assessment.label, assessment.investmentProfile].filter(Boolean).join(" · ") || stage) + '</span>',
+      '<em>' + escapeHtml(detail) + '</em>',
       '</div>'
     ].join("");
   }
@@ -9633,6 +9655,7 @@
     var strengthen = compactPlanList(plan.strengthenConditions, 2);
     var weaken = compactPlanList(plan.weakenConditions, 2);
     var primary = plan.primaryActionLabel || plan.primaryAction || "실행 판단 대기";
+    var addBuy = renderAddBuyAssessment(plan.addBuyAssessment);
     var tone = (row.opinion || {}).tone || (plan.actionLevel === "action" ? "caution" : "hold");
     return [
       '<div class="ontology-execution-row"' + cardTypeAttrs("action-queue-card", tone || "hold") + '>',
@@ -9641,6 +9664,7 @@
       '<span>' + escapeHtml([row.relation, plan.decisionStage, plan.actionGroup, plan.actionLevel].filter(Boolean).join(" · ") || "관계 조건 확인") + '</span>',
       '</div>',
       '<span class="tone-chip ' + escapeHtml(tone || "hold") + '">' + escapeHtml(primary) + '</span>',
+      addBuy,
       '<div class="ontology-execution-detail">',
       renderOntologyPlanMiniList("다음 확인", nextChecks),
       renderOntologyPlanMiniList("보류", blocked),

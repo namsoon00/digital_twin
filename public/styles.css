@@ -6210,6 +6210,45 @@ h3 {
   text-align: right;
 }
 
+.reasoning-execution-addbuy {
+  display: grid;
+  grid-template-columns: auto minmax(140px, auto) minmax(0, 1fr);
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+  padding: 8px 10px;
+  border: 1px solid color-mix(in srgb, var(--blue) 22%, var(--line));
+  border-radius: 6px;
+  background: color-mix(in srgb, var(--panel) 90%, var(--blue-soft));
+}
+
+.reasoning-execution-addbuy strong,
+.reasoning-execution-addbuy span,
+.reasoning-execution-addbuy em {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.reasoning-execution-addbuy strong {
+  color: var(--blue);
+  font-size: 11px;
+  font-weight: 950;
+}
+
+.reasoning-execution-addbuy span {
+  color: var(--ink);
+  font-size: 11px;
+  font-weight: 900;
+}
+
+.reasoning-execution-addbuy em {
+  color: var(--muted);
+  font-size: 11px;
+  font-style: normal;
+  font-weight: 750;
+  line-height: 1.35;
+}
+
 .reasoning-execution-grid {
   display: grid;
   grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
@@ -7330,6 +7369,10 @@ h3 {
   white-space: normal;
   text-align: center;
   overflow-wrap: anywhere;
+}
+
+.ontology-execution-row .reasoning-execution-addbuy {
+  grid-column: 1 / -1;
 }
 
 .ontology-execution-detail {

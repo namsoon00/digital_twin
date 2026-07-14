@@ -303,6 +303,23 @@ def volume_profile(position: Position) -> Dict[str, object]:
         "individualNetAmount": round(number(position.individual_net_amount), 2),
     }
 
+def smart_money_joint_flow_profile(position: Position) -> Dict[str, object]:
+    foreign_net = number(position.foreign_net_volume) or number(position.foreign_buy_volume) - number(position.foreign_sell_volume)
+    institution_net = number(position.institution_net_volume) or number(position.institution_buy_volume) - number(position.institution_sell_volume)
+    smart_money_net = foreign_net + institution_net
+    joint_inflow = foreign_net > 0 and institution_net > 0
+    joint_outflow = foreign_net < 0 and institution_net < 0
+    return {
+        "field": "jointSmartMoneyInflow" if joint_inflow else "jointSmartMoneyOutflow" if joint_outflow else "mixedSmartMoneyFlow",
+        "value": round(smart_money_net, 2),
+        "foreignNetVolume": round(foreign_net, 2),
+        "institutionNetVolume": round(institution_net, 2),
+        "smartMoneyNetVolume": round(smart_money_net, 2),
+        "jointSmartMoneyInflow": joint_inflow,
+        "jointSmartMoneyOutflow": joint_outflow,
+        "direction": "joint_inflow" if joint_inflow else "joint_outflow" if joint_outflow else "mixed",
+    }
+
 def missing_market_microstructure_fields(position: Position) -> List[Dict[str, str]]:
     missing: List[Dict[str, str]] = []
     symbol = str(position.symbol or position.name or "").upper().strip()
@@ -563,6 +580,29 @@ def add_price_level_and_liquidity_concepts(graph: PortfolioOntology, stock_id: s
             flow_props["opinionImpact"] = min(12.0, number(flow.get("volumeRatio")) * 3 + abs(number(flow.get("bidAskImbalance"))) * 0.08)
         add_relation(graph, stock_id, volume_id, "HAS_OBSERVATION", weight=1.0, properties=flow_props)
         add_relation(graph, stock_id, volume_id, "HAS_TRADE_FLOW", weight=1.0, properties=flow_props)
+    smart_money_flow = smart_money_joint_flow_profile(position)
+    if smart_money_flow.get("jointSmartMoneyInflow") or smart_money_flow.get("jointSmartMoneyOutflow"):
+        polarity = "support" if smart_money_flow.get("jointSmartMoneyInflow") else "risk"
+        field_name = str(smart_money_flow.get("field") or "")
+        smart_money_id = add_entity(graph, "smart-money-flow", symbol + ":" + field_name, (position.name or symbol) + " 외국인·기관 동반 " + ("순매수" if polarity == "support" else "순매도"), {
+            "tboxClass": "SmartMoneyJointInflow" if polarity == "support" else "SmartMoneyJointOutflow",
+            "tboxClasses": ["Observation", "FlowObservation", "TradeFlow", "FlowSignal", "SmartMoneyFlow", "SmartMoneyJointInflow" if polarity == "support" else "SmartMoneyJointOutflow"],
+            "symbol": symbol,
+            "source": source,
+            "polarity": polarity,
+            **smart_money_flow,
+        })
+        smart_money_props = {
+            "source": source,
+            "field": field_name,
+            "signalGroup": "smartMoney",
+            "polarity": polarity,
+            "supportImpact": 7.0 if polarity == "support" else 0.0,
+            "riskImpact": 7.0 if polarity == "risk" else 0.0,
+            "aiInfluenceLabel": "외국인·기관 동반 " + ("순매수" if polarity == "support" else "순매도"),
+        }
+        add_relation(graph, stock_id, smart_money_id, "HAS_OBSERVATION", weight=0.86, properties=smart_money_props)
+        add_relation(graph, stock_id, smart_money_id, "HAS_TRADE_FLOW", weight=0.86, properties=smart_money_props)
     missing_fields = missing_market_microstructure_fields(position)
     if missing_fields:
         missing_id = add_entity(graph, "missing-data", symbol + ":market-microstructure", (position.name or symbol) + " 부족 데이터", {

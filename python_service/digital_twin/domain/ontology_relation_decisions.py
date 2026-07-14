@@ -45,6 +45,8 @@ def decision_action_group_for_label(label: object) -> str:
     if "리밸런싱" in text:
         return "rebalance"
     if any(term in text for term in ["매수", "진입"]):
+        if "추가매수 관찰" in text or "조건부 추가매수" in text:
+            return "addBuy"
         return "entryRisk" if "보류" in text else "entry"
     if "금리" in text:
         return "rateRegime"
@@ -127,6 +129,12 @@ def resolve_decision_stage(rule_id: str, score: float, facts: Dict[str, object])
         return decision_stage_by_key("SECTOR_NEWS")
     if rule_id == "holding.trend_flow.confirmation.v1":
         return decision_stage_by_key("FLOW_DEFENSE" if value >= 55 else "FLOW_WATCH")
+    if rule_id == "holding.loss_smart_money.defense.v1":
+        return decision_stage_by_key("FLOW_DEFENSE")
+    if rule_id == "holding.loss_smart_money.reversal_watch.v1":
+        return decision_stage_by_key("ADD_BUY_WATCH")
+    if rule_id == "holding.loss_smart_money.add_buy_review.v1":
+        return decision_stage_by_key("ADD_BUY_REVIEW")
     if rule_id == "entry.pullback.supported.v1":
         if value >= 70:
             return decision_stage_by_key("ENTRY_READY")
@@ -142,6 +150,8 @@ def resolve_decision_stage(rule_id: str, score: float, facts: Dict[str, object])
     if rule_id == "entry.add_buy.blocked.v1":
         return decision_stage_by_key("ADD_BUY_BLOCKED")
     if rule_id == "averaging_down.block.v1":
+        return decision_stage_by_key("ADD_BUY_BLOCKED")
+    if rule_id == "holding.averaging_down.risk_guard.v1":
         return decision_stage_by_key("ADD_BUY_BLOCKED")
     return decision_stage_by_key("HOLD_KEEP")
 

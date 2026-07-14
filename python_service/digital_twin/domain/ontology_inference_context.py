@@ -115,6 +115,7 @@ def relation_context_from_inferencebox(
         position_with_source(position, source),
         portfolio,
         external_signals or {},
+        settings=settings or {},
     )
     matches = matches_from_inference(relations, traces, source_name=source_name, context_version=context_version)
     if not matches:

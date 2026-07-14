@@ -704,8 +704,26 @@ class OntologyRuleBoxTests(unittest.TestCase):
             for item in condition_rows
             if item["id"] == "rule-condition:graph.watchlist.trend_transition.support.v1:watchlist-strategy-role"
         )
+        loss_smart_money = next(
+            item
+            for item in condition_rows
+            if item["id"] == "rule-condition:graph.loss_smart_money.defense.v1:joint-smart-money-inflow"
+        )
+        add_buy_volume = next(
+            item
+            for item in condition_rows
+            if item["id"] == "rule-condition:graph.loss_smart_money.add_buy_review.v1:volume-confirmation"
+        )
+        add_buy_gap_guard = next(
+            item
+            for item in condition_rows
+            if item["id"] == "rule-condition:graph.loss_smart_money.add_buy_review.v1:no-severe-microstructure-gap"
+        )
 
         self.assertIn("graph.materiality.alert_candidate.v1", rule_ids)
+        self.assertIn("graph.loss_smart_money.defense.v1", rule_ids)
+        self.assertIn("graph.loss_smart_money.add_buy_review.v1", rule_ids)
+        self.assertIn("graph.averaging_down.risk_guard.v1", rule_ids)
         self.assertIn("graph.holding.trend_transition.risk.v1", rule_ids)
         self.assertIn("graph.watchlist.trend_transition.support.v1", rule_ids)
         self.assertIn("graph.flow.sell_pressure.v1", rule_ids)
@@ -750,6 +768,15 @@ class OntologyRuleBoxTests(unittest.TestCase):
         self.assertEqual("profit-policy", strategy_profit_policy["conditionTargetKind"])
         self.assertEqual("HAS_POSITION_ROLE", watchlist_strategy_role["conditionRelationType"])
         self.assertEqual("position-role", watchlist_strategy_role["conditionTargetKind"])
+        self.assertEqual("HAS_TRADE_FLOW", loss_smart_money["conditionRelationType"])
+        self.assertEqual("smart-money-flow", loss_smart_money["conditionTargetKind"])
+        self.assertEqual(["jointSmartMoneyInflow"], loss_smart_money["conditionTargetFields"])
+        self.assertEqual(["smartMoney"], loss_smart_money["conditionRelationSignalGroups"])
+        self.assertEqual(["support"], loss_smart_money["conditionRelationPolarities"])
+        self.assertEqual("any", add_buy_volume["conditionRole"])
+        self.assertEqual(["volumeRatio"], add_buy_volume["conditionTargetFields"])
+        self.assertEqual(1.0, add_buy_volume["conditionTargetMinValue"])
+        self.assertEqual("not", add_buy_gap_guard["conditionRole"])
 
     def test_rulebox_admin_payload_roundtrips_to_graph(self):
         rules = default_graph_inference_rules()

@@ -123,6 +123,88 @@ class OntologyEntryGovernanceTests(unittest.TestCase):
         self.assertEqual("regular", facts["volumePaceSession"])
         self.assertIn("미장 정규장", facts["volumePaceSessionLabel"])
 
+    def test_loss_holding_joint_smart_money_inflow_is_defense_before_add_buy(self):
+        position = Position(
+            symbol="000660",
+            name="SK하이닉스",
+            market="KR",
+            currency="KRW",
+            quantity=5,
+            market_value=8400000,
+            profit_loss_rate=-34.7,
+            current_price=1681000,
+            average_price=2571000,
+            ma5=1997600,
+            ma20=2437200,
+            ma60=2011467,
+            ma20_distance=-31.0,
+            ma60_distance=-16.4,
+            volume_ratio=0.7,
+            trade_strength=94,
+            bid_ask_imbalance=28.1,
+            foreign_net_volume=704671,
+            institution_net_volume=781727,
+            individual_net_volume=-1440630,
+            sector="반도체",
+            source="holding",
+        )
+
+        context = evaluate_position_relation_rules(
+            position,
+            portfolio_summary([position], fx_rates={"KRW": 1}),
+            settings={"investmentStrategyProfile": "balanced"},
+        )
+        active_ids = [item.get("rule_id") or item.get("ruleId") for item in context["activeRules"]]
+        assessment = context["executionPlan"]["addBuyAssessment"]
+
+        self.assertIn("holding.loss_smart_money.defense.v1", active_ids)
+        self.assertTrue(context["facts"]["jointSmartMoneyInflow"])
+        self.assertEqual("FLOW_DEFENSE", context["facts"]["addBuyEligibilityStage"])
+        self.assertEqual("FLOW_DEFENSE", assessment["stage"])
+        self.assertIn("회복 확인 전 일괄 추가매수", context["executionPlan"]["blockedActions"])
+        self.assertNotIn("holding.loss_smart_money.add_buy_review.v1", active_ids)
+
+    def test_growth_profile_opens_conditional_add_buy_review_after_recovery_confirmation(self):
+        position = Position(
+            symbol="000660",
+            name="SK하이닉스",
+            market="KR",
+            currency="KRW",
+            quantity=5,
+            market_value=9200000,
+            profit_loss_rate=-6.2,
+            current_price=1840000,
+            average_price=1960000,
+            ma5=1810000,
+            ma20=1820000,
+            ma60=1830000,
+            ma20_distance=1.1,
+            ma60_distance=0.5,
+            volume_ratio=1.35,
+            trade_strength=118,
+            bid_ask_imbalance=12,
+            foreign_net_volume=210000,
+            institution_net_volume=185000,
+            individual_net_volume=-395000,
+            sector="반도체",
+            source="holding",
+        )
+
+        context = evaluate_position_relation_rules(
+            position,
+            portfolio_summary([position], account_cash=20000000, fx_rates={"KRW": 1}),
+            settings={"investmentStrategyProfile": "growth"},
+        )
+        active_ids = [item.get("rule_id") or item.get("ruleId") for item in context["activeRules"]]
+        opinion = build_active_investment_opinion(position, context)
+
+        self.assertIn("holding.loss_smart_money.add_buy_review.v1", active_ids)
+        self.assertEqual("ADD_BUY_REVIEW", context["facts"]["addBuyEligibilityStage"])
+        self.assertEqual("ADD_BUY_REVIEW", context["decision"]["decisionStage"])
+        self.assertEqual("addBuy", context["decision"]["actionGroup"])
+        self.assertEqual("ADD", opinion.action)
+        self.assertEqual("ADD_BUY_REVIEW", opinion.execution_plan["addBuyAssessment"]["stage"])
+
 
 if __name__ == "__main__":
     unittest.main()

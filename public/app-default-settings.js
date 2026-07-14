@@ -146,6 +146,10 @@
       "holding.loss_guard.breakdown.v1 | 손실 보유 + 기준선 이탈 -> 손실 관리 | 손익률이 손실 기준 이하이거나 20일선보다 5% 이상 낮고, 60일선·거래량·수급 확인 강도로 점수를 조정할 때 | LOSS_GUARD | risk_control | 손실 확대 요인, 60일선 유지, 거래량 동반 여부, 회복 조건, 분할 대응 기준을 분리",
       "holding.concentration.rebalance.v1 | 업종 집중 + 보유 비중 과대 -> 리밸런싱 점검 | 업종 비중 50% 이상 또는 단일 종목 비중 30% 이상일 때 | CONCENTRATION_RISK | portfolio_risk | 개별 종목 판단과 포트폴리오 리스크를 분리",
       "holding.trend_flow.confirmation.v1 | 추세와 수급 방향 일치 -> 판단 신뢰도 보강 | 추세와 외국인·기관 순매수 방향이 같은 쪽으로 움직일 때 | EVIDENCE_SUPPORT | confirmation | 같은 방향 근거와 반대 근거를 나눠 검토",
+      "holding.loss_smart_money.defense.v1 | 손실 보유 + 외국인·기관 동반 순매수 -> 매도 강도 완화 | 손실 보유 중이지만 외국인과 기관이 동시에 순매수할 때 | LOSS_DEFENSE_EVIDENCE | flow_defense | 동반 순매수는 즉시 추가매수가 아니라 매도 강도를 낮추는 반대 근거로 먼저 설명",
+      "holding.loss_smart_money.reversal_watch.v1 | 손실 보유 + 동반 순매수 + 회복 일부 -> 추가매수 관찰 | 손실 보유, 외국인·기관 동반 순매수, 회복 확인 신호 일부가 함께 있을 때 | ADD_BUY_WATCH | add_buy_watch | 추가매수 결론이 아니라 어떤 조건이 더 채워져야 하는지 분리",
+      "holding.loss_smart_money.add_buy_review.v1 | 손실 보유 + 동반 순매수 + 회복 확인 -> 조건부 추가매수 검토 | 투자 성향별 회복 확인 기준, 악재 뉴스, 비중 한도를 통과했을 때 | ADD_BUY_ELIGIBILITY | add_buy_review | 즉시 몰아사기가 아니라 소액 분할 추가매수 검토와 무효화 조건을 함께 설명",
+      "holding.averaging_down.risk_guard.v1 | 손실 보유 + 회복 확인 부족 -> 추가매수 차단 | 손실 상태에서 외국인·기관 동반 순매수나 회복 확인이 부족할 때 | AVERAGING_DOWN_GUARD | entry_risk | 평균단가 낮추기보다 회복 신호, 뉴스 리스크, 비중 한도를 먼저 확인",
       "external.crypto.btc_sensitivity.v1 | 비트코인 급변 + 민감 종목 -> 연동 점검 | BTC가 24시간 또는 7일 기준을 넘고 MSTR/STRC 같은 민감 종목을 보유할 때 | EXTERNAL_SENSITIVITY | cross_asset | BTC 변화와 보유 종목 가격 변화의 시차를 확인",
       "data.quality.guard.v1 | 핵심 데이터 부족 -> 판단 보류 | 현재가, 이동평균, 수급, 체결강도 중 판단에 필요한 데이터가 빠졌을 때 | DATA_QUALITY_GUARD | data_quality | 없는 데이터는 추정하지 않고 판단 영향만 설명"
     ].join("\n"),

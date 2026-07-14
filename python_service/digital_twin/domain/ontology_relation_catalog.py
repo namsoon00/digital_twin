@@ -59,6 +59,8 @@ DECISION_STAGE_DEFINITIONS = {
     "ENTRY_WAIT": DecisionStageDefinition("ENTRY_WAIT", "entryWait", "review", "신규 진입 대기", "watch", 55.0, 70.0),
     "ENTRY_SPLIT_BUY": DecisionStageDefinition("ENTRY_SPLIT_BUY", "entry", "review", "소액 진입 검토", "watch", 55.0, 70.0),
     "ENTRY_READY": DecisionStageDefinition("ENTRY_READY", "entry", "action", "소액 분할매수 검토", "caution", 70.0, 85.0),
+    "ADD_BUY_WATCH": DecisionStageDefinition("ADD_BUY_WATCH", "addBuy", "watch", "추가매수 관찰", "watch", 35.0, 55.0),
+    "ADD_BUY_REVIEW": DecisionStageDefinition("ADD_BUY_REVIEW", "addBuy", "review", "조건부 추가매수 검토", "watch", 55.0, 70.0),
     "ADD_BUY_BLOCKED": DecisionStageDefinition("ADD_BUY_BLOCKED", "entryRisk", "review", "추가매수 보류", "caution", 55.0, 70.0),
 }
 
@@ -74,6 +76,9 @@ DECISION_LABEL_ALIASES = {
     "60일선 지지 재확인": "SUPPORT_RETEST",
     "회복 시도 확인": "RECOVERY_CONFIRM",
     "하락 가속 대응 점검": "BREAKDOWN_ACCELERATION",
+    "추가매수 관찰": "ADD_BUY_WATCH",
+    "조건부 추가매수 검토": "ADD_BUY_REVIEW",
+    "추가매수 보류": "ADD_BUY_BLOCKED",
 }
 
 
@@ -117,6 +122,36 @@ DEFAULT_RELATION_RULES = [
         "20일/60일 추세와 외국인·기관 순매수 방향이 같은 쪽으로 움직일 때",
         "같은 방향 근거와 반대 근거를 나눠 AI에게 검토시킵니다.",
         ["ma20Distance", "ma60Distance", "foreignNetVolume", "institutionNetVolume"],
+    ),
+    RelationRuleDefinition(
+        "holding.loss_smart_money.defense.v1",
+        "손실 보유 + 외국인·기관 동반 순매수 -> 매도 강도 완화",
+        "v1",
+        "LOSS_DEFENSE_EVIDENCE",
+        "flow_defense",
+        "손실 보유 중이지만 외국인과 기관이 동시에 순매수할 때",
+        "동반 순매수를 즉시 추가매수 신호로 보지 않고, 먼저 손실 방어·매도 강도를 낮추는 반대 근거로 설명합니다.",
+        ["profitLossRate", "foreignNetVolume", "institutionNetVolume", "investorFlowScore", "investmentStrategyProfile"],
+    ),
+    RelationRuleDefinition(
+        "holding.loss_smart_money.reversal_watch.v1",
+        "손실 보유 + 동반 순매수 + 회복 일부 -> 추가매수 관찰",
+        "v1",
+        "ADD_BUY_WATCH",
+        "add_buy_watch",
+        "손실 보유, 외국인·기관 동반 순매수, 회복 확인 신호 일부가 함께 있을 때",
+        "추가매수 결론이 아니라 어떤 조건이 더 채워지면 검토 단계로 올라가는지 분리해서 설명합니다.",
+        ["profitLossRate", "lossRecoverySignalCount", "addBuyEligibilityStage", "investmentStrategyProfile"],
+    ),
+    RelationRuleDefinition(
+        "holding.loss_smart_money.add_buy_review.v1",
+        "손실 보유 + 동반 순매수 + 회복 확인 -> 조건부 추가매수 검토",
+        "v1",
+        "ADD_BUY_ELIGIBILITY",
+        "add_buy_review",
+        "투자 성향별 회복 확인 기준, 악재 뉴스, 비중 한도를 통과했을 때",
+        "즉시 몰아서 사는 판단이 아니라 소액 분할 추가매수 검토와 무효화 조건을 함께 설명합니다.",
+        ["profitLossRate", "lossRecoverySignalCount", "addBuyEligibilityStage", "positionAccountWeight", "directRiskNewsCount"],
     ),
     RelationRuleDefinition(
         "trend.support_retest.v1",
@@ -227,6 +262,16 @@ DEFAULT_RELATION_RULES = [
         "손실 상태에서 단기 추세 아래이고 수급/거래량/체결 확인이 부족할 때",
         "평균단가 낮추기보다 보유 이유와 손절 기준을 먼저 확인하도록 AI에게 요청합니다.",
         ["profitLossRate", "ma20Distance", "volumeRatio", "tradeStrength", "investorFlow"],
+    ),
+    RelationRuleDefinition(
+        "holding.averaging_down.risk_guard.v1",
+        "손실 보유 + 회복 확인 부족 -> 추가매수 차단",
+        "v1",
+        "AVERAGING_DOWN_GUARD",
+        "entry_risk",
+        "손실 상태에서 외국인·기관 동반 순매수나 회복 확인이 부족할 때",
+        "평균단가를 낮추는 행동보다 회복 신호, 뉴스 리스크, 비중 한도를 먼저 확인하도록 설명합니다.",
+        ["profitLossRate", "jointSmartMoneyInflow", "lossRecoverySignalCount", "addBuyBlockedReasons"],
     ),
     RelationRuleDefinition(
         "distribution.detected.v1",

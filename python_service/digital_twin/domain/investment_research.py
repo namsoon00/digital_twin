@@ -722,13 +722,24 @@ def support_risk_scores(evidence: List[ResearchEvidence], relation_context: Dict
         if not isinstance(item, dict):
             continue
         score = number(item.get("strengthScore") or item.get("strength_score"))
+        rule_id = str(item.get("ruleId") or item.get("rule_id") or "")
         relation_type = str(item.get("relationType") or item.get("relation_type") or "").upper()
         label = str(item.get("label") or "")
         combined = relation_type + " " + label
+        if relation_type in {"LOSS_DEFENSE_EVIDENCE", "ADD_BUY_WATCH", "ADD_BUY_ELIGIBILITY"} or rule_id in {
+            "holding.loss_smart_money.defense.v1",
+            "holding.loss_smart_money.reversal_watch.v1",
+            "holding.loss_smart_money.add_buy_review.v1",
+        }:
+            support += min(18.0, score * 0.22)
+            continue
+        if relation_type in {"AVERAGING_DOWN_RISK"} or rule_id == "holding.averaging_down.risk_guard.v1":
+            risk += min(22.0, score * 0.28)
+            continue
         if any(token in combined for token in ["ENTRY_WAIT", "ENTRY_RISK", "LOSS", "RISK", "DISCLOSURE", "CONCENTRATION", "리스크", "손실", "매도", "하락", "대기", "보류", "차단"]):
             risk += min(22.0, score * 0.28)
             continue
-        if any(token in combined for token in ["ENTRY_OPPORTUNITY", "SUPPORT", "CONFIRM", "기회", "소액 진입", "우호"]):
+        if any(token in combined for token in ["ENTRY_OPPORTUNITY", "ADD_BUY", "SUPPORT", "CONFIRM", "기회", "소액 진입", "추가매수 관찰", "조건부 추가매수", "우호"]):
             support += min(18.0, score * 0.22)
     return support, risk
 
@@ -747,6 +758,14 @@ def choose_action(position: Position, relation_context: Dict[str, object], suppo
         if action_group == "entry" and relation_score >= 55 and support_score >= risk_score + 16:
             return "BUY"
         return "AVOID"
+    if action_group == "addBuy":
+        decision_stage = str(decision.get("decisionStage") or "")
+        execution_plan = relation_context.get("executionPlan") if isinstance(relation_context.get("executionPlan"), dict) else {}
+        add_buy_assessment = execution_plan.get("addBuyAssessment") if isinstance(execution_plan.get("addBuyAssessment"), dict) else {}
+        blocked_reasons = list(add_buy_assessment.get("blockedReasons") or [])
+        if decision_stage == "ADD_BUY_REVIEW" and not blocked_reasons and (support_score >= risk_score or relation_score >= 85):
+            return "ADD"
+        return "HOLD"
     if action_group == "lossControl" or action_level == "urgent" or relation_score >= 85:
         return "SELL" if relation_score >= 78 or risk_score >= support_score + 18 else "TRIM"
     if action_group in {"profitTake", "rebalance"}:

@@ -250,8 +250,25 @@ def unavailable_stage_coverage(stage: str, session: Dict[str, object]) -> Dict[s
 
 def coverage_has_fields(coverage: Dict[str, object], stage: str, keys: Iterable[str]) -> bool:
     item = coverage.get(stage) if isinstance(coverage, dict) else {}
+    if isinstance(item, dict):
+        status = str(item.get("status") or "").strip()
+        if status and status != "available":
+            return False
     fields = item.get("fields") if isinstance(item, dict) else []
     return any(key in set(str(field) for field in fields or []) for key in keys)
+
+
+def investor_stage_values_reliable(coverage: Dict[str, object]) -> bool:
+    item = coverage.get("investor") if isinstance(coverage, dict) else {}
+    if not isinstance(item, dict) or not item:
+        return True
+    status = str(item.get("status") or "").strip()
+    latency_status = str(item.get("latencyStatus") or "").strip()
+    if status in {"stale", "unknown", "unavailable", "missing", "empty"}:
+        return False
+    if item.get("realTime") is False or latency_status or str(item.get("cadence") or "") == "stale-repeat":
+        return False
+    return True
 
 
 def comparable_stage_values(payload: Dict[str, object], keys: Iterable[str]) -> Dict[str, float]:
@@ -612,6 +629,27 @@ class KISMarketSignalProvider:
                 next_item["unchangedCount"] = 0
             coverage[stage] = next_item
         signal["marketSignalCoverage"] = coverage
+        included = []
+        if coverage_has_fields(coverage, "price", ["currentPrice"]):
+            included.append("현재가")
+        if coverage_has_fields(coverage, "ccnl", ["tradeStrength"]):
+            included.append("체결강도")
+        if coverage_has_fields(coverage, "ccnl", ["buyVolume", "sellVolume"]):
+            included.append("방향별 체결량")
+        if coverage_has_fields(coverage, "investor", INVESTOR_SIGNAL_KEYS):
+            included.append("투자자별 수급")
+        if coverage_has_fields(coverage, "orderbook", ["orderbookBidVolume", "orderbookAskVolume"]):
+            included.append("호가 잔량")
+        if included:
+            included_text = ", ".join(included)
+            signal["quoteStatus"] = "KIS " + included_text + " 반영"
+            signal["quoteMessage"] = "KIS " + included_text + "을 모델링 데이터에 반영했습니다."
+        investor = coverage.get("investor") if isinstance(coverage.get("investor"), dict) else {}
+        if investor and not investor_stage_values_reliable(coverage):
+            for key in INVESTOR_SIGNAL_KEYS:
+                signal.pop(key, None)
+            reason = str(investor.get("staleReason") or investor.get("reason") or investor.get("latencyReason") or INVESTOR_DELAYED_REASON)
+            signal["quoteMessage"] = append_message(signal.get("quoteMessage"), "KIS 투자자별 수급은 최신 실시간 값으로 확인되지 않아 수치 근거에서 제외했습니다. " + reason)
         return signal
 
     def save_signal(self, symbol: str, payload: Dict[str, object]) -> None:
@@ -841,6 +879,7 @@ class KISMarketSignalProvider:
         individual_net_volume = optional_number(signal, ["individualNetVolume", "individualNet"])
         individual_net_amount = optional_number(signal, ["individualNetAmount"])
         market_signal_coverage = signal.get("marketSignalCoverage") if isinstance(signal.get("marketSignalCoverage"), dict) else position.market_signal_coverage
+        investor_values_reliable = investor_stage_values_reliable(market_signal_coverage)
 
         merged_price = current_price if current_price is not None else position.current_price
         market_value = position.market_value
@@ -875,18 +914,18 @@ class KISMarketSignalProvider:
             orderbook_bid_volume=orderbook_bid_volume if orderbook_bid_volume is not None else position.orderbook_bid_volume,
             orderbook_ask_volume=orderbook_ask_volume if orderbook_ask_volume is not None else position.orderbook_ask_volume,
             bid_ask_imbalance=bid_ask_imbalance if bid_ask_imbalance is not None else position.bid_ask_imbalance,
-            foreign_buy_volume=foreign_buy_volume if foreign_buy_volume is not None else position.foreign_buy_volume,
-            foreign_sell_volume=foreign_sell_volume if foreign_sell_volume is not None else position.foreign_sell_volume,
-            foreign_net_volume=foreign_net_volume if foreign_net_volume is not None else position.foreign_net_volume,
-            foreign_net_amount=foreign_net_amount if foreign_net_amount is not None else position.foreign_net_amount,
-            institution_buy_volume=institution_buy_volume if institution_buy_volume is not None else position.institution_buy_volume,
-            institution_sell_volume=institution_sell_volume if institution_sell_volume is not None else position.institution_sell_volume,
-            institution_net_volume=institution_net_volume if institution_net_volume is not None else position.institution_net_volume,
-            institution_net_amount=institution_net_amount if institution_net_amount is not None else position.institution_net_amount,
-            individual_buy_volume=individual_buy_volume if individual_buy_volume is not None else position.individual_buy_volume,
-            individual_sell_volume=individual_sell_volume if individual_sell_volume is not None else position.individual_sell_volume,
-            individual_net_volume=individual_net_volume if individual_net_volume is not None else position.individual_net_volume,
-            individual_net_amount=individual_net_amount if individual_net_amount is not None else position.individual_net_amount,
+            foreign_buy_volume=foreign_buy_volume if investor_values_reliable and foreign_buy_volume is not None else (position.foreign_buy_volume if investor_values_reliable else 0.0),
+            foreign_sell_volume=foreign_sell_volume if investor_values_reliable and foreign_sell_volume is not None else (position.foreign_sell_volume if investor_values_reliable else 0.0),
+            foreign_net_volume=foreign_net_volume if investor_values_reliable and foreign_net_volume is not None else (position.foreign_net_volume if investor_values_reliable else 0.0),
+            foreign_net_amount=foreign_net_amount if investor_values_reliable and foreign_net_amount is not None else (position.foreign_net_amount if investor_values_reliable else 0.0),
+            institution_buy_volume=institution_buy_volume if investor_values_reliable and institution_buy_volume is not None else (position.institution_buy_volume if investor_values_reliable else 0.0),
+            institution_sell_volume=institution_sell_volume if investor_values_reliable and institution_sell_volume is not None else (position.institution_sell_volume if investor_values_reliable else 0.0),
+            institution_net_volume=institution_net_volume if investor_values_reliable and institution_net_volume is not None else (position.institution_net_volume if investor_values_reliable else 0.0),
+            institution_net_amount=institution_net_amount if investor_values_reliable and institution_net_amount is not None else (position.institution_net_amount if investor_values_reliable else 0.0),
+            individual_buy_volume=individual_buy_volume if investor_values_reliable and individual_buy_volume is not None else (position.individual_buy_volume if investor_values_reliable else 0.0),
+            individual_sell_volume=individual_sell_volume if investor_values_reliable and individual_sell_volume is not None else (position.individual_sell_volume if investor_values_reliable else 0.0),
+            individual_net_volume=individual_net_volume if investor_values_reliable and individual_net_volume is not None else (position.individual_net_volume if investor_values_reliable else 0.0),
+            individual_net_amount=individual_net_amount if investor_values_reliable and individual_net_amount is not None else (position.individual_net_amount if investor_values_reliable else 0.0),
             ma20_distance=ma20_distance,
             ma60_distance=ma60_distance,
         )

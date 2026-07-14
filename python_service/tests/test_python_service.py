@@ -1256,6 +1256,11 @@ class PythonServiceTests(unittest.TestCase):
         self.assertIn("지연 가능성", coverage["investor"]["staleReason"])
         self.assertEqual("stale", coverage["ccnl"]["status"])
         self.assertEqual("stale", coverage["orderbook"]["status"])
+        self.assertEqual(0, positions[0].foreign_net_volume)
+        self.assertEqual(0, positions[0].institution_net_volume)
+        self.assertEqual(0, positions[0].individual_net_volume)
+        self.assertNotIn("투자자별 수급", positions[0].quote_status)
+        self.assertIn("수치 근거에서 제외", positions[0].quote_message)
 
     def test_position_freshness_uses_kis_stage_staleness(self):
         now = datetime(2026, 7, 7, 2, 0, tzinfo=timezone.utc)
@@ -3825,9 +3830,16 @@ class PythonServiceTests(unittest.TestCase):
         missing_labels = [item["label"] for item in context["missingData"]]
         warnings = context["facts"]["dataQualityWarnings"]
 
-        self.assertNotIn("투자자별 수급", missing_labels)
+        self.assertIn("투자자별 수급", missing_labels)
+        investor_missing = next(item for item in context["missingData"] if item["label"] == "투자자별 수급")
+        self.assertEqual("latency", investor_missing["status"])
+        self.assertIn("지연", investor_missing["effect"])
         self.assertEqual("available", context["facts"]["dataAvailability"]["investorFlow"]["status"])
         self.assertIs(False, context["facts"]["dataAvailability"]["investorFlow"]["realTime"])
+        self.assertEqual(0, context["facts"]["investorFlowBase"])
+        self.assertEqual(0, context["facts"]["investorFlowScore"])
+        self.assertEqual(0, context["facts"]["foreignBuyVolume"])
+        self.assertEqual(0, context["facts"]["institutionBuyVolume"])
         self.assertTrue(any(item["key"] == "investorFlowLatency" for item in warnings))
         self.assertLess(context["facts"]["dataQualityScore"], 100)
 
@@ -11259,6 +11271,9 @@ class PythonServiceTests(unittest.TestCase):
         delayed_investor_line = monitor.investor_context_line(position)
         self.assertIn("KIS 장중 누적·지연 가능", delayed_investor_line)
         self.assertIn("실시간 체결 데이터 아님", delayed_investor_line)
+        self.assertIn("수치 제외", delayed_investor_line)
+        self.assertNotIn("외국인: 순매도", delayed_investor_line)
+        self.assertNotIn("기관: 순매수", delayed_investor_line)
         position.update({
             "quantity": 12,
             "sellable_quantity": 9,

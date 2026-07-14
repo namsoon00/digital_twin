@@ -507,7 +507,7 @@ class MonitoringPositionContextMixin:
             return ""
         note = self.investor_coverage_note(position)
         if note:
-            parts.insert(0, note)
+            return "투자자:\n" + note + "\n수치 제외: KIS 투자자별 수급이 최신 실시간 값으로 확인되지 않았습니다."
         return "투자자:\n" + "\n".join(parts)
 
     def holding_action_text(self, decision_text: str, pnl_rate: float) -> str:

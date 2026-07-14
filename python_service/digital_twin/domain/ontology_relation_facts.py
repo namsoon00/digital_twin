@@ -25,6 +25,18 @@ def _position_weight(position: Position, portfolio: PortfolioSummary) -> float:
 
 
 def _investor_flow(position: Position) -> Dict[str, float]:
+    if not _investor_flow_values_reliable(position):
+        return {
+            "foreignNetVolume": 0.0,
+            "institutionNetVolume": 0.0,
+            "individualNetVolume": 0.0,
+            "foreignNetAmount": 0.0,
+            "institutionNetAmount": 0.0,
+            "individualNetAmount": 0.0,
+            "smartMoneyNetVolume": 0.0,
+            "investorFlowBase": 0.0,
+            "investorFlowScore": 0.0,
+        }
     foreign_volume = number(position.foreign_net_volume) or number(position.foreign_buy_volume) - number(position.foreign_sell_volume)
     institution_volume = number(position.institution_net_volume) or number(position.institution_buy_volume) - number(position.institution_sell_volume)
     individual_volume = number(position.individual_net_volume) or number(position.individual_buy_volume) - number(position.individual_sell_volume)
@@ -45,6 +57,20 @@ def _investor_flow(position: Position) -> Dict[str, float]:
         "investorFlowBase": base,
         "investorFlowScore": score,
     }
+
+
+def _investor_flow_values_reliable(position: Position) -> bool:
+    coverage = position.market_signal_coverage if isinstance(position.market_signal_coverage, dict) else {}
+    investor = coverage.get("investor") if isinstance(coverage.get("investor"), dict) else {}
+    if not investor:
+        return True
+    status = str(investor.get("status") or "").strip()
+    latency_status = str(investor.get("latencyStatus") or "").strip()
+    if status in {"stale", "unknown", "unavailable", "missing", "empty"}:
+        return False
+    if investor.get("realTime") is False or latency_status or str(investor.get("cadence") or "") == "stale-repeat":
+        return False
+    return True
 
 
 def _trend_facts(position: Position) -> Dict[str, object]:
@@ -553,12 +579,13 @@ def position_signal_facts(
     orderbook_bid_volume = number(position.orderbook_bid_volume)
     orderbook_ask_volume = number(position.orderbook_ask_volume)
     bid_ask_imbalance = number(position.bid_ask_imbalance)
-    foreign_buy_volume = number(position.foreign_buy_volume)
-    foreign_sell_volume = number(position.foreign_sell_volume)
-    institution_buy_volume = number(position.institution_buy_volume)
-    institution_sell_volume = number(position.institution_sell_volume)
-    individual_buy_volume = number(position.individual_buy_volume)
-    individual_sell_volume = number(position.individual_sell_volume)
+    investor_values_reliable = _investor_flow_values_reliable(position)
+    foreign_buy_volume = number(position.foreign_buy_volume) if investor_values_reliable else 0.0
+    foreign_sell_volume = number(position.foreign_sell_volume) if investor_values_reliable else 0.0
+    institution_buy_volume = number(position.institution_buy_volume) if investor_values_reliable else 0.0
+    institution_sell_volume = number(position.institution_sell_volume) if investor_values_reliable else 0.0
+    individual_buy_volume = number(position.individual_buy_volume) if investor_values_reliable else 0.0
+    individual_sell_volume = number(position.individual_sell_volume) if investor_values_reliable else 0.0
     execution_direction_proxy = bool(position.trade_strength or bid_ask_imbalance or orderbook_bid_volume or orderbook_ask_volume)
     market_signal_coverage = dict(position.market_signal_coverage or {}) if isinstance(position.market_signal_coverage, dict) else {}
     quote_status = str(position.quote_status or "")
@@ -747,9 +774,14 @@ def position_signal_facts(
             effect = "투자자별 수급 응답은 있었지만 외국인·기관·개인 순매수 합계가 0으로 들어와 방향성 근거로 쓰지 않습니다."
         elif investor_flow_status == "empty":
             effect = "KIS 투자자 단계 응답이 비어 있어 주체별 수급은 중립으로 처리합니다."
+        elif investor_coverage.get("realTime") is False or investor_latency or investor_flow_status in {"stale", "unknown"}:
+            effect = investor_latency_reason or "KIS 투자자별 수급이 지연·반복값으로 판정되어 주체별 수급은 중립으로 처리합니다."
+            missing.append(_missing("investorFlow", "투자자별 수급", effect, investor_flow_status if investor_flow_status in {"stale", "unknown"} else "latency", "KIS investor"))
+            effect = ""
         else:
             effect = "외국인·기관·개인 순매수는 수집되지 않아 주체별 수급은 중립으로 처리합니다. 가격·거래량·체결강도 중심 판단입니다."
-        missing.append(_missing("investorFlow", "투자자별 수급", effect, investor_flow_status, "KIS investor"))
+        if effect:
+            missing.append(_missing("investorFlow", "투자자별 수급", effect, investor_flow_status, "KIS investor"))
     if facts["isBtcSensitive"] and not btc:
         missing.append(_missing("btcMarket", "비트코인 시장 데이터", "비트코인 민감 종목의 외부 연동 위험을 확인하지 못합니다."))
     data_quality = clamp(

@@ -20776,3 +20776,246 @@ html[data-theme="dark"] .ontology-graph-expanded-toolbar .icon-button.danger {
     grid-template-columns: repeat(2, minmax(0, 1fr));
   }
 }
+
+/* Desktop card comfort audit: restore breathing room after compact ledger/list layers. */
+@media (min-width: 1181px) {
+  :root {
+    --ds-page-gap: 20px;
+    --ds-section-gap: 18px;
+    --ds-panel-pad-x: 22px;
+    --ds-panel-pad-y: 18px;
+    --ds-row-pad-x: 18px;
+    --ds-row-pad-y: 14px;
+    --ds-card-comfort-gap: 14px;
+    --ds-card-comfort-pad-x: 18px;
+    --ds-card-comfort-pad-y: 15px;
+    --ds-radius-control: 7px;
+    --ds-radius-panel: 8px;
+  }
+
+  .managed-page,
+  .admin-grid,
+  .home-view,
+  .accounts-view,
+  .notifications-view,
+  .strategy-view,
+  .feed-view,
+  .symbol-universe-view,
+  .watchlist-view,
+  .ontology-experiments-view,
+  .settings-view,
+  .system-view {
+    gap: var(--ds-page-gap);
+  }
+
+  .panel {
+    border-radius: var(--ds-radius-panel);
+  }
+
+  .panel-head {
+    min-height: 66px;
+    padding: var(--ds-panel-pad-y) var(--ds-panel-pad-x);
+  }
+
+  .loading-grid {
+    gap: var(--ds-page-gap);
+  }
+
+  .loading-source-list {
+    gap: var(--ds-card-comfort-gap);
+    padding: var(--ds-panel-pad-y) var(--ds-panel-pad-x) var(--ds-panel-pad-y);
+  }
+
+  .loading-source-row {
+    align-items: center;
+    min-height: 58px;
+    padding: 12px 14px;
+    border: 1px solid var(--ds-card-border);
+    border-left: 3px solid var(--blue);
+    border-radius: var(--ds-radius-control);
+    background: var(--ds-card-bg);
+  }
+
+  .loading-source-row:last-child {
+    border-bottom: 1px solid var(--ds-card-border);
+  }
+
+  .loading-shell-preview {
+    gap: var(--ds-card-comfort-gap);
+    padding: var(--ds-panel-pad-y) var(--ds-panel-pad-x);
+  }
+
+  :where(
+    .account-card-list,
+    .watch-account-list,
+    .account-watch-symbol-list,
+    .monitoring-instrument-list,
+    .symbol-result-list,
+    .alert-list,
+    .notification-template-list,
+    .admin-message-list,
+    .investment-evidence-list,
+    .signal-list,
+    .valuation-list,
+    .lab-list,
+    .news-list,
+    .model-version-list,
+    .investment-action-list,
+    .investment-lineage-list,
+    .source-stack,
+    .account-command-grid,
+    .account-quality-ledger,
+    .settings-diagnostic-grid,
+    .admin-stat-grid,
+    .lab-stats-grid,
+    .work-detail-grid,
+    .work-detail-metric-row,
+    .inline-detail-grid,
+    .inline-detail-list,
+    .system-detail-grid,
+    .settings-detail-grid,
+    .ontology-experiment-list,
+    .ontology-experiment-recommendations,
+    .ontology-experiment-card-metrics,
+    .notification-diagnostics-grid,
+    .rule-strip
+  ) {
+    gap: var(--ds-card-comfort-gap);
+  }
+
+  .panel > :where(
+    .account-card-list,
+    .watch-account-list,
+    .account-watch-symbol-list,
+    .monitoring-instrument-list,
+    .symbol-result-list,
+    .alert-list,
+    .notification-template-list,
+    .admin-message-list,
+    .investment-evidence-list,
+    .signal-list,
+    .valuation-list,
+    .lab-list,
+    .news-list,
+    .model-version-list,
+    .investment-action-list,
+    .investment-lineage-list,
+    .source-stack,
+    .account-command-grid,
+    .account-quality-ledger,
+    .settings-diagnostic-grid,
+    .admin-stat-grid,
+    .lab-stats-grid
+  ) {
+    padding: var(--ds-panel-pad-y) var(--ds-panel-pad-x) var(--ds-panel-pad-y);
+  }
+
+  .symbol-result-workbench,
+  .feed-impact-workbench,
+  .research-evidence-workbench,
+  .investment-action-workbench {
+    gap: var(--ds-page-gap);
+    padding: var(--ds-panel-pad-y) var(--ds-panel-pad-x);
+  }
+
+  .symbol-result-workbench .symbol-result-list,
+  .feed-impact-workbench .feed-impact-grid,
+  .research-evidence-workbench .research-evidence-list,
+  .investment-action-workbench .investment-action-list {
+    gap: var(--ds-card-comfort-gap);
+  }
+
+  .notification-decision-list {
+    display: grid;
+    gap: var(--ds-card-comfort-gap);
+    padding: var(--ds-panel-pad-y) var(--ds-panel-pad-x);
+    border-top: 1px solid var(--ds-card-border);
+  }
+
+  :where(
+    .account-card,
+    .watch-account-row,
+    .account-watch-symbol-row,
+    .monitoring-instrument-row,
+    .symbol-result-row,
+    .notification-decision-row,
+    .feed-impact-card,
+    .research-evidence-item,
+    .investment-action-row,
+    .investment-lineage-row,
+    .service-account-row,
+    .work-detail-card,
+    .work-detail-row,
+    .work-detail-section,
+    .inline-detail-card,
+    .inline-detail-row,
+    .inline-detail-block,
+    .ontology-experiment-card,
+    .ontology-experiment-recommendation,
+    .system-detail-disclosure,
+    .settings-detail-disclosure
+  ) {
+    min-width: 0;
+    padding: var(--ds-card-comfort-pad-y) var(--ds-card-comfort-pad-x);
+    border: 1px solid var(--ds-card-border);
+    border-left-width: 4px;
+    border-radius: var(--ds-radius-panel);
+    background: var(--ds-card-bg);
+    box-shadow: 0 8px 24px rgba(16, 24, 32, 0.045);
+  }
+
+  :where(
+    .symbol-result-row.compact,
+    .feed-impact-card.compact,
+    .research-evidence-item.compact,
+    .investment-action-row.compact
+  ) {
+    border-radius: var(--ds-radius-panel);
+    box-shadow: 0 8px 24px rgba(16, 24, 32, 0.045);
+  }
+
+  .feed-impact-workbench .feed-impact-card,
+  .research-evidence-workbench .research-evidence-item,
+  .investment-action-workbench .investment-action-row {
+    padding: var(--ds-card-comfort-pad-y) var(--ds-card-comfort-pad-x);
+    border-width: 1px 1px 1px 4px;
+    border-radius: var(--ds-radius-panel);
+    background: var(--ds-card-bg);
+  }
+
+  .notification-decision-row {
+    border-bottom: 1px solid var(--ds-card-border);
+  }
+
+  [data-card-type] {
+    border-radius: var(--ds-radius-panel);
+  }
+
+  [data-card-type="metric-cell"],
+  .account-control-metric,
+  .notification-ops-cell,
+  .investment-calendar-kpi,
+  .investment-calendar-type-strip span,
+  .work-detail-metric-row > *,
+  .inline-detail-metrics > * {
+    min-height: 82px;
+    padding: 14px 16px;
+  }
+
+  .account-overview-ledger,
+  .account-command-layout,
+  .account-balance-audit,
+  .notification-command-center,
+  .notification-command-center .notification-ops-rail,
+  .notification-diagnostics-summary-panel .notification-diagnostics-grid,
+  .ontology-experiment-overview-panel > .ontology-experiment-metrics,
+  .ontology-experiment-latest-panel > .ontology-experiment-run-grid {
+    gap: var(--ds-card-comfort-gap);
+  }
+
+  .account-overview-ledger .account-quality-ledger,
+  .account-command-layout .account-quality-ledger {
+    gap: var(--ds-card-comfort-gap);
+    padding-top: var(--ds-card-comfort-gap);
+  }
+}

@@ -571,6 +571,16 @@ def similarity_bypass_match(
         if delta <= -minimum:
             return True, label + " " + format_rule_number(previous) + "% -> " + format_rule_number(current) + "%"
         return False, ""
+    if condition_type == "profit_loss_improved_gte":
+        current = profit_loss_rate_from_context(context, job.text if job else "")
+        previous = profit_loss_rate_from_context(previous_context)
+        minimum = numeric_value(condition.value)
+        if current is None or previous is None or minimum is None:
+            return False, ""
+        delta = current - previous
+        if delta >= minimum:
+            return True, label + " " + format_rule_number(previous) + "% -> " + format_rule_number(current) + "%"
+        return False, ""
     if condition_type == "ma60_crossed_below":
         current = ma60_distance_from_context(context, job.text if job else "")
         previous = ma60_distance_from_context(previous_context)
@@ -783,7 +793,8 @@ def apply_state_cooldown_rule(
             matched, reason = similarity_bypass_match(condition, job=job, previous_context=previous_context, decision=decision, previous_score=previous_score)
             if matched:
                 decision.state_decision = "material_change"
-                decision.state_reason = "의미 있는 추가 확대: " + reason
+                change_label = "의미 있는 회복" if condition.condition_type == "profit_loss_improved_gte" else "의미 있는 추가 확대"
+                decision.state_reason = change_label + ": " + reason
                 decision.similarity_bypassed = True
                 decision.similarity_bypass_reason = reason
                 decision.reasons.append("상태 정책: " + decision.state_reason)

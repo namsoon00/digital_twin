@@ -209,6 +209,13 @@ def default_similarity_bypass_conditions(message_type: str) -> List["SimilarityB
                 description="이전 투자 인사이트보다 손익률이 1%p 이상 나빠지면 반복이어도 보냅니다. 이미 큰 손실·큰 수익 구간이면 새 구간에 들어갈 때만 예외로 보냅니다.",
             ),
             SimilarityBypassCondition(
+                "insight_profit_loss_improved",
+                "손익률 큰 개선",
+                "profit_loss_improved_gte",
+                value=5,
+                description="이전 투자 인사이트보다 손익률이 5%p 이상 좋아지면 회복 신호로 보고 반복이어도 보냅니다.",
+            ),
+            SimilarityBypassCondition(
                 "insight_ma60_crossed_below",
                 "60일 평균 아래 전환",
                 "ma60_crossed_below",
@@ -245,6 +252,13 @@ def default_similarity_bypass_conditions(message_type: str) -> List["SimilarityB
                 "profit_loss_worsened_lte",
                 value=1,
                 description="이전 보유 타이밍 알림보다 손익률이 1%p 이상 나빠지면 보냅니다. 이미 큰 손실·큰 수익 구간이면 새 구간에 들어갈 때만 예외로 보냅니다.",
+            ),
+            SimilarityBypassCondition(
+                "loss_rate_improved",
+                "손익률 큰 개선",
+                "profit_loss_improved_gte",
+                value=5,
+                description="이전 보유 타이밍 알림보다 손익률이 5%p 이상 좋아지면 회복 신호로 보고 반복이어도 보냅니다.",
             ),
             SimilarityBypassCondition(
                 "holding_ma60_crossed_below",

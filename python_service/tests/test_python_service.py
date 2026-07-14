@@ -5706,6 +5706,7 @@ class PythonServiceTests(unittest.TestCase):
         self.assertIn("ontology_novelty_score", condition_ids)
         self.assertIn("insight_type_changed", bypass_ids)
         self.assertIn("new_relation_event", bypass_ids)
+        self.assertIn("insight_profit_loss_improved", bypass_ids)
         insight_change = next(condition for condition in rule.similarity_bypass_conditions if condition.condition_id == "insight_type_changed")
         self.assertEqual("ontologyInsight.dispatchInsightType", insight_change.field)
         self.assertEqual(["messageType", "accountId", "ontologyInsight.subject", "ontologyInsight.dispatchInsightType"], rule.similarity_fields)

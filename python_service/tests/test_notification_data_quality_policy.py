@@ -394,6 +394,43 @@ class NotificationDataQualityPolicyTests(unittest.TestCase):
         self.assertEqual("material_change", decision.state_decision)
         self.assertIn("손익률 추가 악화", decision.state_reason)
 
+    def test_profit_loss_improvement_bypasses_investment_insight_cooldown(self):
+        rule = default_notification_rule("investmentInsight")
+        job = NotificationJob.create(
+            "손익률 큰 개선",
+            account_id="main",
+            message_type="investmentInsight",
+            context={
+                "severity": "WATCH",
+                "symbol": "000660",
+                "rawLines": "수익률: -18.0%\n추세: 60일선 2,015,483원보다 4.6% 낮음",
+                "ontologyInsight": {"subject": "000660", "dispatchInsightType": "riskManagement", "score": 94, "noveltyScore": 20},
+                "sourceSignalTypes": ["holdingTiming"],
+            },
+        )
+        decision = evaluate_notification_rule(job, rule)
+
+        decision = apply_state_cooldown_rule(
+            decision,
+            rule,
+            sent_count=1,
+            previous_score=decision.score,
+            previous_context={
+                "rawLines": "수익률: -34.7%\n추세: 60일선 2,011,467원보다 16.4% 낮음",
+                "ontologyInsight": {"subject": "000660", "dispatchInsightType": "riskManagement"},
+                "sourceSignalTypes": ["holdingTiming"],
+            },
+            last_sent_at=utc_now_iso(),
+            last_sent_age_minutes=164,
+            job=job,
+        )
+
+        self.assertTrue(decision.should_send)
+        self.assertEqual("material_change", decision.state_decision)
+        self.assertTrue(decision.similarity_bypassed)
+        self.assertIn("손익률 큰 개선", decision.state_reason)
+        self.assertIn("-34.7% -> -18%", decision.state_reason)
+
     def test_synthetic_timing_source_event_does_not_bypass_investment_insight_cooldown(self):
         rule = default_notification_rule("investmentInsight")
         job = NotificationJob.create(

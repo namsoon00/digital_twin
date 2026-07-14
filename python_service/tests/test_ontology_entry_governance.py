@@ -205,6 +205,76 @@ class OntologyEntryGovernanceTests(unittest.TestCase):
         self.assertEqual("ADD", opinion.action)
         self.assertEqual("ADD_BUY_REVIEW", opinion.execution_plan["addBuyAssessment"]["stage"])
 
+    def test_profitable_holding_can_add_when_5_20_60_day_and_trade_confirm(self):
+        position = Position(
+            symbol="000660",
+            name="SK하이닉스",
+            market="KR",
+            currency="KRW",
+            quantity=4,
+            market_value=900000,
+            profit_loss_rate=8.5,
+            current_price=228000,
+            average_price=210000,
+            ma5=224000,
+            ma20=219000,
+            ma60=214000,
+            volume_ratio=1.25,
+            trade_strength=108,
+            bid_ask_imbalance=9,
+            sector="반도체",
+            source="holding",
+        )
+        healthcare = Position(
+            symbol="000020",
+            name="동화약품",
+            market="KR",
+            currency="KRW",
+            quantity=100,
+            current_price=6000,
+            market_value=2500000,
+            sector="헬스케어",
+            source="holding",
+        )
+        auto = Position(
+            symbol="005380",
+            name="현대차",
+            market="KR",
+            currency="KRW",
+            quantity=10,
+            current_price=250000,
+            market_value=2500000,
+            sector="자동차",
+            source="holding",
+        )
+        external_signals = {
+            "macro": {
+                "series": {
+                    "DGS10": {"provider": "FRED", "value": 4.0},
+                    "DGS2": {"provider": "FRED", "value": 3.8},
+                },
+                "yieldSpread10y2y": 0.2,
+            },
+            "fxRates": {
+                "USDKRW": {"provider": "RuntimeSettings", "base": "USD", "quote": "KRW", "rate": 1390}
+            },
+        }
+
+        context = evaluate_position_relation_rules(
+            position,
+            portfolio_summary([position, healthcare, auto], account_cash=12000000, fx_rates={"KRW": 1}),
+            external_signals=external_signals,
+            settings={"investmentStrategyProfile": "balanced"},
+        )
+        active_ids = [item.get("rule_id") or item.get("ruleId") for item in context["activeRules"]]
+        opinion = build_active_investment_opinion(position, context)
+
+        self.assertIn("holding.winner_momentum.add_buy_review.v1", active_ids)
+        self.assertEqual("ADD_BUY_REVIEW", context["decision"]["decisionStage"])
+        self.assertEqual("addBuy", context["decision"]["actionGroup"])
+        self.assertTrue(context["facts"]["winnerAddBuyReady"])
+        self.assertEqual("ADD", opinion.action)
+
 
 if __name__ == "__main__":
     unittest.main()

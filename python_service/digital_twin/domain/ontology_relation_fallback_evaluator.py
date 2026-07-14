@@ -511,6 +511,60 @@ def evaluate_position_relation_rules(
             missing_labels,
             definitions=relation_definitions,
         ))
+    winner_add_support_count = sum(
+        1
+        for value in [
+            bool(facts.get("ma5")) and ma5_distance >= max(entry_ma5_min, 0.0),
+            bool(facts.get("ma20")) and ma20_distance >= 0,
+            bool(facts.get("ma60")) and ma60_distance >= 0,
+            volume_is_usable,
+            smart_money_supports,
+            execution_supports,
+            orderbook_supports,
+            direct_support_news_count > 0,
+        ]
+        if value
+    )
+    winner_add_buy_ready = (
+        is_holding
+        and pnl >= 3.0
+        and bool(facts.get("ma5"))
+        and ma5_distance >= max(entry_ma5_min, 0.0)
+        and bool(facts.get("ma20"))
+        and ma20_distance >= 0
+        and bool(facts.get("ma60"))
+        and ma60_distance >= 0
+        and allocation_room
+        and winner_add_support_count >= 4
+        and not entry_external_risk_blocked
+        and not entry_required_data_missing
+    )
+    facts["winnerAddBuySupportCount"] = winner_add_support_count
+    facts["winnerAddBuyReady"] = winner_add_buy_ready
+    if winner_add_buy_ready:
+        score = (
+            62
+            + min(18, winner_add_support_count * 3)
+            + min(10, pnl * 0.3)
+            + (6 if direct_support_news_count else 0)
+        )
+        matches.append(_match(
+            "holding.winner_momentum.add_buy_review.v1",
+            score,
+            data_quality,
+            [
+                "손익률 " + ("%.1f" % pnl) + "%",
+                moving_average_distance_text("5일선", ma5_distance),
+                moving_average_distance_text("20일선", ma20_distance),
+                moving_average_distance_text("60일선", ma60_distance),
+                "거래량 배율 " + ("%.1f" % volume_ratio) + "x" if volume_ratio else "거래량 배율 미확인",
+                "확인 신호 " + str(winner_add_support_count) + "/8",
+                "보유 비중 " + ("%.1f" % position_weight) + "%",
+                "즉시 몰아사기보다 소액 분할 추가매수 검토",
+            ],
+            missing_labels,
+            definitions=relation_definitions,
+        ))
     wait_for_entry_confirmation = (
         source == "watchlist"
         and not pullback_entry_ready

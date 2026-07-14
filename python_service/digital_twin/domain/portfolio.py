@@ -102,6 +102,7 @@ class Position:
     ma200: float = 0.0
     ma20_slope: float = 0.0
     ma60_slope: float = 0.0
+    ma5_distance: float = 0.0
     ma20_distance: float = 0.0
     ma60_distance: float = 0.0
     sector: str = "기타"

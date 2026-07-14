@@ -44,6 +44,7 @@ def relation_stage_priority(relation: Dict[str, object]) -> int:
     base = {
         "LOSS_CUT": 46,
         "LOSS_REDUCE": 40,
+        "EXECUTION_OK": 18,
         "LIQUIDITY_ACTION": 38,
         "LIQUIDITY_REVIEW": 34,
         "PROFIT_SPLIT": 37,

@@ -275,6 +275,16 @@ function checkFrontendAdminRender() {
       /max-width: 1560px\)[\s\S]*\.account-history-panel \.account-command-grid,[\s\S]*\.account-quality-ledger\s*\{[\s\S]*grid-template-columns: repeat\(2, minmax\(0, 1fr\)\);/.test(styles),
     "PC 화면의 상단/탭/계정 카드가 3줄 리듬으로 무너지는 것을 막는 최종 계약이 없습니다."
   );
+  assertOk(
+    styles.indexOf("Desktop card comfort audit") >= 0 &&
+      /--ds-card-comfort-gap: 14px;/.test(styles) &&
+      /\.managed-page,[\s\S]*\.system-view\s*\{[\s\S]*gap: var\(--ds-page-gap\);/.test(styles) &&
+      /\.loading-source-list\s*\{[\s\S]*gap: var\(--ds-card-comfort-gap\);/.test(styles) &&
+      /\.symbol-result-workbench \.symbol-result-list,[\s\S]*\.investment-action-workbench \.investment-action-list\s*\{[\s\S]*gap: var\(--ds-card-comfort-gap\);/.test(styles) &&
+      /\.notification-decision-list\s*\{[\s\S]*display: grid;[\s\S]*gap: var\(--ds-card-comfort-gap\);/.test(styles) &&
+      /:where\([\s\S]*\.symbol-result-row,[\s\S]*\.notification-decision-row,[\s\S]*\.feed-impact-card,[\s\S]*\.research-evidence-item,[\s\S]*\.investment-action-row[\s\S]*\)\s*\{[\s\S]*padding: var\(--ds-card-comfort-pad-y\) var\(--ds-card-comfort-pad-x\);[\s\S]*border-left-width: 4px;/.test(styles),
+    "PC 카드 간격/내부 여백을 최종 레이어에서 복원하는 계약이 없습니다."
+  );
   assertOk(styles.indexOf("Professional finance top navigation shell") >= 0 && styles.indexOf("grid-template-columns: minmax(0, 1fr)") >= 0, "PC shell이 단일 컬럼 상단 탭형 작업 영역으로 전환되지 않습니다.");
   assertOk(/Professional finance top navigation shell[\s\S]*\.app-nav[\s\S]*grid-template-columns: minmax\(180px, 0\.17fr\) minmax\(0, 1fr\) minmax\(108px, auto\);/.test(styles), "PC 상단 금융 탭 네비게이션 3구획 구조가 없습니다.");
   assertOk(styles.indexOf(".app-nav-command") >= 0 && styles.indexOf(".app-nav-flow") >= 0 && styles.indexOf(".app-nav-mode") >= 0, "PC 상단 통합 command rail 스타일 정의가 없습니다.");

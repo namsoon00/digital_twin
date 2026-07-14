@@ -730,6 +730,8 @@ def support_risk_scores(evidence: List[ResearchEvidence], relation_context: Dict
             "holding.loss_smart_money.defense.v1",
             "holding.loss_smart_money.reversal_watch.v1",
             "holding.loss_smart_money.add_buy_review.v1",
+            "holding.winner_momentum.add_buy_review.v1",
+            "graph.winner_momentum.add_buy_review.v1",
         }:
             support += min(18.0, score * 0.22)
             continue
@@ -739,7 +741,7 @@ def support_risk_scores(evidence: List[ResearchEvidence], relation_context: Dict
         if any(token in combined for token in ["ENTRY_WAIT", "ENTRY_RISK", "LOSS", "RISK", "DISCLOSURE", "CONCENTRATION", "리스크", "손실", "매도", "하락", "대기", "보류", "차단"]):
             risk += min(22.0, score * 0.28)
             continue
-        if any(token in combined for token in ["ENTRY_OPPORTUNITY", "ADD_BUY", "SUPPORT", "CONFIRM", "기회", "소액 진입", "추가매수 관찰", "조건부 추가매수", "우호"]):
+        if any(token in combined for token in ["ENTRY_OPPORTUNITY", "ADD_BUY", "SUPPORT", "CONFIRM", "기회", "소액 진입", "추가매수", "우호"]):
             support += min(18.0, score * 0.22)
     return support, risk
 
@@ -766,9 +768,15 @@ def choose_action(position: Position, relation_context: Dict[str, object], suppo
         if decision_stage == "ADD_BUY_REVIEW" and not blocked_reasons and (support_score >= risk_score or relation_score >= 85):
             return "ADD"
         return "HOLD"
-    if action_group == "lossControl" or action_level == "urgent" or relation_score >= 85:
+    if action_group == "lossControl":
         return "SELL" if relation_score >= 78 or risk_score >= support_score + 18 else "TRIM"
     if action_group in {"profitTake", "rebalance"}:
+        return "TRIM"
+    if action_group in {"eventRisk", "disclosure"}:
+        return "HOLD"
+    if action_group in {"executionRisk", "dataQuality", "factorRisk", "rateRegime", "fxRegime", "macroRegime"}:
+        return "HOLD"
+    if action_level == "urgent" and risk_score >= support_score + 28:
         return "TRIM"
     if action_group == "entryRisk" or risk_score >= support_score + 16:
         return "HOLD"
@@ -790,7 +798,7 @@ def thesis_for_action(action: str, position: Position, labels: List[str], suppor
         return name + "는 리스크 점수 " + str(round(risk_score, 1)) + "가 지지 점수 " + str(round(support_score, 1)) + "보다 커 매도 의견입니다."
     if action == "AVOID":
         return name + "는 진입 전 확인할 리스크가 커 매수보류 의견입니다."
-    return name + "는 적극 매수/매도보다 기존 포지션 유지와 다음 검증이 우선입니다."
+    return name + "는 바로 사고팔기보다 보유 이유와 반대 신호를 한 번 더 확인하는 단계입니다."
 
 
 def invalidation_for_action(action: str) -> str:

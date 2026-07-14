@@ -262,6 +262,41 @@ def rule_value(item: Dict[str, object], *keys):
     return ""
 
 
+def beginner_relation_decision_line(relation_context: Dict[str, object]) -> str:
+    decision = relation_context.get("decision") if isinstance(relation_context.get("decision"), dict) else {}
+    action_group = str(decision.get("actionGroup") or "").strip()
+    label = str(decision.get("label") or "").strip()
+    if action_group == "executionRisk":
+        return "쉽게 말하면: 이 점수는 팔아야 한다는 뜻이 아니라, 팔기로 결정했을 때 주문이 무리 없이 가능한지 보는 보조 확인입니다."
+    if action_group in {"eventRisk", "disclosure"}:
+        return "쉽게 말하면: 뉴스나 공시 때문에 보유 이유를 다시 확인하라는 뜻입니다. 이것만으로 매도 확정은 아닙니다."
+    if action_group == "factorRisk":
+        return "쉽게 말하면: 종목 자체 문제라기보다 시장 전체나 같은 테마가 흔들릴 때 같이 움직일 수 있는지 보라는 뜻입니다."
+    if action_group == "lossControl":
+        return "쉽게 말하면: 손실이나 가격 흐름 약화가 실제로 커져 비중을 줄일 기준을 확인하라는 뜻입니다."
+    if action_group == "profitTake":
+        return "쉽게 말하면: 수익을 지키기 위해 일부만 줄일지 확인하라는 뜻이지, 전량 매도 확정은 아닙니다."
+    if "보유" in label or "관찰" in label:
+        return "쉽게 말하면: 바로 행동하기보다 다음 데이터에서도 같은 신호가 유지되는지 보는 단계입니다."
+    return ""
+
+
+def beginner_rule_explanation(item: Dict[str, object]) -> str:
+    text = " ".join(
+        str(rule_value(item, "ruleId", "rule_id", "label", "relationType", "relation_type") or "").split()
+    )
+    lowered = text.casefold()
+    if "execution.capacity" in lowered or "작은 실행 노출" in text or "실행 가능 용량" in text:
+        return "쉬운 해석: 보유 수량이 작아, 나중에 팔기로 정해도 주문 자체는 어렵지 않다는 뜻입니다. 매도해야 한다는 뜻은 아닙니다."
+    if "benchmark.beta" in lowered or "벤치마크 베타" in text:
+        return "쉬운 해석: 애플 같은 대형주는 미국 증시와 같이 움직일 수 있으니 지수·금리도 같이 보라는 뜻입니다."
+    if "disclosure.event_risk" in lowered or "공시" in text:
+        return "쉬운 해석: 새 공시나 신고가 있어 내용을 확인하라는 뜻입니다. 가격 반응이 나쁘게 확인될 때만 경계 강도가 커집니다."
+    if "news.direct" in lowered or "리스크 뉴스" in text or "위험 뉴스" in text:
+        return "쉬운 해석: 직접 악재 뉴스가 있어 원문과 다음 가격 반응을 보라는 뜻입니다. 뉴스 하나만으로 매도 확정은 아닙니다."
+    return ""
+
+
 def ontology_rule_lines(context_or_metadata: Dict[str, object]) -> List[str]:
     relation_context = ontology_relation_context(context_or_metadata)
     if not relation_context:
@@ -274,7 +309,11 @@ def ontology_rule_lines(context_or_metadata: Dict[str, object]) -> List[str]:
         suffix = "신뢰도 " + format_score_value(confidence) if confidence not in (None, "") else ""
         lines.append("관계 신호: " + " ".join(part for part in [label + " (" + format_score_value(strength) + "점)", suffix] if part))
         lines.append("점수 해석: " + relation_score_meaning(float(strength)) + "입니다. 점수 상승은 대응 필요 강도 강화, 하락은 완화를 뜻하며 가격 방향 예측 점수가 아닙니다.")
+    easy_decision = beginner_relation_decision_line(relation_context)
+    if easy_decision:
+        lines.append(easy_decision)
     rules = relation_context.get("activeRules") or relation_context.get("matchedRules") or []
+    easy_rule_lines: List[str] = []
     for item in rules:
         if not isinstance(item, dict):
             continue
@@ -291,6 +330,10 @@ def ontology_rule_lines(context_or_metadata: Dict[str, object]) -> List[str]:
             value += " - " + evidence_text
         if value.strip():
             lines.append("성립 규칙: " + value)
+        easy_rule = beginner_rule_explanation(item)
+        if easy_rule and easy_rule not in easy_rule_lines:
+            easy_rule_lines.append(easy_rule)
+    lines.extend(easy_rule_lines[:3])
     prompt_context = ontology_prompt_context(context_or_metadata)
     prompt_id = str(prompt_context.get("promptId") or "").strip()
     if prompt_id:

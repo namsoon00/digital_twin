@@ -778,7 +778,7 @@ def ontology_modeling_lines(context: Dict[str, object]) -> List[str]:
         if period or change not in (None, ""):
             change_text = signed_pct(change) if isinstance(change, (int, float)) else str(change or "").strip()
             lines.append("대표 변화: " + " ".join(part for part in [period, change_text] if part))
-    for line in ontology_rule_lines(context)[:4]:
+    for line in ontology_rule_lines(context)[:7]:
         lines.append(line)
     return lines
 

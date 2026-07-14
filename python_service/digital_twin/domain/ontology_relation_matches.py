@@ -96,6 +96,7 @@ def decision_from_matches(facts: Dict[str, object], matches: List[OntologyRuleMa
         "holding.concentration.rebalance.v1": 20,
         "entry.add_buy.blocked.v1": 18,
         "holding.loss_smart_money.add_buy_review.v1": 35,
+        "holding.winner_momentum.add_buy_review.v1": 35,
         "holding.loss_smart_money.reversal_watch.v1": 21,
         "holding.loss_smart_money.defense.v1": 19,
         "support.retest.confirmed.v1": 17,

@@ -676,9 +676,17 @@ def add_price_level_and_liquidity_concepts(graph: PortfolioOntology, stock_id: s
             "observedAt": position.updated_at,
         })
         add_relation(graph, stock_id, stale_id, "HAS_DATA_QUALITY", weight=0.35, properties={"source": source, "polarity": "risk", "opinionImpact": 6.0, "aiInfluenceLabel": "시세 신선도 저하"})
+    def technical_distance(level: float, explicit_distance: float) -> float:
+        calculated = pct_distance_safe(current_price, level) if current_price and level else 0.0
+        return calculated if calculated else number(explicit_distance)
+
+    ma5_distance = technical_distance(number(position.ma5), getattr(position, "ma5_distance", 0.0))
+    ma20_distance = technical_distance(number(position.ma20), position.ma20_distance)
+    ma60_distance = technical_distance(number(position.ma60), position.ma60_distance)
     level_rows = [
-        ("ma20", "20일선", number(position.ma20), number(position.ma20_distance), "SupportLevel" if number(position.ma20_distance) >= -1 else "ResistanceLevel"),
-        ("ma60", "60일선", number(position.ma60), number(position.ma60_distance), "SupportLevel" if number(position.ma60_distance) >= -1 else "ResistanceLevel"),
+        ("ma5", "5일선", number(position.ma5), ma5_distance, "SupportLevel" if ma5_distance >= -0.5 else "ResistanceLevel"),
+        ("ma20", "20일선", number(position.ma20), ma20_distance, "SupportLevel" if ma20_distance >= -1 else "ResistanceLevel"),
+        ("ma60", "60일선", number(position.ma60), ma60_distance, "SupportLevel" if ma60_distance >= -1 else "ResistanceLevel"),
         ("average", "평단가", number(position.average_price), pct_distance_safe(current_price, number(position.average_price)), "KeyLevel"),
     ]
     for key, label, level, distance, tbox_class in level_rows:

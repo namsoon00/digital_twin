@@ -135,6 +135,8 @@ def resolve_decision_stage(rule_id: str, score: float, facts: Dict[str, object])
         return decision_stage_by_key("ADD_BUY_WATCH")
     if rule_id == "holding.loss_smart_money.add_buy_review.v1":
         return decision_stage_by_key("ADD_BUY_REVIEW")
+    if rule_id == "holding.winner_momentum.add_buy_review.v1":
+        return decision_stage_by_key("ADD_BUY_REVIEW")
     if rule_id == "entry.pullback.supported.v1":
         if value >= 70:
             return decision_stage_by_key("ENTRY_READY")

@@ -429,9 +429,9 @@ def insight_thesis(insight_type: str, subject_name: str, source_labels: List[str
     sources = ", ".join(source_labels[:4]) if source_labels else "관계 신호"
     score_text = compact_number(round(score, 1))
     if insight_type == "riskIncrease":
-        return subject_name + "에서 " + sources + "가 함께 강해져 리스크 우선 점검 대상으로 바뀌었습니다. 관계 강도는 " + score_text + "점입니다."
+        return subject_name + "에서 확인할 위험 신호가 늘었습니다. 바로 매도하라는 뜻은 아니고, 보유 이유와 가격 반응을 먼저 다시 보라는 알림입니다. 관계 강도는 " + score_text + "점입니다."
     if insight_type == "riskManagement":
-        return subject_name + "의 보유 판단과 관계 신호가 리스크 관리 쪽으로 기울었습니다. 관계 강도는 " + score_text + "점입니다."
+        return subject_name + "은 " + sources + " 때문에 보유 이유를 다시 확인해야 합니다. 관계 강도 " + score_text + "점은 확인 필요 강도이지, 가격 하락 확률이나 매도 확정 점수가 아닙니다."
     if insight_type == "opportunityDetected":
         return subject_name + "에서 " + sources + "가 매수 후보 쪽으로 모였습니다. 아직 실행보다 확인 조건을 먼저 봐야 합니다."
     if insight_type == "portfolioShift":

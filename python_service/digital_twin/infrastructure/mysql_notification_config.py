@@ -277,6 +277,21 @@ class MySQLNotificationRuleStore(MySQLOperationalConnection):
             if condition.field == legacy_field and condition.field != default.field:
                 condition.field = default.field
                 changed = True
+            if condition.condition_id in {
+                "insight_profit_loss_worsened",
+                "insight_profit_loss_improved",
+                "loss_rate_worsened",
+                "loss_rate_improved",
+            }:
+                if condition.value != default.value:
+                    condition.value = default.value
+                    changed = True
+                if condition.label != default.label:
+                    condition.label = default.label
+                    changed = True
+                if condition.description != default.description:
+                    condition.description = default.description
+                    changed = True
         return changed
 
     def list(self) -> List[NotificationRuleConfig]:

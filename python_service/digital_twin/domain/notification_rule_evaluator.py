@@ -575,18 +575,6 @@ def similarity_bypass_match(
         if current is None or previous is None or minimum is None:
             return False, ""
         delta = current - previous
-        if (
-            current <= MANDATORY_LOSS_RATE_THRESHOLD
-            and previous <= MANDATORY_LOSS_RATE_THRESHOLD
-            and mandatory_loss_band_rank(current) <= mandatory_loss_band_rank(previous)
-        ):
-            return False, ""
-        if (
-            current >= MANDATORY_PROFIT_RATE_THRESHOLD
-            and previous >= MANDATORY_PROFIT_RATE_THRESHOLD
-            and mandatory_profit_band_rank(current) <= mandatory_profit_band_rank(previous)
-        ):
-            return False, ""
         if delta <= -minimum:
             return True, label + " " + format_rule_number(previous) + "% -> " + format_rule_number(current) + "%"
         return False, ""

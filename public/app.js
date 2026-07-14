@@ -11004,18 +11004,20 @@
     var portfolio = (snapshot || {}).portfolio || {};
     return [
       '<section class="account-balance-audit">',
-      '<div class="account-board-title">',
-      '<strong>계좌 금액 검증</strong>',
-      '<span>총 평가 = 투자 평가액 + 현금, 환율과 원장 합계를 같이 봅니다.</span>',
-      '</div>',
       '<div class="account-balance-grid">',
       renderAccountControlMetric("투자 평가액", formatMoney(portfolio.invested || 0), "보유 종목 원화환산", "neutral"),
       renderAccountControlMetric("현금/주문 가능", formatMoney(portfolio.cash || 0), portfolioCashBasisText(snapshot || {}, portfolio), "neutral"),
       renderAccountControlMetric("총 평가", formatMoney(portfolio.total || 0), "스냅샷 portfolio.total", "ok"),
       renderAccountControlMetric("산식 차이", exposureDiffText(portfolio.total || 0, numeric(portfolio.invested) + numeric(portfolio.cash)), "total - (invested + cash)", Math.abs(numeric(portfolio.total) - numeric(portfolio.invested) - numeric(portfolio.cash)) < 1 ? "ok" : "warn"),
       '</div>',
+      '<div class="account-balance-ledger">',
+      '<div class="account-board-title">',
+      '<strong>검증 레저</strong>',
+      '<span>데이터 원천, 환율, 현금 기준, 원장 합계를 같은 기준으로 대조합니다.</span>',
+      '</div>',
       '<div class="source-stack compact">',
       renderPortfolioBasisRows(snapshot || {}, portfolio),
+      '</div>',
       '</div>',
       '</section>'
     ].join("");
@@ -11114,15 +11116,21 @@
 
   function renderAccountBalancePanel(snapshot) {
     snapshot = snapshot || {};
+    var portfolio = (snapshot || {}).portfolio || {};
+    var formulaTotal = numeric(portfolio.invested) + numeric(portfolio.cash);
     return [
-      '<article class="panel account-balance-panel">',
-      '<div class="panel-head">',
+      '<article class="panel account-balance-panel account-balance-workspace">',
+      '<div class="panel-head account-balance-hero">',
       '<div>',
       '<p class="label">Balance Audit</p>',
-      '<h2>계좌 금액 기준</h2>',
-      '<p class="subtle">화면의 평가액이 어떤 현금 기준, 환율, 보유 원장 합계에서 나왔는지 확인합니다.</p>',
+      '<h2>자산 검증</h2>',
+      '<p class="subtle">화면의 평가액이 어떤 현금 기준, 환율, 보유 원장 합계에서 나왔는지 한 화면에서 대조합니다.</p>',
       '</div>',
-      '<span class="metric">' + escapeHtml(formatMoney(((snapshot || {}).portfolio || {}).total || 0)) + '</span>',
+      '<div class="account-balance-total">',
+      '<em>총 평가</em>',
+      '<strong>' + escapeHtml(formatMoney(portfolio.total || 0)) + '</strong>',
+      '<span>' + escapeHtml(exposureDiffText(portfolio.total || 0, formulaTotal)) + '</span>',
+      '</div>',
       '</div>',
       renderAccountBalanceAudit(snapshot),
       '</article>'

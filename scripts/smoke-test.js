@@ -233,7 +233,14 @@ function checkFrontendAdminRender() {
   assertOk(
     styles.indexOf("Desktop comfort rail") >= 0 &&
       /\.managed-page\s*\{[\s\S]*max-width: var\(--ds-page-content-width\);[\s\S]*justify-self: center;/.test(styles) &&
-      /\.account-balance-audit \.source-stack\.compact\s*\{[\s\S]*grid-template-columns: repeat\(2, minmax\(0, 1fr\)\);/.test(styles),
+      /\.app-nav-command \.page-command-metrics\s*\{[\s\S]*display: none;/.test(styles) &&
+      /\.account-balance-panel \.account-balance-hero\s*\{[\s\S]*grid-template-columns: minmax\(0, 1fr\) auto;/.test(styles) &&
+      /\.account-balance-audit\s*\{[\s\S]*grid-template-columns: minmax\(360px, 0\.34fr\) minmax\(0, 1fr\);/.test(styles) &&
+      /\.account-balance-ledger\s*\{[\s\S]*border: 1px solid var\(--ds-card-border\);/.test(styles) &&
+      /\.account-balance-audit \.source-stack\.compact\s*\{[\s\S]*grid-template-columns: repeat\(2, minmax\(0, 1fr\)\);/.test(styles) &&
+      code.indexOf("account-balance-total") >= 0 &&
+      code.indexOf("account-balance-ledger") >= 0 &&
+      code.indexOf("<strong>계좌 금액 검증</strong>") < 0,
     "PC comfort rail과 계좌 검증 감사 레저 구조가 없습니다."
   );
   assertOk(styles.indexOf("Professional finance top navigation shell") >= 0 && styles.indexOf("grid-template-columns: minmax(0, 1fr)") >= 0, "PC shell이 단일 컬럼 상단 탭형 작업 영역으로 전환되지 않습니다.");

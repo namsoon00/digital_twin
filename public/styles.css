@@ -3515,6 +3515,36 @@ h3 {
   min-width: 0;
 }
 
+.account-balance-hero {
+  display: grid;
+  gap: 12px;
+}
+
+.account-balance-total {
+  display: grid;
+  gap: 3px;
+  min-width: 0;
+}
+
+.account-balance-total em,
+.account-balance-total span {
+  color: var(--muted);
+  font-size: 12px;
+  font-style: normal;
+  font-weight: 850;
+}
+
+.account-balance-total strong {
+  color: var(--blue);
+  font-size: 24px;
+  font-weight: 950;
+  line-height: 1.05;
+}
+
+.account-balance-ledger {
+  min-width: 0;
+}
+
 .account-api-row {
   display: grid;
   grid-template-columns: minmax(120px, 0.7fr) minmax(120px, 0.7fr) minmax(0, 1fr);
@@ -19995,14 +20025,18 @@ html[data-theme="dark"] .ontology-graph-expanded-toolbar .icon-button.danger {
 
   .app-nav-command,
   .app-nav-command.has-mode {
-    grid-template-columns: minmax(240px, 0.32fr) auto minmax(320px, 0.5fr) minmax(260px, 0.32fr) minmax(340px, 0.42fr);
+    grid-template-columns: minmax(240px, 0.34fr) auto minmax(0, 1fr) auto;
     gap: 10px;
-    min-height: 44px;
+    min-height: 40px;
     padding: 8px 10px;
   }
 
   .app-nav-command.no-mode {
-    grid-template-columns: minmax(240px, 0.34fr) minmax(320px, 0.56fr) minmax(260px, 0.34fr) minmax(340px, 0.42fr);
+    grid-template-columns: minmax(240px, 0.36fr) minmax(0, 1fr) auto;
+  }
+
+  .app-nav-command .page-command-metrics {
+    display: none;
   }
 
   .app-nav-flow .page-flow-node strong {
@@ -20014,62 +20048,147 @@ html[data-theme="dark"] .ontology-graph-expanded-toolbar .icon-button.danger {
   }
 
   .app-nav-routine {
-    grid-template-columns: minmax(110px, 0.52fr) minmax(0, 1fr) auto;
+    grid-template-columns: auto;
+    justify-self: end;
+    padding-left: 0;
+    border-left: 0;
   }
 
-  .account-balance-panel {
+  .app-nav-routine > span:not(.app-nav-routine-action-cell) {
+    display: none;
+  }
+
+  .app-nav-routine-action-cell em {
+    display: none;
+  }
+
+  .account-section-bar {
     width: 100%;
     max-width: 1520px;
     justify-self: center;
   }
 
-  .account-balance-panel .panel-head {
+  .account-section-tabs button {
+    min-height: 48px;
+  }
+
+  .account-balance-panel {
+    width: 100%;
+    max-width: 1480px;
+    justify-self: center;
+    border: 0;
+    background: transparent;
+    box-shadow: none;
+  }
+
+  .account-balance-panel .account-balance-hero {
     grid-template-columns: minmax(0, 1fr) auto;
-    min-height: 66px;
-    padding: 16px 22px;
-    border-bottom: 1px solid var(--ds-card-border);
+    min-height: 96px;
+    padding: 20px 24px;
+    border: 1px solid var(--ds-card-border);
+    border-left: 3px solid var(--blue);
+    border-radius: var(--ds-radius-panel);
+    background: linear-gradient(180deg, var(--panel), color-mix(in srgb, var(--panel-soft) 72%, var(--panel)));
+    box-shadow: 0 12px 34px rgba(16, 24, 32, 0.06);
+  }
+
+  .account-balance-panel .account-balance-hero h2 {
+    font-size: 20px;
+  }
+
+  .account-balance-total {
+    display: grid;
+    justify-items: end;
+    gap: 4px;
+    min-width: 180px;
+    text-align: right;
+  }
+
+  .account-balance-total em,
+  .account-balance-total span {
+    color: var(--muted);
+    font-style: normal;
+    font-weight: 900;
+    line-height: 1.25;
+  }
+
+  .account-balance-total em {
+    font-size: 11px;
+    text-transform: uppercase;
+  }
+
+  .account-balance-total strong {
+    color: var(--blue);
+    font-size: 34px;
+    font-weight: 950;
+    line-height: 1;
+  }
+
+  .account-balance-total span {
+    font-size: 12px;
   }
 
   .account-balance-audit {
-    gap: 0;
-  }
-
-  .account-balance-audit > .account-board-title {
-    padding: 16px 22px 12px;
-    border-bottom: 1px solid var(--ds-card-border);
-    background: linear-gradient(180deg, var(--ds-card-head-bg), var(--panel));
-  }
-
-  .account-balance-audit > .account-board-title span {
-    max-width: 58ch;
-    text-align: left;
+    display: grid;
+    grid-template-columns: minmax(360px, 0.34fr) minmax(0, 1fr);
+    gap: 14px;
+    margin-top: 14px;
   }
 
   .account-balance-audit .account-balance-grid {
-    grid-template-columns: repeat(4, minmax(0, 1fr));
-    gap: 12px;
-    padding: 18px 22px;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    align-content: start;
+    gap: 10px;
+    padding: 0;
     border-top: 0;
-    background: color-mix(in srgb, var(--panel) 92%, var(--panel-soft) 8%);
+    background: transparent;
   }
 
   .account-balance-audit .account-control-metric {
-    min-height: 88px;
-    padding: 14px 16px;
+    min-height: 118px;
+    padding: 16px;
+    border-radius: var(--ds-radius-panel);
     background: var(--panel);
+    box-shadow: 0 8px 24px rgba(16, 24, 32, 0.05);
   }
 
   .account-balance-audit .account-control-metric strong {
-    font-size: 20px;
+    font-size: 22px;
     line-height: 1.16;
+  }
+
+  .account-balance-ledger {
+    display: grid;
+    align-content: start;
+    min-width: 0;
+    border: 1px solid var(--ds-card-border);
+    border-radius: var(--ds-radius-panel);
+    background: var(--panel);
+    box-shadow: 0 8px 24px rgba(16, 24, 32, 0.04);
+    overflow: hidden;
+  }
+
+  .account-balance-ledger .account-board-title {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) minmax(240px, auto);
+    align-items: center;
+    gap: 16px;
+    padding: 15px 18px;
+    border-bottom: 1px solid var(--ds-card-border);
+    background: var(--ds-card-head-bg);
+  }
+
+  .account-balance-ledger .account-board-title span {
+    max-width: 52ch;
+    text-align: right;
   }
 
   .account-balance-audit .source-stack.compact {
     display: grid;
     grid-template-columns: repeat(2, minmax(0, 1fr));
-    gap: 0 28px;
-    padding: 14px 22px 18px;
-    border-top: 1px solid var(--ds-card-border);
+    gap: 0 24px;
+    padding: 10px 18px 16px;
+    border-top: 0;
     background: var(--panel);
   }
 
@@ -20111,6 +20230,10 @@ html[data-theme="dark"] .ontology-graph-expanded-toolbar .icon-button.danger {
 @media (min-width: 1181px) and (max-width: 1460px) {
   .account-balance-audit .account-balance-grid {
     grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .account-balance-audit {
+    grid-template-columns: minmax(0, 1fr);
   }
 
   .account-balance-audit .source-stack.compact {

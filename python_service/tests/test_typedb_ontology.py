@@ -275,6 +275,8 @@ class TypeDBOntologyRepositoryTests(unittest.TestCase):
                     "aiInfluenceLabel": "손실 방어 추론",
                     "inferenceTraceId": "inference-trace:005930:graph.loss_guard.breakdown.v1",
                     "nativeTypeDbReasoned": True,
+                    "ruleboxRulesHash": "rulebox-hash-1",
+                    "ruleboxRuleCount": 23,
                 }),
             },
         ]
@@ -292,6 +294,8 @@ class TypeDBOntologyRepositoryTests(unittest.TestCase):
         self.assertEqual(1, snapshot["relationCount"])
         self.assertTrue(snapshot["nativeTypeDbReasoningUsed"])
         self.assertFalse(snapshot["typedbBootstrapReasoningUsed"])
+        self.assertEqual("rulebox-hash-1", snapshot["ruleboxRulesHash"])
+        self.assertEqual(23, snapshot["ruleboxRuleCount"])
         self.assertEqual(0, snapshot["ignoredNonNativeRelationCount"])
         self.assertEqual(["holding-loss"], snapshot["traces"][0]["matchedConditionIds"])
 
@@ -360,6 +364,22 @@ class TypeDBOntologyRepositoryTests(unittest.TestCase):
         self.assertTrue(captured["graph"].entities)
         self.assertTrue(all((item.properties or {}).get("nativeTypeDbReasoned") for item in captured["graph"].entities))
         self.assertTrue(all((item.properties or {}).get("snapshotId") == result["inferenceGenerationId"] for item in captured["graph"].entities))
+        self.assertTrue(result["ruleboxRulesHash"])
+        self.assertEqual(1, result["ruleboxRuleCount"])
+        self.assertTrue(all((item.properties or {}).get("ruleboxRulesHash") == result["ruleboxRulesHash"] for item in captured["graph"].entities))
+        self.assertEqual("skipped", result["clearResult"]["status"])
+
+    def test_typedb_rulebox_execution_preserves_inferencebox_when_preflight_fails(self):
+        repository = TypeDBOntologyGraphRepository("127.0.0.1:1729")
+
+        with patch.object(repository, "read_entity_rows", side_effect=RuntimeError("abox unavailable")), patch.object(repository, "clear_inferencebox") as clear_mock:
+            result = repository.run_rulebox({"forceClearInference": True})
+
+        clear_mock.assert_not_called()
+        self.assertEqual("error", result["status"])
+        self.assertIn("ABox", result["reason"])
+        self.assertEqual("skipped", result["clearResult"]["status"])
+        self.assertTrue(result["clearResult"]["preservedPreviousInference"])
 
     def test_typedb_inferencebox_graph_rewrites_ids_by_generation(self):
         graph = PortfolioOntology("typedb-generation")
@@ -387,10 +407,17 @@ class TypeDBOntologyRepositoryTests(unittest.TestCase):
             "ruleId": "rule",
         }))
 
-        generated = typedb_inferencebox_graph(graph, generation_id="inference-generation:test", generation_at="2026-07-13T00:00:00Z")
+        generated = typedb_inferencebox_graph(
+            graph,
+            generation_id="inference-generation:test",
+            generation_at="2026-07-13T00:00:00Z",
+            rulebox_metadata={"ruleboxRulesHash": "hash-1", "ruleboxRuleCount": 2},
+        )
 
         self.assertTrue(all(item.entity_id.endswith(":gen:" + item.entity_id.rsplit(":gen:", 1)[1]) for item in generated.entities))
         self.assertTrue(all((item.properties or {}).get("snapshotId") == "inference-generation:test" for item in generated.entities))
+        self.assertTrue(all((item.properties or {}).get("ruleboxRulesHash") == "hash-1" for item in generated.entities))
+        self.assertEqual("hash-1", generated.worldview["ruleboxRulesHash"])
         self.assertIn("stock:005930", {item.source for item in generated.relations})
         self.assertTrue(any(item.target.startswith("risk:005930:gen:") for item in generated.relations))
         self.assertTrue(generated.evidence[0].evidence_id.startswith("evidence:inference:005930:rule:gen:"))

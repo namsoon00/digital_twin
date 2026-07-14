@@ -369,6 +369,51 @@ def notification_fingerprint(job: NotificationJob, config: NotificationRuleConfi
     return "|".join(parts)
 
 
+def notification_state_group_key(job: NotificationJob) -> str:
+    if job is None:
+        return ""
+    message_type = str(job.message_type or "").strip()
+    if message_type not in {"investmentInsight", "holdingTiming"}:
+        return ""
+    context = job.context or {}
+    subject = first_normalized_field_value(context, [
+        "ontologyInsight.subject",
+        "activeInvestmentOpinion.subject",
+        "ontologyRelationContext.subject.symbol",
+        "symbol",
+        "rawSymbol",
+        "target",
+    ])
+    if not subject:
+        return ""
+    dispatch_type = first_normalized_field_value(context, [
+        "ontologyInsight.dispatchInsightType",
+        "dispatchInsightType",
+        "ontologyInsight.insightType",
+        "insightType",
+    ])
+    source_types = {
+        normalized
+        for item in flattened_strings(field_value(context, "sourceSignalTypes"))
+        for normalized in normalize_similarity_list_items("sourceSignalTypes", item)
+        if normalized
+    }
+    holding_group = (
+        message_type == "holdingTiming"
+        or dispatch_type == "holdingpositioncommon"
+        or "holdingtiming" in source_types
+        or normalize_fingerprint_part(field_value(context, "holdingPolicyGroup")) == "holdingpositioncommon"
+    )
+    state_group = "holdingPositionCommon" if holding_group else (dispatch_type or message_type)
+    return "|".join([
+        "state",
+        message_type,
+        normalize_fingerprint_part(job.account_id),
+        subject,
+        normalize_fingerprint_part(state_group),
+    ])
+
+
 def job_search_blob(job: NotificationJob) -> str:
     parts = [
         job.text,

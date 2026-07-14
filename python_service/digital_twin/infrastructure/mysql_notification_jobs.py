@@ -12,6 +12,7 @@ from ..domain.notification_rules import (
     default_notification_rule,
     evaluate_notification_rule,
     notification_fingerprint,
+    notification_state_group_key,
 )
 from ..domain.notifications import NotificationJob
 from .mysql_operational_connection import MySQLOperationalConnection
@@ -179,13 +180,15 @@ class MySQLNotificationJobStore(MySQLOperationalConnection):
         previous_score = 0
         most_recent_context: Dict[str, object] = {}
         most_recent_at = ""
+        state_group_key = notification_state_group_key(job)
         for row in rows:
             previous = NotificationJob.from_dict(_json_loads(row["payload_json"], {}))
             if previous.job_id == job.job_id:
                 continue
             previous_context = previous.context or {}
             previous_fingerprint = str(previous_context.get("honeyFingerprint") or notification_fingerprint(previous, rule))
-            if previous_fingerprint != fingerprint:
+            previous_state_group_key = str(previous_context.get("honeyStateGroupKey") or notification_state_group_key(previous))
+            if previous_fingerprint != fingerprint and (not state_group_key or previous_state_group_key != state_group_key):
                 continue
             status = str(row["status"] or "").strip()
             if status != "done" and not notification_history_is_recent_in_flight(row):
@@ -234,6 +237,9 @@ class MySQLNotificationJobStore(MySQLOperationalConnection):
         decision = self.evaluate_job_with_connection(connection, job)
         context = dict(job.context or {})
         context.update(decision.to_context())
+        state_group_key = notification_state_group_key(job)
+        if state_group_key:
+            context["honeyStateGroupKey"] = state_group_key
         freshness_decision = evaluate_notification_data_freshness(context, self.runtime_settings)
         context.update(freshness_decision.to_context())
         job.context = context

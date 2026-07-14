@@ -31,6 +31,11 @@ class FakeOntologyRepository:
             "ruleCount": 2,
             "conditionCount": 3,
             "derivationCount": 2,
+            "ruleboxRulesHash": "hash-1",
+            "ruleboxShortHash": "hash-1",
+            "ruleboxRuleCount": 2,
+            "ruleboxConditionCount": 3,
+            "ruleboxDerivationCount": 2,
             "nativeReasoningProfile": {
                 "status": "partial",
                 "supportedRuleCount": 1,
@@ -56,8 +61,38 @@ class FakeOntologyRepository:
             "nativeTypeDbReasoningUsed": True,
             "typedbBootstrapReasoningUsed": False,
             "pythonBootstrapDisabled": True,
+            "inferenceGenerationId": "inference-generation:test",
+            "ruleboxRulesHash": "hash-1",
+            "ruleboxRuleCount": 2,
             "symbols": list(symbols or []),
         }
+
+    def read_entity_rows(self, boxes=None):
+        return [
+            {
+                "id": "stock:TSLA",
+                "label": "Tesla",
+                "kind": "stock",
+                "ontologyBox": "ABox",
+                "symbol": "TSLA",
+                "tboxClass": "Stock",
+            },
+            {
+                "id": "flow:TSLA:volume",
+                "label": "Tesla volume",
+                "kind": "trade-flow",
+                "ontologyBox": "ABox",
+                "symbol": "TSLA",
+                "tboxClass": "TradeFlow",
+            },
+        ]
+
+    def read_relation_rows(self, boxes=None):
+        return [
+            {"source": "stock:TSLA", "target": "price:TSLA:current", "type": "HAS_PRICE", "ontologyBox": "ABox", "symbol": "TSLA"},
+            {"source": "stock:TSLA", "target": "flow:TSLA:volume", "type": "HAS_TRADE_FLOW", "ontologyBox": "ABox", "symbol": "TSLA"},
+            {"source": "stock:TSLA", "target": "quality:TSLA", "type": "HAS_DATA_QUALITY", "ontologyBox": "ABox", "symbol": "TSLA"},
+        ]
 
 
 class FakeEventLog:
@@ -111,8 +146,13 @@ class OntologyDiagnosticsServiceTests(unittest.TestCase):
         self.assertEqual(payload["activeGraphStore"], "typedb")
         self.assertTrue(payload["typedb"]["addressConfigured"])
         self.assertEqual(payload["inferenceBox"]["reasoningMode"], "typedb-rulebox-materialized")
+        self.assertEqual(payload["inferenceBox"]["ruleboxRulesHash"], "hash-1")
         self.assertTrue(payload["reasoningBoundary"]["nativeTypeDbReasoningUsed"])
         self.assertFalse(payload["reasoningBoundary"]["typedbBootstrapReasoningUsed"])
+        self.assertEqual("ok", payload["reasoningBoundary"]["ruleboxHashStatus"])
+        self.assertEqual("warning", payload["aboxCoverage"]["status"])
+        self.assertEqual("TSLA", payload["aboxCoverage"]["symbols"][0]["symbol"])
+        self.assertIn("price", payload["aboxCoverage"]["symbols"][0]["present"])
         self.assertEqual(payload["notificationBoundary"]["status"], "ok")
         self.assertEqual(payload["notificationBoundary"]["jobsForLatestAlert"][0]["jobId"], job.job_id)
 

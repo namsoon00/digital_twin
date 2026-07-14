@@ -30,6 +30,7 @@ class OntologyDiagnosticsService:
         tbox = self.safe_call("active_tbox_metadata", {})
         rulebox = self.safe_call("rulebox_snapshot", {})
         inference = self.safe_call("inferencebox_snapshot", {}, clean_symbols, safe_limit)
+        abox_coverage = self.abox_coverage(clean_symbols)
         return {
             "contract": "typedb-ontology-diagnostics-v1",
             "generatedAt": utc_now_iso(),
@@ -37,6 +38,7 @@ class OntologyDiagnosticsService:
             "typedb": self.typedb_settings(),
             "tbox": self.tbox_summary(tbox),
             "rulebox": self.rulebox_summary(rulebox),
+            "aboxCoverage": abox_coverage,
             "inferenceBox": self.inferencebox_summary(inference),
             "reasoningBoundary": self.reasoning_boundary(rulebox, inference),
             "latestEvents": self.latest_events(),
@@ -72,6 +74,7 @@ class OntologyDiagnosticsService:
             "storeSource",
             "graphStore",
             "reason",
+            "reasonCode",
             "entityCount",
             "relationCount",
             "version",
@@ -87,6 +90,7 @@ class OntologyDiagnosticsService:
             "source",
             "graphStore",
             "reason",
+            "reasonCode",
             "engineVersion",
             "ruleCount",
             "conditionCount",
@@ -96,6 +100,12 @@ class OntologyDiagnosticsService:
             "bootstrapAvailable",
             "bootstrapRuleCount",
             "pythonBootstrapDisabled",
+            "ruleboxRulesHash",
+            "ruleboxShortHash",
+            "ruleboxRuleCount",
+            "ruleboxConditionCount",
+            "ruleboxDerivationCount",
+            "ruleboxEngineVersion",
         ])
         profile = payload.get("nativeReasoningProfile")
         if isinstance(profile, dict):
@@ -121,6 +131,7 @@ class OntologyDiagnosticsService:
             "typedbReadStatus",
             "typedbReadReason",
             "reason",
+            "reasonCode",
             "entityCount",
             "relationCount",
             "traceCount",
@@ -138,6 +149,12 @@ class OntologyDiagnosticsService:
             "inactiveGenerationRelationCount",
             "ignoredNonNativeRelationCount",
             "ignoredNonNativeTraceCount",
+            "ruleboxRulesHash",
+            "ruleboxShortHash",
+            "ruleboxRuleCount",
+            "ruleboxConditionCount",
+            "ruleboxDerivationCount",
+            "ruleboxEngineVersion",
             "symbols",
         ])
         summary["relationTypes"] = sorted(set(
@@ -152,15 +169,115 @@ class OntologyDiagnosticsService:
         ]
         return summary
 
+    def abox_coverage(self, symbols: List[str] = None) -> Dict[str, object]:
+        if not hasattr(self.ontology_repository, "read_entity_rows") or not hasattr(self.ontology_repository, "read_relation_rows"):
+            return {"status": "unavailable", "reason": "repository does not expose ABox row reads"}
+        try:
+            entities = self.ontology_repository.read_entity_rows(["ABox"])
+            relations = self.ontology_repository.read_relation_rows(["ABox"])
+        except Exception as error:  # noqa: BLE001 - diagnostics must stay available.
+            return {"status": "error", "reason": str(error)[:220]}
+        clean_symbols = sorted(set(str(item or "").upper().strip() for item in (symbols or []) if str(item or "").strip()))
+        stock_symbols = self.abox_symbols(entities, relations)
+        if clean_symbols:
+            stock_symbols = [item for item in stock_symbols if item in clean_symbols]
+        relation_types_by_symbol: Dict[str, set] = {symbol: set() for symbol in stock_symbols}
+        entity_classes_by_symbol: Dict[str, set] = {symbol: set() for symbol in stock_symbols}
+        for entity in entities:
+            symbol = self.row_symbol(entity)
+            if symbol in entity_classes_by_symbol:
+                tbox_class = str(entity.get("tboxClass") or "")
+                kind = str(entity.get("kind") or entity.get("nodeKind") or "")
+                if tbox_class:
+                    entity_classes_by_symbol[symbol].add(tbox_class)
+                if kind:
+                    entity_classes_by_symbol[symbol].add(kind)
+        for relation in relations:
+            symbol = self.row_symbol(relation) or self.symbol_from_relation_endpoints(relation)
+            if symbol in relation_types_by_symbol:
+                relation_type = str(relation.get("type") or relation.get("relationType") or "").upper().strip()
+                if relation_type:
+                    relation_types_by_symbol[symbol].add(relation_type)
+        required = {
+            "price": {"HAS_PRICE"},
+            "trendPath": {"HAS_PRICE_PATH", "HAS_TREND_PHASE", "HAS_TREND_TRANSITION"},
+            "tradeFlow": {"HAS_TRADE_FLOW"},
+            "liquidity": {"HAS_LIQUIDITY_PROFILE"},
+            "execution": {"HAS_EXECUTION_METRIC", "HAS_EXECUTION_CAPACITY"},
+            "dataQuality": {"HAS_DATA_QUALITY"},
+            "externalEvidence": {"HAS_RESEARCH_EVIDENCE", "HAS_EVENT_EVIDENCE", "HAS_DISCLOSURE", "MENTIONS"},
+        }
+        rows = []
+        total_expected = len(required)
+        total_present = 0
+        for symbol in stock_symbols:
+            relation_types = relation_types_by_symbol.get(symbol) or set()
+            present = sorted(name for name, relation_set in required.items() if relation_types.intersection(relation_set))
+            missing = sorted(name for name in required if name not in present)
+            total_present += len(present)
+            rows.append({
+                "symbol": symbol,
+                "present": present,
+                "missing": missing,
+                "relationTypes": sorted(relation_types)[:40],
+                "entityClasses": sorted(entity_classes_by_symbol.get(symbol) or [])[:30],
+                "coverageRatio": round(len(present) / total_expected, 3) if total_expected else 1.0,
+            })
+        coverage_ratio = round(total_present / max(1, total_expected * max(1, len(stock_symbols))), 3)
+        status = "ok" if stock_symbols and coverage_ratio >= 0.75 else ("warning" if stock_symbols else "empty")
+        return {
+            "status": status,
+            "entityCount": len(entities),
+            "relationCount": len(relations),
+            "symbolCount": len(stock_symbols),
+            "coverageRatio": coverage_ratio,
+            "requiredCategories": sorted(required.keys()),
+            "symbols": rows[:80],
+        }
+
+    def abox_symbols(self, entities: List[Dict[str, object]], relations: List[Dict[str, object]]) -> List[str]:
+        values = set()
+        for row in list(entities or []) + list(relations or []):
+            symbol = self.row_symbol(row) or self.symbol_from_relation_endpoints(row)
+            if symbol:
+                values.add(symbol)
+        return sorted(values)
+
+    def row_symbol(self, row: Dict[str, object]) -> str:
+        if not isinstance(row, dict):
+            return ""
+        symbol = str(row.get("symbol") or "").upper().strip()
+        if symbol:
+            return symbol
+        row_id = str(row.get("id") or "").upper().strip()
+        return row_id.split("STOCK:", 1)[1].split(":", 1)[0] if "STOCK:" in row_id else ""
+
+    def symbol_from_relation_endpoints(self, row: Dict[str, object]) -> str:
+        if not isinstance(row, dict):
+            return ""
+        for key in ["source", "target", "sourceId", "targetId"]:
+            value = str(row.get(key) or "").upper().strip()
+            if value.startswith("STOCK:"):
+                return value.split("STOCK:", 1)[1].split(":", 1)[0]
+        return ""
+
     def reasoning_boundary(self, rulebox: Dict[str, object], inference: Dict[str, object]) -> Dict[str, object]:
         mode = str(inference.get("reasoningMode") or rulebox.get("reasoningMode") or "").strip()
         native_used = bool(inference.get("nativeTypeDbReasoningUsed"))
         bootstrap_used = bool(inference.get("typedbBootstrapReasoningUsed"))
+        rulebox_hash = str(rulebox.get("ruleboxRulesHash") or "").strip()
+        inference_hash = str(inference.get("ruleboxRulesHash") or "").strip()
+        hash_match = bool(rulebox_hash and inference_hash and rulebox_hash == inference_hash)
+        hash_status = "unknown"
+        if rulebox_hash and inference_hash:
+            hash_status = "ok" if hash_match else "stale"
         status = "ok"
         if str(inference.get("status") or "") == "error":
             status = "error"
         elif bootstrap_used and not native_used:
             status = "error"
+        elif rulebox_hash and inference_hash and not hash_match:
+            status = "warning"
         elif not native_used:
             status = "warning"
         return {
@@ -171,6 +288,9 @@ class OntologyDiagnosticsService:
             "nativeTypeDbReasoningReady": bool((rulebox.get("nativeReasoningProfile") or {}).get("status") in {"ready", "partial"})
             if isinstance(rulebox.get("nativeReasoningProfile"), dict)
             else False,
+            "ruleboxHashStatus": hash_status,
+            "ruleboxRulesHash": rulebox_hash,
+            "inferenceRuleboxRulesHash": inference_hash,
             "interpretation": self.reasoning_interpretation(mode, native_used, bootstrap_used),
         }
 

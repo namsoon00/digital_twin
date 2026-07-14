@@ -10,6 +10,7 @@ from digital_twin.domain.notification_rules import (
     apply_state_cooldown_rule,
     default_notification_rule,
     evaluate_notification_rule,
+    notification_state_group_key,
 )
 from digital_twin.domain.notification_ai_gate_message import (
     notification_topline_change_summary,
@@ -197,6 +198,37 @@ class NotificationDataQualityPolicyTests(unittest.TestCase):
         self.assertEqual("cooldown", decision.state_decision)
         self.assertFalse(decision.similarity_bypassed)
         self.assertIn("같은 임계값 상태 지속", decision.state_reason)
+
+    def test_holding_investment_state_group_key_ignores_minor_dispatch_wording(self):
+        risk_job = NotificationJob.create(
+            "삼성전자 리스크 증가",
+            account_id="main",
+            message_type="investmentInsight",
+            context={
+                "symbol": "005930",
+                "ontologyInsight": {
+                    "subject": "005930",
+                    "dispatchInsightType": "riskIncrease",
+                },
+                "sourceSignalTypes": ["holdingTiming"],
+            },
+        )
+        management_job = NotificationJob.create(
+            "삼성전자 리스크 관리",
+            account_id="main",
+            message_type="investmentInsight",
+            context={
+                "symbol": "005930",
+                "ontologyInsight": {
+                    "subject": "005930",
+                    "dispatchInsightType": "riskManagement",
+                },
+                "sourceSignalTypes": ["holdingTiming"],
+            },
+        )
+
+        self.assertEqual(notification_state_group_key(risk_job), notification_state_group_key(management_job))
+        self.assertIn("holdingpositioncommon", notification_state_group_key(risk_job).lower())
 
     def test_critical_loss_new_band_entry_bypasses_state_cooldown(self):
         rule = default_notification_rule("investmentInsight")

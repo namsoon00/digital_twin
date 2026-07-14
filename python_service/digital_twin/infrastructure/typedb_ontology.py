@@ -12,6 +12,7 @@ from ..domain.ontology_rulebox_contracts import GRAPH_REASONER_VERSION, GraphInf
 from ..domain.ontology_rulebox_governance import (
     normalize_rule_change_candidate,
     rulebox_governance_candidates,
+    rulebox_rules_hash,
 )
 from ..domain.ontology_schema import default_tbox_metadata
 from .graph_store_inferencebox import (
@@ -54,6 +55,17 @@ def typedb_bool(value: object) -> bool:
     return str(value or "").strip().lower() in {"1", "true", "yes", "y", "on"}
 
 
+def typedb_error_code(error: object) -> str:
+    text = str(error or "").lower()
+    if any(term in text for term in ["unable to connect", "connection refused", "connect failed", "unavailable"]):
+        return "typedbConnectionError"
+    if any(term in text for term in ["timeout", "timed out", "deadline"]):
+        return "typedbTimeout"
+    if any(term in text for term in ["schema"]):
+        return "typedbSchemaError"
+    return "typedbReadError"
+
+
 def clean_symbols_from_payload(value: object) -> List[str]:
     if isinstance(value, list):
         raw_values = value
@@ -72,6 +84,19 @@ def generated_inference_id(original_id: str, generation_id: str) -> str:
     original = str(original_id or "unknown")
     digest = hashlib.sha256((str(generation_id or "") + "|" + original).encode("utf-8")).hexdigest()[:12]
     return original + ":gen:" + digest
+
+
+def rulebox_runtime_metadata(rules_payload: List[Dict[str, object]]) -> Dict[str, object]:
+    rules_payload = [item for item in (rules_payload or []) if isinstance(item, dict)]
+    rules_hash = rulebox_rules_hash(rules_payload)
+    return {
+        "ruleboxRulesHash": rules_hash,
+        "ruleboxShortHash": rules_hash[:12],
+        "ruleboxRuleCount": len(rules_payload),
+        "ruleboxConditionCount": sum(len(item.get("conditions") or []) for item in rules_payload),
+        "ruleboxDerivationCount": sum(len(item.get("derivations") or []) for item in rules_payload),
+        "ruleboxEngineVersion": GRAPH_REASONER_VERSION,
+    }
 
 
 def node_boxes(graph: PortfolioOntology) -> List[str]:
@@ -770,6 +795,7 @@ class TypeDBOntologyGraphRepository(GraphStoreOntologyRowMapperMixin):
                 "configured": True,
                 "status": "error",
                 "graphStore": "typedb",
+                "reasonCode": typedb_error_code(error),
                 "reason": str(error)[:220],
             }
 
@@ -1109,6 +1135,7 @@ relation ontology-assertion,
                 "status": "error",
                 "source": "typedb-typeql",
                 "graphStore": "typedb",
+                "reasonCode": typedb_error_code(error),
                 "reason": str(error)[:220],
                 "engineVersion": GRAPH_REASONER_VERSION,
                 "rules": [],
@@ -1134,6 +1161,7 @@ relation ontology-assertion,
         }
         snapshot = rulebox_snapshot_from_rows(rowsets, "typedb-typeql")
         snapshot.update({"graphStore": "typedb", "source": "typedb-typeql"})
+        snapshot.update(rulebox_runtime_metadata(snapshot.get("rules") if isinstance(snapshot.get("rules"), list) else []))
         if snapshot.get("status") == "ok":
             try:
                 self._last_rules = rulebox_rules_from_payload({"rules": snapshot.get("rules") or []})
@@ -1168,27 +1196,22 @@ relation ontology-assertion,
             or payload.get("changedSymbols")
         )
         force_clear_requested = typedb_bool(payload.get("forceClearInference"))
+        if "forceClearInference" not in payload:
+            force_clear_requested = typedb_bool(payload.get("clearInference"))
+        destructive_clear_allowed = typedb_bool(payload.get("allowDestructiveInferenceClear"))
         prune_requested = typedb_bool(payload.get("pruneOldGenerations")) if "pruneOldGenerations" in payload else True
         keep_generation_count = max(1, int(number_or_none(payload.get("keepGenerationCount")) or self.inference_generation_keep_count))
         generation_id = str(payload.get("generationId") or inference_generation_id())
         generation_at = utc_now()
-        clear_requested = force_clear_requested
-        clear_result = self.clear_inferencebox() if clear_requested else {}
-        if clear_result and str(clear_result.get("status") or "") != "ok":
-            return {
+        clear_requested = force_clear_requested and destructive_clear_allowed
+        clear_result = {}
+        if force_clear_requested and not clear_requested:
+            clear_result = {
                 "configured": True,
-                "status": "error",
+                "status": "skipped",
                 "graphStore": "typedb",
-                "source": "typedbRuleBox",
-                "reasoningMode": "typedb-rulebox-materialization-blocked",
-                "reason": "TypeDB InferenceBox 초기화 실패: " + str(clear_result.get("reason") or clear_result.get("status") or ""),
-                "statementCount": 0,
-                "relationTypes": [],
-                "nativeTypeDbReasoningUsed": False,
-                "typedbNativeFunctionReasoningUsed": False,
-                "typedbBootstrapReasoningUsed": False,
-                "pythonBootstrapDisabled": True,
-                "clearResult": clear_result,
+                "reason": "InferenceBox is generation-scoped; destructive clear is skipped unless allowDestructiveInferenceClear is true.",
+                "preservedPreviousInference": True,
             }
         try:
             abox_rows = self.read_entity_rows(["ABox"], limit=1)
@@ -1199,6 +1222,7 @@ relation ontology-assertion,
                 "graphStore": "typedb",
                 "source": "typedbRuleBox",
                 "reasoningMode": "typedb-rulebox-materialization-blocked",
+                "reasonCode": typedb_error_code(error),
                 "reason": "TypeDB ABox 조회 실패: " + str(error)[:180],
                 "statementCount": 0,
                 "relationTypes": [],
@@ -1225,6 +1249,7 @@ relation ontology-assertion,
             }
         snapshot = self.rulebox_snapshot()
         rules = snapshot.get("rules") if isinstance(snapshot.get("rules"), list) else []
+        rulebox_metadata = rulebox_runtime_metadata(rules)
         native_profile = typedb_native_reasoning_profile(rules)
         if str(snapshot.get("status") or "") != "ok" or not rules:
             return {
@@ -1242,13 +1267,42 @@ relation ontology-assertion,
                 "pythonBootstrapDisabled": True,
                 "clearResult": clear_result,
                 "nativeReasoningProfile": native_profile,
+                "ruleboxMetadata": rulebox_metadata,
+                **rulebox_metadata,
             }
         try:
             graph = self.load_graph_from_typedb(["ABox"])
             before_entities = len(graph.entities)
             before_relations = len(graph.relations)
             run_graph_reasoner(graph, rulebox_rules_from_payload({"rules": rules}), target_symbols=target_symbols)
-            inference_graph = typedb_inferencebox_graph(graph, generation_id=generation_id, generation_at=generation_at)
+            inference_graph = typedb_inferencebox_graph(
+                graph,
+                generation_id=generation_id,
+                generation_at=generation_at,
+                rulebox_metadata=rulebox_metadata,
+            )
+            if clear_requested:
+                clear_result = self.clear_inferencebox()
+                if str(clear_result.get("status") or "") != "ok":
+                    return {
+                        "configured": True,
+                        "status": "error",
+                        "graphStore": "typedb",
+                        "source": "typedbRuleBox",
+                        "reasoningMode": "typedb-rulebox-materialization-blocked",
+                        "reasonCode": str(clear_result.get("reasonCode") or "typedbClearError"),
+                        "reason": "TypeDB InferenceBox 초기화 실패: " + str(clear_result.get("reason") or clear_result.get("status") or ""),
+                        "statementCount": 0,
+                        "relationTypes": [],
+                        "nativeTypeDbReasoningUsed": False,
+                        "typedbNativeFunctionReasoningUsed": False,
+                        "typedbBootstrapReasoningUsed": False,
+                        "pythonBootstrapDisabled": True,
+                        "clearResult": clear_result,
+                        "nativeReasoningProfile": native_profile,
+                        "ruleboxMetadata": rulebox_metadata,
+                        **rulebox_metadata,
+                    }
             save_result = self.write_inferencebox_graph(inference_graph)
         except Exception as error:  # noqa: BLE001 - expose materialization failures to monitoring diagnostics.
             return {
@@ -1257,6 +1311,7 @@ relation ontology-assertion,
                 "graphStore": "typedb",
                 "source": "typedbRuleBox",
                 "reasoningMode": "typedb-rulebox-materialized",
+                "reasonCode": typedb_error_code(error),
                 "reason": "TypeDB RuleBox materialization failed: " + str(error)[:180],
                 "statementCount": 0,
                 "relationTypes": [],
@@ -1266,6 +1321,8 @@ relation ontology-assertion,
                 "pythonBootstrapDisabled": True,
                 "clearResult": clear_result,
                 "nativeReasoningProfile": native_profile,
+                "ruleboxMetadata": rulebox_metadata,
+                **rulebox_metadata,
             }
         relation_types = sorted({
             str(item.relation_type or "")
@@ -1305,6 +1362,8 @@ relation ontology-assertion,
             "pruneResult": prune_result,
             "saveResult": save_result,
             "nativeReasoningProfile": native_profile,
+            "ruleboxMetadata": rulebox_metadata,
+            **rulebox_metadata,
         }
 
     def write_inferencebox_graph(self, graph: PortfolioOntology) -> Dict[str, object]:
@@ -1367,6 +1426,7 @@ relation ontology-assertion,
                 "saved": False,
                 "status": "error",
                 "graphStore": "typedb",
+                "reasonCode": typedb_error_code(error),
                 "reason": str(error)[:220],
                 "entityCount": len(node_rows),
                 "relationCount": len(relation_rows),
@@ -1465,6 +1525,7 @@ relation ontology-assertion,
                 "reasoningMode": "typedb-typeql-read",
                 "querySource": "typedb-typeql",
                 "typedbReadStatus": "error",
+                "reasonCode": typedb_error_code(error),
                 "typedbReadReason": str(error)[:180],
                 "reason": "TypeDB InferenceBox 조회 실패: " + str(error)[:180],
                 "symbols": clean_symbols,
@@ -1508,6 +1569,7 @@ relation ontology-assertion,
         native_trace_rows = [row for row in native_entity_rows if str(row.get("kind") or "") == "inference-trace"]
         ignored_relation_count = len(relation_rows) - len(native_relation_rows)
         ignored_trace_count = len([row for row in entity_rows if str(row.get("kind") or "") == "inference-trace"]) - len(native_trace_rows)
+        generation_rulebox_metadata = inference_rulebox_metadata(scoped_entity_rows, scoped_relation_rows)
         rowsets = {
             "entityCounts": [{"entityCount": len(native_entity_rows), "nativeEntityCount": len(native_entity_rows)}],
             "relationCounts": [{"relationCount": len(native_relation_rows), "nativeRelationCount": len(native_relation_rows)}],
@@ -1537,6 +1599,7 @@ relation ontology-assertion,
             "inactiveGenerationRelationCount": max(0, len(all_relation_rows) - len(scoped_relation_rows)) if generation_scoped else 0,
             "ignoredNonNativeRelationCount": ignored_relation_count,
             "ignoredNonNativeTraceCount": ignored_trace_count,
+            **generation_rulebox_metadata,
         })
         return snapshot
 
@@ -1634,9 +1697,11 @@ def typedb_inferencebox_graph(
     graph: PortfolioOntology,
     generation_id: str = None,
     generation_at: str = None,
+    rulebox_metadata: Dict[str, object] = None,
 ) -> PortfolioOntology:
     generation_id = str(generation_id or inference_generation_id())
     generation_at = str(generation_at or utc_now())
+    rulebox_metadata = dict(rulebox_metadata or {})
     inference_graph = PortfolioOntology(str(graph.portfolio_id or "typedb-inferencebox"))
     id_map: Dict[str, str] = {}
     for item in graph.entities:
@@ -1650,7 +1715,7 @@ def typedb_inferencebox_graph(
             id_map.get(item.entity_id, item.entity_id),
             item.label,
             item.kind,
-            typedb_reasoned_properties(item.properties, generation_id, generation_at, item.entity_id),
+            typedb_reasoned_properties(item.properties, generation_id, generation_at, item.entity_id, rulebox_metadata),
         )
         for item in graph.entities
         if str((item.properties or {}).get("ontologyBox") or "") == "InferenceBox"
@@ -1662,7 +1727,7 @@ def typedb_inferencebox_graph(
             item.relation_type,
             item.weight,
             [id_map.get(value, value) for value in list(item.evidence_ids or [])],
-            typedb_reasoned_properties(item.properties, generation_id, generation_at),
+            typedb_reasoned_properties(item.properties, generation_id, generation_at, rulebox_metadata=rulebox_metadata),
         )
         for item in graph.relations
         if str((item.properties or {}).get("ontologyBox") or "") == "InferenceBox"
@@ -1674,7 +1739,7 @@ def typedb_inferencebox_graph(
             item.kind,
             item.source,
             item.summary,
-            typedb_reasoned_properties(item.value, generation_id, generation_at, item.evidence_id),
+            typedb_reasoned_properties(item.value, generation_id, generation_at, item.evidence_id, rulebox_metadata),
             item.confidence,
         )
         for item in graph.evidence
@@ -1686,6 +1751,7 @@ def typedb_inferencebox_graph(
         "materializationSource": "typedb-abox-rulebox",
         "inferenceGenerationId": generation_id,
         "inferenceGenerationAt": generation_at,
+        **rulebox_metadata,
     }
     return inference_graph
 
@@ -1695,8 +1761,12 @@ def typedb_reasoned_properties(
     generation_id: str = "",
     generation_at: str = "",
     original_id: str = "",
+    rulebox_metadata: Dict[str, object] = None,
 ) -> Dict[str, object]:
     payload = dict(properties or {})
+    for key, value in dict(rulebox_metadata or {}).items():
+        if value not in (None, "", [], {}):
+            payload.setdefault(key, value)
     payload.setdefault("ontologyBox", "InferenceBox")
     payload.setdefault("box", "InferenceBox")
     payload["nativeTypeDbReasoned"] = True
@@ -1715,6 +1785,37 @@ def typedb_reasoned_properties(
     if original_id:
         payload["originalId"] = original_id
     return payload
+
+
+def inference_rulebox_metadata(
+    entity_rows: Iterable[Dict[str, object]],
+    relation_rows: Iterable[Dict[str, object]],
+) -> Dict[str, object]:
+    keys = [
+        "ruleboxRulesHash",
+        "ruleboxShortHash",
+        "ruleboxRuleCount",
+        "ruleboxConditionCount",
+        "ruleboxDerivationCount",
+        "ruleboxEngineVersion",
+    ]
+    metadata: Dict[str, object] = {}
+    for row in list(entity_rows or []) + list(relation_rows or []):
+        if not isinstance(row, dict):
+            continue
+        props = json_object(row.get("propertiesJson"))
+        props.update(json_object(row.get("valueJson")))
+        source = {**props, **row}
+        for key in keys:
+            value = source.get(key)
+            if value not in (None, "", [], {}) and key not in metadata:
+                metadata[key] = value
+        if all(key in metadata for key in keys):
+            break
+    for key in ["ruleboxRuleCount", "ruleboxConditionCount", "ruleboxDerivationCount"]:
+        if key in metadata:
+            metadata[key] = int(number_or_none(metadata.get(key)) or 0)
+    return metadata
 
 
 def row_inference_generation_id(row: Dict[str, object]) -> str:

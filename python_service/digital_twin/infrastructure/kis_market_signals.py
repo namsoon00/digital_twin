@@ -10,6 +10,7 @@ from typing import Callable, Dict, Iterable, List, Optional, Tuple
 from ..domain.data_freshness import combine_quality
 from ..domain.market_data import known_stock, number, pct_distance
 from ..domain.portfolio import Position, utc_now_iso
+from .external_signal_utils import ExternalCircuitOpen, root_api_error
 from .operational_store import market_quote_cache
 from .settings import runtime_settings
 
@@ -331,9 +332,11 @@ def comparable_stage_values(payload: Dict[str, object], keys: Iterable[str]) -> 
 class KISAPIError(RuntimeError):
     def __init__(self, stage: str, error: Exception):
         self.stage = str(stage or "")
-        self.original_error = error
+        self.original_error = root_api_error(error)
         self.http_status = int(getattr(error, "code", 0) or 0)
-        self.message = "KIS " + self.stage + " 단계 실패 · " + http_error_text(error)
+        if not self.http_status:
+            self.http_status = int(getattr(self.original_error, "code", 0) or 0)
+        self.message = "KIS " + self.stage + " 단계 실패 · " + http_error_text(self.original_error)
         super().__init__(self.message)
 
 
@@ -502,9 +505,29 @@ class KISMarketSignalProvider:
         if self.consecutive_failures >= self.circuit_failure_threshold():
             self.circuit_open_until = datetime.now(timezone.utc) + timedelta(minutes=self.circuit_cooldown_minutes())
             self.diagnostics["circuitOpen"] = True
+            self.diagnostics["circuitOpenUntil"] = self.circuit_open_until.isoformat().replace("+00:00", "Z")
+
+    def record_circuit_skip(self, stage: str, symbol: str) -> None:
+        failures = self.diagnostics.get("failures")
+        if not isinstance(failures, list):
+            failures = []
+            self.diagnostics["failures"] = failures
+        failures.append({
+            "stage": str(stage or ""),
+            "symbol": str(symbol or ""),
+            "message": http_error_text(self.circuit_open_error()),
+        })
+        del failures[:-8]
+        self.diagnostics["circuitOpen"] = True
+        if self.circuit_open_until:
+            self.diagnostics["circuitOpenUntil"] = self.circuit_open_until.isoformat().replace("+00:00", "Z")
 
     def circuit_open(self) -> bool:
         return bool(self.circuit_open_until and self.circuit_open_until > datetime.now(timezone.utc))
+
+    def circuit_open_error(self) -> ExternalCircuitOpen:
+        opened_until = self.circuit_open_until.isoformat().replace("+00:00", "Z") if self.circuit_open_until else ""
+        return ExternalCircuitOpen("circuit open until " + opened_until if opened_until else "circuit open")
 
     def request(
         self,
@@ -515,6 +538,8 @@ class KISMarketSignalProvider:
         body: Dict[str, object] = None,
         query: Dict[str, str] = None,
     ) -> Dict[str, object]:
+        if self.circuit_open():
+            raise KISAPIError(stage, self.circuit_open_error())
         last_error: Exception = RuntimeError("unknown error")
         for attempt in range(self.retry_attempts()):
             try:
@@ -715,6 +740,7 @@ class KISMarketSignalProvider:
 
     def fetch_stage(self, symbol: str, stage: str, path: str, tr_id: str):
         if self.circuit_open():
+            self.record_circuit_skip(stage, symbol)
             return None
         try:
             payload = self.request(stage, "GET", path, self.auth_headers(tr_id), query=self.query(symbol))
@@ -873,6 +899,7 @@ class KISMarketSignalProvider:
 
         for symbol, cached in stale_symbols:
             if self.circuit_open():
+                self.record_circuit_skip("circuit", symbol)
                 if cached:
                     cached = self.signal_for_current_session(cached)
                     cached["dataQuality"] = "cached"

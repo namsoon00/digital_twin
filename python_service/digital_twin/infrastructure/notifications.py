@@ -11,11 +11,13 @@ from ..domain.notification_ai import enrich_notification_ai_context
 from ..domain.notification_templates import alert_context, text_context
 from ..domain.notifications import NotificationJob
 from ..domain.portfolio import AlertEvent
+from .external_signal_utils import guarded_external_call, root_api_error
 from .settings import runtime_settings
 
 
 TELEGRAM_HTML_PATTERN = re.compile(r"</?(?:b|strong|i|em|u|ins|s|strike|del|code|pre|a|blockquote)(?:\s+[^>]*)?>", re.IGNORECASE)
 TELEGRAM_MESSAGE_LIMIT = 3900
+TELEGRAM_API_GUARD_STATE: Dict[str, object] = {}
 FORMULA_SETTING_KEYS = [
     "buyScoreFormula",
     "sellScoreFormula",
@@ -90,8 +92,19 @@ class TelegramNotifier:
             headers={"Content-Type": "application/json", "Accept": "application/json"},
         )
         try:
-            with urllib.request.urlopen(request, timeout=12) as response:
-                payload = json.loads(response.read().decode("utf-8") or "{}")
+            def send_request():
+                with urllib.request.urlopen(request, timeout=12) as response:
+                    return json.loads(response.read().decode("utf-8") or "{}")
+
+            payload = guarded_external_call(
+                runtime_settings(),
+                "Telegram",
+                "sendMessage",
+                send_request,
+                state=TELEGRAM_API_GUARD_STATE,
+                rate_limit_seconds=0,
+            )
+            if isinstance(payload, dict):
                 if payload.get("ok") is False:
                     return NotificationResult(False, self.label, str(payload.get("description") or "발송 실패"))
         except urllib.error.HTTPError as error:
@@ -106,6 +119,20 @@ class TelegramNotifier:
                 reason = reason + " · " + detail
             return NotificationResult(False, self.label, reason)
         except (urllib.error.URLError, ValueError) as error:
+            return NotificationResult(False, self.label, str(error))
+        except RuntimeError as error:
+            original = root_api_error(error)
+            if isinstance(original, urllib.error.HTTPError):
+                detail = ""
+                try:
+                    payload = json.loads(original.read().decode("utf-8", "replace") or "{}")
+                    detail = str(payload.get("description") or "")
+                except (ValueError, OSError):
+                    detail = ""
+                reason = str(error)
+                if detail:
+                    reason = reason + " · " + detail
+                return NotificationResult(False, self.label, reason)
             return NotificationResult(False, self.label, str(error))
         return NotificationResult(True, self.label)
 

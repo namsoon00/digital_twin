@@ -13,6 +13,7 @@ from typing import Callable, Dict, Iterable, List, Optional, Tuple
 from ..domain.accounts import split_symbols
 from ..domain.market_data import known_stock, number
 from ..domain.portfolio import utc_now_iso
+from .external_signal_utils import guarded_external_call
 from .kis_market_signals import KIS_CACHE_ACCOUNT_ID, KIS_CACHE_PROVIDER, clean_symbol
 from .operational_store import market_quote_cache
 from .settings import runtime_settings
@@ -22,6 +23,7 @@ KIS_REALTIME_DEFAULT_WS_URL = "ws://ops.koreainvestment.com:21000"
 KIS_REALTIME_DEMO_WS_URL = "ws://ops.koreainvestment.com:31000"
 KIS_TR_CCN_PRICE = "H0STCNT0"
 KIS_TR_ORDERBOOK = "H0STASP0"
+KIS_REALTIME_API_GUARD_STATE: Dict[str, object] = {}
 
 CCNL_COLUMNS = [
     "MKSC_SHRN_ISCD", "STCK_CNTG_HOUR", "STCK_PRPR", "PRDY_VRSS_SIGN",
@@ -373,15 +375,22 @@ class KISRealtimeWebSocketClient:
     def fetch_approval_key(self) -> str:
         if self.approval_key:
             return self.approval_key
-        payload = self.http_json(
-            self.base_url + "/oauth2/Approval",
-            {
-                "grant_type": "client_credentials",
-                "appkey": self.app_key,
-                "secretkey": self.app_secret,
-            },
-            {"content-type": "application/json; charset=utf-8"},
-            self.timeout_seconds(),
+        payload = guarded_external_call(
+            self.settings,
+            "KIS WebSocket",
+            "oauth2/Approval",
+            lambda: self.http_json(
+                self.base_url + "/oauth2/Approval",
+                {
+                    "grant_type": "client_credentials",
+                    "appkey": self.app_key,
+                    "secretkey": self.app_secret,
+                },
+                {"content-type": "application/json; charset=utf-8"},
+                self.timeout_seconds(),
+            ),
+            state=KIS_REALTIME_API_GUARD_STATE,
+            rate_limit_seconds=0,
         )
         key = str(payload.get("approval_key") or "").strip()
         if not key:

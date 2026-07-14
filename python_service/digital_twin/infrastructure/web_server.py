@@ -59,6 +59,7 @@ from ..domain.notification_templates import DEFAULT_NOTIFICATION_TEMPLATES, MESS
 from ..domain.parsing import parse_assignments
 from ..domain.portfolio import utc_now_iso
 from ..infrastructure.event_bus import default_event_bus
+from ..infrastructure.external_signal_utils import ExternalCircuitOpen, ExternalRateLimited, external_call_target, guarded_external_call
 from ..infrastructure.mock_market import mock_market_payload, mock_market_scenario_list
 from ..infrastructure.ontology_graph_store import ontology_repository_from_settings
 from ..infrastructure.ontology_projection import PortfolioOntologyProjectionRecorder
@@ -72,6 +73,7 @@ PUBLIC_DIR = ROOT_DIR / "public"
 MEMORY_CATEGORIES = ["identity", "preference", "finance", "travel", "asset", "schedule", "work", "other"]
 DOMAIN_TYPES = ["stock", "trip", "asset", "schedule", "task", "note"]
 MAX_BODY_BYTES = 1024 * 1024
+WEB_PROXY_API_GUARD_STATE: Dict[str, object] = {}
 
 NON_CADENCE_MESSAGE_GUIDES = {
     "modelReview": "판단 변화 알림이 발생하면 별도 워커가 충분히 분석한 뒤 보냅니다.",
@@ -1455,17 +1457,40 @@ def parse_number(value):
 
 
 def fetch_text(target_url: str, timeout: int = 8, headers: Dict[str, str] = None) -> str:
-    request = urllib.request.Request(
-        target_url,
-        headers={"User-Agent": "OrbitAlpha/0.1", **(headers or {})},
-        method="GET",
+    def fetch() -> str:
+        request = urllib.request.Request(
+            target_url,
+            headers={"User-Agent": "OrbitAlpha/0.1", **(headers or {})},
+            method="GET",
+        )
+        with urllib.request.urlopen(request, timeout=timeout) as response:
+            return response.read().decode("utf-8")
+
+    return guarded_external_call(
+        runtime_settings(),
+        web_proxy_source_for_url(target_url),
+        external_call_target(target_url),
+        fetch,
+        state=WEB_PROXY_API_GUARD_STATE,
+        rate_limit_seconds=0,
     )
-    with urllib.request.urlopen(request, timeout=timeout) as response:
-        return response.read().decode("utf-8")
 
 
 def fetch_json_url(target_url: str, timeout: int = 8, headers: Dict[str, str] = None):
     return json.loads(fetch_text(target_url, timeout=timeout, headers={"Accept": "application/json", **(headers or {})}))
+
+
+def web_proxy_source_for_url(target_url: str) -> str:
+    host = urllib.parse.urlparse(str(target_url or "")).netloc.lower()
+    if "stlouisfed.org" in host:
+        return "FRED"
+    if "opendart.fss.or.kr" in host:
+        return "OpenDART"
+    if "m.stock.naver.com" in host:
+        return "Naver Finance"
+    if "stooq.com" in host:
+        return "Stooq"
+    return "Web Proxy"
 
 
 def normalize_fred_observations_url(query: Dict[str, List[str]]) -> str:
@@ -1972,7 +1997,7 @@ class DigitalTwinHandler(BaseHTTPRequestHandler):
                 self.serve_static(path)
         except ValueError as error:
             self.send_payload(400, {"error": str(error) or "잘못된 요청입니다."})
-        except (urllib.error.URLError, TimeoutError) as error:
+        except (urllib.error.URLError, TimeoutError, ExternalCircuitOpen, ExternalRateLimited) as error:
             self.send_payload(502, {"error": str(error) or "외부 데이터 요청 실패"})
         except Exception as error:
             self.send_payload(500, {"error": str(error) or "서버 오류"})

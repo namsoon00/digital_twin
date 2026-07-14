@@ -59,22 +59,23 @@ from digital_twin.domain.notifications import NotificationJob
 from digital_twin.domain.parsing import parse_assignments
 from digital_twin.domain.portfolio import AccountSnapshot, AlertEvent, Position, utc_now_iso
 from digital_twin.infrastructure.event_bus import EventBus, JsonEventLog
+from digital_twin.infrastructure.external_signal_utils import ExternalCircuitOpen, guarded_external_call
 from digital_twin.infrastructure.external_signals import ExternalSignalProvider
 from digital_twin.infrastructure.json_monitor_state import MonitorStore
 from digital_twin.infrastructure.kis_market_signals import KIS_CACHE_ACCOUNT_ID, KIS_CACHE_PROVIDER, KISMarketSignalProvider
-from digital_twin.infrastructure.kis_realtime_ws import CCNL_COLUMNS, KIS_TR_CCN_PRICE, KIS_TR_ORDERBOOK, ORDERBOOK_COLUMNS, KISRealtimeWebSocketClient
+from digital_twin.infrastructure.kis_realtime_ws import CCNL_COLUMNS, KIS_REALTIME_API_GUARD_STATE, KIS_TR_CCN_PRICE, KIS_TR_ORDERBOOK, ORDERBOOK_COLUMNS, KISRealtimeWebSocketClient
 from digital_twin.infrastructure.model_review_queue import ModelReviewEnqueuer, ModelReviewJobStore
 from digital_twin.infrastructure.mock_market import mock_market_payload
 from digital_twin.infrastructure.graph_store_payloads import safe_relation_type
 from digital_twin.infrastructure.typedb_ontology import TypeDBOntologyGraphRepository, NullTypeDBOntologyGraphRepository
-from digital_twin.infrastructure.news_sources import NewsSourceGateway
+from digital_twin.infrastructure.news_sources import NEWS_API_GUARD_STATE, NewsSourceGateway
 from digital_twin.infrastructure.notifications import TelegramNotifier, send_events
 from digital_twin.infrastructure.ontology_projection import PortfolioOntologyProjectionRecorder
 from digital_twin.infrastructure.service_factory import flow_lens_snapshot
 from digital_twin.infrastructure.settings import runtime_settings, save_runtime_settings
 from digital_twin.infrastructure.mysql_schema_tuning import MYSQL_OPERATIONAL_KEY_PARTITIONS, mysql_partitioning_mode
 from digital_twin.infrastructure.symbol_sources import RemoteSymbolSourceGateway, parse_krx_kind_table, parse_nasdaq_listed
-from digital_twin.infrastructure.toss_snapshots import TossProvider, account_cash_amount, normalize_price_items, select_account
+from digital_twin.infrastructure.toss_snapshots import TossAPIError, TossProvider, account_cash_amount, normalize_price_items, select_account, toss_json
 from digital_twin.infrastructure.web_server import list_notification_rules_payload, list_templates_payload, notification_jobs_payload, notification_schedules_payload, notification_template_test_payload, realtime_status_payload, save_notification_rule_payload, settings_status_payload
 from digital_twin.scheduler import MonitorRunner
 from mysql_fixtures import (
@@ -1649,6 +1650,29 @@ class PythonServiceTests(unittest.TestCase):
         self.assertIn("Toss token 단계 실패", status)
         self.assertIn("HTTP 401 Unauthorized", status)
         self.assertNotIn("https://example.test", status)
+
+    def test_toss_json_opens_circuit_without_calling_fallback(self):
+        calls = []
+        guard_state = {}
+
+        def fail_http_json(method, url, headers, body=None, timeout=12):
+            calls.append(url)
+            raise urllib.error.URLError("temporary outage")
+
+        settings = {
+            "externalApiRetryAttempts": "1",
+            "externalApiCircuitFailures": "2",
+            "externalApiCircuitCooldownMinutes": "30",
+        }
+        with mock.patch("digital_twin.infrastructure.toss_snapshots.http_json", side_effect=fail_http_json):
+            for _ in range(2):
+                with self.assertRaises(TossAPIError):
+                    toss_json("accounts", "GET", "https://example.test/api/v1/accounts", {}, attempts=1, settings=settings, guard_state=guard_state)
+            with self.assertRaises(TossAPIError) as context:
+                toss_json("accounts", "GET", "https://example.test/api/v1/accounts", {}, attempts=1, settings=settings, guard_state=guard_state)
+
+        self.assertEqual(2, len(calls))
+        self.assertIn("circuit open until", str(context.exception))
 
     def test_toss_price_normalizer_accepts_official_result_shape(self):
         items = normalize_price_items({"result": [{"symbol": "AAPL", "lastPrice": "185.70", "currency": "USD"}]})
@@ -7243,6 +7267,37 @@ class PythonServiceTests(unittest.TestCase):
         self.assertIn("timeout", statuses[0]["message"])
         self.assertEqual("yahoo_finance", statuses[1]["source"])
 
+    def test_news_source_gateway_default_fetcher_opens_circuit(self):
+        calls = []
+        NEWS_API_GUARD_STATE.clear()
+
+        def fail_default_json(url, headers=None, timeout=8.0):
+            calls.append(url)
+            raise urllib.error.URLError("gdelt unavailable")
+
+        gateway = NewsSourceGateway({
+            "newsCollectionProviders": "gdelt",
+            "newsCollectionPerSymbolLimit": "2",
+            "newsCollectionLookbackMinutes": "1440",
+            "newsCollectionMinRelevanceScore": "35",
+            "externalApiRetryAttempts": "1",
+            "externalApiCircuitFailures": "2",
+            "externalApiCircuitCooldownMinutes": "30",
+        })
+        target = NewsCollectionTarget("AAPL", "Apple", "NASDAQ", "USD", "Technology")
+
+        try:
+            with mock.patch("digital_twin.infrastructure.news_sources.default_json_fetcher", side_effect=fail_default_json):
+                for _ in range(2):
+                    _items, statuses = gateway.collect_for_target(target)
+                    self.assertFalse(statuses[0]["ok"])
+                _items, statuses = gateway.collect_for_target(target)
+        finally:
+            NEWS_API_GUARD_STATE.clear()
+
+        self.assertEqual(2, len(calls))
+        self.assertIn("circuit open until", statuses[0]["message"])
+
     def test_yahoo_finance_rss_maps_kr_symbol_to_yahoo_suffix(self):
         published = datetime.now(timezone.utc).strftime("%a, %d %b %Y %H:%M:%S GMT")
         calls = []
@@ -7625,6 +7680,27 @@ class PythonServiceTests(unittest.TestCase):
 
         self.assertEqual(2, len(calls))
         self.assertTrue(any("circuit open until" in item["message"] for item in third["statuses"]))
+
+    def test_guarded_external_call_raises_error_when_circuit_is_open(self):
+        calls = []
+        state = {}
+        settings = {
+            "externalApiRetryAttempts": "1",
+            "externalApiCircuitFailures": "2",
+            "externalApiCircuitCooldownMinutes": "30",
+        }
+
+        def fail_fetch():
+            calls.append("called")
+            raise urllib.error.URLError("temporary outage")
+
+        for _ in range(2):
+            with self.assertRaises(RuntimeError):
+                guarded_external_call(settings, "Example API", "quotes", fail_fetch, state=state)
+        with self.assertRaises(ExternalCircuitOpen):
+            guarded_external_call(settings, "Example API", "quotes", fail_fetch, state=state)
+
+        self.assertEqual(2, len(calls))
 
     def test_external_signal_provider_caps_fred_series_bulk(self):
         calls = []

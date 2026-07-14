@@ -150,7 +150,7 @@ def build_symbol_universe_service(settings=None) -> SymbolUniverseService:
     configured_settings = settings or runtime_settings()
     return SymbolUniverseService(
         store=stores.symbol_universe_store(configured_settings),
-        source_gateway=RemoteSymbolSourceGateway(),
+        source_gateway=RemoteSymbolSourceGateway(configured_settings),
         settings=configured_settings,
         quote_cache=stores.market_quote_cache(configured_settings),
     )

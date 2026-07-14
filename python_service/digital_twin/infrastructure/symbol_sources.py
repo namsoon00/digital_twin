@@ -7,23 +7,49 @@ from typing import Dict, List
 
 from ..domain.market_data import sector_from_symbol
 from ..domain.symbol_universe import ListedSymbol, utc_now_iso
+from .external_signal_utils import external_call_target, guarded_external_call
+from .settings import runtime_settings
 
 
 NASDAQ_LISTED_URL = "https://www.nasdaqtrader.com/dynamic/symdir/nasdaqlisted.txt"
 KRX_KIND_URL = "https://kind.krx.co.kr/corpgeneral/corpList.do"
+SYMBOL_API_GUARD_STATE: Dict[str, object] = {}
 
 
-def fetch_text(url: str, timeout: int = 15) -> str:
-    request = urllib.request.Request(
-        url,
-        headers={
-            "User-Agent": "ExitLens/0.1 (+local symbol universe refresh)",
-            "Accept": "text/html,text/plain,application/octet-stream,*/*",
-        },
+def symbol_source_for_url(url: str) -> str:
+    host = urllib.parse.urlparse(str(url or "")).netloc.lower()
+    if "nasdaqtrader.com" in host:
+        return "Nasdaq Trader Symbol Directory"
+    if "krx.co.kr" in host:
+        return "KRX KIND Listed Companies"
+    return "Symbol Universe"
+
+
+def fetch_text(url: str, timeout: int = 15, settings: Dict[str, str] = None, guard_state: Dict[str, object] = None) -> str:
+    def fetch() -> str:
+        request = urllib.request.Request(
+            url,
+            headers={
+                "User-Agent": "ExitLens/0.1 (+local symbol universe refresh)",
+                "Accept": "text/html,text/plain,application/octet-stream,*/*",
+            },
+        )
+        with urllib.request.urlopen(request, timeout=timeout) as response:
+            raw = response.read()
+            content_type = response.headers.get("Content-Type", "")
+        return decode_response_text(raw, content_type)
+
+    return guarded_external_call(
+        settings or runtime_settings(),
+        symbol_source_for_url(url),
+        external_call_target(url),
+        fetch,
+        state=guard_state if guard_state is not None else SYMBOL_API_GUARD_STATE,
+        rate_limit_seconds=0,
     )
-    with urllib.request.urlopen(request, timeout=timeout) as response:
-        raw = response.read()
-        content_type = response.headers.get("Content-Type", "")
+
+
+def decode_response_text(raw: bytes, content_type: str) -> str:
     lower = content_type.lower()
     if "charset=" in lower:
         charset = lower.split("charset=", 1)[1].split(";", 1)[0].strip()
@@ -157,13 +183,13 @@ def parse_krx_kind_table(text: str, market: str, source_url: str = "", fetched_a
     return result
 
 
-def fetch_market_symbols(market: str) -> List[ListedSymbol]:
+def fetch_market_symbols(market: str, settings: Dict[str, str] = None, guard_state: Dict[str, object] = None) -> List[ListedSymbol]:
     normalized = str(market or "").upper()
     if normalized == "NASDAQ":
-        return parse_nasdaq_listed(fetch_text(NASDAQ_LISTED_URL), fetched_at=utc_now_iso())
+        return parse_nasdaq_listed(fetch_text(NASDAQ_LISTED_URL, settings=settings, guard_state=guard_state), fetched_at=utc_now_iso())
     if normalized in {"KOSPI", "KOSDAQ"}:
         url = krx_kind_url(normalized)
-        return parse_krx_kind_table(fetch_text(url), normalized, source_url=url, fetched_at=utc_now_iso())
+        return parse_krx_kind_table(fetch_text(url, settings=settings, guard_state=guard_state), normalized, source_url=url, fetched_at=utc_now_iso())
     raise ValueError("지원하지 않는 시장입니다: " + str(market))
 
 
@@ -177,8 +203,12 @@ def source_descriptor(market: str) -> Dict[str, str]:
 
 
 class RemoteSymbolSourceGateway:
+    def __init__(self, settings: Dict[str, str] = None, guard_state: Dict[str, object] = None):
+        self.settings = settings or runtime_settings()
+        self.guard_state = guard_state if guard_state is not None else SYMBOL_API_GUARD_STATE
+
     def fetch_market_symbols(self, market: str) -> List[ListedSymbol]:
-        return fetch_market_symbols(market)
+        return fetch_market_symbols(market, settings=self.settings, guard_state=self.guard_state)
 
     def source_descriptor(self, market: str) -> Dict[str, str]:
         return source_descriptor(market)

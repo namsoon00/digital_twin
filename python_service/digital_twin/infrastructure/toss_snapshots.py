@@ -18,6 +18,7 @@ from ..domain.portfolio_calculations import (
 )
 from ..domain.strategy import decisions_for_positions
 from .external_signals import ExternalSignalProvider
+from .external_signal_utils import guarded_external_call, root_api_error
 from .kis_market_signals import KISMarketSignalProvider
 from .operational_store import market_quote_cache
 from .settings import currency_rates, runtime_settings
@@ -29,9 +30,11 @@ MARKET_DATA_ACCOUNT_ID = "__market_data__"
 class TossAPIError(RuntimeError):
     def __init__(self, stage: str, error: Exception):
         self.stage = str(stage or "")
-        self.original_error = error
+        self.original_error = root_api_error(error)
         self.http_status = int(getattr(error, "code", 0) or 0)
-        super().__init__("Toss " + self.stage + " 단계 실패 · " + http_error_text(error))
+        if not self.http_status:
+            self.http_status = int(getattr(self.original_error, "code", 0) or 0)
+        super().__init__("Toss " + self.stage + " 단계 실패 · " + http_error_text(self.original_error))
 
 
 def http_json(method: str, url: str, headers: Dict[str, str], body: bytes = None, timeout: int = 12) -> Dict[str, object]:
@@ -64,17 +67,23 @@ def toss_json(
     body: bytes = None,
     timeout: int = 12,
     attempts: int = 2,
+    settings: Dict[str, str] = None,
+    guard_state: Dict[str, object] = None,
 ) -> Dict[str, object]:
-    last_error: Exception = RuntimeError("unknown error")
-    for attempt in range(max(1, attempts)):
-        try:
-            return http_json(method, url, headers, body=body, timeout=timeout)
-        except Exception as error:  # noqa: BLE001 - adapter normalizes vendor failures.
-            last_error = error
-            if attempt + 1 >= max(1, attempts) or not retryable_http_error(error):
-                break
-            time.sleep(0.35 * (attempt + 1))
-    raise TossAPIError(stage, last_error)
+    try:
+        return guarded_external_call(
+            settings or runtime_settings(),
+            "Toss",
+            stage,
+            lambda: http_json(method, url, headers, body=body, timeout=timeout),
+            state=guard_state,
+            sleep=time.sleep,
+            attempts=max(1, attempts),
+            rate_limit_seconds=0,
+            retry_delay_seconds=0.35,
+        )
+    except Exception as error:  # noqa: BLE001 - adapter normalizes vendor failures.
+        raise TossAPIError(stage, error) from error
 
 
 def form_body(payload: Dict[str, str]) -> bytes:
@@ -320,6 +329,7 @@ class TossProvider:
         self.account = account
         self.base_url = account.base_url.rstrip("/")
         self.quote_cache = quote_cache if quote_cache is not None else market_quote_cache(runtime_settings())
+        self.api_guard_state: Dict[str, object] = {}
         self.stage_failures: Dict[str, Dict[str, object]] = {}
         self.auth_refreshes = 0
 
@@ -362,7 +372,7 @@ class TossProvider:
         body: bytes = None,
     ) -> Tuple[Dict[str, object], str]:
         try:
-            payload = toss_json(stage, method, url, self.auth_headers(token, extra_headers), body=body)
+            payload = toss_json(stage, method, url, self.auth_headers(token, extra_headers), body=body, guard_state=self.api_guard_state)
             return payload, token
         except TossAPIError as error:
             if error.http_status != 401:
@@ -372,7 +382,7 @@ class TossProvider:
             refreshed = self.fetch_access_token()
             self.auth_refreshes += 1
             try:
-                payload = toss_json(stage, method, url, self.auth_headers(refreshed, extra_headers), body=body)
+                payload = toss_json(stage, method, url, self.auth_headers(refreshed, extra_headers), body=body, guard_state=self.api_guard_state)
                 self.record_stage_failure(stage, error, recovered=True)
                 return payload, refreshed
             except TossAPIError as retry_error:
@@ -393,6 +403,7 @@ class TossProvider:
                     "client_id": self.account.client_id,
                     "client_secret": self.account.client_secret,
                 }),
+                guard_state=self.api_guard_state,
             )
         except TossAPIError as error:
             self.record_stage_failure("token", error)

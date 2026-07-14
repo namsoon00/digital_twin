@@ -16,6 +16,7 @@ from ..domain import news_analysis as news_domain
 from ..domain.investment_research import NewsCollectionTarget, ResearchEvidence, classify_news_relevance, compact_text, keyword_polarity, stable_evidence_token
 from ..domain.market_data import number
 from ..domain.portfolio import utc_now_iso
+from .external_signal_utils import external_call_target, guarded_external_call
 
 
 JsonFetcher = Callable[[str, Dict[str, str]], object]
@@ -24,6 +25,7 @@ TAG_RE = re.compile(r"<[^>]+>")
 DISABLED_VALUES = {"0", "false", "no", "off", "disabled"}
 ARTICLE_TEXT_LIMIT = 5000
 DEFAULT_NEWS_COLLECTION_PROVIDERS = ["yahoo_finance", "gdelt"]
+NEWS_API_GUARD_STATE: Dict[str, object] = {}
 RSS_PROVIDER_NAMES = {
     "google_rss_kr",
     "google_rss_us",
@@ -59,6 +61,17 @@ def default_text_fetcher(url: str, headers: Dict[str, str] = None, timeout: floa
     with urllib.request.urlopen(request, timeout=max(0.5, float(timeout or 8.0))) as response:
         charset = response.headers.get_content_charset() or "utf-8"
         return response.read().decode(charset, errors="replace")
+
+
+def news_source_for_url(url: str) -> str:
+    host = urllib.parse.urlparse(str(url or "")).netloc.lower()
+    if "gdeltproject.org" in host:
+        return "GDELT News"
+    if "finance.yahoo.com" in host:
+        return "Yahoo Finance RSS"
+    if "news.google.com" in host:
+        return "Google News"
+    return "News Article"
 
 
 def split_csv(raw: object, fallback: Iterable[str]) -> List[str]:
@@ -228,8 +241,34 @@ class NewsSourceGateway:
     ):
         self.settings = dict(settings or {})
         timeout = number(self.settings.get("newsCollectionTimeoutSeconds") or self.settings.get("externalApiTimeoutSeconds")) or 8.0
-        self.fetch_json = fetch_json or (lambda url, headers=None: default_json_fetcher(url, headers, timeout=timeout))
-        self.fetch_text = fetch_text or (lambda url, headers=None: default_text_fetcher(url, headers, timeout=timeout))
+        self.fetch_json = fetch_json or self.guarded_json_fetcher(timeout)
+        self.fetch_text = fetch_text or self.guarded_text_fetcher(timeout)
+
+    def guarded_json_fetcher(self, timeout: float) -> JsonFetcher:
+        def fetch(url: str, headers: Dict[str, str] = None) -> object:
+            return guarded_external_call(
+                self.settings,
+                news_source_for_url(url),
+                external_call_target(url),
+                lambda: default_json_fetcher(url, headers, timeout=timeout),
+                state=NEWS_API_GUARD_STATE,
+                rate_limit_seconds=0,
+            )
+
+        return fetch
+
+    def guarded_text_fetcher(self, timeout: float) -> TextFetcher:
+        def fetch(url: str, headers: Dict[str, str] = None) -> str:
+            return guarded_external_call(
+                self.settings,
+                news_source_for_url(url),
+                external_call_target(url),
+                lambda: default_text_fetcher(url, headers, timeout=timeout),
+                state=NEWS_API_GUARD_STATE,
+                rate_limit_seconds=0,
+            )
+
+        return fetch
 
     def providers(self) -> List[str]:
         return [

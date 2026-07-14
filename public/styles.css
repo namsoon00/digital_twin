@@ -2500,7 +2500,9 @@ h3 {
 }
 
 .accounts-view .admin-account-panel,
+.accounts-view .account-command-panel,
 .accounts-view .account-connections-panel,
+.accounts-view .account-history-panel,
 .accounts-view .account-balance-panel,
 .watchlist-view .account-watchlist-panel,
 .symbol-universe-view .symbol-universe-panel,
@@ -3407,6 +3409,7 @@ h3 {
 
 .account-command-panel,
 .account-connections-panel,
+.account-history-panel,
 .account-balance-panel {
   grid-column: 1 / -1;
 }
@@ -20070,6 +20073,16 @@ html[data-theme="dark"] .ontology-graph-expanded-toolbar .icon-button.danger {
 
   .account-section-tabs button {
     min-height: 48px;
+  }
+
+  .accounts-view .account-command-panel,
+  .accounts-view .account-connections-panel,
+  .accounts-view .account-history-panel,
+  .accounts-view .account-balance-panel,
+  .accounts-view .admin-account-panel {
+    width: 100%;
+    max-width: 1480px;
+    justify-self: center;
   }
 
   .account-balance-panel {

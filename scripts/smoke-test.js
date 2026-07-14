@@ -234,6 +234,7 @@ function checkFrontendAdminRender() {
     styles.indexOf("Desktop comfort rail") >= 0 &&
       /\.managed-page\s*\{[\s\S]*max-width: var\(--ds-page-content-width\);[\s\S]*justify-self: center;/.test(styles) &&
       /\.app-nav-command \.page-command-metrics\s*\{[\s\S]*display: none;/.test(styles) &&
+      /(?:\.accounts-view \.account-history-panel|\.account-history-panel)[\s\S]*grid-column: 1 \/ -1;/.test(styles) &&
       /\.account-balance-panel \.account-balance-hero\s*\{[\s\S]*grid-template-columns: minmax\(0, 1fr\) auto;/.test(styles) &&
       /\.account-balance-audit\s*\{[\s\S]*grid-template-columns: minmax\(360px, 0\.34fr\) minmax\(0, 1fr\);/.test(styles) &&
       /\.account-balance-ledger\s*\{[\s\S]*border: 1px solid var\(--ds-card-border\);/.test(styles) &&

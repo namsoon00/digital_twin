@@ -25,6 +25,13 @@ BASE_WORKERS = {
         "command": [sys.executable, "-u", "python_service/service.py", "market-data", "watch"],
         "needle": "python_service/service.py market-data watch",
     },
+    "kis-realtime": {
+        "label": "Python KIS realtime WebSocket worker",
+        "pid": data_dir() / "python-kis-realtime.pid",
+        "log": data_dir() / "python-kis-realtime.log",
+        "command": [sys.executable, "-u", "python_service/service.py", "kis-realtime", "watch"],
+        "needle": "python_service/service.py kis-realtime watch",
+    },
     "news": {
         "label": "Python news collector",
         "pid": data_dir() / "python-news.pid",

@@ -258,6 +258,55 @@ def coverage_has_fields(coverage: Dict[str, object], stage: str, keys: Iterable[
     return any(key in set(str(field) for field in fields or []) for key in keys)
 
 
+def fresh_websocket_stage(payload: Dict[str, object], stage: str, max_age_seconds: int) -> bool:
+    coverage = payload.get("marketSignalCoverage") if isinstance(payload.get("marketSignalCoverage"), dict) else {}
+    item = coverage.get(stage) if isinstance(coverage, dict) and isinstance(coverage.get(stage), dict) else {}
+    if not item or str(item.get("status") or "") != "available":
+        return False
+    if str(item.get("cadence") or "") != "websocket" and str(item.get("transport") or "") != "websocket":
+        return False
+    fetched_at = parse_iso(item.get("fetchedAt") or item.get("sourceAsOf") or payload.get("updatedAt"))
+    if not fetched_at:
+        return False
+    return datetime.now(timezone.utc) - fetched_at <= timedelta(seconds=max(1, int(max_age_seconds or 1)))
+
+
+def merge_fresh_websocket_stages(
+    signal: Dict[str, object],
+    cached: Dict[str, object],
+    max_age_seconds: int,
+) -> Dict[str, object]:
+    if not signal or not cached:
+        return signal
+    merged = dict(signal)
+    coverage = dict(merged.get("marketSignalCoverage") or {}) if isinstance(merged.get("marketSignalCoverage"), dict) else {}
+    cached_coverage = cached.get("marketSignalCoverage") if isinstance(cached.get("marketSignalCoverage"), dict) else {}
+    stage_keys = {
+        "ccnl": ["currentPrice", "changeRate", "volume", "volumeRatio", "tradingValue", "tradeStrength", "buyVolume", "sellVolume"],
+        "orderbook": ["orderbookBidVolume", "orderbookAskVolume", "bidAskImbalance"],
+    }
+    used = []
+    for stage, keys in stage_keys.items():
+        if not fresh_websocket_stage(cached, stage, max_age_seconds):
+            continue
+        for key in keys:
+            value = cached.get(key)
+            if value not in (None, ""):
+                merged[key] = value
+        if isinstance(cached_coverage.get(stage), dict):
+            coverage[stage] = dict(cached_coverage.get(stage) or {})
+        used.append(stage)
+    if used:
+        merged["marketSignalCoverage"] = coverage
+        merged["quoteSource"] = append_source(merged.get("quoteSource"), "KIS WebSocket")
+        merged["quoteStatus"] = "KIS 실시간 체결·호가 + 투자자 수급 반영"
+        merged["quoteMessage"] = append_message(
+            merged.get("quoteMessage"),
+            "신선한 KIS WebSocket 체결·호가를 REST 투자자 수급과 병합했습니다.",
+        )
+    return merged
+
+
 def investor_stage_values_reliable(coverage: Dict[str, object]) -> bool:
     item = coverage.get("investor") if isinstance(coverage, dict) else {}
     if not isinstance(item, dict) or not item:
@@ -747,6 +796,10 @@ class KISMarketSignalProvider:
         signal["marketSignalCoverage"] = coverage
         signal["marketSession"] = str(session.get("key") or "")
         signal["marketSessionLabel"] = str(session.get("label") or "")
+        signal["dataQuality"] = "actual"
+        signal["updatedAt"] = fetched_at
+        signal = merge_fresh_websocket_stages(signal, self.cached_signal(symbol), max(10, self.live_refresh_seconds() * 2))
+        coverage = signal.get("marketSignalCoverage") if isinstance(signal.get("marketSignalCoverage"), dict) else coverage
         included = []
         if coverage_has_fields(coverage, "price", ["currentPrice"]):
             included.append("현재가")
@@ -759,12 +812,17 @@ class KISMarketSignalProvider:
         if coverage_has_fields(coverage, "orderbook", ["orderbookBidVolume", "orderbookAskVolume"]):
             included.append("호가 잔량")
         included_text = ", ".join(included) if included else "응답 데이터"
-        signal["quoteStatus"] = "KIS " + included_text + " 반영"
-        signal["quoteMessage"] = "KIS " + included_text + "을 모델링 데이터에 반영했습니다."
+        if "KIS WebSocket" in str(signal.get("quoteSource") or ""):
+            signal["quoteStatus"] = "KIS 실시간 체결·호가 + 투자자 수급 반영"
+            signal["quoteMessage"] = append_message(
+                signal.get("quoteMessage"),
+                "KIS " + included_text + "을 모델링 데이터에 반영했습니다.",
+            )
+        else:
+            signal["quoteStatus"] = "KIS " + included_text + " 반영"
+            signal["quoteMessage"] = "KIS " + included_text + "을 모델링 데이터에 반영했습니다."
         if not microstructure_available:
             signal["quoteMessage"] = str(session.get("reason") or "") or signal["quoteMessage"]
-        signal["dataQuality"] = "actual"
-        signal["updatedAt"] = fetched_at
         return signal
 
     def symbols_for_positions(self, positions: Iterable[Position]) -> List[str]:

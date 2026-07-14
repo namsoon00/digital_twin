@@ -1,6 +1,7 @@
 import json
 import importlib
 import os
+import socket
 import sys
 import tempfile
 import unittest
@@ -17,6 +18,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from digital_twin.admin_preview import admin_preview_config, write_admin_preview
 from digital_twin.application.account_service import AccountApplicationService
 from digital_twin.application.flow_lens_service import FlowLensService
+from digital_twin.application.kis_realtime_service import KISRealtimeWebSocketRunner
 from digital_twin.application.market_data_collection_service import MARKET_DATA_ACCOUNT_ID, MarketDataCollectionRunner
 from digital_twin.application.model_review_service import ModelReviewRunner
 from digital_twin.application.news_collection_service import NewsCollectionRunner
@@ -58,6 +60,7 @@ from digital_twin.infrastructure.event_bus import EventBus, JsonEventLog
 from digital_twin.infrastructure.external_signals import ExternalSignalProvider
 from digital_twin.infrastructure.json_monitor_state import MonitorStore
 from digital_twin.infrastructure.kis_market_signals import KIS_CACHE_ACCOUNT_ID, KIS_CACHE_PROVIDER, KISMarketSignalProvider
+from digital_twin.infrastructure.kis_realtime_ws import CCNL_COLUMNS, KIS_TR_CCN_PRICE, KIS_TR_ORDERBOOK, ORDERBOOK_COLUMNS, KISRealtimeWebSocketClient
 from digital_twin.infrastructure.model_review_queue import ModelReviewEnqueuer, ModelReviewJobStore
 from digital_twin.infrastructure.mock_market import mock_market_payload
 from digital_twin.infrastructure.graph_store_payloads import safe_relation_type
@@ -134,6 +137,224 @@ class PythonServiceTests(unittest.TestCase):
         event.metadata = dict(event.metadata or {})
         event.metadata.setdefault("dataFreshness", self.fresh_data_freshness(source))
         return event
+
+    def kis_realtime_text(self, tr_id: str, columns: list, values: dict) -> str:
+        row = ["" for _item in columns]
+        for key, value in values.items():
+            row[columns.index(key)] = str(value)
+        return "0|" + tr_id + "|1|" + "^".join(row)
+
+    def test_kis_realtime_websocket_client_parses_and_saves_ccnl_orderbook(self):
+        cache = TestMarketQuoteCache(test_store_seed(self.temp.name))
+        client = KISRealtimeWebSocketClient(
+            {
+                "kisBaseUrl": "https://kis.example.test",
+                "kisWebSocketUrl": "ws://kis.example.test:21000",
+                "kisAppKey": "app",
+                "kisAppSecret": "secret",
+            },
+            quote_cache=cache,
+            http_json=lambda _url, _body, _headers, _timeout: {"approval_key": "approval"},
+            now_provider=lambda: "2026-07-14T00:00:00+00:00",
+        )
+
+        ccnl_text = self.kis_realtime_text(KIS_TR_CCN_PRICE, CCNL_COLUMNS, {
+            "MKSC_SHRN_ISCD": "005930",
+            "STCK_PRPR": "72000",
+            "PRDY_CTRT": "1.25",
+            "ACML_VOL": "1000000",
+            "ACML_TR_PBMN": "72000000000",
+            "CTTR": "118.5",
+            "SELN_CNTG_SMTN": "4000",
+            "SHNU_CNTG_SMTN": "6500",
+        })
+        orderbook_text = self.kis_realtime_text(KIS_TR_ORDERBOOK, ORDERBOOK_COLUMNS, {
+            "MKSC_SHRN_ISCD": "005930",
+            "TOTAL_ASKP_RSQN": "3000",
+            "TOTAL_BIDP_RSQN": "9000",
+            "ACML_VOL": "1000000",
+        })
+
+        self.assertEqual(["005930"], [item["symbol"] for item in client.apply_message(ccnl_text)])
+        self.assertEqual(["005930"], [item["symbol"] for item in client.apply_message(orderbook_text)])
+
+        cached = cache.load(KIS_CACHE_PROVIDER, KIS_CACHE_ACCOUNT_ID, "005930")
+        self.assertEqual(72000, cached["currentPrice"])
+        self.assertEqual(118.5, cached["tradeStrength"])
+        self.assertEqual(6500, cached["buyVolume"])
+        self.assertEqual(4000, cached["sellVolume"])
+        self.assertEqual(9000, cached["orderbookBidVolume"])
+        self.assertEqual(3000, cached["orderbookAskVolume"])
+        self.assertEqual(50.0, cached["bidAskImbalance"])
+        self.assertIn("KIS WebSocket", cached["quoteSource"])
+        self.assertEqual("websocket", cached["marketSignalCoverage"]["ccnl"]["cadence"])
+        self.assertEqual("websocket", cached["marketSignalCoverage"]["orderbook"]["cadence"])
+        self.assertTrue(cached["marketSignalCoverage"]["ccnl"]["realTime"])
+        self.assertTrue(cached["marketSignalCoverage"]["orderbook"]["realTime"])
+
+    def test_kis_realtime_websocket_collect_subscribes_price_and_orderbook(self):
+        cache = TestMarketQuoteCache(test_store_seed(self.temp.name))
+        sent = []
+        frames = [
+            self.kis_realtime_text(KIS_TR_CCN_PRICE, CCNL_COLUMNS, {
+                "MKSC_SHRN_ISCD": "005930",
+                "STCK_PRPR": "72000",
+                "CTTR": "118.5",
+            }),
+            self.kis_realtime_text(KIS_TR_ORDERBOOK, ORDERBOOK_COLUMNS, {
+                "MKSC_SHRN_ISCD": "005930",
+                "TOTAL_ASKP_RSQN": "3000",
+                "TOTAL_BIDP_RSQN": "9000",
+            }),
+        ]
+
+        class FakeWebSocket:
+            def __init__(self, _url, _timeout):
+                self.closed = False
+
+            def connect(self):
+                return None
+
+            def send_text(self, text):
+                sent.append(json.loads(text))
+
+            def recv_text(self, timeout=None):
+                if frames:
+                    return frames.pop(0)
+                raise socket.timeout()
+
+            def close(self):
+                self.closed = True
+
+        client = KISRealtimeWebSocketClient(
+            {
+                "kisBaseUrl": "https://kis.example.test",
+                "kisWebSocketUrl": "ws://kis.example.test:21000",
+                "kisAppKey": "app",
+                "kisAppSecret": "secret",
+            },
+            quote_cache=cache,
+            http_json=lambda _url, _body, _headers, _timeout: {"approval_key": "approval"},
+            websocket_factory=FakeWebSocket,
+        )
+
+        result = client.collect(["005930"], 1)
+
+        self.assertEqual("ok", result["status"])
+        self.assertEqual(2, result["savedCount"])
+        self.assertEqual({"H0STCNT0", "H0STASP0"}, {item["body"]["input"]["tr_id"] for item in sent})
+        self.assertTrue(all(item["header"]["approval_key"] == "approval" for item in sent))
+        self.assertEqual("005930", cache.load(KIS_CACHE_PROVIDER, KIS_CACHE_ACCOUNT_ID, "005930")["symbol"])
+
+    def test_kis_realtime_runner_publishes_ontology_reasoning_batch(self):
+        cache = TestMarketQuoteCache(test_store_seed(self.temp.name))
+        events = EventBus()
+        client = SimpleNamespace(enabled=lambda: True, configured=lambda: True)
+        selector = SimpleNamespace(symbols=lambda: ["005930"])
+        runner = KISRealtimeWebSocketRunner(
+            client=client,
+            symbol_selector=selector,
+            quote_cache=cache,
+            settings={"materialityGateEnabled": "0"},
+            event_publisher=events,
+        )
+
+        runner.record_updates([{
+            "symbol": "005930",
+            "previous": {"symbol": "005930", "currentPrice": 70000, "tradeStrength": 90},
+            "payload": {"symbol": "005930", "currentPrice": 72000, "tradeStrength": 118.5, "market": "KR", "dataQuality": "actual"},
+        }])
+        result = runner.flush_events(force=True)
+
+        self.assertEqual("ok", result["status"])
+        self.assertEqual([MARKET_DATA_COLLECTED, ONTOLOGY_REASONING_REQUESTED], [event.name for event in events.published])
+        self.assertEqual("kis-realtime-websocket", events.published[-1].payload["trigger"])
+        self.assertEqual(["005930"], events.published[-1].payload["symbols"])
+        self.assertIn("OrderBook", events.published[-1].payload["factTypes"])
+
+    def test_kis_market_signal_provider_preserves_fresh_websocket_ccnl_and_orderbook(self):
+        cache = TestMarketQuoteCache(test_store_seed(self.temp.name))
+        fetched_at = utc_now_iso()
+        cache.save(KIS_CACHE_PROVIDER, KIS_CACHE_ACCOUNT_ID, "005930", {
+            "symbol": "005930",
+            "name": "삼성전자",
+            "market": "KR",
+            "currency": "KRW",
+            "currentPrice": 72500,
+            "tradeStrength": 150,
+            "buyVolume": 10000,
+            "sellVolume": 4000,
+            "orderbookBidVolume": 9000,
+            "orderbookAskVolume": 3000,
+            "bidAskImbalance": 50,
+            "quoteSource": "KIS WebSocket",
+            "updatedAt": fetched_at,
+            "marketSignalCoverage": {
+                "ccnl": {
+                    "stage": "ccnl",
+                    "status": "available",
+                    "fields": ["currentPrice", "tradeStrength", "buyVolume", "sellVolume"],
+                    "fetchedAt": fetched_at,
+                    "realTime": True,
+                    "cadence": "websocket",
+                    "transport": "websocket",
+                },
+                "orderbook": {
+                    "stage": "orderbook",
+                    "status": "available",
+                    "fields": ["orderbookBidVolume", "orderbookAskVolume", "bidAskImbalance"],
+                    "fetchedAt": fetched_at,
+                    "realTime": True,
+                    "cadence": "websocket",
+                    "transport": "websocket",
+                },
+            },
+        })
+
+        def fake_fetch_json(_method, url, _headers, body=None, query=None, timeout=12):
+            path = urllib.parse.urlparse(url).path
+            if path == "/oauth2/tokenP":
+                return {"access_token": "kis-token", "expires_in": 86400}
+            if path.endswith("/inquire-price"):
+                return {"rt_cd": "0", "output": {"stck_prpr": "72000", "prdy_ctrt": "1.25", "acml_vol": "1000000"}}
+            if path.endswith("/inquire-ccnl"):
+                return {"rt_cd": "0", "output": [{"stck_prpr": "72000", "tday_rltv": "90", "cntg_vol": "100"}]}
+            if path.endswith("/inquire-investor"):
+                return {"rt_cd": "0", "output": [{"frgn_ntby_qty": "700", "orgn_ntby_qty": "300", "prsn_ntby_qty": "-1000"}]}
+            if path.endswith("/inquire-asking-price-exp-ccn"):
+                return {"rt_cd": "0", "output1": {"total_bidp_rsqn": "100", "total_askp_rsqn": "100"}}
+            return {"rt_cd": "1", "msg1": "unexpected"}
+
+        provider = KISMarketSignalProvider(
+            {
+                "kisBaseUrl": "https://kis.example.test",
+                "kisAppKey": "app",
+                "kisAppSecret": "secret",
+                "kisMarketSignalLiveRefreshSeconds": "60",
+            },
+            quote_cache=cache,
+            fetch_json=fake_fetch_json,
+        )
+
+        signal = provider.fetch_symbol_signal("005930")
+
+        self.assertEqual(72500, signal["currentPrice"])
+        self.assertEqual(150, signal["tradeStrength"])
+        self.assertEqual(10000, signal["buyVolume"])
+        self.assertEqual(4000, signal["sellVolume"])
+        self.assertEqual(9000, signal["orderbookBidVolume"])
+        self.assertEqual(3000, signal["orderbookAskVolume"])
+        self.assertIn("KIS WebSocket", signal["quoteSource"])
+        self.assertEqual("websocket", signal["marketSignalCoverage"]["ccnl"]["cadence"])
+        self.assertEqual("websocket", signal["marketSignalCoverage"]["orderbook"]["cadence"])
+        self.assertEqual(700, signal["foreignNetVolume"])
+
+    def test_cli_parser_registers_kis_realtime_command(self):
+        args = build_parser().parse_args(["kis-realtime", "once", "--seconds", "1", "--force"])
+        self.assertEqual("kis-realtime", args.command)
+        self.assertEqual("once", args.kis_realtime_action)
+        self.assertEqual("1", args.seconds)
+        self.assertTrue(args.force)
 
     def graph_relation_context(
         self,

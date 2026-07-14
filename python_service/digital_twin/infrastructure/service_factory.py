@@ -5,6 +5,7 @@ from typing import Callable, Dict, Iterable
 from ..application.flow_lens_service import FlowLensService
 from ..application.investment_analysis_service import InvestmentAnalysisService
 from ..application.investment_calendar_service import InvestmentCalendarRunner, InvestmentCalendarService
+from ..application.kis_realtime_service import KISRealtimeWebSocketRunner
 from ..application.market_data_collection_service import MarketDataCollectionRunner
 from ..application.model_review_service import ModelReviewRunner
 from ..application.news_collection_service import NewsCollectionRunner
@@ -35,6 +36,7 @@ from .notification_ai_reviewer import notification_ai_reviewer_from_settings
 from .ontology_graph_store import ontology_repository_from_settings
 from . import operational_store as stores
 from .ontology_projection import PortfolioOntologyProjectionRecorder
+from .kis_realtime_ws import KISRealtimeSymbolSelector, KISRealtimeWebSocketClient
 from .rule_change_candidate_ai import rule_change_candidate_advisor_from_settings
 from .notifications import queued_notifier_for_account
 from .notifications import send_events
@@ -162,6 +164,24 @@ def build_market_data_collection_runner(settings=None, event_publisher=None) -> 
         quote_cache=stores.market_quote_cache(configured_settings),
         settings=configured_settings,
         provider_factory=lambda account, quote_cache: TossProvider(account, quote_cache=quote_cache),
+        event_publisher=event_publisher or default_event_bus(),
+    )
+
+
+def build_kis_realtime_websocket_runner(settings=None, event_publisher=None) -> KISRealtimeWebSocketRunner:
+    configured_settings = settings or runtime_settings()
+    quote_cache = stores.market_quote_cache(configured_settings)
+    monitor_store = stores.monitor_store(configured_settings)
+    return KISRealtimeWebSocketRunner(
+        client=KISRealtimeWebSocketClient(configured_settings, quote_cache=quote_cache),
+        symbol_selector=KISRealtimeSymbolSelector(
+            stores.account_registry(configured_settings),
+            monitor_store,
+            quote_cache,
+            configured_settings,
+        ),
+        quote_cache=quote_cache,
+        settings=configured_settings,
         event_publisher=event_publisher or default_event_bus(),
     )
 

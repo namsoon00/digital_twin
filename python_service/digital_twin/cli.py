@@ -8,6 +8,7 @@ from typing import Dict, List
 from .admin_preview import write_admin_preview
 from .application.account_service import AccountApplicationService
 from .application.investment_calendar_service import InvestmentCalendarScheduler
+from .application.kis_realtime_service import KISRealtimeWebSocketScheduler
 from .application.market_data_collection_service import MarketDataCollectionScheduler
 from .application.model_review_service import ModelReviewScheduler
 from .application.news_collection_service import NewsCollectionScheduler
@@ -23,7 +24,7 @@ from .infrastructure.event_bus import default_event_bus
 from .infrastructure import operational_store as stores
 from .infrastructure.notifications import queued_notifier_for_account, send_events
 from .infrastructure.ontology_graph_store import ontology_repository_from_settings
-from .infrastructure.service_factory import build_investment_calendar_runner, build_investment_calendar_service, build_market_data_collection_runner, build_model_review_runner, build_monitor_runner, build_news_collection_runner, build_notification_queue_runner, build_ontology_lab_service, build_ontology_reasoning_runner, build_rule_change_candidate_service, build_symbol_universe_service, monitor_account_job_store_from_settings
+from .infrastructure.service_factory import build_investment_calendar_runner, build_investment_calendar_service, build_kis_realtime_websocket_runner, build_market_data_collection_runner, build_model_review_runner, build_monitor_runner, build_news_collection_runner, build_notification_queue_runner, build_ontology_lab_service, build_ontology_reasoning_runner, build_rule_change_candidate_service, build_symbol_universe_service, monitor_account_job_store_from_settings
 from .infrastructure.settings import (
     SECRET_SETTING_KEYS,
     read_settings_store,
@@ -530,6 +531,21 @@ def market_data_command(args) -> int:
     return 1
 
 
+def kis_realtime_command(args) -> int:
+    settings = runtime_settings()
+    runner = build_kis_realtime_websocket_runner(settings)
+    if args.kis_realtime_action == "status":
+        print(json.dumps(runner.status(), ensure_ascii=False))
+        return 0
+    if args.kis_realtime_action == "once":
+        print(json.dumps(runner.run_once(duration_seconds=int(args.seconds or 0), force=args.force), ensure_ascii=False))
+        return 0
+    if args.kis_realtime_action == "watch":
+        KISRealtimeWebSocketScheduler(runner, runner.reconnect_delay_seconds()).run_forever()
+        return 0
+    return 1
+
+
 def news_command(args) -> int:
     settings = runtime_settings()
     runner = build_news_collection_runner(settings)
@@ -781,6 +797,15 @@ def build_parser() -> argparse.ArgumentParser:
     market_data_actions.add_parser("watch")
     market_data_actions.add_parser("status")
     market_data.set_defaults(func=market_data_command)
+
+    kis_realtime = subparsers.add_parser("kis-realtime", help="Collect KIS realtime price and orderbook over WebSocket")
+    kis_realtime_actions = kis_realtime.add_subparsers(dest="kis_realtime_action", required=True)
+    kis_once = kis_realtime_actions.add_parser("once")
+    kis_once.add_argument("--seconds", default="")
+    kis_once.add_argument("--force", action="store_true")
+    kis_realtime_actions.add_parser("watch")
+    kis_realtime_actions.add_parser("status")
+    kis_realtime.set_defaults(func=kis_realtime_command)
 
     news = subparsers.add_parser("news", help="Collect domestic and overseas news evidence")
     news_actions = news.add_subparsers(dest="news_action", required=True)

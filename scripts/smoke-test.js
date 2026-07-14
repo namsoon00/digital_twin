@@ -258,6 +258,14 @@ function checkFrontendAdminRender() {
       /\.system-detail-disclosure-body > \.panel,[\s\S]*\.settings-detail-disclosure-body > \.panel\s*\{[\s\S]*grid-column: 1 \/ -1;[\s\S]*min-width: 0;/.test(styles),
     "상세 펼침 내부 패널이 바깥 PC 컬럼 규칙을 누수하지 않도록 고정되지 않았습니다."
   );
+  assertOk(
+    styles.indexOf("Desktop notification console repair") >= 0 &&
+      /\.notifications-view \.notification-command-center \.notification-section-tabs\s*\{[\s\S]*display: inline-flex;[\s\S]*width: fit-content;/.test(styles) &&
+      /\.notifications-view \.notification-command-center \.notification-ops-rail\s*\{[\s\S]*grid-template-columns: repeat\(7, minmax\(118px, 1fr\)\);[\s\S]*gap: 10px;/.test(styles) &&
+      /\.notifications-view \.notification-decision-panel,[\s\S]*\.notifications-view \.notification-diagnostics-summary-panel\s*\{[\s\S]*grid-column: 1 \/ -1;/.test(styles) &&
+      /\.notifications-view \.notification-diagnostics-summary-panel \.notification-diagnostics-grid\s*\{[\s\S]*grid-template-columns: repeat\(3, minmax\(0, 1fr\)\);/.test(styles),
+    "PC 알림 탭의 상단 콘솔/진단 패널 레이아웃 보정 계약이 없습니다."
+  );
   assertOk(styles.indexOf("Professional finance top navigation shell") >= 0 && styles.indexOf("grid-template-columns: minmax(0, 1fr)") >= 0, "PC shell이 단일 컬럼 상단 탭형 작업 영역으로 전환되지 않습니다.");
   assertOk(/Professional finance top navigation shell[\s\S]*\.app-nav[\s\S]*grid-template-columns: minmax\(180px, 0\.17fr\) minmax\(0, 1fr\) minmax\(108px, auto\);/.test(styles), "PC 상단 금융 탭 네비게이션 3구획 구조가 없습니다.");
   assertOk(styles.indexOf(".app-nav-command") >= 0 && styles.indexOf(".app-nav-flow") >= 0 && styles.indexOf(".app-nav-mode") >= 0, "PC 상단 통합 command rail 스타일 정의가 없습니다.");

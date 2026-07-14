@@ -20374,3 +20374,146 @@ html[data-theme="dark"] .ontology-graph-expanded-toolbar .icon-button.danger {
     border-radius: var(--ds-radius-panel);
   }
 }
+
+/* Desktop notification console repair: compact tabs, readable metrics, full-width diagnostics. */
+@media (min-width: 1181px) {
+  .notifications-view {
+    gap: 18px;
+  }
+
+  .notifications-view .notification-command-center {
+    grid-column: 1 / -1;
+    gap: 12px;
+    padding: 16px 18px;
+    border-radius: var(--ds-radius-panel);
+    background: linear-gradient(180deg, var(--ds-surface-elevated), var(--ds-card-bg));
+  }
+
+  .notifications-view .notification-command-head {
+    align-items: center;
+  }
+
+  .notifications-view .notification-command-head h2 {
+    font-size: 19px;
+  }
+
+  .notifications-view .notification-command-head span:not(.tone-chip) {
+    margin-top: 4px;
+  }
+
+  .notifications-view .notification-command-center .notification-section-bar {
+    grid-template-columns: minmax(0, 1fr) auto;
+    gap: 12px;
+    min-height: 0;
+    padding: 0;
+    border: 0;
+    background: transparent;
+  }
+
+  .notifications-view .notification-command-center .notification-section-tabs {
+    display: inline-flex;
+    flex-wrap: wrap;
+    width: fit-content;
+    max-width: 100%;
+    gap: 6px;
+    padding: 4px;
+    border: 1px solid var(--ds-card-border);
+    border-radius: var(--ds-radius-panel);
+    background: var(--ds-surface-muted);
+  }
+
+  .notifications-view .notification-command-center .notification-section-tabs button {
+    flex: 0 0 auto;
+    width: auto;
+    min-width: 94px;
+    min-height: 38px;
+    padding: 8px 13px;
+    border: 1px solid transparent;
+    border-radius: var(--ds-radius-control);
+  }
+
+  .notifications-view .notification-command-center .notification-section-tabs button.active {
+    border-color: color-mix(in srgb, var(--blue) 40%, var(--ds-card-border));
+    background: color-mix(in srgb, var(--blue-soft) 46%, var(--ds-card-bg));
+    box-shadow: inset 0 1px 0 color-mix(in srgb, var(--panel) 78%, transparent);
+  }
+
+  .notifications-view .notification-command-center .notification-section-tabs span {
+    display: none;
+  }
+
+  .notifications-view .notification-command-center .notification-section-actions {
+    align-items: center;
+    justify-content: flex-end;
+  }
+
+  .notifications-view .notification-command-center .notification-ops-rail {
+    grid-template-columns: repeat(7, minmax(118px, 1fr));
+    gap: 10px;
+    padding: 0;
+    border: 0;
+    background: transparent;
+    overflow: visible;
+  }
+
+  .notifications-view .notification-command-center .notification-ops-cell {
+    min-height: 58px;
+    padding: 10px 13px;
+    border: 1px solid var(--ds-card-border);
+    border-left: 3px solid var(--ds-card-status-neutral);
+    border-radius: var(--ds-radius-panel);
+    background: linear-gradient(180deg, var(--panel), var(--ds-card-row-bg));
+    box-shadow: 0 8px 22px rgba(16, 24, 32, 0.04);
+  }
+
+  .notifications-view .notification-decision-panel,
+  .notifications-view .notification-diagnostics-summary-panel {
+    grid-column: 1 / -1;
+  }
+
+  .notifications-view .notification-decision-panel .panel-head {
+    min-height: 64px;
+  }
+
+  .notifications-view .notification-decision-body:not(.has-detail) {
+    padding: 16px 18px 18px;
+  }
+
+  .notifications-view .notification-decision-body:not(.has-detail) .notification-decision-status {
+    min-height: 0;
+    padding: 0 0 12px;
+    border-bottom: 1px solid var(--ds-card-border);
+  }
+
+  .notifications-view .notification-decision-body:not(.has-detail) .notification-empty-console {
+    max-width: 1180px;
+    margin-top: 14px;
+  }
+
+  .notifications-view .notification-empty-console > section {
+    min-height: 132px;
+    border-radius: var(--ds-radius-panel);
+  }
+
+  .notifications-view .notification-diagnostics-summary-panel .work-detail-metric-row,
+  .notifications-view .notification-diagnostics-summary-panel .notification-diagnostics-grid,
+  .notifications-view .notification-diagnostics-summary-panel .rule-strip {
+    margin-right: var(--ds-panel-pad-x);
+    margin-left: var(--ds-panel-pad-x);
+  }
+
+  .notifications-view .notification-diagnostics-summary-panel .work-detail-metric-row {
+    margin-top: var(--ds-section-gap);
+  }
+
+  .notifications-view .notification-diagnostics-summary-panel .notification-diagnostics-grid {
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+    gap: 12px;
+    margin-top: var(--ds-section-gap);
+  }
+
+  .notifications-view .notification-diagnostics-summary-panel .rule-strip {
+    margin-top: var(--ds-section-gap);
+    margin-bottom: var(--ds-panel-pad-y);
+  }
+}

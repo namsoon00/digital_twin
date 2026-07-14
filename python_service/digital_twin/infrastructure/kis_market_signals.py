@@ -78,11 +78,8 @@ INVESTOR_RAW_KEYS = [
     "prsn_ntby_qty",
     "prsn_ntby_tr_pbmn",
 ]
-INVESTOR_LATENCY_LABEL = "KIS 장중 누적·지연 가능"
-INVESTOR_LATENCY_REASON = (
-    "KIS 투자자별 수급은 장중 누적 또는 공급자 지연 가능 데이터로 다룹니다. "
-    "현재가·호가처럼 실시간 체결 확정값으로 보지 않습니다."
-)
+INVESTOR_DELAYED_LABEL = "KIS 투자자 수급 지연 가능"
+INVESTOR_DELAYED_REASON = "KIS 투자자별 수급이 캐시·반복값·노후값으로 판정되어 실시간 근거로 쓰지 않습니다."
 
 JsonFetcher = Callable[[str, str, Dict[str, str], Optional[Dict[str, object]], Optional[Dict[str, str]], int], Dict[str, object]]
 
@@ -201,6 +198,7 @@ def stage_coverage(
     fetched_at: str = "",
     source_as_of: str = "",
     session: Dict[str, object] = None,
+    real_time: bool = False,
 ) -> Dict[str, object]:
     session = session or {}
     fields = sorted([
@@ -229,11 +227,12 @@ def stage_coverage(
         payload["marketSession"] = str(session.get("key") or "")
         payload["marketSessionLabel"] = str(session.get("label") or "")
     if stage == "investor" and status == "available":
-        payload["realTime"] = False
-        payload["cadence"] = "intraday-cumulative"
-        payload["latencyStatus"] = "delayed-or-batched"
-        payload["latencyLabel"] = INVESTOR_LATENCY_LABEL
-        payload["latencyReason"] = INVESTOR_LATENCY_REASON
+        payload["realTime"] = bool(real_time)
+        payload["cadence"] = "live-poll" if real_time else "cached-or-delayed"
+        if not real_time:
+            payload["latencyStatus"] = "delayed-or-batched"
+            payload["latencyLabel"] = INVESTOR_DELAYED_LABEL
+            payload["latencyReason"] = INVESTOR_DELAYED_REASON
     return payload
 
 
@@ -339,6 +338,9 @@ class KISMarketSignalProvider:
 
     def prefer_live_during_market_hours(self) -> bool:
         return self.bool_setting("kisMarketSignalPreferLiveDuringMarketHours", True)
+
+    def investor_realtime_enabled(self) -> bool:
+        return self.bool_setting("kisInvestorRealtimeEnabled", True)
 
     def live_refresh_seconds(self) -> int:
         return self.int_setting("kisMarketSignalLiveRefreshSeconds", 60, 0, 3600)
@@ -541,6 +543,8 @@ class KISMarketSignalProvider:
             return False
         if not (self.configured() and self.prefer_live_during_market_hours() and self.is_kr_regular_market_hours()):
             return True
+        if self.investor_realtime_enabled():
+            return False
         age_seconds = self.cache_age_seconds(payload)
         return age_seconds is not None and age_seconds <= self.live_refresh_seconds()
 
@@ -598,6 +602,11 @@ class KISMarketSignalProvider:
                 next_item["reason"] = "장중 이전 조회와 같은 값 " + str(unchanged_count) + "회 연속"
                 if stage != "price" and unchanged_count >= stale_threshold:
                     next_item["status"] = "stale"
+                    if stage == "investor":
+                        next_item["realTime"] = False
+                        next_item["cadence"] = "stale-repeat"
+                        next_item["latencyStatus"] = "stale"
+                        next_item["latencyLabel"] = INVESTOR_DELAYED_LABEL
                     next_item["staleReason"] = "장중 같은 " + stage + " 값이 " + str(unchanged_count) + "회 연속 반복되어 지연 가능성이 있습니다."
             else:
                 next_item["unchangedCount"] = 0
@@ -667,11 +676,11 @@ class KISMarketSignalProvider:
         if isinstance(investor, list):
             normalized_investor = normalize_investor(investor)
             merge_if_present(signal, normalized_investor)
-            coverage["investor"] = stage_coverage("investor", investor, normalized_investor, INVESTOR_SIGNAL_KEYS, fetched_at=fetched_at, source_as_of=fetched_at, session=session)
+            coverage["investor"] = stage_coverage("investor", investor, normalized_investor, INVESTOR_SIGNAL_KEYS, fetched_at=fetched_at, source_as_of=fetched_at, session=session, real_time=microstructure_available)
         elif isinstance(investor, dict):
             normalized_investor = normalize_investor([investor])
             merge_if_present(signal, normalized_investor)
-            coverage["investor"] = stage_coverage("investor", investor, normalized_investor, INVESTOR_SIGNAL_KEYS, fetched_at=fetched_at, source_as_of=fetched_at, session=session)
+            coverage["investor"] = stage_coverage("investor", investor, normalized_investor, INVESTOR_SIGNAL_KEYS, fetched_at=fetched_at, source_as_of=fetched_at, session=session, real_time=microstructure_available)
         else:
             coverage["investor"] = unavailable_stage_coverage("investor", session) if not microstructure_available else stage_coverage("investor", investor, {}, INVESTOR_SIGNAL_KEYS, fetched_at=fetched_at, session=session)
         if isinstance(orderbook, dict):

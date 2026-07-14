@@ -663,11 +663,11 @@ class PythonServiceTests(unittest.TestCase):
         self.assertEqual(700, cached["foreignNetVolume"])
         self.assertEqual(50, cached["bidAskImbalance"])
         self.assertEqual("available", enriched.market_signal_coverage["investor"]["status"])
-        self.assertIs(False, enriched.market_signal_coverage["investor"]["realTime"])
-        self.assertEqual("delayed-or-batched", enriched.market_signal_coverage["investor"]["latencyStatus"])
-        self.assertIn("실시간 체결 확정값", enriched.market_signal_coverage["investor"]["latencyReason"])
+        self.assertIs(True, enriched.market_signal_coverage["investor"]["realTime"])
+        self.assertEqual("live-poll", enriched.market_signal_coverage["investor"]["cadence"])
+        self.assertNotIn("latencyStatus", enriched.market_signal_coverage["investor"])
         self.assertEqual("available", cached["marketSignalCoverage"]["investor"]["status"])
-        self.assertIs(False, cached["marketSignalCoverage"]["investor"]["realTime"])
+        self.assertIs(True, cached["marketSignalCoverage"]["investor"]["realTime"])
         self.assertEqual(["/oauth2/tokenP", "/uapi/domestic-stock/v1/quotations/inquire-price", "/uapi/domestic-stock/v1/quotations/inquire-ccnl", "/uapi/domestic-stock/v1/quotations/inquire-investor", "/uapi/domestic-stock/v1/quotations/inquire-asking-price-exp-ccn"], [item[1] for item in calls])
 
     def test_kis_market_signal_provider_does_not_treat_price_foreign_zero_as_investor_flow(self):
@@ -1116,7 +1116,7 @@ class PythonServiceTests(unittest.TestCase):
         self.assertEqual(1, provider.diagnostics["live"])
         self.assertIn("/uapi/domestic-stock/v1/quotations/inquire-investor", calls)
 
-    def test_kis_market_signal_provider_reuses_near_live_cache_during_market_hours(self):
+    def test_kis_market_signal_provider_bypasses_near_live_cache_for_realtime_investor_flow(self):
         db_path = test_store_seed(self.temp.name)
         cache = TestMarketQuoteCache(db_path)
         cache.save(KIS_CACHE_PROVIDER, KIS_CACHE_ACCOUNT_ID, "035420", {
@@ -1136,8 +1136,26 @@ class PythonServiceTests(unittest.TestCase):
             "updatedAt": "2026-07-07T01:59:30Z",
         })
 
-        def fail_fetch_json(*_args, **_kwargs):
-            raise AssertionError("near-live KIS cache should avoid duplicate live calls")
+        calls = []
+
+        def fake_fetch_json(method, url, headers=None, body=None, query=None, timeout=12):
+            path = urllib.parse.urlparse(url).path
+            calls.append(path)
+            if path.endswith("/oauth2/tokenP"):
+                return {"access_token": "kis-token"}
+            if path.endswith("/inquire-price"):
+                return {"rt_cd": "0", "output": {"stck_prpr": "201000", "acml_vol": "1026999"}}
+            if path.endswith("/inquire-ccnl"):
+                return {"rt_cd": "0", "output": [{"stck_prpr": "201000", "tday_rltv": "88.3", "cntg_vol": "100"}]}
+            if path.endswith("/inquire-investor"):
+                return {"rt_cd": "0", "output": [{
+                    "frgn_ntby_qty": "243601",
+                    "orgn_ntby_qty": "67401",
+                    "prsn_ntby_qty": "-304684",
+                }]}
+            if path.endswith("/inquire-asking-price-exp-ccn"):
+                return {"rt_cd": "0", "output1": {"total_bidp_rsqn": "1200", "total_askp_rsqn": "900"}}
+            return {"rt_cd": "0", "output": {}}
 
         provider = KISMarketSignalProvider(
             settings={
@@ -1150,7 +1168,8 @@ class PythonServiceTests(unittest.TestCase):
                 "kisMarketSignalLiveRefreshSeconds": "60",
             },
             quote_cache=cache,
-            fetch_json=fail_fetch_json,
+            fetch_json=fake_fetch_json,
+            sleep=lambda _seconds: None,
             now_provider=lambda: datetime(2026, 7, 7, 2, 0, tzinfo=timezone.utc),
         )
         naver = normalize_position({"symbol": "035420", "name": "NAVER", "market": "KR", "currency": "KRW"})
@@ -1158,8 +1177,10 @@ class PythonServiceTests(unittest.TestCase):
         positions, _watchlist = provider.enrich_collections([naver], [])
 
         self.assertEqual(243601, positions[0].foreign_net_volume)
-        self.assertEqual(1, provider.diagnostics["cached"])
-        self.assertEqual(0, provider.diagnostics["live"])
+        self.assertEqual(1, provider.diagnostics["live"])
+        self.assertEqual(0, provider.diagnostics["cached"])
+        self.assertIs(True, positions[0].market_signal_coverage["investor"]["realTime"])
+        self.assertIn("/uapi/domestic-stock/v1/quotations/inquire-investor", calls)
 
     def test_kis_market_signal_provider_marks_repeated_microstructure_stale_during_regular_hours(self):
         db_path = test_store_seed(self.temp.name)

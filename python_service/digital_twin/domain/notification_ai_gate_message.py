@@ -534,6 +534,49 @@ def notification_reason_summary(context: Dict[str, object]) -> str:
         or _threshold_reason(context)
     )
 
+
+def _minute_count_text(value: object) -> str:
+    if value in (None, ""):
+        return ""
+    number = _number(value)
+    if float(number).is_integer():
+        return str(int(number)) + "분"
+    return ("%.1f" % number).rstrip("0").rstrip(".") + "분"
+
+
+def notification_cooldown_release_summary(context: Dict[str, object]) -> str:
+    context = context or {}
+    if context.get("honeyStateSuppressed"):
+        return ""
+    decision = str(context.get("honeyStateDecision") or "").strip()
+    if not decision or decision == "cooldown":
+        return ""
+    cooldown_enabled = bool(context.get("honeyStateCooldownEnabled"))
+    reason = _clean_reason_text(context.get("honeyStateReason") or context.get("honeySimilarityBypassReason"), 150)
+    if not cooldown_enabled and not reason:
+        return ""
+    age = _number(context.get("honeyStateLastSentAgeMinutes"))
+    cooldown = _number(context.get("honeyStateCooldownMinutes"))
+    age_text = _minute_count_text(age)
+    cooldown_text = _minute_count_text(cooldown)
+    before_cooldown = bool(age_text and cooldown_text and age < cooldown)
+    if decision == "new_threshold":
+        if age_text and cooldown_text:
+            return "현재 조건 조합이 처음 감지되어 기본 쿨다운 " + cooldown_text + "과 별개로 보냈습니다."
+        return "현재 조건 조합이 처음 감지되어 반복 제한 없이 보냈습니다."
+    if decision == "sustained_summary":
+        if age_text and cooldown_text:
+            return "마지막 발송 후 " + age_text + "이 지나 기본 쿨다운 " + cooldown_text + "을 충족했습니다."
+        return reason or "지속 상태 요약 기준을 충족해 다시 보냈습니다."
+    if decision in {"material_change", "mandatory_profit_loss_band"}:
+        if before_cooldown and reason:
+            return "마지막 발송 후 " + age_text + "으로 기본 쿨다운 " + cooldown_text + " 전이지만, " + reason + " 때문에 다시 보냈습니다."
+        if reason:
+            return reason + " 때문에 반복 제한을 통과했습니다."
+    if reason:
+        return reason
+    return ""
+
 def _contains_any(value: object, terms: List[str]) -> bool:
     text = str(value or "").lower()
     return any(str(term or "").lower() in text for term in terms)
@@ -680,7 +723,7 @@ def execution_telegram_message(context: Dict[str, object], response: Notificatio
     ]
     difference_rows = ai_difference_rows(response, level, context)
     if difference_rows:
-        parts.extend(["", "<b>계산 후보와 다른 점</b>", *difference_rows])
+        parts.extend(["", "<b>AI 판단 조정</b>", *difference_rows])
     if current_state_rows:
         parts.extend(["", "<b>현재 상태</b>", *current_state_rows])
     quality_rows = data_quality_warning_rows(context, 3)
@@ -695,7 +738,7 @@ def execution_telegram_message(context: Dict[str, object], response: Notificatio
     evidence_limit = 3 if level == "beginner" else 4
     parts.extend("• " + html.escape(item, quote=False) for item in response.evidence[:evidence_limit])
     if response.counter_evidence:
-        parts.extend(["", "<b>" + ("다르게 볼 점" if level == "beginner" else "확인할 반대 신호") + "</b>"])
+        parts.extend(["", "<b>" + ("반대 신호" if level == "beginner" else "확인할 반대 신호") + "</b>"])
         parts.extend("• " + html.escape(item, quote=False) for item in response.counter_evidence[:3 if level == "beginner" else 4])
     parts.extend(["", "<b>실행 전 확인</b>"])
     if response.opinion:
@@ -711,8 +754,13 @@ def execution_telegram_message(context: Dict[str, object], response: Notificatio
         parts.extend(["", "<b>검증 메모</b>"])
         parts.extend("• " + html.escape(item, quote=False) for item in response.validation_warnings[:3])
     reason = notification_reason_summary(context)
-    if reason:
-        parts.extend(["", "<b>알림이 온 이유</b>", "• " + html.escape(reason, quote=False)])
+    cooldown_reason = notification_cooldown_release_summary(context)
+    if reason or cooldown_reason:
+        parts.extend(["", "<b>알림이 온 이유</b>"])
+        if reason:
+            parts.append("• " + html.escape(reason, quote=False))
+        if cooldown_reason:
+            parts.append("• 쿨다운 해제: " + html.escape(cooldown_reason, quote=False))
     if level == "advanced":
         relation_labels = relation_rule_summary(context, 4)
         if relation_labels:
@@ -740,7 +788,7 @@ def execution_telegram_message_absolute_beginner(context: Dict[str, object], res
     ]
     difference_rows = ai_difference_rows(response, "absoluteBeginner", context)
     if difference_rows:
-        parts.extend(["", "<b>AI가 다르게 본 점</b>", *difference_rows])
+        parts.extend(["", "<b>AI 판단 조정</b>", *difference_rows])
     if current_state_rows:
         parts.extend(["", "<b>현재 상황</b>", *current_state_rows])
     quality_rows = data_quality_warning_rows(context, 2)
@@ -755,7 +803,7 @@ def execution_telegram_message_absolute_beginner(context: Dict[str, object], res
         parts.extend(["", "<b>AI가 중요하게 본 근거</b>"])
         parts.extend("• " + html.escape(_friendly_text(item), quote=False) for item in response.evidence[:3])
     if response.counter_evidence:
-        parts.extend(["", "<b>다르게 볼 점</b>"])
+        parts.extend(["", "<b>반대 신호</b>"])
         parts.extend("• " + html.escape(_friendly_text(item), quote=False) for item in response.counter_evidence[:2])
     parts.extend(["", "<b>실행 전 확인</b>"])
     if response.opinion:
@@ -768,8 +816,13 @@ def execution_telegram_message_absolute_beginner(context: Dict[str, object], res
         parts.extend(["", "<b>데이터 빈 곳</b>"])
         parts.extend("• " + html.escape(_friendly_text(item), quote=False) for item in response.missing_data_impact[:2])
     reason = notification_reason_summary(context)
-    if reason:
-        parts.extend(["", "<b>알림이 온 이유</b>", "• " + html.escape(_friendly_text(reason), quote=False)])
+    cooldown_reason = notification_cooldown_release_summary(context)
+    if reason or cooldown_reason:
+        parts.extend(["", "<b>알림이 온 이유</b>"])
+        if reason:
+            parts.append("• " + html.escape(_friendly_text(reason), quote=False))
+        if cooldown_reason:
+            parts.append("• 쿨다운 해제: " + html.escape(_friendly_text(cooldown_reason), quote=False))
     if response.source_urls:
         parts.extend(["", "<b>원문/출처</b>"])
         parts.extend(source_url_rows(response.source_urls, context))

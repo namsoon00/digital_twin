@@ -8929,6 +8929,11 @@ class PythonServiceTests(unittest.TestCase):
                 "기준일: 2026-07-08 22:26 KST",
             ]),
             "criterionLines": "설정: 관계 그래프에서 의미 있는 투자 인사이트가 생성될 때",
+            "honeyStateCooldownEnabled": True,
+            "honeyStateDecision": "material_change",
+            "honeyStateReason": "의미 있는 추가 확대: 손익률 추가 악화 -16.0% -> -18.7%",
+            "honeyStateLastSentAgeMinutes": 45,
+            "honeyStateCooldownMinutes": 360,
         }
         response = validated_response_from_payload(context, {
             "action": "SELL",
@@ -8954,8 +8959,12 @@ class PythonServiceTests(unittest.TestCase):
         self.assertIn("기관: 순매수 971,031주", message)
         self.assertIn("개인: 순매수 2,031,705주", message)
         self.assertIn("<b>AI가 중요하게 본 근거</b>", message)
-        self.assertIn("<b>다르게 볼 점</b>", message)
+        self.assertIn("<b>반대 신호</b>", message)
         self.assertIn("<b>알림이 온 이유</b>", message)
+        self.assertIn("쿨다운 해제", message)
+        self.assertIn("기본 쿨다운 360분 전", message)
+        self.assertNotIn("<b>AI가 다르게 본 점</b>", message)
+        self.assertNotIn("<b>다르게 볼 점</b>", message)
         self.assertNotIn("<b>왜 온 알림</b>", message)
         self.assertNotIn("<b>핵심 근거</b>", message)
 
@@ -9476,7 +9485,7 @@ class PythonServiceTests(unittest.TestCase):
         self.assertEqual("HOLD", context["activeInvestmentOpinion"]["action"])
         self.assertNotIn("AI 투자 판단", enriched["telegramMessage"])
         self.assertIn("<b>AI 최종 판단</b>", enriched["telegramMessage"])
-        self.assertIn("<b>계산 후보와 다른 점</b>", enriched["telegramMessage"])
+        self.assertIn("<b>AI 판단 조정</b>", enriched["telegramMessage"])
         self.assertIn("계산 후보", enriched["telegramMessage"])
         self.assertIn("AI 최종", enriched["telegramMessage"])
         self.assertIn("매도", enriched["telegramMessage"])

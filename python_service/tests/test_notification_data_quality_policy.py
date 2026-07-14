@@ -13,6 +13,7 @@ from digital_twin.domain.notification_rules import (
     notification_state_group_key,
 )
 from digital_twin.domain.notification_ai_gate_message import (
+    notification_cooldown_release_summary,
     notification_topline_change_summary,
     prepend_execution_start_badge,
 )
@@ -96,6 +97,32 @@ class NotificationDataQualityPolicyTests(unittest.TestCase):
         })
 
         self.assertEqual("새 뉴스·공시", summary)
+
+    def test_cooldown_release_summary_explains_material_change_before_cooldown(self):
+        summary = notification_cooldown_release_summary({
+            "honeyStateCooldownEnabled": True,
+            "honeyStateDecision": "material_change",
+            "honeyStateReason": "의미 있는 추가 확대: 손익률 추가 악화 -18.7% -> -20.1%",
+            "honeyStateLastSentAgeMinutes": 42,
+            "honeyStateCooldownMinutes": 360,
+        })
+
+        self.assertEqual(
+            "마지막 발송 후 42분으로 기본 쿨다운 360분 전이지만, 의미 있는 추가 확대: 손익률 추가 악화 -18.7% → -20.1% 때문에 다시 보냈습니다.",
+            summary,
+        )
+
+    def test_cooldown_release_summary_is_empty_for_suppressed_cooldown(self):
+        summary = notification_cooldown_release_summary({
+            "honeyStateCooldownEnabled": True,
+            "honeyStateDecision": "cooldown",
+            "honeyStateSuppressed": True,
+            "honeyStateReason": "같은 임계값 상태 지속",
+            "honeyStateLastSentAgeMinutes": 35,
+            "honeyStateCooldownMinutes": 360,
+        })
+
+        self.assertEqual("", summary)
 
     def test_watchlist_data_conflict_is_data_quality_signal(self):
         mixin = StrategyAlertMixin()

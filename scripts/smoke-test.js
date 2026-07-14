@@ -298,6 +298,13 @@ function checkFrontendAdminRender() {
       /\.notification-decision-row\s*\{[\s\S]*min-height: 104px;/.test(styles),
     "PC 최종 QA 밀도 레이어의 간격/폰트/카드 높이 계약이 없습니다."
   );
+  assertOk(
+    styles.indexOf("Desktop QA enforcement pass") >= 0 &&
+      /\.console-shell \.managed-page,[\s\S]*\.console-shell \.system-view\s*\{[\s\S]*gap: var\(--ds-page-gap\);/.test(styles) &&
+      /\.console-shell :is\([\s\S]*\.symbol-result-row,[\s\S]*\.investment-lineage-row[\s\S]*\)\s*\{[\s\S]*padding: var\(--ds-card-comfort-pad-y\) var\(--ds-card-comfort-pad-x\);/.test(styles) &&
+      /\.console-shell :is\([\s\S]*\[data-card-type="metric-cell"\],[\s\S]*\.inline-detail-metrics > \*[\s\S]*\),[\s\S]*\.console-shell \.notifications-view \.notification-command-center \.notification-ops-cell\s*\{[\s\S]*min-height: 92px;[\s\S]*padding: 16px 18px;/.test(styles),
+    "PC 컴팩트 규칙을 마지막에 다시 덮는 QA enforcement 계약이 없습니다."
+  );
   assertOk(styles.indexOf("Professional finance top navigation shell") >= 0 && styles.indexOf("grid-template-columns: minmax(0, 1fr)") >= 0, "PC shell이 단일 컬럼 상단 탭형 작업 영역으로 전환되지 않습니다.");
   assertOk(/Professional finance top navigation shell[\s\S]*\.app-nav[\s\S]*grid-template-columns: minmax\(180px, 0\.17fr\) minmax\(0, 1fr\) minmax\(108px, auto\);/.test(styles), "PC 상단 금융 탭 네비게이션 3구획 구조가 없습니다.");
   assertOk(styles.indexOf(".app-nav-command") >= 0 && styles.indexOf(".app-nav-flow") >= 0 && styles.indexOf(".app-nav-mode") >= 0, "PC 상단 통합 command rail 스타일 정의가 없습니다.");

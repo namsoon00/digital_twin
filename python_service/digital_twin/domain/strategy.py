@@ -866,23 +866,24 @@ def decisions_for_positions(
     strategy_model: StrategyModel = None,
     external_signals: Dict[str, object] = None,
     relation_contexts_by_symbol: Dict[str, Dict[str, object]] = None,
+    runtime_context: Dict[str, object] = None,
     require_inference_context: bool = True,
 ) -> List[DecisionItem]:
     active_positions = [item for item in positions if not item.is_cash() and item.market_value > 0]
     relation_contexts_by_symbol = relation_contexts_by_symbol or {}
     legacy_by_symbol = {}
+    decision_runtime_context = dict(runtime_context or {})
+    decision_runtime_context["settings"] = getattr(strategy_model, "settings", {}) if strategy_model else dict(decision_runtime_context.get("settings") or {})
+    decision_runtime_context["decisionItems"] = [
+        {**payload, "symbol": symbol}
+        for symbol, payload in legacy_by_symbol.items()
+    ]
     ontology = build_portfolio_ontology(
         active_positions,
         portfolio,
         legacy_by_symbol=legacy_by_symbol,
         external_signals=external_signals or {},
-        runtime_context={
-            "settings": getattr(strategy_model, "settings", {}) if strategy_model else {},
-            "decisionItems": [
-                {**payload, "symbol": symbol}
-                for symbol, payload in legacy_by_symbol.items()
-            ],
-        },
+        runtime_context=decision_runtime_context,
         include_reasoning_outputs=False,
     )
     decisions = []

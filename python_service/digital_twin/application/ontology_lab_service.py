@@ -540,19 +540,22 @@ class OntologyLabService:
                 active_tbox = {"status": "error", "reason": str(error)[:180], "source": "code-fallback"}
         as_of = str(snapshot.generated_at or "").strip()
         snapshot_seed = "|".join([str(snapshot.account_id or ""), as_of or "unknown"])
+        metadata = dict(snapshot.metadata or {})
+        account_context = metadata.get("accountContext") if isinstance(metadata.get("accountContext"), dict) else {}
         return {
             "settings": dict(self.settings),
             "snapshotId": "lab-abox-snapshot:" + hashlib.sha256(snapshot_seed.encode("utf-8")).hexdigest()[:16],
             "asOf": as_of,
             "activeTBox": active_tbox,
             "account": {
+                **dict(account_context),
                 "accountId": snapshot.account_id,
                 "accountLabel": snapshot.account_label,
                 "provider": snapshot.provider,
                 "mode": snapshot.mode,
                 "status": snapshot.status,
             },
-            "metadata": dict(snapshot.metadata or {}),
+            "metadata": metadata,
             "decisionItems": [item.to_dict() for item in snapshot.decisions],
         }
 

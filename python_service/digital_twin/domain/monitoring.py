@@ -433,12 +433,15 @@ class RealtimeMonitor(MonitoringSampleDataMixin, MonitoringPositionContextMixin,
         if not snapshot.has_live_account_data():
             return snapshot
         inference_contexts = relation_contexts_from_snapshot(snapshot, getattr(self.strategy_model, "settings", {}) if self.strategy_model else {})
+        account_context = (snapshot.metadata or {}).get("accountContext") if isinstance(snapshot.metadata, dict) else {}
+        account_context = account_context if isinstance(account_context, dict) else {}
         snapshot.decisions = decisions_for_positions(
             snapshot.positions,
             snapshot.portfolio,
             self.strategy_model,
             external_signals=snapshot.external_signals,
             relation_contexts_by_symbol=inference_contexts,
+            runtime_context={"account": dict(account_context)},
             require_inference_context=True,
         )
         return snapshot

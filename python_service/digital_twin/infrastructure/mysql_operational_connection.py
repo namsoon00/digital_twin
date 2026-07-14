@@ -102,6 +102,7 @@ MYSQL_SCHEMA = [
         quiet_hours_end VARCHAR(16) NOT NULL DEFAULT '05:00',
         quiet_hours_timezone VARCHAR(64) NOT NULL DEFAULT 'Asia/Seoul',
         message_delivery_level VARCHAR(64) NOT NULL DEFAULT 'absoluteBeginner',
+        investment_strategy_profile VARCHAR(64) NOT NULL DEFAULT 'balanced',
         created_at VARCHAR(40) NOT NULL,
         updated_at VARCHAR(40) NOT NULL,
         KEY idx_service_accounts_enabled (enabled)

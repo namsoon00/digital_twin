@@ -787,6 +787,7 @@ def build_snapshot(account: AccountConfig, external_settings: Optional[Dict[str,
     kis_provider = KISMarketSignalProvider()
     positions, watchlist = kis_provider.enrich_collections(positions, watchlist)
     external_signals = ExternalSignalProvider(settings=settings).signals_for_positions(positions + watchlist)
+    account_context = account.ontology_account_context()
     portfolio = portfolio_summary(
         positions,
         cash,
@@ -798,10 +799,12 @@ def build_snapshot(account: AccountConfig, external_settings: Optional[Dict[str,
         positions,
         portfolio,
         external_signals=external_signals,
+        runtime_context={"account": account_context},
         require_inference_context=True,
     )
     metadata = provider.diagnostics_payload()
     metadata.update(kis_provider.diagnostics_payload())
+    metadata["accountContext"] = account_context
     return AccountSnapshot(
         account_id=account.account_id,
         account_label=account.label,

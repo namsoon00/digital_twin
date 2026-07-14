@@ -10,6 +10,7 @@ DEFAULT_QUIET_HOURS_END = "05:00"
 DEFAULT_QUIET_HOURS_TIMEZONE = "Asia/Seoul"
 QUIET_HOURS_BYPASS_MESSAGE_TYPES = {"workHandoff"}
 DEFAULT_MESSAGE_DELIVERY_LEVEL = "absoluteBeginner"
+DEFAULT_INVESTMENT_STRATEGY_PROFILE = "balanced"
 MESSAGE_DELIVERY_LEVELS = {
     "absoluteBeginner": {
         "label": "왕초보",
@@ -48,6 +49,68 @@ MESSAGE_DELIVERY_LEVELS = {
         "promptInstruction": "고급 사용자가 검증할 수 있도록 관계 규칙, 신뢰도, 부족 데이터, 기준시각, 발송 기준을 최대한 구체적으로 유지한다.",
     },
 }
+INVESTMENT_STRATEGY_PROFILES = {
+    "capitalPreservation": {
+        "label": "안정형",
+        "description": "손실 제한과 현금 여력을 우선하고, 새 진입은 강한 확인 뒤에만 검토합니다.",
+        "riskTolerance": "low",
+        "timeHorizon": "mid",
+        "lossTolerancePct": -5,
+        "profitProtectionPct": 7,
+        "maxPositionWeightPct": 15,
+        "maxSectorWeightPct": 30,
+        "fxExposureReviewPct": 8,
+        "defaultHoldingRole": "core",
+        "watchlistActionPolicy": "entry_after_confirmation",
+        "holdingActionPolicy": "protect_capital_first",
+        "promptInstruction": "손실 제한과 비중 축소 기준을 우선 검토하고, 추가매수는 주요 평균 가격 회복과 거래 증가가 같이 확인될 때만 제안한다.",
+    },
+    "balanced": {
+        "label": "균형형",
+        "description": "손실 관리와 수익 유지의 균형을 잡고, 보유와 관심종목의 행동 범위를 명확히 나눕니다.",
+        "riskTolerance": "medium",
+        "timeHorizon": "mid",
+        "lossTolerancePct": -8,
+        "profitProtectionPct": 12,
+        "maxPositionWeightPct": 25,
+        "maxSectorWeightPct": 45,
+        "fxExposureReviewPct": 12,
+        "defaultHoldingRole": "coreSatellite",
+        "watchlistActionPolicy": "small_entry_after_confirmation",
+        "holdingActionPolicy": "risk_adjusted_hold_trim",
+        "promptInstruction": "손익률, 5/20/60일 평균 가격, 수급, 뉴스·공시, 금리·환율을 함께 보고 보유·분할축소·소액 진입을 균형 있게 제안한다.",
+    },
+    "growth": {
+        "label": "성장형",
+        "description": "추세와 성장 근거가 유지되면 변동성을 더 허용하되, 손실 확대 구간은 분할 대응합니다.",
+        "riskTolerance": "high",
+        "timeHorizon": "long",
+        "lossTolerancePct": -12,
+        "profitProtectionPct": 18,
+        "maxPositionWeightPct": 35,
+        "maxSectorWeightPct": 55,
+        "fxExposureReviewPct": 18,
+        "defaultHoldingRole": "growthCore",
+        "watchlistActionPolicy": "staged_entry",
+        "holdingActionPolicy": "let_winners_run_with_trim_guard",
+        "promptInstruction": "성장 근거와 추세 유지 여부를 더 크게 보되, 평균 가격 이탈·뉴스 악화·수급 약화가 겹치면 분할축소 기준을 제안한다.",
+    },
+    "aggressive": {
+        "label": "공격형",
+        "description": "기회 포착을 더 중시하지만, 집중도와 급락 리스크는 별도 경고로 강하게 표시합니다.",
+        "riskTolerance": "very_high",
+        "timeHorizon": "mixed",
+        "lossTolerancePct": -15,
+        "profitProtectionPct": 25,
+        "maxPositionWeightPct": 45,
+        "maxSectorWeightPct": 65,
+        "fxExposureReviewPct": 25,
+        "defaultHoldingRole": "highConviction",
+        "watchlistActionPolicy": "staged_entry_allowed",
+        "holdingActionPolicy": "momentum_follow_with_risk_stop",
+        "promptInstruction": "강한 추세·수급·뉴스가 동시에 맞으면 진입 후보를 적극 제안하되, 집중도 과다와 급락 신호는 즉시 축소 조건으로 제시한다.",
+    },
+}
 
 
 def normalize_message_delivery_level(value: object) -> str:
@@ -72,6 +135,35 @@ def message_delivery_profile(level: object = None) -> Dict[str, object]:
     profile["level"] = normalized
     profile["ontologyBox"] = "ABox"
     profile["tboxClass"] = "MessageDeliveryProfile"
+    return profile
+
+
+def normalize_investment_strategy_profile(value: object) -> str:
+    text = str(value or "").strip()
+    aliases = {
+        "안정형": "capitalPreservation",
+        "안정": "capitalPreservation",
+        "capital_preservation": "capitalPreservation",
+        "capital-preservation": "capitalPreservation",
+        "conservative": "capitalPreservation",
+        "균형형": "balanced",
+        "균형": "balanced",
+        "balance": "balanced",
+        "성장형": "growth",
+        "성장": "growth",
+        "공격형": "aggressive",
+        "공격": "aggressive",
+    }
+    normalized = aliases.get(text, text)
+    return normalized if normalized in INVESTMENT_STRATEGY_PROFILES else DEFAULT_INVESTMENT_STRATEGY_PROFILE
+
+
+def investment_strategy_profile(value: object = None) -> Dict[str, object]:
+    normalized = normalize_investment_strategy_profile(value)
+    profile = dict(INVESTMENT_STRATEGY_PROFILES[normalized])
+    profile["profile"] = normalized
+    profile["ontologyBox"] = "ABox"
+    profile["tboxClass"] = "InvestmentStrategyProfile"
     return profile
 
 
@@ -162,6 +254,7 @@ class AccountConfig:
     quiet_hours_end: str = DEFAULT_QUIET_HOURS_END
     quiet_hours_timezone: str = DEFAULT_QUIET_HOURS_TIMEZONE
     message_delivery_level: str = DEFAULT_MESSAGE_DELIVERY_LEVEL
+    investment_strategy_profile: str = DEFAULT_INVESTMENT_STRATEGY_PROFILE
 
     @classmethod
     def from_dict(cls, payload: Dict[str, object], settings: Dict[str, str]) -> "AccountConfig":
@@ -171,6 +264,7 @@ class AccountConfig:
         quiet_end_value = payload.get("quietHoursEnd") if "quietHoursEnd" in payload else payload.get("quiet_hours_end")
         quiet_timezone_value = payload.get("quietHoursTimezone") if "quietHoursTimezone" in payload else payload.get("quiet_hours_timezone")
         delivery_level_value = payload.get("messageDeliveryLevel") if "messageDeliveryLevel" in payload else payload.get("message_delivery_level")
+        strategy_profile_value = payload.get("investmentStrategyProfile") if "investmentStrategyProfile" in payload else payload.get("investment_strategy_profile")
         return cls(
             account_id=configured(payload.get("id") or payload.get("accountId") or "default"),
             label=configured(payload.get("label") or payload.get("name") or payload.get("id") or "기본 계정"),
@@ -190,6 +284,7 @@ class AccountConfig:
             quiet_hours_end=normalize_time_text(quiet_end_value, DEFAULT_QUIET_HOURS_END),
             quiet_hours_timezone=quiet_timezone(quiet_timezone_value),
             message_delivery_level=normalize_message_delivery_level(delivery_level_value),
+            investment_strategy_profile=normalize_investment_strategy_profile(strategy_profile_value or settings.get("investmentStrategyProfile")),
         )
 
     def to_private_dict(self) -> Dict[str, object]:
@@ -212,10 +307,12 @@ class AccountConfig:
             "quietHoursEnd": self.quiet_hours_end,
             "quietHoursTimezone": self.quiet_hours_timezone,
             "messageDeliveryLevel": normalize_message_delivery_level(self.message_delivery_level),
+            "investmentStrategyProfile": normalize_investment_strategy_profile(self.investment_strategy_profile),
         }
 
     def masked(self) -> Dict[str, object]:
         profile = self.message_delivery_profile()
+        strategy_profile = self.investment_strategy_profile_payload()
         return {
             "id": self.account_id,
             "label": self.label,
@@ -236,6 +333,8 @@ class AccountConfig:
             "quietHoursTimezone": self.quiet_hours_timezone,
             "messageDeliveryLevel": profile["level"],
             "messageDeliveryLevelLabel": profile["label"],
+            "investmentStrategyProfile": strategy_profile["profile"],
+            "investmentStrategyProfileLabel": strategy_profile["label"],
         }
 
     def message_delivery_profile(self) -> Dict[str, object]:
@@ -251,6 +350,30 @@ class AccountConfig:
             "messageDeliveryLevelLabel": profile["label"],
             "messageDeliveryProfile": profile,
         }
+
+    def investment_strategy_profile_payload(self) -> Dict[str, object]:
+        profile = investment_strategy_profile(self.investment_strategy_profile)
+        profile["accountId"] = self.account_id
+        profile["accountLabel"] = self.label
+        return profile
+
+    def investment_strategy_context(self) -> Dict[str, object]:
+        profile = self.investment_strategy_profile_payload()
+        return {
+            "investmentStrategyProfile": profile["profile"],
+            "investmentStrategyProfileLabel": profile["label"],
+            "investmentStrategy": profile,
+        }
+
+    def ontology_account_context(self) -> Dict[str, object]:
+        context = self.message_delivery_context()
+        context.update(self.investment_strategy_context())
+        context.update({
+            "accountId": self.account_id,
+            "accountLabel": self.label,
+            "provider": self.provider,
+        })
+        return context
 
     def quiet_hours_active(self, now: datetime = None, message_type: str = "") -> bool:
         if message_type in QUIET_HOURS_BYPASS_MESSAGE_TYPES:

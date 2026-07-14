@@ -27,6 +27,23 @@ class MySQLIndexDefinition:
 
 
 @dataclass(frozen=True)
+class MySQLColumnDefinition:
+    table: str
+    name: str
+    definition_sql: str
+
+    def alter_sql(self) -> str:
+        return (
+            "ALTER TABLE "
+            + quote_identifier(self.table)
+            + " ADD COLUMN "
+            + quote_identifier(self.name)
+            + " "
+            + self.definition_sql
+        )
+
+
+@dataclass(frozen=True)
 class MySQLKeyPartitionDefinition:
     table: str
     columns: Sequence[str]
@@ -107,6 +124,17 @@ MYSQL_OPERATIONAL_INDEXES: Dict[str, Sequence[MySQLIndexDefinition]] = {
 }
 
 
+MYSQL_OPERATIONAL_COLUMNS: Dict[str, Sequence[MySQLColumnDefinition]] = {
+    "service_accounts": (
+        MySQLColumnDefinition(
+            "service_accounts",
+            "investment_strategy_profile",
+            "VARCHAR(64) NOT NULL DEFAULT 'balanced'",
+        ),
+    ),
+}
+
+
 MYSQL_MONITORING_INDEXES: Dict[str, Sequence[MySQLIndexDefinition]] = {
     "monitor_account_jobs": (
         MySQLIndexDefinition(
@@ -154,6 +182,32 @@ def _is_duplicate_index_error(error: Exception) -> bool:
 def mysql_index_exists(connection, table: str, index_name: str) -> bool:
     cursor = _execute(connection, "SHOW INDEX FROM " + quote_identifier(table) + " WHERE Key_name = %s", (index_name,))
     return bool(cursor.fetchone())
+
+
+def mysql_column_exists(connection, table: str, column_name: str) -> bool:
+    cursor = _execute(connection, "SHOW COLUMNS FROM " + quote_identifier(table) + " LIKE %s", (column_name,))
+    return bool(cursor.fetchone())
+
+
+def ensure_mysql_columns(
+    connection,
+    column_map: Mapping[str, Sequence[MySQLColumnDefinition]],
+) -> List[str]:
+    created: List[str] = []
+    for table, definitions in column_map.items():
+        for definition in definitions:
+            if mysql_column_exists(connection, table, definition.name):
+                continue
+            try:
+                _execute(connection, definition.alter_sql())
+            except Exception as error:
+                args = getattr(error, "args", ())
+                code = args[0] if args else None
+                if code == 1060 or "Duplicate column name" in str(error):
+                    continue
+                raise
+            created.append(definition.table + "." + definition.name)
+    return created
 
 
 def ensure_mysql_indexes(
@@ -243,6 +297,7 @@ def ensure_mysql_key_partitions(
 
 def ensure_mysql_operational_schema_tuning(connection, settings: Mapping[str, object] = None) -> Dict[str, List[str]]:
     return {
+        "columns": ensure_mysql_columns(connection, MYSQL_OPERATIONAL_COLUMNS),
         "indexes": ensure_mysql_indexes(connection, MYSQL_OPERATIONAL_INDEXES),
         "partitions": ensure_mysql_key_partitions(connection, MYSQL_OPERATIONAL_KEY_PARTITIONS, settings),
     }

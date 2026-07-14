@@ -1,6 +1,6 @@
 from typing import Dict, List
 
-from .accounts import message_delivery_profile
+from .accounts import investment_strategy_profile, message_delivery_profile
 from .market_data import number
 from .ontology_contracts import PortfolioOntology, entity_id
 from .ontology_schema import add_entity, add_relation
@@ -126,7 +126,7 @@ def add_account_delivery_profile_concepts(
     account_context: Dict[str, object],
 ) -> None:
     profile_payload = account_context.get("messageDeliveryProfile") if isinstance(account_context.get("messageDeliveryProfile"), dict) else {}
-    level = profile_payload.get("level") if isinstance(profile_payload, dict) else account_context.get("messageDeliveryLevel")
+    level = profile_payload.get("level") or account_context.get("messageDeliveryLevel")
     profile = message_delivery_profile(level)
     profile_id = add_entity(graph, "message-delivery-profile", str(profile.get("level") or "absoluteBeginner"), str(profile.get("label") or "메시지 전달 수준"), {
         "tboxClass": "MessageDeliveryProfile",
@@ -140,6 +140,107 @@ def add_account_delivery_profile_concepts(
     })
     add_relation(graph, account_node_id, profile_id, "HAS_MESSAGE_DELIVERY_PROFILE", weight=1.0, properties={"source": "account-context"})
     add_relation(graph, portfolio_node_id, profile_id, "USES_MESSAGE_DELIVERY_PROFILE", weight=1.0, properties={"source": "account-context"})
+
+
+def account_investment_strategy_profile(account_context: Dict[str, object]) -> Dict[str, object]:
+    profile_payload = account_context.get("investmentStrategy") if isinstance(account_context.get("investmentStrategy"), dict) else {}
+    profile_key = profile_payload.get("profile") or account_context.get("investmentStrategyProfile")
+    return investment_strategy_profile(profile_key)
+
+
+def add_account_investment_strategy_concepts(
+    graph: PortfolioOntology,
+    account_node_id: str,
+    portfolio_node_id: str,
+    account_context: Dict[str, object],
+) -> Dict[str, object]:
+    profile = account_investment_strategy_profile(account_context)
+    profile_key = str(profile.get("profile") or "balanced")
+    profile_id = add_entity(graph, "investment-strategy-profile", profile_key, str(profile.get("label") or "투자 전략 성향"), {
+        "tboxClass": "InvestmentStrategyProfile",
+        "tboxClasses": ["InvestmentStrategyProfile", "InvestorProfile", "StrategySignal"],
+        "profile": profile_key,
+        "label": profile.get("label"),
+        "riskTolerance": profile.get("riskTolerance"),
+        "timeHorizon": profile.get("timeHorizon"),
+        "lossTolerancePct": number(profile.get("lossTolerancePct")),
+        "profitProtectionPct": number(profile.get("profitProtectionPct")),
+        "maxPositionWeightPct": number(profile.get("maxPositionWeightPct")),
+        "maxSectorWeightPct": number(profile.get("maxSectorWeightPct")),
+        "fxExposureReviewPct": number(profile.get("fxExposureReviewPct")),
+        "defaultHoldingRole": profile.get("defaultHoldingRole"),
+        "watchlistActionPolicy": profile.get("watchlistActionPolicy"),
+        "holdingActionPolicy": profile.get("holdingActionPolicy"),
+        "description": profile.get("description"),
+        "promptInstruction": profile.get("promptInstruction"),
+    })
+    risk_budget_id = add_entity(graph, "risk-budget", profile_key, str(profile.get("label") or "투자 전략") + " 손실 허용 기준", {
+        "tboxClass": "RiskBudget",
+        "profile": profile_key,
+        "lossTolerancePct": number(profile.get("lossTolerancePct")),
+        "maxPositionWeightPct": number(profile.get("maxPositionWeightPct")),
+        "maxSectorWeightPct": number(profile.get("maxSectorWeightPct")),
+        "fxExposureReviewPct": number(profile.get("fxExposureReviewPct")),
+    })
+    profit_policy_id = add_entity(graph, "profit-policy", profile_key, str(profile.get("label") or "투자 전략") + " 수익 보호 기준", {
+        "tboxClass": "ProfitPolicy",
+        "profile": profile_key,
+        "profitProtectionPct": number(profile.get("profitProtectionPct")),
+        "holdingActionPolicy": profile.get("holdingActionPolicy"),
+    })
+    add_relation(graph, account_node_id, profile_id, "HAS_INVESTOR_PROFILE", weight=1.0, properties={"source": "account-context"})
+    add_relation(graph, portfolio_node_id, profile_id, "USES_INVESTMENT_STRATEGY_PROFILE", weight=1.0, properties={"source": "account-context"})
+    add_relation(graph, profile_id, risk_budget_id, "HAS_RISK_BUDGET", weight=1.0, properties={"source": "account-context"})
+    add_relation(graph, profile_id, profit_policy_id, "HAS_PROFIT_POLICY", weight=1.0, properties={"source": "account-context"})
+    return {
+        "profileId": profile_id,
+        "profile": profile,
+    }
+
+
+def role_key_for_position(position: Position, strategy_profile: Dict[str, object]) -> str:
+    if is_watchlist_position(position):
+        return "watchlistEntry"
+    role = str((strategy_profile or {}).get("defaultHoldingRole") or "coreSatellite").strip()
+    return role or "coreSatellite"
+
+
+def role_label(role_key: str) -> str:
+    labels = {
+        "core": "핵심 보유",
+        "coreSatellite": "핵심·위성 보유",
+        "growthCore": "성장 핵심 보유",
+        "highConviction": "고확신 보유",
+        "watchlistEntry": "관심 진입 후보",
+    }
+    return labels.get(str(role_key or ""), str(role_key or "포지션 역할"))
+
+
+def add_position_strategy_role_concepts(
+    graph: PortfolioOntology,
+    position_node_id: str,
+    strategy_context: Dict[str, object],
+    position: Position,
+) -> None:
+    if not strategy_context:
+        return
+    profile = strategy_context.get("profile") if isinstance(strategy_context.get("profile"), dict) else {}
+    profile_id = str(strategy_context.get("profileId") or "")
+    profile_key = str(profile.get("profile") or "balanced")
+    role_key = role_key_for_position(position, profile)
+    role_id = add_entity(graph, "position-role", profile_key + ":" + role_key, role_label(role_key), {
+        "tboxClass": "PositionRole",
+        "profile": profile_key,
+        "role": role_key,
+        "source": position_source(position),
+        "lossTolerancePct": number(profile.get("lossTolerancePct")),
+        "profitProtectionPct": number(profile.get("profitProtectionPct")),
+        "watchlistActionPolicy": profile.get("watchlistActionPolicy"),
+        "holdingActionPolicy": profile.get("holdingActionPolicy"),
+    })
+    add_relation(graph, position_node_id, role_id, "HAS_POSITION_ROLE", weight=1.0, properties={"source": "account-strategy"})
+    if profile_id:
+        add_relation(graph, position_node_id, profile_id, "EVALUATED_UNDER_STRATEGY", weight=1.0, properties={"source": "account-strategy"})
 
 def runtime_settings(runtime_context: Dict[str, object]) -> Dict[str, object]:
     settings = runtime_context.get("settings") if isinstance(runtime_context, dict) else {}

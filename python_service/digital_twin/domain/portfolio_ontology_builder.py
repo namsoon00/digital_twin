@@ -43,8 +43,10 @@ from .ontology_external_abox import (
 from .ontology_reasoning import apply_graph_reasoning
 from .portfolio_ontology_runtime_concepts import (
     add_account_delivery_profile_concepts,
+    add_account_investment_strategy_concepts,
     add_decision_item_concepts,
     add_operational_world_concepts,
+    add_position_strategy_role_concepts,
     add_runtime_metadata_concepts,
     add_runtime_setting_concepts,
     add_strategy_world_concepts,
@@ -161,6 +163,7 @@ def build_portfolio_ontology(
     })))
     add_relation(graph, account_id_value, portfolio_node_id, "MANAGES_PORTFOLIO", weight=1.0, properties={"source": "account-context"})
     add_account_delivery_profile_concepts(graph, account_id_value, portfolio_node_id, account_context)
+    strategy_context = add_account_investment_strategy_concepts(graph, account_id_value, portfolio_node_id, account_context)
     if include_legacy_score_model:
         graph.entities.append(OntologyEntity(entity_id("concept", "legacy-score-model"), "관계 규칙 점수 모델", "model", abox_properties({
             "role": "research-only",
@@ -189,6 +192,8 @@ def build_portfolio_ontology(
     add_runtime_metadata_concepts(graph, portfolio_node_id, runtime_context)
     add_operational_world_concepts(graph, portfolio_node_id, runtime_context, observed_positions)
     strategy_id = add_strategy_world_concepts(graph, portfolio_node_id, runtime_context)
+    if strategy_context.get("profileId"):
+        add_relation(graph, strategy_id, str(strategy_context.get("profileId")), "USES_INVESTMENT_STRATEGY_PROFILE", weight=1.0, properties={"source": "account-context"})
     add_external_signal_concepts(graph, portfolio_node_id, external_signals, runtime_context)
     watchlist_id = ""
     if any(is_watchlist_position(item) for item in observed_positions):
@@ -253,6 +258,7 @@ def build_portfolio_ontology(
         elif watchlist_id:
             add_relation(graph, watchlist_id, position_id, "HAS_POSITION", weight=0.15, properties={"source": source})
         add_relation(graph, position_id, stock_id, "REPRESENTS_STOCK", weight=1.0, properties={"source": source})
+        add_position_strategy_role_concepts(graph, position_id, strategy_context, position)
         for kind, label in [("market", position.market or "unknown"), ("currency", position.currency or "unknown")]:
             tbox_class = "Market" if kind == "market" else "Currency"
             graph.entities.append(OntologyEntity(entity_id(kind, label), label, kind, abox_properties({"tboxClass": tbox_class})))

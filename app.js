@@ -3195,10 +3195,10 @@
 
   function messageDeliveryLevelOptions() {
     return [
-      { value: "absoluteBeginner", label: "왕초보", description: "전문 용어 없이 지금 확인할 행동만 짧게" },
-      { value: "beginner", label: "초보", description: "핵심 수치와 쉬운 이유 중심" },
-      { value: "intermediate", label: "중수", description: "가격·수급·추세·부족 데이터를 균형 있게" },
-      { value: "advanced", label: "고수", description: "관계 규칙과 검증 근거까지 자세히" }
+      { value: "absoluteBeginner", label: "왕초보", description: "같은 내용 · 전문 용어를 쉬운 말로" },
+      { value: "beginner", label: "초보", description: "같은 내용 · 쉬운 말과 기본 용어 함께" },
+      { value: "intermediate", label: "중수", description: "같은 내용 · 표준 투자 용어로" },
+      { value: "advanced", label: "고수", description: "같은 내용 · 원래 용어와 검증 근거 유지" }
     ];
   }
 

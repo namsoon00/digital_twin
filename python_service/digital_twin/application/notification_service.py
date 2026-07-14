@@ -276,7 +276,6 @@ class NotificationQueueRunner:
         use_claim = (not self.dry_run) and hasattr(self.queue, "claim_pending")
         jobs = self.queue.claim_pending(limit=limit, stale_after_minutes=self.stale_after_minutes) if use_claim else self.queue.pending(limit=limit)
         if not jobs:
-            print("No pending notification jobs.")
             return 0
         accounts = self.account_map()
         processed = 0

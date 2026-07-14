@@ -31,8 +31,6 @@ class ModelReviewRunner:
                 processed += 1
             except Exception as error:  # noqa: BLE001 - one model review failure must not block remaining jobs.
                 self.queue.mark_failed(job, str(error))
-        if not processed:
-            print("No pending model review jobs.")
         return processed
 
     def deliver(self, job: ModelReviewJob, result: str, accounts: Dict[str, object]) -> None:

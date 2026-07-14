@@ -19947,12 +19947,20 @@ html[data-theme="dark"] .ontology-graph-expanded-toolbar .icon-button.danger {
 .system-detail-disclosure-body,
 .settings-detail-disclosure-body {
   display: grid;
+  grid-template-columns: minmax(0, 1fr);
   gap: var(--ds-section-gap);
   padding: 0 var(--ds-panel-pad-x) var(--ds-panel-pad-y);
 }
 
+.system-detail-disclosure:not([open]) > .system-detail-disclosure-body,
+.settings-detail-disclosure:not([open]) > .settings-detail-disclosure-body {
+  display: none;
+}
+
 .system-detail-disclosure-body > .panel,
 .settings-detail-disclosure-body > .panel {
+  grid-column: 1 / -1;
+  min-width: 0;
   border-radius: var(--ds-radius-control);
 }
 
@@ -20259,5 +20267,110 @@ html[data-theme="dark"] .ontology-graph-expanded-toolbar .icon-button.danger {
 
   .account-balance-audit .source-row:last-child {
     border-bottom: 0;
+  }
+}
+
+/* Desktop breathing room: keep nested cards from visually sticking together. */
+@media (min-width: 1181px) {
+  .ontology-experiments-view {
+    gap: 18px;
+  }
+
+  .ontology-experiment-overview-panel > .ontology-experiment-metrics,
+  .ontology-experiment-latest-panel > .ontology-experiment-run-grid {
+    margin: var(--ds-section-gap) var(--ds-panel-pad-x) 0;
+  }
+
+  .ontology-experiment-overview-panel > .ontology-experiment-actions {
+    margin: var(--ds-section-gap) var(--ds-panel-pad-x) 0;
+  }
+
+  .ontology-experiment-overview-panel > .subtle,
+  .ontology-experiment-latest-panel > .subtle {
+    margin: var(--ds-space-4) var(--ds-panel-pad-x) 0;
+  }
+
+  .ontology-experiment-overview-panel > .subtle:last-child,
+  .ontology-experiment-latest-panel > .subtle:last-child {
+    margin-bottom: var(--ds-panel-pad-y);
+  }
+
+  .ontology-experiment-metrics,
+  .ontology-experiment-run-grid,
+  .ontology-experiment-card-metrics {
+    gap: 12px;
+  }
+
+  .ontology-experiment-metrics section,
+  .ontology-experiment-run-grid section,
+  .ontology-experiment-card-metrics section {
+    min-height: 82px;
+    padding: 14px 16px;
+    border-radius: var(--ds-radius-panel);
+    background: linear-gradient(180deg, var(--panel), var(--ds-card-row-bg));
+    box-shadow: 0 8px 22px rgba(16, 24, 32, 0.04);
+  }
+
+  .ontology-experiment-findings {
+    gap: 10px;
+    margin: var(--ds-section-gap) var(--ds-panel-pad-x) 0;
+  }
+
+  .ontology-experiment-findings span {
+    padding: 12px 14px;
+    border-radius: var(--ds-radius-panel);
+    background: var(--panel);
+  }
+
+  .ontology-experiment-tags,
+  .ontology-experiment-recommendations {
+    margin: var(--ds-section-gap) var(--ds-panel-pad-x) 0;
+  }
+
+  .ontology-experiment-recommendations {
+    gap: 12px;
+    padding-bottom: var(--ds-panel-pad-y);
+  }
+
+  .ontology-experiment-recommendation-title {
+    padding: 0 2px 2px;
+  }
+
+  .ontology-experiment-recommendation {
+    padding: 16px 18px;
+    border-radius: var(--ds-radius-panel);
+    background: var(--panel);
+    box-shadow: 0 8px 22px rgba(16, 24, 32, 0.04);
+  }
+
+  .ontology-experiment-list {
+    gap: 14px;
+    padding: var(--ds-section-gap) var(--ds-panel-pad-x) var(--ds-panel-pad-y);
+  }
+
+  .ontology-experiment-card {
+    gap: 12px;
+    padding: 18px;
+    box-shadow: 0 8px 22px rgba(16, 24, 32, 0.04);
+  }
+
+  .panel > :where(.lab-stats-grid, .admin-stat-grid, .settings-diagnostic-grid, .account-command-grid, .account-quality-ledger):not(.account-balance-grid) {
+    gap: 12px;
+    padding: var(--ds-section-gap) var(--ds-panel-pad-x) var(--ds-panel-pad-y);
+  }
+
+  .panel > :where(.lab-stats-grid, .admin-stat-grid, .settings-diagnostic-grid, .account-command-grid, .account-quality-ledger):not(.account-balance-grid) > * {
+    border-radius: var(--ds-radius-panel);
+  }
+
+  .account-overview-ledger .account-quality-ledger,
+  .account-command-layout .account-quality-ledger {
+    gap: 12px;
+    padding: var(--ds-section-gap) 0 0;
+  }
+
+  .account-overview-ledger .account-quality-ledger > *,
+  .account-command-layout .account-quality-ledger > * {
+    border-radius: var(--ds-radius-panel);
   }
 }

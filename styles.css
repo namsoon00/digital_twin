@@ -21302,3 +21302,55 @@ html[data-theme="dark"] .ontology-graph-expanded-toolbar .icon-button.danger {
     padding: var(--ds-card-comfort-pad-y) var(--ds-card-comfort-pad-x);
   }
 }
+
+/* Desktop QA enforcement pass: override older compact console rules on PC. */
+@media (min-width: 1181px) {
+  .console-shell .managed-page,
+  .console-shell .admin-grid,
+  .console-shell .home-view,
+  .console-shell .accounts-view,
+  .console-shell .notifications-view,
+  .console-shell .strategy-view,
+  .console-shell .feed-view,
+  .console-shell .symbol-universe-view,
+  .console-shell .watchlist-view,
+  .console-shell .ontology-experiments-view,
+  .console-shell .settings-view,
+  .console-shell .system-view {
+    gap: var(--ds-page-gap);
+  }
+
+  .console-shell :is(
+    .symbol-result-row,
+    .feed-impact-card,
+    .research-evidence-item,
+    .investment-action-row,
+    .investment-lineage-row
+  ) {
+    padding: var(--ds-card-comfort-pad-y) var(--ds-card-comfort-pad-x);
+  }
+
+  .console-shell :is(
+    [data-card-type="metric-cell"],
+    .account-control-metric,
+    .investment-calendar-kpi,
+    .investment-calendar-type-strip span,
+    .work-detail-metric-row > *,
+    .inline-detail-metrics > *
+  ),
+  .console-shell .notifications-view .notification-command-center .notification-ops-cell {
+    min-height: 92px;
+    padding: 16px 18px;
+  }
+
+  .console-shell :is(
+    [data-card-type="metric-cell"] strong,
+    .account-control-metric strong,
+    .investment-calendar-kpi em,
+    .work-detail-metric-row strong
+  ),
+  .console-shell .notifications-view .notification-command-center .notification-ops-cell strong {
+    font-size: 24px;
+    line-height: 1.08;
+  }
+}

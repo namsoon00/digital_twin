@@ -3057,6 +3057,22 @@ h3 {
   background: var(--input);
 }
 
+.symbol-result-row[role="button"] {
+  cursor: pointer;
+}
+
+.symbol-result-row[role="button"]:focus-visible,
+.research-evidence-item[role="button"]:focus-visible {
+  outline: 2px solid var(--focus);
+  outline-offset: 2px;
+}
+
+.symbol-result-row[role="button"]:hover,
+.research-evidence-item[role="button"]:hover {
+  border-color: color-mix(in srgb, var(--blue) 42%, var(--line));
+  background: color-mix(in srgb, var(--blue-soft) 12%, var(--panel));
+}
+
 .symbol-result-main {
   display: grid;
   gap: 7px;
@@ -3138,6 +3154,14 @@ h3 {
   font-weight: 800;
   line-height: 1.35;
   overflow-wrap: anywhere;
+}
+
+.symbol-result-side em {
+  color: var(--blue);
+  font-size: 11px;
+  font-style: normal;
+  font-weight: 950;
+  letter-spacing: 0;
 }
 
 .symbol-pager {
@@ -9586,6 +9610,10 @@ h3 {
   padding: var(--ds-panel-pad-y) var(--ds-panel-pad-x) 0;
 }
 
+.feed-settings-action-grid {
+  padding: 0 var(--ds-panel-pad-x);
+}
+
 .feed-settings-sections {
   display: grid;
   grid-template-columns: repeat(12, minmax(0, 1fr));
@@ -9609,6 +9637,31 @@ h3 {
 
 .feed-settings-sections .settings-fieldset.feed-compact .settings-grid {
   grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
+.strategy-rules-overview-panel > .work-detail-metric-row,
+.strategy-trace-overview-panel > .work-detail-metric-row,
+.notification-diagnostics-summary-panel > .work-detail-metric-row {
+  padding: var(--ds-panel-pad-y) var(--ds-panel-pad-x) 0;
+}
+
+.strategy-control-grid,
+.strategy-trace-grid,
+.notification-diagnostics-grid {
+  padding: 0 var(--ds-panel-pad-x) var(--ds-panel-pad-y);
+}
+
+.strategy-rules-overview-panel > .rule-strip,
+.strategy-trace-overview-panel > .rule-strip,
+.notification-diagnostics-summary-panel > .rule-strip {
+  margin: 0 var(--ds-panel-pad-x) var(--ds-panel-pad-y);
+}
+
+.strategy-control-grid .text-button,
+.strategy-trace-grid .text-button,
+.notification-diagnostics-grid .text-button,
+.feed-settings-action-grid .text-button {
+  justify-self: start;
 }
 
 .feed-quality-grid {
@@ -9676,6 +9729,11 @@ h3 {
   border-left: 3px solid var(--ds-card-status-neutral);
   border-radius: 8px;
   background: var(--panel-soft);
+}
+
+.research-evidence-item[role="button"] {
+  grid-template-columns: minmax(0, 1fr);
+  cursor: pointer;
 }
 
 .research-evidence-item.watch {
@@ -19710,6 +19768,10 @@ html[data-theme="dark"] .ontology-graph-expanded-toolbar .icon-button.danger {
   grid-template-columns: auto minmax(0, 1fr) auto auto;
   align-items: center;
   gap: var(--ds-space-3);
+}
+
+.research-evidence-item.compact .research-evidence-article {
+  grid-template-columns: auto minmax(0, 1fr) auto;
 }
 
 .feed-impact-card.compact .feed-impact-article strong,

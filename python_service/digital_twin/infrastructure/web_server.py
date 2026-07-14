@@ -910,7 +910,7 @@ def replay_notification_payload(payload: Dict[str, object]) -> Dict[str, object]
 
 
 def research_evidence_payload(query: Dict[str, List[str]]) -> Dict[str, object]:
-    limit = max(1, min(500, int(first_query(query, "limit") or 30)))
+    limit = max(1, min(500, int(first_query(query, "limit") or 8)))
     symbol = configured(first_query(query, "symbol")).upper()
     kind = configured(first_query(query, "kind"))
     store = stores.research_evidence_store()
@@ -1345,7 +1345,7 @@ def symbol_universe_payload(query: Dict[str, List[str]]) -> Dict[str, object]:
     return symbol_universe_service().search(
         query=first_query(query, "query") or first_query(query, "q"),
         market=first_query(query, "market"),
-        limit=int(first_query(query, "limit") or 40),
+        limit=int(first_query(query, "limit") or 16),
         offset=int(first_query(query, "offset") or 0),
     )
 

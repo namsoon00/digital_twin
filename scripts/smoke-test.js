@@ -244,6 +244,20 @@ function checkFrontendAdminRender() {
       code.indexOf("<strong>계좌 금액 검증</strong>") < 0,
     "PC comfort rail과 계좌 검증 감사 레저 구조가 없습니다."
   );
+  assertOk(
+    styles.indexOf("Desktop breathing room") >= 0 &&
+      /\.ontology-experiment-overview-panel > \.ontology-experiment-metrics,[\s\S]*\.ontology-experiment-latest-panel > \.ontology-experiment-run-grid\s*\{[\s\S]*margin: var\(--ds-section-gap\) var\(--ds-panel-pad-x\) 0;/.test(styles) &&
+      /\.ontology-experiment-recommendations\s*\{[\s\S]*gap: 12px;[\s\S]*padding-bottom: var\(--ds-panel-pad-y\);/.test(styles) &&
+      /\.panel > :where\(\.lab-stats-grid,[\s\S]*\.account-quality-ledger\):not\(\.account-balance-grid\)\s*\{[\s\S]*gap: 12px;/.test(styles) &&
+      /\.account-overview-ledger \.account-quality-ledger,[\s\S]*\.account-command-layout \.account-quality-ledger\s*\{[\s\S]*gap: 12px;[\s\S]*padding: var\(--ds-section-gap\) 0 0;/.test(styles),
+    "PC 중첩 카드의 여백 보정 레이어가 없습니다."
+  );
+  assertOk(
+    /\.system-detail-disclosure-body,[\s\S]*\.settings-detail-disclosure-body\s*\{[\s\S]*grid-template-columns: minmax\(0, 1fr\);/.test(styles) &&
+      /\.system-detail-disclosure:not\(\[open\]\) > \.system-detail-disclosure-body,[\s\S]*\.settings-detail-disclosure:not\(\[open\]\) > \.settings-detail-disclosure-body\s*\{[\s\S]*display: none;/.test(styles) &&
+      /\.system-detail-disclosure-body > \.panel,[\s\S]*\.settings-detail-disclosure-body > \.panel\s*\{[\s\S]*grid-column: 1 \/ -1;[\s\S]*min-width: 0;/.test(styles),
+    "상세 펼침 내부 패널이 바깥 PC 컬럼 규칙을 누수하지 않도록 고정되지 않았습니다."
+  );
   assertOk(styles.indexOf("Professional finance top navigation shell") >= 0 && styles.indexOf("grid-template-columns: minmax(0, 1fr)") >= 0, "PC shell이 단일 컬럼 상단 탭형 작업 영역으로 전환되지 않습니다.");
   assertOk(/Professional finance top navigation shell[\s\S]*\.app-nav[\s\S]*grid-template-columns: minmax\(180px, 0\.17fr\) minmax\(0, 1fr\) minmax\(108px, auto\);/.test(styles), "PC 상단 금융 탭 네비게이션 3구획 구조가 없습니다.");
   assertOk(styles.indexOf(".app-nav-command") >= 0 && styles.indexOf(".app-nav-flow") >= 0 && styles.indexOf(".app-nav-mode") >= 0, "PC 상단 통합 command rail 스타일 정의가 없습니다.");

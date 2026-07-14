@@ -51,10 +51,11 @@ def rulebox_rules_from_payload(payload: Dict[str, object]) -> List[GraphInferenc
         raise ValueError("RuleBox rules are empty.")
     return rules
 
-def rulebox_graph_from_rules(rules: Iterable[GraphInferenceRule]) -> PortfolioOntology:
+def rulebox_graph_from_rules(rules: Iterable[GraphInferenceRule], include_tbox: bool = True) -> PortfolioOntology:
     graph = PortfolioOntology("typedb-rulebox-admin")
-    graph.entities.extend(tbox_entities())
-    graph.relations.extend(tbox_relations())
+    if include_tbox:
+        graph.entities.extend(tbox_entities())
+        graph.relations.extend(tbox_relations())
     add_rulebox_concepts(graph, rules)
     tbox = default_tbox_metadata()
     for item in graph.entities:

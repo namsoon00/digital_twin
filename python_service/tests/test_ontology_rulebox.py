@@ -789,6 +789,14 @@ class OntologyRuleBoxTests(unittest.TestCase):
         self.assertTrue(any(item.kind == "rule" and (item.properties or {}).get("ontologyBox") == "RuleBox" for item in graph.entities))
         self.assertTrue(any(item.relation_type == "DERIVES_RELATION" for item in graph.relations))
 
+    def test_rulebox_save_graph_can_skip_tbox_for_lightweight_sync(self):
+        graph = rulebox_graph_from_rules(default_graph_inference_rules(), include_tbox=False)
+
+        self.assertTrue(any(item.kind == "rule" and (item.properties or {}).get("ontologyBox") == "RuleBox" for item in graph.entities))
+        self.assertFalse(any((item.properties or {}).get("ontologyBox") == "TBox" for item in graph.entities))
+        self.assertTrue(all((item.properties or {}).get("ontologyBox") == "RuleBox" for item in graph.entities))
+        self.assertTrue(all((item.properties or {}).get("ontologyBox") == "RuleBox" for item in graph.relations))
+
     def test_watchlist_rulebox_templates_carry_entry_only_action_policy(self):
         rules = default_graph_inference_rules()
         watchlist_rule = next(item for item in rules if item.rule_id == "graph.watchlist.trend_transition.support.v1")

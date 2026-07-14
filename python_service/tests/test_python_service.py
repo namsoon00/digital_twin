@@ -37,6 +37,7 @@ from digital_twin.domain.market_data import normalize_position, technical_indica
 from digital_twin.domain.message_types import DEFAULT_ALERT_RULES, DEFAULT_CADENCE, MESSAGE_TYPE_EMOJIS, MESSAGE_TYPE_LABELS, public_message_catalog
 from digital_twin.domain.ontology_contracts import OntologyEntity, OntologyRelation, entity_id
 from digital_twin.domain.ontology_rulebox_catalog import default_graph_inference_rules
+from digital_twin.domain.ontology_rulebox_governance import rulebox_rules_hash
 from digital_twin.domain.ontology_schema import abox_properties
 from digital_twin.domain.ontology_validator import validate_ontology
 from digital_twin.domain.portfolio_ontology_builder import apply_relation_driven_opinions, build_portfolio_ontology
@@ -2895,6 +2896,82 @@ class PythonServiceTests(unittest.TestCase):
         self.assertFalse(repository.seed_calls[0]["replaceRuleBox"])
         self.assertEqual("seeded", result["ruleboxBootstrap"]["status"])
         self.assertEqual(repository.default_rule_count, result["ruleboxBootstrap"]["ruleCount"])
+
+    def test_ontology_projection_syncs_stale_rulebox_before_abox_projection(self):
+        position = normalize_position({
+            "symbol": "005930",
+            "name": "삼성전자",
+            "market": "KR",
+            "currency": "KRW",
+            "marketValue": 1000,
+            "currentPrice": 69000,
+            "sector": "반도체",
+        })
+        portfolio = portfolio_summary([position])
+        snapshot = AccountSnapshot(
+            "main",
+            "메인",
+            "toss",
+            "live",
+            "ok",
+            utc_now_iso(),
+            portfolio,
+            [position],
+            [],
+        )
+
+        class FakeRepository:
+            def __init__(self):
+                self.seed_calls = []
+                self.save_rulebox_calls = []
+                self.graphs = []
+
+            def rulebox_snapshot(self):
+                return {
+                    "configured": True,
+                    "status": "ok",
+                    "ruleCount": 24,
+                    "ruleboxRuleCount": 24,
+                    "ruleboxRulesHash": "old-hash",
+                }
+
+            def seed_ontology(self, payload=None):
+                self.seed_calls.append(dict(payload or {}))
+                return {"seeded": True, "status": "ok", "ruleCount": 24}
+
+            def save_rulebox(self, payload=None):
+                self.save_rulebox_calls.append(dict(payload or {}))
+                rules = list((payload or {}).get("rules") or [])
+                return {
+                    "saved": True,
+                    "status": "ok",
+                    "ruleCount": len(rules),
+                    "ruleboxRuleCount": len(rules),
+                    "ruleboxRulesHash": rulebox_rules_hash(rules),
+                }
+
+            def save_graph(self, graph):
+                self.graphs.append(graph)
+                return {"saved": True, "status": "ok"}
+
+            def active_tbox_metadata(self):
+                return {"source": "typedb", "status": "ok", "version": "stored", "fingerprint": "fp"}
+
+            def run_rulebox(self, payload=None):
+                return {"status": "ok"}
+
+            def inferencebox_snapshot(self, symbols=None, limit=80):
+                return {"status": "ok", "nativeTypeDbReasoningUsed": True, "relations": [], "traces": []}
+
+        repository = FakeRepository()
+        result = PortfolioOntologyProjectionRecorder(repository).record_snapshot(snapshot)
+
+        self.assertFalse(repository.seed_calls)
+        self.assertEqual(1, len(repository.save_rulebox_calls))
+        self.assertEqual(len(default_graph_inference_rules()), len(repository.save_rulebox_calls[0]["rules"]))
+        self.assertEqual("synced", result["ruleboxBootstrap"]["status"])
+        self.assertEqual(24, result["ruleboxBootstrap"]["previousRuleCount"])
+        self.assertEqual(len(default_graph_inference_rules()), result["ruleboxBootstrap"]["expectedRuleCount"])
 
     def test_ontology_projection_recorder_includes_watchlist_candidates(self):
         holding = normalize_position({

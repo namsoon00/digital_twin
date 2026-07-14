@@ -3613,6 +3613,9 @@
       typedbTimeoutSeconds: settingValue("typedbTimeoutSeconds"),
       typedbRetryCount: settingValue("typedbRetryCount"),
       typedbInferenceGenerationKeepCount: settingValue("typedbInferenceGenerationKeepCount"),
+      typedbAutoResetEnabled: settingValue("typedbAutoResetEnabled"),
+      typedbDataRetentionHours: settingValue("typedbDataRetentionHours"),
+      typedbDataMaxSizeMb: settingValue("typedbDataMaxSizeMb"),
       materialityGateEnabled: settingValue("materialityGateEnabled"),
       materialityMinimumScore: settingValue("materialityMinimumScore"),
       marketMaterialityMinimumScore: settingValue("marketMaterialityMinimumScore"),
@@ -15626,7 +15629,13 @@
         ]),
         renderSettingField("typedbTimeoutSeconds", "TypeDB 타임아웃(초)", "number", "20"),
         renderSettingField("typedbRetryCount", "TypeDB 재시도(회)", "number", "2"),
-        renderSettingField("typedbInferenceGenerationKeepCount", "InferenceBox 보관 세대", "number", "2"),
+        renderSettingField("typedbInferenceGenerationKeepCount", "InferenceBox 보관 세대", "number", "1"),
+        renderSettingSelect("typedbAutoResetEnabled", "TypeDB 자동 재생성", [
+          { value: "1", label: "사용" },
+          { value: "0", label: "사용 안 함" }
+        ]),
+        renderSettingField("typedbDataRetentionHours", "TypeDB 보관 시간", "number", "24"),
+        renderSettingField("typedbDataMaxSizeMb", "TypeDB 최대 용량(MB)", "number", "2048"),
         renderSettingField("ontologyReasoningIntervalSeconds", "추론 요청 확인 주기(초)", "number", "10"),
         renderSettingField("ontologyReasoningBatchSize", "추론 요청 배치", "number", "20")
       ].join(""), "gate feed-wide"),

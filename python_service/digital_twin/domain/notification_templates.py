@@ -80,6 +80,7 @@ from .notification_title_rules import (
     reference_date_text,
 )
 from .notifications import notification_debug_number
+from .notification_start_badge import labeled_message_start_badge
 from .portfolio import AlertEvent
 from .scoring import notification_signal_labels
 
@@ -973,13 +974,23 @@ def append_ai_opinion(rendered: str, context: Dict[str, object], rich: bool = Fa
     return rendered_text.rstrip() + "\n\n" + block
 
 
-def prepend_message_start_badge(rendered: str, rich: bool = False) -> str:
+def prepend_message_start_badge(rendered: str, rich: bool = False, context: Dict[str, object] = None) -> str:
     text = str(rendered or "").strip()
     if not text:
         return text
-    if text.startswith(MESSAGE_START_BADGE) or text.startswith("<b>" + MESSAGE_START_BADGE + "</b>"):
-        return text
-    badge = "<b>" + MESSAGE_START_BADGE + "</b>" if rich else MESSAGE_START_BADGE
+    plain_badge = labeled_message_start_badge(MESSAGE_START_BADGE, context or {})
+    if text.startswith("<b>" + MESSAGE_START_BADGE):
+        first, rest = (text.split("\n", 1) + [""])[:2]
+        if " · " in first and plain_badge == MESSAGE_START_BADGE:
+            return text
+        html_badge = "<b>" + html.escape(plain_badge, quote=False) + "</b>"
+        return html_badge + (("\n" + rest) if rest else "")
+    if text.startswith(MESSAGE_START_BADGE):
+        first, rest = (text.split("\n", 1) + [""])[:2]
+        if " · " in first and plain_badge == MESSAGE_START_BADGE:
+            return text
+        return plain_badge + (("\n" + rest) if rest else "")
+    badge = "<b>" + html.escape(plain_badge, quote=False) + "</b>" if rich else plain_badge
     return badge + "\n\n" + text
 
 
@@ -991,13 +1002,13 @@ def render_notification(template: NotificationTemplate, context: Dict[str, objec
         rendered = append_ai_opinion(rendered, values, rich)
         rendered = beginner_friendly_text(append_score_explanation(rendered, values, rich))
         rendered = append_message_footer(rendered, values, rich)
-        return prepend_message_start_badge(rendered, rich)
+        return prepend_message_start_badge(rendered, rich, values)
     rendered = render_template(BODY_TEMPLATE, values)
     rich = template_prefers_rich_score(BODY_TEMPLATE, rendered)
     rendered = append_ai_opinion(rendered, values, rich)
     rendered = beginner_friendly_text(append_score_explanation(rendered, values, rich))
     rendered = append_message_footer(rendered, values, rich)
-    return prepend_message_start_badge(rendered, rich)
+    return prepend_message_start_badge(rendered, rich, values)
 
 
 

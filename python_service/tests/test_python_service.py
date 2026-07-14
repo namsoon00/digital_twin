@@ -8948,7 +8948,7 @@ class PythonServiceTests(unittest.TestCase):
         }, source="test AI")
         enriched = context_with_validated_ai_response(context, response)
 
-        self.assertTrue(enriched["telegramMessage"].startswith("<b>🔔 새 알림</b>"))
+        self.assertTrue(enriched["telegramMessage"].startswith("<b>🔔 새 알림 · NVIDIA</b>"))
         self.assertEqual(1, enriched["telegramMessage"].count("🔔 새 알림"))
         self.assertEqual(urls, response.source_urls)
         self.assertNotIn(truncated_payload_url, response.source_urls)
@@ -10465,7 +10465,7 @@ class PythonServiceTests(unittest.TestCase):
 
         message = templates.render(event.rule, alert_context(event))
 
-        self.assertTrue(message.startswith("<b>🔔 새 알림</b>"))
+        self.assertTrue(message.startswith("<b>🔔 새 알림 · Tesla</b>"))
         self.assertEqual(1, message.count("🔔 새 알림"))
         self.assertIn("<b>[주의] 🇺🇸 Tesla: 미장 가격 급락</b>\n<code>Tesla / TSLA</code>", message)
         self.assertNotIn("<code>TSLA</code>", message)

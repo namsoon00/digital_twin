@@ -22,6 +22,7 @@ from .notification_ai_gate_validation import (
     delivery_level_from_context,
     signed_percent_from_text,
 )
+from .notification_start_badge import labeled_message_start_badge
 from .notification_text_formatting import absolute_beginner_friendly_text
 
 
@@ -229,24 +230,22 @@ def prepend_execution_start_badge(rendered: str, context: Dict[str, object] = No
     if not text:
         return text
     summary = notification_topline_change_summary(context or {})
-    plain_badge = MESSAGE_START_BADGE
-    html_badge = "<b>" + MESSAGE_START_BADGE + "</b>"
+    plain_badge = labeled_message_start_badge(MESSAGE_START_BADGE, context or {})
+    html_badge = "<b>" + html.escape(plain_badge, quote=False) + "</b>"
     plain_summary_line = summary if summary else ""
     html_summary_line = ("<code>" + html.escape(summary, quote=False) + "</code>") if summary else ""
-    if text.startswith("<b>" + MESSAGE_START_BADGE + "</b>"):
+    if text.startswith("<b>" + MESSAGE_START_BADGE):
         first, rest = (text.split("\n", 1) + [""])[:2]
         second = text.splitlines()[1] if len(text.splitlines()) > 1 else ""
         second_plain = re.sub(r"</?(?:b|code)>", "", second)
-        if summary and (first.strip() != html_badge or summary not in second_plain):
-            first, rest = (text.split("\n", 1) + [""])[:2]
+        if first.strip() != html_badge or (summary and summary not in second_plain):
             first = html_badge
             return first + "\n" + html_summary_line + (("\n" + rest) if rest else "")
         return text
     if text.startswith(MESSAGE_START_BADGE):
         first, rest = (text.split("\n", 1) + [""])[:2]
         second = text.splitlines()[1] if len(text.splitlines()) > 1 else ""
-        if summary and (first.strip() != plain_badge or summary not in second):
-            first, rest = (text.split("\n", 1) + [""])[:2]
+        if first.strip() != plain_badge or (summary and summary not in second):
             first = plain_badge
             return first + "\n" + plain_summary_line + (("\n" + rest) if rest else "")
         return text

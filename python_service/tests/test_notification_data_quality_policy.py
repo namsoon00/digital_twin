@@ -16,6 +16,7 @@ from digital_twin.domain.notification_ai_gate_message import (
     notification_topline_change_summary,
     prepend_execution_start_badge,
 )
+from digital_twin.domain.notification_templates import prepend_message_start_badge
 from digital_twin.domain.notifications import NotificationJob
 from digital_twin.domain.strategy_alerts import StrategyAlertMixin
 from digital_twin.domain.portfolio import utc_now_iso
@@ -30,6 +31,11 @@ class NotificationDataQualityPolicyTests(unittest.TestCase):
 
         self.assertTrue(message.startswith("<b>🔔 새 알림</b>\n<code>손익 구간: 손실 관리(-10.4%) · 이전 알림 대비 1.5%p 악화</code>"))
         self.assertEqual(1, message.count("🔔 새 알림"))
+
+    def test_message_start_badge_adds_work_handoff_keyword(self):
+        message = prepend_message_start_badge("작업 완료\n- 요약: 테스트", context={"messageType": "workHandoff"})
+
+        self.assertTrue(message.startswith("🔔 새 알림 · 작업완료\n\n작업 완료"))
 
     def test_topline_change_summary_shows_profit_loss_improvement_delta(self):
         summary = notification_topline_change_summary({

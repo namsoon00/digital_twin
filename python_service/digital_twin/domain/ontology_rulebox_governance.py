@@ -3,6 +3,7 @@ import json
 import re
 from typing import Dict, Iterable, List
 
+from .ontology_decision_policy import decision_stage_from_action, relation_stage_priority
 from .ontology_rulebox_contracts import GRAPH_REASONER_VERSION, GraphInferenceRule, GraphRuleCondition, GraphRuleDerivation
 
 
@@ -11,8 +12,99 @@ def rulebox_rules_payload(rules: Iterable[GraphInferenceRule]) -> List[Dict[str,
 
 
 def rulebox_rules_hash(rules_payload: List[Dict[str, object]]) -> str:
-    encoded = json.dumps(rules_payload or [], ensure_ascii=False, sort_keys=True, separators=(",", ":"))
+    canonical_rules = sorted(
+        [canonical_rulebox_rule(item) for item in (rules_payload or []) if isinstance(item, dict)],
+        key=lambda item: str(item.get("rule_id") or item.get("ruleId") or ""),
+    )
+    encoded = json.dumps(canonical_rules, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
     return hashlib.sha256(encoded.encode("utf-8")).hexdigest()
+
+
+def canonical_rulebox_rule(rule: Dict[str, object]) -> Dict[str, object]:
+    result = canonical_json_value(rule)
+    if not isinstance(result, dict):
+        return {}
+    if isinstance(result.get("conditions"), list):
+        result["conditions"] = sorted(
+            [canonical_json_value(item) for item in result.get("conditions") if isinstance(item, dict)],
+            key=lambda item: str(item.get("condition_id") or item.get("conditionId") or ""),
+        )
+    if isinstance(result.get("derivations"), list):
+        result["derivations"] = sorted(
+            [canonical_rulebox_derivation(item, result) for item in result.get("derivations") if isinstance(item, dict)],
+            key=lambda item: "|".join([
+                str(item.get("relation_type") or item.get("relationType") or ""),
+                str(item.get("target_key") or item.get("targetKey") or ""),
+                str(item.get("target_kind") or item.get("targetKind") or ""),
+                str(item.get("action_group") or item.get("actionGroup") or ""),
+                str(item.get("action_level") or item.get("actionLevel") or ""),
+            ]),
+        )
+    return result
+
+
+def canonical_rulebox_derivation(derivation: Dict[str, object], rule: Dict[str, object] = None) -> Dict[str, object]:
+    result = canonical_json_value(derivation)
+    if not isinstance(result, dict):
+        return {}
+    rule = rule if isinstance(rule, dict) else {}
+    action_group = str(result.get("action_group") or result.get("actionGroup") or rule.get("action_group") or rule.get("actionGroup") or "")
+    action_level = str(result.get("action_level") or result.get("actionLevel") or rule.get("action_level") or rule.get("actionLevel") or "")
+    if action_group:
+        if "action_group" in result or "actionGroup" not in result:
+            result["action_group"] = action_group
+        else:
+            result["actionGroup"] = action_group
+    if action_level:
+        if "action_level" in result or "actionLevel" not in result:
+            result["action_level"] = action_level
+        else:
+            result["actionLevel"] = action_level
+    decision_stage = str(result.get("decision_stage") or result.get("decisionStage") or "").strip()
+    if not decision_stage:
+        decision_stage = decision_stage_from_action(action_group, action_level)
+    if decision_stage:
+        if "decision_stage" in result or "decisionStage" not in result:
+            result["decision_stage"] = decision_stage
+        else:
+            result["decisionStage"] = decision_stage
+    stage_priority = result.get("stage_priority") if "stage_priority" in result else result.get("stagePriority")
+    if not float_or_zero(stage_priority):
+        stage_priority = relation_stage_priority({
+            "decisionStage": decision_stage,
+            "actionGroup": action_group,
+            "actionLevel": action_level,
+            "riskImpact": result.get("risk_impact") or result.get("riskImpact"),
+            "supportImpact": result.get("support_impact") or result.get("supportImpact"),
+        })
+    if "stage_priority" in result or "stagePriority" not in result:
+        result["stage_priority"] = canonical_json_value(stage_priority)
+    else:
+        result["stagePriority"] = canonical_json_value(stage_priority)
+    return result
+
+
+def canonical_json_value(value: object) -> object:
+    if isinstance(value, bool) or value is None:
+        return value
+    if isinstance(value, float):
+        if value.is_integer():
+            return int(value)
+        return round(value, 10)
+    if isinstance(value, int):
+        return value
+    if isinstance(value, list):
+        return [canonical_json_value(item) for item in value]
+    if isinstance(value, dict):
+        return {str(key): canonical_json_value(value[key]) for key in sorted(value.keys(), key=str)}
+    return value
+
+
+def float_or_zero(value: object) -> float:
+    try:
+        return float(value or 0)
+    except (TypeError, ValueError):
+        return 0.0
 
 
 def rulebox_version_payload(

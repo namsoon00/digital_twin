@@ -350,15 +350,17 @@ def decision_drivers_from_relation_context(
             ["macroDgs10", "macroDgs2", "macroYieldSpread10y2y", "rateRegime"],
         )
     if _float_value(facts.get("usdKrwRate") or facts.get("fxRateToKrw")) and _float_value(facts.get("fxExposureRatio")):
+        fx_exposure = _float_value(facts.get("fxExposureRatio"))
+        fx_review_threshold = _float_value(facts.get("strategyFxExposureReviewPct")) or 5.0
         _append_driver(
             rows,
             seen,
             "macro",
-            "neutral",
+            "risk" if fx_exposure >= fx_review_threshold else "neutral",
             "환율 영향",
-            "외화 노출이 있어 원화 평가금액은 환율과 현지 주가를 나눠서 봐야 합니다.",
-            50 + min(20, _float_value(facts.get("fxExposureRatio")) * 0.25),
-            ["usdKrwRate", "fxRateToKrw", "fxExposureRatio", "fxRegime"],
+            "외화 노출 " + _plain_number(fx_exposure) + "%입니다. 계정 성향의 환율 점검 기준 " + _plain_number(fx_review_threshold) + "%와 비교해 원화 평가금액과 현지 주가를 나눠서 봐야 합니다.",
+            50 + min(20, max(0.0, fx_exposure - fx_review_threshold) * 0.6 + fx_exposure * 0.15),
+            ["usdKrwRate", "fxRateToKrw", "fxExposureRatio", "strategyFxExposureReviewPct", "fxRegime"],
         )
 
     risk_title = _first_text(list(facts.get("directRiskNewsTitles") or []))
@@ -747,6 +749,10 @@ def execution_plan_from_relation_context(
             "addBuyBlockedReasons": list(facts.get("addBuyBlockedReasons") or [])[:5],
             "investmentStrategyProfile": facts.get("investmentStrategyProfile"),
             "investmentStrategyProfileLabel": facts.get("investmentStrategyProfileLabel"),
+            "strategyLossTolerancePct": facts.get("strategyLossTolerancePct"),
+            "strategyProfitProtectionPct": facts.get("strategyProfitProtectionPct"),
+            "strategyMaxPositionWeightPct": facts.get("strategyMaxPositionWeightPct"),
+            "strategyMaxSectorWeightPct": facts.get("strategyMaxSectorWeightPct"),
             "positionWeight": round(float(facts.get("positionWeight") or 0), 2),
             "positionAccountWeight": round(float(facts.get("positionAccountWeight") or 0), 2),
             "positionToTradingValuePct": round(float(facts.get("positionToTradingValuePct") or 0), 2),
@@ -774,6 +780,7 @@ def execution_plan_from_relation_context(
             "fxRateToKrw": facts.get("fxRateToKrw"),
             "usdKrwRate": facts.get("usdKrwRate"),
             "fxExposureRatio": round(float(facts.get("fxExposureRatio") or 0), 2),
+            "strategyFxExposureReviewPct": round(float(facts.get("strategyFxExposureReviewPct") or 0), 2),
             "entryMa5TimingOk": facts.get("entryMa5TimingOk"),
             "entryMomentumTrendReady": facts.get("entryMomentumTrendReady"),
             "entrySupportCount": facts.get("entrySupportCount"),

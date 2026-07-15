@@ -6,6 +6,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from digital_twin.domain.ontology_prompting import prompt_payload
 from digital_twin.domain.instrument_profiles import parse_instrument_profiles_text
+from digital_twin.domain.ontology_decision_policy import decision_stage_from_action, relation_stage_priority
 from digital_twin.domain.ontology_rulebox_catalog import default_graph_inference_rules
 from digital_twin.domain.portfolio_ontology_builder import build_portfolio_ontology
 from digital_twin.domain.portfolio import Position
@@ -21,7 +22,7 @@ from digital_twin.infrastructure.typedb_ontology import (
     rulebox_rules_to_payload,
     rulebox_snapshot_from_rows,
 )
-from digital_twin.domain.ontology_rulebox_governance import rulebox_governance_candidates, rulebox_version_payload
+from digital_twin.domain.ontology_rulebox_governance import rulebox_governance_candidates, rulebox_rules_hash, rulebox_version_payload
 
 
 class OntologyRuleBoxTests(unittest.TestCase):
@@ -48,6 +49,66 @@ class OntologyRuleBoxTests(unittest.TestCase):
         )
         portfolio = portfolio_summary([position], account_cash=200000)
         return build_portfolio_ontology([position], portfolio, portfolio_id="rulebox-test")
+
+    def strategy_threshold_loss_graph(self, strategy_profile: str, pnl_rate: float):
+        current_price = 100000 * (1 + pnl_rate / 100)
+        position = Position(
+            symbol="000660",
+            name="SK하이닉스",
+            market="KR",
+            currency="KRW",
+            quantity=5,
+            sellable_quantity=5,
+            average_price=100000,
+            current_price=current_price,
+            market_value=current_price * 5,
+            profit_loss=(current_price - 100000) * 5,
+            profit_loss_rate=pnl_rate,
+            ma20=110000,
+            ma60=108000,
+            ma20_distance=-8.5,
+            ma60_distance=-6.0,
+            volume_ratio=1.2,
+            trading_value=5000000000,
+            sector="반도체",
+        )
+        portfolio = portfolio_summary([position], account_cash=200000)
+        return build_portfolio_ontology(
+            [position],
+            portfolio,
+            portfolio_id="rulebox-strategy-threshold-" + strategy_profile,
+            runtime_context={"account": {"investmentStrategyProfile": strategy_profile}},
+        )
+
+    def strategy_threshold_profit_graph(self, strategy_profile: str, pnl_rate: float):
+        current_price = 100000 * (1 + pnl_rate / 100)
+        position = Position(
+            symbol="AAPL",
+            name="Apple",
+            market="US",
+            currency="USD",
+            quantity=2,
+            sellable_quantity=2,
+            average_price=100000,
+            current_price=current_price,
+            market_value=current_price * 2,
+            profit_loss=(current_price - 100000) * 2,
+            profit_loss_rate=pnl_rate,
+            ma20=128000,
+            ma60=124000,
+            ma20_distance=-3.0,
+            ma60_distance=1.0,
+            volume_ratio=1.1,
+            trading_value=100000000,
+            sector="AI",
+        )
+        portfolio = portfolio_summary([position], account_cash=200000, fx_rates={"USD": 1400})
+        return build_portfolio_ontology(
+            [position],
+            portfolio,
+            portfolio_id="rulebox-profit-threshold-" + strategy_profile,
+            runtime_context={"account": {"investmentStrategyProfile": strategy_profile}},
+        )
 
     def flow_pressure_graph(self):
         position = Position(
@@ -335,6 +396,45 @@ class OntologyRuleBoxTests(unittest.TestCase):
         self.assertTrue(any(item.kind == "inference-trace" for item in graph.evidence))
         self.assertIsNotNone(opinion)
         self.assertTrue(any("손실 방어 추론" in str(item.get("label") or "") for item in opinion.relation_influences))
+
+    def test_loss_guard_uses_account_strategy_loss_threshold(self):
+        aggressive_graph = self.strategy_threshold_loss_graph("aggressive", -9.6)
+        conservative_graph = self.strategy_threshold_loss_graph("capitalPreservation", -6.2)
+
+        aggressive_stock = next(item for item in aggressive_graph.entities if item.entity_id == "stock:000660")
+        aggressive_loss_guard = [
+            item
+            for item in aggressive_graph.relations
+            if item.source == "stock:000660" and item.relation_type == "HAS_INFERRED_RISK" and "loss-guard-breakdown" in str(item.target)
+        ]
+        conservative_loss_guard = [
+            item
+            for item in conservative_graph.relations
+            if item.source == "stock:000660" and item.relation_type == "HAS_INFERRED_RISK" and "loss-guard-breakdown" in str(item.target)
+        ]
+
+        self.assertEqual("aggressive", aggressive_stock.properties["investmentStrategyProfile"])
+        self.assertEqual(-15, aggressive_stock.properties["strategyLossTolerancePct"])
+        self.assertEqual([], aggressive_loss_guard)
+        self.assertTrue(conservative_loss_guard)
+
+    def test_profit_protection_uses_account_strategy_profit_threshold(self):
+        aggressive_graph = self.strategy_threshold_profit_graph("aggressive", 15.0)
+        balanced_graph = self.strategy_threshold_profit_graph("balanced", 15.0)
+
+        aggressive_profit_protect = [
+            item
+            for item in aggressive_graph.relations
+            if item.source == "stock:AAPL" and item.relation_type == "HAS_ACTION_CANDIDATE" and "profit-protect" in str(item.target)
+        ]
+        balanced_profit_protect = [
+            item
+            for item in balanced_graph.relations
+            if item.source == "stock:AAPL" and item.relation_type == "HAS_ACTION_CANDIDATE" and "profit-protect" in str(item.target)
+        ]
+
+        self.assertEqual([], aggressive_profit_protect)
+        self.assertTrue(balanced_profit_protect)
 
     def test_local_rulebox_uses_flow_value_filters(self):
         graph = self.flow_pressure_graph()
@@ -888,6 +988,40 @@ class OntologyRuleBoxTests(unittest.TestCase):
         self.assertTrue(any(item.entity_id == "ontology-box:RuleBox" for item in graph.entities))
         self.assertTrue(any(item.kind == "rule" and (item.properties or {}).get("ontologyBox") == "RuleBox" for item in graph.entities))
         self.assertTrue(any(item.relation_type == "DERIVES_RELATION" for item in graph.relations))
+
+    def test_rulebox_hash_is_independent_of_rule_read_order(self):
+        payload = rulebox_rules_to_payload(default_graph_inference_rules())
+
+        self.assertEqual(rulebox_rules_hash(payload), rulebox_rules_hash(list(reversed(payload))))
+
+    def test_rulebox_hash_matches_store_enriched_decision_policy(self):
+        payload = rulebox_rules_to_payload(default_graph_inference_rules())
+        enriched = []
+        for rule in payload:
+            copy = dict(rule)
+            copy["conditions"] = [dict(item) for item in (rule.get("conditions") or [])]
+            derivations = []
+            for derivation in (rule.get("derivations") or []):
+                item = dict(derivation)
+                if not item.get("action_group"):
+                    item["action_group"] = rule.get("action_group")
+                if not item.get("action_level"):
+                    item["action_level"] = rule.get("action_level")
+                if not item.get("decision_stage"):
+                    item["decision_stage"] = decision_stage_from_action(item.get("action_group"), item.get("action_level"))
+                if not item.get("stage_priority"):
+                    item["stage_priority"] = float(relation_stage_priority({
+                        "decisionStage": item.get("decision_stage"),
+                        "actionGroup": item.get("action_group"),
+                        "actionLevel": item.get("action_level"),
+                        "riskImpact": item.get("risk_impact"),
+                        "supportImpact": item.get("support_impact"),
+                    }))
+                derivations.append(item)
+            copy["derivations"] = derivations
+            enriched.append(copy)
+
+        self.assertEqual(rulebox_rules_hash(payload), rulebox_rules_hash(enriched))
 
     def test_rulebox_save_graph_can_skip_tbox_for_lightweight_sync(self):
         graph = rulebox_graph_from_rules(default_graph_inference_rules(), include_tbox=False)

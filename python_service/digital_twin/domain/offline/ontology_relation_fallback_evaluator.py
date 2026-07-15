@@ -132,8 +132,9 @@ def evaluate_position_relation_rules(
     usd_krw_delta_pct_threshold = float(thresholds.get("usdKrwDeltaPct", 1.0) or 0.0)
     usd_krw_7d_delta_krw_threshold = float(thresholds.get("usdKrw7dDeltaKrw", 30.0) or 0.0)
     usd_krw_7d_delta_pct_threshold = float(thresholds.get("usdKrw7dDeltaPct", 2.0) or 0.0)
-    fx_exposure_review = float(thresholds.get("fxExposureReview", 5.0) or 5.0)
-    fx_exposure_high = float(thresholds.get("fxExposureHigh", 10.0) or 10.0)
+    fx_exposure_review = float(facts.get("strategyFxExposureReviewPct") or thresholds.get("fxExposureReview", 5.0) or 5.0)
+    fx_exposure_high = max(fx_exposure_review, float(thresholds.get("fxExposureHigh", 10.0) or 10.0))
+    profit_protection_threshold = float(facts.get("strategyProfitProtectionPct") or thresholds.get("profitRateHigh", 20.0) or 20.0)
     macro_sensitive = any(token in str(facts.get("sector") or "") for token in ["반도체", "AI", "플랫폼", "디지털자산"]) or currency == "USD" or facts.get("isBtcSensitive")
     rate_sensitive = macro_sensitive or any(token in str(facts.get("sector") or "") for token in ["성장", "소프트웨어", "테크", "바이오"])
     high_rate_active = bool(has_rate_signals and macro_dgs10 and macro_dgs10 >= rate_high_threshold)
@@ -174,8 +175,8 @@ def evaluate_position_relation_rules(
     facts["entryMacroMissing"] = entry_macro_missing
     facts["entryFxMissing"] = entry_fx_missing
 
-    if pnl >= 10 and (ma20_distance <= -2 or ma60_distance <= -5 or trend_score < -3):
-        score = 55 + min(25, max(0, pnl - 10) * 1.2) + min(20, abs(min(ma20_distance, ma60_distance, trend_score)))
+    if pnl >= profit_protection_threshold and (ma20_distance <= -2 or ma60_distance <= -5 or trend_score < -3):
+        score = 55 + min(25, max(0, pnl - profit_protection_threshold) * 1.2) + min(20, abs(min(ma20_distance, ma60_distance, trend_score)))
         matches.append(_match(
             "holding.profit_take.trend_weakness.v1",
             score,
@@ -659,7 +660,7 @@ def evaluate_position_relation_rules(
         ]
         if value
     )
-    avg_loss_threshold = float(thresholds.get("lossRateLow", -8.0) or -8.0)
+    avg_loss_threshold = float(facts.get("strategyLossTolerancePct") or thresholds.get("lossRateLow", -8.0) or -8.0)
     avg_loss_buffer = abs(float(thresholds.get("lossRateBufferPct", 1.0) or 0.0))
     weak_near_loss_for_averaging = (
         pnl <= avg_loss_threshold
@@ -752,7 +753,7 @@ def evaluate_position_relation_rules(
             definitions=relation_definitions,
         ))
 
-    loss_threshold = float(thresholds.get("lossRateLow", -8.0) or -8.0)
+    loss_threshold = float(facts.get("strategyLossTolerancePct") or thresholds.get("lossRateLow", -8.0) or -8.0)
     loss_buffer = abs(float(thresholds.get("lossRateBufferPct", 1.0) or 0.0))
     volume_confirm_ratio = float(thresholds.get("lossGuardVolumeConfirmRatio", 0.8))
     ma60_support_threshold = float(thresholds.get("lossGuardMa60SupportPct", 0.0) or 0.0)
@@ -947,8 +948,8 @@ def evaluate_position_relation_rules(
             missing_labels,
             definitions=relation_definitions,
         ))
-    if pnl >= 10 and (volume_ratio >= 1.5 or abs(price_change) >= 2.0) and (ma20_slope <= 0.2 or trend_curve <= -0.4 or ma20_delta_previous <= -2.0):
-        score = 54 + min(18, max(0.0, pnl - 10) * 1.0) + min(12, max(0.0, volume_ratio - 1.0) * 8.0) + min(12, abs(min(0.0, trend_curve)) * 5.0)
+    if pnl >= profit_protection_threshold and (volume_ratio >= 1.5 or abs(price_change) >= 2.0) and (ma20_slope <= 0.2 or trend_curve <= -0.4 or ma20_delta_previous <= -2.0):
+        score = 54 + min(18, max(0.0, pnl - profit_protection_threshold) * 1.0) + min(12, max(0.0, volume_ratio - 1.0) * 8.0) + min(12, abs(min(0.0, trend_curve)) * 5.0)
         matches.append(_match(
             "profit.protection.volatility.v1",
             score,

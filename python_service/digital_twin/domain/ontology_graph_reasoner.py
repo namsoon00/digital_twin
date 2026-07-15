@@ -144,6 +144,7 @@ def first_matching_relation(
 
 def property_matches(properties: Dict[str, object], field: str, operator: str, expected: object) -> bool:
     actual = properties.get(field)
+    expected = resolve_expected_value(properties, expected)
     op = str(operator or "==").strip().lower()
     if op in {"exists", "present"}:
         return actual not in {None, ""}
@@ -169,6 +170,25 @@ def property_matches(properties: Dict[str, object], field: str, operator: str, e
     if op in {">", "gt"}:
         return actual_number > expected_number
     return compare_equal(actual, expected)
+
+
+def resolve_expected_value(properties: Dict[str, object], expected: object) -> object:
+    if not isinstance(expected, dict):
+        return expected
+    reference_field = (
+        expected.get("field")
+        or expected.get("subjectField")
+        or expected.get("property")
+        or expected.get("propertyName")
+    )
+    if reference_field:
+        value = properties.get(str(reference_field))
+        if value is not None and value != "":
+            return value
+        return expected.get("default")
+    if "value" in expected:
+        return expected.get("value")
+    return expected
 
 
 def property_filters_match(properties: Dict[str, object], filters: Dict[str, object]) -> bool:

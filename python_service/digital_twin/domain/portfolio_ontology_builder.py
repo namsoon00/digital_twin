@@ -166,6 +166,19 @@ def build_portfolio_ontology(
     add_relation(graph, account_id_value, portfolio_node_id, "MANAGES_PORTFOLIO", weight=1.0, properties={"source": "account-context"})
     add_account_delivery_profile_concepts(graph, account_id_value, portfolio_node_id, account_context)
     strategy_context = add_account_investment_strategy_concepts(graph, account_id_value, portfolio_node_id, account_context)
+    strategy_profile = strategy_context.get("profile") if isinstance(strategy_context.get("profile"), dict) else {}
+    strategy_fact_props = {
+        "investmentStrategyProfile": strategy_profile.get("profile"),
+        "investmentStrategyProfileLabel": strategy_profile.get("label"),
+        "strategyLossTolerancePct": number(strategy_profile.get("lossTolerancePct")),
+        "strategyProfitProtectionPct": number(strategy_profile.get("profitProtectionPct")),
+        "strategyMaxPositionWeightPct": number(strategy_profile.get("maxPositionWeightPct")),
+        "strategyMaxSectorWeightPct": number(strategy_profile.get("maxSectorWeightPct")),
+        "strategyFxExposureReviewPct": number(strategy_profile.get("fxExposureReviewPct")),
+        "strategyAddBuyWatchSignalMin": number(strategy_profile.get("addBuyWatchSignalMin")),
+        "strategyAddBuyReviewSignalMin": number(strategy_profile.get("addBuyReviewSignalMin")),
+        "strategyAllowLossAddBuyReview": bool(strategy_profile.get("allowLossAddBuyReview")),
+    }
     if include_legacy_score_model:
         graph.entities.append(OntologyEntity(entity_id("concept", "legacy-score-model"), "관계 규칙 점수 모델", "model", abox_properties({
             "role": "research-only",
@@ -244,6 +257,7 @@ def build_portfolio_ontology(
             "profitLossRate": number(position.profit_loss_rate),
             "tboxClass": "Stock",
             "tboxClasses": stock_tbox_classes,
+            **strategy_fact_props,
         })))
         position_id = add_entity(graph, "position", portfolio_id + ":" + symbol, (position.name or symbol) + (" 관심 행" if source == "watchlist" else " 보유 행"), {
             "tboxClass": "Position",
@@ -254,6 +268,7 @@ def build_portfolio_ontology(
             "marketValue": number(position.market_value),
             "profitLossRate": number(position.profit_loss_rate),
             "updatedAt": position.updated_at,
+            **strategy_fact_props,
         })
         if holding:
             add_relation(graph, portfolio_node_id, position_id, "HAS_POSITION", weight=round(position_weight(position, portfolio) / 100, 4), properties={"source": source})

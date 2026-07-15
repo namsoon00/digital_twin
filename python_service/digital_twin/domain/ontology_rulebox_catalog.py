@@ -49,10 +49,10 @@ def default_graph_inference_rules() -> List[GraphInferenceRule]:
                 GraphRuleCondition(
                     "holding-loss",
                     "subject_property",
-                    "보유 종목 손익률이 -8% 이하입니다.",
+                    "보유 종목 손익률이 계정 투자 성향의 손실 허용폭 이하입니다.",
                     field="profitLossRate",
                     operator="<=",
-                    value=-8,
+                    value={"field": "strategyLossTolerancePct", "default": -8},
                 ),
                 GraphRuleCondition(
                     "ma-break",
@@ -385,10 +385,10 @@ def default_graph_inference_rules() -> List[GraphInferenceRule]:
                 GraphRuleCondition(
                     "holding-profit",
                     "subject_property",
-                    "보유 종목 손익률이 +12% 이상입니다.",
+                    "보유 종목 손익률이 계정 투자 성향의 수익 보호 기준 이상입니다.",
                     field="profitLossRate",
                     operator=">=",
-                    value=12,
+                    value={"field": "strategyProfitProtectionPct", "default": 12},
                 ),
                 GraphRuleCondition(
                     "ma20-break",

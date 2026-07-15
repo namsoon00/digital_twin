@@ -11,6 +11,7 @@ from ..domain.accounts import investment_strategy_profile, message_delivery_prof
 from ..domain.notification_ai import criterion_lines, notification_ai_prompt_context, relation_context_value
 from ..domain.notification_ai_context import relation_facts
 from ..domain.notification_ai_context import is_watchlist_context
+from ..domain.external_api_sources import external_api_source_line
 from ..domain.notification_ai_gate_contracts import ACTION_LABELS, MESSAGE_START_BADGE, NotificationAIValidatedResponse
 from ..domain.notification_ai_gate_sources import source_detail_text, source_url_rows
 from ..domain.notification_ai_gate_text import (
@@ -36,6 +37,7 @@ from .notification_message_metrics import _profit_loss_change_summary
 MESSAGE_CONTEXT_ROW_LIMIT = 5
 MESSAGE_DATA_QUALITY_ROW_LIMIT = 3
 MESSAGE_DATA_COLLECTION_ROW_LIMIT = 6
+MESSAGE_API_SOURCE_ROW_LIMIT = 8
 KST = ZoneInfo("Asia/Seoul") if ZoneInfo else timezone(timedelta(hours=9))
 
 DATA_COLLECTION_TIME_KEYS = [
@@ -1010,6 +1012,42 @@ def context_specific_insight_rows(context: Dict[str, object], response: Notifica
         )
     return rows[:limit]
 
+
+def external_api_source_rows(context: Dict[str, object], limit: int = MESSAGE_API_SOURCE_ROW_LIMIT) -> List[str]:
+    context = context or {}
+    rows: List[str] = []
+    values = context.get("externalApiSourceLines")
+    if isinstance(values, str):
+        rows.extend([line.strip() for line in values.splitlines() if line.strip()])
+    elif isinstance(values, list):
+        for item in values:
+            if isinstance(item, dict):
+                line = external_api_source_line(item)
+            else:
+                line = str(item or "").strip()
+            if line:
+                rows.append(line)
+    structured = context.get("externalApiSources")
+    if isinstance(structured, list):
+        for item in structured:
+            if not isinstance(item, dict):
+                continue
+            line = external_api_source_line(item)
+            if line:
+                rows.append(line)
+    unique: List[str] = []
+    seen = set()
+    for row in rows:
+        text = re.sub(r"\s+", " ", str(row or "")).strip()
+        if not text or text in seen:
+            continue
+        unique.append(text)
+        seen.add(text)
+        if len(unique) >= limit:
+            break
+    return unique
+
+
 def execution_telegram_message(context: Dict[str, object], response: NotificationAIValidatedResponse) -> str:
     level = delivery_level_from_context(context)
     if level == "absoluteBeginner":
@@ -1055,9 +1093,11 @@ def execution_telegram_message(context: Dict[str, object], response: Notificatio
         parts.extend(["", "<b>AI 판단 조정</b>", *difference_rows])
     if current_state_rows:
         parts.extend(["", "<b>현재 상태</b>", *current_state_rows])
+    api_source_rows = external_api_source_rows(context, MESSAGE_API_SOURCE_ROW_LIMIT)
     collection_rows = data_collection_time_rows(context, MESSAGE_DATA_COLLECTION_ROW_LIMIT)
-    if collection_rows:
+    if api_source_rows or collection_rows:
         parts.extend(["", "<b>API 조회 정보</b>"])
+        parts.extend(_html_bullet(item, level) for item in api_source_rows)
         parts.extend(_html_bullet(item, level) for item in collection_rows)
     quality_rows = data_quality_warning_rows(context, MESSAGE_DATA_QUALITY_ROW_LIMIT)
     if quality_rows:
@@ -1123,9 +1163,11 @@ def execution_telegram_message_absolute_beginner(context: Dict[str, object], res
         parts.extend(["", "<b>AI 판단 조정</b>", *difference_rows])
     if current_state_rows:
         parts.extend(["", "<b>현재 상황</b>", *current_state_rows])
+    api_source_rows = external_api_source_rows(context, MESSAGE_API_SOURCE_ROW_LIMIT)
     collection_rows = data_collection_time_rows(context, MESSAGE_DATA_COLLECTION_ROW_LIMIT)
-    if collection_rows:
+    if api_source_rows or collection_rows:
         parts.extend(["", "<b>API 조회 정보</b>"])
+        parts.extend(_html_bullet(item, "absoluteBeginner") for item in api_source_rows)
         parts.extend(_html_bullet(item, "absoluteBeginner") for item in collection_rows)
     quality_rows = data_quality_warning_rows(context, MESSAGE_DATA_QUALITY_ROW_LIMIT)
     if quality_rows:

@@ -4,7 +4,9 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
+from digital_twin.application.notification_ai_gate_message import execution_telegram_message
 from digital_twin.domain.external_api_sources import external_api_source_metadata
+from digital_twin.domain.notification_ai_gate_contracts import NotificationAIValidatedResponse
 from digital_twin.domain.notification_templates import NotificationTemplate, alert_context, render_notification
 from digital_twin.domain.portfolio import AccountSnapshot, AlertEvent, Position
 from digital_twin.domain.portfolio_calculations import portfolio_summary
@@ -108,6 +110,40 @@ class ExternalApiSourceTests(unittest.TestCase):
         )
 
         self.assertIn("사용한 데이터 API", message)
+        self.assertIn("Alpha Vantage", message)
+        self.assertIn("CoinGecko", message)
+        self.assertIn("KIS", message)
+
+    def test_ai_rewritten_message_merges_api_sources_into_single_api_section(self):
+        snapshot = self.snapshot_with_sources()
+        event = AlertEvent(
+            "main",
+            "메인",
+            "WATCH",
+            "investmentInsight",
+            "main:insight:AAPL",
+            "Apple",
+            ["현재가: $315", "수익률: +0.5%"],
+            "AAPL",
+        )
+        stamped = RealtimeMonitor().stamp_events(snapshot, [event])[0]
+        context = alert_context(stamped)
+        context["telegramMessage"] = execution_telegram_message(
+            context,
+            NotificationAIValidatedResponse(
+                action="HOLD",
+                action_label="보유",
+                confidence=70,
+                summary="보유 판단입니다.",
+                evidence=["가격 흐름을 확인했습니다."],
+                opinion="바로 매매보다 확인이 우선입니다.",
+            ),
+        )
+
+        message = render_notification(NotificationTemplate("investmentInsight", "{telegramMessage}"), context)
+
+        self.assertEqual(1, message.count("API 조회 정보"))
+        self.assertNotIn("사용한 데이터 API", message)
         self.assertIn("Alpha Vantage", message)
         self.assertIn("CoinGecko", message)
         self.assertIn("KIS", message)

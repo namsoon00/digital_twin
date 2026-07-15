@@ -1152,7 +1152,7 @@ def append_ai_opinion(rendered: str, context: Dict[str, object], rich: bool = Fa
 
 def append_external_api_sources(rendered: str, context: Dict[str, object], rich: bool = False) -> str:
     rendered_text = str(rendered or "")
-    if not rendered_text.strip() or "사용한 데이터 API" in rendered_text:
+    if not rendered_text.strip() or "사용한 데이터 API" in rendered_text or "API 조회 정보" in rendered_text:
         return rendered
     block = notification_external_api_source_block(context, rich)
     if not block:

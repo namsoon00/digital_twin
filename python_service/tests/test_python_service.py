@@ -9282,6 +9282,60 @@ class PythonServiceTests(unittest.TestCase):
         self.assertNotIn("<b>현재 상태</b>", message)
         self.assertIn("<b>AI가 중요하게 본 근거</b>", message)
 
+    def test_validated_ai_response_shows_api_collection_times(self):
+        context = {
+            "messageType": "investmentInsight",
+            "headline": "[관찰] 🛡️ 삼성전자: 분할축소 우선 점검",
+            "displayTarget": "삼성전자 / 005930",
+            "referenceDate": "2026-07-15 09:01 KST",
+            "sentTime": "2026-07-15 09:02 KST",
+            "rawLines": "\n".join([
+                "현재가: 72,000원",
+                "수익률: -3.1%",
+                "기준일: 2026-07-15 09:01 KST",
+            ]),
+            "dataFreshness": {
+                "source": "KIS Open API",
+                "status": "fresh",
+                "ageMinutes": 2,
+                "sourceFetchedAt": "2026-07-15T00:00:30Z",
+                "checkedAt": "2026-07-15T00:02:30Z",
+            },
+            "ontologyRelationContext": {
+                "graphStoreUsed": True,
+                "inferenceBoxUsed": True,
+                "facts": {
+                    "dartDisclosure": {
+                        "provider": "OpenDART",
+                        "title": "주요사항보고서",
+                        "fetchedAt": "2026-07-15T00:01:10Z",
+                    },
+                    "researchEvidence": [
+                        {
+                            "provider": "GDELT",
+                            "title": "삼성전자 공급망 뉴스",
+                            "fetchedAt": "2026-07-15T00:01:40Z",
+                        }
+                    ],
+                },
+            },
+        }
+        response = validated_response_from_payload(context, {
+            "action": "TRIM",
+            "confidence": 82,
+            "summary": "분할축소 기준을 확인합니다.",
+            "opinion": "실행 전 수량을 확인하세요.",
+            "evidence": ["현재가와 공시를 함께 확인했습니다."],
+            "nextChecks": ["다음 조회에서도 같은 관계가 유지되는지 확인"],
+        }, source="test AI")
+
+        message = context_with_validated_ai_response(context, response)["telegramMessage"]
+
+        self.assertIn("<b>데이터 수집 시각</b>", message)
+        self.assertIn("KIS Open API: 2026-07-15T00:00:30Z", message)
+        self.assertIn("OpenDART: 2026-07-15T00:01:10Z", message)
+        self.assertIn("GDELT: 2026-07-15T00:01:40Z", message)
+
     def test_validated_ai_response_uses_absolute_beginner_delivery_level(self):
         context = {
             "messageType": "investmentInsight",

@@ -30,6 +30,21 @@ from .notification_message_metrics import _profit_loss_change_summary
 
 MESSAGE_CONTEXT_ROW_LIMIT = 5
 MESSAGE_DATA_QUALITY_ROW_LIMIT = 3
+MESSAGE_DATA_COLLECTION_ROW_LIMIT = 6
+
+DATA_COLLECTION_TIME_KEYS = [
+    "sourceFetchedAt",
+    "fetchedAt",
+    "collectedAt",
+    "updatedAt",
+    "observedAt",
+    "asOf",
+    "publishedAt",
+    "checkedAt",
+]
+
+DATA_COLLECTION_SOURCE_KEYS = ["provider", "source", "domain", "quoteSource", "sourceName"]
+DATA_COLLECTION_DETAIL_KEYS = ["symbol", "title", "seriesId", "eventType", "field", "dataScope", "messageType"]
 
 ABSOLUTE_BEGINNER_TERM_REPLACEMENTS = [
     ("유동성 또는 슬리피지 위험", "거래가 적어 원하는 가격에 사고팔기 어려운 위험"),
@@ -409,6 +424,75 @@ def data_quality_warning_rows(context: Dict[str, object], limit: int = 3) -> Lis
     return rows
 
 
+def data_collection_time_rows(context: Dict[str, object], limit: int = MESSAGE_DATA_COLLECTION_ROW_LIMIT) -> List[str]:
+    rows: List[str] = []
+    seen = set()
+
+    def add(label: object, value: object, suffix: object = "") -> None:
+        if len(rows) >= limit:
+            return
+        stamp = str(value or "").strip()
+        if not stamp:
+            return
+        source = _text(str(label or "데이터").strip() or "데이터", 42)
+        detail = _text(str(suffix or "").strip(), 72)
+        text = source + ": " + stamp + ((" · " + detail) if detail else "")
+        key = re.sub(r"\s+", " ", source + "|" + stamp).strip().lower()
+        if key in seen:
+            return
+        seen.add(key)
+        rows.append(text)
+
+    freshness = (context or {}).get("dataFreshness") if isinstance((context or {}).get("dataFreshness"), dict) else {}
+    if freshness:
+        source = freshness.get("source") or "데이터 신선도"
+        stamp = freshness.get("sourceFetchedAt") or freshness.get("fetchedAt") or freshness.get("checkedAt")
+        age = _number(freshness.get("ageMinutes"))
+        status = str(freshness.get("status") or "").strip()
+        detail_parts = []
+        if status:
+            detail_parts.append("상태 " + status)
+        if age or age == 0:
+            detail_parts.append("약 " + _minute_count_text(age) + " 전")
+        add(source, stamp, " · ".join(part for part in detail_parts if part))
+
+    roots = [
+        context,
+        relation_facts(context or {}),
+    ]
+    relation_context = relation_context_value(context or {})
+    if isinstance(relation_context, dict):
+        roots.append(relation_context.get("facts") if isinstance(relation_context.get("facts"), dict) else relation_context)
+
+    def walk(value: object, depth: int = 0) -> None:
+        if len(rows) >= limit or depth > 5:
+            return
+        if isinstance(value, list):
+            for item in value[:20]:
+                walk(item, depth + 1)
+                if len(rows) >= limit:
+                    break
+            return
+        if not isinstance(value, dict):
+            return
+        stamp = next((value.get(key) for key in DATA_COLLECTION_TIME_KEYS if value.get(key)), "")
+        if stamp:
+            source = next((value.get(key) for key in DATA_COLLECTION_SOURCE_KEYS if value.get(key)), "")
+            detail = next((value.get(key) for key in DATA_COLLECTION_DETAIL_KEYS if value.get(key)), "")
+            add(source or value.get("kind") or value.get("type") or "API 데이터", stamp, detail)
+        for child in value.values():
+            if isinstance(child, (dict, list)):
+                walk(child, depth + 1)
+                if len(rows) >= limit:
+                    break
+
+    for root in roots:
+        walk(root)
+        if len(rows) >= limit:
+            break
+    return rows[:limit]
+
+
 def _point_text(value: object) -> str:
     number = _number(value)
     if not number:
@@ -722,6 +806,10 @@ def execution_telegram_message(context: Dict[str, object], response: Notificatio
         parts.extend(["", "<b>AI 판단 조정</b>", *difference_rows])
     if current_state_rows:
         parts.extend(["", "<b>현재 상태</b>", *current_state_rows])
+    collection_rows = data_collection_time_rows(context, MESSAGE_DATA_COLLECTION_ROW_LIMIT)
+    if collection_rows:
+        parts.extend(["", "<b>데이터 수집 시각</b>"])
+        parts.extend(_html_bullet(item, level) for item in collection_rows)
     quality_rows = data_quality_warning_rows(context, MESSAGE_DATA_QUALITY_ROW_LIMIT)
     if quality_rows:
         parts.extend(["", "<b>데이터 신뢰도</b>"])
@@ -786,6 +874,10 @@ def execution_telegram_message_absolute_beginner(context: Dict[str, object], res
         parts.extend(["", "<b>AI 판단 조정</b>", *difference_rows])
     if current_state_rows:
         parts.extend(["", "<b>현재 상황</b>", *current_state_rows])
+    collection_rows = data_collection_time_rows(context, MESSAGE_DATA_COLLECTION_ROW_LIMIT)
+    if collection_rows:
+        parts.extend(["", "<b>데이터 수집 시각</b>"])
+        parts.extend(_html_bullet(item, "absoluteBeginner") for item in collection_rows)
     quality_rows = data_quality_warning_rows(context, MESSAGE_DATA_QUALITY_ROW_LIMIT)
     if quality_rows:
         parts.extend(["", "<b>데이터 신뢰도</b>"])

@@ -137,6 +137,7 @@ class OntologyValidatorTests(unittest.TestCase):
                     }
                 },
             },
+            include_reasoning_outputs=True,
         )
 
         kinds = {item.kind for item in graph.entities}

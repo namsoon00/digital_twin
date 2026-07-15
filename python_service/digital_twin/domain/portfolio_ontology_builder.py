@@ -122,7 +122,7 @@ def build_portfolio_ontology(
     external_signals: Dict[str, object] = None,
     portfolio_id: str = "portfolio",
     runtime_context: Dict[str, object] = None,
-    include_reasoning_outputs: bool = True,
+    include_reasoning_outputs: bool = False,
 ) -> PortfolioOntology:
     legacy_by_symbol = legacy_by_symbol or {}
     external_signals = external_signals or {}

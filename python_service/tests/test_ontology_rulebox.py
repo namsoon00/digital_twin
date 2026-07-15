@@ -8,7 +8,7 @@ from digital_twin.domain.ontology_prompting import prompt_payload
 from digital_twin.domain.instrument_profiles import parse_instrument_profiles_text
 from digital_twin.domain.ontology_decision_policy import decision_stage_from_action, relation_stage_priority
 from digital_twin.domain.ontology_rulebox_catalog import default_graph_inference_rules
-from digital_twin.domain.portfolio_ontology_builder import build_portfolio_ontology
+from digital_twin.domain.portfolio_ontology_builder import build_portfolio_ontology as _build_portfolio_ontology
 from digital_twin.domain.portfolio import Position
 from digital_twin.domain.portfolio_calculations import portfolio_summary
 from digital_twin.domain.portfolio_ontology_market_concepts import missing_market_microstructure_fields
@@ -23,6 +23,11 @@ from digital_twin.infrastructure.typedb_ontology import (
     rulebox_snapshot_from_rows,
 )
 from digital_twin.domain.ontology_rulebox_governance import rulebox_governance_candidates, rulebox_rules_hash, rulebox_version_payload
+
+
+def build_portfolio_ontology(*args, **kwargs):
+    kwargs.setdefault("include_reasoning_outputs", True)
+    return _build_portfolio_ontology(*args, **kwargs)
 
 
 class OntologyRuleBoxTests(unittest.TestCase):

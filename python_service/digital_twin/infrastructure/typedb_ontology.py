@@ -274,6 +274,51 @@ TYPEDB_NATIVE_REQUIRED_MODE = "typedb-native-rule-materialization-required"
 TYPEDB_NATIVE_MATERIALIZATION_SOURCE = "typedb-abox-native-rule"
 TYPEDB_NATIVE_REASONING_LAYER = "typedb-native-rule"
 TYPEDB_SCHEMA_FUNCTION_PREFIX = "orbit_rule_"
+TYPEDB_PROMOTED_NUMERIC_ATTRIBUTES = {
+    "currentPrice": "ontology-current-price",
+    "averagePrice": "ontology-average-price",
+    "marketValue": "ontology-market-value",
+    "quantity": "ontology-quantity",
+    "sellableQuantity": "ontology-sellable-quantity",
+    "positionWeight": "ontology-position-weight-pct",
+    "positionAccountWeight": "ontology-position-account-weight-pct",
+    "changeRate": "ontology-change-rate",
+    "priceChangeRate": "ontology-price-change-rate",
+    "ma5": "ontology-ma5",
+    "ma20": "ontology-ma20",
+    "ma60": "ontology-ma60",
+    "ma5Distance": "ontology-ma5-distance",
+    "ma20Distance": "ontology-ma20-distance",
+    "ma60Distance": "ontology-ma60-distance",
+    "ma20Slope": "ontology-ma20-slope",
+    "ma60Slope": "ontology-ma60-slope",
+    "trendCurve": "ontology-trend-curve",
+    "volume": "ontology-volume",
+    "volumeRatio": "ontology-volume-ratio",
+    "rawVolumeRatio": "ontology-raw-volume-ratio",
+    "timeAdjustedVolumeRatio": "ontology-time-adjusted-volume-ratio",
+    "expectedVolumeRatioNow": "ontology-expected-volume-ratio-now",
+    "tradeStrength": "ontology-trade-strength",
+    "tradingValue": "ontology-trading-value",
+    "bidAskImbalance": "ontology-bid-ask-imbalance",
+    "foreignNetVolume": "ontology-foreign-net-volume",
+    "foreignNetAmount": "ontology-foreign-net-amount",
+    "institutionNetVolume": "ontology-institution-net-volume",
+    "institutionNetAmount": "ontology-institution-net-amount",
+    "individualNetVolume": "ontology-individual-net-volume",
+    "individualNetAmount": "ontology-individual-net-amount",
+    "smartMoneyNetVolume": "ontology-smart-money-net-volume",
+    "investorFlowScore": "ontology-investor-flow-score",
+}
+TYPEDB_PROMOTED_TEXT_ATTRIBUTES = {
+    "investmentStrategyProfile": "ontology-investment-strategy-profile",
+    "investmentStrategyProfileLabel": "ontology-investment-strategy-profile-label",
+    "positionRole": "ontology-position-role",
+    "targetPositionRole": "ontology-target-position-role",
+    "instrumentArchetype": "ontology-instrument-archetype",
+    "instrumentArchetypes": "ontology-instrument-archetype",
+    "actionPolicy": "ontology-action-policy",
+}
 TYPEDB_FUNCTION_SUBJECT_FIELDS = {
     "source",
     "symbol",
@@ -283,7 +328,7 @@ TYPEDB_FUNCTION_SUBJECT_FIELDS = {
     "profitLossRate",
     "value",
     "valueNumber",
-}
+} | set(TYPEDB_PROMOTED_NUMERIC_ATTRIBUTES.keys()) | set(TYPEDB_PROMOTED_TEXT_ATTRIBUTES.keys())
 TYPEDB_FUNCTION_TARGET_FILTERS = {
     "field",
     "levelType",
@@ -308,7 +353,7 @@ TYPEDB_FUNCTION_TARGET_FILTERS = {
     "readScope",
     "peRatio",
     "beta",
-}
+} | set(TYPEDB_PROMOTED_NUMERIC_ATTRIBUTES.keys()) | set(TYPEDB_PROMOTED_TEXT_ATTRIBUTES.keys())
 TYPEDB_FUNCTION_RELATION_FILTERS = {
     "field",
     "signalGroup",
@@ -463,6 +508,7 @@ class TypeDBOntologyGraphRepository(GraphStoreOntologyRowMapperMixin):
         self._schema_function_sync_cache_result: Dict[str, object] = {}
         self._rulebox_snapshot_cache_at = 0.0
         self._rulebox_snapshot_cache_result: Dict[str, object] = {}
+        self._query_metrics: List[Dict[str, object]] = []
 
     def with_typedb_retries(self, operation):
         attempts = max(1, self.retry_count + 1)
@@ -497,6 +543,42 @@ class TypeDBOntologyGraphRepository(GraphStoreOntologyRowMapperMixin):
             return typedb_bool(runtime_settings().get("typedbConditionDetailQueriesEnabled"))
         except Exception:
             return False
+
+    def query_metrics_enabled(self) -> bool:
+        try:
+            value = runtime_settings().get("typedbQueryMetricsEnabled")
+        except Exception:
+            value = None
+        return True if value in (None, "") else typedb_bool(value)
+
+    def reset_query_metrics(self) -> None:
+        self._query_metrics = []
+
+    def record_query_metric(self, label: str, query: str, row_count: int, duration_ms: float, status: str = "ok") -> None:
+        if not self.query_metrics_enabled():
+            return
+        normalized_query = re.sub(r"\s+", " ", str(query or "")).strip()
+        self._query_metrics.append({
+            "label": str(label or "typedb.read")[:80],
+            "status": str(status or "ok"),
+            "rowCount": int(row_count or 0),
+            "durationMs": round(float(duration_ms or 0.0), 2),
+            "queryHash": hashlib.sha256(normalized_query.encode("utf-8")).hexdigest()[:12] if normalized_query else "",
+            "queryPreview": normalized_query[:180],
+        })
+        if len(self._query_metrics) > 120:
+            self._query_metrics = self._query_metrics[-120:]
+
+    def query_metrics_snapshot(self) -> Dict[str, object]:
+        rows = list(self._query_metrics or [])
+        total_ms = sum(float(item.get("durationMs") or 0) for item in rows)
+        slow = sorted(rows, key=lambda item: float(item.get("durationMs") or 0), reverse=True)[:8]
+        return {
+            "enabled": self.query_metrics_enabled(),
+            "queryCount": len(rows),
+            "totalDurationMs": round(total_ms, 2),
+            "slowQueries": slow,
+        }
 
     def rulebox_snapshot_cache_seconds(self) -> float:
         return self.runtime_timeout_seconds("typedbRuleBoxSnapshotCacheSeconds", 60.0)
@@ -651,7 +733,7 @@ class TypeDBOntologyGraphRepository(GraphStoreOntologyRowMapperMixin):
                 tx.query(self.schema_query()).resolve()
                 tx.commit()
 
-    def read_rows(self, query: str, columns: Iterable[str]) -> List[Dict[str, object]]:
+    def read_rows(self, query: str, columns: Iterable[str], label: str = "typedb.read") -> List[Dict[str, object]]:
         if not self.address:
             return []
         imported = self.driver_imports()
@@ -663,18 +745,27 @@ class TypeDBOntologyGraphRepository(GraphStoreOntologyRowMapperMixin):
             try:
                 self.ensure_database(driver)
                 with driver.transaction(self.database, TransactionType.READ) as tx:
-                    return self.read_rows_in_transaction(tx, query, columns)
+                    return self.read_rows_in_transaction(tx, query, columns, label=label)
             finally:
                 self.close_driver(driver)
         return self.with_typedb_retries(operation)
 
-    def read_rows_in_transaction(self, tx, query: str, columns: Iterable[str]) -> List[Dict[str, object]]:
-        with typedb_operation_timeout(self.query_timeout_seconds(), "TypeDB read query"):
-            resolved = tx.query(query).resolve()
-            rows = []
-            for item in resolved:
-                rows.append({name: typedb_row_value(item, name) for name in columns})
-            return rows
+    def read_rows_in_transaction(self, tx, query: str, columns: Iterable[str], label: str = "typedb.read") -> List[Dict[str, object]]:
+        started_at = time.perf_counter()
+        rows: List[Dict[str, object]] = []
+        status = "ok"
+        try:
+            with typedb_operation_timeout(self.query_timeout_seconds(), "TypeDB read query"):
+                resolved = tx.query(query).resolve()
+                for item in resolved:
+                    rows.append({name: typedb_row_value(item, name) for name in columns})
+                return rows
+        except Exception:
+            status = "error"
+            raise
+        finally:
+            duration_ms = (time.perf_counter() - started_at) * 1000
+            self.record_query_metric(label, query, len(rows), duration_ms, status=status)
 
     def has_box_rows(self, box: str) -> bool:
         query = (
@@ -1094,6 +1185,46 @@ attribute ontology-needs-review, value string;
 attribute ontology-read-scope, value string;
 attribute ontology-pe-ratio, value double;
 attribute ontology-beta, value double;
+attribute ontology-current-price, value double;
+attribute ontology-average-price, value double;
+attribute ontology-market-value, value double;
+attribute ontology-quantity, value double;
+attribute ontology-sellable-quantity, value double;
+attribute ontology-position-weight-pct, value double;
+attribute ontology-position-account-weight-pct, value double;
+attribute ontology-change-rate, value double;
+attribute ontology-price-change-rate, value double;
+attribute ontology-ma5, value double;
+attribute ontology-ma20, value double;
+attribute ontology-ma60, value double;
+attribute ontology-ma5-distance, value double;
+attribute ontology-ma20-distance, value double;
+attribute ontology-ma60-distance, value double;
+attribute ontology-ma20-slope, value double;
+attribute ontology-ma60-slope, value double;
+attribute ontology-trend-curve, value double;
+attribute ontology-volume, value double;
+attribute ontology-volume-ratio, value double;
+attribute ontology-raw-volume-ratio, value double;
+attribute ontology-time-adjusted-volume-ratio, value double;
+attribute ontology-expected-volume-ratio-now, value double;
+attribute ontology-trade-strength, value double;
+attribute ontology-trading-value, value double;
+attribute ontology-bid-ask-imbalance, value double;
+attribute ontology-foreign-net-volume, value double;
+attribute ontology-foreign-net-amount, value double;
+attribute ontology-institution-net-volume, value double;
+attribute ontology-institution-net-amount, value double;
+attribute ontology-individual-net-volume, value double;
+attribute ontology-individual-net-amount, value double;
+attribute ontology-smart-money-net-volume, value double;
+attribute ontology-investor-flow-score, value double;
+attribute ontology-investment-strategy-profile, value string;
+attribute ontology-investment-strategy-profile-label, value string;
+attribute ontology-position-role, value string;
+attribute ontology-target-position-role, value string;
+attribute ontology-instrument-archetype, value string;
+attribute ontology-action-policy, value string;
 
 entity ontology-node @abstract,
     owns ontology-id @key,
@@ -1130,6 +1261,46 @@ entity ontology-node @abstract,
     owns ontology-read-scope,
     owns ontology-pe-ratio,
     owns ontology-beta,
+    owns ontology-current-price,
+    owns ontology-average-price,
+    owns ontology-market-value,
+    owns ontology-quantity,
+    owns ontology-sellable-quantity,
+    owns ontology-position-weight-pct,
+    owns ontology-position-account-weight-pct,
+    owns ontology-change-rate,
+    owns ontology-price-change-rate,
+    owns ontology-ma5,
+    owns ontology-ma20,
+    owns ontology-ma60,
+    owns ontology-ma5-distance,
+    owns ontology-ma20-distance,
+    owns ontology-ma60-distance,
+    owns ontology-ma20-slope,
+    owns ontology-ma60-slope,
+    owns ontology-trend-curve,
+    owns ontology-volume,
+    owns ontology-volume-ratio,
+    owns ontology-raw-volume-ratio,
+    owns ontology-time-adjusted-volume-ratio,
+    owns ontology-expected-volume-ratio-now,
+    owns ontology-trade-strength,
+    owns ontology-trading-value,
+    owns ontology-bid-ask-imbalance,
+    owns ontology-foreign-net-volume,
+    owns ontology-foreign-net-amount,
+    owns ontology-institution-net-volume,
+    owns ontology-institution-net-amount,
+    owns ontology-individual-net-volume,
+    owns ontology-individual-net-amount,
+    owns ontology-smart-money-net-volume,
+    owns ontology-investor-flow-score,
+    owns ontology-investment-strategy-profile,
+    owns ontology-investment-strategy-profile-label,
+    owns ontology-position-role,
+    owns ontology-target-position-role,
+    owns ontology-instrument-archetype,
+    owns ontology-action-policy,
     plays ontology-assertion:source,
     plays ontology-assertion:target;
 
@@ -1350,6 +1521,14 @@ relation ontology-assertion,
             + typeql_has("ontology-read-scope", row.get("readScope"))
             + typeql_has("ontology-pe-ratio", row.get("peRatio"), numeric=True)
             + typeql_has("ontology-beta", row.get("beta"), numeric=True)
+            + "".join(
+                typeql_has(attribute, row.get(field), numeric=True)
+                for field, attribute in TYPEDB_PROMOTED_NUMERIC_ATTRIBUTES.items()
+            )
+            + "".join(
+                typeql_has(attribute, row.get(field))
+                for field, attribute in TYPEDB_PROMOTED_TEXT_ATTRIBUTES.items()
+            )
         )
 
     def relation_insert_query(self, row: Dict[str, object], updated_at: str) -> str:
@@ -1644,7 +1823,12 @@ relation ontology-assertion,
                                     "reason": "TypeDB schema function call could not be built.",
                                 })
                                 continue
-                            rows = self.read_rows_in_transaction(tx, str(query_plan.get("query")), query_plan.get("columns") or ["sourceId"])
+                            rows = self.read_rows_in_transaction(
+                                tx,
+                                str(query_plan.get("query")),
+                                query_plan.get("columns") or ["sourceId"],
+                                label="nativeRule:" + str(rule.rule_id or ""),
+                            )
                             read_call_count += 1
                             executed_rules.append({
                                 "ruleId": rule.rule_id,
@@ -1669,6 +1853,7 @@ relation ontology-assertion,
                 "readTransactionCount": 1 if executed_rules else 0,
                 "readQueryCount": read_call_count,
                 "conditionDetailQueryCount": 0 if not self.condition_detail_queries_enabled() else None,
+                "typedbQueryMetrics": self.query_metrics_snapshot(),
                 "matches": matches,
                 "executedRules": executed_rules[:40],
                 "skippedRules": skipped_rules[:40],
@@ -1687,6 +1872,7 @@ relation ontology-assertion,
                 "executedRules": executed_rules[:40],
                 "skippedRules": skipped_rules[:40],
                 "readQueryCount": read_call_count,
+                "typedbQueryMetrics": self.query_metrics_snapshot(),
             }
 
     def merge_native_match_rows(
@@ -1957,6 +2143,7 @@ relation ontology-assertion,
     def run_rulebox(self, payload: Dict[str, object] = None) -> Dict[str, object]:
         if not self.address:
             return NullTypeDBOntologyGraphRepository().run_rulebox(payload)
+        self.reset_query_metrics()
         payload = payload if isinstance(payload, dict) else {}
         target_symbols = clean_symbols_from_payload(
             payload.get("symbols")
@@ -2003,6 +2190,7 @@ relation ontology-assertion,
                 "typedbBootstrapReasoningUsed": False,
                 "pythonBootstrapDisabled": True,
                 "clearResult": clear_result,
+                "typedbQueryMetrics": self.query_metrics_snapshot(),
             }
         if not abox_available:
             return {
@@ -2018,6 +2206,7 @@ relation ontology-assertion,
                 "typedbBootstrapReasoningUsed": False,
                 "pythonBootstrapDisabled": True,
                 "clearResult": clear_result,
+                "typedbQueryMetrics": self.query_metrics_snapshot(),
             }
         snapshot = self.rulebox_snapshot()
         rules = snapshot.get("rules") if isinstance(snapshot.get("rules"), list) else []
@@ -2078,6 +2267,7 @@ relation ontology-assertion,
                     "nativeReasoningProfile": native_profile,
                     "functionSyncResult": function_sync_result,
                     "ruleboxMetadata": runtime_rulebox_metadata,
+                    "typedbQueryMetrics": self.query_metrics_snapshot(),
                     **runtime_rulebox_metadata,
                 }
             native_match_result = self.match_typedb_native_rules(parsed_rules, target_symbols=target_symbols)
@@ -2114,6 +2304,7 @@ relation ontology-assertion,
                     "functionSyncResult": function_sync_result,
                     "nativeMatchResult": native_match_result,
                     "ruleboxMetadata": runtime_rulebox_metadata,
+                    "typedbQueryMetrics": self.query_metrics_snapshot(),
                     **runtime_rulebox_metadata,
                 }
             graph = self.load_graph_for_native_matches(native_match_result)
@@ -2169,6 +2360,7 @@ relation ontology-assertion,
                 "clearResult": clear_result,
                 "nativeReasoningProfile": native_profile,
                 "ruleboxMetadata": rulebox_metadata,
+                "typedbQueryMetrics": self.query_metrics_snapshot(),
                 **rulebox_metadata,
             }
         relation_types = sorted({
@@ -2227,9 +2419,10 @@ relation ontology-assertion,
             },
             "nativeMatchResult": {
                 key: native_match_result.get(key)
-                for key in ["status", "reason", "reasonCode", "nativeQueryUsed", "schemaFunctionUsed", "executedRuleCount", "skippedRuleCount", "matchedCount", "executedRules", "skippedRules"]
+                for key in ["status", "reason", "reasonCode", "nativeQueryUsed", "schemaFunctionUsed", "executedRuleCount", "skippedRuleCount", "matchedCount", "executedRules", "skippedRules", "typedbQueryMetrics"]
                 if key in native_match_result
             },
+            "typedbQueryMetrics": self.query_metrics_snapshot(),
             "inferenceBox": inferencebox_payload,
             "nativeReasoningProfile": native_profile,
             "ruleboxMetadata": runtime_rulebox_metadata,
@@ -2453,6 +2646,7 @@ relation ontology-assertion,
         safe_limit = max(1, min(500, int(limit or 80)))
         if not self.address:
             return NullTypeDBOntologyGraphRepository().inferencebox_snapshot(clean_symbols, safe_limit)
+        self.reset_query_metrics()
         try:
             return self.inferencebox_snapshot_from_typedb(clean_symbols, safe_limit)
         except Exception as error:  # noqa: BLE001 - expose TypeDB read failures to monitoring diagnostics.
@@ -2480,6 +2674,7 @@ relation ontology-assertion,
                 "nativeTraceCount": 0,
                 "nativeTypeDbReasoningUsed": False,
                 "typedbBootstrapReasoningUsed": False,
+                "typedbQueryMetrics": self.query_metrics_snapshot(),
             }
     def inferencebox_snapshot_from_typedb(self, clean_symbols: List[str], safe_limit: int) -> Dict[str, object]:
         generation_records = self.read_inference_generation_records()
@@ -2544,6 +2739,7 @@ relation ontology-assertion,
             "inactiveGenerationRelationCount": max(0, sum(int(item.get("relationCount") or 0) for item in generation_records if str(item.get("generationId") or "") != generation_id)) if generation_scoped else 0,
             "ignoredNonNativeRelationCount": ignored_relation_count,
             "ignoredNonNativeTraceCount": ignored_trace_count,
+            "typedbQueryMetrics": self.query_metrics_snapshot(),
             **generation_rulebox_metadata,
         })
         return snapshot
@@ -3137,6 +3333,9 @@ def typedb_native_condition_check_query(condition: Dict[str, object], source_id:
 
 
 def typedb_subject_attribute(field: str) -> str:
+    promoted_attribute = TYPEDB_PROMOTED_NUMERIC_ATTRIBUTES.get(field) or TYPEDB_PROMOTED_TEXT_ATTRIBUTES.get(field)
+    if promoted_attribute:
+        return promoted_attribute
     return {
         "source": "ontology-source-value",
         "symbol": "ontology-symbol",
@@ -3152,6 +3351,9 @@ def typedb_subject_attribute(field: str) -> str:
 def typedb_target_attribute(field: str) -> str:
     if field in {"minMaterialityScore", "minValue", "maxValue"}:
         field = "materialityScore" if field == "minMaterialityScore" else "value"
+    promoted_attribute = TYPEDB_PROMOTED_NUMERIC_ATTRIBUTES.get(field) or TYPEDB_PROMOTED_TEXT_ATTRIBUTES.get(field)
+    if promoted_attribute:
+        return promoted_attribute
     return {
         "field": "ontology-field",
         "levelType": "ontology-level-type",

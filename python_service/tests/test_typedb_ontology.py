@@ -38,6 +38,9 @@ class TypeDBOntologyRepositoryTests(unittest.TestCase):
         self.assertIn("owns ontology-id @key", schema)
         self.assertIn("plays ontology-assertion:source", schema)
         self.assertIn("plays ontology-assertion:target", schema)
+        self.assertIn("attribute ontology-ma5-distance, value double", schema)
+        self.assertIn("owns ontology-smart-money-net-volume", schema)
+        self.assertIn("attribute ontology-investment-strategy-profile, value string", schema)
 
     def test_typedb_insert_queries_project_same_ontology_graph_shape(self):
         graph = PortfolioOntology("portfolio:test")
@@ -81,6 +84,23 @@ class TypeDBOntologyRepositoryTests(unittest.TestCase):
             "symbol": "005930",
             "source": "holding",
             "profitLossRate": -12.5,
+            "currentPrice": 68000,
+            "averagePrice": 72000,
+            "marketValue": 680000,
+            "quantity": 10,
+            "sellableQuantity": 10,
+            "positionAccountWeight": 28.4,
+            "ma5Distance": 1.2,
+            "ma20Distance": -8.5,
+            "ma60Distance": 2.1,
+            "volumeRatio": 1.6,
+            "tradeStrength": 118.4,
+            "bidAskImbalance": -22.7,
+            "foreignNetVolume": 1400,
+            "institutionNetVolume": 2500,
+            "individualNetVolume": -3900,
+            "smartMoneyNetVolume": 3900,
+            "investmentStrategyProfile": "aggressive",
             "tboxClass": "Stock",
         }))
         graph.entities.append(OntologyEntity("level:005930:ma20", "20일선", "key-level", {
@@ -132,6 +152,59 @@ class TypeDBOntologyRepositoryTests(unittest.TestCase):
         self.assertTrue(any('has ontology-read-scope "title+rss-summary"' in query for query in queries))
         self.assertTrue(any("has ontology-pe-ratio 47.5" in query for query in queries))
         self.assertTrue(any("has ontology-beta 1.8" in query for query in queries))
+        self.assertTrue(any("has ontology-current-price 68000.0" in query for query in queries))
+        self.assertTrue(any("has ontology-average-price 72000.0" in query for query in queries))
+        self.assertTrue(any("has ontology-position-account-weight-pct 28.4" in query for query in queries))
+        self.assertTrue(any("has ontology-ma5-distance 1.2" in query for query in queries))
+        self.assertTrue(any("has ontology-ma20-distance -8.5" in query for query in queries))
+        self.assertTrue(any("has ontology-volume-ratio 1.6" in query for query in queries))
+        self.assertTrue(any("has ontology-trade-strength 118.4" in query for query in queries))
+        self.assertTrue(any("has ontology-foreign-net-volume 1400.0" in query for query in queries))
+        self.assertTrue(any("has ontology-smart-money-net-volume 3900.0" in query for query in queries))
+        self.assertTrue(any('has ontology-investment-strategy-profile "aggressive"' in query for query in queries))
+
+    def test_typedb_read_query_metrics_record_row_count_and_hash(self):
+        class FakeConcept:
+            def __init__(self, value):
+                self._value = value
+
+            def get_value(self):
+                return self._value
+
+        class FakeRow:
+            def __init__(self, values):
+                self.values = values
+
+            def get(self, name):
+                return FakeConcept(self.values.get(name))
+
+        class FakeQuery:
+            def __init__(self, rows):
+                self.rows = rows
+
+            def resolve(self):
+                return self.rows
+
+        class FakeTx:
+            def __init__(self):
+                self.last_query = ""
+
+            def query(self, query):
+                self.last_query = query
+                return FakeQuery([FakeRow({"id": "stock:005930"})])
+
+        repository = TypeDBOntologyGraphRepository("127.0.0.1:1729")
+        repository.reset_query_metrics()
+
+        rows = repository.read_rows_in_transaction(FakeTx(), "match $n isa ontology-node; limit 1;", ["id"], label="unit-test")
+        metrics = repository.query_metrics_snapshot()
+
+        self.assertEqual([{"id": "stock:005930"}], rows)
+        self.assertEqual(1, metrics["queryCount"])
+        self.assertEqual(1, metrics["slowQueries"][0]["rowCount"])
+        self.assertEqual("unit-test", metrics["slowQueries"][0]["label"])
+        self.assertTrue(metrics["slowQueries"][0]["queryHash"])
+        self.assertIn("match $n isa ontology-node", metrics["slowQueries"][0]["queryPreview"])
 
     def test_typedb_read_helpers_push_limit_and_existence_into_typeql(self):
         class CapturingRepository(TypeDBOntologyGraphRepository):

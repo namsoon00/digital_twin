@@ -80,6 +80,53 @@ KNOWN_TARGET_FILTER_KEYS = {
     "tboxClasses",
 }
 
+PROMOTED_NUMERIC_ENTITY_FIELDS = [
+    "currentPrice",
+    "averagePrice",
+    "marketValue",
+    "quantity",
+    "sellableQuantity",
+    "positionWeight",
+    "positionAccountWeight",
+    "changeRate",
+    "priceChangeRate",
+    "ma5",
+    "ma20",
+    "ma60",
+    "ma5Distance",
+    "ma20Distance",
+    "ma60Distance",
+    "ma20Slope",
+    "ma60Slope",
+    "trendCurve",
+    "volume",
+    "volumeRatio",
+    "rawVolumeRatio",
+    "timeAdjustedVolumeRatio",
+    "expectedVolumeRatioNow",
+    "tradeStrength",
+    "tradingValue",
+    "bidAskImbalance",
+    "foreignNetVolume",
+    "foreignNetAmount",
+    "institutionNetVolume",
+    "institutionNetAmount",
+    "individualNetVolume",
+    "individualNetAmount",
+    "smartMoneyNetVolume",
+    "investorFlowScore",
+]
+
+PROMOTED_TEXT_ENTITY_FIELDS = [
+    "investmentStrategyProfile",
+    "investmentStrategyProfileLabel",
+    "positionRole",
+    "targetPositionRole",
+    "instrumentArchetype",
+    "instrumentArchetypes",
+    "actionPolicy",
+]
+
 def condition_target_filter_values(condition: Dict[str, object], key: str) -> List[str]:
     filters = condition.get("target_property_filters") if isinstance(condition.get("target_property_filters"), dict) else {}
     values = list_of_strings(filters.get(key))
@@ -196,6 +243,18 @@ class GraphStoreOntologyRowMapperMixin:
                 "readScope": str(properties.get("readScope") or ""),
                 "peRatio": number_or_none(properties.get("peRatio")),
                 "beta": number_or_none(properties.get("beta")),
+                **{
+                    field: number_or_none(properties.get(field))
+                    for field in PROMOTED_NUMERIC_ENTITY_FIELDS
+                },
+                **{
+                    field: (
+                        ", ".join(list_of_strings(properties.get(field)))
+                        if isinstance(properties.get(field), list)
+                        else str(properties.get(field) or "")
+                    )
+                    for field in PROMOTED_TEXT_ENTITY_FIELDS
+                },
                 "nativeTypeDbReasoned": bool(properties.get("nativeTypeDbReasoned")),
                 "enabled": bool(properties.get("enabled")) if "enabled" in properties else False,
                 "conditionId": str(properties.get("conditionId") or condition.get("condition_id") or ""),

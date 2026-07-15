@@ -21,6 +21,12 @@ EVENT_TYPE_LABELS = {
     "disclosure": "공시",
     "shareholderMeeting": "주주총회",
     "lockup": "락업해제",
+    "listing": "상장/이전상장",
+    "adrListing": "ADR/GDR 상장",
+    "indexInclusion": "지수 편입",
+    "capitalMarketEvent": "자본시장 이벤트",
+    "spinoff": "분할/스핀오프",
+    "capitalRaise": "증자/자금조달",
     "portfolioReview": "포트폴리오 점검",
     "custom": "사용자 이벤트",
 }

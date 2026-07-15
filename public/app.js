@@ -4651,6 +4651,12 @@
       { type: "disclosure", label: "공시" },
       { type: "shareholderMeeting", label: "주주총회" },
       { type: "lockup", label: "락업해제" },
+      { type: "listing", label: "상장/이전상장" },
+      { type: "adrListing", label: "ADR/GDR 상장" },
+      { type: "indexInclusion", label: "지수 편입" },
+      { type: "capitalMarketEvent", label: "자본시장 이벤트" },
+      { type: "spinoff", label: "분할/스핀오프" },
+      { type: "capitalRaise", label: "증자/자금조달" },
       { type: "portfolioReview", label: "포트폴리오 점검" },
       { type: "custom", label: "사용자 이벤트" }
     ];

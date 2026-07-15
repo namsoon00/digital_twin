@@ -4,6 +4,7 @@ from typing import Callable, Dict, Iterable
 
 from ..application.flow_lens_service import FlowLensService
 from ..application.investment_analysis_service import InvestmentAnalysisService
+from ..application.investment_calendar_extraction_service import InvestmentCalendarExtractionService
 from ..application.investment_calendar_service import InvestmentCalendarRunner, InvestmentCalendarService
 from ..application.kis_realtime_service import KISRealtimeWebSocketRunner
 from ..application.market_data_collection_service import MarketDataCollectionRunner
@@ -65,6 +66,15 @@ def news_event_bus(settings=None) -> EventBus:
             queue=stores.notification_job_store(configured_settings),
             settings=configured_settings,
             max_items=int(number(configured_settings.get("newsDigestMaxItems")) or 3),
+        ).handle,
+    )
+    calendar_service = build_investment_calendar_service(configured_settings)
+    bus.subscribe(
+        RESEARCH_EVIDENCE_COLLECTED,
+        InvestmentCalendarExtractionService(
+            calendar_service=calendar_service,
+            account_repository=stores.account_registry(configured_settings),
+            settings=configured_settings,
         ).handle,
     )
     return bus

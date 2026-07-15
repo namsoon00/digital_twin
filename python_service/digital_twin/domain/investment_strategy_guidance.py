@@ -186,6 +186,24 @@ def event_type_guidance(event_type: object, target: str, symbols: Iterable[objec
     elif event_type == "lockup":
         impact = "락업 해제는 잠재 매도 물량과 단기 수급 부담을 키울 수 있습니다."
         watch_items = ["해제 주식 수와 유통주식 대비 비율", "주요 보유자 매각 가능성", "거래량 급증 여부"]
+    elif event_type == "adrListing":
+        impact = "ADR/GDR 상장은 해외 투자자 접근성, 거래 유동성, 원주와 예탁증서 간 가격 차이를 통해 " + target + "의 재평가와 변동성에 영향을 줄 수 있습니다."
+        watch_items = ["상장 거래소와 예정일", "원주/ADR 교환비율과 수수료", "첫 거래 유동성과 원주 가격 차이", "SEC F-6 등 공식 서류"]
+    elif event_type == "listing":
+        impact = "상장·이전상장은 신규 수급, 투자자 접근성, 거래시장 변경에 따른 밸류에이션 재평가를 만들 수 있습니다."
+        watch_items = ["상장 시장과 첫 거래일", "공모가/기준가와 유통 가능 물량", "보호예수와 기존 주주 매도 가능성", "첫 거래 거래대금"]
+    elif event_type == "indexInclusion":
+        impact = "지수 편입은 패시브 자금 유입과 리밸런싱 수급을 통해 단기 거래량과 가격 변동성을 키울 수 있습니다."
+        watch_items = ["편입 지수와 적용일", "예상 패시브 매수 규모", "리밸런싱 전후 거래량", "편입 확정/예상 여부"]
+    elif event_type == "capitalMarketEvent":
+        impact = "자본시장 이벤트는 주식 수, 주주환원, 수급 구조를 바꿔 단기 가격 반응과 장기 주당가치 판단에 영향을 줄 수 있습니다."
+        watch_items = ["주식 수 변화", "주주가치 희석/환원 효과", "기준일과 권리락", "시장 반응과 거래량"]
+    elif event_type == "spinoff":
+        impact = "분할·스핀오프는 사업 가치 분리와 재상장 수급을 통해 기존 투자 가정과 밸류에이션 구조를 바꿀 수 있습니다."
+        watch_items = ["분할 방식과 비율", "분할 기일/재상장일", "존속·신설회사 가치 배분", "거래정지 기간"]
+    elif event_type == "capitalRaise":
+        impact = "증자·자금조달은 성장 투자 재원과 주식 희석 가능성을 동시에 만들며 단기 수급 부담으로 이어질 수 있습니다."
+        watch_items = ["조달 규모와 목적", "발행가/전환가와 희석률", "기존 주주 배정 여부", "자금 사용 계획"]
     elif event_type == "portfolioReview":
         impact = "포트폴리오 점검 일정은 보유 비중, 리스크 노출, 현금 여력을 재확인하는 운영 기준점입니다."
         watch_items = ["종목별 비중 변화", "상관관계가 높은 노출", "현금·손절·추가매수 기준의 최신성"]

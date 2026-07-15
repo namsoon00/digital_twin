@@ -352,6 +352,37 @@ MYSQL_SCHEMA = [
     ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
     """,
     """
+    CREATE TABLE IF NOT EXISTS investment_calendar_candidates (
+        candidate_id VARCHAR(191) PRIMARY KEY,
+        proposed_event_id VARCHAR(191) NOT NULL DEFAULT '',
+        title VARCHAR(255) NOT NULL DEFAULT '',
+        event_type VARCHAR(64) NOT NULL DEFAULT 'custom',
+        starts_at VARCHAR(40) NOT NULL DEFAULT '',
+        timezone_name VARCHAR(80) NOT NULL DEFAULT 'Asia/Seoul',
+        all_day TINYINT NOT NULL DEFAULT 1,
+        status VARCHAR(32) NOT NULL DEFAULT 'pending',
+        review_reason VARCHAR(80) NOT NULL DEFAULT 'needsReview',
+        importance INT NOT NULL DEFAULT 60,
+        confidence DOUBLE NOT NULL DEFAULT 0,
+        symbols_json LONGTEXT NOT NULL,
+        markets_json LONGTEXT NOT NULL,
+        account_ids_json LONGTEXT NOT NULL,
+        source VARCHAR(120) NOT NULL DEFAULT 'research-evidence',
+        source_url TEXT NOT NULL,
+        notes LONGTEXT NOT NULL,
+        reminder_offsets_json LONGTEXT NOT NULL,
+        source_evidence_id VARCHAR(191) NOT NULL DEFAULT '',
+        payload_json LONGTEXT NOT NULL,
+        created_at VARCHAR(40) NOT NULL,
+        updated_at VARCHAR(40) NOT NULL,
+        reviewed_at VARCHAR(40) NOT NULL DEFAULT '',
+        review_note TEXT NOT NULL,
+        KEY idx_investment_calendar_candidates_status (status, created_at, candidate_id),
+        KEY idx_investment_calendar_candidates_type_status (event_type, status, candidate_id),
+        KEY idx_investment_calendar_candidates_evidence (source_evidence_id)
+    ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
+    """,
+    """
     CREATE TABLE IF NOT EXISTS ontology_ai_opinion_samples (
         sample_id VARCHAR(191) PRIMARY KEY,
         portfolio_id VARCHAR(191) NOT NULL DEFAULT '',

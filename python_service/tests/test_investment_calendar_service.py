@@ -7,6 +7,7 @@ from types import SimpleNamespace
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from digital_twin.application.investment_calendar_extraction_service import InvestmentCalendarExtractionService
+from digital_twin.application.investment_calendar_candidate_service import InvestmentCalendarCandidateService
 from digital_twin.application.investment_calendar_service import InvestmentCalendarService
 from digital_twin.domain.accounts import AccountConfig
 from digital_twin.domain.events import (
@@ -16,6 +17,8 @@ from digital_twin.domain.events import (
     RESEARCH_EVIDENCE_COLLECTED,
 )
 from digital_twin.domain.investment_calendar import InvestmentCalendarEvent, event_type_label, utc_iso
+from digital_twin.domain.investment_calendar_candidates import InvestmentCalendarReviewCandidate
+from digital_twin.domain.investment_calendar_extraction import calendar_candidate_from_research_item
 from digital_twin.domain.message_types import INVESTMENT_CALENDAR_REMINDER
 from digital_twin.domain.notification_ai_gate_validation import build_notification_ai_gate_prompt
 
@@ -70,6 +73,50 @@ class MemoryPublisher:
 
     def publish(self, event):
         self.events.append(event)
+
+
+class MemoryCandidateStore:
+    def __init__(self):
+        self.candidates = {}
+
+    def upsert(self, payload):
+        candidate = InvestmentCalendarReviewCandidate.from_payload(payload)
+        self.candidates[candidate.candidate_id] = candidate
+        return True
+
+    def get(self, candidate_id):
+        return self.candidates.get(candidate_id)
+
+    def list(self, status="pending", limit=100):
+        items = list(self.candidates.values())
+        if status:
+            items = [item for item in items if item.status == status]
+        return items[: int(limit or 100)]
+
+    def mark_status(self, candidate_id, status, review_note=""):
+        candidate = self.candidates.get(candidate_id)
+        if not candidate:
+            return None
+        candidate.status = status
+        candidate.review_note = review_note
+        self.candidates[candidate_id] = candidate
+        return candidate
+
+    def summary(self):
+        result = {}
+        for candidate in self.candidates.values():
+            result[candidate.status] = result.get(candidate.status, 0) + 1
+        return result
+
+    def feedback_summary(self):
+        result = {}
+        for candidate in self.candidates.values():
+            bucket = result.setdefault(candidate.event_type, {"accepted": 0, "rejected": 0})
+            if candidate.status == "registered":
+                bucket["accepted"] += 1
+            elif candidate.status == "rejected":
+                bucket["rejected"] += 1
+        return result
 
 
 class InvestmentCalendarServiceTests(unittest.TestCase):
@@ -229,6 +276,142 @@ class InvestmentCalendarServiceTests(unittest.TestCase):
         self.assertEqual(0, result["candidateCount"])
         self.assertEqual(0, result["savedCount"])
         self.assertEqual({}, store.events)
+
+    def test_research_evidence_without_event_date_is_saved_as_review_candidate(self):
+        store = MemoryCalendarStore()
+        candidate_store = MemoryCandidateStore()
+        extractor = InvestmentCalendarExtractionService(
+            calendar_service=self.service(store=store),
+            account_repository=SimpleNamespace(load_all=lambda: [self.account()]),
+            candidate_repository=candidate_store,
+        )
+        event = DomainEvent(
+            name=RESEARCH_EVIDENCE_COLLECTED,
+            aggregate_id="news:AAPL",
+            payload={
+                "changedItems": [
+                    {
+                        "evidenceId": "research:AAPL:sec:f6-undated",
+                        "symbol": "AAPL",
+                        "kind": "filing",
+                        "source": "SEC EDGAR",
+                        "title": "Apple files F-6 for ADR listing",
+                        "summary": "American depositary receipt plan is being reviewed.",
+                        "url": "https://www.sec.gov/example/f6-undated",
+                        "publishedAt": "2026-07-15T00:00:00Z",
+                        "observedAt": "2026-07-15T00:10:00Z",
+                        "materialityScore": 91,
+                    }
+                ]
+            },
+        )
+
+        result = extractor.handle(event)
+
+        self.assertEqual(0, result["candidateCount"])
+        self.assertEqual(0, result["savedCount"])
+        self.assertEqual(1, result["reviewCandidateCount"])
+        self.assertEqual(1, result["storedReviewCandidateCount"])
+        candidate = next(iter(candidate_store.candidates.values()))
+        self.assertEqual("pending", candidate.status)
+        self.assertEqual("missingDate", candidate.review_reason)
+        self.assertEqual("adrListing", candidate.event_type)
+        self.assertEqual("", candidate.starts_at)
+        self.assertEqual({}, store.events)
+
+    def test_review_candidate_approval_registers_calendar_event_and_feedback(self):
+        calendar_store = MemoryCalendarStore()
+        candidate_store = MemoryCandidateStore()
+        candidate_store.upsert({
+            "candidateId": "candidate-1",
+            "proposedEventId": "auto-special-event-review-1",
+            "title": "ADR/GDR 상장: Apple files F-6",
+            "eventType": "adrListing",
+            "startsAt": "",
+            "importance": 92,
+            "confidence": 0.71,
+            "symbols": ["AAPL"],
+            "markets": ["NYSE"],
+            "source": "SEC EDGAR",
+            "sourceUrl": "https://www.sec.gov/example/f6",
+            "sourceEvidenceId": "research:AAPL:sec:f6-review",
+            "payload": {"sourceParser": "sec-edgar"},
+        })
+        service = InvestmentCalendarCandidateService(
+            candidate_repository=candidate_store,
+            calendar_service=self.service(store=calendar_store),
+        )
+
+        result = service.approve_candidate("candidate-1", {"startsAt": "2026-08-20T09:00", "reviewNote": "confirmed"})
+
+        self.assertEqual("registered", result["candidate"]["status"])
+        saved = next(iter(calendar_store.events.values()))
+        self.assertEqual("adrListing", saved.event_type)
+        self.assertEqual("2026-08-20T00:00:00Z", saved.starts_at)
+        self.assertEqual({"adrListing": {"accepted": 1, "rejected": 0}}, candidate_store.feedback_summary())
+
+    def test_structured_sec_f6_payload_uses_official_parser_and_date_field(self):
+        store = MemoryCalendarStore()
+        extractor = InvestmentCalendarExtractionService(
+            calendar_service=self.service(store=store),
+            account_repository=SimpleNamespace(load_all=lambda: [self.account()]),
+        )
+        event = DomainEvent(
+            name=RESEARCH_EVIDENCE_COLLECTED,
+            aggregate_id="news:AAPL",
+            payload={
+                "changedItems": [
+                    {
+                        "evidenceId": "research:AAPL:sec:f6-structured",
+                        "symbol": "AAPL",
+                        "kind": "filing",
+                        "source": "SEC EDGAR",
+                        "title": "Apple depositary shares registration",
+                        "summary": "Registration statement for depositary receipt program.",
+                        "url": "https://www.sec.gov/example/f6-structured",
+                        "publishedAt": "2026-07-15T00:00:00Z",
+                        "observedAt": "2026-07-15T00:10:00Z",
+                        "materialityScore": 91,
+                        "payload": {"form": "F-6", "eventDate": "2026-08-20"},
+                    }
+                ]
+            },
+        )
+
+        result = extractor.handle(event)
+
+        self.assertEqual(1, result["candidateCount"])
+        self.assertEqual(1, result["savedCount"])
+        saved = next(iter(store.events.values()))
+        self.assertEqual("adrListing", saved.event_type)
+        self.assertEqual("sec-edgar", saved.payload["sourceParser"])
+        self.assertEqual("eventDate", saved.payload["dateSource"])
+        self.assertEqual("2026-08-20T00:00:00Z", saved.starts_at)
+
+    def test_rejected_feedback_can_demote_borderline_candidate_to_review(self):
+        item = {
+            "evidenceId": "research:AAPL:listing-blog",
+            "symbol": "AAPL",
+            "kind": "news",
+            "source": "Market Blog",
+            "title": "Apple listing event expected on 2026-08-20",
+            "summary": "Listing schedule mentioned without official confirmation.",
+            "url": "https://example.test/listing",
+            "publishedAt": "2026-07-15T00:00:00Z",
+        }
+
+        candidate = calendar_candidate_from_research_item(
+            item,
+            min_confidence=0.60,
+            include_review=True,
+            review_min_confidence=0.30,
+            feedback={"listing": {"accepted": 0, "rejected": 3}},
+        )
+
+        self.assertIsNotNone(candidate)
+        self.assertTrue(candidate.review_required())
+        self.assertEqual("lowConfidence", candidate.review_reason)
+        self.assertLess(candidate.confidence, 0.60)
 
     def test_adr_listing_reminder_message_includes_event_guidance_and_strategy_profile(self):
         now_at = datetime(2026, 8, 20, 0, 0, tzinfo=timezone.utc)

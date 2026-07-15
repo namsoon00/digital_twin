@@ -4,6 +4,7 @@ from typing import Callable, Dict, Iterable
 
 from ..application.flow_lens_service import FlowLensService
 from ..application.investment_analysis_service import InvestmentAnalysisService
+from ..application.investment_calendar_candidate_service import InvestmentCalendarCandidateService
 from ..application.investment_calendar_extraction_service import InvestmentCalendarExtractionService
 from ..application.investment_calendar_service import InvestmentCalendarRunner, InvestmentCalendarService
 from ..application.kis_realtime_service import KISRealtimeWebSocketRunner
@@ -74,6 +75,7 @@ def news_event_bus(settings=None) -> EventBus:
         InvestmentCalendarExtractionService(
             calendar_service=calendar_service,
             account_repository=stores.account_registry(configured_settings),
+            candidate_repository=stores.investment_calendar_candidate_store(configured_settings),
             settings=configured_settings,
         ).handle,
     )
@@ -221,6 +223,14 @@ def build_investment_calendar_service(settings=None, event_publisher=None) -> In
         notification_queue=stores.notification_job_store(configured_settings),
         settings=configured_settings,
         event_publisher=event_publisher or default_event_bus(),
+    )
+
+
+def build_investment_calendar_candidate_service(settings=None, event_publisher=None) -> InvestmentCalendarCandidateService:
+    configured_settings = settings or runtime_settings()
+    return InvestmentCalendarCandidateService(
+        candidate_repository=stores.investment_calendar_candidate_store(configured_settings),
+        calendar_service=build_investment_calendar_service(configured_settings, event_publisher),
     )
 
 

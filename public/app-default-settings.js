@@ -88,6 +88,8 @@
     investmentCalendarAutoExtractEnabled: "1",
     investmentCalendarAutoExtractRegisterUndated: "0",
     investmentCalendarAutoExtractMinConfidence: "0.45",
+    investmentCalendarAutoExtractReviewEnabled: "1",
+    investmentCalendarAutoExtractReviewMinConfidence: "0.35",
     ontologyReasoningEnabled: "1",
     ontologyReasoningIntervalSeconds: "10",
     ontologyReasoningBatchSize: "20",

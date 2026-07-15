@@ -15,7 +15,7 @@ from .event_bus import default_event_bus
 from . import operational_store as stores
 from .notifications import queued_notifier_for_account, send_events
 from .ontology_graph_store import ontology_repository_from_settings
-from .service_factory import build_investment_calendar_runner, build_investment_calendar_service, build_kis_realtime_websocket_runner, build_market_data_collection_runner, build_model_review_runner, build_monitor_runner, build_news_collection_runner, build_notification_queue_runner, build_ontology_lab_service, build_ontology_reasoning_runner, build_rule_change_candidate_service, build_symbol_universe_service, monitor_account_job_store_from_settings
+from .service_factory import build_investment_calendar_candidate_service, build_investment_calendar_runner, build_investment_calendar_service, build_kis_realtime_websocket_runner, build_market_data_collection_runner, build_model_review_runner, build_monitor_runner, build_news_collection_runner, build_notification_queue_runner, build_ontology_lab_service, build_ontology_reasoning_runner, build_rule_change_candidate_service, build_symbol_universe_service, monitor_account_job_store_from_settings
 from .schedulers import (
     InvestmentCalendarScheduler,
     KISRealtimeWebSocketScheduler,
@@ -580,6 +580,21 @@ def investment_calendar_command(args) -> int:
     if args.investment_calendar_action == "delete":
         print(json.dumps(service.delete_event(args.event_id), ensure_ascii=False))
         return 0
+    if args.investment_calendar_action == "candidates":
+        candidate_service = build_investment_calendar_candidate_service(settings)
+        print(json.dumps(candidate_service.list_candidates({"status": args.status, "limit": args.limit}), ensure_ascii=False))
+        return 0
+    if args.investment_calendar_action == "approve-candidate":
+        candidate_service = build_investment_calendar_candidate_service(settings)
+        print(json.dumps(candidate_service.approve_candidate(args.candidate_id, {
+            "startsAt": args.starts_at,
+            "reviewNote": args.note,
+        }), ensure_ascii=False))
+        return 0
+    if args.investment_calendar_action == "reject-candidate":
+        candidate_service = build_investment_calendar_candidate_service(settings)
+        print(json.dumps(candidate_service.reject_candidate(args.candidate_id, {"reviewNote": args.note}), ensure_ascii=False))
+        return 0
     runner = build_investment_calendar_runner(settings)
     if args.investment_calendar_action == "once":
         print(json.dumps(runner.run_once(), ensure_ascii=False))
@@ -826,6 +841,16 @@ def build_parser() -> argparse.ArgumentParser:
     investment_calendar_actions.add_parser("save-json")
     calendar_delete = investment_calendar_actions.add_parser("delete")
     calendar_delete.add_argument("--event-id", required=True)
+    calendar_candidates = investment_calendar_actions.add_parser("candidates")
+    calendar_candidates.add_argument("--status", default="pending")
+    calendar_candidates.add_argument("--limit", default="100")
+    calendar_candidate_approve = investment_calendar_actions.add_parser("approve-candidate")
+    calendar_candidate_approve.add_argument("--candidate-id", required=True)
+    calendar_candidate_approve.add_argument("--starts-at", default="")
+    calendar_candidate_approve.add_argument("--note", default="")
+    calendar_candidate_reject = investment_calendar_actions.add_parser("reject-candidate")
+    calendar_candidate_reject.add_argument("--candidate-id", required=True)
+    calendar_candidate_reject.add_argument("--note", default="")
     investment_calendar_actions.add_parser("once")
     investment_calendar_actions.add_parser("watch")
     investment_calendar.set_defaults(func=investment_calendar_command)

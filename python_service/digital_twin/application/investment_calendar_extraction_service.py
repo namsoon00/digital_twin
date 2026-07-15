@@ -1,7 +1,7 @@
 from typing import Dict, Iterable, List
 
 from ..domain.events import DomainEvent, RESEARCH_EVIDENCE_COLLECTED
-from ..domain.investment_calendar_extraction import calendar_candidates_from_research_items
+from ..domain.investment_calendar_extraction import calendar_candidate_sets_from_research_items
 
 
 DISABLED_VALUES = {"0", "false", "no", "off", "disabled"}
@@ -46,10 +46,12 @@ class InvestmentCalendarExtractionService:
         self,
         calendar_service,
         account_repository=None,
+        candidate_repository=None,
         settings: Dict[str, object] = None,
     ):
         self.calendar_service = calendar_service
         self.account_repository = account_repository
+        self.candidate_repository = candidate_repository
         self.settings = dict(settings or {})
 
     def enabled(self) -> bool:
@@ -60,6 +62,20 @@ class InvestmentCalendarExtractionService:
 
     def min_confidence(self) -> float:
         return max(0.0, min(1.0, number(self.settings.get("investmentCalendarAutoExtractMinConfidence"), 0.45)))
+
+    def review_enabled(self) -> bool:
+        return truthy(self.settings.get("investmentCalendarAutoExtractReviewEnabled"), True)
+
+    def review_min_confidence(self) -> float:
+        return max(0.0, min(1.0, number(self.settings.get("investmentCalendarAutoExtractReviewMinConfidence"), 0.35)))
+
+    def feedback(self) -> Dict[str, object]:
+        if not self.candidate_repository or not hasattr(self.candidate_repository, "feedback_summary"):
+            return {}
+        try:
+            return self.candidate_repository.feedback_summary()
+        except Exception:  # noqa: BLE001 - feedback must not break news collection.
+            return {}
 
     def accounts(self) -> List[object]:
         if not self.account_repository:
@@ -94,12 +110,17 @@ class InvestmentCalendarExtractionService:
             return {"status": "disabled", "candidateCount": 0, "savedCount": 0}
         if not isinstance(event, DomainEvent) or event.name != RESEARCH_EVIDENCE_COLLECTED:
             return {"status": "ignored", "candidateCount": 0, "savedCount": 0}
-        candidates = calendar_candidates_from_research_items(
+        candidate_sets = calendar_candidate_sets_from_research_items(
             self.event_items(event),
             register_undated=self.register_undated(),
             min_confidence=self.min_confidence(),
+            review_min_confidence=self.review_min_confidence(),
+            feedback=self.feedback(),
         )
+        candidates = candidate_sets["ready"]
+        review_candidates = candidate_sets["review"] if self.review_enabled() else []
         saved = 0
+        stored_review = 0
         errors = []
         for candidate in candidates:
             payload = candidate.to_calendar_payload(self.account_ids_for_candidate(candidate))
@@ -115,9 +136,26 @@ class InvestmentCalendarExtractionService:
                 saved += 1
             except Exception as error:  # noqa: BLE001 - one bad candidate should not block the event bus.
                 errors.append(str(error))
+        if self.candidate_repository:
+            for candidate in review_candidates:
+                try:
+                    payload = candidate.to_review_payload(self.account_ids_for_candidate(candidate))
+                    body = payload.get("payload") if isinstance(payload.get("payload"), dict) else {}
+                    body.update({
+                        "sourceDomainEventId": event.event_id,
+                        "sourceDomainEventName": event.name,
+                        "sourceAggregateId": event.aggregate_id,
+                    })
+                    payload["payload"] = body
+                    if self.candidate_repository.upsert(payload):
+                        stored_review += 1
+                except Exception as error:  # noqa: BLE001 - review storage should not block collection.
+                    errors.append(str(error))
         return {
             "status": "ok",
             "candidateCount": len(candidates),
             "savedCount": saved,
+            "reviewCandidateCount": len(review_candidates),
+            "storedReviewCandidateCount": stored_review,
             "errors": errors[:5],
         }

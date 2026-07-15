@@ -376,6 +376,9 @@
     investmentCalendarSaving: false,
     investmentCalendarDeleting: "",
     investmentCalendarRunning: false,
+    investmentCalendarCandidates: null,
+    investmentCalendarCandidatesLoading: false,
+    investmentCalendarCandidateReviewing: "",
     investmentCalendarFilters: { symbol: "", eventType: "", limit: "8" },
     investmentCalendarDraft: defaultInvestmentCalendarDraft(),
     calendarEntryModalOpen: false,
@@ -4642,6 +4645,16 @@
     };
   }
 
+  function currentInvestmentCalendarCandidates() {
+    return state.investmentCalendarCandidates || {
+      candidates: [],
+      summary: {},
+      feedback: {},
+      status: "pending",
+      limit: 100
+    };
+  }
+
   function staticInvestmentCalendarEventTypes() {
     return [
       { type: "earnings", label: "실적발표" },
@@ -4713,6 +4726,17 @@
     };
   }
 
+  function staticInvestmentCalendarCandidatesPayload() {
+    return {
+      candidates: [],
+      summary: { pending: 0 },
+      feedback: {},
+      status: "pending",
+      limit: 100,
+      preview: true
+    };
+  }
+
   function loadInvestmentCalendar(force) {
     if (state.investmentCalendarLoading) return Promise.resolve();
     if (state.investmentCalendar && !force) return Promise.resolve(state.investmentCalendar);
@@ -4732,6 +4756,28 @@
       })
       .finally(function () {
         state.investmentCalendarLoading = false;
+        render();
+      });
+  }
+
+  function loadInvestmentCalendarCandidates(force) {
+    if (state.investmentCalendarCandidatesLoading) return Promise.resolve();
+    if (state.investmentCalendarCandidates && !force) return Promise.resolve(state.investmentCalendarCandidates);
+    state.investmentCalendarCandidatesLoading = true;
+    state.investmentCalendarError = "";
+    render();
+    var promise = isStaticPreviewHost()
+      ? Promise.resolve(staticInvestmentCalendarCandidatesPayload())
+      : requestJson("/api/investment-calendar/candidates?status=pending&limit=100");
+    return promise
+      .then(function (payload) {
+        state.investmentCalendarCandidates = payload;
+      })
+      .catch(function (error) {
+        state.investmentCalendarError = error.message || "투자 캘린더 후보를 불러오지 못했습니다.";
+      })
+      .finally(function () {
+        state.investmentCalendarCandidatesLoading = false;
         render();
       });
   }
@@ -4809,6 +4855,61 @@
       })
       .finally(function () {
         state.investmentCalendarRunning = false;
+        render();
+      });
+  }
+
+  function approveInvestmentCalendarCandidate(candidateId) {
+    var id = String(candidateId || "").trim();
+    if (!id || state.investmentCalendarCandidateReviewing) return Promise.resolve();
+    var candidates = currentInvestmentCalendarCandidates().candidates || [];
+    var candidate = candidates.filter(function (item) { return item.candidateId === id; })[0] || {};
+    var startsAt = candidate.startsAt || "";
+    if (!startsAt && window.prompt) {
+      startsAt = window.prompt("후보 승인 날짜/시간을 입력하세요. 예: 2026-08-20T09:00", "");
+    }
+    if (!startsAt) return Promise.resolve();
+    state.investmentCalendarCandidateReviewing = id;
+    state.investmentCalendarError = "";
+    render();
+    return sendJson("/api/investment-calendar/candidates/" + encodeURIComponent(id) + "/approve", "POST", {
+      startsAt: startsAt,
+      reviewNote: "UI 승인"
+    })
+      .then(function () {
+        showSnackbar("캘린더 후보를 이벤트로 등록했습니다.", "success");
+        return Promise.all([loadInvestmentCalendar(true), loadInvestmentCalendarCandidates(true)]);
+      })
+      .catch(function (error) {
+        state.investmentCalendarError = error.message || "캘린더 후보를 승인하지 못했습니다.";
+        showSnackbar(state.investmentCalendarError, "danger");
+      })
+      .finally(function () {
+        state.investmentCalendarCandidateReviewing = "";
+        render();
+      });
+  }
+
+  function rejectInvestmentCalendarCandidate(candidateId) {
+    var id = String(candidateId || "").trim();
+    if (!id || state.investmentCalendarCandidateReviewing) return Promise.resolve();
+    if (window.confirm && !window.confirm("선택한 캘린더 후보를 거절할까요?")) return Promise.resolve();
+    state.investmentCalendarCandidateReviewing = id;
+    state.investmentCalendarError = "";
+    render();
+    return sendJson("/api/investment-calendar/candidates/" + encodeURIComponent(id) + "/reject", "POST", {
+      reviewNote: "UI 거절"
+    })
+      .then(function () {
+        showSnackbar("캘린더 후보를 거절했습니다.", "success");
+        return loadInvestmentCalendarCandidates(true);
+      })
+      .catch(function (error) {
+        state.investmentCalendarError = error.message || "캘린더 후보를 거절하지 못했습니다.";
+        showSnackbar(state.investmentCalendarError, "danger");
+      })
+      .finally(function () {
+        state.investmentCalendarCandidateReviewing = "";
         render();
       });
   }
@@ -6692,6 +6793,9 @@
     if (state.activeTab === "calendar" && !state.investmentCalendar && !state.investmentCalendarLoading) {
       loadInvestmentCalendar(false);
     }
+    if (state.activeTab === "calendar" && !state.investmentCalendarCandidates && !state.investmentCalendarCandidatesLoading) {
+      loadInvestmentCalendarCandidates(false);
+    }
     if (state.activeTab === "experiments" && !state.ontologyExperimentsLoaded && !state.ontologyExperimentsLoading) {
       loadOntologyExperiments(false);
     }
@@ -7287,6 +7391,7 @@
       '<section class="admin-grid investment-calendar-view">',
       renderInvestmentCalendarSummaryPanel(),
       renderInvestmentCalendarListPanel(),
+      renderInvestmentCalendarCandidatePanel(),
       renderInvestmentCalendarRailPanel(),
       '</section>'
     ].join(""));
@@ -7461,6 +7566,71 @@
       '<button class="mini-button danger" type="button" data-calendar-delete="' + escapeHtml(event.eventId || "") + '"' + (state.investmentCalendarDeleting === event.eventId ? ' disabled' : '') + '>' + (state.investmentCalendarDeleting === event.eventId ? "삭제 중" : "삭제") + '</button>',
       '</div>',
       expanded ? renderCalendarEventInlineDetail(event) : '',
+      '</section>'
+    ].join("");
+  }
+
+  function investmentCalendarCandidates() {
+    var payload = currentInvestmentCalendarCandidates();
+    return Array.isArray(payload.candidates) ? payload.candidates : [];
+  }
+
+  function renderInvestmentCalendarCandidatePanel() {
+    var payload = currentInvestmentCalendarCandidates();
+    var candidates = investmentCalendarCandidates();
+    var pending = Number((payload.summary || {}).pending || candidates.length || 0);
+    return [
+      '<article class="panel investment-calendar-list-panel"' + cardTypeAttrs("process-card", candidates.length ? "watch" : "hold") + '>',
+      '<div class="panel-head">',
+      '<div><p class="label">AUTO REVIEW</p><h2>자동 감지 후보</h2><span>날짜가 없거나 신뢰도가 낮은 특수 이벤트를 승인 전 단계로 보관합니다.</span></div>',
+      '<span class="metric">' + escapeHtml(pending) + '</span>',
+      '</div>',
+      '<div class="investment-calendar-list">',
+      state.investmentCalendarCandidatesLoading ? renderEmptyState({
+        tone: "watch",
+        label: "Review",
+        title: "자동 감지 후보를 조회하고 있습니다",
+        description: "뉴스·공시에서 뽑은 후보와 승인/거절 피드백을 읽고 있습니다.",
+        meta: ["pending"]
+      }) : (!candidates.length ? renderEmptyState({
+        tone: "hold",
+        label: "Review",
+        title: "검토할 자동 후보가 없습니다",
+        description: "뉴스 수집 중 날짜가 불명확하거나 신뢰도가 낮은 이벤트가 발견되면 여기에 쌓입니다.",
+        meta: ["ADR/GDR", "지수 편입", "상장", "증자"]
+      }) : candidates.slice(0, 5).map(renderInvestmentCalendarCandidate).join("")),
+      '</div>',
+      '</article>'
+    ].join("");
+  }
+
+  function renderInvestmentCalendarCandidate(candidate) {
+    var targets = (candidate.symbols || []).concat(candidate.markets || []);
+    var id = candidate.candidateId || "";
+    var busy = state.investmentCalendarCandidateReviewing === id;
+    var reason = candidate.reviewReason === "missingDate" ? "날짜 확인 필요" : (candidate.reviewReason === "lowConfidence" ? "신뢰도 확인 필요" : "검토 필요");
+    return [
+      '<section class="investment-calendar-event watch"' + cardTypeAttrs("calendar-event", "watch") + '>',
+      '<div class="investment-calendar-event-main">',
+      '<div class="investment-calendar-event-date">',
+      '<strong>' + escapeHtml(candidate.startsAt ? formatClock(candidate.startsAt) : "날짜 필요") + '</strong>',
+      '<span>' + escapeHtml(Math.round(Number(candidate.confidence || 0) * 100)) + '%</span>',
+      '</div>',
+      '<div class="investment-calendar-event-copy">',
+      '<p class="label">' + escapeHtml(investmentCalendarEventTypeLabel(candidate.eventType)) + ' · ' + escapeHtml(reason) + '</p>',
+      '<h3>' + escapeHtml(candidate.title || "자동 감지 후보") + '</h3>',
+      '<div class="notification-detail-tags">',
+      '<span>중요도 ' + escapeHtml(candidate.importance || 0) + '</span>',
+      '<span>' + escapeHtml(targets.join(" · ") || "전체 포트폴리오") + '</span>',
+      '<span>' + escapeHtml(candidate.source || "research-evidence") + '</span>',
+      '</div>',
+      candidate.notes ? '<p class="subtle">' + escapeHtml(candidate.notes) + '</p>' : '',
+      '</div>',
+      '</div>',
+      '<div class="investment-calendar-event-actions">',
+      '<button class="mini-button primary" type="button" data-calendar-candidate-approve="' + escapeHtml(id) + '"' + (busy ? ' disabled' : '') + '>' + escapeHtml(busy ? "처리 중" : "승인") + '</button>',
+      '<button class="mini-button danger" type="button" data-calendar-candidate-reject="' + escapeHtml(id) + '"' + (busy ? ' disabled' : '') + '>거절</button>',
+      '</div>',
       '</section>'
     ].join("");
   }
@@ -17148,7 +17318,7 @@
 
     Array.prototype.slice.call(app.querySelectorAll('[data-action="refresh-investment-calendar"]')).forEach(function (button) {
       button.addEventListener("click", function () {
-        loadInvestmentCalendar(true);
+        Promise.all([loadInvestmentCalendar(true), loadInvestmentCalendarCandidates(true)]);
       });
     });
 
@@ -17228,6 +17398,18 @@
     Array.prototype.slice.call(app.querySelectorAll("[data-calendar-delete]")).forEach(function (button) {
       button.addEventListener("click", function () {
         deleteInvestmentCalendarEvent(button.getAttribute("data-calendar-delete"));
+      });
+    });
+
+    Array.prototype.slice.call(app.querySelectorAll("[data-calendar-candidate-approve]")).forEach(function (button) {
+      button.addEventListener("click", function () {
+        approveInvestmentCalendarCandidate(button.getAttribute("data-calendar-candidate-approve"));
+      });
+    });
+
+    Array.prototype.slice.call(app.querySelectorAll("[data-calendar-candidate-reject]")).forEach(function (button) {
+      button.addEventListener("click", function () {
+        rejectInvestmentCalendarCandidate(button.getAttribute("data-calendar-candidate-reject"));
       });
     });
 

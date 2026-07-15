@@ -7,6 +7,7 @@ from .mysql_operational import (
     MySQLAppStore,
     MySQLEventLog,
     MySQLExternalSignalCache,
+    MySQLInvestmentCalendarCandidateStore,
     MySQLInvestmentCalendarStore,
     MySQLMarketQuoteCache,
     MySQLModelReviewJobStore,
@@ -109,6 +110,11 @@ def research_evidence_store(settings: Dict[str, str] = None):
 def investment_calendar_store(settings: Dict[str, str] = None):
     configured = configured_settings(settings)
     return MySQLInvestmentCalendarStore(configured)
+
+
+def investment_calendar_candidate_store(settings: Dict[str, str] = None):
+    configured = configured_settings(settings)
+    return MySQLInvestmentCalendarCandidateStore(configured)
 
 
 def ontology_quality_sample_store(settings: Dict[str, str] = None):

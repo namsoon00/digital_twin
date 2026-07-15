@@ -207,12 +207,12 @@ class ExternalSignalCoreMixin:
             "researchEvidence": {},
             "statuses": [],
         }
+        self.add_fx_rates(signals, positions)
         self.add_alpha_vantage(signals, positions)
         self.add_alpha_fundamentals(signals, positions)
         self.add_sec_edgar(signals, positions)
         self.add_coingecko(signals)
         self.add_fred(signals)
-        self.add_fx_rates(signals, positions)
         self.add_opendart(signals, positions)
         self.add_news_headlines(signals, positions)
         return attach_external_signal_quality(signals, positions=positions, settings=self.settings)

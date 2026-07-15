@@ -7071,6 +7071,7 @@ class PythonServiceTests(unittest.TestCase):
         cached_signals = provider.signals_for_positions(positions)
 
         self.assertEqual(9, len(calls))
+        self.assertIn("CURRENCY_EXCHANGE_RATE", calls[0])
         self.assertEqual(signals["fetchedAt"], cached_signals["fetchedAt"])
         self.assertEqual(signals["equityQuotes"], cached_signals["equityQuotes"])
         self.assertEqual(signals["cryptoMarkets"], cached_signals["cryptoMarkets"])

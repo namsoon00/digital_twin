@@ -680,7 +680,29 @@ class TossProvider:
             quote_message = position.quote_message or "잔고 응답의 현재가를 표시합니다."
             quote_source = position.quote_source or "Toss holdings"
             updated_at = position.updated_at
-        market_value = position.market_value or (position.quantity * current_price if position.quantity and current_price else 0.0)
+        estimated_market_value = position.quantity * current_price if position.quantity and current_price else 0.0
+        market_value = position.market_value or estimated_market_value
+        market_value_repriced = False
+        if live_price and estimated_market_value:
+            market_value_repriced = abs(estimated_market_value - number(position.market_value)) > max(
+                1.0,
+                abs(estimated_market_value) * 0.0001,
+            )
+            market_value = estimated_market_value
+        market_value_krw = position.market_value_krw
+        profit_loss = position.profit_loss
+        profit_loss_krw = position.profit_loss_krw
+        profit_loss_rate = position.profit_loss_rate
+        if market_value_repriced:
+            if str(position.currency or quote.get("currency") or "").upper() == "KRW":
+                market_value_krw = market_value
+            else:
+                market_value_krw = 0.0
+            if position.average_price and position.quantity:
+                cost_basis = position.average_price * position.quantity
+                profit_loss = market_value - cost_basis
+                profit_loss_rate = ((current_price - position.average_price) / position.average_price) * 100
+                profit_loss_krw = profit_loss if str(position.currency or quote.get("currency") or "").upper() == "KRW" else 0.0
         ma20 = number(indicator_source.get("ma20")) or position.ma20
         ma60 = number(indicator_source.get("ma60")) or position.ma60
         ma20_distance = pct_distance(current_price, ma20) if current_price and ma20 else number(indicator_source.get("ma20Distance")) or position.ma20_distance
@@ -697,6 +719,10 @@ class TossProvider:
             currency=str(quote.get("currency") or position.currency or cached.get("currency") or ""),
             market=str(quote.get("market") or position.market or cached.get("market") or ""),
             market_value=market_value,
+            market_value_krw=market_value_krw,
+            profit_loss=profit_loss,
+            profit_loss_krw=profit_loss_krw,
+            profit_loss_rate=profit_loss_rate,
             trading_value=trading_value,
             volume=volume,
             volume_ratio=volume_ratio,

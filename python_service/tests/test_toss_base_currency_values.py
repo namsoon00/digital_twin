@@ -12,10 +12,45 @@ from digital_twin.domain.portfolio_calculations import (
     runtime_fx_currencies_from_external_signals,
 )
 from digital_twin.domain.volume_time_adjustment import volume_pace_snapshot
-from digital_twin.infrastructure.toss_snapshots import currency_rates_from_external_signals
+from digital_twin.infrastructure.toss_snapshots import TossProvider, currency_rates_from_external_signals
 
 
 class TossBaseCurrencyValueTests(unittest.TestCase):
+    def test_live_quote_reprices_stale_holding_value_and_profit_rate(self):
+        position = normalize_position(
+            {
+                "symbol": "000660",
+                "market": "KR",
+                "currency": "KRW",
+                "quantity": 7,
+                "averagePrice": 2343143,
+                "currentPrice": 2074285.7,
+                "marketValue": 14520000,
+                "profitLossRate": -11.5,
+            }
+        )
+        provider = TossProvider.__new__(TossProvider)
+
+        merged = provider.merge_market_data(
+            position,
+            {"currentPrice": 1913000, "currency": "KRW", "market": "KR"},
+            {},
+            {},
+            quote_live=True,
+            indicators_live=False,
+        )
+        summary = portfolio_summary([merged], fx_rates={"KRW": 1})
+        monitor = RealtimeMonitor({"fxRates": "KRW=1\nUSD=1400"})
+
+        self.assertEqual(1913000, merged.current_price)
+        self.assertEqual(13391000, merged.market_value)
+        self.assertEqual(13391000, merged.market_value_krw)
+        self.assertAlmostEqual(((1913000 - 2343143) / 2343143) * 100, merged.profit_loss_rate, places=4)
+        self.assertEqual(
+            "계좌 평가금액: 1,339만 원",
+            monitor.account_market_value_line(summary, {merged.symbol: merged.to_dict()}),
+        )
+
     def test_us_position_keeps_toss_krw_evaluation_amount_separate_from_native_value(self):
         position = normalize_position(
             {

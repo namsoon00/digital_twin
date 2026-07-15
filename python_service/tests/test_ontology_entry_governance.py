@@ -6,7 +6,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from digital_twin.domain.investment_research import build_active_investment_opinion
 from digital_twin.domain.ontology_relation_facts import position_signal_facts
-from digital_twin.domain.ontology_relation_reasoning import evaluate_position_relation_rules
+from digital_twin.domain.offline.ontology_relation_fallback_evaluator import evaluate_position_relation_rules
 from digital_twin.domain.portfolio import Position
 from digital_twin.domain.portfolio_calculations import portfolio_summary
 

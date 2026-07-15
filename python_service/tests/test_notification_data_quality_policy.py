@@ -12,7 +12,7 @@ from digital_twin.domain.notification_rules import (
     evaluate_notification_rule,
     notification_state_group_key,
 )
-from digital_twin.domain.notification_ai_gate_message import (
+from digital_twin.application.notification_ai_gate_message import (
     notification_cooldown_release_summary,
     notification_topline_change_summary,
     prepend_execution_start_badge,

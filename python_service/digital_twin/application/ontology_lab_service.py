@@ -1,7 +1,5 @@
 import hashlib
 import json
-import signal
-import time
 from dataclasses import fields
 from typing import Dict, Iterable, List
 
@@ -573,68 +571,6 @@ class OntologyLabService:
                 continue
             snapshots.append(snapshot)
         return snapshots
-
-
-class OntologyLabScheduler:
-    def __init__(self, service: OntologyLabService, interval_seconds: int):
-        self.service = service
-        self.interval_seconds = max(5, int(interval_seconds or 300))
-        self.last_auto_suggest_at = 0.0
-        self.running = True
-
-    def stop(self, *_args) -> None:
-        self.running = False
-
-    def run_forever(self, limit: int = 0, force: bool = False) -> None:
-        signal.signal(signal.SIGTERM, self.stop)
-        signal.signal(signal.SIGINT, self.stop)
-        print(
-            "Python ontology lab worker started. interval="
-            + str(self.interval_seconds)
-            + "s autoSuggestInterval="
-            + str(self.service.auto_suggest_interval_seconds())
-            + "s"
-        )
-        while self.running:
-            started = time.monotonic()
-            try:
-                result = self.service.run_once(limit=limit, force=force)
-                if result.get("processedCount"):
-                    print(
-                        "Ontology lab "
-                        + str(result.get("status"))
-                        + " processed="
-                        + str(result.get("processedCount", 0))
-                        + " runs="
-                        + str(result.get("runCount", 0))
-                        + " skipped="
-                        + str(result.get("skippedCount", 0))
-                    )
-                if self.auto_suggest_due(started):
-                    auto_result = self.service.auto_suggest()
-                    self.last_auto_suggest_at = time.monotonic()
-                    print(
-                        "Ontology lab auto-suggest "
-                        + str(auto_result.get("status"))
-                        + " created="
-                        + str(auto_result.get("createdCount", 0))
-                        + " skipped="
-                        + str(auto_result.get("skippedCount", 0))
-                    )
-            except Exception as error:  # noqa: BLE001 - long-running lab worker must continue after a cycle failure.
-                print("Python ontology lab worker error: " + str(error))
-            elapsed = time.monotonic() - started
-            sleep_seconds = max(1.0, self.interval_seconds - elapsed)
-            end_at = time.monotonic() + sleep_seconds
-            while self.running and time.monotonic() < end_at:
-                time.sleep(min(1.0, end_at - time.monotonic()))
-
-    def auto_suggest_due(self, now: float) -> bool:
-        if not self.service.auto_suggest_enabled() or not self.service.auto_suggest_configured():
-            return False
-        interval = self.service.auto_suggest_interval_seconds()
-        return not self.last_auto_suggest_at or now - self.last_auto_suggest_at >= interval
-
 
 def monitor_snapshot_key(snapshots: Iterable[AccountSnapshot], symbols: Iterable[str] = None) -> str:
     rows = []

@@ -126,7 +126,7 @@ class TypeDBOntologyRepositoryTests(unittest.TestCase):
         for relative in [
             "python_service/digital_twin/infrastructure/service_factory.py",
             "python_service/digital_twin/infrastructure/web_server.py",
-            "python_service/digital_twin/cli.py",
+            "python_service/digital_twin/infrastructure/cli.py",
         ]:
             source = (root / relative).read_text(encoding="utf-8")
             self.assertIn("ontology_graph_store", source)

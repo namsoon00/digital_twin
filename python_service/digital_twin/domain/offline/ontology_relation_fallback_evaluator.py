@@ -1,23 +1,29 @@
+"""Offline relation-rule evaluator for tests and ontology-lab comparisons.
+
+Runtime investment judgement must use graph-store InferenceBox context instead
+of this Python evaluator.
+"""
+
 from typing import Dict, List, Optional
 
-from .market_data import number
-from .ontology_relation_contracts import (
+from ..market_data import number
+from ..ontology_relation_contracts import (
     ONTOLOGY_RULE_ENGINE_VERSION,
     OntologyRuleMatch,
 )
-from .ontology_relation_execution_plan import execution_plan_from_relation_context
-from .ontology_relation_facts import (
+from ..ontology_relation_execution_plan import execution_plan_from_relation_context
+from ..ontology_relation_facts import (
     _bp_text,
     _has_numeric_fact,
     _number_text,
     moving_average_distance_text,
     position_signal_facts,
 )
-from .ontology_relation_matches import _match, decision_from_matches
-from .ontology_relation_prompt_context import build_ai_prompt_context
-from .ontology_relation_settings import _thresholds, relation_rule_definitions_from_settings
-from .ontology_relation_decisions import strength_label
-from .portfolio import PortfolioSummary, Position
+from ..ontology_relation_matches import _match, decision_from_matches
+from ..ontology_relation_prompt_context import build_ai_prompt_context
+from ..ontology_relation_settings import _thresholds, relation_rule_definitions_from_settings
+from ..ontology_relation_decisions import strength_label
+from ..portfolio import PortfolioSummary, Position
 
 
 def evaluate_position_relation_rules(

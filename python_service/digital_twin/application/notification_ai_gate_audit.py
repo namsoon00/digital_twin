@@ -1,17 +1,17 @@
 import re
 from typing import Dict
 
-from .notification_ai import active_investment_opinion_value, notification_ai_prompt_context, relation_context_value
-from .notification_ai_gate_contracts import (
+from ..domain.notification_ai import active_investment_opinion_value, notification_ai_prompt_context, relation_context_value
+from ..domain.notification_ai_gate_contracts import (
     AI_DECISION_MODE,
     AI_DECISION_SOURCE_LABEL,
     NOTIFICATION_AI_GATE_VERSION,
     NotificationAIValidatedResponse,
 )
 from .notification_ai_gate_message import execution_telegram_message, prepend_execution_start_badge
-from .notification_ai_gate_sources import source_labels_from_context
-from .notification_ai_gate_text import _number, _text, reference_date
-from .notification_ai_gate_validation import ai_decision_input_packet, delivery_profile_from_context
+from ..domain.notification_ai_gate_sources import source_labels_from_context
+from ..domain.notification_ai_gate_text import _number, _text, reference_date
+from ..domain.notification_ai_gate_validation import ai_decision_input_packet, delivery_profile_from_context
 
 
 def _ontology_id(kind: str, value: object) -> str:

@@ -1,4 +1,3 @@
-import signal
 import time
 from typing import Dict, List
 
@@ -166,35 +165,3 @@ class KISRealtimeWebSocketRunner:
         flush_result = self.flush_events(force=True)
         result["eventFlush"] = flush_result
         return result
-
-
-class KISRealtimeWebSocketScheduler:
-    def __init__(self, runner: KISRealtimeWebSocketRunner, reconnect_delay_seconds: int = 5):
-        self.runner = runner
-        self.reconnect_delay_seconds = max(1, int(reconnect_delay_seconds or 5))
-        self.running = True
-
-    def stop(self, *_args) -> None:
-        self.running = False
-
-    def run_forever(self) -> None:
-        signal.signal(signal.SIGTERM, self.stop)
-        signal.signal(signal.SIGINT, self.stop)
-        print("Python KIS realtime WebSocket worker started. reconnect=" + str(self.reconnect_delay_seconds) + "s")
-        while self.running:
-            try:
-                result = self.runner.run_once()
-                print(
-                    "KIS realtime websocket "
-                    + str(result.get("status"))
-                    + " saved="
-                    + str(result.get("savedCount", 0))
-                    + " symbols="
-                    + str(len(result.get("symbols") or [])),
-                    flush=True,
-                )
-            except Exception as error:  # noqa: BLE001 - realtime feed should reconnect after vendor/network errors.
-                print("Python KIS realtime WebSocket error: " + str(error), flush=True)
-            end_at = time.monotonic() + self.reconnect_delay_seconds
-            while self.running and time.monotonic() < end_at:
-                self.runner.sleep_fn(min(1.0, end_at - time.monotonic()))

@@ -1,4 +1,4 @@
-from .application.scheduler import MIN_REALTIME_INTERVAL_SECONDS, RealtimeScheduler
+from .infrastructure.schedulers import MIN_REALTIME_INTERVAL_SECONDS, RealtimeScheduler
 from .infrastructure.notifications import send_events
 from .infrastructure.service_factory import build_monitor_runner
 from .infrastructure.toss_snapshots import build_snapshot

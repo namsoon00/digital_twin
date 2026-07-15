@@ -1,7 +1,7 @@
 import hashlib
 import json
 from datetime import datetime, timedelta, timezone
-from typing import Dict, Iterable, List, Optional
+from typing import Callable, Dict, Iterable, List, Optional, Tuple
 
 from ..domain.accounts import AccountConfig, split_symbols
 from ..domain.data_freshness import evaluate_notification_data_freshness
@@ -46,6 +46,7 @@ from .settings import read_json, settings_path, utc_now
 from .mysql_notification_jobs import MySQLNotificationJobStore
 from .mysql_operational_connection import MYSQL_SCHEMA, MySQLConnectionProxy, MySQLOperationalConnection
 from .mysql_operational_events import insert_domain_event_with_connection
+from .mysql_operational_events import insert_domain_event_with_connection
 from .mysql_operational_helpers import (
     _is_duplicate_key_error,
     _json_loads,
@@ -55,25 +56,91 @@ from .mysql_operational_helpers import (
 
 
 class MySQLResearchEvidenceStore(MySQLOperationalConnection):
-    def upsert_many(self, items: Iterable[ResearchEvidence]) -> int:
-        stamp = utc_now()
+    def _upsert_many_with_connection(
+        self,
+        connection,
+        items: Iterable[ResearchEvidence],
+        stamp: str,
+    ) -> Tuple[int, List[str], List[ResearchEvidence]]:
         written = 0
         changed_symbols: List[str] = []
         changed_items: List[ResearchEvidence] = []
-        with self.transaction() as connection:
-            for item in items or []:
-                evidence_id = str(item.evidence_id or "").strip()
-                if not evidence_id:
-                    continue
-                symbol = str(item.symbol or "").upper().strip()
-                kind = str(item.kind or "").strip()
-                source = str(item.source or "").strip()
-                title = str(item.title or "").strip()
-                observed_at = str(item.observed_at or item.published_at or stamp).strip()
-                published_at = str(item.published_at or item.observed_at or "").strip()
-                dedupe_key = "|".join([symbol, kind, source, title, str(item.url or "").strip()])[:191]
-                payload = dict(item.raw_payload or {})
-                current_signature = fact_signature(research_evidence_change_payload(
+        for item in items or []:
+            evidence_id = str(item.evidence_id or "").strip()
+            if not evidence_id:
+                continue
+            symbol = str(item.symbol or "").upper().strip()
+            kind = str(item.kind or "").strip()
+            source = str(item.source or "").strip()
+            title = str(item.title or "").strip()
+            observed_at = str(item.observed_at or item.published_at or stamp).strip()
+            published_at = str(item.published_at or item.observed_at or "").strip()
+            dedupe_key = "|".join([symbol, kind, source, title, str(item.url or "").strip()])[:191]
+            payload = dict(item.raw_payload or {})
+            current_signature = fact_signature(research_evidence_change_payload(
+                symbol,
+                kind,
+                source,
+                title,
+                str(item.summary or ""),
+                str(item.url or ""),
+                published_at,
+                str(item.polarity or "context"),
+                float(item.impact_score or 0),
+                float(item.confidence or 0),
+                payload,
+            ))
+            previous_row = connection.execute(
+                """
+                SELECT symbol, kind, source, title, summary, url, published_at,
+                       polarity, impact_score, confidence, payload_json
+                FROM research_evidence
+                WHERE evidence_id = %s
+                """,
+                (evidence_id,),
+            ).fetchone()
+            previous_signature = ""
+            if previous_row:
+                previous_payload = _json_loads(previous_row["payload_json"], {})
+                previous_signature = fact_signature(research_evidence_change_payload(
+                    str(previous_row["symbol"] or ""),
+                    str(previous_row["kind"] or ""),
+                    str(previous_row["source"] or ""),
+                    str(previous_row["title"] or ""),
+                    str(previous_row["summary"] or ""),
+                    str(previous_row["url"] or ""),
+                    str(previous_row["published_at"] or ""),
+                    str(previous_row["polarity"] or "context"),
+                    float(previous_row["impact_score"] or 0),
+                    float(previous_row["confidence"] or 0),
+                    previous_payload,
+                ))
+            connection.execute(
+                """
+                INSERT INTO research_evidence (
+                    evidence_id, symbol, kind, source, title, summary, url, published_at,
+                    observed_at, first_seen_at, last_seen_at, polarity, impact_score,
+                    confidence, dedupe_key, payload_json
+                )
+                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                ON DUPLICATE KEY UPDATE
+                    symbol = VALUES(symbol),
+                    kind = VALUES(kind),
+                    source = VALUES(source),
+                    title = VALUES(title),
+                    summary = VALUES(summary),
+                    url = VALUES(url),
+                    published_at = VALUES(published_at),
+                    observed_at = VALUES(observed_at),
+                    last_seen_at = VALUES(last_seen_at),
+                    polarity = VALUES(polarity),
+                    impact_score = VALUES(impact_score),
+                    confidence = VALUES(confidence),
+                    dedupe_key = VALUES(dedupe_key),
+                    payload_json = VALUES(payload_json)
+                """,
+                (
+                    evidence_id,
                     symbol,
                     kind,
                     source,
@@ -81,87 +148,47 @@ class MySQLResearchEvidenceStore(MySQLOperationalConnection):
                     str(item.summary or ""),
                     str(item.url or ""),
                     published_at,
+                    observed_at,
+                    stamp,
+                    stamp,
                     str(item.polarity or "context"),
                     float(item.impact_score or 0),
                     float(item.confidence or 0),
-                    payload,
-                ))
-                previous_row = connection.execute(
-                    """
-                    SELECT symbol, kind, source, title, summary, url, published_at,
-                           polarity, impact_score, confidence, payload_json
-                    FROM research_evidence
-                    WHERE evidence_id = %s
-                    """,
-                    (evidence_id,),
-                ).fetchone()
-                previous_signature = ""
-                if previous_row:
-                    previous_payload = _json_loads(previous_row["payload_json"], {})
-                    previous_signature = fact_signature(research_evidence_change_payload(
-                        str(previous_row["symbol"] or ""),
-                        str(previous_row["kind"] or ""),
-                        str(previous_row["source"] or ""),
-                        str(previous_row["title"] or ""),
-                        str(previous_row["summary"] or ""),
-                        str(previous_row["url"] or ""),
-                        str(previous_row["published_at"] or ""),
-                        str(previous_row["polarity"] or "context"),
-                        float(previous_row["impact_score"] or 0),
-                        float(previous_row["confidence"] or 0),
-                        previous_payload,
-                    ))
-                connection.execute(
-                    """
-                    INSERT INTO research_evidence (
-                        evidence_id, symbol, kind, source, title, summary, url, published_at,
-                        observed_at, first_seen_at, last_seen_at, polarity, impact_score,
-                        confidence, dedupe_key, payload_json
-                    )
-                    VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
-                    ON DUPLICATE KEY UPDATE
-                        symbol = VALUES(symbol),
-                        kind = VALUES(kind),
-                        source = VALUES(source),
-                        title = VALUES(title),
-                        summary = VALUES(summary),
-                        url = VALUES(url),
-                        published_at = VALUES(published_at),
-                        observed_at = VALUES(observed_at),
-                        last_seen_at = VALUES(last_seen_at),
-                        polarity = VALUES(polarity),
-                        impact_score = VALUES(impact_score),
-                        confidence = VALUES(confidence),
-                        dedupe_key = VALUES(dedupe_key),
-                        payload_json = VALUES(payload_json)
-                    """,
-                    (
-                        evidence_id,
-                        symbol,
-                        kind,
-                        source,
-                        title,
-                        str(item.summary or ""),
-                        str(item.url or ""),
-                        published_at,
-                        observed_at,
-                        stamp,
-                        stamp,
-                        str(item.polarity or "context"),
-                        float(item.impact_score or 0),
-                        float(item.confidence or 0),
-                        dedupe_key,
-                        json_dumps(payload),
-                    ),
-                )
-                if not previous_row or current_signature != previous_signature:
-                    written += 1
-                    if symbol and symbol not in changed_symbols:
-                        changed_symbols.append(symbol)
-                    changed_items.append(item)
-        self.last_changed_symbols = changed_symbols
-        self.last_changed_items = changed_items
+                    dedupe_key,
+                    json_dumps(payload),
+                ),
+            )
+            if not previous_row or current_signature != previous_signature:
+                written += 1
+                if symbol and symbol not in changed_symbols:
+                    changed_symbols.append(symbol)
+                changed_items.append(item)
+        return written, changed_symbols, changed_items
+
+    def _remember_changed_items(self, changed_symbols: List[str], changed_items: List[ResearchEvidence]) -> None:
+        self.last_changed_symbols = list(changed_symbols or [])
+        self.last_changed_items = list(changed_items or [])
+
+    def upsert_many(self, items: Iterable[ResearchEvidence]) -> int:
+        stamp = utc_now()
+        with self.transaction() as connection:
+            written, changed_symbols, changed_items = self._upsert_many_with_connection(connection, items, stamp)
+        self._remember_changed_items(changed_symbols, changed_items)
         return written
+
+    def upsert_many_with_events(
+        self,
+        items: Iterable[ResearchEvidence],
+        event_builder: Callable[[int, List[str], List[ResearchEvidence]], Iterable[DomainEvent]],
+    ) -> Tuple[int, List[DomainEvent]]:
+        stamp = utc_now()
+        with self.transaction() as connection:
+            written, changed_symbols, changed_items = self._upsert_many_with_connection(connection, items, stamp)
+            events = list(event_builder(written, changed_symbols, changed_items) or [])
+            for event in events:
+                insert_domain_event_with_connection(connection, event)
+        self._remember_changed_items(changed_symbols, changed_items)
+        return written, events
 
     def latest(self, symbol: str = "", kind: str = "", limit: int = 50) -> List[ResearchEvidence]:
         conditions = []

@@ -23,8 +23,7 @@ class EventBus:
     def subscribe_all(self, handler: EventHandler) -> None:
         self.subscribe("*", handler)
 
-    def publish(self, event: DomainEvent) -> None:
-        self.published.append(event)
+    def dispatch(self, event: DomainEvent) -> None:
         for handler in self.handlers.get(event.name, []) + self.handlers.get("*", []):
             try:
                 handler(event)
@@ -32,6 +31,14 @@ class EventBus:
                 self.handler_errors.append(error)
                 if self.raise_handler_errors:
                     raise
+
+    def publish(self, event: DomainEvent) -> None:
+        self.published.append(event)
+        self.dispatch(event)
+
+    def dispatch_recorded(self, event: DomainEvent) -> None:
+        self.published.append(event)
+        self.dispatch(event)
 
     def publish_all(self, events: Iterable[DomainEvent]) -> None:
         for event in events:

@@ -2,8 +2,8 @@ import os
 import subprocess
 from typing import Dict
 
-from ..domain.notification_ai_gate import (
-    NotificationAIValidatedResponse,
+from ..domain.notification_ai_gate_contracts import NotificationAIValidatedResponse
+from ..domain.notification_ai_gate_validation import (
     build_notification_ai_gate_prompt,
     local_validated_ai_response,
     validated_response_from_text,

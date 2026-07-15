@@ -3,12 +3,15 @@ from datetime import datetime, timezone
 from typing import Callable, Dict, List
 from zoneinfo import ZoneInfo
 
-from ..domain.disclosure_analysis import context_with_disclosure_analysis, local_disclosure_analysis
+from ..domain.disclosure_analysis import local_disclosure_analysis
 from ..domain.market_data import number
 from ..domain.monitoring import RealtimeMonitor
 from ..domain.notification_ai import enrich_notification_ai_context
-from ..domain.notification_ai_gate import ai_gate_enabled_for_message_type, context_with_validated_ai_response, local_validated_ai_response
+from ..domain.notification_ai_gate_contracts import ai_gate_enabled_for_message_type
+from ..domain.notification_ai_gate_validation import local_validated_ai_response
 from ..domain.notifications import NotificationJob, notification_debug_number
+from .notification_ai_gate_audit import context_with_validated_ai_response
+from .notification_disclosure_rendering import context_with_disclosure_analysis
 
 
 class CompositeNotificationContextEnricher:
@@ -390,29 +393,3 @@ class NotificationQueueRunner:
             self.queue.mark_suppressed(job, reason)
         else:
             self.queue.mark_failed(job, reason)
-
-
-class NotificationQueueScheduler:
-    def __init__(self, runner: NotificationQueueRunner, interval_seconds: int):
-        self.runner = runner
-        self.interval_seconds = max(5, int(interval_seconds or 30))
-        self.running = True
-
-    def stop(self) -> None:
-        self.running = False
-
-    def run_forever(self, limit: int = 10) -> None:
-        print("Python notification worker started. interval=" + str(self.interval_seconds) + "s")
-        while self.running:
-            started = time.monotonic()
-            try:
-                processed = self.runner.run_once(limit=limit)
-                if processed:
-                    print("Processed notification jobs: " + str(processed))
-            except Exception as error:  # noqa: BLE001 - worker must continue after a cycle failure.
-                print("Python notification worker error: " + str(error))
-            elapsed = time.monotonic() - started
-            sleep_seconds = max(1.0, self.interval_seconds - elapsed)
-            end_at = time.monotonic() + sleep_seconds
-            while self.running and time.monotonic() < end_at:
-                time.sleep(min(1.0, end_at - time.monotonic()))

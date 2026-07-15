@@ -42,7 +42,8 @@ from digital_twin.domain.ontology_rulebox_governance import rulebox_rules_hash
 from digital_twin.domain.ontology_schema import abox_properties
 from digital_twin.domain.ontology_validator import validate_ontology
 from digital_twin.domain.portfolio_ontology_builder import apply_relation_driven_opinions, build_portfolio_ontology
-from digital_twin.domain.ontology_relation_reasoning import decision_action_group_for_label, evaluate_position_relation_rules, prompt_template_for_message_type
+from digital_twin.domain.offline.ontology_relation_fallback_evaluator import evaluate_position_relation_rules
+from digital_twin.domain.ontology_relation_reasoning import decision_action_group_for_label, prompt_template_for_message_type
 from digital_twin.domain.portfolio_calculations import portfolio_summary
 from digital_twin.domain.strategy import SafeFormula, StrategyModel, decisions_for_positions
 from digital_twin.domain.trend_transitions import trend_transition_assessment
@@ -54,7 +55,8 @@ from digital_twin.domain.notification_templates import NotificationTemplate, ale
 from digital_twin.domain.notification_rules import apply_market_hours_rule, apply_state_cooldown_rule, default_notification_rule, evaluate_notification_rule
 from digital_twin.domain.ontology_insights import build_investment_insight_events
 from digital_twin.domain.notification_ai import build_notification_ai_opinion
-from digital_twin.domain.notification_ai_gate import build_notification_ai_gate_prompt, context_with_validated_ai_response, validated_response_from_payload
+from digital_twin.application.notification_ai_gate_audit import context_with_validated_ai_response
+from digital_twin.domain.notification_ai_gate_validation import build_notification_ai_gate_prompt, validated_response_from_payload
 from digital_twin.domain.notifications import NotificationJob
 from digital_twin.domain.parsing import parse_assignments
 from digital_twin.domain.portfolio import AccountSnapshot, AlertEvent, Position, utc_now_iso
@@ -6597,12 +6599,63 @@ class PythonServiceTests(unittest.TestCase):
     def test_domain_layer_does_not_import_application_or_infrastructure(self):
         domain_dir = Path(__file__).resolve().parents[1] / "digital_twin" / "domain"
         offenders = []
-        for path in domain_dir.glob("*.py"):
+        for path in domain_dir.rglob("*.py"):
             text = path.read_text(encoding="utf-8")
             if "application" in text or "infrastructure" in text:
-                offenders.append(path.name)
+                offenders.append(str(path.relative_to(domain_dir)))
 
         self.assertEqual([], offenders)
+
+    def test_application_layer_does_not_define_runtime_schedulers(self):
+        application_dir = Path(__file__).resolve().parents[1] / "digital_twin" / "application"
+        offenders = []
+        for path in application_dir.rglob("*.py"):
+            text = path.read_text(encoding="utf-8")
+            defines_scheduler = "class " in text and "Scheduler" in text
+            handles_process_signal = "signal.signal(" in text or "import signal" in text
+            if defines_scheduler or handles_process_signal:
+                offenders.append(str(path.relative_to(application_dir)))
+
+        self.assertEqual([], offenders)
+
+    def test_runtime_schedulers_live_in_infrastructure(self):
+        schedulers = importlib.import_module("digital_twin.infrastructure.schedulers")
+
+        for name in [
+            "RealtimeScheduler",
+            "ModelReviewScheduler",
+            "NotificationQueueScheduler",
+            "OntologyReasoningScheduler",
+            "OntologyLabScheduler",
+            "MarketDataCollectionScheduler",
+            "KISRealtimeWebSocketScheduler",
+            "NewsCollectionScheduler",
+            "InvestmentCalendarScheduler",
+        ]:
+            self.assertTrue(callable(getattr(schedulers, name)))
+
+    def test_runtime_relation_reasoning_does_not_export_offline_fallback(self):
+        runtime_reasoning = importlib.import_module("digital_twin.domain.ontology_relation_reasoning")
+        offline_fallback = importlib.import_module("digital_twin.domain.offline.ontology_relation_fallback_evaluator")
+
+        self.assertFalse(hasattr(runtime_reasoning, "evaluate_position_relation_rules"))
+        self.assertTrue(callable(offline_fallback.evaluate_position_relation_rules))
+
+    def test_disclosure_analysis_rendering_stays_out_of_domain(self):
+        domain_file = Path(__file__).resolve().parents[1] / "digital_twin" / "domain" / "disclosure_analysis.py"
+        text = domain_file.read_text(encoding="utf-8")
+
+        self.assertNotIn("import html", text)
+        self.assertNotIn("context_with_disclosure_analysis", text)
+        self.assertNotIn("telegramMessage", text)
+
+    def test_root_cli_and_admin_preview_are_compatibility_wrappers(self):
+        package_dir = Path(__file__).resolve().parents[1] / "digital_twin"
+        cli_text = (package_dir / "cli.py").read_text(encoding="utf-8")
+        admin_text = (package_dir / "admin_preview.py").read_text(encoding="utf-8")
+
+        self.assertIn("from .infrastructure.cli import *", cli_text)
+        self.assertIn("from .infrastructure.admin_preview import *", admin_text)
 
     def test_message_catalog_is_shared_across_monitoring_and_notifications(self):
         catalog = public_message_catalog()
@@ -7511,6 +7564,9 @@ class PythonServiceTests(unittest.TestCase):
         self.assertGreaterEqual(result["savedCount"], 2)
         self.assertEqual(result["savedCount"], result["changedCount"])
         self.assertEqual([RESEARCH_EVIDENCE_COLLECTED, ONTOLOGY_REASONING_REQUESTED], [event.name for event in events.published])
+        logged_event_names = [event.name for event in TestEventLog(path).events()]
+        self.assertEqual(2, len(logged_event_names))
+        self.assertEqual({RESEARCH_EVIDENCE_COLLECTED, ONTOLOGY_REASONING_REQUESTED}, set(logged_event_names))
         self.assertTrue(any(item.symbol == "005930" and "삼성전자" in item.title for item in latest))
         self.assertTrue(any(item.symbol == "AAPL" and "Apple" in item.title for item in latest))
         self.assertEqual(store.summary()["byKind"][0]["name"], "news")
@@ -7521,6 +7577,7 @@ class PythonServiceTests(unittest.TestCase):
         self.assertEqual("ok", repeat["status"])
         self.assertEqual(0, repeat["savedCount"])
         self.assertEqual([], events.published)
+        self.assertEqual(2, len(TestEventLog(path).events()))
 
     def test_external_signal_provider_attaches_stored_news_evidence(self):
         path = test_store_seed(self.temp.name)

@@ -63,7 +63,6 @@ from .ontology_relation_settings import (
     relation_rule_definitions_from_settings,
     relation_thresholds_from_settings,
 )
-from .ontology_relation_fallback_evaluator import evaluate_position_relation_rules
 from .ontology_relation_matches import _match, _rule, decision_from_matches
 
 

@@ -3,6 +3,7 @@ from dataclasses import dataclass
 from typing import Callable, Dict, Iterable, List, Optional, Protocol, Tuple, runtime_checkable
 
 from .accounts import AccountConfig
+from .events import DomainEvent
 from .investment_research import NewsCollectionTarget, ResearchEvidence
 from .investment_calendar import InvestmentCalendarEvent
 from .ontology_contracts import PortfolioOntology
@@ -300,6 +301,13 @@ class MarketQuoteRepository(Protocol):
 
 class ResearchEvidenceRepository(Protocol):
     def upsert_many(self, items: Iterable[ResearchEvidence]) -> int:
+        ...
+
+    def upsert_many_with_events(
+        self,
+        items: Iterable[ResearchEvidence],
+        event_builder: Callable[[int, List[str], List[ResearchEvidence]], Iterable[DomainEvent]],
+    ) -> Tuple[int, List[DomainEvent]]:
         ...
 
     def latest(self, symbol: str = "", kind: str = "", limit: int = 50) -> List[ResearchEvidence]:

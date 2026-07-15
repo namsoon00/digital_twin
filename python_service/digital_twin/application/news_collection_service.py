@@ -1,11 +1,10 @@
-import signal
 import time
 from datetime import datetime, timedelta, timezone
 from typing import Dict, Iterable, List, Tuple
 
 from ..domain.accounts import AccountConfig
 from ..domain.data_freshness import age_minutes, parse_datetime, utc_iso
-from ..domain.events import ontology_reasoning_requested_event, research_evidence_collected_event
+from ..domain.events import DomainEvent, ontology_reasoning_requested_event, research_evidence_collected_event
 from ..domain.investment_research import NewsCollectionTarget, ResearchEvidence
 from ..domain.market_data import number
 from ..domain.materiality import evidence_materiality
@@ -328,74 +327,101 @@ class NewsCollectionRunner:
             collected.extend(items)
             stale_items.extend(target_stale)
             statuses.extend(target_statuses)
-        saved = self.evidence_store.upsert_many(collected) if collected else 0
-        changed_symbols = list(getattr(self.evidence_store, "last_changed_symbols", []) or [])
-        if saved and not changed_symbols:
-            changed_symbols = sorted(set(str(item.symbol or "").upper().strip() for item in collected if str(item.symbol or "").strip()))
-        changed_items = list(getattr(self.evidence_store, "last_changed_items", []) or [])
-        if saved and not changed_items:
-            changed_symbols_set = set(changed_symbols)
-            changed_items = [item for item in collected if str(item.symbol or "").upper().strip() in changed_symbols_set]
-        materiality_assessments = [evidence_materiality(item, self.settings).to_dict() for item in changed_items]
-        material_items = [
-            item
-            for item, assessment in zip(changed_items, materiality_assessments)
-            if assessment.get("passed")
-        ]
-        material_symbols = sorted(set(str(item.symbol or "").upper().strip() for item in material_items if str(item.symbol or "").strip()))
-        changed_item_payloads = [item.to_dict() for item in changed_items[:50]]
-        material_item_payloads = [item.to_dict() for item in material_items[:50]]
-        result = {
-            "status": "ok",
-            "targetCount": len(targets),
-            "fetchedCount": len(collected),
-            "savedCount": saved,
-            "changedCount": saved,
-            "staleSkippedCount": len(stale_items),
-            "staleDeletedCount": cleanup.get("deleted", 0),
-            "staleCleanup": cleanup,
-            "feedOnlyRssCleanup": feed_only_cleanup,
-            "changedSymbols": changed_symbols,
-            "materialChangedCount": len(material_items),
-            "materialChangedSymbols": material_symbols,
-            "changedItems": changed_item_payloads,
-            "materialChangedItems": material_item_payloads,
-            "materialityAssessments": materiality_assessments,
-            "symbols": [target.symbol for target in targets],
-            "providers": self.gateway.providers(),
-            "statuses": statuses[-50:],
-            "articleAnalysisHealth": self.article_analysis_health(collected, len(stale_items), cleanup),
-            "dataQuality": "actual",
-        }
-        ontology_symbols = changed_symbols
-        if self.event_publisher and saved:
+        def build_collection_result(saved: int, changed_symbols: List[str], changed_items: List[ResearchEvidence]) -> Dict[str, object]:
+            symbols = list(changed_symbols or [])
+            if saved and not symbols:
+                symbols = sorted(set(str(item.symbol or "").upper().strip() for item in collected if str(item.symbol or "").strip()))
+            items = list(changed_items or [])
+            if saved and not items:
+                changed_symbols_set = set(symbols)
+                items = [item for item in collected if str(item.symbol or "").upper().strip() in changed_symbols_set]
+            materiality_assessments = [evidence_materiality(item, self.settings).to_dict() for item in items]
+            material_items = [
+                item
+                for item, assessment in zip(items, materiality_assessments)
+                if assessment.get("passed")
+            ]
+            material_symbols = sorted(set(str(item.symbol or "").upper().strip() for item in material_items if str(item.symbol or "").strip()))
+            return {
+                "status": "ok",
+                "targetCount": len(targets),
+                "fetchedCount": len(collected),
+                "savedCount": saved,
+                "changedCount": saved,
+                "staleSkippedCount": len(stale_items),
+                "staleDeletedCount": cleanup.get("deleted", 0),
+                "staleCleanup": cleanup,
+                "feedOnlyRssCleanup": feed_only_cleanup,
+                "changedSymbols": symbols,
+                "materialChangedCount": len(material_items),
+                "materialChangedSymbols": material_symbols,
+                "changedItems": [item.to_dict() for item in items[:50]],
+                "materialChangedItems": [item.to_dict() for item in material_items[:50]],
+                "materialityAssessments": materiality_assessments,
+                "symbols": [target.symbol for target in targets],
+                "providers": self.gateway.providers(),
+                "statuses": statuses[-50:],
+                "articleAnalysisHealth": self.article_analysis_health(collected, len(stale_items), cleanup),
+                "dataQuality": "actual",
+            }
+
+        def collection_events(result: Dict[str, object]) -> List[DomainEvent]:
+            if not int(result.get("savedCount") or 0):
+                return []
             event = research_evidence_collected_event(result)
-            if hasattr(self.event_publisher, "publish"):
-                self.event_publisher.publish(event)
-                if ontology_symbols:
-                    self.event_publisher.publish(ontology_reasoning_requested_event(
-                        event,
-                        "research-evidence-update",
-                        ontology_symbols,
-                        changed_count=len(ontology_symbols),
-                        observed_count=len(collected),
-                        fact_types=["ResearchEvidence", "NewsEvent"],
-                        reason="뉴스/리서치 근거 변경을 TypeDB ABox에 반영하고 RuleBox 추론을 갱신합니다. 알림은 중요 변경 게이트를 별도로 통과해야 합니다.",
-                        materiality_assessments=materiality_assessments,
-                    ))
-            else:
-                self.event_publisher.handle(event)
-                if ontology_symbols:
-                    self.event_publisher.handle(ontology_reasoning_requested_event(
-                        event,
-                        "research-evidence-update",
-                        ontology_symbols,
-                        changed_count=len(ontology_symbols),
-                        observed_count=len(collected),
-                        fact_types=["ResearchEvidence", "NewsEvent"],
-                        reason="뉴스/리서치 근거 변경을 TypeDB ABox에 반영하고 RuleBox 추론을 갱신합니다. 알림은 중요 변경 게이트를 별도로 통과해야 합니다.",
-                        materiality_assessments=materiality_assessments,
-                    ))
+            events = [event]
+            ontology_symbols = list(result.get("changedSymbols") or [])
+            if ontology_symbols:
+                events.append(ontology_reasoning_requested_event(
+                    event,
+                    "research-evidence-update",
+                    ontology_symbols,
+                    changed_count=len(ontology_symbols),
+                    observed_count=len(collected),
+                    fact_types=["ResearchEvidence", "NewsEvent"],
+                    reason="뉴스/리서치 근거 변경을 TypeDB ABox에 반영하고 RuleBox 추론을 갱신합니다. 알림은 중요 변경 게이트를 별도로 통과해야 합니다.",
+                    materiality_assessments=list(result.get("materialityAssessments") or []),
+                ))
+            return events
+
+        event_state: Dict[str, object] = {}
+        if (
+            collected
+            and self.event_publisher
+            and hasattr(self.evidence_store, "upsert_many_with_events")
+            and hasattr(self.event_publisher, "dispatch_recorded")
+        ):
+            def event_builder(saved: int, changed_symbols: List[str], changed_items: List[ResearchEvidence]) -> List[DomainEvent]:
+                built = build_collection_result(saved, changed_symbols, changed_items)
+                events = collection_events(built)
+                event_state["result"] = built
+                event_state["events"] = events
+                return events
+
+            saved, recorded_events = self.evidence_store.upsert_many_with_events(collected, event_builder)
+            result = event_state.get("result")
+            if not isinstance(result, dict):
+                result = build_collection_result(
+                    saved,
+                    list(getattr(self.evidence_store, "last_changed_symbols", []) or []),
+                    list(getattr(self.evidence_store, "last_changed_items", []) or []),
+                )
+            for event in recorded_events:
+                self.event_publisher.dispatch_recorded(event)
+            return result
+
+        saved = self.evidence_store.upsert_many(collected) if collected else 0
+        result = build_collection_result(
+            saved,
+            list(getattr(self.evidence_store, "last_changed_symbols", []) or []),
+            list(getattr(self.evidence_store, "last_changed_items", []) or []),
+        )
+        if self.event_publisher and saved:
+            for event in collection_events(result):
+                if hasattr(self.event_publisher, "publish"):
+                    self.event_publisher.publish(event)
+                else:
+                    self.event_publisher.handle(event)
         return result
 
     def status(self) -> Dict[str, object]:
@@ -414,30 +440,3 @@ class NewsCollectionRunner:
                 "cleanupBatchSize": self.cleanup_batch_size(),
             },
         }
-
-
-class NewsCollectionScheduler:
-    def __init__(self, runner: NewsCollectionRunner, interval_seconds: int):
-        self.runner = runner
-        self.interval_seconds = max(60, int(interval_seconds or 60))
-        self.running = True
-
-    def stop(self, *_args) -> None:
-        self.running = False
-
-    def run_forever(self) -> None:
-        signal.signal(signal.SIGTERM, self.stop)
-        signal.signal(signal.SIGINT, self.stop)
-        print("Python news collector started. interval=" + str(self.interval_seconds) + "s")
-        while self.running:
-            started = time.monotonic()
-            try:
-                result = self.runner.run_once()
-                print("News collection " + str(result.get("status")) + " saved=" + str(result.get("savedCount", 0)) + " fetched=" + str(result.get("fetchedCount", 0)))
-            except Exception as error:  # noqa: BLE001 - long-running collector must continue after provider failures.
-                print("Python news collector error: " + str(error))
-            elapsed = time.monotonic() - started
-            sleep_seconds = max(1.0, self.interval_seconds - elapsed)
-            end_at = time.monotonic() + sleep_seconds
-            while self.running and time.monotonic() < end_at:
-                time.sleep(min(1.0, end_at - time.monotonic()))

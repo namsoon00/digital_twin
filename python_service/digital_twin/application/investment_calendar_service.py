@@ -1,6 +1,4 @@
 import html
-import signal
-import time
 from datetime import datetime, timedelta, timezone
 from typing import Dict, Iterable, List
 from zoneinfo import ZoneInfo
@@ -339,38 +337,3 @@ class InvestmentCalendarRunner:
 
     def status(self) -> Dict[str, object]:
         return self.service.status()
-
-
-class InvestmentCalendarScheduler:
-    def __init__(self, runner: InvestmentCalendarRunner, interval_seconds: int):
-        self.runner = runner
-        self.interval_seconds = max(30, int(interval_seconds or 60))
-        self.running = True
-
-    def stop(self, *_args) -> None:
-        self.running = False
-
-    def run_forever(self) -> None:
-        signal.signal(signal.SIGTERM, self.stop)
-        signal.signal(signal.SIGINT, self.stop)
-        print("Python investment calendar worker started. interval=" + str(self.interval_seconds) + "s")
-        while self.running:
-            started = time.monotonic()
-            try:
-                result = self.runner.run_once()
-                if result.get("dueCount") or result.get("queuedCount"):
-                    print(
-                        "Investment calendar "
-                        + str(result.get("status"))
-                        + " due="
-                        + str(result.get("dueCount", 0))
-                        + " queued="
-                        + str(result.get("queuedCount", 0))
-                    )
-            except Exception as error:  # noqa: BLE001 - long-running calendar worker must continue after one cycle failure.
-                print("Python investment calendar worker error: " + str(error))
-            elapsed = time.monotonic() - started
-            sleep_seconds = max(1.0, self.interval_seconds - elapsed)
-            end_at = time.monotonic() + sleep_seconds
-            while self.running and time.monotonic() < end_at:
-                time.sleep(min(1.0, end_at - time.monotonic()))

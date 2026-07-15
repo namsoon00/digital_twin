@@ -1,5 +1,3 @@
-import signal
-import time
 import inspect
 from datetime import datetime, timezone
 from typing import Callable, Dict, Iterable, List
@@ -176,38 +174,3 @@ class OntologyReasoningRunner:
             "ruleCandidateAiEnabled": self.rule_candidate_ai_enabled(),
             "ruleCandidateAiDue": self.rule_candidate_due(),
         }
-
-
-class OntologyReasoningScheduler:
-    def __init__(self, runner: OntologyReasoningRunner, interval_seconds: int):
-        self.runner = runner
-        self.interval_seconds = max(5, int(interval_seconds or 10))
-        self.running = True
-
-    def stop(self, *_args) -> None:
-        self.running = False
-
-    def run_forever(self, limit: int = 0) -> None:
-        signal.signal(signal.SIGTERM, self.stop)
-        signal.signal(signal.SIGINT, self.stop)
-        print("Python ontology reasoning worker started. interval=" + str(self.interval_seconds) + "s")
-        while self.running:
-            started = time.monotonic()
-            try:
-                result = self.runner.run_once(limit=limit)
-                if result.get("processedCount"):
-                    print(
-                        "Ontology reasoning "
-                        + str(result.get("status"))
-                        + " processed="
-                        + str(result.get("processedCount", 0))
-                        + " alerts="
-                        + str(result.get("alertCount", 0))
-                    )
-            except Exception as error:  # noqa: BLE001 - long-running reasoning worker must continue after a cycle failure.
-                print("Python ontology reasoning worker error: " + str(error))
-            elapsed = time.monotonic() - started
-            sleep_seconds = max(1.0, self.interval_seconds - elapsed)
-            end_at = time.monotonic() + sleep_seconds
-            while self.running and time.monotonic() < end_at:
-                time.sleep(min(1.0, end_at - time.monotonic()))

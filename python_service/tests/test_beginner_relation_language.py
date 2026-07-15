@@ -2,7 +2,7 @@ import unittest
 
 from digital_twin.domain.investment_research import build_active_investment_opinion
 from digital_twin.domain.notification_ai_gate_contracts import NotificationAIValidatedResponse
-from digital_twin.domain.notification_ai_gate_message import execution_telegram_message
+from digital_twin.application.notification_ai_gate_message import execution_telegram_message
 from digital_twin.domain.notification_ontology_sections import ontology_rule_lines
 from digital_twin.domain.portfolio import Position
 

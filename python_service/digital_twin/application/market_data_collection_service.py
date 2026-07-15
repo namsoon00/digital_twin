@@ -1,4 +1,3 @@
-import signal
 import time
 from typing import Dict, Iterable, List, Tuple
 
@@ -390,30 +389,3 @@ class MarketDataCollectionRunner:
             "cache": self.quote_cache.summary("toss", MARKET_DATA_ACCOUNT_ID),
             "symbolUniverse": self.symbol_service.summary(),
         }
-
-
-class MarketDataCollectionScheduler:
-    def __init__(self, runner: MarketDataCollectionRunner, interval_seconds: int):
-        self.runner = runner
-        self.interval_seconds = max(3 * 60, int(interval_seconds or 180))
-        self.running = True
-
-    def stop(self, *_args) -> None:
-        self.running = False
-
-    def run_forever(self) -> None:
-        signal.signal(signal.SIGTERM, self.stop)
-        signal.signal(signal.SIGINT, self.stop)
-        print("Python market data collector started. interval=" + str(self.interval_seconds) + "s")
-        while self.running:
-            started = time.monotonic()
-            try:
-                result = self.runner.run_once()
-                print("Market data collection " + str(result.get("status")) + " saved=" + str(result.get("savedCount", 0)))
-            except Exception as error:  # noqa: BLE001 - long-running collector must continue after provider failures.
-                print("Python market data collector error: " + str(error))
-            elapsed = time.monotonic() - started
-            sleep_seconds = max(1.0, self.interval_seconds - elapsed)
-            end_at = time.monotonic() + sleep_seconds
-            while self.running and time.monotonic() < end_at:
-                time.sleep(min(1.0, end_at - time.monotonic()))

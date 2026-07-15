@@ -201,6 +201,7 @@ class OntologyRuleBoxTests(unittest.TestCase):
             ma5=101,
             ma20=100,
             ma60=95,
+            ma5_distance=4.0,
             ma20_distance=5.0,
             ma60_distance=10.5,
             volume_ratio=1.3,
@@ -699,6 +700,46 @@ class OntologyRuleBoxTests(unittest.TestCase):
             for item in condition_rows
             if item["id"] == "rule-condition:graph.winner_momentum.add_buy_review.v1:volume-confirmation"
         )
+        loss_rebound_ma5 = next(
+            item
+            for item in condition_rows
+            if item["id"] == "rule-condition:graph.loss_rebound.trim_moderation.v1:short-price-rebound"
+        )
+        loss_rebound_smart_money = next(
+            item
+            for item in condition_rows
+            if item["id"] == "rule-condition:graph.loss_rebound.trim_moderation.v1:smart-money-net-positive"
+        )
+        aggressive_profile = next(
+            item
+            for item in condition_rows
+            if item["id"] == "rule-condition:graph.aggressive.loss_recovery.add_buy_review.v1:aggressive-profile"
+        )
+        aggressive_position_room = next(
+            item
+            for item in condition_rows
+            if item["id"] == "rule-condition:graph.aggressive.loss_recovery.add_buy_review.v1:position-room"
+        )
+        profit_momentum_profile = next(
+            item
+            for item in condition_rows
+            if item["id"] == "rule-condition:graph.profit_momentum.hold_add_review.v1:growth-or-aggressive-profile"
+        )
+        profit_momentum_ma20 = next(
+            item
+            for item in condition_rows
+            if item["id"] == "rule-condition:graph.profit_momentum.hold_add_review.v1:ma20-not-broken"
+        )
+        watchlist_direct_role = next(
+            item
+            for item in condition_rows
+            if item["id"] == "rule-condition:graph.watchlist.direct_momentum.entry.v1:watchlist-role"
+        )
+        watchlist_direct_volume = next(
+            item
+            for item in condition_rows
+            if item["id"] == "rule-condition:graph.watchlist.direct_momentum.entry.v1:volume-confirmation"
+        )
         profile_averaging_policy = next(
             item
             for item in condition_rows
@@ -732,12 +773,16 @@ class OntologyRuleBoxTests(unittest.TestCase):
         self.assertIn("graph.investor_flow.smart_money_outflow_risk.v1", rule_ids)
         self.assertIn("graph.loss_smart_money.add_buy_review.v1", rule_ids)
         self.assertIn("graph.winner_momentum.add_buy_review.v1", rule_ids)
+        self.assertIn("graph.loss_rebound.trim_moderation.v1", rule_ids)
+        self.assertIn("graph.aggressive.loss_recovery.add_buy_review.v1", rule_ids)
+        self.assertIn("graph.profit_momentum.hold_add_review.v1", rule_ids)
         self.assertIn("graph.instrument_profile.averaging_down_policy.v1", rule_ids)
         self.assertIn("graph.averaging_down.risk_guard.v1", rule_ids)
         self.assertIn("graph.holding.trend_transition.risk.v1", rule_ids)
         self.assertIn("graph.watchlist.trend_transition.support.v1", rule_ids)
         self.assertIn("graph.flow.sell_pressure.v1", rule_ids)
         self.assertIn("graph.flow.accumulation.entry.v1", rule_ids)
+        self.assertIn("graph.watchlist.direct_momentum.entry.v1", rule_ids)
         self.assertIn("graph.news.direct_material_risk.v1", rule_ids)
         self.assertIn("graph.news.direct_material_support.v1", rule_ids)
         self.assertIn("graph.news.direct_material_context.v1", rule_ids)
@@ -808,6 +853,22 @@ class OntologyRuleBoxTests(unittest.TestCase):
         self.assertEqual("any", winner_add_volume["conditionRole"])
         self.assertEqual(["volumeRatio"], winner_add_volume["conditionTargetFields"])
         self.assertEqual(1.0, winner_add_volume["conditionTargetMinValue"])
+        self.assertEqual("ma5Distance", loss_rebound_ma5["conditionField"])
+        self.assertEqual(0.0, loss_rebound_ma5["conditionValueNumber"])
+        self.assertEqual("smartMoneyNetVolume", loss_rebound_smart_money["conditionField"])
+        self.assertEqual("investmentStrategyProfile", aggressive_profile["conditionField"])
+        self.assertEqual("aggressive", aggressive_profile["conditionValueString"])
+        self.assertEqual("positionAccountWeight", aggressive_position_room["conditionField"])
+        self.assertEqual(35.0, aggressive_position_room["conditionValueNumber"])
+        self.assertEqual("investmentStrategyProfile", profit_momentum_profile["conditionField"])
+        self.assertIn("growth", profit_momentum_profile["conditionValueString"])
+        self.assertIn("aggressive", profit_momentum_profile["conditionValueString"])
+        self.assertEqual("ma20Distance", profit_momentum_ma20["conditionField"])
+        self.assertEqual(-3.0, profit_momentum_ma20["conditionValueNumber"])
+        self.assertEqual("positionRole", watchlist_direct_role["conditionField"])
+        self.assertEqual("watchlist", watchlist_direct_role["conditionValueString"])
+        self.assertEqual("any", watchlist_direct_volume["conditionRole"])
+        self.assertEqual("volumeRatio", watchlist_direct_volume["conditionField"])
         self.assertEqual("HAS_INSTRUMENT_PROFILE", profile_averaging_policy["conditionRelationType"])
         self.assertEqual(["avoidAveragingDown"], profile_averaging_policy["conditionTargetFields"])
         self.assertEqual("HAS_COVERAGE_GAP", coverage_gap["conditionRelationType"])
@@ -883,6 +944,26 @@ class OntologyRuleBoxTests(unittest.TestCase):
         self.assertTrue(profile.properties["allowAddOnStrength"])
         self.assertIn("HAS_INSTRUMENT_PROFILE", relation_types)
         self.assertTrue(any(item.relation_type == "HAS_ARCHETYPE" and item.source == "stock:MSTR" for item in graph.relations))
+
+    def test_stock_abox_carries_direct_typedb_rule_subject_fields(self):
+        graph = self.profitable_momentum_graph(
+            "MSTR",
+            settings={"investmentStrategyProfile": "aggressive"},
+        )
+        stock = next(item for item in graph.entities if item.entity_id == "stock:MSTR")
+
+        self.assertEqual("holding", stock.properties["source"])
+        self.assertEqual("holding", stock.properties["positionRole"])
+        self.assertEqual(105, stock.properties["currentPrice"])
+        self.assertEqual(88, stock.properties["averagePrice"])
+        self.assertEqual(19.3, stock.properties["profitLossRate"])
+        self.assertEqual(2.2, stock.properties["priceChangeRate"])
+        self.assertGreater(stock.properties["positionAccountWeight"], 0)
+        self.assertGreater(stock.properties["ma5Distance"], 0)
+        self.assertGreater(stock.properties["ma20Distance"], 0)
+        self.assertGreater(stock.properties["ma60Distance"], 0)
+        self.assertEqual(1.3, stock.properties["volumeRatio"])
+        self.assertEqual(108, stock.properties["tradeStrength"])
 
     def test_instrument_profile_policy_controls_winner_add_buy_rulebox(self):
         mstr_graph = self.profitable_momentum_graph("MSTR")

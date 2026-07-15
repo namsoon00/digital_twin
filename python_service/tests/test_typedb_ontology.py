@@ -1061,6 +1061,26 @@ class TypeDBOntologyRepositoryTests(unittest.TestCase):
         self.assertEqual(16, len(definition["functionDefinitions"]))
         self.assertIn("let $source in", definition["body"])
 
+    def test_typedb_function_definition_uses_promoted_subject_attributes(self):
+        rule = next(
+            item
+            for item in default_graph_inference_rules()
+            if item.rule_id == "graph.aggressive.loss_recovery.add_buy_review.v1"
+        )
+        definition = typedb_native_function_definition(rule.to_dict())
+        body = definition["body"] + "\n" + "\n".join(
+            str(item.get("body") or "")
+            for item in definition.get("helperFunctions") or []
+        )
+
+        self.assertIn("ontology-investment-strategy-profile", body)
+        self.assertIn("ontology-profit-loss-rate", body)
+        self.assertIn("ontology-ma5-distance", body)
+        self.assertIn("ontology-ma60-distance", body)
+        self.assertIn("ontology-position-account-weight-pct", body)
+        self.assertIn("ontology-smart-money-net-volume", body)
+        self.assertIn("ontology-bid-ask-imbalance", body)
+
     def test_typedb_schema_function_sync_uses_cache_for_same_rule_fingerprint(self):
         repository = TypeDBOntologyGraphRepository("127.0.0.1:1729")
         rule = default_graph_inference_rules()[0]

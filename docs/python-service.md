@@ -18,6 +18,38 @@ The Python service is the migration target for account-scale monitoring, schedul
 
 The development methodology is documented in `docs/development-methodology.md` and referenced from `AGENTS.md` so future local Codex sessions can load the same rules.
 
+## Ontology And TypeDB Runtime
+
+Investment judgement is ontology-first. The realtime monitor should not create standalone buy/sell/hold/reduce/avoid decisions from Python `if` rules, alert thresholds, or rendered message text.
+
+Operational flow:
+
+1. Source adapters collect Toss, KIS, market-data, news, disclosure, macro, FX, account, and runtime-setting facts.
+2. Application services persist those facts in the operational DB or pass them through account snapshots.
+3. The ontology projection builds ABox facts from the current snapshot and stores them in TypeDB.
+4. TypeDB-native rule matching reads the TypeDB ABox and writes generation-scoped InferenceBox output.
+5. Monitoring reads InferenceBox relation context and creates `investmentInsight` notification candidates.
+6. AI receives the graph context, writes a constrained opinion, and the system validates it before delivery.
+7. Notification workers apply cooldown, novelty, message-template, and transport policy.
+
+Important boundaries:
+
+- TBox vocabulary lives in domain ontology catalog modules. ABox facts come from current account and market state. InferenceBox is the materialized result of TypeDB native rules.
+- `typedb_ontology.py` owns TypeDB storage, native-rule matching, generation-scoped InferenceBox writes, retention pruning, and diagnostics metadata.
+- The old graph reasoner and `ontology_relation_reasoning.py` are compatibility/offline helpers. If they are used because TypeDB native matching failed, diagnostics must expose `pythonCompatibilityReasonerUsed=true`.
+- API and UI names may still contain `rulebox` for compatibility. Treat them as rule-profile management surfaces, not as a separate runtime reasoning engine.
+- If InferenceBox relation and trace counts are zero while there are holdings/watchlist facts, investment judgement should be blocked or downgraded to an operational diagnostics alert.
+
+Useful checks:
+
+```bash
+npm run python:ontology:seed
+npm run python:ontology-reasoning:once
+npm run python:service:status
+```
+
+Expected healthy metadata includes `reasoningMode=typedb-native-rule-materialized`, `materializationSource=typedb-abox-native-rule`, non-zero relation/trace counts for meaningful account data, and `pythonCompatibilityReasonerUsed=false`.
+
 ## DDD Boundaries
 
 The Python service now follows a conservative DDD layout:
@@ -112,8 +144,17 @@ The MySQL schema bootstrap also maintains query-pattern indexes for event replay
 The `python:service:*` commands run all background workers:
 
 - realtime monitor: `data/python-monitor.pid`, `data/python-monitor.log`
+- market data collector: `data/python-market-data.pid`, `data/python-market-data.log`
+- KIS realtime WebSocket worker: `data/python-kis-realtime.pid`, `data/python-kis-realtime.log`
+- news collector: `data/python-news.pid`, `data/python-news.log`
+- investment calendar worker: `data/python-investment-calendar.pid`, `data/python-investment-calendar.log`
 - model review worker: `data/python-model-review.pid`, `data/python-model-review.log`
+- ontology reasoning worker: `data/python-ontology-reasoning.pid`, `data/python-ontology-reasoning.log`
+- ontology lab worker: `data/python-ontology-lab.pid`, `data/python-ontology-lab.log`
 - notification worker: `data/python-notifications.pid`, `data/python-notifications.log`
+- TypeDB graph store: `data/typedb.pid`, `data/typedb.log`, `data/typedb-data/`, `data/typedb-logs/`
+
+TypeDB is a local projection/read model, not the operational source of truth. Default retention keeps only short-lived local graph state: `TYPEDB_AUTO_RESET_ENABLED=1`, `TYPEDB_DATA_RETENTION_HOURS=24`, `TYPEDB_DATA_MAX_SIZE_MB=2048`, and `TYPEDB_INFERENCE_GENERATION_KEEP_COUNT=1`. When the service manager starts TypeDB and the data directory exceeds those limits, it resets the local TypeDB directory and rebuilds from current operational facts.
 
 ## Operational Database
 

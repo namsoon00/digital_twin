@@ -60,6 +60,8 @@ TYPEDB_TIMEOUT_SECONDS=20
 
 TypeDB는 원본 업무 저장소가 아니라 온톨로지 projection/read model입니다. 기본값은 하루치만 유지하도록 `TYPEDB_AUTO_RESET_ENABLED=1`, `TYPEDB_DATA_RETENTION_HOURS=24`, `TYPEDB_DATA_MAX_SIZE_MB=2048`, `TYPEDB_INFERENCE_GENERATION_KEEP_COUNT=1`로 동작합니다. 서비스 시작 전 보관 시간 또는 용량 한도를 넘은 `data/typedb-data/`는 삭제 후 재생성됩니다. 수동 정리는 TypeDB를 중지한 뒤 `npm run python:service -- typedb-maintenance --force`로 실행할 수 있습니다.
 
+투자 판단은 `TBox/ABox -> TypeDB native rule -> InferenceBox -> AI 검증 -> investmentInsight` 흐름을 기준으로 합니다. Python 공식과 알림 임계값은 원천 지표, 데이터 품질, 발송 정책을 계산할 수 있지만 매수/매도/보유/분할축소 같은 최종 투자 의미는 TypeDB InferenceBox 관계 컨텍스트를 통해 만들어야 합니다. 자세한 개발 규칙은 `docs/development-methodology.md`, 모델 구조는 `docs/ontology-strategy-model.md`, 서비스 운영 기준은 `docs/python-service.md`에 정리되어 있습니다.
+
 토스 개발자 콘솔에서 허용 IP를 관리하는 경우, 브라우저 IP가 아니라 이 로컬 서버가 외부로 나가는 공인 IP를 등록해야 합니다. GitHub Pages 같은 정적 웹 페이지에서 브라우저가 직접 토스 API를 호출하는 구조는 `client_secret` 노출과 사용자별 유동 IP 문제 때문에 사용하지 않습니다.
 
 GitHub Pages에 올라가는 모든 정적 산출물은 아래 명령으로 함께 갱신합니다.
@@ -107,7 +109,7 @@ npm run python:symbols:status
 
 투자전략 모델의 기본 구조는 관계 분석 우선입니다. 보유 종목, 섹터, 시장, 통화, 리스크, 기회, 근거, 판단 근거, AI 의견을 관계 그래프로 만들고, 기존 익절/손절 점수는 보조 데이터에 둡니다. 자세한 구조는 `docs/ontology-strategy-model.md`에 정리되어 있습니다.
 
-관계 분석은 규칙 구조와 현재 데이터로 나뉩니다. 규칙 구조는 투자 관점의 분류, 관계 타입, 판단 규칙이고, 현재 데이터는 계좌 스냅샷에서 생성된 실제 보유, 근거, 판단 근거, AI 의견입니다.
+관계 분석은 규칙 구조와 현재 데이터로 나뉩니다. 규칙 구조는 투자 관점의 분류, 관계 타입, TypeDB native rule 판단 규칙이고, 현재 데이터는 계좌 스냅샷에서 생성된 실제 보유, 근거, 판단 근거, AI 의견입니다.
 
 ## 수급 신호
 

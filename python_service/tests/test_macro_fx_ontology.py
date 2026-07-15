@@ -8,6 +8,7 @@ from digital_twin.domain.fx import fx_exposure_facts
 from digital_twin.domain.external_signal_deltas import external_signals_with_deltas
 from digital_twin.domain.macro_context import macro_context_facts
 from digital_twin.domain.offline.ontology_relation_fallback_evaluator import evaluate_position_relation_rules
+from digital_twin.domain.ontology_external_abox import fx_rate_entries
 from digital_twin.domain.ontology_relation_reasoning import relation_rule_context_summary_lines
 from digital_twin.domain.portfolio import Position
 from digital_twin.domain.portfolio_calculations import portfolio_summary
@@ -86,6 +87,8 @@ class MacroFxOntologyTests(unittest.TestCase):
                     "quote": "KRW",
                     "rate": 1502,
                     "previousRate": 1470,
+                    "sourceType": "fallback_setting",
+                    "evidenceStrength": "fallback",
                 }
             },
         }
@@ -98,6 +101,8 @@ class MacroFxOntologyTests(unittest.TestCase):
         self.assertTrue(rate_facts["hasInterestRateDeltaSignal"])
         self.assertAlmostEqual(21, rate_facts["macroDgs10DeltaBp"])
         self.assertEqual("krw_weakening", fx_facts["fxRegime"])
+        self.assertEqual("fallback_setting", fx_facts["fxSourceType"])
+        self.assertEqual("fallback", fx_facts["fxEvidenceStrength"])
         self.assertTrue(fx_facts["hasFxDeltaSignal"])
         self.assertAlmostEqual(32, fx_facts["usdKrwDeltaKrw"])
         self.assertEqual(rate_facts["macroDgs10"], macro_facts["macroDgs10"])
@@ -174,6 +179,8 @@ class MacroFxOntologyTests(unittest.TestCase):
                         "quote": "KRW",
                         "rate": 1502,
                         "previousRate": 1470,
+                        "sourceType": "fallback_setting",
+                        "evidenceStrength": "fallback",
                     }
                 },
             },
@@ -185,8 +192,62 @@ class MacroFxOntologyTests(unittest.TestCase):
         self.assertIn("rates.interest_rate.sensitivity.v1", active_ids)
         self.assertIn("fx.usd_krw.exposure.v1", active_ids)
         self.assertTrue(any(line.startswith("금리: 미국10년 4.56%") and "10년 +21bp" in line for line in summary_lines))
-        self.assertTrue(any("환율: USD/KRW" in line and "1 USD = 1,502 KRW" in line and "+32 KRW" in line for line in summary_lines))
+        self.assertTrue(any("환율: USD/KRW" in line and "1 USD = 1,502 KRW" in line and "설정값 기준" in line and "+32 KRW" in line for line in summary_lines))
         self.assertEqual(1502, context["executionPlan"]["sourceFacts"]["usdKrwRate"])
+
+    def test_fx_context_line_marks_account_applied_rate(self):
+        position = Position(
+            symbol="AAPL",
+            name="Apple",
+            market="US",
+            currency="USD",
+            market_value=1000,
+            market_value_krw=1419700,
+            sector="AI/플랫폼",
+        )
+        context = evaluate_position_relation_rules(
+            position,
+            portfolio_summary([position], fx_rates={"USD": 1419.7, "KRW": 1}),
+            external_signals={
+                "fxRates": {
+                    "USDKRW": {
+                        "provider": "Toss",
+                        "base": "USD",
+                        "quote": "KRW",
+                        "rate": 1419.7,
+                        "sourceType": "broker_applied_valuation",
+                        "evidenceStrength": "account_applied",
+                    }
+                }
+            },
+        )
+
+        summary_lines = relation_rule_context_summary_lines(context)
+
+        self.assertEqual("broker_applied_valuation", context["facts"]["fxSourceType"])
+        self.assertTrue(any("환율: USD/KRW" in line and "계좌 적용 환율" in line for line in summary_lines))
+
+    def test_fx_rate_abox_entries_keep_source_type(self):
+        entries = fx_rate_entries(
+            {
+                "fxRates": {
+                    "USDKRW": {
+                        "provider": "Toss",
+                        "base": "USD",
+                        "quote": "KRW",
+                        "rate": 1419.7,
+                        "sourceType": "broker_applied_valuation",
+                        "evidenceStrength": "account_applied",
+                        "valuationRate": 1419.7,
+                    }
+                }
+            },
+            runtime_context={"settings": {"fxRates": "KRW=1\nUSD=1400"}},
+        )
+
+        self.assertEqual("broker_applied_valuation", entries["USDKRW"]["sourceType"])
+        self.assertEqual("account_applied", entries["USDKRW"]["evidenceStrength"])
+        self.assertEqual(1419.7, entries["USDKRW"]["valuationRate"])
 
     def test_absolute_macro_fx_levels_do_not_trigger_without_deltas(self):
         position = Position(

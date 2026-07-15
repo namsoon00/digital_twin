@@ -3,6 +3,12 @@ from datetime import datetime, timedelta, timezone
 from typing import Dict, List
 
 from ..domain.market_data import number
+from ..domain.portfolio_calculations import (
+    BROKER_FX_SOURCE_TYPE,
+    FALLBACK_FX_SOURCE_TYPE,
+    LIVE_MARKET_FX_SOURCE_TYPE,
+    broker_fx_rates_from_positions,
+)
 from ..domain.portfolio import Position, utc_now_iso
 from .external_signal_utils import symbol_assignments, symbol_list
 
@@ -106,31 +112,122 @@ class ExternalSignalMarketMixin:
         if "DGS10" in series and "DGS2" in series:
             macro["yieldSpread10y2y"] = number(series["DGS10"].get("value")) - number(series["DGS2"].get("value"))
 
-    def add_fx_rates(self, signals: Dict[str, object]) -> None:
+    def add_fx_rates(self, signals: Dict[str, object], positions: List[Position] = None) -> None:
         assignments = symbol_assignments(self.settings.get("fxRates") or "")
         rates: Dict[str, object] = {}
         fetched_at = str(signals.get("fetchedAt") or utc_now_iso())
+        broker_rates = broker_fx_rates_from_positions(positions or [], fetched_at=fetched_at)
         live_rates = self.live_fx_rates(signals, sorted(assignments.keys()))
-        for currency, raw_rate in sorted(assignments.items()):
+        currencies = set(assignments.keys()) | {
+            str(item.get("base") or "").upper().strip()
+            for item in broker_rates.values()
+            if isinstance(item, dict)
+        }
+        for currency in sorted(currencies):
+            raw_rate = assignments.get(currency)
             base = str(currency or "").upper().strip()
             if not base or base == "KRW":
                 continue
             live = live_rates.get(base) if isinstance(live_rates.get(base), dict) else {}
-            rate = number(live.get("rate")) or number(raw_rate)
+            broker = broker_rates.get(base + "KRW") if isinstance(broker_rates.get(base + "KRW"), dict) else {}
+            broker_rate = number(broker.get("rate"))
+            live_rate = number(live.get("rate"))
+            fallback_rate = number(raw_rate)
+            rate = broker_rate or live_rate or fallback_rate
             if rate <= 0:
                 continue
             pair = base + "KRW"
-            rates[pair] = {
-                "provider": str(live.get("provider") or "RuntimeSettings"),
+            source_type = FALLBACK_FX_SOURCE_TYPE
+            evidence_strength = "fallback"
+            provider = "RuntimeSettings"
+            last_updated = ""
+            if broker_rate:
+                source_type = BROKER_FX_SOURCE_TYPE
+                evidence_strength = "account_applied"
+                provider = str(broker.get("provider") or "BrokerAccount")
+                last_updated = str(broker.get("lastUpdated") or "")
+            elif live_rate:
+                source_type = LIVE_MARKET_FX_SOURCE_TYPE
+                evidence_strength = "live_market"
+                provider = str(live.get("provider") or "Alpha Vantage")
+                last_updated = str(live.get("lastUpdated") or "")
+            row = {
+                "provider": provider,
                 "base": base,
                 "quote": "KRW",
                 "rate": rate,
                 "value": rate,
-                "lastUpdated": str(live.get("lastUpdated") or ""),
+                "lastUpdated": last_updated,
                 "fetchedAt": fetched_at,
+                "sourceType": source_type,
+                "evidenceStrength": evidence_strength,
             }
+            if broker_rate:
+                row.update({
+                    "valuationRate": broker_rate,
+                    "valuationProvider": str(broker.get("provider") or provider),
+                    "valuationSourceType": BROKER_FX_SOURCE_TYPE,
+                    "derivedFrom": str(broker.get("derivedFrom") or ""),
+                    "sampleCount": int(number(broker.get("sampleCount")) or 0),
+                })
+            if live_rate:
+                row.update({
+                    "marketRate": live_rate,
+                    "marketProvider": str(live.get("provider") or "Alpha Vantage"),
+                    "marketSourceType": LIVE_MARKET_FX_SOURCE_TYPE,
+                    "marketLastUpdated": str(live.get("lastUpdated") or ""),
+                })
+            if fallback_rate:
+                row["fallbackRate"] = fallback_rate
+                row["fallbackProvider"] = "RuntimeSettings"
+            rates[pair] = row
         if rates:
             signals["fxRates"] = rates
+
+    def refresh_broker_fx_rates(self, signals: Dict[str, object], positions: List[Position] = None) -> None:
+        if not isinstance(signals, dict):
+            return
+        fetched_at = str(signals.get("fetchedAt") or utc_now_iso())
+        broker_rates = broker_fx_rates_from_positions(positions or [], fetched_at=fetched_at)
+        if not broker_rates:
+            return
+        rates = signals.setdefault("fxRates", {})
+        if not isinstance(rates, dict):
+            rates = {}
+            signals["fxRates"] = rates
+        for pair, broker in broker_rates.items():
+            if not isinstance(broker, dict):
+                continue
+            existing = rates.get(pair) if isinstance(rates.get(pair), dict) else {}
+            rate = number(broker.get("rate"))
+            if rate <= 0:
+                continue
+            row = dict(existing)
+            previous_live_rate = number(row.get("marketRate") or (row.get("rate") if row.get("sourceType") == LIVE_MARKET_FX_SOURCE_TYPE else 0.0))
+            previous_live_provider = str(row.get("marketProvider") or (row.get("provider") if row.get("sourceType") == LIVE_MARKET_FX_SOURCE_TYPE else "") or "")
+            previous_live_updated = str(row.get("marketLastUpdated") or (row.get("lastUpdated") if row.get("sourceType") == LIVE_MARKET_FX_SOURCE_TYPE else "") or "")
+            row.update({
+                "provider": str(broker.get("provider") or "BrokerAccount"),
+                "base": str(broker.get("base") or pair[:3]).upper(),
+                "quote": str(broker.get("quote") or "KRW").upper(),
+                "rate": rate,
+                "value": rate,
+                "lastUpdated": str(broker.get("lastUpdated") or row.get("lastUpdated") or ""),
+                "fetchedAt": fetched_at,
+                "sourceType": BROKER_FX_SOURCE_TYPE,
+                "evidenceStrength": "account_applied",
+                "valuationRate": rate,
+                "valuationProvider": str(broker.get("provider") or "BrokerAccount"),
+                "valuationSourceType": BROKER_FX_SOURCE_TYPE,
+                "derivedFrom": str(broker.get("derivedFrom") or row.get("derivedFrom") or ""),
+                "sampleCount": int(number(broker.get("sampleCount")) or number(row.get("sampleCount")) or 0),
+            })
+            if previous_live_rate:
+                row["marketRate"] = previous_live_rate
+                row["marketProvider"] = previous_live_provider or "Alpha Vantage"
+                row["marketSourceType"] = LIVE_MARKET_FX_SOURCE_TYPE
+                row["marketLastUpdated"] = previous_live_updated
+            rates[pair] = row
 
     def live_fx_rates(self, signals: Dict[str, object], currencies: List[str]) -> Dict[str, Dict[str, object]]:
         if not self.fx_live_rate_enabled():

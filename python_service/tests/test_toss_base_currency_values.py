@@ -8,10 +8,12 @@ from digital_twin.domain.market_data import normalize_position
 from digital_twin.domain.monitoring import RealtimeMonitor
 from digital_twin.domain.portfolio_calculations import (
     apply_position_base_currency_values,
+    broker_fx_rates_from_positions,
     portfolio_summary,
     runtime_fx_currencies_from_external_signals,
 )
 from digital_twin.domain.volume_time_adjustment import volume_pace_snapshot
+from digital_twin.infrastructure.external_signals import ExternalSignalProvider
 from digital_twin.infrastructure.toss_snapshots import TossProvider, currency_rates_from_external_signals
 
 
@@ -157,6 +159,116 @@ class TossBaseCurrencyValueTests(unittest.TestCase):
         self.assertEqual(set(), runtime_fx_currencies_from_external_signals(external_signals))
         self.assertEqual(32000000, summary.invested)
         self.assertEqual(32000000, summary.total)
+
+    def test_broker_fx_rate_is_derived_from_account_evaluation_amount(self):
+        position = normalize_position(
+            {
+                "symbol": "MSTR",
+                "market": "US",
+                "currency": "USD",
+                "quantity": 230,
+                "currentPrice": 98,
+                "marketValue": 22540,
+                "evaluationAmount": 32000000,
+                "exchangeRate": 1419.7,
+                "quoteSource": "Toss holdings",
+                "updatedAt": "2026-07-15T09:00:00Z",
+            }
+        )
+
+        rates = broker_fx_rates_from_positions([position], fetched_at="2026-07-15T09:00:05Z")
+
+        self.assertIn("USDKRW", rates)
+        self.assertEqual("Toss", rates["USDKRW"]["provider"])
+        self.assertEqual("broker_applied_valuation", rates["USDKRW"]["sourceType"])
+        self.assertAlmostEqual(32000000 / 22540, rates["USDKRW"]["rate"])
+
+    def test_external_signals_prioritize_broker_fx_rate_for_account_valuation(self):
+        position = normalize_position(
+            {
+                "symbol": "MSTR",
+                "market": "US",
+                "currency": "USD",
+                "quantity": 230,
+                "currentPrice": 98,
+                "marketValue": 22540,
+                "evaluationAmount": 32000000,
+                "quoteSource": "Toss holdings",
+            }
+        )
+        provider = ExternalSignalProvider(
+            settings={
+                "fxRates": "KRW=1\nUSD=1400",
+                "externalAlphaEnabled": "0",
+                "externalFxRateEnabled": "1",
+                "externalCoinGeckoEnabled": "0",
+                "externalFredEnabled": "0",
+                "externalDartEnabled": "0",
+                "externalNewsEnabled": "0",
+                "externalSecEnabled": "0",
+            },
+            cache=object(),
+            evidence_store=object(),
+        )
+
+        signals = provider.fetch_signals([position])
+        rates = currency_rates_from_external_signals({"fxRates": "KRW=1\nUSD=1400"}, signals)
+        summary = portfolio_summary(
+            [position],
+            fx_rates=rates,
+            runtime_fx_currencies=runtime_fx_currencies_from_external_signals(signals),
+        )
+
+        self.assertEqual("broker_applied_valuation", signals["fxRates"]["USDKRW"]["sourceType"])
+        self.assertEqual("account_applied", signals["fxRates"]["USDKRW"]["evidenceStrength"])
+        self.assertEqual(set(), runtime_fx_currencies_from_external_signals(signals))
+        self.assertAlmostEqual(32000000 / 22540, rates["USD"])
+        self.assertAlmostEqual(32000000, summary.total)
+
+    def test_broker_fx_rate_backfills_missing_base_value_without_runtime_refresh_flag(self):
+        position = normalize_position(
+            {
+                "symbol": "AAPL",
+                "market": "US",
+                "currency": "USD",
+                "quantity": 1,
+                "currentPrice": 315.0,
+                "marketValue": 315.0,
+                "exchangeRate": 1419.7,
+                "quoteSource": "Toss holdings",
+            }
+        )
+        external_signals = {
+            "fxRates": {
+                "USDKRW": {
+                    "provider": "Toss",
+                    "base": "USD",
+                    "quote": "KRW",
+                    "rate": 1419.7,
+                    "sourceType": "broker_applied_valuation",
+                    "evidenceStrength": "account_applied",
+                }
+            }
+        }
+        rates = currency_rates_from_external_signals({"fxRates": "KRW=1\nUSD=1400"}, external_signals)
+
+        apply_position_base_currency_values(
+            [position],
+            rates,
+            runtime_fx_currencies_from_external_signals(external_signals),
+        )
+
+        self.assertEqual(set(), runtime_fx_currencies_from_external_signals(external_signals))
+        self.assertAlmostEqual(315.0 * 1419.7, position.market_value_krw)
+
+    def test_external_provider_error_message_masks_api_keys(self):
+        provider = ExternalSignalProvider.__new__(ExternalSignalProvider)
+        secret = "ABCDEF1234567890ABCDEF1234567890ABCDEF1234567890"
+
+        message = provider.safe_error_message(RuntimeError("apikey=" + secret + " daily limit reached"))
+
+        self.assertNotIn(secret, message)
+        self.assertIn("apikey=***", message)
 
     def test_us_position_alert_value_uses_live_fx_over_stale_toss_krw_value(self):
         position = normalize_position(

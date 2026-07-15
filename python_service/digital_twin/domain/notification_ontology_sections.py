@@ -139,6 +139,18 @@ def fx_fact_line(facts: Dict[str, object]) -> str:
     if base and quote:
         parts.append(base + "/" + quote)
     parts.append("1 " + base + " = " + fact_number_text(rate_value, 2) + " " + quote)
+    source_type = str(facts.get("fxSourceType") or "").strip()
+    provider = str(facts.get("fxProvider") or "").strip()
+    source_labels = {
+        "market_realtime": "실시간 API",
+        "broker_applied_valuation": "계좌 적용 환율",
+        "fallback_setting": "설정값 기준",
+    }
+    source_label = source_labels.get(source_type, "")
+    if source_label:
+        parts.append(source_label)
+    elif provider:
+        parts.append("출처 " + provider)
     exposure = facts.get("fxExposureRatio")
     if has_fact_value(exposure) and fact_number(exposure):
         parts.append("노출 " + fact_number_text(exposure, 1) + "%")

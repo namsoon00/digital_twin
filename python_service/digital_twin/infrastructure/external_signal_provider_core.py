@@ -1,5 +1,6 @@
 import hashlib
 import json
+import re
 from datetime import datetime, timedelta, timezone
 from typing import Callable, Dict, Iterable, List
 
@@ -32,12 +33,14 @@ class ExternalSignalCoreMixin:
         if self.is_cache_fresh(entry):
             signals = entry.get("signals")
             if isinstance(signals, dict):
+                self.refresh_broker_fx_rates(signals, position_list)
                 signals = attach_external_signal_quality(signals, positions=position_list, settings=self.settings)
                 self.attach_stored_research_evidence(position_list, signals)
                 self.record_research_evidence(position_list, signals)
                 return signals
 
         signals = self.fetch_signals(position_list)
+        self.refresh_broker_fx_rates(signals, position_list)
         self.record_research_evidence(position_list, signals)
         self.attach_stored_research_evidence(position_list, signals)
         self.cache.replace(self.next_cache_payload(cached, cache_key, signals))
@@ -134,7 +137,7 @@ class ExternalSignalCoreMixin:
             "newsProvider": self.news_provider(),
             "newsMax": str(self.settings.get("externalNewsMaxSymbols") or "3"),
             "newsLookbackHours": str(self.settings.get("externalNewsLookbackHours") or "48"),
-            "fxRateSourceVersion": "alpha-vantage-currency-exchange-v1",
+            "fxRateSourceVersion": "broker-account-priority-v1",
             "alphaRateLimitSeconds": str(self.settings.get("externalAlphaRateLimitSeconds") or "15"),
             "secMappings": symbol_assignments(self.settings.get("externalSecCompanyCiks") or ""),
             "dartLookbackDays": str(self.settings.get("externalDartLookbackDays") or "14"),
@@ -200,7 +203,7 @@ class ExternalSignalCoreMixin:
         self.add_sec_edgar(signals, positions)
         self.add_coingecko(signals)
         self.add_fred(signals)
-        self.add_fx_rates(signals)
+        self.add_fx_rates(signals, positions)
         self.add_opendart(signals, positions)
         self.add_news_headlines(signals, positions)
         return attach_external_signal_quality(signals, positions=positions, settings=self.settings)
@@ -254,4 +257,13 @@ class ExternalSignalCoreMixin:
         })
 
     def status_for_error(self, signals: Dict[str, object], source: str, message: str, error: Exception) -> None:
-        self.status(signals, source, isinstance(error, ExternalRateLimited), message + str(error)[:120])
+        self.status(signals, source, isinstance(error, ExternalRateLimited), message + self.safe_error_message(error))
+
+    def safe_error_message(self, error: Exception) -> str:
+        text = str(error or "")
+        if not text:
+            return ""
+        text = re.sub(r"(?i)(apikey=)[^&\s]+", r"\1***", text)
+        text = re.sub(r"(?i)(api[_ -]?key(?: is|:)?\s+)[A-Za-z0-9+/=_-]{12,}", r"\1***", text)
+        text = re.sub(r"[A-Za-z0-9+/=_-]{48,}", "***", text)
+        return text[:120]

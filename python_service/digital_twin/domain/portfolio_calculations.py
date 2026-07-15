@@ -6,6 +6,9 @@ from .portfolio import PortfolioSummary, Position
 
 
 DEFAULT_FX_RATES = {"KRW": 1.0, "USD": 1400.0}
+BROKER_FX_SOURCE_TYPE = "broker_applied_valuation"
+FALLBACK_FX_SOURCE_TYPE = "fallback_setting"
+LIVE_MARKET_FX_SOURCE_TYPE = "market_realtime"
 
 
 def market_key(position: Position) -> str:
@@ -61,6 +64,77 @@ def fx_rates_with_external_signals(
     return rates
 
 
+def _position_fx_provider(position: Position) -> str:
+    source = str(getattr(position, "quote_source", "") or "").strip().lower()
+    if "toss" in source:
+        return "Toss"
+    if "kis" in source or "korea investment" in source or "한국투자" in source:
+        return "KIS"
+    return "BrokerAccount"
+
+
+def broker_fx_rates_from_positions(
+    positions: Iterable[Position],
+    fetched_at: str = "",
+) -> Dict[str, Dict[str, object]]:
+    accum: Dict[str, Dict[str, object]] = {}
+    for position in positions or []:
+        currency = str(getattr(position, "currency", "") or "").upper().strip()
+        if not currency or currency == "KRW":
+            continue
+        native_value = number(getattr(position, "market_value", 0.0))
+        base_value = number(getattr(position, "market_value_krw", 0.0))
+        explicit_rate = number(getattr(position, "exchange_rate", 0.0))
+        implied_rate = base_value / native_value if native_value > 0 and base_value > 0 else 0.0
+        rate = implied_rate or explicit_rate
+        if rate <= 0:
+            continue
+        weight = native_value if native_value > 0 else 1.0
+        pair = currency + "KRW"
+        item = accum.setdefault(
+            pair,
+            {
+                "provider": _position_fx_provider(position),
+                "base": currency,
+                "quote": "KRW",
+                "rateWeight": 0.0,
+                "weight": 0.0,
+                "sampleCount": 0,
+                "lastUpdated": "",
+                "fetchedAt": fetched_at,
+                "sourceType": BROKER_FX_SOURCE_TYPE,
+                "evidenceStrength": "account_applied",
+                "valuationPriority": 1,
+            },
+        )
+        item["rateWeight"] = float(item["rateWeight"]) + rate * weight
+        item["weight"] = float(item["weight"]) + weight
+        item["sampleCount"] = int(item["sampleCount"]) + 1
+        if implied_rate:
+            item["derivedFrom"] = "marketValueKrw/nativeMarketValue"
+        elif not item.get("derivedFrom"):
+            item["derivedFrom"] = "exchangeRate"
+        updated_at = str(getattr(position, "updated_at", "") or "")
+        if updated_at and updated_at > str(item.get("lastUpdated") or ""):
+            item["lastUpdated"] = updated_at
+        provider = _position_fx_provider(position)
+        if provider != "BrokerAccount":
+            item["provider"] = provider
+    rows: Dict[str, Dict[str, object]] = {}
+    for pair, item in accum.items():
+        weight = number(item.get("weight"))
+        rate = number(item.get("rateWeight")) / weight if weight > 0 else 0.0
+        if rate <= 0:
+            continue
+        row = dict(item)
+        row.pop("rateWeight", None)
+        row.pop("weight", None)
+        row["rate"] = rate
+        row["value"] = rate
+        rows[pair] = row
+    return rows
+
+
 def runtime_fx_currencies_from_external_signals(external_signals: Dict[str, object] = None) -> Set[str]:
     external_fx_rates = external_signals.get("fxRates") if isinstance(external_signals, dict) else {}
     currencies: Set[str] = set()
@@ -78,7 +152,13 @@ def runtime_fx_currencies_from_external_signals(external_signals: Dict[str, obje
             quote = normalized_key[3:6]
         rate = number(item.get("rate") if item.get("rate") not in (None, "") else item.get("value"))
         provider = str(item.get("provider") or "").strip().lower()
-        if not rate or provider == "runtimesettings":
+        source_type = str(item.get("sourceType") or item.get("source_type") or "").strip().lower()
+        if (
+            not rate
+            or provider == "runtimesettings"
+            or source_type in {FALLBACK_FX_SOURCE_TYPE, BROKER_FX_SOURCE_TYPE}
+            or (source_type and source_type != LIVE_MARKET_FX_SOURCE_TYPE)
+        ):
             continue
         if base and quote == "KRW":
             currencies.add(base)

@@ -354,6 +354,18 @@ def _fx_context_line_from_facts(facts: Dict[str, object]) -> str:
     if base == quote:
         return ""
     parts = [base + "/" + quote, "1 " + base + " = " + _number_text(rate_value, 2) + " " + quote]
+    source_type = str(facts.get("fxSourceType") or "").strip()
+    provider = str(facts.get("fxProvider") or "").strip()
+    source_labels = {
+        "market_realtime": "실시간 API",
+        "broker_applied_valuation": "계좌 적용 환율",
+        "fallback_setting": "설정값 기준",
+    }
+    source_label = source_labels.get(source_type, "")
+    if source_label:
+        parts.append(source_label)
+    elif provider:
+        parts.append("출처 " + provider)
     if facts.get("hasFxDeltaSignal"):
         delta_krw = facts.get("usdKrwDeltaKrw")
         delta_pct = facts.get("usdKrwDeltaPct")

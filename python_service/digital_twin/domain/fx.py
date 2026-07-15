@@ -17,6 +17,10 @@ class FxRateSignal:
     delta_7d_krw: float = 0.0
     delta_7d_pct: float = 0.0
     provider: str = ""
+    source_type: str = ""
+    evidence_strength: str = ""
+    market_rate: float = 0.0
+    valuation_rate: float = 0.0
     has_delta_signal: bool = False
 
     def to_dict(self) -> Dict[str, object]:
@@ -36,6 +40,10 @@ class FxExposureContext:
     usd_krw_7d_delta_krw: float = 0.0
     usd_krw_7d_delta_pct: float = 0.0
     provider: str = ""
+    source_type: str = ""
+    evidence_strength: str = ""
+    market_rate: float = 0.0
+    valuation_rate: float = 0.0
     exposure_ratio: float = 0.0
     regime: str = "base_currency_or_unknown"
     has_fx_rate_signal: bool = False
@@ -54,6 +62,10 @@ class FxExposureContext:
             "usdKrw7dDeltaKrw": self.usd_krw_7d_delta_krw,
             "usdKrw7dDeltaPct": self.usd_krw_7d_delta_pct,
             "fxProvider": self.provider,
+            "fxSourceType": self.source_type,
+            "fxEvidenceStrength": self.evidence_strength,
+            "fxMarketRate": self.market_rate,
+            "fxValuationRate": self.valuation_rate,
             "fxExposureRatio": self.exposure_ratio,
             "fxRegime": self.regime,
             "hasFxRateSignal": self.has_fx_rate_signal,
@@ -121,17 +133,21 @@ def _fx_signal(
 ) -> FxRateSignal:
     deltas = _fx_delta_fields(item or {}, rate, inverted=inverted)
     return FxRateSignal(
-        pair,
-        base,
-        quote,
-        rate,
-        deltas["previous_rate"],
-        deltas["delta_krw"],
-        deltas["delta_pct"],
-        deltas["delta_7d_krw"],
-        deltas["delta_7d_pct"],
-        provider,
-        deltas["has_delta_signal"],
+        pair=pair,
+        base=base,
+        quote=quote,
+        rate=rate,
+        previous_rate=deltas["previous_rate"],
+        delta_krw=deltas["delta_krw"],
+        delta_pct=deltas["delta_pct"],
+        delta_7d_krw=deltas["delta_7d_krw"],
+        delta_7d_pct=deltas["delta_7d_pct"],
+        provider=provider,
+        source_type=str((item or {}).get("sourceType") or (item or {}).get("source_type") or ""),
+        evidence_strength=str((item or {}).get("evidenceStrength") or (item or {}).get("evidence_strength") or ""),
+        market_rate=number((item or {}).get("marketRate")),
+        valuation_rate=number((item or {}).get("valuationRate")),
+        has_delta_signal=deltas["has_delta_signal"],
     )
 
 
@@ -192,6 +208,10 @@ def fx_exposure_context(position: Position, portfolio: PortfolioSummary, externa
         usd_krw_7d_delta_krw=number(signal.delta_7d_krw) if currency == "USD" else 0.0,
         usd_krw_7d_delta_pct=number(signal.delta_7d_pct) if currency == "USD" else 0.0,
         provider=str(signal.provider or ""),
+        source_type=str(signal.source_type or ""),
+        evidence_strength=str(signal.evidence_strength or ""),
+        market_rate=number(signal.market_rate),
+        valuation_rate=number(signal.valuation_rate),
         exposure_ratio=exposure_ratio,
         regime=fx_regime(currency, rate_value),
         has_fx_rate_signal=bool(rate_value),

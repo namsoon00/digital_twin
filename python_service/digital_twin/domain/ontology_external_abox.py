@@ -163,12 +163,20 @@ def fx_rate_entries(external_signals: Dict[str, object], runtime_context: Dict[s
             rate = number(value.get("rate") if value.get("rate") not in (None, "") else value.get("value"))
             provider = str(value.get("provider") or source)
             fetched_at = str(value.get("fetchedAt") or value.get("observedAt") or "")
+            source_type = str(value.get("sourceType") or value.get("source_type") or "")
+            evidence_strength = str(value.get("evidenceStrength") or value.get("evidence_strength") or "")
+            market_rate = number(value.get("marketRate"))
+            valuation_rate = number(value.get("valuationRate"))
         else:
             base = str(key or "").upper().strip()
             quote = "KRW"
             rate = number(value)
             provider = source
             fetched_at = ""
+            source_type = "fallback_setting" if source == "runtimeSettings" else ""
+            evidence_strength = "fallback" if source == "runtimeSettings" else ""
+            market_rate = 0.0
+            valuation_rate = 0.0
         normalized_key = str(key or "").upper().replace("/", "").replace("-", "").replace("_", "").strip()
         if not base and len(normalized_key) >= 6:
             base = normalized_key[:3]
@@ -186,6 +194,10 @@ def fx_rate_entries(external_signals: Dict[str, object], runtime_context: Dict[s
             "rate": rate,
             "provider": provider,
             "fetchedAt": fetched_at,
+            "sourceType": source_type,
+            "evidenceStrength": evidence_strength,
+            "marketRate": market_rate,
+            "valuationRate": valuation_rate,
         }
 
     for key, value in sorted(rates.items()):
@@ -412,8 +424,18 @@ def add_portfolio_macro_and_cross_asset_concepts(
             "rate": round(rate, 6),
             "provider": str(item.get("provider") or ""),
             "fetchedAt": str(item.get("fetchedAt") or ""),
+            "sourceType": str(item.get("sourceType") or ""),
+            "evidenceStrength": str(item.get("evidenceStrength") or ""),
+            "marketRate": round(number(item.get("marketRate")), 6) if number(item.get("marketRate")) else 0.0,
+            "valuationRate": round(number(item.get("valuationRate")), 6) if number(item.get("valuationRate")) else 0.0,
         })
-        props = {"source": "fxRates", "polarity": "context", "aiInfluenceLabel": pair_label + " 환율"}
+        props = {
+            "source": "fxRates",
+            "polarity": "context",
+            "aiInfluenceLabel": pair_label + " 환율",
+            "sourceType": str(item.get("sourceType") or ""),
+            "evidenceStrength": str(item.get("evidenceStrength") or ""),
+        }
         if base == "USD" and quote == "KRW" and (rate >= 1450 or (rate and rate <= 1300)):
             props.update({"polarity": "risk", "opinionImpact": 4.0})
         add_relation(graph, pair_id, rate_id, "HAS_OBSERVATION", weight=1.0, properties=props)

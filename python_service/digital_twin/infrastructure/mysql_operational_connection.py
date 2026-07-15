@@ -1,7 +1,14 @@
 from contextlib import contextmanager
+from datetime import datetime, timezone
 from typing import Dict
+import warnings
 
 from .mysql_monitoring import MySQLDependencyError, ensure_mysql_database_exists, mysql_settings
+from .mysql_retention import (
+    apply_mysql_operational_history_retention,
+    operational_history_retention_check_interval_seconds,
+    operational_history_retention_enabled,
+)
 from .mysql_schema_tuning import ensure_mysql_operational_schema_tuning, mysql_partitioning_mode
 
 
@@ -31,12 +38,14 @@ class MySQLConnectionProxy:
 
 class MySQLOperationalConnection:
     _schema_ready = set()
+    _retention_last_run = {}
 
     def __init__(self, settings: Dict[str, str] = None):
         self.runtime_settings = dict(settings or {})
         self.mysql_config = mysql_settings(settings)
         ensure_mysql_database_exists(self.mysql_config)
         self.ensure_schema()
+        self.ensure_history_retention()
 
     def raw_connection(self, autocommit: bool = True):
         try:
@@ -73,14 +82,17 @@ class MySQLOperationalConnection:
         finally:
             proxy.close()
 
-    def ensure_schema(self) -> None:
-        schema_key = (
+    def schema_key(self):
+        return (
             str(self.mysql_config.get("host") or ""),
             str(self.mysql_config.get("port") or ""),
             str(self.mysql_config.get("database") or ""),
             str(self.mysql_config.get("unix_socket") or ""),
             mysql_partitioning_mode(self.runtime_settings),
         )
+
+    def ensure_schema(self) -> None:
+        schema_key = self.schema_key()
         if schema_key in MySQLOperationalConnection._schema_ready:
             return
         with self.transaction() as connection:
@@ -88,6 +100,29 @@ class MySQLOperationalConnection:
                 connection.execute(statement)
             ensure_mysql_operational_schema_tuning(connection, self.runtime_settings)
         MySQLOperationalConnection._schema_ready.add(schema_key)
+
+    def ensure_history_retention(self) -> None:
+        if self.runtime_settings.get("_skipOperationalHistoryRetention"):
+            return
+        if not operational_history_retention_enabled(self.runtime_settings):
+            return
+        schema_key = self.schema_key()
+        now = datetime.now(timezone.utc)
+        last_run = MySQLOperationalConnection._retention_last_run.get(schema_key)
+        min_interval = operational_history_retention_check_interval_seconds(self.runtime_settings)
+        if last_run and (now - last_run).total_seconds() < min_interval:
+            return
+        try:
+            with self.connect() as connection:
+                apply_mysql_operational_history_retention(connection, self.runtime_settings, now=now)
+        except Exception as error:
+            warnings.warn(
+                "MySQL operational history retention skipped: " + str(error),
+                RuntimeWarning,
+                stacklevel=2,
+            )
+            return
+        MySQLOperationalConnection._retention_last_run[schema_key] = now
 
 MYSQL_SCHEMA = [
     """

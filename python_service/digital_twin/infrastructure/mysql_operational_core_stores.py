@@ -57,7 +57,9 @@ from .mysql_operational_helpers import (
 class MySQLRuntimeSettingsStore(MySQLOperationalConnection):
     def __init__(self, settings: Dict[str, str] = None, legacy_path: Optional[object] = None):
         self.legacy_path = legacy_path or settings_path()
-        super().__init__(settings)
+        store_settings = dict(settings or {})
+        store_settings["_skipOperationalHistoryRetention"] = "1"
+        super().__init__(store_settings)
 
     def load(self) -> Dict[str, str]:
         with self.connect() as connection:

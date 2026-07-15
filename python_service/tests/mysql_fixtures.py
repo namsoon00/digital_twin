@@ -67,6 +67,7 @@ def mysql_test_settings(seed=None):
         "mysqlUser": os.environ.get("MYSQL_USER", "root"),
         "mysqlPassword": os.environ.get("MYSQL_PASSWORD", ""),
         "mysqlUnixSocket": os.environ.get("MYSQL_UNIX_SOCKET", ""),
+        "operationalHistoryRetentionEnabled": "0",
     }
 
 
@@ -110,6 +111,13 @@ def reset_mysql_test_database(seed=None):
         str(config.get("unix_socket") or ""),
         mysql_partitioning_mode(settings),
     ))
+    MySQLOperationalConnection._retention_last_run.pop((
+        str(config.get("host") or ""),
+        str(config.get("port") or ""),
+        str(config.get("database") or ""),
+        str(config.get("unix_socket") or ""),
+        mysql_partitioning_mode(settings),
+    ), None)
     ensure_mysql_database_exists(config)
     return settings
 

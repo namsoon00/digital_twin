@@ -75,6 +75,12 @@ from digital_twin.infrastructure.notifications import TelegramNotifier, send_eve
 from digital_twin.infrastructure.ontology_projection import PortfolioOntologyProjectionRecorder
 from digital_twin.infrastructure.service_factory import flow_lens_snapshot
 from digital_twin.infrastructure.settings import runtime_settings, save_runtime_settings
+from digital_twin.infrastructure.mysql_retention import (
+    MYSQL_OPERATIONAL_HISTORY_RETENTION_TARGETS,
+    apply_mysql_operational_history_retention,
+    operational_history_retention_cutoff,
+    operational_history_retention_enabled,
+)
 from digital_twin.infrastructure.mysql_schema_tuning import MYSQL_OPERATIONAL_KEY_PARTITIONS, mysql_partitioning_mode
 from digital_twin.infrastructure.symbol_sources import RemoteSymbolSourceGateway, parse_krx_kind_table, parse_nasdaq_listed
 from digital_twin.infrastructure.toss_snapshots import TossAPIError, TossProvider, account_cash_amount, normalize_price_items, select_account, toss_json
@@ -122,6 +128,7 @@ class PythonServiceTests(unittest.TestCase):
             "MYSQL_USER": mysql_settings["mysqlUser"],
             "MYSQL_PASSWORD": mysql_settings["mysqlPassword"],
             "MYSQL_UNIX_SOCKET": mysql_settings["mysqlUnixSocket"],
+            "OPERATIONAL_HISTORY_RETENTION_ENABLED": "0",
         }, clear=False)
         self.env_patch.start()
         self.addCleanup(self.env_patch.stop)
@@ -13072,6 +13079,8 @@ class PythonServiceTests(unittest.TestCase):
             "idx_domain_events_time",
             "idx_domain_events_name_aggregate_time",
         }.issubset(index_names("domain_events")))
+        self.assertIn("idx_monitor_snapshot_history_generated", index_names("monitor_snapshot_history"))
+        self.assertIn("idx_monitor_sent_sent_at", index_names("monitor_sent"))
         self.assertTrue({
             "idx_notification_jobs_created",
             "idx_notification_jobs_type_status_created",
@@ -13101,6 +13110,118 @@ class PythonServiceTests(unittest.TestCase):
         self.assertEqual(
             "ALTER TABLE `domain_events` PARTITION BY KEY(`event_id`) PARTITIONS 16",
             MYSQL_OPERATIONAL_KEY_PARTITIONS["domain_events"].alter_sql(),
+        )
+
+    def test_mysql_operational_history_retention_keeps_one_day(self):
+        db_path = test_store_seed(self.temp.name)
+        TestMonitorStore(db_path)
+        old_time = "2026-07-14T12:59:59Z"
+        fresh_time = "2026-07-14T13:00:01Z"
+        payload = json.dumps({"ok": True})
+
+        mysql_execute(
+            db_path,
+            """
+            INSERT INTO domain_events
+                (event_id, name, aggregate_id, occurred_at, correlation_id, payload_json, event_json)
+            VALUES
+                (?, 'old.event', 'main', ?, '', ?, ?),
+                (?, 'fresh.event', 'main', ?, '', ?, ?)
+            """,
+            ("old-domain", old_time, payload, payload, "fresh-domain", fresh_time, payload, payload),
+        )
+        mysql_execute(
+            db_path,
+            """
+            INSERT INTO monitor_snapshot_history (account_id, generated_at, payload_json, created_at)
+            VALUES
+                ('main', ?, ?, ?),
+                ('main', ?, ?, ?)
+            """,
+            (old_time, payload, old_time, fresh_time, payload, fresh_time),
+        )
+        mysql_execute(
+            db_path,
+            """
+            INSERT INTO notification_jobs
+                (job_id, account_id, account_label, message_type, source_event_id, source_event_name,
+                 dedupe_key, status, attempts, created_at, updated_at, last_error, text, payload_json)
+            VALUES
+                (?, 'main', 'Main', 'notification', '', '', ?, 'sent', 0, ?, ?, '', 'old', ?),
+                (?, 'main', 'Main', 'notification', '', '', ?, 'sent', 0, ?, ?, '', 'fresh', ?)
+            """,
+            (
+                "old-notification",
+                "old-notification",
+                old_time,
+                old_time,
+                payload,
+                "fresh-notification",
+                "fresh-notification",
+                fresh_time,
+                fresh_time,
+                payload,
+            ),
+        )
+        mysql_execute(
+            db_path,
+            """
+            INSERT INTO model_review_jobs
+                (job_id, account_id, account_label, symbol, title, alert_key, status, attempts,
+                 created_at, updated_at, result, last_error, alert_lines_json, payload_json)
+            VALUES
+                (?, 'main', 'Main', 'AAPL', 'old', 'old', 'done', 0, ?, ?, '', '', '[]', ?),
+                (?, 'main', 'Main', 'AAPL', 'fresh', 'fresh', 'done', 0, ?, ?, '', '', '[]', ?)
+            """,
+            ("old-review", old_time, old_time, payload, "fresh-review", fresh_time, fresh_time, payload),
+        )
+        mysql_execute(
+            db_path,
+            """
+            INSERT INTO monitor_sent (sent_key_hash, sent_key, sent_at)
+            VALUES
+                (?, 'old', ?),
+                (?, 'fresh', ?)
+            """,
+            ("a" * 64, old_time, "b" * 64, fresh_time),
+        )
+        mysql_execute(
+            db_path,
+            """
+            INSERT INTO ontology_ai_opinion_samples
+                (sample_id, portfolio_id, created_at, payload_json)
+            VALUES
+                (?, 'main', ?, ?),
+                (?, 'main', ?, ?)
+            """,
+            ("old-quality", old_time, payload, "fresh-quality", fresh_time, payload),
+        )
+
+        store = TestMonitorStore(db_path)
+        settings = dict(mysql_test_settings(db_path))
+        settings.update({
+            "operationalHistoryRetentionEnabled": "1",
+            "operationalHistoryRetentionHours": "24",
+            "operationalHistoryRetentionBatchSize": "2",
+        })
+        now = datetime(2026, 7, 15, 13, 0, tzinfo=timezone.utc)
+        with store.connect() as connection:
+            result = apply_mysql_operational_history_retention(connection, settings, now=now, use_lock=False)
+
+        self.assertEqual("2026-07-14T13:00:00Z", result["cutoffIso"])
+        self.assertEqual(6, result["deleted"])
+        for target in MYSQL_OPERATIONAL_HISTORY_RETENTION_TARGETS:
+            count = mysql_fetchone(db_path, "SELECT COUNT(*) FROM " + target.table)[0]
+            self.assertEqual(1, count, target.table)
+
+    def test_mysql_operational_history_retention_settings(self):
+        now = datetime(2026, 7, 15, 13, 0, tzinfo=timezone.utc)
+
+        self.assertFalse(operational_history_retention_enabled({"operationalHistoryRetentionEnabled": "off"}))
+        self.assertTrue(operational_history_retention_enabled({}))
+        self.assertEqual(
+            "2026-07-14T13:00:00Z",
+            operational_history_retention_cutoff({"operationalHistoryRetentionHours": "24"}, now=now),
         )
 
 

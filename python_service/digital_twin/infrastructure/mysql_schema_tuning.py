@@ -73,6 +73,16 @@ MYSQL_OPERATIONAL_INDEXES: Dict[str, Sequence[MySQLIndexDefinition]] = {
             "`name`, `aggregate_id`, `occurred_at`, `event_id`",
         ),
     ),
+    "monitor_snapshot_history": (
+        MySQLIndexDefinition(
+            "monitor_snapshot_history",
+            "idx_monitor_snapshot_history_generated",
+            "`generated_at`, `account_id`",
+        ),
+    ),
+    "monitor_sent": (
+        MySQLIndexDefinition("monitor_sent", "idx_monitor_sent_sent_at", "`sent_at`, `sent_key_hash`"),
+    ),
     "notification_jobs": (
         MySQLIndexDefinition("notification_jobs", "idx_notification_jobs_created", "`created_at`, `job_id`"),
         MySQLIndexDefinition(

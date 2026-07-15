@@ -9285,6 +9285,8 @@ class PythonServiceTests(unittest.TestCase):
         context = {
             "messageType": "investmentInsight",
             "messageDeliveryLevel": "absoluteBeginner",
+            "investmentStrategyProfile": "growth",
+            "investmentStrategyProfileLabel": "성장형",
             "headline": "[주의] 🛡️ 손실 -18%: 손절·분할축소 점검",
             "displayTarget": "삼성전자 / 005930",
             "referenceDate": "2026-07-08 22:26 KST",
@@ -9320,6 +9322,8 @@ class PythonServiceTests(unittest.TestCase):
 
         self.assertIn("<b>판단 요약</b>", message)
         self.assertIn("<b>지금 할 일</b>", message)
+        self.assertIn("<b>투자 성향</b>: <code>성장형</code>", message)
+        self.assertIn("<b>투자 레벨</b>: <code>왕초보</code>", message)
         self.assertIn("<b>안내</b>: <code>자동 주문이 아니라 실행 전 점검 알림입니다.</code>", message)
         self.assertNotIn("먼저 볼 행동", message)
         self.assertNotIn("<b>AI 최종 판단</b>", message)

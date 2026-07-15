@@ -2,6 +2,7 @@ import html
 import re
 from typing import Dict, List
 
+from ..domain.accounts import investment_strategy_profile, message_delivery_profile
 from ..domain.notification_ai import criterion_lines, notification_ai_prompt_context, relation_context_value
 from ..domain.notification_ai_context import relation_facts
 from ..domain.notification_ai_context import is_watchlist_context
@@ -243,11 +244,49 @@ def ai_action_row_label(level: str) -> str:
         return "지금 할 일"
     return "대응 방향"
 
+def account_strategy_label(context: Dict[str, object]) -> str:
+    context = context if isinstance(context, dict) else {}
+    payload = context.get("investmentStrategy") if isinstance(context.get("investmentStrategy"), dict) else {}
+    label = str(
+        payload.get("label")
+        or context.get("investmentStrategyProfileLabel")
+        or ""
+    ).strip()
+    if label:
+        return label
+    key = payload.get("profile") or context.get("investmentStrategyProfile")
+    if key:
+        return str(investment_strategy_profile(key).get("label") or "").strip()
+    return ""
+
+def account_delivery_level_label(context: Dict[str, object]) -> str:
+    context = context if isinstance(context, dict) else {}
+    payload = context.get("messageDeliveryProfile") if isinstance(context.get("messageDeliveryProfile"), dict) else {}
+    label = str(
+        payload.get("label")
+        or context.get("messageDeliveryLevelLabel")
+        or ""
+    ).strip()
+    if label:
+        return label
+    level = payload.get("level") or context.get("messageDeliveryLevel")
+    if level:
+        return str(message_delivery_profile(level).get("label") or "").strip()
+    return ""
+
+def account_profile_rows(context: Dict[str, object], level: str) -> List[str]:
+    rows = [
+        _html_row("투자 성향", account_strategy_label(context), level=level),
+        _html_row("투자 레벨", account_delivery_level_label(context), level=level),
+    ]
+    return [row for row in rows if row]
+
 def ai_judgment_rows(response: NotificationAIValidatedResponse, level: str, context: Dict[str, object] = None) -> List[str]:
     rows = [
         _html_row(ai_action_row_label(level), action_label_for_action(response.action, context) or response.action_label, level=level),
         _html_row("판단 강도", ai_confidence_display(response, level), level=level),
     ]
+    rows.extend(account_profile_rows(context or {}, level))
     summary_label = "이유" if level == "absoluteBeginner" else "AI 판단 이유"
     if response.summary:
         rows.append(_html_row(summary_label, response.summary, level=level))

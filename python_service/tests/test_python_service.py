@@ -9332,9 +9332,9 @@ class PythonServiceTests(unittest.TestCase):
         message = context_with_validated_ai_response(context, response)["telegramMessage"]
 
         self.assertIn("<b>데이터 수집 시각</b>", message)
-        self.assertIn("KIS Open API: 2026-07-15T00:00:30Z", message)
-        self.assertIn("OpenDART: 2026-07-15T00:01:10Z", message)
-        self.assertIn("GDELT: 2026-07-15T00:01:40Z", message)
+        self.assertIn("KIS Open API / 시세·수급: 2026-07-15 09:00 KST", message)
+        self.assertIn("OpenDART / 공시: 2026-07-15 09:01 KST", message)
+        self.assertIn("GDELT / 뉴스: 2026-07-15 09:01 KST", message)
 
     def test_validated_ai_response_uses_absolute_beginner_delivery_level(self):
         context = {

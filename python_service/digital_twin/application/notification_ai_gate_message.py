@@ -1,6 +1,11 @@
 import html
 import re
+from datetime import datetime, timedelta, timezone
 from typing import Dict, List
+try:
+    from zoneinfo import ZoneInfo
+except ImportError:  # pragma: no cover - Python 3.8 compatibility guard.
+    ZoneInfo = None
 
 from ..domain.accounts import investment_strategy_profile, message_delivery_profile
 from ..domain.notification_ai import criterion_lines, notification_ai_prompt_context, relation_context_value
@@ -31,6 +36,7 @@ from .notification_message_metrics import _profit_loss_change_summary
 MESSAGE_CONTEXT_ROW_LIMIT = 5
 MESSAGE_DATA_QUALITY_ROW_LIMIT = 3
 MESSAGE_DATA_COLLECTION_ROW_LIMIT = 6
+KST = ZoneInfo("Asia/Seoul") if ZoneInfo else timezone(timedelta(hours=9))
 
 DATA_COLLECTION_TIME_KEYS = [
     "sourceFetchedAt",
@@ -45,6 +51,24 @@ DATA_COLLECTION_TIME_KEYS = [
 
 DATA_COLLECTION_SOURCE_KEYS = ["provider", "source", "domain", "quoteSource", "sourceName"]
 DATA_COLLECTION_DETAIL_KEYS = ["symbol", "title", "seriesId", "eventType", "field", "dataScope", "messageType"]
+DATA_COLLECTION_STAGE_LABELS = {
+    "price": "시세",
+    "ccnl": "실시간 체결",
+    "orderbook": "실시간 호가",
+    "investor": "투자자 수급",
+}
+DATA_COLLECTION_SCOPE_LABELS = {
+    "market-microstructure": "체결·호가",
+    "investor-flow": "투자자 수급",
+    "market-price": "시세",
+    "market-quote": "시세",
+    "quote": "시세",
+    "news": "뉴스",
+    "disclosure": "공시",
+    "macro": "거시 지표",
+    "crypto": "크립토 시세",
+    "fx": "환율",
+}
 
 ABSOLUTE_BEGINNER_TERM_REPLACEMENTS = [
     ("유동성 또는 슬리피지 위험", "거래가 적어 원하는 가격에 사고팔기 어려운 위험"),
@@ -428,16 +452,16 @@ def data_collection_time_rows(context: Dict[str, object], limit: int = MESSAGE_D
     rows: List[str] = []
     seen = set()
 
-    def add(label: object, value: object, suffix: object = "") -> None:
+    def add(label: object, value: object, suffix: object = "", kind: object = "") -> None:
         if len(rows) >= limit:
             return
-        stamp = str(value or "").strip()
+        stamp = _format_kst_timestamp(value)
         if not stamp:
             return
-        source = _text(str(label or "데이터").strip() or "데이터", 42)
+        source = _collection_source_label(label, kind)
         detail = _text(str(suffix or "").strip(), 72)
         text = source + ": " + stamp + ((" · " + detail) if detail else "")
-        key = re.sub(r"\s+", " ", source + "|" + stamp).strip().lower()
+        key = re.sub(r"\s+", " ", source + "|" + stamp + "|" + detail).strip().lower()
         if key in seen:
             return
         seen.add(key)
@@ -446,7 +470,12 @@ def data_collection_time_rows(context: Dict[str, object], limit: int = MESSAGE_D
     freshness = (context or {}).get("dataFreshness") if isinstance((context or {}).get("dataFreshness"), dict) else {}
     if freshness:
         source = freshness.get("source") or "데이터 신선도"
-        stamp = freshness.get("sourceFetchedAt") or freshness.get("fetchedAt") or freshness.get("checkedAt")
+        stamp = (
+            freshness.get("sourceFetchedAt")
+            or freshness.get("fetchedAt")
+            or freshness.get("sourceAsOf")
+            or (freshness.get("checkedAt") if not freshness.get("sources") else "")
+        )
         age = _number(freshness.get("ageMinutes"))
         status = str(freshness.get("status") or "").strip()
         detail_parts = []
@@ -454,7 +483,12 @@ def data_collection_time_rows(context: Dict[str, object], limit: int = MESSAGE_D
             detail_parts.append("상태 " + status)
         if age or age == 0:
             detail_parts.append("약 " + _minute_count_text(age) + " 전")
-        add(source, stamp, " · ".join(part for part in detail_parts if part))
+        add(
+            source,
+            stamp,
+            " · ".join(part for part in detail_parts if part),
+            _collection_text_for_kind(freshness, source),
+        )
 
     roots = [
         context,
@@ -475,11 +509,28 @@ def data_collection_time_rows(context: Dict[str, object], limit: int = MESSAGE_D
             return
         if not isinstance(value, dict):
             return
+        nested_sources = value.get("sources") if isinstance(value.get("sources"), list) else []
+        if nested_sources:
+            for item in nested_sources[:20]:
+                walk(item, depth + 1)
+                if len(rows) >= limit:
+                    return
+            source_stamp = next(
+                (value.get(key) for key in DATA_COLLECTION_TIME_KEYS if key != "checkedAt" and value.get(key)),
+                "",
+            )
+            if not source_stamp and not any(value.get(key) for key in DATA_COLLECTION_SOURCE_KEYS):
+                return
         stamp = next((value.get(key) for key in DATA_COLLECTION_TIME_KEYS if value.get(key)), "")
         if stamp:
             source = next((value.get(key) for key in DATA_COLLECTION_SOURCE_KEYS if value.get(key)), "")
             detail = next((value.get(key) for key in DATA_COLLECTION_DETAIL_KEYS if value.get(key)), "")
-            add(source or value.get("kind") or value.get("type") or "API 데이터", stamp, detail)
+            add(
+                source or value.get("kind") or value.get("type") or "API 데이터",
+                stamp,
+                detail,
+                _collection_text_for_kind(value, source, detail),
+            )
         for child in value.values():
             if isinstance(child, (dict, list)):
                 walk(child, depth + 1)
@@ -622,6 +673,85 @@ def _minute_count_text(value: object) -> str:
     if float(number).is_integer():
         return str(int(number)) + "분"
     return ("%.1f" % number).rstrip("0").rstrip(".") + "분"
+
+
+def _format_kst_timestamp(value: object) -> str:
+    text = str(value or "").strip()
+    if not text:
+        return ""
+    if "KST" in text.upper():
+        return text
+    normalized = text
+    if normalized.endswith("Z"):
+        normalized = normalized[:-1] + "+00:00"
+    try:
+        parsed = datetime.fromisoformat(normalized)
+    except ValueError:
+        try:
+            parsed = datetime.fromisoformat(normalized + "T00:00:00+00:00")
+        except ValueError:
+            return text
+    if parsed.tzinfo is None:
+        parsed = parsed.replace(tzinfo=timezone.utc)
+    return parsed.astimezone(KST).strftime("%Y-%m-%d %H:%M KST")
+
+
+def _collection_text_for_kind(value: Dict[str, object], source: object = "", detail: object = "") -> str:
+    item = value if isinstance(value, dict) else {}
+    stage = str(item.get("stage") or item.get("dataStage") or "").strip()
+    if stage in DATA_COLLECTION_STAGE_LABELS:
+        return DATA_COLLECTION_STAGE_LABELS[stage]
+    scope = str(item.get("dataScope") or item.get("scope") or "").strip()
+    if scope in DATA_COLLECTION_SCOPE_LABELS:
+        return DATA_COLLECTION_SCOPE_LABELS[scope]
+    text = " ".join([
+        str(source or ""),
+        str(detail or ""),
+        str(item.get("provider") or ""),
+        str(item.get("source") or ""),
+        str(item.get("domain") or ""),
+        str(item.get("messageType") or ""),
+        str(item.get("type") or ""),
+        str(item.get("kind") or ""),
+        " ".join(str(key or "") for key in item.keys()),
+    ]).lower()
+    if "opendart" in text or "dart" in text:
+        return "공시"
+    if "sec edgar" in text or "edgar" in text:
+        return "해외 공시"
+    if any(term in text for term in ["gdelt", "google news", "news", "headline", "article", "rss", "뉴스"]):
+        return "뉴스"
+    if "fred" in text or "macro" in text:
+        return "거시 지표"
+    if "coingecko" in text or "crypto" in text or "coin" in text:
+        return "크립토 시세"
+    if "alpha vantage" in text:
+        if "fx" in text or "exchange" in text or "currency" in text:
+            return "환율"
+        if "fundamental" in text or "earnings" in text:
+            return "펀더멘털"
+        return "해외 시세"
+    if "kis" in text:
+        if "websocket" in text:
+            return "실시간 시세·호가"
+        return "시세·수급"
+    if "toss" in text or "brokeraccount" in text:
+        return "계좌·보유"
+    if any(term in text for term in ["currentprice", "price", "quote", "volume", "tradingvalue"]):
+        return "시세"
+    if any(term in text for term in ["orderbook", "bid", "ask", "imbalance"]):
+        return "호가"
+    if any(term in text for term in ["foreign", "institution", "individual", "investor"]):
+        return "투자자 수급"
+    return "API 데이터"
+
+
+def _collection_source_label(source: object, kind: object) -> str:
+    source_text = _text(str(source or "데이터").strip() or "데이터", 42)
+    kind_text = _text(str(kind or "").strip(), 24)
+    if not kind_text or kind_text in source_text:
+        return source_text
+    return source_text + " / " + kind_text
 
 
 def notification_cooldown_release_summary(context: Dict[str, object]) -> str:

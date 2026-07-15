@@ -7789,6 +7789,7 @@
       renderSystemDetailDisclosure("처음 사용하는 순서", "계정 등록부터 투자 판단 검토까지", renderSystemQuickManualPanel()),
       renderSystemDetailDisclosure("데이터와 이벤트 흐름", "저장소, 워커, 이벤트 계보", renderSystemDataFlowPanel(snapshot) + renderSystemEventFlowPanel()),
       renderSystemDetailDisclosure("알림과 온톨로지", "알림 생성 경로와 TBox/ABox 모델", renderSystemNotificationFlowPanel() + renderSystemOntologyPanel(snapshot)),
+      renderSystemDetailDisclosure("하이닉스 알림 흐름", "000660 알림이 수집, 추론, AI 검증, 발송까지 가는 전체 경로", renderSystemHynixAlertFlowPanel()),
       renderSystemDetailDisclosure("운영 체크와 용어", "문제 점검 순서와 핵심 용어", renderSystemOperationsPanel() + renderSystemGlossaryPanel()),
       '</div>',
       '</article>'
@@ -7979,6 +7980,81 @@
       '<div class="system-guide-note">',
       '<strong>중요한 운영 원칙</strong>',
       '<p>투자 알림은 자동 주문이 아닙니다. 시스템은 근거를 모아 대응 우선순위를 제안하고, 실제 실행 전 확인할 조건을 사용자에게 보여줍니다.</p>',
+      '</div>',
+      '</article>'
+    ].join("");
+  }
+
+  function renderSystemHynixAlertFlowPanel() {
+    var steps = [
+      ["01", "데이터 수집", "Toss, KIS, OpenDART, 뉴스, 거시 지표", "하이닉스가 보유 종목이면 Toss 잔고에서 현재가, 평균매입가, 보유 수량, 평가금액, 손익률을 먼저 가져옵니다. KIS에서는 거래량, 체결강도, 호가, 외국인·기관·개인 수급을 붙이고, OpenDART와 뉴스 근거는 새 사건으로 저장합니다."],
+      ["02", "스냅샷 저장", "monitoring.snapshot_collected", "한 번의 조회 결과를 계좌 스냅샷으로 저장합니다. 이 시점의 하이닉스 상태가 이후 알림의 기준시각이 됩니다. 이전 스냅샷과 비교할 수 있도록 손익률, 이동평균 위치, 판단 액션, 원천 뉴스 키도 함께 남깁니다."],
+      ["03", "ABox 생성", "현재 데이터 그래프", "보유 종목 000660, 손익률, 5일·20일·60일 평균 가격, 거래 흐름, 투자자별 수급 심리, 뉴스·공시 근거를 TypeDB에 넣을 실제 관계 데이터로 바꿉니다. 여기서 외국인·기관 동반 순매수, 개인 저가매수 위험 같은 수급 심리도 관계로 만들어집니다."],
+      ["04", "RuleBox 추론", "TypeDB RuleBox → InferenceBox", "저장된 관계 규칙이 ABox를 읽고 손실 방어, 회복 확인, 추가매수 차단, 조건부 추가매수 검토 같은 추론 결과를 만듭니다. 추론 결과가 없으면 투자 판단 대신 추론 상태 점검 알림이 나옵니다."],
+      ["05", "AI 의견 작성", "검증된 근거만 사용", "AI는 RuleBox가 만든 관계, 실제 가격·수급·뉴스·공시, 부족 데이터를 받아 매수, 추가매수, 보유, 분할축소, 매도, 회피 중 하나를 고릅니다. 없는 데이터는 만들 수 없고, 계산 후보와 다르게 판단하면 왜 바꿨는지 남깁니다."],
+      ["06", "알림 게이트", "쿨다운과 새 변화 판단", "알림 정책은 같은 메시지를 계속 보내지 않도록 막습니다. 다만 손익률이 이전 알림보다 1%p 이상 좋아지거나 나빠진 경우, 60일 평균 아래로 바뀐 경우, 새 뉴스·공시가 들어온 경우, 최종 행동이 바뀐 경우에는 쿨다운을 풀 수 있습니다."],
+      ["07", "메시지 생성", "템플릿과 사용자 레벨", "왕초보, 초보, 중수, 고수 레벨에 맞춰 문장 난이도와 노출 정보를 조절합니다. 하이닉스 보유 알림에는 현재가, 평균매입가, 수익률, 보유 수량, 종목 평가금액, 계좌 평가금액, 이동평균, 거래 흐름, 투자자별 수급, 알림이 온 이유, 쿨다운 해제 이유가 들어갑니다."],
+      ["08", "발송과 추적", "notification_jobs, Telegram, 웹 알림", "완성된 메시지는 Outbox에 저장되고 알림 워커가 Telegram과 웹 알림 목록으로 보냅니다. 메시지 끝의 알림 추적 번호로 어떤 판단 작업이었는지 다시 찾을 수 있습니다."]
+    ];
+    var ruleRows = [
+      ["손실 방어", "graph.loss_guard.breakdown.v1", "보유 손익률이 계정의 손실 허용 기준보다 나쁘고 20일 또는 60일 평균 가격 아래로 약해지면 성립합니다.", "손실 관리, 분할축소, 매도 검토를 강화합니다."],
+      ["수급 방어", "graph.loss_smart_money.defense.v1", "손실 구간이어도 외국인과 기관이 함께 순매수하면 성립합니다.", "전량 매도보다 분할축소나 보유 재확인 쪽으로 판단 강도를 낮출 수 있습니다."],
+      ["큰 자금 매집", "graph.investor_flow.smart_money_accumulation.v1", "외국인·기관이 사고 개인이 파는 흐름, 또는 하락 중 외국인·기관이 받아내는 흐름이면 성립합니다.", "회복 가능성을 보는 반대 근거로 쓰지만 이것만으로 추가매수를 확정하지 않습니다."],
+      ["개인 저가매수 위험", "graph.investor_flow.retail_dip_buying_risk.v1", "외국인·기관이 함께 팔고 개인이 받아내면 성립합니다.", "물타기 위험으로 보고 추가매수를 차단하거나 손실 기준 확인을 우선합니다."],
+      ["조건부 추가매수", "graph.loss_smart_money.add_buy_review.v1", "손실 구간에서 외국인·기관 동반 순매수와 가격 회복, 거래량, 체결강도, 매수 호가 우위 중 여러 확인 조건이 같이 맞으면 성립합니다.", "소액 분할 추가매수 검토가 가능하지만 악재 공시, 비중 초과, 데이터 결측이 있으면 다시 낮춰 봅니다."],
+      ["수익 보호", "graph.profit_protect.trend_break.v1", "수익 중인 보유 종목이 계정 수익 보호 기준을 넘었고 20일 평균 아래로 약해지면 성립합니다.", "수익을 지키기 위한 분할축소 기준을 확인합니다."]
+    ];
+    var gateRows = [
+      ["무조건 후보가 되는 변화", "손익률이 계정 손실 구간에 들어가거나 수익 보호 구간에 들어갈 때", "보유 종목은 관심 종목보다 손익과 비중을 우선합니다.", "손익 구간, 보유 비중, 매도 가능 수량을 먼저 봅니다."],
+      ["쿨다운을 풀 수 있는 변화", "손익률 1%p 이상 개선·악화, 60일 평균 아래 전환, 새 뉴스·공시, 최종 행동 변경", "같은 유형이어도 실제 상태가 바뀐 것으로 보고 다시 보낼 수 있습니다.", "메시지 상단과 알림이 온 이유에 어떤 변화였는지 표시합니다."],
+      ["메시지를 막는 경우", "이전과 같은 조건이 계속되고 새 원천 근거가 없으며 쿨다운 시간도 지나지 않았을 때", "반복 알림으로 집중이 깨지지 않도록 발송을 보류합니다.", "하이닉스가 올라도 1%p 기준을 넘지 않거나 최종 행동이 그대로면 메시지가 안 올 수 있습니다."],
+      ["데이터를 약하게 보는 경우", "투자자별 수급이 이전 조회와 같거나 KIS 응답이 비어 있거나 지연 상태일 때", "수급이 판단에 들어가더라도 확신을 낮춥니다.", "메시지의 데이터 빈 곳 또는 최신성 설명에 남깁니다."],
+      ["추론 상태 알림", "TypeDB InferenceBox 결과가 0개이거나 RuleBox 실행이 실패할 때", "투자 신호가 아니라 판단 엔진 점검 신호입니다.", "매수·매도 의견을 만들지 않고 TypeDB, RuleBox, 워커 상태를 확인하라고 보냅니다."]
+    ];
+    return [
+      '<article class="panel system-event-panel">',
+      '<div class="panel-head"><div><p class="label">HYNIX ALERT FLOW</p><h2>SK하이닉스 알림이 오는 전체 흐름</h2><span>000660 보유 알림은 데이터 수집, TypeDB 관계 추론, AI 의견 검증, 쿨다운 게이트를 모두 통과해야 발송됩니다.</span></div></div>',
+      '<div class="system-guide-note">',
+      '<strong>한 줄 요약</strong>',
+      '<p>하이닉스 메시지는 “가격이 움직였다”만으로 오지 않습니다. 보유 손익, 평균 가격 위치, 투자자별 수급, 뉴스·공시, 계정 투자 성향, 이전 알림 대비 변화가 함께 의미 있다고 판단될 때 옵니다.</p>',
+      '</div>',
+      '<div class="system-event-track" aria-label="SK하이닉스 알림 처리 단계">',
+      steps.map(function (step) {
+        return [
+          '<section class="system-event-row"' + cardTypeAttrs("process-card") + '>',
+          '<b>' + escapeHtml(step[0]) + '</b>',
+          '<code>' + escapeHtml(step[2]) + '</code>',
+          '<strong>' + escapeHtml(step[1]) + '</strong>',
+          '<p>' + escapeHtml(step[3]) + '</p>',
+          '</section>'
+        ].join("");
+      }).join(""),
+      '</div>',
+      '<div class="system-lineage-grid" role="table" aria-label="SK하이닉스 관계 규칙">',
+      '<div class="system-lineage-head" role="row"><span>판단 축</span><span>RuleBox 규칙</span><span>성립 조건</span><span>메시지 영향</span></div>',
+      ruleRows.map(function (row) {
+        return [
+          '<div class="system-lineage-row" role="row"' + cardTypeAttrs("relationship-card") + '>',
+          '<strong>' + escapeHtml(row[0]) + '</strong>',
+          '<code>' + escapeHtml(row[1]) + '</code>',
+          '<span>' + escapeHtml(row[2]) + '</span>',
+          '<em>' + escapeHtml(row[3]) + '</em>',
+          '</div>'
+        ].join("");
+      }).join(""),
+      '</div>',
+      '<div class="system-lineage-grid" role="table" aria-label="SK하이닉스 발송 게이트">',
+      '<div class="system-lineage-head" role="row"><span>게이트</span><span>조건</span><span>설명</span><span>운영 포인트</span></div>',
+      gateRows.map(function (row) {
+        return [
+          '<div class="system-lineage-row" role="row"' + cardTypeAttrs("reference-card") + '>',
+          '<strong>' + escapeHtml(row[0]) + '</strong>',
+          '<code>' + escapeHtml(row[1]) + '</code>',
+          '<span>' + escapeHtml(row[2]) + '</span>',
+          '<em>' + escapeHtml(row[3]) + '</em>',
+          '</div>'
+        ].join("");
+      }).join(""),
       '</div>',
       '</article>'
     ].join("");

@@ -270,6 +270,50 @@ class TossBaseCurrencyValueTests(unittest.TestCase):
         self.assertNotIn(secret, message)
         self.assertIn("apikey=***", message)
 
+        state = provider.provider_state_from({"providerState": {"alpha": {"lastError": "api key as " + secret}}})
+        self.assertNotIn(secret, state["alpha"]["lastError"])
+        self.assertIn("api key as ***", state["alpha"]["lastError"])
+
+    def test_alpha_fx_rate_uses_daily_cache_after_success(self):
+        calls = []
+
+        def fake_fetch(url, _headers=None):
+            calls.append(url)
+            return {
+                "Realtime Currency Exchange Rate": {
+                    "5. Exchange Rate": "1419.7000",
+                    "6. Last Refreshed": "2026-07-15 00:00:00",
+                }
+            }
+
+        provider = ExternalSignalProvider(
+            settings={
+                "fxRates": "KRW=1\nUSD=1400",
+                "alphaVantageApiKey": "test-key",
+                "externalAlphaEnabled": "1",
+                "externalFxRateEnabled": "1",
+                "externalFxRateFetchIntervalHours": "24",
+                "externalApiRetryAttempts": "1",
+                "externalAlphaRateLimitSeconds": "0",
+                "externalApiRateLimitSeconds": "0",
+            },
+            cache=object(),
+            evidence_store=object(),
+            fetch_json=fake_fetch,
+            sleep=lambda _seconds: None,
+        )
+        provider.provider_state = {}
+
+        first = provider.live_fx_rates({"statuses": []}, ["USD"])
+        second = provider.live_fx_rates({"statuses": []}, ["USD"])
+
+        self.assertEqual(1, len(calls))
+        self.assertEqual(1419.7, first["USD"]["rate"])
+        self.assertEqual(1419.7, second["USD"]["rate"])
+        self.assertEqual("fresh-fetch", first["USD"]["cacheStatus"])
+        self.assertEqual("daily-cache", second["USD"]["cacheStatus"])
+        self.assertIn("alpha-vantage:fx-daily:USDKRW", provider.provider_state)
+
     def test_us_position_alert_value_uses_live_fx_over_stale_toss_krw_value(self):
         position = normalize_position(
             {

@@ -681,6 +681,7 @@ def runtime_settings() -> Dict[str, str]:
         "externalApiCircuitFailures": value("externalApiCircuitFailures", "EXTERNAL_API_CIRCUIT_FAILURES", "2"),
         "externalApiCircuitCooldownMinutes": value("externalApiCircuitCooldownMinutes", "EXTERNAL_API_CIRCUIT_COOLDOWN_MINUTES", "30"),
         "externalFxRateEnabled": value("externalFxRateEnabled", "EXTERNAL_FX_RATE_ENABLED", "1"),
+        "externalFxRateFetchIntervalHours": value("externalFxRateFetchIntervalHours", "EXTERNAL_FX_RATE_FETCH_INTERVAL_HOURS", "24"),
         "externalFredMaxSeries": value("externalFredMaxSeries", "EXTERNAL_FRED_MAX_SERIES", "5"),
         "externalCryptoMaxIds": value("externalCryptoMaxIds", "EXTERNAL_CRYPTO_MAX_IDS", "50"),
         "externalDartMaxSymbols": value("externalDartMaxSymbols", "EXTERNAL_DART_MAX_SYMBOLS", "5"),

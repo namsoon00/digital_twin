@@ -5,12 +5,13 @@ from typing import Dict, List
 from ..domain.market_data import number
 from ..domain.portfolio_calculations import (
     BROKER_FX_SOURCE_TYPE,
+    DAILY_MARKET_FX_SOURCE_TYPE,
     FALLBACK_FX_SOURCE_TYPE,
     LIVE_MARKET_FX_SOURCE_TYPE,
     broker_fx_rates_from_positions,
 )
 from ..domain.portfolio import Position, utc_now_iso
-from .external_signal_utils import symbol_assignments, symbol_list
+from .external_signal_utils import parse_iso, symbol_assignments, symbol_list
 
 
 class ExternalSignalMarketMixin:
@@ -147,8 +148,8 @@ class ExternalSignalMarketMixin:
                 provider = str(broker.get("provider") or "BrokerAccount")
                 last_updated = str(broker.get("lastUpdated") or "")
             elif live_rate:
-                source_type = LIVE_MARKET_FX_SOURCE_TYPE
-                evidence_strength = "live_market"
+                source_type = str(live.get("sourceType") or DAILY_MARKET_FX_SOURCE_TYPE)
+                evidence_strength = str(live.get("evidenceStrength") or "daily_market")
                 provider = str(live.get("provider") or "Alpha Vantage")
                 last_updated = str(live.get("lastUpdated") or "")
             row = {
@@ -174,8 +175,10 @@ class ExternalSignalMarketMixin:
                 row.update({
                     "marketRate": live_rate,
                     "marketProvider": str(live.get("provider") or "Alpha Vantage"),
-                    "marketSourceType": LIVE_MARKET_FX_SOURCE_TYPE,
+                    "marketSourceType": str(live.get("sourceType") or DAILY_MARKET_FX_SOURCE_TYPE),
                     "marketLastUpdated": str(live.get("lastUpdated") or ""),
+                    "marketFetchedAt": str(live.get("fetchedAt") or ""),
+                    "marketCacheStatus": str(live.get("cacheStatus") or ""),
                 })
             if fallback_rate:
                 row["fallbackRate"] = fallback_rate
@@ -203,9 +206,13 @@ class ExternalSignalMarketMixin:
             if rate <= 0:
                 continue
             row = dict(existing)
-            previous_live_rate = number(row.get("marketRate") or (row.get("rate") if row.get("sourceType") == LIVE_MARKET_FX_SOURCE_TYPE else 0.0))
-            previous_live_provider = str(row.get("marketProvider") or (row.get("provider") if row.get("sourceType") == LIVE_MARKET_FX_SOURCE_TYPE else "") or "")
-            previous_live_updated = str(row.get("marketLastUpdated") or (row.get("lastUpdated") if row.get("sourceType") == LIVE_MARKET_FX_SOURCE_TYPE else "") or "")
+            is_market_fx = row.get("sourceType") in {LIVE_MARKET_FX_SOURCE_TYPE, DAILY_MARKET_FX_SOURCE_TYPE}
+            previous_live_rate = number(row.get("marketRate") or (row.get("rate") if is_market_fx else 0.0))
+            previous_live_provider = str(row.get("marketProvider") or (row.get("provider") if is_market_fx else "") or "")
+            previous_live_updated = str(row.get("marketLastUpdated") or (row.get("lastUpdated") if is_market_fx else "") or "")
+            previous_live_source_type = str(row.get("marketSourceType") or (row.get("sourceType") if is_market_fx else "") or "")
+            previous_live_fetched_at = str(row.get("marketFetchedAt") or (row.get("fetchedAt") if is_market_fx else "") or "")
+            previous_live_cache_status = str(row.get("marketCacheStatus") or (row.get("cacheStatus") if is_market_fx else "") or "")
             row.update({
                 "provider": str(broker.get("provider") or "BrokerAccount"),
                 "base": str(broker.get("base") or pair[:3]).upper(),
@@ -225,8 +232,10 @@ class ExternalSignalMarketMixin:
             if previous_live_rate:
                 row["marketRate"] = previous_live_rate
                 row["marketProvider"] = previous_live_provider or "Alpha Vantage"
-                row["marketSourceType"] = LIVE_MARKET_FX_SOURCE_TYPE
+                row["marketSourceType"] = previous_live_source_type or DAILY_MARKET_FX_SOURCE_TYPE
                 row["marketLastUpdated"] = previous_live_updated
+                row["marketFetchedAt"] = previous_live_fetched_at
+                row["marketCacheStatus"] = previous_live_cache_status
             rates[pair] = row
 
     def live_fx_rates(self, signals: Dict[str, object], currencies: List[str]) -> Dict[str, Dict[str, object]]:
@@ -237,6 +246,11 @@ class ExternalSignalMarketMixin:
         for currency in currencies:
             base = str(currency or "").upper().strip()
             if not base or base == "KRW":
+                continue
+            cached = self.alpha_fx_daily_cache(base)
+            if cached:
+                rows[base] = cached
+                self.status(signals, "Alpha Vantage", True, "fx:" + base + "KRW daily cache")
                 continue
             try:
                 def fetch_rate():
@@ -268,12 +282,79 @@ class ExternalSignalMarketMixin:
                             or data.get("lastUpdated")
                             or ""
                         ) if isinstance(data, dict) else "",
+                        "fetchedAt": utc_now_iso(),
+                        "sourceType": DAILY_MARKET_FX_SOURCE_TYPE,
+                        "evidenceStrength": "daily_market",
+                        "cacheStatus": "fresh-fetch",
                     }
 
-                rows[base] = self.guarded_call("Alpha Vantage", "fx:" + base + "KRW", fetch_rate)
+                row = self.guarded_call("Alpha Vantage", "fx:" + base + "KRW", fetch_rate)
+                self.save_alpha_fx_daily_cache(base, row)
+                rows[base] = row
             except Exception as error:  # noqa: BLE001
                 self.status_for_error(signals, "Alpha Vantage", "fx:" + base + "KRW", error)
+                stale = self.alpha_fx_stored_cache(base)
+                if stale:
+                    rows[base] = stale
         return rows
+
+    def alpha_fx_daily_cache_key(self, base: str) -> str:
+        return "alpha-vantage:fx-daily:" + str(base or "").upper().strip() + "KRW"
+
+    def alpha_fx_daily_cache_hours(self) -> int:
+        return self.int_setting("externalFxRateFetchIntervalHours", 24, 1)
+
+    def alpha_fx_daily_cache(self, base: str) -> Dict[str, object]:
+        row = self.alpha_fx_stored_cache(base)
+        if not row:
+            return {}
+        fetched_at = parse_iso(str(row.get("fetchedAt") or ""))
+        if not fetched_at:
+            return {}
+        if datetime.now(timezone.utc) - fetched_at >= timedelta(hours=self.alpha_fx_daily_cache_hours()):
+            return {}
+        cached = dict(row)
+        cached["cacheStatus"] = "daily-cache"
+        return cached
+
+    def alpha_fx_stored_cache(self, base: str) -> Dict[str, object]:
+        key = self.alpha_fx_daily_cache_key(base)
+        entry = self.provider_state.get(key) if isinstance(getattr(self, "provider_state", None), dict) else {}
+        if not isinstance(entry, dict):
+            return {}
+        rate = number(entry.get("rate"))
+        if rate <= 0:
+            return {}
+        row = {
+            "provider": "Alpha Vantage",
+            "base": str(base or "").upper().strip(),
+            "quote": "KRW",
+            "rate": rate,
+            "lastUpdated": str(entry.get("lastUpdated") or ""),
+            "fetchedAt": str(entry.get("fetchedAt") or ""),
+            "sourceType": DAILY_MARKET_FX_SOURCE_TYPE,
+            "evidenceStrength": "daily_market",
+            "cacheStatus": str(entry.get("cacheStatus") or "stored-cache"),
+        }
+        return row
+
+    def save_alpha_fx_daily_cache(self, base: str, row: Dict[str, object]) -> None:
+        if not isinstance(getattr(self, "provider_state", None), dict):
+            self.provider_state = {}
+        rate = number((row or {}).get("rate"))
+        if rate <= 0:
+            return
+        self.provider_state[self.alpha_fx_daily_cache_key(base)] = {
+            "provider": "Alpha Vantage",
+            "base": str(base or "").upper().strip(),
+            "quote": "KRW",
+            "rate": rate,
+            "lastUpdated": str((row or {}).get("lastUpdated") or ""),
+            "fetchedAt": str((row or {}).get("fetchedAt") or utc_now_iso()),
+            "sourceType": DAILY_MARKET_FX_SOURCE_TYPE,
+            "evidenceStrength": "daily_market",
+            "cacheStatus": "stored-cache",
+        }
 
     def add_opendart(self, signals: Dict[str, object], positions: List[Position]) -> None:
         if not self.external_api_enabled("externalDartEnabled"):

@@ -249,6 +249,37 @@ class MacroFxOntologyTests(unittest.TestCase):
         self.assertEqual("account_applied", entries["USDKRW"]["evidenceStrength"])
         self.assertEqual(1419.7, entries["USDKRW"]["valuationRate"])
 
+    def test_fx_context_line_marks_daily_market_rate(self):
+        position = Position(
+            symbol="AAPL",
+            name="Apple",
+            market="US",
+            currency="USD",
+            market_value=1000,
+            sector="AI/플랫폼",
+        )
+        context = evaluate_position_relation_rules(
+            position,
+            portfolio_summary([position], fx_rates={"USD": 1419.7, "KRW": 1}),
+            external_signals={
+                "fxRates": {
+                    "USDKRW": {
+                        "provider": "Alpha Vantage",
+                        "base": "USD",
+                        "quote": "KRW",
+                        "rate": 1419.7,
+                        "sourceType": "market_daily",
+                        "evidenceStrength": "daily_market",
+                    }
+                }
+            },
+        )
+
+        summary_lines = relation_rule_context_summary_lines(context)
+
+        self.assertEqual("market_daily", context["facts"]["fxSourceType"])
+        self.assertTrue(any("환율: USD/KRW" in line and "일일 API 갱신" in line for line in summary_lines))
+
     def test_absolute_macro_fx_levels_do_not_trigger_without_deltas(self):
         position = Position(
             symbol="NVDA",

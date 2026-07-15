@@ -143,6 +143,7 @@ def fx_fact_line(facts: Dict[str, object]) -> str:
     provider = str(facts.get("fxProvider") or "").strip()
     source_labels = {
         "market_realtime": "실시간 API",
+        "market_daily": "일일 API 갱신",
         "broker_applied_valuation": "계좌 적용 환율",
         "fallback_setting": "설정값 기준",
     }

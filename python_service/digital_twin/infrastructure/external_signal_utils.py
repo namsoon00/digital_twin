@@ -1,4 +1,5 @@
 import json
+import re
 import time
 import urllib.error
 import urllib.parse
@@ -71,13 +72,23 @@ def percent_text(value: object) -> float:
     return number(str(value or "").replace("%", ""))
 
 
+def sanitize_sensitive_text(value: object) -> str:
+    text = str(value or "")
+    if not text:
+        return ""
+    text = re.sub(r"(?i)(apikey=)[^&\s]+", r"\1***", text)
+    text = re.sub(r"(?i)(api[_ -]?key(?: is|:)?\s+)[A-Za-z0-9+/=_-]{8,}", r"\1***", text)
+    text = re.sub(r"[A-Za-z0-9+/=_-]{48,}", "***", text)
+    return text
+
+
 def api_error_text(error: Exception) -> str:
     if isinstance(error, urllib.error.HTTPError):
         reason = str(error.reason or "").strip()
-        return "HTTP " + str(error.code) + (" " + reason if reason else "")
+        return sanitize_sensitive_text("HTTP " + str(error.code) + (" " + reason if reason else ""))[:120]
     if isinstance(error, urllib.error.URLError):
-        return "URL error " + str(error.reason or error)[:120]
-    return str(error or type(error).__name__)[:120]
+        return sanitize_sensitive_text("URL error " + str(error.reason or error))[:120]
+    return sanitize_sensitive_text(str(error or type(error).__name__))[:120]
 
 
 def root_api_error(error: Exception) -> Exception:

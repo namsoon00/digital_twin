@@ -9,6 +9,7 @@ DEFAULT_FX_RATES = {"KRW": 1.0, "USD": 1400.0}
 BROKER_FX_SOURCE_TYPE = "broker_applied_valuation"
 FALLBACK_FX_SOURCE_TYPE = "fallback_setting"
 LIVE_MARKET_FX_SOURCE_TYPE = "market_realtime"
+DAILY_MARKET_FX_SOURCE_TYPE = "market_daily"
 
 
 def market_key(position: Position) -> str:

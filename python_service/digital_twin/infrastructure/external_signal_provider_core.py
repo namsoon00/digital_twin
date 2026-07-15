@@ -1,6 +1,5 @@
 import hashlib
 import json
-import re
 from datetime import datetime, timedelta, timezone
 from typing import Callable, Dict, Iterable, List
 
@@ -14,6 +13,7 @@ from .external_signal_utils import (
     ExternalRateLimited,
     default_json_fetcher,
     parse_iso,
+    sanitize_sensitive_text,
     symbol_assignments,
     symbol_list,
 )
@@ -121,7 +121,15 @@ class ExternalSignalCoreMixin:
 
     def provider_state_from(self, payload: Dict[str, object]) -> Dict[str, object]:
         state = payload.get("providerState") if isinstance(payload.get("providerState"), dict) else {}
-        return {str(key): dict(value) for key, value in state.items() if isinstance(value, dict)}
+        rows = {}
+        for key, value in state.items():
+            if not isinstance(value, dict):
+                continue
+            row = dict(value)
+            if row.get("lastError"):
+                row["lastError"] = sanitize_sensitive_text(row.get("lastError"))[:120]
+            rows[str(key)] = row
+        return rows
 
     def cache_key_for_positions(self, positions: List[Position]) -> str:
         payload = {
@@ -137,7 +145,8 @@ class ExternalSignalCoreMixin:
             "newsProvider": self.news_provider(),
             "newsMax": str(self.settings.get("externalNewsMaxSymbols") or "3"),
             "newsLookbackHours": str(self.settings.get("externalNewsLookbackHours") or "48"),
-            "fxRateSourceVersion": "broker-account-priority-v1",
+            "fxRateSourceVersion": "broker-account-alpha-daily-v1",
+            "fxRateFetchIntervalHours": str(self.settings.get("externalFxRateFetchIntervalHours") or "24"),
             "alphaRateLimitSeconds": str(self.settings.get("externalAlphaRateLimitSeconds") or "15"),
             "secMappings": symbol_assignments(self.settings.get("externalSecCompanyCiks") or ""),
             "dartLookbackDays": str(self.settings.get("externalDartLookbackDays") or "14"),
@@ -260,10 +269,4 @@ class ExternalSignalCoreMixin:
         self.status(signals, source, isinstance(error, ExternalRateLimited), message + self.safe_error_message(error))
 
     def safe_error_message(self, error: Exception) -> str:
-        text = str(error or "")
-        if not text:
-            return ""
-        text = re.sub(r"(?i)(apikey=)[^&\s]+", r"\1***", text)
-        text = re.sub(r"(?i)(api[_ -]?key(?: is|:)?\s+)[A-Za-z0-9+/=_-]{12,}", r"\1***", text)
-        text = re.sub(r"[A-Za-z0-9+/=_-]{48,}", "***", text)
-        return text[:120]
+        return sanitize_sensitive_text(error)[:120]

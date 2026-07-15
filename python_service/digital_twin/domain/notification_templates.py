@@ -793,44 +793,103 @@ def message_delivery_level(context: Dict[str, object]) -> str:
     return str(profile.get("level") or context.get("messageDeliveryLevel") or "").strip()
 
 
+def relation_subject_name(context: Dict[str, object], relation_context: Dict[str, object]) -> str:
+    subject = relation_context.get("subject") if isinstance(relation_context.get("subject"), dict) else {}
+    for value in [
+        subject.get("name"),
+        context.get("displaySymbolName") if isinstance(context, dict) else "",
+        context.get("symbolDisplayName") if isinstance(context, dict) else "",
+        context.get("displayTarget") if isinstance(context, dict) else "",
+        context.get("target") if isinstance(context, dict) else "",
+        subject.get("symbol"),
+    ]:
+        text = str(value or "").strip()
+        if not text:
+            continue
+        return text.split("/", 1)[0].strip() or text
+    return "이 종목"
+
+
+def sentence_text(value: object) -> str:
+    text = absolute_beginner_friendly_text(value).strip()
+    if not text:
+        return ""
+    if text.endswith((".", "!", "?")):
+        return text
+    if text.endswith(("다", "요")):
+        return text + "."
+    return text + "입니다."
+
+
+def absolute_beginner_action_group_sentence(relation_context: Dict[str, object]) -> str:
+    easy = beginner_relation_decision_line(relation_context)
+    if easy:
+        return sentence_text(easy.replace("쉽게 말하면: ", ""))
+    decision = relation_context.get("decision") if isinstance(relation_context.get("decision"), dict) else {}
+    label = str(decision.get("label") or "").strip()
+    if label:
+        return sentence_text(label + " 상태라서 다음 데이터에서도 같은 흐름이 이어지는지 확인해야 합니다")
+    return ""
+
+
+def absolute_beginner_rule_sentence(item: Dict[str, object]) -> str:
+    text = " ".join(str(rule_value(item, "ruleId", "rule_id", "label", "relationType", "relation_type") or "").split())
+    lowered = text.casefold()
+    if "execution.capacity" in lowered or "작은 실행 노출" in text or "실행 가능 용량" in text:
+        return "보유 수량과 주문 규모를 보면, 팔기로 정했을 때 주문 자체가 무리 없는지도 함께 확인했습니다."
+    if "benchmark.beta" in lowered or "벤치마크 베타" in text:
+        return "이 종목은 시장 전체 흐름과 같이 움직일 수 있어, 지수와 금리도 함께 확인해야 합니다."
+    if "disclosure.event_risk" in lowered or "공시" in text:
+        return "새 공시나 신고가 있어, 원문 내용과 다음 가격 반응을 함께 확인해야 합니다."
+    if "news.direct" in lowered or "리스크 뉴스" in text or "위험 뉴스" in text:
+        return "직접 관련된 위험 뉴스가 있어, 기사 원문과 가격 반응을 같이 봐야 합니다."
+    if "loss" in lowered or "손실" in text:
+        return "손실률과 가격 흐름 약화가 함께 보여, 추가매수보다 손실 관리 기준을 먼저 확인해야 합니다."
+    if "profit" in lowered or "수익" in text or "익절" in text:
+        return "수익이 남아 있어도 가격 흐름이 약해지면, 일부 수익을 지킬지 먼저 확인해야 합니다."
+    label = str(rule_value(item, "label", "name")).strip()
+    if not label:
+        return ""
+    clean = absolute_beginner_friendly_text(label).replace("추론", "점검").replace("->", "→")
+    if "→" in clean:
+        left, right = [part.strip() for part in clean.split("→", 1)]
+        left = left.replace(" + ", "이고 ")
+        return sentence_text(left + " 조건이 확인되어, " + right + " 항목을 점검하라는 뜻입니다")
+    return sentence_text(clean)
+
+
 def absolute_beginner_ontology_modeling_lines(context: Dict[str, object]) -> List[str]:
     relation_context = ontology_relation_context(context)
     if not relation_context:
         return []
     lines: List[str] = []
+    subject_name = relation_subject_name(context, relation_context)
     strength = relation_context.get("signalStrength")
     strength_label = str(relation_context.get("signalStrengthLabel") or "").strip()
     confidence = relation_context.get("confidence")
-    if strength not in (None, ""):
-        score_text = strength_label + " (" + format_score_value(strength) + "점)" if strength_label else format_score_value(strength) + "점"
-        if confidence not in (None, ""):
-            score_text += " · 신뢰도 " + format_score_value(confidence) + "%"
-        lines.append("확인 필요 점수: " + score_text)
-        lines.append("점수 뜻: 가격이 오를지 맞히는 점수가 아니라, 지금 다시 확인해야 할 정도를 나타냅니다.")
     decision = relation_context.get("decision") if isinstance(relation_context.get("decision"), dict) else {}
     decision_label = str(decision.get("label") or "").strip()
     if decision_label:
-        lines.append("관계 분석이 본 상황: " + decision_label)
-    easy_decision = beginner_relation_decision_line(relation_context)
-    if easy_decision:
-        lines.append(easy_decision.replace("쉽게 말하면: ", "쉽게 말하면: "))
+        lines.append(sentence_text("관계 분석은 " + subject_name + "에 대해 '" + decision_label + "' 상태로 봤습니다"))
+    if strength not in (None, ""):
+        score_text = format_score_value(strength) + "점"
+        if strength_label:
+            score_text += "으로 '" + strength_label + "' 수준"
+        if confidence not in (None, ""):
+            score_text += "이고, 신뢰도는 " + format_score_value(confidence) + "%"
+        lines.append(sentence_text(score_text + "입니다. 이 점수는 가격이 오를지 맞히는 값이 아니라, 지금 다시 확인해야 할 정도를 나타냅니다"))
+    action_sentence = absolute_beginner_action_group_sentence(relation_context)
+    if action_sentence:
+        lines.append(action_sentence)
     rules = relation_context.get("activeRules") or relation_context.get("matchedRules") or []
-    easy_rows: List[str] = []
+    rule_sentences: List[str] = []
     for item in rules:
         if not isinstance(item, dict) or item.get("referenceOnly") or item.get("reference_only"):
             continue
-        easy = beginner_rule_explanation(item)
-        if easy:
-            easy_rows.append(easy)
-            continue
-        label = str(rule_value(item, "label", "name")).strip()
-        score = rule_value(item, "strengthScore", "strength_score", "score")
-        if label:
-            text = absolute_beginner_friendly_text(label.replace("->", "→"))
-            if score not in (None, ""):
-                text += " (" + format_score_value(score) + "점)"
-            easy_rows.append("왜 이렇게 봤나: " + text)
-    for row in easy_rows[:3]:
+        sentence = absolute_beginner_rule_sentence(item)
+        if sentence:
+            rule_sentences.append(sentence)
+    for row in rule_sentences[:3]:
         if row not in lines:
             lines.append(row)
     return [absolute_beginner_friendly_text(line) for line in lines if str(line or "").strip()]

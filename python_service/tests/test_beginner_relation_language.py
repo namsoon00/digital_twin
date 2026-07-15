@@ -204,6 +204,7 @@ class BeginnerRelationLanguageTests(unittest.TestCase):
                 "messageType": "investmentInsight",
                 "messageDeliveryLevel": "absoluteBeginner",
                 "telegramMessage": "<b>[관찰] 🛡️ SK하이닉스: 분할축소 우선 점검</b>",
+                "displayTarget": "SK하이닉스 / 000660",
                 "ontologyRelationContext": {
                     "graphStoreUsed": True,
                     "inferenceBoxUsed": True,
@@ -233,10 +234,14 @@ class BeginnerRelationLanguageTests(unittest.TestCase):
         )
 
         self.assertIn("<b>관계 판단 쉽게 보기</b>", message)
-        self.assertIn("확인 필요 점수", message)
-        self.assertIn("가격이 오를지 맞히는 점수가 아니라", message)
+        self.assertIn("관계 분석은 SK하이닉스", message)
+        self.assertIn("94점으로", message)
+        self.assertIn("가격이 오를지 맞히는 값이 아니라", message)
         self.assertIn("뉴스나 공시 때문에 보유 이유를 다시 확인", message)
-        self.assertIn("매도해야 한다는 뜻은 아닙니다", message)
+        self.assertIn("매도 확정은 아닙니다", message)
+        self.assertIn("새 공시나 신고가 있어, 원문 내용과 다음 가격 반응을 함께 확인해야 합니다.", message)
+        self.assertNotIn("습니다입니다", message)
+        self.assertNotIn("SK하이닉스을", message)
         self.assertNotIn("엔진", message)
         self.assertNotIn("선택 규칙", message)
         self.assertNotIn("성립 규칙", message)

@@ -131,6 +131,12 @@ def resolve_decision_stage(rule_id: str, score: float, facts: Dict[str, object])
         return decision_stage_by_key("FLOW_DEFENSE" if value >= 55 else "FLOW_WATCH")
     if rule_id == "holding.loss_smart_money.defense.v1":
         return decision_stage_by_key("FLOW_DEFENSE")
+    if rule_id in {"holding.investor_flow.smart_money_accumulation.v1", "graph.investor_flow.smart_money_accumulation.v1"}:
+        return decision_stage_by_key("FLOW_DEFENSE")
+    if rule_id in {"holding.investor_flow.retail_dip_buying_risk.v1", "graph.investor_flow.retail_dip_buying_risk.v1"}:
+        return decision_stage_by_key("ADD_BUY_BLOCKED")
+    if rule_id in {"holding.investor_flow.smart_money_outflow_risk.v1", "graph.investor_flow.smart_money_outflow_risk.v1"}:
+        return decision_stage_by_key("LIQUIDITY_REVIEW")
     if rule_id == "holding.loss_smart_money.reversal_watch.v1":
         return decision_stage_by_key("ADD_BUY_WATCH")
     if rule_id == "holding.loss_smart_money.add_buy_review.v1":

@@ -1,5 +1,6 @@
 from typing import Dict, List
 
+from .investor_flow_psychology import investor_flow_psychology
 from .market_data import clamp, number
 from .ontology_contracts import PortfolioOntology
 from .ontology_schema import add_entity, add_relation
@@ -26,10 +27,10 @@ def symbol_key(position: Position) -> str:
 
 
 def smart_money_score(position: Position) -> float:
-    foreign_net = number(position.foreign_net_volume) or number(position.foreign_buy_volume) - number(position.foreign_sell_volume)
-    institution_net = number(position.institution_net_volume) or number(position.institution_buy_volume) - number(position.institution_sell_volume)
-    base = abs(foreign_net) + abs(institution_net)
-    return clamp(((foreign_net + institution_net) / base) * 100, -100.0, 100.0) if base else 0.0
+    profile = investor_flow_psychology(position)
+    smart_money = number(profile.get("smartMoneyNetVolume"))
+    base = abs(number(profile.get("foreignNetVolume"))) + abs(number(profile.get("institutionNetVolume")))
+    return clamp((smart_money / base) * 100, -100.0, 100.0) if base else 0.0
 
 def trend_score(position: Position) -> float:
     return clamp(
@@ -304,11 +305,12 @@ def volume_profile(position: Position) -> Dict[str, object]:
     }
 
 def smart_money_joint_flow_profile(position: Position) -> Dict[str, object]:
-    foreign_net = number(position.foreign_net_volume) or number(position.foreign_buy_volume) - number(position.foreign_sell_volume)
-    institution_net = number(position.institution_net_volume) or number(position.institution_buy_volume) - number(position.institution_sell_volume)
-    smart_money_net = foreign_net + institution_net
-    joint_inflow = foreign_net > 0 and institution_net > 0
-    joint_outflow = foreign_net < 0 and institution_net < 0
+    profile = investor_flow_psychology(position)
+    foreign_net = number(profile.get("foreignNetVolume"))
+    institution_net = number(profile.get("institutionNetVolume"))
+    smart_money_net = number(profile.get("smartMoneyNetVolume"))
+    joint_inflow = bool(profile.get("jointSmartMoneyInflow"))
+    joint_outflow = bool(profile.get("jointSmartMoneyOutflow"))
     return {
         "field": "jointSmartMoneyInflow" if joint_inflow else "jointSmartMoneyOutflow" if joint_outflow else "mixedSmartMoneyFlow",
         "value": round(smart_money_net, 2),
@@ -319,6 +321,9 @@ def smart_money_joint_flow_profile(position: Position) -> Dict[str, object]:
         "jointSmartMoneyOutflow": joint_outflow,
         "direction": "joint_inflow" if joint_inflow else "joint_outflow" if joint_outflow else "mixed",
     }
+
+def investor_flow_psychology_profile(position: Position) -> Dict[str, object]:
+    return investor_flow_psychology(position)
 
 def missing_market_microstructure_fields(position: Position) -> List[Dict[str, str]]:
     missing: List[Dict[str, str]] = []
@@ -603,6 +608,31 @@ def add_price_level_and_liquidity_concepts(graph: PortfolioOntology, stock_id: s
         }
         add_relation(graph, stock_id, smart_money_id, "HAS_OBSERVATION", weight=0.86, properties=smart_money_props)
         add_relation(graph, stock_id, smart_money_id, "HAS_TRADE_FLOW", weight=0.86, properties=smart_money_props)
+    investor_psychology = investor_flow_psychology_profile(position)
+    if investor_psychology.get("available"):
+        polarity = str(investor_psychology.get("polarity") or "context")
+        field_name = str(investor_psychology.get("field") or "mixedInvestorPsychology")
+        sentiment_label = str(investor_psychology.get("sentimentLabel") or "투자자별 수급 심리")
+        sentiment_id = add_entity(graph, "investor-flow-sentiment", symbol + ":" + field_name, (position.name or symbol) + " " + sentiment_label, {
+            "tboxClass": str(investor_psychology.get("tboxClass") or "InvestorFlowSentiment"),
+            "tboxClasses": list(investor_psychology.get("tboxClasses") or ["Observation", "FlowObservation", "InvestorFlowSentiment"]),
+            "symbol": symbol,
+            "source": source,
+            "polarity": polarity,
+            **investor_psychology,
+        })
+        sentiment_props = {
+            "source": source,
+            "field": field_name,
+            "signalGroup": "investorPsychology",
+            "polarity": polarity,
+            "supportImpact": number(investor_psychology.get("supportImpact")),
+            "riskImpact": number(investor_psychology.get("riskImpact")),
+            "aiInfluenceLabel": sentiment_label,
+        }
+        weight = number(investor_psychology.get("weight")) or 0.7
+        add_relation(graph, stock_id, sentiment_id, "HAS_OBSERVATION", weight=weight, properties=sentiment_props)
+        add_relation(graph, stock_id, sentiment_id, "HAS_INVESTOR_FLOW_SENTIMENT", weight=weight, properties=sentiment_props)
     missing_fields = missing_market_microstructure_fields(position)
     if missing_fields:
         missing_id = add_entity(graph, "missing-data", symbol + ":market-microstructure", (position.name or symbol) + " 부족 데이터", {

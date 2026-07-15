@@ -132,6 +132,58 @@ class OntologyRuleBoxTests(unittest.TestCase):
         portfolio = portfolio_summary([position], account_cash=200000)
         return build_portfolio_ontology([position], portfolio, portfolio_id="rulebox-flow-test")
 
+    def retail_dip_buying_graph(self):
+        position = Position(
+            symbol="000660",
+            name="SK하이닉스",
+            market="KR",
+            currency="KRW",
+            quantity=7,
+            sellable_quantity=7,
+            average_price=2343143,
+            current_price=1913000,
+            market_value=13391000,
+            profit_loss_rate=-18.1,
+            ma20=2449050,
+            ma60=2015417,
+            ma20_distance=-21.9,
+            ma60_distance=-5.1,
+            change_rate=3.69,
+            foreign_net_volume=-665995,
+            institution_net_volume=-701427,
+            individual_net_volume=1362458,
+            volume_ratio=1.3,
+            sector="반도체",
+        )
+        portfolio = portfolio_summary([position], account_cash=200000)
+        return build_portfolio_ontology([position], portfolio, portfolio_id="rulebox-retail-dip-risk")
+
+    def smart_money_accumulation_graph(self):
+        position = Position(
+            symbol="005930",
+            name="삼성전자",
+            market="KR",
+            currency="KRW",
+            quantity=10,
+            sellable_quantity=10,
+            average_price=327000,
+            current_price=296250,
+            market_value=2962500,
+            profit_loss_rate=-9.4,
+            ma20=324112,
+            ma60=289838,
+            ma20_distance=-8.6,
+            ma60_distance=2.2,
+            change_rate=1.6,
+            foreign_net_volume=845552,
+            institution_net_volume=1107761,
+            individual_net_volume=-1739937,
+            volume_ratio=0.4,
+            sector="반도체",
+        )
+        portfolio = portfolio_summary([position], account_cash=200000)
+        return build_portfolio_ontology([position], portfolio, portfolio_id="rulebox-smart-money-accumulation")
+
     def profitable_momentum_graph(self, symbol="MSTR", settings=None):
         position = Position(
             symbol=symbol,
@@ -460,6 +512,47 @@ class OntologyRuleBoxTests(unittest.TestCase):
         self.assertTrue(flow_risk_relations)
         self.assertIn("ask-pressure", matched_ids)
         self.assertIn("volume-confirmation", matched_ids)
+
+    def test_investor_flow_psychology_blocks_retail_dip_buying(self):
+        graph = self.retail_dip_buying_graph()
+
+        sentiment = next(
+            item
+            for item in graph.entities
+            if item.kind == "investor-flow-sentiment" and (item.properties or {}).get("field") == "retailDipBuyingRisk"
+        )
+        sentiment_relations = [
+            item for item in graph.relations
+            if item.source == "stock:000660" and item.target == sentiment.entity_id and item.relation_type == "HAS_INVESTOR_FLOW_SENTIMENT"
+        ]
+        blocked_relations = [
+            item for item in graph.relations
+            if item.source == "stock:000660"
+            and item.relation_type == "BLOCKS_ACTION"
+            and (item.properties or {}).get("ruleId") == "graph.investor_flow.retail_dip_buying_risk.v1"
+        ]
+
+        self.assertEqual("risk", sentiment.properties["polarity"])
+        self.assertTrue(sentiment_relations)
+        self.assertTrue(blocked_relations)
+
+    def test_investor_flow_psychology_supports_smart_money_accumulation(self):
+        graph = self.smart_money_accumulation_graph()
+
+        sentiment = next(
+            item
+            for item in graph.entities
+            if item.kind == "investor-flow-sentiment" and (item.properties or {}).get("field") in {"smartMoneyDipAbsorption", "smartMoneyAccumulation"}
+        )
+        support_relations = [
+            item for item in graph.relations
+            if item.source == "stock:005930"
+            and item.relation_type == "HAS_INFERRED_SUPPORT"
+            and (item.properties or {}).get("ruleId") == "graph.investor_flow.smart_money_accumulation.v1"
+        ]
+
+        self.assertEqual("support", sentiment.properties["polarity"])
+        self.assertTrue(support_relations)
 
     def test_execution_metrics_keep_small_liquid_holding_from_action_block(self):
         graph = self.liquid_small_position_graph()
@@ -843,6 +936,16 @@ class OntologyRuleBoxTests(unittest.TestCase):
             for item in condition_rows
             if item["id"] == "rule-condition:graph.loss_smart_money.defense.v1:joint-smart-money-inflow"
         )
+        investor_flow_accumulation = next(
+            item
+            for item in condition_rows
+            if item["id"] == "rule-condition:graph.investor_flow.smart_money_accumulation.v1:smart-money-accumulation"
+        )
+        retail_dip_buying = next(
+            item
+            for item in condition_rows
+            if item["id"] == "rule-condition:graph.investor_flow.retail_dip_buying_risk.v1:retail-dip-buying-risk"
+        )
         add_buy_volume = next(
             item
             for item in condition_rows
@@ -896,6 +999,9 @@ class OntologyRuleBoxTests(unittest.TestCase):
 
         self.assertIn("graph.materiality.alert_candidate.v1", rule_ids)
         self.assertIn("graph.loss_smart_money.defense.v1", rule_ids)
+        self.assertIn("graph.investor_flow.smart_money_accumulation.v1", rule_ids)
+        self.assertIn("graph.investor_flow.retail_dip_buying_risk.v1", rule_ids)
+        self.assertIn("graph.investor_flow.smart_money_outflow_risk.v1", rule_ids)
         self.assertIn("graph.loss_smart_money.add_buy_review.v1", rule_ids)
         self.assertIn("graph.winner_momentum.add_buy_review.v1", rule_ids)
         self.assertIn("graph.instrument_profile.averaging_down_policy.v1", rule_ids)
@@ -954,6 +1060,14 @@ class OntologyRuleBoxTests(unittest.TestCase):
         self.assertEqual(["jointSmartMoneyInflow"], loss_smart_money["conditionTargetFields"])
         self.assertEqual(["smartMoney"], loss_smart_money["conditionRelationSignalGroups"])
         self.assertEqual(["support"], loss_smart_money["conditionRelationPolarities"])
+        self.assertEqual("HAS_INVESTOR_FLOW_SENTIMENT", investor_flow_accumulation["conditionRelationType"])
+        self.assertEqual("investor-flow-sentiment", investor_flow_accumulation["conditionTargetKind"])
+        self.assertEqual(["smartMoneyAccumulation", "smartMoneyDipAbsorption", "broadInflowConfirmation"], investor_flow_accumulation["conditionTargetFields"])
+        self.assertEqual(["investorPsychology"], investor_flow_accumulation["conditionRelationSignalGroups"])
+        self.assertEqual(["support"], investor_flow_accumulation["conditionRelationPolarities"])
+        self.assertEqual("HAS_INVESTOR_FLOW_SENTIMENT", retail_dip_buying["conditionRelationType"])
+        self.assertEqual(["retailDipBuyingRisk"], retail_dip_buying["conditionTargetFields"])
+        self.assertEqual(["risk"], retail_dip_buying["conditionRelationPolarities"])
         self.assertEqual("any", add_buy_volume["conditionRole"])
         self.assertEqual(["volumeRatio"], add_buy_volume["conditionTargetFields"])
         self.assertEqual(1.0, add_buy_volume["conditionTargetMinValue"])

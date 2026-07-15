@@ -728,6 +728,8 @@ def support_risk_scores(evidence: List[ResearchEvidence], relation_context: Dict
         combined = relation_type + " " + label
         if relation_type in {"LOSS_DEFENSE_EVIDENCE", "ADD_BUY_WATCH", "ADD_BUY_ELIGIBILITY"} or rule_id in {
             "holding.loss_smart_money.defense.v1",
+            "holding.investor_flow.smart_money_accumulation.v1",
+            "graph.investor_flow.smart_money_accumulation.v1",
             "holding.loss_smart_money.reversal_watch.v1",
             "holding.loss_smart_money.add_buy_review.v1",
             "holding.winner_momentum.add_buy_review.v1",
@@ -737,6 +739,10 @@ def support_risk_scores(evidence: List[ResearchEvidence], relation_context: Dict
             continue
         if relation_type in {"AVERAGING_DOWN_RISK"} or rule_id in {
             "holding.averaging_down.risk_guard.v1",
+            "holding.investor_flow.retail_dip_buying_risk.v1",
+            "graph.investor_flow.retail_dip_buying_risk.v1",
+            "holding.investor_flow.smart_money_outflow_risk.v1",
+            "graph.investor_flow.smart_money_outflow_risk.v1",
             "graph.instrument_profile.averaging_down_policy.v1",
         }:
             risk += min(22.0, score * 0.28)

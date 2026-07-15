@@ -2,6 +2,7 @@ from datetime import datetime, timezone
 from typing import Dict, Iterable, List, Optional
 
 from .investment_research import research_evidence_from_external_signals, research_evidence_from_facts
+from .investor_flow_psychology import investor_flow_psychology, investor_flow_values_reliable
 from .macro_context import macro_context_facts
 from .market_data import clamp, number
 from . import news_analysis as news_domain
@@ -33,8 +34,9 @@ def _position_account_weight(position: Position, portfolio: PortfolioSummary) ->
     return (number(position.market_value) / total) * 100.0
 
 
-def _investor_flow(position: Position) -> Dict[str, float]:
-    if not _investor_flow_values_reliable(position):
+def _investor_flow(position: Position) -> Dict[str, object]:
+    psychology = investor_flow_psychology(position)
+    if not investor_flow_values_reliable(position):
         return {
             "foreignNetVolume": 0.0,
             "institutionNetVolume": 0.0,
@@ -48,46 +50,27 @@ def _investor_flow(position: Position) -> Dict[str, float]:
             "jointSmartMoneyInflow": False,
             "jointSmartMoneyOutflow": False,
             "smartMoneyDirection": "unknown",
+            "investorFlowPsychology": "investorFlowUnavailable",
+            "investorFlowPsychologyLabel": str(psychology.get("sentimentLabel") or "투자자별 수급 신뢰도 낮음"),
+            "investorFlowPsychologyPolarity": "context",
         }
-    foreign_volume = number(position.foreign_net_volume) or number(position.foreign_buy_volume) - number(position.foreign_sell_volume)
-    institution_volume = number(position.institution_net_volume) or number(position.institution_buy_volume) - number(position.institution_sell_volume)
-    individual_volume = number(position.individual_net_volume) or number(position.individual_buy_volume) - number(position.individual_sell_volume)
-    foreign = foreign_volume or number(position.foreign_net_amount)
-    institution = institution_volume or number(position.institution_net_amount)
-    individual = individual_volume or number(position.individual_net_amount)
-    base = abs(foreign) + abs(institution) + abs(individual)
-    smart_money = foreign + institution
-    score = clamp((smart_money - individual * 0.35) / base * 100.0, -100.0, 100.0) if base else 0.0
-    joint_inflow = foreign > 0 and institution > 0
-    joint_outflow = foreign < 0 and institution < 0
     return {
-        "foreignNetVolume": foreign_volume,
-        "institutionNetVolume": institution_volume,
-        "individualNetVolume": individual_volume,
-        "foreignNetAmount": number(position.foreign_net_amount),
-        "institutionNetAmount": number(position.institution_net_amount),
-        "individualNetAmount": number(position.individual_net_amount),
-        "smartMoneyNetVolume": smart_money,
-        "investorFlowBase": base,
-        "investorFlowScore": score,
-        "jointSmartMoneyInflow": joint_inflow,
-        "jointSmartMoneyOutflow": joint_outflow,
-        "smartMoneyDirection": "joint_inflow" if joint_inflow else "joint_outflow" if joint_outflow else "mixed",
+        "foreignNetVolume": number(psychology.get("foreignNetVolume")),
+        "institutionNetVolume": number(psychology.get("institutionNetVolume")),
+        "individualNetVolume": number(psychology.get("individualNetVolume")),
+        "foreignNetAmount": number(psychology.get("foreignNetAmount")),
+        "institutionNetAmount": number(psychology.get("institutionNetAmount")),
+        "individualNetAmount": number(psychology.get("individualNetAmount")),
+        "smartMoneyNetVolume": number(psychology.get("smartMoneyNetVolume")),
+        "investorFlowBase": number(psychology.get("investorFlowBase")),
+        "investorFlowScore": number(psychology.get("investorFlowScore")),
+        "jointSmartMoneyInflow": bool(psychology.get("jointSmartMoneyInflow")),
+        "jointSmartMoneyOutflow": bool(psychology.get("jointSmartMoneyOutflow")),
+        "smartMoneyDirection": str(psychology.get("smartMoneyDirection") or "mixed"),
+        "investorFlowPsychology": str(psychology.get("field") or "mixedInvestorPsychology"),
+        "investorFlowPsychologyLabel": str(psychology.get("sentimentLabel") or "투자자별 수급 혼조"),
+        "investorFlowPsychologyPolarity": str(psychology.get("polarity") or "context"),
     }
-
-
-def _investor_flow_values_reliable(position: Position) -> bool:
-    coverage = position.market_signal_coverage if isinstance(position.market_signal_coverage, dict) else {}
-    investor = coverage.get("investor") if isinstance(coverage.get("investor"), dict) else {}
-    if not investor:
-        return True
-    status = str(investor.get("status") or "").strip()
-    latency_status = str(investor.get("latencyStatus") or "").strip()
-    if status in {"stale", "unknown", "unavailable", "missing", "empty"}:
-        return False
-    if investor.get("realTime") is False or latency_status or str(investor.get("cadence") or "") == "stale-repeat":
-        return False
-    return True
 
 
 def _trend_facts(position: Position) -> Dict[str, object]:
@@ -739,7 +722,7 @@ def position_signal_facts(
     orderbook_bid_volume = number(position.orderbook_bid_volume)
     orderbook_ask_volume = number(position.orderbook_ask_volume)
     bid_ask_imbalance = number(position.bid_ask_imbalance)
-    investor_values_reliable = _investor_flow_values_reliable(position)
+    investor_values_reliable = investor_flow_values_reliable(position)
     foreign_buy_volume = number(position.foreign_buy_volume) if investor_values_reliable else 0.0
     foreign_sell_volume = number(position.foreign_sell_volume) if investor_values_reliable else 0.0
     institution_buy_volume = number(position.institution_buy_volume) if investor_values_reliable else 0.0

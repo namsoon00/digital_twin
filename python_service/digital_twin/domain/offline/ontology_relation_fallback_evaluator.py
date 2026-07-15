@@ -74,6 +74,8 @@ def evaluate_position_relation_rules(
     recovery_attempt = bool(facts.get("recoveryAttempt"))
     breakdown_acceleration = bool(facts.get("breakdownAcceleration"))
     joint_smart_money_inflow = bool(facts.get("jointSmartMoneyInflow"))
+    investor_flow_psychology = str(facts.get("investorFlowPsychology") or "")
+    investor_flow_psychology_label = str(facts.get("investorFlowPsychologyLabel") or "")
     loss_recovery_signal_count = int(number(facts.get("lossRecoverySignalCount")))
     add_buy_stage = str(facts.get("addBuyEligibilityStage") or "")
     disclosure = facts.get("dartDisclosure")
@@ -647,6 +649,52 @@ def evaluate_position_relation_rules(
             ],
             missing_labels,
                 definitions=relation_definitions,
+        ))
+
+    if is_holding and investor_flow_psychology in {"smartMoneyAccumulation", "smartMoneyDipAbsorption", "broadInflowConfirmation"}:
+        score = 54 + min(18, max(0.0, flow_score) * 0.22) + (8 if pnl < 0 else 4 if ma20_distance < 0 else 0)
+        matches.append(_match(
+            "holding.investor_flow.smart_money_accumulation.v1",
+            score,
+            data_quality,
+            [
+                investor_flow_psychology_label,
+                "외국인 " + str(int(number(facts.get("foreignNetVolume")))) + "주",
+                "기관 " + str(int(number(facts.get("institutionNetVolume")))) + "주",
+                "개인 " + str(int(number(facts.get("individualNetVolume")))) + "주",
+                "매도 강도를 낮추는 수급 방어 근거",
+            ],
+            missing_labels,
+            definitions=relation_definitions,
+        ))
+    if is_holding and investor_flow_psychology == "retailDipBuyingRisk":
+        score = 60 + min(16, abs(flow_score) * 0.16) + (8 if pnl < 0 else 0) + (6 if ma20_distance < 0 else 0)
+        matches.append(_match(
+            "holding.investor_flow.retail_dip_buying_risk.v1",
+            score,
+            data_quality,
+            [
+                investor_flow_psychology_label,
+                "외국인·기관 순매도, 개인 순매수",
+                "개인 저가매수 성공보다 물타기 위험 먼저 확인",
+                "추가매수보다 손실 기준 확인 우선",
+            ],
+            missing_labels,
+            definitions=relation_definitions,
+        ))
+    if is_holding and investor_flow_psychology in {"broadOutflowRisk", "partialSmartMoneyRisk"}:
+        score = 56 + min(14, abs(flow_score) * 0.14) + (6 if ma20_distance < 0 else 0)
+        matches.append(_match(
+            "holding.investor_flow.smart_money_outflow_risk.v1",
+            score,
+            data_quality,
+            [
+                investor_flow_psychology_label,
+                "외국인·기관 순매도 흐름",
+                "가격 방향 단정보다 수급 부담과 분할 실행 기준 확인",
+            ],
+            missing_labels,
+            definitions=relation_definitions,
         ))
 
     averaging_support_count = sum(

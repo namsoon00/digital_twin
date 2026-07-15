@@ -360,6 +360,7 @@ RELATION_DEFS: List[TBoxRelationDef] = [
     TBoxRelationDef("HAS_PRICE_PATH", "observation-data", "investment-core", "observation-data"),
     TBoxRelationDef("HAS_TECHNICAL_INDICATOR", "observation-data", "investment-core", "observation-data"),
     TBoxRelationDef("HAS_TRADE_FLOW", "observation-data", "investment-core", "observation-data"),
+    TBoxRelationDef("HAS_INVESTOR_FLOW_SENTIMENT", "observation-data", "investment-core", "observation-data", "외국인·기관·개인 수급을 투자자 심리 관계로 해석합니다."),
     TBoxRelationDef("HAS_LIQUIDITY_PROFILE", "observation-data", "investment-core", "risk-exposure"),
     TBoxRelationDef("HAS_EXECUTION_METRIC", "observation-data", "investment-core", "observation-data"),
     TBoxRelationDef("HAS_DATA_QUALITY", "observation-data", "investment-core", "observation-data"),
@@ -597,6 +598,7 @@ RULE_DEFS: List[TBoxRuleDef] = [
     TBoxRuleDef("RuleBox relation templates own decisionStage and stagePriority so graph-store policy, not rule-id code maps, controls AI decision routing", "reasoning-insight"),
     TBoxRuleDef("RuleBox relation templates and InferenceBox assertions carry targetRole, actionPolicy, allowedActions, and blockedActions so watchlist candidates stay entry-only before AI validation", "reasoning-insight"),
     TBoxRuleDef("loss-position smart-money inflow first weakens sell pressure, and only investor-profile-gated recovery confirmation can open conditional add-buy review", "reasoning-insight"),
+    TBoxRuleDef("foreign, institutional, and retail investor flow psychology derives accumulation, absorption, or retail-dip-buying risk before add-buy and trim opinions are formed", "reasoning-insight"),
     TBoxRuleDef("instrument profiles classify each security into archetypes, sensitivities, position intent, and action policies before RuleBox decides add, hold, trim, or sell", "strategy-thesis"),
     TBoxRuleDef("RuleBox changes must produce governance versions and reviewable rule-change candidates before candidate rules affect InferenceBox decisions", "reasoning-insight"),
 ]

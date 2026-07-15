@@ -336,7 +336,7 @@
   var researchEvidenceMemoryStore = "";
   var symbolUniverseMemoryStore = "";
   var DEFAULT_RESEARCH_EVIDENCE_LIMIT = "8";
-  var DEFAULT_SYMBOL_UNIVERSE_LIMIT = 16;
+  var DEFAULT_SYMBOL_UNIVERSE_LIMIT = 8;
   var staticBuildConfigPromise = null;
   var watchSuggestTimer = null;
   var watchSuggestRequestId = 0;
@@ -376,7 +376,7 @@
     investmentCalendarSaving: false,
     investmentCalendarDeleting: "",
     investmentCalendarRunning: false,
-    investmentCalendarFilters: { symbol: "", eventType: "", limit: "200" },
+    investmentCalendarFilters: { symbol: "", eventType: "", limit: "8" },
     investmentCalendarDraft: defaultInvestmentCalendarDraft(),
     calendarEntryModalOpen: false,
     expandedCalendarEventKey: "",
@@ -7401,8 +7401,8 @@
       }).join(""),
       '</select>',
       '<select data-calendar-filter="limit">',
-      ["80", "200", "500"].map(function (limit) {
-        return '<option value="' + limit + '"' + (String(filters.limit || "200") === limit ? " selected" : "") + '>' + limit + '개</option>';
+      ["8", "20", "80"].map(function (limit) {
+        return '<option value="' + limit + '"' + (String(filters.limit || "8") === limit ? " selected" : "") + '>' + limit + '개</option>';
       }).join(""),
       '</select>',
       '<button class="text-button primary" type="submit">' + (state.investmentCalendarLoading ? "조회 중" : "조회") + '</button>',
@@ -7421,7 +7421,7 @@
         description: "실적, 거시지표, 공시, 점검 일정을 등록하면 리마인더와 알림 정책에 연결됩니다.",
         meta: ["등록 폼은 레이어에서 열림", "알림 큐와 온톨로지 요청으로 연결"],
         action: renderCalendarEntryButton("이벤트 등록", "text-button primary")
-      }) : events.map(renderInvestmentCalendarEvent).join("")),
+      }) : events.slice(0, 6).map(renderInvestmentCalendarEvent).join("") + (events.length > 6 ? '<p class="data-refresh-status">가까운 6개 일정만 먼저 표시합니다. 나머지 ' + escapeHtml(events.length - 6) + '개는 필터 조회로 확인하세요.</p>' : '')),
       '</div>',
       '</article>'
     ].join("");
@@ -9183,6 +9183,7 @@
 
   function renderInvestmentActionQueuePanel(snapshot) {
     var rows = Array.isArray(investmentAnalysisModel(snapshot).actionQueue) ? investmentAnalysisModel(snapshot).actionQueue : [];
+    var activeRow = investmentActionByKey(state.expandedInvestmentActionKey);
     return [
       '<article class="panel investment-action-panel">',
       '<div class="panel-head">',
@@ -9193,7 +9194,7 @@
       '</div>',
       '<span class="metric">' + escapeHtml(rows.length) + '</span>',
       '</div>',
-      rows.length ? '<div class="investment-action-workbench"><div class="investment-action-list">' + rows.slice(0, 10).map(renderInvestmentActionRow).join("") + '</div>' + renderInvestmentActionDetailPanel(rows) + '</div>' : '<div class="investment-action-list"><div class="ontology-empty">액션 큐가 비어 있습니다.</div></div>',
+      rows.length ? '<div class="investment-action-workbench ' + escapeHtml(activeRow ? "has-detail" : "summary-only") + '"><div class="investment-action-list">' + rows.slice(0, 4).map(renderInvestmentActionRow).join("") + (rows.length > 4 ? '<p class="data-refresh-status">상위 4개 후보만 먼저 표시합니다. 나머지 ' + escapeHtml(rows.length - 4) + '개 후보는 근거·검증 섹션에서 확인하세요.</p>' : '') + '</div>' + (activeRow ? renderInvestmentActionDetailPanel(rows) : '') + '</div>' : '<div class="investment-action-list"><div class="ontology-empty">액션 큐가 비어 있습니다.</div></div>',
       '</article>'
     ].join("");
   }
@@ -11746,8 +11747,9 @@
     ].join("");
   }
 
-  function renderNotificationScoreFactors(job) {
+  function renderNotificationScoreFactors(job, limit) {
     var factors = notificationJobScoreFactors(job);
+    if (Number.isFinite(Number(limit))) factors = factors.slice(0, Number(limit));
     if (!factors.length) return "";
     return [
       '<div class="notification-score-factors">',
@@ -11801,9 +11803,9 @@
     var stateMessage = hasError
       ? renderNotificationStateMessage("hold", "최근 판단 API 연결 확인", state.notificationJobsError)
       : renderNotificationDecisionEmptyConsole();
-    var visibleJobs = jobs.slice(0, 12);
+    var visibleJobs = jobs.slice(0, 4);
     if (activeJob && visibleJobs.length && visibleJobs.every(function (job) { return notificationJobKey(job) !== notificationJobKey(activeJob); })) {
-      visibleJobs = [activeJob].concat(visibleJobs.slice(0, 11));
+      visibleJobs = [activeJob].concat(visibleJobs.slice(0, 3));
     }
     var visibleJobLabel = visibleJobs.length === jobs.length ? String(jobs.length) : (visibleJobs.length + "/" + jobs.length);
     return [
@@ -11827,9 +11829,9 @@
       '</div>',
       jobs.length ? '<div class="notification-decision-list" role="listbox" aria-label="최근 알림 판단 목록">' + visibleJobs.map(function (job) {
         return renderNotificationDecisionRow(job, notificationJobKey(job) === notificationJobKey(activeJob));
-      }).join("") + '</div>' : stateMessage,
+      }).join("") + (jobs.length > visibleJobs.length ? '<p class="data-refresh-status">최근 4개 판단만 먼저 표시합니다. 나머지 ' + escapeHtml(jobs.length - visibleJobs.length) + '건은 새로고침 또는 상세 리포트에서 확인하세요.</p>' : '') + '</div>' : stateMessage,
       '</div>',
-      jobs.length ? renderNotificationDecisionDetail(activeJob) : '',
+      jobs.length ? renderNotificationDecisionDetail(activeJob, { compact: true }) : '',
       '</div>',
       '</article>'
     ].join("");
@@ -11940,7 +11942,7 @@
     };
   }
 
-  function renderNotificationDecisionDetail(job) {
+  function renderNotificationDecisionDetail(job, options) {
     if (!job) {
       return renderEmptyState({
         tone: "muted",
@@ -11949,6 +11951,8 @@
         description: "왼쪽 목록에서 알림 판단을 선택하면 상세 리포트를 표시합니다."
       });
     }
+    options = options || {};
+    var compact = Boolean(options.compact);
     var payload = notificationJobDetailPayload(job);
     var gateRows = [
       notificationJobSimilarityText(job),
@@ -11960,6 +11964,9 @@
     ].filter(Boolean);
     var fingerprint = textWithKnownDisplaySymbols(job.honeyFingerprint || "", payload.resolvedSymbol, job);
     var scoreFactors = notificationJobScoreFactors(job);
+    var visibleGateRows = compact ? [] : gateRows;
+    var visibleReasons = compact ? [] : payload.reasons;
+    var detailButton = compact ? '<div class="notification-detail-actions">' + renderWorkDetailButton("notification-job", notificationJobKey(job), "상세 리포트", "text-button primary compact") + '</div>' : '';
     return [
       '<aside class="notification-decision-detail" aria-label="선택 알림 판단 상세">',
       '<div class="notification-detail-head">',
@@ -11980,7 +11987,7 @@
       '<section class="notification-detail-section notification-score-section">',
       '<strong>점수 변화와 요인</strong>',
       renderNotificationScoreRoute(job),
-      scoreFactors.length ? '<div class="notification-detail-tags notification-score-tags">' + scoreFactors.map(function (factor) {
+      scoreFactors.length ? '<div class="notification-detail-tags notification-score-tags">' + (compact ? scoreFactors.slice(0, 3) : scoreFactors).map(function (factor) {
         return '<span class="' + escapeHtml(factor.tone || "hold") + '">' + escapeHtml(textWithKnownDisplaySymbols(factor.label, payload.resolvedSymbol, job)) + '</span>';
       }).join("") + '</div>' : '<p>점수 요인이 아직 기록되지 않았습니다.</p>',
       '</section>',
@@ -11988,14 +11995,16 @@
       '<strong>판단 요약</strong>',
       '<p>' + escapeHtml(payload.preview) + '</p>',
       '</section>',
-      gateRows.length ? '<section class="notification-detail-section"><strong>게이트와 보류 조건</strong><div class="notification-detail-tags">' + gateRows.map(function (row) {
+      visibleGateRows.length ? '<section class="notification-detail-section"><strong>게이트와 보류 조건</strong><div class="notification-detail-tags">' + visibleGateRows.map(function (row) {
         return '<span>' + escapeHtml(textWithKnownDisplaySymbols(row, payload.resolvedSymbol, job)) + '</span>';
       }).join("") + '</div></section>' : '',
-      payload.reasons.length ? '<section class="notification-detail-section"><strong>판단 근거</strong><div class="notification-detail-reasons">' + payload.reasons.map(function (reason) {
+      visibleReasons.length ? '<section class="notification-detail-section"><strong>판단 근거</strong><div class="notification-detail-reasons">' + visibleReasons.map(function (reason) {
         return '<p>' + escapeHtml(textWithKnownDisplaySymbols(reason, payload.resolvedSymbol, job)) + '</p>';
       }).join("") + '</div></section>' : '',
-      payload.fullText && payload.fullText !== payload.preview ? '<section class="notification-detail-section"><strong>전체 메시지</strong><pre class="notification-full-message">' + escapeHtml(payload.fullText) + '</pre></section>' : '',
-      fingerprint ? '<section class="notification-detail-section"><strong>중복 판단 키</strong><code class="notification-fingerprint">' + escapeHtml(fingerprint) + '</code></section>' : '',
+      compact ? '<p class="data-refresh-status">전체 메시지, 전체 근거, 중복 키는 상세 리포트에서 확인합니다.</p>' : '',
+      detailButton,
+      !compact && payload.fullText && payload.fullText !== payload.preview ? '<section class="notification-detail-section"><strong>전체 메시지</strong><pre class="notification-full-message">' + escapeHtml(payload.fullText) + '</pre></section>' : '',
+      !compact && fingerprint ? '<section class="notification-detail-section"><strong>중복 판단 키</strong><code class="notification-fingerprint">' + escapeHtml(fingerprint) + '</code></section>' : '',
       '</aside>'
     ].join("");
   }
@@ -12029,6 +12038,16 @@
     var nextEligible = job.nextEligibleAt ? "다음 가능 " + formatClock(job.nextEligibleAt) : "";
     var processing = job.recoverableProcessing ? "처리 중 지연 " + String(job.processingAgeMinutes || 0) + "분 · 워커 재시도 가능" : "";
     var rowKey = notificationJobKey(job);
+    var rowSignals = [
+      notificationJobSimilarityText(job),
+      notificationJobStateCooldownText(job),
+      notificationJobMarketHoursText(job),
+      notificationJobQuietHoursText(job),
+      suppression,
+      nextEligible,
+      processing,
+      job.honeySimilarityBypassed ? (job.honeySimilarityBypassReason ? "반복 예외 " + job.honeySimilarityBypassReason : "반복 예외 적용") : ""
+    ].filter(Boolean).slice(0, 3);
     return [
       '<div class="notification-decision-row ' + (selected ? "active " : "") + escapeHtml(notificationJobToneClass(job.status)) + '"' + cardTypeAttrs("decision-row", notificationJobToneClass(job.status)) + ' role="option" tabindex="0" data-notification-job-select="' + escapeHtml(rowKey) + '" aria-selected="' + escapeHtml(selected ? "true" : "false") + '">',
       '<div class="notification-decision-top">',
@@ -12039,21 +12058,16 @@
       '<div class="notification-decision-target">' + escapeHtml(target || job.messageType || "-") + '</div>',
       '<div class="notification-decision-score">',
       renderNotificationScoreRoute(job),
-      '<span>' + escapeHtml(notificationJobSimilarityText(job)) + '</span>',
-      notificationJobStateCooldownText(job) ? '<span>' + escapeHtml(notificationJobStateCooldownText(job)) + '</span>' : '',
-      notificationJobMarketHoursText(job) ? '<span>' + escapeHtml(notificationJobMarketHoursText(job)) + '</span>' : '',
-      notificationJobQuietHoursText(job) ? '<span>' + escapeHtml(notificationJobQuietHoursText(job)) + '</span>' : '',
-      suppression ? '<span>' + escapeHtml(suppression) + '</span>' : '',
-      nextEligible ? '<span>' + escapeHtml(nextEligible) + '</span>' : '',
-      processing ? '<span>' + escapeHtml(processing) + '</span>' : '',
-      job.honeySimilarityBypassed ? '<span>' + escapeHtml(job.honeySimilarityBypassReason ? "반복 예외 " + job.honeySimilarityBypassReason : "반복 예외 적용") + '</span>' : '',
+      rowSignals.map(function (signal) {
+        return '<span>' + escapeHtml(signal) + '</span>';
+      }).join(""),
       '</div>',
       '<p>' + escapeHtml(preview) + '</p>',
       '<div class="notification-decision-actions">',
       '<span class="mini-button ghost">' + escapeHtml(selected ? "리포트 표시 중" : "행 선택") + '</span>',
       '</div>',
-      renderNotificationScoreFactors(job),
-      reasons.length ? '<div class="notification-decision-reasons compact">' + reasons.slice(0, 2).map(function (reason) {
+      renderNotificationScoreFactors(job, 4),
+      reasons.length ? '<div class="notification-decision-reasons compact">' + reasons.slice(0, 1).map(function (reason) {
         return '<span>' + escapeHtml(textWithKnownDisplaySymbols(reason, resolvedSymbol, job)) + '</span>';
       }).join("") + '</div>' : '',
       '</div>'
@@ -14086,6 +14100,7 @@
   function renderAlertCenterPanel(snapshot) {
     var alerts = buildAlertItems(snapshot);
     var stats = alertStats(alerts);
+    var visibleAlerts = alerts.slice(0, 6);
     return [
       '<article class="panel alert-panel">',
       '<div class="panel-head">',
@@ -14102,9 +14117,9 @@
       renderAlertStat("정보", stats.info, "info"),
       '</div>',
       '<div class="alert-list">',
-      alerts.length ? alerts.map(function (alert, index) {
+      visibleAlerts.length ? visibleAlerts.map(function (alert, index) {
         return renderAlertRow(alert, index);
-      }).join("") : '<p class="subtle">현재 켜진 규칙에서 발생한 알림이 없습니다.</p>',
+      }).join("") + (alerts.length > visibleAlerts.length ? '<p class="data-refresh-status">위험도 높은 6개 알림만 먼저 표시합니다. 나머지 ' + escapeHtml(alerts.length - visibleAlerts.length) + '개는 선택 상세와 알림 운영 흐름에서 확인하세요.</p>' : '') : '<p class="subtle">현재 켜진 규칙에서 발생한 알림이 없습니다.</p>',
       '</div>',
       '<div class="rule-strip"><span>알림은 주문 지시가 아니라 가격선, 수급, 모델 점수, 보유 리스크를 다시 확인하라는 신호입니다.</span></div>',
       '</article>'
@@ -14410,9 +14425,9 @@
       ["섹터별 합계", (portfolio.sectors || []).length + "개 sector value = " + formatMoney(sectorTotal)],
       ["섹터 합계 차이", exposureDiffText(portfolio.total || 0, sectorTotal)]
     ];
-    return rows.map(function (row) {
+    return rows.slice(0, 5).map(function (row) {
       return '<div class="source-row"><span>' + escapeHtml(row[0]) + '</span><strong>' + escapeHtml(row[1]) + '</strong></div>';
-    }).join("");
+    }).join("") + (rows.length > 5 ? '<div class="source-row"><span>상세 산식</span><strong>나머지 ' + escapeHtml(rows.length - 5) + '개 검증 행은 계정·연결의 자산 검증에서 확인</strong></div>' : '');
   }
 
   function renderPortfolioPanel(snapshot) {
@@ -14431,7 +14446,7 @@
       '<div class="source-row"><span>투자 평가액</span><strong>' + escapeHtml(formatMoney(portfolio.invested || 0)) + '</strong></div>',
       '<div class="source-row"><span>현금/주문 가능</span><strong>' + escapeHtml(formatMoney(portfolio.cash || 0)) + '</strong></div>',
       marketRows,
-      (portfolio.sectors || []).map(function (sector) {
+      (portfolio.sectors || []).slice(0, 6).map(function (sector) {
         return [
           '<div class="bar-row">',
           '<div class="bar-meta"><span>' + escapeHtml(sector.sector) + '</span><strong>' + escapeHtml(pct(sector.ratio)) + '</strong></div>',
@@ -14439,6 +14454,7 @@
           '</div>'
         ].join("");
       }).join(""),
+      (portfolio.sectors || []).length > 6 ? '<div class="bar-row"><div class="bar-meta"><span>기타 섹터</span><strong>' + escapeHtml((portfolio.sectors || []).length - 6) + '개</strong></div><div class="bar-track"><span style="width:8%"></span></div></div>' : '',
       '</div>',
       '<div class="source-stack">',
       renderPortfolioBasisRows(snapshot, portfolio),
@@ -14824,7 +14840,7 @@
       '<span>검색어</span>',
       '<input name="query" data-symbol-query placeholder="회사명 검색" value="' + escapeHtml(state.symbolUniverseQuery || "") + '" autocomplete="off" />',
       '</label>',
-      full ? '<label><span>표시 수</span><select name="limit" data-symbol-limit>' + [16, 40, 80, 200].map(function (value) {
+      full ? '<label><span>표시 수</span><select name="limit" data-symbol-limit>' + [8, 16, 40, 80].map(function (value) {
         return '<option value="' + value + '"' + (Number(state.symbolUniverseLimit || DEFAULT_SYMBOL_UNIVERSE_LIMIT) === value ? " selected" : "") + '>' + value + '개</option>';
       }).join("") + '</select></label>' : '',
       full ? '<label><span>추가 대상</span><select name="watchAccount" data-symbol-add-account>' + renderWatchAccountSelectOptions() + '</select></label>' : '',

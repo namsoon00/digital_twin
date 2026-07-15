@@ -21354,3 +21354,134 @@ html[data-theme="dark"] .ontology-graph-expanded-toolbar .icon-button.danger {
     line-height: 1.08;
   }
 }
+
+/* Desktop information hierarchy pass: summary first, details on demand. */
+@media (min-width: 1181px) {
+  .console-shell :is(
+    .feed-command-metrics,
+    .feed-impact-metrics,
+    .symbol-summary-grid,
+    .investment-calendar-kpis,
+    .notification-ops-rail,
+    .inline-detail-metrics
+  ) {
+    grid-template-columns: repeat(auto-fit, minmax(148px, 1fr));
+  }
+
+  .console-shell :is(
+    .feed-command-metric,
+    .feed-impact-metric,
+    .symbol-summary-metric,
+    .investment-calendar-kpi,
+    .notification-ops-cell,
+    [data-card-type="metric-cell"]
+  ) {
+    min-width: 148px;
+  }
+
+  .console-shell .feed-impact-metrics {
+    width: min(100%, 520px);
+    min-width: min(100%, 460px);
+  }
+
+  .console-shell :is(
+    .symbol-result-workbench,
+    .feed-impact-workbench,
+    .research-evidence-workbench,
+    .investment-action-workbench
+  ) {
+    grid-template-columns: minmax(0, 0.68fr) minmax(360px, 0.32fr);
+    align-items: start;
+  }
+
+  .console-shell .investment-action-workbench.summary-only {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .console-shell :is(
+    .symbol-detail-panel,
+    .research-evidence-detail-panel,
+    .investment-action-detail-panel
+  ) {
+    min-height: 280px;
+  }
+
+  .console-shell .symbol-result-workbench .symbol-result-row {
+    min-height: 96px;
+  }
+
+  .console-shell .investment-action-workbench .investment-action-row {
+    grid-template-columns: minmax(0, 1fr) auto;
+    gap: 8px 10px;
+    min-height: 0;
+    padding: 10px 12px;
+  }
+
+  .console-shell .investment-action-workbench .investment-action-meta {
+    grid-column: 1 / -1;
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+    gap: 6px;
+  }
+
+  .console-shell .investment-action-workbench .investment-action-checks {
+    grid-column: 1 / -1;
+    grid-template-columns: minmax(0, 1fr) auto;
+    gap: 6px;
+  }
+
+  .console-shell .investment-action-workbench .investment-action-meta span,
+  .console-shell .investment-action-workbench .investment-action-checks span {
+    padding: 5px 7px;
+  }
+
+  .console-shell .investment-action-workbench .investment-action-row > p {
+    display: none;
+  }
+
+  .console-shell .investment-calendar-list-panel {
+    grid-column: span 7;
+  }
+
+  .console-shell .investment-calendar-rail {
+    grid-column: span 5;
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: var(--ds-card-comfort-gap);
+  }
+
+  .console-shell .investment-calendar-quality-panel {
+    grid-column: 1 / -1;
+  }
+
+  .console-shell .investment-calendar-list {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: var(--ds-card-comfort-gap);
+  }
+
+  .console-shell .investment-calendar-event {
+    min-height: 132px;
+  }
+
+  .console-shell .investment-calendar-event-copy .subtle,
+  .console-shell .notification-decision-row > p {
+    display: -webkit-box;
+    overflow: hidden;
+    -webkit-line-clamp: 2;
+    -webkit-box-orient: vertical;
+  }
+
+  .console-shell .investment-calendar-list .data-refresh-status,
+  .console-shell .notification-decision-list .data-refresh-status,
+  .console-shell .notification-detail-actions {
+    grid-column: 1 / -1;
+  }
+
+  .console-shell .notification-detail-actions {
+    display: flex;
+    justify-content: flex-end;
+  }
+
+  .console-shell .investment-action-list .data-refresh-status {
+    margin: 0;
+  }
+}

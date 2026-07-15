@@ -305,6 +305,25 @@ function checkFrontendAdminRender() {
       /\.console-shell :is\([\s\S]*\[data-card-type="metric-cell"\],[\s\S]*\.inline-detail-metrics > \*[\s\S]*\),[\s\S]*\.console-shell \.notifications-view \.notification-command-center \.notification-ops-cell\s*\{[\s\S]*min-height: 92px;[\s\S]*padding: 16px 18px;/.test(styles),
     "PC 컴팩트 규칙을 마지막에 다시 덮는 QA enforcement 계약이 없습니다."
   );
+  assertOk(
+    styles.indexOf("Desktop information hierarchy pass") >= 0 &&
+      /\.console-shell :is\([\s\S]*\.feed-command-metrics,[\s\S]*\.inline-detail-metrics[\s\S]*\)\s*\{[\s\S]*grid-template-columns: repeat\(auto-fit, minmax\(148px, 1fr\)\);/.test(styles) &&
+      /\.console-shell :is\([\s\S]*\.feed-impact-metric,[\s\S]*\[data-card-type="metric-cell"\][\s\S]*\)\s*\{[\s\S]*min-width: 148px;/.test(styles) &&
+      /\.console-shell :is\([\s\S]*\.symbol-result-workbench,[\s\S]*\.investment-action-workbench[\s\S]*\)\s*\{[\s\S]*grid-template-columns: minmax\(0, 0\.68fr\) minmax\(360px, 0\.32fr\);/.test(styles) &&
+      /\.console-shell \.investment-calendar-list\s*\{[\s\S]*grid-template-columns: repeat\(2, minmax\(0, 1fr\)\);/.test(styles),
+    "PC 정보 계층/metric 최소 폭/긴 리스트 축약 계약이 없습니다."
+  );
+  assertOk(
+    /var DEFAULT_SYMBOL_UNIVERSE_LIMIT = 8;/.test(code) &&
+      /investmentCalendarFilters: \{ symbol: "", eventType: "", limit: "8" \}/.test(code) &&
+      /events\.slice\(0, 6\)\.map\(renderInvestmentCalendarEvent\)/.test(code) &&
+      /rows\.slice\(0, 4\)\.map\(renderInvestmentActionRow\)/.test(code) &&
+      /var visibleJobs = jobs\.slice\(0, 4\);/.test(code) &&
+      /var visibleAlerts = alerts\.slice\(0, 6\);/.test(code) &&
+      /rows\.slice\(0, 5\)\.map\(function \(row\)/.test(code) &&
+      /\(portfolio\.sectors \|\| \[\]\)\.slice\(0, 6\)\.map\(function \(sector\)/.test(code),
+    "PC 기본 화면의 종목/캘린더/액션 큐 표시량 축약 계약이 없습니다."
+  );
   assertOk(styles.indexOf("Professional finance top navigation shell") >= 0 && styles.indexOf("grid-template-columns: minmax(0, 1fr)") >= 0, "PC shell이 단일 컬럼 상단 탭형 작업 영역으로 전환되지 않습니다.");
   assertOk(/Professional finance top navigation shell[\s\S]*\.app-nav[\s\S]*grid-template-columns: minmax\(180px, 0\.17fr\) minmax\(0, 1fr\) minmax\(108px, auto\);/.test(styles), "PC 상단 금융 탭 네비게이션 3구획 구조가 없습니다.");
   assertOk(styles.indexOf(".app-nav-command") >= 0 && styles.indexOf(".app-nav-flow") >= 0 && styles.indexOf(".app-nav-mode") >= 0, "PC 상단 통합 command rail 스타일 정의가 없습니다.");
@@ -1516,10 +1535,10 @@ function checkFrontendAdminRender() {
     assertOk(notificationHtml.indexOf("미장 닫힘") >= 0, "최근 알림 판단의 장 시간 외 보류 사유가 렌더링되지 않았습니다.");
     assertOk(
       notificationHtml.indexOf("notification-decision-detail") >= 0 &&
-        notificationHtml.indexOf('data-work-detail="notification-job"') < 0 &&
-        code.indexOf("renderNotificationDecisionDetail(activeJob)") >= 0 &&
-        code.indexOf("notification-fingerprint") >= 0,
-      "최근 알림 판단 fingerprint가 선택형 상세 패널로 분리되지 않았습니다.",
+        notificationHtml.indexOf('data-work-detail="notification-job"') >= 0 &&
+        code.indexOf("renderNotificationDecisionDetail(activeJob, { compact: true })") >= 0 &&
+        code.indexOf("!compact && fingerprint") >= 0,
+      "최근 알림 판단 전체 fingerprint가 상세 리포트 레이어로 분리되지 않았습니다.",
     );
     assertOk(notificationHtml.indexOf('data-action="refresh-notification-jobs"') >= 0, "최근 알림 판단 새로고침 버튼이 없습니다.");
     assertOk(notificationTemplateHtml.indexOf("notification-template-manager-panel") >= 0, "템플릿 섹션이 렌더링되지 않았습니다.");
@@ -1640,7 +1659,7 @@ function checkFrontendAdminRender() {
     assertOk(styles.indexOf(".monitoring-detail-backdrop") >= 0 && styles.indexOf(".monitoring-detail-drawer") >= 0, "모니터링 상세 드로어 스타일이 없습니다.");
     assertOk(monitoringHtml.indexOf("노출 계산 기준") >= 0, "계좌 노출 패널에 계산 기준이 표시되지 않습니다.");
     assertOk(monitoringHtml.indexOf("총 평가 산식") >= 0 && monitoringHtml.indexOf("보유 원장 합계") >= 0, "계좌 노출 검산 행이 렌더링되지 않았습니다.");
-    assertOk(monitoringHtml.indexOf("시장 합계 차이") >= 0 && monitoringHtml.indexOf("섹터 합계 차이") >= 0, "계좌 노출 시장/섹터 합계 차이가 표시되지 않습니다.");
+    assertOk(monitoringHtml.indexOf("상세 산식") >= 0 && monitoringHtml.indexOf("계정·연결의 자산 검증") >= 0, "계좌 노출 상세 검산 행이 기본 후보 화면에서 요약 안내로 접히지 않습니다.");
     assertOk(monitoringHtml.indexOf("watchlist-panel") < 0, "모니터링 탭에 관심 종목 관리 패널이 따로 남아 있습니다.");
     assertOk(settingsHtml.indexOf("settings-overview-panel") >= 0, "설정 탭 요약 패널이 렌더링되지 않았습니다.");
     assertOk(settingsHtml.indexOf("settings-environment-panel") >= 0, "설정 탭 앱 환경 패널이 렌더링되지 않았습니다.");

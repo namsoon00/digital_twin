@@ -15,6 +15,7 @@ from .message_types import (
     INVESTMENT_INSIGHT,
     MIN_CADENCE_MINUTES,
     ONTOLOGY_INFERENCE_MISSING,
+    PORTFOLIO_HOLDINGS_SNAPSHOT,
     WATCHLIST_ONTOLOGY_SIGNAL,
 )
 from .ontology_inference_context import inferencebox_source_name, ontology_projection_from_metadata, relation_contexts_from_snapshot
@@ -581,6 +582,78 @@ class RealtimeMonitor(MonitoringSampleDataMixin, MonitoringPositionContextMixin,
                 "상태 " + (snapshot.status or snapshot.mode) + ", 보유 " + str(len([item for item in snapshot.positions if not item.is_cash()])) + "개",
             ),
         )]
+
+    def forced_holdings_snapshot_events(self, snapshot: AccountSnapshot) -> List[AlertEvent]:
+        positions = [item for item in snapshot.positions or [] if not item.is_cash()]
+        if not snapshot.has_live_account_data() or not positions:
+            return []
+        portfolio_value = snapshot.portfolio.total or snapshot.portfolio.invested
+        lines = [
+            "기준시각 " + str(snapshot.generated_at or "-"),
+            "보유 종목 " + str(len(positions)) + "개",
+            "계좌 평가금액 " + money(portfolio_value, "KRW"),
+        ]
+        for item in positions:
+            lines.append(self.holding_snapshot_line(item))
+        metadata = {
+            "holdingsSnapshot": {
+                "positionCount": len(positions),
+                "portfolioValue": portfolio_value,
+                "positions": [item.to_dict() for item in positions],
+            },
+            "dataFreshnessRequired": data_freshness_required(PORTFOLIO_HOLDINGS_SNAPSHOT),
+            "dataFreshness": freshness_record(
+                "accountSnapshot",
+                PORTFOLIO_HOLDINGS_SNAPSHOT,
+                settings=self.settings,
+                source_fetched_at=snapshot.generated_at,
+                data_quality=snapshot.mode,
+            ),
+        }
+        event = AlertEvent(
+            snapshot.account_id,
+            snapshot.account_label,
+            "WATCH",
+            PORTFOLIO_HOLDINGS_SNAPSHOT,
+            ":".join([snapshot.account_id, "holdings-snapshot", str(snapshot.generated_at or now_ms())]),
+            "전체 보유 주식 점검",
+            lines,
+            criteria=self.criteria(
+                "강제 점검 또는 수동 확인 요청에서 보유 종목 전체 상태를 확인할 때",
+                "보유 " + str(len(positions)) + "개, 계좌 평가금액 " + money(portfolio_value, "KRW"),
+            ),
+            metadata=metadata,
+        )
+        return [event for event in self.stamp_events(snapshot, [event]) if self.enabled(event.rule)]
+
+    def holding_snapshot_line(self, item: Position) -> str:
+        currency = item.currency or ("KRW" if str(item.market or "").upper() in {"KR", "KOSPI", "KOSDAQ"} else "")
+        current = price_money(item.current_price, currency)
+        average = price_money(item.average_price, currency)
+        value = self.holding_snapshot_value_text(item)
+        return (
+            (item.name or item.symbol)
+            + " / "
+            + item.symbol
+            + ": 현재가 "
+            + current
+            + ", 평균매입가 "
+            + average
+            + ", 수익률 "
+            + signed_pct(item.profit_loss_rate)
+            + ", 보유 "
+            + compact_number(item.quantity)
+            + "주, 평가금액 "
+            + value
+        )
+
+    def holding_snapshot_value_text(self, item: Position) -> str:
+        currency = item.currency or ""
+        original = money(item.market_value, currency) if currency and currency != "KRW" else ""
+        krw = money(item.market_value_krw or item.market_value, "KRW")
+        if original and item.market_value_krw:
+            return original + " (약 " + krw + ")"
+        return original or krw
 
     def ontology_inference_missing_state(self, snapshot: AccountSnapshot) -> Dict[str, object]:
         positions = [item for item in snapshot.positions or [] if getattr(item, "symbol", "") and not item.is_cash()]

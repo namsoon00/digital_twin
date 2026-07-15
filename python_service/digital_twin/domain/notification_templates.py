@@ -136,6 +136,10 @@ DEFAULT_NOTIFICATION_TEMPLATES = {
         "template": DEFAULT_TEMPLATE,
         "description": "온톨로지 관계 인사이트 기반 투자 알림",
     },
+    "portfolioHoldingsSnapshot": {
+        "template": DEFAULT_TEMPLATE,
+        "description": "강제 점검/수동 확인용 전체 보유 주식 스냅샷",
+    },
     "investmentCalendarReminder": {
         "template": BODY_TEMPLATE,
         "description": "투자 이벤트 캘린더 리마인더",

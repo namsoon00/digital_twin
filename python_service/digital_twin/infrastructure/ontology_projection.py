@@ -245,6 +245,13 @@ class PortfolioOntologyProjectionRecorder:
         else:
             execution = {"status": "error", "reason": "non-dict RuleBox result", "graphStore": active_key}
         result["ruleboxExecution"] = execution
+        if isinstance(execution.get("inferenceBox"), dict):
+            snapshot_payload = dict(execution.get("inferenceBox") or {})
+            snapshot_payload.setdefault("graphStore", active_key)
+            if active_key == "typedb":
+                snapshot_payload.setdefault("source", "typedbInferenceBox")
+            result["inferenceBox"] = snapshot_payload
+            return
         if not hasattr(self.repository, "inferencebox_snapshot"):
             return
         try:

@@ -271,11 +271,13 @@ class NotificationQueueRunner:
         self.template_renderer = template_renderer
         self.context_enricher = context_enricher
         self.now_provider = now_provider or (lambda: datetime.now(ZoneInfo("UTC")))
+        self.last_run_details = []
 
     def account_map(self) -> Dict[str, object]:
         return {account.account_id: account for account in self.account_repository.load_all()}
 
     def run_once(self, limit: int = 10) -> int:
+        self.last_run_details = []
         use_claim = (not self.dry_run) and hasattr(self.queue, "claim_pending")
         jobs = self.queue.claim_pending(limit=limit, stale_after_minutes=self.stale_after_minutes) if use_claim else self.queue.pending(limit=limit)
         if not jobs:
@@ -285,11 +287,13 @@ class NotificationQueueRunner:
         for job in jobs:
             if not job.text.strip():
                 self.queue.mark_failed(job, "empty notification text")
+                self.last_run_details.append(self.job_detail(job, "failed", "empty text"))
                 continue
             account = accounts.get(job.account_id)
             self.apply_account_delivery_context(job, account)
             if not self.dry_run and account and account.quiet_hours_active(self.now_provider(), job.message_type):
                 self.mark_quiet_hours_suppressed(job, account)
+                self.last_run_details.append(self.job_detail(job, "suppressed", "quiet hours"))
                 processed += 1
                 continue
             if not self.dry_run and not use_claim:
@@ -297,20 +301,35 @@ class NotificationQueueRunner:
             message = self.render(job)
             if not message:
                 self.queue.mark_failed(job, "empty rendered notification text")
+                self.last_run_details.append(self.job_detail(job, "failed", "empty rendered text"))
                 continue
             if self.dry_run:
                 print(message)
+                self.last_run_details.append(self.job_detail(job, "dry-run"))
                 processed += 1
                 continue
             try:
                 self.deliver(job, accounts, message)
                 self.queue.mark_done(job)
+                self.last_run_details.append(self.job_detail(job, "done"))
                 processed += 1
             except Exception as error:  # noqa: BLE001 - one failed delivery must not stop the queue.
                 self.queue.mark_failed(job, str(error))
+                self.last_run_details.append(self.job_detail(job, "failed", str(error)[:120]))
             if self.send_gap_seconds and processed < len(jobs):
                 time.sleep(self.send_gap_seconds)
         return processed
+
+    def job_detail(self, job: NotificationJob, status: str, reason: str = "") -> str:
+        context = job.context if isinstance(job.context, dict) else {}
+        target = (
+            str(context.get("symbol") or "").strip()
+            or str(context.get("displayTarget") or "").strip()
+            or str(context.get("rawTarget") or "").strip()
+            or "all"
+        )
+        reason_text = (" · " + reason) if reason else ""
+        return notification_debug_number(job.job_id) + " " + str(job.message_type or "-") + "/" + target + " " + status + reason_text
 
     def apply_account_delivery_context(self, job: NotificationJob, account) -> None:
         if not account or not hasattr(account, "message_delivery_context"):

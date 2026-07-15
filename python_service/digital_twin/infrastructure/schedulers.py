@@ -76,7 +76,11 @@ class NotificationQueueScheduler:
             try:
                 processed = self.runner.run_once(limit=limit)
                 if processed:
-                    print("Processed notification jobs: " + str(processed))
+                    details = list(getattr(self.runner, "last_run_details", []) or [])
+                    suffix = (" · " + "; ".join(details[:8])) if details else ""
+                    if len(details) > 8:
+                        suffix += "; +" + str(len(details) - 8) + " more"
+                    print("Processed notification jobs: " + str(processed) + suffix)
             except Exception as error:  # noqa: BLE001 - worker must continue after a cycle failure.
                 print("Python notification worker error: " + str(error))
             end_at = time.monotonic() + max(1.0, self.interval_seconds - (time.monotonic() - started))

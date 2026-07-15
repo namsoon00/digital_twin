@@ -4,8 +4,11 @@ import itertools
 import json
 import math
 import re
+import signal
+import threading
 import time
 import uuid
+from contextlib import contextmanager
 from typing import Dict, Iterable, List, Tuple
 
 from ..domain.ontology_contracts import OntologyEntity, OntologyEvidence, OntologyRelation, PortfolioOntology
@@ -39,6 +42,33 @@ from .graph_store_rulebox import (
     rulebox_rules_to_payload,
 )
 from .settings import runtime_settings, utc_now
+
+
+class TypeDBOperationTimeout(TimeoutError):
+    pass
+
+
+@contextmanager
+def typedb_operation_timeout(seconds: float, label: str):
+    seconds = float(seconds or 0)
+    if seconds <= 0 or threading.current_thread() is not threading.main_thread() or not hasattr(signal, "SIGALRM"):
+        yield
+        return
+
+    def timeout_handler(_signum, _frame):
+        raise TypeDBOperationTimeout(label + " timed out after " + str(round(seconds, 1)) + "s")
+
+    previous_handler = signal.getsignal(signal.SIGALRM)
+    previous_timer = signal.setitimer(signal.ITIMER_REAL, 0)
+    signal.signal(signal.SIGALRM, timeout_handler)
+    signal.setitimer(signal.ITIMER_REAL, seconds)
+    try:
+        yield
+    finally:
+        signal.setitimer(signal.ITIMER_REAL, 0)
+        signal.signal(signal.SIGALRM, previous_handler)
+        if previous_timer and previous_timer[0] > 0:
+            signal.setitimer(signal.ITIMER_REAL, previous_timer[0], previous_timer[1])
 
 
 def typedb_string(value: object) -> str:
@@ -440,6 +470,21 @@ class TypeDBOntologyGraphRepository(GraphStoreOntologyRowMapperMixin):
                 time.sleep(min(2.0, 0.25 * (index + 1)))
         raise last_error
 
+    def runtime_timeout_seconds(self, key: str, default_seconds: float) -> float:
+        try:
+            configured = number_or_none(runtime_settings().get(key))
+        except Exception:
+            configured = None
+        if configured is None:
+            configured = default_seconds
+        return max(1.0, float(configured or default_seconds))
+
+    def query_timeout_seconds(self) -> float:
+        return self.runtime_timeout_seconds("typedbQueryTimeoutSeconds", min(8.0, float(self.timeout_seconds or 8)))
+
+    def schema_operation_timeout_seconds(self) -> float:
+        return self.runtime_timeout_seconds("typedbSchemaOperationTimeoutSeconds", min(8.0, float(self.timeout_seconds or 8)))
+
     def active_tbox_metadata(self) -> Dict[str, object]:
         if not self.address:
             return NullTypeDBOntologyGraphRepository().active_tbox_metadata()
@@ -551,7 +596,11 @@ class TypeDBOntologyGraphRepository(GraphStoreOntologyRowMapperMixin):
         return TypeDB.driver(
             self.address,
             Credentials(self.user, self.password),
-            DriverOptions(tls_config),
+            DriverOptions(
+                tls_config,
+                primary_failover_retries=max(0, min(2, self.retry_count)),
+                request_timeout_millis=max(1000, int(self.timeout_seconds * 1000)),
+            ),
         )
 
     def close_driver(self, driver) -> None:
@@ -577,9 +626,10 @@ class TypeDBOntologyGraphRepository(GraphStoreOntologyRowMapperMixin):
 
     def ensure_schema(self, driver, imported) -> None:
         _TypeDB, _Credentials, _DriverOptions, _DriverTlsConfig, TransactionType = imported[0]
-        with driver.transaction(self.database, TransactionType.SCHEMA) as tx:
-            tx.query(self.schema_query()).resolve()
-            tx.commit()
+        with typedb_operation_timeout(self.schema_operation_timeout_seconds(), "TypeDB base schema sync"):
+            with driver.transaction(self.database, TransactionType.SCHEMA) as tx:
+                tx.query(self.schema_query()).resolve()
+                tx.commit()
 
     def read_rows(self, query: str, columns: Iterable[str]) -> List[Dict[str, object]]:
         if not self.address:
@@ -593,11 +643,12 @@ class TypeDBOntologyGraphRepository(GraphStoreOntologyRowMapperMixin):
             try:
                 self.ensure_database(driver)
                 with driver.transaction(self.database, TransactionType.READ) as tx:
-                    resolved = tx.query(query).resolve()
-                    rows = []
-                    for item in resolved:
-                        rows.append({name: typedb_row_value(item, name) for name in columns})
-                    return rows
+                    with typedb_operation_timeout(self.query_timeout_seconds(), "TypeDB read query"):
+                        resolved = tx.query(query).resolve()
+                        rows = []
+                        for item in resolved:
+                            rows.append({name: typedb_row_value(item, name) for name in columns})
+                        return rows
             finally:
                 self.close_driver(driver)
         return self.with_typedb_retries(operation)
@@ -1112,9 +1163,12 @@ relation ontology-assertion,
         return [row for row in rows if row.get("source") and row.get("target")]
 
     def node_insert_query(self, row: Dict[str, object], updated_at: str) -> str:
+        return "insert " + self.node_insert_clause(row, updated_at, "$n") + ";"
+
+    def node_insert_clause(self, row: Dict[str, object], updated_at: str, variable: str) -> str:
         node_type = str(row.get("nodeType") or "ontology-entity")
         return (
-            "insert $n isa " + node_type
+            str(variable or "$n") + " isa " + node_type
             + ", has ontology-id " + typedb_string(row.get("id"))
             + typeql_has("ontology-label", row.get("label"))
             + typeql_has("ontology-kind", row.get("kind"))
@@ -1149,17 +1203,39 @@ relation ontology-assertion,
             + typeql_has("ontology-read-scope", row.get("readScope"))
             + typeql_has("ontology-pe-ratio", row.get("peRatio"), numeric=True)
             + typeql_has("ontology-beta", row.get("beta"), numeric=True)
-            + ";"
         )
 
     def relation_insert_query(self, row: Dict[str, object], updated_at: str) -> str:
-        relation_id = relation_row_id(row)
         return (
             "match "
-            "$source isa ontology-node, has ontology-id " + typedb_string(row.get("source")) + "; "
-            "$target isa ontology-node, has ontology-id " + typedb_string(row.get("target")) + "; "
-            "insert "
-            "$r isa ontology-assertion, links (source: $source, target: $target)"
+            + self.relation_match_clause(row, "$source", "$target")
+            + "insert "
+            + self.relation_insert_clause(row, updated_at, "$r", "$source", "$target")
+            + ";"
+        )
+
+    def relation_match_clause(self, row: Dict[str, object], source_variable: str, target_variable: str) -> str:
+        return (
+            str(source_variable or "$source") + " isa ontology-node, has ontology-id " + typedb_string(row.get("source")) + "; "
+            + str(target_variable or "$target") + " isa ontology-node, has ontology-id " + typedb_string(row.get("target")) + "; "
+        )
+
+    def relation_insert_clause(
+        self,
+        row: Dict[str, object],
+        updated_at: str,
+        relation_variable: str,
+        source_variable: str,
+        target_variable: str,
+    ) -> str:
+        relation_id = relation_row_id(row)
+        return (
+            str(relation_variable or "$r")
+            + " isa ontology-assertion, links (source: "
+            + str(source_variable or "$source")
+            + ", target: "
+            + str(target_variable or "$target")
+            + ")"
             + ", has ontology-id " + typedb_string(relation_id)
             + typeql_has("ontology-relation-type", row.get("type"))
             + typeql_has("ontology-box", row.get("ontologyBox") or "ABox")
@@ -1180,8 +1256,64 @@ relation ontology-assertion,
             + typeql_has("ontology-risk-impact", row.get("riskImpact"), numeric=True)
             + typeql_has("ontology-support-impact", row.get("supportImpact"), numeric=True)
             + typeql_has("ontology-stage-priority", row.get("stagePriority"), numeric=True)
-            + ";"
         )
+
+    def batched_node_insert_queries(
+        self,
+        rows: Iterable[Dict[str, object]],
+        updated_at: str,
+        batch_size: int = 40,
+    ) -> List[str]:
+        items = [row for row in rows or [] if str((row or {}).get("id") or "").strip()]
+        queries: List[str] = []
+        for offset in range(0, len(items), max(1, int(batch_size or 40))):
+            batch = items[offset: offset + max(1, int(batch_size or 40))]
+            inserts = [
+                self.node_insert_clause(row, updated_at, "$n" + str(index)) + ";"
+                for index, row in enumerate(batch)
+            ]
+            if inserts:
+                queries.append("insert " + " ".join(inserts))
+        return queries
+
+    def batched_relation_insert_queries(
+        self,
+        rows: Iterable[Dict[str, object]],
+        updated_at: str,
+        batch_size: int = 25,
+    ) -> List[str]:
+        items = [
+            row for row in rows or []
+            if str((row or {}).get("source") or "").strip() and str((row or {}).get("target") or "").strip()
+        ]
+        queries: List[str] = []
+        for offset in range(0, len(items), max(1, int(batch_size or 25))):
+            batch = items[offset: offset + max(1, int(batch_size or 25))]
+            matches = []
+            inserts = []
+            for index, row in enumerate(batch):
+                source_var = "$source" + str(index)
+                target_var = "$target" + str(index)
+                relation_var = "$r" + str(index)
+                matches.append(self.relation_match_clause(row, source_var, target_var))
+                inserts.append(self.relation_insert_clause(row, updated_at, relation_var, source_var, target_var) + ";")
+            if matches and inserts:
+                queries.append("match " + " ".join(matches) + " insert " + " ".join(inserts))
+        return queries
+
+    def inferencebox_insert_queries(
+        self,
+        node_rows: Iterable[Dict[str, object]],
+        relation_rows: Iterable[Dict[str, object]],
+        updated_at: str,
+    ) -> List[str]:
+        settings = runtime_settings()
+        node_batch_size = int(number_or_none(settings.get("typedbInferenceBoxNodeBatchSize")) or 40)
+        relation_batch_size = int(number_or_none(settings.get("typedbInferenceBoxRelationBatchSize")) or 25)
+        return [
+            *self.batched_node_insert_queries(node_rows, updated_at, node_batch_size),
+            *self.batched_relation_insert_queries(relation_rows, updated_at, relation_batch_size),
+        ]
 
     def seed_ontology(self, payload: Dict[str, object] = None) -> Dict[str, object]:
         payload = payload or {}
@@ -1545,9 +1677,14 @@ relation ontology-assertion,
         _TypeDB, _Credentials, _DriverOptions, _DriverTlsConfig, TransactionType = imported[0]
 
         def apply_schema_query(driver, query: str) -> None:
-            with driver.transaction(self.database, TransactionType.SCHEMA) as tx:
-                tx.query(query).resolve()
-                tx.commit()
+            with typedb_operation_timeout(self.schema_operation_timeout_seconds(), "TypeDB schema function sync"):
+                with driver.transaction(self.database, TransactionType.SCHEMA) as tx:
+                    tx.query(query).resolve()
+                    tx.commit()
+
+        def is_already_existing_schema_function(error: Exception) -> bool:
+            error_text = str(error).lower()
+            return "already exists" in error_text or "with name" in error_text
 
         synced: List[Dict[str, object]] = []
         failed: List[Dict[str, object]] = []
@@ -1559,18 +1696,19 @@ relation ontology-assertion,
                     self.ensure_schema(driver, imported)
                     for definition in definitions:
                         define_query = str(definition.get("define") or "")
-                        redefine_query = str(definition.get("redefine") or "")
+                        sync_status = "defined"
                         try:
                             apply_schema_query(driver, define_query)
-                        except Exception as define_error:  # noqa: BLE001 - existing functions require redefine.
-                            if "already exists" not in str(define_error).lower() and "with name" not in str(define_error).lower():
+                        except Exception as define_error:  # noqa: BLE001 - TypeDB reports existing schema functions as exceptions.
+                            if not is_already_existing_schema_function(define_error):
                                 raise
-                            apply_schema_query(driver, redefine_query)
+                            sync_status = "already-exists"
                         synced.append({
                             "ruleId": definition.get("ruleId"),
                             "nativeRuleId": definition.get("nativeRuleId"),
                             "schemaFunctionName": definition.get("functionName"),
                             "rootSchemaFunctionName": definition.get("rootFunctionName") or definition.get("functionName"),
+                            "schemaFunctionSyncStatus": sync_status,
                         })
                 finally:
                     self.close_driver(driver)
@@ -1846,6 +1984,7 @@ relation ontology-assertion,
         has_materialized_relations = materialized_relation_count > 0
         saved_ok = bool(save_result.get("saved"))
         prune_result = self.prune_inferencebox_generations(generation_id, keep_count=keep_generation_count) if saved_ok and prune_requested else {}
+        inferencebox_payload = self.inferencebox_snapshot_from_graph(inference_graph, target_symbols, 80)
         return {
             "configured": True,
             "status": ("ok" if has_materialized_relations else "empty") if saved_ok else str(save_result.get("status") or "error"),
@@ -1894,6 +2033,7 @@ relation ontology-assertion,
                 for key in ["status", "reason", "reasonCode", "nativeQueryUsed", "schemaFunctionUsed", "executedRuleCount", "skippedRuleCount", "matchedCount", "executedRules", "skippedRules"]
                 if key in native_match_result
             },
+            "inferenceBox": inferencebox_payload,
             "nativeReasoningProfile": native_profile,
             "ruleboxMetadata": runtime_rulebox_metadata,
             **runtime_rulebox_metadata,
@@ -1926,8 +2066,9 @@ relation ontology-assertion,
             row for row in self.rows_for_relations(graph) + self.support_relation_rows(graph)
             if str(row.get("ontologyBox") or "") == "InferenceBox"
         ]
-        queries = [self.node_insert_query(row, utc_now()) for row in node_rows]
-        queries.extend(self.relation_insert_query(row, utc_now()) for row in relation_rows if row.get("source") and row.get("target"))
+        updated_at = utc_now()
+        queries = self.inferencebox_insert_queries(node_rows, relation_rows, updated_at)
+        statement_count = len(node_rows) + len([row for row in relation_rows if row.get("source") and row.get("target")])
         try:
             def operation():
                 driver = self.open_driver(imported)
@@ -1949,7 +2090,9 @@ relation ontology-assertion,
                 "graphStore": "typedb",
                 "entityCount": len(node_rows),
                 "relationCount": len(relation_rows),
-                "statementCount": len(queries),
+                "statementCount": statement_count,
+                "batchCount": len(queries),
+                "insertMode": "batched",
                 "inferenceGenerationId": str((graph.worldview or {}).get("inferenceGenerationId") or ""),
                 "inferenceGenerationAt": str((graph.worldview or {}).get("inferenceGenerationAt") or ""),
             }
@@ -1963,7 +2106,9 @@ relation ontology-assertion,
                 "reason": str(error)[:220],
                 "entityCount": len(node_rows),
                 "relationCount": len(relation_rows),
-                "statementCount": len(queries),
+                "statementCount": statement_count,
+                "batchCount": len(queries),
+                "insertMode": "batched",
                 "inferenceGenerationId": str((graph.worldview or {}).get("inferenceGenerationId") or ""),
             }
 
@@ -2040,6 +2185,73 @@ relation ontology-assertion,
                 "activeGenerationId": active_generation_id,
                 "deletedGenerationCount": 0,
             }
+
+    def inferencebox_snapshot_from_graph(
+        self,
+        graph: PortfolioOntology,
+        symbols: List[str] = None,
+        limit: int = 80,
+    ) -> Dict[str, object]:
+        clean_symbols = sorted(set(str(item or "").upper().strip() for item in (symbols or []) if str(item or "").strip()))
+        safe_limit = max(1, min(500, int(limit or 80)))
+        all_entity_rows = [
+            row for row in self.node_rows(graph)
+            if str(row.get("ontologyBox") or "") == "InferenceBox"
+        ]
+        all_relation_rows = [
+            row for row in self.rows_for_relations(graph) + self.support_relation_rows(graph)
+            if str(row.get("ontologyBox") or "") == "InferenceBox"
+        ]
+        entity_rows = [
+            row for row in all_entity_rows
+            if not clean_symbols or str(row.get("symbol") or "").upper() in clean_symbols
+        ]
+        relation_rows = [
+            row for row in all_relation_rows
+            if not clean_symbols
+            or any(symbol in str(row.get(key) or "").upper() for symbol in clean_symbols for key in ["source", "target", "symbol"])
+        ]
+        native_entity_rows = [row for row in entity_rows if bool(row.get("nativeTypeDbReasoned"))]
+        native_relation_rows = [row for row in relation_rows if bool(row.get("nativeTypeDbReasoned"))]
+        native_trace_rows = [row for row in native_entity_rows if str(row.get("kind") or "") == "inference-trace"]
+        generation_rulebox_metadata = inference_rulebox_metadata(all_entity_rows, all_relation_rows)
+        rowsets = {
+            "entityCounts": [{"entityCount": len(native_entity_rows), "nativeEntityCount": len(native_entity_rows)}],
+            "relationCounts": [{"relationCount": len(native_relation_rows), "nativeRelationCount": len(native_relation_rows)}],
+            "traceCounts": [{"traceCount": len(native_trace_rows), "nativeTraceCount": len(native_trace_rows)}],
+            "entities": native_entity_rows[:safe_limit],
+            "relations": native_relation_rows[:safe_limit],
+            "traces": [{**row, "matchedConditionIds": matched_condition_ids(row)} for row in native_trace_rows[:safe_limit]],
+        }
+        snapshot = inferencebox_snapshot_from_rows(rowsets, "typedbNativeRuleResult", clean_symbols)
+        has_native_output = bool(native_relation_rows or native_trace_rows)
+        generation_id = str((graph.worldview or {}).get("inferenceGenerationId") or "")
+        generation_at = str((graph.worldview or {}).get("inferenceGenerationAt") or "")
+        snapshot.update({
+            "graphStore": "typedb",
+            "source": "typedbInferenceBox",
+            "status": "ok" if has_native_output else "empty",
+            "reasoningMode": str(generation_rulebox_metadata.get("reasoningMode") or TYPEDB_NATIVE_REASONING_MODE),
+            "materializationSource": str(generation_rulebox_metadata.get("materializationSource") or TYPEDB_NATIVE_MATERIALIZATION_SOURCE),
+            "querySource": "typedb-native-rule-result",
+            "typedbReadStatus": "skipped",
+            "typedbReadReason": "run_rulebox materialization result reused without opening a second TypeDB read driver.",
+            "reason": "" if has_native_output else "TypeDB native rules matched no ABox facts.",
+            "nativeTypeDbReasoningUsed": has_native_output,
+            "typedbNativeRuleReasoningUsed": has_native_output,
+            "typedbBootstrapReasoningUsed": False,
+            "pythonBootstrapDisabled": True,
+            "inferenceGenerationId": generation_id,
+            "inferenceGenerationAt": generation_at,
+            "generationScoped": bool(generation_id),
+            "generationCount": 1 if generation_id else 0,
+            "inactiveGenerationEntityCount": 0,
+            "inactiveGenerationRelationCount": 0,
+            "ignoredNonNativeRelationCount": max(0, len(relation_rows) - len(native_relation_rows)),
+            "ignoredNonNativeTraceCount": max(0, len([row for row in entity_rows if str(row.get("kind") or "") == "inference-trace"]) - len(native_trace_rows)),
+            **generation_rulebox_metadata,
+        })
+        return snapshot
 
     def inferencebox_snapshot(self, symbols: List[str] = None, limit: int = 80) -> Dict[str, object]:
         clean_symbols = sorted(set(str(item or "").upper().strip() for item in (symbols or []) if str(item or "").strip()))

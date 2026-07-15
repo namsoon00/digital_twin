@@ -206,6 +206,8 @@ class MonitorRunner:
             graphStore=projection.get("graphStore") if isinstance(projection, dict) else "",
         )
         events = self.monitor.events_for_snapshot(snapshot, previous)
+        if force and hasattr(self.monitor, "forced_holdings_snapshot_events"):
+            events.extend(self.monitor.forced_holdings_snapshot_events(snapshot))
         self.progress("events.detected", accountId=account.account_id, eventCount=len(events))
         if allowed_symbols:
             events = self.filter_events_by_symbol(events, allowed_symbols)

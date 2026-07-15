@@ -6,13 +6,15 @@ from html import unescape
 from typing import Dict, Iterable
 
 from ..domain.accounts import AccountConfig
+from ..domain.data_freshness import data_freshness_required, freshness_record
 from ..domain.events import DomainEvent
+from ..domain.message_types import PORTFOLIO_HOLDINGS_SNAPSHOT
 from ..domain.notification_ai import enrich_notification_ai_context
 from ..domain.notification_templates import alert_context, text_context
 from ..domain.notifications import NotificationJob
 from ..domain.portfolio import AlertEvent
 from .external_signal_utils import guarded_external_call, root_api_error
-from .settings import runtime_settings
+from .settings import runtime_settings, utc_now
 
 
 TELEGRAM_HTML_PATTERN = re.compile(r"</?(?:b|strong|i|em|u|ins|s|strike|del|code|pre|a|blockquote)(?:\s+[^>]*)?>", re.IGNORECASE)
@@ -236,6 +238,18 @@ class QueueingNotifier:
         )
         context.update(account_delivery_context(self.account))
         context.update({key: value for key, value in formula_settings_context().items() if key not in context})
+        if self.message_type == PORTFOLIO_HOLDINGS_SNAPSHOT and data_freshness_required(self.message_type):
+            context.setdefault("dataFreshnessRequired", True)
+            context.setdefault(
+                "dataFreshness",
+                freshness_record(
+                    "manualPortfolioSnapshot",
+                    self.message_type,
+                    settings=runtime_settings(),
+                    source_fetched_at=context.get("eventGeneratedAt") or context.get("referenceDate") or utc_now(),
+                    data_quality="manual",
+                ),
+            )
         job = NotificationJob.create(
             text,
             account_id=self.account.account_id if self.account else "",

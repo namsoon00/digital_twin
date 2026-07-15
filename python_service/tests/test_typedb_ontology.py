@@ -3,16 +3,19 @@ import json
 import tempfile
 import unittest
 from pathlib import Path
+from types import SimpleNamespace
 from unittest.mock import patch
 
 from digital_twin import service_manager
 from digital_twin.domain.ontology_rulebox_catalog import default_graph_inference_rules
 from digital_twin.domain.ontology_contracts import OntologyEntity, OntologyEvidence, OntologyRelation, PortfolioOntology
+from digital_twin.domain.portfolio import AccountSnapshot, PortfolioSummary, Position, utc_now_iso
 from digital_twin.domain.repositories import (
     ONTOLOGY_GRAPH_REPOSITORY_CONTRACT,
     ontology_graph_repository_contract_errors,
 )
 from digital_twin.infrastructure.ontology_graph_store import ontology_repository_from_settings
+from digital_twin.infrastructure.ontology_projection import PortfolioOntologyProjectionRecorder
 from digital_twin.infrastructure.graph_store_rulebox import rulebox_graph_from_rules
 from digital_twin.infrastructure.typedb_ontology import (
     NullTypeDBOntologyGraphRepository,
@@ -129,6 +132,186 @@ class TypeDBOntologyRepositoryTests(unittest.TestCase):
         self.assertTrue(any('has ontology-read-scope "title+rss-summary"' in query for query in queries))
         self.assertTrue(any("has ontology-pe-ratio 47.5" in query for query in queries))
         self.assertTrue(any("has ontology-beta 1.8" in query for query in queries))
+
+    def test_typedb_inferencebox_insert_queries_batch_rows(self):
+        repository = TypeDBOntologyGraphRepository("127.0.0.1:1729")
+        node_rows = [
+            {
+                "id": "inference:node:" + str(index),
+                "label": "추론 " + str(index),
+                "kind": "inference-result",
+                "nodeType": "ontology-entity",
+                "ontologyBox": "InferenceBox",
+            }
+            for index in range(3)
+        ]
+        relation_rows = [
+            {
+                "source": "inference:node:0",
+                "target": "inference:node:1",
+                "type": "HAS_INFERENCE_TRACE",
+                "ontologyBox": "InferenceBox",
+            },
+            {
+                "source": "inference:node:1",
+                "target": "inference:node:2",
+                "type": "HAS_INFERRED_RISK",
+                "ontologyBox": "InferenceBox",
+            },
+        ]
+
+        queries = repository.inferencebox_insert_queries(node_rows, relation_rows, "2026-07-16T00:00:00Z")
+
+        self.assertEqual(2, len(queries))
+        self.assertIn("$n0 isa ontology-entity", queries[0])
+        self.assertIn("$n1 isa ontology-entity", queries[0])
+        self.assertIn("$n2 isa ontology-entity", queries[0])
+        self.assertIn("match $source0 isa ontology-node", queries[1])
+        self.assertIn("$r0 isa ontology-assertion", queries[1])
+        self.assertIn("$r1 isa ontology-assertion", queries[1])
+
+    def test_typedb_inferencebox_snapshot_can_reuse_materialized_graph_without_read(self):
+        repository = TypeDBOntologyGraphRepository("127.0.0.1:1729")
+        graph = PortfolioOntology(
+            "portfolio:inference",
+            worldview={
+                "inferenceGenerationId": "generation:test",
+                "inferenceGenerationAt": "2026-07-16T00:00:00Z",
+            },
+        )
+        graph.entities.append(OntologyEntity("inference:stock:AAPL", "Apple risk", "inference-result", {
+            "ontologyBox": "InferenceBox",
+            "symbol": "AAPL",
+            "nativeTypeDbReasoned": True,
+            "nativeRuleId": "typedb.native.test",
+        }))
+        graph.relations.append(OntologyRelation("stock:AAPL", "inference:stock:AAPL", "HAS_INFERRED_RISK", 1.0, properties={
+            "ontologyBox": "InferenceBox",
+            "symbol": "AAPL",
+            "nativeTypeDbReasoned": True,
+            "nativeRuleId": "typedb.native.test",
+        }))
+
+        snapshot = repository.inferencebox_snapshot_from_graph(graph, ["AAPL"], 80)
+
+        self.assertEqual("ok", snapshot["status"])
+        self.assertEqual("typedb-native-rule-result", snapshot["querySource"])
+        self.assertEqual("skipped", snapshot["typedbReadStatus"])
+        self.assertEqual(1, snapshot["relationCount"])
+        self.assertTrue(snapshot["nativeTypeDbReasoningUsed"])
+
+    def test_projection_recorder_reuses_rulebox_inferencebox_payload(self):
+        class FakeRepository:
+            store_key = "typedb"
+
+            def __init__(self):
+                self.snapshot_read_called = False
+
+            def save_graph(self, _graph):
+                return {"saved": True, "status": "ok", "graphStore": "typedb"}
+
+            def run_rulebox(self, _payload):
+                return {
+                    "status": "ok",
+                    "graphStore": "typedb",
+                    "inferenceBox": {
+                        "status": "ok",
+                        "relationCount": 1,
+                        "typedbReadStatus": "skipped",
+                    },
+                }
+
+            def inferencebox_snapshot(self, *_args, **_kwargs):
+                self.snapshot_read_called = True
+                raise AssertionError("inferencebox_snapshot should not be called when run_rulebox returned inferenceBox")
+
+        repository = FakeRepository()
+        snapshot = AccountSnapshot(
+            "main",
+            "메인",
+            "toss",
+            "live",
+            "ok",
+            utc_now_iso(),
+            PortfolioSummary(total=1000, invested=1000, cash=0, markets=[], sectors=[], concentration=0),
+            positions=[Position("AAPL", "Apple", market="US", currency="USD", quantity=1, current_price=100, market_value=100, market_value_krw=140000)],
+        )
+
+        result = PortfolioOntologyProjectionRecorder(repository).record_snapshot(snapshot)
+
+        self.assertFalse(repository.snapshot_read_called)
+        self.assertEqual("ok", result["inferenceBox"]["status"])
+        self.assertEqual("skipped", result["inferenceBox"]["typedbReadStatus"])
+
+    def test_typedb_schema_function_sync_skips_redefine_when_function_exists(self):
+        class FakeQuery:
+            def __init__(self, driver, query):
+                self.driver = driver
+                self.query = str(query or "")
+
+            def resolve(self):
+                stripped = self.query.lstrip()
+                if stripped.startswith("redefine"):
+                    self.driver.redefine_called = True
+                    raise AssertionError("redefine should not be called for content-hashed schema functions")
+                if stripped.startswith("define\nfun "):
+                    self.driver.define_attempts += 1
+                    raise RuntimeError("[FUN5] A function with name 'orbit_rule_test' already exists")
+                return []
+
+        class FakeTransaction:
+            def __init__(self, driver):
+                self.driver = driver
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, _exc_type, _exc, _traceback):
+                return False
+
+            def query(self, query):
+                return FakeQuery(self.driver, query)
+
+            def commit(self):
+                self.driver.commits += 1
+
+        class FakeDriver:
+            def __init__(self):
+                self.define_attempts = 0
+                self.redefine_called = False
+                self.commits = 0
+
+            def transaction(self, *_args, **_kwargs):
+                return FakeTransaction(self)
+
+        class FakeRepository(TypeDBOntologyGraphRepository):
+            def __init__(self):
+                super().__init__("127.0.0.1:1729", retry_count=0)
+                self.fake_driver = FakeDriver()
+
+            def driver_imports(self):
+                return (object, object, object, object, SimpleNamespace(SCHEMA="schema")), None
+
+            def open_driver(self, _imported):
+                return self.fake_driver
+
+            def ensure_database(self, _driver):
+                return None
+
+            def ensure_schema(self, _driver, _imported):
+                return None
+
+            def close_driver(self, _driver):
+                return None
+
+        repository = FakeRepository()
+
+        result = repository.sync_typedb_native_rule_functions(default_graph_inference_rules()[:1])
+
+        self.assertEqual("ok", result["status"])
+        self.assertGreater(repository.fake_driver.define_attempts, 0)
+        self.assertFalse(repository.fake_driver.redefine_called)
+        self.assertTrue(all(item["schemaFunctionSyncStatus"] == "already-exists" for item in result["syncedFunctions"]))
 
     def test_typedb_null_repository_is_explicitly_disabled(self):
         result = NullTypeDBOntologyGraphRepository().save_graph(PortfolioOntology("empty"))

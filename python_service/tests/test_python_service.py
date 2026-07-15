@@ -13224,6 +13224,99 @@ class PythonServiceTests(unittest.TestCase):
             operational_history_retention_cutoff({"operationalHistoryRetentionHours": "24"}, now=now),
         )
 
+    def test_mysql_operational_history_retention_aggressive_policies(self):
+        db_path = test_store_seed(self.temp.name)
+        TestMonitorStore(db_path)
+        payload = json.dumps({"ok": True})
+        now = datetime(2026, 7, 15, 13, 0, tzinfo=timezone.utc)
+
+        for index, generated_at in enumerate([
+            "2026-07-15T12:00:00Z",
+            "2026-07-15T12:10:00Z",
+            "2026-07-15T12:20:00Z",
+            "2026-07-15T12:30:00Z",
+        ]):
+            mysql_execute(
+                db_path,
+                """
+                INSERT INTO monitor_snapshot_history (account_id, generated_at, payload_json, created_at)
+                VALUES ('main', ?, ?, ?)
+                """,
+                (generated_at, json.dumps({"index": index}), generated_at),
+            )
+
+        for index, occurred_at in enumerate([
+            "2026-07-15T12:00:00Z",
+            "2026-07-15T12:10:00Z",
+            "2026-07-15T12:20:00Z",
+        ]):
+            mysql_execute(
+                db_path,
+                """
+                INSERT INTO domain_events
+                    (event_id, name, aggregate_id, occurred_at, correlation_id, payload_json, event_json)
+                VALUES (?, 'monitoring.alerts_detected', 'main', ?, '', ?, ?)
+                """,
+                ("alert-event-" + str(index), occurred_at, payload, payload),
+            )
+        mysql_execute(
+            db_path,
+            """
+            INSERT INTO domain_events
+                (event_id, name, aggregate_id, occurred_at, correlation_id, payload_json, event_json)
+            VALUES ('other-event', 'monitoring.cycle_completed', 'main', '2026-07-15T12:20:00Z', '', ?, ?)
+            """,
+            (payload, payload),
+        )
+
+        mysql_execute(
+            db_path,
+            """
+            INSERT INTO notification_jobs
+                (job_id, account_id, account_label, message_type, source_event_id, source_event_name,
+                 dedupe_key, status, attempts, created_at, updated_at, last_error, text, payload_json)
+            VALUES
+                ('old-suppressed', 'main', 'Main', 'investmentInsight', '', '', 'old-suppressed',
+                 'suppressed', 0, '2026-07-15T10:00:00Z', '2026-07-15T10:00:00Z', '', 'old', ?),
+                ('fresh-suppressed', 'main', 'Main', 'investmentInsight', '', '', 'fresh-suppressed',
+                 'suppressed', 0, '2026-07-15T12:30:00Z', '2026-07-15T12:30:00Z', '', 'fresh', ?),
+                ('done-job', 'main', 'Main', 'investmentInsight', '', '', 'done-job',
+                 'done', 0, '2026-07-15T10:00:00Z', '2026-07-15T10:00:00Z', '', 'done', ?)
+            """,
+            (payload, payload, payload),
+        )
+
+        store = TestMonitorStore(db_path)
+        settings = dict(mysql_test_settings(db_path))
+        settings.update({
+            "operationalHistoryRetentionEnabled": "1",
+            "operationalHistoryRetentionHours": "24",
+            "operationalSnapshotHistoryKeepCount": "2",
+            "operationalSuppressedNotificationRetentionMinutes": "120",
+            "operationalLargeDomainEventKeepCount": "1",
+            "operationalLargeDomainEventNames": "monitoring.alerts_detected",
+        })
+        with store.connect() as connection:
+            result = apply_mysql_operational_history_retention(connection, settings, now=now, use_lock=False)
+
+        self.assertEqual(2, result["policies"]["count:monitor_snapshot_history"])
+        self.assertEqual(1, result["policies"]["suppressed:notification_jobs"])
+        self.assertEqual(2, result["policies"]["count:domain_events"])
+        self.assertEqual(2, mysql_fetchone(db_path, "SELECT COUNT(*) FROM monitor_snapshot_history")[0])
+        self.assertEqual(
+            1,
+            mysql_fetchone(db_path, "SELECT COUNT(*) FROM domain_events WHERE name = 'monitoring.alerts_detected'")[0],
+        )
+        self.assertEqual(
+            1,
+            mysql_fetchone(db_path, "SELECT COUNT(*) FROM domain_events WHERE name = 'monitoring.cycle_completed'")[0],
+        )
+        self.assertEqual(2, mysql_fetchone(db_path, "SELECT COUNT(*) FROM notification_jobs")[0])
+        self.assertEqual(
+            1,
+            mysql_fetchone(db_path, "SELECT COUNT(*) FROM notification_jobs WHERE status = 'suppressed'")[0],
+        )
+
 
 class AssignmentTests(unittest.TestCase):
     def test_parse_assignments_preserves_defaults(self):

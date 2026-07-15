@@ -231,6 +231,17 @@ function checkFrontendAdminRender() {
     "PC 중심 상단 통합 금융 콘솔 레이아웃 토큰이 없습니다."
   );
   assertOk(
+    styles.indexOf("PC top area stability layer") >= 0 &&
+      /\.console-shell > \.topbar,[\s\S]*\.console-shell \.managed-page > \.page-command-strip,[\s\S]*\.console-shell \.managed-page > \.page-routine-panel\s*\{[\s\S]*display: none !important;/.test(styles) &&
+      /\.console-shell \.app-nav-tabs\s*\{[\s\S]*flex-wrap: nowrap;[\s\S]*overflow-x: auto;/.test(styles) &&
+      /\.console-shell \.app-nav-section-label,[\s\S]*\.console-shell \.app-nav-divider,[\s\S]*\.console-shell \.nav-tab-description\s*\{[\s\S]*display: none !important;/.test(styles) &&
+      /\.console-shell \.app-nav-command \.page-command-metrics\s*\{[\s\S]*display: none;/.test(styles) &&
+      /\.console-shell \.app-nav-routine > span:not\(\.app-nav-routine-action-cell\)\s*\{[\s\S]*display: none;/.test(styles) &&
+      /@media \(min-width: 861px\) and \(max-width: 1180px\)[\s\S]*\.console-shell \.app-nav-flow,[\s\S]*\.console-shell \.app-nav-command \.page-command-metrics,[\s\S]*\.console-shell \.app-nav-current em,[\s\S]*\.console-shell :is\([\s\S]*\.feed-section-tabs span[\s\S]*\)\s*\{[\s\S]*display: none;/.test(styles) &&
+      indexHtml.indexOf("styles.css?v=20260716-pc-top-stability-v1") >= 0,
+    "PC 상단 영역이 탭별로 여러 줄/넘침으로 깨지지 않도록 하는 안정화 레이어가 없습니다."
+  );
+  assertOk(
     styles.indexOf("Desktop comfort rail") >= 0 &&
       /\.managed-page\s*\{[\s\S]*max-width: var\(--ds-page-content-width\);[\s\S]*justify-self: center;/.test(styles) &&
       /\.app-nav-command \.page-command-metrics\s*\{[\s\S]*display: none;/.test(styles) &&

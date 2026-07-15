@@ -21485,3 +21485,248 @@ html[data-theme="dark"] .ontology-graph-expanded-toolbar .icon-button.danger {
     margin: 0;
   }
 }
+
+/* PC top area stability layer: every work tab keeps one readable command surface. */
+@media (min-width: 861px) {
+  .console-shell > .topbar,
+  .console-shell .managed-page > .page-command-strip,
+  .console-shell .managed-page > .page-routine-panel {
+    display: none !important;
+  }
+
+  .console-shell .app-nav {
+    min-width: 0;
+  }
+
+  .console-shell .app-nav-brand,
+  .console-shell .app-nav-tools,
+  .console-shell .app-nav-command,
+  .console-shell .app-nav-current,
+  .console-shell .app-nav-mode,
+  .console-shell .app-nav-flow,
+  .console-shell .app-nav-routine {
+    min-width: 0;
+  }
+
+  .console-shell .app-nav-tabs {
+    display: flex;
+    flex-wrap: nowrap;
+    align-items: center;
+    min-width: 0;
+    overflow-x: auto;
+    overflow-y: hidden;
+    scrollbar-width: none;
+  }
+
+  .console-shell .app-nav-tabs::-webkit-scrollbar {
+    display: none;
+  }
+
+  .console-shell .app-nav-group {
+    display: contents;
+  }
+
+  .console-shell .app-nav-section-label,
+  .console-shell .app-nav-divider,
+  .console-shell .nav-tab-description {
+    display: none !important;
+  }
+
+  .console-shell .app-nav-tab,
+  .console-shell .app-nav-menu-item {
+    flex: 0 0 auto;
+    max-width: 116px;
+    white-space: nowrap;
+  }
+
+  .console-shell .nav-tab-label {
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    word-break: keep-all;
+  }
+
+  .console-shell .app-nav-command,
+  .console-shell .app-nav-command.has-mode,
+  .console-shell .app-nav-command.no-mode {
+    align-items: center;
+    overflow: hidden;
+  }
+
+  .console-shell .app-nav-command .page-command-metrics {
+    display: none;
+  }
+
+  .console-shell .app-nav-current strong,
+  .console-shell .app-nav-current em,
+  .console-shell .app-nav-flow .page-flow-node strong,
+  .console-shell .app-nav-flow .page-flow-node em,
+  .console-shell .app-nav-routine strong,
+  .console-shell .app-nav-routine em {
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  .console-shell .app-nav-current strong {
+    font-size: clamp(16px, 1.08vw, 19px);
+    line-height: 1.12;
+  }
+
+  .console-shell .app-nav-current em {
+    font-size: 12px;
+    line-height: 1.2;
+  }
+
+  .console-shell .app-nav-flow .page-flow-spine {
+    flex-wrap: nowrap;
+  }
+
+  .console-shell .app-nav-flow .page-flow-node {
+    flex: 1 1 0;
+    max-width: 33.333%;
+  }
+
+  .console-shell .app-nav-routine {
+    justify-self: end;
+  }
+
+  .console-shell .app-nav-routine > span:not(.app-nav-routine-action-cell) {
+    display: none;
+  }
+
+  .console-shell .app-nav-routine-action-cell {
+    min-width: 0;
+  }
+
+  .console-shell .app-nav-routine-action-cell em {
+    display: none;
+  }
+
+  .console-shell .app-nav-routine-action {
+    max-width: 15ch;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  .console-shell :is(
+    .account-section-tabs,
+    .notification-section-tabs,
+    .ontology-section-tabs,
+    .strategy-section-tabs,
+    .feed-section-tabs
+  ) {
+    min-width: 0;
+  }
+
+  .console-shell :is(
+    .account-section-tabs button,
+    .notification-section-tabs button,
+    .ontology-section-tabs button,
+    .strategy-section-tabs button,
+    .feed-section-tabs button
+  ) {
+    min-width: 0;
+    word-break: keep-all;
+  }
+
+  .console-shell :is(
+    .account-section-tabs strong,
+    .notification-section-tabs strong,
+    .ontology-section-tabs strong,
+    .strategy-section-tabs strong,
+    .feed-section-tabs strong
+  ) {
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+}
+
+@media (min-width: 1181px) {
+  .console-shell .app-nav-command.has-mode {
+    grid-template-columns: minmax(240px, 0.34fr) auto minmax(260px, 1fr) auto;
+  }
+
+  .console-shell .app-nav-command.no-mode {
+    grid-template-columns: minmax(240px, 0.36fr) minmax(260px, 1fr) auto;
+  }
+
+  .console-shell .app-nav-current em {
+    max-width: 44ch;
+  }
+}
+
+@media (min-width: 1181px) and (max-width: 1560px) {
+  .console-shell .app-nav-command.has-mode,
+  .console-shell .app-nav-command.no-mode {
+    grid-template-columns: minmax(220px, 0.42fr) auto minmax(0, 1fr) auto;
+  }
+
+  .console-shell .app-nav-command.no-mode {
+    grid-template-columns: minmax(220px, 0.42fr) minmax(0, 1fr) auto;
+  }
+
+  .console-shell .app-nav-current em,
+  .console-shell .app-nav-flow .page-flow-node em,
+  .console-shell :is(
+    .account-section-tabs span,
+    .notification-section-tabs span,
+    .ontology-section-tabs span,
+    .strategy-section-tabs span,
+    .feed-section-tabs span
+  ) {
+    display: none;
+  }
+}
+
+@media (min-width: 861px) and (max-width: 1180px) {
+  .console-shell .app-nav {
+    grid-template-columns: minmax(150px, auto) minmax(0, 1fr) auto;
+    grid-template-rows: auto auto;
+  }
+
+  .console-shell .app-nav-command,
+  .console-shell .app-nav-command.has-mode,
+  .console-shell .app-nav-command.no-mode {
+    grid-template-columns: minmax(0, 1fr) auto;
+    max-height: none;
+  }
+
+  .console-shell .app-nav-mode,
+  .console-shell .app-nav-routine {
+    justify-self: end;
+  }
+
+  .console-shell .app-nav-flow,
+  .console-shell .app-nav-command .page-command-metrics,
+  .console-shell .app-nav-current em,
+  .console-shell :is(
+    .account-section-tabs span,
+    .notification-section-tabs span,
+    .ontology-section-tabs span,
+    .strategy-section-tabs span,
+    .feed-section-tabs span
+  ) {
+    display: none;
+  }
+
+  .console-shell .app-nav-command.has-mode .app-nav-routine {
+    display: none;
+  }
+
+  .console-shell :is(
+    .account-section-tabs button,
+    .notification-section-tabs button,
+    .ontology-section-tabs button,
+    .strategy-section-tabs button,
+    .feed-section-tabs button
+  ) {
+    min-height: 42px;
+    padding: 7px 10px;
+  }
+}

@@ -12,6 +12,8 @@ from .notification_ontology_sections import (
     RATE_REGIME_LABELS,
     ai_prompt_lines,
     append_unique_lines,
+    beginner_relation_decision_line,
+    beginner_rule_explanation,
     block_from_lines,
     fact_number,
     fact_number_text,
@@ -38,6 +40,7 @@ from .notification_text_formatting import (
     FOOTER_DATA_LABELS,
     ONTOLOGY_INTERNAL_DATA_PREFIXES,
     SEPARATE_DATA_LABELS,
+    absolute_beginner_friendly_text,
     beginner_friendly_text,
     criterion_row,
     criterion_rows,
@@ -783,6 +786,56 @@ def ontology_modeling_lines(context: Dict[str, object]) -> List[str]:
     return lines
 
 
+def message_delivery_level(context: Dict[str, object]) -> str:
+    if not isinstance(context, dict):
+        return ""
+    profile = context.get("messageDeliveryProfile") if isinstance(context.get("messageDeliveryProfile"), dict) else {}
+    return str(profile.get("level") or context.get("messageDeliveryLevel") or "").strip()
+
+
+def absolute_beginner_ontology_modeling_lines(context: Dict[str, object]) -> List[str]:
+    relation_context = ontology_relation_context(context)
+    if not relation_context:
+        return []
+    lines: List[str] = []
+    strength = relation_context.get("signalStrength")
+    strength_label = str(relation_context.get("signalStrengthLabel") or "").strip()
+    confidence = relation_context.get("confidence")
+    if strength not in (None, ""):
+        score_text = strength_label + " (" + format_score_value(strength) + "점)" if strength_label else format_score_value(strength) + "점"
+        if confidence not in (None, ""):
+            score_text += " · 신뢰도 " + format_score_value(confidence) + "%"
+        lines.append("확인 필요 점수: " + score_text)
+        lines.append("점수 뜻: 가격이 오를지 맞히는 점수가 아니라, 지금 다시 확인해야 할 정도를 나타냅니다.")
+    decision = relation_context.get("decision") if isinstance(relation_context.get("decision"), dict) else {}
+    decision_label = str(decision.get("label") or "").strip()
+    if decision_label:
+        lines.append("관계 분석이 본 상황: " + decision_label)
+    easy_decision = beginner_relation_decision_line(relation_context)
+    if easy_decision:
+        lines.append(easy_decision.replace("쉽게 말하면: ", "쉽게 말하면: "))
+    rules = relation_context.get("activeRules") or relation_context.get("matchedRules") or []
+    easy_rows: List[str] = []
+    for item in rules:
+        if not isinstance(item, dict) or item.get("referenceOnly") or item.get("reference_only"):
+            continue
+        easy = beginner_rule_explanation(item)
+        if easy:
+            easy_rows.append(easy)
+            continue
+        label = str(rule_value(item, "label", "name")).strip()
+        score = rule_value(item, "strengthScore", "strength_score", "score")
+        if label:
+            text = absolute_beginner_friendly_text(label.replace("->", "→"))
+            if score not in (None, ""):
+                text += " (" + format_score_value(score) + "점)"
+            easy_rows.append("왜 이렇게 봤나: " + text)
+    for row in easy_rows[:3]:
+        if row not in lines:
+            lines.append(row)
+    return [absolute_beginner_friendly_text(line) for line in lines if str(line or "").strip()]
+
+
 def ontology_missing_lines(context: Dict[str, object]) -> List[str]:
     lines = missing_data_lines(context)
     return ["부족 데이터 없음"] if ontology_relation_context(context) and not lines else lines
@@ -794,11 +847,18 @@ def score_explanation_sections(context: Dict[str, object]) -> List[tuple]:
     message_type = context_message_type(context)
     has_relation_context = bool(ontology_relation_context(context))
     if has_relation_context:
-        model_lines = ontology_modeling_lines(context)
+        level = message_delivery_level(context)
+        if level == "absoluteBeginner":
+            model_lines = absolute_beginner_ontology_modeling_lines(context)
+            model_title = "관계 판단 쉽게 보기"
+        else:
+            model_lines = ontology_modeling_lines(context)
+            model_title = "관계 판단"
         missing_lines = ontology_missing_lines(context)
         prompt_lines = []
     else:
         model_lines = modeling_lines(context)
+        model_title = "모델 판단"
         model_lines.extend(formula_audit_lines(context, "model"))
         model_lines.extend(investment_score_lines(context))
         if has_relation_context:
@@ -807,7 +867,7 @@ def score_explanation_sections(context: Dict[str, object]) -> List[tuple]:
         prompt_lines = []
     sections = []
     if model_lines:
-        sections.append(("관계 판단" if has_relation_context else "모델 판단", model_lines))
+        sections.append((model_title, model_lines))
     if missing_lines:
         sections.append(("부족 데이터", missing_lines))
     return sections

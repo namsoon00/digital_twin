@@ -4,6 +4,7 @@ from digital_twin.domain.investment_research import build_active_investment_opin
 from digital_twin.domain.notification_ai_gate_contracts import NotificationAIValidatedResponse
 from digital_twin.application.notification_ai_gate_message import execution_telegram_message
 from digital_twin.domain.notification_ontology_sections import ontology_rule_lines
+from digital_twin.domain.notification_templates import NotificationTemplate, render_notification
 from digital_twin.domain.portfolio import Position
 
 
@@ -195,6 +196,52 @@ class BeginnerRelationLanguageTests(unittest.TestCase):
         self.assertIn("부족 5", message)
         self.assertIn("관계 강도(여러 근거가 같은 방향인지 보는 확인 필요 점수)", message)
         self.assertIn("RuleBox(관계 분석 규칙)", message)
+
+    def test_absolute_beginner_relation_block_uses_plain_language(self):
+        message = render_notification(
+            NotificationTemplate("investmentInsight", "{telegramMessage}"),
+            {
+                "messageType": "investmentInsight",
+                "messageDeliveryLevel": "absoluteBeginner",
+                "telegramMessage": "<b>[관찰] 🛡️ SK하이닉스: 분할축소 우선 점검</b>",
+                "ontologyRelationContext": {
+                    "graphStoreUsed": True,
+                    "inferenceBoxUsed": True,
+                    "engineVersion": "typedb-inferencebox-relation-context-v1",
+                    "signalStrength": 94,
+                    "signalStrengthLabel": "매우 강함",
+                    "confidence": 94,
+                    "decision": {
+                        "actionGroup": "eventRisk",
+                        "label": "뉴스 리스크 대응 검토",
+                        "selectedRuleId": "graph.disclosure.event_risk.v1",
+                    },
+                    "activeRules": [
+                        {
+                            "ruleId": "graph.disclosure.event_risk.v1",
+                            "label": "보유 종목 + 공시/신고 이벤트 -> 공시 이벤트 리스크 추론",
+                            "strengthScore": 94,
+                        },
+                        {
+                            "ruleId": "graph.execution.capacity_safe.v1",
+                            "label": "보유 종목 + 작은 실행 노출 -> 실행 가능 용량 확인",
+                            "strengthScore": 94,
+                        },
+                    ],
+                },
+            },
+        )
+
+        self.assertIn("<b>관계 판단 쉽게 보기</b>", message)
+        self.assertIn("확인 필요 점수", message)
+        self.assertIn("가격이 오를지 맞히는 점수가 아니라", message)
+        self.assertIn("뉴스나 공시 때문에 보유 이유를 다시 확인", message)
+        self.assertIn("매도해야 한다는 뜻은 아닙니다", message)
+        self.assertNotIn("엔진", message)
+        self.assertNotIn("선택 규칙", message)
+        self.assertNotIn("성립 규칙", message)
+        self.assertNotIn("관계 신호:", message)
+        self.assertNotIn("AI 질문", message)
 
 
 if __name__ == "__main__":

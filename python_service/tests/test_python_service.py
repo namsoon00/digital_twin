@@ -10467,23 +10467,35 @@ class PythonServiceTests(unittest.TestCase):
         self.assertTrue(refreshed.market_hours_enabled)
         self.assertEqual(["US"], refreshed.market_hours_markets)
 
-    def test_notification_job_store_skips_rule_seed_when_defaults_exist(self):
+    def test_notification_job_store_migrates_rule_defaults_when_defaults_exist(self):
         db_path = test_store_seed(self.temp.name)
-        TestNotificationRuleStore(db_path)
-        original_seed_defaults = TestNotificationRuleStore.seed_defaults
-        seed_calls = []
+        store = TestNotificationRuleStore(db_path)
+        rule = store.get("investmentInsight")
+        legacy_conditions = []
+        for condition in rule.similarity_bypass_conditions:
+            payload = condition.to_dict()
+            if payload.get("id") == "insight_profit_loss_improved":
+                payload["label"] = "손익률 큰 개선"
+                payload["value"] = 5
+                payload["description"] = "이전 투자 인사이트보다 손익률이 5%p 이상 좋아지면 회복 신호로 보고 반복이어도 보냅니다."
+            legacy_conditions.append(payload)
+        mysql_execute(
+            db_path,
+            """
+            UPDATE notification_rules
+            SET similarity_bypass_conditions_json = ?
+            WHERE message_type = ?
+            """,
+            (json.dumps(legacy_conditions), "investmentInsight"),
+        )
 
-        def fail_if_called(self):
-            seed_calls.append(self.path)
-            raise AssertionError("notification job queue should not reseed existing rules")
+        queue = TestNotificationJobStore(db_path)
+        migrated = TestNotificationRuleStore(db_path).get("investmentInsight")
+        profit_improved = next(condition for condition in migrated.similarity_bypass_conditions if condition.condition_id == "insight_profit_loss_improved")
 
-        try:
-            TestNotificationRuleStore.seed_defaults = fail_if_called
-            queue = TestNotificationJobStore(db_path)
-            self.assertTrue(queue.notification_rule_defaults_exist())
-            self.assertEqual([], seed_calls)
-        finally:
-            TestNotificationRuleStore.seed_defaults = original_seed_defaults
+        self.assertTrue(queue.notification_rule_defaults_exist())
+        self.assertEqual("손익률 개선", profit_improved.label)
+        self.assertEqual(1, profit_improved.value)
 
     def test_notification_queue_suppresses_stale_data_freshness(self):
         queue = TestNotificationJobStore(test_store_seed(self.temp.name))

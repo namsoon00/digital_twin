@@ -37,10 +37,9 @@ from .settings import utc_now
 class MySQLNotificationJobStore(MySQLOperationalConnection):
     def __init__(self, settings: Dict[str, str] = None):
         super().__init__(settings)
-        if not self.notification_rule_defaults_exist():
-            from .mysql_operational import MySQLNotificationRuleStore
+        from .mysql_operational import MySQLNotificationRuleStore
 
-            MySQLNotificationRuleStore(self.runtime_settings)
+        MySQLNotificationRuleStore(self.runtime_settings)
 
     def notification_rule_defaults_exist(self) -> bool:
         message_types = list(DEFAULT_NOTIFICATION_RULES.keys())

@@ -5,6 +5,7 @@ from typing import Dict, List
 
 from .alert_formatting import compact_number, money, price_money, signed_number, signed_pct
 from .data_freshness import data_freshness_required, freshness_from_position, freshness_record
+from .external_api_sources import external_api_source_metadata
 from .external_signal_deltas import external_signals_with_deltas
 from .market_data import number
 from .message_types import (
@@ -420,6 +421,7 @@ class RealtimeMonitor(MonitoringSampleDataMixin, MonitoringPositionContextMixin,
         formula_metadata = self.notification_formula_metadata()
         ontology_quality = ontology_quality_event_metadata(snapshot, self.ontology_quality_min_score())
         ontology_inference = ontology_inference_event_metadata(snapshot)
+        external_api_sources = external_api_source_metadata(snapshot)
         for event in events:
             if generated_at:
                 event.generated_at = generated_at
@@ -429,6 +431,9 @@ class RealtimeMonitor(MonitoringSampleDataMixin, MonitoringPositionContextMixin,
                 event.metadata.setdefault("ontologyQuality", ontology_quality)
             if ontology_inference:
                 event.metadata.setdefault("ontologyInference", ontology_inference)
+            if external_api_sources:
+                event.metadata.setdefault("externalApiSources", external_api_sources.get("externalApiSources"))
+                event.metadata.setdefault("externalApiSourceLines", external_api_sources.get("externalApiSourceLines"))
         return events
 
     def snapshot_with_strategy_scores(self, snapshot: AccountSnapshot) -> AccountSnapshot:

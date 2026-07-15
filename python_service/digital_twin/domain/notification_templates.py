@@ -4,6 +4,7 @@ from dataclasses import asdict, dataclass
 from typing import Dict, List
 
 from .alert_formatting import signed_pct
+from .external_api_sources import external_api_source_line
 from .message_types import MESSAGE_TYPE_EMOJIS, MESSAGE_TYPE_LABELS, TRIGGER_SUMMARIES
 from .notification_ai import enrich_notification_ai_context
 from .notification_ontology_sections import (
@@ -278,6 +279,53 @@ def targeted_headline(status_headline: str, title_icon: str, target_value: str, 
     return " ".join(part for part in [status_headline, title_icon, body] if str(part or "").strip())
 
 
+def notification_external_api_source_lines(context_or_metadata: Dict[str, object]) -> List[str]:
+    if not isinstance(context_or_metadata, dict):
+        return []
+    value = context_or_metadata.get("externalApiSourceLines")
+    metadata = context_or_metadata.get("metadata")
+    if not value and isinstance(metadata, dict):
+        value = metadata.get("externalApiSourceLines")
+    lines: List[str] = []
+    if isinstance(value, str):
+        lines.extend([line.strip() for line in value.splitlines() if line.strip()])
+    elif isinstance(value, list):
+        for item in value:
+            if isinstance(item, dict):
+                line = external_api_source_line(item)
+            else:
+                line = str(item or "").strip()
+            if line:
+                lines.append(line)
+    rows = context_or_metadata.get("externalApiSources")
+    if not rows and isinstance(metadata, dict):
+        rows = metadata.get("externalApiSources")
+    if isinstance(rows, list):
+        for item in rows:
+            if not isinstance(item, dict):
+                continue
+            line = external_api_source_line(item)
+            if line and line not in lines:
+                lines.append(line)
+    unique: List[str] = []
+    seen = set()
+    for line in lines:
+        text = str(line or "").strip()
+        if text and text not in seen:
+            unique.append(text)
+            seen.add(text)
+    return unique
+
+
+def notification_external_api_source_block(context_or_metadata: Dict[str, object], rich: bool = False) -> str:
+    lines = notification_external_api_source_lines(context_or_metadata)
+    if not lines:
+        return ""
+    if rich:
+        return telegram_block_from_lines("사용한 데이터 API", lines)
+    return block_from_lines("사용한 데이터 API", lines)
+
+
 def alert_context(event: AlertEvent) -> Dict[str, object]:
     raw_lines = raw_lines_with_reference_date(event, [str(line).strip() for line in event.lines if str(line).strip()])
     metadata = dict(event.metadata or {})
@@ -312,10 +360,12 @@ def alert_context(event: AlertEvent) -> Dict[str, object]:
     ai_lines = ai_prompt_lines(metadata)
     ai_opinion_lines = notification_ai_opinion_lines(metadata)
     missing_lines = missing_data_lines(metadata)
+    external_api_source_lines = notification_external_api_source_lines(metadata)
     ontology_block = block_from_lines("관계 규칙", ontology_lines)
     ai_opinion_block = block_from_lines("AI 의견", ai_opinion_lines)
     ai_prompt_block = ""
     missing_data_block = block_from_lines("부족 데이터", missing_lines)
+    external_api_source_block = block_from_lines("사용한 데이터 API", external_api_source_lines)
     readable_parts = [
         headline,
         target_value,
@@ -330,6 +380,8 @@ def alert_context(event: AlertEvent) -> Dict[str, object]:
         readable_parts.extend(["", ai_prompt_block])
     if missing_data_block:
         readable_parts.extend(["", missing_data_block])
+    if external_api_source_block:
+        readable_parts.extend(["", external_api_source_block])
     if trigger_block:
         readable_parts.extend(["", trigger_block])
     readable_message = "\n".join(part for part in readable_parts if str(part).strip() or part == "").strip()
@@ -340,6 +392,7 @@ def alert_context(event: AlertEvent) -> Dict[str, object]:
     telegram_ai_opinion_block = telegram_block_from_lines("AI 의견", ai_opinion_lines)
     telegram_ai_prompt_block = ""
     telegram_missing_data_block = telegram_block_from_lines("부족 데이터", missing_lines)
+    telegram_external_api_source_block = telegram_block_from_lines("사용한 데이터 API", external_api_source_lines)
     telegram_parts = [
         "<b>" + html.escape(headline, quote=False) + "</b>",
         ("<code>" + escaped_target + "</code>") if escaped_target else "",
@@ -354,6 +407,8 @@ def alert_context(event: AlertEvent) -> Dict[str, object]:
         telegram_parts.extend(["", telegram_ai_prompt_block])
     if telegram_missing_data_block:
         telegram_parts.extend(["", telegram_missing_data_block])
+    if telegram_external_api_source_block:
+        telegram_parts.extend(["", telegram_external_api_source_block])
     if telegram_trigger_rows:
         telegram_parts.extend(["", "<b>발송 기준</b>", telegram_trigger_rows])
     telegram_message = "\n".join(part for part in telegram_parts if str(part).strip() or part == "").strip()
@@ -392,6 +447,7 @@ def alert_context(event: AlertEvent) -> Dict[str, object]:
         "ontologyRelationBlock": ontology_block,
         "aiPromptBlock": ai_prompt_block,
         "missingDataBlock": missing_data_block,
+        "externalApiSourceBlock": external_api_source_block,
         "divider": "",
         "telegramMessage": telegram_message,
         "telegramDataLines": telegram_data_lines,
@@ -399,6 +455,7 @@ def alert_context(event: AlertEvent) -> Dict[str, object]:
         "telegramOntologyRelationBlock": telegram_ontology_block,
         "telegramAiPromptBlock": telegram_ai_prompt_block,
         "telegramMissingDataBlock": telegram_missing_data_block,
+        "telegramExternalApiSourceBlock": telegram_external_api_source_block,
         "symbolLine": symbol_line,
         "severityLine": severity_line,
         "typeLine": type_line,
@@ -1093,6 +1150,16 @@ def append_ai_opinion(rendered: str, context: Dict[str, object], rich: bool = Fa
     return rendered_text.rstrip() + "\n\n" + block
 
 
+def append_external_api_sources(rendered: str, context: Dict[str, object], rich: bool = False) -> str:
+    rendered_text = str(rendered or "")
+    if not rendered_text.strip() or "사용한 데이터 API" in rendered_text:
+        return rendered
+    block = notification_external_api_source_block(context, rich)
+    if not block:
+        return rendered
+    return rendered_text.rstrip() + "\n\n" + block
+
+
 def prepend_message_start_badge(rendered: str, rich: bool = False, context: Dict[str, object] = None) -> str:
     text = str(rendered or "").strip()
     if not text:
@@ -1120,12 +1187,14 @@ def render_notification(template: NotificationTemplate, context: Dict[str, objec
         rich = template_prefers_rich_score(template.template, rendered)
         rendered = append_ai_opinion(rendered, values, rich)
         rendered = beginner_friendly_text(append_score_explanation(rendered, values, rich))
+        rendered = append_external_api_sources(rendered, values, rich)
         rendered = append_message_footer(rendered, values, rich)
         return prepend_message_start_badge(rendered, rich, values)
     rendered = render_template(BODY_TEMPLATE, values)
     rich = template_prefers_rich_score(BODY_TEMPLATE, rendered)
     rendered = append_ai_opinion(rendered, values, rich)
     rendered = beginner_friendly_text(append_score_explanation(rendered, values, rich))
+    rendered = append_external_api_sources(rendered, values, rich)
     rendered = append_message_footer(rendered, values, rich)
     return prepend_message_start_badge(rendered, rich, values)
 
@@ -1163,6 +1232,7 @@ def template_variables() -> List[str]:
         "ontologyRelationBlock",
         "aiPromptBlock",
         "missingDataBlock",
+        "externalApiSourceBlock",
         "divider",
         "telegramMessage",
         "telegramDataLines",
@@ -1170,6 +1240,7 @@ def template_variables() -> List[str]:
         "telegramOntologyRelationBlock",
         "telegramAiPromptBlock",
         "telegramMissingDataBlock",
+        "telegramExternalApiSourceBlock",
         "symbolLine",
         "severityLine",
         "typeLine",
@@ -1207,6 +1278,8 @@ def template_variables() -> List[str]:
         "notificationAiPromptContext",
         "ontologyRelationContext",
         "ontologyPromptContext",
+        "externalApiSources",
+        "externalApiSourceLines",
         "notificationFormulaAudit",
         "buyScoreFormula",
         "sellScoreFormula",

@@ -6803,54 +6803,33 @@
 
   function renderLoading() {
     return [
-      '<main class="shell">',
-      '<section class="topbar">',
-      '<div class="topbar-copy">',
-      '<p class="eyebrow">' + escapeHtml(appBrandName) + '</p>',
-      '<h1>신호 궤도를 준비하는 중</h1>',
-      '<p class="subtle">계좌, 관심 종목, 알림 워커, 모델 기준을 나눠 확인하고 있습니다.</p>',
+      '<main class="shell loading-shell" aria-busy="true">',
+      '<section class="loading-stage" aria-label="앱 초기화">',
+      '<div class="loading-brand">',
+      '<span class="app-brand-mark" aria-hidden="true"><span></span></span>',
+      '<div>',
+      '<p class="label">' + escapeHtml(appBrandName) + '</p>',
+      '<h1>데이터를 불러오는 중</h1>',
+      '<p class="subtle">잠시만 기다려주세요.</p>',
       '</div>',
-      '<div class="toolbar topbar-actions">',
-      '<span class="status-pill demo">초기 동기화</span>',
+      '</div>',
+      '<div class="loading-progress" role="progressbar" aria-label="초기 데이터 동기화" aria-valuemin="0" aria-valuemax="100">',
+      '<span></span>',
       '</div>',
       '</section>',
-      '<section class="loading-grid">',
-      '<article class="panel loading-status-panel">',
-      '<div class="panel-head">',
-      '<div>',
-      '<p class="label">Startup</p>',
-      '<h2>먼저 볼 수 있는 화면을 준비합니다</h2>',
+      '<section class="loading-skeleton-board" aria-hidden="true">',
+      '<div class="loading-skeleton-head">',
+      '<span></span>',
+      '<span></span>',
       '</div>',
-      '<span class="metric">4</span>',
+      '<div class="loading-skeleton-grid">',
+      '<span></span><span></span><span></span><span></span>',
       '</div>',
-      '<div class="loading-source-list">',
-      renderLoadingSource("계좌 연결", "토스 live 또는 로컬 저장 계정 상태 확인"),
-      renderLoadingSource("관심 종목", "계정별 관심 목록과 전체 종목 캐시 준비"),
-      renderLoadingSource("알림 운영", "최근 발송 이력과 룰 설정 동기화"),
-      renderLoadingSource("투자 판단", "전략 근거와 관계 그래프 계산"),
-      '</div>',
-      '</article>',
-      '<article class="panel loading-preview-panel">',
-      '<div class="panel-head"><div><p class="label">Preview</p><h2>데이터 준비 상태</h2></div></div>',
-      '<div class="loading-shell-preview">',
-      '<span></span><span></span><span></span>',
+      '<div class="loading-skeleton-list">',
       '<span></span><span></span><span></span>',
       '</div>',
-      '</article>',
       '</section>',
       '</main>'
-    ].join("");
-  }
-
-  function renderLoadingSource(title, description) {
-    return [
-      '<div class="loading-source-row">',
-      '<span class="loading-dot" aria-hidden="true"></span>',
-      '<div>',
-      '<strong>' + escapeHtml(title) + '</strong>',
-      '<em>' + escapeHtml(description) + '</em>',
-      '</div>',
-      '</div>'
     ].join("");
   }
 

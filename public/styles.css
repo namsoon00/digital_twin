@@ -20543,8 +20543,8 @@ html[data-theme="dark"] .ontology-graph-expanded-toolbar .icon-button.danger {
 
   .shell > .topbar h1,
   .shell > .topbar .subtle,
-  .loading-source-row strong,
-  .loading-source-row em {
+  .loading-brand h1,
+  .loading-brand .subtle {
     min-width: 0;
     overflow: hidden;
     text-overflow: ellipsis;
@@ -21728,5 +21728,157 @@ html[data-theme="dark"] .ontology-graph-expanded-toolbar .icon-button.danger {
   ) {
     min-height: 42px;
     padding: 7px 10px;
+  }
+}
+
+/* Initial loading skeleton screen: no operational facts before data is ready. */
+.loading-shell {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  place-items: center;
+  gap: var(--ds-space-6);
+  width: min(920px, calc(100vw - 48px));
+  min-height: 100dvh;
+  margin: 0 auto;
+  padding: clamp(28px, 7vh, 72px) 0;
+}
+
+.loading-stage,
+.loading-skeleton-board {
+  width: 100%;
+  min-width: 0;
+}
+
+.loading-stage {
+  display: grid;
+  gap: var(--ds-space-6);
+  padding: 28px;
+  border: 1px solid var(--ds-card-border);
+  border-radius: var(--ds-radius-panel);
+  background: linear-gradient(180deg, var(--panel), color-mix(in srgb, var(--panel-soft) 74%, var(--panel)));
+  box-shadow: 0 18px 48px rgba(16, 24, 32, 0.08);
+}
+
+.loading-brand {
+  display: grid;
+  grid-template-columns: 44px minmax(0, 1fr);
+  align-items: center;
+  gap: var(--ds-space-4);
+  min-width: 0;
+}
+
+.loading-brand h1,
+.loading-brand .subtle {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.loading-brand h1 {
+  color: var(--ink);
+  font-size: clamp(22px, 2.1vw, 30px);
+  line-height: 1.1;
+}
+
+.loading-progress {
+  position: relative;
+  height: 8px;
+  overflow: hidden;
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--panel-soft) 86%, var(--line));
+}
+
+.loading-progress span {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  left: -42%;
+  width: 42%;
+  border-radius: inherit;
+  background: linear-gradient(90deg, var(--blue), var(--green));
+  animation: loadingProgress 1.35s infinite ease-in-out;
+}
+
+.loading-skeleton-board {
+  display: grid;
+  gap: var(--ds-space-5);
+  padding: 20px;
+  border: 1px solid color-mix(in srgb, var(--ds-card-border) 78%, transparent);
+  border-radius: var(--ds-radius-panel);
+  background: color-mix(in srgb, var(--panel) 72%, transparent);
+}
+
+.loading-skeleton-head,
+.loading-skeleton-grid,
+.loading-skeleton-list {
+  display: grid;
+  gap: var(--ds-space-4);
+  min-width: 0;
+}
+
+.loading-skeleton-head {
+  grid-template-columns: minmax(180px, 0.36fr) minmax(0, 1fr);
+}
+
+.loading-skeleton-grid {
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+}
+
+.loading-skeleton-list {
+  grid-template-columns: minmax(0, 1fr);
+}
+
+.loading-skeleton-head span,
+.loading-skeleton-grid span,
+.loading-skeleton-list span {
+  display: block;
+  min-width: 0;
+  min-height: 62px;
+  border-radius: var(--ds-radius-control);
+  background: linear-gradient(90deg, var(--panel-soft), var(--chip-strong), var(--panel-soft));
+  background-size: 260% 100%;
+  animation: pulse 1.3s infinite linear;
+}
+
+.loading-skeleton-head span {
+  min-height: 34px;
+}
+
+.loading-skeleton-head span:last-child {
+  width: 72%;
+}
+
+.loading-skeleton-list span {
+  min-height: 42px;
+}
+
+@keyframes loadingProgress {
+  0% {
+    left: -42%;
+  }
+  55% {
+    left: 32%;
+  }
+  100% {
+    left: 100%;
+  }
+}
+
+@media (max-width: 860px) {
+  .loading-shell {
+    width: 100%;
+    max-width: 720px;
+    padding: calc(18px + env(safe-area-inset-top)) 14px calc(24px + env(safe-area-inset-bottom));
+  }
+
+  .loading-stage,
+  .loading-skeleton-board {
+    padding: 18px;
+  }
+
+  .loading-skeleton-head,
+  .loading-skeleton-grid {
+    grid-template-columns: minmax(0, 1fr);
   }
 }

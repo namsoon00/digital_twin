@@ -238,8 +238,22 @@ function checkFrontendAdminRender() {
       /\.console-shell \.app-nav-command \.page-command-metrics\s*\{[\s\S]*display: none;/.test(styles) &&
       /\.console-shell \.app-nav-routine > span:not\(\.app-nav-routine-action-cell\)\s*\{[\s\S]*display: none;/.test(styles) &&
       /@media \(min-width: 861px\) and \(max-width: 1180px\)[\s\S]*\.console-shell \.app-nav-flow,[\s\S]*\.console-shell \.app-nav-command \.page-command-metrics,[\s\S]*\.console-shell \.app-nav-current em,[\s\S]*\.console-shell :is\([\s\S]*\.feed-section-tabs span[\s\S]*\)\s*\{[\s\S]*display: none;/.test(styles) &&
-      indexHtml.indexOf("styles.css?v=20260716-pc-top-stability-v1") >= 0,
+      indexHtml.indexOf("styles.css?v=20260716-loading-skeleton-v1") >= 0,
     "PC 상단 영역이 탭별로 여러 줄/넘침으로 깨지지 않도록 하는 안정화 레이어가 없습니다."
+  );
+  assertOk(
+    code.indexOf('class="shell loading-shell"') >= 0 &&
+      code.indexOf('class="loading-progress"') >= 0 &&
+      code.indexOf('class="loading-skeleton-board"') >= 0 &&
+      code.indexOf("먼저 볼 수 있는 화면을 준비합니다") < 0 &&
+      code.indexOf('renderLoadingSource("계좌 연결"') < 0 &&
+      styles.indexOf("Initial loading skeleton screen") >= 0 &&
+      /\.loading-shell\s*\{[\s\S]*place-items: center;/.test(styles) &&
+      /\.loading-progress span\s*\{[\s\S]*animation: loadingProgress/.test(styles) &&
+      /\.loading-skeleton-grid\s*\{[\s\S]*grid-template-columns: repeat\(4, minmax\(0, 1fr\)\);/.test(styles) &&
+      /@keyframes loadingProgress/.test(styles) &&
+      indexHtml.indexOf("app.js?v=20260716-loading-skeleton-v1") >= 0,
+    "초기 로딩 화면이 운영 정보 카드 대신 progress/skeleton 화면으로 고정되지 않았습니다."
   );
   assertOk(
     styles.indexOf("Desktop comfort rail") >= 0 &&
@@ -279,7 +293,7 @@ function checkFrontendAdminRender() {
   );
   assertOk(
     styles.indexOf("Desktop no-three-line rhythm") >= 0 &&
-      /\.shell > \.topbar h1,[\s\S]*\.loading-source-row em\s*\{[\s\S]*white-space: nowrap;/.test(styles) &&
+      /\.shell > \.topbar h1,[\s\S]*\.shell > \.topbar \.subtle,[\s\S]*\.loading-brand h1,[\s\S]*\.loading-brand \.subtle\s*\{[\s\S]*white-space: nowrap;/.test(styles) &&
       /\.app-nav-command-kicker\s*\{[\s\S]*display: none;/.test(styles) &&
       /\.app-nav-routine-reason\s*\{[\s\S]*display: none;/.test(styles) &&
       /\.account-history-panel \.account-command-grid,[\s\S]*\.account-command-panel \.account-command-grid\s*\{[\s\S]*grid-template-columns: repeat\(4, minmax\(0, 1fr\)\);/.test(styles) &&
@@ -290,7 +304,7 @@ function checkFrontendAdminRender() {
     styles.indexOf("Desktop card comfort audit") >= 0 &&
       /--ds-card-comfort-gap: 14px;/.test(styles) &&
       /\.managed-page,[\s\S]*\.system-view\s*\{[\s\S]*gap: var\(--ds-page-gap\);/.test(styles) &&
-      /\.loading-source-list\s*\{[\s\S]*gap: var\(--ds-card-comfort-gap\);/.test(styles) &&
+      /\.loading-skeleton-board\s*\{[\s\S]*gap: var\(--ds-space-5\);/.test(styles) &&
       /\.symbol-result-workbench \.symbol-result-list,[\s\S]*\.investment-action-workbench \.investment-action-list\s*\{[\s\S]*gap: var\(--ds-card-comfort-gap\);/.test(styles) &&
       /\.notification-decision-list\s*\{[\s\S]*display: grid;[\s\S]*gap: var\(--ds-card-comfort-gap\);/.test(styles) &&
       /:where\([\s\S]*\.symbol-result-row,[\s\S]*\.notification-decision-row,[\s\S]*\.feed-impact-card,[\s\S]*\.research-evidence-item,[\s\S]*\.investment-action-row[\s\S]*\)\s*\{[\s\S]*padding: var\(--ds-card-comfort-pad-y\) var\(--ds-card-comfort-pad-x\);[\s\S]*border-left-width: 4px;/.test(styles),
@@ -303,8 +317,8 @@ function checkFrontendAdminRender() {
       /--ds-pc-type-panel-title: 18px;/.test(styles) &&
       /\.panel-head h2\s*\{[\s\S]*font-size: var\(--ds-pc-type-panel-title\);/.test(styles) &&
       /\.managed-page,[\s\S]*\.system-view\s*\{[\s\S]*gap: var\(--ds-page-gap\);/.test(styles) &&
-      /:is\([\s\S]*\.loading-source-list,[\s\S]*\.loading-shell-preview[\s\S]*\)\s*\{[\s\S]*gap: var\(--ds-card-comfort-gap\);/.test(styles) &&
-      /:is\([\s\S]*\.account-card strong,[\s\S]*\.loading-source-row strong[\s\S]*\)\s*\{[\s\S]*font-size: var\(--ds-pc-type-card-title\);/.test(styles) &&
+      /\.loading-skeleton-head,[\s\S]*\.loading-skeleton-grid,[\s\S]*\.loading-skeleton-list\s*\{[\s\S]*gap: var\(--ds-space-4\);/.test(styles) &&
+      /:is\([\s\S]*\.account-card strong,[\s\S]*\.ontology-experiment-recommendation strong[\s\S]*\)\s*\{[\s\S]*font-size: var\(--ds-pc-type-card-title\);/.test(styles) &&
       /\[data-card-type="metric-cell"\],[\s\S]*\.inline-detail-metrics > \*\s*\{[\s\S]*min-height: 92px;/.test(styles) &&
       /\.notification-decision-row\s*\{[\s\S]*min-height: 104px;/.test(styles),
     "PC 최종 QA 밀도 레이어의 간격/폰트/카드 높이 계약이 없습니다."

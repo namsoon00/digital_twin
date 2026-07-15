@@ -5,7 +5,7 @@ from typing import Dict, Iterable, List
 from .market_data import clamp, number
 from .investment_research import build_active_investment_opinion
 from .ontology_prompting import ONTOLOGY_PROMPT_VERSION
-from .portfolio_ontology_builder import build_portfolio_ontology, build_position_opinion
+from .portfolio_ontology_builder import build_portfolio_ontology
 from .ontology_relation_reasoning import DEFAULT_RELATION_THRESHOLDS, relation_thresholds_from_settings
 from .parsing import parse_assignments
 from .portfolio import DecisionItem, PortfolioSummary, Position, expects_kr_microstructure_signals
@@ -639,8 +639,7 @@ def decision_for_position(
         "eventRisk",
         "entryRisk",
     } else 0.0
-    opinion = ontology_opinion or build_position_opinion(position, portfolio, {})
-    opinion_payload = opinion.to_dict()
+    opinion_payload = ontology_opinion.to_dict() if ontology_opinion else {}
     worldview = dict(ontology_worldview or {})
     active_opinion = build_active_investment_opinion(
         position,
@@ -884,7 +883,6 @@ def decisions_for_positions(
         legacy_by_symbol=legacy_by_symbol,
         external_signals=external_signals or {},
         runtime_context=decision_runtime_context,
-        include_reasoning_outputs=False,
     )
     decisions = []
     for item in active_positions:
@@ -895,7 +893,7 @@ def decisions_for_positions(
             portfolio,
             strategy_model,
             legacy_payload=legacy_payload,
-            ontology_opinion=ontology.opinion_for_symbol(item.symbol),
+            ontology_opinion=None,
             ontology_worldview=ontology.worldview,
             ontology_prompt=ontology.prompt,
             relation_context=relation_context,

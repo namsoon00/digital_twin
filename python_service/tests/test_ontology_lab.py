@@ -167,16 +167,15 @@ class OntologyLabTests(unittest.TestCase):
         self.assertFalse(lab_result["sandbox"]["mutatedTypeDB"])
         self.assertFalse(lab_result["sandbox"]["mutatedOperationalRuleBox"])
         self.assertEqual(1, lab_result["sandbox"]["graphRunCount"])
-        self.assertGreaterEqual(delta["derivedRelationCount"], 1)
-        self.assertIn("graph.lab.symbol-review.v1", delta["newRuleIds"])
-        self.assertIn("REQUIRES_NEXT_CHECK", delta["newRelationTypes"])
+        self.assertEqual(0, delta["derivedRelationCount"])
+        self.assertEqual(1, delta["requiresTypeDbMaterializationCount"])
         proposal = lab_result["proposedOntologyChanges"]
         self.assertIn("graph.lab.symbol-review.v1", proposal["ruleIds"])
         self.assertIn("REQUIRES_NEXT_CHECK", proposal["newRelationTypes"])
         self.assertIn("LAB_REVIEW", proposal["newDecisionStages"])
         recommendations = lab_result["recommendations"]
         self.assertTrue(recommendations)
-        self.assertIn("review-rule-promotion", {item["type"] for item in recommendations})
+        self.assertIn("run-typedb-materialization", {item["type"] for item in recommendations})
         self.assertIn("register-relation-types", {item["type"] for item in recommendations})
         self.assertIn("register-decision-stages", {item["type"] for item in recommendations})
 

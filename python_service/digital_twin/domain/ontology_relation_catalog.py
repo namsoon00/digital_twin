@@ -1,8 +1,8 @@
 """Bootstrap ontology relation catalog.
 
-Use active graph-store RuleBox/InferenceBox for new runtime reasoning behavior. The defaults
-here seed local fallback reasoning and ontology read models when no graph-store
-rules have been saved yet.
+Use active TypeDB schema-function RuleBox/InferenceBox output for runtime reasoning behavior.
+The defaults here seed ontology/native-rule management views and prompt read models when no
+graph-store rules have been saved yet; they are not a Python fallback reasoner.
 """
 
 from .ontology_relation_contracts import (

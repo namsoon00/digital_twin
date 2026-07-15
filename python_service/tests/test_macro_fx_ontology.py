@@ -7,7 +7,6 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from digital_twin.domain.fx import fx_exposure_facts
 from digital_twin.domain.external_signal_deltas import external_signals_with_deltas
 from digital_twin.domain.macro_context import macro_context_facts
-from digital_twin.domain.offline.ontology_relation_fallback_evaluator import evaluate_position_relation_rules
 from digital_twin.domain.ontology_external_abox import fx_rate_entries
 from digital_twin.domain.ontology_relation_reasoning import relation_rule_context_summary_lines
 from digital_twin.domain.portfolio import Position
@@ -146,7 +145,7 @@ class MacroFxOntologyTests(unittest.TestCase):
         self.assertAlmostEqual(22540 * 1400 / portfolio.invested * 100, facts["fxExposureRatio"])
         self.assertGreater(facts["fxExposureRatio"], 60)
 
-    def test_rate_and_fx_relation_rules_are_scored_from_ontology_context(self):
+    def test_rate_and_fx_facts_are_available_for_typedb_rules(self):
         position = Position(
             symbol="NVDA",
             name="NVIDIA",
@@ -159,10 +158,7 @@ class MacroFxOntologyTests(unittest.TestCase):
             sellable_quantity=2,
             sector="반도체",
         )
-        context = evaluate_position_relation_rules(
-            position,
-            portfolio_summary([position], fx_rates={"USD": 1502, "KRW": 1}),
-            external_signals={
+        external_signals = {
                 "macro": {
                     "series": {
                         "DGS10": {"provider": "FRED", "value": 4.56, "previousValue": 4.35},
@@ -183,14 +179,14 @@ class MacroFxOntologyTests(unittest.TestCase):
                         "evidenceStrength": "fallback",
                     }
                 },
-            },
-        )
-
-        active_ids = [item.get("ruleId") or item.get("rule_id") for item in context["activeRules"]]
+        }
+        portfolio = portfolio_summary([position], fx_rates={"USD": 1502, "KRW": 1})
+        facts = macro_context_facts(position, portfolio, external_signals)
+        context = {"facts": facts, "executionPlan": {"sourceFacts": facts}}
         summary_lines = relation_rule_context_summary_lines(context)
 
-        self.assertIn("rates.interest_rate.sensitivity.v1", active_ids)
-        self.assertIn("fx.usd_krw.exposure.v1", active_ids)
+        self.assertTrue(facts["hasInterestRateDeltaSignal"])
+        self.assertTrue(facts["hasFxDeltaSignal"])
         self.assertTrue(any(line.startswith("금리: 미국10년 4.56%") and "10년 +21bp" in line for line in summary_lines))
         self.assertTrue(any("환율: USD/KRW" in line and "1 USD = 1,502 KRW" in line and "설정값 기준" in line and "+32 KRW" in line for line in summary_lines))
         self.assertEqual(1502, context["executionPlan"]["sourceFacts"]["usdKrwRate"])
@@ -205,10 +201,7 @@ class MacroFxOntologyTests(unittest.TestCase):
             market_value_krw=1419700,
             sector="AI/플랫폼",
         )
-        context = evaluate_position_relation_rules(
-            position,
-            portfolio_summary([position], fx_rates={"USD": 1419.7, "KRW": 1}),
-            external_signals={
+        external_signals = {
                 "fxRates": {
                     "USDKRW": {
                         "provider": "Toss",
@@ -219,8 +212,9 @@ class MacroFxOntologyTests(unittest.TestCase):
                         "evidenceStrength": "account_applied",
                     }
                 }
-            },
-        )
+        }
+        facts = fx_exposure_facts(position, portfolio_summary([position], fx_rates={"USD": 1419.7, "KRW": 1}), external_signals)
+        context = {"facts": facts}
 
         summary_lines = relation_rule_context_summary_lines(context)
 
@@ -258,10 +252,7 @@ class MacroFxOntologyTests(unittest.TestCase):
             market_value=1000,
             sector="AI/플랫폼",
         )
-        context = evaluate_position_relation_rules(
-            position,
-            portfolio_summary([position], fx_rates={"USD": 1419.7, "KRW": 1}),
-            external_signals={
+        external_signals = {
                 "fxRates": {
                     "USDKRW": {
                         "provider": "Alpha Vantage",
@@ -272,8 +263,9 @@ class MacroFxOntologyTests(unittest.TestCase):
                         "evidenceStrength": "daily_market",
                     }
                 }
-            },
-        )
+        }
+        facts = fx_exposure_facts(position, portfolio_summary([position], fx_rates={"USD": 1419.7, "KRW": 1}), external_signals)
+        context = {"facts": facts}
 
         summary_lines = relation_rule_context_summary_lines(context)
 
@@ -293,10 +285,7 @@ class MacroFxOntologyTests(unittest.TestCase):
             sellable_quantity=2,
             sector="반도체",
         )
-        context = evaluate_position_relation_rules(
-            position,
-            portfolio_summary([position], fx_rates={"USD": 1502, "KRW": 1}),
-            external_signals={
+        external_signals = {
                 "macro": {
                     "series": {
                         "DGS10": {"provider": "FRED", "value": 4.56},
@@ -312,13 +301,11 @@ class MacroFxOntologyTests(unittest.TestCase):
                         "rate": 1502,
                     }
                 },
-            },
-        )
+        }
+        facts = macro_context_facts(position, portfolio_summary([position], fx_rates={"USD": 1502, "KRW": 1}), external_signals)
 
-        active_ids = [item.get("ruleId") or item.get("rule_id") for item in context["activeRules"]]
-
-        self.assertNotIn("rates.interest_rate.sensitivity.v1", active_ids)
-        self.assertNotIn("fx.usd_krw.exposure.v1", active_ids)
+        self.assertFalse(facts["hasInterestRateDeltaSignal"])
+        self.assertFalse(facts["hasFxDeltaSignal"])
 
     def test_fx_relation_rule_does_not_attach_usd_pair_to_krw_holding(self):
         position = Position(
@@ -333,10 +320,7 @@ class MacroFxOntologyTests(unittest.TestCase):
             sellable_quantity=10,
             sector="반도체",
         )
-        context = evaluate_position_relation_rules(
-            position,
-            portfolio_summary([position], fx_rates={"KRW": 1}),
-            external_signals={
+        external_signals = {
                 "fxRates": {
                     "USDKRW": {
                         "provider": "RuntimeSettings",
@@ -345,13 +329,12 @@ class MacroFxOntologyTests(unittest.TestCase):
                         "rate": 1502,
                     }
                 }
-            },
-        )
+        }
+        facts = fx_exposure_facts(position, portfolio_summary([position], fx_rates={"KRW": 1}), external_signals)
+        context = {"facts": facts}
 
-        active_ids = [item.get("ruleId") or item.get("rule_id") for item in context["activeRules"]]
         summary_lines = relation_rule_context_summary_lines(context)
 
-        self.assertNotIn("fx.usd_krw.exposure.v1", active_ids)
         self.assertFalse(any(line.startswith("환율:") for line in summary_lines))
         self.assertEqual("base_currency_or_unknown", context["facts"]["fxRegime"])
 

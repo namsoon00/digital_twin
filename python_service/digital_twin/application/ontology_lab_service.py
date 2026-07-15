@@ -526,7 +526,6 @@ class OntologyLabService:
             external_signals=snapshot.external_signals,
             portfolio_id=snapshot.account_id,
             runtime_context=self.runtime_context(snapshot),
-            include_reasoning_outputs=False,
         )
         return facts_only_graph(graph)
 

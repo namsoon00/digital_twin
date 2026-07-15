@@ -48,7 +48,7 @@ AI 프롬프트에는 TBox, `boundedContexts`, ABox, operational ontology, reaso
 ## Runtime Flow
 
 1. Toss 계좌, 시장 데이터, 외부 API 데이터를 `Position`, `PortfolioSummary`, `externalSignals`로 정규화한다.
-2. `infrastructure/ontology_projection.py`가 종목별 ABox fact와 부족 데이터를 TypeDB에 저장하고, TypeDB schema function rule materialization 결과를 InferenceBox로 읽어 운영 판단에 사용한다. `domain/ontology_relation_reasoning.py`는 프롬프트 조립과 비운영 비교용 helper로만 사용한다.
+2. `infrastructure/ontology_projection.py`가 종목별 ABox fact와 부족 데이터를 TypeDB에 저장하고, TypeDB schema function rule materialization 결과를 InferenceBox로 읽어 운영 판단에 사용한다. `domain/ontology_relation_reasoning.py`는 프롬프트 조립과 read model formatting helper로만 사용하며 추론을 실행하지 않는다.
 3. `DecisionItem.decision`, `exit_pressure`, `decision_basis`는 관계 규칙 결과에서 나온다. `decision_basis`는 `ontologyRelationRules`다.
 4. 기존 공식 기반 `profitTakePressure`, `lossCutPressure`, 매수/매도 점수는 보조 근거와 과거 비교용으로만 보관한다.
 5. `domain/ontology.py`가 TBox/ABox 그래프와 `OntologyOpinion`을 만든다. 이때 `Strategy`, `InvestmentThesis`, `Observation`, `Risk`, `Insight`, `NotificationDispatch`까지 모두 ABox 노드로 만든다.
@@ -127,7 +127,7 @@ Projection은 다음 용도로만 사용한다.
 
 ## Ontology Lab
 
-실험 환경은 운영 TypeDB schema function rule과 TypeDB를 직접 바꾸지 않는 로컬 샌드박스다. 후보 규칙을 `candidateRules`로 저장하고, 최근 모니터 스냅샷에서 만든 ABox facts-only 그래프에 현재 RuleBox semantic profile과 후보 profile을 각각 schema function으로 컴파일해 파생 관계, 추론 trace, 품질 점수 변화를 비교한다. API/화면 이름에 남아 있는 `RuleBox`는 호환 이름이며, 운영 의미는 TypeDB schema function rule이다.
+실험 환경은 운영 TypeDB schema function rule과 TypeDB를 직접 바꾸지 않는 후보 검증 단계다. 후보 규칙을 `candidateRules`로 저장하고, 최근 모니터 스냅샷에서 만든 ABox facts-only 그래프와 규칙 구조를 검증한다. 파생 관계, 추론 trace, 품질 점수 변화는 후보가 승인되어 TypeDB schema function으로 동기화되고 `run_rulebox` materialization을 실행한 뒤에만 확인한다. API/화면 이름에 남아 있는 `RuleBox`는 호환 이름이며, 운영 의미는 TypeDB schema function rule이다.
 
 CLI:
 
@@ -146,7 +146,7 @@ npm run python:ontology-lab -- pause --id <experiment-id>
 npm run python:ontology-lab -- report --id <experiment-id>
 ```
 
-`activate`된 실험은 service manager의 `ontology-lab` worker가 계속 확인한다. 기본 주기는 `ontologyLabIntervalSeconds=300`이며, `npm run python:service:restart`를 실행하면 다른 Python worker와 함께 시작된다. 반복 실행은 `lastSnapshotKey`를 보고 같은 모니터 스냅샷에서는 건너뛰고, 새 계좌/관심종목 스냅샷이 들어오면 다시 샌드박스 리플레이를 수행한다. 각 실행 요약은 `runHistory`에 보관한다. 같은 워커는 `ontologyRuleCandidateAiEnabled=1`이면 `ontologyRuleCandidateAiIntervalMinutes` 주기로 AI native-rule 후보를 자동 제안하고, 생성된 실험을 즉시 한 번 샌드박스 실행한 뒤 활성 상태로 둔다. 웹의 `AI 실험 제안` 액션도 같은 제안+실행+활성화 흐름을 수동으로 호출한다.
+`activate`된 실험은 service manager의 `ontology-lab` worker가 계속 확인한다. 기본 주기는 `ontologyLabIntervalSeconds=300`이며, `npm run python:service:restart`를 실행하면 다른 Python worker와 함께 시작된다. 반복 실행은 `lastSnapshotKey`를 보고 같은 모니터 스냅샷에서는 건너뛰고, 새 계좌/관심종목 스냅샷이 들어오면 ABox snapshot과 candidate rule 구조를 다시 점검한다. 각 실행 요약은 `runHistory`에 보관하고, 실제 파생 관계 변화는 TypeDB materialization required 상태로 표시한다. 같은 워커는 `ontologyRuleCandidateAiEnabled=1`이면 `ontologyRuleCandidateAiIntervalMinutes` 주기로 AI native-rule 후보를 자동 제안하고, 생성된 실험을 즉시 한 번 검증한 뒤 활성 상태로 둔다. 웹의 `AI 실험 제안` 액션도 같은 제안+검증+활성화 흐름을 수동으로 호출한다.
 
 API:
 
@@ -216,7 +216,7 @@ AI에는 다음 데이터를 함께 전달한다.
 
 - 새 TBox 클래스, 관계 타입, 바운디드 컨텍스트 규칙은 `domain/ontology_tbox.py`에 추가한다.
 - 새 ABox 인스턴스 생성은 `domain/ontology.py`에 추가하고, `tboxClass` 또는 `tboxClasses`를 지정해 `boundedContext`가 자동 부여되게 한다.
-- 새 런타임 판단은 먼저 RuleBox semantic profile, TypeDB schema function materialization, InferenceBox payload, 온톨로지 relation catalog에 추가한다. Python `domain/ontology_relation_reasoning.py`는 운영 fallback이 아니라 프롬프트 조립, 실험, 비교용 보조 로직으로만 사용한다.
+- 새 런타임 판단은 먼저 RuleBox semantic profile, TypeDB schema function materialization, InferenceBox payload, 온톨로지 relation catalog에 추가한다. Python `domain/ontology_relation_reasoning.py`는 운영 fallback이나 실험 추론기가 아니라 프롬프트 조립과 read model formatting 보조 로직으로만 사용한다.
 - 새 AI 설명은 `aiPromptTemplates`와 `aiPromptPolicy`의 계약을 함께 갱신한다.
 - 외부 뉴스, 공시, 매크로 데이터는 먼저 `ExternalSignal` 또는 구체 클래스(`NewsEvent`, `DisclosureEvent`, `MacroIndicator`)의 ABox 관측값으로 만들고, 필요하면 `Evidence`, `Belief`, `Insight`로 파생한다.
 - 새 관계가 AI 의견을 바꿔야 하면 relation properties에 `polarity`, `opinionImpact`, `riskImpact`, `supportImpact`, `aiInfluenceLabel`을 명시한다.

@@ -1,4 +1,3 @@
-import copy
 import hashlib
 import json
 from dataclasses import asdict, dataclass, field
@@ -6,7 +5,6 @@ from typing import Dict, Iterable, List, Tuple
 
 from .market_data import clamp, number
 from .ontology_contracts import PortfolioOntology
-from .ontology_graph_reasoner import run_graph_reasoner
 from .ontology_quality import build_ontology_quality_sample
 from .ontology_rulebox_contracts import GraphInferenceRule
 from .ontology_rulebox_governance import rulebox_rules_hash
@@ -300,19 +298,22 @@ def run_experiment_on_graph(
     baseline_rules: Iterable[Dict[str, object]],
     candidate_rules: Iterable[Dict[str, object]],
 ) -> Dict[str, object]:
-    baseline_graph = copy.deepcopy(facts_graph)
-    candidate_graph = copy.deepcopy(facts_graph)
-    baseline_rule_objects = graph_rules_from_payloads(baseline_rules)
-    candidate_rule_objects = baseline_rule_objects + graph_rules_from_payloads(candidate_rules, force_enabled=True)
-    run_graph_reasoner(baseline_graph, baseline_rule_objects)
-    run_graph_reasoner(candidate_graph, candidate_rule_objects)
-    baseline_metrics = inference_metrics_from_graph(baseline_graph)
-    candidate_metrics = inference_metrics_from_graph(candidate_graph)
+    baseline_metrics = inference_metrics_from_graph(facts_graph)
+    candidate_metrics = inference_metrics_from_graph(facts_graph)
+    candidate_rule_metrics = rulebox_metrics(candidate_rules)
     return {
         "portfolioId": facts_graph.portfolio_id,
+        "status": "requires-typedb-materialization",
+        "reason": "Local Python graph inference was removed. Candidate rules must be saved to TypeDB schema functions and materialized before inference deltas are available.",
         "baseline": baseline_metrics,
         "candidate": candidate_metrics,
         "delta": inference_metric_delta(baseline_metrics, candidate_metrics),
+        "materialization": {
+            "required": True,
+            "engine": "typedb-native-schema-functions",
+            "candidateRuleCount": int(candidate_rule_metrics.get("ruleCount") or 0),
+            "candidateRuleIds": list(candidate_rule_metrics.get("ruleIds") or []),
+        },
     }
 
 
@@ -417,6 +418,7 @@ def experiment_recommendations(
 ) -> List[Dict[str, object]]:
     recommendations: List[Dict[str, object]] = []
     derived_count = int(aggregate_delta.get("derivedRelationCount") or 0)
+    requires_typedb_materialization = int(aggregate_delta.get("requiresTypeDbMaterializationCount") or 0) > 0
     readiness_status = str(readiness.get("status") or "needs-review")
     rule_ids = list(proposed_changes.get("ruleIds") or [])
     relation_types = list(proposed_changes.get("relationTypes") or [])
@@ -463,6 +465,22 @@ def experiment_recommendations(
                     "derivedRelationDelta": derived_count,
                     "promotionStatus": readiness_status,
                     "promotionScore": readiness.get("score"),
+                },
+            )
+        )
+    elif graph_run_count > 0 and requires_typedb_materialization:
+        recommendations.append(
+            recommendation_payload(
+                "run-typedb-materialization",
+                "high",
+                "TypeDB materialization으로 후보 규칙 검증",
+                "Python 로컬 추론이 제거되어 후보 규칙의 실제 파생 관계 수는 TypeDB schema function 실행 후에만 확인할 수 있습니다.",
+                "후보 규칙을 검토 승인한 뒤 TypeDB RuleBox에 저장하고 run_rulebox로 실제 InferenceBox 결과를 확인합니다.",
+                proposed_changes,
+                {
+                    "graphRunCount": graph_run_count,
+                    "derivedRelationDelta": derived_count,
+                    "requiresTypeDbMaterializationCount": aggregate_delta.get("requiresTypeDbMaterializationCount"),
                 },
             )
         )
@@ -556,11 +574,15 @@ def aggregate_graph_deltas(graph_runs: List[Dict[str, object]]) -> Dict[str, obj
         "derivedRelationCount": 0,
         "traceCount": 0,
         "qualityScore": 0.0,
+        "requiresTypeDbMaterializationCount": 0,
         "newRuleIds": [],
         "newRelationTypes": [],
         "newDecisionStages": [],
     }
     for run in graph_runs or []:
+        materialization = run.get("materialization") if isinstance(run.get("materialization"), dict) else {}
+        if materialization.get("required"):
+            result["requiresTypeDbMaterializationCount"] += 1
         delta = run.get("delta") if isinstance(run.get("delta"), dict) else {}
         for key in ["entityCount", "relationCount", "derivedRelationCount", "traceCount"]:
             result[key] += int(delta.get(key) or 0)
@@ -616,6 +638,8 @@ def experiment_findings(
         findings.append("최근 모니터 스냅샷이 없어 실제 ABox 리플레이를 수행하지 못했습니다.")
     if int(aggregate_delta.get("derivedRelationCount") or 0) > 0:
         findings.append("후보 규칙이 새 파생 관계 " + str(aggregate_delta.get("derivedRelationCount")) + "개를 만들었습니다.")
+    elif int(aggregate_delta.get("requiresTypeDbMaterializationCount") or 0) > 0:
+        findings.append("Python 로컬 추론이 제거되어 후보 규칙의 파생 관계 수는 TypeDB materialization 후 확인합니다.")
     else:
         findings.append("후보 규칙이 현재 스냅샷에서는 새 파생 관계를 만들지 않았습니다.")
     if aggregate_delta.get("newRelationTypes"):

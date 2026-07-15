@@ -2141,7 +2141,7 @@ async function checkNormalMode(port, context) {
   assertOk(tossPayload.tossDecision.investmentAnalysis && tossPayload.tossDecision.investmentAnalysis.contract === "investment-ontology-ai-inference-v1", "토스 판단 API에 투자 분석 AI 추론 계약이 없습니다.");
   assertOk(Array.isArray(tossPayload.tossDecision.investmentAnalysis.reasoningCards), "토스 판단 API reasoning card 필드가 배열이 아닙니다.");
   assertOk(tossPayload.tossDecision.ontologyStrategy && tossPayload.tossDecision.ontologyStrategy.aiInferencePacket && tossPayload.tossDecision.ontologyStrategy.aiInferencePacket.contract === "investment-ontology-ai-inference-v1", "온톨로지 전략에 AI inference packet이 없습니다.");
-  assertOk(tossPayload.tossDecision.ontologyStrategy.worldview && tossPayload.tossDecision.ontologyStrategy.worldview.runtimeProjectionMode === "abox-facts-only-graph-store-rulebox", "토스 판단 API가 그래프 저장소 RuleBox용 ABox 투영 모드가 아닙니다.");
+  assertOk(tossPayload.tossDecision.ontologyStrategy.worldview && tossPayload.tossDecision.ontologyStrategy.worldview.runtimeProjectionMode === "abox-facts-only-typedb-native-rules", "토스 판단 API가 TypeDB native rule용 ABox 투영 모드가 아닙니다.");
   assertOk(tossPayload.tossDecision.items.some(function (item) { return item.decisionBasis === "ontologyInferenceRequired"; }), "토스 판단 항목이 InferenceBox 없는 판단을 차단하지 않습니다.");
   assertOk(tossPayload.portfolio && Array.isArray(tossPayload.portfolio.markets), "토스 판단 API에 시장별 현금비중 배열이 없습니다.");
   assertOk(tossPayload.portfolio.markets.some(function (market) { return market.key === "KR"; }), "시장별 현금비중에 한국장 항목이 없습니다.");

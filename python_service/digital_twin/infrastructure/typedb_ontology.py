@@ -915,6 +915,7 @@ entity ontology-node @abstract,
     owns ontology-level-type,
     owns ontology-data-scope,
     owns ontology-domain-scope,
+    owns ontology-relation-type,
     owns ontology-relation-scope,
     owns ontology-group,
     owns ontology-polarity,
@@ -1123,6 +1124,7 @@ relation ontology-assertion,
             + typeql_has("ontology-account-id", row.get("accountId"))
             + typeql_has("ontology-snapshot-id", row.get("snapshotId") or row.get("aboxSnapshotId"))
             + typeql_has("ontology-tbox-class", row.get("tboxClass"))
+            + typeql_has("ontology-relation-type", row.get("relationTypeName"))
             + typeql_has("ontology-updated-at", updated_at)
             + typeql_has("ontology-json", row.get("propertiesJson"))
             + typeql_has("ontology-confidence", row.get("confidence"), numeric=True)

@@ -147,7 +147,7 @@ class GraphStoreOntologyRowMapperMixin:
                 "actionLevel": str(properties.get("actionLevel") or ""),
                 "promptHint": str(properties.get("promptHint") or ""),
                 "anyConditionMinCount": int(properties.get("anyConditionMinCount") or 1),
-                "tboxClass": str(properties.get("tboxClass") or ""),
+                "tboxClass": str(properties.get("tboxClass") or properties.get("className") or ""),
                 "tboxClasses": list_of_strings(properties.get("tboxClasses")),
                 "className": str(properties.get("className") or ""),
                 "parentClass": str(properties.get("parentClass") or ""),

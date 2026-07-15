@@ -36,7 +36,7 @@ Important boundaries:
 
 - TBox vocabulary lives in domain ontology catalog modules. ABox facts come from current account and market state. InferenceBox is the materialized result of TypeDB schema function rules.
 - `typedb_ontology.py` owns TypeDB storage, RuleBox profile to schema function sync, function query execution, generation-scoped InferenceBox writes, retention pruning, and diagnostics metadata.
-- The old graph reasoner and `ontology_relation_reasoning.py` are compatibility/offline helpers. Runtime investment judgement must not fall back to them; TypeDB schema function sync/query failure blocks investment judgement and should produce diagnostics with `pythonCompatibilityReasonerUsed=false`.
+- The old graph reasoner modules have been removed. `ontology_relation_reasoning.py` remains only as a prompt/read-model helper; runtime investment judgement must not fall back to Python inference. TypeDB schema function sync/query failure blocks investment judgement and should produce diagnostics with `pythonCompatibilityReasonerUsed=false`.
 - API and UI names may still contain `rulebox` for compatibility. Treat them as rule-profile management surfaces, not as a separate runtime reasoning engine.
 - If InferenceBox relation and trace counts are zero while there are holdings/watchlist facts, investment judgement should be blocked or downgraded to an operational diagnostics alert.
 

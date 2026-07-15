@@ -70,7 +70,6 @@ class OntologyValidatorTests(unittest.TestCase):
         graph = build_portfolio_ontology(
             [position],
             portfolio_summary([position], fx_rates={"KRW": 1}),
-            include_reasoning_outputs=False,
         )
 
         coverage_gaps = [item for item in graph.entities if item.kind == "coverage-gap"]
@@ -137,16 +136,15 @@ class OntologyValidatorTests(unittest.TestCase):
                     }
                 },
             },
-            include_reasoning_outputs=True,
         )
 
         kinds = {item.kind for item in graph.entities}
         relation_types = {item.relation_type for item in graph.relations}
-        rule_ids = {
-            (item.properties or {}).get("ruleId")
+        inference_relations = [
+            item
             for item in graph.relations
             if (item.properties or {}).get("ontologyBox") == "InferenceBox"
-        }
+        ]
 
         self.assertIn("crypto-asset", kinds)
         self.assertIn("price-path", kinds)
@@ -156,8 +154,8 @@ class OntologyValidatorTests(unittest.TestCase):
         self.assertIn("HAS_CRYPTO_EXPOSURE", relation_types)
         self.assertIn("HAS_MACRO_REGIME", relation_types)
         self.assertIn("HAS_VALUATION", relation_types)
-        self.assertIn("graph.crypto.exposure.volatility_risk.v1", rule_ids)
-        self.assertIn("graph.macro.regime.risk.v1", rule_ids)
+        self.assertEqual([], inference_relations)
+        self.assertEqual("abox-facts-only-typedb-native-rules", graph.worldview["runtimeProjectionMode"])
         self.assertEqual("valid", validate_ontology(graph).status)
 
     def test_account_investment_strategy_profile_is_normalized(self):

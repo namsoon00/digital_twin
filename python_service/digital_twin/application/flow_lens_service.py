@@ -735,7 +735,6 @@ def build_toss_ontology(
             "decisionItems": list(decision_items or []),
             "account": dict((toss or {}).get("account") or {}),
         },
-        include_reasoning_outputs=False,
     )
 
 

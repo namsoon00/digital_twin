@@ -8,7 +8,7 @@ from digital_twin.domain.ontology_prompting import prompt_payload
 from digital_twin.domain.instrument_profiles import parse_instrument_profiles_text
 from digital_twin.domain.ontology_decision_policy import decision_stage_from_action, relation_stage_priority
 from digital_twin.domain.ontology_rulebox_catalog import default_graph_inference_rules
-from digital_twin.domain.portfolio_ontology_builder import build_portfolio_ontology as _build_portfolio_ontology
+from digital_twin.domain.portfolio_ontology_builder import build_portfolio_ontology
 from digital_twin.domain.portfolio import Position
 from digital_twin.domain.portfolio_calculations import portfolio_summary
 from digital_twin.domain.portfolio_ontology_market_concepts import missing_market_microstructure_fields
@@ -23,11 +23,6 @@ from digital_twin.infrastructure.typedb_ontology import (
     rulebox_snapshot_from_rows,
 )
 from digital_twin.domain.ontology_rulebox_governance import rulebox_governance_candidates, rulebox_rules_hash, rulebox_version_payload
-
-
-def build_portfolio_ontology(*args, **kwargs):
-    kwargs.setdefault("include_reasoning_outputs", True)
-    return _build_portfolio_ontology(*args, **kwargs)
 
 
 class OntologyRuleBoxTests(unittest.TestCase):
@@ -415,7 +410,7 @@ class OntologyRuleBoxTests(unittest.TestCase):
             portfolio_id="rulebox-ai-news-test",
         )
 
-    def test_rulebox_materializes_rules_and_inference_relations(self):
+    def test_portfolio_ontology_builder_defaults_to_abox_only(self):
         graph = self.loss_guard_graph()
 
         rule_entities = [
@@ -428,237 +423,13 @@ class OntologyRuleBoxTests(unittest.TestCase):
             for item in graph.relations
             if (item.properties or {}).get("ontologyBox") == "InferenceBox"
         ]
-        loss_guard_relations = [
-            item
-            for item in inference_relations
-            if item.source == "stock:005930" and item.relation_type == "HAS_INFERRED_RISK"
-        ]
-        loss_trace = next(
-            item
-            for item in graph.entities
-            if item.kind == "inference-trace" and (item.properties or {}).get("ruleId") == "graph.loss_guard.breakdown.v1"
-        )
-        matched_ids = [
-            item.get("conditionId")
-            for item in ((loss_trace.properties or {}).get("matchedConditions") or [])
-            if isinstance(item, dict)
-        ]
-        opinion = graph.opinion_for_symbol("005930")
+        stock = next(item for item in graph.entities if item.entity_id == "stock:005930")
 
-        self.assertTrue(any((item.properties or {}).get("ruleId") == "graph.loss_guard.breakdown.v1" for item in rule_entities))
-        self.assertTrue(loss_guard_relations)
-        self.assertIn("strategy-risk-budget", matched_ids)
-        self.assertTrue(any(item.kind == "relation-rule" and (item.properties or {}).get("ruleId") == "holding.loss_guard.breakdown.v1" for item in graph.entities))
-        self.assertTrue(any(item.kind == "inference-trace" for item in graph.entities))
-        self.assertTrue(any(item.kind == "inference-trace" for item in graph.evidence))
-        self.assertIsNotNone(opinion)
-        self.assertTrue(any("손실 방어 추론" in str(item.get("label") or "") for item in opinion.relation_influences))
-
-    def test_loss_guard_uses_account_strategy_loss_threshold(self):
-        aggressive_graph = self.strategy_threshold_loss_graph("aggressive", -9.6)
-        conservative_graph = self.strategy_threshold_loss_graph("capitalPreservation", -6.2)
-
-        aggressive_stock = next(item for item in aggressive_graph.entities if item.entity_id == "stock:000660")
-        aggressive_loss_guard = [
-            item
-            for item in aggressive_graph.relations
-            if item.source == "stock:000660" and item.relation_type == "HAS_INFERRED_RISK" and "loss-guard-breakdown" in str(item.target)
-        ]
-        conservative_loss_guard = [
-            item
-            for item in conservative_graph.relations
-            if item.source == "stock:000660" and item.relation_type == "HAS_INFERRED_RISK" and "loss-guard-breakdown" in str(item.target)
-        ]
-
-        self.assertEqual("aggressive", aggressive_stock.properties["investmentStrategyProfile"])
-        self.assertEqual(-15, aggressive_stock.properties["strategyLossTolerancePct"])
-        self.assertEqual([], aggressive_loss_guard)
-        self.assertTrue(conservative_loss_guard)
-
-    def test_profit_protection_uses_account_strategy_profit_threshold(self):
-        aggressive_graph = self.strategy_threshold_profit_graph("aggressive", 15.0)
-        balanced_graph = self.strategy_threshold_profit_graph("balanced", 15.0)
-
-        aggressive_profit_protect = [
-            item
-            for item in aggressive_graph.relations
-            if item.source == "stock:AAPL" and item.relation_type == "HAS_ACTION_CANDIDATE" and "profit-protect" in str(item.target)
-        ]
-        balanced_profit_protect = [
-            item
-            for item in balanced_graph.relations
-            if item.source == "stock:AAPL" and item.relation_type == "HAS_ACTION_CANDIDATE" and "profit-protect" in str(item.target)
-        ]
-
-        self.assertEqual([], aggressive_profit_protect)
-        self.assertTrue(balanced_profit_protect)
-
-    def test_local_rulebox_uses_flow_value_filters(self):
-        graph = self.flow_pressure_graph()
-
-        flow_risk_relations = [
-            item
-            for item in graph.relations
-            if item.source == "stock:000660"
-            and item.relation_type == "HAS_INFERRED_RISK"
-            and (item.properties or {}).get("ruleId") == "graph.flow.sell_pressure.v1"
-        ]
-        flow_trace = next(
-            item
-            for item in graph.entities
-            if item.kind == "inference-trace" and (item.properties or {}).get("ruleId") == "graph.flow.sell_pressure.v1"
-        )
-        matched_ids = [
-            item.get("conditionId")
-            for item in ((flow_trace.properties or {}).get("matchedConditions") or [])
-            if isinstance(item, dict)
-        ]
-
-        self.assertTrue(flow_risk_relations)
-        self.assertIn("ask-pressure", matched_ids)
-        self.assertIn("volume-confirmation", matched_ids)
-
-    def test_investor_flow_psychology_blocks_retail_dip_buying(self):
-        graph = self.retail_dip_buying_graph()
-
-        sentiment = next(
-            item
-            for item in graph.entities
-            if item.kind == "investor-flow-sentiment" and (item.properties or {}).get("field") == "retailDipBuyingRisk"
-        )
-        sentiment_relations = [
-            item for item in graph.relations
-            if item.source == "stock:000660" and item.target == sentiment.entity_id and item.relation_type == "HAS_INVESTOR_FLOW_SENTIMENT"
-        ]
-        blocked_relations = [
-            item for item in graph.relations
-            if item.source == "stock:000660"
-            and item.relation_type == "BLOCKS_ACTION"
-            and (item.properties or {}).get("ruleId") == "graph.investor_flow.retail_dip_buying_risk.v1"
-        ]
-
-        self.assertEqual("risk", sentiment.properties["polarity"])
-        self.assertTrue(sentiment_relations)
-        self.assertTrue(blocked_relations)
-
-    def test_investor_flow_psychology_supports_smart_money_accumulation(self):
-        graph = self.smart_money_accumulation_graph()
-
-        sentiment = next(
-            item
-            for item in graph.entities
-            if item.kind == "investor-flow-sentiment" and (item.properties or {}).get("field") in {"smartMoneyDipAbsorption", "smartMoneyAccumulation"}
-        )
-        support_relations = [
-            item for item in graph.relations
-            if item.source == "stock:005930"
-            and item.relation_type == "HAS_INFERRED_SUPPORT"
-            and (item.properties or {}).get("ruleId") == "graph.investor_flow.smart_money_accumulation.v1"
-        ]
-
-        self.assertEqual("support", sentiment.properties["polarity"])
-        self.assertTrue(support_relations)
-
-    def test_execution_metrics_keep_small_liquid_holding_from_action_block(self):
-        graph = self.liquid_small_position_graph()
-
-        execution_metrics = [
-            item for item in graph.entities
-            if item.kind == "execution-metric"
-        ]
-        execution_capacity = [
-            item
-            for item in graph.relations
-            if item.source == "stock:005930"
-            and item.relation_type == "HAS_EXECUTION_CAPACITY"
-            and (item.properties or {}).get("ruleId") == "graph.execution.capacity_safe.v1"
-        ]
-        execution_blocks = [
-            item
-            for item in graph.relations
-            if item.source == "stock:005930"
-            and item.relation_type == "BLOCKS_ACTION"
-            and (item.properties or {}).get("ruleId") == "graph.execution.liquidity_or_slippage_block.v1"
-        ]
-
-        self.assertIn("positionToTradingValuePct", {(item.properties or {}).get("field") for item in execution_metrics})
-        self.assertIn("slippageRiskScore", {(item.properties or {}).get("field") for item in execution_metrics})
-        self.assertTrue(any(item.relation_type == "HAS_LIQUIDITY_PROFILE" for item in graph.relations))
-        self.assertTrue(execution_capacity)
-        self.assertFalse(execution_blocks)
-
-    def test_execution_block_requires_rulebox_execution_thresholds(self):
-        graph = self.illiquid_large_position_graph()
-
-        execution_block = [
-            item
-            for item in graph.relations
-            if item.source == "stock:123450"
-            and item.relation_type == "BLOCKS_ACTION"
-            and (item.properties or {}).get("ruleId") == "graph.execution.liquidity_or_slippage_block.v1"
-        ]
-        trace = next(
-            item
-            for item in graph.entities
-            if item.kind == "inference-trace"
-            and (item.properties or {}).get("ruleId") == "graph.execution.liquidity_or_slippage_block.v1"
-        )
-        matched_ids = [
-            item.get("conditionId")
-            for item in ((trace.properties or {}).get("matchedConditions") or [])
-            if isinstance(item, dict)
-        ]
-
-        self.assertTrue(execution_block)
-        self.assertIn("large-position-block", matched_ids)
-        self.assertIn("visible-depth-block", matched_ids)
-
-    def test_local_rulebox_uses_missing_microstructure_data_quality(self):
-        graph = self.data_quality_gap_graph()
-
-        missing_nodes = [
-            item for item in graph.entities
-            if item.kind == "missing-data" and (item.properties or {}).get("field")
-        ]
-        data_quality_relations = [
-            item
-            for item in graph.relations
-            if item.source == "stock:035420"
-            and item.relation_type == "HAS_INFERRED_RISK"
-            and (item.properties or {}).get("ruleId") == "graph.data_quality.microstructure_gap.v1"
-        ]
-        confidence_relations = [
-            item
-            for item in graph.relations
-            if item.source == "stock:035420"
-            and item.relation_type == "LOWERS_CONFIDENCE_OF"
-            and (item.properties or {}).get("ruleId") == "graph.data_quality.microstructure_gap.v1"
-        ]
-        blocked_relations = [
-            item
-            for item in graph.relations
-            if item.source == "stock:035420"
-            and item.relation_type == "BLOCKS_ACTION"
-            and (item.properties or {}).get("ruleId") == "graph.data_quality.action_block.v1"
-        ]
-        trace = next(
-            item
-            for item in graph.entities
-            if item.kind == "inference-trace" and (item.properties or {}).get("ruleId") == "graph.data_quality.microstructure_gap.v1"
-        )
-        matched_ids = [
-            item.get("conditionId")
-            for item in ((trace.properties or {}).get("matchedConditions") or [])
-            if isinstance(item, dict)
-        ]
-
-        self.assertTrue(missing_nodes)
-        self.assertIn("tradeStrength", {(item.properties or {}).get("field") for item in missing_nodes})
-        self.assertEqual({"market-microstructure"}, {(item.properties or {}).get("dataScope") for item in missing_nodes})
-        self.assertTrue(data_quality_relations)
-        self.assertTrue(confidence_relations)
-        self.assertTrue(blocked_relations)
-        self.assertIn("microstructure-missing", matched_ids)
+        self.assertEqual([], rule_entities)
+        self.assertEqual([], inference_relations)
+        self.assertEqual("ABox", stock.properties["ontologyBox"])
+        self.assertEqual("ontology-abox-facts", graph.worldview["model"])
+        self.assertEqual("abox-facts-only-typedb-native-rules", graph.worldview["runtimeProjectionMode"])
 
     def test_microstructure_missing_data_is_market_specific(self):
         us_position = Position(symbol="AAPL", name="Apple", market="NASDAQ", currency="USD")
@@ -667,84 +438,18 @@ class OntologyRuleBoxTests(unittest.TestCase):
         self.assertEqual([], missing_market_microstructure_fields(us_position))
         self.assertIn("tradeStrength", {item["field"] for item in missing_market_microstructure_fields(kr_position)})
 
-    def test_local_rulebox_promotes_direct_material_context_news_to_next_check(self):
-        graph = self.direct_context_news_graph()
-
-        context_relations = [
-            item
-            for item in graph.relations
-            if item.source == "stock:AAPL"
-            and item.relation_type == "REQUIRES_NEXT_CHECK"
-            and (item.properties or {}).get("ruleId") == "graph.news.direct_material_context.v1"
-        ]
-        trace = next(
-            item
-            for item in graph.entities
-            if item.kind == "inference-trace" and (item.properties or {}).get("ruleId") == "graph.news.direct_material_context.v1"
-        )
-        matched_ids = [
-            item.get("conditionId")
-            for item in ((trace.properties or {}).get("matchedConditions") or [])
-            if isinstance(item, dict)
-        ]
-
-        self.assertTrue(context_relations)
-        self.assertIn("direct-material-context", matched_ids)
-
-    def test_local_rulebox_uses_article_ai_analysis_for_news_risk_and_body_gap(self):
-        graph = self.direct_ai_risk_news_graph()
-
-        ai_risk_relations = [
-            item
-            for item in graph.relations
-            if item.source == "stock:AAPL"
-            and item.relation_type == "HAS_INFERRED_RISK"
-            and (item.properties or {}).get("ruleId") == "graph.news.ai_direct_risk.v1"
-        ]
-        body_check_relations = [
-            item
-            for item in graph.relations
-            if item.source == "stock:AAPL"
-            and item.relation_type == "REQUIRES_NEXT_CHECK"
-            and (item.properties or {}).get("ruleId") == "graph.news.ai_body_missing_review.v1"
-        ]
-        confidence_relations = [
-            item
-            for item in graph.relations
-            if item.source == "stock:AAPL"
-            and item.relation_type == "LOWERS_CONFIDENCE_OF"
-            and (item.properties or {}).get("ruleId") == "graph.news.ai_body_missing_review.v1"
-        ]
-        risk_trace = next(
-            item
-            for item in graph.entities
-            if item.kind == "inference-trace" and (item.properties or {}).get("ruleId") == "graph.news.ai_direct_risk.v1"
-        )
-        matched_ids = [
-            item.get("conditionId")
-            for item in ((risk_trace.properties or {}).get("matchedConditions") or [])
-            if isinstance(item, dict)
-        ]
-
-        self.assertTrue(ai_risk_relations)
-        self.assertTrue(body_check_relations)
-        self.assertTrue(confidence_relations)
-        self.assertIn("ai-direct-risk", matched_ids)
-
-    def test_prompt_payload_exposes_rulebox_and_inferencebox(self):
+    def test_prompt_payload_for_abox_projection_has_no_local_rulebox_inference(self):
         graph = self.loss_guard_graph()
         payload = prompt_payload(graph)
 
-        self.assertGreater(payload["ruleBox"]["ruleCount"], 0)
-        self.assertGreater(payload["ruleBox"]["relationRuleCount"], 0)
-        self.assertTrue(any(item["properties"]["ruleId"] == "holding.loss_guard.breakdown.v1" for item in payload["ruleBox"]["relationRules"]))
-        self.assertGreater(payload["inferenceBox"]["traceCount"], 0)
-        self.assertTrue(any(item["type"] == "HAS_INFERRED_RISK" for item in payload["derivedRelations"]))
-        self.assertIn("ruleBox", payload["aiInferencePacket"]["inputOrder"])
-        self.assertGreater(payload["aiInferencePacket"]["graphInputs"]["inferenceBoxRelationCount"], 0)
+        self.assertEqual(0, payload["ruleBox"]["ruleCount"])
+        self.assertEqual(0, payload["inferenceBox"]["traceCount"])
+        self.assertFalse(any(item["type"] == "HAS_INFERRED_RISK" for item in payload["derivedRelations"]))
+        self.assertIn("abox", payload["aiInferencePacket"]["inputOrder"])
+        self.assertEqual(0, payload["aiInferencePacket"]["graphInputs"]["inferenceBoxRelationCount"])
 
-    def test_typedb_projection_promotes_rule_and_inference_query_keys(self):
-        graph = self.loss_guard_graph()
+    def test_typedb_projection_promotes_rulebox_query_keys(self):
+        graph = ontology_seed_graph(default_graph_inference_rules()[:1])
         repository = TypeDBOntologyGraphRepository("http://typedb.example.test")
 
         rule_row = next(item for item in repository.rows_for_entities(graph) if item["id"] == "rule:graph.loss_guard.breakdown.v1")
@@ -752,9 +457,6 @@ class OntologyRuleBoxTests(unittest.TestCase):
         holds_relation_row = next(item for item in repository.rows_for_entities(graph) if item["id"] == "tbox-relation:HOLDS")
         condition_row = next(item for item in repository.rows_for_entities(graph) if item["id"] == "rule-condition:graph.loss_guard.breakdown.v1:ma-break")
         template_row = next(item for item in repository.rows_for_entities(graph) if item["id"] == "relation-template:graph.loss_guard.breakdown.v1:0")
-        inference_row = next(item for item in repository.rows_for_entities(graph) if item["kind"] == "inference-trace")
-        risk_relation = next(item for item in repository.rows_for_relations(graph) if item["type"] == "HAS_INFERRED_RISK")
-        inference_evidence = next(item for item in repository.rows_for_evidence(graph) if item["kind"] == "inference-trace")
         schema_text = repository.schema_query()
         query_text = "\n".join(repository.insert_queries(graph))
 
@@ -773,21 +475,11 @@ class OntologyRuleBoxTests(unittest.TestCase):
         self.assertEqual("risk", template_row["derivationTargetKind"])
         self.assertEqual("LOSS_REDUCE", template_row["derivationDecisionStage"])
         self.assertGreaterEqual(template_row["derivationStagePriority"], 40)
-        self.assertEqual("InferenceBox", inference_row["ontologyBox"])
-        self.assertTrue(inference_row["tboxVersion"])
-        self.assertEqual("InferenceBox", risk_relation["ontologyBox"])
-        self.assertTrue(risk_relation["tboxVersion"])
-        self.assertEqual("graph.loss_guard.breakdown.v1", risk_relation["ruleId"])
-        self.assertEqual("LOSS_REDUCE", risk_relation["decisionStage"])
-        self.assertGreaterEqual(risk_relation["stagePriority"], 40)
-        self.assertEqual("InferenceBox", inference_evidence["ontologyBox"])
         self.assertIn("attribute ontology-rule-id", schema_text)
         self.assertIn("attribute ontology-json", schema_text)
         self.assertIn("attribute ontology-tbox-class", schema_text)
         self.assertIn('has ontology-box "TBox"', query_text)
-        self.assertIn('has ontology-box "ABox"', query_text)
         self.assertIn('has ontology-box "RuleBox"', query_text)
-        self.assertIn('has ontology-box "InferenceBox"', query_text)
         self.assertIn('has ontology-tbox-class "Stock"', query_text)
         self.assertIn('has ontology-relation-type "HOLDS"', query_text)
 
@@ -1198,21 +890,19 @@ class OntologyRuleBoxTests(unittest.TestCase):
         mstr_graph = self.profitable_momentum_graph("MSTR")
         tsla_graph = self.profitable_momentum_graph("TSLA")
 
-        mstr_actions = [
+        mstr_policy = next(
             item
-            for item in mstr_graph.relations
-            if item.relation_type == "ALLOWS_ACTION"
-            and "winner-momentum-add-buy" in str(item.target)
-        ]
-        tsla_actions = [
+            for item in mstr_graph.entities
+            if item.kind == "instrument-policy" and (item.properties or {}).get("symbol") == "MSTR"
+        )
+        tsla_policy = next(
             item
-            for item in tsla_graph.relations
-            if item.relation_type == "ALLOWS_ACTION"
-            and "winner-momentum-add-buy" in str(item.target)
-        ]
+            for item in tsla_graph.entities
+            if item.kind == "instrument-policy" and (item.properties or {}).get("symbol") == "TSLA"
+        )
 
-        self.assertTrue(mstr_actions)
-        self.assertEqual([], tsla_actions)
+        self.assertTrue(mstr_policy.properties["allowAddOnStrength"])
+        self.assertFalse(tsla_policy.properties["allowAddOnStrength"])
 
     def test_instrument_profile_text_parser(self):
         profiles = parse_instrument_profiles_text(
@@ -1251,10 +941,10 @@ class OntologyRuleBoxTests(unittest.TestCase):
         self.assertEqual(["ADD", "TRIM", "SELL"], template_rows[0]["derivationBlockedActions"])
 
     def test_rulebox_snapshot_reconstructs_rules_from_typedb_rows(self):
-        graph = self.loss_guard_graph()
+        default_rules = default_graph_inference_rules()
+        graph = ontology_seed_graph(default_rules)
         repository = TypeDBOntologyGraphRepository("http://typedb.example.test")
         entity_rows = repository.rows_for_entities(graph)
-        default_rules = default_graph_inference_rules()
         rowsets = {
             "rules": [item for item in entity_rows if item["kind"] == "rule" and item["ontologyBox"] == "RuleBox"],
             "conditions": [item for item in entity_rows if item["kind"] == "rule-condition" and item["ontologyBox"] == "RuleBox"],

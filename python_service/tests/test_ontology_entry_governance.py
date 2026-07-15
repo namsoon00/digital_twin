@@ -1,67 +1,21 @@
+import importlib
 import unittest
 from pathlib import Path
 import sys
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from digital_twin.domain.investment_research import build_active_investment_opinion
 from digital_twin.domain.ontology_relation_facts import position_signal_facts
-from digital_twin.domain.offline.ontology_relation_fallback_evaluator import evaluate_position_relation_rules
 from digital_twin.domain.portfolio import Position
 from digital_twin.domain.portfolio_calculations import portfolio_summary
 
 
 class OntologyEntryGovernanceTests(unittest.TestCase):
-    def test_watchlist_near_20_day_average_waits_when_macro_volume_and_60_day_are_not_ready(self):
-        nvda = Position(
-            symbol="NVDA",
-            name="NVIDIA",
-            market="US",
-            currency="USD",
-            current_price=201.84,
-            ma5=201.7,
-            ma20=201.5,
-            ma60=208.2,
-            volume=258773,
-            volume_ratio=0.0,
-            source="watchlist",
-            sector="반도체",
-        )
-        external_signals = {
-            "macro": {
-                "series": {
-                    "DGS10": {"provider": "FRED", "value": 4.55},
-                    "DGS2": {"provider": "FRED", "value": 4.21},
-                },
-                "yieldSpread10y2y": 0.34,
-            },
-            "fxRates": {
-                "USDKRW": {"provider": "RuntimeSettings", "base": "USD", "quote": "KRW", "rate": 1400}
-            },
-            "newsHeadlines": {
-                "NVDA": {
-                    "items": [
-                        {"title": "NVIDIA institutional ownership update", "source": "MarketBeat"}
-                    ],
-                    "count": 1,
-                }
-            },
-        }
+    def test_python_offline_fallback_evaluator_is_physically_removed(self):
+        with self.assertRaises(ModuleNotFoundError):
+            importlib.import_module("digital_twin.domain.offline.ontology_relation_fallback_evaluator")
 
-        context = evaluate_position_relation_rules(nvda, portfolio_summary([]), external_signals=external_signals)
-        active_ids = [item.get("rule_id") or item.get("ruleId") for item in context["activeRules"]]
-        opinion = build_active_investment_opinion(nvda, context, external_signals=external_signals)
-
-        self.assertIn("entry.wait_for_confirmation.v1", active_ids)
-        self.assertNotIn("entry.momentum.confirmed.v1", active_ids)
-        self.assertNotIn("entry.pullback.supported.v1", active_ids)
-        self.assertEqual("신규 진입 대기", context["decision"]["label"])
-        self.assertEqual("entryWait", context["decision"]["actionGroup"])
-        self.assertTrue(context["facts"]["entryMacroBlocked"])
-        self.assertIn("거래량 확인 부족", context["facts"]["entryBlockReasons"])
-        self.assertEqual("AVOID", opinion.action)
-
-    def test_watchlist_entry_needs_5_20_60_day_volume_and_macro_fx_clearance(self):
+    def test_watchlist_entry_facts_feed_typedb_without_deciding_in_python(self):
         candidate = Position(
             symbol="AAPL",
             name="Apple",
@@ -77,30 +31,32 @@ class OntologyEntryGovernanceTests(unittest.TestCase):
             source="watchlist",
             sector="AI/플랫폼",
         )
-        external_signals = {
-            "macro": {
-                "series": {
-                    "DGS10": {"provider": "FRED", "value": 4.0},
-                    "DGS2": {"provider": "FRED", "value": 3.8},
+        facts = position_signal_facts(
+            candidate,
+            portfolio_summary([], fx_rates={"USD": 1390, "KRW": 1}),
+            external_signals={
+                "macro": {
+                    "series": {
+                        "DGS10": {"provider": "FRED", "value": 4.0},
+                        "DGS2": {"provider": "FRED", "value": 3.8},
+                    },
+                    "yieldSpread10y2y": 0.2,
                 },
-                "yieldSpread10y2y": 0.2,
+                "fxRates": {
+                    "USDKRW": {"provider": "RuntimeSettings", "base": "USD", "quote": "KRW", "rate": 1390}
+                },
             },
-            "fxRates": {
-                "USDKRW": {"provider": "RuntimeSettings", "base": "USD", "quote": "KRW", "rate": 1390}
-            },
-        }
+        )
 
-        context = evaluate_position_relation_rules(candidate, portfolio_summary([]), external_signals=external_signals)
-        active_ids = [item.get("rule_id") or item.get("ruleId") for item in context["activeRules"]]
-        opinion = build_active_investment_opinion(candidate, context, external_signals=external_signals)
-
-        self.assertIn("entry.momentum.confirmed.v1", active_ids)
-        self.assertEqual("entry", context["decision"]["actionGroup"])
-        self.assertTrue(context["facts"]["entryMa5TimingOk"])
-        self.assertTrue(context["facts"]["entryMomentumTrendReady"])
-        self.assertFalse(context["facts"]["entryMacroBlocked"])
-        self.assertFalse(context["facts"]["entryFxBlocked"])
-        self.assertEqual("BUY", opinion.action)
+        self.assertFalse(facts["isHolding"])
+        self.assertGreater(facts["ma5Distance"], 0)
+        self.assertGreater(facts["ma20Distance"], 0)
+        self.assertGreater(facts["ma60Distance"], 0)
+        self.assertEqual(1.3, facts["rawVolumeRatio"])
+        self.assertTrue(facts["hasMacroSignals"])
+        self.assertTrue(facts["hasFxRateSignal"])
+        self.assertNotIn("decision", facts)
+        self.assertNotIn("activeRules", facts)
 
     def test_relation_facts_include_time_adjusted_volume_pace(self):
         candidate = Position(
@@ -123,7 +79,7 @@ class OntologyEntryGovernanceTests(unittest.TestCase):
         self.assertEqual("regular", facts["volumePaceSession"])
         self.assertIn("미장 정규장", facts["volumePaceSessionLabel"])
 
-    def test_loss_holding_joint_smart_money_inflow_is_defense_before_add_buy(self):
+    def test_loss_holding_smart_money_facts_are_available_for_typedb_rules(self):
         position = Position(
             symbol="000660",
             name="SK하이닉스",
@@ -149,63 +105,19 @@ class OntologyEntryGovernanceTests(unittest.TestCase):
             source="holding",
         )
 
-        context = evaluate_position_relation_rules(
-            position,
-            portfolio_summary([position], fx_rates={"KRW": 1}),
-            settings={"investmentStrategyProfile": "balanced"},
-        )
-        active_ids = [item.get("rule_id") or item.get("ruleId") for item in context["activeRules"]]
-        assessment = context["executionPlan"]["addBuyAssessment"]
-
-        self.assertIn("holding.loss_smart_money.defense.v1", active_ids)
-        self.assertTrue(context["facts"]["jointSmartMoneyInflow"])
-        self.assertEqual("FLOW_DEFENSE", context["facts"]["addBuyEligibilityStage"])
-        self.assertEqual("FLOW_DEFENSE", assessment["stage"])
-        self.assertIn("회복 확인 전 일괄 추가매수", context["executionPlan"]["blockedActions"])
-        self.assertNotIn("holding.loss_smart_money.add_buy_review.v1", active_ids)
-
-    def test_growth_profile_opens_conditional_add_buy_review_after_recovery_confirmation(self):
-        position = Position(
-            symbol="000660",
-            name="SK하이닉스",
-            market="KR",
-            currency="KRW",
-            quantity=5,
-            market_value=9200000,
-            profit_loss_rate=-6.2,
-            current_price=1840000,
-            average_price=1960000,
-            ma5=1810000,
-            ma20=1820000,
-            ma60=1830000,
-            ma20_distance=1.1,
-            ma60_distance=0.5,
-            volume_ratio=1.35,
-            trade_strength=118,
-            bid_ask_imbalance=12,
-            foreign_net_volume=210000,
-            institution_net_volume=185000,
-            individual_net_volume=-395000,
-            sector="반도체",
-            source="holding",
-        )
-
-        context = evaluate_position_relation_rules(
+        facts = position_signal_facts(
             position,
             portfolio_summary([position], account_cash=20000000, fx_rates={"KRW": 1}),
             settings={"investmentStrategyProfile": "growth"},
         )
-        active_ids = [item.get("rule_id") or item.get("ruleId") for item in context["activeRules"]]
-        opinion = build_active_investment_opinion(position, context)
 
-        self.assertIn("holding.loss_smart_money.add_buy_review.v1", active_ids)
-        self.assertEqual("ADD_BUY_REVIEW", context["facts"]["addBuyEligibilityStage"])
-        self.assertEqual("ADD_BUY_REVIEW", context["decision"]["decisionStage"])
-        self.assertEqual("addBuy", context["decision"]["actionGroup"])
-        self.assertEqual("ADD", opinion.action)
-        self.assertEqual("ADD_BUY_REVIEW", opinion.execution_plan["addBuyAssessment"]["stage"])
+        self.assertTrue(facts["isHolding"])
+        self.assertTrue(facts["jointSmartMoneyInflow"])
+        self.assertEqual("FLOW_DEFENSE", facts["addBuyEligibilityStage"])
+        self.assertGreater(facts["positionAccountWeight"], 0)
+        self.assertNotIn("decision", facts)
 
-    def test_profitable_holding_can_add_when_5_20_60_day_and_trade_confirm(self):
+    def test_profitable_holding_add_buy_inputs_are_facts_not_python_judgement(self):
         position = Position(
             symbol="000660",
             name="SK하이닉스",
@@ -225,55 +137,30 @@ class OntologyEntryGovernanceTests(unittest.TestCase):
             sector="반도체",
             source="holding",
         )
-        healthcare = Position(
-            symbol="000020",
-            name="동화약품",
-            market="KR",
-            currency="KRW",
-            quantity=100,
-            current_price=6000,
-            market_value=2500000,
-            sector="헬스케어",
-            source="holding",
-        )
-        auto = Position(
-            symbol="005380",
-            name="현대차",
-            market="KR",
-            currency="KRW",
-            quantity=10,
-            current_price=250000,
-            market_value=2500000,
-            sector="자동차",
-            source="holding",
-        )
-        external_signals = {
-            "macro": {
-                "series": {
-                    "DGS10": {"provider": "FRED", "value": 4.0},
-                    "DGS2": {"provider": "FRED", "value": 3.8},
-                },
-                "yieldSpread10y2y": 0.2,
-            },
-            "fxRates": {
-                "USDKRW": {"provider": "RuntimeSettings", "base": "USD", "quote": "KRW", "rate": 1390}
-            },
-        }
+        portfolio = portfolio_summary([position], account_cash=12000000, fx_rates={"KRW": 1})
 
-        context = evaluate_position_relation_rules(
+        facts = position_signal_facts(
             position,
-            portfolio_summary([position, healthcare, auto], account_cash=12000000, fx_rates={"KRW": 1}),
-            external_signals=external_signals,
+            portfolio,
+            external_signals={
+                "macro": {
+                    "series": {
+                        "DGS10": {"provider": "FRED", "value": 4.0},
+                        "DGS2": {"provider": "FRED", "value": 3.8},
+                    },
+                    "yieldSpread10y2y": 0.2,
+                }
+            },
             settings={"investmentStrategyProfile": "balanced"},
         )
-        active_ids = [item.get("rule_id") or item.get("ruleId") for item in context["activeRules"]]
-        opinion = build_active_investment_opinion(position, context)
 
-        self.assertIn("holding.winner_momentum.add_buy_review.v1", active_ids)
-        self.assertEqual("ADD_BUY_REVIEW", context["decision"]["decisionStage"])
-        self.assertEqual("addBuy", context["decision"]["actionGroup"])
-        self.assertTrue(context["facts"]["winnerAddBuyReady"])
-        self.assertEqual("ADD", opinion.action)
+        self.assertTrue(facts["isHolding"])
+        self.assertGreater(facts["profitLossRate"], 0)
+        self.assertGreater(facts["ma5Distance"], 0)
+        self.assertGreater(facts["ma20Distance"], 0)
+        self.assertGreater(facts["ma60Distance"], 0)
+        self.assertGreater(facts["volumeRatio"], 1)
+        self.assertNotIn("decision", facts)
 
 
 if __name__ == "__main__":

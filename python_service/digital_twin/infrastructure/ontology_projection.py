@@ -38,7 +38,6 @@ class PortfolioOntologyProjectionRecorder:
                 external_signals=snapshot.external_signals,
                 portfolio_id=snapshot.account_id,
                 runtime_context=self.runtime_context(snapshot),
-                include_reasoning_outputs=False,
             )
             persistence_graph = self.graph_for_graph_store_persistence(graph)
             validation = validate_ontology(persistence_graph)

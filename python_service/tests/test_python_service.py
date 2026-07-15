@@ -41,8 +41,7 @@ from digital_twin.domain.ontology_rulebox_catalog import default_graph_inference
 from digital_twin.domain.ontology_rulebox_governance import rulebox_rules_hash
 from digital_twin.domain.ontology_schema import abox_properties
 from digital_twin.domain.ontology_validator import validate_ontology
-from digital_twin.domain.portfolio_ontology_builder import apply_relation_driven_opinions, build_portfolio_ontology
-from digital_twin.domain.offline.ontology_relation_fallback_evaluator import evaluate_position_relation_rules
+from digital_twin.domain.portfolio_ontology_builder import build_portfolio_ontology
 from digital_twin.domain.ontology_relation_reasoning import decision_action_group_for_label, prompt_template_for_message_type
 from digital_twin.domain.portfolio_calculations import portfolio_summary
 from digital_twin.domain.strategy import SafeFormula, StrategyModel, decisions_for_positions
@@ -111,6 +110,14 @@ from mysql_fixtures import (
     reset_mysql_test_database,
     test_store_seed,
 )
+
+
+def evaluate_position_relation_rules(*_args, **_kwargs):
+    raise unittest.SkipTest("Python fallback relation evaluator was removed; use TypeDB materialization tests")
+
+
+def apply_relation_driven_opinions(*_args, **_kwargs):
+    raise unittest.SkipTest("Python relation-driven opinion mutation was removed; use TypeDB materialization tests")
 
 
 class PythonServiceTests(unittest.TestCase):
@@ -2628,7 +2635,6 @@ class PythonServiceTests(unittest.TestCase):
         graph = build_portfolio_ontology(
             [position],
             portfolio_summary([position], fx_rates={"KRW": 1}),
-            include_reasoning_outputs=False,
         )
         transition = next(item for item in graph.entities if item.kind == "trend-transition")
         relation_types = {item.relation_type for item in graph.relations}
@@ -6643,10 +6649,10 @@ class PythonServiceTests(unittest.TestCase):
 
     def test_runtime_relation_reasoning_does_not_export_offline_fallback(self):
         runtime_reasoning = importlib.import_module("digital_twin.domain.ontology_relation_reasoning")
-        offline_fallback = importlib.import_module("digital_twin.domain.offline.ontology_relation_fallback_evaluator")
 
         self.assertFalse(hasattr(runtime_reasoning, "evaluate_position_relation_rules"))
-        self.assertTrue(callable(offline_fallback.evaluate_position_relation_rules))
+        with self.assertRaises(ModuleNotFoundError):
+            importlib.import_module("digital_twin.domain.offline.ontology_relation_fallback_evaluator")
 
     def test_disclosure_analysis_rendering_stays_out_of_domain(self):
         domain_file = Path(__file__).resolve().parents[1] / "digital_twin" / "domain" / "disclosure_analysis.py"

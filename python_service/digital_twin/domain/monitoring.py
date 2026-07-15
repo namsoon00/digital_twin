@@ -84,13 +84,13 @@ def ontology_inference_failure_stage(reason_code: object, status: object, detail
     if code == "projectionSaveFailed":
         return graph_store_label((detail or {}).get("graphStore")) + " 투영 저장"
     if code == "ruleboxExecutionFailed" or (rulebox_status and rulebox_status not in {"ok", "partial"}):
-        return "RuleBox 실행"
+        return "TypeDB native rule 실행"
     if typedb_read_status and typedb_read_status not in {"ok", "partial"}:
         return "InferenceBox 조회"
     if code == "missingInferenceBox":
         return "InferenceBox 생성/저장"
     if code == "nativeReasoningMissing":
-        return "RuleBox materialization"
+        return "TypeDB native rule materialization"
     if status_text and status_text not in {"ok", "partial"}:
         return "InferenceBox 상태"
     if code == "emptyInferenceBox":
@@ -736,7 +736,7 @@ class RealtimeMonitor(MonitoringSampleDataMixin, MonitoringPositionContextMixin,
             "추론 상태 status=" + status_text + ", relations=" + str(relation_count) + ", traces=" + str(trace_count),
             "확인 상태 " + str(int(confirmation.get("currentCycle") or 1)) + "/" + str(int(confirmation.get("requiredCycles") or 1)) + "회 연속 감지",
             "보유 " + str(int(state.get("positionCount") or 0)) + "개",
-            "확인 행동 TypeDB 연결, RuleBox 저장 상태, 온톨로지 추론 워커 점검",
+            "확인 행동 TypeDB 연결, 네이티브 규칙 저장 상태, 온톨로지 추론 워커 점검",
         ]
         if failure_detail:
             lines.insert(6, "실패 상세 " + failure_detail)
@@ -893,7 +893,7 @@ class RealtimeMonitor(MonitoringSampleDataMixin, MonitoringPositionContextMixin,
                 reason += ": " + detail
             return "missingInferenceBox", reason, common
         if common["ruleboxExecutionStatus"] and common["ruleboxExecutionStatus"].lower() not in {"ok", "partial"}:
-            reason = "RuleBox 실행 실패"
+            reason = "TypeDB native rule 실행 실패"
             if common["ruleboxExecutionReason"]:
                 reason += ": " + common["ruleboxExecutionReason"]
             return "ruleboxExecutionFailed", reason, common
@@ -907,7 +907,7 @@ class RealtimeMonitor(MonitoringSampleDataMixin, MonitoringPositionContextMixin,
         traces = inference.get("traces") if isinstance(inference.get("traces"), list) else []
         graph_reasoning_used = bool(inference.get("nativeTypeDbReasoningUsed"))
         if graph_store.lower() == "typedb" and not graph_reasoning_used:
-            return "nativeReasoningMissing", graph_store_label(graph_store) + " RuleBox materialization 관계가 아직 없습니다", common
+            return "nativeReasoningMissing", graph_store_label(graph_store) + " native rule materialization 관계가 아직 없습니다", common
         if not graph_reasoning_used and not relations and not traces:
             return "nativeReasoningMissing", graph_store_label(graph_store) + " 추론 관계가 아직 없습니다", common
         if not relations and not traces:

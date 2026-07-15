@@ -5398,8 +5398,8 @@ class PythonServiceTests(unittest.TestCase):
         inference_event = next(event for event in events if event.rule == "ontologyInferenceMissing")
 
         self.assertEqual("ruleboxExecutionFailed", inference_event.metadata["missingInferenceReasonCode"])
-        self.assertIn("RuleBox 실행 실패: timed out", inference_event.metadata["missingInferenceReason"])
-        self.assertTrue(any("RuleBox 실행 실패: timed out" in line for line in inference_event.lines))
+        self.assertIn("TypeDB native rule 실행 실패: timed out", inference_event.metadata["missingInferenceReason"])
+        self.assertTrue(any("TypeDB native rule 실행 실패: timed out" in line for line in inference_event.lines))
         self.assertEqual("error", inference_event.metadata["ontologyInference"]["ruleboxExecutionStatus"])
         self.assertEqual("timed out", inference_event.metadata["ontologyInference"]["ruleboxExecutionReason"])
 
@@ -5494,7 +5494,7 @@ class PythonServiceTests(unittest.TestCase):
                     "ruleboxExecution": {
                         "status": "ok",
                         "statementCount": 0,
-                        "reasoningMode": "typedb-rulebox-materialization-blocked",
+                        "reasoningMode": "typedb-native-rule-materialization-blocked",
                     },
                     "inferenceBox": {
                         "configured": True,
@@ -12529,7 +12529,7 @@ class PythonServiceTests(unittest.TestCase):
             "status": "ok",
             "graphStore": "typedb",
             "projectionMode": "abox-facts-only-typedb-rulebox",
-            "ruleboxExecution": {"status": "ok", "reasoningMode": "typedb-rulebox-materialized"},
+            "ruleboxExecution": {"status": "ok", "reasoningMode": "typedb-native-rule-materialized"},
         })
         projection_metadata["ontology"]["typedb"]["inferenceBox"].update({
             "source": "typedbInferenceBox",

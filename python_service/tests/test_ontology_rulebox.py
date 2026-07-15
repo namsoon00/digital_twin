@@ -839,7 +839,7 @@ class OntologyRuleBoxTests(unittest.TestCase):
 
         self.assertEqual("ok", result["status"])
         self.assertEqual("typedb", result["graphStore"])
-        self.assertEqual("typedb-rulebox-materialized", result["reasoningMode"])
+        self.assertEqual("typedb-native-rule-materialized", result["reasoningMode"])
         self.assertFalse(result["typedbBootstrapReasoningUsed"])
         self.assertTrue(result["nativeTypeDbReasoningUsed"])
         self.assertTrue(result["pythonBootstrapDisabled"])
@@ -849,6 +849,7 @@ class OntologyRuleBoxTests(unittest.TestCase):
         self.assertIsNotNone(repository.saved_inferencebox_graph)
         self.assertTrue(repository.saved_inferencebox_graph.entities)
         self.assertTrue(all((item.properties or {}).get("nativeTypeDbReasoned") for item in repository.saved_inferencebox_graph.entities))
+        self.assertTrue(all((item.properties or {}).get("typedbNativeRuleReasoned") for item in repository.saved_inferencebox_graph.entities))
 
     def test_default_rulebox_covers_materiality_and_trend_transition_rules(self):
         rules = default_graph_inference_rules()

@@ -10,7 +10,7 @@ This project uses a local-first, DDD-oriented, event-driven architecture. Future
 - Use domain events as contracts between feature slices.
 - Do not pass API keys, Telegram tokens, client secrets, or raw account credentials through events, docs, tests, or git-tracked files.
 - Keep old top-level Python modules only as compatibility re-export modules. New code should import from the layer package directly.
-- Build investment-analysis features ontology-first. New investment facts, relationships, rules, AI context, and notification triggers must enter the TBox/ABox/RuleBox/InferenceBox flow before they influence user-facing investment judgement.
+- Build investment-analysis features ontology-first. New investment facts, relationships, semantic rules, AI context, and notification triggers must enter the TBox/ABox/TypeDB native rule/InferenceBox flow before they influence user-facing investment judgement.
 - Run `npm test` before handoff, then commit and push to `origin/main` unless explicitly told not to.
 - After commit and push, restart project-managed local runtime processes with `npm run python:service:restart`, then confirm with `npm run python:service:status`. Also restart any web, preview, share, or watcher process that the current Codex session started. Do not kill unrelated or user-started processes that cannot be safely identified; report any process that could not be restarted.
 - After commit and push, send a work-complete notification with `npm run python:handoff:notify -- --summary "<short summary>" --commit "$(git rev-parse --short HEAD)" --validation "npm test 통과" --push "origin/main 성공"` so other local workers can see the task is finished.
@@ -31,8 +31,8 @@ Required flow for new investment behavior:
 3. Persist graph facts through the projection boundary.
    Owning bounded contexts still persist their transactional state in their own stores. The ontology projection translates that state into graph-store assertions through the TypeDB adapter. New feature code must publish or persist source facts first, then extend `portfolio_ontology_builder.py` or its concept-builder modules so the projection can create ABox nodes and relations. Do not make account, monitoring, notification, or provider aggregates depend directly on TypeDB or any graph driver.
 
-4. Put investment reasoning in the RuleBox and InferenceBox.
-   New investment rules must be expressible as graph rules over ABox facts and should be seeded into RuleBox before they drive alerts or AI opinions. Runtime investment judgement must read the active graph-store InferenceBox through `domain/ontology_inference_context.py`. Python may assemble facts and prompts, but it must not keep a parallel buy/sell/risk rule evaluator for user-facing investment decisions.
+4. Put investment reasoning in TypeDB native semantic rules and InferenceBox.
+   New investment rules must be expressible as graph rules over ABox facts and should be persisted as TypeDB semantic-rule definitions before they drive alerts or AI opinions. The legacy RuleBox API/editor may remain as a compatibility management surface, but runtime investment judgement must read TypeDB-native-rule materialized InferenceBox output through `domain/ontology_inference_context.py`. Python may assemble facts and prompts, but it must not keep a parallel buy/sell/risk rule evaluator for user-facing investment decisions.
 
 5. Keep Python thresholds out of primary investment judgement.
    Python may parse data, normalize units, compute raw market metrics, detect operational failures, and enforce delivery policies. It should not directly decide that a stock is a buy, sell, loss-cut, profit-take, risk-increase, opportunity, or sector-rotation candidate unless that decision is backed by graph-store inference or explicitly marked as an operational/system alert.
@@ -44,13 +44,13 @@ Required flow for new investment behavior:
    Ontology relation scores describe investment meaning, relationship strength, confidence, novelty, and decision stage. Notification scores describe whether a message should be delivered after cooldown, similarity, market-hours, and freshness gates. Do not use delivery priority as an investment score or present it as model confidence.
 
 8. Send AI the graph context, not loose facts only.
-   AI investment opinions should receive the relevant TBox vocabulary, ABox facts, InferenceBox relations, matched RuleBox traces, evidence subgraph, missing data, freshness, provenance, and guardrails. Prompt builders should not invent facts that are absent from the graph; missing data should be explicit.
+   AI investment opinions should receive the relevant TBox vocabulary, ABox facts, InferenceBox relations, matched TypeDB native rule traces, evidence subgraph, missing data, freshness, provenance, and guardrails. Prompt builders should not invent facts that are absent from the graph; missing data should be explicit.
 
 9. Make data quality part of the graph.
    Missing feeds, stale quotes, source errors, partial symbol coverage, unmatched news, and disabled vendors should become `DataQuality`, `DataFreshness`, `Provenance`, `DataSource`, `CoverageGap`, or equivalent ABox facts. They should affect confidence and dispatch policy without being hidden as logs only.
 
 10. Test the ontology contract.
-    Tests for new investment behavior should verify both the source use case and the graph result: expected ABox classes, relation types, provenance/freshness fields, RuleBox execution or InferenceBox context, AI prompt payload, and final `investmentInsight` metadata. Tests should also verify the blocked path when graph inference is missing.
+    Tests for new investment behavior should verify both the source use case and the graph result: expected ABox classes, relation types, provenance/freshness fields, TypeDB native rule materialization or InferenceBox context, AI prompt payload, and final `investmentInsight` metadata. Tests should also verify the blocked path when graph inference is missing.
 
 Acceptable non-ontology code:
 
@@ -64,7 +64,7 @@ Anti-patterns to avoid:
 - Adding a new investment alert by checking a price, moving average, PnL, volume, disclosure title, or news keyword directly in `monitoring.py` or `external_signal_alerts.py` without first creating ontology facts and graph rules.
 - Creating a context named `ontologyRelationContext` in Python without `graphStoreUsed=True` and without active graph-store InferenceBox evidence, then presenting it as graph-derived reasoning.
 - Storing a rule only as a Python `if` statement, formula string, or notification condition when it changes investment judgement.
-- Letting AI see raw source data without the corresponding TBox/ABox/RuleBox/InferenceBox explanation and missing-data boundaries.
+- Letting AI see raw source data without the corresponding TBox/ABox/TypeDB native rule/InferenceBox explanation and missing-data boundaries.
 - Treating graph-store projection failure as harmless for investment judgement. If graph inference is unavailable, investment decisions should be blocked, downgraded to operational diagnostics, or clearly marked as non-investment evidence.
 
 ## Python Layer Map
@@ -126,7 +126,7 @@ Infrastructure:
 - `python_service/digital_twin/infrastructure/model_reviewer.py`: Codex/LLM command adapter with local fallback
 - `python_service/digital_twin/infrastructure/ontology_projection.py`: snapshot-to-ontology projection recorder that saves graph-store projections and quality samples without making monitoring application services own graph persistence details
 - `python_service/digital_twin/infrastructure/ontology_graph_store.py`: graph-store composition root; runtime code should import this factory instead of constructing the database adapter directly
-- `python_service/digital_twin/infrastructure/typedb_ontology.py`: TypeDB graph-store adapter; production InferenceBox output is materialized from TypeDB ABox facts and TypeDB RuleBox rules into TypeDB InferenceBox, not from a non-TypeDB runtime fallback. InferenceBox writes must be generation-scoped so a failed materialization does not erase the last usable graph-backed judgement.
+- `python_service/digital_twin/infrastructure/typedb_ontology.py`: TypeDB graph-store adapter; production InferenceBox output is materialized from TypeDB ABox facts and TypeDB native semantic rules into TypeDB InferenceBox, not from a non-TypeDB runtime fallback. InferenceBox writes must be generation-scoped so a failed materialization does not erase the last usable graph-backed judgement.
 - `python_service/digital_twin/infrastructure/service_factory.py`: runtime composition of use cases and adapters
 
 Compatibility modules:

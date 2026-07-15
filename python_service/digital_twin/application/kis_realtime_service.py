@@ -140,7 +140,7 @@ class KISRealtimeWebSocketRunner:
                 changed_count=len(changed_symbols),
                 observed_count=len(changed_symbols),
                 fact_types=["MarketQuote", "ExecutionFlow", "OrderBook"],
-                reason="KIS WebSocket 체결·호가 변경을 TypeDB ABox에 반영하고 RuleBox 추론을 갱신합니다. 투자자별 수급은 별도 REST live-poll 품질로 분리합니다.",
+                reason="KIS WebSocket 체결·호가 변경을 TypeDB ABox에 반영하고 네이티브 규칙 추론을 갱신합니다. 투자자별 수급은 별도 REST live-poll 품질로 분리합니다.",
                 materiality_assessments=[materiality_assessments[symbol] for symbol in changed_symbols if symbol in materiality_assessments],
             )
             if hasattr(self.event_publisher, "publish"):

@@ -548,7 +548,7 @@ def inference_required_relation_context(position: Position, reason: str = "") ->
             "primaryAction": "WAIT_FOR_ONTOLOGY_INFERENCE",
             "primaryActionLabel": "온톨로지 추론 완료 전 투자 판단 보류",
             "blockedActions": ["InferenceBox 없는 매수 판단", "InferenceBox 없는 매도 판단", "Python 관계 규칙 fallback"],
-            "nextChecks": ["TypeDB RuleBox 저장 상태 확인", "InferenceBox 관계 생성 여부 확인", "온톨로지 품질 점수 확인"],
+            "nextChecks": ["TypeDB native rule 저장 상태 확인", "InferenceBox 관계 생성 여부 확인", "온톨로지 품질 점수 확인"],
             "missingDataImpact": ["온톨로지 추론 결과가 없어 판단 강도를 0으로 고정했습니다."],
             "sourceFacts": {},
         },

@@ -2069,7 +2069,7 @@ class DigitalTwinHandler(BaseHTTPRequestHandler):
                 return self.send_payload(200, save_ontology_rulebox_payload(self.read_json_body()))
 
         if path == "/api/ontology/rulebox/run" and self.command == "POST":
-            if not self.ensure_writable("공유 모드에서는 TypeDB RuleBox 추론을 실행할 수 없습니다."):
+            if not self.ensure_writable("공유 모드에서는 TypeDB 네이티브 규칙 추론을 실행할 수 없습니다."):
                 return
             return self.send_payload(200, run_ontology_rulebox_payload(self.read_json_body()))
 

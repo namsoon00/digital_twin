@@ -360,7 +360,7 @@ class MarketDataCollectionRunner:
                         changed_count=len(ontology_symbols),
                         observed_count=saved,
                         fact_types=["MarketQuote", "TechnicalIndicator"],
-                        reason="시장 데이터 변경을 TypeDB ABox에 반영하고 RuleBox 추론을 갱신합니다. 알림은 중요 변경 게이트를 별도로 통과해야 합니다.",
+                        reason="시장 데이터 변경을 TypeDB ABox에 반영하고 네이티브 규칙 추론을 갱신합니다. 알림은 중요 변경 게이트를 별도로 통과해야 합니다.",
                         materiality_assessments=[materiality_assessments[symbol] for symbol in changed_symbols if symbol in materiality_assessments],
                     ))
             else:
@@ -373,7 +373,7 @@ class MarketDataCollectionRunner:
                         changed_count=len(ontology_symbols),
                         observed_count=saved,
                         fact_types=["MarketQuote", "TechnicalIndicator"],
-                        reason="시장 데이터 변경을 TypeDB ABox에 반영하고 RuleBox 추론을 갱신합니다. 알림은 중요 변경 게이트를 별도로 통과해야 합니다.",
+                        reason="시장 데이터 변경을 TypeDB ABox에 반영하고 네이티브 규칙 추론을 갱신합니다. 알림은 중요 변경 게이트를 별도로 통과해야 합니다.",
                         materiality_assessments=[materiality_assessments[symbol] for symbol in changed_symbols if symbol in materiality_assessments],
                     ))
         return result

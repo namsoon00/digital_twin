@@ -8,6 +8,7 @@ from typing import Dict, Iterable, List, Tuple
 
 from ..domain.ontology_contracts import OntologyEntity, OntologyEvidence, OntologyRelation, PortfolioOntology
 from ..domain.ontology_graph_reasoner import run_graph_reasoner
+from ..domain.ontology_inference_materializer import materialize_rule_inference
 from ..domain.ontology_rulebox_catalog import default_graph_inference_rules
 from ..domain.ontology_rulebox_contracts import GRAPH_REASONER_VERSION, GraphInferenceRule
 from ..domain.ontology_rulebox_governance import (
@@ -229,7 +230,13 @@ def merge_flat_properties(row: Dict[str, object], props: Dict[str, object]) -> D
     return merged
 
 
-TYPEDB_NATIVE_REASONING_PROFILE_VERSION = "typedb-function-readiness-v1"
+TYPEDB_NATIVE_REASONING_PROFILE_VERSION = "typedb-native-rule-profile-v2"
+TYPEDB_NATIVE_RULE_ENGINE_VERSION = "typedb-native-rule-materializer-v1"
+TYPEDB_NATIVE_REASONING_MODE = "typedb-native-rule-materialized"
+TYPEDB_NATIVE_BLOCKED_MODE = "typedb-native-rule-materialization-blocked"
+TYPEDB_NATIVE_REQUIRED_MODE = "typedb-native-rule-materialization-required"
+TYPEDB_NATIVE_MATERIALIZATION_SOURCE = "typedb-abox-native-rule"
+TYPEDB_NATIVE_REASONING_LAYER = "typedb-native-rule"
 TYPEDB_FUNCTION_SUBJECT_FIELDS = {
     "source",
     "symbol",
@@ -653,6 +660,13 @@ class TypeDBOntologyGraphRepository(GraphStoreOntologyRowMapperMixin):
             "ontologyBox": str(box or merged.get("ontologyBox") or "ABox"),
             "symbol": str(row.get("symbol") or merged.get("symbol") or ""),
             "ruleId": str(row.get("ruleId") or merged.get("ruleId") or ""),
+            "sourceRuleId": str(merged.get("sourceRuleId") or row.get("ruleId") or merged.get("ruleId") or ""),
+            "nativeRuleId": str(merged.get("nativeRuleId") or typedb_native_rule_id(row.get("ruleId") or merged.get("ruleId"))),
+            "semanticRuleId": str(merged.get("semanticRuleId") or merged.get("nativeRuleId") or typedb_native_rule_id(row.get("ruleId") or merged.get("ruleId"))),
+            "reasoningLayer": str(merged.get("reasoningLayer") or ""),
+            "reasoningMode": str(merged.get("reasoningMode") or ""),
+            "materializationSource": str(merged.get("materializationSource") or ""),
+            "typedbNativeRuleReasoned": bool(merged.get("typedbNativeRuleReasoned")),
             "tboxClass": str(row.get("tboxClass") or merged.get("tboxClass") or ""),
             "updatedAt": str(row.get("updatedAt") or merged.get("updatedAt") or ""),
             "propertiesJson": json.dumps(props, ensure_ascii=False, sort_keys=True),
@@ -746,6 +760,13 @@ class TypeDBOntologyGraphRepository(GraphStoreOntologyRowMapperMixin):
             "ontologyBox": str(box or merged.get("ontologyBox") or "ABox"),
             "symbol": str(merged.get("symbol") or ""),
             "ruleId": str(row.get("ruleId") or merged.get("ruleId") or ""),
+            "sourceRuleId": str(merged.get("sourceRuleId") or row.get("ruleId") or merged.get("ruleId") or ""),
+            "nativeRuleId": str(merged.get("nativeRuleId") or typedb_native_rule_id(row.get("ruleId") or merged.get("ruleId"))),
+            "semanticRuleId": str(merged.get("semanticRuleId") or merged.get("nativeRuleId") or typedb_native_rule_id(row.get("ruleId") or merged.get("ruleId"))),
+            "reasoningLayer": str(merged.get("reasoningLayer") or ""),
+            "reasoningMode": str(merged.get("reasoningMode") or ""),
+            "materializationSource": str(merged.get("materializationSource") or ""),
+            "typedbNativeRuleReasoned": bool(merged.get("typedbNativeRuleReasoned")),
             "weight": number_or_none(row.get("weight") if row.get("weight") is not None else merged.get("weight")),
             "updatedAt": str(row.get("updatedAt") or merged.get("updatedAt") or ""),
             "propertiesJson": json.dumps(props, ensure_ascii=False, sort_keys=True),
@@ -1252,6 +1273,101 @@ relation ontology-assertion,
         })
         return snapshot
 
+    def match_typedb_native_rules(
+        self,
+        rules: Iterable[GraphInferenceRule],
+        target_symbols: Iterable[str] = None,
+    ) -> Dict[str, object]:
+        clean_symbols = clean_symbols_from_payload(list(target_symbols or []))
+        matches: List[Dict[str, object]] = []
+        match_index: Dict[str, Dict[str, object]] = {}
+        executed_rules = []
+        skipped_rules = []
+        try:
+            for rule in rules or []:
+                rule_payload = rule.to_dict() if hasattr(rule, "to_dict") else dict(rule or {})
+                profile = typedb_native_rule_profile(rule_payload)
+                if profile.get("status") != "ready":
+                    skipped_rules.append({
+                        "ruleId": str(rule.rule_id or ""),
+                        "status": profile.get("status"),
+                        "reason": "Rule has JSON-bound or unsupported conditions for TypeDB-native query matching.",
+                    })
+                    continue
+                query_plan = typedb_native_match_query(rule_payload, clean_symbols)
+                if not query_plan.get("query"):
+                    skipped_rules.append({
+                        "ruleId": str(rule.rule_id or ""),
+                        "status": "blocked",
+                        "reason": "TypeDB native query could not be built.",
+                    })
+                    continue
+                rows = self.read_rows(str(query_plan.get("query")), query_plan.get("columns") or ["sourceId"])
+                executed_rules.append({
+                    "ruleId": rule.rule_id,
+                    "nativeRuleId": typedb_native_rule_id(rule.rule_id),
+                    "rowCount": len(rows),
+                })
+                for row in rows:
+                    source_id = str(row.get("sourceId") or "").strip()
+                    if not source_id:
+                        continue
+                    evidence_relation_ids = [
+                        str(row.get(column) or "")
+                        for column in (query_plan.get("evidenceColumns") or [])
+                        if str(row.get(column) or "").strip()
+                    ]
+                    match_key = str(rule.rule_id or "") + "|" + source_id
+                    existing = match_index.get(match_key)
+                    if existing:
+                        existing["evidenceRelationIds"] = sorted(set(list(existing.get("evidenceRelationIds") or []) + evidence_relation_ids))
+                        existing_conditions = list(existing.get("matchedConditions") or [])
+                        existing_condition_ids = {
+                            str(item.get("conditionId") or "")
+                            for item in existing_conditions
+                            if isinstance(item, dict)
+                        }
+                        for item in typedb_native_matched_conditions(rule, row, query_plan):
+                            if str(item.get("conditionId") or "") not in existing_condition_ids:
+                                existing_conditions.append(item)
+                        existing["matchedConditions"] = existing_conditions
+                        continue
+                    match = {
+                        "ruleId": rule.rule_id,
+                        "nativeRuleId": typedb_native_rule_id(rule.rule_id),
+                        "sourceId": source_id,
+                        "matchedConditions": typedb_native_matched_conditions(rule, row, query_plan),
+                        "evidenceRelationIds": sorted(set(evidence_relation_ids)),
+                        "confidence": typedb_native_match_confidence(rule),
+                    }
+                    match_index[match_key] = match
+                    matches.append(match)
+            return {
+                "status": "ok",
+                "graphStore": "typedb",
+                "engineVersion": TYPEDB_NATIVE_RULE_ENGINE_VERSION,
+                "nativeQueryUsed": True,
+                "executedRuleCount": len(executed_rules),
+                "skippedRuleCount": len(skipped_rules),
+                "matchedCount": len(matches),
+                "matches": matches,
+                "executedRules": executed_rules[:40],
+                "skippedRules": skipped_rules[:40],
+            }
+        except Exception as error:  # noqa: BLE001 - run_rulebox reports and can use compatibility fallback.
+            return {
+                "status": "error",
+                "graphStore": "typedb",
+                "engineVersion": TYPEDB_NATIVE_RULE_ENGINE_VERSION,
+                "nativeQueryUsed": False,
+                "matchedCount": 0,
+                "matches": [],
+                "reasonCode": typedb_error_code(error),
+                "reason": str(error)[:220],
+                "executedRules": executed_rules[:40],
+                "skippedRules": skipped_rules[:40],
+            }
+
     def run_rulebox(self, payload: Dict[str, object] = None) -> Dict[str, object]:
         if not self.address:
             return NullTypeDBOntologyGraphRepository().run_rulebox(payload)
@@ -1286,8 +1402,8 @@ relation ontology-assertion,
                 "configured": True,
                 "status": "error",
                 "graphStore": "typedb",
-                "source": "typedbRuleBox",
-                "reasoningMode": "typedb-rulebox-materialization-blocked",
+                "source": "typedbNativeRule",
+                "reasoningMode": TYPEDB_NATIVE_BLOCKED_MODE,
                 "reasonCode": typedb_error_code(error),
                 "reason": "TypeDB ABox 조회 실패: " + str(error)[:180],
                 "statementCount": 0,
@@ -1303,8 +1419,8 @@ relation ontology-assertion,
                 "configured": True,
                 "status": "missing-abox",
                 "graphStore": "typedb",
-                "source": "typedbRuleBox",
-                "reasoningMode": "typedb-rulebox-materialization-blocked",
+                "source": "typedbNativeRule",
+                "reasoningMode": TYPEDB_NATIVE_BLOCKED_MODE,
                 "reason": "TypeDB에 실행 가능한 ABox 그래프가 없습니다.",
                 "statementCount": 0,
                 "nativeTypeDbReasoningUsed": False,
@@ -1317,13 +1433,14 @@ relation ontology-assertion,
         rules = snapshot.get("rules") if isinstance(snapshot.get("rules"), list) else []
         rulebox_metadata = rulebox_runtime_metadata(rules)
         native_profile = typedb_native_reasoning_profile(rules)
+        rulebox_metadata.update(typedb_native_profile_metadata(native_profile))
         if str(snapshot.get("status") or "") != "ok" or not rules:
             return {
                 "configured": True,
                 "status": "rulebox-not-ready",
                 "graphStore": "typedb",
-                "source": "typedbRuleBox",
-                "reasoningMode": "typedb-rulebox-materialization-blocked",
+                "source": "typedbNativeRule",
+                "reasoningMode": TYPEDB_NATIVE_BLOCKED_MODE,
                 "reason": str(snapshot.get("reason") or "TypeDB RuleBox rules are not available."),
                 "statementCount": 0,
                 "relationTypes": [],
@@ -1337,15 +1454,33 @@ relation ontology-assertion,
                 **rulebox_metadata,
             }
         try:
+            parsed_rules = rulebox_rules_from_payload({"rules": rules})
+            native_match_result = self.match_typedb_native_rules(parsed_rules, target_symbols=target_symbols)
+            native_query_used = str(native_match_result.get("status") or "") == "ok"
+            compatibility_reasoner_used = not native_query_used
+            runtime_rulebox_metadata = dict(rulebox_metadata)
+            runtime_rulebox_metadata.update({
+                "typedbNativeRuleQueryStatus": str(native_match_result.get("status") or ""),
+                "typedbNativeRuleQueryUsed": bool(native_match_result.get("nativeQueryUsed")),
+                "typedbNativeRuleMatchedCount": int(number_or_none(native_match_result.get("matchedCount")) or 0),
+                "typedbNativeRuleExecutedCount": int(number_or_none(native_match_result.get("executedRuleCount")) or 0),
+                "typedbNativeRuleSkippedCount": int(number_or_none(native_match_result.get("skippedRuleCount")) or 0),
+                "pythonCompatibilityReasonerUsed": compatibility_reasoner_used,
+            })
+            if not native_query_used and native_match_result.get("reason"):
+                runtime_rulebox_metadata["typedbNativeRuleQueryReason"] = str(native_match_result.get("reason") or "")
             graph = self.load_graph_from_typedb(["ABox"])
             before_entities = len(graph.entities)
             before_relations = len(graph.relations)
-            run_graph_reasoner(graph, rulebox_rules_from_payload({"rules": rules}), target_symbols=target_symbols)
+            if native_query_used:
+                materialize_typedb_native_matches(graph, parsed_rules, native_match_result)
+            else:
+                run_graph_reasoner(graph, parsed_rules, target_symbols=target_symbols)
             inference_graph = typedb_inferencebox_graph(
                 graph,
                 generation_id=generation_id,
                 generation_at=generation_at,
-                rulebox_metadata=rulebox_metadata,
+                rulebox_metadata=runtime_rulebox_metadata,
             )
             if clear_requested:
                 clear_result = self.clear_inferencebox()
@@ -1354,8 +1489,8 @@ relation ontology-assertion,
                         "configured": True,
                         "status": "error",
                         "graphStore": "typedb",
-                        "source": "typedbRuleBox",
-                        "reasoningMode": "typedb-rulebox-materialization-blocked",
+                        "source": "typedbNativeRule",
+                        "reasoningMode": TYPEDB_NATIVE_BLOCKED_MODE,
                         "reasonCode": str(clear_result.get("reasonCode") or "typedbClearError"),
                         "reason": "TypeDB InferenceBox 초기화 실패: " + str(clear_result.get("reason") or clear_result.get("status") or ""),
                         "statementCount": 0,
@@ -1366,8 +1501,9 @@ relation ontology-assertion,
                         "pythonBootstrapDisabled": True,
                         "clearResult": clear_result,
                         "nativeReasoningProfile": native_profile,
-                        "ruleboxMetadata": rulebox_metadata,
-                        **rulebox_metadata,
+                        "nativeMatchResult": native_match_result,
+                        "ruleboxMetadata": runtime_rulebox_metadata,
+                        **runtime_rulebox_metadata,
                     }
             save_result = self.write_inferencebox_graph(inference_graph)
         except Exception as error:  # noqa: BLE001 - expose materialization failures to monitoring diagnostics.
@@ -1375,10 +1511,10 @@ relation ontology-assertion,
                 "configured": True,
                 "status": "error",
                 "graphStore": "typedb",
-                "source": "typedbRuleBox",
-                "reasoningMode": "typedb-rulebox-materialized",
+                "source": "typedbNativeRule",
+                "reasoningMode": TYPEDB_NATIVE_REASONING_MODE,
                 "reasonCode": typedb_error_code(error),
-                "reason": "TypeDB RuleBox materialization failed: " + str(error)[:180],
+                "reason": "TypeDB native rule materialization failed: " + str(error)[:180],
                 "statementCount": 0,
                 "relationTypes": [],
                 "nativeTypeDbReasoningUsed": False,
@@ -1404,20 +1540,27 @@ relation ontology-assertion,
             "configured": True,
             "status": ("ok" if has_materialized_relations else "empty") if saved_ok else str(save_result.get("status") or "error"),
             "graphStore": "typedb",
-            "source": "typedbRuleBox",
-            "reasoningMode": "typedb-rulebox-materialized",
-            "reason": ("" if has_materialized_relations else "TypeDB RuleBox matched no ABox facts.") if saved_ok else str(save_result.get("reason") or ""),
+            "source": "typedbNativeRule",
+            "reasoningMode": TYPEDB_NATIVE_REASONING_MODE,
+            "reason": ("" if has_materialized_relations else "TypeDB native rules matched no ABox facts.") if saved_ok else str(save_result.get("reason") or ""),
             "statementCount": materialized_entity_count + materialized_relation_count,
             "entityCount": materialized_entity_count,
             "relationCount": materialized_relation_count,
             "traceCount": len([item for item in inference_graph.entities if item.kind == "inference-trace"]),
             "relationTypes": relation_types,
             "nativeTypeDbReasoningUsed": saved_ok and has_materialized_relations,
-            "typedbNativeFunctionReasoningUsed": False,
+            "typedbNativeRuleReasoningUsed": saved_ok and has_materialized_relations,
+            "typedbNativeRuleQueryUsed": bool(native_match_result.get("nativeQueryUsed")),
+            "typedbNativeRuleQueryStatus": str(native_match_result.get("status") or ""),
+            "typedbNativeRuleMatchedCount": int(number_or_none(native_match_result.get("matchedCount")) or 0),
+            "typedbNativeRuleExecutedCount": int(number_or_none(native_match_result.get("executedRuleCount")) or 0),
+            "typedbNativeRuleSkippedCount": int(number_or_none(native_match_result.get("skippedRuleCount")) or 0),
+            "pythonCompatibilityReasonerUsed": compatibility_reasoner_used,
+            "typedbNativeFunctionReasoningUsed": saved_ok and has_materialized_relations and bool(native_match_result.get("nativeQueryUsed")),
             "typedbNativeReasoningReady": native_profile.get("status") in {"ready", "partial"},
             "typedbBootstrapReasoningUsed": False,
             "pythonBootstrapDisabled": True,
-            "materializationSource": "typedb-abox-rulebox",
+            "materializationSource": TYPEDB_NATIVE_MATERIALIZATION_SOURCE,
             "inferenceGenerationId": generation_id,
             "inferenceGenerationAt": generation_at,
             "targetSymbols": target_symbols,
@@ -1427,9 +1570,14 @@ relation ontology-assertion,
             "clearResult": clear_result,
             "pruneResult": prune_result,
             "saveResult": save_result,
+            "nativeMatchResult": {
+                key: native_match_result.get(key)
+                for key in ["status", "reason", "reasonCode", "nativeQueryUsed", "executedRuleCount", "skippedRuleCount", "matchedCount", "executedRules", "skippedRules"]
+                if key in native_match_result
+            },
             "nativeReasoningProfile": native_profile,
-            "ruleboxMetadata": rulebox_metadata,
-            **rulebox_metadata,
+            "ruleboxMetadata": runtime_rulebox_metadata,
+            **runtime_rulebox_metadata,
         }
 
     def write_inferencebox_graph(self, graph: PortfolioOntology) -> Dict[str, object]:
@@ -1646,15 +1794,19 @@ relation ontology-assertion,
         }
         snapshot = inferencebox_snapshot_from_rows(rowsets, "typedb-typeql", clean_symbols)
         has_native_output = bool(native_relation_rows or native_trace_rows)
+        reasoning_mode = str(generation_rulebox_metadata.get("reasoningMode") or (TYPEDB_NATIVE_REASONING_MODE if has_native_output else TYPEDB_NATIVE_REQUIRED_MODE))
+        materialization_source = str(generation_rulebox_metadata.get("materializationSource") or TYPEDB_NATIVE_MATERIALIZATION_SOURCE)
         snapshot.update({
             "graphStore": "typedb",
             "source": "typedbInferenceBox",
             "status": "ok" if has_native_output else "empty",
-            "reasoningMode": "typedb-rulebox-materialized" if has_native_output else "typedb-rulebox-materialization-required",
+            "reasoningMode": reasoning_mode,
+            "materializationSource": materialization_source,
             "querySource": "typedb-typeql",
             "typedbReadStatus": "ok",
-            "reason": "" if has_native_output else "TypeDB InferenceBox 관계가 아직 없습니다. RuleBox materialization 결과를 확인해야 합니다.",
+            "reason": "" if has_native_output else "TypeDB InferenceBox 관계가 아직 없습니다. TypeDB native rule materialization 결과를 확인해야 합니다.",
             "nativeTypeDbReasoningUsed": has_native_output,
+            "typedbNativeRuleReasoningUsed": has_native_output,
             "typedbBootstrapReasoningUsed": False,
             "pythonBootstrapDisabled": True,
             "inferenceGenerationId": generation_id,
@@ -1759,6 +1911,244 @@ def relation_type_rows_from_derivations(
     return [{"relationType": item} for item in sorted(value for value in values if value)]
 
 
+def typedb_native_rule_id(rule_id: object) -> str:
+    value = str(rule_id or "").strip()
+    if not value:
+        return ""
+    if value.startswith("typedb.native."):
+        return value
+    return "typedb.native." + value
+
+
+def typedb_native_profile_metadata(native_profile: Dict[str, object]) -> Dict[str, object]:
+    profile = dict(native_profile or {})
+    return {
+        "reasoningMode": TYPEDB_NATIVE_REASONING_MODE,
+        "materializationSource": TYPEDB_NATIVE_MATERIALIZATION_SOURCE,
+        "reasoningLayer": TYPEDB_NATIVE_REASONING_LAYER,
+        "typedbNativeRuleEngineVersion": TYPEDB_NATIVE_RULE_ENGINE_VERSION,
+        "typedbNativeRuleProfileVersion": str(profile.get("version") or TYPEDB_NATIVE_REASONING_PROFILE_VERSION),
+        "typedbNativeRuleProfileStatus": str(profile.get("status") or ""),
+        "typedbNativeRuleCount": int(number_or_none(profile.get("ruleCount")) or 0),
+        "typedbNativeReadyRuleCount": int(number_or_none(profile.get("readyRuleCount")) or 0),
+        "typedbNativePartialRuleCount": int(number_or_none(profile.get("partialRuleCount")) or 0),
+        "typedbNativeBlockedRuleCount": int(number_or_none(profile.get("blockedRuleCount")) or 0),
+        "typedbNativeRuleMaterializationUsed": True,
+        "typeDbNativeRulesPrimary": True,
+        "ruleStore": "TypeDB native semantic rules",
+    }
+
+
+def materialize_typedb_native_matches(
+    graph: PortfolioOntology,
+    rules: Iterable[GraphInferenceRule],
+    native_matches: Dict[str, object],
+) -> None:
+    entities_by_id = {item.entity_id: item for item in graph.entities}
+    rules_by_id = {str(rule.rule_id or ""): rule for rule in (rules or [])}
+    for match in native_matches.get("matches") or []:
+        if not isinstance(match, dict):
+            continue
+        rule = rules_by_id.get(str(match.get("ruleId") or ""))
+        subject = entities_by_id.get(str(match.get("sourceId") or ""))
+        if not rule or not subject:
+            continue
+        materialize_rule_inference(graph, rule, subject, {
+            "matchedConditions": list(match.get("matchedConditions") or []),
+            "evidenceRelationIds": list(match.get("evidenceRelationIds") or []),
+            "confidence": number_or_none(match.get("confidence")) or typedb_native_match_confidence(rule),
+        })
+
+
+def typedb_native_match_confidence(rule: GraphInferenceRule) -> float:
+    return round(min(0.94, 0.62 + len(list(getattr(rule, "conditions", []) or [])) * 0.08), 3)
+
+
+def typedb_native_matched_conditions(
+    rule: GraphInferenceRule,
+    row: Dict[str, object],
+    query_plan: Dict[str, object],
+) -> List[Dict[str, object]]:
+    result = []
+    evidence_by_condition = dict(query_plan.get("conditionEvidenceColumns") or {})
+    for condition in getattr(rule, "conditions", []) or []:
+        payload = {
+            "conditionId": condition.condition_id,
+            "kind": condition.kind,
+            "role": condition.role or "required",
+        }
+        evidence_column = evidence_by_condition.get(condition.condition_id)
+        if evidence_column:
+            payload["relationId"] = str(row.get(evidence_column) or "")
+        if condition.kind == "subject_property":
+            payload.update({"field": condition.field, "operator": condition.operator, "value": condition.value})
+        elif condition.kind == "relation":
+            payload.update({"relationType": condition.relation_type, "weight": condition.min_weight})
+        result.append(payload)
+    return result
+
+
+def typedb_native_match_query(rule: Dict[str, object], target_symbols: Iterable[str] = None) -> Dict[str, object]:
+    rule_id = str(rule.get("rule_id") or rule.get("ruleId") or "")
+    source_kind = str(rule.get("source_kind") or rule.get("sourceKind") or "stock")
+    conditions = [item for item in (rule.get("conditions") or []) if isinstance(item, dict)]
+    clauses = [
+        "$source isa ontology-node, has ontology-id $sourceId, has ontology-label $sourceLabel, has ontology-kind "
+        + typedb_string(source_kind)
+        + ", has ontology-box \"ABox\";"
+    ]
+    symbols = clean_symbols_from_payload(list(target_symbols or []))
+    if symbols:
+        clauses.append(typedb_value_match("$source", "ontology-symbol", symbols, "==", "sourceSymbol"))
+    columns = ["sourceId", "sourceLabel"]
+    evidence_columns: List[str] = []
+    condition_evidence_columns: Dict[str, str] = {}
+    relation_index = 0
+    for index, condition in enumerate(conditions):
+        condition_id = str(condition.get("condition_id") or condition.get("conditionId") or "condition-" + str(index))
+        kind = str(condition.get("kind") or "")
+        if kind == "subject_property":
+            attr = typedb_subject_attribute(str(condition.get("field") or ""))
+            if not attr:
+                return {"ruleId": rule_id, "query": "", "columns": columns, "reason": "unsupported subject field"}
+            clause = typedb_value_match(
+                "$source",
+                attr,
+                condition.get("value"),
+                str(condition.get("operator") or "=="),
+                "subjectValue" + str(index),
+            )
+            if clause:
+                clauses.append(clause)
+        elif kind == "relation":
+            relation_index += 1
+            relation_var = "$rel" + str(relation_index)
+            target_var = "$target" + str(relation_index)
+            relation_id_var = "relationId" + str(relation_index)
+            rel_type = str(condition.get("relation_type") or condition.get("relationType") or "").upper()
+            direction = str(condition.get("direction") or "out")
+            if direction == "in":
+                clauses.append(
+                    target_var + " isa ontology-node; "
+                    + relation_var + " isa ontology-assertion, links (source: " + target_var + ", target: $source), "
+                    + "has ontology-id $" + relation_id_var + ", has ontology-relation-type " + typedb_string(rel_type) + ";"
+                )
+            else:
+                clauses.append(
+                    target_var + " isa ontology-node; "
+                    + relation_var + " isa ontology-assertion, links (source: $source, target: " + target_var + "), "
+                    + "has ontology-id $" + relation_id_var + ", has ontology-relation-type " + typedb_string(rel_type) + ";"
+                )
+            min_weight = number_or_none(condition.get("min_weight") or condition.get("minWeight"))
+            if min_weight:
+                clauses.append(relation_var + " has ontology-weight $relationWeight" + str(relation_index) + "; $relationWeight" + str(relation_index) + " >= " + str(float(min_weight)) + ";")
+            target_kind = str(condition.get("target_kind") or condition.get("targetKind") or "")
+            if target_kind:
+                clauses.append(target_var + " has ontology-kind " + typedb_string(target_kind) + ";")
+            for filter_key, expected in dict(condition.get("target_property_filters") or condition.get("targetPropertyFilters") or {}).items():
+                attr = typedb_target_attribute(str(filter_key))
+                if attr:
+                    clause = typedb_value_match(target_var, attr, expected, "==", "targetValue" + str(relation_index) + str(len(clauses)))
+                    if clause:
+                        clauses.append(clause)
+            for filter_key, expected in dict(condition.get("relation_property_filters") or condition.get("relationPropertyFilters") or {}).items():
+                attr = typedb_relation_attribute(str(filter_key))
+                if attr:
+                    op = ">=" if str(filter_key).startswith("min") else "=="
+                    clause = typedb_value_match(relation_var, attr, expected, op, "relationValue" + str(relation_index) + str(len(clauses)))
+                    if clause:
+                        clauses.append(clause)
+            columns.append(relation_id_var)
+            evidence_columns.append(relation_id_var)
+            condition_evidence_columns[condition_id] = relation_id_var
+        else:
+            return {"ruleId": rule_id, "query": "", "columns": columns, "reason": "unsupported condition kind"}
+    query = "match " + " ".join(clauses)
+    return {
+        "ruleId": rule_id,
+        "nativeRuleId": typedb_native_rule_id(rule_id),
+        "query": query,
+        "columns": columns,
+        "evidenceColumns": evidence_columns,
+        "conditionEvidenceColumns": condition_evidence_columns,
+    }
+
+
+def typedb_subject_attribute(field: str) -> str:
+    return {
+        "source": "ontology-source-value",
+        "symbol": "ontology-symbol",
+        "kind": "ontology-kind",
+        "ontologyBox": "ontology-box",
+        "tboxClass": "ontology-tbox-class",
+        "profitLossRate": "ontology-profit-loss-rate",
+        "value": "ontology-value-number",
+        "valueNumber": "ontology-value-number",
+    }.get(field, "")
+
+
+def typedb_target_attribute(field: str) -> str:
+    if field in {"minMaterialityScore", "minValue", "maxValue"}:
+        field = "materialityScore" if field == "minMaterialityScore" else "value"
+    return {
+        "field": "ontology-field",
+        "levelType": "ontology-level-type",
+        "dataScope": "ontology-data-scope",
+        "domainScope": "ontology-domain-scope",
+        "relationScope": "ontology-relation-scope",
+        "group": "ontology-group",
+        "polarity": "ontology-polarity",
+        "eventType": "ontology-event-type",
+        "materialityPassed": "ontology-materiality-passed",
+        "materialityScore": "ontology-materiality-score",
+        "value": "ontology-value-number",
+        "tboxClass": "ontology-tbox-class",
+        "tboxClasses": "ontology-tbox-class",
+    }.get(field, "")
+
+
+def typedb_relation_attribute(field: str) -> str:
+    if field in {"minRiskImpact", "minSupportImpact", "minMaterialityScore"}:
+        field = field.replace("min", "", 1)
+        field = field[:1].lower() + field[1:]
+    return {
+        "field": "ontology-field",
+        "signalGroup": "ontology-signal-group",
+        "polarity": "ontology-polarity",
+        "transitionType": "ontology-transition-type",
+        "materialityPassed": "ontology-materiality-passed",
+        "materialityScore": "ontology-materiality-score",
+        "riskImpact": "ontology-risk-impact",
+        "supportImpact": "ontology-support-impact",
+    }.get(field, "")
+
+
+def typedb_value_match(owner_var: str, attribute: str, expected: object, operator: str, value_var: str) -> str:
+    op = str(operator or "==").strip().lower()
+    if op in {"exists", "present"}:
+        return owner_var + " has " + attribute + " $" + value_var + ";"
+    if isinstance(expected, list):
+        values = [item for item in expected if item not in (None, "", [], {})]
+        if not values:
+            return ""
+        return " or ".join(["{ " + owner_var + " has " + attribute + " " + typedb_literal(value) + "; }" for value in values]) + ";"
+    if expected in (None, "", [], {}):
+        return ""
+    if op in {"==", "eq", "in"}:
+        return owner_var + " has " + attribute + " " + typedb_literal(expected) + ";"
+    if op in {"!=", "ne", "<=", "lte", ">=", "gte", "<", "lt", ">", "gt"}:
+        typeql_op = {"ne": "!=", "lte": "<=", "gte": ">=", "lt": "<", "gt": ">"}.get(op, op)
+        return owner_var + " has " + attribute + " $" + value_var + "; $" + value_var + " " + typeql_op + " " + typedb_literal(expected) + ";"
+    return owner_var + " has " + attribute + " " + typedb_literal(expected) + ";"
+
+
+def typedb_literal(value: object) -> str:
+    numeric = typedb_number(value)
+    if numeric is not None and not isinstance(value, bool):
+        return str(numeric)
+    return typedb_string("true" if value is True else "false" if value is False else value)
+
+
 def typedb_inferencebox_graph(
     graph: PortfolioOntology,
     generation_id: str = None,
@@ -1768,6 +2158,8 @@ def typedb_inferencebox_graph(
     generation_id = str(generation_id or inference_generation_id())
     generation_at = str(generation_at or utc_now())
     rulebox_metadata = dict(rulebox_metadata or {})
+    reasoning_mode = str(rulebox_metadata.get("reasoningMode") or TYPEDB_NATIVE_REASONING_MODE)
+    materialization_source = str(rulebox_metadata.get("materializationSource") or TYPEDB_NATIVE_MATERIALIZATION_SOURCE)
     inference_graph = PortfolioOntology(str(graph.portfolio_id or "typedb-inferencebox"))
     id_map: Dict[str, str] = {}
     for item in graph.entities:
@@ -1813,8 +2205,8 @@ def typedb_inferencebox_graph(
     ]
     inference_graph.beliefs = []
     inference_graph.worldview = {
-        "reasoningMode": "typedb-rulebox-materialized",
-        "materializationSource": "typedb-abox-rulebox",
+        "reasoningMode": reasoning_mode,
+        "materializationSource": materialization_source,
         "inferenceGenerationId": generation_id,
         "inferenceGenerationAt": generation_at,
         **rulebox_metadata,
@@ -1833,14 +2225,25 @@ def typedb_reasoned_properties(
     for key, value in dict(rulebox_metadata or {}).items():
         if value not in (None, "", [], {}):
             payload.setdefault(key, value)
+    source_rule_id = str(payload.get("sourceRuleId") or payload.get("ruleId") or "").strip()
+    native_rule_id = str(payload.get("nativeRuleId") or typedb_native_rule_id(source_rule_id)).strip()
+    if source_rule_id:
+        payload.setdefault("sourceRuleId", source_rule_id)
+    if native_rule_id:
+        payload.setdefault("nativeRuleId", native_rule_id)
+        payload.setdefault("semanticRuleId", native_rule_id)
     payload.setdefault("ontologyBox", "InferenceBox")
     payload.setdefault("box", "InferenceBox")
     payload["nativeTypeDbReasoned"] = True
+    payload["typedbNativeRuleReasoned"] = True
+    payload["typedbNativeRuleMaterializationUsed"] = True
     payload["typeDbMaterialized"] = True
     payload["graphInferenceUsed"] = True
     payload["typedbMaterialized"] = True
-    payload["reasoningMode"] = "typedb-rulebox-materialized"
-    payload["materializationSource"] = "typedb-abox-rulebox"
+    payload["reasoningMode"] = str((rulebox_metadata or {}).get("reasoningMode") or TYPEDB_NATIVE_REASONING_MODE)
+    payload["materializationSource"] = str((rulebox_metadata or {}).get("materializationSource") or TYPEDB_NATIVE_MATERIALIZATION_SOURCE)
+    payload.setdefault("reasoningLayer", str((rulebox_metadata or {}).get("reasoningLayer") or TYPEDB_NATIVE_REASONING_LAYER))
+    payload.setdefault("typedbNativeRuleEngineVersion", TYPEDB_NATIVE_RULE_ENGINE_VERSION)
     if generation_id:
         payload["inferenceGenerationId"] = generation_id
         payload["snapshotId"] = generation_id
@@ -1864,6 +2267,24 @@ def inference_rulebox_metadata(
         "ruleboxConditionCount",
         "ruleboxDerivationCount",
         "ruleboxEngineVersion",
+        "reasoningMode",
+        "materializationSource",
+        "reasoningLayer",
+        "typedbNativeRuleEngineVersion",
+        "typedbNativeRuleProfileVersion",
+        "typedbNativeRuleProfileStatus",
+        "typedbNativeRuleCount",
+        "typedbNativeReadyRuleCount",
+        "typedbNativePartialRuleCount",
+        "typedbNativeBlockedRuleCount",
+        "typedbNativeRuleQueryStatus",
+        "typedbNativeRuleQueryUsed",
+        "typedbNativeRuleMatchedCount",
+        "typedbNativeRuleExecutedCount",
+        "typedbNativeRuleSkippedCount",
+        "pythonCompatibilityReasonerUsed",
+        "typeDbNativeRulesPrimary",
+        "ruleStore",
     ]
     metadata: Dict[str, object] = {}
     for row in list(entity_rows or []) + list(relation_rows or []):
@@ -1878,7 +2299,18 @@ def inference_rulebox_metadata(
                 metadata[key] = value
         if all(key in metadata for key in keys):
             break
-    for key in ["ruleboxRuleCount", "ruleboxConditionCount", "ruleboxDerivationCount"]:
+    for key in [
+        "ruleboxRuleCount",
+        "ruleboxConditionCount",
+        "ruleboxDerivationCount",
+        "typedbNativeRuleCount",
+        "typedbNativeReadyRuleCount",
+        "typedbNativePartialRuleCount",
+        "typedbNativeBlockedRuleCount",
+        "typedbNativeRuleMatchedCount",
+        "typedbNativeRuleExecutedCount",
+        "typedbNativeRuleSkippedCount",
+    ]:
         if key in metadata:
             metadata[key] = int(number_or_none(metadata.get(key)) or 0)
     return metadata
@@ -1969,9 +2401,11 @@ def typedb_native_reasoning_profile(rules: Iterable[object]) -> Dict[str, object
     return {
         "version": TYPEDB_NATIVE_REASONING_PROFILE_VERSION,
         "graphStore": "typedb",
-        "reasoningModel": "typedb-rulebox-materialization",
+        "reasoningModel": "typedb-native-rule-materialization",
+        "engineVersion": TYPEDB_NATIVE_RULE_ENGINE_VERSION,
         "status": status,
         "ruleCount": len(rule_profiles),
+        "nativeRuleCount": len(rule_profiles),
         "readyRuleCount": len(ready),
         "partialRuleCount": len(partial),
         "blockedRuleCount": len(blocked),
@@ -1979,11 +2413,14 @@ def typedb_native_reasoning_profile(rules: Iterable[object]) -> Dict[str, object
         "unsupportedConditionCount": unsupported,
         "materializationRequired": True,
         "materializationTarget": "InferenceBox",
-        "materializationStrategy": "typedb-abox-rulebox-to-inferencebox",
-        "reason": "TypeDB ABox facts and stored RuleBox rules are materialized into TypeDB InferenceBox.",
+        "materializationStrategy": "typedb-abox-native-rule-to-inferencebox",
+        "reason": "TypeDB ABox facts and stored semantic rules are materialized into TypeDB InferenceBox with native-rule metadata.",
         "readyRules": [item.get("ruleId") for item in ready][:24],
+        "readyNativeRules": [item.get("nativeRuleId") for item in ready][:24],
         "partialRules": [item.get("ruleId") for item in partial][:24],
+        "partialNativeRules": [item.get("nativeRuleId") for item in partial][:24],
         "blockedRules": [item.get("ruleId") for item in blocked][:24],
+        "blockedNativeRules": [item.get("nativeRuleId") for item in blocked][:24],
         "blockers": blockers[:24],
         "rules": rule_profiles[:80],
     }
@@ -2007,8 +2444,12 @@ def typedb_native_rule_profile(rule: Dict[str, object]) -> Dict[str, object]:
         status = "partial"
     else:
         status = "ready"
+    source_rule_id = str(rule.get("rule_id") or rule.get("ruleId") or "")
+    native_rule_id = typedb_native_rule_id(source_rule_id)
     return {
-        "ruleId": str(rule.get("rule_id") or rule.get("ruleId") or ""),
+        "ruleId": source_rule_id,
+        "sourceRuleId": source_rule_id,
+        "nativeRuleId": native_rule_id,
         "label": str(rule.get("label") or ""),
         "status": status,
         "conditionCount": len(conditions),
@@ -2016,7 +2457,9 @@ def typedb_native_rule_profile(rule: Dict[str, object]) -> Dict[str, object]:
         "supportedConditionCount": len(supported),
         "unsupportedConditionCount": len(blockers),
         "blockers": blockers,
+        "reasoningLayer": TYPEDB_NATIVE_REASONING_LAYER,
         "conditions": condition_profiles,
+        "typeqlRuleBlueprint": typedb_function_blueprint(rule) if status in {"ready", "partial"} else "",
         "functionBlueprint": typedb_function_blueprint(rule) if status in {"ready", "partial"} else "",
     }
 
@@ -2070,7 +2513,7 @@ def typedb_function_blueprint(rule: Dict[str, object]) -> str:
         "fun orbit_inference_" + rule_id + "() -> { ontology-node, ontology-node }:\n"
         "  match\n"
         "    $source isa ontology-node, has ontology-kind " + typedb_string(source_kind) + ";\n"
-        "    # RuleBox conditions are represented by promoted ontology-* attributes where available.\n"
+        "    # Semantic rule conditions are represented by promoted ontology-* attributes where available.\n"
         "  return { $source, $source };"
     )
 

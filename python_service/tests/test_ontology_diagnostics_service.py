@@ -51,7 +51,8 @@ class FakeOntologyRepository:
             "status": "ok",
             "source": "typedbInferenceBox",
             "graphStore": "typedb",
-            "reasoningMode": "typedb-rulebox-materialized",
+            "reasoningMode": "typedb-native-rule-materialized",
+            "materializationSource": "typedb-abox-native-rule",
             "querySource": "typedb-typeql",
             "typedbReadStatus": "ok",
             "entityCount": 4,
@@ -145,7 +146,7 @@ class OntologyDiagnosticsServiceTests(unittest.TestCase):
         self.assertEqual(payload["contract"], "typedb-ontology-diagnostics-v1")
         self.assertEqual(payload["activeGraphStore"], "typedb")
         self.assertTrue(payload["typedb"]["addressConfigured"])
-        self.assertEqual(payload["inferenceBox"]["reasoningMode"], "typedb-rulebox-materialized")
+        self.assertEqual(payload["inferenceBox"]["reasoningMode"], "typedb-native-rule-materialized")
         self.assertEqual(payload["inferenceBox"]["ruleboxRulesHash"], "hash-1")
         self.assertTrue(payload["reasoningBoundary"]["nativeTypeDbReasoningUsed"])
         self.assertFalse(payload["reasoningBoundary"]["typedbBootstrapReasoningUsed"])

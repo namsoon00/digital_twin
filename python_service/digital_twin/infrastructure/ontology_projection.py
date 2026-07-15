@@ -242,7 +242,7 @@ class PortfolioOntologyProjectionRecorder:
         if isinstance(execution, dict):
             execution.setdefault("graphStore", active_key)
             if active_key == "typedb":
-                execution.setdefault("source", "typedbRuleBox")
+                execution.setdefault("source", "typedbNativeRule")
         else:
             execution = {"status": "error", "reason": "non-dict RuleBox result", "graphStore": active_key}
         result["ruleboxExecution"] = execution

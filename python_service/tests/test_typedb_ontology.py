@@ -244,7 +244,7 @@ class TypeDBOntologyRepositoryTests(unittest.TestCase):
         self.assertEqual("typedb", snapshot["graphStore"])
         self.assertGreaterEqual(snapshot["ruleCount"], 1)
         self.assertFalse(snapshot["defaultsFallbackUsed"])
-        self.assertEqual("typedb-rulebox-materialization", snapshot["nativeReasoningProfile"]["reasoningModel"])
+        self.assertEqual("typedb-native-rule-materialization", snapshot["nativeReasoningProfile"]["reasoningModel"])
         expected_payload = [rule.to_dict() for rule in expected_rules]
         self.assertEqual(len(expected_payload), snapshot["ruleCount"])
         self.assertEqual(
@@ -399,6 +399,8 @@ class TypeDBOntologyRepositoryTests(unittest.TestCase):
                     "aiInfluenceLabel": "손실 방어 추론",
                     "inferenceTraceId": "inference-trace:005930:graph.loss_guard.breakdown.v1",
                     "nativeTypeDbReasoned": True,
+                    "reasoningMode": "typedb-native-rule-materialized",
+                    "materializationSource": "typedb-abox-native-rule",
                     "ruleboxRulesHash": "rulebox-hash-1",
                     "ruleboxRuleCount": 23,
                 }),
@@ -411,7 +413,8 @@ class TypeDBOntologyRepositoryTests(unittest.TestCase):
         self.assertEqual("ok", snapshot["status"])
         self.assertEqual("typedbInferenceBox", snapshot["source"])
         self.assertEqual("typedb", snapshot["graphStore"])
-        self.assertEqual("typedb-rulebox-materialized", snapshot["reasoningMode"])
+        self.assertEqual("typedb-native-rule-materialized", snapshot["reasoningMode"])
+        self.assertEqual("typedb-abox-native-rule", snapshot["materializationSource"])
         self.assertEqual("typedb-typeql", snapshot["querySource"])
         self.assertEqual("ok", snapshot["typedbReadStatus"])
         self.assertEqual(2, snapshot["entityCount"])
@@ -471,6 +474,22 @@ class TypeDBOntologyRepositoryTests(unittest.TestCase):
             "rules": [default_graph_inference_rules()[0].to_dict()],
             "ruleCount": 1,
         }
+        native_match = {
+            "status": "ok",
+            "graphStore": "typedb",
+            "nativeQueryUsed": True,
+            "executedRuleCount": 1,
+            "skippedRuleCount": 0,
+            "matchedCount": 1,
+            "matches": [{
+                "ruleId": default_graph_inference_rules()[0].rule_id,
+                "nativeRuleId": "typedb.native." + default_graph_inference_rules()[0].rule_id,
+                "sourceId": "stock:005930",
+                "matchedConditions": [{"conditionId": "holding-source"}],
+                "evidenceRelationIds": ["ontology-assertion:test"],
+                "confidence": 0.86,
+            }],
+        }
 
         captured = {}
 
@@ -478,22 +497,29 @@ class TypeDBOntologyRepositoryTests(unittest.TestCase):
             captured["graph"] = inference_graph
             return {"configured": True, "saved": True, "status": "ok", "graphStore": "typedb"}
 
-        with patch.object(repository, "read_entity_rows", return_value=[{"id": "stock:005930", "ontologyBox": "ABox"}]), patch.object(repository, "rulebox_snapshot", return_value=rule_snapshot), patch.object(repository, "clear_inferencebox", return_value={"status": "ok", "graphStore": "typedb"}), patch.object(repository, "load_graph_from_typedb", return_value=graph), patch.object(repository, "write_inferencebox_graph", side_effect=capture_inferencebox):
+        with patch.object(repository, "read_entity_rows", return_value=[{"id": "stock:005930", "ontologyBox": "ABox"}]), patch.object(repository, "rulebox_snapshot", return_value=rule_snapshot), patch.object(repository, "match_typedb_native_rules", return_value=native_match), patch.object(repository, "clear_inferencebox", return_value={"status": "ok", "graphStore": "typedb"}), patch.object(repository, "load_graph_from_typedb", return_value=graph), patch.object(repository, "write_inferencebox_graph", side_effect=capture_inferencebox):
             result = repository.run_rulebox({"clearInference": True})
 
         self.assertEqual("ok", result["status"])
-        self.assertEqual("typedb-rulebox-materialized", result["reasoningMode"])
+        self.assertEqual("typedb-native-rule-materialized", result["reasoningMode"])
         self.assertGreater(result["statementCount"], 0)
         self.assertFalse(result["typedbBootstrapReasoningUsed"])
         self.assertTrue(result["pythonBootstrapDisabled"])
         self.assertIn("nativeReasoningProfile", result)
-        self.assertFalse(result["typedbNativeFunctionReasoningUsed"])
+        self.assertTrue(result["typedbNativeRuleReasoningUsed"])
+        self.assertTrue(result["typedbNativeFunctionReasoningUsed"])
+        self.assertTrue(result["typedbNativeRuleQueryUsed"])
+        self.assertEqual("ok", result["typedbNativeRuleQueryStatus"])
         self.assertTrue(result["nativeTypeDbReasoningUsed"])
         self.assertIn("HAS_INFERRED_RISK", result["relationTypes"])
         self.assertTrue(result["inferenceGenerationId"].startswith("inference-generation:"))
         self.assertEqual("symbols" if result["targetSymbols"] else "all-symbols", result["incrementalScope"])
         self.assertTrue(captured["graph"].entities)
         self.assertTrue(all((item.properties or {}).get("nativeTypeDbReasoned") for item in captured["graph"].entities))
+        self.assertTrue(all((item.properties or {}).get("typedbNativeRuleReasoned") for item in captured["graph"].entities))
+        self.assertTrue(all((item.properties or {}).get("nativeRuleId") for item in captured["graph"].entities))
+        self.assertEqual("typedb-native-rule-materialized", captured["graph"].worldview["reasoningMode"])
+        self.assertEqual("typedb-abox-native-rule", captured["graph"].worldview["materializationSource"])
         self.assertTrue(all((item.properties or {}).get("snapshotId") == result["inferenceGenerationId"] for item in captured["graph"].entities))
         self.assertTrue(result["ruleboxRulesHash"])
         self.assertEqual(1, result["ruleboxRuleCount"])
@@ -598,8 +624,24 @@ class TypeDBOntologyRepositoryTests(unittest.TestCase):
             "rules": [default_graph_inference_rules()[0].to_dict()],
             "ruleCount": 1,
         }
+        native_match = {
+            "status": "ok",
+            "graphStore": "typedb",
+            "nativeQueryUsed": True,
+            "executedRuleCount": 1,
+            "skippedRuleCount": 0,
+            "matchedCount": 1,
+            "matches": [{
+                "ruleId": default_graph_inference_rules()[0].rule_id,
+                "nativeRuleId": "typedb.native." + default_graph_inference_rules()[0].rule_id,
+                "sourceId": "stock:005930",
+                "matchedConditions": [{"conditionId": "holding-source"}],
+                "evidenceRelationIds": ["ontology-assertion:test"],
+                "confidence": 0.86,
+            }],
+        }
 
-        with patch.object(repository, "read_entity_rows", return_value=[{"id": "stock:005930", "ontologyBox": "ABox"}]), patch.object(repository, "rulebox_snapshot", return_value=rule_snapshot), patch.object(repository, "clear_inferencebox", return_value={"status": "ok", "graphStore": "typedb"}), patch.object(repository, "load_graph_from_typedb", return_value=graph), patch.object(repository, "write_inferencebox_graph", return_value={"configured": True, "saved": False, "status": "error", "reason": "write failed"}):
+        with patch.object(repository, "read_entity_rows", return_value=[{"id": "stock:005930", "ontologyBox": "ABox"}]), patch.object(repository, "rulebox_snapshot", return_value=rule_snapshot), patch.object(repository, "match_typedb_native_rules", return_value=native_match), patch.object(repository, "clear_inferencebox", return_value={"status": "ok", "graphStore": "typedb"}), patch.object(repository, "load_graph_from_typedb", return_value=graph), patch.object(repository, "write_inferencebox_graph", return_value={"configured": True, "saved": False, "status": "error", "reason": "write failed"}):
             result = repository.run_rulebox({"clearInference": True})
 
         self.assertEqual("error", result["status"])
@@ -610,8 +652,10 @@ class TypeDBOntologyRepositoryTests(unittest.TestCase):
     def test_typedb_native_reasoning_profile_identifies_function_ready_rules(self):
         profile = typedb_native_reasoning_profile([rule.to_dict() for rule in default_graph_inference_rules()])
 
-        self.assertEqual("typedb-rulebox-materialization", profile["reasoningModel"])
-        self.assertEqual("typedb-function-readiness-v1", profile["version"])
+        self.assertEqual("typedb-native-rule-materialization", profile["reasoningModel"])
+        self.assertEqual("typedb-native-rule-profile-v2", profile["version"])
+        self.assertEqual(profile["ruleCount"], profile["nativeRuleCount"])
+        self.assertTrue(profile["rules"][0]["nativeRuleId"].startswith("typedb.native."))
         self.assertGreater(profile["readyRuleCount"] + profile["partialRuleCount"], 0)
         self.assertTrue(profile["materializationRequired"])
 

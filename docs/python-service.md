@@ -27,16 +27,16 @@ Operational flow:
 1. Source adapters collect Toss, KIS, market-data, news, disclosure, macro, FX, account, and runtime-setting facts.
 2. Application services persist those facts in the operational DB or pass them through account snapshots.
 3. The ontology projection builds ABox facts from the current snapshot and stores them in TypeDB.
-4. TypeDB-native rule matching reads the TypeDB ABox and writes generation-scoped InferenceBox output.
+4. TypeDB schema function rules read the TypeDB ABox and write generation-scoped InferenceBox output.
 5. Monitoring reads InferenceBox relation context and creates `investmentInsight` notification candidates.
 6. AI receives the graph context, writes a constrained opinion, and the system validates it before delivery.
 7. Notification workers apply cooldown, novelty, message-template, and transport policy.
 
 Important boundaries:
 
-- TBox vocabulary lives in domain ontology catalog modules. ABox facts come from current account and market state. InferenceBox is the materialized result of TypeDB native rules.
-- `typedb_ontology.py` owns TypeDB storage, native-rule matching, generation-scoped InferenceBox writes, retention pruning, and diagnostics metadata.
-- The old graph reasoner and `ontology_relation_reasoning.py` are compatibility/offline helpers. If they are used because TypeDB native matching failed, diagnostics must expose `pythonCompatibilityReasonerUsed=true`.
+- TBox vocabulary lives in domain ontology catalog modules. ABox facts come from current account and market state. InferenceBox is the materialized result of TypeDB schema function rules.
+- `typedb_ontology.py` owns TypeDB storage, RuleBox profile to schema function sync, function query execution, generation-scoped InferenceBox writes, retention pruning, and diagnostics metadata.
+- The old graph reasoner and `ontology_relation_reasoning.py` are compatibility/offline helpers. Runtime investment judgement must not fall back to them; TypeDB schema function sync/query failure blocks investment judgement and should produce diagnostics with `pythonCompatibilityReasonerUsed=false`.
 - API and UI names may still contain `rulebox` for compatibility. Treat them as rule-profile management surfaces, not as a separate runtime reasoning engine.
 - If InferenceBox relation and trace counts are zero while there are holdings/watchlist facts, investment judgement should be blocked or downgraded to an operational diagnostics alert.
 
@@ -48,7 +48,7 @@ npm run python:ontology-reasoning:once
 npm run python:service:status
 ```
 
-Expected healthy metadata includes `reasoningMode=typedb-native-rule-materialized`, `materializationSource=typedb-abox-native-rule`, non-zero relation/trace counts for meaningful account data, and `pythonCompatibilityReasonerUsed=false`.
+Expected healthy metadata includes `reasoningMode=typedb-native-rule-materialized`, `materializationSource=typedb-abox-native-rule`, `typedbSchemaFunctionUsed=true`, `typedbNativeRuleSkippedCount=0`, non-zero relation/trace counts for meaningful account data, and `pythonCompatibilityReasonerUsed=false`.
 
 ## DDD Boundaries
 

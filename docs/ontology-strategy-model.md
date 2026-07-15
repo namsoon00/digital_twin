@@ -48,7 +48,7 @@ AI 프롬프트에는 TBox, `boundedContexts`, ABox, operational ontology, reaso
 ## Runtime Flow
 
 1. Toss 계좌, 시장 데이터, 외부 API 데이터를 `Position`, `PortfolioSummary`, `externalSignals`로 정규화한다.
-2. `infrastructure/ontology_projection.py`가 종목별 ABox fact와 부족 데이터를 TypeDB에 저장하고, TypeDB native rule materialization 결과를 InferenceBox로 읽어 운영 판단에 사용한다. `domain/ontology_relation_reasoning.py`는 프롬프트 조립과 비운영 비교용 helper로만 사용한다.
+2. `infrastructure/ontology_projection.py`가 종목별 ABox fact와 부족 데이터를 TypeDB에 저장하고, TypeDB schema function rule materialization 결과를 InferenceBox로 읽어 운영 판단에 사용한다. `domain/ontology_relation_reasoning.py`는 프롬프트 조립과 비운영 비교용 helper로만 사용한다.
 3. `DecisionItem.decision`, `exit_pressure`, `decision_basis`는 관계 규칙 결과에서 나온다. `decision_basis`는 `ontologyRelationRules`다.
 4. 기존 공식 기반 `profitTakePressure`, `lossCutPressure`, 매수/매도 점수는 보조 근거와 과거 비교용으로만 보관한다.
 5. `domain/ontology.py`가 TBox/ABox 그래프와 `OntologyOpinion`을 만든다. 이때 `Strategy`, `InvestmentThesis`, `Observation`, `Risk`, `Insight`, `NotificationDispatch`까지 모두 ABox 노드로 만든다.
@@ -59,15 +59,15 @@ AI 프롬프트에는 TBox, `boundedContexts`, ABox, operational ontology, reaso
 
 알림은 투자 이벤트 타입별 폴링으로 직접 발송하지 않는다. 기존 `modelBuy`, `holdingTiming`, `externalDartDisclosure` 같은 이벤트는 `investmentInsight.metadata.sourceAlertEvents`의 근거 신호로 남고, 최종 발송은 `Insight -> DISPATCHED_BY -> NotificationDispatch(investmentInsight)` 관계가 담당한다.
 
-## TypeDB Native Rule And InferenceBox
+## TypeDB Schema Function Rule And InferenceBox
 
-운영 판단의 기준은 TypeDB에 저장된 ABox와 TypeDB native rule materialization 결과다. Python 공식, 템플릿 조건, 알림 임계값은 투자 의미를 직접 만들지 않는다.
+운영 판단의 기준은 TypeDB에 저장된 ABox와 TypeDB schema function materialization 결과다. TypeDB 3에서는 예전 TypeDB 2의 `define rule` 대신 schema `fun`이 rule-equivalent 추론 단위다. Python 공식, 템플릿 조건, 알림 임계값은 투자 의미를 직접 만들지 않는다.
 
 실행 흐름은 다음과 같다.
 
 1. `portfolio_ontology_builder.py`가 계좌, 보유/관심 종목, 가격, 이동평균, 수급, 투자자별 매수·매도, 뉴스, 공시, 거시, 투자 성향, 데이터 품질을 ABox fact로 만든다.
 2. `typedb_ontology.py`가 ABox를 TypeDB에 저장한다.
-3. TypeDB-native rule profile은 지원되는 조건을 TypeQL `match` 쿼리로 변환해 TypeDB ABox에서 성립 여부를 찾는다.
+3. RuleBox semantic profile은 TypeDB schema function으로 컴파일된다. 각 function은 TypeDB ABox를 직접 조회하며, 필수 조건, 후보 조건 중 N개 이상, 부정 조건을 TypeQL 안에서 처리한다.
 4. 성립한 규칙은 InferenceBox 노드와 관계로 저장된다. 각 결과에는 `sourceRuleId`, `nativeRuleId`, `semanticRuleId`, `reasoningMode`, `materializationSource`, `matchedConditions`, `confidence`, `sourceEvidenceIds`가 남는다.
 5. `ontology_inference_context.py`가 최신 generation의 InferenceBox만 읽어 투자 판단 후보, 근거, 반대 근거, 부족 데이터, AI 질문을 만든다.
 6. AI는 이 컨텍스트를 받아 최종 의견을 쓰고, 시스템은 없는 데이터 생성 여부와 규칙 충돌 여부를 검증한 뒤 알림 메시지에 넣는다.
@@ -77,10 +77,12 @@ AI 프롬프트에는 TBox, `boundedContexts`, ABox, operational ontology, reaso
 - `reasoningMode=typedb-native-rule-materialized`: 정상. TypeDB ABox에서 native rule match가 실행되고 InferenceBox가 저장됐다.
 - `materializationSource=typedb-abox-native-rule`: 정상. TypeDB ABox 기반 materialization 결과다.
 - `pythonCompatibilityReasonerUsed=false`: 정상 운영 경로다.
-- `pythonCompatibilityReasonerUsed=true`: TypeDB native query 실패로 Python 호환 reasoner가 사용된 상태다. 투자 판단보다는 진단 대상으로 봐야 한다.
+- `typedbSchemaFunctionUsed=true`: 정상. RuleBox profile이 TypeDB schema function으로 동기화되고 해당 function query가 실행됐다.
+- `typedbNativeRuleSkippedCount=0`: 정상. 지원되지 않아 건너뛴 active rule이 없다.
+- `pythonCompatibilityReasonerUsed=true`: 비정상. 운영 투자 판단 경로에서는 사용하면 안 된다. TypeDB schema function sync/query 실패는 투자 판단을 차단하고 진단 알림으로 다뤄야 한다.
 - `relations=0`, `traces=0`: 보유/관심 데이터가 있는데도 이 값이면 TypeDB 저장, native rule profile, 조건 매칭, worker 실행 상태를 순서대로 확인한다.
 
-TypeDB native rule은 TypeDB schema의 class/relation 정의와 다르다. TBox는 개념과 가능한 관계를 정의하고, ABox는 현재 사실을 담는다. Native rule profile은 이 ABox 사실이 어떤 조합일 때 `손실 방어`, `회복 확인`, `추가매수 보류`, `조건부 추가매수 검토`, `뉴스 리스크 대응` 같은 InferenceBox 관계로 이어지는지 정의한다.
+TypeDB schema function rule은 TypeDB schema의 class/relation 정의와 다르다. TBox는 개념과 가능한 관계를 정의하고, ABox는 현재 사실을 담는다. RuleBox profile에서 생성된 schema function은 이 ABox 사실이 어떤 조합일 때 `손실 방어`, `회복 확인`, `추가매수 보류`, `조건부 추가매수 검토`, `뉴스 리스크 대응` 같은 InferenceBox 관계로 이어지는지 정의한다.
 
 ## Projection Boundary
 
@@ -125,7 +127,7 @@ Projection은 다음 용도로만 사용한다.
 
 ## Ontology Lab
 
-실험 환경은 운영 TypeDB native rule profile과 TypeDB를 직접 바꾸지 않는 로컬 샌드박스다. 후보 규칙을 `candidateRules`로 저장하고, 최근 모니터 스냅샷에서 만든 ABox facts-only 그래프에 현재 native-rule profile과 후보 profile을 각각 실행해 파생 관계, 추론 trace, 품질 점수 변화를 비교한다. API/화면 이름에 남아 있는 `RuleBox`는 호환 이름이며, 운영 의미는 TypeDB native rule이다.
+실험 환경은 운영 TypeDB schema function rule과 TypeDB를 직접 바꾸지 않는 로컬 샌드박스다. 후보 규칙을 `candidateRules`로 저장하고, 최근 모니터 스냅샷에서 만든 ABox facts-only 그래프에 현재 RuleBox semantic profile과 후보 profile을 각각 schema function으로 컴파일해 파생 관계, 추론 trace, 품질 점수 변화를 비교한다. API/화면 이름에 남아 있는 `RuleBox`는 호환 이름이며, 운영 의미는 TypeDB schema function rule이다.
 
 CLI:
 
@@ -159,7 +161,7 @@ API:
 - `POST /api/ontology/experiments/{id}/activate`
 - `POST /api/ontology/experiments/{id}/pause`
 
-샌드박스 실행 결과의 `sandbox.mutatedOperationalRuleBox`와 `sandbox.mutatedTypeDB`는 항상 `false`여야 한다. 운영 반영은 완료된 샌드박스 결과, 그래프 실행 이력, `proposedOntologyChanges`가 있는 실험에서만 `apply` 단계로 수행한다. `apply`는 후보 관계 규칙을 TypeDB native-rule profile에 저장하고, 제안된 TBox class/relation/decision stage를 그래프 저장소에 반영한 뒤 TypeDB 네이티브 규칙 추론을 다시 실행한다. 런타임 실험 기록은 `data/ontology-lab.json`에 저장되며 git에 넣지 않는다.
+샌드박스 실행 결과의 `sandbox.mutatedOperationalRuleBox`와 `sandbox.mutatedTypeDB`는 항상 `false`여야 한다. 운영 반영은 완료된 샌드박스 결과, 그래프 실행 이력, `proposedOntologyChanges`가 있는 실험에서만 `apply` 단계로 수행한다. `apply`는 후보 관계 규칙을 RuleBox semantic profile에 저장하고, 제안된 TBox class/relation/decision stage를 그래프 저장소에 반영한 뒤 TypeDB schema function sync와 InferenceBox materialization을 다시 실행한다. 런타임 실험 기록은 `data/ontology-lab.json`에 저장되며 git에 넣지 않는다.
 
 `promotionReadiness.status=promote-candidate`는 바로 `apply`할 수 있다. `needs-review` 결과는 운영 반영 전에 `reviewApproved`, `reviewedBy`, `reviewReason` 승인 payload가 필요하며, 웹 실험 탭은 확인창을 거쳐 이 승인 기록을 남긴다. `needs-data`나 실행되지 않은 AI 제안은 운영 반영할 수 없다.
 
@@ -167,11 +169,11 @@ API:
 
 관계 규칙과 프롬프트는 런타임 설정으로 관리한다.
 
-- `ontologyRelationRules`: `ruleId | label | condition | relationType | signalType | promptHint` 형식의 관계 규칙 목록. 운영에서는 TypeDB native-rule profile로 해석되어 InferenceBox materialization에 쓰인다.
+- `ontologyRelationRules`: `ruleId | label | condition | relationType | signalType | promptHint` 형식의 관계 규칙 목록. 운영에서는 RuleBox semantic profile로 저장된 뒤 TypeDB schema function으로 컴파일되어 InferenceBox materialization에 쓰인다.
 - `aiPromptTemplates`: 투자 인사이트와 근거 신호별 AI 의견/질문 템플릿. 실제 투자 발송 타입은 `investmentInsight`이며, `modelBuy`, `holdingTiming`, `monitorTrendChange`, `externalDartDisclosure` 같은 타입은 인사이트 합성에 들어가는 근거 신호 템플릿으로 유지한다. 사용자가 일부만 수정해도 나머지는 기본 템플릿을 유지한다.
 - `aiPromptPolicy`: 제공 데이터만 사용, 부족 데이터 표시, 투자 판단과 발송 우선도 분리 같은 공통 가드레일.
 
-설정의 관계 규칙과 프롬프트는 UI, 메시지, AI 리뷰 정보의 운영 계약이다. 새 투자 의미를 추가할 때는 TBox/ABox fact, TypeDB native-rule profile, InferenceBox payload, AI prompt contract, 알림 문구를 함께 갱신해야 한다.
+설정의 관계 규칙과 프롬프트는 UI, 메시지, AI 리뷰 정보의 운영 계약이다. 새 투자 의미를 추가할 때는 TBox/ABox fact, RuleBox semantic profile, TypeDB schema function materialization, InferenceBox payload, AI prompt contract, 알림 문구를 함께 갱신해야 한다.
 
 ## Graph Store Configuration
 
@@ -214,7 +216,7 @@ AI에는 다음 데이터를 함께 전달한다.
 
 - 새 TBox 클래스, 관계 타입, 바운디드 컨텍스트 규칙은 `domain/ontology_tbox.py`에 추가한다.
 - 새 ABox 인스턴스 생성은 `domain/ontology.py`에 추가하고, `tboxClass` 또는 `tboxClasses`를 지정해 `boundedContext`가 자동 부여되게 한다.
-- 새 런타임 판단은 먼저 TypeDB native-rule profile, InferenceBox payload, 온톨로지 relation catalog에 추가한다. Python `domain/ontology_relation_reasoning.py`는 운영 fallback이 아니라 프롬프트 조립, 실험, 비교용 보조 로직으로만 사용한다.
+- 새 런타임 판단은 먼저 RuleBox semantic profile, TypeDB schema function materialization, InferenceBox payload, 온톨로지 relation catalog에 추가한다. Python `domain/ontology_relation_reasoning.py`는 운영 fallback이 아니라 프롬프트 조립, 실험, 비교용 보조 로직으로만 사용한다.
 - 새 AI 설명은 `aiPromptTemplates`와 `aiPromptPolicy`의 계약을 함께 갱신한다.
 - 외부 뉴스, 공시, 매크로 데이터는 먼저 `ExternalSignal` 또는 구체 클래스(`NewsEvent`, `DisclosureEvent`, `MacroIndicator`)의 ABox 관측값으로 만들고, 필요하면 `Evidence`, `Belief`, `Insight`로 파생한다.
 - 새 관계가 AI 의견을 바꿔야 하면 relation properties에 `polarity`, `opinionImpact`, `riskImpact`, `supportImpact`, `aiInfluenceLabel`을 명시한다.

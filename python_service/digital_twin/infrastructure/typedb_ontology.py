@@ -1,13 +1,14 @@
 import copy
 import hashlib
+import itertools
 import json
 import math
+import re
 import time
 import uuid
 from typing import Dict, Iterable, List, Tuple
 
 from ..domain.ontology_contracts import OntologyEntity, OntologyEvidence, OntologyRelation, PortfolioOntology
-from ..domain.ontology_graph_reasoner import run_graph_reasoner
 from ..domain.ontology_inference_materializer import materialize_rule_inference
 from ..domain.ontology_rulebox_catalog import default_graph_inference_rules
 from ..domain.ontology_rulebox_contracts import GRAPH_REASONER_VERSION, GraphInferenceRule
@@ -231,12 +232,13 @@ def merge_flat_properties(row: Dict[str, object], props: Dict[str, object]) -> D
 
 
 TYPEDB_NATIVE_REASONING_PROFILE_VERSION = "typedb-native-rule-profile-v2"
-TYPEDB_NATIVE_RULE_ENGINE_VERSION = "typedb-native-rule-materializer-v1"
+TYPEDB_NATIVE_RULE_ENGINE_VERSION = "typedb-schema-function-rule-engine-v1"
 TYPEDB_NATIVE_REASONING_MODE = "typedb-native-rule-materialized"
 TYPEDB_NATIVE_BLOCKED_MODE = "typedb-native-rule-materialization-blocked"
 TYPEDB_NATIVE_REQUIRED_MODE = "typedb-native-rule-materialization-required"
 TYPEDB_NATIVE_MATERIALIZATION_SOURCE = "typedb-abox-native-rule"
 TYPEDB_NATIVE_REASONING_LAYER = "typedb-native-rule"
+TYPEDB_SCHEMA_FUNCTION_PREFIX = "orbit_rule_"
 TYPEDB_FUNCTION_SUBJECT_FIELDS = {
     "source",
     "symbol",
@@ -262,6 +264,15 @@ TYPEDB_FUNCTION_TARGET_FILTERS = {
     "maxValue",
     "tboxClass",
     "tboxClasses",
+    "allowAddOnStrength",
+    "trimOnTrendBreak",
+    "avoidAveragingDown",
+    "confidence",
+    "impactPolarity",
+    "needsReview",
+    "readScope",
+    "peRatio",
+    "beta",
 }
 TYPEDB_FUNCTION_RELATION_FILTERS = {
     "field",
@@ -413,6 +424,8 @@ class TypeDBOntologyGraphRepository(GraphStoreOntologyRowMapperMixin):
         self.inference_generation_keep_count = max(1, int(inference_generation_keep_count or 2))
         self._last_graph = None
         self._last_rules: List[GraphInferenceRule] = []
+        self._schema_function_sync_cache_key = ""
+        self._schema_function_sync_cache_result: Dict[str, object] = {}
 
     def with_typedb_retries(self, operation):
         attempts = max(1, self.retry_count + 1)
@@ -875,6 +888,14 @@ attribute ontology-materiality-score, value double;
 attribute ontology-risk-impact, value double;
 attribute ontology-support-impact, value double;
 attribute ontology-stage-priority, value double;
+attribute ontology-allow-add-on-strength, value string;
+attribute ontology-trim-on-trend-break, value string;
+attribute ontology-avoid-averaging-down, value string;
+attribute ontology-impact-polarity, value string;
+attribute ontology-needs-review, value string;
+attribute ontology-read-scope, value string;
+attribute ontology-pe-ratio, value double;
+attribute ontology-beta, value double;
 
 entity ontology-node @abstract,
     owns ontology-id @key,
@@ -902,6 +923,14 @@ entity ontology-node @abstract,
     owns ontology-value-number,
     owns ontology-profit-loss-rate,
     owns ontology-materiality-score,
+    owns ontology-allow-add-on-strength,
+    owns ontology-trim-on-trend-break,
+    owns ontology-avoid-averaging-down,
+    owns ontology-impact-polarity,
+    owns ontology-needs-review,
+    owns ontology-read-scope,
+    owns ontology-pe-ratio,
+    owns ontology-beta,
     plays ontology-assertion:source,
     plays ontology-assertion:target;
 
@@ -1110,6 +1139,14 @@ relation ontology-assertion,
             + typeql_has("ontology-value-number", row.get("valueNumber"), numeric=True)
             + typeql_has("ontology-profit-loss-rate", row.get("profitLossRate"), numeric=True)
             + typeql_has("ontology-materiality-score", row.get("materialityScore"), numeric=True)
+            + typeql_has_bool_string("ontology-allow-add-on-strength", row.get("allowAddOnStrength"))
+            + typeql_has_bool_string("ontology-trim-on-trend-break", row.get("trimOnTrendBreak"))
+            + typeql_has_bool_string("ontology-avoid-averaging-down", row.get("avoidAveragingDown"))
+            + typeql_has("ontology-impact-polarity", row.get("impactPolarity"))
+            + typeql_has_bool_string("ontology-needs-review", row.get("needsReview"))
+            + typeql_has("ontology-read-scope", row.get("readScope"))
+            + typeql_has("ontology-pe-ratio", row.get("peRatio"), numeric=True)
+            + typeql_has("ontology-beta", row.get("beta"), numeric=True)
             + ";"
         )
 
@@ -1291,21 +1328,23 @@ relation ontology-assertion,
                     skipped_rules.append({
                         "ruleId": str(rule.rule_id or ""),
                         "status": profile.get("status"),
-                        "reason": "Rule has JSON-bound or unsupported conditions for TypeDB-native query matching.",
+                        "reason": "Rule has JSON-bound or unsupported conditions for TypeDB schema function execution.",
                     })
                     continue
-                query_plan = typedb_native_match_query(rule_payload, clean_symbols)
+                function_name = typedb_native_rule_function_name(rule.rule_id)
+                query_plan = typedb_native_function_call_query(rule_payload, clean_symbols)
                 if not query_plan.get("query"):
                     skipped_rules.append({
                         "ruleId": str(rule.rule_id or ""),
                         "status": "blocked",
-                        "reason": "TypeDB native query could not be built.",
+                        "reason": "TypeDB schema function call could not be built.",
                     })
                     continue
                 rows = self.read_rows(str(query_plan.get("query")), query_plan.get("columns") or ["sourceId"])
                 executed_rules.append({
                     "ruleId": rule.rule_id,
                     "nativeRuleId": typedb_native_rule_id(rule.rule_id),
+                    "schemaFunctionName": function_name,
                     "rowCount": len(rows),
                 })
                 for row in rows:
@@ -1332,13 +1371,17 @@ relation ontology-assertion,
                                 existing_conditions.append(item)
                         existing["matchedConditions"] = existing_conditions
                         continue
+                    condition_context = self.typedb_schema_function_condition_context(rule, source_id)
+                    matched_conditions = list(condition_context.get("matchedConditions") or [])
+                    evidence_relation_ids = sorted(set(evidence_relation_ids + list(condition_context.get("evidenceRelationIds") or [])))
                     match = {
                         "ruleId": rule.rule_id,
                         "nativeRuleId": typedb_native_rule_id(rule.rule_id),
+                        "schemaFunctionName": function_name,
                         "sourceId": source_id,
-                        "matchedConditions": typedb_native_matched_conditions(rule, row, query_plan),
+                        "matchedConditions": matched_conditions,
                         "evidenceRelationIds": sorted(set(evidence_relation_ids)),
-                        "confidence": typedb_native_match_confidence(rule),
+                        "confidence": number_or_none(condition_context.get("confidence")) or typedb_native_match_confidence(rule),
                     }
                     match_index[match_key] = match
                     matches.append(match)
@@ -1347,6 +1390,7 @@ relation ontology-assertion,
                 "graphStore": "typedb",
                 "engineVersion": TYPEDB_NATIVE_RULE_ENGINE_VERSION,
                 "nativeQueryUsed": True,
+                "schemaFunctionUsed": True,
                 "executedRuleCount": len(executed_rules),
                 "skippedRuleCount": len(skipped_rules),
                 "matchedCount": len(matches),
@@ -1360,6 +1404,7 @@ relation ontology-assertion,
                 "graphStore": "typedb",
                 "engineVersion": TYPEDB_NATIVE_RULE_ENGINE_VERSION,
                 "nativeQueryUsed": False,
+                "schemaFunctionUsed": False,
                 "matchedCount": 0,
                 "matches": [],
                 "reasonCode": typedb_error_code(error),
@@ -1367,6 +1412,210 @@ relation ontology-assertion,
                 "executedRules": executed_rules[:40],
                 "skippedRules": skipped_rules[:40],
             }
+
+    def typedb_schema_function_condition_context(self, rule: GraphInferenceRule, source_id: str) -> Dict[str, object]:
+        matched_conditions: List[Dict[str, object]] = []
+        evidence_relation_ids: List[str] = []
+        for index, condition in enumerate(getattr(rule, "conditions", []) or []):
+            condition_payload = condition.to_dict() if hasattr(condition, "to_dict") else dict(condition or {})
+            condition_id = str(condition_payload.get("condition_id") or condition_payload.get("conditionId") or "condition-" + str(index))
+            role = normalized_condition_role(condition_payload)
+            query_plan = typedb_native_condition_check_query(condition_payload, source_id, index)
+            rows: List[Dict[str, object]] = []
+            if query_plan.get("query"):
+                rows = self.read_rows(str(query_plan.get("query")), query_plan.get("columns") or [])
+            condition_matched = bool(rows)
+            if role == "not":
+                if not condition_matched:
+                    matched_conditions.append({
+                        "conditionId": condition_id,
+                        "kind": condition_payload.get("kind"),
+                        "role": role,
+                        "absenceSatisfied": True,
+                    })
+                continue
+            if role in {"any", "optional"} and not condition_matched:
+                continue
+            if not condition_matched:
+                matched_conditions.append({
+                    "conditionId": condition_id,
+                    "kind": condition_payload.get("kind"),
+                    "role": role,
+                    "matched": False,
+                })
+                continue
+            payload = {
+                "conditionId": condition_id,
+                "kind": condition_payload.get("kind"),
+                "role": role,
+            }
+            if condition_payload.get("kind") == "subject_property":
+                payload.update({
+                    "field": condition_payload.get("field"),
+                    "operator": condition_payload.get("operator"),
+                    "value": condition_payload.get("value"),
+                })
+            elif condition_payload.get("kind") == "relation":
+                relation_id_column = str(query_plan.get("relationIdColumn") or "")
+                relation_id = str((rows[0] if rows else {}).get(relation_id_column) or "")
+                if relation_id:
+                    payload["relationId"] = relation_id
+                    evidence_relation_ids.append(relation_id)
+                payload.update({
+                    "relationType": condition_payload.get("relation_type") or condition_payload.get("relationType"),
+                    "weight": condition_payload.get("min_weight") or condition_payload.get("minWeight"),
+                })
+            matched_conditions.append(payload)
+        confidence_conditions = [item for item in matched_conditions if not item.get("absenceSatisfied")]
+        confidence = round(min(0.94, 0.62 + len(confidence_conditions) * 0.08), 3)
+        return {
+            "matchedConditions": matched_conditions,
+            "evidenceRelationIds": sorted(set(evidence_relation_ids)),
+            "confidence": confidence,
+        }
+
+    def sync_typedb_native_rule_functions(self, rules: Iterable[GraphInferenceRule], force: bool = False) -> Dict[str, object]:
+        if not self.address:
+            return {"status": "disabled", "configured": False, "graphStore": "typedb", "syncedCount": 0}
+        rules = list(rules or [])
+        definitions: List[Dict[str, object]] = []
+        skipped: List[Dict[str, object]] = []
+        for rule in rules or []:
+            rule_payload = rule.to_dict() if hasattr(rule, "to_dict") else dict(rule or {})
+            profile = typedb_native_rule_profile(rule_payload)
+            if profile.get("status") != "ready":
+                skipped.append({
+                    "ruleId": str(rule.rule_id or ""),
+                    "status": profile.get("status") or "blocked",
+                    "reason": "Unsupported native-rule profile; schema function was not generated.",
+                })
+                continue
+            definition = typedb_native_function_definition(rule_payload)
+            if not definition.get("define"):
+                skipped.append({
+                    "ruleId": str(rule.rule_id or ""),
+                    "status": "blocked",
+                    "reason": str(definition.get("reason") or "Function definition was empty."),
+                })
+                continue
+            rule_definitions = list(definition.get("functionDefinitions") or []) or [definition]
+            for item in rule_definitions:
+                definitions.append({
+                    **item,
+                    "ruleId": definition.get("ruleId") or item.get("ruleId"),
+                    "nativeRuleId": definition.get("nativeRuleId") or item.get("nativeRuleId"),
+                    "rootFunctionName": definition.get("functionName"),
+                })
+        sync_fingerprint = hashlib.sha256(json.dumps({
+            "engineVersion": TYPEDB_NATIVE_RULE_ENGINE_VERSION,
+            "database": self.database,
+            "functions": [
+                {
+                    "functionName": item.get("functionName"),
+                    "define": item.get("define"),
+                    "redefine": item.get("redefine"),
+                }
+                for item in definitions
+            ],
+            "skipped": skipped,
+        }, sort_keys=True, ensure_ascii=False).encode("utf-8")).hexdigest()
+        if (
+            not force
+            and self._schema_function_sync_cache_key == sync_fingerprint
+            and str(self._schema_function_sync_cache_result.get("status") or "") == "ok"
+        ):
+            cached_result = dict(self._schema_function_sync_cache_result)
+            cached_result.update({
+                "cached": True,
+                "schemaFunctionSyncCached": True,
+                "syncFingerprint": sync_fingerprint,
+            })
+            return cached_result
+        imported = self.driver_imports()
+        if imported[0] is None:
+            return {
+                "configured": True,
+                "status": "driver-missing",
+                "graphStore": "typedb",
+                "syncedCount": 0,
+                "reason": "typedb-driver Python package is not installed: " + str(imported[1])[:160],
+            }
+        _TypeDB, _Credentials, _DriverOptions, _DriverTlsConfig, TransactionType = imported[0]
+
+        def apply_schema_query(driver, query: str) -> None:
+            with driver.transaction(self.database, TransactionType.SCHEMA) as tx:
+                tx.query(query).resolve()
+                tx.commit()
+
+        synced: List[Dict[str, object]] = []
+        failed: List[Dict[str, object]] = []
+        try:
+            def operation():
+                driver = self.open_driver(imported)
+                try:
+                    self.ensure_database(driver)
+                    self.ensure_schema(driver, imported)
+                    for definition in definitions:
+                        define_query = str(definition.get("define") or "")
+                        redefine_query = str(definition.get("redefine") or "")
+                        try:
+                            apply_schema_query(driver, define_query)
+                        except Exception as define_error:  # noqa: BLE001 - existing functions require redefine.
+                            if "already exists" not in str(define_error).lower() and "with name" not in str(define_error).lower():
+                                raise
+                            apply_schema_query(driver, redefine_query)
+                        synced.append({
+                            "ruleId": definition.get("ruleId"),
+                            "nativeRuleId": definition.get("nativeRuleId"),
+                            "schemaFunctionName": definition.get("functionName"),
+                            "rootSchemaFunctionName": definition.get("rootFunctionName") or definition.get("functionName"),
+                        })
+                finally:
+                    self.close_driver(driver)
+            self.with_typedb_retries(operation)
+        except Exception as error:  # noqa: BLE001 - caller must block investment inference.
+            failed.append({
+                "reasonCode": typedb_error_code(error),
+                "reason": str(error)[:220],
+            })
+            synced_rule_ids = sorted(set(str(item.get("ruleId") or "") for item in synced if str(item.get("ruleId") or "")))
+            return {
+                "configured": True,
+                "status": "error",
+                "graphStore": "typedb",
+                "engineVersion": TYPEDB_NATIVE_RULE_ENGINE_VERSION,
+                "schemaFunctionSyncUsed": True,
+                "syncedCount": len(synced_rule_ids),
+                "syncedFunctionCount": len(synced),
+                "skippedCount": len(skipped),
+                "failedCount": len(failed),
+                "syncedRules": [{"ruleId": item} for item in synced_rule_ids[:40]],
+                "syncedFunctions": synced[:60],
+                "skippedRules": skipped[:40],
+                "failedRules": failed[:10],
+                "reasonCode": typedb_error_code(error),
+                "reason": str(error)[:220],
+            }
+        synced_rule_ids = sorted(set(str(item.get("ruleId") or "") for item in synced if str(item.get("ruleId") or "")))
+        result = {
+            "configured": True,
+            "status": "ok",
+            "graphStore": "typedb",
+            "engineVersion": TYPEDB_NATIVE_RULE_ENGINE_VERSION,
+            "schemaFunctionSyncUsed": True,
+            "schemaFunctionSyncCached": False,
+            "syncFingerprint": sync_fingerprint,
+            "syncedCount": len(synced_rule_ids),
+            "syncedFunctionCount": len(synced),
+            "skippedCount": len(skipped),
+            "failedCount": 0,
+            "syncedRules": [{"ruleId": item} for item in synced_rule_ids[:40]],
+            "syncedFunctions": synced[:60],
+            "skippedRules": skipped[:40],
+        }
+        self._schema_function_sync_cache_key = sync_fingerprint
+        self._schema_function_sync_cache_result = dict(result)
+        return result
 
     def run_rulebox(self, payload: Dict[str, object] = None) -> Dict[str, object]:
         if not self.address:
@@ -1383,6 +1632,10 @@ relation ontology-assertion,
         destructive_clear_allowed = typedb_bool(payload.get("allowDestructiveInferenceClear"))
         prune_requested = typedb_bool(payload.get("pruneOldGenerations")) if "pruneOldGenerations" in payload else True
         keep_generation_count = max(1, int(number_or_none(payload.get("keepGenerationCount")) or self.inference_generation_keep_count))
+        force_schema_function_sync = (
+            typedb_bool(payload.get("forceSchemaFunctionSync"))
+            or typedb_bool(payload.get("forceRuleFunctionSync"))
+        )
         generation_id = str(payload.get("generationId") or inference_generation_id())
         generation_at = utc_now()
         clear_requested = force_clear_requested and destructive_clear_allowed
@@ -1455,27 +1708,81 @@ relation ontology-assertion,
             }
         try:
             parsed_rules = rulebox_rules_from_payload({"rules": rules})
+            function_sync_result = self.sync_typedb_native_rule_functions(parsed_rules, force=force_schema_function_sync)
+            runtime_rulebox_metadata = dict(rulebox_metadata)
+            runtime_rulebox_metadata.update({
+                "typedbSchemaFunctionSyncStatus": str(function_sync_result.get("status") or ""),
+                "typedbSchemaFunctionSyncCached": bool(function_sync_result.get("schemaFunctionSyncCached")),
+                "typedbSchemaFunctionSyncedCount": int(number_or_none(function_sync_result.get("syncedCount")) or 0),
+                "typedbSchemaFunctionSkippedCount": int(number_or_none(function_sync_result.get("skippedCount")) or 0),
+                "typedbSchemaFunctionFailedCount": int(number_or_none(function_sync_result.get("failedCount")) or 0),
+                "typedbSchemaFunctionUsed": str(function_sync_result.get("status") or "") == "ok",
+                "typeDbFunctionReasoningUsed": str(function_sync_result.get("status") or "") == "ok",
+                "pythonCompatibilityReasonerUsed": False,
+            })
+            if str(function_sync_result.get("status") or "") != "ok":
+                return {
+                    "configured": True,
+                    "status": "error",
+                    "graphStore": "typedb",
+                    "source": "typedbNativeRule",
+                    "reasoningMode": TYPEDB_NATIVE_BLOCKED_MODE,
+                    "reasonCode": str(function_sync_result.get("reasonCode") or "typedbSchemaFunctionSyncError"),
+                    "reason": "TypeDB schema function 동기화 실패: " + str(function_sync_result.get("reason") or function_sync_result.get("status") or "")[:180],
+                    "statementCount": 0,
+                    "relationTypes": [],
+                    "nativeTypeDbReasoningUsed": False,
+                    "typedbNativeFunctionReasoningUsed": False,
+                    "typedbSchemaFunctionUsed": False,
+                    "typedbBootstrapReasoningUsed": False,
+                    "pythonBootstrapDisabled": True,
+                    "pythonCompatibilityReasonerUsed": False,
+                    "clearResult": clear_result,
+                    "nativeReasoningProfile": native_profile,
+                    "functionSyncResult": function_sync_result,
+                    "ruleboxMetadata": runtime_rulebox_metadata,
+                    **runtime_rulebox_metadata,
+                }
             native_match_result = self.match_typedb_native_rules(parsed_rules, target_symbols=target_symbols)
             native_query_used = str(native_match_result.get("status") or "") == "ok"
-            compatibility_reasoner_used = not native_query_used
-            runtime_rulebox_metadata = dict(rulebox_metadata)
             runtime_rulebox_metadata.update({
                 "typedbNativeRuleQueryStatus": str(native_match_result.get("status") or ""),
                 "typedbNativeRuleQueryUsed": bool(native_match_result.get("nativeQueryUsed")),
+                "typedbSchemaFunctionQueryUsed": bool(native_match_result.get("schemaFunctionUsed")),
                 "typedbNativeRuleMatchedCount": int(number_or_none(native_match_result.get("matchedCount")) or 0),
                 "typedbNativeRuleExecutedCount": int(number_or_none(native_match_result.get("executedRuleCount")) or 0),
                 "typedbNativeRuleSkippedCount": int(number_or_none(native_match_result.get("skippedRuleCount")) or 0),
-                "pythonCompatibilityReasonerUsed": compatibility_reasoner_used,
+                "pythonCompatibilityReasonerUsed": False,
             })
-            if not native_query_used and native_match_result.get("reason"):
+            if not native_query_used:
                 runtime_rulebox_metadata["typedbNativeRuleQueryReason"] = str(native_match_result.get("reason") or "")
+                return {
+                    "configured": True,
+                    "status": "error",
+                    "graphStore": "typedb",
+                    "source": "typedbNativeRule",
+                    "reasoningMode": TYPEDB_NATIVE_BLOCKED_MODE,
+                    "reasonCode": str(native_match_result.get("reasonCode") or "typedbSchemaFunctionQueryError"),
+                    "reason": "TypeDB schema function 실행 실패: " + str(native_match_result.get("reason") or "")[:180],
+                    "statementCount": 0,
+                    "relationTypes": [],
+                    "nativeTypeDbReasoningUsed": False,
+                    "typedbNativeFunctionReasoningUsed": False,
+                    "typedbSchemaFunctionUsed": False,
+                    "typedbBootstrapReasoningUsed": False,
+                    "pythonBootstrapDisabled": True,
+                    "pythonCompatibilityReasonerUsed": False,
+                    "clearResult": clear_result,
+                    "nativeReasoningProfile": native_profile,
+                    "functionSyncResult": function_sync_result,
+                    "nativeMatchResult": native_match_result,
+                    "ruleboxMetadata": runtime_rulebox_metadata,
+                    **runtime_rulebox_metadata,
+                }
             graph = self.load_graph_from_typedb(["ABox"])
             before_entities = len(graph.entities)
             before_relations = len(graph.relations)
-            if native_query_used:
-                materialize_typedb_native_matches(graph, parsed_rules, native_match_result)
-            else:
-                run_graph_reasoner(graph, parsed_rules, target_symbols=target_symbols)
+            materialize_typedb_native_matches(graph, parsed_rules, native_match_result)
             inference_graph = typedb_inferencebox_graph(
                 graph,
                 generation_id=generation_id,
@@ -1501,6 +1808,7 @@ relation ontology-assertion,
                         "pythonBootstrapDisabled": True,
                         "clearResult": clear_result,
                         "nativeReasoningProfile": native_profile,
+                        "functionSyncResult": function_sync_result,
                         "nativeMatchResult": native_match_result,
                         "ruleboxMetadata": runtime_rulebox_metadata,
                         **runtime_rulebox_metadata,
@@ -1551,12 +1859,16 @@ relation ontology-assertion,
             "nativeTypeDbReasoningUsed": saved_ok and has_materialized_relations,
             "typedbNativeRuleReasoningUsed": saved_ok and has_materialized_relations,
             "typedbNativeRuleQueryUsed": bool(native_match_result.get("nativeQueryUsed")),
+            "typedbSchemaFunctionQueryUsed": bool(native_match_result.get("schemaFunctionUsed")),
             "typedbNativeRuleQueryStatus": str(native_match_result.get("status") or ""),
             "typedbNativeRuleMatchedCount": int(number_or_none(native_match_result.get("matchedCount")) or 0),
             "typedbNativeRuleExecutedCount": int(number_or_none(native_match_result.get("executedRuleCount")) or 0),
             "typedbNativeRuleSkippedCount": int(number_or_none(native_match_result.get("skippedRuleCount")) or 0),
-            "pythonCompatibilityReasonerUsed": compatibility_reasoner_used,
-            "typedbNativeFunctionReasoningUsed": saved_ok and has_materialized_relations and bool(native_match_result.get("nativeQueryUsed")),
+            "typedbSchemaFunctionUsed": bool(function_sync_result.get("status") == "ok"),
+            "typedbSchemaFunctionSyncedCount": int(number_or_none(function_sync_result.get("syncedCount")) or 0),
+            "pythonCompatibilityReasonerUsed": False,
+            "typedbNativeFunctionReasoningUsed": saved_ok and has_materialized_relations and bool(native_match_result.get("schemaFunctionUsed")),
+            "typeDbFunctionReasoningUsed": saved_ok and has_materialized_relations and bool(native_match_result.get("schemaFunctionUsed")),
             "typedbNativeReasoningReady": native_profile.get("status") in {"ready", "partial"},
             "typedbBootstrapReasoningUsed": False,
             "pythonBootstrapDisabled": True,
@@ -1570,9 +1882,14 @@ relation ontology-assertion,
             "clearResult": clear_result,
             "pruneResult": prune_result,
             "saveResult": save_result,
+            "functionSyncResult": {
+                key: function_sync_result.get(key)
+                for key in ["status", "reason", "reasonCode", "syncedCount", "skippedCount", "failedCount", "syncedRules", "skippedRules"]
+                if key in function_sync_result
+            },
             "nativeMatchResult": {
                 key: native_match_result.get(key)
-                for key in ["status", "reason", "reasonCode", "nativeQueryUsed", "executedRuleCount", "skippedRuleCount", "matchedCount", "executedRules", "skippedRules"]
+                for key in ["status", "reason", "reasonCode", "nativeQueryUsed", "schemaFunctionUsed", "executedRuleCount", "skippedRuleCount", "matchedCount", "executedRules", "skippedRules"]
                 if key in native_match_result
             },
             "nativeReasoningProfile": native_profile,
@@ -1934,8 +2251,9 @@ def typedb_native_profile_metadata(native_profile: Dict[str, object]) -> Dict[st
         "typedbNativePartialRuleCount": int(number_or_none(profile.get("partialRuleCount")) or 0),
         "typedbNativeBlockedRuleCount": int(number_or_none(profile.get("blockedRuleCount")) or 0),
         "typedbNativeRuleMaterializationUsed": True,
+        "typedbSchemaFunctionMaterializationUsed": True,
         "typeDbNativeRulesPrimary": True,
-        "ruleStore": "TypeDB native semantic rules",
+        "ruleStore": "TypeDB schema functions",
     }
 
 
@@ -1988,7 +2306,112 @@ def typedb_native_matched_conditions(
     return result
 
 
-def typedb_native_match_query(rule: Dict[str, object], target_symbols: Iterable[str] = None) -> Dict[str, object]:
+def normalized_condition_role(condition: Dict[str, object]) -> str:
+    role = str(condition.get("role") or condition.get("conditionRole") or "required").strip().lower()
+    return role if role in {"required", "any", "optional", "not"} else "required"
+
+
+def typedb_filter_operator(filter_key: str, expected: object, default_operator: str = "==") -> str:
+    if isinstance(expected, dict) and expected.get("operator"):
+        return str(expected.get("operator") or default_operator)
+    if str(filter_key or "").startswith("min"):
+        return ">="
+    if str(filter_key or "").startswith("max"):
+        return "<="
+    return default_operator
+
+
+def typedb_condition_pattern(
+    condition: Dict[str, object],
+    index: int,
+    source_var: str = "$source",
+    relation_prefix: str = "rel",
+    target_prefix: str = "target",
+) -> Dict[str, object]:
+    condition_id = str(condition.get("condition_id") or condition.get("conditionId") or "condition-" + str(index))
+    kind = str(condition.get("kind") or "")
+    clauses: List[str] = []
+    columns: List[str] = []
+    evidence_columns: List[str] = []
+    if kind == "subject_property":
+        attr = typedb_subject_attribute(str(condition.get("field") or ""))
+        if not attr:
+            return {"conditionId": condition_id, "clauses": [], "columns": [], "reason": "unsupported subject field"}
+        clause = typedb_value_match(
+            source_var,
+            attr,
+            condition.get("value"),
+            str(condition.get("operator") or "=="),
+            "subjectValue" + str(index),
+        )
+        if clause:
+            clauses.append(clause)
+        return {
+            "conditionId": condition_id,
+            "kind": kind,
+            "clauses": clauses,
+            "columns": columns,
+            "evidenceColumns": evidence_columns,
+        }
+    if kind == "relation":
+        relation_var = "$" + relation_prefix + str(index)
+        target_var = "$" + target_prefix + str(index)
+        relation_id_var = "relationId" + str(index)
+        rel_type = str(condition.get("relation_type") or condition.get("relationType") or "").upper()
+        direction = str(condition.get("direction") or "out")
+        if not rel_type:
+            return {"conditionId": condition_id, "clauses": [], "columns": [], "reason": "missing relation type"}
+        if direction == "in":
+            clauses.append(
+                target_var + " isa ontology-node; "
+                + relation_var + " isa ontology-assertion, links (source: " + target_var + ", target: " + source_var + "), "
+                + "has ontology-id $" + relation_id_var + ", has ontology-relation-type " + typedb_string(rel_type) + ";"
+            )
+        else:
+            clauses.append(
+                target_var + " isa ontology-node; "
+                + relation_var + " isa ontology-assertion, links (source: " + source_var + ", target: " + target_var + "), "
+                + "has ontology-id $" + relation_id_var + ", has ontology-relation-type " + typedb_string(rel_type) + ";"
+            )
+        min_weight = number_or_none(condition.get("min_weight") or condition.get("minWeight"))
+        if min_weight:
+            weight_var = "relationWeight" + str(index)
+            clauses.append(relation_var + " has ontology-weight $" + weight_var + "; $" + weight_var + " >= " + str(float(min_weight)) + ";")
+        target_kind = str(condition.get("target_kind") or condition.get("targetKind") or "")
+        if target_kind:
+            clauses.append(target_var + " has ontology-kind " + typedb_string(target_kind) + ";")
+        for filter_key, expected in dict(condition.get("target_property_filters") or condition.get("targetPropertyFilters") or {}).items():
+            attr = typedb_target_attribute(str(filter_key))
+            if attr:
+                op = typedb_filter_operator(str(filter_key), expected)
+                clause = typedb_value_match(target_var, attr, expected, op, "targetValue" + str(index) + str(len(clauses)))
+                if clause:
+                    clauses.append(clause)
+        for filter_key, expected in dict(condition.get("relation_property_filters") or condition.get("relationPropertyFilters") or {}).items():
+            attr = typedb_relation_attribute(str(filter_key))
+            if attr:
+                op = typedb_filter_operator(str(filter_key), expected)
+                clause = typedb_value_match(relation_var, attr, expected, op, "relationValue" + str(index) + str(len(clauses)))
+                if clause:
+                    clauses.append(clause)
+        columns.append(relation_id_var)
+        evidence_columns.append(relation_id_var)
+        return {
+            "conditionId": condition_id,
+            "kind": kind,
+            "clauses": clauses,
+            "columns": columns,
+            "evidenceColumns": evidence_columns,
+            "relationIdColumn": relation_id_var,
+        }
+    return {"conditionId": condition_id, "clauses": [], "columns": [], "reason": "unsupported condition kind"}
+
+
+def typedb_native_match_query(
+    rule: Dict[str, object],
+    target_symbols: Iterable[str] = None,
+    any_helper_names: List[str] = None,
+) -> Dict[str, object]:
     rule_id = str(rule.get("rule_id") or rule.get("ruleId") or "")
     source_kind = str(rule.get("source_kind") or rule.get("sourceKind") or "stock")
     conditions = [item for item in (rule.get("conditions") or []) if isinstance(item, dict)]
@@ -2003,66 +2426,53 @@ def typedb_native_match_query(rule: Dict[str, object], target_symbols: Iterable[
     columns = ["sourceId", "sourceLabel"]
     evidence_columns: List[str] = []
     condition_evidence_columns: Dict[str, str] = {}
-    relation_index = 0
+    any_conditions: List[Tuple[int, Dict[str, object]]] = []
+    any_min_count = max(1, int(number_or_none(rule.get("any_condition_min_count") or rule.get("anyConditionMinCount")) or 1))
     for index, condition in enumerate(conditions):
         condition_id = str(condition.get("condition_id") or condition.get("conditionId") or "condition-" + str(index))
-        kind = str(condition.get("kind") or "")
-        if kind == "subject_property":
-            attr = typedb_subject_attribute(str(condition.get("field") or ""))
-            if not attr:
-                return {"ruleId": rule_id, "query": "", "columns": columns, "reason": "unsupported subject field"}
-            clause = typedb_value_match(
-                "$source",
-                attr,
-                condition.get("value"),
-                str(condition.get("operator") or "=="),
-                "subjectValue" + str(index),
-            )
-            if clause:
-                clauses.append(clause)
-        elif kind == "relation":
-            relation_index += 1
-            relation_var = "$rel" + str(relation_index)
-            target_var = "$target" + str(relation_index)
-            relation_id_var = "relationId" + str(relation_index)
-            rel_type = str(condition.get("relation_type") or condition.get("relationType") or "").upper()
-            direction = str(condition.get("direction") or "out")
-            if direction == "in":
-                clauses.append(
-                    target_var + " isa ontology-node; "
-                    + relation_var + " isa ontology-assertion, links (source: " + target_var + ", target: $source), "
-                    + "has ontology-id $" + relation_id_var + ", has ontology-relation-type " + typedb_string(rel_type) + ";"
+        role = normalized_condition_role(condition)
+        pattern = typedb_condition_pattern(condition, index)
+        if pattern.get("reason"):
+            return {"ruleId": rule_id, "query": "", "columns": columns, "reason": str(pattern.get("reason") or "")}
+        pattern_clauses = [str(item) for item in pattern.get("clauses") or [] if str(item or "").strip()]
+        if not pattern_clauses:
+            continue
+        if role in {"any", "optional"}:
+            any_conditions.append((index, condition))
+            continue
+        if role == "not":
+            clauses.append("not { " + " ".join(pattern_clauses) + " };")
+            continue
+        clauses.extend(pattern_clauses)
+        for column in pattern.get("columns") or []:
+            columns.append(str(column))
+        for column in pattern.get("evidenceColumns") or []:
+            evidence_columns.append(str(column))
+        if pattern.get("relationIdColumn"):
+            condition_evidence_columns[condition_id] = str(pattern.get("relationIdColumn"))
+    if any_conditions and any_helper_names:
+        branches = ["{ let $source in " + name + "(); }" for name in any_helper_names]
+        clauses.append(" or ".join(branches) + ";")
+    elif any_conditions:
+        if any_min_count > len(any_conditions):
+            return {"ruleId": rule_id, "query": "", "columns": columns, "reason": "any condition minimum exceeds available any conditions"}
+        branches: List[str] = []
+        for combo in itertools.combinations(any_conditions, any_min_count):
+            branch_clauses: List[str] = []
+            for slot_index, (_condition_index, condition) in enumerate(combo):
+                pattern = typedb_condition_pattern(
+                    condition,
+                    slot_index,
+                    relation_prefix="anyRel" + str(slot_index) + "_",
+                    target_prefix="anyTarget" + str(slot_index) + "_",
                 )
-            else:
-                clauses.append(
-                    target_var + " isa ontology-node; "
-                    + relation_var + " isa ontology-assertion, links (source: $source, target: " + target_var + "), "
-                    + "has ontology-id $" + relation_id_var + ", has ontology-relation-type " + typedb_string(rel_type) + ";"
-                )
-            min_weight = number_or_none(condition.get("min_weight") or condition.get("minWeight"))
-            if min_weight:
-                clauses.append(relation_var + " has ontology-weight $relationWeight" + str(relation_index) + "; $relationWeight" + str(relation_index) + " >= " + str(float(min_weight)) + ";")
-            target_kind = str(condition.get("target_kind") or condition.get("targetKind") or "")
-            if target_kind:
-                clauses.append(target_var + " has ontology-kind " + typedb_string(target_kind) + ";")
-            for filter_key, expected in dict(condition.get("target_property_filters") or condition.get("targetPropertyFilters") or {}).items():
-                attr = typedb_target_attribute(str(filter_key))
-                if attr:
-                    clause = typedb_value_match(target_var, attr, expected, "==", "targetValue" + str(relation_index) + str(len(clauses)))
-                    if clause:
-                        clauses.append(clause)
-            for filter_key, expected in dict(condition.get("relation_property_filters") or condition.get("relationPropertyFilters") or {}).items():
-                attr = typedb_relation_attribute(str(filter_key))
-                if attr:
-                    op = ">=" if str(filter_key).startswith("min") else "=="
-                    clause = typedb_value_match(relation_var, attr, expected, op, "relationValue" + str(relation_index) + str(len(clauses)))
-                    if clause:
-                        clauses.append(clause)
-            columns.append(relation_id_var)
-            evidence_columns.append(relation_id_var)
-            condition_evidence_columns[condition_id] = relation_id_var
-        else:
-            return {"ruleId": rule_id, "query": "", "columns": columns, "reason": "unsupported condition kind"}
+                if pattern.get("reason"):
+                    return {"ruleId": rule_id, "query": "", "columns": columns, "reason": str(pattern.get("reason") or "")}
+                branch_clauses.extend(str(item) for item in pattern.get("clauses") or [] if str(item or "").strip())
+            if branch_clauses:
+                branches.append("{ " + " ".join(branch_clauses) + " }")
+        if branches:
+            clauses.append(" or ".join(branches) + ";")
     query = "match " + " ".join(clauses)
     return {
         "ruleId": rule_id,
@@ -2071,6 +2481,159 @@ def typedb_native_match_query(rule: Dict[str, object], target_symbols: Iterable[
         "columns": columns,
         "evidenceColumns": evidence_columns,
         "conditionEvidenceColumns": condition_evidence_columns,
+    }
+
+
+def typedb_native_rule_function_name(rule_id: object) -> str:
+    raw = str(rule_id or "rule").strip().lower()
+    normalized = re.sub(r"[^a-z0-9_]+", "_", raw).strip("_")
+    if not normalized:
+        normalized = "rule"
+    digest = hashlib.sha256(raw.encode("utf-8")).hexdigest()[:10]
+    return (TYPEDB_SCHEMA_FUNCTION_PREFIX + normalized + "_" + digest)[:120]
+
+
+def typedb_native_any_helper_function_name(rule_id: object, index: int) -> str:
+    base = typedb_native_rule_function_name(rule_id)
+    suffix = "_any_" + str(index)
+    return (base[: max(1, 120 - len(suffix))] + suffix).strip("_")
+
+
+def typedb_native_any_helper_definitions(rule: Dict[str, object]) -> List[Dict[str, object]]:
+    rule_id = str(rule.get("rule_id") or rule.get("ruleId") or "")
+    source_kind = str(rule.get("source_kind") or rule.get("sourceKind") or "stock")
+    conditions = [item for item in (rule.get("conditions") or []) if isinstance(item, dict)]
+    any_conditions = [
+        (index, condition)
+        for index, condition in enumerate(conditions)
+        if normalized_condition_role(condition) in {"any", "optional"}
+    ]
+    if not any_conditions:
+        return []
+    any_min_count = max(1, int(number_or_none(rule.get("any_condition_min_count") or rule.get("anyConditionMinCount")) or 1))
+    if any_min_count > len(any_conditions):
+        return []
+    definitions: List[Dict[str, object]] = []
+    for combo_index, combo in enumerate(itertools.combinations(any_conditions, any_min_count)):
+        clauses = [
+            "$source isa ontology-node, has ontology-kind "
+            + typedb_string(source_kind)
+            + ", has ontology-box \"ABox\";"
+        ]
+        for slot_index, (_condition_index, condition) in enumerate(combo):
+            pattern = typedb_condition_pattern(
+                condition,
+                slot_index,
+                relation_prefix="helperRel" + str(slot_index) + "_",
+                target_prefix="helperTarget" + str(slot_index) + "_",
+            )
+            if pattern.get("reason"):
+                return []
+            clauses.extend(str(item) for item in pattern.get("clauses") or [] if str(item or "").strip())
+        function_name = typedb_native_any_helper_function_name(rule_id, combo_index)
+        body = (
+            "fun " + function_name + "() -> { ontology-node }:\n"
+            + "match " + " ".join(clauses) + "\n"
+            + "return { $source };"
+        )
+        definitions.append({
+            "ruleId": rule_id,
+            "functionName": function_name,
+            "body": body,
+            "define": "define\n" + body,
+            "redefine": "redefine\n" + body,
+            "comboConditionIds": [
+                str(condition.get("condition_id") or condition.get("conditionId") or "")
+                for _condition_index, condition in combo
+            ],
+        })
+    return definitions
+
+
+def typedb_native_function_definition(rule: Dict[str, object]) -> Dict[str, object]:
+    rule_id = str(rule.get("rule_id") or rule.get("ruleId") or "")
+    function_name = typedb_native_rule_function_name(rule_id)
+    helper_definitions = typedb_native_any_helper_definitions(rule)
+    plan = typedb_native_match_query(rule, [], [str(item.get("functionName") or "") for item in helper_definitions])
+    match_query = str(plan.get("query") or "").strip()
+    if not match_query:
+        return {
+            "ruleId": rule_id,
+            "nativeRuleId": typedb_native_rule_id(rule_id),
+            "functionName": function_name,
+            "define": "",
+            "redefine": "",
+            "reason": str(plan.get("reason") or "match query is empty"),
+        }
+    body = (
+        "fun " + function_name + "() -> { ontology-node }:\n"
+        + match_query + "\n"
+        + "return { $source };"
+    )
+    return {
+        "ruleId": rule_id,
+        "nativeRuleId": typedb_native_rule_id(rule_id),
+        "functionName": function_name,
+        "define": "define\n" + body,
+        "redefine": "redefine\n" + body,
+        "body": body,
+        "helperFunctions": helper_definitions,
+        "functionDefinitions": helper_definitions + [{
+            "ruleId": rule_id,
+            "nativeRuleId": typedb_native_rule_id(rule_id),
+            "functionName": function_name,
+            "define": "define\n" + body,
+            "redefine": "redefine\n" + body,
+            "body": body,
+        }],
+        "matchQuery": match_query,
+    }
+
+
+def typedb_native_function_call_query(rule: Dict[str, object], target_symbols: Iterable[str] = None) -> Dict[str, object]:
+    rule_id = str(rule.get("rule_id") or rule.get("ruleId") or "")
+    function_name = typedb_native_rule_function_name(rule_id)
+    symbols = clean_symbols_from_payload(list(target_symbols or []))
+    clauses = [
+        "let $source in " + function_name + "();",
+        "$source has ontology-id $sourceId;",
+        "$source has ontology-label $sourceLabel;",
+    ]
+    if symbols:
+        clauses.append(typedb_value_match("$source", "ontology-symbol", symbols, "==", "sourceSymbol"))
+    return {
+        "ruleId": rule_id,
+        "nativeRuleId": typedb_native_rule_id(rule_id),
+        "functionName": function_name,
+        "query": "match " + " ".join(item for item in clauses if item),
+        "columns": ["sourceId", "sourceLabel"],
+        "evidenceColumns": [],
+        "conditionEvidenceColumns": {},
+    }
+
+
+def typedb_native_condition_check_query(condition: Dict[str, object], source_id: str, index: int) -> Dict[str, object]:
+    pattern = typedb_condition_pattern(condition, index, relation_prefix="checkRel", target_prefix="checkTarget")
+    if pattern.get("reason"):
+        return {
+            "conditionId": str(condition.get("condition_id") or condition.get("conditionId") or ""),
+            "query": "",
+            "columns": [],
+            "reason": str(pattern.get("reason") or ""),
+        }
+    clauses = [
+        "$source isa ontology-node, has ontology-id " + typedb_string(source_id) + ";",
+        *[str(item) for item in pattern.get("clauses") or [] if str(item or "").strip()],
+    ]
+    columns = list(pattern.get("columns") or []) or ["sourceId"]
+    if "sourceId" in columns:
+        clauses.insert(1, "$source has ontology-id $sourceId;")
+    return {
+        "conditionId": str(condition.get("condition_id") or condition.get("conditionId") or ""),
+        "query": "match " + " ".join(clauses),
+        "columns": columns,
+        "evidenceColumns": list(pattern.get("evidenceColumns") or []),
+        "relationIdColumn": str(pattern.get("relationIdColumn") or ""),
     }
 
 
@@ -2104,6 +2667,15 @@ def typedb_target_attribute(field: str) -> str:
         "value": "ontology-value-number",
         "tboxClass": "ontology-tbox-class",
         "tboxClasses": "ontology-tbox-class",
+        "allowAddOnStrength": "ontology-allow-add-on-strength",
+        "trimOnTrendBreak": "ontology-trim-on-trend-break",
+        "avoidAveragingDown": "ontology-avoid-averaging-down",
+        "confidence": "ontology-confidence",
+        "impactPolarity": "ontology-impact-polarity",
+        "needsReview": "ontology-needs-review",
+        "readScope": "ontology-read-scope",
+        "peRatio": "ontology-pe-ratio",
+        "beta": "ontology-beta",
     }.get(field, "")
 
 
@@ -2125,6 +2697,7 @@ def typedb_relation_attribute(field: str) -> str:
 
 def typedb_value_match(owner_var: str, attribute: str, expected: object, operator: str, value_var: str) -> str:
     op = str(operator or "==").strip().lower()
+    expected = typedb_expected_value(expected)
     if op in {"exists", "present"}:
         return owner_var + " has " + attribute + " $" + value_var + ";"
     if isinstance(expected, list):
@@ -2143,10 +2716,21 @@ def typedb_value_match(owner_var: str, attribute: str, expected: object, operato
 
 
 def typedb_literal(value: object) -> str:
+    value = typedb_expected_value(value)
     numeric = typedb_number(value)
     if numeric is not None and not isinstance(value, bool):
         return str(numeric)
     return typedb_string("true" if value is True else "false" if value is False else value)
+
+
+def typedb_expected_value(value: object) -> object:
+    if isinstance(value, dict):
+        if value.get("default") not in (None, "", [], {}):
+            return value.get("default")
+        if value.get("value") not in (None, "", [], {}):
+            return value.get("value")
+        return ""
+    return value
 
 
 def typedb_inferencebox_graph(
@@ -2237,6 +2821,8 @@ def typedb_reasoned_properties(
     payload["nativeTypeDbReasoned"] = True
     payload["typedbNativeRuleReasoned"] = True
     payload["typedbNativeRuleMaterializationUsed"] = True
+    payload["typedbSchemaFunctionReasoned"] = True
+    payload["typedbSchemaFunctionMaterializationUsed"] = True
     payload["typeDbMaterialized"] = True
     payload["graphInferenceUsed"] = True
     payload["typedbMaterialized"] = True
@@ -2279,6 +2865,13 @@ def inference_rulebox_metadata(
         "typedbNativeBlockedRuleCount",
         "typedbNativeRuleQueryStatus",
         "typedbNativeRuleQueryUsed",
+        "typedbSchemaFunctionQueryUsed",
+        "typedbSchemaFunctionUsed",
+        "typedbSchemaFunctionSyncStatus",
+        "typedbSchemaFunctionSyncCached",
+        "typedbSchemaFunctionSyncedCount",
+        "typedbSchemaFunctionSkippedCount",
+        "typedbSchemaFunctionFailedCount",
         "typedbNativeRuleMatchedCount",
         "typedbNativeRuleExecutedCount",
         "typedbNativeRuleSkippedCount",
@@ -2310,6 +2903,9 @@ def inference_rulebox_metadata(
         "typedbNativeRuleMatchedCount",
         "typedbNativeRuleExecutedCount",
         "typedbNativeRuleSkippedCount",
+        "typedbSchemaFunctionSyncedCount",
+        "typedbSchemaFunctionSkippedCount",
+        "typedbSchemaFunctionFailedCount",
     ]:
         if key in metadata:
             metadata[key] = int(number_or_none(metadata.get(key)) or 0)
@@ -2446,10 +3042,12 @@ def typedb_native_rule_profile(rule: Dict[str, object]) -> Dict[str, object]:
         status = "ready"
     source_rule_id = str(rule.get("rule_id") or rule.get("ruleId") or "")
     native_rule_id = typedb_native_rule_id(source_rule_id)
+    function_definition = typedb_native_function_definition(rule) if status in {"ready", "partial"} else {}
     return {
         "ruleId": source_rule_id,
         "sourceRuleId": source_rule_id,
         "nativeRuleId": native_rule_id,
+        "schemaFunctionName": typedb_native_rule_function_name(source_rule_id),
         "label": str(rule.get("label") or ""),
         "status": status,
         "conditionCount": len(conditions),
@@ -2459,8 +3057,8 @@ def typedb_native_rule_profile(rule: Dict[str, object]) -> Dict[str, object]:
         "blockers": blockers,
         "reasoningLayer": TYPEDB_NATIVE_REASONING_LAYER,
         "conditions": condition_profiles,
-        "typeqlRuleBlueprint": typedb_function_blueprint(rule) if status in {"ready", "partial"} else "",
-        "functionBlueprint": typedb_function_blueprint(rule) if status in {"ready", "partial"} else "",
+        "typeqlRuleBlueprint": str(function_definition.get("body") or typedb_function_blueprint(rule)) if status in {"ready", "partial"} else "",
+        "functionBlueprint": str(function_definition.get("body") or typedb_function_blueprint(rule)) if status in {"ready", "partial"} else "",
     }
 
 

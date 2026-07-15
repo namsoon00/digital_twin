@@ -1,3 +1,4 @@
+import hashlib
 import json
 import tempfile
 import unittest
@@ -18,6 +19,7 @@ from digital_twin.infrastructure.typedb_ontology import (
     TypeDBOntologyGraphRepository,
     relation_row_id,
     typedb_inferencebox_graph,
+    typedb_native_function_definition,
     typedb_native_reasoning_profile,
 )
 
@@ -85,6 +87,27 @@ class TypeDBOntologyRepositoryTests(unittest.TestCase):
             "field": "movingAverage",
             "value": 70000,
         }))
+        graph.entities.append(OntologyEntity("profile:005930", "종목 타입", "instrument-profile", {
+            "ontologyBox": "ABox",
+            "symbol": "005930",
+            "allowAddOnStrength": True,
+            "trimOnTrendBreak": True,
+            "avoidAveragingDown": True,
+        }))
+        graph.entities.append(OntologyEntity("analysis:005930", "기사 AI", "article-ai-analysis", {
+            "ontologyBox": "ABox",
+            "symbol": "005930",
+            "confidence": 0.71,
+            "impactPolarity": "risk",
+            "needsReview": True,
+            "readScope": "title+rss-summary",
+        }))
+        graph.entities.append(OntologyEntity("valuation:005930", "밸류에이션", "valuation-assumption", {
+            "ontologyBox": "ABox",
+            "symbol": "005930",
+            "peRatio": 47.5,
+            "beta": 1.8,
+        }))
         graph.relations.append(OntologyRelation("stock:005930", "level:005930:ma20", "BREAKS_LEVEL", 0.8, properties={
             "ontologyBox": "ABox",
             "riskImpact": 3.2,
@@ -99,6 +122,13 @@ class TypeDBOntologyRepositoryTests(unittest.TestCase):
         self.assertTrue(any("has ontology-profit-loss-rate -12.5" in query for query in queries))
         self.assertTrue(any('has ontology-level-type "ma20"' in query for query in queries))
         self.assertTrue(any("has ontology-risk-impact 3.2" in query for query in queries))
+        self.assertTrue(any('has ontology-allow-add-on-strength "true"' in query for query in queries))
+        self.assertTrue(any('has ontology-avoid-averaging-down "true"' in query for query in queries))
+        self.assertTrue(any('has ontology-impact-polarity "risk"' in query for query in queries))
+        self.assertTrue(any('has ontology-needs-review "true"' in query for query in queries))
+        self.assertTrue(any('has ontology-read-scope "title+rss-summary"' in query for query in queries))
+        self.assertTrue(any("has ontology-pe-ratio 47.5" in query for query in queries))
+        self.assertTrue(any("has ontology-beta 1.8" in query for query in queries))
 
     def test_typedb_null_repository_is_explicitly_disabled(self):
         result = NullTypeDBOntologyGraphRepository().save_graph(PortfolioOntology("empty"))
@@ -478,6 +508,7 @@ class TypeDBOntologyRepositoryTests(unittest.TestCase):
             "status": "ok",
             "graphStore": "typedb",
             "nativeQueryUsed": True,
+            "schemaFunctionUsed": True,
             "executedRuleCount": 1,
             "skippedRuleCount": 0,
             "matchedCount": 1,
@@ -497,7 +528,7 @@ class TypeDBOntologyRepositoryTests(unittest.TestCase):
             captured["graph"] = inference_graph
             return {"configured": True, "saved": True, "status": "ok", "graphStore": "typedb"}
 
-        with patch.object(repository, "read_entity_rows", return_value=[{"id": "stock:005930", "ontologyBox": "ABox"}]), patch.object(repository, "rulebox_snapshot", return_value=rule_snapshot), patch.object(repository, "match_typedb_native_rules", return_value=native_match), patch.object(repository, "clear_inferencebox", return_value={"status": "ok", "graphStore": "typedb"}), patch.object(repository, "load_graph_from_typedb", return_value=graph), patch.object(repository, "write_inferencebox_graph", side_effect=capture_inferencebox):
+        with patch.object(repository, "read_entity_rows", return_value=[{"id": "stock:005930", "ontologyBox": "ABox"}]), patch.object(repository, "rulebox_snapshot", return_value=rule_snapshot), patch.object(repository, "sync_typedb_native_rule_functions", return_value={"status": "ok", "syncedCount": 1, "syncedFunctionCount": 1, "skippedCount": 0, "failedCount": 0}), patch.object(repository, "match_typedb_native_rules", return_value=native_match), patch.object(repository, "clear_inferencebox", return_value={"status": "ok", "graphStore": "typedb"}), patch.object(repository, "load_graph_from_typedb", return_value=graph), patch.object(repository, "write_inferencebox_graph", side_effect=capture_inferencebox):
             result = repository.run_rulebox({"clearInference": True})
 
         self.assertEqual("ok", result["status"])
@@ -628,6 +659,7 @@ class TypeDBOntologyRepositoryTests(unittest.TestCase):
             "status": "ok",
             "graphStore": "typedb",
             "nativeQueryUsed": True,
+            "schemaFunctionUsed": True,
             "executedRuleCount": 1,
             "skippedRuleCount": 0,
             "matchedCount": 1,
@@ -641,7 +673,7 @@ class TypeDBOntologyRepositoryTests(unittest.TestCase):
             }],
         }
 
-        with patch.object(repository, "read_entity_rows", return_value=[{"id": "stock:005930", "ontologyBox": "ABox"}]), patch.object(repository, "rulebox_snapshot", return_value=rule_snapshot), patch.object(repository, "match_typedb_native_rules", return_value=native_match), patch.object(repository, "clear_inferencebox", return_value={"status": "ok", "graphStore": "typedb"}), patch.object(repository, "load_graph_from_typedb", return_value=graph), patch.object(repository, "write_inferencebox_graph", return_value={"configured": True, "saved": False, "status": "error", "reason": "write failed"}):
+        with patch.object(repository, "read_entity_rows", return_value=[{"id": "stock:005930", "ontologyBox": "ABox"}]), patch.object(repository, "rulebox_snapshot", return_value=rule_snapshot), patch.object(repository, "sync_typedb_native_rule_functions", return_value={"status": "ok", "syncedCount": 1, "syncedFunctionCount": 1, "skippedCount": 0, "failedCount": 0}), patch.object(repository, "match_typedb_native_rules", return_value=native_match), patch.object(repository, "clear_inferencebox", return_value={"status": "ok", "graphStore": "typedb"}), patch.object(repository, "load_graph_from_typedb", return_value=graph), patch.object(repository, "write_inferencebox_graph", return_value={"configured": True, "saved": False, "status": "error", "reason": "write failed"}):
             result = repository.run_rulebox({"clearInference": True})
 
         self.assertEqual("error", result["status"])
@@ -656,8 +688,62 @@ class TypeDBOntologyRepositoryTests(unittest.TestCase):
         self.assertEqual("typedb-native-rule-profile-v2", profile["version"])
         self.assertEqual(profile["ruleCount"], profile["nativeRuleCount"])
         self.assertTrue(profile["rules"][0]["nativeRuleId"].startswith("typedb.native."))
-        self.assertGreater(profile["readyRuleCount"] + profile["partialRuleCount"], 0)
+        self.assertEqual(profile["ruleCount"], profile["readyRuleCount"])
+        self.assertEqual(0, profile["partialRuleCount"])
+        self.assertTrue(profile["rules"][0]["schemaFunctionName"].startswith("orbit_rule_"))
         self.assertTrue(profile["materializationRequired"])
+
+    def test_typedb_function_definition_uses_helper_functions_for_any_condition_groups(self):
+        rule = next(item for item in default_graph_inference_rules() if item.rule_id == "graph.loss_smart_money.add_buy_review.v1")
+        definition = typedb_native_function_definition(rule.to_dict())
+
+        self.assertEqual(15, len(definition["helperFunctions"]))
+        self.assertEqual(16, len(definition["functionDefinitions"]))
+        self.assertIn("let $source in", definition["body"])
+
+    def test_typedb_schema_function_sync_uses_cache_for_same_rule_fingerprint(self):
+        repository = TypeDBOntologyGraphRepository("127.0.0.1:1729")
+        rule = default_graph_inference_rules()[0]
+        definition = typedb_native_function_definition(rule.to_dict())
+        definitions = []
+        for item in list(definition.get("functionDefinitions") or []) or [definition]:
+            definitions.append({
+                **item,
+                "ruleId": definition.get("ruleId") or item.get("ruleId"),
+                "nativeRuleId": definition.get("nativeRuleId") or item.get("nativeRuleId"),
+                "rootFunctionName": definition.get("functionName"),
+            })
+        sync_fingerprint = hashlib.sha256(json.dumps({
+            "engineVersion": "typedb-schema-function-rule-engine-v1",
+            "database": repository.database,
+            "functions": [
+                {
+                    "functionName": item.get("functionName"),
+                    "define": item.get("define"),
+                    "redefine": item.get("redefine"),
+                }
+                for item in definitions
+            ],
+            "skipped": [],
+        }, sort_keys=True, ensure_ascii=False).encode("utf-8")).hexdigest()
+        repository._schema_function_sync_cache_key = sync_fingerprint
+        repository._schema_function_sync_cache_result = {
+            "configured": True,
+            "status": "ok",
+            "graphStore": "typedb",
+            "syncedCount": 1,
+            "syncedFunctionCount": len(definitions),
+            "skippedCount": 0,
+            "failedCount": 0,
+        }
+
+        with patch.object(repository, "driver_imports") as driver_imports:
+            result = repository.sync_typedb_native_rule_functions([rule])
+
+        driver_imports.assert_not_called()
+        self.assertTrue(result["cached"])
+        self.assertTrue(result["schemaFunctionSyncCached"])
+        self.assertEqual(sync_fingerprint, result["syncFingerprint"])
 
 
 if __name__ == "__main__":

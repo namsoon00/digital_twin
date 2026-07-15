@@ -133,6 +133,110 @@ class TypeDBOntologyRepositoryTests(unittest.TestCase):
         self.assertTrue(any("has ontology-pe-ratio 47.5" in query for query in queries))
         self.assertTrue(any("has ontology-beta 1.8" in query for query in queries))
 
+    def test_typedb_read_helpers_push_limit_and_existence_into_typeql(self):
+        class CapturingRepository(TypeDBOntologyGraphRepository):
+            def __init__(self):
+                super().__init__("127.0.0.1:1729")
+                self.queries = []
+
+            def read_rows(self, query, columns):
+                self.queries.append(str(query))
+                return []
+
+        repository = CapturingRepository()
+
+        self.assertFalse(repository.has_box_rows("ABox"))
+        repository.read_entity_rows(["ABox"], limit=1)
+        repository.read_relation_rows(["InferenceBox"], limit=2)
+
+        self.assertIn("has ontology-box \"ABox\"; limit 1;", repository.queries[0])
+        self.assertIn("limit 1;", repository.queries[1])
+        self.assertIn("limit 2;", repository.queries[2])
+
+    def test_typedb_native_rule_matching_skips_condition_detail_queries_by_default(self):
+        repository = TypeDBOntologyGraphRepository("127.0.0.1:1729")
+        rule = default_graph_inference_rules()[0]
+        matches = []
+
+        with patch.object(repository, "read_rows", side_effect=AssertionError("condition detail query should not run")), patch.object(repository, "condition_detail_queries_enabled", return_value=False):
+            repository.merge_native_match_rows(
+                rule,
+                {"evidenceColumns": [], "conditionEvidenceColumns": {}},
+                [{"sourceId": "stock:005930", "sourceLabel": "삼성전자"}],
+                {},
+                matches,
+            )
+
+        self.assertEqual(1, len(matches))
+        self.assertTrue(matches[0]["matchedConditions"])
+
+    def test_typedb_native_match_graph_reads_only_matched_subject_entities(self):
+        repository = TypeDBOntologyGraphRepository("127.0.0.1:1729")
+        requested = []
+
+        def fake_rows(ids, boxes=None):
+            requested.extend(list(ids))
+            return [
+                {
+                    "id": "stock:005930",
+                    "label": "삼성전자",
+                    "kind": "stock",
+                    "ontologyBox": "ABox",
+                    "symbol": "005930",
+                    "propertiesJson": json.dumps({"ontologyBox": "ABox", "symbol": "005930", "source": "holding"}),
+                }
+            ]
+
+        with patch.object(repository, "read_entity_rows_by_ids", side_effect=fake_rows):
+            graph = repository.load_graph_for_native_matches({
+                "matches": [
+                    {"sourceId": "stock:005930", "sourceLabel": "삼성전자"},
+                    {"sourceId": "stock:MISSING", "sourceLabel": "Fallback"},
+                ],
+            })
+
+        self.assertEqual(["stock:005930", "stock:MISSING"], requested)
+        self.assertEqual(2, len(graph.entities))
+        self.assertTrue(any(item.entity_id == "stock:MISSING" and (item.properties or {}).get("queryFallback") for item in graph.entities))
+
+    def test_typedb_rulebox_snapshot_uses_short_cache(self):
+        repository = TypeDBOntologyGraphRepository("127.0.0.1:1729")
+        repository._rulebox_snapshot_cache_at = 9999999999.0
+        repository._rulebox_snapshot_cache_result = {"status": "ok", "rules": [], "ruleCount": 0}
+
+        with patch.object(repository, "read_entity_rows", side_effect=AssertionError("cache should avoid TypeDB reads")):
+            snapshot = repository.rulebox_snapshot()
+
+        self.assertTrue(snapshot["cached"])
+        self.assertTrue(snapshot["ruleBoxSnapshotCached"])
+
+    def test_typedb_inferencebox_scoped_helpers_filter_generation_and_symbol(self):
+        class CapturingRepository(TypeDBOntologyGraphRepository):
+            def __init__(self):
+                super().__init__("127.0.0.1:1729")
+                self.queries = []
+
+            def read_rows(self, query, columns):
+                self.queries.append(str(query))
+                return []
+
+        repository = CapturingRepository()
+
+        repository.read_inference_generation_records()
+        repository.read_inferencebox_entity_rows("generation:active", ["AAPL"], 3)
+        repository.read_inferencebox_relation_rows("generation:active", ["AAPL"], 4)
+
+        self.assertIn('has ontology-box "InferenceBox"', repository.queries[0])
+        self.assertIn("has ontology-snapshot-id $snapshotId", repository.queries[0])
+        self.assertIn('has ontology-box "InferenceBox"', repository.queries[1])
+        self.assertIn("has ontology-snapshot-id $snapshotId", repository.queries[1])
+        self.assertIn('has ontology-snapshot-id "generation:active"', repository.queries[2])
+        self.assertIn('has ontology-symbol "AAPL"', repository.queries[2])
+        self.assertIn("limit 3;", repository.queries[2])
+        self.assertIn('has ontology-snapshot-id "generation:active"', repository.queries[3])
+        self.assertIn('has ontology-symbol "AAPL"', repository.queries[3])
+        self.assertIn("limit 4;", repository.queries[3])
+
     def test_typedb_inferencebox_insert_queries_batch_rows(self):
         repository = TypeDBOntologyGraphRepository("127.0.0.1:1729")
         node_rows = [
@@ -620,7 +724,7 @@ class TypeDBOntologyRepositoryTests(unittest.TestCase):
             },
         ]
 
-        with patch.object(repository, "read_entity_rows", return_value=entity_rows), patch.object(repository, "read_relation_rows", return_value=relation_rows):
+        with patch.object(repository, "read_inference_generation_records", return_value=[]), patch.object(repository, "read_entity_rows", return_value=entity_rows), patch.object(repository, "read_relation_rows", return_value=relation_rows):
             snapshot = repository.inferencebox_snapshot(symbols=["005930"])
 
         self.assertEqual("ok", snapshot["status"])
@@ -642,7 +746,7 @@ class TypeDBOntologyRepositoryTests(unittest.TestCase):
     def test_typedb_inferencebox_snapshot_exposes_typeql_read_errors(self):
         repository = TypeDBOntologyGraphRepository("127.0.0.1:1729")
 
-        with patch.object(repository, "read_entity_rows", side_effect=RuntimeError("schema unavailable")):
+        with patch.object(repository, "read_inference_generation_records", side_effect=RuntimeError("schema unavailable")):
             snapshot = repository.inferencebox_snapshot(symbols=["005930"])
 
         self.assertEqual("error", snapshot["status"])
@@ -711,7 +815,7 @@ class TypeDBOntologyRepositoryTests(unittest.TestCase):
             captured["graph"] = inference_graph
             return {"configured": True, "saved": True, "status": "ok", "graphStore": "typedb"}
 
-        with patch.object(repository, "read_entity_rows", return_value=[{"id": "stock:005930", "ontologyBox": "ABox"}]), patch.object(repository, "rulebox_snapshot", return_value=rule_snapshot), patch.object(repository, "sync_typedb_native_rule_functions", return_value={"status": "ok", "syncedCount": 1, "syncedFunctionCount": 1, "skippedCount": 0, "failedCount": 0}), patch.object(repository, "match_typedb_native_rules", return_value=native_match), patch.object(repository, "clear_inferencebox", return_value={"status": "ok", "graphStore": "typedb"}), patch.object(repository, "load_graph_from_typedb", return_value=graph), patch.object(repository, "write_inferencebox_graph", side_effect=capture_inferencebox):
+        with patch.object(repository, "has_box_rows", return_value=True), patch.object(repository, "rulebox_snapshot", return_value=rule_snapshot), patch.object(repository, "sync_typedb_native_rule_functions", return_value={"status": "ok", "syncedCount": 1, "syncedFunctionCount": 1, "skippedCount": 0, "failedCount": 0}), patch.object(repository, "match_typedb_native_rules", return_value=native_match), patch.object(repository, "clear_inferencebox", return_value={"status": "ok", "graphStore": "typedb"}), patch.object(repository, "load_graph_for_native_matches", return_value=graph), patch.object(repository, "write_inferencebox_graph", side_effect=capture_inferencebox):
             result = repository.run_rulebox({"clearInference": True})
 
         self.assertEqual("ok", result["status"])
@@ -743,7 +847,7 @@ class TypeDBOntologyRepositoryTests(unittest.TestCase):
     def test_typedb_rulebox_execution_preserves_inferencebox_when_preflight_fails(self):
         repository = TypeDBOntologyGraphRepository("127.0.0.1:1729")
 
-        with patch.object(repository, "read_entity_rows", side_effect=RuntimeError("abox unavailable")), patch.object(repository, "clear_inferencebox") as clear_mock:
+        with patch.object(repository, "has_box_rows", side_effect=RuntimeError("abox unavailable")), patch.object(repository, "clear_inferencebox") as clear_mock:
             result = repository.run_rulebox({"forceClearInference": True})
 
         clear_mock.assert_not_called()
@@ -856,7 +960,7 @@ class TypeDBOntologyRepositoryTests(unittest.TestCase):
             }],
         }
 
-        with patch.object(repository, "read_entity_rows", return_value=[{"id": "stock:005930", "ontologyBox": "ABox"}]), patch.object(repository, "rulebox_snapshot", return_value=rule_snapshot), patch.object(repository, "sync_typedb_native_rule_functions", return_value={"status": "ok", "syncedCount": 1, "syncedFunctionCount": 1, "skippedCount": 0, "failedCount": 0}), patch.object(repository, "match_typedb_native_rules", return_value=native_match), patch.object(repository, "clear_inferencebox", return_value={"status": "ok", "graphStore": "typedb"}), patch.object(repository, "load_graph_from_typedb", return_value=graph), patch.object(repository, "write_inferencebox_graph", return_value={"configured": True, "saved": False, "status": "error", "reason": "write failed"}):
+        with patch.object(repository, "has_box_rows", return_value=True), patch.object(repository, "rulebox_snapshot", return_value=rule_snapshot), patch.object(repository, "sync_typedb_native_rule_functions", return_value={"status": "ok", "syncedCount": 1, "syncedFunctionCount": 1, "skippedCount": 0, "failedCount": 0}), patch.object(repository, "match_typedb_native_rules", return_value=native_match), patch.object(repository, "clear_inferencebox", return_value={"status": "ok", "graphStore": "typedb"}), patch.object(repository, "load_graph_for_native_matches", return_value=graph), patch.object(repository, "write_inferencebox_graph", return_value={"configured": True, "saved": False, "status": "error", "reason": "write failed"}):
             result = repository.run_rulebox({"clearInference": True})
 
         self.assertEqual("error", result["status"])

@@ -509,12 +509,10 @@ class OntologyRuleBoxTests(unittest.TestCase):
                 self.saved_inferencebox_graph = graph
                 return {"configured": True, "saved": True, "status": "ok", "graphStore": "typedb"}
 
-            def read_entity_rows(self, boxes=None, limit=0):
-                if list(boxes or []) == ["ABox"]:
-                    return [{"id": "stock:005930", "ontologyBox": "ABox"}]
-                return []
+            def has_box_rows(self, box):
+                return str(box or "") == "ABox"
 
-            def load_graph_from_typedb(self, boxes=None):
+            def load_graph_for_native_matches(self, native_match_result):
                 return self._last_graph
 
             def rulebox_snapshot(self):

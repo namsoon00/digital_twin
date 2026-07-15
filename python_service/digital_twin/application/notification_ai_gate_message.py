@@ -57,6 +57,12 @@ DATA_COLLECTION_STAGE_LABELS = {
     "orderbook": "실시간 호가",
     "investor": "투자자 수급",
 }
+DATA_COLLECTION_STAGE_QUERY_INFO = {
+    "price": "국내 주식 현재가·등락률·거래량",
+    "ccnl": "국내 주식 실시간 체결가·거래량·체결강도",
+    "orderbook": "국내 주식 실시간 매수/매도 호가잔량·호가불균형",
+    "investor": "국내 주식 투자자별 매수·매도·순매수",
+}
 DATA_COLLECTION_SCOPE_LABELS = {
     "market-microstructure": "체결·호가",
     "investor-flow": "투자자 수급",
@@ -68,6 +74,40 @@ DATA_COLLECTION_SCOPE_LABELS = {
     "macro": "거시 지표",
     "crypto": "크립토 시세",
     "fx": "환율",
+}
+DATA_COLLECTION_SCOPE_QUERY_INFO = {
+    "market-microstructure": "체결강도·호가잔량·거래량 같은 장중 미시구조",
+    "investor-flow": "외국인·기관·개인 매수/매도/순매수",
+    "market-price": "현재가·등락률·거래량",
+    "market-quote": "현재가·거래량·거래대금",
+    "quote": "시세·거래량",
+    "news": "뉴스 제목·요약·원문 URL·발행시각",
+    "disclosure": "공시 보고서명·접수일·공시 원문",
+    "macro": "금리·스프레드·거시 시계열",
+    "crypto": "크립토 가격·거래액·24시간/7일 변동률",
+    "fx": "환율",
+}
+DATA_COLLECTION_FIELD_LABELS = {
+    "currentPrice": "현재가",
+    "changeRate": "등락률",
+    "volume": "거래량",
+    "volumeRatio": "거래량비율",
+    "tradingValue": "거래대금",
+    "tradeStrength": "체결강도",
+    "buyVolume": "매수체결량",
+    "sellVolume": "매도체결량",
+    "orderbookBidVolume": "매수호가잔량",
+    "orderbookAskVolume": "매도호가잔량",
+    "bidAskImbalance": "호가불균형",
+    "foreignNetVolume": "외국인 순매수",
+    "institutionNetVolume": "기관 순매수",
+    "individualNetVolume": "개인 순매수",
+    "foreignBuyVolume": "외국인 매수",
+    "foreignSellVolume": "외국인 매도",
+    "institutionBuyVolume": "기관 매수",
+    "institutionSellVolume": "기관 매도",
+    "individualBuyVolume": "개인 매수",
+    "individualSellVolume": "개인 매도",
 }
 
 ABSOLUTE_BEGINNER_TERM_REPLACEMENTS = [
@@ -452,7 +492,7 @@ def data_collection_time_rows(context: Dict[str, object], limit: int = MESSAGE_D
     rows: List[str] = []
     seen = set()
 
-    def add(label: object, value: object, suffix: object = "", kind: object = "") -> None:
+    def add(label: object, value: object, suffix: object = "", kind: object = "", query_info: object = "") -> None:
         if len(rows) >= limit:
             return
         stamp = _format_kst_timestamp(value)
@@ -460,8 +500,15 @@ def data_collection_time_rows(context: Dict[str, object], limit: int = MESSAGE_D
             return
         source = _collection_source_label(label, kind)
         detail = _text(str(suffix or "").strip(), 72)
-        text = source + ": " + stamp + ((" · " + detail) if detail else "")
-        key = re.sub(r"\s+", " ", source + "|" + stamp + "|" + detail).strip().lower()
+        info = _text(str(query_info or kind or "API 데이터").strip(), 110)
+        parts = []
+        if info:
+            parts.append("조회 정보 " + info)
+        parts.append("조회시각 " + stamp)
+        if detail:
+            parts.append(detail)
+        text = source + ": " + " · ".join(parts)
+        key = re.sub(r"\s+", " ", source + "|" + info + "|" + stamp + "|" + detail).strip().lower()
         if key in seen:
             return
         seen.add(key)
@@ -488,6 +535,7 @@ def data_collection_time_rows(context: Dict[str, object], limit: int = MESSAGE_D
             stamp,
             " · ".join(part for part in detail_parts if part),
             _collection_text_for_kind(freshness, source),
+            _collection_query_info(freshness, source),
         )
 
     roots = [
@@ -530,6 +578,7 @@ def data_collection_time_rows(context: Dict[str, object], limit: int = MESSAGE_D
                 stamp,
                 detail,
                 _collection_text_for_kind(value, source, detail),
+                _collection_query_info(value, source, detail),
             )
         for child in value.values():
             if isinstance(child, (dict, list)):
@@ -746,6 +795,76 @@ def _collection_text_for_kind(value: Dict[str, object], source: object = "", det
     return "API 데이터"
 
 
+def _collection_field_summary(value: Dict[str, object]) -> str:
+    item = value if isinstance(value, dict) else {}
+    fields = item.get("fields") if isinstance(item.get("fields"), list) else []
+    if not fields:
+        fields = item.get("nonZeroFields") if isinstance(item.get("nonZeroFields"), list) else []
+    labels: List[str] = []
+    for field in fields:
+        label = DATA_COLLECTION_FIELD_LABELS.get(str(field or "").strip())
+        if label and label not in labels:
+            labels.append(label)
+        if len(labels) >= 6:
+            break
+    if not labels:
+        return ""
+    extra = len(fields) - len(labels)
+    return " · 실제 필드 " + "·".join(labels) + ((" 외 " + str(extra) + "개") if extra > 0 else "")
+
+
+def _collection_query_info(value: Dict[str, object], source: object = "", detail: object = "") -> str:
+    item = value if isinstance(value, dict) else {}
+    stage = str(item.get("stage") or item.get("dataStage") or "").strip()
+    if stage in DATA_COLLECTION_STAGE_QUERY_INFO:
+        return DATA_COLLECTION_STAGE_QUERY_INFO[stage] + _collection_field_summary(item)
+    scope = str(item.get("dataScope") or item.get("scope") or "").strip()
+    if scope in DATA_COLLECTION_SCOPE_QUERY_INFO:
+        return DATA_COLLECTION_SCOPE_QUERY_INFO[scope] + _collection_field_summary(item)
+    text = " ".join([
+        str(source or ""),
+        str(detail or ""),
+        str(item.get("provider") or ""),
+        str(item.get("source") or ""),
+        str(item.get("domain") or ""),
+        str(item.get("messageType") or ""),
+        str(item.get("type") or ""),
+        str(item.get("kind") or ""),
+        " ".join(str(key or "") for key in item.keys()),
+    ]).lower()
+    if "opendart" in text or "dart" in text:
+        return "국내 공시 목록·접수일·보고서명"
+    if "sec edgar" in text or "edgar" in text:
+        return "해외 공시 제출자료·기업 facts"
+    if any(term in text for term in ["gdelt", "google news", "news", "headline", "article", "rss", "뉴스"]):
+        return "국내외 뉴스 제목·요약·원문 URL·발행시각"
+    if "fred" in text or "macro" in text:
+        return "미국 금리·스프레드·거시 시계열"
+    if "coingecko" in text or "crypto" in text or "coin" in text:
+        return "크립토 가격·거래액·24시간/7일 변동률"
+    if "alpha vantage" in text:
+        if "fx" in text or "exchange" in text or "currency" in text:
+            return "환율 시계열"
+        if "fundamental" in text or "earnings" in text:
+            return "해외 기업 펀더멘털·실적 지표"
+        return "해외 주식 시세·거래량"
+    if "kis" in text:
+        if "websocket" in text:
+            return "국내 주식 실시간 체결·호가"
+        return "국내 주식 현재가·호가·체결·투자자 수급"
+    if "toss" in text:
+        return "계좌 보유수량·평균매입가·평가금액"
+    if "brokeraccount" in text:
+        return "계좌 평가금액·기준 환율"
+    if any(term in text for term in ["currentprice", "price", "quote", "volume", "tradingvalue"]):
+        return "시세·거래량·거래대금"
+    if any(term in text for term in ["orderbook", "bid", "ask", "imbalance"]):
+        return "매수/매도 호가잔량·호가불균형"
+    if any(term in text for term in ["foreign", "institution", "individual", "investor"]):
+        return "외국인·기관·개인 투자자별 수급"
+    return "제공 API 원천 데이터"
+
+
 def _collection_source_label(source: object, kind: object) -> str:
     source_text = _text(str(source or "데이터").strip() or "데이터", 42)
     kind_text = _text(str(kind or "").strip(), 24)
@@ -938,7 +1057,7 @@ def execution_telegram_message(context: Dict[str, object], response: Notificatio
         parts.extend(["", "<b>현재 상태</b>", *current_state_rows])
     collection_rows = data_collection_time_rows(context, MESSAGE_DATA_COLLECTION_ROW_LIMIT)
     if collection_rows:
-        parts.extend(["", "<b>데이터 수집 시각</b>"])
+        parts.extend(["", "<b>API 조회 정보</b>"])
         parts.extend(_html_bullet(item, level) for item in collection_rows)
     quality_rows = data_quality_warning_rows(context, MESSAGE_DATA_QUALITY_ROW_LIMIT)
     if quality_rows:
@@ -1006,7 +1125,7 @@ def execution_telegram_message_absolute_beginner(context: Dict[str, object], res
         parts.extend(["", "<b>현재 상황</b>", *current_state_rows])
     collection_rows = data_collection_time_rows(context, MESSAGE_DATA_COLLECTION_ROW_LIMIT)
     if collection_rows:
-        parts.extend(["", "<b>데이터 수집 시각</b>"])
+        parts.extend(["", "<b>API 조회 정보</b>"])
         parts.extend(_html_bullet(item, "absoluteBeginner") for item in collection_rows)
     quality_rows = data_quality_warning_rows(context, MESSAGE_DATA_QUALITY_ROW_LIMIT)
     if quality_rows:

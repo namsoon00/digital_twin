@@ -10084,6 +10084,58 @@ class PythonServiceTests(unittest.TestCase):
         self.assertIn("5일선보다 3.4% 높아", message)
         self.assertNotIn("<b>지금 할 일</b>: <code>매도</code>", message)
 
+    def test_validated_ai_response_keeps_ma5_in_decision_evidence_when_evidence_is_full(self):
+        context = {
+            "messageType": "investmentInsight",
+            "headline": "[관찰] 💰 스트래티지: 보유 유지",
+            "displayTarget": "스트래티지 / Strategy / MSTR",
+            "messageDeliveryLevel": "absoluteBeginner",
+            "referenceDate": "2026-07-15 06:40 KST",
+            "rawLines": "\n".join([
+                "현재가: $97.69",
+                "평균매입가: $88.9",
+                "수익률: +9.9%",
+                "추세: 5일선 $95.68보다 2.1% 높음, 20일선 $100.11보다 2.4% 낮음, 60일선 $140.37보다 30.4% 낮음",
+                "수급: 거래량 9,471,192(0.4x)",
+            ]),
+            "metadata": {
+                "ontologyRelationContext": {
+                    "facts": {
+                        "symbol": "MSTR",
+                        "profitLossRate": 9.9,
+                        "currentPrice": 97.69,
+                        "ma5": 95.68,
+                        "ma5Distance": 2.1,
+                        "ma20": 100.11,
+                        "ma20Distance": -2.4,
+                        "ma60": 140.37,
+                        "ma60Distance": -30.4,
+                    }
+                }
+            },
+        }
+
+        response = validated_response_from_payload(context, {
+            "action": "HOLD",
+            "confidence": 70,
+            "summary": "보유 유지가 적절합니다.",
+            "opinion": "가격과 수급을 더 확인합니다.",
+            "evidence": [
+                "수익률이 +9.9%입니다.",
+                "20일 평균 아래입니다.",
+                "60일 평균 아래입니다.",
+                "거래량은 평균보다 낮습니다.",
+                "비트코인 민감 종목입니다.",
+            ],
+            "counterEvidence": ["20일 평균 회복은 아직 확인되지 않았습니다."],
+            "nextChecks": ["20일 평균 회복 여부 확인"],
+            "referenceDate": "2026-07-15 06:40 KST",
+        }, source="Codex AI")
+        message = context_with_validated_ai_response(context, response)["telegramMessage"]
+
+        self.assertIn("5일 평균보다 2.1% 높아", response.evidence[0])
+        self.assertIn("5일 평균보다 2.1% 높아", message)
+
     def test_notification_ai_gate_prompt_requires_user_friendly_language(self):
         prompt = build_notification_ai_gate_prompt({
             "messageType": "investmentInsight",

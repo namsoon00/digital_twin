@@ -44,6 +44,12 @@ from .notification_ai_context import is_watchlist_context, target_position_role
 from .ontology_rulebox_contracts import WATCHLIST_ACTION_POLICY
 
 
+def prepend_unique_text(items: List[str], value: str, limit: int = 220) -> None:
+    text = _text(value, limit)
+    if text and text not in items:
+        items.insert(0, text)
+
+
 def _execution_plan_from_context(context: Dict[str, object]) -> Dict[str, object]:
     relation_context = relation_context_value(context or {})
     plan = relation_context.get("executionPlan") if isinstance(relation_context.get("executionPlan"), dict) else {}
@@ -271,11 +277,11 @@ def add_short_term_trend_evidence(context: Dict[str, object], action: str, evide
         return
     text = short_term_trend_text(ma5_distance)
     if action in {"SELL", "TRIM"} and ma5_distance >= 0:
-        append_unique_text(counter, text, 180)
+        prepend_unique_text(counter, text, 180)
     elif action in {"BUY", "ADD", "HOLD"} and ma5_distance < 0:
-        append_unique_text(counter, text, 180)
+        prepend_unique_text(counter, text, 180)
     else:
-        append_unique_text(evidence, text, 180)
+        prepend_unique_text(evidence, text, 180)
 
 def soften_profitable_short_term_recovery_sell(context: Dict[str, object], response: NotificationAIValidatedResponse) -> NotificationAIValidatedResponse:
     if response.action != "SELL":

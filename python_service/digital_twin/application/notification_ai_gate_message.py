@@ -1119,7 +1119,8 @@ def external_api_source_rows(context: Dict[str, object], limit: int = MESSAGE_AP
 def _compact_text_segments(values: List[object], limit: int = 3, max_len: int = 180) -> str:
     rows: List[str] = []
     for value in values or []:
-        text = _text(value, max_len)
+        text = re.sub(r"\s+", " ", _text(value, max_len)).strip()
+        text = re.sub(r"[\.\?!。]+$", "", text).strip()
         if not text:
             continue
         append_unique_text(rows, text, max_len)
@@ -1127,27 +1128,30 @@ def _compact_text_segments(values: List[object], limit: int = 3, max_len: int = 
             break
     return " / ".join(rows)
 
-def compact_ai_opinion_rows(context: Dict[str, object], response: NotificationAIValidatedResponse, level: str) -> List[str]:
-    rows: List[str] = []
+def compact_ai_opinion_sentence(context: Dict[str, object], response: NotificationAIValidatedResponse, level: str) -> str:
+    action_label = action_label_for_action(response.action, context) or response.action_label or response.action
+    base = "AI는 전체 내용을 종합해 " + action_label + "를 우선 보는 의견"
+    details: List[str] = []
     if response.precomputed_action and response.precomputed_action != response.action:
         adjustment = (
             "계산 후보 "
             + action_label_for_action(response.precomputed_action, context)
-            + " → AI 최종 "
-            + (action_label_for_action(response.action, context) or response.action_label)
+            + "에서 최종 "
+            + action_label
+            + "로 조정한 점"
         )
         if response.disagreement_reason:
-            adjustment += ". " + _text(response.disagreement_reason, 180)
-        rows.append(_html_row("판단 조정", adjustment, level=level, max_len=900))
+            adjustment += " (" + _compact_text_segments([response.disagreement_reason], 1, 180) + ")"
+        details.append(adjustment)
     context_summary = _compact_text_segments(context_specific_insight_rows(context, response, 3), 2, 170)
     if context_summary:
-        rows.append(_html_row("볼 점", context_summary, level=level, max_len=900))
+        details.append("주요 상황 " + context_summary)
     evidence_summary = _compact_text_segments(response.evidence, max(1, len(response.evidence)), 160)
     if evidence_summary:
-        rows.append(_html_row("근거", evidence_summary, level=level, max_len=1400))
+        details.append("핵심 근거 " + evidence_summary)
     counter_summary = _compact_text_segments(response.counter_evidence, max(1, len(response.counter_evidence)), 170)
     if counter_summary:
-        rows.append(_html_row("반대 신호", counter_summary, level=level, max_len=1200))
+        details.append("반대 신호 " + counter_summary)
     checks = []
     if response.opinion:
         checks.append(response.opinion)
@@ -1156,12 +1160,18 @@ def compact_ai_opinion_rows(context: Dict[str, object], response: NotificationAI
     checks.extend(response.next_checks)
     check_summary = _compact_text_segments(checks, max(1, len(checks)), 190)
     if check_summary:
-        rows.append(_html_row("다음 확인", check_summary, level=level, max_len=1400))
+        details.append("다음 확인 " + check_summary)
     data_notes = list(response.missing_data_impact) + list(response.validation_warnings)
     data_summary = _compact_text_segments(data_notes, max(1, len(data_notes)), 180)
     if data_summary:
-        rows.append(_html_row("데이터/검증", data_summary, level=level, max_len=1400))
-    return [row for row in rows if row]
+        details.append("데이터와 검증 메모 " + data_summary)
+    if details:
+        return base + "이며, " + ", ".join(details) + "까지 함께 반영했습니다."
+    return base + "입니다."
+
+def compact_ai_opinion_rows(context: Dict[str, object], response: NotificationAIValidatedResponse, level: str) -> List[str]:
+    sentence = compact_ai_opinion_sentence(context, response, level)
+    return [_html_bullet(sentence, level)] if sentence else []
 
 
 def execution_telegram_message(context: Dict[str, object], response: NotificationAIValidatedResponse) -> str:

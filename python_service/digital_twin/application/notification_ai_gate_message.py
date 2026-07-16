@@ -250,8 +250,8 @@ def _html_bullet(value: object, level: str = "", prefix: str = "") -> str:
     return "• " + html.escape(text, quote=False)
 
 
-def _html_row(label: str, value: object, beginner: bool = False, level: str = "") -> str:
-    text = _text(value, 500)
+def _html_row(label: str, value: object, beginner: bool = False, level: str = "", max_len: int = 500) -> str:
+    text = _text(value, max_len)
     if not text:
         return ""
     display_level = level or ("absoluteBeginner" if beginner else "")
@@ -1116,6 +1116,53 @@ def external_api_source_rows(context: Dict[str, object], limit: int = MESSAGE_AP
             break
     return unique
 
+def _compact_text_segments(values: List[object], limit: int = 3, max_len: int = 180) -> str:
+    rows: List[str] = []
+    for value in values or []:
+        text = _text(value, max_len)
+        if not text:
+            continue
+        append_unique_text(rows, text, max_len)
+        if len(rows) >= limit:
+            break
+    return " / ".join(rows)
+
+def compact_ai_opinion_rows(context: Dict[str, object], response: NotificationAIValidatedResponse, level: str) -> List[str]:
+    rows: List[str] = []
+    if response.precomputed_action and response.precomputed_action != response.action:
+        adjustment = (
+            "계산 후보 "
+            + action_label_for_action(response.precomputed_action, context)
+            + " → AI 최종 "
+            + (action_label_for_action(response.action, context) or response.action_label)
+        )
+        if response.disagreement_reason:
+            adjustment += ". " + _text(response.disagreement_reason, 180)
+        rows.append(_html_row("판단 조정", adjustment, level=level, max_len=900))
+    context_summary = _compact_text_segments(context_specific_insight_rows(context, response, 3), 2, 170)
+    if context_summary:
+        rows.append(_html_row("볼 점", context_summary, level=level, max_len=900))
+    evidence_summary = _compact_text_segments(response.evidence, max(1, len(response.evidence)), 160)
+    if evidence_summary:
+        rows.append(_html_row("근거", evidence_summary, level=level, max_len=1400))
+    counter_summary = _compact_text_segments(response.counter_evidence, max(1, len(response.counter_evidence)), 170)
+    if counter_summary:
+        rows.append(_html_row("반대 신호", counter_summary, level=level, max_len=1200))
+    checks = []
+    if response.opinion:
+        checks.append(response.opinion)
+    if response.invalidation_condition:
+        checks.append("의견이 약해지는 조건: " + response.invalidation_condition)
+    checks.extend(response.next_checks)
+    check_summary = _compact_text_segments(checks, max(1, len(checks)), 190)
+    if check_summary:
+        rows.append(_html_row("다음 확인", check_summary, level=level, max_len=1400))
+    data_notes = list(response.missing_data_impact) + list(response.validation_warnings)
+    data_summary = _compact_text_segments(data_notes, max(1, len(data_notes)), 180)
+    if data_summary:
+        rows.append(_html_row("데이터/검증", data_summary, level=level, max_len=1400))
+    return [row for row in rows if row]
+
 
 def execution_telegram_message(context: Dict[str, object], response: NotificationAIValidatedResponse) -> str:
     level = delivery_level_from_context(context)
@@ -1157,9 +1204,6 @@ def execution_telegram_message(context: Dict[str, object], response: Notificatio
         "<b>" + ai_judgment_section_title(level) + "</b>",
         *ai_judgment_rows(response, level, context),
     ]
-    difference_rows = ai_difference_rows(response, level, context)
-    if difference_rows:
-        parts.extend(["", "<b>AI 판단 조정</b>", *difference_rows])
     if current_state_rows:
         parts.extend(["", "<b>현재 상태</b>", *current_state_rows])
     api_source_rows = external_api_source_rows(context, MESSAGE_API_SOURCE_ROW_LIMIT)
@@ -1172,28 +1216,9 @@ def execution_telegram_message(context: Dict[str, object], response: Notificatio
     if quality_rows:
         parts.extend(["", "<b>데이터 신뢰도</b>"])
         parts.extend(_html_bullet(item, level) for item in quality_rows)
-    context_rows = context_specific_insight_rows(context, response, MESSAGE_CONTEXT_ROW_LIMIT)
-    if context_rows:
-        parts.extend(["", "<b>이번 알림에서 봐야 할 것</b>"])
-        parts.extend(_html_bullet(item, level) for item in context_rows)
-    parts.extend(["", "<b>AI가 중요하게 본 근거</b>"])
-    parts.extend(_html_bullet(item, level) for item in response.evidence)
-    if response.counter_evidence:
-        parts.extend(["", "<b>" + ("반대 신호" if level == "beginner" else "확인할 반대 신호") + "</b>"])
-        parts.extend(_html_bullet(item, level) for item in response.counter_evidence)
-    parts.extend(["", "<b>실행 전 확인</b>"])
-    if response.opinion:
-        parts.append(_html_bullet(response.opinion, level))
-    if response.invalidation_condition:
-        parts.append(_html_bullet(response.invalidation_condition, level, "의견이 약해지는 조건: "))
-    for item in response.next_checks:
-        parts.append(_html_bullet(item, level, "다음 확인: "))
-    if response.missing_data_impact:
-        parts.extend(["", "<b>" + html.escape(_message_label("부족 데이터", level), quote=False) + "</b>"])
-        parts.extend(_html_bullet(item, level) for item in response.missing_data_impact)
-    if response.validation_warnings:
-        parts.extend(["", "<b>" + html.escape(_message_label("검증 메모", level), quote=False) + "</b>"])
-        parts.extend(_html_bullet(item, level) for item in response.validation_warnings)
+    opinion_rows = compact_ai_opinion_rows(context, response, level)
+    if opinion_rows:
+        parts.extend(["", "<b>AI 의견</b>", *opinion_rows])
     reason = notification_reason_summary(context)
     cooldown_reason = notification_cooldown_release_summary(context)
     if reason or cooldown_reason:
@@ -1227,9 +1252,6 @@ def execution_telegram_message_absolute_beginner(context: Dict[str, object], res
         *ai_judgment_rows(response, "absoluteBeginner", context),
         _html_row("안내", "자동 주문이 아니라 실행 전 점검 알림입니다.", True),
     ]
-    difference_rows = ai_difference_rows(response, "absoluteBeginner", context)
-    if difference_rows:
-        parts.extend(["", "<b>AI 판단 조정</b>", *difference_rows])
     if current_state_rows:
         parts.extend(["", "<b>현재 상황</b>", *current_state_rows])
     api_source_rows = external_api_source_rows(context, MESSAGE_API_SOURCE_ROW_LIMIT)
@@ -1242,29 +1264,9 @@ def execution_telegram_message_absolute_beginner(context: Dict[str, object], res
     if quality_rows:
         parts.extend(["", "<b>데이터 신뢰도</b>"])
         parts.extend(_html_bullet(item, "absoluteBeginner") for item in quality_rows)
-    context_rows = context_specific_insight_rows(context, response, MESSAGE_CONTEXT_ROW_LIMIT)
-    if context_rows:
-        parts.extend(["", "<b>이번 알림에서 봐야 할 것</b>"])
-        parts.extend(_html_bullet(item, "absoluteBeginner") for item in context_rows)
-    if response.evidence:
-        parts.extend(["", "<b>AI가 중요하게 본 근거</b>"])
-        parts.extend(_html_bullet(item, "absoluteBeginner") for item in response.evidence)
-    if response.counter_evidence:
-        parts.extend(["", "<b>반대 신호</b>"])
-        parts.extend(_html_bullet(item, "absoluteBeginner") for item in response.counter_evidence)
-    parts.extend(["", "<b>실행 전 확인</b>"])
-    if response.opinion:
-        parts.append(_html_bullet(response.opinion, "absoluteBeginner"))
-    if response.invalidation_condition:
-        parts.append(_html_bullet(response.invalidation_condition, "absoluteBeginner", "의견이 약해지는 조건: "))
-    for item in response.next_checks:
-        parts.append(_html_bullet(item, "absoluteBeginner"))
-    if response.missing_data_impact:
-        parts.extend(["", "<b>데이터 빈 곳</b>"])
-        parts.extend(_html_bullet(item, "absoluteBeginner") for item in response.missing_data_impact)
-    if response.validation_warnings:
-        parts.extend(["", "<b>검증 결과</b>"])
-        parts.extend(_html_bullet(item, "absoluteBeginner") for item in response.validation_warnings)
+    opinion_rows = compact_ai_opinion_rows(context, response, "absoluteBeginner")
+    if opinion_rows:
+        parts.extend(["", "<b>AI 의견</b>", *opinion_rows])
     reason = notification_reason_summary(context)
     cooldown_reason = notification_cooldown_release_summary(context)
     if reason or cooldown_reason:

@@ -466,12 +466,20 @@
     ontologyRulebox: null,
     ontologyRuleboxJson: "",
     ontologyRuleboxLoading: false,
+    ontologyRuleboxLoaded: false,
     ontologyRuleboxSaving: false,
     ontologyRuleboxRunning: false,
     ontologyRuleboxProposing: false,
     ontologyRuleboxError: "",
     ontologyRuleboxLastRun: null,
     ontologyRuleboxChangeReason: "",
+    ontologyDiagnostics: null,
+    ontologyDiagnosticsLoading: false,
+    ontologyDiagnosticsError: "",
+    ontologySeedRunning: false,
+    ontologyStrategyDetailLoading: false,
+    ontologyStrategyDetailLoaded: false,
+    ontologyStrategyDetailError: "",
     ontologyAudit: null,
     ontologyAuditLoading: false,
     ontologyAuditLoaded: false,
@@ -3611,6 +3619,8 @@
       ontologyReasoningEnabled: settingValue("ontologyReasoningEnabled"),
       ontologyReasoningIntervalSeconds: settingValue("ontologyReasoningIntervalSeconds"),
       ontologyReasoningBatchSize: settingValue("ontologyReasoningBatchSize"),
+      temporalWindowPeriods: settingValue("temporalWindowPeriods"),
+      temporalWindowHistoryLimit: settingValue("temporalWindowHistoryLimit"),
       ontologyRuleCandidateAiEnabled: settingValue("ontologyRuleCandidateAiEnabled"),
       ontologyRuleCandidateAiUseCodex: settingValue("ontologyRuleCandidateAiUseCodex"),
       ontologyRuleCandidateAiCommand: settingValue("ontologyRuleCandidateAiCommand"),
@@ -3689,10 +3699,9 @@
     return sendJson("/api/settings", "PUT", { settings: serverSettingsPayload() })
       .then(function (payload) {
         applyServerSettings(payload);
-        return Promise.all([
-          loadNotificationSchedules(),
-          loadOntologyRulebox(true)
-        ])
+        var reloads = [loadNotificationSchedules()];
+        if (state.ontologyRuleboxLoaded) reloads.push(loadOntologyRulebox(true));
+        return Promise.all(reloads)
           .catch(function (error) {
             state.messageSchedulesError = error.message || "설정 적용 후 운영 데이터를 다시 읽지 못했습니다.";
           });
@@ -3707,6 +3716,7 @@
     return requestJson("/api/ontology/rulebox")
       .then(function (payload) {
         applyOntologyRuleboxPayload(payload);
+        state.ontologyRuleboxLoaded = true;
         return payload;
       })
       .catch(function (error) {
@@ -3715,6 +3725,102 @@
       })
       .finally(function () {
         state.ontologyRuleboxLoading = false;
+        if (state.snapshot) render();
+      });
+  }
+
+  function loadOntologyDiagnostics(force) {
+    if (isStaticPreviewHost()) return Promise.resolve(null);
+    if (state.ontologyDiagnosticsLoading && !force) return Promise.resolve(state.ontologyDiagnostics);
+    state.ontologyDiagnosticsLoading = true;
+    state.ontologyDiagnosticsError = "";
+    if (state.snapshot) render();
+    return requestJson("/api/ontology/diagnostics")
+      .then(function (payload) {
+        state.ontologyDiagnostics = payload || {};
+        state.ontologyDiagnosticsError = "";
+        return payload;
+      })
+      .catch(function (error) {
+        state.ontologyDiagnosticsError = error.message || "TypeDB 진단을 읽지 못했습니다.";
+        return null;
+      })
+      .finally(function () {
+        state.ontologyDiagnosticsLoading = false;
+        if (state.snapshot) render();
+      });
+  }
+
+  function seedOntologyGraph() {
+    if (state.ontologySeedRunning) return Promise.resolve(null);
+    if (isStaticPreviewHost() || state.serverSettingsLocked) {
+      state.ontologyRuleboxError = "로컬 서버에서만 TypeDB 온톨로지를 시드할 수 있습니다.";
+      showSnackbar(state.ontologyRuleboxError, "danger");
+      render();
+      return Promise.resolve(null);
+    }
+    state.ontologySeedRunning = true;
+    state.ontologyRuleboxError = "";
+    render();
+    return sendJson("/api/ontology/seed", "POST", {
+      replaceRuleBox: true,
+      clearInference: true,
+      changeReason: "웹 운영 콘솔에서 TypeDB 온톨로지 시드"
+    })
+      .then(function (payload) {
+        showSnackbar(payload && payload.seeded ? "TypeDB 온톨로지를 시드했습니다." : "TypeDB 시드 결과를 확인하세요.", payload && payload.status === "error" ? "danger" : "success");
+        return Promise.all([loadOntologyRulebox(true), loadOntologyDiagnostics(true)])
+          .then(function () { return payload; });
+      })
+      .catch(function (error) {
+        state.ontologyRuleboxError = error.message || "TypeDB 온톨로지 시드에 실패했습니다.";
+        showSnackbar(state.ontologyRuleboxError, "danger");
+        return null;
+      })
+      .finally(function () {
+        state.ontologySeedRunning = false;
+        render();
+      });
+  }
+
+  function snapshotHasFullOntologyDetail(snapshot) {
+    var strategy = (((snapshot || {}).tossDecision || {}).ontologyStrategy || {});
+    if (!strategy || typeof strategy !== "object") return false;
+    if (strategy.detailLevel === "summary") return false;
+    return Array.isArray(strategy.aboxEntities) || Array.isArray(strategy.relations) || Array.isArray(strategy.reasoningCards);
+  }
+
+  function shouldLoadOntologyStrategyDetail() {
+    if (state.activeTab === "ontology") return true;
+    if (state.activeTab !== "modeling") return false;
+    var section = activeSectionForPageMode("modeling", strategySections, normalizeStrategySection(state.activeStrategySection));
+    return ["evidence", "charts", "graphs", "trace"].indexOf(section) >= 0;
+  }
+
+  function loadOntologyStrategyDetail(force) {
+    if (isStaticPreviewHost()) return Promise.resolve(state.snapshot);
+    if (state.ontologyStrategyDetailLoading && !force) return Promise.resolve(state.snapshot);
+    if (!force && snapshotHasFullOntologyDetail(state.snapshot)) {
+      state.ontologyStrategyDetailLoaded = true;
+      return Promise.resolve(state.snapshot);
+    }
+    state.ontologyStrategyDetailLoading = true;
+    state.ontologyStrategyDetailError = "";
+    if (state.snapshot) render();
+    return requestJson(tossLensPath({ detail: "full" }))
+      .then(function (payload) {
+        state.snapshot = payload;
+        state.snapshotFromCache = false;
+        state.ontologyStrategyDetailLoaded = true;
+        state.ontologyStrategyDetailError = "";
+        return payload;
+      })
+      .catch(function (error) {
+        state.ontologyStrategyDetailError = error.message || "온톨로지 상세 데이터를 읽지 못했습니다.";
+        return state.snapshot;
+      })
+      .finally(function () {
+        state.ontologyStrategyDetailLoading = false;
         if (state.snapshot) render();
       });
   }
@@ -4558,8 +4664,10 @@
     return saveWatchlistSymbols(symbols.concat(next[0]));
   }
 
-  function tossLensPath() {
+  function tossLensPath(options) {
+    options = options || {};
     var params = new URLSearchParams();
+    params.set("detail", options.detail || "summary");
     var symbols = allAccountWatchlistSymbols();
     if (!symbols.length) symbols = watchlistSymbols();
     if (symbols.length) params.set("watchlistSymbols", symbols.join(","));
@@ -6882,6 +6990,8 @@
       .then(function (snapshot) {
         state.snapshot = snapshot;
         state.snapshotFromCache = false;
+        state.ontologyStrategyDetailLoaded = snapshotHasFullOntologyDetail(snapshot);
+        state.ontologyStrategyDetailError = "";
         state.error = "";
         writeCachedSnapshot(snapshot);
       })
@@ -6976,6 +7086,13 @@
     }
     if (state.activeTab === "system" && !state.ontologyAuditLoaded && !state.ontologyAuditLoading) {
       loadOntologyAudit(false);
+    }
+    if (shouldLoadOntologyStrategyDetail() && !snapshotHasFullOntologyDetail(state.snapshot) && !state.ontologyStrategyDetailLoading) {
+      loadOntologyStrategyDetail(false);
+    }
+    if (state.workDetailLayer && state.workDetailLayer.type === "strategy-rulebox-editor") {
+      if (!state.ontologyRuleboxLoaded && !state.ontologyRuleboxLoading) loadOntologyRulebox(false);
+      if (!state.ontologyDiagnostics && !state.ontologyDiagnosticsLoading) loadOntologyDiagnostics(false);
     }
   }
 
@@ -7135,7 +7252,6 @@
     if (type === "feed-sources") return feedSourcesWorkDetailPayload();
     if (type === "feed-quality") return feedQualityWorkDetailPayload();
     if (type === "feed-settings-editor") return feedSettingsWorkDetailPayload(key);
-    if (type === "strategy-rule-editor") return strategyRuleEditorWorkDetailPayload();
     if (type === "strategy-rulebox-editor") return strategyRuleboxWorkDetailPayload();
     if (type === "strategy-prompt-editor") return strategyPromptWorkDetailPayload();
     if (type === "strategy-model-policy-editor") return strategyModelPolicyWorkDetailPayload();
@@ -7177,15 +7293,6 @@
       ontologyAuditRowTitle(detail.row),
       ontologyAuditSectionLabel(detail.sectionId) + " · " + ontologyAuditRowMeta(detail.row),
       renderOntologyAuditRowDetail(detail.row)
-    );
-  }
-
-  function strategyRuleEditorWorkDetailPayload() {
-    return editorWorkDetailPayload(
-      "Reasoning Rules",
-      "관계 규칙 편집",
-      "뉴스·시세·수급 신호가 온톨로지 관계로 바뀌는 조건",
-      renderOntologyRuleEditorPanel(state.snapshot || {})
     );
   }
 
@@ -10522,25 +10629,19 @@
   }
 
   function renderStrategyRulesOverviewPanel(snapshot, parts) {
-    var relationRules = ontologyRuleRows();
     var ruleboxRules = ontologyRuleboxRules();
     var prompts = promptTemplateRows();
     var thresholds = relationRuleThresholds();
     var modelStats = modelStatsForItems(buildTradeSignalItems(snapshot));
+    var ruleboxCount = state.ontologyRuleboxLoaded
+      ? (ruleboxRules.length || ((state.ontologyRulebox || {}).ruleCount || 0))
+      : ((state.ontologyRulebox || {}).ruleCount || 0);
     var items = [
       {
-        tone: relationRules.length ? "watch" : "hold",
-        value: relationRules.length + "개",
-        title: "관계 규칙",
-        description: "뉴스·가격·수급 조건이 어떤 관계 타입으로 저장되는지 관리합니다.",
-        type: "strategy-rule-editor",
-        button: "규칙 편집"
-      },
-      {
-        tone: ruleboxRules.length ? "watch" : "caution",
-        value: ruleboxRules.length + "개",
+        tone: ruleboxCount ? "watch" : "caution",
+        value: state.ontologyRuleboxLoaded ? ruleboxCount + "개" : "상세",
         title: "TypeDB RuleBox",
-        description: "RuleBox JSON, 후보 생성, 버전 승인을 한 곳에서 처리합니다.",
+        description: "TypeDB 네이티브 규칙 JSON, 후보 생성, 진단, 시드를 한 곳에서 처리합니다.",
         type: "strategy-rulebox-editor",
         button: "RuleBox 열기"
       },
@@ -10572,8 +10673,7 @@
       '<span class="metric">' + escapeHtml(parts.relations.length) + '</span>',
       '</div>',
       '<div class="work-detail-metric-row">',
-      renderNotificationDetailMetric("관계 규칙", relationRules.length + "개", relationRules.length ? "watch" : "hold"),
-      renderNotificationDetailMetric("RuleBox", ruleboxRules.length + "개", ruleboxRules.length ? "watch" : "caution"),
+      renderNotificationDetailMetric("RuleBox", state.ontologyRuleboxLoaded ? ruleboxCount + "개" : "lazy", ruleboxCount ? "watch" : "caution"),
       renderNotificationDetailMetric("프롬프트", prompts.length + "개", prompts.length ? "watch" : "hold"),
       renderNotificationDetailMetric("임계값", Object.keys(thresholds || {}).length + "개", "muted"),
       '</div>',
@@ -10732,7 +10832,16 @@
       "HAS_INFERRED_ENTRY_OPPORTUNITY",
       "CREATES_NOTIFICATION_INTENT",
       "REQUIRES_NEXT_CHECK",
+      "DERIVES_TREND_EPISODE",
+      "AFFECTS_DECISION_EPISODE",
       "HAS_TREND_TRANSITION",
+      "HAS_TEMPORAL_WINDOW",
+      "HAS_PRICE_PATH_PATTERN",
+      "HAS_FLOW_PATTERN",
+      "HAS_EVENT_CLUSTER",
+      "CHANGES_OVER_WINDOW",
+      "CONFIRMED_ACROSS_WINDOW",
+      "DIVERGES_ACROSS_WINDOW",
       "HAS_EXTERNAL_SIGNAL",
       "HAS_DATA_QUALITY",
       "HAS_TRADE_FLOW",
@@ -10778,7 +10887,9 @@
       HAS_ACTION_CANDIDATE: true,
       CREATES_NOTIFICATION_INTENT: true,
       REQUIRES_NEXT_CHECK: true,
-      HAS_INFERENCE_TRACE: true
+      HAS_INFERENCE_TRACE: true,
+      DERIVES_TREND_EPISODE: true,
+      AFFECTS_DECISION_EPISODE: true
     };
   }
 
@@ -10884,10 +10995,14 @@
     var items = buildTradeSignalItems(snapshot);
     var stats = modelStatsForItems(items);
     var thresholds = modelDecisionThresholds();
+    var ruleboxRules = ontologyRuleboxRules();
+    var ruleboxCount = state.ontologyRuleboxLoaded
+      ? (ruleboxRules.length || ((state.ontologyRulebox || {}).ruleCount || 0))
+      : ((state.ontologyRulebox || {}).ruleCount || 0);
     var steps = [
       ["01", "데이터 정합", "보유·관심·시장 입력", items.length + " symbols"],
       ["02", "근거 추출", "손익·수급·추세·외부 신호", modelVariableGuide().length + " fields"],
-      ["03", "관계 규칙", "관계 규칙 성립 여부", ontologyRuleRows().length + " rules"],
+      ["03", "RuleBox", "TypeDB 네이티브 관계 추론", (state.ontologyRuleboxLoaded ? ruleboxCount : "lazy") + " rules"],
       ["04", "AI Prompt", "비동기 해석 정보", promptTemplateRows().length + " prompts"],
       ["05", "Result", "종목별 판단 결과", Math.round(stats.buyAverage || 0) + " / " + Math.round(stats.sellAverage || 0)],
       ["06", "Alert", "주기·템플릿·발송 정책 연결", notificationEnabledRuleCount() + " types"]
@@ -13603,6 +13718,16 @@
       HAS_DATA_QUALITY: true,
       HAS_TRADE_FLOW: true,
       HAS_TREND_TRANSITION: true,
+      HAS_TEMPORAL_WINDOW: true,
+      WINDOW_CONTAINS_OBSERVATION: true,
+      HAS_PRICE_PATH_PATTERN: true,
+      HAS_FLOW_PATTERN: true,
+      HAS_EVENT_CLUSTER: true,
+      CHANGES_OVER_WINDOW: true,
+      CONFIRMED_ACROSS_WINDOW: true,
+      DIVERGES_ACROSS_WINDOW: true,
+      DERIVES_TREND_EPISODE: true,
+      AFFECTS_DECISION_EPISODE: true,
       BREAKS_LEVEL: true,
       RETESTS_LEVEL: true,
       RECLAIMS_LEVEL: true,
@@ -13802,7 +13927,13 @@
       "disclosure-filing": { x: 720, y: 210, step: 92 },
       "fact-change": { x: 572, y: 224, step: 78 },
       "trend-transition": { x: 572, y: 156, step: 78 },
+      "temporal-window": { x: 572, y: 236, step: 76 },
+      "price-path-pattern": { x: 720, y: 236, step: 78 },
+      "flow-pattern": { x: 720, y: 312, step: 78 },
+      "event-cluster": { x: 720, y: 390, step: 78 },
+      "trend-episode": { x: 850, y: 390, step: 82 },
       "missing-data": { x: 572, y: 300, step: 78 },
+      "temporal-coverage-gap": { x: 572, y: 318, step: 78 },
       "next-check": { x: 850, y: 300, step: 86 },
       "alert-candidate": { x: 850, y: 388, step: 86 },
       "inference-trace": { x: 720, y: 330, step: 78 },
@@ -13826,6 +13957,10 @@
       if (node.kind === "evidence") node.y = Math.max(70, stockY[node.symbol] - 34);
       if (node.kind === "research-evidence" || node.kind === "news-article" || node.kind === "disclosure-filing") node.y = Math.max(70, stockY[node.symbol] - 44);
       if (node.kind === "fact-change" || node.kind === "trend-transition" || node.kind === "missing-data") node.y = stockY[node.symbol];
+      if (node.kind === "temporal-coverage-gap") node.y = stockY[node.symbol] + 26;
+      if (node.kind === "temporal-window") node.y = stockY[node.symbol] + 10;
+      if (node.kind === "price-path-pattern" || node.kind === "flow-pattern" || node.kind === "event-cluster") node.y = stockY[node.symbol] + 18;
+      if (node.kind === "trend-episode") node.y = stockY[node.symbol] + 52;
       if (node.kind === "belief") node.y = Math.max(70, stockY[node.symbol] - 34);
       if (node.kind === "opinion") node.y = stockY[node.symbol] + 30;
       if (node.kind === "next-check" || node.kind === "alert-candidate") node.y = stockY[node.symbol] + 46;
@@ -14032,7 +14167,8 @@
       { selector: ".node-risk", style: { "background-color": "#fef2f2", "border-color": red } },
       { selector: ".node-evidence, .node-belief, .node-opinion, .node-review, .node-model, .node-research-evidence, .node-news-article, .node-disclosure-filing", style: { "background-color": "#f5f3ff", "border-color": violet } },
       { selector: ".node-fact-change, .node-trend-transition", style: { "background-color": "#eff6ff", "border-color": blue } },
-      { selector: ".node-missing-data, .node-data-quality, .node-source-reliability", style: { "background-color": "#fff7ed", "border-color": amber } },
+      { selector: ".node-temporal-window, .node-price-path-pattern, .node-flow-pattern, .node-event-cluster, .node-trend-episode", style: { "background-color": "#ecfeff", "border-color": blue } },
+      { selector: ".node-missing-data, .node-temporal-coverage-gap, .node-data-quality, .node-source-reliability", style: { "background-color": "#fff7ed", "border-color": amber } },
       { selector: ".node-next-check, .node-alert-candidate, .node-inference-trace", style: { "background-color": "#f8fafc", "border-color": ink } },
       {
         selector: "edge",
@@ -14325,24 +14461,6 @@
     ].join("");
   }
 
-  function ontologyRuleRows() {
-    return String(settingValue("ontologyRelationRules") || defaultSettings.ontologyRelationRules || "")
-      .split(/\r?\n/)
-      .map(function (line) { return line.trim(); })
-      .filter(Boolean)
-      .map(function (line) {
-        var parts = line.split("|").map(function (part) { return part.trim(); });
-        return {
-          id: parts[0] || "",
-          label: parts[1] || parts[0] || "",
-          condition: parts[2] || "",
-          relation: parts[3] || "",
-          signal: parts[4] || "",
-          prompt: parts.slice(5).join(" | ")
-        };
-      });
-  }
-
   function promptTemplateRows() {
     var rows = [];
     var current = null;
@@ -14368,55 +14486,53 @@
     return rows;
   }
 
-  function renderOntologyRuleEditorPanel(snapshot) {
-    var rules = ontologyRuleRows();
-    var thresholds = modelDecisionThresholds();
-    var relationThresholdValues = relationRuleThresholds();
+  function renderTypeDBDiagnosticsPanel() {
+    var diagnostics = state.ontologyDiagnostics || {};
+    var tbox = diagnostics.tbox || {};
+    var rulebox = diagnostics.rulebox || {};
+    var aboxCoverage = diagnostics.aboxCoverage || {};
+    var inferenceBox = diagnostics.inferenceBox || {};
+    var reasoningBoundary = diagnostics.reasoningBoundary || {};
+    var notificationBoundary = diagnostics.notificationBoundary || {};
+    var rawChecks = Array.isArray(diagnostics.checks) ? diagnostics.checks : (Array.isArray(notificationBoundary.checks) ? notificationBoundary.checks : []);
+    var checks = [
+      { status: tbox.status || (tbox.configured ? "ok" : ""), title: "TBox", message: tbox.reason || tbox.source || tbox.fingerprint || "" },
+      { status: rulebox.status || (rulebox.configured ? "ok" : ""), title: "RuleBox", message: rulebox.reason || rulebox.source || rulebox.ruleboxShortHash || rulebox.engineVersion || "" },
+      { status: aboxCoverage.status || "", title: "ABox Coverage", message: [aboxCoverage.symbolCount != null ? aboxCoverage.symbolCount + " symbols" : "", aboxCoverage.coverageRatio != null ? "coverage " + Math.round(Number(aboxCoverage.coverageRatio || 0) * 100) + "%" : ""].filter(Boolean).join(" · ") },
+      { status: inferenceBox.status || inferenceBox.typedbReadStatus || "", title: "InferenceBox", message: inferenceBox.reason || inferenceBox.typedbReadReason || inferenceBox.reasoningMode || inferenceBox.inferenceGenerationId || "" },
+      { status: reasoningBoundary.status || "", title: "Reasoning Boundary", message: reasoningBoundary.interpretation || reasoningBoundary.ruleboxHashStatus || "" },
+      { status: notificationBoundary.status || "", title: "Notification Boundary", message: notificationBoundary.reason || (notificationBoundary.recentJobCount != null ? notificationBoundary.recentJobCount + " recent jobs" : "") }
+    ].concat(rawChecks.map(function (check, index) {
+      return typeof check === "string"
+        ? { status: "check", title: "Boundary check " + (index + 1), message: check }
+        : (check || {});
+    })).filter(function (check) {
+      return check && (check.title || check.name || check.id || check.message || check.detail || check.description || check.status);
+    });
+    var status = diagnostics.status || reasoningBoundary.status || inferenceBox.status || rulebox.status || aboxCoverage.status || (state.ontologyDiagnosticsError ? "error" : checks.length ? "ok" : "idle");
     return [
-      '<article class="panel model-panel ontology-rule-panel">',
-      '<div class="panel-head">',
-      '<div>',
-      '<p class="label">Relation Rule Registry</p>',
-      '<h2>관계 규칙 관리</h2>',
-      '</div>',
-      '<span class="metric">' + escapeHtml(rules.length) + '</span>',
-      '</div>',
+      '<div class="model-section typedb-diagnostics-panel">',
+      '<div class="flow-title"><div><strong>TypeDB 진단</strong><span>스키마, RuleBox, 추론 실행 상태를 실제 저장소 기준으로 확인합니다.</span></div><span class="tone-chip ' + escapeHtml(status === "ok" ? "watch" : status === "error" ? "danger" : "hold") + '">' + escapeHtml(status) + '</span></div>',
+      state.ontologyDiagnosticsLoading ? '<p class="lab-message">TypeDB 진단을 읽는 중입니다.</p>' : '',
+      state.ontologyDiagnosticsError ? '<p class="form-error">' + escapeHtml(state.ontologyDiagnosticsError) + '</p>' : '',
       '<div class="lab-stats-grid model-stats-grid">',
-      renderLabStat("관계 규칙", rules.length, "개"),
-      renderLabStat("보유 종목", (snapshot.positions || []).filter(function (item) { return item.symbol !== "CASH"; }).length, "개"),
-      renderLabStat("판단 기준", Math.round(thresholds.modelSell || 0), "점"),
-      renderLabStat("손실 기준", signedPct(relationThresholdValues.lossRateLow || -8), ""),
+      renderLabStat("엔티티", aboxCoverage.entityCount || inferenceBox.entityCount || 0, "개"),
+      renderLabStat("관계", aboxCoverage.relationCount || inferenceBox.relationCount || 0, "개"),
+      renderLabStat("규칙", rulebox.ruleCount || rulebox.ruleboxRuleCount || 0, "개"),
+      renderLabStat("검사", checks.length, "개"),
       '</div>',
-      '<div class="model-editor">',
-      '<div class="settings-note model-settings-note">',
-      '<strong>관계 규칙 런타임</strong>',
-      '<p>저장된 관계 규칙 메타데이터는 백엔드 relation context의 label, relation type, signal type, prompt hint에 반영됩니다. 조건 평가는 검증된 엔진을 사용합니다.</p>',
-      '</div>',
-      '<div class="model-section">',
-      '<div class="flow-title"><div><strong>관계 규칙 원본</strong><span>형식: ruleId | label | condition | relationType | signalType | promptHint</span></div></div>',
-      '<label class="setting-field wide"><textarea data-model-setting="ontologyRelationRules" rows="10" autocomplete="off">' + escapeHtml(settingValue("ontologyRelationRules") || defaultSettings.ontologyRelationRules) + '</textarea></label>',
-      '</div>',
-      '<div class="model-section">',
-      '<div class="flow-title"><div><strong>성립 가능한 관계</strong><span>알림은 이 관계가 실제 데이터와 연결될 때 발생합니다.</span></div></div>',
-      '<div class="source-stack ontology-rule-list">',
-      rules.map(function (rule) {
+      '<div class="source-stack rulebox-diagnostics-list">',
+      checks.length ? checks.slice(0, 8).map(function (check) {
         return [
           '<div class="source-row">',
-          '<span>' + escapeHtml(rule.signal || rule.relation || "relation") + '</span>',
-          '<strong>' + escapeHtml(rule.label) + '</strong>',
-          '<em>' + escapeHtml(rule.condition || rule.prompt || rule.id) + '</em>',
+          '<span>' + escapeHtml(check.status || check.severity || "check") + '</span>',
+          '<strong>' + escapeHtml(check.title || check.name || check.id || "진단 항목") + '</strong>',
+          '<em>' + escapeHtml(check.message || check.detail || check.description || "") + '</em>',
           '</div>'
         ].join("");
-      }).join("") || '<p class="subtle">등록된 관계 규칙이 없습니다.</p>',
+      }).join("") : '<p class="subtle">진단 결과가 아직 없습니다. 새로고침을 누르면 TypeDB 상태를 확인합니다.</p>',
       '</div>',
-      '</div>',
-      '<div class="model-section">',
-      '<div class="flow-title"><div><strong>관계 성립 기준값</strong><span>ABox에 들어온 가격·수급·추세·외부 신호가 어떤 관계로 성립할지 정합니다. 알림 발송 기준과 분리됩니다.</span></div></div>',
-      renderNumberSettingGrid("relationRuleThresholds", relationThresholdValues, ["lossRateLow", "lossRateBufferPct", "lossGuardVolumeConfirmRatio", "lossGuardMa60SupportPct", "lossGuardWeakEvidencePenalty", "profitRateHigh", "sectorWeightHigh", "positionWeightHigh", "externalBitcoinChange24hPct", "externalBitcoinChange7dPct", "entryPullbackMa20BelowPct", "entryPullbackMa20DeepPct", "entryMa60SupportPct", "entryVolumeMinRatio", "entryVolumeMaxRatio", "entrySmartMoneyMin", "entryTradeStrengthMin", "entryOrderbookImbalanceMin", "entryMaxPositionWeight", "entryMaxSectorWeight"]),
-      '</div>',
-      '<div class="rule-strip"><span>실제 점수는 관계 규칙의 성립 강도입니다. 공식 입력값은 참고 계산과 발송 정책에만 사용합니다.</span></div>',
-      '</div>',
-      '</article>'
+      '</div>'
     ].join("");
   }
 
@@ -14460,11 +14576,14 @@
       '<label class="setting-field wide"><span>변경 이유</span><input data-ontology-rulebox-change-reason type="text" autocomplete="off" placeholder="예: 피어 뉴스 후보 검토, 판단 단계 정책 보강" value="' + escapeHtml(state.ontologyRuleboxChangeReason || "") + '"></label>',
       '<div class="settings-actions rulebox-actions">',
       '<button class="text-button" type="button" data-action="refresh-rulebox"' + (state.ontologyRuleboxLoading ? ' disabled' : '') + '>새로고침</button>',
+      '<button class="text-button" type="button" data-action="refresh-ontology-diagnostics"' + (state.ontologyDiagnosticsLoading ? ' disabled' : '') + '>TypeDB 진단</button>',
+      '<button class="text-button" type="button" data-action="seed-ontology-graph"' + (state.ontologySeedRunning || state.serverSettingsLocked ? ' disabled' : '') + '>' + escapeHtml(state.ontologySeedRunning ? "시드 중" : "온톨로지 시드") + '</button>',
       '<button class="text-button" type="button" data-action="seed-rulebox"' + (disabled ? ' disabled' : '') + '>기본값 시드</button>',
       '<button class="text-button primary" type="button" data-action="save-rulebox"' + (disabled ? ' disabled' : '') + '>' + escapeHtml(state.ontologyRuleboxSaving ? "저장 중" : "네이티브 규칙 저장") + '</button>',
       '<button class="text-button primary" type="button" data-action="run-rulebox"' + (disabled ? ' disabled' : '') + '>' + escapeHtml(state.ontologyRuleboxRunning ? "실행 중" : "TypeDB 추론 실행") + '</button>',
       '<button class="text-button primary" type="button" data-action="propose-rulebox-candidates"' + (disabled ? ' disabled' : '') + '>' + escapeHtml(state.ontologyRuleboxProposing ? "생성 중" : "AI 후보 생성") + '</button>',
       '</div>',
+      renderTypeDBDiagnosticsPanel(),
       '<div class="settings-grid compact-settings-grid">',
       '<label class="setting-field"><span>AI 후보 사용</span><select data-model-setting="ontologyRuleCandidateAiEnabled"><option value="1"' + ((settingValue("ontologyRuleCandidateAiEnabled") || defaultSettings.ontologyRuleCandidateAiEnabled) !== "0" ? " selected" : "") + '>사용</option><option value="0"' + ((settingValue("ontologyRuleCandidateAiEnabled") || defaultSettings.ontologyRuleCandidateAiEnabled) === "0" ? " selected" : "") + '>끄기</option></select></label>',
       '<label class="setting-field"><span>Codex 사용</span><select data-model-setting="ontologyRuleCandidateAiUseCodex"><option value="1"' + ((settingValue("ontologyRuleCandidateAiUseCodex") || defaultSettings.ontologyRuleCandidateAiUseCodex) !== "0" ? " selected" : "") + '>사용</option><option value="0"' + ((settingValue("ontologyRuleCandidateAiUseCodex") || defaultSettings.ontologyRuleCandidateAiUseCodex) === "0" ? " selected" : "") + '>로컬</option></select></label>',
@@ -16312,7 +16431,9 @@
         renderSettingField("typedbDataRetentionHours", "TypeDB 보관 시간", "number", "24"),
         renderSettingField("typedbDataMaxSizeMb", "TypeDB 최대 용량(MB)", "number", "2048"),
         renderSettingField("ontologyReasoningIntervalSeconds", "추론 요청 확인 주기(초)", "number", "10"),
-        renderSettingField("ontologyReasoningBatchSize", "추론 요청 배치", "number", "20")
+        renderSettingField("ontologyReasoningBatchSize", "추론 요청 배치", "number", "20"),
+        renderSettingField("temporalWindowHistoryLimit", "기간 판단 히스토리 수", "number", "96"),
+        '<label><span>기간 판단 구간</span><div class="form-control-shell"><textarea data-setting="temporalWindowPeriods" rows="4" autocomplete="off" placeholder="1D=1:2">' + escapeHtml(settingValue("temporalWindowPeriods") || defaultSettings.temporalWindowPeriods) + '</textarea></div></label>'
       ].join(""), "gate feed-wide"),
       renderSettingsGroup("중요도 게이트", "시세·뉴스·거래량 변화가 알림 후보로 들어가는 기준입니다.", [
         renderSettingSelect("materialityGateEnabled", "중요 변경 게이트", [
@@ -18029,6 +18150,22 @@
       });
     }
 
+    var refreshOntologyDiagnosticsButton = app.querySelector('[data-action="refresh-ontology-diagnostics"]');
+    if (refreshOntologyDiagnosticsButton) {
+      refreshOntologyDiagnosticsButton.addEventListener("click", function () {
+        loadOntologyDiagnostics(true).then(function () {
+          showSnackbar("TypeDB 진단을 다시 읽었습니다.");
+        });
+      });
+    }
+
+    var seedOntologyGraphButton = app.querySelector('[data-action="seed-ontology-graph"]');
+    if (seedOntologyGraphButton) {
+      seedOntologyGraphButton.addEventListener("click", function () {
+        seedOntologyGraph();
+      });
+    }
+
     var seedRuleboxButton = app.querySelector('[data-action="seed-rulebox"]');
     if (seedRuleboxButton) {
       seedRuleboxButton.addEventListener("click", function () {
@@ -18799,7 +18936,6 @@
     loadNotificationJobs(),
     loadNotificationSchedules(),
     loadInvestmentCalendar(),
-    loadOntologyRulebox(),
     loadSymbolUniverse()
   ];
   Promise.all(snapshotPrerequisites.map(function (task) {

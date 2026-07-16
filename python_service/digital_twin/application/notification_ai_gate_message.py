@@ -259,6 +259,14 @@ def _html_row(label: str, value: object, beginner: bool = False, level: str = ""
         text = _message_text(text, display_level)
     return "• <b>" + html.escape(_message_label(label, display_level), quote=False) + "</b>: <code>" + html.escape(text, quote=False) + "</code>"
 
+def _ai_marked_value(value: object) -> str:
+    text = str(value or "").strip()
+    if not text:
+        return ""
+    if text.startswith("[AI]"):
+        return text
+    return "[AI] " + text
+
 def notification_topline_change_summary(context: Dict[str, object]) -> str:
     context = context or {}
     reason = str(context.get("honeyStateReason") or context.get("honeySimilarityBypassReason") or "").strip()
@@ -395,13 +403,13 @@ def account_profile_rows(context: Dict[str, object], level: str) -> List[str]:
 
 def ai_judgment_rows(response: NotificationAIValidatedResponse, level: str, context: Dict[str, object] = None) -> List[str]:
     rows = [
-        _html_row(ai_action_row_label(level), action_label_for_action(response.action, context) or response.action_label, level=level),
-        _html_row("판단 강도", ai_confidence_display(response, level), level=level),
+        _html_row(ai_action_row_label(level), _ai_marked_value(action_label_for_action(response.action, context) or response.action_label), level=level),
+        _html_row("판단 강도", _ai_marked_value(ai_confidence_display(response, level)), level=level),
     ]
     rows.extend(account_profile_rows(context or {}, level))
     summary_label = "이유" if level == "absoluteBeginner" else "AI 판단 이유"
     if response.summary:
-        rows.append(_html_row(summary_label, response.summary, level=level))
+        rows.append(_html_row(summary_label, _ai_marked_value(response.summary), level=level))
     return [row for row in rows if row]
 
 def ai_difference_rows(response: NotificationAIValidatedResponse, level: str, context: Dict[str, object] = None) -> List[str]:
@@ -1194,9 +1202,81 @@ def compact_ai_opinion_sentence(context: Dict[str, object], response: Notificati
         return base + "이며, " + ", ".join(details) + "까지 함께 반영했습니다."
     return base + "입니다."
 
+def _full_ai_opinion_rows(context: Dict[str, object], response: NotificationAIValidatedResponse, level: str) -> List[str]:
+    action_label = action_label_for_action(response.action, context) or response.action_label or response.action
+    rows: List[str] = []
+    conclusion = _compact_text_segments([response.summary], 1, 180)
+    append_unique_text(
+        rows,
+        "결론: " + action_label + ((". " + conclusion) if conclusion else ""),
+        240,
+    )
+    if response.precomputed_action and response.precomputed_action != response.action:
+        adjustment = (
+            "판단 조정: 계산 후보 "
+            + action_label_for_action(response.precomputed_action, context)
+            + " → 최종 "
+            + action_label
+        )
+        reason = _compact_text_segments([response.disagreement_reason], 1, 180)
+        append_unique_text(rows, adjustment + ((" (" + reason + ")") if reason else ""), 260)
+    for index, item in enumerate(response.evidence or [], 1):
+        append_unique_text(rows, "근거 " + str(index) + ": " + _text(item, 260), 300)
+    for index, item in enumerate(response.counter_evidence or [], 1):
+        append_unique_text(rows, "반대 신호 " + str(index) + ": " + _text(item, 260), 300)
+    if response.opinion:
+        append_unique_text(rows, "실행 전 판단: " + _text(response.opinion, 260), 300)
+    if response.invalidation_condition:
+        append_unique_text(rows, "의견이 약해지는 조건: " + _text(response.invalidation_condition, 260), 300)
+    for index, item in enumerate(response.next_checks or [], 1):
+        append_unique_text(rows, "다음 확인 " + str(index) + ": " + _text(item, 260), 300)
+    for index, item in enumerate(response.missing_data_impact or [], 1):
+        append_unique_text(rows, "데이터 빈 곳 " + str(index) + ": " + _text(item, 260), 300)
+    for index, item in enumerate(response.validation_warnings or [], 1):
+        append_unique_text(rows, "검증 결과 " + str(index) + ": " + _text(item, 260), 300)
+    return [_html_bullet(_ai_marked_value(row), level) for row in rows if row]
+
 def compact_ai_opinion_rows(context: Dict[str, object], response: NotificationAIValidatedResponse, level: str) -> List[str]:
-    sentence = compact_ai_opinion_sentence(context, response, level)
-    return [_html_bullet(sentence, level)] if sentence else []
+    if level in {"absoluteBeginner", "beginner"}:
+        return _full_ai_opinion_rows(context, response, level)
+    action_label = action_label_for_action(response.action, context) or response.action_label or response.action
+    rows: List[str] = []
+    conclusion = _compact_text_segments([response.summary], 1, 150)
+    append_unique_text(
+        rows,
+        "결론: " + action_label + ((". " + conclusion) if conclusion else ""),
+        190,
+    )
+    if response.precomputed_action and response.precomputed_action != response.action:
+        adjustment = (
+            "판단 조정: 계산 후보 "
+            + action_label_for_action(response.precomputed_action, context)
+            + " → 최종 "
+            + action_label
+        )
+        reason = _compact_text_segments([response.disagreement_reason], 1, 110)
+        append_unique_text(rows, adjustment + ((" (" + reason + ")") if reason else ""), 190)
+    evidence_summary = _compact_text_segments(response.evidence, 2, 120)
+    if not evidence_summary:
+        evidence_summary = _compact_text_segments(context_specific_insight_rows(context, response, 2), 2, 110)
+    if evidence_summary:
+        append_unique_text(rows, "핵심 근거: " + evidence_summary, 180)
+    counter_summary = _compact_text_segments(response.counter_evidence, 2, 130)
+    if counter_summary:
+        append_unique_text(rows, "반대 신호: " + counter_summary, 180)
+    checks = []
+    if response.opinion:
+        checks.append(response.opinion)
+    checks.extend(response.next_checks[:2])
+    if not checks and response.invalidation_condition:
+        checks.append("의견이 약해지는 조건: " + response.invalidation_condition)
+    check_summary = _compact_text_segments(checks, 2, 130)
+    if check_summary:
+        append_unique_text(rows, "다음 확인: " + check_summary, 190)
+    data_summary = _compact_text_segments(list(response.missing_data_impact) + list(response.validation_warnings), 2, 120)
+    if data_summary:
+        append_unique_text(rows, "데이터 한계: " + data_summary, 190)
+    return [_html_bullet(_ai_marked_value(row), level) for row in rows[:5] if row]
 
 def relation_axis_summary_rows(context: Dict[str, object], level: str, limit: int = 5) -> List[str]:
     return [_html_bullet(item, level) for item in relation_axis_summary_lines(context, limit) if str(item or "").strip()]

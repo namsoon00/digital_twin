@@ -143,6 +143,13 @@
       "AAPL,7.5,28,15",
       "005930,6500,12,20"
     ].join("\n"),
+    aiValuationAutoProposalEnabled: "1",
+    aiValuationCurrentPriceAnchorEnabled: "1",
+    aiValuationPreferredParValue: "100",
+    aiValuationPreferredRiskSpreadPct: "",
+    aiValuationPreferredRequiredYieldPct: "",
+    aiValuationPreferredMinimumMarginPct: "8",
+    aiValuationBaselineMinimumMarginPct: "15",
     marketSignalInputs: [
       "005930,118,1.8,620000,480000,18,2.1,71000,68000,14500000000,8200000000,-11200000000",
       "AAPL,86,1.4,320000,410000,-12,-1.8,205,212,-4200000,-1800000,5200000",

@@ -61,12 +61,19 @@ def valuation_assumption_rows(value: object) -> List[Dict[str, object]]:
         parts = [item.strip() for item in line.replace("|", ",").replace("\t", ",").split(",")]
         symbol = str(parts[0] if parts else "").upper().strip()
         key = symbol or "line-" + str(index + 1)
-        rows.append({
+        row = {
             "assumptionKey": key,
             "symbol": symbol,
             "rawLine": line,
             "values": parts[1:] if len(parts) > 1 else [],
-        })
+        }
+        if len(parts) >= 3 and "=" not in ",".join(parts[1:]):
+            row["expectedEPS"] = parts[1]
+            row["targetPER"] = parts[2]
+            if len(parts) >= 4:
+                row["minimumMarginOfSafetyPct"] = parts[3]
+            row["formula"] = "적정가 = 예상 EPS x 목표 PER"
+        rows.append(row)
     return rows
 
 def add_valuation_assumption_concepts(graph: PortfolioOntology, portfolio_node_id: str, value: object) -> None:

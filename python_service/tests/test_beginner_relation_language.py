@@ -372,6 +372,59 @@ class BeginnerRelationLanguageTests(unittest.TestCase):
         self.assertIn("예측 성공률이 아니라", message)
         self.assertIn("사용자 적정가 기준 안전마진", message)
 
+    def test_execution_message_marks_ai_valuation_proposal_as_unapproved(self):
+        response = NotificationAIValidatedResponse(
+            action="HOLD",
+            action_label="보유",
+            confidence=74,
+            summary="AI 제안 적정가를 기준으로 보유 조건을 확인합니다.",
+            evidence=["우선주는 배당수익률 기준으로 봅니다."],
+            next_checks=["사용자 적정가 승인 여부 확인"],
+        )
+        message = execution_telegram_message(
+            {
+                "messageType": "investmentInsight",
+                "messageDeliveryLevel": "absoluteBeginner",
+                "title": "STRC 알림",
+                "target": "스트래티지 우선주 / STRC",
+                "displayTarget": "스트래티지 우선주 / STRC",
+                "ontologyRelationContext": {
+                    "facts": {
+                        "currency": "USD",
+                        "currentPrice": 87.76,
+                        "valuationRows": [{"sourceType": "ai"}],
+                        "valuationFormula": "AI 제안 적정가 = 연간 배당 / 요구수익률",
+                        "valuationSubstitution": "연간 배당 $9 / 요구수익률 9.5% = $94.74",
+                        "valuationCurrentPrice": 87.76,
+                        "valuationFairValue": 94.7368,
+                        "valuationMarginOfSafetyPct": 7.95,
+                        "valuationMinimumMarginOfSafetyPct": 8,
+                        "valuationSourceLabel": "AI 제안",
+                        "valuationReliabilityLabel": "AI 초안(사용자 승인 전)",
+                        "valuationReliabilityScore": 58,
+                        "valuationExplanation": "연간 배당 $9을 요구수익률 9.5%로 나눠 적정가 $94.74로 계산했습니다. 이 값은 AI 제안값이라 사용자 승인 전 초안입니다.",
+                        "valuationDataStatus": "available",
+                        "valuationMissingInputs": [],
+                        "valuationHasUserInput": False,
+                        "valuationHasExternalInput": False,
+                        "valuationHasAiProposal": True,
+                        "valuationApprovalStatus": "suggested",
+                        "valuationRequiresUserApproval": True,
+                        "valuationIsAiGenerated": True,
+                        "valuationSourceReason": "우선주/인컴형은 보통주 PER보다 배당수익률 기준 적정가가 더 적합합니다.",
+                    },
+                },
+            },
+            response,
+        )
+
+        self.assertIn("<b>밸류에이션</b>", message)
+        self.assertIn("AI 제안", message)
+        self.assertIn("사용자 승인 전", message)
+        self.assertIn("연간 배당", message)
+        self.assertIn("요구수익률", message)
+        self.assertIn("배당수익률 기준 적정가", message)
+
     def test_execution_message_shows_valuation_missing_state(self):
         response = NotificationAIValidatedResponse(
             action="HOLD",

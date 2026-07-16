@@ -7,6 +7,7 @@ from .ontology_schema import add_entity, add_relation
 from .portfolio import Position
 from .portfolio_ontology_market_concepts import symbol_key
 from .portfolio_ontology_runtime_concepts import valuation_assumption_rows
+from .valuation_ai_proposals import ai_valuation_proposal_rows
 
 
 VALUATION_NUMERIC_KEYS = {
@@ -28,6 +29,12 @@ VALUATION_NUMERIC_KEYS = {
     "pegRatio": ("pegRatio", "pegRatio", "PEG"),
     "beta": ("beta", "beta", "베타"),
     "dividendYield": ("dividendYield", "dividendYield", "배당수익률"),
+    "annualDividend": ("annualDividend", "annualDividend", "연간 배당"),
+    "annualDividendPerShare": ("annualDividend", "annualDividend", "연간 배당"),
+    "requiredYieldPct": ("requiredYieldPct", "requiredYieldPct", "요구수익률"),
+    "requiredYield": ("requiredYieldPct", "requiredYieldPct", "요구수익률"),
+    "couponPct": ("couponPct", "couponPct", "표면 배당률"),
+    "parValue": ("parValue", "parValue", "액면 기준가"),
     "marginOfSafetyPct": ("marginOfSafetyPct", "marginOfSafetyPct", "안전마진"),
     "minimumMarginOfSafetyPct": ("minimumMarginOfSafetyPct", "minimumMarginOfSafetyPct", "요구 안전마진"),
     "peerPER": ("peerPER", "peerPER", "피어 PER"),
@@ -39,6 +46,7 @@ def normalize_assumption_row(row: Dict[str, object]) -> Dict[str, object]:
     payload = dict(row or {})
     nested = payload.get("payload") if isinstance(payload.get("payload"), dict) else {}
     payload.update(nested)
+    has_structured_formula_inputs = any(payload.get(key) not in (None, "") for key in ("expectedEPS", "expectedEps", "eps", "targetPER", "targetPer", "targetPE"))
     for item in payload.get("values") or []:
         text = str(item or "").strip()
         if not text:
@@ -46,7 +54,7 @@ def normalize_assumption_row(row: Dict[str, object]) -> Dict[str, object]:
         if "=" in text:
             key, value = text.split("=", 1)
             payload[key.strip()] = value.strip()
-        elif "fairValue" not in payload and "fairValuePrice" not in payload and number(text):
+        elif not has_structured_formula_inputs and "fairValue" not in payload and "fairValuePrice" not in payload and number(text):
             payload["fairValue"] = number(text)
     return payload
 
@@ -133,8 +141,14 @@ def valuation_values(row: Dict[str, object], position: Position) -> Dict[str, ob
     fair_value = value_for(row, "fairValue", "fairValuePrice", "targetPrice", "analystTargetPrice")
     expected_eps = value_for(row, "expectedEPS", "expectedEps", "eps", "estimatedEPS", "reportedEPS")
     target_per = value_for(row, "targetPER", "targetPer", "targetPE")
+    annual_dividend = value_for(row, "annualDividend", "annualDividendPerShare")
+    required_yield = value_for(row, "requiredYieldPct", "requiredYield")
+    coupon_pct = value_for(row, "couponPct", "coupon")
+    par_value = value_for(row, "parValue")
     if not fair_value and expected_eps and target_per:
         fair_value = expected_eps * target_per
+    if not fair_value and annual_dividend and required_yield:
+        fair_value = annual_dividend / (required_yield / 100.0)
     margin = value_for(row, "marginOfSafetyPct")
     if not margin and fair_value and current_price:
         margin = ((fair_value / current_price) - 1) * 100
@@ -145,19 +159,29 @@ def valuation_values(row: Dict[str, object], position: Position) -> Dict[str, ob
     formula = str(row.get("formula") or "").strip()
     if not formula and expected_eps and target_per:
         formula = "적정가 = 예상 EPS x 목표 PER"
+    elif not formula and annual_dividend and required_yield:
+        formula = "AI 제안 적정가 = 연간 배당 / 요구수익률"
     elif not formula and fair_value:
         formula = "적정가 = 사용자가 입력한 적정가"
     missing = []
     if not current_price:
         missing.append("currentPrice")
-    if not fair_value and not (expected_eps and target_per):
-        missing.extend(["fairValue", "expectedEPS", "targetPER"])
+    method_lower = method.casefold()
+    if not fair_value and not (expected_eps and target_per) and not (annual_dividend and required_yield):
+        if "preferred" in method_lower or "yield" in method_lower or annual_dividend or required_yield:
+            missing.extend(["fairValue", "annualDividend", "requiredYieldPct"])
+        else:
+            missing.extend(["fairValue", "expectedEPS", "targetPER"])
     return {
         "currentPrice": round(current_price, 4) if current_price else 0.0,
         "fairValue": round(fair_value, 4) if fair_value else 0.0,
         "fairValuePrice": round(fair_value, 4) if fair_value else 0.0,
         "expectedEPS": round(expected_eps, 4) if expected_eps else 0.0,
         "targetPER": round(target_per, 4) if target_per else 0.0,
+        "annualDividend": round(annual_dividend, 4) if annual_dividend else 0.0,
+        "requiredYieldPct": round(required_yield, 4) if required_yield else 0.0,
+        "couponPct": round(coupon_pct, 4) if coupon_pct else 0.0,
+        "parValue": round(par_value, 4) if par_value else 0.0,
         "marginOfSafetyPct": round(margin, 2) if margin else 0.0,
         "expensivePremiumPct": round(expensive_premium, 2) if expensive_premium else 0.0,
         "minimumMarginOfSafetyPct": value_for(row, "minimumMarginOfSafetyPct") or 15.0,
@@ -202,6 +226,10 @@ def add_valuation_row_concepts(
     values = valuation_values(row, position)
     key = str(row.get("assumptionKey") or row.get("symbol") or symbol).strip()
     label = str(row.get("label") or row.get("name") or (position.name or symbol) + " 밸류에이션").strip()
+    is_ai_proposal = str(row.get("source") or "").casefold() == "ai-valuation-proposal" or bool(row.get("aiGenerated"))
+    tbox_classes = ["ValuationAssumption", "StrategySignal", "ValuationSignal"]
+    if is_ai_proposal:
+        tbox_classes.append("AIValuationProposal")
     base_props = {
         "symbol": symbol,
         "provider": str(row.get("provider") or ""),
@@ -212,12 +240,18 @@ def add_valuation_row_concepts(
         **values,
     }
     assumption_id = add_entity(graph, "valuation-assumption", symbol + ":" + key, label, {
-        "tboxClass": "ValuationAssumption",
-        "tboxClasses": ["ValuationAssumption", "StrategySignal", "ValuationSignal"],
+        "tboxClass": "AIValuationProposal" if is_ai_proposal else "ValuationAssumption",
+        "tboxClasses": tbox_classes,
         **base_props,
     })
     props = valuation_relation_props(row, values, label)
     add_relation(graph, stock_id, assumption_id, "HAS_VALUATION", weight=0.88, properties=props)
+    if is_ai_proposal:
+        add_relation(graph, stock_id, assumption_id, "HAS_AI_VALUATION_PROPOSAL", weight=0.86, properties={
+            **props,
+            "polarity": "context",
+            "aiInfluenceLabel": "AI 밸류에이션 제안: 사용자 승인 전",
+        })
     for field, metric_label, value in metric_rows(row):
         metric_id = add_entity(graph, "valuation-metric", symbol + ":" + key + ":" + field, metric_label + " " + compact_number(value), {
             "tboxClass": "ValuationMetric",
@@ -299,5 +333,8 @@ def add_position_valuation_concepts(
     symbol = symbol_key(position)
     rows = position_runtime_valuation_rows(runtime_context or {}, symbol)
     rows.extend(external_valuation_rows(external_signals or {}, symbol))
+    settings = runtime_context.get("settings") if isinstance(runtime_context, dict) and isinstance(runtime_context.get("settings"), dict) else {}
+    if not any(number(valuation_values(normalize_assumption_row(row), position).get("fairValue")) for row in rows):
+        rows.extend(ai_valuation_proposal_rows(position, external_signals or {}, settings))
     for row in rows:
         add_valuation_row_concepts(graph, stock_id, position, row)

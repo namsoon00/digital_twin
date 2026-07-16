@@ -65,7 +65,7 @@ class OntologyInferenceContextTests(unittest.TestCase):
         facts = position_signal_facts(
             position,
             portfolio_summary([], account_cash=1000000, fx_rates={"USD": 1400}),
-            settings={},
+            settings={"aiValuationAutoProposalEnabled": "0"},
         )
 
         self.assertEqual("missing", facts["valuationDataStatus"])
@@ -74,6 +74,45 @@ class OntologyInferenceContextTests(unittest.TestCase):
         self.assertEqual("판단 보류", facts["valuationReliabilityLabel"])
         self.assertEqual(["적정가", "예상 EPS", "목표 PER"], facts["valuationMissingInputs"])
         self.assertEqual(164.25, facts["valuationCurrentPrice"])
+
+    def test_position_signal_facts_use_ai_preferred_income_valuation_when_no_user_value(self):
+        position = Position(
+            symbol="STRC",
+            name="스트래티지 스트레치 우선주(9.00%)",
+            market="NASDAQ",
+            currency="USD",
+            source="holding",
+            current_price=87.76,
+            market_value=2106,
+            quantity=24,
+            ma20=85.7,
+            ma60=94.1,
+            sector="디지털자산",
+        )
+        facts = position_signal_facts(
+            position,
+            portfolio_summary([position], account_cash=1000000, fx_rates={"USD": 1400}),
+            external_signals={
+                "macro": {
+                    "series": {
+                        "DGS10": {"provider": "FRED", "value": 4.5},
+                    },
+                },
+            },
+            settings={},
+        )
+
+        self.assertEqual("available", facts["valuationDataStatus"])
+        self.assertEqual("ai", facts["valuationSourceType"])
+        self.assertEqual("AI 제안", facts["valuationSourceLabel"])
+        self.assertEqual("ai-preferred-income-yield", facts["valuationMethod"])
+        self.assertEqual("suggested", facts["valuationApprovalStatus"])
+        self.assertTrue(facts["valuationRequiresUserApproval"])
+        self.assertTrue(facts["valuationIsAiGenerated"])
+        self.assertEqual(9.0, facts["valuationAnnualDividend"])
+        self.assertEqual(9.5, facts["valuationRequiredYieldPct"])
+        self.assertAlmostEqual(94.7368, facts["valuationFairValue"], places=4)
+        self.assertIn("연간 배당", facts["valuationSubstitution"])
 
     def test_typedb_inferencebox_context_replaces_python_relation_rule_path(self):
         position = Position(

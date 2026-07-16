@@ -16,6 +16,7 @@ from .portfolio_ontology_valuation_concepts import (
     valuation_values,
 )
 from .portfolio import PortfolioSummary, Position, expects_kr_microstructure_signals
+from .valuation_ai_proposals import ai_valuation_proposal_rows
 from .volume_time_adjustment import trading_value_snapshot, volume_pace_snapshot
 
 
@@ -268,6 +269,8 @@ VALUATION_MISSING_INPUT_LABELS = {
     "fairValuePrice": "적정가",
     "expectedEPS": "예상 EPS",
     "targetPER": "목표 PER",
+    "annualDividend": "연간 배당",
+    "requiredYieldPct": "요구수익률",
 }
 
 
@@ -282,6 +285,14 @@ def _valuation_source_metadata(row: Dict[str, object]) -> Dict[str, object]:
     provider = str(row.get("provider") or "").strip()
     source_lower = source.casefold()
     provider_lower = provider.casefold()
+    if source_lower == "ai-valuation-proposal":
+        return {
+            "sourceType": "ai",
+            "sourceLabel": "AI 제안",
+            "provider": provider or "Orbit Alpha AI",
+            "reliabilityLabel": "AI 초안(사용자 승인 전)",
+            "reliabilityScore": number(row.get("reliabilityScore")) or 45.0,
+        }
     if source_lower == "runtime-settings" or provider_lower == "runtimesettings":
         return {
             "sourceType": "user",
@@ -341,6 +352,8 @@ def _valuation_substitution(values: Dict[str, object], row: Dict[str, object], c
     fair_value = number(values.get("fairValue"))
     expected_eps = number(values.get("expectedEPS"))
     target_per = number(values.get("targetPER"))
+    annual_dividend = number(values.get("annualDividend"))
+    required_yield = number(values.get("requiredYieldPct"))
     if expected_eps and target_per and fair_value:
         return (
             _valuation_price_text(expected_eps, currency)
@@ -349,9 +362,18 @@ def _valuation_substitution(values: Dict[str, object], row: Dict[str, object], c
             + " = "
             + _valuation_price_text(fair_value, currency)
         )
+    if annual_dividend and required_yield and fair_value:
+        return (
+            "연간 배당 "
+            + _valuation_price_text(annual_dividend, currency)
+            + " / 요구수익률 "
+            + _number_text(required_yield, 2)
+            + "% = "
+            + _valuation_price_text(fair_value, currency)
+        )
     if fair_value:
         source = str(row.get("source") or "").casefold()
-        prefix = "입력 적정가" if source == "runtime-settings" else "제공 적정가"
+        prefix = "입력 적정가" if source == "runtime-settings" else "AI 제안 적정가" if source == "ai-valuation-proposal" else "제공 적정가"
         return prefix + " = " + _valuation_price_text(fair_value, currency)
     if expected_eps and target_per:
         return _valuation_price_text(expected_eps, currency) + " x " + _valuation_multiplier_text(target_per)
@@ -363,6 +385,8 @@ def _valuation_explanation(values: Dict[str, object], row: Dict[str, object], cu
     current_price = number(values.get("currentPrice"))
     expected_eps = number(values.get("expectedEPS"))
     target_per = number(values.get("targetPER"))
+    annual_dividend = number(values.get("annualDividend"))
+    required_yield = number(values.get("requiredYieldPct"))
     margin = number(values.get("marginOfSafetyPct"))
     if expected_eps and target_per and fair_value:
         base = (
@@ -374,9 +398,24 @@ def _valuation_explanation(values: Dict[str, object], row: Dict[str, object], cu
             + _valuation_price_text(fair_value, currency)
             + "로 계산했습니다."
         )
+    elif annual_dividend and required_yield and fair_value:
+        base = (
+            "연간 배당 "
+            + _valuation_price_text(annual_dividend, currency)
+            + "을 요구수익률 "
+            + _number_text(required_yield, 2)
+            + "%로 나눠 적정가 "
+            + _valuation_price_text(fair_value, currency)
+            + "로 계산했습니다."
+        )
+        if str(row.get("source") or "").casefold() == "ai-valuation-proposal":
+            base += " 이 값은 AI 제안값이라 사용자 승인 전 초안입니다."
     elif fair_value:
-        source = "사용자가 입력한" if str(row.get("source") or "").casefold() == "runtime-settings" else "외부 데이터가 제공한"
+        source_name = str(row.get("source") or "").casefold()
+        source = "사용자가 입력한" if source_name == "runtime-settings" else "AI가 임시로 제안한" if source_name == "ai-valuation-proposal" else "외부 데이터가 제공한"
         base = source + " 적정가 " + _valuation_price_text(fair_value, currency) + "를 현재가와 비교했습니다."
+        if source_name == "ai-valuation-proposal":
+            base += " 이 값은 사용자 승인 전 초안입니다."
     else:
         return "적정가 계산에 필요한 입력값이 부족해 현재가가 싼지 비싼지 단정하지 않습니다."
     if current_price and fair_value:
@@ -396,7 +435,7 @@ def _valuation_row_payload(position: Position, row: Dict[str, object]) -> Dict[s
     fair_value = number(values.get("fairValue"))
     has_formula = bool(str(values.get("formula") or row.get("formula") or "").strip())
     complete_score = (30.0 if fair_value else 0.0) + (10.0 if not missing_inputs else 0.0) + (5.0 if has_formula else 0.0)
-    source_score = 12.0 if source.get("sourceType") == "user" else 6.0 if source.get("sourceType") == "external" else 0.0
+    source_score = 12.0 if source.get("sourceType") == "user" else 6.0 if source.get("sourceType") == "external" else 4.0 if source.get("sourceType") == "ai" else 0.0
     formula = str(values.get("formula") or row.get("formula") or "").strip()
     payload = {
         "assumptionKey": str(row.get("assumptionKey") or row.get("symbol") or position.symbol or "").strip(),
@@ -415,6 +454,11 @@ def _valuation_row_payload(position: Position, row: Dict[str, object]) -> Dict[s
         "selectionScore": complete_score + source_score,
         "hasUserInput": source.get("sourceType") == "user",
         "hasExternalInput": source.get("sourceType") == "external",
+        "hasAiProposal": source.get("sourceType") == "ai",
+        "approvalStatus": str(row.get("approvalStatus") or "").strip(),
+        "requiresUserApproval": bool(row.get("requiresUserApproval")),
+        "aiGenerated": bool(row.get("aiGenerated")),
+        "sourceReason": str(row.get("sourceReason") or "").strip(),
         **values,
     }
     return payload
@@ -432,6 +476,9 @@ def _valuation_facts(position: Position, external_signals: Dict[str, object], se
         return {}
     raw_rows = position_runtime_valuation_rows(_valuation_runtime_context(settings), symbol)
     raw_rows.extend(external_valuation_rows(external_signals or {}, symbol))
+    proposal_settings = settings.get("settings") if isinstance(settings, dict) and isinstance(settings.get("settings"), dict) else settings
+    if not any(number(valuation_values(row, position).get("fairValue")) for row in raw_rows):
+        raw_rows.extend(ai_valuation_proposal_rows(position, external_signals or {}, proposal_settings or {}))
     rows = [_valuation_row_payload(position, row) for row in raw_rows]
     if not rows:
         return {
@@ -454,6 +501,15 @@ def _valuation_facts(position: Position, external_signals: Dict[str, object], se
             "valuationMissingInputs": ["적정가", "예상 EPS", "목표 PER"],
             "valuationHasUserInput": False,
             "valuationHasExternalInput": False,
+            "valuationHasAiProposal": False,
+            "valuationApprovalStatus": "",
+            "valuationRequiresUserApproval": False,
+            "valuationIsAiGenerated": False,
+            "valuationSourceReason": "",
+            "valuationAnnualDividend": 0.0,
+            "valuationRequiredYieldPct": 0.0,
+            "valuationCouponPct": 0.0,
+            "valuationParValue": 0.0,
         }
     primary = _primary_valuation_row(rows)
     missing_inputs = list(primary.get("missingInputs") or [])
@@ -476,6 +532,10 @@ def _valuation_facts(position: Position, external_signals: Dict[str, object], se
         "valuationFairValuePrice": fair_value,
         "valuationExpectedEPS": number(primary.get("expectedEPS")),
         "valuationTargetPER": number(primary.get("targetPER")),
+        "valuationAnnualDividend": number(primary.get("annualDividend")),
+        "valuationRequiredYieldPct": number(primary.get("requiredYieldPct")),
+        "valuationCouponPct": number(primary.get("couponPct")),
+        "valuationParValue": number(primary.get("parValue")),
         "valuationMarginOfSafetyPct": number(primary.get("marginOfSafetyPct")),
         "valuationExpensivePremiumPct": number(primary.get("expensivePremiumPct")),
         "valuationMinimumMarginOfSafetyPct": number(primary.get("minimumMarginOfSafetyPct")),
@@ -483,6 +543,11 @@ def _valuation_facts(position: Position, external_signals: Dict[str, object], se
         "valuationMissingInputs": missing_inputs,
         "valuationHasUserInput": any(bool(item.get("hasUserInput")) for item in rows),
         "valuationHasExternalInput": any(bool(item.get("hasExternalInput")) for item in rows),
+        "valuationHasAiProposal": any(bool(item.get("hasAiProposal")) for item in rows),
+        "valuationApprovalStatus": primary.get("approvalStatus"),
+        "valuationRequiresUserApproval": bool(primary.get("requiresUserApproval")),
+        "valuationIsAiGenerated": bool(primary.get("aiGenerated")),
+        "valuationSourceReason": primary.get("sourceReason"),
     }
 
 

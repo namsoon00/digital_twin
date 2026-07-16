@@ -3646,6 +3646,13 @@
       opendartApiKey: settingValue("opendartApiKey"),
       fxRates: settingValue("fxRates"),
       valuationAssumptions: settingValue("valuationAssumptions"),
+      aiValuationAutoProposalEnabled: settingValue("aiValuationAutoProposalEnabled"),
+      aiValuationCurrentPriceAnchorEnabled: settingValue("aiValuationCurrentPriceAnchorEnabled"),
+      aiValuationPreferredParValue: settingValue("aiValuationPreferredParValue"),
+      aiValuationPreferredRiskSpreadPct: settingValue("aiValuationPreferredRiskSpreadPct"),
+      aiValuationPreferredRequiredYieldPct: settingValue("aiValuationPreferredRequiredYieldPct"),
+      aiValuationPreferredMinimumMarginPct: settingValue("aiValuationPreferredMinimumMarginPct"),
+      aiValuationBaselineMinimumMarginPct: settingValue("aiValuationBaselineMinimumMarginPct"),
       marketSignalInputs: settingValue("marketSignalInputs"),
       fairValueFormula: settingValue("fairValueFormula"),
       buyScoreFormula: settingValue("buyScoreFormula"),
@@ -17471,6 +17478,21 @@
         renderSettingField("externalFredSeries", "FRED 지표", "text", "DGS10,DGS2,DFF"),
         renderSettingField("externalCryptoIds", "CoinGecko 코인 ID", "text", "bitcoin,ethereum")
       ].join(""), "external"),
+      renderSettingsGroup("AI 밸류에이션 제안", "사용자 적정가나 외부 적정가가 없을 때 임시 적정가를 제안합니다. 알림에는 항상 AI 제안과 사용자 승인 전 상태가 표시됩니다.", [
+        renderSettingSelect("aiValuationAutoProposalEnabled", "AI 제안값 사용", [
+          { value: "1", label: "사용" },
+          { value: "0", label: "사용 안 함" }
+        ]),
+        renderSettingSelect("aiValuationCurrentPriceAnchorEnabled", "현재가 임시 기준", [
+          { value: "1", label: "사용" },
+          { value: "0", label: "사용 안 함" }
+        ]),
+        renderSettingField("aiValuationPreferredParValue", "우선주 액면 기준가", "number", "100"),
+        renderSettingField("aiValuationPreferredRiskSpreadPct", "우선주 위험 가산율(%)", "number", "비우면 자동"),
+        renderSettingField("aiValuationPreferredRequiredYieldPct", "우선주 요구수익률(%)", "number", "비우면 금리+위험"),
+        renderSettingField("aiValuationPreferredMinimumMarginPct", "우선주 요구 안전마진(%)", "number", "8"),
+        renderSettingField("aiValuationBaselineMinimumMarginPct", "일반주식 요구 안전마진(%)", "number", "15")
+      ].join(""), "valuation"),
       renderSettingsGroup("뉴스·공시 수집", "뉴스, OpenDART, SEC 원천과 리서치 근거 저장량을 조정합니다.", [
         renderSettingSelect("externalDartEnabled", "OpenDART 수집", [
           { value: "1", label: "사용" },

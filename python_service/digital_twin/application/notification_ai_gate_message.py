@@ -1355,6 +1355,11 @@ def valuation_detail_rows(context: Dict[str, object], level: str) -> List[str]:
         source += " · 외부 데이터도 참고"
     if not source:
         source = "사용자 입력 없음 · 외부 밸류에이션 데이터 없음"
+    approval = ""
+    if facts.get("valuationRequiresUserApproval") or facts.get("valuationIsAiGenerated"):
+        status = str(facts.get("valuationApprovalStatus") or "suggested").strip()
+        status_label = "AI 제안 · 사용자 승인 전" if status == "suggested" else status
+        approval = status_label
     reliability = str(facts.get("valuationReliabilityLabel") or "").strip()
     reliability_score = facts.get("valuationReliabilityScore")
     if reliability and _valuation_value_present(reliability_score):
@@ -1377,10 +1382,12 @@ def valuation_detail_rows(context: Dict[str, object], level: str) -> List[str]:
     rows = [
         _html_row("공식", formula, level=level, max_len=260),
         _html_row("대입값", substitution, level=level, max_len=260),
+        _html_row("승인 상태", approval, level=level, max_len=180),
         _html_row("현재가", current or "현재가 없음", level=level),
         _html_row("적정가", fair_value or "미설정", level=level),
         _html_row("안전마진", margin_text or "계산 불가", level=level),
         _html_row("데이터 출처", source, level=level),
+        _html_row("계산 근거", str(facts.get("valuationSourceReason") or "").strip(), level=level, max_len=260),
         _html_row("근거 신뢰도", reliability, level=level, max_len=260),
         _html_row("계산 상태", status_labels.get(data_status, data_status), level=level),
         _html_row("계산 뜻", explanation, level=level, max_len=700),

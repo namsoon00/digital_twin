@@ -208,11 +208,51 @@ class OntologyValidatorTests(unittest.TestCase):
         self.assertTrue(prompt["valuationContext"])
         self.assertEqual("valid", validate_ontology(graph).status)
 
+    def test_ai_preferred_income_valuation_materializes_as_proposal(self):
+        position = Position(
+            symbol="STRC",
+            name="스트래티지 스트레치 우선주(9.00%)",
+            market="NASDAQ",
+            currency="USD",
+            market_value=2106,
+            quantity=24,
+            current_price=87.76,
+            ma20=85.7,
+            ma60=94.1,
+            sector="디지털자산",
+        )
+        graph = build_portfolio_ontology(
+            [position],
+            portfolio_summary([position], fx_rates={"USD": 1400, "KRW": 1}),
+            external_signals={
+                "macro": {
+                    "series": {
+                        "DGS10": {"provider": "FRED", "value": 4.5},
+                    },
+                },
+            },
+        )
+
+        relation_types = {item.relation_type for item in graph.relations}
+        ai_assumptions = [
+            item
+            for item in graph.entities
+            if item.kind == "valuation-assumption" and "AIValuationProposal" in (item.properties.get("tboxClasses") or [])
+        ]
+
+        self.assertTrue(ai_assumptions)
+        self.assertIn("HAS_AI_VALUATION_PROPOSAL", relation_types)
+        self.assertIn("HAS_FAIR_VALUE_ESTIMATE", relation_types)
+        self.assertIn("HAS_MARGIN_OF_SAFETY", relation_types)
+        self.assertEqual("AIValuationProposal", ai_assumptions[0].properties["tboxClass"])
+        self.assertEqual("valid", validate_ontology(graph).status)
+
     def test_tbox_contains_valuation_and_ai_decision_contracts(self):
         for class_name in [
             "DecisionStage",
             "InvestmentOpinion",
             "PeerContext",
+            "AIValuationProposal",
             "ValuationMetric",
             "FairValueEstimate",
             "MarginOfSafety",
@@ -223,6 +263,7 @@ class OntologyValidatorTests(unittest.TestCase):
 
         for relation_type in [
             "PRODUCES_AI_DECISION",
+            "HAS_AI_VALUATION_PROPOSAL",
             "HAS_VALUATION_METRIC",
             "HAS_FAIR_VALUE_ESTIMATE",
             "HAS_MARGIN_OF_SAFETY",

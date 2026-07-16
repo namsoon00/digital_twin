@@ -552,6 +552,13 @@ def settings_status_payload() -> Dict[str, object]:
         "dataFreshnessMacroMaxAgeMinutes",
         "dataFreshnessDisclosureMaxAgeMinutes",
         "externalSignalCacheMaxAgeMinutes",
+        "aiValuationAutoProposalEnabled",
+        "aiValuationCurrentPriceAnchorEnabled",
+        "aiValuationPreferredParValue",
+        "aiValuationPreferredRiskSpreadPct",
+        "aiValuationPreferredRequiredYieldPct",
+        "aiValuationPreferredMinimumMarginPct",
+        "aiValuationBaselineMinimumMarginPct",
     ]
     public = {key: settings.get(key, "") for key in public_keys}
     public.update({

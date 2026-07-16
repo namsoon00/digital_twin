@@ -288,13 +288,13 @@ def _ai_marked_value(value: object) -> str:
 def customer_data_note_rows(values: List[object]) -> List[str]:
     rows: List[str] = []
     for item in values or []:
-        text = _text(item, 180)
+        text = _text(item, 0)
         if not text:
             continue
         lowered = text.lower()
         if any(term.lower() in lowered for term in CUSTOMER_HIDDEN_DATA_NOTE_TERMS):
             continue
-        append_unique_text(rows, text, 180)
+        append_unique_text(rows, text, 0)
     return rows
 
 def notification_topline_change_summary(context: Dict[str, object]) -> str:
@@ -1177,13 +1177,14 @@ def external_api_source_rows(context: Dict[str, object], limit: int = MESSAGE_AP
 
 def _compact_text_segments(values: List[object], limit: int = 3, max_len: int = 180) -> str:
     rows: List[str] = []
+    row_limit = limit if limit and limit > 0 else None
     for value in values or []:
         text = re.sub(r"\s+", " ", _text(value, max_len)).strip()
         text = re.sub(r"[\.\?!。]+$", "", text).strip()
         if not text:
             continue
         append_unique_text(rows, text, max_len)
-        if len(rows) >= limit:
+        if row_limit and len(rows) >= row_limit:
             break
     return " / ".join(rows)
 
@@ -1200,15 +1201,15 @@ def compact_ai_opinion_sentence(context: Dict[str, object], response: Notificati
             + "로 조정한 점"
         )
         if response.disagreement_reason:
-            adjustment += " (" + _compact_text_segments([response.disagreement_reason], 1, 180) + ")"
+            adjustment += " (" + _compact_text_segments([response.disagreement_reason], 1, 0) + ")"
         details.append(adjustment)
-    context_summary = _compact_text_segments(context_specific_insight_rows(context, response, 3), 2, 170)
+    context_summary = _compact_text_segments(context_specific_insight_rows(context, response, 3), 0, 0)
     if context_summary:
         details.append("주요 상황 " + context_summary)
-    evidence_summary = _compact_text_segments(response.evidence, max(1, len(response.evidence)), 160)
+    evidence_summary = _compact_text_segments(response.evidence, 0, 0)
     if evidence_summary:
         details.append("핵심 근거 " + evidence_summary)
-    counter_summary = _compact_text_segments(response.counter_evidence, max(1, len(response.counter_evidence)), 170)
+    counter_summary = _compact_text_segments(response.counter_evidence, 0, 0)
     if counter_summary:
         details.append("반대 신호 " + counter_summary)
     checks = []
@@ -1217,11 +1218,11 @@ def compact_ai_opinion_sentence(context: Dict[str, object], response: Notificati
     if response.invalidation_condition:
         checks.append("의견이 약해지는 조건: " + response.invalidation_condition)
     checks.extend(response.next_checks)
-    check_summary = _compact_text_segments(checks, max(1, len(checks)), 190)
+    check_summary = _compact_text_segments(checks, 0, 0)
     if check_summary:
         details.append("다음 확인 " + check_summary)
     data_notes = customer_data_note_rows(list(response.missing_data_impact))
-    data_summary = _compact_text_segments(data_notes, max(1, len(data_notes)), 180)
+    data_summary = _compact_text_segments(data_notes, 0, 0)
     if data_summary:
         details.append("추가 확인 데이터 " + data_summary)
     if details:
@@ -1265,11 +1266,11 @@ def _full_ai_opinion_rows(context: Dict[str, object], response: NotificationAIVa
 def compact_ai_opinion_rows(context: Dict[str, object], response: NotificationAIValidatedResponse, level: str) -> List[str]:
     action_label = action_label_for_action(response.action, context) or response.action_label or response.action
     rows: List[str] = []
-    conclusion = _compact_text_segments([response.summary], 1, 150)
+    conclusion = _compact_text_segments([response.summary], 1, 0)
     append_unique_text(
         rows,
         "결론: " + action_label + ((". " + conclusion) if conclusion else ""),
-        190,
+        0,
     )
     if response.precomputed_action and response.precomputed_action != response.action:
         adjustment = (
@@ -1278,29 +1279,29 @@ def compact_ai_opinion_rows(context: Dict[str, object], response: NotificationAI
             + " → 최종 "
             + action_label
         )
-        reason = _compact_text_segments([response.disagreement_reason], 1, 110)
-        append_unique_text(rows, adjustment + ((" (" + reason + ")") if reason else ""), 190)
-    evidence_summary = _compact_text_segments(response.evidence, 2, 120)
+        reason = _compact_text_segments([response.disagreement_reason], 1, 0)
+        append_unique_text(rows, adjustment + ((" (" + reason + ")") if reason else ""), 0)
+    evidence_summary = _compact_text_segments(response.evidence, 0, 0)
     if not evidence_summary:
-        evidence_summary = _compact_text_segments(context_specific_insight_rows(context, response, 2), 2, 110)
+        evidence_summary = _compact_text_segments(context_specific_insight_rows(context, response, MESSAGE_CONTEXT_ROW_LIMIT), 0, 0)
     if evidence_summary:
-        append_unique_text(rows, "핵심 근거: " + evidence_summary, 180)
-    counter_summary = _compact_text_segments(response.counter_evidence, 2, 130)
+        append_unique_text(rows, "핵심 근거: " + evidence_summary, 0)
+    counter_summary = _compact_text_segments(response.counter_evidence, 0, 0)
     if counter_summary:
-        append_unique_text(rows, "반대 신호: " + counter_summary, 180)
+        append_unique_text(rows, "반대 신호: " + counter_summary, 0)
     checks = []
     if response.opinion:
         checks.append(response.opinion)
     if response.invalidation_condition:
         checks.append("의견이 약해지는 조건: " + response.invalidation_condition)
-    checks.extend(response.next_checks[:1])
-    check_summary = _compact_text_segments(checks, 2, 130)
+    checks.extend(response.next_checks)
+    check_summary = _compact_text_segments(checks, 0, 0)
     if check_summary:
-        append_unique_text(rows, "다음 확인: " + check_summary, 190)
-    data_summary = _compact_text_segments(customer_data_note_rows(list(response.missing_data_impact)), 2, 120)
+        append_unique_text(rows, "다음 확인: " + check_summary, 0)
+    data_summary = _compact_text_segments(customer_data_note_rows(list(response.missing_data_impact)), 0, 0)
     if data_summary:
-        append_unique_text(rows, "추가 확인 데이터: " + data_summary, 190)
-    return [_html_bullet(_ai_marked_value(row), level) for row in rows[:5] if row]
+        append_unique_text(rows, "추가 확인 데이터: " + data_summary, 0)
+    return [_html_bullet(_ai_marked_value(row), level) for row in rows if row]
 
 def relation_axis_summary_rows(context: Dict[str, object], level: str, limit: int = 5) -> List[str]:
     return [_html_bullet(item, level) for item in relation_axis_summary_lines(context, limit) if str(item or "").strip()]

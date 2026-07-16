@@ -135,7 +135,7 @@ class BeginnerRelationLanguageTests(unittest.TestCase):
         self.assertIn("팔아야 한다는 뜻이 아니라", joined)
         self.assertIn("매도해야 한다는 뜻은 아닙니다", joined)
 
-    def test_absolute_beginner_message_compacts_validated_content(self):
+    def test_absolute_beginner_strategy_guide_does_not_truncate_validated_content(self):
         response = NotificationAIValidatedResponse(
             action="HOLD",
             action_label="보유",
@@ -168,6 +168,7 @@ class BeginnerRelationLanguageTests(unittest.TestCase):
                 "부족 3",
                 "부족 4",
                 "부족 5",
+                "아주 긴 부족 데이터 설명입니다. 이 문장은 전략 가이드에서 말줄임표 없이 끝까지 보여야 합니다. 고객이 실제 투자 판단 전에 어떤 데이터가 비어 있는지 전체 문장을 확인할 수 있어야 합니다.",
             ],
             validation_warnings=[
                 "검증 1",
@@ -190,18 +191,23 @@ class BeginnerRelationLanguageTests(unittest.TestCase):
             "[AI] 결론:",
             "근거 1",
             "근거 2",
+            "근거 5",
             "반대 1",
+            "반대 4",
             "의견이 약해지는 조건",
+            "확인 4",
             "부족 1",
+            "부족 5",
+            "고객이 실제 투자 판단 전에 어떤 데이터가 비어 있는지 전체 문장을 확인할 수 있어야 합니다",
         ]:
             self.assertIn(expected, message)
-        for hidden in ["근거 5", "반대 4", "확인 4", "부족 5", "검증 3"]:
+        for hidden in ["검증 3", "말줄임표 없이 끝까지 보여야 합..."]:
             self.assertNotIn(hidden, message)
         self.assertIn("확인 필요 강도", message)
         self.assertIn("관계 분석 규칙", message)
         self.assertIn("지금 주문해도 무리가 없는지", message)
 
-    def test_beginner_message_adds_term_hints_and_keeps_message_compact(self):
+    def test_beginner_message_adds_term_hints_without_truncating_strategy_guide(self):
         response = NotificationAIValidatedResponse(
             action="HOLD",
             action_label="보유",
@@ -226,11 +232,11 @@ class BeginnerRelationLanguageTests(unittest.TestCase):
         self.assertIn("[AI] 결론:", message)
         self.assertIn("근거 1", message)
         self.assertIn("근거 2", message)
-        self.assertNotIn("근거 5", message)
-        self.assertNotIn("반대 4", message)
+        self.assertIn("근거 5", message)
+        self.assertIn("반대 4", message)
         self.assertIn("확인 1", message)
-        self.assertNotIn("확인 4", message)
-        self.assertNotIn("부족 5", message)
+        self.assertIn("확인 4", message)
+        self.assertIn("부족 5", message)
         self.assertIn("관계 강도(여러 근거가 같은 방향인지 보는 확인 필요 점수)", message)
         self.assertIn("RuleBox(관계 분석 규칙)", message)
 

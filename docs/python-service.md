@@ -254,6 +254,13 @@ Configuration:
 - `EXTERNAL_DART_LOOKBACK_DAYS`: OpenDART disclosure lookback, default 14.
 - `EXTERNAL_DART_CORP_CODES`: ticker-to-corp-code mappings, for example `005930=00126380;000660=00164779`.
 
+Temporal ontology reasoning groups repeated monitor snapshots before RuleBox derives risk/support episodes. This prevents alerts from judging only the latest price point.
+
+Configuration:
+
+- `TEMPORAL_WINDOW_PERIODS`: semicolon/newline-separated `label=lookbackDays:minSamples`, default `1D=1:2;3D=3:3;5D=5:4;20D=20:5`.
+- `TEMPORAL_WINDOW_HISTORY_LIMIT`: max monitor snapshots loaded into the ontology builder per account, default `96`, clamped to 6-500.
+
 ## Event Sourcing and Outbox
 
 Monitoring snapshots, alert detections, account changes, and cycle completions are appended to `domain_events`. The configured event-log adapter replays that stream in event order so lightweight projections and audits can be rebuilt from the event log instead of trusting only the latest mutable state.

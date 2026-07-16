@@ -285,7 +285,7 @@ class MonitorRunner:
 
     def load_snapshot_history(self, account_id: str) -> List[dict]:
         if hasattr(self.store, "load_history"):
-            return list(self.store.load_history(account_id, limit=6) or [])
+            return list(self.store.load_history(account_id, limit=self.temporal_history_limit()) or [])
         return []
 
     def compact_monitor_history(self, history: List[dict]) -> List[dict]:
@@ -294,7 +294,17 @@ class MonitorRunner:
             compacted_item = self.compact_previous_state(item)
             if compacted_item:
                 compacted.append(compacted_item)
-        return compacted[-6:]
+        return compacted[-self.temporal_history_limit():]
+
+    def temporal_history_limit(self) -> int:
+        settings = getattr(self.monitor, "settings", None)
+        settings = settings if isinstance(settings, dict) else {}
+        raw = settings.get("temporalWindowHistoryLimit") or settings.get("TEMPORAL_WINDOW_HISTORY_LIMIT") or 96
+        try:
+            value = int(float(str(raw).strip()))
+        except (TypeError, ValueError):
+            value = 96
+        return max(6, min(500, value))
 
     def send_alert_events(self, events, dry_run: bool, source_event):
         parameters = inspect.signature(self.event_sender).parameters

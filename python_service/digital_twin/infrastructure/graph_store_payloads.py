@@ -165,6 +165,32 @@ PROMOTED_NUMERIC_ENTITY_FIELDS = [
     "dividendYield",
     "peerPER",
     "historicalMedianPER",
+    "lookbackDays",
+    "requiredSampleCount",
+    "sampleCount",
+    "coverageRatio",
+    "elapsedHours",
+    "startPrice",
+    "priceChangePct",
+    "profitLossRateStart",
+    "profitLossRateEnd",
+    "profitLossRateChangePct",
+    "ma20DistanceStart",
+    "ma20DistanceEnd",
+    "ma20DistanceChange",
+    "ma60DistanceStart",
+    "ma60DistanceEnd",
+    "volumeRatioEnd",
+    "tradeStrengthEnd",
+    "bidAskImbalanceEnd",
+    "smartMoneyNetLatest",
+    "smartMoneyNetChange",
+    "individualNetLatest",
+    "eventCount",
+    "riskEventCount",
+    "supportEventCount",
+    "temporalRiskScore",
+    "temporalSupportScore",
 ]
 
 PROMOTED_TEXT_ENTITY_FIELDS = [
@@ -195,6 +221,12 @@ PROMOTED_TEXT_ENTITY_FIELDS = [
     "sourceUrl",
     "valuationMethod",
     "formula",
+    "windowKey",
+    "hasSufficientHistory",
+    "pricePathPattern",
+    "flowPattern",
+    "eventClusterType",
+    "trendEpisodeType",
 ]
 
 def condition_target_filter_values(condition: Dict[str, object], key: str) -> List[str]:
@@ -321,6 +353,8 @@ class GraphStoreOntologyRowMapperMixin:
                     field: (
                         ", ".join(list_of_strings(properties.get(field)))
                         if isinstance(properties.get(field), list)
+                        else "true" if properties.get(field) is True
+                        else "false" if properties.get(field) is False
                         else str(properties.get(field) or "")
                     )
                     for field in PROMOTED_TEXT_ENTITY_FIELDS

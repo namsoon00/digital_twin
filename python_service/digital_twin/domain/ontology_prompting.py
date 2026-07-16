@@ -255,11 +255,13 @@ def build_ai_inference_packet(graph: PortfolioOntology) -> Dict[str, object]:
     insight_count = len([item for item in graph.entities if item.kind == "insight"])
     active_opinion_count = len([item for item in graph.entities if item.kind == "active-opinion"])
     execution_plan_count = len([item for item in graph.entities if item.kind == "execution-plan"])
-    coverage_gap_count = len([item for item in graph.entities if item.kind == "coverage-gap"])
+    coverage_gap_count = len([item for item in graph.entities if item.kind in {"coverage-gap", "temporal-coverage-gap"}])
     macro_regime_count = len([item for item in graph.entities if item.kind == "macro-regime"])
     crypto_exposure_count = len([item for item in graph.entities if item.kind == "crypto-exposure"])
     article_quality_risk_count = len([item for item in graph.entities if item.kind == "article-quality-risk"])
     valuation_context_count = len([item for item in graph.entities if item.kind in {"valuation-assumption", "revenue-exposure", "analyst-revision"}])
+    temporal_window_count = len([item for item in graph.entities if item.kind == "temporal-window"])
+    temporal_episode_count = len([item for item in graph.entities if item.kind == "trend-episode"])
     rulebox_entity_count = len([item for item in graph.entities if ontology_box(item.properties) == "RuleBox"])
     inferencebox_entity_count = len([item for item in graph.entities if ontology_box(item.properties) == "InferenceBox"])
     inferencebox_relation_count = len([item for item in graph.relations if ontology_box(item.properties) == "InferenceBox"])
@@ -269,7 +271,7 @@ def build_ai_inference_packet(graph: PortfolioOntology) -> Dict[str, object]:
         "role": "ontology-first-investment-opinion",
         "legacyModelRole": "not-used-for-scoring",
         "notificationRole": "insight-driven-dispatch",
-        "inputOrder": ["tbox", "boundedContexts", "ruleBox", "abox", "inferenceBox", "derivedRelations", "inferenceTraces", "operationalOntology", "coverageGaps", "macroRegimes", "cryptoExposures", "valuationContext", "newsQuality", "reasoningCards", "relationInfluences", "researchEvidence", "signalTransitions", "factorExposure", "liquidityConstraints", "insights", "activeInvestmentOpinions", "executionPlans", "relations", "evidence", "beliefs", "opinions"],
+        "inputOrder": ["tbox", "boundedContexts", "ruleBox", "abox", "inferenceBox", "derivedRelations", "inferenceTraces", "operationalOntology", "temporalWindows", "coverageGaps", "macroRegimes", "cryptoExposures", "valuationContext", "newsQuality", "reasoningCards", "relationInfluences", "researchEvidence", "signalTransitions", "factorExposure", "liquidityConstraints", "insights", "activeInvestmentOpinions", "executionPlans", "relations", "evidence", "beliefs", "opinions"],
         "reasoningCardCount": len(graph.reasoning_cards),
         "reasoningCardIds": [item.get("id") for item in graph.reasoning_cards],
         "graphInputs": {
@@ -291,6 +293,8 @@ def build_ai_inference_packet(graph: PortfolioOntology) -> Dict[str, object]:
             "cryptoExposureCount": crypto_exposure_count,
             "articleQualityRiskCount": article_quality_risk_count,
             "valuationContextCount": valuation_context_count,
+            "temporalWindowCount": temporal_window_count,
+            "temporalEpisodeCount": temporal_episode_count,
         },
         "outputSchema": {
             "portfolioView": "string",
@@ -310,6 +314,7 @@ def build_ai_inference_packet(graph: PortfolioOntology) -> Dict[str, object]:
             "BUY, ADD, HOLD, TRIM, SELL, AVOID 중 하나의 투자 의견을 고르되 자동 주문 지시로 표현하지 않습니다.",
             "뉴스·공시·SEC/OpenDART 출처와 반대 근거, 무효화 조건을 함께 제시합니다.",
             "이전 상태와 현재 상태의 SignalTransition을 읽고 새 변화인지 반복 상태인지 구분합니다.",
+            "temporalWindows를 읽고 단일 현재값보다 기간 경로, 수급 패턴, 이벤트 군집, 히스토리 부족 여부를 우선 구분합니다.",
             "팩터/상관/유동성/슬리피지 제약이 있으면 투자 의견과 실행 계획을 분리해 설명합니다.",
             "coverageGaps, newsQuality, source freshness가 있으면 결론 강도를 낮추고 필요한 수집 과제를 먼저 제시합니다.",
             "macroRegimes와 cryptoExposures는 종목 가격 신호의 상위 환경으로만 사용하고 단독 매수·매도 결론으로 쓰지 않습니다.",
@@ -418,6 +423,11 @@ def prompt_relation_priority(item: OntologyRelation) -> float:
         "CONFIRMED_OVER",
         "FAILED_AFTER",
         "MATERIAL_TO",
+        "HAS_TEMPORAL_WINDOW",
+        "HAS_PRICE_PATH_PATTERN",
+        "HAS_FLOW_PATTERN",
+        "HAS_EVENT_CLUSTER",
+        "DERIVES_TREND_EPISODE",
         "HAS_LIQUIDITY_PROFILE",
         "HAS_EXECUTION_METRIC",
         "LIMITED_BY_LIQUIDITY",
@@ -477,7 +487,12 @@ def prompt_payload(graph: PortfolioOntology) -> Dict[str, object]:
         "inferenceTraces": list(inferencebox.get("traces") or []),
         "worldview": graph.worldview,
         "aiInferencePacket": build_ai_inference_packet(graph),
-        "coverageGaps": compact_entities_by_kind(graph, ["coverage-gap"], 80),
+        "coverageGaps": compact_entities_by_kind(graph, ["coverage-gap", "temporal-coverage-gap"], 80),
+        "temporalWindows": compact_entities_by_kind(
+            graph,
+            ["temporal-window", "price-path-pattern", "flow-pattern", "event-cluster", "trend-episode"],
+            120,
+        ),
         "macroRegimes": compact_entities_by_kind(graph, ["macro-regime", "interest-rate", "yield-curve", "fx-rate"], 60),
         "cryptoExposures": compact_entities_by_kind(graph, ["crypto-asset", "crypto-market-signal", "crypto-exposure", "price-path"], 80),
         "valuationContext": compact_entities_by_kind(

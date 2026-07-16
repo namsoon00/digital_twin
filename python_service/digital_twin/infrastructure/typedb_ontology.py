@@ -357,6 +357,32 @@ TYPEDB_PROMOTED_NUMERIC_ATTRIBUTES = {
     "dividendYield": "ontology-dividend-yield",
     "peerPER": "ontology-peer-per",
     "historicalMedianPER": "ontology-historical-median-per",
+    "lookbackDays": "ontology-lookback-days",
+    "requiredSampleCount": "ontology-required-sample-count",
+    "sampleCount": "ontology-sample-count",
+    "coverageRatio": "ontology-coverage-ratio",
+    "elapsedHours": "ontology-elapsed-hours",
+    "startPrice": "ontology-start-price",
+    "priceChangePct": "ontology-price-change-pct",
+    "profitLossRateStart": "ontology-profit-loss-rate-start",
+    "profitLossRateEnd": "ontology-profit-loss-rate-end",
+    "profitLossRateChangePct": "ontology-profit-loss-rate-change-pct",
+    "ma20DistanceStart": "ontology-ma20-distance-start",
+    "ma20DistanceEnd": "ontology-ma20-distance-end",
+    "ma20DistanceChange": "ontology-ma20-distance-change",
+    "ma60DistanceStart": "ontology-ma60-distance-start",
+    "ma60DistanceEnd": "ontology-ma60-distance-end",
+    "volumeRatioEnd": "ontology-volume-ratio-end",
+    "tradeStrengthEnd": "ontology-trade-strength-end",
+    "bidAskImbalanceEnd": "ontology-bid-ask-imbalance-end",
+    "smartMoneyNetLatest": "ontology-smart-money-net-latest",
+    "smartMoneyNetChange": "ontology-smart-money-net-change",
+    "individualNetLatest": "ontology-individual-net-latest",
+    "eventCount": "ontology-event-count",
+    "riskEventCount": "ontology-risk-event-count",
+    "supportEventCount": "ontology-support-event-count",
+    "temporalRiskScore": "ontology-temporal-risk-score",
+    "temporalSupportScore": "ontology-temporal-support-score",
 }
 TYPEDB_PROMOTED_TEXT_ATTRIBUTES = {
     "investmentStrategyProfile": "ontology-investment-strategy-profile",
@@ -386,6 +412,12 @@ TYPEDB_PROMOTED_TEXT_ATTRIBUTES = {
     "sourceUrl": "ontology-source-url",
     "valuationMethod": "ontology-valuation-method",
     "formula": "ontology-formula",
+    "windowKey": "ontology-window-key",
+    "hasSufficientHistory": "ontology-has-sufficient-history",
+    "pricePathPattern": "ontology-price-path-pattern",
+    "flowPattern": "ontology-flow-pattern",
+    "eventClusterType": "ontology-event-cluster-type",
+    "trendEpisodeType": "ontology-trend-episode-type",
 }
 TYPEDB_FUNCTION_SUBJECT_FIELDS = {
     "source",
@@ -1385,6 +1417,32 @@ attribute ontology-peg-ratio, value double;
 attribute ontology-dividend-yield, value double;
 attribute ontology-peer-per, value double;
 attribute ontology-historical-median-per, value double;
+attribute ontology-lookback-days, value double;
+attribute ontology-required-sample-count, value double;
+attribute ontology-sample-count, value double;
+attribute ontology-coverage-ratio, value double;
+attribute ontology-elapsed-hours, value double;
+attribute ontology-start-price, value double;
+attribute ontology-price-change-pct, value double;
+attribute ontology-profit-loss-rate-start, value double;
+attribute ontology-profit-loss-rate-end, value double;
+attribute ontology-profit-loss-rate-change-pct, value double;
+attribute ontology-ma20-distance-start, value double;
+attribute ontology-ma20-distance-end, value double;
+attribute ontology-ma20-distance-change, value double;
+attribute ontology-ma60-distance-start, value double;
+attribute ontology-ma60-distance-end, value double;
+attribute ontology-volume-ratio-end, value double;
+attribute ontology-trade-strength-end, value double;
+attribute ontology-bid-ask-imbalance-end, value double;
+attribute ontology-smart-money-net-latest, value double;
+attribute ontology-smart-money-net-change, value double;
+attribute ontology-individual-net-latest, value double;
+attribute ontology-event-count, value double;
+attribute ontology-risk-event-count, value double;
+attribute ontology-support-event-count, value double;
+attribute ontology-temporal-risk-score, value double;
+attribute ontology-temporal-support-score, value double;
 attribute ontology-investment-strategy-profile, value string;
 attribute ontology-investment-strategy-profile-label, value string;
 attribute ontology-position-role, value string;
@@ -1409,6 +1467,12 @@ attribute ontology-listing-date, value string;
 attribute ontology-source-url, value string;
 attribute ontology-valuation-method, value string;
 attribute ontology-formula, value string;
+attribute ontology-window-key, value string;
+attribute ontology-has-sufficient-history, value string;
+attribute ontology-price-path-pattern, value string;
+attribute ontology-flow-pattern, value string;
+attribute ontology-event-cluster-type, value string;
+attribute ontology-trend-episode-type, value string;
 
 entity ontology-node @abstract,
     owns ontology-id @key,
@@ -1506,6 +1570,32 @@ entity ontology-node @abstract,
     owns ontology-dividend-yield,
     owns ontology-peer-per,
     owns ontology-historical-median-per,
+    owns ontology-lookback-days,
+    owns ontology-required-sample-count,
+    owns ontology-sample-count,
+    owns ontology-coverage-ratio,
+    owns ontology-elapsed-hours,
+    owns ontology-start-price,
+    owns ontology-price-change-pct,
+    owns ontology-profit-loss-rate-start,
+    owns ontology-profit-loss-rate-end,
+    owns ontology-profit-loss-rate-change-pct,
+    owns ontology-ma20-distance-start,
+    owns ontology-ma20-distance-end,
+    owns ontology-ma20-distance-change,
+    owns ontology-ma60-distance-start,
+    owns ontology-ma60-distance-end,
+    owns ontology-volume-ratio-end,
+    owns ontology-trade-strength-end,
+    owns ontology-bid-ask-imbalance-end,
+    owns ontology-smart-money-net-latest,
+    owns ontology-smart-money-net-change,
+    owns ontology-individual-net-latest,
+    owns ontology-event-count,
+    owns ontology-risk-event-count,
+    owns ontology-support-event-count,
+    owns ontology-temporal-risk-score,
+    owns ontology-temporal-support-score,
     owns ontology-investment-strategy-profile,
     owns ontology-investment-strategy-profile-label,
     owns ontology-position-role,
@@ -1530,6 +1620,12 @@ entity ontology-node @abstract,
     owns ontology-source-url,
     owns ontology-valuation-method,
     owns ontology-formula,
+    owns ontology-window-key,
+    owns ontology-has-sufficient-history,
+    owns ontology-price-path-pattern,
+    owns ontology-flow-pattern,
+    owns ontology-event-cluster-type,
+    owns ontology-trend-episode-type,
     plays ontology-assertion:source,
     plays ontology-assertion:target;
 

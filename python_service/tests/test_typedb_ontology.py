@@ -52,6 +52,11 @@ class TypeDBOntologyRepositoryTests(unittest.TestCase):
         self.assertIn("attribute ontology-security-line-role, value string", schema)
         self.assertIn("owns ontology-leverage-factor", schema)
         self.assertIn("owns ontology-security-line-role", schema)
+        self.assertIn("attribute ontology-window-key, value string", schema)
+        self.assertIn("attribute ontology-temporal-risk-score, value double", schema)
+        self.assertIn("attribute ontology-event-cluster-type, value string", schema)
+        self.assertIn("owns ontology-window-key", schema)
+        self.assertIn("owns ontology-temporal-risk-score", schema)
 
     def test_typedb_symbol_filters_keep_numeric_stock_codes_as_strings(self):
         rule = next(item for item in default_graph_inference_rules() if item.rule_id == "graph.loss_guard.breakdown.v1")
@@ -176,6 +181,27 @@ class TypeDBOntologyRepositoryTests(unittest.TestCase):
             "listingDate": "2026-07-13",
             "conversionStartDate": "2026-07-29",
         }))
+        graph.entities.append(OntologyEntity("temporal-window:005930:5D", "삼성전자 5D 기간 흐름", "temporal-window", {
+            "ontologyBox": "ABox",
+            "symbol": "005930",
+            "windowKey": "5D",
+            "lookbackDays": 5,
+            "sampleCount": 4,
+            "requiredSampleCount": 4,
+            "coverageRatio": 1.0,
+            "priceChangePct": -8.4,
+            "profitLossRateChangePct": -5.2,
+            "ma20DistanceChange": -7.5,
+            "smartMoneyNetChange": -12000,
+            "riskEventCount": 2,
+            "eventClusterType": "EventDrivenRiskCluster",
+            "pricePathPattern": "PersistentDecline",
+            "flowPattern": "SmartMoneyOutflow",
+            "trendEpisodeType": "PersistentDecline",
+            "temporalRiskScore": 84,
+            "temporalSupportScore": 0,
+            "hasSufficientHistory": True,
+        }))
         graph.relations.append(OntologyRelation("stock:005930", "level:005930:ma20", "BREAKS_LEVEL", 0.8, properties={
             "ontologyBox": "ABox",
             "riskImpact": 3.2,
@@ -211,6 +237,12 @@ class TypeDBOntologyRepositoryTests(unittest.TestCase):
         self.assertTrue(any("has ontology-foreign-net-volume 1400.0" in query for query in queries))
         self.assertTrue(any("has ontology-smart-money-net-volume 3900.0" in query for query in queries))
         self.assertTrue(any('has ontology-investment-strategy-profile "aggressive"' in query for query in queries))
+        self.assertTrue(any('has ontology-window-key "5D"' in query for query in queries))
+        self.assertTrue(any("has ontology-price-change-pct -8.4" in query for query in queries))
+        self.assertTrue(any("has ontology-risk-event-count 2.0" in query for query in queries))
+        self.assertTrue(any('has ontology-event-cluster-type "EventDrivenRiskCluster"' in query for query in queries))
+        self.assertTrue(any('has ontology-trend-episode-type "PersistentDecline"' in query for query in queries))
+        self.assertTrue(any("has ontology-temporal-risk-score 84.0" in query for query in queries))
 
     def test_typedb_read_query_metrics_record_row_count_and_hash(self):
         class FakeConcept:
@@ -1129,6 +1161,26 @@ class TypeDBOntologyRepositoryTests(unittest.TestCase):
         self.assertIn("ontology-position-account-weight-pct", body)
         self.assertIn("ontology-smart-money-net-volume", body)
         self.assertIn("ontology-bid-ask-imbalance", body)
+
+    def test_typedb_function_definition_uses_promoted_temporal_attributes(self):
+        persistent_rule = next(
+            item
+            for item in default_graph_inference_rules()
+            if item.rule_id == "graph.temporal.persistent_decline.risk.v1"
+        )
+        event_rule = next(
+            item
+            for item in default_graph_inference_rules()
+            if item.rule_id == "graph.temporal.event_cluster.risk.v1"
+        )
+        persistent_body = typedb_native_function_definition(persistent_rule.to_dict())["body"]
+        event_body = typedb_native_function_definition(event_rule.to_dict())["body"]
+
+        self.assertIn("ontology-trend-episode-type", persistent_body)
+        self.assertIn("ontology-window-key", persistent_body)
+        self.assertIn("ontology-value-number", persistent_body)
+        self.assertIn("ontology-event-cluster-type", event_body)
+        self.assertIn("ontology-risk-event-count", event_body)
 
     def test_typedb_schema_function_sync_uses_cache_for_same_rule_fingerprint(self):
         repository = TypeDBOntologyGraphRepository("127.0.0.1:1729")

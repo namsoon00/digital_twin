@@ -130,6 +130,109 @@ class OntologyRuleBoxTests(unittest.TestCase):
         self.assertTrue({"SKHY", "SKHYV", "SKHX", "SKHZ", "SKUU", "SKDD"}.issubset(line_symbols))
         self.assertEqual(["SKHY", "SKHYV", "SKHX", "SKHZ", "SKUU", "SKDD"], symbols)
 
+    def test_temporal_windows_materialize_from_monitor_state_history(self):
+        position = Position(
+            symbol="000660",
+            name="SK하이닉스",
+            market="KR",
+            currency="KRW",
+            quantity=5,
+            sellable_quantity=5,
+            average_price=105000,
+            current_price=90000,
+            market_value=450000,
+            profit_loss=-75000,
+            profit_loss_rate=-17.0,
+            ma20=100000,
+            ma60=98000,
+            ma20_distance=-10.0,
+            ma60_distance=-8.2,
+            foreign_net_volume=-5000,
+            institution_net_volume=-7000,
+            individual_net_volume=12000,
+            volume_ratio=1.4,
+            trade_strength=84,
+            bid_ask_imbalance=-12,
+            sector="반도체",
+        )
+        portfolio = portfolio_summary([position], account_cash=200000)
+        graph = build_portfolio_ontology(
+            [position],
+            portfolio,
+            portfolio_id="temporal-window-test",
+            runtime_context={
+                "asOf": "2026-07-16T00:00:00Z",
+                "settings": {"temporalWindowPeriods": "1D=1:2;3D=3:3;5D=5:4;20D=20:5"},
+                "metadata": {
+                    "monitorStateHistory": [
+                        {
+                            "generatedAt": "2026-07-13T00:00:00Z",
+                            "positions": {
+                                "000660": {
+                                    "current_price": 100000,
+                                    "profit_loss_rate": -8.0,
+                                    "ma20_distance": -2.0,
+                                    "ma60_distance": -1.0,
+                                    "foreign_net_volume": 1000,
+                                    "institution_net_volume": -500,
+                                    "individual_net_volume": -500,
+                                }
+                            },
+                        },
+                        {
+                            "generatedAt": "2026-07-14T00:00:00Z",
+                            "positions": {
+                                "000660": {
+                                    "current_price": 96000,
+                                    "profit_loss_rate": -11.0,
+                                    "ma20_distance": -5.0,
+                                    "ma60_distance": -3.0,
+                                    "foreign_net_volume": -1000,
+                                    "institution_net_volume": -1500,
+                                    "individual_net_volume": 2500,
+                                }
+                            },
+                        },
+                        {
+                            "generatedAt": "2026-07-15T00:00:00Z",
+                            "positions": {
+                                "000660": {
+                                    "current_price": 93000,
+                                    "profit_loss_rate": -14.0,
+                                    "ma20_distance": -7.0,
+                                    "ma60_distance": -5.0,
+                                    "foreign_net_volume": -2500,
+                                    "institution_net_volume": -3000,
+                                    "individual_net_volume": 5500,
+                                }
+                            },
+                        },
+                    ],
+                },
+            },
+        )
+
+        relation_types = {item.relation_type for item in graph.relations}
+        temporal_windows = [item for item in graph.entities if item.kind == "temporal-window"]
+        episodes = [item for item in graph.entities if item.kind == "trend-episode"]
+        persistent = [
+            item
+            for item in episodes
+            if (item.properties or {}).get("trendEpisodeType") == "PersistentDecline"
+        ]
+        payload = prompt_payload(graph)
+
+        self.assertIn("HAS_TEMPORAL_WINDOW", relation_types)
+        self.assertIn("HAS_PRICE_PATH_PATTERN", relation_types)
+        self.assertIn("HAS_FLOW_PATTERN", relation_types)
+        self.assertIn("DERIVES_TREND_EPISODE", relation_types)
+        self.assertIn("HAS_COVERAGE_GAP", relation_types)
+        self.assertGreaterEqual(len(temporal_windows), 4)
+        self.assertTrue(persistent)
+        self.assertTrue(any((item.properties or {}).get("windowKey") == "5D" for item in persistent))
+        self.assertIn("temporalWindows", payload)
+        self.assertTrue(payload["temporalWindows"])
+
     def strategy_threshold_loss_graph(self, strategy_profile: str, pnl_rate: float):
         current_price = 100000 * (1 + pnl_rate / 100)
         position = Position(

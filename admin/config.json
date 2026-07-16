@@ -13,7 +13,7 @@
     "공유 미리보기에서는 서버 설정과 계정 DB 쓰기를 차단합니다."
   ],
   "localData": {
-    "generatedAt": "2026-07-14T00:25:35.592606Z",
+    "generatedAt": "2026-07-16T05:19:58.328117Z",
     "sources": {
       "operationalDbBackend": "mysql",
       "settings": "data/settings.json",
@@ -135,6 +135,13 @@
       "newsAiAnalysisEnabled": "1",
       "newsAiAnalysisUseCodex": "1",
       "newsAiAnalysisTimeoutSeconds": "90",
+      "investmentCalendarOfficialMacroSyncEnabled": "1",
+      "investmentCalendarOfficialMacroSyncIntervalHours": "12",
+      "investmentCalendarOfficialMacroSyncRateLimitSeconds": "600",
+      "investmentCalendarOfficialMacroSyncTimeoutSeconds": "8",
+      "investmentCalendarBokPolicyDecisionEnabled": "1",
+      "investmentCalendarBokPolicyDecisionTimeKst": "09:00",
+      "investmentCalendarBokPolicyDecisionLookaheadYears": "1",
       "ontologyReasoningEnabled": "1",
       "ontologyReasoningIntervalSeconds": "10",
       "ontologyReasoningBatchSize": "20",
@@ -159,15 +166,20 @@
       "tossAccountSeq": false,
       "telegramBotToken": true,
       "telegramChatId": true,
-      "alphaVantageApiKey": false,
-      "coingeckoApiKey": false,
-      "fredApiKey": false,
-      "opendartApiKey": false
+      "alphaVantageApiKey": true,
+      "coingeckoApiKey": true,
+      "fredApiKey": true,
+      "opendartApiKey": true
     },
     "notification": {
       "alertRules": [
         {
           "key": "investmentInsight",
+          "default": 1,
+          "unit": ""
+        },
+        {
+          "key": "portfolioHoldingsSnapshot",
           "default": 1,
           "unit": ""
         },
@@ -478,6 +490,11 @@
           "unit": "minutes"
         },
         {
+          "key": "portfolioHoldingsSnapshot",
+          "default": 10,
+          "unit": "minutes"
+        },
+        {
           "key": "investmentCalendarReminder",
           "default": 10,
           "unit": "minutes"
@@ -661,7 +678,7 @@
           "key": "externalAlphaFundamentalsEnabled",
           "label": "Alpha Vantage 펀더멘털 수집",
           "type": "toggle",
-          "default": "0"
+          "default": "1"
         },
         {
           "key": "externalAlphaFundamentalsMaxSymbols",
@@ -946,6 +963,37 @@
           "unit": "seconds"
         },
         {
+          "key": "investmentCalendarOfficialMacroSyncEnabled",
+          "label": "공식 거시 일정 동기화",
+          "type": "toggle",
+          "default": "1"
+        },
+        {
+          "key": "investmentCalendarOfficialMacroSyncIntervalHours",
+          "label": "공식 일정 동기화 주기",
+          "type": "number",
+          "default": "12",
+          "unit": "hours"
+        },
+        {
+          "key": "investmentCalendarBokPolicyDecisionEnabled",
+          "label": "한국은행 금리 결정 일정",
+          "type": "toggle",
+          "default": "1"
+        },
+        {
+          "key": "investmentCalendarBokPolicyDecisionTimeKst",
+          "label": "한국은행 알림 기준 시각",
+          "type": "text",
+          "default": "09:00"
+        },
+        {
+          "key": "investmentCalendarBokPolicyDecisionLookaheadYears",
+          "label": "한국은행 일정 조회 연수",
+          "type": "number",
+          "default": "1"
+        },
+        {
           "key": "ontologyReasoningEnabled",
           "label": "데이터 변경 추론 사용",
           "type": "toggle",
@@ -1102,6 +1150,38 @@
           "unit": "seconds"
         },
         {
+          "key": "typedbRetryCount",
+          "label": "TypeDB 재시도",
+          "type": "number",
+          "default": "2"
+        },
+        {
+          "key": "typedbInferenceGenerationKeepCount",
+          "label": "InferenceBox 보관 세대",
+          "type": "number",
+          "default": "1"
+        },
+        {
+          "key": "typedbAutoResetEnabled",
+          "label": "TypeDB 자동 재생성",
+          "type": "toggle",
+          "default": "1"
+        },
+        {
+          "key": "typedbDataRetentionHours",
+          "label": "TypeDB 보관 시간",
+          "type": "number",
+          "default": "24",
+          "unit": "hours"
+        },
+        {
+          "key": "typedbDataMaxSizeMb",
+          "label": "TypeDB 최대 용량",
+          "type": "number",
+          "default": "2048",
+          "unit": "MB"
+        },
+        {
           "key": "formulaWeights",
           "label": "참고 가중치",
           "type": "assignmentText"
@@ -1148,6 +1228,11 @@
         "alertRules": [
           {
             "key": "investmentInsight",
+            "default": 1,
+            "unit": ""
+          },
+          {
+            "key": "portfolioHoldingsSnapshot",
             "default": 1,
             "unit": ""
           },
@@ -1404,6 +1489,11 @@
         "alertCadenceMinutes": [
           {
             "key": "investmentInsight",
+            "default": 10,
+            "unit": "minutes"
+          },
+          {
+            "key": "portfolioHoldingsSnapshot",
             "default": 10,
             "unit": "minutes"
           },
@@ -1694,5 +1784,5 @@
       ]
     }
   ],
-  "buildId": "c6c1d23de366"
+  "buildId": "e82fefdea4af"
 }

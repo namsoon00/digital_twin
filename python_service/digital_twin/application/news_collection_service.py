@@ -138,7 +138,7 @@ class NewsCollectionRunner:
         return truthy(self.settings.get("newsCollectionEnabled"), True)
 
     def max_symbols(self) -> int:
-        return int_setting(self.settings, "newsCollectionMaxSymbols", 40, 1, 500)
+        return int_setting(self.settings, "newsCollectionMaxSymbols", 3, 1, 500)
 
     def rate_limit_seconds(self) -> float:
         return max(0.0, number(self.settings.get("newsCollectionRateLimitSeconds")) or 0.25)

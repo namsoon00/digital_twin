@@ -78,6 +78,79 @@ def account_removed_event(account_id: str) -> DomainEvent:
     )
 
 
+def compact_snapshot_event_metadata(metadata: Dict[str, object]) -> Dict[str, object]:
+    compact = dict(metadata or {})
+    compact.pop("previousMonitorState", None)
+    compact.pop("monitorStateHistory", None)
+    ontology = compact.get("ontology")
+    if isinstance(ontology, dict):
+        compact["ontology"] = compact_ontology_event_metadata(ontology)
+    return compact
+
+
+def compact_ontology_event_metadata(ontology: Dict[str, object]) -> Dict[str, object]:
+    compact = {}
+    for key in ["activeGraphStore", "previousStateAvailable"]:
+        if key in ontology:
+            compact[key] = ontology.get(key)
+    for key in ["projection", "typedb", "neo4j", "typeDb"]:
+        value = ontology.get(key)
+        if isinstance(value, dict):
+            compact[key] = compact_ontology_projection_metadata(value)
+    state = ontology.get("inferenceMissingState")
+    if isinstance(state, dict):
+        compact["inferenceMissingState"] = {
+            key: state.get(key)
+            for key in ["reasonCode", "reason", "status", "graphStore", "createdAt", "updatedAt"]
+            if state.get(key) not in (None, "", [], {})
+        }
+    return compact
+
+
+def compact_ontology_projection_metadata(value: Dict[str, object]) -> Dict[str, object]:
+    allowed = [
+        "status",
+        "saved",
+        "graphStore",
+        "activeGraphStore",
+        "projectionMode",
+        "reason",
+        "entityCount",
+        "relationCount",
+        "aboxEntityCount",
+        "aboxRelationCount",
+        "qualitySampleId",
+        "qualityScore",
+    ]
+    compact = {
+        key: value.get(key)
+        for key in allowed
+        if value.get(key) not in (None, "", [], {})
+    }
+    validation = value.get("aboxValidation")
+    if isinstance(validation, dict):
+        compact["aboxValidation"] = {
+            key: validation.get(key)
+            for key in ["status", "errorCount", "warningCount"]
+            if validation.get(key) not in (None, "", [], {})
+        }
+    rulebox = value.get("ruleboxExecution")
+    if isinstance(rulebox, dict):
+        compact["ruleboxExecution"] = {
+            key: rulebox.get(key)
+            for key in ["status", "reason", "graphStore", "matchedCount", "relationCount", "traceCount", "nativeTypeDbReasoningUsed"]
+            if rulebox.get(key) not in (None, "", [], {})
+        }
+    inference = value.get("inferenceBox")
+    if isinstance(inference, dict):
+        compact["inferenceBox"] = {
+            key: inference.get(key)
+            for key in ["status", "reason", "graphStore", "relationCount", "traceCount", "nativeTypeDbReasoningUsed", "typedbReadStatus"]
+            if inference.get(key) not in (None, "", [], {})
+        }
+    return compact
+
+
 def snapshot_collected_event(snapshot: AccountSnapshot) -> DomainEvent:
     return DomainEvent(
         name=MONITORING_SNAPSHOT_COLLECTED,
@@ -94,7 +167,7 @@ def snapshot_collected_event(snapshot: AccountSnapshot) -> DomainEvent:
             "portfolioTotal": snapshot.portfolio.total,
             "portfolioInvested": snapshot.portfolio.invested,
             "portfolioCash": snapshot.portfolio.cash,
-            "metadata": dict(getattr(snapshot, "metadata", {}) or {}),
+            "metadata": compact_snapshot_event_metadata(getattr(snapshot, "metadata", {}) or {}),
         },
     )
 

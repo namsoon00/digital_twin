@@ -12,6 +12,14 @@ from .mysql_retention import (
 from .mysql_schema_tuning import ensure_mysql_operational_schema_tuning, mysql_partitioning_mode
 
 
+def mysql_operation_timeout_seconds(settings: Dict[str, str]) -> int:
+    try:
+        parsed = int(float(str((settings or {}).get("mysqlOperationTimeoutSeconds") or "").strip()))
+    except ValueError:
+        parsed = 10
+    return max(1, min(120, parsed))
+
+
 class MySQLConnectionProxy:
     def __init__(self, connection):
         self.connection = connection
@@ -53,6 +61,7 @@ class MySQLOperationalConnection:
             from pymysql.cursors import DictCursor
         except ImportError as error:
             raise MySQLDependencyError("MySQL backend requires pymysql. Install with: python3 -m pip install pymysql") from error
+        timeout_seconds = mysql_operation_timeout_seconds(self.runtime_settings)
         kwargs = {
             "host": self.mysql_config["host"],
             "port": int(self.mysql_config["port"] or 3306),
@@ -62,6 +71,9 @@ class MySQLOperationalConnection:
             "charset": "utf8mb4",
             "cursorclass": DictCursor,
             "autocommit": autocommit,
+            "connect_timeout": timeout_seconds,
+            "read_timeout": timeout_seconds,
+            "write_timeout": timeout_seconds,
         }
         if self.mysql_config.get("unix_socket"):
             kwargs["unix_socket"] = self.mysql_config["unix_socket"]
@@ -112,6 +124,7 @@ class MySQLOperationalConnection:
         min_interval = operational_history_retention_check_interval_seconds(self.runtime_settings)
         if last_run and (now - last_run).total_seconds() < min_interval:
             return
+        MySQLOperationalConnection._retention_last_run[schema_key] = now
         try:
             with self.connect() as connection:
                 apply_mysql_operational_history_retention(connection, self.runtime_settings, now=now)
@@ -122,7 +135,6 @@ class MySQLOperationalConnection:
                 stacklevel=2,
             )
             return
-        MySQLOperationalConnection._retention_last_run[schema_key] = now
 
 MYSQL_SCHEMA = [
     """

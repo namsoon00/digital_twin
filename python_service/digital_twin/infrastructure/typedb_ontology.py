@@ -653,9 +653,11 @@ class TypeDBOntologyGraphRepository(GraphStoreOntologyRowMapperMixin):
         inference_generation_keep_count: int = 2,
         query_timeout_seconds: float = None,
         schema_operation_timeout_seconds: float = None,
+        write_operation_timeout_seconds: float = None,
         condition_detail_queries_enabled: bool = False,
         query_metrics_enabled: bool = True,
         rulebox_snapshot_cache_seconds: float = 60.0,
+        native_rule_execution_enabled: bool = True,
     ):
         self.address = str(address or "").strip()
         self.user = str(user or "admin").strip() or "admin"
@@ -677,9 +679,18 @@ class TypeDBOntologyGraphRepository(GraphStoreOntologyRowMapperMixin):
                 else min(8.0, float(self.timeout_seconds or 8))
             ),
         )
+        self._write_operation_timeout_seconds = max(
+            1.0,
+            float(
+                write_operation_timeout_seconds
+                if write_operation_timeout_seconds is not None
+                else float(self.timeout_seconds or 20)
+            ),
+        )
         self._condition_detail_queries_enabled = bool(condition_detail_queries_enabled)
         self._query_metrics_enabled = bool(query_metrics_enabled)
         self._rulebox_snapshot_cache_seconds = max(1.0, float(rulebox_snapshot_cache_seconds or 60.0))
+        self._native_rule_execution_enabled = bool(native_rule_execution_enabled)
         self._last_graph = None
         self._last_rules: List[GraphInferenceRule] = []
         self._schema_function_sync_cache_key = ""
@@ -715,6 +726,9 @@ class TypeDBOntologyGraphRepository(GraphStoreOntologyRowMapperMixin):
 
     def schema_operation_timeout_seconds(self) -> float:
         return self._schema_operation_timeout_seconds
+
+    def write_operation_timeout_seconds(self) -> float:
+        return self._write_operation_timeout_seconds
 
     def condition_detail_queries_enabled(self) -> bool:
         return self._condition_detail_queries_enabled
@@ -753,6 +767,9 @@ class TypeDBOntologyGraphRepository(GraphStoreOntologyRowMapperMixin):
 
     def rulebox_snapshot_cache_seconds(self) -> float:
         return self._rulebox_snapshot_cache_seconds
+
+    def native_rule_execution_enabled(self) -> bool:
+        return self._native_rule_execution_enabled
 
     def clear_rulebox_snapshot_cache(self) -> None:
         self._rulebox_snapshot_cache_at = 0.0
@@ -799,13 +816,14 @@ class TypeDBOntologyGraphRepository(GraphStoreOntologyRowMapperMixin):
             return self.driver_missing_result(imported[1], graph)
         try:
             def operation():
-                driver = self.open_driver(imported)
-                try:
-                    self.ensure_database(driver)
-                    self.ensure_schema(driver, imported)
-                    self.write_graph(driver, imported, graph)
-                finally:
-                    self.close_driver(driver)
+                with typedb_operation_timeout(self.write_operation_timeout_seconds(), "TypeDB graph save"):
+                    driver = self.open_driver(imported)
+                    try:
+                        self.ensure_database(driver)
+                        self.ensure_schema(driver, imported)
+                        self.write_graph(driver, imported, graph)
+                    finally:
+                        self.close_driver(driver)
             self.with_typedb_retries(operation)
         except Exception as error:  # noqa: BLE001 - graph-store persistence must not block monitoring.
             return {
@@ -2470,6 +2488,28 @@ relation ontology-assertion,
             return NullTypeDBOntologyGraphRepository().run_rulebox(payload)
         self.reset_query_metrics()
         payload = payload if isinstance(payload, dict) else {}
+        if "typedbNativeRuleExecutionEnabled" in payload:
+            native_execution_enabled = typedb_bool(payload.get("typedbNativeRuleExecutionEnabled"))
+        else:
+            native_execution_enabled = self.native_rule_execution_enabled()
+        if not native_execution_enabled:
+            return {
+                "configured": True,
+                "status": "skipped",
+                "graphStore": "typedb",
+                "source": "typedbNativeRule",
+                "reasoningMode": TYPEDB_NATIVE_BLOCKED_MODE,
+                "reason": "TypeDB native rule execution is disabled for this runtime path.",
+                "statementCount": 0,
+                "relationTypes": [],
+                "nativeTypeDbReasoningUsed": False,
+                "typedbNativeFunctionReasoningUsed": False,
+                "typedbSchemaFunctionUsed": False,
+                "typedbBootstrapReasoningUsed": False,
+                "pythonBootstrapDisabled": True,
+                "pythonCompatibilityReasonerUsed": False,
+                "typedbQueryMetrics": self.query_metrics_snapshot(),
+            }
         target_symbols = clean_symbols_from_payload(
             payload.get("symbols")
             or payload.get("targetSymbols")
@@ -4368,7 +4408,9 @@ def typedb_repository_from_settings(settings: Dict[str, str] = None):
         inference_generation_keep_count=int(number_or_none(settings.get("typedbInferenceGenerationKeepCount")) or 1),
         query_timeout_seconds=number_or_none(settings.get("typedbQueryTimeoutSeconds")) or min(8.0, float(timeout_seconds or 8)),
         schema_operation_timeout_seconds=number_or_none(settings.get("typedbSchemaOperationTimeoutSeconds")) or min(8.0, float(timeout_seconds or 8)),
+        write_operation_timeout_seconds=number_or_none(settings.get("typedbWriteOperationTimeoutSeconds")) or float(timeout_seconds or 20),
         condition_detail_queries_enabled=typedb_bool(settings.get("typedbConditionDetailQueriesEnabled")),
         query_metrics_enabled=True if query_metrics_value in (None, "") else typedb_bool(query_metrics_value),
         rulebox_snapshot_cache_seconds=number_or_none(settings.get("typedbRuleBoxSnapshotCacheSeconds")) or 60.0,
+        native_rule_execution_enabled=typedb_bool(settings.get("typedbNativeRuleExecutionEnabled")),
     )

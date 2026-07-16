@@ -1,7 +1,10 @@
 import html
 import json
 import re
+import shutil
 import signal
+import socket
+import subprocess
 import threading
 import urllib.parse
 import urllib.request
@@ -24,7 +27,7 @@ TextFetcher = Callable[[str, Dict[str, str]], str]
 TAG_RE = re.compile(r"<[^>]+>")
 DISABLED_VALUES = {"0", "false", "no", "off", "disabled"}
 ARTICLE_TEXT_LIMIT = 5000
-DEFAULT_NEWS_COLLECTION_PROVIDERS = ["yahoo_finance", "gdelt", "google_rss_kr", "google_rss_us"]
+DEFAULT_NEWS_COLLECTION_PROVIDERS = ["yahoo_finance", "google_rss_kr", "google_rss_us"]
 NEWS_API_GUARD_STATE: Dict[str, object] = {}
 RSS_PROVIDER_NAMES = {
     "google_rss_kr",
@@ -49,18 +52,69 @@ class NewsProviderTimeout(TimeoutError):
     pass
 
 
+def curl_fetch_bytes(url: str, headers: Dict[str, str] = None, timeout: float = 8.0):
+    curl_path = shutil.which("curl")
+    if not curl_path:
+        return None
+    request_timeout = max(0.5, float(timeout or 8.0))
+    command = [
+        curl_path,
+        "-fsSL",
+        "--connect-timeout",
+        str(max(0.5, min(3.0, request_timeout))),
+        "--max-time",
+        str(request_timeout),
+    ]
+    for key, value in (headers or {}).items():
+        if key and value:
+            command.extend(["-H", str(key) + ": " + str(value)])
+    command.append(str(url or ""))
+    completed = subprocess.run(
+        command,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        timeout=request_timeout + 1.0,
+    )
+    if completed.returncode != 0:
+        message = completed.stderr.decode("utf-8", errors="replace").strip() or "curl request failed"
+        raise urllib.error.URLError(message[:180])
+    return completed.stdout
+
+
+@contextmanager
+def socket_default_timeout(seconds: float):
+    timeout = max(0.5, float(seconds or 8.0))
+    previous = socket.getdefaulttimeout()
+    socket.setdefaulttimeout(timeout)
+    try:
+        yield
+    finally:
+        socket.setdefaulttimeout(previous)
+
+
 def default_json_fetcher(url: str, headers: Dict[str, str] = None, timeout: float = 8.0) -> object:
     request = urllib.request.Request(url, headers=headers or {})
-    with urllib.request.urlopen(request, timeout=max(0.5, float(timeout or 8.0))) as response:
-        raw = response.read().decode("utf-8")
+    request_timeout = max(0.5, float(timeout or 8.0))
+    raw_bytes = curl_fetch_bytes(url, headers, request_timeout)
+    if raw_bytes is not None:
+        raw = raw_bytes.decode("utf-8", errors="replace")
         return json.loads(raw) if raw else {}
+    with socket_default_timeout(request_timeout):
+        with urllib.request.urlopen(request, timeout=request_timeout) as response:
+            raw = response.read().decode("utf-8")
+            return json.loads(raw) if raw else {}
 
 
 def default_text_fetcher(url: str, headers: Dict[str, str] = None, timeout: float = 8.0) -> str:
     request = urllib.request.Request(url, headers=headers or {})
-    with urllib.request.urlopen(request, timeout=max(0.5, float(timeout or 8.0))) as response:
-        charset = response.headers.get_content_charset() or "utf-8"
-        return response.read().decode(charset, errors="replace")
+    request_timeout = max(0.5, float(timeout or 8.0))
+    raw_bytes = curl_fetch_bytes(url, headers, request_timeout)
+    if raw_bytes is not None:
+        return raw_bytes.decode("utf-8", errors="replace")
+    with socket_default_timeout(request_timeout):
+        with urllib.request.urlopen(request, timeout=request_timeout) as response:
+            charset = response.headers.get_content_charset() or "utf-8"
+            return response.read().decode(charset, errors="replace")
 
 
 def news_source_for_url(url: str) -> str:
@@ -107,7 +161,7 @@ def strip_html(value: object) -> str:
 
 
 def article_block_is_useful(text: object) -> bool:
-    value = compact_text(text, 500)
+    value = clean_article_block(text)
     if len(value) < 28:
         return False
     lowered = value.lower()
@@ -127,6 +181,30 @@ def article_block_is_useful(text: object) -> bool:
     ]):
         return False
     return True
+
+
+def clean_article_block(text: object) -> str:
+    value = compact_text(text, 500)
+    if not value:
+        return ""
+    for marker in ["Sign in to access your portfolio", "Are you ahead, or behind on retirement?"]:
+        index = value.find(marker)
+        if index == 0:
+            return ""
+        if index > 0:
+            value = value[:index]
+    widget_match = re.search(
+        r"\b[A-Z]{1,6}(?:-[A-Z]{2,4})?\s+[A-Z][A-Za-z0-9&.,' -]{2,48}(?:Inc\.|Corporation|Corp\.|Ltd\.|PLC|USD)\s+[+-]?\d",
+        value,
+    )
+    if widget_match and widget_match.start() > 28:
+        value = value[: widget_match.start()]
+    price_change_count = len(re.findall(r"[+-]?\d[\d,]*(?:\.\d+)?\s+[+-]\d[\d,]*(?:\.\d+)?\s+\([+-]?\d", value))
+    ticker_count = len(re.findall(r"\b[A-Z]{1,6}(?:-[A-Z]{2,4})?\b", value))
+    numeric_count = len(re.findall(r"[+-]?\d[\d,]*(?:\.\d+)?%?", value))
+    if price_change_count >= 2 or (ticker_count >= 4 and numeric_count >= 6):
+        return ""
+    return compact_text(value, 500)
 
 
 def article_body_allowed_for_source(source: object, provider: object = "") -> bool:
@@ -162,7 +240,7 @@ class ArticleTextParser(HTMLParser):
             self.skip_depth = max(0, self.skip_depth - 1)
             return
         if self.capture_stack and normalized == self.capture_stack[-1]:
-            text = compact_text(" ".join(self.buffer), 420)
+            text = clean_article_block(" ".join(self.buffer))
             if article_block_is_useful(text):
                 self.blocks.append(text)
             self.capture_stack.pop()
@@ -243,15 +321,19 @@ class NewsSourceGateway:
         timeout = number(self.settings.get("newsCollectionTimeoutSeconds") or self.settings.get("externalApiTimeoutSeconds")) or 8.0
         self.fetch_json = fetch_json or self.guarded_json_fetcher(timeout)
         self.fetch_text = fetch_text or self.guarded_text_fetcher(timeout)
+        self._article_body_fetches_used = 0
+        self._article_body_fetches_for_target = 0
 
     def guarded_json_fetcher(self, timeout: float) -> JsonFetcher:
         def fetch(url: str, headers: Dict[str, str] = None) -> object:
+            source = news_source_for_url(url)
             return guarded_external_call(
                 self.settings,
-                news_source_for_url(url),
+                source,
                 external_call_target(url),
                 lambda: default_json_fetcher(url, headers, timeout=timeout),
                 state=NEWS_API_GUARD_STATE,
+                attempts=1 if source == "GDELT News" else 2,
                 rate_limit_seconds=0,
             )
 
@@ -259,25 +341,31 @@ class NewsSourceGateway:
 
     def guarded_text_fetcher(self, timeout: float) -> TextFetcher:
         def fetch(url: str, headers: Dict[str, str] = None) -> str:
+            source = news_source_for_url(url)
+            request_timeout = self.article_body_timeout_seconds() if self.is_article_body_request(headers) else timeout
             return guarded_external_call(
                 self.settings,
-                news_source_for_url(url),
+                source,
                 external_call_target(url),
-                lambda: default_text_fetcher(url, headers, timeout=timeout),
+                lambda: default_text_fetcher(url, headers, timeout=request_timeout),
                 state=NEWS_API_GUARD_STATE,
+                attempts=1 if source == "GDELT News" else 2,
                 rate_limit_seconds=0,
             )
 
         return fetch
 
     def providers(self) -> List[str]:
-        return [
+        providers = [
             item.lower().replace("-", "_")
             for item in split_csv(
                 self.settings.get("newsCollectionProviders"),
                 DEFAULT_NEWS_COLLECTION_PROVIDERS,
             )
         ]
+        if not truthy(self.settings.get("newsCollectionGdeltSyncEnabled"), False):
+            providers = [item for item in providers if item != "gdelt"]
+        return providers
 
     def per_symbol_limit(self) -> int:
         return int_setting(self.settings, "newsCollectionPerSymbolLimit", 8, 1, 50)
@@ -336,12 +424,41 @@ class NewsSourceGateway:
     def provider_requires_article_body(self, provider: object) -> bool:
         return self.provider_is_rss(provider) and self.require_article_body_for_rss()
 
+    def is_article_body_request(self, headers: Dict[str, str] = None) -> bool:
+        accept = str((headers or {}).get("Accept") or "").lower()
+        return "text/html" in accept
+
+    def article_body_timeout_seconds(self) -> float:
+        return float_setting(
+            self.settings,
+            "newsCollectionArticleBodyTimeoutSeconds",
+            float_setting(self.settings, "newsCollectionProviderTimeoutSeconds", 8.0, 0.5, 60.0),
+            0.5,
+            30.0,
+        )
+
+    def article_body_max_per_target(self) -> int:
+        return int_setting(self.settings, "newsCollectionArticleBodyMaxPerTarget", 10000, 0, 10000)
+
+    def article_body_max_per_run(self) -> int:
+        return int_setting(self.settings, "newsCollectionArticleBodyMaxPerRun", 10000, 0, 10000)
+
+    def article_body_budget_available(self) -> bool:
+        return (
+            self._article_body_fetches_for_target < self.article_body_max_per_target()
+            and self._article_body_fetches_used < self.article_body_max_per_run()
+        )
+
     def article_text_for_url(self, url: str) -> str:
         if not self.article_body_enabled():
             return ""
         normalized = str(url or "").strip()
         if not normalized.startswith(("http://", "https://")):
             return ""
+        if not self.article_body_budget_available():
+            return ""
+        self._article_body_fetches_for_target += 1
+        self._article_body_fetches_used += 1
         try:
             raw_html = self.fetch_text(normalized, {
                 "Accept": "text/html,application/xhtml+xml",
@@ -444,6 +561,7 @@ class NewsSourceGateway:
         statuses: List[Dict[str, object]] = []
         seen = set()
         limit = self.per_symbol_limit()
+        self._article_body_fetches_for_target = 0
         for provider in self.providers():
             remaining = max(0, limit - len(items))
             if remaining <= 0:

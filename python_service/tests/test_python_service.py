@@ -22,6 +22,7 @@ from digital_twin.application.flow_lens_service import FlowLensService
 from digital_twin.application.kis_realtime_service import KISRealtimeWebSocketRunner
 from digital_twin.application.market_data_collection_service import MARKET_DATA_ACCOUNT_ID, MarketDataCollectionRunner
 from digital_twin.application.model_review_service import ModelReviewRunner
+from digital_twin.application.news_ai_analysis_service import NewsAiAnalysisService
 from digital_twin.application.news_collection_service import NewsCollectionRunner
 from digital_twin.application.ontology_reasoning_service import OntologyReasoningRunner
 from digital_twin.application.monitoring_service import MonitorRunner as ApplicationMonitorRunner
@@ -69,7 +70,7 @@ from digital_twin.infrastructure.model_review_queue import ModelReviewEnqueuer, 
 from digital_twin.infrastructure.mock_market import mock_market_payload
 from digital_twin.infrastructure.graph_store_payloads import safe_relation_type
 from digital_twin.infrastructure.typedb_ontology import TypeDBOntologyGraphRepository, NullTypeDBOntologyGraphRepository
-from digital_twin.infrastructure.news_sources import NEWS_API_GUARD_STATE, NewsSourceGateway
+from digital_twin.infrastructure.news_sources import NEWS_API_GUARD_STATE, NewsSourceGateway, extract_article_text
 from digital_twin.infrastructure.notifications import TelegramNotifier, send_events
 from digital_twin.infrastructure.ontology_projection import PortfolioOntologyProjectionRecorder
 from digital_twin.infrastructure.service_factory import flow_lens_snapshot
@@ -80,6 +81,7 @@ from digital_twin.infrastructure.mysql_retention import (
     operational_history_retention_cutoff,
     operational_history_retention_enabled,
 )
+from digital_twin.infrastructure.mysql_operational_connection import mysql_operation_timeout_seconds
 from digital_twin.infrastructure.mysql_schema_tuning import MYSQL_OPERATIONAL_KEY_PARTITIONS, mysql_partitioning_mode
 from digital_twin.infrastructure.symbol_sources import RemoteSymbolSourceGateway, parse_krx_kind_table, parse_nasdaq_listed
 from digital_twin.infrastructure.toss_snapshots import TossAPIError, TossProvider, account_cash_amount, normalize_price_items, select_account, toss_json
@@ -5947,6 +5949,68 @@ class PythonServiceTests(unittest.TestCase):
         self.assertEqual(2, event.payload["metadata"]["connectionFailureStreak"])
         self.assertEqual(2, event.payload["metadata"]["toss"]["stageFailures"]["accounts"]["count"])
 
+    def test_snapshot_collected_event_compacts_heavy_ontology_metadata(self):
+        position = normalize_position({
+            "symbol": "005930",
+            "name": "삼성전자",
+            "market": "KR",
+            "currency": "KRW",
+            "marketValue": 864000,
+            "quantity": 10,
+            "currentPrice": 86400,
+            "sector": "반도체",
+        })
+        portfolio = portfolio_summary([position], 0, "KRW")
+        snapshot = AccountSnapshot(
+            "main",
+            "메인",
+            "toss",
+            "live",
+            "ok",
+            utc_now_iso(),
+            portfolio,
+            [position],
+            decisions_for_positions([position], portfolio),
+            metadata={
+                "previousMonitorState": {"positions": {"005930": {"currentPrice": 86000}}},
+                "monitorStateHistory": [{"positions": {"005930": {"currentPrice": 85000}}}],
+                "ontology": {
+                    "activeGraphStore": "typedb",
+                    "previousStateAvailable": True,
+                    "projection": {
+                        "status": "ok",
+                        "saved": True,
+                        "graphStore": "typedb",
+                        "entityCount": 100,
+                        "relationCount": 200,
+                        "inferenceBox": {
+                            "status": "ok",
+                            "relationCount": 12,
+                            "relations": [{"id": "heavy"}],
+                            "traces": [{"id": "heavy"}],
+                        },
+                        "ruleboxExecution": {
+                            "status": "ok",
+                            "relationCount": 12,
+                            "matches": [{"id": "heavy"}],
+                        },
+                    },
+                },
+            },
+        )
+
+        event = snapshot_collected_event(snapshot)
+        metadata = event.payload["metadata"]
+        projection = metadata["ontology"]["projection"]
+
+        self.assertNotIn("previousMonitorState", metadata)
+        self.assertNotIn("monitorStateHistory", metadata)
+        self.assertEqual("typedb", metadata["ontology"]["activeGraphStore"])
+        self.assertEqual("ok", projection["status"])
+        self.assertEqual(12, projection["inferenceBox"]["relationCount"])
+        self.assertNotIn("relations", projection["inferenceBox"])
+        self.assertNotIn("matches", projection["ruleboxExecution"])
+
     def test_recovery_from_account_data_failure_starts_new_baseline(self):
         failed_position = normalize_position({
             "symbol": "005930",
@@ -7249,7 +7313,7 @@ class PythonServiceTests(unittest.TestCase):
         gateway = NewsSourceGateway({})
 
         self.assertEqual(
-            ["yahoo_finance", "gdelt", "google_rss_kr", "google_rss_us"],
+            ["yahoo_finance", "google_rss_kr", "google_rss_us"],
             gateway.providers(),
         )
 
@@ -7331,6 +7395,22 @@ class PythonServiceTests(unittest.TestCase):
 
         self.assertIsNone(evidence)
 
+    def test_news_article_text_extraction_removes_market_widget_noise(self):
+        html = (
+            "<html><body><article>"
+            "<p>SK Hynix stock has been volatile since its blockbuster ADR listing. South Korean regulators are stepping in.</p>"
+            "<p>As SK Hynix Stock Drops, Regulators Try to Impose Stability NFLX Netflix, Inc. 353.81 -16.40 (-4.43%) BTC-USD Bitcoin USD 64,030.32 -790.70 (-1.22%)</p>"
+            "<p>Sign in to access your portfolio CDNA CareDx, Inc. 40.34 +10.59 (+35.60%)</p>"
+            "</article></body></html>"
+        )
+
+        text = extract_article_text(html)
+
+        self.assertIn("SK Hynix stock has been volatile", text)
+        self.assertIn("Regulators Try to Impose Stability", text)
+        self.assertNotIn("BTC-USD", text)
+        self.assertNotIn("Sign in to access your portfolio", text)
+
     def test_news_source_gateway_skips_rss_without_article_body_and_continues_providers(self):
         published = datetime.now(timezone.utc).strftime("%a, %d %b %Y %H:%M:%S GMT")
 
@@ -7403,6 +7483,7 @@ class PythonServiceTests(unittest.TestCase):
 
         gateway = NewsSourceGateway({
             "newsCollectionProviders": "yahoo_finance,gdelt",
+            "newsCollectionGdeltSyncEnabled": "1",
             "newsCollectionPerSymbolLimit": "1",
             "newsCollectionLookbackMinutes": "1440",
             "newsCollectionMinRelevanceScore": "35",
@@ -7440,6 +7521,7 @@ class PythonServiceTests(unittest.TestCase):
 
         gateway = NewsSourceGateway({
             "newsCollectionProviders": "gdelt,yahoo_finance",
+            "newsCollectionGdeltSyncEnabled": "1",
             "newsCollectionPerSymbolLimit": "2",
             "newsCollectionLookbackMinutes": "1440",
             "newsCollectionMinRelevanceScore": "35",
@@ -7468,6 +7550,7 @@ class PythonServiceTests(unittest.TestCase):
 
         gateway = NewsSourceGateway({
             "newsCollectionProviders": "gdelt",
+            "newsCollectionGdeltSyncEnabled": "1",
             "newsCollectionPerSymbolLimit": "2",
             "newsCollectionLookbackMinutes": "1440",
             "newsCollectionMinRelevanceScore": "35",
@@ -7488,6 +7571,119 @@ class PythonServiceTests(unittest.TestCase):
 
         self.assertEqual(2, len(calls))
         self.assertIn("circuit open until", statuses[0]["message"])
+
+    def test_news_ai_analysis_limits_external_analysis_to_top_ranked_articles(self):
+        calls = []
+
+        class RecordingAnalyzer:
+            def analyze(self, _target, evidence):
+                calls.append(evidence.title)
+                return {
+                    "status": "ok",
+                    "model": "test-external-news-ai",
+                    "impactPolarity": "risk",
+                    "impactLabelKo": "악재",
+                    "confidence": 0.82,
+                    "materialityScore": 91,
+                    "summary": {
+                        "oneLineKo": evidence.title,
+                        "briefKo": evidence.title,
+                    },
+                    "rationaleKo": "상위 중요도 기사만 외부 AI 분석 대상으로 보냅니다.",
+                }
+
+        def evidence(title, materiality, reliability):
+            return ResearchEvidence(
+                "news:" + title,
+                "005930",
+                "news",
+                "Test News",
+                title,
+                "summary",
+                "https://example.com/" + title,
+                utc_now_iso(),
+                "context",
+                materiality,
+                reliability,
+                utc_now_iso(),
+                {
+                    "materialityScore": materiality,
+                    "sourceReliability": reliability,
+                    "articleFacts": {"bodyAvailable": True},
+                },
+            )
+
+        service = NewsAiAnalysisService(
+            RecordingAnalyzer(),
+            {"newsAiAnalysisEnabled": "1", "newsAiAnalysisMaxPerTarget": "1"},
+        )
+        target = NewsCollectionTarget("005930", "삼성전자", "KOSPI", "KRW", "반도체")
+
+        analyzed = service.analyze_many(target, [
+            evidence("낮은 중요도", 20, 0.9),
+            evidence("가장 중요한 기사", 95, 0.8),
+            evidence("중간 중요도", 60, 0.7),
+        ])
+
+        self.assertEqual(["가장 중요한 기사"], calls)
+        self.assertEqual("test-external-news-ai", analyzed[1].raw_payload["aiAnalysis"]["model"])
+        self.assertIn(
+            "외부 AI 기사 분석 우선순위 제한",
+            " ".join(analyzed[0].raw_payload["aiAnalysis"]["reasoningLimitations"]),
+        )
+        self.assertIn(
+            "외부 AI 기사 분석 우선순위 제한",
+            " ".join(analyzed[2].raw_payload["aiAnalysis"]["reasoningLimitations"]),
+        )
+
+    def test_news_ai_analysis_respects_external_analysis_budget_per_run(self):
+        calls = []
+
+        class RecordingAnalyzer:
+            def analyze(self, _target, evidence):
+                calls.append(evidence.title)
+                return {
+                    "status": "ok",
+                    "model": "test-external-news-ai",
+                    "impactPolarity": "neutral",
+                    "impactLabelKo": "중립",
+                    "confidence": 0.7,
+                    "materialityScore": evidence.impact_score,
+                    "summary": {"oneLineKo": evidence.title, "briefKo": evidence.title},
+                }
+
+        def evidence(title, materiality):
+            return ResearchEvidence(
+                "news:" + title,
+                "005930",
+                "news",
+                "Test News",
+                title,
+                "summary",
+                "https://example.com/" + title,
+                utc_now_iso(),
+                "context",
+                materiality,
+                0.7,
+                utc_now_iso(),
+                {"materialityScore": materiality, "sourceReliability": 0.8},
+            )
+
+        service = NewsAiAnalysisService(
+            RecordingAnalyzer(),
+            {"newsAiAnalysisEnabled": "1", "newsAiAnalysisMaxPerTarget": "2", "newsAiAnalysisMaxPerRun": "2"},
+        )
+        first_target = NewsCollectionTarget("005930", "삼성전자", "KOSPI", "KRW", "반도체")
+        second_target = NewsCollectionTarget("000660", "SK하이닉스", "KOSPI", "KRW", "반도체")
+
+        service.analyze_many(first_target, [evidence("첫 번째", 90), evidence("두 번째", 80)])
+        analyzed_second = service.analyze_many(second_target, [evidence("세 번째", 95)])
+
+        self.assertEqual(["첫 번째", "두 번째"], calls)
+        self.assertIn(
+            "외부 AI 기사 분석 우선순위 제한",
+            " ".join(analyzed_second[0].raw_payload["aiAnalysis"]["reasoningLimitations"]),
+        )
 
     def test_yahoo_finance_rss_maps_kr_symbol_to_yahoo_suffix(self):
         published = datetime.now(timezone.utc).strftime("%a, %d %b %Y %H:%M:%S GMT")
@@ -13490,6 +13686,9 @@ class PythonServiceTests(unittest.TestCase):
             "2026-07-14T13:00:00Z",
             operational_history_retention_cutoff({"operationalHistoryRetentionHours": "24"}, now=now),
         )
+        self.assertEqual(10, mysql_operation_timeout_seconds({}))
+        self.assertEqual(3, mysql_operation_timeout_seconds({"mysqlOperationTimeoutSeconds": "3"}))
+        self.assertEqual(120, mysql_operation_timeout_seconds({"mysqlOperationTimeoutSeconds": "500"}))
 
     def test_mysql_operational_history_retention_aggressive_policies(self):
         db_path = test_store_seed(self.temp.name)

@@ -1,6 +1,7 @@
 import hashlib
 import json
 import tempfile
+import time
 import unittest
 from pathlib import Path
 from types import SimpleNamespace
@@ -19,8 +20,10 @@ from digital_twin.infrastructure.ontology_projection import PortfolioOntologyPro
 from digital_twin.infrastructure.graph_store_rulebox import rulebox_graph_from_rules
 from digital_twin.infrastructure.typedb_ontology import (
     NullTypeDBOntologyGraphRepository,
+    TypeDBOperationTimeout,
     TypeDBOntologyGraphRepository,
     relation_row_id,
+    typedb_repository_from_settings,
     typedb_inferencebox_graph,
     typedb_native_function_definition,
     typedb_native_match_query,
@@ -57,6 +60,39 @@ class TypeDBOntologyRepositoryTests(unittest.TestCase):
         self.assertIn("attribute ontology-event-cluster-type, value string", schema)
         self.assertIn("owns ontology-window-key", schema)
         self.assertIn("owns ontology-temporal-risk-score", schema)
+
+    def test_typedb_save_graph_returns_error_when_write_operation_times_out(self):
+        graph = PortfolioOntology("typedb-timeout-test")
+        repository = TypeDBOntologyGraphRepository(
+            "127.0.0.1:1729",
+            retry_count=0,
+            write_operation_timeout_seconds=1,
+        )
+
+        def slow_open_driver(_imported):
+            time.sleep(2)
+            raise TypeDBOperationTimeout("expected timeout")
+
+        with patch.object(repository, "driver_imports", return_value=((object, object, object, object, object), None)):
+            with patch.object(repository, "open_driver", side_effect=slow_open_driver):
+                result = repository.save_graph(graph)
+
+        self.assertEqual("error", result["status"])
+        self.assertFalse(result["saved"])
+        self.assertIn("TypeDB graph save timed out", result["reason"])
+
+    def test_typedb_repository_factory_disables_native_rule_execution_by_default(self):
+        direct = TypeDBOntologyGraphRepository("127.0.0.1:1729")
+        factory_default = typedb_repository_from_settings({"ontologyTypeDbEnabled": "1", "typedbAddress": "127.0.0.1:1729"})
+        factory_enabled = typedb_repository_from_settings({
+            "ontologyTypeDbEnabled": "1",
+            "typedbAddress": "127.0.0.1:1729",
+            "typedbNativeRuleExecutionEnabled": "1",
+        })
+
+        self.assertTrue(direct.native_rule_execution_enabled())
+        self.assertFalse(factory_default.native_rule_execution_enabled())
+        self.assertTrue(factory_enabled.native_rule_execution_enabled())
 
     def test_typedb_symbol_filters_keep_numeric_stock_codes_as_strings(self):
         rule = next(item for item in default_graph_inference_rules() if item.rule_id == "graph.loss_guard.breakdown.v1")

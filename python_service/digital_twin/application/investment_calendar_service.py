@@ -329,11 +329,25 @@ class InvestmentCalendarService:
 
 
 class InvestmentCalendarRunner:
-    def __init__(self, service: InvestmentCalendarService):
+    def __init__(self, service: InvestmentCalendarService, official_sync_service=None):
         self.service = service
+        self.official_sync_service = official_sync_service
 
     def run_once(self) -> Dict[str, object]:
-        return self.service.enqueue_due_reminders()
+        sync_result = {}
+        if self.official_sync_service:
+            sync_result = self.official_sync_service.run_due()
+        result = self.service.enqueue_due_reminders()
+        if sync_result and sync_result.get("status") != "not-due":
+            result["officialCalendarSync"] = sync_result
+        return result
 
     def status(self) -> Dict[str, object]:
-        return self.service.status()
+        result = self.service.status()
+        if self.official_sync_service:
+            result["officialCalendarSync"] = {
+                "enabled": self.official_sync_service.enabled(),
+                "due": self.official_sync_service.due(),
+                "intervalSeconds": self.official_sync_service.interval_seconds(),
+            }
+        return result

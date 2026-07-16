@@ -15,7 +15,7 @@ from .event_bus import default_event_bus
 from . import operational_store as stores
 from .notifications import queued_notifier_for_account, send_events
 from .ontology_graph_store import ontology_repository_from_settings
-from .service_factory import build_investment_calendar_candidate_service, build_investment_calendar_runner, build_investment_calendar_service, build_kis_realtime_websocket_runner, build_market_data_collection_runner, build_model_review_runner, build_monitor_runner, build_news_collection_runner, build_notification_queue_runner, build_ontology_lab_service, build_ontology_reasoning_runner, build_rule_change_candidate_service, build_symbol_universe_service, monitor_account_job_store_from_settings
+from .service_factory import build_investment_calendar_candidate_service, build_investment_calendar_runner, build_investment_calendar_service, build_kis_realtime_websocket_runner, build_market_data_collection_runner, build_model_review_runner, build_monitor_runner, build_news_collection_runner, build_notification_queue_runner, build_official_calendar_sync_service, build_ontology_lab_service, build_ontology_reasoning_runner, build_rule_change_candidate_service, build_symbol_universe_service, monitor_account_job_store_from_settings
 from .schedulers import (
     InvestmentCalendarScheduler,
     KISRealtimeWebSocketScheduler,
@@ -595,6 +595,9 @@ def investment_calendar_command(args) -> int:
         candidate_service = build_investment_calendar_candidate_service(settings)
         print(json.dumps(candidate_service.reject_candidate(args.candidate_id, {"reviewNote": args.note}), ensure_ascii=False))
         return 0
+    if args.investment_calendar_action == "sync-official":
+        print(json.dumps(build_official_calendar_sync_service(settings).run_once(force=True), ensure_ascii=False))
+        return 0
     runner = build_investment_calendar_runner(settings)
     if args.investment_calendar_action == "once":
         print(json.dumps(runner.run_once(), ensure_ascii=False))
@@ -852,6 +855,7 @@ def build_parser() -> argparse.ArgumentParser:
     calendar_candidate_reject.add_argument("--candidate-id", required=True)
     calendar_candidate_reject.add_argument("--note", default="")
     investment_calendar_actions.add_parser("once")
+    investment_calendar_actions.add_parser("sync-official")
     investment_calendar_actions.add_parser("watch")
     investment_calendar.set_defaults(func=investment_calendar_command)
 

@@ -9,6 +9,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from digital_twin.application.investment_calendar_extraction_service import InvestmentCalendarExtractionService
 from digital_twin.application.investment_calendar_candidate_service import InvestmentCalendarCandidateService
 from digital_twin.application.investment_calendar_service import InvestmentCalendarService
+from digital_twin.application.official_calendar_sync_service import OfficialCalendarSyncService
 from digital_twin.domain.accounts import AccountConfig
 from digital_twin.domain.events import (
     DomainEvent,
@@ -19,6 +20,7 @@ from digital_twin.domain.events import (
 from digital_twin.domain.investment_calendar import InvestmentCalendarEvent, event_type_label, utc_iso
 from digital_twin.domain.investment_calendar_candidates import InvestmentCalendarReviewCandidate
 from digital_twin.domain.investment_calendar_extraction import calendar_candidate_from_research_item
+from digital_twin.infrastructure.bok_calendar_source import BokPolicyDecisionCalendarSource, parse_bok_policy_decision_events
 from digital_twin.domain.message_types import INVESTMENT_CALENDAR_REMINDER
 from digital_twin.domain.notification_ai_gate_validation import build_notification_ai_gate_prompt
 
@@ -445,6 +447,69 @@ class InvestmentCalendarServiceTests(unittest.TestCase):
         self.assertEqual("ADR/GDR 상장", job.context["eventTypeLabel"])
         self.assertIn("원주/ADR 교환비율과 수수료", job.context["watchItems"])
         self.assertEqual("balanced", job.context["investmentStrategyProfile"])
+
+    def test_bok_policy_decision_html_parses_to_central_bank_events(self):
+        html = """
+        <h3>2026년</h3>
+        <table><tbody>
+          <tr><th scope="row">07월 16일(목)</th><td></td></tr>
+          <tr><th scope="row">08월 27일(목)</th><td></td></tr>
+        </tbody></table>
+        """
+
+        events = parse_bok_policy_decision_events(
+            html,
+            year=2026,
+            source_url="https://www.bok.or.kr/portal/singl/crncyPolicyDrcMtg/listYear.do?mtgSe=A&menuNo=200755&pYear=2026",
+            time_kst="09:00",
+        )
+
+        self.assertEqual(2, len(events))
+        first = events[0]
+        self.assertEqual("official-bok-policy-decision-20260716", first.event_id)
+        self.assertEqual("centralBank", first.event_type)
+        self.assertEqual(["KR"], first.markets)
+        self.assertFalse(first.all_day)
+        self.assertEqual("2026-07-16T00:00:00Z", first.starts_at)
+        self.assertTrue(first.payload["policyRateDecisionExpected"])
+        self.assertEqual("목", first.payload["weekday"])
+
+    def test_official_calendar_sync_registers_bok_policy_decisions(self):
+        html = """
+        <h3>2026년</h3>
+        <table><tbody>
+          <tr><th scope="row">07월 16일(목)</th><td></td></tr>
+        </tbody></table>
+        """
+        store = MemoryCalendarStore()
+        calendar_service = self.service(store=store)
+        source = BokPolicyDecisionCalendarSource(
+            settings={
+                "investmentCalendarOfficialMacroSyncEnabled": "1",
+                "investmentCalendarBokPolicyDecisionEnabled": "1",
+                "investmentCalendarBokPolicyDecisionLookaheadYears": "0",
+            },
+            fetch_text=lambda _url, _headers, _timeout: html,
+            now=lambda: datetime(2026, 7, 1, tzinfo=timezone.utc),
+            guard_state={},
+        )
+        sync_service = OfficialCalendarSyncService(
+            calendar_service=calendar_service,
+            sources=[source],
+            settings={"investmentCalendarOfficialMacroSyncEnabled": "1"},
+            now=lambda: datetime(2026, 7, 1, tzinfo=timezone.utc),
+        )
+
+        result = sync_service.run_once(force=True)
+
+        self.assertEqual("ok", result["status"])
+        self.assertEqual(1, result["fetchedCount"])
+        self.assertEqual(1, result["savedCount"])
+        saved = store.get("official-bok-policy-decision-20260716")
+        self.assertIsNotNone(saved)
+        self.assertEqual("한국은행 기준금리 결정 금융통화위원회", saved.title)
+        self.assertEqual("Bank of Korea", saved.source)
+        self.assertEqual("centralBank", saved.event_type)
 
 
 if __name__ == "__main__":

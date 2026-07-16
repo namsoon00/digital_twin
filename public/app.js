@@ -376,6 +376,7 @@
     investmentCalendarSaving: false,
     investmentCalendarDeleting: "",
     investmentCalendarRunning: false,
+    investmentCalendarSyncing: false,
     investmentCalendarCandidates: null,
     investmentCalendarCandidatesLoading: false,
     investmentCalendarCandidateReviewing: "",
@@ -4859,6 +4860,26 @@
       });
   }
 
+  function syncOfficialInvestmentCalendar() {
+    if (state.investmentCalendarSyncing) return Promise.resolve();
+    state.investmentCalendarSyncing = true;
+    state.investmentCalendarError = "";
+    render();
+    return sendJson("/api/investment-calendar/sync-official", "POST", {})
+      .then(function (payload) {
+        showSnackbar("공식 일정 동기화 완료 · 저장 " + Number(payload.savedCount || 0) + "건", "success");
+        return loadInvestmentCalendar(true);
+      })
+      .catch(function (error) {
+        state.investmentCalendarError = error.message || "공식 일정을 동기화하지 못했습니다.";
+        showSnackbar(state.investmentCalendarError, "danger");
+      })
+      .finally(function () {
+        state.investmentCalendarSyncing = false;
+        render();
+      });
+  }
+
   function approveInvestmentCalendarCandidate(candidateId) {
     var id = String(candidateId || "").trim();
     if (!id || state.investmentCalendarCandidateReviewing) return Promise.resolve();
@@ -7419,6 +7440,7 @@
       '<div><p class="label">INVESTMENT CALENDAR</p><h2>예정 이벤트와 알림 상태</h2><span>투자 판단은 캘린더 리마인더가 아니라 온톨로지 인사이트에서 따로 생성됩니다.</span></div>',
       '<div class="toolbar">',
       '<button class="text-button" type="button" data-action="refresh-investment-calendar"' + (state.investmentCalendarLoading ? ' disabled' : '') + '>' + (state.investmentCalendarLoading ? "조회 중" : "새로고침") + '</button>',
+      '<button class="text-button" type="button" data-action="sync-official-investment-calendar"' + (state.investmentCalendarSyncing ? ' disabled' : '') + '>' + (state.investmentCalendarSyncing ? "동기화 중" : "공식일정 동기화") + '</button>',
       '<button class="text-button primary" type="button" data-action="run-investment-calendar-reminders"' + (state.investmentCalendarRunning ? ' disabled' : '') + '>' + (state.investmentCalendarRunning ? "확인 중" : "리마인더 확인") + '</button>',
       renderCalendarEntryButton("이벤트 등록", "text-button primary"),
       '</div>',
@@ -17380,6 +17402,12 @@
     Array.prototype.slice.call(app.querySelectorAll('[data-action="run-investment-calendar-reminders"]')).forEach(function (button) {
       button.addEventListener("click", function () {
         runInvestmentCalendarReminders();
+      });
+    });
+
+    Array.prototype.slice.call(app.querySelectorAll('[data-action="sync-official-investment-calendar"]')).forEach(function (button) {
+      button.addEventListener("click", function () {
+        syncOfficialInvestmentCalendar();
       });
     });
 

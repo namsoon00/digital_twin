@@ -22,6 +22,7 @@ from ..application.notification_service import (
     NotificationHoldingSnapshotEnricher,
     NotificationQueueRunner,
 )
+from ..application.official_calendar_sync_service import OfficialCalendarSyncService
 from ..application.ontology_reasoning_service import OntologyReasoningRunner
 from ..application.ontology_lab_service import OntologyLabService
 from ..application.ontology_rule_candidate_service import RuleChangeCandidateProposalService
@@ -31,6 +32,7 @@ from ..domain.events import RESEARCH_EVIDENCE_COLLECTED
 from ..domain.market_data import number
 from ..domain.monitoring import RealtimeMonitor
 from .event_bus import EventBus, default_event_bus
+from .bok_calendar_source import BokPolicyDecisionCalendarSource
 from .disclosure_analyzer import disclosure_analyzer_from_settings
 from .model_review_queue import ModelReviewEnqueuer
 from .model_reviewer import reviewer_from_settings
@@ -226,6 +228,17 @@ def build_investment_calendar_service(settings=None, event_publisher=None) -> In
     )
 
 
+def build_official_calendar_sync_service(settings=None, event_publisher=None) -> OfficialCalendarSyncService:
+    configured_settings = settings or runtime_settings()
+    return OfficialCalendarSyncService(
+        calendar_service=build_investment_calendar_service(configured_settings, event_publisher),
+        sources=[
+            BokPolicyDecisionCalendarSource(configured_settings),
+        ],
+        settings=configured_settings,
+    )
+
+
 def build_investment_calendar_candidate_service(settings=None, event_publisher=None) -> InvestmentCalendarCandidateService:
     configured_settings = settings or runtime_settings()
     return InvestmentCalendarCandidateService(
@@ -235,7 +248,11 @@ def build_investment_calendar_candidate_service(settings=None, event_publisher=N
 
 
 def build_investment_calendar_runner(settings=None, event_publisher=None) -> InvestmentCalendarRunner:
-    return InvestmentCalendarRunner(build_investment_calendar_service(settings, event_publisher))
+    configured_settings = settings or runtime_settings()
+    return InvestmentCalendarRunner(
+        build_investment_calendar_service(configured_settings, event_publisher),
+        official_sync_service=build_official_calendar_sync_service(configured_settings, event_publisher),
+    )
 
 
 def build_ontology_reasoning_runner(settings=None, event_publisher=None) -> OntologyReasoningRunner:

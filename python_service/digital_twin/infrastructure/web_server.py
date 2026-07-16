@@ -64,7 +64,7 @@ from ..infrastructure.mock_market import mock_market_payload, mock_market_scenar
 from ..infrastructure.ontology_graph_store import ontology_repository_from_settings
 from ..infrastructure.ontology_projection import PortfolioOntologyProjectionRecorder
 from ..infrastructure import operational_store as stores
-from ..infrastructure.service_factory import build_investment_calendar_candidate_service, build_investment_calendar_service, build_notification_queue_runner, build_ontology_lab_service, build_rule_change_candidate_service, build_symbol_universe_service, flow_lens_snapshot, investment_analysis_snapshot
+from ..infrastructure.service_factory import build_investment_calendar_candidate_service, build_investment_calendar_runner, build_investment_calendar_service, build_notification_queue_runner, build_official_calendar_sync_service, build_ontology_lab_service, build_rule_change_candidate_service, build_symbol_universe_service, flow_lens_snapshot, investment_analysis_snapshot
 from ..infrastructure.settings import ROOT_DIR, runtime_settings, save_runtime_settings
 from ..infrastructure.toss_snapshots import build_snapshot
 
@@ -509,6 +509,13 @@ def settings_status_payload() -> Dict[str, object]:
         "investmentCalendarAutoExtractMinConfidence",
         "investmentCalendarAutoExtractReviewEnabled",
         "investmentCalendarAutoExtractReviewMinConfidence",
+        "investmentCalendarOfficialMacroSyncEnabled",
+        "investmentCalendarOfficialMacroSyncIntervalHours",
+        "investmentCalendarOfficialMacroSyncRateLimitSeconds",
+        "investmentCalendarOfficialMacroSyncTimeoutSeconds",
+        "investmentCalendarBokPolicyDecisionEnabled",
+        "investmentCalendarBokPolicyDecisionTimeKst",
+        "investmentCalendarBokPolicyDecisionLookaheadYears",
         "dartDisclosureAiAnalysisEnabled",
         "dartDisclosureAiUseCodex",
         "dartDisclosureAiCommand",
@@ -995,7 +1002,11 @@ def delete_investment_calendar_event_payload(event_id: str) -> Dict[str, object]
 
 
 def investment_calendar_reminders_once_payload() -> Dict[str, object]:
-    return investment_calendar_service().enqueue_due_reminders()
+    return build_investment_calendar_runner(runtime_settings(), event_publisher=RealtimeEventBridge()).run_once()
+
+
+def investment_calendar_sync_official_payload() -> Dict[str, object]:
+    return build_official_calendar_sync_service(runtime_settings(), event_publisher=RealtimeEventBridge()).run_once(force=True)
 
 
 def investment_calendar_candidates_query_payload(query: Dict[str, List[str]]) -> Dict[str, object]:
@@ -2206,6 +2217,11 @@ class DigitalTwinHandler(BaseHTTPRequestHandler):
             if not self.ensure_writable("공유 모드에서는 투자 캘린더 알림을 큐잉할 수 없습니다."):
                 return
             return self.send_payload(200, investment_calendar_reminders_once_payload())
+
+        if path == "/api/investment-calendar/sync-official" and self.command == "POST":
+            if not self.ensure_writable("공유 모드에서는 공식 투자 일정을 동기화할 수 없습니다."):
+                return
+            return self.send_payload(200, investment_calendar_sync_official_payload())
 
         calendar_event_match = re.match(r"^/api/investment-calendar/events/([^/]+)$", path)
         if calendar_event_match:

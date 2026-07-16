@@ -467,6 +467,10 @@ def missing_data_lines(context_or_metadata: Dict[str, object]) -> List[str]:
         "zero": "0값 수신",
         "proxy": "대체 근거 사용",
         "stale": "오래된 값",
+        "latency": "지연/반복값",
+        "stale-repeat": "반복 지연",
+        "reference-only": "참고용",
+        "unknown": "상태 미확인",
     }
     lines = []
     for item in rows:

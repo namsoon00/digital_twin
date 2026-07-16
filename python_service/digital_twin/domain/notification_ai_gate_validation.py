@@ -329,6 +329,65 @@ def soften_low_confidence_sell(context: Dict[str, object], response: Notificatio
         response.opinion = "한 번에 모두 줄이기보다 일부 축소부터 보는 판단입니다."
     return response
 
+def _clean_placeholder_missing_impact(rows: List[str]) -> List[str]:
+    placeholders = {"없음", "부족 데이터 없음", "명시적 부족 데이터 없음"}
+    result = []
+    for item in rows:
+        text = str(item or "").strip()
+        if not text:
+            continue
+        if text in placeholders:
+            continue
+        if any(token in text for token in ["missingData", "빈 배열", "빈 객체"]):
+            continue
+        result.append(item)
+    return result
+
+def _missing_impact_matches_structured_label(row: str, label: str) -> bool:
+    text = re.sub(r"\s+", " ", str(row or "").strip())
+    label_text = str(label or "").strip()
+    if not text or not label_text:
+        return False
+    if label_text in text:
+        return True
+    if label_text == "투자자별 수급":
+        has_actor = any(token in text for token in ["투자자", "주체별", "외국인", "기관", "개인"])
+        has_flow = any(token in text for token in ["수급", "순매수", "순매도", "매수", "매도"])
+        return has_actor and has_flow
+    if label_text == "체결강도":
+        return any(token in text for token in ["체결강도", "체결 압력"])
+    if label_text == "방향별 매수/매도 체결량":
+        return (
+            "방향별" in text
+            or "체결량" in text
+            or "매수·매도 방향" in text
+            or ("매수" in text and "매도" in text and "체결" in text)
+        )
+    if label_text == "비트코인 시장 데이터":
+        return "비트코인" in text and any(token in text for token in ["시장", "데이터", "가격"])
+    return False
+
+def _normalize_missing_data_impact(
+    context: Dict[str, object],
+    rows: List[str],
+    missing_labels: List[str],
+    limit: int = 5,
+) -> List[str]:
+    missing_impact = _clean_placeholder_missing_impact(list(rows or []))
+    if not missing_labels:
+        return missing_impact[:limit]
+    if relation_context_value(context):
+        filtered: List[str] = []
+        for row in missing_impact:
+            if any(_missing_impact_matches_structured_label(row, label) for label in missing_labels):
+                continue
+            append_unique_text(filtered, row, 220)
+        return filtered[:limit]
+    for item in missing_labels:
+        if not any(item in row for row in missing_impact):
+            missing_impact.append(user_friendly_ai_text(item + "는 결론 강도를 낮추는 요소입니다."))
+    return missing_impact[:limit]
+
 def confidence_cap_for_response(
     context: Dict[str, object],
     evidence_count: int,
@@ -464,6 +523,7 @@ def local_validated_ai_response(context: Dict[str, object], source: str = "local
     missing_impact = list(execution_plan.get("missingDataImpact") or []) if isinstance(execution_plan.get("missingDataImpact"), list) else []
     if not missing_impact:
         missing_impact = [item + "는 결론 강도를 낮추는 요소입니다." for item in missing[:4]]
+    missing_impact = _normalize_missing_data_impact(context, missing_impact, missing, 4)
     warnings: List[str] = []
     append_watchlist_action_warning(context, original_action, action, warnings)
     return soften_low_confidence_sell(context, NotificationAIValidatedResponse(
@@ -676,15 +736,7 @@ def validated_response_from_payload(
         warnings.append("AI 기준일이 알림 기준일과 달라 알림 기준일로 보정했습니다.")
         response_reference = expected_reference
     missing_labels = missing_data_labels(context)
-    if not missing_labels:
-        missing_impact = [
-            item
-            for item in missing_impact
-            if not any(token in item for token in ["missingData", "빈 배열", "빈 객체", "명시적 부족 데이터", "없음"])
-        ]
-    for item in missing_labels:
-        if not any(item in row for row in missing_impact):
-            missing_impact.append(user_friendly_ai_text(item + "는 결론 강도를 낮추는 요소입니다."))
+    missing_impact = _normalize_missing_data_impact(context, missing_impact, missing_labels, 5)
     source_urls = source_urls_from_context(context, payload)
     for item in payload.get("sourceUrls") or payload.get("source_urls") or []:
         append_unique_source_url(source_urls, item)

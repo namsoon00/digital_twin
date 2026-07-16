@@ -9284,6 +9284,85 @@ class PythonServiceTests(unittest.TestCase):
         self.assertIn("AI 강근거 제외", message)
         self.assertNotIn("<b>데이터 빈 곳</b>", message)
 
+    def test_validated_ai_message_deduplicates_structured_missing_data(self):
+        context = {
+            "messageType": "investmentInsight",
+            "messageDeliveryLevel": "absoluteBeginner",
+            "headline": "[관찰] 🛡️ SK하이닉스: 분할축소 우선 점검",
+            "displayTarget": "SK하이닉스 / 000660",
+            "rawLines": "\n".join([
+                "현재가: 1,952,000원",
+                "수익률: -24.1%",
+                "추세: 5일선보다 7.9% 낮음, 20일선보다 21.3% 낮음",
+            ]),
+            "ontologyRelationContext": {
+                "engineVersion": "typedb-inferencebox-relation-context-v1",
+                "source": "typedbInferenceBox",
+                "graphStoreUsed": True,
+                "inferenceBoxUsed": True,
+                "nativeTypeDbReasoningUsed": True,
+                "subject": {"symbol": "000660", "name": "SK하이닉스", "market": "KR"},
+                "decision": {
+                    "label": "뉴스 리스크 대응 검토",
+                    "score": 92.3,
+                    "basis": "typedbInferenceBox",
+                    "actionGroup": "newsRiskReview",
+                    "actionLevel": "review",
+                },
+                "signalStrength": 92.3,
+                "signalStrengthLabel": "매우 강함",
+                "confidence": 80,
+                "activeRules": [{
+                    "ruleId": "graph.news.event_risk.v1",
+                    "label": "기사 AI 직접 위험 분석",
+                    "strengthScore": 92.3,
+                    "confidence": 80,
+                }],
+                "missingData": [{
+                    "label": "투자자별 수급",
+                    "status": "latency",
+                    "effect": "KIS 투자자별 수급이 이전 조회와 같아 실시간 변화 신호로 쓰지 않습니다.",
+                }],
+                "executionPlan": {
+                    "primaryAction": "TRIM",
+                    "primaryActionLabel": "분할축소 기준 검토",
+                    "nextChecks": ["기사 원문과 가격 반응 확인"],
+                    "riskSignals": ["직접 뉴스 이벤트 위험"],
+                    "supportSignals": [],
+                    "counterSignals": [],
+                },
+            },
+        }
+        response = validated_response_from_payload(context, {
+            "action": "TRIM",
+            "confidence": 82,
+            "summary": "분할축소 기준을 확인합니다.",
+            "opinion": "뉴스 원문과 장 마감 가격을 확인한 뒤 일부 축소 기준을 봅니다.",
+            "evidence": ["직접 뉴스 이벤트 위험"],
+            "counterEvidence": ["거래량 확인 전 전량 매도는 보류"],
+            "invalidationCondition": "20일 평균 회복 시 약해집니다.",
+            "nextChecks": ["외국인과 기관 순매수 수치를 확인", "뉴스 원문 확인"],
+            "missingDataImpact": [
+                "외국인·기관·개인의 순매수 수치가 없어 수급 판단의 확신을 낮췄습니다.",
+                "뉴스 본문과 SK하이닉스 직접 관련 사실이 제공되지 않아 뉴스만으로 매도 판단을 강화하지 않았습니다.",
+            ],
+            "sourceUrls": ["https://example.test/sk-hynix-risk"],
+        }, source="test AI")
+
+        self.assertEqual([
+            "뉴스 본문과 SK하이닉스 직접 관련 사실이 제공되지 않아 뉴스만으로 매도 판단을 강화하지 않았습니다."
+        ], response.missing_data_impact)
+
+        enriched = context_with_validated_ai_response(context, response)
+        message = render_notification(NotificationTemplate("investmentInsight", "{telegramMessage}"), enriched)
+
+        self.assertIn("<b>데이터 빈 곳</b>", message)
+        self.assertIn("뉴스 본문과 SK하이닉스 직접 관련 사실", message)
+        self.assertNotIn("외국인·기관·개인의 순매수 수치", message)
+        self.assertIn("<b>부족 데이터</b>", message)
+        self.assertIn("투자자별 수급 (지연/반복값)", message)
+        self.assertIn("이전 조회와 같아 실시간 변화 신호로 쓰지 않습니다", message)
+
     def test_notification_render_appends_short_tracking_number_only(self):
         rendered = render_notification(
             NotificationTemplate("investmentInsight", "{telegramMessage}"),

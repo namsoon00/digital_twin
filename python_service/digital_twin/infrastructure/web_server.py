@@ -868,6 +868,7 @@ def ontology_audit_payload(query: Dict[str, List[str]], requested_section: str =
     section_filter = str(requested_section or first_query(query, "section") or "").strip().lower()
     if section_filter == "all":
         section_filter = ""
+    compact_all = not section_filter
     section_ids = [section_filter] if section_filter in ONTOLOGY_AUDIT_SECTION_LABELS else list(ONTOLOGY_AUDIT_SECTION_LABELS.keys())
     section_box_map = {
         "tbox": ["TBox"],
@@ -887,8 +888,20 @@ def ontology_audit_payload(query: Dict[str, List[str]], requested_section: str =
     graph_error = ""
     if read_boxes and hasattr(repo, "read_entity_rows") and hasattr(repo, "read_relation_rows"):
         try:
-            graph_entities = [ontology_audit_row_payload(row, "entity") for row in repo.read_entity_rows(read_boxes)]
-            graph_relations = [ontology_audit_row_payload(row, "relation") for row in repo.read_relation_rows(read_boxes)]
+            if compact_all:
+                sample_limit = max(5, min(80, limit))
+                for box in read_boxes:
+                    graph_entities.extend([
+                        ontology_audit_row_payload(row, "entity")
+                        for row in repo.read_entity_rows([box], sample_limit)
+                    ])
+                    graph_relations.extend([
+                        ontology_audit_row_payload(row, "relation")
+                        for row in repo.read_relation_rows([box], sample_limit)
+                    ])
+            else:
+                graph_entities = [ontology_audit_row_payload(row, "entity") for row in repo.read_entity_rows(read_boxes)]
+                graph_relations = [ontology_audit_row_payload(row, "relation") for row in repo.read_relation_rows(read_boxes)]
         except Exception as error:  # noqa: BLE001 - admin audit must degrade gracefully.
             graph_error = str(error)[:240]
     elif read_boxes:
@@ -904,24 +917,46 @@ def ontology_audit_payload(query: Dict[str, List[str]], requested_section: str =
     inferencebox: Dict[str, object] = {}
     diagnostics: Dict[str, object] = {}
     try:
-        tbox_metadata = repo.active_tbox_metadata() if ("tbox" in section_ids or "sync" in section_ids) and hasattr(repo, "active_tbox_metadata") else {}
+        tbox_metadata = (
+            {"status": "sampled", "source": "audit-sample", "configured": bool(getattr(repo, "address", ""))}
+            if compact_all
+            else repo.active_tbox_metadata()
+            if ("tbox" in section_ids or "sync" in section_ids) and hasattr(repo, "active_tbox_metadata")
+            else {}
+        )
     except Exception as error:  # noqa: BLE001
         tbox_metadata = {"status": "error", "reason": str(error)[:220]}
     try:
-        rulebox = repo.rulebox_snapshot() if ("rulebox" in section_ids or "sync" in section_ids) and hasattr(repo, "rulebox_snapshot") else {}
+        rulebox = (
+            {"status": "sampled", "source": "audit-sample", "rules": []}
+            if compact_all
+            else repo.rulebox_snapshot()
+            if ("rulebox" in section_ids or "sync" in section_ids) and hasattr(repo, "rulebox_snapshot")
+            else {}
+        )
     except Exception as error:  # noqa: BLE001
         rulebox = {"status": "error", "reason": str(error)[:220], "rules": []}
     try:
-        inferencebox = repo.inferencebox_snapshot(symbols=symbols, limit=min(300, max(80, limit))) if ("inferencebox" in section_ids or "sync" in section_ids) and hasattr(repo, "inferencebox_snapshot") else {}
+        inferencebox = (
+            {"status": "sampled", "source": "audit-sample", "entities": [], "relations": [], "traces": []}
+            if compact_all
+            else repo.inferencebox_snapshot(symbols=symbols, limit=min(300, max(80, limit)))
+            if ("inferencebox" in section_ids or "sync" in section_ids) and hasattr(repo, "inferencebox_snapshot")
+            else {}
+        )
     except Exception as error:  # noqa: BLE001
         inferencebox = {"status": "error", "reason": str(error)[:220], "entities": [], "relations": [], "traces": []}
     try:
-        diagnostics = OntologyDiagnosticsService(
-            ontology_repository=repo,
-            settings=settings,
-            event_log=stores.event_log(settings),
-            notification_queue=stores.notification_job_store(settings),
-        ).status(symbols=symbols, limit=min(300, max(80, limit))) if "sync" in section_ids else {}
+        diagnostics = (
+            {"status": "sampled", "reason": "기본 감사 화면은 빠른 샘플만 읽고, 상세 진단은 /api/ontology/audit/sync에서 실행합니다."}
+            if compact_all and "sync" in section_ids
+            else OntologyDiagnosticsService(
+                ontology_repository=repo,
+                settings=settings,
+                event_log=stores.event_log(settings),
+                notification_queue=stores.notification_job_store(settings),
+            ).status(symbols=symbols, limit=min(300, max(80, limit))) if "sync" in section_ids else {}
+        )
     except Exception as error:  # noqa: BLE001
         diagnostics = {"status": "error", "reason": str(error)[:220]}
 
@@ -998,8 +1033,8 @@ def ontology_audit_payload(query: Dict[str, List[str]], requested_section: str =
             "graphRowCount": len(graph_rows),
             "entityCount": len(graph_entities),
             "relationCount": len(graph_relations),
-            "ruleCount": rulebox.get("ruleCount") or len(rulebox.get("rules") or []),
-            "inferenceRelationCount": inferencebox.get("relationCount") or 0,
+            "ruleCount": rulebox.get("ruleCount") or len(rulebox.get("rules") or []) or (sections.get("rulebox") or {}).get("total", 0),
+            "inferenceRelationCount": inferencebox.get("relationCount") or (sections.get("inferencebox") or {}).get("relationCount", 0),
             "inferenceTraceCount": inferencebox.get("traceCount") or 0,
             "diagnosticsStatus": diagnostics.get("status") or diagnostics.get("readiness") or "",
             "tboxStatus": tbox_metadata.get("status") or "",

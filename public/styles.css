@@ -21884,10 +21884,17 @@ html[data-theme="dark"] .ontology-graph-expanded-toolbar .icon-button.danger {
 }
 
 /* Ontology audit console: full ledger access without crowding the system guide. */
+.system-guide-view > .ontology-audit-panel {
+  grid-column: 1 / -1;
+  width: 100%;
+  max-width: 100%;
+}
+
 .ontology-audit-panel {
   display: grid;
   gap: var(--ds-section-gap);
   min-width: 0;
+  overflow: visible;
 }
 
 .ontology-audit-head {

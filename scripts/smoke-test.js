@@ -1458,8 +1458,10 @@ function checkFrontendAdminRender() {
     assertOk(systemHtml.indexOf("EVENT FLOW") >= 0 && systemHtml.indexOf("monitoring.snapshot_collected") >= 0 && systemHtml.indexOf("notification.job_queued") >= 0, "시스템 탭에 이벤트 흐름 설명이 없습니다.");
     assertOk(systemHtml.indexOf("ALERT PIPELINE") >= 0 && systemHtml.indexOf("system-notification-flow") >= 0, "시스템 탭에 알림 생성 흐름 다이어그램이 없습니다.");
     assertOk(systemHtml.indexOf("ONTOLOGY MODEL") >= 0 && systemHtml.indexOf("TBox") >= 0 && systemHtml.indexOf("ABox") >= 0, "시스템 탭에 온톨로지 모델 설명이 없습니다.");
+    assertOk(systemHtml.indexOf("ONTOLOGY AUDIT") >= 0 && systemHtml.indexOf("ontology-audit-panel") >= 0, "시스템 탭에 온톨로지 감사 콘솔이 없습니다.");
     assertOk(systemHtml.indexOf("MySQL operational tables") >= 0, "시스템 탭 데이터 흐름이 MySQL 운영 DB 기준으로 렌더링되지 않습니다.");
     assertOk(styles.indexOf(".system-guide-view") >= 0 && styles.indexOf(".system-flow-diagram") >= 0 && styles.indexOf(".system-event-track") >= 0, "시스템 설명 탭 스타일이 없습니다.");
+    assertOk(/\.system-guide-view > \.ontology-audit-panel\s*\{[\s\S]*grid-column: 1 \/ -1;[\s\S]*width: 100%;/.test(styles), "온톨로지 감사 콘솔이 구조·흐름 12컬럼 전체 폭을 차지하지 않습니다.");
     assertOk(overviewHtml.indexOf("admin-monitoring-panel") >= 0, "모니터링 상태 패널이 렌더링되지 않았습니다.");
     assertOk(overviewHtml.indexOf("account-directory-panel") >= 0, "홈에 DB 계정 패널이 렌더링되지 않았습니다.");
     assertOk(overviewHtml.indexOf("account-watchlist-panel") >= 0, "홈에 계정별 관심 종목 패널이 렌더링되지 않았습니다.");

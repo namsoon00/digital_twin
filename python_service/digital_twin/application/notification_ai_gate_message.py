@@ -1332,14 +1332,15 @@ def _valuation_pct_display(value: object) -> str:
 
 def valuation_detail_rows(context: Dict[str, object], level: str) -> List[str]:
     facts = relation_facts(context or {})
-    rows_data = facts.get("valuationRows") if isinstance(facts.get("valuationRows"), list) else []
-    has_valuation_context = bool(rows_data or facts.get("primaryValuation") or facts.get("valuationFormula"))
-    if not has_valuation_context:
+    if not facts:
         return []
+    rows_data = facts.get("valuationRows") if isinstance(facts.get("valuationRows"), list) else []
     currency = facts.get("currency") or "KRW"
-    formula = str(facts.get("valuationFormula") or "").strip() or "공식 미입력"
+    formula = str(facts.get("valuationFormula") or "").strip() or "적정가 공식 미설정"
     substitution = str(facts.get("valuationSubstitution") or "").strip()
     missing_inputs = facts.get("valuationMissingInputs") if isinstance(facts.get("valuationMissingInputs"), list) else []
+    if not rows_data and not missing_inputs and not facts.get("valuationFormula"):
+        missing_inputs = ["적정가", "예상 EPS", "목표 PER"]
     if not substitution and missing_inputs:
         substitution = "대입값 부족: " + ", ".join(str(item) for item in missing_inputs[:5])
     current = _valuation_price_display(facts.get("valuationCurrentPrice") or facts.get("currentPrice"), currency)
@@ -1352,16 +1353,22 @@ def valuation_detail_rows(context: Dict[str, object], level: str) -> List[str]:
     source = str(facts.get("valuationSourceLabel") or "").strip()
     if facts.get("valuationHasUserInput") and facts.get("valuationHasExternalInput") and source:
         source += " · 외부 데이터도 참고"
+    if not source:
+        source = "사용자 입력 없음 · 외부 밸류에이션 데이터 없음"
     reliability = str(facts.get("valuationReliabilityLabel") or "").strip()
     reliability_score = facts.get("valuationReliabilityScore")
     if reliability and _valuation_value_present(reliability_score):
         reliability += " (" + str(round(_number(reliability_score), 1)).rstrip("0").rstrip(".") + "%)"
     elif _valuation_value_present(reliability_score):
         reliability = str(round(_number(reliability_score), 1)).rstrip("0").rstrip(".") + "%"
+    if not reliability:
+        reliability = "판단 보류"
     if reliability:
         reliability += " · 예측 성공률이 아니라 출처와 공식 완성도 기준"
     explanation = str(facts.get("valuationExplanation") or "").strip()
-    data_status = str(facts.get("valuationDataStatus") or "").strip()
+    if not explanation:
+        explanation = "적정가 공식이나 적정가 입력값이 없어 현재가가 싼지 비싼지 계산하지 않았습니다. 설정 탭에서 적정가, 예상 EPS, 목표 PER 중 하나를 입력해야 합니다."
+    data_status = str(facts.get("valuationDataStatus") or "").strip() or ("available" if fair_value and margin else "missing")
     status_labels = {
         "available": "계산 가능",
         "partial": "일부 부족",
@@ -1370,9 +1377,9 @@ def valuation_detail_rows(context: Dict[str, object], level: str) -> List[str]:
     rows = [
         _html_row("공식", formula, level=level, max_len=260),
         _html_row("대입값", substitution, level=level, max_len=260),
-        _html_row("현재가", current, level=level),
-        _html_row("적정가", fair_value, level=level),
-        _html_row("안전마진", margin_text, level=level),
+        _html_row("현재가", current or "현재가 없음", level=level),
+        _html_row("적정가", fair_value or "미설정", level=level),
+        _html_row("안전마진", margin_text or "계산 불가", level=level),
         _html_row("데이터 출처", source, level=level),
         _html_row("근거 신뢰도", reliability, level=level, max_len=260),
         _html_row("계산 상태", status_labels.get(data_status, data_status), level=level),

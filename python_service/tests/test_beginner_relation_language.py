@@ -372,6 +372,50 @@ class BeginnerRelationLanguageTests(unittest.TestCase):
         self.assertIn("예측 성공률이 아니라", message)
         self.assertIn("사용자 적정가 기준 안전마진", message)
 
+    def test_execution_message_shows_valuation_missing_state(self):
+        response = NotificationAIValidatedResponse(
+            action="HOLD",
+            action_label="보유",
+            confidence=61,
+            summary="가격 흐름을 먼저 확인합니다.",
+            evidence=["20일 평균선 근처입니다."],
+            next_checks=["적정가 입력 여부 확인"],
+        )
+        message = execution_telegram_message(
+            {
+                "messageType": "investmentInsight",
+                "messageDeliveryLevel": "beginner",
+                "title": "엔비디아 알림",
+                "target": "엔비디아 / NVDA",
+                "displayTarget": "엔비디아 / NVDA",
+                "ontologyRelationContext": {
+                    "facts": {
+                        "currency": "USD",
+                        "currentPrice": 164.25,
+                        "valuationRows": [],
+                        "valuationDataStatus": "missing",
+                        "valuationMissingInputs": ["적정가", "예상 EPS", "목표 PER"],
+                    },
+                    "activeRules": [
+                        {
+                            "ruleId": "graph.price.reclaim.thesis_support.v1",
+                            "label": "가격 회복 조건 확인",
+                            "strengthScore": 62,
+                        }
+                    ],
+                },
+            },
+            response,
+        )
+
+        self.assertIn("<b>밸류에이션</b>", message)
+        self.assertIn("적정가 공식 미설정", message)
+        self.assertIn("대입값 부족: 적정가, 예상 EPS, 목표 PER", message)
+        self.assertIn("외부 밸류에이션 데이터 없음", message)
+        self.assertIn("판단 보류", message)
+        self.assertIn("계산 상태", message)
+        self.assertIn("부족", message)
+
     def test_template_message_includes_relation_axis_summary(self):
         event = AlertEvent(
             "main",

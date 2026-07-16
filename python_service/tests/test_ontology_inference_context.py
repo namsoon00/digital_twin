@@ -50,6 +50,31 @@ class OntologyInferenceContextTests(unittest.TestCase):
         self.assertEqual(23.75, facts["valuationMarginOfSafetyPct"])
         self.assertEqual([], facts["valuationMissingInputs"])
 
+    def test_position_signal_facts_mark_missing_valuation_inputs(self):
+        position = Position(
+            symbol="NVDA",
+            name="엔비디아",
+            market="US",
+            currency="USD",
+            source="watchlist",
+            current_price=164.25,
+            ma20=160.0,
+            ma60=150.0,
+            sector="AI",
+        )
+        facts = position_signal_facts(
+            position,
+            portfolio_summary([], account_cash=1000000, fx_rates={"USD": 1400}),
+            settings={},
+        )
+
+        self.assertEqual("missing", facts["valuationDataStatus"])
+        self.assertEqual("missing", facts["valuationSourceType"])
+        self.assertIn("사용자 입력 없음", facts["valuationSourceLabel"])
+        self.assertEqual("판단 보류", facts["valuationReliabilityLabel"])
+        self.assertEqual(["적정가", "예상 EPS", "목표 PER"], facts["valuationMissingInputs"])
+        self.assertEqual(164.25, facts["valuationCurrentPrice"])
+
     def test_typedb_inferencebox_context_replaces_python_relation_rule_path(self):
         position = Position(
             symbol="005930",

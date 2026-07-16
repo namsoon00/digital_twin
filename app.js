@@ -472,6 +472,11 @@
     ontologyRuleboxError: "",
     ontologyRuleboxLastRun: null,
     ontologyRuleboxChangeReason: "",
+    ontologyAudit: null,
+    ontologyAuditLoading: false,
+    ontologyAuditLoaded: false,
+    ontologyAuditError: "",
+    ontologyAuditFilters: { query: "", symbol: "", limit: "80", offset: "0" },
     activeWatchAccountId: "",
     editingWatchAccountId: "",
     editingWatchSymbol: "",
@@ -3707,6 +3712,139 @@
       });
   }
 
+  function ontologyAuditPath() {
+    var filters = state.ontologyAuditFilters || {};
+    var params = new URLSearchParams();
+    params.set("limit", String(filters.limit || "80"));
+    params.set("offset", String(filters.offset || "0"));
+    if (String(filters.query || "").trim()) params.set("q", String(filters.query || "").trim());
+    if (String(filters.symbol || "").trim()) params.set("symbol", String(filters.symbol || "").trim().toUpperCase());
+    return "/api/ontology/audit?" + params.toString();
+  }
+
+  function ontologyAuditClientRow(row, rowType, box, index) {
+    row = row && typeof row === "object" ? row : {};
+    var relationType = row.relationType || row.type || "";
+    return {
+      key: String(box || "row") + "-" + String(rowType || "row") + "-" + String(row.id || row.label || relationType || index),
+      rowType: rowType || "entity",
+      id: String(row.id || row.key || ""),
+      label: String(row.label || row.title || row.id || relationType || "row"),
+      kind: String(row.kind || row.nodeKind || relationType || rowType || ""),
+      box: String(row.ontologyBox || row.box || box || ""),
+      relationType: String(relationType || ""),
+      source: String(row.sourceLabel || row.source || ""),
+      target: String(row.targetLabel || row.target || ""),
+      symbol: String(row.symbol || ""),
+      ruleId: String(row.ruleId || row.sourceRuleId || row.semanticRuleId || ""),
+      status: String(row.status || ""),
+      updatedAt: String(row.updatedAt || row.createdAt || ""),
+      weight: row.weight,
+      raw: row
+    };
+  }
+
+  function ontologyAuditClientSection(id, label, description, rows) {
+    rows = Array.isArray(rows) ? rows : [];
+    return {
+      id: id,
+      label: label,
+      description: description,
+      total: rows.length,
+      offset: 0,
+      limit: rows.length,
+      hasMore: false,
+      entityCount: rows.filter(function (row) { return row.rowType === "entity"; }).length,
+      relationCount: rows.filter(function (row) { return row.rowType === "relation"; }).length,
+      rows: rows
+    };
+  }
+
+  function staticOntologyAuditPayload(snapshot) {
+    var parts = ontologyStrategyParts(snapshot || state.snapshot || {});
+    var tboxRows = (Array.isArray(parts.tboxEntities) ? parts.tboxEntities : []).map(function (row, index) {
+      return ontologyAuditClientRow(row, "entity", "TBox", index);
+    }).concat((Array.isArray(parts.tboxRelations) ? parts.tboxRelations : []).map(function (row, index) {
+      return ontologyAuditClientRow(row, "relation", "TBox", index);
+    }));
+    var aboxRows = (Array.isArray(parts.aboxEntities) ? parts.aboxEntities : []).map(function (row, index) {
+      return ontologyAuditClientRow(row, "entity", "ABox", index);
+    }).concat((Array.isArray(parts.aboxRelations) ? parts.aboxRelations : []).map(function (row, index) {
+      return ontologyAuditClientRow(row, "relation", "ABox", index);
+    }));
+    var evidenceRows = []
+      .concat(Array.isArray(parts.evidence) ? parts.evidence : [])
+      .concat(Array.isArray(parts.beliefs) ? parts.beliefs : [])
+      .concat(Array.isArray(parts.opinions) ? parts.opinions : [])
+      .map(function (row, index) {
+        return ontologyAuditClientRow(row, "trace", "ABox", index);
+      });
+    var relationCounts = parts.relationCounts || {};
+    var syncRows = [
+      ontologyAuditClientRow({ id: "snapshot.audit", label: "Snapshot fallback", kind: "sync-status", status: "preview", updatedAt: ((state.snapshot || {}).generatedAt || "") }, "status", "Runtime", 0)
+    ];
+    return {
+      generatedAt: (state.snapshot || {}).generatedAt || new Date().toISOString(),
+      status: "preview",
+      graphStore: "snapshot",
+      storeLabel: "Snapshot",
+      configured: false,
+      summary: {
+        sectionTotals: {
+          tbox: tboxRows.length,
+          abox: aboxRows.length,
+          rulebox: Object.keys(relationCounts).length,
+          inferencebox: 0,
+          evidence: evidenceRows.length,
+          sync: syncRows.length
+        },
+        graphRowCount: tboxRows.length + aboxRows.length,
+        entityCount: (Array.isArray(parts.entities) ? parts.entities.length : 0),
+        relationCount: (Array.isArray(parts.relations) ? parts.relations.length : 0),
+        ruleCount: Object.keys(relationCounts).length,
+        diagnosticsStatus: "preview"
+      },
+      sections: {
+        tbox: ontologyAuditClientSection("tbox", "TBox", "스냅샷 스키마", tboxRows),
+        abox: ontologyAuditClientSection("abox", "ABox", "스냅샷 실체 데이터", aboxRows),
+        rulebox: ontologyAuditClientSection("rulebox", "RuleBox", "관계 타입 분포", Object.keys(relationCounts).sort().map(function (type, index) {
+          return ontologyAuditClientRow({ id: type, label: type, kind: "relation-type", status: String(relationCounts[type] || 0) }, "rule", "RuleBox", index);
+        })),
+        inferencebox: ontologyAuditClientSection("inferencebox", "InferenceBox", "TypeDB 감사 API 필요", []),
+        evidence: ontologyAuditClientSection("evidence", "Evidence Trace", "근거와 의견", evidenceRows),
+        sync: ontologyAuditClientSection("sync", "TypeDB Sync", "스냅샷 fallback 상태", syncRows)
+      }
+    };
+  }
+
+  function loadOntologyAudit(force) {
+    if (isStaticPreviewHost()) {
+      state.ontologyAudit = staticOntologyAuditPayload(state.snapshot || {});
+      state.ontologyAuditLoaded = true;
+      state.ontologyAuditError = "";
+      if (state.snapshot) render();
+      return Promise.resolve(state.ontologyAudit);
+    }
+    if (state.ontologyAuditLoading && !force) return Promise.resolve(state.ontologyAudit);
+    if (state.ontologyAuditLoaded && state.ontologyAudit && !force) return Promise.resolve(state.ontologyAudit);
+    state.ontologyAuditLoading = true;
+    state.ontologyAuditError = "";
+    if (state.snapshot) render();
+    return requestJson(ontologyAuditPath())
+      .then(function (payload) {
+        state.ontologyAudit = payload || {};
+        state.ontologyAuditLoaded = true;
+        state.ontologyAuditError = "";
+      })
+      .catch(function (error) {
+        state.ontologyAuditError = error.message || "온톨로지 감사 데이터를 읽지 못했습니다.";
+      })
+      .finally(function () {
+        state.ontologyAuditLoading = false;
+        if (state.snapshot) render();
+      });
+  }
+
   function applyOntologyRuleboxPayload(payload) {
     state.ontologyRulebox = payload || {};
     state.ontologyRuleboxJson = JSON.stringify((payload && payload.rules) || [], null, 2);
@@ -4996,6 +5134,12 @@
     if (Math.abs(number) >= 100000000) return (number / 100000000).toFixed(1) + "억";
     if (Math.abs(number) >= 10000) return Math.round(number / 10000).toLocaleString("ko-KR") + "만";
     return number.toLocaleString("ko-KR");
+  }
+
+  function formatInteger(value) {
+    var number = Number(value || 0);
+    if (!Number.isFinite(number)) return "0";
+    return Math.round(number).toLocaleString("ko-KR");
   }
 
   function formatCurrency(value, currency) {
@@ -6823,6 +6967,9 @@
     if (state.activeTab === "experiments" && !state.ontologyExperimentsLoaded && !state.ontologyExperimentsLoading) {
       loadOntologyExperiments(false);
     }
+    if (state.activeTab === "system" && !state.ontologyAuditLoaded && !state.ontologyAuditLoading) {
+      loadOntologyAudit(false);
+    }
   }
 
   function renderLoading() {
@@ -6986,6 +7133,8 @@
     if (type === "strategy-prompt-editor") return strategyPromptWorkDetailPayload();
     if (type === "strategy-model-policy-editor") return strategyModelPolicyWorkDetailPayload();
     if (type === "strategy-trace-detail") return strategyTraceWorkDetailPayload(key);
+    if (type === "ontology-audit-section") return ontologyAuditSectionWorkDetailPayload(key);
+    if (type === "ontology-audit-row") return ontologyAuditRowWorkDetailPayload(key);
     if (type === "notification-delivery-settings") return notificationDeliveryWorkDetailPayload();
     if (type === "notification-rule-diagnostics") return notificationRuleDiagnosticsWorkDetailPayload();
     if (type === "notification-threshold-settings") return notificationThresholdWorkDetailPayload();
@@ -7000,6 +7149,28 @@
       meta: meta || "",
       body: body || ""
     };
+  }
+
+  function ontologyAuditSectionWorkDetailPayload(key) {
+    var sectionId = String(key || "tbox");
+    var section = ontologyAuditSection(sectionId);
+    return editorWorkDetailPayload(
+      "Ontology Audit",
+      (section.label || ontologyAuditSectionLabel(sectionId)) + " 상세",
+      "감사 API 조회 범위 " + formatInteger((section.rows || []).length) + " / 전체 " + formatInteger(section.total || 0),
+      renderSystemOntologyAuditDetail(sectionId)
+    );
+  }
+
+  function ontologyAuditRowWorkDetailPayload(key) {
+    var detail = ontologyAuditRowByKey(key);
+    if (!detail.row) return null;
+    return editorWorkDetailPayload(
+      "Ontology Row",
+      ontologyAuditRowTitle(detail.row),
+      ontologyAuditSectionLabel(detail.sectionId) + " · " + ontologyAuditRowMeta(detail.row),
+      renderOntologyAuditRowDetail(detail.row)
+    );
   }
 
   function strategyRuleEditorWorkDetailPayload() {
@@ -7774,6 +7945,7 @@
     return renderManagedPage("system", snapshot, [
       '<section class="admin-grid system-guide-view">',
       renderSystemGuideHero(snapshot),
+      renderSystemOntologyAuditPanel(snapshot),
       renderSystemGuideDetailHub(snapshot),
       '</section>'
     ].join(""));
@@ -7851,6 +8023,222 @@
       '<div class="system-orbit-node ui"><strong>Console</strong><em>탭별 운영 화면</em></div>',
       '</div>',
       '</article>'
+    ].join("");
+  }
+
+  function ontologyAuditPayload() {
+    return state.ontologyAudit && typeof state.ontologyAudit === "object"
+      ? state.ontologyAudit
+      : staticOntologyAuditPayload(state.snapshot || {});
+  }
+
+  function ontologyAuditSectionOrder() {
+    return [
+      { id: "tbox", label: "TBox", description: "스키마" },
+      { id: "abox", label: "ABox", description: "실체 데이터" },
+      { id: "rulebox", label: "RuleBox", description: "규칙" },
+      { id: "inferencebox", label: "InferenceBox", description: "추론 결과" },
+      { id: "evidence", label: "근거 연결", description: "Evidence·Belief·Opinion" },
+      { id: "sync", label: "동기화", description: "TypeDB 상태" }
+    ];
+  }
+
+  function ontologyAuditSection(sectionId) {
+    var payload = ontologyAuditPayload();
+    var sections = payload.sections || {};
+    return sections[sectionId] || ontologyAuditClientSection(sectionId, sectionId, "", []);
+  }
+
+  function ontologyAuditSectionLabel(sectionId) {
+    var found = ontologyAuditSectionOrder().filter(function (item) { return item.id === sectionId; })[0];
+    return found ? found.label : sectionId;
+  }
+
+  function ontologyAuditTone(value) {
+    var text = String(value || "").toLowerCase();
+    if (text === "ok" || text === "materialized" || text === "active") return "live";
+    if (text === "disabled" || text === "preview" || text === "fallback") return "hold";
+    if (text === "error" || text === "failed") return "danger";
+    return "watch";
+  }
+
+  function ontologyAuditRowTitle(row) {
+    row = row || {};
+    return row.label || row.id || row.relationType || row.kind || "ontology row";
+  }
+
+  function ontologyAuditRowMeta(row) {
+    row = row || {};
+    var parts = [];
+    if (row.box) parts.push(row.box);
+    if (row.rowType) parts.push(row.rowType);
+    if (row.kind && row.kind !== row.rowType) parts.push(row.kind);
+    if (row.relationType) parts.push(row.relationType);
+    if (row.symbol) parts.push(row.symbol);
+    if (row.ruleId) parts.push(row.ruleId);
+    return parts.join(" · ");
+  }
+
+  function ontologyAuditRowPath(row) {
+    row = row || {};
+    if (row.source || row.target) return [row.source || row.id || "-", row.target || "-"].join(" → ");
+    if (row.status) return "상태 " + row.status;
+    if (row.updatedAt) return "업데이트 " + formatClock(row.updatedAt);
+    return row.id || row.key || "";
+  }
+
+  function renderSystemOntologyAuditPanel(snapshot) {
+    var audit = ontologyAuditPayload();
+    var summary = audit.summary || {};
+    var filters = state.ontologyAuditFilters || {};
+    var cards = [
+      ["TBox", (audit.sections && audit.sections.tbox && audit.sections.tbox.total) || 0, "스키마 행"],
+      ["ABox", (audit.sections && audit.sections.abox && audit.sections.abox.total) || 0, "실체 행"],
+      ["RuleBox", summary.ruleCount || ((audit.sections && audit.sections.rulebox && audit.sections.rulebox.total) || 0), "규칙"],
+      ["Inference", summary.inferenceRelationCount || ((audit.sections && audit.sections.inferencebox && audit.sections.inferencebox.total) || 0), "추론 관계"],
+      ["Trace", (audit.sections && audit.sections.evidence && audit.sections.evidence.total) || 0, "근거 연결"],
+      ["Sync", summary.diagnosticsStatus || audit.status || "-", audit.storeLabel || audit.graphStore || "TypeDB"]
+    ];
+    return [
+      '<article class="panel ontology-audit-panel">',
+      '<div class="panel-head ontology-audit-head">',
+      '<div>',
+      '<p class="label">ONTOLOGY AUDIT</p>',
+      '<h2>온톨로지 감사 콘솔</h2>',
+      '<span>운영 요약과 분리해서 TypeDB 원장, 규칙, 추론 세대, 근거 trace를 확인합니다.</span>',
+      '</div>',
+      '<span class="status-pill ' + escapeHtml(ontologyAuditTone(audit.status)) + '">' + escapeHtml(state.ontologyAuditLoading ? "조회 중" : (audit.status || "preview")) + '</span>',
+      '</div>',
+      '<form class="ontology-audit-toolbar" data-ontology-audit-form>',
+      '<label><span>검색</span><input data-ontology-audit-filter="query" type="search" value="' + escapeHtml(filters.query || "") + '" placeholder="rule, relation, symbol, evidence"></label>',
+      '<label><span>종목</span><input data-ontology-audit-filter="symbol" type="text" value="' + escapeHtml(filters.symbol || "") + '" placeholder="000660"></label>',
+      '<label><span>행 수</span><select data-ontology-audit-filter="limit">',
+      [40, 80, 120, 200].map(function (value) {
+        return '<option value="' + value + '"' + (String(filters.limit || "80") === String(value) ? " selected" : "") + '>' + value + '</option>';
+      }).join(""),
+      '</select></label>',
+      '<label><span>시작 행</span><input data-ontology-audit-filter="offset" type="number" min="0" step="1" value="' + escapeHtml(filters.offset || "0") + '"></label>',
+      '<button class="text-button" type="submit"' + (state.ontologyAuditLoading ? ' disabled' : '') + '>' + escapeHtml(state.ontologyAuditLoading ? "조회 중" : "감사 조회") + '</button>',
+      '<button class="text-button primary" type="button" data-action="refresh-ontology-audit"' + (state.ontologyAuditLoading ? ' disabled' : '') + '>새로고침</button>',
+      '</form>',
+      state.ontologyAuditError ? '<p class="form-error">' + escapeHtml(state.ontologyAuditError) + '</p>' : '',
+      audit.error ? '<p class="data-refresh-status danger">TypeDB row 조회 오류: ' + escapeHtml(audit.error) + '</p>' : '',
+      '<div class="ontology-audit-summary-grid">',
+      cards.map(function (card) {
+        return [
+          '<section class="ontology-audit-metric"' + cardTypeAttrs("metric-card") + '>',
+          '<em>' + escapeHtml(card[0]) + '</em>',
+          '<strong>' + escapeHtml(typeof card[1] === "number" ? formatInteger(card[1]) : card[1]) + '</strong>',
+          '<span>' + escapeHtml(card[2]) + '</span>',
+          '</section>'
+        ].join("");
+      }).join(""),
+      '</div>',
+      '<div class="ontology-audit-section-grid">',
+      ontologyAuditSectionOrder().map(function (section) {
+        return renderOntologyAuditSectionCard(section.id);
+      }).join(""),
+      '</div>',
+      '</article>'
+    ].join("");
+  }
+
+  function renderOntologyAuditSectionCard(sectionId) {
+    var section = ontologyAuditSection(sectionId);
+    var rows = Array.isArray(section.rows) ? section.rows : [];
+    var visible = rows.slice(0, 5);
+    return [
+      '<section class="ontology-audit-section-card"' + cardTypeAttrs("ledger-card") + '>',
+      '<header>',
+      '<span><em>' + escapeHtml(section.label || ontologyAuditSectionLabel(sectionId)) + '</em><strong>' + escapeHtml(formatInteger(section.total || rows.length || 0)) + '</strong></span>',
+      '<p>' + escapeHtml(section.description || "") + '</p>',
+      '</header>',
+      '<div class="ontology-audit-row-list">',
+      visible.length ? visible.map(function (row, index) {
+        return renderOntologyAuditRow(sectionId, row, index);
+      }).join("") : '<div class="ontology-empty">조회된 행이 없습니다.</div>',
+      '</div>',
+      '<footer>',
+      section.hasMore ? '<span>더 많은 행이 있습니다. 필터를 좁히거나 API offset으로 확인하세요.</span>' : '<span>현재 조회 범위 전체 표시</span>',
+      renderWorkDetailButton("ontology-audit-section", sectionId, "상세 보기", "mini-button"),
+      '</footer>',
+      '</section>'
+    ].join("");
+  }
+
+  function renderOntologyAuditRow(sectionId, row, index) {
+    var tone = ontologyAuditTone(row && row.status);
+    var key = sectionId + ":" + index;
+    return [
+      '<button class="ontology-audit-row" type="button" data-work-detail="ontology-audit-row" data-work-detail-key="' + escapeHtml(key) + '">',
+      '<span class="ontology-audit-row-main">',
+      '<strong>' + escapeHtml(ontologyAuditRowTitle(row)) + '</strong>',
+      '<em>' + escapeHtml(ontologyAuditRowMeta(row)) + '</em>',
+      '</span>',
+      '<span class="ontology-audit-row-side">',
+      row && row.status ? '<b class="tone-chip ' + escapeHtml(tone) + '">' + escapeHtml(row.status) + '</b>' : '',
+      '<i>' + escapeHtml(ontologyAuditRowPath(row)) + '</i>',
+      '</span>',
+      '</button>'
+    ].join("");
+  }
+
+  function renderSystemOntologyAuditDetail(sectionId) {
+    var section = ontologyAuditSection(sectionId);
+    var rows = Array.isArray(section.rows) ? section.rows : [];
+    return [
+      '<section class="work-detail-section ontology-audit-detail-section">',
+      '<strong>' + escapeHtml(section.label || ontologyAuditSectionLabel(sectionId)) + '</strong>',
+      '<p>' + escapeHtml(section.description || "") + '</p>',
+      '<div class="ontology-audit-detail-summary">',
+      '<span><em>총 행</em><strong>' + escapeHtml(formatInteger(section.total || rows.length || 0)) + '</strong></span>',
+      '<span><em>Entity</em><strong>' + escapeHtml(formatInteger(section.entityCount || 0)) + '</strong></span>',
+      '<span><em>Relation</em><strong>' + escapeHtml(formatInteger(section.relationCount || 0)) + '</strong></span>',
+      '<span><em>조회 범위</em><strong>' + escapeHtml(formatInteger(rows.length)) + '</strong></span>',
+      '</div>',
+      '<div class="ontology-audit-detail-list">',
+      rows.length ? rows.map(function (row, index) {
+        return renderOntologyAuditRow(sectionId, row, index);
+      }).join("") : '<div class="ontology-empty">표시할 행이 없습니다.</div>',
+      '</div>',
+      section.hasMore ? '<p class="data-refresh-status">이 섹션은 API 조회 제한 때문에 일부만 표시됩니다. 검색어나 종목 필터로 범위를 줄이면 더 정확하게 확인할 수 있습니다.</p>' : '',
+      '</section>'
+    ].join("");
+  }
+
+  function ontologyAuditRowByKey(key) {
+    var parts = String(key || "").split(":");
+    var sectionId = parts[0] || "";
+    var index = Number(parts[1] || 0);
+    var section = ontologyAuditSection(sectionId);
+    var rows = Array.isArray(section.rows) ? section.rows : [];
+    return { sectionId: sectionId, section: section, row: rows[index] || null };
+  }
+
+  function renderOntologyAuditRowDetail(row) {
+    row = row || {};
+    var raw = row.raw && typeof row.raw === "object" ? row.raw : row;
+    var fields = [
+      ["Box", row.box],
+      ["Type", row.rowType],
+      ["Kind", row.kind],
+      ["Relation", row.relationType],
+      ["Symbol", row.symbol],
+      ["Rule", row.ruleId],
+      ["Updated", row.updatedAt ? formatClock(row.updatedAt) : ""]
+    ].filter(function (item) { return item[1] != null && String(item[1]).trim(); });
+    return [
+      '<section class="work-detail-section ontology-audit-row-detail">',
+      '<strong>' + escapeHtml(ontologyAuditRowTitle(row)) + '</strong>',
+      '<p>' + escapeHtml(ontologyAuditRowPath(row)) + '</p>',
+      '<div class="ontology-audit-field-grid">',
+      fields.map(function (field) {
+        return '<span><em>' + escapeHtml(field[0]) + '</em><strong>' + escapeHtml(field[1]) + '</strong></span>';
+      }).join(""),
+      '</div>',
+      '<strong>Raw payload</strong>',
+      '<pre class="raw-json-block">' + escapeHtml(JSON.stringify(raw, null, 2)) + '</pre>',
+      '</section>'
     ].join("");
   }
 
@@ -17644,6 +18032,35 @@
     if (proposeRuleboxCandidatesButton) {
       proposeRuleboxCandidatesButton.addEventListener("click", function () {
         proposeOntologyRuleCandidates();
+      });
+    }
+
+    var ontologyAuditForm = app.querySelector("[data-ontology-audit-form]");
+    if (ontologyAuditForm) {
+      ontologyAuditForm.addEventListener("submit", function (event) {
+        event.preventDefault();
+        state.ontologyAuditLoaded = false;
+        loadOntologyAudit(true);
+      });
+    }
+
+    Array.prototype.slice.call(app.querySelectorAll("[data-ontology-audit-filter]")).forEach(function (field) {
+      var updateOntologyAuditFilter = function () {
+        var name = field.getAttribute("data-ontology-audit-filter");
+        if (!name) return;
+        state.ontologyAuditFilters[name] = field.value;
+      };
+      field.addEventListener("input", updateOntologyAuditFilter);
+      field.addEventListener("change", updateOntologyAuditFilter);
+    });
+
+    var refreshOntologyAuditButton = app.querySelector('[data-action="refresh-ontology-audit"]');
+    if (refreshOntologyAuditButton) {
+      refreshOntologyAuditButton.addEventListener("click", function () {
+        state.ontologyAuditLoaded = false;
+        loadOntologyAudit(true).then(function () {
+          showSnackbar("온톨로지 감사 데이터를 다시 읽었습니다.");
+        });
       });
     }
 

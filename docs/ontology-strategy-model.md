@@ -72,6 +72,17 @@ AI 프롬프트에는 TBox, `boundedContexts`, ABox, operational ontology, reaso
 5. `ontology_inference_context.py`가 최신 generation의 InferenceBox만 읽어 투자 판단 후보, 근거, 반대 근거, 부족 데이터, AI 질문을 만든다.
 6. AI는 이 컨텍스트를 받아 최종 의견을 쓰고, 시스템은 없는 데이터 생성 여부와 규칙 충돌 여부를 검증한 뒤 알림 메시지에 넣는다.
 
+관계 점수는 단일 공식 점수가 아니다. TypeDB가 먼저 규칙 성립 여부와 InferenceBox 관계를 만들고, `ontology_inference_context.py`는 성립한 관계를 현재 ABox fact의 크기로 다시 해석해 다음 분해 점수를 만든다.
+
+- `ruleReliability`: TypeDB 규칙 weight와 trace confidence에서 온 규칙 신뢰도.
+- `riskPressure`: 손실률, 5/20/60일 평균 가격 아래 위치, 하락 속도, 체결강도 약화, 매도 호가, 외국인·기관 매도, 악재 뉴스가 키우는 위험 압력.
+- `supportEvidence`: 수익 구간, 5/20/60일 평균 가격 위 위치, 당일 회복, 체결강도 우위, 매수 호가, 외국인·기관 순매수, 우호 뉴스가 만드는 버티는 근거.
+- `dataConfidence`: TypeDB trace confidence, ABox 데이터 품질, 부족 데이터, 지연/반복 수급, 뉴스 충돌을 반영한 확신도.
+- `actionability`: 보유 비중, 매도 가능 수량, 손실/수익 구간, 관심종목 진입 조건처럼 실제 행동으로 옮길 수 있는 정도.
+- `novelty`: 손익률 변화, 당일 가격 변화, 새 뉴스/공시, 새 trace처럼 쿨다운 우회 판단에 쓰이는 새 변화.
+
+사용자에게 보이는 `signalStrength`와 `decision.score`는 위 분해 점수의 합성 결과다. 따라서 같은 TypeDB 규칙이 성립해도 손실률이 -3%인지 -18%인지, 5일선 회복과 외국인·기관 순매수가 있는지, 데이터가 지연됐는지에 따라 점수와 AI 의견 강도가 달라져야 한다. 이 점수는 가격 방향 예측 확률이 아니라 지금 확인해야 할 투자 관계의 강도다.
+
 운영 상태를 해석하는 기준:
 
 - `reasoningMode=typedb-native-rule-materialized`: 정상. TypeDB ABox에서 native rule match가 실행되고 InferenceBox가 저장됐다.

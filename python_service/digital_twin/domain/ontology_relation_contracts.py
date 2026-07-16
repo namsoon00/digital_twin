@@ -45,11 +45,13 @@ class OntologyRuleMatch:
     missing: List[str] = field(default_factory=list)
     reference_only: bool = False
     prompt_hint: str = ""
+    score_breakdown: Dict[str, object] = field(default_factory=dict)
 
     def to_dict(self) -> Dict[str, object]:
         payload = asdict(self)
         payload["strengthScore"] = round(float(self.strength_score or 0), 1)
         payload["strengthLabel"] = self.strength_label
+        payload["scoreBreakdown"] = dict(self.score_breakdown or {})
         return payload
 
 

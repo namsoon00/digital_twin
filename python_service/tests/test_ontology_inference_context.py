@@ -396,6 +396,181 @@ class OntologyInferenceContextTests(unittest.TestCase):
         self.assertNotIn("TRIM", context["executionPlan"]["primaryAction"])
         self.assertIn("SELL", context["executionPlan"]["blockedActionCodes"])
 
+    def test_inference_score_uses_fact_magnitude_not_rule_weight_only(self):
+        def context_for(position: Position):
+            snapshot = AccountSnapshot(
+                "acct",
+                "계좌",
+                "test",
+                "live",
+                "ok",
+                "2026-07-10T00:00:00Z",
+                portfolio_summary([position], fx_rates={"KRW": 1}),
+                positions=[position],
+                metadata={
+                    "ontology": {
+                        "typedb": {
+                            "inferenceBox": {
+                                "status": "ok",
+                                "nativeTypeDbReasoningUsed": True,
+                                "relations": [
+                                    {
+                                        "type": "HAS_INFERRED_RISK",
+                                        "source": "stock:000660",
+                                        "target": "risk:000660:loss-guard-breakdown",
+                                        "targetLabel": "SK하이닉스 손실 방어 리스크",
+                                        "ruleId": "graph.loss_guard.breakdown.v1",
+                                        "polarity": "risk",
+                                        "riskImpact": 13,
+                                        "supportImpact": 0,
+                                        "weight": 0.86,
+                                        "decisionStage": "LOSS_REDUCE",
+                                        "stagePriority": 40,
+                                        "actionGroup": "lossControl",
+                                        "actionLevel": "review",
+                                        "nativeTypeDbReasoned": True,
+                                    }
+                                ],
+                                "traces": [
+                                    {
+                                        "id": "inference-trace:000660:graph.loss_guard.breakdown.v1",
+                                        "label": "SK하이닉스 · 손실 보유 + 주요 평균선 아래",
+                                        "symbol": "000660",
+                                        "ruleId": "graph.loss_guard.breakdown.v1",
+                                        "confidence": 0.86,
+                                    }
+                                ],
+                            }
+                        }
+                    }
+                },
+            )
+            return relation_contexts_from_snapshot(snapshot)["000660"]
+
+        mild = Position(
+            symbol="000660",
+            name="SK하이닉스",
+            market="KR",
+            currency="KRW",
+            quantity=7,
+            sellable_quantity=7,
+            average_price=2343143,
+            current_price=2240000,
+            market_value=15680000,
+            profit_loss_rate=-4.4,
+            ma5=2220000,
+            ma20=2320000,
+            ma60=2100000,
+            change_rate=0.8,
+            sector="반도체",
+        )
+        severe = Position(
+            symbol="000660",
+            name="SK하이닉스",
+            market="KR",
+            currency="KRW",
+            quantity=7,
+            sellable_quantity=7,
+            average_price=2343143,
+            current_price=1913000,
+            market_value=13391000,
+            profit_loss_rate=-18.4,
+            ma5=2045000,
+            ma20=2449050,
+            ma60=2015417,
+            change_rate=-3.7,
+            trade_strength=94,
+            bid_ask_imbalance=-35,
+            sector="반도체",
+        )
+
+        mild_score = context_for(mild)["scoreBreakdown"]
+        severe_score = context_for(severe)["scoreBreakdown"]
+
+        self.assertGreater(severe_score["riskPressure"], mild_score["riskPressure"])
+        self.assertGreater(severe_score["finalStrength"], mild_score["finalStrength"])
+        self.assertIn("손실률 확대", severe_score["drivers"])
+
+    def test_support_evidence_is_kept_separate_from_risk_pressure(self):
+        position = Position(
+            symbol="000660",
+            name="SK하이닉스",
+            market="KR",
+            currency="KRW",
+            quantity=7,
+            sellable_quantity=7,
+            average_price=2343143,
+            current_price=2118000,
+            change_rate=10.7,
+            market_value=14826000,
+            profit_loss_rate=-9.6,
+            ma5=2068200,
+            ma20=2431000,
+            ma60=2031967,
+            trade_strength=106,
+            bid_ask_imbalance=63.5,
+            foreign_buy_volume=3683043,
+            foreign_sell_volume=3017048,
+            institution_buy_volume=3531063,
+            institution_sell_volume=2829636,
+            individual_buy_volume=3143652,
+            individual_sell_volume=4506110,
+            sector="반도체",
+        )
+        snapshot = AccountSnapshot(
+            "acct",
+            "계좌",
+            "test",
+            "live",
+            "ok",
+            "2026-07-10T00:00:00Z",
+            portfolio_summary([position], fx_rates={"KRW": 1}),
+            positions=[position],
+            metadata={
+                "ontology": {
+                    "typedb": {
+                        "inferenceBox": {
+                            "status": "ok",
+                            "nativeTypeDbReasoningUsed": True,
+                            "relations": [
+                                {
+                                    "type": "HAS_INFERRED_RISK",
+                                    "source": "stock:000660",
+                                    "target": "risk:000660:loss-guard-breakdown",
+                                    "targetLabel": "SK하이닉스 손실 방어 리스크",
+                                    "ruleId": "graph.loss_guard.breakdown.v1",
+                                    "polarity": "risk",
+                                    "riskImpact": 13,
+                                    "weight": 0.86,
+                                    "decisionStage": "LOSS_REDUCE",
+                                    "stagePriority": 40,
+                                    "actionGroup": "lossControl",
+                                    "actionLevel": "review",
+                                    "nativeTypeDbReasoned": True,
+                                }
+                            ],
+                            "traces": [
+                                {
+                                    "id": "inference-trace:000660:graph.loss_guard.breakdown.v1",
+                                    "label": "SK하이닉스 · 손실 보유 + 주요 평균선 아래",
+                                    "symbol": "000660",
+                                    "ruleId": "graph.loss_guard.breakdown.v1",
+                                    "confidence": 0.86,
+                                }
+                            ],
+                        }
+                    }
+                }
+            },
+        )
+
+        breakdown = relation_contexts_from_snapshot(snapshot)["000660"]["scoreBreakdown"]
+
+        self.assertGreater(breakdown["riskPressure"], 0)
+        self.assertGreater(breakdown["supportEvidence"], 0)
+        self.assertLess(breakdown["netRiskPressure"], breakdown["riskPressure"])
+        self.assertGreater(breakdown["opposingPressurePenalty"], 0)
+
 
 if __name__ == "__main__":
     unittest.main()

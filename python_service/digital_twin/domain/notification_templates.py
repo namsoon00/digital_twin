@@ -13,6 +13,7 @@ from .notification_ontology_sections import (
     RATE_REGIME_LABELS,
     ai_prompt_lines,
     append_unique_lines,
+    beginner_score_breakdown_line,
     beginner_relation_decision_line,
     beginner_rule_explanation,
     block_from_lines,
@@ -939,6 +940,9 @@ def absolute_beginner_ontology_modeling_lines(context: Dict[str, object]) -> Lis
         if confidence not in (None, ""):
             score_text += "이고, 신뢰도는 " + format_score_value(confidence) + "%"
         lines.append(sentence_text(score_text + "입니다. 이 점수는 가격이 오를지 맞히는 값이 아니라, 지금 다시 확인해야 할 정도를 나타냅니다"))
+    breakdown_line = beginner_score_breakdown_line(context)
+    if breakdown_line:
+        lines.append(sentence_text(breakdown_line))
     action_sentence = absolute_beginner_action_group_sentence(relation_context)
     if action_sentence:
         lines.append(action_sentence)

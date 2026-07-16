@@ -149,7 +149,16 @@ def event_score(event: AlertEvent) -> float:
     relation_context = event_relation_context(event)
     if relation_context:
         decision = relation_context.get("decision") if isinstance(relation_context.get("decision"), dict) else {}
+        score_breakdown = {}
+        for candidate in [
+            decision.get("scoreBreakdown") if isinstance(decision, dict) else {},
+            relation_context.get("scoreBreakdown"),
+        ]:
+            if isinstance(candidate, dict) and candidate:
+                score_breakdown = candidate
+                break
         graph_scores = [
+            number(score_breakdown.get("finalStrength")),
             number(decision.get("score")),
             number(relation_context.get("signalStrength")),
             number(metadata.get("relationRuleScore")),
@@ -529,6 +538,10 @@ def build_investment_insight_events(snapshot: AccountSnapshot, signal_events: It
         reference_lines = promoted_reference_lines(events)
         source_lines = unique_preserve(compact_source_line(event) for event in events)[:7]
         promoted_context = promoted_ontology_context(events)
+        promoted_breakdown = {}
+        relation_context = promoted_context.get("ontologyRelationContext")
+        if isinstance(relation_context, dict):
+            promoted_breakdown = relation_context.get("scoreBreakdown") if isinstance(relation_context.get("scoreBreakdown"), dict) else {}
         active_opinion = promoted_active_opinion(promoted_context)
         active_label = str(active_opinion.get("actionLabel") or active_opinion.get("action") or "").strip()
         active_conviction = active_opinion.get("conviction")
@@ -566,6 +579,7 @@ def build_investment_insight_events(snapshot: AccountSnapshot, signal_events: It
                 "score": round(score, 1),
                 "confidence": round(confidence, 1),
                 "noveltyScore": round(novelty_score, 1),
+                "scoreBreakdown": dict(promoted_breakdown or {}),
                 "severity": highest_severity(events),
                 "sourceSignalTypes": source_types,
                 "scoreBucket": score_bucket,

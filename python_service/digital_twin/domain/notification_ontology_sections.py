@@ -1,6 +1,7 @@
 import html
 from typing import Dict, List
 
+from .market_data import number
 from .notification_text_formatting import (
     FOOTER_DATA_LABELS,
     format_score_value,
@@ -294,6 +295,71 @@ def beginner_relation_decision_line(relation_context: Dict[str, object]) -> str:
     return ""
 
 
+def relation_score_breakdown(context_or_metadata: Dict[str, object]) -> Dict[str, object]:
+    relation_context = ontology_relation_context(context_or_metadata)
+    if not relation_context:
+        return {}
+    decision = relation_context.get("decision") if isinstance(relation_context.get("decision"), dict) else {}
+    for candidate in [
+        decision.get("scoreBreakdown") if isinstance(decision, dict) else {},
+        relation_context.get("scoreBreakdown"),
+    ]:
+        if isinstance(candidate, dict) and candidate:
+            return candidate
+    return {}
+
+
+def relation_score_breakdown_line(context_or_metadata: Dict[str, object]) -> str:
+    breakdown = relation_score_breakdown(context_or_metadata)
+    if not breakdown:
+        return ""
+    parts = []
+    labels = [
+        ("위험 압력", "riskPressure", "점"),
+        ("버티는 근거", "supportEvidence", "점"),
+        ("데이터 확신", "dataConfidence", "%"),
+        ("실행 필요도", "actionability", "점"),
+        ("새 변화", "novelty", "점"),
+    ]
+    for label, key, unit in labels:
+        value = breakdown.get(key)
+        if value in (None, ""):
+            continue
+        parts.append(label + " " + format_score_value(value) + unit)
+    if not parts:
+        return ""
+    return "점수 구성: " + ", ".join(parts)
+
+
+def beginner_score_breakdown_line(context_or_metadata: Dict[str, object]) -> str:
+    breakdown = relation_score_breakdown(context_or_metadata)
+    if not breakdown:
+        return ""
+    risk = number(breakdown.get("riskPressure"))
+    support = number(breakdown.get("supportEvidence"))
+    confidence = number(breakdown.get("dataConfidence"))
+    drivers = [str(item or "").strip() for item in breakdown.get("drivers") or [] if str(item or "").strip()]
+    if risk and support:
+        base = (
+            "위험 쪽 근거는 "
+            + format_score_value(risk)
+            + "점이고, 버티는 근거는 "
+            + format_score_value(support)
+            + "점입니다."
+        )
+    elif risk:
+        base = "위험 쪽 근거가 " + format_score_value(risk) + "점으로 더 크게 보입니다."
+    elif support:
+        base = "버티는 근거가 " + format_score_value(support) + "점으로 더 크게 보입니다."
+    else:
+        base = "아직 한쪽으로 강하게 기운 근거는 약합니다."
+    if confidence:
+        base += " 데이터 확신도는 " + format_score_value(confidence) + "%입니다."
+    if drivers:
+        base += " 특히 " + ", ".join(drivers[:3]) + "을 중요하게 봤습니다."
+    return base
+
+
 def beginner_rule_explanation(item: Dict[str, object]) -> str:
     text = " ".join(
         str(rule_value(item, "ruleId", "rule_id", "label", "relationType", "relation_type") or "").split()
@@ -322,6 +388,9 @@ def ontology_rule_lines(context_or_metadata: Dict[str, object]) -> List[str]:
         suffix = "신뢰도 " + format_score_value(confidence) if confidence not in (None, "") else ""
         lines.append("관계 신호: " + " ".join(part for part in [label + " (" + format_score_value(strength) + "점)", suffix] if part))
         lines.append("점수 해석: " + relation_score_meaning(float(strength)) + "입니다. 점수 상승은 대응 필요 강도 강화, 하락은 완화를 뜻하며 가격 방향 예측 점수가 아닙니다.")
+    breakdown_line = relation_score_breakdown_line(context_or_metadata)
+    if breakdown_line:
+        lines.append(breakdown_line)
     easy_decision = beginner_relation_decision_line(relation_context)
     if easy_decision:
         lines.append(easy_decision)

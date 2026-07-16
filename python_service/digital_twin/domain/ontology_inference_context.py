@@ -1,6 +1,6 @@
 from typing import Dict, Iterable, List, Optional
 
-from .market_data import number
+from .market_data import clamp, number
 from .ontology_decision_policy import decision_stage_from_action, relation_stage_priority
 from .ontology_rulebox_contracts import (
     HOLDING_TARGET_ROLE,
@@ -117,7 +117,7 @@ def relation_context_from_inferencebox(
         external_signals or {},
         settings=settings or {},
     )
-    matches = matches_from_inference(relations, traces, source_name=source_name, context_version=context_version)
+    matches = matches_from_inference(relations, traces, facts=facts, source_name=source_name, context_version=context_version)
     if not matches:
         return {}
     decision = decision_from_inference(facts, matches, relations, traces, source_name=source_name)
@@ -125,9 +125,11 @@ def relation_context_from_inferencebox(
     prompt_context = build_ai_prompt_context(prompt_id, facts, matches, settings or {}, execution_plan)
     active_matches = [item for item in matches if item.matched and not item.reference_only]
     max_strength = max([item.strength_score for item in active_matches], default=decision.get("score") or 0)
+    score_breakdown = aggregate_score_breakdown(active_matches)
     evidence_subgraph = evidence_subgraph_packet(position, facts, matches, relations, traces)
     if isinstance(prompt_context, dict):
         prompt_context["evidenceSubgraph"] = evidence_subgraph
+        prompt_context["scoreBreakdown"] = score_breakdown
     return {
         "engineVersion": context_version,
         "source": source_name,
@@ -151,6 +153,7 @@ def relation_context_from_inferencebox(
         "signalStrength": round(float(max_strength or 0), 1),
         "signalStrengthLabel": strength_label(max_strength),
         "confidence": round(max([item.confidence for item in active_matches], default=0), 1),
+        "scoreBreakdown": score_breakdown,
         "inferenceGenerationId": str(inferencebox.get("inferenceGenerationId") or ""),
         "inferenceGenerationAt": str(inferencebox.get("inferenceGenerationAt") or ""),
         "ruleboxRulesHash": str(inferencebox.get("ruleboxRulesHash") or ""),
@@ -259,6 +262,7 @@ def relation_mentions_symbol(symbol: str, item: Dict[str, object]) -> bool:
 def matches_from_inference(
     relations: List[Dict[str, object]],
     traces: List[Dict[str, object]],
+    facts: Optional[Dict[str, object]] = None,
     source_name: str = "typedbInferenceBox",
     context_version: str = TYPEDB_RELATION_CONTEXT_VERSION,
 ) -> List[OntologyRuleMatch]:
@@ -278,7 +282,8 @@ def matches_from_inference(
             continue
         seen.add(key)
         trace = trace_by_rule.get(rule_id, {})
-        score = inference_strength_score(relation)
+        score_breakdown = inference_score_breakdown(relation, facts or {}, trace)
+        score = float(score_breakdown.get("finalStrength") or inference_strength_score(relation))
         label = str(relation.get("aiInfluenceLabel") or relation.get("targetLabel") or trace.get("label") or rule_id)
         evidence = [
             value
@@ -298,11 +303,12 @@ def matches_from_inference(
             matched=True,
             strength_score=score,
             strength_label=strength_label(score),
-            confidence=round(number(trace.get("confidence") or relation.get("weight") or 0) * 100, 1),
+            confidence=round(float(score_breakdown.get("dataConfidence") or 0), 1),
             evidence=evidence,
             missing=[],
             reference_only=False,
             prompt_hint=inference_prompt_hint(source_name, "relation"),
+            score_breakdown=score_breakdown,
         ))
     if matches:
         return sorted(matches, key=lambda item: (-item.strength_score, item.rule_id))
@@ -325,6 +331,18 @@ def matches_from_inference(
             missing=[],
             reference_only=False,
             prompt_hint=inference_prompt_hint(source_name, "trace"),
+            score_breakdown={
+                "ruleReliability": round(max(0.0, min(100.0, number(trace.get("confidence")) * 100)), 1),
+                "riskPressure": 0.0,
+                "supportEvidence": 0.0,
+                "netRiskPressure": 0.0,
+                "dataConfidence": round(max(0.0, min(100.0, number(trace.get("confidence")) * 100)), 1),
+                "actionability": 35.0,
+                "novelty": 25.0,
+                "finalStrength": round(score, 1),
+                "opposingPressurePenalty": 0.0,
+                "drivers": ["TypeDB trace confidence"],
+            },
         ))
     return sorted(matches, key=lambda item: (-item.strength_score, item.rule_id))
 
@@ -341,11 +359,256 @@ def inference_prompt_hint(source_name: str, unit: str) -> str:
     return f"{store_label} RuleBox InferenceBox에서 생성된 {suffix}를 우선 근거로 사용합니다."
 
 
+def _bounded_score(value: object, minimum: float = 0.0, maximum: float = 100.0) -> float:
+    return round(clamp(number(value), minimum, maximum), 1)
+
+
+def _add_driver(drivers: List[str], label: str, value: float, threshold: float = 0.1) -> None:
+    if abs(float(value or 0)) >= threshold and label not in drivers:
+        drivers.append(label)
+
+
+def _impact_pressure(value: float, reliability: float, polarity_active: bool) -> float:
+    if not value and not polarity_active:
+        return 0.0
+    base = number(value) * 4.2
+    if polarity_active:
+        base += reliability * 0.25
+    return base
+
+
+def inference_score_breakdown(
+    relation: Dict[str, object],
+    facts: Dict[str, object],
+    trace: Optional[Dict[str, object]] = None,
+) -> Dict[str, object]:
+    """Explain a TypeDB inference score with data-driven pressure components.
+
+    TypeDB remains the source of the semantic match. This function does not
+    decide whether a rule is true; it interprets a true relation with current
+    ABox fact magnitudes so equal rule weights do not hide different situations.
+    """
+    relation = relation or {}
+    facts = facts or {}
+    trace = trace or {}
+    polarity = str(relation.get("polarity") or "").strip().lower()
+    relation_type = str(relation.get("type") or "").strip().upper()
+    trace_confidence = number(trace.get("confidence")) * 100
+    relation_weight = number(relation.get("weight")) * 100
+    rule_reliability = _bounded_score(relation_weight or trace_confidence or 55.0, 0.0, 100.0)
+    risk_impact = number(relation.get("riskImpact"))
+    support_impact = number(relation.get("supportImpact"))
+    risk = _impact_pressure(risk_impact, rule_reliability, polarity in {"risk", "negative"} or "RISK" in relation_type)
+    support = _impact_pressure(support_impact, rule_reliability, polarity in {"support", "positive"} or "SUPPORT" in relation_type)
+    drivers: List[str] = []
+    if risk_impact:
+        _add_driver(drivers, "TypeDB 위험 관계 강도", risk_impact)
+    if support_impact:
+        _add_driver(drivers, "TypeDB 지지 관계 강도", support_impact)
+
+    pnl = number(facts.get("profitLossRate"))
+    if facts.get("isHolding"):
+        if pnl <= -3.0:
+            addition = min(36.0, abs(pnl) * 1.15 + max(0.0, abs(pnl) - 8.0) * 0.65)
+            risk += addition
+            _add_driver(drivers, "손실률 확대", addition)
+        elif pnl > 0:
+            addition = min(18.0, pnl * 0.8)
+            support += addition
+            _add_driver(drivers, "수익 구간", addition)
+
+    ma5_distance = number(facts.get("ma5Distance"))
+    ma20_distance = number(facts.get("ma20Distance"))
+    ma60_distance = number(facts.get("ma60Distance"))
+    for key, distance, risk_weight, support_weight, risk_cap, support_cap in [
+        ("5일 평균", ma5_distance, 0.7, 0.45, 7.0, 5.0),
+        ("20일 평균", ma20_distance, 1.0, 0.75, 18.0, 13.0),
+        ("60일 평균", ma60_distance, 1.1, 0.75, 20.0, 14.0),
+    ]:
+        if distance < 0:
+            addition = min(risk_cap, abs(distance) * risk_weight)
+            risk += addition
+            _add_driver(drivers, key + " 아래", addition)
+        elif distance > 0:
+            addition = min(support_cap, distance * support_weight)
+            support += addition
+            _add_driver(drivers, key + " 위", addition)
+
+    price_change = number(facts.get("priceChangeRate"))
+    if price_change <= -1.0:
+        addition = min(12.0, abs(price_change) * 1.5)
+        risk += addition
+        _add_driver(drivers, "당일 가격 약화", addition)
+    elif price_change >= 1.0:
+        addition = min(10.0, price_change * 1.2)
+        support += addition
+        _add_driver(drivers, "당일 가격 회복", addition)
+
+    dynamic_risk = number(facts.get("trendDynamicRiskScore"))
+    if dynamic_risk:
+        addition = min(14.0, max(0.0, dynamic_risk - 25.0) * 0.35)
+        risk += addition
+        _add_driver(drivers, "하락 속도/추세 약화", addition)
+
+    trade_strength = number(facts.get("tradeStrength"))
+    if trade_strength >= 105.0:
+        addition = min(8.0, (trade_strength - 100.0) * 0.2)
+        support += addition
+        _add_driver(drivers, "체결강도 우위", addition)
+    elif 0.0 < trade_strength <= 95.0:
+        addition = min(8.0, (100.0 - trade_strength) * 0.25)
+        risk += addition
+        _add_driver(drivers, "체결강도 약화", addition)
+
+    bid_ask_imbalance = number(facts.get("bidAskImbalance"))
+    if bid_ask_imbalance > 0:
+        addition = min(8.0, bid_ask_imbalance * 0.12)
+        support += addition
+        _add_driver(drivers, "매수 호가 우위", addition)
+    elif bid_ask_imbalance < 0:
+        addition = min(8.0, abs(bid_ask_imbalance) * 0.12)
+        risk += addition
+        _add_driver(drivers, "매도 호가 우위", addition)
+
+    investor_score = number(facts.get("investorFlowScore"))
+    if investor_score > 0:
+        addition = min(14.0, investor_score * 0.14)
+        support += addition
+        _add_driver(drivers, "외국인·기관 수급 지지", addition)
+    elif investor_score < 0:
+        addition = min(14.0, abs(investor_score) * 0.14)
+        risk += addition
+        _add_driver(drivers, "외국인·기관 수급 부담", addition)
+
+    news_momentum = number(facts.get("newsMomentumScore"))
+    if news_momentum > 0:
+        addition = min(12.0, news_momentum * 0.4)
+        support += addition
+        _add_driver(drivers, "뉴스 근거 지지", addition)
+    elif news_momentum < 0:
+        addition = min(12.0, abs(news_momentum) * 0.4)
+        risk += addition
+        _add_driver(drivers, "뉴스 근거 부담", addition)
+
+    position_weight = number(facts.get("positionAccountWeight") or facts.get("positionWeight"))
+    sellable_quantity = number(facts.get("sellableQuantity"))
+    quantity = number(facts.get("quantity"))
+    actionability = 30.0
+    if facts.get("isHolding"):
+        actionability += min(24.0, position_weight * 0.9)
+        if sellable_quantity or quantity:
+            actionability += min(14.0, (sellable_quantity / quantity) * 14.0 if quantity else 8.0)
+        if pnl <= -8.0:
+            actionability += min(18.0, abs(pnl + 8.0) * 1.1 + 8.0)
+        elif pnl >= 8.0:
+            actionability += min(12.0, pnl * 0.5)
+    elif facts.get("isWatchlist"):
+        actionability += 10.0
+        if ma5_distance >= 0 and ma20_distance >= 0:
+            actionability += 10.0
+        if number(facts.get("volumeRatio")) >= 1.2 or number(facts.get("timeAdjustedVolumeRatio")) >= 1.2:
+            actionability += 8.0
+    actionability = _bounded_score(actionability, 0.0, 100.0)
+
+    data_quality = number(facts.get("dataQualityScore")) or 100.0
+    missing_count = len(facts.get("missingData") or []) if isinstance(facts.get("missingData"), list) else 0
+    warning_count = len(facts.get("dataQualityWarnings") or []) if isinstance(facts.get("dataQualityWarnings"), list) else 0
+    conflict_penalty = min(10.0, number(facts.get("newsConflictScore")) * 0.4)
+    data_confidence = _bounded_score(
+        (trace_confidence or rule_reliability) * 0.55
+        + data_quality * 0.45
+        - missing_count * 2.5
+        - warning_count * 3.0
+        - conflict_penalty,
+        20.0,
+        100.0,
+    )
+
+    novelty = 25.0
+    pnl_delta = number(facts.get("profitLossRateDeltaPct"))
+    novelty += min(24.0, abs(pnl_delta) * 5.0)
+    novelty += min(18.0, abs(price_change) * 2.2)
+    if number(facts.get("directNewsCount")):
+        latest_age = number(facts.get("latestDirectNewsAgeMinutes"))
+        novelty += 14.0 if not latest_age or latest_age <= 360.0 else 6.0
+    if relation.get("inferenceTraceId") or trace.get("id"):
+        novelty += 6.0
+    novelty = _bounded_score(novelty, 0.0, 100.0)
+
+    risk = _bounded_score(risk, 0.0, 100.0)
+    support = _bounded_score(support, 0.0, 100.0)
+    net_risk = round(risk - support, 1)
+    dominant = max(risk, support)
+    opposing_penalty = 0.0
+    if risk and support:
+        opposing_penalty = min(14.0, min(risk, support) * 0.18)
+    final = (
+        rule_reliability * 0.25
+        + dominant * 0.42
+        + actionability * 0.18
+        + novelty * 0.10
+        + data_confidence * 0.05
+        - opposing_penalty
+    )
+    if abs(net_risk) >= 55:
+        final += 4.0
+    if data_confidence < 55.0:
+        final -= (55.0 - data_confidence) * 0.18
+    final = _bounded_score(max(55.0, final), 0.0, 100.0)
+    return {
+        "ruleReliability": rule_reliability,
+        "riskPressure": risk,
+        "supportEvidence": support,
+        "netRiskPressure": net_risk,
+        "dataConfidence": data_confidence,
+        "actionability": actionability,
+        "novelty": novelty,
+        "finalStrength": final,
+        "opposingPressurePenalty": round(opposing_penalty, 1),
+        "drivers": drivers[:8],
+    }
+
+
+def aggregate_score_breakdown(matches: List[OntologyRuleMatch]) -> Dict[str, object]:
+    breakdowns = [
+        item.score_breakdown
+        for item in matches or []
+        if isinstance(getattr(item, "score_breakdown", None), dict) and item.score_breakdown
+    ]
+    if not breakdowns:
+        return {}
+    def max_value(key: str) -> float:
+        return round(max([number(item.get(key)) for item in breakdowns], default=0.0), 1)
+
+    risk = max_value("riskPressure")
+    support = max_value("supportEvidence")
+    final = max_value("finalStrength")
+    drivers: List[str] = []
+    for item in sorted(breakdowns, key=lambda row: number(row.get("finalStrength")), reverse=True):
+        for driver in item.get("drivers") or []:
+            text = str(driver or "").strip()
+            if text and text not in drivers:
+                drivers.append(text)
+            if len(drivers) >= 8:
+                break
+        if len(drivers) >= 8:
+            break
+    return {
+        "ruleReliability": max_value("ruleReliability"),
+        "riskPressure": risk,
+        "supportEvidence": support,
+        "netRiskPressure": round(risk - support, 1),
+        "dataConfidence": max_value("dataConfidence"),
+        "actionability": max_value("actionability"),
+        "novelty": max_value("novelty"),
+        "finalStrength": final,
+        "opposingPressurePenalty": max_value("opposingPressurePenalty"),
+        "drivers": drivers,
+    }
+
+
 def inference_strength_score(relation: Dict[str, object]) -> float:
-    weight_score = number(relation.get("weight")) * 100
-    impact = max(number(relation.get("riskImpact")), number(relation.get("supportImpact")))
-    impact_score = 50 + impact * 2.5 if impact else 0
-    return round(max(55.0, min(100.0, max(weight_score, impact_score))), 1)
+    return float(inference_score_breakdown(relation, {}, {}).get("finalStrength") or 0)
 
 
 def decision_from_inference(
@@ -373,6 +636,7 @@ def decision_from_inference(
         "label": label,
         "tone": stage.tone,
         "score": round(float(selected.strength_score or 0), 1),
+        "scoreBreakdown": dict(selected.score_breakdown or {}),
         "basis": source_name,
         "selectedRuleId": selected.rule_id,
         "selectedInferenceTraceId": str(trace.get("id") or ""),
@@ -539,10 +803,18 @@ def evidence_subgraph_packet(
         ],
         "factSummary": {
             "profitLossRate": facts.get("profitLossRate"),
+            "profitLossRateDeltaPct": facts.get("profitLossRateDeltaPct"),
+            "ma5Distance": facts.get("ma5Distance"),
             "ma20Distance": facts.get("ma20Distance"),
             "ma60Distance": facts.get("ma60Distance"),
+            "priceChangeRate": facts.get("priceChangeRate"),
             "volumeRatio": facts.get("volumeRatio"),
+            "timeAdjustedVolumeRatio": facts.get("timeAdjustedVolumeRatio"),
+            "tradeStrength": facts.get("tradeStrength"),
+            "bidAskImbalance": facts.get("bidAskImbalance"),
+            "investorFlowScore": facts.get("investorFlowScore"),
             "dataQuality": facts.get("dataQuality"),
+            "dataQualityScore": facts.get("dataQualityScore"),
             "targetRole": WATCHLIST_TARGET_ROLE if facts.get("isWatchlist") else (HOLDING_TARGET_ROLE if facts.get("isHolding") else ""),
         },
         "missingData": list(facts.get("missingData") or [])[:8],

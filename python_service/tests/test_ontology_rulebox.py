@@ -598,6 +598,8 @@ class OntologyRuleBoxTests(unittest.TestCase):
         self.assertTrue(repository.saved_inferencebox_graph.entities)
         self.assertTrue(all((item.properties or {}).get("nativeTypeDbReasoned") for item in repository.saved_inferencebox_graph.entities))
         self.assertTrue(all((item.properties or {}).get("typedbNativeRuleReasoned") for item in repository.saved_inferencebox_graph.entities))
+        self.assertTrue(repository.saved_inferencebox_graph.relations)
+        self.assertTrue(all((item.properties or {}).get("symbol") == "005930" for item in repository.saved_inferencebox_graph.relations))
 
     def test_default_rulebox_covers_materiality_and_trend_transition_rules(self):
         rules = default_graph_inference_rules()

@@ -537,6 +537,11 @@ class TypeDBOntologyGraphRepository(GraphStoreOntologyRowMapperMixin):
         timeout_seconds: int = 20,
         retry_count: int = 2,
         inference_generation_keep_count: int = 2,
+        query_timeout_seconds: float = None,
+        schema_operation_timeout_seconds: float = None,
+        condition_detail_queries_enabled: bool = False,
+        query_metrics_enabled: bool = True,
+        rulebox_snapshot_cache_seconds: float = 60.0,
     ):
         self.address = str(address or "").strip()
         self.user = str(user or "admin").strip() or "admin"
@@ -546,6 +551,21 @@ class TypeDBOntologyGraphRepository(GraphStoreOntologyRowMapperMixin):
         self.timeout_seconds = max(2, int(timeout_seconds or 20))
         self.retry_count = max(0, int(retry_count or 0))
         self.inference_generation_keep_count = max(1, int(inference_generation_keep_count or 2))
+        self._query_timeout_seconds = max(
+            1.0,
+            float(query_timeout_seconds if query_timeout_seconds is not None else min(8.0, float(self.timeout_seconds or 8))),
+        )
+        self._schema_operation_timeout_seconds = max(
+            1.0,
+            float(
+                schema_operation_timeout_seconds
+                if schema_operation_timeout_seconds is not None
+                else min(8.0, float(self.timeout_seconds or 8))
+            ),
+        )
+        self._condition_detail_queries_enabled = bool(condition_detail_queries_enabled)
+        self._query_metrics_enabled = bool(query_metrics_enabled)
+        self._rulebox_snapshot_cache_seconds = max(1.0, float(rulebox_snapshot_cache_seconds or 60.0))
         self._last_graph = None
         self._last_rules: List[GraphInferenceRule] = []
         self._schema_function_sync_cache_key = ""
@@ -577,23 +597,16 @@ class TypeDBOntologyGraphRepository(GraphStoreOntologyRowMapperMixin):
         return max(1.0, float(configured or default_seconds))
 
     def query_timeout_seconds(self) -> float:
-        return self.runtime_timeout_seconds("typedbQueryTimeoutSeconds", min(8.0, float(self.timeout_seconds or 8)))
+        return self._query_timeout_seconds
 
     def schema_operation_timeout_seconds(self) -> float:
-        return self.runtime_timeout_seconds("typedbSchemaOperationTimeoutSeconds", min(8.0, float(self.timeout_seconds or 8)))
+        return self._schema_operation_timeout_seconds
 
     def condition_detail_queries_enabled(self) -> bool:
-        try:
-            return typedb_bool(runtime_settings().get("typedbConditionDetailQueriesEnabled"))
-        except Exception:
-            return False
+        return self._condition_detail_queries_enabled
 
     def query_metrics_enabled(self) -> bool:
-        try:
-            value = runtime_settings().get("typedbQueryMetricsEnabled")
-        except Exception:
-            value = None
-        return True if value in (None, "") else typedb_bool(value)
+        return self._query_metrics_enabled
 
     def reset_query_metrics(self) -> None:
         self._query_metrics = []
@@ -625,7 +638,7 @@ class TypeDBOntologyGraphRepository(GraphStoreOntologyRowMapperMixin):
         }
 
     def rulebox_snapshot_cache_seconds(self) -> float:
-        return self.runtime_timeout_seconds("typedbRuleBoxSnapshotCacheSeconds", 60.0)
+        return self._rulebox_snapshot_cache_seconds
 
     def clear_rulebox_snapshot_cache(self) -> None:
         self._rulebox_snapshot_cache_at = 0.0
@@ -3917,13 +3930,20 @@ def typedb_repository_from_settings(settings: Dict[str, str] = None):
     address = str(settings.get("typedbAddress") or "").strip()
     if not enabled or not address:
         return NullTypeDBOntologyGraphRepository()
+    timeout_seconds = int(settings.get("typedbTimeoutSeconds") or 20)
+    query_metrics_value = settings.get("typedbQueryMetricsEnabled")
     return TypeDBOntologyGraphRepository(
         address=address,
         user=str(settings.get("typedbUser") or "admin"),
         password=str(settings.get("typedbPassword") or "password"),
         database=str(settings.get("typedbDatabase") or "orbit_alpha_ontology"),
         tls_enabled=typedb_bool(settings.get("typedbTlsEnabled")),
-        timeout_seconds=int(settings.get("typedbTimeoutSeconds") or 20),
+        timeout_seconds=timeout_seconds,
         retry_count=int(number_or_none(settings.get("typedbRetryCount")) or 2),
         inference_generation_keep_count=int(number_or_none(settings.get("typedbInferenceGenerationKeepCount")) or 1),
+        query_timeout_seconds=number_or_none(settings.get("typedbQueryTimeoutSeconds")) or min(8.0, float(timeout_seconds or 8)),
+        schema_operation_timeout_seconds=number_or_none(settings.get("typedbSchemaOperationTimeoutSeconds")) or min(8.0, float(timeout_seconds or 8)),
+        condition_detail_queries_enabled=typedb_bool(settings.get("typedbConditionDetailQueriesEnabled")),
+        query_metrics_enabled=True if query_metrics_value in (None, "") else typedb_bool(query_metrics_value),
+        rulebox_snapshot_cache_seconds=number_or_none(settings.get("typedbRuleBoxSnapshotCacheSeconds")) or 60.0,
     )

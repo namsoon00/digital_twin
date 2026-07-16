@@ -49,6 +49,7 @@ def materialize_rule_inference(
         weight=confidence,
         evidence_ids=evidence_relation_ids,
         properties=inference_relation_properties("TRIGGERED_INFERENCE", {
+            "symbol": symbol,
             "ruleId": rule.rule_id,
             "aiInfluenceLabel": rule.label,
             "source": GRAPH_REASONER_VERSION,
@@ -61,6 +62,7 @@ def materialize_rule_inference(
         weight=confidence,
         evidence_ids=evidence_relation_ids,
         properties=inference_relation_properties("HAS_INFERENCE_TRACE", {
+            "symbol": symbol,
             "ruleId": rule.rule_id,
             "aiInfluenceLabel": rule.label,
             "source": GRAPH_REASONER_VERSION,
@@ -113,6 +115,7 @@ def materialize_rule_inference(
             "inferenceTraceId": trace_id,
         })))
         relation_properties = {
+            "symbol": symbol,
             "ruleId": rule.rule_id,
             "ruleLabel": rule.label,
             "derivationIndex": index,
@@ -143,6 +146,7 @@ def materialize_rule_inference(
             weight=confidence,
             evidence_ids=[evidence_id_value] + evidence_relation_ids,
             properties=inference_relation_properties("EXPLAINED_BY_TRACE", {
+                "symbol": symbol,
                 "ruleId": rule.rule_id,
                 "source": GRAPH_REASONER_VERSION,
                 "aiInfluenceLabel": "추론 경로",

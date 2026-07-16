@@ -4,6 +4,7 @@ from typing import Callable, Dict, List
 
 from ..domain.accounts import AccountConfig, split_symbols
 from ..domain.market_data import (
+    investor_net_volume,
     known_stock,
     normalize_position,
     number,
@@ -21,6 +22,9 @@ from ..domain.strategy import StrategyModel, inference_required_relation_context
 
 
 def position_payload(position: Position) -> Dict[str, object]:
+    foreign_net = investor_net_volume(position.foreign_net_volume, position.foreign_buy_volume, position.foreign_sell_volume)
+    institution_net = investor_net_volume(position.institution_net_volume, position.institution_buy_volume, position.institution_sell_volume)
+    individual_net = investor_net_volume(position.individual_net_volume, position.individual_buy_volume, position.individual_sell_volume)
     return {
         "symbol": position.symbol,
         "name": position.name,
@@ -52,15 +56,15 @@ def position_payload(position: Position) -> Dict[str, object]:
         "bidAskImbalance": position.bid_ask_imbalance,
         "foreignBuyVolume": position.foreign_buy_volume,
         "foreignSellVolume": position.foreign_sell_volume,
-        "foreignNetVolume": position.foreign_net_volume,
+        "foreignNetVolume": foreign_net,
         "foreignNetAmount": position.foreign_net_amount,
         "institutionBuyVolume": position.institution_buy_volume,
         "institutionSellVolume": position.institution_sell_volume,
-        "institutionNetVolume": position.institution_net_volume,
+        "institutionNetVolume": institution_net,
         "institutionNetAmount": position.institution_net_amount,
         "individualBuyVolume": position.individual_buy_volume,
         "individualSellVolume": position.individual_sell_volume,
-        "individualNetVolume": position.individual_net_volume,
+        "individualNetVolume": individual_net,
         "individualNetAmount": position.individual_net_amount,
         "ma5": position.ma5,
         "ma20": position.ma20,

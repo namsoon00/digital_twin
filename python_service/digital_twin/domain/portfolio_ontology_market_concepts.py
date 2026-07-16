@@ -1,7 +1,7 @@
 from typing import Dict, List
 
 from .investor_flow_psychology import investor_flow_psychology
-from .market_data import clamp, number
+from .market_data import clamp, investor_net_volume, number
 from .ontology_contracts import PortfolioOntology
 from .ontology_schema import add_entity, add_relation
 from .portfolio import Position, expects_kr_microstructure_signals
@@ -277,6 +277,9 @@ def volume_profile(position: Position) -> Dict[str, object]:
         trading_value=position.trading_value,
         observed_at=position.updated_at,
     )
+    foreign_net_volume = investor_net_volume(position.foreign_net_volume, position.foreign_buy_volume, position.foreign_sell_volume)
+    institution_net_volume = investor_net_volume(position.institution_net_volume, position.institution_buy_volume, position.institution_sell_volume)
+    individual_net_volume = investor_net_volume(position.individual_net_volume, position.individual_buy_volume, position.individual_sell_volume)
     return {
         "volume": round(number(position.volume), 2),
         "volumeRatio": round(number(position.volume_ratio), 3),
@@ -296,11 +299,11 @@ def volume_profile(position: Position) -> Dict[str, object]:
         "orderbookBidVolume": round(number(position.orderbook_bid_volume), 2),
         "orderbookAskVolume": round(number(position.orderbook_ask_volume), 2),
         "bidAskImbalance": round(number(position.bid_ask_imbalance), 2),
-        "foreignNetVolume": round(number(position.foreign_net_volume), 2),
+        "foreignNetVolume": round(foreign_net_volume, 2),
         "foreignNetAmount": round(number(position.foreign_net_amount), 2),
-        "institutionNetVolume": round(number(position.institution_net_volume), 2),
+        "institutionNetVolume": round(institution_net_volume, 2),
         "institutionNetAmount": round(number(position.institution_net_amount), 2),
-        "individualNetVolume": round(number(position.individual_net_volume), 2),
+        "individualNetVolume": round(individual_net_volume, 2),
         "individualNetAmount": round(number(position.individual_net_amount), 2),
     }
 
@@ -344,21 +347,21 @@ def missing_market_microstructure_fields(position: Position) -> List[Dict[str, s
             {"field": "bidAskImbalance", "label": "호가 불균형"},
         ])
     if (
-        number(position.foreign_net_volume) == 0
+        investor_net_volume(position.foreign_net_volume, position.foreign_buy_volume, position.foreign_sell_volume) == 0
         and number(position.foreign_net_amount) == 0
         and number(position.foreign_buy_volume) == 0
         and number(position.foreign_sell_volume) == 0
     ):
         missing.append({"field": "foreignNetVolume", "label": "외국인 순매수"})
     if (
-        number(position.institution_net_volume) == 0
+        investor_net_volume(position.institution_net_volume, position.institution_buy_volume, position.institution_sell_volume) == 0
         and number(position.institution_net_amount) == 0
         and number(position.institution_buy_volume) == 0
         and number(position.institution_sell_volume) == 0
     ):
         missing.append({"field": "institutionNetVolume", "label": "기관 순매수"})
     if (
-        number(position.individual_net_volume) == 0
+        investor_net_volume(position.individual_net_volume, position.individual_buy_volume, position.individual_sell_volume) == 0
         and number(position.individual_net_amount) == 0
         and number(position.individual_buy_volume) == 0
         and number(position.individual_sell_volume) == 0

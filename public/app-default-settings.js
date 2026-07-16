@@ -103,6 +103,13 @@
     ontologyReasoningEnabled: "1",
     ontologyReasoningIntervalSeconds: "10",
     ontologyReasoningBatchSize: "20",
+    temporalWindowPeriods: [
+      "1D=1:2",
+      "3D=3:3",
+      "5D=5:4",
+      "20D=20:5"
+    ].join("\n"),
+    temporalWindowHistoryLimit: "96",
     ontologyRuleCandidateAiEnabled: "1",
     ontologyRuleCandidateAiUseCodex: "1",
     ontologyRuleCandidateAiCommand: "",

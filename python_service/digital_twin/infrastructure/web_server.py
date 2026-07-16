@@ -445,6 +445,8 @@ def settings_status_payload() -> Dict[str, object]:
         "ontologyReasoningEnabled",
         "ontologyReasoningIntervalSeconds",
         "ontologyReasoningBatchSize",
+        "temporalWindowPeriods",
+        "temporalWindowHistoryLimit",
         "ontologyRuleCandidateAiEnabled",
         "ontologyRuleCandidateAiUseCodex",
         "ontologyRuleCandidateAiCommand",
@@ -2044,6 +2046,63 @@ def first_query(query: Dict[str, List[str]], key: str) -> str:
     return str(value or "")
 
 
+def compact_flow_lens_payload(payload: Dict[str, object]) -> Dict[str, object]:
+    """Keep initial dashboard payload small; full ontology rows load on demand."""
+    if not isinstance(payload, dict):
+        return payload
+    compact = dict(payload)
+    decision = compact.get("tossDecision")
+    if not isinstance(decision, dict):
+        return compact
+    decision = dict(decision)
+    compact["tossDecision"] = decision
+
+    strategy = decision.get("ontologyStrategy")
+    if isinstance(strategy, dict):
+        omitted = []
+        strategy = dict(strategy)
+        for key in [
+            "prompt",
+            "reasoningCards",
+            "entities",
+            "relations",
+            "tboxEntities",
+            "tboxRelations",
+            "aboxEntities",
+            "aboxRelations",
+            "evidence",
+            "beliefs",
+            "opinions",
+            "activeInvestmentOpinions",
+            "executionPlans",
+            "insights",
+            "dataQuality",
+        ]:
+            value = strategy.pop(key, None)
+            if value not in (None, [], {}, ""):
+                omitted.append(key)
+                if isinstance(value, list):
+                    strategy[key + "Count"] = len(value)
+        strategy["detailLevel"] = "summary"
+        strategy["detailAvailable"] = True
+        strategy["heavyFieldsOmitted"] = omitted
+        decision["ontologyStrategy"] = strategy
+
+    analysis = decision.get("investmentAnalysis")
+    if isinstance(analysis, dict):
+        analysis = dict(analysis)
+        reasoning_cards = analysis.pop("reasoningCards", None)
+        if isinstance(reasoning_cards, list):
+            analysis["reasoningCardCount"] = len(reasoning_cards)
+        analysis["detailLevel"] = "summary"
+        analysis["detailAvailable"] = True
+        decision["investmentAnalysis"] = analysis
+
+    compact["payloadDetail"] = "summary"
+    compact["fullDetailPath"] = "/api/flow-lens?detail=full"
+    return compact
+
+
 def category_for(value: str) -> str:
     text = str(value or "")
     if re.search(r"주식|투자|종목|포트폴리오|배당|매수|매도", text):
@@ -2795,10 +2854,14 @@ class DigitalTwinHandler(BaseHTTPRequestHandler):
 
         if path == "/api/flow-lens" and self.command == "GET":
             mock_value = configured(first_query(query, "mock") or first_query(query, "mode")).lower()
-            return self.send_payload(200, flow_lens_snapshot(
+            detail = configured(first_query(query, "detail") or first_query(query, "view")).lower()
+            payload = flow_lens_snapshot(
                 mock=mock_value in {"1", "true", "mock"},
                 watchlist_symbols=first_query(query, "watchlistSymbols"),
-            ))
+            )
+            if detail not in {"full", "detail", "all"}:
+                payload = compact_flow_lens_payload(payload)
+            return self.send_payload(200, payload)
 
         if path == "/api/investment-analysis" and self.command == "GET":
             mock_value = configured(first_query(query, "mock") or first_query(query, "mode")).lower()

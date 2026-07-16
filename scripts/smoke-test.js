@@ -439,7 +439,11 @@ function checkFrontendAdminRender() {
   assertOk(code.indexOf('appTheme: settingValue("appTheme")') >= 0, "설정 저장 payload에 화면 테마가 포함되지 않았습니다.");
   assertOk(code.indexOf('typedbAddress: settingValue("typedbAddress")') >= 0, "설정 저장 payload에 TypeDB 주소가 포함되지 않았습니다.");
   assertOk(code.indexOf('typedbTlsEnabled: settingValue("typedbTlsEnabled")') >= 0, "설정 저장 payload에 TypeDB TLS 설정이 포함되지 않았습니다.");
+  assertOk(code.indexOf('temporalWindowPeriods: settingValue("temporalWindowPeriods")') >= 0, "설정 저장 payload에 기간 판단 구간이 포함되지 않았습니다.");
+  assertOk(code.indexOf('temporalWindowHistoryLimit: settingValue("temporalWindowHistoryLimit")') >= 0, "설정 저장 payload에 기간 히스토리 제한이 포함되지 않았습니다.");
   assertOk(code.indexOf('renderSettingField("typedbAddress"') >= 0, "설정 화면에 TypeDB 주소 입력 필드가 없습니다.");
+  assertOk(code.indexOf('data-setting="temporalWindowPeriods"') >= 0, "설정 화면에 기간 판단 구간 입력 필드가 없습니다.");
+  assertOk(code.indexOf('renderSettingField("temporalWindowHistoryLimit"') >= 0, "설정 화면에 기간 히스토리 제한 입력 필드가 없습니다.");
   const payloads = {
     "/api/settings": {
       settings: {
@@ -452,6 +456,8 @@ function checkFrontendAdminRender() {
         typedbDatabase: "orbit_alpha_ontology",
         typedbTlsEnabled: "0",
         typedbTimeoutSeconds: "20",
+        temporalWindowPeriods: "1D=1:2\n3D=3:3\n5D=5:4\n20D=20:5",
+        temporalWindowHistoryLimit: "96",
         ontologyRuleCandidateAiEnabled: "1",
         ontologyRuleCandidateAiUseCodex: "1",
         ontologyRuleCandidateAiIntervalMinutes: "60",
@@ -1623,14 +1629,18 @@ function checkFrontendAdminRender() {
     assertOk(code.indexOf('targetContext + "|RELATES_TO"') < 0 && modelingGraphHtml.indexOf("접은 표시") < 0, "규칙 구조 그래프가 relation type을 접어서 표시합니다.");
     assertOk(code.indexOf("ontologyEntityDisplayLabel") >= 0 && code.indexOf('"의견 " + displayName') >= 0, "현재 데이터 관계 그래프 노드가 회사명 표시명을 거치지 않습니다.");
     assertOk(code.indexOf("properties.symbol || entity.label") < 0 && code.indexOf('"의견 " + symbol') < 0, "현재 데이터 관계 그래프 노드 라벨에 종목코드 우선 경로가 남아 있습니다.");
+    assertOk(code.indexOf("HAS_TEMPORAL_WINDOW") >= 0 && code.indexOf("DERIVES_TREND_EPISODE") >= 0 && code.indexOf("AFFECTS_DECISION_EPISODE") >= 0, "기간/히스토리 온톨로지 관계가 웹 그래프 중요 관계로 등록되지 않았습니다.");
+    assertOk(code.indexOf(".node-temporal-window") >= 0 && code.indexOf(".node-trend-episode") >= 0, "기간/히스토리 온톨로지 노드 타입이 그래프 스타일에 없습니다.");
     assertOk(modelingRulesHtml.indexOf("investment-ai-packet-panel") >= 0 && modelingRulesHtml.indexOf("AI 추론 입력 계약") >= 0, "전략 룰 섹션에 AI 추론 입력 계약이 없습니다.");
-    assertOk(modelingRulesHtml.indexOf("strategy-rules-overview-panel") >= 0 && modelingRulesHtml.indexOf('data-work-detail="strategy-rule-editor"') >= 0, "전략 룰 섹션에 관계 규칙 상세 진입점이 없습니다.");
-    assertOk(code.indexOf("renderOntologyRuleEditorPanel") >= 0 && code.indexOf('data-model-setting="ontologyRelationRules"') >= 0, "전략 룰 상세 레이어에 관계 규칙 편집기가 없습니다.");
+    assertOk(modelingRulesHtml.indexOf("strategy-rules-overview-panel") >= 0 && modelingRulesHtml.indexOf('data-work-detail="strategy-rule-editor"') < 0, "전략 룰 섹션에 레거시 관계 규칙 상세 진입점이 남아 있습니다.");
+    assertOk(code.indexOf("renderOntologyRuleEditorPanel") < 0 && code.indexOf('data-model-setting="ontologyRelationRules"') < 0, "웹 편집 UI에 레거시 관계 규칙 편집기가 남아 있습니다.");
     assertOk(modelingRulesHtml.indexOf('data-work-detail="strategy-rulebox-editor"') >= 0 && modelingRulesHtml.indexOf("TypeDB RuleBox") >= 0, "전략 룰 섹션에 TypeDB RuleBox 상세 진입점이 없습니다.");
     assertOk(code.indexOf("renderTypeDBRuleboxPanel") >= 0 && code.indexOf('data-ontology-rulebox-json') >= 0 && code.indexOf('data-action="run-rulebox"') >= 0, "TypeDB RuleBox 상세 레이어에 JSON 편집기나 실행 버튼이 없습니다.");
     assertOk(code.indexOf("최근 버전") >= 0 && code.indexOf("AI 관계 후보 검토") >= 0, "TypeDB RuleBox 상세 레이어에 버전/후보 검토 섹션이 없습니다.");
     assertOk(code.indexOf('data-ontology-rulebox-change-reason') >= 0 && code.indexOf('data-action="append-rulebox-candidate"') >= 0, "RuleBox 변경 이유 입력이나 후보 추가 버튼이 없습니다.");
     assertOk(code.indexOf('data-action="propose-rulebox-candidates"') >= 0 && code.indexOf("AI 후보 생성") >= 0, "RuleBox AI 후보 생성 버튼이 없습니다.");
+    assertOk(code.indexOf('data-action="refresh-ontology-diagnostics"') >= 0 && code.indexOf('data-action="seed-ontology-graph"') >= 0 && code.indexOf("renderTypeDBDiagnosticsPanel") >= 0, "RuleBox 상세 레이어에 TypeDB 진단/시드 운영 액션이 없습니다.");
+    assertOk(code.indexOf("loadOntologyStrategyDetail") >= 0 && code.indexOf('detail: "full"') >= 0, "온톨로지 상세 탭이 전체 그래프 데이터를 지연 로드하지 않습니다.");
     assertOk(code.indexOf('data-model-setting="ontologyRuleCandidateAiEnabled"') >= 0 && code.indexOf('data-model-setting="ontologyRuleCandidateAiIntervalMinutes"') >= 0, "RuleBox AI 후보 생성 설정이 없습니다.");
     assertOk(modelingRulesHtml.indexOf('data-work-detail="strategy-prompt-editor"') >= 0 && code.indexOf("renderAiPromptRegistryPanel") >= 0 && code.indexOf("Prompt Registry") >= 0, "전략 룰 섹션에 프롬프트 상세 진입점이 없습니다.");
     assertOk(code.indexOf("prompt-registry-list") >= 0 && code.indexOf("prompt-registry-row") >= 0, "프롬프트 레지스트리 목록에 모바일 전용 행 구조가 없습니다.");
@@ -1936,9 +1946,13 @@ async function checkNormalMode(port, context) {
   assertOk(Object.prototype.hasOwnProperty.call(settingsPayload.settings, "alertRules"), "설정 API에 알림 규칙 필드가 없습니다.");
   assertOk(Object.prototype.hasOwnProperty.call(settingsPayload.settings, "modelDecisionThresholds"), "설정 API에 모델 판단 기준 필드가 없습니다.");
   assertOk(Object.prototype.hasOwnProperty.call(settingsPayload.settings, "ontologyRelationRules"), "설정 API에 관계 규칙 필드가 없습니다.");
+  assertOk(Object.prototype.hasOwnProperty.call(settingsPayload.settings, "temporalWindowPeriods"), "설정 API에 기간 판단 구간 필드가 없습니다.");
+  assertOk(Object.prototype.hasOwnProperty.call(settingsPayload.settings, "temporalWindowHistoryLimit"), "설정 API에 기간 히스토리 제한 필드가 없습니다.");
   assertOk(Object.prototype.hasOwnProperty.call(settingsPayload.settings, "aiPromptTemplates"), "설정 API에 AI 프롬프트 템플릿 필드가 없습니다.");
   assertOk(Object.prototype.hasOwnProperty.call(settingsPayload.settings, "aiPromptPolicy"), "설정 API에 AI 프롬프트 정책 필드가 없습니다.");
   assertOk(settingsPayload.settings.ontologyRelationRules.indexOf("holding.loss_guard.breakdown.v1") >= 0, "설정 API의 기본 관계 규칙이 비어 있습니다.");
+  assertOk(String(settingsPayload.settings.temporalWindowPeriods || "").indexOf("1D=1:2") >= 0, "설정 API의 기간 판단 구간 기본값이 비어 있습니다.");
+  assertOk(String(settingsPayload.settings.temporalWindowHistoryLimit || "") === "96", "설정 API의 기간 히스토리 제한 기본값이 맞지 않습니다.");
   assertOk(settingsPayload.settings.modelDecisionThresholds.indexOf("graphSignalAlertScore=78") >= 0, "설정 API의 그래프 신호 기본 판단 기준이 비어 있습니다.");
   assertOk(settingsPayload.settings.alertThresholds.indexOf("graphSignalMinScore=55") >= 0, "설정 API의 그래프 신호 최소 기준이 비어 있습니다.");
   assertOk(settingsPayload.settings.alertThresholds.indexOf("graphSignalConfidenceMin=50") >= 0, "설정 API의 그래프 신호 신뢰도 기준이 비어 있습니다.");
@@ -2174,16 +2188,26 @@ async function checkNormalMode(port, context) {
   assertOk(tossPayload.tossDecision.items.some(function (item) { return item.symbol === "AAPL"; }), "토스 판단 항목에 AAPL이 없습니다.");
   assertOk(tossPayload.tossDecision.items.some(function (item) { return item.symbol === "TSLA"; }), "토스 판단 항목에 TSLA 관심 종목이 없습니다.");
   assertOk(tossPayload.tossDecision.investmentAnalysis && tossPayload.tossDecision.investmentAnalysis.contract === "investment-ontology-ai-inference-v1", "토스 판단 API에 투자 분석 AI 추론 계약이 없습니다.");
-  assertOk(Array.isArray(tossPayload.tossDecision.investmentAnalysis.reasoningCards), "토스 판단 API reasoning card 필드가 배열이 아닙니다.");
-  assertOk(tossPayload.tossDecision.ontologyStrategy && tossPayload.tossDecision.ontologyStrategy.aiInferencePacket && tossPayload.tossDecision.ontologyStrategy.aiInferencePacket.contract === "investment-ontology-ai-inference-v1", "온톨로지 전략에 AI inference packet이 없습니다.");
-  assertOk(tossPayload.tossDecision.ontologyStrategy.worldview && tossPayload.tossDecision.ontologyStrategy.worldview.runtimeProjectionMode === "abox-facts-only-typedb-native-rules", "토스 판단 API가 TypeDB native rule용 ABox 투영 모드가 아닙니다.");
-  assertOk(tossPayload.tossDecision.items.some(function (item) { return item.decisionBasis === "ontologyInferenceRequired"; }), "토스 판단 항목이 InferenceBox 없는 판단을 차단하지 않습니다.");
+  assertOk(tossPayload.payloadDetail === "summary", "토스 판단 API 기본 응답이 요약 모드가 아닙니다.");
+  assertOk(tossPayload.fullDetailPath === "/api/flow-lens?detail=full", "토스 판단 API가 상세 데이터 경로를 내려주지 않습니다.");
+  assertOk(!Array.isArray(tossPayload.tossDecision.investmentAnalysis.reasoningCards), "요약 응답에 reasoning card 배열이 남아 있습니다.");
+  assertOk(typeof tossPayload.tossDecision.investmentAnalysis.reasoningCardCount === "number", "요약 응답에 reasoning card 개수 메타가 없습니다.");
+  assertOk(tossPayload.tossDecision.ontologyStrategy && tossPayload.tossDecision.ontologyStrategy.detailLevel === "summary", "온톨로지 전략 요약 플래그가 없습니다.");
+  assertOk(!Array.isArray(tossPayload.tossDecision.ontologyStrategy.aboxRelations), "요약 응답에 ABox 관계 배열이 남아 있습니다.");
   assertOk(tossPayload.portfolio && Array.isArray(tossPayload.portfolio.markets), "토스 판단 API에 시장별 현금비중 배열이 없습니다.");
   assertOk(tossPayload.portfolio.markets.some(function (market) { return market.key === "KR"; }), "시장별 현금비중에 한국장 항목이 없습니다.");
   assertOk(tossPayload.portfolio.markets.some(function (market) { return market.key === "US"; }), "시장별 현금비중에 미국장 항목이 없습니다.");
   assertOk(tossPayload.portfolio.total > 2700000, "미국장 USD 평가액이 KRW 기준 총 평가액에 환산되지 않았습니다.");
   assertOk(!Array.isArray(tossPayload.news), "토스 전용 판단 API가 뉴스 배열을 내려주고 있습니다.");
   assertOk(!Array.isArray(tossPayload.social), "토스 전용 판단 API가 소셜 배열을 내려주고 있습니다.");
+
+  const tossLensFull = await request(port, "/api/flow-lens?mock=1&detail=full");
+  assertOk(tossLensFull.statusCode === 200, "토스 판단 상세 API 응답 코드가 200이 아닙니다: " + tossLensFull.statusCode);
+  const tossFullPayload = JSON.parse(tossLensFull.body);
+  assertOk(Array.isArray(tossFullPayload.tossDecision.investmentAnalysis.reasoningCards), "토스 판단 상세 API reasoning card 필드가 배열이 아닙니다.");
+  assertOk(tossFullPayload.tossDecision.ontologyStrategy && tossFullPayload.tossDecision.ontologyStrategy.aiInferencePacket && tossFullPayload.tossDecision.ontologyStrategy.aiInferencePacket.contract === "investment-ontology-ai-inference-v1", "온톨로지 전략 상세에 AI inference packet이 없습니다.");
+  assertOk(tossFullPayload.tossDecision.ontologyStrategy.worldview && tossFullPayload.tossDecision.ontologyStrategy.worldview.runtimeProjectionMode === "abox-facts-only-typedb-native-rules", "토스 판단 상세 API가 TypeDB native rule용 ABox 투영 모드가 아닙니다.");
+  assertOk(tossFullPayload.tossDecision.items.some(function (item) { return item.decisionBasis === "ontologyInferenceRequired"; }), "토스 판단 항목이 InferenceBox 없는 판단을 차단하지 않습니다.");
 
   const scenarios = await request(port, "/api/mock-market/scenarios");
   assertOk(scenarios.statusCode === 200, "mock market 시나리오 API 응답 코드가 200이 아닙니다: " + scenarios.statusCode);

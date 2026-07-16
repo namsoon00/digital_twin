@@ -9,6 +9,12 @@ DEFAULT_INSTRUMENT_PROFILES_TEXT = """# symbol|label|archetypes|positionIntent|s
 MSTR|비트코인 프록시 성장주|BitcoinProxy,HighVolatilityGrowth|trading|btc:high,rate:medium,fx:high|allowAddOnStrength=1,trimOnTrendBreak=1,avoidAveragingDown=1
 STRC|비트코인 민감 우선주/배당|PreferredIncome,BitcoinSensitiveIncome|income|btc:medium,rate:high,fx:high|allowAddOnStrength=0,trimOnTrendBreak=1,avoidAveragingDown=1
 000660|HBM 반도체 성장주|SemiconductorHBM,CyclicalGrowth|core|cycle:high,ai:high,fx:medium|allowAddOnStrength=1,trimOnTrendBreak=1,avoidAveragingDown=1
+SKHY|SK하이닉스 ADR|SemiconductorHBM,CyclicalGrowth,CrossListedSecurity|trading|cycle:high,ai:high,fx:high,crossListing:high|allowAddOnStrength=0,trimOnTrendBreak=1,avoidAveragingDown=1
+SKHYV|SK하이닉스 임시 ADR|SemiconductorHBM,CyclicalGrowth,CrossListedSecurity|trading|cycle:high,ai:high,fx:high,crossListing:high|allowAddOnStrength=0,trimOnTrendBreak=1,avoidAveragingDown=1
+SKHX|SK하이닉스 2x 롱 ETF|DailyLeveragedProduct,SingleStockETF,CrossListedSecurity|trading|cycle:high,fx:high,leverage:high|allowAddOnStrength=0,trimOnTrendBreak=1,avoidAveragingDown=1
+SKHZ|SK하이닉스 1x 숏 ETF|InverseProduct,SingleStockETF,CrossListedSecurity|trading|cycle:high,fx:high,inverse:high|allowAddOnStrength=0,trimOnTrendBreak=1,avoidAveragingDown=1
+SKUU|SK하이닉스 2x 롱 ETF|DailyLeveragedProduct,SingleStockETF,CrossListedSecurity|trading|cycle:high,fx:high,leverage:high|allowAddOnStrength=0,trimOnTrendBreak=1,avoidAveragingDown=1
+SKDD|SK하이닉스 -2x 숏 ETF|InverseProduct,DailyLeveragedProduct,SingleStockETF,CrossListedSecurity|trading|cycle:high,fx:high,inverse:high,leverage:high|allowAddOnStrength=0,trimOnTrendBreak=1,avoidAveragingDown=1
 005930|대형 반도체 우량주|MegaCapQuality,SemiconductorCyclical|core|cycle:medium,fx:medium|allowAddOnStrength=1,trimOnTrendBreak=1,avoidAveragingDown=1
 AAPL|대형 플랫폼 우량 성장주|MegaCapQuality,PlatformGrowth|core|rate:medium,fx:high|allowAddOnStrength=1,trimOnTrendBreak=1,avoidAveragingDown=1
 NVDA|AI 인프라 성장주|AIGrowth,SemiconductorHBM|growth|ai:high,rate:medium,fx:high|allowAddOnStrength=1,trimOnTrendBreak=1,avoidAveragingDown=1

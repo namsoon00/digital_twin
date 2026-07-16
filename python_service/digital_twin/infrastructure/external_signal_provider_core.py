@@ -134,6 +134,9 @@ class ExternalSignalCoreMixin:
     def cache_key_for_positions(self, positions: List[Position]) -> str:
         payload = {
             "alphaSymbols": self.alpha_symbols(positions),
+            "securityLineMappings": str(self.settings.get("securityLineMappings") or ""),
+            "alphaRelatedSymbolsEnabled": str(self.settings.get("externalAlphaRelatedSymbolsEnabled") or "1"),
+            "alphaRelatedMaxSymbols": str(self.settings.get("externalAlphaRelatedMaxSymbols") or "8"),
             "cryptoIds": symbol_list(self.settings.get("externalCryptoIds") or "bitcoin,ethereum") if self.external_api_enabled("externalCoinGeckoEnabled") else [],
             "fredSeries": symbol_list(self.settings.get("externalFredSeries") or "DGS10,DGS2,DFF") if self.external_api_enabled("externalFredEnabled") else [],
             "fxRates": str(self.settings.get("fxRates") or ""),

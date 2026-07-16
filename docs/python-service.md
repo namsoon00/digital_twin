@@ -248,6 +248,9 @@ Configuration:
 - `EXTERNAL_FRED_SERIES`: comma-separated FRED series ids, default `DGS10,DGS2,DFF`.
 - `EXTERNAL_CRYPTO_IDS`: comma-separated CoinGecko ids, default `bitcoin,ethereum`.
 - `EXTERNAL_ALPHA_MAX_SYMBOLS`: max US holdings queried per refresh, default 3.
+- `EXTERNAL_ALPHA_RELATED_SYMBOLS_ENABLED`: collect configured ADR/single-stock ETF lines related to current holdings, default 1.
+- `EXTERNAL_ALPHA_RELATED_MAX_SYMBOLS`: max related ADR/single-stock ETF symbols appended per refresh, default 8.
+- `SECURITY_LINE_MAPPINGS`: optional line mappings in `localSymbol|companyName|role|symbol|label|market|currency|exchange|adrRatio|conversionStartDate|leverageFactor|underlyingSymbol|sourceUrl|listingDate` format.
 - `EXTERNAL_DART_LOOKBACK_DAYS`: OpenDART disclosure lookback, default 14.
 - `EXTERNAL_DART_CORP_CODES`: ticker-to-corp-code mappings, for example `005930=00126380;000660=00164779`.
 

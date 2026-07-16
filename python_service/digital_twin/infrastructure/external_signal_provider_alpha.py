@@ -3,6 +3,7 @@ from typing import Dict, List
 
 from ..domain.market_data import number
 from ..domain.portfolio import Position
+from ..domain.security_lines import related_market_symbols_for_positions
 from .external_signal_utils import DISABLED_SETTING_VALUES, percent_text
 
 
@@ -44,6 +45,8 @@ class ExternalSignalAlphaMixin:
         if not self.external_api_enabled("externalAlphaEnabled"):
             return []
         max_symbols = int(number(self.settings.get("externalAlphaMaxSymbols")) or 3)
+        related_symbols = related_market_symbols_for_positions(positions, self.settings)
+        max_total_symbols = max(max_symbols, max_symbols + int(number(self.settings.get("externalAlphaRelatedMaxSymbols")) or 0))
         symbols = []
         seen = set()
         for position in positions:
@@ -55,7 +58,11 @@ class ExternalSignalAlphaMixin:
             if position.market.upper() == "US" or position.currency.upper() == "USD":
                 seen.add(symbol)
                 symbols.append(symbol)
-        return symbols[:max(1, max_symbols)]
+        for symbol in related_symbols:
+            if symbol and symbol not in seen:
+                seen.add(symbol)
+                symbols.append(symbol)
+        return symbols[:max(1, max_total_symbols)]
 
     def alpha_fundamentals_enabled(self) -> bool:
         raw_enabled = str(self.settings.get("externalAlphaFundamentalsEnabled") or "0").strip().lower()

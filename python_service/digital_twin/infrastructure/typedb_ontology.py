@@ -312,6 +312,14 @@ TYPEDB_PROMOTED_NUMERIC_ATTRIBUTES = {
     "individualNetAmount": "ontology-individual-net-amount",
     "smartMoneyNetVolume": "ontology-smart-money-net-volume",
     "investorFlowScore": "ontology-investor-flow-score",
+    "adrRatio": "ontology-adr-ratio",
+    "adrPriceUsd": "ontology-adr-price-usd",
+    "adrVolume": "ontology-adr-volume",
+    "usdKrwRate": "ontology-usd-krw-rate",
+    "localPriceKrw": "ontology-local-price-krw",
+    "localEquivalentKrw": "ontology-local-equivalent-krw",
+    "leverageFactor": "ontology-leverage-factor",
+    "price": "ontology-price",
 }
 TYPEDB_PROMOTED_TEXT_ATTRIBUTES = {
     "investmentStrategyProfile": "ontology-investment-strategy-profile",
@@ -327,6 +335,18 @@ TYPEDB_PROMOTED_TEXT_ATTRIBUTES = {
     "actionPolicy": "ontology-action-policy",
     "tradingValueQuality": "ontology-trading-value-quality",
     "tradingValueBasis": "ontology-trading-value-basis",
+    "securityLineRole": "ontology-security-line-role",
+    "localSymbol": "ontology-local-symbol",
+    "companyName": "ontology-company-name",
+    "market": "ontology-market",
+    "currency": "ontology-currency",
+    "exchange": "ontology-exchange",
+    "adrSymbol": "ontology-adr-symbol",
+    "etfSymbol": "ontology-etf-symbol",
+    "underlyingSymbol": "ontology-underlying-symbol",
+    "conversionStartDate": "ontology-conversion-start-date",
+    "listingDate": "ontology-listing-date",
+    "sourceUrl": "ontology-source-url",
 }
 TYPEDB_FUNCTION_SUBJECT_FIELDS = {
     "source",
@@ -1302,6 +1322,14 @@ attribute ontology-individual-net-volume, value double;
 attribute ontology-individual-net-amount, value double;
 attribute ontology-smart-money-net-volume, value double;
 attribute ontology-investor-flow-score, value double;
+attribute ontology-adr-ratio, value double;
+attribute ontology-adr-price-usd, value double;
+attribute ontology-adr-volume, value double;
+attribute ontology-usd-krw-rate, value double;
+attribute ontology-local-price-krw, value double;
+attribute ontology-local-equivalent-krw, value double;
+attribute ontology-leverage-factor, value double;
+attribute ontology-price, value double;
 attribute ontology-investment-strategy-profile, value string;
 attribute ontology-investment-strategy-profile-label, value string;
 attribute ontology-position-role, value string;
@@ -1312,6 +1340,18 @@ attribute ontology-factor, value string;
 attribute ontology-sensitivity-level, value string;
 attribute ontology-crypto-symbol, value string;
 attribute ontology-action-policy, value string;
+attribute ontology-security-line-role, value string;
+attribute ontology-local-symbol, value string;
+attribute ontology-company-name, value string;
+attribute ontology-market, value string;
+attribute ontology-currency, value string;
+attribute ontology-exchange, value string;
+attribute ontology-adr-symbol, value string;
+attribute ontology-etf-symbol, value string;
+attribute ontology-underlying-symbol, value string;
+attribute ontology-conversion-start-date, value string;
+attribute ontology-listing-date, value string;
+attribute ontology-source-url, value string;
 
 entity ontology-node @abstract,
     owns ontology-id @key,
@@ -1387,6 +1427,14 @@ entity ontology-node @abstract,
     owns ontology-individual-net-amount,
     owns ontology-smart-money-net-volume,
     owns ontology-investor-flow-score,
+    owns ontology-adr-ratio,
+    owns ontology-adr-price-usd,
+    owns ontology-adr-volume,
+    owns ontology-usd-krw-rate,
+    owns ontology-local-price-krw,
+    owns ontology-local-equivalent-krw,
+    owns ontology-leverage-factor,
+    owns ontology-price,
     owns ontology-investment-strategy-profile,
     owns ontology-investment-strategy-profile-label,
     owns ontology-position-role,
@@ -1397,6 +1445,18 @@ entity ontology-node @abstract,
     owns ontology-sensitivity-level,
     owns ontology-crypto-symbol,
     owns ontology-action-policy,
+    owns ontology-security-line-role,
+    owns ontology-local-symbol,
+    owns ontology-company-name,
+    owns ontology-market,
+    owns ontology-currency,
+    owns ontology-exchange,
+    owns ontology-adr-symbol,
+    owns ontology-etf-symbol,
+    owns ontology-underlying-symbol,
+    owns ontology-conversion-start-date,
+    owns ontology-listing-date,
+    owns ontology-source-url,
     plays ontology-assertion:source,
     plays ontology-assertion:target;
 

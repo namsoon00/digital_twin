@@ -55,6 +55,7 @@ from .portfolio_ontology_exposure_concepts import (
 from .portfolio_ontology_research_concepts import (
     add_research_evidence_concepts,
 )
+from .portfolio_ontology_security_line_concepts import add_security_line_concepts
 from .portfolio import PortfolioSummary, Position
 from .portfolio_ontology_outputs import (
     dedupe_entities,
@@ -287,6 +288,7 @@ def build_portfolio_ontology(
         add_data_source_concept(graph, stock_id, position, source)
         add_metric_concepts(graph, stock_id, position, source)
         add_price_level_and_liquidity_concepts(graph, stock_id, position, source)
+        add_security_line_concepts(graph, stock_id, position, observed_positions, external_signals, runtime_context)
         add_symbol_external_signal_concepts(graph, stock_id, symbol, external_signals)
         add_position_factor_concepts(graph, stock_id, portfolio_node_id, position, portfolio)
         add_instrument_profile_concepts(graph, stock_id, portfolio_node_id, position, runtime_context)

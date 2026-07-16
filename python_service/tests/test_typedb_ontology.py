@@ -47,6 +47,11 @@ class TypeDBOntologyRepositoryTests(unittest.TestCase):
         self.assertIn("attribute ontology-sensitivity-level, value string", schema)
         self.assertIn("attribute ontology-crypto-symbol, value string", schema)
         self.assertIn("owns ontology-crypto-symbol", schema)
+        self.assertIn("attribute ontology-adr-ratio, value double", schema)
+        self.assertIn("attribute ontology-leverage-factor, value double", schema)
+        self.assertIn("attribute ontology-security-line-role, value string", schema)
+        self.assertIn("owns ontology-leverage-factor", schema)
+        self.assertIn("owns ontology-security-line-role", schema)
 
     def test_typedb_symbol_filters_keep_numeric_stock_codes_as_strings(self):
         rule = next(item for item in default_graph_inference_rules() if item.rule_id == "graph.loss_guard.breakdown.v1")
@@ -161,6 +166,16 @@ class TypeDBOntologyRepositoryTests(unittest.TestCase):
             "peRatio": 47.5,
             "beta": 1.8,
         }))
+        graph.entities.append(OntologyEntity("security-line:000660:SKHY", "SK hynix ADR", "security-line", {
+            "ontologyBox": "ABox",
+            "symbol": "000660",
+            "securityLineRole": "adr",
+            "adrSymbol": "SKHY",
+            "adrRatio": 0.1,
+            "leverageFactor": 0,
+            "listingDate": "2026-07-13",
+            "conversionStartDate": "2026-07-29",
+        }))
         graph.relations.append(OntologyRelation("stock:005930", "level:005930:ma20", "BREAKS_LEVEL", 0.8, properties={
             "ontologyBox": "ABox",
             "riskImpact": 3.2,
@@ -183,6 +198,10 @@ class TypeDBOntologyRepositoryTests(unittest.TestCase):
         self.assertTrue(any("has ontology-pe-ratio 47.5" in query for query in queries))
         self.assertTrue(any("has ontology-beta 1.8" in query for query in queries))
         self.assertTrue(any("has ontology-current-price 68000.0" in query for query in queries))
+        self.assertTrue(any('has ontology-security-line-role "adr"' in query for query in queries))
+        self.assertTrue(any('has ontology-adr-symbol "SKHY"' in query for query in queries))
+        self.assertTrue(any("has ontology-adr-ratio 0.1" in query for query in queries))
+        self.assertTrue(any('has ontology-listing-date "2026-07-13"' in query for query in queries))
         self.assertTrue(any("has ontology-average-price 72000.0" in query for query in queries))
         self.assertTrue(any("has ontology-position-account-weight-pct 28.4" in query for query in queries))
         self.assertTrue(any("has ontology-ma5-distance 1.2" in query for query in queries))

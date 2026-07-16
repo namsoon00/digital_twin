@@ -13,6 +13,7 @@ from digital_twin.domain.portfolio_ontology_builder import build_portfolio_ontol
 from digital_twin.domain.portfolio import Position
 from digital_twin.domain.portfolio_calculations import portfolio_summary
 from digital_twin.domain.portfolio_ontology_market_concepts import missing_market_microstructure_fields
+from digital_twin.domain.security_lines import related_market_symbols_for_positions, security_lines_for_symbol
 from digital_twin.infrastructure.typedb_ontology import (
     TypeDBOntologyGraphRepository,
     inferencebox_snapshot_from_rows,
@@ -69,6 +70,65 @@ class OntologyRuleBoxTests(unittest.TestCase):
         )
         portfolio = portfolio_summary([position], account_cash=200000)
         return build_portfolio_ontology([position], portfolio, portfolio_id="rulebox-test")
+
+    def test_sk_hynix_security_lines_materialize_cross_listing_and_leveraged_flow(self):
+        position = Position(
+            symbol="000660",
+            name="SK하이닉스",
+            market="KR",
+            currency="KRW",
+            quantity=10,
+            sellable_quantity=10,
+            average_price=210000,
+            current_price=200000,
+            market_value=2000000,
+            profit_loss=-100000,
+            profit_loss_rate=-4.8,
+            sector="반도체",
+        )
+        portfolio = portfolio_summary([position], account_cash=1000000)
+        graph = build_portfolio_ontology(
+            [position],
+            portfolio,
+            external_signals={
+                "fxRates": {"USDKRW": {"rate": 1400}},
+                "equityQuotes": {
+                    "SKHY": {"price": 20, "volume": 120000, "latestTradingDay": "2026-07-16"},
+                    "SKHX": {"price": 41.2, "volume": 78000, "latestTradingDay": "2026-07-16"},
+                },
+            },
+            portfolio_id="security-line-test",
+            runtime_context={"settings": {"externalAlphaRelatedSymbolsEnabled": "1"}},
+        )
+
+        relation_types = {item.relation_type for item in graph.relations}
+        entity_by_kind = {}
+        for item in graph.entities:
+            entity_by_kind.setdefault(item.kind, []).append(item)
+        premium = next(item for item in graph.entities if item.kind == "cross-market-premium")
+        inverse_line = next(
+            item
+            for item in graph.entities
+            if item.kind == "security-line" and (item.properties or {}).get("symbol") == "SKHZ"
+        )
+
+        self.assertIn("HAS_SECURITY_LINE", relation_types)
+        self.assertIn("REPRESENTS_ECONOMIC_CLAIM", relation_types)
+        self.assertIn("HAS_ADR_PREMIUM", relation_types)
+        self.assertIn("HAS_LEVERAGED_FLOW_SIGNAL", relation_types)
+        self.assertIn("HAS_COVERAGE_GAP", relation_types)
+        self.assertEqual(40.0, (premium.properties or {}).get("value"))
+        self.assertEqual("InverseETF", (inverse_line.properties or {}).get("tboxClass"))
+        self.assertTrue(entity_by_kind.get("leveraged-flow-signal"))
+
+    def test_sk_hynix_related_market_symbols_include_adr_and_single_stock_etfs(self):
+        position = Position(symbol="000660", name="SK하이닉스", market="KR", currency="KRW")
+
+        symbols = related_market_symbols_for_positions([position], {"externalAlphaRelatedMaxSymbols": "8"})
+        line_symbols = {item.symbol for item in security_lines_for_symbol("000660")}
+
+        self.assertTrue({"SKHY", "SKHYV", "SKHX", "SKHZ", "SKUU", "SKDD"}.issubset(line_symbols))
+        self.assertEqual(["SKHY", "SKHYV", "SKHX", "SKHZ", "SKUU", "SKDD"], symbols)
 
     def strategy_threshold_loss_graph(self, strategy_profile: str, pnl_rate: float):
         current_price = 100000 * (1 + pnl_rate / 100)

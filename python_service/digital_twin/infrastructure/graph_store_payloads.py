@@ -143,6 +143,14 @@ PROMOTED_NUMERIC_ENTITY_FIELDS = [
     "individualNetAmount",
     "smartMoneyNetVolume",
     "investorFlowScore",
+    "adrRatio",
+    "adrPriceUsd",
+    "adrVolume",
+    "usdKrwRate",
+    "localPriceKrw",
+    "localEquivalentKrw",
+    "leverageFactor",
+    "price",
 ]
 
 PROMOTED_TEXT_ENTITY_FIELDS = [
@@ -159,6 +167,18 @@ PROMOTED_TEXT_ENTITY_FIELDS = [
     "actionPolicy",
     "tradingValueQuality",
     "tradingValueBasis",
+    "securityLineRole",
+    "localSymbol",
+    "companyName",
+    "market",
+    "currency",
+    "exchange",
+    "adrSymbol",
+    "etfSymbol",
+    "underlyingSymbol",
+    "conversionStartDate",
+    "listingDate",
+    "sourceUrl",
 ]
 
 def condition_target_filter_values(condition: Dict[str, object], key: str) -> List[str]:

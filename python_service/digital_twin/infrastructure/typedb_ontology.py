@@ -320,6 +320,20 @@ TYPEDB_PROMOTED_NUMERIC_ATTRIBUTES = {
     "localEquivalentKrw": "ontology-local-equivalent-krw",
     "leverageFactor": "ontology-leverage-factor",
     "price": "ontology-price",
+    "fairValue": "ontology-fair-value",
+    "fairValuePrice": "ontology-fair-value-price",
+    "marginOfSafetyPct": "ontology-margin-of-safety-pct",
+    "expensivePremiumPct": "ontology-expensive-premium-pct",
+    "minimumMarginOfSafetyPct": "ontology-minimum-margin-of-safety-pct",
+    "expectedEPS": "ontology-expected-eps",
+    "reportedEPS": "ontology-reported-eps",
+    "estimatedEPS": "ontology-estimated-eps",
+    "targetPER": "ontology-target-per",
+    "forwardPE": "ontology-forward-pe",
+    "pegRatio": "ontology-peg-ratio",
+    "dividendYield": "ontology-dividend-yield",
+    "peerPER": "ontology-peer-per",
+    "historicalMedianPER": "ontology-historical-median-per",
 }
 TYPEDB_PROMOTED_TEXT_ATTRIBUTES = {
     "investmentStrategyProfile": "ontology-investment-strategy-profile",
@@ -347,6 +361,8 @@ TYPEDB_PROMOTED_TEXT_ATTRIBUTES = {
     "conversionStartDate": "ontology-conversion-start-date",
     "listingDate": "ontology-listing-date",
     "sourceUrl": "ontology-source-url",
+    "valuationMethod": "ontology-valuation-method",
+    "formula": "ontology-formula",
 }
 TYPEDB_FUNCTION_SUBJECT_FIELDS = {
     "source",
@@ -1330,6 +1346,20 @@ attribute ontology-local-price-krw, value double;
 attribute ontology-local-equivalent-krw, value double;
 attribute ontology-leverage-factor, value double;
 attribute ontology-price, value double;
+attribute ontology-fair-value, value double;
+attribute ontology-fair-value-price, value double;
+attribute ontology-margin-of-safety-pct, value double;
+attribute ontology-expensive-premium-pct, value double;
+attribute ontology-minimum-margin-of-safety-pct, value double;
+attribute ontology-expected-eps, value double;
+attribute ontology-reported-eps, value double;
+attribute ontology-estimated-eps, value double;
+attribute ontology-target-per, value double;
+attribute ontology-forward-pe, value double;
+attribute ontology-peg-ratio, value double;
+attribute ontology-dividend-yield, value double;
+attribute ontology-peer-per, value double;
+attribute ontology-historical-median-per, value double;
 attribute ontology-investment-strategy-profile, value string;
 attribute ontology-investment-strategy-profile-label, value string;
 attribute ontology-position-role, value string;
@@ -1352,6 +1382,8 @@ attribute ontology-underlying-symbol, value string;
 attribute ontology-conversion-start-date, value string;
 attribute ontology-listing-date, value string;
 attribute ontology-source-url, value string;
+attribute ontology-valuation-method, value string;
+attribute ontology-formula, value string;
 
 entity ontology-node @abstract,
     owns ontology-id @key,
@@ -1435,6 +1467,20 @@ entity ontology-node @abstract,
     owns ontology-local-equivalent-krw,
     owns ontology-leverage-factor,
     owns ontology-price,
+    owns ontology-fair-value,
+    owns ontology-fair-value-price,
+    owns ontology-margin-of-safety-pct,
+    owns ontology-expensive-premium-pct,
+    owns ontology-minimum-margin-of-safety-pct,
+    owns ontology-expected-eps,
+    owns ontology-reported-eps,
+    owns ontology-estimated-eps,
+    owns ontology-target-per,
+    owns ontology-forward-pe,
+    owns ontology-peg-ratio,
+    owns ontology-dividend-yield,
+    owns ontology-peer-per,
+    owns ontology-historical-median-per,
     owns ontology-investment-strategy-profile,
     owns ontology-investment-strategy-profile-label,
     owns ontology-position-role,
@@ -1457,6 +1503,8 @@ entity ontology-node @abstract,
     owns ontology-conversion-start-date,
     owns ontology-listing-date,
     owns ontology-source-url,
+    owns ontology-valuation-method,
+    owns ontology-formula,
     plays ontology-assertion:source,
     plays ontology-assertion:target;
 

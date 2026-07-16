@@ -7,6 +7,8 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from digital_twin.domain.ontology_contracts import OntologyEntity, OntologyRelation, PortfolioOntology
 from digital_twin.domain.ontology_quality import build_ontology_quality_sample
 from digital_twin.domain.ontology_schema import abox_properties, abox_relation_properties
+from digital_twin.domain.ontology_prompting import prompt_payload
+from digital_twin.domain.ontology_tbox import tbox_class_def, tbox_relation_def
 from digital_twin.domain.ontology_validator import validate_ontology
 from digital_twin.domain.portfolio_ontology_builder import build_portfolio_ontology
 from digital_twin.domain.accounts import AccountConfig
@@ -157,6 +159,77 @@ class OntologyValidatorTests(unittest.TestCase):
         self.assertEqual([], inference_relations)
         self.assertEqual("abox-facts-only-typedb-native-rules", graph.worldview["runtimeProjectionMode"])
         self.assertEqual("valid", validate_ontology(graph).status)
+
+    def test_runtime_valuation_assumption_materializes_fair_value_and_margin(self):
+        position = Position(
+            symbol="005930",
+            name="삼성전자",
+            market="KR",
+            currency="KRW",
+            market_value=800000,
+            quantity=10,
+            current_price=80000,
+            ma20=79000,
+            ma20_distance=1.3,
+            volume=1200000,
+            volume_ratio=1.1,
+            sector="반도체",
+            source="watchlist",
+        )
+        graph = build_portfolio_ontology(
+            [position],
+            portfolio_summary([], account_cash=1000000, fx_rates={"KRW": 1}),
+            runtime_context={
+                "settings": {
+                    "valuationAssumptions": {
+                        "005930": {
+                            "expectedEPS": 9000,
+                            "targetPER": 11,
+                            "minimumMarginOfSafetyPct": 20,
+                            "formula": "적정가 = 예상 EPS x 목표 PER",
+                        }
+                    }
+                }
+            },
+        )
+
+        kinds = {item.kind for item in graph.entities}
+        relation_types = {item.relation_type for item in graph.relations}
+        margin = next(item for item in graph.entities if item.kind == "margin-of-safety")
+        prompt = prompt_payload(graph)
+
+        self.assertIn("valuation-metric", kinds)
+        self.assertIn("fair-value-estimate", kinds)
+        self.assertIn("margin-of-safety", kinds)
+        self.assertIn("HAS_VALUATION_METRIC", relation_types)
+        self.assertIn("HAS_FAIR_VALUE_ESTIMATE", relation_types)
+        self.assertIn("HAS_MARGIN_OF_SAFETY", relation_types)
+        self.assertEqual(23.75, margin.properties["marginOfSafetyPct"])
+        self.assertTrue(prompt["valuationContext"])
+        self.assertEqual("valid", validate_ontology(graph).status)
+
+    def test_tbox_contains_valuation_and_ai_decision_contracts(self):
+        for class_name in [
+            "DecisionStage",
+            "InvestmentOpinion",
+            "PeerContext",
+            "ValuationMetric",
+            "FairValueEstimate",
+            "MarginOfSafety",
+            "ValuationRisk",
+            "UndervaluationOpportunity",
+        ]:
+            self.assertIsNotNone(tbox_class_def(class_name), class_name)
+
+        for relation_type in [
+            "PRODUCES_AI_DECISION",
+            "HAS_VALUATION_METRIC",
+            "HAS_FAIR_VALUE_ESTIMATE",
+            "HAS_MARGIN_OF_SAFETY",
+            "HAS_VALUATION_RISK",
+            "HAS_VALUATION_OPPORTUNITY",
+        ]:
+            self.assertIsNotNone(tbox_relation_def(relation_type), relation_type)
 
     def test_account_investment_strategy_profile_is_normalized(self):
         account = AccountConfig.from_dict(

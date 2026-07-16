@@ -151,6 +151,20 @@ PROMOTED_NUMERIC_ENTITY_FIELDS = [
     "localEquivalentKrw",
     "leverageFactor",
     "price",
+    "fairValue",
+    "fairValuePrice",
+    "marginOfSafetyPct",
+    "expensivePremiumPct",
+    "minimumMarginOfSafetyPct",
+    "expectedEPS",
+    "reportedEPS",
+    "estimatedEPS",
+    "targetPER",
+    "forwardPE",
+    "pegRatio",
+    "dividendYield",
+    "peerPER",
+    "historicalMedianPER",
 ]
 
 PROMOTED_TEXT_ENTITY_FIELDS = [
@@ -179,6 +193,8 @@ PROMOTED_TEXT_ENTITY_FIELDS = [
     "conversionStartDate",
     "listingDate",
     "sourceUrl",
+    "valuationMethod",
+    "formula",
 ]
 
 def condition_target_filter_values(condition: Dict[str, object], key: str) -> List[str]:

@@ -579,6 +579,33 @@ class OntologyRuleBoxTests(unittest.TestCase):
         self.assertGreater(result["entityCount"], 0)
         self.assertGreater(result["relationCount"], 0)
 
+    def test_default_rulebox_contains_valuation_margin_rules(self):
+        rules = default_graph_inference_rules()
+        rule_ids = {item.rule_id for item in rules}
+        graph = rulebox_graph_from_rules(rules)
+        repository = TypeDBOntologyGraphRepository("http://typedb.example.test")
+        condition_rows = repository.rows_for_entities(graph)
+        schema_text = repository.schema_query()
+
+        margin_condition = next(
+            item
+            for item in condition_rows
+            if item["id"] == "rule-condition:graph.valuation.margin_of_safety.opportunity.v1:positive-margin-of-safety"
+        )
+        risk_template = next(
+            item
+            for item in condition_rows
+            if item["id"] == "relation-template:graph.valuation.negative_margin.risk.v1:0"
+        )
+
+        self.assertIn("graph.valuation.margin_of_safety.opportunity.v1", rule_ids)
+        self.assertIn("graph.valuation.negative_margin.risk.v1", rule_ids)
+        self.assertEqual("HAS_MARGIN_OF_SAFETY", margin_condition["conditionRelationType"])
+        self.assertEqual("HAS_VALUATION_RISK", risk_template["derivationRelationType"])
+        self.assertEqual("VALUATION_RISK", risk_template["derivationDecisionStage"])
+        self.assertIn("attribute ontology-margin-of-safety-pct", schema_text)
+        self.assertIn("owns ontology-margin-of-safety-pct", schema_text)
+
     def test_typedb_run_rulebox_materializes_inferencebox_from_typedb_projection(self):
         class CapturingTypeDBRepository(TypeDBOntologyGraphRepository):
             def __init__(self, graph):

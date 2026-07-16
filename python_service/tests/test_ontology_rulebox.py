@@ -8,6 +8,7 @@ from digital_twin.domain.ontology_prompting import prompt_payload
 from digital_twin.domain.instrument_profiles import parse_instrument_profiles_text
 from digital_twin.domain.ontology_decision_policy import decision_stage_from_action, relation_stage_priority
 from digital_twin.domain.ontology_rulebox_catalog import default_graph_inference_rules
+from digital_twin.domain.ontology_tbox import tbox_class_def
 from digital_twin.domain.portfolio_ontology_builder import build_portfolio_ontology
 from digital_twin.domain.portfolio import Position
 from digital_twin.domain.portfolio_calculations import portfolio_summary
@@ -26,6 +27,25 @@ from digital_twin.domain.ontology_rulebox_governance import rulebox_governance_c
 
 
 class OntologyRuleBoxTests(unittest.TestCase):
+    def test_rulebox_derivation_and_investor_flow_classes_exist_in_tbox(self):
+        class_names = set()
+        for rule in default_graph_inference_rules():
+            for derivation in rule.derivations:
+                class_names.add(derivation.tbox_class)
+                class_names.update(derivation.tbox_classes or [])
+        class_names.update({
+            "InvestorFlowSentiment",
+            "SmartMoneyAccumulation",
+            "RetailFlowPsychology",
+            "RetailDipBuyingRisk",
+            "PartialSmartMoneySupport",
+            "PartialSmartMoneyRisk",
+        })
+
+        missing = sorted(name for name in class_names if name and not tbox_class_def(name))
+
+        self.assertEqual([], missing)
+
     def loss_guard_graph(self):
         position = Position(
             symbol="005930",

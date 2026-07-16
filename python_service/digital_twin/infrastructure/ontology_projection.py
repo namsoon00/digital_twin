@@ -70,7 +70,7 @@ class PortfolioOntologyProjectionRecorder:
         return result
 
     def ensure_rulebox_ready(self) -> Dict[str, object]:
-        if not hasattr(self.repository, "rulebox_snapshot") or not hasattr(self.repository, "seed_ontology"):
+        if not hasattr(self.repository, "rulebox_snapshot"):
             return {}
         expected_rules = rulebox_rules_to_payload(default_graph_inference_rules())
         expected_hash = rulebox_rules_hash(expected_rules)
@@ -91,29 +91,37 @@ class PortfolioOntologyProjectionRecorder:
         if not stored_hash and isinstance(snapshot.get("rules"), list) and snapshot.get("rules"):
             stored_hash = rulebox_rules_hash(snapshot.get("rules") or [])
         if stored_count > 0 and str(snapshot.get("status") or "") == "ok":
-            if stored_hash == expected_hash:
-                return {
-                    "status": "ready",
-                    "ruleCount": stored_count,
-                    "ruleboxRulesHash": stored_hash,
-                    "expectedRuleCount": expected_count,
-                }
-            return self.sync_default_rulebox(
-                expected_rules,
-                expected_hash,
-                expected_count,
-                stored_hash,
-                stored_count,
-                "RuleBox hash mismatch: stored rules are stale relative to code defaults.",
-            )
+            result = {
+                "status": "ready",
+                "ruleCount": stored_count,
+                "ruleboxRulesHash": stored_hash,
+                "sourceOfTruth": "typedb-rulebox",
+                "bootstrapRuleCount": expected_count,
+                "bootstrapRulesHash": expected_hash,
+                "codeDefaultHashMismatch": bool(stored_hash and stored_hash != expected_hash),
+            }
+            if result["codeDefaultHashMismatch"]:
+                result["reason"] = (
+                    "TypeDB RuleBox is the source of truth. Code default rules are bootstrap-only "
+                    "and will not overwrite stored RuleBox rules."
+                )
+            return result
         if str(snapshot.get("status") or "") != "empty":
             return {
                 "status": "not-ready",
                 "reason": str(snapshot.get("reason") or snapshot.get("status") or "RuleBox is not ready."),
                 "ruleCount": stored_count,
-                "expectedRuleCount": expected_count,
+                "bootstrapRuleCount": expected_count,
                 "ruleboxRulesHash": stored_hash,
-                "expectedRuleboxRulesHash": expected_hash,
+                "bootstrapRulesHash": expected_hash,
+            }
+        if not hasattr(self.repository, "seed_ontology"):
+            return {
+                "status": "not-ready",
+                "reason": "RuleBox is empty and repository does not support bootstrap seeding.",
+                "ruleCount": stored_count,
+                "bootstrapRuleCount": expected_count,
+                "bootstrapRulesHash": expected_hash,
             }
         try:
             seeded = self.repository.seed_ontology({
@@ -126,63 +134,10 @@ class PortfolioOntologyProjectionRecorder:
         return {
             "status": "seeded" if bool((seeded or {}).get("seeded")) else str((seeded or {}).get("status") or "not-seeded"),
             "ruleCount": int((seeded or {}).get("ruleCount") or 0),
+            "sourceOfTruth": "typedb-rulebox",
+            "bootstrapRuleCount": expected_count,
+            "bootstrapRulesHash": expected_hash,
             "reason": str((seeded or {}).get("reason") or ""),
-        }
-
-    def sync_default_rulebox(
-        self,
-        expected_rules: List[Dict[str, object]],
-        expected_hash: str,
-        expected_count: int,
-        stored_hash: str,
-        stored_count: int,
-        reason: str,
-    ) -> Dict[str, object]:
-        if not hasattr(self.repository, "save_rulebox"):
-            return {
-                "status": "stale",
-                "reason": reason + " Repository does not support save_rulebox.",
-                "ruleCount": stored_count,
-                "expectedRuleCount": expected_count,
-                "ruleboxRulesHash": stored_hash,
-                "expectedRuleboxRulesHash": expected_hash,
-            }
-        payload = {
-            "rules": expected_rules,
-            "changeReason": "자동 RuleBox 동기화: 코드 기본 그래프 규칙과 TypeDB 저장 규칙의 hash가 달라 최신 규칙을 반영합니다.",
-        }
-        try:
-            saved = self.repository.save_rulebox(payload)
-        except Exception as error:  # noqa: BLE001 - projection will expose sync failure and continue.
-            return {
-                "status": "sync-failed",
-                "reason": str(error)[:180],
-                "ruleCount": stored_count,
-                "expectedRuleCount": expected_count,
-                "ruleboxRulesHash": stored_hash,
-                "expectedRuleboxRulesHash": expected_hash,
-            }
-        if not isinstance(saved, dict):
-            return {
-                "status": "sync-failed",
-                "reason": "save_rulebox returned non-dict result.",
-                "ruleCount": stored_count,
-                "expectedRuleCount": expected_count,
-                "ruleboxRulesHash": stored_hash,
-                "expectedRuleboxRulesHash": expected_hash,
-            }
-        saved_hash = str(saved.get("ruleboxRulesHash") or saved.get("rulesHash") or "").strip()
-        saved_count = int(saved.get("ruleboxRuleCount") or saved.get("ruleCount") or 0)
-        synced = bool(saved.get("saved")) and str(saved.get("status") or "") == "ok" and saved_hash == expected_hash
-        return {
-            "status": "synced" if synced else "sync-failed",
-            "reason": "" if synced else str(saved.get("reason") or saved.get("status") or "RuleBox sync did not save expected hash."),
-            "ruleCount": saved_count or stored_count,
-            "previousRuleCount": stored_count,
-            "expectedRuleCount": expected_count,
-            "ruleboxRulesHash": saved_hash or stored_hash,
-            "previousRuleboxRulesHash": stored_hash,
-            "expectedRuleboxRulesHash": expected_hash,
         }
 
     def graph_for_graph_store_persistence(self, graph: PortfolioOntology) -> PortfolioOntology:

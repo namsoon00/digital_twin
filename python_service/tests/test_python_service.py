@@ -2970,7 +2970,7 @@ class PythonServiceTests(unittest.TestCase):
         self.assertEqual("seeded", result["ruleboxBootstrap"]["status"])
         self.assertEqual(repository.default_rule_count, result["ruleboxBootstrap"]["ruleCount"])
 
-    def test_ontology_projection_syncs_stale_rulebox_before_abox_projection(self):
+    def test_ontology_projection_keeps_stored_rulebox_when_code_defaults_differ(self):
         position = normalize_position({
             "symbol": "005930",
             "name": "삼성전자",
@@ -3040,11 +3040,12 @@ class PythonServiceTests(unittest.TestCase):
         result = PortfolioOntologyProjectionRecorder(repository).record_snapshot(snapshot)
 
         self.assertFalse(repository.seed_calls)
-        self.assertEqual(1, len(repository.save_rulebox_calls))
-        self.assertEqual(len(default_graph_inference_rules()), len(repository.save_rulebox_calls[0]["rules"]))
-        self.assertEqual("synced", result["ruleboxBootstrap"]["status"])
-        self.assertEqual(24, result["ruleboxBootstrap"]["previousRuleCount"])
-        self.assertEqual(len(default_graph_inference_rules()), result["ruleboxBootstrap"]["expectedRuleCount"])
+        self.assertFalse(repository.save_rulebox_calls)
+        self.assertEqual("ready", result["ruleboxBootstrap"]["status"])
+        self.assertEqual("typedb-rulebox", result["ruleboxBootstrap"]["sourceOfTruth"])
+        self.assertEqual(24, result["ruleboxBootstrap"]["ruleCount"])
+        self.assertTrue(result["ruleboxBootstrap"]["codeDefaultHashMismatch"])
+        self.assertEqual(len(default_graph_inference_rules()), result["ruleboxBootstrap"]["bootstrapRuleCount"])
 
     def test_ontology_projection_recorder_includes_watchlist_candidates(self):
         holding = normalize_position({

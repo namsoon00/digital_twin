@@ -23,6 +23,7 @@ from digital_twin.infrastructure.typedb_ontology import (
     relation_row_id,
     typedb_inferencebox_graph,
     typedb_native_function_definition,
+    typedb_native_match_query,
     typedb_native_reasoning_profile,
 )
 
@@ -41,6 +42,30 @@ class TypeDBOntologyRepositoryTests(unittest.TestCase):
         self.assertIn("attribute ontology-ma5-distance, value double", schema)
         self.assertIn("owns ontology-smart-money-net-volume", schema)
         self.assertIn("attribute ontology-investment-strategy-profile, value string", schema)
+
+    def test_typedb_symbol_filters_keep_numeric_stock_codes_as_strings(self):
+        rule = next(item for item in default_graph_inference_rules() if item.rule_id == "graph.loss_guard.breakdown.v1")
+
+        query = typedb_native_match_query(rule.to_dict(), ["000660"])["query"]
+
+        self.assertIn('has ontology-symbol "000660"', query)
+        self.assertNotIn("has ontology-symbol 660.0", query)
+
+    def test_typedb_relation_rows_infer_symbol_from_stock_endpoint(self):
+        graph = PortfolioOntology("symbol-row-test")
+        graph.relations.append(OntologyRelation(
+            "stock:000660",
+            "risk:000660:loss-guard-breakdown",
+            "HAS_INFERRED_RISK",
+            weight=0.86,
+            properties={"ontologyBox": "InferenceBox", "nativeTypeDbReasoned": True},
+        ))
+        repository = TypeDBOntologyGraphRepository("127.0.0.1:1729")
+
+        row = repository.rows_for_relations(graph)[0]
+
+        self.assertEqual("000660", row["symbol"])
+        self.assertIn('"symbol": "000660"', row["propertiesJson"])
 
     def test_typedb_insert_queries_project_same_ontology_graph_shape(self):
         graph = PortfolioOntology("portfolio:test")

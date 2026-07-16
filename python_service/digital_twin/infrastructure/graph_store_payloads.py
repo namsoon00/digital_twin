@@ -15,6 +15,31 @@ def safe_relation_type(value: str) -> str:
         normalized = "R_" + normalized
     return normalized[:60]
 
+
+def symbol_from_graph_reference(*values: object) -> str:
+    symbol_prefixes = {
+        "action-candidate",
+        "blocked-action",
+        "confidence-assessment",
+        "execution-capacity",
+        "inference-trace",
+        "investment-thesis",
+        "loss-defense-evidence",
+        "next-check",
+        "risk",
+        "stock",
+    }
+    for value in values:
+        parts = str(value or "").split(":")
+        for index, part in enumerate(parts[:-1]):
+            if part not in symbol_prefixes:
+                continue
+            candidate = str(parts[index + 1] or "").upper().strip()
+            if re.match(r"^[A-Z0-9.]{1,12}$", candidate):
+                return candidate
+    return ""
+
+
 def group_relation_rows(rows: Iterable[Dict[str, object]]) -> Dict[str, List[Dict[str, object]]]:
     grouped: Dict[str, List[Dict[str, object]]] = {}
     for row in rows:
@@ -318,12 +343,16 @@ class GraphStoreOntologyRowMapperMixin:
     def rows_for_relations(self, graph: PortfolioOntology) -> List[Dict[str, object]]:
         rows: List[Dict[str, object]] = []
         for item in graph.relations:
-            properties = item.properties or {}
+            properties = dict(item.properties or {})
+            symbol = str(properties.get("symbol") or symbol_from_graph_reference(item.source, item.target))
+            if symbol:
+                properties.setdefault("symbol", symbol)
             rows.append({
                 "source": item.source,
                 "target": item.target,
                 "type": safe_relation_type(item.relation_type),
                 "weight": float(item.weight or 0),
+                "symbol": symbol,
                 "ontologyBox": str(properties.get("ontologyBox") or "ABox"),
                 "accountId": str(properties.get("accountId") or ""),
                 "aboxSnapshotId": str(properties.get("aboxSnapshotId") or properties.get("snapshotId") or ""),

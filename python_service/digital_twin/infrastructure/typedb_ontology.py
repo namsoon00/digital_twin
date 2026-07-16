@@ -365,6 +365,50 @@ TYPEDB_FUNCTION_RELATION_FILTERS = {
     "minSupportImpact",
 }
 TYPEDB_FUNCTION_OPERATORS = {"==", "eq", "!=", "ne", "<=", "lte", ">=", "gte", "<", "lt", ">", "gt", "exists", "present"}
+TYPEDB_STRING_ATTRIBUTES = {
+    "ontology-id",
+    "ontology-label",
+    "ontology-kind",
+    "ontology-box",
+    "ontology-symbol",
+    "ontology-rule-id",
+    "ontology-account-id",
+    "ontology-snapshot-id",
+    "ontology-tbox-class",
+    "ontology-relation-type",
+    "ontology-updated-at",
+    "ontology-json",
+    "ontology-source-value",
+    "ontology-field",
+    "ontology-level-type",
+    "ontology-data-scope",
+    "ontology-domain-scope",
+    "ontology-relation-scope",
+    "ontology-group",
+    "ontology-polarity",
+    "ontology-transition-type",
+    "ontology-signal-group",
+    "ontology-event-type",
+    "ontology-materiality-passed",
+    "ontology-allow-add-on-strength",
+    "ontology-trim-on-trend-break",
+    "ontology-avoid-averaging-down",
+    "ontology-impact-polarity",
+    "ontology-needs-review",
+    "ontology-read-scope",
+} | set(TYPEDB_PROMOTED_TEXT_ATTRIBUTES.values())
+TYPEDB_NUMERIC_ATTRIBUTES = {
+    "ontology-weight",
+    "ontology-confidence",
+    "ontology-value-number",
+    "ontology-profit-loss-rate",
+    "ontology-materiality-score",
+    "ontology-risk-impact",
+    "ontology-support-impact",
+    "ontology-stage-priority",
+    "ontology-pe-ratio",
+    "ontology-beta",
+} | set(TYPEDB_PROMOTED_NUMERIC_ATTRIBUTES.values())
 
 
 class NullTypeDBOntologyGraphRepository:
@@ -3405,15 +3449,26 @@ def typedb_value_match(owner_var: str, attribute: str, expected: object, operato
         values = [item for item in expected if item not in (None, "", [], {})]
         if not values:
             return ""
-        return " or ".join(["{ " + owner_var + " has " + attribute + " " + typedb_literal(value) + "; }" for value in values]) + ";"
+        return " or ".join(["{ " + owner_var + " has " + attribute + " " + typedb_literal_for_attribute(attribute, value) + "; }" for value in values]) + ";"
     if expected in (None, "", [], {}):
         return ""
     if op in {"==", "eq", "in"}:
-        return owner_var + " has " + attribute + " " + typedb_literal(expected) + ";"
+        return owner_var + " has " + attribute + " " + typedb_literal_for_attribute(attribute, expected) + ";"
     if op in {"!=", "ne", "<=", "lte", ">=", "gte", "<", "lt", ">", "gt"}:
         typeql_op = {"ne": "!=", "lte": "<=", "gte": ">=", "lt": "<", "gt": ">"}.get(op, op)
-        return owner_var + " has " + attribute + " $" + value_var + "; $" + value_var + " " + typeql_op + " " + typedb_literal(expected) + ";"
-    return owner_var + " has " + attribute + " " + typedb_literal(expected) + ";"
+        return owner_var + " has " + attribute + " $" + value_var + "; $" + value_var + " " + typeql_op + " " + typedb_literal_for_attribute(attribute, expected) + ";"
+    return owner_var + " has " + attribute + " " + typedb_literal_for_attribute(attribute, expected) + ";"
+
+
+def typedb_literal_for_attribute(attribute: str, value: object) -> str:
+    value = typedb_expected_value(value)
+    if attribute in TYPEDB_STRING_ATTRIBUTES:
+        return typedb_string("true" if value is True else "false" if value is False else value)
+    if attribute in TYPEDB_NUMERIC_ATTRIBUTES:
+        numeric = typedb_number(value)
+        if numeric is not None and not isinstance(value, bool):
+            return str(numeric)
+    return typedb_literal(value)
 
 
 def typedb_literal(value: object) -> str:

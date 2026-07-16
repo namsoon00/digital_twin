@@ -1,13 +1,20 @@
 import unittest
 
+from digital_twin.domain.message_types import INVESTMENT_INSIGHT, NEWS_DIGEST
+from digital_twin.domain.notifications import NotificationJob
 from digital_twin.domain.sent_article_filter import (
     article_identity_keys,
     collect_article_identity_keys_from_context,
     filter_sent_articles_from_context,
 )
+from digital_twin.infrastructure.mysql_notification_jobs import MySQLNotificationJobStore
 
 
 class SentArticleFilterTests(unittest.TestCase):
+    def notification_store(self):
+        store = MySQLNotificationJobStore.__new__(MySQLNotificationJobStore)
+        return store
+
     def test_article_keys_match_source_suffix_and_tracking_variants(self):
         first = {
             "kind": "news",
@@ -111,6 +118,45 @@ class SentArticleFilterTests(unittest.TestCase):
         keys = collect_article_identity_keys_from_context(context, max_nodes=8, max_keys=20)
 
         self.assertLessEqual(len(keys), 20)
+
+    def test_holding_insight_is_not_article_driven_by_quality_rule_name(self):
+        store = self.notification_store()
+        job = NotificationJob.create(
+            text="holding alert",
+            message_type=INVESTMENT_INSIGHT,
+            context={
+                "sourceSignalTypes": ["holdingTiming"],
+                "ontologyInsight": {
+                    "sourceSignalTypes": ["holdingTiming"],
+                    "semanticSignature": (
+                        "subject=strc|sourceSignalTypes=holdingTiming|"
+                        "relationRuleIds=graph.factor.position_crowding.v1+"
+                        "graph.news.quality.confidence_limit.v1"
+                    ),
+                },
+            },
+        )
+
+        self.assertFalse(store.article_driven_job(job))
+
+    def test_research_insight_is_article_driven(self):
+        store = self.notification_store()
+        job = NotificationJob.create(
+            text="news alert",
+            message_type=INVESTMENT_INSIGHT,
+            context={
+                "sourceSignalTypes": ["researchEvidence"],
+                "ontologyInsight": {"sourceSignalTypes": ["researchEvidence"]},
+            },
+        )
+
+        self.assertTrue(store.article_driven_job(job))
+
+    def test_news_digest_is_article_driven(self):
+        store = self.notification_store()
+        job = NotificationJob.create(text="news digest", message_type=NEWS_DIGEST)
+
+        self.assertTrue(store.article_driven_job(job))
 
 
 if __name__ == "__main__":

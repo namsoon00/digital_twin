@@ -198,6 +198,21 @@ class MySQLNotificationJobStore(MySQLOperationalConnection):
                 break
         return keys
 
+    def article_signal_tokens(self, value) -> List[str]:
+        if isinstance(value, dict):
+            tokens: List[str] = []
+            for key in ("type", "kind", "name", "messageType", "signalType", "sourceSignalType"):
+                if key in value:
+                    tokens.extend(self.article_signal_tokens(value.get(key)))
+            return tokens
+        if isinstance(value, (list, tuple, set)):
+            tokens = []
+            for item in value:
+                tokens.extend(self.article_signal_tokens(item))
+            return tokens
+        text = str(value or "").strip().casefold()
+        return [text] if text else []
+
     def article_driven_job(self, job: NotificationJob) -> bool:
         if str(job.message_type or "") == NEWS_DIGEST:
             return True
@@ -206,15 +221,31 @@ class MySQLNotificationJobStore(MySQLOperationalConnection):
         context = job.context or {}
         insight = context.get("ontologyInsight") if isinstance(context.get("ontologyInsight"), dict) else {}
         values = [
-            job.message_type,
-            context.get("rule"),
-            context.get("key"),
+            context.get("dispatchInsightType"),
+            context.get("signalType"),
+            context.get("sourceSignalType"),
             context.get("sourceSignalTypes"),
+            insight.get("dispatchInsightType"),
+            insight.get("signalType"),
+            insight.get("sourceSignalType"),
             insight.get("sourceSignalTypes"),
-            insight.get("semanticSignature"),
         ]
-        blob = " ".join(str(value or "") for value in values).casefold()
-        return any(token in blob for token in ["news", "article", "rss", "research"])
+        tokens = []
+        for value in values:
+            tokens.extend(self.article_signal_tokens(value))
+        blob = " ".join(tokens)
+        article_markers = [
+            "article",
+            "dart",
+            "disclosure",
+            "feed",
+            "filing",
+            "news",
+            "research",
+            "rss",
+            "sec",
+        ]
+        return any(marker in blob for marker in article_markers)
 
     def apply_sent_article_filter_with_connection(self, connection, job: NotificationJob) -> bool:
         if not self.sent_article_filter_enabled():

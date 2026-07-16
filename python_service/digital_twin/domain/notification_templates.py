@@ -932,6 +932,10 @@ def absolute_beginner_rule_sentence(item: Dict[str, object]) -> str:
         return "새 공시나 신고가 있어, 원문 내용과 다음 가격 반응을 함께 확인해야 합니다."
     if "news.direct" in lowered or "리스크 뉴스" in text or "위험 뉴스" in text:
         return "직접 관련된 위험 뉴스가 있어, 기사 원문과 가격 반응을 같이 봐야 합니다."
+    if "valuation.margin_of_safety" in lowered or "안전마진" in text or "저평가" in text:
+        return "현재가가 적정가보다 충분히 낮은지 확인했습니다. 싸 보인다는 뜻이지 바로 사라는 뜻은 아닙니다."
+    if "valuation.negative_margin" in lowered or "고평가" in text or "적정가 대비 현재가 부담" in text:
+        return "현재가가 적정가보다 비싸 보이는지 확인했습니다. 이것만으로 바로 팔라는 뜻은 아닙니다."
     if "loss" in lowered or "손실" in text:
         return "손실률과 가격 흐름 약화가 함께 보여, 추가매수보다 손실 관리 기준을 먼저 확인해야 합니다."
     if "profit" in lowered or "수익" in text or "익절" in text:

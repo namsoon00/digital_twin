@@ -5,12 +5,51 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from digital_twin.domain.ontology_inference_context import relation_contexts_from_snapshot
+from digital_twin.domain.ontology_relation_facts import position_signal_facts
 from digital_twin.domain.portfolio import AccountSnapshot, Position
 from digital_twin.domain.portfolio_calculations import portfolio_summary
 from digital_twin.domain.strategy import decisions_for_positions
 
 
 class OntologyInferenceContextTests(unittest.TestCase):
+    def test_position_signal_facts_include_runtime_valuation_formula(self):
+        position = Position(
+            symbol="005930",
+            name="삼성전자",
+            market="KR",
+            currency="KRW",
+            source="watchlist",
+            current_price=80000,
+            ma20=79000,
+            ma60=76000,
+            volume=1200000,
+            volume_ratio=1.1,
+            sector="반도체",
+        )
+        facts = position_signal_facts(
+            position,
+            portfolio_summary([], account_cash=1000000, fx_rates={"KRW": 1}),
+            settings={
+                "valuationAssumptions": {
+                    "005930": {
+                        "expectedEPS": 9000,
+                        "targetPER": 11,
+                        "minimumMarginOfSafetyPct": 20,
+                        "formula": "적정가 = 예상 EPS x 목표 PER",
+                    }
+                }
+            },
+        )
+
+        self.assertEqual("available", facts["valuationDataStatus"])
+        self.assertEqual("user", facts["valuationSourceType"])
+        self.assertEqual("사용자 입력", facts["valuationSourceLabel"])
+        self.assertEqual("적정가 = 예상 EPS x 목표 PER", facts["valuationFormula"])
+        self.assertEqual("9,000원 x 11배 = 99,000원", facts["valuationSubstitution"])
+        self.assertEqual(99000, facts["valuationFairValue"])
+        self.assertEqual(23.75, facts["valuationMarginOfSafetyPct"])
+        self.assertEqual([], facts["valuationMissingInputs"])
+
     def test_typedb_inferencebox_context_replaces_python_relation_rule_path(self):
         position = Position(
             symbol="005930",

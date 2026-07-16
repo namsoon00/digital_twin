@@ -102,6 +102,7 @@ RELATION_AXIS_ORDER = [
     "손익·보유비중",
     "종목 타입",
     "투자 성향·정책",
+    "밸류에이션",
     "가격 회복·약화",
     "수급 심리",
     "뉴스·공시",
@@ -117,6 +118,12 @@ RELATION_AXIS_CATEGORY_LABELS = {
     "liquidity": "수급 심리",
     "investorflow": "수급 심리",
     "addbuy": "투자 성향·정책",
+    "valuation": "밸류에이션",
+    "valuationrisk": "밸류에이션",
+    "valuationopportunity": "밸류에이션",
+    "undervaluationopportunity": "밸류에이션",
+    "marginofsafety": "밸류에이션",
+    "fairvalueestimate": "밸류에이션",
     "research": "뉴스·공시",
     "news": "뉴스·공시",
     "disclosure": "뉴스·공시",
@@ -133,6 +140,7 @@ RELATION_AXIS_RULE_PREFIXES = [
     ("graph.crypto.", "종목 타입"),
     ("graph.strategy_profile.", "투자 성향·정책"),
     ("graph.averaging_down.", "투자 성향·정책"),
+    ("graph.valuation.", "밸류에이션"),
     ("graph.price.", "가격 회복·약화"),
     ("graph.holding.trend_transition.", "가격 회복·약화"),
     ("graph.watchlist.trend_transition.", "가격 회복·약화"),
@@ -345,6 +353,8 @@ def relation_axis_from_rule(rule_id: object, label: object = "") -> str:
         return "종목 타입"
     if any(term in lowered for term in ["strategy_profile", "성향", "비중 한도", "물타기", "추가매수"]):
         return "투자 성향·정책"
+    if any(term in lowered for term in ["valuation", "밸류", "저평가", "고평가", "안전마진", "적정가", "per", "eps", "fair value"]):
+        return "밸류에이션"
     if any(term in lowered for term in ["trend", "recovery", "breakdown", "5일", "20일", "60일", "평균"]):
         return "가격 회복·약화"
     if any(term in lowered for term in ["flow", "liquidity", "smart_money", "수급", "기관", "외국인", "체결", "호가"]):
@@ -456,6 +466,8 @@ def beginner_relation_decision_line(relation_context: Dict[str, object]) -> str:
         return "쉽게 말하면: 손실이나 가격 흐름 약화가 실제로 커져 비중을 줄일 기준을 확인하라는 뜻입니다."
     if action_group == "profitTake":
         return "쉽게 말하면: 수익을 지키기 위해 일부만 줄일지 확인하라는 뜻이지, 전량 매도 확정은 아닙니다."
+    if action_group == "valuation":
+        return "쉽게 말하면: 사용자가 정한 적정가와 현재가를 비교해 싼지 비싼지 확인하는 단계입니다. 이것만으로 매수나 매도 확정은 아닙니다."
     if "보유" in label or "관찰" in label:
         return "쉽게 말하면: 바로 행동하기보다 다음 데이터에서도 같은 신호가 유지되는지 보는 단계입니다."
     return ""
@@ -539,6 +551,10 @@ def beginner_rule_explanation(item: Dict[str, object]) -> str:
         return "쉬운 해석: 새 공시나 신고가 있어 내용을 확인하라는 뜻입니다. 가격 반응이 나쁘게 확인될 때만 경계 강도가 커집니다."
     if "news.direct" in lowered or "리스크 뉴스" in text or "위험 뉴스" in text:
         return "쉬운 해석: 직접 악재 뉴스가 있어 원문과 다음 가격 반응을 보라는 뜻입니다. 뉴스 하나만으로 매도 확정은 아닙니다."
+    if "valuation.margin_of_safety" in lowered or "안전마진" in text or "저평가" in text:
+        return "쉬운 해석: 현재가가 적정가보다 충분히 낮은지 보는 기준입니다. 싸 보이더라도 추세와 거래 흐름 확인 전에는 매수 확정이 아닙니다."
+    if "valuation.negative_margin" in lowered or "고평가" in text or "적정가 대비 현재가 부담" in text:
+        return "쉬운 해석: 현재가가 적정가보다 비싸 보이는지 확인하는 기준입니다. 이것만으로 바로 팔라는 뜻은 아닙니다."
     return ""
 
 

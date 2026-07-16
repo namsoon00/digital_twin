@@ -1,6 +1,7 @@
 from datetime import datetime, timezone
 from typing import Dict, Iterable, List, Optional
 
+from .alert_formatting import compact_number, price_money
 from .investment_research import research_evidence_from_external_signals, research_evidence_from_facts
 from .investor_flow_psychology import investor_flow_psychology, investor_flow_values_reliable
 from .macro_context import macro_context_facts
@@ -9,6 +10,11 @@ from . import news_analysis as news_domain
 from .accounts import investment_strategy_profile
 from .instrument_profiles import instrument_profile_for_position
 from .ontology_relation_contracts import BTC_SENSITIVE_SYMBOLS
+from .portfolio_ontology_valuation_concepts import (
+    external_valuation_rows,
+    position_runtime_valuation_rows,
+    valuation_values,
+)
 from .portfolio import PortfolioSummary, Position, expects_kr_microstructure_signals
 from .volume_time_adjustment import trading_value_snapshot, volume_pace_snapshot
 
@@ -253,6 +259,215 @@ def _external_quality_facts(external_signals: Dict[str, object]) -> Dict[str, ob
         "externalSignalAgeMinutes": number(freshness.get("ageMinutes")) if freshness else 0.0,
         "externalSignalFreshnessStatus": str(freshness.get("status") or ""),
         "externalSignalErrorCount": error_count,
+    }
+
+
+VALUATION_MISSING_INPUT_LABELS = {
+    "currentPrice": "현재가",
+    "fairValue": "적정가",
+    "fairValuePrice": "적정가",
+    "expectedEPS": "예상 EPS",
+    "targetPER": "목표 PER",
+}
+
+
+def _valuation_runtime_context(settings: Optional[Dict[str, object]]) -> Dict[str, object]:
+    if isinstance(settings, dict) and isinstance(settings.get("settings"), dict):
+        return settings
+    return {"settings": settings or {}}
+
+
+def _valuation_source_metadata(row: Dict[str, object]) -> Dict[str, object]:
+    source = str(row.get("source") or "").strip()
+    provider = str(row.get("provider") or "").strip()
+    source_lower = source.casefold()
+    provider_lower = provider.casefold()
+    if source_lower == "runtime-settings" or provider_lower == "runtimesettings":
+        return {
+            "sourceType": "user",
+            "sourceLabel": "사용자 입력",
+            "provider": provider or "RuntimeSettings",
+            "reliabilityLabel": "사용자 가정",
+            "reliabilityScore": 55.0,
+        }
+    if source_lower == "company-overview":
+        return {
+            "sourceType": "external",
+            "sourceLabel": (provider or "Alpha Vantage") + " 기업개요",
+            "provider": provider or "Alpha Vantage",
+            "reliabilityLabel": "외부 기업개요",
+            "reliabilityScore": 70.0,
+        }
+    if source_lower == "earnings-report":
+        return {
+            "sourceType": "external",
+            "sourceLabel": (provider or "Alpha Vantage") + " 실적",
+            "provider": provider or "Alpha Vantage",
+            "reliabilityLabel": "외부 실적",
+            "reliabilityScore": 65.0,
+        }
+    if provider:
+        return {
+            "sourceType": "external",
+            "sourceLabel": provider,
+            "provider": provider,
+            "reliabilityLabel": "외부/혼합 데이터",
+            "reliabilityScore": 60.0,
+        }
+    return {
+        "sourceType": "unknown",
+        "sourceLabel": "밸류에이션 데이터",
+        "provider": "",
+        "reliabilityLabel": "출처 미확인",
+        "reliabilityScore": 45.0,
+    }
+
+
+def _valuation_price_text(value: object, currency: object = "") -> str:
+    amount = number(value)
+    if not amount:
+        return ""
+    return price_money(amount, str(currency or "KRW"))
+
+
+def _valuation_multiplier_text(value: object) -> str:
+    amount = number(value)
+    if not amount:
+        return ""
+    return compact_number(amount) + "배"
+
+
+def _valuation_substitution(values: Dict[str, object], row: Dict[str, object], currency: object) -> str:
+    fair_value = number(values.get("fairValue"))
+    expected_eps = number(values.get("expectedEPS"))
+    target_per = number(values.get("targetPER"))
+    if expected_eps and target_per and fair_value:
+        return (
+            _valuation_price_text(expected_eps, currency)
+            + " x "
+            + _valuation_multiplier_text(target_per)
+            + " = "
+            + _valuation_price_text(fair_value, currency)
+        )
+    if fair_value:
+        source = str(row.get("source") or "").casefold()
+        prefix = "입력 적정가" if source == "runtime-settings" else "제공 적정가"
+        return prefix + " = " + _valuation_price_text(fair_value, currency)
+    if expected_eps and target_per:
+        return _valuation_price_text(expected_eps, currency) + " x " + _valuation_multiplier_text(target_per)
+    return ""
+
+
+def _valuation_explanation(values: Dict[str, object], row: Dict[str, object], currency: object) -> str:
+    fair_value = number(values.get("fairValue"))
+    current_price = number(values.get("currentPrice"))
+    expected_eps = number(values.get("expectedEPS"))
+    target_per = number(values.get("targetPER"))
+    margin = number(values.get("marginOfSafetyPct"))
+    if expected_eps and target_per and fair_value:
+        base = (
+            "예상 EPS "
+            + _valuation_price_text(expected_eps, currency)
+            + "에 목표 PER "
+            + _valuation_multiplier_text(target_per)
+            + "를 적용해 적정가 "
+            + _valuation_price_text(fair_value, currency)
+            + "로 계산했습니다."
+        )
+    elif fair_value:
+        source = "사용자가 입력한" if str(row.get("source") or "").casefold() == "runtime-settings" else "외부 데이터가 제공한"
+        base = source + " 적정가 " + _valuation_price_text(fair_value, currency) + "를 현재가와 비교했습니다."
+    else:
+        return "적정가 계산에 필요한 입력값이 부족해 현재가가 싼지 비싼지 단정하지 않습니다."
+    if current_price and fair_value:
+        base += " 현재가 " + _valuation_price_text(current_price, currency) + " 대비 안전마진은 " + _number_text(margin, 1, signed=True) + "%입니다."
+    return base
+
+
+def _valuation_row_payload(position: Position, row: Dict[str, object]) -> Dict[str, object]:
+    currency = position.currency or "KRW"
+    values = valuation_values(row, position)
+    source = _valuation_source_metadata(row)
+    missing_inputs = [
+        VALUATION_MISSING_INPUT_LABELS.get(str(item), str(item))
+        for item in (values.get("missingInputs") or [])
+        if str(item or "").strip()
+    ]
+    fair_value = number(values.get("fairValue"))
+    has_formula = bool(str(values.get("formula") or row.get("formula") or "").strip())
+    complete_score = (30.0 if fair_value else 0.0) + (10.0 if not missing_inputs else 0.0) + (5.0 if has_formula else 0.0)
+    source_score = 12.0 if source.get("sourceType") == "user" else 6.0 if source.get("sourceType") == "external" else 0.0
+    formula = str(values.get("formula") or row.get("formula") or "").strip()
+    payload = {
+        "assumptionKey": str(row.get("assumptionKey") or row.get("symbol") or position.symbol or "").strip(),
+        "label": str(row.get("label") or row.get("name") or (position.name or position.symbol or "") + " 밸류에이션").strip(),
+        "source": str(row.get("source") or ""),
+        "provider": source.get("provider") or str(row.get("provider") or ""),
+        "sourceType": source.get("sourceType"),
+        "sourceLabel": source.get("sourceLabel"),
+        "reliabilityLabel": source.get("reliabilityLabel"),
+        "reliabilityScore": source.get("reliabilityScore"),
+        "formula": formula,
+        "substitution": _valuation_substitution(values, row, currency),
+        "explanation": _valuation_explanation(values, row, currency),
+        "missingInputs": missing_inputs,
+        "dataStatus": "available" if fair_value and not missing_inputs else "partial" if fair_value or values.get("expectedEPS") or values.get("targetPER") else "missing",
+        "selectionScore": complete_score + source_score,
+        "hasUserInput": source.get("sourceType") == "user",
+        "hasExternalInput": source.get("sourceType") == "external",
+        **values,
+    }
+    return payload
+
+
+def _primary_valuation_row(rows: List[Dict[str, object]]) -> Dict[str, object]:
+    if not rows:
+        return {}
+    return sorted(rows, key=lambda item: number(item.get("selectionScore")), reverse=True)[0]
+
+
+def _valuation_facts(position: Position, external_signals: Dict[str, object], settings: Optional[Dict[str, object]]) -> Dict[str, object]:
+    symbol = str(position.symbol or "").upper().strip()
+    if not symbol:
+        return {}
+    raw_rows = position_runtime_valuation_rows(_valuation_runtime_context(settings), symbol)
+    raw_rows.extend(external_valuation_rows(external_signals or {}, symbol))
+    rows = [_valuation_row_payload(position, row) for row in raw_rows]
+    if not rows:
+        return {
+            "valuationRows": [],
+            "valuationDataStatus": "missing",
+            "valuationHasUserInput": False,
+            "valuationHasExternalInput": False,
+        }
+    primary = _primary_valuation_row(rows)
+    missing_inputs = list(primary.get("missingInputs") or [])
+    fair_value = number(primary.get("fairValue"))
+    current_price = number(primary.get("currentPrice"))
+    return {
+        "valuationRows": rows,
+        "primaryValuation": primary,
+        "valuationDataStatus": primary.get("dataStatus") or ("available" if fair_value and current_price else "partial"),
+        "valuationSourceType": primary.get("sourceType"),
+        "valuationSourceLabel": primary.get("sourceLabel"),
+        "valuationProvider": primary.get("provider"),
+        "valuationReliabilityLabel": primary.get("reliabilityLabel"),
+        "valuationReliabilityScore": number(primary.get("reliabilityScore")),
+        "valuationFormula": primary.get("formula"),
+        "valuationSubstitution": primary.get("substitution"),
+        "valuationExplanation": primary.get("explanation"),
+        "valuationCurrentPrice": current_price,
+        "valuationFairValue": fair_value,
+        "valuationFairValuePrice": fair_value,
+        "valuationExpectedEPS": number(primary.get("expectedEPS")),
+        "valuationTargetPER": number(primary.get("targetPER")),
+        "valuationMarginOfSafetyPct": number(primary.get("marginOfSafetyPct")),
+        "valuationExpensivePremiumPct": number(primary.get("expensivePremiumPct")),
+        "valuationMinimumMarginOfSafetyPct": number(primary.get("minimumMarginOfSafetyPct")),
+        "valuationMethod": primary.get("valuationMethod"),
+        "valuationMissingInputs": missing_inputs,
+        "valuationHasUserInput": any(bool(item.get("hasUserInput")) for item in rows),
+        "valuationHasExternalInput": any(bool(item.get("hasExternalInput")) for item in rows),
     }
 
 
@@ -846,6 +1061,7 @@ def position_signal_facts(
     facts.update(_liquidity_facts(position))
     facts.update(_external_quality_facts(external_signals))
     facts.update(macro_context_facts(position, portfolio, external_signals))
+    facts.update(_valuation_facts(position, external_signals, settings))
     facts.update(_loss_smart_money_facts(facts))
     missing: List[Dict[str, str]] = []
     if not facts["currentPrice"]:
@@ -956,6 +1172,15 @@ def position_signal_facts(
             missing.append(_missing("investorFlow", "투자자별 수급", effect, investor_flow_status, "KIS investor"))
     if facts["isBtcSensitive"] and not btc:
         missing.append(_missing("btcMarket", "비트코인 시장 데이터", "비트코인 민감 종목의 외부 연동 위험을 확인하지 못합니다."))
+    valuation_missing_inputs = facts.get("valuationMissingInputs") if isinstance(facts.get("valuationMissingInputs"), list) else []
+    if facts.get("valuationRows") and valuation_missing_inputs:
+        missing.append(_missing(
+            "valuationInputs",
+            "밸류에이션 입력값",
+            "적정가 판단에 필요한 값이 일부 부족합니다: " + ", ".join(str(item) for item in valuation_missing_inputs[:5]),
+            "missing",
+            str(facts.get("valuationSourceLabel") or "valuation"),
+        ))
     data_quality = clamp(
         100.0
         - sum(_missing_penalty(item) for item in missing)

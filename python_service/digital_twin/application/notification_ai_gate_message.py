@@ -8,6 +8,7 @@ except ImportError:  # pragma: no cover - Python 3.8 compatibility guard.
     ZoneInfo = None
 
 from ..domain.accounts import investment_strategy_profile, message_delivery_profile
+from ..domain.alert_formatting import price_money, signed_pct
 from ..domain.notification_ai import criterion_lines, notification_ai_prompt_context, relation_context_value
 from ..domain.notification_ai_context import relation_facts
 from ..domain.notification_ai_context import is_watchlist_context
@@ -120,6 +121,11 @@ DATA_COLLECTION_FIELD_LABELS = {
     "institutionSellVolume": "기관 매도",
     "individualBuyVolume": "개인 매수",
     "individualSellVolume": "개인 매도",
+    "valuationCurrentPrice": "밸류에이션 현재가",
+    "valuationFairValue": "적정가",
+    "valuationExpectedEPS": "예상 EPS",
+    "valuationTargetPER": "목표 PER",
+    "valuationMarginOfSafetyPct": "안전마진",
 }
 DATA_COLLECTION_FRESHNESS_LABELS = {
     "realtime": "실시간",
@@ -1307,6 +1313,75 @@ def relation_axis_summary_rows(context: Dict[str, object], level: str, limit: in
     return [_html_bullet(item, level) for item in relation_axis_summary_lines(context, limit) if str(item or "").strip()]
 
 
+def _valuation_value_present(value: object) -> bool:
+    return value not in (None, "") and str(value).strip() not in {"", "-"}
+
+
+def _valuation_price_display(value: object, currency: object) -> str:
+    amount = _number(value)
+    if not amount and not _valuation_value_present(value):
+        return ""
+    return price_money(amount, str(currency or "KRW"))
+
+
+def _valuation_pct_display(value: object) -> str:
+    if not _valuation_value_present(value):
+        return ""
+    return signed_pct(_number(value))
+
+
+def valuation_detail_rows(context: Dict[str, object], level: str) -> List[str]:
+    facts = relation_facts(context or {})
+    rows_data = facts.get("valuationRows") if isinstance(facts.get("valuationRows"), list) else []
+    has_valuation_context = bool(rows_data or facts.get("primaryValuation") or facts.get("valuationFormula"))
+    if not has_valuation_context:
+        return []
+    currency = facts.get("currency") or "KRW"
+    formula = str(facts.get("valuationFormula") or "").strip() or "공식 미입력"
+    substitution = str(facts.get("valuationSubstitution") or "").strip()
+    missing_inputs = facts.get("valuationMissingInputs") if isinstance(facts.get("valuationMissingInputs"), list) else []
+    if not substitution and missing_inputs:
+        substitution = "대입값 부족: " + ", ".join(str(item) for item in missing_inputs[:5])
+    current = _valuation_price_display(facts.get("valuationCurrentPrice") or facts.get("currentPrice"), currency)
+    fair_value = _valuation_price_display(facts.get("valuationFairValue") or facts.get("valuationFairValuePrice"), currency)
+    margin = _valuation_pct_display(facts.get("valuationMarginOfSafetyPct"))
+    minimum_margin = _valuation_pct_display(facts.get("valuationMinimumMarginOfSafetyPct"))
+    margin_text = margin
+    if margin and minimum_margin:
+        margin_text += " / 요구 " + minimum_margin
+    source = str(facts.get("valuationSourceLabel") or "").strip()
+    if facts.get("valuationHasUserInput") and facts.get("valuationHasExternalInput") and source:
+        source += " · 외부 데이터도 참고"
+    reliability = str(facts.get("valuationReliabilityLabel") or "").strip()
+    reliability_score = facts.get("valuationReliabilityScore")
+    if reliability and _valuation_value_present(reliability_score):
+        reliability += " (" + str(round(_number(reliability_score), 1)).rstrip("0").rstrip(".") + "%)"
+    elif _valuation_value_present(reliability_score):
+        reliability = str(round(_number(reliability_score), 1)).rstrip("0").rstrip(".") + "%"
+    if reliability:
+        reliability += " · 예측 성공률이 아니라 출처와 공식 완성도 기준"
+    explanation = str(facts.get("valuationExplanation") or "").strip()
+    data_status = str(facts.get("valuationDataStatus") or "").strip()
+    status_labels = {
+        "available": "계산 가능",
+        "partial": "일부 부족",
+        "missing": "부족",
+    }
+    rows = [
+        _html_row("공식", formula, level=level, max_len=260),
+        _html_row("대입값", substitution, level=level, max_len=260),
+        _html_row("현재가", current, level=level),
+        _html_row("적정가", fair_value, level=level),
+        _html_row("안전마진", margin_text, level=level),
+        _html_row("데이터 출처", source, level=level),
+        _html_row("근거 신뢰도", reliability, level=level, max_len=260),
+        _html_row("계산 상태", status_labels.get(data_status, data_status), level=level),
+        _html_row("계산 뜻", explanation, level=level, max_len=700),
+        _html_row("부족 데이터", ", ".join(str(item) for item in missing_inputs[:5]), level=level, max_len=260),
+    ]
+    return [row for row in rows if row]
+
+
 def execution_telegram_message(context: Dict[str, object], response: NotificationAIValidatedResponse) -> str:
     level = delivery_level_from_context(context)
     if level == "absoluteBeginner":
@@ -1349,6 +1424,9 @@ def execution_telegram_message(context: Dict[str, object], response: Notificatio
     ]
     if current_state_rows:
         parts.extend(["", "<b>현재 상황</b>", *current_state_rows])
+    valuation_rows = valuation_detail_rows(context, level)
+    if valuation_rows:
+        parts.extend(["", "<b>밸류에이션</b>", *valuation_rows])
     axis_rows = relation_axis_summary_rows(context, level)
     if axis_rows:
         parts.extend(["", "<b>투자 판단 근거</b>", *axis_rows])
@@ -1377,6 +1455,9 @@ def execution_telegram_message_absolute_beginner(context: Dict[str, object], res
     ]
     if current_state_rows:
         parts.extend(["", "<b>현재 상황</b>", *current_state_rows])
+    valuation_rows = valuation_detail_rows(context, "absoluteBeginner")
+    if valuation_rows:
+        parts.extend(["", "<b>밸류에이션</b>", *valuation_rows])
     axis_rows = relation_axis_summary_rows(context, "absoluteBeginner")
     if axis_rows:
         parts.extend(["", "<b>투자 판단 근거</b>", *axis_rows])

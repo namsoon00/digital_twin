@@ -3,7 +3,7 @@ import unittest
 from digital_twin.domain.investment_research import build_active_investment_opinion
 from digital_twin.domain.notification_ai_gate_contracts import NotificationAIValidatedResponse
 from digital_twin.application.notification_ai_gate_message import execution_telegram_message
-from digital_twin.domain.notification_ontology_sections import ontology_rule_lines
+from digital_twin.domain.notification_ontology_sections import ontology_rule_lines, relation_axis_summary_lines
 from digital_twin.domain.notification_templates import NotificationTemplate, alert_context, render_notification
 from digital_twin.domain.portfolio import AlertEvent, Position
 
@@ -299,6 +299,78 @@ class BeginnerRelationLanguageTests(unittest.TestCase):
         self.assertIn("뉴스·공시", message)
         self.assertIn("투자 성향·정책", message)
         self.assertIn("20일 평균보다 12.9%", message)
+
+    def test_execution_message_includes_deterministic_valuation_details(self):
+        response = NotificationAIValidatedResponse(
+            action="BUY",
+            action_label="매수 점검",
+            confidence=72,
+            summary="현재가와 적정가를 비교해 진입 조건을 확인합니다.",
+            evidence=["안전마진이 요구 기준을 넘었습니다."],
+            next_checks=["추세와 거래량 확인"],
+        )
+        context = {
+            "messageType": "investmentInsight",
+            "messageDeliveryLevel": "beginner",
+            "title": "삼성전자 알림",
+            "target": "삼성전자 / 005930",
+            "displayTarget": "삼성전자 / 005930",
+            "ontologyRelationContext": {
+                "signalStrength": 78,
+                "decision": {
+                    "actionGroup": "valuation",
+                    "label": "저평가 조건 확인",
+                },
+                "facts": {
+                    "currency": "KRW",
+                    "currentPrice": 80000,
+                    "valuationRows": [{"sourceType": "user"}],
+                    "valuationFormula": "적정가 = 예상 EPS x 목표 PER",
+                    "valuationSubstitution": "9,000원 x 11배 = 99,000원",
+                    "valuationCurrentPrice": 80000,
+                    "valuationFairValue": 99000,
+                    "valuationMarginOfSafetyPct": 23.75,
+                    "valuationMinimumMarginOfSafetyPct": 20,
+                    "valuationSourceLabel": "사용자 입력",
+                    "valuationReliabilityLabel": "사용자 가정",
+                    "valuationReliabilityScore": 55,
+                    "valuationExplanation": "예상 EPS 9,000원에 목표 PER 11배를 적용해 적정가 99,000원으로 계산했습니다.",
+                    "valuationDataStatus": "available",
+                    "valuationMissingInputs": [],
+                    "valuationHasUserInput": True,
+                    "valuationHasExternalInput": False,
+                },
+                "executionPlan": {
+                    "decisionDrivers": [
+                        {
+                            "category": "valuation",
+                            "direction": "support",
+                            "importance": 78,
+                            "summary": "사용자 적정가 기준 안전마진이 있습니다.",
+                        }
+                    ]
+                },
+                "activeRules": [
+                    {
+                        "ruleId": "graph.valuation.margin_of_safety.opportunity.v1",
+                        "label": "안전마진 + 추세/수급 확인 -> 저평가 조건 확인",
+                        "strengthScore": 78,
+                    }
+                ],
+            },
+        }
+
+        axes = relation_axis_summary_lines(context)
+        message = execution_telegram_message(context, response)
+
+        self.assertTrue(any(line.startswith("밸류에이션") for line in axes))
+        self.assertIn("<b>밸류에이션</b>", message)
+        self.assertIn("적정가 = 예상 EPS x 목표 PER", message)
+        self.assertIn("9,000원 x 11배 = 99,000원", message)
+        self.assertIn("사용자 입력", message)
+        self.assertIn("사용자 가정", message)
+        self.assertIn("예측 성공률이 아니라", message)
+        self.assertIn("사용자 적정가 기준 안전마진", message)
 
     def test_template_message_includes_relation_axis_summary(self):
         event = AlertEvent(

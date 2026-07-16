@@ -927,11 +927,11 @@ class PythonServiceTests(unittest.TestCase):
         self.assertEqual(3000, enriched.orderbook_ask_volume)
         self.assertEqual(50, enriched.bid_ask_imbalance)
         self.assertEqual(1.85, enriched.volume_ratio)
-        self.assertEqual(0, enriched.foreign_net_volume)
-        self.assertEqual(0, enriched.foreign_buy_volume)
-        self.assertEqual(0, enriched.foreign_sell_volume)
-        self.assertEqual(0, enriched.institution_net_volume)
-        self.assertEqual(0, enriched.individual_net_volume)
+        self.assertEqual(700, enriched.foreign_net_volume)
+        self.assertEqual(1300, enriched.foreign_buy_volume)
+        self.assertEqual(600, enriched.foreign_sell_volume)
+        self.assertEqual(300, enriched.institution_net_volume)
+        self.assertEqual(-400, enriched.individual_net_volume)
         self.assertIn("KIS Open API", enriched.quote_source)
         self.assertEqual("actual", enriched.data_quality)
         self.assertEqual(0, untouched.current_price)
@@ -944,6 +944,7 @@ class PythonServiceTests(unittest.TestCase):
         self.assertEqual("business-date-only", enriched.market_signal_coverage["investor"]["sourceAsOfConfidence"])
         self.assertEqual("2026-07-07T00:00:00+09:00", enriched.market_signal_coverage["investor"]["sourceAsOf"])
         self.assertIs(False, enriched.market_signal_coverage["investor"]["aiUsableAsStrongEvidence"])
+        self.assertIs(True, enriched.market_signal_coverage["investor"]["judgementEvidenceUsable"])
         self.assertEqual("delayed-or-batched", enriched.market_signal_coverage["investor"]["latencyStatus"])
         self.assertEqual("available", cached["marketSignalCoverage"]["investor"]["status"])
         self.assertIs(False, cached["marketSignalCoverage"]["investor"]["realTime"])
@@ -1254,13 +1255,14 @@ class PythonServiceTests(unittest.TestCase):
         self.assertEqual(118.5, positions[0].trade_strength)
         self.assertEqual(900, positions[0].buy_volume)
         self.assertEqual(700, positions[0].sell_volume)
-        self.assertEqual(0, positions[0].foreign_net_volume)
-        self.assertEqual(0, positions[0].institution_net_volume)
-        self.assertEqual(0, positions[0].individual_net_volume)
-        self.assertEqual(0, positions[0].foreign_net_amount)
-        self.assertEqual(0, positions[0].institution_net_amount)
-        self.assertEqual(0, positions[0].individual_net_amount)
+        self.assertEqual(700, positions[0].foreign_net_volume)
+        self.assertEqual(300, positions[0].institution_net_volume)
+        self.assertEqual(-400, positions[0].individual_net_volume)
+        self.assertEqual(210000000, positions[0].foreign_net_amount)
+        self.assertEqual(90000000, positions[0].institution_net_amount)
+        self.assertEqual(-120000000, positions[0].individual_net_amount)
         self.assertIs(False, positions[0].market_signal_coverage["investor"]["aiUsableAsStrongEvidence"])
+        self.assertIs(True, positions[0].market_signal_coverage["investor"]["judgementEvidenceUsable"])
         self.assertEqual("2026-07-07T00:00:00+09:00", positions[0].market_signal_coverage["investor"]["sourceAsOf"])
         self.assertEqual(1, provider.diagnostics["partialCached"])
         self.assertEqual(1, provider.diagnostics["live"])
@@ -1326,10 +1328,11 @@ class PythonServiceTests(unittest.TestCase):
 
         positions, _watchlist = provider.enrich_collections([naver], [])
 
-        self.assertEqual(0, positions[0].foreign_net_volume)
-        self.assertEqual(0, positions[0].institution_net_volume)
-        self.assertEqual(0, positions[0].individual_net_volume)
+        self.assertEqual(243601, positions[0].foreign_net_volume)
+        self.assertEqual(67401, positions[0].institution_net_volume)
+        self.assertEqual(-304684, positions[0].individual_net_volume)
         self.assertIs(False, positions[0].market_signal_coverage["investor"]["aiUsableAsStrongEvidence"])
+        self.assertIs(True, positions[0].market_signal_coverage["investor"]["judgementEvidenceUsable"])
         self.assertEqual(1, provider.diagnostics["partialCached"])
         self.assertEqual(1, provider.diagnostics["live"])
         self.assertIn("/uapi/domestic-stock/v1/quotations/inquire-investor", calls)
@@ -1396,8 +1399,9 @@ class PythonServiceTests(unittest.TestCase):
 
         positions, _watchlist = provider.enrich_collections([naver], [])
 
-        self.assertEqual(0, positions[0].foreign_net_volume)
+        self.assertEqual(243601, positions[0].foreign_net_volume)
         self.assertIs(False, positions[0].market_signal_coverage["investor"]["aiUsableAsStrongEvidence"])
+        self.assertIs(True, positions[0].market_signal_coverage["investor"]["judgementEvidenceUsable"])
         self.assertEqual(1, provider.diagnostics["livePreferred"])
         self.assertEqual(1, provider.diagnostics["live"])
         self.assertIn("/uapi/domestic-stock/v1/quotations/inquire-investor", calls)
@@ -1463,11 +1467,12 @@ class PythonServiceTests(unittest.TestCase):
 
         positions, _watchlist = provider.enrich_collections([naver], [])
 
-        self.assertEqual(0, positions[0].foreign_net_volume)
+        self.assertEqual(243601, positions[0].foreign_net_volume)
         self.assertEqual(1, provider.diagnostics["live"])
         self.assertEqual(0, provider.diagnostics["cached"])
         self.assertIs(False, positions[0].market_signal_coverage["investor"]["realTime"])
         self.assertIs(False, positions[0].market_signal_coverage["investor"]["aiUsableAsStrongEvidence"])
+        self.assertIs(True, positions[0].market_signal_coverage["investor"]["judgementEvidenceUsable"])
         self.assertEqual("reference-repeat", positions[0].market_signal_coverage["investor"]["freshnessStatus"])
         self.assertEqual("unchanged-repeat", positions[0].market_signal_coverage["investor"]["latencyStatus"])
         self.assertEqual("2026-07-07T00:00:00+09:00", positions[0].market_signal_coverage["investor"]["sourceAsOf"])
@@ -4212,6 +4217,8 @@ class PythonServiceTests(unittest.TestCase):
                     "latencyStatus": "delayed-or-batched",
                     "latencyLabel": "KIS 장중 누적·지연 가능",
                     "latencyReason": "KIS 투자자별 수급은 장중 누적 또는 공급자 지연 가능 데이터입니다.",
+                    "aiUsableAsStrongEvidence": False,
+                    "judgementEvidenceUsable": True,
                 },
             },
         )
@@ -4220,16 +4227,14 @@ class PythonServiceTests(unittest.TestCase):
         missing_labels = [item["label"] for item in context["missingData"]]
         warnings = context["facts"]["dataQualityWarnings"]
 
-        self.assertIn("투자자별 수급", missing_labels)
-        investor_missing = next(item for item in context["missingData"] if item["label"] == "투자자별 수급")
-        self.assertEqual("latency", investor_missing["status"])
-        self.assertIn("지연", investor_missing["effect"])
+        self.assertNotIn("투자자별 수급", missing_labels)
         self.assertEqual("available", context["facts"]["dataAvailability"]["investorFlow"]["status"])
         self.assertIs(False, context["facts"]["dataAvailability"]["investorFlow"]["realTime"])
-        self.assertEqual(0, context["facts"]["investorFlowBase"])
-        self.assertEqual(0, context["facts"]["investorFlowScore"])
-        self.assertEqual(0, context["facts"]["foreignBuyVolume"])
-        self.assertEqual(0, context["facts"]["institutionBuyVolume"])
+        self.assertIs(True, context["facts"]["dataAvailability"]["investorFlow"]["judgementEvidenceUsable"])
+        self.assertGreater(context["facts"]["investorFlowBase"], 0)
+        self.assertLess(context["facts"]["investorFlowScore"], 0)
+        self.assertEqual(-716994, context["facts"]["foreignNetVolume"])
+        self.assertEqual(-3246131, context["facts"]["institutionNetVolume"])
         self.assertTrue(any(item["key"] == "investorFlowLatency" for item in warnings))
         self.assertLess(context["facts"]["dataQualityScore"], 100)
 
@@ -12460,14 +12465,15 @@ class PythonServiceTests(unittest.TestCase):
                 "realTime": False,
                 "latencyLabel": "KIS 장중 누적·지연 가능",
                 "aiUsableAsStrongEvidence": False,
+                "judgementEvidenceUsable": True,
             }
         }
         delayed_investor_line = monitor.investor_context_line(position)
         self.assertIn("KIS 장중 누적·지연 가능", delayed_investor_line)
-        self.assertIn("AI 강근거 제외", delayed_investor_line)
-        self.assertIn("수치 제외", delayed_investor_line)
-        self.assertNotIn("외국인: 순매도", delayed_investor_line)
-        self.assertNotIn("기관: 순매수", delayed_investor_line)
+        self.assertIn("실시간 강근거 제외", delayed_investor_line)
+        self.assertIn("판단 참고 근거", delayed_investor_line)
+        self.assertIn("외국인: 순매도", delayed_investor_line)
+        self.assertIn("기관: 순매수", delayed_investor_line)
         position.update({
             "quantity": 12,
             "sellable_quantity": 9,

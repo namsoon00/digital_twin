@@ -479,7 +479,8 @@ class MonitoringPositionContextMixin:
         latency_label = str(investor.get("latencyLabel") or "").strip()
         if investor.get("aiUsableAsStrongEvidence") is False:
             reason = str(investor.get("latencyReason") or investor.get("reason") or "").strip()
-            return (latency_label or "KIS 투자자 수급 참고용") + " · AI 강근거 제외" + ((" · " + reason) if reason else "")
+            reference = "판단 참고 근거" if investor.get("judgementEvidenceUsable") is not False else "수치 제외"
+            return (latency_label or "KIS 투자자 수급 참고용") + " · 실시간 강근거 제외 · " + reference + ((" · " + reason) if reason else "")
         if investor.get("realTime") is False or latency_label:
             return (latency_label or "장중 누적·지연 가능") + " · 현재가·호가와 같은 실시간 체결 데이터 아님"
         if investor.get("unchangedCount") not in (None, "", 0):
@@ -510,7 +511,13 @@ class MonitoringPositionContextMixin:
             return ""
         note = self.investor_coverage_note(position)
         if note:
-            return "투자자:\n" + note + "\n수치 제외: KIS 투자자별 수급이 최신 실시간 값으로 확인되지 않았습니다."
+            coverage = position.get("market_signal_coverage")
+            if not isinstance(coverage, dict) or not coverage:
+                coverage = position.get("marketSignalCoverage")
+            investor = coverage.get("investor") if isinstance(coverage, dict) and isinstance(coverage.get("investor"), dict) else {}
+            if investor.get("judgementEvidenceUsable") is not False and str(investor.get("status") or "") == "available":
+                return "투자자:\n" + note + "\n" + "\n".join(parts)
+            return "투자자:\n" + note + "\n수치 제외: KIS 투자자별 수급이 최신 판단 참고값으로 확인되지 않았습니다."
         return "투자자:\n" + "\n".join(parts)
 
     def holding_action_text(self, decision_text: str, pnl_rate: float) -> str:

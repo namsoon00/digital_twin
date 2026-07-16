@@ -239,6 +239,7 @@ def kis_stage_freshness_records(position: Dict[str, object], message_type: str, 
                 "latencyLabel",
                 "latencyReason",
                 "aiUsableAsStrongEvidence",
+                "judgementEvidenceUsable",
             ]:
                 if stage_payload.get(key) not in (None, ""):
                     record[key] = stage_payload.get(key)
@@ -264,6 +265,7 @@ def kis_stage_freshness_records(position: Dict[str, object], message_type: str, 
                 "freshnessStatus": stage_payload.get("freshnessStatus"),
                 "sourceAsOfConfidence": stage_payload.get("sourceAsOfConfidence"),
                 "aiUsableAsStrongEvidence": stage_payload.get("aiUsableAsStrongEvidence"),
+                "judgementEvidenceUsable": stage_payload.get("judgementEvidenceUsable"),
                 "cadence": stage_payload.get("cadence"),
                 "latencyStatus": stage_payload.get("latencyStatus"),
                 "latencyLabel": stage_payload.get("latencyLabel"),

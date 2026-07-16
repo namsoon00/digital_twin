@@ -580,6 +580,7 @@ def _availability_with_coverage(status: str, source: str, coverage: Dict[str, ob
         "freshnessStatus",
         "sourceAsOfConfidence",
         "aiUsableAsStrongEvidence",
+        "judgementEvidenceUsable",
         "cadence",
         "latencyStatus",
         "latencyLabel",

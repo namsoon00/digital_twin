@@ -81,7 +81,7 @@ INVESTOR_RAW_KEYS = [
 ]
 INVESTOR_DELAYED_LABEL = "KIS 투자자 수급 지연 가능"
 INVESTOR_DELAYED_REASON = "KIS 투자자별 수급이 캐시·반복값·노후값으로 판정되어 실시간 근거로 쓰지 않습니다."
-INVESTOR_REST_REFERENCE_REASON = "KIS 투자자별 수급은 REST 조회값이며 원천의 초단위 실시간 기준시각이 제공되지 않아 강한 판단 근거로 쓰지 않습니다."
+INVESTOR_REST_REFERENCE_REASON = "KIS 투자자별 수급은 REST 조회값이라 실시간 체결 근거는 아니지만 판단 참고 근거로 반영합니다."
 
 JsonFetcher = Callable[[str, str, Dict[str, str], Optional[Dict[str, object]], Optional[Dict[str, str]], int], Dict[str, object]]
 
@@ -293,6 +293,7 @@ def stage_coverage(
     if stage == "investor" and status == "available":
         payload["realTime"] = bool(real_time)
         payload["cadence"] = "live-poll" if real_time else "rest-reference"
+        payload["judgementEvidenceUsable"] = True
         if not real_time:
             payload["latencyStatus"] = "delayed-or-batched"
             payload["latencyLabel"] = INVESTOR_DELAYED_LABEL
@@ -393,10 +394,33 @@ def investor_stage_values_reliable(coverage: Dict[str, object]) -> bool:
     return True
 
 
+def investor_stage_values_usable_for_judgement(coverage: Dict[str, object]) -> bool:
+    item = coverage.get("investor") if isinstance(coverage, dict) else {}
+    if not isinstance(item, dict) or not item:
+        return True
+    status = str(item.get("status") or "").strip()
+    if status in {"stale", "unknown", "unavailable", "missing", "empty"}:
+        return False
+    if status == "available" and item.get("judgementEvidenceUsable") is not False:
+        return True
+    return investor_stage_values_reliable(coverage)
+
+
 def remove_unreliable_investor_values(signal: Dict[str, object], strip_values: bool = False) -> Dict[str, object]:
     coverage = signal.get("marketSignalCoverage") if isinstance(signal.get("marketSignalCoverage"), dict) else {}
     investor = coverage.get("investor") if isinstance(coverage.get("investor"), dict) else {}
     if not investor or investor_stage_values_reliable(coverage):
+        return signal
+    if investor_stage_values_usable_for_judgement(coverage):
+        reason = str(
+            investor.get("latencyReason")
+            or investor.get("reason")
+            or INVESTOR_REST_REFERENCE_REASON
+        )
+        signal["quoteMessage"] = append_message(
+            signal.get("quoteMessage"),
+            "KIS 투자자별 수급은 실시간 체결 근거는 아니지만 판단 참고 근거로 반영했습니다. " + reason,
+        )
         return signal
     if strip_values:
         for key in INVESTOR_SIGNAL_KEYS:
@@ -786,10 +810,11 @@ class KISMarketSignalProvider:
                 next_item["reason"] = "장중 이전 조회와 같은 값 " + str(unchanged_count) + "회 연속"
                 if stage == "investor":
                     next_item["aiUsableAsStrongEvidence"] = False
+                    next_item["judgementEvidenceUsable"] = True
                     next_item["freshnessStatus"] = "reference-repeat"
                     next_item["latencyStatus"] = "unchanged-repeat"
                     next_item["latencyLabel"] = INVESTOR_DELAYED_LABEL
-                    next_item["latencyReason"] = "KIS 투자자별 수급이 이전 조회와 같아 실시간 변화 신호로 쓰지 않습니다."
+                    next_item["latencyReason"] = "KIS 투자자별 수급이 이전 조회와 같아 실시간 변화 신호는 아니지만 판단 참고 근거로 반영합니다."
                 if stage != "price" and unchanged_count >= stale_threshold:
                     next_item["status"] = "stale"
                     if stage == "investor":
@@ -798,6 +823,7 @@ class KISMarketSignalProvider:
                         next_item["latencyStatus"] = "stale"
                         next_item["latencyLabel"] = INVESTOR_DELAYED_LABEL
                         next_item["freshnessStatus"] = "stale-repeat"
+                        next_item["judgementEvidenceUsable"] = False
                     next_item["staleReason"] = "장중 같은 " + stage + " 값이 " + str(unchanged_count) + "회 연속 반복되어 지연 가능성이 있습니다."
             else:
                 next_item["unchangedCount"] = 0
@@ -810,7 +836,7 @@ class KISMarketSignalProvider:
             included.append("체결강도")
         if coverage_has_fields(coverage, "ccnl", ["buyVolume", "sellVolume"]):
             included.append("방향별 체결량")
-        if coverage_has_fields(coverage, "investor", INVESTOR_SIGNAL_KEYS) and investor_stage_values_reliable(coverage):
+        if coverage_has_fields(coverage, "investor", INVESTOR_SIGNAL_KEYS) and investor_stage_values_usable_for_judgement(coverage):
             included.append("투자자별 수급")
         if coverage_has_fields(coverage, "orderbook", ["orderbookBidVolume", "orderbookAskVolume"]):
             included.append("호가 잔량")
@@ -940,7 +966,7 @@ class KISMarketSignalProvider:
             included.append("체결강도")
         if coverage_has_fields(coverage, "ccnl", ["buyVolume", "sellVolume"]):
             included.append("방향별 체결량")
-        if coverage_has_fields(coverage, "investor", INVESTOR_SIGNAL_KEYS) and investor_stage_values_reliable(coverage):
+        if coverage_has_fields(coverage, "investor", INVESTOR_SIGNAL_KEYS) and investor_stage_values_usable_for_judgement(coverage):
             included.append("투자자별 수급")
         if coverage_has_fields(coverage, "orderbook", ["orderbookBidVolume", "orderbookAskVolume"]):
             included.append("호가 잔량")
@@ -1072,7 +1098,7 @@ class KISMarketSignalProvider:
         individual_net_volume = optional_number(signal, ["individualNetVolume", "individualNet"])
         individual_net_amount = optional_number(signal, ["individualNetAmount"])
         market_signal_coverage = signal.get("marketSignalCoverage") if isinstance(signal.get("marketSignalCoverage"), dict) else position.market_signal_coverage
-        investor_values_reliable = investor_stage_values_reliable(market_signal_coverage)
+        investor_values_reliable = investor_stage_values_usable_for_judgement(market_signal_coverage)
 
         merged_price = current_price if current_price is not None else position.current_price
         market_value = position.market_value

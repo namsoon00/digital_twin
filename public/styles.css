@@ -21882,3 +21882,287 @@ html[data-theme="dark"] .ontology-graph-expanded-toolbar .icon-button.danger {
     grid-template-columns: minmax(0, 1fr);
   }
 }
+
+/* Ontology audit console: full ledger access without crowding the system guide. */
+.ontology-audit-panel {
+  display: grid;
+  gap: var(--ds-section-gap);
+  min-width: 0;
+}
+
+.ontology-audit-head {
+  align-items: center;
+}
+
+.ontology-audit-toolbar {
+  display: grid;
+  grid-template-columns: minmax(260px, 1fr) minmax(150px, 0.28fr) minmax(108px, 0.18fr) minmax(112px, 0.2fr) auto auto;
+  gap: var(--ds-space-4);
+  align-items: end;
+  min-width: 0;
+  padding: 0 var(--ds-panel-pad-x);
+}
+
+.ontology-audit-toolbar label {
+  display: grid;
+  gap: 6px;
+  min-width: 0;
+}
+
+.ontology-audit-toolbar label span {
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 900;
+}
+
+.ontology-audit-summary-grid {
+  display: grid;
+  grid-template-columns: repeat(6, minmax(0, 1fr));
+  gap: var(--ds-space-4);
+  min-width: 0;
+  padding: 0 var(--ds-panel-pad-x);
+}
+
+.ontology-audit-metric {
+  display: grid;
+  gap: 5px;
+  min-width: 0;
+  padding: var(--ds-row-pad-y) var(--ds-row-pad-x);
+  border: 1px solid var(--ds-card-border);
+  border-left: 3px solid var(--blue);
+  border-radius: var(--ds-radius-panel);
+  background: var(--panel-soft);
+}
+
+.ontology-audit-metric em,
+.ontology-audit-metric span {
+  min-width: 0;
+  overflow: hidden;
+  color: var(--muted);
+  font-style: normal;
+  font-weight: 850;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.ontology-audit-metric em {
+  font-size: 11px;
+  text-transform: uppercase;
+}
+
+.ontology-audit-metric strong {
+  min-width: 0;
+  color: var(--ink);
+  font-size: 22px;
+  font-variant-numeric: tabular-nums;
+  line-height: 1.08;
+  overflow-wrap: anywhere;
+}
+
+.ontology-audit-section-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: var(--ds-section-gap);
+  min-width: 0;
+  padding: 0 var(--ds-panel-pad-x) var(--ds-panel-pad-y);
+}
+
+.ontology-audit-section-card {
+  display: grid;
+  gap: var(--ds-space-4);
+  min-width: 0;
+  padding: var(--ds-panel-pad-y) var(--ds-panel-pad-x);
+  border: 1px solid var(--ds-card-border);
+  border-radius: var(--ds-radius-panel);
+  background: var(--panel);
+}
+
+.ontology-audit-section-card header,
+.ontology-audit-section-card footer {
+  display: flex;
+  gap: var(--ds-space-4);
+  align-items: center;
+  justify-content: space-between;
+  min-width: 0;
+}
+
+.ontology-audit-section-card header span {
+  display: grid;
+  gap: 3px;
+  min-width: 0;
+}
+
+.ontology-audit-section-card header em,
+.ontology-audit-section-card header p,
+.ontology-audit-section-card footer span {
+  min-width: 0;
+  color: var(--muted);
+  font-size: 12px;
+  font-style: normal;
+  font-weight: 850;
+  line-height: 1.35;
+  overflow-wrap: anywhere;
+}
+
+.ontology-audit-section-card header strong {
+  color: var(--ink);
+  font-size: 22px;
+  font-variant-numeric: tabular-nums;
+  line-height: 1.08;
+}
+
+.ontology-audit-row-list,
+.ontology-audit-detail-list {
+  display: grid;
+  gap: var(--ds-space-3);
+  min-width: 0;
+}
+
+.ontology-audit-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(180px, 0.48fr);
+  gap: var(--ds-space-4);
+  align-items: center;
+  min-width: 0;
+  width: 100%;
+  padding: 12px 14px;
+  border: 1px solid var(--line);
+  border-radius: var(--ds-radius-control);
+  background: var(--panel-soft);
+  color: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+
+.ontology-audit-row:hover {
+  border-color: color-mix(in srgb, var(--blue) 42%, var(--line));
+  background: color-mix(in srgb, var(--blue-soft) 28%, var(--panel));
+}
+
+.ontology-audit-row-main,
+.ontology-audit-row-side {
+  display: grid;
+  gap: 4px;
+  min-width: 0;
+}
+
+.ontology-audit-row-main strong,
+.ontology-audit-row-main em,
+.ontology-audit-row-side i {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.ontology-audit-row-main strong {
+  color: var(--ink);
+  font-size: 14px;
+  font-weight: 920;
+}
+
+.ontology-audit-row-main em,
+.ontology-audit-row-side i {
+  color: var(--muted);
+  font-size: 12px;
+  font-style: normal;
+  font-weight: 820;
+}
+
+.ontology-audit-row-side {
+  justify-items: end;
+}
+
+.ontology-audit-detail-section,
+.ontology-audit-row-detail {
+  display: grid;
+  gap: var(--ds-space-5);
+}
+
+.ontology-audit-detail-summary,
+.ontology-audit-field-grid {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: var(--ds-space-4);
+}
+
+.ontology-audit-detail-summary span,
+.ontology-audit-field-grid span {
+  display: grid;
+  gap: 4px;
+  min-width: 0;
+  padding: var(--ds-row-pad-y) var(--ds-row-pad-x);
+  border: 1px solid var(--line);
+  border-radius: var(--ds-radius-control);
+  background: var(--panel-soft);
+}
+
+.ontology-audit-detail-summary em,
+.ontology-audit-field-grid em {
+  color: var(--muted);
+  font-size: 11px;
+  font-style: normal;
+  font-weight: 900;
+}
+
+.ontology-audit-detail-summary strong,
+.ontology-audit-field-grid strong {
+  min-width: 0;
+  color: var(--ink);
+  font-size: 14px;
+  font-weight: 920;
+  overflow-wrap: anywhere;
+}
+
+.raw-json-block {
+  min-width: 0;
+  margin: 0;
+  padding: var(--ds-panel-pad-y) var(--ds-panel-pad-x);
+  border: 1px solid var(--line);
+  border-radius: var(--ds-radius-panel);
+  background: var(--input);
+  color: var(--ink);
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 12px;
+  line-height: 1.55;
+  overflow: visible;
+  overflow-wrap: anywhere;
+  white-space: pre-wrap;
+}
+
+.tone-chip.live {
+  border-color: color-mix(in srgb, var(--green) 38%, var(--line));
+  background: color-mix(in srgb, var(--green-soft) 62%, var(--panel));
+  color: var(--green);
+}
+
+@media (max-width: 1180px) {
+  .ontology-audit-toolbar {
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+  }
+
+  .ontology-audit-summary-grid {
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+  }
+}
+
+@media (max-width: 860px) {
+  .ontology-audit-toolbar,
+  .ontology-audit-summary-grid,
+  .ontology-audit-section-grid,
+  .ontology-audit-row,
+  .ontology-audit-detail-summary,
+  .ontology-audit-field-grid {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .ontology-audit-section-card header,
+  .ontology-audit-section-card footer {
+    align-items: stretch;
+    flex-direction: column;
+  }
+
+  .ontology-audit-row-side {
+    justify-items: start;
+  }
+}

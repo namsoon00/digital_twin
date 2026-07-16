@@ -238,7 +238,7 @@ function checkFrontendAdminRender() {
       /\.console-shell \.app-nav-command \.page-command-metrics\s*\{[\s\S]*display: none;/.test(styles) &&
       /\.console-shell \.app-nav-routine > span:not\(\.app-nav-routine-action-cell\)\s*\{[\s\S]*display: none;/.test(styles) &&
       /@media \(min-width: 861px\) and \(max-width: 1180px\)[\s\S]*\.console-shell \.app-nav-flow,[\s\S]*\.console-shell \.app-nav-command \.page-command-metrics,[\s\S]*\.console-shell \.app-nav-current em,[\s\S]*\.console-shell :is\([\s\S]*\.feed-section-tabs span[\s\S]*\)\s*\{[\s\S]*display: none;/.test(styles) &&
-      indexHtml.indexOf("styles.css?v=20260716-loading-skeleton-v1") >= 0,
+      indexHtml.indexOf("styles.css?v=20260716-ontology-audit-v1") >= 0,
     "PC 상단 영역이 탭별로 여러 줄/넘침으로 깨지지 않도록 하는 안정화 레이어가 없습니다."
   );
   assertOk(
@@ -252,7 +252,7 @@ function checkFrontendAdminRender() {
       /\.loading-progress span\s*\{[\s\S]*animation: loadingProgress/.test(styles) &&
       /\.loading-skeleton-grid\s*\{[\s\S]*grid-template-columns: repeat\(4, minmax\(0, 1fr\)\);/.test(styles) &&
       /@keyframes loadingProgress/.test(styles) &&
-      indexHtml.indexOf("app.js?v=20260716-loading-skeleton-v1") >= 0,
+      indexHtml.indexOf("app.js?v=20260716-ontology-audit-v1") >= 0,
     "초기 로딩 화면이 운영 정보 카드 대신 progress/skeleton 화면으로 고정되지 않았습니다."
   );
   assertOk(
@@ -1916,6 +1916,15 @@ async function checkNormalMode(port, context) {
   assertOk(payload.profile && payload.profile.assistantName, "부트스트랩 API에 프로필 정보가 없습니다.");
   assertOk(Array.isArray(payload.items), "부트스트랩 API items가 배열이 아닙니다.");
   assertOk(Array.isArray(payload.messages), "부트스트랩 API messages가 배열이 아닙니다.");
+
+  const ontologyAudit = await request(port, "/api/ontology/audit?limit=5");
+  assertOk(ontologyAudit.statusCode === 200, "온톨로지 감사 API 응답 코드가 200이 아닙니다: " + ontologyAudit.statusCode);
+  const ontologyAuditPayload = JSON.parse(ontologyAudit.body);
+  assertOk(ontologyAuditPayload.summary && ontologyAuditPayload.sections, "온톨로지 감사 API 응답 형식이 맞지 않습니다.");
+  ["tbox", "abox", "rulebox", "inferencebox", "evidence", "sync"].forEach(function (section) {
+    assertOk(ontologyAuditPayload.sections[section], "온톨로지 감사 API에 " + section + " 섹션이 없습니다.");
+    assertOk(Array.isArray(ontologyAuditPayload.sections[section].rows), "온톨로지 감사 " + section + " rows가 배열이 아닙니다.");
+  });
 
   const settings = await request(port, "/api/settings");
   assertOk(settings.statusCode === 200, "설정 API 응답 코드가 200이 아닙니다: " + settings.statusCode);

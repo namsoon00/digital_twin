@@ -98,6 +98,65 @@ CURVE_REGIME_LABELS = {
     "flat_or_unknown_curve": "평탄/미확인",
 }
 
+RELATION_AXIS_ORDER = [
+    "손익·보유비중",
+    "종목 타입",
+    "투자 성향·정책",
+    "가격 회복·약화",
+    "수급 심리",
+    "뉴스·공시",
+    "외부 환경",
+    "데이터 신뢰도",
+]
+
+RELATION_AXIS_CATEGORY_LABELS = {
+    "position": "손익·보유비중",
+    "instrumentprofile": "종목 타입",
+    "crossasset": "종목 타입",
+    "trend": "가격 회복·약화",
+    "liquidity": "수급 심리",
+    "investorflow": "수급 심리",
+    "addbuy": "투자 성향·정책",
+    "research": "뉴스·공시",
+    "news": "뉴스·공시",
+    "disclosure": "뉴스·공시",
+    "macro": "외부 환경",
+    "rateregime": "외부 환경",
+    "fxregime": "외부 환경",
+    "dataquality": "데이터 신뢰도",
+    "dataqualitywarning": "데이터 신뢰도",
+    "relationrule": "관계 규칙",
+}
+
+RELATION_AXIS_RULE_PREFIXES = [
+    ("graph.instrument_profile.", "종목 타입"),
+    ("graph.crypto.", "종목 타입"),
+    ("graph.strategy_profile.", "투자 성향·정책"),
+    ("graph.averaging_down.", "투자 성향·정책"),
+    ("graph.price.", "가격 회복·약화"),
+    ("graph.holding.trend_transition.", "가격 회복·약화"),
+    ("graph.watchlist.trend_transition.", "가격 회복·약화"),
+    ("graph.flow.", "수급 심리"),
+    ("graph.loss_smart_money.", "수급 심리"),
+    ("graph.winner_momentum.", "수급 심리"),
+    ("graph.news.", "뉴스·공시"),
+    ("graph.disclosure.", "뉴스·공시"),
+    ("graph.macro.", "외부 환경"),
+    ("graph.benchmark.", "외부 환경"),
+    ("graph.factor.", "외부 환경"),
+    ("graph.data_quality.", "데이터 신뢰도"),
+    ("graph.coverage.", "데이터 신뢰도"),
+    ("graph.execution.", "손익·보유비중"),
+    ("graph.loss_guard.", "손익·보유비중"),
+]
+
+RELATION_DIRECTION_LABELS = {
+    "risk": "위험 쪽 근거",
+    "support": "버티는 근거",
+    "counter": "반대 근거",
+    "neutral": "참고 근거",
+}
+
 
 def source_fact_rows(context_or_metadata: Dict[str, object]) -> List[Dict[str, object]]:
     rows: List[Dict[str, object]] = []
@@ -274,6 +333,113 @@ def rule_value(item: Dict[str, object], *keys):
         if isinstance(item, dict) and item.get(key) not in (None, ""):
             return item.get(key)
     return ""
+
+
+def relation_axis_from_rule(rule_id: object, label: object = "") -> str:
+    text = (str(rule_id or "") + " " + str(label or "")).strip()
+    lowered = text.casefold()
+    for prefix, axis in RELATION_AXIS_RULE_PREFIXES:
+        if lowered.startswith(prefix):
+            return axis
+    if any(term in lowered for term in ["instrument", "profile", "종목 타입", "디지털자산", "우선주"]):
+        return "종목 타입"
+    if any(term in lowered for term in ["strategy_profile", "성향", "비중 한도", "물타기", "추가매수"]):
+        return "투자 성향·정책"
+    if any(term in lowered for term in ["trend", "recovery", "breakdown", "5일", "20일", "60일", "평균"]):
+        return "가격 회복·약화"
+    if any(term in lowered for term in ["flow", "liquidity", "smart_money", "수급", "기관", "외국인", "체결", "호가"]):
+        return "수급 심리"
+    if any(term in lowered for term in ["news", "disclosure", "공시", "뉴스", "기사"]):
+        return "뉴스·공시"
+    if any(term in lowered for term in ["macro", "benchmark", "factor", "rate", "fx", "금리", "환율", "시장"]):
+        return "외부 환경"
+    if any(term in lowered for term in ["quality", "coverage", "신뢰도", "누락", "품질"]):
+        return "데이터 신뢰도"
+    if any(term in lowered for term in ["loss", "execution", "손실", "손익", "실행", "보유"]):
+        return "손익·보유비중"
+    return ""
+
+
+def relation_axis_from_driver(driver: Dict[str, object]) -> str:
+    category = str((driver or {}).get("category") or "").replace("_", "").replace("-", "").casefold()
+    axis = RELATION_AXIS_CATEGORY_LABELS.get(category, "")
+    if axis:
+        return axis
+    return relation_axis_from_rule(driver.get("ruleId") or driver.get("rule_id"), driver.get("label") or driver.get("summary"))
+
+
+def relation_rule_score(item: Dict[str, object]) -> float:
+    if not isinstance(item, dict):
+        return 0.0
+    return number(item.get("strengthScore") or item.get("strength_score") or item.get("score") or item.get("relationScore"))
+
+
+def relation_axis_sort_key(axis: str, importance: float) -> tuple:
+    try:
+        order = RELATION_AXIS_ORDER.index(axis)
+    except ValueError:
+        order = len(RELATION_AXIS_ORDER)
+    return (order, -float(importance or 0))
+
+
+def relation_axis_line(axis: str, direction: object, summary: object) -> str:
+    text = " ".join(str(summary or "").split())
+    if not text:
+        return ""
+    text = text.replace(" -> ", " → ")
+    if len(text) > 170:
+        text = text[:167].rstrip() + "..."
+    direction_label = RELATION_DIRECTION_LABELS.get(str(direction or "").strip(), "")
+    prefix = axis + ((" · " + direction_label) if direction_label else "")
+    return prefix + ": " + text
+
+
+def relation_axis_summary_lines(context_or_metadata: Dict[str, object], limit: int = 5) -> List[str]:
+    relation_context = ontology_relation_context(context_or_metadata)
+    if not relation_context:
+        return []
+    execution_plan = relation_context.get("executionPlan") if isinstance(relation_context.get("executionPlan"), dict) else {}
+    candidates: List[Dict[str, object]] = []
+    drivers = execution_plan.get("decisionDrivers") if isinstance(execution_plan.get("decisionDrivers"), list) else []
+    for item in drivers:
+        if not isinstance(item, dict):
+            continue
+        axis = relation_axis_from_driver(item)
+        summary = item.get("summary") or item.get("label")
+        if axis and summary:
+            candidates.append({
+                "axis": axis,
+                "direction": item.get("direction"),
+                "summary": summary,
+                "importance": number(item.get("importance")),
+            })
+    rules = relation_context.get("activeRules") or relation_context.get("matchedRules") or []
+    for item in rules:
+        if not isinstance(item, dict) or item.get("referenceOnly") or item.get("reference_only"):
+            continue
+        axis = relation_axis_from_rule(rule_value(item, "ruleId", "rule_id"), rule_value(item, "label", "name"))
+        label = rule_value(item, "label", "name", "ruleId", "rule_id")
+        if axis and label:
+            candidates.append({
+                "axis": axis,
+                "direction": rule_value(item, "direction", "polarity") or "neutral",
+                "summary": label,
+                "importance": relation_rule_score(item),
+            })
+    selected: Dict[str, Dict[str, object]] = {}
+    for item in candidates:
+        axis = str(item.get("axis") or "")
+        current = selected.get(axis)
+        if current is None or float(item.get("importance") or 0) > float(current.get("importance") or 0):
+            selected[axis] = item
+    rows: List[str] = []
+    for item in sorted(selected.values(), key=lambda value: relation_axis_sort_key(str(value.get("axis") or ""), float(value.get("importance") or 0))):
+        line = relation_axis_line(str(item.get("axis") or ""), item.get("direction"), item.get("summary"))
+        if line:
+            rows.append(line)
+        if len(rows) >= limit:
+            break
+    return rows
 
 
 def beginner_relation_decision_line(relation_context: Dict[str, object]) -> str:

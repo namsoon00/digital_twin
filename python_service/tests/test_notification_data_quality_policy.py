@@ -124,6 +124,19 @@ class NotificationDataQualityPolicyTests(unittest.TestCase):
 
         self.assertEqual("", summary)
 
+    def test_cooldown_release_summary_hides_internal_relation_signature(self):
+        summary = notification_cooldown_release_summary({
+            "honeyStateCooldownEnabled": True,
+            "honeyStateDecision": "material_change",
+            "honeyStateReason": "관계 경로 변경: 관계 의미 경로 변경 subject=aapl|dispatchtype=holdingPositionCommon|relationRuleIds=graph.averaging_down.risk_guard.v1",
+            "honeyStateLastSentAgeMinutes": 5,
+            "honeyStateCooldownMinutes": 360,
+        })
+
+        self.assertIn("핵심 판단 축 조합이 달라졌습니다", summary)
+        self.assertNotIn("subject=", summary)
+        self.assertNotIn("relationRuleIds=", summary)
+
     def test_watchlist_data_conflict_is_data_quality_signal(self):
         mixin = StrategyAlertMixin()
         signal_type = mixin.watchlist_ontology_signal_type({

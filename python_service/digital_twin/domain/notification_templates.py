@@ -31,6 +31,7 @@ from .notification_ontology_sections import (
     ontology_relation_contexts,
     ontology_rule_lines,
     rate_fact_line,
+    relation_axis_summary_lines,
     rule_value,
     source_fact_rows,
     telegram_block_from_lines,
@@ -362,11 +363,13 @@ def alert_context(event: AlertEvent) -> Dict[str, object]:
     data_rows = plain_data_rows(display_raw_lines)
     data_block = ("데이터\n" + data_rows) if data_rows else ""
     ontology_lines = ontology_rule_lines(metadata)
+    relation_axis_lines = relation_axis_summary_lines(metadata)
     ai_lines = ai_prompt_lines(metadata)
     ai_opinion_lines = notification_ai_opinion_lines(metadata)
     missing_lines = missing_data_lines(metadata)
     external_api_source_lines = notification_external_api_source_lines(metadata)
     ontology_block = block_from_lines("관계 규칙", ontology_lines)
+    relation_axis_block = block_from_lines("관계축 요약", relation_axis_lines)
     ai_opinion_block = block_from_lines("AI 의견", ai_opinion_lines)
     ai_prompt_block = ""
     missing_data_block = block_from_lines("부족 데이터", missing_lines)
@@ -379,6 +382,8 @@ def alert_context(event: AlertEvent) -> Dict[str, object]:
         readable_parts.extend(["", data_block])
     if ai_opinion_block:
         readable_parts.extend(["", ai_opinion_block])
+    if relation_axis_block:
+        readable_parts.extend(["", relation_axis_block])
     if ontology_block:
         readable_parts.extend(["", ontology_block])
     if ai_prompt_block:
@@ -394,6 +399,7 @@ def alert_context(event: AlertEvent) -> Dict[str, object]:
     telegram_trigger_rows = criterion_rows(criteria, True)
     telegram_data_lines = telegram_data_rows(display_raw_lines)
     telegram_ontology_block = telegram_block_from_lines("관계 규칙", ontology_lines)
+    telegram_relation_axis_block = telegram_block_from_lines("관계축 요약", relation_axis_lines)
     telegram_ai_opinion_block = telegram_block_from_lines("AI 의견", ai_opinion_lines)
     telegram_ai_prompt_block = ""
     telegram_missing_data_block = telegram_block_from_lines("부족 데이터", missing_lines)
@@ -406,6 +412,8 @@ def alert_context(event: AlertEvent) -> Dict[str, object]:
         telegram_parts.extend(["", "<b>데이터</b>", telegram_data_lines])
     if telegram_ai_opinion_block:
         telegram_parts.extend(["", telegram_ai_opinion_block])
+    if telegram_relation_axis_block:
+        telegram_parts.extend(["", telegram_relation_axis_block])
     if telegram_ontology_block:
         telegram_parts.extend(["", telegram_ontology_block])
     if telegram_ai_prompt_block:

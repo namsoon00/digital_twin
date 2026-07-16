@@ -31,6 +31,7 @@ from ..domain.notification_ai_gate_validation import (
 )
 from ..domain.notification_start_badge import labeled_message_start_badge
 from ..domain.notification_text_formatting import absolute_beginner_friendly_text, beginner_friendly_text
+from ..domain.notification_ontology_sections import relation_axis_summary_lines
 from .notification_message_metrics import _profit_loss_change_summary
 
 
@@ -200,7 +201,6 @@ ABSOLUTE_BEGINNER_LABEL_REPLACEMENTS = {
     "부족 데이터": "데이터 빈 곳",
     "검증 메모": "검증 결과",
 }
-
 
 def _annotate_term_once(text: str, term: str, hint: str) -> str:
     if term not in text:
@@ -943,6 +943,31 @@ def _collection_source_label(source: object, kind: object) -> str:
         return source_text
     return source_text + " / " + kind_text
 
+def _human_readable_cooldown_reason(value: object) -> str:
+    text = _clean_reason_text(value, 170)
+    if not text:
+        return ""
+    lowered = text.casefold()
+    if "subject=" in lowered or "relationruleids=" in lowered or "sourceeventkeys=" in lowered:
+        if "관계 경로 변경" in text or "관계 의미 경로 변경" in text:
+            return "관계 경로 변경: 핵심 판단 축 조합이 달라졌습니다."
+        return "관계 근거 조합이 바뀌었습니다."
+    if "새 뉴스/공시 원천 근거 추가" in text:
+        return "새 뉴스/공시 원천 근거가 추가됐습니다."
+    if "새 근거 신호 추가" in text:
+        readable = text
+        replacements = {
+            "holdingTiming": "보유 타이밍",
+            "watchlistOntologySignal": "관심종목 신호",
+            "externalDartDisclosure": "국내 공시",
+            "externalSecDisclosure": "해외 공시",
+            "researchEvidence": "뉴스·리서치",
+        }
+        for before, after in replacements.items():
+            readable = readable.replace(before, after)
+        return readable
+    return text
+
 
 def notification_cooldown_release_summary(context: Dict[str, object]) -> str:
     context = context or {}
@@ -952,7 +977,7 @@ def notification_cooldown_release_summary(context: Dict[str, object]) -> str:
     if not decision or decision == "cooldown":
         return ""
     cooldown_enabled = bool(context.get("honeyStateCooldownEnabled"))
-    reason = _clean_reason_text(context.get("honeyStateReason") or context.get("honeySimilarityBypassReason"), 150)
+    reason = _human_readable_cooldown_reason(context.get("honeyStateReason") or context.get("honeySimilarityBypassReason"))
     if not cooldown_enabled and not reason:
         return ""
     age = _number(context.get("honeyStateLastSentAgeMinutes"))
@@ -1173,6 +1198,9 @@ def compact_ai_opinion_rows(context: Dict[str, object], response: NotificationAI
     sentence = compact_ai_opinion_sentence(context, response, level)
     return [_html_bullet(sentence, level)] if sentence else []
 
+def relation_axis_summary_rows(context: Dict[str, object], level: str, limit: int = 5) -> List[str]:
+    return [_html_bullet(item, level) for item in relation_axis_summary_lines(context, limit) if str(item or "").strip()]
+
 
 def execution_telegram_message(context: Dict[str, object], response: NotificationAIValidatedResponse) -> str:
     level = delivery_level_from_context(context)
@@ -1216,6 +1244,9 @@ def execution_telegram_message(context: Dict[str, object], response: Notificatio
     ]
     if current_state_rows:
         parts.extend(["", "<b>현재 상태</b>", *current_state_rows])
+    axis_rows = relation_axis_summary_rows(context, level)
+    if axis_rows:
+        parts.extend(["", "<b>관계축 요약</b>", *axis_rows])
     api_source_rows = external_api_source_rows(context, MESSAGE_API_SOURCE_ROW_LIMIT)
     collection_rows = data_collection_time_rows(context, MESSAGE_DATA_COLLECTION_ROW_LIMIT)
     if api_source_rows or collection_rows:
@@ -1264,6 +1295,9 @@ def execution_telegram_message_absolute_beginner(context: Dict[str, object], res
     ]
     if current_state_rows:
         parts.extend(["", "<b>현재 상황</b>", *current_state_rows])
+    axis_rows = relation_axis_summary_rows(context, "absoluteBeginner")
+    if axis_rows:
+        parts.extend(["", "<b>판단에 쓴 큰 묶음</b>", *axis_rows])
     api_source_rows = external_api_source_rows(context, MESSAGE_API_SOURCE_ROW_LIMIT)
     collection_rows = data_collection_time_rows(context, MESSAGE_DATA_COLLECTION_ROW_LIMIT)
     if api_source_rows or collection_rows:

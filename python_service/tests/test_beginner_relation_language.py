@@ -4,8 +4,8 @@ from digital_twin.domain.investment_research import build_active_investment_opin
 from digital_twin.domain.notification_ai_gate_contracts import NotificationAIValidatedResponse
 from digital_twin.application.notification_ai_gate_message import execution_telegram_message
 from digital_twin.domain.notification_ontology_sections import ontology_rule_lines
-from digital_twin.domain.notification_templates import NotificationTemplate, render_notification
-from digital_twin.domain.portfolio import Position
+from digital_twin.domain.notification_templates import NotificationTemplate, alert_context, render_notification
+from digital_twin.domain.portfolio import AlertEvent, Position
 
 
 class BeginnerRelationLanguageTests(unittest.TestCase):
@@ -196,6 +196,117 @@ class BeginnerRelationLanguageTests(unittest.TestCase):
         self.assertIn("부족 5", message)
         self.assertIn("관계 강도(여러 근거가 같은 방향인지 보는 확인 필요 점수)", message)
         self.assertIn("RuleBox(관계 분석 규칙)", message)
+
+    def test_execution_message_includes_relation_axis_summary(self):
+        response = NotificationAIValidatedResponse(
+            action="TRIM",
+            action_label="분할축소",
+            confidence=74,
+            summary="손실과 가격 흐름을 함께 봐 일부 줄이는 판단입니다.",
+            evidence=["20일 평균보다 낮음"],
+            counter_evidence=["외국인·기관 순매수"],
+            next_checks=["20일 평균 회복 여부 확인"],
+        )
+
+        message = execution_telegram_message(
+            {
+                "messageType": "investmentInsight",
+                "messageDeliveryLevel": "beginner",
+                "title": "SK하이닉스 알림",
+                "target": "SK하이닉스 / 000660",
+                "displayTarget": "SK하이닉스 / 000660",
+                "ontologyRelationContext": {
+                    "executionPlan": {
+                        "decisionDrivers": [
+                            {
+                                "category": "trend",
+                                "direction": "risk",
+                                "importance": 91,
+                                "summary": "현재가가 20일 평균보다 12.9% 낮아 최근 가격 흐름이 약합니다.",
+                            },
+                            {
+                                "category": "investorFlow",
+                                "direction": "counter",
+                                "importance": 82,
+                                "summary": "외국인과 기관 합산 흐름은 순매수 1,362,211주입니다.",
+                            },
+                            {
+                                "category": "research",
+                                "direction": "risk",
+                                "importance": 76,
+                                "summary": "새 공시가 있어 원문 조건과 가격 반응을 함께 확인해야 합니다.",
+                            },
+                        ]
+                    },
+                    "activeRules": [
+                        {
+                            "ruleId": "graph.strategy_profile.loss_tolerance_breach.v1",
+                            "label": "계정 손실 관리 기준 초과",
+                            "strengthScore": 86,
+                        }
+                    ],
+                },
+            },
+            response,
+        )
+
+        self.assertIn("<b>관계축 요약</b>", message)
+        self.assertIn("가격 회복·약화", message)
+        self.assertIn("수급 심리", message)
+        self.assertIn("뉴스·공시", message)
+        self.assertIn("투자 성향·정책", message)
+        self.assertIn("20일 평균보다 12.9%", message)
+
+    def test_template_message_includes_relation_axis_summary(self):
+        event = AlertEvent(
+            "main",
+            "메인",
+            "WATCH",
+            "investmentInsight",
+            "main:insight:000660",
+            "SK하이닉스",
+            [
+                "현재가: 2,118,000원",
+                "수익률: -9.6%",
+                "상태: 분할축소 우선 점검",
+            ],
+            symbol="000660",
+            metadata={
+                "ontologyRelationContext": {
+                    "executionPlan": {
+                        "decisionDrivers": [
+                            {
+                                "category": "trend",
+                                "direction": "risk",
+                                "importance": 91,
+                                "summary": "현재가가 20일 평균보다 12.9% 낮아 최근 가격 흐름이 약합니다.",
+                            },
+                            {
+                                "category": "investorFlow",
+                                "direction": "counter",
+                                "importance": 82,
+                                "summary": "외국인과 기관 합산 흐름은 순매수 1,362,211주입니다.",
+                            },
+                        ]
+                    },
+                    "activeRules": [
+                        {
+                            "ruleId": "graph.strategy_profile.loss_tolerance_breach.v1",
+                            "label": "계정 손실 관리 기준 초과",
+                            "strengthScore": 86,
+                        }
+                    ],
+                }
+            },
+        )
+
+        message = render_notification(NotificationTemplate("investmentInsight", "{telegramMessage}"), alert_context(event))
+
+        self.assertIn("<b>관계축 요약</b>", message)
+        self.assertIn("가격 회복·약화", message)
+        self.assertIn("수급 심리", message)
+        self.assertIn("투자 성향·정책", message)
+        self.assertIn("20일 평균보다 12.9%", message)
 
     def test_absolute_beginner_relation_block_uses_plain_language(self):
         message = render_notification(

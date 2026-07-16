@@ -50,6 +50,15 @@ DATA_COLLECTION_TIME_KEYS = [
     "publishedAt",
     "checkedAt",
 ]
+DATA_COLLECTION_FETCHED_TIME_KEYS = [
+    "sourceFetchedAt",
+    "fetchedAt",
+    "collectedAt",
+    "updatedAt",
+    "observedAt",
+    "checkedAt",
+]
+DATA_COLLECTION_BASIS_TIME_KEYS = ["sourceAsOf", "asOf", "publishedAt"]
 
 DATA_COLLECTION_SOURCE_KEYS = ["provider", "source", "domain", "quoteSource", "sourceName"]
 DATA_COLLECTION_DETAIL_KEYS = ["symbol", "title", "seriesId", "eventType", "field", "dataScope", "messageType"]
@@ -110,6 +119,28 @@ DATA_COLLECTION_FIELD_LABELS = {
     "institutionSellVolume": "기관 매도",
     "individualBuyVolume": "개인 매수",
     "individualSellVolume": "개인 매도",
+}
+DATA_COLLECTION_FRESHNESS_LABELS = {
+    "realtime": "실시간",
+    "near-live": "준실시간",
+    "reference-only": "참고용",
+    "reference-repeat": "반복 참고값",
+    "stale-repeat": "반복 지연",
+    "delayed-or-batched": "지연/배치 가능",
+    "stale": "노후",
+    "unknown": "미확인",
+    "unavailable": "사용 불가",
+}
+DATA_COLLECTION_TRANSPORT_LABELS = {
+    "websocket": "WebSocket",
+    "rest": "REST",
+    "http": "REST",
+}
+DATA_COLLECTION_SOURCE_AS_OF_CONFIDENCE_LABELS = {
+    "exchange-tick": "거래소 틱 기준",
+    "provider-timestamp": "제공 기준시각",
+    "business-date-only": "영업일자 기준",
+    "queried-at-fallback": "조회시각 기준",
 }
 
 ABSOLUTE_BEGINNER_TERM_REPLACEMENTS = [
@@ -494,23 +525,48 @@ def data_collection_time_rows(context: Dict[str, object], limit: int = MESSAGE_D
     rows: List[str] = []
     seen = set()
 
-    def add(label: object, value: object, suffix: object = "", kind: object = "", query_info: object = "") -> None:
+    def add(
+        label: object,
+        value: object,
+        suffix: object = "",
+        kind: object = "",
+        query_info: object = "",
+        source_as_of: object = "",
+        transport: object = "",
+        freshness_status: object = "",
+        ai_usable_as_strong_evidence: object = None,
+        source_as_of_confidence: object = "",
+    ) -> None:
         if len(rows) >= limit:
             return
         stamp = _format_kst_timestamp(value)
         if not stamp:
             return
+        basis_stamp = _format_kst_timestamp(source_as_of)
         source = _collection_source_label(label, kind)
         detail = _text(str(suffix or "").strip(), 72)
         info = _text(str(query_info or kind or "API 데이터").strip(), 110)
         parts = []
         if info:
             parts.append("조회 정보 " + info)
+        transport_label = DATA_COLLECTION_TRANSPORT_LABELS.get(str(transport or "").strip().lower(), str(transport or "").strip())
+        if transport_label:
+            parts.append("전송 " + transport_label)
         parts.append("조회시각 " + stamp)
+        if basis_stamp:
+            parts.append("기준시각 " + basis_stamp)
+        freshness_label = DATA_COLLECTION_FRESHNESS_LABELS.get(str(freshness_status or "").strip().lower(), str(freshness_status or "").strip())
+        if freshness_label:
+            parts.append("품질 " + freshness_label)
+        confidence_label = DATA_COLLECTION_SOURCE_AS_OF_CONFIDENCE_LABELS.get(str(source_as_of_confidence or "").strip().lower(), str(source_as_of_confidence or "").strip())
+        if confidence_label:
+            parts.append("기준 " + confidence_label)
+        if ai_usable_as_strong_evidence is False:
+            parts.append("AI 강근거 제외")
         if detail:
             parts.append(detail)
         text = source + ": " + " · ".join(parts)
-        key = re.sub(r"\s+", " ", source + "|" + info + "|" + stamp + "|" + detail).strip().lower()
+        key = re.sub(r"\s+", " ", source + "|" + info + "|" + stamp + "|" + basis_stamp + "|" + detail).strip().lower()
         if key in seen:
             return
         seen.add(key)
@@ -538,6 +594,11 @@ def data_collection_time_rows(context: Dict[str, object], limit: int = MESSAGE_D
             " · ".join(part for part in detail_parts if part),
             _collection_text_for_kind(freshness, source),
             _collection_query_info(freshness, source),
+            source_as_of=freshness.get("sourceAsOf"),
+            transport=freshness.get("transport"),
+            freshness_status=freshness.get("freshnessStatus") or freshness.get("status"),
+            ai_usable_as_strong_evidence=freshness.get("aiUsableAsStrongEvidence"),
+            source_as_of_confidence=freshness.get("sourceAsOfConfidence"),
         )
 
     roots = [
@@ -571,16 +632,24 @@ def data_collection_time_rows(context: Dict[str, object], limit: int = MESSAGE_D
             )
             if not source_stamp and not any(value.get(key) for key in DATA_COLLECTION_SOURCE_KEYS):
                 return
-        stamp = next((value.get(key) for key in DATA_COLLECTION_TIME_KEYS if value.get(key)), "")
+        stamp = next((value.get(key) for key in DATA_COLLECTION_FETCHED_TIME_KEYS if value.get(key)), "")
+        if not stamp:
+            stamp = next((value.get(key) for key in DATA_COLLECTION_TIME_KEYS if value.get(key)), "")
         if stamp:
             source = next((value.get(key) for key in DATA_COLLECTION_SOURCE_KEYS if value.get(key)), "")
             detail = next((value.get(key) for key in DATA_COLLECTION_DETAIL_KEYS if value.get(key)), "")
+            source_as_of = next((value.get(key) for key in DATA_COLLECTION_BASIS_TIME_KEYS if value.get(key)), "")
             add(
                 source or value.get("kind") or value.get("type") or "API 데이터",
                 stamp,
                 detail,
                 _collection_text_for_kind(value, source, detail),
                 _collection_query_info(value, source, detail),
+                source_as_of=source_as_of,
+                transport=value.get("transport"),
+                freshness_status=value.get("freshnessStatus") or value.get("latencyStatus") or value.get("status"),
+                ai_usable_as_strong_evidence=value.get("aiUsableAsStrongEvidence"),
+                source_as_of_confidence=value.get("sourceAsOfConfidence"),
             )
         for child in value.values():
             if isinstance(child, (dict, list)):

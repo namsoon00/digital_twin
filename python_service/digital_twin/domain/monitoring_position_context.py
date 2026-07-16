@@ -477,6 +477,9 @@ class MonitoringPositionContextMixin:
             reason = str(investor.get("staleReason") or investor.get("reason") or "").strip()
             return "신선도 주의" + (" - " + reason if reason else "")
         latency_label = str(investor.get("latencyLabel") or "").strip()
+        if investor.get("aiUsableAsStrongEvidence") is False:
+            reason = str(investor.get("latencyReason") or investor.get("reason") or "").strip()
+            return (latency_label or "KIS 투자자 수급 참고용") + " · AI 강근거 제외" + ((" · " + reason) if reason else "")
         if investor.get("realTime") is False or latency_label:
             return (latency_label or "장중 누적·지연 가능") + " · 현재가·호가와 같은 실시간 체결 데이터 아님"
         if investor.get("unchangedCount") not in (None, "", 0):

@@ -81,6 +81,7 @@ INVESTOR_RAW_KEYS = [
 ]
 INVESTOR_DELAYED_LABEL = "KIS 투자자 수급 지연 가능"
 INVESTOR_DELAYED_REASON = "KIS 투자자별 수급이 캐시·반복값·노후값으로 판정되어 실시간 근거로 쓰지 않습니다."
+INVESTOR_REST_REFERENCE_REASON = "KIS 투자자별 수급은 REST 조회값이며 원천의 초단위 실시간 기준시각이 제공되지 않아 강한 판단 근거로 쓰지 않습니다."
 
 JsonFetcher = Callable[[str, str, Dict[str, str], Optional[Dict[str, object]], Optional[Dict[str, str]], int], Dict[str, object]]
 
@@ -160,6 +161,53 @@ def has_raw_value(payload: Dict[str, object], keys: Iterable[str]) -> bool:
     return False
 
 
+def kst_business_date_iso(value: object, time_value: object = "") -> str:
+    text = str(value or "").strip()
+    if not text:
+        return ""
+    digits = "".join(ch for ch in text if ch.isdigit())
+    if len(digits) < 8:
+        return ""
+    date = digits[:8]
+    time_digits = "".join(ch for ch in str(time_value or "").strip() if ch.isdigit())
+    if len(time_digits) >= 6:
+        hhmmss = time_digits[:6]
+    else:
+        hhmmss = "000000"
+    return (
+        date[:4]
+        + "-"
+        + date[4:6]
+        + "-"
+        + date[6:8]
+        + "T"
+        + hhmmss[:2]
+        + ":"
+        + hhmmss[2:4]
+        + ":"
+        + hhmmss[4:6]
+        + "+09:00"
+    )
+
+
+def stage_source_as_of(stage: str, raw_payload, fetched_at: str) -> Tuple[str, str]:
+    if stage != "investor":
+        return fetched_at, "provider-timestamp"
+    rows = raw_payload if isinstance(raw_payload, list) else [raw_payload] if isinstance(raw_payload, dict) else []
+    for row in rows:
+        if not isinstance(row, dict):
+            continue
+        source_as_of = kst_business_date_iso(
+            row.get("stck_bsop_date") or row.get("bsop_date"),
+            row.get("stck_bsop_hour") or row.get("bsop_hour"),
+        )
+        if source_as_of:
+            if source_as_of.endswith("00:00:00+09:00"):
+                return source_as_of, "business-date-only"
+            return source_as_of, "provider-timestamp"
+    return fetched_at, "queried-at-fallback"
+
+
 def merge_if_present(target: Dict[str, object], source: Dict[str, object]) -> Dict[str, object]:
     for key, value in source.items():
         if value not in (None, ""):
@@ -200,6 +248,9 @@ def stage_coverage(
     source_as_of: str = "",
     session: Dict[str, object] = None,
     real_time: bool = False,
+    transport: str = "rest",
+    source_as_of_confidence: str = "",
+    ai_usable_as_strong_evidence: Optional[bool] = None,
 ) -> Dict[str, object]:
     session = session or {}
     fields = sorted([
@@ -224,16 +275,30 @@ def stage_coverage(
         payload["fetchedAt"] = fetched_at
     if source_as_of:
         payload["sourceAsOf"] = source_as_of
+    payload["transport"] = str(transport or "rest")
+    if source_as_of_confidence:
+        payload["sourceAsOfConfidence"] = str(source_as_of_confidence)
+    if ai_usable_as_strong_evidence is not None:
+        payload["aiUsableAsStrongEvidence"] = bool(ai_usable_as_strong_evidence)
+    if payload["status"] == "available":
+        if stage == "investor" and ai_usable_as_strong_evidence is False:
+            payload["freshnessStatus"] = "reference-only"
+        elif real_time:
+            payload["freshnessStatus"] = "realtime"
+        else:
+            payload["freshnessStatus"] = "near-live"
     if session:
         payload["marketSession"] = str(session.get("key") or "")
         payload["marketSessionLabel"] = str(session.get("label") or "")
     if stage == "investor" and status == "available":
         payload["realTime"] = bool(real_time)
-        payload["cadence"] = "live-poll" if real_time else "cached-or-delayed"
+        payload["cadence"] = "live-poll" if real_time else "rest-reference"
         if not real_time:
             payload["latencyStatus"] = "delayed-or-batched"
             payload["latencyLabel"] = INVESTOR_DELAYED_LABEL
-            payload["latencyReason"] = INVESTOR_DELAYED_REASON
+            payload["latencyReason"] = INVESTOR_REST_REFERENCE_REASON
+            payload["aiUsableAsStrongEvidence"] = False
+            payload["freshnessStatus"] = "reference-only"
     return payload
 
 
@@ -243,6 +308,9 @@ def unavailable_stage_coverage(stage: str, session: Dict[str, object]) -> Dict[s
         "status": "unavailable",
         "fields": [],
         "nonZeroFields": [],
+        "transport": "rest",
+        "freshnessStatus": "unavailable",
+        "aiUsableAsStrongEvidence": False,
         "reason": str(session.get("reason") or "정규장 시작 전이라 장중 수급 신호를 사용하지 않습니다."),
         "marketSession": str(session.get("key") or ""),
         "marketSessionLabel": str(session.get("label") or ""),
@@ -300,10 +368,10 @@ def merge_fresh_websocket_stages(
     if used:
         merged["marketSignalCoverage"] = coverage
         merged["quoteSource"] = append_source(merged.get("quoteSource"), "KIS WebSocket")
-        merged["quoteStatus"] = "KIS 실시간 체결·호가 + 투자자 수급 반영"
+        merged["quoteStatus"] = "KIS 실시간 체결·호가 반영"
         merged["quoteMessage"] = append_message(
             merged.get("quoteMessage"),
-            "신선한 KIS WebSocket 체결·호가를 REST 투자자 수급과 병합했습니다.",
+            "신선한 KIS WebSocket 체결·호가를 REST 투자자 수급 참고값과 병합했습니다.",
         )
     return merged
 
@@ -316,9 +384,34 @@ def investor_stage_values_reliable(coverage: Dict[str, object]) -> bool:
     latency_status = str(item.get("latencyStatus") or "").strip()
     if status in {"stale", "unknown", "unavailable", "missing", "empty"}:
         return False
+    if item.get("aiUsableAsStrongEvidence") is False:
+        return False
+    if int(number(item.get("unchangedCount")) or 0) > 0:
+        return False
     if item.get("realTime") is False or latency_status or str(item.get("cadence") or "") == "stale-repeat":
         return False
     return True
+
+
+def remove_unreliable_investor_values(signal: Dict[str, object], strip_values: bool = False) -> Dict[str, object]:
+    coverage = signal.get("marketSignalCoverage") if isinstance(signal.get("marketSignalCoverage"), dict) else {}
+    investor = coverage.get("investor") if isinstance(coverage.get("investor"), dict) else {}
+    if not investor or investor_stage_values_reliable(coverage):
+        return signal
+    if strip_values:
+        for key in INVESTOR_SIGNAL_KEYS:
+            signal.pop(key, None)
+    reason = str(
+        investor.get("latencyReason")
+        or investor.get("staleReason")
+        or investor.get("reason")
+        or INVESTOR_DELAYED_REASON
+    )
+    signal["quoteMessage"] = append_message(
+        signal.get("quoteMessage"),
+        "KIS 투자자별 수급은 최신 실시간 값으로 확인되지 않아 수치 근거에서 제외했습니다. " + reason,
+    )
+    return signal
 
 
 def comparable_stage_values(payload: Dict[str, object], keys: Iterable[str]) -> Dict[str, float]:
@@ -691,6 +784,12 @@ class KISMarketSignalProvider:
                 next_item["unchangedCount"] = unchanged_count
                 next_item["unchangedFields"] = sorted(comparable_keys)
                 next_item["reason"] = "장중 이전 조회와 같은 값 " + str(unchanged_count) + "회 연속"
+                if stage == "investor":
+                    next_item["aiUsableAsStrongEvidence"] = False
+                    next_item["freshnessStatus"] = "reference-repeat"
+                    next_item["latencyStatus"] = "unchanged-repeat"
+                    next_item["latencyLabel"] = INVESTOR_DELAYED_LABEL
+                    next_item["latencyReason"] = "KIS 투자자별 수급이 이전 조회와 같아 실시간 변화 신호로 쓰지 않습니다."
                 if stage != "price" and unchanged_count >= stale_threshold:
                     next_item["status"] = "stale"
                     if stage == "investor":
@@ -698,6 +797,7 @@ class KISMarketSignalProvider:
                         next_item["cadence"] = "stale-repeat"
                         next_item["latencyStatus"] = "stale"
                         next_item["latencyLabel"] = INVESTOR_DELAYED_LABEL
+                        next_item["freshnessStatus"] = "stale-repeat"
                     next_item["staleReason"] = "장중 같은 " + stage + " 값이 " + str(unchanged_count) + "회 연속 반복되어 지연 가능성이 있습니다."
             else:
                 next_item["unchangedCount"] = 0
@@ -710,7 +810,7 @@ class KISMarketSignalProvider:
             included.append("체결강도")
         if coverage_has_fields(coverage, "ccnl", ["buyVolume", "sellVolume"]):
             included.append("방향별 체결량")
-        if coverage_has_fields(coverage, "investor", INVESTOR_SIGNAL_KEYS):
+        if coverage_has_fields(coverage, "investor", INVESTOR_SIGNAL_KEYS) and investor_stage_values_reliable(coverage):
             included.append("투자자별 수급")
         if coverage_has_fields(coverage, "orderbook", ["orderbookBidVolume", "orderbookAskVolume"]):
             included.append("호가 잔량")
@@ -718,13 +818,7 @@ class KISMarketSignalProvider:
             included_text = ", ".join(included)
             signal["quoteStatus"] = "KIS " + included_text + " 반영"
             signal["quoteMessage"] = "KIS " + included_text + "을 모델링 데이터에 반영했습니다."
-        investor = coverage.get("investor") if isinstance(coverage.get("investor"), dict) else {}
-        if investor and not investor_stage_values_reliable(coverage):
-            for key in INVESTOR_SIGNAL_KEYS:
-                signal.pop(key, None)
-            reason = str(investor.get("staleReason") or investor.get("reason") or investor.get("latencyReason") or INVESTOR_DELAYED_REASON)
-            signal["quoteMessage"] = append_message(signal.get("quoteMessage"), "KIS 투자자별 수급은 최신 실시간 값으로 확인되지 않아 수치 근거에서 제외했습니다. " + reason)
-        return signal
+        return remove_unreliable_investor_values(signal)
 
     def save_signal(self, symbol: str, payload: Dict[str, object]) -> None:
         try:
@@ -769,44 +863,55 @@ class KISMarketSignalProvider:
             if not microstructure_available:
                 normalized_price.pop("foreignNetVolume", None)
             merge_if_present(signal, normalized_price)
+            price_as_of, price_as_of_confidence = stage_source_as_of("price", price, fetched_at)
             coverage["price"] = stage_coverage(
                 "price",
                 price,
                 normalized_price,
                 ["currentPrice", "changeRate", "volume", "volumeRatio", "tradingValue", "foreignNetVolume"],
                 fetched_at=fetched_at,
-                source_as_of=fetched_at,
+                source_as_of=price_as_of,
+                source_as_of_confidence=price_as_of_confidence,
                 session=session,
+                transport="rest",
+                ai_usable_as_strong_evidence=True,
             )
         else:
             coverage["price"] = stage_coverage("price", price, {}, ["currentPrice"], fetched_at=fetched_at, session=session)
         if isinstance(ccnl, list):
             normalized_ccnl = normalize_ccnl(ccnl)
             merge_if_present(signal, normalized_ccnl)
-            coverage["ccnl"] = stage_coverage("ccnl", ccnl, normalized_ccnl, ["tradeStrength", "buyVolume", "sellVolume"], fetched_at=fetched_at, source_as_of=fetched_at, session=session)
+            ccnl_as_of, ccnl_as_of_confidence = stage_source_as_of("ccnl", ccnl, fetched_at)
+            coverage["ccnl"] = stage_coverage("ccnl", ccnl, normalized_ccnl, ["tradeStrength", "buyVolume", "sellVolume"], fetched_at=fetched_at, source_as_of=ccnl_as_of, source_as_of_confidence=ccnl_as_of_confidence, session=session, transport="rest", ai_usable_as_strong_evidence=True)
         else:
             coverage["ccnl"] = unavailable_stage_coverage("ccnl", session) if not microstructure_available else stage_coverage("ccnl", ccnl, {}, ["tradeStrength", "buyVolume", "sellVolume"], fetched_at=fetched_at, session=session)
         if isinstance(investor, list):
             normalized_investor = normalize_investor(investor)
             merge_if_present(signal, normalized_investor)
-            coverage["investor"] = stage_coverage("investor", investor, normalized_investor, INVESTOR_SIGNAL_KEYS, fetched_at=fetched_at, source_as_of=fetched_at, session=session, real_time=microstructure_available)
+            investor_as_of, investor_as_of_confidence = stage_source_as_of("investor", investor, fetched_at)
+            coverage["investor"] = stage_coverage("investor", investor, normalized_investor, INVESTOR_SIGNAL_KEYS, fetched_at=fetched_at, source_as_of=investor_as_of, source_as_of_confidence=investor_as_of_confidence, session=session, real_time=False, transport="rest", ai_usable_as_strong_evidence=False)
         elif isinstance(investor, dict):
             normalized_investor = normalize_investor([investor])
             merge_if_present(signal, normalized_investor)
-            coverage["investor"] = stage_coverage("investor", investor, normalized_investor, INVESTOR_SIGNAL_KEYS, fetched_at=fetched_at, source_as_of=fetched_at, session=session, real_time=microstructure_available)
+            investor_as_of, investor_as_of_confidence = stage_source_as_of("investor", investor, fetched_at)
+            coverage["investor"] = stage_coverage("investor", investor, normalized_investor, INVESTOR_SIGNAL_KEYS, fetched_at=fetched_at, source_as_of=investor_as_of, source_as_of_confidence=investor_as_of_confidence, session=session, real_time=False, transport="rest", ai_usable_as_strong_evidence=False)
         else:
             coverage["investor"] = unavailable_stage_coverage("investor", session) if not microstructure_available else stage_coverage("investor", investor, {}, INVESTOR_SIGNAL_KEYS, fetched_at=fetched_at, session=session)
         if isinstance(orderbook, dict):
             normalized_orderbook = normalize_orderbook(orderbook)
             merge_if_present(signal, normalized_orderbook)
+            orderbook_as_of, orderbook_as_of_confidence = stage_source_as_of("orderbook", orderbook, fetched_at)
             coverage["orderbook"] = stage_coverage(
                 "orderbook",
                 orderbook,
                 normalized_orderbook,
                 ["orderbookBidVolume", "orderbookAskVolume", "bidAskImbalance"],
                 fetched_at=fetched_at,
-                source_as_of=fetched_at,
+                source_as_of=orderbook_as_of,
+                source_as_of_confidence=orderbook_as_of_confidence,
                 session=session,
+                transport="rest",
+                ai_usable_as_strong_evidence=True,
             )
         else:
             coverage["orderbook"] = unavailable_stage_coverage("orderbook", session) if not microstructure_available else stage_coverage("orderbook", orderbook, {}, ["orderbookBidVolume", "orderbookAskVolume", "bidAskImbalance"], fetched_at=fetched_at, session=session)
@@ -826,6 +931,8 @@ class KISMarketSignalProvider:
         signal["updatedAt"] = fetched_at
         signal = merge_fresh_websocket_stages(signal, self.cached_signal(symbol), max(10, self.live_refresh_seconds() * 2))
         coverage = signal.get("marketSignalCoverage") if isinstance(signal.get("marketSignalCoverage"), dict) else coverage
+        signal = remove_unreliable_investor_values(signal)
+        coverage = signal.get("marketSignalCoverage") if isinstance(signal.get("marketSignalCoverage"), dict) else coverage
         included = []
         if coverage_has_fields(coverage, "price", ["currentPrice"]):
             included.append("현재가")
@@ -833,13 +940,13 @@ class KISMarketSignalProvider:
             included.append("체결강도")
         if coverage_has_fields(coverage, "ccnl", ["buyVolume", "sellVolume"]):
             included.append("방향별 체결량")
-        if coverage_has_fields(coverage, "investor", INVESTOR_SIGNAL_KEYS):
+        if coverage_has_fields(coverage, "investor", INVESTOR_SIGNAL_KEYS) and investor_stage_values_reliable(coverage):
             included.append("투자자별 수급")
         if coverage_has_fields(coverage, "orderbook", ["orderbookBidVolume", "orderbookAskVolume"]):
             included.append("호가 잔량")
         included_text = ", ".join(included) if included else "응답 데이터"
         if "KIS WebSocket" in str(signal.get("quoteSource") or ""):
-            signal["quoteStatus"] = "KIS 실시간 체결·호가 + 투자자 수급 반영"
+            signal["quoteStatus"] = "KIS 실시간 체결·호가 반영"
             signal["quoteMessage"] = append_message(
                 signal.get("quoteMessage"),
                 "KIS " + included_text + "을 모델링 데이터에 반영했습니다.",
@@ -849,6 +956,7 @@ class KISMarketSignalProvider:
             signal["quoteMessage"] = "KIS " + included_text + "을 모델링 데이터에 반영했습니다."
         if not microstructure_available:
             signal["quoteMessage"] = str(session.get("reason") or "") or signal["quoteMessage"]
+        signal = remove_unreliable_investor_values(signal)
         return signal
 
     def symbols_for_positions(self, positions: Iterable[Position]) -> List[str]:

@@ -576,6 +576,10 @@ def _availability_with_coverage(status: str, source: str, coverage: Dict[str, ob
     stage_item = _coverage_item(coverage, stage)
     for key in [
         "realTime",
+        "transport",
+        "freshnessStatus",
+        "sourceAsOfConfidence",
+        "aiUsableAsStrongEvidence",
         "cadence",
         "latencyStatus",
         "latencyLabel",
@@ -899,6 +903,7 @@ def position_signal_facts(
     ).strip()
     if expects_kr_signals and investor_flow_status in {"available", "stale", "unknown"} and (
         investor_coverage.get("realTime") is False
+        or investor_coverage.get("aiUsableAsStrongEvidence") is False
         or investor_latency
         or investor_flow_status in {"stale", "unknown"}
     ):
@@ -932,7 +937,7 @@ def position_signal_facts(
             effect = "투자자별 수급 응답은 있었지만 외국인·기관·개인 순매수 합계가 0으로 들어와 방향성 근거로 쓰지 않습니다."
         elif investor_flow_status == "empty":
             effect = "KIS 투자자 단계 응답이 비어 있어 주체별 수급은 중립으로 처리합니다."
-        elif investor_coverage.get("realTime") is False or investor_latency or investor_flow_status in {"stale", "unknown"}:
+        elif investor_coverage.get("realTime") is False or investor_coverage.get("aiUsableAsStrongEvidence") is False or investor_latency or investor_flow_status in {"stale", "unknown"}:
             effect = investor_latency_reason or "KIS 투자자별 수급이 지연·반복값으로 판정되어 주체별 수급은 중립으로 처리합니다."
             missing.append(_missing("investorFlow", "투자자별 수급", effect, investor_flow_status if investor_flow_status in {"stale", "unknown"} else "latency", "KIS investor"))
             effect = ""

@@ -393,6 +393,7 @@ def add_market_signal_latency_concepts(graph: PortfolioOntology, stock_id: str, 
     latency_status = str(investor.get("latencyStatus") or "").strip()
     if not (
         investor.get("realTime") is False
+        or investor.get("aiUsableAsStrongEvidence") is False
         or latency_status
         or status in {"stale", "unknown"}
     ):
@@ -410,6 +411,10 @@ def add_market_signal_latency_concepts(graph: PortfolioOntology, stock_id: str, 
         "stage": "investor",
         "status": status,
         "realTime": bool(investor.get("realTime")) if "realTime" in investor else None,
+        "transport": str(investor.get("transport") or ""),
+        "freshnessStatus": str(investor.get("freshnessStatus") or ""),
+        "sourceAsOfConfidence": str(investor.get("sourceAsOfConfidence") or ""),
+        "aiUsableAsStrongEvidence": bool(investor.get("aiUsableAsStrongEvidence")) if "aiUsableAsStrongEvidence" in investor else None,
         "cadence": str(investor.get("cadence") or ""),
         "latencyStatus": latency_status,
         "latencyLabel": str(investor.get("latencyLabel") or "투자자별 수급 지연 가능"),

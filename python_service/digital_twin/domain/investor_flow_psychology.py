@@ -13,6 +13,10 @@ def investor_flow_values_reliable(position: Position) -> bool:
     latency_status = str(investor.get("latencyStatus") or "").strip()
     if status in {"stale", "unknown", "unavailable", "missing", "empty"}:
         return False
+    if investor.get("aiUsableAsStrongEvidence") is False:
+        return False
+    if number(investor.get("unchangedCount")):
+        return False
     if investor.get("realTime") is False or latency_status or str(investor.get("cadence") or "") == "stale-repeat":
         return False
     return True

@@ -861,6 +861,7 @@ class PythonServiceTests(unittest.TestCase):
             if path.endswith("/inquire-investor"):
                 return {"rt_cd": "0", "output": [
                     {
+                        "stck_bsop_date": "20260707",
                         "prsn_ntby_qty": "",
                         "frgn_ntby_qty": "",
                         "orgn_ntby_qty": "",
@@ -872,6 +873,7 @@ class PythonServiceTests(unittest.TestCase):
                         "orgn_seln_vol": "",
                     },
                     {
+                        "stck_bsop_date": "20260707",
                         "prsn_ntby_qty": "-400",
                         "frgn_ntby_qty": "700",
                         "orgn_ntby_qty": "300",
@@ -925,22 +927,26 @@ class PythonServiceTests(unittest.TestCase):
         self.assertEqual(3000, enriched.orderbook_ask_volume)
         self.assertEqual(50, enriched.bid_ask_imbalance)
         self.assertEqual(1.85, enriched.volume_ratio)
-        self.assertEqual(700, enriched.foreign_net_volume)
-        self.assertEqual(1300, enriched.foreign_buy_volume)
-        self.assertEqual(600, enriched.foreign_sell_volume)
-        self.assertEqual(300, enriched.institution_net_volume)
-        self.assertEqual(-400, enriched.individual_net_volume)
+        self.assertEqual(0, enriched.foreign_net_volume)
+        self.assertEqual(0, enriched.foreign_buy_volume)
+        self.assertEqual(0, enriched.foreign_sell_volume)
+        self.assertEqual(0, enriched.institution_net_volume)
+        self.assertEqual(0, enriched.individual_net_volume)
         self.assertIn("KIS Open API", enriched.quote_source)
         self.assertEqual("actual", enriched.data_quality)
         self.assertEqual(0, untouched.current_price)
         self.assertEqual(700, cached["foreignNetVolume"])
         self.assertEqual(50, cached["bidAskImbalance"])
         self.assertEqual("available", enriched.market_signal_coverage["investor"]["status"])
-        self.assertIs(True, enriched.market_signal_coverage["investor"]["realTime"])
-        self.assertEqual("live-poll", enriched.market_signal_coverage["investor"]["cadence"])
-        self.assertNotIn("latencyStatus", enriched.market_signal_coverage["investor"])
+        self.assertIs(False, enriched.market_signal_coverage["investor"]["realTime"])
+        self.assertEqual("rest-reference", enriched.market_signal_coverage["investor"]["cadence"])
+        self.assertEqual("reference-only", enriched.market_signal_coverage["investor"]["freshnessStatus"])
+        self.assertEqual("business-date-only", enriched.market_signal_coverage["investor"]["sourceAsOfConfidence"])
+        self.assertEqual("2026-07-07T00:00:00+09:00", enriched.market_signal_coverage["investor"]["sourceAsOf"])
+        self.assertIs(False, enriched.market_signal_coverage["investor"]["aiUsableAsStrongEvidence"])
+        self.assertEqual("delayed-or-batched", enriched.market_signal_coverage["investor"]["latencyStatus"])
         self.assertEqual("available", cached["marketSignalCoverage"]["investor"]["status"])
-        self.assertIs(True, cached["marketSignalCoverage"]["investor"]["realTime"])
+        self.assertIs(False, cached["marketSignalCoverage"]["investor"]["realTime"])
         self.assertEqual(["/oauth2/tokenP", "/uapi/domestic-stock/v1/quotations/inquire-price", "/uapi/domestic-stock/v1/quotations/inquire-ccnl", "/uapi/domestic-stock/v1/quotations/inquire-investor", "/uapi/domestic-stock/v1/quotations/inquire-asking-price-exp-ccn"], [item[1] for item in calls])
 
     def test_kis_market_signal_provider_does_not_treat_price_foreign_zero_as_investor_flow(self):
@@ -1214,6 +1220,7 @@ class PythonServiceTests(unittest.TestCase):
                 return {"rt_cd": "0", "output": [{"stck_prpr": "72000", "tday_rltv": "118.5", "total_shnu_qty": "900", "total_seln_qty": "700"}]}
             if path.endswith("/inquire-investor"):
                 return {"rt_cd": "0", "output": {
+                    "stck_bsop_date": "20260707",
                     "frgn_ntby_qty": "700",
                     "orgn_ntby_qty": "300",
                     "prsn_ntby_qty": "-400",
@@ -1247,12 +1254,14 @@ class PythonServiceTests(unittest.TestCase):
         self.assertEqual(118.5, positions[0].trade_strength)
         self.assertEqual(900, positions[0].buy_volume)
         self.assertEqual(700, positions[0].sell_volume)
-        self.assertEqual(700, positions[0].foreign_net_volume)
-        self.assertEqual(300, positions[0].institution_net_volume)
-        self.assertEqual(-400, positions[0].individual_net_volume)
-        self.assertEqual(210000000, positions[0].foreign_net_amount)
-        self.assertEqual(90000000, positions[0].institution_net_amount)
-        self.assertEqual(-120000000, positions[0].individual_net_amount)
+        self.assertEqual(0, positions[0].foreign_net_volume)
+        self.assertEqual(0, positions[0].institution_net_volume)
+        self.assertEqual(0, positions[0].individual_net_volume)
+        self.assertEqual(0, positions[0].foreign_net_amount)
+        self.assertEqual(0, positions[0].institution_net_amount)
+        self.assertEqual(0, positions[0].individual_net_amount)
+        self.assertIs(False, positions[0].market_signal_coverage["investor"]["aiUsableAsStrongEvidence"])
+        self.assertEqual("2026-07-07T00:00:00+09:00", positions[0].market_signal_coverage["investor"]["sourceAsOf"])
         self.assertEqual(1, provider.diagnostics["partialCached"])
         self.assertEqual(1, provider.diagnostics["live"])
         self.assertIn("/uapi/domestic-stock/v1/quotations/inquire-ccnl", calls)
@@ -1289,6 +1298,7 @@ class PythonServiceTests(unittest.TestCase):
                 return {"rt_cd": "0", "output": [{"stck_prpr": "201000", "tday_rltv": "88.3", "cntg_vol": "100"}]}
             if path.endswith("/inquire-investor"):
                 return {"rt_cd": "0", "output": [{
+                    "stck_bsop_date": "20260707",
                     "frgn_ntby_qty": "243601",
                     "orgn_ntby_qty": "67401",
                     "prsn_ntby_qty": "-304684",
@@ -1316,9 +1326,10 @@ class PythonServiceTests(unittest.TestCase):
 
         positions, _watchlist = provider.enrich_collections([naver], [])
 
-        self.assertEqual(243601, positions[0].foreign_net_volume)
-        self.assertEqual(67401, positions[0].institution_net_volume)
-        self.assertEqual(-304684, positions[0].individual_net_volume)
+        self.assertEqual(0, positions[0].foreign_net_volume)
+        self.assertEqual(0, positions[0].institution_net_volume)
+        self.assertEqual(0, positions[0].individual_net_volume)
+        self.assertIs(False, positions[0].market_signal_coverage["investor"]["aiUsableAsStrongEvidence"])
         self.assertEqual(1, provider.diagnostics["partialCached"])
         self.assertEqual(1, provider.diagnostics["live"])
         self.assertIn("/uapi/domestic-stock/v1/quotations/inquire-investor", calls)
@@ -1355,6 +1366,7 @@ class PythonServiceTests(unittest.TestCase):
                 return {"rt_cd": "0", "output": [{"stck_prpr": "201000", "tday_rltv": "88.3", "cntg_vol": "100"}]}
             if path.endswith("/inquire-investor"):
                 return {"rt_cd": "0", "output": [{
+                    "stck_bsop_date": "20260707",
                     "frgn_ntby_qty": "243601",
                     "orgn_ntby_qty": "67401",
                     "prsn_ntby_qty": "-304684",
@@ -1384,7 +1396,8 @@ class PythonServiceTests(unittest.TestCase):
 
         positions, _watchlist = provider.enrich_collections([naver], [])
 
-        self.assertEqual(243601, positions[0].foreign_net_volume)
+        self.assertEqual(0, positions[0].foreign_net_volume)
+        self.assertIs(False, positions[0].market_signal_coverage["investor"]["aiUsableAsStrongEvidence"])
         self.assertEqual(1, provider.diagnostics["livePreferred"])
         self.assertEqual(1, provider.diagnostics["live"])
         self.assertIn("/uapi/domestic-stock/v1/quotations/inquire-investor", calls)
@@ -1422,6 +1435,7 @@ class PythonServiceTests(unittest.TestCase):
                 return {"rt_cd": "0", "output": [{"stck_prpr": "201000", "tday_rltv": "88.3", "cntg_vol": "100"}]}
             if path.endswith("/inquire-investor"):
                 return {"rt_cd": "0", "output": [{
+                    "stck_bsop_date": "20260707",
                     "frgn_ntby_qty": "243601",
                     "orgn_ntby_qty": "67401",
                     "prsn_ntby_qty": "-304684",
@@ -1449,10 +1463,14 @@ class PythonServiceTests(unittest.TestCase):
 
         positions, _watchlist = provider.enrich_collections([naver], [])
 
-        self.assertEqual(243601, positions[0].foreign_net_volume)
+        self.assertEqual(0, positions[0].foreign_net_volume)
         self.assertEqual(1, provider.diagnostics["live"])
         self.assertEqual(0, provider.diagnostics["cached"])
-        self.assertIs(True, positions[0].market_signal_coverage["investor"]["realTime"])
+        self.assertIs(False, positions[0].market_signal_coverage["investor"]["realTime"])
+        self.assertIs(False, positions[0].market_signal_coverage["investor"]["aiUsableAsStrongEvidence"])
+        self.assertEqual("reference-repeat", positions[0].market_signal_coverage["investor"]["freshnessStatus"])
+        self.assertEqual("unchanged-repeat", positions[0].market_signal_coverage["investor"]["latencyStatus"])
+        self.assertEqual("2026-07-07T00:00:00+09:00", positions[0].market_signal_coverage["investor"]["sourceAsOf"])
         self.assertIn("/uapi/domestic-stock/v1/quotations/inquire-investor", calls)
 
     def test_kis_market_signal_provider_marks_repeated_microstructure_stale_during_regular_hours(self):
@@ -9226,6 +9244,20 @@ class PythonServiceTests(unittest.TestCase):
                     }],
                 },
                 "missingData": [],
+                "marketSignalCoverage": {
+                    "investor": {
+                        "stage": "investor",
+                        "status": "available",
+                        "fields": ["foreignNetVolume", "institutionNetVolume"],
+                        "nonZeroFields": ["foreignNetVolume", "institutionNetVolume"],
+                        "fetchedAt": "2026-07-16T00:49:00Z",
+                        "sourceAsOf": "2026-07-16T00:00:00+09:00",
+                        "sourceAsOfConfidence": "business-date-only",
+                        "transport": "rest",
+                        "freshnessStatus": "reference-only",
+                        "aiUsableAsStrongEvidence": False,
+                    }
+                },
             },
         }
         response = validated_response_from_payload(context, {
@@ -9245,6 +9277,11 @@ class PythonServiceTests(unittest.TestCase):
 
         self.assertIn("<b>데이터 신뢰도</b>", message)
         self.assertIn("실시간 체결 확정값으로 보지 않습니다", message)
+        self.assertIn("전송 REST", message)
+        self.assertIn("조회시각 2026-07-16 09:49 KST", message)
+        self.assertIn("기준시각 2026-07-16 00:00 KST", message)
+        self.assertIn("품질 참고용", message)
+        self.assertIn("AI 강근거 제외", message)
         self.assertNotIn("<b>데이터 빈 곳</b>", message)
 
     def test_notification_render_appends_short_tracking_number_only(self):
@@ -12336,11 +12373,12 @@ class PythonServiceTests(unittest.TestCase):
                 "status": "available",
                 "realTime": False,
                 "latencyLabel": "KIS 장중 누적·지연 가능",
+                "aiUsableAsStrongEvidence": False,
             }
         }
         delayed_investor_line = monitor.investor_context_line(position)
         self.assertIn("KIS 장중 누적·지연 가능", delayed_investor_line)
-        self.assertIn("실시간 체결 데이터 아님", delayed_investor_line)
+        self.assertIn("AI 강근거 제외", delayed_investor_line)
         self.assertIn("수치 제외", delayed_investor_line)
         self.assertNotIn("외국인: 순매도", delayed_investor_line)
         self.assertNotIn("기관: 순매수", delayed_investor_line)

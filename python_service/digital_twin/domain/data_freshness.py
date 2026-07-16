@@ -230,7 +230,16 @@ def kis_stage_freshness_records(position: Dict[str, object], message_type: str, 
             record["fields"] = list(fields or [])
             if "realTime" in stage_payload:
                 record["realTime"] = bool(stage_payload.get("realTime"))
-            for key in ["cadence", "latencyStatus", "latencyLabel", "latencyReason"]:
+            for key in [
+                "cadence",
+                "transport",
+                "freshnessStatus",
+                "sourceAsOfConfidence",
+                "latencyStatus",
+                "latencyLabel",
+                "latencyReason",
+                "aiUsableAsStrongEvidence",
+            ]:
                 if stage_payload.get(key) not in (None, ""):
                     record[key] = stage_payload.get(key)
             if stage_payload.get("unchangedCount") not in (None, ""):
@@ -251,6 +260,10 @@ def kis_stage_freshness_records(position: Dict[str, object], message_type: str, 
                 "fields": list(fields or []),
                 "unchangedCount": stage_payload.get("unchangedCount"),
                 "realTime": bool(stage_payload.get("realTime")) if "realTime" in stage_payload else None,
+                "transport": stage_payload.get("transport"),
+                "freshnessStatus": stage_payload.get("freshnessStatus"),
+                "sourceAsOfConfidence": stage_payload.get("sourceAsOfConfidence"),
+                "aiUsableAsStrongEvidence": stage_payload.get("aiUsableAsStrongEvidence"),
                 "cadence": stage_payload.get("cadence"),
                 "latencyStatus": stage_payload.get("latencyStatus"),
                 "latencyLabel": stage_payload.get("latencyLabel"),

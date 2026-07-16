@@ -186,6 +186,24 @@ INTERMEDIATE_TERM_HINTS = [
     ("InferenceBox", "추론 결과"),
 ]
 
+CUSTOMER_HIDDEN_DATA_NOTE_TERMS = [
+    "AI 응답",
+    "raw",
+    "fallback",
+    "프롬프트",
+    "검증",
+    "관계 분석 관계가 없어",
+    "그래프 기반",
+    "로컬 임계값",
+    "출처 URL",
+    "sourceUrl",
+    "source URL",
+    "TypeDB",
+    "RuleBox",
+    "InferenceBox",
+    "ontology",
+]
+
 BEGINNER_LABEL_REPLACEMENTS = {
     "추세": "가격 흐름(추세)",
     "수급": "거래 흐름(수급)",
@@ -266,6 +284,18 @@ def _ai_marked_value(value: object) -> str:
     if text.startswith("[AI]"):
         return text
     return "[AI] " + text
+
+def customer_data_note_rows(values: List[object]) -> List[str]:
+    rows: List[str] = []
+    for item in values or []:
+        text = _text(item, 180)
+        if not text:
+            continue
+        lowered = text.lower()
+        if any(term.lower() in lowered for term in CUSTOMER_HIDDEN_DATA_NOTE_TERMS):
+            continue
+        append_unique_text(rows, text, 180)
+    return rows
 
 def notification_topline_change_summary(context: Dict[str, object]) -> str:
     context = context or {}
@@ -355,14 +385,10 @@ def ai_confidence_display(response: NotificationAIValidatedResponse, level: str)
     return str(round(response.confidence, 1)) + "%"
 
 def ai_judgment_section_title(level: str) -> str:
-    if level in {"absoluteBeginner", "beginner"}:
-        return "판단 요약"
-    return "AI 최종 판단"
+    return "전략 요약"
 
 def ai_action_row_label(level: str) -> str:
-    if level == "absoluteBeginner":
-        return "지금 할 일"
-    return "대응 방향"
+    return "권장 대응"
 
 def account_strategy_label(context: Dict[str, object]) -> str:
     context = context if isinstance(context, dict) else {}
@@ -1194,12 +1220,12 @@ def compact_ai_opinion_sentence(context: Dict[str, object], response: Notificati
     check_summary = _compact_text_segments(checks, max(1, len(checks)), 190)
     if check_summary:
         details.append("다음 확인 " + check_summary)
-    data_notes = list(response.missing_data_impact) + list(response.validation_warnings)
+    data_notes = customer_data_note_rows(list(response.missing_data_impact))
     data_summary = _compact_text_segments(data_notes, max(1, len(data_notes)), 180)
     if data_summary:
-        details.append("데이터와 검증 메모 " + data_summary)
+        details.append("추가 확인 데이터 " + data_summary)
     if details:
-        return base + "이며, " + ", ".join(details) + "까지 함께 반영했습니다."
+        return base + "입니다. " + " / ".join(details)
     return base + "입니다."
 
 def _full_ai_opinion_rows(context: Dict[str, object], response: NotificationAIValidatedResponse, level: str) -> List[str]:
@@ -1237,8 +1263,6 @@ def _full_ai_opinion_rows(context: Dict[str, object], response: NotificationAIVa
     return [_html_bullet(_ai_marked_value(row), level) for row in rows if row]
 
 def compact_ai_opinion_rows(context: Dict[str, object], response: NotificationAIValidatedResponse, level: str) -> List[str]:
-    if level in {"absoluteBeginner", "beginner"}:
-        return _full_ai_opinion_rows(context, response, level)
     action_label = action_label_for_action(response.action, context) or response.action_label or response.action
     rows: List[str] = []
     conclusion = _compact_text_segments([response.summary], 1, 150)
@@ -1267,15 +1291,15 @@ def compact_ai_opinion_rows(context: Dict[str, object], response: NotificationAI
     checks = []
     if response.opinion:
         checks.append(response.opinion)
-    checks.extend(response.next_checks[:2])
-    if not checks and response.invalidation_condition:
+    if response.invalidation_condition:
         checks.append("의견이 약해지는 조건: " + response.invalidation_condition)
+    checks.extend(response.next_checks[:1])
     check_summary = _compact_text_segments(checks, 2, 130)
     if check_summary:
         append_unique_text(rows, "다음 확인: " + check_summary, 190)
-    data_summary = _compact_text_segments(list(response.missing_data_impact) + list(response.validation_warnings), 2, 120)
+    data_summary = _compact_text_segments(customer_data_note_rows(list(response.missing_data_impact)), 2, 120)
     if data_summary:
-        append_unique_text(rows, "데이터 한계: " + data_summary, 190)
+        append_unique_text(rows, "추가 확인 데이터: " + data_summary, 190)
     return [_html_bullet(_ai_marked_value(row), level) for row in rows[:5] if row]
 
 def relation_axis_summary_rows(context: Dict[str, object], level: str, limit: int = 5) -> List[str]:
@@ -1323,30 +1347,13 @@ def execution_telegram_message(context: Dict[str, object], response: Notificatio
         *ai_judgment_rows(response, level, context),
     ]
     if current_state_rows:
-        parts.extend(["", "<b>현재 상태</b>", *current_state_rows])
+        parts.extend(["", "<b>현재 상황</b>", *current_state_rows])
     axis_rows = relation_axis_summary_rows(context, level)
     if axis_rows:
-        parts.extend(["", "<b>관계축 요약</b>", *axis_rows])
-    quality_rows = data_quality_warning_rows(context, MESSAGE_DATA_QUALITY_ROW_LIMIT)
-    if quality_rows:
-        parts.extend(["", "<b>데이터 신뢰도</b>"])
-        parts.extend(_html_bullet(item, level) for item in quality_rows)
+        parts.extend(["", "<b>투자 판단 근거</b>", *axis_rows])
     opinion_rows = compact_ai_opinion_rows(context, response, level)
     if opinion_rows:
-        parts.extend(["", "<b>AI 의견</b>", *opinion_rows])
-    reason = notification_reason_summary(context)
-    cooldown_reason = notification_cooldown_release_summary(context)
-    if reason or cooldown_reason:
-        parts.extend(["", "<b>알림이 온 이유</b>"])
-        if reason:
-            parts.append(_html_bullet(reason, level))
-        if cooldown_reason:
-            parts.append(_html_bullet(cooldown_reason, level, "쿨다운 해제: "))
-    if level == "advanced":
-        relation_labels = relation_rule_summary(context, 4)
-        if relation_labels:
-            parts.extend(["", "<b>관계 규칙 요약</b>"])
-            parts.extend("• " + html.escape(item, quote=False) for item in relation_labels)
+        parts.extend(["", "<b>전략 가이드</b>", *opinion_rows])
     if response.source_urls:
         parts.extend(["", "<b>출처</b>"])
         parts.extend(source_url_rows(response.source_urls, context))
@@ -1371,22 +1378,10 @@ def execution_telegram_message_absolute_beginner(context: Dict[str, object], res
         parts.extend(["", "<b>현재 상황</b>", *current_state_rows])
     axis_rows = relation_axis_summary_rows(context, "absoluteBeginner")
     if axis_rows:
-        parts.extend(["", "<b>판단에 쓴 큰 묶음</b>", *axis_rows])
-    quality_rows = data_quality_warning_rows(context, MESSAGE_DATA_QUALITY_ROW_LIMIT)
-    if quality_rows:
-        parts.extend(["", "<b>데이터 신뢰도</b>"])
-        parts.extend(_html_bullet(item, "absoluteBeginner") for item in quality_rows)
+        parts.extend(["", "<b>투자 판단 근거</b>", *axis_rows])
     opinion_rows = compact_ai_opinion_rows(context, response, "absoluteBeginner")
     if opinion_rows:
-        parts.extend(["", "<b>AI 의견</b>", *opinion_rows])
-    reason = notification_reason_summary(context)
-    cooldown_reason = notification_cooldown_release_summary(context)
-    if reason or cooldown_reason:
-        parts.extend(["", "<b>알림이 온 이유</b>"])
-        if reason:
-            parts.append(_html_bullet(reason, "absoluteBeginner"))
-        if cooldown_reason:
-            parts.append(_html_bullet(cooldown_reason, "absoluteBeginner", "쿨다운 해제: "))
+        parts.extend(["", "<b>전략 가이드</b>", *opinion_rows])
     if response.source_urls:
         parts.extend(["", "<b>원문/출처</b>"])
         parts.extend(source_url_rows(response.source_urls, context))

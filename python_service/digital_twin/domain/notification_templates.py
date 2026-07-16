@@ -127,6 +127,29 @@ SCORE_EXPLANATION_SKIP_TYPES = {
     "workHandoff",
 }
 
+CUSTOMER_FACING_MESSAGE_TYPES = {
+    "investmentInsight",
+    "investmentCalendarReminder",
+    "watchlistOntologySignal",
+    "watchlistBuyCandidate",
+    "watchlistQuote",
+    "watchlistQuotePending",
+    "holdingTiming",
+    "modelBuy",
+    "modelSell",
+    "monitorDecisionChange",
+    "monitorPositionChange",
+    "monitorPnlChange",
+    "monitorValueChange",
+    "monitorTrendChange",
+    "monitorCashChange",
+    "externalEquityMove",
+    "externalCryptoMove",
+    "externalMacroShift",
+    "externalDartDisclosure",
+    "newsDigest",
+}
+
 SCORE_VALUE_PATTERN = re.compile(r"\d+(?:\.\d+)?점")
 
 DEFAULT_NOTIFICATION_TEMPLATES = {
@@ -1109,6 +1132,8 @@ def append_message_footer(rendered: str, context: Dict[str, object], rich: bool 
     rendered_text = str(rendered or "").rstrip()
     if not rendered_text or "알림 추적" in rendered_text:
         return rendered_text
+    if context_message_type(context) in CUSTOMER_FACING_MESSAGE_TYPES:
+        return rendered_text
     footer = message_footer(context, rich)
     if not footer:
         return rendered_text
@@ -1117,6 +1142,8 @@ def append_message_footer(rendered: str, context: Dict[str, object], rich: bool 
 
 def append_score_explanation(rendered: str, context: Dict[str, object], rich: bool = False) -> str:
     rendered_text = str(rendered or "")
+    if isinstance(context, dict) and context.get("notificationAiValidatedResponse"):
+        return rendered
     if context_message_type(context) == "modelReview":
         return rendered
     if (

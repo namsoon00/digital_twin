@@ -9182,8 +9182,8 @@ class PythonServiceTests(unittest.TestCase):
         enriched = context_with_validated_ai_response(context, response)
         message = enriched["telegramMessage"]
 
-        self.assertIn("<b>AI 최종 판단</b>", message)
-        self.assertIn("<b>대응 방향</b>", message)
+        self.assertIn("<b>전략 요약</b>", message)
+        self.assertIn("<b>권장 대응</b>", message)
         self.assertIn("AI 판단 이유", message)
         self.assertNotIn("먼저 볼 행동", message)
         self.assertIn("매도", message)
@@ -9192,7 +9192,7 @@ class PythonServiceTests(unittest.TestCase):
         self.assertIn("<b>매도가능 수량</b>: <code>10주</code>", message)
         self.assertIn("<b>종목 평가금액</b>: <code>2,115만 원</code>", message)
         self.assertIn("<b>계좌 평가금액</b>: <code>4,000만 원</code>", message)
-        self.assertIn("<b>AI 의견</b>", message)
+        self.assertIn("<b>전략 가이드</b>", message)
         self.assertIn("반대 신호", message)
         self.assertIn("60일선은 아직 위", message)
         self.assertIn("외국인 -3,015,093", message)
@@ -9217,8 +9217,9 @@ class PythonServiceTests(unittest.TestCase):
         self.assertEqual("SELL", enriched["notificationAiDecisionAudit"]["aiAction"])
         self.assertEqual("aiResponse", enriched["ontologyAiValidation"]["finalDecisionOwner"])
         rendered = render_notification(NotificationTemplate("investmentInsight", "{telegramMessage}"), enriched)
-        self.assertEqual(1, rendered.count("<b>AI 의견</b>"))
+        self.assertEqual(1, rendered.count("<b>전략 가이드</b>"))
         self.assertEqual(0, rendered.count("<b>알림 정보</b>"))
+        self.assertNotIn("<b>알림 추적</b>", rendered)
         self.assertNotIn("• <b>분석</b>: <code>AI 투자 판단 / test AI</code>", rendered)
 
     def test_validated_ai_message_shows_data_quality_warnings_separately_from_missing_data(self):
@@ -9280,13 +9281,12 @@ class PythonServiceTests(unittest.TestCase):
 
         message = context_with_validated_ai_response(context, response)["telegramMessage"]
 
-        self.assertIn("<b>데이터 신뢰도</b>", message)
-        self.assertIn("실시간 체결 확정값으로 보지 않습니다", message)
-        self.assertIn("전송 REST", message)
-        self.assertIn("조회시각 2026-07-16 09:49 KST", message)
-        self.assertIn("기준시각 2026-07-16 00:00 KST", message)
-        self.assertIn("품질 참고용", message)
-        self.assertIn("AI 강근거 제외", message)
+        self.assertNotIn("<b>데이터 신뢰도</b>", message)
+        self.assertNotIn("전송 REST", message)
+        self.assertNotIn("조회시각 2026-07-16 09:49 KST", message)
+        self.assertNotIn("기준시각 2026-07-16 00:00 KST", message)
+        self.assertNotIn("품질 참고용", message)
+        self.assertNotIn("AI 강근거 제외", message)
         self.assertNotIn("<b>데이터 빈 곳</b>", message)
 
     def test_validated_ai_message_deduplicates_structured_missing_data(self):
@@ -9361,12 +9361,12 @@ class PythonServiceTests(unittest.TestCase):
         enriched = context_with_validated_ai_response(context, response)
         message = render_notification(NotificationTemplate("investmentInsight", "{telegramMessage}"), enriched)
 
-        self.assertIn("데이터와 검증 메모", message)
+        self.assertIn("추가 확인 데이터", message)
         self.assertIn("뉴스 본문과 SK하이닉스 직접 관련 사실", message)
         self.assertNotIn("외국인·기관·개인의 순매수 수치", message)
-        self.assertIn("<b>부족 데이터</b>", message)
-        self.assertIn("투자자별 수급 (지연/반복값)", message)
-        self.assertIn("이전 조회와 같아 실시간 변화 신호로 쓰지 않습니다", message)
+        self.assertNotIn("<b>부족 데이터</b>", message)
+        self.assertNotIn("투자자별 수급 (지연/반복값)", message)
+        self.assertNotIn("이전 조회와 같아 실시간 변화 신호로 쓰지 않습니다", message)
 
     def test_notification_render_appends_short_tracking_number_only(self):
         rendered = render_notification(
@@ -9378,8 +9378,8 @@ class PythonServiceTests(unittest.TestCase):
             },
         )
 
-        self.assertIn("<b>알림 추적</b>", rendered)
-        self.assertIn("• <b>번호</b>: <code>N-ABCDEF12</code>", rendered)
+        self.assertNotIn("<b>알림 추적</b>", rendered)
+        self.assertNotIn("• <b>번호</b>: <code>N-ABCDEF12</code>", rendered)
         self.assertNotIn("<b>알림 정보</b>", rendered)
         self.assertNotIn("알림ID", rendered)
 
@@ -9413,10 +9413,10 @@ class PythonServiceTests(unittest.TestCase):
         enriched = context_with_validated_ai_response(context, response)
         message = enriched["telegramMessage"]
 
-        self.assertIn("<b>AI 최종 판단</b>", message)
+        self.assertIn("<b>전략 요약</b>", message)
         self.assertNotIn("<b>현재 상태</b>", message)
-        self.assertIn("<b>AI 의견</b>", message)
-        self.assertIn("근거 1", message)
+        self.assertIn("<b>전략 가이드</b>", message)
+        self.assertIn("핵심 근거", message)
         self.assertNotIn("<b>근거</b>", message)
         self.assertNotIn("<b>반대 신호</b>", message)
         self.assertNotIn("<b>다음 확인</b>", message)
@@ -9515,8 +9515,8 @@ class PythonServiceTests(unittest.TestCase):
 
         message = context_with_validated_ai_response(context, response)["telegramMessage"]
 
-        self.assertIn("<b>판단 요약</b>", message)
-        self.assertIn("<b>지금 할 일</b>", message)
+        self.assertIn("<b>전략 요약</b>", message)
+        self.assertIn("<b>권장 대응</b>", message)
         self.assertIn("[AI] 매도", message)
         self.assertIn("[AI] 보통", message)
         self.assertIn("<b>투자 성향</b>: <code>성장형</code>", message)
@@ -9529,14 +9529,14 @@ class PythonServiceTests(unittest.TestCase):
         self.assertIn("외국인: 순매도 3,015,093주", message)
         self.assertIn("기관: 순매수 971,031주", message)
         self.assertIn("개인: 순매수 2,031,705주", message)
-        self.assertIn("<b>AI 의견</b>", message)
+        self.assertIn("<b>전략 가이드</b>", message)
         self.assertIn("[AI] 결론:", message)
-        self.assertIn("근거 1", message)
+        self.assertIn("핵심 근거", message)
         self.assertIn("반대 신호", message)
         self.assertNotIn("까지 함께 반영했습니다", message)
-        self.assertIn("<b>알림이 온 이유</b>", message)
-        self.assertIn("쿨다운 해제", message)
-        self.assertIn("기본 쿨다운 360분 전", message)
+        self.assertNotIn("<b>알림이 온 이유</b>", message)
+        self.assertNotIn("쿨다운 해제", message)
+        self.assertNotIn("기본 쿨다운 360분 전", message)
         self.assertNotIn("<b>AI가 다르게 본 점</b>", message)
         self.assertNotIn("<b>다르게 볼 점</b>", message)
         self.assertNotIn("<b>왜 온 알림</b>", message)
@@ -9607,7 +9607,7 @@ class PythonServiceTests(unittest.TestCase):
         self.assertEqual("HOLD", enriched["notificationAiValidatedResponse"]["action"])
         self.assertEqual("관심 유지", enriched["notificationAiValidatedResponse"]["actionLabel"])
         self.assertIn("<b>[관찰] 🧭 Apple: 관심 유지·진입 조건 확인</b>", message)
-        self.assertIn("<b>지금 할 일</b>: <code>[AI] 관심 유지</code>", message)
+        self.assertIn("<b>권장 대응</b>: <code>[AI] 관심 유지</code>", message)
         self.assertIn("관심종목으로 지켜보는 게 맞습니다", message)
         self.assertIn("관심 상태를 유지", message)
         self.assertNotIn("보유 유지", message)
@@ -9962,7 +9962,7 @@ class PythonServiceTests(unittest.TestCase):
 
         self.assertEqual("TRIM", response.action)
         self.assertIn("분할축소", message)
-        self.assertIn("<b>AI 의견</b>", message)
+        self.assertIn("<b>전략 가이드</b>", message)
         self.assertIn("BTC는 7일 +4.3%", message)
         self.assertIn("수익 보호형 분할축소", message)
         self.assertIn("BTC 민감 종목", message)
@@ -10039,7 +10039,7 @@ class PythonServiceTests(unittest.TestCase):
         self.assertEqual("분할축소", response.action_label)
         self.assertIn("5일 평균보다 3.4% 높아", " ".join(response.counter_evidence))
         self.assertIn("전량 매도보다 분할축소", " ".join(response.counter_evidence))
-        self.assertIn("<b>지금 할 일</b>: <code>분할축소</code>", message)
+        self.assertIn("<b>권장 대응</b>: <code>[AI] 분할축소</code>", message)
         self.assertIn("5일선보다 3.4% 높아", message)
         self.assertNotIn("<b>지금 할 일</b>: <code>매도</code>", message)
 
@@ -10134,16 +10134,15 @@ class PythonServiceTests(unittest.TestCase):
         self.assertEqual("SELL", enriched["notificationAiValidatedResponse"]["action"])
         self.assertEqual("HOLD", context["activeInvestmentOpinion"]["action"])
         self.assertNotIn("AI 투자 판단", enriched["telegramMessage"])
-        self.assertIn("<b>AI 최종 판단</b>", enriched["telegramMessage"])
-        self.assertIn("<b>AI 의견</b>", enriched["telegramMessage"])
+        self.assertIn("<b>전략 요약</b>", enriched["telegramMessage"])
+        self.assertIn("<b>전략 가이드</b>", enriched["telegramMessage"])
         self.assertNotIn("<b>판단 조정</b>", enriched["telegramMessage"])
         self.assertIn("계산 후보", enriched["telegramMessage"])
         self.assertIn("최종 매도", enriched["telegramMessage"])
         self.assertIn("매도", enriched["telegramMessage"])
         self.assertIn("사전 계산 후보는 보유", enriched["telegramMessage"])
-        self.assertIn("<b>알림이 온 이유</b>", enriched["telegramMessage"])
-        self.assertIn("관계 점수 82점까지 상승", enriched["telegramMessage"])
-        self.assertIn("손실 보유 + 기준선 이탈", enriched["telegramMessage"])
+        self.assertNotIn("<b>알림이 온 이유</b>", enriched["telegramMessage"])
+        self.assertNotIn("관계 점수 82점까지 상승", enriched["telegramMessage"])
 
     def test_notification_ai_gate_records_audit_and_caps_weak_ai_response(self):
         context = {
@@ -10429,7 +10428,7 @@ class PythonServiceTests(unittest.TestCase):
         self.assertIn("핵심: HBM 수요 회복", message)
         self.assertIn("요약: 본문 요약: HBM 수요 회복", message)
         self.assertIn("영향 분석: 주가 영향은 긍정적으로 봅니다.", message)
-        self.assertGreater(message.rfind("<b>출처</b>"), message.rfind("<b>AI 의견</b>"))
+        self.assertGreater(message.rfind("<b>출처</b>"), message.rfind("<b>전략 가이드</b>"))
 
     def test_notification_worker_waits_for_validated_ai_before_rendering(self):
         class FakeReviewer:
@@ -11685,8 +11684,8 @@ class PythonServiceTests(unittest.TestCase):
         )
 
         self.assertEqual(1, runner.run_once(limit=10))
-        self.assertIn("<b>알림 추적</b>", sent[0])
-        self.assertIn("• <b>번호</b>: <code>N-", sent[0])
+        self.assertNotIn("<b>알림 추적</b>", sent[0])
+        self.assertNotIn("• <b>번호</b>: <code>N-", sent[0])
         self.assertNotIn("<b>알림 정보</b>", sent[0])
         self.assertNotIn("• <b>발송</b>: <code>2026-07-05 09:06 KST</code>", sent[0])
         self.assertEqual("2026-07-05 09:06 KST", queue.jobs()[0].context["sentTime"])

@@ -135,7 +135,7 @@ class BeginnerRelationLanguageTests(unittest.TestCase):
         self.assertIn("팔아야 한다는 뜻이 아니라", joined)
         self.assertIn("매도해야 한다는 뜻은 아닙니다", joined)
 
-    def test_absolute_beginner_message_keeps_full_validated_content(self):
+    def test_absolute_beginner_message_compacts_validated_content(self):
         response = NotificationAIValidatedResponse(
             action="HOLD",
             action_label="보유",
@@ -188,19 +188,20 @@ class BeginnerRelationLanguageTests(unittest.TestCase):
 
         for expected in [
             "[AI] 결론:",
-            "근거 5",
-            "반대 4",
-            "확인 4",
-            "부족 5",
-            "검증 3",
+            "근거 1",
+            "근거 2",
+            "반대 1",
+            "의견이 약해지는 조건",
+            "부족 1",
         ]:
             self.assertIn(expected, message)
+        for hidden in ["근거 5", "반대 4", "확인 4", "부족 5", "검증 3"]:
+            self.assertNotIn(hidden, message)
         self.assertIn("확인 필요 강도", message)
         self.assertIn("관계 분석 규칙", message)
         self.assertIn("지금 주문해도 무리가 없는지", message)
-        self.assertIn("시장과 같이 움직이는 정도", message)
 
-    def test_beginner_message_adds_term_hints_without_hiding_content(self):
+    def test_beginner_message_adds_term_hints_and_keeps_message_compact(self):
         response = NotificationAIValidatedResponse(
             action="HOLD",
             action_label="보유",
@@ -223,11 +224,13 @@ class BeginnerRelationLanguageTests(unittest.TestCase):
         )
 
         self.assertIn("[AI] 결론:", message)
-        self.assertIn("근거 5", message)
-        self.assertIn("반대 4", message)
+        self.assertIn("근거 1", message)
+        self.assertIn("근거 2", message)
+        self.assertNotIn("근거 5", message)
+        self.assertNotIn("반대 4", message)
         self.assertIn("확인 1", message)
-        self.assertIn("확인 4", message)
-        self.assertIn("부족 5", message)
+        self.assertNotIn("확인 4", message)
+        self.assertNotIn("부족 5", message)
         self.assertIn("관계 강도(여러 근거가 같은 방향인지 보는 확인 필요 점수)", message)
         self.assertIn("RuleBox(관계 분석 규칙)", message)
 
@@ -284,7 +287,7 @@ class BeginnerRelationLanguageTests(unittest.TestCase):
             response,
         )
 
-        self.assertIn("<b>관계축 요약</b>", message)
+        self.assertIn("<b>투자 판단 근거</b>", message)
         self.assertIn("가격 회복·약화", message)
         self.assertIn("수급 심리", message)
         self.assertIn("뉴스·공시", message)

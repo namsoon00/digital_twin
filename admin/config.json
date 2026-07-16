@@ -13,7 +13,7 @@
     "공유 미리보기에서는 서버 설정과 계정 DB 쓰기를 차단합니다."
   ],
   "localData": {
-    "generatedAt": "2026-07-16T10:01:59.518505Z",
+    "generatedAt": "2026-07-16T10:19:52.572748Z",
     "sources": {
       "settings": "data/settings.json",
       "settingsExists": false
@@ -673,6 +673,18 @@
           "default": "1"
         },
         {
+          "key": "externalAlphaRelatedSymbolsEnabled",
+          "label": "ADR·레버리지 관련 종목 수집",
+          "type": "toggle",
+          "default": "1"
+        },
+        {
+          "key": "externalAlphaRelatedMaxSymbols",
+          "label": "ADR·레버리지 관련 종목 수",
+          "type": "number",
+          "default": "8"
+        },
+        {
           "key": "externalAlphaFundamentalsEnabled",
           "label": "Alpha Vantage 펀더멘털 수집",
           "type": "toggle",
@@ -873,6 +885,11 @@
           "label": "AI 전달 최신 근거 수",
           "type": "number",
           "default": "8"
+        },
+        {
+          "key": "securityLineMappings",
+          "label": "ADR·레버리지 증권 관계",
+          "type": "assignmentText"
         },
         {
           "key": "newsCollectionEnabled",
@@ -1782,5 +1799,5 @@
       ]
     }
   ],
-  "buildId": "9c4fd416c29c"
+  "buildId": "6c8714264994"
 }

@@ -3570,11 +3570,14 @@
       externalApiFetchIntervalMinutes: settingValue("externalApiFetchIntervalMinutes"),
       externalSignalCacheMaxAgeMinutes: settingValue("externalSignalCacheMaxAgeMinutes"),
       externalAlphaEnabled: settingValue("externalAlphaEnabled"),
+      externalAlphaRelatedSymbolsEnabled: settingValue("externalAlphaRelatedSymbolsEnabled"),
+      externalAlphaRelatedMaxSymbols: settingValue("externalAlphaRelatedMaxSymbols"),
       externalCoinGeckoEnabled: settingValue("externalCoinGeckoEnabled"),
       externalFredEnabled: settingValue("externalFredEnabled"),
       externalFredSeries: settingValue("externalFredSeries"),
       externalCryptoIds: settingValue("externalCryptoIds"),
       externalAlphaMaxSymbols: settingValue("externalAlphaMaxSymbols"),
+      securityLineMappings: settingValue("securityLineMappings"),
       externalSecEnabled: settingValue("externalSecEnabled"),
       externalSecMaxSymbols: settingValue("externalSecMaxSymbols"),
       externalSecCompanyCiks: settingValue("externalSecCompanyCiks"),
@@ -15943,6 +15946,11 @@
           { value: "1", label: "사용" },
           { value: "0", label: "사용 안 함" }
         ]),
+        renderSettingSelect("externalAlphaRelatedSymbolsEnabled", "ADR·ETF 관련 종목 수집", [
+          { value: "1", label: "사용" },
+          { value: "0", label: "사용 안 함" }
+        ]),
+        renderSettingField("externalAlphaRelatedMaxSymbols", "ADR·ETF 관련 종목 수", "number", "8"),
         renderSettingSelect("externalFredEnabled", "FRED 거시 수집", [
           { value: "1", label: "사용" },
           { value: "0", label: "사용 안 함" }
@@ -15956,6 +15964,10 @@
       renderSettingsGroup("긴 매핑값", "종목 코드, CIK, 거시·코인 목록처럼 긴 입력값입니다.", [
         renderSettingField("externalFredSeries", "FRED 지표", "text", "DGS10,DGS2,DFF"),
         renderSettingField("externalCryptoIds", "CoinGecko 코인 ID", "text", "bitcoin,ethereum"),
+        '<label class="setting-field wide">',
+        '<span class="setting-field-label">ADR·ETF 증권 라인 매핑</span>',
+        '<div class="form-control-shell"><textarea data-setting="securityLineMappings" rows="4" autocomplete="off" placeholder="000660|SK하이닉스|adr|SKHY|SK hynix ADR|US|USD|Nasdaq|0.1|2026-07-29|0|000660|https://...|2026-07-13">' + escapeHtml(settingValue("securityLineMappings") || defaultSettings.securityLineMappings || "") + '</textarea></div>',
+        '</label>',
         '<label class="setting-field wide">',
         '<span class="setting-field-label">OpenDART 종목 매핑</span>',
         '<div class="form-control-shell"><textarea data-setting="externalDartCorpCodes" rows="3" autocomplete="off" placeholder="005930=00126380">' + escapeHtml(settingValue("externalDartCorpCodes") || defaultSettings.externalDartCorpCodes) + '</textarea></div>',
@@ -17053,6 +17065,11 @@
         ]),
         renderSettingField("alphaVantageApiKey", "Alpha Vantage API Key", secretType, "api key", { preserveConfigured: true }),
         renderSettingField("externalAlphaMaxSymbols", "미장 조회 종목 수", "number", "3"),
+        renderSettingSelect("externalAlphaRelatedSymbolsEnabled", "ADR·ETF 관련 종목 수집", [
+          { value: "1", label: "사용" },
+          { value: "0", label: "사용 안 함" }
+        ]),
+        renderSettingField("externalAlphaRelatedMaxSymbols", "ADR·ETF 관련 종목 수", "number", "8"),
         renderSettingSelect("externalCoinGeckoEnabled", "CoinGecko 수집", [
           { value: "1", label: "사용" },
           { value: "0", label: "사용 안 함" }

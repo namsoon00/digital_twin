@@ -35,6 +35,7 @@ INVESTMENT_STRATEGY_PROPOSED = "investment_strategy.proposed"
 INVESTMENT_STRATEGY_VALIDATED = "investment_strategy.validated"
 INVESTMENT_STRATEGY_APPROVED = "investment_strategy.approved"
 INVESTMENT_STRATEGY_DEPLOYED = "investment_strategy.deployed"
+INVESTMENT_STRATEGY_PERFORMANCE_RECORDED = "investment_strategy.performance_recorded"
 
 
 @dataclass(frozen=True)
@@ -286,6 +287,7 @@ def investment_strategy_validated_event(proposal) -> DomainEvent:
 
 def investment_strategy_approved_event(proposal) -> DomainEvent:
     payload = proposal.to_dict() if hasattr(proposal, "to_dict") else dict(proposal or {})
+    lifecycle = dict(payload.get("lifecycle") or {})
     return DomainEvent(
         name=INVESTMENT_STRATEGY_APPROVED,
         aggregate_id=str(payload.get("id") or payload.get("proposalId") or ""),
@@ -293,6 +295,8 @@ def investment_strategy_approved_event(proposal) -> DomainEvent:
             "proposalId": str(payload.get("id") or ""),
             "status": str(payload.get("status") or ""),
             "approvedAt": str(payload.get("approvedAt") or ""),
+            "approvedBy": str(lifecycle.get("approvedBy") or ""),
+            "approvalReason": str(lifecycle.get("approvalReason") or ""),
         },
     )
 
@@ -307,6 +311,21 @@ def investment_strategy_deployed_event(proposal) -> DomainEvent:
             "status": str(payload.get("status") or ""),
             "deployedAt": str(payload.get("deployedAt") or ""),
             "ruleIds": list(payload.get("ruleIds") or []),
+        },
+    )
+
+
+def investment_strategy_performance_recorded_event(proposal, sample: Dict[str, object]) -> DomainEvent:
+    payload = proposal.to_dict() if hasattr(proposal, "to_dict") else dict(proposal or {})
+    performance = dict(payload.get("performance") or {})
+    return DomainEvent(
+        name=INVESTMENT_STRATEGY_PERFORMANCE_RECORDED,
+        aggregate_id=str(payload.get("id") or payload.get("proposalId") or ""),
+        payload={
+            "proposalId": str(payload.get("id") or ""),
+            "status": str(payload.get("status") or ""),
+            "sample": dict(sample or {}),
+            "summary": dict(performance.get("summary") or {}),
         },
     )
 

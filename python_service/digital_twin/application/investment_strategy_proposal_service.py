@@ -3,6 +3,7 @@ from typing import Dict, Iterable, List
 from ..domain.events import (
     investment_strategy_approved_event,
     investment_strategy_deployed_event,
+    investment_strategy_performance_recorded_event,
     investment_strategy_proposed_event,
     investment_strategy_validated_event,
 )
@@ -18,6 +19,11 @@ from ..domain.investment_strategy_proposals import (
     proposal_matches_rule_ids,
     rule_id_from_payload,
     strategy_proposals_from_rule_candidates,
+)
+from ..domain.investment_strategy_lifecycle import (
+    append_strategy_review_log,
+    merge_strategy_performance,
+    strategy_performance_sample,
 )
 from ..domain.portfolio import utc_now_iso
 
@@ -90,9 +96,19 @@ class InvestmentStrategyProposalService:
                 continue
             if existing:
                 merged = merge_strategy_proposal(existing, proposal)
+                append_strategy_review_log(merged, "updated", {
+                    "trigger": context.get("trigger"),
+                    "source": "rule-change-candidate",
+                    "ruleIds": proposal.rule_ids,
+                })
                 self.proposal_store.save(merged)
                 updated.append(merged.to_dict())
             else:
+                append_strategy_review_log(proposal, "proposed", {
+                    "trigger": context.get("trigger"),
+                    "source": "rule-change-candidate",
+                    "ruleIds": proposal.rule_ids,
+                })
                 self.proposal_store.save(proposal)
                 created.append(proposal.to_dict())
                 self.publish(investment_strategy_proposed_event(proposal))
@@ -131,6 +147,11 @@ class InvestmentStrategyProposalService:
                 "promotionReadiness": result.get("promotionReadiness") if isinstance(result.get("promotionReadiness"), dict) else {},
             }
             proposal.status = STRATEGY_STATUS_VALIDATED if validation_is_complete(proposal.validation) else proposal.status
+            append_strategy_review_log(proposal, "validated" if proposal.status == STRATEGY_STATUS_VALIDATED else "validation-recorded", {
+                "experimentId": getattr(experiment, "experiment_id", ""),
+                "validationStatus": proposal.validation.get("status"),
+                "promotionReadiness": proposal.validation.get("promotionReadiness") or {},
+            })
             proposal.updated_at = utc_now_iso()
             self.proposal_store.save(proposal)
             updated.append(proposal.to_dict())
@@ -172,10 +193,17 @@ class InvestmentStrategyProposalService:
                 "proposalId": proposal.proposal_id,
             })
             validation = validation if isinstance(validation, dict) else {"status": "unknown"}
+        validation = materialization_validation_with_diff(validation)
         proposal.validation = {**dict(proposal.validation or {}), "materialization": validation}
         if str(validation.get("status") or "") in {"ok", "empty"}:
             proposal.status = STRATEGY_STATUS_VALIDATED
             self.publish(investment_strategy_validated_event(proposal))
+        append_strategy_review_log(proposal, "materialization-validated", {
+            "validationStatus": validation.get("status"),
+            "candidateRuleCount": validation.get("candidateRuleCount"),
+            "matchedCount": validation.get("matchedCount"),
+            "diff": validation.get("diff") or {},
+        })
         proposal.updated_at = utc_now_iso()
         self.proposal_store.save(proposal)
         return {"status": str(validation.get("status") or "unknown"), "proposal": proposal.to_dict(), "validation": validation}
@@ -188,14 +216,21 @@ class InvestmentStrategyProposalService:
         if proposal.status not in PROMOTABLE_STRATEGY_STATUSES and not truthy(payload.get("forceApproved"), False):
             return {"status": "not-ready", "id": proposal_id, "reason": "proposal-status-not-approvable", "proposal": proposal.to_dict()}
         stamp = utc_now_iso()
+        reviewer = str(payload.get("approvedBy") or payload.get("reviewedBy") or "local-user")
+        reason = str(payload.get("approvalReason") or payload.get("reviewReason") or "strategy proposal approved")
         proposal.status = STRATEGY_STATUS_APPROVED
         proposal.approved_at = stamp
         proposal.updated_at = stamp
         proposal.lifecycle = {
             **dict(proposal.lifecycle or {}),
-            "approvedBy": str(payload.get("approvedBy") or payload.get("reviewedBy") or "local-user"),
-            "approvalReason": str(payload.get("approvalReason") or payload.get("reviewReason") or "strategy proposal approved"),
+            "approvedBy": reviewer,
+            "approvalReason": reason,
         }
+        append_strategy_review_log(proposal, "approved", {
+            "reviewedBy": reviewer,
+            "reviewReason": reason,
+            "forceApproved": truthy(payload.get("forceApproved"), False),
+        })
         self.proposal_store.save(proposal)
         self.publish(investment_strategy_approved_event(proposal))
         return {"status": "approved", "proposal": proposal.to_dict()}
@@ -214,10 +249,46 @@ class InvestmentStrategyProposalService:
                 **dict(proposal.lifecycle or {}),
                 "deployment": dict(application or {}),
             }
+            append_strategy_review_log(proposal, "deployed", {
+                "experimentId": getattr(experiment, "experiment_id", ""),
+                "ruleIds": rule_ids,
+                "appliedAt": stamp,
+            })
             self.proposal_store.save(proposal)
             updated.append(proposal.to_dict())
             self.publish(investment_strategy_deployed_event(proposal))
         return {"status": "updated" if updated else "no-proposals", "updatedCount": len(updated), "ruleIds": rule_ids, "proposals": updated}
+
+    def performance(self, proposal_id: str) -> Dict[str, object]:
+        proposal = self.proposal_store.get(proposal_id) if self.proposal_store else None
+        if not proposal:
+            return {"status": "not-found", "id": proposal_id}
+        return {
+            "status": "ok",
+            "proposalId": proposal.proposal_id,
+            "performance": dict(proposal.performance or {}),
+        }
+
+    def record_performance_sample(self, proposal_id: str, payload: Dict[str, object] = None) -> Dict[str, object]:
+        proposal = self.proposal_store.get(proposal_id) if self.proposal_store else None
+        if not proposal:
+            return {"status": "not-found", "id": proposal_id}
+        sample = strategy_performance_sample(payload or {}, proposal.symbols)
+        proposal.performance = merge_strategy_performance(proposal.performance, sample)
+        append_strategy_review_log(proposal, "performance-recorded", {
+            "observedAt": sample.get("observedAt"),
+            "portfolioReturnPct": sample.get("portfolioReturnPct"),
+            "benchmarkReturnPct": sample.get("benchmarkReturnPct"),
+        })
+        proposal.updated_at = utc_now_iso()
+        self.proposal_store.save(proposal)
+        self.publish(investment_strategy_performance_recorded_event(proposal, sample))
+        return {
+            "status": "recorded",
+            "proposal": proposal.to_dict(),
+            "sample": sample,
+            "performance": dict(proposal.performance or {}),
+        }
 
     def find_by_rule_ids(self, rule_ids: Iterable[object]) -> List[InvestmentStrategyProposal]:
         proposals = self.proposal_store.list() if self.proposal_store else []
@@ -305,6 +376,34 @@ def proposal_rule_payloads(proposal: InvestmentStrategyProposal) -> List[Dict[st
     metadata = proposal.metadata if isinstance(proposal.metadata, dict) else {}
     rule = metadata.get("proposedRule") if isinstance(metadata.get("proposedRule"), dict) else {}
     return [dict(rule)] if rule else []
+
+
+def materialization_validation_with_diff(validation: Dict[str, object]) -> Dict[str, object]:
+    validation = dict(validation or {})
+    if "diff" in validation and isinstance(validation.get("diff"), dict):
+        return validation
+    baseline = validation.get("baselineInferenceBox") if isinstance(validation.get("baselineInferenceBox"), dict) else {}
+    matched_count = int(number_or_none(validation.get("matchedCount")) or 0)
+    baseline_relations = int(number_or_none(baseline.get("relationCount")) or 0)
+    baseline_traces = int(number_or_none(baseline.get("traceCount")) or 0)
+    validation["diff"] = {
+        "baselineRelationCount": baseline_relations,
+        "baselineTraceCount": baseline_traces,
+        "candidateMatchedCount": matched_count,
+        "matchedMinusBaselineRelations": matched_count - baseline_relations,
+        "validationOnly": bool(validation.get("validationOnly", True)),
+        "wroteInferenceBox": bool(validation.get("wroteInferenceBox")),
+    }
+    return validation
+
+
+def number_or_none(value: object):
+    if value in (None, ""):
+        return None
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return None
 
 
 def truthy(value: object, default: bool = True) -> bool:

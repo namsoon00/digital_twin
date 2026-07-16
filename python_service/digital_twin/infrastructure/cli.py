@@ -15,7 +15,24 @@ from .event_bus import default_event_bus
 from . import operational_store as stores
 from .notifications import queued_notifier_for_account, send_events
 from .ontology_graph_store import ontology_repository_from_settings
-from .service_factory import build_investment_calendar_candidate_service, build_investment_calendar_runner, build_investment_calendar_service, build_kis_realtime_websocket_runner, build_market_data_collection_runner, build_model_review_runner, build_monitor_runner, build_news_collection_runner, build_notification_queue_runner, build_official_calendar_sync_service, build_ontology_lab_service, build_ontology_reasoning_runner, build_rule_change_candidate_service, build_symbol_universe_service, monitor_account_job_store_from_settings
+from .service_factory import (
+    build_investment_calendar_candidate_service,
+    build_investment_calendar_runner,
+    build_investment_calendar_service,
+    build_investment_strategy_proposal_service,
+    build_kis_realtime_websocket_runner,
+    build_market_data_collection_runner,
+    build_model_review_runner,
+    build_monitor_runner,
+    build_news_collection_runner,
+    build_notification_queue_runner,
+    build_official_calendar_sync_service,
+    build_ontology_lab_service,
+    build_ontology_reasoning_runner,
+    build_rule_change_candidate_service,
+    build_symbol_universe_service,
+    monitor_account_job_store_from_settings,
+)
 from .schedulers import (
     InvestmentCalendarScheduler,
     KISRealtimeWebSocketScheduler,
@@ -415,6 +432,56 @@ def ontology_lab_command(args) -> int:
     return 1
 
 
+def investment_strategy_proposals_command(args) -> int:
+    service = build_investment_strategy_proposal_service(runtime_settings())
+    action = args.strategy_proposals_action
+    if action == "list":
+        print(json.dumps(service.list(), ensure_ascii=False))
+        return 0
+    if action == "status":
+        print(json.dumps(service.status(), ensure_ascii=False))
+        return 0
+    if action == "get":
+        result = service.get(args.id)
+        print(json.dumps(result, ensure_ascii=False))
+        return 0 if result.get("status") != "not-found" else 1
+    if action == "validate":
+        result = service.validate_materialization(args.id, read_json_payload(args.payload_file) if args.payload_file else {})
+        print(json.dumps(result, ensure_ascii=False))
+        return 0 if result.get("status") not in {"not-found", "error", "invalid-rulebox"} else 1
+    if action == "approve":
+        result = service.approve(args.id, {
+            "reviewedBy": args.reviewed_by,
+            "reviewReason": args.review_reason,
+            "forceApproved": bool(args.force),
+        })
+        print(json.dumps(result, ensure_ascii=False))
+        return 0 if result.get("status") == "approved" else 1
+    if action == "performance":
+        result = service.performance(args.id)
+        print(json.dumps(result, ensure_ascii=False))
+        return 0 if result.get("status") != "not-found" else 1
+    if action == "record-performance":
+        payload = read_json_payload(args.payload_file) if args.payload_file else {}
+        for key in [
+            "observedAt",
+            "portfolioReturnPct",
+            "benchmarkReturnPct",
+            "maxDrawdownPct",
+            "signalCount",
+            "falsePositiveCount",
+            "notes",
+            "source",
+        ]:
+            value = getattr(args, snake_arg(key), "")
+            if value not in (None, ""):
+                payload[key] = value
+        result = service.record_performance_sample(args.id, payload)
+        print(json.dumps(result, ensure_ascii=False))
+        return 0 if result.get("status") == "recorded" else 1
+    return 1
+
+
 def read_json_payload(path: str = "") -> Dict[str, object]:
     if path:
         with open(path, "r", encoding="utf-8") as handle:
@@ -424,6 +491,17 @@ def read_json_payload(path: str = "") -> Dict[str, object]:
     else:
         payload = {}
     return payload if isinstance(payload, dict) else {}
+
+
+def snake_arg(name: str) -> str:
+    result = []
+    for char in str(name or ""):
+        if char.isupper():
+            result.append("_")
+            result.append(char.lower())
+        else:
+            result.append(char)
+    return "".join(result).lstrip("_")
 
 
 MASKED_RUNTIME_SETTING_KEYS = set(SECRET_SETTING_KEYS) | {"tossAccountSeq", "telegramChatId"}
@@ -775,6 +853,35 @@ def build_parser() -> argparse.ArgumentParser:
     lab_report = ontology_lab_actions.add_parser("report")
     lab_report.add_argument("--id", required=True)
     ontology_lab.set_defaults(func=ontology_lab_command)
+
+    strategy_proposals = subparsers.add_parser("strategy-proposals", help="Review investment strategy proposals")
+    strategy_proposals_actions = strategy_proposals.add_subparsers(dest="strategy_proposals_action", required=True)
+    strategy_proposals_actions.add_parser("list")
+    strategy_proposals_actions.add_parser("status")
+    strategy_get = strategy_proposals_actions.add_parser("get")
+    strategy_get.add_argument("--id", required=True)
+    strategy_validate = strategy_proposals_actions.add_parser("validate")
+    strategy_validate.add_argument("--id", required=True)
+    strategy_validate.add_argument("--payload-file", default="")
+    strategy_approve = strategy_proposals_actions.add_parser("approve")
+    strategy_approve.add_argument("--id", required=True)
+    strategy_approve.add_argument("--reviewed-by", default="cli-user")
+    strategy_approve.add_argument("--review-reason", default="")
+    strategy_approve.add_argument("--force", action="store_true")
+    strategy_performance = strategy_proposals_actions.add_parser("performance")
+    strategy_performance.add_argument("--id", required=True)
+    strategy_record_performance = strategy_proposals_actions.add_parser("record-performance")
+    strategy_record_performance.add_argument("--id", required=True)
+    strategy_record_performance.add_argument("--payload-file", default="")
+    strategy_record_performance.add_argument("--observed-at", default="")
+    strategy_record_performance.add_argument("--portfolio-return-pct", default="")
+    strategy_record_performance.add_argument("--benchmark-return-pct", default="")
+    strategy_record_performance.add_argument("--max-drawdown-pct", default="")
+    strategy_record_performance.add_argument("--signal-count", default="")
+    strategy_record_performance.add_argument("--false-positive-count", default="")
+    strategy_record_performance.add_argument("--notes", default="")
+    strategy_record_performance.add_argument("--source", default="")
+    strategy_proposals.set_defaults(func=investment_strategy_proposals_command)
 
     settings = subparsers.add_parser("settings", help="Manage runtime settings")
     settings_actions = settings.add_subparsers(dest="settings_action", required=True)

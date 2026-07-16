@@ -112,6 +112,29 @@ def clean_symbols_from_payload(value: object) -> List[str]:
     return sorted(set(str(item or "").upper().strip() for item in raw_values if str(item or "").strip()))
 
 
+def materialization_preview_diff_payload(
+    baseline_inferencebox: Dict[str, object],
+    matched_count: int,
+    candidate_rule_count: int,
+    native_query_used: bool = False,
+) -> Dict[str, object]:
+    baseline = baseline_inferencebox if isinstance(baseline_inferencebox, dict) else {}
+    baseline_relations = int(number_or_none(baseline.get("relationCount")) or 0)
+    baseline_traces = int(number_or_none(baseline.get("traceCount")) or 0)
+    matched = int(number_or_none(matched_count) or 0)
+    return {
+        "baselineRelationCount": baseline_relations,
+        "baselineTraceCount": baseline_traces,
+        "candidateMatchedCount": matched,
+        "candidateRuleCount": int(number_or_none(candidate_rule_count) or 0),
+        "matchedMinusBaselineRelations": matched - baseline_relations,
+        "validationOnly": True,
+        "mutatedOperationalRuleBox": False,
+        "wroteInferenceBox": False,
+        "nativeQueryUsed": bool(native_query_used),
+    }
+
+
 def inference_generation_id() -> str:
     return "inference-generation:" + uuid.uuid4().hex[:16]
 
@@ -544,6 +567,8 @@ class NullTypeDBOntologyGraphRepository:
             "mutatedOperationalRuleBox": False,
             "wroteInferenceBox": False,
             "candidateRuleCount": 0,
+            "baselineInferenceBox": self.inferencebox_snapshot(),
+            "diff": materialization_preview_diff_payload({}, 0, 0, False),
         }
 
     def inferencebox_snapshot(self, symbols: List[str] = None, limit: int = 80) -> Dict[str, object]:
@@ -2655,6 +2680,8 @@ relation ontology-assertion,
                 "mutatedOperationalRuleBox": False,
                 "wroteInferenceBox": False,
                 "candidateRuleCount": 0,
+                "baselineInferenceBox": {},
+                "diff": materialization_preview_diff_payload({}, 0, 0, False),
             }
         enabled_rules = [
             GraphInferenceRule.from_dict({**rule.to_dict(), "enabled": True})
@@ -2675,6 +2702,8 @@ relation ontology-assertion,
                 "wroteInferenceBox": False,
                 "candidateRuleCount": len(enabled_rules),
                 "nativeReasoningProfile": native_profile,
+                "baselineInferenceBox": {},
+                "diff": materialization_preview_diff_payload({}, 0, len(enabled_rules), False),
                 "typedbQueryMetrics": self.query_metrics_snapshot(),
             }
         if not abox_available:
@@ -2688,7 +2717,21 @@ relation ontology-assertion,
                 "wroteInferenceBox": False,
                 "candidateRuleCount": len(enabled_rules),
                 "nativeReasoningProfile": native_profile,
+                "baselineInferenceBox": {},
+                "diff": materialization_preview_diff_payload({}, 0, len(enabled_rules), False),
                 "typedbQueryMetrics": self.query_metrics_snapshot(),
+            }
+        try:
+            baseline_inferencebox = self.inferencebox_snapshot_from_typedb(target_symbols, 80)
+        except Exception as error:  # noqa: BLE001 - baseline diff is diagnostic only.
+            baseline_inferencebox = {
+                "status": "error",
+                "graphStore": "typedb",
+                "source": "typedbInferenceBox",
+                "reasonCode": typedb_error_code(error),
+                "reason": "TypeDB InferenceBox 기준선 조회 실패: " + str(error)[:180],
+                "relationCount": 0,
+                "traceCount": 0,
             }
         try:
             force_sync = typedb_bool(payload.get("forceSchemaFunctionSync")) or typedb_bool(payload.get("forceRuleFunctionSync"))
@@ -2705,6 +2748,8 @@ relation ontology-assertion,
                     "wroteInferenceBox": False,
                     "candidateRuleCount": len(enabled_rules),
                     "nativeReasoningProfile": native_profile,
+                    "baselineInferenceBox": baseline_inferencebox,
+                    "diff": materialization_preview_diff_payload(baseline_inferencebox, 0, len(enabled_rules), False),
                     "functionSyncResult": function_sync_result,
                     "typedbQueryMetrics": self.query_metrics_snapshot(),
                 }
@@ -2725,6 +2770,13 @@ relation ontology-assertion,
                 "candidateRuleIds": [rule.rule_id for rule in enabled_rules],
                 "targetSymbols": target_symbols,
                 "matchedCount": matched_count,
+                "baselineInferenceBox": baseline_inferencebox,
+                "diff": materialization_preview_diff_payload(
+                    baseline_inferencebox,
+                    matched_count,
+                    len(enabled_rules),
+                    native_query_used,
+                ),
                 "nativeTypeDbReasoningUsed": native_query_used,
                 "typedbNativeFunctionReasoningUsed": native_query_used and bool(native_match_result.get("schemaFunctionUsed")),
                 "typedbSchemaFunctionUsed": bool(function_sync_result.get("status") == "ok"),
@@ -2753,6 +2805,13 @@ relation ontology-assertion,
                 "wroteInferenceBox": False,
                 "candidateRuleCount": len(enabled_rules),
                 "nativeReasoningProfile": native_profile,
+                "baselineInferenceBox": baseline_inferencebox if "baseline_inferencebox" in locals() else {},
+                "diff": materialization_preview_diff_payload(
+                    baseline_inferencebox if "baseline_inferencebox" in locals() else {},
+                    0,
+                    len(enabled_rules),
+                    False,
+                ),
                 "typedbQueryMetrics": self.query_metrics_snapshot(),
             }
 

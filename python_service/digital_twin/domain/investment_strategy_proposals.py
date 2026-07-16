@@ -41,6 +41,7 @@ class InvestmentStrategyProposal:
     status: str = STRATEGY_STATUS_PROPOSED
     validation: Dict[str, object] = field(default_factory=dict)
     lifecycle: Dict[str, object] = field(default_factory=dict)
+    performance: Dict[str, object] = field(default_factory=dict)
     metadata: Dict[str, object] = field(default_factory=dict)
     created_at: str = ""
     updated_at: str = ""
@@ -96,6 +97,7 @@ class InvestmentStrategyProposal:
             status=clean_text(payload.get("status") or STRATEGY_STATUS_PROPOSED, 64),
             validation=dict(payload.get("validation") or {}),
             lifecycle=dict(payload.get("lifecycle") or {}),
+            performance=dict(payload.get("performance") or {}),
             metadata=dict(payload.get("metadata") or {}),
             created_at=clean_text(payload.get("createdAt") or payload.get("created_at")),
             updated_at=clean_text(payload.get("updatedAt") or payload.get("updated_at")),

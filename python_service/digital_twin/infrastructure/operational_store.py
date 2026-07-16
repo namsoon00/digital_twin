@@ -1,7 +1,7 @@
 from typing import Dict
 
 from .mysql_monitoring import MySQLMonitorAccountJobStore
-from .ontology_lab_store import JsonInvestmentStrategyProposalStore, JsonOntologyExperimentStore
+from .ontology_lab_store import JsonOntologyExperimentStore
 from .mysql_operational import (
     MySQLAccountRegistry,
     MySQLAppStore,
@@ -9,6 +9,7 @@ from .mysql_operational import (
     MySQLExternalSignalCache,
     MySQLInvestmentCalendarCandidateStore,
     MySQLInvestmentCalendarStore,
+    MySQLInvestmentStrategyProposalStore,
     MySQLMarketQuoteCache,
     MySQLModelReviewJobStore,
     MySQLMonitorStore,
@@ -127,7 +128,8 @@ def ontology_experiment_store(settings: Dict[str, str] = None):
 
 
 def investment_strategy_proposal_store(settings: Dict[str, str] = None):
-    return JsonInvestmentStrategyProposalStore()
+    configured = configured_settings(settings)
+    return MySQLInvestmentStrategyProposalStore(configured)
 
 
 def monitor_account_job_store(settings: Dict[str, str] = None):

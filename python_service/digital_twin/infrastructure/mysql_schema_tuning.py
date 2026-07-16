@@ -131,6 +131,28 @@ MYSQL_OPERATIONAL_INDEXES: Dict[str, Sequence[MySQLIndexDefinition]] = {
     "ontology_ai_opinion_samples": (
         MySQLIndexDefinition("ontology_ai_opinion_samples", "idx_ontology_quality_created", "`created_at`, `sample_id`"),
     ),
+    "investment_strategy_proposals": (
+        MySQLIndexDefinition(
+            "investment_strategy_proposals",
+            "idx_investment_strategy_proposals_status",
+            "`status`, `updated_at`, `proposal_id`",
+        ),
+        MySQLIndexDefinition(
+            "investment_strategy_proposals",
+            "idx_investment_strategy_proposals_experiment",
+            "`source_experiment_id`",
+        ),
+        MySQLIndexDefinition(
+            "investment_strategy_proposals",
+            "idx_investment_strategy_proposals_trigger",
+            "`source_trigger`, `updated_at`",
+        ),
+        MySQLIndexDefinition(
+            "investment_strategy_proposals",
+            "idx_investment_strategy_proposals_updated",
+            "`updated_at`, `proposal_id`",
+        ),
+    ),
 }
 
 
@@ -165,6 +187,7 @@ MYSQL_OPERATIONAL_KEY_PARTITIONS: Dict[str, MySQLKeyPartitionDefinition] = {
     "symbol_universe": MySQLKeyPartitionDefinition("symbol_universe", ("market", "symbol"), 8),
     "research_evidence": MySQLKeyPartitionDefinition("research_evidence", ("evidence_id",), 8),
     "ontology_ai_opinion_samples": MySQLKeyPartitionDefinition("ontology_ai_opinion_samples", ("sample_id",), 8),
+    "investment_strategy_proposals": MySQLKeyPartitionDefinition("investment_strategy_proposals", ("proposal_id",), 8),
 }
 
 

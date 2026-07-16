@@ -47,6 +47,8 @@
     "python:ontology-lab:once": "python3 python_service/service.py ontology-lab once",
     "python:ontology-lab:status": "python3 python_service/service.py ontology-lab status",
     "python:ontology-lab:watch": "python3 python_service/service.py ontology-lab watch",
+    "python:strategy-proposals": "python3 python_service/service.py strategy-proposals",
+    "python:strategy-proposals:status": "python3 python_service/service.py strategy-proposals status",
     "python:ontology:seed": "python3 python_service/service.py ontology seed",
     "python:symbols:refresh": "python3 python_service/service.py symbols refresh",
     "python:symbols:search": "python3 python_service/service.py symbols search",

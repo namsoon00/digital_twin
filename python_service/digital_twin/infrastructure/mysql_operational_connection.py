@@ -418,6 +418,25 @@ MYSQL_SCHEMA = [
     ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
     """,
     """
+    CREATE TABLE IF NOT EXISTS investment_strategy_proposals (
+        proposal_id VARCHAR(191) PRIMARY KEY,
+        status VARCHAR(32) NOT NULL DEFAULT 'proposed',
+        title VARCHAR(255) NOT NULL DEFAULT '',
+        source_trigger VARCHAR(120) NOT NULL DEFAULT '',
+        source_experiment_id VARCHAR(191) NOT NULL DEFAULT '',
+        symbols_json LONGTEXT NOT NULL,
+        rule_ids_json LONGTEXT NOT NULL,
+        payload_json LONGTEXT NOT NULL,
+        created_at VARCHAR(40) NOT NULL,
+        updated_at VARCHAR(40) NOT NULL,
+        approved_at VARCHAR(40) NOT NULL DEFAULT '',
+        deployed_at VARCHAR(40) NOT NULL DEFAULT '',
+        KEY idx_investment_strategy_proposals_status (status, updated_at, proposal_id),
+        KEY idx_investment_strategy_proposals_experiment (source_experiment_id),
+        KEY idx_investment_strategy_proposals_trigger (source_trigger, updated_at)
+    ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
+    """,
+    """
     CREATE TABLE IF NOT EXISTS ontology_ai_opinion_samples (
         sample_id VARCHAR(191) PRIMARY KEY,
         portfolio_id VARCHAR(191) NOT NULL DEFAULT '',

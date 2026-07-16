@@ -64,7 +64,19 @@ from ..infrastructure.mock_market import mock_market_payload, mock_market_scenar
 from ..infrastructure.ontology_graph_store import ontology_repository_from_settings
 from ..infrastructure.ontology_projection import PortfolioOntologyProjectionRecorder
 from ..infrastructure import operational_store as stores
-from ..infrastructure.service_factory import build_investment_calendar_candidate_service, build_investment_calendar_runner, build_investment_calendar_service, build_notification_queue_runner, build_official_calendar_sync_service, build_ontology_lab_service, build_rule_change_candidate_service, build_symbol_universe_service, flow_lens_snapshot, investment_analysis_snapshot
+from ..infrastructure.service_factory import (
+    build_investment_calendar_candidate_service,
+    build_investment_calendar_runner,
+    build_investment_calendar_service,
+    build_investment_strategy_proposal_service,
+    build_notification_queue_runner,
+    build_official_calendar_sync_service,
+    build_ontology_lab_service,
+    build_rule_change_candidate_service,
+    build_symbol_universe_service,
+    flow_lens_snapshot,
+    investment_analysis_snapshot,
+)
 from ..infrastructure.settings import ROOT_DIR, runtime_settings, save_runtime_settings
 from ..infrastructure.toss_snapshots import build_snapshot
 
@@ -699,6 +711,38 @@ def activate_ontology_experiment_payload(experiment_id: str) -> Dict[str, object
 
 def pause_ontology_experiment_payload(experiment_id: str) -> Dict[str, object]:
     return ontology_lab_service().pause(experiment_id)
+
+
+def investment_strategy_proposal_service():
+    return build_investment_strategy_proposal_service(runtime_settings())
+
+
+def list_investment_strategy_proposals_payload() -> Dict[str, object]:
+    return investment_strategy_proposal_service().list()
+
+
+def investment_strategy_proposals_status_payload() -> Dict[str, object]:
+    return investment_strategy_proposal_service().status()
+
+
+def investment_strategy_proposal_payload(proposal_id: str) -> Dict[str, object]:
+    return investment_strategy_proposal_service().get(proposal_id)
+
+
+def validate_investment_strategy_proposal_payload(proposal_id: str, payload: Dict[str, object]) -> Dict[str, object]:
+    return investment_strategy_proposal_service().validate_materialization(proposal_id, payload if isinstance(payload, dict) else {})
+
+
+def approve_investment_strategy_proposal_payload(proposal_id: str, payload: Dict[str, object]) -> Dict[str, object]:
+    return investment_strategy_proposal_service().approve(proposal_id, payload if isinstance(payload, dict) else {})
+
+
+def investment_strategy_proposal_performance_payload(proposal_id: str) -> Dict[str, object]:
+    return investment_strategy_proposal_service().performance(proposal_id)
+
+
+def record_investment_strategy_proposal_performance_payload(proposal_id: str, payload: Dict[str, object]) -> Dict[str, object]:
+    return investment_strategy_proposal_service().record_performance_sample(proposal_id, payload if isinstance(payload, dict) else {})
 
 
 def notification_store():
@@ -2154,6 +2198,36 @@ class DigitalTwinHandler(BaseHTTPRequestHandler):
         ontology_experiment_match = re.match(r"^/api/ontology/experiments/([^/]+)$", path)
         if ontology_experiment_match and self.command == "GET":
             return self.send_payload(200, ontology_experiment_payload(urllib.parse.unquote(ontology_experiment_match.group(1))))
+
+        if path == "/api/investment-strategy-proposals" and self.command == "GET":
+            return self.send_payload(200, list_investment_strategy_proposals_payload())
+
+        if path == "/api/investment-strategy-proposals/status" and self.command == "GET":
+            return self.send_payload(200, investment_strategy_proposals_status_payload())
+
+        strategy_proposal_action_match = re.match(r"^/api/investment-strategy-proposals/([^/]+)/(validate|approve|performance)$", path)
+        if strategy_proposal_action_match:
+            proposal_id = urllib.parse.unquote(strategy_proposal_action_match.group(1))
+            action = strategy_proposal_action_match.group(2)
+            if action == "performance" and self.command == "GET":
+                return self.send_payload(200, investment_strategy_proposal_performance_payload(proposal_id))
+            if self.command == "POST":
+                if action == "validate":
+                    if not self.ensure_writable("공유 모드에서는 투자 전략 제안을 검증할 수 없습니다."):
+                        return
+                    return self.send_payload(200, validate_investment_strategy_proposal_payload(proposal_id, self.read_json_body()))
+                if action == "approve":
+                    if not self.ensure_writable("공유 모드에서는 투자 전략 제안을 승인할 수 없습니다."):
+                        return
+                    return self.send_payload(200, approve_investment_strategy_proposal_payload(proposal_id, self.read_json_body()))
+                if action == "performance":
+                    if not self.ensure_writable("공유 모드에서는 투자 전략 성과를 기록할 수 없습니다."):
+                        return
+                    return self.send_payload(200, record_investment_strategy_proposal_performance_payload(proposal_id, self.read_json_body()))
+
+        strategy_proposal_match = re.match(r"^/api/investment-strategy-proposals/([^/]+)$", path)
+        if strategy_proposal_match and self.command == "GET":
+            return self.send_payload(200, investment_strategy_proposal_payload(urllib.parse.unquote(strategy_proposal_match.group(1))))
 
         if path == "/api/symbol-universe":
             if self.command == "GET":

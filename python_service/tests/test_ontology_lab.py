@@ -454,7 +454,48 @@ class OntologyLabTests(unittest.TestCase):
         self.assertEqual(0, len(repository.run_rulebox_payloads))
         self.assertFalse(result["validation"]["mutatedOperationalRuleBox"])
         self.assertFalse(result["validation"]["wroteInferenceBox"])
+        self.assertEqual(1, result["validation"]["diff"]["candidateMatchedCount"])
+        self.assertIn("materialization-validated", {
+            item["action"]
+            for item in proposal_store.get(proposal_id).lifecycle.get("reviewLog") or []
+        })
         self.assertEqual("validated", proposal_store.get(proposal_id).status)
+
+    def test_strategy_proposal_approval_and_performance_keep_audit_trail(self):
+        repository = FakeOntologyRepository()
+        proposal_store = MemoryStrategyProposalStore()
+        strategy_service = InvestmentStrategyProposalService(
+            proposal_store,
+            ontology_repository=repository,
+        )
+        created = strategy_service.propose_from_rule_candidates(
+            ai_candidate_result(),
+            {"symbols": ["AAPL"], "trigger": "unit-test"},
+        )
+        proposal_id = created["proposals"][0]["id"]
+        strategy_service.validate_materialization(proposal_id)
+
+        approved = strategy_service.approve(proposal_id, {
+            "reviewedBy": "unit-test",
+            "reviewReason": "preview matched expected graph facts",
+        })
+        performance = strategy_service.record_performance_sample(proposal_id, {
+            "portfolioReturnPct": "3.2",
+            "benchmarkReturnPct": "1.1",
+            "maxDrawdownPct": "-0.8",
+            "signalCount": "2",
+            "falsePositiveCount": "1",
+        })
+
+        proposal = proposal_store.get(proposal_id)
+        actions = [item["action"] for item in proposal.lifecycle.get("reviewLog") or []]
+        self.assertEqual("approved", approved["status"])
+        self.assertEqual("approved", proposal.status)
+        self.assertIn("approved", actions)
+        self.assertIn("performance-recorded", actions)
+        self.assertEqual(1, performance["performance"]["summary"]["sampleCount"])
+        self.assertEqual(2.1, performance["performance"]["summary"]["avgExcessReturnPct"])
+        self.assertEqual(0.5, performance["performance"]["summary"]["falsePositiveRate"])
 
     def test_run_without_snapshots_marks_result_as_needing_data(self):
         service = OntologyLabService(

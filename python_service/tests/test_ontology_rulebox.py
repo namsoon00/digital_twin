@@ -901,6 +901,84 @@ class OntologyRuleBoxTests(unittest.TestCase):
         self.assertEqual("HAS_DATA_QUALITY", news_quality["conditionRelationType"])
         self.assertEqual(["news-quality"], news_quality["conditionTargetDataScopes"])
 
+    def test_default_rulebox_covers_priority_relation_axes(self):
+        rules = default_graph_inference_rules()
+        rule_ids = {item.rule_id for item in rules}
+        expected_rule_ids = {
+            "graph.instrument_profile.strategy_fit.support.v1",
+            "graph.instrument_profile.strategy_mismatch.risk.v1",
+            "graph.strategy_profile.loss_tolerance_breach.v1",
+            "graph.strategy_profile.aggressive_recovery_room.v1",
+            "graph.price.recovery.confirmed_by_flow.v1",
+            "graph.price.rebound.failure.v1",
+            "graph.flow.recovery_confirmed_by_smart_money.v1",
+            "graph.flow.price_up_smart_money_outflow.divergence.v1",
+            "graph.news.price_reaction.support_confirmed.v1",
+            "graph.news.price_reaction.risk_confirmed.v1",
+            "graph.disclosure.financing_or_dilution.risk.v1",
+        }
+
+        self.assertTrue(expected_rule_ids.issubset(rule_ids))
+
+        graph = rulebox_graph_from_rules(rules)
+        repository = TypeDBOntologyGraphRepository("http://typedb.example.test")
+        condition_rows = repository.rows_for_entities(graph)
+        strategy_fit_profile = next(
+            item
+            for item in condition_rows
+            if item["id"] == "rule-condition:graph.instrument_profile.strategy_fit.support.v1:profile-allows-strength-add"
+        )
+        strategy_loss_budget = next(
+            item
+            for item in condition_rows
+            if item["id"] == "rule-condition:graph.strategy_profile.loss_tolerance_breach.v1:strategy-risk-budget"
+        )
+        price_recovery = next(
+            item
+            for item in condition_rows
+            if item["id"] == "rule-condition:graph.price.recovery.confirmed_by_flow.v1:reclaim-ma5-or-ma20"
+        )
+        flow_divergence = next(
+            item
+            for item in condition_rows
+            if item["id"] == "rule-condition:graph.flow.price_up_smart_money_outflow.divergence.v1:investor-flow-risk"
+        )
+        news_reaction = next(
+            item
+            for item in condition_rows
+            if item["id"] == "rule-condition:graph.news.price_reaction.risk_confirmed.v1:direct-material-risk"
+        )
+        disclosure_action = next(
+            item
+            for item in condition_rows
+            if item["id"] == "rule-condition:graph.disclosure.financing_or_dilution.risk.v1:corporate-action-signal"
+        )
+
+        self.assertEqual("HAS_INSTRUMENT_PROFILE", strategy_fit_profile["conditionRelationType"])
+        self.assertEqual("instrument-profile", strategy_fit_profile["conditionTargetKind"])
+        self.assertEqual("HAS_RISK_BUDGET", strategy_loss_budget["conditionRelationType"])
+        self.assertEqual("RECLAIMS_LEVEL", price_recovery["conditionRelationType"])
+        self.assertEqual(["ma5", "ma20"], price_recovery["conditionTargetLevelTypes"])
+        self.assertEqual("HAS_INVESTOR_FLOW_SENTIMENT", flow_divergence["conditionRelationType"])
+        self.assertEqual(["risk"], flow_divergence["conditionRelationPolarities"])
+        self.assertEqual("HAS_EXTERNAL_SIGNAL", news_reaction["conditionRelationType"])
+        self.assertEqual(["risk"], news_reaction["conditionTargetPolarities"])
+        self.assertEqual("HAS_EXTERNAL_SIGNAL", disclosure_action["conditionRelationType"])
+        self.assertEqual("corporate-action", disclosure_action["conditionTargetKind"])
+
+        relation_types = {
+            derivation.relation_type
+            for rule in rules
+            if rule.rule_id in expected_rule_ids
+            for derivation in rule.derivations
+        }
+        self.assertIn("MATCHES_INVESTOR_PROFILE", relation_types)
+        self.assertIn("VIOLATES_RISK_TOLERANCE", relation_types)
+        self.assertIn("CONFIRMS_RECOVERY", relation_types)
+        self.assertIn("DIVERGES_FROM_FLOW", relation_types)
+        self.assertIn("CONFIRMS_EVENT_IMPACT", relation_types)
+        self.assertIn("HAS_DILUTION_RISK", relation_types)
+
     def test_rulebox_admin_payload_roundtrips_to_graph(self):
         rules = default_graph_inference_rules()
         payload = {"rules": rulebox_rules_to_payload(rules)}

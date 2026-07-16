@@ -72,6 +72,14 @@ AI 프롬프트에는 TBox, `boundedContexts`, ABox, operational ontology, reaso
 5. `ontology_inference_context.py`가 최신 generation의 InferenceBox만 읽어 투자 판단 후보, 근거, 반대 근거, 부족 데이터, AI 질문을 만든다.
 6. AI는 이 컨텍스트를 받아 최종 의견을 쓰고, 시스템은 없는 데이터 생성 여부와 규칙 충돌 여부를 검증한 뒤 알림 메시지에 넣는다.
 
+우선적으로 강화한 추론 관계 축은 다음 5개다.
+
+- 종목 타입 관계: `HAS_INSTRUMENT_PROFILE`, `HAS_ARCHETYPE`, `HAS_POSITION_INTENT`로 종목을 성장주, 반도체 사이클, 비트코인 프록시, 우선주/인컴, 대형 우량 등으로 분류한다. `MATCHES_INVESTOR_PROFILE`, `VIOLATES_STRATEGY_FIT` 추론은 이 타입이 현재 가격 흐름과 계정 성향에 맞는지 분리한다.
+- 투자 성향 적합 관계: `HAS_RISK_BUDGET`, `HAS_PROFIT_POLICY`, `EVALUATED_UNDER_STRATEGY`를 통해 공격형/성장형/균형형/보수형의 손실 허용폭, 수익 보호 기준, 단일 종목 비중 한도를 적용한다. `VIOLATES_RISK_TOLERANCE`, `FITS_INVESTOR_RISK_PROFILE` 추론은 모든 계정에 같은 손절/추가매수 기준을 쓰지 않게 한다.
+- 가격 회복 관계: `RECLAIMS_LEVEL`, `BREAKS_LEVEL`, `HAS_TREND_TRANSITION`과 5/20/60일 평균 가격 거리, 당일 등락, 거래량을 묶어 `CONFIRMS_RECOVERY`, `FAILS_RECOVERY`를 만든다. 단순 반등, 확인된 회복, 반등 실패 위험을 다른 관계로 남긴다.
+- 수급 심리 관계: `HAS_TRADE_FLOW`, `HAS_INVESTOR_FLOW_SENTIMENT`로 체결강도, 호가 불균형, 외국인·기관·개인 순매수 심리를 표현한다. `CONFIRMS_WITH_FLOW`, `DIVERGES_FROM_FLOW`는 가격 변화와 큰 자금 흐름이 같은 방향인지 또는 어긋나는지를 추론한다.
+- 뉴스·공시 영향 관계: `HAS_EXTERNAL_SIGNAL`, `NEWS_CONTEXT_FOR`, `NEWS_RISK_FOR`, `NEWS_SUPPORTS_ENTRY`, `HAS_DILUTION_RISK`, `CONFIRMS_EVENT_IMPACT`로 기사/공시 존재와 실제 가격·거래 반응을 분리한다. 새 뉴스나 공시가 있더라도 신선도, 관련성, 중요도, 원문 확보, 가격 반응이 약하면 실행 강도를 낮춘다.
+
 관계 점수는 단일 공식 점수가 아니다. TypeDB가 먼저 규칙 성립 여부와 InferenceBox 관계를 만들고, `ontology_inference_context.py`는 성립한 관계를 현재 ABox fact의 크기로 다시 해석해 다음 분해 점수를 만든다.
 
 - `ruleReliability`: TypeDB 규칙 weight와 trace confidence에서 온 규칙 신뢰도.

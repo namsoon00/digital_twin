@@ -9740,6 +9740,249 @@ h3 {
   justify-self: start;
 }
 
+.strategy-proposal-console-panel {
+  overflow: hidden;
+}
+
+.strategy-proposal-summary {
+  padding: var(--ds-panel-pad-y) var(--ds-panel-pad-x) 0;
+}
+
+.strategy-proposal-layout {
+  display: grid;
+  grid-template-columns: minmax(260px, 0.72fr) minmax(0, 1.28fr);
+  gap: 0;
+  min-width: 0;
+  min-height: 420px;
+  border-top: 1px solid var(--line);
+}
+
+.strategy-proposal-list {
+  display: grid;
+  align-content: start;
+  gap: 8px;
+  min-width: 0;
+  padding: var(--ds-panel-pad-y) var(--ds-panel-pad-x);
+  border-right: 1px solid var(--line);
+  background: var(--panel-soft);
+}
+
+.strategy-proposal-card {
+  display: grid;
+  gap: 6px;
+  min-width: 0;
+  padding: 12px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--panel);
+  color: var(--ink);
+  text-align: left;
+  cursor: pointer;
+}
+
+.strategy-proposal-card:hover,
+.strategy-proposal-card:focus-visible {
+  border-color: color-mix(in srgb, var(--blue) 54%, var(--line));
+}
+
+.strategy-proposal-card.active {
+  border-color: var(--blue);
+  box-shadow: inset 3px 0 0 var(--blue);
+}
+
+.strategy-proposal-card strong,
+.strategy-proposal-card em {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.strategy-proposal-card strong {
+  font-size: 13px;
+  font-weight: 900;
+  line-height: 1.35;
+}
+
+.strategy-proposal-card em {
+  color: var(--muted);
+  font-size: 12px;
+  font-style: normal;
+  font-weight: 760;
+  line-height: 1.4;
+}
+
+.strategy-proposal-detail {
+  display: grid;
+  align-content: start;
+  gap: 14px;
+  min-width: 0;
+  padding: var(--ds-panel-pad-y) var(--ds-panel-pad-x);
+}
+
+.strategy-proposal-detail-head,
+.strategy-proposal-subpanel-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+  min-width: 0;
+}
+
+.strategy-proposal-detail-head > div:first-child {
+  display: grid;
+  gap: 8px;
+  min-width: 0;
+}
+
+.strategy-proposal-detail-head h3 {
+  margin: 0;
+  color: var(--ink);
+  font-size: 18px;
+  line-height: 1.35;
+  overflow-wrap: anywhere;
+}
+
+.strategy-proposal-detail-head p {
+  margin: 0;
+  color: var(--muted);
+  font-size: 13px;
+  font-weight: 760;
+  line-height: 1.55;
+  word-break: keep-all;
+}
+
+.strategy-proposal-detail-actions {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: 8px;
+}
+
+.strategy-proposal-condition-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 10px;
+  min-width: 0;
+}
+
+.strategy-proposal-condition-grid section,
+.strategy-proposal-subpanel,
+.strategy-proposal-empty {
+  display: grid;
+  gap: 8px;
+  min-width: 0;
+  padding: 12px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--panel);
+}
+
+.strategy-proposal-condition-grid strong,
+.strategy-proposal-subpanel-head strong,
+.strategy-proposal-empty strong {
+  color: var(--ink);
+  font-size: 13px;
+  font-weight: 950;
+}
+
+.strategy-proposal-condition-grid ul {
+  display: grid;
+  gap: 6px;
+  margin: 0;
+  padding-left: 18px;
+  color: var(--ink);
+  font-size: 12px;
+  font-weight: 720;
+  line-height: 1.45;
+}
+
+.strategy-proposal-condition-grid p,
+.strategy-proposal-empty span {
+  margin: 0;
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 740;
+  line-height: 1.45;
+}
+
+.strategy-proposal-review-log {
+  display: grid;
+  min-width: 0;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  overflow: hidden;
+}
+
+.strategy-proposal-review-log > div {
+  display: grid;
+  gap: 3px;
+  min-width: 0;
+  padding: 10px 12px;
+  border-bottom: 1px solid var(--line);
+}
+
+.strategy-proposal-review-log > div:last-child {
+  border-bottom: 0;
+}
+
+.strategy-proposal-review-log span {
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 740;
+  overflow-wrap: anywhere;
+}
+
+.strategy-proposal-performance-form {
+  display: grid;
+  grid-template-columns: repeat(6, minmax(0, 1fr));
+  align-items: end;
+  gap: 10px;
+  min-width: 0;
+  padding-top: 2px;
+}
+
+.strategy-proposal-performance-form .setting-field.wide {
+  grid-column: span 4;
+}
+
+.strategy-proposal-performance-form .text-button {
+  justify-self: start;
+}
+
+@media (max-width: 900px) {
+  .strategy-proposal-layout {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .strategy-proposal-list {
+    border-right: 0;
+    border-bottom: 1px solid var(--line);
+  }
+
+  .strategy-proposal-detail-head,
+  .strategy-proposal-subpanel-head {
+    display: grid;
+  }
+
+  .strategy-proposal-detail-actions {
+    justify-content: flex-start;
+  }
+
+  .strategy-proposal-performance-form {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .strategy-proposal-performance-form .setting-field.wide {
+    grid-column: 1 / -1;
+  }
+}
+
+@media (max-width: 620px) {
+  .strategy-proposal-condition-grid,
+  .strategy-proposal-performance-form {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}
+
 .feed-quality-grid {
   display: grid;
   grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));

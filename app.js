@@ -121,6 +121,7 @@
     { id: "charts", label: "통합 차트", description: "가격·흐름" },
     { id: "rules", label: "전략 룰", description: "조건·알림" },
     { id: "graphs", label: "온톨로지", description: "TBox·ABox" },
+    { id: "proposals", label: "전략 제안", description: "승인·성과" },
     { id: "trace", label: "검증·리뷰", description: "성과·품질" }
   ];
   var ontologySections = [
@@ -144,7 +145,7 @@
       settings: ["policy", "templates", "diagnostics"]
     },
     modeling: {
-      results: ["overview", "evidence", "charts", "graphs", "trace"],
+      results: ["overview", "evidence", "charts", "graphs", "proposals", "trace"],
       settings: ["rules"]
     },
     feed: {
@@ -450,6 +451,12 @@
     ontologyExperimentsLoaded: false,
     ontologyExperimentsError: "",
     ontologyExperimentAction: "",
+    strategyProposals: null,
+    strategyProposalsLoading: false,
+    strategyProposalsLoaded: false,
+    strategyProposalsError: "",
+    strategyProposalAction: "",
+    activeStrategyProposalId: "",
     messageSchedules: [],
     messageSchedulesLoading: false,
     messageSchedulesError: "",
@@ -677,6 +684,8 @@
         tasks.push(loadInvestmentCalendar(true));
         tasks.push(loadNotificationJobs());
         tasks.push(loadNotificationSchedules());
+      } else if (/^investment_strategy\./.test(eventType)) {
+        tasks.push(loadStrategyProposals(true));
       } else if (/^symbol_universe\./.test(eventType)) {
         tasks.push(loadSymbolUniverse());
       } else if (/^app\.|^chat\./.test(eventType)) {
@@ -735,6 +744,21 @@
     }
     if (event.name === "monitoring.cycle_completed" && Number(payload.alertCount || 0) > 0) {
       return { message: "모니터링 사이클 완료: 알림 " + Number(payload.alertCount || 0) + "건", tone: "success" };
+    }
+    if (event.name === "investment_strategy.proposed") {
+      return { message: "새 투자 전략 제안이 등록됐습니다.", tone: "success" };
+    }
+    if (event.name === "investment_strategy.validated") {
+      return { message: "투자 전략 제안 검증이 완료됐습니다.", tone: "success" };
+    }
+    if (event.name === "investment_strategy.approved") {
+      return { message: "투자 전략 제안이 승인됐습니다.", tone: "success" };
+    }
+    if (event.name === "investment_strategy.deployed") {
+      return { message: "투자 전략 제안이 운영 온톨로지에 반영됐습니다.", tone: "success" };
+    }
+    if (event.name === "investment_strategy.performance_recorded") {
+      return { message: "투자 전략 성과 표본을 기록했습니다.", tone: "success" };
     }
     return null;
   }
@@ -1068,6 +1092,7 @@
     if (requested === "chart" || requested === "candle" || requested === "candles" || requested === "flow" || requested === "money-flow") return "charts";
     if (requested === "policy" || requested === "rule" || requested === "rules" || requested === "registry" || requested === "prompts") return "rules";
     if (requested === "structure" || requested === "graph" || requested === "ontology" || requested === "relation-graph") return "graphs";
+    if (requested === "proposal" || requested === "proposals" || requested === "strategy-proposals" || requested === "approval" || requested === "approvals") return "proposals";
     if (requested === "relations" || requested === "rules-trace" || requested === "review" || requested === "reviews") return "trace";
     return strategySections.some(function (section) { return section.id === requested; }) ? requested : "overview";
   }
@@ -3797,6 +3822,11 @@
     return ["evidence", "charts", "graphs", "trace"].indexOf(section) >= 0;
   }
 
+  function shouldLoadStrategyProposals() {
+    if (state.activeTab !== "modeling") return false;
+    return activeSectionForPageMode("modeling", strategySections, normalizeStrategySection(state.activeStrategySection)) === "proposals";
+  }
+
   function loadOntologyStrategyDetail(force) {
     if (isStaticPreviewHost()) return Promise.resolve(state.snapshot);
     if (state.ontologyStrategyDetailLoading && !force) return Promise.resolve(state.snapshot);
@@ -4236,6 +4266,153 @@
     if (action === "apply" && status === "disabled") return "온톨로지 저장소가 비활성화되어 적용할 수 없습니다.";
     if (action === "apply" && status === "pending") return "온톨로지 제안 적용이 완료되지 않았습니다.";
     if (action === "apply" && status === "error") return "온톨로지 제안을 운영 반영하지 못했습니다.";
+    return "";
+  }
+
+  function loadStrategyProposals(force) {
+    if (isStaticPreviewHost()) {
+      state.strategyProposals = { proposals: [], count: 0, summary: { count: 0, statuses: {} } };
+      state.strategyProposalsLoaded = true;
+      state.strategyProposalsError = "";
+      return Promise.resolve(state.strategyProposals);
+    }
+    if (state.strategyProposalsLoading && !force) return Promise.resolve(state.strategyProposals);
+    state.strategyProposalsLoading = true;
+    state.strategyProposalsError = "";
+    return Promise.all([
+      requestJson("/api/investment-strategy-proposals"),
+      requestJson("/api/investment-strategy-proposals/status")
+    ])
+      .then(function (results) {
+        var listPayload = results[0] && typeof results[0] === "object" ? results[0] : {};
+        var statusPayload = results[1] && typeof results[1] === "object" ? results[1] : {};
+        var proposals = Array.isArray(listPayload.proposals) ? listPayload.proposals : [];
+        state.strategyProposals = Object.assign({}, listPayload, {
+          proposals: proposals,
+          count: listPayload.count == null ? proposals.length : listPayload.count,
+          summary: statusPayload
+        });
+        state.strategyProposalsLoaded = true;
+        if (!strategyProposalById(state.activeStrategyProposalId) && proposals.length) {
+          state.activeStrategyProposalId = proposals[0].id || "";
+        }
+        if (!proposals.length) state.activeStrategyProposalId = "";
+        return state.strategyProposals;
+      })
+      .catch(function (error) {
+        state.strategyProposalsError = error.message || "전략 제안을 읽지 못했습니다.";
+        return null;
+      })
+      .finally(function () {
+        state.strategyProposalsLoading = false;
+        if (state.snapshot) render();
+      });
+  }
+
+  function strategyProposalActionDisabled() {
+    return Boolean(isStaticPreviewHost() || state.serverSettingsLocked || state.strategyProposalAction);
+  }
+
+  function validateStrategyProposal(proposalId) {
+    strategyProposalCommand(proposalId, "validate", "전략 제안의 TypeDB 물질화 검증을 실행했습니다.");
+  }
+
+  function approveStrategyProposal(proposalId) {
+    var proposal = strategyProposalById(proposalId);
+    if (!proposal) return;
+    var status = String(proposal.status || "");
+    if (status === "retired" || status === "deployed") {
+      showSnackbar("운영 반영 또는 폐기된 제안은 승인 상태로 되돌리지 않습니다.", "caution");
+      return;
+    }
+    strategyProposalCommand(proposalId, "approve", "전략 제안을 승인했습니다.", {
+      reviewedBy: "web-main",
+      reviewReason: "웹 전략 제안 화면에서 수동 승인"
+    });
+  }
+
+  function recordStrategyProposalPerformance(proposalId, form) {
+    var id = String(proposalId || "").trim();
+    if (!id || !form) return;
+    var payload = {
+      source: "web-main",
+      portfolioReturnPct: strategyProposalFormNumber(form, "portfolioReturnPct"),
+      benchmarkReturnPct: strategyProposalFormNumber(form, "benchmarkReturnPct"),
+      maxDrawdownPct: strategyProposalFormNumber(form, "maxDrawdownPct"),
+      signalCount: strategyProposalFormInteger(form, "signalCount"),
+      falsePositiveCount: strategyProposalFormInteger(form, "falsePositiveCount"),
+      notes: strategyProposalFormValue(form, "notes")
+    };
+    if (
+      payload.portfolioReturnPct == null &&
+      payload.benchmarkReturnPct == null &&
+      payload.maxDrawdownPct == null &&
+      payload.signalCount == null &&
+      payload.falsePositiveCount == null &&
+      !payload.notes
+    ) {
+      showSnackbar("기록할 성과 값이나 메모를 입력하세요.", "caution");
+      return;
+    }
+    strategyProposalCommand(id, "performance", "전략 제안 성과 표본을 기록했습니다.", payload);
+  }
+
+  function strategyProposalFormValue(form, name) {
+    var field = form.querySelector('[name="' + name + '"]');
+    return field ? String(field.value || "").trim() : "";
+  }
+
+  function strategyProposalFormNumber(form, name) {
+    var value = strategyProposalFormValue(form, name);
+    if (!value) return null;
+    var number = Number(value);
+    return Number.isFinite(number) ? number : null;
+  }
+
+  function strategyProposalFormInteger(form, name) {
+    var value = strategyProposalFormNumber(form, name);
+    return value == null ? null : Math.round(value);
+  }
+
+  function strategyProposalCommand(proposalId, action, successMessage, payload) {
+    var id = String(proposalId || "").trim();
+    if (!id || state.strategyProposalAction) return;
+    if (isStaticPreviewHost() || state.serverSettingsLocked) {
+      state.strategyProposalsError = "로컬 서버에서만 전략 제안을 변경할 수 있습니다.";
+      showSnackbar(state.strategyProposalsError, "danger");
+      render();
+      return;
+    }
+    state.strategyProposalAction = action + ":" + id;
+    state.strategyProposalsError = "";
+    render();
+    sendJson("/api/investment-strategy-proposals/" + encodeURIComponent(id) + "/" + action, "POST", payload || {})
+      .then(function (result) {
+        var failureMessage = strategyProposalCommandFailureMessage(action, result);
+        if (failureMessage) throw new Error(failureMessage);
+        if (result && result.proposal && result.proposal.id) state.activeStrategyProposalId = result.proposal.id;
+        showSnackbar(successMessage || "전략 제안 상태를 변경했습니다.");
+        return loadStrategyProposals(true);
+      })
+      .catch(function (error) {
+        state.strategyProposalsError = error.message || "전략 제안 요청에 실패했습니다.";
+        showSnackbar(state.strategyProposalsError, "danger");
+      })
+      .finally(function () {
+        state.strategyProposalAction = "";
+        render();
+      });
+  }
+
+  function strategyProposalCommandFailureMessage(action, payload) {
+    payload = payload && typeof payload === "object" ? payload : {};
+    var status = String(payload.status || "");
+    var reason = String(payload.reason || "");
+    if (status === "not-found") return "전략 제안을 찾지 못했습니다.";
+    if (action === "validate" && status === "requires-typedb") return "TypeDB 물질화 미리보기를 사용할 수 없습니다.";
+    if (action === "validate" && status === "missing-rules") return "검증할 RuleBox 후보 규칙이 없습니다.";
+    if (action === "validate" && status === "error") return "TypeDB 물질화 검증에 실패했습니다.";
+    if (action === "approve" && status === "not-ready") return "현재 제안 상태에서는 승인할 수 없습니다." + (reason ? " (" + reason + ")" : "");
     return "";
   }
 
@@ -7084,6 +7261,9 @@
     if (state.activeTab === "experiments" && !state.ontologyExperimentsLoaded && !state.ontologyExperimentsLoading) {
       loadOntologyExperiments(false);
     }
+    if (shouldLoadStrategyProposals() && !state.strategyProposalsLoaded && !state.strategyProposalsLoading) {
+      loadStrategyProposals(false);
+    }
     if (state.activeTab === "system" && !state.ontologyAuditLoaded && !state.ontologyAuditLoading) {
       loadOntologyAudit(false);
     }
@@ -9346,6 +9526,308 @@
     ].join("");
   }
 
+  function strategyProposalPayload() {
+    return state.strategyProposals && typeof state.strategyProposals === "object"
+      ? state.strategyProposals
+      : { proposals: [], count: 0, summary: { statuses: {} } };
+  }
+
+  function strategyProposalItems() {
+    var payload = strategyProposalPayload();
+    return Array.isArray(payload.proposals) ? payload.proposals : [];
+  }
+
+  function strategyProposalSummary() {
+    var payload = strategyProposalPayload();
+    return payload.summary && typeof payload.summary === "object" ? payload.summary : {};
+  }
+
+  function strategyProposalById(proposalId) {
+    var target = String(proposalId || "");
+    return strategyProposalItems().filter(function (item) {
+      return String(item.id || "") === target;
+    })[0] || null;
+  }
+
+  function activeStrategyProposal() {
+    return strategyProposalById(state.activeStrategyProposalId) || strategyProposalItems()[0] || null;
+  }
+
+  function strategyProposalStatusLabel(status) {
+    var value = String(status || "").toLowerCase();
+    if (value === "proposed") return "제안";
+    if (value === "validated") return "검증됨";
+    if (value === "approved") return "승인됨";
+    if (value === "deployed") return "운영 반영";
+    if (value === "retired") return "폐기";
+    return value || "대기";
+  }
+
+  function strategyProposalStatusTone(status) {
+    var value = String(status || "").toLowerCase();
+    if (value === "approved" || value === "deployed") return "watch";
+    if (value === "validated") return "watch";
+    if (value === "proposed") return "hold";
+    if (value === "retired") return "hold";
+    return "caution";
+  }
+
+  function strategyProposalMetricValue(value, suffix) {
+    if (value == null || value === "") return "-";
+    var number = Number(value);
+    if (!Number.isFinite(number)) return String(value);
+    return number.toLocaleString("ko-KR", { maximumFractionDigits: 2 }) + (suffix || "");
+  }
+
+  function strategyProposalSignedPercent(value) {
+    if (value == null || value === "") return "-";
+    var number = Number(value);
+    if (!Number.isFinite(number)) return String(value);
+    return (number > 0 ? "+" : "") + number.toFixed(Math.abs(number) >= 10 ? 0 : 2) + "%";
+  }
+
+  function strategyProposalArray(value) {
+    return Array.isArray(value) ? value : [];
+  }
+
+  function strategyProposalValidation(proposal) {
+    var validation = proposal && proposal.validation && typeof proposal.validation === "object" ? proposal.validation : {};
+    return validation.materialization && typeof validation.materialization === "object" ? validation.materialization : validation;
+  }
+
+  function strategyProposalReviewLog(proposal) {
+    var lifecycle = proposal && proposal.lifecycle && typeof proposal.lifecycle === "object" ? proposal.lifecycle : {};
+    return Array.isArray(lifecycle.reviewLog) ? lifecycle.reviewLog : [];
+  }
+
+  function strategyProposalPerformanceSummary(proposal) {
+    var performance = proposal && proposal.performance && typeof proposal.performance === "object" ? proposal.performance : {};
+    return performance.summary && typeof performance.summary === "object" ? performance.summary : {};
+  }
+
+  function strategyProposalBusy(action, proposalId) {
+    return state.strategyProposalAction === action + ":" + String(proposalId || "");
+  }
+
+  function renderStrategyProposalConsolePanel() {
+    var payload = strategyProposalPayload();
+    var summary = strategyProposalSummary();
+    var statuses = summary.statuses && typeof summary.statuses === "object" ? summary.statuses : {};
+    var items = strategyProposalItems();
+    var active = activeStrategyProposal();
+    var waitingCount = Number(statuses.proposed || 0) + Number(statuses.validated || 0);
+    return [
+      '<article class="panel strategy-proposal-console-panel">',
+      '<div class="panel-head">',
+      '<div>',
+      '<p class="label">Strategy Proposals</p>',
+      '<h2>전략 제안 승인 큐</h2>',
+      '<p class="subtle">온톨로지 실험과 AI 후보가 만든 전략 가설을 검증, 승인, 성과 표본으로 추적합니다.</p>',
+      '</div>',
+      '<div class="settings-actions strategy-proposal-actions">',
+      '<span class="tone-chip ' + escapeHtml(waitingCount ? "caution" : "hold") + '">' + escapeHtml(waitingCount ? waitingCount + "건 검토" : "대기 없음") + '</span>',
+      '<button class="text-button" type="button" data-action="refresh-strategy-proposals"' + (state.strategyProposalsLoading ? ' disabled' : '') + '>' + escapeHtml(state.strategyProposalsLoading ? "조회 중" : "새로고침") + '</button>',
+      '</div>',
+      '</div>',
+      '<div class="work-detail-metric-row strategy-proposal-summary">',
+      renderOntologyExperimentMetric("전체", payload.count == null ? items.length : payload.count, "proposals"),
+      renderOntologyExperimentMetric("제안", summary.proposedCount || statuses.proposed || 0, "proposed"),
+      renderOntologyExperimentMetric("검증", summary.validatedCount || statuses.validated || 0, "validated"),
+      renderOntologyExperimentMetric("승인·운영", Number(summary.approvedCount || statuses.approved || 0) + Number(summary.deployedCount || statuses.deployed || 0), "approved"),
+      '</div>',
+      state.strategyProposalsError ? '<p class="form-error">' + escapeHtml(state.strategyProposalsError) + '</p>' : '',
+      state.strategyProposalsLoading && !state.strategyProposalsLoaded ? '<div class="rule-strip"><span>전략 제안 목록을 읽는 중입니다.</span></div>' : '',
+      '<div class="strategy-proposal-layout">',
+      renderStrategyProposalList(items, active),
+      renderStrategyProposalDetail(active),
+      '</div>',
+      '</article>'
+    ].join("");
+  }
+
+  function renderStrategyProposalList(items, active) {
+    if (!items.length) {
+      return [
+        '<section class="strategy-proposal-list">',
+        '<div class="strategy-proposal-empty">',
+        '<strong>등록된 전략 제안이 없습니다.</strong>',
+        '<span>온톨로지 실험 제안이나 RuleBox 후보가 저장되면 이 큐에 표시됩니다.</span>',
+        '</div>',
+        '</section>'
+      ].join("");
+    }
+    return [
+      '<section class="strategy-proposal-list" aria-label="전략 제안 목록">',
+      items.map(function (proposal) {
+        var id = proposal.id || "";
+        var activeClass = active && active.id === id ? " active" : "";
+        var symbols = strategyProposalArray(proposal.symbols);
+        var ruleIds = strategyProposalArray(proposal.ruleIds);
+        var meta = [
+          symbols.slice(0, 4).join(", "),
+          ruleIds.length ? ruleIds.length + "개 룰" : "",
+          proposal.updatedAt ? formatClock(proposal.updatedAt) : ""
+        ].filter(Boolean).join(" · ");
+        return [
+          '<button class="strategy-proposal-card' + activeClass + '" type="button" data-strategy-proposal-select="' + escapeHtml(id) + '">',
+          '<span class="tone-chip ' + escapeHtml(strategyProposalStatusTone(proposal.status)) + '">' + escapeHtml(strategyProposalStatusLabel(proposal.status)) + '</span>',
+          '<strong>' + escapeHtml(proposal.title || id || "전략 제안") + '</strong>',
+          '<em>' + escapeHtml(meta || "세부 정보 대기") + '</em>',
+          '</button>'
+        ].join("");
+      }).join(""),
+      '</section>'
+    ].join("");
+  }
+
+  function renderStrategyProposalDetail(proposal) {
+    if (!proposal) {
+      return [
+        '<section class="strategy-proposal-detail">',
+        '<div class="strategy-proposal-empty">',
+        '<strong>선택된 전략 제안이 없습니다.</strong>',
+        '<span>목록에서 제안을 선택하면 검증 결과와 승인 이력이 표시됩니다.</span>',
+        '</div>',
+        '</section>'
+      ].join("");
+    }
+    var id = proposal.id || "";
+    var validation = strategyProposalValidation(proposal);
+    var diff = validation.diff && typeof validation.diff === "object" ? validation.diff : {};
+    var reviewLog = strategyProposalReviewLog(proposal);
+    var performance = proposal.performance && typeof proposal.performance === "object" ? proposal.performance : {};
+    var samples = Array.isArray(performance.samples) ? performance.samples : [];
+    var disabled = strategyProposalActionDisabled();
+    var approvable = ["proposed", "validated", "approved"].indexOf(String(proposal.status || "")) >= 0;
+    return [
+      '<section class="strategy-proposal-detail">',
+      '<div class="strategy-proposal-detail-head">',
+      '<div>',
+      '<span class="tone-chip ' + escapeHtml(strategyProposalStatusTone(proposal.status)) + '">' + escapeHtml(strategyProposalStatusLabel(proposal.status)) + '</span>',
+      '<h3>' + escapeHtml(proposal.title || "전략 제안") + '</h3>',
+      '<p>' + escapeHtml(proposal.thesis || "전략 가설 설명이 아직 없습니다.") + '</p>',
+      '</div>',
+      '<div class="strategy-proposal-detail-actions">',
+      '<button class="text-button" type="button" data-strategy-proposal-validate="' + escapeHtml(id) + '"' + (disabled ? ' disabled' : '') + '>' + escapeHtml(strategyProposalBusy("validate", id) ? "검증 중" : "검증 실행") + '</button>',
+      '<button class="text-button primary" type="button" data-strategy-proposal-approve="' + escapeHtml(id) + '"' + (disabled || !approvable ? ' disabled' : '') + '>' + escapeHtml(strategyProposalBusy("approve", id) ? "승인 중" : "승인") + '</button>',
+      '</div>',
+      '</div>',
+      '<div class="work-detail-metric-row strategy-proposal-detail-metrics">',
+      renderOntologyExperimentMetric("상태", strategyProposalStatusLabel(proposal.status), "status"),
+      renderOntologyExperimentMetric("종목", strategyProposalArray(proposal.symbols).length || "-", "symbols"),
+      renderOntologyExperimentMetric("룰", strategyProposalArray(proposal.ruleIds).length || "-", "rules"),
+      renderOntologyExperimentMetric("갱신", proposal.updatedAt ? formatClock(proposal.updatedAt) : "-", "updated"),
+      '</div>',
+      renderStrategyProposalConditionGrid(proposal),
+      renderStrategyProposalValidationPanel(validation, diff),
+      renderStrategyProposalPerformancePanel(proposal, samples),
+      renderStrategyProposalReviewLog(reviewLog),
+      renderStrategyProposalPerformanceForm(proposal, disabled),
+      '</section>'
+    ].join("");
+  }
+
+  function renderStrategyProposalConditionGrid(proposal) {
+    var groups = [
+      { label: "진입 조건", items: strategyProposalArray(proposal.entryConditions) },
+      { label: "청산 조건", items: strategyProposalArray(proposal.exitConditions) },
+      { label: "리스크 통제", items: strategyProposalArray(proposal.riskControls) },
+      { label: "포지션·리밸런싱", items: strategyProposalArray(proposal.positionSizing).concat(strategyProposalArray(proposal.rebalancePolicy)) }
+    ];
+    return [
+      '<div class="strategy-proposal-condition-grid">',
+      groups.map(function (group) {
+        return [
+          '<section>',
+          '<strong>' + escapeHtml(group.label) + '</strong>',
+          group.items.length ? '<ul>' + group.items.slice(0, 6).map(function (item) {
+            return '<li>' + escapeHtml(item) + '</li>';
+          }).join("") + '</ul>' : '<p>조건 데이터 없음</p>',
+          '</section>'
+        ].join("");
+      }).join(""),
+      '</div>'
+    ].join("");
+  }
+
+  function renderStrategyProposalValidationPanel(validation, diff) {
+    var status = String(validation.status || "not-run");
+    var reason = validation.reason || "";
+    return [
+      '<section class="strategy-proposal-subpanel">',
+      '<div class="strategy-proposal-subpanel-head">',
+      '<strong>TypeDB 물질화 검증</strong>',
+      '<span class="tone-chip ' + escapeHtml(status === "ok" || status === "empty" || status === "completed" ? "watch" : (status === "not-run" ? "hold" : "caution")) + '">' + escapeHtml(status === "not-run" ? "미실행" : status) + '</span>',
+      '</div>',
+      reason ? '<p class="subtle">' + escapeHtml(reason) + '</p>' : '',
+      '<div class="work-detail-metric-row strategy-proposal-validation-metrics">',
+      renderOntologyExperimentMetric("기준 관계", strategyProposalMetricValue(diff.baselineRelationCount), "baseline"),
+      renderOntologyExperimentMetric("후보 매칭", strategyProposalMetricValue(diff.candidateMatchedCount != null ? diff.candidateMatchedCount : validation.matchedCount), "candidate"),
+      renderOntologyExperimentMetric("관계 변화", strategyProposalMetricValue(diff.matchedMinusBaselineRelations), "delta"),
+      renderOntologyExperimentMetric("InferenceBox", diff.wroteInferenceBox || validation.wroteInferenceBox ? "기록" : "미기록", "write"),
+      '</div>',
+      '</section>'
+    ].join("");
+  }
+
+  function renderStrategyProposalPerformancePanel(proposal, samples) {
+    var summary = strategyProposalPerformanceSummary(proposal);
+    return [
+      '<section class="strategy-proposal-subpanel">',
+      '<div class="strategy-proposal-subpanel-head">',
+      '<strong>성과 요약</strong>',
+      '<span class="tone-chip hold">' + escapeHtml((summary.sampleCount || samples.length || 0) + "개 표본") + '</span>',
+      '</div>',
+      '<div class="work-detail-metric-row strategy-proposal-performance-metrics">',
+      renderOntologyExperimentMetric("평균 수익률", strategyProposalSignedPercent(summary.avgPortfolioReturnPct), "portfolio"),
+      renderOntologyExperimentMetric("벤치마크", strategyProposalSignedPercent(summary.avgBenchmarkReturnPct), "benchmark"),
+      renderOntologyExperimentMetric("초과 수익", strategyProposalSignedPercent(summary.avgExcessReturnPct), "excess"),
+      renderOntologyExperimentMetric("오탐률", summary.falsePositiveRate == null ? "-" : Math.round(Number(summary.falsePositiveRate || 0) * 100) + "%", "false-positive"),
+      '</div>',
+      '</section>'
+    ].join("");
+  }
+
+  function renderStrategyProposalReviewLog(reviewLog) {
+    var rows = reviewLog.slice(-6).reverse();
+    return [
+      '<section class="strategy-proposal-subpanel">',
+      '<div class="strategy-proposal-subpanel-head">',
+      '<strong>승인·검증 이력</strong>',
+      '<span class="tone-chip hold">' + escapeHtml(reviewLog.length + "건") + '</span>',
+      '</div>',
+      rows.length ? '<div class="strategy-proposal-review-log">' + rows.map(function (item) {
+        var meta = [
+          item.at ? formatClock(item.at) : "",
+          item.reviewedBy || item.source || item.trigger || "",
+          item.validationStatus || ""
+        ].filter(Boolean).join(" · ");
+        return [
+          '<div>',
+          '<strong>' + escapeHtml(item.action || "record") + '</strong>',
+          '<span>' + escapeHtml(meta || "이력 데이터") + '</span>',
+          '</div>'
+        ].join("");
+      }).join("") + '</div>' : '<p class="subtle">아직 승인 또는 검증 이력이 없습니다.</p>',
+      '</section>'
+    ].join("");
+  }
+
+  function renderStrategyProposalPerformanceForm(proposal, disabled) {
+    var id = proposal && proposal.id ? proposal.id : "";
+    return [
+      '<form class="strategy-proposal-performance-form" data-strategy-proposal-performance-form="' + escapeHtml(id) + '">',
+      '<label class="setting-field"><span>포트폴리오 수익률(%)</span><input name="portfolioReturnPct" type="number" step="0.01" inputmode="decimal" placeholder="0.00"' + (disabled ? ' disabled' : '') + '></label>',
+      '<label class="setting-field"><span>벤치마크 수익률(%)</span><input name="benchmarkReturnPct" type="number" step="0.01" inputmode="decimal" placeholder="0.00"' + (disabled ? ' disabled' : '') + '></label>',
+      '<label class="setting-field"><span>최대 낙폭(%)</span><input name="maxDrawdownPct" type="number" step="0.01" inputmode="decimal" placeholder="-0.00"' + (disabled ? ' disabled' : '') + '></label>',
+      '<label class="setting-field"><span>신호 수</span><input name="signalCount" type="number" min="0" step="1" inputmode="numeric" placeholder="0"' + (disabled ? ' disabled' : '') + '></label>',
+      '<label class="setting-field"><span>오탐 수</span><input name="falsePositiveCount" type="number" min="0" step="1" inputmode="numeric" placeholder="0"' + (disabled ? ' disabled' : '') + '></label>',
+      '<label class="setting-field wide"><span>메모</span><textarea name="notes" rows="2" placeholder="성과 판단 메모"' + (disabled ? ' disabled' : '') + '></textarea></label>',
+      '<button class="text-button primary" type="submit"' + (disabled ? ' disabled' : '') + '>' + escapeHtml(strategyProposalBusy("performance", id) ? "기록 중" : "성과 기록") + '</button>',
+      '</form>'
+    ].join("");
+  }
+
   function ontologyStrategyParts(snapshot) {
     var decision = (snapshot || {}).tossDecision || {};
     var strategy = decision.ontologyStrategy || {};
@@ -10596,6 +11078,11 @@
         '</div>',
         '</article>'
       ].join("") }
+      ]);
+    }
+    if (section === "proposals") {
+      return renderInvestmentTabWorkspace("proposals", [
+        { role: "full", html: renderStrategyProposalConsolePanel() }
       ]);
     }
     if (section === "rules") {
@@ -18269,6 +18756,42 @@
       });
     });
 
+    var refreshStrategyProposalsButton = app.querySelector('[data-action="refresh-strategy-proposals"]');
+    if (refreshStrategyProposalsButton) {
+      refreshStrategyProposalsButton.addEventListener("click", function () {
+        loadStrategyProposals(true).then(function () {
+          if (!state.strategyProposalsError) showSnackbar("전략 제안 목록을 다시 읽었습니다.");
+        });
+      });
+    }
+
+    Array.prototype.slice.call(app.querySelectorAll("[data-strategy-proposal-select]")).forEach(function (button) {
+      button.addEventListener("click", function () {
+        var id = button.getAttribute("data-strategy-proposal-select") || "";
+        if (!id || id === state.activeStrategyProposalId) return;
+        state.activeStrategyProposalId = id;
+        render();
+      });
+    });
+
+    Array.prototype.slice.call(app.querySelectorAll("[data-strategy-proposal-validate]")).forEach(function (button) {
+      button.addEventListener("click", function () {
+        validateStrategyProposal(button.getAttribute("data-strategy-proposal-validate"));
+      });
+    });
+
+    Array.prototype.slice.call(app.querySelectorAll("[data-strategy-proposal-approve]")).forEach(function (button) {
+      button.addEventListener("click", function () {
+        approveStrategyProposal(button.getAttribute("data-strategy-proposal-approve"));
+      });
+    });
+
+    Array.prototype.slice.call(app.querySelectorAll("[data-strategy-proposal-performance-form]")).forEach(function (form) {
+      form.addEventListener("submit", function (event) {
+        event.preventDefault();
+        recordStrategyProposalPerformance(form.getAttribute("data-strategy-proposal-performance-form"), form);
+      });
+    });
 
     Array.prototype.slice.call(app.querySelectorAll('[data-action="append-rulebox-candidate"]')).forEach(function (button) {
       button.addEventListener("click", function () {

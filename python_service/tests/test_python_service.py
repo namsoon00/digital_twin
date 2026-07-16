@@ -7227,6 +7227,14 @@ class PythonServiceTests(unittest.TestCase):
         self.assertEqual(first[0].evidence_id, second[1].evidence_id)
         self.assertNotIn(":news:0", first[0].evidence_id)
 
+    def test_news_source_gateway_defaults_include_google_rss_fallbacks(self):
+        gateway = NewsSourceGateway({})
+
+        self.assertEqual(
+            ["yahoo_finance", "gdelt", "google_rss_kr", "google_rss_us"],
+            gateway.providers(),
+        )
+
     def test_news_source_gateway_scores_and_filters_unrelated_news(self):
         published = datetime.now(timezone.utc).strftime("%a, %d %b %Y %H:%M:%S GMT")
 

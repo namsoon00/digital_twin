@@ -704,7 +704,7 @@ def runtime_settings() -> Dict[str, str]:
         "newsCollectionMaxSymbols": value("newsCollectionMaxSymbols", "NEWS_COLLECTION_MAX_SYMBOLS", "40"),
         "newsCollectionLookbackMinutes": value("newsCollectionLookbackMinutes", "NEWS_COLLECTION_LOOKBACK_MINUTES", "180"),
         "newsCollectionPerSymbolLimit": value("newsCollectionPerSymbolLimit", "NEWS_COLLECTION_PER_SYMBOL_LIMIT", "8"),
-        "newsCollectionProviders": value("newsCollectionProviders", "NEWS_COLLECTION_PROVIDERS", "yahoo_finance,gdelt"),
+        "newsCollectionProviders": value("newsCollectionProviders", "NEWS_COLLECTION_PROVIDERS", "yahoo_finance,gdelt,google_rss_kr,google_rss_us"),
         "newsCollectionMinRelevanceScore": value("newsCollectionMinRelevanceScore", "NEWS_COLLECTION_MIN_RELEVANCE_SCORE", "35"),
         "newsCollectionRequireArticleBodyForRss": value("newsCollectionRequireArticleBodyForRss", "NEWS_COLLECTION_REQUIRE_ARTICLE_BODY_FOR_RSS", "1"),
         "newsCollectionIncludeWatchlist": value("newsCollectionIncludeWatchlist", "NEWS_COLLECTION_INCLUDE_WATCHLIST", "1"),

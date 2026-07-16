@@ -71,7 +71,7 @@
     newsCollectionMaxSymbols: "40",
     newsCollectionLookbackMinutes: "180",
     newsCollectionPerSymbolLimit: "8",
-    newsCollectionProviders: "yahoo_finance,gdelt",
+    newsCollectionProviders: "yahoo_finance,gdelt,google_rss_kr,google_rss_us",
     newsCollectionMinRelevanceScore: "35",
     newsCollectionRequireArticleBodyForRss: "1",
     newsCollectionIncludeWatchlist: "1",

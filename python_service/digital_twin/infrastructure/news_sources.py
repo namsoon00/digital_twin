@@ -24,7 +24,7 @@ TextFetcher = Callable[[str, Dict[str, str]], str]
 TAG_RE = re.compile(r"<[^>]+>")
 DISABLED_VALUES = {"0", "false", "no", "off", "disabled"}
 ARTICLE_TEXT_LIMIT = 5000
-DEFAULT_NEWS_COLLECTION_PROVIDERS = ["yahoo_finance", "gdelt"]
+DEFAULT_NEWS_COLLECTION_PROVIDERS = ["yahoo_finance", "gdelt", "google_rss_kr", "google_rss_us"]
 NEWS_API_GUARD_STATE: Dict[str, object] = {}
 RSS_PROVIDER_NAMES = {
     "google_rss_kr",

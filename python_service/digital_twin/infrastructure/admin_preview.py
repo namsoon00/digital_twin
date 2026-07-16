@@ -363,7 +363,7 @@ def admin_preview_config() -> Dict[str, object]:
                     {"key": "newsCollectionMaxSymbols", "label": "뉴스 수집 종목 수", "type": "number", "default": "40"},
                     {"key": "newsCollectionLookbackMinutes", "label": "뉴스 조회 기간", "type": "number", "default": "180", "unit": "minutes"},
                     {"key": "newsCollectionPerSymbolLimit", "label": "종목별 저장 기사 수", "type": "number", "default": "8"},
-                    {"key": "newsCollectionProviders", "label": "뉴스 수집 채널", "type": "text", "default": "yahoo_finance,gdelt"},
+                    {"key": "newsCollectionProviders", "label": "뉴스 수집 채널", "type": "text", "default": "yahoo_finance,gdelt,google_rss_kr,google_rss_us"},
                     {"key": "newsCollectionMinRelevanceScore", "label": "뉴스 관련성 최소 점수", "type": "number", "default": "35"},
                     {"key": "newsCollectionRequireArticleBodyForRss", "label": "RSS 원문 본문 필수", "type": "toggle", "default": "1"},
                     {"key": "newsCollectionIncludeWatchlist", "label": "관심종목 뉴스 포함", "type": "toggle", "default": "1"},

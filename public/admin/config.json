@@ -13,7 +13,7 @@
     "공유 미리보기에서는 서버 설정과 계정 DB 쓰기를 차단합니다."
   ],
   "localData": {
-    "generatedAt": "2026-07-16T05:19:58.328117Z",
+    "generatedAt": "2026-07-16T10:01:59.518505Z",
     "sources": {
       "settings": "data/settings.json",
       "settingsExists": false
@@ -124,7 +124,7 @@
       "newsCollectionMaxSymbols": "40",
       "newsCollectionLookbackMinutes": "180",
       "newsCollectionPerSymbolLimit": "8",
-      "newsCollectionProviders": "yahoo_finance,gdelt",
+      "newsCollectionProviders": "yahoo_finance,gdelt,google_rss_kr,google_rss_us",
       "newsCollectionMinRelevanceScore": "35",
       "newsCollectionRequireArticleBodyForRss": "1",
       "newsCollectionIncludeWatchlist": "1",
@@ -910,7 +910,7 @@
           "key": "newsCollectionProviders",
           "label": "뉴스 수집 채널",
           "type": "text",
-          "default": "yahoo_finance,gdelt"
+          "default": "yahoo_finance,gdelt,google_rss_kr,google_rss_us"
         },
         {
           "key": "newsCollectionMinRelevanceScore",
@@ -1782,5 +1782,5 @@
       ]
     }
   ],
-  "buildId": "e82fefdea4af"
+  "buildId": "9c4fd416c29c"
 }

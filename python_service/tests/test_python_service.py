@@ -1400,7 +1400,10 @@ class PythonServiceTests(unittest.TestCase):
         positions, _watchlist = provider.enrich_collections([naver], [])
 
         self.assertEqual(243601, positions[0].foreign_net_volume)
-        self.assertIs(False, positions[0].market_signal_coverage["investor"]["aiUsableAsStrongEvidence"])
+        self.assertIs(True, positions[0].market_signal_coverage["investor"]["realTime"])
+        self.assertEqual("live-poll", positions[0].market_signal_coverage["investor"]["cadence"])
+        self.assertEqual("realtime-polled", positions[0].market_signal_coverage["investor"]["freshnessStatus"])
+        self.assertIs(True, positions[0].market_signal_coverage["investor"]["aiUsableAsStrongEvidence"])
         self.assertIs(True, positions[0].market_signal_coverage["investor"]["judgementEvidenceUsable"])
         self.assertEqual(1, provider.diagnostics["livePreferred"])
         self.assertEqual(1, provider.diagnostics["live"])
@@ -1470,7 +1473,8 @@ class PythonServiceTests(unittest.TestCase):
         self.assertEqual(243601, positions[0].foreign_net_volume)
         self.assertEqual(1, provider.diagnostics["live"])
         self.assertEqual(0, provider.diagnostics["cached"])
-        self.assertIs(False, positions[0].market_signal_coverage["investor"]["realTime"])
+        self.assertIs(True, positions[0].market_signal_coverage["investor"]["realTime"])
+        self.assertEqual("live-poll", positions[0].market_signal_coverage["investor"]["cadence"])
         self.assertIs(False, positions[0].market_signal_coverage["investor"]["aiUsableAsStrongEvidence"])
         self.assertIs(True, positions[0].market_signal_coverage["investor"]["judgementEvidenceUsable"])
         self.assertEqual("reference-repeat", positions[0].market_signal_coverage["investor"]["freshnessStatus"])
@@ -1950,6 +1954,42 @@ class PythonServiceTests(unittest.TestCase):
 
         self.assertGreater(buy_side["buyScore"], buy_side["sellScore"])
         self.assertGreater(sell_side["sellScore"], sell_side["buyScore"])
+
+    def test_strategy_prefers_investor_buy_sell_difference_over_reported_net(self):
+        model = StrategyModel({})
+
+        variables = model.feature_variables({
+            "foreignNetVolume": 999999,
+            "foreignBuyVolume": 1300,
+            "foreignSellVolume": 600,
+            "institutionNetVolume": 999999,
+            "institutionBuyVolume": 200,
+            "institutionSellVolume": 500,
+            "individualNetVolume": 999999,
+            "individualBuyVolume": 400,
+            "individualSellVolume": 900,
+            "market": "KR",
+            "currency": "KRW",
+            "symbol": "000660",
+        })
+
+        self.assertEqual(700, variables["foreignNet"])
+        self.assertEqual(-300, variables["institutionNet"])
+        self.assertEqual(-500, variables["individualNet"])
+        self.assertNotIn("investorFlowScore", model.market_formula_missing_inputs({
+            "foreignNetVolume": 999999,
+            "foreignBuyVolume": 1300,
+            "foreignSellVolume": 600,
+            "institutionNetVolume": 999999,
+            "institutionBuyVolume": 200,
+            "institutionSellVolume": 500,
+            "individualNetVolume": 999999,
+            "individualBuyVolume": 400,
+            "individualSellVolume": 900,
+            "market": "KR",
+            "currency": "KRW",
+            "symbol": "000660",
+        }))
 
     def test_holding_decision_uses_ontology_reasoning_not_user_score_formulas(self):
         loss_position = normalize_position({

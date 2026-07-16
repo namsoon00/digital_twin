@@ -149,9 +149,21 @@ class StrategyModel:
         trend_distance60 = number(enriched.get("trendDistance60")) or (((current_price / ma60) - 1) * 100 if current_price and ma60 else 0.0)
         ma_spread = number(enriched.get("maSpread")) or (((ma20 / ma60) - 1) * 100 if ma20 and ma60 else 0.0)
         trend_score = clamp(trend_distance20 * 0.35 + trend_distance60 * 0.2 + ma_spread * 0.4, -15.0, 15.0)
-        foreign_net = number(enriched.get("foreignNet") or enriched.get("foreignNetVolume") or enriched.get("foreignInvestorNet"))
-        institution_net = number(enriched.get("institutionNet") or enriched.get("institutionNetVolume") or enriched.get("institutionInvestorNet"))
-        individual_net = number(enriched.get("individualNet") or enriched.get("individualNetVolume") or enriched.get("retailNet"))
+        foreign_net = investor_net_volume(
+            enriched.get("foreignNet") or enriched.get("foreignNetVolume") or enriched.get("foreignInvestorNet"),
+            enriched.get("foreignBuyVolume") or enriched.get("foreignBuy") or enriched.get("foreign_buy_volume"),
+            enriched.get("foreignSellVolume") or enriched.get("foreignSell") or enriched.get("foreign_sell_volume"),
+        )
+        institution_net = investor_net_volume(
+            enriched.get("institutionNet") or enriched.get("institutionNetVolume") or enriched.get("institutionInvestorNet"),
+            enriched.get("institutionBuyVolume") or enriched.get("institutionBuy") or enriched.get("institution_buy_volume"),
+            enriched.get("institutionSellVolume") or enriched.get("institutionSell") or enriched.get("institution_sell_volume"),
+        )
+        individual_net = investor_net_volume(
+            enriched.get("individualNet") or enriched.get("individualNetVolume") or enriched.get("retailNet"),
+            enriched.get("individualBuyVolume") or enriched.get("individualBuy") or enriched.get("individual_buy_volume"),
+            enriched.get("individualSellVolume") or enriched.get("individualSell") or enriched.get("individual_sell_volume"),
+        )
         investor_base = abs(foreign_net) + abs(institution_net) + abs(individual_net)
         investor_balance = foreign_net + institution_net - individual_net * 0.35
         investor_flow_score = clamp((investor_balance / investor_base) * 100, -30.0, 30.0) if investor_base else 0.0
@@ -314,9 +326,21 @@ class StrategyModel:
         orderbook_bid = number(raw.get("orderbookBidVolume") or raw.get("orderbook_bid_volume"))
         orderbook_ask = number(raw.get("orderbookAskVolume") or raw.get("orderbook_ask_volume"))
         price_change = number(raw.get("priceChangeRate") or raw.get("price_change_rate"))
-        foreign_net = number(raw.get("foreignNet") or raw.get("foreignNetVolume") or raw.get("foreign_net_volume"))
-        institution_net = number(raw.get("institutionNet") or raw.get("institutionNetVolume") or raw.get("institution_net_volume"))
-        individual_net = number(raw.get("individualNet") or raw.get("individualNetVolume") or raw.get("individual_net_volume"))
+        foreign_net = investor_net_volume(
+            raw.get("foreignNet") or raw.get("foreignNetVolume") or raw.get("foreign_net_volume"),
+            raw.get("foreignBuyVolume") or raw.get("foreignBuy") or raw.get("foreign_buy_volume"),
+            raw.get("foreignSellVolume") or raw.get("foreignSell") or raw.get("foreign_sell_volume"),
+        )
+        institution_net = investor_net_volume(
+            raw.get("institutionNet") or raw.get("institutionNetVolume") or raw.get("institution_net_volume"),
+            raw.get("institutionBuyVolume") or raw.get("institutionBuy") or raw.get("institution_buy_volume"),
+            raw.get("institutionSellVolume") or raw.get("institutionSell") or raw.get("institution_sell_volume"),
+        )
+        individual_net = investor_net_volume(
+            raw.get("individualNet") or raw.get("individualNetVolume") or raw.get("individual_net_volume"),
+            raw.get("individualBuyVolume") or raw.get("individualBuy") or raw.get("individual_buy_volume"),
+            raw.get("individualSellVolume") or raw.get("individualSell") or raw.get("individual_sell_volume"),
+        )
         expects_kr_signals = expects_kr_microstructure_signals(
             raw.get("market") or raw.get("marketCode") or raw.get("exchange"),
             raw.get("currency"),

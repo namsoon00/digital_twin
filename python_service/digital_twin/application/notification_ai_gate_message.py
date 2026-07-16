@@ -1327,12 +1327,6 @@ def execution_telegram_message(context: Dict[str, object], response: Notificatio
     axis_rows = relation_axis_summary_rows(context, level)
     if axis_rows:
         parts.extend(["", "<b>관계축 요약</b>", *axis_rows])
-    api_source_rows = external_api_source_rows(context, MESSAGE_API_SOURCE_ROW_LIMIT)
-    collection_rows = data_collection_time_rows(context, MESSAGE_DATA_COLLECTION_ROW_LIMIT)
-    if api_source_rows or collection_rows:
-        parts.extend(["", "<b>API 조회 정보</b>"])
-        parts.extend(_html_bullet(item, level) for item in api_source_rows)
-        parts.extend(_html_bullet(item, level) for item in collection_rows)
     quality_rows = data_quality_warning_rows(context, MESSAGE_DATA_QUALITY_ROW_LIMIT)
     if quality_rows:
         parts.extend(["", "<b>데이터 신뢰도</b>"])
@@ -1378,12 +1372,6 @@ def execution_telegram_message_absolute_beginner(context: Dict[str, object], res
     axis_rows = relation_axis_summary_rows(context, "absoluteBeginner")
     if axis_rows:
         parts.extend(["", "<b>판단에 쓴 큰 묶음</b>", *axis_rows])
-    api_source_rows = external_api_source_rows(context, MESSAGE_API_SOURCE_ROW_LIMIT)
-    collection_rows = data_collection_time_rows(context, MESSAGE_DATA_COLLECTION_ROW_LIMIT)
-    if api_source_rows or collection_rows:
-        parts.extend(["", "<b>API 조회 정보</b>"])
-        parts.extend(_html_bullet(item, "absoluteBeginner") for item in api_source_rows)
-        parts.extend(_html_bullet(item, "absoluteBeginner") for item in collection_rows)
     quality_rows = data_quality_warning_rows(context, MESSAGE_DATA_QUALITY_ROW_LIMIT)
     if quality_rows:
         parts.extend(["", "<b>데이터 신뢰도</b>"])

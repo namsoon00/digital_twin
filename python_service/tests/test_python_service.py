@@ -9471,10 +9471,10 @@ class PythonServiceTests(unittest.TestCase):
 
         message = context_with_validated_ai_response(context, response)["telegramMessage"]
 
-        self.assertIn("<b>API 조회 정보</b>", message)
-        self.assertIn("KIS Open API / 시세·수급: 조회 정보 국내 주식 현재가·호가·체결·투자자 수급 · 조회시각 2026-07-15 09:00 KST", message)
-        self.assertIn("OpenDART / 공시: 조회 정보 국내 공시 목록·접수일·보고서명 · 조회시각 2026-07-15 09:01 KST", message)
-        self.assertIn("GDELT / 뉴스: 조회 정보 국내외 뉴스 제목·요약·원문 URL·발행시각 · 조회시각 2026-07-15 09:01 KST", message)
+        self.assertNotIn("<b>API 조회 정보</b>", message)
+        self.assertNotIn("KIS Open API / 시세·수급: 조회 정보 국내 주식 현재가·호가·체결·투자자 수급", message)
+        self.assertNotIn("OpenDART / 공시: 조회 정보 국내 공시 목록·접수일·보고서명", message)
+        self.assertNotIn("GDELT / 뉴스: 조회 정보 국내외 뉴스 제목·요약·원문 URL·발행시각", message)
 
     def test_validated_ai_response_uses_absolute_beginner_delivery_level(self):
         context = {

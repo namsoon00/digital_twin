@@ -89,7 +89,7 @@ class ExternalApiSourceTests(unittest.TestCase):
         self.assertIn("환율", text)
         self.assertIn("실패", text)
 
-    def test_monitor_stamps_and_renderer_shows_external_api_block(self):
+    def test_monitor_stamps_external_api_metadata_but_renderer_hides_block(self):
         snapshot = self.snapshot_with_sources()
         event = AlertEvent(
             "main",
@@ -109,12 +109,13 @@ class ExternalApiSourceTests(unittest.TestCase):
             alert_context(stamped),
         )
 
-        self.assertIn("사용한 데이터 API", message)
-        self.assertIn("Alpha Vantage", message)
-        self.assertIn("CoinGecko", message)
-        self.assertIn("KIS", message)
+        self.assertNotIn("사용한 데이터 API", message)
+        self.assertNotIn("API 조회 정보", message)
+        self.assertNotIn("Alpha Vantage", message)
+        self.assertNotIn("CoinGecko", message)
+        self.assertNotIn("KIS", message)
 
-    def test_ai_rewritten_message_merges_api_sources_into_single_api_section(self):
+    def test_ai_rewritten_message_hides_api_sources_from_alert_body(self):
         snapshot = self.snapshot_with_sources()
         event = AlertEvent(
             "main",
@@ -142,11 +143,11 @@ class ExternalApiSourceTests(unittest.TestCase):
 
         message = render_notification(NotificationTemplate("investmentInsight", "{telegramMessage}"), context)
 
-        self.assertEqual(1, message.count("API 조회 정보"))
+        self.assertNotIn("API 조회 정보", message)
         self.assertNotIn("사용한 데이터 API", message)
-        self.assertIn("Alpha Vantage", message)
-        self.assertIn("CoinGecko", message)
-        self.assertIn("KIS", message)
+        self.assertNotIn("Alpha Vantage", message)
+        self.assertNotIn("CoinGecko", message)
+        self.assertNotIn("KIS", message)
 
 
 if __name__ == "__main__":

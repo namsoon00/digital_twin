@@ -390,8 +390,6 @@ def alert_context(event: AlertEvent) -> Dict[str, object]:
         readable_parts.extend(["", ai_prompt_block])
     if missing_data_block:
         readable_parts.extend(["", missing_data_block])
-    if external_api_source_block:
-        readable_parts.extend(["", external_api_source_block])
     if trigger_block:
         readable_parts.extend(["", trigger_block])
     readable_message = "\n".join(part for part in readable_parts if str(part).strip() or part == "").strip()
@@ -420,8 +418,6 @@ def alert_context(event: AlertEvent) -> Dict[str, object]:
         telegram_parts.extend(["", telegram_ai_prompt_block])
     if telegram_missing_data_block:
         telegram_parts.extend(["", telegram_missing_data_block])
-    if telegram_external_api_source_block:
-        telegram_parts.extend(["", telegram_external_api_source_block])
     if telegram_trigger_rows:
         telegram_parts.extend(["", "<b>발송 기준</b>", telegram_trigger_rows])
     telegram_message = "\n".join(part for part in telegram_parts if str(part).strip() or part == "").strip()
@@ -1167,13 +1163,7 @@ def append_ai_opinion(rendered: str, context: Dict[str, object], rich: bool = Fa
 
 
 def append_external_api_sources(rendered: str, context: Dict[str, object], rich: bool = False) -> str:
-    rendered_text = str(rendered or "")
-    if not rendered_text.strip() or "사용한 데이터 API" in rendered_text or "API 조회 정보" in rendered_text:
-        return rendered
-    block = notification_external_api_source_block(context, rich)
-    if not block:
-        return rendered
-    return rendered_text.rstrip() + "\n\n" + block
+    return rendered
 
 
 def prepend_message_start_badge(rendered: str, rich: bool = False, context: Dict[str, object] = None) -> str:

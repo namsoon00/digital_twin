@@ -5,6 +5,7 @@ from .alert_formatting import compact_number
 from .data_freshness import aggregate_freshness
 from .market_data import number
 from .message_types import (
+    EXTERNAL_CRYPTO_MOVE,
     EXTERNAL_DATA_CONNECTION,
     HOLDING_TIMING,
     INVESTMENT_INSIGHT,
@@ -28,6 +29,7 @@ SYSTEM_ALERT_TYPES = {
     MONITOR_HEARTBEAT,
     ONTOLOGY_INFERENCE_MISSING,
     EXTERNAL_DATA_CONNECTION,
+    EXTERNAL_CRYPTO_MOVE,
     MODEL_REVIEW,
     WORK_HANDOFF,
 }

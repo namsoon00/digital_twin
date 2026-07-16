@@ -6926,9 +6926,11 @@ class PythonServiceTests(unittest.TestCase):
         messages = {event.rule: event.message() for event in events}
 
         self.assertIn("externalDataConnection", messages)
-        self.assertEqual(["externalDataConnection"], sorted(messages.keys()))
+        self.assertIn("externalCryptoMove", messages)
+        self.assertEqual(["externalCryptoMove", "externalDataConnection"], sorted(messages.keys()))
         self.assertIn("FRED", messages["externalDataConnection"])
         self.assertIn("rate limit", messages["externalDataConnection"])
+        self.assertIn("비트코인 변동", messages["externalCryptoMove"])
         criteria_by_rule = {event.rule: event.criteria for event in events}
         self.assertTrue(any("외부 데이터 API" in item for item in criteria_by_rule["externalDataConnection"]))
 
@@ -6970,7 +6972,15 @@ class PythonServiceTests(unittest.TestCase):
 
         events = RealtimeMonitor().external_signal_events(snapshot, {})
 
-        self.assertEqual([], [event.rule for event in events])
+        self.assertEqual(["externalCryptoMove"], [event.rule for event in events])
+        event = events[0]
+        self.assertEqual("BTC", event.symbol)
+        self.assertEqual("WATCH", event.severity)
+        self.assertIn("비트코인 변동 24h +1.8% · 7d +5.3%", event.lines)
+        self.assertEqual("비트코인 가격 급등", event.metadata["cryptoMoveTitle"])
+        self.assertEqual("7일", event.metadata["cryptoMoveDominantPeriod"])
+        self.assertGreaterEqual(event.metadata["cryptoMoveScore"], 79)
+        self.assertTrue(event.metadata["dataFreshnessRequired"])
 
     def test_external_crypto_positive_weekly_move_with_minor_day_drop_is_watch(self):
         portfolio = portfolio_summary([])
@@ -7001,7 +7011,15 @@ class PythonServiceTests(unittest.TestCase):
 
         events = RealtimeMonitor().external_signal_events(snapshot, {})
 
-        self.assertEqual([], events)
+        self.assertEqual(["externalCryptoMove"], [event.rule for event in events])
+        event = events[0]
+        self.assertEqual("ETH", event.symbol)
+        self.assertEqual("WATCH", event.severity)
+        self.assertEqual("이더리움 가격 급등", event.metadata["cryptoMoveTitle"])
+        self.assertEqual("상승", event.metadata["cryptoMoveDirection"])
+        self.assertEqual("7일", event.metadata["cryptoMoveDominantPeriod"])
+        self.assertIn("이더리움 변동 24h -0.1% · 7d +11.8%", event.lines)
+        self.assertNotIn("가격 급락", event.metadata["cryptoMoveTitle"])
 
     def test_crypto_investment_insight_uses_active_opinion_beginner_summary(self):
         portfolio = portfolio_summary([])
@@ -7032,7 +7050,7 @@ class PythonServiceTests(unittest.TestCase):
 
         events = RealtimeMonitor().events_for_snapshot(snapshot, {})
         self.assertFalse(any(event.rule == "investmentInsight" for event in events))
-        self.assertFalse(any(event.rule == "externalCryptoMove" for event in events))
+        self.assertTrue(any(event.rule == "externalCryptoMove" for event in events))
 
     def test_external_signal_provider_normalizes_api_responses_and_caches(self):
         calls = []

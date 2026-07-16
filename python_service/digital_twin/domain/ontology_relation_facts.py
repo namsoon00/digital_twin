@@ -10,7 +10,7 @@ from .accounts import investment_strategy_profile
 from .instrument_profiles import instrument_profile_for_position
 from .ontology_relation_contracts import BTC_SENSITIVE_SYMBOLS
 from .portfolio import PortfolioSummary, Position, expects_kr_microstructure_signals
-from .volume_time_adjustment import volume_pace_snapshot
+from .volume_time_adjustment import trading_value_snapshot, volume_pace_snapshot
 
 
 def _sector_ratio(position: Position, portfolio: PortfolioSummary) -> float:
@@ -745,11 +745,12 @@ def position_signal_facts(
     news_context = news_headlines.get(symbol) if isinstance(news_headlines, dict) and isinstance(news_headlines.get(symbol), dict) else {}
     sec_filings = external_signals.get("secFilings") if isinstance(external_signals, dict) else {}
     sec_context = sec_filings.get(symbol) if isinstance(sec_filings, dict) and isinstance(sec_filings.get(symbol), dict) else {}
+    trading_snapshot = trading_value_snapshot(position.current_price, position.volume, position.trading_value)
     volume_pace = volume_pace_snapshot(
         position.market,
         position.volume_ratio,
         volume=position.volume,
-        trading_value=position.trading_value,
+        trading_value=trading_snapshot.get("tradingValue"),
         observed_at=position.updated_at,
     )
     facts: Dict[str, object] = {
@@ -789,7 +790,14 @@ def position_signal_facts(
         "volumePaceElapsedPct": volume_pace.get("volumePaceElapsedPct"),
         "volumePaceLocalTime": volume_pace.get("volumePaceLocalTime"),
         "volumePaceBasis": volume_pace.get("volumePaceBasis"),
-        "tradingValue": number(position.trading_value),
+        "tradingValue": number(trading_snapshot.get("tradingValue")),
+        "reportedTradingValue": number(trading_snapshot.get("reportedTradingValue")),
+        "estimatedTradingValue": number(trading_snapshot.get("estimatedTradingValue")),
+        "tradingValueQuality": trading_snapshot.get("tradingValueQuality"),
+        "tradingValueBasis": trading_snapshot.get("tradingValueBasis"),
+        "tradingValueMismatchPct": trading_snapshot.get("tradingValueMismatchPct"),
+        "tradingValueEstimated": trading_snapshot.get("tradingValueEstimated"),
+        "tradingValueReliable": trading_snapshot.get("tradingValueReliable"),
         "buyVolume": buy_volume,
         "sellVolume": sell_volume,
         "buyShare": buy_share,

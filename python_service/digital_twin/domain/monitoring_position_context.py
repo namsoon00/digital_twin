@@ -5,7 +5,7 @@ from .market_data import investor_net_volume, number
 from .ontology_relation_reasoning import relation_rule_context_summary_lines
 from .portfolio import AccountSnapshot, Position
 from .portfolio_calculations import value_in_base
-from .volume_time_adjustment import volume_pace_snapshot
+from .volume_time_adjustment import trading_value_snapshot, volume_pace_snapshot
 
 
 class MonitoringPositionContextMixin:
@@ -341,12 +341,41 @@ class MonitoringPositionContextMixin:
         return number(position.get("trade_strength")) or number(position.get("tradeStrength"))
 
     def position_trading_value(self, position: Dict[str, object]) -> float:
+        return number(self.position_trading_value_snapshot(position).get("tradingValue"))
+
+    def position_trading_value_snapshot(self, position: Dict[str, object]) -> Dict[str, object]:
         value = number(position.get("trading_value")) or number(position.get("tradingValue"))
-        if value:
-            return value
-        volume = self.position_volume(position)
-        price = self.position_current_price(position)
-        return volume * price if volume and price else 0.0
+        return trading_value_snapshot(
+            self.position_current_price(position),
+            self.position_volume(position),
+            value,
+        )
+
+    def volume_ratio_label(self, value: object) -> str:
+        amount = number(value)
+        if amount <= 0:
+            return ""
+        if amount < 0.01:
+            return ("%.4f" % amount).rstrip("0").rstrip(".")
+        if amount < 0.1:
+            return ("%.2f" % amount).rstrip("0").rstrip(".")
+        if amount < 10:
+            return ("%.1f" % amount).rstrip("0").rstrip(".")
+        return compact_number(amount)
+
+    def trading_value_detail_label(self, snapshot: Dict[str, object], currency: str) -> str:
+        quality = str(snapshot.get("tradingValueQuality") or "")
+        if quality == "reported":
+            return "제공값, 가격×거래량 교차확인"
+        if quality == "reported_without_cross_check":
+            return "제공값, 가격·거래량 교차검증 불가"
+        if quality == "estimated_from_price_volume":
+            reported = number(snapshot.get("reportedTradingValue"))
+            mismatch_pct = number(snapshot.get("tradingValueMismatchPct"))
+            if reported > 0 and mismatch_pct > 0:
+                return "가격×거래량 추정, 제공값 " + money(reported, currency) + "와 " + self.volume_ratio_label(mismatch_pct) + "% 차이"
+            return "가격×거래량 추정"
+        return ""
 
     def position_value_base(self, position: Dict[str, object]) -> float:
         currency = self.position_currency(position)
@@ -382,7 +411,8 @@ class MonitoringPositionContextMixin:
         parts: List[str] = []
         volume = self.position_volume(position)
         ratio = self.position_volume_ratio(position)
-        trading_value = self.position_trading_value(position)
+        trading_value_snapshot_value = self.position_trading_value_snapshot(position)
+        trading_value = number(trading_value_snapshot_value.get("tradingValue"))
         pace = volume_pace_snapshot(
             position.get("market"),
             ratio,
@@ -394,26 +424,34 @@ class MonitoringPositionContextMixin:
         expected_ratio = number(pace.get("expectedVolumeRatioNow"))
         elapsed_pct = number(pace.get("volumePaceElapsedPct"))
         session_label = str(pace.get("volumePaceSessionLabel") or "").strip()
+        pace_label = str(pace.get("volumePaceLabel") or "").strip()
         if volume > 0:
             volume_label = compact_number(volume)
             if ratio > 0:
-                ratio_bits = ["원본 " + compact_number(ratio) + "x"]
+                ratio_bits = ["평균 대비 원본 " + self.volume_ratio_label(ratio) + "x"]
                 if adjusted_ratio > 0:
-                    ratio_bits.append("시간보정 " + compact_number(adjusted_ratio) + "x")
+                    ratio_bits.append("시간보정 " + self.volume_ratio_label(adjusted_ratio) + "x")
                 if session_label and elapsed_pct > 0:
-                    ratio_bits.append(session_label + " " + compact_number(elapsed_pct) + "% 경과")
+                    ratio_bits.append(session_label + " " + self.volume_ratio_label(elapsed_pct) + "% 경과")
                 if expected_ratio > 0:
-                    ratio_bits.append("현시점 기대 " + compact_number(expected_ratio) + "x")
+                    ratio_bits.append("현시점 기대 누적 " + self.volume_ratio_label(expected_ratio) + "x")
+                if pace_label:
+                    ratio_bits.append(pace_label)
                 volume_label += "(" + " · ".join(ratio_bits) + ")"
             parts.append("거래량 " + volume_label)
         elif ratio > 0:
-            ratio_label = "거래량 배율 원본 " + compact_number(ratio) + "x"
+            ratio_label = "거래량 배율 평균 대비 원본 " + self.volume_ratio_label(ratio) + "x"
             if adjusted_ratio > 0:
-                ratio_label += " · 시간보정 " + compact_number(adjusted_ratio) + "x"
+                ratio_label += " · 시간보정 " + self.volume_ratio_label(adjusted_ratio) + "x"
             parts.append(ratio_label)
 
         if trading_value > 0:
-            parts.append("거래액 " + money(trading_value, self.position_currency(position)))
+            currency = self.position_currency(position)
+            detail = self.trading_value_detail_label(trading_value_snapshot_value, currency)
+            label = "거래액 " + money(trading_value, currency)
+            if detail:
+                label += " (" + detail + ")"
+            parts.append(label)
         trade_strength = self.position_trade_strength(position)
         if trade_strength > 0:
             parts.append("체결강도 " + compact_number(trade_strength))

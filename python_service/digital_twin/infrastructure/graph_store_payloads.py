@@ -131,6 +131,9 @@ PROMOTED_NUMERIC_ENTITY_FIELDS = [
     "expectedVolumeRatioNow",
     "tradeStrength",
     "tradingValue",
+    "reportedTradingValue",
+    "estimatedTradingValue",
+    "tradingValueMismatchPct",
     "bidAskImbalance",
     "foreignNetVolume",
     "foreignNetAmount",
@@ -154,6 +157,8 @@ PROMOTED_TEXT_ENTITY_FIELDS = [
     "sensitivityLevel",
     "cryptoSymbol",
     "actionPolicy",
+    "tradingValueQuality",
+    "tradingValueBasis",
 ]
 
 def condition_target_filter_values(condition: Dict[str, object], key: str) -> List[str]:

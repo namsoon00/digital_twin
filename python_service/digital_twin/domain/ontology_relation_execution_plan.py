@@ -29,6 +29,19 @@ def _plain_number(value: object) -> str:
     return text or "0"
 
 
+def _ratio_number(value: object) -> str:
+    amount = _float_value(value)
+    if amount <= 0:
+        return "0"
+    if amount < 0.01:
+        return ("%.4f" % amount).rstrip("0").rstrip(".")
+    if amount < 0.1:
+        return ("%.2f" % amount).rstrip("0").rstrip(".")
+    if amount < 10:
+        return ("%.1f" % amount).rstrip("0").rstrip(".")
+    return _plain_number(amount)
+
+
 def _volume_pace_phrase(facts: Dict[str, object]) -> str:
     raw_ratio = _float_value(facts.get("rawVolumeRatio") if facts.get("rawVolumeRatio") is not None else facts.get("volumeRatio"))
     adjusted_ratio = _float_value(facts.get("timeAdjustedVolumeRatio"))
@@ -37,14 +50,25 @@ def _volume_pace_phrase(facts: Dict[str, object]) -> str:
     session_label = str(facts.get("volumePaceSessionLabel") or "").strip()
     pieces = []
     if raw_ratio:
-        pieces.append("원본 " + _plain_number(raw_ratio) + "배")
+        pieces.append("평균 대비 원본 " + _ratio_number(raw_ratio) + "배")
     if adjusted_ratio:
-        pieces.append("시간 보정 " + _plain_number(adjusted_ratio) + "배")
+        pieces.append("시간 보정 " + _ratio_number(adjusted_ratio) + "배")
     if session_label and elapsed_pct:
         pieces.append(session_label + " " + _plain_number(elapsed_pct) + "% 경과")
     if expected_ratio:
-        pieces.append("현시점 기대 누적 " + _plain_number(expected_ratio) + "배")
+        pieces.append("현시점 기대 누적 " + _ratio_number(expected_ratio) + "배")
     return ", ".join(pieces)
+
+
+def _volume_pace_explanation(facts: Dict[str, object]) -> str:
+    basis = str(facts.get("volumePaceBasis") or "").strip()
+    label = str(facts.get("volumePaceLabel") or "").strip()
+    details = []
+    if basis:
+        details.append(basis)
+    if label and label != "시간 보정 불가":
+        details.append("판정 " + label)
+    return " · ".join(details)
 
 
 def _append_unique(rows: List[str], value: object) -> None:
@@ -254,14 +278,16 @@ def decision_drivers_from_relation_context(
     trade_strength = _float_value(facts.get("tradeStrength"))
     bid_ask_imbalance = _float_value(facts.get("bidAskImbalance"))
     if volume_ratio:
+        volume_detail = _volume_pace_explanation(facts)
+        detail_suffix = (" " + volume_detail) if volume_detail else ""
         if volume_ratio < 0.7:
-            summary = "거래량은 " + (volume_pace_phrase or _plain_number(volume_ratio) + "배") + " 기준이라 강한 매수세나 투매를 단정하기 어렵습니다."
+            summary = "거래량은 " + (volume_pace_phrase or _ratio_number(volume_ratio) + "배") + " 기준이라 강한 매수세나 투매를 단정하기 어렵습니다." + detail_suffix
             direction = "counter"
         elif volume_ratio >= 1.5:
-            summary = "거래량은 " + (volume_pace_phrase or _plain_number(volume_ratio) + "배") + " 기준으로 늘어 가격 신호의 확인 강도가 커졌습니다."
+            summary = "거래량은 " + (volume_pace_phrase or _ratio_number(volume_ratio) + "배") + " 기준으로 늘어 가격 신호의 확인 강도가 커졌습니다." + detail_suffix
             direction = "support" if ma20_distance >= 0 else "risk"
         else:
-            summary = "거래량은 " + (volume_pace_phrase or _plain_number(volume_ratio) + "배") + " 기준이라 가격 흐름을 보조 근거로 봅니다."
+            summary = "거래량은 " + (volume_pace_phrase or _ratio_number(volume_ratio) + "배") + " 기준이라 가격 흐름을 보조 근거로 봅니다." + detail_suffix
             direction = "neutral"
         _append_driver(
             rows,
@@ -451,7 +477,7 @@ def execution_plan_from_relation_context(
     raw_volume_ratio = _float_value(facts.get("rawVolumeRatio") if facts.get("rawVolumeRatio") is not None else facts.get("volumeRatio"))
     adjusted_volume_ratio = _float_value(facts.get("timeAdjustedVolumeRatio"))
     volume_ratio = adjusted_volume_ratio or raw_volume_ratio
-    volume_phrase = _volume_pace_phrase(facts) or (("%.1f" % volume_ratio) + "x" if volume_ratio else "")
+    volume_phrase = _volume_pace_phrase(facts) or ((_ratio_number(volume_ratio)) + "배" if volume_ratio else "")
     trade_strength = float(facts.get("tradeStrength") or 0)
     bid_ask_imbalance = float(facts.get("bidAskImbalance") or 0)
     primary_action = "HOLD"

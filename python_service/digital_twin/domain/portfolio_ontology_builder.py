@@ -70,6 +70,7 @@ from .portfolio_ontology_structure import (
     instrument_tbox_classes,
     observable_position,
 )
+from .volume_time_adjustment import trading_value_snapshot
 
 
 def build_portfolio_ontology(
@@ -198,6 +199,7 @@ def build_portfolio_ontology(
         foreign_net_volume = investor_net_volume(position.foreign_net_volume, position.foreign_buy_volume, position.foreign_sell_volume)
         institution_net_volume = investor_net_volume(position.institution_net_volume, position.institution_buy_volume, position.institution_sell_volume)
         individual_net_volume = investor_net_volume(position.individual_net_volume, position.individual_buy_volume, position.individual_sell_volume)
+        trading_snapshot = trading_value_snapshot(position.current_price, position.volume, position.trading_value)
         graph.entities.append(OntologyEntity(stock_id, position.name or symbol, "stock", abox_properties({
             "symbol": symbol,
             "market": position.market,
@@ -228,7 +230,14 @@ def build_portfolio_ontology(
             "volume": number(position.volume),
             "volumeRatio": number(position.volume_ratio),
             "tradeStrength": number(position.trade_strength),
-            "tradingValue": number(position.trading_value),
+            "tradingValue": number(trading_snapshot.get("tradingValue")),
+            "reportedTradingValue": number(trading_snapshot.get("reportedTradingValue")),
+            "estimatedTradingValue": number(trading_snapshot.get("estimatedTradingValue")),
+            "tradingValueQuality": trading_snapshot.get("tradingValueQuality"),
+            "tradingValueBasis": trading_snapshot.get("tradingValueBasis"),
+            "tradingValueMismatchPct": trading_snapshot.get("tradingValueMismatchPct"),
+            "tradingValueEstimated": trading_snapshot.get("tradingValueEstimated"),
+            "tradingValueReliable": trading_snapshot.get("tradingValueReliable"),
             "bidAskImbalance": number(position.bid_ask_imbalance),
             "foreignNetVolume": foreign_net_volume,
             "foreignNetAmount": number(position.foreign_net_amount),

@@ -300,6 +300,9 @@ TYPEDB_PROMOTED_NUMERIC_ATTRIBUTES = {
     "expectedVolumeRatioNow": "ontology-expected-volume-ratio-now",
     "tradeStrength": "ontology-trade-strength",
     "tradingValue": "ontology-trading-value",
+    "reportedTradingValue": "ontology-reported-trading-value",
+    "estimatedTradingValue": "ontology-estimated-trading-value",
+    "tradingValueMismatchPct": "ontology-trading-value-mismatch-pct",
     "bidAskImbalance": "ontology-bid-ask-imbalance",
     "foreignNetVolume": "ontology-foreign-net-volume",
     "foreignNetAmount": "ontology-foreign-net-amount",
@@ -322,6 +325,8 @@ TYPEDB_PROMOTED_TEXT_ATTRIBUTES = {
     "sensitivityLevel": "ontology-sensitivity-level",
     "cryptoSymbol": "ontology-crypto-symbol",
     "actionPolicy": "ontology-action-policy",
+    "tradingValueQuality": "ontology-trading-value-quality",
+    "tradingValueBasis": "ontology-trading-value-basis",
 }
 TYPEDB_FUNCTION_SUBJECT_FIELDS = {
     "source",
@@ -1283,6 +1288,11 @@ attribute ontology-time-adjusted-volume-ratio, value double;
 attribute ontology-expected-volume-ratio-now, value double;
 attribute ontology-trade-strength, value double;
 attribute ontology-trading-value, value double;
+attribute ontology-reported-trading-value, value double;
+attribute ontology-estimated-trading-value, value double;
+attribute ontology-trading-value-mismatch-pct, value double;
+attribute ontology-trading-value-quality, value string;
+attribute ontology-trading-value-basis, value string;
 attribute ontology-bid-ask-imbalance, value double;
 attribute ontology-foreign-net-volume, value double;
 attribute ontology-foreign-net-amount, value double;
@@ -1363,6 +1373,11 @@ entity ontology-node @abstract,
     owns ontology-expected-volume-ratio-now,
     owns ontology-trade-strength,
     owns ontology-trading-value,
+    owns ontology-reported-trading-value,
+    owns ontology-estimated-trading-value,
+    owns ontology-trading-value-mismatch-pct,
+    owns ontology-trading-value-quality,
+    owns ontology-trading-value-basis,
     owns ontology-bid-ask-imbalance,
     owns ontology-foreign-net-volume,
     owns ontology-foreign-net-amount,

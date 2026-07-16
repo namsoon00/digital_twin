@@ -4,6 +4,8 @@ from typing import Dict, Iterable, Tuple
 from .market_data import clamp, number
 from .market_hours import DEFAULT_MARKET_HOUR_SESSIONS, market_time, normalize_market_key, parse_hhmm, session_items
 
+TRADING_VALUE_MISMATCH_THRESHOLD_PCT = 35.0
+
 
 REGULAR_SESSION_CURVE: Tuple[Tuple[float, float], ...] = (
     (0.0, 0.0),
@@ -70,6 +72,75 @@ def expected_volume_ratio_for_session(session_key: str, elapsed_ratio: float) ->
     if expected_share:
         return clamp(expected_share * clamp(elapsed_ratio, 0.0, 1.0), 0.01, expected_share)
     return clamp(elapsed_ratio, 0.05, 1.0)
+
+
+def trading_value_snapshot(
+    current_price: object,
+    volume: object,
+    reported_trading_value: object = 0,
+    mismatch_threshold_pct: float = TRADING_VALUE_MISMATCH_THRESHOLD_PCT,
+) -> Dict[str, object]:
+    price_value = number(current_price)
+    volume_value = number(volume)
+    reported_value = number(reported_trading_value)
+    estimated_value = price_value * volume_value if price_value > 0 and volume_value > 0 else 0.0
+    threshold = max(0.0, number(mismatch_threshold_pct) or TRADING_VALUE_MISMATCH_THRESHOLD_PCT)
+    mismatch_pct = 0.0
+    if reported_value > 0 and estimated_value > 0:
+        mismatch_pct = abs(reported_value - estimated_value) / max(1.0, estimated_value) * 100.0
+        if mismatch_pct <= threshold:
+            return {
+                "tradingValue": reported_value,
+                "reportedTradingValue": reported_value,
+                "estimatedTradingValue": estimated_value,
+                "tradingValueQuality": "reported",
+                "tradingValueBasis": "제공 거래대금이 가격×거래량 교차검증 범위 안에 있어 제공값을 사용",
+                "tradingValueMismatchPct": round(mismatch_pct, 2),
+                "tradingValueEstimated": False,
+                "tradingValueReliable": True,
+            }
+        return {
+            "tradingValue": estimated_value,
+            "reportedTradingValue": reported_value,
+            "estimatedTradingValue": estimated_value,
+            "tradingValueQuality": "estimated_from_price_volume",
+            "tradingValueBasis": "제공 거래대금이 가격×거래량과 크게 달라 가격×거래량 추정값을 사용",
+            "tradingValueMismatchPct": round(mismatch_pct, 2),
+            "tradingValueEstimated": True,
+            "tradingValueReliable": False,
+        }
+    if reported_value > 0:
+        return {
+            "tradingValue": reported_value,
+            "reportedTradingValue": reported_value,
+            "estimatedTradingValue": estimated_value,
+            "tradingValueQuality": "reported_without_cross_check",
+            "tradingValueBasis": "가격 또는 거래량이 없어 제공 거래대금을 교차검증하지 못함",
+            "tradingValueMismatchPct": 0.0,
+            "tradingValueEstimated": False,
+            "tradingValueReliable": False,
+        }
+    if estimated_value > 0:
+        return {
+            "tradingValue": estimated_value,
+            "reportedTradingValue": 0.0,
+            "estimatedTradingValue": estimated_value,
+            "tradingValueQuality": "estimated_from_price_volume",
+            "tradingValueBasis": "제공 거래대금이 없어 가격×거래량 추정값을 사용",
+            "tradingValueMismatchPct": 0.0,
+            "tradingValueEstimated": True,
+            "tradingValueReliable": True,
+        }
+    return {
+        "tradingValue": 0.0,
+        "reportedTradingValue": reported_value,
+        "estimatedTradingValue": estimated_value,
+        "tradingValueQuality": "missing",
+        "tradingValueBasis": "거래대금 산출에 필요한 가격 또는 거래량이 없음",
+        "tradingValueMismatchPct": 0.0,
+        "tradingValueEstimated": False,
+        "tradingValueReliable": False,
+    }
 
 
 def volume_pace_snapshot(
@@ -150,4 +221,3 @@ def volume_pace_snapshot(
         "volumePaceBasis": "원본 거래량 배율을 현재 세션 경과율과 장중 U자형 기대 거래량 분포로 보정",
     })
     return result
-

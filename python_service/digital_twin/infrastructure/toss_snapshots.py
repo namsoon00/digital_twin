@@ -17,6 +17,7 @@ from ..domain.portfolio_calculations import (
     runtime_fx_currencies_from_external_signals,
 )
 from ..domain.strategy import decisions_for_positions
+from ..domain.volume_time_adjustment import trading_value_snapshot
 from .external_signals import ExternalSignalProvider
 from .external_signal_utils import guarded_external_call, root_api_error
 from .kis_market_signals import KISMarketSignalProvider
@@ -649,13 +650,12 @@ class TossProvider:
             or number(cached.get("volume"))
         )
         volume_ratio = position.volume_ratio or number(indicator_source.get("volumeRatio")) or number(cached.get("volumeRatio"))
-        trading_value = (
+        raw_trading_value = (
             position.trading_value
             or number(first_present(quote, ["tradingValue", "tradeValue", "tradingAmount"]))
             or number(cached.get("tradingValue"))
         )
-        if not trading_value and volume and current_price:
-            trading_value = volume * current_price
+        trading_value = number(trading_value_snapshot(current_price, volume, raw_trading_value).get("tradingValue"))
         quote_message = "현재가는 토스 prices, 이동평균은 토스 candles 기준입니다."
         quote_status = "토스 prices 반영" if live_price else ""
         quote_source = str(quote.get("quoteSource") or "")

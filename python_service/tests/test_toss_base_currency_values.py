@@ -12,7 +12,7 @@ from digital_twin.domain.portfolio_calculations import (
     portfolio_summary,
     runtime_fx_currencies_from_external_signals,
 )
-from digital_twin.domain.volume_time_adjustment import volume_pace_snapshot
+from digital_twin.domain.volume_time_adjustment import trading_value_snapshot, volume_pace_snapshot
 from digital_twin.infrastructure.external_signals import ExternalSignalProvider
 from digital_twin.infrastructure.toss_snapshots import TossProvider, currency_rates_from_external_signals
 
@@ -429,6 +429,14 @@ class TossBaseCurrencyValueTests(unittest.TestCase):
         self.assertGreater(pace["timeAdjustedVolumeRatio"], pace["rawVolumeRatio"])
         self.assertIn("시간 대비", pace["volumePaceLabel"])
 
+    def test_trading_value_snapshot_replaces_inconsistent_reported_value(self):
+        snapshot = trading_value_snapshot(95.97, 54577, 1050906655)
+
+        self.assertEqual("estimated_from_price_volume", snapshot["tradingValueQuality"])
+        self.assertFalse(snapshot["tradingValueReliable"])
+        self.assertAlmostEqual(95.97 * 54577, snapshot["tradingValue"])
+        self.assertEqual(1050906655, snapshot["reportedTradingValue"])
+
     def test_flow_context_line_shows_raw_and_time_adjusted_volume_ratio(self):
         monitor = RealtimeMonitor({"fxRates": "KRW=1\nUSD=1400"})
         position = {
@@ -447,6 +455,26 @@ class TossBaseCurrencyValueTests(unittest.TestCase):
         self.assertIn("시간보정", line)
         self.assertIn("미장 정규장", line)
         self.assertIn("현시점 기대", line)
+
+    def test_flow_context_line_explains_inconsistent_us_trading_value(self):
+        monitor = RealtimeMonitor({"fxRates": "KRW=1\nUSD=1400"})
+        position = {
+            "symbol": "MSTR",
+            "market": "US",
+            "currency": "USD",
+            "currentPrice": 95.97,
+            "volume": 54577,
+            "volumeRatio": 0.034,
+            "tradingValue": 1050906655,
+            "updatedAt": "2026-07-16T05:30:00-04:00",
+        }
+
+        line = monitor.flow_context_line(position)
+
+        self.assertIn("평균 대비 원본 0.03x", line)
+        self.assertIn("가격×거래량 추정", line)
+        self.assertIn("제공값 $1,050,906,655", line)
+        self.assertIn("거래액 $5,237,755", line)
 
 
 if __name__ == "__main__":

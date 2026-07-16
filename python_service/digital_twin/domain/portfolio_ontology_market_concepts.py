@@ -6,7 +6,7 @@ from .ontology_contracts import PortfolioOntology
 from .ontology_schema import add_entity, add_relation
 from .portfolio import Position, expects_kr_microstructure_signals
 from .portfolio_ontology_catalog import METRIC_CONCEPTS
-from .volume_time_adjustment import volume_pace_snapshot
+from .volume_time_adjustment import trading_value_snapshot, volume_pace_snapshot
 
 
 def metric_tbox_classes(tbox_class: str, field_name: str) -> List[str]:
@@ -174,9 +174,10 @@ def compact_price(value: object) -> str:
 
 def liquidity_profile(position: Position) -> Dict[str, object]:
     market_value = number(position.market_value)
-    trading_value = number(position.trading_value)
     current_price = number(position.current_price)
     volume = number(position.volume)
+    trading_snapshot = trading_value_snapshot(current_price, volume, position.trading_value)
+    trading_value = number(trading_snapshot.get("tradingValue"))
     volume_ratio = number(position.volume_ratio)
     ask_pressure = max(0.0, -number(position.bid_ask_imbalance))
     sellable_quantity = number(position.sellable_quantity)
@@ -220,6 +221,14 @@ def liquidity_profile(position: Position) -> Dict[str, object]:
         "slippageRiskScore": round(slippage_risk, 1),
         "volumeRatio": round(volume_ratio, 3),
         "bidAskImbalance": round(number(position.bid_ask_imbalance), 2),
+        "tradingValue": round(trading_value, 2),
+        "reportedTradingValue": round(number(trading_snapshot.get("reportedTradingValue")), 2),
+        "estimatedTradingValue": round(number(trading_snapshot.get("estimatedTradingValue")), 2),
+        "tradingValueQuality": trading_snapshot.get("tradingValueQuality"),
+        "tradingValueBasis": trading_snapshot.get("tradingValueBasis"),
+        "tradingValueMismatchPct": trading_snapshot.get("tradingValueMismatchPct"),
+        "tradingValueEstimated": trading_snapshot.get("tradingValueEstimated"),
+        "tradingValueReliable": trading_snapshot.get("tradingValueReliable"),
     }
 
 def add_execution_metric_concepts(
@@ -270,11 +279,12 @@ def add_execution_metric_concepts(
         add_relation(graph, stock_id, metric_id, "HAS_EXECUTION_METRIC", weight=1.0, properties=relation_props)
 
 def volume_profile(position: Position) -> Dict[str, object]:
+    trading_snapshot = trading_value_snapshot(position.current_price, position.volume, position.trading_value)
     volume_pace = volume_pace_snapshot(
         position.market,
         position.volume_ratio,
         volume=position.volume,
-        trading_value=position.trading_value,
+        trading_value=trading_snapshot.get("tradingValue"),
         observed_at=position.updated_at,
     )
     foreign_net_volume = investor_net_volume(position.foreign_net_volume, position.foreign_buy_volume, position.foreign_sell_volume)
@@ -292,7 +302,14 @@ def volume_profile(position: Position) -> Dict[str, object]:
         "volumePaceSessionLabel": volume_pace.get("volumePaceSessionLabel"),
         "volumePaceElapsedPct": volume_pace.get("volumePaceElapsedPct"),
         "volumePaceBasis": volume_pace.get("volumePaceBasis"),
-        "tradingValue": round(number(position.trading_value), 2),
+        "tradingValue": round(number(trading_snapshot.get("tradingValue")), 2),
+        "reportedTradingValue": round(number(trading_snapshot.get("reportedTradingValue")), 2),
+        "estimatedTradingValue": round(number(trading_snapshot.get("estimatedTradingValue")), 2),
+        "tradingValueQuality": trading_snapshot.get("tradingValueQuality"),
+        "tradingValueBasis": trading_snapshot.get("tradingValueBasis"),
+        "tradingValueMismatchPct": trading_snapshot.get("tradingValueMismatchPct"),
+        "tradingValueEstimated": trading_snapshot.get("tradingValueEstimated"),
+        "tradingValueReliable": trading_snapshot.get("tradingValueReliable"),
         "tradeStrength": round(number(position.trade_strength), 2),
         "buyVolume": round(number(position.buy_volume), 2),
         "sellVolume": round(number(position.sell_volume), 2),
@@ -782,7 +799,11 @@ def add_price_level_and_liquidity_concepts(graph: PortfolioOntology, stock_id: s
         "tboxClasses": ["Risk", "LiquidityRisk", "ExitCapacity", "ExecutionCapacity"],
         "sellableQuantity": round(number(position.sellable_quantity), 4),
         "positionValue": round(number(position.market_value), 2),
-        "tradingValue": round(number(position.trading_value), 2),
+        "tradingValue": round(number(liquidity.get("tradingValue")), 2),
+        "reportedTradingValue": round(number(liquidity.get("reportedTradingValue")), 2),
+        "estimatedTradingValue": round(number(liquidity.get("estimatedTradingValue")), 2),
+        "tradingValueQuality": liquidity.get("tradingValueQuality"),
+        "tradingValueBasis": liquidity.get("tradingValueBasis"),
         "positionToTradingValuePct": liquidity.get("positionToTradingValuePct"),
         "positionToDailyVolumePct": liquidity.get("positionToDailyVolumePct"),
         "positionToBidDepthPct": liquidity.get("positionToBidDepthPct"),

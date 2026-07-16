@@ -11,10 +11,20 @@ class RuleChangeCandidateAdvisor:
     def propose(self, context: Dict[str, object]) -> List[Dict[str, object]]:
         raise NotImplementedError
 
+    def metadata(self) -> Dict[str, object]:
+        return {"configured": False, "mode": self.__class__.__name__}
+
 
 class LocalRuleChangeCandidateAdvisor(RuleChangeCandidateAdvisor):
     def propose(self, context: Dict[str, object]) -> List[Dict[str, object]]:
         return []
+
+    def metadata(self) -> Dict[str, object]:
+        return {
+            "configured": False,
+            "mode": "local-empty-fallback",
+            "reason": "Rule candidate AI command is not configured; local advisor intentionally returns no candidates.",
+        }
 
 
 class CommandRuleChangeCandidateAdvisor(RuleChangeCandidateAdvisor):
@@ -48,6 +58,14 @@ class CommandRuleChangeCandidateAdvisor(RuleChangeCandidateAdvisor):
             candidate["source"] = self.source
         return candidates
 
+    def metadata(self) -> Dict[str, object]:
+        return {
+            "configured": bool(self.command),
+            "mode": "command",
+            "source": self.source,
+            "timeoutSeconds": self.timeout_seconds,
+        }
+
 
 class FallbackRuleChangeCandidateAdvisor(RuleChangeCandidateAdvisor):
     def __init__(self, primary: RuleChangeCandidateAdvisor, fallback: RuleChangeCandidateAdvisor = None):
@@ -64,6 +82,16 @@ class FallbackRuleChangeCandidateAdvisor(RuleChangeCandidateAdvisor):
                 warnings.append("AI 제안 실패로 로컬 fallback을 사용했습니다: " + str(error)[:140])
                 candidate["validationWarnings"] = warnings
             return candidates
+
+    def metadata(self) -> Dict[str, object]:
+        primary = self.primary.metadata() if hasattr(self.primary, "metadata") else {"mode": self.primary.__class__.__name__}
+        fallback = self.fallback.metadata() if hasattr(self.fallback, "metadata") else {"mode": self.fallback.__class__.__name__}
+        return {
+            "configured": bool(primary.get("configured")),
+            "mode": "fallback",
+            "primary": primary,
+            "fallback": fallback,
+        }
 
 
 def rule_change_candidate_advisor_from_settings(settings: Dict[str, str] = None) -> RuleChangeCandidateAdvisor:

@@ -4,6 +4,7 @@ from typing import Callable, Dict, Iterable
 
 from ..application.flow_lens_service import FlowLensService
 from ..application.investment_analysis_service import InvestmentAnalysisService
+from ..application.investment_strategy_proposal_service import InvestmentStrategyProposalService
 from ..application.investment_calendar_candidate_service import InvestmentCalendarCandidateService
 from ..application.investment_calendar_extraction_service import InvestmentCalendarExtractionService
 from ..application.investment_calendar_service import InvestmentCalendarRunner, InvestmentCalendarService
@@ -271,6 +272,7 @@ def build_ontology_reasoning_runner(settings=None, event_publisher=None) -> Onto
             advisor=rule_change_candidate_advisor_from_settings(configured_settings),
             event_reader=event_log,
             settings=configured_settings,
+            strategy_proposal_service=build_investment_strategy_proposal_service(configured_settings, event_publisher=event_publisher),
         ),
     )
 
@@ -282,6 +284,17 @@ def build_rule_change_candidate_service(settings=None) -> RuleChangeCandidatePro
         advisor=rule_change_candidate_advisor_from_settings(configured_settings),
         event_reader=stores.event_log(configured_settings),
         settings=configured_settings,
+        strategy_proposal_service=build_investment_strategy_proposal_service(configured_settings),
+    )
+
+
+def build_investment_strategy_proposal_service(settings=None, event_publisher=None) -> InvestmentStrategyProposalService:
+    configured_settings = settings or runtime_settings()
+    return InvestmentStrategyProposalService(
+        proposal_store=stores.investment_strategy_proposal_store(configured_settings),
+        ontology_repository=ontology_repository_from_settings(configured_settings),
+        event_publisher=event_publisher or default_event_bus(),
+        settings=configured_settings,
     )
 
 
@@ -292,6 +305,7 @@ def build_ontology_lab_service(settings=None) -> OntologyLabService:
         experiment_store=stores.ontology_experiment_store(configured_settings),
         monitor_store=stores.monitor_store(configured_settings),
         rule_candidate_service=build_rule_change_candidate_service(configured_settings),
+        strategy_proposal_service=build_investment_strategy_proposal_service(configured_settings),
         settings=configured_settings,
     )
 

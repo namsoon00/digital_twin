@@ -48,12 +48,14 @@ class OntologyLabService:
         experiment_store,
         monitor_store=None,
         rule_candidate_service=None,
+        strategy_proposal_service=None,
         settings: Dict[str, object] = None,
     ):
         self.ontology_repository = ontology_repository
         self.experiment_store = experiment_store
         self.monitor_store = monitor_store
         self.rule_candidate_service = rule_candidate_service
+        self.strategy_proposal_service = strategy_proposal_service
         self.settings = dict(settings or {})
 
     def list(self) -> Dict[str, object]:
@@ -365,6 +367,9 @@ class OntologyLabService:
         }
         if review_approval:
             application["reviewApproval"] = review_approval
+        strategy_application = self.mark_strategy_proposals_deployed(experiment, application)
+        if strategy_application:
+            application["strategyProposals"] = strategy_application
         updated_recommendations = mark_recommendations_applied(recommendations, application)
         last_result["recommendations"] = updated_recommendations
         last_result["appliedOntologyChanges"] = application
@@ -436,6 +441,10 @@ class OntologyLabService:
         experiment.last_result = result
         experiment.last_snapshot_key = snapshot_key
         self.append_run_history(experiment, result, snapshot_key, run_kind)
+        strategy_validation = self.record_strategy_proposal_validation(experiment, result)
+        if strategy_validation:
+            result["strategyProposalValidation"] = strategy_validation
+            experiment.last_result = result
         self.experiment_store.save(experiment)
         return {"status": "completed", "experiment": experiment.to_dict(), "result": result}
 
@@ -511,6 +520,22 @@ class OntologyLabService:
             return {"status": "disabled", "saved": False, "reason": "Ontology repository cannot save TBox graph."}
         result = self.ontology_repository.save_graph(graph)
         return result if isinstance(result, dict) else {"status": "unknown", "saved": False}
+
+    def record_strategy_proposal_validation(self, experiment: OntologyExperiment, result: Dict[str, object]) -> Dict[str, object]:
+        if not self.strategy_proposal_service or not hasattr(self.strategy_proposal_service, "record_experiment_validation"):
+            return {}
+        try:
+            return self.strategy_proposal_service.record_experiment_validation(experiment, result)
+        except Exception as error:  # noqa: BLE001 - strategy proposal tracking must not block ontology lab runs.
+            return {"status": "error", "reason": str(error)[:180]}
+
+    def mark_strategy_proposals_deployed(self, experiment: OntologyExperiment, application: Dict[str, object]) -> Dict[str, object]:
+        if not self.strategy_proposal_service or not hasattr(self.strategy_proposal_service, "mark_deployed_by_experiment"):
+            return {}
+        try:
+            return self.strategy_proposal_service.mark_deployed_by_experiment(experiment, application)
+        except Exception as error:  # noqa: BLE001 - deployment tracking must not block RuleBox application.
+            return {"status": "error", "reason": str(error)[:180]}
 
     def facts_graphs(self, symbols: Iterable[str] = None, snapshots: List[AccountSnapshot] = None) -> List[object]:
         return [

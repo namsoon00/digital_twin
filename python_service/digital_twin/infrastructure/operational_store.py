@@ -1,7 +1,7 @@
 from typing import Dict
 
 from .mysql_monitoring import MySQLMonitorAccountJobStore
-from .ontology_lab_store import JsonOntologyExperimentStore
+from .ontology_lab_store import JsonInvestmentStrategyProposalStore, JsonOntologyExperimentStore
 from .mysql_operational import (
     MySQLAccountRegistry,
     MySQLAppStore,
@@ -124,6 +124,10 @@ def ontology_quality_sample_store(settings: Dict[str, str] = None):
 
 def ontology_experiment_store(settings: Dict[str, str] = None):
     return JsonOntologyExperimentStore()
+
+
+def investment_strategy_proposal_store(settings: Dict[str, str] = None):
+    return JsonInvestmentStrategyProposalStore()
 
 
 def monitor_account_job_store(settings: Dict[str, str] = None):

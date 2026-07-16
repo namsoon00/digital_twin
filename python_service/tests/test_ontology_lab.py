@@ -4,6 +4,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
+from digital_twin.application.investment_strategy_proposal_service import InvestmentStrategyProposalService
 from digital_twin.application.ontology_lab_service import OntologyLabService
 from digital_twin.domain.ontology_experiments import OntologyExperiment
 from digital_twin.domain.ontology_rulebox_contracts import GraphInferenceRule
@@ -23,12 +24,27 @@ class MemoryExperimentStore:
         self.rows[experiment.experiment_id] = experiment
 
 
+class MemoryStrategyProposalStore:
+    def __init__(self):
+        self.rows = {}
+
+    def list(self):
+        return list(self.rows.values())
+
+    def get(self, proposal_id):
+        return self.rows.get(proposal_id)
+
+    def save(self, proposal):
+        self.rows[proposal.proposal_id] = proposal
+
+
 class FakeOntologyRepository:
     def __init__(self):
         self.rules = []
         self.saved_rulebox_payloads = []
         self.run_rulebox_payloads = []
         self.saved_tbox_graphs = []
+        self.validation_payloads = []
 
     def active_tbox_metadata(self):
         return {"status": "ok", "source": "test"}
@@ -73,6 +89,17 @@ class FakeOntologyRepository:
             "status": "ok",
             "entityCount": len(graph.entities),
             "relationCount": len(graph.relations),
+        }
+
+    def validate_rulebox_materialization(self, payload):
+        self.validation_payloads.append(dict(payload or {}))
+        return {
+            "status": "ok",
+            "validationOnly": True,
+            "mutatedOperationalRuleBox": False,
+            "wroteInferenceBox": False,
+            "candidateRuleCount": len((payload or {}).get("rules") or []),
+            "matchedCount": 1,
         }
 
 
@@ -377,6 +404,57 @@ class OntologyLabTests(unittest.TestCase):
         self.assertEqual("active", experiment.status)
         self.assertEqual("completed", experiment.last_result["status"])
         self.assertEqual("ai-suggested", experiment.run_history[0]["runKind"])
+
+    def test_rule_candidate_creates_strategy_proposal_and_lab_validation_updates_it(self):
+        proposal_store = MemoryStrategyProposalStore()
+        strategy_service = InvestmentStrategyProposalService(
+            proposal_store,
+            ontology_repository=FakeOntologyRepository(),
+        )
+        proposal_result = strategy_service.propose_from_rule_candidates(
+            ai_candidate_result(),
+            {"symbols": ["AAPL"], "trigger": "unit-test"},
+        )
+        service = OntologyLabService(
+            FakeOntologyRepository(),
+            MemoryExperimentStore(),
+            monitor_store=FakeMonitorStore(),
+            strategy_proposal_service=strategy_service,
+        )
+
+        lab_result = service.suggest_from_rule_candidates(ai_candidate_result(), {"activate": True, "run": True})
+
+        self.assertEqual("created", proposal_result["status"])
+        self.assertEqual(1, proposal_result["createdCount"])
+        self.assertEqual("created", lab_result["status"])
+        proposal = proposal_store.list()[0]
+        self.assertEqual("validated", proposal.status)
+        self.assertTrue(proposal.source_experiment_id.startswith("ontology-exp-"))
+        self.assertEqual("completed", proposal.validation["status"])
+        self.assertIn("graph.lab.symbol-review.v1", proposal.rule_ids)
+
+    def test_strategy_proposal_materialization_validation_does_not_write_operational_rulebox(self):
+        repository = FakeOntologyRepository()
+        proposal_store = MemoryStrategyProposalStore()
+        strategy_service = InvestmentStrategyProposalService(
+            proposal_store,
+            ontology_repository=repository,
+        )
+        created = strategy_service.propose_from_rule_candidates(
+            ai_candidate_result(),
+            {"symbols": ["AAPL"], "trigger": "unit-test"},
+        )
+        proposal_id = created["proposals"][0]["id"]
+
+        result = strategy_service.validate_materialization(proposal_id)
+
+        self.assertEqual("ok", result["status"])
+        self.assertEqual(1, len(repository.validation_payloads))
+        self.assertEqual(0, len(repository.saved_rulebox_payloads))
+        self.assertEqual(0, len(repository.run_rulebox_payloads))
+        self.assertFalse(result["validation"]["mutatedOperationalRuleBox"])
+        self.assertFalse(result["validation"]["wroteInferenceBox"])
+        self.assertEqual("validated", proposal_store.get(proposal_id).status)
 
     def test_run_without_snapshots_marks_result_as_needing_data(self):
         service = OntologyLabService(

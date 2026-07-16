@@ -493,6 +493,18 @@ class NullTypeDBOntologyGraphRepository:
             "statementCount": 0,
         }
 
+    def validate_rulebox_materialization(self, payload: Dict[str, object] = None) -> Dict[str, object]:
+        return {
+            "configured": False,
+            "status": "disabled",
+            "graphStore": "typedb",
+            "reason": "TypeDB ontology storage is not configured.",
+            "validationOnly": True,
+            "mutatedOperationalRuleBox": False,
+            "wroteInferenceBox": False,
+            "candidateRuleCount": 0,
+        }
+
     def inferencebox_snapshot(self, symbols: List[str] = None, limit: int = 80) -> Dict[str, object]:
         return {
             "configured": False,
@@ -2497,6 +2509,129 @@ relation ontology-assertion,
             "ruleboxMetadata": runtime_rulebox_metadata,
             **runtime_rulebox_metadata,
         }
+
+    def validate_rulebox_materialization(self, payload: Dict[str, object] = None) -> Dict[str, object]:
+        payload = payload if isinstance(payload, dict) else {}
+        if not self.address:
+            return NullTypeDBOntologyGraphRepository().validate_rulebox_materialization(payload)
+        self.reset_query_metrics()
+        target_symbols = clean_symbols_from_payload(
+            payload.get("symbols")
+            or payload.get("targetSymbols")
+            or payload.get("changedSymbols")
+        )
+        try:
+            candidate_rules = rulebox_rules_from_payload({"rules": payload.get("rules") or []})
+        except ValueError as error:
+            return {
+                "configured": True,
+                "status": "invalid-rulebox",
+                "graphStore": "typedb",
+                "reason": str(error),
+                "validationOnly": True,
+                "mutatedOperationalRuleBox": False,
+                "wroteInferenceBox": False,
+                "candidateRuleCount": 0,
+            }
+        enabled_rules = [
+            GraphInferenceRule.from_dict({**rule.to_dict(), "enabled": True})
+            for rule in candidate_rules
+        ]
+        native_profile = typedb_native_reasoning_profile(enabled_rules)
+        try:
+            abox_available = self.has_box_rows("ABox")
+        except Exception as error:  # noqa: BLE001 - expose TypeDB read failures to strategy validation.
+            return {
+                "configured": True,
+                "status": "error",
+                "graphStore": "typedb",
+                "reasonCode": typedb_error_code(error),
+                "reason": "TypeDB ABox 조회 실패: " + str(error)[:180],
+                "validationOnly": True,
+                "mutatedOperationalRuleBox": False,
+                "wroteInferenceBox": False,
+                "candidateRuleCount": len(enabled_rules),
+                "nativeReasoningProfile": native_profile,
+                "typedbQueryMetrics": self.query_metrics_snapshot(),
+            }
+        if not abox_available:
+            return {
+                "configured": True,
+                "status": "missing-abox",
+                "graphStore": "typedb",
+                "reason": "TypeDB에 실행 가능한 ABox 그래프가 없습니다.",
+                "validationOnly": True,
+                "mutatedOperationalRuleBox": False,
+                "wroteInferenceBox": False,
+                "candidateRuleCount": len(enabled_rules),
+                "nativeReasoningProfile": native_profile,
+                "typedbQueryMetrics": self.query_metrics_snapshot(),
+            }
+        try:
+            force_sync = typedb_bool(payload.get("forceSchemaFunctionSync")) or typedb_bool(payload.get("forceRuleFunctionSync"))
+            function_sync_result = self.sync_typedb_native_rule_functions(enabled_rules, force=force_sync)
+            if str(function_sync_result.get("status") or "") != "ok":
+                return {
+                    "configured": True,
+                    "status": "error",
+                    "graphStore": "typedb",
+                    "reasonCode": str(function_sync_result.get("reasonCode") or "typedbSchemaFunctionSyncError"),
+                    "reason": "TypeDB schema function 동기화 실패: " + str(function_sync_result.get("reason") or function_sync_result.get("status") or "")[:180],
+                    "validationOnly": True,
+                    "mutatedOperationalRuleBox": False,
+                    "wroteInferenceBox": False,
+                    "candidateRuleCount": len(enabled_rules),
+                    "nativeReasoningProfile": native_profile,
+                    "functionSyncResult": function_sync_result,
+                    "typedbQueryMetrics": self.query_metrics_snapshot(),
+                }
+            native_match_result = self.match_typedb_native_rules(enabled_rules, target_symbols=target_symbols)
+            native_query_used = str(native_match_result.get("status") or "") == "ok"
+            matched_count = int(number_or_none(native_match_result.get("matchedCount")) or 0)
+            return {
+                "configured": True,
+                "status": "ok" if native_query_used else "error",
+                "graphStore": "typedb",
+                "source": "typedbCandidateRulePreview",
+                "reasoningMode": TYPEDB_NATIVE_REASONING_MODE,
+                "reason": "" if native_query_used else "TypeDB schema function preview failed: " + str(native_match_result.get("reason") or "")[:180],
+                "validationOnly": True,
+                "mutatedOperationalRuleBox": False,
+                "wroteInferenceBox": False,
+                "candidateRuleCount": len(enabled_rules),
+                "candidateRuleIds": [rule.rule_id for rule in enabled_rules],
+                "targetSymbols": target_symbols,
+                "matchedCount": matched_count,
+                "nativeTypeDbReasoningUsed": native_query_used,
+                "typedbNativeFunctionReasoningUsed": native_query_used and bool(native_match_result.get("schemaFunctionUsed")),
+                "typedbSchemaFunctionUsed": bool(function_sync_result.get("status") == "ok"),
+                "functionSyncResult": {
+                    key: function_sync_result.get(key)
+                    for key in ["status", "reason", "reasonCode", "syncedCount", "skippedCount", "failedCount", "syncedRules", "skippedRules"]
+                    if key in function_sync_result
+                },
+                "nativeMatchResult": {
+                    key: native_match_result.get(key)
+                    for key in ["status", "reason", "reasonCode", "nativeQueryUsed", "schemaFunctionUsed", "executedRuleCount", "skippedRuleCount", "matchedCount", "executedRules", "skippedRules", "typedbQueryMetrics"]
+                    if key in native_match_result
+                },
+                "nativeReasoningProfile": native_profile,
+                "typedbQueryMetrics": self.query_metrics_snapshot(),
+            }
+        except Exception as error:  # noqa: BLE001 - strategy validation is diagnostic, not runtime judgement.
+            return {
+                "configured": True,
+                "status": "error",
+                "graphStore": "typedb",
+                "reasonCode": typedb_error_code(error),
+                "reason": "TypeDB candidate rule preview failed: " + str(error)[:180],
+                "validationOnly": True,
+                "mutatedOperationalRuleBox": False,
+                "wroteInferenceBox": False,
+                "candidateRuleCount": len(enabled_rules),
+                "nativeReasoningProfile": native_profile,
+                "typedbQueryMetrics": self.query_metrics_snapshot(),
+            }
 
     def write_inferencebox_graph(self, graph: PortfolioOntology) -> Dict[str, object]:
         if not self.address:

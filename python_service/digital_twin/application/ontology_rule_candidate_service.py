@@ -16,11 +16,13 @@ class RuleChangeCandidateProposalService:
         advisor,
         event_reader=None,
         settings: Dict[str, object] = None,
+        strategy_proposal_service=None,
     ):
         self.ontology_repository = ontology_repository
         self.advisor = advisor
         self.event_reader = event_reader
         self.settings = dict(settings or {})
+        self.strategy_proposal_service = strategy_proposal_service
 
     def propose(
         self,
@@ -44,7 +46,7 @@ class RuleChangeCandidateProposalService:
             "savedCount": 0,
             "reason": "No candidates to save.",
         }
-        return {
+        result = {
             "status": "ok" if candidates else "no-candidates",
             "trigger": trigger,
             "symbols": clean_symbols,
@@ -52,6 +54,7 @@ class RuleChangeCandidateProposalService:
             "savedCount": int(save_result.get("savedCount") or 0),
             "candidates": candidates,
             "saveResult": save_result,
+            "advisor": self.advisor_metadata(),
             "contextSummary": {
                 "recentEventCount": len(context.get("recentEvents") or []),
                 "alertCount": len(context.get("alerts") or []),
@@ -59,6 +62,9 @@ class RuleChangeCandidateProposalService:
                 "inferenceRelationCount": ((context.get("inferenceBox") or {}).get("relationCount") if isinstance(context.get("inferenceBox"), dict) else 0),
             },
         }
+        if self.strategy_proposal_service and hasattr(self.strategy_proposal_service, "propose_from_rule_candidates"):
+            result["strategyProposalResult"] = self.strategy_proposal_service.propose_from_rule_candidates(result, context)
+        return result
 
     def build_context(
         self,
@@ -83,6 +89,12 @@ class RuleChangeCandidateProposalService:
 
     def max_candidates(self) -> int:
         return int_setting(self.settings, "ontologyRuleCandidateAiMaxCandidates", 3, 1, 10)
+
+    def advisor_metadata(self) -> Dict[str, object]:
+        if self.advisor and hasattr(self.advisor, "metadata"):
+            metadata = self.advisor.metadata()
+            return metadata if isinstance(metadata, dict) else {}
+        return {"configured": bool(self.advisor), "mode": self.advisor.__class__.__name__ if self.advisor else "disabled"}
 
     def recent_events(self) -> List[Dict[str, object]]:
         if not self.event_reader or not hasattr(self.event_reader, "latest_events"):

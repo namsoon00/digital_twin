@@ -31,6 +31,10 @@ ONTOLOGY_REASONING_COMPLETED = "ontology.reasoning_completed"
 INVESTMENT_CALENDAR_EVENT_SAVED = "investment_calendar.event_saved"
 INVESTMENT_CALENDAR_EVENT_REMOVED = "investment_calendar.event_removed"
 INVESTMENT_CALENDAR_REMINDER_DUE = "investment_calendar.reminder_due"
+INVESTMENT_STRATEGY_PROPOSED = "investment_strategy.proposed"
+INVESTMENT_STRATEGY_VALIDATED = "investment_strategy.validated"
+INVESTMENT_STRATEGY_APPROVED = "investment_strategy.approved"
+INVESTMENT_STRATEGY_DEPLOYED = "investment_strategy.deployed"
 
 
 @dataclass(frozen=True)
@@ -254,6 +258,55 @@ def ontology_reasoning_completed_event(
             "status": str(status or "ok"),
             "reason": str(reason or ""),
             "dispatchMode": "data-update-driven",
+        },
+    )
+
+
+def investment_strategy_proposed_event(proposal) -> DomainEvent:
+    payload = proposal.to_dict() if hasattr(proposal, "to_dict") else dict(proposal or {})
+    return DomainEvent(
+        name=INVESTMENT_STRATEGY_PROPOSED,
+        aggregate_id=str(payload.get("id") or payload.get("proposalId") or ""),
+        payload={"proposal": payload},
+    )
+
+
+def investment_strategy_validated_event(proposal) -> DomainEvent:
+    payload = proposal.to_dict() if hasattr(proposal, "to_dict") else dict(proposal or {})
+    return DomainEvent(
+        name=INVESTMENT_STRATEGY_VALIDATED,
+        aggregate_id=str(payload.get("id") or payload.get("proposalId") or ""),
+        payload={
+            "proposalId": str(payload.get("id") or ""),
+            "status": str(payload.get("status") or ""),
+            "validation": dict(payload.get("validation") or {}),
+        },
+    )
+
+
+def investment_strategy_approved_event(proposal) -> DomainEvent:
+    payload = proposal.to_dict() if hasattr(proposal, "to_dict") else dict(proposal or {})
+    return DomainEvent(
+        name=INVESTMENT_STRATEGY_APPROVED,
+        aggregate_id=str(payload.get("id") or payload.get("proposalId") or ""),
+        payload={
+            "proposalId": str(payload.get("id") or ""),
+            "status": str(payload.get("status") or ""),
+            "approvedAt": str(payload.get("approvedAt") or ""),
+        },
+    )
+
+
+def investment_strategy_deployed_event(proposal) -> DomainEvent:
+    payload = proposal.to_dict() if hasattr(proposal, "to_dict") else dict(proposal or {})
+    return DomainEvent(
+        name=INVESTMENT_STRATEGY_DEPLOYED,
+        aggregate_id=str(payload.get("id") or payload.get("proposalId") or ""),
+        payload={
+            "proposalId": str(payload.get("id") or ""),
+            "status": str(payload.get("status") or ""),
+            "deployedAt": str(payload.get("deployedAt") or ""),
+            "ruleIds": list(payload.get("ruleIds") or []),
         },
     )
 

@@ -1,7 +1,7 @@
 from typing import Dict, Iterable, List
 
 from .alert_formatting import compact_number, money, pct_delta, price_money, signed_pct
-from .market_data import number
+from .market_data import investor_net_volume, number
 from .ontology_relation_reasoning import relation_rule_context_summary_lines
 from .portfolio import AccountSnapshot, Position
 from .portfolio_calculations import value_in_base
@@ -429,7 +429,9 @@ class MonitoringPositionContextMixin:
         return "수급: " + ", ".join(parts)
 
     def investor_value(self, position: Dict[str, object], snake_key: str, camel_key: str) -> float:
-        return number(position.get(snake_key)) or number(position.get(camel_key))
+        if snake_key in position and position.get(snake_key) not in (None, ""):
+            return number(position.get(snake_key))
+        return number(position.get(camel_key))
 
     def investor_amount_text(self, value: float, currency: str) -> str:
         amount = number(value)
@@ -452,10 +454,22 @@ class MonitoringPositionContextMixin:
     def investor_summary(self, label: str, buy: float, sell: float, net: float, net_amount: float, currency: str) -> str:
         amount_text = (", 금액 " + self.investor_amount_text(net_amount, currency)) if net_amount else ""
         if buy or sell:
-            effective_net = net if net else buy - sell
-            direction = "순매수" if effective_net > 0 else "순매도" if effective_net < 0 else "순매수/순매도 0"
-            net_text = direction + " " + compact_number(abs(effective_net)) + "주" if effective_net else direction
-            return label + ": " + net_text + ", 매수 " + compact_number(buy) + "주, 매도 " + compact_number(sell) + "주" + amount_text
+            effective_net = investor_net_volume(net, buy, sell)
+            direction = "순매수" if effective_net > 0 else "순매도" if effective_net < 0 else "매수·매도 균형"
+            net_text = ("+" if effective_net > 0 else "-" if effective_net < 0 else "") + compact_number(abs(effective_net)) + "주"
+            return (
+                label
+                + ": 상태 "
+                + direction
+                + ", 차이 "
+                + net_text
+                + "(매수-매도), 매수 "
+                + compact_number(buy)
+                + "주, 매도 "
+                + compact_number(sell)
+                + "주"
+                + amount_text
+            )
         if net:
             direction = "순매수" if net > 0 else "순매도"
             return label + ": " + direction + " " + compact_number(abs(net)) + "주" + amount_text
@@ -476,15 +490,17 @@ class MonitoringPositionContextMixin:
         if status == "stale":
             reason = str(investor.get("staleReason") or investor.get("reason") or "").strip()
             return "신선도 주의" + (" - " + reason if reason else "")
+        if investor.get("unchangedCount") not in (None, "", 0):
+            return "이전 조회와 같은 투자자 수급 값 " + str(investor.get("unchangedCount")) + "회 연속"
         latency_label = str(investor.get("latencyLabel") or "").strip()
         if investor.get("aiUsableAsStrongEvidence") is False:
             reason = str(investor.get("latencyReason") or investor.get("reason") or "").strip()
             reference = "판단 참고 근거" if investor.get("judgementEvidenceUsable") is not False else "수치 제외"
             return (latency_label or "KIS 투자자 수급 참고용") + " · 실시간 강근거 제외 · " + reference + ((" · " + reason) if reason else "")
+        if investor.get("realTime") is True and str(investor.get("cadence") or "") == "live-poll":
+            return (latency_label or "KIS 장중 누적 수급 실시간 조회") + " · 매수-매도 차이를 판단 근거로 반영"
         if investor.get("realTime") is False or latency_label:
             return (latency_label or "장중 누적·지연 가능") + " · 현재가·호가와 같은 실시간 체결 데이터 아님"
-        if investor.get("unchangedCount") not in (None, "", 0):
-            return "이전 조회와 같은 투자자 수급 값 " + str(investor.get("unchangedCount")) + "회 연속"
         return ""
 
     def investor_context_line(self, position: Dict[str, object]) -> str:

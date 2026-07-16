@@ -31,6 +31,22 @@ def optional_number(item: Dict[str, object], keys: List[str]):
     return None
 
 
+def investor_net_volume(reported_net, buy, sell) -> float:
+    buy_value = number(buy)
+    sell_value = number(sell)
+    if buy_value or sell_value:
+        return buy_value - sell_value
+    return number(reported_net)
+
+
+def optional_investor_net_volume(reported_net, buy, sell):
+    if buy is not None or sell is not None:
+        return number(buy) - number(sell)
+    if reported_net is not None:
+        return number(reported_net)
+    return None
+
+
 BASE_MARKET_VALUE_KEYS = [
     "marketValueKrw",
     "marketValueKRW",
@@ -353,7 +369,7 @@ def normalize_position(item: Dict[str, object]) -> Position:
     if not bid_ask_imbalance and (orderbook_bid_volume or orderbook_ask_volume):
         base = orderbook_bid_volume + orderbook_ask_volume
         bid_ask_imbalance = ((orderbook_bid_volume - orderbook_ask_volume) / base) * 100 if base else 0.0
-    foreign_buy_volume = first_number(item, [
+    foreign_buy_volume = optional_number(item, [
         "foreignBuyVolume",
         "foreignerBuyVolume",
         "foreignInvestorBuyVolume",
@@ -363,7 +379,7 @@ def normalize_position(item: Dict[str, object]) -> Position:
         "외국인매수량",
         "외국인매수",
     ])
-    foreign_sell_volume = first_number(item, [
+    foreign_sell_volume = optional_number(item, [
         "foreignSellVolume",
         "foreignerSellVolume",
         "foreignInvestorSellVolume",
@@ -373,19 +389,18 @@ def normalize_position(item: Dict[str, object]) -> Position:
         "외국인매도량",
         "외국인매도",
     ])
-    foreign_net_volume = (
-        foreign_buy_volume - foreign_sell_volume
-        if foreign_buy_volume or foreign_sell_volume
-        else first_number(item, [
-            "foreignNet",
-            "foreignNetBuy",
-            "foreignerNetBuy",
-            "foreignInvestorNet",
-            "foreignNetVolume",
-            "frgn_ntby_qty",
-            "외국인순매수",
-        ])
-    )
+    foreign_net_reported = optional_number(item, [
+        "foreignNet",
+        "foreignNetBuy",
+        "foreignerNetBuy",
+        "foreignInvestorNet",
+        "foreignNetVolume",
+        "frgn_ntby_qty",
+        "외국인순매수",
+    ])
+    foreign_net_volume = optional_investor_net_volume(foreign_net_reported, foreign_buy_volume, foreign_sell_volume) or 0.0
+    foreign_buy_volume = number(foreign_buy_volume)
+    foreign_sell_volume = number(foreign_sell_volume)
     foreign_net_amount = first_number(item, [
         "foreignNetAmount",
         "foreign_net_amount",
@@ -396,7 +411,7 @@ def normalize_position(item: Dict[str, object]) -> Position:
         "외국인순매수금액",
         "외국인순매수거래대금",
     ])
-    institution_buy_volume = first_number(item, [
+    institution_buy_volume = optional_number(item, [
         "institutionBuyVolume",
         "institutionalBuyVolume",
         "institutionInvestorBuyVolume",
@@ -406,7 +421,7 @@ def normalize_position(item: Dict[str, object]) -> Position:
         "기관매수량",
         "기관매수",
     ])
-    institution_sell_volume = first_number(item, [
+    institution_sell_volume = optional_number(item, [
         "institutionSellVolume",
         "institutionalSellVolume",
         "institutionInvestorSellVolume",
@@ -416,19 +431,18 @@ def normalize_position(item: Dict[str, object]) -> Position:
         "기관매도량",
         "기관매도",
     ])
-    institution_net_volume = (
-        institution_buy_volume - institution_sell_volume
-        if institution_buy_volume or institution_sell_volume
-        else first_number(item, [
-            "institutionNet",
-            "institutionNetBuy",
-            "institutionalNet",
-            "institutionInvestorNet",
-            "institutionNetVolume",
-            "orgn_ntby_qty",
-            "기관순매수",
-        ])
-    )
+    institution_net_reported = optional_number(item, [
+        "institutionNet",
+        "institutionNetBuy",
+        "institutionalNet",
+        "institutionInvestorNet",
+        "institutionNetVolume",
+        "orgn_ntby_qty",
+        "기관순매수",
+    ])
+    institution_net_volume = optional_investor_net_volume(institution_net_reported, institution_buy_volume, institution_sell_volume) or 0.0
+    institution_buy_volume = number(institution_buy_volume)
+    institution_sell_volume = number(institution_sell_volume)
     institution_net_amount = first_number(item, [
         "institutionNetAmount",
         "institution_net_amount",
@@ -439,7 +453,7 @@ def normalize_position(item: Dict[str, object]) -> Position:
         "기관순매수금액",
         "기관순매수거래대금",
     ])
-    individual_buy_volume = first_number(item, [
+    individual_buy_volume = optional_number(item, [
         "individualBuyVolume",
         "retailBuyVolume",
         "personalBuyVolume",
@@ -449,7 +463,7 @@ def normalize_position(item: Dict[str, object]) -> Position:
         "개인매수량",
         "개인매수",
     ])
-    individual_sell_volume = first_number(item, [
+    individual_sell_volume = optional_number(item, [
         "individualSellVolume",
         "retailSellVolume",
         "personalSellVolume",
@@ -459,19 +473,18 @@ def normalize_position(item: Dict[str, object]) -> Position:
         "개인매도량",
         "개인매도",
     ])
-    individual_net_volume = (
-        individual_buy_volume - individual_sell_volume
-        if individual_buy_volume or individual_sell_volume
-        else first_number(item, [
-            "individualNet",
-            "individualNetBuy",
-            "individualNetVolume",
-            "retailNet",
-            "personalNetBuy",
-            "prsn_ntby_qty",
-            "개인순매수",
-        ])
-    )
+    individual_net_reported = optional_number(item, [
+        "individualNet",
+        "individualNetBuy",
+        "individualNetVolume",
+        "retailNet",
+        "personalNetBuy",
+        "prsn_ntby_qty",
+        "개인순매수",
+    ])
+    individual_net_volume = optional_investor_net_volume(individual_net_reported, individual_buy_volume, individual_sell_volume) or 0.0
+    individual_buy_volume = number(individual_buy_volume)
+    individual_sell_volume = number(individual_sell_volume)
     individual_net_amount = first_number(item, [
         "individualNetAmount",
         "individual_net_amount",

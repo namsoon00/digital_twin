@@ -875,7 +875,7 @@ class PythonServiceTests(unittest.TestCase):
                     {
                         "stck_bsop_date": "20260707",
                         "prsn_ntby_qty": "-400",
-                        "frgn_ntby_qty": "700",
+                        "frgn_ntby_qty": "999999",
                         "orgn_ntby_qty": "300",
                         "prsn_shnu_vol": "2000",
                         "frgn_shnu_vol": "1300",
@@ -938,16 +938,16 @@ class PythonServiceTests(unittest.TestCase):
         self.assertEqual(700, cached["foreignNetVolume"])
         self.assertEqual(50, cached["bidAskImbalance"])
         self.assertEqual("available", enriched.market_signal_coverage["investor"]["status"])
-        self.assertIs(False, enriched.market_signal_coverage["investor"]["realTime"])
-        self.assertEqual("rest-reference", enriched.market_signal_coverage["investor"]["cadence"])
-        self.assertEqual("reference-only", enriched.market_signal_coverage["investor"]["freshnessStatus"])
+        self.assertIs(True, enriched.market_signal_coverage["investor"]["realTime"])
+        self.assertEqual("live-poll", enriched.market_signal_coverage["investor"]["cadence"])
+        self.assertEqual("realtime-polled", enriched.market_signal_coverage["investor"]["freshnessStatus"])
         self.assertEqual("business-date-only", enriched.market_signal_coverage["investor"]["sourceAsOfConfidence"])
         self.assertEqual("2026-07-07T00:00:00+09:00", enriched.market_signal_coverage["investor"]["sourceAsOf"])
-        self.assertIs(False, enriched.market_signal_coverage["investor"]["aiUsableAsStrongEvidence"])
+        self.assertIs(True, enriched.market_signal_coverage["investor"]["aiUsableAsStrongEvidence"])
         self.assertIs(True, enriched.market_signal_coverage["investor"]["judgementEvidenceUsable"])
-        self.assertEqual("delayed-or-batched", enriched.market_signal_coverage["investor"]["latencyStatus"])
+        self.assertNotIn("latencyStatus", enriched.market_signal_coverage["investor"])
         self.assertEqual("available", cached["marketSignalCoverage"]["investor"]["status"])
-        self.assertIs(False, cached["marketSignalCoverage"]["investor"]["realTime"])
+        self.assertIs(True, cached["marketSignalCoverage"]["investor"]["realTime"])
         self.assertEqual(["/oauth2/tokenP", "/uapi/domestic-stock/v1/quotations/inquire-price", "/uapi/domestic-stock/v1/quotations/inquire-ccnl", "/uapi/domestic-stock/v1/quotations/inquire-investor", "/uapi/domestic-stock/v1/quotations/inquire-asking-price-exp-ccn"], [item[1] for item in calls])
 
     def test_kis_market_signal_provider_does_not_treat_price_foreign_zero_as_investor_flow(self):
@@ -6152,21 +6152,23 @@ class PythonServiceTests(unittest.TestCase):
         condition_ids = {condition.condition_id for condition in rule.conditions}
         bypass_ids = {condition.condition_id for condition in rule.similarity_bypass_conditions}
         self.assertIn("ontology_novelty_score", condition_ids)
-        self.assertIn("insight_type_changed", bypass_ids)
+        self.assertNotIn("insight_type_changed", bypass_ids)
         self.assertNotIn("semantic_signature_changed", bypass_ids)
         self.assertIn("new_relation_event", bypass_ids)
         self.assertIn("insight_profit_loss_improved", bypass_ids)
-        insight_change = next(condition for condition in rule.similarity_bypass_conditions if condition.condition_id == "insight_type_changed")
+        self.assertEqual(360, rule.similarity_window_minutes)
+        self.assertEqual(-50, rule.similarity_penalty)
+        relation_delta = next(condition for condition in rule.similarity_bypass_conditions if condition.condition_id == "relation_score_delta")
         profit_improved = next(condition for condition in rule.similarity_bypass_conditions if condition.condition_id == "insight_profit_loss_improved")
         action_change = next(condition for condition in rule.similarity_bypass_conditions if condition.condition_id == "insight_action_changed")
-        self.assertEqual("ontologyInsight.dispatchInsightType", insight_change.field)
+        self.assertEqual(15, relation_delta.value)
         self.assertEqual(1, profit_improved.value)
         self.assertEqual(
             "notificationAiValidatedResponse.actionLabel,notificationAiValidatedResponse.action,aiOpinion.actionLabel,aiOpinion.action",
             action_change.field,
         )
         self.assertEqual(
-            ["messageType", "accountId", "ontologyInsight.subject", "ontologyInsight.dispatchInsightType", "ontologyInsight.semanticSignature"],
+            ["messageType", "accountId", "ontologyInsight.subject"],
             rule.similarity_fields,
         )
         job = NotificationJob.create(
@@ -6246,15 +6248,15 @@ class PythonServiceTests(unittest.TestCase):
         )
 
         migrated = TestNotificationRuleStore(db_path).get("investmentInsight")
-        insight_change = next(condition for condition in migrated.similarity_bypass_conditions if condition.condition_id == "insight_type_changed")
+        migrated_ids = {condition.condition_id for condition in migrated.similarity_bypass_conditions}
         profit_improved = next(condition for condition in migrated.similarity_bypass_conditions if condition.condition_id == "insight_profit_loss_improved")
         action_change = next(condition for condition in migrated.similarity_bypass_conditions if condition.condition_id == "insight_action_changed")
 
         self.assertEqual(
-            ["messageType", "accountId", "ontologyInsight.subject", "ontologyInsight.dispatchInsightType", "ontologyInsight.semanticSignature"],
+            ["messageType", "accountId", "ontologyInsight.subject"],
             migrated.similarity_fields,
         )
-        self.assertEqual("ontologyInsight.dispatchInsightType", insight_change.field)
+        self.assertNotIn("insight_type_changed", migrated_ids)
         self.assertEqual("손익률 개선", profit_improved.label)
         self.assertEqual(1, profit_improved.value)
         self.assertEqual(
@@ -11195,6 +11197,8 @@ class PythonServiceTests(unittest.TestCase):
         rule.similarity_penalty = -40
         rule.similarity_bypass_score_delta = 20
         rule.similarity_fields = ["messageType", "accountId", "symbol", "severity", "title"]
+        rule.state_cooldown_enabled = False
+        rule.state_cooldown_minutes = 0
         rule.market_hours_enabled = False
         rules.upsert(rule)
         first = self.mark_event_fresh(AlertEvent("main", "메인", "ALERT", "monitorTrendChange", "main:trend:1", "SK하이닉스", ["이동평균 변화", "20일선 하향 이탈"], "000660"))
@@ -11225,14 +11229,20 @@ class PythonServiceTests(unittest.TestCase):
         rule = default_notification_rule("externalEquityMove")
 
         self.assertEqual(45, rule.threshold)
-        self.assertFalse(rule.state_cooldown_enabled)
+        self.assertTrue(rule.state_cooldown_enabled)
+        self.assertEqual(360, rule.state_cooldown_minutes)
+        self.assertEqual(360, rule.similarity_window_minutes)
+        self.assertEqual(-40, rule.similarity_penalty)
         self.assertEqual([], rule.similarity_bypass_conditions)
 
     def test_crypto_state_cooldown_suppresses_same_threshold_state(self):
         rule = default_notification_rule("externalCryptoMove")
 
         self.assertEqual(45, rule.threshold)
-        self.assertFalse(rule.state_cooldown_enabled)
+        self.assertTrue(rule.state_cooldown_enabled)
+        self.assertEqual(360, rule.state_cooldown_minutes)
+        self.assertEqual(360, rule.similarity_window_minutes)
+        self.assertEqual(-40, rule.similarity_penalty)
         self.assertEqual([], rule.similarity_bypass_conditions)
 
     def test_holding_timing_state_cooldown_suppresses_same_status(self):

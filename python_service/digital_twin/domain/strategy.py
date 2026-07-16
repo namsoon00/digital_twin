@@ -2,7 +2,7 @@ import ast
 import math
 from typing import Dict, Iterable, List
 
-from .market_data import clamp, number
+from .market_data import clamp, investor_net_volume, number
 from .investment_research import build_active_investment_opinion
 from .ontology_prompting import ONTOLOGY_PROMPT_VERSION
 from .portfolio_ontology_builder import build_portfolio_ontology
@@ -390,9 +390,9 @@ class StrategyModel:
             "ma60": position.ma60,
             "trendDistance20": position.ma20_distance,
             "trendDistance60": position.ma60_distance,
-            "foreignNet": number(position.foreign_net_volume) or number(position.foreign_buy_volume) - number(position.foreign_sell_volume),
-            "institutionNet": number(position.institution_net_volume) or number(position.institution_buy_volume) - number(position.institution_sell_volume),
-            "individualNet": number(position.individual_net_volume) or number(position.individual_buy_volume) - number(position.individual_sell_volume),
+            "foreignNet": investor_net_volume(position.foreign_net_volume, position.foreign_buy_volume, position.foreign_sell_volume),
+            "institutionNet": investor_net_volume(position.institution_net_volume, position.institution_buy_volume, position.institution_sell_volume),
+            "individualNet": investor_net_volume(position.individual_net_volume, position.individual_buy_volume, position.individual_sell_volume),
         })
         variables.update({
             "baseScore": 24.0,
@@ -724,9 +724,9 @@ def loss_guard_confirmation_components(position: Position, pnl: float, threshold
     sell_volume = number(position.sell_volume)
     total_volume = buy_volume + sell_volume
     sell_share = (sell_volume / total_volume) * 100.0 if total_volume else 0.0
-    foreign_net = number(position.foreign_net_volume) or number(position.foreign_buy_volume) - number(position.foreign_sell_volume)
-    institution_net = number(position.institution_net_volume) or number(position.institution_buy_volume) - number(position.institution_sell_volume)
-    individual_net = number(position.individual_net_volume) or number(position.individual_buy_volume) - number(position.individual_sell_volume)
+    foreign_net = investor_net_volume(position.foreign_net_volume, position.foreign_buy_volume, position.foreign_sell_volume)
+    institution_net = investor_net_volume(position.institution_net_volume, position.institution_buy_volume, position.institution_sell_volume)
+    individual_net = investor_net_volume(position.individual_net_volume, position.individual_buy_volume, position.individual_sell_volume)
     investor_base = abs(foreign_net) + abs(institution_net) + abs(individual_net)
     investor_flow_score = clamp(((foreign_net + institution_net) - individual_net * 0.35) / investor_base * 100.0, -100.0, 100.0) if investor_base else 0.0
     pnl_value = float(pnl or 0.0)
@@ -809,8 +809,8 @@ def holding_signal_adjustment(position: Position, pnl: float = None) -> float:
             adjustment -= 5
         elif buy_share >= 56:
             adjustment -= 2
-    foreign_net = number(position.foreign_net_volume) or number(position.foreign_buy_volume) - number(position.foreign_sell_volume)
-    institution_net = number(position.institution_net_volume) or number(position.institution_buy_volume) - number(position.institution_sell_volume)
+    foreign_net = investor_net_volume(position.foreign_net_volume, position.foreign_buy_volume, position.foreign_sell_volume)
+    institution_net = investor_net_volume(position.institution_net_volume, position.institution_buy_volume, position.institution_sell_volume)
     investor_base = abs(foreign_net) + abs(institution_net)
     if investor_base:
         smart_money_ratio = (foreign_net + institution_net) / investor_base

@@ -18,7 +18,21 @@ from .notification_templates import DEFAULT_NOTIFICATION_TEMPLATES
 DEFAULT_HONEY_THRESHOLD = 45
 DEFAULT_LOW_SCORE_ACTION = "suppress"
 DEFAULT_SIMILARITY_FIELDS = ["messageType", "accountId", "symbol", "severity", "title"]
-STATE_COOLDOWN_MESSAGE_TYPES = {INVESTMENT_INSIGHT, "holdingTiming", "watchlistOntologySignal"}
+STATE_COOLDOWN_MESSAGE_TYPES = {
+    INVESTMENT_INSIGHT,
+    "holdingTiming",
+    "watchlistOntologySignal",
+    "monitorDecisionChange",
+    "monitorPositionChange",
+    "monitorPnlChange",
+    "monitorValueChange",
+    "monitorTrendChange",
+    "monitorCashChange",
+    "externalEquityMove",
+    "externalCryptoMove",
+    "externalMacroShift",
+    "externalDartDisclosure",
+}
 DEFAULT_NOTIFICATION_SCORE_FORMULA = "rawScore"
 VOLATILE_SCORE_SUFFIX = re.compile(r":[+-]?\d+(?:\.\d+)?%?$")
 FORMULA_VARIABLE_BY_CONDITION_ID = {
@@ -113,8 +127,8 @@ def default_similarity_window_minutes(message_type: str) -> int:
     if key == INVESTMENT_CALENDAR_REMINDER:
         return 1440
     if key == INVESTMENT_INSIGHT:
-        return 180
-    if key in {"holdingTiming", "watchlistOntologySignal", "monitorHeartbeat"}:
+        return 360
+    if key in STATE_COOLDOWN_MESSAGE_TYPES or key == "monitorHeartbeat":
         return 360
     if key in LOW_SIGNAL_MESSAGE_TYPES:
         return 180
@@ -128,8 +142,8 @@ def default_similarity_penalty(message_type: str) -> int:
     if key == INVESTMENT_CALENDAR_REMINDER:
         return -80
     if key == INVESTMENT_INSIGHT:
-        return -35
-    if key in {"holdingTiming", "watchlistOntologySignal", "monitorHeartbeat"}:
+        return -50
+    if key in STATE_COOLDOWN_MESSAGE_TYPES or key == "monitorHeartbeat":
         return -40
     if key in LOW_SIGNAL_MESSAGE_TYPES:
         return -30
@@ -163,18 +177,11 @@ def default_similarity_bypass_conditions(message_type: str) -> List["SimilarityB
                 description="온톨로지 인사이트 중요도가 올라가면 반복이어도 보냅니다.",
             ),
             SimilarityBypassCondition(
-                "insight_type_changed",
-                "인사이트 유형 변경",
-                "field_changed",
-                field="ontologyInsight.dispatchInsightType",
-                description="위험, 기회, 데이터 품질처럼 발송 정책 분류가 바뀌면 보냅니다.",
-            ),
-            SimilarityBypassCondition(
                 "relation_score_delta",
                 "관계 강도 변화",
                 "abs_number_delta_gte",
                 field="ontologyInsight.score",
-                value=8,
+                value=15,
                 description="이전 유사 인사이트보다 관계 강도가 기준점 이상 달라지면 보냅니다.",
             ),
             SimilarityBypassCondition(
@@ -620,7 +627,7 @@ def default_notification_rule(message_type: str) -> NotificationRuleConfig:
     similarity_fields = list(DEFAULT_SIMILARITY_FIELDS)
     if key == INVESTMENT_INSIGHT:
         conditions.extend(NotificationRuleCondition.from_dict(condition.to_dict()) for condition in ontology_insight_conditions())
-        similarity_fields = ["messageType", "accountId", "ontologyInsight.subject", "ontologyInsight.dispatchInsightType", "ontologyInsight.semanticSignature"]
+        similarity_fields = ["messageType", "accountId", "ontologyInsight.subject"]
     if key == NEWS_DIGEST:
         similarity_fields = ["messageType", "accountId", "newsDigest.primaryEvidenceId"]
     if key == INVESTMENT_CALENDAR_REMINDER:

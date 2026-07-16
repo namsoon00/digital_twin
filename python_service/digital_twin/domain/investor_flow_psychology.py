@@ -1,6 +1,6 @@
 from typing import Dict
 
-from .market_data import clamp, number
+from .market_data import clamp, investor_net_volume, number
 from .portfolio import Position
 
 
@@ -34,9 +34,9 @@ def investor_flow_psychology(position: Position) -> Dict[str, object]:
             "sentimentLabel": "투자자별 수급 신뢰도 낮음",
         }
 
-    foreign_volume = number(position.foreign_net_volume) or number(position.foreign_buy_volume) - number(position.foreign_sell_volume)
-    institution_volume = number(position.institution_net_volume) or number(position.institution_buy_volume) - number(position.institution_sell_volume)
-    individual_volume = number(position.individual_net_volume) or number(position.individual_buy_volume) - number(position.individual_sell_volume)
+    foreign_volume = investor_net_volume(position.foreign_net_volume, position.foreign_buy_volume, position.foreign_sell_volume)
+    institution_volume = investor_net_volume(position.institution_net_volume, position.institution_buy_volume, position.institution_sell_volume)
+    individual_volume = investor_net_volume(position.individual_net_volume, position.individual_buy_volume, position.individual_sell_volume)
     foreign = foreign_volume or number(position.foreign_net_amount)
     institution = institution_volume or number(position.institution_net_amount)
     individual = individual_volume or number(position.individual_net_amount)

@@ -1,6 +1,6 @@
 from typing import Dict, Iterable, List
 
-from .market_data import number
+from .market_data import investor_net_volume, number
 from .ontology_contracts import (
     OntologyEntity,
     OntologyRelation,
@@ -195,6 +195,9 @@ def build_portfolio_ontology(
         source = "watchlist" if is_watchlist_position(position) else "holding"
         holding = is_holding_position(position)
         stock_tbox_classes = instrument_tbox_classes(position) + (["WatchlistCandidate"] if source == "watchlist" else [])
+        foreign_net_volume = investor_net_volume(position.foreign_net_volume, position.foreign_buy_volume, position.foreign_sell_volume)
+        institution_net_volume = investor_net_volume(position.institution_net_volume, position.institution_buy_volume, position.institution_sell_volume)
+        individual_net_volume = investor_net_volume(position.individual_net_volume, position.individual_buy_volume, position.individual_sell_volume)
         graph.entities.append(OntologyEntity(stock_id, position.name or symbol, "stock", abox_properties({
             "symbol": symbol,
             "market": position.market,
@@ -227,13 +230,13 @@ def build_portfolio_ontology(
             "tradeStrength": number(position.trade_strength),
             "tradingValue": number(position.trading_value),
             "bidAskImbalance": number(position.bid_ask_imbalance),
-            "foreignNetVolume": number(position.foreign_net_volume),
+            "foreignNetVolume": foreign_net_volume,
             "foreignNetAmount": number(position.foreign_net_amount),
-            "institutionNetVolume": number(position.institution_net_volume),
+            "institutionNetVolume": institution_net_volume,
             "institutionNetAmount": number(position.institution_net_amount),
-            "individualNetVolume": number(position.individual_net_volume),
+            "individualNetVolume": individual_net_volume,
             "individualNetAmount": number(position.individual_net_amount),
-            "smartMoneyNetVolume": number(position.foreign_net_volume) + number(position.institution_net_volume),
+            "smartMoneyNetVolume": foreign_net_volume + institution_net_volume,
             "tboxClass": "Stock",
             "tboxClasses": stock_tbox_classes,
             **strategy_fact_props,

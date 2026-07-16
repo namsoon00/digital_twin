@@ -242,21 +242,36 @@ class MySQLNotificationRuleStore(MySQLOperationalConnection):
             "ontologyInsight.subject",
             "ontologyInsight.dispatchInsightType",
         ]
+        legacy_dispatch_signature_fields = [
+            "messageType",
+            "accountId",
+            "ontologyInsight.subject",
+            "ontologyInsight.dispatchInsightType",
+            "ontologyInsight.semanticSignature",
+        ]
         legacy_insight_fields = [
             "messageType",
             "accountId",
             "ontologyInsight.subject",
             "ontologyInsight.insightType",
         ]
-        known_legacy_fields = [legacy_fields, legacy_dispatch_fields, legacy_insight_fields]
+        generic_legacy_fields = ["messageType", "accountId", "symbol", "severity", "title"]
+        known_legacy_fields = [
+            legacy_fields,
+            legacy_dispatch_fields,
+            legacy_dispatch_signature_fields,
+            legacy_insight_fields,
+            generic_legacy_fields,
+        ]
         if current.similarity_fields in known_legacy_fields and current.similarity_fields != default_rule.similarity_fields:
             current.similarity_fields = list(default_rule.similarity_fields)
             changed = True
         if str(current.message_type or "") == "investmentInsight":
+            default_ids = {condition.condition_id for condition in default_rule.similarity_bypass_conditions}
             filtered_conditions = [
                 condition
                 for condition in current.similarity_bypass_conditions
-                if condition.condition_id != "semantic_signature_changed"
+                if condition.condition_id in default_ids and condition.condition_id != "semantic_signature_changed"
             ]
             if len(filtered_conditions) != len(current.similarity_bypass_conditions):
                 current.similarity_bypass_conditions = filtered_conditions

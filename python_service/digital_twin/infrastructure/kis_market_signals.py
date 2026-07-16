@@ -8,7 +8,7 @@ from datetime import datetime, timedelta, timezone
 from typing import Callable, Dict, Iterable, List, Optional, Tuple
 
 from ..domain.data_freshness import combine_quality
-from ..domain.market_data import known_stock, number, pct_distance
+from ..domain.market_data import known_stock, number, optional_investor_net_volume, pct_distance
 from ..domain.portfolio import Position, utc_now_iso
 from .external_signal_utils import ExternalCircuitOpen, root_api_error
 from .operational_store import market_quote_cache
@@ -300,6 +300,10 @@ def stage_coverage(
             payload["latencyReason"] = INVESTOR_REST_REFERENCE_REASON
             payload["aiUsableAsStrongEvidence"] = False
             payload["freshnessStatus"] = "reference-only"
+        else:
+            payload["freshnessStatus"] = "realtime-polled"
+            payload["latencyLabel"] = "KIS 장중 누적 수급 실시간 조회"
+            payload["latencyReason"] = "KIS 투자자별 수급은 WebSocket 틱 데이터가 아니라 REST 장중 누적 조회값입니다. 매 주기 새로 조회하고 반복값이면 자동으로 약한 근거로 낮춥니다."
     return payload
 
 
@@ -915,12 +919,14 @@ class KISMarketSignalProvider:
             normalized_investor = normalize_investor(investor)
             merge_if_present(signal, normalized_investor)
             investor_as_of, investor_as_of_confidence = stage_source_as_of("investor", investor, fetched_at)
-            coverage["investor"] = stage_coverage("investor", investor, normalized_investor, INVESTOR_SIGNAL_KEYS, fetched_at=fetched_at, source_as_of=investor_as_of, source_as_of_confidence=investor_as_of_confidence, session=session, real_time=False, transport="rest", ai_usable_as_strong_evidence=False)
+            investor_real_time = self.investor_realtime_enabled() and microstructure_available
+            coverage["investor"] = stage_coverage("investor", investor, normalized_investor, INVESTOR_SIGNAL_KEYS, fetched_at=fetched_at, source_as_of=investor_as_of, source_as_of_confidence=investor_as_of_confidence, session=session, real_time=investor_real_time, transport="rest", ai_usable_as_strong_evidence=investor_real_time)
         elif isinstance(investor, dict):
             normalized_investor = normalize_investor([investor])
             merge_if_present(signal, normalized_investor)
             investor_as_of, investor_as_of_confidence = stage_source_as_of("investor", investor, fetched_at)
-            coverage["investor"] = stage_coverage("investor", investor, normalized_investor, INVESTOR_SIGNAL_KEYS, fetched_at=fetched_at, source_as_of=investor_as_of, source_as_of_confidence=investor_as_of_confidence, session=session, real_time=False, transport="rest", ai_usable_as_strong_evidence=False)
+            investor_real_time = self.investor_realtime_enabled() and microstructure_available
+            coverage["investor"] = stage_coverage("investor", investor, normalized_investor, INVESTOR_SIGNAL_KEYS, fetched_at=fetched_at, source_as_of=investor_as_of, source_as_of_confidence=investor_as_of_confidence, session=session, real_time=investor_real_time, transport="rest", ai_usable_as_strong_evidence=investor_real_time)
         else:
             coverage["investor"] = unavailable_stage_coverage("investor", session) if not microstructure_available else stage_coverage("investor", investor, {}, INVESTOR_SIGNAL_KEYS, fetched_at=fetched_at, session=session)
         if isinstance(orderbook, dict):
@@ -1097,6 +1103,9 @@ class KISMarketSignalProvider:
         individual_sell_volume = optional_number(signal, ["individualSellVolume"])
         individual_net_volume = optional_number(signal, ["individualNetVolume", "individualNet"])
         individual_net_amount = optional_number(signal, ["individualNetAmount"])
+        foreign_net_volume = optional_investor_net_volume(foreign_net_volume, foreign_buy_volume, foreign_sell_volume)
+        institution_net_volume = optional_investor_net_volume(institution_net_volume, institution_buy_volume, institution_sell_volume)
+        individual_net_volume = optional_investor_net_volume(individual_net_volume, individual_buy_volume, individual_sell_volume)
         market_signal_coverage = signal.get("marketSignalCoverage") if isinstance(signal.get("marketSignalCoverage"), dict) else position.market_signal_coverage
         investor_values_reliable = investor_stage_values_usable_for_judgement(market_signal_coverage)
 
@@ -1247,21 +1256,15 @@ def normalize_investor(items: List[Dict[str, object]]) -> Dict[str, object]:
     return {
         "foreignBuyVolume": foreign_buy,
         "foreignSellVolume": foreign_sell,
-        "foreignNetVolume": foreign_net if foreign_net is not None else (
-            foreign_buy - foreign_sell if foreign_buy is not None and foreign_sell is not None else None
-        ),
+        "foreignNetVolume": optional_investor_net_volume(foreign_net, foreign_buy, foreign_sell),
         "foreignNetAmount": foreign_net_amount,
         "institutionBuyVolume": institution_buy,
         "institutionSellVolume": institution_sell,
-        "institutionNetVolume": institution_net if institution_net is not None else (
-            institution_buy - institution_sell if institution_buy is not None and institution_sell is not None else None
-        ),
+        "institutionNetVolume": optional_investor_net_volume(institution_net, institution_buy, institution_sell),
         "institutionNetAmount": institution_net_amount,
         "individualBuyVolume": individual_buy,
         "individualSellVolume": individual_sell,
-        "individualNetVolume": individual_net if individual_net is not None else (
-            individual_buy - individual_sell if individual_buy is not None and individual_sell is not None else None
-        ),
+        "individualNetVolume": optional_investor_net_volume(individual_net, individual_buy, individual_sell),
         "individualNetAmount": individual_net_amount,
     }
 

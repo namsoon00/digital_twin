@@ -772,6 +772,31 @@ class OntologyRuleBoxTests(unittest.TestCase):
             for item in condition_rows
             if item["id"] == "rule-condition:graph.coverage.gap.confidence_limit.v1:coverage-gap"
         )
+        bitcoin_profile = next(
+            item
+            for item in condition_rows
+            if item["id"] == "rule-condition:graph.instrument_profile.bitcoin_sensitive.crypto_linkage.v1:btc-sensitive-archetype"
+        )
+        bitcoin_exposure = next(
+            item
+            for item in condition_rows
+            if item["id"] == "rule-condition:graph.instrument_profile.bitcoin_sensitive.crypto_linkage.v1:btc-exposure"
+        )
+        preferred_rate_factor = next(
+            item
+            for item in condition_rows
+            if item["id"] == "rule-condition:graph.instrument_profile.preferred_income.rate_sensitivity.v1:rate-sensitive-factor"
+        )
+        preferred_rate_signal = next(
+            item
+            for item in condition_rows
+            if item["id"] == "rule-condition:graph.instrument_profile.preferred_income.rate_sensitivity.v1:high-rate-signal"
+        )
+        cyclical_growth_profile = next(
+            item
+            for item in condition_rows
+            if item["id"] == "rule-condition:graph.instrument_profile.cyclical_growth.recovery_add_review.v1:growth-cyclical-archetype"
+        )
         macro_regime = next(
             item
             for item in condition_rows
@@ -799,6 +824,9 @@ class OntologyRuleBoxTests(unittest.TestCase):
         self.assertIn("graph.aggressive.loss_recovery.add_buy_review.v1", rule_ids)
         self.assertIn("graph.profit_momentum.hold_add_review.v1", rule_ids)
         self.assertIn("graph.instrument_profile.averaging_down_policy.v1", rule_ids)
+        self.assertIn("graph.instrument_profile.bitcoin_sensitive.crypto_linkage.v1", rule_ids)
+        self.assertIn("graph.instrument_profile.preferred_income.rate_sensitivity.v1", rule_ids)
+        self.assertIn("graph.instrument_profile.cyclical_growth.recovery_add_review.v1", rule_ids)
         self.assertIn("graph.averaging_down.risk_guard.v1", rule_ids)
         self.assertIn("graph.holding.trend_transition.risk.v1", rule_ids)
         self.assertIn("graph.watchlist.trend_transition.support.v1", rule_ids)
@@ -896,6 +924,16 @@ class OntologyRuleBoxTests(unittest.TestCase):
         self.assertEqual("HAS_COVERAGE_GAP", coverage_gap["conditionRelationType"])
         self.assertEqual("coverage-gap", coverage_gap["conditionTargetKind"])
         self.assertEqual(4.0, coverage_gap["conditionRelationMinRiskImpact"])
+        self.assertEqual("HAS_ARCHETYPE", bitcoin_profile["conditionRelationType"])
+        self.assertEqual(["BitcoinProxy", "BitcoinSensitiveIncome"], bitcoin_profile["conditionTargetInstrumentArchetypes"])
+        self.assertEqual("HAS_CRYPTO_EXPOSURE", bitcoin_exposure["conditionRelationType"])
+        self.assertEqual(["BTC"], bitcoin_exposure["conditionTargetCryptoSymbols"])
+        self.assertEqual("HAS_FACTOR_SENSITIVITY", preferred_rate_factor["conditionRelationType"])
+        self.assertEqual(["rate"], preferred_rate_factor["conditionTargetFactors"])
+        self.assertEqual(["high"], preferred_rate_factor["conditionTargetSensitivityLevels"])
+        self.assertEqual("HAS_RATE_SENSITIVITY", preferred_rate_signal["conditionRelationType"])
+        self.assertEqual(4.0, preferred_rate_signal["conditionTargetMinValue"])
+        self.assertEqual(["SemiconductorHBM", "CyclicalGrowth", "SemiconductorCyclical", "AIGrowth"], cyclical_growth_profile["conditionTargetInstrumentArchetypes"])
         self.assertEqual("HAS_MACRO_REGIME", macro_regime["conditionRelationType"])
         self.assertEqual(["risk"], macro_regime["conditionRelationPolarities"])
         self.assertEqual("HAS_CRYPTO_EXPOSURE", crypto_exposure["conditionRelationType"])
@@ -909,6 +947,9 @@ class OntologyRuleBoxTests(unittest.TestCase):
         expected_rule_ids = {
             "graph.instrument_profile.strategy_fit.support.v1",
             "graph.instrument_profile.strategy_mismatch.risk.v1",
+            "graph.instrument_profile.bitcoin_sensitive.crypto_linkage.v1",
+            "graph.instrument_profile.preferred_income.rate_sensitivity.v1",
+            "graph.instrument_profile.cyclical_growth.recovery_add_review.v1",
             "graph.strategy_profile.loss_tolerance_breach.v1",
             "graph.strategy_profile.aggressive_recovery_room.v1",
             "graph.price.recovery.confirmed_by_flow.v1",
@@ -1038,9 +1079,22 @@ class OntologyRuleBoxTests(unittest.TestCase):
         graph = self.profitable_momentum_graph("MSTR")
         profiles = [item for item in graph.entities if item.kind == "instrument-profile"]
         profile = next(item for item in profiles if (item.properties or {}).get("symbol") == "MSTR")
+        archetype = next(
+            item
+            for item in graph.entities
+            if item.kind == "investment-archetype" and (item.properties or {}).get("archetype") == "BitcoinProxy"
+        )
+        sensitivity = next(
+            item
+            for item in graph.entities
+            if item.kind == "factor-sensitivity" and (item.properties or {}).get("factor") == "btc"
+        )
         relation_types = [item.relation_type for item in graph.relations if item.source == "stock:MSTR" or item.target == profile.entity_id]
 
         self.assertIn("BitcoinProxy", profile.properties["archetypes"])
+        self.assertEqual("BitcoinProxy", archetype.properties["instrumentArchetype"])
+        self.assertEqual("btc", sensitivity.properties["factor"])
+        self.assertEqual("high", sensitivity.properties["sensitivityLevel"])
         self.assertTrue(profile.properties["allowAddOnStrength"])
         self.assertIn("HAS_INSTRUMENT_PROFILE", relation_types)
         self.assertTrue(any(item.relation_type == "HAS_ARCHETYPE" and item.source == "stock:MSTR" for item in graph.relations))

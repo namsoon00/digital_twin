@@ -688,9 +688,28 @@ def signed_pct(value: float) -> str:
     return ("+" if rounded > 0 else "") + str(rounded) + "%"
 
 
+def relation_rule_items(relation_context: Dict[str, object]) -> List[Dict[str, object]]:
+    rows: List[Dict[str, object]] = []
+    seen = set()
+    for key in ["activeRules", "matchedRules", "rules"]:
+        for item in relation_context.get(key) or []:
+            if not isinstance(item, dict):
+                continue
+            identity = (
+                str(item.get("ruleId") or item.get("rule_id") or ""),
+                str(item.get("relationType") or item.get("relation_type") or ""),
+                str(item.get("label") or ""),
+            )
+            if identity in seen:
+                continue
+            seen.add(identity)
+            rows.append(item)
+    return rows
+
+
 def active_rule_labels(relation_context: Dict[str, object]) -> List[str]:
     labels: List[str] = []
-    for item in relation_context.get("activeRules") or relation_context.get("matchedRules") or []:
+    for item in relation_rule_items(relation_context):
         if not isinstance(item, dict) or item.get("referenceOnly") or item.get("reference_only"):
             continue
         label = str(item.get("label") or item.get("ruleId") or item.get("rule_id") or "").strip()
@@ -718,7 +737,7 @@ def support_risk_scores(evidence: List[ResearchEvidence], relation_context: Dict
 
     support = sum(number(item.impact_score) * evidence_weight(item) for item in evidence if item.polarity == "support")
     risk = sum(number(item.impact_score) * evidence_weight(item) for item in evidence if item.polarity in {"risk", "contradiction"})
-    for item in relation_context.get("activeRules") or []:
+    for item in relation_rule_items(relation_context):
         if not isinstance(item, dict):
             continue
         score = number(item.get("strengthScore") or item.get("strength_score"))
@@ -726,7 +745,15 @@ def support_risk_scores(evidence: List[ResearchEvidence], relation_context: Dict
         relation_type = str(item.get("relationType") or item.get("relation_type") or "").upper()
         label = str(item.get("label") or "")
         combined = relation_type + " " + label
-        if relation_type in {"LOSS_DEFENSE_EVIDENCE", "ADD_BUY_WATCH", "ADD_BUY_ELIGIBILITY"} or rule_id in {
+        if relation_type in {
+            "LOSS_DEFENSE_EVIDENCE",
+            "ADD_BUY_WATCH",
+            "ADD_BUY_ELIGIBILITY",
+            "ALLOWS_ACTION",
+            "MATCHES_INVESTOR_PROFILE",
+            "SUPPORTS_THESIS",
+            "HAS_INFERRED_SUPPORT",
+        } or rule_id in {
             "holding.loss_smart_money.defense.v1",
             "holding.investor_flow.smart_money_accumulation.v1",
             "graph.investor_flow.smart_money_accumulation.v1",
@@ -734,10 +761,19 @@ def support_risk_scores(evidence: List[ResearchEvidence], relation_context: Dict
             "holding.loss_smart_money.add_buy_review.v1",
             "holding.winner_momentum.add_buy_review.v1",
             "graph.winner_momentum.add_buy_review.v1",
+            "graph.aggressive.loss_recovery.add_buy_review.v1",
+            "graph.strategy_profile.aggressive_recovery_room.v1",
+            "graph.instrument_profile.cyclical_growth.recovery_add_review.v1",
+            "graph.instrument_profile.strategy_fit.support.v1",
         }:
             support += min(18.0, score * 0.22)
             continue
-        if relation_type in {"AVERAGING_DOWN_RISK"} or rule_id in {
+        if relation_type in {
+            "AVERAGING_DOWN_RISK",
+            "BLOCKS_ACTION",
+            "VIOLATES_STRATEGY_FIT",
+            "VIOLATES_RISK_TOLERANCE",
+        } or rule_id in {
             "holding.averaging_down.risk_guard.v1",
             "holding.investor_flow.retail_dip_buying_risk.v1",
             "graph.investor_flow.retail_dip_buying_risk.v1",
@@ -755,10 +791,35 @@ def support_risk_scores(evidence: List[ResearchEvidence], relation_context: Dict
     return support, risk
 
 
+def has_add_buy_candidate(relation_context: Dict[str, object]) -> bool:
+    decision = relation_context.get("decision") if isinstance(relation_context.get("decision"), dict) else {}
+    if str(decision.get("actionGroup") or "") == "addBuy" or str(decision.get("decisionStage") or "") == "ADD_BUY_REVIEW":
+        return True
+    for item in relation_rule_items(relation_context):
+        if not isinstance(item, dict):
+            continue
+        rule_id = str(item.get("ruleId") or item.get("rule_id") or "")
+        relation_type = str(item.get("relationType") or item.get("relation_type") or "").upper()
+        tbox_class = str(item.get("tboxClass") or item.get("tbox_class") or "")
+        tbox_classes = [
+            str(value or "")
+            for value in (
+                item.get("tboxClasses")
+                or item.get("tbox_classes")
+                or item.get("classes")
+                or []
+            )
+        ]
+        if relation_type == "ALLOWS_ACTION" or tbox_class == "AddBuyEligibility" or "AddBuyEligibility" in tbox_classes or "add_buy" in rule_id or "add-buy" in rule_id:
+            return True
+    return False
+
+
 def choose_action(position: Position, relation_context: Dict[str, object], support_score: float, risk_score: float) -> str:
     decision = relation_context.get("decision") if isinstance(relation_context.get("decision"), dict) else {}
     action_group = str(decision.get("actionGroup") or "")
     action_level = str(decision.get("actionLevel") or "")
+    decision_stage = str(decision.get("decisionStage") or "")
     relation_score = number(decision.get("score") or relation_context.get("signalStrength"))
     is_watchlist = str(position.source or "") == "watchlist"
     if is_watchlist:
@@ -769,12 +830,11 @@ def choose_action(position: Position, relation_context: Dict[str, object], suppo
         if action_group == "entry" and relation_score >= 55 and support_score >= risk_score + 16:
             return "BUY"
         return "AVOID"
-    if action_group == "addBuy":
-        decision_stage = str(decision.get("decisionStage") or "")
+    if action_group == "addBuy" or decision_stage == "ADD_BUY_REVIEW" or has_add_buy_candidate(relation_context):
         execution_plan = relation_context.get("executionPlan") if isinstance(relation_context.get("executionPlan"), dict) else {}
         add_buy_assessment = execution_plan.get("addBuyAssessment") if isinstance(execution_plan.get("addBuyAssessment"), dict) else {}
         blocked_reasons = list(add_buy_assessment.get("blockedReasons") or [])
-        if decision_stage == "ADD_BUY_REVIEW" and not blocked_reasons and (support_score >= risk_score or relation_score >= 85):
+        if not blocked_reasons and relation_score >= 70 and support_score >= risk_score - 4:
             return "ADD"
         return "HOLD"
     if action_group == "lossControl":

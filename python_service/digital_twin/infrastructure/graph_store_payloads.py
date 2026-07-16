@@ -149,6 +149,10 @@ PROMOTED_TEXT_ENTITY_FIELDS = [
     "targetPositionRole",
     "instrumentArchetype",
     "instrumentArchetypes",
+    "positionIntent",
+    "factor",
+    "sensitivityLevel",
+    "cryptoSymbol",
     "actionPolicy",
 ]
 
@@ -296,6 +300,11 @@ class GraphStoreOntologyRowMapperMixin:
                 "conditionTargetLevelTypes": condition_target_level_types(condition),
                 "conditionTargetFields": condition_target_filter_values(condition, "field"),
                 "conditionTargetTboxClasses": condition_target_filter_values(condition, "tboxClass") + condition_target_filter_values(condition, "tboxClasses"),
+                "conditionTargetInstrumentArchetypes": condition_target_filter_values(condition, "instrumentArchetype") + condition_target_filter_values(condition, "instrumentArchetypes"),
+                "conditionTargetFactors": condition_target_filter_values(condition, "factor"),
+                "conditionTargetSensitivityLevels": condition_target_filter_values(condition, "sensitivityLevel"),
+                "conditionTargetCryptoSymbols": condition_target_filter_values(condition, "cryptoSymbol"),
+                "conditionTargetPositionIntents": condition_target_filter_values(condition, "positionIntent"),
                 "conditionTargetGroups": condition_target_filter_values(condition, "group"),
                 "conditionTargetScopes": condition_target_filter_values(condition, "scope"),
                 "conditionTargetDataScopes": condition_target_filter_values(condition, "dataScope"),

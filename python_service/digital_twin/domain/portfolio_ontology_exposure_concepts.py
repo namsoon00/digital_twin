@@ -89,6 +89,7 @@ def add_instrument_profile_concepts(
     intent_id = add_entity(graph, "position-intent", profile.position_intent, profile.position_intent, {
         "tboxClass": "PositionIntent",
         "intent": profile.position_intent,
+        "positionIntent": profile.position_intent,
     })
     add_relation(graph, profile_id, intent_id, "HAS_POSITION_INTENT", weight=1.0, properties={"source": "instrument-profile"})
 
@@ -97,6 +98,7 @@ def add_instrument_profile_concepts(
             "tboxClass": "InvestmentArchetype",
             "tboxClasses": ["InvestmentArchetype", archetype],
             "archetype": archetype,
+            "instrumentArchetype": archetype,
         })
         add_relation(graph, profile_id, archetype_id, "HAS_ARCHETYPE", weight=1.0, properties={
             "source": "instrument-profile",
@@ -116,6 +118,7 @@ def add_instrument_profile_concepts(
             "symbol": symbol,
             "factor": factor,
             "level": level,
+            "sensitivityLevel": level,
         })
         add_relation(graph, profile_id, sensitivity_id, "HAS_FACTOR_SENSITIVITY", weight=1.0, properties={
             "source": "instrument-profile",

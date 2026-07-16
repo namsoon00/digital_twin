@@ -42,6 +42,11 @@ class TypeDBOntologyRepositoryTests(unittest.TestCase):
         self.assertIn("attribute ontology-ma5-distance, value double", schema)
         self.assertIn("owns ontology-smart-money-net-volume", schema)
         self.assertIn("attribute ontology-investment-strategy-profile, value string", schema)
+        self.assertIn("attribute ontology-instrument-archetype, value string", schema)
+        self.assertIn("attribute ontology-factor, value string", schema)
+        self.assertIn("attribute ontology-sensitivity-level, value string", schema)
+        self.assertIn("attribute ontology-crypto-symbol, value string", schema)
+        self.assertIn("owns ontology-crypto-symbol", schema)
 
     def test_typedb_symbol_filters_keep_numeric_stock_codes_as_strings(self):
         rule = next(item for item in default_graph_inference_rules() if item.rule_id == "graph.loss_guard.breakdown.v1")

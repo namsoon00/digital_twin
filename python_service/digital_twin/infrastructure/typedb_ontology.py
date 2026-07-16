@@ -315,8 +315,12 @@ TYPEDB_PROMOTED_TEXT_ATTRIBUTES = {
     "investmentStrategyProfileLabel": "ontology-investment-strategy-profile-label",
     "positionRole": "ontology-position-role",
     "targetPositionRole": "ontology-target-position-role",
+    "positionIntent": "ontology-position-intent",
     "instrumentArchetype": "ontology-instrument-archetype",
     "instrumentArchetypes": "ontology-instrument-archetype",
+    "factor": "ontology-factor",
+    "sensitivityLevel": "ontology-sensitivity-level",
+    "cryptoSymbol": "ontology-crypto-symbol",
     "actionPolicy": "ontology-action-policy",
 }
 TYPEDB_FUNCTION_SUBJECT_FIELDS = {
@@ -1280,7 +1284,11 @@ attribute ontology-investment-strategy-profile, value string;
 attribute ontology-investment-strategy-profile-label, value string;
 attribute ontology-position-role, value string;
 attribute ontology-target-position-role, value string;
+attribute ontology-position-intent, value string;
 attribute ontology-instrument-archetype, value string;
+attribute ontology-factor, value string;
+attribute ontology-sensitivity-level, value string;
+attribute ontology-crypto-symbol, value string;
 attribute ontology-action-policy, value string;
 
 entity ontology-node @abstract,
@@ -1356,7 +1364,11 @@ entity ontology-node @abstract,
     owns ontology-investment-strategy-profile-label,
     owns ontology-position-role,
     owns ontology-target-position-role,
+    owns ontology-position-intent,
     owns ontology-instrument-archetype,
+    owns ontology-factor,
+    owns ontology-sensitivity-level,
+    owns ontology-crypto-symbol,
     owns ontology-action-policy,
     plays ontology-assertion:source,
     plays ontology-assertion:target;

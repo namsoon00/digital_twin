@@ -25,7 +25,6 @@ class ExistingApiOntologyMaterializationTests(unittest.TestCase):
             {
                 "DIGITAL_TWIN_DATA_DIR": self.temp.name,
                 "SETTINGS_PATH": str(Path(self.temp.name) / "settings.json"),
-                "OPERATIONAL_DB_BACKEND": "mysql",
                 "MYSQL_HOST": mysql_settings["mysqlHost"],
                 "MYSQL_PORT": mysql_settings["mysqlPort"],
                 "MYSQL_DATABASE": mysql_settings["mysqlDatabase"],

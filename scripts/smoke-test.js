@@ -1875,7 +1875,6 @@ async function withServer(extraEnv, callback) {
       PORT: String(randomPort()),
       LOCAL_CODEX_ENABLED: "0",
       WATCHLIST_SYMBOLS: "TSLA,AAPL,NVDA,000660",
-      OPERATIONAL_DB_BACKEND: "mysql",
       MYSQL_HOST: process.env.MYSQL_HOST || "127.0.0.1",
       MYSQL_PORT: process.env.MYSQL_PORT || "3306",
       MYSQL_DATABASE: process.env.MYSQL_SMOKE_DATABASE || mysqlDatabase,

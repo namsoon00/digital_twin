@@ -21,7 +21,6 @@ DEFAULT_DATA_DIR = ROOT_DIR / "data"
 TEXT_SETTING_KEYS = [
     "appTheme",
     "watchlistSymbols",
-    "operationalDbBackend",
     "mysqlUrl",
     "mysqlHost",
     "mysqlPort",
@@ -507,7 +506,6 @@ def runtime_settings() -> Dict[str, str]:
     settings = {
         "appTheme": value("appTheme", "APP_THEME", "light"),
         "watchlistSymbols": value("watchlistSymbols", "WATCHLIST_SYMBOLS", "TSLA,AAPL,NVDA,000660"),
-        "operationalDbBackend": value("operationalDbBackend", "OPERATIONAL_DB_BACKEND", "mysql"),
         "mysqlUrl": value("mysqlUrl", "MYSQL_URL", ""),
         "mysqlHost": value("mysqlHost", "MYSQL_HOST", "127.0.0.1"),
         "mysqlPort": value("mysqlPort", "MYSQL_PORT", "3306"),

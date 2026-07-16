@@ -116,16 +116,15 @@ npm run python:service:restart
 npm run python:service:stop
 ```
 
-Operational state is selected through `python_service/digital_twin/infrastructure/operational_store.py`. The default operational backend is MySQL. Accounts, runtime settings, app store, domain events, monitor snapshots, cadence keys, notification templates/rules/jobs, model review jobs, symbol universe, market quote cache, research evidence, and ontology quality samples use MySQL.
+Operational state is wired through `python_service/digital_twin/infrastructure/operational_store.py`. MySQL is the only supported operational backend. Accounts, runtime settings, app store, domain events, monitor snapshots, cadence keys, notification templates/rules/jobs, model review jobs, symbol universe, market quote cache, research evidence, and ontology quality samples use MySQL.
 
-If the operational database has no account rows, the service falls back to single-account settings from `runtime_settings` or `.env.local`. Existing `data/store.json`, `data/settings.json`, and `data/accounts.json` files are retained only as legacy import sources; new runtime writes should go to MySQL.
+If the operational database has no account rows, the service falls back to single-account settings from `runtime_settings` or `.env.local`. Runtime writes go to MySQL.
 
 `python:monitor:watch` runs realtime monitoring in the foreground. `python:model-review:watch` runs the asynchronous model-review worker in the foreground. `python:notifications:watch` runs the single notification delivery worker.
 
-For account-scale monitoring, enable MySQL. It becomes the production coordination point for 100+ accounts and multiple monitor workers:
+For account-scale monitoring, MySQL is the production coordination point for 100+ accounts and multiple monitor workers:
 
 ```bash
-OPERATIONAL_DB_BACKEND=mysql
 MYSQL_HOST=127.0.0.1
 MYSQL_PORT=3306
 MYSQL_DATABASE=orbit_alpha

@@ -56,7 +56,6 @@ def display_key(key: object) -> str:
 PUBLIC_SETTING_KEYS = [
     "appTheme",
     "watchlistSymbols",
-    "operationalDbBackend",
     "mysqlHost",
     "mysqlPort",
     "mysqlDatabase",
@@ -257,7 +256,6 @@ def local_data_snapshot() -> Dict[str, object]:
     return {
         "generatedAt": utc_now(),
         "sources": {
-            "operationalDbBackend": settings.get("operationalDbBackend") or "mysql",
             "settings": relative_path(settings_path()),
             "settingsExists": settings_path().exists(),
         },
@@ -659,7 +657,7 @@ def render_local_data(payload: Dict[str, object]) -> str:
         "</div>"
         '<div class="section-grid">'
         '<div class="panel"><h3>소스</h3>'
-        '<div class="default-row"><strong>DB</strong><div><span class="chip">' + escape(str(sources.get("operationalDbBackend") or "mysql")) + "</span></div></div>"
+        '<div class="default-row"><strong>운영 저장소</strong><div><span class="chip">MySQL</span></div></div>'
         '<div class="default-row"><strong>설정</strong><div><span class="chip">' + escape(str(sources.get("settings") or "data/settings.json")) + "</span>" + status_chip(sources.get("settingsExists"), "파일 확인") + "</div></div>"
         '<div class="default-row"><strong>빌드 시각</strong><div><span class="chip">' + escape(str(local_data.get("generatedAt") or "-")) + "</span></div></div>"
         "</div>"

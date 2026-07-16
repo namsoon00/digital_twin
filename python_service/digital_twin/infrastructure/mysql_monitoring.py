@@ -90,14 +90,6 @@ def forget_mysql_database(settings: Dict[str, object]) -> None:
     _MYSQL_DATABASE_READY.discard(cache_key)
 
 
-def mysql_backend_enabled(settings: Dict[str, str] = None) -> bool:
-    configured = settings or {}
-    backend = str(configured.get("operationalDbBackend") or os.environ.get("OPERATIONAL_DB_BACKEND") or "").strip().lower()
-    if backend in {"mysql", "mariadb"}:
-        return True
-    return bool(str(configured.get("mysqlUrl") or os.environ.get("MYSQL_URL") or "").strip())
-
-
 def monitor_account_job_from_row(row) -> MonitorAccountJob:
     return MonitorAccountJob(
         account_id=str(row.get("account_id") or ""),

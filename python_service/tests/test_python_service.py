@@ -128,7 +128,6 @@ class PythonServiceTests(unittest.TestCase):
         self.env_patch = mock.patch.dict(os.environ, {
             "DIGITAL_TWIN_DATA_DIR": self.temp.name,
             "SETTINGS_PATH": str(Path(self.temp.name) / "settings.json"),
-            "OPERATIONAL_DB_BACKEND": "mysql",
             "MYSQL_HOST": mysql_settings["mysqlHost"],
             "MYSQL_PORT": mysql_settings["mysqlPort"],
             "MYSQL_DATABASE": mysql_settings["mysqlDatabase"],
@@ -1882,7 +1881,7 @@ class PythonServiceTests(unittest.TestCase):
         self.assertFalse(event_bus.published[-1].payload["account"]["clientSecret"] == "secret1")
 
     def test_account_message_delivery_level_is_persisted_and_preserved(self):
-        registry = AccountRegistry(Path(self.temp.name) / "delivery-level.db", legacy_path=Path(self.temp.name) / "missing-accounts.json")
+        registry = AccountRegistry(test_store_seed(self.temp.name), legacy_path=Path(self.temp.name) / "missing-accounts.json")
         service = AccountApplicationService(registry, registry.settings)
 
         saved = service.save_payload({

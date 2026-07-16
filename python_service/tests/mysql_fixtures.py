@@ -60,7 +60,6 @@ def test_database_name(seed=None) -> str:
 
 def mysql_test_settings(seed=None):
     return {
-        "operationalDbBackend": "mysql",
         "mysqlHost": os.environ.get("MYSQL_HOST", "127.0.0.1"),
         "mysqlPort": os.environ.get("MYSQL_PORT", "3306"),
         "mysqlDatabase": os.environ.get("MYSQL_TEST_DATABASE") or test_database_name(seed),
@@ -74,7 +73,6 @@ def mysql_test_settings(seed=None):
 def reset_mysql_test_database(seed=None):
     settings = mysql_test_settings(seed)
     os.environ["MYSQL_DATABASE"] = settings["mysqlDatabase"]
-    os.environ["OPERATIONAL_DB_BACKEND"] = "mysql"
     config = {
         "host": settings["mysqlHost"],
         "port": int(settings["mysqlPort"] or 3306),
@@ -267,5 +265,8 @@ class TestMonitorAccountJobStore(MySQLMonitorAccountJobStore):
         super().__init__(_settings(seed))
 
 
-def test_store_seed(temp_name: str) -> Path:
+def test_mysql_seed(temp_name: str) -> Path:
     return Path(temp_name) / "mysql-test-store"
+
+
+test_store_seed = test_mysql_seed

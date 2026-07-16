@@ -15,7 +15,6 @@
   "localData": {
     "generatedAt": "2026-07-16T05:19:58.328117Z",
     "sources": {
-      "operationalDbBackend": "mysql",
       "settings": "data/settings.json",
       "settingsExists": false
     },
@@ -49,7 +48,6 @@
     "settings": {
       "appTheme": "light",
       "watchlistSymbols": "TSLA,AAPL,NVDA,000660",
-      "operationalDbBackend": "mysql",
       "mysqlHost": "127.0.0.1",
       "mysqlPort": "3306",
       "mysqlDatabase": "orbit_alpha",

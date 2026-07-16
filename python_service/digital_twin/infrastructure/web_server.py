@@ -375,7 +375,6 @@ def settings_status_payload() -> Dict[str, object]:
     public_keys = [
         "appTheme",
         "watchlistSymbols",
-        "operationalDbBackend",
         "mysqlUrl",
         "mysqlHost",
         "mysqlPort",

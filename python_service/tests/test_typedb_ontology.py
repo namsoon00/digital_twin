@@ -81,7 +81,7 @@ class TypeDBOntologyRepositoryTests(unittest.TestCase):
         self.assertFalse(result["saved"])
         self.assertIn("TypeDB graph save timed out", result["reason"])
 
-    def test_typedb_repository_factory_disables_native_rule_execution_by_default(self):
+    def test_typedb_repository_factory_enables_native_rule_execution_by_default(self):
         direct = TypeDBOntologyGraphRepository("127.0.0.1:1729")
         factory_default = typedb_repository_from_settings({"ontologyTypeDbEnabled": "1", "typedbAddress": "127.0.0.1:1729"})
         factory_enabled = typedb_repository_from_settings({
@@ -89,10 +89,18 @@ class TypeDBOntologyRepositoryTests(unittest.TestCase):
             "typedbAddress": "127.0.0.1:1729",
             "typedbNativeRuleExecutionEnabled": "1",
         })
+        factory_disabled = typedb_repository_from_settings({
+            "ontologyTypeDbEnabled": "1",
+            "typedbAddress": "127.0.0.1:1729",
+            "typedbNativeRuleExecutionEnabled": "0",
+        })
 
         self.assertTrue(direct.native_rule_execution_enabled())
-        self.assertFalse(factory_default.native_rule_execution_enabled())
+        self.assertTrue(factory_default.native_rule_execution_enabled())
         self.assertTrue(factory_enabled.native_rule_execution_enabled())
+        self.assertFalse(factory_disabled.native_rule_execution_enabled())
+        self.assertEqual(20.0, factory_default.query_timeout_seconds())
+        self.assertEqual(20.0, factory_default.schema_operation_timeout_seconds())
 
     def test_typedb_symbol_filters_keep_numeric_stock_codes_as_strings(self):
         rule = next(item for item in default_graph_inference_rules() if item.rule_id == "graph.loss_guard.breakdown.v1")

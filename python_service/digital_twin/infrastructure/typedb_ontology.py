@@ -669,14 +669,14 @@ class TypeDBOntologyGraphRepository(GraphStoreOntologyRowMapperMixin):
         self.inference_generation_keep_count = max(1, int(inference_generation_keep_count or 2))
         self._query_timeout_seconds = max(
             1.0,
-            float(query_timeout_seconds if query_timeout_seconds is not None else min(8.0, float(self.timeout_seconds or 8))),
+            float(query_timeout_seconds if query_timeout_seconds is not None else float(self.timeout_seconds or 20)),
         )
         self._schema_operation_timeout_seconds = max(
             1.0,
             float(
                 schema_operation_timeout_seconds
                 if schema_operation_timeout_seconds is not None
-                else min(8.0, float(self.timeout_seconds or 8))
+                else float(self.timeout_seconds or 20)
             ),
         )
         self._write_operation_timeout_seconds = max(
@@ -4397,6 +4397,7 @@ def typedb_repository_from_settings(settings: Dict[str, str] = None):
         return NullTypeDBOntologyGraphRepository()
     timeout_seconds = int(settings.get("typedbTimeoutSeconds") or 20)
     query_metrics_value = settings.get("typedbQueryMetricsEnabled")
+    native_execution_value = settings.get("typedbNativeRuleExecutionEnabled")
     return TypeDBOntologyGraphRepository(
         address=address,
         user=str(settings.get("typedbUser") or "admin"),
@@ -4406,11 +4407,11 @@ def typedb_repository_from_settings(settings: Dict[str, str] = None):
         timeout_seconds=timeout_seconds,
         retry_count=int(number_or_none(settings.get("typedbRetryCount")) or 2),
         inference_generation_keep_count=int(number_or_none(settings.get("typedbInferenceGenerationKeepCount")) or 1),
-        query_timeout_seconds=number_or_none(settings.get("typedbQueryTimeoutSeconds")) or min(8.0, float(timeout_seconds or 8)),
-        schema_operation_timeout_seconds=number_or_none(settings.get("typedbSchemaOperationTimeoutSeconds")) or min(8.0, float(timeout_seconds or 8)),
+        query_timeout_seconds=number_or_none(settings.get("typedbQueryTimeoutSeconds")) or float(timeout_seconds or 20),
+        schema_operation_timeout_seconds=number_or_none(settings.get("typedbSchemaOperationTimeoutSeconds")) or float(timeout_seconds or 20),
         write_operation_timeout_seconds=number_or_none(settings.get("typedbWriteOperationTimeoutSeconds")) or float(timeout_seconds or 20),
         condition_detail_queries_enabled=typedb_bool(settings.get("typedbConditionDetailQueriesEnabled")),
         query_metrics_enabled=True if query_metrics_value in (None, "") else typedb_bool(query_metrics_value),
         rulebox_snapshot_cache_seconds=number_or_none(settings.get("typedbRuleBoxSnapshotCacheSeconds")) or 60.0,
-        native_rule_execution_enabled=typedb_bool(settings.get("typedbNativeRuleExecutionEnabled")),
+        native_rule_execution_enabled=True if native_execution_value in (None, "") else typedb_bool(native_execution_value),
     )

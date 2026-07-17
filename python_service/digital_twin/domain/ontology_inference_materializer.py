@@ -1,4 +1,4 @@
-from typing import Dict
+from typing import Dict, List
 
 from .market_data import number
 from .ontology_contracts import OntologyBelief, OntologyEntity, OntologyEvidence, OntologyRelation, PortfolioOntology, entity_id
@@ -41,6 +41,16 @@ def materialize_rule_inference(
         "evidenceRelationIds": evidence_relation_ids,
         "promptHint": rule.prompt_hint,
     })))
+    explanation_entities = materialize_inference_explanation_entities(
+        graph,
+        rule,
+        stock,
+        symbol,
+        display_name,
+        trace_id,
+        confidence,
+        evidence_relation_ids,
+    )
     rule_entity_id = entity_id("rule", rule.rule_id)
     graph.relations.append(OntologyRelation(
         rule_entity_id,
@@ -162,6 +172,137 @@ def materialize_rule_inference(
                 confidence,
                 [evidence_id_value] + evidence_relation_ids,
             ))
+    for explanation_id, relation_type, label in explanation_entities:
+        graph.relations.append(OntologyRelation(
+            stock.entity_id,
+            explanation_id,
+            relation_type,
+            weight=confidence,
+            evidence_ids=[evidence_id_value] + evidence_relation_ids,
+            properties=inference_relation_properties(relation_type, {
+                "symbol": symbol,
+                "ruleId": rule.rule_id,
+                "source": GRAPH_REASONER_VERSION,
+                "aiInfluenceLabel": label,
+                "inferenceTraceId": trace_id,
+            }),
+        ))
+        graph.relations.append(OntologyRelation(
+            explanation_id,
+            trace_id,
+            "EXPLAINED_BY_TRACE",
+            weight=confidence,
+            evidence_ids=[evidence_id_value] + evidence_relation_ids,
+            properties=inference_relation_properties("EXPLAINED_BY_TRACE", {
+                "symbol": symbol,
+                "ruleId": rule.rule_id,
+                "source": GRAPH_REASONER_VERSION,
+                "aiInfluenceLabel": label,
+            }),
+        ))
+
+
+def materialize_inference_explanation_entities(
+    graph: PortfolioOntology,
+    rule: GraphInferenceRule,
+    stock: OntologyEntity,
+    symbol: str,
+    display_name: str,
+    trace_id: str,
+    confidence: float,
+    evidence_relation_ids: List[str],
+) -> List[tuple]:
+    risk_impact = max([number(getattr(item, "risk_impact", 0)) for item in rule.derivations or []], default=0)
+    support_impact = max([number(getattr(item, "support_impact", 0)) for item in rule.derivations or []], default=0)
+    primary = primary_derivation(rule)
+    action_group = (getattr(primary, "action_group", "") or rule.action_group) if primary else rule.action_group
+    action_level = (getattr(primary, "action_level", "") or rule.action_level) if primary else rule.action_level
+    decision_stage = getattr(primary, "decision_stage", "") if primary else ""
+    decision_stage = decision_stage or decision_stage_from_action(action_group, action_level)
+    stage_priority = relation_stage_priority({
+        "decisionStage": decision_stage,
+        "actionGroup": action_group,
+        "actionLevel": action_level,
+        "riskImpact": risk_impact,
+        "supportImpact": support_impact,
+    })
+    conflict_type = signal_conflict_type(risk_impact, support_impact)
+    should_escalate = bool(stage_priority >= 55 or risk_impact >= 12 or support_impact >= 12 or confidence >= 0.86)
+    state_key = "|".join([value for value in [decision_stage, rule.rule_id] if str(value or "").strip()])
+    common = {
+        "symbol": symbol,
+        "ruleId": rule.rule_id,
+        "ruleLabel": rule.label,
+        "engineVersion": GRAPH_REASONER_VERSION,
+        "confidence": confidence,
+        "sourceTraceId": trace_id,
+        "evidenceRelationIds": evidence_relation_ids,
+        "decisionStage": decision_stage,
+        "stagePriority": stage_priority,
+    }
+    why_id = entity_id("why-now", symbol + ":" + rule.rule_id)
+    conflict_id = entity_id("signal-conflict", symbol + ":" + rule.rule_id)
+    timeline_id = entity_id("inference-timeline", symbol + ":" + rule.rule_id)
+    graph.entities.append(OntologyEntity(why_id, display_name + " 지금 볼 이유", "why-now", inference_properties({
+        **common,
+        "tboxClass": "WhyNow",
+        "tboxClasses": ["MaterialityAssessment", "WhyNow"],
+        "reasoningQuestion": "왜 지금 다시 봐야 하는가",
+        "shouldEscalate": should_escalate,
+        "changeDrivers": unique_non_empty([rule.label, rule.prompt_hint]),
+    })))
+    graph.entities.append(OntologyEntity(conflict_id, display_name + " 신호 충돌", "signal-conflict", inference_properties({
+        **common,
+        "tboxClass": "SignalConflict",
+        "tboxClasses": ["Contradiction", "SignalConflict"],
+        "hasConflict": conflict_type != "none",
+        "conflictType": conflict_type,
+        "riskPressure": risk_impact,
+        "supportEvidence": support_impact,
+        "netRiskPressure": risk_impact - support_impact,
+    })))
+    graph.entities.append(OntologyEntity(timeline_id, display_name + " 추론 타임라인", "inference-timeline", inference_properties({
+        **common,
+        "tboxClass": "InferenceTimeline",
+        "tboxClasses": ["InferenceTrace", "InferencePath", "InferenceTimeline"],
+        "timelineBasis": "typedb-native-rule-materialization",
+        "currentStateKey": state_key,
+        "activeRuleIds": [rule.rule_id],
+    })))
+    return [
+        (why_id, "HAS_WHY_NOW", "지금 볼 이유"),
+        (conflict_id, "HAS_SIGNAL_CONFLICT", "신호 충돌"),
+        (timeline_id, "HAS_INFERENCE_TIMELINE", "추론 타임라인"),
+    ]
+
+
+def primary_derivation(rule: GraphInferenceRule):
+    derivations = list(rule.derivations or [])
+    if not derivations:
+        return None
+    return max(derivations, key=lambda item: (
+        number(getattr(item, "risk_impact", 0)) + number(getattr(item, "support_impact", 0)),
+        number(getattr(item, "weight", 0)),
+    ))
+
+
+def signal_conflict_type(risk_impact: float, support_impact: float) -> str:
+    if risk_impact <= 0 or support_impact <= 0:
+        return "none"
+    if risk_impact > support_impact + 3:
+        return "risk-dominant-with-support"
+    if support_impact > risk_impact + 3:
+        return "support-dominant-with-risk"
+    return "mixed-signal"
+
+
+def unique_non_empty(values: List[object]) -> List[str]:
+    result: List[str] = []
+    for value in values or []:
+        text = str(value or "").strip()
+        if text and text not in result:
+            result.append(text)
+    return result[:8]
 
 
 def inference_properties(properties: Dict[str, object]) -> Dict[str, object]:

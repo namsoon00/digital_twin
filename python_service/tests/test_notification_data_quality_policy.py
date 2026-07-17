@@ -326,6 +326,65 @@ class NotificationDataQualityPolicyTests(unittest.TestCase):
         self.assertEqual(notification_state_group_key(risk_job), notification_state_group_key(management_job))
         self.assertIn("holdingpositioncommon", notification_state_group_key(risk_job).lower())
 
+    def test_state_group_key_uses_ontology_timeline_and_conflict(self):
+        base_context = {
+            "symbol": "005930",
+            "ontologyInsight": {
+                "subject": "005930",
+                "dispatchInsightType": "riskManagement",
+            },
+            "sourceSignalTypes": ["holdingTiming"],
+            "ontologyRelationContext": {
+                "decision": {"selectedRuleId": "graph.holding.trend_transition.risk.v1"},
+                "inferenceTimeline": {
+                    "currentStateKey": "TEMPORAL_RISK|graph.holding.trend_transition.risk.v1",
+                },
+                "signalConflicts": {
+                    "conflictType": "risk-dominant-with-support",
+                },
+                "whyNow": {
+                    "shouldEscalate": False,
+                },
+            },
+        }
+        same_state = NotificationJob.create(
+            "삼성전자 리스크 관리",
+            account_id="main",
+            message_type="investmentInsight",
+            context=base_context,
+        )
+        same_state_other_dispatch = NotificationJob.create(
+            "삼성전자 리스크 증가",
+            account_id="main",
+            message_type="investmentInsight",
+            context={
+                **base_context,
+                "ontologyInsight": {
+                    "subject": "005930",
+                    "dispatchInsightType": "riskIncrease",
+                },
+            },
+        )
+        changed_state = NotificationJob.create(
+            "삼성전자 다른 추론",
+            account_id="main",
+            message_type="investmentInsight",
+            context={
+                **base_context,
+                "ontologyRelationContext": {
+                    **base_context["ontologyRelationContext"],
+                    "inferenceTimeline": {
+                        "currentStateKey": "TEMPORAL_RISK|graph.disclosure.event_risk.v1",
+                    },
+                },
+            },
+        )
+
+        self.assertEqual(notification_state_group_key(same_state), notification_state_group_key(same_state_other_dispatch))
+        self.assertNotEqual(notification_state_group_key(same_state), notification_state_group_key(changed_state))
+        self.assertIn("timeline=temporal_risk", notification_state_group_key(same_state).lower())
+        self.assertIn("conflict=risk-dominant-with-support", notification_state_group_key(same_state).lower())
+
     def test_critical_loss_new_band_entry_bypasses_state_cooldown(self):
         rule = default_notification_rule("investmentInsight")
         job = NotificationJob.create(

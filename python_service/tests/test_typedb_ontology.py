@@ -1140,6 +1140,14 @@ class TypeDBOntologyRepositoryTests(unittest.TestCase):
         self.assertTrue(all((item.properties or {}).get("nativeTypeDbReasoned") for item in captured["graph"].entities))
         self.assertTrue(all((item.properties or {}).get("typedbNativeRuleReasoned") for item in captured["graph"].entities))
         self.assertTrue(all((item.properties or {}).get("nativeRuleId") for item in captured["graph"].entities))
+        inferred_classes = {str((item.properties or {}).get("tboxClass") or "") for item in captured["graph"].entities}
+        self.assertIn("WhyNow", inferred_classes)
+        self.assertIn("SignalConflict", inferred_classes)
+        self.assertIn("InferenceTimeline", inferred_classes)
+        inferred_relation_types = {item.relation_type for item in captured["graph"].relations}
+        self.assertIn("HAS_WHY_NOW", inferred_relation_types)
+        self.assertIn("HAS_SIGNAL_CONFLICT", inferred_relation_types)
+        self.assertIn("HAS_INFERENCE_TIMELINE", inferred_relation_types)
         self.assertEqual("typedb-native-rule-materialized", captured["graph"].worldview["reasoningMode"])
         self.assertEqual("typedb-abox-native-rule", captured["graph"].worldview["materializationSource"])
         self.assertTrue(all((item.properties or {}).get("snapshotId") == result["inferenceGenerationId"] for item in captured["graph"].entities))

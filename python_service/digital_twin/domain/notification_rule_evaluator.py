@@ -418,13 +418,63 @@ def notification_state_group_key(job: NotificationJob) -> str:
         or normalize_fingerprint_part(field_value(context, "holdingPolicyGroup")) == "holdingpositioncommon"
     )
     state_group = "holdingPositionCommon" if holding_group else (dispatch_type or message_type)
-    return "|".join([
+    parts = [
         "state",
         message_type,
         normalize_fingerprint_part(job.account_id),
         subject,
         normalize_fingerprint_part(state_group),
+    ]
+    semantic_state = ontology_relation_state_signature(context)
+    if semantic_state:
+        parts.append(semantic_state)
+    return "|".join(parts)
+
+
+def ontology_relation_state_signature(context: Dict[str, object]) -> str:
+    relation_context = relation_context_from_notification_context(context)
+    if not relation_context:
+        return ""
+    timeline = relation_context.get("inferenceTimeline") if isinstance(relation_context.get("inferenceTimeline"), dict) else {}
+    conflict = relation_context.get("signalConflicts") if isinstance(relation_context.get("signalConflicts"), dict) else {}
+    why_now = relation_context.get("whyNow") if isinstance(relation_context.get("whyNow"), dict) else {}
+    decision = relation_context.get("decision") if isinstance(relation_context.get("decision"), dict) else {}
+    parts: List[str] = []
+    state_key = normalize_fingerprint_part(timeline.get("currentStateKey"))
+    if state_key:
+        parts.append("timeline=" + state_key)
+    else:
+        selected_rule = normalize_fingerprint_part(decision.get("selectedRuleId"))
+        if selected_rule:
+            parts.append("rule=" + selected_rule)
+    conflict_type = normalize_fingerprint_part(conflict.get("conflictType"))
+    if conflict_type and conflict_type != "none":
+        parts.append("conflict=" + conflict_type)
+    if why_now:
+        parts.append("why=" + ("escalate" if bool(why_now.get("shouldEscalate")) else "repeat"))
+    return "|".join(parts)
+
+
+def relation_context_from_notification_context(context: Dict[str, object]) -> Dict[str, object]:
+    if not isinstance(context, dict):
+        return {}
+    candidates = [
+        context.get("ontologyRelationContext"),
+        context.get("relationContext"),
+        context.get("relationRuleContext"),
+    ]
+    metadata = context.get("metadata") if isinstance(context.get("metadata"), dict) else {}
+    candidates.extend([
+        metadata.get("ontologyRelationContext"),
+        metadata.get("relationContext"),
+        metadata.get("relationRuleContext"),
     ])
+    ai_context = context.get("aiContext") if isinstance(context.get("aiContext"), dict) else {}
+    candidates.append(ai_context.get("relationRuleContext"))
+    for candidate in candidates:
+        if isinstance(candidate, dict) and candidate:
+            return candidate
+    return {}
 
 
 def job_search_blob(job: NotificationJob) -> str:

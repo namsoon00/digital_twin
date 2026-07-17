@@ -159,6 +159,15 @@ class FakeRuleCandidateService:
         return self.result
 
 
+class FakeNotificationQueue:
+    def __init__(self):
+        self.jobs = []
+
+    def enqueue(self, job):
+        self.jobs.append(job)
+        return True
+
+
 class OntologyLabTests(unittest.TestCase):
     def test_create_normalizes_candidate_rule_as_disabled(self):
         service = OntologyLabService(
@@ -539,6 +548,80 @@ class OntologyLabTests(unittest.TestCase):
         self.assertTrue(experiment.last_snapshot_key.startswith("monitor:"))
         self.assertEqual("scheduled", experiment.run_history[0]["runKind"])
         self.assertGreaterEqual(experiment.run_history[0]["recommendationCount"], 1)
+
+    def test_auto_apply_promotable_experiment_and_queues_growth_notification(self):
+        store = MemoryExperimentStore()
+        repository = FakeOntologyRepository()
+        queue = FakeNotificationQueue()
+        service = OntologyLabService(
+            repository,
+            store,
+            monitor_store=FakeMonitorStore(),
+            notification_queue=queue,
+            settings={"ontologyLabAutoApplyMinScore": "75"},
+        )
+        experiment_id = service.create({
+            "title": "AAPL auto growth lab",
+            "symbols": ["AAPL"],
+            "rules": [candidate_rule()],
+        })["experiment"]["id"]
+        service.run(experiment_id)
+        experiment = store.get(experiment_id)
+        experiment.last_result["promotionReadiness"] = {
+            "status": "promote-candidate",
+            "score": 82,
+            "reason": "unit-test promotable",
+        }
+        experiment.last_result["inference"]["aggregateDelta"]["derivedRelationCount"] = 8
+        store.save(experiment)
+
+        automation = service.automate_latest_result(experiment, "scheduled")
+
+        self.assertEqual("applied", automation["status"])
+        self.assertEqual("auto-applied", automation["action"])
+        self.assertEqual(1, len(repository.saved_rulebox_payloads))
+        self.assertEqual(1, len(repository.run_rulebox_payloads))
+        self.assertEqual(1, len(repository.saved_tbox_graphs))
+        self.assertEqual(1, len(queue.jobs))
+        job = queue.jobs[0]
+        self.assertEqual("notification", job.message_type)
+        self.assertTrue(job.dedupe_key.startswith("ontology-lab:auto-applied:"))
+        self.assertIn("자동 반영 완료", job.text)
+        self.assertEqual("ontologyLabAutomation", job.context["source"])
+        self.assertEqual("applied", job.context["ontologyLabAutomation"]["status"])
+        experiment = store.get(experiment_id)
+        self.assertEqual("completed", experiment.status)
+        self.assertEqual("applied", experiment.last_result["automation"]["status"])
+        self.assertEqual("applied", experiment.run_history[0]["automation"]["status"])
+
+    def test_scheduled_needs_review_experiment_only_queues_review_notification(self):
+        store = MemoryExperimentStore()
+        repository = FakeOntologyRepository()
+        queue = FakeNotificationQueue()
+        service = OntologyLabService(
+            repository,
+            store,
+            monitor_store=FakeMonitorStore(),
+            notification_queue=queue,
+            settings={"ontologyLabAutoApplyEnabled": "1", "ontologyLabNotifyEnabled": "1"},
+        )
+        experiment_id = service.create({
+            "title": "AAPL review lab",
+            "symbols": ["AAPL"],
+            "rules": [candidate_rule()],
+        })["experiment"]["id"]
+        service.activate(experiment_id)
+
+        result = service.run_once(force=True)
+
+        self.assertEqual(1, result["runCount"])
+        self.assertEqual("review-required", result["experiments"][0]["automation"]["status"])
+        self.assertEqual(0, len(repository.saved_rulebox_payloads))
+        self.assertEqual(0, len(repository.run_rulebox_payloads))
+        self.assertEqual(0, len(repository.saved_tbox_graphs))
+        self.assertEqual(1, len(queue.jobs))
+        self.assertIn("검토 후 반영 필요", queue.jobs[0].text)
+        self.assertEqual("active", store.get(experiment_id).status)
 
     def test_pause_experiment_removes_it_from_active_batch(self):
         store = MemoryExperimentStore()

@@ -15,6 +15,7 @@ from ..domain.ontology_experiments import (
     summarize_experiment_result,
 )
 from ..domain.ontology_rulebox_contracts import GraphInferenceRule
+from ..domain.notifications import NotificationJob
 from ..domain.portfolio import AccountSnapshot, DecisionItem, PortfolioSummary, Position, utc_now_iso
 from ..domain.portfolio_ontology_builder import build_portfolio_ontology
 from ..domain.ontology_schema import default_tbox_metadata, tbox_entities, tbox_relations
@@ -49,6 +50,7 @@ class OntologyLabService:
         monitor_store=None,
         rule_candidate_service=None,
         strategy_proposal_service=None,
+        notification_queue=None,
         settings: Dict[str, object] = None,
     ):
         self.ontology_repository = ontology_repository
@@ -56,6 +58,7 @@ class OntologyLabService:
         self.monitor_store = monitor_store
         self.rule_candidate_service = rule_candidate_service
         self.strategy_proposal_service = strategy_proposal_service
+        self.notification_queue = notification_queue
         self.settings = dict(settings or {})
 
     def list(self) -> Dict[str, object]:
@@ -89,6 +92,21 @@ class OntologyLabService:
     def auto_suggest_limit(self) -> int:
         return int_setting(self.settings, "ontologyRuleCandidateAiMaxCandidates", 3, 1, 10)
 
+    def auto_apply_enabled(self) -> bool:
+        return truthy(self.settings.get("ontologyLabAutoApplyEnabled"), True)
+
+    def auto_apply_min_score(self) -> int:
+        return int_setting(self.settings, "ontologyLabAutoApplyMinScore", 75, 0, 100)
+
+    def auto_apply_needs_review_enabled(self) -> bool:
+        return truthy(self.settings.get("ontologyLabAutoApplyNeedsReviewEnabled"), False)
+
+    def auto_notify_enabled(self) -> bool:
+        return truthy(self.settings.get("ontologyLabNotifyEnabled"), True)
+
+    def notification_configured(self) -> bool:
+        return bool(self.notification_queue and hasattr(self.notification_queue, "enqueue"))
+
     def status(self) -> Dict[str, object]:
         experiments = self.experiment_store.list()
         statuses: Dict[str, int] = {}
@@ -111,6 +129,11 @@ class OntologyLabService:
             "autoSuggestConfigured": self.auto_suggest_configured(),
             "autoSuggestIntervalMinutes": self.auto_suggest_interval_minutes(),
             "autoSuggestLimit": self.auto_suggest_limit(),
+            "autoApplyEnabled": self.auto_apply_enabled(),
+            "autoApplyMinScore": self.auto_apply_min_score(),
+            "autoApplyNeedsReviewEnabled": self.auto_apply_needs_review_enabled(),
+            "autoNotifyEnabled": self.auto_notify_enabled(),
+            "notificationConfigured": self.notification_configured(),
             "latestRun": latest_run,
             "experiments": [item.to_dict() for item in experiments],
         }
@@ -446,7 +469,133 @@ class OntologyLabService:
             result["strategyProposalValidation"] = strategy_validation
             experiment.last_result = result
         self.experiment_store.save(experiment)
-        return {"status": "completed", "experiment": experiment.to_dict(), "result": result}
+        automation = self.automate_latest_result(experiment, run_kind)
+        latest = self.experiment_store.get(experiment.experiment_id) or experiment
+        payload = {"status": "completed", "experiment": latest.to_dict(), "result": latest.last_result}
+        if automation:
+            payload["automation"] = automation
+        return payload
+
+    def automate_latest_result(self, experiment: OntologyExperiment, run_kind: str = "scheduled") -> Dict[str, object]:
+        if str(run_kind or "") not in {"scheduled", "ai-suggested"}:
+            return {}
+        current = self.experiment_store.get(experiment.experiment_id) or experiment
+        last_result = dict(current.last_result or {})
+        if str(last_result.get("status") or "").lower() != "completed":
+            return {}
+        eligibility = self.auto_apply_eligibility(last_result)
+        automation = ontology_lab_automation_payload(current, last_result, run_kind, eligibility)
+        apply_result = {}
+        if eligibility.get("eligible"):
+            apply_payload = {
+                "runRulebox": True,
+                "reviewApproved": bool(eligibility.get("reviewApproved")),
+                "reviewedBy": "ontology-lab-auto",
+                "reviewReason": "자동 성장 조건을 충족한 온톨로지 실험 결과입니다.",
+            }
+            apply_result = self.apply_recommendations(current.experiment_id, apply_payload)
+            automation["applicationStatus"] = str(apply_result.get("status") or "")
+            automation["application"] = compact_automation_application(apply_result.get("application") or {})
+            if str(apply_result.get("status") or "") in {"applied", "already-applied"}:
+                automation["status"] = "applied"
+                automation["action"] = "auto-applied"
+                automation["retiredExperiment"] = True
+                self.complete_auto_applied_experiment(current.experiment_id)
+            elif str(apply_result.get("status") or "") == "not-ready":
+                automation["status"] = "review-required"
+                automation["action"] = "notify-review"
+                automation["reason"] = str(apply_result.get("reason") or automation.get("reason") or "")
+            else:
+                automation["status"] = "apply-error"
+                automation["action"] = "notify-error"
+                automation["reason"] = str((apply_result.get("application") or {}).get("reason") or apply_result.get("reason") or "")
+        notification = self.notify_automation(current.experiment_id, automation)
+        if notification:
+            automation["notification"] = notification
+        self.record_latest_history_automation(current.experiment_id, automation)
+        return automation
+
+    def auto_apply_eligibility(self, last_result: Dict[str, object]) -> Dict[str, object]:
+        if not self.auto_apply_enabled():
+            return {"eligible": False, "reason": "auto-apply-disabled", "minScore": self.auto_apply_min_score()}
+        readiness = last_result.get("promotionReadiness") if isinstance(last_result.get("promotionReadiness"), dict) else {}
+        status = str(readiness.get("status") or "").lower()
+        score = numeric_value(readiness.get("score"), 100.0 if status == "approved" else 0.0)
+        review_approved = False
+        if status == "needs-review" and self.auto_apply_needs_review_enabled():
+            review_approved = True
+        elif status not in {"promote-candidate", "ready", "approved"}:
+            return {"eligible": False, "reason": "readiness-" + (status or "missing"), "readinessStatus": status, "score": score, "minScore": self.auto_apply_min_score()}
+        if score < self.auto_apply_min_score():
+            return {"eligible": False, "reason": "score-below-auto-apply-threshold", "readinessStatus": status, "score": score, "minScore": self.auto_apply_min_score()}
+        readiness_error = ontology_apply_readiness(last_result, {"reviewApproved": review_approved})
+        if readiness_error:
+            return {"eligible": False, "reason": readiness_error, "readinessStatus": status, "score": score, "minScore": self.auto_apply_min_score()}
+        if not ontology_result_has_apply_targets(last_result):
+            return {"eligible": False, "reason": "no-apply-targets", "readinessStatus": status, "score": score, "minScore": self.auto_apply_min_score()}
+        return {
+            "eligible": True,
+            "reason": "auto-apply-eligible",
+            "readinessStatus": status,
+            "score": score,
+            "minScore": self.auto_apply_min_score(),
+            "reviewApproved": review_approved,
+        }
+
+    def complete_auto_applied_experiment(self, experiment_id: str) -> None:
+        experiment = self.experiment_store.get(experiment_id)
+        if not experiment:
+            return
+        stamp = utc_now_iso()
+        experiment.status = "completed"
+        experiment.paused_at = ""
+        experiment.updated_at = stamp
+        self.experiment_store.save(experiment)
+
+    def record_latest_history_automation(self, experiment_id: str, automation: Dict[str, object]) -> None:
+        experiment = self.experiment_store.get(experiment_id)
+        if not experiment:
+            return
+        payload = dict(automation or {})
+        last_result = dict(experiment.last_result or {})
+        last_result["automation"] = payload
+        experiment.last_result = last_result
+        history = [dict(item) for item in (experiment.run_history or []) if isinstance(item, dict)]
+        if history:
+            history[0]["automation"] = payload
+            experiment.run_history = history[: self.history_limit()]
+        experiment.updated_at = str(payload.get("automatedAt") or utc_now_iso())
+        self.experiment_store.save(experiment)
+
+    def notify_automation(self, experiment_id: str, automation: Dict[str, object]) -> Dict[str, object]:
+        if not self.auto_notify_enabled():
+            return {"status": "disabled", "reason": "auto-notify-disabled"}
+        if not self.notification_configured():
+            return {"status": "disabled", "reason": "notification-queue-unavailable"}
+        experiment = self.experiment_store.get(experiment_id)
+        if not experiment:
+            return {"status": "not-found"}
+        text = ontology_lab_notification_text(experiment, automation)
+        if not text.strip():
+            return {"status": "skipped", "reason": "empty-message"}
+        run_id = str((automation or {}).get("runId") or "")
+        dedupe_basis = run_id or (experiment.experiment_id + ":" + str((automation or {}).get("automatedAt") or ""))
+        job = NotificationJob.create(
+            text,
+            message_type="notification",
+            source_event_name="ontology_lab.automation",
+            dedupe_key="ontology-lab:" + str((automation or {}).get("action") or "observe") + ":" + dedupe_basis,
+            context={
+                "messageType": "notification",
+                "source": "ontologyLabAutomation",
+                "ontologyLabAutomation": dict(automation or {}),
+            },
+        )
+        try:
+            queued = self.notification_queue.enqueue(job)
+        except Exception as error:  # noqa: BLE001 - lab automation must not crash after a successful experiment.
+            return {"status": "error", "reason": str(error)[:180]}
+        return {"status": "queued" if queued else "deduped", "jobId": job.job_id, "dedupeKey": job.dedupe_key}
 
     def append_run_history(
         self,
@@ -796,6 +945,149 @@ def clean_text_list(values: Iterable[object]) -> List[str]:
         seen.add(text)
         result.append(text)
     return result
+
+
+def numeric_value(value: object, fallback: float = 0.0) -> float:
+    try:
+        return float(str(value if value is not None else "").strip())
+    except (TypeError, ValueError):
+        return fallback
+
+
+def ontology_result_has_apply_targets(last_result: Dict[str, object]) -> bool:
+    proposed = last_result.get("proposedOntologyChanges") if isinstance(last_result.get("proposedOntologyChanges"), dict) else {}
+    target_keys = [
+        "ruleIds",
+        "newRelationTypes",
+        "relationTypes",
+        "newDecisionStages",
+        "decisionStages",
+        "tboxClasses",
+    ]
+    return any(clean_text_list(proposed.get(key) or []) for key in target_keys)
+
+
+def compact_automation_application(application: Dict[str, object]) -> Dict[str, object]:
+    application = dict(application or {})
+    keys = [
+        "status",
+        "appliedAt",
+        "experimentId",
+        "ruleIds",
+        "skippedRuleIds",
+        "relationTypes",
+        "decisionStages",
+        "tboxClasses",
+        "recommendationIds",
+    ]
+    return {key: application.get(key) for key in keys if application.get(key) not in (None, "", [])}
+
+
+def latest_run_id(experiment: OntologyExperiment) -> str:
+    for item in experiment.run_history or []:
+        if isinstance(item, dict) and str(item.get("runId") or "").strip():
+            return str(item.get("runId") or "").strip()
+    return ""
+
+
+def compact_recommendation_titles(last_result: Dict[str, object]) -> List[str]:
+    titles = []
+    for item in (last_result or {}).get("recommendations") or []:
+        if not isinstance(item, dict):
+            continue
+        title = str(item.get("title") or item.get("type") or "").strip()
+        if title:
+            titles.append(title)
+    return titles[:4]
+
+
+def ontology_lab_automation_payload(
+    experiment: OntologyExperiment,
+    last_result: Dict[str, object],
+    run_kind: str,
+    eligibility: Dict[str, object],
+) -> Dict[str, object]:
+    readiness = last_result.get("promotionReadiness") if isinstance(last_result.get("promotionReadiness"), dict) else {}
+    proposed = last_result.get("proposedOntologyChanges") if isinstance(last_result.get("proposedOntologyChanges"), dict) else {}
+    inference = last_result.get("inference") if isinstance(last_result.get("inference"), dict) else {}
+    delta = inference.get("aggregateDelta") if isinstance(inference.get("aggregateDelta"), dict) else {}
+    readiness_status = str(readiness.get("status") or eligibility.get("readinessStatus") or "").strip()
+    status = "observed"
+    action = "notify-result"
+    if eligibility.get("eligible"):
+        status = "apply-pending"
+        action = "auto-apply"
+    elif readiness_status == "needs-review":
+        status = "review-required"
+        action = "notify-review"
+    elif readiness_status == "needs-data":
+        status = "needs-data"
+        action = "notify-data"
+    return {
+        "status": status,
+        "action": action,
+        "reason": str(eligibility.get("reason") or readiness.get("reason") or ""),
+        "automatedAt": utc_now_iso(),
+        "experimentId": experiment.experiment_id,
+        "experimentTitle": experiment.title,
+        "runId": latest_run_id(experiment),
+        "runKind": str(run_kind or ""),
+        "readinessStatus": readiness_status,
+        "readinessScore": readiness.get("score", eligibility.get("score")),
+        "autoApplyMinScore": eligibility.get("minScore"),
+        "derivedRelationDelta": int(delta.get("derivedRelationCount") or 0),
+        "ruleIds": clean_text_list(proposed.get("ruleIds") or []),
+        "relationTypes": clean_text_list(proposed.get("newRelationTypes") or proposed.get("relationTypes") or []),
+        "decisionStages": clean_text_list(proposed.get("newDecisionStages") or proposed.get("decisionStages") or []),
+        "tboxClasses": clean_text_list(proposed.get("tboxClasses") or []),
+        "recommendations": compact_recommendation_titles(last_result),
+    }
+
+
+def comma_text(values: Iterable[object], fallback: str = "-") -> str:
+    rows = clean_text_list(values or [])
+    return ", ".join(rows[:6]) if rows else fallback
+
+
+def ontology_lab_notification_text(experiment: OntologyExperiment, automation: Dict[str, object]) -> str:
+    action = str((automation or {}).get("action") or "")
+    readiness = str((automation or {}).get("readinessStatus") or "-")
+    score = (automation or {}).get("readinessScore")
+    score_text = "-" if score in (None, "") else str(score)
+    application = str((automation or {}).get("applicationStatus") or "")
+    if action == "auto-applied":
+        headline = "[온톨로지 실험실] 자동 반영 완료"
+        next_line = "다음: 적용된 RuleBox/TBox가 다음 TypeDB 추론 사이클부터 검증됩니다."
+    elif action == "notify-error":
+        headline = "[온톨로지 실험실] 자동 반영 오류"
+        next_line = "다음: 웹 실험 탭에서 오류와 적용 결과를 확인해야 합니다."
+    elif action == "notify-data":
+        headline = "[온톨로지 실험실] 실험 데이터 필요"
+        next_line = "다음: 모니터링 스냅샷이 쌓인 뒤 같은 실험을 다시 실행합니다."
+    elif action == "notify-review":
+        headline = "[온톨로지 실험실] 검토 후 반영 필요"
+        next_line = "다음: 웹 실험 탭에서 제안 관계와 규칙을 확인한 뒤 반영하세요."
+    else:
+        headline = "[온톨로지 실험실] 실험 결과"
+        next_line = "다음: 추천 액션을 기준으로 후보 규칙을 조정합니다."
+    lines = [
+        headline,
+        "실험: " + str(experiment.title or experiment.experiment_id),
+        "판정: " + readiness + " / 점수 " + score_text,
+        "개선 후보: 파생 관계 +" + str((automation or {}).get("derivedRelationDelta") or 0)
+        + ", 관계 " + comma_text((automation or {}).get("relationTypes") or [])
+        + ", 단계 " + comma_text((automation or {}).get("decisionStages") or []),
+    ]
+    if application:
+        lines.append("적용: " + application)
+    recommendations = clean_text_list((automation or {}).get("recommendations") or [])
+    if recommendations:
+        lines.append("추천: " + " / ".join(recommendations[:3]))
+    reason = str((automation or {}).get("reason") or "").strip()
+    if reason:
+        lines.append("사유: " + reason)
+    lines.append(next_line)
+    return "\n".join(lines)
 
 
 def split_csv(value: object) -> List[str]:

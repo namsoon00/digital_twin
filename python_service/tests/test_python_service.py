@@ -5855,10 +5855,10 @@ class PythonServiceTests(unittest.TestCase):
         events = RealtimeMonitor().events_for_snapshot(current_failed, previous_live.to_monitor_state())
 
         blocked_rules = {"monitorCashChange", "monitorPositionChange", "monitorPnlChange", "monitorValueChange", "monitorDecisionChange", "holdingTiming"}
-        self.assertTrue(any(event.rule == "monitorConnection" for event in events))
+        self.assertFalse(any(event.rule == "monitorConnection" for event in events))
         self.assertFalse(any(event.rule in blocked_rules for event in events))
 
-    def test_connection_failure_is_watch_once_and_alert_when_repeated(self):
+    def test_connection_failure_alerts_only_after_three_consecutive_failures(self):
         position = normalize_position({
             "symbol": "005930",
             "name": "삼성전자",
@@ -5895,7 +5895,7 @@ class PythonServiceTests(unittest.TestCase):
         )
         monitor = RealtimeMonitor()
 
-        first_event = next(event for event in monitor.connection_events(first_failed, previous_live.to_monitor_state()) if event.key.startswith("main:connection:demo"))
+        first_events = monitor.connection_events(first_failed, previous_live.to_monitor_state())
         second_failed = AccountSnapshot(
             "main",
             "메인",
@@ -5908,16 +5908,30 @@ class PythonServiceTests(unittest.TestCase):
             decisions_for_positions([position], portfolio),
             metadata={"toss": {"stageFailures": {"accounts": {"count": 2, "lastError": "HTTP 401 Unauthorized", "recovered": 0}}, "authRefreshes": 1}},
         )
-        second_event = next(event for event in monitor.connection_events(second_failed, first_failed.to_monitor_state()) if event.key.startswith("main:connection:demo"))
+        second_events = monitor.connection_events(second_failed, first_failed.to_monitor_state())
+        third_failed = AccountSnapshot(
+            "main",
+            "메인",
+            "toss",
+            "demo",
+            "토스 조회 실패 · Toss accounts 단계 실패 · HTTP 401 Unauthorized",
+            utc_now_iso(),
+            portfolio,
+            [position],
+            decisions_for_positions([position], portfolio),
+            metadata={"toss": {"stageFailures": {"accounts": {"count": 2, "lastError": "HTTP 401 Unauthorized", "recovered": 0}}, "authRefreshes": 1}},
+        )
+        third_event = next(event for event in monitor.connection_events(third_failed, second_failed.to_monitor_state()) if event.key.startswith("main:connection:demo"))
 
-        self.assertEqual("WATCH", first_event.severity)
-        self.assertIn("상태 일시 인증 실패", first_event.lines)
-        self.assertIn("연속 실패 1회", first_event.lines)
-        self.assertEqual(1, first_event.metadata["connectionFailureStreak"])
-        self.assertEqual("ALERT", second_event.severity)
-        self.assertIn("상태 연속 인증 실패", second_event.lines)
-        self.assertIn("연속 실패 2회", second_event.lines)
-        self.assertEqual(2, second_event.metadata["connectionFailureStreak"])
+        self.assertFalse(any(event.rule == "monitorConnection" for event in first_events))
+        self.assertFalse(any(event.rule == "monitorConnection" for event in second_events))
+        self.assertEqual(1, first_failed.metadata["connectionFailureStreak"])
+        self.assertEqual(2, second_failed.metadata["connectionFailureStreak"])
+        self.assertEqual("ALERT", third_event.severity)
+        self.assertIn("상태 연속 인증 실패", third_event.lines)
+        self.assertIn("연속 실패 3회", third_event.lines)
+        self.assertEqual(3, third_event.metadata["connectionFailureStreak"])
+        self.assertEqual(3, third_event.metadata["connectionFailureAlertStreak"])
 
     def test_snapshot_collected_event_preserves_toss_failure_metadata(self):
         position = normalize_position({

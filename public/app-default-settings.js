@@ -302,6 +302,7 @@
       "monitorConnection=10",
       "externalDataConnection=60"
     ].join("\n"),
+    monitorConnectionFailureAlertStreak: "3",
     alertThresholds: [
       "volumeRatioHigh=2",
       "buyShareHigh=65",

@@ -684,8 +684,8 @@ def opinion_lines_for_type(message_type: str, context: Dict[str, object]) -> Lis
     if message_type == "monitorConnection":
         return [
             "해석: 데이터 연결 상태가 정상 live 흐름이 아닙니다.",
-            "의견: 투자 판단보다 데이터 신뢰도 복구가 우선입니다. 1회성 실패는 관찰, 반복 실패는 키/권한 재점검 대상입니다.",
-            "다음 확인: 실패 단계, 재시도 결과, 다음 주기에서 정상 복구되는지 확인하세요.",
+            "의견: 투자 판단보다 데이터 신뢰도 복구가 우선입니다. 토스 조회 실패는 3회 연속 확인된 뒤 키/권한 재점검 알림으로 보냅니다.",
+            "다음 확인: 실패 단계, 재시도 결과, 3회 누적 전 정상 복구되는지 확인하세요.",
         ]
     if message_type == "monitorHeartbeat":
         return [

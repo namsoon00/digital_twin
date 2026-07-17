@@ -34,6 +34,7 @@ from .monitoring_sample_data import MonitoringSampleDataMixin
 
 
 DEFAULT_THRESHOLDS = DEFAULT_ALERT_THRESHOLDS
+DEFAULT_CONNECTION_FAILURE_ALERT_STREAK = 3
 
 
 def now_ms() -> int:
@@ -508,20 +509,27 @@ class RealtimeMonitor(MonitoringSampleDataMixin, MonitoringPositionContextMixin,
         metadata["connectionFailureStreak"] = int(streak or 0)
         snapshot.metadata = metadata
 
+    def connection_failure_alert_streak(self) -> int:
+        raw = self.settings.get("monitorConnectionFailureAlertStreak")
+        try:
+            value = int(float(str(raw).strip())) if str(raw or "").strip() else DEFAULT_CONNECTION_FAILURE_ALERT_STREAK
+        except ValueError:
+            value = DEFAULT_CONNECTION_FAILURE_ALERT_STREAK
+        return max(1, value)
+
     def connection_events(self, snapshot: AccountSnapshot, previous: Dict[str, object]) -> List[AlertEvent]:
         events: List[AlertEvent] = []
         failure_streak = self.connection_failure_streak(snapshot, previous)
         self.set_connection_failure_streak(snapshot, failure_streak)
-        if snapshot.mode != "live":
-            repeated = failure_streak >= 2
-            severity = "ALERT" if repeated else "WATCH"
+        failure_alert_streak = self.connection_failure_alert_streak()
+        current_failed = snapshot.mode != "live" or status_has_account_data_failure(snapshot.status)
+        if current_failed and failure_streak >= failure_alert_streak:
             stage = self.toss_failure_stage(snapshot) or "-"
             toss = self.toss_diagnostics(snapshot)
             auth_refreshes = int(float(toss.get("authRefreshes") or 0))
-            status_line = "연속 인증 실패" if repeated else "일시 인증 실패"
             retry_line = "재시도 access token 재발급 " + str(auth_refreshes) + "회" if auth_refreshes else ""
             lines = [
-                "상태 " + status_line,
+                "상태 연속 인증 실패",
                 "연속 실패 " + str(failure_streak) + "회",
                 "실패 단계 " + stage,
             ]
@@ -531,23 +539,24 @@ class RealtimeMonitor(MonitoringSampleDataMixin, MonitoringPositionContextMixin,
             events.append(AlertEvent(
                 snapshot.account_id,
                 snapshot.account_label,
-                severity,
+                "ALERT",
                 "monitorConnection",
-                ":".join([snapshot.account_id, "connection", snapshot.mode, "repeated" if repeated else "single", snapshot.status]),
+                ":".join([snapshot.account_id, "connection", snapshot.mode, "confirmed", snapshot.status]),
                 "연결 상태",
                 lines,
                 criteria=self.criteria(
-                    "토스 연결 모드가 live가 아니며 " + ("2회 이상 연속 실패할 때 주의로 보냅니다" if repeated else "1회성 실패는 관찰로 보냅니다"),
+                    "토스 연결 모드가 live가 아니며 " + str(failure_alert_streak) + "회 이상 연속 실패할 때만 보냅니다",
                     "연속 실패 " + str(failure_streak) + "회, stage=" + stage + ", mode=" + str(snapshot.mode or "-") + ", status=" + str(snapshot.status or "-"),
                 ),
                 metadata={
                     "connectionFailureStreak": failure_streak,
+                    "connectionFailureAlertStreak": failure_alert_streak,
                     "tossFailureStage": stage,
                     "tossAuthRefreshes": auth_refreshes,
                 },
             ))
         previous_status = previous.get("status") if previous else ""
-        if previous_status and previous_status != snapshot.status:
+        if previous_status and previous_status != snapshot.status and not current_failed:
             events.append(AlertEvent(
                 snapshot.account_id,
                 snapshot.account_label,

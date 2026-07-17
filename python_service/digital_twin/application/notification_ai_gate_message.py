@@ -1087,12 +1087,16 @@ def _first_crypto_source_event(context: Dict[str, object]) -> Dict[str, object]:
         if "externalcryptomove" in text or "crypto" in text or metadata.get("cryptoMoveModel"):
             return item
     if str((context or {}).get("messageType") or (context or {}).get("rule") or "") == "externalCryptoMove":
+        context_metadata = context.get("metadata") if isinstance(context.get("metadata"), dict) else {}
+        merged_metadata = {**context_metadata, **context}
+        if isinstance(context_metadata.get("cryptoMoveModel"), dict) and not isinstance(merged_metadata.get("cryptoMoveModel"), dict):
+            merged_metadata["cryptoMoveModel"] = context_metadata.get("cryptoMoveModel")
         return {
             "rule": "externalCryptoMove",
             "symbol": context.get("symbol") or context.get("rawSymbol"),
             "lines": _raw_lines(context),
             "criteria": criterion_lines(context),
-            "metadata": context,
+            "metadata": merged_metadata,
         }
     return {}
 
@@ -1146,8 +1150,19 @@ def _crypto_trigger_summary_lines(context: Dict[str, object], limit: int = 3) ->
     dominant_change = model.get("dominantChange", metadata.get("cryptoMoveDominantChange"))
     if dominant_change in (None, ""):
         dominant_change = change7d if dominant_period == "7일" else change24h if dominant_period in {"24시간", "24h"} else None
-    setting = next((line.split(":", 1)[1].strip() for line in criteria if line.startswith("설정:")), "")
-    detected = next((line.split(":", 1)[1].strip() for line in criteria if line.startswith("감지:")), "")
+    def clean_criterion_value(value: str) -> str:
+        text = str(value or "").strip()
+        text = re.sub(r"^(발송\s*기준\s*)?(설정|감지)\s*:\s*", "", text).strip()
+        return text
+
+    setting = ""
+    detected = ""
+    for line in criteria:
+        text = str(line or "").strip()
+        if not setting and ("설정:" in text or "설정：" in text):
+            setting = clean_criterion_value(text.split(":", 1)[1] if ":" in text else text.split("：", 1)[1])
+        if not detected and ("감지:" in text or "감지：" in text):
+            detected = clean_criterion_value(text.split(":", 1)[1] if ":" in text else text.split("：", 1)[1])
 
     rows: List[str] = []
     if dominant_period or dominant_change not in (None, ""):

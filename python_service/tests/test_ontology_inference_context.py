@@ -5,6 +5,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from digital_twin.domain.ontology_inference_context import relation_contexts_from_snapshot
+from digital_twin.domain.ontology_relation_execution_plan import decision_drivers_from_relation_context
 from digital_twin.domain.ontology_relation_facts import position_signal_facts
 from digital_twin.domain.portfolio import AccountSnapshot, Position
 from digital_twin.domain.portfolio_calculations import portfolio_summary
@@ -12,6 +13,29 @@ from digital_twin.domain.strategy import decisions_for_positions
 
 
 class OntologyInferenceContextTests(unittest.TestCase):
+    def test_missing_data_driver_preserves_stale_value_reason(self):
+        drivers = decision_drivers_from_relation_context(
+            {
+                "missingData": [
+                    {
+                        "label": "체결강도 (오래된 값)",
+                        "effect": "체결강도는 확인됐지만 이전 조회와 같아 최신 변화 신호로 보지는 않습니다.",
+                    },
+                    {
+                        "label": "투자자별 수급 (오래된 값)",
+                        "effect": "KIS 투자자별 수급이 이전 조회와 같아 실시간 변화 신호는 아닙니다.",
+                    },
+                ]
+            },
+            {},
+            [],
+        )
+
+        summary = next(item["summary"] for item in drivers if item["category"] == "dataQuality")
+        self.assertIn("체결강도 (오래된 값)", summary)
+        self.assertIn("이전 조회와 같아 최신 변화 신호로 보지는 않습니다", summary)
+        self.assertNotIn("부족 데이터가 있어 판단 강도를 낮춥니다: 체결강도, 투자자별 수급", summary)
+
     def test_position_signal_facts_include_runtime_valuation_formula(self):
         position = Position(
             symbol="005930",

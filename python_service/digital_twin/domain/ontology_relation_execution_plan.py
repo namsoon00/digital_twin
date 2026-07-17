@@ -411,15 +411,26 @@ def decision_drivers_from_relation_context(
             ["dartDisclosure"],
         )
 
-    missing_labels = [str(item.get("label") or item.get("key") or "") for item in facts.get("missingData") or [] if isinstance(item, dict)]
-    if missing_labels:
+    missing_notes = []
+    for item in facts.get("missingData") or []:
+        if not isinstance(item, dict):
+            continue
+        name = str(item.get("label") or item.get("key") or "").strip()
+        effect = str(item.get("effect") or item.get("reason") or "").strip()
+        if not name:
+            continue
+        if effect:
+            missing_notes.append(name + ": " + effect)
+        else:
+            missing_notes.append(name + "는 판단 강도를 낮추는 확인 한계입니다.")
+    if missing_notes:
         _append_driver(
             rows,
             seen,
             "dataQuality",
             "counter",
             "부족 데이터",
-            "부족 데이터가 있어 판단 강도를 낮춥니다: " + ", ".join(missing_labels[:4]),
+            "데이터 확인 한계가 있어 판단 강도를 낮춥니다: " + " / ".join(missing_notes[:4]),
             66,
             ["missingData", "dataAvailability"],
         )

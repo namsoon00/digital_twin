@@ -9754,6 +9754,58 @@ class PythonServiceTests(unittest.TestCase):
         self.assertIn("24시간 +2.8%", message)
         self.assertIn("CoinGecko", message)
 
+    def test_validated_ai_response_shows_crypto_trigger_reason_for_direct_crypto_alert(self):
+        context = {
+            "messageType": "externalCryptoMove",
+            "rule": "externalCryptoMove",
+            "symbol": "ETH",
+            "rawSymbol": "ETH",
+            "displayTarget": "크립토 변동 / 이더리움 / ETH",
+            "messageDeliveryLevel": "absoluteBeginner",
+            "rawLines": "\n".join([
+                "이더리움 변동 24h +2.8% · 7d +13.4%",
+                "크립토 가격 $3,421",
+                "크립토 거래액 $24,000,000,000",
+                "출처 CoinGecko",
+            ]),
+            "criterionLines": "\n".join([
+                "설정: 크립토 24시간 ±4% 또는 7일 ±10% 이상",
+                "감지: ETH 24h +2.8%, 7d +13.4%",
+            ]),
+            "metadata": {
+                "market": "CRYPTO",
+                "provider": "CoinGecko",
+                "cryptoId": "ethereum",
+                "change24h": 2.8,
+                "change7d": 13.4,
+                "price": 3421,
+                "volume24h": 24000000000,
+                "cryptoMoveModel": {
+                    "assetLabel": "이더리움",
+                    "dominantPeriodLabel": "7일",
+                    "dominantChange": 13.4,
+                },
+            },
+        }
+
+        response = validated_response_from_payload(context, {
+            "action": "HOLD",
+            "confidence": 60,
+            "summary": "크립토 변동이 기준을 넘었습니다.",
+            "opinion": "BTC/ETH 움직임은 민감 종목 점검 신호입니다.",
+            "nextChecks": ["MSTR/STRC 같은 민감 종목의 가격 반응을 확인하세요."],
+            "referenceDate": "2026-07-17 09:10 KST",
+        }, source="test AI")
+
+        message = context_with_validated_ai_response(context, response)["telegramMessage"]
+
+        self.assertIn("<b>투자 판단 근거</b>", message)
+        self.assertIn("알림 발생 이유", message)
+        self.assertIn("이더리움 7일 +13.4%", message)
+        self.assertIn("크립토 변동: 24시간 +2.8%, 7일 +13.4%", message)
+        self.assertIn("출처 CoinGecko", message)
+        self.assertNotIn("ETH 24h +2.8%, 7d +13.4%이 기준", message)
+
     def test_validated_ai_response_shows_api_collection_times(self):
         context = {
             "messageType": "investmentInsight",

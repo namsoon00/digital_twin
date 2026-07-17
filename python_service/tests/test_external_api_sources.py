@@ -275,6 +275,85 @@ class ExternalApiSourceTests(unittest.TestCase):
         evidence = research_evidence_from_external_signals("AAPL", signals)
         self.assertTrue(any(item.kind == "financial-fact" and item.raw_payload.get("provider") == "yfinance" for item in evidence))
 
+    def test_yfinance_missing_fundamentals_keeps_quote_without_error_status(self):
+        class FakeRecordsFrame:
+            def __init__(self, rows):
+                self.rows = list(rows)
+
+            @property
+            def empty(self):
+                return not self.rows
+
+            def reset_index(self):
+                return self
+
+            def tail(self, limit):
+                return FakeRecordsFrame(self.rows[-int(limit):])
+
+            def to_dict(self, orient="records"):
+                return list(self.rows)
+
+        class FakeTicker:
+            options = []
+
+            def __init__(self, _symbol):
+                pass
+
+            def history(self, **_kwargs):
+                return FakeRecordsFrame([
+                    {"Date": "2026-07-01", "Close": 94.0, "Volume": 1000},
+                    {"Date": "2026-07-02", "Close": 98.0, "Volume": 1300},
+                ])
+
+            def get_info(self):
+                raise RuntimeError(
+                    'HTTP Error 404: {"quoteSummary":{"result":null,"error":{"code":"Not Found",'
+                    '"description":"No fundamentals data found for symbol: MSTR"}}}'
+                )
+
+        previous_module = sys.modules.get("yfinance")
+        sys.modules["yfinance"] = SimpleNamespace(Ticker=FakeTicker)
+        try:
+            provider = ExternalSignalProvider(
+                settings={
+                    "externalAlphaEnabled": "0",
+                    "externalCoinGeckoEnabled": "0",
+                    "externalFredEnabled": "0",
+                    "externalDartEnabled": "0",
+                    "externalSecEnabled": "0",
+                    "externalNewsEnabled": "0",
+                    "externalFxRateEnabled": "0",
+                    "externalYFinanceEnabled": "1",
+                    "externalYFinanceMaxSymbols": "1",
+                    "externalYFinanceHistoryRows": "2",
+                    "externalYFinanceOptionExpirations": "0",
+                    "externalYFinanceNewsLimit": "0",
+                    "externalApiRateLimitSeconds": "0",
+                    "externalApiRetryAttempts": "1",
+                },
+                cache=object(),
+                evidence_store=object(),
+                fetch_json=lambda *_args, **_kwargs: {},
+                sleep=lambda _: None,
+            )
+            signals = provider.fetch_signals([
+                normalize_position({"symbol": "MSTR", "name": "Strategy", "market": "US", "currency": "USD"})
+            ])
+        finally:
+            if previous_module is None:
+                sys.modules.pop("yfinance", None)
+            else:
+                sys.modules["yfinance"] = previous_module
+
+        payload = signals["yfinanceData"]["MSTR"]
+        self.assertEqual(98.0, signals["equityQuotes"]["MSTR"]["price"])
+        self.assertNotIn("info", payload)
+        self.assertNotIn("errors", payload)
+        self.assertFalse([
+            item for item in signals["statuses"]
+            if item.get("source") == "yfinance" and not item.get("ok")
+        ])
+
     def test_ai_rewritten_message_hides_api_sources_from_alert_body(self):
         snapshot = self.snapshot_with_sources()
         event = AlertEvent(

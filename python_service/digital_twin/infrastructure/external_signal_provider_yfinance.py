@@ -1,3 +1,6 @@
+import io
+import logging
+from contextlib import contextmanager, redirect_stderr, redirect_stdout
 from datetime import date, datetime, timezone
 from typing import Dict, Iterable, List, Tuple
 
@@ -57,6 +60,31 @@ def is_empty_value(value) -> bool:
         except Exception:
             return False
     return False
+
+
+def is_expected_yfinance_missing_error(error: Exception) -> bool:
+    text = str(error or "").lower()
+    if not text:
+        return False
+    return any(marker in text for marker in [
+        "no fundamentals data found",
+        "quotesummary",
+        '"code":"not found"',
+        '"code": "not found"',
+        "404",
+    ])
+
+
+@contextmanager
+def quiet_yfinance_io():
+    logger = logging.getLogger("yfinance")
+    previous_level = logger.level
+    logger.setLevel(logging.CRITICAL)
+    try:
+        with redirect_stdout(io.StringIO()), redirect_stderr(io.StringIO()):
+            yield
+    finally:
+        logger.setLevel(previous_level)
 
 
 def frame_rows(frame, limit: int = 40) -> List[Dict[str, object]]:
@@ -279,13 +307,16 @@ class ExternalSignalYFinanceMixin:
 
         def capture(name: str, getter, transform=None):
             try:
-                value = getter()
+                with quiet_yfinance_io():
+                    value = getter()
                 if transform:
                     value = transform(value)
                 else:
                     value = json_safe_value(value)
                 return None if is_empty_value(value) else value
             except Exception as error:  # noqa: BLE001 - yfinance modules are best-effort.
+                if is_expected_yfinance_missing_error(error):
+                    return None
                 errors.append({"section": name, "message": str(error)[:180]})
                 return None
 
@@ -351,8 +382,11 @@ class ExternalSignalYFinanceMixin:
         chains = []
         for expiration in options[:option_expirations]:
             try:
-                chain = ticker.option_chain(expiration)
+                with quiet_yfinance_io():
+                    chain = ticker.option_chain(expiration)
             except Exception as error:  # noqa: BLE001 - option expirations can disappear intraday.
+                if is_expected_yfinance_missing_error(error):
+                    continue
                 errors.append({"section": "optionChain:" + str(expiration), "message": str(error)[:180]})
                 continue
             calls = frame_rows(getattr(chain, "calls", None), option_rows_limit)

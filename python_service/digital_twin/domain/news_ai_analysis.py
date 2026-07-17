@@ -81,6 +81,14 @@ RISK_PHRASES = [
     "concerns",
     "under pressure",
     "profit warning",
+    "slide",
+    "slides",
+    "slid",
+    "selloff",
+    "decline",
+    "declines",
+    "down",
+    "valuation debate",
 ]
 
 SUPPORT_PHRASES = [
@@ -106,6 +114,11 @@ SUPPORT_PHRASES = [
     "surge",
     "record revenue",
     "record",
+    "bargain",
+    "cheap",
+    "undervalued",
+    "value score",
+    "lean cheap",
 ]
 
 CONTRAST_PHRASES = ["덮은", "불구", "에도", "despite", "but", "however", "yet"]
@@ -141,7 +154,11 @@ def keyword_hits(text: object, phrases: Iterable[str], limit: int = 6) -> List[s
             continue
         term_lower = term.casefold()
         if re.fullmatch(r"[a-z0-9][a-z0-9 .&+/'-]*", term_lower):
-            matched = bool(re.search(r"(?<![a-z0-9])" + re.escape(term_lower) + r"(?![a-z0-9])", lowered))
+            pattern = r"(?<![a-z0-9])" + re.escape(term_lower) + r"(?![a-z0-9])"
+            matched = any(
+                not keyword_match_is_boilerplate(term_lower, lowered[max(0, match.start() - 32): match.end() + 42])
+                for match in re.finditer(pattern, lowered)
+            )
         else:
             matched = term_lower in lowered
         if matched and term not in rows:
@@ -149,6 +166,16 @@ def keyword_hits(text: object, phrases: Iterable[str], limit: int = 6) -> List[s
         if len(rows) >= limit:
             break
     return rows
+
+
+def keyword_match_is_boilerplate(term: str, snippet: str) -> bool:
+    if term in {"miss", "missed"}:
+        return bool(re.search(r"\b(?:never|don't|dont|do\s+not|not\s+to)\s+\w{0,12}\s*miss(?:ed)?\b", snippet)) or bool(
+            re.search(r"\bmiss(?:ed)?\s+important\s+updates?\b", snippet)
+        )
+    if term == "record":
+        return "recorded for your portfolio" in snippet
+    return False
 
 
 def source_text_hash(*values: object) -> str:
@@ -256,6 +283,10 @@ class NewsAiAnalysis:
     contrast_signals: List[str] = field(default_factory=list)
     key_numbers: List[str] = field(default_factory=list)
     rationale_ko: str = ""
+    impact_reason_ko: str = ""
+    portfolio_implication_ko: str = ""
+    action_boundary_ko: str = ""
+    confidence_reason_ko: str = ""
     needs_review: bool = False
     reasoning_limitations: List[str] = field(default_factory=list)
 
@@ -280,6 +311,10 @@ class NewsAiAnalysis:
             "contrastSignals": list(self.contrast_signals or []),
             "keyNumbers": list(self.key_numbers or []),
             "rationaleKo": compact_text(self.rationale_ko, 760),
+            "impactReasonKo": compact_text(self.impact_reason_ko, 520),
+            "portfolioImplicationKo": compact_text(self.portfolio_implication_ko, 520),
+            "actionBoundaryKo": compact_text(self.action_boundary_ko, 360),
+            "confidenceReasonKo": compact_text(self.confidence_reason_ko, 360),
             "needsReview": bool(self.needs_review),
             "reasoningLimitations": list(self.reasoning_limitations or []),
         }
@@ -319,6 +354,10 @@ def normalize_ai_analysis(payload: Dict[str, object], fallback: NewsAiAnalysis =
         contrast_signals=unique_texts(payload.get("contrastSignals") or payload.get("contrast_signals") or fallback.contrast_signals, 6),
         key_numbers=unique_texts(payload.get("keyNumbers") or payload.get("key_numbers") or fallback.key_numbers, 6),
         rationale_ko=compact_text(payload.get("rationaleKo") or payload.get("rationale_ko") or fallback.rationale_ko, 760),
+        impact_reason_ko=compact_text(payload.get("impactReasonKo") or payload.get("impact_reason_ko") or fallback.impact_reason_ko, 520),
+        portfolio_implication_ko=compact_text(payload.get("portfolioImplicationKo") or payload.get("portfolio_implication_ko") or fallback.portfolio_implication_ko, 520),
+        action_boundary_ko=compact_text(payload.get("actionBoundaryKo") or payload.get("action_boundary_ko") or fallback.action_boundary_ko, 360),
+        confidence_reason_ko=compact_text(payload.get("confidenceReasonKo") or payload.get("confidence_reason_ko") or fallback.confidence_reason_ko, 360),
         needs_review=bool(payload.get("needsReview") if "needsReview" in payload else fallback.needs_review),
         reasoning_limitations=unique_texts(payload.get("reasoningLimitations") or payload.get("reasoning_limitations") or fallback.reasoning_limitations, 5),
     )
@@ -347,6 +386,78 @@ def infer_impact_polarity(text: object) -> Tuple[str, List[str], List[str], List
     if support_hits:
         return "support", risk_hits, support_hits, contrast_hits
     return "neutral", risk_hits, support_hits, contrast_hits
+
+
+def signal_summary_text(risk_hits: Iterable[str], support_hits: Iterable[str], contrast_hits: Iterable[str]) -> str:
+    parts = []
+    risk = unique_texts(risk_hits, 3)
+    support = unique_texts(support_hits, 3)
+    contrast = unique_texts(contrast_hits, 2)
+    if risk:
+        parts.append("위험 신호 " + ", ".join(risk))
+    if support:
+        parts.append("우호 신호 " + ", ".join(support))
+    if contrast:
+        parts.append("상반 문맥 " + ", ".join(contrast))
+    return " · ".join(parts) if parts else "명시적 방향 신호 없음"
+
+
+def impact_reason_text(
+    target_name: str,
+    polarity: str,
+    event_type: str,
+    risk_hits: Iterable[str],
+    support_hits: Iterable[str],
+    contrast_hits: Iterable[str],
+    key_numbers: Iterable[str],
+) -> str:
+    event_label = news_domain.event_type_label(event_type)
+    signals = signal_summary_text(risk_hits, support_hits, contrast_hits)
+    numbers = unique_texts(key_numbers, 3)
+    number_text = (" 확인 수치: " + ", ".join(numbers) + ".") if numbers else ""
+    if polarity == "risk":
+        risk_rows = {str(item or "").casefold() for item in risk_hits or []}
+        price_drop_prefix = "주가 하락과 " if risk_rows.intersection({"slide", "slides", "slid", "decline", "declines", "down", "drop", "drops", "falls", "fell", "plunge"}) else ""
+        return compact_text(target_name + "에는 " + price_drop_prefix + event_label + " 관련 부담이 우세합니다. " + signals + "가 확인돼 단기 투자심리와 가격 반응을 낮출 수 있습니다." + number_text, 520)
+    if polarity == "support":
+        return compact_text(target_name + "에는 " + event_label + " 관련 우호 재료가 확인됩니다. " + signals + "가 실제 가격·거래량 반응으로 이어지는지 봐야 합니다." + number_text, 520)
+    if polarity == "mixed":
+        return compact_text(target_name + "에는 우호 논리와 위험 신호가 함께 있습니다. " + signals + "가 충돌해 다음 가격 반응 전까지 방향을 단정하기 어렵습니다." + number_text, 520)
+    return compact_text(target_name + " 관련 새 정보지만 기사 안의 가격 방향성은 제한적입니다. " + event_label + " 이슈가 실제 수급 변화로 이어지는지 확인하는 근거로 봅니다." + number_text, 520)
+
+
+def portfolio_implication_text(target_name: str, polarity: str, event_type: str) -> str:
+    event_label = news_domain.event_type_label(event_type)
+    if polarity == "risk":
+        return target_name + " 보유·관심 기준으로는 " + event_label + " 부담이 가격 하락이나 변동성 확대로 이어지는지 먼저 확인해야 합니다."
+    if polarity == "support":
+        return target_name + " 보유·관심 기준으로는 우호 재료지만, 가격 상승이 거래량을 동반하는지 확인해야 의미가 커집니다."
+    if polarity == "mixed":
+        return target_name + " 보유·관심 기준으로는 저가 매수 논리와 추가 하락 위험이 동시에 있어 실적·거래량 확인 전 판단 강도를 낮춥니다."
+    return target_name + " 보유·관심 기준으로는 당장 방향성 근거보다 이벤트 확인용 정보에 가깝습니다."
+
+
+def action_boundary_text(polarity: str, read_scope: str) -> str:
+    scope_note = "본문 기반" if read_scope == "body" else "제목/RSS 기반"
+    if polarity == "risk":
+        return scope_note + " 경계 신호입니다. 자동 매매 판단이 아니라 다음 장 가격, 거래량, 반대 뉴스 확인 조건입니다."
+    if polarity == "support":
+        return scope_note + " 우호 신호입니다. 자동 진입 판단이 아니라 가격 반응과 거래량 동반 여부 확인 조건입니다."
+    if polarity == "mixed":
+        return scope_note + " 혼재 신호입니다. 방향을 정하기보다 상반 근거와 실적 반응을 분리해 확인해야 합니다."
+    return scope_note + " 확인 신호입니다. 투자 방향을 단정하지 않고 후속 가격·거래량 반응만 점검합니다."
+
+
+def confidence_reason_text(read_scope: str, relation_scope: str, risk_hits: Iterable[str], support_hits: Iterable[str]) -> str:
+    parts = []
+    parts.append("본문을 읽음" if read_scope == "body" else "본문 미확보")
+    if relation_scope:
+        parts.append("관계 범위 " + relation_scope)
+    if list(risk_hits or []) or list(support_hits or []):
+        parts.append("방향 키워드 확인")
+    else:
+        parts.append("방향 키워드 약함")
+    return ", ".join(parts)
 
 
 def local_news_ai_analysis(target: NewsCollectionTarget, evidence: ResearchEvidence) -> NewsAiAnalysis:
@@ -385,20 +496,25 @@ def local_news_ai_analysis(target: NewsCollectionTarget, evidence: ResearchEvide
     }
     article_summary = news_domain.korean_article_summary(target, title, body, feed_summary, analysis_context)
     article_takeaway = news_domain.article_event_takeaway(target, title, body, feed_summary)
-    signal_text = ", ".join(unique_texts(risk_hits + support_hits + contrast_hits, 5)) or "명시적 방향 신호 없음"
+    signal_text = signal_summary_text(risk_hits, support_hits, contrast_hits)
+    impact_reason = impact_reason_text(target_name, polarity, event_type, risk_hits, support_hits, contrast_hits, key_numbers)
+    portfolio_implication = portfolio_implication_text(target_name, polarity, event_type)
+    action_boundary = action_boundary_text(polarity, read_scope)
+    confidence_reason = confidence_reason_text(read_scope, relation_scope, risk_hits, support_hits)
     if polarity == "risk":
         one_line = article_takeaway or target_name + " 기사에서 위험 신호가 더 강하게 확인됩니다."
-        fallback_brief = target_name + " 관련 기사에서 " + signal_text + "가 확인돼 단기 가격 부담과 거래량 반응을 먼저 봐야 합니다."
+        fallback_brief = impact_reason
     elif polarity == "support":
         one_line = article_takeaway or target_name + " 기사에서 우호 신호가 확인됩니다."
-        fallback_brief = target_name + " 관련 기사에서 " + signal_text + "가 확인돼 가격 반응이 이어지는지 확인할 필요가 있습니다."
+        fallback_brief = impact_reason
     elif polarity == "mixed":
         one_line = article_takeaway or target_name + " 기사에 우호·위험 신호가 함께 있습니다."
-        fallback_brief = "우호 표현과 위험 표현이 함께 있어 방향을 단정하지 말고 원문과 다음 가격 반응을 함께 확인해야 합니다."
+        fallback_brief = impact_reason
     else:
         one_line = article_takeaway or target_name + " 관련 새 정보지만 방향성은 중립입니다."
-        fallback_brief = "기사에서 명확한 호재·악재 방향은 약해 가격·거래량 확인용 근거로 다룹니다."
-    brief = article_summary or fallback_brief
+        fallback_brief = impact_reason
+    brief_source = article_takeaway or article_summary
+    brief = compact_text((brief_source + ". " if brief_source else "") + impact_reason, 520) or fallback_brief
     takeaways = [
         "기사 요약: " + compact_text(article_takeaway or article_summary, 140),
         "영향 방향: " + label,
@@ -447,11 +563,15 @@ def local_news_ai_analysis(target: NewsCollectionTarget, evidence: ResearchEvide
             + evidence_scope
             + "에서 "
             + signal_text
-            + "를 근거로 "
+            + "을 근거로 "
             + label
             + "로 분류했습니다.",
             760,
         ),
+        impact_reason_ko=impact_reason,
+        portfolio_implication_ko=portfolio_implication,
+        action_boundary_ko=action_boundary,
+        confidence_reason_ko=confidence_reason,
         needs_review=read_scope != "body" or polarity in {"mixed", "unknown"},
         reasoning_limitations=unique_texts(limitations, 5),
     )
@@ -514,7 +634,10 @@ def apply_news_ai_analysis(evidence: ResearchEvidence, analysis_payload: Dict[st
     payload["stockImpactLabel"] = analysis_dict.get("impactLabelKo") or IMPACT_LABELS.get(impact_polarity, "중립")
     payload["stockImpactPolarity"] = impact_polarity if impact_polarity in {"support", "risk"} else "context"
     payload["stockImpactScore"] = round(clamp(stock_impact_score, 0.0, 100.0), 1)
-    payload["stockImpactReasonKo"] = analysis_dict.get("rationaleKo") or payload.get("stockImpactReasonKo") or ""
+    payload["stockImpactReasonKo"] = analysis_dict.get("impactReasonKo") or analysis_dict.get("rationaleKo") or payload.get("stockImpactReasonKo") or ""
+    payload["portfolioImplicationKo"] = analysis_dict.get("portfolioImplicationKo") or payload.get("portfolioImplicationKo") or ""
+    payload["actionBoundaryKo"] = analysis_dict.get("actionBoundaryKo") or payload.get("actionBoundaryKo") or ""
+    payload["confidenceReasonKo"] = analysis_dict.get("confidenceReasonKo") or payload.get("confidenceReasonKo") or ""
     if analysis_dict.get("materialityScore"):
         payload["materialityScore"] = max(number(payload.get("materialityScore")), number(analysis_dict.get("materialityScore")))
     if analysis_dict.get("relationScope") and not payload.get("relationScope"):
@@ -565,6 +688,10 @@ def build_news_ai_analysis_prompt(target: NewsCollectionTarget, evidence: Resear
             "contrastSignals": ["phrase"],
             "keyNumbers": ["number"],
             "rationaleKo": "short evidence-based rationale",
+            "impactReasonKo": "why this article is support/risk/mixed/neutral for the stock in Korean",
+            "portfolioImplicationKo": "what this means for a holding/watchlist user without trading instruction",
+            "actionBoundaryKo": "what to check next and what not to conclude",
+            "confidenceReasonKo": "why confidence is high/medium/low",
             "needsReview": True,
             "reasoningLimitations": ["missing data"],
         },
@@ -575,6 +702,9 @@ def build_news_ai_analysis_prompt(target: NewsCollectionTarget, evidence: Resear
             "Do not use generic sector templates such as AI/data-center demand unless that fact is present in the title, feed summary, or body preview.",
             "If the body is missing, state that limitation and lower confidence.",
             "A phrase such as 실적 by itself is not positive; 실적 우려, 붕괴, 하락, 덮은 are risk context.",
+            "Ignore newsletter or CTA boilerplate such as Never miss important updates, Simply Wall St tools, make better investment decisions, and cut through noise.",
+            "The word miss is a risk signal only in earnings or estimate-miss context, not in Never miss important updates.",
+            "impactReasonKo and portfolioImplicationKo must explain the investment impact plainly before any generic summary.",
         ],
         "target": {
             "symbol": target.symbol,

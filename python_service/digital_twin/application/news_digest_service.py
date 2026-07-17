@@ -168,6 +168,18 @@ def ai_summary(item: Dict[str, object]) -> Dict[str, object]:
     return summary if isinstance(summary, dict) else {}
 
 
+def ai_text(item: Dict[str, object], key: str, limit: int = 360) -> str:
+    payload = item.get("payload") if isinstance(item.get("payload"), dict) else {}
+    analysis = ai_analysis(item)
+    for source in [analysis, item, payload]:
+        if not isinstance(source, dict):
+            continue
+        text = bounded_text(clean_article_summary_noise(source.get(key)), limit)
+        if text:
+            return text
+    return ""
+
+
 def ai_list(item: Dict[str, object], key: str, limit: int = 4) -> List[str]:
     analysis = ai_analysis(item)
     values = analysis.get(key) if isinstance(analysis, dict) else []
@@ -240,6 +252,70 @@ def ai_reason_line(item: Dict[str, object]) -> str:
     if contrast:
         pieces.append("반전 문맥 " + ", ".join(contrast))
     return bounded_text(" · ".join(pieces), 260)
+
+
+def item_impact_reason(item: Dict[str, object]) -> str:
+    return (
+        ai_text(item, "impactReasonKo", 420)
+        or ai_text(item, "stockImpactReasonKo", 420)
+        or ai_text(item, "rationaleKo", 420)
+    )
+
+
+def item_portfolio_implication(item: Dict[str, object]) -> str:
+    return ai_text(item, "portfolioImplicationKo", 360)
+
+
+def item_action_boundary(item: Dict[str, object]) -> str:
+    return ai_text(item, "actionBoundaryKo", 320)
+
+
+def normalized_impact_kind(item: Dict[str, object]) -> str:
+    analysis = ai_analysis(item)
+    payload = item.get("payload") if isinstance(item.get("payload"), dict) else {}
+    raw = clean_text(
+        (analysis.get("impactPolarity") if isinstance(analysis, dict) else "")
+        or item.get("stockImpactPolarity")
+        or payload.get("stockImpactPolarity")
+        or item.get("polarity")
+    ).lower()
+    label = impact_label(item)
+    if raw in {"risk", "negative"} or label in {"악재", "위험"}:
+        return "risk"
+    if raw in {"support", "positive"} or label in {"호재", "우호"}:
+        return "support"
+    if raw == "mixed" or label == "혼재":
+        return "mixed"
+    return "neutral"
+
+
+def impact_summary_bucket(item: Dict[str, object]) -> str:
+    kind = normalized_impact_kind(item)
+    if kind == "risk":
+        return "단기 경계"
+    if kind == "support":
+        return "우호 재료"
+    if kind == "mixed":
+        return "방향 확인"
+    return "영향 제한"
+
+
+def impact_summary_lines(items: List[Dict[str, object]]) -> List[str]:
+    rows: List[str] = []
+    seen = set()
+    for item in items:
+        symbol = normalized_symbol(item.get("symbol"))
+        name = clean_text(item.get("displayName") or symbol or "종목")
+        label = name + ("(" + symbol + ")" if symbol and symbol != name else "")
+        implication = item_portfolio_implication(item) or item_impact_reason(item) or item_summary(item)
+        line = "• " + label + ": " + impact_summary_bucket(item) + ". " + bounded_text(implication, 220)
+        key = re.sub(r"\s+", "", line).casefold()
+        if line and key not in seen:
+            rows.append(line)
+            seen.add(key)
+        if len(rows) >= 5:
+            break
+    return rows
 
 
 def ai_watch_line(item: Dict[str, object]) -> str:
@@ -553,6 +629,7 @@ class NewsDigestEnqueuer:
         reference = latest_timestamp(items)
         strategy_context = merge_strategy_context({}, account)
         strategy_lines = strategy_message_lines(strategy_context)
+        effect_lines = impact_summary_lines(items)
         symbols = []
         seen_symbol_lines = set()
         for item in items:
@@ -587,16 +664,25 @@ class NewsDigestEnqueuer:
             if facts_line:
                 item_lines.append("• 기사 정보: " + html_text(facts_line))
             summary_line = item_summary(item)
+            impact_reason = item_impact_reason(item)
+            portfolio_implication = item_portfolio_implication(item)
+            action_boundary = item_action_boundary(item)
             reason_line = ai_reason_line(item)
             watch_line = ai_watch_line(item)
             item_lines.extend([
                 "• 판단: 영향 " + html_text(impact_label(item)) + ", 신뢰도 " + html_text(reliability)
                 + (", 관련성 " + html_text(relevance) if relevance else "")
                 + (", 중요도 " + html_text(importance) if importance else ""),
-                "• AI 요약: " + html_text(summary_line),
             ])
-            if reason_line:
-                item_lines.append("• 핵심 근거: " + html_text(reason_line))
+            if impact_reason:
+                item_lines.append("• 영향 해석: " + html_text(impact_reason))
+            if portfolio_implication:
+                item_lines.append("• 보유/관심 영향: " + html_text(portfolio_implication))
+            item_lines.append("• 내용 요약: " + html_text(summary_line))
+            if reason_line and not impact_reason:
+                item_lines.append("• 판단 근거: " + html_text(reason_line))
+            if action_boundary:
+                item_lines.append("• 대응 경계: " + html_text(action_boundary))
             if watch_line:
                 item_lines.append("• 다음 확인: " + html_text(watch_line))
             item_lines.append("• 원문: " + link)
@@ -617,6 +703,9 @@ class NewsDigestEnqueuer:
             "",
             "계정 성향 기준",
             *(html_text(line) for line in strategy_lines),
+            "",
+            "실제 영향 요약",
+            *(html_text(line) for line in effect_lines or ["• 기사별 영향 해석을 확인하세요."]),
             "",
             "먼저 볼 것",
             *(symbols or ["• 대상 종목을 확인하세요."]),

@@ -686,6 +686,14 @@ def is_news_boilerplate_sentence(value: object) -> bool:
         return True
     if "comprehensive 상승-으로-date" in lowered:
         return True
+    if "never miss" in lowered and any(token in lowered for token in ["important update", "portfolio", "cut through noise"]):
+        return True
+    if "make better investment decisions" in lowered:
+        return True
+    if "simply wall st" in lowered and any(token in lowered for token in ["tool", "visual", "portfolio"]):
+        return True
+    if "cut through noise" in lowered and "portfolio" in lowered:
+        return True
     return False
 
 
@@ -1094,6 +1102,16 @@ def article_event_takeaway(target: object, title: object, article_text: object =
         return "전환사채 상환이 " + affected + " 급락 원인으로 지목"
     if re.search(r"needs clarity in BTC pivot message to convince investors", combined, re.IGNORECASE):
         return "비트코인 전략 전환 메시지가 투자자를 설득하기에는 아직 명확하지 않다는 지적"
+    if re.search(r"\bslides?\b.+\bahead of earnings\b", lowered) or re.search(r"\bahead of earnings\b.+\bslides?\b", lowered):
+        return target_name + " 주가가 실적 발표를 앞두고 하락했고 밸류에이션 논쟁이 커진 상황"
+    if re.search(r"\bvaluation debate\b", lowered) and re.search(r"\bslides?\b|\bdown\b|\bdeclines?\b|\bfallen\b", lowered):
+        return target_name + " 주가 하락과 밸류에이션 논쟁이 함께 부각된 상황"
+    if re.search(r"\bfallen far enough\b.+\bbargain\b", lowered) or re.search(r"\bbargain\b.+\bfallen far enough\b", lowered):
+        return target_name + " 주가 하락 이후 저가 매수 논리가 제기된 상황"
+    if re.search(r"\bjoins?\b.+\bnasdaq composite\b", lowered):
+        return target_name + "의 미국 상장 이후 NASDAQ Composite 편입 이슈"
+    if re.search(r"\bcore tech secrets?\b|\btrade secrets?\b", lowered) and re.search(r"\bsteal(?:ing|s)?\b|\baccuses?\b|\bsues?\b", lowered):
+        return target_name + "가 핵심 기술 비밀 탈취 의혹을 제기한 소송·규제 이슈"
     if re.search(r"\bsues?\b|\blawsuit\b|\blitigation\b|\bantitrust\b|\baccuses?\b|\bstealing\b|\btrade secrets?\b", lowered):
         return target_name + " 관련 소송·규제 이슈가 투자심리 부담으로 부각"
     if re.search(r"\bbuyback\b|자사주|dividend|배당", lowered):

@@ -322,6 +322,82 @@ class NewsAnalysisDomainTests(unittest.TestCase):
         self.assertIn("원문 본문 확보", analysis["summary"]["watchPoints"])
         self.assertIn("본문 원문 미수집", " ".join(analysis["reasoningLimitations"]))
 
+    def test_ai_article_analysis_ignores_never_miss_boilerplate_for_listing(self):
+        target = NewsCollectionTarget("000660", "SK하이닉스", "KOSPI", "KRW", "반도체")
+        evidence = ResearchEvidence(
+            "research:000660:news:hynix-listing",
+            "000660",
+            "news",
+            "Yahoo Finance",
+            "SK hynix (KOSE:A000660) Joins The NASDAQ Composite After Its Major US Listing",
+            "SK hynix joins the NASDAQ Composite after its major US listing. Never miss important update on your portfolio and cut through noise.",
+            "https://example.test/hynix-listing",
+            "2026-07-17T07:13:00Z",
+            "context",
+            76,
+            0.58,
+            "2026-07-17T07:13:00Z",
+            raw_payload={
+                "relationScope": "direct",
+                "relevanceScore": 97,
+                "materialityScore": 76,
+                "sourceReliability": 58,
+                "articleReadStatus": "body",
+                "articleFacts": {
+                    "bodyAvailable": True,
+                    "feedSummaryPreview": "Never miss important update on your portfolio and cut through noise.",
+                    "bodyPreview": "SK hynix joins the NASDAQ Composite after its major US listing. Never miss important update on your portfolio and cut through noise.",
+                },
+            },
+        )
+
+        analysis = local_news_ai_analysis(target, evidence).to_dict()
+
+        self.assertNotEqual("risk", analysis["impactPolarity"])
+        self.assertNotIn("miss", analysis["riskSignals"])
+        self.assertIn("NASDAQ Composite 편입", analysis["summary"]["oneLineKo"])
+        self.assertNotIn("Never miss", analysis["summary"]["briefKo"])
+        self.assertIn("당장 방향성 근거보다 이벤트 확인용 정보", analysis["portfolioImplicationKo"])
+
+    def test_ai_article_analysis_explains_coupang_valuation_slide_impact(self):
+        target = NewsCollectionTarget("CPNG", "쿠팡", "NYSE", "USD", "커머스")
+        evidence = ResearchEvidence(
+            "research:CPNG:news:valuation-slide",
+            "CPNG",
+            "news",
+            "Yahoo Finance",
+            "Coupang (CPNG) Slides Ahead Of Earnings As The Valuation Debate Heats Up",
+            "Recent move puts Coupang back in focus. Coupang recently closed trading day down 3.21%, extending month long slide of 7.49% as valuation debate heats up.",
+            "https://example.test/cpng-slide",
+            "2026-07-17T07:12:00Z",
+            "risk",
+            82.2,
+            0.58,
+            "2026-07-17T07:12:00Z",
+            raw_payload={
+                "relationScope": "direct",
+                "eventType": "earnings",
+                "relevanceScore": 97,
+                "materialityScore": 82.2,
+                "sourceReliability": 58,
+                "articleReadStatus": "body",
+                "articleFacts": {
+                    "bodyAvailable": True,
+                    "bodyPreview": "Recent move puts Coupang back in focus. Coupang recently closed trading day down 3.21%, extending month long slide of 7.49% as valuation debate heats up.",
+                },
+            },
+        )
+
+        analysis = local_news_ai_analysis(target, evidence).to_dict()
+
+        self.assertEqual("risk", analysis["impactPolarity"])
+        self.assertIn("slides", analysis["riskSignals"])
+        self.assertIn("valuation debate", analysis["riskSignals"])
+        self.assertIn("주가 하락", analysis["impactReasonKo"])
+        self.assertIn("보유·관심 기준", analysis["portfolioImplicationKo"])
+        self.assertIn("자동 매매 판단이 아니라", analysis["actionBoundaryKo"])
+        self.assertIn("3.21%", analysis["keyNumbers"])
+
     def test_ai_article_analysis_keeps_fallback_summary_when_external_ai_omits_summary(self):
         target = NewsCollectionTarget("AAPL", "Apple", "NASDAQ", "USD", "AI/플랫폼")
         evidence = ResearchEvidence(

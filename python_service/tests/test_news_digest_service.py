@@ -186,6 +186,9 @@ class NewsDigestEnqueuerTests(unittest.TestCase):
             "riskSignals": ["소송", "규제"],
             "supportSignals": [],
             "contrastSignals": ["however"],
+            "impactReasonKo": "소송 이슈가 투자심리 부담으로 작용할 수 있습니다.",
+            "portfolioImplicationKo": "Apple 보유·관심 기준으로는 법적 리스크가 가격 변동성으로 이어지는지 확인해야 합니다.",
+            "actionBoundaryKo": "자동 매매 판단이 아니라 원문과 다음 장 가격 반응 확인 조건입니다.",
         }
         event = DomainEvent(
             name=RESEARCH_EVIDENCE_COLLECTED,
@@ -200,10 +203,64 @@ class NewsDigestEnqueuerTests(unittest.TestCase):
         self.enqueuer(queue).handle(event)
 
         job = queue.jobs[0]
+        self.assertIn("실제 영향 요약", job.text)
+        self.assertIn("Apple(AAPL): 단기 경계", job.text)
         self.assertIn("판단: 영향 악재", job.text)
-        self.assertIn("AI 요약: 애플 관련 법적 이슈", job.text)
-        self.assertIn("핵심 근거: 위험 소송, 규제", job.text)
+        self.assertIn("영향 해석: 소송 이슈가 투자심리 부담", job.text)
+        self.assertIn("보유/관심 영향: Apple 보유·관심 기준", job.text)
+        self.assertIn("내용 요약: 애플 관련 법적 이슈", job.text)
+        self.assertIn("대응 경계: 자동 매매 판단이 아니라", job.text)
+        self.assertNotIn("핵심 근거:", job.text)
         self.assertIn("다음 확인: 원문 본문 확보, 다음 장 가격 반응", job.text)
+
+    def test_news_digest_groups_plain_impact_before_article_details(self):
+        queue = MemoryNotificationQueue()
+        first = self.evidence()
+        first.raw_payload["aiAnalysis"] = {
+            "version": "news-ai-analysis-v1",
+            "impactPolarity": "risk",
+            "impactLabelKo": "악재",
+            "confidence": 0.76,
+            "materialityScore": 86,
+            "summary": {"briefKo": "실적 발표 전 주가 하락과 밸류에이션 논쟁이 핵심입니다.", "watchPoints": ["다음 장 가격 반응"]},
+            "impactReasonKo": "쿠팡에는 실적 발표 전 주가 하락과 밸류에이션 논쟁 부담이 우세합니다.",
+            "portfolioImplicationKo": "쿠팡 보유 기준으로는 추가 하락이나 거래량 확대 여부를 먼저 확인해야 합니다.",
+            "actionBoundaryKo": "자동 매도 판단이 아니라 실적과 거래량 확인 조건입니다.",
+            "riskSignals": ["slides", "valuation debate"],
+        }
+        first.symbol = "CPNG"
+        first.title = "Coupang (CPNG) Slides Ahead Of Earnings As The Valuation Debate Heats Up"
+        first.raw_payload.update({
+            "relevanceScore": 97,
+            "materialityScore": 86,
+            "stockImpactPolarity": "risk",
+            "stockImpactLabel": "악재",
+            "stockImpactScore": 82,
+        })
+        monitor_store = SimpleNamespace(previous={
+            "main": {
+                "positions": {"CPNG": {"symbol": "CPNG", "name": "쿠팡", "market": "NYSE"}},
+                "watchlist": {},
+            }
+        })
+        enqueuer = NewsDigestEnqueuer(
+            account_repository=SimpleNamespace(load=lambda: [self.account()]),
+            monitor_store=monitor_store,
+            queue=queue,
+            settings={},
+        )
+        event = DomainEvent(
+            name=RESEARCH_EVIDENCE_COLLECTED,
+            aggregate_id="news:CPNG",
+            payload={"materialChangedItems": [first.to_dict()]},
+        )
+
+        enqueuer.handle(event)
+
+        job = queue.jobs[0]
+        self.assertLess(job.text.index("실제 영향 요약"), job.text.index("먼저 볼 것"))
+        self.assertIn("쿠팡(CPNG): 단기 경계. 쿠팡 보유 기준", job.text)
+        self.assertIn("영향 해석: 쿠팡에는 실적 발표 전 주가 하락", job.text)
 
     def test_ignores_feed_only_article_by_default(self):
         queue = MemoryNotificationQueue()

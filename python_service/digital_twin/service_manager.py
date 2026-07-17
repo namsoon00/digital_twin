@@ -1,6 +1,7 @@
 import os
 import signal
 import shutil
+import socket
 import subprocess
 import sys
 import time
@@ -126,18 +127,21 @@ def typedb_worker_spec(settings: Dict[str, object]) -> Dict[str, object]:
         "retentionHours": str((settings or {}).get("typedbDataRetentionHours") or "24"),
         "maxSizeMb": str((settings or {}).get("typedbDataMaxSizeMb") or "2048"),
         "autoResetEnabled": str((settings or {}).get("typedbAutoResetEnabled") or "1"),
+        "healthAddress": address,
+        "startupWaitSeconds": str((settings or {}).get("typedbStartupWaitSeconds") or "60"),
         "missingReason": "" if executable else "TypeDB executable was not found. Install TypeDB or set TYPEDB_COMMAND.",
     }
 
 
 def worker_specs() -> Dict[str, Dict[str, object]]:
-    workers = dict(BASE_WORKERS)
     try:
         settings = runtime_settings()
     except Exception:  # noqa: BLE001 - service manager should still manage Python workers.
         settings = {}
+    workers = {}
     if typedb_requested(settings):
         workers["typedb"] = typedb_worker_spec(settings)
+    workers.update(BASE_WORKERS)
     return workers
 
 
@@ -162,12 +166,18 @@ def is_worker_command(command: str, spec: Dict[str, object]) -> bool:
     return str(spec["needle"]) in command
 
 
-def is_running(pid: int, spec: Dict[str, object]) -> bool:
+def pid_exists(pid: int) -> bool:
     if not pid:
         return False
     try:
         os.kill(pid, 0)
     except OSError:
+        return False
+    return True
+
+
+def is_running(pid: int, spec: Dict[str, object]) -> bool:
+    if not pid_exists(pid):
         return False
     if os.name != "nt":
         return is_worker_command(command_for_pid(pid), spec)
@@ -325,6 +335,64 @@ def status_worker(spec: Dict[str, object]) -> int:
     return 0
 
 
+def typedb_host_port(address: object) -> tuple:
+    raw = str(address or "").strip() or "127.0.0.1:1729"
+    raw = raw.split(",", 1)[0].strip()
+    if "://" in raw:
+        raw = raw.split("://", 1)[1]
+    raw = raw.split("/", 1)[0].strip()
+    if raw.startswith("[") and "]" in raw:
+        host = raw[1 : raw.find("]")]
+        port_text = raw[raw.find("]") + 1 :].lstrip(":") or "1729"
+    elif ":" in raw:
+        host, port_text = raw.rsplit(":", 1)
+    else:
+        host, port_text = raw, "1729"
+    try:
+        port = int(float(port_text))
+    except ValueError:
+        port = 1729
+    return (host or "127.0.0.1", port)
+
+
+def tcp_ready(address: object, timeout_seconds: float = 1.0) -> bool:
+    host, port = typedb_host_port(address)
+    sock = None
+    try:
+        sock = socket.create_connection((host, port), timeout=timeout_seconds)
+        return True
+    except OSError:
+        return False
+    finally:
+        try:
+            if sock:
+                sock.close()
+        except OSError:
+            pass
+
+
+def wait_for_typedb_ready(spec: Dict[str, object]) -> bool:
+    wait_seconds = int_value(spec.get("startupWaitSeconds"), 60, 0)
+    address = spec.get("healthAddress") or spec.get("typedbAddress") or "127.0.0.1:1729"
+    if wait_seconds <= 0:
+        return True
+    deadline = time.monotonic() + wait_seconds
+    while time.monotonic() <= deadline:
+        pid = read_pid(spec["pid"])
+        if pid and not pid_exists(pid):
+            append_log(spec["log"], "not-ready process-exited")
+            print(str(spec["label"]) + " did not become ready because the process exited.")
+            return False
+        if tcp_ready(address):
+            append_log(spec["log"], "ready " + str(address))
+            print(str(spec["label"]) + " ready. address=" + str(address))
+            return True
+        time.sleep(0.5)
+    append_log(spec["log"], "not-ready timeout " + str(address))
+    print(str(spec["label"]) + " not ready after " + str(wait_seconds) + "s. address=" + str(address))
+    return False
+
+
 def start_worker(spec: Dict[str, object]) -> int:
     if spec.get("missingReason") or not spec.get("command"):
         print(str(spec["label"]) + " not started. " + str(spec.get("missingReason") or "Command is not configured."))
@@ -334,6 +402,8 @@ def start_worker(spec: Dict[str, object]) -> int:
     existing = read_pid(pid_path)
     if is_running(existing, spec):
         print(str(spec["label"]) + " already running.")
+        if str(spec.get("role") or "") == "typedb" and not wait_for_typedb_ready(spec):
+            return 1
         return status_worker(spec)
     if existing:
         remove_pid(pid_path)
@@ -358,6 +428,8 @@ def start_worker(spec: Dict[str, object]) -> int:
     os.chmod(pid_path, 0o600)
     print(str(spec["label"]) + " started. pid=" + str(process.pid))
     print("Log: " + str(log_path))
+    if str(spec.get("role") or "") == "typedb" and not wait_for_typedb_ready(spec):
+        return 1
     return 0
 
 
@@ -395,7 +467,10 @@ def status() -> int:
 
 def start() -> int:
     for spec in worker_specs().values():
-        start_worker(spec)
+        result = start_worker(spec)
+        if result != 0:
+            print("Service start aborted before dependent workers. failed=" + str(spec.get("label") or "unknown"))
+            return result
     return 0
 
 

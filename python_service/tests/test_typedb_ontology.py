@@ -726,6 +726,7 @@ class TypeDBOntologyRepositoryTests(unittest.TestCase):
             workers = service_manager.worker_specs()
 
         self.assertIn("typedb", workers)
+        self.assertEqual("typedb", next(iter(workers.keys())))
         command = workers["typedb"]["command"]
         self.assertIn("server", command)
         self.assertIn("--server.listen-address", command)
@@ -733,6 +734,46 @@ class TypeDBOntologyRepositoryTests(unittest.TestCase):
         self.assertEqual("typedb", workers["typedb"]["role"])
         self.assertEqual("24", workers["typedb"]["retentionHours"])
         self.assertEqual("2048", workers["typedb"]["maxSizeMb"])
+        self.assertEqual("127.0.0.1:1729", workers["typedb"]["healthAddress"])
+        self.assertEqual("60", workers["typedb"]["startupWaitSeconds"])
+
+    def test_service_manager_waits_for_typedb_tcp_readiness(self):
+        with tempfile.TemporaryDirectory() as temp:
+            spec = {
+                "label": "TypeDB ontology graph store",
+                "role": "typedb",
+                "pid": Path(temp) / "typedb.pid",
+                "log": Path(temp) / "typedb.log",
+                "needle": "typedb_server_bin",
+                "healthAddress": "127.0.0.1:1729",
+                "startupWaitSeconds": "2",
+            }
+            spec["pid"].write_text("123\n", encoding="utf-8")
+            socket_result = SimpleNamespace(close=lambda: None)
+            with patch.object(service_manager, "pid_exists", return_value=True), \
+                    patch.object(service_manager.socket, "create_connection", side_effect=[OSError("not ready"), socket_result]), \
+                    patch.object(service_manager.time, "sleep", return_value=None):
+                self.assertTrue(service_manager.wait_for_typedb_ready(spec))
+
+        self.assertEqual(("127.0.0.1", 1729), service_manager.typedb_host_port("127.0.0.1:1729"))
+        self.assertEqual(("127.0.0.1", 1729), service_manager.typedb_host_port("http://127.0.0.1:1729"))
+
+    def test_service_manager_does_not_start_dependents_when_typedb_is_not_ready(self):
+        calls = []
+        specs = {
+            "typedb": {"label": "TypeDB ontology graph store", "role": "typedb"},
+            "monitor": {"label": "Python realtime monitor"},
+        }
+
+        def fake_start_worker(spec):
+            calls.append(spec["label"])
+            return 1 if spec.get("role") == "typedb" else 0
+
+        with patch.object(service_manager, "worker_specs", return_value=specs), \
+                patch.object(service_manager, "start_worker", side_effect=fake_start_worker):
+            self.assertEqual(1, service_manager.start())
+
+        self.assertEqual(["TypeDB ontology graph store"], calls)
 
     def test_typedb_retention_resets_projection_data_when_size_exceeds_limit(self):
         with tempfile.TemporaryDirectory() as temp:

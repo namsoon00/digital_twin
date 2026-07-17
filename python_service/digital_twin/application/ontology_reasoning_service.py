@@ -128,11 +128,13 @@ class OntologyReasoningRunner:
             clean_event_id = str(event_id or "").strip()
             if not clean_event_id:
                 continue
-            progress[clean_event_id] = [
+            clean_symbols = [
                 str(symbol or "").upper().strip()
                 for symbol in (symbols or [])
                 if str(symbol or "").strip()
             ][:200]
+            if clean_symbols:
+                progress[clean_event_id] = clean_symbols
         return progress
 
     def remaining_event_symbols(self, event: object, progress: Dict[str, List[str]] = None) -> List[str]:
@@ -243,10 +245,13 @@ class OntologyReasoningRunner:
                 completed_event_ids.append(event_id)
                 progress.pop(event_id, None)
                 continue
+            existing_symbols = list(progress.get(event_id, []) or [])
             merged = []
-            for symbol in list(progress.get(event_id, []) or []) + selected_symbols:
+            for symbol in existing_symbols + selected_symbols:
                 if symbol not in merged:
                     merged.append(symbol)
+            if not selected_symbols and not existing_symbols:
+                continue
             if set(all_symbols).issubset(set(merged)):
                 completed_event_ids.append(event_id)
                 progress.pop(event_id, None)

@@ -99,19 +99,6 @@ def age_minutes(value: object, now=None):
     return max(0, int((current.astimezone(timezone.utc) - parsed.astimezone(timezone.utc)).total_seconds() // 60))
 
 
-def first_timestamp_from_rows(rows: object, keys: List[str]) -> str:
-    if not isinstance(rows, list) or not rows:
-        return ""
-    for row in reversed(rows):
-        if not isinstance(row, dict):
-            continue
-        for key in keys:
-            value = row.get(key)
-            if value not in (None, ""):
-                return str(value)
-    return ""
-
-
 def first_news_timestamp(items: object) -> str:
     if not isinstance(items, list):
         return ""

@@ -449,6 +449,41 @@ def disagreement_reason_text(precomputed_action: str, action: str, payload: Dict
             return user_friendly_ai_text(text, 220)
     return "AI가 사전 계산 후보 " + ACTION_LABELS.get(precomputed_action, precomputed_action) + "와 다른 " + ACTION_LABELS.get(action, action) + " 의견을 선택했습니다. 근거와 반대 근거를 함께 재확인하세요."
 
+def normalized_strategy_guide_payload(context: Dict[str, object], payload: Dict[str, object]) -> Dict[str, object]:
+    payload = payload if isinstance(payload, dict) else {}
+    guide = payload.get("strategyGuide") or payload.get("strategy_guide") or {}
+    if not isinstance(guide, dict):
+        return {}
+
+    def text(*keys: str, limit: int = 260) -> str:
+        for key in keys:
+            value = guide.get(key)
+            if value not in (None, ""):
+                return watchlist_friendly_text(context, user_friendly_ai_text(value, limit))
+        return ""
+
+    def rows(*keys: str, limit: int = 5) -> List[str]:
+        for key in keys:
+            value = guide.get(key)
+            if value not in (None, "", []):
+                return watchlist_friendly_rows(context, user_friendly_ai_list(value, limit))
+        return []
+
+    normalized = {
+        "actionMode": text("actionMode", "executionMode", "mode", limit=80),
+        "positionSizing": text("positionSizing", "sizing", "quantityPlan", limit=180),
+        "riskPrice": text("riskPrice", "downsidePrice", "breakdownPrice", limit=80),
+        "recoveryPrice": text("recoveryPrice", "weakenPrice", "invalidationPrice", limit=80),
+        "interpretation": text("interpretation", "aiInterpretation", "summary", limit=320),
+        "executionCriteria": text("executionCriteria", "executionRule", "actionCriteria", limit=360),
+        "confirmationData": rows("confirmationData", "dataToCheck", "checkData", limit=5),
+        "dataLimitations": rows("dataLimitations", "confidenceLimiters", "limitations", limit=5),
+        "aiHypothesis": text("aiHypothesis", "backgroundHypothesis", "hypothesis", limit=360),
+        "hypothesisBoundary": text("hypothesisBoundary", "hypothesisDisclaimer", limit=260),
+        "invalidationCondition": text("invalidationCondition", "weakenCondition", limit=260),
+    }
+    return {key: value for key, value in normalized.items() if value not in ("", [], None)}
+
 def local_validated_ai_response(context: Dict[str, object], source: str = "local") -> NotificationAIValidatedResponse:
     context = dict(context or {})
     message_type = str(context.get("messageType") or context.get("rule") or "").strip()
@@ -468,6 +503,7 @@ def local_validated_ai_response(context: Dict[str, object], source: str = "local
             source_urls=source_urls_from_context(context),
             reference_date=reference_date(context),
             validation_warnings=["graph-backed ontology context missing"],
+            strategy_guide={},
             source=source,
         )
     relation_context = relation_context_value(context)
@@ -548,6 +584,7 @@ def local_validated_ai_response(context: Dict[str, object], source: str = "local
         precomputed_action=precomputed_action_value(context),
         reference_date=reference_date(context),
         validation_warnings=warnings,
+        strategy_guide={},
         source=source,
     ))
 
@@ -667,6 +704,12 @@ def build_notification_ai_gate_prompt(context: Dict[str, object]) -> str:
         "계정의 투자 성향은 " + strategy_label + "이다. " + str(strategy_guidance.get("stance") or "") + " " + str(strategy_guidance.get("response") or ""),
         "투자 성향은 행동의 경계 조건이다. 성향이 공격형이어도 자동 주문 지시처럼 쓰지 말고, 안정형이면 손실 제한·현금 여력·비중 한도를 먼저 확인한다.",
         "반대 근거, 부족 데이터 영향, 무효화 조건, 다음 확인 조건을 반드시 포함한다.",
+        "strategyGuide에는 실제 대응 기준을 구조화한다. actionMode는 즉시 실행/정규장 확인/대기/분할 준비/소액 진입 검토 중 가장 가까운 표현으로 쓴다.",
+        "strategyGuide.positionSizing에는 보유 수량이 있으면 '10주 중 3~5주 축소 검토'처럼 수량 또는 비중 범위를 쓴다. 수량 정보가 없으면 수량 기준을 만들지 말고 '수량 정보 없음'이라고 쓴다.",
+        "strategyGuide.riskPrice와 recoveryPrice에는 제공된 현재가, 5일선, 20일선, 60일선 중 실제 입력값만 사용한다. 가격을 새로 추정하지 않는다.",
+        "strategyGuide.dataLimitations에는 장외, 거래량 부족, 뉴스 원문 없음, 수급 지연, 데이터 신선도 문제처럼 실행 강도를 낮추는 제한을 쓴다.",
+        "strategyGuide.aiHypothesis에는 AI의 일반 배경지식으로 볼 수 있는 참고 가설만 쓴다. 예: ADR은 본주·환율·미국 업종 심리에 같이 흔들릴 수 있음. 이 가설은 매매 근거가 아니라 다음 확인 항목이라고 분리한다.",
+        "strategyGuide.executionCriteria는 현재 조건 → 실행 강도 → 가격 기준 → 수량 기준 → 판단이 약해지는 조건 순서로 쓴다.",
         "응답 JSON이 최종 메시지의 원천이다. 설명 문장 없이 JSON 객체 하나만 출력한다.",
         "스키마:",
         json.dumps({
@@ -679,6 +722,19 @@ def build_notification_ai_gate_prompt(context: Dict[str, object]) -> str:
             "invalidationCondition": "string",
             "nextChecks": ["string"],
             "missingDataImpact": ["string"],
+            "strategyGuide": {
+                "actionMode": "string",
+                "positionSizing": "string",
+                "riskPrice": "string",
+                "recoveryPrice": "string",
+                "interpretation": "string",
+                "executionCriteria": "string",
+                "confirmationData": ["string"],
+                "dataLimitations": ["string"],
+                "aiHypothesis": "string",
+                "hypothesisBoundary": "string",
+                "invalidationCondition": "string"
+            },
             "sourceUrls": ["string"],
             "disagreementReason": "string when AI action differs from precomputed candidate",
             "referenceDate": "string",
@@ -790,6 +846,7 @@ def validated_response_from_payload(
         confidence_cap_reasons=cap_reasons,
         reference_date=response_reference,
         validation_warnings=warnings,
+        strategy_guide=normalized_strategy_guide_payload(context, payload),
         source=source,
         raw_response=raw_response,
     )

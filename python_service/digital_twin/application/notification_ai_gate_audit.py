@@ -8,7 +8,7 @@ from ..domain.notification_ai_gate_contracts import (
     NOTIFICATION_AI_GATE_VERSION,
     NotificationAIValidatedResponse,
 )
-from .notification_ai_gate_message import execution_telegram_message, prepend_execution_start_badge
+from .notification_ai_gate_message import execution_telegram_message, prepend_execution_start_badge, strategy_guide_quality
 from ..domain.notification_ai_gate_sources import source_labels_from_context
 from ..domain.notification_ai_gate_text import _number, _text, reference_date
 from ..domain.notification_ai_gate_validation import ai_decision_input_packet, delivery_profile_from_context
@@ -138,6 +138,7 @@ def notification_ai_decision_audit(
     decision_input = ai_decision_input_packet(context or {}, prompt_context, delivery_profile)
     source_urls = list(response.source_urls or [])
     source_labels = source_labels_from_context(context or {}, payload)
+    guide_quality = strategy_guide_quality(context or {}, response)
     return {
         "engineVersion": NOTIFICATION_AI_GATE_VERSION,
         "decisionMode": AI_DECISION_MODE,
@@ -155,6 +156,7 @@ def notification_ai_decision_audit(
         "validationWarnings": list(response.validation_warnings or []),
         "sourceUrls": source_urls,
         "sourceLabels": source_labels,
+        "strategyGuideQuality": guide_quality,
         "inputSummary": {
             "rawLineCount": len(decision_input.get("rawAlert", {}).get("rawLines") or []),
             "activeRuleCount": len(decision_input.get("relationshipDatabaseInference", {}).get("activeRules") or []),
@@ -174,6 +176,8 @@ def context_with_validated_ai_response(
 ) -> Dict[str, object]:
     enriched = dict(context or {})
     payload = response.to_dict()
+    guide_quality = strategy_guide_quality(enriched, response)
+    payload["strategyGuideQuality"] = guide_quality
     audit = notification_ai_decision_audit(enriched, response, payload)
     assertions = notification_ai_validation_assertions(enriched, response, payload)
     audit_entity_ids = [
@@ -191,6 +195,7 @@ def context_with_validated_ai_response(
         "validationWarnings": list(response.validation_warnings or []),
         "messageDeliveryProfile": delivery_profile_from_context(enriched),
         "auditIds": audit_entity_ids,
+        "strategyGuideQuality": guide_quality,
     }
     enriched["ontologyAiValidation"] = {
         "ontologyBox": "ABox",
@@ -207,6 +212,7 @@ def context_with_validated_ai_response(
             "confidenceCap": round(_number(response.confidence_cap), 1),
         },
         "validationWarnings": list(response.validation_warnings or []),
+        "strategyGuideQuality": guide_quality,
         "producesValidatedMessage": True,
         "assertionIds": [item.get("id") for item in assertions.get("entities", [])],
     }

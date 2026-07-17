@@ -9940,6 +9940,60 @@ class PythonServiceTests(unittest.TestCase):
         self.assertNotIn("<b>왜 온 알림</b>", message)
         self.assertNotIn("<b>핵심 근거</b>", message)
 
+    def test_strategy_guide_turns_after_hours_low_volume_sell_into_actionable_plan(self):
+        context = {
+            "messageType": "investmentInsight",
+            "messageDeliveryLevel": "absoluteBeginner",
+            "investmentStrategyProfileLabel": "공격형",
+            "headline": "[관찰] 🛡️ SK하이닉스(ADR): 매도 우선 점검",
+            "displayTarget": "SK하이닉스(ADR) / SKHY",
+            "rawLines": "\n".join([
+                "현재가: $150.81",
+                "평균매입가: $165.02",
+                "수익률: -8.6%",
+                "보유 수량: 10주",
+                "종목 평가금액: $1,508 (약 223만 원)",
+                "계좌 평가금액: 4,801만 원",
+                "추세: 5일선 $165.21보다 8.7% 낮음, 20일선 $165.67보다 9% 낮음, 60일선 $165.67보다 9% 낮음",
+                "수급: 거래량 1,442,110(평균 대비 원본 0.02x · 미장 장외), 거래액 $183,039,199",
+            ]),
+            "ontologyRelationContext": {
+                "graphStoreUsed": True,
+                "inferenceBoxUsed": True,
+                "source": "typedbInferenceBox",
+                "decision": {"basis": "typedbInferenceBox", "actionGroup": "lossRisk", "score": 83.9},
+                "facts": {
+                    "instrumentProfiles": ["SemiconductorHBM", "CyclicalGrowth", "CrossListedSecurity"],
+                    "currency": "USD",
+                    "market": "US",
+                },
+            },
+        }
+        response = validated_response_from_payload(context, {
+            "action": "SELL",
+            "confidence": 94,
+            "summary": "손실 관리 기준을 확인해야 합니다.",
+            "opinion": "추가매수는 보류하고 분할축소 기준을 봅니다.",
+            "evidence": ["수익률 -8.6%", "현재가가 5일·20일·60일 평균보다 낮습니다."],
+            "counterEvidence": ["장외 거래이고 거래량이 평균 대비 0.02배라 투매 확정은 아닙니다."],
+            "invalidationCondition": "20일 평균 $165.67 위로 회복하면 매도 강도를 낮춥니다.",
+            "nextChecks": ["정규장 거래량", "본주와 ADR 가격 차이", "USD/KRW 변화"],
+        }, source="test AI")
+
+        enriched = context_with_validated_ai_response(context, response)
+        message = enriched["telegramMessage"]
+
+        self.assertIn("정규장 확인", message)
+        self.assertIn("10주 중 3~5주", message)
+        self.assertIn("$150.81", message)
+        self.assertIn("$165.67", message)
+        self.assertIn("장외", message)
+        self.assertIn("0.02배", message)
+        self.assertIn("AI 설명", message)
+        self.assertIn("매매 근거가 아니라", message)
+        self.assertGreaterEqual(enriched["notificationAiGate"]["strategyGuideQuality"]["score"], 80)
+        self.assertEqual(enriched["notificationAiValidatedResponse"]["strategyGuideQuality"], enriched["notificationAiGate"]["strategyGuideQuality"])
+
     def test_watchlist_ai_response_uses_entry_language_not_holding_language(self):
         context = {
             "messageType": "investmentInsight",

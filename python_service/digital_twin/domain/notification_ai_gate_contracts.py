@@ -80,6 +80,7 @@ class NotificationAIValidatedResponse:
     confidence_cap_reasons: List[str] = field(default_factory=list)
     reference_date: str = ""
     validation_warnings: List[str] = field(default_factory=list)
+    strategy_guide: Dict[str, object] = field(default_factory=dict)
     source: str = "local"
     raw_response: str = ""
 
@@ -99,6 +100,7 @@ class NotificationAIValidatedResponse:
         payload["confidenceCapReasons"] = payload.pop("confidence_cap_reasons")
         payload["referenceDate"] = payload.pop("reference_date")
         payload["validationWarnings"] = payload.pop("validation_warnings")
+        payload["strategyGuide"] = payload.pop("strategy_guide")
         payload["rawResponse"] = payload.pop("raw_response")
         return payload
 

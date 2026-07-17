@@ -1397,6 +1397,245 @@ def _full_ai_opinion_rows(context: Dict[str, object], response: NotificationAIVa
         append_unique_text(rows, "검증 결과 " + str(index) + ": " + _text(item, 260), 300)
     return [_html_bullet(_ai_marked_value(row), level) for row in rows if row]
 
+def _strategy_guide_value(response: NotificationAIValidatedResponse, key: str) -> str:
+    guide = response.strategy_guide if isinstance(response.strategy_guide, dict) else {}
+    value = guide.get(key)
+    if isinstance(value, list):
+        return " / ".join(str(item).strip() for item in value if str(item or "").strip())
+    return str(value or "").strip()
+
+def _strategy_guide_list(response: NotificationAIValidatedResponse, key: str) -> List[str]:
+    guide = response.strategy_guide if isinstance(response.strategy_guide, dict) else {}
+    value = guide.get(key)
+    if isinstance(value, list):
+        return [str(item).strip() for item in value if str(item or "").strip()]
+    if str(value or "").strip():
+        return [str(value).strip()]
+    return []
+
+def _context_blob(context: Dict[str, object]) -> str:
+    values = [
+        str(context.get("displayTarget") or context.get("target") or context.get("title") or ""),
+        "\n".join(_raw_lines(context)),
+        str(relation_facts(context or {})),
+    ]
+    return "\n".join(values)
+
+def _is_outside_regular_session(context: Dict[str, object]) -> bool:
+    blob = _context_blob(context).lower()
+    return any(term in blob for term in ["장외", "프리장", "프리마켓", "애프터", "after-hours", "premarket", "pre-market", "정규 거래시간 밖"])
+
+def _volume_ratio_from_context(context: Dict[str, object]) -> float:
+    candidates = []
+    for match in re.finditer(r"(\d+(?:\.\d+)?)\s*x", _context_blob(context), flags=re.IGNORECASE):
+        candidates.append(_number(match.group(1)))
+    return min(candidates) if candidates else 0.0
+
+def _has_low_volume_context(context: Dict[str, object]) -> bool:
+    ratio = _volume_ratio_from_context(context)
+    if ratio and ratio < 0.3:
+        return True
+    return bool(re.search(r"\b0x\b|0\.0+\s*x", _context_blob(context), flags=re.IGNORECASE))
+
+def _quantity_number(text: object) -> float:
+    cleaned = str(text or "").replace(",", "")
+    match = re.search(r"(\d+(?:\.\d+)?)", cleaned)
+    return _number(match.group(1)) if match else 0.0
+
+def _quantity_display(value: float) -> str:
+    if not value:
+        return ""
+    if float(value).is_integer():
+        return str(int(value))
+    return ("%.2f" % value).rstrip("0").rstrip(".")
+
+def _quantity_range_text(quantity: float, low_ratio: float, high_ratio: float) -> str:
+    if quantity <= 0:
+        return ""
+    if quantity <= 1:
+        return _quantity_display(quantity) + "주라 분할 여지가 작아 정규장 확인 후 보유 또는 정리 중 하나를 다시 판단"
+    low = max(1, int(round(quantity * low_ratio)))
+    high = max(low, int(round(quantity * high_ratio)))
+    high = min(int(round(quantity)), high)
+    return _quantity_display(quantity) + "주 중 " + str(low) + "~" + str(high) + "주"
+
+def _price_text_from_current(value: object) -> str:
+    text = str(value or "").strip()
+    if not text:
+        return ""
+    match = re.search(r"([$₩]?\s*\d[\d,]*(?:\.\d+)?)", text)
+    return re.sub(r"\s+", "", match.group(1)) if match else text
+
+def _moving_average_price(context: Dict[str, object], days: int) -> str:
+    blob = _plain_value(context, "추세") or _context_blob(context)
+    patterns = [
+        r"" + str(days) + r"일선\s*([$₩]?\s*\d[\d,]*(?:\.\d+)?)",
+        r"" + str(days) + r"일\s*평균(?:\s*가격|가)?\s*([$₩]?\s*\d[\d,]*(?:\.\d+)?)",
+    ]
+    for pattern in patterns:
+        match = re.search(pattern, blob)
+        if match:
+            return re.sub(r"\s+", "", match.group(1))
+    return ""
+
+def _strategy_price_levels(context: Dict[str, object], response: NotificationAIValidatedResponse) -> Dict[str, str]:
+    current = _price_text_from_current(_plain_value(context, "현재가"))
+    ma5 = _moving_average_price(context, 5)
+    ma20 = _moving_average_price(context, 20)
+    ma60 = _moving_average_price(context, 60)
+    risk = _strategy_guide_value(response, "riskPrice") or current
+    recovery = _strategy_guide_value(response, "recoveryPrice") or ma20 or ma5 or ma60
+    return {"current": current, "ma5": ma5, "ma20": ma20, "ma60": ma60, "risk": risk, "recovery": recovery}
+
+def _derived_action_mode(context: Dict[str, object], response: NotificationAIValidatedResponse) -> str:
+    explicit = _strategy_guide_value(response, "actionMode")
+    if explicit:
+        return explicit
+    if is_watchlist_context(context):
+        if response.action in {"BUY", "ADD"}:
+            return "소액 진입 검토"
+        if response.action == "AVOID":
+            return "신규 진입 회피"
+        return "대기"
+    if _is_outside_regular_session(context):
+        return "정규장 확인"
+    if response.action in {"SELL", "TRIM"}:
+        return "분할 준비"
+    if response.action in {"BUY", "ADD"}:
+        return "소액 진입 검토"
+    return "대기"
+
+def _derived_position_sizing(context: Dict[str, object], response: NotificationAIValidatedResponse) -> str:
+    explicit = _strategy_guide_value(response, "positionSizing")
+    if explicit:
+        return explicit
+    if is_watchlist_context(context):
+        if response.action in {"BUY", "ADD"}:
+            return "처음 진입이면 계획 금액의 일부만 사용하고, 다음 조회에서도 조건이 유지될 때 나머지를 검토"
+        return "보유 수량이 없으므로 수량 변경이 아니라 신규 진입 여부만 판단"
+    quantity = _quantity_number(_plain_value(context, "매도가능 수량") or _plain_value(context, "보유 수량"))
+    if response.action == "SELL":
+        sized = _quantity_range_text(quantity, 0.30, 0.50)
+        return (sized + " 축소 검토") if sized else "전량 판단보다 일부 축소 기준부터 확인"
+    if response.action == "TRIM":
+        sized = _quantity_range_text(quantity, 0.20, 0.30)
+        return (sized + " 축소 검토") if sized else "줄일 수량 정보가 없어 비중 기준부터 확인"
+    if response.action in {"BUY", "ADD"}:
+        return "추가 진입은 한 번에 늘리기보다 계획 수량의 일부만 검토"
+    return "수량 변경보다 보유 이유와 회복 조건 확인"
+
+def _derived_interpretation(context: Dict[str, object], response: NotificationAIValidatedResponse) -> str:
+    explicit = _strategy_guide_value(response, "interpretation")
+    if explicit:
+        return explicit
+    opinion = str(response.opinion or "").strip()
+    action_label = action_label_for_action(response.action, context) or response.action_label or response.action
+    if _is_outside_regular_session(context) and response.action in {"SELL", "TRIM"}:
+        return "지금은 바로 전량 " + action_label + "보다 정규장 확인 후 분할 대응을 준비하는 쪽이 맞습니다. " + " ".join(part for part in [response.summary, opinion] if part)
+    if response.action in {"SELL", "TRIM"}:
+        return "바로 결론을 고정하기보다 손실 관리 기준과 줄일 수량을 같이 확인하는 " + action_label + " 검토 단계입니다. " + " ".join(part for part in [response.summary, opinion] if part)
+    if is_watchlist_context(context):
+        return "보유 종목 판단이 아니라 새로 들어갈 조건을 확인하는 단계입니다. " + " ".join(part for part in [response.summary, opinion] if part)
+    return " ".join(part for part in [response.summary, opinion] if part) or "현재 조건을 다음 조회에서도 확인하는 단계입니다."
+
+def _derived_execution_criteria(context: Dict[str, object], response: NotificationAIValidatedResponse) -> str:
+    explicit = _strategy_guide_value(response, "executionCriteria")
+    if explicit:
+        return explicit
+    prices = _strategy_price_levels(context, response)
+    sizing = _derived_position_sizing(context, response)
+    action_label = action_label_for_action(response.action, context) or response.action_label or response.action
+    if _is_outside_regular_session(context) and response.action in {"SELL", "TRIM"}:
+        first = "정규장 시작 후에도 " + (prices["risk"] + " 아래이고 " if prices["risk"] else "") + "거래량이 붙으면 " + sizing + "합니다"
+    elif response.action in {"SELL", "TRIM"}:
+        first = "다음 조회에서도 약한 조건이 유지되면 " + sizing + "합니다"
+    elif response.action in {"BUY", "ADD"}:
+        first = "다음 조회에서도 가격과 거래가 같이 버티면 " + sizing + "합니다"
+    elif response.action == "AVOID":
+        first = "위험 조건이 해소되기 전까지 신규 진입을 피합니다"
+    else:
+        first = "지금은 수량을 바꾸기보다 확인 조건을 기다립니다"
+    if prices["recovery"] and response.action in {"SELL", "TRIM", "AVOID"}:
+        first += ". " + prices["recovery"] + " 위로 회복하면 " + action_label + " 강도를 낮춥니다"
+    elif response.invalidation_condition:
+        first += ". " + response.invalidation_condition
+    return first
+
+def _strategy_confidence_limiters(context: Dict[str, object], response: NotificationAIValidatedResponse) -> List[str]:
+    rows = list(_strategy_guide_list(response, "dataLimitations"))
+    if _is_outside_regular_session(context):
+        append_unique_text(rows, "정규 거래시간 밖이라 거래가 적고 현재가 신뢰도가 낮을 수 있습니다.", 0)
+    if _has_low_volume_context(context):
+        append_unique_text(rows, "거래량이 평균보다 크게 낮아 강한 매수세나 투매로 단정하지 않습니다.", 0)
+    for item in customer_data_note_rows(list(response.missing_data_impact)):
+        append_unique_text(rows, item, 0)
+    return rows
+
+def _derived_ai_hypothesis(context: Dict[str, object], response: NotificationAIValidatedResponse) -> str:
+    explicit = _strategy_guide_value(response, "aiHypothesis")
+    if explicit:
+        return explicit
+    blob = _context_blob(context).lower()
+    target = str(context.get("displayTarget") or context.get("target") or context.get("title") or "")
+    if "adr" in blob or "crosslisted" in blob or "skhy" in blob:
+        return target_name_for_headline(target) + " 같은 ADR은 한국 본주, 환율, 미국 반도체 투자심리에 같이 흔들릴 수 있습니다."
+    if "mstr" in blob or "strc" in blob or "bitcoin" in blob or "비트코인" in blob:
+        return target_name_for_headline(target) + "은 비트코인 가격과 시장 심리에 민감하게 반응할 수 있습니다."
+    if "semiconductor" in blob or "반도체" in blob or "hynix" in blob or "하이닉스" in blob or "삼성전자" in blob:
+        return "반도체 종목은 AI 수요, 메모리 가격, 미국 반도체 업종 심리에 같이 영향을 받을 수 있습니다."
+    if "금리" in blob or "10년" in blob or "growth" in blob or "성장" in blob:
+        return "성장주는 금리가 높을수록 미래 이익의 현재 가치가 낮게 평가될 수 있어 금리 변화에 민감할 수 있습니다."
+    return ""
+
+def _ai_hypothesis_boundary(response: NotificationAIValidatedResponse) -> str:
+    return _strategy_guide_value(response, "hypothesisBoundary") or "이 내용은 수집 데이터 밖의 일반 배경지식이므로 매매 근거가 아니라 다음에 확인할 가설입니다."
+
+def strategy_guide_quality(context: Dict[str, object], response: NotificationAIValidatedResponse) -> Dict[str, object]:
+    prices = _strategy_price_levels(context, response)
+    checks = [
+        ("actionMode", bool(_derived_action_mode(context, response))),
+        ("positionSizing", bool(_derived_position_sizing(context, response))),
+        ("priceCriteria", bool(prices.get("risk") or prices.get("recovery"))),
+        ("dataLimitations", bool(_strategy_confidence_limiters(context, response))),
+        ("aiHypothesisSeparated", bool(_derived_ai_hypothesis(context, response))),
+        ("invalidationCondition", bool(_strategy_guide_value(response, "invalidationCondition") or response.invalidation_condition)),
+    ]
+    passed = [key for key, ok in checks if ok]
+    missing = [key for key, ok in checks if not ok]
+    score = round(100 * len(passed) / max(1, len(checks)), 1)
+    return {"score": score, "passed": passed, "missing": missing}
+
+def strategy_guide_rows(context: Dict[str, object], response: NotificationAIValidatedResponse, level: str) -> List[str]:
+    rows: List[str] = []
+    action_label = action_label_for_action(response.action, context) or response.action_label or response.action
+    interpretation = _derived_interpretation(context, response)
+    if interpretation:
+        append_unique_text(rows, "결론: " + action_label + ". AI 해석: " + interpretation, 0)
+    execution = _derived_execution_criteria(context, response)
+    if execution:
+        append_unique_text(rows, "실행 기준: " + execution, 0)
+    evidence_summary = _compact_text_segments(response.evidence or context_specific_insight_rows(context, response, MESSAGE_CONTEXT_ROW_LIMIT), 0, 0)
+    if evidence_summary:
+        append_unique_text(rows, "핵심 근거: " + evidence_summary, 0)
+    counter_summary = _compact_text_segments(response.counter_evidence, 0, 0)
+    if counter_summary:
+        append_unique_text(rows, "반대 신호: " + counter_summary, 0)
+    check_items = list(_strategy_guide_list(response, "confirmationData"))
+    check_items.extend(response.next_checks or [])
+    check_summary = _compact_text_segments(check_items, 0, 0)
+    if check_summary:
+        append_unique_text(rows, "확인할 데이터/다음 확인: " + check_summary, 0)
+    limiters = _strategy_confidence_limiters(context, response)
+    if limiters:
+        append_unique_text(rows, "추가 확인 데이터: " + _compact_text_segments(limiters, 0, 0), 0)
+    hypothesis = _derived_ai_hypothesis(context, response)
+    if hypothesis:
+        append_unique_text(rows, "AI 가설: " + hypothesis + " " + _ai_hypothesis_boundary(response), 0)
+    invalidation = _strategy_guide_value(response, "invalidationCondition") or response.invalidation_condition
+    if invalidation:
+        append_unique_text(rows, "의견이 약해지는 조건: " + invalidation, 0)
+    return [_html_bullet(_ai_marked_value(row), level) for row in rows if row]
+
 def compact_ai_opinion_rows(context: Dict[str, object], response: NotificationAIValidatedResponse, level: str) -> List[str]:
     action_label = action_label_for_action(response.action, context) or response.action_label or response.action
     rows: List[str] = []
@@ -1474,6 +1713,26 @@ def valuation_detail_rows(context: Dict[str, object], level: str) -> List[str]:
     formula = str(facts.get("valuationFormula") or "").strip() or "적정가 공식 미설정"
     substitution = str(facts.get("valuationSubstitution") or "").strip()
     missing_inputs = facts.get("valuationMissingInputs") if isinstance(facts.get("valuationMissingInputs"), list) else []
+    has_valuation_fact = any(
+        key in facts and facts.get(key) not in (None, "", [])
+        for key in [
+            "valuationFormula",
+            "valuationSubstitution",
+            "valuationCurrentPrice",
+            "valuationFairValue",
+            "valuationFairValuePrice",
+            "valuationMarginOfSafetyPct",
+            "valuationMinimumMarginOfSafetyPct",
+            "valuationSourceLabel",
+            "valuationSourceReason",
+            "valuationReliabilityLabel",
+            "valuationReliabilityScore",
+            "valuationExplanation",
+            "valuationDataStatus",
+        ]
+    )
+    if not rows_data and not missing_inputs and not has_valuation_fact:
+        return []
     if not rows_data and not missing_inputs and not facts.get("valuationFormula"):
         missing_inputs = ["적정가", "예상 EPS", "목표 PER"]
     if not substitution and missing_inputs:
@@ -1492,8 +1751,18 @@ def valuation_detail_rows(context: Dict[str, object], level: str) -> List[str]:
         source = "사용자 입력 없음 · 외부 밸류에이션 데이터 없음"
     approval = ""
     if facts.get("valuationRequiresUserApproval") or facts.get("valuationIsAiGenerated"):
-        status = str(facts.get("valuationApprovalStatus") or "suggested").strip()
-        status_label = "AI 제안 · 사용자 승인 전" if status == "suggested" else status
+        status = str(facts.get("valuationReviewStatus") or facts.get("valuationApprovalStatus") or "ai_applied_pending_review").strip()
+        status_labels = {
+            "suggested": "AI 제안 · 사용자 검토 전",
+            "ai_applied_pending_review": "AI 제안 자동 적용 · 사용자 검토 전",
+            "user_approved": "사용자 승인",
+            "user_modified": "사용자 수정 승인",
+            "user_rejected": "사용자 거절",
+            "approved": "사용자 승인",
+            "modified": "사용자 수정 승인",
+            "rejected": "사용자 거절",
+        }
+        status_label = status_labels.get(status, status)
         approval = status_label
     reliability = str(facts.get("valuationReliabilityLabel") or "").strip()
     reliability_score = facts.get("valuationReliabilityScore")
@@ -1514,7 +1783,18 @@ def valuation_detail_rows(context: Dict[str, object], level: str) -> List[str]:
         "partial": "일부 부족",
         "missing": "부족",
     }
+    method = str(facts.get("valuationMethod") or "").strip()
+    if facts.get("valuationIsAiGenerated"):
+        if str(method).casefold() == "ai-current-price-anchor":
+            status_text = "입력 부족 · 임시 기준"
+        elif missing_inputs:
+            status_text = "AI 초안 자동 적용 · 검토 필요"
+        else:
+            status_text = "AI 초안 자동 적용"
+    else:
+        status_text = status_labels.get(data_status, data_status)
     rows = [
+        _html_row("사용 모델", method, level=level, max_len=260),
         _html_row("공식", formula, level=level, max_len=260),
         _html_row("대입값", substitution, level=level, max_len=260),
         _html_row("승인 상태", approval, level=level, max_len=180),
@@ -1524,7 +1804,7 @@ def valuation_detail_rows(context: Dict[str, object], level: str) -> List[str]:
         _html_row("데이터 출처", source, level=level),
         _html_row("계산 근거", str(facts.get("valuationSourceReason") or "").strip(), level=level, max_len=260),
         _html_row("근거 신뢰도", reliability, level=level, max_len=260),
-        _html_row("계산 상태", status_labels.get(data_status, data_status), level=level),
+        _html_row("계산 상태", status_text, level=level),
         _html_row("계산 뜻", explanation, level=level, max_len=700),
         _html_row("부족 데이터", ", ".join(str(item) for item in missing_inputs[:5]), level=level, max_len=260),
     ]
@@ -1579,7 +1859,7 @@ def execution_telegram_message(context: Dict[str, object], response: Notificatio
     axis_rows = relation_axis_summary_rows(context, level)
     if axis_rows:
         parts.extend(["", "<b>투자 판단 근거</b>", *axis_rows])
-    opinion_rows = compact_ai_opinion_rows(context, response, level)
+    opinion_rows = strategy_guide_rows(context, response, level)
     if opinion_rows:
         parts.extend(["", "<b>전략 가이드</b>", *opinion_rows])
     if response.source_urls:
@@ -1610,7 +1890,7 @@ def execution_telegram_message_absolute_beginner(context: Dict[str, object], res
     axis_rows = relation_axis_summary_rows(context, "absoluteBeginner")
     if axis_rows:
         parts.extend(["", "<b>투자 판단 근거</b>", *axis_rows])
-    opinion_rows = compact_ai_opinion_rows(context, response, "absoluteBeginner")
+    opinion_rows = strategy_guide_rows(context, response, "absoluteBeginner")
     if opinion_rows:
         parts.extend(["", "<b>전략 가이드</b>", *opinion_rows])
     if response.source_urls:

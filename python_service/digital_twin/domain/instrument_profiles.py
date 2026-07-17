@@ -19,6 +19,7 @@ SKDD|SK하이닉스 -2x 숏 ETF|InverseProduct,DailyLeveragedProduct,SingleStock
 AAPL|대형 플랫폼 우량 성장주|MegaCapQuality,PlatformGrowth|core|rate:medium,fx:high|allowAddOnStrength=1,trimOnTrendBreak=1,avoidAveragingDown=1
 NVDA|AI 인프라 성장주|AIGrowth,SemiconductorHBM|growth|ai:high,rate:medium,fx:high|allowAddOnStrength=1,trimOnTrendBreak=1,avoidAveragingDown=1
 TSLA|고변동 성장주|HighVolatilityGrowth,CyclicalGrowth|trading|rate:high,cycle:high,fx:high|allowAddOnStrength=0,trimOnTrendBreak=1,avoidAveragingDown=1
+CPNG|이커머스 플랫폼 성장주|PlatformGrowth,HighVolatilityGrowth|growth|rate:medium,fx:high,consumer:medium|allowAddOnStrength=1,trimOnTrendBreak=1,avoidAveragingDown=1
 SPY|S&P 500 시장 프록시|MarketProxyInstrument,BroadMarketProxy,RiskAppetiteProxy|market-signal|broadMarket:high,risk:high,usd:medium|allowAddOnStrength=0,trimOnTrendBreak=0,avoidAveragingDown=1
 QQQ|나스닥 100 성장 프록시|MarketProxyInstrument,GrowthMarketProxy,RiskAppetiteProxy|market-signal|growth:high,rate:high,usd:medium|allowAddOnStrength=0,trimOnTrendBreak=0,avoidAveragingDown=1
 IWM|러셀 2000 소형주 프록시|MarketProxyInstrument,SmallCapRiskProxy,RiskAppetiteProxy|market-signal|smallCap:high,risk:high,credit:medium|allowAddOnStrength=0,trimOnTrendBreak=0,avoidAveragingDown=1

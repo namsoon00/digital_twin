@@ -290,7 +290,7 @@ def _valuation_source_metadata(row: Dict[str, object]) -> Dict[str, object]:
             "sourceType": "ai",
             "sourceLabel": "AI 제안",
             "provider": provider or "Orbit Alpha AI",
-            "reliabilityLabel": "AI 초안(사용자 승인 전)",
+            "reliabilityLabel": "AI 초안(사용자 검토 전)",
             "reliabilityScore": number(row.get("reliabilityScore")) or 45.0,
         }
     if source_lower == "runtime-settings" or provider_lower == "runtimesettings":
@@ -409,13 +409,13 @@ def _valuation_explanation(values: Dict[str, object], row: Dict[str, object], cu
             + "로 계산했습니다."
         )
         if str(row.get("source") or "").casefold() == "ai-valuation-proposal":
-            base += " 이 값은 AI 제안값이라 사용자 승인 전 초안입니다."
+            base += " 이 값은 AI 제안값이라 사용자 검토 전 초안입니다."
     elif fair_value:
         source_name = str(row.get("source") or "").casefold()
         source = "사용자가 입력한" if source_name == "runtime-settings" else "AI가 임시로 제안한" if source_name == "ai-valuation-proposal" else "외부 데이터가 제공한"
         base = source + " 적정가 " + _valuation_price_text(fair_value, currency) + "를 현재가와 비교했습니다."
         if source_name == "ai-valuation-proposal":
-            base += " 이 값은 사용자 승인 전 초안입니다."
+            base += " 이 값은 사용자 검토 전 초안입니다."
     else:
         return "적정가 계산에 필요한 입력값이 부족해 현재가가 싼지 비싼지 단정하지 않습니다."
     if current_price and fair_value:
@@ -456,6 +456,9 @@ def _valuation_row_payload(position: Position, row: Dict[str, object]) -> Dict[s
         "hasExternalInput": source.get("sourceType") == "external",
         "hasAiProposal": source.get("sourceType") == "ai",
         "approvalStatus": str(row.get("approvalStatus") or "").strip(),
+        "activeStatus": str(row.get("activeStatus") or "").strip(),
+        "reviewStatus": str(row.get("reviewStatus") or row.get("approvalStatus") or "").strip(),
+        "autoApplied": bool(row.get("autoApplied")),
         "requiresUserApproval": bool(row.get("requiresUserApproval")),
         "aiGenerated": bool(row.get("aiGenerated")),
         "sourceReason": str(row.get("sourceReason") or "").strip(),
@@ -510,6 +513,10 @@ def _valuation_facts(position: Position, external_signals: Dict[str, object], se
             "valuationRequiredYieldPct": 0.0,
             "valuationCouponPct": 0.0,
             "valuationParValue": 0.0,
+            "valuationMethod": "",
+            "valuationActiveStatus": "",
+            "valuationReviewStatus": "",
+            "valuationAutoApplied": False,
         }
     primary = _primary_valuation_row(rows)
     missing_inputs = list(primary.get("missingInputs") or [])
@@ -540,6 +547,9 @@ def _valuation_facts(position: Position, external_signals: Dict[str, object], se
         "valuationExpensivePremiumPct": number(primary.get("expensivePremiumPct")),
         "valuationMinimumMarginOfSafetyPct": number(primary.get("minimumMarginOfSafetyPct")),
         "valuationMethod": primary.get("valuationMethod"),
+        "valuationActiveStatus": primary.get("activeStatus"),
+        "valuationReviewStatus": primary.get("reviewStatus") or primary.get("approvalStatus"),
+        "valuationAutoApplied": bool(primary.get("autoApplied")),
         "valuationMissingInputs": missing_inputs,
         "valuationHasUserInput": any(bool(item.get("hasUserInput")) for item in rows),
         "valuationHasExternalInput": any(bool(item.get("hasExternalInput")) for item in rows),

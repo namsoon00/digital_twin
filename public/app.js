@@ -18099,7 +18099,8 @@
         renderSettingField("aiValuationPreferredRiskSpreadPct", "우선주 위험 가산율(%)", "number", "비우면 자동"),
         renderSettingField("aiValuationPreferredRequiredYieldPct", "우선주 요구수익률(%)", "number", "비우면 금리+위험"),
         renderSettingField("aiValuationPreferredMinimumMarginPct", "우선주 요구 안전마진(%)", "number", "8"),
-        renderSettingField("aiValuationBaselineMinimumMarginPct", "일반주식 요구 안전마진(%)", "number", "15")
+        renderSettingField("aiValuationBaselineMinimumMarginPct", "일반주식 요구 안전마진(%)", "number", "15"),
+        renderSettingField("valuationReviewOverrides", "사용자 검토 상태", "text", "예: MSTR,user_approved,BTC NAV 초안 승인")
       ].join(""), "valuation"),
       renderSettingsGroup("뉴스·공시 수집", "뉴스, OpenDART, SEC 원천과 리서치 근거 저장량을 조정합니다.", [
         renderSettingSelect("externalDartEnabled", "OpenDART 수집", [

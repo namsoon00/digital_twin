@@ -40,10 +40,166 @@ def _base_row(position: Position, method: str, formula: str, reliability: float)
         "valuationMethod": method,
         "formula": formula,
         "reliabilityScore": reliability,
-        "approvalStatus": "suggested",
+        "approvalStatus": "ai_applied_pending_review",
+        "activeStatus": "active",
         "requiresUserApproval": True,
+        "autoApplied": True,
         "aiGenerated": True,
     }
+
+
+def pct_distance(current: float, reference: float) -> float:
+    return ((current / reference) - 1.0) * 100.0 if current and reference else 0.0
+
+
+def crypto_market(external_signals: Dict[str, object], coin_id: str = "bitcoin") -> Dict[str, object]:
+    markets = external_signals.get("cryptoMarkets") if isinstance(external_signals, dict) and isinstance(external_signals.get("cryptoMarkets"), dict) else {}
+    direct = markets.get(coin_id)
+    if isinstance(direct, dict):
+        return direct
+    for item in markets.values():
+        if isinstance(item, dict) and str(item.get("symbol") or "").upper() == "BTC":
+            return item
+    return {}
+
+
+def review_overrides(settings: Dict[str, object]) -> Dict[str, Dict[str, str]]:
+    rows: Dict[str, Dict[str, str]] = {}
+    text = str((settings or {}).get("valuationReviewOverrides") or "")
+    for raw_line in text.splitlines():
+        line = raw_line.strip()
+        if not line or line.startswith("#"):
+            continue
+        if "=" in line and "," not in line:
+            symbol, status = [part.strip() for part in line.split("=", 1)]
+            note = ""
+        else:
+            parts = [part.strip() for part in line.split(",")]
+            symbol = parts[0] if parts else ""
+            status = parts[1] if len(parts) > 1 else ""
+            note = parts[2] if len(parts) > 2 else ""
+        symbol = symbol.upper()
+        if symbol and status:
+            rows[symbol] = {"status": status, "note": note}
+    return rows
+
+
+def apply_review_override(row: Dict[str, object], settings: Dict[str, object]) -> Dict[str, object]:
+    symbol = str(row.get("symbol") or "").upper().strip()
+    override = review_overrides(settings).get(symbol)
+    if not override:
+        return row
+    status = str(override.get("status") or "").strip()
+    note = str(override.get("note") or "").strip()
+    row = dict(row)
+    row["approvalStatus"] = status
+    row["reviewStatus"] = status
+    row["userReviewNote"] = note
+    if status in {"user_approved", "approved"}:
+        row["approvalStatus"] = "user_approved"
+        row["activeStatus"] = "active"
+        row["requiresUserApproval"] = False
+        row["reliabilityScore"] = max(number(row.get("reliabilityScore")), 72.0)
+    elif status in {"user_modified", "modified"}:
+        row["approvalStatus"] = "user_modified"
+        row["activeStatus"] = "active"
+        row["requiresUserApproval"] = False
+        row["reliabilityScore"] = max(number(row.get("reliabilityScore")), 78.0)
+    elif status in {"user_rejected", "rejected"}:
+        row["approvalStatus"] = "user_rejected"
+        row["activeStatus"] = "rejected"
+        row["requiresUserApproval"] = False
+    return row
+
+
+def bitcoin_proxy_ai_valuation_row(
+    position: Position,
+    external_signals: Dict[str, object],
+    settings: Dict[str, object],
+) -> Dict[str, object]:
+    current = number(position.current_price)
+    if not current:
+        return {}
+    btc = crypto_market(external_signals or {}, "bitcoin")
+    btc24 = number(btc.get("change24h"))
+    btc7 = number(btc.get("change7d"))
+    ma20_distance = pct_distance(current, number(position.ma20))
+    ma60_distance = pct_distance(current, number(position.ma60))
+    adjustment_pct = clamp(
+        btc24 * 0.20 + btc7 * 0.35 + ma20_distance * 0.18 + ma60_distance * 0.06,
+        -22.0,
+        28.0,
+    )
+    fair_value = current * (1.0 + adjustment_pct / 100.0)
+    row = _base_row(
+        position,
+        "ai-bitcoin-proxy-nav-draft",
+        "AI 제안 기준가 = 현재가 x (1 + BTC/추세 보정)",
+        48.0 if btc else 42.0,
+    )
+    row.update({
+        "currentPrice": current,
+        "fairValue": round(max(0.01, fair_value), 4),
+        "minimumMarginOfSafetyPct": number(settings.get("aiValuationBitcoinProxyMinimumMarginPct")) or 18.0,
+        "btcPrice": number(btc.get("price")),
+        "btcChange24h": btc24,
+        "btcChange7d": btc7,
+        "missingInputs": ["BTC 보유량", "희석주식수", "순부채/우선주 부담"],
+        "sourceReason": "비트코인 보유가치/NAV 모델이 적합하지만 최신 BTC 보유량, 희석주식수, 순부채가 없어 BTC 가격 변화와 종목 추세로 만든 자동 적용 초안입니다.",
+    })
+    return row
+
+
+def semiconductor_cycle_ai_valuation_row(position: Position, settings: Dict[str, object]) -> Dict[str, object]:
+    current = number(position.current_price)
+    if not current:
+        return {}
+    ma5_distance = pct_distance(current, number(getattr(position, "ma5", 0)))
+    ma20_distance = pct_distance(current, number(position.ma20))
+    ma60_distance = pct_distance(current, number(position.ma60))
+    volume_ratio = number(position.volume_ratio)
+    volume_adjustment = clamp((volume_ratio - 1.0) * 2.5, -5.0, 6.0) if volume_ratio else 0.0
+    adjustment_pct = clamp(ma5_distance * 0.12 + ma20_distance * 0.14 + ma60_distance * 0.08 + volume_adjustment, -20.0, 22.0)
+    row = _base_row(
+        position,
+        "ai-semiconductor-cycle-draft",
+        "AI 제안 기준가 = 현재가 x (1 + 반도체 사이클/추세 보정)",
+        46.0,
+    )
+    row.update({
+        "currentPrice": current,
+        "fairValue": round(max(0.01, current * (1.0 + adjustment_pct / 100.0)), 4),
+        "minimumMarginOfSafetyPct": number(settings.get("aiValuationSemiconductorMinimumMarginPct")) or 18.0,
+        "missingInputs": ["예상 EPS", "목표 PER", "메모리 가격/업황 지표"],
+        "sourceReason": "반도체는 EPS/PER와 업황 사이클이 핵심이지만 입력이 부족해 5일·20일·60일 평균과 거래량으로 만든 자동 적용 초안입니다.",
+    })
+    return row
+
+
+def growth_quality_ai_valuation_row(position: Position, external_signals: Dict[str, object], settings: Dict[str, object]) -> Dict[str, object]:
+    current = number(position.current_price)
+    if not current:
+        return {}
+    ma5_distance = pct_distance(current, number(getattr(position, "ma5", 0)))
+    ma20_distance = pct_distance(current, number(position.ma20))
+    ma60_distance = pct_distance(current, number(position.ma60))
+    dgs10 = macro_dgs10(external_signals or {})
+    rate_penalty = max(0.0, dgs10 - 4.0) * 2.0 if dgs10 else 0.0
+    adjustment_pct = clamp(ma5_distance * 0.10 + ma20_distance * 0.16 + ma60_distance * 0.08 - rate_penalty, -18.0, 24.0)
+    row = _base_row(
+        position,
+        "ai-growth-quality-draft",
+        "AI 제안 기준가 = 현재가 x (1 + 성장주 추세/금리 보정)",
+        44.0,
+    )
+    row.update({
+        "currentPrice": current,
+        "fairValue": round(max(0.01, current * (1.0 + adjustment_pct / 100.0)), 4),
+        "minimumMarginOfSafetyPct": number(settings.get("aiValuationGrowthMinimumMarginPct")) or 15.0,
+        "missingInputs": ["예상 EPS", "목표 PER", "매출 성장률", "마진 전망"],
+        "sourceReason": "성장주는 실적 성장률과 마진 전망이 핵심이지만 입력이 부족해 가격 추세와 금리 부담으로 만든 자동 적용 초안입니다.",
+    })
+    return row
 
 
 def preferred_income_ai_valuation_row(
@@ -154,11 +310,24 @@ def ai_valuation_proposal_rows(
         row = preferred_income_ai_valuation_row(position, external_signals or {}, settings)
         if row:
             rows.append(row)
+    if not rows and "BitcoinProxy" in archetypes:
+        row = bitcoin_proxy_ai_valuation_row(position, external_signals or {}, settings)
+        if row:
+            rows.append(row)
     row = external_fundamental_ai_valuation_row(position, external_signals or {})
     if row:
         rows.append(row)
-    if not rows and truthy(settings.get("aiValuationCurrentPriceAnchorEnabled"), True):
+    if not rows and ({"SemiconductorHBM", "SemiconductorCyclical"} & archetypes):
+        row = semiconductor_cycle_ai_valuation_row(position, settings)
+        if row:
+            rows.append(row)
+    if not rows and ({"PlatformGrowth", "MegaCapQuality", "AIGrowth", "HighVolatilityGrowth"} & archetypes):
+        row = growth_quality_ai_valuation_row(position, external_signals or {}, settings)
+        if row:
+            rows.append(row)
+    if not rows and truthy(settings.get("aiValuationCurrentPriceAnchorEnabled"), False):
         row = current_price_anchor_ai_valuation_row(position, settings)
         if row:
             rows.append(row)
-    return rows
+    reviewed = [apply_review_override(row, settings) for row in rows]
+    return [row for row in reviewed if str(row.get("activeStatus") or "").strip() != "rejected"]

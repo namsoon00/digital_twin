@@ -130,13 +130,57 @@ class OntologyInferenceContextTests(unittest.TestCase):
         self.assertEqual("ai", facts["valuationSourceType"])
         self.assertEqual("AI 제안", facts["valuationSourceLabel"])
         self.assertEqual("ai-preferred-income-yield", facts["valuationMethod"])
-        self.assertEqual("suggested", facts["valuationApprovalStatus"])
+        self.assertEqual("ai_applied_pending_review", facts["valuationApprovalStatus"])
+        self.assertEqual("ai_applied_pending_review", facts["valuationReviewStatus"])
+        self.assertTrue(facts["valuationAutoApplied"])
         self.assertTrue(facts["valuationRequiresUserApproval"])
         self.assertTrue(facts["valuationIsAiGenerated"])
         self.assertEqual(9.0, facts["valuationAnnualDividend"])
         self.assertEqual(9.5, facts["valuationRequiredYieldPct"])
         self.assertAlmostEqual(94.7368, facts["valuationFairValue"], places=4)
         self.assertIn("연간 배당", facts["valuationSubstitution"])
+
+    def test_position_signal_facts_use_bitcoin_proxy_ai_valuation_for_mstr(self):
+        position = Position(
+            symbol="MSTR",
+            name="스트래티지",
+            market="NASDAQ",
+            currency="USD",
+            source="holding",
+            current_price=90.75,
+            average_price=88.9,
+            quantity=200,
+            market_value=18150,
+            ma20=95.69,
+            ma60=136.72,
+            sector="디지털자산",
+        )
+        facts = position_signal_facts(
+            position,
+            portfolio_summary([position], account_cash=1000000, fx_rates={"USD": 1400}),
+            external_signals={
+                "cryptoMarkets": {
+                    "bitcoin": {
+                        "provider": "CoinGecko",
+                        "symbol": "BTC",
+                        "price": 64000,
+                        "change24h": -3.1,
+                        "change7d": -1.9,
+                    }
+                }
+            },
+            settings={},
+        )
+
+        self.assertEqual("partial", facts["valuationDataStatus"])
+        self.assertEqual("ai", facts["valuationSourceType"])
+        self.assertEqual("ai-bitcoin-proxy-nav-draft", facts["valuationMethod"])
+        self.assertEqual("ai_applied_pending_review", facts["valuationApprovalStatus"])
+        self.assertTrue(facts["valuationAutoApplied"])
+        self.assertTrue(facts["valuationRequiresUserApproval"])
+        self.assertNotEqual(position.current_price, facts["valuationFairValue"])
+        self.assertIn("BTC 보유량", facts["valuationMissingInputs"])
+        self.assertIn("BTC/추세 보정", facts["valuationFormula"])
 
     def test_typedb_inferencebox_context_replaces_python_relation_rule_path(self):
         position = Position(

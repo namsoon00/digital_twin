@@ -400,15 +400,17 @@ class BeginnerRelationLanguageTests(unittest.TestCase):
                         "valuationMarginOfSafetyPct": 7.95,
                         "valuationMinimumMarginOfSafetyPct": 8,
                         "valuationSourceLabel": "AI 제안",
-                        "valuationReliabilityLabel": "AI 초안(사용자 승인 전)",
+                        "valuationReliabilityLabel": "AI 초안(사용자 검토 전)",
                         "valuationReliabilityScore": 58,
-                        "valuationExplanation": "연간 배당 $9을 요구수익률 9.5%로 나눠 적정가 $94.74로 계산했습니다. 이 값은 AI 제안값이라 사용자 승인 전 초안입니다.",
+                        "valuationExplanation": "연간 배당 $9을 요구수익률 9.5%로 나눠 적정가 $94.74로 계산했습니다. 이 값은 AI 제안값이라 사용자 검토 전 초안입니다.",
                         "valuationDataStatus": "available",
                         "valuationMissingInputs": [],
                         "valuationHasUserInput": False,
                         "valuationHasExternalInput": False,
                         "valuationHasAiProposal": True,
-                        "valuationApprovalStatus": "suggested",
+                        "valuationApprovalStatus": "ai_applied_pending_review",
+                        "valuationReviewStatus": "ai_applied_pending_review",
+                        "valuationAutoApplied": True,
                         "valuationRequiresUserApproval": True,
                         "valuationIsAiGenerated": True,
                         "valuationSourceReason": "우선주/인컴형은 보통주 PER보다 배당수익률 기준 적정가가 더 적합합니다.",
@@ -420,7 +422,7 @@ class BeginnerRelationLanguageTests(unittest.TestCase):
 
         self.assertIn("<b>밸류에이션</b>", message)
         self.assertIn("AI 제안", message)
-        self.assertIn("사용자 승인 전", message)
+        self.assertIn("사용자 검토 전", message)
         self.assertIn("연간 배당", message)
         self.assertIn("요구수익률", message)
         self.assertIn("배당수익률 기준 적정가", message)

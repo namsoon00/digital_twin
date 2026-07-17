@@ -194,6 +194,21 @@ API:
 
 설정의 관계 규칙과 프롬프트는 UI, 메시지, AI 리뷰 정보의 운영 계약이다. 새 투자 의미를 추가할 때는 TBox/ABox fact, RuleBox semantic profile, TypeDB schema function materialization, InferenceBox payload, AI prompt contract, 알림 문구를 함께 갱신해야 한다.
 
+## AI Valuation Proposals
+
+밸류에이션은 사용자 입력이 없어도 종목 타입별 AI 초안을 만들 수 있다. 이 초안은 당분간 시스템 검증으로 차단하지 않고 `ActiveValuation`으로 자동 적용하지만, 항상 `AIValuationProposal`과 `UserValuationReview`를 함께 만들어 `ai_applied_pending_review` 상태를 드러낸다. 메시지는 이를 "AI 제안 자동 적용 · 사용자 검토 전"으로 표시해야 하며, 확정 적정가처럼 표현하면 안 된다.
+
+현재 종목 타입별 초안 모델:
+
+- `ai-bitcoin-proxy-nav-draft`: MSTR 같은 비트코인 프록시 종목. BTC 가격 변화와 5/20/60일 가격 흐름으로 임시 기준가를 만들고, BTC 보유량·희석주식수·순부채/우선주 부담을 부족 데이터로 남긴다.
+- `ai-preferred-income-yield`: STRC 같은 우선주/인컴형. 연간 배당을 요구수익률로 나눠 기준가를 만든다.
+- `ai-semiconductor-cycle-draft`: 삼성전자, SK하이닉스 같은 반도체 종목. 5/20/60일 가격 흐름과 거래량으로 낮은 신뢰도 초안을 만들고, 예상 EPS·목표 PER·업황 지표 부족을 표시한다.
+- `ai-growth-quality-draft`: Apple, NVIDIA, Tesla 같은 성장/플랫폼 종목. 가격 흐름과 금리 부담으로 초안을 만들고, 성장률·마진 전망 부족을 표시한다.
+
+`aiValuationCurrentPriceAnchorEnabled`는 기본 꺼짐이다. 이 값을 켜면 마지막 수단으로 `AI 초기 기준가 = 현재가`가 생성될 수 있지만, 알림에서는 `입력 부족 · 임시 기준`으로만 보여야 한다.
+
+사용자 검토는 `valuationReviewOverrides` 설정으로 먼저 지원한다. 형식은 `MSTR,user_approved,메모` 또는 `MSTR=user_rejected`이며, 승인/수정 승인 시 AI 제안의 신뢰도를 높이고 거절 시 해당 AI 제안을 활성 밸류에이션에서 제외한다. 버튼형 검토 UI를 추가하더라도 이 설정과 같은 상태값(`user_approved`, `user_modified`, `user_rejected`)을 사용해야 한다.
+
 ## Graph Store Configuration
 
 ```bash

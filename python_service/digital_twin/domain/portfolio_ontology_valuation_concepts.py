@@ -163,7 +163,13 @@ def valuation_values(row: Dict[str, object], position: Position) -> Dict[str, ob
         formula = "AI 제안 적정가 = 연간 배당 / 요구수익률"
     elif not formula and fair_value:
         formula = "적정가 = 사용자가 입력한 적정가"
-    missing = []
+    raw_missing = row.get("missingInputs")
+    if isinstance(raw_missing, list):
+        missing = [str(item).strip() for item in raw_missing if str(item or "").strip()]
+    elif raw_missing:
+        missing = [str(item).strip() for item in str(raw_missing).replace(";", ",").split(",") if str(item).strip()]
+    else:
+        missing = []
     if not current_price:
         missing.append("currentPrice")
     method_lower = method.casefold()
@@ -212,6 +218,10 @@ def valuation_relation_props(row: Dict[str, object], values: Dict[str, object], 
         "formula": values.get("formula"),
         "marginOfSafetyPct": values.get("marginOfSafetyPct"),
         "fairValue": values.get("fairValue"),
+        "approvalStatus": str(row.get("approvalStatus") or ""),
+        "activeStatus": str(row.get("activeStatus") or ""),
+        "requiresUserApproval": bool(row.get("requiresUserApproval")),
+        "autoApplied": bool(row.get("autoApplied")),
     }
 
 
@@ -227,6 +237,7 @@ def add_valuation_row_concepts(
     key = str(row.get("assumptionKey") or row.get("symbol") or symbol).strip()
     label = str(row.get("label") or row.get("name") or (position.name or symbol) + " 밸류에이션").strip()
     is_ai_proposal = str(row.get("source") or "").casefold() == "ai-valuation-proposal" or bool(row.get("aiGenerated"))
+    is_active = bool(values.get("fairValue")) and str(row.get("activeStatus") or "active").casefold() != "rejected"
     tbox_classes = ["ValuationAssumption", "StrategySignal", "ValuationSignal"]
     if is_ai_proposal:
         tbox_classes.append("AIValuationProposal")
@@ -237,8 +248,24 @@ def add_valuation_row_concepts(
         "assumptionKey": key,
         "label": label,
         "payload": {k: v for k, v in row.items() if k not in {"payload"}},
+        "approvalStatus": str(row.get("approvalStatus") or ""),
+        "activeStatus": str(row.get("activeStatus") or ""),
+        "requiresUserApproval": bool(row.get("requiresUserApproval")),
+        "autoApplied": bool(row.get("autoApplied")),
+        "reviewStatus": str(row.get("reviewStatus") or row.get("approvalStatus") or ""),
+        "userReviewNote": str(row.get("userReviewNote") or ""),
         **values,
     }
+    model_label = str(row.get("valuationMethod") or values.get("valuationMethod") or "valuation-context")
+    model_id = add_entity(graph, "valuation-model", symbol + ":" + model_label, label + " 모델", {
+        "tboxClass": "ValuationModel",
+        "tboxClasses": ["ValuationModel", "StrategySignal", "ValuationSignal"],
+        "symbol": symbol,
+        "valuationMethod": model_label,
+        "formula": values.get("formula"),
+        "source": str(row.get("source") or row.get("provider") or "valuation"),
+        "provider": str(row.get("provider") or ""),
+    })
     assumption_id = add_entity(graph, "valuation-assumption", symbol + ":" + key, label, {
         "tboxClass": "AIValuationProposal" if is_ai_proposal else "ValuationAssumption",
         "tboxClasses": tbox_classes,
@@ -246,12 +273,42 @@ def add_valuation_row_concepts(
     })
     props = valuation_relation_props(row, values, label)
     add_relation(graph, stock_id, assumption_id, "HAS_VALUATION", weight=0.88, properties=props)
+    add_relation(graph, stock_id, model_id, "USES_VALUATION_MODEL", weight=0.84, properties=props)
+    add_relation(graph, assumption_id, model_id, "USES_VALUATION_MODEL", weight=0.84, properties=props)
     if is_ai_proposal:
         add_relation(graph, stock_id, assumption_id, "HAS_AI_VALUATION_PROPOSAL", weight=0.86, properties={
             **props,
             "polarity": "context",
-            "aiInfluenceLabel": "AI 밸류에이션 제안: 사용자 승인 전",
+            "aiInfluenceLabel": "AI 밸류에이션 제안: 자동 적용, 사용자 검토 전",
         })
+    if is_active:
+        active_classes = ["ActiveValuation", "ValuationAssumption", "ValuationSignal"]
+        if is_ai_proposal:
+            active_classes.append("AIValuationProposal")
+        active_id = add_entity(graph, "active-valuation", symbol + ":" + key, label + " 활성 밸류에이션", {
+            "tboxClass": "ActiveValuation",
+            "tboxClasses": active_classes,
+            **base_props,
+        })
+        add_relation(graph, stock_id, active_id, "HAS_ACTIVE_VALUATION", weight=0.9, properties=props)
+        add_relation(graph, active_id, assumption_id, "DERIVED_FROM_AI_VALUATION_PROPOSAL" if is_ai_proposal else "DERIVED_FROM_VALUATION_ASSUMPTION", weight=0.88, properties=props)
+        if is_ai_proposal and bool(row.get("requiresUserApproval")):
+            review_id = add_entity(graph, "valuation-review", symbol + ":" + key, label + " 사용자 검토 대기", {
+                "tboxClass": "UserValuationReview",
+                "tboxClasses": ["UserValuationReview", "ValuationAssumption", "ValuationSignal"],
+                "symbol": symbol,
+                "approvalStatus": str(row.get("approvalStatus") or "ai_applied_pending_review"),
+                "reviewStatus": str(row.get("reviewStatus") or row.get("approvalStatus") or "ai_applied_pending_review"),
+                "userReviewNote": str(row.get("userReviewNote") or ""),
+                "requiresUserApproval": True,
+                "autoApplied": True,
+                "source": "valuation-review",
+            })
+            add_relation(graph, active_id, review_id, "AWAITS_USER_REVIEW", weight=0.86, properties={
+                **props,
+                "polarity": "context",
+                "aiInfluenceLabel": "사용자 검토 전까지 AI 초안으로 자동 적용",
+            })
     for field, metric_label, value in metric_rows(row):
         metric_id = add_entity(graph, "valuation-metric", symbol + ":" + key + ":" + field, metric_label + " " + compact_number(value), {
             "tboxClass": "ValuationMetric",

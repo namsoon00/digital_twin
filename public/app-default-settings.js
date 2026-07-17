@@ -151,7 +151,8 @@
       "005930,6500,12,20"
     ].join("\n"),
     aiValuationAutoProposalEnabled: "1",
-    aiValuationCurrentPriceAnchorEnabled: "1",
+    aiValuationCurrentPriceAnchorEnabled: "0",
+    valuationReviewOverrides: "",
     aiValuationPreferredParValue: "100",
     aiValuationPreferredRiskSpreadPct: "",
     aiValuationPreferredRequiredYieldPct: "",

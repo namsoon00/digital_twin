@@ -366,15 +366,15 @@ class MonitoringPositionContextMixin:
     def trading_value_detail_label(self, snapshot: Dict[str, object], currency: str) -> str:
         quality = str(snapshot.get("tradingValueQuality") or "")
         if quality == "reported":
-            return "제공값, 가격×거래량 교차확인"
+            return ""
         if quality == "reported_without_cross_check":
-            return "제공값, 가격·거래량 교차검증 불가"
+            return ""
         if quality == "estimated_from_price_volume":
             reported = number(snapshot.get("reportedTradingValue"))
             mismatch_pct = number(snapshot.get("tradingValueMismatchPct"))
             if reported > 0 and mismatch_pct > 0:
-                return "가격×거래량 추정, 제공값 " + money(reported, currency) + "와 " + self.volume_ratio_label(mismatch_pct) + "% 차이"
-            return "가격×거래량 추정"
+                return "제공 거래대금과 차이가 커서 가격×거래량으로 다시 계산"
+            return "가격×거래량으로 계산"
         return ""
 
     def position_value_base(self, position: Dict[str, object]) -> float:
@@ -407,6 +407,51 @@ class MonitoringPositionContextMixin:
         currencies = {self.position_currency(before), self.position_currency(item)}
         return " (KRW 환산 기준)" if currencies != {"KRW"} else ""
 
+    def volume_activity_label(self, ratio: float) -> str:
+        if ratio <= 0:
+            return ""
+        if ratio >= 2:
+            return "평소보다 매우 많음"
+        if ratio >= 1.2:
+            return "평소보다 많음"
+        if ratio >= 0.8:
+            return "평소와 비슷"
+        if ratio >= 0.3:
+            return "평소보다 적음"
+        return "평소보다 매우 적음"
+
+    def volume_pace_detail_label(self, pace: Dict[str, object], adjusted_ratio: float) -> str:
+        status = str(pace.get("volumePaceStatus") or "").strip()
+        pace_label = str(pace.get("volumePaceLabel") or "").strip()
+        session_label = str(pace.get("volumePaceSessionLabel") or "").strip()
+        elapsed_pct = number(pace.get("volumePaceElapsedPct"))
+        if status == "closed":
+            return (pace_label or "장외") + "라 거래량 판단은 참고용"
+        if status != "open" or adjusted_ratio <= 0:
+            return ""
+        if adjusted_ratio >= 1.5:
+            strength = "많음"
+        elif adjusted_ratio >= 0.8:
+            strength = "보통"
+        else:
+            strength = "부족"
+        if session_label and elapsed_pct > 0:
+            details = [
+                session_label
+                + " "
+                + self.volume_ratio_label(elapsed_pct)
+                + "% 진행 기준 "
+                + strength
+                + "(예상치의 "
+                + self.volume_ratio_label(adjusted_ratio)
+                + "배)"
+            ]
+        else:
+            details = ["현재 시간 기준 " + strength + "(예상치의 " + self.volume_ratio_label(adjusted_ratio) + "배)"]
+        if not session_label and pace_label and pace_label not in {"시간 대비 강함", "시간 대비 보통", "시간 대비 부족", "시간 보정 불가"}:
+            details.append(pace_label)
+        return ", ".join(details)
+
     def flow_context_line(self, position: Dict[str, object]) -> str:
         parts: List[str] = []
         volume = self.position_volume(position)
@@ -421,28 +466,20 @@ class MonitoringPositionContextMixin:
             observed_at=position.get("updated_at") if "updated_at" in position else position.get("updatedAt"),
         )
         adjusted_ratio = number(pace.get("timeAdjustedVolumeRatio"))
-        expected_ratio = number(pace.get("expectedVolumeRatioNow"))
-        elapsed_pct = number(pace.get("volumePaceElapsedPct"))
-        session_label = str(pace.get("volumePaceSessionLabel") or "").strip()
-        pace_label = str(pace.get("volumePaceLabel") or "").strip()
         if volume > 0:
             volume_label = compact_number(volume)
             if ratio > 0:
-                ratio_bits = ["평균 대비 원본 " + self.volume_ratio_label(ratio) + "x"]
-                if adjusted_ratio > 0:
-                    ratio_bits.append("시간보정 " + self.volume_ratio_label(adjusted_ratio) + "x")
-                if session_label and elapsed_pct > 0:
-                    ratio_bits.append(session_label + " " + self.volume_ratio_label(elapsed_pct) + "% 경과")
-                if expected_ratio > 0:
-                    ratio_bits.append("현시점 기대 누적 " + self.volume_ratio_label(expected_ratio) + "x")
-                if pace_label:
-                    ratio_bits.append(pace_label)
+                ratio_bits = [self.volume_activity_label(ratio) + "(평균의 " + self.volume_ratio_label(ratio) + "배)"]
+                pace_detail = self.volume_pace_detail_label(pace, adjusted_ratio)
+                if pace_detail:
+                    ratio_bits.append(pace_detail)
                 volume_label += "(" + " · ".join(ratio_bits) + ")"
             parts.append("거래량 " + volume_label)
         elif ratio > 0:
-            ratio_label = "거래량 배율 평균 대비 원본 " + self.volume_ratio_label(ratio) + "x"
-            if adjusted_ratio > 0:
-                ratio_label += " · 시간보정 " + self.volume_ratio_label(adjusted_ratio) + "x"
+            ratio_label = "거래량 " + self.volume_activity_label(ratio) + "(평균의 " + self.volume_ratio_label(ratio) + "배)"
+            pace_detail = self.volume_pace_detail_label(pace, adjusted_ratio)
+            if pace_detail:
+                ratio_label += " · " + pace_detail
             parts.append(ratio_label)
 
         if trading_value > 0:
@@ -454,14 +491,28 @@ class MonitoringPositionContextMixin:
             parts.append(label)
         trade_strength = self.position_trade_strength(position)
         if trade_strength > 0:
-            parts.append("체결강도 " + compact_number(trade_strength))
+            if trade_strength >= 110:
+                trade_label = "매수 체결 강함"
+            elif trade_strength >= 100:
+                trade_label = "매수 체결 약간 우세"
+            else:
+                trade_label = "매수 체결 우위 약함"
+            parts.append("체결강도 " + compact_number(trade_strength) + "(" + trade_label + ")")
         orderbook_bid = number(position.get("orderbook_bid_volume")) or number(position.get("orderbookBidVolume"))
         orderbook_ask = number(position.get("orderbook_ask_volume")) or number(position.get("orderbookAskVolume"))
-        if orderbook_bid or orderbook_ask:
-            parts.append("호가잔량 매수 " + compact_number(orderbook_bid) + "/매도 " + compact_number(orderbook_ask))
         bid_ask_imbalance = number(position.get("bid_ask_imbalance")) or number(position.get("bidAskImbalance"))
+        if orderbook_bid or orderbook_ask:
+            orderbook_label = ""
+            if orderbook_bid > orderbook_ask:
+                orderbook_label = "매수 대기 우위"
+            elif orderbook_ask > orderbook_bid:
+                orderbook_label = "매도 대기 우위"
+            detail = "매수 " + compact_number(orderbook_bid) + "/매도 " + compact_number(orderbook_ask)
+            if orderbook_label:
+                detail += ", " + orderbook_label
+            parts.append("호가 대기 물량 " + detail)
         if bid_ask_imbalance:
-            parts.append("호가불균형 " + signed_pct(bid_ask_imbalance))
+            parts.append("매수·매도 대기 차이 " + signed_pct(bid_ask_imbalance))
         if not parts:
             return ""
         return "수급: " + ", ".join(parts)

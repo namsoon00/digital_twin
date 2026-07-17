@@ -452,10 +452,10 @@ class TossBaseCurrencyValueTests(unittest.TestCase):
 
         line = monitor.flow_context_line(position)
 
-        self.assertIn("원본 0.3x", line)
-        self.assertIn("시간보정", line)
+        self.assertIn("평소보다 적음(평균의 0.3배)", line)
         self.assertIn("미장 정규장", line)
-        self.assertIn("현시점 기대", line)
+        self.assertIn("진행 기준 많음", line)
+        self.assertIn("예상치의", line)
 
     def test_flow_context_line_explains_inconsistent_us_trading_value(self):
         monitor = RealtimeMonitor({"fxRates": "KRW=1\nUSD=1400"})
@@ -472,9 +472,8 @@ class TossBaseCurrencyValueTests(unittest.TestCase):
 
         line = monitor.flow_context_line(position)
 
-        self.assertIn("평균 대비 원본 0.03x", line)
-        self.assertIn("가격×거래량 추정", line)
-        self.assertIn("제공값 $1,050,906,655", line)
+        self.assertIn("평소보다 매우 적음(평균의 0.03배)", line)
+        self.assertIn("제공 거래대금과 차이가 커서 가격×거래량으로 다시 계산", line)
         self.assertIn("거래액 $5,237,755", line)
 
 

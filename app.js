@@ -3610,6 +3610,17 @@
       externalAlphaEnabled: settingValue("externalAlphaEnabled"),
       externalAlphaRelatedSymbolsEnabled: settingValue("externalAlphaRelatedSymbolsEnabled"),
       externalAlphaRelatedMaxSymbols: settingValue("externalAlphaRelatedMaxSymbols"),
+      externalYFinanceEnabled: settingValue("externalYFinanceEnabled"),
+      externalYFinanceMaxSymbols: settingValue("externalYFinanceMaxSymbols"),
+      externalYFinanceHistoryPeriod: settingValue("externalYFinanceHistoryPeriod"),
+      externalYFinanceHistoryInterval: settingValue("externalYFinanceHistoryInterval"),
+      externalYFinanceHistoryRows: settingValue("externalYFinanceHistoryRows"),
+      externalYFinanceFinancialPeriods: settingValue("externalYFinanceFinancialPeriods"),
+      externalYFinanceTabularRows: settingValue("externalYFinanceTabularRows"),
+      externalYFinanceOptionExpirations: settingValue("externalYFinanceOptionExpirations"),
+      externalYFinanceOptionsMaxRows: settingValue("externalYFinanceOptionsMaxRows"),
+      externalYFinanceEarningsLimit: settingValue("externalYFinanceEarningsLimit"),
+      externalYFinanceNewsLimit: settingValue("externalYFinanceNewsLimit"),
       externalCoinGeckoEnabled: settingValue("externalCoinGeckoEnabled"),
       externalFredEnabled: settingValue("externalFredEnabled"),
       externalFredSeries: settingValue("externalFredSeries"),
@@ -16954,6 +16965,11 @@
           { value: "0", label: "사용 안 함" }
         ]),
         renderSettingField("externalAlphaRelatedMaxSymbols", "ADR·ETF 관련 종목 수", "number", "8"),
+        renderSettingSelect("externalYFinanceEnabled", "yfinance 종합 수집", [
+          { value: "1", label: "사용" },
+          { value: "0", label: "사용 안 함" }
+        ]),
+        renderSettingField("externalYFinanceMaxSymbols", "yfinance 조회 종목 수", "number", "8"),
         renderSettingSelect("externalFredEnabled", "FRED 거시 수집", [
           { value: "1", label: "사용" },
           { value: "0", label: "사용 안 함" }
@@ -18073,6 +18089,20 @@
           { value: "0", label: "사용 안 함" }
         ]),
         renderSettingField("externalAlphaRelatedMaxSymbols", "ADR·ETF 관련 종목 수", "number", "8"),
+        renderSettingSelect("externalYFinanceEnabled", "yfinance 종합 수집", [
+          { value: "1", label: "사용" },
+          { value: "0", label: "사용 안 함" }
+        ]),
+        renderSettingField("externalYFinanceMaxSymbols", "yfinance 조회 종목 수", "number", "8"),
+        renderSettingField("externalYFinanceHistoryPeriod", "yfinance 가격 기간", "text", "1y"),
+        renderSettingField("externalYFinanceHistoryInterval", "yfinance 가격 간격", "text", "1d"),
+        renderSettingField("externalYFinanceHistoryRows", "yfinance 가격 행 수", "number", "90"),
+        renderSettingField("externalYFinanceFinancialPeriods", "재무제표 기간 수", "number", "4"),
+        renderSettingField("externalYFinanceTabularRows", "표 데이터 행 수", "number", "40"),
+        renderSettingField("externalYFinanceOptionExpirations", "옵션 만기 수", "number", "2"),
+        renderSettingField("externalYFinanceOptionsMaxRows", "옵션 행 수", "number", "40"),
+        renderSettingField("externalYFinanceEarningsLimit", "실적 일정 수", "number", "16"),
+        renderSettingField("externalYFinanceNewsLimit", "뉴스 수", "number", "10"),
         renderSettingSelect("externalCoinGeckoEnabled", "CoinGecko 수집", [
           { value: "1", label: "사용" },
           { value: "0", label: "사용 안 함" }

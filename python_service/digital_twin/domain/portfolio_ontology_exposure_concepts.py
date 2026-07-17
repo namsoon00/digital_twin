@@ -10,6 +10,7 @@ from .instrument_profiles import (
 )
 from .ontology_contracts import PortfolioOntology, entity_id
 from .ontology_schema import add_entity, add_relation
+from .ontology_threshold_policy import default_ontology_threshold_policy
 from .portfolio import PortfolioSummary, Position
 from .portfolio_ontology_catalog import FACTOR_BENCHMARKS, SECTOR_FACTORS
 from .portfolio_ontology_market_concepts import symbol_key
@@ -106,6 +107,7 @@ def market_proxy_observation_id(profile: InstrumentProfile) -> str:
 
 
 def market_proxy_observation_pressure(quote: Dict[str, object]) -> Dict[str, object]:
+    policy = default_ontology_threshold_policy().market_proxy
     change_rate = number(quote.get("changeRate"))
     ma20_distance = number(quote.get("ma20Distance"))
     ma60_distance = number(quote.get("ma60Distance"))
@@ -124,14 +126,14 @@ def market_proxy_observation_pressure(quote: Dict[str, object]) -> Dict[str, obj
         risk_score += abs(ma60_distance) * 0.5
     else:
         support_score += ma60_distance * 0.3
-    if volume_ratio >= 1.2:
+    if volume_ratio >= policy.volume_confirmation_ratio:
         if risk_score >= support_score:
             risk_score += 2.0
         else:
             support_score += 1.5
-    if risk_score >= support_score + 1.0 and risk_score >= 3.0:
+    if risk_score >= support_score + policy.directional_margin_score and risk_score >= policy.minimum_directional_score:
         polarity = "risk"
-    elif support_score >= risk_score + 1.0 and support_score >= 3.0:
+    elif support_score >= risk_score + policy.directional_margin_score and support_score >= policy.minimum_directional_score:
         polarity = "support"
     else:
         polarity = "context"
@@ -448,6 +450,7 @@ def add_portfolio_factor_exposure_concepts(
     observed_positions: List[Position],
     runtime_context: Dict[str, object] = None,
 ) -> None:
+    policy = default_ontology_threshold_policy().market_proxy
     add_market_proxy_universe_concepts(graph, portfolio_node_id, runtime_context)
     total = number(portfolio.total) or number(portfolio.invested)
     if not total:
@@ -465,7 +468,7 @@ def add_portfolio_factor_exposure_concepts(
         sector_positions[sector] = sector_positions.get(sector, 0) + 1
     for currency, value in sorted(currency_exposure.items()):
         ratio = (value / raw_position_total) * 100 if raw_position_total else 0.0
-        if currency in {"KRW", ""} or ratio < 10:
+        if currency in {"KRW", ""} or ratio < policy.currency_exposure_min_pct:
             continue
         fx_id = add_entity(graph, "fx-pair", "KRW:" + currency, "KRW/" + currency + " 환율 노출", {
             "tboxClass": "FXPair",
@@ -485,7 +488,7 @@ def add_portfolio_factor_exposure_concepts(
     for sector in portfolio.sectors:
         label = str(sector.get("sector") or "기타")
         ratio = number(sector.get("ratio"))
-        if ratio < 35 and sector_positions.get(label, 0) < 2:
+        if ratio < policy.sector_exposure_min_pct and sector_positions.get(label, 0) < policy.sector_position_min_count:
             continue
         risk_id = add_entity(graph, "risk", label + "-correlation-risk", label + " 상관 리스크", {
             "tboxClass": "Risk",

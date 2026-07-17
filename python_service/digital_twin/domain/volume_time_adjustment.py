@@ -3,8 +3,9 @@ from typing import Dict, Iterable, Tuple
 
 from .market_data import clamp, number
 from .market_hours import DEFAULT_MARKET_HOUR_SESSIONS, market_time, normalize_market_key, parse_hhmm, session_items
+from .ontology_threshold_policy import default_ontology_threshold_policy
 
-TRADING_VALUE_MISMATCH_THRESHOLD_PCT = 35.0
+TRADING_VALUE_MISMATCH_THRESHOLD_PCT = default_ontology_threshold_policy().data_quality.trading_value_mismatch_pct
 
 
 REGULAR_SESSION_CURVE: Tuple[Tuple[float, float], ...] = (
@@ -200,9 +201,10 @@ def volume_pace_snapshot(
     elapsed_ratio = clamp(elapsed_seconds / total_seconds, 0.0, 1.0)
     expected_ratio = expected_volume_ratio_for_session(session_key, elapsed_ratio)
     adjusted_ratio = raw_ratio / expected_ratio if raw_ratio and expected_ratio else 0.0
-    if adjusted_ratio >= 1.5:
+    policy = default_ontology_threshold_policy().data_quality
+    if adjusted_ratio >= policy.volume_pace_strong_ratio:
         label = "시간 대비 강함"
-    elif adjusted_ratio >= 0.8:
+    elif adjusted_ratio >= policy.volume_pace_normal_ratio:
         label = "시간 대비 보통"
     elif adjusted_ratio > 0:
         label = "시간 대비 부족"

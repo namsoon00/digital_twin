@@ -9,6 +9,7 @@ from .ontology_rulebox_contracts import (
     WATCHLIST_BLOCKED_ACTIONS,
     WATCHLIST_TARGET_ROLE,
 )
+from .ontology_threshold_policy import ontology_threshold_policy_from_context
 from .ontology_relation_reasoning import (
     OntologyRuleMatch,
     build_ai_prompt_context,
@@ -117,7 +118,8 @@ def relation_context_from_inferencebox(
         external_signals or {},
         settings=settings or {},
     )
-    matches = matches_from_inference(relations, traces, facts=facts, source_name=source_name, context_version=context_version)
+    threshold_policy = ontology_threshold_policy_from_context(settings or {})
+    matches = matches_from_inference(relations, traces, facts=facts, source_name=source_name, context_version=context_version, threshold_policy=threshold_policy)
     if not matches:
         return {}
     decision = decision_from_inference(facts, matches, relations, traces, source_name=source_name)
@@ -125,17 +127,19 @@ def relation_context_from_inferencebox(
     prompt_context = build_ai_prompt_context(prompt_id, facts, matches, settings or {}, execution_plan)
     active_matches = [item for item in matches if item.matched and not item.reference_only]
     max_strength = max([item.strength_score for item in active_matches], default=decision.get("score") or 0)
-    score_breakdown = aggregate_score_breakdown(active_matches)
+    score_breakdown = aggregate_score_breakdown(active_matches, threshold_policy)
     evidence_subgraph = evidence_subgraph_packet(position, facts, matches, relations, traces)
-    why_now = why_now_packet(facts, active_matches, score_breakdown, decision, relations, traces, inferencebox)
-    signal_conflicts = signal_conflict_packet(facts, active_matches, score_breakdown, relations)
+    why_now = why_now_packet(facts, active_matches, score_breakdown, decision, relations, traces, inferencebox, threshold_policy)
+    signal_conflicts = signal_conflict_packet(facts, active_matches, score_breakdown, relations, threshold_policy)
     inference_timeline = inference_timeline_packet(facts, active_matches, decision, inferencebox)
+    threshold_policy_payload = threshold_policy.to_dict()
     if isinstance(prompt_context, dict):
         prompt_context["evidenceSubgraph"] = evidence_subgraph
         prompt_context["scoreBreakdown"] = score_breakdown
         prompt_context["whyNow"] = why_now
         prompt_context["signalConflicts"] = signal_conflicts
         prompt_context["inferenceTimeline"] = inference_timeline
+        prompt_context["thresholdPolicy"] = threshold_policy_payload
     return {
         "engineVersion": context_version,
         "source": source_name,
@@ -160,6 +164,7 @@ def relation_context_from_inferencebox(
         "signalStrengthLabel": strength_label(max_strength),
         "confidence": round(max([item.confidence for item in active_matches], default=0), 1),
         "scoreBreakdown": score_breakdown,
+        "thresholdPolicy": threshold_policy_payload,
         "whyNow": why_now,
         "signalConflicts": signal_conflicts,
         "inferenceTimeline": inference_timeline,
@@ -274,6 +279,7 @@ def matches_from_inference(
     facts: Optional[Dict[str, object]] = None,
     source_name: str = "typedbInferenceBox",
     context_version: str = TYPEDB_RELATION_CONTEXT_VERSION,
+    threshold_policy=None,
 ) -> List[OntologyRuleMatch]:
     trace_by_rule = {
         str(item.get("ruleId") or ""): item
@@ -291,7 +297,7 @@ def matches_from_inference(
             continue
         seen.add(key)
         trace = trace_by_rule.get(rule_id, {})
-        score_breakdown = inference_score_breakdown(relation, facts or {}, trace)
+        score_breakdown = inference_score_breakdown(relation, facts or {}, trace, threshold_policy)
         score = float(score_breakdown.get("finalStrength") or inference_strength_score(relation))
         label = str(relation.get("aiInfluenceLabel") or relation.get("targetLabel") or trace.get("label") or rule_id)
         evidence = [
@@ -325,7 +331,8 @@ def matches_from_inference(
         rule_id = str(trace.get("ruleId") or "").strip()
         if not rule_id:
             continue
-        score = max(55.0, min(100.0, number(trace.get("confidence")) * 100))
+        score_policy = (threshold_policy or ontology_threshold_policy_from_context({})).score_breakdown
+        score = max(score_policy.trace_floor_score, min(100.0, number(trace.get("confidence")) * 100))
         matches.append(OntologyRuleMatch(
             rule_id=rule_id,
             label=str(trace.get("label") or rule_id),
@@ -346,10 +353,13 @@ def matches_from_inference(
                 "supportEvidence": 0.0,
                 "netRiskPressure": 0.0,
                 "dataConfidence": round(max(0.0, min(100.0, number(trace.get("confidence")) * 100)), 1),
-                "actionability": 35.0,
-                "novelty": 25.0,
+                "actionability": score_policy.trace_actionability_score,
+                "novelty": score_policy.trace_novelty_score,
                 "finalStrength": round(score, 1),
                 "opposingPressurePenalty": 0.0,
+                "thresholdPolicyId": score_policy.policy_id,
+                "thresholdPolicyVersion": score_policy.version,
+                "thresholdPolicySource": score_policy.source,
                 "drivers": ["TypeDB trace confidence"],
             },
         ))
@@ -390,6 +400,7 @@ def inference_score_breakdown(
     relation: Dict[str, object],
     facts: Dict[str, object],
     trace: Optional[Dict[str, object]] = None,
+    threshold_policy=None,
 ) -> Dict[str, object]:
     """Explain a TypeDB inference score with data-driven pressure components.
 
@@ -400,11 +411,12 @@ def inference_score_breakdown(
     relation = relation or {}
     facts = facts or {}
     trace = trace or {}
+    policy = (threshold_policy or ontology_threshold_policy_from_context({})).score_breakdown
     polarity = str(relation.get("polarity") or "").strip().lower()
     relation_type = str(relation.get("type") or "").strip().upper()
     trace_confidence = number(trace.get("confidence")) * 100
     relation_weight = number(relation.get("weight")) * 100
-    rule_reliability = _bounded_score(relation_weight or trace_confidence or 55.0, 0.0, 100.0)
+    rule_reliability = _bounded_score(relation_weight or trace_confidence or policy.default_rule_reliability, 0.0, 100.0)
     risk_impact = number(relation.get("riskImpact"))
     support_impact = number(relation.get("supportImpact"))
     risk = _impact_pressure(risk_impact, rule_reliability, polarity in {"risk", "negative"} or "RISK" in relation_type)
@@ -417,7 +429,7 @@ def inference_score_breakdown(
 
     pnl = number(facts.get("profitLossRate"))
     if facts.get("isHolding"):
-        if pnl <= -3.0:
+        if pnl <= policy.holding_loss_pressure_rate:
             addition = min(36.0, abs(pnl) * 1.15 + max(0.0, abs(pnl) - 8.0) * 0.65)
             risk += addition
             _add_driver(drivers, "손실률 확대", addition)
@@ -444,27 +456,27 @@ def inference_score_breakdown(
             _add_driver(drivers, key + " 위", addition)
 
     price_change = number(facts.get("priceChangeRate"))
-    if price_change <= -1.0:
+    if price_change <= -policy.price_change_pressure_pct:
         addition = min(12.0, abs(price_change) * 1.5)
         risk += addition
         _add_driver(drivers, "당일 가격 약화", addition)
-    elif price_change >= 1.0:
+    elif price_change >= policy.price_change_pressure_pct:
         addition = min(10.0, price_change * 1.2)
         support += addition
         _add_driver(drivers, "당일 가격 회복", addition)
 
     dynamic_risk = number(facts.get("trendDynamicRiskScore"))
     if dynamic_risk:
-        addition = min(14.0, max(0.0, dynamic_risk - 25.0) * 0.35)
+        addition = min(14.0, max(0.0, dynamic_risk - policy.trend_dynamic_risk_baseline) * 0.35)
         risk += addition
         _add_driver(drivers, "하락 속도/추세 약화", addition)
 
     trade_strength = number(facts.get("tradeStrength"))
-    if trade_strength >= 105.0:
+    if trade_strength >= policy.support_trade_strength:
         addition = min(8.0, (trade_strength - 100.0) * 0.2)
         support += addition
         _add_driver(drivers, "체결강도 우위", addition)
-    elif 0.0 < trade_strength <= 95.0:
+    elif 0.0 < trade_strength <= policy.weak_trade_strength:
         addition = min(8.0, (100.0 - trade_strength) * 0.25)
         risk += addition
         _add_driver(drivers, "체결강도 약화", addition)
@@ -507,15 +519,15 @@ def inference_score_breakdown(
         actionability += min(24.0, position_weight * 0.9)
         if sellable_quantity or quantity:
             actionability += min(14.0, (sellable_quantity / quantity) * 14.0 if quantity else 8.0)
-        if pnl <= -8.0:
-            actionability += min(18.0, abs(pnl + 8.0) * 1.1 + 8.0)
-        elif pnl >= 8.0:
+        if pnl <= policy.loss_actionability_rate:
+            actionability += min(18.0, abs(pnl - policy.loss_actionability_rate) * 1.1 + 8.0)
+        elif pnl >= policy.profit_actionability_rate:
             actionability += min(12.0, pnl * 0.5)
     elif facts.get("isWatchlist"):
         actionability += 10.0
         if ma5_distance >= 0 and ma20_distance >= 0:
             actionability += 10.0
-        if number(facts.get("volumeRatio")) >= 1.2 or number(facts.get("timeAdjustedVolumeRatio")) >= 1.2:
+        if number(facts.get("volumeRatio")) >= policy.watchlist_volume_ratio or number(facts.get("timeAdjustedVolumeRatio")) >= policy.watchlist_volume_ratio:
             actionability += 8.0
     actionability = _bounded_score(actionability, 0.0, 100.0)
 
@@ -539,7 +551,7 @@ def inference_score_breakdown(
     novelty += min(18.0, abs(price_change) * 2.2)
     if number(facts.get("directNewsCount")):
         latest_age = number(facts.get("latestDirectNewsAgeMinutes"))
-        novelty += 14.0 if not latest_age or latest_age <= 360.0 else 6.0
+        novelty += 14.0 if not latest_age or latest_age <= policy.recent_news_age_minutes else 6.0
     if relation.get("inferenceTraceId") or trace.get("id"):
         novelty += 6.0
     novelty = _bounded_score(novelty, 0.0, 100.0)
@@ -559,11 +571,11 @@ def inference_score_breakdown(
         + data_confidence * 0.05
         - opposing_penalty
     )
-    if abs(net_risk) >= 55:
+    if abs(net_risk) >= policy.net_risk_bonus_threshold:
         final += 4.0
-    if data_confidence < 55.0:
-        final -= (55.0 - data_confidence) * 0.18
-    final = _bounded_score(max(55.0, final), 0.0, 100.0)
+    if data_confidence < policy.data_confidence_penalty_threshold:
+        final -= (policy.data_confidence_penalty_threshold - data_confidence) * 0.18
+    final = _bounded_score(max(policy.minimum_final_strength, final), 0.0, 100.0)
     return {
         "ruleReliability": rule_reliability,
         "riskPressure": risk,
@@ -574,11 +586,15 @@ def inference_score_breakdown(
         "novelty": novelty,
         "finalStrength": final,
         "opposingPressurePenalty": round(opposing_penalty, 1),
-        "drivers": drivers[:8],
+        "thresholdPolicyId": policy.policy_id,
+        "thresholdPolicyVersion": policy.version,
+        "thresholdPolicySource": policy.source,
+        "drivers": drivers[:policy.max_drivers],
     }
 
 
-def aggregate_score_breakdown(matches: List[OntologyRuleMatch]) -> Dict[str, object]:
+def aggregate_score_breakdown(matches: List[OntologyRuleMatch], threshold_policy=None) -> Dict[str, object]:
+    policy = (threshold_policy or ontology_threshold_policy_from_context({})).score_breakdown
     breakdowns = [
         item.score_breakdown
         for item in matches or []
@@ -598,9 +614,9 @@ def aggregate_score_breakdown(matches: List[OntologyRuleMatch]) -> Dict[str, obj
             text = str(driver or "").strip()
             if text and text not in drivers:
                 drivers.append(text)
-            if len(drivers) >= 8:
+            if len(drivers) >= policy.max_drivers:
                 break
-        if len(drivers) >= 8:
+        if len(drivers) >= policy.max_drivers:
             break
     return {
         "ruleReliability": max_value("ruleReliability"),
@@ -612,6 +628,9 @@ def aggregate_score_breakdown(matches: List[OntologyRuleMatch]) -> Dict[str, obj
         "novelty": max_value("novelty"),
         "finalStrength": final,
         "opposingPressurePenalty": max_value("opposingPressurePenalty"),
+        "thresholdPolicyId": policy.policy_id,
+        "thresholdPolicyVersion": policy.version,
+        "thresholdPolicySource": policy.source,
         "drivers": drivers,
     }
 
@@ -624,7 +643,9 @@ def why_now_packet(
     relations: List[Dict[str, object]],
     traces: List[Dict[str, object]],
     inferencebox: Dict[str, object],
+    threshold_policy=None,
 ) -> Dict[str, object]:
+    policy = (threshold_policy or ontology_threshold_policy_from_context({})).why_now
     facts = facts or {}
     score_breakdown = score_breakdown or {}
     decision = decision or {}
@@ -652,14 +673,21 @@ def why_now_packet(
 
     pnl_delta = number(facts.get("profitLossRateDeltaPct"))
     if pnl_delta:
-        add_change("profitLossRate", "손익률 변화", facts.get("profitLossRate"), facts.get("previousProfitLossRate"), pnl_delta, threshold=0.1)
+        add_change(
+            "profitLossRate",
+            "손익률 변화",
+            facts.get("profitLossRate"),
+            facts.get("previousProfitLossRate"),
+            pnl_delta,
+            threshold=policy.profit_loss_delta_change_pct,
+        )
         add_driver("손익률이 이전 관측 대비 " + signed_number_text(pnl_delta) + "%p 변했습니다.")
     price_change = number(facts.get("priceChangeRate"))
-    if abs(price_change) >= 1.0:
-        add_change("priceChangeRate", "현재 가격 변화", facts.get("priceChangeRate"), delta=price_change, threshold=1.0)
+    if abs(price_change) >= policy.price_change_driver_pct:
+        add_change("priceChangeRate", "현재 가격 변화", facts.get("priceChangeRate"), delta=price_change, threshold=policy.price_change_driver_pct)
         add_driver("현재 가격 변화율이 " + signed_number_text(price_change) + "%입니다.")
     novelty = number(score_breakdown.get("novelty"))
-    if novelty >= 55:
+    if novelty >= policy.novelty_driver_score:
         add_driver("새 변화 점수가 " + str(round(novelty, 1)) + "점으로 의미 있는 변경에 가깝습니다.")
     elif novelty:
         add_driver("새 변화 점수는 " + str(round(novelty, 1)) + "점이라 반복 상태인지 함께 봐야 합니다.")
@@ -674,22 +702,25 @@ def why_now_packet(
     if relation_rule_ids:
         add_driver("이번 세대에서 성립한 핵심 룰: " + ", ".join(relation_rule_ids[:3]))
     should_escalate = bool(
-        novelty >= 55
-        or abs(pnl_delta) >= 0.5
-        or abs(price_change) >= 2.0
-        or number(score_breakdown.get("riskPressure")) >= 70
-        or number(score_breakdown.get("supportEvidence")) >= 70
-        or number(decision.get("stagePriority")) >= 55
+        novelty >= policy.novelty_driver_score
+        or abs(pnl_delta) >= policy.escalate_profit_loss_delta_pct
+        or abs(price_change) >= policy.escalate_price_change_pct
+        or number(score_breakdown.get("riskPressure")) >= policy.escalate_pressure_score
+        or number(score_breakdown.get("supportEvidence")) >= policy.escalate_pressure_score
+        or number(decision.get("stagePriority")) >= policy.escalate_stage_priority
     )
     return {
         "tboxClass": "WhyNow",
+        "thresholdPolicyId": policy.policy_id,
+        "thresholdPolicyVersion": policy.version,
+        "thresholdPolicySource": policy.source,
         "reasoningQuestion": "왜 지금 다시 봐야 하는가",
         "noveltyScore": round(novelty, 1),
         "shouldEscalate": should_escalate,
-        "changeDrivers": drivers[:8],
-        "changedFacts": changed_facts[:8],
-        "activeRuleIds": relation_rule_ids[:8],
-        "traceIds": trace_ids[:8],
+        "changeDrivers": drivers[:policy.max_change_drivers],
+        "changedFacts": changed_facts[:policy.max_changed_facts],
+        "activeRuleIds": relation_rule_ids[:policy.max_rule_ids],
+        "traceIds": trace_ids[:policy.max_rule_ids],
         "decisionStage": stage,
         "inferenceGenerationId": str(inferencebox.get("inferenceGenerationId") or ""),
         "inferenceGenerationAt": str(inferencebox.get("inferenceGenerationAt") or ""),
@@ -701,7 +732,9 @@ def signal_conflict_packet(
     active_matches: List[OntologyRuleMatch],
     score_breakdown: Dict[str, object],
     relations: List[Dict[str, object]],
+    threshold_policy=None,
 ) -> Dict[str, object]:
+    policy = (threshold_policy or ontology_threshold_policy_from_context({})).signal_conflict
     facts = facts or {}
     score_breakdown = score_breakdown or {}
     risk = number(score_breakdown.get("riskPressure"))
@@ -714,19 +747,19 @@ def signal_conflict_packet(
         if text and text not in target:
             target.append(text)
 
-    if number(facts.get("profitLossRate")) <= -3:
+    if number(facts.get("profitLossRate")) <= policy.loss_risk_profit_loss_rate:
         add(risk_drivers, "손실 구간")
     if number(facts.get("ma20Distance")) < 0:
         add(risk_drivers, "20일 평균 아래")
     if number(facts.get("ma60Distance")) < 0:
         add(risk_drivers, "60일 평균 아래")
-    if number(facts.get("tradeStrength")) and number(facts.get("tradeStrength")) < 95:
+    if number(facts.get("tradeStrength")) and number(facts.get("tradeStrength")) < policy.weak_trade_strength:
         add(risk_drivers, "체결강도 약화")
     if number(facts.get("investorFlowScore")) < 0:
         add(risk_drivers, "외국인·기관 수급 부담")
-    if number(facts.get("tradeStrength")) >= 105:
+    if number(facts.get("tradeStrength")) >= policy.support_trade_strength:
         add(support_drivers, "체결강도 우위")
-    if number(facts.get("bidAskImbalance")) >= 20:
+    if number(facts.get("bidAskImbalance")) >= policy.support_bid_ask_imbalance:
         add(support_drivers, "매수 호가 우위")
     if number(facts.get("investorFlowScore")) > 0:
         add(support_drivers, "외국인·기관 수급 지지")
@@ -742,11 +775,11 @@ def signal_conflict_packet(
         elif polarity == "support":
             add(support_drivers, label)
 
-    has_conflict = bool(risk >= 25 and support >= 18 and risk_drivers and support_drivers)
-    if has_conflict and risk > support + 12:
+    has_conflict = bool(risk >= policy.minimum_risk_pressure and support >= policy.minimum_support_evidence and risk_drivers and support_drivers)
+    if has_conflict and risk > support + policy.dominance_gap:
         conflict_type = "risk-dominant-with-support"
         effect = "위험이 우세하지만 지지 근거 때문에 전량 판단보다 강도 조절이 필요합니다."
-    elif has_conflict and support > risk + 12:
+    elif has_conflict and support > risk + policy.dominance_gap:
         conflict_type = "support-dominant-with-risk"
         effect = "지지 근거가 우세하지만 위험 근거 때문에 확인 조건이 필요합니다."
     elif has_conflict:
@@ -757,6 +790,9 @@ def signal_conflict_packet(
         effect = "뚜렷한 신호 충돌은 약합니다."
     return {
         "tboxClass": "SignalConflict",
+        "thresholdPolicyId": policy.policy_id,
+        "thresholdPolicyVersion": policy.version,
+        "thresholdPolicySource": policy.source,
         "hasConflict": has_conflict,
         "conflictType": conflict_type,
         "riskPressure": round(risk, 1),

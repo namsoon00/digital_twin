@@ -9,6 +9,7 @@ from digital_twin.domain.instrument_profiles import market_signal_profiles, pars
 from digital_twin.domain.ontology_decision_policy import decision_stage_from_action, relation_stage_priority
 from digital_twin.domain.ontology_rulebox_catalog import default_graph_inference_rules
 from digital_twin.domain.ontology_tbox import tbox_class_def
+from digital_twin.domain.ontology_threshold_policy import default_ontology_threshold_policy
 from digital_twin.domain.portfolio_ontology_builder import build_portfolio_ontology
 from digital_twin.domain.portfolio import Position
 from digital_twin.domain.portfolio_calculations import portfolio_summary
@@ -28,6 +29,27 @@ from digital_twin.domain.ontology_rulebox_governance import rulebox_governance_c
 
 
 class OntologyRuleBoxTests(unittest.TestCase):
+    def test_rulebox_projects_threshold_policy_nodes(self):
+        graph = rulebox_graph_from_rules(default_graph_inference_rules(), include_tbox=False)
+        policies = [
+            item
+            for item in graph.entities
+            if item.kind == "threshold-policy" and (item.properties or {}).get("ontologyBox") == "RuleBox"
+        ]
+        policy_ids = {str((item.properties or {}).get("policyId") or "") for item in policies}
+        action_policy = next(
+            item
+            for item in policies
+            if (item.properties or {}).get("policyId") == default_ontology_threshold_policy().action_selection.policy_id
+        )
+        threshold_payload = action_policy.properties.get("thresholds") or {}
+
+        self.assertIn(default_ontology_threshold_policy().why_now.policy_id, policy_ids)
+        self.assertIn(default_ontology_threshold_policy().profit_loss_delivery.policy_id, policy_ids)
+        self.assertEqual("ActionPolicy", action_policy.properties["tboxClass"])
+        self.assertEqual(70.0, threshold_payload["watchlistEntryStrongRelationScore"])
+        self.assertTrue(any(item.relation_type == "DEFINES_POLICY" for item in graph.relations))
+
     def test_rulebox_derivation_and_investor_flow_classes_exist_in_tbox(self):
         class_names = set()
         for rule in default_graph_inference_rules():

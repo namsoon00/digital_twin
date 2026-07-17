@@ -4,6 +4,7 @@ from .materiality import market_change_materiality
 from .market_data import clamp, number
 from .ontology_contracts import PortfolioOntology, entity_id
 from .ontology_schema import add_entity, add_relation
+from .ontology_threshold_policy import ontology_threshold_policy_from_context
 from .portfolio import Position
 from .portfolio_ontology_market_concepts import pct_distance_safe
 from .portfolio_ontology_runtime_concepts import runtime_settings
@@ -208,7 +209,8 @@ def add_trend_transition_concepts(
     metadata = metadata if isinstance(metadata, dict) else {}
     history = metadata.get("monitorStateHistory") if isinstance(metadata.get("monitorStateHistory"), list) else []
     previous = metadata.get("previousMonitorState") if isinstance(metadata.get("previousMonitorState"), dict) else {}
-    assessment = trend_transition_assessment(position, history=history, previous_state=previous, source=source)
+    threshold_policy = ontology_threshold_policy_from_context(runtime_context).temporal_pattern
+    assessment = trend_transition_assessment(position, history=history, previous_state=previous, source=source, threshold_policy=threshold_policy)
     points = list(assessment.get("points") or [])
     if not points:
         return

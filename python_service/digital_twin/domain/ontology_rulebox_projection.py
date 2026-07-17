@@ -4,6 +4,7 @@ from .ontology_contracts import OntologyEntity, OntologyRelation, PortfolioOntol
 from .ontology_rulebox_contracts import GRAPH_REASONER_VERSION, GraphInferenceRule
 from .ontology_relation_reasoning import ONTOLOGY_RULE_ENGINE_VERSION, RelationRuleDefinition
 from .ontology_schema import abox_relation_properties
+from .ontology_threshold_policy import rulebox_threshold_policy_payloads
 
 
 def add_rulebox_concepts(graph: PortfolioOntology, rules: Iterable[GraphInferenceRule]) -> None:
@@ -21,6 +22,7 @@ def add_rulebox_concepts(graph: PortfolioOntology, rules: Iterable[GraphInferenc
         weight=1.0,
         properties=rulebox_relation_properties("DEFINES_RULE", {"source": GRAPH_REASONER_VERSION}),
     ))
+    add_threshold_policy_concepts(graph, registry_id)
     for rule in rules:
         rule_id = entity_id("rule", rule.rule_id)
         graph.entities.append(OntologyEntity(rule_id, rule.label, "rule", rulebox_properties({
@@ -87,6 +89,45 @@ def add_rulebox_concepts(graph: PortfolioOntology, rules: Iterable[GraphInferenc
                     "relationType": derivation.relation_type,
                 }),
             ))
+
+
+def add_threshold_policy_concepts(graph: PortfolioOntology, registry_id: str) -> None:
+    policy_registry_id = entity_id("threshold-policy-registry", GRAPH_REASONER_VERSION)
+    graph.entities.append(OntologyEntity(policy_registry_id, "Ontology Threshold Policy Registry", "threshold-policy-registry", rulebox_properties({
+        "tboxClass": "RuleRegistry",
+        "tboxClasses": ["RuleRegistry", "RuleDecisionPolicy"],
+        "version": GRAPH_REASONER_VERSION,
+        "engine": "threshold-policy",
+    })))
+    graph.relations.append(OntologyRelation(
+        registry_id,
+        policy_registry_id,
+        "DEFINES_POLICY",
+        weight=1.0,
+        properties=rulebox_relation_properties("DEFINES_POLICY", {"source": GRAPH_REASONER_VERSION}),
+    ))
+    for index, payload in enumerate(rulebox_threshold_policy_payloads()):
+        policy_id = str(payload.get("policyId") or "threshold-policy-" + str(index + 1))
+        entity = entity_id("threshold-policy", policy_id)
+        graph.entities.append(OntologyEntity(entity, str(payload.get("label") or policy_id), "threshold-policy", rulebox_properties({
+            "tboxClass": payload.get("tboxClass"),
+            "tboxClasses": payload.get("tboxClasses") or [],
+            "policyId": policy_id,
+            "policyVersion": payload.get("version"),
+            "policySource": payload.get("source"),
+            "thresholdCount": payload.get("thresholdCount"),
+            "thresholds": payload.get("thresholds") or {},
+        })))
+        graph.relations.append(OntologyRelation(
+            policy_registry_id,
+            entity,
+            "DEFINES_POLICY",
+            weight=1.0,
+            properties=rulebox_relation_properties("DEFINES_POLICY", {
+                "policyId": policy_id,
+                "source": GRAPH_REASONER_VERSION,
+            }),
+        ))
 
 
 def add_relation_rulebox_concepts(graph: PortfolioOntology, rules: Iterable[RelationRuleDefinition]) -> None:

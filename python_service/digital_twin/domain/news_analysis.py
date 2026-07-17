@@ -3,6 +3,7 @@ import re
 from typing import Dict, Iterable, List, Tuple
 
 from .market_data import clamp, number
+from .ontology_threshold_policy import default_ontology_threshold_policy
 
 
 NEWS_ANALYSIS_VERSION = "news-analysis-v3-entity-linking"
@@ -368,14 +369,15 @@ class NewsAnalysis:
     quality_gate: Dict[str, object] = field(default_factory=dict)
 
     def confidence(self) -> float:
+        policy = default_ontology_threshold_policy().news_impact
         if self.excluded_reason:
-            return 0.25
+            return policy.excluded_confidence
         return round(clamp(
             self.relevance_score / 100 * 0.45
             + self.source_reliability * 0.35
             + self.materiality_score / 100 * 0.20,
-            0.25,
-            0.92,
+            policy.confidence_floor,
+            policy.confidence_cap,
         ), 2)
 
     def to_payload(self) -> Dict[str, object]:
@@ -1161,6 +1163,7 @@ def impact_channel_text(event_type: object, text: object) -> str:
 
 
 def impact_watch_text(impact: str, materiality: float, text: object) -> str:
+    policy = default_ontology_threshold_policy().news_impact
     lowered = _lower_text(text)
     if impact == "positive":
         return "호재라면 가격 상승이 거래량 증가와 함께 이어지는지 확인하세요"
@@ -1168,7 +1171,7 @@ def impact_watch_text(impact: str, materiality: float, text: object) -> str:
         return "악재라면 하락이 하루짜리 반응인지, 거래량을 동반한 재평가인지 확인하세요"
     if re.search(r"trading volume|거래량|거래대금", lowered):
         return "거래가 늘어난 이유가 매수 수요인지 단순 변동성인지 가격 반응으로 확인하세요"
-    if materiality >= 65:
+    if materiality >= policy.materiality_watch_score:
         return "중요도는 높지만 방향은 단정하지 말고 당일·익일 가격과 거래량 반응을 보세요"
     return "방향성이 약하므로 다른 가격·수급 신호와 같이 봐야 합니다"
 
@@ -1338,22 +1341,23 @@ def article_analysis_facts(
 
 
 def source_reliability_score(source: object, provider: object = "") -> float:
+    policy = default_ontology_threshold_policy().news_impact
     source_text = _lower_text(source)
     provider_text = _lower_text(provider)
     text = source_text + " " + provider_text
     if source_is_social_feed(source, provider):
-        return 0.25
+        return policy.social_source_reliability
     if any(token in source_text for token in LOW_RELIABILITY_SOURCE_TERMS):
-        return 0.42
+        return policy.low_source_reliability
     if any(token in source_text for token in HIGH_RELIABILITY_SOURCE_TERMS):
-        return 0.82
+        return policy.high_source_reliability
     if any(token in source_text for token in MEDIUM_RELIABILITY_SOURCE_TERMS):
-        return 0.68
+        return policy.medium_source_reliability
     if any(token in provider_text for token in ["google news", "google_rss", "gdelt"]):
-        return 0.58
+        return policy.aggregator_source_reliability
     if any(token in text for token in ["yahoo finance", "investing"]):
-        return 0.68
-    return 0.58
+        return policy.medium_source_reliability
+    return policy.default_source_reliability
 
 
 def source_is_social_feed(source: object, provider: object = "") -> bool:
@@ -1362,14 +1366,15 @@ def source_is_social_feed(source: object, provider: object = "") -> bool:
 
 
 def keyword_polarity(text: object) -> Tuple[str, float]:
+    policy = default_ontology_threshold_policy().news_impact
     lowered = _lower_text(text)
     support_hits = sum(1 for item in SUPPORT_KEYWORDS if _keyword_in_lowered_text(item, lowered))
     risk_hits = sum(1 for item in RISK_KEYWORDS if _keyword_in_lowered_text(item, lowered))
     if risk_hits > support_hits:
-        return "risk", min(16.0, 6.0 + risk_hits * 4.0)
+        return "risk", min(policy.risk_impact_cap, policy.risk_impact_base + risk_hits * policy.risk_impact_per_hit)
     if support_hits > risk_hits:
-        return "support", min(14.0, 5.0 + support_hits * 3.5)
-    return "context", 2.0
+        return "support", min(policy.support_impact_cap, policy.support_impact_base + support_hits * policy.support_impact_per_hit)
+    return "context", policy.context_impact_score
 
 
 def classify_news_event_type(title: object, summary: object = "") -> str:
@@ -1464,15 +1469,16 @@ def ambiguous_company_alias_noise(
 
 
 def confidence_from_analysis_payload(payload: Dict[str, object]) -> float:
+    policy = default_ontology_threshold_policy().news_impact
     payload = payload if isinstance(payload, dict) else {}
     if payload.get("excludedReason"):
-        return 0.25
+        return policy.excluded_confidence
     return round(clamp(
         number(payload.get("relevanceScore")) / 100 * 0.45
         + number(payload.get("sourceReliability")) * 0.35
         + number(payload.get("materialityScore")) / 100 * 0.20,
-        0.25,
-        0.92,
+        policy.confidence_floor,
+        policy.confidence_cap,
     ), 2)
 
 

@@ -21,6 +21,7 @@ from .message_types import (
 from .ontology_inference_context import inferencebox_source_name, ontology_projection_from_metadata, relation_contexts_from_snapshot
 from .ontology_insights import build_investment_insight_events, relation_news_event_key_suffix, split_operational_and_investment_events
 from .ontology_relation_reasoning import decision_action_group_for_label, relation_rule_context_summary_lines, relation_thresholds_from_settings
+from .ontology_threshold_policy import ontology_threshold_policy_from_context
 from .parsing import parse_assignments
 from .portfolio import AccountSnapshot, AlertEvent, Position, monitor_state_has_live_account_data, status_has_account_data_failure
 from .portfolio_calculations import DEFAULT_FX_RATES, fx_rates_with_external_signals, runtime_fx_currencies_from_external_signals, value_in_base
@@ -1009,8 +1010,9 @@ class RealtimeMonitor(MonitoringSampleDataMixin, MonitoringPositionContextMixin,
             relation_context = self.relation_context_from_decision(decision_state)
             if not is_graph_backed_relation_context(relation_context):
                 continue
+            dispatch_policy = ontology_threshold_policy_from_context(relation_context).watchlist_dispatch
             relation_score = float((relation_context.get("decision") or {}).get("score") or relation_context.get("signalStrength") or item.exit_pressure or 0)
-            if item.tone not in {"danger", "caution"} and item.profit_loss_rate > forced_loss_threshold and relation_score < 55:
+            if item.tone not in {"danger", "caution"} and item.profit_loss_rate > forced_loss_threshold and relation_score < dispatch_policy.minimum_relation_score:
                 continue
             prompt_context = self.prompt_context_from_decision(decision_state)
             relation_lines = self.relation_context_lines(decision_state)

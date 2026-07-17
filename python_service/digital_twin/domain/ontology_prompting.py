@@ -4,6 +4,7 @@ from typing import Dict, List
 from .market_data import number
 from .ontology_contracts import OntologyBelief, OntologyEvidence, OntologyRelation, PortfolioOntology
 from .ontology_schema import ontology_abox, ontology_tbox
+from .ontology_threshold_policy import default_ontology_threshold_policy
 from .ontology_tbox import BOUNDED_CONTEXTS, bounded_contexts_payload
 from .portfolio import PortfolioSummary
 
@@ -333,7 +334,8 @@ def portfolio_worldview(
     risk_count = len([item for item in graph.beliefs if item.polarity == "risk"])
     support_count = len([item for item in graph.beliefs if item.polarity == "support"])
     contradictions = sum(len(item.contradictions) for item in graph.opinions)
-    high_pressure = [item.symbol for item in graph.opinions if item.ontology_pressure >= 55]
+    pressure_policy = default_ontology_threshold_policy().score_breakdown
+    high_pressure = [item.symbol for item in graph.opinions if item.ontology_pressure >= pressure_policy.high_ontology_pressure_score]
     relation_influence_count = sum(len(item.relation_influences or []) for item in graph.opinions)
     pipeline_nodes = [item for item in graph.entities if item.kind == "data-pipeline"]
     insight_nodes = [item for item in graph.entities if item.kind == "insight"]

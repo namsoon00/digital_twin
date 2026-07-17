@@ -2,6 +2,7 @@ from typing import Dict, Iterable, List
 
 from .alert_formatting import compact_number, money, pct_delta, price_money, signed_pct
 from .market_data import investor_net_volume, number
+from .ontology_threshold_policy import default_ontology_threshold_policy
 from .ontology_relation_reasoning import relation_rule_context_summary_lines
 from .portfolio import AccountSnapshot, Position
 from .portfolio_calculations import value_in_base
@@ -429,9 +430,10 @@ class MonitoringPositionContextMixin:
             return (pace_label or "장외") + "라 거래량 판단은 참고용"
         if status != "open" or adjusted_ratio <= 0:
             return ""
-        if adjusted_ratio >= 1.5:
+        policy = default_ontology_threshold_policy().data_quality
+        if adjusted_ratio >= policy.volume_pace_strong_ratio:
             strength = "많음"
-        elif adjusted_ratio >= 0.8:
+        elif adjusted_ratio >= policy.volume_pace_normal_ratio:
             strength = "보통"
         else:
             strength = "부족"

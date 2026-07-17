@@ -7,6 +7,7 @@ from .investment_research import build_active_investment_opinion
 from .ontology_prompting import ONTOLOGY_PROMPT_VERSION
 from .portfolio_ontology_builder import build_portfolio_ontology
 from .ontology_relation_reasoning import DEFAULT_RELATION_THRESHOLDS, relation_thresholds_from_settings
+from .ontology_threshold_policy import default_ontology_threshold_policy
 from .parsing import parse_assignments
 from .portfolio import DecisionItem, PortfolioSummary, Position, expects_kr_microstructure_signals
 
@@ -398,7 +399,14 @@ class StrategyModel:
         sell_volume = number(position.sell_volume)
         total_volume = buy_volume + sell_volume
         buy_share = (buy_volume / total_volume) * 100.0 if total_volume else 50.0
-        sector_concentration_score = 12.0 if sector_ratio >= 50 else 6.0 if sector_ratio >= 35 else 0.0
+        policy = default_ontology_threshold_policy().strategy_fallback
+        sector_concentration_score = (
+            12.0
+            if sector_ratio >= policy.sector_concentration_high_pct
+            else 6.0
+            if sector_ratio >= policy.sector_concentration_review_pct
+            else 0.0
+        )
         sellable_score = 4.0 if position.sellable_quantity > 0 else 0.0
         holding_signal_score = holding_signal_adjustment(position, pnl)
         loss_guard = loss_guard_confirmation_components(position, pnl, self.thresholds)
@@ -713,21 +721,23 @@ def holding_pressure_scores(position: Position, sector_ratio: float = 0.0, strat
 
 
 def profit_take_pnl_component(pnl: float) -> float:
-    if pnl >= 20:
+    policy = default_ontology_threshold_policy().strategy_fallback
+    if pnl >= policy.profit_take_high_pnl:
         return 40.0
-    if pnl >= 10:
+    if pnl >= policy.profit_take_mid_pnl:
         return 28.0
-    if pnl >= 5:
+    if pnl >= policy.profit_take_low_pnl:
         return 15.0
     return 0.0
 
 
 def loss_cut_pnl_component(pnl: float) -> float:
-    if pnl <= -15:
+    policy = default_ontology_threshold_policy().strategy_fallback
+    if pnl <= policy.loss_cut_deep_pnl:
         return 42.0
-    if pnl <= -8:
+    if pnl <= policy.loss_cut_mid_pnl:
         return 28.0
-    if pnl <= -3:
+    if pnl <= policy.loss_cut_low_pnl:
         return 10.0
     return 0.0
 
@@ -753,17 +763,18 @@ def loss_guard_confirmation_components(position: Position, pnl: float, threshold
     individual_net = investor_net_volume(position.individual_net_volume, position.individual_buy_volume, position.individual_sell_volume)
     investor_base = abs(foreign_net) + abs(institution_net) + abs(individual_net)
     investor_flow_score = clamp(((foreign_net + institution_net) - individual_net * 0.35) / investor_base * 100.0, -100.0, 100.0) if investor_base else 0.0
+    policy = default_ontology_threshold_policy().strategy_fallback
     pnl_value = float(pnl or 0.0)
     loss_depth = max(0.0, loss_threshold - pnl_value) if pnl_value <= loss_threshold else 0.0
     near_threshold = pnl_value <= loss_threshold and loss_depth <= loss_buffer
-    ma20_break = ma20_distance <= -5
+    ma20_break = ma20_distance <= policy.loss_guard_ma20_break_pct
     has_ma60 = bool(number(position.ma60) or ma60_distance)
     ma60_break = has_ma60 and ma60_distance <= ma60_support_threshold
     ma60_support = has_ma60 and ma60_distance > ma60_support_threshold
     volume_confirm = volume_ratio >= volume_confirm_ratio
-    sell_flow_confirm = bool(total_volume) and sell_share >= 56.0
-    investor_flow_confirm = investor_flow_score <= -15.0
-    slope_confirm = ma20_slope <= -1.0 or ma60_slope <= -0.5
+    sell_flow_confirm = bool(total_volume) and sell_share >= policy.loss_guard_sell_flow_share
+    investor_flow_confirm = investor_flow_score <= policy.loss_guard_investor_flow_score
+    slope_confirm = ma20_slope <= policy.loss_guard_ma20_slope or ma60_slope <= policy.loss_guard_ma60_slope
     confirmation_count = sum(
         1
         for value in [ma60_break, volume_confirm, sell_flow_confirm, investor_flow_confirm, slope_confirm]
@@ -796,26 +807,28 @@ def loss_guard_confirmation_components(position: Position, pnl: float, threshold
 
 
 def holding_decision_label(pressure: float, pnl: float):
-    if pressure >= 72:
-        if pnl <= -8:
+    policy = default_ontology_threshold_policy().strategy_fallback
+    if pressure >= policy.pressure_urgent_score:
+        if pnl <= policy.pressure_loss_label_pnl:
             return "손절·분할축소 권장", "danger"
         if pnl < 0:
             return "손실 축소 권장", "danger"
         return "분할매도 권장", "danger"
-    if pressure >= 55:
-        if pnl <= -8:
+    if pressure >= policy.pressure_action_score:
+        if pnl <= policy.pressure_loss_label_pnl:
             return "손절·분할축소 권장", "danger"
         if pnl < 0:
             return "손실 축소 권장", "caution"
         return "일부 익절 권장", "caution"
-    if pressure >= 38:
-        if pnl <= -8:
+    if pressure >= policy.pressure_review_score:
+        if pnl <= policy.pressure_loss_label_pnl:
             return "손실 방어 관망", "hold"
         return "조건부 보유", "hold"
     return "보유 유지", "watch"
 
 
 def holding_signal_adjustment(position: Position, pnl: float = None) -> float:
+    policy = default_ontology_threshold_policy().strategy_fallback
     pnl_rate = position.profit_loss_rate if pnl is None else float(pnl or 0.0)
     adjustment = 0.0
     buy_volume = number(position.buy_volume)
@@ -825,60 +838,60 @@ def holding_signal_adjustment(position: Position, pnl: float = None) -> float:
     if total_volume:
         buy_share = (buy_volume / total_volume) * 100.0
         sell_share = 100.0 - buy_share
-        if sell_share >= 62 and volume_ratio >= 1.2:
+        if sell_share >= policy.strong_flow_share and volume_ratio >= policy.flow_volume_ratio:
             adjustment += 6
-        elif sell_share >= 56:
+        elif sell_share >= policy.moderate_flow_share:
             adjustment += 3
-        if buy_share >= 62 and volume_ratio >= 1.2:
+        if buy_share >= policy.strong_flow_share and volume_ratio >= policy.flow_volume_ratio:
             adjustment -= 5
-        elif buy_share >= 56:
+        elif buy_share >= policy.moderate_flow_share:
             adjustment -= 2
     foreign_net = investor_net_volume(position.foreign_net_volume, position.foreign_buy_volume, position.foreign_sell_volume)
     institution_net = investor_net_volume(position.institution_net_volume, position.institution_buy_volume, position.institution_sell_volume)
     investor_base = abs(foreign_net) + abs(institution_net)
     if investor_base:
         smart_money_ratio = (foreign_net + institution_net) / investor_base
-        if smart_money_ratio <= -0.35:
+        if smart_money_ratio <= -policy.smart_money_strong_ratio:
             adjustment += 5
-        elif smart_money_ratio <= -0.15:
+        elif smart_money_ratio <= -policy.smart_money_moderate_ratio:
             adjustment += 2
-        elif smart_money_ratio >= 0.35:
+        elif smart_money_ratio >= policy.smart_money_strong_ratio:
             adjustment -= 4
-        elif smart_money_ratio >= 0.15:
+        elif smart_money_ratio >= policy.smart_money_moderate_ratio:
             adjustment -= 2
     trade_strength = number(position.trade_strength)
     if trade_strength:
-        if trade_strength <= 85:
+        if trade_strength <= policy.weak_trade_strength:
             adjustment += 3
-        elif trade_strength >= 120:
+        elif trade_strength >= policy.strong_trade_strength:
             adjustment -= 3
     ma20_distance = number(position.ma20_distance)
     ma60_distance = number(position.ma60_distance)
     ma20_slope = number(position.ma20_slope)
     ma60_slope = number(position.ma60_slope)
     if ma20_distance:
-        if ma20_distance <= -5:
+        if ma20_distance <= policy.ma20_deep_break_pct:
             adjustment += 7
-        elif ma20_distance <= -2:
+        elif ma20_distance <= policy.ma20_weak_break_pct:
             adjustment += 4
-        elif ma20_distance >= 8 and pnl_rate >= 10:
+        elif ma20_distance >= policy.ma20_overheat_pct and pnl_rate >= policy.profit_overheat_pnl:
             adjustment += 3
-        elif ma20_distance > 0 and pnl_rate > -8:
+        elif ma20_distance > 0 and pnl_rate > policy.pressure_loss_label_pnl:
             adjustment -= 2
     if ma60_distance:
-        if ma60_distance <= -4:
+        if ma60_distance <= policy.ma60_break_pct:
             adjustment += 4
-        elif ma60_distance > 0 and pnl_rate > -8:
+        elif ma60_distance > 0 and pnl_rate > policy.pressure_loss_label_pnl:
             adjustment -= 1
     if ma20_slope:
-        if ma20_slope <= -1:
+        if ma20_slope <= policy.loss_guard_ma20_slope:
             adjustment += 4
-        elif ma20_slope >= 0.5 and pnl_rate > -8:
+        elif ma20_slope >= policy.ma20_slope_recovery_pct and pnl_rate > policy.pressure_loss_label_pnl:
             adjustment -= 2
     if ma60_slope:
-        if ma60_slope <= -0.5:
+        if ma60_slope <= policy.loss_guard_ma60_slope:
             adjustment += 2
-        elif ma60_slope > 0 and pnl_rate > -8:
+        elif ma60_slope > 0 and pnl_rate > policy.pressure_loss_label_pnl:
             adjustment -= 1
     return clamp(adjustment, -12.0, 18.0)
 

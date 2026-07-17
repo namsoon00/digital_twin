@@ -13,6 +13,7 @@ from .ontology_rulebox_contracts import (
     GraphInferenceRule,
 )
 from .ontology_schema import abox_relation_properties
+from .ontology_threshold_policy import default_ontology_threshold_policy
 
 
 def materialize_rule_inference(
@@ -212,6 +213,7 @@ def materialize_inference_explanation_entities(
     confidence: float,
     evidence_relation_ids: List[str],
 ) -> List[tuple]:
+    threshold_policy = default_ontology_threshold_policy().inference_materialization
     risk_impact = max([number(getattr(item, "risk_impact", 0)) for item in rule.derivations or []], default=0)
     support_impact = max([number(getattr(item, "support_impact", 0)) for item in rule.derivations or []], default=0)
     primary = primary_derivation(rule)
@@ -227,7 +229,12 @@ def materialize_inference_explanation_entities(
         "supportImpact": support_impact,
     })
     conflict_type = signal_conflict_type(risk_impact, support_impact)
-    should_escalate = bool(stage_priority >= 55 or risk_impact >= 12 or support_impact >= 12 or confidence >= 0.86)
+    should_escalate = bool(
+        stage_priority >= threshold_policy.escalate_stage_priority
+        or risk_impact >= threshold_policy.escalate_risk_impact
+        or support_impact >= threshold_policy.escalate_support_impact
+        or confidence >= threshold_policy.escalate_confidence
+    )
     state_key = "|".join([value for value in [decision_stage, rule.rule_id] if str(value or "").strip()])
     common = {
         "symbol": symbol,
@@ -239,6 +246,9 @@ def materialize_inference_explanation_entities(
         "evidenceRelationIds": evidence_relation_ids,
         "decisionStage": decision_stage,
         "stagePriority": stage_priority,
+        "thresholdPolicyId": threshold_policy.policy_id,
+        "thresholdPolicyVersion": threshold_policy.version,
+        "thresholdPolicySource": threshold_policy.source,
     }
     why_id = entity_id("why-now", symbol + ":" + rule.rule_id)
     conflict_id = entity_id("signal-conflict", symbol + ":" + rule.rule_id)
@@ -287,11 +297,12 @@ def primary_derivation(rule: GraphInferenceRule):
 
 
 def signal_conflict_type(risk_impact: float, support_impact: float) -> str:
+    threshold_policy = default_ontology_threshold_policy().inference_materialization
     if risk_impact <= 0 or support_impact <= 0:
         return "none"
-    if risk_impact > support_impact + 3:
+    if risk_impact > support_impact + threshold_policy.conflict_dominance_gap:
         return "risk-dominant-with-support"
-    if support_impact > risk_impact + 3:
+    if support_impact > risk_impact + threshold_policy.conflict_dominance_gap:
         return "support-dominant-with-risk"
     return "mixed-signal"
 

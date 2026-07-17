@@ -7,12 +7,31 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from digital_twin.domain.ontology_inference_context import relation_contexts_from_snapshot
 from digital_twin.domain.ontology_relation_execution_plan import decision_drivers_from_relation_context
 from digital_twin.domain.ontology_relation_facts import position_signal_facts
+from digital_twin.domain.investment_research import choose_action
 from digital_twin.domain.portfolio import AccountSnapshot, Position
 from digital_twin.domain.portfolio_calculations import portfolio_summary
 from digital_twin.domain.strategy import decisions_for_positions
 
 
 class OntologyInferenceContextTests(unittest.TestCase):
+    def test_action_selection_threshold_policy_can_override_watchlist_entry_gate(self):
+        position = Position(symbol="AAPL", name="Apple", source="watchlist")
+        context = {
+            "decision": {"actionGroup": "entry", "score": 58},
+            "signalStrength": 58,
+        }
+
+        self.assertEqual("AVOID", choose_action(position, context, support_score=11, risk_score=0))
+
+        context["thresholdPolicy"] = {
+            "actionSelection": {
+                "watchlistEntryRelationScore": 50,
+                "watchlistEntryWeakSupportMargin": 10,
+            }
+        }
+
+        self.assertEqual("BUY", choose_action(position, context, support_score=11, risk_score=0))
+
     def test_missing_data_driver_preserves_stale_value_reason(self):
         drivers = decision_drivers_from_relation_context(
             {

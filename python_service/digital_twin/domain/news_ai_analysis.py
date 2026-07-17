@@ -7,6 +7,7 @@ from typing import Dict, Iterable, List, Tuple
 from .investment_research import NewsCollectionTarget, ResearchEvidence
 from .market_data import clamp, number
 from . import news_analysis as news_domain
+from .ontology_threshold_policy import default_ontology_threshold_policy
 
 
 NEWS_AI_ANALYSIS_VERSION = "news-ai-analysis-v1"
@@ -364,20 +365,21 @@ def normalize_ai_analysis(payload: Dict[str, object], fallback: NewsAiAnalysis =
 
 
 def infer_impact_polarity(text: object) -> Tuple[str, List[str], List[str], List[str]]:
+    policy = default_ontology_threshold_policy().news_impact
     risk_hits = keyword_hits(text, RISK_PHRASES)
     support_hits = keyword_hits(text, SUPPORT_PHRASES)
     contrast_hits = keyword_hits(text, CONTRAST_PHRASES)
-    risk_score = len(risk_hits) * 18
-    support_score = len(support_hits) * 15
+    risk_score = len(risk_hits) * policy.risk_keyword_weight
+    support_score = len(support_hits) * policy.support_keyword_weight
     if "실적 우려" in risk_hits or "전망 우려" in risk_hits:
-        risk_score += 22
+        risk_score += policy.concern_bonus
     if "붕괴" in risk_hits or "plunge" in risk_hits:
-        risk_score += 18
+        risk_score += policy.plunge_bonus
     if contrast_hits and risk_hits and support_hits:
-        risk_score += 15
-    if risk_score >= support_score + 8 and risk_score > 0:
+        risk_score += policy.contrast_bonus
+    if risk_score >= support_score + policy.dominance_gap and risk_score > 0:
         return "risk", risk_hits, support_hits, contrast_hits
-    if support_score >= risk_score + 8 and support_score > 0:
+    if support_score >= risk_score + policy.dominance_gap and support_score > 0:
         return "support", risk_hits, support_hits, contrast_hits
     if risk_hits and support_hits:
         return "mixed", risk_hits, support_hits, contrast_hits

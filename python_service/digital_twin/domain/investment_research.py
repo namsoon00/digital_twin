@@ -4,6 +4,7 @@ from typing import Dict, Iterable, List, Tuple
 
 from .market_data import clamp, number
 from . import news_analysis as news_domain
+from .ontology_threshold_policy import ontology_threshold_policy_from_context
 from .portfolio import Position
 from .symbol_universe import normalize_market
 
@@ -877,6 +878,7 @@ def has_add_buy_candidate(relation_context: Dict[str, object]) -> bool:
 
 
 def choose_action(position: Position, relation_context: Dict[str, object], support_score: float, risk_score: float) -> str:
+    policy = ontology_threshold_policy_from_context(relation_context or {}).action_selection
     decision = relation_context.get("decision") if isinstance(relation_context.get("decision"), dict) else {}
     action_group = str(decision.get("actionGroup") or "")
     action_level = str(decision.get("actionLevel") or "")
@@ -884,33 +886,33 @@ def choose_action(position: Position, relation_context: Dict[str, object], suppo
     relation_score = number(decision.get("score") or relation_context.get("signalStrength"))
     is_watchlist = str(position.source or "") == "watchlist"
     if is_watchlist:
-        if risk_score >= support_score + 8 or action_group in {"entryRisk", "entryWait", "lossControl", "dataQuality", "rateRegime", "fxRegime", "macroRegime"}:
+        if risk_score >= support_score + policy.watchlist_risk_margin or action_group in {"entryRisk", "entryWait", "lossControl", "dataQuality", "rateRegime", "fxRegime", "macroRegime"}:
             return "AVOID"
-        if action_group == "entry" and relation_score >= 70 and support_score >= risk_score + 8:
+        if action_group == "entry" and relation_score >= policy.watchlist_entry_strong_relation_score and support_score >= risk_score + policy.watchlist_entry_support_margin:
             return "BUY"
-        if action_group == "entry" and relation_score >= 55 and support_score >= risk_score + 16:
+        if action_group == "entry" and relation_score >= policy.watchlist_entry_relation_score and support_score >= risk_score + policy.watchlist_entry_weak_support_margin:
             return "BUY"
         return "AVOID"
     if action_group == "addBuy" or decision_stage == "ADD_BUY_REVIEW" or has_add_buy_candidate(relation_context):
         execution_plan = relation_context.get("executionPlan") if isinstance(relation_context.get("executionPlan"), dict) else {}
         add_buy_assessment = execution_plan.get("addBuyAssessment") if isinstance(execution_plan.get("addBuyAssessment"), dict) else {}
         blocked_reasons = list(add_buy_assessment.get("blockedReasons") or [])
-        if not blocked_reasons and relation_score >= 70 and support_score >= risk_score - 4:
+        if not blocked_reasons and relation_score >= policy.add_buy_relation_score and support_score >= risk_score + policy.add_buy_support_margin:
             return "ADD"
         return "HOLD"
     if action_group == "lossControl":
-        return "SELL" if relation_score >= 78 or risk_score >= support_score + 18 else "TRIM"
+        return "SELL" if relation_score >= policy.loss_control_sell_relation_score or risk_score >= support_score + policy.loss_control_sell_risk_margin else "TRIM"
     if action_group in {"profitTake", "rebalance"}:
         return "TRIM"
     if action_group in {"eventRisk", "disclosure"}:
         return "HOLD"
     if action_group in {"executionRisk", "dataQuality", "factorRisk", "rateRegime", "fxRegime", "macroRegime"}:
         return "HOLD"
-    if action_level == "urgent" and risk_score >= support_score + 28:
+    if action_level == "urgent" and risk_score >= support_score + policy.urgent_trim_risk_margin:
         return "TRIM"
-    if action_group == "entryRisk" or risk_score >= support_score + 16:
+    if action_group == "entryRisk" or risk_score >= support_score + policy.risk_hold_margin:
         return "HOLD"
-    if support_score >= risk_score + 18 and relation_score < 55:
+    if support_score >= risk_score + policy.unsupported_add_support_margin and relation_score < policy.unsupported_add_max_relation_score:
         return "ADD"
     return "HOLD"
 

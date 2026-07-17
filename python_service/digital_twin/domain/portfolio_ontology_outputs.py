@@ -9,6 +9,7 @@ from .ontology_contracts import (
     PortfolioOntology,
 )
 from .ontology_schema import abox_relation_properties, add_entity, add_relation
+from .ontology_threshold_policy import default_ontology_threshold_policy
 
 
 def dedupe_entities(items: List[OntologyEntity]) -> List[OntologyEntity]:
@@ -41,13 +42,14 @@ def dedupe_evidence(items: List[OntologyEvidence]) -> List[OntologyEvidence]:
     return list(merged.values())
 
 def insight_type_for_opinion(opinion: OntologyOpinion, stock_source: str) -> str:
+    pressure_policy = default_ontology_threshold_policy().score_breakdown
     if opinion.contradictions:
         return "contradictionDetected"
     if any("데이터" in str(item) or "부족" in str(item) for item in opinion.dominant_risks + opinion.contradictions):
         return "dataQualityWarning"
     if stock_source == "watchlist":
         return "watchlistEntrySignal"
-    if opinion.ontology_pressure >= 55 or opinion.tone in {"danger", "caution"}:
+    if opinion.ontology_pressure >= pressure_policy.high_ontology_pressure_score or opinion.tone in {"danger", "caution"}:
         return "riskIncrease"
     if opinion.opportunities or opinion.supporting_beliefs:
         return "opportunityDetected"
@@ -64,6 +66,7 @@ def add_ontology_insight_concepts(graph: PortfolioOntology) -> None:
     insight_policy_id = entity_id("insight-policy", "meaningful-change")
     importance_gate_id = entity_id("importance-gate", "materiality-first")
     ai_review_id = entity_id("concept", "ai-investment-review")
+    pressure_policy = default_ontology_threshold_policy().score_breakdown
     for opinion in graph.opinions:
         stock = stock_entities.get(str(opinion.symbol or "").upper())
         if not stock:
@@ -72,8 +75,8 @@ def add_ontology_insight_concepts(graph: PortfolioOntology) -> None:
         insight_type = insight_type_for_opinion(opinion, source)
         materiality_score = max(number(opinion.ontology_pressure), number(opinion.conviction))
         if opinion.contradictions:
-            materiality_score = max(materiality_score, 78)
-        materiality_threshold = 55.0
+            materiality_score = max(materiality_score, pressure_policy.contradiction_materiality_score)
+        materiality_threshold = pressure_policy.high_ontology_pressure_score
         dispatch_candidate = bool(materiality_score >= materiality_threshold or opinion.contradictions or source == "watchlist")
         insight_id = add_entity(graph, "insight", opinion.symbol + ":" + insight_type, stock.label + " " + opinion.action, {
             "tboxClass": "Insight",

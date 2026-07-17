@@ -3,6 +3,7 @@ from typing import Dict, List
 from .message_types import WATCHLIST_ONTOLOGY_SIGNAL
 from .ontology_inference_context import relation_contexts_from_snapshot
 from .ontology_insights import relation_news_event_key_suffix
+from .ontology_threshold_policy import ontology_threshold_policy_from_context
 from .portfolio import AccountSnapshot, AlertEvent
 
 
@@ -66,8 +67,9 @@ class StrategyAlertMixin:
         decision = relation_context.get("decision") if isinstance(relation_context, dict) else {}
         if not isinstance(decision, dict):
             decision = {}
+        threshold_policy = ontology_threshold_policy_from_context(relation_context).watchlist_dispatch
         relation_score = float(decision.get("score") or relation_context.get("signalStrength") or 0)
-        if relation_score < 55:
+        if relation_score < threshold_policy.minimum_relation_score:
             return None
         signal_type = self.watchlist_ontology_signal_type(relation_context)
         decision_label = str(decision.get("label") or "관심종목 관계 신호")
@@ -85,7 +87,7 @@ class StrategyAlertMixin:
         news_event_suffix = relation_news_event_key_suffix(relation_context)
         if news_event_suffix:
             rule_signature = rule_signature + "+" + news_event_suffix
-        severity = "ALERT" if signal_type == "riskWatch" and (relation_score >= 75 or decision.get("tone") == "danger") else "WATCH"
+        severity = "ALERT" if signal_type == "riskWatch" and (relation_score >= threshold_policy.risk_alert_relation_score or decision.get("tone") == "danger") else "WATCH"
         symbol = position.symbol.upper()
         lines = [
             "관심종목 온톨로지 관계 신호",

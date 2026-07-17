@@ -20,15 +20,20 @@ from .notification_rule_models import (
     default_threshold,
 )
 from .notifications import NotificationJob
+from .ontology_threshold_policy import default_ontology_threshold_policy
 from .scoring import fallback_terms_for_condition
 from .strategy import SafeFormula
 
 
-MANDATORY_PROFIT_LOSS_MESSAGE_TYPES = {"investmentInsight", "holdingTiming"}
-MANDATORY_LOSS_RATE_THRESHOLD = -15.0
-MANDATORY_PROFIT_RATE_THRESHOLD = 20.0
-MANDATORY_LOSS_BANDS = [-15.0, -20.0, -30.0]
-MANDATORY_PROFIT_BANDS = [20.0, 30.0, 50.0]
+def mandatory_profit_loss_policy():
+    return default_ontology_threshold_policy().profit_loss_delivery
+
+
+MANDATORY_PROFIT_LOSS_MESSAGE_TYPES = set(mandatory_profit_loss_policy().message_types)
+MANDATORY_LOSS_RATE_THRESHOLD = mandatory_profit_loss_policy().loss_rate_threshold
+MANDATORY_PROFIT_RATE_THRESHOLD = mandatory_profit_loss_policy().profit_rate_threshold
+MANDATORY_LOSS_BANDS = list(mandatory_profit_loss_policy().loss_bands)
+MANDATORY_PROFIT_BANDS = list(mandatory_profit_loss_policy().profit_bands)
 MATERIAL_SOURCE_EVENT_MARKERS = [
     ":news:",
     ":article:",
@@ -253,11 +258,13 @@ def format_profit_loss_percent(value: float) -> str:
 
 
 def mandatory_loss_band_rank(value: float) -> int:
-    return len([threshold for threshold in MANDATORY_LOSS_BANDS if float(value or 0) <= threshold])
+    policy = mandatory_profit_loss_policy()
+    return len([threshold for threshold in policy.loss_bands if float(value or 0) <= threshold])
 
 
 def mandatory_profit_band_rank(value: float) -> int:
-    return len([threshold for threshold in MANDATORY_PROFIT_BANDS if float(value or 0) >= threshold])
+    policy = mandatory_profit_loss_policy()
+    return len([threshold for threshold in policy.profit_bands if float(value or 0) >= threshold])
 
 
 def mandatory_profit_loss_delivery_reason(
@@ -267,17 +274,18 @@ def mandatory_profit_loss_delivery_reason(
 ) -> str:
     if job is None:
         return ""
-    if str(job.message_type or "") not in MANDATORY_PROFIT_LOSS_MESSAGE_TYPES:
+    policy = mandatory_profit_loss_policy()
+    if str(job.message_type or "") not in set(policy.message_types):
         return ""
     profit_loss_rate = profit_loss_rate_from_context(job.context or {}, job.text or "")
     if profit_loss_rate is None:
         return ""
     previous_rate = profit_loss_rate_from_context(previous_context or {})
-    if profit_loss_rate <= MANDATORY_LOSS_RATE_THRESHOLD:
+    if profit_loss_rate <= policy.loss_rate_threshold:
         current_text = format_profit_loss_percent(profit_loss_rate)
         if previous_rate is not None:
             previous_text = format_profit_loss_percent(previous_rate)
-            if previous_rate > MANDATORY_LOSS_RATE_THRESHOLD:
+            if previous_rate > policy.loss_rate_threshold:
                 return "손실률 " + previous_text + " -> " + current_text + "로 필수 발송 구간에 신규 진입"
             if mandatory_loss_band_rank(profit_loss_rate) > mandatory_loss_band_rank(previous_rate):
                 return "손실률 " + previous_text + " -> " + current_text + "로 더 깊은 손실 구간 진입"
@@ -288,14 +296,14 @@ def mandatory_profit_loss_delivery_reason(
             "손실률 "
             + current_text
             + "가 필수 발송 구간("
-            + format_rule_number(MANDATORY_LOSS_RATE_THRESHOLD)
+            + format_rule_number(policy.loss_rate_threshold)
             + "% 이하)에 있음"
         )
-    if profit_loss_rate >= MANDATORY_PROFIT_RATE_THRESHOLD:
+    if profit_loss_rate >= policy.profit_rate_threshold:
         current_text = format_profit_loss_percent(profit_loss_rate)
         if previous_rate is not None:
             previous_text = format_profit_loss_percent(previous_rate)
-            if previous_rate < MANDATORY_PROFIT_RATE_THRESHOLD:
+            if previous_rate < policy.profit_rate_threshold:
                 return "수익률 " + previous_text + " -> " + current_text + "로 필수 발송 구간에 신규 진입"
             if mandatory_profit_band_rank(profit_loss_rate) > mandatory_profit_band_rank(previous_rate):
                 return "수익률 " + previous_text + " -> " + current_text + "로 더 높은 수익 구간 진입"
@@ -306,7 +314,7 @@ def mandatory_profit_loss_delivery_reason(
             "수익률 "
             + current_text
             + "가 필수 발송 구간(+"
-            + format_rule_number(MANDATORY_PROFIT_RATE_THRESHOLD)
+            + format_rule_number(policy.profit_rate_threshold)
             + "% 이상)에 있음"
         )
     return ""

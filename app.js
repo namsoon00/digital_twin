@@ -3621,6 +3621,11 @@
       externalYFinanceOptionsMaxRows: settingValue("externalYFinanceOptionsMaxRows"),
       externalYFinanceEarningsLimit: settingValue("externalYFinanceEarningsLimit"),
       externalYFinanceNewsLimit: settingValue("externalYFinanceNewsLimit"),
+      externalYFinancePriceMaxAgeMinutes: settingValue("externalYFinancePriceMaxAgeMinutes"),
+      externalYFinanceOptionsMaxAgeMinutes: settingValue("externalYFinanceOptionsMaxAgeMinutes"),
+      externalYFinanceNewsMaxAgeMinutes: settingValue("externalYFinanceNewsMaxAgeMinutes"),
+      externalYFinanceAnalystMaxAgeMinutes: settingValue("externalYFinanceAnalystMaxAgeMinutes"),
+      externalYFinanceFundamentalMaxAgeMinutes: settingValue("externalYFinanceFundamentalMaxAgeMinutes"),
       externalCoinGeckoEnabled: settingValue("externalCoinGeckoEnabled"),
       externalFredEnabled: settingValue("externalFredEnabled"),
       externalFredSeries: settingValue("externalFredSeries"),
@@ -14992,14 +14997,16 @@
     var inferenceBox = diagnostics.inferenceBox || {};
     var reasoningBoundary = diagnostics.reasoningBoundary || {};
     var notificationBoundary = diagnostics.notificationBoundary || {};
+    var strategyProposalBoundary = diagnostics.strategyProposalBoundary || {};
     var rawChecks = Array.isArray(diagnostics.checks) ? diagnostics.checks : (Array.isArray(notificationBoundary.checks) ? notificationBoundary.checks : []);
     var checks = [
       { status: tbox.status || (tbox.configured ? "ok" : ""), title: "TBox", message: tbox.reason || tbox.source || tbox.fingerprint || "" },
       { status: rulebox.status || (rulebox.configured ? "ok" : ""), title: "RuleBox", message: rulebox.reason || rulebox.source || rulebox.ruleboxShortHash || rulebox.engineVersion || "" },
-      { status: aboxCoverage.status || "", title: "ABox Coverage", message: [aboxCoverage.symbolCount != null ? aboxCoverage.symbolCount + " symbols" : "", aboxCoverage.coverageRatio != null ? "coverage " + Math.round(Number(aboxCoverage.coverageRatio || 0) * 100) + "%" : ""].filter(Boolean).join(" · ") },
+      { status: aboxCoverage.status || "", title: "ABox Coverage", message: [aboxCoverage.primarySymbolCount != null ? aboxCoverage.primarySymbolCount + " primary" : aboxCoverage.symbolCount != null ? aboxCoverage.symbolCount + " symbols" : "", aboxCoverage.primaryCoverageRatio != null ? "primary " + Math.round(Number(aboxCoverage.primaryCoverageRatio || 0) * 100) + "%" : aboxCoverage.coverageRatio != null ? "coverage " + Math.round(Number(aboxCoverage.coverageRatio || 0) * 100) + "%" : "", aboxCoverage.contextSymbolCount != null ? aboxCoverage.contextSymbolCount + " context" : ""].filter(Boolean).join(" · ") },
       { status: inferenceBox.status || inferenceBox.typedbReadStatus || "", title: "InferenceBox", message: inferenceBox.reason || inferenceBox.typedbReadReason || inferenceBox.reasoningMode || inferenceBox.inferenceGenerationId || "" },
       { status: reasoningBoundary.status || "", title: "Reasoning Boundary", message: reasoningBoundary.interpretation || reasoningBoundary.ruleboxHashStatus || "" },
-      { status: notificationBoundary.status || "", title: "Notification Boundary", message: notificationBoundary.reason || (notificationBoundary.recentJobCount != null ? notificationBoundary.recentJobCount + " recent jobs" : "") }
+      { status: notificationBoundary.status || "", title: "Notification Boundary", message: notificationBoundary.reason || (notificationBoundary.recentJobCount != null ? notificationBoundary.recentJobCount + " recent jobs" : "") },
+      { status: strategyProposalBoundary.status || "", title: "Strategy Proposal Boundary", message: strategyProposalBoundary.nextAction || (strategyProposalBoundary.count != null ? strategyProposalBoundary.count + " proposals" : "") }
     ].concat(rawChecks.map(function (check, index) {
       return typeof check === "string"
         ? { status: "check", title: "Boundary check " + (index + 1), message: check }
@@ -18103,6 +18110,11 @@
         renderSettingField("externalYFinanceOptionsMaxRows", "옵션 행 수", "number", "40"),
         renderSettingField("externalYFinanceEarningsLimit", "실적 일정 수", "number", "16"),
         renderSettingField("externalYFinanceNewsLimit", "뉴스 수", "number", "10"),
+        renderSettingField("externalYFinancePriceMaxAgeMinutes", "가격 신선도(분)", "number", "30"),
+        renderSettingField("externalYFinanceOptionsMaxAgeMinutes", "옵션 신선도(분)", "number", "30"),
+        renderSettingField("externalYFinanceNewsMaxAgeMinutes", "뉴스 신선도(분)", "number", "1440"),
+        renderSettingField("externalYFinanceAnalystMaxAgeMinutes", "애널리스트 신선도(분)", "number", "10080"),
+        renderSettingField("externalYFinanceFundamentalMaxAgeMinutes", "재무 신선도(분)", "number", "129600"),
         renderSettingSelect("externalCoinGeckoEnabled", "CoinGecko 수집", [
           { value: "1", label: "사용" },
           { value: "0", label: "사용 안 함" }

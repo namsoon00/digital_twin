@@ -353,6 +353,12 @@ class OntologyInferenceContextTests(unittest.TestCase):
         self.assertEqual(["graph.loss_guard.breakdown.v1"], contexts["005930"]["evidenceSubgraph"]["matchedRuleIds"])
         self.assertTrue(any(item["type"] == "HAS_INFERRED_RISK" for item in contexts["005930"]["evidenceSubgraph"]["edges"]))
         self.assertIn("evidenceSubgraph", contexts["005930"]["promptContext"])
+        self.assertEqual("WhyNow", contexts["005930"]["whyNow"]["tboxClass"])
+        self.assertEqual("SignalConflict", contexts["005930"]["signalConflicts"]["tboxClass"])
+        self.assertEqual("InferenceTimeline", contexts["005930"]["inferenceTimeline"]["tboxClass"])
+        self.assertIn("whyNow", contexts["005930"]["promptContext"])
+        self.assertIn("signalConflicts", contexts["005930"]["promptContext"])
+        self.assertIn("inferenceTimeline", contexts["005930"]["promptContext"])
 
         decisions = decisions_for_positions(
             [position],
@@ -825,12 +831,16 @@ class OntologyInferenceContextTests(unittest.TestCase):
             },
         )
 
-        breakdown = relation_contexts_from_snapshot(snapshot)["000660"]["scoreBreakdown"]
+        context = relation_contexts_from_snapshot(snapshot)["000660"]
+        breakdown = context["scoreBreakdown"]
 
         self.assertGreater(breakdown["riskPressure"], 0)
         self.assertGreater(breakdown["supportEvidence"], 0)
         self.assertLess(breakdown["netRiskPressure"], breakdown["riskPressure"])
         self.assertGreater(breakdown["opposingPressurePenalty"], 0)
+        self.assertTrue(context["signalConflicts"]["hasConflict"])
+        self.assertIn("손실 구간", context["signalConflicts"]["riskDrivers"])
+        self.assertIn("체결강도 우위", context["signalConflicts"]["supportDrivers"])
 
 
 if __name__ == "__main__":

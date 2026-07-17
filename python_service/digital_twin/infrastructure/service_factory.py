@@ -53,6 +53,16 @@ from .symbol_sources import RemoteSymbolSourceGateway
 from .toss_snapshots import TossProvider, build_snapshot, demo_positions
 
 
+DISABLED_SETTING_VALUES = {"0", "false", "no", "off", "disabled"}
+
+
+def setting_truthy(value: object, default: bool = True) -> bool:
+    text = str(value if value is not None else "").strip().lower()
+    if not text:
+        return default
+    return text not in DISABLED_SETTING_VALUES
+
+
 def monitor_event_bus() -> EventBus:
     bus = default_event_bus()
     bus.subscribe_all(ModelReviewEnqueuer(stores.model_review_job_store()).handle)
@@ -93,28 +103,31 @@ def build_monitor_runner(
     accounts: Iterable[AccountConfig],
     event_publisher=None,
     progress_callback: Callable[[str, Dict[str, object]], None] = None,
+    settings=None,
+    typedb_native_rule_execution_enabled: bool = False,
 ) -> MonitorRunner:
-    settings = runtime_settings()
-    store = stores.monitor_store(settings)
-    ontology_quality_store = stores.ontology_quality_sample_store(settings)
-    interval_seconds = int(os.environ.get("PYTHON_REALTIME_INTERVAL_SECONDS") or os.environ.get("REALTIME_NOTIFY_INTERVAL_SECONDS") or settings.get("monitorAccountIntervalSeconds") or 180)
+    configured_settings = dict(settings or runtime_settings())
+    configured_settings["typedbNativeRuleExecutionEnabled"] = "1" if typedb_native_rule_execution_enabled else "0"
+    store = stores.monitor_store(configured_settings)
+    ontology_quality_store = stores.ontology_quality_sample_store(configured_settings)
+    interval_seconds = int(os.environ.get("PYTHON_REALTIME_INTERVAL_SECONDS") or os.environ.get("REALTIME_NOTIFY_INTERVAL_SECONDS") or configured_settings.get("monitorAccountIntervalSeconds") or 180)
     return MonitorRunner(
         accounts,
         store=store,
-        monitor=RealtimeMonitor(settings),
+        monitor=RealtimeMonitor(configured_settings),
         snapshot_builder=build_snapshot,
         event_sender=send_events,
         event_publisher=event_publisher or monitor_event_bus(),
-        cycle_recorder=stores.monitoring_cycle_recorder(settings, store),
+        cycle_recorder=stores.monitoring_cycle_recorder(configured_settings, store),
         ontology_projection_recorder=PortfolioOntologyProjectionRecorder(
-            ontology_repository_from_settings(settings),
+            ontology_repository_from_settings(configured_settings),
             quality_store=ontology_quality_store,
-            settings=settings,
+            settings=configured_settings,
         ),
-        account_job_store=monitor_account_job_store_from_settings(settings),
-        account_job_batch_size=int(settings.get("monitorAccountBatchSize") or os.environ.get("MONITOR_ACCOUNT_BATCH_SIZE") or 10),
+        account_job_store=monitor_account_job_store_from_settings(configured_settings),
+        account_job_batch_size=int(configured_settings.get("monitorAccountBatchSize") or os.environ.get("MONITOR_ACCOUNT_BATCH_SIZE") or 10),
         account_job_interval_seconds=interval_seconds,
-        account_job_lock_seconds=int(settings.get("monitorAccountLockSeconds") or os.environ.get("MONITOR_ACCOUNT_LOCK_SECONDS") or max(600, interval_seconds * 4)),
+        account_job_lock_seconds=int(configured_settings.get("monitorAccountLockSeconds") or os.environ.get("MONITOR_ACCOUNT_LOCK_SECONDS") or max(600, interval_seconds * 4)),
         worker_id=os.environ.get("MONITOR_WORKER_ID") or ("monitor-" + uuid.uuid4().hex[:12]),
         progress_callback=progress_callback,
     )
@@ -258,13 +271,26 @@ def build_investment_calendar_runner(settings=None, event_publisher=None) -> Inv
 
 def build_ontology_reasoning_runner(settings=None, event_publisher=None) -> OntologyReasoningRunner:
     configured_settings = settings or runtime_settings()
-    registry = stores.account_registry(configured_settings)
-    event_log = stores.event_log(configured_settings)
+    reasoning_store_settings = dict(configured_settings)
+    reasoning_store_settings["_skipOperationalHistoryRetention"] = "1"
+    reasoning_monitor_settings = dict(configured_settings)
+    reasoning_monitor_settings["_skipOperationalHistoryRetention"] = "1"
+    reasoning_native_rule_execution_enabled = setting_truthy(
+        configured_settings.get("ontologyReasoningTypeDbNativeRuleExecutionEnabled"),
+        True,
+    )
+    reasoning_monitor_settings["typedbNativeRuleExecutionEnabled"] = "1" if reasoning_native_rule_execution_enabled else "0"
+    registry = stores.account_registry(reasoning_store_settings)
+    event_log = stores.event_log(reasoning_store_settings)
     ontology_repository = ontology_repository_from_settings(configured_settings)
     return OntologyReasoningRunner(
         event_reader=event_log,
-        cursor_store=stores.ontology_reasoning_cursor_store(configured_settings),
-        monitor_runner_factory=lambda: build_monitor_runner(registry.load()),
+        cursor_store=stores.ontology_reasoning_cursor_store(reasoning_store_settings),
+        monitor_runner_factory=lambda: build_monitor_runner(
+            registry.load(),
+            settings=reasoning_monitor_settings,
+            typedb_native_rule_execution_enabled=reasoning_native_rule_execution_enabled,
+        ),
         event_publisher=event_publisher or default_event_bus(),
         settings=configured_settings,
         rule_candidate_service=RuleChangeCandidateProposalService(

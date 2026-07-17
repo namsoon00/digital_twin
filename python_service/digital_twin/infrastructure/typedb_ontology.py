@@ -1977,8 +1977,8 @@ relation ontology-assertion,
         updated_at: str,
     ) -> List[str]:
         settings = runtime_settings()
-        node_batch_size = int(number_or_none(settings.get("typedbInferenceBoxNodeBatchSize")) or 40)
-        relation_batch_size = int(number_or_none(settings.get("typedbInferenceBoxRelationBatchSize")) or 25)
+        node_batch_size = int(number_or_none(settings.get("typedbInferenceBoxNodeBatchSize")) or 5)
+        relation_batch_size = int(number_or_none(settings.get("typedbInferenceBoxRelationBatchSize")) or 5)
         return [
             *self.batched_node_insert_queries(node_rows, updated_at, node_batch_size),
             *self.batched_relation_insert_queries(relation_rows, updated_at, relation_batch_size),
@@ -2983,17 +2983,17 @@ relation ontology-assertion,
         statement_count = len(node_rows) + len([row for row in relation_rows if row.get("source") and row.get("target")])
         try:
             def operation():
-                driver = self.open_driver(imported)
-                try:
-                    self.ensure_database(driver)
-                    self.ensure_schema(driver, imported)
-                    if queries:
-                        with driver.transaction(self.database, TransactionType.WRITE) as tx:
+                with typedb_operation_timeout(self.write_operation_timeout_seconds(), "TypeDB InferenceBox graph save"):
+                    driver = self.open_driver(imported)
+                    try:
+                        self.ensure_database(driver)
+                        if queries:
                             for query in queries:
-                                tx.query(query).resolve()
-                            tx.commit()
-                finally:
-                    self.close_driver(driver)
+                                with driver.transaction(self.database, TransactionType.WRITE) as tx:
+                                    tx.query(query).resolve()
+                                    tx.commit()
+                    finally:
+                        self.close_driver(driver)
             self.with_typedb_retries(operation)
             return {
                 "configured": True,
@@ -4413,5 +4413,5 @@ def typedb_repository_from_settings(settings: Dict[str, str] = None):
         condition_detail_queries_enabled=typedb_bool(settings.get("typedbConditionDetailQueriesEnabled")),
         query_metrics_enabled=True if query_metrics_value in (None, "") else typedb_bool(query_metrics_value),
         rulebox_snapshot_cache_seconds=number_or_none(settings.get("typedbRuleBoxSnapshotCacheSeconds")) or 60.0,
-        native_rule_execution_enabled=True if native_execution_value in (None, "") else typedb_bool(native_execution_value),
+        native_rule_execution_enabled=False if native_execution_value in (None, "") else typedb_bool(native_execution_value),
     )

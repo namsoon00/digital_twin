@@ -93,6 +93,9 @@ TEXT_SETTING_KEYS = [
     "ontologyReasoningEnabled",
     "ontologyReasoningIntervalSeconds",
     "ontologyReasoningBatchSize",
+    "ontologyReasoningMaxSymbolsPerRun",
+    "ontologyReasoningEventScanLimit",
+    "ontologyReasoningTypeDbNativeRuleExecutionEnabled",
     "ontologyLabEnabled",
     "ontologyLabIntervalSeconds",
     "ontologyLabBatchSize",
@@ -470,7 +473,7 @@ def read_settings_store() -> Dict[str, str]:
     try:
         from .mysql_operational import MySQLRuntimeSettingsStore
 
-        return MySQLRuntimeSettingsStore({}).load()
+        return MySQLRuntimeSettingsStore({"_skipOperationalHistoryRetention": "1"}).load()
     except Exception:
         return read_json(settings_path(), {})
 
@@ -479,7 +482,9 @@ def write_settings_store(settings: Dict[str, object]) -> Dict[str, str]:
     clean = {str(key): str(value or "") for key, value in settings.items()}
     from .mysql_operational import MySQLRuntimeSettingsStore
 
-    MySQLRuntimeSettingsStore(clean).replace(clean)
+    store_settings = dict(clean)
+    store_settings["_skipOperationalHistoryRetention"] = "1"
+    MySQLRuntimeSettingsStore(store_settings).replace(clean)
     return clean
 
 
@@ -643,6 +648,9 @@ def runtime_settings() -> Dict[str, str]:
         "ontologyReasoningEnabled": value("ontologyReasoningEnabled", "ONTOLOGY_REASONING_ENABLED", "1"),
         "ontologyReasoningIntervalSeconds": value("ontologyReasoningIntervalSeconds", "ONTOLOGY_REASONING_INTERVAL_SECONDS", "10"),
         "ontologyReasoningBatchSize": value("ontologyReasoningBatchSize", "ONTOLOGY_REASONING_BATCH_SIZE", "20"),
+        "ontologyReasoningMaxSymbolsPerRun": value("ontologyReasoningMaxSymbolsPerRun", "ONTOLOGY_REASONING_MAX_SYMBOLS_PER_RUN", "3"),
+        "ontologyReasoningEventScanLimit": value("ontologyReasoningEventScanLimit", "ONTOLOGY_REASONING_EVENT_SCAN_LIMIT", "1500"),
+        "ontologyReasoningTypeDbNativeRuleExecutionEnabled": value("ontologyReasoningTypeDbNativeRuleExecutionEnabled", "ONTOLOGY_REASONING_TYPEDB_NATIVE_RULE_EXECUTION_ENABLED", "1"),
         "temporalWindowPeriods": value("temporalWindowPeriods", "TEMPORAL_WINDOW_PERIODS", "1D=1:2\n3D=3:3\n5D=5:4\n20D=20:5"),
         "ontologyLabEnabled": value("ontologyLabEnabled", "ONTOLOGY_LAB_ENABLED", "1"),
         "ontologyLabIntervalSeconds": value("ontologyLabIntervalSeconds", "ONTOLOGY_LAB_INTERVAL_SECONDS", "300"),
@@ -673,7 +681,7 @@ def runtime_settings() -> Dict[str, str]:
         "typedbQueryTimeoutSeconds": value("typedbQueryTimeoutSeconds", "TYPEDB_QUERY_TIMEOUT_SECONDS", "20"),
         "typedbSchemaOperationTimeoutSeconds": value("typedbSchemaOperationTimeoutSeconds", "TYPEDB_SCHEMA_OPERATION_TIMEOUT_SECONDS", "120"),
         "typedbWriteOperationTimeoutSeconds": value("typedbWriteOperationTimeoutSeconds", "TYPEDB_WRITE_OPERATION_TIMEOUT_SECONDS", "20"),
-        "typedbNativeRuleExecutionEnabled": value("typedbNativeRuleExecutionEnabled", "TYPEDB_NATIVE_RULE_EXECUTION_ENABLED", "1"),
+        "typedbNativeRuleExecutionEnabled": value("typedbNativeRuleExecutionEnabled", "TYPEDB_NATIVE_RULE_EXECUTION_ENABLED", "0"),
         "typedbAutoResetEnabled": value("typedbAutoResetEnabled", "TYPEDB_AUTO_RESET_ENABLED", "1"),
         "typedbDataRetentionHours": value("typedbDataRetentionHours", "TYPEDB_DATA_RETENTION_HOURS", "24"),
         "typedbDataMaxSizeMb": value("typedbDataMaxSizeMb", "TYPEDB_DATA_MAX_SIZE_MB", "2048"),

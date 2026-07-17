@@ -120,6 +120,10 @@ PEER_ALIASES = {
     "TSLA": ["BYD", "Rivian", "Lucid", "Hyundai Motor"],
 }
 
+RELATED_PRODUCT_ALIASES = {
+    "MSTR": ["MSTY", "MSTX", "MSTU", "STRC", "STRK", "STRF", "STRD", "Strategy preferred shares"],
+}
+
 EXTRA_COMPANY_ALIASES = [
     "카카오",
     "Kakao",
@@ -187,7 +191,7 @@ SOCIAL_SOURCE_TERMS = [
     "tiktok",
 ]
 LOW_RELIABILITY_SOURCE_TERMS = ["blog", "블로그", "cafe", "reddit", "rumor", *SOCIAL_SOURCE_TERMS]
-INVESTABLE_RELATION_SCOPES = {"direct", "peer", "sector", "market"}
+INVESTABLE_RELATION_SCOPES = {"direct", "related_product", "peer", "sector", "market"}
 NON_INVESTABLE_RELATION_SCOPES = {
     "noise",
     "platform_noise",
@@ -291,6 +295,7 @@ EVENT_TYPE_LABELS = {
 
 RELATION_SCOPE_LABELS = {
     "direct": "종목 직접 뉴스",
+    "related_product": "연결 상품 뉴스",
     "peer": "비교 기업 뉴스",
     "sector": "업종 뉴스",
     "market": "시장 환경 뉴스",
@@ -400,6 +405,7 @@ class NewsAnalysis:
     def summary(self) -> str:
         scope = {
             "direct": "종목 직접 뉴스",
+            "related_product": "연결 상품 뉴스",
             "peer": "비교 기업 뉴스",
             "sector": "업종 뉴스",
             "market": "시장 환경 뉴스",
@@ -550,6 +556,7 @@ def entity_link_rows(
     direct_title: Iterable[str],
     direct_body: Iterable[str],
     peer_hits: Iterable[str],
+    related_product_hits: Iterable[str],
     other_company_hits: Iterable[str],
     platform_alias_hits: Iterable[str],
 ) -> List[Dict[str, object]]:
@@ -571,6 +578,7 @@ def entity_link_rows(
     add(symbol, "target_subject", direct_title, 0.95, "제목 본문 영역에서 대상 종목명이 확인됨")
     add(symbol, "target_context", direct_body, 0.72, "요약/본문 영역에서 대상 종목명이 확인됨")
     add(symbol, "platform_reference", platform_alias_hits, 0.15, "회사명이 아니라 게시 플랫폼/출처명에서 감지됨")
+    add(symbol, "related_product_context", related_product_hits, 0.68, "대상 종목과 연결된 상품/증권 라인이 기사 주어로 확인됨")
     add("peer_or_other_company", "peer_context", peer_hits, 0.62, "비교 기업 또는 동종 기업명이 확인됨")
     add("other_company", "article_subject", other_company_hits, 0.78, "기사 제목의 주어가 다른 회사로 보임")
     identity = source_identity(source, provider)
@@ -600,6 +608,10 @@ def target_aliases(target: object) -> List[str]:
 
 def peer_aliases(target: object) -> List[str]:
     return _unique_texts(PEER_ALIASES.get(target_symbol(target), []))
+
+
+def related_product_aliases(target: object) -> List[str]:
+    return _unique_texts(RELATED_PRODUCT_ALIASES.get(target_symbol(target), []))
 
 
 def sector_topic_keywords(target: object) -> List[str]:
@@ -1364,7 +1376,9 @@ def ontology_relations_for_news(scope: str, polarity: str, event_type: str) -> L
         relations.append({"type": "NEWS_RISK_FOR", "scope": scope, "eventType": event_type})
     if scope == "direct" and polarity == "support":
         relations.append({"type": "NEWS_SUPPORTS_ENTRY", "scope": scope, "eventType": event_type})
-    if scope in {"peer", "sector", "market"}:
+    if scope == "related_product":
+        relations.append({"type": "NEWS_LINKED_PRODUCT_CONTEXT", "scope": scope, "eventType": event_type})
+    if scope in {"related_product", "peer", "sector", "market"}:
         relations.append({"type": "NEWS_PROPAGATES_CONTEXT", "scope": scope, "eventType": event_type})
     return relations
 
@@ -1474,6 +1488,9 @@ def analyze_news_item(
     direct_keys = {_lower_text(item) for item in _unique_texts([*direct_title, *direct_body])}
     platform_alias_hits = [item for item in raw_direct_hits if _lower_text(item) not in direct_keys]
     peer_hits = matched_terms(combined, peers)
+    related_products = related_product_aliases(target)
+    related_product_hits = matched_terms(combined, related_products)
+    related_product_title_hits = matched_terms(normalized_title, related_products)
     topic_hits = matched_terms(combined, topics)
     market_hits = matched_terms(combined, MARKET_TOPIC_KEYWORDS)
     other_subject_hits = other_company_subject_hits(target, normalized_title)
@@ -1486,6 +1503,7 @@ def analyze_news_item(
     alias_noise = ambiguous_company_alias_noise(target, title_text, summary_text, [*direct_title, *direct_body], topic_hits, event_type)
     low_confidence_platform = low_confidence_platform_context(source, provider, [*direct_title, *direct_body])
     social_feed = source_is_social_feed(source, provider)
+    related_product_focus = bool(related_product_title_hits) and not direct_title
 
     score = 24.0
     scope = "noise"
@@ -1504,6 +1522,9 @@ def analyze_news_item(
     elif direct_title:
         score = 95.0
         scope = "direct"
+    elif related_product_focus:
+        score = 68.0
+        scope = "related_product"
     elif direct_body:
         score = 82.0
         scope = "direct"
@@ -1555,6 +1576,7 @@ def analyze_news_item(
         direct_title,
         direct_body,
         peer_hits,
+        related_product_hits,
         other_subject_hits,
         platform_alias_hits,
     )
@@ -1566,6 +1588,7 @@ def analyze_news_item(
         "sourceKind": str(identity.get("sourceKind") or "publisher"),
         "sourcePlatform": str(identity.get("sourcePlatform") or ""),
         "targetSubjectConfirmed": bool(direct_title),
+        "relatedProductContext": bool(related_product_focus),
     }
     return NewsAnalysis(
         relevance_score=round(score, 1),
@@ -1578,7 +1601,7 @@ def analyze_news_item(
         mentioned_peers=peer_hits,
         topic_tags=topic_hits[:8],
         market_topics=market_hits[:8],
-        direct_mention=bool(direct_title or direct_body),
+        direct_mention=bool(direct_title or (direct_body and not related_product_focus)),
         excluded_reason=excluded_reason,
         normalized_title=normalized_title,
         normalized_summary=normalized_summary,

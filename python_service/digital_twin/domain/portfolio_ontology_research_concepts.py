@@ -320,6 +320,7 @@ def add_research_evidence_concepts(
             materiality_passed = number(raw_payload.get("materialityScore")) >= 65
         scope_weight = {
             "direct": 1.0,
+            "related_product": 0.7,
             "peer": 0.62,
             "sector": 0.48,
             "market": 0.28,
@@ -376,7 +377,7 @@ def add_research_evidence_concepts(
         add_research_document_concept(graph, stock_id, event_id, thesis_id, active_opinion_id, item, props, relation_weight)
         add_news_ai_analysis_concept(graph, stock_id, event_id, item, props, relation_weight)
         add_news_quality_risk_concepts(graph, stock_id, event_id, item, props, relation_weight)
-        if relation_scope in {"peer", "sector", "market"}:
+        if relation_scope in {"related_product", "peer", "sector", "market"}:
             add_relation(graph, event_id, stock_id, "AFFECTS", weight=relation_weight, evidence_ids=[item.evidence_id], properties=props)
         event_type = str(raw_payload.get("eventType") or "").strip()
         if event_type:

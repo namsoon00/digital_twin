@@ -378,6 +378,74 @@ class MaterialityGateTests(unittest.TestCase):
         self.assertEqual("ok", result["status"])
         self.assertEqual(["AAPL"], fake_monitor.symbol_filter)
 
+    def test_ontology_reasoning_processes_large_events_by_symbol_cursor(self):
+        request = ontology_reasoning_requested_event(
+            DomainEvent(
+                name="market_data.collected",
+                aggregate_id="market:US",
+                payload={"changedCount": 3, "symbols": ["AAPL", "MSFT", "TSLA"]},
+            ),
+            "market-data-update",
+            ["AAPL", "MSFT", "TSLA"],
+            changed_count=3,
+            observed_count=3,
+            fact_types=["MarketQuote"],
+        )
+
+        class Reader:
+            def events(self, name="", aggregate_id="", limit=0):
+                return [request] if name == ONTOLOGY_REASONING_REQUESTED else []
+
+        class Cursor:
+            def __init__(self):
+                self.payload = {"processedEventIds": []}
+
+            def processed_event_ids(self):
+                return list(self.payload.get("processedEventIds") or [])
+
+            def mark_processed(self, event_ids):
+                payload = dict(self.payload)
+                payload["processedEventIds"] = list(event_ids or [])
+                self.payload = payload
+
+            def load(self):
+                return dict(self.payload)
+
+            def save(self, payload):
+                self.payload = dict(payload or {})
+
+        class FakeMonitorRunner:
+            def __init__(self):
+                self.accounts = []
+                self.calls = []
+
+            def run_once(self, dry_run=False, force=False, symbol_filter=None):
+                self.calls.append(list(symbol_filter or []))
+                return []
+
+        cursor = Cursor()
+        fake_monitor = FakeMonitorRunner()
+        runner = OntologyReasoningRunner(
+            Reader(),
+            cursor,
+            monitor_runner_factory=lambda: fake_monitor,
+            event_publisher=EventBus(),
+            settings={
+                "ontologyReasoningEnabled": "1",
+                "ontologyReasoningMaxSymbolsPerRun": "2",
+                "ontologyRuleCandidateAiEnabled": "0",
+            },
+        )
+
+        first = runner.run_once()
+        second = runner.run_once()
+
+        self.assertEqual(["AAPL", "MSFT"], fake_monitor.calls[0])
+        self.assertEqual(["TSLA"], fake_monitor.calls[1])
+        self.assertEqual(1, first["partialEventCount"])
+        self.assertEqual(1, second["completedEventCount"])
+        self.assertEqual([request.event_id], cursor.processed_event_ids())
+
 
 if __name__ == "__main__":
     unittest.main()

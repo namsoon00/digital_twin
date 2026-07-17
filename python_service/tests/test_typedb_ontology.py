@@ -81,7 +81,33 @@ class TypeDBOntologyRepositoryTests(unittest.TestCase):
         self.assertFalse(result["saved"])
         self.assertIn("TypeDB graph save timed out", result["reason"])
 
-    def test_typedb_repository_factory_enables_native_rule_execution_by_default(self):
+    def test_typedb_inferencebox_save_returns_error_when_write_operation_times_out(self):
+        graph = PortfolioOntology("typedb-inference-timeout-test")
+        graph.entities.append(OntologyEntity(
+            entity_id="inference:timeout",
+            label="Inference Timeout",
+            kind="inference",
+            properties={"ontologyBox": "InferenceBox"},
+        ))
+        repository = TypeDBOntologyGraphRepository(
+            "127.0.0.1:1729",
+            retry_count=0,
+            write_operation_timeout_seconds=1,
+        )
+
+        def slow_open_driver(_imported):
+            time.sleep(2)
+            raise TypeDBOperationTimeout("expected timeout")
+
+        with patch.object(repository, "driver_imports", return_value=((object, object, object, object, object), None)):
+            with patch.object(repository, "open_driver", side_effect=slow_open_driver):
+                result = repository.write_inferencebox_graph(graph)
+
+        self.assertEqual("error", result["status"])
+        self.assertFalse(result["saved"])
+        self.assertIn("TypeDB InferenceBox graph save timed out", result["reason"])
+
+    def test_typedb_repository_factory_requires_native_rule_execution_opt_in(self):
         direct = TypeDBOntologyGraphRepository("127.0.0.1:1729")
         factory_default = typedb_repository_from_settings({"ontologyTypeDbEnabled": "1", "typedbAddress": "127.0.0.1:1729"})
         factory_enabled = typedb_repository_from_settings({
@@ -96,7 +122,7 @@ class TypeDBOntologyRepositoryTests(unittest.TestCase):
         })
 
         self.assertTrue(direct.native_rule_execution_enabled())
-        self.assertTrue(factory_default.native_rule_execution_enabled())
+        self.assertFalse(factory_default.native_rule_execution_enabled())
         self.assertTrue(factory_enabled.native_rule_execution_enabled())
         self.assertFalse(factory_disabled.native_rule_execution_enabled())
         self.assertEqual(20.0, factory_default.query_timeout_seconds())

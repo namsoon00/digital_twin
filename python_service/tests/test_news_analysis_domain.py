@@ -552,6 +552,39 @@ class NewsAnalysisDomainTests(unittest.TestCase):
         self.assertIn("합산 거래대금", facts["eventTakeaway"])
         self.assertTrue(facts["keySentences"])
 
+    def test_mstr_related_product_news_is_not_promoted_to_direct_news(self):
+        target = NewsCollectionTarget("MSTR", "Strategy", "NASDAQ", "USD", "디지털자산")
+
+        analysis = classify_news_relevance(
+            target,
+            "MSTY Covered-Call ETF Hits Record Monthly Distribution",
+            "The ETF owns MSTR-linked exposure and reacts to Strategy share volatility.",
+            "Yahoo Finance",
+            "google_rss_us",
+        )
+
+        self.assertEqual("related_product", analysis["relationScope"])
+        self.assertTrue(relation_scope_is_investable(analysis["relationScope"]))
+        self.assertFalse(analysis["directMention"])
+        self.assertFalse(analysis["qualityGate"]["targetSubjectConfirmed"])
+        self.assertTrue(analysis["qualityGate"]["relatedProductContext"])
+        self.assertTrue(any(row["role"] == "related_product_context" for row in analysis["entityLinks"]))
+
+    def test_mstr_title_subject_stays_direct_when_symbol_is_explicit(self):
+        target = NewsCollectionTarget("MSTR", "Strategy", "NASDAQ", "USD", "디지털자산")
+
+        analysis = classify_news_relevance(
+            target,
+            "Strategy (MSTR) buys more Bitcoin after financing update",
+            "The company disclosed a new treasury purchase.",
+            "Reuters",
+            "google_rss_us",
+        )
+
+        self.assertEqual("direct", analysis["relationScope"])
+        self.assertTrue(analysis["directMention"])
+        self.assertTrue(analysis["qualityGate"]["targetSubjectConfirmed"])
+
     def test_stock_impact_analysis_explains_event_channel_and_watchpoint(self):
         target = NewsCollectionTarget("STRC", "Strategy Preferred", "US", "USD", "디지털자산")
 

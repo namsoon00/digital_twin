@@ -871,6 +871,7 @@ def ontology_audit_payload(query: Dict[str, List[str]], requested_section: str =
     if section_filter == "all":
         section_filter = ""
     compact_all = not section_filter
+    fast_compact_summary = compact_all and not search and not symbols
     section_ids = [section_filter] if section_filter in ONTOLOGY_AUDIT_SECTION_LABELS else list(ONTOLOGY_AUDIT_SECTION_LABELS.keys())
     section_box_map = {
         "tbox": ["TBox"],
@@ -888,7 +889,9 @@ def ontology_audit_payload(query: Dict[str, List[str]], requested_section: str =
     graph_entities: List[Dict[str, object]] = []
     graph_relations: List[Dict[str, object]] = []
     graph_error = ""
-    if read_boxes and hasattr(repo, "read_entity_rows") and hasattr(repo, "read_relation_rows"):
+    if fast_compact_summary:
+        graph_error = ""
+    elif read_boxes and hasattr(repo, "read_entity_rows") and hasattr(repo, "read_relation_rows"):
         try:
             if compact_all:
                 sample_limit = max(5, min(80, limit))

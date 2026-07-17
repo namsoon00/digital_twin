@@ -1065,6 +1065,117 @@ def _source_event_titles(context: Dict[str, object], limit: int = 3) -> List[str
             break
     return rows[:limit]
 
+
+def _source_alert_events(context: Dict[str, object]) -> List[Dict[str, object]]:
+    context = context or {}
+    metadata = context.get("metadata") if isinstance(context.get("metadata"), dict) else {}
+    raw = context.get("sourceAlertEvents") or metadata.get("sourceAlertEvents") or []
+    return [item for item in raw if isinstance(item, dict)] if isinstance(raw, list) else []
+
+
+def _first_crypto_source_event(context: Dict[str, object]) -> Dict[str, object]:
+    for item in _source_alert_events(context):
+        metadata = item.get("metadata") if isinstance(item.get("metadata"), dict) else {}
+        text = " ".join([
+            str(item.get("rule") or ""),
+            str(item.get("key") or ""),
+            str(item.get("title") or ""),
+            str(item.get("symbol") or ""),
+            str(metadata.get("cryptoId") or ""),
+            str(metadata.get("market") or ""),
+        ]).casefold()
+        if "externalcryptomove" in text or "crypto" in text or metadata.get("cryptoMoveModel"):
+            return item
+    if str((context or {}).get("messageType") or (context or {}).get("rule") or "") == "externalCryptoMove":
+        return {
+            "rule": "externalCryptoMove",
+            "symbol": context.get("symbol") or context.get("rawSymbol"),
+            "lines": _raw_lines(context),
+            "criteria": criterion_lines(context),
+            "metadata": context,
+        }
+    return {}
+
+
+def _crypto_line_value(lines: List[str], label: str) -> str:
+    prefix = str(label or "").strip()
+    for line in lines or []:
+        text = str(line or "").strip().lstrip("-• ").strip()
+        if text.startswith(prefix):
+            return text[len(prefix):].strip(" :")
+    return ""
+
+
+def _crypto_signed_pct(value: object) -> str:
+    if value in (None, ""):
+        return ""
+    return signed_pct(_number(value))
+
+
+def _crypto_trigger_summary_lines(context: Dict[str, object], limit: int = 3) -> List[str]:
+    source = _first_crypto_source_event(context)
+    metadata = source.get("metadata") if isinstance(source.get("metadata"), dict) else {}
+    model = metadata.get("cryptoMoveModel") if isinstance(metadata.get("cryptoMoveModel"), dict) else {}
+    lines = [str(item or "").strip() for item in (source.get("lines") if isinstance(source.get("lines"), list) else []) if str(item or "").strip()]
+    criteria = [str(item or "").strip() for item in (source.get("criteria") if isinstance(source.get("criteria"), list) else []) if str(item or "").strip()]
+    if not source and not model and not lines:
+        return []
+
+    symbol = str(source.get("symbol") or metadata.get("symbol") or context.get("symbol") or context.get("rawSymbol") or "").upper().strip()
+    asset = str(model.get("assetLabel") or metadata.get("cryptoMoveAssetLabel") or "").strip()
+    for line in lines:
+        match = re.search(r"^(.+?)\s+변동\s+24h", line)
+        if match:
+            asset = asset or match.group(1).strip()
+            break
+    if not asset:
+        target = str(context.get("displayTarget") or context.get("target") or "").strip()
+        parts = [part.strip() for part in target.split("/") if part.strip()]
+        asset = parts[-2] if len(parts) >= 2 and parts[-1].upper() in {"BTC", "ETH"} else (symbol or "크립토")
+
+    change24h = metadata.get("change24h")
+    change7d = metadata.get("change7d")
+    for line in lines:
+        match = re.search(r"24h\s*([+-]?\d+(?:\.\d+)?)%\s*[·,]\s*7d\s*([+-]?\d+(?:\.\d+)?)%", line)
+        if match:
+            change24h = change24h if change24h not in (None, "") else match.group(1)
+            change7d = change7d if change7d not in (None, "") else match.group(2)
+            break
+
+    dominant_period = str(model.get("dominantPeriodLabel") or metadata.get("cryptoMoveDominantPeriod") or "").strip()
+    dominant_change = model.get("dominantChange", metadata.get("cryptoMoveDominantChange"))
+    if dominant_change in (None, ""):
+        dominant_change = change7d if dominant_period == "7일" else change24h if dominant_period in {"24시간", "24h"} else None
+    setting = next((line.split(":", 1)[1].strip() for line in criteria if line.startswith("설정:")), "")
+    detected = next((line.split(":", 1)[1].strip() for line in criteria if line.startswith("감지:")), "")
+
+    rows: List[str] = []
+    if dominant_period or dominant_change not in (None, ""):
+        dominant_text = " ".join(part for part in [dominant_period, _crypto_signed_pct(dominant_change)] if part)
+        threshold_text = (" 기준(" + setting + ")" if setting else "")
+        rows.append("알림 발생 이유: " + asset + " " + dominant_text + " 변동이" + threshold_text + "을 넘었습니다.")
+    elif detected:
+        rows.append("알림 발생 이유: " + detected + ("이 기준(" + setting + ")을 넘었습니다." if setting else " 때문에 감지됐습니다."))
+    if change24h not in (None, "") or change7d not in (None, ""):
+        rows.append("크립토 변동: 24시간 " + (_crypto_signed_pct(change24h) or "-") + ", 7일 " + (_crypto_signed_pct(change7d) or "-"))
+
+    price = metadata.get("price")
+    volume = metadata.get("volume24h")
+    price_text = _crypto_line_value(lines, "크립토 가격") or (price_money(_number(price), "USD") if price not in (None, "") else "")
+    volume_text = _crypto_line_value(lines, "크립토 거래액") or (price_money(_number(volume), "USD") if volume not in (None, "") else "")
+    provider = metadata.get("provider") or _crypto_line_value(lines, "출처")
+    detail_parts = []
+    if price_text:
+        detail_parts.append("가격 " + price_text)
+    if volume_text:
+        detail_parts.append("24시간 거래액 " + volume_text)
+    if provider:
+        detail_parts.append("출처 " + str(provider))
+    if detail_parts:
+        rows.append("확인 데이터: " + ", ".join(detail_parts))
+    return rows[:limit]
+
+
 def _price_position_summary(context: Dict[str, object], response: NotificationAIValidatedResponse) -> str:
     current = _plain_value(context, "현재가")
     average = _plain_value(context, "평균매입가") or _plain_value(context, "평단가")
@@ -1133,6 +1244,8 @@ def _news_event_summary(context: Dict[str, object]) -> str:
 
 def context_specific_insight_rows(context: Dict[str, object], response: NotificationAIValidatedResponse, limit: int = MESSAGE_CONTEXT_ROW_LIMIT) -> List[str]:
     rows: List[str] = []
+    for item in _crypto_trigger_summary_lines(context, 2):
+        append_unique_text(rows, item, 230)
     for item in _driver_rows(context, ["risk", "support", "counter", "neutral"], limit):
         append_unique_text(rows, item, 230)
     append_unique_text(rows, _price_position_summary(context, response), 230)
@@ -1310,7 +1423,14 @@ def compact_ai_opinion_rows(context: Dict[str, object], response: NotificationAI
     return [_html_bullet(_ai_marked_value(row), level) for row in rows if row]
 
 def relation_axis_summary_rows(context: Dict[str, object], level: str, limit: int = 5) -> List[str]:
-    return [_html_bullet(item, level) for item in relation_axis_summary_lines(context, limit) if str(item or "").strip()]
+    rows: List[str] = []
+    for item in _crypto_trigger_summary_lines(context, 3):
+        append_unique_text(rows, item, 230)
+    for item in relation_axis_summary_lines(context, limit):
+        append_unique_text(rows, item, 230)
+        if len(rows) >= limit:
+            break
+    return [_html_bullet(item, level) for item in rows if str(item or "").strip()]
 
 
 def _valuation_value_present(value: object) -> bool:

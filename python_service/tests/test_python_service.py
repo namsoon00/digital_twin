@@ -9685,6 +9685,75 @@ class PythonServiceTests(unittest.TestCase):
         self.assertNotIn("<b>다음 확인</b>", message)
         self.assertNotIn("<b>데이터/검증</b>", message)
 
+    def test_validated_ai_response_shows_crypto_trigger_reason_from_source_event(self):
+        context = {
+            "messageType": "investmentInsight",
+            "headline": "[관찰] 🪙 크립토 변동: 보유 유지·다음 조건 확인",
+            "displayTarget": "크립토 변동 / 이더리움 / ETH",
+            "messageDeliveryLevel": "absoluteBeginner",
+            "referenceDate": "2026-07-17 09:10 KST",
+            "sentTime": "2026-07-17 09:10 KST",
+            "rawLines": "\n".join([
+                "인사이트 유형: 외부 환경 변화",
+                "핵심 결론: 크립토 변동에 연결된 외부 시장 관계가 바뀌었습니다.",
+                "기준일: 2026-07-17 09:10 KST",
+            ]),
+            "metadata": {
+                "sourceAlertEvents": [
+                    {
+                        "rule": "externalCryptoMove",
+                        "label": "크립토 변동",
+                        "key": "main:crypto:ETH:7d:up",
+                        "symbol": "ETH",
+                        "lines": [
+                            "이더리움 변동 24h +2.8% · 7d +13.4%",
+                            "크립토 가격 $3,421",
+                            "크립토 거래액 $24,000,000,000",
+                            "출처 CoinGecko",
+                        ],
+                        "criteria": [
+                            "설정: 크립토 24시간 ±4% 또는 7일 ±10% 이상",
+                            "감지: ETH 24h +2.8%, 7d +13.4%",
+                        ],
+                        "metadata": {
+                            "market": "CRYPTO",
+                            "provider": "CoinGecko",
+                            "cryptoId": "ethereum",
+                            "change24h": 2.8,
+                            "change7d": 13.4,
+                            "price": 3421,
+                            "volume24h": 24000000000,
+                            "cryptoMoveModel": {
+                                "assetLabel": "이더리움",
+                                "dominantPeriodLabel": "7일",
+                                "dominantChange": 13.4,
+                            },
+                        },
+                    }
+                ]
+            },
+            "criterionLines": "설정: 온톨로지 관계 그래프에서 의미 있는 투자 인사이트가 생성될 때",
+        }
+
+        response = validated_response_from_payload(context, {
+            "action": "HOLD",
+            "confidence": 60,
+            "summary": "크립토 변동이 기준을 넘었습니다.",
+            "opinion": "BTC/ETH 움직임은 민감 종목 점검 신호이지 단독 매매 신호가 아닙니다.",
+            "nextChecks": ["MSTR/STRC 같은 민감 종목의 가격 반응을 확인하세요."],
+            "referenceDate": "2026-07-17 09:10 KST",
+        }, source="test AI")
+
+        message = context_with_validated_ai_response(context, response)["telegramMessage"]
+
+        self.assertIn("<b>투자 판단 근거</b>", message)
+        self.assertIn("알림 발생 이유", message)
+        self.assertIn("이더리움 7일 +13.4%", message)
+        self.assertIn("기준(크립토 24시간 ±4% 또는 7일 ±10% 이상)", message)
+        self.assertIn("크립토 변동", message)
+        self.assertIn("24시간 +2.8%", message)
+        self.assertIn("CoinGecko", message)
+
     def test_validated_ai_response_shows_api_collection_times(self):
         context = {
             "messageType": "investmentInsight",

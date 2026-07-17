@@ -552,7 +552,7 @@ def beginner_rule_explanation(item: Dict[str, object]) -> str:
     if "news.direct" in lowered or "리스크 뉴스" in text or "위험 뉴스" in text:
         return "쉬운 해석: 직접 악재 뉴스가 있어 원문과 다음 가격 반응을 보라는 뜻입니다. 뉴스 하나만으로 매도 확정은 아닙니다."
     if "valuation.margin_of_safety" in lowered or "안전마진" in text or "저평가" in text:
-        return "쉬운 해석: 현재가가 적정가보다 충분히 낮은지 보는 기준입니다. 싸 보이더라도 추세와 거래 흐름 확인 전에는 매수 확정이 아닙니다."
+        return "쉬운 해석: 현재가가 적정가보다 충분히 낮은지 보는 기준입니다. 싸 보이더라도 가격 흐름, 거래량, 매수/매도 압력을 확인하기 전에는 매수 확정이 아닙니다."
     if "valuation.negative_margin" in lowered or "고평가" in text or "적정가 대비 현재가 부담" in text:
         return "쉬운 해석: 현재가가 적정가보다 비싸 보이는지 확인하는 기준입니다. 이것만으로 바로 팔라는 뜻은 아닙니다."
     return ""

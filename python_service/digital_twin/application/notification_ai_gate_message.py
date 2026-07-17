@@ -212,14 +212,14 @@ CUSTOMER_HIDDEN_DATA_NOTE_TERMS = [
 
 BEGINNER_LABEL_REPLACEMENTS = {
     "추세": "가격 흐름(추세)",
-    "수급": "거래 흐름(수급)",
+    "수급": "거래량·매수매도",
     "확인할 반대 신호": "반대 신호",
     "검증 메모": "검증 결과",
 }
 
 ABSOLUTE_BEGINNER_LABEL_REPLACEMENTS = {
     "추세": "가격 흐름",
-    "수급": "거래 흐름",
+    "수급": "거래량·매수매도",
     "AI 판단 이유": "이유",
     "확인할 반대 신호": "반대 신호",
     "부족 데이터": "데이터 빈 곳",
@@ -2049,7 +2049,7 @@ def beginner_current_state_rows(context: Dict[str, object]) -> List[str]:
         ("종목 평가금액", _plain_value(context, "종목 평가금액") or _plain_value(context, "평가금액")),
         ("계좌 평가금액", _plain_value(context, "계좌 평가금액")),
         ("가격 흐름", _plain_value(context, "추세")),
-        ("거래 흐름", _plain_value(context, "수급")),
+        ("거래량·매수매도", _plain_value(context, "수급")),
     ]
     rows = [row for row in [_html_row(label, value, True) for label, value in values] if row]
     rows.extend(_html_multiline_rows("투자자", _plain_value(context, "투자자")))

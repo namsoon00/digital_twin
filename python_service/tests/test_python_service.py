@@ -10312,7 +10312,9 @@ class PythonServiceTests(unittest.TestCase):
 
         for hard_word in ["중기 회복", "중기 방어선", "60일선 이탈", "추세 훼손", "모멘텀"]:
             self.assertNotIn(hard_word, message)
+        self.assertNotIn("거래 흐름", message)
         self.assertIn("최근보다 조금 긴 기간의 가격 회복", message)
+        self.assertIn("거래량과 매수/매도 압력", message)
         self.assertIn("최근보다 조금 긴 기간의 버티는 가격대", message)
         self.assertIn("60일 평균 가격 아래로 내려감", message)
         self.assertIn("가격 흐름 약화", message)

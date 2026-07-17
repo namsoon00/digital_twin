@@ -1900,6 +1900,7 @@ async function withServer(extraEnv, callback) {
       EXTERNAL_DART_ENABLED: "0",
       EXTERNAL_SEC_ENABLED: "0",
       EXTERNAL_NEWS_ENABLED: "0",
+      EXTERNAL_YFINANCE_ENABLED: "0",
       EXTERNAL_CRYPTO_IDS: "",
       SETTINGS_PATH: settingsPath,
       DIGITAL_TWIN_DATA_DIR: dataDir

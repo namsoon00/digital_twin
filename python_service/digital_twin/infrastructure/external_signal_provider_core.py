@@ -148,6 +148,12 @@ class ExternalSignalCoreMixin:
             "newsProvider": self.news_provider(),
             "newsMax": str(self.settings.get("externalNewsMaxSymbols") or "3"),
             "newsLookbackHours": str(self.settings.get("externalNewsLookbackHours") or "48"),
+            "yfinanceSymbols": self.yfinance_target_symbols(positions),
+            "yfinanceMax": str(self.settings.get("externalYFinanceMaxSymbols") or "8"),
+            "yfinanceHistoryPeriod": str(self.settings.get("externalYFinanceHistoryPeriod") or "1y"),
+            "yfinanceHistoryInterval": str(self.settings.get("externalYFinanceHistoryInterval") or "1d"),
+            "yfinanceFinancialPeriods": str(self.settings.get("externalYFinanceFinancialPeriods") or "4"),
+            "yfinanceOptionExpirations": str(self.settings.get("externalYFinanceOptionExpirations") or "2"),
             "fxRateSourceVersion": "broker-account-alpha-daily-v1",
             "fxRateFetchIntervalHours": str(self.settings.get("externalFxRateFetchIntervalHours") or "24"),
             "alphaRateLimitSeconds": str(self.settings.get("externalAlphaRateLimitSeconds") or "15"),
@@ -166,6 +172,7 @@ class ExternalSignalCoreMixin:
                 "sec": self.sec_enabled(),
                 "news": self.external_api_enabled("externalNewsEnabled"),
                 "fx": self.external_api_enabled("externalFxRateEnabled"),
+                "yfinance": self.yfinance_enabled(),
             },
             "configured": {
                 "alpha": self.external_api_enabled("externalAlphaEnabled") and bool(str(self.settings.get("alphaVantageApiKey") or "").strip()),
@@ -176,6 +183,7 @@ class ExternalSignalCoreMixin:
                 "sec": self.sec_enabled(),
                 "news": self.external_api_enabled("externalNewsEnabled"),
                 "fx": self.fx_live_rate_enabled(),
+                "yfinance": self.yfinance_enabled(),
             },
         }
         raw = json.dumps(payload, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
@@ -207,12 +215,14 @@ class ExternalSignalCoreMixin:
             "newsHeadlines": {},
             "companyOverviews": {},
             "earningsReports": {},
+            "yfinanceData": {},
             "researchEvidence": {},
             "statuses": [],
         }
         self.add_fx_rates(signals, positions)
         self.add_alpha_vantage(signals, positions)
         self.add_alpha_fundamentals(signals, positions)
+        self.add_yfinance(signals, positions)
         self.add_sec_edgar(signals, positions)
         self.add_coingecko(signals)
         self.add_fred(signals)

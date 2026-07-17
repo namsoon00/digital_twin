@@ -45,6 +45,30 @@ def safe_signal_value(key: str, value: object) -> object:
     lowered = str(key or "").replace("-", "").replace("_", "").lower()
     if any(token.replace("_", "") in lowered for token in SENSITIVE_SIGNAL_TOKENS):
         return "configured" if value not in (None, "", False) else ""
+    if lowered == "yfinancedata" and isinstance(value, dict):
+        def yfinance_summary(payload: Dict[str, object]) -> Dict[str, object]:
+            option_chains = payload.get("optionChains") if isinstance(payload.get("optionChains"), list) else []
+            return {
+                "provider": payload.get("provider"),
+                "querySymbol": payload.get("querySymbol"),
+                "modulesCollected": list(payload.get("modulesCollected") or [])[:40],
+                "quote": payload.get("quote") if isinstance(payload.get("quote"), dict) else {},
+                "optionExpirations": len(payload.get("options") or []),
+                "optionChainSummaries": [
+                    {"expiration": item.get("expiration"), "summary": item.get("summary")}
+                    for item in option_chains[:4]
+                    if isinstance(item, dict)
+                ],
+                "errorCount": len(payload.get("errors") or []),
+            }
+        if value.get("provider") == "yfinance":
+            return yfinance_summary(value)
+        summary: Dict[str, object] = {}
+        for symbol, payload in value.items():
+            if not isinstance(payload, dict):
+                continue
+            summary[str(symbol)] = yfinance_summary(payload)
+        return summary
     text = str(value or "")
     return text[:1200] if len(text) > 1200 else value
 
@@ -56,6 +80,8 @@ def external_signal_classes(group: str) -> List[str]:
         classes.extend(["DisclosureEvent", "DisclosureSignal", "EventRisk"])
     if "overview" in text or "fundamental" in text:
         classes.extend(["FundamentalObservation", "ValuationSignal"])
+    if "yfinance" in text:
+        classes.extend(["FundamentalObservation", "ValuationSignal", "AnalystRevision", "EarningsEvent"])
     if "earning" in text:
         classes.extend(["EarningsEvent", "EarningsCalendarEvent", "ValuationSignal"])
     if "analyst" in text:

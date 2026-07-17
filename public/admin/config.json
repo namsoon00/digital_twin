@@ -13,7 +13,7 @@
     "공유 미리보기에서는 서버 설정과 계정 DB 쓰기를 차단합니다."
   ],
   "localData": {
-    "generatedAt": "2026-07-16T10:19:52.572748Z",
+    "generatedAt": "2026-07-17T13:24:07.389361Z",
     "sources": {
       "settings": "data/settings.json",
       "settingsExists": false
@@ -88,6 +88,8 @@
       "kisMarketSignalLiveRefreshSeconds": "60",
       "kisMarketSignalUnchangedStaleCount": "3",
       "marketDataMaxAgeMinutes": "240",
+      "marketSignalDataCollectionEnabled": "1",
+      "marketSignalDataBatchSize": "12",
       "dataFreshnessEnabled": "1",
       "dataFreshnessDefaultMaxAgeMinutes": "10",
       "dataFreshnessQuoteMaxAgeMinutes": "10",
@@ -102,6 +104,17 @@
       "externalApiFetchIntervalMinutes": "30",
       "externalSignalCacheMaxAgeMinutes": "10",
       "externalAlphaEnabled": "1",
+      "externalYFinanceEnabled": "1",
+      "externalYFinanceMaxSymbols": "8",
+      "externalYFinanceHistoryPeriod": "1y",
+      "externalYFinanceHistoryInterval": "1d",
+      "externalYFinanceHistoryRows": "90",
+      "externalYFinanceFinancialPeriods": "4",
+      "externalYFinanceTabularRows": "40",
+      "externalYFinanceOptionExpirations": "2",
+      "externalYFinanceOptionsMaxRows": "40",
+      "externalYFinanceEarningsLimit": "16",
+      "externalYFinanceNewsLimit": "10",
       "externalCoinGeckoEnabled": "1",
       "externalFredEnabled": "1",
       "externalFredSeries": "DGS10,DGS2,DFF",
@@ -121,7 +134,7 @@
       "externalResearchEvidenceMaxItems": "8",
       "newsCollectionEnabled": "1",
       "newsCollectionIntervalSeconds": "60",
-      "newsCollectionMaxSymbols": "40",
+      "newsCollectionMaxSymbols": "3",
       "newsCollectionLookbackMinutes": "180",
       "newsCollectionPerSymbolLimit": "8",
       "newsCollectionProviders": "yahoo_finance,gdelt,google_rss_kr,google_rss_us",
@@ -131,8 +144,8 @@
       "newsCollectionIncludeHoldings": "1",
       "newsCollectionRateLimitSeconds": "0.25",
       "newsAiAnalysisEnabled": "1",
-      "newsAiAnalysisUseCodex": "1",
-      "newsAiAnalysisTimeoutSeconds": "90",
+      "newsAiAnalysisUseCodex": "0",
+      "newsAiAnalysisTimeoutSeconds": "15",
       "investmentCalendarOfficialMacroSyncEnabled": "1",
       "investmentCalendarOfficialMacroSyncIntervalHours": "12",
       "investmentCalendarOfficialMacroSyncRateLimitSeconds": "600",
@@ -695,6 +708,72 @@
           "label": "펀더멘털 조회 종목 수",
           "type": "number",
           "default": "1"
+        },
+        {
+          "key": "externalYFinanceEnabled",
+          "label": "yfinance 종합 수집",
+          "type": "toggle",
+          "default": "1"
+        },
+        {
+          "key": "externalYFinanceMaxSymbols",
+          "label": "yfinance 조회 종목 수",
+          "type": "number",
+          "default": "8"
+        },
+        {
+          "key": "externalYFinanceHistoryPeriod",
+          "label": "yfinance 가격 기간",
+          "type": "text",
+          "default": "1y"
+        },
+        {
+          "key": "externalYFinanceHistoryInterval",
+          "label": "yfinance 가격 간격",
+          "type": "text",
+          "default": "1d"
+        },
+        {
+          "key": "externalYFinanceHistoryRows",
+          "label": "yfinance 가격 행 수",
+          "type": "number",
+          "default": "90"
+        },
+        {
+          "key": "externalYFinanceFinancialPeriods",
+          "label": "yfinance 재무제표 기간 수",
+          "type": "number",
+          "default": "4"
+        },
+        {
+          "key": "externalYFinanceTabularRows",
+          "label": "yfinance 표 데이터 행 수",
+          "type": "number",
+          "default": "40"
+        },
+        {
+          "key": "externalYFinanceOptionExpirations",
+          "label": "yfinance 옵션 만기 수",
+          "type": "number",
+          "default": "2"
+        },
+        {
+          "key": "externalYFinanceOptionsMaxRows",
+          "label": "yfinance 옵션 행 수",
+          "type": "number",
+          "default": "40"
+        },
+        {
+          "key": "externalYFinanceEarningsLimit",
+          "label": "yfinance 실적 일정 수",
+          "type": "number",
+          "default": "16"
+        },
+        {
+          "key": "externalYFinanceNewsLimit",
+          "label": "yfinance 뉴스 수",
+          "type": "number",
+          "default": "10"
         },
         {
           "key": "coingeckoApiKey",
@@ -1604,7 +1683,7 @@
     {
       "id": "market-data-collector",
       "title": "추천용 시장 데이터 수집",
-      "summary": "전체 종목 카탈로그를 순환하면서 Toss 현재가와 일부 캔들 지표를 운영 저장소에 저장합니다.",
+      "summary": "보유·관심 종목과 온톨로지 시장 센서 프록시를 순환하면서 Toss 현재가와 일부 캔들 지표를 운영 저장소에 저장합니다.",
       "localEndpoints": [],
       "commands": [
         "npm run python:market-data:once",
@@ -1638,6 +1717,18 @@
           "label": "신선도 기준(분)",
           "type": "number",
           "default": "240"
+        },
+        {
+          "key": "marketSignalDataCollectionEnabled",
+          "label": "시장 센서 수집",
+          "type": "boolean",
+          "default": "1"
+        },
+        {
+          "key": "marketSignalDataBatchSize",
+          "label": "시장 센서 배치",
+          "type": "number",
+          "default": "12"
         }
       ]
     },
@@ -1799,5 +1890,5 @@
       ]
     }
   ],
-  "buildId": "6c8714264994"
+  "buildId": "e1be24107ccb"
 }

@@ -7380,6 +7380,7 @@ class PythonServiceTests(unittest.TestCase):
             "externalCryptoIds": "bitcoin",
             "externalAlphaMaxSymbols": "2",
             "externalAlphaRateLimitSeconds": "0",
+            "externalYFinanceEnabled": "0",
             "externalSecMaxSymbols": "2",
             "externalNewsMaxSymbols": "2",
             "externalSecCompanyCiks": "AAPL=0000320193",
@@ -8073,6 +8074,7 @@ class PythonServiceTests(unittest.TestCase):
                 "externalDartEnabled": "0",
                 "externalSecEnabled": "0",
                 "externalNewsEnabled": "0",
+                "externalYFinanceEnabled": "0",
                 "externalResearchEvidenceMaxItems": "4",
             },
             cache=TestExternalSignalCache(path),
@@ -8105,6 +8107,7 @@ class PythonServiceTests(unittest.TestCase):
             "externalDartEnabled": "0",
             "externalSecEnabled": "0",
             "externalNewsEnabled": "0",
+            "externalYFinanceEnabled": "0",
             "externalDartCorpCodes": "005930=00126380",
             "externalSecCompanyCiks": "AAPL=0000320193",
         }
@@ -8127,6 +8130,7 @@ class PythonServiceTests(unittest.TestCase):
         self.assertEqual({}, signals["secFilings"])
         self.assertEqual({}, signals["dartDisclosures"])
         self.assertEqual({}, signals["newsHeadlines"])
+        self.assertEqual({}, signals["yfinanceData"])
 
     def test_external_signal_provider_rate_limits_repeated_targets(self):
         calls = []
@@ -8194,6 +8198,7 @@ class PythonServiceTests(unittest.TestCase):
                 "externalFxRateEnabled": "0",
                 "externalNewsEnabled": "1",
                 "externalNewsProvider": "alpha_vantage",
+                "externalYFinanceEnabled": "0",
             },
             cache=TestExternalSignalCache(test_store_seed(self.temp.name)),
             fetch_json=fake_fetch,
@@ -8276,6 +8281,7 @@ class PythonServiceTests(unittest.TestCase):
                 "fredApiKey": "fred-key",
                 "externalFredSeries": "DGS10,DGS2,DFF",
                 "externalCryptoIds": " ",
+                "externalYFinanceEnabled": "0",
                 "externalFredMaxSeries": "2",
                 "externalApiRetryAttempts": "1",
                 "externalApiRateLimitSeconds": "0",

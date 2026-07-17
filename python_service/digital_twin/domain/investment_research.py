@@ -673,6 +673,56 @@ def research_evidence_from_external_signals(symbol: str, external_signals: Dict[
                 min(12.0, abs(change) * 1.5),
                 0.65,
             ))
+    yfinance_group = external_signals.get("yfinanceData") if isinstance(external_signals.get("yfinanceData"), dict) else {}
+    yfinance_data = yfinance_group.get(normalized_symbol) if isinstance(yfinance_group.get(normalized_symbol), dict) else {}
+    if yfinance_data:
+        modules = [str(item) for item in yfinance_data.get("modulesCollected") or [] if str(item or "").strip()]
+        quote_payload = yfinance_data.get("quote") if isinstance(yfinance_data.get("quote"), dict) else {}
+        options = yfinance_data.get("optionChains") if isinstance(yfinance_data.get("optionChains"), list) else []
+        option_summary = options[0].get("summary") if options and isinstance(options[0], dict) and isinstance(options[0].get("summary"), dict) else {}
+        info = yfinance_data.get("info") if isinstance(yfinance_data.get("info"), dict) else {}
+        title = "yfinance 종합 데이터"
+        summary = compact_text(
+            ", ".join([
+                "모듈 " + str(len(modules)) + "개",
+                "현재가 " + str(quote_payload.get("price") or info.get("currentPrice") or "-"),
+                "옵션만기 " + str(len(yfinance_data.get("options") or [])) + "개",
+                "put/call OI " + str(round(number(option_summary.get("putCallOpenInterestRatio")), 2)) if option_summary else "",
+            ]),
+            360,
+        )
+        evidence.append(ResearchEvidence(
+            "research:" + normalized_symbol + ":yfinance",
+            normalized_symbol,
+            "financial-fact",
+            "yfinance",
+            title,
+            summary,
+            "",
+            str(yfinance_data.get("collectedAt") or ""),
+            "context",
+            4.0 if modules else 1.0,
+            0.58,
+            str(yfinance_data.get("collectedAt") or ""),
+            {
+                "provider": "yfinance",
+                "sourceKind": "unofficial-yahoo-finance-wrapper",
+                "querySymbol": str(yfinance_data.get("querySymbol") or ""),
+                "modulesCollected": modules,
+                "quote": quote_payload,
+                "analystPriceTargets": yfinance_data.get("analystPriceTargets") if isinstance(yfinance_data.get("analystPriceTargets"), dict) else {},
+                "calendar": yfinance_data.get("calendar") if isinstance(yfinance_data.get("calendar"), dict) else {},
+                "optionSummary": option_summary,
+                "statementMetricCounts": {
+                    "incomeStatement": len(yfinance_data.get("incomeStatement") or []),
+                    "balanceSheet": len(yfinance_data.get("balanceSheet") or []),
+                    "cashFlow": len(yfinance_data.get("cashFlow") or []),
+                },
+                "sourceReliability": 0.58,
+                "dataQualityRisk": "unofficial-yahoo-finance-wrapper",
+                "materialityScore": 45,
+            },
+        ))
     return evidence
 
 

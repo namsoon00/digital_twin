@@ -142,6 +142,8 @@ def _add_external_signal_payload_sources(rows: "OrderedDict[str, Dict[str, objec
         _add_source(rows, "Alpha Vantage", "기업 개요(OVERVIEW)")
     if _group_has_items(signals.get("earningsReports")):
         _add_source(rows, "Alpha Vantage", "실적(EARNINGS)")
+    if _group_has_items(signals.get("yfinanceData")):
+        _add_source(rows, "yfinance", "Yahoo Finance 기반 가격·재무·실적·애널리스트·보유자·옵션 데이터")
     if _group_has_items(signals.get("cryptoMarkets")):
         _add_source(rows, "CoinGecko", "크립토 가격·거래액(coins/markets)")
 
@@ -179,6 +181,8 @@ def _status_detail(message: str) -> str:
         return "환율 호출 상태"
     if "global_quote" in lowered:
         return "해외 주식 가격 호출 상태"
+    if "yfinance" in lowered:
+        return "yfinance 호출 상태"
     if "news" in lowered or "sentiment" in lowered or "doc:" in lowered:
         return "뉴스 호출 상태"
     if "series" in lowered:

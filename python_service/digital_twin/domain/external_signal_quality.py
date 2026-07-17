@@ -12,6 +12,7 @@ SOURCE_KEYS = {
     "secFilings": "SEC EDGAR",
     "dartDisclosures": "OpenDART",
     "newsHeadlines": "GDELT News",
+    "yfinanceData": "yfinance",
 }
 
 CONFIG_KEYS = {
@@ -86,7 +87,7 @@ def source_status(signals: Dict[str, object], source_label: str) -> Dict[str, ob
 
 
 def configured_source(key: str, settings: Dict[str, object]) -> bool:
-    if key == "cryptoMarkets" or key == "newsHeadlines" or key == "secFilings":
+    if key == "cryptoMarkets" or key == "newsHeadlines" or key == "secFilings" or key == "yfinanceData":
         return True
     config_key = CONFIG_KEYS.get(key)
     return bool(str((settings or {}).get(config_key) or "").strip()) if config_key else True
@@ -96,7 +97,7 @@ def symbol_coverage(signals: Dict[str, object], symbols: List[str]) -> Dict[str,
     if not symbols:
         return {"requested": 0, "covered": 0, "ratio": 1.0, "missingSymbols": []}
     covered = set()
-    for key in ["equityQuotes", "secFilings", "dartDisclosures", "newsHeadlines"]:
+    for key in ["equityQuotes", "secFilings", "dartDisclosures", "newsHeadlines", "yfinanceData"]:
         group = signals.get(key)
         if isinstance(group, dict):
             covered.update(str(symbol or "").upper() for symbol in group.keys() if str(symbol or "").strip())

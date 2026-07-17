@@ -6,6 +6,7 @@ from .external_signal_provider_core import ExternalSignalCoreMixin
 from .external_signal_provider_market import ExternalSignalMarketMixin
 from .external_signal_provider_news import ExternalSignalNewsMixin
 from .external_signal_provider_sec import ExternalSignalSecMixin
+from .external_signal_provider_yfinance import ExternalSignalYFinanceMixin
 from .external_signal_utils import (
     DISABLED_SETTING_VALUES,
     ExternalApiGuard,
@@ -30,6 +31,7 @@ class ExternalSignalProvider(
     ExternalSignalSecMixin,
     ExternalSignalMarketMixin,
     ExternalSignalNewsMixin,
+    ExternalSignalYFinanceMixin,
 ):
     def __init__(
         self,

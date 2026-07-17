@@ -206,6 +206,7 @@ class TossBaseCurrencyValueTests(unittest.TestCase):
                 "externalDartEnabled": "0",
                 "externalNewsEnabled": "0",
                 "externalSecEnabled": "0",
+                "externalYFinanceEnabled": "0",
             },
             cache=object(),
             evidence_store=object(),

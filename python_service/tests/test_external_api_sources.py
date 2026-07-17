@@ -1,16 +1,20 @@
 import sys
 import unittest
 from pathlib import Path
+from types import SimpleNamespace
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from digital_twin.application.notification_ai_gate_message import execution_telegram_message
 from digital_twin.domain.external_api_sources import external_api_source_metadata
+from digital_twin.domain.investment_research import research_evidence_from_external_signals
+from digital_twin.domain.market_data import normalize_position
 from digital_twin.domain.notification_ai_gate_contracts import NotificationAIValidatedResponse
 from digital_twin.domain.notification_templates import NotificationTemplate, alert_context, render_notification
 from digital_twin.domain.portfolio import AccountSnapshot, AlertEvent, Position
 from digital_twin.domain.portfolio_calculations import portfolio_summary
 from digital_twin.domain.monitoring import RealtimeMonitor
+from digital_twin.infrastructure.external_signals import ExternalSignalProvider
 
 
 class ExternalApiSourceTests(unittest.TestCase):
@@ -53,6 +57,12 @@ class ExternalApiSourceTests(unittest.TestCase):
             "equityQuotes": {"AAPL": {"provider": "Alpha Vantage", "price": 315}},
             "companyOverviews": {"AAPL": {"provider": "Alpha Vantage", "sector": "Technology"}},
             "earningsReports": {"AAPL": {"provider": "Alpha Vantage", "latestQuarter": {}}},
+            "yfinanceData": {
+                "AAPL": {
+                    "provider": "yfinance",
+                    "modulesCollected": ["history", "incomeStatement", "optionChains"],
+                }
+            },
             "cryptoMarkets": {"bitcoin": {"provider": "CoinGecko", "price": 100000}},
             "macro": {"series": {"DGS10": {"provider": "FRED", "value": 4.5}, "DGS2": {"provider": "FRED", "value": 4.1}}},
             "secFilings": {"AAPL": {"provider": "SEC EDGAR", "latestFiling": {"form": "10-Q"}}},
@@ -83,7 +93,7 @@ class ExternalApiSourceTests(unittest.TestCase):
         metadata = external_api_source_metadata(self.snapshot_with_sources())
         text = "\n".join(metadata["externalApiSourceLines"])
 
-        for provider in ["Toss", "KIS", "Alpha Vantage", "CoinGecko", "FRED", "SEC EDGAR", "OpenDART", "GDELT"]:
+        for provider in ["Toss", "KIS", "Alpha Vantage", "yfinance", "CoinGecko", "FRED", "SEC EDGAR", "OpenDART", "GDELT"]:
             self.assertIn(provider, text)
         self.assertIn("RuntimeSettings", text)
         self.assertIn("환율", text)
@@ -114,6 +124,156 @@ class ExternalApiSourceTests(unittest.TestCase):
         self.assertNotIn("Alpha Vantage", message)
         self.assertNotIn("CoinGecko", message)
         self.assertNotIn("KIS", message)
+
+    def test_yfinance_provider_collects_data_without_real_network_in_unit_test(self):
+        class FakeRecordsFrame:
+            def __init__(self, rows):
+                self.rows = list(rows)
+
+            @property
+            def empty(self):
+                return not self.rows
+
+            def reset_index(self):
+                return self
+
+            def tail(self, limit):
+                return FakeRecordsFrame(self.rows[-int(limit):])
+
+            def to_dict(self, orient="records"):
+                return list(self.rows)
+
+        class FakeStatementFrame:
+            def __init__(self, rows):
+                self.rows = dict(rows)
+                first = next(iter(self.rows.values()), {})
+                self.columns = list(first.keys())
+
+            @property
+            def empty(self):
+                return not self.rows
+
+            def iterrows(self):
+                for metric, values in self.rows.items():
+                    yield metric, values
+
+        class FakeSeries:
+            def __init__(self, values):
+                self.values = list(values)
+
+            @property
+            def empty(self):
+                return not self.values
+
+            def tail(self, limit):
+                return FakeSeries(self.values[-int(limit):])
+
+            def items(self):
+                return list(self.values)
+
+        class FakeTicker:
+            history_metadata = {"currency": "USD"}
+            fast_info = {"lastPrice": 110.0}
+            calendar = {"Earnings Date": "2026-07-30"}
+            income_stmt = FakeStatementFrame({"Total Revenue": {"2025-12-31": 1000}})
+            quarterly_income_stmt = FakeStatementFrame({"Total Revenue": {"2026-03-31": 260}})
+            balance_sheet = FakeStatementFrame({"Total Assets": {"2025-12-31": 3000}})
+            quarterly_balance_sheet = FakeStatementFrame({"Total Assets": {"2026-03-31": 3100}})
+            cashflow = FakeStatementFrame({"Operating Cash Flow": {"2025-12-31": 400}})
+            quarterly_cashflow = FakeStatementFrame({"Operating Cash Flow": {"2026-03-31": 105}})
+            earnings_estimate = FakeRecordsFrame([{"period": "0q", "avg": 1.3}])
+            revenue_estimate = FakeRecordsFrame([{"period": "0q", "avg": 1000}])
+            eps_trend = FakeRecordsFrame([{"period": "0q", "current": 1.3}])
+            eps_revisions = FakeRecordsFrame([{"period": "0q", "upLast7days": 2}])
+            recommendations_summary = FakeRecordsFrame([{"period": "0m", "buy": 12, "hold": 6}])
+            analyst_price_targets = {"mean": 125.0}
+            institutional_holders = FakeRecordsFrame([{"Holder": "Fund A", "Shares": 1000}])
+            options = ["2026-08-21"]
+            actions = FakeRecordsFrame([])
+            dividends = FakeSeries([])
+            splits = FakeSeries([])
+            capital_gains = FakeSeries([])
+            funds_data = None
+            news = []
+
+            def __init__(self, _symbol):
+                pass
+
+            def history(self, **_kwargs):
+                return FakeRecordsFrame([
+                    {"Date": "2026-07-01", "Close": 100.0, "Volume": 1000},
+                    {"Date": "2026-07-02", "Close": 110.0, "Volume": 1300},
+                ])
+
+            def get_info(self):
+                return {
+                    "longName": "Apple Inc.",
+                    "quoteType": "EQUITY",
+                    "currency": "USD",
+                    "sector": "Technology",
+                    "marketCap": 3200000000000,
+                    "totalRevenue": 391000000000,
+                    "currentPrice": 110.0,
+                    "targetMeanPrice": 125.0,
+                }
+
+            def get_earnings_dates(self, limit=16):
+                return FakeRecordsFrame([{
+                    "Earnings Date": "2026-07-30",
+                    "Reported EPS": 1.65,
+                    "EPS Estimate": 1.58,
+                }])
+
+            def get_shares_full(self):
+                return FakeSeries([("2026-07-01", 15000000000)])
+
+            def option_chain(self, _expiration):
+                return SimpleNamespace(
+                    calls=FakeRecordsFrame([{"contractSymbol": "AAPL260821C00110000", "openInterest": 100, "volume": 20}]),
+                    puts=FakeRecordsFrame([{"contractSymbol": "AAPL260821P00110000", "openInterest": 50, "volume": 10}]),
+                )
+
+        previous_module = sys.modules.get("yfinance")
+        sys.modules["yfinance"] = SimpleNamespace(Ticker=FakeTicker)
+        try:
+            provider = ExternalSignalProvider(
+                settings={
+                    "externalAlphaEnabled": "0",
+                    "externalCoinGeckoEnabled": "0",
+                    "externalFredEnabled": "0",
+                    "externalDartEnabled": "0",
+                    "externalSecEnabled": "0",
+                    "externalNewsEnabled": "0",
+                    "externalFxRateEnabled": "0",
+                    "externalYFinanceEnabled": "1",
+                    "externalYFinanceMaxSymbols": "1",
+                    "externalYFinanceHistoryRows": "2",
+                    "externalYFinanceOptionExpirations": "1",
+                    "externalApiRateLimitSeconds": "0",
+                    "externalApiRetryAttempts": "1",
+                },
+                cache=object(),
+                evidence_store=object(),
+                fetch_json=lambda *_args, **_kwargs: {},
+                sleep=lambda _: None,
+            )
+            signals = provider.fetch_signals([
+                normalize_position({"symbol": "AAPL", "name": "Apple", "market": "US", "currency": "USD"})
+            ])
+        finally:
+            if previous_module is None:
+                sys.modules.pop("yfinance", None)
+            else:
+                sys.modules["yfinance"] = previous_module
+
+        payload = signals["yfinanceData"]["AAPL"]
+        self.assertEqual(110.0, signals["equityQuotes"]["AAPL"]["price"])
+        self.assertEqual(125.0, signals["companyOverviews"]["AAPL"]["analystTargetPrice"])
+        self.assertEqual(1.65, signals["earningsReports"]["AAPL"]["latestQuarter"]["reportedEPS"])
+        self.assertEqual(0.5, payload["optionChains"][0]["summary"]["putCallOpenInterestRatio"])
+        self.assertIn("incomeStatement", payload["modulesCollected"])
+        evidence = research_evidence_from_external_signals("AAPL", signals)
+        self.assertTrue(any(item.kind == "financial-fact" and item.raw_payload.get("provider") == "yfinance" for item in evidence))
 
     def test_ai_rewritten_message_hides_api_sources_from_alert_body(self):
         snapshot = self.snapshot_with_sources()

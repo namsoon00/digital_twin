@@ -4029,7 +4029,70 @@ def typedb_inferencebox_graph(
         "inferenceGenerationAt": generation_at,
         **rulebox_metadata,
     }
-    return inference_graph
+    return dedupe_inferencebox_graph(inference_graph)
+
+
+def dedupe_inferencebox_graph(graph: PortfolioOntology) -> PortfolioOntology:
+    entities_by_id: Dict[str, OntologyEntity] = {}
+    for item in graph.entities:
+        existing = entities_by_id.get(item.entity_id)
+        if existing is None:
+            entities_by_id[item.entity_id] = item
+            continue
+        existing.properties = merge_ontology_properties(existing.properties, item.properties)
+
+    relations_by_id: Dict[str, OntologyRelation] = {}
+    for item in graph.relations:
+        row_id = relation_row_id({
+            "source": item.source,
+            "target": item.target,
+            "type": item.relation_type,
+            "ontologyBox": (item.properties or {}).get("ontologyBox"),
+            "snapshotId": (item.properties or {}).get("snapshotId"),
+            "aboxSnapshotId": (item.properties or {}).get("aboxSnapshotId"),
+            "ruleId": (item.properties or {}).get("ruleId"),
+        })
+        existing = relations_by_id.get(row_id)
+        if existing is None:
+            relations_by_id[row_id] = item
+            continue
+        existing.weight = max(number_or_none(existing.weight) or 0, number_or_none(item.weight) or 0)
+        existing.evidence_ids = list(dict.fromkeys(list(existing.evidence_ids or []) + list(item.evidence_ids or [])))
+        existing.properties = merge_ontology_properties(existing.properties, item.properties)
+
+    evidence_by_id: Dict[str, OntologyEvidence] = {}
+    for item in graph.evidence:
+        existing = evidence_by_id.get(item.evidence_id)
+        if existing is None:
+            evidence_by_id[item.evidence_id] = item
+            continue
+        existing.value = merge_ontology_properties(existing.value, item.value)
+        existing.confidence = max(number_or_none(existing.confidence) or 0, number_or_none(item.confidence) or 0)
+
+    return PortfolioOntology(
+        graph.portfolio_id,
+        entities=list(entities_by_id.values()),
+        relations=list(relations_by_id.values()),
+        evidence=list(evidence_by_id.values()),
+        beliefs=list(graph.beliefs or []),
+        opinions=list(graph.opinions or []),
+        reasoning_cards=list(graph.reasoning_cards or []),
+        worldview=dict(graph.worldview or {}),
+        prompt=graph.prompt,
+    )
+
+
+def merge_ontology_properties(left: Dict[str, object], right: Dict[str, object]) -> Dict[str, object]:
+    merged = dict(left or {})
+    for key, value in dict(right or {}).items():
+        if value in (None, "", [], {}):
+            continue
+        current = merged.get(key)
+        if current in (None, "", [], {}):
+            merged[key] = value
+        elif isinstance(current, list) and isinstance(value, list):
+            merged[key] = list(dict.fromkeys(current + value))
+    return merged
 
 
 def typedb_reasoned_properties(
@@ -4397,7 +4460,9 @@ def typedb_repository_from_settings(settings: Dict[str, str] = None):
         return NullTypeDBOntologyGraphRepository()
     timeout_seconds = int(settings.get("typedbTimeoutSeconds") or 20)
     query_metrics_value = settings.get("typedbQueryMetricsEnabled")
-    native_execution_value = settings.get("typedbNativeRuleExecutionEnabled")
+    native_execution_value = settings.get("ontologyReasoningTypeDbNativeRuleExecutionEnabled")
+    if native_execution_value in (None, ""):
+        native_execution_value = settings.get("typedbNativeRuleExecutionEnabled")
     return TypeDBOntologyGraphRepository(
         address=address,
         user=str(settings.get("typedbUser") or "admin"),
@@ -4413,5 +4478,5 @@ def typedb_repository_from_settings(settings: Dict[str, str] = None):
         condition_detail_queries_enabled=typedb_bool(settings.get("typedbConditionDetailQueriesEnabled")),
         query_metrics_enabled=True if query_metrics_value in (None, "") else typedb_bool(query_metrics_value),
         rulebox_snapshot_cache_seconds=number_or_none(settings.get("typedbRuleBoxSnapshotCacheSeconds")) or 60.0,
-        native_rule_execution_enabled=False if native_execution_value in (None, "") else typedb_bool(native_execution_value),
+        native_rule_execution_enabled=True if native_execution_value in (None, "") else typedb_bool(native_execution_value),
     )

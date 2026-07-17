@@ -687,7 +687,15 @@ def runtime_settings() -> Dict[str, str]:
         "typedbQueryTimeoutSeconds": value("typedbQueryTimeoutSeconds", "TYPEDB_QUERY_TIMEOUT_SECONDS", "20"),
         "typedbSchemaOperationTimeoutSeconds": value("typedbSchemaOperationTimeoutSeconds", "TYPEDB_SCHEMA_OPERATION_TIMEOUT_SECONDS", "120"),
         "typedbWriteOperationTimeoutSeconds": value("typedbWriteOperationTimeoutSeconds", "TYPEDB_WRITE_OPERATION_TIMEOUT_SECONDS", "20"),
-        "typedbNativeRuleExecutionEnabled": value("typedbNativeRuleExecutionEnabled", "TYPEDB_NATIVE_RULE_EXECUTION_ENABLED", "0"),
+        "typedbNativeRuleExecutionEnabled": value(
+            "typedbNativeRuleExecutionEnabled",
+            "TYPEDB_NATIVE_RULE_EXECUTION_ENABLED",
+            value(
+                "ontologyReasoningTypeDbNativeRuleExecutionEnabled",
+                "ONTOLOGY_REASONING_TYPEDB_NATIVE_RULE_EXECUTION_ENABLED",
+                "1",
+            ),
+        ),
         "typedbAutoResetEnabled": value("typedbAutoResetEnabled", "TYPEDB_AUTO_RESET_ENABLED", "1"),
         "typedbDataRetentionHours": value("typedbDataRetentionHours", "TYPEDB_DATA_RETENTION_HOURS", "24"),
         "typedbDataMaxSizeMb": value("typedbDataMaxSizeMb", "TYPEDB_DATA_MAX_SIZE_MB", "2048"),

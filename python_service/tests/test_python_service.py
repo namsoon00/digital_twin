@@ -84,7 +84,7 @@ from digital_twin.infrastructure.mysql_retention import (
 from digital_twin.infrastructure.mysql_operational_connection import mysql_operation_timeout_seconds
 from digital_twin.infrastructure.mysql_schema_tuning import MYSQL_OPERATIONAL_KEY_PARTITIONS, mysql_partitioning_mode
 from digital_twin.infrastructure.symbol_sources import RemoteSymbolSourceGateway, parse_krx_kind_table, parse_nasdaq_listed
-from digital_twin.infrastructure.toss_snapshots import TossAPIError, TossProvider, account_cash_amount, normalize_price_items, select_account, toss_json
+from digital_twin.infrastructure.toss_snapshots import TossAPIError, TossProvider, account_cash_amount, market_proxy_quote_context, normalize_price_items, select_account, toss_json
 from digital_twin.infrastructure.web_server import list_notification_rules_payload, list_templates_payload, notification_jobs_payload, notification_schedules_payload, notification_template_test_payload, realtime_status_payload, save_notification_rule_payload, settings_status_payload
 from digital_twin.scheduler import MonitorRunner
 from mysql_fixtures import (
@@ -832,6 +832,59 @@ class PythonServiceTests(unittest.TestCase):
         self.assertEqual(241, tsla.ma20)
         self.assertEqual("cached", tsla.data_quality)
         self.assertEqual("마지막 저장 시세", tsla.quote_status)
+
+    def test_market_proxy_quote_context_merges_coingecko_crypto_markets(self):
+        db_path = test_store_seed(self.temp.name)
+        cache = TestMarketQuoteCache(db_path)
+        cache.save("toss", "__market_data__", "SPY", {
+            "symbol": "SPY",
+            "name": "SPDR S&P 500 ETF Trust",
+            "market": "US",
+            "currency": "USD",
+            "assetType": "ETF",
+            "sector": "시장프록시",
+            "currentPrice": 743.9,
+            "ma20Distance": -0.2,
+            "quoteSource": "Toss /api/v1/prices",
+            "quoteStatus": "ok",
+            "dataQuality": "actual",
+            "updatedAt": "2026-07-17T18:15:42+09:00",
+            "collectionPurpose": "market-signal",
+            "collectionTarget": "market-proxy",
+        })
+
+        quotes = market_proxy_quote_context(
+            {},
+            cache,
+            external_signals={
+                "fetchedAt": "2026-07-17T09:15:00Z",
+                "cryptoMarkets": {
+                    "bitcoin": {
+                        "provider": "CoinGecko",
+                        "symbol": "BTC",
+                        "name": "Bitcoin",
+                        "price": 64089,
+                        "volume24h": 32000000000,
+                        "change24h": -1.0,
+                        "lastUpdated": "2026-07-17T09:14:58Z",
+                    },
+                    "ethereum": {
+                        "provider": "CoinGecko",
+                        "symbol": "ETH",
+                        "name": "Ethereum",
+                        "price": 3120,
+                        "volume24h": 11000000000,
+                        "change24h": 2.4,
+                    },
+                },
+            },
+        )
+
+        self.assertEqual(743.9, quotes["SPY"]["currentPrice"])
+        self.assertEqual(64089, quotes["BTC"]["currentPrice"])
+        self.assertEqual(-1.0, quotes["BTC"]["changeRate"])
+        self.assertEqual("CoinGecko coins/markets", quotes["BTC"]["quoteSource"])
+        self.assertEqual("market-proxy", quotes["ETH"]["collectionTarget"])
 
     def test_kis_market_signal_provider_enriches_kr_positions(self):
         db_path = test_store_seed(self.temp.name)

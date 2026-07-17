@@ -29,50 +29,95 @@ from .settings import currency_rates, runtime_settings
 MARKET_DATA_ACCOUNT_ID = "__market_data__"
 
 
-def market_proxy_quote_context(settings: Dict[str, str], quote_cache, limit: int = 80) -> Dict[str, Dict[str, object]]:
+def market_proxy_quote_context(
+    settings: Dict[str, str],
+    quote_cache,
+    limit: int = 80,
+    external_signals: Dict[str, object] = None,
+) -> Dict[str, Dict[str, object]]:
+    symbols = market_signal_symbols(settings or {})[:max(1, int(limit or 80))]
     if quote_cache is None:
-        return {}
+        rows: Dict[str, Dict[str, object]] = {}
+    else:
+        rows = {}
+        for symbol in symbols:
+            try:
+                payload = quote_cache.load("toss", MARKET_DATA_ACCOUNT_ID, symbol)
+            except Exception:
+                payload = {}
+            if not isinstance(payload, dict) or not payload:
+                continue
+            if not any(number(payload.get(key)) for key in ["currentPrice", "ma20", "ma60", "volume", "changeRate"]):
+                continue
+            rows[symbol] = {
+                key: payload.get(key)
+                for key in [
+                    "symbol",
+                    "name",
+                    "market",
+                    "currency",
+                    "assetType",
+                    "sector",
+                    "currentPrice",
+                    "changeRate",
+                    "volume",
+                    "volumeRatio",
+                    "tradingValue",
+                    "ma5",
+                    "ma20",
+                    "ma60",
+                    "ma120",
+                    "ma200",
+                    "ma20Slope",
+                    "ma60Slope",
+                    "ma20Distance",
+                    "ma60Distance",
+                    "quoteSource",
+                    "quoteStatus",
+                    "dataQuality",
+                    "updatedAt",
+                    "collectionPurpose",
+                    "collectionTarget",
+                ]
+                if payload.get(key) not in (None, "")
+            }
+    rows.update(crypto_market_proxy_quote_context(symbols, external_signals or {}))
+    return rows
+
+
+def crypto_market_proxy_quote_context(symbols: List[str], external_signals: Dict[str, object]) -> Dict[str, Dict[str, object]]:
+    allowed = {str(symbol or "").upper().strip() for symbol in symbols or [] if str(symbol or "").strip()}
     rows: Dict[str, Dict[str, object]] = {}
-    for symbol in market_signal_symbols(settings or {})[:max(1, int(limit or 80))]:
-        try:
-            payload = quote_cache.load("toss", MARKET_DATA_ACCOUNT_ID, symbol)
-        except Exception:
-            payload = {}
-        if not isinstance(payload, dict) or not payload:
+    markets = external_signals.get("cryptoMarkets") if isinstance(external_signals.get("cryptoMarkets"), dict) else {}
+    for coin_id, payload in markets.items():
+        if not isinstance(payload, dict):
             continue
-        if not any(number(payload.get(key)) for key in ["currentPrice", "ma20", "ma60", "volume", "changeRate"]):
+        symbol = str(payload.get("symbol") or "").upper().strip()
+        if not symbol:
+            symbol = {"bitcoin": "BTC", "ethereum": "ETH"}.get(str(coin_id or "").lower().strip(), "")
+        if not symbol or symbol not in allowed:
             continue
+        price = number(payload.get("price") or payload.get("currentPrice"))
+        if not price:
+            continue
+        meta = known_stock(symbol)
         rows[symbol] = {
-            key: payload.get(key)
-            for key in [
-                "symbol",
-                "name",
-                "market",
-                "currency",
-                "assetType",
-                "sector",
-                "currentPrice",
-                "changeRate",
-                "volume",
-                "volumeRatio",
-                "tradingValue",
-                "ma5",
-                "ma20",
-                "ma60",
-                "ma120",
-                "ma200",
-                "ma20Slope",
-                "ma60Slope",
-                "ma20Distance",
-                "ma60Distance",
-                "quoteSource",
-                "quoteStatus",
-                "dataQuality",
-                "updatedAt",
-                "collectionPurpose",
-                "collectionTarget",
-            ]
-            if payload.get(key) not in (None, "")
+            "symbol": symbol,
+            "name": payload.get("name") or meta.get("name") or symbol,
+            "market": "CRYPTO",
+            "currency": "USD",
+            "assetType": "CRYPTO",
+            "sector": meta.get("sector") or "디지털자산",
+            "currentPrice": price,
+            "changeRate": number(payload.get("change24h")),
+            "volume": number(payload.get("volume24h")),
+            "tradingValue": number(payload.get("volume24h")),
+            "quoteSource": "CoinGecko coins/markets",
+            "quoteStatus": "ok",
+            "dataQuality": "actual",
+            "updatedAt": payload.get("lastUpdated") or external_signals.get("fetchedAt") or "",
+            "collectionPurpose": "market-signal",
+            "collectionTarget": "market-proxy",
         }
     return rows
 
@@ -900,7 +945,7 @@ def build_snapshot(account: AccountConfig, external_settings: Optional[Dict[str,
     metadata = provider.diagnostics_payload()
     metadata.update(kis_provider.diagnostics_payload())
     metadata["accountContext"] = account_context
-    metadata["marketProxyQuotes"] = market_proxy_quote_context(settings, provider.quote_cache)
+    metadata["marketProxyQuotes"] = market_proxy_quote_context(settings, provider.quote_cache, external_signals=external_signals)
     return AccountSnapshot(
         account_id=account.account_id,
         account_label=account.label,

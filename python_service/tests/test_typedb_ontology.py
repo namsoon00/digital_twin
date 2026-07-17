@@ -107,9 +107,47 @@ class TypeDBOntologyRepositoryTests(unittest.TestCase):
         self.assertFalse(result["saved"])
         self.assertIn("TypeDB InferenceBox graph save timed out", result["reason"])
 
-    def test_typedb_repository_factory_requires_native_rule_execution_opt_in(self):
+    def test_typedb_inferencebox_graph_dedupes_duplicate_native_trace_ids(self):
+        graph = PortfolioOntology("typedb-inference-dedupe-test")
+        trace = OntologyEntity(
+            entity_id="inference-trace:AAPL:graph.watchlist.trend_transition.support.v1",
+            label="AAPL trend support",
+            kind="inference-trace",
+            properties={"ontologyBox": "InferenceBox", "ruleId": "graph.watchlist.trend_transition.support.v1", "matchedConditions": ["a"]},
+        )
+        duplicate = OntologyEntity(
+            entity_id=trace.entity_id,
+            label="AAPL trend support",
+            kind="inference-trace",
+            properties={"ontologyBox": "InferenceBox", "ruleId": "graph.watchlist.trend_transition.support.v1", "matchedConditions": ["b"]},
+        )
+        graph.entities.extend([trace, duplicate])
+        graph.relations.extend([
+            OntologyRelation("stock:AAPL", trace.entity_id, "HAS_INFERENCE_TRACE", 0.7, properties={
+                "ontologyBox": "InferenceBox",
+                "ruleId": "graph.watchlist.trend_transition.support.v1",
+            }),
+            OntologyRelation("stock:AAPL", trace.entity_id, "HAS_INFERENCE_TRACE", 0.8, evidence_ids=["evidence:1"], properties={
+                "ontologyBox": "InferenceBox",
+                "ruleId": "graph.watchlist.trend_transition.support.v1",
+            }),
+        ])
+
+        inference_graph = typedb_inferencebox_graph(graph, generation_id="gen:test", generation_at="2026-07-17T00:00:00Z")
+
+        self.assertEqual(1, len(inference_graph.entities))
+        self.assertEqual(1, len(inference_graph.relations))
+        self.assertEqual(0.8, inference_graph.relations[0].weight)
+        self.assertEqual(["evidence:1"], inference_graph.relations[0].evidence_ids)
+
+    def test_typedb_repository_factory_inherits_ontology_reasoning_native_rule_setting(self):
         direct = TypeDBOntologyGraphRepository("127.0.0.1:1729")
         factory_default = typedb_repository_from_settings({"ontologyTypeDbEnabled": "1", "typedbAddress": "127.0.0.1:1729"})
+        factory_reasoning_disabled = typedb_repository_from_settings({
+            "ontologyTypeDbEnabled": "1",
+            "typedbAddress": "127.0.0.1:1729",
+            "ontologyReasoningTypeDbNativeRuleExecutionEnabled": "0",
+        })
         factory_enabled = typedb_repository_from_settings({
             "ontologyTypeDbEnabled": "1",
             "typedbAddress": "127.0.0.1:1729",
@@ -122,7 +160,8 @@ class TypeDBOntologyRepositoryTests(unittest.TestCase):
         })
 
         self.assertTrue(direct.native_rule_execution_enabled())
-        self.assertFalse(factory_default.native_rule_execution_enabled())
+        self.assertTrue(factory_default.native_rule_execution_enabled())
+        self.assertFalse(factory_reasoning_disabled.native_rule_execution_enabled())
         self.assertTrue(factory_enabled.native_rule_execution_enabled())
         self.assertFalse(factory_disabled.native_rule_execution_enabled())
         self.assertEqual(20.0, factory_default.query_timeout_seconds())

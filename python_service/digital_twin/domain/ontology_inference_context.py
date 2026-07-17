@@ -127,9 +127,15 @@ def relation_context_from_inferencebox(
     max_strength = max([item.strength_score for item in active_matches], default=decision.get("score") or 0)
     score_breakdown = aggregate_score_breakdown(active_matches)
     evidence_subgraph = evidence_subgraph_packet(position, facts, matches, relations, traces)
+    why_now = why_now_packet(facts, active_matches, score_breakdown, decision, relations, traces, inferencebox)
+    signal_conflicts = signal_conflict_packet(facts, active_matches, score_breakdown, relations)
+    inference_timeline = inference_timeline_packet(facts, active_matches, decision, inferencebox)
     if isinstance(prompt_context, dict):
         prompt_context["evidenceSubgraph"] = evidence_subgraph
         prompt_context["scoreBreakdown"] = score_breakdown
+        prompt_context["whyNow"] = why_now
+        prompt_context["signalConflicts"] = signal_conflicts
+        prompt_context["inferenceTimeline"] = inference_timeline
     return {
         "engineVersion": context_version,
         "source": source_name,
@@ -154,6 +160,9 @@ def relation_context_from_inferencebox(
         "signalStrengthLabel": strength_label(max_strength),
         "confidence": round(max([item.confidence for item in active_matches], default=0), 1),
         "scoreBreakdown": score_breakdown,
+        "whyNow": why_now,
+        "signalConflicts": signal_conflicts,
+        "inferenceTimeline": inference_timeline,
         "inferenceGenerationId": str(inferencebox.get("inferenceGenerationId") or ""),
         "inferenceGenerationAt": str(inferencebox.get("inferenceGenerationAt") or ""),
         "ruleboxRulesHash": str(inferencebox.get("ruleboxRulesHash") or ""),
@@ -605,6 +614,224 @@ def aggregate_score_breakdown(matches: List[OntologyRuleMatch]) -> Dict[str, obj
         "opposingPressurePenalty": max_value("opposingPressurePenalty"),
         "drivers": drivers,
     }
+
+
+def why_now_packet(
+    facts: Dict[str, object],
+    active_matches: List[OntologyRuleMatch],
+    score_breakdown: Dict[str, object],
+    decision: Dict[str, object],
+    relations: List[Dict[str, object]],
+    traces: List[Dict[str, object]],
+    inferencebox: Dict[str, object],
+) -> Dict[str, object]:
+    facts = facts or {}
+    score_breakdown = score_breakdown or {}
+    decision = decision or {}
+    drivers: List[str] = []
+    changed_facts: List[Dict[str, object]] = []
+
+    def add_driver(label: str) -> None:
+        text = str(label or "").strip()
+        if text and text not in drivers:
+            drivers.append(text)
+
+    def add_change(key: str, label: str, current: object, previous: object = None, delta: object = None, threshold: float = 0.0) -> None:
+        delta_value = number(delta)
+        if threshold and abs(delta_value) < threshold:
+            return
+        if current in (None, "") and previous in (None, "") and delta in (None, ""):
+            return
+        changed_facts.append({
+            "key": key,
+            "label": label,
+            "current": current,
+            "previous": previous,
+            "delta": round(delta_value, 3) if delta not in (None, "") else "",
+        })
+
+    pnl_delta = number(facts.get("profitLossRateDeltaPct"))
+    if pnl_delta:
+        add_change("profitLossRate", "손익률 변화", facts.get("profitLossRate"), facts.get("previousProfitLossRate"), pnl_delta, threshold=0.1)
+        add_driver("손익률이 이전 관측 대비 " + signed_number_text(pnl_delta) + "%p 변했습니다.")
+    price_change = number(facts.get("priceChangeRate"))
+    if abs(price_change) >= 1.0:
+        add_change("priceChangeRate", "현재 가격 변화", facts.get("priceChangeRate"), delta=price_change, threshold=1.0)
+        add_driver("현재 가격 변화율이 " + signed_number_text(price_change) + "%입니다.")
+    novelty = number(score_breakdown.get("novelty"))
+    if novelty >= 55:
+        add_driver("새 변화 점수가 " + str(round(novelty, 1)) + "점으로 의미 있는 변경에 가깝습니다.")
+    elif novelty:
+        add_driver("새 변화 점수는 " + str(round(novelty, 1)) + "점이라 반복 상태인지 함께 봐야 합니다.")
+    direct_news_count = number(facts.get("directNewsCount"))
+    if direct_news_count:
+        add_driver("직접 뉴스/리서치 근거 " + str(int(direct_news_count)) + "건이 추론에 포함됐습니다.")
+    stage = str(decision.get("decisionStage") or "").strip()
+    if stage:
+        add_driver("현재 판단 단계는 " + stage + "입니다.")
+    relation_rule_ids = unique_texts([item.rule_id for item in active_matches or []])
+    trace_ids = unique_texts([str(item.get("id") or "") for item in traces or [] if isinstance(item, dict)])
+    if relation_rule_ids:
+        add_driver("이번 세대에서 성립한 핵심 룰: " + ", ".join(relation_rule_ids[:3]))
+    should_escalate = bool(
+        novelty >= 55
+        or abs(pnl_delta) >= 0.5
+        or abs(price_change) >= 2.0
+        or number(score_breakdown.get("riskPressure")) >= 70
+        or number(score_breakdown.get("supportEvidence")) >= 70
+        or number(decision.get("stagePriority")) >= 55
+    )
+    return {
+        "tboxClass": "WhyNow",
+        "reasoningQuestion": "왜 지금 다시 봐야 하는가",
+        "noveltyScore": round(novelty, 1),
+        "shouldEscalate": should_escalate,
+        "changeDrivers": drivers[:8],
+        "changedFacts": changed_facts[:8],
+        "activeRuleIds": relation_rule_ids[:8],
+        "traceIds": trace_ids[:8],
+        "decisionStage": stage,
+        "inferenceGenerationId": str(inferencebox.get("inferenceGenerationId") or ""),
+        "inferenceGenerationAt": str(inferencebox.get("inferenceGenerationAt") or ""),
+    }
+
+
+def signal_conflict_packet(
+    facts: Dict[str, object],
+    active_matches: List[OntologyRuleMatch],
+    score_breakdown: Dict[str, object],
+    relations: List[Dict[str, object]],
+) -> Dict[str, object]:
+    facts = facts or {}
+    score_breakdown = score_breakdown or {}
+    risk = number(score_breakdown.get("riskPressure"))
+    support = number(score_breakdown.get("supportEvidence"))
+    risk_drivers: List[str] = []
+    support_drivers: List[str] = []
+
+    def add(target: List[str], label: str) -> None:
+        text = str(label or "").strip()
+        if text and text not in target:
+            target.append(text)
+
+    if number(facts.get("profitLossRate")) <= -3:
+        add(risk_drivers, "손실 구간")
+    if number(facts.get("ma20Distance")) < 0:
+        add(risk_drivers, "20일 평균 아래")
+    if number(facts.get("ma60Distance")) < 0:
+        add(risk_drivers, "60일 평균 아래")
+    if number(facts.get("tradeStrength")) and number(facts.get("tradeStrength")) < 95:
+        add(risk_drivers, "체결강도 약화")
+    if number(facts.get("investorFlowScore")) < 0:
+        add(risk_drivers, "외국인·기관 수급 부담")
+    if number(facts.get("tradeStrength")) >= 105:
+        add(support_drivers, "체결강도 우위")
+    if number(facts.get("bidAskImbalance")) >= 20:
+        add(support_drivers, "매수 호가 우위")
+    if number(facts.get("investorFlowScore")) > 0:
+        add(support_drivers, "외국인·기관 수급 지지")
+    if number(facts.get("ma5Distance")) > 0:
+        add(support_drivers, "5일 평균 위")
+    if number(facts.get("priceChangeRate")) > 0:
+        add(support_drivers, "현재 가격 반등")
+    for relation in relations or []:
+        polarity = str((relation or {}).get("polarity") or "").lower()
+        label = str((relation or {}).get("aiInfluenceLabel") or (relation or {}).get("targetLabel") or "").strip()
+        if polarity == "risk":
+            add(risk_drivers, label)
+        elif polarity == "support":
+            add(support_drivers, label)
+
+    has_conflict = bool(risk >= 25 and support >= 18 and risk_drivers and support_drivers)
+    if has_conflict and risk > support + 12:
+        conflict_type = "risk-dominant-with-support"
+        effect = "위험이 우세하지만 지지 근거 때문에 전량 판단보다 강도 조절이 필요합니다."
+    elif has_conflict and support > risk + 12:
+        conflict_type = "support-dominant-with-risk"
+        effect = "지지 근거가 우세하지만 위험 근거 때문에 확인 조건이 필요합니다."
+    elif has_conflict:
+        conflict_type = "mixed-signal"
+        effect = "위험과 지지 근거가 동시에 강해 단정적 판단을 낮춰야 합니다."
+    else:
+        conflict_type = "none"
+        effect = "뚜렷한 신호 충돌은 약합니다."
+    return {
+        "tboxClass": "SignalConflict",
+        "hasConflict": has_conflict,
+        "conflictType": conflict_type,
+        "riskPressure": round(risk, 1),
+        "supportEvidence": round(support, 1),
+        "netRiskPressure": round(risk - support, 1),
+        "opposingPressurePenalty": round(number(score_breakdown.get("opposingPressurePenalty")), 1),
+        "riskDrivers": risk_drivers[:8],
+        "supportDrivers": support_drivers[:8],
+        "decisionEffect": effect,
+        "activeRuleIds": unique_texts([item.rule_id for item in active_matches or []])[:8],
+    }
+
+
+def inference_timeline_packet(
+    facts: Dict[str, object],
+    active_matches: List[OntologyRuleMatch],
+    decision: Dict[str, object],
+    inferencebox: Dict[str, object],
+) -> Dict[str, object]:
+    facts = facts or {}
+    decision = decision or {}
+    phases: List[Dict[str, object]] = []
+    if facts.get("previousProfitLossRate") not in (None, ""):
+        phases.append({
+            "phase": "previous-observation",
+            "label": "이전 손익 상태",
+            "profitLossRate": facts.get("previousProfitLossRate"),
+        })
+    phases.append({
+        "phase": "current-facts",
+        "label": "현재 관측 상태",
+        "profitLossRate": facts.get("profitLossRate"),
+        "priceChangeRate": facts.get("priceChangeRate"),
+        "ma20Distance": facts.get("ma20Distance"),
+        "ma60Distance": facts.get("ma60Distance"),
+    })
+    phases.append({
+        "phase": "current-inference",
+        "label": "현재 추론 세대",
+        "decisionStage": decision.get("decisionStage"),
+        "selectedRuleId": decision.get("selectedRuleId"),
+        "score": decision.get("score"),
+        "inferenceGenerationId": str(inferencebox.get("inferenceGenerationId") or ""),
+        "inferenceGenerationAt": str(inferencebox.get("inferenceGenerationAt") or ""),
+    })
+    return {
+        "tboxClass": "InferenceTimeline",
+        "timelineBasis": "previous-fact-delta-and-current-inference-generation",
+        "currentStateKey": timeline_state_key(decision, active_matches),
+        "phases": phases,
+        "activeRuleIds": unique_texts([item.rule_id for item in active_matches or []])[:8],
+    }
+
+
+def timeline_state_key(decision: Dict[str, object], active_matches: List[OntologyRuleMatch]) -> str:
+    return "|".join([
+        str((decision or {}).get("decisionStage") or ""),
+        str((decision or {}).get("selectedRuleId") or ""),
+        ",".join(unique_texts([item.rule_id for item in active_matches or []])[:4]),
+    ]).strip("|")
+
+
+def signed_number_text(value: object) -> str:
+    parsed = number(value)
+    prefix = "+" if parsed > 0 else ""
+    return prefix + str(round(parsed, 2))
+
+
+def unique_texts(values: Iterable[object]) -> List[str]:
+    result: List[str] = []
+    for value in values or []:
+        text = str(value or "").strip()
+        if text and text not in result:
+            result.append(text)
+    return result
 
 
 def inference_strength_score(relation: Dict[str, object]) -> float:

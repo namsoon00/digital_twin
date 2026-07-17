@@ -1466,6 +1466,18 @@ def _price_text_from_current(value: object) -> str:
     match = re.search(r"([$₩]?\s*\d[\d,]*(?:\.\d+)?)", text)
     return re.sub(r"\s+", "", match.group(1)) if match else text
 
+def _profit_loss_rate_from_context(context: Dict[str, object]) -> float:
+    for label in ["수익률", "손익률", "손익"]:
+        value = _plain_value(context, label)
+        if value:
+            rate = signed_percent_from_text(value)
+            if rate:
+                return rate
+    for key in ["profitLossRate", "profit_loss_rate", "pnlRate", "pnlPct", "profitLossPct"]:
+        if key in (context or {}):
+            return _number(context.get(key))
+    return 0.0
+
 def _moving_average_price(context: Dict[str, object], days: int) -> str:
     blob = _plain_value(context, "추세") or _context_blob(context)
     patterns = [
@@ -1487,6 +1499,32 @@ def _strategy_price_levels(context: Dict[str, object], response: NotificationAIV
     recovery = _strategy_guide_value(response, "recoveryPrice") or ma20 or ma5 or ma60
     return {"current": current, "ma5": ma5, "ma20": ma20, "ma60": ma60, "risk": risk, "recovery": recovery}
 
+def _loss_zone(context: Dict[str, object]) -> str:
+    rate = _profit_loss_rate_from_context(context)
+    if rate <= -20:
+        return "large_loss"
+    if rate <= -8:
+        return "loss_management"
+    if rate < 0:
+        return "small_loss"
+    if rate >= 8:
+        return "profit_protection"
+    if rate > 0:
+        return "small_profit"
+    return "flat"
+
+def _holding_action_mode(context: Dict[str, object]) -> str:
+    if _is_outside_regular_session(context):
+        return "정규장 재확인"
+    zone = _loss_zone(context)
+    if zone in {"large_loss", "loss_management"}:
+        return "보유 유지·손실 방어선 확인"
+    if zone == "small_loss":
+        return "보유 유지·추가매수 보류"
+    if zone == "profit_protection":
+        return "보유 유지·이익 보호선 확인"
+    return "보유 유지·조건 확인"
+
 def _derived_action_mode(context: Dict[str, object], response: NotificationAIValidatedResponse) -> str:
     explicit = _strategy_guide_value(response, "actionMode")
     if explicit:
@@ -1497,6 +1535,8 @@ def _derived_action_mode(context: Dict[str, object], response: NotificationAIVal
         if response.action == "AVOID":
             return "신규 진입 회피"
         return "대기"
+    if response.action == "HOLD":
+        return _holding_action_mode(context)
     if _is_outside_regular_session(context):
         return "정규장 확인"
     if response.action in {"SELL", "TRIM"}:
@@ -1504,6 +1544,24 @@ def _derived_action_mode(context: Dict[str, object], response: NotificationAIVal
     if response.action in {"BUY", "ADD"}:
         return "소액 진입 검토"
     return "대기"
+
+def _holding_position_sizing(context: Dict[str, object]) -> str:
+    quantity = _quantity_number(_plain_value(context, "매도가능 수량") or _plain_value(context, "보유 수량"))
+    keep = (_quantity_display(quantity) + "주 유지") if quantity else "현재 수량 유지"
+    zone = _loss_zone(context)
+    if zone in {"large_loss", "loss_management"}:
+        sized = _quantity_range_text(quantity, 0.20, 0.30)
+        if sized:
+            return keep + ". 추가매수는 보류하고, 약한 조건이 다음 조회에서도 이어지면 " + sized + " 축소 기준을 준비"
+        return keep + ". 추가매수는 보류하고, 약한 조건이 이어지면 일부 축소 기준을 먼저 준비"
+    if zone == "small_loss":
+        return keep + ". 손실이 더 커지기 전까지 새로 늘리지 않고 회복 조건부터 확인"
+    if zone == "profit_protection":
+        sized = _quantity_range_text(quantity, 0.20, 0.30)
+        if sized:
+            return keep + ". 평균선 아래로 밀리면 수익 보호용 " + sized + " 축소 기준을 준비"
+        return keep + ". 평균선 아래로 밀리면 수익 보호용 일부 축소 기준을 준비"
+    return keep + ". 새로 늘리기보다 다음 조회에서도 가격과 거래가 버티는지 확인"
 
 def _derived_position_sizing(context: Dict[str, object], response: NotificationAIValidatedResponse) -> str:
     explicit = _strategy_guide_value(response, "positionSizing")
@@ -1522,6 +1580,8 @@ def _derived_position_sizing(context: Dict[str, object], response: NotificationA
         return (sized + " 축소 검토") if sized else "줄일 수량 정보가 없어 비중 기준부터 확인"
     if response.action in {"BUY", "ADD"}:
         return "추가 진입은 한 번에 늘리기보다 계획 수량의 일부만 검토"
+    if response.action == "HOLD":
+        return _holding_position_sizing(context)
     return "수량 변경보다 보유 이유와 회복 조건 확인"
 
 def _derived_interpretation(context: Dict[str, object], response: NotificationAIValidatedResponse) -> str:
@@ -1536,7 +1596,57 @@ def _derived_interpretation(context: Dict[str, object], response: NotificationAI
         return "바로 결론을 고정하기보다 손실 관리 기준과 줄일 수량을 같이 확인하는 " + action_label + " 검토 단계입니다. " + " ".join(part for part in [response.summary, opinion] if part)
     if is_watchlist_context(context):
         return "보유 종목 판단이 아니라 새로 들어갈 조건을 확인하는 단계입니다. " + " ".join(part for part in [response.summary, opinion] if part)
+    if response.action == "HOLD":
+        zone = _loss_zone(context)
+        base = " ".join(part for part in [response.summary, opinion] if part)
+        if zone in {"large_loss", "loss_management"}:
+            return "보유 의견은 낙관이 아니라, 지금 바로 전량 정리할 만큼의 추가 근거가 부족하다는 뜻입니다. 추가매수는 막고 손실 방어 기준을 확인합니다. " + base
+        if zone == "profit_protection":
+            return "보유 의견은 수익을 계속 방치하라는 뜻이 아니라, 수익을 지키는 기준을 정해 둔 채 더 이어지는지 확인하는 단계입니다. " + base
+        if _is_outside_regular_session(context):
+            return "장외나 거래가 적은 시간대라 지금 가격만으로 수량을 바꾸기보다 정규장 거래를 다시 확인하는 단계입니다. " + base
+        return "보유 의견은 새로 늘리라는 뜻이 아니라, 조건이 유지되는지 보면서 다음 행동 기준을 정하는 단계입니다. " + base
     return " ".join(part for part in [response.summary, opinion] if part) or "현재 조건을 다음 조회에서도 확인하는 단계입니다."
+
+def _price_clause(label: str, price: str) -> str:
+    return (price + "(" + label + ")") if price else ""
+
+def _derived_holding_execution_criteria(context: Dict[str, object], response: NotificationAIValidatedResponse) -> str:
+    prices = _strategy_price_levels(context, response)
+    sizing = _derived_position_sizing(context, response)
+    current = prices.get("current") or prices.get("risk") or ""
+    ma5 = prices.get("ma5") or ""
+    ma20 = prices.get("ma20") or prices.get("recovery") or ""
+    recovery = ma20 or ma5 or prices.get("ma60") or ""
+    zone = _loss_zone(context)
+    session = "정규장 기준으로 " if _is_outside_regular_session(context) else "다음 조회에서도 "
+    if zone in {"large_loss", "loss_management"}:
+        weak_parts = []
+        if current:
+            weak_parts.append(current + " 아래로 더 밀림")
+        if ma5:
+            weak_parts.append(_price_clause("5일 평균", ma5) + " 회복 실패")
+        if not weak_parts and ma20:
+            weak_parts.append(_price_clause("20일 평균", ma20) + " 회복 실패")
+        first = session + " / ".join(weak_parts or ["약한 가격 흐름"]) + "이면 분할축소 판단으로 바꿉니다"
+        if recovery:
+            first += ". " + _price_clause("20일 평균", recovery) + " 위로 회복하고 거래량이 붙으면 보유 유지 근거가 강해집니다"
+        first += ". " + sizing
+        return first
+    if zone == "profit_protection":
+        guard = ma20 or ma5 or current
+        first = "수익은 유지하되 " + (_price_clause("20일 평균", guard) + " 아래로 내려가면 이익 보호용 일부 축소를 검토합니다" if guard else "주요 평균선 아래로 내려가면 이익 보호용 일부 축소를 검토합니다")
+        if recovery:
+            first += ". " + _price_clause("회복 기준", recovery) + " 위에서 거래가 붙으면 보유를 유지합니다"
+        first += ". " + sizing
+        return first
+    first = "새로 늘리지는 않습니다"
+    if recovery:
+        first += ". " + _price_clause("확인 기준", recovery) + " 위에서 거래가 붙으면 보유를 유지하고, 아래로 내려가면 추가매수는 계속 보류합니다"
+    elif current:
+        first += ". 다음 조회에서도 " + current + " 근처를 지키는지 먼저 봅니다"
+    first += ". " + sizing
+    return first
 
 def _derived_execution_criteria(context: Dict[str, object], response: NotificationAIValidatedResponse) -> str:
     explicit = _strategy_guide_value(response, "executionCriteria")
@@ -1553,6 +1663,8 @@ def _derived_execution_criteria(context: Dict[str, object], response: Notificati
         first = "다음 조회에서도 가격과 거래가 같이 버티면 " + sizing + "합니다"
     elif response.action == "AVOID":
         first = "위험 조건이 해소되기 전까지 신규 진입을 피합니다"
+    elif response.action == "HOLD":
+        return _derived_holding_execution_criteria(context, response)
     else:
         first = "지금은 수량을 바꾸기보다 확인 조건을 기다립니다"
     if prices["recovery"] and response.action in {"SELL", "TRIM", "AVOID"}:
@@ -1560,6 +1672,32 @@ def _derived_execution_criteria(context: Dict[str, object], response: Notificati
     elif response.invalidation_condition:
         first += ". " + response.invalidation_condition
     return first
+
+def _derived_invalidation_condition(context: Dict[str, object], response: NotificationAIValidatedResponse) -> str:
+    explicit = _strategy_guide_value(response, "invalidationCondition") or response.invalidation_condition
+    if explicit and not (response.action == "HOLD" and "관계 점수 급변" in explicit):
+        return explicit
+    if response.action != "HOLD":
+        return ""
+    prices = _strategy_price_levels(context, response)
+    current = prices.get("current") or ""
+    ma5 = prices.get("ma5") or ""
+    ma20 = prices.get("ma20") or prices.get("recovery") or ""
+    zone = _loss_zone(context)
+    if zone in {"large_loss", "loss_management"}:
+        parts = []
+        if current:
+            parts.append(current + " 아래로 더 내려감")
+        if ma5:
+            parts.append(_price_clause("5일 평균", ma5) + " 회복 실패")
+        if ma20:
+            parts.append(_price_clause("20일 평균", ma20) + " 회복 실패")
+        return "다음 조회에서도 " + " + ".join(parts or ["약한 조건"]) + "가 이어지면 보유 의견이 약해지고 분할축소를 다시 봅니다."
+    if zone == "profit_protection":
+        guard = ma20 or ma5 or current
+        return (_price_clause("20일 평균", guard) + " 아래로 내려가거나 직접 악재가 추가되면 보유 의견이 약해집니다.") if guard else "가격 흐름이 약해지거나 직접 악재가 추가되면 보유 의견이 약해집니다."
+    guard = ma20 or ma5 or current
+    return (_price_clause("확인 기준", guard) + " 아래로 내려가고 거래가 늘지 않으면 보유 의견이 약해집니다.") if guard else "가격과 거래가 같이 약해지면 보유 의견이 약해집니다."
 
 def _strategy_confidence_limiters(context: Dict[str, object], response: NotificationAIValidatedResponse) -> List[str]:
     rows = list(_strategy_guide_list(response, "dataLimitations"))
@@ -1598,7 +1736,7 @@ def strategy_guide_quality(context: Dict[str, object], response: NotificationAIV
         ("priceCriteria", bool(prices.get("risk") or prices.get("recovery"))),
         ("dataLimitations", bool(_strategy_confidence_limiters(context, response))),
         ("aiHypothesisSeparated", bool(_derived_ai_hypothesis(context, response))),
-        ("invalidationCondition", bool(_strategy_guide_value(response, "invalidationCondition") or response.invalidation_condition)),
+        ("invalidationCondition", bool(_derived_invalidation_condition(context, response))),
     ]
     passed = [key for key, ok in checks if ok]
     missing = [key for key, ok in checks if not ok]
@@ -1611,6 +1749,9 @@ def strategy_guide_rows(context: Dict[str, object], response: NotificationAIVali
     interpretation = _derived_interpretation(context, response)
     if interpretation:
         append_unique_text(rows, "결론: " + action_label + ". AI 해석: " + interpretation, 0)
+    action_mode = _derived_action_mode(context, response)
+    if action_mode:
+        append_unique_text(rows, "대응 모드: " + action_mode, 0)
     execution = _derived_execution_criteria(context, response)
     if execution:
         append_unique_text(rows, "실행 기준: " + execution, 0)
@@ -1631,7 +1772,7 @@ def strategy_guide_rows(context: Dict[str, object], response: NotificationAIVali
     hypothesis = _derived_ai_hypothesis(context, response)
     if hypothesis:
         append_unique_text(rows, "AI 가설: " + hypothesis + " " + _ai_hypothesis_boundary(response), 0)
-    invalidation = _strategy_guide_value(response, "invalidationCondition") or response.invalidation_condition
+    invalidation = _derived_invalidation_condition(context, response)
     if invalidation:
         append_unique_text(rows, "의견이 약해지는 조건: " + invalidation, 0)
     return [_html_bullet(_ai_marked_value(row), level) for row in rows if row]

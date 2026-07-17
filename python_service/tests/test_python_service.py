@@ -10157,6 +10157,59 @@ class PythonServiceTests(unittest.TestCase):
         self.assertGreaterEqual(enriched["notificationAiGate"]["strategyGuideQuality"]["score"], 80)
         self.assertEqual(enriched["notificationAiValidatedResponse"]["strategyGuideQuality"], enriched["notificationAiGate"]["strategyGuideQuality"])
 
+    def test_strategy_guide_turns_loss_zone_hold_into_defensive_plan(self):
+        context = {
+            "messageType": "investmentInsight",
+            "messageDeliveryLevel": "absoluteBeginner",
+            "investmentStrategyProfileLabel": "공격형",
+            "headline": "[관찰] 🛡️ SK하이닉스(ADR): 보유 유지·다음 조건 확인",
+            "displayTarget": "SK하이닉스(ADR) / SKHY",
+            "rawLines": "\n".join([
+                "현재가: $148.4",
+                "평균매입가: $165.02",
+                "수익률: -10.1%",
+                "보유 수량: 10주",
+                "종목 평가금액: $1,484 (약 219만 원)",
+                "계좌 평가금액: 4,811만 원",
+                "추세: 5일선 $164.7보다 9.9% 낮음, 20일선 $165.25보다 10.2% 낮음, 60일선 $165.25보다 10.2% 낮음",
+                "수급: 거래량 667,021(평균 대비 원본 0.01x · 시간보정 0.5x · 미장 프리마켓), 거래액 $74,023,621",
+            ]),
+            "ontologyRelationContext": {
+                "graphStoreUsed": True,
+                "inferenceBoxUsed": True,
+                "source": "typedbInferenceBox",
+                "decision": {"basis": "typedbInferenceBox", "actionGroup": "lossRisk", "score": 94},
+                "facts": {
+                    "instrumentProfiles": ["SemiconductorHBM", "CyclicalGrowth", "CrossListedSecurity"],
+                    "currency": "USD",
+                    "market": "US",
+                },
+            },
+        }
+        response = validated_response_from_payload(context, {
+            "action": "HOLD",
+            "confidence": 94,
+            "summary": "손실 관리 기준을 확인해야 합니다.",
+            "opinion": "보유 유지, 다음 데이터 확인",
+            "evidence": ["수익률 -10.1%", "현재가가 5일·20일·60일 평균보다 낮습니다."],
+            "counterEvidence": ["프리마켓 거래량이 낮아 투매로 단정하기 어렵습니다."],
+            "nextChecks": ["정규장 거래량", "20일 평균 회복 여부"],
+        }, source="test AI")
+
+        enriched = context_with_validated_ai_response(context, response)
+        message = enriched["telegramMessage"]
+
+        self.assertIn("정규장 재확인", message)
+        self.assertIn("보유 의견은 낙관이 아니라", message)
+        self.assertIn("추가매수는 막고", message)
+        self.assertIn("10주 유지", message)
+        self.assertIn("2~3주 축소", message)
+        self.assertIn("$148.4 아래로 더 밀림", message)
+        self.assertIn("$164.7(5일 평균) 회복 실패", message)
+        self.assertIn("$165.25(20일 평균) 위로 회복", message)
+        self.assertIn("보유 의견이 약해지고 분할축소", message)
+        self.assertGreaterEqual(enriched["notificationAiGate"]["strategyGuideQuality"]["score"], 80)
+
     def test_watchlist_ai_response_uses_entry_language_not_holding_language(self):
         context = {
             "messageType": "investmentInsight",

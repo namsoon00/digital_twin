@@ -6431,8 +6431,13 @@ class PythonServiceTests(unittest.TestCase):
         )
 
         payload = service.search(query="TSLA")
+        proxy_payload = service.search(query="SPY")
+        proxy = next(item for item in proxy_payload["items"] if item["symbol"] == "SPY")
 
         self.assertTrue(any(item["symbol"] == "TSLA" for item in payload["items"]))
+        self.assertEqual("SPDR S&P 500 ETF Trust", proxy["name"])
+        self.assertEqual("ETF", proxy["assetType"])
+        self.assertEqual("시장프록시", proxy["sector"])
         self.assertTrue(payload["summary"]["total"] >= 1)
         self.assertTrue(any(item["market"] == "NASDAQ" for item in payload["summary"]["markets"]))
         self.assertEqual(0, payload["offset"])
@@ -6639,6 +6644,105 @@ class PythonServiceTests(unittest.TestCase):
         self.assertEqual(5, repeat["accountSavedCount"])
         self.assertEqual(0, repeat["changedCount"])
         self.assertEqual([MARKET_DATA_COLLECTED], [event.name for event in events.published])
+
+    def test_market_data_collection_runner_collects_market_signal_proxies(self):
+        db_path = test_store_seed(self.temp.name)
+        symbol_store = TestSymbolUniverseStore(db_path)
+        quote_cache = TestMarketQuoteCache(db_path)
+        symbol_store.upsert_many([seed_symbol("AAPL"), seed_symbol("SPY"), seed_symbol("QQQ")])
+        registry = AccountRegistry()
+        registry.upsert(AccountConfig("main", "메인", "toss", "https://example.test", "id", "secret", "1", ["AAPL"]))
+        price_calls = []
+
+        class StaticSymbolService:
+            def summary(self):
+                return {
+                    "markets": [{"market": "NASDAQ", "count": 3, "stale": False}],
+                    "sources": [],
+                    "total": 3,
+                }
+
+            def refresh(self, markets=None):
+                return {"results": [], "summary": self.summary()}
+
+        class FakeProvider:
+            def __init__(self, account, cache):
+                self.account = account
+                self.delegate = TossProvider(account, quote_cache=cache)
+
+            def fetch_access_token(self):
+                return "token"
+
+            def fetch_focus_targets(self):
+                holding = normalize_position({
+                    "symbol": "AAPL",
+                    "name": "Apple",
+                    "market": "NASDAQ",
+                    "currency": "USD",
+                    "currentPrice": 100,
+                    "volume": 2000,
+                    "ma20": 95,
+                    "dataQuality": "actual",
+                    "quoteSource": "fake account focus",
+                    "source": "holding",
+                })
+                return "live", "토스 계좌 동기화", "token-main", [holding], []
+
+            def fetch_prices(self, token, symbols):
+                price_calls.append(list(symbols))
+                return {
+                    symbol: {
+                        "symbol": symbol,
+                        "currentPrice": 100 + index,
+                        "currency": "USD",
+                        "quoteSource": "Toss /api/v1/prices",
+                        "quoteStatus": "토스 prices 반영",
+                        "dataQuality": "actual",
+                        "updatedAt": "2026-07-04T00:00:00Z",
+                    }
+                    for index, symbol in enumerate(symbols)
+                }, token
+
+            def fetch_daily_candles(self, token, symbol):
+                return [
+                    {
+                        "timestamp": "2026-01-" + str(index + 1).zfill(2) + "T09:00:00+09:00",
+                        "closePrice": str(80 + index),
+                        "volume": str(1000 + index),
+                    }
+                    for index in range(28)
+                ], token
+
+            def merge_market_data(self, *args, **kwargs):
+                return self.delegate.merge_market_data(*args, **kwargs)
+
+        runner = MarketDataCollectionRunner(
+            registry,
+            StaticSymbolService(),
+            quote_cache,
+            {
+                "marketDataCollectionMarkets": "NASDAQ",
+                "marketDataMaxAgeMinutes": "240",
+                "marketDataRefreshUniverse": "0",
+                "marketSignalDataBatchSize": "2",
+            },
+            provider_factory=lambda account, cache: FakeProvider(account, cache),
+            sleep_fn=lambda _seconds: None,
+        )
+
+        result = runner.run_once()
+        cached_spy = quote_cache.load("toss", MARKET_DATA_ACCOUNT_ID, "SPY")
+        cached_qqq = quote_cache.load("toss", MARKET_DATA_ACCOUNT_ID, "QQQ")
+
+        self.assertEqual("account-focus+market-signals", result["collectionScope"])
+        self.assertEqual(2, result["marketSignalSelectedCount"])
+        self.assertEqual(2, result["marketSignalSavedCount"])
+        self.assertEqual(["QQQ", "SPY"], result["marketSignalSymbols"])
+        self.assertEqual([["AAPL", "QQQ", "SPY"]], price_calls)
+        self.assertEqual("market-signal", cached_spy["collectionPurpose"])
+        self.assertEqual("market-proxy", cached_spy["collectionTarget"])
+        self.assertEqual("ETF", cached_spy["assetType"])
+        self.assertEqual("market-signal", cached_qqq["collectionPurpose"])
 
     def test_ontology_reasoning_runner_consumes_data_update_requests_once(self):
         source = DomainEvent(

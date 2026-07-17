@@ -5,7 +5,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from digital_twin.domain.ontology_prompting import prompt_payload
-from digital_twin.domain.instrument_profiles import parse_instrument_profiles_text
+from digital_twin.domain.instrument_profiles import market_signal_profiles, parse_instrument_profiles_text
 from digital_twin.domain.ontology_decision_policy import decision_stage_from_action, relation_stage_priority
 from digital_twin.domain.ontology_rulebox_catalog import default_graph_inference_rules
 from digital_twin.domain.ontology_tbox import tbox_class_def
@@ -367,7 +367,7 @@ class OntologyRuleBoxTests(unittest.TestCase):
         portfolio = portfolio_summary([position], account_cash=200000)
         return build_portfolio_ontology([position], portfolio, portfolio_id="rulebox-smart-money-accumulation")
 
-    def profitable_momentum_graph(self, symbol="MSTR", settings=None):
+    def profitable_momentum_graph(self, symbol="MSTR", settings=None, metadata=None):
         position = Position(
             symbol=symbol,
             name="Strategy" if symbol == "MSTR" else "Tesla",
@@ -398,7 +398,7 @@ class OntologyRuleBoxTests(unittest.TestCase):
             [position],
             portfolio,
             portfolio_id="rulebox-profile-" + symbol.lower(),
-            runtime_context={"settings": settings or {}},
+            runtime_context={"settings": settings or {}, "metadata": metadata or {}},
         )
 
     def data_quality_gap_graph(self):
@@ -1288,6 +1288,69 @@ class OntologyRuleBoxTests(unittest.TestCase):
         self.assertTrue(profile.properties["allowAddOnStrength"])
         self.assertIn("HAS_INSTRUMENT_PROFILE", relation_types)
         self.assertTrue(any(item.relation_type == "HAS_ARCHETYPE" and item.source == "stock:MSTR" for item in graph.relations))
+
+    def test_market_signal_profiles_include_economic_proxy_set(self):
+        profiles = market_signal_profiles({})
+
+        for symbol in ["SPY", "IPO", "VIXY", "TLT", "HYG", "SOXX", "UUP", "069500"]:
+            self.assertIn(symbol, profiles)
+            self.assertEqual("market-signal", profiles[symbol].position_intent)
+            self.assertIn("MarketProxyInstrument", profiles[symbol].archetypes)
+        self.assertEqual("high", profiles["IPO"].sensitivities["ipo"])
+        self.assertEqual("high", profiles["HYG"].sensitivities["credit"])
+        self.assertEqual("high", profiles["UUP"].sensitivities["usd"])
+
+    def test_market_proxy_universe_is_projected_to_abox(self):
+        graph = self.profitable_momentum_graph("MSTR")
+        proxy = next(
+            item
+            for item in graph.entities
+            if item.kind == "market-proxy-instrument" and (item.properties or {}).get("symbol") == "SPY"
+        )
+        ipo_theme = next(
+            item
+            for item in graph.entities
+            if item.kind == "market-proxy-theme" and (item.properties or {}).get("theme") == "ipo"
+        )
+
+        self.assertIn("MarketProxyInstrument", proxy.properties["tboxClasses"])
+        self.assertIn("MarketProxyETF", proxy.properties["tboxClasses"])
+        self.assertTrue(any(item.relation_type == "OBSERVES_MARKET_PROXY" and item.target == proxy.entity_id for item in graph.relations))
+        self.assertTrue(any(item.relation_type == "PROXIES_THEME" and item.target == ipo_theme.entity_id for item in graph.relations))
+        self.assertTrue(any(item.relation_type == "SENSITIVE_TO" and item.source == proxy.entity_id for item in graph.relations))
+
+    def test_market_proxy_quotes_link_to_sensitive_stock_observations(self):
+        graph = self.profitable_momentum_graph(
+            "MSTR",
+            metadata={
+                "marketProxyQuotes": {
+                    "BTC": {
+                        "symbol": "BTC",
+                        "currentPrice": 64000,
+                        "changeRate": -3.2,
+                        "ma20Distance": -5.5,
+                        "volumeRatio": 1.4,
+                        "quoteSource": "CoinGecko/Toss market proxy cache",
+                        "updatedAt": "2026-07-16T00:00:00Z",
+                    }
+                }
+            },
+        )
+        observation = next(
+            item
+            for item in graph.entities
+            if item.kind == "market-proxy-observation" and (item.properties or {}).get("symbol") == "BTC"
+        )
+        stock_relation = next(
+            item
+            for item in graph.relations
+            if item.source == "stock:MSTR" and item.target == observation.entity_id and item.relation_type == "HAS_OBSERVATION"
+        )
+
+        self.assertEqual("risk", observation.properties["polarity"])
+        self.assertGreaterEqual(observation.properties["riskImpact"], 3.0)
+        self.assertEqual("risk", stock_relation.properties["polarity"])
+        self.assertIn("btc", stock_relation.properties["overlapFactors"])
 
     def test_stock_abox_carries_direct_typedb_rule_subject_fields(self):
         graph = self.profitable_momentum_graph(

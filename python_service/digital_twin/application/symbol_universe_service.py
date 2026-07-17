@@ -6,7 +6,37 @@ from ..domain.repositories import MarketQuoteRepository, SymbolSourceGateway, Sy
 from ..domain.symbol_universe import ListedSymbol, SUPPORTED_MARKETS, is_stale, stale_after_hours
 
 
-DEFAULT_SYMBOL_SEEDS = ["005930", "000660", "TSLA", "AAPL", "NVDA", "MSFT", "AMD", "MSTR"]
+DEFAULT_SYMBOL_SEEDS = [
+    "005930",
+    "000660",
+    "069500",
+    "091160",
+    "122630",
+    "229200",
+    "360750",
+    "TSLA",
+    "AAPL",
+    "NVDA",
+    "MSFT",
+    "AMD",
+    "MSTR",
+    "COIN",
+    "SPY",
+    "QQQ",
+    "IWM",
+    "IPO",
+    "IPOS",
+    "VIXY",
+    "TLT",
+    "IEF",
+    "HYG",
+    "LQD",
+    "SOXX",
+    "SMH",
+    "GLD",
+    "USO",
+    "UUP",
+]
 MARKET_DATA_ACCOUNT_ID = "__market_data__"
 DEFAULT_SYMBOL_UNIVERSE_LIMIT = 40
 
@@ -22,10 +52,10 @@ def seed_symbol(symbol: str) -> ListedSymbol:
         symbol=info["symbol"],
         name=info["name"],
         market=market,
-        exchange=market,
+        exchange=info.get("exchange") or market,
         currency=info.get("currency") or "",
         sector=info.get("sector") or "",
-        asset_type="STOCK",
+        asset_type=info.get("assetType") or "STOCK",
         source="Orbit Alpha seed",
         source_url="local-default",
     )
@@ -51,10 +81,9 @@ class SymbolUniverseService:
         return int_setting(self.settings, "marketDataMaxAgeMinutes", 240, 1, 1440 * 30)
 
     def ensure_seed(self) -> None:
-        counts = self.store.counts_by_market()
-        if counts:
-            return
-        self.store.upsert_many([seed_symbol(symbol) for symbol in DEFAULT_SYMBOL_SEEDS])
+        missing = [symbol for symbol in DEFAULT_SYMBOL_SEEDS if not self.store.get(symbol)]
+        if missing:
+            self.store.upsert_many([seed_symbol(symbol) for symbol in missing])
 
     def summary(self) -> Dict[str, object]:
         self.ensure_seed()

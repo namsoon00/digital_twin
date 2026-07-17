@@ -155,7 +155,7 @@ def build_portfolio_ontology(
             properties=abox_properties(),
         ))
     add_market_exposure_concepts(graph, portfolio_node_id, portfolio)
-    add_portfolio_factor_exposure_concepts(graph, portfolio_node_id, portfolio, observed_positions)
+    add_portfolio_factor_exposure_concepts(graph, portfolio_node_id, portfolio, observed_positions, runtime_context)
     add_runtime_setting_concepts(graph, portfolio_node_id, runtime_context)
     add_runtime_metadata_concepts(graph, portfolio_node_id, runtime_context)
     add_operational_world_concepts(graph, portfolio_node_id, runtime_context, observed_positions)

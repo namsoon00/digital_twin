@@ -744,6 +744,7 @@ def build_toss_ontology(
             "settings": getattr(strategy_model, "settings", {}) if strategy_model else {},
             "decisionItems": list(decision_items or []),
             "account": dict((toss or {}).get("account") or {}),
+            "metadata": dict((toss or {}).get("metadata") or {}),
         },
     )
 

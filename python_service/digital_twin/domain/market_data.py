@@ -195,6 +195,16 @@ def clamp(value: float, lower: float, upper: float) -> float:
 
 def sector_from_symbol(value: str) -> str:
     normalized = str(value or "").upper()
+    if normalized in {"SPY", "QQQ", "IWM", "IPO", "IPOS", "VIXY"}:
+        return "시장프록시"
+    if normalized in {"TLT", "IEF"}:
+        return "채권/금리"
+    if normalized in {"HYG", "LQD"}:
+        return "크레딧"
+    if normalized in {"GLD", "USO", "UUP"}:
+        return "원자재/통화"
+    if normalized in {"069500", "229200", "122630", "360750"}:
+        return "한국시장"
     if any(token in normalized for token in ["005930", "000660", "NVDA", "AMD", "TSM", "CHIP", "SEMICONDUCTOR"]):
         return "반도체"
     if any(token in normalized for token in ["AAPL", "MSFT", "GOOGL", "META", "AMZN", "AI", "SOFTWARE"]):
@@ -214,6 +224,11 @@ def known_stock(symbol: str) -> Dict[str, str]:
         "005930": {"name": "삼성전자", "market": "KR", "currency": "KRW", "sector": "반도체"},
         "000660": {"name": "SK하이닉스", "market": "KR", "currency": "KRW", "sector": "반도체"},
         "035420": {"name": "NAVER", "market": "KR", "currency": "KRW", "sector": "AI/플랫폼"},
+        "069500": {"name": "KODEX 200", "market": "KR", "currency": "KRW", "sector": "한국시장", "assetType": "ETF"},
+        "229200": {"name": "KODEX 코스닥150", "market": "KR", "currency": "KRW", "sector": "한국시장", "assetType": "ETF"},
+        "091160": {"name": "KODEX 반도체", "market": "KR", "currency": "KRW", "sector": "반도체", "assetType": "ETF"},
+        "122630": {"name": "KODEX 레버리지", "market": "KR", "currency": "KRW", "sector": "한국시장", "assetType": "ETF"},
+        "360750": {"name": "TIGER 미국S&P500", "market": "KR", "currency": "KRW", "sector": "한국시장", "assetType": "ETF"},
         "AAPL": {"name": "Apple", "market": "US", "currency": "USD", "sector": "AI/플랫폼"},
         "MSFT": {"name": "Microsoft", "market": "US", "currency": "USD", "sector": "AI/플랫폼"},
         "NVDA": {"name": "NVIDIA", "market": "US", "currency": "USD", "sector": "반도체"},
@@ -221,6 +236,24 @@ def known_stock(symbol: str) -> Dict[str, str]:
         "TSLA": {"name": "Tesla", "market": "US", "currency": "USD", "sector": "모빌리티"},
         "MSTR": {"name": "Strategy", "market": "US", "currency": "USD", "sector": "디지털자산"},
         "STRC": {"name": "Strategy Preferred", "market": "US", "currency": "USD", "sector": "디지털자산"},
+        "COIN": {"name": "Coinbase", "market": "US", "currency": "USD", "sector": "디지털자산"},
+        "SPY": {"name": "SPDR S&P 500 ETF Trust", "market": "US", "currency": "USD", "sector": "시장프록시", "assetType": "ETF", "exchange": "NYSEARCA"},
+        "QQQ": {"name": "Invesco QQQ Trust", "market": "US", "currency": "USD", "sector": "시장프록시", "assetType": "ETF", "exchange": "NASDAQ"},
+        "IWM": {"name": "iShares Russell 2000 ETF", "market": "US", "currency": "USD", "sector": "시장프록시", "assetType": "ETF", "exchange": "NYSEARCA"},
+        "IPO": {"name": "Renaissance IPO ETF", "market": "US", "currency": "USD", "sector": "시장프록시", "assetType": "ETF", "exchange": "NYSEARCA"},
+        "IPOS": {"name": "Renaissance International IPO ETF", "market": "US", "currency": "USD", "sector": "시장프록시", "assetType": "ETF", "exchange": "NYSEARCA"},
+        "VIXY": {"name": "ProShares VIX Short-Term Futures ETF", "market": "US", "currency": "USD", "sector": "시장프록시", "assetType": "ETF", "exchange": "NYSEARCA"},
+        "TLT": {"name": "iShares 20+ Year Treasury Bond ETF", "market": "US", "currency": "USD", "sector": "채권/금리", "assetType": "ETF", "exchange": "NASDAQ"},
+        "IEF": {"name": "iShares 7-10 Year Treasury Bond ETF", "market": "US", "currency": "USD", "sector": "채권/금리", "assetType": "ETF", "exchange": "NASDAQ"},
+        "HYG": {"name": "iShares iBoxx High Yield Corporate Bond ETF", "market": "US", "currency": "USD", "sector": "크레딧", "assetType": "ETF", "exchange": "NYSEARCA"},
+        "LQD": {"name": "iShares iBoxx Investment Grade Corporate Bond ETF", "market": "US", "currency": "USD", "sector": "크레딧", "assetType": "ETF", "exchange": "NYSEARCA"},
+        "SOXX": {"name": "iShares Semiconductor ETF", "market": "US", "currency": "USD", "sector": "반도체", "assetType": "ETF", "exchange": "NASDAQ"},
+        "SMH": {"name": "VanEck Semiconductor ETF", "market": "US", "currency": "USD", "sector": "반도체", "assetType": "ETF", "exchange": "NASDAQ"},
+        "GLD": {"name": "SPDR Gold Shares", "market": "US", "currency": "USD", "sector": "원자재/통화", "assetType": "ETF", "exchange": "NYSEARCA"},
+        "USO": {"name": "United States Oil Fund", "market": "US", "currency": "USD", "sector": "원자재/통화", "assetType": "ETF", "exchange": "NYSEARCA"},
+        "UUP": {"name": "Invesco DB US Dollar Index Bullish Fund", "market": "US", "currency": "USD", "sector": "원자재/통화", "assetType": "ETF", "exchange": "NYSEARCA"},
+        "BTC": {"name": "Bitcoin", "market": "CRYPTO", "currency": "USD", "sector": "디지털자산", "assetType": "CRYPTO"},
+        "ETH": {"name": "Ethereum", "market": "CRYPTO", "currency": "USD", "sector": "디지털자산", "assetType": "CRYPTO"},
     }
     fallback = {"name": normalized or "관심 종목", "market": "", "currency": "", "sector": sector_from_symbol(normalized)}
     fallback.update(known.get(normalized, {}))

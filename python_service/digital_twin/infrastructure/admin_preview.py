@@ -101,6 +101,8 @@ PUBLIC_SETTING_KEYS = [
     "kisMarketSignalLiveRefreshSeconds",
     "kisMarketSignalUnchangedStaleCount",
     "marketDataMaxAgeMinutes",
+    "marketSignalDataCollectionEnabled",
+    "marketSignalDataBatchSize",
     "dataFreshnessEnabled",
     "dataFreshnessDefaultMaxAgeMinutes",
     "dataFreshnessQuoteMaxAgeMinutes",
@@ -458,7 +460,7 @@ def admin_preview_config() -> Dict[str, object]:
             {
                 "id": "market-data-collector",
                 "title": "추천용 시장 데이터 수집",
-                "summary": "전체 종목 카탈로그를 순환하면서 Toss 현재가와 일부 캔들 지표를 운영 저장소에 저장합니다.",
+                "summary": "보유·관심 종목과 온톨로지 시장 센서 프록시를 순환하면서 Toss 현재가와 일부 캔들 지표를 운영 저장소에 저장합니다.",
                 "localEndpoints": [],
                 "commands": [
                     "npm run python:market-data:once",
@@ -471,6 +473,8 @@ def admin_preview_config() -> Dict[str, object]:
                     {"key": "marketDataPriceBatchSize", "label": "현재가 배치", "type": "number", "default": "200"},
                     {"key": "marketDataCandleBatchSize", "label": "캔들 배치", "type": "number", "default": "25"},
                     {"key": "marketDataMaxAgeMinutes", "label": "신선도 기준(분)", "type": "number", "default": "240"},
+                    {"key": "marketSignalDataCollectionEnabled", "label": "시장 센서 수집", "type": "boolean", "default": "1"},
+                    {"key": "marketSignalDataBatchSize", "label": "시장 센서 배치", "type": "number", "default": "12"},
                 ],
             },
             {

@@ -8,6 +8,7 @@ from typing import Dict, List, Optional, Tuple
 
 from ..domain.accounts import AccountConfig
 from ..domain.data_freshness import combine_quality
+from ..domain.instrument_profiles import market_signal_symbols
 from ..domain.market_data import known_stock, normalize_position, number, pct_distance, technical_indicators_from_candles
 from ..domain.portfolio import AccountSnapshot, Position, utc_now_iso
 from ..domain.portfolio_calculations import (
@@ -26,6 +27,54 @@ from .settings import currency_rates, runtime_settings
 
 
 MARKET_DATA_ACCOUNT_ID = "__market_data__"
+
+
+def market_proxy_quote_context(settings: Dict[str, str], quote_cache, limit: int = 80) -> Dict[str, Dict[str, object]]:
+    if quote_cache is None:
+        return {}
+    rows: Dict[str, Dict[str, object]] = {}
+    for symbol in market_signal_symbols(settings or {})[:max(1, int(limit or 80))]:
+        try:
+            payload = quote_cache.load("toss", MARKET_DATA_ACCOUNT_ID, symbol)
+        except Exception:
+            payload = {}
+        if not isinstance(payload, dict) or not payload:
+            continue
+        if not any(number(payload.get(key)) for key in ["currentPrice", "ma20", "ma60", "volume", "changeRate"]):
+            continue
+        rows[symbol] = {
+            key: payload.get(key)
+            for key in [
+                "symbol",
+                "name",
+                "market",
+                "currency",
+                "assetType",
+                "sector",
+                "currentPrice",
+                "changeRate",
+                "volume",
+                "volumeRatio",
+                "tradingValue",
+                "ma5",
+                "ma20",
+                "ma60",
+                "ma120",
+                "ma200",
+                "ma20Slope",
+                "ma60Slope",
+                "ma20Distance",
+                "ma60Distance",
+                "quoteSource",
+                "quoteStatus",
+                "dataQuality",
+                "updatedAt",
+                "collectionPurpose",
+                "collectionTarget",
+            ]
+            if payload.get(key) not in (None, "")
+        }
+    return rows
 
 
 class TossAPIError(RuntimeError):
@@ -851,6 +900,7 @@ def build_snapshot(account: AccountConfig, external_settings: Optional[Dict[str,
     metadata = provider.diagnostics_payload()
     metadata.update(kis_provider.diagnostics_payload())
     metadata["accountContext"] = account_context
+    metadata["marketProxyQuotes"] = market_proxy_quote_context(settings, provider.quote_cache)
     return AccountSnapshot(
         account_id=account.account_id,
         account_label=account.label,

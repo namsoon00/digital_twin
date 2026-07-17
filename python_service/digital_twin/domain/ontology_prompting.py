@@ -262,6 +262,7 @@ def build_ai_inference_packet(graph: PortfolioOntology) -> Dict[str, object]:
     valuation_context_count = len([item for item in graph.entities if item.kind in {"valuation-assumption", "revenue-exposure", "analyst-revision"}])
     temporal_window_count = len([item for item in graph.entities if item.kind == "temporal-window"])
     temporal_episode_count = len([item for item in graph.entities if item.kind == "trend-episode"])
+    market_proxy_count = len([item for item in graph.entities if item.kind in {"market-proxy-instrument", "market-proxy-observation"}])
     rulebox_entity_count = len([item for item in graph.entities if ontology_box(item.properties) == "RuleBox"])
     inferencebox_entity_count = len([item for item in graph.entities if ontology_box(item.properties) == "InferenceBox"])
     inferencebox_relation_count = len([item for item in graph.relations if ontology_box(item.properties) == "InferenceBox"])
@@ -271,7 +272,7 @@ def build_ai_inference_packet(graph: PortfolioOntology) -> Dict[str, object]:
         "role": "ontology-first-investment-opinion",
         "legacyModelRole": "not-used-for-scoring",
         "notificationRole": "insight-driven-dispatch",
-        "inputOrder": ["tbox", "boundedContexts", "ruleBox", "abox", "inferenceBox", "derivedRelations", "inferenceTraces", "operationalOntology", "temporalWindows", "coverageGaps", "macroRegimes", "cryptoExposures", "valuationContext", "newsQuality", "reasoningCards", "relationInfluences", "researchEvidence", "signalTransitions", "factorExposure", "liquidityConstraints", "insights", "activeInvestmentOpinions", "executionPlans", "relations", "evidence", "beliefs", "opinions"],
+        "inputOrder": ["tbox", "boundedContexts", "ruleBox", "abox", "inferenceBox", "derivedRelations", "inferenceTraces", "operationalOntology", "temporalWindows", "coverageGaps", "macroRegimes", "marketProxyContext", "cryptoExposures", "valuationContext", "newsQuality", "reasoningCards", "relationInfluences", "researchEvidence", "signalTransitions", "factorExposure", "liquidityConstraints", "insights", "activeInvestmentOpinions", "executionPlans", "relations", "evidence", "beliefs", "opinions"],
         "reasoningCardCount": len(graph.reasoning_cards),
         "reasoningCardIds": [item.get("id") for item in graph.reasoning_cards],
         "graphInputs": {
@@ -295,6 +296,7 @@ def build_ai_inference_packet(graph: PortfolioOntology) -> Dict[str, object]:
             "valuationContextCount": valuation_context_count,
             "temporalWindowCount": temporal_window_count,
             "temporalEpisodeCount": temporal_episode_count,
+            "marketProxyCount": market_proxy_count,
         },
         "outputSchema": {
             "portfolioView": "string",
@@ -318,6 +320,7 @@ def build_ai_inference_packet(graph: PortfolioOntology) -> Dict[str, object]:
             "팩터/상관/유동성/슬리피지 제약이 있으면 투자 의견과 실행 계획을 분리해 설명합니다.",
             "coverageGaps, newsQuality, source freshness가 있으면 결론 강도를 낮추고 필요한 수집 과제를 먼저 제시합니다.",
             "macroRegimes와 cryptoExposures는 종목 가격 신호의 상위 환경으로만 사용하고 단독 매수·매도 결론으로 쓰지 않습니다.",
+            "marketProxyContext는 위험선호, 금리, 크레딧, IPO, 변동성, 달러, 원자재, 섹터 사이클의 배경 맥락이며 단독 매수·매도 결론으로 쓰지 않습니다.",
         ],
     }
 
@@ -494,6 +497,7 @@ def prompt_payload(graph: PortfolioOntology) -> Dict[str, object]:
             120,
         ),
         "macroRegimes": compact_entities_by_kind(graph, ["macro-regime", "interest-rate", "yield-curve", "fx-rate"], 60),
+        "marketProxyContext": compact_entities_by_kind(graph, ["market-proxy-instrument", "market-proxy-theme", "market-proxy-observation"], 140),
         "cryptoExposures": compact_entities_by_kind(graph, ["crypto-asset", "crypto-market-signal", "crypto-exposure", "price-path"], 80),
         "valuationContext": compact_entities_by_kind(
             graph,

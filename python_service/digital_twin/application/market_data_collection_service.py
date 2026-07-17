@@ -2,8 +2,10 @@ import time
 from typing import Dict, Iterable, List, Tuple
 
 from ..domain.accounts import AccountConfig
+from ..domain.data_freshness import age_minutes
 from ..domain.events import market_data_collected_event, ontology_reasoning_requested_event
 from ..domain.fact_changes import market_fact_change
+from ..domain.instrument_profiles import market_signal_symbols
 from ..domain.market_data import normalize_position, number, technical_indicators_from_candles
 from ..domain.materiality import market_change_materiality
 from ..domain.portfolio import Position, utc_now_iso
@@ -103,6 +105,12 @@ class MarketDataCollectionRunner:
     def candle_batch_size(self) -> int:
         return int_setting(self.settings, "marketDataCandleBatchSize", 25, 0, self.price_batch_size())
 
+    def market_signal_collection_enabled(self) -> bool:
+        return truthy(self.settings.get("marketSignalDataCollectionEnabled"), True)
+
+    def market_signal_batch_size(self) -> int:
+        return int_setting(self.settings, "marketSignalDataBatchSize", 12, 0, self.price_batch_size())
+
     def max_age_minutes(self) -> int:
         return int_setting(self.settings, "marketDataMaxAgeMinutes", 240, 1, 1440 * 30)
 
@@ -119,7 +127,10 @@ class MarketDataCollectionRunner:
 
     def refresh_symbol_universe_if_needed(self) -> Dict[str, object]:
         if not self.refresh_universe_enabled():
-            return {"status": "disabled"}
+            try:
+                return {"status": "disabled", "summary": self.symbol_service.summary()}
+            except Exception as error:  # noqa: BLE001 - disabled refresh must not block account-focus collection.
+                return {"status": "disabled", "error": str(error)}
         try:
             summary = self.symbol_service.summary()
             markets = [
@@ -141,6 +152,61 @@ class MarketDataCollectionRunner:
             "currency": item.get("currency"),
             "sector": item.get("sector"),
         })
+
+    def market_signal_targets(self, excluded_symbols: Iterable[str] = None) -> List[Tuple[Position, Dict[str, object]]]:
+        batch_size = self.market_signal_batch_size()
+        if not self.market_signal_collection_enabled() or batch_size <= 0:
+            return []
+        excluded = {str(symbol or "").upper() for symbol in (excluded_symbols or []) if str(symbol or "").strip()}
+        signal_symbols = market_signal_symbols(self.settings)
+        if not signal_symbols:
+            return []
+        selected_markets = set(self.markets())
+        fallback_rows: Dict[str, Dict[str, object]] = {}
+        if not hasattr(self.symbol_service, "enrich"):
+            selection_limit = max(self.price_batch_size(), batch_size * 5)
+            try:
+                fallback_rows = {
+                    str(row.get("symbol") or "").upper(): dict(row)
+                    for row in self.quote_cache.stale_universe_symbols(
+                        "toss",
+                        MARKET_DATA_ACCOUNT_ID,
+                        self.markets(),
+                        limit=selection_limit,
+                        max_age_minutes=self.max_age_minutes(),
+                    )
+                }
+            except Exception:
+                fallback_rows = {}
+        targets: List[Tuple[Position, Dict[str, object]]] = []
+        for symbol in signal_symbols:
+            if not symbol or symbol in excluded:
+                continue
+            try:
+                cached = self.quote_cache.load("toss", MARKET_DATA_ACCOUNT_ID, symbol)
+            except Exception:
+                cached = {}
+            cached_age = age_minutes(str(cached.get("updatedAt") or cached.get("updated_at") or "")) if isinstance(cached, dict) else None
+            if cached and cached_age is not None and cached_age <= self.max_age_minutes():
+                continue
+            row = {}
+            if hasattr(self.symbol_service, "enrich"):
+                try:
+                    row = self.symbol_service.enrich(symbol)
+                except Exception:
+                    row = {}
+            if not row:
+                row = fallback_rows.get(symbol) or {}
+            if not row:
+                continue
+            if normalize_market(str(row.get("market") or "")) not in selected_markets:
+                continue
+            position = self.base_position(row)
+            position.source = "market-signal"
+            targets.append((position, dict(row)))
+            if len(targets) >= batch_size:
+                break
+        return targets
 
     def focus_positions(self, provider: MarketDataProvider):
         token = ""
@@ -167,15 +233,21 @@ class MarketDataCollectionRunner:
         provider: MarketDataProvider,
         token: str,
         focused_by_account: List[Dict[str, object]],
-    ) -> Tuple[List[Dict[str, object]], Dict[str, object]]:
+        market_signal_targets: List[Tuple[Position, Dict[str, object]]] = None,
+    ) -> Tuple[List[Dict[str, object]], List[Tuple[Position, Dict[str, object]]], Dict[str, object]]:
+        market_signal_targets = list(market_signal_targets or [])
         symbol_order: List[str] = []
         for entry in focused_by_account:
             for position in entry.get("positions") or []:
                 symbol = str(position.symbol or "").upper()
                 if symbol and symbol not in symbol_order:
                     symbol_order.append(symbol)
+        for position, _base in market_signal_targets:
+            symbol = str(position.symbol or "").upper()
+            if symbol and symbol not in symbol_order:
+                symbol_order.append(symbol)
         if not symbol_order:
-            return focused_by_account, {"symbols": [], "priceCount": 0, "candleCount": 0}
+            return focused_by_account, [], {"symbols": [], "priceCount": 0, "candleCount": 0}
         if not token:
             token = provider.fetch_access_token()
         try:
@@ -200,7 +272,22 @@ class MarketDataCollectionRunner:
             next_entry = dict(entry)
             next_entry["positions"] = merged_positions
             merged_entries.append(next_entry)
-        return merged_entries, {
+        merged_market_signals: List[Tuple[Position, Dict[str, object]]] = []
+        for position, base in market_signal_targets:
+            symbol = str(position.symbol or "").upper()
+            cached = self.quote_cache.load("toss", MARKET_DATA_ACCOUNT_ID, symbol)
+            merged_market_signals.append((
+                provider.merge_market_data(
+                    position,
+                    prices.get(symbol) or {},
+                    indicators.get(symbol) or {},
+                    cached,
+                    quote_live=bool(prices.get(symbol)),
+                    indicators_live=bool(indicators.get(symbol)),
+                ),
+                base,
+            ))
+        return merged_entries, merged_market_signals, {
             "symbols": symbol_order,
             "priceCount": len(prices),
             "candleCount": len(indicators),
@@ -269,7 +356,19 @@ class MarketDataCollectionRunner:
                 "savedCount": 0,
                 "cache": self.quote_cache.summary("toss", MARKET_DATA_ACCOUNT_ID),
             }
-        focused_by_account, merge_summary = self.merge_focus_market_data(merge_provider, merge_token, focused_by_account)
+        focused_symbols = [
+            str(position.symbol or "").upper()
+            for entry in focused_by_account
+            for position in (entry.get("positions") or [])
+            if str(position.symbol or "").strip()
+        ]
+        market_signal_targets = self.market_signal_targets(focused_symbols)
+        focused_by_account, market_signal_targets, merge_summary = self.merge_focus_market_data(
+            merge_provider,
+            merge_token,
+            focused_by_account,
+            market_signal_targets,
+        )
         if not merge_summary.get("symbols"):
             return {
                 "status": "fresh",
@@ -292,6 +391,8 @@ class MarketDataCollectionRunner:
         materiality_assessments: Dict[str, Dict[str, object]] = {}
         global_saved_symbols = set()
         account_symbol_counts: Dict[str, int] = {}
+        market_signal_saved = 0
+        market_signal_symbols: List[str] = []
         for entry in focused_by_account:
             account = entry["account"]
             account_count = 0
@@ -321,11 +422,34 @@ class MarketDataCollectionRunner:
                     if assessment.passed:
                         material_symbols.append(symbol)
             account_symbol_counts[account.account_id] = account_count
+        for position, base in market_signal_targets:
+            symbol = str(position.symbol or "").upper()
+            if not symbol or symbol in global_saved_symbols:
+                continue
+            payload = position_payload(position, base, "market-signal")
+            payload["collectionTarget"] = "market-proxy"
+            if not number(payload.get("currentPrice")) and not any(number(payload.get(key)) for key in ["ma20", "ma60", "volume"]):
+                continue
+            cached = self.quote_cache.load("toss", MARKET_DATA_ACCOUNT_ID, symbol)
+            change = market_fact_change(cached, payload)
+            self.quote_cache.save("toss", MARKET_DATA_ACCOUNT_ID, symbol, payload)
+            global_saved_symbols.add(symbol)
+            market_signal_saved += 1
+            market_signal_symbols.append(symbol)
+            saved += 1
+            if change.get("changed"):
+                changed += 1
+                changed_symbols.append(symbol)
+                changed_fields_by_symbol[symbol] = list(change.get("fields") or [])
+                assessment = market_change_materiality(symbol, cached, payload, change, self.settings)
+                materiality_assessments[symbol] = assessment.to_dict()
+                if assessment.passed:
+                    material_symbols.append(symbol)
         result = {
             "status": "ok",
             "provider": "toss",
             "markets": markets,
-            "collectionScope": "account-focus",
+            "collectionScope": "account-focus+market-signals" if market_signal_targets else "account-focus",
             "accountCount": len(accounts),
             "liveAccountCount": len(focused_by_account),
             "unavailableAccounts": unavailable_accounts,
@@ -333,6 +457,9 @@ class MarketDataCollectionRunner:
             "symbols": symbols,
             "selectedCount": len(symbols),
             "accountSelectedCount": sum(account_symbol_counts.values()),
+            "marketSignalSelectedCount": len(market_signal_targets),
+            "marketSignalSavedCount": market_signal_saved,
+            "marketSignalSymbols": market_signal_symbols,
             "priceCount": int(merge_summary.get("priceCount") or 0),
             "candleCount": int(merge_summary.get("candleCount") or 0),
             "savedCount": saved,
@@ -384,8 +511,10 @@ class MarketDataCollectionRunner:
             "markets": self.markets(),
             "priceBatchSize": self.price_batch_size(),
             "candleBatchSize": self.candle_batch_size(),
+            "marketSignalCollectionEnabled": self.market_signal_collection_enabled(),
+            "marketSignalBatchSize": self.market_signal_batch_size(),
             "maxAgeMinutes": self.max_age_minutes(),
-            "collectionScope": "account-focus",
+            "collectionScope": "account-focus+market-signals",
             "cache": self.quote_cache.summary("toss", MARKET_DATA_ACCOUNT_ID),
             "symbolUniverse": self.symbol_service.summary(),
         }

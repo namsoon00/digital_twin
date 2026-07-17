@@ -218,7 +218,7 @@ The decision-change evidence signal also queues a deeper asynchronous model revi
 
 The app store is stored in `app_store`, runtime settings are stored in `runtime_settings`, listed symbols are stored in `symbol_universe` with source freshness in `symbol_universe_sources`, recommendation-universe quote/trend snapshots are stored in `market_quote_cache` with account id `__market_data__`, snapshots are stored in `monitor_snapshots`, cadence is stored per account, rule, and symbol in `monitor_sent`, notification templates are stored in `notification_templates`, and outgoing notification jobs are stored in `notification_jobs` inside the configured operational DB.
 
-The market data collector runs as a managed worker through `python_service/monitor_service.py`. It refreshes stale catalog rows when configured, then rotates through the symbol universe and stores Toss `/api/v1/prices` current prices plus a smaller `/api/v1/candles` trend batch for future recommendation scoring.
+The market data collector runs as a managed worker through `python_service/monitor_service.py`. It refreshes stale catalog rows when configured, then collects account-focus holdings/watchlist symbols plus ontology `market-signal` proxy instruments. It stores Toss `/api/v1/prices` current prices plus a smaller `/api/v1/candles` trend batch in the global `__market_data__` quote cache so market proxies can become ABox evidence without being treated as account holdings.
 
 Configuration:
 
@@ -229,6 +229,8 @@ Configuration:
 - `MARKET_DATA_PRICE_BATCH_SIZE`: Toss prices symbols per cycle, capped at 200 by the app.
 - `MARKET_DATA_CANDLE_BATCH_SIZE`: daily-candle indicator symbols per cycle, default 25.
 - `MARKET_DATA_REFRESH_UNIVERSE`: refresh stale symbol catalog before collection, default `1`.
+- `MARKET_SIGNAL_DATA_COLLECTION_ENABLED`: collect ontology market proxy sensors, default `1`.
+- `MARKET_SIGNAL_DATA_BATCH_SIZE`: market proxy sensors per cycle, default 12.
 
 External data signals are collected in `python_service/digital_twin/infrastructure/external_signals.py` and cached in `app_store` with the `external_signals` store id. The cache is separated by the holdings/settings combination so multiple accounts do not reuse the wrong symbol set, and it prevents each realtime monitoring tick from calling every vendor API. `AccountSnapshot.external_signals` carries normalized data into the domain monitor, and `RealtimeMonitor.external_signal_events()` decides whether to create evidence signals:
 

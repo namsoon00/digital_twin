@@ -47,6 +47,7 @@ class MySQLConnectionProxy:
 class MySQLOperationalConnection:
     _schema_ready = set()
     _retention_last_run = {}
+    _retention_last_warning = {}
 
     def __init__(self, settings: Dict[str, str] = None):
         self.runtime_settings = dict(settings or {})
@@ -129,12 +130,25 @@ class MySQLOperationalConnection:
             with self.connect() as connection:
                 apply_mysql_operational_history_retention(connection, self.runtime_settings, now=now)
         except Exception as error:
-            warnings.warn(
-                "MySQL operational history retention skipped: " + str(error),
-                RuntimeWarning,
-                stacklevel=2,
-            )
+            if self.should_warn_retention_failure(schema_key, now):
+                warnings.warn(
+                    "MySQL operational history retention skipped: " + str(error),
+                    RuntimeWarning,
+                    stacklevel=2,
+                )
             return
+
+    def should_warn_retention_failure(self, schema_key, now: datetime) -> bool:
+        try:
+            interval = int(float(str(self.runtime_settings.get("operationalHistoryRetentionWarningIntervalSeconds") or "3600").strip()))
+        except ValueError:
+            interval = 3600
+        interval = max(60, min(24 * 3600, interval))
+        last_warning = MySQLOperationalConnection._retention_last_warning.get(schema_key)
+        if last_warning and (now - last_warning).total_seconds() < interval:
+            return False
+        MySQLOperationalConnection._retention_last_warning[schema_key] = now
+        return True
 
 MYSQL_SCHEMA = [
     """

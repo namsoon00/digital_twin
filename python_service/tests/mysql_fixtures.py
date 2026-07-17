@@ -102,20 +102,16 @@ def reset_mysql_test_database(seed=None):
     finally:
         connection.close()
     forget_mysql_database(config)
-    MySQLOperationalConnection._schema_ready.discard((
+    schema_key = (
         str(config.get("host") or ""),
         str(config.get("port") or ""),
         str(config.get("database") or ""),
         str(config.get("unix_socket") or ""),
         mysql_partitioning_mode(settings),
-    ))
-    MySQLOperationalConnection._retention_last_run.pop((
-        str(config.get("host") or ""),
-        str(config.get("port") or ""),
-        str(config.get("database") or ""),
-        str(config.get("unix_socket") or ""),
-        mysql_partitioning_mode(settings),
-    ), None)
+    )
+    MySQLOperationalConnection._schema_ready.discard(schema_key)
+    MySQLOperationalConnection._retention_last_run.pop(schema_key, None)
+    MySQLOperationalConnection._retention_last_warning.pop(schema_key, None)
     ensure_mysql_database_exists(config)
     return settings
 

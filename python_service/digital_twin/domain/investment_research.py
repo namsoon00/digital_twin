@@ -681,6 +681,14 @@ def research_evidence_from_external_signals(symbol: str, external_signals: Dict[
         options = yfinance_data.get("optionChains") if isinstance(yfinance_data.get("optionChains"), list) else []
         option_summary = options[0].get("summary") if options and isinstance(options[0], dict) and isinstance(options[0].get("summary"), dict) else {}
         info = yfinance_data.get("info") if isinstance(yfinance_data.get("info"), dict) else {}
+        freshness = yfinance_data.get("freshness") if isinstance(yfinance_data.get("freshness"), dict) else {}
+        freshness_status = str(freshness.get("status") or "unknown")
+        stale_modules = [str(item) for item in freshness.get("staleModules") or [] if str(item or "").strip()]
+        confidence = 0.58
+        if freshness_status == "stale":
+            confidence = 0.42
+        elif freshness_status == "unknown":
+            confidence = 0.48
         title = "yfinance 종합 데이터"
         summary = compact_text(
             ", ".join([
@@ -688,6 +696,7 @@ def research_evidence_from_external_signals(symbol: str, external_signals: Dict[
                 "현재가 " + str(quote_payload.get("price") or info.get("currentPrice") or "-"),
                 "옵션만기 " + str(len(yfinance_data.get("options") or [])) + "개",
                 "put/call OI " + str(round(number(option_summary.get("putCallOpenInterestRatio")), 2)) if option_summary else "",
+                "신선도 " + freshness_status,
             ]),
             360,
         )
@@ -702,7 +711,7 @@ def research_evidence_from_external_signals(symbol: str, external_signals: Dict[
             str(yfinance_data.get("collectedAt") or ""),
             "context",
             4.0 if modules else 1.0,
-            0.58,
+            confidence,
             str(yfinance_data.get("collectedAt") or ""),
             {
                 "provider": "yfinance",
@@ -713,13 +722,15 @@ def research_evidence_from_external_signals(symbol: str, external_signals: Dict[
                 "analystPriceTargets": yfinance_data.get("analystPriceTargets") if isinstance(yfinance_data.get("analystPriceTargets"), dict) else {},
                 "calendar": yfinance_data.get("calendar") if isinstance(yfinance_data.get("calendar"), dict) else {},
                 "optionSummary": option_summary,
+                "freshness": freshness,
+                "moduleFreshness": yfinance_data.get("moduleFreshness") if isinstance(yfinance_data.get("moduleFreshness"), dict) else {},
                 "statementMetricCounts": {
                     "incomeStatement": len(yfinance_data.get("incomeStatement") or []),
                     "balanceSheet": len(yfinance_data.get("balanceSheet") or []),
                     "cashFlow": len(yfinance_data.get("cashFlow") or []),
                 },
-                "sourceReliability": 0.58,
-                "dataQualityRisk": "unofficial-yahoo-finance-wrapper",
+                "sourceReliability": confidence,
+                "dataQualityRisk": "stale-yfinance-modules:" + ",".join(stale_modules[:5]) if stale_modules else "unofficial-yahoo-finance-wrapper",
                 "materialityScore": 45,
             },
         ))

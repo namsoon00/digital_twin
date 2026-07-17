@@ -486,6 +486,11 @@ def settings_status_payload() -> Dict[str, object]:
         "externalYFinanceOptionsMaxRows",
         "externalYFinanceEarningsLimit",
         "externalYFinanceNewsLimit",
+        "externalYFinancePriceMaxAgeMinutes",
+        "externalYFinanceOptionsMaxAgeMinutes",
+        "externalYFinanceNewsMaxAgeMinutes",
+        "externalYFinanceAnalystMaxAgeMinutes",
+        "externalYFinanceFundamentalMaxAgeMinutes",
         "externalCoinGeckoEnabled",
         "externalFredEnabled",
         "externalFredSeries",
@@ -657,6 +662,7 @@ def ontology_diagnostics_payload(query: Dict[str, List[str]]) -> Dict[str, objec
         settings=settings,
         event_log=stores.event_log(settings),
         notification_queue=stores.notification_job_store(settings),
+        strategy_proposal_service=build_investment_strategy_proposal_service(settings),
     ).status(symbols=symbols, limit=limit)
 
 
@@ -974,6 +980,7 @@ def ontology_audit_payload(query: Dict[str, List[str]], requested_section: str =
                 settings=settings,
                 event_log=stores.event_log(settings),
                 notification_queue=stores.notification_job_store(settings),
+                strategy_proposal_service=build_investment_strategy_proposal_service(settings),
             ).status(symbols=symbols, limit=min(300, max(80, limit))) if "sync" in section_ids else {}
         )
     except Exception as error:  # noqa: BLE001
@@ -2519,15 +2526,18 @@ class DigitalTwinHandler(BaseHTTPRequestHandler):
                 payload if isinstance(payload, bytes) else str(payload).encode("utf-8")
             )
         )
-        self.send_response(status)
-        self.send_header("Content-Type", content_type)
-        self.send_header("Cache-Control", "no-store")
-        if cors:
-            self.add_cors_headers()
-        self.send_header("Content-Length", str(len(body)))
-        self.end_headers()
-        if not no_body:
-            self.wfile.write(body)
+        try:
+            self.send_response(status)
+            self.send_header("Content-Type", content_type)
+            self.send_header("Cache-Control", "no-store")
+            if cors:
+                self.add_cors_headers()
+            self.send_header("Content-Length", str(len(body)))
+            self.end_headers()
+            if not no_body:
+                self.wfile.write(body)
+        except (BrokenPipeError, ConnectionAbortedError, ConnectionResetError):
+            return
 
     def add_cors_headers(self):
         self.send_header("Access-Control-Allow-Origin", "*")
@@ -2579,6 +2589,8 @@ class DigitalTwinHandler(BaseHTTPRequestHandler):
                 self.handle_api(path)
             else:
                 self.serve_static(path)
+        except (BrokenPipeError, ConnectionAbortedError, ConnectionResetError):
+            return
         except ValueError as error:
             self.send_payload(400, {"error": str(error) or "잘못된 요청입니다."})
         except (urllib.error.URLError, TimeoutError, ExternalCircuitOpen, ExternalRateLimited) as error:

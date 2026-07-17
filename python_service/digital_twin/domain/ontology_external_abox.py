@@ -52,6 +52,7 @@ def safe_signal_value(key: str, value: object) -> object:
                 "provider": payload.get("provider"),
                 "querySymbol": payload.get("querySymbol"),
                 "modulesCollected": list(payload.get("modulesCollected") or [])[:40],
+                "freshness": payload.get("freshness") if isinstance(payload.get("freshness"), dict) else {},
                 "quote": payload.get("quote") if isinstance(payload.get("quote"), dict) else {},
                 "optionExpirations": len(payload.get("options") or []),
                 "optionChainSummaries": [

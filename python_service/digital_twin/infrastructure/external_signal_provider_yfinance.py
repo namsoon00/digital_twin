@@ -75,6 +75,63 @@ def is_expected_yfinance_missing_error(error: Exception) -> bool:
     ])
 
 
+def parse_iso_datetime(value: object):
+    text = str(value or "").strip()
+    if not text:
+        return None
+    try:
+        parsed = datetime.fromisoformat(text.replace("Z", "+00:00"))
+    except ValueError:
+        try:
+            parsed = datetime.fromisoformat(text + "T00:00:00+00:00")
+        except ValueError:
+            return None
+    return parsed if parsed.tzinfo else parsed.replace(tzinfo=timezone.utc)
+
+
+def age_minutes(value: object, now=None):
+    parsed = parse_iso_datetime(value)
+    if not parsed:
+        return None
+    current = now or datetime.now(timezone.utc)
+    if current.tzinfo is None:
+        current = current.replace(tzinfo=timezone.utc)
+    return max(0, int((current.astimezone(timezone.utc) - parsed.astimezone(timezone.utc)).total_seconds() // 60))
+
+
+def first_timestamp_from_rows(rows: object, keys: List[str]) -> str:
+    if not isinstance(rows, list) or not rows:
+        return ""
+    for row in reversed(rows):
+        if not isinstance(row, dict):
+            continue
+        for key in keys:
+            value = row.get(key)
+            if value not in (None, ""):
+                return str(value)
+    return ""
+
+
+def first_news_timestamp(items: object) -> str:
+    if not isinstance(items, list):
+        return ""
+    for item in items:
+        if not isinstance(item, dict):
+            continue
+        content = item.get("content") if isinstance(item.get("content"), dict) else {}
+        for key in ["pubDate", "displayTime", "providerPublishTime", "publishedAt", "date"]:
+            value = item.get(key) if key in item else content.get(key)
+            if value in (None, ""):
+                continue
+            if isinstance(value, (int, float)):
+                try:
+                    return datetime.fromtimestamp(float(value), tz=timezone.utc).isoformat().replace("+00:00", "Z")
+                except (OSError, ValueError):
+                    continue
+            return str(value)
+    return ""
+
+
 @contextmanager
 def quiet_yfinance_io():
     logger = logging.getLogger("yfinance")
@@ -234,6 +291,56 @@ def earnings_report_from_yfinance(symbol: str, payload: Dict[str, object]) -> Di
     }
 
 
+YFINANCE_FRESHNESS_PROFILES = {
+    "price": ("externalYFinancePriceMaxAgeMinutes", 30),
+    "options": ("externalYFinanceOptionsMaxAgeMinutes", 30),
+    "news": ("externalYFinanceNewsMaxAgeMinutes", 1440),
+    "analyst": ("externalYFinanceAnalystMaxAgeMinutes", 10080),
+    "fundamental": ("externalYFinanceFundamentalMaxAgeMinutes", 129600),
+}
+
+YFINANCE_MODULE_PROFILES = {
+    "quote": "price",
+    "history": "price",
+    "historyMetadata": "price",
+    "fastInfo": "price",
+    "options": "options",
+    "optionChains": "options",
+    "news": "news",
+    "analystPriceTargets": "analyst",
+    "earningsEstimate": "analyst",
+    "revenueEstimate": "analyst",
+    "epsTrend": "analyst",
+    "epsRevisions": "analyst",
+    "recommendations": "analyst",
+    "recommendationsSummary": "analyst",
+    "upgradesDowngrades": "analyst",
+    "institutionalHolders": "analyst",
+    "mutualfundHolders": "analyst",
+    "majorHolders": "analyst",
+    "insiderTransactions": "analyst",
+    "insiderPurchases": "analyst",
+    "insiderRosterHolders": "analyst",
+    "info": "fundamental",
+    "calendar": "fundamental",
+    "actions": "fundamental",
+    "dividends": "fundamental",
+    "splits": "fundamental",
+    "capitalGains": "fundamental",
+    "incomeStatement": "fundamental",
+    "quarterlyIncomeStatement": "fundamental",
+    "balanceSheet": "fundamental",
+    "quarterlyBalanceSheet": "fundamental",
+    "cashFlow": "fundamental",
+    "quarterlyCashFlow": "fundamental",
+    "earningsDates": "fundamental",
+    "sustainability": "fundamental",
+    "isin": "fundamental",
+    "fundsData": "fundamental",
+    "shares": "fundamental",
+}
+
+
 class ExternalSignalYFinanceMixin:
     def yfinance_enabled(self) -> bool:
         return self.external_api_enabled("externalYFinanceEnabled")
@@ -289,12 +396,17 @@ class ExternalSignalYFinanceMixin:
                     signals.setdefault("yfinanceData", {})[symbol] = payload
                     self.merge_yfinance_summaries(signals, symbol, payload)
             except Exception as error:  # noqa: BLE001
-                self.status_for_error(signals, "yfinance", symbol + " ", error)
+                if is_expected_yfinance_missing_error(error):
+                    self.status(signals, "yfinance", True, symbol + " fundamentals unavailable")
+                else:
+                    self.status_for_error(signals, "yfinance", symbol + " ", error)
 
     def fetch_yfinance_symbol(self, yf, symbol: str, query_symbol: str) -> Dict[str, object]:
-        ticker = yf.Ticker(query_symbol)
+        with quiet_yfinance_io():
+            ticker = yf.Ticker(query_symbol)
         collected_at = utc_now_iso()
         errors: List[Dict[str, object]] = []
+        expected_missing: List[Dict[str, object]] = []
         period = str(self.settings.get("externalYFinanceHistoryPeriod") or "1y")
         interval = str(self.settings.get("externalYFinanceHistoryInterval") or "1d")
         history_rows_limit = self.int_setting("externalYFinanceHistoryRows", 90, 1)
@@ -316,6 +428,11 @@ class ExternalSignalYFinanceMixin:
                 return None if is_empty_value(value) else value
             except Exception as error:  # noqa: BLE001 - yfinance modules are best-effort.
                 if is_expected_yfinance_missing_error(error):
+                    expected_missing.append({
+                        "section": name,
+                        "status": "expected-missing",
+                        "reason": "fundamentals-not-available",
+                    })
                     return None
                 errors.append({"section": name, "message": str(error)[:180]})
                 return None
@@ -386,6 +503,11 @@ class ExternalSignalYFinanceMixin:
                     chain = ticker.option_chain(expiration)
             except Exception as error:  # noqa: BLE001 - option expirations can disappear intraday.
                 if is_expected_yfinance_missing_error(error):
+                    expected_missing.append({
+                        "section": "optionChain:" + str(expiration),
+                        "status": "expected-missing",
+                        "reason": "option-chain-not-available",
+                    })
                     continue
                 errors.append({"section": "optionChain:" + str(expiration), "message": str(error)[:180]})
                 continue
@@ -402,9 +524,80 @@ class ExternalSignalYFinanceMixin:
 
         modules = [key for key, value in payload.items() if key not in {"provider", "symbol", "querySymbol", "collectedAt"} and not is_empty_value(value)]
         payload["modulesCollected"] = modules
+        payload["freshness"] = self.yfinance_freshness_summary(payload)
+        payload["moduleFreshness"] = self.yfinance_module_freshness(payload)
+        if expected_missing:
+            payload["dataQualityNotes"] = expected_missing[:20]
         if errors:
             payload["errors"] = errors[:20]
         return payload
+
+    def yfinance_max_age_minutes(self, profile: str) -> int:
+        key, fallback = YFINANCE_FRESHNESS_PROFILES.get(str(profile or ""), YFINANCE_FRESHNESS_PROFILES["fundamental"])
+        return self.int_setting(key, fallback, 1)
+
+    def yfinance_module_timestamp(self, payload: Dict[str, object], module: str) -> Tuple[str, str]:
+        collected_at = str(payload.get("collectedAt") or "")
+        if module == "news":
+            return first_news_timestamp(payload.get("news")) or collected_at, "publishedAt"
+        return collected_at, "collectedAt"
+
+    def yfinance_module_freshness_record(self, module: str, payload: Dict[str, object]) -> Dict[str, object]:
+        profile = YFINANCE_MODULE_PROFILES.get(module, "fundamental")
+        max_age = self.yfinance_max_age_minutes(profile)
+        timestamp, basis = self.yfinance_module_timestamp(payload, module)
+        age = age_minutes(timestamp)
+        if age is None:
+            status = "unknown"
+            reason = "기준시각 없음"
+        elif age <= max_age:
+            status = "fresh"
+            reason = "신선도 기준 통과"
+        else:
+            status = "stale"
+            reason = "기준 " + str(max_age) + "분 초과"
+        return {
+            "module": module,
+            "profile": profile,
+            "status": status,
+            "reason": reason,
+            "ageMinutes": age,
+            "maxAgeMinutes": max_age,
+            "sourceTimestamp": str(timestamp or ""),
+            "basis": basis,
+        }
+
+    def yfinance_module_freshness(self, payload: Dict[str, object]) -> Dict[str, object]:
+        result: Dict[str, object] = {}
+        for module in payload.get("modulesCollected") or []:
+            text = str(module or "").strip()
+            if not text:
+                continue
+            result[text] = self.yfinance_module_freshness_record(text, payload)
+        return result
+
+    def yfinance_freshness_summary(self, payload: Dict[str, object]) -> Dict[str, object]:
+        records = list(self.yfinance_module_freshness(payload).values())
+        stale = [item for item in records if str(item.get("status") or "") == "stale"]
+        unknown = [item for item in records if str(item.get("status") or "") == "unknown"]
+        if stale:
+            status = "stale"
+            reason = ", ".join(str(item.get("module") or "") + " " + str(item.get("reason") or "") for item in stale[:3])
+        elif unknown:
+            status = "unknown"
+            reason = ", ".join(str(item.get("module") or "") + " " + str(item.get("reason") or "") for item in unknown[:3])
+        else:
+            status = "fresh"
+            reason = "모든 yfinance 모듈 신선도 기준 통과"
+        ages = [item.get("ageMinutes") for item in records if isinstance(item.get("ageMinutes"), int)]
+        return {
+            "status": status,
+            "reason": reason,
+            "ageMinutes": max(ages) if ages else None,
+            "staleModules": [str(item.get("module") or "") for item in stale[:20]],
+            "unknownModules": [str(item.get("module") or "") for item in unknown[:20]],
+            "checkedAt": utc_now_iso(),
+        }
 
     def yfinance_funds_data(self, funds_data, rows_limit: int) -> Dict[str, object]:
         if not funds_data:

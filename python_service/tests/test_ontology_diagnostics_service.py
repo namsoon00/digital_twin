@@ -112,6 +112,70 @@ class FakeNotificationQueue:
         return self.jobs[:limit]
 
 
+class FakeStrategyProposalService:
+    def status(self):
+        return {
+            "count": 1,
+            "proposedCount": 0,
+            "validatedCount": 1,
+            "approvedCount": 0,
+            "deployedCount": 0,
+            "retiredCount": 0,
+            "statuses": {"validated": 1},
+        }
+
+    def list(self):
+        return {
+            "proposals": [{
+                "id": "strategy-proposal-test",
+                "title": "테스트 전략",
+                "status": "validated",
+                "updatedAt": "2026-07-17T00:00:00Z",
+                "ruleIds": ["graph.test.v1"],
+                "validation": {
+                    "status": "completed",
+                    "promotionReadiness": {"status": "needs-review"},
+                },
+            }]
+        }
+
+
+class PrimaryCoverageRepository(FakeOntologyRepository):
+    def read_entity_rows(self, boxes=None):
+        return [
+            {
+                "id": "stock:AAPL",
+                "label": "Apple",
+                "kind": "stock",
+                "ontologyBox": "ABox",
+                "symbol": "AAPL",
+                "source": "watchlist",
+                "tboxClass": "Stock",
+                "tboxClasses": ["ActionPolicy", "WatchlistCandidate"],
+            },
+            {
+                "id": "stock:SPY",
+                "label": "SPY",
+                "kind": "market-proxy",
+                "ontologyBox": "ABox",
+                "symbol": "SPY",
+                "tboxClass": "ETF",
+                "tboxClasses": ["MarketProxyETF", "MarketProxyInstrument"],
+            },
+        ]
+
+    def read_relation_rows(self, boxes=None):
+        return [
+            {"source": "stock:AAPL", "target": "price:AAPL", "type": "HAS_PRICE", "ontologyBox": "ABox", "symbol": "AAPL"},
+            {"source": "stock:AAPL", "target": "path:AAPL", "type": "HAS_PRICE_PATH", "ontologyBox": "ABox", "symbol": "AAPL"},
+            {"source": "stock:AAPL", "target": "flow:AAPL", "type": "HAS_TRADE_FLOW", "ontologyBox": "ABox", "symbol": "AAPL"},
+            {"source": "stock:AAPL", "target": "quality:AAPL", "type": "HAS_DATA_QUALITY", "ontologyBox": "ABox", "symbol": "AAPL"},
+            {"source": "stock:AAPL", "target": "evidence:AAPL", "type": "HAS_EXTERNAL_SIGNAL", "ontologyBox": "ABox", "symbol": "AAPL"},
+            {"source": "stock:AAPL", "target": "macro:AAPL", "type": "HAS_MACRO_REGIME", "ontologyBox": "ABox", "symbol": "AAPL"},
+            {"source": "stock:AAPL", "target": "valuation:AAPL", "type": "HAS_VALUATION", "ontologyBox": "ABox", "symbol": "AAPL"},
+        ]
+
+
 class OntologyDiagnosticsServiceTests(unittest.TestCase):
     def test_status_reports_native_reasoning_and_outbox_boundary(self):
         alert_event = DomainEvent(
@@ -175,6 +239,36 @@ class OntologyDiagnosticsServiceTests(unittest.TestCase):
 
         self.assertEqual(payload["notificationBoundary"]["status"], "warning")
         self.assertIn("no recent notification job", payload["notificationBoundary"]["reason"])
+
+    def test_abox_coverage_separates_primary_symbols_from_context_proxies(self):
+        service = OntologyDiagnosticsService(ontology_repository=PrimaryCoverageRepository())
+
+        payload = service.status()
+
+        coverage = payload["aboxCoverage"]
+        self.assertEqual("ok", coverage["status"])
+        self.assertEqual(2, coverage["symbolCount"])
+        self.assertEqual(1, coverage["primarySymbolCount"])
+        self.assertEqual(1, coverage["contextSymbolCount"])
+        self.assertEqual(1.0, coverage["primaryCoverageRatio"])
+        self.assertEqual("primary", coverage["primarySymbols"][0]["diagnosticScope"])
+        self.assertEqual("context", coverage["contextSymbols"][0]["diagnosticScope"])
+        self.assertIn("do not lower the primary status", coverage["interpretation"])
+
+    def test_strategy_proposal_boundary_reports_validated_backlog(self):
+        service = OntologyDiagnosticsService(
+            ontology_repository=FakeOntologyRepository(),
+            strategy_proposal_service=FakeStrategyProposalService(),
+        )
+
+        payload = service.status()
+
+        boundary = payload["strategyProposalBoundary"]
+        self.assertEqual("warning", boundary["status"])
+        self.assertEqual(1, boundary["pendingApprovalCount"])
+        self.assertEqual(0, boundary["pendingDeploymentCount"])
+        self.assertIn("human approval", boundary["nextAction"])
+        self.assertEqual("needs-review", boundary["proposals"][0]["promotionReadinessStatus"])
 
 
 if __name__ == "__main__":

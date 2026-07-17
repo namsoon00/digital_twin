@@ -86,6 +86,22 @@ def source_status(signals: Dict[str, object], source_label: str) -> Dict[str, ob
     }
 
 
+def yfinance_freshness_messages(payload: object) -> List[str]:
+    if not isinstance(payload, dict):
+        return []
+    messages: List[str] = []
+    for symbol, item in payload.items():
+        if not isinstance(item, dict):
+            continue
+        freshness = item.get("freshness") if isinstance(item.get("freshness"), dict) else {}
+        status = str(freshness.get("status") or "").strip()
+        if status in {"stale", "unknown"}:
+            modules = freshness.get("staleModules") if isinstance(freshness.get("staleModules"), list) else []
+            module_text = ",".join(str(module) for module in modules[:4] if str(module or "").strip())
+            messages.append(str(symbol) + " " + status + ((" · " + module_text) if module_text else ""))
+    return messages
+
+
 def configured_source(key: str, settings: Dict[str, object]) -> bool:
     if key == "cryptoMarkets" or key == "newsHeadlines" or key == "secFilings" or key == "yfinanceData":
         return True
@@ -142,14 +158,21 @@ def evaluate_external_signal_quality(
         payload = signals.get(key)
         count = group_count(payload)
         status = source_status(signals, label)
+        messages = list(status.get("messages") or [])[:5]
+        ok = bool(status.get("ok"))
+        if key == "yfinanceData":
+            freshness_messages = yfinance_freshness_messages(payload)
+            if freshness_messages:
+                ok = False
+                messages.extend(freshness_messages[:5 - len(messages)])
         configured = configured_source(key, settings)
         source_rows.append({
             "key": key,
             "source": label,
             "configured": configured,
             "itemCount": count,
-            "ok": bool(status.get("ok")) and (configured or count > 0),
-            "messages": list(status.get("messages") or [])[:5],
+            "ok": ok and (configured or count > 0),
+            "messages": messages[:5],
         })
     configured_rows = [row for row in source_rows if row["configured"]]
     healthy_rows = [row for row in configured_rows if row["ok"] and row["itemCount"] > 0]

@@ -13,7 +13,7 @@
     "공유 미리보기에서는 서버 설정과 계정 DB 쓰기를 차단합니다."
   ],
   "localData": {
-    "generatedAt": "2026-07-17T13:24:07.389361Z",
+    "generatedAt": "2026-07-17T21:18:06.015261Z",
     "sources": {
       "settings": "data/settings.json",
       "settingsExists": false
@@ -115,6 +115,11 @@
       "externalYFinanceOptionsMaxRows": "40",
       "externalYFinanceEarningsLimit": "16",
       "externalYFinanceNewsLimit": "10",
+      "externalYFinancePriceMaxAgeMinutes": "30",
+      "externalYFinanceOptionsMaxAgeMinutes": "30",
+      "externalYFinanceNewsMaxAgeMinutes": "1440",
+      "externalYFinanceAnalystMaxAgeMinutes": "10080",
+      "externalYFinanceFundamentalMaxAgeMinutes": "129600",
       "externalCoinGeckoEnabled": "1",
       "externalFredEnabled": "1",
       "externalFredSeries": "DGS10,DGS2,DFF",
@@ -774,6 +779,41 @@
           "label": "yfinance 뉴스 수",
           "type": "number",
           "default": "10"
+        },
+        {
+          "key": "externalYFinancePriceMaxAgeMinutes",
+          "label": "yfinance 가격 신선도",
+          "type": "number",
+          "default": "30",
+          "unit": "minutes"
+        },
+        {
+          "key": "externalYFinanceOptionsMaxAgeMinutes",
+          "label": "yfinance 옵션 신선도",
+          "type": "number",
+          "default": "30",
+          "unit": "minutes"
+        },
+        {
+          "key": "externalYFinanceNewsMaxAgeMinutes",
+          "label": "yfinance 뉴스 신선도",
+          "type": "number",
+          "default": "1440",
+          "unit": "minutes"
+        },
+        {
+          "key": "externalYFinanceAnalystMaxAgeMinutes",
+          "label": "yfinance 애널리스트 신선도",
+          "type": "number",
+          "default": "10080",
+          "unit": "minutes"
+        },
+        {
+          "key": "externalYFinanceFundamentalMaxAgeMinutes",
+          "label": "yfinance 재무 신선도",
+          "type": "number",
+          "default": "129600",
+          "unit": "minutes"
         },
         {
           "key": "coingeckoApiKey",
@@ -1890,5 +1930,5 @@
       ]
     }
   ],
-  "buildId": "e1be24107ccb"
+  "buildId": "255ffe028d8e"
 }

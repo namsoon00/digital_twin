@@ -272,8 +272,44 @@ class ExternalApiSourceTests(unittest.TestCase):
         self.assertEqual(1.65, signals["earningsReports"]["AAPL"]["latestQuarter"]["reportedEPS"])
         self.assertEqual(0.5, payload["optionChains"][0]["summary"]["putCallOpenInterestRatio"])
         self.assertIn("incomeStatement", payload["modulesCollected"])
+        self.assertEqual("fresh", payload["freshness"]["status"])
+        self.assertEqual("fresh", payload["moduleFreshness"]["optionChains"]["status"])
+        self.assertEqual(30, payload["moduleFreshness"]["optionChains"]["maxAgeMinutes"])
         evidence = research_evidence_from_external_signals("AAPL", signals)
         self.assertTrue(any(item.kind == "financial-fact" and item.raw_payload.get("provider") == "yfinance" for item in evidence))
+
+    def test_yfinance_stale_modules_reduce_financial_fact_confidence(self):
+        signals = {
+            "yfinanceData": {
+                "AAPL": {
+                    "provider": "yfinance",
+                    "querySymbol": "AAPL",
+                    "collectedAt": "2000-01-01T00:00:00Z",
+                    "modulesCollected": ["quote", "optionChains", "incomeStatement"],
+                    "quote": {"price": 110.0},
+                    "options": ["2026-08-21"],
+                    "optionChains": [{"summary": {"putCallOpenInterestRatio": 0.5}}],
+                    "incomeStatement": [{"metric": "Total Revenue", "values": {"2025-12-31": 1000}}],
+                    "freshness": {
+                        "status": "stale",
+                        "reason": "quote 기준 30분 초과",
+                        "staleModules": ["quote", "optionChains"],
+                    },
+                    "moduleFreshness": {
+                        "quote": {"status": "stale", "maxAgeMinutes": 30},
+                        "optionChains": {"status": "stale", "maxAgeMinutes": 30},
+                        "incomeStatement": {"status": "fresh", "maxAgeMinutes": 129600},
+                    },
+                }
+            }
+        }
+
+        evidence = research_evidence_from_external_signals("AAPL", signals)
+        item = next(row for row in evidence if row.kind == "financial-fact")
+
+        self.assertEqual(0.42, item.confidence)
+        self.assertEqual("stale", item.raw_payload["freshness"]["status"])
+        self.assertIn("stale-yfinance-modules", item.raw_payload["dataQualityRisk"])
 
     def test_yfinance_missing_fundamentals_keeps_quote_without_error_status(self):
         class FakeRecordsFrame:
@@ -349,6 +385,8 @@ class ExternalApiSourceTests(unittest.TestCase):
         self.assertEqual(98.0, signals["equityQuotes"]["MSTR"]["price"])
         self.assertNotIn("info", payload)
         self.assertNotIn("errors", payload)
+        self.assertEqual("expected-missing", payload["dataQualityNotes"][0]["status"])
+        self.assertEqual("fundamentals-not-available", payload["dataQualityNotes"][0]["reason"])
         self.assertFalse([
             item for item in signals["statuses"]
             if item.get("source") == "yfinance" and not item.get("ok")

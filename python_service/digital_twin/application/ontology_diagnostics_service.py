@@ -18,12 +18,14 @@ class OntologyDiagnosticsService:
         event_log=None,
         notification_queue=None,
         service_status_provider=None,
+        strategy_proposal_service=None,
     ):
         self.ontology_repository = ontology_repository
         self.settings = settings or {}
         self.event_log = event_log
         self.notification_queue = notification_queue
         self.service_status_provider = service_status_provider
+        self.strategy_proposal_service = strategy_proposal_service
 
     def status(self, symbols: Iterable[str] = None, limit: int = 80) -> Dict[str, object]:
         clean_symbols = sorted(set(str(item or "").upper().strip() for item in (symbols or []) if str(item or "").strip()))
@@ -44,6 +46,7 @@ class OntologyDiagnosticsService:
             "reasoningBoundary": self.reasoning_boundary(rulebox, inference),
             "latestEvents": self.latest_events(),
             "notificationBoundary": self.notification_boundary(),
+            "strategyProposalBoundary": self.strategy_proposal_boundary(),
             "serviceStatus": self.service_status(),
         }
 
@@ -208,20 +211,35 @@ class OntologyDiagnosticsService:
                     relation_types_by_symbol[symbol].add(relation_type)
         rows = []
         all_required_categories = sorted(CATEGORY_RELATIONS.keys())
+        primary_rows = []
+        context_rows = []
         total_present = 0
         total_expected = 0
+        primary_present = 0
+        primary_expected = 0
+        context_present = 0
+        context_expected = 0
         for symbol in stock_symbols:
             relation_types = relation_types_by_symbol.get(symbol) or set()
+            classes = entity_classes_by_symbol.get(symbol) or set()
+            scope = self.coverage_scope(classes, source_by_symbol.get(symbol) or "")
             required = self.required_categories_for_symbol(
-                entity_classes_by_symbol.get(symbol) or set(),
+                classes,
                 source_by_symbol.get(symbol) or "",
             )
             present = sorted(name for name in required if relation_types.intersection(CATEGORY_RELATIONS.get(name, set())))
             missing = sorted(name for name in required if name not in present)
             total_present += len(present)
             total_expected += len(required)
-            rows.append({
+            if scope == "primary":
+                primary_present += len(present)
+                primary_expected += len(required)
+            else:
+                context_present += len(present)
+                context_expected += len(required)
+            row = {
                 "symbol": symbol,
+                "diagnosticScope": scope,
                 "present": present,
                 "missing": missing,
                 "missingLabels": [CATEGORY_LABELS.get(name, name) for name in missing],
@@ -229,9 +247,16 @@ class OntologyDiagnosticsService:
                 "entityClasses": sorted(entity_classes_by_symbol.get(symbol) or [])[:30],
                 "requiredCategories": required,
                 "coverageRatio": round(len(present) / max(1, len(required)), 3),
-            })
+            }
+            rows.append(row)
+            if scope == "primary":
+                primary_rows.append(row)
+            else:
+                context_rows.append(row)
         coverage_ratio = round(total_present / max(1, total_expected), 3)
-        status = "ok" if stock_symbols and coverage_ratio >= 0.75 else ("warning" if stock_symbols else "empty")
+        primary_coverage_ratio = round(primary_present / max(1, primary_expected), 3)
+        context_coverage_ratio = round(context_present / max(1, context_expected), 3)
+        status = "ok" if primary_rows and primary_coverage_ratio >= 0.75 else ("warning" if primary_rows or stock_symbols else "empty")
         coverage_gap_count = len([
             item for item in entities
             if str(item.get("kind") or item.get("nodeKind") or "") == "coverage-gap"
@@ -243,9 +268,16 @@ class OntologyDiagnosticsService:
             "relationCount": len(relations),
             "symbolCount": len(stock_symbols),
             "coverageRatio": coverage_ratio,
+            "primarySymbolCount": len(primary_rows),
+            "primaryCoverageRatio": primary_coverage_ratio,
+            "contextSymbolCount": len(context_rows),
+            "contextCoverageRatio": context_coverage_ratio,
             "requiredCategories": all_required_categories,
             "coverageGapCount": coverage_gap_count,
+            "interpretation": self.coverage_interpretation(status, primary_coverage_ratio, len(primary_rows), len(context_rows)),
             "symbols": rows[:80],
+            "primarySymbols": primary_rows[:80],
+            "contextSymbols": context_rows[:80],
         }
 
     def required_categories_for_symbol(self, classes: set, source: str) -> List[str]:
@@ -256,6 +288,42 @@ class OntologyDiagnosticsService:
         if str(source or "").lower() == "watchlist" or "WatchlistCandidate" in class_values:
             return base + ["valuation"]
         return base + ["liquidity", "execution", "valuation"]
+
+    def coverage_scope(self, classes: set, source: str) -> str:
+        class_values = {str(item or "") for item in (classes or set())}
+        decision_markers = {
+            "ActionPolicy",
+            "PositionRole",
+            "WatchlistCandidate",
+            "PortfolioHolding",
+            "Holding",
+            "CryptoAsset",
+            "crypto-asset",
+            "CryptoMarketSignal",
+            "crypto-market-signal",
+        }
+        if str(source or "").lower() in {"holding", "watchlist"}:
+            return "primary"
+        if decision_markers.intersection(class_values):
+            return "primary"
+        return "context"
+
+    def coverage_interpretation(self, status: str, primary_ratio: float, primary_count: int, context_count: int) -> str:
+        if status == "empty":
+            return "No ABox symbols were available for coverage diagnostics."
+        if status == "ok":
+            return (
+                "Primary account/watchlist/decision symbols have sufficient ontology coverage. "
+                + str(context_count)
+                + " context or market-proxy symbols are reported separately and do not lower the primary status."
+            )
+        return (
+            "Primary decision-symbol ontology coverage is below the operating threshold: "
+            + str(round(primary_ratio * 100))
+            + "% across "
+            + str(primary_count)
+            + " symbols."
+        )
 
     def abox_symbols(self, entities: List[Dict[str, object]], relations: List[Dict[str, object]]) -> List[str]:
         values = set()
@@ -361,6 +429,65 @@ class OntologyDiagnosticsService:
                 "monitoring.alerts_detected and notification jobs are expected to be recorded in one operational DB transaction.",
                 "A non-zero jobsForLatestAlert confirms the event-to-outbox boundary for the latest alert event.",
             ],
+        }
+
+    def strategy_proposal_boundary(self) -> Dict[str, object]:
+        if not self.strategy_proposal_service:
+            return {"status": "unavailable", "reason": "strategy proposal service is not configured"}
+        try:
+            summary = self.strategy_proposal_service.status()
+            listed = self.strategy_proposal_service.list()
+        except Exception as error:  # noqa: BLE001 - diagnostics must not depend on proposal storage health.
+            return {"status": "error", "reason": str(error)[:180]}
+        proposals = [
+            item for item in (listed.get("proposals") or [])
+            if isinstance(item, dict)
+        ] if isinstance(listed, dict) else []
+        validated = int(summary.get("validatedCount") or 0) if isinstance(summary, dict) else 0
+        approved = int(summary.get("approvedCount") or 0) if isinstance(summary, dict) else 0
+        deployed = int(summary.get("deployedCount") or 0) if isinstance(summary, dict) else 0
+        proposed = int(summary.get("proposedCount") or 0) if isinstance(summary, dict) else 0
+        pending_approval = proposed + validated
+        pending_deployment = approved
+        status = "ok"
+        next_action = ""
+        if pending_deployment:
+            status = "warning"
+            next_action = "approved strategies are waiting for ontology-lab apply/deployment"
+        elif pending_approval:
+            status = "warning"
+            next_action = "validated/proposed strategies are waiting for human approval"
+        elif deployed:
+            next_action = "strategy proposal loop has deployed strategies"
+        else:
+            next_action = "no active strategy proposal backlog"
+        return {
+            "status": status,
+            "count": int(summary.get("count") or len(proposals)) if isinstance(summary, dict) else len(proposals),
+            "proposedCount": proposed,
+            "validatedCount": validated,
+            "approvedCount": approved,
+            "deployedCount": deployed,
+            "retiredCount": int(summary.get("retiredCount") or 0) if isinstance(summary, dict) else 0,
+            "pendingApprovalCount": pending_approval,
+            "pendingDeploymentCount": pending_deployment,
+            "nextAction": next_action,
+            "proposals": [self.strategy_proposal_summary(item) for item in proposals[:10]],
+        }
+
+    def strategy_proposal_summary(self, proposal: Dict[str, object]) -> Dict[str, object]:
+        validation = proposal.get("validation") if isinstance(proposal.get("validation"), dict) else {}
+        readiness = validation.get("promotionReadiness") if isinstance(validation.get("promotionReadiness"), dict) else {}
+        materialization = validation.get("materialization") if isinstance(validation.get("materialization"), dict) else {}
+        return {
+            "id": str(proposal.get("id") or ""),
+            "title": str(proposal.get("title") or ""),
+            "status": str(proposal.get("status") or ""),
+            "updatedAt": str(proposal.get("updatedAt") or ""),
+            "ruleIds": [str(item) for item in (proposal.get("ruleIds") or [])[:8]],
+            "validationStatus": str(validation.get("status") or ""),
+            "promotionReadinessStatus": str(readiness.get("status") or ""),
+            "materializationStatus": str(materialization.get("status") or ""),
         }
 
     def latest_alert_event(self):

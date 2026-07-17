@@ -46,6 +46,10 @@ def _base_row(position: Position, method: str, formula: str, reliability: float)
         "requiresUserApproval": True,
         "autoApplied": True,
         "aiGenerated": True,
+        "perValuationStatus": "",
+        "perValuationReason": "",
+        "preferredValuationMetric": "",
+        "fundamentalDataSourcePriority": "",
     }
 
 
@@ -168,6 +172,10 @@ def bitcoin_proxy_ai_valuation_row(
         "btcChange7d": btc7,
         "missingInputs": ["BTC 보유량", "희석주식수", "순부채/우선주 부담"],
         "sourceReason": "비트코인 보유가치/NAV 모델이 적합하지만 최신 BTC 보유량, 희석주식수, 순부채가 없어 BTC 가격 변화와 종목 추세로 만든 자동 적용 초안입니다.",
+        "perValuationStatus": "not_applicable",
+        "perValuationReason": "비트코인 민감 종목은 일반 PER만으로 설명력이 낮아 비트코인 보유가치, 순부채, 희석주식수와 BTC 가격 민감도를 먼저 봅니다.",
+        "preferredValuationMetric": "비트코인 보유가치/NAV",
+        "fundamentalDataSourcePriority": "BTC 보유가치/NAV > 외부 PER",
     })
     return row
 
@@ -194,6 +202,10 @@ def semiconductor_cycle_ai_valuation_row(position: Position, settings: Dict[str,
         "minimumMarginOfSafetyPct": number(settings.get("aiValuationSemiconductorMinimumMarginPct")) or 18.0,
         "missingInputs": ["예상 EPS", "목표 PER", "메모리 가격/업황 지표"],
         "sourceReason": "반도체는 EPS/PER와 업황 사이클이 핵심이지만 입력이 부족해 5일·20일·60일 평균과 거래량으로 만든 자동 적용 초안입니다.",
+        "perValuationStatus": "missing",
+        "perValuationReason": "예상 EPS, 목표 PER, 메모리 가격/업황 지표가 부족해 PER 기준 적정가를 직접 계산하지 못했습니다.",
+        "preferredValuationMetric": "EPS/PER + 반도체 업황 사이클",
+        "fundamentalDataSourcePriority": "KIS 국내 PER/EPS > 본주 PER/EPS > 반도체 업황 보정",
     })
     return row
 
@@ -220,6 +232,10 @@ def growth_quality_ai_valuation_row(position: Position, external_signals: Dict[s
         "minimumMarginOfSafetyPct": number(settings.get("aiValuationGrowthMinimumMarginPct")) or 15.0,
         "missingInputs": ["예상 EPS", "목표 PER", "매출 성장률", "마진 전망"],
         "sourceReason": "성장주는 실적 성장률과 마진 전망이 핵심이지만 입력이 부족해 가격 추세와 금리 부담으로 만든 자동 적용 초안입니다.",
+        "perValuationStatus": "missing",
+        "perValuationReason": "예상 EPS, 목표 PER, 매출 성장률, 마진 전망이 부족해 PER 기준 적정가를 직접 계산하지 못했습니다.",
+        "preferredValuationMetric": "EPS/PER + 성장률/금리 보정",
+        "fundamentalDataSourcePriority": "Alpha Vantage/yfinance PER/EPS > 성장률/금리 보정",
     })
     return row
 
@@ -263,6 +279,10 @@ def preferred_income_ai_valuation_row(
         "requiredYieldPct": round(required_yield, 4),
         "minimumMarginOfSafetyPct": number(settings.get("aiValuationPreferredMinimumMarginPct")) or 8.0,
         "sourceReason": "우선주/인컴형은 보통주 PER보다 배당수익률 기준 적정가가 더 적합합니다.",
+        "perValuationStatus": "not_applicable",
+        "perValuationReason": "우선주와 배당형 상품은 보통주 이익 배수보다 배당, 액면 기준가, 요구수익률이 가격 설명에 더 직접적입니다.",
+        "preferredValuationMetric": "배당수익률/요구수익률",
+        "fundamentalDataSourcePriority": "배당 조건 > 금리/요구수익률 > 외부 PER",
     })
     return row
 
@@ -321,6 +341,15 @@ def external_fundamental_ai_valuation_row(
                 "본주 " + source_symbol + "의 EPS/PER는 확인했지만 "
                 + symbol + " ADR 적정가로 환산할 ADR 비율이나 환율이 부족합니다."
             )
+    per_status = "available" if fair_value else "conversion_missing"
+    per_reason = source_label + "EPS와 PER가 확인되어 PER 기준 적정가를 계산했습니다."
+    priority = "외부 PER/EPS"
+    if source_symbol != symbol:
+        priority = "본주 PER/EPS + ADR 비율 + 환율"
+        per_reason = (
+            "본주 " + source_symbol + "의 EPS와 PER를 확인했고, "
+            + ("ADR 비율과 환율로 환산했습니다." if fair_value else "ADR 비율이나 환율이 부족해 달러 기준 적정가 환산은 보류했습니다.")
+        )
     row = _base_row(
         position,
         method,
@@ -343,6 +372,10 @@ def external_fundamental_ai_valuation_row(
         "minimumMarginOfSafetyPct": 15.0,
         "sourceReason": source_reason,
         "missingInputs": missing_inputs,
+        "perValuationStatus": per_status,
+        "perValuationReason": per_reason,
+        "preferredValuationMetric": "EPS x PER",
+        "fundamentalDataSourcePriority": priority,
     })
     return row
 
@@ -362,6 +395,10 @@ def current_price_anchor_ai_valuation_row(position: Position, settings: Dict[str
         "fairValue": current,
         "minimumMarginOfSafetyPct": number(settings.get("aiValuationBaselineMinimumMarginPct")) or 15.0,
         "sourceReason": "펀더멘털 입력이 없어 현재가를 임시 기준가로 둔 낮은 신뢰도 초안입니다.",
+        "perValuationStatus": "missing",
+        "perValuationReason": "PER/EPS와 적정가 입력이 없어 현재가를 임시 기준가로만 사용했습니다.",
+        "preferredValuationMetric": "임시 현재가 기준",
+        "fundamentalDataSourcePriority": "사용자 적정가 또는 외부 PER/EPS 필요",
     })
     return row
 

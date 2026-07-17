@@ -462,6 +462,10 @@ def _valuation_row_payload(position: Position, row: Dict[str, object]) -> Dict[s
         "requiresUserApproval": bool(row.get("requiresUserApproval")),
         "aiGenerated": bool(row.get("aiGenerated")),
         "sourceReason": str(row.get("sourceReason") or "").strip(),
+        "perValuationStatus": str(values.get("perValuationStatus") or row.get("perValuationStatus") or "").strip(),
+        "perValuationReason": str(values.get("perValuationReason") or row.get("perValuationReason") or "").strip(),
+        "preferredValuationMetric": str(values.get("preferredValuationMetric") or row.get("preferredValuationMetric") or "").strip(),
+        "fundamentalDataSourcePriority": str(values.get("fundamentalDataSourcePriority") or row.get("fundamentalDataSourcePriority") or "").strip(),
         **values,
     }
     return payload
@@ -509,6 +513,10 @@ def _valuation_facts(position: Position, external_signals: Dict[str, object], se
             "valuationRequiresUserApproval": False,
             "valuationIsAiGenerated": False,
             "valuationSourceReason": "",
+            "valuationPerStatus": "missing",
+            "valuationPerReason": "PER/EPS와 적정가 입력이 없어 PER 기준 적정가를 계산하지 않았습니다.",
+            "valuationPreferredMetric": "적정가 입력 또는 외부 PER/EPS",
+            "valuationFundamentalDataSourcePriority": "사용자 입력 > KIS/Alpha Vantage/yfinance PER/EPS",
             "valuationAnnualDividend": 0.0,
             "valuationRequiredYieldPct": 0.0,
             "valuationCouponPct": 0.0,
@@ -558,6 +566,10 @@ def _valuation_facts(position: Position, external_signals: Dict[str, object], se
         "valuationRequiresUserApproval": bool(primary.get("requiresUserApproval")),
         "valuationIsAiGenerated": bool(primary.get("aiGenerated")),
         "valuationSourceReason": primary.get("sourceReason"),
+        "valuationPerStatus": primary.get("perValuationStatus"),
+        "valuationPerReason": primary.get("perValuationReason"),
+        "valuationPreferredMetric": primary.get("preferredValuationMetric"),
+        "valuationFundamentalDataSourcePriority": primary.get("fundamentalDataSourcePriority"),
     }
 
 

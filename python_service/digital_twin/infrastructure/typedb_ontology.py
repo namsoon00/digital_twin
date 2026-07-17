@@ -412,6 +412,10 @@ TYPEDB_PROMOTED_TEXT_ATTRIBUTES = {
     "sourceUrl": "ontology-source-url",
     "valuationMethod": "ontology-valuation-method",
     "formula": "ontology-formula",
+    "perValuationStatus": "ontology-per-valuation-status",
+    "perValuationReason": "ontology-per-valuation-reason",
+    "preferredValuationMetric": "ontology-preferred-valuation-metric",
+    "fundamentalDataSourcePriority": "ontology-fundamental-data-source-priority",
     "windowKey": "ontology-window-key",
     "hasSufficientHistory": "ontology-has-sufficient-history",
     "pricePathPattern": "ontology-price-path-pattern",
@@ -1485,6 +1489,10 @@ attribute ontology-listing-date, value string;
 attribute ontology-source-url, value string;
 attribute ontology-valuation-method, value string;
 attribute ontology-formula, value string;
+attribute ontology-per-valuation-status, value string;
+attribute ontology-per-valuation-reason, value string;
+attribute ontology-preferred-valuation-metric, value string;
+attribute ontology-fundamental-data-source-priority, value string;
 attribute ontology-window-key, value string;
 attribute ontology-has-sufficient-history, value string;
 attribute ontology-price-path-pattern, value string;
@@ -1638,6 +1646,10 @@ entity ontology-node @abstract,
     owns ontology-source-url,
     owns ontology-valuation-method,
     owns ontology-formula,
+    owns ontology-per-valuation-status,
+    owns ontology-per-valuation-reason,
+    owns ontology-preferred-valuation-metric,
+    owns ontology-fundamental-data-source-priority,
     owns ontology-window-key,
     owns ontology-has-sufficient-history,
     owns ontology-price-path-pattern,

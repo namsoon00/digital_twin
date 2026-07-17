@@ -1866,6 +1866,10 @@ def valuation_detail_rows(context: Dict[str, object], level: str) -> List[str]:
             "valuationMinimumMarginOfSafetyPct",
             "valuationSourceLabel",
             "valuationSourceReason",
+            "valuationPerStatus",
+            "valuationPerReason",
+            "valuationPreferredMetric",
+            "valuationFundamentalDataSourcePriority",
             "valuationReliabilityLabel",
             "valuationReliabilityScore",
             "valuationExplanation",
@@ -1890,6 +1894,20 @@ def valuation_detail_rows(context: Dict[str, object], level: str) -> List[str]:
         source += " · 외부 데이터도 참고"
     if not source:
         source = "사용자 입력 없음 · 외부 밸류에이션 데이터 없음"
+    per_status = str(facts.get("valuationPerStatus") or "").strip()
+    per_reason = str(facts.get("valuationPerReason") or "").strip()
+    preferred_metric = str(facts.get("valuationPreferredMetric") or "").strip()
+    source_priority = str(facts.get("valuationFundamentalDataSourcePriority") or "").strip()
+    per_status_labels = {
+        "available": "PER/EPS 사용",
+        "missing": "PER/EPS 부족",
+        "not_applicable": "PER보다 다른 기준 우선",
+        "conversion_missing": "PER 확인 · 환산값 부족",
+        "partial_conversion_missing": "PER 확인 · 환산값 부족",
+    }
+    per_line = per_status_labels.get(per_status, per_status)
+    if per_reason:
+        per_line = (per_line + " · " if per_line else "") + per_reason
     approval = ""
     if facts.get("valuationRequiresUserApproval") or facts.get("valuationIsAiGenerated"):
         status = str(facts.get("valuationReviewStatus") or facts.get("valuationApprovalStatus") or "ai_applied_pending_review").strip()
@@ -1943,6 +1961,9 @@ def valuation_detail_rows(context: Dict[str, object], level: str) -> List[str]:
         _html_row("적정가", fair_value or "미설정", level=level),
         _html_row("안전마진", margin_text or "계산 불가", level=level),
         _html_row("데이터 출처", source, level=level),
+        _html_row("PER 기준", per_line, level=level, max_len=300),
+        _html_row("대체 기준", preferred_metric, level=level, max_len=180),
+        _html_row("데이터 우선순위", source_priority, level=level, max_len=220),
         _html_row("계산 근거", str(facts.get("valuationSourceReason") or "").strip(), level=level, max_len=260),
         _html_row("근거 신뢰도", reliability, level=level, max_len=260),
         _html_row("계산 상태", status_text, level=level),

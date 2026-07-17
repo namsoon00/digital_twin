@@ -158,6 +158,9 @@ class OntologyInferenceContextTests(unittest.TestCase):
         self.assertEqual(9.5, facts["valuationRequiredYieldPct"])
         self.assertAlmostEqual(94.7368, facts["valuationFairValue"], places=4)
         self.assertIn("연간 배당", facts["valuationSubstitution"])
+        self.assertEqual("not_applicable", facts["valuationPerStatus"])
+        self.assertIn("배당", facts["valuationPerReason"])
+        self.assertEqual("배당수익률/요구수익률", facts["valuationPreferredMetric"])
 
     def test_position_signal_facts_use_bitcoin_proxy_ai_valuation_for_mstr(self):
         position = Position(
@@ -200,6 +203,9 @@ class OntologyInferenceContextTests(unittest.TestCase):
         self.assertNotEqual(position.current_price, facts["valuationFairValue"])
         self.assertIn("BTC 보유량", facts["valuationMissingInputs"])
         self.assertIn("BTC/추세 보정", facts["valuationFormula"])
+        self.assertEqual("not_applicable", facts["valuationPerStatus"])
+        self.assertIn("비트코인", facts["valuationPerReason"])
+        self.assertEqual("비트코인 보유가치/NAV", facts["valuationPreferredMetric"])
 
     def test_position_signal_facts_use_kis_domestic_fundamentals_for_kr_stock(self):
         position = Position(
@@ -246,6 +252,9 @@ class OntologyInferenceContextTests(unittest.TestCase):
         self.assertEqual(10000, facts["valuationExpectedEPS"])
         self.assertEqual(12, facts["valuationTargetPER"])
         self.assertIn("외부 EPS x 외부 PER", facts["valuationFormula"])
+        self.assertEqual("available", facts["valuationPerStatus"])
+        self.assertIn("EPS와 PER", facts["valuationPerReason"])
+        self.assertEqual("EPS x PER", facts["valuationPreferredMetric"])
 
     def test_position_signal_facts_convert_underlying_kis_fundamentals_for_adr(self):
         position = Position(
@@ -290,6 +299,9 @@ class OntologyInferenceContextTests(unittest.TestCase):
         self.assertAlmostEqual(8.5714, facts["valuationFairValue"], places=4)
         self.assertIn("본주 EPS x 본주 PER x ADR비율", facts["valuationFormula"])
         self.assertEqual([], facts["valuationMissingInputs"])
+        self.assertEqual("available", facts["valuationPerStatus"])
+        self.assertIn("본주 000660", facts["valuationPerReason"])
+        self.assertEqual("본주 PER/EPS + ADR 비율 + 환율", facts["valuationFundamentalDataSourcePriority"])
 
     def test_typedb_inferencebox_context_replaces_python_relation_rule_path(self):
         position = Position(

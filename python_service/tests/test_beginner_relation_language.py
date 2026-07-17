@@ -414,6 +414,10 @@ class BeginnerRelationLanguageTests(unittest.TestCase):
                         "valuationRequiresUserApproval": True,
                         "valuationIsAiGenerated": True,
                         "valuationSourceReason": "우선주/인컴형은 보통주 PER보다 배당수익률 기준 적정가가 더 적합합니다.",
+                        "valuationPerStatus": "not_applicable",
+                        "valuationPerReason": "우선주와 배당형 상품은 보통주 이익 배수보다 배당, 액면 기준가, 요구수익률이 가격 설명에 더 직접적입니다.",
+                        "valuationPreferredMetric": "배당수익률/요구수익률",
+                        "valuationFundamentalDataSourcePriority": "배당 조건 > 금리/요구수익률 > 외부 PER",
                     },
                 },
             },
@@ -426,6 +430,8 @@ class BeginnerRelationLanguageTests(unittest.TestCase):
         self.assertIn("연간 배당", message)
         self.assertIn("요구수익률", message)
         self.assertIn("배당수익률 기준 적정가", message)
+        self.assertIn("PER보다 다른 기준 우선", message)
+        self.assertIn("배당 조건", message)
 
     def test_execution_message_shows_valuation_missing_state(self):
         response = NotificationAIValidatedResponse(

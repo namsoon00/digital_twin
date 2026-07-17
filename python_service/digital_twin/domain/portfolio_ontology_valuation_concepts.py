@@ -191,6 +191,23 @@ def valuation_values(row: Dict[str, object], position: Position) -> Dict[str, ob
             missing.extend(["fairValue", "annualDividend", "requiredYieldPct"])
         else:
             missing.extend(["fairValue", "expectedEPS", "targetPER"])
+    per_status = str(row.get("perValuationStatus") or "").strip()
+    per_reason = str(row.get("perValuationReason") or "").strip()
+    preferred_metric = str(row.get("preferredValuationMetric") or "").strip()
+    source_priority = str(row.get("fundamentalDataSourcePriority") or "").strip()
+    if not per_status:
+        if expected_eps and target_per:
+            per_status = "available"
+            per_reason = per_reason or "EPS와 PER가 있어 PER 기준 적정가 계산이 가능합니다."
+            preferred_metric = preferred_metric or "EPS x PER"
+        elif annual_dividend and required_yield:
+            per_status = "not_applicable"
+            per_reason = per_reason or "배당형 상품은 PER보다 배당과 요구수익률이 가격 설명에 더 직접적입니다."
+            preferred_metric = preferred_metric or "배당수익률/요구수익률"
+        else:
+            per_status = "missing"
+            per_reason = per_reason or "EPS 또는 PER가 없어 PER 기준 적정가를 계산하지 못했습니다."
+            preferred_metric = preferred_metric or "적정가 입력 또는 외부 PER/EPS"
     return {
         "currentPrice": round(current_price, 4) if current_price else 0.0,
         "fairValue": round(fair_value, 4) if fair_value else 0.0,
@@ -207,6 +224,10 @@ def valuation_values(row: Dict[str, object], position: Position) -> Dict[str, ob
         "valuationMethod": method,
         "formula": formula,
         "missingInputs": sorted(set(missing)),
+        "perValuationStatus": per_status,
+        "perValuationReason": per_reason,
+        "preferredValuationMetric": preferred_metric,
+        "fundamentalDataSourcePriority": source_priority,
     }
 
 
@@ -235,6 +256,10 @@ def valuation_relation_props(row: Dict[str, object], values: Dict[str, object], 
         "activeStatus": str(row.get("activeStatus") or ""),
         "requiresUserApproval": bool(row.get("requiresUserApproval")),
         "autoApplied": bool(row.get("autoApplied")),
+        "perValuationStatus": values.get("perValuationStatus"),
+        "perValuationReason": values.get("perValuationReason"),
+        "preferredValuationMetric": values.get("preferredValuationMetric"),
+        "fundamentalDataSourcePriority": values.get("fundamentalDataSourcePriority"),
     }
 
 

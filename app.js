@@ -2813,11 +2813,11 @@
         criteria: ["설정: 실시간 모니터링 워커 생존 확인 주기", "감지: 상태 토스 계좌 동기화, 보유 5개"]
       },
       monitorConnection: {
-        title: "연결 상태 변화",
+        title: "연결 상태",
         symbol: "",
-        severity: "WATCH",
-        lines: ["상태 일시 인증 실패", "연속 실패 1회", "실패 단계 accounts", "재시도 access token 재발급 1회", "토스 조회 실패 · Toss accounts 단계 실패 · HTTP 401 Unauthorized"],
-        criteria: ["설정: 토스 연결 모드가 live가 아니며 1회성 실패는 관찰로 보냅니다", "감지: 연속 실패 1회, stage=accounts, mode=demo"]
+        severity: "ALERT",
+        lines: ["상태 연속 인증 실패", "연속 실패 3회", "실패 단계 accounts", "재시도 access token 재발급 1회", "토스 조회 실패 · Toss accounts 단계 실패 · HTTP 401 Unauthorized"],
+        criteria: ["설정: 토스 연결 모드가 live가 아니며 3회 이상 연속 실패할 때만 보냅니다", "감지: 연속 실패 3회, stage=accounts, mode=demo"]
       },
       monitorPositionChange: {
         title: "SK하이닉스",

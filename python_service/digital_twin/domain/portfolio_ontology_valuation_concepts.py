@@ -7,6 +7,7 @@ from .ontology_schema import add_entity, add_relation
 from .portfolio import Position
 from .portfolio_ontology_market_concepts import symbol_key
 from .portfolio_ontology_runtime_concepts import valuation_assumption_rows
+from .security_lines import security_lines_for_symbol
 from .valuation_ai_proposals import ai_valuation_proposal_rows
 
 
@@ -92,14 +93,22 @@ def position_runtime_valuation_rows(runtime_context: Dict[str, object], symbol: 
 def external_valuation_rows(external_signals: Dict[str, object], symbol: str) -> List[Dict[str, object]]:
     normalized_symbol = str(symbol or "").upper().strip()
     rows: List[Dict[str, object]] = []
+    source_symbols = [normalized_symbol]
+    for line in security_lines_for_symbol(normalized_symbol):
+        if line.symbol == normalized_symbol and line.is_adr and line.local_symbol not in source_symbols:
+            source_symbols.append(line.local_symbol)
     overviews = external_signals.get("companyOverviews") if isinstance(external_signals.get("companyOverviews"), dict) else {}
-    overview = overviews.get(normalized_symbol)
-    if isinstance(overview, dict):
+    for source_symbol in source_symbols:
+        overview = overviews.get(source_symbol)
+        if not isinstance(overview, dict):
+            continue
+        is_underlying = source_symbol != normalized_symbol
         rows.append({
-            "assumptionKey": normalized_symbol + ":alpha-overview",
+            "assumptionKey": normalized_symbol + ":" + source_symbol + ":company-overview",
             "symbol": normalized_symbol,
-            "label": str(overview.get("name") or normalized_symbol) + " 기업개요 밸류에이션",
-            "provider": str(overview.get("provider") or "Alpha Vantage"),
+            "sourceSymbol": source_symbol,
+            "label": (("본주 " + source_symbol + " 기반 ") if is_underlying else "") + str(overview.get("name") or normalized_symbol) + " 기업개요 밸류에이션",
+            "provider": str(overview.get("provider") or "External"),
             "source": "company-overview",
             "fairValue": number(overview.get("analystTargetPrice")),
             "peRatio": number(overview.get("peRatio")),
@@ -111,14 +120,18 @@ def external_valuation_rows(external_signals: Dict[str, object], symbol: str) ->
             "formula": "애널리스트 목표가와 PER/베타를 참고",
         })
     earnings = external_signals.get("earningsReports") if isinstance(external_signals.get("earningsReports"), dict) else {}
-    report = earnings.get(normalized_symbol)
-    latest = report.get("latestQuarter") if isinstance(report, dict) and isinstance(report.get("latestQuarter"), dict) else {}
-    if latest:
+    for source_symbol in source_symbols:
+        report = earnings.get(source_symbol)
+        latest = report.get("latestQuarter") if isinstance(report, dict) and isinstance(report.get("latestQuarter"), dict) else {}
+        if not latest:
+            continue
+        is_underlying = source_symbol != normalized_symbol
         rows.append({
-            "assumptionKey": normalized_symbol + ":alpha-earnings",
+            "assumptionKey": normalized_symbol + ":" + source_symbol + ":earnings",
             "symbol": normalized_symbol,
-            "label": normalized_symbol + " 실적 EPS 밸류에이션",
-            "provider": str(report.get("provider") or "Alpha Vantage"),
+            "sourceSymbol": source_symbol,
+            "label": (("본주 " + source_symbol + " 기반 ") if is_underlying else "") + normalized_symbol + " 실적 EPS 밸류에이션",
+            "provider": str(report.get("provider") or "External"),
             "source": "earnings-report",
             "reportedEPS": number(latest.get("reportedEPS")),
             "estimatedEPS": number(latest.get("estimatedEPS")),

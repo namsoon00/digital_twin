@@ -898,7 +898,19 @@ class KISMarketSignalProvider:
                 "price",
                 price,
                 normalized_price,
-                ["currentPrice", "changeRate", "volume", "volumeRatio", "tradingValue", "foreignNetVolume"],
+                [
+                    "currentPrice",
+                    "changeRate",
+                    "volume",
+                    "volumeRatio",
+                    "tradingValue",
+                    "foreignNetVolume",
+                    "peRatio",
+                    "forwardPE",
+                    "pbr",
+                    "reportedEPS",
+                    "bps",
+                ],
                 fetched_at=fetched_at,
                 source_as_of=price_as_of,
                 source_as_of_confidence=price_as_of_confidence,
@@ -1076,6 +1088,38 @@ class KISMarketSignalProvider:
             [self.merge_position(item, signals.get(clean_symbol(item.symbol))) for item in watchlist],
         )
 
+    def attach_fundamentals_to_external_signals(
+        self,
+        external_signals: Dict[str, object],
+        positions: Iterable[Position],
+    ) -> Dict[str, object]:
+        if not isinstance(external_signals, dict):
+            external_signals = {}
+        overviews = external_signals.setdefault("companyOverviews", {})
+        earnings = external_signals.setdefault("earningsReports", {})
+        statuses = external_signals.setdefault("statuses", [])
+        if not isinstance(overviews, dict) or not isinstance(earnings, dict):
+            return external_signals
+        added = 0
+        for symbol in self.symbols_for_positions(positions or []):
+            signal = self.cached_signal(symbol)
+            rows = kis_fundamental_external_rows(symbol, signal)
+            overview = rows.get("companyOverview") if isinstance(rows.get("companyOverview"), dict) else {}
+            report = rows.get("earningsReport") if isinstance(rows.get("earningsReport"), dict) else {}
+            if overview and symbol not in overviews:
+                overviews[symbol] = overview
+                added += 1
+            if report and symbol not in earnings:
+                earnings[symbol] = report
+                added += 1
+        if added and isinstance(statuses, list):
+            statuses.append({
+                "source": "KIS Open API",
+                "ok": True,
+                "message": "국내장 PER/EPS/PBR/BPS를 본주 펀더멘털 신호로 반영했습니다.",
+            })
+        return external_signals
+
     def merge_position(self, position: Position, signal: Dict[str, object] = None) -> Position:
         if not signal:
             return position
@@ -1167,7 +1211,7 @@ def normalize_price(symbol: str, payload: Dict[str, object]) -> Dict[str, object
     if not trading_value and current_price and volume:
         trading_value = current_price * volume
     volume_ratio_raw = optional_number(payload, ["prdy_vrss_vol_rate"])
-    return {
+    signal = {
         "symbol": symbol,
         "name": str(payload.get("hts_kor_isnm") or info["name"]),
         "market": "KR",
@@ -1179,6 +1223,76 @@ def normalize_price(symbol: str, payload: Dict[str, object]) -> Dict[str, object
         "tradingValue": trading_value,
         "foreignNetVolume": optional_number(payload, ["frgn_ntby_qty"]),
     }
+    pe_ratio = optional_number(payload, ["per", "PER"])
+    forward_pe = optional_number(payload, ["forwardPE", "forward_pe", "fwd_per"])
+    pbr = optional_number(payload, ["pbr", "PBR"])
+    eps = optional_number(payload, ["eps", "EPS"])
+    bps = optional_number(payload, ["bps", "BPS"])
+    if pe_ratio is not None:
+        signal["peRatio"] = pe_ratio
+    if forward_pe is not None:
+        signal["forwardPE"] = forward_pe
+    if pbr is not None:
+        signal["pbr"] = pbr
+    if eps is not None:
+        signal["reportedEPS"] = eps
+    if bps is not None:
+        signal["bps"] = bps
+    if any(signal.get(key) not in (None, "") for key in ["peRatio", "forwardPE", "pbr", "reportedEPS", "bps"]):
+        signal["fundamentalSource"] = "KIS Open API inquire-price"
+    return signal
+
+
+def kis_fundamental_external_rows(symbol: str, signal: Dict[str, object]) -> Dict[str, Dict[str, object]]:
+    if not isinstance(signal, dict):
+        return {}
+    pe_ratio = number(signal.get("peRatio"))
+    forward_pe = number(signal.get("forwardPE"))
+    pbr = number(signal.get("pbr"))
+    eps = number(signal.get("reportedEPS"))
+    bps = number(signal.get("bps"))
+    if not any([pe_ratio, forward_pe, pbr, eps, bps]):
+        return {}
+    name = str(signal.get("name") or known_stock(symbol)["name"])
+    fetched_at = str(signal.get("updatedAt") or utc_now_iso())
+    overview = {
+        "provider": "KIS Open API",
+        "source": "KIS inquire-price",
+        "sourceType": "broker-domestic-fundamentals",
+        "symbol": symbol,
+        "name": name,
+        "market": "KR",
+        "currency": "KRW",
+        "currentPrice": number(signal.get("currentPrice")),
+        "peRatio": pe_ratio,
+        "forwardPE": forward_pe,
+        "pbr": pbr,
+        "bps": bps,
+        "latestQuarter": "",
+        "fetchedAt": fetched_at,
+    }
+    earnings = {
+        "provider": "KIS Open API",
+        "source": "KIS inquire-price",
+        "sourceType": "broker-domestic-fundamentals",
+        "symbol": symbol,
+        "name": name,
+        "market": "KR",
+        "currency": "KRW",
+        "fetchedAt": fetched_at,
+        "latestQuarter": {
+            "reportedEPS": eps,
+            "estimatedEPS": 0.0,
+            "reportedDate": "",
+            "fiscalDateEnding": "",
+        },
+    }
+    rows: Dict[str, Dict[str, object]] = {}
+    if any(number(overview.get(key)) for key in ["currentPrice", "peRatio", "forwardPE", "pbr", "bps"]):
+        rows["companyOverview"] = overview
+    if eps:
+        rows["earningsReport"] = earnings
+    return rows
 
 
 def normalize_ccnl(items: List[Dict[str, object]]) -> Dict[str, object]:

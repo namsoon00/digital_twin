@@ -182,6 +182,96 @@ class OntologyInferenceContextTests(unittest.TestCase):
         self.assertIn("BTC 보유량", facts["valuationMissingInputs"])
         self.assertIn("BTC/추세 보정", facts["valuationFormula"])
 
+    def test_position_signal_facts_use_kis_domestic_fundamentals_for_kr_stock(self):
+        position = Position(
+            symbol="000660",
+            name="SK하이닉스",
+            market="KR",
+            currency="KRW",
+            source="holding",
+            current_price=210000,
+            average_price=230000,
+            quantity=7,
+            market_value=1470000,
+            ma20=220000,
+            ma60=205000,
+            sector="반도체",
+        )
+        facts = position_signal_facts(
+            position,
+            portfolio_summary([position], account_cash=1000000, fx_rates={"KRW": 1}),
+            external_signals={
+                "companyOverviews": {
+                    "000660": {
+                        "provider": "KIS Open API",
+                        "peRatio": 12,
+                        "pbr": 1.6,
+                    }
+                },
+                "earningsReports": {
+                    "000660": {
+                        "provider": "KIS Open API",
+                        "latestQuarter": {
+                            "reportedEPS": 10000,
+                        },
+                    }
+                },
+            },
+            settings={},
+        )
+
+        self.assertEqual("available", facts["valuationDataStatus"])
+        self.assertEqual("ai", facts["valuationSourceType"])
+        self.assertEqual("ai-eps-per-from-external-fundamentals", facts["valuationMethod"])
+        self.assertEqual(120000, facts["valuationFairValue"])
+        self.assertEqual(10000, facts["valuationExpectedEPS"])
+        self.assertEqual(12, facts["valuationTargetPER"])
+        self.assertIn("외부 EPS x 외부 PER", facts["valuationFormula"])
+
+    def test_position_signal_facts_convert_underlying_kis_fundamentals_for_adr(self):
+        position = Position(
+            symbol="SKHY",
+            name="SK하이닉스 ADR",
+            market="NASDAQ",
+            currency="USD",
+            source="holding",
+            current_price=9.0,
+            exchange_rate=1400,
+            average_price=10.0,
+            quantity=10,
+            market_value=90,
+            ma20=9.5,
+            ma60=8.5,
+            sector="반도체",
+        )
+        facts = position_signal_facts(
+            position,
+            portfolio_summary([position], account_cash=1000000, fx_rates={"USD": 1400, "KRW": 1}),
+            external_signals={
+                "companyOverviews": {
+                    "000660": {
+                        "provider": "KIS Open API",
+                        "peRatio": 12,
+                    }
+                },
+                "earningsReports": {
+                    "000660": {
+                        "provider": "KIS Open API",
+                        "latestQuarter": {
+                            "reportedEPS": 10000,
+                        },
+                    }
+                },
+            },
+            settings={},
+        )
+
+        self.assertEqual("available", facts["valuationDataStatus"])
+        self.assertEqual("ai-underlying-eps-per-adr-conversion", facts["valuationMethod"])
+        self.assertAlmostEqual(8.5714, facts["valuationFairValue"], places=4)
+        self.assertIn("본주 EPS x 본주 PER x ADR비율", facts["valuationFormula"])
+        self.assertEqual([], facts["valuationMissingInputs"])
+
     def test_typedb_inferencebox_context_replaces_python_relation_rule_path(self):
         position = Position(
             symbol="005930",

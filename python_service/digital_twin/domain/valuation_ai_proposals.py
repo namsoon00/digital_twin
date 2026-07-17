@@ -4,6 +4,7 @@ from typing import Dict, List
 from .instrument_profiles import instrument_profile_for_position
 from .market_data import clamp, number
 from .portfolio import Position
+from .security_lines import SecurityLine, security_lines_for_symbol
 
 
 def truthy(value: object, default: bool = True) -> bool:
@@ -110,6 +111,27 @@ def apply_review_override(row: Dict[str, object], settings: Dict[str, object]) -
         row["activeStatus"] = "rejected"
         row["requiresUserApproval"] = False
     return row
+
+
+def usdkrw_rate_for_position(position: Position, external_signals: Dict[str, object]) -> float:
+    rate = number(getattr(position, "exchange_rate", 0.0))
+    if rate:
+        return rate
+    fx_rates = external_signals.get("fxRates") if isinstance(external_signals, dict) and isinstance(external_signals.get("fxRates"), dict) else {}
+    for key in ["USDKRW", "USD/KRW", "USD"]:
+        item = fx_rates.get(key) if isinstance(fx_rates.get(key), dict) else {}
+        rate = number(item.get("rate")) or number(item.get("value"))
+        if rate:
+            return rate
+    return 0.0
+
+
+def adr_security_line_for_position(position: Position, settings: Dict[str, object] = None) -> SecurityLine:
+    symbol = str(position.symbol or "").upper().strip()
+    for line in security_lines_for_symbol(symbol, settings or {}):
+        if line.symbol == symbol and line.is_adr and line.local_symbol:
+            return line
+    return None
 
 
 def bitcoin_proxy_ai_valuation_row(
@@ -248,30 +270,79 @@ def preferred_income_ai_valuation_row(
 def external_fundamental_ai_valuation_row(
     position: Position,
     external_signals: Dict[str, object],
+    settings: Dict[str, object] = None,
 ) -> Dict[str, object]:
     symbol = str(position.symbol or "").upper().strip()
     overviews = external_signals.get("companyOverviews") if isinstance(external_signals, dict) and isinstance(external_signals.get("companyOverviews"), dict) else {}
     earnings = external_signals.get("earningsReports") if isinstance(external_signals, dict) and isinstance(external_signals.get("earningsReports"), dict) else {}
-    overview = overviews.get(symbol) if isinstance(overviews.get(symbol), dict) else {}
-    report = earnings.get(symbol) if isinstance(earnings.get(symbol), dict) else {}
+    source_symbol = symbol
+    source_label = ""
+    adr_line = None
+    overview = overviews.get(source_symbol) if isinstance(overviews.get(source_symbol), dict) else {}
+    report = earnings.get(source_symbol) if isinstance(earnings.get(source_symbol), dict) else {}
+    if not overview or not report:
+        adr_line = adr_security_line_for_position(position, settings or {})
+        if adr_line:
+            source_symbol = adr_line.local_symbol
+            source_label = "본주 " + source_symbol + " "
+            overview = overviews.get(source_symbol) if isinstance(overviews.get(source_symbol), dict) else {}
+            report = earnings.get(source_symbol) if isinstance(earnings.get(source_symbol), dict) else {}
     latest = report.get("latestQuarter") if isinstance(report.get("latestQuarter"), dict) else {}
     expected_eps = number(latest.get("estimatedEPS")) or number(latest.get("reportedEPS"))
     target_per = number(overview.get("forwardPE")) or number(overview.get("peRatio"))
     if not expected_eps or not target_per:
         return {}
     target_per = clamp(target_per, 3.0, 80.0)
+    fair_value = expected_eps * target_per
+    method = "ai-eps-per-from-external-fundamentals"
+    formula = "AI 제안 적정가 = 외부 EPS x 외부 PER"
+    reliability = 62.0
+    missing_inputs = []
+    source_reason = source_label + "외부 기업개요와 최근 실적 EPS를 조합한 AI 초안입니다."
+    if source_symbol != symbol:
+        adr_ratio = number(getattr(adr_line, "adr_ratio", 0.0)) if adr_line else 0.0
+        fx_rate = usdkrw_rate_for_position(position, external_signals)
+        if adr_ratio and fx_rate:
+            fair_value = fair_value * adr_ratio / fx_rate
+            method = "ai-underlying-eps-per-adr-conversion"
+            formula = "AI 제안 적정가 = 본주 EPS x 본주 PER x ADR비율 / USDKRW"
+            reliability = 54.0
+            source_reason = (
+                "본주 " + source_symbol + "의 KIS EPS/PER를 사용하고, "
+                + symbol + " ADR 비율 " + str(round(adr_ratio, 4))
+                + "과 USD/KRW " + str(round(fx_rate, 4))
+                + "로 달러 기준 ADR 적정가를 환산한 AI 초안입니다."
+            )
+        else:
+            fair_value = 0.0
+            missing_inputs = ["ADR 비율" if not adr_ratio else "", "USD/KRW 환율" if not fx_rate else ""]
+            missing_inputs = [item for item in missing_inputs if item]
+            source_reason = (
+                "본주 " + source_symbol + "의 EPS/PER는 확인했지만 "
+                + symbol + " ADR 적정가로 환산할 ADR 비율이나 환율이 부족합니다."
+            )
     row = _base_row(
         position,
-        "ai-eps-per-from-external-fundamentals",
-        "AI 제안 적정가 = 외부 EPS x 외부 PER",
-        62.0,
+        method,
+        formula,
+        reliability,
     )
     row.update({
         "currentPrice": number(position.current_price),
+        "fairValue": round(fair_value, 4) if fair_value else 0.0,
         "expectedEPS": round(expected_eps, 4),
         "targetPER": round(target_per, 4),
+        "peRatio": number(overview.get("peRatio")),
+        "forwardPE": number(overview.get("forwardPE")),
+        "pbr": number(overview.get("pbr")),
+        "bps": number(overview.get("bps")),
+        "sourceSymbol": source_symbol,
+        "underlyingSymbol": source_symbol if source_symbol != symbol else "",
+        "adrRatio": round(number(getattr(adr_line, "adr_ratio", 0.0)), 4) if adr_line else 0.0,
+        "sourceProvider": str(overview.get("provider") or report.get("provider") or ""),
         "minimumMarginOfSafetyPct": 15.0,
-        "sourceReason": "외부 기업개요와 최근 실적 EPS를 조합한 AI 초안입니다.",
+        "sourceReason": source_reason,
+        "missingInputs": missing_inputs,
     })
     return row
 
@@ -314,7 +385,7 @@ def ai_valuation_proposal_rows(
         row = bitcoin_proxy_ai_valuation_row(position, external_signals or {}, settings)
         if row:
             rows.append(row)
-    row = external_fundamental_ai_valuation_row(position, external_signals or {})
+    row = external_fundamental_ai_valuation_row(position, external_signals or {}, settings)
     if row:
         rows.append(row)
     if not rows and ({"SemiconductorHBM", "SemiconductorCyclical"} & archetypes):

@@ -17,6 +17,7 @@ from .notifications import queued_notifier_for_account, send_events
 from .ontology_graph_store import ontology_repository_from_settings
 from .service_factory import (
     build_investment_calendar_candidate_service,
+    build_investment_calendar_research_service,
     build_investment_calendar_runner,
     build_investment_calendar_service,
     build_investment_strategy_proposal_service,
@@ -660,7 +661,22 @@ def investment_calendar_command(args) -> int:
         return 0
     if args.investment_calendar_action == "candidates":
         candidate_service = build_investment_calendar_candidate_service(settings)
-        print(json.dumps(candidate_service.list_candidates({"status": args.status, "limit": args.limit}), ensure_ascii=False))
+        print(json.dumps(candidate_service.list_candidates({
+            "status": args.status,
+            "limit": args.limit,
+            "page": args.page,
+            "pageSize": args.page_size,
+        }), ensure_ascii=False))
+        return 0
+    if args.investment_calendar_action == "research-candidates":
+        research_service = build_investment_calendar_research_service(settings)
+        print(json.dumps(research_service.recommend({
+            "symbol": args.symbol,
+            "kind": args.kind,
+            "limit": args.limit,
+            "runCollection": args.run_collection,
+            "force": args.force,
+        }), ensure_ascii=False))
         return 0
     if args.investment_calendar_action == "approve-candidate":
         candidate_service = build_investment_calendar_candidate_service(settings)
@@ -954,6 +970,14 @@ def build_parser() -> argparse.ArgumentParser:
     calendar_candidates = investment_calendar_actions.add_parser("candidates")
     calendar_candidates.add_argument("--status", default="pending")
     calendar_candidates.add_argument("--limit", default="100")
+    calendar_candidates.add_argument("--page", default="0")
+    calendar_candidates.add_argument("--page-size", default="20")
+    calendar_research = investment_calendar_actions.add_parser("research-candidates")
+    calendar_research.add_argument("--symbol", default="")
+    calendar_research.add_argument("--kind", default="")
+    calendar_research.add_argument("--limit", default="120")
+    calendar_research.add_argument("--run-collection", action=argparse.BooleanOptionalAction, default=True)
+    calendar_research.add_argument("--force", action="store_true")
     calendar_candidate_approve = investment_calendar_actions.add_parser("approve-candidate")
     calendar_candidate_approve.add_argument("--candidate-id", required=True)
     calendar_candidate_approve.add_argument("--starts-at", default="")

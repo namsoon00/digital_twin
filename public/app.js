@@ -381,6 +381,8 @@
     investmentCalendarDeleting: "",
     investmentCalendarRunning: false,
     investmentCalendarSyncing: false,
+    investmentCalendarResearching: false,
+    investmentCalendarResearchResult: null,
     investmentCalendarCandidates: null,
     investmentCalendarCandidatesLoading: false,
     investmentCalendarCandidateReviewing: "",
@@ -5274,8 +5276,33 @@
       feedback: {},
       status: "pending",
       limit: 100,
+      page: 0,
+      pageSize: INVESTMENT_CALENDAR_CANDIDATE_PAGE_SIZE,
+      total: 0,
+      pageInfo: {
+        page: 0,
+        pageSize: INVESTMENT_CALENDAR_CANDIDATE_PAGE_SIZE,
+        offset: 0,
+        total: 0,
+        pageCount: 1,
+        hasPrev: false,
+        hasNext: false
+      },
       preview: true
     };
+  }
+
+  function investmentCalendarCandidateQueryString() {
+    var pageSize = INVESTMENT_CALENDAR_CANDIDATE_PAGE_SIZE;
+    var page = Number(state.investmentCalendarCandidatePage || 0);
+    if (!Number.isFinite(page)) page = 0;
+    page = Math.max(0, page);
+    var params = new URLSearchParams();
+    params.set("status", "pending");
+    params.set("page", String(page));
+    params.set("pageSize", String(pageSize));
+    params.set("limit", String(pageSize));
+    return "?" + params.toString();
   }
 
   function loadInvestmentCalendar(force) {
@@ -5309,7 +5336,7 @@
     render();
     var promise = isStaticPreviewHost()
       ? Promise.resolve(staticInvestmentCalendarCandidatesPayload())
-      : requestJson("/api/investment-calendar/candidates?status=pending&limit=100");
+      : requestJson("/api/investment-calendar/candidates" + investmentCalendarCandidateQueryString());
     return promise
       .then(function (payload) {
         state.investmentCalendarCandidates = payload;
@@ -5319,6 +5346,43 @@
       })
       .finally(function () {
         state.investmentCalendarCandidatesLoading = false;
+        render();
+      });
+  }
+
+  function recommendInvestmentCalendarCandidates() {
+    if (state.investmentCalendarResearching) return Promise.resolve();
+    var filters = state.investmentCalendarFilters || {};
+    var payload = {
+      symbol: String(filters.symbol || "").trim().toUpperCase(),
+      limit: 120,
+      runCollection: true
+    };
+    state.investmentCalendarResearching = true;
+    state.investmentCalendarError = "";
+    render();
+    var promise = isStaticPreviewHost()
+      ? Promise.resolve({
+          status: "preview",
+          evidenceCount: 0,
+          candidateCount: 0,
+          storedCandidateCount: 0,
+          collection: { status: "preview" }
+        })
+      : sendJson("/api/investment-calendar/candidates/research", "POST", payload);
+    return promise
+      .then(function (result) {
+        state.investmentCalendarResearchResult = result || {};
+        state.investmentCalendarCandidatePage = 0;
+        showSnackbar("AI 일정 추천 완료 · 후보 " + Number((result || {}).storedCandidateCount || 0) + "건", "success");
+        return loadInvestmentCalendarCandidates(true);
+      })
+      .catch(function (error) {
+        state.investmentCalendarError = error.message || "AI 일정 후보를 추천하지 못했습니다.";
+        showSnackbar(state.investmentCalendarError, "danger");
+      })
+      .finally(function () {
+        state.investmentCalendarResearching = false;
         render();
       });
   }
@@ -8073,6 +8137,50 @@
     return targets.slice(0, 3).join(" · ") || "전체 포트폴리오";
   }
 
+  function investmentCalendarPayload(event) {
+    var payload = (event || {}).payload;
+    return payload && typeof payload === "object" ? payload : {};
+  }
+
+  function investmentCalendarWatchItems(event) {
+    var payload = investmentCalendarPayload(event);
+    if (Array.isArray(payload.watchItems) && payload.watchItems.length) return payload.watchItems.slice(0, 5);
+    var type = (event || {}).eventType || "";
+    if (type === "adrListing") return ["상장 거래소와 예정일", "원주/ADR 교환비율과 수수료", "첫 거래 유동성과 원주 가격 차이"];
+    if (type === "indexInclusion") return ["편입 지수와 적용일", "예상 패시브 매수 규모", "리밸런싱 전후 거래량"];
+    if (type === "capitalRaise") return ["조달 규모와 목적", "발행가/전환가와 희석률", "자금 사용 계획"];
+    if (type === "earnings") return ["매출/EPS의 시장 기대 대비 차이", "마진과 비용 구조", "다음 분기 가이던스"];
+    if (type === "centralBank" || type === "macro") return ["컨센서스 대비 결과", "금리·달러·지수 선물 반응", "장초반 거래량 변화"];
+    return ["예상치 대비 실제 결과", "발표 직후 가격·거래량 반응", "기존 투자 가정과 달라진 점"];
+  }
+
+  function investmentCalendarImpactText(event) {
+    var payload = investmentCalendarPayload(event);
+    if (payload.investmentImpact) return String(payload.investmentImpact || "");
+    var target = investmentCalendarTargetLabel(event);
+    var type = (event || {}).eventType || "";
+    if (type === "adrListing") return "ADR/GDR 상장은 해외 투자자 접근성, 거래 유동성, 원주와 예탁증서 간 가격 차이를 통해 " + target + "의 재평가와 변동성에 영향을 줄 수 있습니다.";
+    if (type === "indexInclusion") return "지수 편입은 패시브 자금 유입과 리밸런싱 수급을 통해 " + target + "의 단기 거래량과 가격 변동성을 키울 수 있습니다.";
+    if (type === "capitalRaise") return "증자·자금조달은 성장 투자 재원과 주식 희석 가능성을 동시에 만들며 단기 수급 부담으로 이어질 수 있습니다.";
+    if (type === "earnings") return "실적 이벤트는 " + target + "의 이익 추정치, 밸류에이션 프리미엄, 다음 분기 가이던스 재평가로 이어질 수 있습니다.";
+    if (type === "centralBank") return "중앙은행 결정은 할인율과 위험선호를 바꾸며 " + target + "의 멀티플, 기술주 수급, 환율 민감도에 영향을 줄 수 있습니다.";
+    return "이벤트 결과가 " + target + "의 변동성, 뉴스 흐름, 포트폴리오 리스크 점검 우선순위에 영향을 줄 수 있습니다.";
+  }
+
+  function renderInvestmentCalendarImpactPreview(event) {
+    var impact = investmentCalendarImpactText(event);
+    if (!impact) return "";
+    return '<p class="investment-calendar-impact-preview">' + escapeHtml(impact) + '</p>';
+  }
+
+  function renderInvestmentCalendarWatchList(event) {
+    var items = investmentCalendarWatchItems(event);
+    if (!items.length) return "";
+    return '<div class="investment-calendar-watch-list">' + items.map(function (item) {
+      return '<span>' + escapeHtml(item) + '</span>';
+    }).join("") + '</div>';
+  }
+
   function investmentCalendarSortEvents(events) {
     return (events || []).slice().sort(function (a, b) {
       return Date.parse(a.startsAt || "") - Date.parse(b.startsAt || "");
@@ -8128,6 +8236,7 @@
       '<div class="toolbar">',
       '<button class="text-button" type="button" data-action="refresh-investment-calendar"' + (state.investmentCalendarLoading ? ' disabled' : '') + '>' + (state.investmentCalendarLoading ? "조회 중" : "새로고침") + '</button>',
       '<button class="text-button" type="button" data-action="sync-official-investment-calendar"' + (state.investmentCalendarSyncing ? ' disabled' : '') + '>' + (state.investmentCalendarSyncing ? "동기화 중" : "공식일정 동기화") + '</button>',
+      '<button class="text-button" type="button" data-action="research-investment-calendar"' + (state.investmentCalendarResearching ? ' disabled' : '') + '>' + (state.investmentCalendarResearching ? "리서치 중" : "AI 일정 추천") + '</button>',
       '<button class="text-button primary" type="button" data-action="run-investment-calendar-reminders"' + (state.investmentCalendarRunning ? ' disabled' : '') + '>' + (state.investmentCalendarRunning ? "확인 중" : "리마인더 확인") + '</button>',
       renderCalendarEntryButton("이벤트 등록", "text-button primary"),
       '</div>',
@@ -8326,6 +8435,7 @@
       '<span>알림 ' + escapeHtml((event.reminderOffsetsMinutes || []).join(", ") || "없음") + '분 전</span>',
       '</div>',
       event.notes ? '<p class="subtle">' + escapeHtml(event.notes) + '</p>' : '',
+      renderInvestmentCalendarImpactPreview(event),
       '</div>',
       '</div>',
       '<div class="investment-calendar-event-actions">',
@@ -8342,8 +8452,26 @@
   }
 
   function investmentCalendarCandidatePageInfo(candidates) {
-    var total = (candidates || []).length;
+    var payload = currentInvestmentCalendarCandidates();
+    var serverInfo = payload.pageInfo || {};
     var pageSize = INVESTMENT_CALENDAR_CANDIDATE_PAGE_SIZE;
+    var serverTotal = Number(serverInfo.total);
+    if (Number.isFinite(serverTotal)) {
+      pageSize = Number(serverInfo.pageSize || pageSize) || pageSize;
+      var serverPage = Number(serverInfo.page || 0);
+      var serverOffset = Number(serverInfo.offset || serverPage * pageSize);
+      var serverPageCount = Math.max(1, Number(serverInfo.pageCount || Math.ceil(serverTotal / pageSize)) || 1);
+      return {
+        total: serverTotal,
+        page: Math.max(0, serverPage),
+        pageSize: pageSize,
+        pageCount: serverPageCount,
+        start: serverTotal ? serverOffset : 0,
+        end: Math.min(serverOffset + (candidates || []).length, serverTotal),
+        visible: candidates || []
+      };
+    }
+    var total = (candidates || []).length;
     var pageCount = Math.max(1, Math.ceil(total / pageSize));
     var page = Number(state.investmentCalendarCandidatePage || 0);
     if (!Number.isFinite(page)) page = 0;
@@ -8369,9 +8497,10 @@
     return [
       '<article class="panel investment-calendar-list-panel investment-calendar-candidate-panel"' + cardTypeAttrs("process-card", candidates.length ? "watch" : "hold") + '>',
       '<div class="panel-head">',
-      '<div><p class="label">AUTO REVIEW</p><h2>자동 감지 후보</h2><span>날짜가 없거나 신뢰도가 낮은 특수 이벤트를 승인 전 단계로 보관합니다.</span></div>',
+      '<div><p class="label">AI RESEARCH QUEUE</p><h2>AI 추천/자동 감지 후보</h2><span>뉴스·공시 리서치에서 날짜 후보를 추천하고, 승인 전 단계로 보관합니다.</span></div>',
       '<span class="metric">' + escapeHtml(pending) + '</span>',
       '</div>',
+      renderInvestmentCalendarResearchStatus(),
       candidates.length ? renderInvestmentCalendarCandidatePager(pageInfo) : '',
       '<div class="investment-calendar-list">',
       state.investmentCalendarCandidatesLoading ? renderEmptyState({
@@ -8389,6 +8518,21 @@
       }) : pageInfo.visible.map(renderInvestmentCalendarCandidate).join("")),
       '</div>',
       '</article>'
+    ].join("");
+  }
+
+  function renderInvestmentCalendarResearchStatus() {
+    var result = state.investmentCalendarResearchResult || {};
+    var collection = result.collection || {};
+    var hasResult = Object.keys(result).length > 0;
+    return [
+      '<div class="investment-calendar-research-strip">',
+      '<div>',
+      '<strong>' + escapeHtml(state.investmentCalendarResearching ? "AI 리서치 실행 중" : (hasResult ? "최근 AI 추천 결과" : "AI 리서치 대기")) + '</strong>',
+      '<span>' + escapeHtml(hasResult ? ("근거 " + Number(result.evidenceCount || 0) + "개 · 후보 " + Number(result.storedCandidateCount || 0) + "개 · 수집 " + (collection.status || "unknown")) : "추천 실행 시 최신 뉴스 수집 후 후보 큐에만 저장합니다.") + '</span>',
+      '</div>',
+      '<button class="mini-button primary" type="button" data-action="research-investment-calendar"' + (state.investmentCalendarResearching ? ' disabled' : '') + '>' + escapeHtml(state.investmentCalendarResearching ? "실행 중" : "AI 추천 실행") + '</button>',
+      '</div>'
     ].join("");
   }
 
@@ -8411,7 +8555,9 @@
     var targets = (candidate.symbols || []).concat(candidate.markets || []);
     var id = candidate.candidateId || "";
     var busy = state.investmentCalendarCandidateReviewing === id;
-    var reason = candidate.reviewReason === "missingDate" ? "날짜 확인 필요" : (candidate.reviewReason === "lowConfidence" ? "신뢰도 확인 필요" : "검토 필요");
+    var payload = investmentCalendarPayload(candidate);
+    var aiRecommended = Boolean(payload.aiResearchRecommended);
+    var reason = candidate.reviewReason === "missingDate" ? "날짜 확인 필요" : (candidate.reviewReason === "lowConfidence" ? "신뢰도 확인 필요" : (candidate.reviewReason === "aiResearchRecommended" ? "AI 추천 검토" : "검토 필요"));
     return [
       '<section class="investment-calendar-event watch"' + cardTypeAttrs("calendar-event", "watch") + cardFormatAttrs("summary-list-card", "compact") + '>',
       '<div class="investment-calendar-event-main">',
@@ -8420,7 +8566,7 @@
       '<span>' + escapeHtml(Math.round(Number(candidate.confidence || 0) * 100)) + '%</span>',
       '</div>',
       '<div class="investment-calendar-event-copy">',
-      '<p class="label">' + escapeHtml(investmentCalendarEventTypeLabel(candidate.eventType)) + ' · ' + escapeHtml(reason) + '</p>',
+      '<p class="label">' + escapeHtml((aiRecommended ? "AI 추천 · " : "") + investmentCalendarEventTypeLabel(candidate.eventType) + " · " + reason) + '</p>',
       '<h3>' + escapeHtml(candidate.title || "자동 감지 후보") + '</h3>',
       '<div class="notification-detail-tags">',
       '<span>중요도 ' + escapeHtml(candidate.importance || 0) + '</span>',
@@ -8428,6 +8574,8 @@
       '<span>' + escapeHtml(candidate.source || "research-evidence") + '</span>',
       '</div>',
       candidate.notes ? '<p class="subtle">' + escapeHtml(candidate.notes) + '</p>' : '',
+      renderInvestmentCalendarImpactPreview(candidate),
+      renderInvestmentCalendarWatchList(candidate),
       '</div>',
       '</div>',
       '<div class="investment-calendar-event-actions">',
@@ -8526,11 +8674,24 @@
     if (!event) return null;
     var targets = (event.symbols || []).concat(event.markets || []);
     var tone = investmentCalendarTone(event);
+    var payload = investmentCalendarPayload(event);
     return {
       kicker: "Calendar Event",
       title: event.title || "투자 이벤트",
       meta: [investmentCalendarEventTypeLabel(event.eventType), event.startsAt ? formatClock(event.startsAt) : "", targets.join(" · ")].filter(Boolean).join(" · "),
       body: [
+        '<section class="work-detail-section primary">',
+        '<strong>투자 영향</strong>',
+        '<p>' + escapeHtml(investmentCalendarImpactText(event)) + '</p>',
+        renderInvestmentCalendarWatchList(event),
+        '</section>',
+        payload.positiveScenario || payload.negativeScenario ? [
+          '<section class="work-detail-section">',
+          '<strong>시나리오</strong>',
+          payload.positiveScenario ? '<p><b>긍정</b> ' + escapeHtml(payload.positiveScenario) + '</p>' : '',
+          payload.negativeScenario ? '<p><b>부정</b> ' + escapeHtml(payload.negativeScenario) + '</p>' : '',
+          '</section>'
+        ].join("") : '',
         '<section class="work-detail-section primary">',
         '<strong>이벤트 요약</strong>',
         '<p>' + escapeHtml(event.notes || "등록된 메모가 없습니다. 이벤트 시점과 대상 종목을 확인한 뒤 알림 후보로 이어집니다.") + '</p>',
@@ -19987,6 +20148,12 @@
       });
     });
 
+    Array.prototype.slice.call(app.querySelectorAll('[data-action="research-investment-calendar"]')).forEach(function (button) {
+      button.addEventListener("click", function () {
+        recommendInvestmentCalendarCandidates();
+      });
+    });
+
     Array.prototype.slice.call(app.querySelectorAll("[data-calendar-month-step]")).forEach(function (button) {
       button.addEventListener("click", function () {
         state.investmentCalendarMonthOffset += Number(button.getAttribute("data-calendar-month-step") || 0);
@@ -20083,7 +20250,7 @@
         var page = Number(button.getAttribute("data-calendar-candidate-page"));
         if (!Number.isFinite(page)) return;
         state.investmentCalendarCandidatePage = Math.max(0, page);
-        render();
+        loadInvestmentCalendarCandidates(true);
       });
     });
 

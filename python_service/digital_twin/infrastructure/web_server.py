@@ -68,6 +68,7 @@ from ..infrastructure.ontology_projection import PortfolioOntologyProjectionReco
 from ..infrastructure import operational_store as stores
 from ..infrastructure.service_factory import (
     build_investment_calendar_candidate_service,
+    build_investment_calendar_research_service,
     build_investment_calendar_runner,
     build_investment_calendar_service,
     build_investment_strategy_proposal_service,
@@ -1540,6 +1541,10 @@ def investment_calendar_candidate_service():
     return build_investment_calendar_candidate_service(runtime_settings(), event_publisher=RealtimeEventBridge())
 
 
+def investment_calendar_research_service():
+    return build_investment_calendar_research_service(runtime_settings())
+
+
 def investment_calendar_query_payload(query: Dict[str, List[str]]) -> Dict[str, object]:
     return {
         "from": first_query(query, "from") or first_query(query, "fromAt"),
@@ -1575,11 +1580,18 @@ def investment_calendar_candidates_query_payload(query: Dict[str, List[str]]) ->
     return {
         "status": first_query(query, "status") or "pending",
         "limit": first_query(query, "limit") or "100",
+        "page": first_query(query, "page"),
+        "pageSize": first_query(query, "pageSize") or first_query(query, "page_size"),
+        "offset": first_query(query, "offset"),
     }
 
 
 def investment_calendar_candidates_payload(query: Dict[str, List[str]]) -> Dict[str, object]:
     return investment_calendar_candidate_service().list_candidates(investment_calendar_candidates_query_payload(query))
+
+
+def research_investment_calendar_candidates_payload(payload: Dict[str, object]) -> Dict[str, object]:
+    return investment_calendar_research_service().recommend(payload if isinstance(payload, dict) else {})
 
 
 def approve_investment_calendar_candidate_payload(candidate_id: str, payload: Dict[str, object]) -> Dict[str, object]:
@@ -2971,6 +2983,11 @@ class DigitalTwinHandler(BaseHTTPRequestHandler):
 
         if path == "/api/investment-calendar/candidates" and self.command == "GET":
             return self.send_payload(200, investment_calendar_candidates_payload(query))
+
+        if path == "/api/investment-calendar/candidates/research" and self.command == "POST":
+            if not self.ensure_writable("공유 모드에서는 AI 리서치 캘린더 후보를 생성할 수 없습니다."):
+                return
+            return self.send_payload(200, research_investment_calendar_candidates_payload(self.read_json_body()))
 
         calendar_candidate_match = re.match(r"^/api/investment-calendar/candidates/([^/]+)/(approve|reject)$", path)
         if calendar_candidate_match and self.command == "POST":

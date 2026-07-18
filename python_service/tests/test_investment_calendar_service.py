@@ -8,6 +8,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from digital_twin.application.investment_calendar_extraction_service import InvestmentCalendarExtractionService
 from digital_twin.application.investment_calendar_candidate_service import InvestmentCalendarCandidateService
+from digital_twin.application.investment_calendar_research_service import InvestmentCalendarResearchRecommendationService
 from digital_twin.application.investment_calendar_service import InvestmentCalendarService
 from digital_twin.application.official_calendar_sync_service import OfficialCalendarSyncService
 from digital_twin.domain.accounts import AccountConfig
@@ -20,6 +21,7 @@ from digital_twin.domain.events import (
 from digital_twin.domain.investment_calendar import InvestmentCalendarEvent, event_type_label, utc_iso
 from digital_twin.domain.investment_calendar_candidates import InvestmentCalendarReviewCandidate
 from digital_twin.domain.investment_calendar_extraction import calendar_candidate_from_research_item
+from digital_twin.domain.investment_research import ResearchEvidence
 from digital_twin.infrastructure.bok_calendar_source import BokPolicyDecisionCalendarSource, parse_bok_policy_decision_events
 from digital_twin.domain.message_types import INVESTMENT_CALENDAR_REMINDER
 from digital_twin.domain.notification_ai_gate_validation import build_notification_ai_gate_prompt
@@ -89,11 +91,17 @@ class MemoryCandidateStore:
     def get(self, candidate_id):
         return self.candidates.get(candidate_id)
 
-    def list(self, status="pending", limit=100):
+    def list(self, status="pending", limit=100, offset=0):
         items = list(self.candidates.values())
         if status:
             items = [item for item in items if item.status == status]
-        return items[: int(limit or 100)]
+        return items[int(offset or 0): int(offset or 0) + int(limit or 100)]
+
+    def count(self, status="pending"):
+        items = list(self.candidates.values())
+        if status:
+            items = [item for item in items if item.status == status]
+        return len(items)
 
     def mark_status(self, candidate_id, status, review_note=""):
         candidate = self.candidates.get(candidate_id)
@@ -119,6 +127,37 @@ class MemoryCandidateStore:
             elif candidate.status == "rejected":
                 bucket["rejected"] += 1
         return result
+
+
+class MemoryResearchEvidenceStore:
+    def __init__(self, items=None):
+        self.items = list(items or [])
+
+    def latest(self, symbol="", kind="", limit=50):
+        rows = list(self.items)
+        if symbol:
+            rows = [item for item in rows if str(item.symbol or "").upper() == str(symbol or "").upper()]
+        if kind:
+            rows = [item for item in rows if item.kind == kind]
+        return rows[: int(limit or 50)]
+
+
+class MemoryNewsCollectionRunner:
+    def __init__(self):
+        self.calls = 0
+
+    def run_once(self, force=False):
+        self.calls += 1
+        return {
+            "status": "ok",
+            "targetCount": 1,
+            "fetchedCount": 1,
+            "savedCount": 0,
+            "changedCount": 0,
+            "materialChangedCount": 0,
+            "symbols": ["AAPL"],
+            "providers": ["memory"],
+        }
 
 
 class InvestmentCalendarServiceTests(unittest.TestCase):
@@ -351,6 +390,81 @@ class InvestmentCalendarServiceTests(unittest.TestCase):
         self.assertEqual("adrListing", saved.event_type)
         self.assertEqual("2026-08-20T00:00:00Z", saved.starts_at)
         self.assertEqual({"adrListing": {"accepted": 1, "rejected": 0}}, candidate_store.feedback_summary())
+
+    def test_candidate_list_uses_server_pagination_metadata(self):
+        calendar_store = MemoryCalendarStore()
+        candidate_store = MemoryCandidateStore()
+        for index in range(7):
+            candidate_store.upsert({
+                "candidateId": "candidate-" + str(index),
+                "proposedEventId": "event-" + str(index),
+                "title": "AI 추천 후보 " + str(index),
+                "eventType": "indexInclusion",
+                "startsAt": "2026-08-" + str(10 + index).zfill(2),
+                "importance": 80,
+                "confidence": 0.55,
+            })
+        service = InvestmentCalendarCandidateService(
+            candidate_repository=candidate_store,
+            calendar_service=self.service(store=calendar_store),
+        )
+
+        result = service.list_candidates({"status": "pending", "page": "1", "pageSize": "3"})
+
+        self.assertEqual(3, len(result["candidates"]))
+        self.assertEqual(7, result["total"])
+        self.assertEqual(1, result["pageInfo"]["page"])
+        self.assertEqual(3, result["pageInfo"]["pageSize"])
+        self.assertEqual(3, result["pageInfo"]["offset"])
+        self.assertTrue(result["pageInfo"]["hasPrev"])
+        self.assertTrue(result["pageInfo"]["hasNext"])
+
+    def test_ai_research_recommendation_saves_pending_review_candidate_without_registering_event(self):
+        calendar_store = MemoryCalendarStore()
+        candidate_store = MemoryCandidateStore()
+        runner = MemoryNewsCollectionRunner()
+        evidence_store = MemoryResearchEvidenceStore([
+            ResearchEvidence(
+                evidence_id="research:AAPL:sec:f6-ai",
+                symbol="AAPL",
+                kind="filing",
+                source="SEC EDGAR",
+                title="Apple files F-6 for ADR listing on NYSE on 2026-08-20",
+                summary="American depositary receipt listing schedule confirmed.",
+                url="https://www.sec.gov/example/f6-ai",
+                published_at="2026-07-15T00:00:00Z",
+                observed_at="2026-07-15T00:10:00Z",
+                impact_score=91,
+                confidence=0.91,
+                raw_payload={"form": "F-6", "eventDate": "2026-08-20", "materialityScore": 91},
+            )
+        ])
+        service = InvestmentCalendarResearchRecommendationService(
+            candidate_repository=candidate_store,
+            evidence_repository=evidence_store,
+            account_repository=SimpleNamespace(load_all=lambda: [self.account()]),
+            news_collection_runner_factory=lambda: runner,
+            settings={"investmentCalendarAiResearchReviewMinConfidence": "0.2"},
+        )
+
+        result = service.recommend({"symbol": "AAPL", "runCollection": True})
+
+        self.assertEqual("ok", result["status"])
+        self.assertEqual(1, runner.calls)
+        self.assertEqual(1, result["candidateCount"])
+        self.assertEqual(1, result["storedCandidateCount"])
+        self.assertEqual({}, calendar_store.events)
+        candidate = next(iter(candidate_store.candidates.values()))
+        self.assertEqual("pending", candidate.status)
+        self.assertEqual("aiResearchRecommended", candidate.review_reason)
+        self.assertEqual("adrListing", candidate.event_type)
+        self.assertEqual("2026-08-20T00:00:00Z", candidate.starts_at)
+        self.assertTrue(candidate.payload["aiResearchRecommended"])
+        self.assertEqual("ai-research-calendar-recommender-v1", candidate.payload["detector"])
+        self.assertIn("investmentImpact", candidate.payload)
+        self.assertIn("watchItems", candidate.payload)
+        self.assertIn("positiveScenario", candidate.payload)
+        self.assertEqual(["main"], candidate.account_ids)
 
     def test_structured_sec_f6_payload_uses_official_parser_and_date_field(self):
         store = MemoryCalendarStore()

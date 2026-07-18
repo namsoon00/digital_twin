@@ -115,20 +115,35 @@ class MySQLInvestmentCalendarCandidateStore(MySQLOperationalConnection):
             ).fetchone()
         return candidate_from_row(row) if row else None
 
-    def list(self, status: str = "pending", limit: int = 100) -> List[InvestmentCalendarReviewCandidate]:
+    def list(self, status: str = "pending", limit: int = 100, offset: int = 0) -> List[InvestmentCalendarReviewCandidate]:
         clauses = []
         params = []
         if status:
             clauses.append("status = %s")
             params.append(str(status))
         params.append(max(1, min(500, int(limit or 100))))
+        params.append(max(0, int(offset or 0)))
         where = " WHERE " + " AND ".join(clauses) if clauses else ""
         with self.connect() as connection:
             rows = connection.execute(
-                "SELECT * FROM investment_calendar_candidates" + where + " ORDER BY created_at DESC, candidate_id LIMIT %s",
+                "SELECT * FROM investment_calendar_candidates" + where + " ORDER BY created_at DESC, candidate_id LIMIT %s OFFSET %s",
                 params,
             ).fetchall()
         return [candidate_from_row(row) for row in rows]
+
+    def count(self, status: str = "pending") -> int:
+        clauses = []
+        params = []
+        if status:
+            clauses.append("status = %s")
+            params.append(str(status))
+        where = " WHERE " + " AND ".join(clauses) if clauses else ""
+        with self.connect() as connection:
+            row = connection.execute(
+                "SELECT COUNT(*) AS count FROM investment_calendar_candidates" + where,
+                params,
+            ).fetchone()
+        return int((row or {}).get("count") or 0)
 
     def mark_status(self, candidate_id: str, status: str, review_note: str = ""):
         stamp = utc_now()

@@ -238,7 +238,7 @@ function checkFrontendAdminRender() {
       /\.console-shell \.app-nav-command \.page-command-metrics\s*\{[\s\S]*display: none;/.test(styles) &&
       /\.console-shell \.app-nav-routine > span:not\(\.app-nav-routine-action-cell\)\s*\{[\s\S]*display: none;/.test(styles) &&
       /@media \(min-width: 861px\) and \(max-width: 1180px\)[\s\S]*\.console-shell \.app-nav-flow,[\s\S]*\.console-shell \.app-nav-command \.page-command-metrics,[\s\S]*\.console-shell \.app-nav-current em,[\s\S]*\.console-shell :is\([\s\S]*\.feed-section-tabs span[\s\S]*\)\s*\{[\s\S]*display: none;/.test(styles) &&
-      indexHtml.indexOf("styles.css?v=20260718-strategy-data-card-guard-v1") >= 0,
+      indexHtml.indexOf("styles.css?v=20260719-calendar-ai-research-v1") >= 0,
     "PC 상단 영역이 탭별로 여러 줄/넘침으로 깨지지 않도록 하는 안정화 레이어가 없습니다."
   );
   assertOk(
@@ -252,7 +252,7 @@ function checkFrontendAdminRender() {
       /\.loading-progress span\s*\{[\s\S]*animation: loadingProgress/.test(styles) &&
       /\.loading-skeleton-grid\s*\{[\s\S]*grid-template-columns: repeat\(4, minmax\(0, 1fr\)\);/.test(styles) &&
       /@keyframes loadingProgress/.test(styles) &&
-      indexHtml.indexOf("app.js?v=20260718-strategy-data-card-guard-v1") >= 0,
+      indexHtml.indexOf("app.js?v=20260719-calendar-ai-research-v1") >= 0,
     "초기 로딩 화면이 운영 정보 카드 대신 progress/skeleton 화면으로 고정되지 않았습니다."
   );
   assertOk(
@@ -350,8 +350,13 @@ function checkFrontendAdminRender() {
       code.indexOf("investment-calendar-month-count") >= 0 &&
       code.indexOf("investmentCalendarCandidatePageInfo") >= 0 &&
       code.indexOf("data-calendar-candidate-page") >= 0 &&
+      code.indexOf("recommendInvestmentCalendarCandidates") >= 0 &&
+      code.indexOf("/api/investment-calendar/candidates/research") >= 0 &&
+      code.indexOf("investmentCalendarCandidateQueryString") >= 0 &&
       styles.indexOf("Calendar month board: date-first investment event view.") >= 0 &&
       styles.indexOf("Calendar review queue and primary layout") >= 0 &&
+      styles.indexOf("investment-calendar-research-strip") >= 0 &&
+      styles.indexOf("investment-calendar-impact-preview") >= 0 &&
       /\.investment-calendar-month-grid\s*\{[\s\S]*grid-template-columns: repeat\(7, minmax\(0, 1fr\)\);/.test(styles) &&
       /\.investment-calendar-primary-grid\s*\{[\s\S]*display: grid;[\s\S]*gap: var\(--ds-page-gap\);/.test(styles) &&
       /\.investment-calendar-candidate-panel \.investment-calendar-list\s*\{[\s\S]*grid-template-columns: repeat\(auto-fit, minmax\(320px, 1fr\)\);/.test(styles) &&

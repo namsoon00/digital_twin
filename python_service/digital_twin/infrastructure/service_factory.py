@@ -7,6 +7,7 @@ from ..application.investment_analysis_service import InvestmentAnalysisService
 from ..application.investment_strategy_proposal_service import InvestmentStrategyProposalService
 from ..application.investment_calendar_candidate_service import InvestmentCalendarCandidateService
 from ..application.investment_calendar_extraction_service import InvestmentCalendarExtractionService
+from ..application.investment_calendar_research_service import InvestmentCalendarResearchRecommendationService
 from ..application.investment_calendar_service import InvestmentCalendarRunner, InvestmentCalendarService
 from ..application.kis_realtime_service import KISRealtimeWebSocketRunner
 from ..application.market_data_collection_service import MarketDataCollectionRunner
@@ -258,6 +259,20 @@ def build_investment_calendar_candidate_service(settings=None, event_publisher=N
     return InvestmentCalendarCandidateService(
         candidate_repository=stores.investment_calendar_candidate_store(configured_settings),
         calendar_service=build_investment_calendar_service(configured_settings, event_publisher),
+    )
+
+
+def build_investment_calendar_research_service(settings=None) -> InvestmentCalendarResearchRecommendationService:
+    configured_settings = settings or runtime_settings()
+    return InvestmentCalendarResearchRecommendationService(
+        candidate_repository=stores.investment_calendar_candidate_store(configured_settings),
+        evidence_repository=stores.research_evidence_store(configured_settings),
+        account_repository=stores.account_registry(configured_settings),
+        news_collection_runner_factory=lambda: build_news_collection_runner(
+            configured_settings,
+            event_publisher=default_event_bus(),
+        ),
+        settings=configured_settings,
     )
 
 

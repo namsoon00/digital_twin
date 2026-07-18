@@ -2,6 +2,7 @@ from typing import Dict
 
 from ..domain.investment_calendar import clean_text
 from ..domain.investment_calendar_candidates import (
+    bounded_int,
     CANDIDATE_STATUS_REGISTERED,
     CANDIDATE_STATUS_REJECTED,
     InvestmentCalendarReviewCandidate,
@@ -16,18 +17,49 @@ class InvestmentCalendarCandidateService:
     def list_candidates(self, query: Dict[str, object] = None) -> Dict[str, object]:
         query = query if isinstance(query, dict) else {}
         status = clean_text(query.get("status") or "pending", 32)
-        try:
-            limit = int(float(str(query.get("limit") or 100)))
-        except (TypeError, ValueError):
-            limit = 100
-        limit = max(1, min(500, limit))
-        candidates = self.candidate_repository.list(status=status, limit=limit)
+        page_size = bounded_int(query.get("pageSize") or query.get("page_size") or query.get("limit"), 20, lower=1, upper=100)
+        page = bounded_int(query.get("page"), 0, lower=0, upper=100000)
+        if query.get("offset") not in (None, ""):
+            offset = bounded_int(query.get("offset"), 0, lower=0, upper=1000000)
+            page = offset // page_size
+        else:
+            offset = page * page_size
+        if hasattr(self.candidate_repository, "list"):
+            try:
+                candidates = self.candidate_repository.list(status=status, limit=page_size, offset=offset)
+            except TypeError:
+                candidates = self.candidate_repository.list(status=status, limit=offset + page_size)[offset:offset + page_size]
+        else:
+            candidates = []
+        total = None
+        if hasattr(self.candidate_repository, "count"):
+            try:
+                total = int(self.candidate_repository.count(status=status) or 0)
+            except Exception:  # noqa: BLE001 - count is a read-model convenience.
+                total = None
+        if total is None:
+            summary = self.candidate_repository.summary()
+            total = int((summary or {}).get(status) or len(candidates))
+        page_count = max(1, (total + page_size - 1) // page_size)
         return {
             "candidates": [candidate.to_dict() for candidate in candidates],
             "summary": self.candidate_repository.summary(),
             "feedback": self.candidate_repository.feedback_summary(),
             "status": status,
-            "limit": limit,
+            "limit": page_size,
+            "page": page,
+            "pageSize": page_size,
+            "offset": offset,
+            "total": total,
+            "pageInfo": {
+                "page": page,
+                "pageSize": page_size,
+                "offset": offset,
+                "total": total,
+                "pageCount": page_count,
+                "hasPrev": page > 0,
+                "hasNext": page + 1 < page_count,
+            },
         }
 
     def approve_candidate(self, candidate_id: str, payload: Dict[str, object] = None) -> Dict[str, object]:

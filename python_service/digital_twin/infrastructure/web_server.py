@@ -1930,6 +1930,14 @@ def symbol_universe_payload(query: Dict[str, List[str]]) -> Dict[str, object]:
     )
 
 
+def symbol_universe_suggest_payload(query: Dict[str, List[str]]) -> Dict[str, object]:
+    return symbol_universe_service().suggest(
+        query=first_query(query, "query") or first_query(query, "q"),
+        market=first_query(query, "market"),
+        limit=int(first_query(query, "limit") or 8),
+    )
+
+
 def refresh_symbol_universe_payload(payload: Dict[str, object]) -> Dict[str, object]:
     raw_markets = payload.get("markets") if isinstance(payload, dict) else None
     if isinstance(raw_markets, str):
@@ -2760,6 +2768,10 @@ class DigitalTwinHandler(BaseHTTPRequestHandler):
         if path == "/api/symbol-universe":
             if self.command == "GET":
                 return self.send_payload(200, symbol_universe_payload(query))
+
+        if path == "/api/symbol-universe/suggest":
+            if self.command == "GET":
+                return self.send_payload(200, symbol_universe_suggest_payload(query))
 
         if path == "/api/symbol-universe/refresh" and self.command == "POST":
             if not self.ensure_writable("공유 모드에서는 종목 유니버스를 갱신할 수 없습니다."):

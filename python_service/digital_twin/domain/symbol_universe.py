@@ -5,6 +5,25 @@ from typing import Dict
 
 SUPPORTED_MARKETS = ("KOSPI", "KOSDAQ", "NASDAQ")
 
+SYMBOL_SEARCH_ALIASES = {
+    "팔란티어": ("PLTR", "Palantir", "Palantir Technologies"),
+    "palantir": ("PLTR", "Palantir", "Palantir Technologies"),
+    "pltr": ("PLTR", "Palantir", "Palantir Technologies"),
+    "애플": ("AAPL", "Apple"),
+    "apple": ("AAPL", "Apple"),
+    "테슬라": ("TSLA", "Tesla"),
+    "tesla": ("TSLA", "Tesla"),
+    "엔비디아": ("NVDA", "NVIDIA"),
+    "nvidia": ("NVDA", "NVIDIA"),
+    "마이크로소프트": ("MSFT", "Microsoft"),
+    "microsoft": ("MSFT", "Microsoft"),
+    "하이닉스": ("000660", "SK하이닉스"),
+    "sk하이닉스": ("000660", "SK하이닉스"),
+    "삼성전자": ("005930", "삼성전자"),
+    "네이버": ("035420", "NAVER"),
+    "naver": ("035420", "NAVER"),
+}
+
 
 def utc_now_iso() -> str:
     return datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
@@ -26,6 +45,53 @@ def normalize_market(value: str) -> str:
 
 def normalize_symbol(value: str) -> str:
     return str(value or "").strip().upper()
+
+
+def compact_search_text(value: str) -> str:
+    return "".join(
+        char
+        for char in str(value or "").strip().lower()
+        if char.isalnum()
+    )
+
+
+def symbol_search_terms(query: str) -> list:
+    raw = str(query or "").strip()
+    compact = compact_search_text(raw)
+    alias_ready = len(compact) >= 2 or any("\uac00" <= char <= "\ud7a3" for char in compact)
+    terms = []
+
+    def add(value: str) -> None:
+        text = str(value or "").strip()
+        if text and text not in terms:
+            terms.append(text)
+
+    if compact and alias_ready:
+        for alias, values in SYMBOL_SEARCH_ALIASES.items():
+            alias_compact = compact_search_text(alias)
+            matched = alias_compact.startswith(compact)
+            if not matched and len(compact) >= 2:
+                matched = compact in alias_compact
+            if not matched:
+                for value in values:
+                    value_compact = compact_search_text(value)
+                    if value_compact.startswith(compact) or (len(compact) >= 2 and compact in value_compact):
+                        matched = True
+                        break
+            if matched:
+                for value in values:
+                    add(value)
+    add(raw)
+    return terms
+
+
+def symbol_search_symbol_candidates(query: str) -> list:
+    candidates = []
+    for term in symbol_search_terms(query):
+        symbol = normalize_symbol(term)
+        if symbol and symbol.replace(".", "").replace("-", "").isalnum() and symbol not in candidates:
+            candidates.append(symbol)
+    return candidates
 
 
 def market_currency(market: str) -> str:

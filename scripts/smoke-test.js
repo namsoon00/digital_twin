@@ -1502,6 +1502,7 @@ function checkFrontendAdminRender() {
     assertOk(watchlistHtml.indexOf("data-watch-account-id=\"main\"") >= 0, "관심종목 추가 폼이 선택 계정에 연결되지 않았습니다.");
     assertOk(watchlistHtml.indexOf("data-watch-symbol-input") >= 0, "관심종목 검색 입력창이 렌더링되지 않았습니다.");
     assertOk(watchlistHtml.indexOf("data-watch-suggest-list") >= 0, "관심종목 서제스트 영역이 렌더링되지 않았습니다.");
+    assertOk(code.indexOf("/api/symbol-universe/suggest?") >= 0 && code.indexOf("팔란티어") >= 0 && code.indexOf("PLTR") >= 0, "관심종목 자동완성이 경량 API와 팔란티어 별칭을 사용하지 않습니다.");
     assertOk(watchlistHtml.indexOf("watch-row-meta") >= 0, "관심종목 알림/시세 상태가 렌더링되지 않았습니다.");
     assertOk(watchlistHtml.indexOf("시세 알림") >= 0, "관심종목 시세 알림 상태가 표시되지 않았습니다.");
     assertOk(watchlistHtml.indexOf("symbol-result-list") < 0, "관심종목 탭에 전체 종목 결과 리스트가 남아 있습니다.");
@@ -1992,6 +1993,12 @@ async function checkNormalMode(port, context) {
   assertOk(Array.isArray(universePayload.items), "종목 유니버스 items가 배열이 아닙니다.");
   assertOk(universePayload.items.some(function (item) { return item.symbol === "AAPL"; }), "종목 유니버스에 AAPL seed가 없습니다.");
   assertOk(universePayload.summary && Array.isArray(universePayload.summary.markets), "종목 유니버스 시장별 신선도 요약이 없습니다.");
+  const universeSuggest = await request(port, "/api/symbol-universe/suggest?query=" + encodeURIComponent("팔란티어"));
+  assertOk(universeSuggest.statusCode === 200, "종목 자동완성 API 응답 코드가 200이 아닙니다: " + universeSuggest.statusCode);
+  const universeSuggestPayload = JSON.parse(universeSuggest.body);
+  assertOk(Array.isArray(universeSuggestPayload.items), "종목 자동완성 API items가 배열이 아닙니다.");
+  assertOk(universeSuggestPayload.items[0] && universeSuggestPayload.items[0].symbol === "PLTR", "팔란티어 자동완성이 PLTR을 첫 후보로 반환하지 않습니다.");
+  assertOk(!Object.prototype.hasOwnProperty.call(universeSuggestPayload, "summary"), "종목 자동완성 API가 무거운 summary payload를 포함합니다.");
 
   const savedSettings = await request(port, "/api/settings", {
     method: "PUT",

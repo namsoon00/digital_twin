@@ -349,7 +349,8 @@ MYSQL_SCHEMA = [
         updated_at VARCHAR(40) NOT NULL,
         PRIMARY KEY (market, symbol),
         KEY idx_symbol_universe_symbol (symbol),
-        KEY idx_symbol_universe_active_market_symbol (active, market, symbol)
+        KEY idx_symbol_universe_active_market_symbol (active, market, symbol),
+        KEY idx_symbol_universe_active_name_market (active, name, market)
     ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
     """,
     """

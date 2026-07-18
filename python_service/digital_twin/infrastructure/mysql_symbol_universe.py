@@ -29,7 +29,14 @@ from ..domain.notifications import NotificationJob, notification_debug_number
 from ..domain.ontology_quality import OntologyQualitySample, build_ontology_quality_sample
 from ..domain.portfolio import AccountSnapshot, AlertEvent
 from ..domain.repositories import MonitoringCycleRecordResult
-from ..domain.symbol_universe import ListedSymbol, normalize_market, normalize_symbol, utc_now_iso as symbol_utc_now_iso
+from ..domain.symbol_universe import (
+    ListedSymbol,
+    normalize_market,
+    normalize_symbol,
+    symbol_search_symbol_candidates,
+    symbol_search_terms,
+    utc_now_iso as symbol_utc_now_iso,
+)
 from .model_review_queue import model_review_payloads_from_event
 from .mysql_monitoring import MySQLDependencyError, MySQLMonitorAccountJobStore, ensure_mysql_database_exists, mysql_settings
 from .operational_common import (
@@ -145,21 +152,36 @@ class MySQLSymbolUniverseStore(MySQLOperationalConnection):
             clauses.append("market = %s")
             params.append(market_value)
         if query_value:
-            clauses.append("(symbol LIKE %s OR name LIKE %s)")
-            like = "%" + query_value.upper() + "%"
-            params.extend([like, "%" + query_value + "%"])
+            search_parts = []
+            for term in symbol_search_terms(query_value):
+                symbol_term = normalize_symbol(term)
+                if symbol_term and symbol_term.replace(".", "").replace("-", "").isalnum():
+                    search_parts.append("symbol LIKE %s")
+                    params.append(symbol_term + "%")
+                search_parts.append("name LIKE %s")
+                params.append(str(term).strip() + "%")
+                search_parts.append("name LIKE %s")
+                params.append("%" + str(term).strip() + "%")
+            clauses.append("(" + " OR ".join(search_parts) + ")")
         return query_value, clauses, params
 
     def search(self, query: str = "", market: str = "", limit: int = DEFAULT_SYMBOL_UNIVERSE_LIMIT, offset: int = 0) -> List[ListedSymbol]:
         query_value, clauses, params = self.symbol_search_clauses(query, market)
         limit_value = max(1, min(500, int(limit or DEFAULT_SYMBOL_UNIVERSE_LIMIT)))
         offset_value = max(0, int(offset or 0))
-        exact_symbol = normalize_symbol(query_value)
+        symbol_candidates = symbol_search_symbol_candidates(query_value)
+        exact_symbol = symbol_candidates[0] if symbol_candidates else normalize_symbol(query_value)
+        first_term = symbol_search_terms(query_value)[0] if query_value and symbol_search_terms(query_value) else query_value
         sql = """
             SELECT * FROM symbol_universe
             WHERE """ + " AND ".join(clauses) + """
             ORDER BY
-                CASE WHEN %s != '' AND symbol = %s THEN 0 WHEN %s != '' AND symbol LIKE %s THEN 1 ELSE 2 END,
+                CASE
+                    WHEN %s != '' AND symbol = %s THEN 0
+                    WHEN %s != '' AND symbol LIKE %s THEN 1
+                    WHEN %s != '' AND name LIKE %s THEN 2
+                    ELSE 3
+                END,
                 CASE market WHEN 'KOSPI' THEN 1 WHEN 'KOSDAQ' THEN 2 WHEN 'NASDAQ' THEN 3 ELSE 9 END,
                 symbol
             LIMIT %s OFFSET %s
@@ -167,7 +189,16 @@ class MySQLSymbolUniverseStore(MySQLOperationalConnection):
         with self.connect() as connection:
             rows = connection.execute(
                 sql,
-                params + [exact_symbol, exact_symbol, exact_symbol, exact_symbol + "%", limit_value, offset_value],
+                params + [
+                    exact_symbol,
+                    exact_symbol,
+                    exact_symbol,
+                    exact_symbol + "%",
+                    first_term,
+                    str(first_term).strip() + "%",
+                    limit_value,
+                    offset_value,
+                ],
             ).fetchall()
         return [self.row_to_symbol(row) for row in rows]
 

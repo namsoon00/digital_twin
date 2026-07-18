@@ -207,7 +207,7 @@ def sector_from_symbol(value: str) -> str:
         return "한국시장"
     if any(token in normalized for token in ["005930", "000660", "NVDA", "AMD", "TSM", "CHIP", "SEMICONDUCTOR"]):
         return "반도체"
-    if any(token in normalized for token in ["AAPL", "MSFT", "GOOGL", "META", "AMZN", "AI", "SOFTWARE"]):
+    if any(token in normalized for token in ["AAPL", "MSFT", "GOOGL", "META", "AMZN", "PLTR", "AI", "SOFTWARE"]):
         return "AI/플랫폼"
     if normalized in {"TSLA", "RIVN", "GM", "F"} or any(token in normalized for token in ["EV", "BATTERY", "AUTO"]):
         return "모빌리티"
@@ -234,6 +234,7 @@ def known_stock(symbol: str) -> Dict[str, str]:
         "NVDA": {"name": "NVIDIA", "market": "US", "currency": "USD", "sector": "반도체"},
         "AMD": {"name": "AMD", "market": "US", "currency": "USD", "sector": "반도체"},
         "TSLA": {"name": "Tesla", "market": "US", "currency": "USD", "sector": "모빌리티"},
+        "PLTR": {"name": "Palantir Technologies", "market": "US", "currency": "USD", "sector": "AI/플랫폼"},
         "MSTR": {"name": "Strategy", "market": "US", "currency": "USD", "sector": "디지털자산"},
         "STRC": {"name": "Strategy Preferred", "market": "US", "currency": "USD", "sector": "디지털자산"},
         "COIN": {"name": "Coinbase", "market": "US", "currency": "USD", "sector": "디지털자산"},

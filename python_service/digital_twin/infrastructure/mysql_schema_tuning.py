@@ -113,6 +113,7 @@ MYSQL_OPERATIONAL_INDEXES: Dict[str, Sequence[MySQLIndexDefinition]] = {
     "symbol_universe": (
         MySQLIndexDefinition("symbol_universe", "idx_symbol_universe_active_market_seen", "`active`, `market`, `last_seen_at`"),
         MySQLIndexDefinition("symbol_universe", "idx_symbol_universe_active_symbol_market", "`active`, `symbol`, `market`"),
+        MySQLIndexDefinition("symbol_universe", "idx_symbol_universe_active_name_market", "`active`, `name`, `market`"),
     ),
     "research_evidence": (
         MySQLIndexDefinition(

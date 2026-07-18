@@ -6484,10 +6484,12 @@ class PythonServiceTests(unittest.TestCase):
         )
 
         payload = service.search(query="TSLA")
+        palantir_payload = service.search(query="팔란티어")
         proxy_payload = service.search(query="SPY")
         proxy = next(item for item in proxy_payload["items"] if item["symbol"] == "SPY")
 
         self.assertTrue(any(item["symbol"] == "TSLA" for item in payload["items"]))
+        self.assertTrue(any(item["symbol"] == "PLTR" for item in palantir_payload["items"]))
         self.assertEqual("SPDR S&P 500 ETF Trust", proxy["name"])
         self.assertEqual("ETF", proxy["assetType"])
         self.assertEqual("시장프록시", proxy["sector"])
@@ -6495,6 +6497,21 @@ class PythonServiceTests(unittest.TestCase):
         self.assertTrue(any(item["market"] == "NASDAQ" for item in payload["summary"]["markets"]))
         self.assertEqual(0, payload["offset"])
         self.assertIn("hasMore", payload)
+
+    def test_symbol_universe_suggest_is_lightweight_and_resolves_korean_alias(self):
+        service = SymbolUniverseService(
+            TestSymbolUniverseStore(test_store_seed(self.temp.name)),
+            RemoteSymbolSourceGateway(),
+            runtime_settings(),
+        )
+
+        payload = service.suggest(query="팔란티어")
+
+        self.assertEqual("symbol-universe-suggest", payload["source"])
+        self.assertEqual("PLTR", payload["items"][0]["symbol"])
+        self.assertEqual("Palantir Technologies", payload["items"][0]["name"])
+        self.assertNotIn("summary", payload)
+        self.assertNotIn("resultTotal", payload)
 
     def test_symbol_universe_search_includes_collected_market_data(self):
         db_path = test_store_seed(self.temp.name)
@@ -13964,6 +13981,7 @@ class PythonServiceTests(unittest.TestCase):
         self.assertTrue({
             "idx_symbol_universe_active_market_seen",
             "idx_symbol_universe_active_symbol_market",
+            "idx_symbol_universe_active_name_market",
         }.issubset(index_names("symbol_universe")))
         self.assertTrue({
             "idx_monitor_account_jobs_status_priority_due",

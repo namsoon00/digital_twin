@@ -3,7 +3,14 @@ from typing import Dict, Iterable, List
 from ..domain.data_freshness import age_minutes, int_setting
 from ..domain.market_data import known_stock
 from ..domain.repositories import MarketQuoteRepository, SymbolSourceGateway, SymbolUniverseRepository
-from ..domain.symbol_universe import ListedSymbol, SUPPORTED_MARKETS, is_stale, stale_after_hours
+from ..domain.symbol_universe import (
+    ListedSymbol,
+    SUPPORTED_MARKETS,
+    is_stale,
+    stale_after_hours,
+    symbol_search_symbol_candidates,
+    symbol_search_terms,
+)
 
 
 DEFAULT_SYMBOL_SEEDS = [
@@ -19,6 +26,7 @@ DEFAULT_SYMBOL_SEEDS = [
     "NVDA",
     "MSFT",
     "AMD",
+    "PLTR",
     "MSTR",
     "COIN",
     "SPY",
@@ -172,6 +180,41 @@ class SymbolUniverseService:
             "limit": limit_value,
             "offset": offset_value,
             "hasMore": offset_value + len(items) < result_total,
+        }
+
+    def suggest(self, query: str = "", market: str = "", limit: int = 8) -> Dict[str, object]:
+        self.ensure_seed()
+        max_age = self.max_age_hours()
+        limit_value = max(1, min(20, int(limit or 8)))
+        selected_market = str(market or "").strip()
+        seen = set()
+        items: List[ListedSymbol] = []
+
+        def add(item: ListedSymbol) -> None:
+            key = item.key() if item else ""
+            if not key or key in seen or len(items) >= limit_value:
+                return
+            seen.add(key)
+            items.append(item)
+
+        for symbol in symbol_search_symbol_candidates(query):
+            found = self.store.get(symbol, selected_market) if selected_market else self.store.get(symbol)
+            if found:
+                add(found)
+
+        for term in symbol_search_terms(query):
+            if len(items) >= limit_value:
+                break
+            for item in self.store.search(query=term, market=selected_market, limit=limit_value * 2, offset=0):
+                add(item)
+                if len(items) >= limit_value:
+                    break
+
+        return {
+            "items": [item.to_dict(max_age) for item in items],
+            "query": str(query or "").strip(),
+            "limit": limit_value,
+            "source": "symbol-universe-suggest",
         }
 
     def refresh(self, markets: Iterable[str] = None) -> Dict[str, object]:

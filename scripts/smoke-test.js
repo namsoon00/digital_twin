@@ -382,7 +382,9 @@ function checkFrontendAdminRender() {
   assertOk(designSystemDoc.indexOf("Card type taxonomy") >= 0 && designSystemDoc.indexOf("health-card") >= 0 && designSystemDoc.indexOf("action-queue-card") >= 0, "디자인 시스템 문서에 카드 타입 분류 계약이 없습니다.");
   assertOk(code.indexOf("cardFormatAttrs") >= 0 && code.indexOf('data-card-format="') >= 0, "데이터 형식별 카드 포맷을 렌더링하는 공통 계약이 없습니다.");
   assertOk(styles.indexOf("Financial data card format system") >= 0 && styles.indexOf('[data-card-format="decision-ticket"]') >= 0 && styles.indexOf('[data-card-format="document-card"]') >= 0 && styles.indexOf('[data-card-format="market-ledger-row"]') >= 0, "금융 데이터 포맷별 카드 표면 레이어가 없습니다.");
-  assertOk(designSystemDoc.indexOf("Card format taxonomy") >= 0 && designSystemDoc.indexOf("decision-ticket") >= 0 && designSystemDoc.indexOf("pagination-strip") >= 0, "디자인 시스템 문서에 카드 포맷 분류 계약이 없습니다.");
+  assertOk(styles.indexOf("Summary-first list UX pass") >= 0 && styles.indexOf('[data-card-format="summary-list-card"]') >= 0 && styles.indexOf(".investment-evidence-columns") >= 0 && styles.indexOf(".model-preview-row[data-card-format=\"summary-list-card\"]") >= 0, "긴 카드 정보를 리스트 요약/상세 진입으로 분리하는 summary-first 카드 계약이 없습니다.");
+  assertOk(code.indexOf("investmentReasoningCardWorkDetailPayload") >= 0 && code.indexOf("ontologyExperimentWorkDetailPayload") >= 0 && code.indexOf('renderWorkDetailButton("investment-reasoning-card"') >= 0 && code.indexOf('renderWorkDetailButton("ontology-experiment"') >= 0, "요약 리스트 카드의 상세 레이어 payload 연결이 없습니다.");
+  assertOk(designSystemDoc.indexOf("Card format taxonomy") >= 0 && designSystemDoc.indexOf("summary-list-card") >= 0 && designSystemDoc.indexOf("pagination-strip") >= 0, "디자인 시스템 문서에 카드 포맷 분류 계약이 없습니다.");
   ["process-card", "source-card", "diagnostic-card", "signal-card", "relationship-card", "reference-card", "calendar-event"].forEach((cardType) => {
     assertOk(code.indexOf(cardType) >= 0 && styles.indexOf('[data-card-type="' + cardType + '"]') >= 0 && designSystemDoc.indexOf(cardType) >= 0, "확장 카드 타입 계약이 누락되었습니다: " + cardType);
   });

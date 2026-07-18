@@ -388,7 +388,6 @@
     investmentCalendarFocusedDayKey: "",
     investmentCalendarDraft: defaultInvestmentCalendarDraft(),
     calendarEntryModalOpen: false,
-    expandedCalendarEventKey: "",
     activeTab: initialTab(),
     previousTab: "",
     tabBarScrollLeft: 0,
@@ -7506,6 +7505,9 @@
     if (type === "feed-sources") return feedSourcesWorkDetailPayload();
     if (type === "feed-quality") return feedQualityWorkDetailPayload();
     if (type === "investment-action") return investmentActionWorkDetailPayload(key);
+    if (type === "investment-calendar-event") return investmentCalendarEventWorkDetailPayload(key);
+    if (type === "investment-reasoning-card") return investmentReasoningCardWorkDetailPayload(key);
+    if (type === "ontology-experiment") return ontologyExperimentWorkDetailPayload(key);
     if (type === "feed-settings-editor") return feedSettingsWorkDetailPayload(key);
     if (type === "strategy-rulebox-editor") return strategyRuleboxWorkDetailPayload();
     if (type === "strategy-prompt-editor") return strategyPromptWorkDetailPayload();
@@ -8226,7 +8228,7 @@
     var targets = (event.symbols || []).concat(event.markets || []);
     var dayKey = investmentCalendarDayKey(event.startsAt);
     return [
-      '<button class="investment-calendar-day-event ' + escapeHtml(tone) + '" type="button" data-calendar-event-toggle="' + escapeHtml(key) + '" data-calendar-event-day="' + escapeHtml(dayKey) + '">',
+      '<button class="investment-calendar-day-event ' + escapeHtml(tone) + '" type="button" data-calendar-event-detail="' + escapeHtml(key) + '" data-calendar-event-day="' + escapeHtml(dayKey) + '">',
       '<span>' + escapeHtml(investmentCalendarEventTimeLabel(event)) + '</span>',
       '<strong>' + escapeHtml(event.title || "이벤트") + '</strong>',
       '<em>' + escapeHtml(targets.slice(0, 2).join(" · ") || investmentCalendarEventTypeLabel(event.eventType)) + '</em>',
@@ -8253,9 +8255,8 @@
     var tone = investmentCalendarTone(event);
     var targets = (event.symbols || []).concat(event.markets || []);
     var key = event.eventId || event.id || event.title || "";
-    var expanded = state.expandedCalendarEventKey === String(key || "");
     return [
-      '<section class="investment-calendar-event ' + escapeHtml(tone) + '"' + cardTypeAttrs("calendar-event", tone) + '>',
+      '<section class="investment-calendar-event ' + escapeHtml(tone) + '"' + cardTypeAttrs("calendar-event", tone) + cardFormatAttrs("summary-list-card", "compact") + '>',
       '<div class="investment-calendar-event-main">',
       '<div class="investment-calendar-event-date">',
       '<strong>' + escapeHtml(formatClock(event.startsAt)) + '</strong>',
@@ -8273,10 +8274,9 @@
       '</div>',
       '</div>',
       '<div class="investment-calendar-event-actions">',
-      '<button class="mini-button" type="button" data-calendar-event-toggle="' + escapeHtml(key) + '">' + escapeHtml(expanded ? "접기" : "상세") + '</button>',
+      renderWorkDetailButton("investment-calendar-event", key, "상세", "mini-button"),
       '<button class="mini-button danger" type="button" data-calendar-delete="' + escapeHtml(event.eventId || "") + '"' + (state.investmentCalendarDeleting === event.eventId ? ' disabled' : '') + '>' + (state.investmentCalendarDeleting === event.eventId ? "삭제 중" : "삭제") + '</button>',
       '</div>',
-      expanded ? renderCalendarEventInlineDetail(event) : '',
       '</section>'
     ].join("");
   }
@@ -8358,7 +8358,7 @@
     var busy = state.investmentCalendarCandidateReviewing === id;
     var reason = candidate.reviewReason === "missingDate" ? "날짜 확인 필요" : (candidate.reviewReason === "lowConfidence" ? "신뢰도 확인 필요" : "검토 필요");
     return [
-      '<section class="investment-calendar-event watch"' + cardTypeAttrs("calendar-event", "watch") + '>',
+      '<section class="investment-calendar-event watch"' + cardTypeAttrs("calendar-event", "watch") + cardFormatAttrs("summary-list-card", "compact") + '>',
       '<div class="investment-calendar-event-main">',
       '<div class="investment-calendar-event-date">',
       '<strong>' + escapeHtml(candidate.startsAt ? formatClock(candidate.startsAt) : "날짜 필요") + '</strong>',
@@ -8397,28 +8397,6 @@
       '<button class="icon-button danger" type="button" data-calendar-entry-close aria-label="등록 닫기">&times;</button>',
       '</header>',
       renderInvestmentCalendarFormPanel({ compact: true }),
-      '</section>',
-      '</div>'
-    ].join("");
-  }
-
-  function renderCalendarEventInlineDetail(event) {
-    var targets = (event.symbols || []).concat(event.markets || []);
-    var tone = investmentCalendarTone(event);
-    return [
-      '<div class="investment-calendar-event-detail">',
-      '<section class="notification-detail-metrics">',
-      renderNotificationDetailMetric("중요도", event.importance || 0, tone),
-      renderNotificationDetailMetric("시간대", event.timezone || "UTC", "muted"),
-      renderNotificationDetailMetric("알림", (event.reminderOffsetsMinutes || []).join(", ") || "없음", "muted"),
-      '</section>',
-      '<section class="notification-detail-section primary">',
-      '<strong>이벤트 요약</strong>',
-      '<p>' + escapeHtml(event.notes || "등록된 메모가 없습니다. 이벤트 시점과 대상 종목을 확인한 뒤 알림 후보로 이어집니다.") + '</p>',
-      '</section>',
-      '<section class="notification-detail-section">',
-      '<strong>대상</strong>',
-      '<p>' + escapeHtml(targets.join(" · ") || "전체 포트폴리오") + '</p>',
       '</section>',
       '</div>'
     ].join("");
@@ -9725,6 +9703,44 @@
     ].join("");
   }
 
+  function ontologyExperimentByKey(key) {
+    var target = String(key || "");
+    return ontologyExperimentItems().filter(function (experiment) {
+      return String(experiment.id || experiment.experimentId || "") === target;
+    })[0] || null;
+  }
+
+  function ontologyExperimentWorkDetailPayload(key) {
+    var experiment = ontologyExperimentByKey(key);
+    if (!experiment) return null;
+    var latest = ontologyExperimentLatestRun(experiment);
+    var candidateRules = Array.isArray(experiment.candidateRules) ? experiment.candidateRules : [];
+    var symbols = Array.isArray(experiment.symbols) ? experiment.symbols : [];
+    var recommendations = ontologyExperimentRecommendations(latest);
+    var status = String(experiment.status || "draft");
+    var applyStatus = String(latest.applyStatus || ((latest.appliedOntologyChanges || {}).status) || "");
+    return {
+      kicker: "Ontology Experiment",
+      title: experiment.title || "Ontology experiment",
+      meta: [ontologyExperimentStatusLabel(status), experiment.id || experiment.experimentId || "", latest.completedAt ? "최근 " + formatClock(latest.completedAt) : ""].filter(Boolean).join(" · "),
+      body: [
+        '<section class="work-detail-section primary">',
+        '<strong>실험 가설</strong>',
+        '<p>' + escapeHtml(experiment.hypothesis || "등록된 가설 설명이 없습니다.") + '</p>',
+        '</section>',
+        '<div class="work-detail-metric-row">',
+        renderNotificationDetailMetric("후보 규칙", candidateRules.length, "watch"),
+        renderNotificationDetailMetric("그래프", latest.graphRunCount || 0, "hold"),
+        renderNotificationDetailMetric("파생 변화", latest.derivedRelationDelta || 0, "hold"),
+        renderNotificationDetailMetric("판정", ontologyReadinessLabel(latest.promotionStatus), ontologyExperimentStatusTone(status)),
+        '</div>',
+        symbols.length ? '<section class="work-detail-section"><strong>대상 심볼</strong><p>' + escapeHtml(symbols.join(" · ")) + '</p></section>' : '',
+        recommendations.length ? '<section class="work-detail-section"><strong>보완 제안</strong>' + renderOntologyExperimentRecommendationList(recommendations, recommendations.length) + '</section>' : '',
+        applyStatus ? '<section class="work-detail-section"><strong>운영 반영</strong><p>' + escapeHtml(ontologyApplyStatusLabel(applyStatus)) + (latest.appliedAt ? ' · ' + escapeHtml(formatClock(latest.appliedAt)) : '') + '</p></section>' : ''
+      ].join("")
+    };
+  }
+
   function renderOntologyExperimentCard(experiment) {
     experiment = experiment || {};
     var id = String(experiment.id || experiment.experimentId || "");
@@ -9739,7 +9755,7 @@
     var appliedAt = latest.appliedAt || ((latest.appliedOntologyChanges || {}).appliedAt) || "";
     var applied = applyStatus === "applied" || applyStatus === "already-applied";
     return [
-      '<section class="ontology-experiment-card"' + cardTypeAttrs("relationship-card", active ? "watch" : "hold") + '>',
+      '<section class="ontology-experiment-card"' + cardTypeAttrs("relationship-card", active ? "watch" : "hold") + cardFormatAttrs("summary-list-card", "compact") + '>',
       '<div class="ontology-experiment-card-head">',
       '<div>',
       '<strong>' + escapeHtml(experiment.title || "Ontology experiment") + '</strong>',
@@ -9759,6 +9775,7 @@
       applyStatus ? '<p class="subtle">운영 반영 ' + escapeHtml(ontologyApplyStatusLabel(applyStatus)) + (appliedAt ? ' · ' + escapeHtml(formatClock(appliedAt)) : '') + '</p>' : '',
       latest.completedAt ? '<p class="subtle">최근 실행 ' + escapeHtml(formatClock(latest.completedAt)) + '</p>' : '',
       '<div class="ontology-experiment-card-actions">',
+      renderWorkDetailButton("ontology-experiment", id, "상세", "text-button compact"),
       recommendations.length && latest.completedAt ? '<button class="text-button primary" type="button" data-lab-apply="' + escapeHtml(id) + '"' + (actionBusy || !id || applied ? ' disabled' : '') + '>' + escapeHtml(ontologyExperimentBusy("apply", id) ? "반영 중" : (applied ? "반영됨" : "제안 적용")) + '</button>' : '',
       '<button class="text-button" type="button" data-lab-run="' + escapeHtml(id) + '"' + (actionBusy || !id ? ' disabled' : '') + '>' + escapeHtml(ontologyExperimentBusy("run", id) ? "실행 중" : "실행") + '</button>',
       active ? '<button class="text-button" type="button" data-lab-pause="' + escapeHtml(id) + '"' + (actionBusy || !id ? ' disabled' : '') + '>일시정지</button>' : '<button class="text-button primary" type="button" data-lab-activate="' + escapeHtml(id) + '"' + (actionBusy || !id ? ' disabled' : '') + '>활성화</button>',
@@ -11080,7 +11097,29 @@
     ].join("");
   }
 
-  function renderInvestmentReasoningCard(card) {
+  function investmentReasoningCardKey(card, index) {
+    card = card || {};
+    return String(card.id || card.reasoningCardId || card.cardId || [
+      "reasoning",
+      card.symbol || "",
+      card.portfolioRelation || "",
+      card.status || "",
+      index == null ? "" : index
+    ].filter(Boolean).join(":"));
+  }
+
+  function investmentReasoningCardByKey(key) {
+    var target = String(key || "");
+    var cards = investmentReasoningCards(state.snapshot || {});
+    for (var i = 0; i < cards.length; i += 1) {
+      if (investmentReasoningCardKey(cards[i], i) === target) return cards[i];
+    }
+    return null;
+  }
+
+  function investmentReasoningCardWorkDetailPayload(key) {
+    var card = investmentReasoningCardByKey(key);
+    if (!card) return null;
     var finalOpinion = card.finalOpinion || {};
     var relationRows = Array.isArray(card.relationEvidence) ? card.relationEvidence : [];
     var influenceRows = Array.isArray(card.relationInfluences) ? card.relationInfluences : [];
@@ -11090,8 +11129,53 @@
     var displayName = card.companyName || card.displayName || stockDisplayName(card.symbol);
     var tone = finalOpinion.tone || (gaps.length ? "hold" : "watch");
     var thesis = textWithKnownDisplaySymbols(beginnerFriendlyText(finalOpinion.thesis || finalOpinion.action || ""), card.symbol, { symbol: card.symbol, name: displayName });
+    return {
+      kicker: "Reasoning Card",
+      title: displayName + " 투자 근거",
+      meta: [card.portfolioRelation || "", sourceLabel(card.source || ""), card.status || ""].filter(Boolean).join(" · "),
+      body: [
+        '<section class="work-detail-section primary">',
+        '<strong>판단 요약</strong>',
+        '<p>' + escapeHtml(thesis || "판단 문장이 아직 없습니다.") + '</p>',
+        gaps.length ? '<p>데이터 공백: ' + escapeHtml(gaps.join(", ")) + '</p>' : '',
+        '</section>',
+        '<div class="work-detail-metric-row">',
+        renderNotificationDetailMetric("관계 신호", Math.round(Number(finalOpinion.ontologyPressure || finalOpinion.ontology_pressure || 0)), tone),
+        renderNotificationDetailMetric("확신", finalOpinion.conviction || 0, tone),
+        renderNotificationDetailMetric("전략 근거", evidenceRows.length, "hold"),
+        renderNotificationDetailMetric("관계 근거", relationRows.length, "hold"),
+        renderNotificationDetailMetric("관계 영향", influenceRows.length, "hold"),
+        renderNotificationDetailMetric("실행 계획", planRows.length, "hold"),
+        '</div>',
+        '<section class="work-detail-section"><strong>전략 근거</strong>' + renderReasoningCardList("전략 근거", evidenceRows.map(function (item) { return item.summary || item.kind || item.id; })) + '</section>',
+        '<section class="work-detail-section"><strong>의견 영향</strong>' + renderReasoningCardList("의견 영향", influenceRows.map(function (item) {
+          var risk = Number(item.riskImpact || 0);
+          var support = Number(item.supportImpact || 0);
+          var impact = risk ? ("리스크 +" + Math.round(risk)) : support ? ("지지 +" + Math.round(support)) : "";
+          return [item.label || item.type, item.scope, impact].filter(Boolean).join(" · ");
+        })) + '</section>',
+        '<section class="work-detail-section"><strong>관계 근거</strong>' + renderReasoningCardList("관계 근거", relationRows.map(function (item) {
+          return [item.type, item.sourceLabel, item.targetLabel].filter(Boolean).join(" · ");
+        })) + '</section>',
+        planRows.length ? '<section class="work-detail-section"><strong>실행 계획</strong>' + planRows.map(renderReasoningExecutionPlan).join("") + '</section>' : '',
+        '<section class="work-detail-section"><strong>그래프 참조</strong>' + renderReasoningGraphRefs(card) + '</section>'
+      ].join("")
+    };
+  }
+
+  function renderInvestmentReasoningCard(card, index) {
+    var finalOpinion = card.finalOpinion || {};
+    var relationRows = Array.isArray(card.relationEvidence) ? card.relationEvidence : [];
+    var influenceRows = Array.isArray(card.relationInfluences) ? card.relationInfluences : [];
+    var evidenceRows = Array.isArray(card.strategyEvidence) ? card.strategyEvidence : [];
+    var planRows = Array.isArray(card.executionPlans) ? card.executionPlans : [];
+    var gaps = Array.isArray(card.dataGaps) ? card.dataGaps : [];
+    var displayName = card.companyName || card.displayName || stockDisplayName(card.symbol);
+    var tone = finalOpinion.tone || (gaps.length ? "hold" : "watch");
+    var thesis = textWithKnownDisplaySymbols(beginnerFriendlyText(finalOpinion.thesis || finalOpinion.action || ""), card.symbol, { symbol: card.symbol, name: displayName });
+    var key = investmentReasoningCardKey(card, index);
     return [
-      '<div class="investment-evidence-card"' + cardTypeAttrs("evidence-card", tone || "hold") + '>',
+      '<div class="investment-evidence-card"' + cardTypeAttrs("evidence-card", tone || "hold") + cardFormatAttrs("summary-list-card", "compact") + '>',
       '<div class="investment-evidence-head">',
       '<div>',
       '<strong>' + escapeHtml(displayName) + '</strong>',
@@ -11125,6 +11209,9 @@
       '</div>',
       renderReasoningExecutionPlan(planRows[0]),
       renderReasoningGraphRefs(card),
+      '<div class="summary-first-actions">',
+      renderWorkDetailButton("investment-reasoning-card", key, "상세", "mini-button"),
+      '</div>',
       '</div>'
     ].join("");
   }
@@ -12130,7 +12217,7 @@
     var enabled = account.enabled !== false;
     var provider = String(account.provider || "toss").toUpperCase();
     return [
-      '<div class="account-card"' + cardTypeAttrs("ledger-row", enabled ? "watch" : "hold") + '>',
+      '<div class="account-card"' + cardTypeAttrs("ledger-row", enabled ? "watch" : "hold") + cardFormatAttrs("summary-list-card", "compact") + '>',
       '<div class="account-card-head">',
       '<span class="account-provider-badge">' + escapeHtml(provider.slice(0, 4)) + '</span>',
       '<div>',
@@ -12871,7 +12958,7 @@
   function renderServiceAccountRow(account) {
     var watchlist = watchSymbolListText(accountWatchlistSymbols(account));
     return [
-      '<div class="service-account-row"' + cardTypeAttrs("ledger-row", account.enabled === false ? "hold" : "watch") + '>',
+      '<div class="service-account-row"' + cardTypeAttrs("ledger-row", account.enabled === false ? "hold" : "watch") + cardFormatAttrs("summary-list-card", "compact") + '>',
       '<div class="service-account-main">',
       '<div class="service-account-title">',
       '<strong>' + escapeHtml(account.label || account.id || "-") + '</strong>',
@@ -14240,7 +14327,7 @@
   function renderStrategyDataRow(item) {
     var symbols = compactSymbolList(item.symbols || []);
     return [
-      '<div class="strategy-data-row"' + cardTypeAttrs("diagnostic-card", item.tone || "hold") + '>',
+      '<div class="strategy-data-row"' + cardTypeAttrs("diagnostic-card", item.tone || "hold") + cardFormatAttrs("summary-list-card", "compact") + '>',
       '<div class="strategy-data-main">',
       '<strong>' + escapeHtml(item.label) + '</strong>',
       '<span>' + escapeHtml(item.description) + '</span>',
@@ -15608,7 +15695,7 @@
     var model = item.model || customModelScores(item);
     var displayName = stockDisplayName(item.symbol, item);
     return [
-      '<div class="signal-row model-preview-row"' + cardTypeAttrs("signal-card", model.tone || "hold") + '>',
+      '<div class="signal-row model-preview-row"' + cardTypeAttrs("signal-card", model.tone || "hold") + cardFormatAttrs("summary-list-card", "compact") + '>',
       '<div class="signal-main">',
       '<div class="flow-title">',
       '<div>',
@@ -15773,7 +15860,7 @@
       alert.threshold ? "기준 " + alert.threshold : ""
     ].filter(Boolean);
     return [
-      '<div class="alert-row ' + escapeHtml(alert.severity || "info") + '"' + cardTypeAttrs("signal-card", alert.severity || "info") + ' role="button" tabindex="0" data-monitor-alert-detail="' + escapeHtml(index) + '" aria-label="' + escapeHtml((title || "알림") + " 상세 보기") + '">',
+      '<div class="alert-row ' + escapeHtml(alert.severity || "info") + '"' + cardTypeAttrs("signal-card", alert.severity || "info") + cardFormatAttrs("summary-list-card", "compact") + ' role="button" tabindex="0" data-monitor-alert-detail="' + escapeHtml(index) + '" aria-label="' + escapeHtml((title || "알림") + " 상세 보기") + '">',
       '<span class="alert-severity ' + escapeHtml(alert.severity || "info") + '">' + escapeHtml(alertSeverityLabel(alert.severity)) + '</span>',
       '<div class="alert-main">',
       '<div class="flow-title">',
@@ -16151,7 +16238,7 @@
       : "수급 입력 필요";
     var displayName = stockDisplayName(symbol, item);
     return [
-      '<div class="monitoring-instrument-row"' + cardTypeAttrs("signal-card", signal && signal.tone ? signal.tone : "hold") + ' role="button" tabindex="0" data-monitor-instrument-detail="' + escapeHtml(symbol) + '" aria-label="' + escapeHtml(displayName + " 상세 보기") + '">',
+      '<div class="monitoring-instrument-row"' + cardTypeAttrs("signal-card", signal && signal.tone ? signal.tone : "hold") + cardFormatAttrs("summary-list-card", "compact") + ' role="button" tabindex="0" data-monitor-instrument-detail="' + escapeHtml(symbol) + '" aria-label="' + escapeHtml(displayName + " 상세 보기") + '">',
       '<div class="monitoring-instrument-main">',
       '<div class="monitoring-instrument-title">',
       '<strong>' + escapeHtml(displayName) + '</strong>',
@@ -17458,7 +17545,7 @@
 
   function renderFeedQualitySignal(item) {
     return [
-      '<div class="feed-quality-card"' + cardTypeAttrs("diagnostic-card", item.tone || "hold") + '>',
+      '<div class="feed-quality-card"' + cardTypeAttrs("diagnostic-card", item.tone || "hold") + cardFormatAttrs("summary-list-card", "compact") + '>',
       '<span class="tone-chip ' + escapeHtml(item.tone || "hold") + '">' + escapeHtml(item.value || "-") + '</span>',
       '<strong>' + escapeHtml(item.label || "-") + '</strong>',
       '<p>' + escapeHtml(item.description || "") + '</p>',
@@ -18339,7 +18426,7 @@
 
   function renderSettingsDiagnosticMini(label, value, tone, detail) {
     return [
-      '<section class="work-detail-card ' + escapeHtml(tone || "hold") + '">',
+      '<section class="work-detail-card ' + escapeHtml(tone || "hold") + '"' + cardFormatAttrs("summary-list-card", "compact") + '>',
       '<span class="tone-chip ' + escapeHtml(tone || "hold") + '">' + escapeHtml(value || "-") + '</span>',
       '<strong>' + escapeHtml(label || "-") + '</strong>',
       '<p>' + escapeHtml(detail || "") + '</p>',
@@ -18626,7 +18713,7 @@
       '<div class="settings-diagnostic-grid">',
       diagnostics.map(function (item) {
         return [
-          '<section class="settings-diagnostic-card ' + escapeHtml(item.tone || "hold") + '"' + cardTypeAttrs("diagnostic-card", item.tone || "hold") + '>',
+          '<section class="settings-diagnostic-card ' + escapeHtml(item.tone || "hold") + '"' + cardTypeAttrs("diagnostic-card", item.tone || "hold") + cardFormatAttrs("summary-list-card", "compact") + '>',
           '<span class="tone-chip ' + escapeHtml(item.tone || "hold") + '">' + escapeHtml(item.value) + '</span>',
           '<strong>' + escapeHtml(item.label) + '</strong>',
           '<p>' + escapeHtml(item.detail) + '</p>',
@@ -18955,13 +19042,12 @@
       field.addEventListener("change", updateCalendarFilter);
     });
 
-    Array.prototype.slice.call(app.querySelectorAll("[data-calendar-event-toggle]")).forEach(function (button) {
+    Array.prototype.slice.call(app.querySelectorAll("[data-calendar-event-detail]")).forEach(function (button) {
       button.addEventListener("click", function () {
-        var key = button.getAttribute("data-calendar-event-toggle") || "";
+        var key = button.getAttribute("data-calendar-event-detail") || "";
         var dayKey = button.getAttribute("data-calendar-event-day") || "";
         if (dayKey) state.investmentCalendarFocusedDayKey = dayKey;
-        state.expandedCalendarEventKey = state.expandedCalendarEventKey === key ? "" : key;
-        render();
+        openWorkDetailLayer("investment-calendar-event", key);
       });
     });
 

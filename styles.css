@@ -22837,3 +22837,95 @@ html[data-theme="dark"] .ontology-graph-expanded-toolbar .icon-button.danger {
   -webkit-box-orient: vertical;
   -webkit-line-clamp: 2;
 }
+
+/* Calendar review queue and primary layout: calendar first, review queue second. */
+.investment-calendar-primary-grid,
+.investment-calendar-candidate-panel {
+  grid-column: 1 / -1;
+  min-width: 0;
+}
+
+.investment-calendar-primary-grid {
+  display: grid;
+  gap: var(--ds-page-gap);
+  align-items: start;
+}
+
+.investment-calendar-primary-grid > .investment-calendar-month-panel,
+.investment-calendar-primary-grid > .investment-calendar-rail {
+  grid-column: auto;
+  min-width: 0;
+}
+
+.investment-calendar-primary-grid > .investment-calendar-rail {
+  grid-template-columns: minmax(0, 1fr);
+}
+
+.investment-calendar-candidate-toolbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--ds-section-gap);
+  min-width: 0;
+  padding: 0 var(--ds-panel-pad-x) var(--ds-space-4);
+}
+
+.investment-calendar-candidate-toolbar span {
+  min-width: 0;
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 900;
+  line-height: 1.35;
+  overflow-wrap: anywhere;
+}
+
+.investment-calendar-candidate-pager {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: 8px;
+  min-width: 0;
+}
+
+.investment-calendar-candidate-panel .investment-calendar-list {
+  grid-template-columns: repeat(auto-fit, minmax(320px, 1fr));
+  gap: var(--ds-card-comfort-gap);
+  padding: 0 var(--ds-panel-pad-x) var(--ds-panel-pad-y);
+  border-top: 0;
+  background: transparent;
+}
+
+@media (min-width: 1181px) {
+  .investment-calendar-primary-grid {
+    grid-template-columns: minmax(0, 1fr) minmax(340px, 0.34fr);
+  }
+
+  .console-shell .investment-calendar-primary-grid > .investment-calendar-month-panel,
+  .console-shell .investment-calendar-primary-grid > .investment-calendar-rail,
+  .console-shell .investment-calendar-candidate-panel {
+    grid-column: auto;
+  }
+
+  .console-shell .investment-calendar-primary-grid > .investment-calendar-rail {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .console-shell .investment-calendar-candidate-panel {
+    grid-column: 1 / -1;
+  }
+}
+
+@media (max-width: 860px) {
+  .investment-calendar-candidate-toolbar {
+    display: grid;
+  }
+
+  .investment-calendar-candidate-pager {
+    justify-content: flex-start;
+  }
+
+  .investment-calendar-candidate-panel .investment-calendar-list {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}

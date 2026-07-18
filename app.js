@@ -338,6 +338,7 @@
   var symbolUniverseMemoryStore = "";
   var DEFAULT_RESEARCH_EVIDENCE_LIMIT = "8";
   var DEFAULT_SYMBOL_UNIVERSE_LIMIT = 8;
+  var INVESTMENT_CALENDAR_CANDIDATE_PAGE_SIZE = 5;
   var staticBuildConfigPromise = null;
   var watchSuggestTimer = null;
   var watchSuggestRequestId = 0;
@@ -381,6 +382,7 @@
     investmentCalendarCandidates: null,
     investmentCalendarCandidatesLoading: false,
     investmentCalendarCandidateReviewing: "",
+    investmentCalendarCandidatePage: 0,
     investmentCalendarFilters: { symbol: "", eventType: "", limit: "80" },
     investmentCalendarMonthOffset: 0,
     investmentCalendarFocusedDayKey: "",
@@ -7923,8 +7925,10 @@
     return renderManagedPage("calendar", snapshot, [
       '<section class="admin-grid investment-calendar-view">',
       renderInvestmentCalendarSummaryPanel(),
+      '<div class="investment-calendar-primary-grid">',
       renderInvestmentCalendarMonthPanel(),
       renderInvestmentCalendarRailPanel(),
+      '</div>',
       renderInvestmentCalendarCandidatePanel(),
       '</section>'
     ].join(""));
@@ -8274,16 +8278,38 @@
     return Array.isArray(payload.candidates) ? payload.candidates : [];
   }
 
+  function investmentCalendarCandidatePageInfo(candidates) {
+    var total = (candidates || []).length;
+    var pageSize = INVESTMENT_CALENDAR_CANDIDATE_PAGE_SIZE;
+    var pageCount = Math.max(1, Math.ceil(total / pageSize));
+    var page = Number(state.investmentCalendarCandidatePage || 0);
+    if (!Number.isFinite(page)) page = 0;
+    page = Math.min(Math.max(0, page), pageCount - 1);
+    var start = page * pageSize;
+    var end = Math.min(start + pageSize, total);
+    return {
+      total: total,
+      page: page,
+      pageSize: pageSize,
+      pageCount: pageCount,
+      start: start,
+      end: end,
+      visible: (candidates || []).slice(start, end)
+    };
+  }
+
   function renderInvestmentCalendarCandidatePanel() {
     var payload = currentInvestmentCalendarCandidates();
     var candidates = investmentCalendarCandidates();
+    var pageInfo = investmentCalendarCandidatePageInfo(candidates);
     var pending = Number((payload.summary || {}).pending || candidates.length || 0);
     return [
-      '<article class="panel investment-calendar-list-panel"' + cardTypeAttrs("process-card", candidates.length ? "watch" : "hold") + '>',
+      '<article class="panel investment-calendar-list-panel investment-calendar-candidate-panel"' + cardTypeAttrs("process-card", candidates.length ? "watch" : "hold") + '>',
       '<div class="panel-head">',
       '<div><p class="label">AUTO REVIEW</p><h2>자동 감지 후보</h2><span>날짜가 없거나 신뢰도가 낮은 특수 이벤트를 승인 전 단계로 보관합니다.</span></div>',
       '<span class="metric">' + escapeHtml(pending) + '</span>',
       '</div>',
+      candidates.length ? renderInvestmentCalendarCandidatePager(pageInfo) : '',
       '<div class="investment-calendar-list">',
       state.investmentCalendarCandidatesLoading ? renderEmptyState({
         tone: "watch",
@@ -8297,9 +8323,24 @@
         title: "검토할 자동 후보가 없습니다",
         description: "뉴스 수집 중 날짜가 불명확하거나 신뢰도가 낮은 이벤트가 발견되면 여기에 쌓입니다.",
         meta: ["ADR/GDR", "지수 편입", "상장", "증자"]
-      }) : candidates.slice(0, 5).map(renderInvestmentCalendarCandidate).join("")),
+      }) : pageInfo.visible.map(renderInvestmentCalendarCandidate).join("")),
       '</div>',
       '</article>'
+    ].join("");
+  }
+
+  function renderInvestmentCalendarCandidatePager(pageInfo) {
+    var from = pageInfo.total ? pageInfo.start + 1 : 0;
+    var canPrev = pageInfo.page > 0;
+    var canNext = pageInfo.page < pageInfo.pageCount - 1;
+    return [
+      '<div class="investment-calendar-candidate-toolbar">',
+      '<span>후보 ' + escapeHtml(from) + '-' + escapeHtml(pageInfo.end) + ' / ' + escapeHtml(pageInfo.total) + ' · ' + escapeHtml(pageInfo.page + 1) + '/' + escapeHtml(pageInfo.pageCount) + '페이지</span>',
+      '<div class="investment-calendar-candidate-pager">',
+      '<button class="mini-button" type="button" data-calendar-candidate-page="' + escapeHtml(pageInfo.page - 1) + '"' + (canPrev ? '' : ' disabled') + '>이전</button>',
+      '<button class="mini-button" type="button" data-calendar-candidate-page="' + escapeHtml(pageInfo.page + 1) + '"' + (canNext ? '' : ' disabled') + '>다음</button>',
+      '</div>',
+      '</div>'
     ].join("");
   }
 
@@ -18797,6 +18838,15 @@
         var dayKey = button.getAttribute("data-calendar-event-day") || "";
         if (dayKey) state.investmentCalendarFocusedDayKey = dayKey;
         state.expandedCalendarEventKey = state.expandedCalendarEventKey === key ? "" : key;
+        render();
+      });
+    });
+
+    Array.prototype.slice.call(app.querySelectorAll("[data-calendar-candidate-page]")).forEach(function (button) {
+      button.addEventListener("click", function () {
+        var page = Number(button.getAttribute("data-calendar-candidate-page"));
+        if (!Number.isFinite(page)) return;
+        state.investmentCalendarCandidatePage = Math.max(0, page);
         render();
       });
     });

@@ -22416,3 +22416,115 @@ html[data-theme="dark"] .ontology-graph-expanded-toolbar .icon-button.danger {
     justify-items: start;
   }
 }
+
+/* Calendar layout hardening: keep long event text and rail metrics from colliding. */
+.investment-calendar-event {
+  align-items: start;
+}
+
+.investment-calendar-event-copy,
+.investment-calendar-event-copy h3,
+.investment-calendar-event-copy .subtle,
+.investment-calendar-event-copy .notification-detail-tags,
+.investment-calendar-event-copy .notification-detail-tags span {
+  min-width: 0;
+}
+
+.investment-calendar-event-copy h3 {
+  font-size: 16px;
+  line-height: 1.32;
+  word-break: keep-all;
+  overflow-wrap: anywhere;
+}
+
+.investment-calendar-event-copy .notification-detail-tags {
+  grid-template-columns: repeat(auto-fit, minmax(116px, 1fr));
+  gap: 8px;
+  margin-top: 10px;
+}
+
+.investment-calendar-event-copy .notification-detail-tags span {
+  min-height: 36px;
+  padding: 8px 10px;
+  font-size: 12px;
+  line-height: 1.35;
+}
+
+.investment-calendar-event-actions {
+  gap: 8px;
+  align-self: start;
+}
+
+.investment-calendar-type-strip {
+  grid-template-columns: repeat(auto-fit, minmax(118px, 1fr));
+}
+
+.investment-calendar-type-strip span {
+  min-height: 64px;
+  align-content: start;
+  gap: 6px;
+  padding: 12px;
+}
+
+.investment-calendar-type-strip strong {
+  font-size: 15px;
+  line-height: 1.22;
+  word-break: keep-all;
+  overflow-wrap: anywhere;
+}
+
+.investment-calendar-type-strip em {
+  font-size: 12px;
+  line-height: 1.25;
+}
+
+@media (min-width: 1181px) {
+  .investment-calendar-event,
+  .console-shell .investment-calendar-event {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .investment-calendar-event-main,
+  .console-shell .investment-calendar-event-main {
+    grid-template-columns: minmax(104px, 0.28fr) minmax(0, 1fr);
+    align-items: start;
+  }
+
+  .investment-calendar-event-actions,
+  .console-shell .investment-calendar-event-actions {
+    grid-column: 1 / -1;
+    justify-content: flex-end;
+    width: 100%;
+  }
+
+  .investment-calendar-type-strip,
+  .console-shell .investment-calendar-type-strip {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .console-shell .investment-calendar-type-strip [data-card-type="metric-cell"] {
+    min-width: 0;
+    min-height: 64px;
+    padding: 12px;
+  }
+
+  .console-shell .investment-calendar-type-strip [data-card-type="metric-cell"] strong {
+    font-size: 15px;
+    line-height: 1.22;
+  }
+
+  .console-shell .investment-calendar-type-strip [data-card-type="metric-cell"] em {
+    font-size: 12px;
+    line-height: 1.25;
+  }
+}
+
+@media (max-width: 640px) {
+  .investment-calendar-event-copy .notification-detail-tags {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .investment-calendar-event-actions {
+    justify-content: flex-start;
+  }
+}

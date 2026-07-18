@@ -151,6 +151,11 @@
       "newsAiAnalysisEnabled": "1",
       "newsAiAnalysisUseCodex": "0",
       "newsAiAnalysisTimeoutSeconds": "15",
+      "investmentCalendarAiResearchEnabled": "1",
+      "investmentCalendarAiResearchRunCollection": "1",
+      "investmentCalendarAiResearchEvidenceLimit": "120",
+      "investmentCalendarAiResearchCandidateLimit": "50",
+      "investmentCalendarAiResearchReviewMinConfidence": "0.25",
       "investmentCalendarOfficialMacroSyncEnabled": "1",
       "investmentCalendarOfficialMacroSyncIntervalHours": "12",
       "investmentCalendarOfficialMacroSyncRateLimitSeconds": "600",
@@ -1095,6 +1100,38 @@
           "type": "number",
           "default": "90",
           "unit": "seconds"
+        },
+        {
+          "key": "investmentCalendarAiResearchEnabled",
+          "label": "AI 캘린더 후보 추천",
+          "type": "toggle",
+          "default": "1"
+        },
+        {
+          "key": "investmentCalendarAiResearchRunCollection",
+          "label": "추천 전 뉴스 수집 실행",
+          "type": "toggle",
+          "default": "1"
+        },
+        {
+          "key": "investmentCalendarAiResearchEvidenceLimit",
+          "label": "추천 근거 스캔 수",
+          "type": "number",
+          "default": "120",
+          "unit": "items"
+        },
+        {
+          "key": "investmentCalendarAiResearchCandidateLimit",
+          "label": "추천 후보 저장 한도",
+          "type": "number",
+          "default": "50",
+          "unit": "items"
+        },
+        {
+          "key": "investmentCalendarAiResearchReviewMinConfidence",
+          "label": "추천 후보 최소 신뢰도",
+          "type": "number",
+          "default": "0.25"
         },
         {
           "key": "investmentCalendarOfficialMacroSyncEnabled",

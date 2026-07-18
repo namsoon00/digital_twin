@@ -6841,6 +6841,169 @@ h3 {
   min-height: 560px;
 }
 
+.ontology-decision-chain-graph {
+  border-left: 3px solid color-mix(in srgb, var(--blue) 54%, var(--line));
+}
+
+.ontology-decision-chain-cytoscape {
+  height: min(58vh, 520px);
+  min-height: 430px;
+}
+
+.ontology-chain-selector {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+  gap: 8px;
+  min-width: 0;
+}
+
+.ontology-chain-selector button {
+  display: grid;
+  gap: 4px;
+  min-width: 0;
+  min-height: 62px;
+  padding: 10px 12px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--input);
+  color: var(--ink);
+  text-align: left;
+  cursor: pointer;
+}
+
+.ontology-chain-selector button.active {
+  border-color: color-mix(in srgb, var(--blue) 62%, var(--line));
+  background: color-mix(in srgb, var(--blue-soft) 26%, var(--panel));
+  box-shadow: inset 3px 0 0 var(--blue);
+}
+
+.ontology-chain-selector strong,
+.ontology-chain-selector span {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.ontology-chain-selector strong {
+  font-size: 13px;
+  font-weight: 920;
+}
+
+.ontology-chain-selector span {
+  color: var(--muted);
+  font-size: 11px;
+  font-weight: 820;
+}
+
+.ontology-chain-detail {
+  display: grid;
+  gap: 10px;
+  min-width: 0;
+  padding: 12px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: color-mix(in srgb, var(--panel) 82%, var(--input) 18%);
+}
+
+.ontology-chain-detail-head {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  align-items: start;
+  min-width: 0;
+  padding-bottom: 10px;
+  border-bottom: 1px solid var(--line);
+}
+
+.ontology-chain-detail-head > div {
+  display: grid;
+  gap: 4px;
+  min-width: 0;
+}
+
+.ontology-chain-detail-head strong,
+.ontology-chain-detail-head span {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.ontology-chain-detail-head strong {
+  color: var(--ink);
+  font-size: 15px;
+  font-weight: 940;
+}
+
+.ontology-chain-detail-head span {
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 820;
+  line-height: 1.4;
+}
+
+.ontology-chain-stage-list {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(190px, 1fr));
+  gap: 8px;
+  min-width: 0;
+}
+
+.ontology-chain-stage {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  gap: 10px;
+  align-items: start;
+  min-width: 0;
+  padding: 11px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--input);
+}
+
+.ontology-chain-stage b {
+  display: grid;
+  place-items: center;
+  width: 30px;
+  height: 30px;
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--blue) 10%, var(--panel));
+  color: var(--blue);
+  font-size: 11px;
+  font-weight: 950;
+}
+
+.ontology-chain-stage div {
+  display: grid;
+  gap: 4px;
+  min-width: 0;
+}
+
+.ontology-chain-stage strong,
+.ontology-chain-stage span,
+.ontology-chain-stage em {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.ontology-chain-stage strong {
+  color: var(--ink);
+  font-size: 12px;
+  font-weight: 920;
+}
+
+.ontology-chain-stage span,
+.ontology-chain-stage em {
+  color: var(--muted);
+  font-size: 11px;
+  font-style: normal;
+  font-weight: 800;
+  line-height: 1.4;
+}
+
+.ontology-chain-stage span {
+  color: var(--ink);
+}
+
 .ontology-graph-actions {
   display: flex;
   gap: 6px;
@@ -12596,6 +12759,10 @@ h3 {
 @media (max-width: 860px) {
   .ontology-relationship-graphs {
     grid-template-columns: 1fr;
+  }
+
+  .ontology-chain-detail-head {
+    display: grid;
   }
 
   .ontology-section-tabs {

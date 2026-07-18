@@ -442,6 +442,7 @@
     activeNotificationTemplateType: "investmentInsight",
     notificationTemplateEditorOpen: false,
     expandedInvestmentActionKey: "",
+    activeOntologyChainKey: "",
     investmentActionQuery: "",
     investmentActionPage: 1,
     investmentActionPageSize: 6,
@@ -1135,11 +1136,21 @@
 
   function normalizeOntologyGraphId(value) {
     var requested = String(value || "").toLowerCase().replace("-expanded", "");
+    if (requested === "chain" || requested === "decision" || requested === "decision-chain") return "decision-chain";
     return requested === "tbox" || requested === "abox" ? requested : "";
   }
 
   function ontologyGraphDisplayMeta(graphId) {
     var normalized = normalizeOntologyGraphId(graphId);
+    if (normalized === "decision-chain") {
+      return {
+        title: "판단 근거 체인 그래프",
+        eyebrow: "Decision Evidence Chain",
+        description: "데이터, 관계, RuleBox, InferenceBox, 투자 판단, 알림, 성과가 한 종목 판단으로 이어지는 경로입니다.",
+        fitLabel: "판단 근거 체인 맞춤",
+        layoutLabel: "판단 근거 체인 자동 배치"
+      };
+    }
     if (normalized === "abox") {
       return {
         title: "핵심 데이터 관계 그래프",
@@ -3864,7 +3875,7 @@
   function shouldLoadStrategyProposals() {
     if (state.activeTab !== "modeling") return false;
     var section = activeSectionForPageMode("modeling", strategySections, normalizeStrategySection(state.activeStrategySection));
-    return section === "overview" || section === "proposals";
+    return section === "overview" || section === "graphs" || section === "proposals";
   }
 
   function loadOntologyStrategyDetail(force) {
@@ -11862,7 +11873,7 @@
         '</div>',
         '<div class="ontology-dashboard">',
         renderInvestmentRuleRelationTextPanel(parts),
-        renderOntologyRelationshipGraphs(parts.tbox, parts.abox, parts.aboxEntities, parts.aboxRelations, parts.evidence, parts.beliefs, parts.opinions, parts.entityLabels, parts.relationCounts),
+        renderOntologyRelationshipGraphs(parts.tbox, parts.abox, parts.aboxEntities, parts.aboxRelations, parts.evidence, parts.beliefs, parts.opinions, parts.entityLabels, parts.relationCounts, snapshot, parts),
         renderOntologyClassPanel(parts.tbox),
         renderOntologyAboxPanel(parts.abox, parts.aboxEntities, parts.evidence, parts.beliefs, parts.opinions),
         '</div>',
@@ -14970,9 +14981,324 @@
     return fallback;
   }
 
-  function renderOntologyRelationshipGraphs(tbox, abox, aboxEntities, aboxRelations, evidence, beliefs, opinions, entityLabels, relationCounts) {
+  function ontologyActionRowsBySymbol(snapshot) {
+    var rows = Array.isArray(investmentAnalysisModel(snapshot || {}).actionQueue) ? investmentAnalysisModel(snapshot || {}).actionQueue : [];
+    return rows.reduce(function (memo, row) {
+      var symbol = String(row && row.symbol || "").toUpperCase();
+      if (symbol && !memo[symbol]) memo[symbol] = row;
+      return memo;
+    }, {});
+  }
+
+  function ontologyProposalPerformanceForSymbol(symbol) {
+    var target = String(symbol || "").toUpperCase();
+    if (!target) return { label: "성과 대기", detail: "종목 연결 없음", tone: "hold", sampleCount: 0 };
+    var proposals = strategyProposalItems().filter(function (proposal) {
+      return strategyProposalArray(proposal.symbols).map(function (item) {
+        return String(item || "").toUpperCase();
+      }).indexOf(target) >= 0;
+    });
+    var sampleCount = 0;
+    var excessSum = 0;
+    var excessWeight = 0;
+    proposals.forEach(function (proposal) {
+      var summary = strategyProposalPerformanceSummary(proposal);
+      var count = Number(summary.sampleCount || 0);
+      sampleCount += count;
+      if (count && summary.avgExcessReturnPct != null) {
+        excessSum += Number(summary.avgExcessReturnPct || 0) * count;
+        excessWeight += count;
+      }
+    });
+    if (!proposals.length) return { label: "성과 대기", detail: state.strategyProposalsLoaded ? "연결된 전략 제안 없음" : "전략 성과 로딩 전", tone: "hold", sampleCount: 0 };
+    if (!sampleCount) return { label: proposals.length + "개 전략", detail: "성과 표본 미기록", tone: "caution", sampleCount: 0 };
+    var avg = excessWeight ? excessSum / excessWeight : 0;
+    return {
+      label: strategyProposalSignedPercent(avg),
+      detail: sampleCount + "개 표본 · " + proposals.length + "개 전략",
+      tone: avg >= 0 ? "watch" : "danger",
+      sampleCount: sampleCount
+    };
+  }
+
+  function ontologyChainRelationSummary(card) {
+    card = card || {};
+    var relations = Array.isArray(card.relationEvidence) ? card.relationEvidence : [];
+    var influences = Array.isArray(card.relationInfluences) ? card.relationInfluences : [];
+    if (relations.length) {
+      return {
+        label: relations.length + "개 관계",
+        detail: relations.slice(0, 2).map(function (item) {
+          return [item.type, item.sourceLabel, item.targetLabel].filter(Boolean).join(" ");
+        }).filter(Boolean).join(" · ") || "관계 근거",
+        count: relations.length
+      };
+    }
+    if (influences.length) {
+      return {
+        label: influences.length + "개 영향",
+        detail: influences.slice(0, 2).map(function (item) { return item.label || item.type || ""; }).filter(Boolean).join(" · ") || "관계 영향",
+        count: influences.length
+      };
+    }
+    return { label: "관계 대기", detail: "관계 근거 없음", count: 0 };
+  }
+
+  function ontologyChainRuleSummary(card, parts) {
+    var rows = ontologyReadableRuleRows(parts || {});
+    var planRows = Array.isArray(card && card.executionPlans) ? card.executionPlans : [];
+    var firstPlan = planRows[0] || {};
+    var ruleLabel = firstPlan.ruleId || firstPlan.rule_id || (rows[0] && (rows[0].id || rows[0].label)) || "RuleBox";
+    return {
+      label: ontologyShortText(ruleLabel, 24),
+      detail: rows.length ? rows.length + "개 RuleBox 후보 중 관련 규칙" : "TBox/RuleBox 조건 매칭",
+      count: rows.length
+    };
+  }
+
+  function ontologyChainInferenceSummary(card, actionRow) {
+    var plans = Array.isArray(card && card.executionPlans) ? card.executionPlans : [];
+    var finalOpinion = (card && card.finalOpinion) || {};
+    var graph = (actionRow && actionRow.graph) || {};
+    if (graph.blocked) return { label: "추론 보류", detail: graph.basis || "InferenceBox 확인", tone: "caution", count: 0 };
+    if (plans.length) {
+      var plan = plans[0] || {};
+      return {
+        label: plan.primaryActionLabel || plan.primaryAction || "InferenceBox",
+        detail: [plan.decisionStage, plan.actionGroup, plan.actionLevel].filter(Boolean).join(" · ") || "실행 계획 생성",
+        tone: "watch",
+        count: plans.length
+      };
+    }
+    return {
+      label: finalOpinion.action || "추론 대기",
+      detail: finalOpinion.thesis || "InferenceBox 출력 확인",
+      tone: finalOpinion.action ? "watch" : "hold",
+      count: finalOpinion.action ? 1 : 0
+    };
+  }
+
+  function ontologyDecisionChainRows(parts, snapshot) {
+    parts = parts || ontologyStrategyParts(snapshot || state.snapshot || {});
+    snapshot = snapshot || state.snapshot || {};
+    var actionBySymbol = ontologyActionRowsBySymbol(snapshot);
+    var cards = investmentReasoningCards(snapshot);
+    var rows = cards.map(function (card, index) {
+      var symbol = String(card.symbol || "").toUpperCase();
+      var actionRow = actionBySymbol[symbol] || {};
+      var finalOpinion = card.finalOpinion || {};
+      var relation = ontologyChainRelationSummary(card);
+      var rule = ontologyChainRuleSummary(card, parts);
+      var inference = ontologyChainInferenceSummary(card, actionRow);
+      var performance = ontologyProposalPerformanceForSymbol(symbol);
+      var displayName = card.companyName || card.displayName || stockDisplayName(symbol);
+      var key = investmentReasoningCardKey(card, index);
+      return {
+        key: key,
+        reasoningKey: key,
+        symbol: symbol,
+        displayName: displayName,
+        dataLabel: [card.portfolioRelation || actionRow.source || "계좌 데이터", sourceLabel(card.source || actionRow.source || "")].filter(Boolean).join(" · "),
+        dataDetail: "strategyEvidence " + ((card.strategyEvidence || []).length || 0) + "개 · graphContext " + (((card.graphContext || {}).relationIds || []).length || 0) + "개",
+        relationLabel: relation.label,
+        relationDetail: relation.detail,
+        relationCount: relation.count,
+        ruleLabel: rule.label,
+        ruleDetail: rule.detail,
+        ruleCount: rule.count,
+        inferenceLabel: inference.label,
+        inferenceDetail: inference.detail,
+        inferenceTone: inference.tone,
+        actionLabel: finalOpinion.action || actionRow.decision || "판단 대기",
+        actionDetail: textWithKnownDisplaySymbols(beginnerFriendlyText(finalOpinion.thesis || (Array.isArray(actionRow.reasons) ? actionRow.reasons[0] : "") || ""), symbol, { symbol: symbol, name: displayName }),
+        alertLabel: investmentActionLinkedAlert(actionRow),
+        alertDetail: investmentActionNextWindow(actionRow),
+        performanceLabel: performance.label,
+        performanceDetail: performance.detail,
+        performanceTone: performance.tone,
+        tone: finalOpinion.tone || inference.tone || actionRow.tone || "hold"
+      };
+    });
+    if (!rows.length) {
+      var actionRows = Array.isArray(investmentAnalysisModel(snapshot).actionQueue) ? investmentAnalysisModel(snapshot).actionQueue : [];
+      rows = actionRows.slice(0, 8).map(function (row, index) {
+        var symbol = String(row.symbol || "").toUpperCase();
+        var playbook = investmentActionPlaybook(row);
+        var performance = ontologyProposalPerformanceForSymbol(symbol);
+        return {
+          key: "action-chain:" + symbol + ":" + index,
+          reasoningKey: "",
+          symbol: symbol,
+          displayName: row.name || stockDisplayName(symbol),
+          dataLabel: [row.dataQuality || "데이터", row.apiSource || row.source || ""].filter(Boolean).join(" · "),
+          dataDetail: "액션 큐 fallback",
+          relationLabel: (row.graph || {}).blocked ? "관계 차단" : "관계 확인",
+          relationDetail: (row.graph || {}).reason || playbook.detail,
+          relationCount: 0,
+          ruleLabel: playbook.label,
+          ruleDetail: playbook.detail,
+          ruleCount: 0,
+          inferenceLabel: (row.graph || {}).blocked ? "추론 보류" : "InferenceBox",
+          inferenceDetail: (row.graph || {}).basis || "액션 후보 생성",
+          inferenceTone: (row.graph || {}).blocked ? "caution" : "watch",
+          actionLabel: row.decision || "판단 대기",
+          actionDetail: Array.isArray(row.reasons) ? row.reasons[0] || "" : "",
+          alertLabel: investmentActionLinkedAlert(row),
+          alertDetail: investmentActionNextWindow(row),
+          performanceLabel: performance.label,
+          performanceDetail: performance.detail,
+          performanceTone: performance.tone,
+          tone: row.tone || "hold"
+        };
+      });
+    }
+    if (!state.activeOntologyChainKey && rows.length) state.activeOntologyChainKey = rows[0].key;
+    if (rows.length && !rows.some(function (row) { return row.key === state.activeOntologyChainKey; })) state.activeOntologyChainKey = rows[0].key;
+    return rows;
+  }
+
+  function ontologyDecisionChainActiveRow(rows) {
+    rows = Array.isArray(rows) ? rows : [];
+    return rows.filter(function (row) { return row.key === state.activeOntologyChainKey; })[0] || rows[0] || null;
+  }
+
+  function ontologyGraphSafeId(value) {
+    return String(value || "").replace(/[^a-zA-Z0-9:_-]+/g, "_");
+  }
+
+  function ontologyBuildDecisionChainGraph(parts, snapshot) {
+    var rows = ontologyDecisionChainRows(parts, snapshot).slice(0, 8);
+    var active = ontologyDecisionChainActiveRow(rows);
+    var nodesById = {};
+    var edges = [];
+    var stages = [
+      { key: "data", label: "실계좌 데이터", kind: "source-data", x: 70 },
+      { key: "relation", label: "관계 근거", kind: "relation-evidence", x: 245 },
+      { key: "rule", label: "RuleBox", kind: "rulebox", x: 420 },
+      { key: "inference", label: "InferenceBox", kind: "inferencebox", x: 595 },
+      { key: "opinion", label: "투자 판단", kind: "investment-opinion", x: 770 },
+      { key: "alert", label: "알림", kind: "notification-intent", x: 945 },
+      { key: "performance", label: "성과", kind: "performance-feedback", x: 1120 }
+    ];
+    rows.forEach(function (row, rowIndex) {
+      var y = 80 + rowIndex * 132;
+      stages.forEach(function (stage, stageIndex) {
+        var id = "chain:" + ontologyGraphSafeId(row.key) + ":" + stage.key;
+        var value = row[stage.key + "Label"] || stage.label;
+        if (stage.key === "opinion") value = row.actionLabel;
+        nodesById[id] = {
+          id: id,
+          label: value || stage.label,
+          kind: stage.kind,
+          title: [row.displayName, stage.label, row[stage.key + "Detail"] || row.actionDetail || ""].filter(Boolean).join(" · "),
+          chainKey: row.key,
+          active: active && active.key === row.key,
+          x: stage.x,
+          y: y
+        };
+        if (stageIndex > 0) {
+          edges.push({
+            source: "chain:" + ontologyGraphSafeId(row.key) + ":" + stages[stageIndex - 1].key,
+            target: id,
+            type: stages[stageIndex - 1].label + "→" + stage.label,
+            kind: stage.key === "rule" || stage.key === "inference" ? "rule" : "chain",
+            chainKey: row.key
+          });
+        }
+      });
+    });
+    return { nodesById: nodesById, edges: edges, rows: rows, active: active };
+  }
+
+  function renderOntologyDecisionChainGraph(parts, snapshot) {
+    var graph = ontologyBuildDecisionChainGraph(parts, snapshot);
+    var rows = graph.rows || [];
+    var active = graph.active;
+    var activeIndex = active ? rows.indexOf(active) + 1 : 0;
+    return [
+      '<section class="ontology-graph-panel ontology-decision-chain-graph">',
+      '<div class="ontology-surface-head">',
+      '<div>',
+      '<strong>판단 근거 체인 그래프</strong>',
+      '<span>종목을 선택하면 데이터 → 관계 → RuleBox → InferenceBox → 투자 판단 → 알림 → 성과 흐름을 한 줄로 추적합니다.</span>',
+      '</div>',
+      '<div class="ontology-graph-actions">',
+      '<button class="icon-button" type="button" data-ontology-graph-expand="decision-chain" title="판단 근거 체인 큰 화면으로 보기" aria-label="판단 근거 체인 큰 화면으로 보기">⤢</button>',
+      '<button class="icon-button" type="button" data-ontology-graph-fit="decision-chain" title="판단 근거 체인 맞춤" aria-label="판단 근거 체인 맞춤">⌖</button>',
+      '<button class="icon-button" type="button" data-ontology-graph-layout="decision-chain" title="판단 근거 체인 자동 배치" aria-label="판단 근거 체인 자동 배치">↺</button>',
+      '</div>',
+      '</div>',
+      '<div class="ontology-graph-meta">',
+      '<span>표시 ' + escapeHtml(Object.keys(graph.nodesById || {}).length) + ' 노드 · ' + escapeHtml((graph.edges || []).length) + ' 관계</span>',
+      '<span>선택 ' + escapeHtml(activeIndex || "-") + ' / ' + escapeHtml(rows.length || 0) + ' 체인</span>',
+      '<span>Reasoning Card · RuleBox · InferenceBox · 알림 · 성과</span>',
+      '</div>',
+      rows.length ? '<div class="ontology-chain-selector" aria-label="판단 근거 체인 선택">' + rows.map(function (row) {
+        return [
+          '<button class="' + escapeHtml(row.key === (active && active.key) ? "active" : "") + '" type="button" data-ontology-chain-select="' + escapeHtml(row.key) + '">',
+          '<strong>' + escapeHtml(row.displayName || row.symbol || "판단 체인") + '</strong>',
+          '<span>' + escapeHtml([row.actionLabel, row.inferenceLabel, row.alertLabel].filter(Boolean).join(" · ")) + '</span>',
+          '</button>'
+        ].join("");
+      }).join("") + '</div>' : '',
+      '<div class="ontology-cytoscape ontology-decision-chain-cytoscape" data-ontology-cytoscape="decision-chain"><span>그래프 엔진 초기화 중</span></div>',
+      renderOntologyDecisionChainDetail(active),
+      '<div class="ontology-graph-caption">',
+      '<span>노드 또는 종목 버튼을 선택하면 아래 상세 체인이 갱신됩니다.</span>',
+      '<span>성과는 전략 제안 표본이 연결된 경우 초과 수익 기준으로 표시합니다.</span>',
+      '</div>',
+      '</section>'
+    ].join("");
+  }
+
+  function renderOntologyDecisionChainDetail(row) {
+    if (!row) {
+      return '<div class="ontology-chain-detail"><div class="ontology-empty">표시할 판단 근거 체인이 없습니다.</div></div>';
+    }
+    var stages = [
+      ["실계좌 데이터", row.dataLabel, row.dataDetail, "source-data"],
+      ["관계 근거", row.relationLabel, row.relationDetail, "relation-evidence"],
+      ["RuleBox", row.ruleLabel, row.ruleDetail, "rulebox"],
+      ["InferenceBox", row.inferenceLabel, row.inferenceDetail, row.inferenceTone || "inferencebox"],
+      ["투자 판단", row.actionLabel, row.actionDetail, row.tone || "investment-opinion"],
+      ["연결 알림", row.alertLabel, row.alertDetail, "notification-intent"],
+      ["성과 피드백", row.performanceLabel, row.performanceDetail, row.performanceTone || "performance-feedback"]
+    ];
+    return [
+      '<div class="ontology-chain-detail">',
+      '<div class="ontology-chain-detail-head">',
+      '<div><strong>' + escapeHtml(row.displayName || row.symbol || "판단 체인") + '</strong><span>' + escapeHtml([row.symbol, row.dataLabel].filter(Boolean).join(" · ")) + '</span></div>',
+      row.reasoningKey ? renderWorkDetailButton("investment-reasoning-card", row.reasoningKey, "근거 카드", "mini-button") : '',
+      '</div>',
+      '<div class="ontology-chain-stage-list">',
+      stages.map(function (stage, index) {
+        return [
+          '<section class="ontology-chain-stage ' + escapeHtml(stage[3] || "hold") + '"' + cardTypeAttrs("process-card", stage[3] || "hold") + '>',
+          '<b>' + escapeHtml(String(index + 1).padStart(2, "0")) + '</b>',
+          '<div><strong>' + escapeHtml(stage[0]) + '</strong><span>' + escapeHtml(stage[1] || "-") + '</span><em>' + escapeHtml(stage[2] || "세부 정보 대기") + '</em></div>',
+          '</section>'
+        ].join("");
+      }).join(""),
+      '</div>',
+      '</div>'
+    ].join("");
+  }
+
+  function renderOntologyRelationshipGraphs(tbox, abox, aboxEntities, aboxRelations, evidence, beliefs, opinions, entityLabels, relationCounts, snapshot, parts) {
+    parts = parts || {
+      tbox: tbox || {},
+      abox: abox || {},
+      aboxEntities: aboxEntities || [],
+      aboxRelations: aboxRelations || [],
+      evidence: evidence || [],
+      beliefs: beliefs || [],
+      opinions: opinions || [],
+      entityLabels: entityLabels || {},
+      relationCounts: relationCounts || []
+    };
     return [
       '<section class="ontology-relationship-graphs" aria-label="TBox ABox 관계 그래프">',
+      renderOntologyDecisionChainGraph(parts, snapshot || state.snapshot || {}),
       renderOntologyTboxGraph(tbox, relationCounts),
       renderOntologyAboxGraph(abox, aboxEntities, aboxRelations, evidence, beliefs, opinions, entityLabels),
       '</section>'
@@ -15117,6 +15443,7 @@
   function renderOntologyTboxGraph(tbox, relationCounts) {
     var graphNodes = ontologyTboxGraphNodes(tbox);
     var graphEdges = ontologyTboxGraphEdges(tbox);
+    var graphNodeCount = Object.keys(graphNodes || {}).length;
     return [
       '<section class="ontology-graph-panel ontology-tbox-graph">',
       '<div class="ontology-surface-head">',
@@ -15131,7 +15458,7 @@
       '</div>',
       '</div>',
       '<div class="ontology-graph-meta">',
-      '<span>표시 ' + escapeHtml(graphNodes.length) + ' 노드 · ' + escapeHtml(graphEdges.length) + ' 관계</span>',
+      '<span>표시 ' + escapeHtml(graphNodeCount) + ' 노드 · ' + escapeHtml(graphEdges.length) + ' 관계</span>',
       '<span>전체 ' + escapeHtml(((tbox.boundedContexts || []).length || 0)) + ' 컨텍스트 · ' + escapeHtml((tbox.classes || []).length || 0) + ' 분류 · ' + escapeHtml((tbox.relationTypes || []).length || 0) + ' 관계 타입</span>',
       '</div>',
       '<div class="ontology-cytoscape" data-ontology-cytoscape="tbox"><span>그래프 엔진 초기화 중</span></div>',
@@ -15354,6 +15681,8 @@
   function ontologyCyElements(nodesById, edges) {
     var nodes = Object.keys(nodesById || {}).map(function (id) {
       var node = nodesById[id] || {};
+      var nodeClasses = ["node-" + ontologyGraphClass(node.kind)];
+      if (node.active) nodeClasses.push("node-active-chain");
       return {
         group: "nodes",
         data: {
@@ -15361,13 +15690,14 @@
           label: ontologyShortText(node.label || id, node.kind === "rule" ? 10 : 18),
           fullLabel: node.label || id,
           kind: node.kind || "entity",
-          title: node.title || node.label || id
+          title: node.title || node.label || id,
+          chainKey: node.chainKey || ""
         },
         position: {
           x: Number(node.x || 0),
           y: Number(node.y || 0)
         },
-        classes: "node-" + ontologyGraphClass(node.kind)
+        classes: nodeClasses.join(" ")
       };
     });
     var seen = {};
@@ -15386,7 +15716,8 @@
           target: edge.target,
           label: ontologyShortText(ontologyEdgeLabel(edge.type), 18),
           fullLabel: edge.type || "",
-          kind: edge.kind || "assertion"
+          kind: edge.kind || "assertion",
+          chainKey: edge.chainKey || ""
         },
         classes: "edge-" + ontologyGraphClass(edge.kind)
       };
@@ -15399,9 +15730,11 @@
     var tboxNodes = ontologyTboxGraphNodes(parts.tbox);
     var tboxEdges = ontologyTboxGraphEdges(parts.tbox);
     var aboxGraph = ontologyBuildAboxGraph(parts.aboxEntities, parts.aboxRelations, parts.evidence, parts.beliefs, parts.opinions, parts.entityLabels);
+    var decisionChainGraph = ontologyBuildDecisionChainGraph(parts, state.snapshot || {});
     return {
       tbox: { elements: ontologyCyElements(tboxNodes, tboxEdges) },
-      abox: { elements: ontologyCyElements(aboxGraph.nodesById, aboxGraph.edges) }
+      abox: { elements: ontologyCyElements(aboxGraph.nodesById, aboxGraph.edges) },
+      "decision-chain": { elements: ontologyCyElements(decisionChainGraph.nodesById, decisionChainGraph.edges) }
     };
   }
 
@@ -15448,6 +15781,14 @@
       { selector: ".node-temporal-window, .node-price-path-pattern, .node-flow-pattern, .node-event-cluster, .node-trend-episode", style: { "background-color": "#ecfeff", "border-color": blue } },
       { selector: ".node-missing-data, .node-temporal-coverage-gap, .node-data-quality, .node-source-reliability", style: { "background-color": "#fff7ed", "border-color": amber } },
       { selector: ".node-next-check, .node-alert-candidate, .node-inference-trace", style: { "background-color": "#f8fafc", "border-color": ink } },
+      { selector: ".node-source-data", style: { "background-color": "#eff6ff", "border-color": blue } },
+      { selector: ".node-relation-evidence", style: { "background-color": "#ecfdf5", "border-color": green } },
+      { selector: ".node-rulebox", style: { "background-color": "#fff7ed", "border-color": amber, "color": amber } },
+      { selector: ".node-inferencebox", style: { "background-color": "#f5f3ff", "border-color": violet } },
+      { selector: ".node-investment-opinion", style: { "background-color": "#eff6ff", "border-color": blue, "font-weight": 900 } },
+      { selector: ".node-notification-intent", style: { "background-color": "#f8fafc", "border-color": ink } },
+      { selector: ".node-performance-feedback", style: { "background-color": "#ecfdf5", "border-color": green } },
+      { selector: ".node-active-chain", style: { "border-width": 3, "border-color": ink, "shadow-blur": 12, "shadow-color": blue, "shadow-opacity": 0.18 } },
       {
         selector: "edge",
         style: {
@@ -15475,6 +15816,7 @@
       { selector: ".edge-assertion", style: { "line-color": green, "target-arrow-color": green } },
       { selector: ".edge-derived", style: { "line-color": violet, "target-arrow-color": violet, "line-style": "dashed" } },
       { selector: ".edge-rule", style: { "line-color": amber, "target-arrow-color": amber, "line-style": "dashed" } },
+      { selector: ".edge-chain", style: { "line-color": blue, "target-arrow-color": blue, "width": 1.7 } },
       { selector: ":selected", style: { "border-width": 3, "border-color": ink, "line-color": ink, "target-arrow-color": ink, "opacity": 1 } }
     ];
   }
@@ -15520,6 +15862,14 @@
       ontologyGraphInstances[graphId].ready(function () {
         this.fit(undefined, 30);
       });
+      if (sourceGraphId === "decision-chain") {
+        ontologyGraphInstances[graphId].on("tap", "node", function (event) {
+          var key = event && event.target && event.target.data ? event.target.data("chainKey") : "";
+          if (!key) return;
+          state.activeOntologyChainKey = key;
+          render();
+        });
+      }
     });
   }
 
@@ -15537,7 +15887,7 @@
       name: "breadthfirst",
       directed: true,
       padding: 36,
-      spacingFactor: normalizeOntologyGraphId(graphId) === "abox" ? 1.25 : 1.1,
+      spacingFactor: normalizeOntologyGraphId(graphId) === "abox" ? 1.25 : normalizeOntologyGraphId(graphId) === "decision-chain" ? 1.05 : 1.1,
       avoidOverlap: true,
       animate: true,
       animationDuration: 260,
@@ -19112,6 +19462,15 @@
       button.addEventListener("click", function (event) {
         if (button.classList && button.classList.contains("ontology-graph-expanded-backdrop") && event.target !== button) return;
         state.expandedOntologyGraphId = "";
+        render();
+      });
+    });
+
+    Array.prototype.slice.call(app.querySelectorAll("[data-ontology-chain-select]")).forEach(function (button) {
+      button.addEventListener("click", function () {
+        var key = button.getAttribute("data-ontology-chain-select") || "";
+        if (!key) return;
+        state.activeOntologyChainKey = key;
         render();
       });
     });

@@ -6383,6 +6383,19 @@
     return unique.length > 8 ? visible + " 외 " + (unique.length - 8) + "개" : visible;
   }
 
+  function compactStrategyDataSymbols(symbols) {
+    var unique = [];
+    (symbols || []).forEach(function (symbol) {
+      var key = String(symbol || "").toUpperCase();
+      if (key && unique.indexOf(key) < 0) unique.push(key);
+    });
+    if (!unique.length) return "없음";
+    var visible = unique.slice(0, 4).map(function (symbol) {
+      return stockDisplayName(symbol);
+    }).join(", ");
+    return unique.length > 4 ? visible + " 외 " + (unique.length - 4) + "개" : visible;
+  }
+
   function diagnosticTone(missingCount, totalCount) {
     if (!totalCount) return "hold";
     if (missingCount >= totalCount) return "danger";
@@ -14354,7 +14367,8 @@
   }
 
   function renderStrategyDataRow(item) {
-    var symbols = compactSymbolList(item.symbols || []);
+    var fullSymbols = compactSymbolList(item.symbols || []);
+    var symbols = compactStrategyDataSymbols(item.symbols || []);
     return [
       '<div class="strategy-data-row"' + cardTypeAttrs("diagnostic-card", item.tone || "hold") + cardFormatAttrs("summary-list-card", "compact") + '>',
       '<div class="strategy-data-main">',
@@ -14364,7 +14378,7 @@
       '</div>',
       '<div class="strategy-data-status">',
       '<span class="tone-chip ' + escapeHtml(item.tone || "hold") + '">' + escapeHtml(item.value) + '</span>',
-      '<b>' + escapeHtml(symbols) + '</b>',
+      '<b title="' + escapeHtml(fullSymbols) + '">' + escapeHtml(symbols) + '</b>',
       '</div>',
       '</div>'
     ].join("");

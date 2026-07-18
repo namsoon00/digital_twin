@@ -238,7 +238,7 @@ function checkFrontendAdminRender() {
       /\.console-shell \.app-nav-command \.page-command-metrics\s*\{[\s\S]*display: none;/.test(styles) &&
       /\.console-shell \.app-nav-routine > span:not\(\.app-nav-routine-action-cell\)\s*\{[\s\S]*display: none;/.test(styles) &&
       /@media \(min-width: 861px\) and \(max-width: 1180px\)[\s\S]*\.console-shell \.app-nav-flow,[\s\S]*\.console-shell \.app-nav-command \.page-command-metrics,[\s\S]*\.console-shell \.app-nav-current em,[\s\S]*\.console-shell :is\([\s\S]*\.feed-section-tabs span[\s\S]*\)\s*\{[\s\S]*display: none;/.test(styles) &&
-      indexHtml.indexOf("styles.css?v=20260718-calendar-year-window-v1") >= 0,
+      indexHtml.indexOf("styles.css?v=20260718-strategy-data-card-guard-v1") >= 0,
     "PC 상단 영역이 탭별로 여러 줄/넘침으로 깨지지 않도록 하는 안정화 레이어가 없습니다."
   );
   assertOk(
@@ -252,7 +252,7 @@ function checkFrontendAdminRender() {
       /\.loading-progress span\s*\{[\s\S]*animation: loadingProgress/.test(styles) &&
       /\.loading-skeleton-grid\s*\{[\s\S]*grid-template-columns: repeat\(4, minmax\(0, 1fr\)\);/.test(styles) &&
       /@keyframes loadingProgress/.test(styles) &&
-      indexHtml.indexOf("app.js?v=20260718-calendar-year-window-v1") >= 0,
+      indexHtml.indexOf("app.js?v=20260718-strategy-data-card-guard-v1") >= 0,
     "초기 로딩 화면이 운영 정보 카드 대신 progress/skeleton 화면으로 고정되지 않았습니다."
   );
   assertOk(
@@ -425,6 +425,9 @@ function checkFrontendAdminRender() {
   assertOk(/\.notification-decision-list\s*\{\s*grid-template-columns: minmax\(0, 1fr\);/.test(desktopLayoutAuditLayer), "최근 알림 판단 목록이 PC 전폭 원장 행으로 유지되지 않습니다.");
   assertOk(/\.notification-decision-row\s*\{\s*grid-template-columns: minmax\(240px, 0\.34fr\) minmax\(0, 1fr\);/.test(desktopLayoutAuditLayer), "최근 알림 판단 행의 PC 최종 2열 구조가 없습니다.");
   assertOk(/\.strategy-data-grid\s*\{\s*grid-template-columns: repeat\(auto-fit, minmax\(min\(100%, 360px\), 1fr\)\);/.test(desktopLayoutAuditLayer), "전략 데이터 점검 카드가 PC 읽기 폭 제한 그리드로 정리되지 않습니다.");
+  assertOk(code.indexOf("compactStrategyDataSymbols") >= 0, "전략 데이터 점검 카드가 긴 종목 목록을 리스트용으로 축약하지 않습니다.");
+  assertOk(/\.console-shell \.strategy-data-row\[data-card-format="summary-list-card"\]\s*\{\s*grid-template-columns: minmax\(220px, 1fr\) minmax\(104px, 220px\);/.test(styles), "전략 데이터 점검 행의 상태 칼럼이 긴 텍스트로 본문을 압축할 수 있습니다.");
+  assertOk(/@media \(max-width: 720px\)[\s\S]*\.strategy-data-row,[\s\S]*\.console-shell \.strategy-data-row\[data-card-format="summary-list-card"\][\s\S]*grid-template-columns: minmax\(0, 1fr\);/.test(styles), "좁은 화면에서 전략 데이터 점검 행이 단일 컬럼으로 전환되지 않습니다.");
   assertOk(/:where\([\s\S]*\.symbol-filter-form,[\s\S]*\.settings-body,[\s\S]*\.investment-bridge-flow,[\s\S]*\.formula-ledger,[\s\S]*\.relation-matrix,[\s\S]*\.admin-form-grid[\s\S]*\)\s*\{[\s\S]*gap: var\(--ds-section-gap\);/.test(desktopLayoutAuditLayer), "PC 탭별 내부 작업 영역 gap 감사 규칙이 없습니다.");
   assertOk(/:where\([\s\S]*\.symbol-filter-form,[\s\S]*\.settings-body,[\s\S]*\.investment-bridge-flow,[\s\S]*\.account-credential-grid[\s\S]*\)\s*\{[\s\S]*padding: var\(--ds-space-4\) var\(--ds-panel-pad-x\) var\(--ds-panel-pad-y\);/.test(desktopLayoutAuditLayer), "PC 탭별 내부 작업 영역 padding 감사 규칙이 없습니다.");
   assertOk(/\.notification-section-tabs,[\s\S]*\.ontology-section-tabs[\s\S]*\{[\s\S]*gap: var\(--ds-space-2\);[\s\S]*padding: var\(--ds-space-2\);/.test(desktopLayoutAuditLayer), "PC 섹션 탭 바 간격 감사 규칙이 없습니다.");

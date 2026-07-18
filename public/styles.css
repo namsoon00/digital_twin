@@ -22528,3 +22528,264 @@ html[data-theme="dark"] .ontology-graph-expanded-toolbar .icon-button.danger {
     justify-content: flex-start;
   }
 }
+
+/* Calendar month board: date-first investment event view. */
+.investment-calendar-month-panel .panel-head {
+  align-items: start;
+}
+
+.investment-calendar-month-controls {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: 8px;
+  min-width: 0;
+}
+
+.investment-calendar-month-controls .metric {
+  min-width: 54px;
+  text-align: center;
+}
+
+.investment-calendar-month-shell {
+  display: grid;
+  gap: var(--ds-section-gap);
+  min-width: 0;
+  padding: 0 var(--ds-panel-pad-x) var(--ds-panel-pad-y);
+}
+
+.investment-calendar-month-scroller {
+  min-width: 0;
+  overflow-x: auto;
+  scrollbar-gutter: stable;
+}
+
+.investment-calendar-month-weekdays,
+.investment-calendar-month-grid {
+  display: grid;
+  grid-template-columns: repeat(7, minmax(0, 1fr));
+  min-width: 820px;
+}
+
+.investment-calendar-month-weekdays {
+  gap: 6px;
+  padding: 0 0 8px;
+}
+
+.investment-calendar-month-weekdays span {
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 950;
+  text-align: center;
+}
+
+.investment-calendar-month-grid {
+  overflow: hidden;
+  border: 1px solid var(--ds-card-border);
+  border-radius: var(--ds-radius-panel);
+  background: var(--ds-card-border);
+  gap: 1px;
+}
+
+.investment-calendar-day-cell {
+  display: grid;
+  align-content: start;
+  gap: 8px;
+  min-width: 0;
+  min-height: 142px;
+  padding: 10px;
+  background: var(--panel);
+}
+
+.investment-calendar-day-cell.is-outside-month {
+  background: color-mix(in srgb, var(--panel-soft) 72%, var(--panel));
+}
+
+.investment-calendar-day-cell.is-today {
+  box-shadow: inset 0 0 0 2px color-mix(in srgb, var(--blue) 54%, transparent);
+}
+
+.investment-calendar-day-cell.is-selected {
+  background: color-mix(in srgb, var(--blue-soft) 26%, var(--panel));
+}
+
+.investment-calendar-day-cell.has-events {
+  border-top: 3px solid var(--blue);
+}
+
+.investment-calendar-day-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  min-width: 0;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+
+.investment-calendar-day-head strong {
+  display: grid;
+  place-items: center;
+  width: 26px;
+  height: 26px;
+  border-radius: 50%;
+  color: var(--ink);
+  font-size: 13px;
+  font-weight: 950;
+}
+
+.investment-calendar-day-cell.is-today .investment-calendar-day-head strong {
+  background: var(--blue);
+  color: var(--ds-color-on-action);
+}
+
+.investment-calendar-day-head span {
+  min-width: 0;
+  color: var(--muted);
+  font-size: 11px;
+  font-weight: 900;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.investment-calendar-day-events {
+  display: grid;
+  gap: 6px;
+  min-width: 0;
+}
+
+.investment-calendar-day-event,
+.investment-calendar-day-more {
+  min-width: 0;
+  border-radius: var(--ds-radius-control);
+  text-align: left;
+  cursor: pointer;
+}
+
+.investment-calendar-day-event {
+  display: grid;
+  gap: 3px;
+  padding: 7px 8px;
+  border: 1px solid var(--ds-card-border);
+  border-left: 3px solid var(--ds-card-status-neutral);
+  background: var(--ds-card-bg);
+  color: var(--ink);
+}
+
+.investment-calendar-day-event.watch {
+  border-left-color: var(--amber);
+}
+
+.investment-calendar-day-event.danger {
+  border-left-color: var(--red);
+}
+
+.investment-calendar-day-event span,
+.investment-calendar-day-event em {
+  min-width: 0;
+  color: var(--muted);
+  font-size: 11px;
+  font-style: normal;
+  font-weight: 850;
+  line-height: 1.2;
+}
+
+.investment-calendar-day-event strong {
+  min-width: 0;
+  color: var(--ink);
+  font-size: 12px;
+  font-weight: 950;
+  line-height: 1.25;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.investment-calendar-day-event em {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.investment-calendar-day-more {
+  padding: 6px 8px;
+  border: 1px dashed color-mix(in srgb, var(--blue) 32%, var(--ds-card-border));
+  background: color-mix(in srgb, var(--blue-soft) 16%, transparent);
+  color: var(--blue);
+  font-size: 11px;
+  font-weight: 900;
+}
+
+.investment-calendar-selected-day {
+  display: grid;
+  gap: var(--ds-card-comfort-gap);
+  min-width: 0;
+  padding-top: var(--ds-section-gap);
+  border-top: 1px solid var(--ds-card-border);
+}
+
+.investment-calendar-selected-day-head {
+  display: flex;
+  justify-content: space-between;
+  gap: var(--ds-section-gap);
+  min-width: 0;
+}
+
+.investment-calendar-selected-day-head h3 {
+  min-width: 0;
+  margin: 0;
+  color: var(--ink);
+  font-size: 17px;
+  font-weight: 950;
+  line-height: 1.25;
+  overflow-wrap: anywhere;
+}
+
+.investment-calendar-selected-day-head span {
+  align-self: start;
+  min-width: 48px;
+  padding: 6px 9px;
+  border: 1px solid var(--ds-card-border);
+  border-radius: var(--ds-radius-control);
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 900;
+  text-align: center;
+}
+
+.investment-calendar-selected-day .investment-calendar-list {
+  padding: 0;
+  border-top: 0;
+  background: transparent;
+}
+
+@media (min-width: 1181px) {
+  .console-shell .investment-calendar-month-panel {
+    grid-column: span 7;
+  }
+
+  .console-shell .investment-calendar-month-panel .investment-calendar-list {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
+
+@media (max-width: 860px) {
+  .investment-calendar-month-panel .panel-head,
+  .investment-calendar-selected-day-head {
+    display: grid;
+  }
+
+  .investment-calendar-month-controls {
+    justify-content: flex-start;
+  }
+
+  .investment-calendar-month-weekdays,
+  .investment-calendar-month-grid {
+    min-width: 760px;
+  }
+}

@@ -238,7 +238,7 @@ function checkFrontendAdminRender() {
       /\.console-shell \.app-nav-command \.page-command-metrics\s*\{[\s\S]*display: none;/.test(styles) &&
       /\.console-shell \.app-nav-routine > span:not\(\.app-nav-routine-action-cell\)\s*\{[\s\S]*display: none;/.test(styles) &&
       /@media \(min-width: 861px\) and \(max-width: 1180px\)[\s\S]*\.console-shell \.app-nav-flow,[\s\S]*\.console-shell \.app-nav-command \.page-command-metrics,[\s\S]*\.console-shell \.app-nav-current em,[\s\S]*\.console-shell :is\([\s\S]*\.feed-section-tabs span[\s\S]*\)\s*\{[\s\S]*display: none;/.test(styles) &&
-      indexHtml.indexOf("styles.css?v=20260718-calendar-layout-fix-v1") >= 0,
+      indexHtml.indexOf("styles.css?v=20260718-calendar-board-v1") >= 0,
     "PC 상단 영역이 탭별로 여러 줄/넘침으로 깨지지 않도록 하는 안정화 레이어가 없습니다."
   );
   assertOk(
@@ -252,7 +252,7 @@ function checkFrontendAdminRender() {
       /\.loading-progress span\s*\{[\s\S]*animation: loadingProgress/.test(styles) &&
       /\.loading-skeleton-grid\s*\{[\s\S]*grid-template-columns: repeat\(4, minmax\(0, 1fr\)\);/.test(styles) &&
       /@keyframes loadingProgress/.test(styles) &&
-      indexHtml.indexOf("app.js?v=20260717-strategy-proposals-web-v1") >= 0,
+      indexHtml.indexOf("app.js?v=20260718-calendar-board-v1") >= 0,
     "초기 로딩 화면이 운영 정보 카드 대신 progress/skeleton 화면으로 고정되지 않았습니다."
   );
   assertOk(
@@ -340,14 +340,18 @@ function checkFrontendAdminRender() {
   );
   assertOk(
     /var DEFAULT_SYMBOL_UNIVERSE_LIMIT = 8;/.test(code) &&
-      /investmentCalendarFilters: \{ symbol: "", eventType: "", limit: "8" \}/.test(code) &&
-      /events\.slice\(0, 6\)\.map\(renderInvestmentCalendarEvent\)/.test(code) &&
+      /investmentCalendarFilters: \{ symbol: "", eventType: "", limit: "80" \}/.test(code) &&
+      code.indexOf("renderInvestmentCalendarMonthPanel") >= 0 &&
+      code.indexOf("renderInvestmentCalendarMonthGrid") >= 0 &&
+      code.indexOf("data-calendar-day-select") >= 0 &&
+      styles.indexOf("Calendar month board: date-first investment event view.") >= 0 &&
+      /\.investment-calendar-month-grid\s*\{[\s\S]*grid-template-columns: repeat\(7, minmax\(0, 1fr\)\);/.test(styles) &&
       /rows\.slice\(0, 4\)\.map\(renderInvestmentActionRow\)/.test(code) &&
       /var visibleJobs = jobs\.slice\(0, 4\);/.test(code) &&
       /var visibleAlerts = alerts\.slice\(0, 6\);/.test(code) &&
       /rows\.slice\(0, 5\)\.map\(function \(row\)/.test(code) &&
       /\(portfolio\.sectors \|\| \[\]\)\.slice\(0, 6\)\.map\(function \(sector\)/.test(code),
-    "PC 기본 화면의 종목/캘린더/액션 큐 표시량 축약 계약이 없습니다."
+    "PC 기본 화면의 종목/캘린더 월간 보드/액션 큐 표시 계약이 없습니다."
   );
   assertOk(styles.indexOf("Professional finance top navigation shell") >= 0 && styles.indexOf("grid-template-columns: minmax(0, 1fr)") >= 0, "PC shell이 단일 컬럼 상단 탭형 작업 영역으로 전환되지 않습니다.");
   assertOk(/Professional finance top navigation shell[\s\S]*\.app-nav[\s\S]*grid-template-columns: minmax\(180px, 0\.17fr\) minmax\(0, 1fr\) minmax\(108px, auto\);/.test(styles), "PC 상단 금융 탭 네비게이션 3구획 구조가 없습니다.");

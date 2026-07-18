@@ -4466,6 +4466,7 @@
       NVDA: { name: "NVIDIA", market: "US", currency: "USD", sector: "반도체" },
       AMD: { name: "AMD", market: "US", currency: "USD", sector: "반도체" },
       TSLA: { name: "Tesla", market: "US", currency: "USD", sector: "모빌리티" },
+      PLTR: { name: "Palantir Technologies", market: "US", currency: "USD", sector: "AI/플랫폼" },
       MSTR: { name: "Strategy", market: "US", currency: "USD", sector: "디지털자산" },
       STRC: { name: "Strategy Preferred", market: "US", currency: "USD", sector: "디지털자산" },
       GOOGL: { name: "Alphabet", market: "US", currency: "USD", sector: "AI/플랫폼" },
@@ -4481,7 +4482,43 @@
   }
 
   function fallbackKnownStockSymbols() {
-    return ["005930", "000660", "005380", "000020", "035420", "035720", "051910", "068270", "AAPL", "MSFT", "NVDA", "AMD", "TSLA", "MSTR", "STRC", "GOOGL", "META"];
+    return ["005930", "000660", "005380", "000020", "035420", "035720", "051910", "068270", "AAPL", "MSFT", "NVDA", "AMD", "TSLA", "PLTR", "MSTR", "STRC", "GOOGL", "META"];
+  }
+
+  function compactStockSearchText(value) {
+    return String(value || "").trim().toLowerCase().replace(/[\s._'’`-]+/g, "");
+  }
+
+  function stockSearchAliasCatalog() {
+    return [
+      { aliases: ["팔란티어", "palantir", "palantirtechnologies", "pltr"], symbols: ["PLTR"] },
+      { aliases: ["애플", "apple", "aapl"], symbols: ["AAPL"] },
+      { aliases: ["테슬라", "tesla", "tsla"], symbols: ["TSLA"] },
+      { aliases: ["엔비디아", "nvidia", "nvda"], symbols: ["NVDA"] },
+      { aliases: ["마이크로소프트", "microsoft", "msft"], symbols: ["MSFT"] },
+      { aliases: ["삼성전자", "samsung", "005930"], symbols: ["005930"] },
+      { aliases: ["하이닉스", "sk하이닉스", "skhynix", "000660"], symbols: ["000660"] },
+      { aliases: ["네이버", "naver", "035420"], symbols: ["035420"] }
+    ];
+  }
+
+  function stockSearchAliasSymbols(query) {
+    var token = compactStockSearchText(query);
+    if (!token) return [];
+    var aliasReady = token.length >= 2 || /[가-힣]/.test(token);
+    if (!aliasReady) return [];
+    var symbols = [];
+    stockSearchAliasCatalog().forEach(function (entry) {
+      var matched = entry.aliases.some(function (alias) {
+        var compactAlias = compactStockSearchText(alias);
+        return compactAlias.indexOf(token) >= 0 || token.indexOf(compactAlias) >= 0;
+      });
+      if (!matched) return;
+      entry.symbols.forEach(function (symbol) {
+        if (symbols.indexOf(symbol) < 0) symbols.push(symbol);
+      });
+    });
+    return symbols;
   }
 
   function clientKnownStockInfo(symbol) {
@@ -4727,7 +4764,11 @@
   function localWatchSuggestItems(query) {
     var normalized = String(query || "").trim().toUpperCase();
     if (!normalized) return [];
+    var aliasSymbols = stockSearchAliasSymbols(query);
     var candidates = [];
+    aliasSymbols.forEach(function (symbol) {
+      candidates.push(clientKnownStockInfo(symbol));
+    });
     (state.symbolUniverse.items || []).forEach(function (item) {
       candidates.push(item);
     });
@@ -4739,7 +4780,9 @@
       if (item && item.symbol) candidates.push(item);
     });
     return mergeSuggestionItems(candidates.filter(function (item) {
-      return String(item.symbol || "").toUpperCase().indexOf(normalized) >= 0
+      var symbol = String(item.symbol || "").toUpperCase();
+      return aliasSymbols.indexOf(symbol) >= 0
+        || symbol.indexOf(normalized) >= 0
         || String(item.name || "").toUpperCase().indexOf(normalized) >= 0;
     }), [], 8);
   }
@@ -4749,19 +4792,19 @@
     params.set("query", String(query || "").trim());
     params.set("limit", "8");
     params.set("offset", "0");
-    return "/api/symbol-universe?" + params.toString();
+    return "/api/symbol-universe/suggest?" + params.toString();
   }
 
   function renderWatchSuggestList() {
     var query = String(state.watchSuggestQuery || "").trim();
     if (!query) return "";
-    if (state.watchSuggestLoading) {
+    var items = state.watchSuggestItems || [];
+    if (state.watchSuggestLoading && !items.length) {
       return '<p class="subtle watch-suggest-message">종목을 검색하는 중입니다.</p>';
     }
     if (state.watchSuggestError) {
       return '<p class="form-error">' + escapeHtml(state.watchSuggestError) + '</p>';
     }
-    var items = state.watchSuggestItems || [];
     if (!items.length) {
       return '<p class="subtle watch-suggest-message">검색 결과가 없습니다. 종목명을 다시 확인하세요.</p>';
     }
@@ -4776,7 +4819,7 @@
         '<b>추가</b>',
         '</button>'
       ].join("");
-    }).join("");
+    }).join("") + (state.watchSuggestLoading ? '<p class="subtle watch-suggest-message">DB 후보를 확인하는 중입니다.</p>' : '');
   }
 
   function updateWatchSuggestBox(box) {

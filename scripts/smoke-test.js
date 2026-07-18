@@ -1673,6 +1673,12 @@ function checkFrontendAdminRender() {
     assertOk(modelingChartHtml.indexOf("실제 데이터") >= 0 && modelingChartHtml.indexOf("mock") >= 0 && modelingChartHtml.indexOf("API·스냅샷 출처") >= 0, "통합 차트가 실제/mock 데이터와 출처 표시 정책을 보여주지 않습니다.");
     assertOk(modelingChartHtml.indexOf("investment-evidence-panel") < 0 && modelingChartHtml.indexOf("ontology-cytoscape") < 0, "통합 차트 섹션에 근거 카드나 온톨로지 그래프가 섞여 있습니다.");
     assertOk(modelingGraphHtml.indexOf("<h2>온톨로지</h2>") >= 0 && modelingGraphHtml.indexOf("전체 규칙 구조 그래프") >= 0 && modelingGraphHtml.indexOf("핵심 데이터 관계 그래프") >= 0, "온톨로지 섹션이 통합 탭 내부에서 렌더링되지 않았습니다.");
+    assertOk(modelingGraphHtml.indexOf("판단 근거 체인 그래프") >= 0 && modelingGraphHtml.indexOf('data-ontology-cytoscape="decision-chain"') >= 0, "온톨로지 섹션에 판단 근거 체인 그래프가 없습니다.");
+    assertOk(modelingGraphHtml.indexOf("데이터 → 관계 → RuleBox → InferenceBox → 투자 판단 → 알림 → 성과") >= 0, "판단 근거 체인 그래프가 전체 판단 흐름을 설명하지 않습니다.");
+    assertOk(modelingGraphHtml.indexOf("ontology-chain-selector") >= 0 && modelingGraphHtml.indexOf("ontology-chain-detail") >= 0 && modelingGraphHtml.indexOf("성과 피드백") >= 0, "판단 근거 체인 선택/상세/성과 피드백 UI가 없습니다.");
+    assertOk(code.indexOf("ontologyDecisionChainRows") >= 0 && code.indexOf("ontologyBuildDecisionChainGraph") >= 0 && code.indexOf("activeOntologyChainKey") >= 0, "판단 근거 체인 그래프 데이터 빌더나 선택 상태가 없습니다.");
+    assertOk(code.indexOf('sourceGraphId === "decision-chain"') >= 0 && code.indexOf('data-ontology-chain-select') >= 0, "판단 근거 체인 노드 클릭 또는 버튼 선택 바인딩이 없습니다.");
+    assertOk(styles.indexOf(".ontology-decision-chain-graph") >= 0 && styles.indexOf(".ontology-chain-stage") >= 0 && code.indexOf(".node-performance-feedback") >= 0, "판단 근거 체인 그래프 스타일이 없습니다.");
     assertOk(modelingGraphHtml.indexOf("ontology-cytoscape") >= 0 && modelingGraphHtml.indexOf("규칙과 관계 해설") >= 0 && modelingGraphHtml.indexOf("RuleBox 규칙") >= 0, "관계 그래프 섹션에 Cytoscape 그래프와 텍스트 보조 패널이 없습니다.");
     assertOk(legacyOntologyGraphHtml.indexOf("managed-page managed-page-modeling") >= 0 && legacyOntologyGraphHtml.indexOf("<h2>온톨로지</h2>") >= 0, "기존 관계 그래프 URL이 통합 탭 온톨로지 섹션으로 열리지 않습니다.");
     assertOk(/\.ontology-relationship-graphs\s*\{[\s\S]*grid-template-columns: 1fr;/.test(styles), "관계 그래프가 전폭 1열 구조로 정의되지 않았습니다.");

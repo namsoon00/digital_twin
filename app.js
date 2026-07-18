@@ -5186,11 +5186,23 @@
   function investmentCalendarQueryString() {
     var filters = state.investmentCalendarFilters || {};
     var params = new URLSearchParams();
+    var windowRange = investmentCalendarQueryWindow();
+    params.set("from", windowRange.from);
+    params.set("to", windowRange.to);
     if (String(filters.symbol || "").trim()) params.set("symbol", String(filters.symbol || "").trim().toUpperCase());
     if (String(filters.eventType || "").trim()) params.set("eventType", String(filters.eventType || "").trim());
     if (String(filters.limit || "").trim()) params.set("limit", String(filters.limit || "").trim());
     var text = params.toString();
     return text ? "?" + text : "";
+  }
+
+  function investmentCalendarQueryWindow() {
+    var monthDate = investmentCalendarMonthDate();
+    var year = Number.isFinite(monthDate.getFullYear()) ? monthDate.getFullYear() : new Date().getFullYear();
+    return {
+      from: year + "-01-01T00:00:00Z",
+      to: year + "-12-31T23:59:59Z"
+    };
   }
 
   function staticInvestmentCalendarPayload(reason) {
@@ -8146,7 +8158,7 @@
       '<button class="mini-button" type="button" data-calendar-month-step="-1">이전</button>',
       '<button class="mini-button" type="button" data-calendar-month-today>이번 달</button>',
       '<button class="mini-button" type="button" data-calendar-month-step="1">다음</button>',
-      '<span class="metric">' + escapeHtml(monthEvents.length) + '</span>',
+      '<span class="investment-calendar-month-count">이번 달 ' + escapeHtml(monthEvents.length) + ' · 로드 ' + escapeHtml(events.length) + '</span>',
       '</div>',
       '</div>',
       '<form class="investment-calendar-filters" data-investment-calendar-filter-form>',
@@ -18964,7 +18976,7 @@
       button.addEventListener("click", function () {
         state.investmentCalendarMonthOffset += Number(button.getAttribute("data-calendar-month-step") || 0);
         state.investmentCalendarFocusedDayKey = "";
-        render();
+        loadInvestmentCalendar(true);
       });
     });
 
@@ -18972,7 +18984,7 @@
       button.addEventListener("click", function () {
         state.investmentCalendarMonthOffset = 0;
         state.investmentCalendarFocusedDayKey = investmentCalendarDayKey(new Date());
-        render();
+        loadInvestmentCalendar(true);
       });
     });
 

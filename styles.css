@@ -22545,6 +22545,19 @@ html[data-theme="dark"] .ontology-graph-expanded-toolbar .icon-button.danger {
   text-align: center;
 }
 
+.investment-calendar-month-count {
+  min-width: 0;
+  padding: 8px 10px;
+  border: 1px solid var(--ds-card-border);
+  border-radius: var(--ds-radius-control);
+  background: var(--ds-card-bg);
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 900;
+  line-height: 1.2;
+  white-space: nowrap;
+}
+
 .investment-calendar-month-shell {
   display: grid;
   gap: var(--ds-section-gap);

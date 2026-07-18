@@ -1291,7 +1291,10 @@ function checkFrontendAdminRender() {
     renderForSearch("?tab=accounts&account=management", null, { captureNewAccountButton: true, clickNewAccount: true }),
     renderForSearch("?tab=feed&feed=evidence"),
     renderForSearch("?tab=feed&feed=sources"),
-    renderForSearch("?tab=feed&feed=settings")
+    renderForSearch("?tab=feed&feed=settings"),
+    renderForSearch("?tab=experiments&lab=validation"),
+    renderForSearch("?tab=experiments&lab=promotion"),
+    renderForSearch("?tab=experiments&lab=proposals")
   ]).then(function (pages) {
     const overviewHtml = pages[0];
     const accountHtml = pages[1];
@@ -1321,6 +1324,9 @@ function checkFrontendAdminRender() {
     const feedEvidenceHtml = pages[25];
     const feedSourcesHtml = pages[26];
     const feedExplicitSettingsHtml = pages[27];
+    const experimentsValidationHtml = pages[28];
+    const experimentsPromotionHtml = pages[29];
+    const experimentsProposalsHtml = pages[30];
 
     [
       ["overview", overviewHtml],
@@ -1583,9 +1589,10 @@ function checkFrontendAdminRender() {
     );
     assertOk(code.indexOf("renderOntologyExperimentStarterPanel") >= 0 && styles.indexOf(".ontology-experiment-starter-grid") >= 0, "전략 검증 빈 상태가 시작 흐름 카드로 정리되지 않았습니다.");
     assertOk(code.indexOf("renderOntologyExperimentPipelinePanel") >= 0 && experimentsHtml.indexOf("검증 파이프라인") >= 0 && styles.indexOf(".ontology-experiment-stage-grid") >= 0, "전략 검증 탭에 실험 파이프라인 워크벤치가 렌더링되지 않습니다.");
-    assertOk(experimentsHtml.indexOf("백테스트 / 리플레이") >= 0 && experimentsHtml.indexOf("후보 비교") >= 0 && experimentsHtml.indexOf("승격 심사") >= 0, "전략 검증 탭이 리플레이·비교·승격 심사를 분리하지 않습니다.");
-    assertOk(experimentsHtml.indexOf("운영 반영 이력") >= 0 && code.indexOf("ontologyExperimentPromotionChecks") >= 0, "전략 검증 탭에 운영 반영 이력과 승격 체크리스트가 없습니다.");
-    assertOk(experimentsHtml.indexOf("strategy-proposal-console-panel") >= 0 && code.indexOf('state.activeTab === "experiments"') >= 0, "전략 검증 탭에서 전략 제안 승인 큐를 직접 확인할 수 없습니다.");
+    assertOk(experimentsHtml.indexOf("ontology-experiment-section-tabs") >= 0 && experimentsHtml.indexOf("data-lab-section=\"validation\"") >= 0, "전략 검증 탭 내부 섹션 탭이 렌더링되지 않습니다.");
+    assertOk(experimentsValidationHtml.indexOf("백테스트 / 리플레이") >= 0 && experimentsValidationHtml.indexOf("후보 비교") >= 0 && experimentsValidationHtml.indexOf("Selected Experiment") >= 0, "전략 검증 검증 섹션이 선택 실험 기준 리플레이·비교를 렌더링하지 않습니다.");
+    assertOk(experimentsPromotionHtml.indexOf("승격 심사") >= 0 && code.indexOf("ontologyExperimentPromotionGate") >= 0 && code.indexOf("promotionGate") >= 0, "전략 검증 승격 섹션이 서버 승격 게이트를 사용하지 않습니다.");
+    assertOk(experimentsProposalsHtml.indexOf("strategy-proposal-console-panel") >= 0 && code.indexOf('state.activeTab === "experiments"') >= 0, "전략 검증 탭에서 전략 제안 승인 큐를 직접 확인할 수 없습니다.");
     assertOk(notificationHtml.indexOf("NAVER") >= 0, "최근 알림 판단에서 국내 종목명이 코드 대신 렌더링되지 않습니다.");
     assertOk(notificationHtml.indexOf("035420 판단") < 0 && notificationHtml.indexOf("symbol=035420") < 0 && notificationHtml.indexOf(">035420<") < 0, "최근 알림 판단에 국내 종목코드가 그대로 노출됩니다.");
     assertOk(code.indexOf('indexOf("API를 찾지 못했습니다")') >= 0, "최근 알림 판단 API 미지원 상태를 빈 상태로 처리하지 않습니다.");

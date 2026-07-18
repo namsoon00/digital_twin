@@ -325,6 +325,44 @@ class OntologyLabTests(unittest.TestCase):
         self.assertEqual(0, len(repository.run_rulebox_payloads))
         self.assertEqual(0, len(repository.saved_tbox_graphs))
 
+    def test_status_exposes_server_promotion_gate_for_experiment_review(self):
+        store = MemoryExperimentStore()
+        repository = FakeOntologyRepository()
+        service = OntologyLabService(
+            repository,
+            store,
+            monitor_store=FakeMonitorStore(),
+        )
+        experiment_id = service.create({
+            "title": "AAPL gate lab",
+            "symbols": ["AAPL"],
+            "rules": [candidate_rule()],
+        })["experiment"]["id"]
+        service.run(experiment_id)
+
+        experiment = service.status()["experiments"][0]
+        gate = experiment["promotionGate"]
+
+        self.assertEqual("needs-review", gate["status"])
+        self.assertEqual("experiment-needs-review-approval", gate["reason"])
+        self.assertTrue(gate["canApply"])
+        self.assertTrue(gate["requiresReviewApproval"])
+        self.assertIn("promotionSummary", service.status())
+        self.assertIn("review-approval", {item["id"] for item in gate["checks"]})
+        review_check = [item for item in gate["checks"] if item["id"] == "review-approval"][0]
+        self.assertTrue(review_check["required"])
+
+        service.apply_recommendations(experiment_id, {
+            "reviewApproved": True,
+            "reviewedBy": "unit-test",
+            "reviewReason": "gate promotion test",
+        })
+        applied_gate = service.status()["experiments"][0]["promotionGate"]
+
+        self.assertEqual("applied", applied_gate["status"])
+        self.assertFalse(applied_gate["canApply"])
+        self.assertEqual("applied", applied_gate["applyStatus"])
+
     def test_suggest_from_ai_candidates_creates_draft_experiment_once(self):
         store = MemoryExperimentStore()
         service = OntologyLabService(

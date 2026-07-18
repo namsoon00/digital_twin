@@ -64,9 +64,14 @@ class OntologyLabService:
     def list(self) -> Dict[str, object]:
         experiments = self.experiment_store.list()
         return {
-            "experiments": [item.to_dict() for item in experiments],
+            "experiments": [self.experiment_payload(item) for item in experiments],
             "count": len(experiments),
         }
+
+    def experiment_payload(self, experiment: OntologyExperiment) -> Dict[str, object]:
+        payload = experiment.to_dict()
+        payload["promotionGate"] = ontology_promotion_gate(experiment)
+        return payload
 
     def enabled(self) -> bool:
         return truthy(self.settings.get("ontologyLabEnabled"), True)
@@ -135,7 +140,8 @@ class OntologyLabService:
             "autoNotifyEnabled": self.auto_notify_enabled(),
             "notificationConfigured": self.notification_configured(),
             "latestRun": latest_run,
-            "experiments": [item.to_dict() for item in experiments],
+            "promotionSummary": ontology_promotion_summary(experiments),
+            "experiments": [self.experiment_payload(item) for item in experiments],
         }
 
     def create(self, payload: Dict[str, object]) -> Dict[str, object]:
@@ -322,7 +328,7 @@ class OntologyLabService:
         experiment = self.experiment_store.get(experiment_id)
         if not experiment:
             return {"status": "not-found", "id": experiment_id}
-        return {"experiment": experiment.to_dict()}
+        return {"experiment": self.experiment_payload(experiment)}
 
     def run(self, experiment_id: str, payload: Dict[str, object] = None) -> Dict[str, object]:
         experiment = self.experiment_store.get(experiment_id)
@@ -1247,6 +1253,149 @@ def ontology_apply_readiness(last_result: Dict[str, object], payload: Dict[str, 
     if not isinstance(proposal, dict) or not proposal:
         return "experiment-has-no-ontology-proposal"
     return ""
+
+
+PROMOTION_GATE_REASON_LABELS = {
+    "": "운영 반영 가능",
+    "experiment-result-not-completed": "실험 실행 완료 필요",
+    "experiment-result-missing-completed-at": "완료 시각 누락",
+    "experiment-has-no-sandbox-graph-run": "샌드박스 그래프 실행 필요",
+    "experiment-needs-abox-data": "ABox 데이터 보강 필요",
+    "experiment-needs-review-approval": "수동 검토 승인 필요",
+    "experiment-readiness-not-promotable": "승격 판정 미충족",
+    "experiment-has-no-ontology-proposal": "온톨로지 변경안 없음",
+}
+
+PROMOTION_GATE_STATUS_LABELS = {
+    "ready": "반영 가능",
+    "needs-review": "검토 필요",
+    "blocked": "보류",
+    "applied": "운영 반영",
+    "already-applied": "이미 반영",
+    "pending": "반영 대기",
+    "disabled": "저장소 비활성",
+    "error": "반영 오류",
+}
+
+
+def ontology_promotion_summary(experiments: Iterable[OntologyExperiment]) -> Dict[str, int]:
+    summary: Dict[str, int] = {}
+    for experiment in experiments or []:
+        gate = ontology_promotion_gate(experiment)
+        status = str(gate.get("status") or "blocked")
+        summary[status] = summary.get(status, 0) + 1
+    return summary
+
+
+def ontology_promotion_gate(experiment: OntologyExperiment) -> Dict[str, object]:
+    last_result = dict(getattr(experiment, "last_result", {}) or {})
+    readiness = last_result.get("promotionReadiness") if isinstance(last_result.get("promotionReadiness"), dict) else {}
+    sandbox = last_result.get("sandbox") if isinstance(last_result.get("sandbox"), dict) else {}
+    inference = last_result.get("inference") if isinstance(last_result.get("inference"), dict) else {}
+    aggregate_delta = inference.get("aggregateDelta") if isinstance(inference.get("aggregateDelta"), dict) else {}
+    proposed = last_result.get("proposedOntologyChanges") if isinstance(last_result.get("proposedOntologyChanges"), dict) else {}
+    application = last_result.get("appliedOntologyChanges") if isinstance(last_result.get("appliedOntologyChanges"), dict) else {}
+    apply_status = str(application.get("status") or "").lower()
+    reason = ontology_apply_readiness(last_result, {})
+    requires_review = reason == "experiment-needs-review-approval"
+    applied = apply_status in {"applied", "already-applied"}
+    status = "ready" if not reason else ("needs-review" if requires_review else "blocked")
+    if applied:
+        status = apply_status
+    elif apply_status in {"pending", "disabled", "error"}:
+        status = apply_status
+    checks = ontology_promotion_checks(
+        experiment,
+        last_result,
+        readiness,
+        sandbox,
+        aggregate_delta,
+        proposed,
+        apply_status,
+    )
+    return {
+        "status": status,
+        "statusLabel": PROMOTION_GATE_STATUS_LABELS.get(status, status or "보류"),
+        "reason": reason,
+        "reasonLabel": PROMOTION_GATE_REASON_LABELS.get(reason, reason or "운영 반영 가능"),
+        "canApply": bool((not reason or requires_review) and not applied and ontology_result_has_apply_targets(last_result)),
+        "requiresReviewApproval": requires_review,
+        "completedAt": str(last_result.get("completedAt") or ""),
+        "readinessStatus": str(readiness.get("status") or ""),
+        "readinessScore": readiness.get("score"),
+        "applyStatus": apply_status,
+        "checks": checks,
+    }
+
+
+def ontology_promotion_checks(
+    experiment: OntologyExperiment,
+    last_result: Dict[str, object],
+    readiness: Dict[str, object],
+    sandbox: Dict[str, object],
+    aggregate_delta: Dict[str, object],
+    proposed: Dict[str, object],
+    apply_status: str,
+) -> List[Dict[str, object]]:
+    candidate_rules = list(getattr(experiment, "candidate_rules", []) or [])
+    graph_run_count = int_setting({"graphRunCount": sandbox.get("graphRunCount")}, "graphRunCount", 0, 0, 1000000)
+    derived_count = int_setting({"derivedRelationCount": aggregate_delta.get("derivedRelationCount")}, "derivedRelationCount", 0, 0, 1000000)
+    relation_types = clean_text_list((aggregate_delta or {}).get("newRelationTypes") or proposed.get("newRelationTypes") or proposed.get("relationTypes") or [])
+    readiness_status = str((readiness or {}).get("status") or "").lower()
+    recommendations = [dict(item) for item in (last_result.get("recommendations") or []) if isinstance(item, dict)]
+    apply_done = str(apply_status or "").lower() in {"applied", "already-applied"}
+    return [
+        {
+            "id": "candidate-rules",
+            "label": "가설·후보 규칙",
+            "passed": bool(str(getattr(experiment, "hypothesis", "") or "").strip() or candidate_rules),
+            "detail": (str(len(candidate_rules)) + "개 후보 규칙") if candidate_rules else "가설 또는 후보 규칙 필요",
+            "blocking": True,
+        },
+        {
+            "id": "replay-run",
+            "label": "재생 실행",
+            "passed": str(last_result.get("status") or "").lower() == "completed" and bool(str(last_result.get("completedAt") or "").strip()),
+            "detail": str(last_result.get("completedAt") or "실행 이력 없음"),
+            "blocking": True,
+        },
+        {
+            "id": "graph-evidence",
+            "label": "그래프 증거",
+            "passed": graph_run_count > 0,
+            "detail": str(graph_run_count) + "개 그래프 · 파생 변화 " + str(derived_count),
+            "blocking": True,
+        },
+        {
+            "id": "abox-coverage",
+            "label": "ABox 커버리지",
+            "passed": readiness_status != "needs-data",
+            "detail": "ABox 리플레이 가능" if readiness_status != "needs-data" else "최근 스냅샷 데이터 필요",
+            "blocking": True,
+        },
+        {
+            "id": "ontology-proposal",
+            "label": "온톨로지 변경안",
+            "passed": ontology_result_has_apply_targets(last_result),
+            "detail": "관계 타입 " + str(len(relation_types)) + "개 · 제안 " + str(len(recommendations)) + "건",
+            "blocking": True,
+        },
+        {
+            "id": "review-approval",
+            "label": "수동 검토",
+            "passed": readiness_status != "needs-review",
+            "required": readiness_status == "needs-review",
+            "detail": "수동 승인 필요" if readiness_status == "needs-review" else "추가 승인 불필요",
+            "blocking": False,
+        },
+        {
+            "id": "apply-state",
+            "label": "운영 반영",
+            "passed": apply_done,
+            "detail": PROMOTION_GATE_STATUS_LABELS.get(str(apply_status or "").lower(), "미반영"),
+            "blocking": False,
+        },
+    ]
 
 
 def ontology_review_approved(payload: Dict[str, object]) -> bool:

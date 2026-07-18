@@ -7999,6 +7999,11 @@
     return date.toLocaleTimeString("ko-KR", { hour: "2-digit", minute: "2-digit" });
   }
 
+  function investmentCalendarTargetLabel(event) {
+    var targets = ((event || {}).symbols || []).concat(((event || {}).markets || []));
+    return targets.slice(0, 3).join(" · ") || "전체 포트폴리오";
+  }
+
   function investmentCalendarSortEvents(events) {
     return (events || []).slice().sort(function (a, b) {
       return Date.parse(a.startsAt || "") - Date.parse(b.startsAt || "");
@@ -8063,7 +8068,7 @@
       renderCalendarKpi("전체", summary.total || 0, "등록 이벤트", "metric-cell", "hold"),
       renderCalendarKpi("예정", summary.upcoming || upcoming.length || 0, "활성 일정", "metric-cell", upcoming.length ? "watch" : "hold"),
       renderCalendarKpi("중요", important, "중요도 80+", "metric-cell", important ? "caution" : "hold"),
-      renderCalendarKpi("다음", next.title || "대기", next.startsAt ? formatClock(next.startsAt) : "등록 필요", "metric-cell", next.startsAt ? "watch" : "hold"),
+      renderCalendarKpi("다음", next.startsAt ? formatClock(next.startsAt) : "대기", next.startsAt ? investmentCalendarEventTypeLabel(next.eventType) + " · " + investmentCalendarTargetLabel(next) : "등록 필요", "metric-cell", next.startsAt ? "watch" : "hold"),
       '</div>',
       '</article>'
     ].join("");
@@ -8376,14 +8381,16 @@
     var upcoming = investmentCalendarUpcomingEvents();
     var next = upcoming[0] || {};
     var byType = (summary.byType || []).length ? summary.byType : [{ eventType: "custom", count: 0 }];
+    var nextType = next.eventType ? investmentCalendarEventTypeLabel(next.eventType) : "캘린더 준비";
+    var nextTarget = next.startsAt ? investmentCalendarTargetLabel(next) : "예정 이벤트 없음";
     return [
       '<aside class="investment-calendar-rail">',
       '<section class="panel investment-calendar-next-card"' + cardTypeAttrs("action-queue-card", next.startsAt ? "watch" : "hold") + '>',
       '<div class="panel-head"><div><p class="label">NEXT ACTION</p><h2>다음 알림</h2></div></div>',
       '<div class="investment-calendar-next-body">',
-      '<strong>' + escapeHtml(next.title || "등록 대기") + '</strong>',
-      '<span>' + escapeHtml(next.startsAt ? formatClock(next.startsAt) : "예정 이벤트를 등록하면 알림 후보가 생성됩니다.") + '</span>',
-      '<em>' + escapeHtml(next.eventType ? investmentCalendarEventTypeLabel(next.eventType) : "캘린더 준비") + '</em>',
+      '<strong class="investment-calendar-next-time">' + escapeHtml(next.startsAt ? formatClock(next.startsAt) : "등록 대기") + '</strong>',
+      '<em>' + escapeHtml(nextType + " · " + nextTarget) + '</em>',
+      '<span class="investment-calendar-next-title">' + escapeHtml(next.title || "예정 이벤트를 등록하면 알림 후보가 생성됩니다.") + '</span>',
       '</div>',
       renderCalendarEntryButton("이벤트 등록", "text-button primary"),
       '</section>',

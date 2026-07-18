@@ -22789,3 +22789,51 @@ html[data-theme="dark"] .ontology-graph-expanded-toolbar .icon-button.danger {
     min-width: 760px;
   }
 }
+
+/* Calendar next-alert hierarchy: show time first, keep long titles secondary. */
+.investment-calendar-kpi strong,
+.investment-calendar-kpi b {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.investment-calendar-kpi strong {
+  line-height: 1.16;
+  overflow-wrap: anywhere;
+}
+
+.investment-calendar-kpi b {
+  display: -webkit-box;
+  line-height: 1.32;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+}
+
+.investment-calendar-next-body {
+  gap: 8px;
+}
+
+.investment-calendar-next-body .investment-calendar-next-time {
+  color: var(--blue);
+  font-size: 20px;
+  line-height: 1.18;
+}
+
+.investment-calendar-next-body .investment-calendar-next-title {
+  display: -webkit-box;
+  color: var(--ink);
+  font-size: 14px;
+  font-weight: 900;
+  line-height: 1.36;
+  overflow: hidden;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 3;
+}
+
+.investment-calendar-next-body em {
+  display: -webkit-box;
+  overflow: hidden;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+}

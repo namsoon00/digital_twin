@@ -19702,8 +19702,7 @@ html[data-theme="dark"] .ontology-graph-expanded-toolbar .icon-button.danger {
 
 /* Layer reduction: inline detail surfaces and focused modal entry */
 .inline-detail-surface,
-.feed-inline-detail,
-.investment-calendar-event-detail {
+.feed-inline-detail {
   display: grid;
   gap: var(--ds-section-gap);
   min-width: 0;
@@ -19713,8 +19712,7 @@ html[data-theme="dark"] .ontology-graph-expanded-toolbar .icon-button.danger {
 }
 
 .research-evidence-detail,
-.investment-action-detail,
-.investment-calendar-event-detail {
+.investment-action-detail {
   grid-column: 1 / -1;
 }
 
@@ -23156,5 +23154,117 @@ html[data-theme="dark"] .ontology-graph-expanded-toolbar .icon-button.danger {
 
   .investment-action-checks .mini-button {
     justify-self: stretch;
+  }
+}
+
+/* Summary-first list UX pass: dense cards expose only decision-grade data in lists. */
+.console-shell [data-card-format="summary-list-card"] {
+  border-radius: var(--ds-radius-panel);
+  border-color: color-mix(in srgb, var(--ds-card-border) 88%, transparent);
+  background:
+    linear-gradient(180deg, color-mix(in srgb, var(--ds-card-head-bg) 58%, transparent), transparent 64%),
+    var(--ds-card-bg);
+  box-shadow:
+    inset 0 1px 0 color-mix(in srgb, white 34%, transparent),
+    0 1px 2px color-mix(in srgb, var(--ink) 5%, transparent);
+}
+
+.console-shell [data-card-format="summary-list-card"]:hover {
+  border-color: color-mix(in srgb, var(--card-type-accent, var(--blue)) 30%, var(--ds-card-border));
+  background:
+    linear-gradient(180deg, color-mix(in srgb, var(--card-type-soft-bg, var(--blue-soft)) 34%, transparent), transparent 70%),
+    var(--ds-card-bg);
+}
+
+.console-shell [data-card-format="summary-list-card"] :is(p, .subtle, .service-account-line, .strategy-data-main span, .strategy-data-main em, .alert-main p, .investment-calendar-event-copy p) {
+  display: -webkit-box;
+  overflow: hidden;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 1;
+  line-clamp: 1;
+}
+
+.console-shell [data-card-format="summary-list-card"] :is(strong, h3) {
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.console-shell .summary-first-actions {
+  display: flex;
+  justify-content: flex-end;
+  align-items: center;
+  gap: var(--ds-space-2);
+  margin-top: var(--ds-space-3);
+}
+
+.console-shell .investment-evidence-card[data-card-format="summary-list-card"] {
+  gap: var(--ds-space-4);
+}
+
+.console-shell .investment-evidence-card[data-card-format="summary-list-card"] .investment-evidence-grid {
+  grid-template-columns: repeat(auto-fit, minmax(122px, 1fr));
+}
+
+.console-shell .investment-evidence-card[data-card-format="summary-list-card"] .investment-evidence-columns,
+.console-shell .investment-evidence-card[data-card-format="summary-list-card"] .reasoning-execution-plan,
+.console-shell .investment-evidence-card[data-card-format="summary-list-card"] .reasoning-graph-refs {
+  display: none;
+}
+
+.console-shell .ontology-experiment-card[data-card-format="summary-list-card"] {
+  gap: var(--ds-space-4);
+}
+
+.console-shell .ontology-experiment-card[data-card-format="summary-list-card"] .ontology-experiment-card-metrics {
+  grid-template-columns: repeat(auto-fit, minmax(116px, 1fr));
+}
+
+.console-shell .ontology-experiment-card[data-card-format="summary-list-card"] .ontology-experiment-recommendations {
+  display: none;
+}
+
+.console-shell .ontology-experiment-card[data-card-format="summary-list-card"] .ontology-experiment-tags {
+  max-height: 34px;
+  overflow: hidden;
+}
+
+.console-shell .model-preview-row[data-card-format="summary-list-card"] .model-plain-explain,
+.console-shell .model-preview-row[data-card-format="summary-list-card"] .model-feature-audit:not(.model-relation-summary),
+.console-shell .model-preview-row[data-card-format="summary-list-card"] .exit-reasons {
+  display: none;
+}
+
+.console-shell .model-preview-row[data-card-format="summary-list-card"] .lab-model-grid {
+  grid-template-columns: repeat(auto-fit, minmax(116px, 1fr));
+}
+
+.console-shell .account-card[data-card-format="summary-list-card"] .account-credential-grid {
+  grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+}
+
+.console-shell .account-card[data-card-format="summary-list-card"] > .chip-row {
+  max-height: 38px;
+  overflow: hidden;
+}
+
+.console-shell .service-account-row[data-card-format="summary-list-card"] .account-exposure-grid {
+  grid-template-columns: repeat(auto-fit, minmax(112px, 1fr));
+}
+
+.console-shell .strategy-data-row[data-card-format="summary-list-card"] {
+  grid-template-columns: minmax(0, 1fr) minmax(170px, auto);
+  align-items: center;
+}
+
+.console-shell .alert-row[data-card-format="summary-list-card"],
+.console-shell .monitoring-instrument-row[data-card-format="summary-list-card"] {
+  cursor: pointer;
+}
+
+@media (min-width: 1181px) {
+  .console-shell .investment-evidence-card[data-card-format="summary-list-card"],
+  .console-shell .ontology-experiment-card[data-card-format="summary-list-card"],
+  .console-shell .investment-calendar-event[data-card-format="summary-list-card"] {
+    padding: var(--ds-card-comfort-pad-y) var(--ds-card-comfort-pad-x);
   }
 }

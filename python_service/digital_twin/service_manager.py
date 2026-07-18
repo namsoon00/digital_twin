@@ -129,6 +129,11 @@ def typedb_worker_spec(settings: Dict[str, object]) -> Dict[str, object]:
         "autoResetEnabled": str((settings or {}).get("typedbAutoResetEnabled") or "1"),
         "healthAddress": address,
         "startupWaitSeconds": str((settings or {}).get("typedbStartupWaitSeconds") or "60"),
+        "seedOnStart": str((settings or {}).get("typedbSeedOnStart") or os.environ.get("TYPEDB_SEED_ON_START") or "1"),
+        "seedReplaceRuleBox": str((settings or {}).get("typedbSeedReplaceRuleBox") or os.environ.get("TYPEDB_SEED_REPLACE_RULEBOX") or "1"),
+        "seedKeepInference": str((settings or {}).get("typedbSeedKeepInference") or os.environ.get("TYPEDB_SEED_KEEP_INFERENCE") or "1"),
+        "seedTimeoutSeconds": str((settings or {}).get("typedbSeedTimeoutSeconds") or os.environ.get("TYPEDB_SEED_TIMEOUT_SECONDS") or "180"),
+        "seedRetryCount": str((settings or {}).get("typedbSeedRetryCount") or os.environ.get("TYPEDB_SEED_RETRY_COUNT") or "2"),
         "missingReason": "" if executable else "TypeDB executable was not found. Install TypeDB or set TYPEDB_COMMAND.",
     }
 
@@ -393,6 +398,69 @@ def wait_for_typedb_ready(spec: Dict[str, object]) -> bool:
     return False
 
 
+def typedb_seed_command(spec: Dict[str, object]) -> List[str]:
+    command = [sys.executable, "-u", "python_service/service.py", "ontology", "seed"]
+    if truthy(spec.get("seedReplaceRuleBox")):
+        command.append("--replace-rulebox")
+    if truthy(spec.get("seedKeepInference")):
+        command.append("--keep-inference")
+    return command
+
+
+def append_log_text(path: Path, label: str, text: str) -> None:
+    append_log(path, label)
+    if not text:
+        return
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with path.open("a", encoding="utf-8") as handle:
+        handle.write(text.rstrip() + "\n")
+
+
+def ensure_typedb_seeded(spec: Dict[str, object]) -> bool:
+    if str(spec.get("role") or "") != "typedb":
+        return True
+    if not truthy(spec.get("seedOnStart")):
+        append_log(spec["log"], "seed skipped")
+        print(str(spec["label"]) + " RuleBox seed skipped.")
+        return True
+    command = typedb_seed_command(spec)
+    timeout_seconds = int_value(spec.get("seedTimeoutSeconds"), 180, 1)
+    attempts = int_value(spec.get("seedRetryCount"), 2, 0) + 1
+    for attempt in range(1, attempts + 1):
+        append_log(spec["log"], "seed start attempt=" + str(attempt))
+        print(str(spec["label"]) + " seeding ontology RuleBox. attempt=" + str(attempt))
+        try:
+            result = subprocess.run(
+                command,
+                cwd=str(ROOT_DIR),
+                env=dict(os.environ, PYTHONUNBUFFERED="1"),
+                stdin=subprocess.DEVNULL,
+                capture_output=True,
+                text=True,
+                timeout=timeout_seconds,
+            )
+        except subprocess.TimeoutExpired as error:
+            output = (error.stdout or "") + ("\n" if error.stdout and error.stderr else "") + (error.stderr or "")
+            append_log_text(spec["log"], "seed timeout attempt=" + str(attempt), output)
+            print(str(spec["label"]) + " RuleBox seed timed out after " + str(timeout_seconds) + "s.")
+        else:
+            output = (result.stdout or "") + ("\n" if result.stdout and result.stderr else "") + (result.stderr or "")
+            if result.returncode == 0:
+                append_log_text(spec["log"], "seed ok attempt=" + str(attempt), output)
+                print(str(spec["label"]) + " RuleBox seed ok.")
+                return True
+            append_log_text(
+                spec["log"],
+                "seed failed attempt=" + str(attempt) + " exit=" + str(result.returncode),
+                output,
+            )
+            print(str(spec["label"]) + " RuleBox seed failed. exit=" + str(result.returncode))
+        if attempt < attempts:
+            time.sleep(1.0)
+    print(str(spec["label"]) + " RuleBox seed failed after " + str(attempts) + " attempts.")
+    return False
+
+
 def start_worker(spec: Dict[str, object]) -> int:
     if spec.get("missingReason") or not spec.get("command"):
         print(str(spec["label"]) + " not started. " + str(spec.get("missingReason") or "Command is not configured."))
@@ -402,8 +470,11 @@ def start_worker(spec: Dict[str, object]) -> int:
     existing = read_pid(pid_path)
     if is_running(existing, spec):
         print(str(spec["label"]) + " already running.")
-        if str(spec.get("role") or "") == "typedb" and not wait_for_typedb_ready(spec):
-            return 1
+        if str(spec.get("role") or "") == "typedb":
+            if not wait_for_typedb_ready(spec):
+                return 1
+            if not ensure_typedb_seeded(spec):
+                return 1
         return status_worker(spec)
     if existing:
         remove_pid(pid_path)
@@ -428,8 +499,11 @@ def start_worker(spec: Dict[str, object]) -> int:
     os.chmod(pid_path, 0o600)
     print(str(spec["label"]) + " started. pid=" + str(process.pid))
     print("Log: " + str(log_path))
-    if str(spec.get("role") or "") == "typedb" and not wait_for_typedb_ready(spec):
-        return 1
+    if str(spec.get("role") or "") == "typedb":
+        if not wait_for_typedb_ready(spec):
+            return 1
+        if not ensure_typedb_seeded(spec):
+            return 1
     return 0
 
 

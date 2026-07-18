@@ -736,6 +736,11 @@ class TypeDBOntologyRepositoryTests(unittest.TestCase):
         self.assertEqual("2048", workers["typedb"]["maxSizeMb"])
         self.assertEqual("127.0.0.1:1729", workers["typedb"]["healthAddress"])
         self.assertEqual("60", workers["typedb"]["startupWaitSeconds"])
+        self.assertEqual("1", workers["typedb"]["seedOnStart"])
+        self.assertEqual("1", workers["typedb"]["seedReplaceRuleBox"])
+        self.assertEqual("1", workers["typedb"]["seedKeepInference"])
+        self.assertEqual("180", workers["typedb"]["seedTimeoutSeconds"])
+        self.assertEqual("2", workers["typedb"]["seedRetryCount"])
 
     def test_service_manager_waits_for_typedb_tcp_readiness(self):
         with tempfile.TemporaryDirectory() as temp:
@@ -757,6 +762,64 @@ class TypeDBOntologyRepositoryTests(unittest.TestCase):
 
         self.assertEqual(("127.0.0.1", 1729), service_manager.typedb_host_port("127.0.0.1:1729"))
         self.assertEqual(("127.0.0.1", 1729), service_manager.typedb_host_port("http://127.0.0.1:1729"))
+
+    def test_service_manager_seeds_typedb_rulebox_before_dependents_start(self):
+        with tempfile.TemporaryDirectory() as temp:
+            spec = {
+                "label": "TypeDB ontology graph store",
+                "role": "typedb",
+                "log": Path(temp) / "typedb.log",
+                "seedOnStart": "1",
+                "seedReplaceRuleBox": "1",
+                "seedKeepInference": "1",
+                "seedTimeoutSeconds": "5",
+                "seedRetryCount": "1",
+            }
+            results = [
+                SimpleNamespace(returncode=1, stdout="", stderr="TypeDB is warming up"),
+                SimpleNamespace(returncode=0, stdout='{"status":"ok","ruleBoxReplaced":true}', stderr=""),
+            ]
+
+            with patch.object(service_manager.subprocess, "run", side_effect=results) as run, \
+                    patch.object(service_manager.time, "sleep", return_value=None):
+                self.assertTrue(service_manager.ensure_typedb_seeded(spec))
+
+            self.assertEqual(2, run.call_count)
+            command = run.call_args[0][0]
+            self.assertEqual(command[:5], [
+                service_manager.sys.executable,
+                "-u",
+                "python_service/service.py",
+                "ontology",
+                "seed",
+            ])
+            self.assertIn("--replace-rulebox", command)
+            self.assertIn("--keep-inference", command)
+            log_text = spec["log"].read_text(encoding="utf-8")
+            self.assertIn("seed failed attempt=1", log_text)
+            self.assertIn("seed ok attempt=2", log_text)
+
+    def test_service_manager_fails_start_when_typedb_rulebox_seed_fails(self):
+        with tempfile.TemporaryDirectory() as temp:
+            spec = {
+                "label": "TypeDB ontology graph store",
+                "role": "typedb",
+                "log": Path(temp) / "typedb.log",
+                "seedOnStart": "1",
+                "seedReplaceRuleBox": "1",
+                "seedKeepInference": "1",
+                "seedTimeoutSeconds": "5",
+                "seedRetryCount": "0",
+            }
+
+            with patch.object(service_manager.subprocess, "run", return_value=SimpleNamespace(
+                returncode=1,
+                stdout='{"status":"rulebox-replace-failed"}',
+                stderr="",
+            )):
+                self.assertFalse(service_manager.ensure_typedb_seeded(spec))
+
+            self.assertIn("seed failed attempt=1 exit=1", spec["log"].read_text(encoding="utf-8"))
 
     def test_service_manager_does_not_start_dependents_when_typedb_is_not_ready(self):
         calls = []

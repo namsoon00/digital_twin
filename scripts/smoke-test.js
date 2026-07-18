@@ -238,7 +238,7 @@ function checkFrontendAdminRender() {
       /\.console-shell \.app-nav-command \.page-command-metrics\s*\{[\s\S]*display: none;/.test(styles) &&
       /\.console-shell \.app-nav-routine > span:not\(\.app-nav-routine-action-cell\)\s*\{[\s\S]*display: none;/.test(styles) &&
       /@media \(min-width: 861px\) and \(max-width: 1180px\)[\s\S]*\.console-shell \.app-nav-flow,[\s\S]*\.console-shell \.app-nav-command \.page-command-metrics,[\s\S]*\.console-shell \.app-nav-current em,[\s\S]*\.console-shell :is\([\s\S]*\.feed-section-tabs span[\s\S]*\)\s*\{[\s\S]*display: none;/.test(styles) &&
-      indexHtml.indexOf("styles.css?v=20260718-calendar-board-v1") >= 0,
+      indexHtml.indexOf("styles.css?v=20260718-calendar-next-alert-v1") >= 0,
     "PC 상단 영역이 탭별로 여러 줄/넘침으로 깨지지 않도록 하는 안정화 레이어가 없습니다."
   );
   assertOk(
@@ -252,7 +252,7 @@ function checkFrontendAdminRender() {
       /\.loading-progress span\s*\{[\s\S]*animation: loadingProgress/.test(styles) &&
       /\.loading-skeleton-grid\s*\{[\s\S]*grid-template-columns: repeat\(4, minmax\(0, 1fr\)\);/.test(styles) &&
       /@keyframes loadingProgress/.test(styles) &&
-      indexHtml.indexOf("app.js?v=20260718-calendar-board-v1") >= 0,
+      indexHtml.indexOf("app.js?v=20260718-calendar-next-alert-v1") >= 0,
     "초기 로딩 화면이 운영 정보 카드 대신 progress/skeleton 화면으로 고정되지 않았습니다."
   );
   assertOk(
@@ -1537,7 +1537,14 @@ function checkFrontendAdminRender() {
     assertOk(notificationHtml.indexOf("notification-ops-rail") < notificationHtml.indexOf("notification-decision-panel"), "기본 현황에서 상태 레일 다음에 최근 알림 판단이 이어지지 않습니다.");
     assertOk(notificationHtml.indexOf("notification-decision-body") >= 0, "최근 알림 판단 본문 영역이 분리되지 않았습니다.");
     assertOk(code.indexOf("renderNotificationDecisionEmptyConsole") >= 0 && styles.indexOf(".notification-empty-console") >= 0, "최근 알림 판단 빈 상태가 후보/판단/설정 흐름으로 구조화되지 않았습니다.");
-    assertOk(code.indexOf("renderInvestmentCalendarRailPanel") >= 0 && styles.indexOf(".investment-calendar-rail") >= 0, "투자 캘린더가 PC 타임라인/상태 레일 구조로 정리되지 않았습니다.");
+    assertOk(
+      code.indexOf("renderInvestmentCalendarRailPanel") >= 0 &&
+        code.indexOf("investment-calendar-next-time") >= 0 &&
+        code.indexOf("investment-calendar-next-title") >= 0 &&
+        styles.indexOf(".investment-calendar-rail") >= 0 &&
+        styles.indexOf("Calendar next-alert hierarchy") >= 0,
+      "투자 캘린더 다음 알림이 시간 우선 요약 카드로 정리되지 않았습니다."
+    );
     assertOk(code.indexOf("renderOntologyExperimentStarterPanel") >= 0 && styles.indexOf(".ontology-experiment-starter-grid") >= 0, "전략 검증 빈 상태가 시작 흐름 카드로 정리되지 않았습니다.");
     assertOk(notificationHtml.indexOf("NAVER") >= 0, "최근 알림 판단에서 국내 종목명이 코드 대신 렌더링되지 않습니다.");
     assertOk(notificationHtml.indexOf("035420 판단") < 0 && notificationHtml.indexOf("symbol=035420") < 0 && notificationHtml.indexOf(">035420<") < 0, "최근 알림 판단에 국내 종목코드가 그대로 노출됩니다.");

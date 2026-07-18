@@ -471,6 +471,10 @@
     ontologyExperimentAction: "",
     activeExperimentSection: initialExperimentSection(),
     activeOntologyExperimentId: initialOntologyExperimentId(),
+    ontologyInferenceLedger: null,
+    ontologyInferenceLedgerLoading: false,
+    ontologyInferenceLedgerLoaded: false,
+    ontologyInferenceLedgerError: "",
     strategyProposals: null,
     strategyProposalsLoading: false,
     strategyProposalsLoaded: false,
@@ -3933,6 +3937,8 @@
     })
       .then(function (payload) {
         showSnackbar(payload && payload.seeded ? "TypeDB 온톨로지를 시드했습니다." : "TypeDB 시드 결과를 확인하세요.", payload && payload.status === "error" ? "danger" : "success");
+        state.ontologyInferenceLedgerLoaded = false;
+        state.ontologyInferenceLedger = null;
         return Promise.all([loadOntologyRulebox(true), loadOntologyDiagnostics(true)])
           .then(function () { return payload; });
       })
@@ -4129,6 +4135,98 @@
       });
   }
 
+  function shouldLoadOntologyInferenceLedger() {
+    if (state.activeTab !== "modeling") return false;
+    var section = activeSectionForPageMode("modeling", strategySections, normalizeStrategySection(state.activeStrategySection));
+    return section === "trace";
+  }
+
+  function ontologyInferenceLedgerPath() {
+    var params = new URLSearchParams();
+    params.set("limit", "120");
+    return "/api/ontology/inference-ledger?" + params.toString();
+  }
+
+  function staticOntologyInferenceLedgerPayload() {
+    var parts = ontologyStrategyParts(state.snapshot || {});
+    var inferenceRows = ontologyReadableInferenceRows(parts);
+    return {
+      generatedAt: ((state.snapshot || {}).generatedAt || new Date().toISOString()),
+      status: inferenceRows.length ? "preview" : "empty",
+      graphStore: "snapshot",
+      source: "snapshot",
+      reason: inferenceRows.length ? "" : "정적 미리보기에는 TypeDB InferenceBox 원장이 포함되지 않습니다.",
+      summary: {
+        ledgerCount: inferenceRows.length,
+        traceCount: inferenceRows.length,
+        relationCount: inferenceRows.length,
+        entityCount: 0,
+        matchedRuleCount: 0,
+        activeRuleCount: ontologyReadableRuleRows(parts).length,
+        untracedRuleCount: 0,
+        conditionCount: 0,
+        matchedConditionCount: 0,
+        notReturnedConditionCount: 0
+      },
+      ruleCoverage: { matchedRuleIds: [], untracedRuleIds: [], coverageRatio: 0 },
+      rows: inferenceRows.map(function (row, index) {
+        return {
+          key: "preview-ledger-" + index,
+          symbol: row.source || "",
+          ruleId: row.detail || row.type || "",
+          ruleLabel: row.type || "InferenceBox",
+          status: "preview",
+          confidence: row.weight,
+          decisionStage: row.detail || "",
+          relationTypes: [row.type].filter(Boolean),
+          matchedConditionCount: 0,
+          conditionCount: 0,
+          derivedRelationCount: 1,
+          derivedEntityCount: 0,
+          conditions: [],
+          derivations: [],
+          relations: [{ type: row.type, sourceLabel: row.source, targetLabel: row.target, aiInfluenceLabel: row.detail, weight: row.weight }],
+          stages: [
+            { id: "source-data", label: "Source facts", status: "preview", detail: "snapshot relation" },
+            { id: "rulebox", label: "RuleBox", status: "preview", detail: row.detail || "" },
+            { id: "inferencebox", label: "InferenceBox", status: "preview", detail: row.type || "" },
+            { id: "derived-output", label: "Derived output", status: "preview", detail: [row.source, row.target].filter(Boolean).join(" → ") }
+          ]
+        };
+      })
+    };
+  }
+
+  function loadOntologyInferenceLedger(force) {
+    if (isStaticPreviewHost()) {
+      state.ontologyInferenceLedger = staticOntologyInferenceLedgerPayload();
+      state.ontologyInferenceLedgerLoaded = true;
+      state.ontologyInferenceLedgerError = "";
+      if (state.snapshot) render();
+      return Promise.resolve(state.ontologyInferenceLedger);
+    }
+    if (state.ontologyInferenceLedgerLoading && !force) return Promise.resolve(state.ontologyInferenceLedger);
+    if (state.ontologyInferenceLedgerLoaded && state.ontologyInferenceLedger && !force) return Promise.resolve(state.ontologyInferenceLedger);
+    state.ontologyInferenceLedgerLoading = true;
+    state.ontologyInferenceLedgerError = "";
+    if (state.snapshot) render();
+    return requestJson(ontologyInferenceLedgerPath())
+      .then(function (payload) {
+        state.ontologyInferenceLedger = payload || {};
+        state.ontologyInferenceLedgerLoaded = true;
+        state.ontologyInferenceLedgerError = "";
+        return payload;
+      })
+      .catch(function (error) {
+        state.ontologyInferenceLedgerError = error.message || "Inference Trace Ledger를 읽지 못했습니다.";
+        return null;
+      })
+      .finally(function () {
+        state.ontologyInferenceLedgerLoading = false;
+        if (state.snapshot) render();
+      });
+  }
+
   function applyOntologyRuleboxPayload(payload) {
     state.ontologyRulebox = payload || {};
     state.ontologyRuleboxJson = JSON.stringify((payload && payload.rules) || [], null, 2);
@@ -4169,6 +4267,8 @@
     })
       .then(function (payload) {
         applyOntologyRuleboxPayload(payload);
+        state.ontologyInferenceLedgerLoaded = false;
+        state.ontologyInferenceLedger = null;
         state.ontologyRuleboxChangeReason = "";
         showSnackbar(seedDefaults ? "기본 RuleBox를 TypeDB에 시드했습니다." : "TypeDB RuleBox를 저장했습니다.");
       })
@@ -4222,7 +4322,8 @@
       .then(function (payload) {
         state.ontologyRuleboxLastRun = payload;
         showSnackbar(payload.status === "ok" ? "TypeDB 네이티브 규칙 추론을 실행했습니다." : "네이티브 규칙 실행 결과: " + (payload.status || "확인 필요"), payload.status === "ok" ? "success" : "caution");
-        return loadOntologyRulebox(true);
+        state.ontologyInferenceLedgerLoaded = false;
+        return Promise.all([loadOntologyRulebox(true), loadOntologyInferenceLedger(true)]);
       })
       .catch(function (error) {
         state.ontologyRuleboxError = error.message || "TypeDB 네이티브 규칙 추론 실행에 실패했습니다.";
@@ -7544,6 +7645,9 @@
     if (state.activeTab === "system" && !state.ontologyAuditLoaded && !state.ontologyAuditLoading) {
       loadOntologyAudit(false);
     }
+    if (shouldLoadOntologyInferenceLedger() && !state.ontologyInferenceLedgerLoaded && !state.ontologyInferenceLedgerLoading) {
+      loadOntologyInferenceLedger(false);
+    }
     if (shouldLoadOntologyStrategyDetail() && !snapshotHasFullOntologyDetail(state.snapshot) && !state.ontologyStrategyDetailLoading) {
       loadOntologyStrategyDetail(false);
     }
@@ -7788,9 +7892,145 @@
     );
   }
 
+  function inferenceLedgerPayload() {
+    return state.ontologyInferenceLedger && typeof state.ontologyInferenceLedger === "object" ? state.ontologyInferenceLedger : {};
+  }
+
+  function inferenceLedgerRows() {
+    var payload = inferenceLedgerPayload();
+    return Array.isArray(payload.rows) ? payload.rows : [];
+  }
+
+  function inferenceLedgerSummary() {
+    var payload = inferenceLedgerPayload();
+    return payload.summary && typeof payload.summary === "object" ? payload.summary : {};
+  }
+
+  function inferenceLedgerTone(value) {
+    var text = String(value || "").toLowerCase();
+    if (["complete", "ok", "matched", "materialized", "linked"].indexOf(text) >= 0) return "watch";
+    if (["review", "not-returned", "error"].indexOf(text) >= 0) return "danger";
+    if (["empty", "none", "not-used"].indexOf(text) >= 0) return "hold";
+    return "caution";
+  }
+
+  function inferenceLedgerConditionText(condition) {
+    condition = condition || {};
+    var parts = [
+      condition.field,
+      condition.operator,
+      condition.value !== undefined && condition.value !== null ? condition.value : "",
+      condition.relationType ? "relation " + condition.relationType : "",
+      condition.evidenceRelationId ? "evidence " + condition.evidenceRelationId : ""
+    ].filter(function (item) { return String(item || "").trim(); });
+    return parts.join(" · ") || condition.kind || condition.role || "-";
+  }
+
+  function renderInferenceTraceLedgerPanel() {
+    var payload = inferenceLedgerPayload();
+    var summary = inferenceLedgerSummary();
+    var rows = inferenceLedgerRows();
+    var status = payload.status || (state.ontologyInferenceLedgerLoading ? "loading" : "empty");
+    return [
+      '<section class="inference-ledger-panel">',
+      '<div class="ontology-surface-head">',
+      '<div>',
+      '<strong>Inference Trace Ledger</strong>',
+      '<span>TypeDB InferenceBox가 만든 trace를 입력 데이터, 조건, RuleBox, 파생 관계, 알림 의도까지 감사 원장으로 재구성합니다.</span>',
+      '</div>',
+      '<button class="mini-button" type="button" data-action="refresh-inference-ledger">' + escapeHtml(state.ontologyInferenceLedgerLoading ? "읽는 중" : "새로고침") + '</button>',
+      '</div>',
+      '<div class="work-detail-metric-row">',
+      renderNotificationDetailMetric("원장 행", formatInteger(summary.ledgerCount || rows.length || 0), rows.length ? "watch" : "hold"),
+      renderNotificationDetailMetric("Trace", formatInteger(summary.traceCount || 0), summary.traceCount ? "watch" : "hold"),
+      renderNotificationDetailMetric("조건 매칭", formatInteger(summary.matchedConditionCount || 0) + "/" + formatInteger(summary.conditionCount || 0), summary.notReturnedConditionCount ? "caution" : "watch"),
+      renderNotificationDetailMetric("Rule coverage", formatInteger(summary.matchedRuleCount || 0) + "/" + formatInteger(summary.activeRuleCount || 0), summary.matchedRuleCount ? "watch" : "hold"),
+      '</div>',
+      '<div class="inference-ledger-meta">',
+      '<span>상태 ' + escapeHtml(status || "-") + '</span>',
+      '<span>세대 ' + escapeHtml(payload.inferenceGenerationId || "-") + '</span>',
+      '<span>엔진 ' + escapeHtml(payload.reasoningMode || payload.materializationSource || "-") + '</span>',
+      '<span>TypeDB native ' + escapeHtml(payload.nativeTypeDbReasoningUsed ? "사용" : "미확인") + '</span>',
+      '</div>',
+      state.ontologyInferenceLedgerError ? '<p class="form-error">' + escapeHtml(state.ontologyInferenceLedgerError) + '</p>' : '',
+      payload.reason && !rows.length ? '<p class="subtle">' + escapeHtml(payload.reason) + '</p>' : '',
+      state.ontologyInferenceLedgerLoading && !rows.length ? '<div class="ontology-empty">Inference Trace Ledger를 읽는 중입니다.</div>' : '',
+      rows.length ? '<div class="inference-ledger-list">' + rows.map(renderInferenceLedgerRow).join("") + '</div>' : (!state.ontologyInferenceLedgerLoading ? '<div class="ontology-empty">표시할 추론 원장이 없습니다. RuleBox 실행과 TypeDB InferenceBox 세대를 확인하세요.</div>' : ''),
+      renderInferenceLedgerCoverage(payload),
+      '</section>'
+    ].join("");
+  }
+
+  function renderInferenceLedgerCoverage(payload) {
+    var coverage = payload.ruleCoverage || {};
+    var untraced = Array.isArray(coverage.untracedRuleIds) ? coverage.untracedRuleIds : [];
+    if (!untraced.length) return "";
+    return [
+      '<div class="inference-ledger-coverage">',
+      '<strong>이번 세대에서 trace가 없는 RuleBox</strong>',
+      '<span>' + escapeHtml(formatInteger(untraced.length) + "개 · coverage " + (coverage.coverageRatio == null ? "-" : coverage.coverageRatio + "%")) + '</span>',
+      '<div class="chip-row">' + untraced.slice(0, 16).map(function (ruleId) {
+        return '<span class="chip">' + escapeHtml(ruleId) + '</span>';
+      }).join("") + '</div>',
+      '</div>'
+    ].join("");
+  }
+
+  function renderInferenceLedgerRow(row) {
+    row = row || {};
+    var conditions = Array.isArray(row.conditions) ? row.conditions : [];
+    var stages = Array.isArray(row.stages) ? row.stages : [];
+    var relations = Array.isArray(row.relations) ? row.relations : [];
+    var confidence = row.confidence == null || row.confidence === "" ? "-" : Math.round(Number(row.confidence || 0) * 100) + "%";
+    return [
+      '<article class="inference-ledger-row"' + cardTypeAttrs("ledger-row", inferenceLedgerTone(row.status)) + '>',
+      '<div class="inference-ledger-row-head">',
+      '<div>',
+      '<span class="tone-chip ' + escapeHtml(inferenceLedgerTone(row.status)) + '">' + escapeHtml(row.status || "trace") + '</span>',
+      '<strong>' + escapeHtml([row.symbol, row.ruleLabel || row.ruleId].filter(Boolean).join(" · ") || "Inference trace") + '</strong>',
+      '<em>' + escapeHtml([row.decisionStage, row.actionPolicy, "confidence " + confidence].filter(Boolean).join(" · ")) + '</em>',
+      '</div>',
+      '<span>' + escapeHtml(row.updatedAt || row.traceId || "-") + '</span>',
+      '</div>',
+      '<div class="inference-ledger-stage-rail">',
+      stages.map(function (stage, index) {
+        return [
+          '<section class="inference-ledger-stage ' + escapeHtml(inferenceLedgerTone(stage.status)) + '">',
+          '<b>' + escapeHtml(String(index + 1).padStart(2, "0")) + '</b>',
+          '<div><strong>' + escapeHtml(stage.label || "-") + '</strong><span>' + escapeHtml(stage.status || "-") + '</span><em>' + escapeHtml(stage.detail || "") + '</em></div>',
+          '</section>'
+        ].join("");
+      }).join(""),
+      '</div>',
+      '<div class="inference-ledger-condition-grid">',
+      conditions.length ? conditions.map(function (condition) {
+        return [
+          '<div class="inference-ledger-condition ' + escapeHtml(inferenceLedgerTone(condition.status)) + '">',
+          '<span>' + escapeHtml(condition.status || "-") + '</span>',
+          '<strong>' + escapeHtml(condition.label || condition.id || "-") + '</strong>',
+          '<em>' + escapeHtml(inferenceLedgerConditionText(condition)) + '</em>',
+          '</div>'
+        ].join("");
+      }).join("") : '<div class="ontology-empty">조건 상세가 없습니다.</div>',
+      '</div>',
+      relations.length ? '<div class="inference-ledger-relation-strip">' + relations.slice(0, 10).map(function (relation) {
+        return '<span class="chip">' + escapeHtml([relation.type, relation.sourceLabel || relation.source, relation.targetLabel || relation.target].filter(Boolean).join(" · ")) + '</span>';
+      }).join("") + '</div>' : '',
+      '</article>'
+    ].join("");
+  }
+
   function strategyTraceWorkDetailPayload(key) {
     var snapshot = state.snapshot || {};
     var parts = ontologyStrategyParts(snapshot);
+    if (key === "ledger") {
+      return editorWorkDetailPayload(
+        "Review Trace",
+        "Inference Trace Ledger",
+        "TypeDB 세대별 trace, 조건, 파생 관계, 알림 의도",
+        renderInferenceTraceLedgerPanel()
+      );
+    }
     if (key === "model") {
       return editorWorkDetailPayload("Review Trace", "모델 리뷰 상세", "종목별 점수와 판단 근거", renderModelPreviewPanel(snapshot));
     }
@@ -12759,7 +12999,18 @@
         return ["data-quality", "data-freshness", "provenance", "source-reliability", "missing-data"].indexOf(String(item && item.kind || "")) >= 0;
       });
     var modelStats = modelStatsForItems(buildTradeSignalItems(snapshot));
+    var ledgerSummary = inferenceLedgerSummary();
+    var ledgerRows = inferenceLedgerRows();
     var cards = [
+      {
+        tone: ledgerRows.length ? "watch" : (state.ontologyInferenceLedgerLoading ? "caution" : "hold"),
+        value: state.ontologyInferenceLedgerLoaded ? (ledgerSummary.ledgerCount || ledgerRows.length || 0) + "건" : "lazy",
+        title: "추론 원장",
+        description: "TypeDB trace별 조건 통과, 파생 관계, 알림 의도를 한 줄 감사 경로로 봅니다.",
+        type: "strategy-trace-detail",
+        key: "ledger",
+        button: "원장 보기"
+      },
       {
         tone: modelStats.actionCount ? "watch" : "hold",
         value: modelStats.actionCount + "개",
@@ -12817,6 +13068,7 @@
       '<span class="metric">' + escapeHtml(parts.relations.length) + '</span>',
       '</div>',
       '<div class="work-detail-metric-row">',
+      renderNotificationDetailMetric("추론 원장", (ledgerSummary.ledgerCount || ledgerRows.length || 0) + "건", ledgerRows.length ? "watch" : "hold"),
       renderNotificationDetailMetric("모델 액션", modelStats.actionCount + "개", modelStats.actionCount ? "watch" : "hold"),
       renderNotificationDetailMetric("관계 행", parts.relations.length + "개", parts.relations.length ? "watch" : "hold"),
       renderNotificationDetailMetric("인사이트", insights.length + "개", insights.length ? "watch" : "hold"),
@@ -12825,7 +13077,7 @@
       '<div class="work-detail-grid strategy-trace-grid">',
       cards.map(renderStrategyOverviewActionCard).join(""),
       '</div>',
-      '<div class="rule-strip"><span>기본 화면에서는 검증 대상의 위치만 파악합니다.</span><span>상세 레이어에서 모델 리뷰, 관계 투영, 규칙 추적을 하나씩 열어 원인을 확인합니다.</span></div>',
+      '<div class="rule-strip"><span>기본 화면에서는 검증 대상의 위치만 파악합니다.</span><span>상세 레이어에서 추론 원장, 모델 리뷰, 관계 투영, 규칙 추적을 하나씩 열어 원인을 확인합니다.</span></div>',
       '</article>'
     ].join("");
   }
@@ -20733,6 +20985,16 @@
         state.ontologyAuditLoaded = false;
         loadOntologyAudit(true).then(function () {
           showSnackbar("온톨로지 감사 데이터를 다시 읽었습니다.");
+        });
+      });
+    }
+
+    var refreshInferenceLedgerButton = app.querySelector('[data-action="refresh-inference-ledger"]');
+    if (refreshInferenceLedgerButton) {
+      refreshInferenceLedgerButton.addEventListener("click", function () {
+        state.ontologyInferenceLedgerLoaded = false;
+        loadOntologyInferenceLedger(true).then(function () {
+          if (!state.ontologyInferenceLedgerError) showSnackbar("Inference Trace Ledger를 다시 읽었습니다.");
         });
       });
     }

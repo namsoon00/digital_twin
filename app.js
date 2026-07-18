@@ -381,7 +381,9 @@
     investmentCalendarCandidates: null,
     investmentCalendarCandidatesLoading: false,
     investmentCalendarCandidateReviewing: "",
-    investmentCalendarFilters: { symbol: "", eventType: "", limit: "8" },
+    investmentCalendarFilters: { symbol: "", eventType: "", limit: "80" },
+    investmentCalendarMonthOffset: 0,
+    investmentCalendarFocusedDayKey: "",
     investmentCalendarDraft: defaultInvestmentCalendarDraft(),
     calendarEntryModalOpen: false,
     expandedCalendarEventKey: "",
@@ -7921,9 +7923,9 @@
     return renderManagedPage("calendar", snapshot, [
       '<section class="admin-grid investment-calendar-view">',
       renderInvestmentCalendarSummaryPanel(),
-      renderInvestmentCalendarListPanel(),
-      renderInvestmentCalendarCandidatePanel(),
+      renderInvestmentCalendarMonthPanel(),
       renderInvestmentCalendarRailPanel(),
+      renderInvestmentCalendarCandidatePanel(),
       '</section>'
     ].join(""));
   }
@@ -7955,6 +7957,86 @@
     if (importance >= 85) return "danger";
     if (importance >= 70) return "watch";
     return "hold";
+  }
+
+  function investmentCalendarDayKey(value) {
+    var date = value instanceof Date ? value : new Date(value || "");
+    if (Number.isNaN(date.getTime())) return "";
+    var year = date.getFullYear();
+    var month = String(date.getMonth() + 1).padStart(2, "0");
+    var day = String(date.getDate()).padStart(2, "0");
+    return year + "-" + month + "-" + day;
+  }
+
+  function investmentCalendarMonthDate() {
+    var now = new Date();
+    return new Date(now.getFullYear(), now.getMonth() + Number(state.investmentCalendarMonthOffset || 0), 1);
+  }
+
+  function investmentCalendarMonthKey(date) {
+    var value = date instanceof Date ? date : new Date(date || "");
+    if (Number.isNaN(value.getTime())) return "";
+    return value.getFullYear() + "-" + String(value.getMonth() + 1).padStart(2, "0");
+  }
+
+  function investmentCalendarMonthLabel(date) {
+    var value = date instanceof Date ? date : new Date(date || "");
+    if (Number.isNaN(value.getTime())) return "캘린더";
+    return value.getFullYear() + "년 " + (value.getMonth() + 1) + "월";
+  }
+
+  function investmentCalendarDayLabel(key) {
+    if (!key) return "선택 날짜";
+    var parts = String(key).split("-").map(function (part) { return Number(part); });
+    if (parts.length !== 3 || parts.some(function (part) { return !Number.isFinite(part); })) return key;
+    return parts[0] + "년 " + parts[1] + "월 " + parts[2] + "일";
+  }
+
+  function investmentCalendarEventTimeLabel(event) {
+    if ((event || {}).allDay) return "종일";
+    var date = new Date((event || {}).startsAt || "");
+    if (Number.isNaN(date.getTime())) return "시간 미정";
+    return date.toLocaleTimeString("ko-KR", { hour: "2-digit", minute: "2-digit" });
+  }
+
+  function investmentCalendarSortEvents(events) {
+    return (events || []).slice().sort(function (a, b) {
+      return Date.parse(a.startsAt || "") - Date.parse(b.startsAt || "");
+    });
+  }
+
+  function investmentCalendarEventsByDay(events) {
+    return investmentCalendarSortEvents(events).reduce(function (map, event) {
+      var key = investmentCalendarDayKey(event.startsAt);
+      if (!key) return map;
+      if (!map[key]) map[key] = [];
+      map[key].push(event);
+      return map;
+    }, {});
+  }
+
+  function investmentCalendarMonthDays(monthDate) {
+    var first = new Date(monthDate.getFullYear(), monthDate.getMonth(), 1);
+    var cursor = new Date(first);
+    cursor.setDate(first.getDate() - first.getDay());
+    var days = [];
+    for (var index = 0; index < 42; index += 1) {
+      days.push(new Date(cursor));
+      cursor.setDate(cursor.getDate() + 1);
+    }
+    return days;
+  }
+
+  function investmentCalendarSelectedDayKey(monthDate, eventsByDay) {
+    var currentMonthKey = investmentCalendarMonthKey(monthDate);
+    var focused = state.investmentCalendarFocusedDayKey || "";
+    if (focused && focused.slice(0, 7) === currentMonthKey) return focused;
+    var todayKey = investmentCalendarDayKey(new Date());
+    if (todayKey.slice(0, 7) === currentMonthKey) return todayKey;
+    var eventKeys = Object.keys(eventsByDay || {}).filter(function (key) {
+      return key.slice(0, 7) === currentMonthKey;
+    }).sort();
+    return eventKeys[0] || investmentCalendarDayKey(monthDate);
   }
 
   function renderInvestmentCalendarSummaryPanel() {
@@ -8026,15 +8108,27 @@
     ].join("");
   }
 
-  function renderInvestmentCalendarListPanel() {
+  function renderInvestmentCalendarMonthPanel() {
     var events = investmentCalendarEvents();
     var filters = state.investmentCalendarFilters || {};
-    var upcoming = investmentCalendarUpcomingEvents();
+    var monthDate = investmentCalendarMonthDate();
+    var monthKey = investmentCalendarMonthKey(monthDate);
+    var eventsByDay = investmentCalendarEventsByDay(events);
+    var selectedDayKey = investmentCalendarSelectedDayKey(monthDate, eventsByDay);
+    var monthEvents = investmentCalendarSortEvents(events).filter(function (event) {
+      return investmentCalendarDayKey(event.startsAt).slice(0, 7) === monthKey;
+    });
+    var selectedEvents = eventsByDay[selectedDayKey] || [];
     return [
-      '<article class="panel investment-calendar-list-panel"' + cardTypeAttrs("process-card", events.length ? "watch" : "hold") + '>',
+      '<article class="panel investment-calendar-list-panel investment-calendar-month-panel"' + cardTypeAttrs("process-card", events.length ? "watch" : "hold") + '>',
       '<div class="panel-head">',
-      '<div><p class="label">AGENDA</p><h2>투자 이벤트 타임라인</h2><span>예정 이벤트를 먼저 보고, 등록과 상세 편집은 레이어에서 처리합니다.</span></div>',
-      '<span class="metric">' + escapeHtml(upcoming.length) + '</span>',
+      '<div><p class="label">CALENDAR</p><h2>' + escapeHtml(investmentCalendarMonthLabel(monthDate)) + ' 투자 캘린더</h2><span>각 날짜 셀에서 예정 이벤트를 바로 확인하고, 날짜를 선택해 상세 일정을 봅니다.</span></div>',
+      '<div class="investment-calendar-month-controls" aria-label="캘린더 월 이동">',
+      '<button class="mini-button" type="button" data-calendar-month-step="-1">이전</button>',
+      '<button class="mini-button" type="button" data-calendar-month-today>이번 달</button>',
+      '<button class="mini-button" type="button" data-calendar-month-step="1">다음</button>',
+      '<span class="metric">' + escapeHtml(monthEvents.length) + '</span>',
+      '</div>',
       '</div>',
       '<form class="investment-calendar-filters" data-investment-calendar-filter-form>',
       '<input data-calendar-filter="symbol" type="text" value="' + escapeHtml(filters.symbol || "") + '" placeholder="종목 필터" autocomplete="off">',
@@ -8044,13 +8138,13 @@
       }).join(""),
       '</select>',
       '<select data-calendar-filter="limit">',
-      ["8", "20", "80"].map(function (limit) {
-        return '<option value="' + limit + '"' + (String(filters.limit || "8") === limit ? " selected" : "") + '>' + limit + '개</option>';
+      ["20", "80", "200"].map(function (limit) {
+        return '<option value="' + limit + '"' + (String(filters.limit || "80") === limit ? " selected" : "") + '>' + limit + '개</option>';
       }).join(""),
       '</select>',
       '<button class="text-button primary" type="submit">' + (state.investmentCalendarLoading ? "조회 중" : "조회") + '</button>',
       '</form>',
-      '<div class="investment-calendar-list">',
+      '<div class="investment-calendar-month-shell">',
       state.investmentCalendarLoading ? renderEmptyState({
         tone: "watch",
         label: "Calendar",
@@ -8064,9 +8158,77 @@
         description: "실적, 거시지표, 공시, 점검 일정을 등록하면 리마인더와 알림 정책에 연결됩니다.",
         meta: ["등록 폼은 레이어에서 열림", "알림 큐와 온톨로지 요청으로 연결"],
         action: renderCalendarEntryButton("이벤트 등록", "text-button primary")
-      }) : events.slice(0, 6).map(renderInvestmentCalendarEvent).join("") + (events.length > 6 ? '<p class="data-refresh-status">가까운 6개 일정만 먼저 표시합니다. 나머지 ' + escapeHtml(events.length - 6) + '개는 필터 조회로 확인하세요.</p>' : '')),
+      }) : renderInvestmentCalendarMonthGrid(monthDate, eventsByDay, selectedDayKey) + renderInvestmentCalendarSelectedDayAgenda(selectedDayKey, selectedEvents)),
       '</div>',
       '</article>'
+    ].join("");
+  }
+
+  function renderInvestmentCalendarMonthGrid(monthDate, eventsByDay, selectedDayKey) {
+    var monthKey = investmentCalendarMonthKey(monthDate);
+    var todayKey = investmentCalendarDayKey(new Date());
+    return [
+      '<div class="investment-calendar-month-scroller">',
+      '<div class="investment-calendar-month-weekdays" aria-hidden="true">',
+      ["일", "월", "화", "수", "목", "금", "토"].map(function (label) {
+        return '<span>' + escapeHtml(label) + '</span>';
+      }).join(""),
+      '</div>',
+      '<div class="investment-calendar-month-grid">',
+      investmentCalendarMonthDays(monthDate).map(function (day) {
+        var key = investmentCalendarDayKey(day);
+        var dayEvents = eventsByDay[key] || [];
+        var classes = [
+          "investment-calendar-day-cell",
+          key.slice(0, 7) === monthKey ? "is-current-month" : "is-outside-month",
+          key === todayKey ? "is-today" : "",
+          key === selectedDayKey ? "is-selected" : "",
+          dayEvents.length ? "has-events" : ""
+        ].filter(Boolean).join(" ");
+        return [
+          '<section class="' + escapeHtml(classes) + '">',
+          '<button class="investment-calendar-day-head" type="button" data-calendar-day-select="' + escapeHtml(key) + '" aria-label="' + escapeHtml(investmentCalendarDayLabel(key)) + ' 선택">',
+          '<strong>' + escapeHtml(day.getDate()) + '</strong>',
+          dayEvents.length ? '<span>' + escapeHtml(dayEvents.length) + '건</span>' : '<span></span>',
+          '</button>',
+          '<div class="investment-calendar-day-events">',
+          dayEvents.slice(0, 3).map(renderInvestmentCalendarDayEventChip).join(""),
+          dayEvents.length > 3 ? '<button class="investment-calendar-day-more" type="button" data-calendar-day-select="' + escapeHtml(key) + '">+' + escapeHtml(dayEvents.length - 3) + '개 더보기</button>' : '',
+          '</div>',
+          '</section>'
+        ].join("");
+      }).join(""),
+      '</div>',
+      '</div>'
+    ].join("");
+  }
+
+  function renderInvestmentCalendarDayEventChip(event) {
+    var tone = investmentCalendarTone(event);
+    var key = event.eventId || event.id || event.title || "";
+    var targets = (event.symbols || []).concat(event.markets || []);
+    var dayKey = investmentCalendarDayKey(event.startsAt);
+    return [
+      '<button class="investment-calendar-day-event ' + escapeHtml(tone) + '" type="button" data-calendar-event-toggle="' + escapeHtml(key) + '" data-calendar-event-day="' + escapeHtml(dayKey) + '">',
+      '<span>' + escapeHtml(investmentCalendarEventTimeLabel(event)) + '</span>',
+      '<strong>' + escapeHtml(event.title || "이벤트") + '</strong>',
+      '<em>' + escapeHtml(targets.slice(0, 2).join(" · ") || investmentCalendarEventTypeLabel(event.eventType)) + '</em>',
+      '</button>'
+    ].join("");
+  }
+
+  function renderInvestmentCalendarSelectedDayAgenda(dayKey, events) {
+    var selectedEvents = investmentCalendarSortEvents(events || []);
+    return [
+      '<section class="investment-calendar-selected-day">',
+      '<div class="investment-calendar-selected-day-head">',
+      '<div><p class="label">SELECTED DAY</p><h3>' + escapeHtml(investmentCalendarDayLabel(dayKey)) + '</h3></div>',
+      '<span>' + escapeHtml(selectedEvents.length) + '건</span>',
+      '</div>',
+      '<div class="investment-calendar-list">',
+      selectedEvents.length ? selectedEvents.map(renderInvestmentCalendarEvent).join("") : '<p class="data-refresh-status">선택한 날짜에 등록된 투자 이벤트가 없습니다.</p>',
+      '</div>',
+      '</section>'
     ].join("");
   }
 
@@ -18540,6 +18702,29 @@
       });
     });
 
+    Array.prototype.slice.call(app.querySelectorAll("[data-calendar-month-step]")).forEach(function (button) {
+      button.addEventListener("click", function () {
+        state.investmentCalendarMonthOffset += Number(button.getAttribute("data-calendar-month-step") || 0);
+        state.investmentCalendarFocusedDayKey = "";
+        render();
+      });
+    });
+
+    Array.prototype.slice.call(app.querySelectorAll("[data-calendar-month-today]")).forEach(function (button) {
+      button.addEventListener("click", function () {
+        state.investmentCalendarMonthOffset = 0;
+        state.investmentCalendarFocusedDayKey = investmentCalendarDayKey(new Date());
+        render();
+      });
+    });
+
+    Array.prototype.slice.call(app.querySelectorAll("[data-calendar-day-select]")).forEach(function (button) {
+      button.addEventListener("click", function () {
+        state.investmentCalendarFocusedDayKey = button.getAttribute("data-calendar-day-select") || "";
+        render();
+      });
+    });
+
     Array.prototype.slice.call(app.querySelectorAll("[data-calendar-entry-open]")).forEach(function (button) {
       button.addEventListener("click", function () {
         state.calendarEntryModalOpen = true;
@@ -18602,6 +18787,8 @@
     Array.prototype.slice.call(app.querySelectorAll("[data-calendar-event-toggle]")).forEach(function (button) {
       button.addEventListener("click", function () {
         var key = button.getAttribute("data-calendar-event-toggle") || "";
+        var dayKey = button.getAttribute("data-calendar-event-day") || "";
+        if (dayKey) state.investmentCalendarFocusedDayKey = dayKey;
         state.expandedCalendarEventKey = state.expandedCalendarEventKey === key ? "" : key;
         render();
       });

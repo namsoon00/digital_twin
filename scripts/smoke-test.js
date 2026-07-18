@@ -1660,6 +1660,13 @@ function checkFrontendAdminRender() {
     assertOk(modelingEvidenceHtml.indexOf("삼성전자") >= 0 && modelingEvidenceHtml.indexOf("005930 가격과") < 0, "근거 카드 본문에 종목코드가 회사명으로 치환되지 않았습니다.");
     assertOk(modelingEvidenceHtml.indexOf("체결강도") >= 0 && modelingEvidenceHtml.indexOf("모델-알림 기준") >= 0, "근거 카드 섹션에 전략 데이터 점검 항목이 없습니다.");
     assertOk(modelingHtml.indexOf("investment-action-panel") >= 0 && modelingHtml.indexOf("model-preview-panel") < 0, "오늘의 판단 섹션은 액션 큐만 짧게 보여줘야 합니다.");
+    assertOk(modelingHtml.indexOf("Decision Inbox") >= 0 && modelingHtml.indexOf("종목별 실행 카드") >= 0, "오늘의 판단 섹션이 Decision Inbox 실행 카드 구조로 렌더링되지 않습니다.");
+    assertOk(modelingHtml.indexOf("investment-decision-summary-rail") >= 0 && modelingHtml.indexOf("investment-decision-rail") >= 0, "오늘의 판단 실행 카드에 판단 요약 레일과 카드별 조건 레일이 없습니다.");
+    assertOk(modelingHtml.indexOf("무효화 조건") >= 0 && modelingHtml.indexOf("다음 확인 시점") >= 0 && modelingHtml.indexOf("연결 알림") >= 0, "오늘의 판단 카드가 무효화 조건, 다음 확인 시점, 연결 알림을 함께 보여주지 않습니다.");
+    assertOk(modelingHtml.indexOf("investment-playbook-panel") >= 0 && modelingHtml.indexOf("전략 플레이북") >= 0, "오늘의 판단 섹션에 전략 플레이북 요약이 없습니다.");
+    assertOk(modelingHtml.indexOf("investment-performance-feedback-panel") >= 0 && modelingHtml.indexOf("성과 피드백") >= 0, "오늘의 판단 섹션에 성과 피드백 요약이 없습니다.");
+    assertOk(code.indexOf("investmentActionInvalidation") >= 0 && code.indexOf("investmentActionLinkedAlert") >= 0 && code.indexOf("investmentActionPlaybook") >= 0, "투자 판단 실행 카드 파생 로직이 없습니다.");
+    assertOk(styles.indexOf(".investment-decision-summary-rail") >= 0 && styles.indexOf(".investment-playbook-card") >= 0 && styles.indexOf(".investment-feedback-grid") >= 0, "투자 판단 실행 카드/플레이북/성과 피드백 스타일이 없습니다.");
     assertOk(modelingHtml.indexOf("investment-evidence-panel") < 0, "오늘의 판단 섹션에 근거 카드가 중복 렌더링됩니다.");
     assertOk(modelingChartHtml.indexOf("investment-tab-workspace-charts") >= 0 && modelingChartHtml.indexOf("investment-chart-panel") >= 0 && modelingChartHtml.indexOf("investment-chart-periods") >= 0, "통합 차트 섹션이 별도 워크스페이스와 기간 컨트롤로 렌더링되지 않습니다.");
     assertOk(modelingChartHtml.indexOf('data-investment-chart-period="1d"') >= 0 && modelingChartHtml.indexOf('data-investment-chart-period="1w"') >= 0 && modelingChartHtml.indexOf('data-investment-chart-period="1m"') >= 0 && modelingChartHtml.indexOf('data-investment-chart-period="custom"') >= 0, "통합 차트 기간 컨트롤이 일/주/월/사용자 기간을 제공하지 않습니다.");

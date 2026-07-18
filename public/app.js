@@ -3863,7 +3863,8 @@
 
   function shouldLoadStrategyProposals() {
     if (state.activeTab !== "modeling") return false;
-    return activeSectionForPageMode("modeling", strategySections, normalizeStrategySection(state.activeStrategySection)) === "proposals";
+    var section = activeSectionForPageMode("modeling", strategySections, normalizeStrategySection(state.activeStrategySection));
+    return section === "overview" || section === "proposals";
   }
 
   function loadOntologyStrategyDetail(force) {
@@ -10770,12 +10771,13 @@
       '<article class="panel investment-action-panel">',
       '<div class="panel-head">',
       '<div>',
-      '<p class="label">Action Queue</p>',
-      '<h2>보유·관심 종목 액션 큐</h2>',
-      '<p class="subtle">매수·매도 결론이 아니라, 그래프 추론과 체크리스트를 통과하기 전 확인할 후보 목록입니다.</p>',
+      '<p class="label">Decision Inbox</p>',
+      '<h2>종목별 실행 카드</h2>',
+      '<p class="subtle">매수·매도 결론이 아니라, 판단·무효화 조건·다음 확인·연결 알림을 한 장에서 검토하는 후보함입니다.</p>',
       '</div>',
       '<span class="metric">' + escapeHtml(rows.length) + '</span>',
       '</div>',
+      renderInvestmentDecisionSummaryRail(rows, filteredRows),
       rows.length ? '<div class="investment-action-workbench ' + escapeHtml(activeRow ? "has-detail" : "summary-only") + '">' + renderInvestmentActionToolbar(rows, filteredRows, pageInfo) + '<div class="investment-action-list">' + (pageInfo.visibleRows.length ? pageInfo.visibleRows.map(renderInvestmentActionRow).join("") : renderEmptyState({
         tone: "muted",
         label: "Filtered",
@@ -10787,9 +10789,145 @@
     ].join("");
   }
 
+  function investmentActionDecisionType(row) {
+    row = row || {};
+    var text = [
+      row.decision,
+      row.tone,
+      Array.isArray(row.reasons) ? row.reasons.join(" ") : "",
+      Array.isArray(row.triggers) ? row.triggers.join(" ") : ""
+    ].join(" ").toLowerCase();
+    if (text.indexOf("매수") >= 0 || text.indexOf("buy") >= 0 || text.indexOf("add") >= 0) return "buy";
+    if (text.indexOf("매도") >= 0 || text.indexOf("축소") >= 0 || text.indexOf("sell") >= 0 || text.indexOf("trim") >= 0) return "risk";
+    if (text.indexOf("보유") >= 0 || text.indexOf("hold") >= 0) return "hold";
+    return "watch";
+  }
+
+  function investmentActionConfidence(row) {
+    row = row || {};
+    var graph = row.graph || {};
+    var quality = String(row.dataQuality || "").toLowerCase();
+    if (graph.blocked) return { label: "추론 보류", tone: "caution", detail: graph.basis || "InferenceBox 확인" };
+    if (["missing", "mock", "demo", "stale"].indexOf(quality) >= 0) return { label: "데이터 확인", tone: "caution", detail: row.dataQuality || "품질 확인" };
+    if ((Array.isArray(row.reasons) ? row.reasons.length : 0) >= 2 && (Array.isArray(graph.nextChecks) ? graph.nextChecks.length : 0)) {
+      return { label: "검토 가능", tone: "watch", detail: "근거와 다음 확인 있음" };
+    }
+    return { label: "관찰", tone: "hold", detail: "추가 근거 대기" };
+  }
+
+  function investmentActionInvalidation(row) {
+    row = row || {};
+    var graph = row.graph || {};
+    var checks = Array.isArray(graph.nextChecks) ? graph.nextChecks : [];
+    var blockedActions = Array.isArray(graph.blockedActions) ? graph.blockedActions : [];
+    var direct = row.invalidationCondition || row.invalidation || graph.invalidationCondition || graph.weakenCondition;
+    if (direct) return String(direct);
+    for (var i = 0; i < checks.length; i += 1) {
+      var check = String(checks[i] || "");
+      if (check.indexOf("무효") >= 0 || check.indexOf("약해") >= 0 || check.indexOf("회복") >= 0 || check.indexOf("해소") >= 0) return check;
+    }
+    if (blockedActions.length) return String(blockedActions[0]);
+    var type = investmentActionDecisionType(row);
+    if (graph.blocked) return "TypeDB InferenceBox 관계가 복구되기 전까지 판단을 보류합니다.";
+    if (type === "risk") return "리스크 관계가 해소되거나 가격 회복 근거가 생기면 축소 판단을 낮춥니다.";
+    if (type === "buy") return "진입 근거가 사라지거나 데이터 신선도가 깨지면 매수 후보에서 제외합니다.";
+    return "핵심 근거가 사라지거나 새 반대 신호가 생기면 판단을 다시 봅니다.";
+  }
+
+  function investmentActionNextWindow(row) {
+    row = row || {};
+    var graph = row.graph || {};
+    var checks = Array.isArray(graph.nextChecks) ? graph.nextChecks : [];
+    if (row.nextReviewAt) return formatClock(row.nextReviewAt);
+    if (checks.length) return "다음 데이터 갱신: " + String(checks[0]);
+    var market = String(row.market || "").toUpperCase();
+    if (market === "US" || market === "USA" || market === "NASDAQ" || market === "NYSE") return "미국장 시작 전";
+    if (market === "KR" || market === "KOSPI" || market === "KOSDAQ") return "국내장 시작 전";
+    return "장 시작 전 체크";
+  }
+
+  function investmentActionLinkedAlert(row) {
+    row = row || {};
+    if (row.linkedAlert || row.alertType) return String(row.linkedAlert || row.alertType);
+    if ((row.graph || {}).blocked) return "관계 추론 상태 알림";
+    var type = investmentActionDecisionType(row);
+    if (type === "buy") return "매수 후보 알림 대기";
+    if (type === "risk") return "매도·축소 알림 대기";
+    if (type === "hold") return "보유 조건 점검 알림";
+    return "관찰 알림 대기";
+  }
+
+  function investmentActionPlaybook(row) {
+    row = row || {};
+    var graph = row.graph || {};
+    var text = [
+      row.market,
+      row.sector,
+      row.source,
+      row.decision,
+      Array.isArray(row.reasons) ? row.reasons.join(" ") : "",
+      Array.isArray(row.triggers) ? row.triggers.join(" ") : ""
+    ].join(" ").toLowerCase();
+    if (graph.blocked) return { id: "gate", label: "추론 게이트 복구", tone: "caution", detail: "관계 추론 정상화 후 판단" };
+    if (investmentActionDecisionType(row) === "risk") return { id: "risk", label: "리스크 축소", tone: "danger", detail: "하방 압력과 반대 신호 점검" };
+    if (text.indexOf("뉴스") >= 0 || text.indexOf("공시") >= 0 || text.indexOf("소송") >= 0 || text.indexOf("risk") >= 0) return { id: "news", label: "뉴스 리스크 회피", tone: "caution", detail: "새 근거와 가격 반응 연결" };
+    if (text.indexOf("usd") >= 0 || text.indexOf("환율") >= 0 || text.indexOf("금리") >= 0 || text.indexOf("미국") >= 0) return { id: "macro", label: "환율·금리 민감", tone: "hold", detail: "거시 관계와 가격 동조 확인" };
+    if (investmentActionDecisionType(row) === "buy") return { id: "entry", label: "진입 후보 검증", tone: "watch", detail: "진입 근거와 무효화 조건 확인" };
+    return { id: "defense", label: "보유 방어", tone: "hold", detail: "유지 조건과 반대 신호 확인" };
+  }
+
+  function investmentDecisionStats(rows, filteredRows) {
+    rows = Array.isArray(rows) ? rows : [];
+    filteredRows = Array.isArray(filteredRows) ? filteredRows : rows;
+    var stats = { total: rows.length, visible: filteredRows.length, buy: 0, risk: 0, hold: 0, watch: 0, blocked: 0, alerts: 0 };
+    rows.forEach(function (row) {
+      var type = investmentActionDecisionType(row);
+      if (stats[type] == null) stats.watch += 1;
+      else stats[type] += 1;
+      if ((row.graph || {}).blocked) stats.blocked += 1;
+      if (investmentActionLinkedAlert(row)) stats.alerts += 1;
+    });
+    return stats;
+  }
+
+  function renderInvestmentDecisionSummaryRail(rows, filteredRows) {
+    var stats = investmentDecisionStats(rows, filteredRows);
+    return [
+      '<div class="investment-decision-summary-rail" aria-label="오늘의 판단 요약">',
+      renderInvestmentDecisionSummaryCell("전체 후보", stats.total, stats.visible + "개 표시", "hold"),
+      renderInvestmentDecisionSummaryCell("매수 후보", stats.buy, "진입 검토", stats.buy ? "watch" : "hold"),
+      renderInvestmentDecisionSummaryCell("매도·축소", stats.risk, "리스크 점검", stats.risk ? "danger" : "hold"),
+      renderInvestmentDecisionSummaryCell("추론 보류", stats.blocked, "게이트 확인", stats.blocked ? "caution" : "watch"),
+      renderInvestmentDecisionSummaryCell("연결 알림", stats.alerts, "발송 정책 확인", stats.alerts ? "watch" : "hold"),
+      '</div>'
+    ].join("");
+  }
+
+  function renderInvestmentDecisionSummaryCell(label, value, detail, tone) {
+    return [
+      '<section class="investment-decision-summary-cell ' + escapeHtml(tone || "hold") + '"' + cardTypeAttrs("metric-cell", tone || "hold") + '>',
+      '<span>' + escapeHtml(label) + '</span>',
+      '<strong>' + escapeHtml(value) + '</strong>',
+      '<em>' + escapeHtml(detail || "") + '</em>',
+      '</section>'
+    ].join("");
+  }
+
+  function renderInvestmentDecisionCell(label, value, detail, tone) {
+    return [
+      '<section class="investment-decision-cell ' + escapeHtml(tone || "hold") + '"' + cardTypeAttrs("signal-card", tone || "hold") + '>',
+      '<span>' + escapeHtml(label) + '</span>',
+      '<strong>' + escapeHtml(value || "-") + '</strong>',
+      detail ? '<em>' + escapeHtml(detail) + '</em>' : '',
+      '</section>'
+    ].join("");
+  }
+
   function investmentActionSearchText(row) {
     row = row || {};
     var graph = row.graph || {};
+    var confidence = investmentActionConfidence(row);
+    var playbook = investmentActionPlaybook(row);
     return [
       row.symbol,
       row.name,
@@ -10801,6 +10939,12 @@
       row.apiSource,
       graph.reason,
       graph.basis,
+      confidence.label,
+      confidence.detail,
+      playbook.label,
+      investmentActionInvalidation(row),
+      investmentActionNextWindow(row),
+      investmentActionLinkedAlert(row),
       Array.isArray(row.reasons) ? row.reasons.join(" ") : "",
       Array.isArray(graph.nextChecks) ? graph.nextChecks.join(" ") : ""
     ].filter(Boolean).join(" ").toLowerCase();
@@ -10881,14 +11025,21 @@
     var reasons = Array.isArray(row.reasons) ? row.reasons : [];
     var checks = Array.isArray(graph.nextChecks) ? graph.nextChecks : [];
     var name = row.name || stockDisplayName(row.symbol, row);
+    var confidence = investmentActionConfidence(row);
+    var playbook = investmentActionPlaybook(row);
+    var invalidation = investmentActionInvalidation(row);
+    var nextWindow = investmentActionNextWindow(row);
+    var linkedAlert = investmentActionLinkedAlert(row);
     return {
-      kicker: "Action Queue",
+      kicker: "Decision Inbox",
       title: name || row.symbol || "투자 판단 후보",
       meta: [row.symbol, sourceLabel(row.source), row.market, row.sector].filter(Boolean).join(" · "),
       body: [
         '<section class="work-detail-section">',
         '<div class="work-detail-metric-row">',
         renderNotificationDetailMetric("판단", row.decision || "판단 대기", row.tone || "hold"),
+        renderNotificationDetailMetric("신뢰도", confidence.label, confidence.tone || "hold"),
+        renderNotificationDetailMetric("플레이북", playbook.label, playbook.tone || "hold"),
         renderNotificationDetailMetric("데이터", row.dataQuality || "-", "muted"),
         renderNotificationDetailMetric("API", row.apiSource || "-", "muted"),
         renderNotificationDetailMetric("손익률", String(row.profitLossRate || 0) + "%", Number(row.profitLossRate || 0) >= 0 ? "watch" : "danger"),
@@ -10904,6 +11055,9 @@
         checks.length ? '<section class="work-detail-section"><strong>다음 체크</strong><div class="notification-detail-tags">' + checks.map(function (item) {
           return '<span>' + escapeHtml(item) + '</span>';
         }).join("") + '</div></section>' : '',
+        '<section class="work-detail-section"><strong>무효화 조건</strong><p>' + escapeHtml(invalidation) + '</p></section>',
+        '<section class="work-detail-section"><strong>다음 확인 시점</strong><p>' + escapeHtml(nextWindow) + '</p></section>',
+        '<section class="work-detail-section"><strong>연결 알림</strong><p>' + escapeHtml(linkedAlert) + '</p></section>',
         graph.blocked ? '<section class="work-detail-section"><strong>차단 조건</strong><p>' + escapeHtml(graph.basis || "InferenceBox") + '</p></section>' : ''
       ].join("")
     };
@@ -10917,19 +11071,33 @@
     var name = row.name || stockDisplayName(row.symbol, row);
     var key = investmentActionKey(row, index);
     var expanded = state.expandedInvestmentActionKey === key;
+    var confidence = investmentActionConfidence(row);
+    var playbook = investmentActionPlaybook(row);
+    var invalidation = investmentActionInvalidation(row);
+    var nextWindow = investmentActionNextWindow(row);
+    var linkedAlert = investmentActionLinkedAlert(row);
     return [
       '<div class="investment-action-row compact ' + escapeHtml(expanded ? "active" : "") + '"' + cardTypeAttrs("action-queue-card", row.tone || "hold") + cardFormatAttrs("decision-ticket", "compact") + '>',
       '<div class="investment-action-main">',
       '<strong>' + escapeHtml(name) + '</strong>',
       '<span>' + escapeHtml([row.symbol, sourceLabel(row.source), row.market, row.sector].filter(Boolean).join(" · ")) + '</span>',
       '</div>',
+      '<div class="investment-action-stage">',
       '<span class="tone-chip ' + escapeHtml(row.tone || "hold") + '">' + escapeHtml(row.decision || "판단 대기") + '</span>',
+      '<em>' + escapeHtml(playbook.label) + '</em>',
+      '</div>',
       '<div class="investment-action-meta">',
       '<span>데이터 <strong>' + escapeHtml(row.dataQuality || "-") + '</strong></span>',
       '<span>손익률 <strong>' + escapeHtml(row.profitLossRate || 0) + '%</strong></span>',
       graph.blocked ? '<span>차단 <strong>' + escapeHtml(graph.basis || "InferenceBox") + '</strong></span>' : '<span>추론 <strong>ready</strong></span>',
+      '<span>신뢰도 <strong>' + escapeHtml(confidence.label) + '</strong></span>',
       '</div>',
       '<p>' + escapeHtml((reasons[0] || graph.reason || "다음 확인 조건을 먼저 봅니다.")) + '</p>',
+      '<div class="investment-decision-rail">',
+      renderInvestmentDecisionCell("무효화 조건", invalidation, "", playbook.tone),
+      renderInvestmentDecisionCell("다음 확인 시점", nextWindow, "", confidence.tone),
+      renderInvestmentDecisionCell("연결 알림", linkedAlert, "알림 정책과 연결", row.tone || "hold"),
+      '</div>',
       '<div class="investment-action-checks">',
       '<span>' + escapeHtml(checks.length ? checks[0] : "추가 확인 대기") + '</span>',
       '<button class="mini-button" type="button" data-investment-action-toggle="' + escapeHtml(key) + '">' + escapeHtml(expanded ? "상세 표시 중" : "상세") + '</button>',
@@ -10964,10 +11132,17 @@
     var graph = row.graph || {};
     var reasons = Array.isArray(row.reasons) ? row.reasons : [];
     var checks = Array.isArray(graph.nextChecks) ? graph.nextChecks : [];
+    var confidence = investmentActionConfidence(row);
+    var playbook = investmentActionPlaybook(row);
+    var invalidation = investmentActionInvalidation(row);
+    var nextWindow = investmentActionNextWindow(row);
+    var linkedAlert = investmentActionLinkedAlert(row);
     return [
       '<div class="investment-action-detail inline-detail-surface">',
       '<div class="inline-detail-metrics">',
       renderNotificationDetailMetric("판단", row.decision || "판단 대기", row.tone || "hold"),
+      renderNotificationDetailMetric("신뢰도", confidence.label, confidence.tone || "hold"),
+      renderNotificationDetailMetric("플레이북", playbook.label, playbook.tone || "hold"),
       renderNotificationDetailMetric("데이터", row.dataQuality || "-", "muted"),
       renderNotificationDetailMetric("API", row.apiSource || "-", "muted"),
       renderNotificationDetailMetric("손익률", String(row.profitLossRate || 0) + "%", Number(row.profitLossRate || 0) >= 0 ? "watch" : "danger"),
@@ -10976,14 +11151,135 @@
       '<strong>요약 판단</strong>',
       '<p>' + escapeHtml(reasons[0] || graph.reason || "다음 확인 조건을 먼저 봅니다.") + '</p>',
       '</section>',
+      '<section class="inline-detail-block watch"><strong>전략 플레이북</strong><p>' + escapeHtml(playbook.label + " · " + playbook.detail) + '</p></section>',
       reasons.length ? '<section class="inline-detail-block"><strong>판단 근거</strong><div class="inline-detail-list">' + reasons.map(function (reason) {
         return '<span>' + escapeHtml(reason) + '</span>';
       }).join("") + '</div></section>' : '',
       checks.length ? '<section class="inline-detail-block"><strong>다음 체크</strong><div class="inline-detail-tags">' + checks.map(function (item) {
         return '<span>' + escapeHtml(item) + '</span>';
       }).join("") + '</div></section>' : '',
+      '<section class="inline-detail-block caution"><strong>무효화 조건</strong><p>' + escapeHtml(invalidation) + '</p></section>',
+      '<section class="inline-detail-block"><strong>다음 확인 시점</strong><p>' + escapeHtml(nextWindow) + '</p></section>',
+      '<section class="inline-detail-block"><strong>연결 알림</strong><p>' + escapeHtml(linkedAlert) + '</p></section>',
       graph.blocked ? '<section class="inline-detail-block caution"><strong>차단 조건</strong><p>' + escapeHtml(graph.basis || "InferenceBox") + '</p></section>' : '',
       '</div>'
+    ].join("");
+  }
+
+  function renderInvestmentPlaybookPanel(snapshot) {
+    var analysis = investmentAnalysisModel(snapshot);
+    var rows = Array.isArray(analysis.actionQueue) ? analysis.actionQueue : [];
+    var gate = analysis.graphGate || {};
+    var focus = analysis.accountFocus || {};
+    var playbookCounts = rows.reduce(function (acc, row) {
+      var playbook = investmentActionPlaybook(row);
+      acc[playbook.id] = (acc[playbook.id] || 0) + 1;
+      return acc;
+    }, {});
+    var cards = [
+      {
+        id: "entry",
+        title: "진입 후보 검증",
+        tone: playbookCounts.entry ? "watch" : "hold",
+        count: playbookCounts.entry || 0,
+        detail: "매수 후보는 진입 근거, 데이터 신선도, 무효화 조건을 먼저 봅니다."
+      },
+      {
+        id: "risk",
+        title: "리스크 축소",
+        tone: playbookCounts.risk ? "danger" : "hold",
+        count: playbookCounts.risk || 0,
+        detail: "매도·축소 후보는 회복 조건과 반대 신호를 함께 확인합니다."
+      },
+      {
+        id: "macro",
+        title: "환율·금리 민감",
+        tone: playbookCounts.macro ? "caution" : "hold",
+        count: playbookCounts.macro || 0,
+        detail: "달러, 금리, 시장 흐름이 종목 판단에 미치는 경로를 추적합니다."
+      },
+      {
+        id: "defense",
+        title: "보유 방어",
+        tone: (playbookCounts.defense || focus.holdingCount) ? "hold" : "muted",
+        count: playbookCounts.defense || focus.holdingCount || 0,
+        detail: "보유 종목은 유지 조건과 반대 신호를 매일 같은 기준으로 봅니다."
+      },
+      {
+        id: "gate",
+        title: "추론 게이트 복구",
+        tone: (playbookCounts.gate || gate.blockedCount) ? "caution" : "watch",
+        count: playbookCounts.gate || gate.blockedCount || 0,
+        detail: "TypeDB InferenceBox, RuleBox, 데이터 신선도 차단 여부를 점검합니다."
+      }
+    ];
+    return [
+      '<article class="panel investment-playbook-panel">',
+      '<div class="panel-head">',
+      '<div>',
+      '<p class="label">Strategy Playbook</p>',
+      '<h2>전략 플레이북</h2>',
+      '<p class="subtle">오늘의 후보를 어떤 전략 관점으로 볼지 먼저 분류합니다.</p>',
+      '</div>',
+      '<a class="text-button" href="?tab=modeling&mode=settings&strategy=rules">룰 조정</a>',
+      '</div>',
+      '<div class="investment-playbook-list">',
+      cards.map(function (card) {
+        return [
+          '<section class="investment-playbook-card ' + escapeHtml(card.tone || "hold") + '"' + cardTypeAttrs("strategy-card", card.tone || "hold") + '>',
+          '<span class="tone-chip ' + escapeHtml(card.tone || "hold") + '">' + escapeHtml(card.count + "건") + '</span>',
+          '<strong>' + escapeHtml(card.title) + '</strong>',
+          '<p>' + escapeHtml(card.detail) + '</p>',
+          '</section>'
+        ].join("");
+      }).join(""),
+      '</div>',
+      '</article>'
+    ].join("");
+  }
+
+  function renderInvestmentPerformanceFeedbackPanel(snapshot) {
+    var payload = strategyProposalPayload();
+    var summary = strategyProposalSummary();
+    var statuses = summary.statuses && typeof summary.statuses === "object" ? summary.statuses : {};
+    var proposals = strategyProposalItems();
+    var samples = 0;
+    var excessSum = 0;
+    var excessCount = 0;
+    proposals.forEach(function (proposal) {
+      var perf = strategyProposalPerformanceSummary(proposal);
+      var count = Number(perf.sampleCount || 0);
+      samples += count;
+      if (perf.avgExcessReturnPct != null && count) {
+        excessSum += Number(perf.avgExcessReturnPct || 0) * count;
+        excessCount += count;
+      }
+    });
+    var avgExcess = excessCount ? excessSum / excessCount : null;
+    var waiting = Number(statuses.proposed || 0) + Number(statuses.validated || 0);
+    var model = investmentAnalysisModel(snapshot);
+    var actionCount = Array.isArray(model.actionQueue) ? model.actionQueue.length : 0;
+    return [
+      '<article class="panel investment-performance-feedback-panel">',
+      '<div class="panel-head">',
+      '<div>',
+      '<p class="label">Feedback Loop</p>',
+      '<h2>성과 피드백</h2>',
+      '<p class="subtle">전략 제안 승인 큐와 성과 표본을 오늘의 판단 옆에서 바로 확인합니다.</p>',
+      '</div>',
+      '<a class="text-button" href="?tab=modeling&strategy=proposals">성과 기록</a>',
+      '</div>',
+      '<div class="investment-feedback-grid">',
+      renderInvestmentDecisionCell("오늘 후보", actionCount + "개", "Decision Inbox", actionCount ? "watch" : "hold"),
+      renderInvestmentDecisionCell("검토 대기", waiting + "건", "전략 제안", waiting ? "caution" : "hold"),
+      renderInvestmentDecisionCell("성과 표본", samples + "개", state.strategyProposalsLoaded ? "저장된 표본" : "조회 대기", samples ? "watch" : "hold"),
+      renderInvestmentDecisionCell("초과 수익", avgExcess == null ? "-" : strategyProposalSignedPercent(avgExcess), "평균 표본", avgExcess == null ? "hold" : (avgExcess >= 0 ? "watch" : "danger")),
+      '</div>',
+      state.strategyProposalsLoading ? '<div class="rule-strip"><span>전략 성과 표본을 읽는 중입니다.</span></div>' : '',
+      state.strategyProposalsError ? '<p class="form-error">' + escapeHtml(state.strategyProposalsError) + '</p>' : '',
+      !state.strategyProposalsLoaded && !state.strategyProposalsLoading ? '<div class="rule-strip"><span>성과 피드백은 전략 제안 데이터를 읽은 뒤 갱신됩니다.</span></div>' : '',
+      payload.count || proposals.length ? '' : '<div class="rule-strip"><span>아직 승인된 전략 표본이 없으면 후보 판단과 실제 결과를 비교할 수 없습니다.</span></div>',
+      '</article>'
     ].join("");
   }
 
@@ -11593,7 +11889,7 @@
     return renderInvestmentTabWorkspace("overview", [
       { role: "summary", html: renderInvestmentDecisionBoardPanel(snapshot) + renderInvestmentGraphGatePanel(snapshot) },
       { role: "main", html: renderInvestmentActionQueuePanel(snapshot) },
-      { role: "side", html: renderInvestmentMoneyFlowPanel(snapshot) + renderInvestmentBridgePanel(snapshot) + renderOntologyOperationalPanel(parts) }
+      { role: "side", html: renderInvestmentPlaybookPanel(snapshot) + renderInvestmentPerformanceFeedbackPanel(snapshot) + renderInvestmentMoneyFlowPanel(snapshot) + renderInvestmentBridgePanel(snapshot) + renderOntologyOperationalPanel(parts) }
     ]);
   }
 

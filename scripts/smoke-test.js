@@ -383,7 +383,13 @@ function checkFrontendAdminRender() {
       code.indexOf("data-settings-runtime-toggle") >= 0,
     "짧은 상세 정보를 인라인/패널로 여는 렌더 경로가 없습니다.",
   );
-  assertOk(styles.indexOf(".work-detail-layer") >= 0 && styles.indexOf("Layer reduction: inline detail surfaces") >= 0, "PC 요약 화면과 상세 표면을 위한 최종 콘솔 레이어가 없습니다.");
+  assertOk(
+    styles.indexOf(".work-detail-layer") >= 0 &&
+      styles.indexOf("Layer reduction: inline detail surfaces") >= 0 &&
+      /\.work-detail-backdrop\s*\{[\s\S]*place-items: stretch center;/.test(styles) &&
+      /\.work-detail-layer\s*\{[\s\S]*width: min\(1480px, calc\(100vw - 36px\)\);[\s\S]*height: calc\(100dvh - 36px\);/.test(styles),
+    "PC 요약 화면과 전체화면 상세 표면을 위한 최종 콘솔 레이어가 없습니다."
+  );
   assertOk(designSystemDoc.indexOf("inline-detail-surface") >= 0 && designSystemDoc.indexOf("전체 데이터를 다 펼치지 않는다") >= 0, "디자인 시스템 문서에 요약 우선/상세 표면 계약이 없습니다.");
   assertOk(code.indexOf("cardTypeAttrs") >= 0 && code.indexOf('data-card-type="') >= 0, "카드 의미 타입을 렌더링하는 공통 계약이 없습니다.");
   assertOk(styles.indexOf("PC card type taxonomy layer") >= 0 && styles.indexOf('[data-card-type="health-card"]') >= 0 && styles.indexOf('[data-card-type="evidence-card"]') >= 0, "PC 카드 타입별 스타일 레이어가 없습니다.");

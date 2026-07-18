@@ -18716,8 +18716,8 @@ html[data-theme="dark"] .ontology-graph-expanded-toolbar .icon-button.danger {
   inset: 0;
   z-index: 1300;
   display: grid;
-  justify-content: end;
-  padding: 16px;
+  place-items: stretch center;
+  padding: 18px;
   background: color-mix(in srgb, var(--bg) 62%, rgba(15, 23, 42, 0.46) 38%);
   -webkit-backdrop-filter: blur(10px);
   backdrop-filter: blur(10px);
@@ -18725,9 +18725,10 @@ html[data-theme="dark"] .ontology-graph-expanded-toolbar .icon-button.danger {
 
 .work-detail-layer {
   display: grid;
-  grid-template-rows: auto minmax(0, 1fr);
-  width: min(760px, calc(100vw - 32px));
-  max-height: calc(100dvh - 32px);
+  grid-template-rows: auto minmax(0, 1fr) auto;
+  width: min(1480px, calc(100vw - 36px));
+  height: calc(100dvh - 36px);
+  max-height: calc(100dvh - 36px);
   min-width: 0;
   overflow: hidden;
   border: 1px solid var(--ds-card-border);
@@ -18781,6 +18782,17 @@ html[data-theme="dark"] .ontology-graph-expanded-toolbar .icon-button.danger {
   min-width: 0;
   overflow: auto;
   padding: var(--ds-panel-pad-y) var(--ds-panel-pad-x);
+}
+
+.work-detail-footer {
+  display: flex;
+  justify-content: flex-end;
+  align-items: center;
+  gap: var(--ds-space-3);
+  min-width: 0;
+  padding: var(--ds-space-4) var(--ds-panel-pad-x);
+  border-top: 1px solid var(--line);
+  background: color-mix(in srgb, var(--panel) 94%, var(--panel-soft) 6%);
 }
 
 .work-detail-body .notification-decision-detail {
@@ -19204,13 +19216,15 @@ html[data-theme="dark"] .ontology-graph-expanded-toolbar .icon-button.danger {
 
 @media (max-width: 860px) {
   .work-detail-backdrop {
-    justify-content: stretch;
-    padding: 8px;
+    padding: 0;
   }
 
   .work-detail-layer {
     width: 100%;
-    max-height: calc(100dvh - 16px);
+    height: 100dvh;
+    max-height: 100dvh;
+    border-radius: 0;
+    border-width: 0;
   }
 
   .work-detail-head {

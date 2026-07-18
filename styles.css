@@ -17234,18 +17234,169 @@ html[data-theme="dark"] .ontology-graph-expanded-toolbar .icon-button.danger {
 }
 
 .ontology-experiment-overview-panel,
+.ontology-experiment-pipeline-panel,
+.ontology-experiment-replay-panel,
+.ontology-experiment-comparison-panel,
+.ontology-experiment-promotion-panel,
 .ontology-experiment-latest-panel,
-.ontology-experiment-list-panel {
+.ontology-experiment-audit-panel,
+.ontology-experiment-list-panel,
+.ontology-experiments-view > .strategy-proposal-console-panel {
   min-width: 0;
 }
 
 .ontology-experiment-overview-panel,
-.ontology-experiment-latest-panel {
+.ontology-experiment-replay-panel,
+.ontology-experiment-comparison-panel,
+.ontology-experiment-promotion-panel,
+.ontology-experiment-latest-panel,
+.ontology-experiment-audit-panel {
   grid-column: span 6;
 }
 
+.ontology-experiment-pipeline-panel,
 .ontology-experiment-list-panel {
   grid-column: 1 / -1;
+}
+
+.ontology-experiments-view > .strategy-proposal-console-panel {
+  grid-column: 1 / -1;
+}
+
+.ontology-experiment-stage-grid {
+  display: grid;
+  grid-template-columns: repeat(5, minmax(0, 1fr));
+  gap: var(--ds-space-3);
+  padding: 0 var(--ds-panel-pad-x) var(--ds-panel-pad-y);
+}
+
+.ontology-experiment-stage-card {
+  display: grid;
+  align-content: start;
+  gap: var(--ds-space-2);
+  min-width: 0;
+  padding: var(--ds-row-pad-y) var(--ds-row-pad-x);
+  border: 1px solid var(--ds-card-border);
+  border-left: 3px solid var(--ds-card-status-neutral);
+  border-radius: var(--ds-radius-control);
+  background: var(--ds-card-row-bg);
+}
+
+.ontology-experiment-stage-card span,
+.ontology-experiment-stage-card p,
+.ontology-experiment-trace-row em,
+.ontology-experiment-comparison-row span,
+.ontology-experiment-comparison-row em,
+.ontology-experiment-check-row em,
+.ontology-experiment-audit-row span,
+.ontology-experiment-audit-row em {
+  color: var(--muted);
+  font-size: var(--ds-type-caption);
+  font-weight: 760;
+  line-height: 1.45;
+}
+
+.ontology-experiment-stage-card span {
+  font-weight: 950;
+  text-transform: uppercase;
+}
+
+.ontology-experiment-stage-card strong,
+.ontology-experiment-stage-card b,
+.ontology-experiment-trace-row strong,
+.ontology-experiment-comparison-head strong,
+.ontology-experiment-comparison-head span,
+.ontology-experiment-comparison-row strong,
+.ontology-experiment-check-row strong,
+.ontology-experiment-audit-row strong {
+  min-width: 0;
+  color: var(--ink);
+  overflow-wrap: anywhere;
+}
+
+.ontology-experiment-stage-card strong,
+.ontology-experiment-trace-row strong,
+.ontology-experiment-check-row strong,
+.ontology-experiment-audit-row strong {
+  font-size: var(--ds-type-label);
+  font-weight: 950;
+}
+
+.ontology-experiment-stage-card b {
+  font-size: 22px;
+  line-height: 1.1;
+}
+
+.ontology-experiment-stage-card p {
+  margin: 0;
+}
+
+.ontology-experiment-trace-list,
+.ontology-experiment-checklist,
+.ontology-experiment-audit-list {
+  display: grid;
+  gap: var(--ds-space-2);
+  min-width: 0;
+  padding: var(--ds-space-3) var(--ds-panel-pad-x) var(--ds-panel-pad-y);
+}
+
+.ontology-experiment-trace-row,
+.ontology-experiment-check-row,
+.ontology-experiment-audit-row {
+  display: grid;
+  gap: var(--ds-space-3);
+  min-width: 0;
+  padding: var(--ds-row-pad-y) var(--ds-row-pad-x);
+  border: 1px solid var(--ds-card-border);
+  border-left: 3px solid var(--ds-card-status-neutral);
+  border-radius: var(--ds-radius-control);
+  background: var(--ds-card-row-bg);
+}
+
+.ontology-experiment-trace-row,
+.ontology-experiment-check-row {
+  grid-template-columns: auto minmax(0, 1fr);
+  align-items: start;
+}
+
+.ontology-experiment-trace-row > div,
+.ontology-experiment-check-row > div,
+.ontology-experiment-audit-row {
+  min-width: 0;
+}
+
+.ontology-experiment-comparison-grid {
+  display: grid;
+  min-width: 0;
+  margin: 0 var(--ds-panel-pad-x) var(--ds-panel-pad-y);
+  border: 1px solid var(--ds-card-border);
+  border-radius: var(--ds-radius-control);
+  overflow: hidden;
+}
+
+.ontology-experiment-comparison-head,
+.ontology-experiment-comparison-row {
+  display: grid;
+  grid-template-columns: minmax(104px, 0.8fr) minmax(0, 1fr) minmax(0, 1fr) minmax(0, 1.2fr);
+  gap: var(--ds-space-3);
+  min-width: 0;
+  padding: var(--ds-row-pad-y) var(--ds-row-pad-x);
+  border-bottom: 1px solid var(--ds-card-border);
+}
+
+.ontology-experiment-comparison-head {
+  background: var(--ds-card-head-bg);
+}
+
+.ontology-experiment-comparison-row:last-child {
+  border-bottom: 0;
+}
+
+.ontology-experiment-comparison-head em {
+  color: var(--muted);
+  font-size: var(--ds-type-caption);
+  font-style: normal;
+  font-weight: 900;
 }
 
 .ontology-experiment-metrics,
@@ -17427,7 +17578,11 @@ html[data-theme="dark"] .ontology-graph-expanded-toolbar .icon-button.danger {
 
 @media (max-width: 980px) {
   .ontology-experiment-overview-panel,
-  .ontology-experiment-latest-panel {
+  .ontology-experiment-replay-panel,
+  .ontology-experiment-comparison-panel,
+  .ontology-experiment-promotion-panel,
+  .ontology-experiment-latest-panel,
+  .ontology-experiment-audit-panel {
     grid-column: 1 / -1;
   }
 
@@ -17436,20 +17591,31 @@ html[data-theme="dark"] .ontology-graph-expanded-toolbar .icon-button.danger {
   .ontology-experiment-card-metrics {
     grid-template-columns: repeat(2, minmax(0, 1fr));
   }
+
+  .ontology-experiment-stage-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
 }
 
 @media (max-width: 620px) {
   .ontology-experiment-metrics,
   .ontology-experiment-run-grid,
   .ontology-experiment-card-metrics,
+  .ontology-experiment-stage-grid,
   .ontology-experiment-card-head,
   .ontology-experiment-recommendation-title,
-  .ontology-experiment-recommendation {
+  .ontology-experiment-recommendation,
+  .ontology-experiment-trace-row,
+  .ontology-experiment-check-row,
+  .ontology-experiment-comparison-head,
+  .ontology-experiment-comparison-row {
     grid-template-columns: 1fr;
   }
 
   .ontology-experiment-card-head .tone-chip,
-  .ontology-experiment-recommendation .tone-chip {
+  .ontology-experiment-recommendation .tone-chip,
+  .ontology-experiment-trace-row .tone-chip,
+  .ontology-experiment-check-row .tone-chip {
     justify-self: start;
   }
 }

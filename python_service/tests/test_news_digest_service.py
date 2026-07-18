@@ -119,7 +119,7 @@ class NewsDigestEnqueuerTests(unittest.TestCase):
         self.assertNotIn("• 원문: https://example.test", job.text)
         self.assertIn("기사일: 07/11 09:00 KST", job.text)
         self.assertIn("분석: 기사 본문 읽음", job.text)
-        self.assertIn("기사 정보: 핵심 애플 관련 소송", job.text)
+        self.assertIn("판단 근거: 핵심 애플 관련 소송", job.text)
         self.assertIn("계정 성향 기준", job.text)
         self.assertIn("계정 성향: 균형형", job.text)
         self.assertEqual("balanced", job.context["investmentStrategyProfile"])
@@ -203,15 +203,19 @@ class NewsDigestEnqueuerTests(unittest.TestCase):
         self.enqueuer(queue).handle(event)
 
         job = queue.jobs[0]
-        self.assertIn("실제 영향 요약", job.text)
+        self.assertIn("이번 뉴스 핵심", job.text)
         self.assertIn("Apple(AAPL): 단기 경계", job.text)
         self.assertIn("판단: 영향 악재", job.text)
-        self.assertIn("영향 해석: 소송 이슈가 투자심리 부담", job.text)
-        self.assertIn("보유/관심 영향: Apple 보유·관심 기준", job.text)
-        self.assertIn("내용 요약: 애플 관련 법적 이슈", job.text)
+        self.assertIn("핵심 내용: 애플 관련 법적 이슈", job.text)
+        self.assertIn("투자 영향: Apple 보유·관심 기준", job.text)
         self.assertIn("대응 경계: 자동 매매 판단이 아니라", job.text)
         self.assertNotIn("핵심 근거:", job.text)
-        self.assertIn("다음 확인: 원문 본문 확보, 다음 장 가격 반응", job.text)
+        self.assertNotIn("실제 영향 요약", job.text)
+        self.assertNotIn("먼저 볼 것", job.text)
+        self.assertNotIn("영향 해석:", job.text)
+        self.assertNotIn("보유/관심 영향:", job.text)
+        self.assertNotIn("내용 요약:", job.text)
+        self.assertIn("확인할 것: 원문 본문 확보, 다음 장 가격 반응", job.text)
 
     def test_news_digest_groups_plain_impact_before_article_details(self):
         queue = MemoryNotificationQueue()
@@ -258,9 +262,9 @@ class NewsDigestEnqueuerTests(unittest.TestCase):
         enqueuer.handle(event)
 
         job = queue.jobs[0]
-        self.assertLess(job.text.index("실제 영향 요약"), job.text.index("먼저 볼 것"))
+        self.assertLess(job.text.index("이번 뉴스 핵심"), job.text.index("기사 상세"))
         self.assertIn("쿠팡(CPNG): 단기 경계. 쿠팡 보유 기준", job.text)
-        self.assertIn("영향 해석: 쿠팡에는 실적 발표 전 주가 하락", job.text)
+        self.assertIn("투자 영향: 쿠팡 보유 기준", job.text)
 
     def test_ignores_feed_only_article_by_default(self):
         queue = MemoryNotificationQueue()
@@ -380,7 +384,7 @@ class NewsDigestEnqueuerTests(unittest.TestCase):
         self.assertNotIn("모델 판단", rendered)
         self.assertIn("뉴스/피드 새 정보", rendered)
 
-    def test_first_watch_section_deduplicates_same_symbol(self):
+    def test_news_digest_omits_repeated_first_watch_section(self):
         queue = MemoryNotificationQueue()
         first = self.evidence()
         second = self.evidence()
@@ -396,7 +400,10 @@ class NewsDigestEnqueuerTests(unittest.TestCase):
         self.enqueuer(queue).handle(event)
 
         self.assertEqual(1, len(queue.jobs))
-        self.assertEqual(1, queue.jobs[0].text.count("• Apple(AAPL): 관심 · 위험 뉴스"))
+        self.assertNotIn("먼저 볼 것", queue.jobs[0].text)
+        self.assertIn("기사 상세", queue.jobs[0].text)
+        self.assertIn("1. Apple / AAPL", queue.jobs[0].text)
+        self.assertIn("2. Apple / AAPL", queue.jobs[0].text)
 
     def test_ignores_collection_event_without_material_items(self):
         queue = MemoryNotificationQueue()

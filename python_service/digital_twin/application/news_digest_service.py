@@ -318,6 +318,17 @@ def impact_summary_lines(items: List[Dict[str, object]]) -> List[str]:
     return rows
 
 
+def compact_digest_line(label: str, value: object, seen: set, limit: int = 420) -> str:
+    text = bounded_text(value, limit)
+    if not text:
+        return ""
+    key = re.sub(r"\s+", "", text).casefold()
+    if key in seen:
+        return ""
+    seen.add(key)
+    return "• " + label + ": " + html_text(text)
+
+
 def ai_watch_line(item: Dict[str, object]) -> str:
     summary = ai_summary(item)
     values = summary.get("watchPoints") if isinstance(summary, dict) else []
@@ -630,18 +641,6 @@ class NewsDigestEnqueuer:
         strategy_context = merge_strategy_context({}, account)
         strategy_lines = strategy_message_lines(strategy_context)
         effect_lines = impact_summary_lines(items)
-        symbols = []
-        seen_symbol_lines = set()
-        for item in items:
-            symbol = normalized_symbol(item.get("symbol"))
-            name = clean_text(item.get("displayName") or symbol)
-            bucket = clean_text(item.get("portfolioBucket") or "대상")
-            label = name + ("(" + symbol + ")" if symbol and symbol != name else "")
-            impact = impact_label(item)
-            line_key = re.sub(r"\s+", "", label + "|" + bucket + "|" + impact).casefold()
-            if label and line_key not in seen_symbol_lines:
-                seen_symbol_lines.add(line_key)
-                symbols.append("• " + html_text(label) + ": " + html_text(bucket + " · " + impact + " 뉴스"))
         item_lines = []
         for index, item in enumerate(items, start=1):
             symbol = normalized_symbol(item.get("symbol"))
@@ -661,8 +660,6 @@ class NewsDigestEnqueuer:
                 "• 분석: " + html_text(article_analysis_label(item)),
             ])
             facts_line = article_facts_line(item)
-            if facts_line:
-                item_lines.append("• 기사 정보: " + html_text(facts_line))
             summary_line = item_summary(item)
             impact_reason = item_impact_reason(item)
             portfolio_implication = item_portfolio_implication(item)
@@ -674,17 +671,18 @@ class NewsDigestEnqueuer:
                 + (", 관련성 " + html_text(relevance) if relevance else "")
                 + (", 중요도 " + html_text(importance) if importance else ""),
             ])
-            if impact_reason:
-                item_lines.append("• 영향 해석: " + html_text(impact_reason))
-            if portfolio_implication:
-                item_lines.append("• 보유/관심 영향: " + html_text(portfolio_implication))
-            item_lines.append("• 내용 요약: " + html_text(summary_line))
-            if reason_line and not impact_reason:
-                item_lines.append("• 판단 근거: " + html_text(reason_line))
+            seen_detail_lines = set()
+            for line in [
+                compact_digest_line("핵심 내용", summary_line, seen_detail_lines),
+                compact_digest_line("투자 영향", portfolio_implication or impact_reason, seen_detail_lines),
+                compact_digest_line("판단 근거", facts_line or reason_line, seen_detail_lines, limit=260),
+            ]:
+                if line:
+                    item_lines.append(line)
             if action_boundary:
                 item_lines.append("• 대응 경계: " + html_text(action_boundary))
             if watch_line:
-                item_lines.append("• 다음 확인: " + html_text(watch_line))
+                item_lines.append("• 확인할 것: " + html_text(watch_line))
             item_lines.append("• 원문: " + link)
             if index < len(items):
                 item_lines.append("")
@@ -704,13 +702,10 @@ class NewsDigestEnqueuer:
             "계정 성향 기준",
             *(html_text(line) for line in strategy_lines),
             "",
-            "실제 영향 요약",
+            "이번 뉴스 핵심",
             *(html_text(line) for line in effect_lines or ["• 기사별 영향 해석을 확인하세요."]),
             "",
-            "먼저 볼 것",
-            *(symbols or ["• 대상 종목을 확인하세요."]),
-            "",
-            "새 정보",
+            "기사 상세",
             *item_lines,
             "",
             "알림이 온 이유",

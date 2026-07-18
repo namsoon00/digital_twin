@@ -3873,6 +3873,7 @@
   }
 
   function shouldLoadStrategyProposals() {
+    if (state.activeTab === "experiments") return true;
     if (state.activeTab !== "modeling") return false;
     var section = activeSectionForPageMode("modeling", strategySections, normalizeStrategySection(state.activeStrategySection));
     return section === "overview" || section === "graphs" || section === "proposals";
@@ -9478,9 +9479,15 @@
     return renderManagedPage("experiments", snapshot, [
       '<section class="admin-grid ontology-experiments-view">',
       renderOntologyExperimentOverviewPanel(),
+      renderOntologyExperimentPipelinePanel(),
+      renderOntologyExperimentReplayPanel(),
+      renderOntologyExperimentComparisonPanel(),
+      renderOntologyExperimentPromotionPanel(),
       renderOntologyExperimentLatestPanel(),
       !experiments.length ? renderOntologyExperimentStarterPanel() : '',
+      renderOntologyExperimentAuditPanel(),
       renderOntologyExperimentListPanel(),
+      renderStrategyProposalConsolePanel(),
       '</section>'
     ].join(""));
   }
@@ -9642,6 +9649,326 @@
     ].join("");
   }
 
+  function ontologyExperimentPrimaryCandidate() {
+    var items = ontologyExperimentItems();
+    if (!items.length) return null;
+    var promoteCandidate = items.filter(function (experiment) {
+      var latest = ontologyExperimentLatestRun(experiment || {});
+      var readiness = String(latest.promotionStatus || "").toLowerCase();
+      var applyStatus = String(latest.applyStatus || ((latest.appliedOntologyChanges || {}).status) || "").toLowerCase();
+      return readiness === "promote-candidate" && applyStatus !== "applied" && applyStatus !== "already-applied";
+    })[0];
+    if (promoteCandidate) return promoteCandidate;
+    return items.filter(function (experiment) {
+      return String((experiment || {}).status || "").toLowerCase() === "active";
+    })[0] || items[0];
+  }
+
+  function ontologyExperimentRunHistory(experiment) {
+    if (!experiment) return [];
+    var history = Array.isArray(experiment.runHistory) ? experiment.runHistory.slice() : [];
+    var latest = ontologyExperimentLatestRun(experiment);
+    if (!history.length && (latest.completedAt || latest.promotionStatus || latest.graphRunCount)) history.push(latest);
+    return history;
+  }
+
+  function ontologyExperimentStageCounts() {
+    var counts = { draft: 0, validating: 0, promotable: 0, applied: 0, blocked: 0 };
+    ontologyExperimentItems().forEach(function (experiment) {
+      var latest = ontologyExperimentLatestRun(experiment || {});
+      var status = String((experiment || {}).status || "draft").toLowerCase();
+      var readiness = String(latest.promotionStatus || "").toLowerCase();
+      var applyStatus = String(latest.applyStatus || ((latest.appliedOntologyChanges || {}).status) || "").toLowerCase();
+      if (applyStatus === "applied" || applyStatus === "already-applied") {
+        counts.applied += 1;
+      } else if (readiness === "promote-candidate") {
+        counts.promotable += 1;
+      } else if (status === "active" || latest.completedAt) {
+        counts.validating += 1;
+      } else if (status === "paused" || readiness === "needs-data" || readiness === "needs-review") {
+        counts.blocked += 1;
+      } else {
+        counts.draft += 1;
+      }
+    });
+    return counts;
+  }
+
+  function renderOntologyExperimentStageCard(index, title, count, description, tone) {
+    return [
+      '<section class="ontology-experiment-stage-card"' + cardTypeAttrs("process-card", tone || "hold") + '>',
+      '<span>' + escapeHtml(index) + '</span>',
+      '<strong>' + escapeHtml(title) + '</strong>',
+      '<b>' + escapeHtml(count) + '</b>',
+      '<p>' + escapeHtml(description) + '</p>',
+      '</section>'
+    ].join("");
+  }
+
+  function renderOntologyExperimentPipelinePanel() {
+    var counts = ontologyExperimentStageCounts();
+    var total = ontologyExperimentItems().length;
+    return [
+      '<article class="panel ontology-experiment-pipeline-panel"' + cardTypeAttrs("process-card", total ? "watch" : "hold") + '>',
+      '<div class="panel-head">',
+      '<div>',
+      '<p class="label">Experiment Workbench</p>',
+      '<h2>검증 파이프라인</h2>',
+      '<p class="subtle">초안 규칙을 샌드박스에서 재생하고, 증거가 쌓인 후보만 운영 RuleBox로 올립니다.</p>',
+      '</div>',
+      '<span class="tone-chip ' + escapeHtml(total ? "watch" : "hold") + '">' + escapeHtml(total ? total + "개 실험" : "대기") + '</span>',
+      '</div>',
+      '<div class="ontology-experiment-stage-grid">',
+      renderOntologyExperimentStageCard("01", "제안", counts.draft, "AI 또는 수동으로 만든 후보 규칙", "hold"),
+      renderOntologyExperimentStageCard("02", "재생 검증", counts.validating, "스냅샷 기반 샌드박스 실행 중", "caution"),
+      renderOntologyExperimentStageCard("03", "승격 후보", counts.promotable, "운영 반영 전 심사 대상", "watch"),
+      renderOntologyExperimentStageCard("04", "운영 반영", counts.applied, "RuleBox에 적용된 변경", "watch"),
+      renderOntologyExperimentStageCard("보류", "데이터 보강", counts.blocked, "근거 부족 또는 검토 필요", "hold"),
+      '</div>',
+      '</article>'
+    ].join("");
+  }
+
+  function ontologyExperimentReplaySource() {
+    var candidate = ontologyExperimentPrimaryCandidate();
+    if (candidate) {
+      return { experiment: candidate, latest: ontologyExperimentLatestRun(candidate), history: ontologyExperimentRunHistory(candidate) };
+    }
+    var payload = ontologyExperimentPayload();
+    var latest = payload.latestRun && typeof payload.latestRun === "object" ? payload.latestRun : {};
+    return { experiment: null, latest: latest, history: latest.completedAt ? [latest] : [] };
+  }
+
+  function renderOntologyExperimentTraceRow(label, title, detail, tone) {
+    return [
+      '<div class="ontology-experiment-trace-row">',
+      '<span class="tone-chip ' + escapeHtml(tone || "hold") + '">' + escapeHtml(label) + '</span>',
+      '<div>',
+      '<strong>' + escapeHtml(title || "-") + '</strong>',
+      '<em>' + escapeHtml(detail || "데이터 대기") + '</em>',
+      '</div>',
+      '</div>'
+    ].join("");
+  }
+
+  function renderOntologyExperimentReplayPanel() {
+    var source = ontologyExperimentReplaySource();
+    var latest = source.latest || {};
+    var experiment = source.experiment || {};
+    var relationTypes = Array.isArray(latest.newRelationTypes) ? latest.newRelationTypes : [];
+    var findings = Array.isArray(latest.findings) ? latest.findings : [];
+    var history = source.history || [];
+    var title = experiment.title || "선택된 실험 없음";
+    return [
+      '<article class="panel ontology-experiment-replay-panel"' + cardTypeAttrs("diagnostic-card", latest.completedAt ? "watch" : "hold") + '>',
+      '<div class="panel-head">',
+      '<div>',
+      '<p class="label">Backtest Replay</p>',
+      '<h2>백테스트 / 리플레이</h2>',
+      '<p class="subtle">실험 후보가 과거 스냅샷과 TypeDB 물질화 결과에서 어떤 관계 변화를 만들었는지 확인합니다.</p>',
+      '</div>',
+      '<span class="tone-chip ' + escapeHtml(latest.completedAt ? "watch" : "hold") + '">' + escapeHtml(latest.completedAt ? "최근 재생" : "미실행") + '</span>',
+      '</div>',
+      '<div class="ontology-experiment-run-grid">',
+      renderOntologyExperimentMetric("대상", title, "candidate"),
+      renderOntologyExperimentMetric("그래프", latest.graphRunCount || 0, "graphs"),
+      renderOntologyExperimentMetric("관계 변화", latest.derivedRelationDelta || 0, "delta"),
+      renderOntologyExperimentMetric("이력", history.length || 0, "runs"),
+      '</div>',
+      latest.completedAt ? '<p class="subtle">최근 실행 ' + escapeHtml(formatClock(latest.completedAt)) + '</p>' : '',
+      '<div class="ontology-experiment-trace-list">',
+      renderOntologyExperimentTraceRow("입력", "후보 규칙·스냅샷", title, experiment.id ? "watch" : "hold"),
+      renderOntologyExperimentTraceRow("검증", "샌드박스 관계 생성", (latest.graphRunCount || 0) + "개 그래프 · 파생 변화 " + (latest.derivedRelationDelta || 0), latest.completedAt ? "watch" : "hold"),
+      renderOntologyExperimentTraceRow("출력", "운영 반영 심사", ontologyReadinessLabel(latest.promotionStatus), ontologyReadinessTone(latest.promotionStatus)),
+      '</div>',
+      relationTypes.length ? '<div class="theme-radar ontology-experiment-tags">' + relationTypes.slice(0, 8).map(function (item) { return '<span>' + escapeHtml(item) + '</span>'; }).join("") + '</div>' : '',
+      findings.length ? '<div class="ontology-experiment-findings">' + findings.slice(0, 3).map(function (item) { return '<span>' + escapeHtml(item) + '</span>'; }).join("") + '</div>' : '',
+      '</article>'
+    ].join("");
+  }
+
+  function renderOntologyExperimentComparisonRow(label, baseline, candidate, meaning) {
+    return [
+      '<div class="ontology-experiment-comparison-row">',
+      '<strong>' + escapeHtml(label) + '</strong>',
+      '<span>' + escapeHtml(baseline || "-") + '</span>',
+      '<span>' + escapeHtml(candidate || "-") + '</span>',
+      '<em>' + escapeHtml(meaning || "") + '</em>',
+      '</div>'
+    ].join("");
+  }
+
+  function renderOntologyExperimentComparisonPanel() {
+    var source = ontologyExperimentReplaySource();
+    var experiment = source.experiment || {};
+    var latest = source.latest || {};
+    var candidateRules = Array.isArray(experiment.candidateRules) ? experiment.candidateRules : [];
+    var relationTypes = Array.isArray(latest.newRelationTypes) ? latest.newRelationTypes : [];
+    var recommendations = ontologyExperimentRecommendations(latest);
+    return [
+      '<article class="panel ontology-experiment-comparison-panel"' + cardTypeAttrs("relationship-card", candidateRules.length || latest.completedAt ? "watch" : "hold") + '>',
+      '<div class="panel-head">',
+      '<div>',
+      '<p class="label">Candidate vs Operation</p>',
+      '<h2>후보 비교</h2>',
+      '<p class="subtle">운영 기준과 후보 규칙의 차이를 같은 표로 맞춰 보고, 승격 전에 의미를 분리합니다.</p>',
+      '</div>',
+      '<span class="tone-chip ' + escapeHtml(ontologyReadinessTone(latest.promotionStatus)) + '">' + escapeHtml(ontologyReadinessLabel(latest.promotionStatus)) + '</span>',
+      '</div>',
+      '<div class="ontology-experiment-comparison-grid">',
+      '<div class="ontology-experiment-comparison-head"><strong>항목</strong><span>운영 기준</span><span>실험 후보</span><em>해석</em></div>',
+      renderOntologyExperimentComparisonRow("룰", "현재 RuleBox", candidateRules.length ? candidateRules.length + "개 후보" : "후보 없음", "운영 로직에 추가될 조건 수"),
+      renderOntologyExperimentComparisonRow("관계", "기존 관계", (latest.derivedRelationDelta || 0) + "개 변화", "새 규칙이 만든 관계 수 변화"),
+      renderOntologyExperimentComparisonRow("타입", "기존 타입", relationTypes.length ? relationTypes.slice(0, 3).join(", ") : "신규 타입 없음", "새 관계 타입 확장 여부"),
+      renderOntologyExperimentComparisonRow("보완 제안", "운영 유지", recommendations.length ? recommendations.length + "건 검토" : "제안 없음", "승격 전 보완해야 할 작업"),
+      '</div>',
+      '</article>'
+    ].join("");
+  }
+
+  function ontologyExperimentPromotionChecks(experiment, latest) {
+    experiment = experiment || {};
+    latest = latest || {};
+    var candidateRules = Array.isArray(experiment.candidateRules) ? experiment.candidateRules : [];
+    var recommendations = ontologyExperimentRecommendations(latest);
+    var relationTypes = Array.isArray(latest.newRelationTypes) ? latest.newRelationTypes : [];
+    var applyStatus = String(latest.applyStatus || ((latest.appliedOntologyChanges || {}).status) || "").toLowerCase();
+    return [
+      {
+        label: "가설·후보 규칙",
+        passed: Boolean(experiment.hypothesis || candidateRules.length),
+        detail: candidateRules.length ? candidateRules.length + "개 후보 규칙" : "가설 또는 후보 규칙 필요"
+      },
+      {
+        label: "재생 실행",
+        passed: Boolean(latest.completedAt),
+        detail: latest.completedAt ? formatClock(latest.completedAt) : "실행 이력 없음"
+      },
+      {
+        label: "그래프 증거",
+        passed: Boolean(Number(latest.graphRunCount || 0) > 0 || Number(latest.derivedRelationDelta || 0) !== 0 || relationTypes.length),
+        detail: (latest.graphRunCount || 0) + "개 그래프 · 변화 " + (latest.derivedRelationDelta || 0)
+      },
+      {
+        label: "AI 보완 검토",
+        passed: recommendations.length > 0,
+        detail: recommendations.length ? recommendations.length + "건 제안" : "보완 제안 없음"
+      },
+      {
+        label: "승격 판정",
+        passed: String(latest.promotionStatus || "").toLowerCase() === "promote-candidate",
+        detail: ontologyReadinessLabel(latest.promotionStatus)
+      },
+      {
+        label: "운영 반영",
+        passed: applyStatus === "applied" || applyStatus === "already-applied",
+        detail: ontologyApplyStatusLabel(applyStatus)
+      }
+    ];
+  }
+
+  function renderOntologyExperimentPromotionCheck(check) {
+    check = check || {};
+    var tone = check.passed ? "watch" : "hold";
+    return [
+      '<section class="ontology-experiment-check-row">',
+      '<span class="tone-chip ' + escapeHtml(tone) + '">' + escapeHtml(check.passed ? "통과" : "대기") + '</span>',
+      '<div>',
+      '<strong>' + escapeHtml(check.label || "체크") + '</strong>',
+      '<em>' + escapeHtml(check.detail || "") + '</em>',
+      '</div>',
+      '</section>'
+    ].join("");
+  }
+
+  function renderOntologyExperimentPromotionPanel() {
+    var source = ontologyExperimentReplaySource();
+    var experiment = source.experiment || {};
+    var latest = source.latest || {};
+    var id = String(experiment.id || experiment.experimentId || "");
+    var recommendations = ontologyExperimentRecommendations(latest);
+    var applyStatus = String(latest.applyStatus || ((latest.appliedOntologyChanges || {}).status) || "");
+    var applied = applyStatus === "applied" || applyStatus === "already-applied";
+    var canApply = Boolean(id && latest.completedAt && recommendations.length && !applied);
+    var checks = ontologyExperimentPromotionChecks(experiment, latest);
+    return [
+      '<article class="panel ontology-experiment-promotion-panel"' + cardTypeAttrs("signal-card", canApply ? "watch" : "hold") + '>',
+      '<div class="panel-head">',
+      '<div>',
+      '<p class="label">Promotion Review</p>',
+      '<h2>승격 심사</h2>',
+      '<p class="subtle">운영 반영은 투자 판단 로직 변경이므로 실행 이력, 관계 증거, 보완 제안을 함께 확인합니다.</p>',
+      '</div>',
+      '<span class="tone-chip ' + escapeHtml(canApply ? "watch" : "hold") + '">' + escapeHtml(canApply ? "반영 가능" : ontologyApplyStatusLabel(applyStatus)) + '</span>',
+      '</div>',
+      '<div class="ontology-experiment-checklist">',
+      checks.map(renderOntologyExperimentPromotionCheck).join(""),
+      '</div>',
+      '<div class="ontology-experiment-actions">',
+      canApply ? '<button class="text-button primary" type="button" data-lab-apply="' + escapeHtml(id) + '"' + (ontologyExperimentBusy("apply", id) ? ' disabled' : '') + '>' + escapeHtml(ontologyExperimentBusy("apply", id) ? "반영 중" : "검증 제안 운영 반영") + '</button>' : '',
+      id ? renderWorkDetailButton("ontology-experiment", id, "상세 심사", "text-button compact") : '',
+      '</div>',
+      '</article>'
+    ].join("");
+  }
+
+  function ontologyExperimentAuditEntries() {
+    var entries = [];
+    ontologyExperimentItems().forEach(function (experiment) {
+      var id = String((experiment || {}).id || (experiment || {}).experimentId || "");
+      ontologyExperimentRunHistory(experiment).forEach(function (run) {
+        entries.push({
+          at: run.completedAt || run.startedAt || "",
+          title: (experiment || {}).title || id || "실험",
+          status: ontologyReadinessLabel(run.promotionStatus),
+          detail: "그래프 " + (run.graphRunCount || 0) + " · 파생 변화 " + (run.derivedRelationDelta || 0)
+        });
+      });
+      var latest = ontologyExperimentLatestRun(experiment || {});
+      var applyStatus = String(latest.applyStatus || ((latest.appliedOntologyChanges || {}).status) || "");
+      if (applyStatus) {
+        entries.push({
+          at: latest.appliedAt || ((latest.appliedOntologyChanges || {}).appliedAt) || latest.completedAt || "",
+          title: (experiment || {}).title || id || "실험",
+          status: ontologyApplyStatusLabel(applyStatus),
+          detail: "운영 반영 상태"
+        });
+      }
+    });
+    return entries.sort(function (a, b) {
+      return String(b.at || "").localeCompare(String(a.at || ""));
+    });
+  }
+
+  function renderOntologyExperimentAuditPanel() {
+    var entries = ontologyExperimentAuditEntries().slice(0, 6);
+    return [
+      '<article class="panel ontology-experiment-audit-panel"' + cardTypeAttrs("diagnostic-card", entries.length ? "watch" : "hold") + '>',
+      '<div class="panel-head">',
+      '<div>',
+      '<p class="label">Audit Trail</p>',
+      '<h2>운영 반영 이력</h2>',
+      '<p class="subtle">실험 실행, 승격 판정, 운영 반영 상태를 시간순으로 남겨 되돌림 기준을 확인합니다.</p>',
+      '</div>',
+      '<span class="metric">' + escapeHtml(entries.length) + '</span>',
+      '</div>',
+      entries.length ? '<div class="ontology-experiment-audit-list">' + entries.map(function (entry) {
+        return [
+          '<section class="ontology-experiment-audit-row">',
+          '<strong>' + escapeHtml(entry.title) + '</strong>',
+          '<span>' + escapeHtml(entry.status) + '</span>',
+          '<em>' + escapeHtml([entry.at ? formatClock(entry.at) : "", entry.detail].filter(Boolean).join(" · ")) + '</em>',
+          '</section>'
+        ].join("");
+      }).join("") + '</div>' : renderEmptyState({
+        label: "Audit Trail",
+        title: "아직 기록된 실험 이력이 없습니다",
+        description: "실험을 실행하거나 운영 반영하면 이 위치에 감사 이력이 표시됩니다."
+      }),
+      '</article>'
+    ].join("");
+  }
+
   function renderOntologyExperimentLatestPanel() {
     var payload = ontologyExperimentPayload();
     var latest = payload.latestRun && typeof payload.latestRun === "object" ? payload.latestRun : {};
@@ -9773,6 +10100,7 @@
     var recommendations = ontologyExperimentRecommendations(latest);
     var status = String(experiment.status || "draft");
     var applyStatus = String(latest.applyStatus || ((latest.appliedOntologyChanges || {}).status) || "");
+    var promotionChecks = ontologyExperimentPromotionChecks(experiment, latest);
     return {
       kicker: "Ontology Experiment",
       title: experiment.title || "Ontology experiment",
@@ -9789,6 +10117,7 @@
         renderNotificationDetailMetric("판정", ontologyReadinessLabel(latest.promotionStatus), ontologyExperimentStatusTone(status)),
         '</div>',
         symbols.length ? '<section class="work-detail-section"><strong>대상 심볼</strong><p>' + escapeHtml(symbols.join(" · ")) + '</p></section>' : '',
+        '<section class="work-detail-section"><strong>승격 체크리스트</strong><div class="ontology-experiment-checklist">' + promotionChecks.map(renderOntologyExperimentPromotionCheck).join("") + '</div></section>',
         recommendations.length ? '<section class="work-detail-section"><strong>보완 제안</strong>' + renderOntologyExperimentRecommendationList(recommendations, recommendations.length) + '</section>' : '',
         applyStatus ? '<section class="work-detail-section"><strong>운영 반영</strong><p>' + escapeHtml(ontologyApplyStatusLabel(applyStatus)) + (latest.appliedAt ? ' · ' + escapeHtml(formatClock(latest.appliedAt)) : '') + '</p></section>' : ''
       ].join("")

@@ -307,7 +307,9 @@ function checkFrontendAdminRender() {
       /\.loading-skeleton-board\s*\{[\s\S]*gap: var\(--ds-space-5\);/.test(styles) &&
       /\.symbol-result-workbench \.symbol-result-list,[\s\S]*\.investment-action-workbench \.investment-action-list\s*\{[\s\S]*gap: var\(--ds-card-comfort-gap\);/.test(styles) &&
       /\.notification-decision-list\s*\{[\s\S]*display: grid;[\s\S]*gap: var\(--ds-card-comfort-gap\);/.test(styles) &&
-      /:where\([\s\S]*\.symbol-result-row,[\s\S]*\.notification-decision-row,[\s\S]*\.feed-impact-card,[\s\S]*\.research-evidence-item,[\s\S]*\.investment-action-row[\s\S]*\)\s*\{[\s\S]*padding: var\(--ds-card-comfort-pad-y\) var\(--ds-card-comfort-pad-x\);[\s\S]*border-left-width: 4px;/.test(styles),
+      styles.indexOf("Financial data card format system") >= 0 &&
+      /\.console-shell \[data-card-type\]\s*\{[\s\S]*border-left-width: 1px !important;/.test(styles) &&
+      /\.console-shell :is\([\s\S]*\.symbol-result-row,[\s\S]*\.notification-decision-row,[\s\S]*\.feed-impact-card,[\s\S]*\.research-evidence-item,[\s\S]*\.investment-action-row[\s\S]*\)\s*\{[\s\S]*border-left-width: 1px !important;/.test(styles),
     "PC 카드 간격/내부 여백을 최종 레이어에서 복원하는 계약이 없습니다."
   );
   assertOk(
@@ -351,7 +353,9 @@ function checkFrontendAdminRender() {
       /\.investment-calendar-month-grid\s*\{[\s\S]*grid-template-columns: repeat\(7, minmax\(0, 1fr\)\);/.test(styles) &&
       /\.investment-calendar-primary-grid\s*\{[\s\S]*display: grid;[\s\S]*gap: var\(--ds-page-gap\);/.test(styles) &&
       /\.investment-calendar-candidate-panel \.investment-calendar-list\s*\{[\s\S]*grid-template-columns: repeat\(auto-fit, minmax\(320px, 1fr\)\);/.test(styles) &&
-      /rows\.slice\(0, 4\)\.map\(renderInvestmentActionRow\)/.test(code) &&
+      code.indexOf("investmentActionPageInfo") >= 0 &&
+      code.indexOf("data-investment-action-query") >= 0 &&
+      code.indexOf("data-investment-action-page") >= 0 &&
       /var visibleJobs = jobs\.slice\(0, 4\);/.test(code) &&
       /var visibleAlerts = alerts\.slice\(0, 6\);/.test(code) &&
       /rows\.slice\(0, 5\)\.map\(function \(row\)/.test(code) &&
@@ -376,6 +380,9 @@ function checkFrontendAdminRender() {
   assertOk(code.indexOf("cardTypeAttrs") >= 0 && code.indexOf('data-card-type="') >= 0, "카드 의미 타입을 렌더링하는 공통 계약이 없습니다.");
   assertOk(styles.indexOf("PC card type taxonomy layer") >= 0 && styles.indexOf('[data-card-type="health-card"]') >= 0 && styles.indexOf('[data-card-type="evidence-card"]') >= 0, "PC 카드 타입별 스타일 레이어가 없습니다.");
   assertOk(designSystemDoc.indexOf("Card type taxonomy") >= 0 && designSystemDoc.indexOf("health-card") >= 0 && designSystemDoc.indexOf("action-queue-card") >= 0, "디자인 시스템 문서에 카드 타입 분류 계약이 없습니다.");
+  assertOk(code.indexOf("cardFormatAttrs") >= 0 && code.indexOf('data-card-format="') >= 0, "데이터 형식별 카드 포맷을 렌더링하는 공통 계약이 없습니다.");
+  assertOk(styles.indexOf("Financial data card format system") >= 0 && styles.indexOf('[data-card-format="decision-ticket"]') >= 0 && styles.indexOf('[data-card-format="document-card"]') >= 0 && styles.indexOf('[data-card-format="market-ledger-row"]') >= 0, "금융 데이터 포맷별 카드 표면 레이어가 없습니다.");
+  assertOk(designSystemDoc.indexOf("Card format taxonomy") >= 0 && designSystemDoc.indexOf("decision-ticket") >= 0 && designSystemDoc.indexOf("pagination-strip") >= 0, "디자인 시스템 문서에 카드 포맷 분류 계약이 없습니다.");
   ["process-card", "source-card", "diagnostic-card", "signal-card", "relationship-card", "reference-card", "calendar-event"].forEach((cardType) => {
     assertOk(code.indexOf(cardType) >= 0 && styles.indexOf('[data-card-type="' + cardType + '"]') >= 0 && designSystemDoc.indexOf(cardType) >= 0, "확장 카드 타입 계약이 누락되었습니다: " + cardType);
   });

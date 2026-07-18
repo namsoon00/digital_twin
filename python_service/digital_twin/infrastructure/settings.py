@@ -504,11 +504,14 @@ def read_settings_store() -> Dict[str, str]:
 
 def write_settings_store(settings: Dict[str, object]) -> Dict[str, str]:
     clean = {str(key): str(value or "") for key, value in settings.items()}
-    from .mysql_operational import MySQLRuntimeSettingsStore
+    try:
+        from .mysql_operational import MySQLRuntimeSettingsStore
 
-    store_settings = dict(clean)
-    store_settings["_skipOperationalHistoryRetention"] = "1"
-    MySQLRuntimeSettingsStore(store_settings).replace(clean)
+        store_settings = dict(clean)
+        store_settings["_skipOperationalHistoryRetention"] = "1"
+        MySQLRuntimeSettingsStore(store_settings).replace(clean)
+    except Exception:
+        write_private_json(settings_path(), clean)
     return clean
 
 

@@ -24,6 +24,7 @@ from typing import Dict, List
 from ..application.account_service import AccountApplicationService
 from ..application.notification_replay_service import NotificationReplayService
 from ..application.ontology_diagnostics_service import OntologyDiagnosticsService
+from ..application.symbol_universe_service import DEFAULT_SYMBOL_SEEDS, seed_symbol
 from ..domain.events import (
     APP_ITEM_REMOVED,
     APP_ITEM_UPDATED,
@@ -55,10 +56,11 @@ from ..domain.market_hours import DEFAULT_MARKET_HOUR_SESSIONS
 from ..domain.monitoring import RealtimeMonitor
 from ..domain.notification_rules import CONDITION_TYPE_LABELS, DEFAULT_HONEY_THRESHOLD, NotificationRuleConfig
 from ..domain.notifications import NotificationJob
-from ..domain.notification_templates import DEFAULT_NOTIFICATION_TEMPLATES, MESSAGE_TYPE_LABELS, TRIGGER_SUMMARIES, alert_context, template_variables
+from ..domain.notification_templates import DEFAULT_NOTIFICATION_TEMPLATES, MESSAGE_TYPE_LABELS, TRIGGER_SUMMARIES, NotificationTemplate, alert_context, template_variables
 from ..domain.parsing import parse_assignments
 from ..domain.portfolio import utc_now_iso
-from ..infrastructure.event_bus import default_event_bus
+from ..domain.symbol_universe import symbol_search_symbol_candidates
+from ..infrastructure.event_bus import EventBus, JsonEventLog, default_event_bus
 from ..infrastructure.external_signal_utils import ExternalCircuitOpen, ExternalRateLimited, external_call_target, guarded_external_call
 from ..infrastructure.mock_market import mock_market_payload, mock_market_scenario_list
 from ..infrastructure.ontology_graph_store import ontology_repository_from_settings
@@ -77,11 +79,12 @@ from ..infrastructure.service_factory import (
     flow_lens_snapshot,
     investment_analysis_snapshot,
 )
-from ..infrastructure.settings import ROOT_DIR, runtime_settings, save_runtime_settings
+from ..infrastructure.settings import ROOT_DIR, read_json, runtime_settings, save_runtime_settings, write_private_json
 from ..infrastructure.toss_snapshots import build_snapshot
 
 
 PUBLIC_DIR = ROOT_DIR / "public"
+LOCAL_APP_STORE_PATH = ROOT_DIR / "data" / "store.json"
 MEMORY_CATEGORIES = ["identity", "preference", "finance", "travel", "asset", "schedule", "work", "other"]
 DOMAIN_TYPES = ["stock", "trip", "asset", "schedule", "task", "note"]
 MAX_BODY_BYTES = 1024 * 1024
@@ -154,6 +157,7 @@ def read_websocket_frame(sock):
 class RealtimeHub:
     def __init__(self):
         self.clients = set()
+        self.recent_events: List[DomainEvent] = []
         self.lock = threading.Lock()
 
     def add(self, client) -> None:
@@ -168,6 +172,15 @@ class RealtimeHub:
         with self.lock:
             connected = len(self.clients)
         return {"connectedClients": connected}
+
+    def remember_event(self, event: DomainEvent) -> None:
+        with self.lock:
+            self.recent_events.insert(0, event)
+            self.recent_events = self.recent_events[:50]
+
+    def latest_events(self, limit: int = 12) -> List[DomainEvent]:
+        with self.lock:
+            return list(self.recent_events[:limit])
 
     def send(self, client, payload, opcode: int = 0x1) -> bool:
         body = payload if isinstance(payload, str) else json.dumps(payload, ensure_ascii=False, sort_keys=True)
@@ -190,6 +203,7 @@ class RealtimeHub:
             self.send(client, message)
 
     def broadcast_event(self, event: DomainEvent) -> None:
+        self.remember_event(event)
         self.broadcast(event.name, {"event": event.to_dict(), **dict(event.payload or {})})
 
 
@@ -198,7 +212,11 @@ REALTIME_HUB = RealtimeHub()
 
 class RealtimeEventBridge:
     def __init__(self):
-        self.inner = default_event_bus()
+        try:
+            self.inner = default_event_bus()
+        except Exception:  # noqa: BLE001 - domain events should fall back when optional MySQL is offline.
+            self.inner = EventBus()
+            self.inner.subscribe_all(JsonEventLog().handle)
 
     def publish(self, event: DomainEvent) -> None:
         self.inner.publish(event)
@@ -225,14 +243,23 @@ def realtime_event_payload(event: DomainEvent) -> Dict[str, object]:
 
 
 def realtime_status_payload() -> Dict[str, object]:
-    event_log = stores.event_log()
-    counts = event_log.event_counts()
-    latest_by_name = event_log.latest_events_by_name([
-        MONITORING_CYCLE_COMPLETED,
-        MONITORING_ALERTS_DETECTED,
-        MONITORING_SNAPSHOT_COLLECTED,
-    ])
-    latest_events = event_log.latest_events(limit=12)
+    store_warning = ""
+    try:
+        event_log = stores.event_log()
+        counts = event_log.event_counts()
+        latest_by_name = event_log.latest_events_by_name([
+            MONITORING_CYCLE_COMPLETED,
+            MONITORING_ALERTS_DETECTED,
+            MONITORING_SNAPSHOT_COLLECTED,
+        ])
+        latest_events = event_log.latest_events(limit=12)
+    except Exception as error:  # noqa: BLE001 - status API should degrade when optional MySQL is offline.
+        store_warning = str(error)[:240]
+        latest_events = REALTIME_HUB.latest_events(limit=12)
+        counts = {}
+        for event in latest_events:
+            counts[event.name] = counts.get(event.name, 0) + 1
+        latest_by_name = {}
     monitoring = {}
     if latest_by_name.get(MONITORING_CYCLE_COMPLETED):
         monitoring["cycle"] = realtime_event_payload(latest_by_name[MONITORING_CYCLE_COMPLETED])
@@ -240,12 +267,18 @@ def realtime_status_payload() -> Dict[str, object]:
         monitoring["alerts"] = realtime_event_payload(latest_by_name[MONITORING_ALERTS_DETECTED])
     if latest_by_name.get(MONITORING_SNAPSHOT_COLLECTED):
         monitoring["snapshot"] = realtime_event_payload(latest_by_name[MONITORING_SNAPSHOT_COLLECTED])
+    try:
+        notification_jobs = notification_queue_store().summary()
+    except Exception as error:  # noqa: BLE001 - notification queue may share the same optional MySQL backend.
+        store_warning = store_warning or str(error)[:240]
+        notification_jobs = {"pending": 0, "processing": 0, "done": 0, "suppressed": 0, "failed": 0}
     return {
         **REALTIME_HUB.status(),
         "events": counts,
         "latestEvents": [realtime_event_payload(event) for event in latest_events],
         "monitoring": monitoring,
-        "notificationJobs": notification_queue_store().summary(),
+        "notificationJobs": notification_jobs,
+        "storeWarning": store_warning,
     }
 
 
@@ -351,10 +384,19 @@ def app_store():
 
 def read_store() -> Dict[str, object]:
     fallback = default_store()
-    parsed = app_store().load()
+    try:
+        parsed = app_store().load()
+    except Exception as error:  # noqa: BLE001 - bootstrap must remain available when optional MySQL is offline.
+        parsed = read_json(LOCAL_APP_STORE_PATH, {})
+        if isinstance(parsed, dict):
+            parsed.setdefault("metadata", {})
+            parsed["metadata"]["operationalStoreWarning"] = str(error)[:240]
     if not parsed:
         parsed = fallback
-        app_store().replace(parsed)
+        try:
+            app_store().replace(parsed)
+        except Exception:  # noqa: BLE001 - local fallback keeps the web console readable.
+            write_private_json(LOCAL_APP_STORE_PATH, parsed)
     return {
         **fallback,
         **parsed,
@@ -368,7 +410,10 @@ def read_store() -> Dict[str, object]:
 def save_store(mutator):
     store = read_store()
     mutator(store)
-    app_store().replace(store)
+    try:
+        app_store().replace(store)
+    except Exception:  # noqa: BLE001 - local fallback keeps manual notes usable without MySQL.
+        write_private_json(LOCAL_APP_STORE_PATH, store)
     return store
 
 
@@ -1215,11 +1260,14 @@ def notification_rule_store():
 
 def list_templates_payload() -> Dict[str, object]:
     visible_types = set(visible_notification_template_types())
-    templates = [
-        item
-        for item in notification_store().list()
-        if item.message_type in visible_types
-    ]
+    try:
+        templates = [
+            item
+            for item in notification_store().list()
+            if item.message_type in visible_types
+        ]
+    except Exception:  # noqa: BLE001 - default templates keep settings UI available without MySQL.
+        templates = [NotificationTemplate.default(message_type) for message_type in visible_notification_template_types()]
     return {
         "templates": [item.to_dict() for item in templates],
         "variables": template_variables(),
@@ -1230,7 +1278,17 @@ def list_templates_payload() -> Dict[str, object]:
 def list_notification_rules_payload(include_internal: bool = False) -> Dict[str, object]:
     managed_order = user_managed_notification_types()
     managed_types = set(managed_order)
-    rules = notification_rule_store().list()
+    try:
+        rules = notification_rule_store().list()
+    except Exception:  # noqa: BLE001 - default rules keep settings UI available without MySQL.
+        catalog = user_managed_notification_types() + ([] if not include_internal else [key for key in DEFAULT_ALERT_RULES if key not in managed_types])
+        rules = [
+            NotificationRuleConfig.from_dict({
+                "messageType": message_type,
+                "enabled": bool(DEFAULT_ALERT_RULES.get(message_type, 1)),
+            })
+            for message_type in catalog
+        ]
     rules_by_type = {item.message_type: item for item in rules}
     visible_rules = [rules_by_type[item] for item in managed_order if item in rules_by_type]
     internal_rules = [item for item in rules if item.message_type not in managed_types]
@@ -1408,14 +1466,19 @@ def notification_job_public_payload(job: NotificationJob) -> Dict[str, object]:
 
 def notification_jobs_payload(query: Dict[str, List[str]]) -> Dict[str, object]:
     limit = max(1, min(200, int(first_query(query, "limit") or 40)))
-    jobs = notification_queue_store().recent(
-        limit=limit,
-        message_type=first_query(query, "messageType") or first_query(query, "message_type"),
-        status=first_query(query, "status"),
-    )
+    try:
+        jobs = notification_queue_store().recent(
+            limit=limit,
+            message_type=first_query(query, "messageType") or first_query(query, "message_type"),
+            status=first_query(query, "status"),
+        )
+        summary = notification_queue_store().summary()
+    except Exception:  # noqa: BLE001 - empty queue keeps the console readable without MySQL.
+        jobs = []
+        summary = {"pending": 0, "processing": 0, "done": 0, "suppressed": 0, "failed": 0}
     return {
         "jobs": [notification_job_public_payload(job) for job in jobs],
-        "summary": notification_queue_store().summary(),
+        "summary": summary,
         "diagnostics": notification_job_diagnostics(jobs),
         "limit": limit,
     }
@@ -1629,7 +1692,10 @@ def save_template_payload(payload: Dict[str, object]) -> Dict[str, object]:
     template = str(payload.get("template") or "")
     description = str(payload.get("description") or "")
     enabled = payload.get("enabled") is not False
-    saved = notification_store().upsert(message_type, template, description, enabled)
+    try:
+        saved = notification_store().upsert(message_type, template, description, enabled)
+    except Exception:  # noqa: BLE001 - respond with normalized payload when optional MySQL is offline.
+        saved = NotificationTemplate(message_type, template, description, enabled, now())
     event = new_domain_event(
         NOTIFICATION_TEMPLATE_UPDATED,
         saved.message_type,
@@ -1639,7 +1705,10 @@ def save_template_payload(payload: Dict[str, object]) -> Dict[str, object]:
 
 
 def reset_template_payload(message_type: str) -> Dict[str, object]:
-    saved = notification_store().reset(message_type)
+    try:
+        saved = notification_store().reset(message_type)
+    except Exception:  # noqa: BLE001
+        saved = NotificationTemplate.default(message_type)
     event = new_domain_event(
         NOTIFICATION_TEMPLATE_UPDATED,
         saved.message_type,
@@ -1651,7 +1720,11 @@ def reset_template_payload(message_type: str) -> Dict[str, object]:
 def save_notification_rule_payload(payload: Dict[str, object]) -> Dict[str, object]:
     requested = payload.get("rule") if isinstance(payload.get("rule"), dict) else payload
     rule = NotificationRuleConfig.from_dict(requested if isinstance(requested, dict) else {})
-    saved = notification_rule_store().upsert(rule)
+    try:
+        saved = notification_rule_store().upsert(rule)
+    except Exception:  # noqa: BLE001
+        saved = rule
+        saved.updated_at = now()
     event = new_domain_event(
         NOTIFICATION_RULE_UPDATED,
         saved.message_type,
@@ -1673,7 +1746,11 @@ def save_notification_rule_payload(payload: Dict[str, object]) -> Dict[str, obje
 
 
 def reset_notification_rule_payload(message_type: str) -> Dict[str, object]:
-    saved = notification_rule_store().reset(message_type)
+    try:
+        saved = notification_rule_store().reset(message_type)
+    except Exception:  # noqa: BLE001
+        saved = NotificationRuleConfig.from_dict({"messageType": message_type, "enabled": bool(DEFAULT_ALERT_RULES.get(message_type, 1))})
+        saved.updated_at = now()
     event = new_domain_event(
         NOTIFICATION_RULE_UPDATED,
         saved.message_type,
@@ -1922,20 +1999,99 @@ def symbol_universe_service():
 
 
 def symbol_universe_payload(query: Dict[str, List[str]]) -> Dict[str, object]:
-    return symbol_universe_service().search(
-        query=first_query(query, "query") or first_query(query, "q"),
-        market=first_query(query, "market"),
-        limit=int(first_query(query, "limit") or 16),
-        offset=int(first_query(query, "offset") or 0),
-    )
+    search = first_query(query, "query") or first_query(query, "q")
+    market = first_query(query, "market")
+    limit = int(first_query(query, "limit") or 16)
+    offset = int(first_query(query, "offset") or 0)
+    try:
+        return symbol_universe_service().search(
+            query=search,
+            market=market,
+            limit=limit,
+            offset=offset,
+        )
+    except Exception as error:  # noqa: BLE001 - seed universe keeps search usable without optional MySQL.
+        items = fallback_symbol_universe_items(search, market)
+        return {
+            "items": items[offset: offset + limit],
+            "summary": fallback_symbol_universe_summary(str(error)[:240]),
+            "query": search or "",
+            "market": market or "",
+            "limit": limit,
+            "offset": offset,
+            "total": len(items),
+            "storeWarning": str(error)[:240],
+        }
 
 
 def symbol_universe_suggest_payload(query: Dict[str, List[str]]) -> Dict[str, object]:
-    return symbol_universe_service().suggest(
-        query=first_query(query, "query") or first_query(query, "q"),
-        market=first_query(query, "market"),
-        limit=int(first_query(query, "limit") or 8),
-    )
+    search = first_query(query, "query") or first_query(query, "q")
+    market = first_query(query, "market")
+    limit = int(first_query(query, "limit") or 8)
+    try:
+        return symbol_universe_service().suggest(
+            query=search,
+            market=market,
+            limit=limit,
+        )
+    except Exception as error:  # noqa: BLE001 - autocomplete can fall back to local seed symbols.
+        return {
+            "items": fallback_symbol_universe_items(search, market)[:limit],
+            "query": search or "",
+            "market": market or "",
+            "limit": limit,
+            "storeWarning": str(error)[:240],
+        }
+
+
+def fallback_symbol_universe_items(search: str = "", market: str = "") -> List[Dict[str, object]]:
+    needle = configured(search).lower()
+    market_filter = configured(market).upper()
+    candidate_symbol_list = symbol_search_symbol_candidates(search)
+    candidate_symbols = set(candidate_symbol_list)
+    seed_symbols = list(DEFAULT_SYMBOL_SEEDS)
+    for symbol in reversed(candidate_symbol_list):
+        if symbol in seed_symbols:
+            seed_symbols.remove(symbol)
+        seed_symbols.insert(0, symbol)
+    items = [seed_symbol(symbol).to_dict(24) for symbol in seed_symbols]
+    if market_filter:
+        items = [item for item in items if str(item.get("market") or "").upper() == market_filter]
+    if needle:
+        def matches(item):
+            if str(item.get("symbol") or "").upper() in candidate_symbols:
+                return True
+            haystack = " ".join([
+                str(item.get("symbol") or ""),
+                str(item.get("name") or ""),
+                str(item.get("market") or ""),
+                str(item.get("sector") or ""),
+            ]).lower()
+            return needle in haystack
+
+        items = [item for item in items if matches(item)]
+    return items
+
+
+def fallback_symbol_universe_summary(warning: str = "") -> Dict[str, object]:
+    items = [seed_symbol(symbol).to_dict(24) for symbol in DEFAULT_SYMBOL_SEEDS]
+    markets = []
+    for market in sorted({str(item.get("market") or "") for item in items if item.get("market")}):
+        markets.append({
+            "market": market,
+            "count": len([item for item in items if item.get("market") == market]),
+            "lastSeenAt": "",
+            "stale": True,
+            "source": "Orbit Alpha seed",
+            "sourceUrl": "local-default",
+        })
+    return {
+        "markets": markets,
+        "sources": [],
+        "maxAgeHours": 24,
+        "total": len(items),
+        "storeWarning": warning,
+    }
 
 
 def refresh_symbol_universe_payload(payload: Dict[str, object]) -> Dict[str, object]:

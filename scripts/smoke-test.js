@@ -371,6 +371,12 @@ function checkFrontendAdminRender() {
   assertOk(/Professional finance top navigation shell[\s\S]*\.console-shell \.topbar,[\s\S]*\.console-shell \.managed-page > \.page-command-strip,[\s\S]*\.console-shell \.managed-page > \.page-routine-panel[\s\S]*\{[\s\S]*display: none;/.test(styles), "topbar, 본문 command strip, 본문 routine panel이 상단 통합 rail로 합쳐지지 않았습니다.");
   assertOk(code.indexOf("renderWorkDetailLayer") >= 0 && code.indexOf("data-work-detail") >= 0, "긴 독립 상세를 공통 work detail layer로 여는 렌더 경로가 없습니다.");
   assertOk(
+    code.indexOf("runWithSuppressedRender") >= 0 &&
+      /function markRealtimeState\(connected, eventName\)\s*\{[\s\S]*state\.realtime\.lastEventAt = new Date\(\)\.toISOString\(\);[\s\S]*\}\s*\n\s*function runWithSuppressedRender/.test(code) &&
+      /queueRealtimeReload\(eventType\)[\s\S]*runWithSuppressedRender/.test(code),
+    "WebSocket 이벤트가 전체 화면을 즉시 재렌더링하지 않도록 실시간 렌더 억제 계약이 없습니다."
+  );
+  assertOk(
     code.indexOf("data-feed-detail-toggle") >= 0 &&
       code.indexOf("data-research-evidence-toggle") >= 0 &&
       code.indexOf("data-investment-action-toggle") >= 0 &&

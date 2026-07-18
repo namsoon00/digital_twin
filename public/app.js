@@ -347,6 +347,8 @@
   var realtimeReconnectTimer = null;
   var realtimeReloadTimer = null;
   var realtimeSeenEventIds = {};
+  var renderSuppressionDepth = 0;
+  var renderQueuedDuringSuppression = false;
   var appNavLastScrollY = 0;
   var appNavHidden = false;
   var appNavScrollTicking = false;
@@ -667,43 +669,60 @@
     state.realtime.connected = Boolean(connected);
     state.realtime.lastEvent = eventName || state.realtime.lastEvent || "";
     state.realtime.lastEventAt = new Date().toISOString();
-    if (state.snapshot) render();
+  }
+
+  function runWithSuppressedRender(taskFactory) {
+    renderSuppressionDepth += 1;
+    var task;
+    try {
+      task = Promise.resolve(taskFactory());
+    } catch (error) {
+      renderSuppressionDepth = Math.max(0, renderSuppressionDepth - 1);
+      throw error;
+    }
+    return task.finally(function () {
+      renderSuppressionDepth = Math.max(0, renderSuppressionDepth - 1);
+      if (!renderSuppressionDepth && (renderQueuedDuringSuppression || state.snapshot)) {
+        renderQueuedDuringSuppression = false;
+        render();
+      }
+    });
   }
 
   function queueRealtimeReload(eventType) {
     if (isStaticPreviewHost()) return;
     if (realtimeReloadTimer) clearTimeout(realtimeReloadTimer);
     realtimeReloadTimer = setTimeout(function () {
-      var tasks = [];
-      if (/^settings\./.test(eventType)) {
-        tasks.push(loadServerSettings());
-        tasks.push(loadNotificationSchedules());
-      } else if (/^account\./.test(eventType)) {
-        tasks.push(loadServiceAccounts());
-        tasks.push(load());
-      } else if (/^notification_template\.|^notification_rule\.|^notification\./.test(eventType)) {
-        tasks.push(loadNotificationTemplates());
-        tasks.push(loadNotificationRules());
-        tasks.push(loadNotificationJobs());
-        tasks.push(loadNotificationSchedules());
-      } else if (/^investment_calendar\./.test(eventType)) {
-        tasks.push(loadInvestmentCalendar(true));
-        tasks.push(loadNotificationJobs());
-        tasks.push(loadNotificationSchedules());
-      } else if (/^investment_strategy\./.test(eventType)) {
-        tasks.push(loadStrategyProposals(true));
-      } else if (/^symbol_universe\./.test(eventType)) {
-        tasks.push(loadSymbolUniverse());
-      } else if (/^app\.|^chat\./.test(eventType)) {
-        tasks.push(load());
-      }
-      if (!tasks.length) tasks.push(load());
-      Promise.all(tasks.map(function (task) {
-        return task.catch(function () { return null; });
-      })).finally(function () {
-        render();
+      runWithSuppressedRender(function () {
+        var tasks = [];
+        if (/^settings\./.test(eventType)) {
+          tasks.push(loadServerSettings());
+          tasks.push(loadNotificationSchedules());
+        } else if (/^account\./.test(eventType)) {
+          tasks.push(loadServiceAccounts());
+          tasks.push(load());
+        } else if (/^notification_template\.|^notification_rule\.|^notification\./.test(eventType)) {
+          tasks.push(loadNotificationTemplates());
+          tasks.push(loadNotificationRules());
+          tasks.push(loadNotificationJobs());
+          tasks.push(loadNotificationSchedules());
+        } else if (/^investment_calendar\./.test(eventType)) {
+          tasks.push(loadInvestmentCalendar(true));
+          tasks.push(loadNotificationJobs());
+          tasks.push(loadNotificationSchedules());
+        } else if (/^investment_strategy\./.test(eventType)) {
+          tasks.push(loadStrategyProposals(true));
+        } else if (/^symbol_universe\./.test(eventType)) {
+          tasks.push(loadSymbolUniverse());
+        } else if (/^app\.|^chat\./.test(eventType)) {
+          tasks.push(load());
+        }
+        if (!tasks.length) tasks.push(load());
+        return Promise.all(tasks.map(function (task) {
+          return task.catch(function () { return null; });
+        }));
       });
-    }, 250);
+    }, 900);
   }
 
   function normalizeRealtimeEvent(event) {
@@ -744,12 +763,6 @@
     }
     if (event.name === "notification_rule.updated") {
       return { message: "알림 발송 룰이 갱신됐습니다: " + (payload.messageType || event.aggregateId || "-"), tone: "success" };
-    }
-    if (event.name === "monitoring.alerts_detected") {
-      return { message: "모니터링 알림 " + Number(payload.count || 0) + "건이 감지됐습니다.", tone: "danger" };
-    }
-    if (event.name === "monitoring.cycle_completed" && Number(payload.alertCount || 0) > 0) {
-      return { message: "모니터링 사이클 완료: 알림 " + Number(payload.alertCount || 0) + "건", tone: "success" };
     }
     if (event.name === "investment_strategy.proposed") {
       return { message: "새 투자 전략 제안이 등록됐습니다.", tone: "success" };
@@ -7308,6 +7321,10 @@
   }
 
   function render() {
+    if (renderSuppressionDepth > 0) {
+      renderQueuedDuringSuppression = true;
+      return;
+    }
     applyAppTheme();
     rememberRenderedPageScrollPosition();
     destroyOntologyCytoscapeGraphs();

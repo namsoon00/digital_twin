@@ -8489,7 +8489,7 @@ h3 {
 
 .strategy-data-row {
   display: grid;
-  grid-template-columns: minmax(0, 1fr) minmax(150px, 220px);
+  grid-template-columns: minmax(220px, 1fr) minmax(104px, 220px);
   gap: 12px;
   align-items: center;
   min-width: 0;
@@ -8509,6 +8509,9 @@ h3 {
   color: var(--ink);
   font-size: 15px;
   line-height: 1.35;
+  min-width: 0;
+  overflow-wrap: break-word;
+  word-break: keep-all;
 }
 
 .strategy-data-main span,
@@ -8519,7 +8522,9 @@ h3 {
   font-style: normal;
   font-weight: 750;
   line-height: 1.4;
-  overflow-wrap: anywhere;
+  min-width: 0;
+  overflow-wrap: break-word;
+  word-break: keep-all;
 }
 
 .strategy-data-status {
@@ -8527,6 +8532,12 @@ h3 {
   justify-items: end;
   gap: 8px;
   min-width: 0;
+  max-width: 220px;
+}
+
+.strategy-data-status b {
+  max-width: 100%;
+  text-align: right;
 }
 
 .model-setting-card-grid {
@@ -23279,8 +23290,43 @@ html[data-theme="dark"] .ontology-graph-expanded-toolbar .icon-button.danger {
 }
 
 .console-shell .strategy-data-row[data-card-format="summary-list-card"] {
-  grid-template-columns: minmax(0, 1fr) minmax(170px, auto);
+  grid-template-columns: minmax(220px, 1fr) minmax(104px, 220px);
   align-items: center;
+}
+
+.console-shell .strategy-data-row[data-card-format="summary-list-card"] .strategy-data-main {
+  min-width: 0;
+}
+
+.console-shell .strategy-data-row[data-card-format="summary-list-card"] .strategy-data-status {
+  min-width: 0;
+  max-width: 220px;
+}
+
+.console-shell .strategy-data-row[data-card-format="summary-list-card"] .strategy-data-status b {
+  max-width: 100%;
+  overflow-wrap: break-word;
+  text-align: right;
+  word-break: keep-all;
+}
+
+@media (max-width: 720px) {
+  .strategy-data-row,
+  .console-shell .strategy-data-row[data-card-format="summary-list-card"] {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .strategy-data-status,
+  .console-shell .strategy-data-row[data-card-format="summary-list-card"] .strategy-data-status {
+    max-width: 100%;
+    justify-items: start;
+    text-align: left;
+  }
+
+  .strategy-data-status b,
+  .console-shell .strategy-data-row[data-card-format="summary-list-card"] .strategy-data-status b {
+    text-align: left;
+  }
 }
 
 .console-shell .alert-row[data-card-format="summary-list-card"],

@@ -441,6 +441,9 @@
     activeNotificationTemplateType: "investmentInsight",
     notificationTemplateEditorOpen: false,
     expandedInvestmentActionKey: "",
+    investmentActionQuery: "",
+    investmentActionPage: 1,
+    investmentActionPageSize: 6,
     settingsRuntimeExpanded: false,
     notificationMarketHoursSessions: [],
     notificationJobItems: [],
@@ -7401,6 +7404,10 @@
     return ' data-card-type="' + escapeHtml(type || "container") + '"' + (tone ? ' data-card-tone="' + escapeHtml(tone) + '"' : '');
   }
 
+  function cardFormatAttrs(format, density) {
+    return ' data-card-format="' + escapeHtml(format || "surface") + '"' + (density ? ' data-card-density="' + escapeHtml(density) + '"' : '');
+  }
+
   function renderError() {
     return [
       '<main class="shell">',
@@ -7498,6 +7505,7 @@
     if (type === "feed-pipeline") return feedPipelineWorkDetailPayload();
     if (type === "feed-sources") return feedSourcesWorkDetailPayload();
     if (type === "feed-quality") return feedQualityWorkDetailPayload();
+    if (type === "investment-action") return investmentActionWorkDetailPayload(key);
     if (type === "feed-settings-editor") return feedSettingsWorkDetailPayload(key);
     if (type === "strategy-rulebox-editor") return strategyRuleboxWorkDetailPayload();
     if (type === "strategy-prompt-editor") return strategyPromptWorkDetailPayload();
@@ -10696,6 +10704,8 @@
 
   function renderInvestmentActionQueuePanel(snapshot) {
     var rows = Array.isArray(investmentAnalysisModel(snapshot).actionQueue) ? investmentAnalysisModel(snapshot).actionQueue : [];
+    var filteredRows = investmentActionFilteredRows(rows);
+    var pageInfo = investmentActionPageInfo(filteredRows);
     var activeRow = investmentActionByKey(state.expandedInvestmentActionKey);
     return [
       '<article class="panel investment-action-panel">',
@@ -10707,14 +10717,95 @@
       '</div>',
       '<span class="metric">' + escapeHtml(rows.length) + '</span>',
       '</div>',
-      rows.length ? '<div class="investment-action-workbench ' + escapeHtml(activeRow ? "has-detail" : "summary-only") + '"><div class="investment-action-list">' + rows.slice(0, 4).map(renderInvestmentActionRow).join("") + (rows.length > 4 ? '<p class="data-refresh-status">상위 4개 후보만 먼저 표시합니다. 나머지 ' + escapeHtml(rows.length - 4) + '개 후보는 근거·검증 섹션에서 확인하세요.</p>' : '') + '</div>' + (activeRow ? renderInvestmentActionDetailPanel(rows) : '') + '</div>' : '<div class="investment-action-list"><div class="ontology-empty">액션 큐가 비어 있습니다.</div></div>',
+      rows.length ? '<div class="investment-action-workbench ' + escapeHtml(activeRow ? "has-detail" : "summary-only") + '">' + renderInvestmentActionToolbar(rows, filteredRows, pageInfo) + '<div class="investment-action-list">' + (pageInfo.visibleRows.length ? pageInfo.visibleRows.map(renderInvestmentActionRow).join("") : renderEmptyState({
+        tone: "muted",
+        label: "Filtered",
+        title: "조건에 맞는 투자 후보가 없습니다",
+        description: "종목명, 코드, 판단, 근거 문장으로 후보를 다시 좁혀보세요.",
+        meta: ["검색", "페이지", "상세 팝업"]
+      })) + renderInvestmentActionPager(pageInfo) + '</div>' + (activeRow ? renderInvestmentActionDetailPanel(rows) : '') + '</div>' : '<div class="investment-action-list"><div class="ontology-empty">액션 큐가 비어 있습니다.</div></div>',
       '</article>'
+    ].join("");
+  }
+
+  function investmentActionSearchText(row) {
+    row = row || {};
+    var graph = row.graph || {};
+    return [
+      row.symbol,
+      row.name,
+      row.displayName,
+      row.market,
+      row.sector,
+      row.decision,
+      row.dataQuality,
+      row.apiSource,
+      graph.reason,
+      graph.basis,
+      Array.isArray(row.reasons) ? row.reasons.join(" ") : "",
+      Array.isArray(graph.nextChecks) ? graph.nextChecks.join(" ") : ""
+    ].filter(Boolean).join(" ").toLowerCase();
+  }
+
+  function investmentActionFilteredRows(rows) {
+    var query = String(state.investmentActionQuery || "").trim().toLowerCase();
+    rows = Array.isArray(rows) ? rows : [];
+    if (!query) return rows;
+    return rows.filter(function (row) {
+      return investmentActionSearchText(row).indexOf(query) >= 0;
+    });
+  }
+
+  function investmentActionPageInfo(rows) {
+    rows = Array.isArray(rows) ? rows : [];
+    var pageSize = Math.max(1, Number(state.investmentActionPageSize || 6));
+    var totalPages = Math.max(1, Math.ceil(rows.length / pageSize));
+    var page = Math.min(Math.max(1, Number(state.investmentActionPage || 1)), totalPages);
+    var start = rows.length ? (page - 1) * pageSize : 0;
+    var end = Math.min(rows.length, start + pageSize);
+    return {
+      page: page,
+      pageSize: pageSize,
+      totalPages: totalPages,
+      totalRows: rows.length,
+      start: start,
+      end: end,
+      visibleRows: rows.slice(start, end)
+    };
+  }
+
+  function renderInvestmentActionToolbar(rows, filteredRows, pageInfo) {
+    var query = String(state.investmentActionQuery || "");
+    var from = pageInfo.totalRows ? pageInfo.start + 1 : 0;
+    return [
+      '<form class="investment-action-toolbar"' + cardFormatAttrs("control-strip", "compact") + ' data-investment-action-search-form>',
+      '<label class="investment-action-search">',
+      '<span>후보 검색</span>',
+      '<input data-investment-action-query type="search" value="' + escapeHtml(query) + '" placeholder="종목, 판단, 근거 검색" autocomplete="off" />',
+      '</label>',
+      '<div class="investment-action-count" aria-label="투자 후보 표시 범위">',
+      '<strong>' + escapeHtml(from) + '-' + escapeHtml(pageInfo.end) + '</strong>',
+      '<span>/ ' + escapeHtml(filteredRows.length) + '개 후보 · 전체 ' + escapeHtml(rows.length) + '</span>',
+      '</div>',
+      '<button class="mini-button primary" type="submit">검색</button>',
+      '</form>'
+    ].join("");
+  }
+
+  function renderInvestmentActionPager(pageInfo) {
+    if (!pageInfo || pageInfo.totalPages <= 1) return "";
+    return [
+      '<div class="investment-action-pager"' + cardFormatAttrs("pagination-strip", "compact") + '>',
+      '<button class="mini-button" type="button" data-investment-action-page="' + escapeHtml(Math.max(1, pageInfo.page - 1)) + '"' + (pageInfo.page <= 1 ? " disabled" : "") + '>이전</button>',
+      '<span>' + escapeHtml(pageInfo.page) + ' / ' + escapeHtml(pageInfo.totalPages) + '</span>',
+      '<button class="mini-button" type="button" data-investment-action-page="' + escapeHtml(Math.min(pageInfo.totalPages, pageInfo.page + 1)) + '"' + (pageInfo.page >= pageInfo.totalPages ? " disabled" : "") + '>다음</button>',
+      '</div>'
     ].join("");
   }
 
   function investmentActionKey(row, index) {
     row = row || {};
-    return String(row.symbol || row.id || [row.name, row.source, index].join(":"));
+    return String(row.symbol || row.id || [row.name, row.source, row.decision, row.dataQuality, (row.graph || {}).reason, index].filter(Boolean).join(":"));
   }
 
   function investmentActionByKey(key) {
@@ -10768,7 +10859,7 @@
     var key = investmentActionKey(row, index);
     var expanded = state.expandedInvestmentActionKey === key;
     return [
-      '<div class="investment-action-row compact ' + escapeHtml(expanded ? "active" : "") + '"' + cardTypeAttrs("action-queue-card", row.tone || "hold") + '>',
+      '<div class="investment-action-row compact ' + escapeHtml(expanded ? "active" : "") + '"' + cardTypeAttrs("action-queue-card", row.tone || "hold") + cardFormatAttrs("decision-ticket", "compact") + '>',
       '<div class="investment-action-main">',
       '<strong>' + escapeHtml(name) + '</strong>',
       '<span>' + escapeHtml([row.symbol, sourceLabel(row.source), row.market, row.sector].filter(Boolean).join(" · ")) + '</span>',
@@ -10783,6 +10874,7 @@
       '<div class="investment-action-checks">',
       '<span>' + escapeHtml(checks.length ? checks[0] : "추가 확인 대기") + '</span>',
       '<button class="mini-button" type="button" data-investment-action-toggle="' + escapeHtml(key) + '">' + escapeHtml(expanded ? "상세 표시 중" : "상세") + '</button>',
+      renderWorkDetailButton("investment-action", key, "팝업", "mini-button ghost"),
       '</div>',
       '</div>'
     ].join("");
@@ -13575,7 +13667,7 @@
       job.honeySimilarityBypassed ? (job.honeySimilarityBypassReason ? "반복 예외 " + job.honeySimilarityBypassReason : "반복 예외 적용") : ""
     ].filter(Boolean).slice(0, 3);
     return [
-      '<div class="notification-decision-row ' + (selected ? "active " : "") + escapeHtml(notificationJobToneClass(job.status)) + '"' + cardTypeAttrs("decision-row", notificationJobToneClass(job.status)) + ' role="option" tabindex="0" data-notification-job-select="' + escapeHtml(rowKey) + '" aria-selected="' + escapeHtml(selected ? "true" : "false") + '">',
+      '<div class="notification-decision-row ' + (selected ? "active " : "") + escapeHtml(notificationJobToneClass(job.status)) + '"' + cardTypeAttrs("decision-row", notificationJobToneClass(job.status)) + cardFormatAttrs("decision-ticket", "compact") + ' role="option" tabindex="0" data-notification-job-select="' + escapeHtml(rowKey) + '" aria-selected="' + escapeHtml(selected ? "true" : "false") + '">',
       '<div class="notification-decision-top">',
       '<span class="tone-chip ' + escapeHtml(notificationJobToneClass(job.status)) + '">' + escapeHtml(notificationJobStatusLabel(job.status)) + '</span>',
       '<strong>' + escapeHtml(labelWithNotificationIcon(job.messageType, job.messageTypeLabel || job.messageType || "-")) + '</strong>',
@@ -16608,7 +16700,7 @@
       : (item.quoteStatus || "추천용 시세 수집 순서를 기다리는 중");
     var active = state.activeSymbolUniverseKey === key;
     return [
-      '<div class="symbol-result-row ' + escapeHtml(active ? "active" : "") + '"' + cardTypeAttrs("ledger-row", already ? "watch" : "hold") + ' role="button" tabindex="0" data-symbol-select="' + escapeHtml(key) + '" aria-label="' + escapeHtml(stockDisplayName(symbol, item) + " 상세 보기") + '">',
+      '<div class="symbol-result-row ' + escapeHtml(active ? "active" : "") + '"' + cardTypeAttrs("ledger-row", already ? "watch" : "hold") + cardFormatAttrs("market-ledger-row", "compact") + ' role="button" tabindex="0" data-symbol-select="' + escapeHtml(key) + '" aria-label="' + escapeHtml(stockDisplayName(symbol, item) + " 상세 보기") + '">',
       '<div class="symbol-result-main">',
       '<div class="symbol-result-title">',
       '<strong>' + escapeHtml(stockDisplayName(symbol, item)) + '</strong>',
@@ -17597,7 +17689,7 @@
     var key = feedEvidenceKey(item, index);
     var expanded = state.expandedResearchEvidenceKey === key;
     return [
-      '<section class="feed-impact-card compact ' + escapeHtml(impact.tone) + (expanded ? " active" : "") + '"' + cardTypeAttrs("evidence-card", impact.tone) + '>',
+      '<section class="feed-impact-card compact ' + escapeHtml(impact.tone) + (expanded ? " active" : "") + '"' + cardTypeAttrs("evidence-card", impact.tone) + cardFormatAttrs("document-card", "compact") + '>',
       '<div class="feed-impact-card-head">',
       '<span class="tone-chip ' + escapeHtml(impact.tone) + '">' + escapeHtml(impact.label) + '</span>',
       '<div>',
@@ -17858,7 +17950,7 @@
     var key = feedEvidenceKey(item, index);
     var expanded = state.expandedResearchEvidenceKey === key;
     return [
-      '<div class="research-evidence-item compact ' + escapeHtml(impact.tone) + (expanded ? " active" : "") + '"' + cardTypeAttrs("evidence-card", impact.tone) + ' role="button" tabindex="0" data-research-evidence-toggle="' + escapeHtml(key) + '" aria-label="' + escapeHtml((item.title || "저장 근거") + " 상세 보기") + '">',
+      '<div class="research-evidence-item compact ' + escapeHtml(impact.tone) + (expanded ? " active" : "") + '"' + cardTypeAttrs("evidence-card", impact.tone) + cardFormatAttrs("document-card", "compact") + ' role="button" tabindex="0" data-research-evidence-toggle="' + escapeHtml(key) + '" aria-label="' + escapeHtml((item.title || "저장 근거") + " 상세 보기") + '">',
       '<div class="research-evidence-main">',
       '<div class="research-evidence-meta">',
       '<span class="tone-chip ' + escapeHtml(impact.tone) + '">' + escapeHtml(impact.label) + '</span>',
@@ -18643,6 +18735,37 @@
       button.addEventListener("click", function () {
         var key = button.getAttribute("data-investment-action-toggle") || "";
         state.expandedInvestmentActionKey = key;
+        render();
+      });
+    });
+
+    Array.prototype.slice.call(app.querySelectorAll("[data-investment-action-query]")).forEach(function (field) {
+      field.addEventListener("input", function () {
+        state.investmentActionQuery = field.value;
+        state.investmentActionPage = 1;
+      });
+      field.addEventListener("change", function () {
+        state.investmentActionQuery = field.value;
+        state.investmentActionPage = 1;
+        render();
+      });
+    });
+
+    Array.prototype.slice.call(app.querySelectorAll("[data-investment-action-search-form]")).forEach(function (form) {
+      form.addEventListener("submit", function (event) {
+        event.preventDefault();
+        var field = form.querySelector("[data-investment-action-query]");
+        state.investmentActionQuery = field ? field.value : state.investmentActionQuery;
+        state.investmentActionPage = 1;
+        render();
+      });
+    });
+
+    Array.prototype.slice.call(app.querySelectorAll("[data-investment-action-page]")).forEach(function (button) {
+      button.addEventListener("click", function () {
+        var page = Number(button.getAttribute("data-investment-action-page"));
+        if (!Number.isFinite(page)) return;
+        state.investmentActionPage = Math.max(1, page);
         render();
       });
     });

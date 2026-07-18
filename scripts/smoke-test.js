@@ -1721,6 +1721,9 @@ function checkFrontendAdminRender() {
     assertOk(modelingRulesHtml.indexOf('data-work-detail="strategy-model-policy-editor"') >= 0 && code.indexOf("admin-modeling-panel") >= 0 && modelingRulesHtml.indexOf("model-version-panel") < 0, "전략 룰 섹션은 보조 모델 정책 상세 진입점만 유지하고 로컬 모델 버전 패널은 제거해야 합니다.");
     assertOk(code.indexOf("notificationScoreFormula") >= 0 && code.indexOf("알림 발송 공식") >= 0, "전략 룰 상세 레이어에 알림 발송 공식 편집기가 없습니다.");
     assertOk(modelingTraceHtml.indexOf("<h2>검증·리뷰</h2>") >= 0 && modelingTraceHtml.indexOf("strategy-trace-overview-panel") >= 0 && modelingTraceHtml.indexOf('data-work-detail="strategy-trace-detail"') >= 0 && modelingTraceHtml.indexOf("규칙 추적") >= 0, "검증·리뷰 섹션이 요약 카드와 상세 추적 레이어 진입점으로 렌더링되지 않았습니다.");
+    assertOk(modelingTraceHtml.indexOf("추론 원장") >= 0 && modelingTraceHtml.indexOf("원장 보기") >= 0, "검증·리뷰 섹션에 Inference Trace Ledger 진입점이 없습니다.");
+    assertOk(code.indexOf("/api/ontology/inference-ledger") >= 0 && code.indexOf("loadOntologyInferenceLedger") >= 0 && code.indexOf("renderInferenceTraceLedgerPanel") >= 0, "Inference Trace Ledger API 로더나 상세 패널이 없습니다.");
+    assertOk(code.indexOf("data-action=\"refresh-inference-ledger\"") >= 0 && styles.indexOf(".inference-ledger-panel") >= 0 && styles.indexOf(".inference-ledger-condition-grid") >= 0, "Inference Trace Ledger 새로고침 액션이나 스타일이 없습니다.");
     assertOk(code.indexOf("renderOntologyRelationPanel") >= 0 && code.indexOf("ontology-relation-table") >= 0 && code.indexOf("renderOntologyRulePanel") >= 0 && code.indexOf("ontology-rule-list") >= 0, "검증 추적 상세 레이어에 관계/규칙 보조 표 경로가 없습니다.");
     assertOk(code.indexOf("renderOntologyMacroRelationPanel") >= 0 && code.indexOf("HAS_FX_EXPOSURE") >= 0 && code.indexOf("HAS_RATE_SENSITIVITY") >= 0, "검증 추적 상세 레이어에 환율·금리 관계 행 경로가 없습니다.");
     assertOk(code.indexOf("ontologyEntityDisplayLabel") >= 0 && code.indexOf("회사 표시명") >= 0 && code.indexOf("회사명 -> 종목 데이터") >= 0, "검증 추적 상세가 회사명 표시명 기준으로 설명되지 않습니다.");

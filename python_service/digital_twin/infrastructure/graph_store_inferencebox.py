@@ -1,3 +1,4 @@
+import json
 from typing import Dict, List
 
 from ..domain.ontology_rulebox_contracts import GRAPH_REASONER_VERSION
@@ -94,6 +95,8 @@ def inferencebox_relation_payload(row: Dict[str, object]) -> Dict[str, object]:
         "riskImpact": number_or_none(row.get("riskImpact")),
         "supportImpact": number_or_none(row.get("supportImpact")),
         "weight": number_or_none(row.get("weight")),
+        "actionGroup": str(row.get("actionGroup") or ""),
+        "actionLevel": str(row.get("actionLevel") or ""),
         "decisionStage": str(row.get("decisionStage") or ""),
         "stagePriority": number_or_none(row.get("stagePriority")),
         "targetRole": str(row.get("targetRole") or ""),
@@ -110,6 +113,18 @@ def inferencebox_relation_payload(row: Dict[str, object]) -> Dict[str, object]:
 
 
 def inferencebox_trace_payload(row: Dict[str, object]) -> Dict[str, object]:
+    properties = row_properties(row)
+    matched_conditions = [
+        dict(item)
+        for item in properties.get("matchedConditions") or row.get("matchedConditions") or []
+        if isinstance(item, dict)
+    ]
+    matched_condition_ids = list_of_strings(row.get("matchedConditionIds")) or [
+        str(item.get("conditionId") or "")
+        for item in matched_conditions
+        if str(item.get("conditionId") or "")
+    ]
+    evidence_relation_ids = list_of_strings(properties.get("evidenceRelationIds") or row.get("evidenceRelationIds"))
     return {
         "id": str(row.get("id") or ""),
         "label": str(row.get("label") or ""),
@@ -122,8 +137,22 @@ def inferencebox_trace_payload(row: Dict[str, object]) -> Dict[str, object]:
         "reasoningMode": str(row.get("reasoningMode") or ""),
         "materializationSource": str(row.get("materializationSource") or ""),
         "confidence": number_or_none(row.get("confidence")),
-        "matchedConditionIds": list_of_strings(row.get("matchedConditionIds")),
+        "matchedConditionIds": matched_condition_ids,
+        "matchedConditions": matched_conditions,
+        "evidenceRelationIds": evidence_relation_ids,
+        "promptHint": str(properties.get("promptHint") or row.get("promptHint") or ""),
+        "conditionDetailSource": str(properties.get("conditionDetailSource") or row.get("conditionDetailSource") or ""),
         "nativeTypeDbReasoned": bool(row.get("nativeTypeDbReasoned")),
         "typedbNativeRuleReasoned": bool(row.get("typedbNativeRuleReasoned")),
         "updatedAt": str(row.get("updatedAt") or ""),
     }
+
+
+def row_properties(row: Dict[str, object]) -> Dict[str, object]:
+    if isinstance(row.get("properties"), dict):
+        return dict(row.get("properties") or {})
+    try:
+        parsed = json.loads(str(row.get("propertiesJson") or "{}"))
+    except (TypeError, json.JSONDecodeError):
+        parsed = {}
+    return parsed if isinstance(parsed, dict) else {}

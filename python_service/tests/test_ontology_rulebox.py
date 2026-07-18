@@ -1,3 +1,4 @@
+import json
 import sys
 import unittest
 from pathlib import Path
@@ -5,6 +6,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from digital_twin.domain.ontology_prompting import prompt_payload
+from digital_twin.domain.ontology_inference_ledger import inference_trace_ledger_payload
 from digital_twin.domain.instrument_profiles import market_signal_profiles, parse_instrument_profiles_text
 from digital_twin.domain.ontology_decision_policy import decision_stage_from_action, relation_stage_priority
 from digital_twin.domain.ontology_rulebox_catalog import default_graph_inference_rules
@@ -1578,6 +1580,104 @@ class OntologyRuleBoxTests(unittest.TestCase):
         self.assertEqual("LOSS_REDUCE", payload["relations"][0]["decisionStage"])
         self.assertEqual(43, payload["relations"][0]["stagePriority"])
         self.assertEqual(["holding-loss", "holding-source", "ma-break"], payload["traces"][0]["matchedConditionIds"])
+
+    def test_inference_trace_ledger_reconstructs_rulebox_audit_path(self):
+        rulebox = {
+            "status": "ok",
+            "rules": [
+                {
+                    "rule_id": "graph.loss_guard.breakdown.v1",
+                    "label": "손실 방어 추론",
+                    "prompt_hint": "손실과 기준선 이탈을 함께 확인합니다.",
+                    "conditions": [
+                        {"condition_id": "holding-loss", "kind": "subject_property", "description": "손실 구간", "field": "profitLossRate", "operator": "<=", "value": -8},
+                        {"condition_id": "ma-break", "kind": "relation", "description": "기준선 이탈", "relation_type": "BREAKS_LEVEL", "min_weight": 0.6},
+                    ],
+                    "derivations": [
+                        {"relation_type": "HAS_INFERRED_RISK", "target_kind": "risk", "target_label": "손실 방어 리스크", "polarity": "risk", "risk_impact": 13, "decision_stage": "LOSS_REDUCE"}
+                    ],
+                }
+            ],
+        }
+        rowsets = {
+            "entityCounts": [{"entityCount": 2, "nativeEntityCount": 2}],
+            "relationCounts": [{"relationCount": 1, "nativeRelationCount": 1}],
+            "traceCounts": [{"traceCount": 1, "nativeTraceCount": 1}],
+            "entities": [
+                {
+                    "id": "inference-trace:005930:graph.loss_guard.breakdown.v1",
+                    "label": "삼성전자 · 손실 방어 추론",
+                    "kind": "inference-trace",
+                    "symbol": "005930",
+                    "ruleId": "graph.loss_guard.breakdown.v1",
+                    "confidence": 0.86,
+                    "nativeTypeDbReasoned": True,
+                    "propertiesJson": json.dumps({
+                        "matchedConditions": [
+                            {"conditionId": "holding-loss", "kind": "subject_property", "field": "profitLossRate", "operator": "<=", "value": -8},
+                            {"conditionId": "ma-break", "kind": "relation", "relationType": "BREAKS_LEVEL", "relationId": "rel:ma-break"},
+                        ],
+                        "evidenceRelationIds": ["rel:ma-break"],
+                        "promptHint": "손실과 기준선 이탈을 함께 확인합니다.",
+                    }),
+                },
+                {
+                    "id": "risk:005930:loss-guard-breakdown",
+                    "label": "삼성전자 손실 방어 리스크",
+                    "kind": "risk",
+                    "symbol": "005930",
+                    "ruleId": "graph.loss_guard.breakdown.v1",
+                    "sourceTraceId": "inference-trace:005930:graph.loss_guard.breakdown.v1",
+                    "nativeTypeDbReasoned": True,
+                },
+            ],
+            "relations": [
+                {
+                    "type": "HAS_INFERRED_RISK",
+                    "source": "stock:005930",
+                    "sourceLabel": "삼성전자",
+                    "target": "risk:005930:loss-guard-breakdown",
+                    "targetLabel": "삼성전자 손실 방어 리스크",
+                    "ruleId": "graph.loss_guard.breakdown.v1",
+                    "symbol": "005930",
+                    "riskImpact": 13,
+                    "decisionStage": "LOSS_REDUCE",
+                    "stagePriority": 43,
+                    "inferenceTraceId": "inference-trace:005930:graph.loss_guard.breakdown.v1",
+                    "nativeTypeDbReasoned": True,
+                }
+            ],
+            "traces": [
+                {
+                    "id": "inference-trace:005930:graph.loss_guard.breakdown.v1",
+                    "label": "삼성전자 · 손실 방어 추론",
+                    "symbol": "005930",
+                    "ruleId": "graph.loss_guard.breakdown.v1",
+                    "confidence": 0.86,
+                    "matchedConditionIds": ["holding-loss", "ma-break"],
+                    "matchedConditions": [
+                        {"conditionId": "holding-loss", "kind": "subject_property"},
+                        {"conditionId": "ma-break", "kind": "relation", "relationId": "rel:ma-break"},
+                    ],
+                    "evidenceRelationIds": ["rel:ma-break"],
+                    "nativeTypeDbReasoned": True,
+                }
+            ],
+        }
+
+        inferencebox = inferencebox_snapshot_from_rows(rowsets, source="test", symbols=["005930"])
+        payload = inference_trace_ledger_payload(inferencebox, rulebox=rulebox, symbols=["005930"])
+
+        self.assertEqual("ok", payload["status"])
+        self.assertEqual(1, payload["summary"]["ledgerCount"])
+        self.assertEqual(2, payload["summary"]["matchedConditionCount"])
+        row = payload["rows"][0]
+        self.assertEqual("complete", row["status"])
+        self.assertEqual("LOSS_REDUCE", row["decisionStage"])
+        self.assertEqual(["HAS_INFERRED_RISK"], row["relationTypes"])
+        self.assertEqual(["matched", "matched"], [item["status"] for item in row["conditions"]])
+        self.assertEqual("rel:ma-break", row["conditions"][1]["evidenceRelationId"])
+        self.assertEqual("Derived output", row["stages"][3]["label"])
 
 
 if __name__ == "__main__":

@@ -57,6 +57,7 @@ from ..domain.monitoring import RealtimeMonitor
 from ..domain.notification_rules import CONDITION_TYPE_LABELS, DEFAULT_HONEY_THRESHOLD, NotificationRuleConfig
 from ..domain.notifications import NotificationJob
 from ..domain.notification_templates import DEFAULT_NOTIFICATION_TEMPLATES, MESSAGE_TYPE_LABELS, TRIGGER_SUMMARIES, NotificationTemplate, alert_context, template_variables
+from ..domain.ontology_inference_ledger import inference_trace_ledger_payload
 from ..domain.parsing import parse_assignments
 from ..domain.portfolio import utc_now_iso
 from ..domain.symbol_universe import symbol_search_symbol_candidates
@@ -714,6 +715,33 @@ def ontology_diagnostics_payload(query: Dict[str, List[str]]) -> Dict[str, objec
         notification_queue=stores.notification_job_store(settings),
         strategy_proposal_service=build_investment_strategy_proposal_service(settings),
     ).status(symbols=symbols, limit=limit)
+
+
+def ontology_inference_ledger_api_payload(query: Dict[str, List[str]]) -> Dict[str, object]:
+    settings = runtime_settings()
+    repo = ontology_repository_from_settings(settings)
+    symbols = ontology_audit_symbols(query)
+    limit = safe_int(first_query(query, "limit"), 80, 1, 300)
+    try:
+        rulebox = repo.rulebox_snapshot() if hasattr(repo, "rulebox_snapshot") else {}
+    except Exception as error:  # noqa: BLE001 - ledger can still expose raw InferenceBox rows.
+        rulebox = {"status": "error", "reason": str(error)[:220], "rules": []}
+    try:
+        inferencebox = repo.inferencebox_snapshot(symbols=symbols, limit=limit) if hasattr(repo, "inferencebox_snapshot") else {}
+    except Exception as error:  # noqa: BLE001 - return a structured diagnostic payload.
+        inferencebox = {
+            "status": "error",
+            "reason": str(error)[:220],
+            "graphStore": getattr(repo, "store_key", "typedb"),
+            "source": "typedbInferenceBox",
+            "entities": [],
+            "relations": [],
+            "traces": [],
+        }
+    payload = inference_trace_ledger_payload(inferencebox, rulebox=rulebox, symbols=symbols, limit=limit)
+    payload["ruleboxStatus"] = rulebox.get("status")
+    payload["ruleboxReason"] = rulebox.get("reason")
+    return payload
 
 
 ONTOLOGY_AUDIT_BOXES = ["TBox", "ABox", "RuleBox", "RuleBoxGovernance", "InferenceBox"]
@@ -2823,6 +2851,9 @@ class DigitalTwinHandler(BaseHTTPRequestHandler):
 
         if path == "/api/ontology/diagnostics" and self.command == "GET":
             return self.send_payload(200, ontology_diagnostics_payload(query))
+
+        if path == "/api/ontology/inference-ledger" and self.command == "GET":
+            return self.send_payload(200, ontology_inference_ledger_api_payload(query))
 
         if path == "/api/ontology/audit" and self.command == "GET":
             return self.send_payload(200, ontology_audit_payload(query))

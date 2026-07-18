@@ -17233,8 +17233,36 @@ html[data-theme="dark"] .ontology-graph-expanded-toolbar .icon-button.danger {
   align-items: start;
 }
 
+.ontology-experiment-section-bar,
+.ontology-experiment-workbench {
+  grid-column: 1 / -1;
+  min-width: 0;
+}
+
+.ontology-experiment-section-bar {
+  padding: 0;
+  border: 0;
+  background: transparent;
+}
+
+.ontology-experiment-workbench {
+  display: grid;
+  grid-template-columns: minmax(300px, 0.34fr) minmax(0, 1fr);
+  gap: var(--ds-page-gap);
+  align-items: start;
+}
+
+.ontology-experiment-workbench-side,
+.ontology-experiment-workbench-main {
+  display: grid;
+  align-content: start;
+  gap: var(--ds-page-gap);
+  min-width: 0;
+}
+
 .ontology-experiment-overview-panel,
 .ontology-experiment-pipeline-panel,
+.ontology-experiment-selected-panel,
 .ontology-experiment-replay-panel,
 .ontology-experiment-comparison-panel,
 .ontology-experiment-promotion-panel,
@@ -17246,6 +17274,7 @@ html[data-theme="dark"] .ontology-graph-expanded-toolbar .icon-button.danger {
 }
 
 .ontology-experiment-overview-panel,
+.ontology-experiment-selected-panel,
 .ontology-experiment-replay-panel,
 .ontology-experiment-comparison-panel,
 .ontology-experiment-promotion-panel,
@@ -17459,6 +17488,10 @@ html[data-theme="dark"] .ontology-graph-expanded-toolbar .icon-button.danger {
   margin-top: var(--ds-space-4);
 }
 
+.ontology-experiment-gate-reason {
+  margin: 0 var(--ds-panel-pad-x) var(--ds-space-3);
+}
+
 .ontology-experiment-list {
   display: grid;
   gap: var(--ds-space-3);
@@ -17472,6 +17505,12 @@ html[data-theme="dark"] .ontology-graph-expanded-toolbar .icon-button.danger {
   border-left: 3px solid var(--blue);
   border-radius: var(--ds-radius-panel);
   background: linear-gradient(180deg, var(--ds-card-row-bg), var(--ds-card-bg));
+}
+
+.ontology-experiment-card.active {
+  border-color: color-mix(in srgb, var(--blue) 58%, var(--ds-card-border));
+  border-left-color: var(--blue);
+  background: linear-gradient(180deg, color-mix(in srgb, var(--blue-soft) 34%, var(--ds-card-row-bg)), var(--ds-card-bg));
 }
 
 .ontology-experiment-card-head {
@@ -17578,6 +17617,7 @@ html[data-theme="dark"] .ontology-graph-expanded-toolbar .icon-button.danger {
 
 @media (max-width: 980px) {
   .ontology-experiment-overview-panel,
+  .ontology-experiment-selected-panel,
   .ontology-experiment-replay-panel,
   .ontology-experiment-comparison-panel,
   .ontology-experiment-promotion-panel,
@@ -17594,6 +17634,10 @@ html[data-theme="dark"] .ontology-graph-expanded-toolbar .icon-button.danger {
 
   .ontology-experiment-stage-grid {
     grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .ontology-experiment-workbench {
+    grid-template-columns: minmax(0, 1fr);
   }
 }
 

@@ -131,6 +131,13 @@
     { id: "registry", label: "규칙·프롬프트", description: "런타임 관리" },
     { id: "trace", label: "관계 추적", description: "행·룰 검증" }
   ];
+  var experimentSections = [
+    { id: "overview", label: "현황", description: "파이프라인" },
+    { id: "validation", label: "검증", description: "리플레이·비교" },
+    { id: "promotion", label: "승격", description: "체크·반영" },
+    { id: "audit", label: "이력", description: "실행·반영" },
+    { id: "proposals", label: "전략제안", description: "승인·성과" }
+  ];
   var pageModeOptions = [
     { id: "results", label: "결과", description: "지금 봐야 할 상태와 결과" },
     { id: "settings", label: "설정", description: "편집, 정책, 고급 설정" }
@@ -462,6 +469,8 @@
     ontologyExperimentsLoaded: false,
     ontologyExperimentsError: "",
     ontologyExperimentAction: "",
+    activeExperimentSection: initialExperimentSection(),
+    activeOntologyExperimentId: initialOntologyExperimentId(),
     strategyProposals: null,
     strategyProposalsLoading: false,
     strategyProposalsLoaded: false,
@@ -989,6 +998,16 @@
     return normalizeFeedSection(params.get("feed"));
   }
 
+  function initialExperimentSection() {
+    var params = new URLSearchParams(window.location.search);
+    return normalizeExperimentSection(params.get("lab") || params.get("experimentSection"));
+  }
+
+  function initialOntologyExperimentId() {
+    var params = new URLSearchParams(window.location.search);
+    return String(params.get("experimentId") || params.get("ontologyExperimentId") || "").trim();
+  }
+
   function normalizePageMode(value) {
     return String(value || "").toLowerCase() === "settings" ? "settings" : "results";
   }
@@ -1136,6 +1155,16 @@
     return feedSections.some(function (section) { return section.id === requested; }) ? requested : "operations";
   }
 
+  function normalizeExperimentSection(value) {
+    var requested = String(value || "").toLowerCase();
+    if (requested === "status" || requested === "pipeline" || requested === "dashboard" || requested === "summary") return "overview";
+    if (requested === "validate" || requested === "backtest" || requested === "replay" || requested === "comparison" || requested === "compare") return "validation";
+    if (requested === "apply" || requested === "approval" || requested === "approve" || requested === "promote") return "promotion";
+    if (requested === "history" || requested === "log" || requested === "logs" || requested === "trail") return "audit";
+    if (requested === "proposal" || requested === "strategy-proposals" || requested === "strategy") return "proposals";
+    return experimentSections.some(function (section) { return section.id === requested; }) ? requested : "overview";
+  }
+
   function normalizeOntologyGraphId(value) {
     var requested = String(value || "").toLowerCase().replace("-expanded", "");
     if (requested === "chain" || requested === "decision" || requested === "decision-chain") return "decision-chain";
@@ -1195,6 +1224,12 @@
     })[0] || feedSections[0];
   }
 
+  function activeExperimentSectionMeta() {
+    return experimentSections.filter(function (section) {
+      return section.id === state.activeExperimentSection;
+    })[0] || experimentSections[0];
+  }
+
   function tabUrl(tab) {
     var normalized = normalizeTabId(tab);
     var params = new URLSearchParams(window.location.search);
@@ -1203,6 +1238,12 @@
     if (normalized !== "modeling") params.delete("strategy");
     if (normalized !== "ontology") params.delete("ontology");
     if (normalized !== "feed") params.delete("feed");
+    if (normalized !== "experiments") {
+      params.delete("lab");
+      params.delete("experimentId");
+      params.delete("experimentSection");
+      params.delete("ontologyExperimentId");
+    }
     params.delete("mode");
     if (normalized === "overview") {
       params.delete("tab");
@@ -1298,6 +1339,35 @@
     return path + (query ? "?" + query : "") + hash;
   }
 
+  function experimentSectionUrl(section, experimentId) {
+    var normalized = normalizeExperimentSection(section);
+    var params = new URLSearchParams(window.location.search);
+    params.set("tab", "experiments");
+    params.delete("account");
+    params.delete("notification");
+    params.delete("strategy");
+    params.delete("ontology");
+    params.delete("feed");
+    params.delete("mode");
+    params.delete("experimentSection");
+    params.delete("ontologyExperimentId");
+    if (normalized === "overview") {
+      params.delete("lab");
+    } else {
+      params.set("lab", normalized);
+    }
+    var selectedId = String(experimentId == null ? state.activeOntologyExperimentId : experimentId).trim();
+    if (selectedId) {
+      params.set("experimentId", selectedId);
+    } else {
+      params.delete("experimentId");
+    }
+    var path = window.location.pathname || "/";
+    var query = params.toString();
+    var hash = window.location.hash || "";
+    return path + (query ? "?" + query : "") + hash;
+  }
+
   function writeTabHistory(tab, replace) {
     if (!window.history) return;
     var method = replace ? "replaceState" : "pushState";
@@ -1328,6 +1398,13 @@
     if (!window.history || !window.history.replaceState) return;
     var normalized = normalizeFeedSection(section);
     window.history.replaceState({ tab: "feed", feed: normalized }, "", feedSectionUrl(normalized));
+  }
+
+  function writeExperimentSectionHistory(section, experimentId) {
+    if (!window.history || !window.history.replaceState) return;
+    var normalized = normalizeExperimentSection(section);
+    var selectedId = String(experimentId == null ? state.activeOntologyExperimentId : experimentId).trim();
+    window.history.replaceState({ tab: "experiments", lab: normalized, experimentId: selectedId }, "", experimentSectionUrl(normalized, selectedId));
   }
 
   function pageModeUrl(pageId, mode) {
@@ -1367,6 +1444,9 @@
     }
     if (normalized === "feed") {
       return normalized + ":" + normalizeFeedSection(feedSection || state.activeFeedSection);
+    }
+    if (normalized === "experiments") {
+      return normalized + ":" + normalizeExperimentSection(state.activeExperimentSection);
     }
     return normalized;
   }
@@ -1661,12 +1741,16 @@
     var nextStrategySection = initialStrategySection();
     var nextOntologySection = initialOntologySection();
     var nextFeedSection = initialFeedSection();
+    var nextExperimentSection = initialExperimentSection();
+    var nextOntologyExperimentId = initialOntologyExperimentId();
     var nextPageMode = initialPageModeForTab(nextTab);
     var accountSectionChanged = nextAccountSection !== state.activeAccountSection;
     var sectionChanged = nextNotificationSection !== state.activeNotificationSection;
     var strategySectionChanged = nextStrategySection !== state.activeStrategySection;
     var ontologySectionChanged = nextOntologySection !== state.activeOntologySection;
     var feedSectionChanged = nextFeedSection !== state.activeFeedSection;
+    var experimentSectionChanged = nextExperimentSection !== state.activeExperimentSection;
+    var ontologyExperimentChanged = nextOntologyExperimentId !== state.activeOntologyExperimentId;
     var pageModeChanged = activePageMode(nextTab) !== nextPageMode;
     if (!state.pageViewModes) state.pageViewModes = {};
     state.pageViewModes[nextTab] = nextPageMode;
@@ -1675,6 +1759,8 @@
     state.activeStrategySection = nextStrategySection;
     state.activeOntologySection = nextOntologySection;
     state.activeFeedSection = nextFeedSection;
+    state.activeExperimentSection = nextExperimentSection;
+    state.activeOntologyExperimentId = nextOntologyExperimentId;
     if (nextTab !== "notifications" || sectionChanged) state.notificationPolicyEditorOpen = false;
     if (nextTab !== "notifications" || sectionChanged) state.notificationTemplateEditorOpen = false;
     if (nextTab === state.activeTab) {
@@ -1683,6 +1769,7 @@
       if (strategySectionChanged && nextTab === "modeling") render();
       if (ontologySectionChanged && nextTab === "ontology") render();
       if (feedSectionChanged && nextTab === "feed") render();
+      if ((experimentSectionChanged || ontologyExperimentChanged) && nextTab === "experiments") render();
       if (pageModeChanged) render();
       return;
     }
@@ -4185,6 +4272,7 @@
       .then(function (payload) {
         state.ontologyExperiments = payload || {};
         state.ontologyExperimentsLoaded = true;
+        syncActiveOntologyExperimentId();
         return payload;
       })
       .catch(function (error) {
@@ -4268,8 +4356,9 @@
     var experiment = ontologyExperimentById(experimentId);
     var latest = ontologyExperimentLatestRun(experiment);
     var readiness = String(((latest.promotionReadiness || {}).status) || latest.promotionStatus || "");
+    var gate = ontologyExperimentPromotionGate(experiment, latest);
     var payload = {};
-    if (readiness === "needs-review") {
+    if (readiness === "needs-review" || gate.requiresReviewApproval) {
       if (window.confirm && !window.confirm("이 실험은 needs-review 상태입니다. 검토 승인 기록을 남기고 운영 온톨로지에 반영할까요?")) return;
       payload = {
         reviewApproved: true,
@@ -9637,20 +9726,83 @@
 
   function renderOntologyExperimentsPage(snapshot) {
     var experiments = ontologyExperimentItems();
+    var section = normalizeExperimentSection(state.activeExperimentSection);
+    state.activeExperimentSection = section;
+    syncActiveOntologyExperimentId();
     return renderManagedPage("experiments", snapshot, [
       '<section class="admin-grid ontology-experiments-view">',
-      renderOntologyExperimentOverviewPanel(),
-      renderOntologyExperimentPipelinePanel(),
-      renderOntologyExperimentReplayPanel(),
-      renderOntologyExperimentComparisonPanel(),
-      renderOntologyExperimentPromotionPanel(),
-      renderOntologyExperimentLatestPanel(),
-      !experiments.length ? renderOntologyExperimentStarterPanel() : '',
-      renderOntologyExperimentAuditPanel(),
-      renderOntologyExperimentListPanel(),
-      renderStrategyProposalConsolePanel(),
+      renderOntologyExperimentSectionBar(),
+      renderOntologyExperimentSectionContent(section, experiments),
       '</section>'
     ].join(""));
+  }
+
+  function renderOntologyExperimentSectionBar() {
+    var activeId = normalizeExperimentSection(state.activeExperimentSection);
+    return [
+      '<div class="strategy-section-bar ontology-experiment-section-bar">',
+      '<div class="strategy-section-tabs ontology-experiment-section-tabs" role="tablist" aria-label="전략 검증 섹션">',
+      experimentSections.map(function (item) {
+        var active = activeId === item.id;
+        return [
+          '<button type="button" role="tab" class="' + (active ? "active" : "") + '" data-lab-section="' + escapeHtml(item.id) + '"' + (active ? ' aria-selected="true"' : ' aria-selected="false"') + '>',
+          '<strong>' + escapeHtml(item.label) + '</strong>',
+          '<span>' + escapeHtml(item.description) + '</span>',
+          '</button>'
+        ].join("");
+      }).join(""),
+      '</div>',
+      '</div>'
+    ].join("");
+  }
+
+  function renderOntologyExperimentSectionContent(section, experiments) {
+    section = normalizeExperimentSection(section);
+    experiments = experiments || ontologyExperimentItems();
+    if (section === "validation") {
+      return [
+        '<div class="ontology-experiment-workbench ontology-experiment-workbench-validation">',
+        '<div class="ontology-experiment-workbench-side">',
+        renderOntologyExperimentListPanel({ selectable: true, compact: true }),
+        '</div>',
+        '<div class="ontology-experiment-workbench-main">',
+        renderOntologyExperimentSelectedPanel(),
+        renderOntologyExperimentReplayPanel(),
+        renderOntologyExperimentComparisonPanel(),
+        '</div>',
+        '</div>'
+      ].join("");
+    }
+    if (section === "promotion") {
+      return [
+        '<div class="ontology-experiment-workbench ontology-experiment-workbench-promotion">',
+        '<div class="ontology-experiment-workbench-side">',
+        renderOntologyExperimentListPanel({ selectable: true, compact: true }),
+        '</div>',
+        '<div class="ontology-experiment-workbench-main">',
+        renderOntologyExperimentSelectedPanel(),
+        renderOntologyExperimentPromotionPanel(),
+        renderOntologyExperimentLatestPanel(),
+        '</div>',
+        '</div>'
+      ].join("");
+    }
+    if (section === "audit") {
+      return [
+        renderOntologyExperimentAuditPanel(),
+        renderOntologyExperimentListPanel({ selectable: true })
+      ].join("");
+    }
+    if (section === "proposals") {
+      return renderStrategyProposalConsolePanel();
+    }
+    return [
+      renderOntologyExperimentOverviewPanel(),
+      renderOntologyExperimentPipelinePanel(),
+      renderOntologyExperimentLatestPanel(),
+      !experiments.length ? renderOntologyExperimentStarterPanel() : '',
+      renderOntologyExperimentListPanel({ selectable: true })
+    ].join("");
   }
 
   function ontologyExperimentPayload() {
@@ -9667,6 +9819,30 @@
     return ontologyExperimentItems().filter(function (item) {
       return String((item || {}).id || (item || {}).experimentId || "") === id;
     })[0] || {};
+  }
+
+  function ontologyExperimentIdOf(experiment) {
+    return String((experiment || {}).id || (experiment || {}).experimentId || "").trim();
+  }
+
+  function syncActiveOntologyExperimentId() {
+    var items = ontologyExperimentItems();
+    if (!items.length) {
+      if (state.ontologyExperimentsLoaded) state.activeOntologyExperimentId = "";
+      return state.activeOntologyExperimentId || "";
+    }
+    if (state.activeOntologyExperimentId && ontologyExperimentIdOf(ontologyExperimentById(state.activeOntologyExperimentId))) {
+      return state.activeOntologyExperimentId;
+    }
+    var selected = ontologyExperimentPrimaryCandidate() || items[0];
+    state.activeOntologyExperimentId = ontologyExperimentIdOf(selected);
+    return state.activeOntologyExperimentId;
+  }
+
+  function activeOntologyExperiment() {
+    return ontologyExperimentIdOf(ontologyExperimentById(state.activeOntologyExperimentId))
+      ? ontologyExperimentById(state.activeOntologyExperimentId)
+      : (ontologyExperimentPrimaryCandidate() || ontologyExperimentItems()[0] || null);
   }
 
   function ontologyExperimentLatestRun(experiment) {
@@ -9891,13 +10067,58 @@
   }
 
   function ontologyExperimentReplaySource() {
-    var candidate = ontologyExperimentPrimaryCandidate();
+    var candidate = activeOntologyExperiment() || ontologyExperimentPrimaryCandidate();
     if (candidate) {
       return { experiment: candidate, latest: ontologyExperimentLatestRun(candidate), history: ontologyExperimentRunHistory(candidate) };
     }
     var payload = ontologyExperimentPayload();
     var latest = payload.latestRun && typeof payload.latestRun === "object" ? payload.latestRun : {};
     return { experiment: null, latest: latest, history: latest.completedAt ? [latest] : [] };
+  }
+
+  function renderOntologyExperimentSelectedPanel() {
+    var experiment = activeOntologyExperiment();
+    if (!experiment) {
+      return [
+        '<article class="panel ontology-experiment-selected-panel"' + cardTypeAttrs("process-card", "hold") + '>',
+        renderEmptyState({
+          label: "Selected Experiment",
+          title: "선택된 실험이 없습니다",
+          description: "AI 실험 제안을 만들거나 목록에서 검증할 실험을 선택하세요.",
+          action: '<button class="text-button primary" type="button" data-lab-suggest' + (state.ontologyExperimentAction ? ' disabled' : '') + '>' + escapeHtml(ontologyExperimentBusy("suggest") ? "제안 중" : "AI 실험 제안") + '</button>'
+        }),
+        '</article>'
+      ].join("");
+    }
+    var id = ontologyExperimentIdOf(experiment);
+    var latest = ontologyExperimentLatestRun(experiment);
+    var candidateRules = Array.isArray(experiment.candidateRules) ? experiment.candidateRules : [];
+    var symbols = Array.isArray(experiment.symbols) ? experiment.symbols : [];
+    var gate = ontologyExperimentPromotionGate(experiment, latest);
+    return [
+      '<article class="panel ontology-experiment-selected-panel"' + cardTypeAttrs("process-card", latest.completedAt ? "watch" : "hold") + '>',
+      '<div class="panel-head">',
+      '<div>',
+      '<p class="label">Selected Experiment</p>',
+      '<h2>' + escapeHtml(experiment.title || "선택 실험") + '</h2>',
+      '<p class="subtle">' + escapeHtml(experiment.hypothesis || "등록된 가설 설명이 없습니다.") + '</p>',
+      '</div>',
+      '<span class="tone-chip ' + escapeHtml(ontologyPromotionGateTone(gate.status || latest.promotionStatus)) + '">' + escapeHtml(gate.statusLabel || ontologyReadinessLabel(latest.promotionStatus)) + '</span>',
+      '</div>',
+      '<div class="ontology-experiment-run-grid">',
+      renderOntologyExperimentMetric("후보 규칙", candidateRules.length, "rules"),
+      renderOntologyExperimentMetric("그래프", latest.graphRunCount || 0, "graphs"),
+      renderOntologyExperimentMetric("관계 변화", latest.derivedRelationDelta || 0, "delta"),
+      renderOntologyExperimentMetric("운영 게이트", gate.reasonLabel || gate.statusLabel || "-", "gate"),
+      '</div>',
+      symbols.length ? '<div class="theme-radar ontology-experiment-tags">' + symbols.slice(0, 12).map(function (item) { return '<span>' + escapeHtml(item) + '</span>'; }).join("") + '</div>' : '',
+      '<div class="ontology-experiment-actions">',
+      renderWorkDetailButton("ontology-experiment", id, "상세", "text-button compact"),
+      '<button class="text-button" type="button" data-lab-run="' + escapeHtml(id) + '"' + (ontologyExperimentBusy("run", id) || !id ? ' disabled' : '') + '>' + escapeHtml(ontologyExperimentBusy("run", id) ? "실행 중" : "검증 실행") + '</button>',
+      gate.canApply ? '<button class="text-button primary" type="button" data-lab-apply="' + escapeHtml(id) + '"' + (ontologyExperimentBusy("apply", id) || !id ? ' disabled' : '') + '>' + escapeHtml(ontologyExperimentBusy("apply", id) ? "반영 중" : "운영 반영") + '</button>' : '',
+      '</div>',
+      '</article>'
+    ].join("");
   }
 
   function renderOntologyExperimentTraceRow(label, title, detail, tone) {
@@ -9987,7 +10208,52 @@
     ].join("");
   }
 
+  function ontologyPromotionGateTone(status) {
+    var key = String(status || "").toLowerCase();
+    if (key === "ready" || key === "applied" || key === "already-applied" || key === "promote-candidate") return "watch";
+    if (key === "needs-review" || key === "review-required") return "caution";
+    if (key === "blocked" || key === "error") return "danger";
+    return "hold";
+  }
+
+  function fallbackOntologyPromotionGate(experiment, latest) {
+    latest = latest || {};
+    var recommendations = ontologyExperimentRecommendations(latest);
+    var applyStatus = String(latest.applyStatus || ((latest.appliedOntologyChanges || {}).status) || "").toLowerCase();
+    var applied = applyStatus === "applied" || applyStatus === "already-applied";
+    var checks = fallbackOntologyPromotionChecks(experiment, latest);
+    var blocked = checks.some(function (check) {
+      return check.blocking !== false && !check.passed;
+    });
+    return {
+      status: applied ? applyStatus : (blocked ? "blocked" : "ready"),
+      statusLabel: applied ? ontologyApplyStatusLabel(applyStatus) : (blocked ? "보류" : "반영 가능"),
+      reason: blocked ? "frontend-derived-check-blocked" : "",
+      reasonLabel: blocked ? "체크 필요" : "통과",
+      canApply: Boolean(!applied && !blocked && ontologyExperimentIdOf(experiment)),
+      checks: checks
+    };
+  }
+
+  function ontologyExperimentPromotionGate(experiment, latest) {
+    var gate = experiment && experiment.promotionGate && typeof experiment.promotionGate === "object" ? experiment.promotionGate : null;
+    if (gate) {
+      var normalized = Object.assign({}, gate);
+      normalized.checks = Array.isArray(gate.checks) ? gate.checks : [];
+      normalized.canApply = Boolean(gate.canApply);
+      normalized.requiresReviewApproval = Boolean(gate.requiresReviewApproval);
+      return normalized;
+    }
+    return fallbackOntologyPromotionGate(experiment, latest);
+  }
+
   function ontologyExperimentPromotionChecks(experiment, latest) {
+    var gate = experiment && experiment.promotionGate && typeof experiment.promotionGate === "object" ? experiment.promotionGate : null;
+    if (gate && Array.isArray(gate.checks) && gate.checks.length) return gate.checks;
+    return fallbackOntologyPromotionChecks(experiment, latest);
+  }
+
+  function fallbackOntologyPromotionChecks(experiment, latest) {
     experiment = experiment || {};
     latest = latest || {};
     var candidateRules = Array.isArray(experiment.candidateRules) ? experiment.candidateRules : [];
@@ -9996,44 +10262,56 @@
     var applyStatus = String(latest.applyStatus || ((latest.appliedOntologyChanges || {}).status) || "").toLowerCase();
     return [
       {
+        id: "candidate-rules",
         label: "가설·후보 규칙",
         passed: Boolean(experiment.hypothesis || candidateRules.length),
-        detail: candidateRules.length ? candidateRules.length + "개 후보 규칙" : "가설 또는 후보 규칙 필요"
+        detail: candidateRules.length ? candidateRules.length + "개 후보 규칙" : "가설 또는 후보 규칙 필요",
+        blocking: true
       },
       {
+        id: "replay-run",
         label: "재생 실행",
         passed: Boolean(latest.completedAt),
-        detail: latest.completedAt ? formatClock(latest.completedAt) : "실행 이력 없음"
+        detail: latest.completedAt ? formatClock(latest.completedAt) : "실행 이력 없음",
+        blocking: true
       },
       {
+        id: "graph-evidence",
         label: "그래프 증거",
         passed: Boolean(Number(latest.graphRunCount || 0) > 0 || Number(latest.derivedRelationDelta || 0) !== 0 || relationTypes.length),
-        detail: (latest.graphRunCount || 0) + "개 그래프 · 변화 " + (latest.derivedRelationDelta || 0)
+        detail: (latest.graphRunCount || 0) + "개 그래프 · 변화 " + (latest.derivedRelationDelta || 0),
+        blocking: true
       },
       {
+        id: "recommendations",
         label: "AI 보완 검토",
         passed: recommendations.length > 0,
-        detail: recommendations.length ? recommendations.length + "건 제안" : "보완 제안 없음"
+        detail: recommendations.length ? recommendations.length + "건 제안" : "보완 제안 없음",
+        blocking: false
       },
       {
+        id: "readiness",
         label: "승격 판정",
         passed: String(latest.promotionStatus || "").toLowerCase() === "promote-candidate",
-        detail: ontologyReadinessLabel(latest.promotionStatus)
+        detail: ontologyReadinessLabel(latest.promotionStatus),
+        blocking: true
       },
       {
+        id: "apply-state",
         label: "운영 반영",
         passed: applyStatus === "applied" || applyStatus === "already-applied",
-        detail: ontologyApplyStatusLabel(applyStatus)
+        detail: ontologyApplyStatusLabel(applyStatus),
+        blocking: false
       }
     ];
   }
 
   function renderOntologyExperimentPromotionCheck(check) {
     check = check || {};
-    var tone = check.passed ? "watch" : "hold";
+    var tone = check.passed ? "watch" : (check.required ? "caution" : "hold");
     return [
       '<section class="ontology-experiment-check-row">',
-      '<span class="tone-chip ' + escapeHtml(tone) + '">' + escapeHtml(check.passed ? "통과" : "대기") + '</span>',
+      '<span class="tone-chip ' + escapeHtml(tone) + '">' + escapeHtml(check.passed ? "통과" : (check.required ? "검토" : "대기")) + '</span>',
       '<div>',
       '<strong>' + escapeHtml(check.label || "체크") + '</strong>',
       '<em>' + escapeHtml(check.detail || "") + '</em>',
@@ -10050,8 +10328,9 @@
     var recommendations = ontologyExperimentRecommendations(latest);
     var applyStatus = String(latest.applyStatus || ((latest.appliedOntologyChanges || {}).status) || "");
     var applied = applyStatus === "applied" || applyStatus === "already-applied";
-    var canApply = Boolean(id && latest.completedAt && recommendations.length && !applied);
-    var checks = ontologyExperimentPromotionChecks(experiment, latest);
+    var gate = ontologyExperimentPromotionGate(experiment, latest);
+    var canApply = Boolean(id && gate.canApply && !applied);
+    var checks = gate.checks && gate.checks.length ? gate.checks : ontologyExperimentPromotionChecks(experiment, latest);
     return [
       '<article class="panel ontology-experiment-promotion-panel"' + cardTypeAttrs("signal-card", canApply ? "watch" : "hold") + '>',
       '<div class="panel-head">',
@@ -10060,8 +10339,9 @@
       '<h2>승격 심사</h2>',
       '<p class="subtle">운영 반영은 투자 판단 로직 변경이므로 실행 이력, 관계 증거, 보완 제안을 함께 확인합니다.</p>',
       '</div>',
-      '<span class="tone-chip ' + escapeHtml(canApply ? "watch" : "hold") + '">' + escapeHtml(canApply ? "반영 가능" : ontologyApplyStatusLabel(applyStatus)) + '</span>',
+      '<span class="tone-chip ' + escapeHtml(ontologyPromotionGateTone(gate.status)) + '">' + escapeHtml(gate.statusLabel || (canApply ? "반영 가능" : ontologyApplyStatusLabel(applyStatus))) + '</span>',
       '</div>',
+      gate.reasonLabel ? '<p class="subtle ontology-experiment-gate-reason">서버 판정: ' + escapeHtml(gate.reasonLabel) + '</p>' : '',
       '<div class="ontology-experiment-checklist">',
       checks.map(renderOntologyExperimentPromotionCheck).join(""),
       '</div>',
@@ -10221,7 +10501,8 @@
     ].join("");
   }
 
-  function renderOntologyExperimentListPanel() {
+  function renderOntologyExperimentListPanel(options) {
+    options = options || {};
     var experiments = ontologyExperimentItems();
     return [
       '<article class="panel ontology-experiment-list-panel"' + cardTypeAttrs("relationship-card", experiments.length ? "watch" : "hold") + '>',
@@ -10240,7 +10521,7 @@
         meta: ["AI 제안으로 시작", "활성 실험만 자동 검증"],
         action: '<button class="text-button primary" type="button" data-lab-suggest' + (state.ontologyExperimentAction ? ' disabled' : '') + '>' + escapeHtml(ontologyExperimentBusy("suggest") ? "제안 중" : "AI 실험 제안") + '</button>'
       }) : '',
-      experiments.length ? '<div class="ontology-experiment-list">' + experiments.map(renderOntologyExperimentCard).join("") + '</div>' : '',
+      experiments.length ? '<div class="ontology-experiment-list">' + experiments.map(function (experiment) { return renderOntologyExperimentCard(experiment, options); }).join("") + '</div>' : '',
       '</article>'
     ].join("");
   }
@@ -10285,7 +10566,8 @@
     };
   }
 
-  function renderOntologyExperimentCard(experiment) {
+  function renderOntologyExperimentCard(experiment, options) {
+    options = options || {};
     experiment = experiment || {};
     var id = String(experiment.id || experiment.experimentId || "");
     var latest = ontologyExperimentLatestRun(experiment);
@@ -10298,14 +10580,16 @@
     var applyStatus = String(latest.applyStatus || ((latest.appliedOntologyChanges || {}).status) || "");
     var appliedAt = latest.appliedAt || ((latest.appliedOntologyChanges || {}).appliedAt) || "";
     var applied = applyStatus === "applied" || applyStatus === "already-applied";
+    var selected = id && id === state.activeOntologyExperimentId;
+    var gate = ontologyExperimentPromotionGate(experiment, latest);
     return [
-      '<section class="ontology-experiment-card"' + cardTypeAttrs("relationship-card", active ? "watch" : "hold") + cardFormatAttrs("summary-list-card", "compact") + '>',
+      '<section class="ontology-experiment-card' + (selected ? " active" : "") + '"' + cardTypeAttrs("relationship-card", selected || active ? "watch" : "hold") + cardFormatAttrs("summary-list-card", "compact") + '>',
       '<div class="ontology-experiment-card-head">',
       '<div>',
       '<strong>' + escapeHtml(experiment.title || "Ontology experiment") + '</strong>',
       '<span>' + escapeHtml(id || "-") + '</span>',
       '</div>',
-      '<span class="tone-chip ' + escapeHtml(ontologyExperimentStatusTone(status)) + '">' + escapeHtml(ontologyExperimentStatusLabel(status)) + '</span>',
+      '<span class="tone-chip ' + escapeHtml(selected ? "watch" : ontologyExperimentStatusTone(status)) + '">' + escapeHtml(selected ? "검토 기준" : ontologyExperimentStatusLabel(status)) + '</span>',
       '</div>',
       experiment.hypothesis ? '<p>' + escapeHtml(experiment.hypothesis) + '</p>' : '',
       '<div class="ontology-experiment-card-metrics">',
@@ -10317,8 +10601,10 @@
       symbols.length ? '<div class="theme-radar ontology-experiment-tags">' + symbols.slice(0, 12).map(function (item) { return '<span>' + escapeHtml(item) + '</span>'; }).join("") + '</div>' : '',
       recommendations.length ? renderOntologyExperimentRecommendationList(recommendations, 2) : '',
       applyStatus ? '<p class="subtle">운영 반영 ' + escapeHtml(ontologyApplyStatusLabel(applyStatus)) + (appliedAt ? ' · ' + escapeHtml(formatClock(appliedAt)) : '') + '</p>' : '',
+      gate.reasonLabel ? '<p class="subtle">승격 게이트 ' + escapeHtml(gate.reasonLabel) + '</p>' : '',
       latest.completedAt ? '<p class="subtle">최근 실행 ' + escapeHtml(formatClock(latest.completedAt)) + '</p>' : '',
       '<div class="ontology-experiment-card-actions">',
+      options.selectable ? '<button class="text-button compact' + (selected ? " primary" : "") + '" type="button" data-lab-select="' + escapeHtml(id) + '"' + (!id || selected ? ' disabled' : '') + '>' + escapeHtml(selected ? "선택됨" : "검토 기준") + '</button>' : '',
       renderWorkDetailButton("ontology-experiment", id, "상세", "text-button compact"),
       recommendations.length && latest.completedAt ? '<button class="text-button primary" type="button" data-lab-apply="' + escapeHtml(id) + '"' + (actionBusy || !id || applied ? ' disabled' : '') + '>' + escapeHtml(ontologyExperimentBusy("apply", id) ? "반영 중" : (applied ? "반영됨" : "제안 적용")) + '</button>' : '',
       '<button class="text-button" type="button" data-lab-run="' + escapeHtml(id) + '"' + (actionBusy || !id ? ' disabled' : '') + '>' + escapeHtml(ontologyExperimentBusy("run", id) ? "실행 중" : "실행") + '</button>',
@@ -20459,6 +20745,26 @@
         });
       });
     }
+
+    Array.prototype.slice.call(app.querySelectorAll("[data-lab-section]")).forEach(function (button) {
+      button.addEventListener("click", function () {
+        var section = normalizeExperimentSection(button.getAttribute("data-lab-section"));
+        if (section === state.activeExperimentSection) return;
+        state.activeExperimentSection = section;
+        writeExperimentSectionHistory(section);
+        render();
+      });
+    });
+
+    Array.prototype.slice.call(app.querySelectorAll("[data-lab-select]")).forEach(function (button) {
+      button.addEventListener("click", function () {
+        var id = String(button.getAttribute("data-lab-select") || "").trim();
+        if (!id || id === state.activeOntologyExperimentId) return;
+        state.activeOntologyExperimentId = id;
+        writeExperimentSectionHistory(state.activeExperimentSection, id);
+        render();
+      });
+    });
 
     var runActiveLabButton = app.querySelector("[data-lab-run-active]");
     if (runActiveLabButton) {

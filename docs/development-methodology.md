@@ -46,10 +46,22 @@ Required flow for new investment behavior:
 8. Send AI the graph context, not loose facts only.
    AI investment opinions should receive the relevant TBox vocabulary, ABox facts, InferenceBox relations, matched TypeDB schema function traces, evidence subgraph, missing data, freshness, provenance, and guardrails. Prompt builders should not invent facts that are absent from the graph; missing data should be explicit.
 
-9. Make data quality part of the graph.
+9. Compare competing hypotheses before choosing an action.
+   A single highest-scoring relation or rule is a baseline candidate, not the final investment opinion. Every AI investment judgement must receive and compare at least risk-continuation, support/recovery, and uncertainty hypotheses. Each hypothesis must carry graph evidence IDs, counter-evidence IDs, assumptions, invalidation conditions, horizon, and a provisional confidence. The selected hypothesis and unresolved questions must be part of the structured AI response.
+
+10. Make data quality part of the graph.
    Missing feeds, stale quotes, source errors, partial symbol coverage, unmatched news, and disabled vendors should become `DataQuality`, `DataFreshness`, `Provenance`, `DataSource`, `CoverageGap`, or equivalent ABox facts. They should affect confidence and dispatch policy without being hidden as logs only.
 
-10. Test the ontology contract.
+11. Persist decisions and evaluate outcomes.
+    Save every final AI investment judgement as a `DecisionEpisode` with its `InvestmentQuestion`, `HypothesisSet`, selected hypothesis, inference generation, evidence IDs, and facts at decision time. Evaluate later ontology observations at configured horizons and project `ObservedOutcome` facts back into the ABox. Do not count repeated observations of one decision as multiple independent decisions.
+
+12. Keep learning proposals under governance.
+    Repeatedly contradicted decisions may create a `LearningProposal`, but they must never edit TypeDB schema functions, RuleBox data, prompts, or collection policy automatically. Promotion requires historical replay, TypeDB rule preview, explicit review, and deployment audit. Runtime learning is proposal generation, not unsupervised production mutation.
+
+13. Bound Graph RAG by the question.
+    Store the complete graph and audit context, but send AI only the relevant subject, top active relations, evidence/counter-evidence subgraph, provenance, freshness, competing hypotheses, and research plan. Remove duplicated full snapshots and repeated rule payloads. Prompt-size limits are an architectural constraint; silently falling back because an unbounded graph exceeded an AI input limit is a defect.
+
+14. Test the ontology contract.
     Tests for new investment behavior should verify both the source use case and the graph result: expected ABox classes, relation types, provenance/freshness fields, TypeDB schema function materialization or InferenceBox context, AI prompt payload, and final `investmentInsight` metadata. Tests should also verify the blocked path when graph inference is missing.
 
 Acceptable non-ontology code:
@@ -68,8 +80,10 @@ Runtime investment reasoning has one primary path:
 3. `typedb_ontology.py` stores the ABox in TypeDB.
 4. TypeDB schema functions read TypeDB ABox facts and materialize generation-scoped InferenceBox entities, relations, and traces.
 5. `ontology_inference_context.py` reads the active InferenceBox context for monitoring, AI prompts, diagnostics, and notification metadata.
-6. AI writes an opinion from the provided graph context; it does not create missing facts or bypass graph reasoning.
-7. Notification delivery applies cooldown, novelty, market-hours, and channel policy after investment meaning is already decided.
+6. The investment brain creates an `InvestmentQuestion`, a research plan, and at least three competing hypotheses from the question-specific InferenceBox subgraph.
+7. AI compares support, counter-evidence, assumptions, invalidation conditions, provenance, freshness, and missing data before selecting a hypothesis and action.
+8. The final opinion is stored as a `DecisionEpisode`; later observations become `ObservedOutcome` ABox facts and may create review-only learning proposals.
+9. Notification delivery applies cooldown, novelty, market-hours, and channel policy after investment meaning is already decided.
 
 Implementation notes:
 
@@ -96,6 +110,7 @@ Domain:
 
 - `python_service/digital_twin/domain/accounts.py`: account entity/value data
 - `python_service/digital_twin/domain/portfolio.py`: positions, portfolio summaries, decisions, alert events
+- `python_service/digital_twin/domain/investment_brain.py`: investment questions, research plans, competing hypotheses, decision episodes, observed outcomes, and governed learning proposals
 - `python_service/digital_twin/domain/analytics.py`: compatibility facade for legacy analytics imports only
 - `python_service/digital_twin/domain/market_data.py`: market-data normalization, symbol hints, moving-average helpers, and numeric coercion
 - `python_service/digital_twin/domain/portfolio_calculations.py`: portfolio exposure, FX conversion, and summary calculations
@@ -108,6 +123,7 @@ Domain:
 - `python_service/digital_twin/domain/ontology_prompt_registry.py`: default AI prompt registry text, prompt guardrails, and prompt policy defaults
 - `python_service/digital_twin/domain/ontology_relation_facts.py`: position, temporal, liquidity, macro, research-evidence, and missing-data facts used by ontology relation evaluation
 - `python_service/digital_twin/domain/portfolio_ontology_builder.py`: portfolio snapshot to ontology builder; graph-store projection produces ABox facts only and leaves opinions, insights, and inference to TypeDB schema-function/AI stages
+- `python_service/digital_twin/domain/portfolio_ontology_cognitive_concepts.py`: decision memory, hypotheses, assumptions, unresolved questions, and outcomes projected into the ABox
 - `python_service/digital_twin/domain/portfolio_ontology_catalog.py`: portfolio ontology projection catalogs for metrics, runtime settings, operational pipelines, insight types, factors, and sectors
 - `python_service/digital_twin/domain/portfolio_ontology_market_concepts.py`: market metric, trend, data-source, model-score, price-level, and liquidity ABox concept builders
 - `python_service/digital_twin/domain/portfolio_ontology_runtime_concepts.py`: runtime settings, account delivery profile, operational pipeline, strategy world, and decision-item ABox concept builders

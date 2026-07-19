@@ -479,6 +479,42 @@ def ai_difference_rows(response: NotificationAIValidatedResponse, level: str, co
         rows.append(_html_row("다르게 본 이유" if level == "absoluteBeginner" else "변경 이유", response.disagreement_reason, level=level))
     return [row for row in rows if row]
 
+
+def hypothesis_comparison_rows(response: NotificationAIValidatedResponse, level: str) -> List[str]:
+    rows: List[str] = []
+    stance_labels = {
+        "risk": "위험 지속 가설",
+        "support": "회복·지지 가설",
+        "uncertain": "판단 보류 가설",
+        "context": "외부 맥락 가설",
+    }
+    ordered = sorted(
+        [item for item in response.hypotheses or [] if isinstance(item, dict)],
+        key=lambda item: (
+            str(item.get("hypothesisId") or "") != response.selected_hypothesis_id,
+            -_number(item.get("confidence")),
+        ),
+    )
+    for item in ordered[:3]:
+        label = stance_labels.get(str(item.get("stance") or ""), "경쟁 가설")
+        selected = str(item.get("hypothesisId") or "") == response.selected_hypothesis_id
+        if selected:
+            label = "선택 가설"
+        claim = _text(item.get("claim"), 260)
+        confidence = _number(item.get("confidence"))
+        verdict = str(item.get("verdict") or "").strip()
+        suffix = []
+        if confidence:
+            suffix.append(str(round(confidence, 1)) + "%")
+        if verdict and verdict != "unreviewed":
+            suffix.append(verdict)
+        if suffix:
+            claim += " (" + " · ".join(suffix) + ")"
+        rows.append(_html_row(label, claim, level=level, max_len=360))
+    if response.unresolved_questions:
+        rows.append(_html_row("남은 질문", response.unresolved_questions[0], level=level, max_len=300))
+    return [row for row in rows if row]
+
 def target_name_for_headline(target: object) -> str:
     text = str(target or "").strip()
     if not text:
@@ -2058,6 +2094,9 @@ def execution_telegram_message(context: Dict[str, object], response: Notificatio
         "<b>" + ai_judgment_section_title(level) + "</b>",
         *ai_judgment_rows(response, level, context),
     ]
+    hypothesis_rows = hypothesis_comparison_rows(response, level)
+    if hypothesis_rows:
+        parts.extend(["", "<b>AI 경쟁 가설</b>", *hypothesis_rows])
     reason_rows = customer_reason_rows(context, level)
     if reason_rows:
         parts.extend(["", "<b>왜 알림이 왔나요?</b>", *reason_rows])
@@ -2098,6 +2137,9 @@ def execution_telegram_message_absolute_beginner(context: Dict[str, object], res
         *ai_judgment_rows(response, "absoluteBeginner", context),
         _html_row("안내", "자동 주문이 아니라 실행 전 점검 알림입니다.", True),
     ]
+    hypothesis_rows = hypothesis_comparison_rows(response, "absoluteBeginner")
+    if hypothesis_rows:
+        parts.extend(["", "<b>AI가 비교한 가능성</b>", *hypothesis_rows])
     reason_rows = customer_reason_rows(context, "absoluteBeginner")
     if reason_rows:
         parts.extend(["", "<b>왜 알림이 왔나요?</b>", *reason_rows])

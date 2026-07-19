@@ -15,11 +15,13 @@ class PortfolioOntologyProjectionRecorder:
         self,
         repository,
         quality_store=None,
+        decision_episode_store=None,
         settings: Dict[str, object] = None,
         source: str = "monitoring",
     ):
         self.repository = repository
         self.quality_store = quality_store
+        self.decision_episode_store = decision_episode_store
         self.settings = dict(settings or {})
         self.source = source or "monitoring"
 
@@ -264,6 +266,7 @@ class PortfolioOntologyProjectionRecorder:
         snapshot_seed = "|".join([str(snapshot.account_id or ""), as_of or "unknown"])
         metadata = dict(snapshot.metadata or {})
         account_context = metadata.get("accountContext") if isinstance(metadata.get("accountContext"), dict) else {}
+        decision_episodes = self.decision_episode_context(snapshot)
         return {
             "settings": dict(self.settings),
             "snapshotId": "abox-snapshot:" + hashlib.sha256(snapshot_seed.encode("utf-8")).hexdigest()[:16],
@@ -279,4 +282,39 @@ class PortfolioOntologyProjectionRecorder:
             },
             "metadata": metadata,
             "decisionItems": [item.to_dict() for item in snapshot.decisions],
+            "decisionEpisodes": decision_episodes,
         }
+
+    def decision_episode_context(self, snapshot: AccountSnapshot) -> List[Dict[str, object]]:
+        if not self.decision_episode_store:
+            return []
+        symbols = []
+        for position in list(snapshot.positions or []) + list(snapshot.watchlist or []):
+            symbol = str(getattr(position, "symbol", "") or "").upper().strip()
+            if not symbol or position.is_cash():
+                continue
+            symbols.append(symbol)
+            try:
+                self.decision_episode_store.record_observation(
+                    snapshot.account_id,
+                    symbol,
+                    {
+                        "currentPrice": getattr(position, "current_price", 0),
+                        "profitLossRate": getattr(position, "profit_loss_rate", 0),
+                        "priceChangeRate": getattr(position, "change_rate", 0),
+                        "observedAt": snapshot.generated_at,
+                    },
+                    snapshot.generated_at,
+                )
+            except Exception:  # noqa: BLE001 - feedback memory must not block ABox projection.
+                continue
+        episodes = []
+        for symbol in list(dict.fromkeys(symbols)):
+            try:
+                episodes.extend(
+                    item.to_dict()
+                    for item in self.decision_episode_store.list(snapshot.account_id, symbol, limit=6)
+                )
+            except Exception:  # noqa: BLE001 - projection remains valid without historical memory.
+                continue
+        return episodes[:30]

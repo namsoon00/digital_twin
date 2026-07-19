@@ -81,6 +81,10 @@ class NotificationAIValidatedResponse:
     reference_date: str = ""
     validation_warnings: List[str] = field(default_factory=list)
     strategy_guide: Dict[str, object] = field(default_factory=dict)
+    hypotheses: List[Dict[str, object]] = field(default_factory=list)
+    selected_hypothesis_id: str = ""
+    unresolved_questions: List[str] = field(default_factory=list)
+    epistemic_summary: str = ""
     source: str = "local"
     raw_response: str = ""
 
@@ -101,6 +105,9 @@ class NotificationAIValidatedResponse:
         payload["referenceDate"] = payload.pop("reference_date")
         payload["validationWarnings"] = payload.pop("validation_warnings")
         payload["strategyGuide"] = payload.pop("strategy_guide")
+        payload["selectedHypothesisId"] = payload.pop("selected_hypothesis_id")
+        payload["unresolvedQuestions"] = payload.pop("unresolved_questions")
+        payload["epistemicSummary"] = payload.pop("epistemic_summary")
         payload["rawResponse"] = payload.pop("raw_response")
         return payload
 

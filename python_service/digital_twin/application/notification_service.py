@@ -4,6 +4,7 @@ from typing import Callable, Dict, List
 from zoneinfo import ZoneInfo
 
 from ..domain.disclosure_analysis import local_disclosure_analysis
+from ..domain.investment_brain import decision_episode_from_context
 from ..domain.market_data import number
 from ..domain.message_types import INVESTMENT_INSIGHT, OPERATOR_REASONING_REPORT
 from ..domain.monitoring import RealtimeMonitor
@@ -226,9 +227,10 @@ def apply_ontology_quality_gate_to_response(response, gate: Dict[str, object]) -
 
 
 class NotificationAIValidatedGateEnricher:
-    def __init__(self, reviewer=None, settings: Dict[str, object] = None):
+    def __init__(self, reviewer=None, settings: Dict[str, object] = None, decision_episode_store=None):
         self.reviewer = reviewer
         self.settings = settings or {}
+        self.decision_episode_store = decision_episode_store
 
     def __call__(self, job: NotificationJob) -> None:
         if not ai_gate_enabled_for_message_type(job.message_type, self.settings):
@@ -237,6 +239,7 @@ class NotificationAIValidatedGateEnricher:
         context.setdefault("messageType", job.message_type)
         context.setdefault("accountId", job.account_id)
         context.setdefault("accountLabel", job.account_label)
+        context.setdefault("jobId", job.job_id)
         quality_gate = ontology_quality_gate_context(context, self.settings)
         context["ontologyQualityGate"] = quality_gate
         if context.get("notificationAiValidatedResponse"):
@@ -248,6 +251,25 @@ class NotificationAIValidatedGateEnricher:
             response = local_validated_ai_response(context, source="local fallback")
             response.validation_warnings.append("AI 검증 실패로 로컬 의견을 사용했습니다: " + str(error)[:140])
         apply_ontology_quality_gate_to_response(response, quality_gate)
+        if self.decision_episode_store and job.message_type == INVESTMENT_INSIGHT:
+            try:
+                relation_context = context.get("ontologyRelationContext") if isinstance(context.get("ontologyRelationContext"), dict) else {}
+                subject = relation_context.get("subject") if isinstance(relation_context.get("subject"), dict) else {}
+                facts = dict(relation_context.get("facts") or {})
+                facts["inferenceGenerationId"] = relation_context.get("inferenceGenerationId") or ""
+                self.decision_episode_store.record_observation(
+                    job.account_id,
+                    str(subject.get("symbol") or ""),
+                    facts,
+                    str(relation_context.get("inferenceGenerationAt") or context.get("referenceDate") or ""),
+                )
+                episode = decision_episode_from_context(context, response.to_dict(), job_id=job.job_id)
+                if episode:
+                    self.decision_episode_store.save(episode)
+                    context["investmentDecisionEpisodeId"] = episode.episode_id
+                    context["investmentDecisionEpisode"] = episode.to_dict()
+            except Exception as error:  # noqa: BLE001 - memory persistence must not block a time-sensitive alert.
+                response.validation_warnings.append("투자 판단 기억 저장 실패: " + str(error)[:140])
         job.context = context_with_validated_ai_response(context, response)
 
 

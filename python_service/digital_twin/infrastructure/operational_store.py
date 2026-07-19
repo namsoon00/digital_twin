@@ -10,6 +10,7 @@ from .mysql_operational import (
     MySQLInvestmentCalendarCandidateStore,
     MySQLInvestmentCalendarStore,
     MySQLInvestmentStrategyProposalStore,
+    MySQLInvestmentDecisionEpisodeStore,
     MySQLMarketQuoteCache,
     MySQLModelReviewJobStore,
     MySQLMonitorStore,
@@ -130,6 +131,11 @@ def ontology_experiment_store(settings: Dict[str, str] = None):
 def investment_strategy_proposal_store(settings: Dict[str, str] = None):
     configured = configured_settings(settings)
     return MySQLInvestmentStrategyProposalStore(configured)
+
+
+def investment_decision_episode_store(settings: Dict[str, str] = None):
+    configured = configured_settings(settings)
+    return MySQLInvestmentDecisionEpisodeStore(configured)
 
 
 def monitor_account_job_store(settings: Dict[str, str] = None):

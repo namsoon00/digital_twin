@@ -486,4 +486,61 @@ MYSQL_SCHEMA = [
         KEY idx_ontology_quality_portfolio_time (portfolio_id, created_at)
     ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
     """,
+    """
+    CREATE TABLE IF NOT EXISTS investment_decision_episodes (
+        episode_id VARCHAR(191) PRIMARY KEY,
+        account_id VARCHAR(191) NOT NULL DEFAULT '',
+        symbol VARCHAR(64) NOT NULL DEFAULT '',
+        subject_name VARCHAR(255) NOT NULL DEFAULT '',
+        question_id VARCHAR(191) NOT NULL DEFAULT '',
+        hypothesis_set_id VARCHAR(191) NOT NULL DEFAULT '',
+        selected_hypothesis_id VARCHAR(191) NOT NULL DEFAULT '',
+        action VARCHAR(32) NOT NULL DEFAULT 'HOLD',
+        confidence DOUBLE NOT NULL DEFAULT 0,
+        inference_generation_id VARCHAR(191) NOT NULL DEFAULT '',
+        status VARCHAR(32) NOT NULL DEFAULT 'active',
+        decided_at VARCHAR(40) NOT NULL,
+        source VARCHAR(120) NOT NULL DEFAULT 'notification-ai',
+        payload_json LONGTEXT NOT NULL,
+        created_at VARCHAR(40) NOT NULL,
+        updated_at VARCHAR(40) NOT NULL,
+        KEY idx_decision_episodes_account_symbol_time (account_id, symbol, decided_at),
+        KEY idx_decision_episodes_hypothesis_status (selected_hypothesis_id, status, decided_at),
+        KEY idx_decision_episodes_inference (inference_generation_id)
+    ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
+    """,
+    """
+    CREATE TABLE IF NOT EXISTS investment_decision_outcomes (
+        outcome_id VARCHAR(191) PRIMARY KEY,
+        episode_id VARCHAR(191) NOT NULL,
+        account_id VARCHAR(191) NOT NULL DEFAULT '',
+        symbol VARCHAR(64) NOT NULL DEFAULT '',
+        observed_at VARCHAR(40) NOT NULL,
+        selected_hypothesis_status VARCHAR(64) NOT NULL DEFAULT 'pending',
+        price DOUBLE NOT NULL DEFAULT 0,
+        profit_loss_rate DOUBLE NOT NULL DEFAULT 0,
+        price_change_from_decision_pct DOUBLE NOT NULL DEFAULT 0,
+        payload_json LONGTEXT NOT NULL,
+        created_at VARCHAR(40) NOT NULL,
+        KEY idx_decision_outcomes_episode_time (episode_id, observed_at),
+        KEY idx_decision_outcomes_symbol_time (account_id, symbol, observed_at),
+        KEY idx_decision_outcomes_hypothesis_status (selected_hypothesis_status, observed_at)
+    ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
+    """,
+    """
+    CREATE TABLE IF NOT EXISTS investment_learning_proposals (
+        proposal_id VARCHAR(191) PRIMARY KEY,
+        status VARCHAR(32) NOT NULL DEFAULT 'review-required',
+        title VARCHAR(255) NOT NULL DEFAULT '',
+        reason LONGTEXT NOT NULL,
+        affected_rule_ids_json LONGTEXT NOT NULL,
+        source_episode_ids_json LONGTEXT NOT NULL,
+        payload_json LONGTEXT NOT NULL,
+        created_at VARCHAR(40) NOT NULL,
+        updated_at VARCHAR(40) NOT NULL,
+        reviewed_at VARCHAR(40) NOT NULL DEFAULT '',
+        review_note TEXT NOT NULL,
+        KEY idx_learning_proposals_status_time (status, updated_at, proposal_id)
+    ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
+    """,
 ]

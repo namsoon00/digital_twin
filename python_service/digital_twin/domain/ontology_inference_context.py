@@ -1,5 +1,6 @@
 from typing import Dict, Iterable, List, Optional
 
+from .investment_brain import hypothesis_set_from_relation_context
 from .market_data import clamp, number
 from .ontology_decision_policy import decision_stage_from_action, relation_stage_priority
 from .ontology_rulebox_contracts import (
@@ -133,6 +134,24 @@ def relation_context_from_inferencebox(
     signal_conflicts = signal_conflict_packet(facts, active_matches, score_breakdown, relations, threshold_policy)
     inference_timeline = inference_timeline_packet(facts, active_matches, decision, inferencebox)
     threshold_policy_payload = threshold_policy.to_dict()
+    investment_brain = hypothesis_set_from_relation_context({
+        "subject": {
+            "symbol": facts.get("symbol"),
+            "name": facts.get("name"),
+            "market": facts.get("market"),
+            "sector": facts.get("sector"),
+        },
+        "facts": facts,
+        "activeRules": [item.to_dict() for item in active_matches],
+        "matchedRules": [item.to_dict() for item in matches if item.matched],
+        "missingData": list(facts.get("missingData") or []),
+        "signalConflicts": signal_conflicts,
+        "inferenceGenerationId": str(inferencebox.get("inferenceGenerationId") or ""),
+        "graphStoreInference": {
+            "relations": relations,
+            "traces": traces,
+        },
+    })
     if isinstance(prompt_context, dict):
         prompt_context["evidenceSubgraph"] = evidence_subgraph
         prompt_context["scoreBreakdown"] = score_breakdown
@@ -140,6 +159,9 @@ def relation_context_from_inferencebox(
         prompt_context["signalConflicts"] = signal_conflicts
         prompt_context["inferenceTimeline"] = inference_timeline
         prompt_context["thresholdPolicy"] = threshold_policy_payload
+        prompt_context["investmentBrain"] = investment_brain
+        prompt_context["hypothesisSet"] = investment_brain.get("hypothesisSet") or {}
+        prompt_context["researchPlan"] = investment_brain.get("researchPlan") or {}
     return {
         "engineVersion": context_version,
         "source": source_name,
@@ -168,6 +190,11 @@ def relation_context_from_inferencebox(
         "whyNow": why_now,
         "signalConflicts": signal_conflicts,
         "inferenceTimeline": inference_timeline,
+        "investmentBrain": investment_brain,
+        "hypothesisSet": investment_brain.get("hypothesisSet") or {},
+        "researchPlan": investment_brain.get("researchPlan") or {},
+        "selfQuestions": investment_brain.get("selfQuestions") or [],
+        "epistemicState": investment_brain.get("epistemicState") or {},
         "inferenceGenerationId": str(inferencebox.get("inferenceGenerationId") or ""),
         "inferenceGenerationAt": str(inferencebox.get("inferenceGenerationAt") or ""),
         "ruleboxRulesHash": str(inferencebox.get("ruleboxRulesHash") or ""),
@@ -902,6 +929,14 @@ def decision_from_inference(
         "scoreBreakdown": dict(selected.score_breakdown or {}),
         "basis": source_name,
         "selectedRuleId": selected.rule_id,
+        "selectionRole": "rule-derived-baseline-not-final-opinion",
+        "finalDecisionOwner": "ai-hypothesis-competition",
+        "candidateRuleIds": unique_texts([item.rule_id for item in matches if item.matched])[:12],
+        "candidateDecisionStages": unique_texts([
+            stage_key_for_inference(item.rule_id, relation_for_match(item, relations))
+            for item in matches
+            if item.matched
+        ])[:8],
         "selectedInferenceTraceId": str(trace.get("id") or ""),
         "decisionStage": stage.stage_key,
         "actionGroup": stage.action_group,
@@ -1060,6 +1095,7 @@ def evidence_subgraph_packet(
                 "label": str(item.get("label") or ""),
                 "confidence": number(item.get("confidence")),
                 "matchedConditionIds": list(item.get("matchedConditionIds") or [])[:12],
+                "evidenceRelationIds": list(item.get("evidenceRelationIds") or [])[:12],
             }
             for item in traces[:12]
             if isinstance(item, dict)

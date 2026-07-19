@@ -73,6 +73,7 @@ from ..infrastructure.service_factory import (
     build_investment_calendar_runner,
     build_investment_calendar_service,
     build_investment_strategy_proposal_service,
+    build_investment_brain_service,
     build_notification_queue_runner,
     build_official_calendar_sync_service,
     build_ontology_lab_service,
@@ -2546,11 +2547,38 @@ def run_local_codex(message: str) -> str:
             pass
 
 
+def is_investment_brain_question(message: str, body: Dict[str, object] = None) -> bool:
+    body = body if isinstance(body, dict) else {}
+    if configured(body.get("mode") or body.get("engine")).lower() in {"investment", "ontology", "investment-brain"}:
+        return True
+    compact = str(message or "").lower()
+    return any(term in compact for term in [
+        "주식", "종목", "매수", "매도", "보유", "추가매수", "분할축소", "손절",
+        "포트폴리오", "수익률", "투자", "리스크", "공시", "주가", "증권",
+    ])
+
+
+def investment_brain_question_payload(body: Dict[str, object]) -> Dict[str, object]:
+    message = configured(body.get("message") or body.get("question"))
+    if not message:
+        raise ValueError("투자 질문을 입력하세요.")
+    result = build_investment_brain_service().ask(
+        message,
+        account_id=configured(body.get("accountId")),
+        symbol=configured(body.get("symbol")),
+    )
+    return result
+
+
 def chat_payload(body: Dict[str, object]) -> Dict[str, object]:
     message = configured(body.get("message"))
     if not message:
         raise ValueError("메시지를 입력하세요.")
     append_message("user", message)
+    if is_investment_brain_question(message, body):
+        result = investment_brain_question_payload(body)
+        append_message("assistant", str(result.get("reply") or ""))
+        return result
     reply = run_local_codex(message) or fallback_reply(message)
     candidates = persist_memory_candidates(local_memory_candidates(message))
     append_message("assistant", reply)
@@ -3156,6 +3184,39 @@ class DigitalTwinHandler(BaseHTTPRequestHandler):
 
         if path == "/api/chat" and self.command == "POST":
             return self.send_payload(200, chat_payload(self.read_json_body()))
+
+        if path == "/api/investment-brain/questions" and self.command == "POST":
+            return self.send_payload(200, investment_brain_question_payload(self.read_json_body()))
+
+        if path == "/api/investment-brain/episodes" and self.command == "GET":
+            try:
+                limit = int(first_query(query, "limit") or 50)
+            except ValueError:
+                limit = 50
+            return self.send_payload(200, build_investment_brain_service().episodes(
+                account_id=first_query(query, "accountId"),
+                symbol=first_query(query, "symbol"),
+                limit=limit,
+            ))
+
+        if path == "/api/investment-brain/learning-proposals" and self.command == "GET":
+            try:
+                limit = int(first_query(query, "limit") or 50)
+            except ValueError:
+                limit = 50
+            return self.send_payload(200, build_investment_brain_service().learning_proposals(
+                status=first_query(query, "status"),
+                limit=limit,
+            ))
+
+        learning_match = re.match(r"^/api/investment-brain/learning-proposals/([^/]+)$", path)
+        if learning_match and self.command == "PATCH":
+            body = self.read_json_body()
+            return self.send_payload(200, build_investment_brain_service().review_learning_proposal(
+                learning_match.group(1),
+                configured(body.get("status")),
+                configured(body.get("note")),
+            ))
 
         if path == "/api/memories":
             if self.command == "GET":

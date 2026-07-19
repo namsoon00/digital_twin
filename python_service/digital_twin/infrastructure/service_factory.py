@@ -4,6 +4,7 @@ from typing import Callable, Dict, Iterable
 
 from ..application.flow_lens_service import FlowLensService
 from ..application.investment_analysis_service import InvestmentAnalysisService
+from ..application.investment_brain_service import InvestmentBrainService
 from ..application.investment_strategy_proposal_service import InvestmentStrategyProposalService
 from ..application.investment_calendar_candidate_service import InvestmentCalendarCandidateService
 from ..application.investment_calendar_extraction_service import InvestmentCalendarExtractionService
@@ -123,6 +124,7 @@ def build_monitor_runner(
         ontology_projection_recorder=PortfolioOntologyProjectionRecorder(
             ontology_repository_from_settings(configured_settings),
             quality_store=ontology_quality_store,
+            decision_episode_store=stores.investment_decision_episode_store(configured_settings),
             settings=configured_settings,
         ),
         account_job_store=monitor_account_job_store_from_settings(configured_settings),
@@ -169,10 +171,22 @@ def build_notification_queue_runner(dry_run: bool = False) -> NotificationQueueR
             NotificationAIValidatedGateEnricher(
                 notification_ai_reviewer_from_settings(settings),
                 settings,
+                stores.investment_decision_episode_store(settings),
             ),
             NotificationAIOpinionEnricher(settings),
         ),
         operator_reports_enabled=str(settings.get("operatorReasoningReportEnabled", "1")).strip().lower() not in {"0", "false", "no", "off"},
+    )
+
+
+def build_investment_brain_service(settings=None) -> InvestmentBrainService:
+    configured_settings = settings or runtime_settings()
+    return InvestmentBrainService(
+        monitor_store=stores.monitor_store(configured_settings),
+        ontology_repository=ontology_repository_from_settings(configured_settings),
+        reviewer=notification_ai_reviewer_from_settings(configured_settings),
+        decision_episode_store=stores.investment_decision_episode_store(configured_settings),
+        settings=configured_settings,
     )
 
 

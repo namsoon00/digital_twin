@@ -45,6 +45,7 @@ from .portfolio_ontology_market_concepts import (
     symbol_key,
 )
 from .portfolio_ontology_coverage import add_coverage_gap_concepts
+from .portfolio_ontology_cognitive_concepts import add_investment_brain_concepts
 from .portfolio_ontology_exposure_concepts import (
     add_instrument_profile_concepts,
     add_market_exposure_concepts,
@@ -317,6 +318,11 @@ def build_portfolio_ontology(
             external_signals,
         )
     add_decision_item_concepts(graph, runtime_context)
+    add_investment_brain_concepts(
+        graph,
+        portfolio_id,
+        runtime_context.get("decisionEpisodes") if isinstance(runtime_context, dict) else [],
+    )
     add_coverage_gap_concepts(graph, observed_positions, portfolio_id)
     graph.entities = dedupe_entities(graph.entities)
     graph.relations = dedupe_relations(graph.relations)

@@ -9,7 +9,7 @@ from .ontology_tbox import BOUNDED_CONTEXTS, bounded_contexts_payload
 from .portfolio import PortfolioSummary
 
 
-ONTOLOGY_PROMPT_VERSION = "ontology-investment-v2-tbox-abox"
+ONTOLOGY_PROMPT_VERSION = "ontology-investment-v3-hypothesis-learning"
 
 
 def relation_key(item: OntologyRelation) -> str:
@@ -264,6 +264,10 @@ def build_ai_inference_packet(graph: PortfolioOntology) -> Dict[str, object]:
     temporal_window_count = len([item for item in graph.entities if item.kind == "temporal-window"])
     temporal_episode_count = len([item for item in graph.entities if item.kind == "trend-episode"])
     market_proxy_count = len([item for item in graph.entities if item.kind in {"market-proxy-instrument", "market-proxy-observation"}])
+    investment_question_count = len([item for item in graph.entities if item.kind in {"investment-question", "self-question"}])
+    competing_hypothesis_count = len([item for item in graph.entities if item.kind == "competing-hypothesis"])
+    decision_episode_count = len([item for item in graph.entities if item.kind == "decision-episode"])
+    observed_outcome_count = len([item for item in graph.entities if item.kind == "observed-outcome"])
     rulebox_entity_count = len([item for item in graph.entities if ontology_box(item.properties) == "RuleBox"])
     inferencebox_entity_count = len([item for item in graph.entities if ontology_box(item.properties) == "InferenceBox"])
     inferencebox_relation_count = len([item for item in graph.relations if ontology_box(item.properties) == "InferenceBox"])
@@ -273,7 +277,7 @@ def build_ai_inference_packet(graph: PortfolioOntology) -> Dict[str, object]:
         "role": "ontology-first-investment-opinion",
         "legacyModelRole": "not-used-for-scoring",
         "notificationRole": "insight-driven-dispatch",
-        "inputOrder": ["tbox", "boundedContexts", "ruleBox", "abox", "inferenceBox", "derivedRelations", "inferenceTraces", "operationalOntology", "temporalWindows", "coverageGaps", "macroRegimes", "marketProxyContext", "cryptoExposures", "valuationContext", "newsQuality", "reasoningCards", "relationInfluences", "researchEvidence", "signalTransitions", "factorExposure", "liquidityConstraints", "insights", "activeInvestmentOpinions", "executionPlans", "relations", "evidence", "beliefs", "opinions"],
+        "inputOrder": ["tbox", "boundedContexts", "ruleBox", "abox", "inferenceBox", "derivedRelations", "inferenceTraces", "investmentQuestions", "hypothesisSets", "decisionEpisodes", "observedOutcomes", "operationalOntology", "temporalWindows", "coverageGaps", "macroRegimes", "marketProxyContext", "cryptoExposures", "valuationContext", "newsQuality", "reasoningCards", "relationInfluences", "researchEvidence", "signalTransitions", "factorExposure", "liquidityConstraints", "insights", "activeInvestmentOpinions", "executionPlans", "relations", "evidence", "beliefs", "opinions"],
         "reasoningCardCount": len(graph.reasoning_cards),
         "reasoningCardIds": [item.get("id") for item in graph.reasoning_cards],
         "graphInputs": {
@@ -298,6 +302,10 @@ def build_ai_inference_packet(graph: PortfolioOntology) -> Dict[str, object]:
             "temporalWindowCount": temporal_window_count,
             "temporalEpisodeCount": temporal_episode_count,
             "marketProxyCount": market_proxy_count,
+            "investmentQuestionCount": investment_question_count,
+            "competingHypothesisCount": competing_hypothesis_count,
+            "decisionEpisodeCount": decision_episode_count,
+            "observedOutcomeCount": observed_outcome_count,
         },
         "outputSchema": {
             "portfolioView": "string",
@@ -307,6 +315,9 @@ def build_ai_inference_packet(graph: PortfolioOntology) -> Dict[str, object]:
             "executionPlans": ["symbol", "primaryAction", "decisionDrivers", "blockedActions", "riskSignals", "supportSignals", "counterSignals", "strengthenConditions", "weakenConditions", "nextChecks"],
             "insightDispatch": ["subject", "insightType", "novelty", "confidence", "dispatchDecision"],
             "missingDataImpact": ["string"],
+            "hypothesisComparison": ["hypothesisId", "claim", "supportingEvidenceIds", "counterEvidenceIds", "verdict", "confidence"],
+            "selectedHypothesisId": "string",
+            "unresolvedQuestions": ["string"],
         },
         "guardrails": [
             "제공된 TBox, ABox, reasoning card, 관계 행만 사용합니다.",
@@ -322,6 +333,7 @@ def build_ai_inference_packet(graph: PortfolioOntology) -> Dict[str, object]:
             "coverageGaps, newsQuality, source freshness가 있으면 결론 강도를 낮추고 필요한 수집 과제를 먼저 제시합니다.",
             "macroRegimes와 cryptoExposures는 종목 가격 신호의 상위 환경으로만 사용하고 단독 매수·매도 결론으로 쓰지 않습니다.",
             "marketProxyContext는 위험선호, 금리, 크레딧, IPO, 변동성, 달러, 원자재, 섹터 사이클의 배경 맥락이며 단독 매수·매도 결론으로 쓰지 않습니다.",
+            "최소 세 개의 경쟁 가설을 지지·반대 근거로 비교하고, 과거 DecisionEpisode와 ObservedOutcome에서 반복 반증된 가설을 그대로 재사용하지 않습니다.",
         ],
     }
 
@@ -490,6 +502,10 @@ def prompt_payload(graph: PortfolioOntology) -> Dict[str, object]:
         "inferenceBox": inferencebox,
         "derivedRelations": list(inferencebox.get("derivedRelations") or []),
         "inferenceTraces": list(inferencebox.get("traces") or []),
+        "investmentQuestions": compact_entities_by_kind(graph, ["investment-question", "self-question"], 80),
+        "hypothesisSets": compact_entities_by_kind(graph, ["hypothesis-set", "competing-hypothesis", "assumption"], 140),
+        "decisionEpisodes": compact_entities_by_kind(graph, ["decision-episode"], 80),
+        "observedOutcomes": compact_entities_by_kind(graph, ["observed-outcome"], 120),
         "worldview": graph.worldview,
         "aiInferencePacket": build_ai_inference_packet(graph),
         "coverageGaps": compact_entities_by_kind(graph, ["coverage-gap", "temporal-coverage-gap"], 80),
@@ -547,6 +563,8 @@ def build_investment_opinion_prompt(graph: PortfolioOntology) -> str:
         "너는 투자전략 관계 분석 데이터를 읽는 AI 투자 의견 리뷰어다.",
         "규칙 구조는 투자 핵심, 관측 데이터, 전략 가설, 리스크, 추론 인사이트, 운영/알림 바운디드 컨텍스트와 RuleBox로 나뉜 세계관이다.",
         "현재 데이터는 계좌의 실제 보유, 근거, 판단 근거, 운영 정책, 의견 기록이며 InferenceBox는 RuleBox가 파생한 관계와 추론 경로다.",
+        "하나의 최고 점수를 답으로 쓰지 말고 위험 지속, 회복·지지, 데이터 불확실성 가설을 동시에 비교한 뒤 가장 설명력이 높은 잠정 가설을 선택해라.",
+        "과거 DecisionEpisode와 ObservedOutcome을 읽어 반복 반증된 가정과 규칙을 경고하고, 답하지 못한 질문은 다음 수집 과제로 남겨라.",
         "제공된 근거 안에서 BUY, ADD, HOLD, TRIM, SELL, AVOID 중 하나의 투자 의견을 반드시 고르되 자동 주문 지시로 표현하지 마라.",
         "최종 판단과 점수는 관계 규칙과 근거 충돌을 기준으로 설명해라.",
         "뉴스, 공시, SEC/OpenDART 근거와 출처 URL을 적극적으로 반영하고, 반대 근거와 무효화 조건을 함께 제시해라.",

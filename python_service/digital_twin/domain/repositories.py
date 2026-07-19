@@ -5,6 +5,7 @@ from typing import Callable, Dict, Iterable, List, Optional, Protocol, Tuple, ru
 from .accounts import AccountConfig
 from .events import DomainEvent
 from .investment_research import NewsCollectionTarget, ResearchEvidence
+from .investment_brain import DecisionEpisode, LearningProposal, ObservedOutcome
 from .investment_calendar import InvestmentCalendarEvent
 from .ontology_contracts import PortfolioOntology
 from .portfolio import AccountSnapshot, AlertEvent, Position
@@ -207,6 +208,35 @@ def ensure_ontology_graph_repository_contract(repository: object, label: str = "
 
 class OntologyProjectionRecorder(Protocol):
     def record_snapshot(self, snapshot: AccountSnapshot) -> Dict[str, object]:
+        ...
+
+
+class DecisionEpisodeRepository(Protocol):
+    def save(self, episode: DecisionEpisode) -> DecisionEpisode:
+        ...
+
+    def get(self, episode_id: str) -> Optional[DecisionEpisode]:
+        ...
+
+    def list(self, account_id: str = "", symbol: str = "", limit: int = 50) -> List[DecisionEpisode]:
+        ...
+
+    def record_observation(
+        self,
+        account_id: str,
+        symbol: str,
+        facts: Dict[str, object],
+        observed_at: str = "",
+    ) -> List[ObservedOutcome]:
+        ...
+
+    def save_learning_proposal(self, proposal: LearningProposal) -> LearningProposal:
+        ...
+
+    def list_learning_proposals(self, status: str = "", limit: int = 50) -> List[Dict[str, object]]:
+        ...
+
+    def review_learning_proposal(self, proposal_id: str, status: str, note: str = "") -> Dict[str, object]:
         ...
 
 

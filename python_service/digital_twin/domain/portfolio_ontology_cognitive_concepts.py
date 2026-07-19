@@ -11,7 +11,8 @@ def add_investment_brain_concepts(
     hypothesis_proposals: Iterable[Dict[str, object]] = None,
 ) -> None:
     portfolio_node_id = entity_id("portfolio", portfolio_id)
-    for episode in decision_episodes or []:
+    episode_rows = [item for item in decision_episodes or [] if isinstance(item, dict)]
+    for episode in episode_rows:
         if not isinstance(episode, dict):
             continue
         episode_key = str(episode.get("episodeId") or "").strip()
@@ -230,7 +231,81 @@ def add_investment_brain_concepts(
             })
             add_relation(graph, episode_id, outcome_id, "RESULTED_IN_OUTCOME", weight=1.0, properties={"source": "investment-brain-feedback"})
             add_relation(graph, stock_id, outcome_id, "OBSERVES_OUTCOME", weight=1.0, properties={"source": "investment-brain-feedback"})
+    add_hypothesis_calibration_concepts(graph, portfolio_id, episode_rows)
     add_novel_hypothesis_proposal_concepts(graph, portfolio_id, hypothesis_proposals or [])
+
+
+def add_hypothesis_calibration_concepts(
+    graph: PortfolioOntology,
+    portfolio_id: str,
+    decision_episodes: Iterable[Dict[str, object]],
+) -> None:
+    grouped: Dict[str, Dict[str, object]] = {}
+    for episode in decision_episodes or []:
+        hypothesis_set = episode.get("hypothesisSet") if isinstance(episode.get("hypothesisSet"), dict) else {}
+        selected_id = str(episode.get("selectedHypothesisId") or "")
+        selected = next((
+            item for item in hypothesis_set.get("hypotheses") or []
+            if isinstance(item, dict) and str(item.get("hypothesisId") or "") == selected_id
+        ), None)
+        outcomes = [item for item in episode.get("outcomes") or [] if isinstance(item, dict)]
+        if not selected or not outcomes:
+            continue
+        latest = sorted(outcomes, key=lambda item: str(item.get("observedAt") or ""))[-1]
+        status = str(latest.get("selectedHypothesisStatus") or "")
+        template_id = str(selected.get("templateId") or "").strip()
+        episode_id = str(episode.get("episodeId") or "").strip()
+        if not episode_id or not template_id or status not in {"directionally-corroborated", "directionally-contradicted", "inconclusive"}:
+            continue
+        row = grouped.setdefault(template_id, {
+            "templateId": template_id,
+            "templateLabel": str(selected.get("templateLabel") or template_id),
+            "episodeOutcomes": {},
+        })
+        previous = row["episodeOutcomes"].get(episode_id) or {}
+        if str(latest.get("observedAt") or "") >= str(previous.get("observedAt") or ""):
+            row["episodeOutcomes"][episode_id] = {
+                "status": status,
+                "observedAt": str(latest.get("observedAt") or ""),
+            }
+    portfolio_node_id = entity_id("portfolio", portfolio_id)
+    for template_id, row in sorted(grouped.items()):
+        statuses = [str(item.get("status") or "") for item in row["episodeOutcomes"].values()]
+        corroborated_count = statuses.count("directionally-corroborated")
+        contradicted_count = statuses.count("directionally-contradicted")
+        inconclusive_count = statuses.count("inconclusive")
+        decisive_count = corroborated_count + contradicted_count
+        independent_count = len(row["episodeOutcomes"])
+        smoothed_rate = (corroborated_count + 1) / (decisive_count + 2)
+        adjustment = max(-10.0, min(10.0, (smoothed_rate - 0.5) * 20.0)) if decisive_count >= 3 else 0.0
+        calibration_id = add_entity(graph, "hypothesis-calibration", template_id, str(row["templateLabel"]) + " 결과 보정", {
+            "tboxClass": "HypothesisCalibration",
+            "templateId": template_id,
+            "independentEpisodeCount": independent_count,
+            "decisiveOutcomeCount": decisive_count,
+            "corroboratedCount": corroborated_count,
+            "contradictedCount": contradicted_count,
+            "inconclusiveCount": inconclusive_count,
+            "smoothedCorroborationRate": round(smoothed_rate, 4),
+            "suggestedPriorAdjustmentPoints": round(adjustment, 2),
+            "calibrationStatus": "usable" if decisive_count >= 3 else "insufficient-sample",
+            "minimumDecisiveOutcomes": 3,
+            "automaticDeployment": False,
+            "source": "investment-brain-feedback",
+        })
+        template_id_node = entity_id("hypothesis-template", template_id)
+        if not any(item.entity_id == template_id_node for item in graph.entities):
+            add_entity(graph, "hypothesis-template", template_id, str(row["templateLabel"]), {
+                "tboxClass": "ApprovedHypothesisTemplate",
+                "source": "investment-brain-feedback",
+            })
+        add_relation(graph, template_id_node, calibration_id, "CALIBRATED_BY_OUTCOME", weight=1.0, properties={
+            "source": "investment-brain-feedback",
+            "automaticDeployment": False,
+        })
+        add_relation(graph, portfolio_node_id, calibration_id, "HAS_HYPOTHESIS_CALIBRATION", weight=1.0, properties={
+            "source": "investment-brain-feedback",
+        })
 
 
 def add_research_source_policy(graph: PortfolioOntology, plan_key: str, research_plan: Dict[str, object]) -> str:

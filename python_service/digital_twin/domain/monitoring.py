@@ -675,6 +675,15 @@ class RealtimeMonitor(MonitoringSampleDataMixin, MonitoringPositionContextMixin,
         )
         if inference_contexts:
             return {"missing": False, "positionCount": len(positions), "contextCount": len(inference_contexts)}
+        projection = ontology_projection_from_metadata(snapshot.metadata if isinstance(snapshot.metadata, dict) else {})
+        if str((projection or {}).get("status") or "").strip().lower() == "deferred-to-reasoning-worker":
+            return {
+                "missing": False,
+                "pending": True,
+                "reasonCode": "reasoningWorkerPending",
+                "reason": str((projection or {}).get("reason") or "전용 온톨로지 추론 워커 처리 대기"),
+                "positionCount": len(positions),
+            }
 
         reason_code, reason, inference_status = self.ontology_inference_missing_reason(snapshot)
         relation_count = int(number(inference_status.get("relationCount")) or 0)

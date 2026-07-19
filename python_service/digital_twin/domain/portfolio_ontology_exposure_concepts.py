@@ -154,6 +154,8 @@ def add_market_proxy_observation_concepts(
     if not isinstance(quote, dict) or not quote:
         return ""
     pressure = market_proxy_observation_pressure(quote)
+    source_as_of = str(quote.get("sourceAsOf") or quote.get("updatedAt") or "")
+    source_fetched_at = str(quote.get("sourceFetchedAt") or quote.get("updatedAt") or "")
     observation_id = add_entity(graph, "market-proxy-observation", profile.symbol, profile.label + " 시장 센서 관측", {
         "tboxClass": "MarketProxyObservation",
         "tboxClasses": ["Observation", "PriceObservation", "MarketProxyObservation", "MarketProxyInstrument"],
@@ -171,6 +173,16 @@ def add_market_proxy_observation_concepts(
         "quoteSource": quote.get("quoteSource") or "",
         "dataQuality": quote.get("dataQuality") or "",
         "updatedAt": quote.get("updatedAt") or "",
+        "observationDomain": "quote",
+        "freshnessRequired": True,
+        "freshnessStatus": quote.get("freshnessStatus") or "unknown",
+        "freshnessReason": quote.get("freshnessReason") or "",
+        "freshnessAgeMinutes": quote.get("freshnessAgeMinutes"),
+        "sourceAsOf": source_as_of,
+        "sourceFetchedAt": source_fetched_at,
+        "sourceTimestampPresent": bool(quote.get("sourceTimestampPresent", bool(source_as_of))),
+        "maxAgeMinutes": quote.get("maxAgeMinutes") or 10,
+        "judgementEvidenceUsable": bool(quote.get("judgementEvidenceUsable")),
         "collectionPurpose": quote.get("collectionPurpose") or "",
         "collectionTarget": quote.get("collectionTarget") or "",
         **pressure,

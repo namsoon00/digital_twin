@@ -2546,6 +2546,7 @@ relation ontology-assertion,
             }
         _TypeDB, _Credentials, _DriverOptions, _DriverTlsConfig, TransactionType = imported[0]
         probed_count = 0
+        sentinel_rule, sentinel_payload = ready_rules[0]
         try:
             def operation():
                 nonlocal probed_count
@@ -2553,23 +2554,25 @@ relation ontology-assertion,
                 try:
                     self.ensure_database(driver)
                     with driver.transaction(self.database, TransactionType.READ) as tx:
-                        for rule, rule_payload in ready_rules:
-                            query_plan = typedb_native_function_call_query(rule_payload, ["__ORBIT_SCHEMA_PROBE__"])
-                            self.read_rows_in_transaction(
-                                tx,
-                                str(query_plan.get("query") or ""),
-                                query_plan.get("columns") or ["sourceId"],
-                                label="nativeRuleProbe:" + str(rule.rule_id or ""),
-                            )
-                            probed_count += 1
+                        query_plan = typedb_native_function_call_query(sentinel_payload, ["__ORBIT_SCHEMA_PROBE__"])
+                        self.read_rows_in_transaction(
+                            tx,
+                            str(query_plan.get("query") or ""),
+                            query_plan.get("columns") or ["sourceId"],
+                            label="nativeRuleSentinelProbe:" + str(sentinel_rule.rule_id or ""),
+                        )
+                        probed_count += 1
                 finally:
                     self.close_driver(driver)
 
             self.with_typedb_retries(operation)
             return {
                 "status": "ok",
-                "available": probed_count == len(ready_rules),
+                "available": probed_count == 1,
                 "probedCount": probed_count,
+                "verifiedRuleCount": len(ready_rules),
+                "probeMode": "sentinel-root-function",
+                "sentinelRuleId": str(sentinel_rule.rule_id or ""),
             }
         except Exception as error:  # noqa: BLE001 - a missing function falls through to schema synchronization.
             return {
@@ -3115,7 +3118,11 @@ relation ontology-assertion,
             "saveResult": save_result,
             "functionSyncResult": {
                 key: function_sync_result.get(key)
-                for key in ["status", "reason", "reasonCode", "syncedCount", "skippedCount", "failedCount", "syncedRules", "skippedRules"]
+                for key in [
+                    "status", "reason", "reasonCode", "syncedCount", "skippedCount", "failedCount",
+                    "syncedRules", "skippedRules", "schemaFunctionSyncCached",
+                    "schemaFunctionProbeUsed", "functionProbe",
+                ]
                 if key in function_sync_result
             },
             "nativeMatchResult": {
@@ -3254,7 +3261,11 @@ relation ontology-assertion,
                 "typedbSchemaFunctionUsed": bool(function_sync_result.get("status") == "ok"),
                 "functionSyncResult": {
                     key: function_sync_result.get(key)
-                    for key in ["status", "reason", "reasonCode", "syncedCount", "skippedCount", "failedCount", "syncedRules", "skippedRules"]
+                    for key in [
+                        "status", "reason", "reasonCode", "syncedCount", "skippedCount", "failedCount",
+                        "syncedRules", "skippedRules", "schemaFunctionSyncCached",
+                        "schemaFunctionProbeUsed", "functionProbe",
+                    ]
                     if key in function_sync_result
                 },
                 "nativeMatchResult": {

@@ -1604,6 +1604,35 @@ class TypeDBOntologyRepositoryTests(unittest.TestCase):
         self.assertGreater(result["syncedFunctionCount"], 0)
         self.assertTrue(all(item["schemaFunctionSyncStatus"] == "verified-existing" for item in result["syncedFunctions"]))
 
+    def test_typedb_schema_function_probe_uses_one_sentinel_query(self):
+        class FakeTransaction:
+            def __enter__(self):
+                return self
+
+            def __exit__(self, _exc_type, _exc, _traceback):
+                return False
+
+        class FakeDriver:
+            def transaction(self, *_args, **_kwargs):
+                return FakeTransaction()
+
+        repository = TypeDBOntologyGraphRepository("127.0.0.1:1729", retry_count=0)
+        rules = default_graph_inference_rules()[:4]
+        queries = []
+
+        with patch.object(repository, "driver_imports", return_value=((object, object, object, object, SimpleNamespace(READ="read")), None)), \
+                patch.object(repository, "open_driver", return_value=FakeDriver()), \
+                patch.object(repository, "ensure_database"), \
+                patch.object(repository, "close_driver"), \
+                patch.object(repository, "read_rows_in_transaction", side_effect=lambda _tx, query, _columns, label="": queries.append((query, label)) or []):
+            result = repository.probe_typedb_native_rule_functions(rules)
+
+        self.assertEqual("ok", result["status"])
+        self.assertEqual(1, result["probedCount"])
+        self.assertEqual(1, len(queries))
+        self.assertEqual("sentinel-root-function", result["probeMode"])
+        self.assertGreaterEqual(result["verifiedRuleCount"], 1)
+
 
 if __name__ == "__main__":
     unittest.main()

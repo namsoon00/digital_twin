@@ -22603,7 +22603,7 @@
         renderSettingField("newsCollectionMaxSymbols", "뉴스 수집 종목 수", "number", "40"),
         renderSettingField("newsCollectionLookbackMinutes", "뉴스 조회 기간(분)", "number", "180"),
         renderSettingField("newsCollectionPerSymbolLimit", "종목별 저장 기사 수", "number", "8"),
-        renderSettingField("newsCollectionProviders", "뉴스 수집 채널", "text", "yahoo_finance,gdelt,google_rss_kr,google_rss_us"),
+        renderSettingField("newsCollectionProviders", "뉴스 수집 채널", "text", "yahoo_search,yahoo_finance"),
         renderSettingField("newsCollectionMinRelevanceScore", "뉴스 관련성 최소 점수", "number", "35"),
         renderSettingSelect("newsCollectionRequireArticleBodyForRss", "RSS 원문 본문 필수", [
           { value: "1", label: "본문 있는 RSS만 저장" },

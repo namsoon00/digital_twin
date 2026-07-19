@@ -251,6 +251,7 @@ def add_execution_metric_concepts(
     display_name: str,
     liquidity: Dict[str, object],
     source: str,
+    observation_profile: Dict[str, object] = None,
 ) -> None:
     metric_rows = [
         ("positionToTradingValuePct", "보유금액/거래대금", "position-exit-exposure", ["hasMarketValue", "hasTradingValue"]),
@@ -280,6 +281,7 @@ def add_execution_metric_concepts(
             "valueNumber": round(numeric_value, 4),
             "metricRole": metric_role,
             "source": source,
+            **dict(observation_profile or {}),
         })
         relation_props = {
             "source": source,
@@ -818,6 +820,7 @@ def add_price_level_and_liquidity_concepts(
         "tboxClass": "LiquidityProfile",
         "tboxClasses": ["Risk", "LiquidityRisk", "LiquidityProfile"],
         **liquidity,
+        **flow_observation,
     })
     add_relation(
         graph,
@@ -827,7 +830,7 @@ def add_price_level_and_liquidity_concepts(
         weight=1.0,
         properties={"source": source, "polarity": "context", "aiInfluenceLabel": "유동성 원천 프로파일"},
     )
-    add_execution_metric_concepts(graph, stock_id, symbol, position.name or symbol, liquidity, source)
+    add_execution_metric_concepts(graph, stock_id, symbol, position.name or symbol, liquidity, source, flow_observation)
     risk_props = {"source": source, "aiInfluenceLabel": "유동성/실행 가능성", "polarity": "context"}
     liquidity_risk = number(liquidity.get("liquidityRiskScore"))
     slippage_risk = number(liquidity.get("slippageRiskScore"))

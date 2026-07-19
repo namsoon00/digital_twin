@@ -271,6 +271,8 @@ def add_news_ai_analysis_concept(
     add_relation(graph, analysis_id, stock_id, "AFFECTS", weight=relation_weight, evidence_ids=[evidence_id], properties={**props, "source": "article-ai-analysis"})
     if raw_payload.get("analysisConflict"):
         risk_score = number(raw_payload.get("dataQualityRiskScore")) or 7.0
+        source_as_of = str(getattr(item, "published_at", "") or getattr(item, "observed_at", "") or "")
+        source_fetched_at = str(getattr(item, "observed_at", "") or source_as_of)
         conflict_id = add_entity(graph, "article-analysis-conflict", evidence_id or str(getattr(item, "title", "") or ""), "뉴스 영향 분석 충돌: " + str(getattr(item, "title", "") or ""), {
             "tboxClass": "DataQualityRisk",
             "tboxClasses": ["Risk", "DataQualityRisk", "ArticleAIAnalysis", "DataQualitySignal"],
@@ -284,6 +286,13 @@ def add_news_ai_analysis_concept(
             "analysisConflictAiPolarity": raw_payload.get("analysisConflictAiPolarity"),
             "analysisConflictReasonKo": raw_payload.get("analysisConflictReasonKo"),
             "dataQualityRisk": raw_payload.get("dataQualityRisk"),
+            "observationDomain": "news",
+            "freshnessRequired": True,
+            "freshnessStatus": "unknown",
+            "sourceAsOf": source_as_of,
+            "sourceFetchedAt": source_fetched_at,
+            "sourceTimestampPresent": bool(source_as_of),
+            "maxAgeMinutes": 180,
         })
         conflict_props = {
             **props,

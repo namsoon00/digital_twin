@@ -298,9 +298,9 @@ def build_portfolio_ontology(
         add_metric_concepts(graph, stock_id, position, source, observation_profiles)
         add_price_level_and_liquidity_concepts(graph, stock_id, position, source, observation_profiles)
         add_security_line_concepts(graph, stock_id, position, observed_positions, external_signals, runtime_context)
-        add_position_temporal_concepts(graph, stock_id, position, external_signals, runtime_context)
+        add_position_temporal_concepts(graph, stock_id, position, external_signals, runtime_context, observation_profiles)
         add_symbol_external_signal_concepts(graph, stock_id, symbol, external_signals)
-        add_position_valuation_concepts(graph, stock_id, position, external_signals, runtime_context)
+        add_position_valuation_concepts(graph, stock_id, position, external_signals, runtime_context, observation_profiles)
         add_position_factor_concepts(graph, stock_id, portfolio_node_id, position, portfolio)
         add_instrument_profile_concepts(graph, stock_id, portfolio_node_id, position, runtime_context)
         add_position_macro_context_concepts(graph, stock_id, position, portfolio, external_signals, runtime_context)
@@ -313,6 +313,7 @@ def build_portfolio_ontology(
             position,
             source,
             runtime_context,
+            observation_profiles,
         )
         add_research_evidence_concepts(
             graph,

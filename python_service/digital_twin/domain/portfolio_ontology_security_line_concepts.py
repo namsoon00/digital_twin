@@ -104,6 +104,7 @@ def add_cross_listing_coverage_gap(
     label: str,
     field: str,
     description: str,
+    observed_at: str = "",
 ) -> None:
     gap_id = add_entity(graph, "coverage-gap", local_symbol + ":cross-listing:" + field, label, {
         "tboxClass": "CoverageGap",
@@ -116,6 +117,13 @@ def add_cross_listing_coverage_gap(
         "impact": "ADR 프리미엄과 레버리지 수급 증폭 판단의 신뢰도를 낮춥니다.",
         "riskImpact": 5.0,
         "source": "security-line-ontology",
+        "observationDomain": "data-quality",
+        "freshnessRequired": True,
+        "freshnessStatus": "unknown",
+        "sourceAsOf": observed_at,
+        "sourceFetchedAt": observed_at,
+        "sourceTimestampPresent": bool(observed_at),
+        "maxAgeMinutes": 60,
     })
     add_relation(graph, stock_id, gap_id, "HAS_COVERAGE_GAP", weight=0.8, properties={
         "source": "security-line-ontology",
@@ -148,6 +156,7 @@ def add_security_line_concepts(
     company_name = (local_line.company_name if local_line else position.name) or position.name or local_symbol
     company_id = entity_id("company", local_symbol)
     usd_krw = fx_usd_krw(external_signals, runtime_context)
+    observation_time = str((runtime_context or {}).get("asOf") or position.source_fetched_at or position.updated_at or "")
     local_price = number(position.current_price)
     local_line_id = ""
     adr_lines = [line for line in lines if line.is_adr]
@@ -223,6 +232,7 @@ def add_security_line_concepts(
                 line.symbol + " ADR 시세 부족",
                 "adrPrice",
                 line.symbol + " ADR 가격이 없어 ADR 프리미엄을 계산하지 못합니다.",
+                observation_time,
             )
             continue
         if not usd_krw:
@@ -233,6 +243,7 @@ def add_security_line_concepts(
                 "USD/KRW 환율 부족",
                 "usdKrwRate",
                 "ADR 달러 가격을 본주 원화 가치와 비교할 USD/KRW가 없습니다.",
+                observation_time,
             )
             continue
         if not local_price:
@@ -243,6 +254,7 @@ def add_security_line_concepts(
                 local_symbol + " 본주 시세 부족",
                 "localSharePrice",
                 "본주 현재가가 없어 ADR 프리미엄을 계산하지 못합니다.",
+                observation_time,
             )
             continue
         if not line.adr_ratio:
@@ -253,10 +265,12 @@ def add_security_line_concepts(
                 line.symbol + " ADR ratio 부족",
                 "adrRatio",
                 "ADR 1주가 본주 몇 주를 대표하는지 없어 가격 괴리를 계산하지 못합니다.",
+                observation_time,
             )
             continue
         local_equivalent_krw = adr_price * usd_krw / line.adr_ratio
         premium_pct = ((local_equivalent_krw / local_price) - 1) * 100 if local_price else 0.0
+        premium_source_as_of = latest_trading_day_for_line(line, external_signals) or position.source_as_of or position.updated_at
         premium_id = add_entity(graph, "cross-market-premium", local_symbol + ":" + line.symbol, line.symbol + " ADR 프리미엄", {
             "tboxClass": "ADRPremium",
             "tboxClasses": ["Observation", "PriceObservation", "CrossMarketPremium", "ADRPremium", "MarketStructureSignal"],
@@ -270,7 +284,14 @@ def add_security_line_concepts(
             "adrRatio": line.adr_ratio,
             "localPriceKrw": round(local_price, 4),
             "localEquivalentKrw": round(local_equivalent_krw, 2),
-            "latestTradingDay": latest_trading_day_for_line(line, external_signals),
+            "latestTradingDay": premium_source_as_of,
+            "observationDomain": "quote",
+            "freshnessRequired": True,
+            "freshnessStatus": "unknown",
+            "sourceAsOf": premium_source_as_of,
+            "sourceFetchedAt": position.source_fetched_at or position.updated_at,
+            "sourceTimestampPresent": bool(premium_source_as_of),
+            "maxAgeMinutes": 1440,
             "source": "security-line-ontology",
         })
         add_relation(graph, stock_id, premium_id, "HAS_ADR_PREMIUM", weight=min(1.0, max(0.3, abs(premium_pct) / 50)), properties={
@@ -330,4 +351,5 @@ def add_security_line_concepts(
                 line.symbol + " 레버리지 ETF 시세 부족",
                 "leveragedEtfQuote:" + line.symbol,
                 line.symbol + " 가격·거래량이 없어 레버리지 ETF 수급 증폭 여부를 계산하지 못합니다.",
+                observation_time,
             )

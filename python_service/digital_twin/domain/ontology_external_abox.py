@@ -16,6 +16,53 @@ RATE_SERIES_LABELS = {
 }
 
 
+def external_observation_profile(
+    external_signals: Dict[str, object],
+    value: object = None,
+    domain: str = "external",
+    max_age_minutes: int = 180,
+) -> Dict[str, object]:
+    freshness = external_signals.get("freshness") if isinstance(external_signals.get("freshness"), dict) else {}
+    item = value if isinstance(value, dict) else {}
+    nested_candidates = []
+    for nested_key in ["latestFiling", "facts", "freshness"]:
+        nested = item.get(nested_key) if isinstance(item.get(nested_key), dict) else {}
+        nested_candidates.extend([
+            nested.get("sourceAsOf"), nested.get("observedAt"), nested.get("lastUpdated"),
+            nested.get("filingDate"), nested.get("filed"), nested.get("date"), nested.get("end"),
+        ])
+    source_as_of = str(
+        item.get("sourceAsOf")
+        or item.get("observedAt")
+        or item.get("lastUpdated")
+        or item.get("latestTradingDay")
+        or item.get("date")
+        or item.get("publishedAt")
+        or next((candidate for candidate in nested_candidates if candidate not in (None, "")), "")
+        or freshness.get("sourceAsOf")
+        or freshness.get("fetchedAt")
+        or external_signals.get("fetchedAt")
+        or ""
+    )
+    source_fetched_at = str(
+        item.get("sourceFetchedAt")
+        or item.get("fetchedAt")
+        or freshness.get("fetchedAt")
+        or external_signals.get("fetchedAt")
+        or ""
+    )
+    return {
+        "observationDomain": domain,
+        "freshnessRequired": True,
+        "freshnessStatus": str(item.get("freshnessStatus") or freshness.get("status") or "unknown"),
+        "freshnessAgeMinutes": item.get("ageMinutes") if item.get("ageMinutes") not in (None, "") else freshness.get("ageMinutes"),
+        "sourceAsOf": source_as_of,
+        "sourceFetchedAt": source_fetched_at,
+        "sourceTimestampPresent": bool(source_as_of),
+        "maxAgeMinutes": max_age_minutes,
+    }
+
+
 def unique_list(values: Iterable[str]) -> List[str]:
     seen = set()
     rows: List[str] = []
@@ -367,6 +414,7 @@ def add_external_signal_concepts(
             "tboxClasses": external_signal_classes(str(key)),
             "key": str(key),
             "value": safe_signal_value(str(key), value),
+            **external_observation_profile(external_signals, value),
         })
         properties = {"source": "external-signals", "aiInfluenceLabel": "외부 신호 " + str(key)}
         if isinstance(value, dict):
@@ -413,6 +461,7 @@ def add_portfolio_macro_and_cross_asset_concepts(
             "provider": str(item.get("provider") or "FRED"),
             "date": str(item.get("date") or ""),
             "value": round(value, 4),
+            **external_observation_profile(external_signals, item, "macro", 4320),
         })
         props = {"source": "macro", "polarity": "context", "aiInfluenceLabel": rate_series_label(str(series_id))}
         if str(series_id).upper() in {"DGS10", "DGS2", "DFF"}:
@@ -767,6 +816,7 @@ def add_symbol_external_signal_concepts(graph: PortfolioOntology, stock_id: str,
             "symbol": symbol,
             "group": group,
             "value": safe_signal_value(group, row.get("value")),
+            **external_observation_profile(external_signals, row.get("value")),
         })
         add_relation(
             graph,
@@ -996,6 +1046,7 @@ def add_symbol_company_overview_concepts(graph: PortfolioOntology, stock_id: str
             "provider": str(value.get("provider") or "Alpha Vantage"),
             "latestQuarter": str(value.get("latestQuarter") or ""),
             **valuation_fields,
+            **external_observation_profile({"fetchedAt": value.get("fetchedAt") or ""}, value, "valuation", 4320),
         })
         add_relation(graph, stock_id, assumption_id, "HAS_VALUATION", weight=0.8, properties={"source": group, "polarity": "context", "aiInfluenceLabel": label})
     if number(value.get("revenueTTM")):

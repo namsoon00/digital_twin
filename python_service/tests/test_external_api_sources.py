@@ -15,9 +15,18 @@ from digital_twin.domain.portfolio import AccountSnapshot, AlertEvent, Position
 from digital_twin.domain.portfolio_calculations import portfolio_summary
 from digital_twin.domain.monitoring import RealtimeMonitor
 from digital_twin.infrastructure.external_signals import ExternalSignalProvider
+from digital_twin.infrastructure.external_signal_utils import sanitize_sensitive_text
 
 
 class ExternalApiSourceTests(unittest.TestCase):
+    def test_external_api_error_redacts_key_disclosed_by_provider(self):
+        message = "We have detected your API key as 8YHIHMCZZ3W8L64E and our standard rate limit applies"
+
+        sanitized = sanitize_sensitive_text(message)
+
+        self.assertNotIn("8YHIHMCZZ3W8L64E", sanitized)
+        self.assertIn("API key as ***", sanitized)
+
     def snapshot_with_sources(self) -> AccountSnapshot:
         samsung = Position(
             symbol="005930",

@@ -7,9 +7,10 @@ from dataclasses import replace
 from typing import Dict, List, Optional, Tuple
 
 from ..domain.accounts import AccountConfig
-from ..domain.data_freshness import combine_quality, parse_datetime
+from ..domain.data_freshness import combine_quality, freshness_record, int_setting, parse_datetime
 from ..domain.instrument_profiles import market_signal_symbols
 from ..domain.market_data import known_stock, normalize_position, number, pct_distance, technical_indicators_from_candles
+from ..domain.message_types import INVESTMENT_INSIGHT
 from ..domain.portfolio import AccountSnapshot, Position, utc_now_iso
 from ..domain.portfolio_calculations import (
     apply_position_base_currency_values,
@@ -76,12 +77,39 @@ def market_proxy_quote_context(
                     "quoteStatus",
                     "dataQuality",
                     "updatedAt",
+                    "sourceAsOf",
+                    "sourceFetchedAt",
+                    "indicatorAsOf",
+                    "indicatorFetchedAt",
                     "collectionPurpose",
                     "collectionTarget",
                 ]
                 if payload.get(key) not in (None, "")
             }
     rows.update(crypto_market_proxy_quote_context(symbols, external_signals or {}))
+    for payload in rows.values():
+        source_as_of = payload.get("sourceAsOf") or payload.get("updatedAt") or ""
+        source_fetched_at = payload.get("sourceFetchedAt") or payload.get("updatedAt") or ""
+        freshness = freshness_record(
+            payload.get("quoteSource") or "market-proxy-quote",
+            INVESTMENT_INSIGHT,
+            settings=settings,
+            source_fetched_at=source_fetched_at,
+            source_as_of=source_as_of,
+            data_quality=payload.get("dataQuality") or "",
+            max_age_minutes=int_setting(settings or {}, "dataFreshnessExternalMaxAgeMinutes", 10),
+            require_source_as_of=True,
+        )
+        payload.update({
+            "sourceAsOf": freshness.get("sourceAsOf") or "",
+            "sourceFetchedAt": freshness.get("sourceFetchedAt") or "",
+            "freshnessStatus": freshness.get("status") or "unknown",
+            "freshnessReason": freshness.get("reason") or "",
+            "freshnessAgeMinutes": freshness.get("ageMinutes"),
+            "maxAgeMinutes": freshness.get("maxAgeMinutes"),
+            "sourceTimestampPresent": bool(freshness.get("sourceTimestampPresent")),
+            "judgementEvidenceUsable": str(freshness.get("status") or "") == "fresh",
+        })
     return rows
 
 
@@ -116,6 +144,8 @@ def crypto_market_proxy_quote_context(symbols: List[str], external_signals: Dict
             "quoteStatus": "ok",
             "dataQuality": "actual",
             "updatedAt": payload.get("lastUpdated") or external_signals.get("fetchedAt") or "",
+            "sourceAsOf": payload.get("lastUpdated") or external_signals.get("fetchedAt") or "",
+            "sourceFetchedAt": external_signals.get("fetchedAt") or payload.get("lastUpdated") or "",
             "collectionPurpose": "market-signal",
             "collectionTarget": "market-proxy",
         }

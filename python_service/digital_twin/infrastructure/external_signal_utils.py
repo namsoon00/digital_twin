@@ -77,7 +77,7 @@ def sanitize_sensitive_text(value: object) -> str:
     if not text:
         return ""
     text = re.sub(r"(?i)(apikey=)[^&\s]+", r"\1***", text)
-    text = re.sub(r"(?i)(api[_ -]?key(?: is|:)?\s+)[A-Za-z0-9+/=_-]{8,}", r"\1***", text)
+    text = re.sub(r"(?i)(api[_ -]?key(?:\s+(?:is|as))?\s*[:=]?\s*)[A-Za-z0-9+/=_-]{8,}", r"\1***", text)
     text = re.sub(r"[A-Za-z0-9+/=_-]{48,}", "***", text)
     return text
 

@@ -3,6 +3,7 @@ from typing import Dict, List
 from .materiality import market_change_materiality
 from .market_data import clamp, number
 from .ontology_contracts import PortfolioOntology, entity_id
+from .ontology_observation_quality import profile_for_domain
 from .ontology_schema import add_entity, add_relation
 from .ontology_threshold_policy import ontology_threshold_policy_from_context
 from .portfolio import Position
@@ -204,6 +205,7 @@ def add_trend_transition_concepts(
     position: Position,
     source: str,
     runtime_context: Dict[str, object],
+    observation_profiles: Dict[str, Dict[str, object]] = None,
 ) -> None:
     metadata = runtime_context.get("metadata") if isinstance(runtime_context, dict) else {}
     metadata = metadata if isinstance(metadata, dict) else {}
@@ -214,6 +216,7 @@ def add_trend_transition_concepts(
     points = list(assessment.get("points") or [])
     if not points:
         return
+    trend_observation = profile_for_domain(observation_profiles or {}, "trend")
     phase_classes = {
         "falling_to_rebound": ["TrendTransition", "ReversalSignal"],
         "sideways_to_breakout": ["TrendTransition", "ConsolidationBreak"],
@@ -229,6 +232,7 @@ def add_trend_transition_concepts(
         "points": points,
         "lastPriceDeltaPct": assessment.get("lastPriceDeltaPct"),
         "ma20DistanceDeltaPct": assessment.get("ma20DistanceDeltaPct"),
+        **trend_observation,
     })
     add_relation(graph, stock_id, path_id, "HAS_PRICE_PATH", weight=min(1.0, len(points) / 6.0), properties={
         "source": "monitor-state-history",
@@ -277,6 +281,7 @@ def add_trend_transition_concepts(
         "lastPriceDeltaPct": assessment.get("lastPriceDeltaPct"),
         "ma20DistanceDeltaPct": assessment.get("ma20DistanceDeltaPct"),
         "volumeRatio": assessment.get("volumeRatio"),
+        **trend_observation,
     })
     polarity = str(assessment.get("polarity") or "context")
     props = {

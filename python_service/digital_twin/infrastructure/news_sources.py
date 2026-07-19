@@ -27,7 +27,7 @@ TextFetcher = Callable[[str, Dict[str, str]], str]
 TAG_RE = re.compile(r"<[^>]+>")
 DISABLED_VALUES = {"0", "false", "no", "off", "disabled"}
 ARTICLE_TEXT_LIMIT = 5000
-DEFAULT_NEWS_COLLECTION_PROVIDERS = ["yahoo_finance", "google_rss_kr", "google_rss_us"]
+DEFAULT_NEWS_COLLECTION_PROVIDERS = ["yahoo_search", "yahoo_finance"]
 NEWS_API_GUARD_STATE: Dict[str, object] = {}
 RSS_PROVIDER_NAMES = {
     "google_rss_kr",
@@ -42,6 +42,7 @@ RSS_PROVIDER_NAMES = {
     "yahoo_finance_rss",
     "yahoo_rss",
 }
+DIRECT_BODY_REQUIRED_PROVIDER_NAMES = {"yahoo_search", "yahoo_finance_search"}
 GOOGLE_NEWS_BODY_NOISE = [
     "comprehensive up-to-date news coverage",
     "aggregated from sources all over the world by google news",
@@ -50,6 +51,18 @@ GOOGLE_NEWS_BODY_NOISE = [
 
 class NewsProviderTimeout(TimeoutError):
     pass
+
+
+def provider_empty_status(diagnostics: Dict[str, int]) -> str:
+    if int(diagnostics.get("candidateCount") or 0) <= 0:
+        return "no-candidates"
+    if int(diagnostics.get("bodyBudgetRejectedCount") or 0) > 0:
+        return "article-body-budget-exhausted"
+    if int(diagnostics.get("bodyMissingCount") or 0) > 0:
+        return "article-body-unavailable"
+    if int(diagnostics.get("preliminaryRejectedCount") or 0) > 0 or int(diagnostics.get("finalRelevanceRejectedCount") or 0) > 0:
+        return "relevance-filtered"
+    return "empty"
 
 
 def curl_fetch_bytes(url: str, headers: Dict[str, str] = None, timeout: float = 8.0):
@@ -323,6 +336,24 @@ class NewsSourceGateway:
         self.fetch_text = fetch_text or self.guarded_text_fetcher(timeout)
         self._article_body_fetches_used = 0
         self._article_body_fetches_for_target = 0
+        self._current_provider_diagnostics: Dict[str, int] = {}
+
+    def reset_provider_diagnostics(self) -> None:
+        self._current_provider_diagnostics = {
+            "candidateCount": 0,
+            "preliminaryRejectedCount": 0,
+            "bodyFetchAttemptCount": 0,
+            "bodyMissingCount": 0,
+            "bodyBudgetRejectedCount": 0,
+            "sourceBlockedCount": 0,
+            "finalRelevanceRejectedCount": 0,
+            "acceptedCount": 0,
+        }
+
+    def record_provider_diagnostic(self, key: str) -> None:
+        if key not in self._current_provider_diagnostics:
+            self._current_provider_diagnostics[key] = 0
+        self._current_provider_diagnostics[key] += 1
 
     def guarded_json_fetcher(self, timeout: float) -> JsonFetcher:
         def fetch(url: str, headers: Dict[str, str] = None) -> object:
@@ -422,7 +453,10 @@ class NewsSourceGateway:
         return normalized in RSS_PROVIDER_NAMES
 
     def provider_requires_article_body(self, provider: object) -> bool:
-        return self.provider_is_rss(provider) and self.require_article_body_for_rss()
+        normalized = re.sub(r"[\s-]+", "_", str(provider or "").strip().lower())
+        return (
+            self.provider_is_rss(provider) and self.require_article_body_for_rss()
+        ) or normalized in DIRECT_BODY_REQUIRED_PROVIDER_NAMES
 
     def is_article_body_request(self, headers: Dict[str, str] = None) -> bool:
         accept = str((headers or {}).get("Accept") or "").lower()
@@ -479,16 +513,33 @@ class NewsSourceGateway:
         published: object,
         metadata: Dict[str, object] = None,
     ) -> Optional[ResearchEvidence]:
+        self.record_provider_diagnostic("candidateCount")
         preliminary = classify_news_relevance(target, title, feed_summary or title, source, provider)
-        if number(preliminary.get("relevanceScore")) < self.min_relevance_score() or not news_domain.relation_scope_is_investable(preliminary.get("relationScope")):
+        provider_key = re.sub(r"[\s-]+", "_", str(provider or "").strip().lower())
+        search_target_unconfirmed = (
+            provider_key in DIRECT_BODY_REQUIRED_PROVIDER_NAMES
+            and str(preliminary.get("relationScope") or "") != "direct"
+            and not list(preliminary.get("matchedAliases") or [])
+        )
+        if search_target_unconfirmed or number(preliminary.get("relevanceScore")) < self.min_relevance_score() or not news_domain.relation_scope_is_investable(preliminary.get("relationScope")):
+            self.record_provider_diagnostic("preliminaryRejectedCount")
             return None
         article_source_allowed = article_body_allowed_for_source(source, provider)
+        body_budget_available = self.article_body_budget_available()
+        if article_source_allowed and body_budget_available:
+            self.record_provider_diagnostic("bodyFetchAttemptCount")
+        elif not article_source_allowed:
+            self.record_provider_diagnostic("sourceBlockedCount")
         article_text = self.article_text_for_url(link) if article_source_allowed else ""
         if not article_text and self.provider_requires_article_body(provider):
+            self.record_provider_diagnostic("bodyMissingCount")
+            if article_source_allowed and not body_budget_available:
+                self.record_provider_diagnostic("bodyBudgetRejectedCount")
             return None
         analysis_text = article_text or feed_summary or title
         relevance = classify_news_relevance(target, title, analysis_text, source, provider)
         if number(relevance.get("relevanceScore")) < self.min_relevance_score() or not news_domain.relation_scope_is_investable(relevance.get("relationScope")):
+            self.record_provider_diagnostic("finalRelevanceRejectedCount")
             return None
         polarity, impact = keyword_polarity(title + " " + analysis_text)
         confidence = news_domain.confidence_from_analysis_payload(relevance)
@@ -540,7 +591,7 @@ class NewsSourceGateway:
             "articleFacts": article_facts,
             "articleTextPreview": compact_text(article_text, 700) if article_text else "",
         }
-        return ResearchEvidence(
+        evidence = ResearchEvidence(
             "research:" + symbol + ":news:" + stable_evidence_token(provider, title, link),
             symbol,
             "news",
@@ -555,6 +606,8 @@ class NewsSourceGateway:
             iso_or_empty(published),
             payload,
         )
+        self.record_provider_diagnostic("acceptedCount")
+        return evidence
 
     def collect_for_target(
         self,
@@ -580,6 +633,7 @@ class NewsSourceGateway:
             if remaining <= 0:
                 break
             try:
+                self.reset_provider_diagnostics()
                 with self.provider_deadline(provider):
                     fetched = self.fetch_provider(provider, target)
                 saved = 0
@@ -592,7 +646,15 @@ class NewsSourceGateway:
                     saved += 1
                     if saved >= remaining:
                         break
-                statuses.append({"source": provider, "symbol": target.normalized_symbol(), "ok": True, "count": saved})
+                diagnostics = dict(self._current_provider_diagnostics)
+                statuses.append({
+                    "source": provider,
+                    "symbol": target.normalized_symbol(),
+                    "ok": True,
+                    "count": saved,
+                    **diagnostics,
+                    "status": "ok" if saved else provider_empty_status(diagnostics),
+                })
             except Exception as error:  # noqa: BLE001 - one feed must not stop the collection cycle.
                 statuses.append({"source": provider, "symbol": target.normalized_symbol(), "ok": False, "message": str(error)[:180]})
         ranked = sorted(items, key=self.evidence_rank_key, reverse=True)
@@ -615,6 +677,8 @@ class NewsSourceGateway:
             return self.fetch_google_news_rss(target, locale="US")
         if provider in {"yahoo_finance", "yahoo_finance_rss", "yahoo_rss"}:
             return self.fetch_yahoo_finance_rss(target)
+        if provider in {"yahoo_search", "yahoo_finance_search"}:
+            return self.fetch_yahoo_finance_search(target)
         if provider == "gdelt":
             return self.fetch_gdelt(target)
         return []
@@ -661,6 +725,50 @@ class NewsSourceGateway:
                     "provider": "Yahoo Finance RSS",
                     "query": yahoo_symbol,
                     "feedUrl": url,
+                },
+            )
+            if not item_evidence:
+                continue
+            evidence.append(item_evidence)
+            if len(evidence) >= self.per_symbol_limit():
+                break
+        return evidence
+
+    def fetch_yahoo_finance_search(self, target: NewsCollectionTarget) -> List[ResearchEvidence]:
+        symbol = self.yahoo_finance_symbol(target)
+        query = symbol if not symbol.endswith((".KS", ".KQ")) else target.search_query()
+        params = {
+            "q": query,
+            "quotesCount": "1",
+            "newsCount": str(min(30, max(8, self.per_symbol_limit() * 2))),
+            "enableFuzzyQuery": "false",
+        }
+        url = "https://query1.finance.yahoo.com/v1/finance/search?" + urllib.parse.urlencode(params)
+        payload = self.fetch_json(url, {"Accept": "application/json", "User-Agent": "Mozilla/5.0"})
+        articles = payload.get("news") if isinstance(payload, dict) and isinstance(payload.get("news"), list) else []
+        evidence: List[ResearchEvidence] = []
+        for article in articles:
+            if not isinstance(article, dict):
+                continue
+            title = str(article.get("title") or "").strip()
+            link = str(article.get("link") or "").strip()
+            published_epoch = number(article.get("providerPublishTime"))
+            published = datetime.fromtimestamp(published_epoch, tz=timezone.utc).isoformat().replace("+00:00", "Z") if published_epoch else ""
+            if not title or not link or not within_lookback(published, self.lookback_minutes()):
+                continue
+            source = str(article.get("publisher") or "Yahoo Finance").strip()
+            item_evidence = self.news_evidence_from_article(
+                target,
+                "Yahoo Finance Search",
+                source,
+                title,
+                "",
+                link,
+                published,
+                {
+                    "provider": "Yahoo Finance Search",
+                    "query": query,
+                    "searchUrl": url,
                 },
             )
             if not item_evidence:

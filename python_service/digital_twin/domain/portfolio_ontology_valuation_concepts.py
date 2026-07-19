@@ -4,6 +4,7 @@ from typing import Dict, Iterable, List, Tuple
 from .alert_formatting import compact_number
 from .market_data import number
 from .ontology_contracts import PortfolioOntology
+from .ontology_observation_quality import profile_for_domain
 from .ontology_schema import add_entity, add_relation
 from .portfolio import Position
 from .portfolio_ontology_market_concepts import symbol_key
@@ -386,6 +387,7 @@ def add_valuation_row_concepts(
     stock_id: str,
     position: Position,
     row: Dict[str, object],
+    observation_profiles: Dict[str, Dict[str, object]] = None,
 ) -> None:
     symbol = symbol_key(position)
     row = normalize_assumption_row(row)
@@ -393,6 +395,8 @@ def add_valuation_row_concepts(
     key = str(row.get("assumptionKey") or row.get("symbol") or symbol).strip()
     label = str(row.get("label") or row.get("name") or (position.name or symbol) + " 밸류에이션").strip()
     is_ai_proposal = str(row.get("source") or "").casefold() == "ai-valuation-proposal" or bool(row.get("aiGenerated"))
+    static_observation = profile_for_domain(observation_profiles or {}, "static")
+    quote_observation = profile_for_domain(observation_profiles or {}, "quote")
     is_active = bool(values.get("fairValue")) and str(row.get("activeStatus") or "active").casefold() != "rejected"
     tbox_classes = ["ValuationAssumption", "StrategySignal", "ValuationSignal"]
     if is_ai_proposal:
@@ -410,6 +414,7 @@ def add_valuation_row_concepts(
         "autoApplied": bool(row.get("autoApplied")),
         "reviewStatus": str(row.get("reviewStatus") or row.get("approvalStatus") or ""),
         "userReviewNote": str(row.get("userReviewNote") or ""),
+        **static_observation,
         **values,
     }
     model_label = str(row.get("valuationMethod") or values.get("valuationMethod") or "valuation-context")
@@ -507,6 +512,7 @@ def add_valuation_row_concepts(
             "tboxClass": "MarginOfSafety",
             "tboxClasses": ["ValuationAssumption", "MarginOfSafety", "ValuationSignal"],
             **base_props,
+            **quote_observation,
         })
         margin_props = {
             **props,
@@ -555,6 +561,7 @@ def add_position_valuation_concepts(
     position: Position,
     external_signals: Dict[str, object],
     runtime_context: Dict[str, object],
+    observation_profiles: Dict[str, Dict[str, object]] = None,
 ) -> None:
     symbol = symbol_key(position)
     rows = position_runtime_valuation_rows(runtime_context or {}, symbol)
@@ -611,4 +618,4 @@ def add_position_valuation_concepts(
         "valuationConsensusStatus": consensus_status,
     })
     for row in unique_rows:
-        add_valuation_row_concepts(graph, stock_id, position, row)
+        add_valuation_row_concepts(graph, stock_id, position, row, observation_profiles)

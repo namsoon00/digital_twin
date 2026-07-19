@@ -17,7 +17,7 @@ from digital_twin.domain.notification_ai_gate_validation import (
     build_notification_ai_gate_prompt,
     validated_response_from_payload,
 )
-from digital_twin.domain.ontology_contracts import PortfolioOntology
+from digital_twin.domain.ontology_contracts import PortfolioOntology, entity_id
 from digital_twin.domain.ontology_tbox import CLASS_DEFS, RELATION_DEFS
 from digital_twin.domain.portfolio_ontology_cognitive_concepts import add_investment_brain_concepts
 from digital_twin.domain.portfolio_ontology_research_concepts import add_governed_claim_concepts
@@ -670,6 +670,50 @@ class InvestmentBrainTest(unittest.TestCase):
         episode.outcomes.append(type("Outcome", (), {"payload": {"horizonMinutes": 60}})())
         self.assertEqual(0, due_outcome_horizon_minutes(episode, "2026-07-19T02:00:00Z", "60,1440"))
         self.assertEqual(1440, due_outcome_horizon_minutes(episode, "2026-07-20T01:00:00Z", "60,1440"))
+
+    def test_hypothesis_calibration_uses_independent_episode_outcomes(self):
+        brain = hypothesis_set_from_relation_context(relation_context())
+        hypothesis_set = brain["hypothesisSet"]
+        selected = hypothesis_set["hypotheses"][0]
+        episodes = []
+        statuses = ["directionally-corroborated", "directionally-corroborated", "directionally-contradicted"]
+        for index, status in enumerate(statuses):
+            episodes.append({
+                "episodeId": "episode-" + str(index),
+                "symbol": "005930",
+                "subjectName": "삼성전자",
+                "selectedHypothesisId": selected["hypothesisId"],
+                "hypothesisSet": hypothesis_set,
+                "outcomes": [{
+                    "outcomeId": "outcome-" + str(index),
+                    "observedAt": "2026-07-2" + str(index) + "T01:00:00Z",
+                    "selectedHypothesisStatus": status,
+                }],
+            })
+        episodes.append({
+            **episodes[0],
+            "outcomes": [{
+                "outcomeId": "outcome-duplicate",
+                "observedAt": "2026-07-29T01:00:00Z",
+                "selectedHypothesisStatus": "directionally-corroborated",
+            }],
+        })
+
+        graph = PortfolioOntology("account-1")
+        add_investment_brain_concepts(graph, "account-1", episodes)
+
+        calibration = next(item for item in graph.entities if item.kind == "hypothesis-calibration")
+        self.assertEqual(3, calibration.properties["independentEpisodeCount"])
+        self.assertEqual(2, calibration.properties["corroboratedCount"])
+        self.assertEqual(1, calibration.properties["contradictedCount"])
+        self.assertEqual("usable", calibration.properties["calibrationStatus"])
+        self.assertFalse(calibration.properties["automaticDeployment"])
+        template_id = calibration.properties["templateId"]
+        self.assertEqual(len(episodes), len([
+            item for item in graph.entities
+            if item.entity_id == entity_id("hypothesis-template", template_id)
+        ]))
+        self.assertIn("CALIBRATED_BY_OUTCOME", {item.relation_type for item in graph.relations})
 
 
 if __name__ == "__main__":

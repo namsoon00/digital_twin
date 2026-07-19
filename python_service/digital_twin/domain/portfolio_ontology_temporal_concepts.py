@@ -5,6 +5,7 @@ from typing import Dict, Iterable, List, Optional
 from .investment_research import research_evidence_from_external_signals
 from .market_data import number
 from .ontology_contracts import PortfolioOntology
+from .ontology_observation_quality import profile_for_domain
 from .ontology_schema import add_entity, add_relation
 from .portfolio import Position
 
@@ -298,6 +299,7 @@ def add_temporal_coverage_gap(
     symbol: str,
     definition: TemporalWindowDefinition,
     sample_count: int,
+    observation_profile: Dict[str, object] = None,
 ) -> None:
     gap_id = add_entity(graph, "temporal-coverage-gap", symbol + ":temporal:" + definition.key, definition.key + " 기간 히스토리 부족", {
         "tboxClass": "TemporalCoverageGap",
@@ -312,6 +314,7 @@ def add_temporal_coverage_gap(
         "riskImpact": 4.0,
         "description": definition.key + " 기간 판단에 필요한 스냅샷 히스토리가 부족합니다.",
         "source": "temporal-window-ontology",
+        **dict(observation_profile or {}),
     })
     add_relation(graph, stock_id, gap_id, "HAS_COVERAGE_GAP", weight=0.62, properties={
         "source": "temporal-window-ontology",
@@ -330,6 +333,7 @@ def add_position_temporal_concepts(
     position: Position,
     external_signals: Dict[str, object] = None,
     runtime_context: Dict[str, object] = None,
+    observation_profiles: Dict[str, Dict[str, object]] = None,
 ) -> None:
     runtime_context = runtime_context if isinstance(runtime_context, dict) else {}
     settings = runtime_context.get("settings") if isinstance(runtime_context.get("settings"), dict) else runtime_context
@@ -339,6 +343,8 @@ def add_position_temporal_concepts(
     current_time = parse_timestamp(runtime_context.get("asOf") or (rows[-1].get("generatedAt") if rows else ""))
     if rows and isinstance(external_signals, dict):
         rows[-1] = {**rows[-1], "externalSignals": external_signals}
+    trend_observation = profile_for_domain(observation_profiles or {}, "trend")
+    flow_observation = profile_for_domain(observation_profiles or {}, "flow")
 
     for definition in definitions:
         selected = window_rows(rows, definition, current_time)
@@ -362,6 +368,7 @@ def add_position_temporal_concepts(
             "field": "temporalWindow",
             "value": values.get("temporalRiskScore") or values.get("temporalSupportScore") or 0,
             **values,
+            **trend_observation,
         })
         add_relation(graph, stock_id, window_id, "HAS_TEMPORAL_WINDOW", weight=relation_weight(max(values.get("temporalRiskScore", 0), values.get("temporalSupportScore", 0), 35)), properties={
             "source": "monitor-snapshot-history",
@@ -377,6 +384,7 @@ def add_position_temporal_concepts(
             "field": "pricePathPattern",
             "value": values.get("temporalRiskScore") or values.get("temporalSupportScore") or 0,
             **values,
+            **trend_observation,
         })
         add_relation(graph, window_id, path_id, "HAS_PRICE_PATH_PATTERN", weight=relation_weight(max(values.get("temporalRiskScore", 0), values.get("temporalSupportScore", 0), 45)), properties={
             "source": "monitor-snapshot-history",
@@ -391,6 +399,7 @@ def add_position_temporal_concepts(
             "field": "flowPattern",
             "value": values.get("temporalRiskScore") or values.get("temporalSupportScore") or 0,
             **values,
+            **flow_observation,
         })
         add_relation(graph, window_id, flow_id, "HAS_FLOW_PATTERN", weight=0.64, properties={
             "source": "monitor-snapshot-history",
@@ -422,6 +431,7 @@ def add_position_temporal_concepts(
                 "value": values.get("temporalRiskScore") or values.get("temporalSupportScore") or 0,
                 "trendEpisodeType": episode,
                 **values,
+                **trend_observation,
             })
             add_relation(graph, stock_id, episode_id, "DERIVES_TREND_EPISODE", weight=relation_weight(max(values.get("temporalRiskScore", 0), values.get("temporalSupportScore", 0), 50)), properties={
                 "source": "monitor-snapshot-history",
@@ -432,4 +442,11 @@ def add_position_temporal_concepts(
             })
 
         if not values.get("hasSufficientHistory"):
-            add_temporal_coverage_gap(graph, stock_id, symbol, definition, int(values.get("sampleCount") or 0))
+            add_temporal_coverage_gap(
+                graph,
+                stock_id,
+                symbol,
+                definition,
+                int(values.get("sampleCount") or 0),
+                trend_observation,
+            )

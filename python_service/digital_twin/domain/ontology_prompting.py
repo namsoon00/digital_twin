@@ -268,6 +268,7 @@ def build_ai_inference_packet(graph: PortfolioOntology) -> Dict[str, object]:
     competing_hypothesis_count = len([item for item in graph.entities if item.kind == "competing-hypothesis"])
     decision_episode_count = len([item for item in graph.entities if item.kind == "decision-episode"])
     observed_outcome_count = len([item for item in graph.entities if item.kind == "observed-outcome"])
+    hypothesis_calibration_count = len([item for item in graph.entities if item.kind == "hypothesis-calibration"])
     rulebox_entity_count = len([item for item in graph.entities if ontology_box(item.properties) == "RuleBox"])
     inferencebox_entity_count = len([item for item in graph.entities if ontology_box(item.properties) == "InferenceBox"])
     inferencebox_relation_count = len([item for item in graph.relations if ontology_box(item.properties) == "InferenceBox"])
@@ -306,6 +307,7 @@ def build_ai_inference_packet(graph: PortfolioOntology) -> Dict[str, object]:
             "competingHypothesisCount": competing_hypothesis_count,
             "decisionEpisodeCount": decision_episode_count,
             "observedOutcomeCount": observed_outcome_count,
+            "hypothesisCalibrationCount": hypothesis_calibration_count,
         },
         "outputSchema": {
             "portfolioView": "string",
@@ -334,6 +336,7 @@ def build_ai_inference_packet(graph: PortfolioOntology) -> Dict[str, object]:
             "macroRegimes와 cryptoExposures는 종목 가격 신호의 상위 환경으로만 사용하고 단독 매수·매도 결론으로 쓰지 않습니다.",
             "marketProxyContext는 위험선호, 금리, 크레딧, IPO, 변동성, 달러, 원자재, 섹터 사이클의 배경 맥락이며 단독 매수·매도 결론으로 쓰지 않습니다.",
             "최소 세 개의 경쟁 가설을 지지·반대 근거로 비교하고, 과거 DecisionEpisode와 ObservedOutcome에서 반복 반증된 가설을 그대로 재사용하지 않습니다.",
+            "hypothesis-calibration은 서로 다른 판단 에피소드의 사후 결과 표본입니다. 표본이 3개 미만이면 점수를 조정하지 않고, 그 이상이어도 제안된 보정치를 설명에만 반영하며 규칙을 자동 변경하지 않습니다.",
         ],
     }
 
@@ -503,7 +506,7 @@ def prompt_payload(graph: PortfolioOntology) -> Dict[str, object]:
         "derivedRelations": list(inferencebox.get("derivedRelations") or []),
         "inferenceTraces": list(inferencebox.get("traces") or []),
         "investmentQuestions": compact_entities_by_kind(graph, ["investment-question", "self-question"], 80),
-        "hypothesisSets": compact_entities_by_kind(graph, ["hypothesis-set", "competing-hypothesis", "assumption"], 140),
+        "hypothesisSets": compact_entities_by_kind(graph, ["hypothesis-set", "competing-hypothesis", "assumption", "hypothesis-calibration"], 160),
         "decisionEpisodes": compact_entities_by_kind(graph, ["decision-episode"], 80),
         "observedOutcomes": compact_entities_by_kind(graph, ["observed-outcome"], 120),
         "worldview": graph.worldview,
@@ -564,7 +567,7 @@ def build_investment_opinion_prompt(graph: PortfolioOntology) -> str:
         "규칙 구조는 투자 핵심, 관측 데이터, 전략 가설, 리스크, 추론 인사이트, 운영/알림 바운디드 컨텍스트와 RuleBox로 나뉜 세계관이다.",
         "현재 데이터는 계좌의 실제 보유, 근거, 판단 근거, 운영 정책, 의견 기록이며 InferenceBox는 RuleBox가 파생한 관계와 추론 경로다.",
         "하나의 최고 점수를 답으로 쓰지 말고 위험 지속, 회복·지지, 데이터 불확실성 가설을 동시에 비교한 뒤 가장 설명력이 높은 잠정 가설을 선택해라.",
-        "과거 DecisionEpisode와 ObservedOutcome을 읽어 반복 반증된 가정과 규칙을 경고하고, 답하지 못한 질문은 다음 수집 과제로 남겨라.",
+        "과거 DecisionEpisode, ObservedOutcome, hypothesis-calibration을 읽어 반복 반증된 가정과 규칙을 경고하되 표본 3건 미만의 보정값은 사용하지 말고, 답하지 못한 질문은 다음 수집 과제로 남겨라.",
         "제공된 근거 안에서 BUY, ADD, HOLD, TRIM, SELL, AVOID 중 하나의 투자 의견을 반드시 고르되 자동 주문 지시로 표현하지 마라.",
         "최종 판단과 점수는 관계 규칙과 근거 충돌을 기준으로 설명해라.",
         "뉴스, 공시, SEC/OpenDART 근거와 출처 URL을 적극적으로 반영하고, 반대 근거와 무효화 조건을 함께 제시해라.",

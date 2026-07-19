@@ -5,7 +5,7 @@ from .market_data import number
 from .ontology_contracts import PortfolioOntology, entity_id
 from .ontology_schema import add_entity, add_relation
 from .portfolio import Position
-from .ontology_observation_quality import position_observation_profiles
+from .ontology_observation_quality import position_observation_profiles, static_observation_profile
 from .portfolio_ontology_catalog import (
     INSIGHT_TYPES,
     OPERATIONAL_PIPELINES,
@@ -78,6 +78,7 @@ def valuation_assumption_rows(value: object) -> List[Dict[str, object]]:
     return rows
 
 def add_valuation_assumption_concepts(graph: PortfolioOntology, portfolio_node_id: str, value: object) -> None:
+    static_observation = static_observation_profile({}, "")
     for row in valuation_assumption_rows(value):
         key = str(row.get("assumptionKey") or row.get("symbol") or row.get("name") or "portfolio").strip()
         if not key:
@@ -93,6 +94,7 @@ def add_valuation_assumption_concepts(graph: PortfolioOntology, portfolio_node_i
             "rawLine": row.get("rawLine"),
             "values": row.get("values") if isinstance(row.get("values"), list) else [],
             "payload": {k: v for k, v in row.items() if k not in {"assumptionKey", "symbol", "label", "name"}},
+            **static_observation,
         })
         add_relation(graph, portfolio_node_id, assumption_id, "HAS_VALUATION", weight=1.0, properties={"source": "runtime-settings", "aiInfluenceLabel": label})
 

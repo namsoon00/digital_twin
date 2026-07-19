@@ -918,6 +918,9 @@ class PythonServiceTests(unittest.TestCase):
         self.assertEqual(-1.0, quotes["BTC"]["changeRate"])
         self.assertEqual("CoinGecko coins/markets", quotes["BTC"]["quoteSource"])
         self.assertEqual("market-proxy", quotes["ETH"]["collectionTarget"])
+        self.assertIn(quotes["SPY"]["freshnessStatus"], {"fresh", "stale", "unknown"})
+        self.assertIn(quotes["BTC"]["freshnessStatus"], {"fresh", "stale", "unknown"})
+        self.assertTrue(quotes["SPY"]["sourceTimestampPresent"])
 
     def test_kis_market_signal_provider_enriches_kr_positions(self):
         db_path = test_store_seed(self.temp.name)
@@ -5627,6 +5630,41 @@ class PythonServiceTests(unittest.TestCase):
         self.assertIn("실패 단계 TypeDB 투영 저장", line_text)
         self.assertIn("projectionReason=TypeQL syntax error", line_text)
 
+    def test_events_do_not_report_expected_reasoning_worker_defer_as_failure(self):
+        position = normalize_position({
+            "symbol": "005930",
+            "name": "삼성전자",
+            "market": "KR",
+            "currency": "KRW",
+            "marketValue": 700000,
+            "quantity": 10,
+            "currentPrice": 70000,
+        })
+        portfolio = portfolio_summary([position])
+        metadata = {
+            "ontology": {
+                "typedb": {
+                    "saved": False,
+                    "status": "deferred-to-reasoning-worker",
+                    "graphStore": "typedb",
+                    "reason": "전용 온톨로지 추론 워커 처리 대기",
+                },
+            },
+        }
+        previous = AccountSnapshot(
+            "main", "메인", "toss", "live", "ok", utc_now_iso(),
+            portfolio, [position], decisions_for_positions([position], portfolio), metadata=deepcopy(metadata),
+        )
+        current = AccountSnapshot(
+            "main", "메인", "toss", "live", "ok", utc_now_iso(),
+            portfolio, [position], decisions_for_positions([position], portfolio), metadata=deepcopy(metadata),
+        )
+
+        events = RealtimeMonitor().events_for_snapshot(current, previous.to_monitor_state())
+
+        self.assertFalse(any(event.rule == "ontologyInferenceMissing" for event in events))
+        self.assertTrue(current.metadata["ontology"]["inferenceMissingState"]["pending"])
+
     def test_events_explain_typedb_inferencebox_read_error_when_repeated(self):
         position = normalize_position({
             "symbol": "005930",
@@ -7533,11 +7571,11 @@ class PythonServiceTests(unittest.TestCase):
         self.assertEqual(first[0].evidence_id, second[1].evidence_id)
         self.assertNotIn(":news:0", first[0].evidence_id)
 
-    def test_news_source_gateway_defaults_include_google_rss_fallbacks(self):
+    def test_news_source_gateway_defaults_require_direct_article_sources(self):
         gateway = NewsSourceGateway({})
 
         self.assertEqual(
-            ["yahoo_finance", "google_rss_kr", "google_rss_us"],
+            ["yahoo_search", "yahoo_finance"],
             gateway.providers(),
         )
 
@@ -7681,6 +7719,9 @@ class PythonServiceTests(unittest.TestCase):
         self.assertEqual("body", items[0].raw_payload["articleReadStatus"])
         self.assertTrue(items[0].raw_payload["articleFacts"]["bodyAvailable"])
         self.assertEqual({"google_rss_us": 0, "yahoo_finance": 1}, {item["source"]: item["count"] for item in statuses})
+        self.assertEqual("article-body-unavailable", statuses[0]["status"])
+        self.assertEqual(1, statuses[0]["bodyMissingCount"])
+        self.assertEqual(1, statuses[1]["acceptedCount"])
 
     def test_news_source_gateway_skips_gdelt_when_primary_provider_fills_limit(self):
         published = datetime.now(timezone.utc).strftime("%a, %d %b %Y %H:%M:%S GMT")
@@ -7945,6 +7986,39 @@ class PythonServiceTests(unittest.TestCase):
         self.assertIn("s=005930.KS", calls[0])
         self.assertEqual("Yahoo Finance RSS", evidence[0].raw_payload["provider"])
         self.assertEqual("body", evidence[0].raw_payload["articleReadStatus"])
+
+    def test_yahoo_finance_search_collects_direct_full_text_article(self):
+        published = int(datetime.now(timezone.utc).timestamp())
+
+        def fake_json(_url, headers=None):
+            return {"news": [{
+                "title": "Strategy reports new capital plan for MSTR",
+                "link": "https://finance.yahoo.com/news/strategy-capital-plan",
+                "publisher": "Reuters",
+                "providerPublishTime": published,
+            }]}
+
+        def fake_text(_url, headers=None):
+            return (
+                "<html><body><article>"
+                "<p>Strategy announced a new capital plan and disclosed how proceeds may affect its bitcoin holdings.</p>"
+                "<p>The company said investors should review dilution and financing costs before the next filing.</p>"
+                "</article></body></html>"
+            )
+
+        gateway = NewsSourceGateway({
+            "newsCollectionLookbackMinutes": "1440",
+            "newsCollectionMinRelevanceScore": "35",
+        }, fetch_json=fake_json, fetch_text=fake_text)
+
+        evidence = gateway.fetch_yahoo_finance_search(
+            NewsCollectionTarget("MSTR", "Strategy", "NASDAQ", "USD", "Bitcoin"),
+        )
+
+        self.assertEqual(1, len(evidence))
+        self.assertEqual("Yahoo Finance Search", evidence[0].raw_payload["provider"])
+        self.assertEqual("body", evidence[0].raw_payload["articleReadStatus"])
+        self.assertTrue(evidence[0].raw_payload["articleFacts"]["bodyAvailable"])
 
     def test_news_collection_runner_deletes_existing_feed_only_rss_evidence(self):
         path = test_store_seed(self.temp.name)

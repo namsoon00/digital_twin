@@ -3898,6 +3898,7 @@
       telegramBotToken: settingValue("telegramBotToken"),
       telegramChatId: settingValue("telegramChatId"),
       notifyLinkUrl: settingValue("notifyLinkUrl"),
+      operatorReasoningReportEnabled: settingValue("operatorReasoningReportEnabled"),
       symbolUniverseMaxAgeHours: settingValue("symbolUniverseMaxAgeHours"),
       marketDataMaxAgeMinutes: settingValue("marketDataMaxAgeMinutes"),
       dataFreshnessEnabled: settingValue("dataFreshnessEnabled"),
@@ -20689,6 +20690,10 @@
       '<div class="settings-grid">',
       renderSettingField("notifyProvider", "알림 제공자", "text", "telegram"),
       renderSettingField("notifyLinkUrl", "알림 링크 URL", "url", "http://127.0.0.1:3000?tab=notifications"),
+      renderSettingSelect("operatorReasoningReportEnabled", "운영자 추론 보고서", [
+        { value: "0", label: "끄기" },
+        { value: "1", label: "사용" }
+      ]),
       renderSettingField("telegramBotToken", "Telegram Bot Token", secretType, "bot token", { preserveConfigured: true }),
       renderSettingField("telegramChatId", "Telegram Chat ID", "text", "chat id", { preserveConfigured: true }),
       '</div>',
@@ -23759,6 +23764,10 @@
       '<div class="settings-body">',
       renderSettingsGroup("텔레그램 전달 채널", "사용자에게 나가는 링크와 채널 자격 정보를 관리합니다.", [
         renderSettingField("notifyProvider", "알림 제공자", "text", "telegram"),
+        renderSettingSelect("operatorReasoningReportEnabled", "운영자 추론 보고서", [
+          { value: "0", label: "끄기" },
+          { value: "1", label: "사용" }
+        ]),
         renderSettingField("telegramBotToken", "Telegram Bot Token", secretType, "bot token", { preserveConfigured: true }),
         renderSettingField("telegramChatId", "Telegram Chat ID", "text", "chat id", { preserveConfigured: true }),
         renderSettingField("notifyLinkUrl", "알림 링크 URL", "url", "http://127.0.0.1:3000?tab=notifications")

@@ -24835,3 +24835,168 @@ html[data-theme="dark"] .ontology-graph-expanded-toolbar .icon-button.danger {
     grid-template-columns: minmax(0, 1fr);
   }
 }
+
+/* Notification operations desktop fit pass: keep the ops tab from stretching into broken wide-screen gaps. */
+:root {
+  --notification-ops-workspace-width: 1760px;
+}
+
+@media (min-width: 1181px) {
+  .notifications-view .notification-command-center,
+  .notifications-view .notification-decision-panel {
+    width: min(100%, var(--notification-ops-workspace-width));
+    justify-self: center;
+  }
+
+  .notifications-view .notification-command-center {
+    grid-template-columns: minmax(260px, 0.24fr) minmax(0, 1fr);
+    gap: 16px 22px;
+    align-items: start;
+    padding: 20px 24px;
+  }
+
+  .notifications-view .notification-command-head {
+    grid-column: 1;
+    grid-template-columns: minmax(0, 1fr);
+    align-content: start;
+    gap: 10px;
+    min-height: 0;
+  }
+
+  .notifications-view .notification-command-head .tone-chip {
+    justify-self: start;
+  }
+
+  .notifications-view .notification-command-center .notification-section-bar {
+    grid-column: 2;
+    grid-template-columns: minmax(0, max-content) max-content;
+    justify-self: end;
+    width: fit-content;
+    max-width: 100%;
+    gap: 12px;
+  }
+
+  .notifications-view .notification-command-center .notification-section-tabs {
+    justify-self: start;
+  }
+
+  .notifications-view .notification-command-center .notification-section-actions {
+    justify-self: end;
+    flex-wrap: nowrap;
+  }
+
+  .notifications-view .notification-command-center .notification-section-actions .text-button,
+  .notifications-view .notification-command-center .notification-section-actions .primary-button,
+  .notifications-view .notification-command-center .notification-section-actions .secondary-button {
+    white-space: nowrap;
+  }
+
+  .notifications-view .notification-command-center .notification-ops-rail {
+    grid-column: 1 / -1;
+    grid-template-columns: repeat(7, minmax(126px, 1fr));
+  }
+
+  .notifications-view .notification-command-center .notification-ops-cell {
+    min-height: 76px;
+    padding: 14px 16px;
+  }
+
+  .notifications-view .notification-decision-panel .panel-head,
+  .notifications-view .notification-decision-diagnostics,
+  .notifications-view .notification-decision-body {
+    box-sizing: border-box;
+    width: min(100%, var(--notification-ops-workspace-width));
+    margin-right: auto;
+    margin-left: auto;
+  }
+
+  .notifications-view .notification-decision-panel .panel-head {
+    display: grid;
+    grid-template-columns: minmax(260px, max-content) minmax(0, 1fr);
+    gap: 16px;
+    align-items: center;
+    min-height: 0;
+    padding: 20px 24px 16px;
+  }
+
+  .notifications-view .notification-decision-diagnostics {
+    padding: 0 24px 14px;
+  }
+
+  .notifications-view .notification-decision-diagnostics:not(:empty) {
+    border-bottom: 1px solid var(--ds-card-border);
+  }
+
+  .notifications-view .notification-decision-body.has-detail {
+    padding: 18px 24px 24px;
+  }
+
+  .notifications-view .notification-decision-master {
+    gap: 14px;
+  }
+
+  .notifications-view .notification-search-panel {
+    grid-template-columns: minmax(420px, 1fr) repeat(2, minmax(180px, 220px)) max-content;
+    gap: 14px;
+    align-items: end;
+    padding: 16px;
+    border: 1px solid var(--ds-card-border);
+    border-radius: var(--ds-radius-panel);
+    background: color-mix(in srgb, var(--ds-card-row-bg) 74%, var(--panel));
+  }
+
+  .notifications-view .notification-search-actions {
+    flex-wrap: nowrap;
+    justify-content: flex-end;
+  }
+
+  .notifications-view .notification-decision-status {
+    min-height: 48px;
+    padding: 10px 14px;
+    border: 1px solid var(--ds-card-border);
+    border-radius: var(--ds-radius-control);
+    background: color-mix(in srgb, var(--ds-surface-muted) 82%, var(--panel));
+  }
+
+  .notifications-view .notification-decision-status em {
+    margin-left: auto;
+    white-space: nowrap;
+  }
+
+  .notifications-view .notification-workbench {
+    grid-template-columns: minmax(460px, 0.82fr) minmax(560px, 1.18fr);
+    gap: 16px;
+    align-items: start;
+  }
+
+  .notifications-view .notification-list-pane,
+  .notifications-view .notification-detail-pane {
+    min-width: 0;
+  }
+
+  .notifications-view .notification-detail-metrics {
+    grid-template-columns: repeat(auto-fit, minmax(148px, 1fr));
+  }
+}
+
+@media (max-width: 1380px) and (min-width: 1181px) {
+  .notifications-view .notification-command-center {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .notifications-view .notification-command-head,
+  .notifications-view .notification-command-center .notification-section-bar,
+  .notifications-view .notification-command-center .notification-ops-rail {
+    grid-column: 1;
+  }
+
+  .notifications-view .notification-command-center .notification-section-bar {
+    justify-self: stretch;
+    width: 100%;
+    grid-template-columns: minmax(0, 1fr) max-content;
+  }
+
+  .notifications-view .notification-workbench {
+    grid-template-columns: minmax(420px, 0.9fr) minmax(480px, 1.1fr);
+  }
+}

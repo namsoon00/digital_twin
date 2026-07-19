@@ -239,10 +239,14 @@ function checkWorkflowConsoleContract() {
   });
   assertOk(/\.console-shell \.app-nav\s*\{[\s\S]*position: relative !important;/.test(styles), "PC 상단 네비게이션이 고정되지 않는 구조가 아닙니다.");
   assertOk(/\.console-shell > \.topbar,[\s\S]*\.workspace-layout > \.tab-bar\s*\{[\s\S]*display: none !important;/.test(styles), "중복 상단 영역이 제거되지 않았습니다.");
-  assertOk(/\.work-detail-backdrop\s*\{[\s\S]*overflow-y: auto;/.test(styles) && /\.work-detail-layer\s*\{[\s\S]*width: 100%;[\s\S]*min-height: 100dvh;[\s\S]*overflow: visible;/.test(styles), "상세가 우측 패널이 아닌 전체화면 페이지로 열리지 않습니다.");
+  assertOk(code.indexOf("function workDetailPresentation") >= 0 && code.indexOf('work-detail-layer work-detail-layer-') >= 0 && code.indexOf("data-work-detail-size") >= 0, "상세 유형별 중앙 레이어 크기 계약이 없습니다.");
+  assertOk(styles.indexOf("Centered detail layer system") >= 0 && /\.work-detail-backdrop\s*\{[\s\S]*padding: 32px[\s\S]*overflow-y: auto[\s\S]*background: rgba\(15, 23, 42, 0\.52\)/.test(styles), "PC 상세 백드롭이 화면 맥락을 남기는 중앙 레이어 구조가 아닙니다.");
+  assertOk(/\.work-detail-layer\s*\{[\s\S]*width: min\(92vw, 1180px\)[\s\S]*min-height: 0[\s\S]*margin: 0 auto[\s\S]*overflow: visible/.test(styles), "PC 상세 레이어가 중앙 정렬 또는 외부 스크롤 구조가 아닙니다.");
+  assertOk(styles.indexOf(".work-detail-layer.work-detail-layer-medium") >= 0 && styles.indexOf(".work-detail-layer.work-detail-layer-wide") >= 0, "일반 상세와 그래프 상세의 폭이 분리되지 않았습니다.");
   assertOk(/\.work-detail-body\s*\{[\s\S]*overflow: visible;/.test(styles), "상세 본문에 중첩 스크롤이 남아 있습니다.");
+  assertOk(styles.indexOf("Centered overlay alignment for legacy detail and editor dialogs") >= 0 && code.indexOf("activeOverlayDialog") >= 0 && code.indexOf("syncOverlayPageState") >= 0 && styles.indexOf("html.oa-overlay-open") >= 0, "기존 상세·편집 팝업이 공통 중앙 레이어와 키보드·스크롤 계약을 따르지 않습니다.");
   assertOk(styles.indexOf("Workflow console continuity and detail navigation pass") >= 0 && styles.indexOf(".oa-detail-queue") >= 0, "전체 목록 상세와 포커스 스타일이 없습니다.");
-  assertOk(indexHtml.indexOf("styles.css?v=20260720-ontology-topology-v8") >= 0 && indexHtml.indexOf("app.js?v=20260720-ontology-topology-v8") >= 0, "새 콘솔 정적 자산 cache key가 반영되지 않았습니다.");
+  assertOk(indexHtml.indexOf("styles.css?v=20260720-centered-detail-v9") >= 0 && indexHtml.indexOf("app.js?v=20260720-centered-detail-v9") >= 0, "중앙 상세 레이어 정적 자산 cache key가 반영되지 않았습니다.");
 }
 
 function checkFrontendAdminRender() {

@@ -27935,57 +27935,82 @@ html[data-theme="dark"] .ontology-graph-expanded-toolbar .icon-button.danger {
   grid-row: 2 !important;
 }
 
+/* Centered detail layer system. */
+html.oa-overlay-open,
+body.oa-overlay-open {
+  overflow: hidden;
+}
+
 .work-detail-backdrop {
   display: block !important;
-  padding: 0 !important;
+  padding: 32px max(32px, env(safe-area-inset-right)) 48px max(32px, env(safe-area-inset-left)) !important;
   overflow-x: hidden !important;
   overflow-y: auto !important;
-  background: var(--bg) !important;
-  -webkit-backdrop-filter: none !important;
-  backdrop-filter: none !important;
+  background: rgba(15, 23, 42, 0.52) !important;
+  -webkit-backdrop-filter: blur(7px) !important;
+  backdrop-filter: blur(7px) !important;
+  overscroll-behavior-y: contain;
 }
 
 .work-detail-layer {
   display: grid !important;
   grid-template-rows: auto auto auto !important;
   align-content: start !important;
-  width: 100% !important;
-  max-width: none !important;
-  min-height: 100dvh !important;
+  width: min(92vw, 1180px) !important;
+  max-width: 1180px !important;
+  min-height: 0 !important;
   height: auto !important;
   max-height: none !important;
-  margin: 0 !important;
-  border: 0 !important;
-  border-radius: 0 !important;
-  background: var(--bg) !important;
-  box-shadow: none !important;
+  margin: 0 auto !important;
+  border: 1px solid color-mix(in srgb, var(--ds-card-border) 92%, transparent) !important;
+  border-radius: 8px !important;
+  background: var(--panel) !important;
+  box-shadow: 0 28px 90px rgba(15, 23, 42, 0.28) !important;
   overflow: visible !important;
+}
+
+.work-detail-layer.work-detail-layer-medium {
+  width: min(92vw, 960px) !important;
+  max-width: 960px !important;
+}
+
+.work-detail-layer.work-detail-layer-large {
+  width: min(92vw, 1180px) !important;
+  max-width: 1180px !important;
+}
+
+.work-detail-layer.work-detail-layer-wide {
+  width: min(92vw, 1320px) !important;
+  max-width: 1320px !important;
 }
 
 .work-detail-layer > .work-detail-head,
 .work-detail-layer > .work-detail-body,
 .work-detail-layer > .work-detail-footer {
-  width: min(1540px, calc(100vw - (var(--oa-page-gutter) * 2))) !important;
-  margin-right: auto !important;
-  margin-left: auto !important;
+  width: 100% !important;
+  margin: 0 !important;
 }
 
 .work-detail-layer > .work-detail-head {
-  min-height: 86px !important;
-  padding: 20px 0 16px !important;
-  background: transparent !important;
+  min-height: 82px !important;
+  padding: 20px 24px 18px !important;
+  border-bottom: 1px solid var(--line) !important;
+  background: color-mix(in srgb, var(--panel) 96%, var(--panel-soft) 4%) !important;
+  border-radius: 8px 8px 0 0;
 }
 
 .work-detail-layer > .work-detail-body {
   height: auto !important;
   max-height: none !important;
   overflow: visible !important;
-  padding: 22px 0 54px !important;
+  padding: 24px !important;
 }
 
 .work-detail-layer > .work-detail-footer {
-  padding: 16px 0 28px !important;
-  background: transparent !important;
+  padding: 16px 24px 20px !important;
+  border-top: 1px solid var(--line) !important;
+  background: color-mix(in srgb, var(--panel) 96%, var(--panel-soft) 4%) !important;
+  border-radius: 0 0 8px 8px;
 }
 
 /* Workflow console continuity and detail navigation pass. */
@@ -28023,5 +28048,146 @@ html[data-theme="dark"] .ontology-graph-expanded-toolbar .icon-button.danger {
   .oa-surface-actions {
     grid-column: 1 / -1;
     justify-content: flex-start;
+  }
+}
+
+/* Centered overlay alignment for legacy detail and editor dialogs. */
+.notification-policy-modal-backdrop,
+.notification-template-modal-backdrop,
+.monitoring-detail-backdrop,
+.calendar-entry-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 1320;
+  display: block;
+  padding: 32px max(32px, env(safe-area-inset-right)) 48px max(32px, env(safe-area-inset-left));
+  overflow-x: hidden;
+  overflow-y: auto;
+  background: rgba(15, 23, 42, 0.52);
+  -webkit-backdrop-filter: blur(7px);
+  backdrop-filter: blur(7px);
+  overscroll-behavior-y: contain;
+}
+
+.notification-policy-editor-layer,
+.notification-template-editor-layer,
+.monitoring-detail-drawer,
+.calendar-entry-modal {
+  position: static;
+  inset: auto;
+  transform: none;
+  width: min(92vw, 960px);
+  max-width: 960px;
+  height: auto;
+  min-height: 0;
+  max-height: none;
+  margin: 0 auto;
+  overflow: visible;
+  border: 1px solid color-mix(in srgb, var(--ds-card-border) 92%, transparent);
+  border-radius: 8px;
+  background: var(--panel);
+  box-shadow: 0 28px 90px rgba(15, 23, 42, 0.28);
+}
+
+.notification-policy-editor-layer,
+.notification-template-editor-layer {
+  padding: 20px 24px 24px;
+}
+
+.work-detail-backdrop:has(.notification-policy-modal-backdrop),
+.work-detail-backdrop:has(.notification-template-modal-backdrop) {
+  overflow-y: hidden !important;
+}
+
+.work-detail-layer .notification-policy-modal-backdrop,
+.work-detail-layer .notification-template-modal-backdrop {
+  background: rgba(15, 23, 42, 0.38);
+  -webkit-backdrop-filter: blur(5px);
+  backdrop-filter: blur(5px);
+}
+
+.monitoring-detail-drawer {
+  grid-template-rows: auto auto;
+}
+
+.monitoring-detail-content {
+  overflow: visible;
+}
+
+.calendar-entry-modal {
+  width: min(92vw, 760px);
+  max-width: 760px;
+}
+
+.ontology-graph-expanded-backdrop {
+  padding: 32px;
+  background: rgba(15, 23, 42, 0.52);
+  -webkit-backdrop-filter: blur(7px);
+  backdrop-filter: blur(7px);
+}
+
+.ontology-graph-expanded-dialog {
+  width: min(92vw, 1320px);
+  height: min(860px, calc(100dvh - 64px));
+  border-radius: 8px;
+  box-shadow: 0 28px 90px rgba(15, 23, 42, 0.28);
+}
+
+@media (max-width: 860px) {
+  .work-detail-backdrop {
+    padding: 0 !important;
+    background: var(--bg) !important;
+    -webkit-backdrop-filter: none !important;
+    backdrop-filter: none !important;
+  }
+
+  .work-detail-layer,
+  .work-detail-layer.work-detail-layer-medium,
+  .work-detail-layer.work-detail-layer-large,
+  .work-detail-layer.work-detail-layer-wide {
+    width: 100% !important;
+    max-width: none !important;
+    min-height: 100dvh !important;
+    border: 0 !important;
+    border-radius: 0 !important;
+    box-shadow: none !important;
+  }
+
+  .work-detail-layer > .work-detail-head {
+    padding: 18px 16px 16px !important;
+    border-radius: 0;
+  }
+
+  .work-detail-layer > .work-detail-body {
+    padding: 20px 16px calc(32px + var(--bottom-tabs-height) + env(safe-area-inset-bottom)) !important;
+  }
+
+  .work-detail-layer > .work-detail-footer {
+    padding: 14px 16px calc(18px + var(--bottom-tabs-height) + env(safe-area-inset-bottom)) !important;
+    border-radius: 0;
+  }
+
+  .notification-policy-modal-backdrop,
+  .notification-template-modal-backdrop,
+  .monitoring-detail-backdrop,
+  .calendar-entry-backdrop {
+    padding: 8px 8px calc(8px + var(--bottom-tabs-height) + env(safe-area-inset-bottom));
+  }
+
+  .notification-policy-editor-layer,
+  .notification-template-editor-layer,
+  .monitoring-detail-drawer,
+  .calendar-entry-modal {
+    width: 100%;
+    max-width: none;
+  }
+
+  .ontology-graph-expanded-backdrop {
+    padding: 10px;
+  }
+
+  .ontology-graph-expanded-dialog {
+    width: 100%;
+    height: calc(100dvh - 20px);
   }
 }

@@ -1268,6 +1268,8 @@ def kis_fundamental_external_rows(symbol: str, signal: Dict[str, object]) -> Dic
         "forwardPE": forward_pe,
         "pbr": pbr,
         "bps": bps,
+        "trailingEPS": eps,
+        "epsPeriod": "annual" if eps else "",
         "latestQuarter": "",
         "fetchedAt": fetched_at,
     }
@@ -1283,6 +1285,14 @@ def kis_fundamental_external_rows(symbol: str, signal: Dict[str, object]) -> Dic
         "latestQuarter": {
             "reportedEPS": eps,
             "estimatedEPS": 0.0,
+            "epsPeriod": "annual",
+            "reportedDate": "",
+            "fiscalDateEnding": "",
+        },
+        "latestAnnual": {
+            "reportedEPS": eps,
+            "estimatedEPS": 0.0,
+            "epsPeriod": "annual",
             "reportedDate": "",
             "fiscalDateEnding": "",
         },

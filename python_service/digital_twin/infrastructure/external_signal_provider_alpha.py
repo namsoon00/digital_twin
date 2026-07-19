@@ -2,7 +2,7 @@ import urllib.parse
 from typing import Dict, List
 
 from ..domain.market_data import number
-from ..domain.portfolio import Position
+from ..domain.portfolio import Position, utc_now_iso
 from ..domain.security_lines import related_market_symbols_for_positions
 from .external_signal_utils import DISABLED_SETTING_VALUES, percent_text
 
@@ -112,20 +112,29 @@ class ExternalSignalAlphaMixin:
                     if payload.get("Information") or payload.get("Note") or payload.get("Error Message"):
                         raise RuntimeError(str(payload.get("Information") or payload.get("Note") or payload.get("Error Message")))
                     quarterly = payload.get("quarterlyEarnings") if isinstance(payload.get("quarterlyEarnings"), list) else []
+                    annual = payload.get("annualEarnings") if isinstance(payload.get("annualEarnings"), list) else []
                     latest = quarterly[0] if quarterly and isinstance(quarterly[0], dict) else {}
                     if not latest:
                         raise RuntimeError("empty EARNINGS")
+                    latest_annual = annual[0] if annual and isinstance(annual[0], dict) else {}
                     return {
                         "provider": "Alpha Vantage",
                         "symbol": symbol,
+                        "fetchedAt": utc_now_iso(),
                         "latestQuarter": {
                             "fiscalDateEnding": str(latest.get("fiscalDateEnding") or ""),
                             "reportedDate": str(latest.get("reportedDate") or ""),
                             "reportedEPS": number(latest.get("reportedEPS")),
                             "estimatedEPS": number(latest.get("estimatedEPS")),
+                            "epsPeriod": "quarterly",
                             "surprise": number(latest.get("surprise")),
                             "surprisePercentage": number(latest.get("surprisePercentage")),
                         },
+                        "latestAnnual": {
+                            "fiscalDateEnding": str(latest_annual.get("fiscalDateEnding") or ""),
+                            "reportedEPS": number(latest_annual.get("reportedEPS")),
+                            "epsPeriod": "annual",
+                        } if latest_annual else {},
                     }
 
                 signals.setdefault("earningsReports", {})[symbol] = self.guarded_call("Alpha Vantage", "EARNINGS:" + symbol, fetch_earnings)
@@ -144,12 +153,15 @@ class ExternalSignalAlphaMixin:
             "sector": str(payload.get("Sector") or ""),
             "industry": str(payload.get("Industry") or ""),
             "latestQuarter": str(payload.get("LatestQuarter") or ""),
+            "fetchedAt": utc_now_iso(),
             "marketCapitalization": number(payload.get("MarketCapitalization")),
             "revenueTTM": number(payload.get("RevenueTTM")),
             "grossProfitTTM": number(payload.get("GrossProfitTTM")),
             "ebitda": number(payload.get("EBITDA")),
             "profitMargin": number(payload.get("ProfitMargin")),
             "operatingMarginTTM": number(payload.get("OperatingMarginTTM")),
+            "trailingEPS": number(payload.get("DilutedEPSTTM")),
+            "epsPeriod": "ttm" if number(payload.get("DilutedEPSTTM")) else "",
             "peRatio": number(payload.get("PERatio")),
             "pegRatio": number(payload.get("PEGRatio")),
             "forwardPE": number(payload.get("ForwardPE")),

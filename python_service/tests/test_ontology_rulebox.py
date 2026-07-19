@@ -732,6 +732,11 @@ class OntologyRuleBoxTests(unittest.TestCase):
         self.assertEqual("VALUATION_RISK", risk_template["derivationDecisionStage"])
         self.assertIn("attribute ontology-margin-of-safety-pct", schema_text)
         self.assertIn("owns ontology-margin-of-safety-pct", schema_text)
+        self.assertIn("valuationDecisionEligible", margin_condition["conditionTargetFields"])
+        self.assertIn("valuationReliabilityScore", margin_condition["conditionTargetFields"])
+        self.assertIn("conservativeMarginOfSafetyPct", margin_condition["conditionTargetFields"])
+        self.assertIn("attribute ontology-valuation-decision-eligible", schema_text)
+        self.assertIn("attribute ontology-fair-value-low", schema_text)
 
     def test_typedb_run_rulebox_materializes_inferencebox_from_typedb_projection(self):
         class CapturingTypeDBRepository(TypeDBOntologyGraphRepository):

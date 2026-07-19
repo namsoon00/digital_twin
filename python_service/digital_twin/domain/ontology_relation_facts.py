@@ -1,4 +1,5 @@
 from datetime import datetime, timezone
+from statistics import median
 from typing import Dict, Iterable, List, Optional
 
 from .alert_formatting import compact_number, price_money
@@ -354,6 +355,8 @@ def _valuation_substitution(values: Dict[str, object], row: Dict[str, object], c
     target_per = number(values.get("targetPER"))
     annual_dividend = number(values.get("annualDividend"))
     required_yield = number(values.get("requiredYieldPct"))
+    fair_value_low = number(values.get("fairValueLow"))
+    fair_value_high = number(values.get("fairValueHigh"))
     if expected_eps and target_per and fair_value:
         return (
             _valuation_price_text(expected_eps, currency)
@@ -361,6 +364,7 @@ def _valuation_substitution(values: Dict[str, object], row: Dict[str, object], c
             + _valuation_multiplier_text(target_per)
             + " = "
             + _valuation_price_text(fair_value, currency)
+            + ((" (범위 " + _valuation_price_text(fair_value_low, currency) + "~" + _valuation_price_text(fair_value_high, currency) + ")") if fair_value_low and fair_value_high and fair_value_low != fair_value_high else "")
         )
     if annual_dividend and required_yield and fair_value:
         return (
@@ -388,6 +392,8 @@ def _valuation_explanation(values: Dict[str, object], row: Dict[str, object], cu
     annual_dividend = number(values.get("annualDividend"))
     required_yield = number(values.get("requiredYieldPct"))
     margin = number(values.get("marginOfSafetyPct"))
+    fair_value_low = number(values.get("fairValueLow"))
+    fair_value_high = number(values.get("fairValueHigh"))
     if expected_eps and target_per and fair_value:
         base = (
             "예상 EPS "
@@ -420,6 +426,10 @@ def _valuation_explanation(values: Dict[str, object], row: Dict[str, object], cu
         return "적정가 계산에 필요한 입력값이 부족해 현재가가 싼지 비싼지 단정하지 않습니다."
     if current_price and fair_value:
         base += " 현재가 " + _valuation_price_text(current_price, currency) + " 대비 안전마진은 " + _number_text(margin, 1, signed=True) + "%입니다."
+    if fair_value_low and fair_value_high and fair_value_low != fair_value_high:
+        base += " 보수적·낙관적 가정을 반영한 적정가 범위는 " + _valuation_price_text(fair_value_low, currency) + "~" + _valuation_price_text(fair_value_high, currency) + "입니다."
+    if not bool(values.get("valuationDecisionEligible")):
+        base += " 이 계산은 신뢰도나 승인 조건이 부족해 매수·매도 추론에는 직접 사용하지 않습니다."
     return base
 
 
@@ -434,8 +444,15 @@ def _valuation_row_payload(position: Position, row: Dict[str, object]) -> Dict[s
     ]
     fair_value = number(values.get("fairValue"))
     has_formula = bool(str(values.get("formula") or row.get("formula") or "").strip())
-    complete_score = (30.0 if fair_value else 0.0) + (10.0 if not missing_inputs else 0.0) + (5.0 if has_formula else 0.0)
+    complete_score = (
+        (30.0 if fair_value else 0.0)
+        + (10.0 if not missing_inputs else 0.0)
+        + (5.0 if has_formula else 0.0)
+        + (10.0 if bool(row.get("aiGenerated")) and str(values.get("valuationMethod") or "") != "ai-current-price-anchor" else 0.0)
+    )
     source_score = 12.0 if source.get("sourceType") == "user" else 6.0 if source.get("sourceType") == "external" else 4.0 if source.get("sourceType") == "ai" else 0.0
+    reliability_score = number(values.get("valuationReliabilityScore")) or number(source.get("reliabilityScore"))
+    decision_eligible = bool(values.get("valuationDecisionEligible"))
     formula = str(values.get("formula") or row.get("formula") or "").strip()
     payload = {
         "assumptionKey": str(row.get("assumptionKey") or row.get("symbol") or position.symbol or "").strip(),
@@ -444,14 +461,14 @@ def _valuation_row_payload(position: Position, row: Dict[str, object]) -> Dict[s
         "provider": source.get("provider") or str(row.get("provider") or ""),
         "sourceType": source.get("sourceType"),
         "sourceLabel": source.get("sourceLabel"),
-        "reliabilityLabel": source.get("reliabilityLabel"),
-        "reliabilityScore": source.get("reliabilityScore"),
+        "reliabilityLabel": values.get("valuationConfidenceLabel") or source.get("reliabilityLabel"),
+        "reliabilityScore": reliability_score,
         "formula": formula,
         "substitution": _valuation_substitution(values, row, currency),
         "explanation": _valuation_explanation(values, row, currency),
         "missingInputs": missing_inputs,
-        "dataStatus": "available" if fair_value and not missing_inputs else "partial" if fair_value or values.get("expectedEPS") or values.get("targetPER") else "missing",
-        "selectionScore": complete_score + source_score,
+        "dataStatus": "available" if fair_value and not missing_inputs else "partial" if fair_value or values.get("expectedEPS") or values.get("targetPER") or bool(row.get("aiGenerated")) else "missing",
+        "selectionScore": complete_score + source_score + reliability_score * 0.25 + (40.0 if decision_eligible else 0.0),
         "hasUserInput": source.get("sourceType") == "user",
         "hasExternalInput": source.get("sourceType") == "external",
         "hasAiProposal": source.get("sourceType") == "ai",
@@ -484,8 +501,7 @@ def _valuation_facts(position: Position, external_signals: Dict[str, object], se
     raw_rows = position_runtime_valuation_rows(_valuation_runtime_context(settings), symbol)
     raw_rows.extend(external_valuation_rows(external_signals or {}, symbol))
     proposal_settings = settings.get("settings") if isinstance(settings, dict) and isinstance(settings.get("settings"), dict) else settings
-    if not any(number(valuation_values(row, position).get("fairValue")) for row in raw_rows):
-        raw_rows.extend(ai_valuation_proposal_rows(position, external_signals or {}, proposal_settings or {}))
+    raw_rows.extend(ai_valuation_proposal_rows(position, external_signals or {}, proposal_settings or {}))
     rows = [_valuation_row_payload(position, row) for row in raw_rows]
     if not rows:
         return {
@@ -501,9 +517,13 @@ def _valuation_facts(position: Position, external_signals: Dict[str, object], se
             "valuationCurrentPrice": number(position.current_price),
             "valuationFairValue": 0.0,
             "valuationFairValuePrice": 0.0,
+            "valuationFairValueLow": 0.0,
+            "valuationFairValueHigh": 0.0,
             "valuationExpectedEPS": 0.0,
             "valuationTargetPER": 0.0,
             "valuationMarginOfSafetyPct": 0.0,
+            "valuationConservativeMarginOfSafetyPct": 0.0,
+            "valuationOptimisticMarginOfSafetyPct": 0.0,
             "valuationMinimumMarginOfSafetyPct": 0.0,
             "valuationMissingInputs": ["적정가", "예상 EPS", "목표 PER"],
             "valuationHasUserInput": False,
@@ -525,11 +545,32 @@ def _valuation_facts(position: Position, external_signals: Dict[str, object], se
             "valuationActiveStatus": "",
             "valuationReviewStatus": "",
             "valuationAutoApplied": False,
+            "valuationDecisionEligible": False,
+            "valuationFreshnessStatus": "unknown",
+            "valuationAsOf": "",
+            "valuationInputCoveragePct": 0.0,
+            "valuationConfidenceLabel": "판단 보류",
+            "valuationModelCount": 0,
+            "valuationConsensusPrice": 0.0,
+            "valuationDisagreementPct": 0.0,
+            "valuationConsensusStatus": "missing",
         }
     primary = _primary_valuation_row(rows)
     missing_inputs = list(primary.get("missingInputs") or [])
     fair_value = number(primary.get("fairValue"))
     current_price = number(primary.get("currentPrice"))
+    eligible_fair_values = [
+        number(item.get("fairValue"))
+        for item in rows
+        if bool(item.get("valuationDecisionEligible")) and number(item.get("fairValue"))
+    ]
+    consensus_price = median(eligible_fair_values) if eligible_fair_values else 0.0
+    disagreement_pct = (
+        (max(eligible_fair_values) - min(eligible_fair_values)) / consensus_price * 100.0
+        if len(eligible_fair_values) >= 2 and consensus_price
+        else 0.0
+    )
+    consensus_status = "conflict" if disagreement_pct > 35.0 else "agreement" if len(eligible_fair_values) >= 2 else "single-model"
     return {
         "valuationRows": rows,
         "primaryValuation": primary,
@@ -545,6 +586,8 @@ def _valuation_facts(position: Position, external_signals: Dict[str, object], se
         "valuationCurrentPrice": current_price,
         "valuationFairValue": fair_value,
         "valuationFairValuePrice": fair_value,
+        "valuationFairValueLow": number(primary.get("fairValueLow")),
+        "valuationFairValueHigh": number(primary.get("fairValueHigh")),
         "valuationExpectedEPS": number(primary.get("expectedEPS")),
         "valuationTargetPER": number(primary.get("targetPER")),
         "valuationAnnualDividend": number(primary.get("annualDividend")),
@@ -552,12 +595,25 @@ def _valuation_facts(position: Position, external_signals: Dict[str, object], se
         "valuationCouponPct": number(primary.get("couponPct")),
         "valuationParValue": number(primary.get("parValue")),
         "valuationMarginOfSafetyPct": number(primary.get("marginOfSafetyPct")),
+        "valuationConservativeMarginOfSafetyPct": number(primary.get("conservativeMarginOfSafetyPct")),
+        "valuationOptimisticMarginOfSafetyPct": number(primary.get("optimisticMarginOfSafetyPct")),
         "valuationExpensivePremiumPct": number(primary.get("expensivePremiumPct")),
         "valuationMinimumMarginOfSafetyPct": number(primary.get("minimumMarginOfSafetyPct")),
         "valuationMethod": primary.get("valuationMethod"),
         "valuationActiveStatus": primary.get("activeStatus"),
         "valuationReviewStatus": primary.get("reviewStatus") or primary.get("approvalStatus"),
         "valuationAutoApplied": bool(primary.get("autoApplied")),
+        "valuationDecisionEligible": bool(primary.get("valuationDecisionEligible")) and consensus_status != "conflict",
+        "valuationModelCount": len(eligible_fair_values),
+        "valuationConsensusPrice": round(consensus_price, 4) if consensus_price else 0.0,
+        "valuationDisagreementPct": round(disagreement_pct, 2),
+        "valuationConsensusStatus": consensus_status,
+        "valuationFreshnessStatus": primary.get("valuationFreshnessStatus"),
+        "valuationAsOf": primary.get("valuationAsOf"),
+        "valuationInputCoveragePct": number(primary.get("valuationInputCoveragePct")),
+        "valuationConfidenceLabel": primary.get("valuationConfidenceLabel"),
+        "valuationEpsPeriod": primary.get("epsPeriod"),
+        "valuationMultiplePeriod": primary.get("multiplePeriod"),
         "valuationMissingInputs": missing_inputs,
         "valuationHasUserInput": any(bool(item.get("hasUserInput")) for item in rows),
         "valuationHasExternalInput": any(bool(item.get("hasExternalInput")) for item in rows),

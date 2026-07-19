@@ -4480,7 +4480,12 @@ def default_graph_inference_rules() -> List[GraphInferenceRule]:
                     "현재가가 적정가보다 충분히 낮아 안전마진이 있습니다.",
                     relation_type="HAS_MARGIN_OF_SAFETY",
                     target_kind="margin-of-safety",
-                    target_property_filters={"marginOfSafetyPct": {"operator": ">=", "value": 20}},
+                    target_property_filters={
+                        "marginOfSafetyPct": {"operator": ">=", "value": 15},
+                        "conservativeMarginOfSafetyPct": {"operator": ">=", "value": 0},
+                        "valuationReliabilityScore": {"operator": ">=", "value": 65},
+                        "valuationDecisionEligible": {"operator": ">=", "value": 1},
+                    },
                     min_weight=0.5,
                 ),
                 GraphRuleCondition(
@@ -4515,7 +4520,7 @@ def default_graph_inference_rules() -> List[GraphInferenceRule]:
                     polarity="support",
                     support_impact=7.5,
                     weight=0.66,
-                    belief_label="사용자 적정가 기준 안전마진이 있고, 최소한의 추세 또는 거래 확인이 붙었습니다.",
+                    belief_label="검증 가능한 밸류에이션의 기준 시나리오에 안전마진이 있고, 보수적 시나리오도 현재가를 지지하며 최소한의 추세 또는 거래 확인이 붙었습니다.",
                     ai_influence_label="저평가 조건 확인",
                     action_group="valuation",
                     action_level="review",
@@ -4539,7 +4544,11 @@ def default_graph_inference_rules() -> List[GraphInferenceRule]:
                     "현재가가 적정가보다 높아 안전마진이 음수입니다.",
                     relation_type="HAS_MARGIN_OF_SAFETY",
                     target_kind="margin-of-safety",
-                    target_property_filters={"marginOfSafetyPct": {"operator": "<=", "value": -10}},
+                    target_property_filters={
+                        "marginOfSafetyPct": {"operator": "<=", "value": -10},
+                        "valuationReliabilityScore": {"operator": ">=", "value": 65},
+                        "valuationDecisionEligible": {"operator": ">=", "value": 1},
+                    },
                     min_weight=0.5,
                 )
             ],

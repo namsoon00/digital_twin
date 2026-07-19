@@ -1,3 +1,4 @@
+from statistics import median
 from typing import Dict, Iterable, List, Tuple
 
 from .alert_formatting import compact_number
@@ -9,11 +10,24 @@ from .portfolio_ontology_market_concepts import symbol_key
 from .portfolio_ontology_runtime_concepts import valuation_assumption_rows
 from .security_lines import security_lines_for_symbol
 from .valuation_ai_proposals import ai_valuation_proposal_rows
+from .valuation_contracts import (
+    period_is_annual_per_share,
+    scenario_margins,
+    unique_missing,
+    valuation_confidence_label,
+    valuation_decision_eligible,
+    valuation_freshness_status,
+    valuation_input_coverage,
+    valuation_reliability_score,
+)
 
 
 VALUATION_NUMERIC_KEYS = {
     "currentPrice": ("currentPrice", "price", "현재가"),
     "fairValue": ("fairValue", "fairValuePrice", "적정가"),
+    "fairValueLow": ("fairValueLow", "fairValueLow", "보수적 적정가"),
+    "fairValueBase": ("fairValueBase", "fairValueBase", "기준 적정가"),
+    "fairValueHigh": ("fairValueHigh", "fairValueHigh", "낙관적 적정가"),
     "fairValuePrice": ("fairValue", "fairValuePrice", "적정가"),
     "targetPrice": ("fairValue", "fairValuePrice", "목표가"),
     "analystTargetPrice": ("fairValue", "fairValuePrice", "애널리스트 목표가"),
@@ -37,7 +51,12 @@ VALUATION_NUMERIC_KEYS = {
     "couponPct": ("couponPct", "couponPct", "표면 배당률"),
     "parValue": ("parValue", "parValue", "액면 기준가"),
     "marginOfSafetyPct": ("marginOfSafetyPct", "marginOfSafetyPct", "안전마진"),
+    "conservativeMarginOfSafetyPct": ("conservativeMarginOfSafetyPct", "conservativeMarginOfSafetyPct", "보수적 안전마진"),
+    "optimisticMarginOfSafetyPct": ("optimisticMarginOfSafetyPct", "optimisticMarginOfSafetyPct", "낙관적 안전마진"),
     "minimumMarginOfSafetyPct": ("minimumMarginOfSafetyPct", "minimumMarginOfSafetyPct", "요구 안전마진"),
+    "reliabilityScore": ("reliabilityScore", "valuationReliabilityScore", "밸류에이션 신뢰도"),
+    "inputCoveragePct": ("inputCoveragePct", "valuationInputCoveragePct", "입력 데이터 충족률"),
+    "valuationDecisionEligible": ("valuationDecisionEligible", "valuationDecisionEligible", "투자 판단 사용 가능"),
     "peerPER": ("peerPER", "peerPER", "피어 PER"),
     "historicalMedianPER": ("historicalMedianPER", "historicalMedianPER", "과거 중앙 PER"),
 }
@@ -111,6 +130,8 @@ def external_valuation_rows(external_signals: Dict[str, object], symbol: str) ->
             "provider": str(overview.get("provider") or "External"),
             "source": "company-overview",
             "fairValue": number(overview.get("analystTargetPrice")),
+            "fairValueLow": number(overview.get("analystTargetLowPrice")),
+            "fairValueHigh": number(overview.get("analystTargetHighPrice")),
             "peRatio": number(overview.get("peRatio")),
             "forwardPE": number(overview.get("forwardPE")),
             "pegRatio": number(overview.get("pegRatio")),
@@ -118,6 +139,10 @@ def external_valuation_rows(external_signals: Dict[str, object], symbol: str) ->
             "dividendYield": number(overview.get("dividendYield")),
             "valuationMethod": "analyst-target-and-multiple",
             "formula": "애널리스트 목표가와 PER/베타를 참고",
+            "valuationAsOf": str(overview.get("fetchedAt") or ""),
+            "valuationSourceType": "external",
+            "valuationCurrency": str(overview.get("currency") or ""),
+            "periodCompatible": True,
         })
     earnings = external_signals.get("earningsReports") if isinstance(external_signals.get("earningsReports"), dict) else {}
     for source_symbol in source_symbols:
@@ -135,6 +160,9 @@ def external_valuation_rows(external_signals: Dict[str, object], symbol: str) ->
             "source": "earnings-report",
             "reportedEPS": number(latest.get("reportedEPS")),
             "estimatedEPS": number(latest.get("estimatedEPS")),
+            "epsPeriod": str(latest.get("epsPeriod") or "quarterly"),
+            "valuationAsOf": str(latest.get("fiscalDateEnding") or latest.get("reportedDate") or report.get("fetchedAt") or ""),
+            "valuationSourceType": "external",
             "valuationMethod": "earnings-context",
             "formula": "최근 실적 EPS 참고",
         })
@@ -152,21 +180,39 @@ def value_for(row: Dict[str, object], *keys: str) -> float:
 def valuation_values(row: Dict[str, object], position: Position) -> Dict[str, object]:
     current_price = value_for(row, "currentPrice", "price") or number(position.current_price)
     fair_value = value_for(row, "fairValue", "fairValuePrice", "targetPrice", "analystTargetPrice")
+    fair_value_low = value_for(row, "fairValueLow") or fair_value
+    fair_value_high = value_for(row, "fairValueHigh") or fair_value
     expected_eps = value_for(row, "expectedEPS", "expectedEps", "eps", "estimatedEPS", "reportedEPS")
     target_per = value_for(row, "targetPER", "targetPer", "targetPE")
     annual_dividend = value_for(row, "annualDividend", "annualDividendPerShare")
     required_yield = value_for(row, "requiredYieldPct", "requiredYield")
     coupon_pct = value_for(row, "couponPct", "coupon")
     par_value = value_for(row, "parValue")
-    if not fair_value and expected_eps and target_per:
+    method = str(row.get("valuationMethod") or row.get("method") or "").strip()
+    method_lower = method.casefold()
+    eps_period = str(row.get("epsPeriod") or row.get("earningsPeriod") or "").strip()
+    if not eps_period and expected_eps and target_per and str(row.get("source") or "").casefold() == "runtime-settings":
+        eps_period = "annual"
+    multiple_period = str(row.get("multiplePeriod") or ("annual-compatible" if target_per else "")).strip()
+    uses_eps_multiple = bool(expected_eps and target_per) or "eps-per" in method_lower or "eps x per" in str(row.get("formula") or "").casefold()
+    period_compatible = bool(row.get("periodCompatible")) if "periodCompatible" in row else (period_is_annual_per_share(eps_period) if uses_eps_multiple else True)
+    if uses_eps_multiple and not period_compatible:
+        fair_value = 0.0
+        fair_value_low = 0.0
+        fair_value_high = 0.0
+    if not fair_value and expected_eps and target_per and period_compatible:
         fair_value = expected_eps * target_per
+        fair_value_low = fair_value
+        fair_value_high = fair_value
     if not fair_value and annual_dividend and required_yield:
         fair_value = annual_dividend / (required_yield / 100.0)
-    margin = value_for(row, "marginOfSafetyPct")
-    if not margin and fair_value and current_price:
-        margin = ((fair_value / current_price) - 1) * 100
+        fair_value_low = fair_value
+        fair_value_high = fair_value
+    margins = scenario_margins(current_price, fair_value_low, fair_value, fair_value_high)
+    margin = value_for(row, "marginOfSafetyPct") or number(margins.get("marginOfSafetyPct"))
+    conservative_margin = value_for(row, "conservativeMarginOfSafetyPct") or number(margins.get("conservativeMarginOfSafetyPct"))
+    optimistic_margin = value_for(row, "optimisticMarginOfSafetyPct") or number(margins.get("optimisticMarginOfSafetyPct"))
     expensive_premium = ((current_price / fair_value) - 1) * 100 if current_price and fair_value else 0.0
-    method = str(row.get("valuationMethod") or row.get("method") or "").strip()
     if not method:
         method = "eps-per" if expected_eps and target_per else "manual-fair-value" if fair_value else "valuation-context"
     formula = str(row.get("formula") or "").strip()
@@ -185,7 +231,8 @@ def valuation_values(row: Dict[str, object], position: Position) -> Dict[str, ob
         missing = []
     if not current_price:
         missing.append("currentPrice")
-    method_lower = method.casefold()
+    if uses_eps_multiple and not period_compatible:
+        missing.append("연간/TTM EPS 기간 정보")
     if not fair_value and not (expected_eps and target_per) and not (annual_dividend and required_yield):
         if "preferred" in method_lower or "yield" in method_lower or annual_dividend or required_yield:
             missing.extend(["fairValue", "annualDividend", "requiredYieldPct"])
@@ -208,10 +255,51 @@ def valuation_values(row: Dict[str, object], position: Position) -> Dict[str, ob
             per_status = "missing"
             per_reason = per_reason or "EPS 또는 PER가 없어 PER 기준 적정가를 계산하지 못했습니다."
             preferred_metric = preferred_metric or "적정가 입력 또는 외부 PER/EPS"
+    provider_text = str(row.get("sourceProvider") or row.get("provider") or "").casefold()
+    raw_source = str(row.get("valuationSourceType") or "").strip().lower()
+    if raw_source:
+        source_type = raw_source
+    elif bool(row.get("aiGenerated")) or str(row.get("source") or "").casefold() == "ai-valuation-proposal":
+        source_type = "ai"
+    elif "kis" in provider_text:
+        source_type = "broker"
+    elif str(row.get("source") or "").casefold() == "runtime-settings":
+        source_type = "user"
+    else:
+        source_type = "external"
+    valuation_as_of = str(row.get("valuationAsOf") or row.get("fetchedAt") or row.get("updatedAt") or "").strip()
+    freshness = str(row.get("valuationFreshnessStatus") or "").strip() or valuation_freshness_status(valuation_as_of)
+    required_inputs = ["currentPrice", "fairValue"]
+    available_inputs = []
+    if current_price:
+        available_inputs.append("currentPrice")
+    if fair_value:
+        available_inputs.append("fairValue")
+    coverage = value_for(row, "inputCoveragePct", "valuationInputCoveragePct") or valuation_input_coverage(required_inputs, available_inputs)
+    scenario_complete = bool(value_for(row, "fairValueLow") and fair_value and value_for(row, "fairValueHigh"))
+    reliability = value_for(row, "reliabilityScore", "valuationReliabilityScore") or valuation_reliability_score(
+        source_type,
+        coverage,
+        eps_period=eps_period,
+        freshness_status=freshness,
+        scenario_complete=scenario_complete,
+    )
+    calculated_eligible = valuation_decision_eligible(
+        source_type,
+        reliability,
+        row.get("approvalStatus"),
+        freshness,
+        period_compatible,
+        fair_value,
+    )
+    decision_eligible = bool(row.get("valuationDecisionEligible")) if "valuationDecisionEligible" in row else calculated_eligible
     return {
         "currentPrice": round(current_price, 4) if current_price else 0.0,
         "fairValue": round(fair_value, 4) if fair_value else 0.0,
         "fairValuePrice": round(fair_value, 4) if fair_value else 0.0,
+        "fairValueLow": round(fair_value_low, 4) if fair_value_low else 0.0,
+        "fairValueBase": round(fair_value, 4) if fair_value else 0.0,
+        "fairValueHigh": round(fair_value_high, 4) if fair_value_high else 0.0,
         "expectedEPS": round(expected_eps, 4) if expected_eps else 0.0,
         "targetPER": round(target_per, 4) if target_per else 0.0,
         "annualDividend": round(annual_dividend, 4) if annual_dividend else 0.0,
@@ -219,15 +307,30 @@ def valuation_values(row: Dict[str, object], position: Position) -> Dict[str, ob
         "couponPct": round(coupon_pct, 4) if coupon_pct else 0.0,
         "parValue": round(par_value, 4) if par_value else 0.0,
         "marginOfSafetyPct": round(margin, 2) if margin else 0.0,
+        "conservativeMarginOfSafetyPct": round(conservative_margin, 2) if conservative_margin else 0.0,
+        "optimisticMarginOfSafetyPct": round(optimistic_margin, 2) if optimistic_margin else 0.0,
         "expensivePremiumPct": round(expensive_premium, 2) if expensive_premium else 0.0,
         "minimumMarginOfSafetyPct": value_for(row, "minimumMarginOfSafetyPct") or 15.0,
         "valuationMethod": method,
         "formula": formula,
-        "missingInputs": sorted(set(missing)),
+        "missingInputs": unique_missing(missing),
         "perValuationStatus": per_status,
         "perValuationReason": per_reason,
         "preferredValuationMetric": preferred_metric,
         "fundamentalDataSourcePriority": source_priority,
+        "epsPeriod": eps_period,
+        "multiplePeriod": multiple_period,
+        "periodCompatible": period_compatible,
+        "valuationAsOf": valuation_as_of,
+        "valuationFreshnessStatus": freshness,
+        "valuationSourceType": source_type,
+        "valuationCurrency": str(row.get("valuationCurrency") or position.currency or ""),
+        "perShare": bool(row.get("perShare", True)),
+        "valuationInputCoveragePct": round(coverage, 1),
+        "valuationReliabilityScore": round(reliability, 1),
+        "valuationConfidenceLabel": str(row.get("valuationConfidenceLabel") or valuation_confidence_label(reliability)),
+        "valuationDecisionEligible": decision_eligible,
+        "scenarioComplete": scenario_complete,
     }
 
 
@@ -251,7 +354,22 @@ def valuation_relation_props(row: Dict[str, object], values: Dict[str, object], 
         "valuationMethod": values.get("valuationMethod"),
         "formula": values.get("formula"),
         "marginOfSafetyPct": values.get("marginOfSafetyPct"),
+        "conservativeMarginOfSafetyPct": values.get("conservativeMarginOfSafetyPct"),
+        "optimisticMarginOfSafetyPct": values.get("optimisticMarginOfSafetyPct"),
         "fairValue": values.get("fairValue"),
+        "fairValueLow": values.get("fairValueLow"),
+        "fairValueBase": values.get("fairValueBase"),
+        "fairValueHigh": values.get("fairValueHigh"),
+        "valuationReliabilityScore": values.get("valuationReliabilityScore"),
+        "valuationInputCoveragePct": values.get("valuationInputCoveragePct"),
+        "valuationConfidenceLabel": values.get("valuationConfidenceLabel"),
+        "valuationDecisionEligible": values.get("valuationDecisionEligible"),
+        "valuationFreshnessStatus": values.get("valuationFreshnessStatus"),
+        "valuationAsOf": values.get("valuationAsOf"),
+        "valuationSourceType": values.get("valuationSourceType"),
+        "epsPeriod": values.get("epsPeriod"),
+        "multiplePeriod": values.get("multiplePeriod"),
+        "periodCompatible": values.get("periodCompatible"),
         "approvalStatus": str(row.get("approvalStatus") or ""),
         "activeStatus": str(row.get("activeStatus") or ""),
         "requiresUserApproval": bool(row.get("requiresUserApproval")),
@@ -370,6 +488,19 @@ def add_valuation_row_concepts(
         })
         add_relation(graph, stock_id, estimate_id, "HAS_FAIR_VALUE_ESTIMATE", weight=0.86, properties=props)
         add_relation(graph, stock_id, estimate_id, "HAS_VALUATION", weight=0.86, properties=props)
+        range_id = add_entity(graph, "fair-value-range", symbol + ":" + key, (position.name or symbol) + " 적정가 범위", {
+            "tboxClass": "FairValueRange",
+            "tboxClasses": ["ValuationAssumption", "FairValueRange", "ValuationSignal"],
+            **base_props,
+        })
+        add_relation(graph, stock_id, range_id, "HAS_FAIR_VALUE_RANGE", weight=0.88, properties=props)
+        add_relation(graph, range_id, assumption_id, "DERIVED_FROM_VALUATION_ASSUMPTION", weight=0.84, properties=props)
+        confidence_id = add_entity(graph, "valuation-confidence", symbol + ":" + key, (position.name or symbol) + " 밸류에이션 신뢰도", {
+            "tboxClass": "ValuationConfidence",
+            "tboxClasses": ["ValuationAssumption", "ValuationConfidence", "DataQualitySignal"],
+            **base_props,
+        })
+        add_relation(graph, stock_id, confidence_id, "HAS_VALUATION_CONFIDENCE", weight=0.82, properties=props)
     if number(values.get("marginOfSafetyPct")):
         margin = number(values.get("marginOfSafetyPct"))
         margin_id = add_entity(graph, "margin-of-safety", symbol + ":" + key, (position.name or symbol) + " 안전마진 " + str(round(margin, 1)) + "%", {
@@ -429,7 +560,55 @@ def add_position_valuation_concepts(
     rows = position_runtime_valuation_rows(runtime_context or {}, symbol)
     rows.extend(external_valuation_rows(external_signals or {}, symbol))
     settings = runtime_context.get("settings") if isinstance(runtime_context, dict) and isinstance(runtime_context.get("settings"), dict) else {}
-    if not any(number(valuation_values(normalize_assumption_row(row), position).get("fairValue")) for row in rows):
-        rows.extend(ai_valuation_proposal_rows(position, external_signals or {}, settings))
+    rows.extend(ai_valuation_proposal_rows(position, external_signals or {}, settings))
+    unique_rows = []
+    seen = set()
     for row in rows:
+        normalized = normalize_assumption_row(row)
+        key = str(normalized.get("assumptionKey") or "") + "|" + str(normalized.get("valuationMethod") or "")
+        if key in seen:
+            continue
+        seen.add(key)
+        unique_rows.append(normalized)
+    evaluated = [(row, valuation_values(row, position)) for row in unique_rows]
+    eligible_values = [
+        number(values.get("fairValue"))
+        for _row, values in evaluated
+        if bool(values.get("valuationDecisionEligible")) and number(values.get("fairValue"))
+    ]
+    consensus_mid = median(eligible_values) if eligible_values else 0.0
+    disagreement_pct = (
+        (max(eligible_values) - min(eligible_values)) / consensus_mid * 100.0
+        if len(eligible_values) >= 2 and consensus_mid
+        else 0.0
+    )
+    consensus_status = "conflict" if disagreement_pct > 35.0 else "agreement" if len(eligible_values) >= 2 else "single-model"
+    if consensus_status == "conflict":
+        unique_rows = [
+            {**row, "valuationDecisionEligible": False, "valuationConsensusBlocked": True}
+            if bool(values.get("valuationDecisionEligible"))
+            else row
+            for row, values in evaluated
+        ]
+    consensus_id = add_entity(graph, "valuation-consensus", symbol, (position.name or symbol) + " 밸류에이션 모델 합의", {
+        "tboxClass": "ValuationConsensus",
+        "tboxClasses": ["ValuationAssumption", "ValuationConsensus", "ValuationSignal"],
+        "symbol": symbol,
+        "valuationModelCount": len(eligible_values),
+        "valuationConsensusPrice": round(consensus_mid, 4) if consensus_mid else 0.0,
+        "valuationDisagreementPct": round(disagreement_pct, 2),
+        "valuationConsensusStatus": consensus_status,
+        "valuationDecisionEligible": bool(eligible_values) and consensus_status != "conflict",
+        "source": "valuation-consensus",
+    })
+    add_relation(graph, stock_id, consensus_id, "HAS_VALUATION_CONSENSUS", weight=0.86, properties={
+        "source": "valuation-consensus",
+        "polarity": "risk" if consensus_status == "conflict" else "context",
+        "riskImpact": 6.0 if consensus_status == "conflict" else 0.0,
+        "aiInfluenceLabel": "밸류에이션 모델 차이 " + str(round(disagreement_pct, 1)) + "%" if len(eligible_values) >= 2 else "검증 가능한 밸류에이션 모델 1개 이하",
+        "valuationModelCount": len(eligible_values),
+        "valuationDisagreementPct": round(disagreement_pct, 2),
+        "valuationConsensusStatus": consensus_status,
+    })
+    for row in unique_rows:
         add_valuation_row_concepts(graph, stock_id, position, row)

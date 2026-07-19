@@ -1965,7 +1965,14 @@ def valuation_detail_rows(context: Dict[str, object], level: str) -> List[str]:
         substitution = "대입값 부족: " + ", ".join(str(item) for item in missing_inputs[:5])
     current = _valuation_price_display(facts.get("valuationCurrentPrice") or facts.get("currentPrice"), currency)
     fair_value = _valuation_price_display(facts.get("valuationFairValue") or facts.get("valuationFairValuePrice"), currency)
+    fair_value_low = _valuation_price_display(facts.get("valuationFairValueLow"), currency)
+    fair_value_high = _valuation_price_display(facts.get("valuationFairValueHigh"), currency)
+    fair_value_range = ""
+    if fair_value_low and fair_value_high:
+        fair_value_range = fair_value_low + " ~ " + fair_value_high
     margin = _valuation_pct_display(facts.get("valuationMarginOfSafetyPct"))
+    conservative_margin = _valuation_pct_display(facts.get("valuationConservativeMarginOfSafetyPct"))
+    optimistic_margin = _valuation_pct_display(facts.get("valuationOptimisticMarginOfSafetyPct"))
     minimum_margin = _valuation_pct_display(facts.get("valuationMinimumMarginOfSafetyPct"))
     margin_text = margin
     if margin and minimum_margin:
@@ -2014,6 +2021,17 @@ def valuation_detail_rows(context: Dict[str, object], level: str) -> List[str]:
         reliability = "판단 보류"
     if reliability:
         reliability += " · 예측 성공률이 아니라 출처와 공식 완성도 기준"
+    freshness_labels = {"fresh": "최신", "aging": "업데이트 필요", "stale": "오래됨", "unknown": "기준일 미확인"}
+    freshness = freshness_labels.get(str(facts.get("valuationFreshnessStatus") or "unknown"), str(facts.get("valuationFreshnessStatus") or "기준일 미확인"))
+    valuation_as_of = str(facts.get("valuationAsOf") or "").strip()
+    decision_eligible = bool(facts.get("valuationDecisionEligible"))
+    decision_status = "투자 판단 근거로 사용 가능" if decision_eligible else "참고만 사용 · 매수·매도 추론에서 제외"
+    model_count = int(_number(facts.get("valuationModelCount"))) if _valuation_value_present(facts.get("valuationModelCount")) else 0
+    disagreement = _valuation_pct_display(facts.get("valuationDisagreementPct"))
+    consensus_labels = {"agreement": "모델 결과가 비슷함", "conflict": "모델 차이가 커 판단 보류", "single-model": "검증 가능한 모델 1개 이하"}
+    consensus = consensus_labels.get(str(facts.get("valuationConsensusStatus") or ""), "")
+    if model_count:
+        consensus += ((" · " if consensus else "") + str(model_count) + "개 모델" + ((" · 차이 " + disagreement) if disagreement else ""))
     explanation = str(facts.get("valuationExplanation") or "").strip()
     if not explanation:
         explanation = "적정가 공식이나 적정가 입력값이 없어 현재가가 싼지 비싼지 계산하지 않았습니다. 설정 탭에서 적정가, 예상 EPS, 목표 PER 중 하나를 입력해야 합니다."
@@ -2039,14 +2057,19 @@ def valuation_detail_rows(context: Dict[str, object], level: str) -> List[str]:
         _html_row("대입값", substitution, level=level, max_len=260),
         _html_row("승인 상태", approval, level=level, max_len=180),
         _html_row("현재가", current or "현재가 없음", level=level),
-        _html_row("적정가", fair_value or "미설정", level=level),
+        _html_row("기준 적정가", fair_value or "미설정", level=level),
+        _html_row("적정가 범위", fair_value_range, level=level),
         _html_row("안전마진", margin_text or "계산 불가", level=level),
+        _html_row("시나리오 안전마진", ("보수 " + conservative_margin + " / 낙관 " + optimistic_margin) if conservative_margin and optimistic_margin else "", level=level),
         _html_row("데이터 출처", source, level=level),
         _html_row("PER 기준", per_line, level=level, max_len=300),
         _html_row("대체 기준", preferred_metric, level=level, max_len=180),
         _html_row("데이터 우선순위", source_priority, level=level, max_len=220),
         _html_row("계산 근거", str(facts.get("valuationSourceReason") or "").strip(), level=level, max_len=260),
         _html_row("근거 신뢰도", reliability, level=level, max_len=260),
+        _html_row("데이터 기준", freshness + ((" · " + valuation_as_of) if valuation_as_of else ""), level=level, max_len=220),
+        _html_row("판단 사용", decision_status, level=level, max_len=220),
+        _html_row("모델 비교", consensus, level=level, max_len=220),
         _html_row("계산 상태", status_text, level=level),
         _html_row("계산 뜻", explanation, level=level, max_len=700),
         _html_row("부족 데이터", ", ".join(str(item) for item in missing_inputs[:5]), level=level, max_len=260),

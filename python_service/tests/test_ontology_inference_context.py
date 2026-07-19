@@ -148,7 +148,7 @@ class OntologyInferenceContextTests(unittest.TestCase):
         self.assertEqual("available", facts["valuationDataStatus"])
         self.assertEqual("ai", facts["valuationSourceType"])
         self.assertEqual("AI 제안", facts["valuationSourceLabel"])
-        self.assertEqual("ai-preferred-income-yield", facts["valuationMethod"])
+        self.assertEqual("ai-preferred-income-yield-scenarios", facts["valuationMethod"])
         self.assertEqual("ai_applied_pending_review", facts["valuationApprovalStatus"])
         self.assertEqual("ai_applied_pending_review", facts["valuationReviewStatus"])
         self.assertTrue(facts["valuationAutoApplied"])
@@ -196,13 +196,14 @@ class OntologyInferenceContextTests(unittest.TestCase):
 
         self.assertEqual("partial", facts["valuationDataStatus"])
         self.assertEqual("ai", facts["valuationSourceType"])
-        self.assertEqual("ai-bitcoin-proxy-nav-draft", facts["valuationMethod"])
+        self.assertEqual("ai-bitcoin-treasury-nav-scenarios", facts["valuationMethod"])
         self.assertEqual("ai_applied_pending_review", facts["valuationApprovalStatus"])
         self.assertTrue(facts["valuationAutoApplied"])
         self.assertTrue(facts["valuationRequiresUserApproval"])
-        self.assertNotEqual(position.current_price, facts["valuationFairValue"])
+        self.assertEqual(0, facts["valuationFairValue"])
         self.assertIn("BTC 보유량", facts["valuationMissingInputs"])
-        self.assertIn("BTC/추세 보정", facts["valuationFormula"])
+        self.assertIn("BTC 보유량", facts["valuationFormula"])
+        self.assertFalse(facts["valuationDecisionEligible"])
         self.assertEqual("not_applicable", facts["valuationPerStatus"])
         self.assertIn("비트코인", facts["valuationPerReason"])
         self.assertEqual("비트코인 보유가치/NAV", facts["valuationPreferredMetric"])
@@ -238,6 +239,7 @@ class OntologyInferenceContextTests(unittest.TestCase):
                         "provider": "KIS Open API",
                         "latestQuarter": {
                             "reportedEPS": 10000,
+                            "epsPeriod": "annual",
                         },
                     }
                 },
@@ -245,16 +247,19 @@ class OntologyInferenceContextTests(unittest.TestCase):
             settings={},
         )
 
-        self.assertEqual("available", facts["valuationDataStatus"])
+        self.assertEqual("partial", facts["valuationDataStatus"])
         self.assertEqual("ai", facts["valuationSourceType"])
-        self.assertEqual("ai-eps-per-from-external-fundamentals", facts["valuationMethod"])
+        self.assertEqual("ai-semiconductor-eps-per-scenarios", facts["valuationMethod"])
         self.assertEqual(120000, facts["valuationFairValue"])
         self.assertEqual(10000, facts["valuationExpectedEPS"])
         self.assertEqual(12, facts["valuationTargetPER"])
-        self.assertIn("외부 EPS x 외부 PER", facts["valuationFormula"])
+        self.assertIn("연간/TTM EPS", facts["valuationFormula"])
         self.assertEqual("available", facts["valuationPerStatus"])
-        self.assertIn("EPS와 PER", facts["valuationPerReason"])
-        self.assertEqual("EPS x PER", facts["valuationPreferredMetric"])
+        self.assertIn("같은 기간", facts["valuationPerReason"])
+        self.assertEqual("연간/TTM EPS x 유형별 PER 범위", facts["valuationPreferredMetric"])
+        self.assertEqual(68000, facts["valuationFairValueLow"])
+        self.assertEqual(184000, facts["valuationFairValueHigh"])
+        self.assertFalse(facts["valuationDecisionEligible"])
 
     def test_position_signal_facts_convert_underlying_kis_fundamentals_for_adr(self):
         position = Position(
@@ -287,6 +292,7 @@ class OntologyInferenceContextTests(unittest.TestCase):
                         "provider": "KIS Open API",
                         "latestQuarter": {
                             "reportedEPS": 10000,
+                            "epsPeriod": "annual",
                         },
                     }
                 },
@@ -294,14 +300,14 @@ class OntologyInferenceContextTests(unittest.TestCase):
             settings={},
         )
 
-        self.assertEqual("available", facts["valuationDataStatus"])
-        self.assertEqual("ai-underlying-eps-per-adr-conversion", facts["valuationMethod"])
+        self.assertEqual("partial", facts["valuationDataStatus"])
+        self.assertEqual("ai-semiconductor-eps-per-scenarios", facts["valuationMethod"])
         self.assertAlmostEqual(8.5714, facts["valuationFairValue"], places=4)
-        self.assertIn("본주 EPS x 본주 PER x ADR비율", facts["valuationFormula"])
-        self.assertEqual([], facts["valuationMissingInputs"])
+        self.assertIn("연간/TTM EPS", facts["valuationFormula"])
+        self.assertIn("메모리 가격/업황 지표", facts["valuationMissingInputs"])
         self.assertEqual("available", facts["valuationPerStatus"])
-        self.assertIn("본주 000660", facts["valuationPerReason"])
-        self.assertEqual("본주 PER/EPS + ADR 비율 + 환율", facts["valuationFundamentalDataSourcePriority"])
+        self.assertIn("같은 기간", facts["valuationPerReason"])
+        self.assertIn("KIS/공식 연간 EPS", facts["valuationFundamentalDataSourcePriority"])
 
     def test_typedb_inferencebox_context_replaces_python_relation_rule_path(self):
         position = Position(

@@ -345,9 +345,20 @@ TYPEDB_PROMOTED_NUMERIC_ATTRIBUTES = {
     "price": "ontology-price",
     "fairValue": "ontology-fair-value",
     "fairValuePrice": "ontology-fair-value-price",
+    "fairValueLow": "ontology-fair-value-low",
+    "fairValueBase": "ontology-fair-value-base",
+    "fairValueHigh": "ontology-fair-value-high",
     "marginOfSafetyPct": "ontology-margin-of-safety-pct",
+    "conservativeMarginOfSafetyPct": "ontology-conservative-margin-of-safety-pct",
+    "optimisticMarginOfSafetyPct": "ontology-optimistic-margin-of-safety-pct",
     "expensivePremiumPct": "ontology-expensive-premium-pct",
     "minimumMarginOfSafetyPct": "ontology-minimum-margin-of-safety-pct",
+    "valuationReliabilityScore": "ontology-valuation-reliability-score",
+    "valuationInputCoveragePct": "ontology-valuation-input-coverage-pct",
+    "valuationDecisionEligible": "ontology-valuation-decision-eligible",
+    "valuationModelCount": "ontology-valuation-model-count",
+    "valuationConsensusPrice": "ontology-valuation-consensus-price",
+    "valuationDisagreementPct": "ontology-valuation-disagreement-pct",
     "expectedEPS": "ontology-expected-eps",
     "reportedEPS": "ontology-reported-eps",
     "estimatedEPS": "ontology-estimated-eps",
@@ -412,6 +423,14 @@ TYPEDB_PROMOTED_TEXT_ATTRIBUTES = {
     "sourceUrl": "ontology-source-url",
     "valuationMethod": "ontology-valuation-method",
     "formula": "ontology-formula",
+    "epsPeriod": "ontology-eps-period",
+    "multiplePeriod": "ontology-multiple-period",
+    "valuationAsOf": "ontology-valuation-as-of",
+    "valuationFreshnessStatus": "ontology-valuation-freshness-status",
+    "valuationConfidenceLabel": "ontology-valuation-confidence-label",
+    "valuationSourceType": "ontology-valuation-source-type",
+    "valuationCurrency": "ontology-valuation-currency",
+    "valuationConsensusStatus": "ontology-valuation-consensus-status",
     "perValuationStatus": "ontology-per-valuation-status",
     "perValuationReason": "ontology-per-valuation-reason",
     "preferredValuationMetric": "ontology-preferred-valuation-metric",
@@ -1435,9 +1454,20 @@ attribute ontology-leverage-factor, value double;
 attribute ontology-price, value double;
 attribute ontology-fair-value, value double;
 attribute ontology-fair-value-price, value double;
+attribute ontology-fair-value-low, value double;
+attribute ontology-fair-value-base, value double;
+attribute ontology-fair-value-high, value double;
 attribute ontology-margin-of-safety-pct, value double;
+attribute ontology-conservative-margin-of-safety-pct, value double;
+attribute ontology-optimistic-margin-of-safety-pct, value double;
 attribute ontology-expensive-premium-pct, value double;
 attribute ontology-minimum-margin-of-safety-pct, value double;
+attribute ontology-valuation-reliability-score, value double;
+attribute ontology-valuation-input-coverage-pct, value double;
+attribute ontology-valuation-decision-eligible, value double;
+attribute ontology-valuation-model-count, value double;
+attribute ontology-valuation-consensus-price, value double;
+attribute ontology-valuation-disagreement-pct, value double;
 attribute ontology-expected-eps, value double;
 attribute ontology-reported-eps, value double;
 attribute ontology-estimated-eps, value double;
@@ -1497,6 +1527,14 @@ attribute ontology-listing-date, value string;
 attribute ontology-source-url, value string;
 attribute ontology-valuation-method, value string;
 attribute ontology-formula, value string;
+attribute ontology-eps-period, value string;
+attribute ontology-multiple-period, value string;
+attribute ontology-valuation-as-of, value string;
+attribute ontology-valuation-freshness-status, value string;
+attribute ontology-valuation-confidence-label, value string;
+attribute ontology-valuation-source-type, value string;
+attribute ontology-valuation-currency, value string;
+attribute ontology-valuation-consensus-status, value string;
 attribute ontology-per-valuation-status, value string;
 attribute ontology-per-valuation-reason, value string;
 attribute ontology-preferred-valuation-metric, value string;
@@ -1592,9 +1630,20 @@ entity ontology-node @abstract,
     owns ontology-price,
     owns ontology-fair-value,
     owns ontology-fair-value-price,
+    owns ontology-fair-value-low,
+    owns ontology-fair-value-base,
+    owns ontology-fair-value-high,
     owns ontology-margin-of-safety-pct,
+    owns ontology-conservative-margin-of-safety-pct,
+    owns ontology-optimistic-margin-of-safety-pct,
     owns ontology-expensive-premium-pct,
     owns ontology-minimum-margin-of-safety-pct,
+    owns ontology-valuation-reliability-score,
+    owns ontology-valuation-input-coverage-pct,
+    owns ontology-valuation-decision-eligible,
+    owns ontology-valuation-model-count,
+    owns ontology-valuation-consensus-price,
+    owns ontology-valuation-disagreement-pct,
     owns ontology-expected-eps,
     owns ontology-reported-eps,
     owns ontology-estimated-eps,
@@ -1654,6 +1703,14 @@ entity ontology-node @abstract,
     owns ontology-source-url,
     owns ontology-valuation-method,
     owns ontology-formula,
+    owns ontology-eps-period,
+    owns ontology-multiple-period,
+    owns ontology-valuation-as-of,
+    owns ontology-valuation-freshness-status,
+    owns ontology-valuation-confidence-label,
+    owns ontology-valuation-source-type,
+    owns ontology-valuation-currency,
+    owns ontology-valuation-consensus-status,
     owns ontology-per-valuation-status,
     owns ontology-per-valuation-reason,
     owns ontology-preferred-valuation-metric,

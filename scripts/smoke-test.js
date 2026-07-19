@@ -207,9 +207,14 @@ function checkWorkflowConsoleContract() {
   });
   assertOk(code.indexOf('data-console-workspace="') >= 0 && code.indexOf("renderConsoleMetricStrip") >= 0 && code.indexOf("renderConsoleSurface") >= 0, "공통 콘솔 화면 계약이 없습니다.");
   assertOk(code.indexOf("consolePageSlice(rows, \"market\", 8)") >= 0 && code.indexOf("consolePageSlice(rows, \"alerts\", 10)") >= 0, "대량 목록 페이징 제한이 없습니다.");
+  assertOk(code.indexOf("todayQueueWorkDetailPayload") >= 0 && code.indexOf("decisionQueueWorkDetailPayload") >= 0 && code.indexOf('"today-work-queue"') >= 0 && code.indexOf('"decision-action-queue"') >= 0, "오늘/판단 목록의 전체 보기 경로가 없습니다.");
   assertOk(code.indexOf('data-work-detail="market-instrument"') >= 0 && code.indexOf('data-work-detail="notification-job"') >= 0, "목록에서 전체화면 상세로 이동하는 경로가 없습니다.");
+  assertOk(code.indexOf("function workDetailUrl") >= 0 && code.indexOf('params.set("detail"') >= 0 && code.indexOf('params.set("detailKey"') >= 0 && code.indexOf("closeWorkDetailLayer") >= 0, "상세 URL과 브라우저 뒤로 가기 계약이 없습니다.");
+  assertOk(code.indexOf("trapWorkDetailFocus") >= 0 && code.indexOf("restoreWorkDetailFocus") >= 0 && code.indexOf("data-work-detail-dialog") >= 0, "상세 화면의 키보드 포커스 관리가 없습니다.");
   assertOk(code.indexOf('params.set("mock", "1")') >= 0, "로컬 웹 URL에서 서버 mock 검증 모드로 연결되는 경로가 없습니다.");
-  assertOk(code.indexOf("function patchStableDashboardMarkup") >= 0 && code.indexOf("function syncStableDashboardDom") >= 0 && code.indexOf('data-render-mode", "stable-patch"') >= 0, "실시간 데이터 변경 시 안정적인 DOM 부분 갱신 경로가 없습니다.");
+  assertOk(code.indexOf("function patchStableDashboardMarkup") >= 0 && code.indexOf("function syncStableDashboardDom") >= 0 && code.indexOf("function reconcileDashboardCollections") >= 0 && code.indexOf('data-console-row-key="') >= 0 && code.indexOf('data-render-mode", "stable-patch"') >= 0, "실시간 데이터 변경 시 canonical key 기반 DOM 부분 갱신 경로가 없습니다.");
+  assertOk(code.indexOf("orbitAlphaLastSnapshotPersistent") >= 0 && code.indexOf("writePersistentPayload") >= 0, "새 탭에서도 즉시 표시할 최근 스냅샷 캐시가 없습니다.");
+  assertOk(code.indexOf("formatConsoleNarrative") >= 0 && code.indexOf("compactSecurityName") >= 0, "긴 종목명과 과도한 숫자 정밀도 정리가 없습니다.");
   assertOk(code.indexOf("researchEvidenceKoreanSummary(item)") >= 0 && code.indexOf("researchEvidenceImpactMeta(item)") >= 0, "뉴스 목록에 한글 본문 요약과 주가 영향 분석이 없습니다.");
   assertOk(code.indexOf('state.activeTab === "notifications" || notificationDetailNeedsEvidence') >= 0, "알림 상세가 연결된 뉴스 근거를 지연 로드하지 않습니다.");
   assertOk(code.indexOf("원문/출처") >= 0 && code.indexOf("기사 분석") >= 0, "알림 상세의 하단 기사 원문 진입 구조가 없습니다.");
@@ -236,7 +241,8 @@ function checkWorkflowConsoleContract() {
   assertOk(/\.console-shell > \.topbar,[\s\S]*\.workspace-layout > \.tab-bar\s*\{[\s\S]*display: none !important;/.test(styles), "중복 상단 영역이 제거되지 않았습니다.");
   assertOk(/\.work-detail-backdrop\s*\{[\s\S]*overflow-y: auto;/.test(styles) && /\.work-detail-layer\s*\{[\s\S]*width: 100%;[\s\S]*min-height: 100dvh;[\s\S]*overflow: visible;/.test(styles), "상세가 우측 패널이 아닌 전체화면 페이지로 열리지 않습니다.");
   assertOk(/\.work-detail-body\s*\{[\s\S]*overflow: visible;/.test(styles), "상세 본문에 중첩 스크롤이 남아 있습니다.");
-  assertOk(indexHtml.indexOf("styles.css?v=20260719-workflow-console-v5") >= 0 && indexHtml.indexOf("app.js?v=20260719-workflow-console-v5") >= 0, "새 콘솔 정적 자산 cache key가 반영되지 않았습니다.");
+  assertOk(styles.indexOf("Workflow console continuity and detail navigation pass") >= 0 && styles.indexOf(".oa-detail-queue") >= 0, "전체 목록 상세와 포커스 스타일이 없습니다.");
+  assertOk(indexHtml.indexOf("styles.css?v=20260719-workflow-console-v6") >= 0 && indexHtml.indexOf("app.js?v=20260719-workflow-console-v6") >= 0, "새 콘솔 정적 자산 cache key가 반영되지 않았습니다.");
 }
 
 function checkFrontendAdminRender() {

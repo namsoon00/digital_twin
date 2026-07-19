@@ -26762,7 +26762,7 @@ html[data-theme="dark"] .ontology-graph-expanded-toolbar .icon-button.danger {
   }
 }
 
-/* Workflow console final contract lock. Keep this block at the physical EOF. */
+/* Workflow console viewport contract lock. */
 .console-shell.web-style-shell,
 .console-shell.web-style-shell.shell-home,
 .console-shell.web-style-shell.shell-page {
@@ -26834,4 +26834,42 @@ html[data-theme="dark"] .ontology-graph-expanded-toolbar .icon-button.danger {
 .work-detail-layer > .work-detail-footer {
   padding: 16px 0 28px !important;
   background: transparent !important;
+}
+
+/* Workflow console continuity and detail navigation pass. */
+.oa-live-region,
+.oa-pager-slot {
+  min-width: 0;
+}
+
+.oa-pager-slot:empty {
+  display: none;
+}
+
+.oa-detail-queue {
+  min-width: 0;
+  overflow: hidden;
+  border: 1px solid var(--oa-surface-border);
+  border-radius: 7px;
+  background: #fff;
+}
+
+.work-detail-layer:focus {
+  outline: none;
+}
+
+.work-detail-layer :focus-visible {
+  outline: 2px solid var(--blue);
+  outline-offset: 2px;
+}
+
+@media (max-width: 1180px) {
+  .oa-surface-head {
+    grid-template-columns: minmax(0, 1fr) auto;
+  }
+
+  .oa-surface-actions {
+    grid-column: 1 / -1;
+    justify-content: flex-start;
+  }
 }

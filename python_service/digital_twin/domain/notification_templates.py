@@ -951,6 +951,42 @@ def absolute_beginner_rule_sentence(item: Dict[str, object]) -> str:
     return sentence_text(clean)
 
 
+def absolute_beginner_inference_flow_sentence(context: Dict[str, object], rules: List[Dict[str, object]]) -> str:
+    relation_context = ontology_relation_context(context)
+    if not relation_context:
+        return ""
+    subject_name = relation_subject_name(context, relation_context)
+    useful_rules = [
+        item
+        for item in rules
+        if isinstance(item, dict) and not item.get("referenceOnly") and not item.get("reference_only")
+    ]
+    if not useful_rules:
+        return ""
+    first = useful_rules[0]
+    label = absolute_beginner_friendly_text(rule_value(first, "label", "name", "ruleId", "rule_id") or "")
+    if "→" in label:
+        before, after = [part.strip() for part in label.split("→", 1)]
+    elif "->" in label:
+        before, after = [part.strip() for part in label.split("->", 1)]
+    else:
+        before, after = label, "확인 알림"
+    before = before.replace(" + ", "이고 ")
+    before = before.replace("추론", "점검")
+    after = after.replace("추론", "점검")
+    if before:
+        return sentence_text(
+            "추론은 "
+            + subject_name
+            + "의 현재 데이터가 '"
+            + before
+            + "' 조건에 맞는지 확인하고, 맞으면 '"
+            + after
+            + "' 알림으로 연결하는 방식입니다"
+        )
+    return ""
+
+
 def absolute_beginner_ontology_modeling_lines(context: Dict[str, object]) -> List[str]:
     relation_context = ontology_relation_context(context)
     if not relation_context:
@@ -978,6 +1014,9 @@ def absolute_beginner_ontology_modeling_lines(context: Dict[str, object]) -> Lis
     if action_sentence:
         lines.append(action_sentence)
     rules = relation_context.get("activeRules") or relation_context.get("matchedRules") or []
+    flow_sentence = absolute_beginner_inference_flow_sentence(context, rules)
+    if flow_sentence:
+        lines.append(flow_sentence)
     rule_sentences: List[str] = []
     for item in rules:
         if not isinstance(item, dict) or item.get("referenceOnly") or item.get("reference_only"):

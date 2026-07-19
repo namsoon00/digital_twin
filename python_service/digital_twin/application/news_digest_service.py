@@ -329,6 +329,58 @@ def compact_digest_line(label: str, value: object, seen: set, limit: int = 420) 
     return "• " + label + ": " + html_text(text)
 
 
+def item_watch_text(item: Dict[str, object]) -> str:
+    return ai_watch_line(item) or "다음 장 가격 반응과 거래량 동반 여부"
+
+
+def alert_reason_context_item(item: Dict[str, object]) -> Dict[str, object]:
+    symbol = normalized_symbol(item.get("symbol"))
+    name = clean_text(item.get("displayName") or symbol or "종목")
+    title = bounded_text(item.get("title"), 90)
+    bucket = clean_text(item.get("portfolioBucket") or "대상")
+    relevance = score_text(item.get("relevanceScore") or (item.get("payload") or {}).get("relevanceScore"))
+    importance = score_text(item.get("materialityScore") or (item.get("payload") or {}).get("materialityScore"))
+    return {
+        "symbol": symbol,
+        "name": name,
+        "title": title,
+        "bucket": bucket,
+        "impact": impact_label(item),
+        "relevance": relevance,
+        "importance": importance,
+        "watch": item_watch_text(item),
+    }
+
+
+def alert_reason_lines(items: List[Dict[str, object]]) -> List[str]:
+    if not items:
+        return ["• 새 뉴스/피드 근거가 들어와 확인 알림을 보냈습니다."]
+    primary = alert_reason_context_item(items[0])
+    name = str(primary.get("name") or "종목")
+    symbol = str(primary.get("symbol") or "")
+    target = name + ((" / " + symbol) if symbol and symbol != name else "")
+    bucket = str(primary.get("bucket") or "대상")
+    title = str(primary.get("title") or "제목 미확인")
+    impact = str(primary.get("impact") or "중립")
+    score_parts = [part for part in [primary.get("relevance"), primary.get("importance")] if part]
+    score_text_value = "·".join(str(part) for part in score_parts)
+    lines = [
+        "• 새 뉴스가 들어왔습니다: " + html_text(title),
+        "• 이 뉴스는 " + html_text(target) + " " + html_text(bucket) + " 종목과 직접 관련된 " + html_text(impact) + " 뉴스로 분류됐습니다.",
+    ]
+    if score_text_value:
+        lines.append("• 관련성·중요도 " + html_text(score_text_value) + " 기준을 통과해서 지금 알림을 보냈습니다.")
+    else:
+        lines.append("• 새 근거가 기존 보유/관심 종목과 연결되어 지금 알림을 보냈습니다.")
+    lines.extend([
+        "• 단독 매수·매도 신호가 아니라, 가격 반응과 거래량이 같은 방향으로 따라오는지 확인하라는 알림입니다.",
+        "• 확인할 것: " + html_text(primary.get("watch") or "다음 장 가격 반응과 거래량 동반 여부"),
+    ])
+    if len(items) > 1:
+        lines.append("• 함께 들어온 새 뉴스가 " + str(len(items)) + "건이라 기사 상세에서 각각 확인할 수 있습니다.")
+    return lines
+
+
 def ai_watch_line(item: Dict[str, object]) -> str:
     summary = ai_summary(item)
     values = summary.get("watchPoints") if isinstance(summary, dict) else []
@@ -641,6 +693,7 @@ class NewsDigestEnqueuer:
         strategy_context = merge_strategy_context({}, account)
         strategy_lines = strategy_message_lines(strategy_context)
         effect_lines = impact_summary_lines(items)
+        reason_lines = alert_reason_lines(items)
         item_lines = []
         for index, item in enumerate(items, start=1):
             symbol = normalized_symbol(item.get("symbol"))
@@ -686,7 +739,6 @@ class NewsDigestEnqueuer:
             item_lines.append("• 원문: " + link)
             if index < len(items):
                 item_lines.append("")
-        reason = "신선도·관련성·중요도 기준을 통과한 새 뉴스/피드 근거가 저장됐습니다."
         number = tracking_number or notification_debug_number(event.event_id)
         parts = [
             "🔔 새 알림 · 새 뉴스 " + str(len(items)) + "건",
@@ -709,7 +761,7 @@ class NewsDigestEnqueuer:
             *item_lines,
             "",
             "알림이 온 이유",
-            "• " + html_text(reason),
+            *reason_lines,
             "",
             "알림 추적",
             "• 번호: " + html_text(number),

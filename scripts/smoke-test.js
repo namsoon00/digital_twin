@@ -292,6 +292,15 @@ function checkFrontendAdminRender() {
     "PC 알림 탭의 상단 콘솔/진단 패널 레이아웃 보정 계약이 없습니다."
   );
   assertOk(
+    styles.indexOf("Notification operations desktop fit pass") >= 0 &&
+      /--notification-ops-workspace-width: 1760px;/.test(styles) &&
+      /\.notifications-view \.notification-command-center,[\s\S]*\.notifications-view \.notification-decision-panel\s*\{[\s\S]*width: min\(100%, var\(--notification-ops-workspace-width\)\);[\s\S]*justify-self: center;/.test(styles) &&
+      /\.notifications-view \.notification-command-center\s*\{[\s\S]*grid-template-columns: minmax\(260px, 0\.24fr\) minmax\(0, 1fr\);/.test(styles) &&
+      /\.notifications-view \.notification-search-panel\s*\{[\s\S]*grid-template-columns: minmax\(420px, 1fr\) repeat\(2, minmax\(180px, 220px\)\) max-content;/.test(styles) &&
+      /@media \(max-width: 1380px\) and \(min-width: 1181px\)[\s\S]*\.notifications-view \.notification-command-center\s*\{[\s\S]*grid-template-columns: minmax\(0, 1fr\);/.test(styles),
+    "알림 운영 탭이 넓은 PC에서 과도하게 벌어지지 않도록 최종 fit pass가 고정되지 않았습니다."
+  );
+  assertOk(
     styles.indexOf("Desktop no-three-line rhythm") >= 0 &&
       /\.shell > \.topbar h1,[\s\S]*\.shell > \.topbar \.subtle,[\s\S]*\.loading-brand h1,[\s\S]*\.loading-brand \.subtle\s*\{[\s\S]*white-space: nowrap;/.test(styles) &&
       /\.app-nav-command-kicker\s*\{[\s\S]*display: none;/.test(styles) &&

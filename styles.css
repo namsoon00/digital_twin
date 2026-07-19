@@ -18415,6 +18415,63 @@ html[data-theme="dark"] .ontology-graph-expanded-toolbar .icon-button.danger {
   margin-top: var(--ds-space-4);
 }
 
+.ontology-experiments-view button[data-lab-tooltip] {
+  position: relative;
+}
+
+.ontology-experiments-view button[data-lab-tooltip]::before,
+.ontology-experiments-view button[data-lab-tooltip]::after {
+  position: absolute;
+  left: 50%;
+  z-index: 80;
+  opacity: 0;
+  pointer-events: none;
+  transform: translate(-50%, 6px);
+  transition: opacity 140ms ease, transform 140ms ease;
+}
+
+.ontology-experiments-view button[data-lab-tooltip]::before {
+  content: "";
+  top: calc(100% + 4px);
+  border: 6px solid transparent;
+  border-bottom-color: color-mix(in srgb, var(--ink) 88%, #000);
+}
+
+.ontology-experiments-view button[data-lab-tooltip]::after {
+  content: attr(data-lab-tooltip);
+  top: calc(100% + 15px);
+  width: max-content;
+  max-width: min(360px, calc(100vw - 32px));
+  padding: 9px 11px;
+  border: 1px solid color-mix(in srgb, var(--ink) 16%, transparent);
+  border-radius: var(--ds-radius-control);
+  background: color-mix(in srgb, var(--ink) 92%, #000);
+  box-shadow: 0 12px 30px color-mix(in srgb, var(--ink) 18%, transparent);
+  color: var(--ds-color-on-action);
+  font-size: 12px;
+  font-weight: 800;
+  line-height: 1.45;
+  text-align: left;
+  white-space: normal;
+  overflow-wrap: anywhere;
+}
+
+.ontology-experiments-view button[data-lab-tooltip]:hover::before,
+.ontology-experiments-view button[data-lab-tooltip]:hover::after,
+.ontology-experiments-view button[data-lab-tooltip]:focus-visible::before,
+.ontology-experiments-view button[data-lab-tooltip]:focus-visible::after {
+  opacity: 1;
+  transform: translate(-50%, 0);
+}
+
+.ontology-experiment-section-tabs button[data-lab-tooltip]::before {
+  top: calc(100% + 2px);
+}
+
+.ontology-experiment-section-tabs button[data-lab-tooltip]::after {
+  top: calc(100% + 13px);
+}
+
 .ontology-experiment-gate-reason {
   margin: 0 var(--ds-panel-pad-x) var(--ds-space-3);
 }
@@ -25220,5 +25277,69 @@ html[data-theme="dark"] .ontology-graph-expanded-toolbar .icon-button.danger {
 
   .notifications-view .notification-workbench {
     grid-template-columns: minmax(420px, 0.9fr) minmax(480px, 1.1fr);
+  }
+}
+
+/* Desktop sticky detail inspector layer: keep right-side detail visible while long lists scroll. */
+:root {
+  --ds-workbench-sticky-top: 24px;
+  --ds-workbench-sticky-max-height: calc(100dvh - var(--ds-workbench-sticky-top) - 24px);
+}
+
+@media (min-width: 1181px) {
+  .console-shell :where(
+    .notification-decision-panel,
+    .symbol-universe-panel,
+    .feed-impact-inbox-panel,
+    .research-evidence-panel,
+    .investment-action-panel,
+    .investment-evidence-workbench-panel
+  ) {
+    overflow: visible;
+  }
+
+  .console-shell :where(
+    .notification-detail-pane,
+    .symbol-detail-panel,
+    .research-evidence-detail-panel,
+    .investment-action-detail-panel,
+    .feed-view .feed-side-column,
+    .ontology-experiment-workbench-main,
+    .investment-evidence-selected-panel,
+    .investment-today-selected-panel,
+    .strategy-view .investment-tab-workspace-overview .investment-tab-stack-side
+  ) {
+    position: sticky;
+    top: var(--ds-workbench-sticky-top);
+    align-self: start;
+    height: fit-content;
+    max-height: var(--ds-workbench-sticky-max-height);
+    overflow: auto;
+    overscroll-behavior: contain;
+    scrollbar-gutter: stable;
+    scrollbar-width: thin;
+  }
+
+  .console-shell .notification-detail-pane > .notification-decision-detail {
+    min-height: 0;
+  }
+}
+
+@media (max-width: 1180px) {
+  .console-shell :where(
+    .notification-detail-pane,
+    .symbol-detail-panel,
+    .research-evidence-detail-panel,
+    .investment-action-detail-panel,
+    .feed-view .feed-side-column,
+    .ontology-experiment-workbench-main,
+    .investment-evidence-selected-panel,
+    .investment-today-selected-panel,
+    .strategy-view .investment-tab-workspace-overview .investment-tab-stack-side
+  ) {
+    position: static;
+    max-height: none;
+    overflow: visible;
+    scrollbar-gutter: auto;
   }
 }

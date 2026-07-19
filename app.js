@@ -7814,9 +7814,9 @@
     render();
   }
 
-  function renderWorkDetailButton(type, key, label, className) {
+  function renderWorkDetailButton(type, key, label, className, extraAttrs) {
     return [
-      '<button class="' + escapeHtml(className || "mini-button") + '" type="button" data-work-detail="' + escapeHtml(type || "") + '" data-work-detail-key="' + escapeHtml(key || "") + '">',
+      '<button class="' + escapeHtml(className || "mini-button") + '" type="button" data-work-detail="' + escapeHtml(type || "") + '" data-work-detail-key="' + escapeHtml(key || "") + '"' + (extraAttrs || "") + '>',
       escapeHtml(label || "상세 보기"),
       '</button>'
     ].join("");
@@ -10014,6 +10014,39 @@
     ].join(""));
   }
 
+  function ontologyExperimentTooltipAttrs(text) {
+    var value = String(text || "").trim();
+    if (!value) return "";
+    return ' data-lab-tooltip="' + escapeHtml(value) + '" title="' + escapeHtml(value) + '" aria-description="' + escapeHtml(value) + '"';
+  }
+
+  function ontologyExperimentSectionTooltip(sectionId) {
+    var descriptions = {
+      overview: "실험 현황, 최근 실행 상태, AI 후보 제안과 활성 실험 실행을 확인합니다.",
+      validation: "선택한 실험을 기준으로 백테스트, 리플레이, 후보 비교 결과를 검토합니다.",
+      promotion: "검증을 통과한 실험을 운영 RuleBox에 반영할 수 있는지 심사합니다.",
+      audit: "실험 실행, 승격 판정, 운영 반영 이력을 시간순으로 확인합니다.",
+      proposals: "전략 제안 승인 큐에서 검증된 가설의 조건, 성과, 이력을 검토합니다."
+    };
+    return descriptions[sectionId] || "전략 검증 화면의 하위 섹션으로 이동합니다.";
+  }
+
+  function ontologyExperimentActionTooltip(action) {
+    var descriptions = {
+      refresh: "전략 검증 실험 목록과 최근 실행 결과를 다시 불러옵니다.",
+      suggest: "최근 판단 실패와 누락 근거를 분석해 새 RuleBox 후보 실험을 만듭니다.",
+      runActive: "활성 상태의 실험들을 현재 스냅샷으로 샌드박스 검증합니다.",
+      select: "이 실험을 검증, 승격, 상세 패널의 기준 대상으로 선택합니다.",
+      detail: "선택한 실험의 가설, 후보 규칙, 승격 체크리스트를 상세 레이어로 엽니다.",
+      run: "이 실험만 샌드박스에서 실행해 관계 변화와 승격 조건을 다시 계산합니다.",
+      apply: "승격 조건을 통과한 검증 결과를 운영 RuleBox 기준에 반영합니다.",
+      applyRecommendation: "AI 보완 제안이 포함된 실험 결과를 운영 기준에 적용합니다.",
+      pause: "이 실험을 자동 검증 대상에서 제외해 다음 실행부터 멈춥니다.",
+      activate: "이 실험을 활성 상태로 바꿔 다음 자동 검증 대상에 포함합니다."
+    };
+    return descriptions[action] || "전략 검증 작업을 실행합니다.";
+  }
+
   function renderOntologyExperimentSectionBar() {
     var activeId = normalizeExperimentSection(state.activeExperimentSection);
     return [
@@ -10022,7 +10055,7 @@
       experimentSections.map(function (item) {
         var active = activeId === item.id;
         return [
-          '<button type="button" role="tab" class="' + (active ? "active" : "") + '" data-lab-section="' + escapeHtml(item.id) + '"' + (active ? ' aria-selected="true"' : ' aria-selected="false"') + '>',
+          '<button type="button" role="tab" class="' + (active ? "active" : "") + '" data-lab-section="' + escapeHtml(item.id) + '"' + ontologyExperimentTooltipAttrs(ontologyExperimentSectionTooltip(item.id)) + (active ? ' aria-selected="true"' : ' aria-selected="false"') + '>',
           '<strong>' + escapeHtml(item.label) + '</strong>',
           '<span>' + escapeHtml(item.description) + '</span>',
           '</button>'
@@ -10242,9 +10275,9 @@
       renderOntologyExperimentMetric("배치", payload.batchSize || "-", "batch"),
       '</div>',
       '<div class="ontology-experiment-actions">',
-      '<button class="text-button" type="button" data-lab-refresh' + (state.ontologyExperimentsLoading ? ' disabled' : '') + '>' + escapeHtml(state.ontologyExperimentsLoading ? "조회 중" : "새로고침") + '</button>',
-      '<button class="text-button" type="button" data-lab-suggest' + (state.ontologyExperimentAction ? ' disabled' : '') + '>' + escapeHtml(ontologyExperimentBusy("suggest") ? "제안 중" : "AI 실험 제안") + '</button>',
-      '<button class="text-button primary" type="button" data-lab-run-active' + (state.ontologyExperimentAction ? ' disabled' : '') + '>' + escapeHtml(ontologyExperimentBusy("once") ? "실행 중" : "활성 실험 실행") + '</button>',
+      '<button class="text-button" type="button" data-lab-refresh' + ontologyExperimentTooltipAttrs(ontologyExperimentActionTooltip("refresh")) + (state.ontologyExperimentsLoading ? ' disabled' : '') + '>' + escapeHtml(state.ontologyExperimentsLoading ? "조회 중" : "새로고침") + '</button>',
+      '<button class="text-button" type="button" data-lab-suggest' + ontologyExperimentTooltipAttrs(ontologyExperimentActionTooltip("suggest")) + (state.ontologyExperimentAction ? ' disabled' : '') + '>' + escapeHtml(ontologyExperimentBusy("suggest") ? "제안 중" : "AI 실험 제안") + '</button>',
+      '<button class="text-button primary" type="button" data-lab-run-active' + ontologyExperimentTooltipAttrs(ontologyExperimentActionTooltip("runActive")) + (state.ontologyExperimentAction ? ' disabled' : '') + '>' + escapeHtml(ontologyExperimentBusy("once") ? "실행 중" : "활성 실험 실행") + '</button>',
       '</div>',
       state.ontologyExperimentsError ? '<p class="form-error">' + escapeHtml(state.ontologyExperimentsError) + '</p>' : '',
       '<p class="subtle">AI 자동 제안 ' + escapeHtml(payload.autoSuggestEnabled === false ? "중지" : (payload.autoSuggestConfigured === false ? "미설정" : "실행")) + ' · 주기 ' + escapeHtml(payload.autoSuggestIntervalMinutes || "-") + '분 · 최대 ' + escapeHtml(payload.autoSuggestLimit || "-") + '건</p>',
@@ -10362,7 +10395,7 @@
           label: "Selected Experiment",
           title: "선택된 실험이 없습니다",
           description: "AI 실험 제안을 만들거나 목록에서 검증할 실험을 선택하세요.",
-          action: '<button class="text-button primary" type="button" data-lab-suggest' + (state.ontologyExperimentAction ? ' disabled' : '') + '>' + escapeHtml(ontologyExperimentBusy("suggest") ? "제안 중" : "AI 실험 제안") + '</button>'
+          action: '<button class="text-button primary" type="button" data-lab-suggest' + ontologyExperimentTooltipAttrs(ontologyExperimentActionTooltip("suggest")) + (state.ontologyExperimentAction ? ' disabled' : '') + '>' + escapeHtml(ontologyExperimentBusy("suggest") ? "제안 중" : "AI 실험 제안") + '</button>'
         }),
         '</article>'
       ].join("");
@@ -10390,9 +10423,9 @@
       '</div>',
       symbols.length ? '<div class="theme-radar ontology-experiment-tags">' + symbols.slice(0, 12).map(function (item) { return '<span>' + escapeHtml(item) + '</span>'; }).join("") + '</div>' : '',
       '<div class="ontology-experiment-actions">',
-      renderWorkDetailButton("ontology-experiment", id, "상세", "text-button compact"),
-      '<button class="text-button" type="button" data-lab-run="' + escapeHtml(id) + '"' + (ontologyExperimentBusy("run", id) || !id ? ' disabled' : '') + '>' + escapeHtml(ontologyExperimentBusy("run", id) ? "실행 중" : "검증 실행") + '</button>',
-      gate.canApply ? '<button class="text-button primary" type="button" data-lab-apply="' + escapeHtml(id) + '"' + (ontologyExperimentBusy("apply", id) || !id ? ' disabled' : '') + '>' + escapeHtml(ontologyExperimentBusy("apply", id) ? "반영 중" : "운영 반영") + '</button>' : '',
+      renderWorkDetailButton("ontology-experiment", id, "상세", "text-button compact", ontologyExperimentTooltipAttrs(ontologyExperimentActionTooltip("detail"))),
+      '<button class="text-button" type="button" data-lab-run="' + escapeHtml(id) + '"' + ontologyExperimentTooltipAttrs(ontologyExperimentActionTooltip("run")) + (ontologyExperimentBusy("run", id) || !id ? ' disabled' : '') + '>' + escapeHtml(ontologyExperimentBusy("run", id) ? "실행 중" : "검증 실행") + '</button>',
+      gate.canApply ? '<button class="text-button primary" type="button" data-lab-apply="' + escapeHtml(id) + '"' + ontologyExperimentTooltipAttrs(ontologyExperimentActionTooltip("apply")) + (ontologyExperimentBusy("apply", id) || !id ? ' disabled' : '') + '>' + escapeHtml(ontologyExperimentBusy("apply", id) ? "반영 중" : "운영 반영") + '</button>' : '',
       '</div>',
       '</article>'
     ].join("");
@@ -10623,8 +10656,8 @@
       checks.map(renderOntologyExperimentPromotionCheck).join(""),
       '</div>',
       '<div class="ontology-experiment-actions">',
-      canApply ? '<button class="text-button primary" type="button" data-lab-apply="' + escapeHtml(id) + '"' + (ontologyExperimentBusy("apply", id) ? ' disabled' : '') + '>' + escapeHtml(ontologyExperimentBusy("apply", id) ? "반영 중" : "검증 제안 운영 반영") + '</button>' : '',
-      id ? renderWorkDetailButton("ontology-experiment", id, "상세 심사", "text-button compact") : '',
+      canApply ? '<button class="text-button primary" type="button" data-lab-apply="' + escapeHtml(id) + '"' + ontologyExperimentTooltipAttrs(ontologyExperimentActionTooltip("apply")) + (ontologyExperimentBusy("apply", id) ? ' disabled' : '') + '>' + escapeHtml(ontologyExperimentBusy("apply", id) ? "반영 중" : "검증 제안 운영 반영") + '</button>' : '',
+      id ? renderWorkDetailButton("ontology-experiment", id, "상세 심사", "text-button compact", ontologyExperimentTooltipAttrs(ontologyExperimentActionTooltip("detail"))) : '',
       '</div>',
       '</article>'
     ].join("");
@@ -10729,7 +10762,7 @@
       '<article class="panel ontology-experiment-starter-panel"' + cardTypeAttrs("action-queue-card", "hold") + '>',
       '<div class="panel-head">',
       '<div><p class="label">STARTER FLOW</p><h2>전략 검증 시작점</h2><span>빈 화면에서도 다음 작업이 보이도록 실험 생성, 실행, 운영 반영 흐름을 고정합니다.</span></div>',
-      '<button class="text-button primary" type="button" data-lab-suggest' + (state.ontologyExperimentAction ? ' disabled' : '') + '>' + escapeHtml(ontologyExperimentBusy("suggest") ? "제안 중" : "AI 실험 제안") + '</button>',
+      '<button class="text-button primary" type="button" data-lab-suggest' + ontologyExperimentTooltipAttrs(ontologyExperimentActionTooltip("suggest")) + (state.ontologyExperimentAction ? ' disabled' : '') + '>' + escapeHtml(ontologyExperimentBusy("suggest") ? "제안 중" : "AI 실험 제안") + '</button>',
       '</div>',
       '<div class="ontology-experiment-starter-grid">',
       renderExperimentStarterStep("01", "후보 규칙 생성", "최근 판단 실패와 누락 근거에서 RuleBox 후보를 만듭니다.", "process-card"),
@@ -10796,7 +10829,7 @@
         title: "등록된 실험이 없습니다",
         description: "후보 RuleBox 실험을 만들면 이 탭에서 실행 상태를 볼 수 있습니다.",
         meta: ["AI 제안으로 시작", "활성 실험만 자동 검증"],
-        action: '<button class="text-button primary" type="button" data-lab-suggest' + (state.ontologyExperimentAction ? ' disabled' : '') + '>' + escapeHtml(ontologyExperimentBusy("suggest") ? "제안 중" : "AI 실험 제안") + '</button>'
+        action: '<button class="text-button primary" type="button" data-lab-suggest' + ontologyExperimentTooltipAttrs(ontologyExperimentActionTooltip("suggest")) + (state.ontologyExperimentAction ? ' disabled' : '') + '>' + escapeHtml(ontologyExperimentBusy("suggest") ? "제안 중" : "AI 실험 제안") + '</button>'
       }) : '',
       experiments.length ? '<div class="ontology-experiment-list">' + experiments.map(function (experiment) { return renderOntologyExperimentCard(experiment, options); }).join("") + '</div>' : '',
       '</article>'
@@ -10881,11 +10914,11 @@
       gate.reasonLabel ? '<p class="subtle">승격 게이트 ' + escapeHtml(gate.reasonLabel) + '</p>' : '',
       latest.completedAt ? '<p class="subtle">최근 실행 ' + escapeHtml(formatClock(latest.completedAt)) + '</p>' : '',
       '<div class="ontology-experiment-card-actions">',
-      options.selectable ? '<button class="text-button compact' + (selected ? " primary" : "") + '" type="button" data-lab-select="' + escapeHtml(id) + '"' + (!id || selected ? ' disabled' : '') + '>' + escapeHtml(selected ? "선택됨" : "검토 기준") + '</button>' : '',
-      renderWorkDetailButton("ontology-experiment", id, "상세", "text-button compact"),
-      recommendations.length && latest.completedAt ? '<button class="text-button primary" type="button" data-lab-apply="' + escapeHtml(id) + '"' + (actionBusy || !id || applied ? ' disabled' : '') + '>' + escapeHtml(ontologyExperimentBusy("apply", id) ? "반영 중" : (applied ? "반영됨" : "제안 적용")) + '</button>' : '',
-      '<button class="text-button" type="button" data-lab-run="' + escapeHtml(id) + '"' + (actionBusy || !id ? ' disabled' : '') + '>' + escapeHtml(ontologyExperimentBusy("run", id) ? "실행 중" : "실행") + '</button>',
-      active ? '<button class="text-button" type="button" data-lab-pause="' + escapeHtml(id) + '"' + (actionBusy || !id ? ' disabled' : '') + '>일시정지</button>' : '<button class="text-button primary" type="button" data-lab-activate="' + escapeHtml(id) + '"' + (actionBusy || !id ? ' disabled' : '') + '>활성화</button>',
+      options.selectable ? '<button class="text-button compact' + (selected ? " primary" : "") + '" type="button" data-lab-select="' + escapeHtml(id) + '"' + ontologyExperimentTooltipAttrs(ontologyExperimentActionTooltip("select")) + (!id || selected ? ' disabled' : '') + '>' + escapeHtml(selected ? "선택됨" : "검토 기준") + '</button>' : '',
+      renderWorkDetailButton("ontology-experiment", id, "상세", "text-button compact", ontologyExperimentTooltipAttrs(ontologyExperimentActionTooltip("detail"))),
+      recommendations.length && latest.completedAt ? '<button class="text-button primary" type="button" data-lab-apply="' + escapeHtml(id) + '"' + ontologyExperimentTooltipAttrs(ontologyExperimentActionTooltip("applyRecommendation")) + (actionBusy || !id || applied ? ' disabled' : '') + '>' + escapeHtml(ontologyExperimentBusy("apply", id) ? "반영 중" : (applied ? "반영됨" : "제안 적용")) + '</button>' : '',
+      '<button class="text-button" type="button" data-lab-run="' + escapeHtml(id) + '"' + ontologyExperimentTooltipAttrs(ontologyExperimentActionTooltip("run")) + (actionBusy || !id ? ' disabled' : '') + '>' + escapeHtml(ontologyExperimentBusy("run", id) ? "실행 중" : "실행") + '</button>',
+      active ? '<button class="text-button" type="button" data-lab-pause="' + escapeHtml(id) + '"' + ontologyExperimentTooltipAttrs(ontologyExperimentActionTooltip("pause")) + (actionBusy || !id ? ' disabled' : '') + '>일시정지</button>' : '<button class="text-button primary" type="button" data-lab-activate="' + escapeHtml(id) + '"' + ontologyExperimentTooltipAttrs(ontologyExperimentActionTooltip("activate")) + (actionBusy || !id ? ' disabled' : '') + '>활성화</button>',
       '</div>',
       '</section>'
     ].join("");

@@ -258,18 +258,67 @@ class NotificationReasoningReportTests(unittest.TestCase):
         message = render_notification(NotificationTemplate.default(INVESTMENT_INSIGHT), enriched)
 
         self.assertIn("<b>왜 알림이 왔나요?</b>", message)
-        self.assertIn("<b>관계 분석으로 새로 확인한 사실</b>", message)
-        self.assertIn("<b>신뢰도와 부족 데이터</b>", message)
+        self.assertIn("<b>핵심 근거</b>", message)
+        self.assertIn("<b>다음 조건</b>", message)
         self.assertIn("<b>밸류에이션</b>", message)
-        self.assertIn("BTC 보유가치/NAV + 추세 보정", message)
-        self.assertIn("<b>원문/출처</b>", message)
+        self.assertIn("ai-bitcoin-proxy-nav-draft", message)
+        self.assertIn("<b>뉴스·공시 요약</b>", message)
+        self.assertIn("내용: 회사는 신규 자금조달 계획을 공시했습니다.", message)
         self.assertIn(article_url, message)
-        self.assertIn("[관계 분석] 높음 (78.0점)", message)
+        self.assertIn("높음 (78.0점)", message)
+        self.assertNotIn("<b>관계 분석으로 새로 확인한 사실</b>", message)
+        self.assertNotIn("<b>전략 가이드</b>", message)
+        self.assertNotIn("[AI]", message)
         self.assertIn("🧪 테스트 알림", message)
         self.assertIn("일부 수급·추세 조건은 메시지 검증용 테스트값", message)
         self.assertIn("N-TEST1234", message)
         self.assertNotIn("EVENT_RISK_REVIEW", message)
         self.assertNotIn("graph.disclosure.event_risk.v1", message)
+
+    def test_beginner_message_preserves_nested_article_summary_when_duplicate_headline_is_sparse(self):
+        context, _article_url = notification_context()
+        article_url = "https://news.example.com/tesla-founder-led"
+        context.update({
+            "displayTarget": "Tesla / TSLA",
+            "target": "Tesla / TSLA",
+            "symbol": "TSLA",
+            "newsHeadlines": {
+                "items": [{
+                    "kind": "news",
+                    "title": "Tesla remains founder-led ahead of earnings",
+                    "url": article_url,
+                    "domain": "Yahoo Finance",
+                    "publishedAt": "2026-07-20T04:25:00+09:00",
+                    "payload": {"sourceReliability": 0.68, "relevanceScore": 97, "materialityScore": 82.2},
+                }]
+            },
+            "researchEvidence": [{
+                "kind": "news",
+                "title": "Tesla remains founder-led ahead of earnings",
+                "url": article_url,
+                "source": "Yahoo Finance",
+                "publishedAt": "2026-07-20T04:25:00+09:00",
+                "rawPayload": {
+                    "articleFacts": {
+                        "readStatus": "body",
+                        "readStatusLabel": "전체 본문 읽음",
+                        "summaryKo": "기사는 일론 머스크의 창업자 중심 경영이 테슬라의 빠른 의사결정에는 도움이 되지만, 실적 발표를 앞두고 높은 기업가치와 자동차 판매 둔화가 부담이라고 설명합니다.",
+                    },
+                    "stockImpactLabel": "혼재",
+                    "stockImpactReasonKo": "경영 일관성은 긍정적이지만 실적과 밸류에이션 부담이 함께 있어 방향은 혼재입니다.",
+                },
+            }],
+        })
+        response = validated_response(article_url)
+        response.source_urls = [article_url]
+
+        message = context_with_validated_ai_response(context, response)["telegramMessage"]
+
+        self.assertIn("<b>뉴스·공시 요약</b>", message)
+        self.assertIn("기사는 일론 머스크의 창업자 중심 경영", message)
+        self.assertIn("투자 영향: 경영 일관성은 긍정적", message)
+        self.assertNotIn("기사 본문 요약이 아직 준비되지 않았습니다", message)
+        self.assertEqual(1, message.count("기사는 일론 머스크의 창업자 중심 경영"))
 
     def test_watchlist_strategy_guide_does_not_describe_holdings(self):
         context, article_url = notification_context()

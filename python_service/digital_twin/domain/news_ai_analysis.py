@@ -10,8 +10,8 @@ from . import news_analysis as news_domain
 from .ontology_threshold_policy import default_ontology_threshold_policy
 
 
-NEWS_AI_ANALYSIS_VERSION = "news-ai-analysis-v1"
-NEWS_AI_PROMPT_VERSION = "news-ai-prompt-v1"
+NEWS_AI_ANALYSIS_VERSION = "news-ai-analysis-v2"
+NEWS_AI_PROMPT_VERSION = "news-ai-prompt-v2"
 
 IMPACT_LABELS = {
     "support": "호재",
@@ -516,8 +516,8 @@ def local_news_ai_analysis(target: NewsCollectionTarget, evidence: ResearchEvide
     else:
         one_line = article_takeaway or target_name + " 관련 새 정보지만 방향성은 중립입니다."
         fallback_brief = impact_reason
-    brief_source = article_takeaway or article_summary
-    brief = compact_text((brief_source + ". " if brief_source else "") + impact_reason, 520) or fallback_brief
+    brief_source = article_summary or article_takeaway
+    brief = compact_text(brief_source, 520) or fallback_brief
     takeaways = [
         "기사 요약: " + compact_text(article_takeaway or article_summary, 140),
         "영향 방향: " + label,
@@ -695,8 +695,8 @@ def build_news_ai_analysis_prompt(target: NewsCollectionTarget, evidence: Resear
             "confidence": "0.0-1.0",
             "materialityScore": "0-100",
             "summary": {
-                "oneLineKo": "one sentence",
-                "briefKo": "2-3 sentences",
+                "oneLineKo": "기사에서 실제로 일어난 일과 종목 관련성을 담은 한 문장",
+                "briefKo": "기사 전체 흐름을 이해할 수 있는 구체적인 한국어 2-3문장",
                 "keyTakeaways": ["fact"],
                 "whyItMatters": "investment relevance path",
                 "watchPoints": ["next check"],
@@ -717,6 +717,8 @@ def build_news_ai_analysis_prompt(target: NewsCollectionTarget, evidence: Resear
             "Do not create buy, sell, add, trim, or hold decisions.",
             "Use only the provided title, feed summary, body preview, and existing metadata.",
             "summary.oneLineKo and summary.briefKo must summarize article facts first; keep stock impact reasoning in rationaleKo.",
+            "summary.briefKo must state who did what, the material number or condition when present, and why the event matters; do not merely name an event category.",
+            "Write the Korean summary as complete natural sentences. Do not repeat the title, source name, relation score, or phrases such as 확인할 뉴스, 관련 뉴스입니다, 핵심 내용은.",
             "Do not use generic sector templates such as AI/data-center demand unless that fact is present in the title, feed summary, or body preview.",
             "If the body is missing, state that limitation and lower confidence.",
             "A phrase such as 실적 by itself is not positive; 실적 우려, 붕괴, 하락, 덮은 are risk context.",

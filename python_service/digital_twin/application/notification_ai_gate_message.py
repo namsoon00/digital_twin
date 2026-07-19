@@ -2041,7 +2041,7 @@ def valuation_detail_rows(context: Dict[str, object], level: str) -> List[str]:
         "partial": "일부 부족",
         "missing": "부족",
     }
-    method = str(facts.get("valuationMethod") or "").strip()
+    method = str(facts.get("valuationMethod") or facts.get("valuationFormula") or "").strip()
     if facts.get("valuationIsAiGenerated"):
         if str(method).casefold() == "ai-current-price-anchor":
             status_text = "입력 부족 · 임시 기준"
@@ -2077,10 +2077,151 @@ def valuation_detail_rows(context: Dict[str, object], level: str) -> List[str]:
     return [row for row in rows if row]
 
 
+def compact_valuation_detail_rows(context: Dict[str, object], level: str) -> List[str]:
+    facts = relation_facts(context or {})
+    if not facts:
+        return []
+    rows_data = facts.get("valuationRows") if isinstance(facts.get("valuationRows"), list) else []
+    missing_inputs = facts.get("valuationMissingInputs") if isinstance(facts.get("valuationMissingInputs"), list) else []
+    if not rows_data and not missing_inputs and not any(str(key).startswith("valuation") for key in facts):
+        return []
+    currency = facts.get("currency") or "KRW"
+    method = str(facts.get("valuationMethod") or facts.get("valuationFormula") or "").strip()
+    fair_value = _valuation_price_display(facts.get("valuationFairValue") or facts.get("valuationFairValuePrice"), currency)
+    fair_value_low = _valuation_price_display(facts.get("valuationFairValueLow"), currency)
+    fair_value_high = _valuation_price_display(facts.get("valuationFairValueHigh"), currency)
+    fair_value_text = fair_value or "계산 불가"
+    if fair_value_low and fair_value_high:
+        fair_value_text += " · 예상 범위 " + fair_value_low + " ~ " + fair_value_high
+    margin_value = facts.get("valuationMarginOfSafetyPct")
+    minimum_value = facts.get("valuationMinimumMarginOfSafetyPct")
+    margin = _valuation_pct_display(margin_value)
+    minimum_margin = _valuation_pct_display(minimum_value)
+    margin_text = margin or "계산 불가"
+    if margin and minimum_margin:
+        meets_requirement = _number(margin_value) >= _number(minimum_value)
+        margin_text += " · 계정 기준 " + minimum_margin + (" 충족" if meets_requirement else " 미달")
+    source = str(facts.get("valuationSourceLabel") or "").strip()
+    reliability = str(facts.get("valuationReliabilityLabel") or "").strip()
+    reliability_score = facts.get("valuationReliabilityScore")
+    if _valuation_value_present(reliability_score):
+        reliability += (" " if reliability else "") + str(round(_number(reliability_score), 1)).rstrip("0").rstrip(".") + "%"
+    review_status = str(facts.get("valuationReviewStatus") or facts.get("valuationApprovalStatus") or "").strip()
+    review_labels = {
+        "suggested": "사용자 검토 전",
+        "ai_applied_pending_review": "자동 적용 · 사용자 검토 전",
+        "user_approved": "사용자 승인",
+        "user_modified": "사용자 수정 승인",
+        "user_rejected": "사용자 거절",
+        "approved": "사용자 승인",
+        "modified": "사용자 수정 승인",
+        "rejected": "사용자 거절",
+    }
+    basis = " · ".join(part for part in [source, reliability, review_labels.get(review_status, review_status)] if part)
+    if "valuationDecisionEligible" in facts:
+        basis += (" · " if basis else "") + ("투자 판단에 사용" if facts.get("valuationDecisionEligible") else "참고만 사용")
+    per_status = str(facts.get("valuationPerStatus") or "").strip()
+    per_reason = str(facts.get("valuationPerReason") or "").strip()
+    missing_parts = [str(item) for item in missing_inputs[:4] if str(item or "").strip()]
+    if per_status in {"missing", "conversion_missing", "partial_conversion_missing"} and per_reason:
+        missing_parts.append(per_reason)
+    rows = [
+        _html_row("평가 방법", method, level=level, max_len=180),
+        _html_row("기준 적정가", fair_value_text, level=level, max_len=240),
+        _html_row("현재가와 적정가 차이", margin_text, level=level, max_len=180),
+        _html_row("근거 수준", basis, level=level, max_len=240),
+        _html_row("확인할 데이터", " · ".join(missing_parts), level=level, max_len=260),
+    ]
+    return [row for row in rows if row]
+
+
+def compact_beginner_judgment_rows(
+    context: Dict[str, object],
+    response: NotificationAIValidatedResponse,
+    level: str,
+) -> List[str]:
+    relation_strength = relation_judgment_strength_display(context or {}, level).replace("[온톨로지] ", "")
+    profile = " · ".join(part for part in [account_strategy_label(context), account_delivery_level_label(context)] if part)
+    rows = [
+        _html_row("대응", action_label_for_action(response.action, context) or response.action_label, level=level),
+        _html_row("이유", response.summary, level=level, max_len=420),
+        _html_row("확인 필요 점수", relation_strength or ai_confidence_display(response, level), level=level),
+        _html_row("계정 기준", profile, level=level),
+        _html_row("안내", "실행 전 참고용이며 자동 주문되지 않습니다.", level=level),
+    ]
+    return [row for row in rows if row]
+
+
+def compact_beginner_reason_rows(context: Dict[str, object], level: str) -> List[str]:
+    values = customer_alert_reason_lines(context)
+    return [_html_bullet(item, level) for item in values[:3] if str(item or "").strip()]
+
+
+def compact_beginner_evidence_rows(
+    context: Dict[str, object],
+    response: NotificationAIValidatedResponse,
+    level: str,
+) -> List[str]:
+    values = list(relation_axis_summary_lines(context, 8))
+    if not values:
+        values = list(response.evidence or [])
+    rows: List[str] = []
+    for item in values:
+        text = _message_text(item, level)
+        if not text:
+            continue
+        normalized = re.sub(r"[^0-9a-z가-힣]+", "", text.casefold())
+        if any(normalized and (normalized in key or key in normalized) for key in [re.sub(r"[^0-9a-z가-힣]+", "", row.casefold()) for row in rows]):
+            continue
+        rows.append(text)
+        if len(rows) >= 3:
+            break
+    if response.counter_evidence:
+        counter = _message_text(response.counter_evidence[0], level)
+        if counter and all(counter not in row and row not in counter for row in rows):
+            rows.append("반대 신호: " + counter)
+    return [_html_bullet(item, level) for item in rows[:5]]
+
+
+def compact_beginner_next_rows(
+    context: Dict[str, object],
+    response: NotificationAIValidatedResponse,
+    level: str,
+) -> List[str]:
+    rows: List[str] = []
+    execution = compact_sentence_count(
+        watchlist_friendly_text(context, _derived_execution_criteria(context, response)),
+        2,
+    )
+    if execution:
+        rows.append("실행 조건: " + execution)
+    invalidation = _derived_invalidation_condition(context, response)
+    if invalidation and invalidation not in execution:
+        rows.append("다시 판단할 조건: " + invalidation)
+    for item in response.next_checks[:1]:
+        text = watchlist_friendly_text(context, str(item or "").strip())
+        if text and all(text not in row and row not in text for row in rows):
+            rows.append("다음 확인: " + text)
+    missing = customer_data_note_rows(list(response.missing_data_impact))
+    if missing:
+        rows.append("부족한 데이터: " + " / ".join(missing[:2]))
+    return [_html_bullet(item, level) for item in rows]
+
+
+def compact_sentence_count(value: object, limit: int = 2) -> str:
+    text = re.sub(r"\s+", " ", str(value or "")).strip()
+    if not text:
+        return ""
+    parts = [part.strip() for part in re.split(r"(?<=[가-힣])\.\s+(?=[가-힣$0-9])", text) if part.strip()]
+    if len(parts) <= limit:
+        return text
+    return ". ".join(parts[:limit]).rstrip(".") + "."
+
+
 def execution_telegram_message(context: Dict[str, object], response: NotificationAIValidatedResponse) -> str:
     level = delivery_level_from_context(context)
-    if level == "absoluteBeginner":
-        return execution_telegram_message_absolute_beginner(context, response)
+    if level in {"absoluteBeginner", "beginner"}:
+        return execution_telegram_message_compact_beginner(context, response, level)
     headline = execution_headline(context, response)
     target = str(context.get("displayTarget") or context.get("target") or "").strip()
     current = _plain_value(context, "현재가")
@@ -2147,6 +2288,14 @@ def execution_telegram_message(context: Dict[str, object], response: Notificatio
     return "\n".join(part for part in parts if str(part).strip() or part == "").strip()
 
 def execution_telegram_message_absolute_beginner(context: Dict[str, object], response: NotificationAIValidatedResponse) -> str:
+    return execution_telegram_message_compact_beginner(context, response, "absoluteBeginner")
+
+
+def execution_telegram_message_compact_beginner(
+    context: Dict[str, object],
+    response: NotificationAIValidatedResponse,
+    level: str,
+) -> str:
     headline = execution_headline(context, response)
     target = str(context.get("displayTarget") or context.get("target") or "").strip()
     sent = str(context.get("sentTime") or "").strip()
@@ -2156,35 +2305,25 @@ def execution_telegram_message_absolute_beginner(context: Dict[str, object], res
         "<b>" + html.escape(headline, quote=False) + "</b>",
         ("<code>" + html.escape(target, quote=False) + "</code>") if target else "",
         "",
-        "<b>" + ai_judgment_section_title("absoluteBeginner") + "</b>",
-        *ai_judgment_rows(response, "absoluteBeginner", context),
-        _html_row("안내", "자동 주문이 아니라 실행 전 점검 알림입니다.", True),
+        "<b>판단</b>",
+        *compact_beginner_judgment_rows(context, response, level),
     ]
-    hypothesis_rows = hypothesis_comparison_rows(response, "absoluteBeginner")
-    if hypothesis_rows:
-        parts.extend(["", "<b>AI가 비교한 가능성</b>", *hypothesis_rows])
-    reason_rows = customer_reason_rows(context, "absoluteBeginner")
+    reason_rows = compact_beginner_reason_rows(context, level)
     if reason_rows:
         parts.extend(["", "<b>왜 알림이 왔나요?</b>", *reason_rows])
     if current_state_rows:
         parts.extend(["", "<b>현재 상황</b>", *current_state_rows])
-    valuation_rows = valuation_detail_rows(context, "absoluteBeginner")
+    valuation_rows = compact_valuation_detail_rows(context, level)
     if valuation_rows:
         parts.extend(["", "<b>밸류에이션</b>", *valuation_rows])
-    inference_rows = customer_inference_rows(context, "absoluteBeginner")
-    if inference_rows:
-        parts.extend(["", "<b>관계 분석으로 새로 확인한 사실</b>", *inference_rows])
-    axis_rows = relation_axis_summary_rows(context, "absoluteBeginner", 4)
-    if axis_rows:
-        parts.extend(["", "<b>투자 판단 근거</b>", *axis_rows])
-    opinion_rows = strategy_guide_rows(context, response, "absoluteBeginner")
-    if opinion_rows:
-        parts.extend(["", "<b>전략 가이드</b>", *opinion_rows])
-    confidence_rows = customer_data_confidence_rows(context, "absoluteBeginner")
-    if confidence_rows:
-        parts.extend(["", "<b>신뢰도와 부족 데이터</b>", *confidence_rows])
+    evidence_rows = compact_beginner_evidence_rows(context, response, level)
+    if evidence_rows:
+        parts.extend(["", "<b>핵심 근거</b>", *evidence_rows])
+    next_rows = compact_beginner_next_rows(context, response, level)
+    if next_rows:
+        parts.extend(["", "<b>다음 조건</b>", *next_rows])
     if response.source_urls:
-        parts.extend(["", "<b>원문/출처</b>"])
+        parts.extend(["", "<b>뉴스·공시 요약</b>"])
         parts.extend(source_url_rows(response.source_urls, context))
     parts.extend(execution_footer(context, response, reference, sent))
     return "\n".join(part for part in parts if str(part).strip() or part == "").strip()

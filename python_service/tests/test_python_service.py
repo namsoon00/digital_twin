@@ -833,6 +833,39 @@ class PythonServiceTests(unittest.TestCase):
         self.assertEqual("cached", tsla.data_quality)
         self.assertEqual("마지막 저장 시세", tsla.quote_status)
 
+    def test_toss_provider_prefers_newest_market_cache_over_stale_account_quote(self):
+        db_path = test_store_seed(self.temp.name)
+        cache = TestMarketQuoteCache(db_path)
+        cache.save("toss", "main", "AAPL", {
+            "symbol": "AAPL",
+            "currentPrice": 100,
+            "updatedAt": "2026-07-19T00:00:00Z",
+        })
+        cache.save("toss", MARKET_DATA_ACCOUNT_ID, "AAPL", {
+            "symbol": "AAPL",
+            "currentPrice": 120,
+            "volume": 2000,
+            "quoteSource": "market-data-collector",
+            "updatedAt": "2026-07-20T00:00:00Z",
+        })
+        account = AccountConfig("main", "메인", "toss", "https://example.test", "id", "secret", "1", [])
+        provider = TossProvider(account, quote_cache=cache)
+        cached = provider.cached_quote("AAPL")
+        position = Position(
+            "AAPL", "Apple", market="US", currency="USD", quantity=2,
+            average_price=90, current_price=100, market_value=200,
+            updated_at="2026-07-19T00:00:00Z",
+        )
+
+        merged = provider.merge_market_data(position, {}, {}, cached, quote_live=False, indicators_live=False)
+
+        self.assertEqual("market-data", cached["cacheScope"])
+        self.assertEqual(120, merged.current_price)
+        self.assertEqual(240, merged.market_value)
+        self.assertEqual(2000, merged.volume)
+        self.assertAlmostEqual(33.333, merged.profit_loss_rate, places=2)
+        self.assertEqual("2026-07-20T00:00:00Z", merged.updated_at)
+
     def test_market_proxy_quote_context_merges_coingecko_crypto_markets(self):
         db_path = test_store_seed(self.temp.name)
         cache = TestMarketQuoteCache(db_path)

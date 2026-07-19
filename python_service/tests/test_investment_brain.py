@@ -22,6 +22,7 @@ from digital_twin.domain.ontology_tbox import CLASS_DEFS, RELATION_DEFS
 from digital_twin.domain.portfolio_ontology_cognitive_concepts import add_investment_brain_concepts
 from digital_twin.domain.portfolio_ontology_research_concepts import add_governed_claim_concepts
 from digital_twin.domain.ontology_schema import add_entity
+from digital_twin.domain.portfolio import utc_now_iso
 from digital_twin.infrastructure.mysql_investment_decision_episodes import due_outcome_horizon_minutes
 from digital_twin.infrastructure.investment_research_gateway import (
     CompositeInvestmentResearchGateway,
@@ -495,14 +496,15 @@ class InvestmentBrainTest(unittest.TestCase):
 
     def test_research_orchestrator_persists_only_governed_evidence(self):
         target = NewsCollectionTarget("005930", "삼성전자", "KR", "KRW", "반도체")
+        observed_at = utc_now_iso()
         evidence = ResearchEvidence(
             evidence_id="evidence-direct",
             symbol="005930",
             kind="news",
             source="Reuters",
             title="삼성전자 공급 계약 확인",
-            observed_at="2026-07-19T11:00:00Z",
-            published_at="2026-07-19T11:00:00Z",
+            observed_at=observed_at,
+            published_at=observed_at,
             confidence=0.92,
             raw_payload={"relationScope": "direct", "sourceReliability": 92},
         )
@@ -611,6 +613,30 @@ class InvestmentBrainTest(unittest.TestCase):
         NotificationHypothesisResearchEnricher(no_change_service, {})(second)
         self.assertEqual(1, len(refresh_calls))
         self.assertEqual("cache-satisfied", second.context["researchCycle"]["status"])
+
+    def test_notification_research_uses_graph_subject_when_monitor_snapshot_is_missing(self):
+        class EmptyMonitorStore:
+            def load_previous(self):
+                return {}
+
+        service = InvestmentBrainService(
+            EmptyMonitorStore(),
+            FakeOntologyRepository(),
+            FakeReviewer(),
+            FakeDecisionEpisodeStore(),
+            research_orchestrator=FakeResearchOrchestrator(changed_count=0),
+            settings={},
+        )
+        context = {
+            "accountId": "account-1",
+            "ontologyRelationContext": relation_context(),
+        }
+
+        enriched = service.enrich_notification_context(context, account_id="account-1", event_id="event-1")
+
+        self.assertEqual("cache-satisfied", enriched["researchCycle"]["status"])
+        self.assertEqual("notification-graph-context", enriched["researchCycle"]["subjectResolutionSource"])
+        self.assertEqual("005930", enriched["investmentBrainQuestion"]["subjectSymbol"])
 
     def test_novel_hypothesis_proposal_requires_known_evidence(self):
         store = FakeResearchStore()

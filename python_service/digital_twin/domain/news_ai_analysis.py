@@ -18,6 +18,7 @@ IMPACT_LABELS = {
     "risk": "악재",
     "mixed": "혼재",
     "neutral": "중립",
+    "context": "중립",
     "unknown": "미확인",
 }
 
@@ -212,7 +213,7 @@ def news_analysis_conflict_payload(
     ai_impact_polarity: object,
 ) -> Dict[str, object]:
     ai_polarity = normalized_impact_polarity(ai_impact_polarity)
-    if ai_polarity not in {"support", "risk"}:
+    if ai_polarity not in {"support", "risk", "context"}:
         return {}
     candidates = [
         ("기존 주가 영향", payload.get("stockImpactPolarity")),
@@ -646,6 +647,21 @@ def apply_news_ai_analysis(evidence: ResearchEvidence, analysis_payload: Dict[st
         payload["relationScope"] = analysis_dict.get("relationScope")
     if analysis_dict.get("eventType") and not payload.get("eventType"):
         payload["eventType"] = analysis_dict.get("eventType")
+    if article_facts_payload:
+        article_facts_payload.setdefault("preAiStockImpact", article_facts_payload.get("stockImpact"))
+        article_facts_payload.setdefault("preAiStockImpactPolarity", article_facts_payload.get("stockImpactPolarity") or article_facts_payload.get("impactPolarity"))
+        article_facts_payload.setdefault("preAiStockImpactLabel", article_facts_payload.get("stockImpactLabel"))
+        article_facts_payload.update({
+            "stockImpact": payload["stockImpact"],
+            "stockImpactPolarity": payload["stockImpactPolarity"],
+            "stockImpactLabel": payload["stockImpactLabel"],
+            "stockImpactScore": payload["stockImpactScore"],
+            "stockImpactReasonKo": payload["stockImpactReasonKo"],
+            "analysisConflict": bool(conflict_payload),
+        })
+        if conflict_payload:
+            article_facts_payload.update(conflict_payload)
+        payload["articleFacts"] = article_facts_payload
     evidence_polarity = impact_polarity if impact_polarity in {"support", "risk"} else "context"
     return ResearchEvidence(
         evidence.evidence_id,

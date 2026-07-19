@@ -1014,6 +1014,14 @@ class TypeDBOntologyGraphRepository(GraphStoreOntologyRowMapperMixin):
             ), box))
         return rows
 
+    def active_abox_snapshot_id(self) -> str:
+        rows = self.read_entity_rows(["ABox"], limit=40)
+        for row in rows:
+            snapshot_id = str(row.get("aboxSnapshotId") or row.get("snapshotId") or "").strip()
+            if snapshot_id:
+                return snapshot_id
+        return ""
+
     def read_relation_rows(self, boxes: Iterable[str] = None, limit: int = 0) -> List[Dict[str, object]]:
         rows: List[Dict[str, object]] = []
         safe_limit = int(limit or 0)
@@ -2777,6 +2785,14 @@ relation ontology-assertion,
             graph = self.load_graph_for_native_matches(native_match_result)
             before_entities = len(graph.entities)
             before_relations = len(graph.relations)
+            source_abox_snapshot_ids = sorted({
+                str((item.properties or {}).get("aboxSnapshotId") or (item.properties or {}).get("snapshotId") or "").strip()
+                for item in graph.entities
+                if str((item.properties or {}).get("aboxSnapshotId") or (item.properties or {}).get("snapshotId") or "").strip()
+            })
+            if len(source_abox_snapshot_ids) == 1:
+                runtime_rulebox_metadata["sourceAboxSnapshotId"] = source_abox_snapshot_ids[0]
+            runtime_rulebox_metadata["sourceAboxSnapshotCount"] = len(source_abox_snapshot_ids)
             materialize_typedb_native_matches(graph, parsed_rules, native_match_result)
             inference_graph = typedb_inferencebox_graph(
                 graph,
@@ -2784,6 +2800,48 @@ relation ontology-assertion,
                 generation_at=generation_at,
                 rulebox_metadata=runtime_rulebox_metadata,
             )
+            inferencebox_limit = max(80, min(500, int(number_or_none(payload.get("inferenceSnapshotLimit")) or 500)))
+            invalid_abox_generation = bool(inference_graph.relations) and len(source_abox_snapshot_ids) != 1
+            if invalid_abox_generation or not inference_graph.relations:
+                previous_inferencebox = self.inferencebox_snapshot(
+                    symbols=target_symbols,
+                    limit=inferencebox_limit,
+                )
+                return {
+                    "configured": True,
+                    "status": "invalid-abox-generation" if invalid_abox_generation else "empty",
+                    "graphStore": "typedb",
+                    "source": "typedbNativeRule",
+                    "reasoningMode": TYPEDB_NATIVE_BLOCKED_MODE,
+                    "reason": (
+                        "원본 ABox 세대를 하나로 확인할 수 없어 새 InferenceBox를 활성화하지 않았습니다."
+                        if invalid_abox_generation
+                        else "TypeDB native rules matched no ABox facts; the previous InferenceBox remains active."
+                    ),
+                    "statementCount": 0,
+                    "entityCount": 0,
+                    "relationCount": 0,
+                    "traceCount": 0,
+                    "relationTypes": [],
+                    "nativeTypeDbReasoningUsed": False,
+                    "typedbNativeRuleReasoningUsed": False,
+                    "typedbNativeFunctionReasoningUsed": False,
+                    "typedbBootstrapReasoningUsed": False,
+                    "pythonBootstrapDisabled": True,
+                    "preservedPreviousInference": True,
+                    "activatedGeneration": False,
+                    "sourceAboxSnapshotIds": source_abox_snapshot_ids,
+                    "inferenceGenerationId": generation_id,
+                    "inferenceGenerationAt": generation_at,
+                    "targetSymbols": target_symbols,
+                    "saveResult": {"saved": False, "status": "skipped-preserve-previous"},
+                    "clearResult": clear_result,
+                    "inferenceBox": previous_inferencebox,
+                    "nativeReasoningProfile": native_profile,
+                    "ruleboxMetadata": runtime_rulebox_metadata,
+                    "typedbQueryMetrics": self.query_metrics_snapshot(),
+                    **runtime_rulebox_metadata,
+                }
             if clear_requested:
                 clear_result = self.clear_inferencebox()
                 if str(clear_result.get("status") or "") != "ok":
@@ -2840,7 +2898,6 @@ relation ontology-assertion,
         has_materialized_relations = materialized_relation_count > 0
         saved_ok = bool(save_result.get("saved"))
         prune_result = self.prune_inferencebox_generations(generation_id, keep_count=keep_generation_count) if saved_ok and prune_requested else {}
-        inferencebox_limit = max(80, min(500, int(number_or_none(payload.get("inferenceSnapshotLimit")) or 500)))
         inferencebox_payload = self.inferencebox_snapshot_from_graph(inference_graph, target_symbols, inferencebox_limit)
         return {
             "configured": True,
@@ -3264,6 +3321,13 @@ relation ontology-assertion,
             "ignoredNonNativeTraceCount": max(0, len([row for row in entity_rows if str(row.get("kind") or "") == "inference-trace"]) - len(native_trace_rows)),
             **generation_rulebox_metadata,
         })
+        source_abox_snapshot_id = str(generation_rulebox_metadata.get("sourceAboxSnapshotId") or "").strip()
+        if source_abox_snapshot_id:
+            snapshot.update({
+                "sourceAboxSnapshotId": source_abox_snapshot_id,
+                "activeAboxSnapshotId": source_abox_snapshot_id,
+                "generationAligned": True,
+            })
         return snapshot
 
     def inferencebox_snapshot(self, symbols: List[str] = None, limit: int = 80) -> Dict[str, object]:
@@ -3367,6 +3431,31 @@ relation ontology-assertion,
             "typedbQueryMetrics": self.query_metrics_snapshot(),
             **generation_rulebox_metadata,
         })
+        source_abox_snapshot_id = str(generation_rulebox_metadata.get("sourceAboxSnapshotId") or "").strip()
+        if source_abox_snapshot_id:
+            active_abox_snapshot_id = self.active_abox_snapshot_id()
+            generation_aligned = bool(active_abox_snapshot_id and active_abox_snapshot_id == source_abox_snapshot_id)
+            snapshot.update({
+                "sourceAboxSnapshotId": source_abox_snapshot_id,
+                "activeAboxSnapshotId": active_abox_snapshot_id,
+                "generationAligned": generation_aligned,
+            })
+            if not generation_aligned:
+                snapshot.update({
+                    "status": "stale-generation",
+                    "reason": "현재 ABox와 InferenceBox의 원본 ABox 세대가 달라 투자 판단에서 제외합니다.",
+                    "entities": [],
+                    "relations": [],
+                    "traces": [],
+                    "entityCount": 0,
+                    "relationCount": 0,
+                    "traceCount": 0,
+                    "nativeEntityCount": 0,
+                    "nativeRelationCount": 0,
+                    "nativeTraceCount": 0,
+                    "nativeTypeDbReasoningUsed": False,
+                    "typedbNativeRuleReasoningUsed": False,
+                })
         return snapshot
 
     def load_graph_from_typedb(self, boxes: Iterable[str] = None) -> PortfolioOntology:
@@ -4278,6 +4367,8 @@ def inference_rulebox_metadata(
         "pythonCompatibilityReasonerUsed",
         "typeDbNativeRulesPrimary",
         "ruleStore",
+        "sourceAboxSnapshotId",
+        "sourceAboxSnapshotCount",
     ]
     metadata: Dict[str, object] = {}
     for row in list(entity_rows or []) + list(relation_rows or []):
@@ -4306,6 +4397,7 @@ def inference_rulebox_metadata(
         "typedbSchemaFunctionSyncedCount",
         "typedbSchemaFunctionSkippedCount",
         "typedbSchemaFunctionFailedCount",
+        "sourceAboxSnapshotCount",
     ]:
         if key in metadata:
             metadata[key] = int(number_or_none(metadata.get(key)) or 0)

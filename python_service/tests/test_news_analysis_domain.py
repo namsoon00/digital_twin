@@ -286,6 +286,48 @@ class NewsAnalysisDomainTests(unittest.TestCase):
         self.assertTrue(any(item.kind == "article-analysis-conflict" for item in graph.entities))
         self.assertTrue(any(item.source == stock_id and item.relation_type == "HAS_DATA_QUALITY" for item in graph.relations))
 
+    def test_ai_neutral_impact_replaces_directional_article_fact_and_preserves_audit_value(self):
+        evidence = ResearchEvidence(
+            "research:005930:news:neutralized",
+            "005930",
+            "news",
+            "Reuters",
+            "Samsung announces routine operating update",
+            "방향성이 확인되지 않은 운영 업데이트입니다.",
+            "https://example.test/neutralized",
+            "2026-07-20T01:00:00Z",
+            "risk",
+            70,
+            0.8,
+            "2026-07-20T01:00:00Z",
+            raw_payload={
+                "stockImpactPolarity": "risk",
+                "stockImpactLabel": "악재",
+                "articleFacts": {
+                    "bodyAvailable": True,
+                    "stockImpact": "negative",
+                    "stockImpactPolarity": "risk",
+                    "stockImpactLabel": "악재",
+                },
+            },
+        )
+
+        updated = apply_news_ai_analysis(evidence, {
+            "status": "ok",
+            "impactPolarity": "neutral",
+            "impactLabelKo": "중립",
+            "confidence": 0.76,
+            "materialityScore": 55,
+            "summary": {"briefKo": "주가 방향을 정할 근거가 부족합니다."},
+        })
+
+        facts = updated.raw_payload["articleFacts"]
+        self.assertEqual("context", updated.polarity)
+        self.assertEqual("context", facts["stockImpactPolarity"])
+        self.assertEqual("중립", facts["stockImpactLabel"])
+        self.assertEqual("risk", facts["preAiStockImpactPolarity"])
+        self.assertTrue(updated.raw_payload["analysisConflict"])
+
     def test_ai_article_analysis_summarizes_title_rss_facts_for_legal_article(self):
         target = NewsCollectionTarget("AAPL", "Apple", "NASDAQ", "USD", "AI/플랫폼")
         evidence = ResearchEvidence(

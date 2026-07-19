@@ -1276,6 +1276,36 @@ def prepend_test_dispatch_notice(rendered: str, context: Dict[str, object], rich
     return notice + "\n\n" + text
 
 
+def compact_investment_notification(rendered: str, context: Dict[str, object], max_length: int = 3700) -> str:
+    text = str(rendered or "").strip()
+    if context_message_type(context) != "investmentInsight" or len(text) <= max_length:
+        return text
+    text = re.sub(
+        r'<a\s+[^>]*href=["\']([^"\']+)["\'][^>]*>(.*?)</a>',
+        lambda match: re.sub(r"<[^>]+>", "", match.group(2)).strip() + ": " + match.group(1),
+        text,
+        flags=re.IGNORECASE | re.DOTALL,
+    )
+    text = re.sub(r"<br\s*/?>", "\n", text, flags=re.IGNORECASE)
+    text = html.unescape(re.sub(r"<[^>]+>", "", text))
+    text = re.sub(r"\n{3,}", "\n\n", text).strip()
+    notification_number = footer_value_from_context(context, "notificationNumber", "notificationNo", "debugNotificationNumber")
+    if not notification_number:
+        notification_number = notification_debug_number(footer_value_from_context(context, "jobId"))
+    detail_url = str((context or {}).get("notifyLinkUrl") or (context or {}).get("notificationDetailUrl") or "").strip()
+    suffix_rows = ["상세 근거는 서비스 알림 상세에서 확인하세요."]
+    if detail_url:
+        suffix_rows.append("상세 링크: " + detail_url)
+    if notification_number:
+        suffix_rows.append("알림 번호: " + str(notification_number))
+    suffix = "\n\n" + "\n".join(suffix_rows)
+    budget = max(200, max_length - len(suffix))
+    cutoff = text.rfind("\n", 0, budget)
+    if cutoff < int(budget * 0.65):
+        cutoff = budget
+    return text[:cutoff].rstrip() + suffix
+
+
 def render_notification(template: NotificationTemplate, context: Dict[str, object]) -> str:
     values = context_with_score_explanation(context)
     if context_message_type(values) == OPERATOR_REASONING_REPORT:
@@ -1290,7 +1320,8 @@ def render_notification(template: NotificationTemplate, context: Dict[str, objec
         rendered = append_external_api_sources(rendered, values, rich)
         rendered = append_message_footer(rendered, values, rich)
         rendered = prepend_message_start_badge(rendered, rich, values)
-        return prepend_test_dispatch_notice(rendered, values, rich)
+        rendered = prepend_test_dispatch_notice(rendered, values, rich)
+        return compact_investment_notification(rendered, values)
     rendered = render_template(BODY_TEMPLATE, values)
     rich = template_prefers_rich_score(BODY_TEMPLATE, rendered)
     rendered = append_ai_opinion(rendered, values, rich)
@@ -1298,7 +1329,8 @@ def render_notification(template: NotificationTemplate, context: Dict[str, objec
     rendered = append_external_api_sources(rendered, values, rich)
     rendered = append_message_footer(rendered, values, rich)
     rendered = prepend_message_start_badge(rendered, rich, values)
-    return prepend_test_dispatch_notice(rendered, values, rich)
+    rendered = prepend_test_dispatch_notice(rendered, values, rich)
+    return compact_investment_notification(rendered, values)
 
 
 

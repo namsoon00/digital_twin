@@ -28,8 +28,29 @@ class PortfolioOntologyProjectionRecorder:
         self.source = source or "monitoring"
 
     def record_snapshot(self, snapshot: AccountSnapshot) -> Dict[str, object]:
-        if not self.repository or not self.has_projectable_data(snapshot):
+        if not self.repository:
             return {}
+        if not self.has_projectable_data(snapshot):
+            result = {
+                "saved": False,
+                "status": "rejected-non-live-snapshot",
+                "reason": "운영 ABox는 정상 live 계좌의 실제 보유·관심종목 스냅샷으로만 갱신합니다.",
+                "snapshotMode": str(snapshot.mode or ""),
+                "snapshotStatus": str(snapshot.status or ""),
+                "preservedActiveGeneration": True,
+            }
+            self.store_projection_result(snapshot, result)
+            return result
+        if self.typedb_projection_deferred():
+            result = {
+                "saved": False,
+                "status": "deferred-to-reasoning-worker",
+                "reason": "TypeDB ABox와 InferenceBox는 전용 온톨로지 추론 워커가 같은 주기에서 생성합니다.",
+                "preservedActiveGeneration": True,
+                "singleWriter": True,
+            }
+            self.store_projection_result(snapshot, result)
+            return result
         try:
             rulebox_bootstrap = self.ensure_rulebox_ready()
             graph = build_portfolio_ontology(
@@ -243,17 +264,22 @@ class PortfolioOntologyProjectionRecorder:
         return max(80, min(500, value))
 
     def has_projectable_data(self, snapshot: AccountSnapshot) -> bool:
-        if snapshot.has_live_account_data():
-            return True
-        if any(item for item in snapshot.watchlist or [] if not item.is_cash()):
-            return True
-        if isinstance(snapshot.external_signals, dict) and any(
-            value not in ({}, [], "", None, False)
-            for key, value in snapshot.external_signals.items()
-            if key not in {"quality", "freshness", "provenance", "statuses"}
-        ):
-            return True
-        return False
+        if not snapshot.has_live_account_data():
+            return False
+        return any(
+            item
+            for item in list(snapshot.positions or []) + list(snapshot.watchlist or [])
+            if not item.is_cash()
+        )
+
+    def typedb_projection_deferred(self) -> bool:
+        if self.active_graph_store_key() != "typedb":
+            return False
+        if "typedbNativeRuleExecutionEnabled" not in self.settings:
+            return False
+        return str(self.settings.get("typedbNativeRuleExecutionEnabled") or "").strip().lower() in {
+            "0", "false", "no", "off", "disabled",
+        }
 
     def active_graph_store_key(self, result: Dict[str, object] = None) -> str:
         key = str(getattr(self.repository, "store_key", "") or "").strip()

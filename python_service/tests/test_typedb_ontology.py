@@ -610,6 +610,39 @@ class TypeDBOntologyRepositoryTests(unittest.TestCase):
         self.assertEqual("ok", result["inferenceBox"]["status"])
         self.assertEqual("skipped", result["inferenceBox"]["typedbReadStatus"])
 
+    def test_projection_recorder_rejects_demo_snapshot_and_defers_regular_typedb_writer(self):
+        class FakeRepository:
+            store_key = "typedb"
+
+            def __init__(self):
+                self.save_calls = 0
+
+            def save_graph(self, _graph):
+                self.save_calls += 1
+                return {"saved": True}
+
+        repository = FakeRepository()
+        demo = AccountSnapshot(
+            "main", "메인", "toss", "demo", "credentials missing", utc_now_iso(),
+            PortfolioSummary(total=100, invested=100, cash=0, markets=[], sectors=[], concentration=0),
+            positions=[Position("AAPL", "Apple", current_price=100)],
+        )
+        rejected = PortfolioOntologyProjectionRecorder(repository).record_snapshot(demo)
+        live = AccountSnapshot(
+            "main", "메인", "toss", "live", "ok", utc_now_iso(),
+            PortfolioSummary(total=100, invested=100, cash=0, markets=[], sectors=[], concentration=0),
+            positions=[Position("AAPL", "Apple", current_price=100)],
+        )
+        deferred = PortfolioOntologyProjectionRecorder(
+            repository,
+            settings={"typedbNativeRuleExecutionEnabled": "0"},
+        ).record_snapshot(live)
+
+        self.assertEqual("rejected-non-live-snapshot", rejected["status"])
+        self.assertEqual("deferred-to-reasoning-worker", deferred["status"])
+        self.assertTrue(deferred["singleWriter"])
+        self.assertEqual(0, repository.save_calls)
+
     def test_typedb_schema_function_sync_skips_redefine_when_function_exists(self):
         class FakeQuery:
             def __init__(self, driver, query):
@@ -1126,11 +1159,45 @@ class TypeDBOntologyRepositoryTests(unittest.TestCase):
         self.assertIn("TypeDB InferenceBox 조회 실패", snapshot["reason"])
         self.assertFalse(snapshot["typedbBootstrapReasoningUsed"])
 
+    def test_typedb_inferencebox_fails_closed_when_abox_generation_changed(self):
+        repository = TypeDBOntologyGraphRepository("127.0.0.1:1729")
+        entity_rows = [{
+            "id": "risk:005930:gen:test",
+            "kind": "risk-signal",
+            "symbol": "005930",
+            "ontologyBox": "InferenceBox",
+            "nativeTypeDbReasoned": True,
+            "propertiesJson": json.dumps({
+                "nativeTypeDbReasoned": True,
+                "sourceAboxSnapshotId": "abox-snapshot:old",
+            }),
+        }]
+        relation_rows = [{
+            "source": "stock:005930",
+            "target": "risk:005930:gen:test",
+            "type": "HAS_INFERRED_RISK",
+            "symbol": "005930",
+            "ontologyBox": "InferenceBox",
+            "nativeTypeDbReasoned": True,
+            "propertiesJson": json.dumps({
+                "nativeTypeDbReasoned": True,
+                "sourceAboxSnapshotId": "abox-snapshot:old",
+            }),
+        }]
+        with patch.object(repository, "read_inference_generation_records", return_value=[{"generationId": "inference-generation:test", "latestAt": "2026-07-20T00:00:00Z"}]), patch.object(repository, "read_inferencebox_entity_rows", return_value=entity_rows), patch.object(repository, "read_inferencebox_relation_rows", return_value=relation_rows), patch.object(repository, "active_abox_snapshot_id", return_value="abox-snapshot:new"):
+            snapshot = repository.inferencebox_snapshot(symbols=["005930"])
+
+        self.assertEqual("stale-generation", snapshot["status"])
+        self.assertFalse(snapshot["generationAligned"])
+        self.assertFalse(snapshot["nativeTypeDbReasoningUsed"])
+        self.assertEqual([], snapshot["relations"])
+
     def test_typedb_rulebox_execution_materializes_inferencebox_from_typedb_abox_rulebox(self):
         repository = TypeDBOntologyGraphRepository("127.0.0.1:1729")
         graph = PortfolioOntology("typedb-run-rulebox")
         graph.entities.append(OntologyEntity("stock:005930", "삼성전자", "stock", {
             "ontologyBox": "ABox",
+            "aboxSnapshotId": "abox-snapshot:test",
             "symbol": "005930",
             "source": "holding",
             "profitLossRate": -12.5,
@@ -1217,7 +1284,44 @@ class TypeDBOntologyRepositoryTests(unittest.TestCase):
         self.assertTrue(result["ruleboxRulesHash"])
         self.assertEqual(1, result["ruleboxRuleCount"])
         self.assertTrue(all((item.properties or {}).get("ruleboxRulesHash") == result["ruleboxRulesHash"] for item in captured["graph"].entities))
+        self.assertEqual("abox-snapshot:test", result["sourceAboxSnapshotId"])
+        self.assertTrue(all((item.properties or {}).get("sourceAboxSnapshotId") == "abox-snapshot:test" for item in captured["graph"].entities))
         self.assertEqual("skipped", result["clearResult"]["status"])
+
+    def test_typedb_rulebox_empty_result_preserves_previous_inference_generation(self):
+        repository = TypeDBOntologyGraphRepository("127.0.0.1:1729")
+        rule_snapshot = {
+            "configured": True,
+            "saved": True,
+            "status": "ok",
+            "graphStore": "typedb",
+            "rules": [default_graph_inference_rules()[0].to_dict()],
+            "ruleCount": 1,
+        }
+        native_match = {
+            "status": "ok",
+            "nativeQueryUsed": True,
+            "schemaFunctionUsed": True,
+            "executedRuleCount": 1,
+            "skippedRuleCount": 0,
+            "matchedCount": 0,
+            "matches": [],
+        }
+        previous = {
+            "status": "ok",
+            "inferenceGenerationId": "inference-generation:previous",
+            "relations": [{"type": "HAS_INFERRED_RISK"}],
+            "traces": [],
+        }
+        with patch.object(repository, "has_box_rows", return_value=True), patch.object(repository, "rulebox_snapshot", return_value=rule_snapshot), patch.object(repository, "sync_typedb_native_rule_functions", return_value={"status": "ok", "syncedCount": 1, "skippedCount": 0, "failedCount": 0}), patch.object(repository, "match_typedb_native_rules", return_value=native_match), patch.object(repository, "load_graph_for_native_matches", return_value=PortfolioOntology("empty")), patch.object(repository, "inferencebox_snapshot", return_value=previous), patch.object(repository, "write_inferencebox_graph") as write_mock, patch.object(repository, "clear_inferencebox") as clear_mock:
+            result = repository.run_rulebox({"forceClearInference": True, "allowDestructiveInferenceClear": True})
+
+        write_mock.assert_not_called()
+        clear_mock.assert_not_called()
+        self.assertEqual("empty", result["status"])
+        self.assertTrue(result["preservedPreviousInference"])
+        self.assertFalse(result["activatedGeneration"])
+        self.assertEqual("inference-generation:previous", result["inferenceBox"]["inferenceGenerationId"])
 
     def test_typedb_rulebox_execution_preserves_inferencebox_when_preflight_fails(self):
         repository = TypeDBOntologyGraphRepository("127.0.0.1:1729")
@@ -1290,6 +1394,7 @@ class TypeDBOntologyRepositoryTests(unittest.TestCase):
         graph = PortfolioOntology("typedb-run-rulebox-save-failure")
         graph.entities.append(OntologyEntity("stock:005930", "삼성전자", "stock", {
             "ontologyBox": "ABox",
+            "aboxSnapshotId": "abox-snapshot:save-failure",
             "symbol": "005930",
             "source": "holding",
             "profitLossRate": -12.5,

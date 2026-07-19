@@ -7,7 +7,7 @@ from dataclasses import replace
 from typing import Dict, List, Optional, Tuple
 
 from ..domain.accounts import AccountConfig
-from ..domain.data_freshness import combine_quality
+from ..domain.data_freshness import combine_quality, parse_datetime
 from ..domain.instrument_profiles import market_signal_symbols
 from ..domain.market_data import known_stock, normalize_position, number, pct_distance, technical_indicators_from_candles
 from ..domain.portfolio import AccountSnapshot, Position, utc_now_iso
@@ -649,16 +649,22 @@ class TossProvider:
         clean_symbol = str(symbol or "").upper().strip()
         if not clean_symbol:
             return {}
-        try:
-            payload = self.quote_cache.load("toss", self.account.account_id, clean_symbol)
-            if payload:
-                return payload
-        except Exception:
-            pass
-        try:
-            return self.quote_cache.load("toss", MARKET_DATA_ACCOUNT_ID, clean_symbol)
-        except Exception:
-            return {}
+        candidates = []
+        for account_id, scope in [
+            (self.account.account_id, "account"),
+            (MARKET_DATA_ACCOUNT_ID, "market-data"),
+        ]:
+            try:
+                payload = self.quote_cache.load("toss", account_id, clean_symbol)
+            except Exception:
+                payload = {}
+            if not isinstance(payload, dict) or not payload:
+                continue
+            candidate = dict(payload)
+            candidate["cacheScope"] = scope
+            timestamp = parse_datetime(candidate.get("updatedAt") or candidate.get("sourceAsOf") or candidate.get("fetchedAt"))
+            candidates.append((timestamp.timestamp() if timestamp else float("-inf"), candidate))
+        return max(candidates, key=lambda item: item[0])[1] if candidates else {}
 
     def save_quote_cache(self, position: Position) -> None:
         if not position.symbol:
@@ -734,19 +740,35 @@ class TossProvider:
         cached = cached or {}
         cached_price = number(first_present(cached, ["currentPrice", "lastPrice", "price", "closePrice"]))
         live_price = number(first_present(quote, ["currentPrice", "lastPrice", "price", "closePrice"]))
-        used_cached_price = not live_price and not position.current_price and bool(cached_price)
-        current_price = live_price or position.current_price or cached_price
+        cached_at = parse_datetime(cached.get("updatedAt") or cached.get("sourceAsOf") or cached.get("fetchedAt"))
+        position_at = parse_datetime(position.updated_at)
+        cached_is_fresher = bool(
+            cached_price
+            and (
+                (cached_at and (not position_at or cached_at > position_at))
+                or not position.current_price
+            )
+        )
+        used_cached_price = not live_price and cached_is_fresher
+        current_price = live_price or (cached_price if used_cached_price else position.current_price) or cached_price
         indicator_source = indicators if indicators else cached
         volume = (
-            position.volume
-            or number(first_present(quote, ["volume", "tradingVolume", "accumulatedVolume"]))
+            number(first_present(quote, ["volume", "tradingVolume", "accumulatedVolume"]))
+            or (number(cached.get("volume")) if used_cached_price else 0)
+            or position.volume
             or number(indicator_source.get("volume"))
             or number(cached.get("volume"))
         )
-        volume_ratio = position.volume_ratio or number(indicator_source.get("volumeRatio")) or number(cached.get("volumeRatio"))
+        volume_ratio = (
+            number(indicator_source.get("volumeRatio"))
+            or (number(cached.get("volumeRatio")) if used_cached_price else 0)
+            or position.volume_ratio
+            or number(cached.get("volumeRatio"))
+        )
         raw_trading_value = (
-            position.trading_value
-            or number(first_present(quote, ["tradingValue", "tradeValue", "tradingAmount"]))
+            number(first_present(quote, ["tradingValue", "tradeValue", "tradingAmount"]))
+            or (number(cached.get("tradingValue")) if used_cached_price else 0)
+            or position.trading_value
             or number(cached.get("tradingValue"))
         )
         trading_value = number(trading_value_snapshot(current_price, volume, raw_trading_value).get("tradingValue"))
@@ -774,10 +796,13 @@ class TossProvider:
             quote_message = position.quote_message or "잔고 응답의 현재가를 표시합니다."
             quote_source = position.quote_source or "Toss holdings"
             updated_at = position.updated_at
+        selected_updated_at = updated_at
+        if not live_price and not used_cached_price:
+            selected_updated_at = position.updated_at or str(cached.get("updatedAt") or "")
         estimated_market_value = position.quantity * current_price if position.quantity and current_price else 0.0
         market_value = position.market_value or estimated_market_value
         market_value_repriced = False
-        if live_price and estimated_market_value:
+        if (live_price or used_cached_price) and estimated_market_value:
             market_value_repriced = abs(estimated_market_value - number(position.market_value)) > max(
                 1.0,
                 abs(estimated_market_value) * 0.0001,
@@ -809,7 +834,7 @@ class TossProvider:
             quote_status=quote_status or position.quote_status or str(cached.get("quoteStatus") or ""),
             quote_message=quote_message or position.quote_message or str(cached.get("quoteMessage") or ""),
             data_quality=data_quality or position.data_quality or str(cached.get("dataQuality") or ""),
-            updated_at=updated_at or position.updated_at or str(cached.get("updatedAt") or ""),
+            updated_at=selected_updated_at,
             currency=str(quote.get("currency") or position.currency or cached.get("currency") or ""),
             market=str(quote.get("market") or position.market or cached.get("market") or ""),
             market_value=market_value,

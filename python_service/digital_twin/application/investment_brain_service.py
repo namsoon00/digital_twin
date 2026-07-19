@@ -211,10 +211,16 @@ class InvestmentBrainService:
             return enriched
         state, position, source = self.resolve_subject(symbol, account_id, symbol)
         if not state or not position:
+            state, position, source = subject_from_notification_graph_context(
+                relation_context,
+                enriched,
+                account_id,
+            )
+        if not state or not position:
             enriched["researchCycle"] = {
                 "status": "subject-not-found",
                 "symbol": symbol,
-                "reason": "최신 계좌 스냅샷에서 알림 대상을 찾지 못해 기존 TypeDB 추론 세대를 사용합니다.",
+                "reason": "최신 계좌 스냅샷과 검증 가능한 TypeDB 알림 컨텍스트에서 대상을 찾지 못했습니다.",
             }
             return enriched
         resolved_account_id = str(state.get("accountId") or account_id or "")
@@ -256,9 +262,11 @@ class InvestmentBrainService:
             **research_payload,
             "notificationEventId": str(event_id or ""),
             "reasoningRefresh": refresh_result,
+            "subjectResolutionSource": source,
         } if research_payload else {
             "status": "unavailable",
             "notificationEventId": str(event_id or ""),
+            "subjectResolutionSource": source,
             "reason": "가설 조사 오케스트레이터가 구성되지 않아 기존 TypeDB 추론 세대를 사용합니다.",
         }
         if int(research_cycle.get("changedEvidenceCount") or 0) > 0 and not bool(research_cycle.get("reasoningRefreshed")):
@@ -443,6 +451,80 @@ def portfolio_from_payload(payload: Dict[str, object]) -> PortfolioSummary:
         sectors=list(payload.get("sectors") or []),
         concentration=float(payload.get("concentration") or 0),
     )
+
+
+def subject_from_notification_graph_context(
+    relation_context: Dict[str, object],
+    notification_context: Dict[str, object],
+    account_id: str = "",
+) -> Tuple[Dict[str, object], Optional[Position], str]:
+    graph_inference = relation_context.get("graphStoreInference") if isinstance(relation_context.get("graphStoreInference"), dict) else {}
+    graph_backed = bool(
+        relation_context.get("graphStoreUsed")
+        or graph_inference.get("relations")
+        or graph_inference.get("traces")
+    )
+    if not graph_backed:
+        return {}, None, ""
+    subject = relation_context.get("subject") if isinstance(relation_context.get("subject"), dict) else {}
+    facts = relation_context.get("facts") if isinstance(relation_context.get("facts"), dict) else {}
+    symbol = str(subject.get("symbol") or facts.get("symbol") or notification_context.get("rawSymbol") or "").upper().strip()
+    if not symbol:
+        return {}, None, ""
+    market = str(subject.get("market") or facts.get("market") or "").upper().strip()
+    currency = str(subject.get("currency") or facts.get("currency") or ("KRW" if market == "KR" or symbol.isdigit() else ""))
+    values = {
+        "symbol": symbol,
+        "name": str(subject.get("name") or facts.get("name") or notification_context.get("displayTarget") or symbol),
+        "market": market,
+        "currency": currency,
+        "quantity": facts.get("quantity") or 0,
+        "sellable_quantity": facts.get("sellableQuantity") or 0,
+        "average_price": facts.get("averagePrice") or 0,
+        "current_price": facts.get("currentPrice") or 0,
+        "change_rate": facts.get("changeRate"),
+        "market_value": facts.get("marketValue") or 0,
+        "market_value_krw": facts.get("marketValueKrw") or facts.get("marketValueKRW") or 0,
+        "profit_loss": facts.get("profitLoss") or 0,
+        "profit_loss_krw": facts.get("profitLossKrw") or facts.get("profitLossKRW") or 0,
+        "profit_loss_rate": facts.get("profitLossRate") or 0,
+        "volume": facts.get("volume") or 0,
+        "volume_ratio": facts.get("volumeRatio") or 0,
+        "trade_strength": facts.get("tradeStrength") or 0,
+        "ma5": facts.get("ma5") or 0,
+        "ma20": facts.get("ma20") or 0,
+        "ma60": facts.get("ma60") or 0,
+        "ma20_distance": facts.get("ma20Distance") or 0,
+        "ma60_distance": facts.get("ma60Distance") or 0,
+        "sector": str(subject.get("sector") or facts.get("sector") or "기타"),
+        "source": str(facts.get("source") or ("holding" if facts.get("isHolding") else "watchlist")),
+        "updated_at": str(facts.get("observedAt") or relation_context.get("inferenceGenerationAt") or ""),
+        "data_quality": "graph-context",
+    }
+    try:
+        position = Position(**values)
+    except (TypeError, ValueError):
+        return {}, None, ""
+    resolved_account_id = str(notification_context.get("accountId") or account_id or facts.get("accountId") or "")
+    portfolio_payload = {
+        "total": facts.get("portfolioTotal") or facts.get("accountTotal") or notification_context.get("portfolioTotal") or 0,
+        "invested": facts.get("portfolioInvested") or 0,
+        "cash": facts.get("portfolioCash") or 0,
+        "markets": [],
+        "sectors": [],
+        "concentration": facts.get("portfolioConcentration") or 0,
+    }
+    state = {
+        "accountId": resolved_account_id,
+        "accountLabel": str(notification_context.get("accountLabel") or ""),
+        "generatedAt": str(relation_context.get("inferenceGenerationAt") or facts.get("observedAt") or ""),
+        "portfolio": portfolio_payload,
+        "positions": {symbol: position.to_dict()} if position.source == "holding" else {},
+        "watchlist": {symbol: position.to_dict()} if position.source != "holding" else {},
+        "decisions": {},
+        "externalSignals": {},
+    }
+    return state, position, "notification-graph-context"
 
 
 def subject_match_score(message: str, requested_symbol: str, position: Position) -> int:

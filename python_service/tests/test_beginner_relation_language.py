@@ -4,7 +4,7 @@ from digital_twin.domain.investment_research import build_active_investment_opin
 from digital_twin.domain.notification_ai_gate_contracts import NotificationAIValidatedResponse
 from digital_twin.application.notification_ai_gate_message import execution_telegram_message
 from digital_twin.domain.notification_ontology_sections import ontology_rule_lines, relation_axis_summary_lines
-from digital_twin.domain.notification_templates import NotificationTemplate, alert_context, render_notification
+from digital_twin.domain.notification_templates import NotificationTemplate, alert_context, compact_investment_notification, render_notification
 from digital_twin.domain.portfolio import AlertEvent, Position
 
 
@@ -29,6 +29,19 @@ class BeginnerRelationLanguageTests(unittest.TestCase):
             ma20_distance=4.9,
             ma60_distance=6.9,
         )
+
+    def test_long_investment_notification_is_compacted_to_one_telegram_message(self):
+        rendered = "<b>판단 요약</b>\n" + ("• 긴 근거 설명입니다.\n" * 500) + '<a href="https://example.test/detail">상세</a>'
+        compacted = compact_investment_notification(rendered, {
+            "messageType": "investmentInsight",
+            "notifyLinkUrl": "https://example.test/notifications",
+            "notificationNumber": "N-TEST1234",
+        })
+
+        self.assertLessEqual(len(compacted), 3700)
+        self.assertNotIn("<b>", compacted)
+        self.assertIn("상세 링크: https://example.test/notifications", compacted)
+        self.assertIn("알림 번호: N-TEST1234", compacted)
 
     def test_execution_capacity_signal_does_not_create_sell_opinion(self):
         opinion = build_active_investment_opinion(

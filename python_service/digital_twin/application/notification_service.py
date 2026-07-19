@@ -342,6 +342,15 @@ class NotificationQueueRunner:
         accounts = self.account_map()
         processed = 0
         for job in jobs:
+            if str(job.message_type or "") == OPERATOR_REASONING_REPORT and not self.operator_reports_enabled:
+                reason = "운영자 추론 보고서 알림이 비활성화되어 발송하지 않았습니다."
+                if hasattr(self.queue, "mark_suppressed"):
+                    self.queue.mark_suppressed(job, reason)
+                else:
+                    self.queue.mark_failed(job, reason)
+                self.last_run_details.append(self.job_detail(job, "suppressed", "operator reports disabled"))
+                processed += 1
+                continue
             if not job.text.strip():
                 self.queue.mark_failed(job, "empty notification text")
                 self.last_run_details.append(self.job_detail(job, "failed", "empty text"))

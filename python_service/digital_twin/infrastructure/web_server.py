@@ -498,6 +498,7 @@ def settings_status_payload() -> Dict[str, object]:
         "modelDecisionThresholds",
         "modelTimingScenario",
         "modelTimingSymbols",
+        "operatorReasoningReportEnabled",
         "alertRules",
         "alertThresholds",
         "relationRuleThresholds",

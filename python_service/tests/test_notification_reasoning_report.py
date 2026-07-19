@@ -445,6 +445,34 @@ class NotificationReasoningReportTests(unittest.TestCase):
         self.assertIn("🛠 운영자 추론 보고서", sent[1])
         self.assertIn(notification_debug_number(customer_job.job_id), sent[1])
 
+    def test_runner_suppresses_pending_operator_report_when_disabled(self):
+        operator_job = NotificationJob.create(
+            "🛠 운영자 추론 보고서",
+            account_id="main",
+            account_label="기본 계정",
+            message_type=OPERATOR_REASONING_REPORT,
+        )
+        queue = MemoryQueue([operator_job])
+        account = AccountConfig("main", "기본 계정", "toss", "https://example.test", "", "", "", ["MSTR"])
+        sent = []
+
+        class FakeNotifier:
+            def send(self, message):
+                sent.append(message)
+                return SimpleNamespace(delivered=True, reason="")
+
+        runner = NotificationQueueRunner(
+            queue,
+            AccountRepository(account),
+            lambda _account: FakeNotifier(),
+            operator_reports_enabled=False,
+        )
+
+        self.assertEqual(1, runner.run_once(limit=10))
+        self.assertEqual("suppressed", operator_job.status)
+        self.assertIn("비활성화", operator_job.last_error)
+        self.assertEqual([], sent)
+
     def test_operator_delivery_failure_does_not_change_completed_customer_job(self):
         context, article_url = notification_context()
         enriched = context_with_validated_ai_response(context, validated_response(article_url))

@@ -1889,6 +1889,7 @@ class PythonServiceTests(unittest.TestCase):
             "kisBaseUrl": "https://openapi.koreainvestment.com:9443",
             "kisAppKey": "app-key",
             "kisAppSecret": "app-secret",
+            "operatorReasoningReportEnabled": "0",
         })
 
         settings = runtime_settings()
@@ -1897,12 +1898,14 @@ class PythonServiceTests(unittest.TestCase):
         self.assertEqual("https://openapi.koreainvestment.com:9443", settings["kisBaseUrl"])
         self.assertEqual("app-key", settings["kisAppKey"])
         self.assertEqual("app-secret", settings["kisAppSecret"])
+        self.assertEqual("0", settings["operatorReasoningReportEnabled"])
         self.assertEqual("", status["settings"]["kisAppKey"])
         self.assertEqual("", status["settings"]["kisAppSecret"])
         self.assertIn("ontologyRelationRules", status["settings"])
         self.assertIn("aiPromptTemplates", status["settings"])
         self.assertIn("aiPromptPolicy", status["settings"])
         self.assertIn("kisMarketSignalUnchangedStaleCount", status["settings"])
+        self.assertEqual("0", status["settings"]["operatorReasoningReportEnabled"])
         self.assertTrue(status["configured"]["kisAppKey"])
         self.assertTrue(status["configured"]["kisAppSecret"])
         self.assertNotIn("kisAccountNo", status["configured"])

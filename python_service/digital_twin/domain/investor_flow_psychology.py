@@ -1,10 +1,12 @@
 from typing import Dict
 
 from .market_data import clamp, investor_net_volume, number
-from .portfolio import Position
+from .portfolio import Position, expects_kr_microstructure_signals
 
 
 def investor_flow_values_reliable(position: Position) -> bool:
+    if not expects_kr_microstructure_signals(position.market, position.currency, position.symbol):
+        return False
     coverage = position.market_signal_coverage if isinstance(position.market_signal_coverage, dict) else {}
     investor = coverage.get("investor") if isinstance(coverage.get("investor"), dict) else {}
     if not investor:

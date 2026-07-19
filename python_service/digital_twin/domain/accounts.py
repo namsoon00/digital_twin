@@ -361,11 +361,13 @@ class AccountConfig:
 
     def message_delivery_context(self) -> Dict[str, object]:
         profile = self.message_delivery_profile()
-        return {
+        context = {
             "messageDeliveryLevel": profile["level"],
             "messageDeliveryLevelLabel": profile["label"],
             "messageDeliveryProfile": profile,
         }
+        context.update(self.investment_strategy_context())
+        return context
 
     def investment_strategy_profile_payload(self) -> Dict[str, object]:
         profile = investment_strategy_profile(self.investment_strategy_profile)

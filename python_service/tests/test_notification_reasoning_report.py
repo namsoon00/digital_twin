@@ -12,6 +12,7 @@ from digital_twin.application.notification_service import NotificationQueueRunne
 from digital_twin.domain.accounts import AccountConfig
 from digital_twin.domain.message_types import INVESTMENT_INSIGHT, OPERATOR_REASONING_REPORT
 from digital_twin.domain.notification_ai_gate_contracts import NotificationAIValidatedResponse
+from digital_twin.domain.ontology_relation_execution_plan import execution_plan_from_relation_context
 from digital_twin.domain.notification_reasoning_report import (
     build_notification_reasoning_report,
     render_operator_reasoning_report,
@@ -19,6 +20,7 @@ from digital_twin.domain.notification_reasoning_report import (
 from digital_twin.domain.notification_rules import default_notification_rule
 from digital_twin.domain.notification_templates import NotificationTemplate, render_notification
 from digital_twin.domain.notifications import NotificationJob, notification_debug_number
+from digital_twin.infrastructure.model_reviewer import codex_command
 
 
 def relation_context():
@@ -221,6 +223,12 @@ class AccountRepository:
 
 
 class NotificationReasoningReportTests(unittest.TestCase):
+    def test_notification_ai_can_pin_a_cli_compatible_model(self):
+        command = codex_command("gpt-5.4")
+
+        self.assertIn("--model gpt-5.4", command)
+        self.assertIn("exec --skip-git-repo-check", command)
+
     def test_operator_message_type_uses_system_delivery_policy_and_raw_template(self):
         rule = default_notification_rule(OPERATOR_REASONING_REPORT)
         rendered = render_notification(
@@ -242,19 +250,66 @@ class NotificationReasoningReportTests(unittest.TestCase):
 
     def test_customer_message_keeps_valuation_articles_and_adds_reasoning_sections(self):
         context, article_url = notification_context()
+        context.update({
+            "testDispatch": True,
+            "notificationNumber": "N-TEST1234",
+        })
         enriched = context_with_validated_ai_response(context, validated_response(article_url))
-        message = enriched["telegramMessage"]
+        message = render_notification(NotificationTemplate.default(INVESTMENT_INSIGHT), enriched)
 
         self.assertIn("<b>왜 알림이 왔나요?</b>", message)
-        self.assertIn("<b>온톨로지가 새로 확인한 사실</b>", message)
+        self.assertIn("<b>관계 분석으로 새로 확인한 사실</b>", message)
         self.assertIn("<b>신뢰도와 부족 데이터</b>", message)
         self.assertIn("<b>밸류에이션</b>", message)
         self.assertIn("BTC 보유가치/NAV + 추세 보정", message)
         self.assertIn("<b>원문/출처</b>", message)
         self.assertIn(article_url, message)
         self.assertIn("[관계 분석] 높음 (78.0점)", message)
+        self.assertIn("🧪 테스트 알림", message)
+        self.assertIn("일부 수급·추세 조건은 메시지 검증용 테스트값", message)
+        self.assertIn("N-TEST1234", message)
         self.assertNotIn("EVENT_RISK_REVIEW", message)
         self.assertNotIn("graph.disclosure.event_risk.v1", message)
+
+    def test_watchlist_strategy_guide_does_not_describe_holdings(self):
+        context, article_url = notification_context()
+        context["ontologyRelationContext"]["facts"].update({"isHolding": False, "isWatchlist": True})
+        response = validated_response(article_url)
+        response.strategy_guide = {"invalidationCondition": "가격이 약해지면 보유 의견이 약해집니다."}
+
+        message = context_with_validated_ai_response(context, response)["telegramMessage"]
+
+        self.assertIn("관심 유지 의견이 약해집니다", message)
+        self.assertNotIn("보유 의견이 약해집니다", message)
+
+    def test_watchlist_relation_watch_plan_uses_entry_language(self):
+        plan = execution_plan_from_relation_context(
+            {"symbol": "TSLA", "name": "Tesla", "isWatchlist": True},
+            {"label": "관계 규칙 관찰", "targetRole": "watchlist", "actionGroup": "valuation"},
+            [],
+        )
+
+        self.assertEqual("WAIT_FOR_ENTRY_CONFIRMATION", plan["primaryAction"])
+        self.assertEqual("관심 유지, 다음 진입 조건 확인", plan["primaryActionLabel"])
+        self.assertNotIn("보유 유지", plan["primaryActionLabel"])
+
+    def test_account_delivery_context_includes_strategy_profile(self):
+        account = AccountConfig(
+            "main",
+            "기본 계정",
+            "toss",
+            "https://example.test",
+            "",
+            "",
+            "",
+            ["MSTR"],
+            investment_strategy_profile="aggressive",
+        )
+
+        context = account.message_delivery_context()
+
+        self.assertEqual("공격형", context["investmentStrategyProfileLabel"])
+        self.assertEqual("aggressive", context["investmentStrategyProfile"])
 
     def test_operator_report_separates_selected_decision_score_from_highest_relation(self):
         context, article_url = notification_context()
@@ -276,8 +331,31 @@ class NotificationReasoningReportTests(unittest.TestCase):
         self.assertNotIn("telegramBotToken", message)
         self.assertNotIn("clientSecret", message)
 
+    def test_operator_report_omits_non_finite_empty_fact_rows(self):
+        context, _article_url = notification_context()
+        context["ontologyRelationContext"]["facts"]["averagePrice"] = float("nan")
+
+        report = build_notification_reasoning_report(context, "customer-job", "밸류에이션")
+
+        self.assertFalse(any(item["key"] == "averagePrice" for item in report.input_facts))
+
+    def test_direct_test_operator_audit_explains_policy_bypass_and_no_articles(self):
+        context, _article_url = notification_context()
+        context.update({
+            "testDispatch": True,
+            "notificationTestBypassPolicy": True,
+            "newsHeadlines": {"items": []},
+        })
+        report = build_notification_reasoning_report(context, "customer-job", "밸류에이션")
+
+        article_check = next(item for item in report.validation_checks if item["name"] == "사용자 메시지 기사·공시 보존")
+        self.assertEqual("해당 없음", article_check["status"])
+        self.assertEqual("test-direct-send", report.delivery_audit["decision"])
+        self.assertIn("정책을 우회", report.delivery_audit["reasons"][0])
+
     def test_runner_enqueues_operator_report_as_independent_job_for_same_account(self):
         context, article_url = notification_context()
+        context["testDispatch"] = True
         enriched = context_with_validated_ai_response(context, validated_response(article_url))
         customer_job = NotificationJob.create(
             enriched["telegramMessage"],
@@ -314,6 +392,7 @@ class NotificationReasoningReportTests(unittest.TestCase):
         self.assertEqual(1, runner.run_once(limit=10))
         self.assertEqual("done", operator_jobs[0].status)
         self.assertEqual(2, len(sent))
+        self.assertTrue(sent[1].startswith("🧪 테스트 발송 · 운영자 검증용"))
         self.assertIn("🛠 운영자 추론 보고서", sent[1])
         self.assertIn(notification_debug_number(customer_job.job_id), sent[1])
 

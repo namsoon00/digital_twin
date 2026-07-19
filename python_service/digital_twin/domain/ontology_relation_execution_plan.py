@@ -688,7 +688,11 @@ def execution_plan_from_relation_context(
 
     if target_role == WATCHLIST_TARGET_ROLE:
         _append_unique(blocked_actions, "관심종목에는 추가매수·분할축소·매도 같은 보유종목 행동을 적용하지 않음")
-        if primary_action in {
+        if primary_action == "HOLD":
+            primary_action = "WAIT_FOR_ENTRY_CONFIRMATION"
+            primary_label = "관심 유지, 다음 진입 조건 확인"
+            _append_unique(next_checks, "다음 조회에서도 같은 관계와 진입 조건이 유지되는지 확인")
+        elif primary_action in {
             "TRIM_OR_SELL_REVIEW",
             "LOSS_CONTROL_REVIEW",
             "TRIM_REVIEW",

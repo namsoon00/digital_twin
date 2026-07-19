@@ -1263,6 +1263,19 @@ def prepend_message_start_badge(rendered: str, rich: bool = False, context: Dict
     return badge + "\n\n" + text
 
 
+def prepend_test_dispatch_notice(rendered: str, context: Dict[str, object], rich: bool = False) -> str:
+    text = str(rendered or "").strip()
+    if not text or not (context or {}).get("testDispatch"):
+        return text
+    marker = "🧪 테스트 알림"
+    if marker in text:
+        return text
+    notice = marker + " · 일부 수급·추세 조건은 메시지 검증용 테스트값입니다. 실제 매매 신호가 아닙니다."
+    if rich:
+        notice = "<b>" + html.escape(notice, quote=False) + "</b>"
+    return notice + "\n\n" + text
+
+
 def render_notification(template: NotificationTemplate, context: Dict[str, object]) -> str:
     values = context_with_score_explanation(context)
     if context_message_type(values) == OPERATOR_REASONING_REPORT:
@@ -1276,14 +1289,16 @@ def render_notification(template: NotificationTemplate, context: Dict[str, objec
         rendered = beginner_friendly_text(append_score_explanation(rendered, values, rich))
         rendered = append_external_api_sources(rendered, values, rich)
         rendered = append_message_footer(rendered, values, rich)
-        return prepend_message_start_badge(rendered, rich, values)
+        rendered = prepend_message_start_badge(rendered, rich, values)
+        return prepend_test_dispatch_notice(rendered, values, rich)
     rendered = render_template(BODY_TEMPLATE, values)
     rich = template_prefers_rich_score(BODY_TEMPLATE, rendered)
     rendered = append_ai_opinion(rendered, values, rich)
     rendered = beginner_friendly_text(append_score_explanation(rendered, values, rich))
     rendered = append_external_api_sources(rendered, values, rich)
     rendered = append_message_footer(rendered, values, rich)
-    return prepend_message_start_badge(rendered, rich, values)
+    rendered = prepend_message_start_badge(rendered, rich, values)
+    return prepend_test_dispatch_notice(rendered, values, rich)
 
 
 

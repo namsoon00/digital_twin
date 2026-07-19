@@ -69,6 +69,9 @@ def expected_volume_ratio_for_session(session_key: str, elapsed_ratio: float) ->
     key = str(session_key or "").strip()
     if key == "regular":
         return interpolate_curve(REGULAR_SESSION_CURVE, elapsed_ratio)
+    if key == "after":
+        expected_share = EXTENDED_SESSION_EXPECTED_SHARE[key]
+        return clamp(1.0 + expected_share * clamp(elapsed_ratio, 0.0, 1.0), 1.0, 1.0 + expected_share)
     expected_share = EXTENDED_SESSION_EXPECTED_SHARE.get(key)
     if expected_share:
         return clamp(expected_share * clamp(elapsed_ratio, 0.0, 1.0), 0.01, expected_share)

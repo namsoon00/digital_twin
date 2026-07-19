@@ -56,12 +56,16 @@ class FallbackModelReviewer(ModelReviewer):
             return self.fallback.review(job) + "\n- LLM 상태: 외부 분석 실패로 로컬 진단 사용 (" + str(error)[:160] + ")"
 
 
-def codex_command() -> str:
+def codex_command(model: str = "") -> str:
     executable = shutil.which("codex")
     if not executable:
         return ""
-    return " ".join([
+    parts = [
         shlex.quote(executable),
+    ]
+    if str(model or "").strip():
+        parts.extend(["--model", shlex.quote(str(model).strip())])
+    parts.extend([
         "-a",
         "never",
         "--sandbox",
@@ -72,6 +76,7 @@ def codex_command() -> str:
         "--skip-git-repo-check",
         "-",
     ])
+    return " ".join(parts)
 
 
 def reviewer_from_settings(settings: Dict[str, str] = None) -> ModelReviewer:
@@ -86,4 +91,3 @@ def reviewer_from_settings(settings: Dict[str, str] = None) -> ModelReviewer:
         if command:
             return FallbackModelReviewer(CommandModelReviewer(command, timeout))
     return LocalModelReviewer()
-

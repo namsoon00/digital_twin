@@ -408,6 +408,7 @@ DEFAULT_STRATEGY_SETTINGS = {
     "notificationAiGateEnabled": "1",
     "notificationAiGateMessageTypes": "investmentInsight",
     "notificationAiUseCodex": "1",
+    "notificationAiModel": "gpt-5.4",
     "notificationAiTimeoutSeconds": "120",
     "modelName": "나의 매수/매도 모델",
     "modelHypothesis": "수급, 가치, 내 점수, 리스크를 함께 봐서 매수 후보와 매도 후보를 분리한다.",

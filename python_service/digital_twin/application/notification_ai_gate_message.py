@@ -34,6 +34,7 @@ from ..domain.notification_ai_gate_validation import (
     action_label_for_target,
     delivery_level_from_context,
     signed_percent_from_text,
+    watchlist_friendly_text,
 )
 from ..domain.notification_start_badge import labeled_message_start_badge
 from ..domain.notification_text_formatting import absolute_beginner_friendly_text, beginner_friendly_text
@@ -531,7 +532,13 @@ def _plain_value(context: Dict[str, object], label: str) -> str:
     return _line_after_colon(_raw_lines(context), label)
 
 def execution_footer(context: Dict[str, object], response: NotificationAIValidatedResponse, reference: str, sent: str) -> List[str]:
-    return []
+    rows = [
+        _html_row("데이터 기준일", reference),
+        _html_row("발송시각", sent),
+        _html_row("번호", context.get("notificationNumber")),
+    ]
+    rows = [row for row in rows if row]
+    return (["", "<b>기준·추적</b>", *rows] if rows else [])
 
 def _split_legacy_investor_rows(text: str) -> List[str]:
     rows = []
@@ -1698,6 +1705,7 @@ def _derived_execution_criteria(context: Dict[str, object], response: Notificati
 
 def _derived_invalidation_condition(context: Dict[str, object], response: NotificationAIValidatedResponse) -> str:
     explicit = _strategy_guide_value(response, "invalidationCondition") or response.invalidation_condition
+    explicit = watchlist_friendly_text(context, explicit)
     if explicit and not (response.action == "HOLD" and "관계 점수 급변" in explicit):
         return explicit
     if response.action != "HOLD":
@@ -1715,12 +1723,14 @@ def _derived_invalidation_condition(context: Dict[str, object], response: Notifi
             parts.append(_price_clause("5일 평균", ma5) + " 회복 실패")
         if ma20:
             parts.append(_price_clause("20일 평균", ma20) + " 회복 실패")
-        return "다음 조회에서도 " + " + ".join(parts or ["약한 조건"]) + "가 이어지면 보유 의견이 약해지고 분할축소를 다시 봅니다."
+        return watchlist_friendly_text(context, "다음 조회에서도 " + " + ".join(parts or ["약한 조건"]) + "가 이어지면 보유 의견이 약해지고 분할축소를 다시 봅니다.")
     if zone == "profit_protection":
         guard = ma20 or ma5 or current
-        return (_price_clause("20일 평균", guard) + " 아래로 내려가거나 직접 악재가 추가되면 보유 의견이 약해집니다.") if guard else "가격 흐름이 약해지거나 직접 악재가 추가되면 보유 의견이 약해집니다."
+        condition = (_price_clause("20일 평균", guard) + " 아래로 내려가거나 직접 악재가 추가되면 보유 의견이 약해집니다.") if guard else "가격 흐름이 약해지거나 직접 악재가 추가되면 보유 의견이 약해집니다."
+        return watchlist_friendly_text(context, condition)
     guard = ma20 or ma5 or current
-    return (_price_clause("확인 기준", guard) + " 아래로 내려가고 거래가 늘지 않으면 보유 의견이 약해집니다.") if guard else "가격과 거래가 같이 약해지면 보유 의견이 약해집니다."
+    condition = (_price_clause("확인 기준", guard) + " 아래로 내려가고 거래가 늘지 않으면 보유 의견이 약해집니다.") if guard else "가격과 거래가 같이 약해지면 보유 의견이 약해집니다."
+    return watchlist_friendly_text(context, condition)
 
 def _strategy_confidence_limiters(context: Dict[str, object], response: NotificationAIValidatedResponse) -> List[str]:
     rows = list(_strategy_guide_list(response, "dataLimitations"))
@@ -1769,29 +1779,29 @@ def strategy_guide_quality(context: Dict[str, object], response: NotificationAIV
 def strategy_guide_rows(context: Dict[str, object], response: NotificationAIValidatedResponse, level: str) -> List[str]:
     rows: List[str] = []
     action_label = action_label_for_action(response.action, context) or response.action_label or response.action
-    interpretation = _derived_interpretation(context, response)
+    interpretation = watchlist_friendly_text(context, _derived_interpretation(context, response))
     if interpretation:
         append_unique_text(rows, "결론: " + action_label + ". AI 해석: " + interpretation, 0)
     action_mode = _derived_action_mode(context, response)
     if action_mode:
         append_unique_text(rows, "대응 모드: " + action_mode, 0)
-    execution = _derived_execution_criteria(context, response)
+    execution = watchlist_friendly_text(context, _derived_execution_criteria(context, response))
     if execution:
         append_unique_text(rows, "실행 기준: " + execution, 0)
-    evidence_summary = _compact_text_segments(response.evidence or context_specific_insight_rows(context, response, MESSAGE_CONTEXT_ROW_LIMIT), 0, 0)
+    evidence_summary = watchlist_friendly_text(context, _compact_text_segments(response.evidence or context_specific_insight_rows(context, response, MESSAGE_CONTEXT_ROW_LIMIT), 3, 150))
     if evidence_summary:
         append_unique_text(rows, "핵심 근거: " + evidence_summary, 0)
-    counter_summary = _compact_text_segments(response.counter_evidence, 0, 0)
+    counter_summary = watchlist_friendly_text(context, _compact_text_segments(response.counter_evidence, 2, 140))
     if counter_summary:
         append_unique_text(rows, "반대 신호: " + counter_summary, 0)
     check_items = list(_strategy_guide_list(response, "confirmationData"))
     check_items.extend(response.next_checks or [])
-    check_summary = _compact_text_segments(check_items, 0, 0)
+    check_summary = watchlist_friendly_text(context, _compact_text_segments(check_items, 3, 140))
     if check_summary:
         append_unique_text(rows, "확인할 데이터/다음 확인: " + check_summary, 0)
     limiters = _strategy_confidence_limiters(context, response)
     if limiters:
-        append_unique_text(rows, "추가 확인 데이터: " + _compact_text_segments(limiters, 0, 0), 0)
+        append_unique_text(rows, "추가 확인 데이터: " + _compact_text_segments(limiters, 3, 140), 0)
     hypothesis = _derived_ai_hypothesis(context, response)
     if hypothesis:
         append_unique_text(rows, "AI 가설: " + hypothesis + " " + _ai_hypothesis_boundary(response), 0)
@@ -2058,8 +2068,8 @@ def execution_telegram_message(context: Dict[str, object], response: Notificatio
         parts.extend(["", "<b>밸류에이션</b>", *valuation_rows])
     inference_rows = customer_inference_rows(context, level)
     if inference_rows:
-        parts.extend(["", "<b>온톨로지가 새로 확인한 사실</b>", *inference_rows])
-    axis_rows = relation_axis_summary_rows(context, level)
+        parts.extend(["", "<b>관계 분석으로 새로 확인한 사실</b>", *inference_rows])
+    axis_rows = relation_axis_summary_rows(context, level, 4)
     if axis_rows:
         parts.extend(["", "<b>투자 판단 근거</b>", *axis_rows])
     opinion_rows = strategy_guide_rows(context, response, level)
@@ -2098,8 +2108,8 @@ def execution_telegram_message_absolute_beginner(context: Dict[str, object], res
         parts.extend(["", "<b>밸류에이션</b>", *valuation_rows])
     inference_rows = customer_inference_rows(context, "absoluteBeginner")
     if inference_rows:
-        parts.extend(["", "<b>온톨로지가 새로 확인한 사실</b>", *inference_rows])
-    axis_rows = relation_axis_summary_rows(context, "absoluteBeginner")
+        parts.extend(["", "<b>관계 분석으로 새로 확인한 사실</b>", *inference_rows])
+    axis_rows = relation_axis_summary_rows(context, "absoluteBeginner", 4)
     if axis_rows:
         parts.extend(["", "<b>투자 판단 근거</b>", *axis_rows])
     opinion_rows = strategy_guide_rows(context, response, "absoluteBeginner")

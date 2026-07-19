@@ -1,9 +1,11 @@
 import unittest
+from datetime import datetime, timezone
 from pathlib import Path
 import sys
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
+from digital_twin.domain.investor_flow_psychology import investor_flow_values_reliable
 from digital_twin.domain.market_data import normalize_position
 from digital_twin.domain.monitoring import RealtimeMonitor
 from digital_twin.domain.portfolio_calculations import (
@@ -18,6 +20,28 @@ from digital_twin.infrastructure.toss_snapshots import TossProvider, currency_ra
 
 
 class TossBaseCurrencyValueTests(unittest.TestCase):
+    def test_after_market_volume_pace_includes_completed_regular_session(self):
+        pace = volume_pace_snapshot(
+            "US",
+            1.1,
+            observed_at=datetime(2026, 7, 17, 23, 0, tzinfo=timezone.utc),
+        )
+
+        self.assertEqual("after", pace["volumePaceSession"])
+        self.assertGreaterEqual(pace["expectedVolumeRatioNow"], 1.0)
+        self.assertLess(pace["timeAdjustedVolumeRatio"], 1.2)
+
+    def test_us_investor_category_values_are_not_treated_as_kr_flow_evidence(self):
+        position = normalize_position({
+            "symbol": "TSLA",
+            "market": "US",
+            "currency": "USD",
+            "foreignNetVolume": 180000,
+            "institutionNetVolume": 90000,
+        })
+
+        self.assertFalse(investor_flow_values_reliable(position))
+
     def test_live_quote_reprices_stale_holding_value_and_profit_rate(self):
         position = normalize_position(
             {

@@ -314,16 +314,7 @@ class NotificationQueueRunner:
                 continue
             try:
                 self.deliver(job, accounts, message)
-                try:
-                    operator_detail = self.enqueue_operator_reasoning_report(job, message)
-                except Exception as operator_error:  # noqa: BLE001 - operator audit must not retry the customer alert.
-                    operator_detail = "운영자 보고 생성 실패"
-                    context = dict(job.context or {})
-                    context.update({
-                        "operatorReasoningReportStatus": "error",
-                        "operatorReasoningReportError": str(operator_error)[:180],
-                    })
-                    job.context = context
+                operator_detail = self.capture_operator_report_after_delivery(job, message)
                 self.queue.mark_done(job)
                 self.last_run_details.append(self.job_detail(job, "done", operator_detail))
                 processed += 1
@@ -411,6 +402,18 @@ class NotificationQueueRunner:
         if not delivery.delivered:
             raise RuntimeError(delivery.reason or "notification delivery failed")
 
+    def capture_operator_report_after_delivery(self, job: NotificationJob, customer_message: str) -> str:
+        try:
+            return self.enqueue_operator_reasoning_report(job, customer_message)
+        except Exception as operator_error:  # noqa: BLE001 - operator audit must not retry the customer alert.
+            context = dict(job.context or {})
+            context.update({
+                "operatorReasoningReportStatus": "error",
+                "operatorReasoningReportError": str(operator_error)[:180],
+            })
+            job.context = context
+            return "운영자 보고 생성 실패"
+
     def enqueue_operator_reasoning_report(self, job: NotificationJob, customer_message: str) -> str:
         if not self.operator_reports_enabled or str(job.message_type or "") != INVESTMENT_INSIGHT:
             return ""
@@ -425,6 +428,8 @@ class NotificationQueueRunner:
             return "운영자 보고 생략: 관계 추론 없음"
         report = build_notification_reasoning_report(context, job.job_id, customer_message)
         report_text = render_operator_reasoning_report(report)
+        if context.get("testDispatch"):
+            report_text = "🧪 테스트 발송 · 운영자 검증용\n" + report_text
         if not report_text:
             context["operatorReasoningReportStatus"] = "skipped_empty_report"
             job.context = context
@@ -442,6 +447,7 @@ class NotificationQueueRunner:
             "body": report_text,
             "telegramMessage": report_text,
             "readableMessage": report_text,
+            "testDispatch": bool(context.get("testDispatch")),
             "notificationSignals": ["operatorAudit", "confirmingData", "actionable"],
             "reasoningReport": report.to_dict(),
         }

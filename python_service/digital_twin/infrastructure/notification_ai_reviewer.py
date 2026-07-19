@@ -62,7 +62,9 @@ class FallbackNotificationAIReviewer(NotificationAIReviewer):
         except Exception as error:  # noqa: BLE001 - alert delivery falls back to deterministic validation.
             fallback = self.fallback.review(context)
             fallback.source = "local fallback"
-            fallback.validation_warnings.append("AI 응답 실패로 로컬 검증 의견을 사용했습니다: " + str(error)[:140])
+            error_lines = [line.strip() for line in str(error).splitlines() if line.strip()]
+            error_detail = next((line for line in reversed(error_lines) if "ERROR" in line.upper()), error_lines[-1] if error_lines else str(error))
+            fallback.validation_warnings.append("AI 응답 실패로 로컬 검증 의견을 사용했습니다: " + error_detail[:320])
             return fallback
 
 
@@ -71,10 +73,11 @@ def notification_ai_reviewer_from_settings(settings: Dict[str, str] = None) -> N
     command = str(settings.get("notificationAiCommand") or os.environ.get("NOTIFICATION_AI_COMMAND") or "").strip()
     use_codex = str(settings.get("notificationAiUseCodex") or os.environ.get("NOTIFICATION_AI_USE_CODEX") or "1").strip() != "0"
     timeout = int(settings.get("notificationAiTimeoutSeconds") or os.environ.get("NOTIFICATION_AI_TIMEOUT_SECONDS") or 120)
+    model = str(settings.get("notificationAiModel") or os.environ.get("NOTIFICATION_AI_MODEL") or "gpt-5.4").strip()
     if command:
         return FallbackNotificationAIReviewer(CommandNotificationAIReviewer(command, timeout, "AI 명령"))
     if use_codex:
-        command = codex_command()
+        command = codex_command(model)
         if command:
             return FallbackNotificationAIReviewer(CommandNotificationAIReviewer(command, timeout, "Codex AI"))
     return LocalNotificationAIReviewer()

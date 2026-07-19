@@ -474,6 +474,7 @@ def settings_status_payload() -> Dict[str, object]:
         "notificationAiGateEnabled",
         "notificationAiGateMessageTypes",
         "notificationAiUseCodex",
+        "notificationAiModel",
         "notificationAiTimeoutSeconds",
         "modelName",
         "modelHypothesis",
@@ -1967,6 +1968,7 @@ def notification_template_test_payload(payload: Dict[str, object]):
         store.upsert_job(job)
         try:
             runner.deliver(job, {account.account_id: account}, job.text)
+            operator_detail = runner.capture_operator_report_after_delivery(job, job.text)
             store.mark_done(job)
             return 200, {
                 "delivered": True,
@@ -1976,6 +1978,9 @@ def notification_template_test_payload(payload: Dict[str, object]):
                 "jobId": job.job_id,
                 "provider": "Notification Direct Test",
                 "messageType": message_type,
+                "operatorReportStatus": job.context.get("operatorReasoningReportStatus"),
+                "operatorReportJobId": job.context.get("operatorReasoningReportJobId"),
+                "operatorReportDetail": operator_detail,
                 "event": public_event,
             }
         except Exception as error:  # noqa: BLE001 - expose direct test failures to the UI.

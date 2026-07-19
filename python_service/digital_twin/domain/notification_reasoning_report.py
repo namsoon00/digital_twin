@@ -1,3 +1,4 @@
+import math
 import re
 from dataclasses import asdict, dataclass, field
 from typing import Dict, List
@@ -129,6 +130,14 @@ def _list(value: object) -> List[object]:
     return value if isinstance(value, list) else []
 
 
+def _missing_value(value: object) -> bool:
+    if value in (None, "", []):
+        return True
+    if isinstance(value, float) and not math.isfinite(value):
+        return True
+    return str(value).strip().casefold() in {"nan", "none", "null", "nat"}
+
+
 def _raw_lines(context: Dict[str, object]) -> List[str]:
     value = context.get("rawLines")
     if isinstance(value, list):
@@ -140,7 +149,7 @@ def _fact_rows(facts: Dict[str, object]) -> List[Dict[str, object]]:
     rows = []
     for key, label in FACT_FIELDS:
         value = facts.get(key)
-        if value in (None, "", []):
+        if _missing_value(value):
             continue
         rows.append({"key": key, "label": label, "value": value})
     missing_inputs = facts.get("valuationMissingInputs")
@@ -239,7 +248,13 @@ def _decision_and_score_audit(relation: Dict[str, object], active_rules: List[Di
     return decision_payload, score_audit
 
 
-def _validation_checks(relation: Dict[str, object], decision: Dict[str, object], score_audit: Dict[str, object], customer_message: str) -> List[Dict[str, str]]:
+def _validation_checks(
+    relation: Dict[str, object],
+    decision: Dict[str, object],
+    score_audit: Dict[str, object],
+    customer_message: str,
+    source_items: List[Dict[str, object]],
+) -> List[Dict[str, str]]:
     active_rules = relation.get("activeRules") if isinstance(relation.get("activeRules"), list) else []
     graph_store = str(relation.get("graphStore") or "")
     checks = [
@@ -275,8 +290,12 @@ def _validation_checks(relation: Dict[str, object], decision: Dict[str, object],
         },
         {
             "name": "사용자 메시지 기사·공시 보존",
-            "status": "정상" if any(term in customer_message for term in ["원문/출처", "<b>출처</b>", "뉴스", "공시"]) else "확인 필요",
-            "detail": "기사·공시가 있을 때 원문과 분석 정보 표시",
+            "status": (
+                "정상"
+                if source_items and any(term in customer_message for term in ["원문/출처", "<b>출처</b>", "뉴스", "공시"])
+                else "오류" if source_items else "해당 없음"
+            ),
+            "detail": "기사·공시 원문 " + (str(len(source_items)) + "건을 사용자 메시지와 대조" if source_items else "없음"),
         },
         {
             "name": "TBox 전체 타입 검증",
@@ -311,6 +330,8 @@ def build_notification_reasoning_report(context: Dict[str, object], customer_job
     ai = values.get("notificationAiValidatedResponse") if isinstance(values.get("notificationAiValidatedResponse"), dict) else {}
     ai_audit = values.get("notificationAiAudit") if isinstance(values.get("notificationAiAudit"), dict) else {}
     quality_gate = values.get("ontologyQualityGate") if isinstance(values.get("ontologyQualityGate"), dict) else {}
+    source_items = _source_rows(values)
+    is_direct_test = bool(values.get("testDispatch") and values.get("notificationTestBypassPolicy"))
     delivery = {
         "priority": values.get("honeyScore"),
         "threshold": values.get("honeyThreshold"),
@@ -328,6 +349,12 @@ def build_notification_reasoning_report(context: Dict[str, object], customer_job
         "sentTime": values.get("sentTime"),
         "customerDelivery": "success",
     }
+    if is_direct_test:
+        delivery.update({
+            "decision": "test-direct-send",
+            "reasons": ["사용자 요청 테스트 발송으로 일반 우선도·쿨다운 정책을 우회했습니다."],
+            "stateReason": "테스트 발송은 운영 쿨다운 이력과 분리해 해석합니다.",
+        })
     subject = relation.get("subject") if isinstance(relation.get("subject"), dict) else {}
     input_facts = _fact_rows(facts)
     for key, label in [
@@ -348,7 +375,7 @@ def build_notification_reasoning_report(context: Dict[str, object], customer_job
         generated_at=str(values.get("sentAt") or values.get("eventGeneratedAt") or values.get("referenceDate") or ""),
         input_facts=input_facts,
         raw_observations=_raw_lines(values),
-        source_items=_source_rows(values),
+        source_items=source_items,
         graph_summary={
             "engineVersion": relation.get("engineVersion"),
             "source": relation.get("source"),
@@ -374,7 +401,7 @@ def build_notification_reasoning_report(context: Dict[str, object], customer_job
         inferred_facts=inferred_facts,
         decision=decision,
         score_audit=score_audit,
-        validation_checks=_validation_checks(relation, decision, score_audit, customer_message),
+        validation_checks=_validation_checks(relation, decision, score_audit, customer_message, source_items),
         ai_audit={
             "engineVersion": ai.get("engineVersion"),
             "source": ai.get("source"),
@@ -427,7 +454,7 @@ def customer_inferred_fact_lines(context: Dict[str, object]) -> List[str]:
             label = _text(rule.get("label"), 260)
             if label and label not in rows:
                 rows.append(label)
-    return rows[:5]
+    return rows[:4]
 
 
 def customer_confidence_and_missing_lines(context: Dict[str, object]) -> List[str]:
@@ -443,7 +470,7 @@ def customer_confidence_and_missing_lines(context: Dict[str, object]) -> List[st
 
 
 def _display(value: object) -> str:
-    if value in (None, "", []):
+    if _missing_value(value):
         return "-"
     if isinstance(value, bool):
         return "예" if value else "아니오"

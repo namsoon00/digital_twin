@@ -301,6 +301,13 @@ function checkFrontendAdminRender() {
     "알림 운영 탭이 넓은 PC에서 과도하게 벌어지지 않도록 최종 fit pass가 고정되지 않았습니다."
   );
   assertOk(
+    styles.indexOf("Desktop sticky detail inspector layer") >= 0 &&
+      /--ds-workbench-sticky-top: 24px;/.test(styles) &&
+      /\.console-shell :where\([\s\S]*\.notification-detail-pane,[\s\S]*\.symbol-detail-panel,[\s\S]*\.research-evidence-detail-panel,[\s\S]*\.investment-action-detail-panel,[\s\S]*\.feed-view \.feed-side-column,[\s\S]*\.ontology-experiment-workbench-main,[\s\S]*\.investment-evidence-selected-panel,[\s\S]*\.investment-today-selected-panel[\s\S]*\)\s*\{[\s\S]*position: sticky;[\s\S]*max-height: var\(--ds-workbench-sticky-max-height\);[\s\S]*overflow: auto;/.test(styles) &&
+      /@media \(max-width: 1180px\)[\s\S]*\.console-shell :where\([\s\S]*\.notification-detail-pane,[\s\S]*\.investment-today-selected-panel[\s\S]*\)\s*\{[\s\S]*position: static;[\s\S]*max-height: none;[\s\S]*overflow: visible;/.test(styles),
+    "PC 리스트-상세 워크벤치의 우측 상세 sticky inspector 계약이 없습니다."
+  );
+  assertOk(
     styles.indexOf("Desktop no-three-line rhythm") >= 0 &&
       /\.shell > \.topbar h1,[\s\S]*\.shell > \.topbar \.subtle,[\s\S]*\.loading-brand h1,[\s\S]*\.loading-brand \.subtle\s*\{[\s\S]*white-space: nowrap;/.test(styles) &&
       /\.app-nav-command-kicker\s*\{[\s\S]*display: none;/.test(styles) &&
@@ -1613,6 +1620,10 @@ function checkFrontendAdminRender() {
     assertOk(code.indexOf("renderOntologyExperimentStarterPanel") >= 0 && styles.indexOf(".ontology-experiment-starter-grid") >= 0, "전략 검증 빈 상태가 시작 흐름 카드로 정리되지 않았습니다.");
     assertOk(code.indexOf("renderOntologyExperimentPipelinePanel") >= 0 && experimentsHtml.indexOf("검증 파이프라인") >= 0 && styles.indexOf(".ontology-experiment-stage-grid") >= 0, "전략 검증 탭에 실험 파이프라인 워크벤치가 렌더링되지 않습니다.");
     assertOk(experimentsHtml.indexOf("ontology-experiment-section-tabs") >= 0 && experimentsHtml.indexOf("data-lab-section=\"validation\"") >= 0, "전략 검증 탭 내부 섹션 탭이 렌더링되지 않습니다.");
+    assertOk(code.indexOf("ontologyExperimentTooltipAttrs") >= 0 && code.indexOf("ontologyExperimentActionTooltip") >= 0, "전략 검증 버튼 tooltip 속성 헬퍼가 없습니다.");
+    assertOk(experimentsHtml.indexOf("data-lab-tooltip") >= 0 && experimentsValidationHtml.indexOf("data-lab-tooltip") >= 0 && experimentsPromotionHtml.indexOf("data-lab-tooltip") >= 0, "전략 검증 버튼에 hover 설명 속성이 렌더링되지 않습니다.");
+    assertOk(experimentsHtml.indexOf("최근 판단 실패와 누락 근거를 분석") >= 0 && code.indexOf("샌드박스에서 실행해 관계 변화") >= 0, "전략 검증 버튼 tooltip 문구가 기능 설명을 제공하지 않습니다.");
+    assertOk(styles.indexOf(".ontology-experiments-view button[data-lab-tooltip]::after") >= 0 && styles.indexOf("content: attr(data-lab-tooltip)") >= 0 && styles.indexOf(":focus-visible::after") >= 0, "전략 검증 버튼 tooltip hover/focus 스타일이 없습니다.");
     assertOk(experimentsValidationHtml.indexOf("백테스트 / 리플레이") >= 0 && experimentsValidationHtml.indexOf("후보 비교") >= 0 && experimentsValidationHtml.indexOf("Selected Experiment") >= 0, "전략 검증 검증 섹션이 선택 실험 기준 리플레이·비교를 렌더링하지 않습니다.");
     assertOk(experimentsPromotionHtml.indexOf("승격 심사") >= 0 && code.indexOf("ontologyExperimentPromotionGate") >= 0 && code.indexOf("promotionGate") >= 0, "전략 검증 승격 섹션이 서버 승격 게이트를 사용하지 않습니다.");
     assertOk(experimentsProposalsHtml.indexOf("strategy-proposal-console-panel") >= 0 && code.indexOf('state.activeTab === "experiments"') >= 0, "전략 검증 탭에서 전략 제안 승인 큐를 직접 확인할 수 없습니다.");

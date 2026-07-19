@@ -440,11 +440,16 @@
     notificationExpandedTypes: {},
     notificationExpandedGroups: {},
     activeNotificationJobKey: "",
+    notificationJobSearch: "",
+    notificationJobStatusFilter: "all",
+    notificationJobTypeFilter: "all",
     activeNotificationSection: initialNotificationSection(),
     activeAccountSection: initialAccountSection(),
     activeStrategySection: initialStrategySection(),
     activeFeedSection: initialFeedSection(),
     activeInvestmentChartPeriod: "1d",
+    activeInvestmentEvidenceKey: "",
+    activeInvestmentGraphLayer: initialInvestmentGraphLayer(),
     activeOntologySection: initialOntologySection(),
     activeNotificationMessageType: "investmentInsight",
     notificationPolicyEditorOpen: false,
@@ -481,6 +486,7 @@
     strategyProposalsError: "",
     strategyProposalAction: "",
     activeStrategyProposalId: "",
+    activeStrategyProposalSection: initialStrategyProposalSection(),
     messageSchedules: [],
     messageSchedulesLoading: false,
     messageSchedulesError: "",
@@ -989,6 +995,16 @@
     return normalizeStrategySection(requested);
   }
 
+  function initialStrategyProposalSection() {
+    var params = new URLSearchParams(window.location.search);
+    return normalizeStrategyProposalSection(params.get("proposalView") || params.get("proposalSection"));
+  }
+
+  function initialInvestmentGraphLayer() {
+    var params = new URLSearchParams(window.location.search);
+    return normalizeInvestmentGraphLayer(params.get("graphLayer") || params.get("ontologyLayer"));
+  }
+
   function initialOntologySection() {
     var params = new URLSearchParams(window.location.search);
     return normalizeOntologySection(params.get("ontology"));
@@ -1140,6 +1156,23 @@
     if (requested === "proposal" || requested === "proposals" || requested === "strategy-proposals" || requested === "approval" || requested === "approvals") return "proposals";
     if (requested === "relations" || requested === "rules-trace" || requested === "review" || requested === "reviews") return "trace";
     return strategySections.some(function (section) { return section.id === requested; }) ? requested : "overview";
+  }
+
+  function normalizeStrategyProposalSection(value) {
+    var requested = String(value || "").toLowerCase();
+    if (requested === "condition" || requested === "conditions" || requested === "rule" || requested === "rules") return "conditions";
+    if (requested === "validate" || requested === "validation" || requested === "typedb" || requested === "materialization") return "validation";
+    if (requested === "perform" || requested === "performance" || requested === "result" || requested === "results") return "performance";
+    if (requested === "history" || requested === "log" || requested === "review" || requested === "reviews") return "history";
+    return "summary";
+  }
+
+  function normalizeInvestmentGraphLayer(value) {
+    var requested = String(value || "").toLowerCase();
+    if (requested === "rule" || requested === "rules" || requested === "rulebox") return "rulebox";
+    if (requested === "infer" || requested === "inference" || requested === "inferencebox") return "inference";
+    if (requested === "abox" || requested === "data" || requested === "facts") return "abox";
+    return requested === "tbox" || requested === "schema" || requested === "vocabulary" ? "tbox" : "inference";
   }
 
   function normalizeOntologySection(value) {
@@ -10997,12 +11030,7 @@
       '<button class="text-button" type="button" data-action="refresh-strategy-proposals"' + (state.strategyProposalsLoading ? ' disabled' : '') + '>' + escapeHtml(state.strategyProposalsLoading ? "조회 중" : "새로고침") + '</button>',
       '</div>',
       '</div>',
-      '<div class="work-detail-metric-row strategy-proposal-summary">',
-      renderOntologyExperimentMetric("전체", payload.count == null ? items.length : payload.count, "proposals"),
-      renderOntologyExperimentMetric("제안", summary.proposedCount || statuses.proposed || 0, "proposed"),
-      renderOntologyExperimentMetric("검증", summary.validatedCount || statuses.validated || 0, "validated"),
-      renderOntologyExperimentMetric("승인·운영", Number(summary.approvedCount || statuses.approved || 0) + Number(summary.deployedCount || statuses.deployed || 0), "approved"),
-      '</div>',
+      renderStrategyProposalStatusRail(payload, summary, statuses, items),
       state.strategyProposalsError ? '<p class="form-error">' + escapeHtml(state.strategyProposalsError) + '</p>' : '',
       state.strategyProposalsLoading && !state.strategyProposalsLoaded ? '<div class="rule-strip"><span>전략 제안 목록을 읽는 중입니다.</span></div>' : '',
       '<div class="strategy-proposal-layout">',
@@ -11010,6 +11038,17 @@
       renderStrategyProposalDetail(active),
       '</div>',
       '</article>'
+    ].join("");
+  }
+
+  function renderStrategyProposalStatusRail(payload, summary, statuses, items) {
+    return [
+      '<div class="work-detail-metric-row strategy-proposal-summary">',
+      renderOntologyExperimentMetric("전체", payload.count == null ? items.length : payload.count, "proposals"),
+      renderOntologyExperimentMetric("제안", summary.proposedCount || statuses.proposed || 0, "proposed"),
+      renderOntologyExperimentMetric("검증", summary.validatedCount || statuses.validated || 0, "validated"),
+      renderOntologyExperimentMetric("승인·운영", Number(summary.approvedCount || statuses.approved || 0) + Number(summary.deployedCount || statuses.deployed || 0), "approved"),
+      '</div>'
     ].join("");
   }
 
@@ -11067,6 +11106,8 @@
     var samples = Array.isArray(performance.samples) ? performance.samples : [];
     var disabled = strategyProposalActionDisabled();
     var approvable = ["proposed", "validated", "approved"].indexOf(String(proposal.status || "")) >= 0;
+    var section = normalizeStrategyProposalSection(state.activeStrategyProposalSection);
+    state.activeStrategyProposalSection = section;
     return [
       '<section class="strategy-proposal-detail">',
       '<div class="strategy-proposal-detail-head">',
@@ -11086,11 +11127,73 @@
       renderOntologyExperimentMetric("룰", strategyProposalArray(proposal.ruleIds).length || "-", "rules"),
       renderOntologyExperimentMetric("갱신", proposal.updatedAt ? formatClock(proposal.updatedAt) : "-", "updated"),
       '</div>',
-      renderStrategyProposalConditionGrid(proposal),
-      renderStrategyProposalValidationPanel(validation, diff),
-      renderStrategyProposalPerformancePanel(proposal, samples),
-      renderStrategyProposalReviewLog(reviewLog),
-      renderStrategyProposalPerformanceForm(proposal, disabled),
+      renderStrategyProposalSectionTabs(section),
+      '<div class="strategy-proposal-section-body">',
+      renderStrategyProposalSectionContent(section, proposal, validation, diff, reviewLog, samples, disabled),
+      '</div>',
+      '</section>'
+    ].join("");
+  }
+
+  function strategyProposalSectionItems() {
+    return [
+      { id: "summary", label: "요약", caption: "가설·상태" },
+      { id: "conditions", label: "조건", caption: "진입·청산" },
+      { id: "validation", label: "검증", caption: "TypeDB" },
+      { id: "performance", label: "성과", caption: "표본 기록" },
+      { id: "history", label: "이력", caption: "승인 로그" }
+    ];
+  }
+
+  function renderStrategyProposalSectionTabs(activeSection) {
+    return [
+      '<div class="strategy-proposal-section-tabs" role="tablist" aria-label="전략 제안 상세 섹션">',
+      strategyProposalSectionItems().map(function (item) {
+        var active = item.id === activeSection;
+        return [
+          '<button type="button" role="tab" class="' + escapeHtml(active ? "active" : "") + '" data-strategy-proposal-section="' + escapeHtml(item.id) + '"' + (active ? ' aria-selected="true"' : ' aria-selected="false"') + '>',
+          '<strong>' + escapeHtml(item.label) + '</strong>',
+          '<span>' + escapeHtml(item.caption) + '</span>',
+          '</button>'
+        ].join("");
+      }).join(""),
+      '</div>'
+    ].join("");
+  }
+
+  function renderStrategyProposalSectionContent(section, proposal, validation, diff, reviewLog, samples, disabled) {
+    if (section === "conditions") return renderStrategyProposalConditionGrid(proposal);
+    if (section === "validation") return renderStrategyProposalValidationPanel(validation, diff);
+    if (section === "performance") return renderStrategyProposalPerformancePanel(proposal, samples) + renderStrategyProposalPerformanceForm(proposal, disabled);
+    if (section === "history") return renderStrategyProposalReviewLog(reviewLog);
+    return renderStrategyProposalSummaryPanel(proposal, validation, diff, reviewLog, samples);
+  }
+
+  function renderStrategyProposalSummaryPanel(proposal, validation, diff, reviewLog, samples) {
+    var symbols = strategyProposalArray(proposal.symbols);
+    var ruleIds = strategyProposalArray(proposal.ruleIds);
+    var entry = strategyProposalArray(proposal.entryConditions);
+    var exit = strategyProposalArray(proposal.exitConditions);
+    var summary = strategyProposalPerformanceSummary(proposal);
+    return [
+      '<section class="strategy-proposal-summary-panel">',
+      '<div class="strategy-proposal-summary-copy">',
+      '<strong>핵심 가설</strong>',
+      '<p>' + escapeHtml(proposal.thesis || "전략 가설 설명이 아직 없습니다.") + '</p>',
+      '</div>',
+      '<div class="strategy-proposal-focus-grid">',
+      renderInvestmentTodayStatusCell("대상 종목", symbols.length || "-", symbols.slice(0, 4).join(", ") || "종목 미지정", symbols.length ? "watch" : "hold"),
+      renderInvestmentTodayStatusCell("연결 룰", ruleIds.length || "-", ruleIds.slice(0, 3).join(", ") || "RuleBox 연결 전", ruleIds.length ? "watch" : "caution"),
+      renderInvestmentTodayStatusCell("검증 상태", validation.status || "not-run", diff.wroteInferenceBox || validation.wroteInferenceBox ? "InferenceBox 기록" : "기록 전", validation.status === "ok" || validation.status === "completed" ? "watch" : "hold"),
+      renderInvestmentTodayStatusCell("성과 표본", summary.sampleCount || samples.length || 0, summary.avgExcessReturnPct == null ? "초과수익 미기록" : strategyProposalSignedPercent(summary.avgExcessReturnPct), summary.avgExcessReturnPct == null ? "hold" : (Number(summary.avgExcessReturnPct) >= 0 ? "watch" : "danger")),
+      '</div>',
+      '<div class="strategy-proposal-summary-slices">',
+      renderReasoningCardList("대표 진입 조건", entry.slice(0, 3)),
+      renderReasoningCardList("대표 청산 조건", exit.slice(0, 3)),
+      renderReasoningCardList("최근 이력", reviewLog.slice(-3).reverse().map(function (item) {
+        return [item.action || "record", item.at ? formatClock(item.at) : "", item.reviewedBy || item.source || ""].filter(Boolean).join(" · ");
+      })),
+      '</div>',
       '</section>'
     ].join("");
   }
@@ -11714,6 +11817,37 @@
       '<div class="rule-strip">',
       '<span>점수는 차트 표시용 방향성입니다. 최종 투자 판단은 온톨로지 InferenceBox와 전략 룰 근거를 우선합니다.</span>',
       '<span>각 행 끝에 실제/mock 여부와 API·스냅샷 출처를 표시합니다.</span>',
+      '</div>',
+      '</article>'
+    ].join("");
+  }
+
+  function renderInvestmentChartControlPanel(snapshot, parts) {
+    var rows = investmentIntegratedChartRows(snapshot, parts);
+    var active = activeInvestmentChartPeriod();
+    var lineageStats = investmentLineageStats((investmentAnalysisModel(snapshot).dataLineage || {}));
+    var apiSources = {};
+    rows.forEach(function (row) {
+      var source = row && row.source ? String(row.source) : "";
+      if (source) apiSources[sourceLabel(source)] = true;
+    });
+    var sources = Object.keys(apiSources);
+    return [
+      '<article class="panel investment-chart-control-panel">',
+      '<div class="panel-head">',
+      '<div>',
+      '<p class="label">Chart Control</p>',
+      '<h2>차트 기준선</h2>',
+      '<p class="subtle">기간, 실제/mock 구분, API 출처를 먼저 고정한 뒤 가격·수급·자금흐름·매크로를 같은 시간축으로 봅니다.</p>',
+      '</div>',
+      '<span class="tone-chip ' + escapeHtml(lineageStats.mock || lineageStats.missing ? "caution" : "watch") + '">' + escapeHtml(lineageStats.mock || lineageStats.missing ? "출처 확인" : "actual 우선") + '</span>',
+      '</div>',
+      '<div class="investment-chart-control-grid">',
+      renderInvestmentTodayStatusCell("선택 기간", active.toUpperCase(), "일·주·월·사용자", "watch"),
+      renderInvestmentTodayStatusCell("차트 레인", rows.length, "가격/흐름/매크로", rows.length ? "watch" : "hold"),
+      renderInvestmentTodayStatusCell("실제 데이터", lineageStats.actual, "저장된 최신값", lineageStats.actual ? "watch" : "caution"),
+      renderInvestmentTodayStatusCell("mock 데이터", lineageStats.mock, "명시 표시", lineageStats.mock ? "caution" : "hold"),
+      renderInvestmentTodayStatusCell("API 출처", sources.length || "-", sources.slice(0, 3).join(", ") || "출처 대기", sources.length ? "watch" : "hold"),
       '</div>',
       '</article>'
     ].join("");
@@ -12759,6 +12893,144 @@
     ].join("");
   }
 
+  function activeInvestmentReasoningCard(cards) {
+    cards = Array.isArray(cards) ? cards : [];
+    var target = String(state.activeInvestmentEvidenceKey || "");
+    var selected = null;
+    cards.forEach(function (card, index) {
+      if (selected) return;
+      var key = investmentReasoningCardKey(card, index);
+      if (target && key === target) selected = { card: card, index: index, key: key };
+    });
+    if (selected) return selected;
+    if (!cards.length) return null;
+    return { card: cards[0], index: 0, key: investmentReasoningCardKey(cards[0], 0) };
+  }
+
+  function renderInvestmentEvidenceWorkbenchPanel(snapshot) {
+    var cards = investmentReasoningCards(snapshot);
+    var active = activeInvestmentReasoningCard(cards);
+    var actualCards = cards.filter(function (card) {
+      var quality = String(card.dataQuality || card.quality || card.sourceQuality || "").toLowerCase();
+      return quality && quality !== "mock" && quality !== "demo" && quality !== "missing";
+    }).length;
+    var gapCount = cards.reduce(function (count, card) {
+      return count + (Array.isArray(card.dataGaps) ? card.dataGaps.length : 0);
+    }, 0);
+    return [
+      '<article class="panel investment-evidence-workbench-panel">',
+      '<div class="panel-head">',
+      '<div>',
+      '<p class="label">Evidence Workbench</p>',
+      '<h2>투자 근거</h2>',
+      '<p class="subtle">종목별 근거를 하나씩 선택해 전략 근거, 관계 근거, 데이터 출처를 분리해서 봅니다.</p>',
+      '</div>',
+      '<span class="metric">' + escapeHtml(cards.length) + '</span>',
+      '</div>',
+      '<div class="investment-evidence-status-grid">',
+      renderInvestmentTodayStatusCell("근거 카드", cards.length, "선택형 검토", cards.length ? "watch" : "hold"),
+      renderInvestmentTodayStatusCell("실제 데이터", actualCards || "-", "mock 제외 품질", actualCards ? "watch" : "caution"),
+      renderInvestmentTodayStatusCell("데이터 공백", gapCount, "출처·신선도 확인", gapCount ? "caution" : "watch"),
+      '</div>',
+      '<div class="investment-evidence-workbench">',
+      renderInvestmentEvidenceQueue(cards, active ? active.key : ""),
+      renderInvestmentEvidenceSelectedPanel(active),
+      '</div>',
+      '</article>'
+    ].join("");
+  }
+
+  function renderInvestmentEvidenceQueue(cards, activeKey) {
+    cards = Array.isArray(cards) ? cards : [];
+    return [
+      '<section class="investment-evidence-queue" aria-label="투자 근거 카드 목록">',
+      cards.length ? cards.map(function (card, index) {
+        return renderInvestmentEvidenceQueueCard(card, index, activeKey);
+      }).join("") : renderEmptyState({
+        tone: "muted",
+        label: "Evidence",
+        title: "선택할 투자 근거가 없습니다",
+        description: "보유·관심 종목의 그래프 근거가 생기면 여기에서 선택해 볼 수 있습니다.",
+        meta: ["근거", "관계", "출처"]
+      }),
+      '</section>'
+    ].join("");
+  }
+
+  function renderInvestmentEvidenceQueueCard(card, index, activeKey) {
+    card = card || {};
+    var finalOpinion = card.finalOpinion || {};
+    var gaps = Array.isArray(card.dataGaps) ? card.dataGaps : [];
+    var key = investmentReasoningCardKey(card, index);
+    var displayName = card.companyName || card.displayName || stockDisplayName(card.symbol);
+    var tone = finalOpinion.tone || (gaps.length ? "caution" : "watch");
+    return [
+      '<button type="button" class="investment-evidence-queue-card ' + escapeHtml(activeKey === key ? "active" : "") + '" data-investment-evidence-select="' + escapeHtml(key) + '">',
+      '<span class="tone-chip ' + escapeHtml(tone || "hold") + '">' + escapeHtml(finalOpinion.action || card.status || "대기") + '</span>',
+      '<strong>' + escapeHtml(displayName || card.symbol || "투자 근거") + '</strong>',
+      '<em>' + escapeHtml([card.symbol, card.portfolioRelation, sourceLabel(card.source || "")].filter(Boolean).join(" · ") || "관계 근거") + '</em>',
+      gaps.length ? '<i>' + escapeHtml(gaps.length + "개 데이터 공백") + '</i>' : '',
+      '</button>'
+    ].join("");
+  }
+
+  function renderInvestmentEvidenceSelectedPanel(active) {
+    if (!active || !active.card) {
+      return [
+        '<section class="investment-evidence-selected-panel">',
+        renderEmptyState({ tone: "muted", label: "Selected", title: "근거 카드를 선택하세요", description: "선택한 종목의 판단 요약과 출처를 압축해서 보여줍니다.", meta: ["요약", "근거", "출처"] }),
+        '</section>'
+      ].join("");
+    }
+    var card = active.card || {};
+    var finalOpinion = card.finalOpinion || {};
+    var relationRows = Array.isArray(card.relationEvidence) ? card.relationEvidence : [];
+    var influenceRows = Array.isArray(card.relationInfluences) ? card.relationInfluences : [];
+    var evidenceRows = Array.isArray(card.strategyEvidence) ? card.strategyEvidence : [];
+    var planRows = Array.isArray(card.executionPlans) ? card.executionPlans : [];
+    var gaps = Array.isArray(card.dataGaps) ? card.dataGaps : [];
+    var displayName = card.companyName || card.displayName || stockDisplayName(card.symbol);
+    var tone = finalOpinion.tone || (gaps.length ? "caution" : "watch");
+    var thesis = textWithKnownDisplaySymbols(beginnerFriendlyText(finalOpinion.thesis || finalOpinion.action || ""), card.symbol, { symbol: card.symbol, name: displayName });
+    return [
+      '<section class="investment-evidence-selected-panel">',
+      '<div class="investment-evidence-selected-head">',
+      '<div>',
+      '<span class="tone-chip ' + escapeHtml(tone || "hold") + '">' + escapeHtml(finalOpinion.action || "관계 의견 대기") + '</span>',
+      '<strong>' + escapeHtml(displayName || card.symbol || "투자 근거") + '</strong>',
+      '<em>' + escapeHtml([card.symbol, card.portfolioRelation, card.status].filter(Boolean).join(" · ")) + '</em>',
+      '</div>',
+      renderWorkDetailButton("investment-reasoning-card", active.key, "상세", "mini-button"),
+      '</div>',
+      '<div class="investment-evidence-focus-grid">',
+      renderInvestmentTodayStatusCell("관계 신호", Math.round(Number(finalOpinion.ontologyPressure || finalOpinion.ontology_pressure || 0)), "InferenceBox", tone),
+      renderInvestmentTodayStatusCell("확신", finalOpinion.conviction || 0, "AI 의견", tone),
+      renderInvestmentTodayStatusCell("전략 근거", evidenceRows.length, "가격·수급·추세", evidenceRows.length ? "watch" : "hold"),
+      renderInvestmentTodayStatusCell("관계 근거", relationRows.length, "TBox/ABox 연결", relationRows.length ? "watch" : "hold"),
+      '</div>',
+      '<div class="investment-evidence-selected-copy">',
+      '<strong>판단 요약</strong>',
+      '<p>' + escapeHtml(thesis || "판단 문장이 아직 없습니다.") + '</p>',
+      gaps.length ? '<p>데이터 공백: ' + escapeHtml(gaps.join(", ")) + '</p>' : '',
+      '</div>',
+      '<div class="investment-evidence-selected-columns">',
+      renderReasoningCardList("전략 근거", evidenceRows.slice(0, 5).map(function (item) { return item.summary || item.kind || item.id; })),
+      renderReasoningCardList("관계 근거", relationRows.slice(0, 5).map(function (item) {
+        return [item.type, item.sourceLabel, item.targetLabel].filter(Boolean).join(" · ");
+      })),
+      renderReasoningCardList("의견 영향", influenceRows.slice(0, 5).map(function (item) {
+        var risk = Number(item.riskImpact || 0);
+        var support = Number(item.supportImpact || 0);
+        var impact = risk ? ("리스크 +" + Math.round(risk)) : support ? ("지지 +" + Math.round(support)) : "";
+        return [item.label || item.type, item.scope, impact].filter(Boolean).join(" · ");
+      })),
+      '</div>',
+      renderReasoningExecutionPlan(planRows[0]),
+      renderReasoningGraphRefs(card),
+      '</section>'
+    ].join("");
+  }
+
   function investmentReasoningCardKey(card, index) {
     card = card || {};
     return String(card.id || card.reasoningCardId || card.cardId || [
@@ -13162,36 +13434,20 @@
     var parts = ontologyStrategyParts(snapshot);
     if (section === "evidence") {
       return renderInvestmentTabWorkspace("evidence", [
-        { role: "main", html: renderInvestmentReasoningCardPanel(snapshot) },
+        { role: "main", html: renderInvestmentEvidenceWorkbenchPanel(snapshot) },
         { role: "side", html: renderOntologyExecutionPlanPanel(investmentReasoningCards(snapshot), parts) + renderInvestmentDataLineagePanel(snapshot) + renderStrategyDataPanel(snapshot) }
       ]);
     }
     if (section === "charts") {
       return renderInvestmentTabWorkspace("charts", [
-        { role: "main", html: renderInvestmentIntegratedChartPanel(snapshot, parts) + renderInvestmentMoneyFlowPanel(snapshot) },
-        { role: "side", html: renderOntologyMacroSignalPanel(parts) + renderInvestmentGraphGatePanel(snapshot) + renderInvestmentDataLineagePanel(snapshot) }
+        { role: "summary", html: renderInvestmentChartControlPanel(snapshot, parts) },
+        { role: "main", html: renderInvestmentIntegratedChartPanel(snapshot, parts) },
+        { role: "side", html: renderInvestmentMoneyFlowPanel(snapshot) + renderOntologyMacroSignalPanel(parts) + renderInvestmentGraphGatePanel(snapshot) + renderInvestmentDataLineagePanel(snapshot) }
       ]);
     }
     if (section === "graphs") {
       return renderInvestmentTabWorkspace("graphs", [
-        { role: "full", html: [
-        '<article class="panel ontology-panel">',
-        '<div class="panel-head">',
-        '<div>',
-        '<p class="label">Ontology Engine</p>',
-        '<h2>온톨로지</h2>',
-        '<p class="subtle">TBox 규칙 구조와 ABox 현재 데이터가 투자 근거 카드, RuleBox, AI 의견으로 연결되는 경로입니다.</p>',
-        '</div>',
-        '<span class="metric">' + escapeHtml(parts.aboxRelations.length) + '</span>',
-        '</div>',
-        '<div class="ontology-dashboard">',
-        renderInvestmentRuleRelationTextPanel(parts),
-        renderOntologyRelationshipGraphs(parts.tbox, parts.abox, parts.aboxEntities, parts.aboxRelations, parts.evidence, parts.beliefs, parts.opinions, parts.entityLabels, parts.relationCounts, snapshot, parts),
-        renderOntologyClassPanel(parts.tbox),
-        renderOntologyAboxPanel(parts.abox, parts.aboxEntities, parts.evidence, parts.beliefs, parts.opinions),
-        '</div>',
-        '</article>'
-      ].join("") }
+        { role: "full", html: renderInvestmentOntologyWorkspacePanel(snapshot, parts) }
       ]);
     }
     if (section === "proposals") {
@@ -13207,6 +13463,7 @@
     }
     if (section === "trace") {
       return renderInvestmentTabWorkspace("trace", [
+        { role: "summary", html: renderStrategyReviewStatusPanel(snapshot, parts) },
         { role: "full", html: renderStrategyTraceOverviewPanel(snapshot, parts) }
       ]);
     }
@@ -13376,6 +13633,37 @@
       cards.map(renderStrategyOverviewActionCard).join(""),
       '</div>',
       '<div class="rule-strip"><span>기본 화면에서는 검증 대상의 위치만 파악합니다.</span><span>상세 레이어에서 추론 원장, 모델 리뷰, 관계 투영, 규칙 추적을 하나씩 열어 원인을 확인합니다.</span></div>',
+      '</article>'
+    ].join("");
+  }
+
+  function renderStrategyReviewStatusPanel(snapshot, parts) {
+    var analysis = investmentAnalysisModel(snapshot);
+    var lineageStats = investmentLineageStats(analysis.dataLineage || {});
+    var ledgerSummary = inferenceLedgerSummary();
+    var ledgerRows = inferenceLedgerRows();
+    var modelStats = modelStatsForItems(buildTradeSignalItems(snapshot));
+    var proposals = strategyProposalItems();
+    var approved = proposals.filter(function (proposal) {
+      return ["approved", "deployed"].indexOf(String(proposal.status || "")) >= 0;
+    }).length;
+    return [
+      '<article class="panel strategy-review-status-panel">',
+      '<div class="panel-head">',
+      '<div>',
+      '<p class="label">Review Status</p>',
+      '<h2>검증 상태판</h2>',
+      '<p class="subtle">데이터 품질, TypeDB 추론, 모델 액션, 전략 성과를 먼저 확인하고 상세 원장은 필요할 때 엽니다.</p>',
+      '</div>',
+      '<span class="tone-chip ' + escapeHtml(lineageStats.missing || lineageStats.mock ? "caution" : "watch") + '">' + escapeHtml(lineageStats.missing || lineageStats.mock ? "검증 필요" : "검증 가능") + '</span>',
+      '</div>',
+      '<div class="strategy-review-status-grid">',
+      renderInvestmentTodayStatusCell("데이터 품질", lineageStats.actual + "/" + Math.max(1, lineageStats.actual + lineageStats.mock), "mock " + lineageStats.mock + " · missing " + lineageStats.missing, lineageStats.mock || lineageStats.missing ? "caution" : "watch"),
+      renderInvestmentTodayStatusCell("추론 원장", ledgerSummary.ledgerCount || ledgerRows.length || 0, state.ontologyInferenceLedgerLoaded ? "loaded" : "lazy", ledgerRows.length ? "watch" : "hold"),
+      renderInvestmentTodayStatusCell("모델 액션", modelStats.actionCount, "buy/sell/hold", modelStats.actionCount ? "watch" : "hold"),
+      renderInvestmentTodayStatusCell("전략 성과", approved + "/" + proposals.length, "승인·운영 제안", approved ? "watch" : "hold"),
+      renderInvestmentTodayStatusCell("관계 투영", parts.relations.length, "ABox/InferenceBox", parts.relations.length ? "watch" : "hold"),
+      '</div>',
       '</article>'
     ].join("");
   }
@@ -13554,6 +13842,79 @@
       renderInvestmentRuleTextColumn("RuleBox 규칙", "조건과 파생 관계", ruleRows, renderInvestmentRuleTextRow),
       renderInvestmentRuleTextColumn("현재 ABox 관계", "실제 데이터 관계 묶음", relationRows, renderInvestmentRelationTextRow),
       renderInvestmentRuleTextColumn("InferenceBox 출력", "AI 판단으로 넘어가는 추론", inferenceRows, renderInvestmentInferenceTextRow),
+      '</div>',
+      '</section>'
+    ].join("");
+  }
+
+  function investmentOntologyLayerItems(parts) {
+    parts = parts || {};
+    return [
+      { id: "tbox", label: "TBox", caption: "규칙 어휘", count: (parts.tboxEntities || []).length || ((parts.tbox || {}).classDefinitions || []).length || 0 },
+      { id: "abox", label: "ABox", caption: "현재 사실", count: (parts.aboxEntities || []).length || 0 },
+      { id: "inference", label: "InferenceBox", caption: "추론 출력", count: ontologyReadableInferenceRows(parts).length },
+      { id: "rulebox", label: "RuleBox", caption: "전략 규칙", count: ontologyReadableRuleRows(parts).length }
+    ];
+  }
+
+  function renderInvestmentOntologyWorkspacePanel(snapshot, parts) {
+    var activeLayer = normalizeInvestmentGraphLayer(state.activeInvestmentGraphLayer);
+    state.activeInvestmentGraphLayer = activeLayer;
+    var layers = investmentOntologyLayerItems(parts);
+    return [
+      '<article class="panel investment-ontology-workspace-panel">',
+      '<div class="panel-head">',
+      '<div>',
+      '<p class="label">Ontology Engine</p>',
+      '<h2>온톨로지</h2>',
+      '<p class="subtle">TBox, ABox, InferenceBox, RuleBox를 레이어로 나눠 선택한 관계만 깊게 봅니다.</p>',
+      '</div>',
+      '<span class="metric">' + escapeHtml(parts.aboxRelations.length) + '</span>',
+      '</div>',
+      '<div class="investment-ontology-layer-tabs" role="tablist" aria-label="온톨로지 레이어">',
+      layers.map(function (layer) {
+        var active = layer.id === activeLayer;
+        return [
+          '<button type="button" role="tab" class="' + escapeHtml(active ? "active" : "") + '" data-investment-graph-layer="' + escapeHtml(layer.id) + '"' + (active ? ' aria-selected="true"' : ' aria-selected="false"') + '>',
+          '<strong>' + escapeHtml(layer.label) + '</strong>',
+          '<span>' + escapeHtml(layer.caption) + '</span>',
+          '<em>' + escapeHtml(layer.count) + '</em>',
+          '</button>'
+        ].join("");
+      }).join(""),
+      '</div>',
+      '<div class="investment-ontology-workbench">',
+      '<div class="investment-ontology-graph-main">',
+      renderOntologyRelationshipGraphs(parts.tbox, parts.abox, parts.aboxEntities, parts.aboxRelations, parts.evidence, parts.beliefs, parts.opinions, parts.entityLabels, parts.relationCounts, snapshot, parts),
+      '</div>',
+      '<div class="investment-ontology-layer-detail">',
+      renderInvestmentOntologyLayerDetail(activeLayer, parts),
+      '</div>',
+      '</div>',
+      '</article>'
+    ].join("");
+  }
+
+  function renderInvestmentOntologyLayerDetail(layer, parts) {
+    if (layer === "tbox") return renderOntologyClassPanel(parts.tbox);
+    if (layer === "abox") return renderOntologyAboxPanel(parts.abox, parts.aboxEntities, parts.evidence, parts.beliefs, parts.opinions);
+    if (layer === "rulebox") return renderInvestmentRuleRelationTextPanel(parts);
+    return renderInvestmentInferenceLayerPanel(parts);
+  }
+
+  function renderInvestmentInferenceLayerPanel(parts) {
+    var rows = ontologyReadableInferenceRows(parts);
+    return [
+      '<section class="ontology-surface investment-inference-layer-panel">',
+      '<div class="ontology-surface-head">',
+      '<div>',
+      '<strong>InferenceBox 출력</strong>',
+      '<span>AI 의견과 알림 판단으로 넘어가는 그래프 추론 결과입니다.</span>',
+      '</div>',
+      '<span>' + escapeHtml(rows.length) + ' rows</span>',
+      '</div>',
+      '<div class="investment-relation-text-list">',
+      rows.length ? rows.map(renderInvestmentInferenceTextRow).join("") : '<div class="ontology-empty">InferenceBox 행이 없습니다.</div>',
       '</div>',
       '</section>'
     ].join("");
@@ -15171,23 +15532,145 @@
     return "";
   }
 
+  function notificationJobStatusKey(job) {
+    return String((job && job.status) || "unknown");
+  }
+
+  function notificationJobTypeKey(job) {
+    return String((job && job.messageType) || "notification");
+  }
+
+  function notificationJobFilterOptions(jobs, keyFn) {
+    var options = ["all"];
+    var seen = { all: true };
+    (Array.isArray(jobs) ? jobs : []).forEach(function (job) {
+      var key = keyFn(job);
+      if (!key || seen[key]) return;
+      seen[key] = true;
+      options.push(key);
+    });
+    return options;
+  }
+
+  function notificationJobTypeLabel(type, jobs) {
+    if (type === "all") return "전체 타입";
+    var found = (Array.isArray(jobs) ? jobs : []).filter(function (job) {
+      return notificationJobTypeKey(job) === type;
+    })[0];
+    return labelWithNotificationIcon(type, (found && found.messageTypeLabel) || notificationTemplateLabel(type));
+  }
+
+  function notificationJobSearchText(job) {
+    job = job || {};
+    var resolvedSymbol = notificationJobResolvedSymbol(job);
+    var displaySymbol = resolvedSymbol ? stockDisplayName(resolvedSymbol, job) : "";
+    var reasons = Array.isArray(job.honeyReasons) ? job.honeyReasons : [];
+    var scoreFactors = notificationJobScoreFactors(job).map(function (factor) {
+      return factor.label;
+    });
+    return [
+      notificationJobStatusLabel(job.status),
+      notificationJobStatusKey(job),
+      notificationJobTypeLabel(notificationJobTypeKey(job), [job]),
+      job.messageType,
+      job.messageTypeLabel,
+      job.accountId,
+      job.accountLabel,
+      job.sourceEventName,
+      job.title,
+      job.symbol,
+      job.rawSymbol,
+      resolvedSymbol,
+      displaySymbol,
+      job.textPreview,
+      job.lastError,
+      job.suppressionSummary,
+      notificationJobSimilarityText(job),
+      notificationJobStateCooldownText(job),
+      notificationJobMarketHoursText(job),
+      notificationJobQuietHoursText(job),
+      job.honeyFingerprint,
+      reasons.join(" "),
+      scoreFactors.join(" "),
+      formatClock(job.createdAt)
+    ].filter(Boolean).join(" ").toLowerCase();
+  }
+
+  function filteredNotificationJobs(jobs) {
+    jobs = Array.isArray(jobs) ? jobs : [];
+    var query = String(state.notificationJobSearch || "").trim().toLowerCase();
+    var status = String(state.notificationJobStatusFilter || "all");
+    var type = String(state.notificationJobTypeFilter || "all");
+    return jobs.filter(function (job) {
+      if (status !== "all" && notificationJobStatusKey(job) !== status) return false;
+      if (type !== "all" && notificationJobTypeKey(job) !== type) return false;
+      if (query && notificationJobSearchText(job).indexOf(query) < 0) return false;
+      return true;
+    });
+  }
+
+  function renderNotificationJobFilterOptions(options, currentValue, labelFn) {
+    return options.map(function (option) {
+      return '<option value="' + escapeHtml(option) + '"' + (option === currentValue ? " selected" : "") + '>' + escapeHtml(labelFn(option)) + '</option>';
+    }).join("");
+  }
+
+  function renderNotificationJobFilterToolbar(jobs, filteredJobs) {
+    var query = String(state.notificationJobSearch || "");
+    var status = String(state.notificationJobStatusFilter || "all");
+    var type = String(state.notificationJobTypeFilter || "all");
+    var hasFilter = Boolean(query.trim() || status !== "all" || type !== "all");
+    return [
+      '<form class="notification-search-panel"' + cardFormatAttrs("control-strip", "compact") + ' data-notification-search-form>',
+      '<label class="notification-search-field primary">',
+      '<span>검색</span>',
+      '<input data-notification-job-search type="search" value="' + escapeHtml(query) + '" placeholder="종목, 알림 타입, 상태, 본문 검색" autocomplete="off" />',
+      '</label>',
+      '<label class="notification-search-field">',
+      '<span>상태</span>',
+      '<select data-notification-job-filter="status">',
+      renderNotificationJobFilterOptions(notificationJobFilterOptions(jobs, notificationJobStatusKey), status, function (option) {
+        return option === "all" ? "전체 상태" : notificationJobStatusLabel(option);
+      }),
+      '</select>',
+      '</label>',
+      '<label class="notification-search-field">',
+      '<span>타입</span>',
+      '<select data-notification-job-filter="messageType">',
+      renderNotificationJobFilterOptions(notificationJobFilterOptions(jobs, notificationJobTypeKey), type, function (option) {
+        return notificationJobTypeLabel(option, jobs);
+      }),
+      '</select>',
+      '</label>',
+      '<div class="notification-search-actions">',
+      '<span class="notification-filter-count"><strong>' + escapeHtml(filteredJobs.length) + '</strong><em>/ 전체 ' + escapeHtml(jobs.length) + '건</em></span>',
+      '<button class="mini-button primary" type="submit">검색</button>',
+      '<button class="mini-button" type="button" data-action="reset-notification-job-filters"' + (hasFilter ? "" : " disabled") + '>초기화</button>',
+      '</div>',
+      '</form>'
+    ].join("");
+  }
+
   function renderNotificationDecisionPanel() {
     var jobs = state.notificationJobItems || [];
+    var filteredJobs = filteredNotificationJobs(jobs);
     var summary = state.notificationJobsSummary || state.realtime.notificationJobs || {};
     var diagnostics = state.notificationJobDiagnostics || {};
     var hasError = Boolean(state.notificationJobsError);
     var summaryItems = ["pending", "done", "suppressed", "failed"].map(function (key) {
       return '<span class="chip">' + escapeHtml(notificationJobStatusLabel(key)) + ' ' + escapeHtml(Number(summary[key] || 0)) + '</span>';
     }).join("");
-    var activeJob = activeNotificationDecisionJob(jobs);
+    var activeJob = activeNotificationDecisionJob(filteredJobs);
     var stateMessage = hasError
       ? renderNotificationStateMessage("hold", "최근 판단 API 연결 확인", state.notificationJobsError)
       : renderNotificationDecisionEmptyConsole();
-    var visibleJobs = jobs.slice(0, 4);
-    if (activeJob && visibleJobs.length && visibleJobs.every(function (job) { return notificationJobKey(job) !== notificationJobKey(activeJob); })) {
-      visibleJobs = [activeJob].concat(visibleJobs.slice(0, 3));
-    }
-    var visibleJobLabel = visibleJobs.length === jobs.length ? String(jobs.length) : (visibleJobs.length + "/" + jobs.length);
+    var detailHtml = filteredJobs.length ? renderNotificationDecisionDetail(activeJob, { compact: true }) : renderEmptyState({
+      tone: "muted",
+      label: "Detail",
+      title: "상세 보기 대상이 없습니다",
+      description: "검색어나 필터를 조정하면 선택한 알림의 판단 근거와 발송 조건을 여기서 확인할 수 있습니다.",
+      meta: ["검색 결과", "상세 보기"]
+    });
     return [
       '<article class="panel notification-decision-panel"' + cardTypeAttrs("process-card", jobs.length ? "watch" : "hold") + '>',
       '<div class="panel-head">',
@@ -15200,18 +15683,24 @@
       '</div>',
       '</div>',
       renderNotificationDecisionDiagnostics(diagnostics),
-      '<div class="notification-decision-body' + (jobs.length ? " has-detail" : "") + '">',
+      '<div class="notification-decision-body notification-structured-body' + (jobs.length ? " has-detail" : "") + '">',
       '<div class="notification-decision-master">',
+      jobs.length ? renderNotificationJobFilterToolbar(jobs, filteredJobs) : '',
       '<div class="notification-decision-status">',
       '<span class="tone-chip ' + escapeHtml(hasError ? "hold" : "watch") + '">' + escapeHtml(hasError ? "확인 필요" : "현황") + '</span>',
-      '<span>' + escapeHtml(jobs.length ? "최근 " + visibleJobLabel + "건 · 선택 행을 오른쪽 리포트로 확인" : (hasError ? "연결 상태 확인" : "판단 이력 없음")) + '</span>',
+      '<span>' + escapeHtml(jobs.length ? "전체 " + jobs.length + "건 · 검색 결과 " + filteredJobs.length + "건 · 선택 행을 상세 보기로 확인" : (hasError ? "연결 상태 확인" : "판단 이력 없음")) + '</span>',
       '<em>' + escapeHtml(state.notificationJobsLoading ? "백그라운드 갱신 중" : "마지막 결과 유지") + '</em>',
       '</div>',
-      jobs.length ? '<div class="notification-decision-list" role="listbox" aria-label="최근 알림 판단 목록">' + visibleJobs.map(function (job) {
+      jobs.length ? '<div class="notification-workbench"><section class="notification-list-pane" aria-label="알림 전체 리스트"><div class="notification-list-head"><div><p class="label">All Notifications</p><h3>전체 리스트</h3><span>발송·보류·실패 판단을 시간순으로 모두 확인합니다.</span></div><strong>' + escapeHtml(filteredJobs.length) + '건</strong></div>' + (filteredJobs.length ? '<div class="notification-decision-list" role="listbox" aria-label="최근 알림 판단 목록">' + filteredJobs.map(function (job) {
         return renderNotificationDecisionRow(job, notificationJobKey(job) === notificationJobKey(activeJob));
-      }).join("") + (jobs.length > visibleJobs.length ? '<p class="data-refresh-status">최근 4개 판단만 먼저 표시합니다. 나머지 ' + escapeHtml(jobs.length - visibleJobs.length) + '건은 새로고침 또는 상세 리포트에서 확인하세요.</p>' : '') + '</div>' : stateMessage,
+      }).join("") + '</div>' : renderEmptyState({
+        tone: "muted",
+        label: "Search",
+        title: "검색 결과가 없습니다",
+        description: "종목명, 알림 타입, 발송 상태, 본문 문구를 바꿔 다시 검색하세요.",
+        meta: ["전체 리스트", "검색"]
+      })) + '</section><section class="notification-detail-pane" aria-label="알림 상세 보기"><div class="notification-detail-pane-head"><div><p class="label">Selected Report</p><h3>상세 보기</h3><span>선택한 알림의 점수 변화, 보류 조건, 상세 리포트를 확인합니다.</span></div></div>' + detailHtml + '</section></div>' : stateMessage,
       '</div>',
-      jobs.length ? renderNotificationDecisionDetail(activeJob, { compact: true }) : '',
       '</div>',
       '</article>'
     ].join("");
@@ -20801,6 +21290,13 @@
       });
     });
 
+    Array.prototype.slice.call(app.querySelectorAll("[data-investment-graph-layer]")).forEach(function (button) {
+      button.addEventListener("click", function () {
+        state.activeInvestmentGraphLayer = normalizeInvestmentGraphLayer(button.getAttribute("data-investment-graph-layer"));
+        render();
+      });
+    });
+
     Array.prototype.slice.call(app.querySelectorAll("[data-work-detail]")).forEach(function (button) {
       button.addEventListener("click", function (event) {
         if (event && event.preventDefault) event.preventDefault();
@@ -20846,6 +21342,13 @@
       button.addEventListener("click", function () {
         var key = button.getAttribute("data-investment-action-toggle") || "";
         state.expandedInvestmentActionKey = key;
+        render();
+      });
+    });
+
+    Array.prototype.slice.call(app.querySelectorAll("[data-investment-evidence-select]")).forEach(function (button) {
+      button.addEventListener("click", function () {
+        state.activeInvestmentEvidenceKey = button.getAttribute("data-investment-evidence-select") || "";
         render();
       });
     });
@@ -21377,6 +21880,14 @@
         var id = button.getAttribute("data-strategy-proposal-select") || "";
         if (!id || id === state.activeStrategyProposalId) return;
         state.activeStrategyProposalId = id;
+        state.activeStrategyProposalSection = "summary";
+        render();
+      });
+    });
+
+    Array.prototype.slice.call(app.querySelectorAll("[data-strategy-proposal-section]")).forEach(function (button) {
+      button.addEventListener("click", function () {
+        state.activeStrategyProposalSection = normalizeStrategyProposalSection(button.getAttribute("data-strategy-proposal-section"));
         render();
       });
     });
@@ -21776,6 +22287,45 @@
       refreshNotificationJobsButton.addEventListener("click", function () {
         loadNotificationJobs();
         render();
+      });
+    }
+
+    Array.prototype.slice.call(app.querySelectorAll("[data-notification-job-search]")).forEach(function (field) {
+      field.addEventListener("input", function () {
+        state.notificationJobSearch = field.value;
+      });
+      field.addEventListener("change", function () {
+        state.notificationJobSearch = field.value;
+        render();
+      });
+    });
+
+    Array.prototype.slice.call(app.querySelectorAll("[data-notification-search-form]")).forEach(function (form) {
+      form.addEventListener("submit", function (event) {
+        event.preventDefault();
+        var field = form.querySelector("[data-notification-job-search]");
+        state.notificationJobSearch = field ? field.value : state.notificationJobSearch;
+        render();
+      });
+    });
+
+    Array.prototype.slice.call(app.querySelectorAll("[data-notification-job-filter]")).forEach(function (field) {
+      field.addEventListener("change", function () {
+        var filter = field.getAttribute("data-notification-job-filter");
+        if (filter === "status") state.notificationJobStatusFilter = field.value || "all";
+        if (filter === "messageType") state.notificationJobTypeFilter = field.value || "all";
+        render();
+      });
+    });
+
+    var resetNotificationJobFilters = app.querySelector('[data-action="reset-notification-job-filters"]');
+    if (resetNotificationJobFilters) {
+      resetNotificationJobFilters.addEventListener("click", function () {
+        state.notificationJobSearch = "";
+        state.notificationJobStatusFilter = "all";
+        state.notificationJobTypeFilter = "all";
+        render();
+        showSnackbar("알림 검색 조건을 초기화했습니다.");
       });
     }
 

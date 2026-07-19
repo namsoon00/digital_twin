@@ -238,7 +238,7 @@ function checkFrontendAdminRender() {
       /\.console-shell \.app-nav-command \.page-command-metrics\s*\{[\s\S]*display: none;/.test(styles) &&
       /\.console-shell \.app-nav-routine > span:not\(\.app-nav-routine-action-cell\)\s*\{[\s\S]*display: none;/.test(styles) &&
       /@media \(min-width: 861px\) and \(max-width: 1180px\)[\s\S]*\.console-shell \.app-nav-flow,[\s\S]*\.console-shell \.app-nav-command \.page-command-metrics,[\s\S]*\.console-shell \.app-nav-current em,[\s\S]*\.console-shell :is\([\s\S]*\.feed-section-tabs span[\s\S]*\)\s*\{[\s\S]*display: none;/.test(styles) &&
-      indexHtml.indexOf("styles.css?v=20260719-today-decision-board-v1") >= 0,
+      indexHtml.indexOf("styles.css?v=20260719-investment-tabs-v1") >= 0,
     "PC 상단 영역이 탭별로 여러 줄/넘침으로 깨지지 않도록 하는 안정화 레이어가 없습니다."
   );
   assertOk(
@@ -252,7 +252,7 @@ function checkFrontendAdminRender() {
       /\.loading-progress span\s*\{[\s\S]*animation: loadingProgress/.test(styles) &&
       /\.loading-skeleton-grid\s*\{[\s\S]*grid-template-columns: repeat\(4, minmax\(0, 1fr\)\);/.test(styles) &&
       /@keyframes loadingProgress/.test(styles) &&
-      indexHtml.indexOf("app.js?v=20260719-today-decision-board-v1") >= 0,
+      indexHtml.indexOf("app.js?v=20260719-investment-tabs-v1") >= 0,
     "초기 로딩 화면이 운영 정보 카드 대신 progress/skeleton 화면으로 고정되지 않았습니다."
   );
   assertOk(
@@ -363,7 +363,8 @@ function checkFrontendAdminRender() {
       code.indexOf("investmentActionPageInfo") >= 0 &&
       code.indexOf("data-investment-action-query") >= 0 &&
       code.indexOf("data-investment-action-page") >= 0 &&
-      /var visibleJobs = jobs\.slice\(0, 4\);/.test(code) &&
+      code.indexOf("filteredNotificationJobs") >= 0 &&
+      code.indexOf("notification-workbench") >= 0 &&
       /var visibleAlerts = alerts\.slice\(0, 6\);/.test(code) &&
       /rows\.slice\(0, 5\)\.map\(function \(row\)/.test(code) &&
       /\(portfolio\.sectors \|\| \[\]\)\.slice\(0, 6\)\.map\(function \(sector\)/.test(code),
@@ -1282,6 +1283,7 @@ function checkFrontendAdminRender() {
     renderForSearch("?tab=modeling&strategy=graphs"),
     renderForSearch("?tab=modeling&strategy=rules"),
     renderForSearch("?tab=modeling&strategy=trace"),
+    renderForSearch("?tab=modeling&strategy=proposals"),
     renderForSearch("?tab=ontology&ontology=graphs"),
     renderForSearch("?tab=monitoring"),
     renderForSearch("?tab=system"),
@@ -1314,19 +1316,20 @@ function checkFrontendAdminRender() {
     const modelingGraphHtml = pages[15];
     const modelingRulesHtml = pages[16];
     const modelingTraceHtml = pages[17];
-    const legacyOntologyGraphHtml = pages[18];
-    const monitoringHtml = pages[19];
-    const systemHtml = pages[20];
-    const settingsHtml = pages[21];
-    const feedSettingsHtml = pages[22];
-    const staticAccountHtml = pages[23];
-    const newAccountHtml = pages[24];
-    const feedEvidenceHtml = pages[25];
-    const feedSourcesHtml = pages[26];
-    const feedExplicitSettingsHtml = pages[27];
-    const experimentsValidationHtml = pages[28];
-    const experimentsPromotionHtml = pages[29];
-    const experimentsProposalsHtml = pages[30];
+    const modelingProposalsHtml = pages[18];
+    const legacyOntologyGraphHtml = pages[19];
+    const monitoringHtml = pages[20];
+    const systemHtml = pages[21];
+    const settingsHtml = pages[22];
+    const feedSettingsHtml = pages[23];
+    const staticAccountHtml = pages[24];
+    const newAccountHtml = pages[25];
+    const feedEvidenceHtml = pages[26];
+    const feedSourcesHtml = pages[27];
+    const feedExplicitSettingsHtml = pages[28];
+    const experimentsValidationHtml = pages[29];
+    const experimentsPromotionHtml = pages[30];
+    const experimentsProposalsHtml = pages[31];
 
     [
       ["overview", overviewHtml],
@@ -1578,6 +1581,11 @@ function checkFrontendAdminRender() {
     assertOk(notificationHtml.indexOf("notification-decision-panel") >= 0, "최근 알림 판단 패널이 렌더링되지 않았습니다.");
     assertOk(notificationHtml.indexOf("notification-ops-rail") < notificationHtml.indexOf("notification-decision-panel"), "기본 현황에서 상태 레일 다음에 최근 알림 판단이 이어지지 않습니다.");
     assertOk(notificationHtml.indexOf("notification-decision-body") >= 0, "최근 알림 판단 본문 영역이 분리되지 않았습니다.");
+    assertOk(notificationHtml.indexOf("notification-search-panel") >= 0 && notificationHtml.indexOf("data-notification-job-search") >= 0, "최근 알림 판단에 검색 영역이 렌더링되지 않았습니다.");
+    assertOk(notificationHtml.indexOf("notification-workbench") >= 0 && notificationHtml.indexOf("notification-list-pane") >= 0 && notificationHtml.indexOf("notification-detail-pane") >= 0, "최근 알림 판단이 전체 리스트와 상세 보기 워크벤치로 분리되지 않았습니다.");
+    assertOk(notificationHtml.indexOf("전체 리스트") >= 0 && notificationHtml.indexOf("상세 보기") >= 0, "최근 알림 판단에 전체 리스트/상세 보기 제목이 없습니다.");
+    assertOk(code.indexOf("filteredNotificationJobs") >= 0 && code.indexOf("notificationJobSearch") >= 0 && code.indexOf("data-notification-job-filter") >= 0, "최근 알림 판단 검색/필터 상태 경로가 없습니다.");
+    assertOk(styles.indexOf(".notification-search-panel") >= 0 && styles.indexOf(".notification-workbench") >= 0, "최근 알림 판단 검색/워크벤치 스타일이 없습니다.");
     assertOk(code.indexOf("renderNotificationDecisionEmptyConsole") >= 0 && styles.indexOf(".notification-empty-console") >= 0, "최근 알림 판단 빈 상태가 후보/판단/설정 흐름으로 구조화되지 않았습니다.");
     assertOk(
       code.indexOf("renderInvestmentCalendarRailPanel") >= 0 &&
@@ -1625,6 +1633,7 @@ function checkFrontendAdminRender() {
     assertOk(notificationHtml.indexOf("notification-score-factors") >= 0, "최근 알림 판단의 상승/감점 요인이 렌더링되지 않았습니다.");
     assertOk(notificationHtml.indexOf("360분 내 7회 · 우선도 -55") >= 0, "최근 알림 판단의 유사 메시지 감점이 렌더링되지 않았습니다.");
     assertOk(notificationHtml.indexOf("미장 닫힘") >= 0, "최근 알림 판단의 장 시간 외 보류 사유가 렌더링되지 않았습니다.");
+    assertOk(notificationHtml.indexOf("최근 4개 판단만 먼저 표시합니다") < 0, "최근 알림 판단 목록이 여전히 4건 요약 안내를 노출합니다.");
     assertOk(
       notificationHtml.indexOf("notification-decision-detail") >= 0 &&
         notificationHtml.indexOf('data-work-detail="notification-job"') >= 0 &&
@@ -1674,7 +1683,7 @@ function checkFrontendAdminRender() {
     assertOk(styles.indexOf(".macro-signal-grid") >= 0 && styles.indexOf(".macro-relation-row") >= 0, "환율·금리 온톨로지 신호 UI 스타일이 없습니다.");
     assertOk(modelingHtml.indexOf("strategy-process-panel") < 0 && modelingHtml.indexOf("model-guide-panel") < 0, "개요 탭에 긴 운영 가이드 패널이 섞여 있습니다.");
     assertOk(modelingHtml.indexOf("strategy-data-panel") < 0 && modelingHtml.indexOf("admin-modeling-panel") < 0 && modelingHtml.indexOf("model-preview-panel") < 0, "개요 탭에 상세 운영 섹션 패널이 섞여 있습니다.");
-    assertOk(modelingEvidenceHtml.indexOf("investment-tab-workspace-evidence") >= 0 && modelingEvidenceHtml.indexOf("investment-evidence-panel") >= 0 && modelingEvidenceHtml.indexOf("strategy-data-panel") >= 0, "근거 카드 섹션에 카드와 데이터 점검이 함께 렌더링되지 않았습니다.");
+    assertOk(modelingEvidenceHtml.indexOf("investment-tab-workspace-evidence") >= 0 && modelingEvidenceHtml.indexOf("investment-evidence-workbench-panel") >= 0 && modelingEvidenceHtml.indexOf("investment-evidence-queue") >= 0 && modelingEvidenceHtml.indexOf("strategy-data-panel") >= 0, "근거 카드 섹션에 선택형 카드 워크벤치와 데이터 점검이 함께 렌더링되지 않았습니다.");
     assertOk(modelingEvidenceHtml.indexOf("전략 근거") >= 0 && modelingEvidenceHtml.indexOf("관계 근거") >= 0, "근거 카드가 전략 근거와 관계 근거를 분리해서 보여주지 않습니다.");
     assertOk(modelingEvidenceHtml.indexOf("삼성전자") >= 0 && modelingEvidenceHtml.indexOf("005930 가격과") < 0, "근거 카드 본문에 종목코드가 회사명으로 치환되지 않았습니다.");
     assertOk(modelingEvidenceHtml.indexOf("체결강도") >= 0 && modelingEvidenceHtml.indexOf("모델-알림 기준") >= 0, "근거 카드 섹션에 전략 데이터 점검 항목이 없습니다.");
@@ -1695,7 +1704,7 @@ function checkFrontendAdminRender() {
     assertOk(code.indexOf("ontologyDecisionChainRows") >= 0 && code.indexOf("ontologyBuildDecisionChainGraph") >= 0 && code.indexOf("activeOntologyChainKey") >= 0, "판단 근거 체인 그래프 데이터 빌더나 선택 상태가 없습니다.");
     assertOk(code.indexOf('sourceGraphId === "decision-chain"') >= 0 && code.indexOf('data-ontology-chain-select') >= 0, "판단 근거 체인 노드 클릭 또는 버튼 선택 바인딩이 없습니다.");
     assertOk(styles.indexOf(".ontology-decision-chain-graph") >= 0 && styles.indexOf(".ontology-chain-stage") >= 0 && code.indexOf(".node-performance-feedback") >= 0, "판단 근거 체인 그래프 스타일이 없습니다.");
-    assertOk(modelingGraphHtml.indexOf("ontology-cytoscape") >= 0 && modelingGraphHtml.indexOf("규칙과 관계 해설") >= 0 && modelingGraphHtml.indexOf("RuleBox 규칙") >= 0, "관계 그래프 섹션에 Cytoscape 그래프와 텍스트 보조 패널이 없습니다.");
+    assertOk(modelingGraphHtml.indexOf("ontology-cytoscape") >= 0 && modelingGraphHtml.indexOf("investment-ontology-layer-tabs") >= 0 && modelingGraphHtml.indexOf("investment-ontology-workbench") >= 0 && code.indexOf("renderInvestmentRuleRelationTextPanel") >= 0 && code.indexOf("RuleBox 규칙") >= 0, "관계 그래프 섹션에 레이어 탭, Cytoscape 그래프, RuleBox 해설 경로가 없습니다.");
     assertOk(legacyOntologyGraphHtml.indexOf("managed-page managed-page-modeling") >= 0 && legacyOntologyGraphHtml.indexOf("<h2>온톨로지</h2>") >= 0, "기존 관계 그래프 URL이 통합 탭 온톨로지 섹션으로 열리지 않습니다.");
     assertOk(/\.ontology-relationship-graphs\s*\{[\s\S]*grid-template-columns: 1fr;/.test(styles), "관계 그래프가 전폭 1열 구조로 정의되지 않았습니다.");
     assertOk(code.indexOf('targetContext + "|RELATES_TO"') < 0 && modelingGraphHtml.indexOf("접은 표시") < 0, "규칙 구조 그래프가 relation type을 접어서 표시합니다.");

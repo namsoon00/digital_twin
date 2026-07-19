@@ -5621,7 +5621,11 @@ h3 {
 .investment-today-status-panel,
 .investment-today-action-panel,
 .investment-today-selected-panel,
-.investment-today-blockers-panel {
+.investment-today-blockers-panel,
+.investment-evidence-workbench-panel,
+.investment-chart-control-panel,
+.investment-ontology-workspace-panel,
+.strategy-review-status-panel {
   grid-column: 1 / -1;
 }
 
@@ -5652,7 +5656,12 @@ h3 {
 .investment-feedback-grid,
 .investment-today-status-grid,
 .investment-today-selected-metrics,
-.investment-today-blocker-list {
+.investment-today-blocker-list,
+.investment-evidence-status-grid,
+.investment-evidence-focus-grid,
+.investment-chart-control-grid,
+.strategy-proposal-focus-grid,
+.strategy-review-status-grid {
   display: grid;
   grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
   gap: 10px;
@@ -5667,7 +5676,9 @@ h3 {
 .investment-decision-summary-cell,
 .investment-decision-cell,
 .investment-today-status-cell,
-.investment-today-blocker {
+.investment-today-blocker,
+.strategy-proposal-focus-grid .investment-today-status-cell,
+.strategy-review-status-grid .investment-today-status-cell {
   display: grid;
   gap: 5px;
   min-width: 0;
@@ -5867,13 +5878,232 @@ h3 {
   grid-template-columns: repeat(auto-fit, minmax(190px, 1fr));
 }
 
+.investment-evidence-workbench,
+.investment-ontology-workbench {
+  display: grid;
+  gap: var(--ds-section-gap);
+  min-width: 0;
+  padding: var(--ds-panel-pad-y) var(--ds-panel-pad-x);
+  border-top: 1px solid var(--line);
+}
+
+.investment-evidence-workbench {
+  grid-template-columns: minmax(260px, 0.42fr) minmax(0, 1fr);
+}
+
+.investment-evidence-queue,
+.investment-evidence-selected-panel {
+  display: grid;
+  align-content: start;
+  gap: 10px;
+  min-width: 0;
+}
+
+.investment-evidence-queue {
+  padding: 10px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--panel-soft);
+}
+
+.investment-evidence-queue-card {
+  display: grid;
+  gap: 6px;
+  min-width: 0;
+  padding: 11px 12px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--input);
+  color: var(--ink);
+  text-align: left;
+  cursor: pointer;
+}
+
+.investment-evidence-queue-card.active {
+  border-color: color-mix(in srgb, var(--blue) 60%, var(--line));
+  background: color-mix(in srgb, var(--blue) 8%, var(--input));
+  box-shadow: inset 3px 0 0 var(--blue);
+}
+
+.investment-evidence-queue-card strong,
+.investment-evidence-queue-card em,
+.investment-evidence-queue-card i {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.investment-evidence-queue-card strong {
+  color: var(--ink);
+  font-size: 13px;
+  font-weight: 920;
+}
+
+.investment-evidence-queue-card em,
+.investment-evidence-queue-card i {
+  color: var(--muted);
+  font-size: 11px;
+  font-style: normal;
+  font-weight: 780;
+  line-height: 1.4;
+}
+
+.investment-evidence-selected-panel {
+  padding: 14px;
+  border: 1px solid var(--line);
+  border-left: 3px solid var(--blue);
+  border-radius: 8px;
+  background: linear-gradient(180deg, var(--panel), var(--panel-soft));
+}
+
+.investment-evidence-selected-head {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 12px;
+  align-items: start;
+  min-width: 0;
+}
+
+.investment-evidence-selected-head > div {
+  display: grid;
+  gap: 6px;
+  min-width: 0;
+}
+
+.investment-evidence-selected-head strong {
+  color: var(--ink);
+  font-size: 18px;
+  font-weight: 930;
+  line-height: 1.25;
+  overflow-wrap: anywhere;
+}
+
+.investment-evidence-selected-head em,
+.investment-evidence-selected-copy p {
+  color: var(--muted);
+  font-size: 12px;
+  font-style: normal;
+  font-weight: 780;
+  line-height: 1.5;
+  overflow-wrap: anywhere;
+}
+
+.investment-evidence-selected-copy,
+.investment-evidence-selected-columns {
+  display: grid;
+  gap: 10px;
+  min-width: 0;
+}
+
+.investment-evidence-selected-copy {
+  padding: 12px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--input);
+}
+
+.investment-evidence-selected-copy strong {
+  color: var(--ink);
+  font-size: 13px;
+  font-weight: 920;
+}
+
+.investment-evidence-selected-copy p {
+  margin: 0;
+}
+
+.investment-evidence-selected-columns {
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+}
+
+.investment-chart-control-grid {
+  grid-template-columns: repeat(5, minmax(0, 1fr));
+}
+
+.investment-ontology-layer-tabs,
+.strategy-proposal-section-tabs {
+  display: grid;
+  gap: 8px;
+  min-width: 0;
+  padding: 0 var(--ds-panel-pad-x) var(--ds-panel-pad-y);
+  border-top: 1px solid var(--line);
+}
+
+.investment-ontology-layer-tabs {
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  padding-top: var(--ds-panel-pad-y);
+}
+
+.investment-ontology-layer-tabs button,
+.strategy-proposal-section-tabs button {
+  display: grid;
+  gap: 4px;
+  min-width: 0;
+  padding: 10px 12px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--input);
+  color: var(--ink);
+  text-align: left;
+  cursor: pointer;
+}
+
+.investment-ontology-layer-tabs button.active,
+.strategy-proposal-section-tabs button.active {
+  border-color: color-mix(in srgb, var(--blue) 60%, var(--line));
+  background: color-mix(in srgb, var(--blue) 8%, var(--input));
+}
+
+.investment-ontology-layer-tabs strong,
+.strategy-proposal-section-tabs strong {
+  font-size: 13px;
+  font-weight: 930;
+}
+
+.investment-ontology-layer-tabs span,
+.investment-ontology-layer-tabs em,
+.strategy-proposal-section-tabs span {
+  color: var(--muted);
+  font-size: 11px;
+  font-style: normal;
+  font-weight: 780;
+}
+
+.investment-ontology-workbench {
+  grid-template-columns: minmax(0, 1fr) minmax(340px, 0.42fr);
+}
+
+.investment-ontology-graph-main,
+.investment-ontology-layer-detail {
+  display: grid;
+  align-content: start;
+  gap: var(--ds-section-gap);
+  min-width: 0;
+}
+
+.investment-ontology-layer-detail .investment-relation-text-grid {
+  grid-template-columns: minmax(0, 1fr);
+}
+
+.investment-ontology-layer-detail .ontology-surface,
+.investment-ontology-layer-detail .ontology-panel {
+  min-width: 0;
+}
+
 @media (max-width: 860px) {
   .investment-today-status-grid,
-  .investment-today-selected-metrics {
+  .investment-today-selected-metrics,
+  .investment-evidence-status-grid,
+  .investment-evidence-focus-grid,
+  .investment-chart-control-grid,
+  .strategy-review-status-grid {
     grid-template-columns: repeat(2, minmax(0, 1fr));
   }
 
-  .investment-today-selected-actions {
+  .investment-today-selected-actions,
+  .investment-evidence-workbench,
+  .investment-ontology-workbench,
+  .investment-evidence-selected-columns,
+  .investment-ontology-layer-tabs {
     grid-template-columns: 1fr;
   }
 }
@@ -10449,10 +10679,10 @@ h3 {
 
 .strategy-proposal-layout {
   display: grid;
-  grid-template-columns: minmax(260px, 0.72fr) minmax(0, 1.28fr);
+  grid-template-columns: minmax(280px, 0.36fr) minmax(0, 1fr);
   gap: 0;
   min-width: 0;
-  min-height: 420px;
+  min-height: 0;
   border-top: 1px solid var(--line);
 }
 
@@ -10461,9 +10691,12 @@ h3 {
   align-content: start;
   gap: 8px;
   min-width: 0;
+  max-height: min(72dvh, 760px);
+  overflow: auto;
   padding: var(--ds-panel-pad-y) var(--ds-panel-pad-x);
   border-right: 1px solid var(--line);
   background: var(--panel-soft);
+  scrollbar-gutter: stable;
 }
 
 .strategy-proposal-card {
@@ -10514,6 +10747,7 @@ h3 {
   align-content: start;
   gap: 14px;
   min-width: 0;
+  overflow: hidden;
   padding: var(--ds-panel-pad-y) var(--ds-panel-pad-x);
 }
 
@@ -10554,6 +10788,53 @@ h3 {
   flex-wrap: wrap;
   justify-content: flex-end;
   gap: 8px;
+}
+
+.strategy-proposal-section-tabs {
+  grid-template-columns: repeat(5, minmax(0, 1fr));
+  padding: 0;
+  border-top: 0;
+}
+
+.strategy-proposal-section-body {
+  display: grid;
+  min-width: 0;
+}
+
+.strategy-proposal-summary-panel,
+.strategy-proposal-summary-slices {
+  display: grid;
+  gap: 10px;
+  min-width: 0;
+}
+
+.strategy-proposal-summary-copy {
+  display: grid;
+  gap: 8px;
+  min-width: 0;
+  padding: 12px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--panel-soft);
+}
+
+.strategy-proposal-summary-copy strong {
+  color: var(--ink);
+  font-size: 13px;
+  font-weight: 930;
+}
+
+.strategy-proposal-summary-copy p {
+  margin: 0;
+  color: var(--muted);
+  font-size: 13px;
+  font-weight: 760;
+  line-height: 1.5;
+  overflow-wrap: anywhere;
+}
+
+.strategy-proposal-summary-slices {
+  grid-template-columns: repeat(3, minmax(0, 1fr));
 }
 
 .strategy-proposal-condition-grid {
@@ -10632,7 +10913,7 @@ h3 {
 
 .strategy-proposal-performance-form {
   display: grid;
-  grid-template-columns: repeat(6, minmax(0, 1fr));
+  grid-template-columns: repeat(3, minmax(0, 1fr));
   align-items: end;
   gap: 10px;
   min-width: 0;
@@ -10640,7 +10921,7 @@ h3 {
 }
 
 .strategy-proposal-performance-form .setting-field.wide {
-  grid-column: span 4;
+  grid-column: 1 / -1;
 }
 
 .strategy-proposal-performance-form .text-button {
@@ -10673,11 +10954,20 @@ h3 {
   .strategy-proposal-performance-form .setting-field.wide {
     grid-column: 1 / -1;
   }
+
+  .strategy-proposal-section-tabs {
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+  }
+
+  .strategy-proposal-summary-slices {
+    grid-template-columns: minmax(0, 1fr);
+  }
 }
 
 @media (max-width: 620px) {
   .strategy-proposal-condition-grid,
-  .strategy-proposal-performance-form {
+  .strategy-proposal-performance-form,
+  .strategy-proposal-section-tabs {
     grid-template-columns: minmax(0, 1fr);
   }
 }
@@ -16585,6 +16875,10 @@ html[data-theme="dark"] .ontology-graph-expanded-toolbar .icon-button.danger {
     grid-template-columns: repeat(2, minmax(0, 1fr));
   }
 
+  .strategy-view .investment-tab-stack-full {
+    grid-column: 1 / -1;
+  }
+
   .strategy-view .investment-tab-stack-full > .panel {
     display: grid;
     grid-template-rows: auto minmax(0, 1fr);
@@ -21176,6 +21470,11 @@ html[data-theme="dark"] .ontology-graph-expanded-toolbar .icon-button.danger {
     grid-column: 1 / -1;
   }
 
+  .strategy-view .investment-tab-workspace:not(.investment-tab-workspace-overview) .investment-tab-stack-summary,
+  .strategy-view .investment-tab-workspace:not(.investment-tab-workspace-overview) .investment-tab-stack-full {
+    grid-column: 1 / -1;
+  }
+
   .strategy-view .investment-tab-stack,
   .strategy-view .investment-tab-stack-full,
   .strategy-view .investment-tab-stack-full > .panel,
@@ -24324,5 +24623,215 @@ html[data-theme="dark"] .ontology-graph-expanded-toolbar .icon-button.danger {
   .console-shell .ontology-experiment-card[data-card-format="summary-list-card"],
   .console-shell .investment-calendar-event[data-card-format="summary-list-card"] {
     padding: var(--ds-card-comfort-pad-y) var(--ds-card-comfort-pad-x);
+  }
+}
+
+/* Notification workbench: full list, search, and selected-detail flow. */
+.notification-structured-body,
+.notification-structured-body.has-detail {
+  grid-template-columns: minmax(0, 1fr) !important;
+  align-items: stretch;
+  gap: var(--ds-section-gap);
+}
+
+.notification-search-panel {
+  display: grid;
+  grid-template-columns: minmax(260px, 1fr) minmax(150px, 0.2fr) minmax(190px, 0.26fr) auto;
+  gap: var(--ds-section-gap);
+  align-items: end;
+  min-width: 0;
+  padding: var(--ds-space-4);
+}
+
+.notification-search-field {
+  display: grid;
+  gap: var(--ds-space-2);
+  min-width: 0;
+}
+
+.notification-search-field span {
+  color: var(--muted);
+  font-size: var(--ds-type-caption);
+  font-weight: 900;
+  line-height: 1.35;
+}
+
+.notification-search-field input,
+.notification-search-field select {
+  width: 100%;
+  min-width: 0;
+  min-height: 40px;
+  border: 1px solid var(--ds-card-border);
+  border-radius: var(--ds-radius-control);
+  background: var(--input);
+  color: var(--ink);
+  padding: 8px 10px;
+  font: inherit;
+  font-size: var(--ds-type-label);
+}
+
+.notification-search-field input:focus,
+.notification-search-field select:focus {
+  border-color: var(--focus);
+  outline: none;
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--focus) 18%, transparent);
+}
+
+.notification-search-actions {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  align-items: center;
+  gap: var(--ds-space-3);
+  min-width: 0;
+}
+
+.notification-filter-count {
+  display: inline-flex;
+  align-items: baseline;
+  gap: var(--ds-space-2);
+  min-width: 0;
+  color: var(--muted);
+  font-size: var(--ds-type-caption);
+  font-weight: 850;
+  white-space: nowrap;
+}
+
+.notification-filter-count strong {
+  color: var(--ink);
+  font-size: 18px;
+  font-weight: 950;
+  font-variant-numeric: tabular-nums;
+}
+
+.notification-filter-count em {
+  font-style: normal;
+}
+
+.notification-workbench {
+  display: grid;
+  grid-template-columns: minmax(380px, 0.74fr) minmax(0, 1fr);
+  gap: var(--ds-section-gap);
+  min-width: 0;
+}
+
+.notification-list-pane,
+.notification-detail-pane {
+  display: grid;
+  align-content: start;
+  gap: 0;
+  min-width: 0;
+  overflow: hidden;
+  border: 1px solid var(--ds-card-border);
+  border-radius: var(--ds-radius-panel);
+  background: color-mix(in srgb, var(--ds-card-bg) 86%, var(--ds-card-row-bg));
+}
+
+.notification-list-head,
+.notification-detail-pane-head {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: var(--ds-section-gap);
+  align-items: start;
+  min-width: 0;
+  padding: var(--ds-row-pad-y) var(--ds-row-pad-x);
+  border-bottom: 1px solid var(--ds-card-border);
+  background: color-mix(in srgb, var(--ds-card-head-bg) 58%, transparent);
+}
+
+.notification-list-head h3,
+.notification-detail-pane-head h3 {
+  margin: 0;
+  color: var(--ink);
+  font-size: var(--ds-type-title);
+  line-height: 1.28;
+}
+
+.notification-list-head span,
+.notification-detail-pane-head span {
+  display: block;
+  margin-top: var(--ds-space-2);
+  color: var(--muted);
+  font-size: var(--ds-type-label);
+  font-weight: 820;
+  line-height: 1.45;
+  overflow-wrap: anywhere;
+}
+
+.notification-list-head strong {
+  color: var(--ink);
+  font-size: 18px;
+  font-weight: 950;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+.notification-list-pane .notification-decision-list,
+.notification-structured-body.has-detail .notification-decision-list {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  gap: 0;
+  max-height: none !important;
+  overflow: visible !important;
+  padding: 0 !important;
+  border: 0 !important;
+  border-radius: 0;
+  background: transparent;
+  overscroll-behavior: auto;
+}
+
+.notification-list-pane .notification-decision-row {
+  border-width: 0 0 1px 3px;
+  border-radius: 0;
+  box-shadow: none;
+}
+
+.notification-list-pane .notification-decision-row:last-child {
+  border-bottom: 0;
+}
+
+.notification-list-pane .notification-decision-row.active {
+  border-left-color: var(--blue);
+  background: color-mix(in srgb, var(--blue-soft) 24%, var(--ds-card-bg));
+  box-shadow: inset 0 1px 0 color-mix(in srgb, var(--panel) 68%, transparent);
+}
+
+.notification-detail-pane > .notification-decision-detail {
+  border: 0 !important;
+  border-radius: 0;
+  background: transparent;
+  box-shadow: none;
+}
+
+.notification-detail-pane > .empty-state {
+  margin: var(--ds-panel-pad-y) var(--ds-panel-pad-x);
+}
+
+@media (max-width: 1180px) {
+  .notification-search-panel,
+  .notification-workbench {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .notification-search-actions {
+    justify-content: flex-start;
+  }
+}
+
+@media (max-width: 720px) {
+  .notification-search-actions {
+    display: grid;
+    justify-content: stretch;
+  }
+
+  .notification-filter-count,
+  .notification-search-actions .mini-button {
+    width: 100%;
+    justify-content: center;
+  }
+
+  .notification-list-head,
+  .notification-detail-pane-head {
+    grid-template-columns: minmax(0, 1fr);
   }
 }

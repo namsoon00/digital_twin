@@ -1,7 +1,7 @@
 import re
 from typing import Dict, List, Optional
 
-from .message_types import MESSAGE_TYPE_LABELS
+from .message_types import MESSAGE_TYPE_LABELS, OPERATOR_REASONING_REPORT
 from .accounts import message_delivery_profile
 from .disclosure_analysis import local_disclosure_analysis
 from .notification_ai_constants import KST
@@ -38,7 +38,7 @@ from .ontology_relation_reasoning import (
 )
 
 
-SKIP_AI_OPINION_TYPES = {"workHandoff", "modelReview"}
+SKIP_AI_OPINION_TYPES = {"workHandoff", "modelReview", OPERATOR_REASONING_REPORT}
 AI_OPINION_ENGINE_VERSION = "notification-ai-opinion-v3"
 AI_OPINION_MAX_LINES = 5
 AI_OPINION_MAX_CHARS = 135

@@ -2,7 +2,7 @@ from datetime import datetime, timedelta, timezone
 from typing import Dict, List
 
 from ..domain.data_freshness import evaluate_notification_data_freshness
-from ..domain.message_types import INVESTMENT_INSIGHT, NEWS_DIGEST
+from ..domain.message_types import INVESTMENT_INSIGHT, NEWS_DIGEST, OPERATOR_REASONING_REPORT
 from ..domain.notification_rules import (
     DEFAULT_NOTIFICATION_RULES,
     NotificationRuleConfig,
@@ -248,6 +248,8 @@ class MySQLNotificationJobStore(MySQLOperationalConnection):
         return any(marker in blob for marker in article_markers)
 
     def apply_sent_article_filter_with_connection(self, connection, job: NotificationJob) -> bool:
+        if str(job.message_type or "") == OPERATOR_REASONING_REPORT:
+            return False
         if not self.sent_article_filter_enabled():
             return False
         current_keys = collect_article_identity_keys_from_context(job.context or {})

@@ -15,6 +15,11 @@ from ..domain.notification_ai_context import is_watchlist_context
 from ..domain.external_api_sources import external_api_source_line
 from ..domain.notification_ai_gate_contracts import ACTION_LABELS, MESSAGE_START_BADGE, NotificationAIValidatedResponse
 from ..domain.notification_ai_gate_sources import source_detail_text, source_url_rows
+from ..domain.notification_reasoning_report import (
+    customer_alert_reason_lines,
+    customer_confidence_and_missing_lines,
+    customer_inferred_fact_lines,
+)
 from ..domain.notification_ai_gate_text import (
     _clamp,
     _line_after_colon,
@@ -390,6 +395,23 @@ def ai_confidence_display(response: NotificationAIValidatedResponse, level: str)
         return confidence_text(response.confidence)
     return str(round(response.confidence, 1)) + "%"
 
+
+def relation_judgment_strength_display(context: Dict[str, object], level: str) -> str:
+    relation_context = relation_context_value(context or {})
+    decision = relation_context.get("decision") if isinstance(relation_context.get("decision"), dict) else {}
+    score = _number(decision.get("score") or relation_context.get("signalStrength"))
+    if not score:
+        return ""
+    if score >= 85:
+        label = "매우 높음"
+    elif score >= 70:
+        label = "높음"
+    elif score >= 55:
+        label = "보통"
+    else:
+        label = "낮음"
+    return "[온톨로지] " + label + " (" + str(round(score, 1)) + "점)"
+
 def ai_judgment_section_title(level: str) -> str:
     return "전략 요약"
 
@@ -434,9 +456,10 @@ def account_profile_rows(context: Dict[str, object], level: str) -> List[str]:
     return [row for row in rows if row]
 
 def ai_judgment_rows(response: NotificationAIValidatedResponse, level: str, context: Dict[str, object] = None) -> List[str]:
+    relation_strength = relation_judgment_strength_display(context or {}, level)
     rows = [
         _html_row(ai_action_row_label(level), _ai_marked_value(action_label_for_action(response.action, context) or response.action_label), level=level),
-        _html_row("판단 강도", _ai_marked_value(ai_confidence_display(response, level)), level=level),
+        _html_row("관계 판단 강도", relation_strength or _ai_marked_value(ai_confidence_display(response, level)), level=level),
     ]
     rows.extend(account_profile_rows(context or {}, level))
     summary_label = "이유" if level == "absoluteBeginner" else "AI 판단 이유"
@@ -1828,6 +1851,18 @@ def relation_axis_summary_rows(context: Dict[str, object], level: str, limit: in
     return [_html_bullet(item, level) for item in rows if str(item or "").strip()]
 
 
+def customer_reason_rows(context: Dict[str, object], level: str) -> List[str]:
+    return [_html_bullet(item, level) for item in customer_alert_reason_lines(context) if str(item or "").strip()]
+
+
+def customer_inference_rows(context: Dict[str, object], level: str) -> List[str]:
+    return [_html_bullet(item, level) for item in customer_inferred_fact_lines(context) if str(item or "").strip()]
+
+
+def customer_data_confidence_rows(context: Dict[str, object], level: str) -> List[str]:
+    return [_html_bullet(item, level) for item in customer_confidence_and_missing_lines(context) if str(item or "").strip()]
+
+
 def _valuation_value_present(value: object) -> bool:
     return value not in (None, "") and str(value).strip() not in {"", "-"}
 
@@ -2013,17 +2048,26 @@ def execution_telegram_message(context: Dict[str, object], response: Notificatio
         "<b>" + ai_judgment_section_title(level) + "</b>",
         *ai_judgment_rows(response, level, context),
     ]
+    reason_rows = customer_reason_rows(context, level)
+    if reason_rows:
+        parts.extend(["", "<b>왜 알림이 왔나요?</b>", *reason_rows])
     if current_state_rows:
         parts.extend(["", "<b>현재 상황</b>", *current_state_rows])
     valuation_rows = valuation_detail_rows(context, level)
     if valuation_rows:
         parts.extend(["", "<b>밸류에이션</b>", *valuation_rows])
+    inference_rows = customer_inference_rows(context, level)
+    if inference_rows:
+        parts.extend(["", "<b>온톨로지가 새로 확인한 사실</b>", *inference_rows])
     axis_rows = relation_axis_summary_rows(context, level)
     if axis_rows:
         parts.extend(["", "<b>투자 판단 근거</b>", *axis_rows])
     opinion_rows = strategy_guide_rows(context, response, level)
     if opinion_rows:
         parts.extend(["", "<b>전략 가이드</b>", *opinion_rows])
+    confidence_rows = customer_data_confidence_rows(context, level)
+    if confidence_rows:
+        parts.extend(["", "<b>신뢰도와 부족 데이터</b>", *confidence_rows])
     if response.source_urls:
         parts.extend(["", "<b>출처</b>"])
         parts.extend(source_url_rows(response.source_urls, context))
@@ -2044,17 +2088,26 @@ def execution_telegram_message_absolute_beginner(context: Dict[str, object], res
         *ai_judgment_rows(response, "absoluteBeginner", context),
         _html_row("안내", "자동 주문이 아니라 실행 전 점검 알림입니다.", True),
     ]
+    reason_rows = customer_reason_rows(context, "absoluteBeginner")
+    if reason_rows:
+        parts.extend(["", "<b>왜 알림이 왔나요?</b>", *reason_rows])
     if current_state_rows:
         parts.extend(["", "<b>현재 상황</b>", *current_state_rows])
     valuation_rows = valuation_detail_rows(context, "absoluteBeginner")
     if valuation_rows:
         parts.extend(["", "<b>밸류에이션</b>", *valuation_rows])
+    inference_rows = customer_inference_rows(context, "absoluteBeginner")
+    if inference_rows:
+        parts.extend(["", "<b>온톨로지가 새로 확인한 사실</b>", *inference_rows])
     axis_rows = relation_axis_summary_rows(context, "absoluteBeginner")
     if axis_rows:
         parts.extend(["", "<b>투자 판단 근거</b>", *axis_rows])
     opinion_rows = strategy_guide_rows(context, response, "absoluteBeginner")
     if opinion_rows:
         parts.extend(["", "<b>전략 가이드</b>", *opinion_rows])
+    confidence_rows = customer_data_confidence_rows(context, "absoluteBeginner")
+    if confidence_rows:
+        parts.extend(["", "<b>신뢰도와 부족 데이터</b>", *confidence_rows])
     if response.source_urls:
         parts.extend(["", "<b>원문/출처</b>"])
         parts.extend(source_url_rows(response.source_urls, context))

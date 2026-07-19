@@ -5,11 +5,13 @@ from zoneinfo import ZoneInfo
 
 from ..domain.disclosure_analysis import local_disclosure_analysis
 from ..domain.market_data import number
+from ..domain.message_types import INVESTMENT_INSIGHT, OPERATOR_REASONING_REPORT
 from ..domain.monitoring import RealtimeMonitor
 from ..domain.notification_ai import enrich_notification_ai_context
 from ..domain.notification_ai_gate_contracts import ai_gate_enabled_for_message_type
 from ..domain.notification_ai_gate_validation import local_validated_ai_response
 from ..domain.notifications import NotificationJob, notification_debug_number
+from ..domain.notification_reasoning_report import build_notification_reasoning_report, render_operator_reasoning_report
 from .notification_ai_gate_audit import context_with_validated_ai_response
 from .notification_disclosure_rendering import context_with_disclosure_analysis
 
@@ -261,6 +263,7 @@ class NotificationQueueRunner:
         template_renderer: Callable = None,
         context_enricher: Callable = None,
         now_provider: Callable = None,
+        operator_reports_enabled: bool = False,
     ):
         self.queue = queue
         self.account_repository = account_repository
@@ -271,6 +274,7 @@ class NotificationQueueRunner:
         self.template_renderer = template_renderer
         self.context_enricher = context_enricher
         self.now_provider = now_provider or (lambda: datetime.now(ZoneInfo("UTC")))
+        self.operator_reports_enabled = bool(operator_reports_enabled)
         self.last_run_details = []
 
     def account_map(self) -> Dict[str, object]:
@@ -310,8 +314,18 @@ class NotificationQueueRunner:
                 continue
             try:
                 self.deliver(job, accounts, message)
+                try:
+                    operator_detail = self.enqueue_operator_reasoning_report(job, message)
+                except Exception as operator_error:  # noqa: BLE001 - operator audit must not retry the customer alert.
+                    operator_detail = "운영자 보고 생성 실패"
+                    context = dict(job.context or {})
+                    context.update({
+                        "operatorReasoningReportStatus": "error",
+                        "operatorReasoningReportError": str(operator_error)[:180],
+                    })
+                    job.context = context
                 self.queue.mark_done(job)
-                self.last_run_details.append(self.job_detail(job, "done"))
+                self.last_run_details.append(self.job_detail(job, "done", operator_detail))
                 processed += 1
             except Exception as error:  # noqa: BLE001 - one failed delivery must not stop the queue.
                 self.queue.mark_failed(job, str(error))
@@ -396,6 +410,61 @@ class NotificationQueueRunner:
         delivery = notifier.send(message)
         if not delivery.delivered:
             raise RuntimeError(delivery.reason or "notification delivery failed")
+
+    def enqueue_operator_reasoning_report(self, job: NotificationJob, customer_message: str) -> str:
+        if not self.operator_reports_enabled or str(job.message_type or "") != INVESTMENT_INSIGHT:
+            return ""
+        context = dict(job.context or {})
+        relation_context = context.get("ontologyRelationContext")
+        if not isinstance(relation_context, dict) or not relation_context:
+            metadata = context.get("metadata") if isinstance(context.get("metadata"), dict) else {}
+            relation_context = metadata.get("ontologyRelationContext")
+        if not isinstance(relation_context, dict) or not relation_context:
+            context["operatorReasoningReportStatus"] = "skipped_missing_relation_context"
+            job.context = context
+            return "운영자 보고 생략: 관계 추론 없음"
+        report = build_notification_reasoning_report(context, job.job_id, customer_message)
+        report_text = render_operator_reasoning_report(report)
+        if not report_text:
+            context["operatorReasoningReportStatus"] = "skipped_empty_report"
+            job.context = context
+            return "운영자 보고 생략: 빈 보고서"
+        report_context = {
+            "messageType": OPERATOR_REASONING_REPORT,
+            "accountId": job.account_id,
+            "accountLabel": job.account_label,
+            "customerNotificationNumber": report.customer_notification_number,
+            "customerJobId": job.job_id,
+            "displayTarget": report.target,
+            "target": report.target,
+            "symbol": report.symbol,
+            "rawSymbol": report.symbol,
+            "body": report_text,
+            "telegramMessage": report_text,
+            "readableMessage": report_text,
+            "notificationSignals": ["operatorAudit", "confirmingData", "actionable"],
+            "reasoningReport": report.to_dict(),
+        }
+        operator_job = NotificationJob.create(
+            report_text,
+            account_id=job.account_id,
+            account_label=job.account_label,
+            message_type=OPERATOR_REASONING_REPORT,
+            source_event_id=job.source_event_id,
+            source_event_name=job.source_event_name,
+            dedupe_key="operator-report:" + job.job_id,
+            context=report_context,
+        )
+        if not self.queue.enqueue(operator_job):
+            context["operatorReasoningReportStatus"] = "enqueue_failed"
+            job.context = context
+            return "운영자 보고 큐 적재 실패"
+        context.update({
+            "operatorReasoningReportStatus": "queued",
+            "operatorReasoningReportJobId": operator_job.job_id,
+        })
+        job.context = context
+        return "운영자 보고 큐 적재"
 
     def mark_quiet_hours_suppressed(self, job: NotificationJob, account) -> None:
         reason = account.quiet_hours_reason()

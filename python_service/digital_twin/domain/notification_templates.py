@@ -5,7 +5,7 @@ from typing import Dict, List
 
 from .alert_formatting import signed_pct
 from .external_api_sources import external_api_source_line
-from .message_types import MESSAGE_TYPE_EMOJIS, MESSAGE_TYPE_LABELS, TRIGGER_SUMMARIES
+from .message_types import MESSAGE_TYPE_EMOJIS, MESSAGE_TYPE_LABELS, OPERATOR_REASONING_REPORT, TRIGGER_SUMMARIES
 from .notification_ai import enrich_notification_ai_context
 from .notification_ontology_sections import (
     CURVE_REGIME_LABELS,
@@ -125,6 +125,7 @@ SEVERITY_LABELS = {
 SCORE_EXPLANATION_SKIP_TYPES = {
     "newsDigest",
     "workHandoff",
+    OPERATOR_REASONING_REPORT,
 }
 
 CUSTOMER_FACING_MESSAGE_TYPES = {
@@ -204,6 +205,10 @@ DEFAULT_NOTIFICATION_TEMPLATES = {
     "workHandoff": {
         "template": BODY_TEMPLATE,
         "description": "작업 완료 핸드오프 알림",
+    },
+    OPERATOR_REASONING_REPORT: {
+        "template": DEFAULT_TEMPLATE,
+        "description": "사용자 투자 알림과 연결된 운영자용 온톨로지 추론 감사 보고서",
     },
     "notification": {
         "template": BODY_TEMPLATE,
@@ -1240,6 +1245,8 @@ def prepend_message_start_badge(rendered: str, rich: bool = False, context: Dict
     text = str(rendered or "").strip()
     if not text:
         return text
+    if context_message_type(context or {}) == OPERATOR_REASONING_REPORT:
+        return text
     plain_badge = labeled_message_start_badge(MESSAGE_START_BADGE, context or {})
     if text.startswith("<b>" + MESSAGE_START_BADGE):
         first, rest = (text.split("\n", 1) + [""])[:2]
@@ -1258,6 +1265,10 @@ def prepend_message_start_badge(rendered: str, rich: bool = False, context: Dict
 
 def render_notification(template: NotificationTemplate, context: Dict[str, object]) -> str:
     values = context_with_score_explanation(context)
+    if context_message_type(values) == OPERATOR_REASONING_REPORT:
+        configured_template = template.template if template and template.enabled else BODY_TEMPLATE
+        rendered = render_template(configured_template, values)
+        return append_message_footer(rendered, values, False)
     if template and template.enabled:
         rendered = render_template(template.template, values)
         rich = template_prefers_rich_score(template.template, rendered)

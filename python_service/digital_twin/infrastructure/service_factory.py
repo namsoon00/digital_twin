@@ -172,6 +172,7 @@ def build_notification_queue_runner(dry_run: bool = False) -> NotificationQueueR
             ),
             NotificationAIOpinionEnricher(settings),
         ),
+        operator_reports_enabled=str(settings.get("operatorReasoningReportEnabled", "1")).strip().lower() not in {"0", "false", "no", "off"},
     )
 
 

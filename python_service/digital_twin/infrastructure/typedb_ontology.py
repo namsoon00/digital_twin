@@ -2346,6 +2346,58 @@ relation ontology-assertion,
             "confidence": confidence,
         }
 
+    def probe_typedb_native_rule_functions(self, rules: Iterable[GraphInferenceRule]) -> Dict[str, object]:
+        ready_rules = []
+        for rule in rules or []:
+            rule_payload = rule.to_dict() if hasattr(rule, "to_dict") else dict(rule or {})
+            if typedb_native_rule_profile(rule_payload).get("status") == "ready":
+                ready_rules.append((rule, rule_payload))
+        if not ready_rules:
+            return {"status": "empty", "available": False, "probedCount": 0}
+        imported = self.driver_imports()
+        if imported[0] is None:
+            return {
+                "status": "driver-missing",
+                "available": False,
+                "probedCount": 0,
+                "reason": str(imported[1])[:180],
+            }
+        _TypeDB, _Credentials, _DriverOptions, _DriverTlsConfig, TransactionType = imported[0]
+        probed_count = 0
+        try:
+            def operation():
+                nonlocal probed_count
+                driver = self.open_driver(imported)
+                try:
+                    self.ensure_database(driver)
+                    with driver.transaction(self.database, TransactionType.READ) as tx:
+                        for rule, rule_payload in ready_rules:
+                            query_plan = typedb_native_function_call_query(rule_payload, ["__ORBIT_SCHEMA_PROBE__"])
+                            self.read_rows_in_transaction(
+                                tx,
+                                str(query_plan.get("query") or ""),
+                                query_plan.get("columns") or ["sourceId"],
+                                label="nativeRuleProbe:" + str(rule.rule_id or ""),
+                            )
+                            probed_count += 1
+                finally:
+                    self.close_driver(driver)
+
+            self.with_typedb_retries(operation)
+            return {
+                "status": "ok",
+                "available": probed_count == len(ready_rules),
+                "probedCount": probed_count,
+            }
+        except Exception as error:  # noqa: BLE001 - a missing function falls through to schema synchronization.
+            return {
+                "status": "missing",
+                "available": False,
+                "probedCount": probed_count,
+                "reasonCode": typedb_error_code(error),
+                "reason": str(error)[:180],
+            }
+
     def sync_typedb_native_rule_functions(self, rules: Iterable[GraphInferenceRule], force: bool = False) -> Dict[str, object]:
         if not self.address:
             return {"status": "disabled", "configured": False, "graphStore": "typedb", "syncedCount": 0}
@@ -2403,6 +2455,44 @@ relation ontology-assertion,
                 "syncFingerprint": sync_fingerprint,
             })
             return cached_result
+        if not force:
+            probe_result = self.probe_typedb_native_rule_functions(rules)
+            if probe_result.get("available"):
+                synced_rule_ids = sorted(set(
+                    str(item.get("ruleId") or "")
+                    for item in definitions
+                    if str(item.get("ruleId") or "")
+                ))
+                result = {
+                    "configured": True,
+                    "status": "ok",
+                    "graphStore": "typedb",
+                    "engineVersion": TYPEDB_NATIVE_RULE_ENGINE_VERSION,
+                    "schemaFunctionSyncUsed": True,
+                    "schemaFunctionSyncCached": True,
+                    "schemaFunctionProbeUsed": True,
+                    "syncFingerprint": sync_fingerprint,
+                    "syncedCount": len(synced_rule_ids),
+                    "syncedFunctionCount": len(definitions),
+                    "skippedCount": len(skipped),
+                    "failedCount": 0,
+                    "syncedRules": [{"ruleId": item} for item in synced_rule_ids[:40]],
+                    "syncedFunctions": [
+                        {
+                            "ruleId": item.get("ruleId"),
+                            "nativeRuleId": item.get("nativeRuleId"),
+                            "schemaFunctionName": item.get("functionName"),
+                            "rootSchemaFunctionName": item.get("rootFunctionName") or item.get("functionName"),
+                            "schemaFunctionSyncStatus": "verified-existing",
+                        }
+                        for item in definitions[:60]
+                    ],
+                    "skippedRules": skipped[:40],
+                    "functionProbe": probe_result,
+                }
+                self._schema_function_sync_cache_key = sync_fingerprint
+                self._schema_function_sync_cache_result = dict(result)
+                return result
         imported = self.driver_imports()
         if imported[0] is None:
             return {

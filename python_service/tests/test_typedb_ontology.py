@@ -1447,6 +1447,25 @@ class TypeDBOntologyRepositoryTests(unittest.TestCase):
         self.assertTrue(result["schemaFunctionSyncCached"])
         self.assertEqual(sync_fingerprint, result["syncFingerprint"])
 
+    def test_typedb_schema_function_sync_probes_existing_functions_before_define(self):
+        repository = TypeDBOntologyGraphRepository("127.0.0.1:1729")
+        rule = default_graph_inference_rules()[0]
+
+        with patch.object(repository, "probe_typedb_native_rule_functions", return_value={
+            "status": "ok",
+            "available": True,
+            "probedCount": 1,
+        }) as probe, patch.object(repository, "driver_imports") as driver_imports:
+            result = repository.sync_typedb_native_rule_functions([rule])
+
+        probe.assert_called_once()
+        driver_imports.assert_not_called()
+        self.assertEqual("ok", result["status"])
+        self.assertTrue(result["schemaFunctionProbeUsed"])
+        self.assertTrue(result["schemaFunctionSyncCached"])
+        self.assertGreater(result["syncedFunctionCount"], 0)
+        self.assertTrue(all(item["schemaFunctionSyncStatus"] == "verified-existing" for item in result["syncedFunctions"]))
+
 
 if __name__ == "__main__":
     unittest.main()

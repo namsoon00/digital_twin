@@ -26,6 +26,7 @@ from .ontology_external_abox import (
     add_position_macro_context_concepts,
     add_symbol_external_signal_concepts,
 )
+from .ontology_observation_quality import position_observation_profiles, profile_for_domain
 from .portfolio_ontology_runtime_concepts import (
     add_account_delivery_profile_concepts,
     add_account_investment_strategy_concepts,
@@ -204,6 +205,8 @@ def build_portfolio_ontology(
         institution_net_volume = investor_net_volume(position.institution_net_volume, position.institution_buy_volume, position.institution_sell_volume)
         individual_net_volume = investor_net_volume(position.individual_net_volume, position.individual_buy_volume, position.individual_sell_volume)
         trading_snapshot = trading_value_snapshot(position.current_price, position.volume, position.trading_value)
+        observation_profiles = position_observation_profiles(position, runtime_context)
+        quote_observation = profile_for_domain(observation_profiles, "quote")
         graph.entities.append(OntologyEntity(stock_id, position.name or symbol, "stock", abox_properties({
             "symbol": symbol,
             "market": position.market,
@@ -250,6 +253,8 @@ def build_portfolio_ontology(
             "individualNetVolume": individual_net_volume,
             "individualNetAmount": number(position.individual_net_amount),
             "smartMoneyNetVolume": foreign_net_volume + institution_net_volume,
+            "updatedAt": position.updated_at,
+            **quote_observation,
             "tboxClass": "Stock",
             "tboxClasses": stock_tbox_classes,
             **strategy_fact_props,
@@ -263,6 +268,7 @@ def build_portfolio_ontology(
             "marketValue": number(position.market_value),
             "profitLossRate": number(position.profit_loss_rate),
             "updatedAt": position.updated_at,
+            **quote_observation,
             **strategy_fact_props,
         })
         if holding:
@@ -288,9 +294,9 @@ def build_portfolio_ontology(
             OntologyRelation(stock_id, entity_id("concept", "ai-investment-review"), "REQUESTS_OPINION_FROM", weight=1.0, properties=abox_properties({"source": source})),
         ])
         add_instrument_identity_concepts(graph, stock_id, position, source)
-        add_data_source_concept(graph, stock_id, position, source)
-        add_metric_concepts(graph, stock_id, position, source)
-        add_price_level_and_liquidity_concepts(graph, stock_id, position, source)
+        add_data_source_concept(graph, stock_id, position, source, observation_profiles)
+        add_metric_concepts(graph, stock_id, position, source, observation_profiles)
+        add_price_level_and_liquidity_concepts(graph, stock_id, position, source, observation_profiles)
         add_security_line_concepts(graph, stock_id, position, observed_positions, external_signals, runtime_context)
         add_position_temporal_concepts(graph, stock_id, position, external_signals, runtime_context)
         add_symbol_external_signal_concepts(graph, stock_id, symbol, external_signals)

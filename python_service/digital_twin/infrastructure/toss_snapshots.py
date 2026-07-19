@@ -320,7 +320,17 @@ def normalize_price_payload(item: Dict[str, object]) -> Dict[str, object]:
     trading_value = number(first_present(item, ["tradingValue", "tradeValue", "tradingAmount", "accumulatedTradeAmount", "accTradeAmount"]))
     if not trading_value and volume and price:
         trading_value = volume * price
-    timestamp = str(item.get("timestamp") or item.get("updatedAt") or item.get("time") or "")
+    timestamp = str(
+        item.get("timestamp")
+        or item.get("sourceAsOf")
+        or item.get("tradeDateTime")
+        or item.get("tradeDate")
+        or item.get("latestTradingDay")
+        or item.get("updatedAt")
+        or item.get("time")
+        or ""
+    )
+    fetched_at = utc_now_iso()
     return {
         "symbol": symbol or info["symbol"],
         "name": str(item.get("name") or item.get("stockName") or info["name"]),
@@ -336,7 +346,10 @@ def normalize_price_payload(item: Dict[str, object]) -> Dict[str, object]:
         "quoteMessage": "현재가는 토스 prices, 이동평균은 토스 candles 기준입니다.",
         "dataQuality": "actual",
         "provider": "Toss Open API",
-        "updatedAt": timestamp or utc_now_iso(),
+        "updatedAt": timestamp or fetched_at,
+        "sourceAsOf": timestamp,
+        "sourceFetchedAt": fetched_at,
+        "sourceAsOfConfidence": "provider" if timestamp else "missing",
     }
 
 
@@ -662,7 +675,7 @@ class TossProvider:
                 continue
             candidate = dict(payload)
             candidate["cacheScope"] = scope
-            timestamp = parse_datetime(candidate.get("updatedAt") or candidate.get("sourceAsOf") or candidate.get("fetchedAt"))
+            timestamp = parse_datetime(candidate.get("sourceAsOf") or candidate.get("sourceFetchedAt") or candidate.get("fetchedAt") or candidate.get("updatedAt"))
             candidates.append((timestamp.timestamp() if timestamp else float("-inf"), candidate))
         return max(candidates, key=lambda item: item[0])[1] if candidates else {}
 
@@ -692,6 +705,11 @@ class TossProvider:
             "dataQuality": position.data_quality or "actual",
             "marketSignalCoverage": dict(position.market_signal_coverage or {}),
             "updatedAt": position.updated_at or utc_now_iso(),
+            "sourceAsOf": position.source_as_of,
+            "sourceFetchedAt": position.source_fetched_at,
+            "sourceAsOfConfidence": position.source_as_of_confidence,
+            "indicatorAsOf": position.indicator_as_of,
+            "indicatorFetchedAt": position.indicator_fetched_at,
             "tradingValue": position.trading_value,
             "volume": position.volume,
             "volumeRatio": position.volume_ratio,
@@ -740,8 +758,8 @@ class TossProvider:
         cached = cached or {}
         cached_price = number(first_present(cached, ["currentPrice", "lastPrice", "price", "closePrice"]))
         live_price = number(first_present(quote, ["currentPrice", "lastPrice", "price", "closePrice"]))
-        cached_at = parse_datetime(cached.get("updatedAt") or cached.get("sourceAsOf") or cached.get("fetchedAt"))
-        position_at = parse_datetime(position.updated_at)
+        cached_at = parse_datetime(cached.get("sourceAsOf") or cached.get("sourceFetchedAt") or cached.get("fetchedAt") or cached.get("updatedAt"))
+        position_at = parse_datetime(position.source_as_of or position.source_fetched_at or position.updated_at)
         cached_is_fresher = bool(
             cached_price
             and (
@@ -777,12 +795,22 @@ class TossProvider:
         quote_source = str(quote.get("quoteSource") or "")
         data_quality = "actual" if live_price and indicators_live else position.data_quality
         updated_at = str(quote.get("updatedAt") or "")
+        source_as_of = str(quote.get("sourceAsOf") or "")
+        source_fetched_at = str(quote.get("sourceFetchedAt") or "")
+        source_as_of_confidence = str(quote.get("sourceAsOfConfidence") or "")
+        indicator_as_of = str(indicator_source.get("sourceAsOf") or indicator_source.get("latestCandleAt") or "")
+        indicator_fetched_at = str(indicator_source.get("sourceFetchedAt") or "")
         if used_cached_price:
             quote_status = "마지막 저장 시세"
             quote_message = "토스 호출 제한 또는 오류로 마지막 저장 시세를 표시합니다."
             quote_source = str(cached.get("quoteSource") or "Toss Open API cache")
             data_quality = "cached"
             updated_at = str(cached.get("updatedAt") or "")
+            source_as_of = str(cached.get("sourceAsOf") or "")
+            source_fetched_at = str(cached.get("sourceFetchedAt") or cached.get("fetchedAt") or "")
+            source_as_of_confidence = str(cached.get("sourceAsOfConfidence") or "cached")
+            indicator_as_of = str(cached.get("indicatorAsOf") or indicator_as_of)
+            indicator_fetched_at = str(cached.get("indicatorFetchedAt") or indicator_fetched_at)
         elif live_price and not indicators_live and cached:
             quote_message = "현재가는 토스 prices, 이동평균은 마지막 저장 candles 기준입니다."
             data_quality = combine_quality("actual", str(cached.get("dataQuality") or "cached"))
@@ -796,6 +824,11 @@ class TossProvider:
             quote_message = position.quote_message or "잔고 응답의 현재가를 표시합니다."
             quote_source = position.quote_source or "Toss holdings"
             updated_at = position.updated_at
+            source_as_of = position.source_as_of
+            source_fetched_at = position.source_fetched_at
+            source_as_of_confidence = position.source_as_of_confidence
+            indicator_as_of = position.indicator_as_of or indicator_as_of
+            indicator_fetched_at = position.indicator_fetched_at or indicator_fetched_at
         selected_updated_at = updated_at
         if not live_price and not used_cached_price:
             selected_updated_at = position.updated_at or str(cached.get("updatedAt") or "")
@@ -835,6 +868,11 @@ class TossProvider:
             quote_message=quote_message or position.quote_message or str(cached.get("quoteMessage") or ""),
             data_quality=data_quality or position.data_quality or str(cached.get("dataQuality") or ""),
             updated_at=selected_updated_at,
+            source_as_of=source_as_of,
+            source_fetched_at=source_fetched_at,
+            source_as_of_confidence=source_as_of_confidence,
+            indicator_as_of=indicator_as_of,
+            indicator_fetched_at=indicator_fetched_at,
             currency=str(quote.get("currency") or position.currency or cached.get("currency") or ""),
             market=str(quote.get("market") or position.market or cached.get("market") or ""),
             market_value=market_value,
@@ -877,6 +915,7 @@ class TossProvider:
                 candles, token = self.fetch_daily_candles(token, position.symbol)
                 chart_calls += 1
                 indicators = technical_indicators_from_candles(candles)
+                indicators["sourceFetchedAt"] = utc_now_iso()
                 indicators_live = bool(indicators)
             except (urllib.error.URLError, urllib.error.HTTPError, RuntimeError, ValueError, OSError):
                 indicators = {}
@@ -922,6 +961,7 @@ class TossProvider:
                 candles, token = self.fetch_daily_candles(token, normalized)
                 chart_calls += 1
                 indicators = technical_indicators_from_candles(candles)
+                indicators["sourceFetchedAt"] = utc_now_iso()
                 indicators_live = bool(indicators)
             except (urllib.error.URLError, urllib.error.HTTPError, RuntimeError, ValueError, OSError):
                 indicators = {}

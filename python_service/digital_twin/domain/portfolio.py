@@ -68,6 +68,11 @@ class Position:
     data_quality: str = ""
     market_signal_coverage: Dict[str, object] = field(default_factory=dict)
     updated_at: str = ""
+    source_as_of: str = ""
+    source_fetched_at: str = ""
+    source_as_of_confidence: str = ""
+    indicator_as_of: str = ""
+    indicator_fetched_at: str = ""
     market_value: float = 0.0
     market_value_krw: float = 0.0
     profit_loss: float = 0.0

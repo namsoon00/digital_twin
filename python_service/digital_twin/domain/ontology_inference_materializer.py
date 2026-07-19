@@ -1,5 +1,6 @@
 from typing import Dict, List
 
+from .data_freshness import age_minutes
 from .market_data import number
 from .ontology_contracts import OntologyBelief, OntologyEntity, OntologyEvidence, OntologyRelation, PortfolioOntology, entity_id
 from .ontology_decision_policy import decision_stage_from_action, relation_stage_priority
@@ -44,6 +45,9 @@ def materialize_rule_inference(
         "conditionDetailSource": str(context.get("conditionDetailSource") or ""),
         "evidenceCoverage": number(context.get("evidenceCoverage")),
         "freshnessStatus": str(context.get("freshnessStatus") or "unknown"),
+        "freshnessGateReason": str(context.get("freshnessGateReason") or ""),
+        "temporalEvidenceCount": int(number(context.get("temporalEvidenceCount"))),
+        "evidenceUsableForJudgement": bool(context.get("evidenceUsableForJudgement")),
         "promptHint": rule.prompt_hint,
     })))
     explanation_entities = materialize_inference_explanation_entities(
@@ -99,6 +103,9 @@ def materialize_rule_inference(
             "conditionDetailSource": str(context.get("conditionDetailSource") or ""),
             "evidenceCoverage": number(context.get("evidenceCoverage")),
             "freshnessStatus": str(context.get("freshnessStatus") or "unknown"),
+            "freshnessGateReason": str(context.get("freshnessGateReason") or ""),
+            "temporalEvidenceCount": int(number(context.get("temporalEvidenceCount"))),
+            "evidenceUsableForJudgement": bool(context.get("evidenceUsableForJudgement")),
             "promptHint": rule.prompt_hint,
         },
         confidence,
@@ -147,6 +154,9 @@ def materialize_rule_inference(
             **action_policy,
             "aiInfluenceLabel": derivation.ai_influence_label or derivation.belief_label or target_label,
             "inferenceTraceId": trace_id,
+            "freshnessStatus": str(context.get("freshnessStatus") or "unknown"),
+            "freshnessGateReason": str(context.get("freshnessGateReason") or ""),
+            "evidenceUsableForJudgement": bool(context.get("evidenceUsableForJudgement")),
             "source": GRAPH_REASONER_VERSION,
         }
         graph.relations.append(OntologyRelation(
@@ -393,7 +403,9 @@ def grounded_inference_context(
             if str(getattr(condition, "kind", "") or "") == "subject_property":
                 field = str(getattr(condition, "field", "") or item.get("field") or "")
                 observed_value = (stock.properties or {}).get(field)
-                item.update(observation_metadata(stock.properties or {}, observed_value))
+                stock_observation_properties = dict(stock.properties or {})
+                stock_observation_properties.setdefault("observationKind", stock.kind)
+                item.update(observation_metadata(stock_observation_properties, observed_value))
                 item["field"] = field
             elif str(getattr(condition, "kind", "") or "") == "relation":
                 relation, target = matching_evidence_relation(graph, stock.entity_id, condition)
@@ -402,7 +414,9 @@ def grounded_inference_context(
                     if relation_id:
                         item["relationId"] = relation_id
                         evidence_relation_ids.add(relation_id)
-                    target_properties = target.properties if target else {}
+                    target_properties = dict(target.properties if target else {})
+                    target_properties.setdefault("observationKind", target.kind if target else "")
+                    target_properties.setdefault("observationRelationType", relation.relation_type)
                     observed_value = evidence_observed_value(target, condition)
                     item.update(observation_metadata(target_properties or {}, observed_value))
                     item["relationType"] = relation.relation_type
@@ -412,15 +426,42 @@ def grounded_inference_context(
     grounded_count = sum(1 for item in grounded_conditions if condition_is_grounded(item))
     coverage = grounded_count / max(1, len(grounded_conditions))
     freshness_status = aggregate_condition_freshness(grounded_conditions)
+    temporal_conditions = [
+        item
+        for item in grounded_conditions
+        if condition_is_grounded(item) and bool(item.get("freshnessRequired"))
+    ]
+    blocked_temporal_conditions = [
+        item
+        for item in temporal_conditions
+        if not bool(item.get("judgementEvidenceUsable"))
+    ]
+    evidence_usable = coverage >= 0.65 and not blocked_temporal_conditions
+    if coverage < 0.65:
+        freshness_gate_reason = "성립 조건의 실제 관측값이 충분하지 않습니다."
+    elif blocked_temporal_conditions:
+        freshness_gate_reason = str(
+            blocked_temporal_conditions[0].get("freshnessGateReason")
+            or "시간에 민감한 근거가 신선도 기준을 통과하지 못했습니다."
+        )
+    elif temporal_conditions:
+        freshness_gate_reason = "시간에 민감한 근거가 원천 시각과 거래 세션 기준을 통과했습니다."
+    else:
+        freshness_gate_reason = "시간에 민감한 조건이 없는 구조·정책 추론입니다."
     rule_reliability = max([number(getattr(item, "weight", 0)) for item in rule.derivations or []], default=0.72)
-    freshness_factor = {"fresh": 1.0, "aging": 0.72, "delayed": 0.65, "stale": 0.3}.get(freshness_status, 0.55)
+    freshness_factor = {"fresh": 1.0, "aging": 0.72, "delayed": 0.65, "stale": 0.1, "not-applicable": 1.0}.get(freshness_status, 0.2)
     confidence = min(0.96, max(0.25, rule_reliability * 0.45 + coverage * 0.35 + freshness_factor * 0.20))
+    if not evidence_usable:
+        confidence = min(confidence, 0.35)
     payload.update({
         "matchedConditions": grounded_conditions,
         "evidenceRelationIds": sorted(evidence_relation_ids),
         "conditionDetailSource": "typedb-match+abox-grounding",
         "evidenceCoverage": round(coverage * 100.0, 1),
         "freshnessStatus": freshness_status,
+        "freshnessGateReason": freshness_gate_reason,
+        "temporalEvidenceCount": len(temporal_conditions),
+        "evidenceUsableForJudgement": evidence_usable,
         "confidence": round(confidence, 3),
     })
     return payload
@@ -527,29 +568,77 @@ def observation_metadata(properties: Dict[str, object], observed_value: object) 
     properties = properties or {}
     source = str(
         properties.get("provider")
+        or properties.get("observationSource")
         or properties.get("source")
         or properties.get("quoteSource")
         or ""
     ).strip()
-    observed_at = str(
+    source_as_of = str(
         properties.get("sourceAsOf")
         or properties.get("observedAt")
-        or properties.get("sourceFetchedAt")
-        or properties.get("updatedAt")
         or properties.get("publishedAt")
         or ""
     ).strip()
+    source_fetched_at = str(properties.get("sourceFetchedAt") or properties.get("fetchedAt") or "").strip()
+    observed_at = source_as_of
+    explicit_required = properties.get("freshnessRequired")
+    if explicit_required in (None, ""):
+        freshness_required = bool(
+            source_as_of
+            or source_fetched_at
+            or properties.get("freshnessStatus")
+            or properties.get("dataFreshnessStatus")
+            or properties.get("quoteStatus")
+            or properties.get("valuationFreshnessStatus")
+            or inferred_time_sensitive_observation(properties)
+        )
+    else:
+        freshness_required = bool_value(explicit_required)
     freshness = normalized_freshness_status(
         properties.get("freshnessStatus")
         or properties.get("dataFreshnessStatus")
         or properties.get("quoteStatus")
         or properties.get("valuationFreshnessStatus")
     )
+    maximum_age = int(number(properties.get("maxAgeMinutes"))) or default_observation_max_age(properties)
+    freshness_age = properties.get("freshnessAgeMinutes")
+    if freshness_age in (None, "") and source_as_of:
+        freshness_age = age_minutes(source_as_of)
+    if freshness_required and freshness == "unknown" and freshness_age is not None:
+        freshness = "fresh" if number(freshness_age) <= maximum_age else "stale"
+    if not freshness_required:
+        freshness = "not-applicable"
+    source_timestamp_present = bool(source_as_of)
+    explicit_usable = properties.get("judgementEvidenceUsable")
+    if not freshness_required:
+        judgement_usable = True
+    elif explicit_usable not in (None, ""):
+        judgement_usable = bool_value(explicit_usable) and source_timestamp_present and freshness == "fresh"
+    else:
+        judgement_usable = source_timestamp_present and freshness == "fresh"
+    if not freshness_required:
+        gate_reason = "시간에 따라 바뀌지 않는 구조·정책 근거입니다."
+    elif not source_timestamp_present:
+        gate_reason = "원천 기준시각이 없어 투자 판단 근거로 사용할 수 없습니다."
+    elif freshness != "fresh":
+        gate_reason = str(properties.get("freshnessReason") or "원천 데이터가 허용 시간보다 오래되었습니다.")
+    elif not judgement_usable:
+        gate_reason = str(properties.get("freshnessGateReason") or properties.get("marketSessionReason") or "현재 거래 세션에서는 판단 근거로 사용하지 않습니다.")
+    else:
+        gate_reason = str(properties.get("freshnessGateReason") or "원천 시각과 거래 세션 기준을 통과했습니다.")
     result = {
         "observedValue": observed_value,
         "source": source,
         "observedAt": observed_at,
+        "sourceFetchedAt": source_fetched_at,
+        "sourceTimestampPresent": source_timestamp_present,
+        "freshnessRequired": freshness_required,
         "freshnessStatus": freshness,
+        "freshnessAgeMinutes": freshness_age,
+        "maxAgeMinutes": maximum_age if freshness_required else None,
+        "freshnessGateReason": gate_reason,
+        "marketSessionStatus": str(properties.get("marketSessionStatus") or ""),
+        "judgementEvidenceUsable": judgement_usable,
     }
     reliability = number(properties.get("sourceReliability") or properties.get("reliabilityScore"))
     if reliability > 0:
@@ -565,7 +654,44 @@ def normalized_freshness_status(value: object) -> str:
         return "aging"
     if text in {"stale", "cached", "expired", "unavailable"}:
         return "stale"
+    if text in {"not-applicable", "not_applicable", "n/a", "na", "static"}:
+        return "not-applicable"
     return "unknown"
+
+
+def bool_value(value: object) -> bool:
+    if isinstance(value, bool):
+        return value
+    return str(value or "").strip().lower() in {"1", "true", "yes", "on", "enabled"}
+
+
+def default_observation_max_age(properties: Dict[str, object]) -> int:
+    domain = str((properties or {}).get("observationDomain") or "").strip().lower()
+    if domain in {"trend", "technical"}:
+        return 4320
+    if domain in {"news", "disclosure", "macro"}:
+        return 120
+    if domain == "valuation":
+        return 1440
+    return 10
+
+
+def inferred_time_sensitive_observation(properties: Dict[str, object]) -> bool:
+    semantic_text = " ".join([
+        str((properties or {}).get("observationDomain") or ""),
+        str((properties or {}).get("observationKind") or ""),
+        str((properties or {}).get("observationRelationType") or ""),
+        str((properties or {}).get("tboxClass") or ""),
+    ]).strip().lower().replace("_", "-")
+    time_sensitive_tokens = {
+        "article", "corporate-action", "coverage-gap", "cross-market", "data-quality",
+        "disclosure", "event-impact", "execution-capacity", "execution-metric", "external-signal",
+        "fact-change", "flow", "freshness", "interest-rate", "investor", "key-level",
+        "loss-defense", "macro", "margin-of-safety", "market-proxy-observation", "missing-data",
+        "news", "price", "quote", "recovery", "research-evidence", "smart-money", "technical",
+        "temporal", "trend", "valuation",
+    }
+    return any(token in semantic_text for token in time_sensitive_tokens)
 
 
 def condition_is_grounded(condition: Dict[str, object]) -> bool:
@@ -580,10 +706,14 @@ def aggregate_condition_freshness(conditions: List[Dict[str, object]]) -> str:
     statuses = [
         str(item.get("freshnessStatus") or "unknown")
         for item in conditions or []
-        if condition_is_grounded(item)
+        if condition_is_grounded(item) and bool(item.get("freshnessRequired"))
     ]
+    if not statuses:
+        return "not-applicable"
     if "stale" in statuses:
         return "stale"
+    if "unknown" in statuses:
+        return "unknown"
     if "aging" in statuses:
         return "aging"
     if statuses and all(item == "fresh" for item in statuses):

@@ -78,6 +78,7 @@ def inferencebox_entity_payload(row: Dict[str, object]) -> Dict[str, object]:
 
 
 def inferencebox_relation_payload(row: Dict[str, object]) -> Dict[str, object]:
+    properties = row_properties(row)
     return {
         "type": str(row.get("type") or ""),
         "source": str(row.get("source") or ""),
@@ -106,6 +107,11 @@ def inferencebox_relation_payload(row: Dict[str, object]) -> Dict[str, object]:
         "label": str(row.get("aiInfluenceLabel") or ""),
         "aiInfluenceLabel": str(row.get("aiInfluenceLabel") or ""),
         "inferenceTraceId": str(row.get("inferenceTraceId") or ""),
+        "freshnessStatus": str(properties.get("freshnessStatus") or row.get("freshnessStatus") or ""),
+        "freshnessGateReason": str(properties.get("freshnessGateReason") or row.get("freshnessGateReason") or ""),
+        "evidenceUsableForJudgement": bool(properties.get("evidenceUsableForJudgement")) if "evidenceUsableForJudgement" in properties else (
+            bool(row.get("evidenceUsableForJudgement")) if "evidenceUsableForJudgement" in row else None
+        ),
         "nativeTypeDbReasoned": bool(row.get("nativeTypeDbReasoned")),
         "typedbNativeRuleReasoned": bool(row.get("typedbNativeRuleReasoned")),
         "updatedAt": str(row.get("updatedAt") or ""),
@@ -144,6 +150,11 @@ def inferencebox_trace_payload(row: Dict[str, object]) -> Dict[str, object]:
         "conditionDetailSource": str(properties.get("conditionDetailSource") or row.get("conditionDetailSource") or ""),
         "evidenceCoverage": number_or_none(properties.get("evidenceCoverage") if "evidenceCoverage" in properties else row.get("evidenceCoverage")),
         "freshnessStatus": str(properties.get("freshnessStatus") or row.get("freshnessStatus") or "unknown"),
+        "freshnessGateReason": str(properties.get("freshnessGateReason") or row.get("freshnessGateReason") or ""),
+        "temporalEvidenceCount": int(number_or_none(properties.get("temporalEvidenceCount") if "temporalEvidenceCount" in properties else row.get("temporalEvidenceCount")) or 0),
+        "evidenceUsableForJudgement": bool(properties.get("evidenceUsableForJudgement")) if "evidenceUsableForJudgement" in properties else (
+            bool(row.get("evidenceUsableForJudgement")) if "evidenceUsableForJudgement" in row else None
+        ),
         "nativeTypeDbReasoned": bool(row.get("nativeTypeDbReasoned")),
         "typedbNativeRuleReasoned": bool(row.get("typedbNativeRuleReasoned")),
         "updatedAt": str(row.get("updatedAt") or ""),

@@ -5,6 +5,7 @@ from .market_data import number
 from .ontology_contracts import PortfolioOntology, entity_id
 from .ontology_schema import add_entity, add_relation
 from .portfolio import Position
+from .ontology_observation_quality import position_observation_profiles
 from .portfolio_ontology_catalog import (
     INSIGHT_TYPES,
     OPERATIONAL_PIPELINES,
@@ -308,6 +309,24 @@ def add_operational_world_concepts(
     observed_positions: List[Position],
 ) -> None:
     settings = runtime_settings(runtime_context)
+    session_rows = []
+    seen_sessions = set()
+    for position in observed_positions:
+        quote_profile = position_observation_profiles(position, runtime_context).get("quote") or {}
+        key = "|".join([
+            str(quote_profile.get("market") or ""),
+            str(quote_profile.get("marketSessionStatus") or ""),
+        ])
+        if key in seen_sessions:
+            continue
+        seen_sessions.add(key)
+        session_rows.append({
+            "market": quote_profile.get("market"),
+            "status": quote_profile.get("marketSessionStatus"),
+            "label": quote_profile.get("marketSessionLabel"),
+            "reason": quote_profile.get("marketSessionReason"),
+            "timezone": quote_profile.get("marketSessionTimezone"),
+        })
     collection_policy_id = add_entity(graph, "collection-policy", "adaptive-polling", "적응형 데이터 수집 정책", {
         "tboxClass": "CollectionPolicy",
         "mode": "adaptive",
@@ -318,6 +337,8 @@ def add_operational_world_concepts(
         "mode": str(runtime_context.get("mode") or ""),
         "positionCount": len([item for item in observed_positions if is_holding_position(item)]),
         "watchlistCount": len([item for item in observed_positions if is_watchlist_position(item)]),
+        "asOf": str(runtime_context.get("asOf") or ""),
+        "sessions": session_rows,
     })
     reasoning_id = add_entity(graph, "reasoning-cycle", "ontologyReasoning", "ontologyReasoning", {
         "tboxClass": "ReasoningCycle",

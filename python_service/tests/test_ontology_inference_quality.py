@@ -1,11 +1,13 @@
 import unittest
+from datetime import datetime, timezone
 
 from digital_twin.domain.ontology_contracts import OntologyEntity, OntologyRelation, PortfolioOntology
-from digital_twin.domain.ontology_inference_context import matches_from_inference
+from digital_twin.domain.ontology_inference_context import inference_score_breakdown, matches_from_inference
 from digital_twin.domain.ontology_inference_materializer import materialize_rule_inference
+from digital_twin.domain.ontology_observation_quality import position_observation_profiles
 from digital_twin.domain.ontology_projection_fingerprint import material_graph_fingerprint
 from digital_twin.domain.ontology_rulebox_catalog import default_graph_inference_rules
-from digital_twin.domain.portfolio import AccountSnapshot
+from digital_twin.domain.portfolio import AccountSnapshot, Position
 from digital_twin.domain.portfolio_calculations import portfolio_summary
 from digital_twin.domain.market_data import normalize_position
 from digital_twin.infrastructure.ontology_projection import PortfolioOntologyProjectionRecorder
@@ -48,12 +50,19 @@ class OntologyInferenceQualityTests(unittest.TestCase):
             "source": "holding",
             "profitLossRate": -12.5,
             "updatedAt": "2026-07-20T00:00:00Z",
+            "sourceAsOf": "2026-07-20T00:00:00Z",
+            "freshnessRequired": True,
+            "freshnessStatus": "fresh",
+            "judgementEvidenceUsable": True,
             "quoteStatus": "ok",
             "quoteSource": "Toss",
         })
         risk_budget = OntologyEntity("risk-budget:main", "손실 한도", "risk-budget", {
             "ontologyBox": "ABox",
             "source": "account-policy",
+            "freshnessRequired": False,
+            "freshnessStatus": "not-applicable",
+            "judgementEvidenceUsable": True,
         })
         level = OntologyEntity("key-level:005930:ma20", "20일선", "key-level", {
             "ontologyBox": "ABox",
@@ -96,6 +105,103 @@ class OntologyInferenceQualityTests(unittest.TestCase):
         self.assertEqual("fresh", conditions["ma-break"]["freshnessStatus"])
         self.assertEqual(100.0, trace.properties["evidenceCoverage"])
         self.assertEqual("typedb-match+abox-grounding", trace.properties["conditionDetailSource"])
+        self.assertTrue(trace.properties["evidenceUsableForJudgement"])
+
+    def test_position_observation_profile_requires_provider_clock_and_open_session(self):
+        open_at = datetime(2026, 7, 20, 1, 0, tzinfo=timezone.utc)
+        position = normalize_position({
+            "symbol": "005930",
+            "name": "삼성전자",
+            "market": "KR",
+            "currency": "KRW",
+            "currentPrice": 80000,
+            "quoteSource": "KIS Open API",
+            "dataQuality": "actual",
+            "sourceAsOf": "2026-07-20T00:58:00Z",
+            "sourceFetchedAt": "2026-07-20T00:59:00Z",
+            "indicatorAsOf": "2026-07-17T06:30:00Z",
+            "indicatorFetchedAt": "2026-07-20T00:59:00Z",
+        })
+
+        profiles = position_observation_profiles(position, {"asOf": open_at.isoformat()})
+
+        self.assertEqual("fresh", profiles["quote"]["freshnessStatus"])
+        self.assertEqual("open", profiles["quote"]["marketSessionStatus"])
+        self.assertTrue(profiles["quote"]["sourceTimestampPresent"])
+        self.assertTrue(profiles["quote"]["judgementEvidenceUsable"])
+        self.assertEqual("not-applicable", profiles["static"]["freshnessStatus"])
+
+    def test_position_observation_profile_rejects_fetch_clock_without_source_clock(self):
+        position = Position(
+            "005930",
+            "삼성전자",
+            market="KR",
+            currency="KRW",
+            current_price=80000,
+            quote_source="KIS Open API",
+            source_fetched_at="2026-07-20T00:59:00Z",
+        )
+
+        profile = position_observation_profiles(position, {"asOf": "2026-07-20T01:00:00Z"})["quote"]
+
+        self.assertEqual("unknown", profile["freshnessStatus"])
+        self.assertFalse(profile["sourceTimestampPresent"])
+        self.assertFalse(profile["judgementEvidenceUsable"])
+        self.assertIn("원천 기준시각", profile["freshnessGateReason"])
+
+    def test_position_observation_profile_rejects_closed_market_for_judgement(self):
+        position = Position(
+            "005930",
+            "삼성전자",
+            market="KR",
+            currency="KRW",
+            current_price=80000,
+            quote_source="KIS Open API",
+            source_as_of="2026-07-20T12:59:00Z",
+            source_fetched_at="2026-07-20T12:59:30Z",
+        )
+
+        profile = position_observation_profiles(position, {"asOf": "2026-07-20T13:00:00Z"})["quote"]
+
+        self.assertEqual("fresh", profile["freshnessStatus"])
+        self.assertEqual("closed", profile["marketSessionStatus"])
+        self.assertFalse(profile["judgementEvidenceUsable"])
+
+    def test_inference_score_is_capped_when_temporal_evidence_is_blocked(self):
+        score = inference_score_breakdown(
+            {
+                "type": "HAS_INFERRED_RISK",
+                "ruleId": "graph.loss_guard.breakdown.v1",
+                "actionGroup": "lossControl",
+                "polarity": "risk",
+                "riskImpact": 18,
+                "weight": 0.94,
+            },
+            {
+                "isHolding": True,
+                "profitLossRate": -25,
+                "ma20Distance": -20,
+                "ma60Distance": -12,
+                "dataQualityScore": 100,
+            },
+            {
+                "confidence": 0.94,
+                "evidenceUsableForJudgement": False,
+                "freshnessStatus": "stale",
+                "freshnessGateReason": "원천 가격 기준시각이 오래되었습니다.",
+                "matchedConditions": [{
+                    "conditionId": "holding-loss",
+                    "observedValue": -25,
+                    "freshnessRequired": True,
+                    "freshnessStatus": "stale",
+                }],
+            },
+        )
+
+        self.assertTrue(score["judgementBlocked"])
+        self.assertLessEqual(score["finalStrength"], 35)
+        self.assertLessEqual(score["actionability"], 20)
+        self.assertLessEqual(score["dataConfidence"], 35)
 
     def test_material_fingerprint_ignores_poll_time_but_changes_with_price(self):
         position = normalize_position({

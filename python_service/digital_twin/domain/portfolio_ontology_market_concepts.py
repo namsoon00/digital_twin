@@ -3,6 +3,7 @@ from typing import Dict, List
 from .investor_flow_psychology import investor_flow_psychology
 from .market_data import clamp, investor_net_volume, number
 from .ontology_contracts import PortfolioOntology
+from .ontology_observation_quality import profile_for_domain
 from .ontology_schema import add_entity, add_relation
 from .portfolio import Position, expects_kr_microstructure_signals
 from .portfolio_ontology_catalog import METRIC_CONCEPTS
@@ -138,6 +139,18 @@ def data_quality_score(position: Position) -> float:
 
 def metric_value(position: Position, field_name: str) -> float:
     return number(getattr(position, field_name, 0))
+
+
+def metric_observation_domain(field_name: str) -> str:
+    if field_name in {"ma5", "ma20", "ma60", "ma120", "ma200", "ma5_distance", "ma20_distance", "ma60_distance", "ma20_slope", "ma60_slope"}:
+        return "trend"
+    if field_name in {
+        "volume", "volume_ratio", "trade_strength", "trading_value", "buy_volume", "sell_volume",
+        "bid_ask_imbalance", "foreign_net_volume", "foreign_net_amount", "institution_net_volume",
+        "institution_net_amount", "individual_net_volume", "individual_net_amount",
+    }:
+        return "flow"
+    return "quote"
 
 def metric_relation_properties(field_name: str, value: float, source: str) -> Dict[str, object]:
     properties: Dict[str, object] = {"field": field_name, "source": source}
@@ -458,18 +471,26 @@ def add_market_signal_latency_concepts(graph: PortfolioOntology, stock_id: str, 
     add_relation(graph, latency_id, stock_id, "WEIGHTED_BY_CONFIDENCE", weight=0.76, properties={**properties, "confidenceImpact": "decrease"})
 
 
-def add_metric_concepts(graph: PortfolioOntology, stock_id: str, position: Position, source: str) -> None:
+def add_metric_concepts(
+    graph: PortfolioOntology,
+    stock_id: str,
+    position: Position,
+    source: str,
+    observation_profiles: Dict[str, Dict[str, object]] = None,
+) -> None:
     symbol = symbol_key(position)
     for field_name, label, tbox_class, relation_type, kind, public_key in METRIC_CONCEPTS:
         value = metric_value(position, field_name)
         if value in (None, "", 0):
             continue
+        observation = profile_for_domain(observation_profiles or {}, metric_observation_domain(field_name))
         metric_id = add_entity(graph, kind + "-metric", symbol + ":" + public_key, label, {
             "tboxClass": tbox_class,
             "tboxClasses": metric_tbox_classes(tbox_class, field_name),
             "field": public_key,
             "value": round(value, 4),
-            "source": source,
+            "positionSource": source,
+            **observation,
         })
         properties = metric_relation_properties(field_name, value, source)
         add_relation(
@@ -489,10 +510,12 @@ def add_metric_concepts(graph: PortfolioOntology, stock_id: str, position: Posit
             properties=properties,
         )
     trend_dynamic = trend_dynamic_facts(position)
+    trend_observation = profile_for_domain(observation_profiles or {}, "trend")
     scenario_id = add_entity(graph, "trend-scenario", symbol, str(trend_dynamic.get("state") or "추세 시나리오"), {
         "tboxClass": "TrendSignal",
         "tboxClasses": ["Observation", "TechnicalObservation", "TrendSignal", "Scenario"],
-        "source": source,
+        "positionSource": source,
+        **trend_observation,
         **trend_dynamic,
     })
     trend_properties = {
@@ -504,12 +527,14 @@ def add_metric_concepts(graph: PortfolioOntology, stock_id: str, position: Posit
     add_relation(graph, stock_id, scenario_id, "HAS_OBSERVATION", weight=1.0, properties=trend_properties)
     add_relation(graph, stock_id, scenario_id, "HAS_TECHNICAL_INDICATOR", weight=1.0, properties=trend_properties)
     quality = data_quality_score(position)
+    quote_observation = profile_for_domain(observation_profiles or {}, "quote")
     quality_id = add_entity(graph, "data-quality", symbol, "데이터 품질", {
         "tboxClass": "DataQuality",
         "tboxClasses": metric_tbox_classes("DataQuality", "dataQuality"),
         "qualityScore": round(quality, 2),
         "dataQuality": position.data_quality,
         "quoteStatus": position.quote_status,
+        **quote_observation,
     })
     quality_properties = {"field": "dataQuality", "source": source, "aiInfluenceLabel": "데이터 품질"}
     if quality < 60:
@@ -518,7 +543,13 @@ def add_metric_concepts(graph: PortfolioOntology, stock_id: str, position: Posit
     add_relation(graph, stock_id, quality_id, "HAS_DATA_QUALITY", weight=round(quality / 100, 4), properties=quality_properties)
     add_market_signal_latency_concepts(graph, stock_id, position, source)
 
-def add_data_source_concept(graph: PortfolioOntology, stock_id: str, position: Position, source: str) -> None:
+def add_data_source_concept(
+    graph: PortfolioOntology,
+    stock_id: str,
+    position: Position,
+    source: str,
+    observation_profiles: Dict[str, Dict[str, object]] = None,
+) -> None:
     label = str(position.quote_source or position.data_quality or source or "runtime-data")
     quality = data_quality_score(position)
     source_id = add_entity(graph, "data-source", label, label, {
@@ -527,6 +558,9 @@ def add_data_source_concept(graph: PortfolioOntology, stock_id: str, position: P
         "quoteStatus": position.quote_status,
         "quoteMessage": position.quote_message,
         "dataQuality": position.data_quality,
+        "sourceAsOf": position.source_as_of,
+        "sourceFetchedAt": position.source_fetched_at,
+        "sourceAsOfConfidence": position.source_as_of_confidence,
     })
     add_relation(graph, stock_id, source_id, "OBSERVED_FROM", weight=1.0, properties={"source": source, "basis": "quote-source"})
     add_relation(graph, stock_id, source_id, "HAS_PROVENANCE", weight=1.0, properties={"source": source, "basis": "quote-source"})
@@ -569,9 +603,18 @@ def add_legacy_model_score_concepts(graph: PortfolioOntology, stock_id: str, sym
         add_relation(graph, stock_id, score_id, "HAS_MODEL_SCORE", weight=round(value / 100, 4), properties=properties)
         add_relation(graph, score_id, stock_id, "USED_AS_EVIDENCE", weight=round(value / 100, 4), properties={**properties, "source": "relation-rule"})
 
-def add_price_level_and_liquidity_concepts(graph: PortfolioOntology, stock_id: str, position: Position, source: str) -> None:
+def add_price_level_and_liquidity_concepts(
+    graph: PortfolioOntology,
+    stock_id: str,
+    position: Position,
+    source: str,
+    observation_profiles: Dict[str, Dict[str, object]] = None,
+) -> None:
     symbol = symbol_key(position)
     current_price = number(position.current_price)
+    quote_observation = profile_for_domain(observation_profiles or {}, "quote")
+    trend_observation = profile_for_domain(observation_profiles or {}, "trend")
+    flow_observation = profile_for_domain(observation_profiles or {}, "flow")
     bar_id = ""
     if current_price:
         bar_id = add_entity(graph, "price-bar", symbol + ":latest", (position.name or symbol) + " 현재 가격 봉", {
@@ -583,6 +626,7 @@ def add_price_level_and_liquidity_concepts(graph: PortfolioOntology, stock_id: s
             "volume": round(number(position.volume), 2),
             "volumeRatio": round(number(position.volume_ratio), 3),
             "observedAt": position.updated_at,
+            **quote_observation,
         })
         add_relation(graph, stock_id, bar_id, "HAS_PRICE", weight=1.0, properties={"source": source, "aiInfluenceLabel": "현재 가격 봉"})
         add_relation(graph, stock_id, bar_id, "HAS_OBSERVATION", weight=1.0, properties={"source": source, "aiInfluenceLabel": "현재 가격 봉"})
@@ -594,6 +638,7 @@ def add_price_level_and_liquidity_concepts(graph: PortfolioOntology, stock_id: s
                 "validFrom": position.updated_at,
                 "observedAt": position.updated_at,
                 "source": source,
+                **quote_observation,
             })
             add_relation(graph, bar_id, validity_id, "VALID_DURING", weight=1.0, properties={"source": source, "aiInfluenceLabel": "시세 유효 구간"})
             add_relation(graph, stock_id, validity_id, "HAS_DATA_QUALITY", weight=1.0, properties={"source": source, "aiInfluenceLabel": "시세 유효 구간"})
@@ -605,6 +650,7 @@ def add_price_level_and_liquidity_concepts(graph: PortfolioOntology, stock_id: s
             "symbol": symbol,
             "source": source,
             **flow,
+            **flow_observation,
         })
         flow_props = {"source": source, "aiInfluenceLabel": "거래량/체결/호가 프로파일", "polarity": "context"}
         if number(flow.get("volumeRatio")) >= 1.5 or abs(number(flow.get("bidAskImbalance"))) >= 35:
@@ -622,6 +668,7 @@ def add_price_level_and_liquidity_concepts(graph: PortfolioOntology, stock_id: s
             "source": source,
             "polarity": polarity,
             **smart_money_flow,
+            **flow_observation,
         })
         smart_money_props = {
             "source": source,
@@ -646,6 +693,7 @@ def add_price_level_and_liquidity_concepts(graph: PortfolioOntology, stock_id: s
             "source": source,
             "polarity": polarity,
             **investor_psychology,
+            **flow_observation,
         })
         sentiment_props = {
             "source": source,
@@ -730,6 +778,7 @@ def add_price_level_and_liquidity_concepts(graph: PortfolioOntology, stock_id: s
             "quoteStatus": position.quote_status,
             "quoteMessage": position.quote_message,
             "observedAt": position.updated_at,
+            **quote_observation,
         })
         add_relation(graph, stock_id, stale_id, "HAS_DATA_QUALITY", weight=0.35, properties={"source": source, "polarity": "risk", "opinionImpact": 6.0, "aiInfluenceLabel": "시세 신선도 저하"})
     def technical_distance(level: float, explicit_distance: float) -> float:
@@ -755,6 +804,7 @@ def add_price_level_and_liquidity_concepts(graph: PortfolioOntology, stock_id: s
             "levelType": key,
             "price": round(level, 4),
             "distancePct": round(distance, 2),
+            **trend_observation,
         })
         add_relation(graph, stock_id, level_id, "HAS_TECHNICAL_INDICATOR", weight=1.0, properties={"source": source, "aiInfluenceLabel": label + " 위치"})
         if -1.0 <= distance <= 1.5:

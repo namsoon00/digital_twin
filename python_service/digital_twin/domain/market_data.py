@@ -156,7 +156,7 @@ def candle_close(candle: Dict[str, object]) -> float:
     return number(candle.get("closePrice") or candle.get("close") or candle.get("price"))
 
 
-def technical_indicators_from_candles(candles: Iterable[Dict[str, object]]) -> Dict[str, float]:
+def technical_indicators_from_candles(candles: Iterable[Dict[str, object]]) -> Dict[str, object]:
     ordered = sorted_candles(candles)
     closes = [candle_close(item) for item in ordered if candle_close(item) > 0]
     if not closes:
@@ -172,6 +172,14 @@ def technical_indicators_from_candles(candles: Iterable[Dict[str, object]]) -> D
     ma200 = moving_average(closes, 200)
     prev_ma20 = previous_moving_average(closes, 20)
     prev_ma60 = previous_moving_average(closes, 60)
+    latest_row = ordered[-1] if ordered else {}
+    latest_candle_at = str(
+        latest_row.get("timestamp")
+        or latest_row.get("date")
+        or latest_row.get("tradingDate")
+        or latest_row.get("time")
+        or ""
+    )
     return {
         "currentPrice": latest,
         "ma5": ma5,
@@ -186,6 +194,8 @@ def technical_indicators_from_candles(candles: Iterable[Dict[str, object]]) -> D
         "volume": latest_volume,
         "volumeMa20": volume_ma20,
         "volumeRatio": latest_volume / volume_ma20 if volume_ma20 else 0.0,
+        "sourceAsOf": latest_candle_at,
+        "latestCandleAt": latest_candle_at,
     }
 
 
@@ -564,6 +574,11 @@ def normalize_position(item: Dict[str, object]) -> Position:
         data_quality=str(item.get("dataQuality") or item.get("data_quality") or ""),
         market_signal_coverage=dict(market_signal_coverage or {}) if isinstance(market_signal_coverage, dict) else {},
         updated_at=str(item.get("updatedAt") or item.get("updated_at") or item.get("timestamp") or ""),
+        source_as_of=str(item.get("sourceAsOf") or item.get("source_as_of") or ""),
+        source_fetched_at=str(item.get("sourceFetchedAt") or item.get("source_fetched_at") or item.get("fetchedAt") or ""),
+        source_as_of_confidence=str(item.get("sourceAsOfConfidence") or item.get("source_as_of_confidence") or ""),
+        indicator_as_of=str(item.get("indicatorAsOf") or item.get("indicator_as_of") or ""),
+        indicator_fetched_at=str(item.get("indicatorFetchedAt") or item.get("indicator_fetched_at") or ""),
         market_value=native_market_value,
         market_value_krw=market_value_krw,
         profit_loss=profit_loss,

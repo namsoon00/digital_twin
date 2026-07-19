@@ -413,7 +413,7 @@ def matches_from_inference(
             confidence=round(float(score_breakdown.get("dataConfidence") or 0), 1),
             evidence=evidence,
             missing=[],
-            reference_only=False,
+            reference_only=bool(score_breakdown.get("judgementBlocked")),
             prompt_hint=inference_prompt_hint(source_name, "relation"),
             score_breakdown=score_breakdown,
         ))
@@ -424,7 +424,10 @@ def matches_from_inference(
         if not rule_id:
             continue
         score_policy = (threshold_policy or ontology_threshold_policy_from_context({})).score_breakdown
+        trace_blocked = trace.get("evidenceUsableForJudgement") is False
         score = max(score_policy.trace_floor_score, min(100.0, number(trace.get("confidence")) * 100))
+        if trace_blocked:
+            score = min(score, 35.0)
         matches.append(OntologyRuleMatch(
             rule_id=rule_id,
             label=str(trace.get("label") or rule_id),
@@ -437,7 +440,7 @@ def matches_from_inference(
             confidence=round(number(trace.get("confidence")) * 100, 1),
             evidence=[str(trace.get("label") or rule_id)],
             missing=[],
-            reference_only=False,
+            reference_only=trace_blocked,
             prompt_hint=inference_prompt_hint(source_name, "trace"),
             score_breakdown={
                 "ruleReliability": round(max(0.0, min(100.0, number(trace.get("confidence")) * 100)), 1),
@@ -452,7 +455,11 @@ def matches_from_inference(
                 "thresholdPolicyId": score_policy.policy_id,
                 "thresholdPolicyVersion": score_policy.version,
                 "thresholdPolicySource": score_policy.source,
-                "drivers": ["TypeDB trace confidence"],
+                "evidenceUsableForJudgement": not trace_blocked,
+                "judgementBlocked": trace_blocked,
+                "freshnessStatus": str(trace.get("freshnessStatus") or "unknown"),
+                "freshnessGateReason": str(trace.get("freshnessGateReason") or ""),
+                "drivers": ["시간 민감 근거 신선도 미충족" if trace_blocked else "TypeDB trace confidence"],
             },
         ))
     return sorted(matches, key=lambda item: (-item.strength_score, item.rule_id))
@@ -551,9 +558,10 @@ def trace_evidence_quality(trace: Dict[str, object]) -> Dict[str, float]:
         or str(item.get("relationId") or "").strip()
         or bool(item.get("absenceSatisfied"))
     ]
-    statuses = [str(item.get("freshnessStatus") or "").strip().lower() for item in grounded]
+    temporal = [item for item in grounded if bool(item.get("freshnessRequired"))]
+    statuses = [str(item.get("freshnessStatus") or "").strip().lower() for item in temporal]
     freshness_scores = [
-        100.0 if status == "fresh" else 65.0 if status in {"aging", "delayed"} else 30.0 if status == "stale" else 55.0
+        100.0 if status == "fresh" else 65.0 if status in {"aging", "delayed"} else 10.0 if status == "stale" else 20.0
         for status in statuses
     ]
     reliability_scores = [
@@ -563,7 +571,7 @@ def trace_evidence_quality(trace: Dict[str, object]) -> Dict[str, float]:
     ]
     return {
         "coverage": round(len(grounded) / max(1, len(conditions)) * 100.0, 1),
-        "freshness": round(sum(freshness_scores) / len(freshness_scores), 1) if freshness_scores else 55.0,
+        "freshness": round(sum(freshness_scores) / len(freshness_scores), 1) if freshness_scores else 100.0,
         "sourceReliability": round(sum(reliability_scores) / len(reliability_scores), 1) if reliability_scores else 65.0,
     }
 
@@ -616,6 +624,12 @@ def inference_score_breakdown(
     policy = (threshold_policy or ontology_threshold_policy_from_context({})).score_breakdown
     polarity = str(relation.get("polarity") or "").strip().lower()
     relation_type = str(relation.get("type") or "").strip().upper()
+    action_group = str(relation.get("actionGroup") or "").strip()
+    evidence_usable = trace.get("evidenceUsableForJudgement")
+    if evidence_usable is None and "evidenceUsableForJudgement" in relation:
+        evidence_usable = relation.get("evidenceUsableForJudgement")
+    judgement_blocked = evidence_usable is False and action_group.lower() != "dataquality"
+    freshness_gate_reason = str(trace.get("freshnessGateReason") or relation.get("freshnessGateReason") or "")
     evidence_domains = inference_evidence_domains(relation, trace)
     domain_set = set(evidence_domains)
     applied_fact_fields: List[str] = []
@@ -779,6 +793,10 @@ def inference_score_breakdown(
             20.0,
             100.0,
         )
+    if judgement_blocked:
+        data_confidence = min(data_confidence, 35.0)
+        actionability = min(actionability, 20.0)
+        _add_driver(drivers, "시간 민감 근거 신선도 미충족", 1.0)
 
     novelty = 25.0
     pnl_delta = number(facts.get("profitLossRateDeltaPct"))
@@ -813,6 +831,8 @@ def inference_score_breakdown(
     if data_confidence < policy.data_confidence_penalty_threshold:
         final -= (policy.data_confidence_penalty_threshold - data_confidence) * 0.18
     final = _bounded_score(max(policy.minimum_final_strength, final), 0.0, 100.0)
+    if judgement_blocked:
+        final = min(final, 35.0)
     return {
         "ruleReliability": rule_reliability,
         "riskPressure": risk,
@@ -829,6 +849,10 @@ def inference_score_breakdown(
         "evidenceDomains": evidence_domains,
         "appliedFactFields": list(dict.fromkeys(applied_fact_fields)),
         "evidenceQuality": evidence_quality,
+        "evidenceUsableForJudgement": evidence_usable is not False,
+        "judgementBlocked": judgement_blocked,
+        "freshnessStatus": str(trace.get("freshnessStatus") or relation.get("freshnessStatus") or "unknown"),
+        "freshnessGateReason": freshness_gate_reason,
         "drivers": drivers[:policy.max_drivers],
     }
 
@@ -873,6 +897,13 @@ def aggregate_score_breakdown(matches: List[OntologyRuleMatch], threshold_policy
         "thresholdPolicySource": policy.source,
         "activeRuleCount": len(matches or []),
         "uniqueRuleCount": len({item.rule_id for item in matches or [] if item.rule_id}),
+        "judgementBlockedCount": sum(1 for item in breakdowns if bool(item.get("judgementBlocked"))),
+        "evidenceUsableForJudgement": any(bool(item.get("evidenceUsableForJudgement")) for item in breakdowns),
+        "freshnessGateReasons": list(dict.fromkeys(
+            str(item.get("freshnessGateReason") or "")
+            for item in breakdowns
+            if str(item.get("freshnessGateReason") or "").strip()
+        ))[:3],
         "drivers": drivers,
     }
 

@@ -159,10 +159,11 @@ def freshness_record(
     data_quality: object = "",
     now=None,
     max_age_minutes: int = 0,
+    require_source_as_of: bool = False,
 ) -> Dict[str, object]:
     settings = settings or {}
     max_age = int(max_age_minutes or max_age_minutes_for_message_type(message_type, settings))
-    timestamp = source_fetched_at or source_as_of
+    timestamp = source_as_of or ("" if require_source_as_of else source_fetched_at)
     age = age_minutes(timestamp, now=now)
     quality = str(data_quality or "").strip()
     if age is None:
@@ -182,6 +183,8 @@ def freshness_record(
         "maxAgeMinutes": max_age,
         "sourceFetchedAt": str(source_fetched_at or ""),
         "sourceAsOf": str(source_as_of or ""),
+        "sourceTimestampPresent": bool(source_as_of or (source_fetched_at and not require_source_as_of)),
+        "sourceAsOfRequired": bool(require_source_as_of),
         "dataQuality": quality,
         "checkedAt": utc_iso(now),
     }
@@ -225,6 +228,7 @@ def kis_stage_freshness_records(position: Dict[str, object], message_type: str, 
                 data_quality=item.get("dataQuality") or item.get("data_quality") or "",
                 now=now,
                 max_age_minutes=max_age_minutes_for_kis_stage(str(stage), settings),
+                require_source_as_of=True,
             )
             record["stage"] = str(stage or "")
             record["fields"] = list(fields or [])
@@ -276,13 +280,19 @@ def kis_stage_freshness_records(position: Dict[str, object], message_type: str, 
 
 def freshness_from_position(position: Dict[str, object], message_type: str, settings: Dict[str, object] = None, now=None) -> Dict[str, object]:
     item = position or {}
+    has_explicit_source_clock = any(key in item for key in ["sourceAsOf", "source_as_of", "sourceFetchedAt", "source_fetched_at"])
+    source_as_of = item.get("source_as_of") or item.get("sourceAsOf")
+    if not has_explicit_source_clock:
+        source_as_of = item.get("updated_at") or item.get("updatedAt")
     base = freshness_record(
         item.get("quote_source") or item.get("quoteSource") or item.get("source") or "position",
         message_type,
         settings=settings,
-        source_fetched_at=item.get("updated_at") or item.get("updatedAt"),
+        source_fetched_at=item.get("source_fetched_at") or item.get("sourceFetchedAt"),
+        source_as_of=source_as_of,
         data_quality=item.get("data_quality") or item.get("dataQuality"),
         now=now,
+        require_source_as_of=True,
     )
     records = [base]
     records.extend(kis_stage_freshness_records(item, message_type, settings=settings, now=now))

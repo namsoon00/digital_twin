@@ -93,6 +93,60 @@ def event_relation_properties(item: object) -> Dict[str, object]:
     return props
 
 
+def add_governed_claim_concepts(
+    graph: PortfolioOntology,
+    stock_id: str,
+    item: object,
+    raw_payload: Dict[str, object],
+) -> None:
+    governance = raw_payload.get("evidenceGovernance") if isinstance(raw_payload.get("evidenceGovernance"), dict) else {}
+    if not governance.get("investmentJudgmentEligible"):
+        return
+    claim_key = str(governance.get("claimId") or "").strip()
+    evidence_key = str(getattr(item, "evidence_id", "") or "").strip()
+    if not claim_key or not evidence_key:
+        return
+    statement = str(getattr(item, "summary", "") or getattr(item, "title", "") or evidence_key)
+    source = str(getattr(item, "source", "") or "unknown")
+    document_id = add_entity(graph, "retrieved-document", evidence_key, statement, {
+        "tboxClass": "RetrievedDocument",
+        "source": source,
+        "sourceUrl": getattr(item, "url", ""),
+        "publishedAt": getattr(item, "published_at", ""),
+        "observedAt": getattr(item, "observed_at", ""),
+    })
+    claim_id = add_entity(graph, "verified-claim", claim_key, statement, {
+        "tboxClass": "VerifiedClaim",
+        "verificationStatus": governance.get("verificationStatus"),
+        "entityResolutionStatus": governance.get("entityResolutionStatus"),
+        "confidence": getattr(item, "confidence", 0),
+        "evidenceId": evidence_key,
+        "checkedAt": governance.get("checkedAt"),
+        "investmentJudgmentEligible": True,
+    })
+    assessment_id = add_entity(graph, "evidence-assessment", claim_key, "근거 품질 검증", {
+        "tboxClass": "EvidenceAssessment",
+        "verificationStatus": governance.get("verificationStatus"),
+        "entityResolutionStatus": governance.get("entityResolutionStatus"),
+        "confidence": getattr(item, "confidence", 0),
+        "reasons": governance.get("reasons") or [],
+        "sourcePolicy": governance.get("sourcePolicy"),
+    })
+    source_id = add_entity(graph, "research-source", source, source, {
+        "tboxClass": "DataSource",
+        "sourceUrl": getattr(item, "url", ""),
+    })
+    relation_props = {
+        "source": "evidence-governance",
+        "verificationStatus": governance.get("verificationStatus"),
+        "investmentJudgmentEligible": True,
+    }
+    add_relation(graph, document_id, source_id, "RETRIEVED_FROM", weight=1.0, evidence_ids=[evidence_key], properties=relation_props)
+    add_relation(graph, document_id, claim_id, "ASSERTS", weight=1.0, evidence_ids=[evidence_key], properties=relation_props)
+    add_relation(graph, claim_id, stock_id, "RESOLVES_TO", weight=1.0, evidence_ids=[evidence_key], properties=relation_props)
+    add_relation(graph, claim_id, assessment_id, "VERIFIED_BY", weight=1.0, evidence_ids=[evidence_key], properties=relation_props)
+
+
 def evidence_document_shape(item: object) -> Dict[str, object]:
     kind = str(getattr(item, "kind", "") or "").lower()
     source = str(getattr(item, "source", "") or "").lower()
@@ -360,7 +414,10 @@ def add_research_evidence_concepts(
             "sourceKind": raw_payload.get("sourceKind"),
             "sourcePlatform": raw_payload.get("sourcePlatform"),
             "qualityGate": raw_payload.get("qualityGate"),
+            "evidenceGovernance": raw_payload.get("evidenceGovernance"),
+            "investmentJudgmentEligible": bool((raw_payload.get("evidenceGovernance") or {}).get("investmentJudgmentEligible")) if isinstance(raw_payload.get("evidenceGovernance"), dict) else False,
         })
+        add_governed_claim_concepts(graph, stock_id, item, raw_payload)
         graph.evidence.append(OntologyEvidence(
             item.evidence_id,
             stock_id,

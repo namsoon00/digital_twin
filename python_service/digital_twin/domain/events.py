@@ -26,6 +26,9 @@ CHAT_MESSAGE_APPENDED = "chat.message_appended"
 SYMBOL_UNIVERSE_REFRESHED = "symbol_universe.refreshed"
 MARKET_DATA_COLLECTED = "market_data.collected"
 RESEARCH_EVIDENCE_COLLECTED = "research_evidence.collected"
+HYPOTHESIS_RESEARCH_COMPLETED = "investment_hypothesis.research_completed"
+HYPOTHESIS_PROPOSED = "investment_hypothesis.proposed"
+HYPOTHESIS_REVIEWED = "investment_hypothesis.reviewed"
 ONTOLOGY_REASONING_REQUESTED = "ontology.reasoning_requested"
 ONTOLOGY_REASONING_COMPLETED = "ontology.reasoning_completed"
 INVESTMENT_CALENDAR_EVENT_SAVED = "investment_calendar.event_saved"
@@ -274,6 +277,43 @@ def research_evidence_collected_event(payload: Dict[str, object]) -> DomainEvent
             "materialityAssessments": list(payload.get("materialityAssessments") or [])[:100],
             "providers": list(payload.get("providers") or [])[:20],
         },
+    )
+
+
+def hypothesis_research_completed_event(payload: Dict[str, object]) -> DomainEvent:
+    symbol = str(payload.get("symbol") or "").upper().strip()
+    return DomainEvent(
+        name=HYPOTHESIS_RESEARCH_COMPLETED,
+        aggregate_id="hypothesis-research:" + (symbol or str(payload.get("runId") or "unknown")),
+        payload={
+            "runId": str(payload.get("runId") or ""),
+            "questionId": str(payload.get("questionId") or ""),
+            "accountId": str(payload.get("accountId") or ""),
+            "symbol": symbol,
+            "symbols": [symbol] if symbol else [],
+            "status": str(payload.get("status") or ""),
+            "changedCount": int(payload.get("changedEvidenceCount") or 0),
+            "verifiedClaimCount": len(payload.get("verifiedClaims") or []),
+            "rejectedClaimCount": len(payload.get("rejectedClaims") or []),
+            "factTypes": ["ResearchEvidence", "VerifiedClaim", "VerificationRun"],
+            "source": "investment-brain-on-demand-research",
+        },
+    )
+
+
+def hypothesis_proposed_event(payload: Dict[str, object]) -> DomainEvent:
+    return DomainEvent(
+        name=HYPOTHESIS_PROPOSED,
+        aggregate_id=str(payload.get("proposalId") or "hypothesis-proposal"),
+        payload=dict(payload or {}),
+    )
+
+
+def hypothesis_reviewed_event(payload: Dict[str, object]) -> DomainEvent:
+    return DomainEvent(
+        name=HYPOTHESIS_REVIEWED,
+        aggregate_id=str(payload.get("proposalId") or "hypothesis-proposal"),
+        payload=dict(payload or {}),
     )
 
 

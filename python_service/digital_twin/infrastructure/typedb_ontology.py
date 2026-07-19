@@ -2750,7 +2750,8 @@ relation ontology-assertion,
         has_materialized_relations = materialized_relation_count > 0
         saved_ok = bool(save_result.get("saved"))
         prune_result = self.prune_inferencebox_generations(generation_id, keep_count=keep_generation_count) if saved_ok and prune_requested else {}
-        inferencebox_payload = self.inferencebox_snapshot_from_graph(inference_graph, target_symbols, 80)
+        inferencebox_limit = max(80, min(500, int(number_or_none(payload.get("inferenceSnapshotLimit")) or 500)))
+        inferencebox_payload = self.inferencebox_snapshot_from_graph(inference_graph, target_symbols, inferencebox_limit)
         return {
             "configured": True,
             "status": ("ok" if has_materialized_relations else "empty") if saved_ok else str(save_result.get("status") or "error"),

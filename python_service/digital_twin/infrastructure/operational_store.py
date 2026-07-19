@@ -11,6 +11,7 @@ from .mysql_operational import (
     MySQLInvestmentCalendarStore,
     MySQLInvestmentStrategyProposalStore,
     MySQLInvestmentDecisionEpisodeStore,
+    MySQLInvestmentResearchStore,
     MySQLMarketQuoteCache,
     MySQLModelReviewJobStore,
     MySQLMonitorStore,
@@ -136,6 +137,11 @@ def investment_strategy_proposal_store(settings: Dict[str, str] = None):
 def investment_decision_episode_store(settings: Dict[str, str] = None):
     configured = configured_settings(settings)
     return MySQLInvestmentDecisionEpisodeStore(configured)
+
+
+def investment_research_store(settings: Dict[str, str] = None):
+    configured = configured_settings(settings)
+    return MySQLInvestmentResearchStore(configured)
 
 
 def monitor_account_job_store(settings: Dict[str, str] = None):

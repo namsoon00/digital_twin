@@ -5,7 +5,8 @@ from typing import Callable, Dict, Iterable, List, Optional, Protocol, Tuple, ru
 from .accounts import AccountConfig
 from .events import DomainEvent
 from .investment_research import NewsCollectionTarget, ResearchEvidence
-from .investment_brain import DecisionEpisode, LearningProposal, ObservedOutcome
+from .investment_brain import DecisionEpisode, LearningProposal, NovelHypothesisProposal, ObservedOutcome
+from .investment_evidence_governance import ResearchRun
 from .investment_calendar import InvestmentCalendarEvent
 from .ontology_contracts import PortfolioOntology
 from .portfolio import AccountSnapshot, AlertEvent, Position
@@ -240,6 +241,23 @@ class DecisionEpisodeRepository(Protocol):
         ...
 
 
+class InvestmentResearchRepository(Protocol):
+    def save_run(self, run: ResearchRun) -> ResearchRun:
+        ...
+
+    def list_runs(self, account_id: str = "", symbol: str = "", limit: int = 50) -> List[Dict[str, object]]:
+        ...
+
+    def save_hypothesis_proposal(self, proposal: NovelHypothesisProposal) -> NovelHypothesisProposal:
+        ...
+
+    def list_hypothesis_proposals(self, status: str = "", symbol: str = "", limit: int = 50) -> List[Dict[str, object]]:
+        ...
+
+    def review_hypothesis_proposal(self, proposal_id: str, status: str, note: str = "") -> Dict[str, object]:
+        ...
+
+
 class SymbolUniverseRepository(Protocol):
     def upsert_many(self, symbols: Iterable[ListedSymbol]) -> int:
         ...
@@ -354,7 +372,11 @@ class ResearchEvidenceRepository(Protocol):
 
 
 class ResearchEvidenceGateway(Protocol):
-    def collect_for_target(self, target: NewsCollectionTarget) -> Tuple[List[ResearchEvidence], List[Dict[str, object]]]:
+    def collect_for_target(
+        self,
+        target: NewsCollectionTarget,
+        source_types: Iterable[str] = None,
+    ) -> Tuple[List[ResearchEvidence], List[Dict[str, object]]]:
         ...
 
     def providers(self) -> List[str]:

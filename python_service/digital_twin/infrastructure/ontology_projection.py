@@ -16,12 +16,14 @@ class PortfolioOntologyProjectionRecorder:
         repository,
         quality_store=None,
         decision_episode_store=None,
+        hypothesis_proposal_store=None,
         settings: Dict[str, object] = None,
         source: str = "monitoring",
     ):
         self.repository = repository
         self.quality_store = quality_store
         self.decision_episode_store = decision_episode_store
+        self.hypothesis_proposal_store = hypothesis_proposal_store
         self.settings = dict(settings or {})
         self.source = source or "monitoring"
 
@@ -191,6 +193,7 @@ class PortfolioOntologyProjectionRecorder:
             execution = self.repository.run_rulebox({
                 "symbols": self.snapshot_symbols(snapshot),
                 "pruneOldGenerations": True,
+                "inferenceSnapshotLimit": self.inference_snapshot_limit(),
             })
         except Exception as error:  # noqa: BLE001 - graph inference must not block monitoring.
             execution = {"status": "error", "reason": str(error)[:180]}
@@ -212,7 +215,10 @@ class PortfolioOntologyProjectionRecorder:
         if not hasattr(self.repository, "inferencebox_snapshot"):
             return
         try:
-            snapshot_payload = self.repository.inferencebox_snapshot(symbols=self.snapshot_symbols(snapshot), limit=80)
+            snapshot_payload = self.repository.inferencebox_snapshot(
+                symbols=self.snapshot_symbols(snapshot),
+                limit=self.inference_snapshot_limit(),
+            )
         except Exception as error:  # noqa: BLE001 - snapshot read is best effort.
             snapshot_payload = {"status": "error", "reason": str(error)[:180], "graphStore": active_key}
         if isinstance(snapshot_payload, dict):
@@ -228,6 +234,13 @@ class PortfolioOntologyProjectionRecorder:
             if symbol and symbol not in symbols:
                 symbols.append(symbol)
         return symbols
+
+    def inference_snapshot_limit(self) -> int:
+        try:
+            value = int(float(str(self.settings.get("investmentBrainInferenceBoxLimit") or 500)))
+        except (TypeError, ValueError):
+            value = 500
+        return max(80, min(500, value))
 
     def has_projectable_data(self, snapshot: AccountSnapshot) -> bool:
         if snapshot.has_live_account_data():
@@ -283,6 +296,7 @@ class PortfolioOntologyProjectionRecorder:
             "metadata": metadata,
             "decisionItems": [item.to_dict() for item in snapshot.decisions],
             "decisionEpisodes": decision_episodes,
+            "hypothesisProposals": self.hypothesis_proposal_context(snapshot),
         }
 
     def decision_episode_context(self, snapshot: AccountSnapshot) -> List[Dict[str, object]]:
@@ -318,3 +332,23 @@ class PortfolioOntologyProjectionRecorder:
             except Exception:  # noqa: BLE001 - projection remains valid without historical memory.
                 continue
         return episodes[:30]
+
+    def hypothesis_proposal_context(self, snapshot: AccountSnapshot) -> List[Dict[str, object]]:
+        if not self.hypothesis_proposal_store or not hasattr(self.hypothesis_proposal_store, "list_hypothesis_proposals"):
+            return []
+        symbols = {
+            str(getattr(position, "symbol", "") or "").upper().strip()
+            for position in list(snapshot.positions or []) + list(snapshot.watchlist or [])
+            if str(getattr(position, "symbol", "") or "").strip()
+        }
+        try:
+            rows = self.hypothesis_proposal_store.list_hypothesis_proposals("", "", 200)
+        except Exception:  # noqa: BLE001 - proposal memory must not block ABox projection.
+            return []
+        return [
+            dict(item)
+            for item in rows or []
+            if isinstance(item, dict)
+            and str(item.get("accountId") or "") == str(snapshot.account_id or "")
+            and str(item.get("symbol") or "").upper().strip() in symbols
+        ]

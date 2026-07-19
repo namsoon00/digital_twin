@@ -47,7 +47,7 @@ Required flow for new investment behavior:
    AI investment opinions should receive the relevant TBox vocabulary, ABox facts, InferenceBox relations, matched TypeDB schema function traces, evidence subgraph, missing data, freshness, provenance, and guardrails. Prompt builders should not invent facts that are absent from the graph; missing data should be explicit.
 
 9. Compare competing hypotheses before choosing an action.
-   A single highest-scoring relation or rule is a baseline candidate, not the final investment opinion. Every AI investment judgement must receive and compare at least risk-continuation, support/recovery, and uncertainty hypotheses. Each hypothesis must carry graph evidence IDs, counter-evidence IDs, assumptions, invalidation conditions, horizon, and a provisional confidence. The selected hypothesis and unresolved questions must be part of the structured AI response.
+   A single highest-scoring relation or rule is a baseline candidate, not the final investment opinion. Create one current-situation hypothesis from each relevant active TypeDB rule and causal trace, then keep at least one evidence-sufficiency or counterfactual safety hypothesis when the graph does not provide enough independent alternatives. Do not maintain a fixed Python catalog of risk/recovery claims. Each hypothesis must carry an approved template ID, graph evidence IDs, counter-evidence IDs, causal trace IDs, assumptions, invalidation conditions, horizon, verification status, and a provisional confidence. The selected hypothesis and unresolved questions must be part of the structured AI response.
 
 10. Make data quality part of the graph.
    Missing feeds, stale quotes, source errors, partial symbol coverage, unmatched news, and disabled vendors should become `DataQuality`, `DataFreshness`, `Provenance`, `DataSource`, `CoverageGap`, or equivalent ABox facts. They should affect confidence and dispatch policy without being hidden as logs only.
@@ -56,13 +56,16 @@ Required flow for new investment behavior:
     Save every final AI investment judgement as a `DecisionEpisode` with its `InvestmentQuestion`, `HypothesisSet`, selected hypothesis, inference generation, evidence IDs, and facts at decision time. Evaluate later ontology observations at configured horizons and project `ObservedOutcome` facts back into the ABox. Do not count repeated observations of one decision as multiple independent decisions.
 
 12. Keep learning proposals under governance.
-    Repeatedly contradicted decisions may create a `LearningProposal`, but they must never edit TypeDB schema functions, RuleBox data, prompts, or collection policy automatically. Promotion requires historical replay, TypeDB rule preview, explicit review, and deployment audit. Runtime learning is proposal generation, not unsupervised production mutation.
+    Repeatedly contradicted decisions may create a `LearningProposal`. AI research may also create a `NovelHypothesisProposal` when approved active TypeDB templates cannot explain the verified evidence. Neither proposal may edit TypeDB schema functions, RuleBox data, prompts, or collection policy automatically. Approval means that the proposal is eligible for rule design, not deployed. Promotion requires evidence review, historical replay, TypeDB rule preview, explicit review, and deployment audit. Runtime learning is proposal generation, not unsupervised production mutation.
 
 13. Bound Graph RAG by the question.
     Store the complete graph and audit context, but send AI only the relevant subject, top active relations, evidence/counter-evidence subgraph, provenance, freshness, competing hypotheses, and research plan. Remove duplicated full snapshots and repeated rule payloads. Prompt-size limits are an architectural constraint; silently falling back because an unbounded graph exceeded an AI input limit is a defect.
 
 14. Test the ontology contract.
     Tests for new investment behavior should verify both the source use case and the graph result: expected ABox classes, relation types, provenance/freshness fields, TypeDB schema function materialization or InferenceBox context, AI prompt payload, and final `investmentInsight` metadata. Tests should also verify the blocked path when graph inference is missing.
+
+15. Research only when a hypothesis has a decision-changing evidence gap.
+    Reuse verified cached evidence first. When the active hypotheses conflict or require missing evidence, create bounded `ResearchTask` records and collect only the source types required by those hypotheses. Resolve the target entity, enforce source reliability and freshness, and separate verified and rejected claims. Only verified claims may enter the investment ABox. If verified evidence changes, rebuild the complete account snapshot, project it through the graph repository, run TypeDB schema functions, and ask the AI judge only after the new InferenceBox generation is available. Research failures must preserve the last usable generation and remain visible in the audit record.
 
 Acceptable non-ontology code:
 
@@ -80,10 +83,12 @@ Runtime investment reasoning has one primary path:
 3. `typedb_ontology.py` stores the ABox in TypeDB.
 4. TypeDB schema functions read TypeDB ABox facts and materialize generation-scoped InferenceBox entities, relations, and traces.
 5. `ontology_inference_context.py` reads the active InferenceBox context for monitoring, AI prompts, diagnostics, and notification metadata.
-6. The investment brain creates an `InvestmentQuestion`, a research plan, and at least three competing hypotheses from the question-specific InferenceBox subgraph.
-7. AI compares support, counter-evidence, assumptions, invalidation conditions, provenance, freshness, and missing data before selecting a hypothesis and action.
-8. The final opinion is stored as a `DecisionEpisode`; later observations become `ObservedOutcome` ABox facts and may create review-only learning proposals.
-9. Notification delivery applies cooldown, novelty, market-hours, and channel policy after investment meaning is already decided.
+6. The investment brain instantiates current hypotheses from approved active TypeDB rules and causal traces, and adds only the minimum safety hypotheses needed for evidence sufficiency or counterfactual comparison.
+7. The research orchestrator reuses cached verified claims, performs bounded on-demand collection for decision-changing gaps, rejects stale/unresolved/low-quality evidence, and persists an auditable `ResearchRun`.
+8. New verified evidence triggers a complete ABox refresh and a new TypeDB InferenceBox generation; unchanged or rejected evidence does not create a false new fact.
+9. AI compares support, counter-evidence, assumptions, invalidation conditions, provenance, freshness, research verification, and missing data before selecting a hypothesis and action.
+10. The final opinion is stored as a `DecisionEpisode`; later observations become `ObservedOutcome` ABox facts and may create review-only learning or novel-hypothesis proposals.
+11. Notification delivery applies cooldown, novelty, market-hours, and channel policy after investment meaning is already decided.
 
 Implementation notes:
 
@@ -111,6 +116,7 @@ Domain:
 - `python_service/digital_twin/domain/accounts.py`: account entity/value data
 - `python_service/digital_twin/domain/portfolio.py`: positions, portfolio summaries, decisions, alert events
 - `python_service/digital_twin/domain/investment_brain.py`: investment questions, research plans, competing hypotheses, decision episodes, observed outcomes, and governed learning proposals
+- `python_service/digital_twin/domain/investment_evidence_governance.py`: evidence claims, entity resolution, freshness/source quality verification, and research-run audit contracts
 - `python_service/digital_twin/domain/analytics.py`: compatibility facade for legacy analytics imports only
 - `python_service/digital_twin/domain/market_data.py`: market-data normalization, symbol hints, moving-average helpers, and numeric coercion
 - `python_service/digital_twin/domain/portfolio_calculations.py`: portfolio exposure, FX conversion, and summary calculations
@@ -149,6 +155,8 @@ Application:
 - `python_service/digital_twin/application/flow_lens_service.py`: flow-lens snapshot use case with injected account, snapshot, settings, FX, and symbol dependencies
 - `python_service/digital_twin/application/monitoring_service.py`: one monitoring cycle use case
 - `python_service/digital_twin/application/scheduler.py`: long-running scheduling loop around a runner
+- `python_service/digital_twin/application/investment_research_orchestration_service.py`: cache-first bounded hypothesis research, verified-evidence persistence, and re-reasoning request orchestration
+- `python_service/digital_twin/application/hypothesis_proposal_service.py`: evidence-bound novel hypothesis proposals with mandatory human governance
 
 Infrastructure:
 
@@ -163,6 +171,7 @@ Infrastructure:
 - `python_service/digital_twin/infrastructure/event_bus.py`: synchronous event bus with operational event-log default
 - `python_service/digital_twin/infrastructure/model_review_queue.py`: async model-review queue interface fed by decision-change events
 - `python_service/digital_twin/infrastructure/model_reviewer.py`: Codex/LLM command adapter with local fallback
+- `python_service/digital_twin/infrastructure/investment_research_gateway.py`: hypothesis-scoped composite gateway over existing official/market APIs and full-text news research
 - `python_service/digital_twin/infrastructure/ontology_projection.py`: snapshot-to-ontology projection recorder that saves graph-store projections and quality samples without making monitoring application services own graph persistence details
 - `python_service/digital_twin/infrastructure/ontology_graph_store.py`: graph-store composition root; runtime code should import this factory instead of constructing the database adapter directly
 - `python_service/digital_twin/infrastructure/typedb_ontology.py`: TypeDB graph-store adapter; production InferenceBox output is materialized from TypeDB ABox facts and TypeDB schema functions into TypeDB InferenceBox, not from a non-TypeDB runtime fallback. InferenceBox writes must be generation-scoped so a failed materialization does not erase the last usable graph-backed judgement.

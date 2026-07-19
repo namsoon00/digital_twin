@@ -6,8 +6,15 @@ import re
 from typing import Dict, Iterable, List, Optional
 
 
-INVESTMENT_BRAIN_VERSION = "ontology-investment-brain-v1"
-HYPOTHESIS_SET_VERSION = "competing-investment-hypotheses-v1"
+INVESTMENT_BRAIN_VERSION = "ontology-investment-brain-v2"
+HYPOTHESIS_SET_VERSION = "typedb-causal-hypotheses-v2"
+SYSTEM_ABSTENTION_TEMPLATE_ID = "hypothesis-template:system.evidence-sufficiency.v1"
+META_INFERENCE_RELATION_TYPES = {
+    "EXPLAINED_BY_TRACE",
+    "HAS_INFERENCE_TRACE",
+    "HAS_SIGNAL_CONFLICT",
+    "HAS_WHY_NOW",
+}
 
 
 def utc_now_iso() -> str:
@@ -86,6 +93,11 @@ class ResearchTask:
     purpose: str
     required_evidence_types: List[str] = field(default_factory=list)
     related_hypothesis_ids: List[str] = field(default_factory=list)
+    source_types: List[str] = field(default_factory=list)
+    max_age_minutes: int = 180
+    decision_impact: float = 0.0
+    execution_mode: str = "cache-first-on-demand"
+    result_evidence_ids: List[str] = field(default_factory=list)
     priority: int = 50
     status: str = "ready"
 
@@ -99,6 +111,8 @@ class ResearchPlan:
     question_id: str
     tasks: List[ResearchTask] = field(default_factory=list)
     unresolved_questions: List[str] = field(default_factory=list)
+    max_rounds: int = 2
+    status: str = "ready"
     created_at: str = field(default_factory=utc_now_iso)
 
     def to_dict(self) -> Dict[str, object]:
@@ -108,8 +122,26 @@ class ResearchPlan:
 
 
 @dataclass(frozen=True)
+class HypothesisTemplate:
+    template_id: str
+    label: str
+    version: str
+    source_rule_ids: List[str]
+    stance: str = "context"
+    required_evidence_types: List[str] = field(default_factory=list)
+    causal_path_pattern: List[str] = field(default_factory=list)
+    approval_status: str = "approved-active"
+    source: str = "typedb-native-rule"
+
+    def to_dict(self) -> Dict[str, object]:
+        return camelize(asdict(self))
+
+
+@dataclass(frozen=True)
 class InvestmentHypothesis:
     hypothesis_id: str
+    template_id: str
+    template_label: str
     claim: str
     stance: str
     horizon: str
@@ -120,6 +152,10 @@ class InvestmentHypothesis:
     counter_rule_ids: List[str] = field(default_factory=list)
     assumptions: List[str] = field(default_factory=list)
     invalidation_conditions: List[str] = field(default_factory=list)
+    causal_path_ids: List[str] = field(default_factory=list)
+    required_evidence_types: List[str] = field(default_factory=list)
+    approval_status: str = "approved-active"
+    verification_status: str = "unverified-current-generation"
     status: str = "candidate"
 
     def to_dict(self) -> Dict[str, object]:
@@ -180,6 +216,8 @@ class DecisionEpisode:
     status: str = "active"
     source: str = "notification-ai"
     facts_at_decision: Dict[str, object] = field(default_factory=dict)
+    research_plan: Dict[str, object] = field(default_factory=dict)
+    research_audit: Dict[str, object] = field(default_factory=dict)
     outcomes: List[ObservedOutcome] = field(default_factory=list)
 
     def to_dict(self) -> Dict[str, object]:
@@ -187,6 +225,8 @@ class DecisionEpisode:
         payload["engineVersion"] = INVESTMENT_BRAIN_VERSION
         payload["question"] = self.question.to_dict()
         payload["hypothesisSet"] = self.hypothesis_set.to_dict()
+        payload["researchPlan"] = dict(self.research_plan or {})
+        payload["researchAudit"] = dict(self.research_audit or {})
         payload["outcomes"] = [item.to_dict() for item in self.outcomes]
         return payload
 
@@ -212,6 +252,8 @@ class DecisionEpisode:
                 continue
             hypotheses.append(InvestmentHypothesis(
                 hypothesis_id=str(item.get("hypothesisId") or item.get("hypothesis_id") or ""),
+                template_id=str(item.get("templateId") or item.get("template_id") or ""),
+                template_label=str(item.get("templateLabel") or item.get("template_label") or ""),
                 claim=str(item.get("claim") or ""),
                 stance=str(item.get("stance") or "uncertain"),
                 horizon=str(item.get("horizon") or "multi-horizon"),
@@ -222,6 +264,10 @@ class DecisionEpisode:
                 counter_rule_ids=list(item.get("counterRuleIds") or item.get("counter_rule_ids") or []),
                 assumptions=list(item.get("assumptions") or []),
                 invalidation_conditions=list(item.get("invalidationConditions") or item.get("invalidation_conditions") or []),
+                causal_path_ids=list(item.get("causalPathIds") or item.get("causal_path_ids") or []),
+                required_evidence_types=list(item.get("requiredEvidenceTypes") or item.get("required_evidence_types") or []),
+                approval_status=str(item.get("approvalStatus") or item.get("approval_status") or "approved-active"),
+                verification_status=str(item.get("verificationStatus") or item.get("verification_status") or "unverified-current-generation"),
                 status=str(item.get("status") or "candidate"),
             ))
         hypothesis_set = HypothesisSet(
@@ -269,6 +315,8 @@ class DecisionEpisode:
             status=str(payload.get("status") or "active"),
             source=str(payload.get("source") or "notification-ai"),
             facts_at_decision=dict(payload.get("factsAtDecision") or {}),
+            research_plan=dict(payload.get("researchPlan") or {}),
+            research_audit=dict(payload.get("researchAudit") or {}),
             outcomes=outcomes,
         )
 
@@ -282,6 +330,27 @@ class LearningProposal:
     affected_rule_ids: List[str]
     proposed_change: Dict[str, object]
     status: str = "review-required"
+    created_at: str = field(default_factory=utc_now_iso)
+
+    def to_dict(self) -> Dict[str, object]:
+        return camelize(asdict(self))
+
+
+@dataclass(frozen=True)
+class NovelHypothesisProposal:
+    proposal_id: str
+    account_id: str
+    symbol: str
+    title: str
+    claim: str
+    causal_path: List[str]
+    supporting_evidence_ids: List[str]
+    counter_evidence_ids: List[str]
+    required_evidence_types: List[str]
+    invalidation_conditions: List[str]
+    source_question_id: str = ""
+    status: str = "review-required"
+    source: str = "ai-research-planner"
     created_at: str = field(default_factory=utc_now_iso)
 
     def to_dict(self) -> Dict[str, object]:
@@ -341,14 +410,17 @@ def hypothesis_set_from_relation_context(
         subject=subject,
         facts=facts,
         relations=(context.get("graphStoreInference") or {}).get("relations") if isinstance(context.get("graphStoreInference"), dict) else [],
+        traces=(context.get("graphStoreInference") or {}).get("traces") if isinstance(context.get("graphStoreInference"), dict) else [],
         matches=context.get("activeRules") or context.get("matchedRules") or [],
         signal_conflicts=context.get("signalConflicts") or {},
         missing_data=context.get("missingData") or facts.get("missingData") or [],
         inference_generation_id=str(context.get("inferenceGenerationId") or ""),
         question=question,
+        policy=context.get("hypothesisPolicy") if isinstance(context.get("hypothesisPolicy"), dict) else {},
     )
     return {
         "question": question.to_dict(),
+        "hypothesisTemplates": hypothesis_templates_from_hypotheses(hypothesis_set.hypotheses),
         "hypothesisSet": hypothesis_set.to_dict(),
         "researchPlan": research_plan.to_dict(),
         "selfQuestions": list(research_plan.unresolved_questions),
@@ -360,81 +432,381 @@ def build_competing_hypotheses(
     subject: Dict[str, object],
     facts: Dict[str, object],
     relations: Iterable[Dict[str, object]],
+    traces: Iterable[Dict[str, object]],
     matches: Iterable[Dict[str, object]],
     signal_conflicts: Dict[str, object],
     missing_data: Iterable[object],
     inference_generation_id: str,
     question: InvestmentQuestion,
+    policy: Dict[str, object] = None,
 ) -> tuple:
     symbol = str(subject.get("symbol") or facts.get("symbol") or question.subject_symbol or "").upper().strip()
     name = str(subject.get("name") or facts.get("name") or question.subject_name or symbol)
     relation_rows = [dict(item) for item in relations or [] if isinstance(item, dict)]
+    trace_rows = [dict(item) for item in traces or [] if isinstance(item, dict)]
     match_rows = [dict(item) for item in matches or [] if isinstance(item, dict)]
-    risk_rows = [item for item in relation_rows if relation_polarity(item) == "risk"]
-    support_rows = [item for item in relation_rows if relation_polarity(item) == "support"]
-    context_rows = [item for item in relation_rows if relation_polarity(item) not in {"risk", "support"}]
-    risk_score = hypothesis_prior(risk_rows, match_rows, "risk", signal_conflicts)
-    support_score = hypothesis_prior(support_rows, match_rows, "support", signal_conflicts)
-    uncertainty_score = uncertainty_prior(missing_data, signal_conflicts, risk_score, support_score)
-    risk_evidence = relation_ids(risk_rows)
-    support_evidence = relation_ids(support_rows)
-    context_evidence = relation_ids(context_rows)
-    risk_rules = rule_ids(risk_rows, match_rows, "risk")
-    support_rules = rule_ids(support_rows, match_rows, "support")
-    all_rules = unique_texts(risk_rules + support_rules + rule_ids(context_rows, match_rows, ""))
+    policy = policy if isinstance(policy, dict) else {}
+    minimum_count = int_setting(policy.get("minimumComparisonCount"), 3, 2, 6)
+    maximum_count = int_setting(policy.get("maximumComparisonCount"), 8, minimum_count, 12)
     hypothesis_seed = stable_id("hypothesis-set", question.question_id, inference_generation_id, symbol)
-    risk_id = stable_id("hypothesis", hypothesis_seed, "risk-continuation")
-    support_id = stable_id("hypothesis", hypothesis_seed, "support-recovery")
-    uncertainty_id = stable_id("hypothesis", hypothesis_seed, "uncertainty")
+    rule_keys = ordered_rule_ids(match_rows, trace_rows, relation_rows)
     hypotheses = [
-        InvestmentHypothesis(
-            hypothesis_id=risk_id,
-            claim=name + "의 위험 신호가 이어져 현재 행동을 더 보수적으로 바꿔야 한다.",
-            stance="risk",
-            horizon=question.horizon,
-            prior_confidence=risk_score,
-            supporting_evidence_ids=risk_evidence,
-            counter_evidence_ids=support_evidence,
-            supporting_rule_ids=risk_rules,
-            counter_rule_ids=support_rules,
-            assumptions=["현재 위험 관계의 원천 데이터와 유효시각이 판단 시점에도 유효합니다."],
-            invalidation_conditions=["가격·수급·이벤트 관계가 회복 방향으로 바뀌고 다음 추론 세대에서도 유지됩니다."],
-        ),
-        InvestmentHypothesis(
-            hypothesis_id=support_id,
-            claim=name + "의 지지 또는 회복 관계가 위험을 상쇄해 행동 강도를 유지하거나 완화할 수 있다.",
-            stance="support",
-            horizon=question.horizon,
-            prior_confidence=support_score,
-            supporting_evidence_ids=support_evidence,
-            counter_evidence_ids=risk_evidence,
-            supporting_rule_ids=support_rules,
-            counter_rule_ids=risk_rules,
-            assumptions=["지지 관계가 일시적 호가나 단일 관측이 아니라 다음 기간에도 확인됩니다."],
-            invalidation_conditions=["지지 관계가 사라지거나 위험 관계가 더 높은 신뢰도로 재확인됩니다."],
-        ),
-        InvestmentHypothesis(
-            hypothesis_id=uncertainty_id,
-            claim="현재 근거 충돌 또는 데이터 공백 때문에 " + name + "의 행동을 단정하기보다 추가 확인이 필요하다.",
-            stance="uncertain",
-            horizon=question.horizon,
-            prior_confidence=uncertainty_score,
-            supporting_evidence_ids=context_evidence,
-            counter_evidence_ids=unique_texts(risk_evidence + support_evidence),
-            supporting_rule_ids=all_rules,
-            counter_rule_ids=[],
-            assumptions=["누락·지연·충돌 데이터가 해소되면 가설 우선순위가 달라질 수 있습니다."],
-            invalidation_conditions=["핵심 데이터 공백이 채워지고 위험 또는 지지 근거가 여러 관계에서 같은 방향으로 확인됩니다."],
-        ),
+        hypothesis_from_inference_rule(
+            hypothesis_seed,
+            name,
+            question,
+            rule_id,
+            relations_for_rule(relation_rows, rule_id),
+            traces_for_rule(trace_rows, rule_id),
+            matches_for_rule(match_rows, rule_id),
+            relation_rows,
+        )
+        for rule_id in rule_keys
     ]
+    hypotheses = [item for item in hypotheses if item is not None]
+    hypotheses.sort(key=lambda item: (-item.prior_confidence, item.template_id))
+    hypotheses = diverse_hypotheses(hypotheses, maximum_count)
+    hypotheses = add_safety_hypotheses(
+        hypotheses,
+        hypothesis_seed,
+        name,
+        question,
+        missing_data,
+        signal_conflicts,
+        relation_rows,
+        minimum_count,
+        maximum_count,
+    )
     research_plan = research_plan_for_hypotheses(question, hypotheses, missing_data, signal_conflicts)
     return HypothesisSet(
         hypothesis_set_id=hypothesis_seed,
         subject_symbol=symbol,
         question_id=question.question_id,
         hypotheses=hypotheses,
+        minimum_comparison_count=minimum_count,
         inference_generation_id=inference_generation_id,
     ), research_plan
+
+
+def int_setting(value: object, fallback: int, lower: int, upper: int) -> int:
+    try:
+        parsed = int(float(str(value if value not in (None, "") else fallback)))
+    except (TypeError, ValueError):
+        parsed = fallback
+    return max(lower, min(upper, parsed))
+
+
+def row_rule_id(item: Dict[str, object]) -> str:
+    return str(item.get("ruleId") or item.get("rule_id") or item.get("sourceRuleId") or "").strip()
+
+
+def ordered_rule_ids(*groups: Iterable[Dict[str, object]]) -> List[str]:
+    result: List[str] = []
+    for rows in groups:
+        for item in rows or []:
+            rule_id = row_rule_id(item)
+            if rule_id and rule_id not in result:
+                result.append(rule_id)
+    return result
+
+
+def relations_for_rule(rows: Iterable[Dict[str, object]], rule_id: str) -> List[Dict[str, object]]:
+    return [item for item in rows or [] if row_rule_id(item) == rule_id]
+
+
+def traces_for_rule(rows: Iterable[Dict[str, object]], rule_id: str) -> List[Dict[str, object]]:
+    return [item for item in rows or [] if row_rule_id(item) == rule_id]
+
+
+def matches_for_rule(rows: Iterable[Dict[str, object]], rule_id: str) -> List[Dict[str, object]]:
+    return [item for item in rows or [] if row_rule_id(item) == rule_id]
+
+
+def primary_inference_rows(rows: Iterable[Dict[str, object]]) -> List[Dict[str, object]]:
+    primary = [
+        item for item in rows or []
+        if str(item.get("type") or "").upper() not in META_INFERENCE_RELATION_TYPES
+    ]
+    return primary or list(rows or [])
+
+
+def hypothesis_stance(rows: Iterable[Dict[str, object]], matches: Iterable[Dict[str, object]]) -> str:
+    risk = 0.0
+    support = 0.0
+    for item in primary_inference_rows(rows):
+        risk += max(0.0, float_or_zero(item.get("riskImpact")))
+        support += max(0.0, float_or_zero(item.get("supportImpact")))
+        polarity = relation_polarity(item)
+        if polarity == "risk":
+            risk += max(1.0, normalize_score(item.get("weight")) / 10.0)
+        elif polarity == "support":
+            support += max(1.0, normalize_score(item.get("weight")) / 10.0)
+    if risk > support:
+        return "risk"
+    if support > risk:
+        return "support"
+    return "context"
+
+
+def hypothesis_confidence(
+    rows: Iterable[Dict[str, object]],
+    traces: Iterable[Dict[str, object]],
+    matches: Iterable[Dict[str, object]],
+) -> float:
+    values: List[float] = []
+    for item in rows or []:
+        values.extend([
+            normalize_score(item.get("weight")),
+            normalize_score(item.get("confidence")),
+            min(100.0, max(float_or_zero(item.get("riskImpact")), float_or_zero(item.get("supportImpact"))) * 10.0),
+        ])
+    for item in traces or []:
+        values.append(normalize_score(item.get("confidence")))
+    for item in matches or []:
+        values.append(normalize_score(item.get("strengthScore") or item.get("strength_score")))
+        values.append(normalize_score(item.get("confidence")))
+    return bounded_score(max(values or [25.0]), 25.0)
+
+
+def causal_label(name: str, rows: Iterable[Dict[str, object]], traces: Iterable[Dict[str, object]], matches: Iterable[Dict[str, object]]) -> str:
+    candidates = []
+    for item in traces or []:
+        candidates.append(item.get("label"))
+    for item in primary_inference_rows(rows):
+        candidates.extend([item.get("targetLabel"), item.get("aiInfluenceLabel"), item.get("label")])
+    for item in matches or []:
+        candidates.extend([item.get("label"), item.get("promptHint") or item.get("prompt_hint")])
+    label = next((str(item).strip() for item in candidates if str(item or "").strip()), "TypeDB 인과 경로")
+    prefix = str(name or "").strip() + " · "
+    if prefix.strip() and label.startswith(prefix):
+        label = label[len(prefix):]
+    return label[:420]
+
+
+def trace_requirements(traces: Iterable[Dict[str, object]]) -> List[str]:
+    values: List[str] = []
+    for trace in traces or []:
+        for condition in trace.get("matchedConditions") or []:
+            if not isinstance(condition, dict):
+                continue
+            value = condition.get("relationType") or condition.get("field") or condition.get("conditionId")
+            if value:
+                values.append(value)
+    return unique_texts(values, 16)
+
+
+def trace_condition_ids(traces: Iterable[Dict[str, object]]) -> List[str]:
+    values = []
+    for trace in traces or []:
+        values.extend(trace.get("matchedConditionIds") or [])
+    return unique_texts(values, 16)
+
+
+def hypothesis_from_inference_rule(
+    hypothesis_seed: str,
+    name: str,
+    question: InvestmentQuestion,
+    rule_id: str,
+    rows: List[Dict[str, object]],
+    traces: List[Dict[str, object]],
+    matches: List[Dict[str, object]],
+    all_rows: List[Dict[str, object]],
+) -> Optional[InvestmentHypothesis]:
+    if not rule_id or not (rows or traces or matches):
+        return None
+    stance = hypothesis_stance(rows, matches)
+    evidence_rows = primary_inference_rows(rows)
+    evidence_ids = relation_ids(evidence_rows)
+    causal_paths = unique_texts(
+        [item.get("id") or item.get("inferenceTraceId") for item in traces + rows],
+        16,
+    )
+    if not evidence_ids and causal_paths:
+        evidence_ids = list(causal_paths)
+    opposite_rows = [
+        item for item in all_rows
+        if row_rule_id(item) != rule_id
+        and relation_polarity(item) in ({"support"} if stance == "risk" else {"risk"} if stance == "support" else {"risk", "support"})
+    ]
+    condition_ids = trace_condition_ids(traces)
+    requirements = trace_requirements(traces)
+    label = causal_label(name, rows, traces, matches)
+    template_id = "hypothesis-template:" + rule_id
+    return InvestmentHypothesis(
+        hypothesis_id=stable_id("hypothesis", hypothesis_seed, template_id),
+        template_id=template_id,
+        template_label=label,
+        claim=name + "에서 TypeDB가 확인한 '" + label + "' 인과 경로가 현재 상황을 설명한다.",
+        stance=stance,
+        horizon=question.horizon,
+        prior_confidence=hypothesis_confidence(rows, traces, matches),
+        supporting_evidence_ids=evidence_ids,
+        counter_evidence_ids=relation_ids(opposite_rows),
+        supporting_rule_ids=[rule_id],
+        counter_rule_ids=unique_texts([row_rule_id(item) for item in opposite_rows]),
+        assumptions=[
+            "TypeDB 성립 조건 " + ", ".join(condition_ids[:6]) + "이 판단 기간에도 유효합니다."
+        ] if condition_ids else ["현재 TypeDB 추론 경로와 원천 데이터의 유효시각이 판단 기간에도 유효합니다."],
+        invalidation_conditions=[
+            "TypeDB 조건 " + (", ".join(condition_ids[:6]) if condition_ids else rule_id) + "이 다음 추론 세대에서 성립하지 않거나 반대 인과 경로가 더 강해집니다."
+        ],
+        causal_path_ids=causal_paths,
+        required_evidence_types=requirements,
+        approval_status="approved-active",
+        verification_status="typedb-current-generation",
+    )
+
+
+def diverse_hypotheses(hypotheses: List[InvestmentHypothesis], maximum_count: int) -> List[InvestmentHypothesis]:
+    selected: List[InvestmentHypothesis] = []
+    for stance in ["risk", "support", "context"]:
+        item = next((row for row in hypotheses if row.stance == stance), None)
+        if item and item not in selected:
+            selected.append(item)
+    for item in hypotheses:
+        if item not in selected:
+            selected.append(item)
+        if len(selected) >= maximum_count:
+            break
+    selected.sort(key=lambda item: (-item.prior_confidence, item.template_id))
+    return selected[:maximum_count]
+
+
+def add_safety_hypotheses(
+    hypotheses: List[InvestmentHypothesis],
+    hypothesis_seed: str,
+    name: str,
+    question: InvestmentQuestion,
+    missing_data: Iterable[object],
+    conflicts: Dict[str, object],
+    relation_rows: List[Dict[str, object]],
+    minimum_count: int,
+    maximum_count: int,
+) -> List[InvestmentHypothesis]:
+    result = list(hypotheses)
+    directional_stances = {item.stance for item in result if item.stance in {"risk", "support"}}
+    evidence_safety_needed = len(result) < minimum_count or bool(list(missing_data or [])) or bool((conflicts or {}).get("hasConflict"))
+    if result and evidence_safety_needed:
+        risk_score = max([item.prior_confidence for item in result if item.stance == "risk"] or [25.0])
+        support_score = max([item.prior_confidence for item in result if item.stance == "support"] or [25.0])
+        missing = unique_texts(missing_data)
+        safety = InvestmentHypothesis(
+            hypothesis_id=stable_id("hypothesis", hypothesis_seed, SYSTEM_ABSTENTION_TEMPLATE_ID),
+            template_id=SYSTEM_ABSTENTION_TEMPLATE_ID,
+            template_label="근거 충분성 검증",
+            claim=name + "의 현재 근거만으로는 경쟁 인과 경로를 충분히 배제할 수 없어 행동 판단을 유보해야 한다.",
+            stance="uncertain",
+            horizon=question.horizon,
+            prior_confidence=uncertainty_prior(missing, conflicts, risk_score, support_score),
+            supporting_evidence_ids=relation_ids([item for item in relation_rows if relation_polarity(item) in {"context", "neutral"}]),
+            counter_evidence_ids=unique_texts([evidence for item in result for evidence in item.supporting_evidence_ids]),
+            supporting_rule_ids=[],
+            counter_rule_ids=unique_texts([rule for item in result for rule in item.supporting_rule_ids]),
+            assumptions=["누락·지연·충돌 데이터가 해소되면 가설 우선순위가 달라질 수 있습니다."],
+            invalidation_conditions=["필수 근거가 채워지고 독립된 인과 경로가 같은 방향으로 반복 확인됩니다."],
+            causal_path_ids=[],
+            required_evidence_types=missing,
+            approval_status="approved-safety-policy",
+            verification_status="requires-research",
+        )
+        result = with_reserved_safety_slot(result, safety, maximum_count)
+    if result and (len(result) < minimum_count or len(directional_stances) < 2):
+        leading = result[0]
+        null_template = "hypothesis-template:system.null-challenge.v1"
+        safety = InvestmentHypothesis(
+            hypothesis_id=stable_id("hypothesis", hypothesis_seed, null_template),
+            template_id=null_template,
+            template_label="추론 경로의 일시적 동행 가능성",
+            claim=name + "의 현재 TypeDB 경로가 지속 가능한 인과가 아니라 일시적 동행일 수 있다.",
+            stance="context",
+            horizon=question.horizon,
+            prior_confidence=bounded_score(max(25.0, 100.0 - leading.prior_confidence)),
+            supporting_evidence_ids=relation_ids([item for item in relation_rows if relation_polarity(item) == "context"]),
+            counter_evidence_ids=list(leading.supporting_evidence_ids),
+            supporting_rule_ids=[],
+            counter_rule_ids=list(leading.supporting_rule_ids),
+            assumptions=["현재 경로가 다음 관측에서 반복되지 않을 수 있습니다."],
+            invalidation_conditions=["동일 인과 경로가 독립된 다음 관측과 출처에서도 반복 확인됩니다."],
+            causal_path_ids=[],
+            required_evidence_types=list(leading.required_evidence_types),
+            approval_status="approved-safety-policy",
+            verification_status="counterfactual-challenge",
+        )
+        result = with_reserved_safety_slot(result, safety, maximum_count)
+    return result[:maximum_count]
+
+
+def with_reserved_safety_slot(
+    hypotheses: List[InvestmentHypothesis],
+    safety: InvestmentHypothesis,
+    maximum_count: int,
+) -> List[InvestmentHypothesis]:
+    if any(item.template_id == safety.template_id for item in hypotheses):
+        return list(hypotheses)
+    result = list(hypotheses)
+    if len(result) >= maximum_count:
+        removable = [item for item in result if item.approval_status == "approved-active"]
+        if removable:
+            result.remove(min(removable, key=lambda item: item.prior_confidence))
+    result.append(safety)
+    result.sort(key=lambda item: (-item.prior_confidence, item.template_id))
+    return result
+
+
+def hypothesis_templates_from_hypotheses(hypotheses: Iterable[InvestmentHypothesis]) -> List[Dict[str, object]]:
+    rows = []
+    seen = set()
+    for item in hypotheses or []:
+        if item.template_id in seen:
+            continue
+        seen.add(item.template_id)
+        rows.append(HypothesisTemplate(
+            template_id=item.template_id,
+            label=item.template_label,
+            version="v1",
+            source_rule_ids=list(item.supporting_rule_ids),
+            stance=item.stance,
+            required_evidence_types=list(item.required_evidence_types),
+            causal_path_pattern=list(item.causal_path_ids),
+            approval_status=item.approval_status,
+            source="typedb-native-rule" if item.supporting_rule_ids else "system-safety-policy",
+        ).to_dict())
+    return rows
+
+
+def hypothesis_templates_from_rulebox_snapshot(snapshot: Dict[str, object]) -> List[Dict[str, object]]:
+    rows = []
+    for rule in (snapshot or {}).get("rules") or []:
+        if not isinstance(rule, dict) or rule.get("enabled") is False:
+            continue
+        rule_id = row_rule_id(rule)
+        if not rule_id:
+            continue
+        derivations = [item for item in rule.get("derivations") or [] if isinstance(item, dict)]
+        risk = sum(max(0.0, float_or_zero(item.get("risk_impact") or item.get("riskImpact"))) for item in derivations)
+        support = sum(max(0.0, float_or_zero(item.get("support_impact") or item.get("supportImpact"))) for item in derivations)
+        stance = "risk" if risk > support else "support" if support > risk else "context"
+        requirements = unique_texts([
+            condition.get("relation_type") or condition.get("relationType") or condition.get("field") or condition.get("condition_id") or condition.get("conditionId")
+            for condition in rule.get("conditions") or []
+            if isinstance(condition, dict)
+        ], 20)
+        causal_path = unique_texts([
+            derivation.get("relation_type") or derivation.get("relationType")
+            for derivation in derivations
+        ], 12)
+        rows.append(HypothesisTemplate(
+            template_id="hypothesis-template:" + rule_id,
+            label=str(rule.get("label") or rule_id),
+            version=str(rule.get("version") or "v1"),
+            source_rule_ids=[rule_id],
+            stance=stance,
+            required_evidence_types=requirements,
+            causal_path_pattern=causal_path,
+            approval_status="approved-active",
+            source="typedb-native-rule",
+        ).to_dict())
+    return rows
 
 
 def relation_polarity(item: Dict[str, object]) -> str:
@@ -466,40 +838,6 @@ def relation_ids(rows: Iterable[Dict[str, object]]) -> List[str]:
     return unique_texts(values)
 
 
-def rule_ids(rows: Iterable[Dict[str, object]], matches: Iterable[Dict[str, object]], polarity: str) -> List[str]:
-    values = [item.get("ruleId") for item in rows or []]
-    if not values:
-        for item in matches or []:
-            breakdown = item.get("scoreBreakdown") if isinstance(item.get("scoreBreakdown"), dict) else {}
-            if polarity == "risk" and float_or_zero(breakdown.get("riskPressure")) <= 0:
-                continue
-            if polarity == "support" and float_or_zero(breakdown.get("supportEvidence")) <= 0:
-                continue
-            values.append(item.get("ruleId") or item.get("rule_id"))
-    return unique_texts(values)
-
-
-def hypothesis_prior(
-    rows: Iterable[Dict[str, object]],
-    matches: Iterable[Dict[str, object]],
-    polarity: str,
-    conflicts: Dict[str, object],
-) -> float:
-    values = []
-    for item in rows or []:
-        values.extend([item.get("strength"), item.get("strengthScore"), item.get("confidence")])
-    conflict_key = "riskPressure" if polarity == "risk" else "supportEvidence"
-    values.append((conflicts or {}).get(conflict_key))
-    for item in matches or []:
-        breakdown = item.get("scoreBreakdown") if isinstance(item.get("scoreBreakdown"), dict) else {}
-        directional_score = float_or_zero(breakdown.get(conflict_key))
-        if directional_score > 0:
-            values.append(directional_score)
-            values.append(item.get("strengthScore"))
-    scores = [normalize_score(item) for item in values if item not in (None, "")]
-    return bounded_score(max(scores, default=25.0), 25.0)
-
-
 def uncertainty_prior(
     missing_data: Iterable[object],
     conflicts: Dict[str, object],
@@ -524,17 +862,24 @@ def research_plan_for_hypotheses(
     conflicts: Dict[str, object],
 ) -> ResearchPlan:
     missing = unique_texts(missing_data)
-    unresolved = ["위험 가설과 지지 가설 중 어느 쪽이 다음 추론 세대에서도 유지되는가?"]
-    tasks = [
-        ResearchTask(
-            task_id=stable_id("research-task", question.question_id, "risk-support-comparison"),
-            question=unresolved[0],
-            purpose="단일 최고 점수가 아니라 경쟁 가설의 지속성과 반증을 비교합니다.",
-            required_evidence_types=["price-path", "flow", "event", "data-freshness"],
-            related_hypothesis_ids=[item.hypothesis_id for item in hypotheses],
-            priority=100,
-        )
-    ]
+    unresolved: List[str] = []
+    tasks: List[ResearchTask] = []
+    for index, hypothesis in enumerate(sorted(hypotheses, key=lambda item: item.prior_confidence, reverse=True)[:5]):
+        question_text = "가설 '" + hypothesis.template_label + "'을 확인하거나 반박할 가장 직접적이고 최신인 근거는 무엇인가?"
+        unresolved.append(question_text)
+        requirements = unique_texts(hypothesis.required_evidence_types or ["provenance", "observation-time", "independent-confirmation"])
+        tasks.append(ResearchTask(
+            task_id=stable_id("research-task", question.question_id, hypothesis.template_id),
+            question=question_text,
+            purpose="TypeDB 인과 경로의 지속성, 반증 가능성, 원천 데이터 품질을 확인합니다.",
+            required_evidence_types=requirements,
+            related_hypothesis_ids=[hypothesis.hypothesis_id],
+            source_types=source_types_for_requirements(requirements),
+            max_age_minutes=research_max_age_minutes(question.horizon),
+            decision_impact=max(0.0, 100.0 - index * 12.5),
+            priority=max(55, 100 - index * 10),
+            status="blocked-by-data" if hypothesis.verification_status == "requires-research" else "ready",
+        ))
     if bool((conflicts or {}).get("hasConflict")):
         conflict_question = "서로 반대인 가격·수급·이벤트 신호 중 어떤 신호가 더 신선하고 직접적인가?"
         unresolved.append(conflict_question)
@@ -544,6 +889,9 @@ def research_plan_for_hypotheses(
             purpose="신호 충돌을 숨기지 않고 출처·시점·직접성으로 판별합니다.",
             required_evidence_types=["provenance", "observation-time", "source-reliability"],
             related_hypothesis_ids=[item.hypothesis_id for item in hypotheses],
+            source_types=["official", "market-data", "news-full-text"],
+            max_age_minutes=research_max_age_minutes(question.horizon),
+            decision_impact=90.0,
             priority=90,
         ))
     if missing:
@@ -555,6 +903,9 @@ def research_plan_for_hypotheses(
             purpose="데이터 공백이 판단 강도와 행동 후보에 미치는 영향을 확인합니다.",
             required_evidence_types=missing[:6],
             related_hypothesis_ids=[item.hypothesis_id for item in hypotheses],
+            source_types=source_types_for_requirements(missing[:6]),
+            max_age_minutes=research_max_age_minutes(question.horizon),
+            decision_impact=85.0,
             priority=80,
             status="blocked-by-data",
         ))
@@ -562,8 +913,33 @@ def research_plan_for_hypotheses(
         plan_id=stable_id("research-plan", question.question_id),
         question_id=question.question_id,
         tasks=tasks,
-        unresolved_questions=unresolved,
+        unresolved_questions=unique_texts(unresolved, 12),
     )
+
+
+def source_types_for_requirements(requirements: Iterable[object]) -> List[str]:
+    text = " ".join(str(item or "").lower() for item in requirements or [])
+    sources = []
+    if any(token in text for token in ["disclosure", "filing", "공시", "fundamental", "financial", "earning"]):
+        sources.extend(["official-filing", "company-ir"])
+    if any(token in text for token in ["price", "flow", "trade", "quote", "market", "volume", "수급", "가격"]):
+        sources.append("market-data")
+    if any(token in text for token in ["macro", "rate", "fx", "currency", "금리", "환율"]):
+        sources.append("official-macro")
+    if any(token in text for token in ["event", "news", "article", "사건", "뉴스"]):
+        sources.append("news-full-text")
+    if not sources:
+        sources.extend(["official", "news-full-text"])
+    return unique_texts(sources, 6)
+
+
+def research_max_age_minutes(horizon: str) -> int:
+    return {
+        "intraday": 30,
+        "short-term": 180,
+        "medium-term": 1440,
+        "long-term": 10080,
+    }.get(str(horizon or ""), 360)
 
 
 def epistemic_state(hypothesis_set: HypothesisSet, research_plan: ResearchPlan) -> Dict[str, object]:
@@ -647,6 +1023,8 @@ def decision_episode_from_context(
         decided_at=decided_at,
         source="notification-ai-hypothesis-competition",
         facts_at_decision=dict(relation_context.get("facts") or {}),
+        research_plan=dict(brain.get("researchPlan") or relation_context.get("researchPlan") or {}),
+        research_audit=dict(relation_context.get("researchCycle") or {}),
     )
 
 

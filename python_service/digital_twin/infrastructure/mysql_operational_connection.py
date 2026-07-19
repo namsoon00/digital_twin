@@ -543,4 +543,40 @@ MYSQL_SCHEMA = [
         KEY idx_learning_proposals_status_time (status, updated_at, proposal_id)
     ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
     """,
+    """
+    CREATE TABLE IF NOT EXISTS investment_research_runs (
+        run_id VARCHAR(191) PRIMARY KEY,
+        question_id VARCHAR(191) NOT NULL DEFAULT '',
+        account_id VARCHAR(191) NOT NULL DEFAULT '',
+        symbol VARCHAR(64) NOT NULL DEFAULT '',
+        status VARCHAR(40) NOT NULL DEFAULT 'ready',
+        started_at VARCHAR(40) NOT NULL,
+        completed_at VARCHAR(40) NOT NULL DEFAULT '',
+        changed_evidence_count INT NOT NULL DEFAULT 0,
+        reasoning_refreshed TINYINT(1) NOT NULL DEFAULT 0,
+        payload_json LONGTEXT NOT NULL,
+        created_at VARCHAR(40) NOT NULL,
+        updated_at VARCHAR(40) NOT NULL,
+        KEY idx_investment_research_runs_symbol_time (account_id, symbol, started_at),
+        KEY idx_investment_research_runs_status_time (status, updated_at)
+    ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
+    """,
+    """
+    CREATE TABLE IF NOT EXISTS investment_hypothesis_proposals (
+        proposal_id VARCHAR(191) PRIMARY KEY,
+        account_id VARCHAR(191) NOT NULL DEFAULT '',
+        symbol VARCHAR(64) NOT NULL DEFAULT '',
+        status VARCHAR(40) NOT NULL DEFAULT 'review-required',
+        title VARCHAR(255) NOT NULL DEFAULT '',
+        source_question_id VARCHAR(191) NOT NULL DEFAULT '',
+        source VARCHAR(120) NOT NULL DEFAULT 'ai-research-planner',
+        payload_json LONGTEXT NOT NULL,
+        created_at VARCHAR(40) NOT NULL,
+        updated_at VARCHAR(40) NOT NULL,
+        reviewed_at VARCHAR(40) NOT NULL DEFAULT '',
+        review_note TEXT NOT NULL,
+        KEY idx_hypothesis_proposals_symbol_status (symbol, status, updated_at),
+        KEY idx_hypothesis_proposals_status_time (status, updated_at)
+    ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
+    """,
 ]

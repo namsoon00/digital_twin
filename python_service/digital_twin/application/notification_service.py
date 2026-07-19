@@ -273,6 +273,37 @@ class NotificationAIValidatedGateEnricher:
         job.context = context_with_validated_ai_response(context, response)
 
 
+class NotificationHypothesisResearchEnricher:
+    def __init__(self, investment_brain_service=None, settings: Dict[str, object] = None):
+        self.investment_brain_service = investment_brain_service
+        self.settings = dict(settings or {})
+
+    def __call__(self, job: NotificationJob) -> None:
+        if job.message_type != INVESTMENT_INSIGHT or not self.enabled():
+            return
+        context = dict(job.context or {})
+        if context.get("researchCycle"):
+            return
+        if not self.investment_brain_service or not hasattr(self.investment_brain_service, "enrich_notification_context"):
+            return
+        try:
+            job.context = self.investment_brain_service.enrich_notification_context(
+                context,
+                account_id=job.account_id,
+                event_id=job.job_id,
+            )
+        except Exception as error:  # noqa: BLE001 - research enrichment must not block a time-sensitive alert.
+            context["researchCycle"] = {
+                "status": "error",
+                "reason": "가설 조사 실패로 기존 TypeDB 추론 세대를 사용합니다: " + str(error)[:140],
+            }
+            job.context = context
+
+    def enabled(self) -> bool:
+        value = str(self.settings.get("investmentBrainNotificationResearchEnabled", "1")).strip().lower()
+        return value not in {"0", "false", "no", "off", "disabled"}
+
+
 class NotificationQueueRunner:
     def __init__(
         self,

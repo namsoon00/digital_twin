@@ -477,6 +477,18 @@ def settings_status_payload() -> Dict[str, object]:
         "notificationAiUseCodex",
         "notificationAiModel",
         "notificationAiTimeoutSeconds",
+        "investmentBrainMinimumHypothesisCount",
+        "investmentBrainMaximumHypothesisCount",
+        "investmentBrainInferenceBoxLimit",
+        "investmentBrainResearchEnabled",
+        "investmentBrainResearchMaxRounds",
+        "investmentBrainResearchEvidenceLimit",
+        "investmentBrainResearchMinimumVerifiedCount",
+        "investmentBrainResearchMinimumSourceReliability",
+        "investmentBrainResearchCooldownMinutes",
+        "investmentBrainNotificationResearchEnabled",
+        "investmentBrainNovelHypothesisAiEnabled",
+        "investmentBrainNovelHypothesisAiTimeoutSeconds",
         "modelName",
         "modelHypothesis",
         "customBuyModelFormula",
@@ -1857,6 +1869,8 @@ def attach_notification_test_ontology_projection(snapshot, settings: Dict[str, s
         recorder = PortfolioOntologyProjectionRecorder(
             ontology_repository_from_settings(settings),
             quality_store=stores.ontology_quality_sample_store(settings),
+            decision_episode_store=stores.investment_decision_episode_store(settings),
+            hypothesis_proposal_store=stores.investment_research_store(settings),
             settings=settings,
             source="notification-test",
         )
@@ -3197,6 +3211,40 @@ class DigitalTwinHandler(BaseHTTPRequestHandler):
                 account_id=first_query(query, "accountId"),
                 symbol=first_query(query, "symbol"),
                 limit=limit,
+            ))
+
+        if path == "/api/investment-brain/hypothesis-templates" and self.command == "GET":
+            return self.send_payload(200, build_investment_brain_service().hypothesis_templates())
+
+        if path == "/api/investment-brain/research-runs" and self.command == "GET":
+            try:
+                limit = int(first_query(query, "limit") or 50)
+            except ValueError:
+                limit = 50
+            return self.send_payload(200, build_investment_brain_service().research_runs(
+                account_id=first_query(query, "accountId"),
+                symbol=first_query(query, "symbol"),
+                limit=limit,
+            ))
+
+        if path == "/api/investment-brain/hypothesis-proposals" and self.command == "GET":
+            try:
+                limit = int(first_query(query, "limit") or 50)
+            except ValueError:
+                limit = 50
+            return self.send_payload(200, build_investment_brain_service().hypothesis_proposals(
+                status=first_query(query, "status"),
+                symbol=first_query(query, "symbol"),
+                limit=limit,
+            ))
+
+        hypothesis_proposal_match = re.match(r"^/api/investment-brain/hypothesis-proposals/([^/]+)$", path)
+        if hypothesis_proposal_match and self.command == "PATCH":
+            body = self.read_json_body()
+            return self.send_payload(200, build_investment_brain_service().review_hypothesis_proposal(
+                hypothesis_proposal_match.group(1),
+                configured(body.get("status")),
+                configured(body.get("note")),
             ))
 
         if path == "/api/investment-brain/learning-proposals" and self.command == "GET":

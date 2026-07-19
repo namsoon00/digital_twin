@@ -151,6 +151,10 @@ def relation_context_from_inferencebox(
             "relations": relations,
             "traces": traces,
         },
+        "hypothesisPolicy": {
+            "minimumComparisonCount": (settings or {}).get("investmentBrainMinimumHypothesisCount") or 3,
+            "maximumComparisonCount": (settings or {}).get("investmentBrainMaximumHypothesisCount") or 8,
+        },
     })
     if isinstance(prompt_context, dict):
         prompt_context["evidenceSubgraph"] = evidence_subgraph
@@ -193,6 +197,7 @@ def relation_context_from_inferencebox(
         "investmentBrain": investment_brain,
         "hypothesisSet": investment_brain.get("hypothesisSet") or {},
         "researchPlan": investment_brain.get("researchPlan") or {},
+        "hypothesisTemplates": investment_brain.get("hypothesisTemplates") or [],
         "selfQuestions": investment_brain.get("selfQuestions") or [],
         "epistemicState": investment_brain.get("epistemicState") or {},
         "inferenceGenerationId": str(inferencebox.get("inferenceGenerationId") or ""),

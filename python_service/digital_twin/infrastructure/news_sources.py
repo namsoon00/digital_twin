@@ -556,7 +556,20 @@ class NewsSourceGateway:
             payload,
         )
 
-    def collect_for_target(self, target: NewsCollectionTarget) -> Tuple[List[ResearchEvidence], List[Dict[str, object]]]:
+    def collect_for_target(
+        self,
+        target: NewsCollectionTarget,
+        source_types: Iterable[str] = None,
+    ) -> Tuple[List[ResearchEvidence], List[Dict[str, object]]]:
+        requested = {str(item or "").strip().lower() for item in source_types or [] if str(item or "").strip()}
+        if requested and not requested.intersection({"news", "news-full-text", "article", "official"}):
+            return [], [{
+                "source": "news-source-gateway",
+                "symbol": target.normalized_symbol(),
+                "ok": True,
+                "status": "not-requested",
+                "requestedSourceTypes": sorted(requested),
+            }]
         items: List[ResearchEvidence] = []
         statuses: List[Dict[str, object]] = []
         seen = set()

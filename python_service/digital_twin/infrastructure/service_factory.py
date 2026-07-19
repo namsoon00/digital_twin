@@ -5,6 +5,8 @@ from typing import Callable, Dict, Iterable
 from ..application.flow_lens_service import FlowLensService
 from ..application.investment_analysis_service import InvestmentAnalysisService
 from ..application.investment_brain_service import InvestmentBrainService
+from ..application.investment_research_orchestration_service import InvestmentResearchOrchestrationService
+from ..application.hypothesis_proposal_service import HypothesisProposalService
 from ..application.investment_strategy_proposal_service import InvestmentStrategyProposalService
 from ..application.investment_calendar_candidate_service import InvestmentCalendarCandidateService
 from ..application.investment_calendar_extraction_service import InvestmentCalendarExtractionService
@@ -23,6 +25,7 @@ from ..application.notification_service import (
     NotificationAIValidatedGateEnricher,
     NotificationAIOpinionEnricher,
     NotificationHoldingSnapshotEnricher,
+    NotificationHypothesisResearchEnricher,
     NotificationQueueRunner,
 )
 from ..application.official_calendar_sync_service import OfficialCalendarSyncService
@@ -40,6 +43,8 @@ from .disclosure_analyzer import disclosure_analyzer_from_settings
 from .model_review_queue import ModelReviewEnqueuer
 from .model_reviewer import reviewer_from_settings
 from .notification_ai_reviewer import notification_ai_reviewer_from_settings
+from .hypothesis_proposal_ai import hypothesis_proposal_advisor_from_settings
+from .investment_research_gateway import CompositeInvestmentResearchGateway, ExistingApiResearchGateway
 from .ontology_graph_store import ontology_repository_from_settings
 from . import operational_store as stores
 from .ontology_projection import PortfolioOntologyProjectionRecorder
@@ -125,6 +130,7 @@ def build_monitor_runner(
             ontology_repository_from_settings(configured_settings),
             quality_store=ontology_quality_store,
             decision_episode_store=stores.investment_decision_episode_store(configured_settings),
+            hypothesis_proposal_store=stores.investment_research_store(configured_settings),
             settings=configured_settings,
         ),
         account_job_store=monitor_account_job_store_from_settings(configured_settings),
@@ -151,6 +157,7 @@ def build_model_review_runner(dry_run: bool = False) -> ModelReviewRunner:
 def build_notification_queue_runner(dry_run: bool = False) -> NotificationQueueRunner:
     settings = runtime_settings()
     monitor_store = stores.monitor_store(settings)
+    investment_brain_service = build_investment_brain_service(settings)
     return NotificationQueueRunner(
         queue=stores.notification_job_store(settings),
         account_repository=stores.account_registry(settings),
@@ -168,6 +175,10 @@ def build_notification_queue_runner(dry_run: bool = False) -> NotificationQueueR
                 disclosure_analyzer_from_settings(settings),
                 settings,
             ),
+            NotificationHypothesisResearchEnricher(
+                investment_brain_service,
+                settings,
+            ),
             NotificationAIValidatedGateEnricher(
                 notification_ai_reviewer_from_settings(settings),
                 settings,
@@ -181,13 +192,83 @@ def build_notification_queue_runner(dry_run: bool = False) -> NotificationQueueR
 
 def build_investment_brain_service(settings=None) -> InvestmentBrainService:
     configured_settings = settings or runtime_settings()
+    research_store = stores.investment_research_store(configured_settings)
     return InvestmentBrainService(
         monitor_store=stores.monitor_store(configured_settings),
         ontology_repository=ontology_repository_from_settings(configured_settings),
         reviewer=notification_ai_reviewer_from_settings(configured_settings),
         decision_episode_store=stores.investment_decision_episode_store(configured_settings),
+        research_orchestrator=build_investment_research_orchestrator(configured_settings, research_store),
+        reasoning_refresher=build_investment_reasoning_refresher(configured_settings),
+        hypothesis_proposal_service=build_hypothesis_proposal_service(configured_settings, research_store),
+        research_store=research_store,
         settings=configured_settings,
     )
+
+
+def build_investment_research_orchestrator(settings=None, research_store=None) -> InvestmentResearchOrchestrationService:
+    configured_settings = settings or runtime_settings()
+    evidence_store = stores.research_evidence_store(configured_settings)
+    return InvestmentResearchOrchestrationService(
+        evidence_repository=evidence_store,
+        research_gateway=CompositeInvestmentResearchGateway([
+            ExistingApiResearchGateway(configured_settings),
+            NewsSourceGateway(configured_settings),
+        ]),
+        research_store=research_store or stores.investment_research_store(configured_settings),
+        event_publisher=default_event_bus(),
+        article_analysis_service=NewsAiAnalysisService(
+            news_ai_analyzer_from_settings(configured_settings),
+            configured_settings,
+        ),
+        settings=configured_settings,
+    )
+
+
+def build_hypothesis_proposal_service(settings=None, research_store=None) -> HypothesisProposalService:
+    configured_settings = settings or runtime_settings()
+    return HypothesisProposalService(
+        store=research_store or stores.investment_research_store(configured_settings),
+        advisor=hypothesis_proposal_advisor_from_settings(configured_settings),
+        event_publisher=default_event_bus(),
+        settings=configured_settings,
+    )
+
+
+def build_investment_reasoning_refresher(settings=None):
+    configured_settings = settings or runtime_settings()
+    repository = ontology_repository_from_settings(configured_settings)
+    recorder = PortfolioOntologyProjectionRecorder(
+        repository,
+        quality_store=stores.ontology_quality_sample_store(configured_settings),
+        decision_episode_store=stores.investment_decision_episode_store(configured_settings),
+        hypothesis_proposal_store=stores.investment_research_store(configured_settings),
+        settings={**configured_settings, "typedbNativeRuleExecutionEnabled": "1"},
+    )
+    account_repository = stores.account_registry(configured_settings)
+
+    def refresh(account_id: str, symbol: str) -> Dict[str, object]:
+        accounts = account_repository.load_all() if hasattr(account_repository, "load_all") else account_repository.load()
+        account = next((item for item in accounts or [] if str(getattr(item, "account_id", "")) == str(account_id or "")), None)
+        if not account:
+            return {"status": "account-not-found", "refreshed": False}
+        snapshot = build_snapshot(account)
+        projection = recorder.record_snapshot(snapshot)
+        state = snapshot.to_monitor_state()
+        position = (state.get("positions") or {}).get(str(symbol or "").upper()) or (state.get("watchlist") or {}).get(str(symbol or "").upper()) or {}
+        inference = projection.get("inferenceBox") if isinstance(projection, dict) and isinstance(projection.get("inferenceBox"), dict) else {}
+        execution = projection.get("ruleboxExecution") if isinstance(projection, dict) and isinstance(projection.get("ruleboxExecution"), dict) else {}
+        refreshed = bool(projection.get("saved")) and str(execution.get("status") or inference.get("status") or "") == "ok"
+        return {
+            "status": "completed" if refreshed else str(projection.get("status") or execution.get("status") or "error"),
+            "refreshed": refreshed,
+            "projection": projection,
+            "inferenceGenerationId": inference.get("inferenceGenerationId"),
+            "position": position,
+            "state": state,
+        }
+
+    return refresh
 
 
 def build_symbol_universe_service(settings=None) -> SymbolUniverseService:

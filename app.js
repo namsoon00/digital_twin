@@ -7963,12 +7963,26 @@
     return true;
   }
 
+  function syncOverlayPageState() {
+    var overlayOpen = Boolean(
+      state.workDetailLayer
+      || state.calendarEntryModalOpen
+      || state.notificationTemplateEditorOpen
+      || state.notificationPolicyEditorOpen
+      || state.expandedOntologyGraphId
+      || state.monitoringDetail
+    );
+    document.documentElement.classList.toggle("oa-overlay-open", overlayOpen);
+    document.body.classList.toggle("oa-overlay-open", overlayOpen);
+  }
+
   function render() {
     if (renderSuppressionDepth > 0) {
       renderQueuedDuringSuppression = true;
       return;
     }
     applyAppTheme();
+    syncOverlayPageState();
     rememberRenderedPageScrollPosition();
     if (state.loading && !state.snapshot) {
       destroyOntologyCytoscapeGraphs();
@@ -8173,11 +8187,20 @@
     restoreWorkDetailFocus();
   }
 
+  function activeOverlayDialog() {
+    if (state.calendarEntryModalOpen) return app.querySelector(".calendar-entry-modal");
+    if (state.notificationTemplateEditorOpen) return app.querySelector(".notification-template-editor-layer");
+    if (state.notificationPolicyEditorOpen) return app.querySelector(".notification-policy-editor-layer");
+    if (state.expandedOntologyGraphId) return app.querySelector(".ontology-graph-expanded-dialog");
+    if (state.workDetailLayer) return app.querySelector("[data-work-detail-dialog]");
+    if (state.monitoringDetail) return app.querySelector(".monitoring-detail-drawer");
+    return null;
+  }
+
   function focusWorkDetailLayer() {
-    if (!state.workDetailLayer) return;
-    var dialog = app.querySelector("[data-work-detail-dialog]");
+    var dialog = activeOverlayDialog();
     if (!dialog || dialog.contains(document.activeElement)) return;
-    var closeButton = dialog.querySelector("[data-work-detail-close]");
+    var closeButton = dialog.querySelector('[data-work-detail-close], [data-calendar-entry-close], [data-notification-editor-close], [data-notification-template-editor-close], [data-ontology-graph-close], [data-monitoring-detail-close]');
     (closeButton || dialog).focus();
   }
 
@@ -8194,8 +8217,8 @@
   }
 
   function trapWorkDetailFocus(event) {
-    if (!state.workDetailLayer || event.key !== "Tab") return false;
-    var dialog = app.querySelector("[data-work-detail-dialog]");
+    if (event.key !== "Tab") return false;
+    var dialog = activeOverlayDialog();
     if (!dialog) return false;
     var focusable = Array.prototype.slice.call(dialog.querySelectorAll(
       'button:not([disabled]), a[href], input:not([disabled]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"])'
@@ -8241,20 +8264,76 @@
     );
   }
 
+  function workDetailPresentation(type) {
+    var detailType = String(type || "");
+    var protectedEditors = [
+      "feed-settings-editor",
+      "strategy-rulebox-editor",
+      "strategy-prompt-editor",
+      "strategy-model-policy-editor",
+      "notification-delivery-settings",
+      "notification-threshold-settings",
+      "settings-runtime"
+    ];
+    var wideDetails = [
+      "strategy-charts-board",
+      "strategy-graphs-board",
+      "strategy-evidence-board",
+      "strategy-proposals-board",
+      "strategy-trace-board",
+      "experiment-validation-board",
+      "experiment-promotion-board",
+      "experiment-audit-board",
+      "experiment-proposals-board",
+      "ontology-audit-section"
+    ];
+    var largeDetails = [
+      "today-work-queue",
+      "decision-action-queue",
+      "feed-impact-board",
+      "feed-theme-board",
+      "feed-portfolio-board",
+      "feed-source-board",
+      "account-connections-board",
+      "account-balance-board",
+      "account-history-board",
+      "account-identity-board",
+      "notification-candidates-board",
+      "notification-policy-board",
+      "notification-templates-board",
+      "notification-diagnostics-board",
+      "feed-pipeline",
+      "feed-sources",
+      "feed-quality"
+    ];
+    var editor = protectedEditors.indexOf(detailType) >= 0;
+    var size = wideDetails.indexOf(detailType) >= 0
+      ? "wide"
+      : (largeDetails.indexOf(detailType) >= 0 || editor ? "large" : "medium");
+    return {
+      size: size,
+      kind: editor ? "editor" : "reader",
+      dismissOnBackdrop: !editor
+    };
+  }
+
   function renderWorkDetailLayer() {
     var detail = state.workDetailLayer || {};
     if (!detail.type) return "";
     var payload = workDetailPayload(detail.type, detail.key);
     if (!payload) return "";
     var headingId = "work-detail-title";
+    var descriptionId = "work-detail-description";
+    var presentation = workDetailPresentation(detail.type);
+    var backdropCloseAttr = presentation.dismissOnBackdrop ? " data-work-detail-close" : "";
     return [
-      '<div class="work-detail-backdrop" data-work-detail-close>',
-      '<aside class="work-detail-layer" role="dialog" aria-modal="true" aria-labelledby="' + headingId + '" tabindex="-1" data-work-detail-dialog>',
+      '<div class="work-detail-backdrop" data-work-detail-backdrop data-work-detail-kind="' + escapeHtml(presentation.kind) + '"' + backdropCloseAttr + '>',
+      '<aside class="work-detail-layer work-detail-layer-' + escapeHtml(presentation.size) + '" role="dialog" aria-modal="true" aria-labelledby="' + headingId + '"' + (payload.meta ? ' aria-describedby="' + descriptionId + '"' : '') + ' tabindex="-1" data-work-detail-dialog data-work-detail-size="' + escapeHtml(presentation.size) + '">',
       '<header class="work-detail-head">',
       '<div>',
       '<p class="label">' + escapeHtml(payload.kicker || "Detail") + '</p>',
       '<h2 id="' + headingId + '">' + escapeHtml(payload.title || "상세 정보") + '</h2>',
-      payload.meta ? '<span>' + escapeHtml(payload.meta) + '</span>' : '',
+      payload.meta ? '<span id="' + descriptionId + '">' + escapeHtml(payload.meta) + '</span>' : '',
       '</div>',
       '<button class="icon-button danger" type="button" data-work-detail-close title="상세 닫기" aria-label="상세 닫기">&times;</button>',
       '</header>',
@@ -10218,7 +10297,7 @@
   function renderCalendarEntryModal() {
     if (!state.calendarEntryModalOpen) return "";
     return [
-      '<div class="calendar-entry-backdrop" data-calendar-entry-close>',
+      '<div class="calendar-entry-backdrop">',
       '<section class="calendar-entry-modal" role="dialog" aria-modal="true" aria-label="투자 이벤트 등록">',
       '<header class="calendar-entry-head">',
       '<div><p class="label">Event Entry</p><h2>투자 이벤트 등록</h2><span>실적, 거시지표, 공시 일정을 리마인더 후보로 연결합니다.</span></div>',
@@ -17292,7 +17371,7 @@
 
   function renderNotificationPolicyEditorLayer() {
     return [
-      '<div class="notification-policy-modal-backdrop" data-notification-editor-close></div>',
+      '<div class="notification-policy-modal-backdrop">',
       '<section class="notification-policy-editor-layer" role="dialog" aria-modal="true" aria-label="알림 상세 편집">',
       '<div class="notification-policy-modal-head">',
       '<div>',
@@ -17303,7 +17382,8 @@
       '<button class="icon-button" type="button" data-notification-editor-close aria-label="상세 편집 닫기">&times;</button>',
       '</div>',
       renderNotificationPolicyDetailPanel(),
-      '</section>'
+      '</section>',
+      '</div>'
     ].join("");
   }
 
@@ -18235,7 +18315,7 @@
   function renderNotificationTemplateEditorLayer() {
     var selected = activeNotificationTemplate();
     return [
-      '<div class="notification-template-modal-backdrop" data-notification-template-editor-close></div>',
+      '<div class="notification-template-modal-backdrop">',
       '<section class="notification-template-editor-layer" role="dialog" aria-modal="true" aria-label="템플릿 상세 편집">',
       '<div class="notification-template-modal-head">',
       '<div>',
@@ -18246,7 +18326,8 @@
       '<button class="icon-button" type="button" data-notification-template-editor-close aria-label="템플릿 편집 닫기">&times;</button>',
       '</div>',
       renderNotificationTemplateRow(selected, { templateDetail: true }),
-      '</section>'
+      '</section>',
+      '</div>'
     ].join("");
   }
 
@@ -24840,7 +24921,8 @@
     });
 
     Array.prototype.slice.call(app.querySelectorAll("[data-notification-editor-close]")).forEach(function (button) {
-      button.addEventListener("click", function () {
+      button.addEventListener("click", function (event) {
+        if (button.classList && button.classList.contains("notification-policy-modal-backdrop") && event.target !== button) return;
         state.notificationPolicyEditorOpen = false;
         render();
       });
@@ -24857,7 +24939,8 @@
     });
 
     Array.prototype.slice.call(app.querySelectorAll("[data-notification-template-editor-close]")).forEach(function (button) {
-      button.addEventListener("click", function () {
+      button.addEventListener("click", function (event) {
+        if (button.classList && button.classList.contains("notification-template-modal-backdrop") && event.target !== button) return;
         state.notificationTemplateEditorOpen = false;
         render();
       });
@@ -25406,6 +25489,21 @@
     window.addEventListener("keydown", function (event) {
       if (trapWorkDetailFocus(event)) return;
       if (event.key !== "Escape") return;
+      if (state.calendarEntryModalOpen) {
+        state.calendarEntryModalOpen = false;
+        render();
+        return;
+      }
+      if (state.notificationTemplateEditorOpen) {
+        state.notificationTemplateEditorOpen = false;
+        render();
+        return;
+      }
+      if (state.notificationPolicyEditorOpen) {
+        state.notificationPolicyEditorOpen = false;
+        render();
+        return;
+      }
       if (state.expandedOntologyGraphId) {
         state.expandedOntologyGraphId = "";
         render();

@@ -253,6 +253,129 @@ class OntologyLabTests(unittest.TestCase):
         self.assertEqual("unit-test", experiment.last_result["appliedOntologyChanges"]["reviewApproval"]["reviewedBy"])
         self.assertIn("applied", {item.get("applyStatus") for item in experiment.last_result["recommendations"]})
 
+    def test_apply_recommendations_accepts_multiple_selected_recommendation_ids(self):
+        store = MemoryExperimentStore()
+        repository = FakeOntologyRepository()
+        service = OntologyLabService(
+            repository,
+            store,
+            monitor_store=FakeMonitorStore(),
+        )
+        experiment_id = service.create({
+            "title": "AAPL selected apply lab",
+            "symbols": ["AAPL"],
+            "rules": [candidate_rule()],
+        })["experiment"]["id"]
+        service.run(experiment_id)
+        experiment = store.get(experiment_id)
+        recommendations = experiment.last_result["recommendations"]
+        selected_ids = [
+            item["id"]
+            for item in recommendations
+            if item["type"] in {"run-typedb-materialization", "register-relation-types"}
+        ]
+
+        result = service.apply_recommendations(experiment_id, {
+            "reviewApproved": True,
+            "reviewedBy": "unit-test",
+            "reviewReason": "multiple selected recommendations",
+            "recommendationIds": selected_ids,
+        })
+
+        self.assertEqual("applied", result["status"])
+        self.assertEqual(selected_ids, result["application"]["recommendationIds"])
+        self.assertEqual(selected_ids, result["application"]["requestedRecommendationIds"])
+        self.assertEqual([], result["application"]["skippedRecommendationIds"])
+        self.assertEqual(1, len(repository.saved_rulebox_payloads))
+        self.assertEqual(1, len(repository.run_rulebox_payloads))
+        self.assertEqual(1, len(repository.saved_tbox_graphs))
+        marked = {
+            item["id"]: item.get("applyStatus")
+            for item in store.get(experiment_id).last_result["recommendations"]
+        }
+        for recommendation_id in selected_ids:
+            self.assertEqual("applied", marked[recommendation_id])
+
+    def test_apply_recommendations_can_apply_only_selected_tbox_recommendation(self):
+        store = MemoryExperimentStore()
+        repository = FakeOntologyRepository()
+        service = OntologyLabService(
+            repository,
+            store,
+            monitor_store=FakeMonitorStore(),
+        )
+        rule = candidate_rule()
+        rule["rule_id"] = "graph.lab.selected-relation-only.v1"
+        rule["derivations"][0]["relation_type"] = "UNIT_TEST_SELECTED_RELATION"
+        experiment_id = service.create({
+            "title": "AAPL selected tbox apply lab",
+            "symbols": ["AAPL"],
+            "rules": [rule],
+        })["experiment"]["id"]
+        service.run(experiment_id)
+        recommendations = store.get(experiment_id).last_result["recommendations"]
+        relation_recommendation = [
+            item
+            for item in recommendations
+            if item["type"] == "register-relation-types"
+        ][0]
+
+        result = service.apply_recommendations(experiment_id, {
+            "reviewApproved": True,
+            "reviewedBy": "unit-test",
+            "reviewReason": "selected relation type only",
+            "recommendationIds": [relation_recommendation["id"]],
+        })
+
+        self.assertEqual("applied", result["status"])
+        self.assertEqual([relation_recommendation["id"]], result["application"]["recommendationIds"])
+        self.assertEqual(0, len(repository.saved_rulebox_payloads))
+        self.assertEqual(0, len(repository.run_rulebox_payloads))
+        self.assertEqual(1, len(repository.saved_tbox_graphs))
+        self.assertIn("UNIT_TEST_SELECTED_RELATION", result["application"]["relationTypes"])
+        self.assertEqual([], result["application"]["decisionStages"])
+        marked = {
+            item["id"]: item.get("applyStatus")
+            for item in store.get(experiment_id).last_result["recommendations"]
+        }
+        self.assertEqual("applied", marked[relation_recommendation["id"]])
+        unapplied = [
+            item
+            for item in recommendations
+            if item["id"] != relation_recommendation["id"]
+        ]
+        self.assertFalse(any(marked.get(item["id"]) == "applied" for item in unapplied))
+
+    def test_apply_recommendation_batch_processes_multiple_experiments(self):
+        store = MemoryExperimentStore()
+        repository = FakeOntologyRepository()
+        service = OntologyLabService(
+            repository,
+            store,
+            monitor_store=FakeMonitorStore(),
+        )
+        first_rule = candidate_rule()
+        first_rule["rule_id"] = "graph.lab.batch-first.v1"
+        second_rule = candidate_rule()
+        second_rule["rule_id"] = "graph.lab.batch-second.v1"
+        first_id = service.create({"title": "First lab", "symbols": ["AAPL"], "rules": [first_rule]})["experiment"]["id"]
+        second_id = service.create({"title": "Second lab", "symbols": ["AAPL"], "rules": [second_rule]})["experiment"]["id"]
+        service.run(first_id)
+        service.run(second_id)
+
+        result = service.apply_recommendation_batch({
+            "reviewApproved": True,
+            "reviewedBy": "unit-test",
+            "reviewReason": "batch apply",
+            "experimentIds": [first_id, second_id],
+        })
+
+        self.assertEqual("applied", result["status"])
+        self.assertEqual(2, result["count"])
+        self.assertEqual(2, result["appliedCount"])
+        self.assertEqual(0, result["failedCount"])
+        self.assertEqual(2, len(result["results"]))
+
     def test_apply_recommendations_normalizes_blank_condition_ids(self):
         store = MemoryExperimentStore()
         repository = FakeOntologyRepository()

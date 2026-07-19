@@ -1228,6 +1228,10 @@ def apply_ontology_experiment_payload(experiment_id: str, payload: Dict[str, obj
     return ontology_lab_service().apply_recommendations(experiment_id, payload if isinstance(payload, dict) else {})
 
 
+def apply_ontology_experiments_batch_payload(payload: Dict[str, object]) -> Dict[str, object]:
+    return ontology_lab_service().apply_recommendation_batch(payload if isinstance(payload, dict) else {})
+
+
 def run_ontology_experiments_once_payload(payload: Dict[str, object]) -> Dict[str, object]:
     body = payload if isinstance(payload, dict) else {}
     limit = int(body.get("limit") or 0)
@@ -2895,6 +2899,11 @@ class DigitalTwinHandler(BaseHTTPRequestHandler):
             if not self.ensure_writable("공유 모드에서는 AI 온톨로지 실험 제안을 생성할 수 없습니다."):
                 return
             return self.send_payload(200, suggest_ontology_experiments_payload(self.read_json_body()))
+
+        if path == "/api/ontology/experiments/apply" and self.command == "POST":
+            if not self.ensure_writable("공유 모드에서는 온톨로지 실험 제안을 운영 반영할 수 없습니다."):
+                return
+            return self.send_payload(200, apply_ontology_experiments_batch_payload(self.read_json_body()))
 
         ontology_experiment_run_match = re.match(r"^/api/ontology/experiments/([^/]+)/run$", path)
         if ontology_experiment_run_match and self.command == "POST":

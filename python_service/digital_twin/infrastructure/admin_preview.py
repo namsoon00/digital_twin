@@ -539,6 +539,7 @@ def admin_preview_config() -> Dict[str, object]:
                     "POST /api/ontology/experiments",
                     "POST /api/ontology/experiments/once",
                     "POST /api/ontology/experiments/suggest",
+                    "POST /api/ontology/experiments/apply",
                     "POST /api/ontology/experiments/{id}/run",
                     "POST /api/ontology/experiments/{id}/apply",
                     "POST /api/ontology/experiments/{id}/activate",

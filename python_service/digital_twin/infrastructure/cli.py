@@ -404,6 +404,7 @@ def ontology_lab_command(args) -> int:
                 "reviewApproved": bool(args.approve_needs_review),
                 "reviewedBy": args.reviewed_by,
                 "reviewReason": args.review_reason,
+                "recommendationIds": [item.strip() for item in str(args.recommendation_ids or "").split(",") if item.strip()],
             },
         )
         print(json.dumps(result, ensure_ascii=False))
@@ -857,6 +858,7 @@ def build_parser() -> argparse.ArgumentParser:
     lab_apply.add_argument("--approve-needs-review", action="store_true")
     lab_apply.add_argument("--reviewed-by", default="cli-user")
     lab_apply.add_argument("--review-reason", default="")
+    lab_apply.add_argument("--recommendation-ids", default="")
     lab_auto_suggest = ontology_lab_actions.add_parser("auto-suggest")
     lab_auto_suggest.add_argument("--symbols", default="")
     lab_auto_suggest.add_argument("--trigger", default="ontology-lab-cli-auto-suggest")

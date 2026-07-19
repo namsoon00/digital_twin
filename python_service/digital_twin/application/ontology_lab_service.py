@@ -25,6 +25,38 @@ from ..domain.ontology_tbox import TBOX_CLASSES, TBOX_RELATION_TYPES
 DISABLED_VALUES = {"0", "false", "no", "off", "disabled"}
 ACTIVE_STATUS = "active"
 PAUSED_STATUS = "paused"
+RULEBOX_APPLY_RECOMMENDATION_TYPES = {
+    "promote-rule",
+    "review-rule-promotion",
+    "reuse-existing-relation-types",
+    "run-typedb-materialization",
+}
+TBOX_RELATION_APPLY_RECOMMENDATION_TYPES = {
+    "promote-rule",
+    "review-rule-promotion",
+    "reuse-existing-relation-types",
+    "run-typedb-materialization",
+    "register-relation-types",
+}
+TBOX_DECISION_STAGE_APPLY_RECOMMENDATION_TYPES = {
+    "promote-rule",
+    "review-rule-promotion",
+    "reuse-existing-relation-types",
+    "run-typedb-materialization",
+    "register-decision-stages",
+}
+TBOX_CLASS_APPLY_RECOMMENDATION_TYPES = {
+    "promote-rule",
+    "review-rule-promotion",
+    "run-typedb-materialization",
+    "register-tbox-classes",
+}
+APPLY_RECOMMENDATION_TYPES = (
+    RULEBOX_APPLY_RECOMMENDATION_TYPES
+    | TBOX_RELATION_APPLY_RECOMMENDATION_TYPES
+    | TBOX_DECISION_STAGE_APPLY_RECOMMENDATION_TYPES
+    | TBOX_CLASS_APPLY_RECOMMENDATION_TYPES
+)
 
 
 def truthy(value: object, default: bool = True) -> bool:
@@ -359,11 +391,40 @@ class OntologyLabService:
             for item in (last_result.get("recommendations") or [])
             if isinstance(item, dict)
         ]
+        requested_recommendation_ids = clean_recommendation_ids(payload)
+        selected_recommendations = select_recommendations(recommendations, requested_recommendation_ids)
+        if requested_recommendation_ids:
+            selected_ids = {str(item.get("id") or "") for item in selected_recommendations}
+            missing_ids = [item for item in requested_recommendation_ids if item not in selected_ids]
+            if missing_ids:
+                return {
+                    "status": "not-ready",
+                    "id": experiment_id,
+                    "reason": "experiment-recommendations-not-found",
+                    "missingRecommendationIds": missing_ids,
+                    "experiment": experiment.to_dict(),
+                }
+        applicable_recommendations = apply_target_recommendations(selected_recommendations)
+        if requested_recommendation_ids and not applicable_recommendations:
+            return {
+                "status": "not-ready",
+                "id": experiment_id,
+                "reason": "experiment-selected-recommendations-not-applicable",
+                "requestedRecommendationIds": requested_recommendation_ids,
+                "experiment": experiment.to_dict(),
+            }
+        proposed = selected_ontology_proposal(proposed, applicable_recommendations, requested_recommendation_ids)
+        candidate_rules = selected_candidate_rules(
+            experiment.candidate_rules,
+            proposed,
+            applicable_recommendations,
+            requested_recommendation_ids,
+        )
         run_rulebox = truthy(payload.get("runRulebox", payload.get("run_rulebox")), True)
         stamp = utc_now_iso()
         rulebox = self.rulebox_snapshot()
         baseline_rules = rule_payloads_from_snapshot(rulebox)
-        merged_rules, added_rules, skipped_rule_ids = merge_candidate_rules(baseline_rules, experiment.candidate_rules)
+        merged_rules, added_rules, skipped_rule_ids = merge_candidate_rules(baseline_rules, candidate_rules)
         tbox_graph = ontology_lab_tbox_graph(experiment, proposed, stamp)
         tbox_result = self.save_tbox_graph(tbox_graph) if tbox_graph.entities else {"status": "skipped", "reason": "No TBox proposal."}
         rulebox_result = {"status": "skipped", "reason": "No new RuleBox rule."}
@@ -389,7 +450,13 @@ class OntologyLabService:
             "relationTypes": clean_text_list(proposed.get("newRelationTypes") or proposed.get("relationTypes") or []),
             "decisionStages": clean_text_list(proposed.get("newDecisionStages") or proposed.get("decisionStages") or []),
             "tboxClasses": clean_text_list(proposed.get("tboxClasses") or []),
-            "recommendationIds": [str(item.get("id") or "") for item in recommendations if str(item.get("id") or "").strip()],
+            "recommendationIds": recommendation_ids(applicable_recommendations),
+            "requestedRecommendationIds": requested_recommendation_ids,
+            "skippedRecommendationIds": [
+                str(item.get("id") or "")
+                for item in selected_recommendations
+                if str(item.get("id") or "").strip() and str(item.get("type") or "") not in APPLY_RECOMMENDATION_TYPES
+            ],
             "ruleboxSave": compact_apply_result(rulebox_result),
             "tboxSave": compact_apply_result(tbox_result),
             "inferenceRun": compact_apply_result(inference_result),
@@ -399,7 +466,11 @@ class OntologyLabService:
         strategy_application = self.mark_strategy_proposals_deployed(experiment, application)
         if strategy_application:
             application["strategyProposals"] = strategy_application
-        updated_recommendations = mark_recommendations_applied(recommendations, application)
+        updated_recommendations = mark_recommendations_applied(
+            recommendations,
+            application,
+            set(application.get("recommendationIds") or []),
+        )
         last_result["recommendations"] = updated_recommendations
         last_result["appliedOntologyChanges"] = application
         last_result["sandbox"] = {
@@ -412,6 +483,30 @@ class OntologyLabService:
         self.mark_latest_history_application(experiment, application, updated_recommendations)
         self.experiment_store.save(experiment)
         return {"status": application["status"], "experiment": experiment.to_dict(), "application": application}
+
+    def apply_recommendation_batch(self, payload: Dict[str, object] = None) -> Dict[str, object]:
+        payload = dict(payload or {})
+        applications = normalize_apply_batch_payload(payload)
+        if not applications:
+            return {"status": "empty", "count": 0, "appliedCount": 0, "failedCount": 0, "results": []}
+        results = []
+        for item in applications:
+            experiment_id = str(item.get("experimentId") or item.get("id") or "").strip()
+            body = dict(item)
+            body.pop("experimentId", None)
+            body.pop("id", None)
+            result = self.apply_recommendations(experiment_id, body)
+            results.append(result)
+        applied_count = len([item for item in results if str(item.get("status") or "").lower() in {"applied", "already-applied"}])
+        failed_count = len(results) - applied_count
+        status = "applied" if applied_count == len(results) else ("partial" if applied_count else "error")
+        return {
+            "status": status,
+            "count": len(results),
+            "appliedCount": applied_count,
+            "failedCount": failed_count,
+            "results": results,
+        }
 
     def run_once(self, limit: int = 0, force: bool = False) -> Dict[str, object]:
         if not self.enabled():
@@ -953,6 +1048,143 @@ def clean_text_list(values: Iterable[object]) -> List[str]:
     return result
 
 
+def clean_recommendation_ids(payload: Dict[str, object]) -> List[str]:
+    payload = dict(payload or {})
+    value = payload.get("recommendationIds", payload.get("recommendation_ids", payload.get("recommendationId")))
+    if isinstance(value, str):
+        values = value.replace("\n", ",").split(",")
+    elif isinstance(value, list):
+        values = value
+    else:
+        values = []
+    return clean_text_list(values)
+
+
+def recommendation_ids(recommendations: Iterable[Dict[str, object]]) -> List[str]:
+    return clean_text_list([str((item or {}).get("id") or "") for item in recommendations or []])
+
+
+def select_recommendations(
+    recommendations: List[Dict[str, object]],
+    selected_ids: List[str],
+) -> List[Dict[str, object]]:
+    if not selected_ids:
+        return [dict(item) for item in recommendations or [] if isinstance(item, dict)]
+    selected = set(selected_ids)
+    return [
+        dict(item)
+        for item in recommendations or []
+        if isinstance(item, dict) and str(item.get("id") or "").strip() in selected
+    ]
+
+
+def apply_target_recommendations(recommendations: List[Dict[str, object]]) -> List[Dict[str, object]]:
+    return [
+        dict(item)
+        for item in recommendations or []
+        if str((item or {}).get("type") or "") in APPLY_RECOMMENDATION_TYPES
+    ]
+
+
+def selected_ontology_proposal(
+    base_proposal: Dict[str, object],
+    recommendations: List[Dict[str, object]],
+    selected_ids: List[str],
+) -> Dict[str, object]:
+    if not selected_ids:
+        return dict(base_proposal or {})
+    result = {
+        "ruleIds": [],
+        "relationTypes": [],
+        "newRelationTypes": [],
+        "decisionStages": [],
+        "newDecisionStages": [],
+        "tboxClasses": [],
+        "inferenceRuleIds": [],
+        "inferenceDecisionStages": [],
+        "inferenceRelationTypes": [],
+    }
+    for recommendation in recommendations or []:
+        recommendation_type = str((recommendation or {}).get("type") or "")
+        proposal = (recommendation or {}).get("proposal") if isinstance((recommendation or {}).get("proposal"), dict) else {}
+        evidence = (recommendation or {}).get("evidence") if isinstance((recommendation or {}).get("evidence"), dict) else {}
+        if recommendation_type in RULEBOX_APPLY_RECOMMENDATION_TYPES:
+            extend_proposal_keys(result, proposal, [
+                "ruleIds",
+                "relationTypes",
+                "newRelationTypes",
+                "decisionStages",
+                "newDecisionStages",
+                "tboxClasses",
+                "inferenceRuleIds",
+                "inferenceDecisionStages",
+                "inferenceRelationTypes",
+            ])
+        if recommendation_type in TBOX_RELATION_APPLY_RECOMMENDATION_TYPES:
+            extend_proposal_keys(result, proposal, ["relationTypes", "newRelationTypes", "inferenceRelationTypes"])
+            extend_proposal_keys(result, evidence, ["relationTypes", "newRelationTypes", "inferenceRelationTypes"])
+        if recommendation_type in TBOX_DECISION_STAGE_APPLY_RECOMMENDATION_TYPES:
+            extend_proposal_keys(result, proposal, ["decisionStages", "newDecisionStages", "inferenceDecisionStages"])
+            extend_proposal_keys(result, evidence, ["decisionStages", "newDecisionStages", "inferenceDecisionStages"])
+        if recommendation_type in TBOX_CLASS_APPLY_RECOMMENDATION_TYPES:
+            extend_proposal_keys(result, proposal, ["tboxClasses"])
+            extend_proposal_keys(result, evidence, ["tboxClasses"])
+    return {key: clean_text_list(value) for key, value in result.items()}
+
+
+def extend_proposal_keys(target: Dict[str, List[str]], source: Dict[str, object], keys: List[str]) -> None:
+    source = dict(source or {})
+    for key in keys:
+        target[key] = clean_text_list(list(target.get(key) or []) + clean_text_list(source.get(key) or []))
+
+
+def selected_candidate_rules(
+    candidate_rules: List[Dict[str, object]],
+    proposal: Dict[str, object],
+    recommendations: List[Dict[str, object]],
+    selected_ids: List[str],
+) -> List[Dict[str, object]]:
+    if not selected_ids:
+        return [dict(item) for item in candidate_rules or [] if isinstance(item, dict)]
+    selected_types = {str((item or {}).get("type") or "") for item in recommendations or []}
+    if not selected_types.intersection(RULEBOX_APPLY_RECOMMENDATION_TYPES):
+        return []
+    selected_rule_ids = set(clean_text_list((proposal or {}).get("ruleIds") or []))
+    if not selected_rule_ids:
+        return [dict(item) for item in candidate_rules or [] if isinstance(item, dict)]
+    return [
+        dict(item)
+        for item in candidate_rules or []
+        if isinstance(item, dict) and rule_id_from_payload(item) in selected_rule_ids
+    ]
+
+
+def normalize_apply_batch_payload(payload: Dict[str, object]) -> List[Dict[str, object]]:
+    payload = dict(payload or {})
+    shared = {
+        key: value
+        for key, value in payload.items()
+        if key not in {"applications", "experiments", "experimentIds", "experiment_ids"}
+    }
+    applications = payload.get("applications")
+    if not isinstance(applications, list):
+        applications = payload.get("experiments") if isinstance(payload.get("experiments"), list) else []
+    if applications:
+        result = []
+        for item in applications:
+            if not isinstance(item, dict):
+                continue
+            body = {**shared, **dict(item)}
+            if str(body.get("experimentId") or body.get("id") or "").strip():
+                result.append(body)
+        return result
+    experiment_ids = payload.get("experimentIds", payload.get("experiment_ids"))
+    if isinstance(experiment_ids, str):
+        experiment_ids = experiment_ids.replace("\n", ",").split(",")
+    ids = clean_text_list(experiment_ids or [])
+    return [{**shared, "experimentId": item} for item in ids]
+
+
 def numeric_value(value: object, fallback: float = 0.0) -> float:
     try:
         return float(str(value if value is not None else "").strip())
@@ -985,6 +1217,8 @@ def compact_automation_application(application: Dict[str, object]) -> Dict[str, 
         "decisionStages",
         "tboxClasses",
         "recommendationIds",
+        "requestedRecommendationIds",
+        "skippedRecommendationIds",
     ]
     return {key: application.get(key) for key in keys if application.get(key) not in (None, "", [])}
 
@@ -1468,18 +1702,14 @@ def ontology_application_status(
 def mark_recommendations_applied(
     recommendations: List[Dict[str, object]],
     application: Dict[str, object],
+    selected_ids: set = None,
 ) -> List[Dict[str, object]]:
-    applied_types = {
-        "promote-rule",
-        "review-rule-promotion",
-        "register-relation-types",
-        "register-decision-stages",
-        "reuse-existing-relation-types",
-    }
+    selected_ids = selected_ids or set()
     applied = []
     for item in recommendations or []:
         recommendation = dict(item)
-        if str(recommendation.get("type") or "") in applied_types:
+        recommendation_id = str(recommendation.get("id") or "").strip()
+        if recommendation_id in selected_ids and str(recommendation.get("type") or "") in APPLY_RECOMMENDATION_TYPES:
             recommendation["applyStatus"] = str(application.get("status") or "")
             recommendation["appliedAt"] = str(application.get("appliedAt") or "")
             recommendation["appliedRuleIds"] = list(application.get("ruleIds") or [])

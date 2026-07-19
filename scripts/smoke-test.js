@@ -238,7 +238,7 @@ function checkFrontendAdminRender() {
       /\.console-shell \.app-nav-command \.page-command-metrics\s*\{[\s\S]*display: none;/.test(styles) &&
       /\.console-shell \.app-nav-routine > span:not\(\.app-nav-routine-action-cell\)\s*\{[\s\S]*display: none;/.test(styles) &&
       /@media \(min-width: 861px\) and \(max-width: 1180px\)[\s\S]*\.console-shell \.app-nav-flow,[\s\S]*\.console-shell \.app-nav-command \.page-command-metrics,[\s\S]*\.console-shell \.app-nav-current em,[\s\S]*\.console-shell :is\([\s\S]*\.feed-section-tabs span[\s\S]*\)\s*\{[\s\S]*display: none;/.test(styles) &&
-      indexHtml.indexOf("styles.css?v=20260719-investment-tabs-v1") >= 0,
+      indexHtml.indexOf("styles.css?v=20260719-single-screen-console-v1") >= 0,
     "PC 상단 영역이 탭별로 여러 줄/넘침으로 깨지지 않도록 하는 안정화 레이어가 없습니다."
   );
   assertOk(
@@ -252,7 +252,7 @@ function checkFrontendAdminRender() {
       /\.loading-progress span\s*\{[\s\S]*animation: loadingProgress/.test(styles) &&
       /\.loading-skeleton-grid\s*\{[\s\S]*grid-template-columns: repeat\(4, minmax\(0, 1fr\)\);/.test(styles) &&
       /@keyframes loadingProgress/.test(styles) &&
-      indexHtml.indexOf("app.js?v=20260719-investment-tabs-v1") >= 0,
+      indexHtml.indexOf("app.js?v=20260719-single-screen-console-v1") >= 0,
     "초기 로딩 화면이 운영 정보 카드 대신 progress/skeleton 화면으로 고정되지 않았습니다."
   );
   assertOk(
@@ -392,6 +392,22 @@ function checkFrontendAdminRender() {
   assertOk(code.indexOf("renderAppNavCommand") >= 0 && code.indexOf("app-nav-routine") >= 0 && code.indexOf('data-style-layer="unified-command"') >= 0, "상단 네비게이션이 현재 화면 command/routine rail을 함께 렌더링하지 않습니다.");
   assertOk(/Professional finance top navigation shell[\s\S]*\.console-shell \.topbar,[\s\S]*\.console-shell \.managed-page > \.page-command-strip,[\s\S]*\.console-shell \.managed-page > \.page-routine-panel[\s\S]*\{[\s\S]*display: none;/.test(styles), "topbar, 본문 command strip, 본문 routine panel이 상단 통합 rail로 합쳐지지 않았습니다.");
   assertOk(code.indexOf("renderWorkDetailLayer") >= 0 && code.indexOf("data-work-detail") >= 0, "긴 독립 상세를 공통 work detail layer로 여는 렌더 경로가 없습니다.");
+  assertOk(
+    code.indexOf("renderSingleScreenFlowPanel") >= 0 &&
+      code.indexOf("renderInfoIconButton") >= 0 &&
+      code.indexOf('type === "screen-info"') >= 0 &&
+      styles.indexOf(".single-screen-flow-panel") >= 0 &&
+      styles.indexOf(".screen-info-button") >= 0,
+    "탭당 하나의 운영 화면을 위한 흐름 패널과 정보 아이콘 상세 레이어 계약이 없습니다."
+  );
+  assertOk(
+    code.indexOf("renderFeedUnifiedConsole") >= 0 &&
+      code.indexOf('data-single-tab-console="feed"') >= 0 &&
+      code.indexOf('type === "feed-impact-board"') >= 0 &&
+      code.indexOf('type === "feed-source-board"') >= 0 &&
+      styles.indexOf(".feed-drilldown-bar .feed-drilldown-rail") >= 0,
+    "뉴스·근거 탭이 하위 탭 화면 전환 대신 단일 콘솔과 상세 드릴다운으로 정리되지 않았습니다."
+  );
   assertOk(
     code.indexOf("runWithSuppressedRender") >= 0 &&
       /function markRealtimeState\(connected, eventName\)\s*\{[\s\S]*state\.realtime\.lastEventAt = new Date\(\)\.toISOString\(\);[\s\S]*\}\s*\n\s*function runWithSuppressedRender/.test(code) &&
@@ -1514,15 +1530,15 @@ function checkFrontendAdminRender() {
     ["decision", "lab", "alerts", "holdings"].forEach(function (tab) {
       assertOk(overviewHtml.indexOf('data-tab="' + tab + '"') < 0, "기존 탭이 남아 있습니다: " + tab);
     });
-    assertOk(feedHtml.indexOf("feed-view feed-view-overview") >= 0 && feedHtml.indexOf("feed-section-tabs") >= 0, "피드 탭이 시장 영향 콘솔 기본 화면으로 렌더링되지 않습니다.");
+    assertOk(feedHtml.indexOf("feed-view feed-view-console") >= 0 && feedHtml.indexOf('data-single-tab-console="feed"') >= 0 && feedHtml.indexOf("feed-drilldown-rail") >= 0, "피드 탭이 단일 운영 콘솔 기본 화면으로 렌더링되지 않습니다.");
     assertOk(feedHtml.indexOf("page-mode-switch") >= 0 && feedHtml.indexOf('data-page-mode-page="feed"') >= 0 && feedHtml.indexOf('data-page-mode="results"') >= 0 && feedHtml.indexOf('data-page-mode="settings"') >= 0, "피드 탭에 결과/설정 전환이 없습니다.");
-    assertOk(feedHtml.indexOf('data-feed-section="overview"') >= 0 && feedHtml.indexOf('data-feed-section="impact"') >= 0 && feedHtml.indexOf('data-feed-section="themes"') >= 0 && feedHtml.indexOf('data-feed-section="portfolio"') >= 0 && feedHtml.indexOf('data-feed-section="sources"') >= 0 && feedHtml.indexOf('data-feed-section="settings"') < 0, "피드 결과 모드 섹션 탭이 요약/영향 뉴스/테마/내 종목/소스 구조로 제공되지 않습니다.");
+    assertOk(feedHtml.indexOf('data-work-detail="feed-impact-board"') >= 0 && feedHtml.indexOf('data-work-detail="feed-theme-board"') >= 0 && feedHtml.indexOf('data-work-detail="feed-portfolio-board"') >= 0 && feedHtml.indexOf('data-work-detail="feed-source-board"') >= 0, "피드 결과 모드가 하위 화면 이동 대신 상세 드릴다운 버튼을 제공하지 않습니다.");
     assertOk(feedHtml.indexOf("오늘의 시장 요약") >= 0 && feedHtml.indexOf("테마별 자금 흐름 후보") >= 0 && feedHtml.indexOf("투자 영향 인박스") >= 0 && feedHtml.indexOf("소스 신선도 원장") >= 0, "피드 기본 화면이 요약, 테마, 영향 뉴스, 소스 품질을 먼저 보여주지 않습니다.");
     assertOk(feedHtml.indexOf("데이터 품질 상태") >= 0 && feedHtml.indexOf("피드 수집 설정") < 0 && feedHtml.indexOf('data-research-evidence-form') < 0, "피드 기본 화면이 설정 폼이나 긴 근거 목록과 분리되지 않았습니다.");
-    assertOk(feedEvidenceHtml.indexOf("feed-view feed-view-impact") >= 0 && feedEvidenceHtml.indexOf("투자 영향 인박스") >= 0 && feedEvidenceHtml.indexOf("저장 근거 조회·관리") >= 0 && feedEvidenceHtml.indexOf("research-evidence-article") >= 0 && feedEvidenceHtml.indexOf('data-research-evidence-form') >= 0, "피드 영향 뉴스 섹션에 영향 판단형 저장 근거 조회/관리 폼이 없습니다.");
-    assertOk(feedThemesHtml.indexOf("feed-view feed-view-themes") >= 0 && feedThemesHtml.indexOf("테마별 자금 흐름 후보") >= 0 && feedThemesHtml.indexOf("feed-theme-grid") >= 0, "피드 테마 섹션이 섹터·자산 흐름 묶음으로 렌더링되지 않습니다.");
-    assertOk(feedPortfolioHtml.indexOf("feed-view feed-view-portfolio") >= 0 && feedPortfolioHtml.indexOf("내 종목 영향 뉴스") >= 0 && feedPortfolioHtml.indexOf("Portfolio Lens") >= 0, "피드 내 종목 섹션이 보유·관심 종목 뉴스 렌즈로 렌더링되지 않습니다.");
-    assertOk(feedSourcesHtml.indexOf("feed-view feed-view-sources") >= 0 && feedSourcesHtml.indexOf("소스 신선도 원장") >= 0 && feedSourcesHtml.indexOf("수집 채널 매트릭스") >= 0 && feedSourcesHtml.indexOf("수집·판단 흐름") >= 0, "피드 소스 섹션이 소스 원장, 채널, 데이터 흐름을 함께 보여주지 않습니다.");
+    assertOk(feedEvidenceHtml.indexOf("feed-view feed-view-console") >= 0 && code.indexOf("feedImpactBoardWorkDetailPayload") >= 0 && code.indexOf("renderResearchEvidencePanel") >= 0, "피드 영향 뉴스 상세가 별도 드릴다운 payload로 분리되지 않았습니다.");
+    assertOk(feedThemesHtml.indexOf("feed-view feed-view-console") >= 0 && code.indexOf("feedThemeBoardWorkDetailPayload") >= 0 && code.indexOf("renderFeedThemeClusterPanel") >= 0, "피드 테마 상세가 별도 드릴다운 payload로 분리되지 않았습니다.");
+    assertOk(feedPortfolioHtml.indexOf("feed-view feed-view-console") >= 0 && code.indexOf("feedPortfolioBoardWorkDetailPayload") >= 0 && code.indexOf("Portfolio Evidence") >= 0, "피드 내 종목 상세가 별도 드릴다운 payload로 분리되지 않았습니다.");
+    assertOk(feedSourcesHtml.indexOf("feed-view feed-view-console") >= 0 && code.indexOf("feedSourceBoardWorkDetailPayload") >= 0 && code.indexOf("renderFeedPipelinePanel") >= 0, "피드 소스 상세가 별도 드릴다운 payload로 분리되지 않았습니다.");
     assertOk(feedSettingsHtml.indexOf("피드 수집 설정") >= 0 && feedSettingsHtml.indexOf("feed-settings-action-grid") >= 0 && feedSettingsHtml.indexOf("뉴스·아카이브") >= 0 && feedSettingsHtml.indexOf("그래프 추론") >= 0 && feedSettingsHtml.indexOf("긴 매핑값") >= 0, "피드 설정 섹션이 요약 카드와 상세 레이어 진입점 구조로 렌더링되지 않습니다.");
     assertOk(code.indexOf("renderFeedSettingsEditorPanel") >= 0 && code.indexOf('newsCollectionRateLimitSeconds') >= 0 && code.indexOf('data-setting="externalSecCompanyCiks"') >= 0, "피드 설정 상세 레이어에 세부 수집 설정 필드가 없습니다.");
     assertOk(feedSettingsHtml.indexOf('data-section-mode="settings"') >= 0 && feedSettingsHtml.indexOf('data-feed-section="settings"') >= 0 && feedSettingsHtml.indexOf('data-feed-section="overview"') < 0, "피드 설정 모드가 수집 설정 섹션으로만 분리되지 않았습니다.");

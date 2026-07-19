@@ -242,7 +242,7 @@ function checkWorkflowConsoleContract() {
   assertOk(/\.work-detail-backdrop\s*\{[\s\S]*overflow-y: auto;/.test(styles) && /\.work-detail-layer\s*\{[\s\S]*width: 100%;[\s\S]*min-height: 100dvh;[\s\S]*overflow: visible;/.test(styles), "상세가 우측 패널이 아닌 전체화면 페이지로 열리지 않습니다.");
   assertOk(/\.work-detail-body\s*\{[\s\S]*overflow: visible;/.test(styles), "상세 본문에 중첩 스크롤이 남아 있습니다.");
   assertOk(styles.indexOf("Workflow console continuity and detail navigation pass") >= 0 && styles.indexOf(".oa-detail-queue") >= 0, "전체 목록 상세와 포커스 스타일이 없습니다.");
-  assertOk(indexHtml.indexOf("styles.css?v=20260719-workflow-console-v6") >= 0 && indexHtml.indexOf("app.js?v=20260719-workflow-console-v6") >= 0, "새 콘솔 정적 자산 cache key가 반영되지 않았습니다.");
+  assertOk(indexHtml.indexOf("styles.css?v=20260719-ontology-world-v7") >= 0 && indexHtml.indexOf("app.js?v=20260719-ontology-world-v7") >= 0, "새 콘솔 정적 자산 cache key가 반영되지 않았습니다.");
 }
 
 function checkFrontendAdminRender() {
@@ -1828,14 +1828,15 @@ function checkFrontendAdminRender() {
     assertOk(modelingChartHtml.indexOf('data-investment-chart-period="1d"') >= 0 && modelingChartHtml.indexOf('data-investment-chart-period="1w"') >= 0 && modelingChartHtml.indexOf('data-investment-chart-period="1m"') >= 0 && modelingChartHtml.indexOf('data-investment-chart-period="custom"') >= 0, "통합 차트 기간 컨트롤이 일/주/월/사용자 기간을 제공하지 않습니다.");
     assertOk(modelingChartHtml.indexOf("실제 데이터") >= 0 && modelingChartHtml.indexOf("mock") >= 0 && modelingChartHtml.indexOf("API·스냅샷 출처") >= 0, "통합 차트가 실제/mock 데이터와 출처 표시 정책을 보여주지 않습니다.");
     assertOk(modelingChartHtml.indexOf("investment-evidence-panel") < 0 && modelingChartHtml.indexOf("ontology-cytoscape") < 0, "통합 차트 섹션에 근거 카드나 온톨로지 그래프가 섞여 있습니다.");
-    assertOk(modelingGraphHtml.indexOf("<h2>온톨로지</h2>") >= 0 && modelingGraphHtml.indexOf("전체 규칙 구조 그래프") >= 0 && modelingGraphHtml.indexOf("핵심 데이터 관계 그래프") >= 0, "온톨로지 섹션이 통합 탭 내부에서 렌더링되지 않았습니다.");
-    assertOk(modelingGraphHtml.indexOf("판단 근거 체인 그래프") >= 0 && modelingGraphHtml.indexOf('data-ontology-cytoscape="decision-chain"') >= 0, "온톨로지 섹션에 판단 근거 체인 그래프가 없습니다.");
-    assertOk(modelingGraphHtml.indexOf("데이터 → 관계 → RuleBox → InferenceBox → 투자 판단 → 알림 → 성과") >= 0, "판단 근거 체인 그래프가 전체 판단 흐름을 설명하지 않습니다.");
-    assertOk(modelingGraphHtml.indexOf("ontology-chain-selector") >= 0 && modelingGraphHtml.indexOf("ontology-chain-detail") >= 0 && modelingGraphHtml.indexOf("성과 피드백") >= 0, "판단 근거 체인 선택/상세/성과 피드백 UI가 없습니다.");
+    assertOk(modelingGraphHtml.indexOf("<h2>시장 관계 지도</h2>") >= 0 && modelingGraphHtml.indexOf("현재 세계 그래프") >= 0 && modelingGraphHtml.indexOf('data-ontology-cytoscape="world"') >= 0, "온톨로지 섹션이 실세계 그래프 중심 화면으로 렌더링되지 않았습니다.");
+    assertOk(modelingGraphHtml.indexOf('data-ontology-world-lens="reality"') >= 0 && modelingGraphHtml.indexOf('data-ontology-world-lens="portfolio"') >= 0 && modelingGraphHtml.indexOf('data-ontology-world-lens="risk"') >= 0 && modelingGraphHtml.indexOf('data-ontology-world-lens="inference"') >= 0 && modelingGraphHtml.indexOf('data-ontology-world-lens="evidence"') >= 0, "실세계 그래프에 전체/포트폴리오/위험/추론/근거 렌즈가 없습니다.");
+    assertOk(modelingGraphHtml.indexOf("ontology-world-causal-rail") >= 0 && modelingGraphHtml.indexOf("실데이터") >= 0 && modelingGraphHtml.indexOf("RuleBox") >= 0 && modelingGraphHtml.indexOf("InferenceBox") >= 0 && modelingGraphHtml.indexOf("성과") >= 0, "판단 경로가 데이터에서 성과까지 이어지지 않습니다.");
+    assertOk(modelingGraphHtml.indexOf("Insight Brief") >= 0 && modelingGraphHtml.indexOf("Change Ledger") >= 0 && modelingGraphHtml.indexOf("Evidence Ledger") >= 0 && modelingGraphHtml.indexOf("Risk &amp; Anomaly") >= 0, "온톨로지 데이터별 전문 포맷이 렌더링되지 않았습니다.");
     assertOk(code.indexOf("ontologyDecisionChainRows") >= 0 && code.indexOf("ontologyBuildDecisionChainGraph") >= 0 && code.indexOf("activeOntologyChainKey") >= 0, "판단 근거 체인 그래프 데이터 빌더나 선택 상태가 없습니다.");
-    assertOk(code.indexOf('sourceGraphId === "decision-chain"') >= 0 && code.indexOf('data-ontology-chain-select') >= 0, "판단 근거 체인 노드 클릭 또는 버튼 선택 바인딩이 없습니다.");
-    assertOk(styles.indexOf(".ontology-decision-chain-graph") >= 0 && styles.indexOf(".ontology-chain-stage") >= 0 && code.indexOf(".node-performance-feedback") >= 0, "판단 근거 체인 그래프 스타일이 없습니다.");
-    assertOk(modelingGraphHtml.indexOf("ontology-cytoscape") >= 0 && modelingGraphHtml.indexOf("investment-ontology-layer-tabs") >= 0 && modelingGraphHtml.indexOf("investment-ontology-workbench") >= 0 && code.indexOf("renderInvestmentRuleRelationTextPanel") >= 0 && code.indexOf("RuleBox 규칙") >= 0, "관계 그래프 섹션에 레이어 탭, Cytoscape 그래프, RuleBox 해설 경로가 없습니다.");
+    assertOk(code.indexOf('sourceGraphId === "world"') >= 0 && code.indexOf('data-ontology-world-chain') >= 0 && code.indexOf('data-ontology-world-inspector') >= 0, "실세계 그래프 노드 선택 또는 판단 대상 선택 바인딩이 없습니다.");
+    assertOk(styles.indexOf(".ontology-world-stage") >= 0 && styles.indexOf(".ontology-world-causal-rail") >= 0 && styles.indexOf(".ontology-ledger-rows") >= 0 && code.indexOf(".node-performance-feedback") >= 0, "실세계 그래프와 전문 원장 스타일이 없습니다.");
+    assertOk(modelingGraphHtml.indexOf("investment-ontology-layer-tabs") < 0 && modelingGraphHtml.indexOf('data-ontology-cytoscape="tbox"') < 0 && modelingGraphHtml.indexOf('data-ontology-cytoscape="abox"') < 0, "기본 온톨로지 화면에 이전 레이어 탭이나 다중 그래프가 남아 있습니다.");
+    assertOk(modelingGraphHtml.indexOf('data-ontology-graph-expand="tbox"') >= 0 && modelingGraphHtml.indexOf('data-work-detail="strategy-rulebox-editor"') >= 0 && modelingGraphHtml.indexOf('data-work-detail="strategy-trace-board"') >= 0, "TBox, RuleBox, 추론 원장 상세 도구 진입점이 없습니다.");
     assertOk(modelingTraceHtml.indexOf("strategy-review-status-panel") >= 0 && modelingTraceHtml.indexOf("검증 상태판") >= 0 && modelingTraceHtml.indexOf("strategy-trace-overview-panel") >= 0, "검증·리뷰 섹션이 상단 상태판과 상세 진입 카드로 분리되지 않았습니다.");
     assertOk(modelingProposalsHtml.indexOf("strategy-proposal-console-panel") >= 0 && modelingProposalsHtml.indexOf("strategy-proposal-layout") >= 0, "투자 판단 전략제안 섹션이 공용 승인 큐 콘솔로 렌더링되지 않습니다.");
     assertOk(code.indexOf("renderStrategyProposalSectionTabs") >= 0 && code.indexOf("data-strategy-proposal-section") >= 0 && styles.indexOf(".strategy-proposal-section-tabs") >= 0, "전략제안 상세가 요약/조건/검증/성과/이력 내부 섹션으로 분리되지 않았습니다.");

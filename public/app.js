@@ -449,6 +449,8 @@
     activeInvestmentChartPeriod: "1d",
     activeInvestmentEvidenceKey: "",
     activeInvestmentGraphLayer: initialInvestmentGraphLayer(),
+    activeOntologyWorldLens: initialOntologyWorldLens(),
+    activeOntologyWorldNodeId: "",
     activeOntologySection: initialOntologySection(),
     activeNotificationMessageType: "investmentInsight",
     notificationPolicyEditorOpen: false,
@@ -1051,6 +1053,11 @@
     return normalizeInvestmentGraphLayer(params.get("graphLayer") || params.get("ontologyLayer"));
   }
 
+  function initialOntologyWorldLens() {
+    var params = new URLSearchParams(window.location.search);
+    return normalizeOntologyWorldLens(params.get("ontologyLens") || params.get("worldLens"));
+  }
+
   function initialOntologySection() {
     var params = new URLSearchParams(window.location.search);
     return normalizeOntologySection(params.get("ontology"));
@@ -1237,6 +1244,15 @@
     return requested === "tbox" || requested === "schema" || requested === "vocabulary" ? "tbox" : "inference";
   }
 
+  function normalizeOntologyWorldLens(value) {
+    var requested = String(value || "").toLowerCase();
+    if (requested === "account" || requested === "holding" || requested === "holdings") return "portfolio";
+    if (requested === "quality" || requested === "warning" || requested === "anomaly") return "risk";
+    if (requested === "reasoning" || requested === "opinion") return "inference";
+    if (requested === "source" || requested === "sources" || requested === "provenance") return "evidence";
+    return ["reality", "portfolio", "risk", "inference", "evidence"].indexOf(requested) >= 0 ? requested : "reality";
+  }
+
   function normalizeOntologySection(value) {
     var requested = String(value || "").toLowerCase();
     if (requested === "graph") return "graphs";
@@ -1269,11 +1285,22 @@
   function normalizeOntologyGraphId(value) {
     var requested = String(value || "").toLowerCase().replace("-expanded", "");
     if (requested === "chain" || requested === "decision" || requested === "decision-chain") return "decision-chain";
+    if (requested === "world" || requested === "reality") return "world";
     return requested === "tbox" || requested === "abox" ? requested : "";
   }
 
   function ontologyGraphDisplayMeta(graphId) {
     var normalized = normalizeOntologyGraphId(graphId);
+    if (normalized === "world") {
+      var lens = ontologyWorldLensDefinition(state.activeOntologyWorldLens);
+      return {
+        title: lens.title,
+        eyebrow: "Reality Graph",
+        description: lens.description,
+        fitLabel: "현재 세계 그래프 맞춤",
+        layoutLabel: "현재 세계 그래프 자동 배치"
+      };
+    }
     if (normalized === "decision-chain") {
       return {
         title: "판단 근거 체인 그래프",
@@ -15356,40 +15383,281 @@
   }
 
   function renderInvestmentOntologyWorkspacePanel(snapshot, parts) {
-    var activeLayer = normalizeInvestmentGraphLayer(state.activeInvestmentGraphLayer);
-    state.activeInvestmentGraphLayer = activeLayer;
-    var layers = investmentOntologyLayerItems(parts);
+    if (((parts.strategy || {}).detailLevel === "summary" || !snapshotHasFullOntologyDetail(snapshot)) && state.ontologyStrategyDetailLoading) {
+      return renderOntologyWorldLoadingState(snapshot);
+    }
+    var lensId = normalizeOntologyWorldLens(state.activeOntologyWorldLens);
+    state.activeOntologyWorldLens = lensId;
+    var lens = ontologyWorldLensDefinition(lensId);
+    var graph = ontologyBuildWorldGraph(parts, snapshot, lensId);
+    var summary = ontologyWorldSummary(parts, graph);
     return [
-      '<article class="panel investment-ontology-workspace-panel">',
-      '<div class="panel-head">',
+      '<article class="investment-ontology-world" data-ontology-world-lens-active="' + escapeHtml(lensId) + '">',
+      '<header class="ontology-world-command">',
       '<div>',
-      '<p class="label">Ontology Engine</p>',
-      '<h2>온톨로지</h2>',
-      '<p class="subtle">TBox, ABox, InferenceBox, RuleBox를 레이어로 나눠 선택한 관계만 깊게 봅니다.</p>',
+      '<p class="label">Reality Intelligence</p>',
+      '<h2>시장 관계 지도</h2>',
+      '<p>계좌, 종목, 시장 사건, 근거와 TypeDB 추론을 현재 시점의 한 세계 모델로 읽습니다.</p>',
       '</div>',
-      '<span class="metric">' + escapeHtml(parts.aboxRelations.length) + '</span>',
-      '</div>',
-      '<div class="investment-ontology-layer-tabs" role="tablist" aria-label="온톨로지 레이어">',
-      layers.map(function (layer) {
-        var active = layer.id === activeLayer;
-        return [
-          '<button type="button" role="tab" class="' + escapeHtml(active ? "active" : "") + '" data-investment-graph-layer="' + escapeHtml(layer.id) + '"' + (active ? ' aria-selected="true"' : ' aria-selected="false"') + '>',
-          '<strong>' + escapeHtml(layer.label) + '</strong>',
-          '<span>' + escapeHtml(layer.caption) + '</span>',
-          '<em>' + escapeHtml(layer.count) + '</em>',
-          '</button>'
-        ].join("");
+      '<span class="ontology-world-asof">기준 ' + escapeHtml(formatClock(snapshot.generatedAt)) + '</span>',
+      '</header>',
+      renderOntologyWorldMetrics(summary),
+      '<nav class="ontology-world-lenses" aria-label="시장 관계 지도 렌즈">',
+      ontologyWorldLensItems(parts, snapshot).map(function (item) {
+        var active = item.id === lensId;
+        return '<button type="button" class="' + (active ? 'active' : '') + '" data-ontology-world-lens="' + escapeHtml(item.id) + '" aria-pressed="' + (active ? 'true' : 'false') + '"><strong>' + escapeHtml(item.label) + '</strong><span>' + escapeHtml(item.count) + '</span></button>';
       }).join(""),
+      '</nav>',
+      '<section class="ontology-world-stage">',
+      '<div class="ontology-world-stage-head">',
+      '<div><span>' + escapeHtml(lens.eyebrow) + '</span><strong>' + escapeHtml(lens.title) + '</strong><p>' + escapeHtml(lens.description) + '</p></div>',
+      '<div class="ontology-world-stage-actions">',
+      '<span>' + escapeHtml(Object.keys(graph.nodesById || {}).length) + ' nodes · ' + escapeHtml((graph.edges || []).length) + ' relations</span>',
+      '<button class="icon-button" type="button" data-ontology-graph-expand="world" title="그래프 전체 화면" aria-label="그래프 전체 화면">⤢</button>',
+      '<button class="icon-button" type="button" data-ontology-graph-fit="world" title="그래프 화면 맞춤" aria-label="그래프 화면 맞춤">⌖</button>',
+      '<button class="icon-button" type="button" data-ontology-graph-layout="world" title="그래프 자동 배치" aria-label="그래프 자동 배치">↺</button>',
       '</div>',
-      '<div class="investment-ontology-workbench">',
-      '<div class="investment-ontology-graph-main">',
-      renderOntologyRelationshipGraphs(parts.tbox, parts.abox, parts.aboxEntities, parts.aboxRelations, parts.evidence, parts.beliefs, parts.opinions, parts.entityLabels, parts.relationCounts, snapshot, parts),
       '</div>',
-      '<div class="investment-ontology-layer-detail">',
-      renderInvestmentOntologyLayerDetail(activeLayer, parts),
+      '<div class="ontology-world-legend" aria-label="그래프 범례"><span data-kind="fact">확인된 사실</span><span data-kind="inference">추론 관계</span><span data-kind="risk">위험·결측</span><span data-kind="selection">선택 대상</span></div>',
+      '<div class="ontology-cytoscape ontology-world-cytoscape" data-ontology-cytoscape="world"><span>실세계 그래프를 구성하는 중</span></div>',
+      '</section>',
+      renderOntologyWorldNodeInspector(parts, snapshot, graph),
+      renderOntologyWorldCausalPath(parts, snapshot),
+      '<div class="ontology-world-intelligence-grid">',
+      renderOntologyWorldInsightBrief(parts, snapshot),
+      renderOntologyWorldChangeLedger(parts),
       '</div>',
+      '<div class="ontology-world-ledger-grid">',
+      renderOntologyWorldEvidenceLedger(parts),
+      renderOntologyWorldRiskLedger(parts, snapshot),
       '</div>',
+      renderOntologyWorldToolRail(parts),
       '</article>'
+    ].join("");
+  }
+
+  function renderOntologyWorldLoadingState(snapshot) {
+    return [
+      '<article class="investment-ontology-world ontology-world-loading" aria-busy="true">',
+      '<header class="ontology-world-command"><div><p class="label">Reality Intelligence</p><h2>시장 관계 지도</h2><p>온톨로지 상세 데이터를 동기화하고 있습니다.</p></div><span class="ontology-world-asof">기준 ' + escapeHtml(formatClock(snapshot.generatedAt)) + '</span></header>',
+      '<div class="ontology-world-loading-metrics" aria-hidden="true"><span></span><span></span><span></span><span></span><span></span></div>',
+      '<section class="ontology-world-loading-stage" aria-label="실세계 그래프 로딩 중">',
+      '<div><span></span><strong></strong><em></em></div>',
+      '<div class="ontology-world-loading-graph"><i></i><i></i><i></i><i></i><i></i><i></i><i></i></div>',
+      '</section>',
+      '</article>'
+    ].join("");
+  }
+
+  function ontologyWorldLensDefinition(value) {
+    var id = normalizeOntologyWorldLens(value);
+    var definitions = {
+      reality: { id: "reality", label: "전체 세계", eyebrow: "Current Reality", title: "현재 세계 그래프", description: "실계좌 사실과 시장 관계, 근거, 추론 결과를 연결한 현재 상태입니다." },
+      portfolio: { id: "portfolio", label: "포트폴리오", eyebrow: "Portfolio Exposure", title: "보유·관심·노출 관계", description: "계좌에서 종목, 업종, 시장, 환율과 금리로 이어지는 실제 노출만 봅니다." },
+      risk: { id: "risk", label: "위험", eyebrow: "Risk Transmission", title: "위험 전이 지도", description: "손실, 추세 이탈, 데이터 결측과 알림 후보가 어디에서 시작되는지 추적합니다." },
+      inference: { id: "inference", label: "추론", eyebrow: "Inference Path", title: "TypeDB 추론 지도", description: "근거가 RuleBox와 InferenceBox를 거쳐 투자 의견으로 파생되는 경로입니다." },
+      evidence: { id: "evidence", label: "근거", eyebrow: "Evidence Provenance", title: "근거·출처 지도", description: "뉴스, 공시, 시장 데이터와 출처 품질이 어떤 판단에 사용됐는지 확인합니다." }
+    };
+    return definitions[id];
+  }
+
+  function ontologyWorldLensItems(parts, snapshot) {
+    return ["reality", "portfolio", "risk", "inference", "evidence"].map(function (id) {
+      var definition = ontologyWorldLensDefinition(id);
+      var graph = ontologyBuildWorldGraph(parts, snapshot, id);
+      return Object.assign({}, definition, { count: Object.keys(graph.nodesById || {}).length });
+    });
+  }
+
+  function ontologyWorldQualityNodes(parts) {
+    return Array.isArray(parts.dataQuality) && parts.dataQuality.length
+      ? parts.dataQuality
+      : (parts.aboxEntities || []).filter(function (item) {
+        return ["data-quality", "data-freshness", "provenance", "source-reliability", "missing-data", "temporal-coverage-gap"].indexOf(String(item && item.kind || "")) >= 0;
+      });
+  }
+
+  function ontologyWorldSummary(parts, graph) {
+    return {
+      facts: (parts.aboxEntities || []).length,
+      relations: (parts.aboxRelations || []).length,
+      inference: ontologyReadableInferenceRows(parts).length,
+      risk: ontologyWorldQualityNodes(parts).length + ontologyDecisionChainRows(parts, state.snapshot || {}).filter(function (row) { return row.inferenceTone === "caution" || row.tone === "danger"; }).length,
+      visible: Object.keys((graph || {}).nodesById || {}).length
+    };
+  }
+
+  function renderOntologyWorldMetrics(summary) {
+    var rows = [
+      ["ABox 사실", summary.facts, "현재 데이터"],
+      ["관계", summary.relations, "확인·파생"],
+      ["InferenceBox", summary.inference, "활성 추론"],
+      ["점검 필요", summary.risk, "위험·품질"],
+      ["현재 표시", summary.visible, "렌즈 노드"]
+    ];
+    return '<dl class="ontology-world-metrics">' + rows.map(function (row) {
+      return '<div><dt>' + escapeHtml(row[0]) + '</dt><dd>' + escapeHtml(row[1]) + '</dd><span>' + escapeHtml(row[2]) + '</span></div>';
+    }).join("") + '</dl>';
+  }
+
+  function ontologyWorldSelectedNode(parts, graph) {
+    var nodes = (graph || {}).nodesById || {};
+    var selectedId = String(state.activeOntologyWorldNodeId || "");
+    if (!nodes[selectedId]) {
+      selectedId = Object.keys(nodes).filter(function (id) { return String(nodes[id].kind || "") === "stock"; })[0] || Object.keys(nodes)[0] || "";
+    }
+    var entity = (parts.aboxEntities || []).filter(function (item) { return String(item && item.id || "") === selectedId; })[0] || {};
+    return { id: selectedId, node: nodes[selectedId] || {}, entity: entity };
+  }
+
+  function ontologyWorldNodeKindLabel(kind) {
+    var labels = {
+      portfolio: "포트폴리오", stock: "종목", sector: "업종", market: "시장", cash: "현금", risk: "위험",
+      evidence: "근거 묶음", belief: "판단 근거", opinion: "투자 의견", rule: "규칙", "missing-data": "결측 데이터",
+      "data-quality": "데이터 품질", "source-reliability": "출처 신뢰도", "alert-candidate": "알림 후보", "next-check": "다음 확인"
+    };
+    return labels[String(kind || "")] || String(kind || "entity").replace(/-/g, " ");
+  }
+
+  function ontologyWorldPropertyRows(entity) {
+    var properties = (entity && entity.properties) || {};
+    var preferred = ["symbol", "name", "status", "provider", "source", "qualityScore", "confidence", "score", "value", "rate", "ageMinutes"];
+    return preferred.filter(function (key) {
+      var value = properties[key];
+      return value != null && value !== "" && typeof value !== "object";
+    }).slice(0, 4).map(function (key) {
+      return { key: key, value: properties[key] };
+    });
+  }
+
+  function renderOntologyWorldNodeInspector(parts, snapshot, graph) {
+    var selected = ontologyWorldSelectedNode(parts, graph);
+    if (!selected.id) return '<section class="ontology-world-inspector" data-ontology-world-inspector><span>그래프에서 대상을 선택하면 연결 정보를 표시합니다.</span></section>';
+    var relations = (graph.edges || []).filter(function (edge) { return edge.source === selected.id || edge.target === selected.id; });
+    var properties = ontologyWorldPropertyRows(selected.entity);
+    var connected = relations.slice(0, 5).map(function (edge) {
+      var otherId = edge.source === selected.id ? edge.target : edge.source;
+      var other = graph.nodesById[otherId] || {};
+      return '<span><b>' + escapeHtml(ontologyEdgeLabel(edge.type)) + '</b>' + escapeHtml(other.label || otherId) + '</span>';
+    }).join("");
+    return [
+      '<section class="ontology-world-inspector" data-ontology-world-inspector>',
+      '<div class="ontology-world-inspector-identity"><span>' + escapeHtml(ontologyWorldNodeKindLabel(selected.node.kind)) + '</span><strong>' + escapeHtml(selected.node.label || selected.id) + '</strong><p>' + escapeHtml(selected.node.title || "현재 그래프 개체") + '</p></div>',
+      '<div class="ontology-world-inspector-relations"><span>직접 연결 ' + escapeHtml(relations.length) + '</span><div>' + (connected || '<em>직접 연결 없음</em>') + '</div></div>',
+      '<dl class="ontology-world-inspector-properties">',
+      properties.length ? properties.map(function (item) { return '<div><dt>' + escapeHtml(item.key) + '</dt><dd>' + escapeHtml(item.value) + '</dd></div>'; }).join("") : '<div><dt>graph id</dt><dd>' + escapeHtml(selected.id) + '</dd></div>',
+      '</dl>',
+      '</section>'
+    ].join("");
+  }
+
+  function renderOntologyWorldCausalPath(parts, snapshot) {
+    var rows = ontologyDecisionChainRows(parts, snapshot);
+    var active = ontologyDecisionChainActiveRow(rows);
+    if (!active) return '<section class="ontology-world-causal"><div class="ontology-empty">표시할 판단 경로가 없습니다.</div></section>';
+    var stages = [
+      ["01", "실데이터", active.dataLabel, active.dataDetail],
+      ["02", "관계", active.relationLabel, active.relationDetail],
+      ["03", "RuleBox", active.ruleLabel, active.ruleDetail],
+      ["04", "InferenceBox", active.inferenceLabel, active.inferenceDetail],
+      ["05", "판단", active.actionLabel, active.actionDetail],
+      ["06", "알림", active.alertLabel, active.alertDetail],
+      ["07", "성과", active.performanceLabel, active.performanceDetail]
+    ];
+    return [
+      '<section class="ontology-world-causal">',
+      '<header><div><span>Decision Lineage</span><strong>판단 경로</strong></div>',
+      '<label><span>분석 대상</span><select data-ontology-world-chain>',
+      rows.map(function (row) { return '<option value="' + escapeHtml(row.key) + '"' + (row.key === active.key ? ' selected' : '') + '>' + escapeHtml(row.displayName || row.symbol || "판단 체인") + '</option>'; }).join(""),
+      '</select></label></header>',
+      '<ol class="ontology-world-causal-rail">',
+      stages.map(function (stage) { return '<li><b>' + escapeHtml(stage[0]) + '</b><span>' + escapeHtml(stage[1]) + '</span><strong>' + escapeHtml(stage[2] || "-") + '</strong><p>' + escapeHtml(stage[3] || "세부 정보 대기") + '</p></li>'; }).join(""),
+      '</ol>',
+      '</section>'
+    ].join("");
+  }
+
+  function renderOntologyWorldInsightBrief(parts, snapshot) {
+    var active = ontologyDecisionChainActiveRow(ontologyDecisionChainRows(parts, snapshot));
+    if (!active) return '<section class="ontology-intelligence-brief"><div class="ontology-empty">생성된 판단 브리프가 없습니다.</div></section>';
+    return [
+      '<section class="ontology-intelligence-brief">',
+      '<header><span>Insight Brief</span><strong>' + escapeHtml(active.displayName || active.symbol || "투자 판단") + '</strong>',
+      active.reasoningKey ? renderWorkDetailButton("investment-reasoning-card", active.reasoningKey, "전체 근거", "text-button compact") : '',
+      '</header>',
+      '<dl>',
+      '<div><dt>확인된 사실</dt><dd>' + escapeHtml([active.dataLabel, active.relationDetail].filter(Boolean).join(" · ") || "사실 확인 중") + '</dd></div>',
+      '<div><dt>그래프 추론</dt><dd>' + escapeHtml([active.inferenceLabel, active.inferenceDetail].filter(Boolean).join(" · ") || "추론 대기") + '</dd></div>',
+      '<div><dt>현재 판단</dt><dd><strong>' + escapeHtml(active.actionLabel || "판단 대기") + '</strong><span>' + escapeHtml(active.actionDetail || "추가 확인 필요") + '</span></dd></div>',
+      '</dl>',
+      '</section>'
+    ].join("");
+  }
+
+  function renderOntologyWorldChangeLedger(parts) {
+    var inferenceRows = ontologyReadableInferenceRows(parts).slice(0, 4);
+    var relationRows = ontologyReadableRelationRows(parts).slice(0, Math.max(0, 5 - inferenceRows.length));
+    var rows = inferenceRows.map(function (row) {
+      return { type: "추론", title: [row.source, row.target].filter(Boolean).join(" → "), detail: [row.type, row.detail].filter(Boolean).join(" · "), value: row.weight == null ? "active" : Number(row.weight || 0).toFixed(2) };
+    }).concat(relationRows.map(function (row) {
+      return { type: "관계", title: row.type, detail: (row.examples || []).join(" · "), value: row.count + " rows" };
+    }));
+    return [
+      '<section class="ontology-change-ledger">',
+      '<header><div><span>Change Ledger</span><strong>현재 변화·파생 관계</strong></div><em>' + escapeHtml(rows.length) + '</em></header>',
+      '<div class="ontology-ledger-rows">',
+      rows.length ? rows.map(function (row) { return '<div><span>' + escapeHtml(row.type) + '</span><p><strong>' + escapeHtml(row.title || "-") + '</strong><em>' + escapeHtml(row.detail || "세부 정보 없음") + '</em></p><b>' + escapeHtml(row.value) + '</b></div>'; }).join("") : '<div class="ontology-empty">변화 관계가 없습니다.</div>',
+      '</div>',
+      '</section>'
+    ].join("");
+  }
+
+  function renderOntologyWorldEvidenceLedger(parts) {
+    var rows = (parts.evidence || []).slice(0, 5);
+    return [
+      '<section class="ontology-evidence-ledger">',
+      '<header><div><span>Evidence Ledger</span><strong>판단 근거·출처</strong></div>' + renderWorkDetailButton("strategy-evidence-board", "", "근거 전체", "text-button compact") + '</header>',
+      '<div class="ontology-ledger-rows">',
+      rows.length ? rows.map(function (item) {
+        var value = item.confidence != null ? Math.round(Number(item.confidence || 0) * (Number(item.confidence || 0) <= 1 ? 100 : 1)) + "%" : (item.value && typeof item.value !== "object" ? item.value : "linked");
+        return '<div><span>' + escapeHtml(item.kind || "evidence") + '</span><p><strong>' + escapeHtml(item.summary || item.label || item.id || "근거") + '</strong><em>' + escapeHtml([item.source, item.subject].filter(Boolean).join(" · ") || "온톨로지 근거") + '</em></p><b>' + escapeHtml(value) + '</b></div>';
+      }).join("") : '<div class="ontology-empty">연결된 근거가 없습니다.</div>',
+      '</div>',
+      '</section>'
+    ].join("");
+  }
+
+  function renderOntologyWorldRiskLedger(parts, snapshot) {
+    var quality = ontologyWorldQualityNodes(parts).slice(0, 4).map(function (item) {
+      var props = item.properties || {};
+      return { type: "품질", title: ontologyEntityDisplayLabel(item, item && item.id), detail: [item.kind, props.provider, props.status].filter(Boolean).join(" · "), value: props.qualityScore != null ? Math.round(Number(props.qualityScore || 0)) : (props.ageMinutes != null ? Math.round(Number(props.ageMinutes || 0)) + "m" : "check") };
+    });
+    var blocked = ontologyDecisionChainRows(parts, snapshot).filter(function (row) { return row.inferenceTone === "caution" || row.tone === "danger"; }).slice(0, Math.max(0, 4 - quality.length)).map(function (row) {
+      return { type: "판단", title: row.displayName || row.symbol || "추론 점검", detail: row.inferenceDetail || row.actionDetail, value: row.inferenceLabel || "review" };
+    });
+    var rows = quality.concat(blocked);
+    return [
+      '<section class="ontology-risk-ledger">',
+      '<header><div><span>Risk &amp; Anomaly</span><strong>위험·결측 점검</strong></div>' + renderWorkDetailButton("strategy-trace-board", "", "검증 전체", "text-button compact") + '</header>',
+      '<div class="ontology-ledger-rows">',
+      rows.length ? rows.map(function (row) { return '<div><span>' + escapeHtml(row.type) + '</span><p><strong>' + escapeHtml(row.title || "-") + '</strong><em>' + escapeHtml(row.detail || "추가 점검 필요") + '</em></p><b>' + escapeHtml(row.value) + '</b></div>'; }).join("") : '<div class="ontology-empty">현재 표시할 위험 또는 결측이 없습니다.</div>',
+      '</div>',
+      '</section>'
+    ].join("");
+  }
+
+  function renderOntologyWorldToolRail(parts) {
+    var tboxCount = (parts.tboxEntities || []).length || (((parts.tbox || {}).classDefinitions || []).length);
+    var ruleCount = ontologyReadableRuleRows(parts).length;
+    return [
+      '<footer class="ontology-world-tools">',
+      '<div><span>Structure Tools</span><strong>구조와 운영 도구는 필요할 때 전체 화면으로 엽니다.</strong></div>',
+      '<div>',
+      '<button class="text-button compact" type="button" data-ontology-graph-expand="tbox">TBox 구조 <span>' + escapeHtml(tboxCount) + '</span></button>',
+      renderWorkDetailButton("strategy-rulebox-editor", "", "RuleBox " + ruleCount, "text-button compact"),
+      renderWorkDetailButton("strategy-trace-board", "", "추론 원장", "text-button compact"),
+      '</div>',
+      '</footer>'
     ].join("");
   }
 
@@ -19038,6 +19306,98 @@
     return { nodesById: nodesById, edges: edges };
   }
 
+  function ontologyWorldLensNodeKinds(lensId) {
+    var map = {
+      portfolio: ["portfolio", "stock", "sector", "market", "cash", "currency", "fx-pair", "fx-rate", "interest-rate", "yield-curve"],
+      risk: ["risk", "missing-data", "temporal-coverage-gap", "data-quality", "data-freshness", "source-reliability", "fact-change", "trend-transition", "alert-candidate", "next-check"],
+      inference: ["evidence", "belief", "opinion", "rule", "review", "model", "inference-trace", "alert-candidate", "next-check"],
+      evidence: ["evidence", "research-evidence", "news-article", "disclosure-filing", "source-reliability", "data-quality", "provenance"]
+    };
+    return (map[normalizeOntologyWorldLens(lensId)] || []).reduce(function (memo, kind) { memo[kind] = true; return memo; }, {});
+  }
+
+  function ontologyWorldLensRelationMatches(lensId, relationType) {
+    var type = String(relationType || "").toUpperCase();
+    if (lensId === "portfolio") return /HOLDS|WATCHES|EXPOSURE|BELONGS|MARKET|CURRENCY|FX|RATE|PRICE/.test(type);
+    if (lensId === "risk") return /RISK|QUALITY|MISSING|ALERT|NEXT_CHECK|BREAK|DIVERG|CHANGE|TREND|LOSS/.test(type);
+    if (lensId === "inference") return Boolean(ontologyInferenceRelationTypes()[type]) || /EVIDENCE|OPINION|DERIVE|EVALUATED|RULE/.test(type);
+    if (lensId === "evidence") return /EVIDENCE|SOURCE|PROVENANCE|RESEARCH|NEWS|DISCLOSURE|QUALITY/.test(type);
+    return true;
+  }
+
+  function ontologyPruneWorldGraph(graph, maxNodes, maxEdges) {
+    var nodes = graph.nodesById || {};
+    var edges = graph.edges || [];
+    var degree = {};
+    edges.forEach(function (edge) {
+      degree[edge.source] = (degree[edge.source] || 0) + 1;
+      degree[edge.target] = (degree[edge.target] || 0) + 1;
+    });
+    var kindPriority = {
+      portfolio: 0, stock: 1, risk: 2, "alert-candidate": 3, "next-check": 4, opinion: 5, belief: 6,
+      evidence: 7, rule: 8, "inference-trace": 9, "missing-data": 10, "data-quality": 11,
+      "trend-transition": 12, "fact-change": 13, sector: 14, market: 15, "fx-rate": 16,
+      "interest-rate": 17, "yield-curve": 18
+    };
+    var ids = Object.keys(nodes).sort(function (a, b) {
+      var aPriority = kindPriority[String((nodes[a] || {}).kind || "")];
+      var bPriority = kindPriority[String((nodes[b] || {}).kind || "")];
+      if (aPriority == null) aPriority = 99;
+      if (bPriority == null) bPriority = 99;
+      if (aPriority !== bPriority) return aPriority - bPriority;
+      if (Number(degree[b] || 0) !== Number(degree[a] || 0)) return Number(degree[b] || 0) - Number(degree[a] || 0);
+      return String((nodes[a] || {}).label || a).localeCompare(String((nodes[b] || {}).label || b));
+    }).slice(0, maxNodes || 52);
+    var keep = ids.reduce(function (memo, id) { memo[id] = true; return memo; }, {});
+    var keptEdges = edges.filter(function (edge) { return keep[edge.source] && keep[edge.target]; }).sort(function (a, b) {
+      var aDerived = a.kind === "derived" || a.kind === "rule" ? 0 : 1;
+      var bDerived = b.kind === "derived" || b.kind === "rule" ? 0 : 1;
+      if (aDerived !== bDerived) return aDerived - bDerived;
+      return ontologyRelationPriority(a.type) - ontologyRelationPriority(b.type);
+    }).slice(0, maxEdges || 72);
+    var connected = {};
+    keptEdges.forEach(function (edge) { connected[edge.source] = true; connected[edge.target] = true; });
+    ids.slice(0, 12).forEach(function (id) { connected[id] = true; });
+    var nodesById = {};
+    Object.keys(connected).forEach(function (id) { if (nodes[id]) nodesById[id] = nodes[id]; });
+    return Object.keys(nodesById).length ? { nodesById: nodesById, edges: keptEdges } : graph;
+  }
+
+  function ontologyBuildWorldGraph(parts, snapshot, lensValue) {
+    parts = parts || ontologyStrategyParts(snapshot || state.snapshot || {});
+    var lensId = normalizeOntologyWorldLens(lensValue);
+    var base = ontologyBuildAboxGraph(parts.aboxEntities, parts.aboxRelations, parts.evidence, parts.beliefs, parts.opinions, parts.entityLabels);
+    if (lensId === "reality") return ontologyPruneWorldGraph(base, 32, 42);
+    var kinds = ontologyWorldLensNodeKinds(lensId);
+    var selected = {};
+    Object.keys(base.nodesById || {}).forEach(function (id) {
+      if (kinds[String((base.nodesById[id] || {}).kind || "")]) selected[id] = true;
+    });
+    var edges = (base.edges || []).filter(function (edge) {
+      return ontologyWorldLensRelationMatches(lensId, edge.type) || (selected[edge.source] && selected[edge.target]);
+    });
+    edges.forEach(function (edge) {
+      selected[edge.source] = true;
+      selected[edge.target] = true;
+    });
+    (base.edges || []).forEach(function (edge) {
+      if (!selected[edge.source] && !selected[edge.target]) return;
+      var sourceKind = String(((base.nodesById || {})[edge.source] || {}).kind || "");
+      var targetKind = String(((base.nodesById || {})[edge.target] || {}).kind || "");
+      if (["portfolio", "stock"].indexOf(sourceKind) < 0 && ["portfolio", "stock"].indexOf(targetKind) < 0) return;
+      if (!/HOLDS|WATCHES|BELONGS|HAS_OPINION|HAS_EVIDENCE|HAS_INFERRED/.test(String(edge.type || "").toUpperCase())) return;
+      if (edges.indexOf(edge) < 0) edges.push(edge);
+      selected[edge.source] = true;
+      selected[edge.target] = true;
+    });
+    var nodesById = {};
+    Object.keys(selected).forEach(function (id) {
+      if (base.nodesById[id]) nodesById[id] = base.nodesById[id];
+    });
+    if (!Object.keys(nodesById).length) return ontologyPruneWorldGraph(base, 32, 42);
+    return ontologyPruneWorldGraph({ nodesById: nodesById, edges: edges.slice(0, 90) }, 28, 38);
+  }
+
   function renderOntologyAboxGraph(abox, aboxEntities, aboxRelations, evidence, beliefs, opinions, entityLabels) {
     var portfolioId = String(abox && abox.portfolioId || "flow-lens");
     var graph = ontologyBuildAboxGraph(aboxEntities, aboxRelations, evidence, beliefs, opinions, entityLabels);
@@ -19137,10 +19497,12 @@
     var tboxNodes = ontologyTboxGraphNodes(parts.tbox);
     var tboxEdges = ontologyTboxGraphEdges(parts.tbox);
     var aboxGraph = ontologyBuildAboxGraph(parts.aboxEntities, parts.aboxRelations, parts.evidence, parts.beliefs, parts.opinions, parts.entityLabels);
+    var worldGraph = ontologyBuildWorldGraph(parts, state.snapshot || {}, state.activeOntologyWorldLens);
     var decisionChainGraph = ontologyBuildDecisionChainGraph(parts, state.snapshot || {});
     return {
       tbox: { elements: ontologyCyElements(tboxNodes, tboxEdges) },
       abox: { elements: ontologyCyElements(aboxGraph.nodesById, aboxGraph.edges) },
+      world: { elements: ontologyCyElements(worldGraph.nodesById, worldGraph.edges) },
       "decision-chain": { elements: ontologyCyElements(decisionChainGraph.nodesById, decisionChainGraph.edges) }
     };
   }
@@ -19259,7 +19621,18 @@
         container: container,
         elements: graph.elements,
         style: ontologyCytoscapeStyle(),
-        layout: { name: "preset", fit: true, padding: 28 },
+        layout: sourceGraphId === "world" ? {
+          name: "cose",
+          fit: true,
+          padding: 42,
+          animate: false,
+          randomize: true,
+          nodeRepulsion: 420000,
+          idealEdgeLength: 96,
+          edgeElasticity: 120,
+          gravity: 0.7,
+          numIter: 900
+        } : { name: "preset", fit: true, padding: 28 },
         minZoom: 0.25,
         maxZoom: 2.4,
         wheelSensitivity: 0.18,
@@ -19275,6 +19648,17 @@
           if (!key) return;
           state.activeOntologyChainKey = key;
           render();
+        });
+      }
+      if (sourceGraphId === "world") {
+        ontologyGraphInstances[graphId].on("tap", "node", function (event) {
+          var nodeId = event && event.target && event.target.data ? event.target.data("id") : "";
+          if (!nodeId) return;
+          state.activeOntologyWorldNodeId = nodeId;
+          var parts = ontologyStrategyParts(state.snapshot || {});
+          var worldGraph = ontologyBuildWorldGraph(parts, state.snapshot || {}, state.activeOntologyWorldLens);
+          var inspector = app.querySelector("[data-ontology-world-inspector]");
+          if (inspector) inspector.outerHTML = renderOntologyWorldNodeInspector(parts, state.snapshot || {}, worldGraph);
         });
       }
     });
@@ -19294,7 +19678,7 @@
       name: "breadthfirst",
       directed: true,
       padding: 36,
-      spacingFactor: normalizeOntologyGraphId(graphId) === "abox" ? 1.25 : normalizeOntologyGraphId(graphId) === "decision-chain" ? 1.05 : 1.1,
+      spacingFactor: normalizeOntologyGraphId(graphId) === "abox" || normalizeOntologyGraphId(graphId) === "world" ? 1.25 : normalizeOntologyGraphId(graphId) === "decision-chain" ? 1.05 : 1.1,
       avoidOverlap: true,
       animate: true,
       animationDuration: 260,
@@ -23431,6 +23815,25 @@
     Array.prototype.slice.call(app.querySelectorAll("[data-investment-graph-layer]")).forEach(function (button) {
       button.addEventListener("click", function () {
         state.activeInvestmentGraphLayer = normalizeInvestmentGraphLayer(button.getAttribute("data-investment-graph-layer"));
+        render();
+      });
+    });
+
+    Array.prototype.slice.call(app.querySelectorAll("[data-ontology-world-lens]")).forEach(function (button) {
+      button.addEventListener("click", function () {
+        var nextLens = normalizeOntologyWorldLens(button.getAttribute("data-ontology-world-lens"));
+        if (nextLens === state.activeOntologyWorldLens) return;
+        state.activeOntologyWorldLens = nextLens;
+        state.activeOntologyWorldNodeId = "";
+        render();
+      });
+    });
+
+    Array.prototype.slice.call(app.querySelectorAll("[data-ontology-world-chain]")).forEach(function (select) {
+      select.addEventListener("change", function () {
+        var key = select.value || "";
+        if (!key || key === state.activeOntologyChainKey) return;
+        state.activeOntologyChainKey = key;
         render();
       });
     });

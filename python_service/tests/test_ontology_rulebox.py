@@ -752,7 +752,7 @@ class OntologyRuleBoxTests(unittest.TestCase):
             def has_box_rows(self, box):
                 return str(box or "") == "ABox"
 
-            def load_graph_for_native_matches(self, native_match_result):
+            def load_graph_for_native_matches(self, native_match_result, rules=None):
                 return self._last_graph
 
             def rulebox_snapshot(self):

@@ -450,7 +450,11 @@ class TypeDBOntologyRepositoryTests(unittest.TestCase):
                 }
             ]
 
-        with patch.object(repository, "read_entity_rows_by_ids", side_effect=fake_rows):
+        with patch.object(repository, "read_entity_rows_by_ids", side_effect=fake_rows), patch.object(
+            repository,
+            "read_relation_rows_by_source_ids",
+            return_value=[],
+        ):
             graph = repository.load_graph_for_native_matches({
                 "matches": [
                     {"sourceId": "stock:005930", "sourceLabel": "삼성전자"},
@@ -489,16 +493,41 @@ class TypeDBOntologyRepositoryTests(unittest.TestCase):
         repository.read_inferencebox_entity_rows("generation:active", ["AAPL"], 3)
         repository.read_inferencebox_relation_rows("generation:active", ["AAPL"], 4)
 
-        self.assertIn('has ontology-box "InferenceBox"', repository.queries[0])
-        self.assertIn("has ontology-snapshot-id $snapshotId", repository.queries[0])
+        self.assertIn('has ontology-kind "inference-generation"', repository.queries[0])
         self.assertIn('has ontology-box "InferenceBox"', repository.queries[1])
         self.assertIn("has ontology-snapshot-id $snapshotId", repository.queries[1])
-        self.assertIn('has ontology-snapshot-id "generation:active"', repository.queries[2])
-        self.assertIn('has ontology-symbol "AAPL"', repository.queries[2])
-        self.assertIn("limit 3;", repository.queries[2])
+        self.assertIn('has ontology-box "InferenceBox"', repository.queries[2])
+        self.assertIn("has ontology-snapshot-id $snapshotId", repository.queries[2])
         self.assertIn('has ontology-snapshot-id "generation:active"', repository.queries[3])
         self.assertIn('has ontology-symbol "AAPL"', repository.queries[3])
-        self.assertIn("limit 4;", repository.queries[3])
+        self.assertIn("limit 3;", repository.queries[3])
+        self.assertIn('has ontology-snapshot-id "generation:active"', repository.queries[4])
+        self.assertIn('has ontology-symbol "AAPL"', repository.queries[4])
+        self.assertIn("limit 4;", repository.queries[4])
+
+    def test_typedb_active_generation_ignores_unpublished_partial_generation(self):
+        class PublishedOnlyRepository(TypeDBOntologyGraphRepository):
+            def __init__(self):
+                super().__init__("127.0.0.1:1729")
+
+            def read_rows(self, query, columns, label="typedb.read"):
+                if 'has ontology-kind "inference-generation"' in query:
+                    return [{"snapshotId": "generation:complete", "updatedAt": "2026-07-20T00:00:00Z"}]
+                if "$n isa ontology-node" in query:
+                    return [
+                        {"snapshotId": "generation:complete", "updatedAt": "2026-07-20T00:00:00Z"},
+                        {"snapshotId": "generation:partial", "updatedAt": "2026-07-20T00:01:00Z"},
+                    ]
+                return [
+                    {"snapshotId": "generation:complete", "updatedAt": "2026-07-20T00:00:00Z"},
+                    {"snapshotId": "generation:partial", "updatedAt": "2026-07-20T00:01:00Z"},
+                ]
+
+        records = PublishedOnlyRepository().read_inference_generation_records()
+
+        self.assertEqual(1, len(records))
+        self.assertEqual("generation:complete", records[0]["generationId"])
+        self.assertEqual("published", records[0]["publicationStatus"])
 
     def test_typedb_inferencebox_insert_queries_batch_rows(self):
         repository = TypeDBOntologyGraphRepository("127.0.0.1:1729")
@@ -1090,6 +1119,8 @@ class TypeDBOntologyRepositoryTests(unittest.TestCase):
                     "ruleId": "graph.loss_guard.breakdown.v1",
                     "confidence": 0.86,
                     "matchedConditions": [{"conditionId": "holding-loss"}],
+                    "evidenceCoverage": 100,
+                    "freshnessStatus": "fresh",
                     "nativeTypeDbReasoned": True,
                 }),
             },
@@ -1142,6 +1173,8 @@ class TypeDBOntologyRepositoryTests(unittest.TestCase):
         self.assertEqual(23, snapshot["ruleboxRuleCount"])
         self.assertEqual(0, snapshot["ignoredNonNativeRelationCount"])
         self.assertEqual(["holding-loss"], snapshot["traces"][0]["matchedConditionIds"])
+        self.assertEqual(100, snapshot["traces"][0]["evidenceCoverage"])
+        self.assertEqual("fresh", snapshot["traces"][0]["freshnessStatus"])
 
     def test_typedb_inferencebox_snapshot_exposes_typeql_read_errors(self):
         repository = TypeDBOntologyGraphRepository("127.0.0.1:1729")

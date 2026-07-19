@@ -26,6 +26,60 @@ from .portfolio import AccountSnapshot, PortfolioSummary, Position
 TYPEDB_RELATION_CONTEXT_VERSION = "typedb-inferencebox-relation-context-v1"
 GRAPH_STORE_RELATION_CONTEXT_VERSION = "graph-store-inferencebox-relation-context-v1"
 
+META_INFERENCE_RELATION_TYPES = {
+    "EXPLAINED_BY_TRACE",
+    "HAS_INFERENCE_TIMELINE",
+    "HAS_INFERENCE_TRACE",
+    "HAS_SIGNAL_CONFLICT",
+    "HAS_WHY_NOW",
+    "TRIGGERED_INFERENCE",
+}
+
+EVIDENCE_DOMAIN_TOKENS = {
+    "position": {"holding", "loss", "profit", "pnl", "position", "rebalance", "concentration"},
+    "trend": {"breakdown", "breakout", "ma5", "ma20", "ma60", "recovery", "support", "trend"},
+    "flow": {"flow", "investor", "orderbook", "smart-money", "trade-strength", "volume"},
+    "news": {"disclosure", "event", "filing", "news", "research"},
+    "macro": {"crypto", "fx", "macro", "rate", "regime"},
+    "valuation": {"fair-value", "margin-of-safety", "multiple", "per", "valuation"},
+    "execution": {"capacity", "execution", "liquidity", "slippage"},
+    "portfolio": {"allocation", "concentration", "exposure", "factor", "portfolio", "rebalance"},
+    "temporal": {"episode", "timeline", "temporal", "transition"},
+    "data-quality": {"conflict", "coverage", "data-quality", "freshness", "missing", "stale"},
+}
+
+FIELD_EVIDENCE_DOMAINS = {
+    "profitLossRate": {"position"},
+    "positionWeight": {"position", "portfolio"},
+    "positionAccountWeight": {"position", "portfolio"},
+    "quantity": {"position", "execution"},
+    "sellableQuantity": {"position", "execution"},
+    "priceChangeRate": {"trend"},
+    "changeRate": {"trend"},
+    "ma5Distance": {"trend"},
+    "ma20Distance": {"trend"},
+    "ma60Distance": {"trend"},
+    "ma20Slope": {"trend"},
+    "ma60Slope": {"trend"},
+    "trendCurve": {"trend"},
+    "trendDynamicRiskScore": {"trend"},
+    "volume": {"flow"},
+    "volumeRatio": {"flow"},
+    "tradeStrength": {"flow"},
+    "bidAskImbalance": {"flow", "execution"},
+    "investorFlowScore": {"flow"},
+    "smartMoneyNetVolume": {"flow"},
+    "newsMomentumScore": {"news"},
+    "directNewsCount": {"news"},
+    "usdKrwRate": {"macro"},
+    "us10yRate": {"macro"},
+    "us2yRate": {"macro"},
+    "btcChange24h": {"macro"},
+    "btcChange7d": {"macro"},
+    "valuationFairValue": {"valuation"},
+    "marginOfSafetyPct": {"valuation"},
+}
+
 
 def ontology_projection_from_metadata(metadata: Dict[str, object]) -> Dict[str, object]:
     metadata = metadata if isinstance(metadata, dict) else {}
@@ -313,18 +367,24 @@ def matches_from_inference(
     context_version: str = TYPEDB_RELATION_CONTEXT_VERSION,
     threshold_policy=None,
 ) -> List[OntologyRuleMatch]:
-    trace_by_rule = {
-        str(item.get("ruleId") or ""): item
-        for item in traces or []
-        if isinstance(item, dict) and str(item.get("ruleId") or "")
-    }
+    trace_by_rule: Dict[str, Dict[str, object]] = {}
+    for item in traces or []:
+        if not isinstance(item, dict):
+            continue
+        rule_id = str(item.get("ruleId") or "").strip()
+        if not rule_id:
+            continue
+        existing = trace_by_rule.get(rule_id)
+        if existing is None or trace_grounding_score(item) > trace_grounding_score(existing):
+            trace_by_rule[rule_id] = item
     matches: List[OntologyRuleMatch] = []
     seen = set()
-    for relation in relations or []:
+    primary_relations = [item for item in relations or [] if is_primary_inference_relation(item)]
+    for relation in sorted(primary_relations, key=relation_signal_priority, reverse=True):
         rule_id = str(relation.get("ruleId") or "").strip()
         if not rule_id:
             continue
-        key = rule_id + "|" + str(relation.get("type") or "") + "|" + str(relation.get("target") or "")
+        key = inference_causal_path_key(relation)
         if key in seen:
             continue
         seen.add(key)
@@ -398,6 +458,116 @@ def matches_from_inference(
     return sorted(matches, key=lambda item: (-item.strength_score, item.rule_id))
 
 
+def is_primary_inference_relation(relation: Dict[str, object]) -> bool:
+    if not isinstance(relation, dict):
+        return False
+    relation_type = str(relation.get("type") or relation.get("relationType") or "").strip().upper()
+    if not relation_type or relation_type in META_INFERENCE_RELATION_TYPES:
+        return False
+    if relation.get("derivationIndex") not in (None, ""):
+        return True
+    if bool(
+        str(relation.get("decisionStage") or relation.get("actionGroup") or "").strip()
+        or number(relation.get("riskImpact"))
+        or number(relation.get("supportImpact"))
+    ):
+        return True
+    # Keep previously materialized rule relations readable during rolling upgrades.
+    return bool(str(relation.get("ruleId") or "").strip())
+
+
+def inference_causal_path_key(relation: Dict[str, object]) -> str:
+    return "|".join([
+        str(relation.get("ruleId") or "").strip(),
+        str(relation.get("decisionStage") or "").strip(),
+        str(relation.get("actionGroup") or "").strip(),
+        str(relation.get("polarity") or "context").strip(),
+    ])
+
+
+def relation_signal_priority(relation: Dict[str, object]):
+    return (
+        number(relation.get("stagePriority")),
+        number(relation.get("riskImpact")) + number(relation.get("supportImpact")),
+        number(relation.get("weight")),
+        str(relation.get("type") or ""),
+    )
+
+
+def trace_grounding_score(trace: Dict[str, object]) -> float:
+    conditions = [item for item in (trace or {}).get("matchedConditions") or [] if isinstance(item, dict)]
+    grounded = sum(
+        1
+        for item in conditions
+        if item.get("observedValue") not in (None, "")
+        or str(item.get("relationId") or "").strip()
+        or bool(item.get("absenceSatisfied"))
+    )
+    return grounded * 10 + len((trace or {}).get("evidenceRelationIds") or [])
+
+
+def inference_evidence_domains(
+    relation: Dict[str, object],
+    trace: Optional[Dict[str, object]] = None,
+) -> List[str]:
+    relation = relation or {}
+    trace = trace or {}
+    domains = set()
+    for condition in trace.get("matchedConditions") or []:
+        if not isinstance(condition, dict):
+            continue
+        domains.update(FIELD_EVIDENCE_DOMAINS.get(str(condition.get("field") or ""), set()))
+        condition_text = " ".join([
+            str(condition.get("relationType") or ""),
+            str(condition.get("targetKind") or ""),
+            str(condition.get("dataScope") or ""),
+            str(condition.get("domainScope") or ""),
+        ]).lower()
+        for domain, tokens in EVIDENCE_DOMAIN_TOKENS.items():
+            if any(token in condition_text for token in tokens):
+                domains.add(domain)
+    semantic_text = " ".join([
+        str(relation.get("ruleId") or ""),
+        str(relation.get("type") or ""),
+        str(relation.get("decisionStage") or ""),
+        str(relation.get("actionGroup") or ""),
+        str(relation.get("target") or ""),
+        str(trace.get("ruleLabel") or trace.get("label") or ""),
+    ]).lower().replace("_", "-").replace(".", "-")
+    for domain, tokens in EVIDENCE_DOMAIN_TOKENS.items():
+        if any(token in semantic_text for token in tokens):
+            domains.add(domain)
+    return sorted(domains or {"semantic"})
+
+
+def trace_evidence_quality(trace: Dict[str, object]) -> Dict[str, float]:
+    conditions = [item for item in (trace or {}).get("matchedConditions") or [] if isinstance(item, dict)]
+    if not conditions:
+        return {}
+    grounded = [
+        item
+        for item in conditions
+        if item.get("observedValue") not in (None, "")
+        or str(item.get("relationId") or "").strip()
+        or bool(item.get("absenceSatisfied"))
+    ]
+    statuses = [str(item.get("freshnessStatus") or "").strip().lower() for item in grounded]
+    freshness_scores = [
+        100.0 if status == "fresh" else 65.0 if status in {"aging", "delayed"} else 30.0 if status == "stale" else 55.0
+        for status in statuses
+    ]
+    reliability_scores = [
+        number(item.get("sourceReliability"))
+        for item in grounded
+        if number(item.get("sourceReliability")) > 0
+    ]
+    return {
+        "coverage": round(len(grounded) / max(1, len(conditions)) * 100.0, 1),
+        "freshness": round(sum(freshness_scores) / len(freshness_scores), 1) if freshness_scores else 55.0,
+        "sourceReliability": round(sum(reliability_scores) / len(reliability_scores), 1) if reliability_scores else 65.0,
+    }
+
+
 def inference_signal_type(source_name: str) -> str:
     if source_name == "typedbInferenceBox":
         return "typedb_inference"
@@ -446,6 +616,9 @@ def inference_score_breakdown(
     policy = (threshold_policy or ontology_threshold_policy_from_context({})).score_breakdown
     polarity = str(relation.get("polarity") or "").strip().lower()
     relation_type = str(relation.get("type") or "").strip().upper()
+    evidence_domains = inference_evidence_domains(relation, trace)
+    domain_set = set(evidence_domains)
+    applied_fact_fields: List[str] = []
     trace_confidence = number(trace.get("confidence")) * 100
     relation_weight = number(relation.get("weight")) * 100
     rule_reliability = _bounded_score(relation_weight or trace_confidence or policy.default_rule_reliability, 0.0, 100.0)
@@ -460,7 +633,8 @@ def inference_score_breakdown(
         _add_driver(drivers, "TypeDB 지지 관계 강도", support_impact)
 
     pnl = number(facts.get("profitLossRate"))
-    if facts.get("isHolding"):
+    if facts.get("isHolding") and "position" in domain_set:
+        applied_fact_fields.append("profitLossRate")
         if pnl <= policy.holding_loss_pressure_rate:
             addition = min(36.0, abs(pnl) * 1.15 + max(0.0, abs(pnl) - 8.0) * 0.65)
             risk += addition
@@ -473,72 +647,86 @@ def inference_score_breakdown(
     ma5_distance = number(facts.get("ma5Distance"))
     ma20_distance = number(facts.get("ma20Distance"))
     ma60_distance = number(facts.get("ma60Distance"))
-    for key, distance, risk_weight, support_weight, risk_cap, support_cap in [
-        ("5일 평균", ma5_distance, 0.7, 0.45, 7.0, 5.0),
-        ("20일 평균", ma20_distance, 1.0, 0.75, 18.0, 13.0),
-        ("60일 평균", ma60_distance, 1.1, 0.75, 20.0, 14.0),
-    ]:
-        if distance < 0:
-            addition = min(risk_cap, abs(distance) * risk_weight)
-            risk += addition
-            _add_driver(drivers, key + " 아래", addition)
-        elif distance > 0:
-            addition = min(support_cap, distance * support_weight)
-            support += addition
-            _add_driver(drivers, key + " 위", addition)
+    if "trend" in domain_set:
+        applied_fact_fields.extend(["ma5Distance", "ma20Distance", "ma60Distance"])
+        for key, distance, risk_weight, support_weight, risk_cap, support_cap in [
+            ("5일 평균", ma5_distance, 0.7, 0.45, 7.0, 5.0),
+            ("20일 평균", ma20_distance, 1.0, 0.75, 18.0, 13.0),
+            ("60일 평균", ma60_distance, 1.1, 0.75, 20.0, 14.0),
+        ]:
+            if distance < 0:
+                addition = min(risk_cap, abs(distance) * risk_weight)
+                risk += addition
+                _add_driver(drivers, key + " 아래", addition)
+            elif distance > 0:
+                addition = min(support_cap, distance * support_weight)
+                support += addition
+                _add_driver(drivers, key + " 위", addition)
 
     price_change = number(facts.get("priceChangeRate"))
-    if price_change <= -policy.price_change_pressure_pct:
+    if "trend" in domain_set and price_change <= -policy.price_change_pressure_pct:
+        applied_fact_fields.append("priceChangeRate")
         addition = min(12.0, abs(price_change) * 1.5)
         risk += addition
         _add_driver(drivers, "당일 가격 약화", addition)
-    elif price_change >= policy.price_change_pressure_pct:
+    elif "trend" in domain_set and price_change >= policy.price_change_pressure_pct:
+        applied_fact_fields.append("priceChangeRate")
         addition = min(10.0, price_change * 1.2)
         support += addition
         _add_driver(drivers, "당일 가격 회복", addition)
 
     dynamic_risk = number(facts.get("trendDynamicRiskScore"))
-    if dynamic_risk:
+    if "trend" in domain_set and dynamic_risk:
+        applied_fact_fields.append("trendDynamicRiskScore")
         addition = min(14.0, max(0.0, dynamic_risk - policy.trend_dynamic_risk_baseline) * 0.35)
         risk += addition
         _add_driver(drivers, "하락 속도/추세 약화", addition)
 
     trade_strength = number(facts.get("tradeStrength"))
-    if trade_strength >= policy.support_trade_strength:
+    flow_relevant = bool(domain_set & {"flow", "execution"})
+    if flow_relevant and trade_strength >= policy.support_trade_strength:
+        applied_fact_fields.append("tradeStrength")
         addition = min(8.0, (trade_strength - 100.0) * 0.2)
         support += addition
         _add_driver(drivers, "체결강도 우위", addition)
-    elif 0.0 < trade_strength <= policy.weak_trade_strength:
+    elif flow_relevant and 0.0 < trade_strength <= policy.weak_trade_strength:
+        applied_fact_fields.append("tradeStrength")
         addition = min(8.0, (100.0 - trade_strength) * 0.25)
         risk += addition
         _add_driver(drivers, "체결강도 약화", addition)
 
     bid_ask_imbalance = number(facts.get("bidAskImbalance"))
-    if bid_ask_imbalance > 0:
+    if flow_relevant and bid_ask_imbalance > 0:
+        applied_fact_fields.append("bidAskImbalance")
         addition = min(8.0, bid_ask_imbalance * 0.12)
         support += addition
         _add_driver(drivers, "매수 호가 우위", addition)
-    elif bid_ask_imbalance < 0:
+    elif flow_relevant and bid_ask_imbalance < 0:
+        applied_fact_fields.append("bidAskImbalance")
         addition = min(8.0, abs(bid_ask_imbalance) * 0.12)
         risk += addition
         _add_driver(drivers, "매도 호가 우위", addition)
 
     investor_score = number(facts.get("investorFlowScore"))
-    if investor_score > 0:
+    if "flow" in domain_set and investor_score > 0:
+        applied_fact_fields.append("investorFlowScore")
         addition = min(14.0, investor_score * 0.14)
         support += addition
         _add_driver(drivers, "외국인·기관 수급 지지", addition)
-    elif investor_score < 0:
+    elif "flow" in domain_set and investor_score < 0:
+        applied_fact_fields.append("investorFlowScore")
         addition = min(14.0, abs(investor_score) * 0.14)
         risk += addition
         _add_driver(drivers, "외국인·기관 수급 부담", addition)
 
     news_momentum = number(facts.get("newsMomentumScore"))
-    if news_momentum > 0:
+    if "news" in domain_set and news_momentum > 0:
+        applied_fact_fields.append("newsMomentumScore")
         addition = min(12.0, news_momentum * 0.4)
         support += addition
         _add_driver(drivers, "뉴스 근거 지지", addition)
-    elif news_momentum < 0:
+    elif "news" in domain_set and news_momentum < 0:
+        applied_fact_fields.append("newsMomentumScore")
         addition = min(12.0, abs(news_momentum) * 0.4)
         risk += addition
         _add_driver(drivers, "뉴스 근거 부담", addition)
@@ -547,7 +735,7 @@ def inference_score_breakdown(
     sellable_quantity = number(facts.get("sellableQuantity"))
     quantity = number(facts.get("quantity"))
     actionability = 30.0
-    if facts.get("isHolding"):
+    if facts.get("isHolding") and domain_set & {"position", "portfolio", "execution"}:
         actionability += min(24.0, position_weight * 0.9)
         if sellable_quantity or quantity:
             actionability += min(14.0, (sellable_quantity / quantity) * 14.0 if quantity else 8.0)
@@ -555,7 +743,7 @@ def inference_score_breakdown(
             actionability += min(18.0, abs(pnl - policy.loss_actionability_rate) * 1.1 + 8.0)
         elif pnl >= policy.profit_actionability_rate:
             actionability += min(12.0, pnl * 0.5)
-    elif facts.get("isWatchlist"):
+    elif facts.get("isWatchlist") and domain_set & {"position", "trend", "valuation"}:
         actionability += 10.0
         if ma5_distance >= 0 and ma20_distance >= 0:
             actionability += 10.0
@@ -567,21 +755,38 @@ def inference_score_breakdown(
     missing_count = len(facts.get("missingData") or []) if isinstance(facts.get("missingData"), list) else 0
     warning_count = len(facts.get("dataQualityWarnings") or []) if isinstance(facts.get("dataQualityWarnings"), list) else 0
     conflict_penalty = min(10.0, number(facts.get("newsConflictScore")) * 0.4)
-    data_confidence = _bounded_score(
-        (trace_confidence or rule_reliability) * 0.55
-        + data_quality * 0.45
-        - missing_count * 2.5
-        - warning_count * 3.0
-        - conflict_penalty,
-        20.0,
-        100.0,
-    )
+    evidence_quality = trace_evidence_quality(trace)
+    if evidence_quality:
+        data_confidence = _bounded_score(
+            (trace_confidence or rule_reliability) * 0.30
+            + data_quality * 0.25
+            + evidence_quality["coverage"] * 0.20
+            + evidence_quality["freshness"] * 0.15
+            + evidence_quality["sourceReliability"] * 0.10
+            - missing_count * 2.5
+            - warning_count * 3.0
+            - conflict_penalty,
+            20.0,
+            100.0,
+        )
+    else:
+        data_confidence = _bounded_score(
+            (trace_confidence or rule_reliability) * 0.55
+            + data_quality * 0.45
+            - missing_count * 2.5
+            - warning_count * 3.0
+            - conflict_penalty,
+            20.0,
+            100.0,
+        )
 
     novelty = 25.0
     pnl_delta = number(facts.get("profitLossRateDeltaPct"))
-    novelty += min(24.0, abs(pnl_delta) * 5.0)
-    novelty += min(18.0, abs(price_change) * 2.2)
-    if number(facts.get("directNewsCount")):
+    if "position" in domain_set:
+        novelty += min(24.0, abs(pnl_delta) * 5.0)
+    if "trend" in domain_set:
+        novelty += min(18.0, abs(price_change) * 2.2)
+    if "news" in domain_set and number(facts.get("directNewsCount")):
         latest_age = number(facts.get("latestDirectNewsAgeMinutes"))
         novelty += 14.0 if not latest_age or latest_age <= policy.recent_news_age_minutes else 6.0
     if relation.get("inferenceTraceId") or trace.get("id"):
@@ -621,6 +826,9 @@ def inference_score_breakdown(
         "thresholdPolicyId": policy.policy_id,
         "thresholdPolicyVersion": policy.version,
         "thresholdPolicySource": policy.source,
+        "evidenceDomains": evidence_domains,
+        "appliedFactFields": list(dict.fromkeys(applied_fact_fields)),
+        "evidenceQuality": evidence_quality,
         "drivers": drivers[:policy.max_drivers],
     }
 
@@ -663,6 +871,8 @@ def aggregate_score_breakdown(matches: List[OntologyRuleMatch], threshold_policy
         "thresholdPolicyId": policy.policy_id,
         "thresholdPolicyVersion": policy.version,
         "thresholdPolicySource": policy.source,
+        "activeRuleCount": len(matches or []),
+        "uniqueRuleCount": len({item.rule_id for item in matches or [] if item.rule_id}),
         "drivers": drivers,
     }
 
@@ -771,6 +981,12 @@ def signal_conflict_packet(
     score_breakdown = score_breakdown or {}
     risk = number(score_breakdown.get("riskPressure"))
     support = number(score_breakdown.get("supportEvidence"))
+    applied_fields = {
+        str(field)
+        for match in active_matches or []
+        for field in (match.score_breakdown or {}).get("appliedFactFields") or []
+        if str(field or "").strip()
+    }
     risk_drivers: List[str] = []
     support_drivers: List[str] = []
 
@@ -779,27 +995,29 @@ def signal_conflict_packet(
         if text and text not in target:
             target.append(text)
 
-    if number(facts.get("profitLossRate")) <= policy.loss_risk_profit_loss_rate:
+    if "profitLossRate" in applied_fields and number(facts.get("profitLossRate")) <= policy.loss_risk_profit_loss_rate:
         add(risk_drivers, "손실 구간")
-    if number(facts.get("ma20Distance")) < 0:
+    if "ma20Distance" in applied_fields and number(facts.get("ma20Distance")) < 0:
         add(risk_drivers, "20일 평균 아래")
-    if number(facts.get("ma60Distance")) < 0:
+    if "ma60Distance" in applied_fields and number(facts.get("ma60Distance")) < 0:
         add(risk_drivers, "60일 평균 아래")
-    if number(facts.get("tradeStrength")) and number(facts.get("tradeStrength")) < policy.weak_trade_strength:
+    if "tradeStrength" in applied_fields and number(facts.get("tradeStrength")) and number(facts.get("tradeStrength")) < policy.weak_trade_strength:
         add(risk_drivers, "체결강도 약화")
-    if number(facts.get("investorFlowScore")) < 0:
+    if "investorFlowScore" in applied_fields and number(facts.get("investorFlowScore")) < 0:
         add(risk_drivers, "외국인·기관 수급 부담")
-    if number(facts.get("tradeStrength")) >= policy.support_trade_strength:
+    if "tradeStrength" in applied_fields and number(facts.get("tradeStrength")) >= policy.support_trade_strength:
         add(support_drivers, "체결강도 우위")
-    if number(facts.get("bidAskImbalance")) >= policy.support_bid_ask_imbalance:
+    if "bidAskImbalance" in applied_fields and number(facts.get("bidAskImbalance")) >= policy.support_bid_ask_imbalance:
         add(support_drivers, "매수 호가 우위")
-    if number(facts.get("investorFlowScore")) > 0:
+    if "investorFlowScore" in applied_fields and number(facts.get("investorFlowScore")) > 0:
         add(support_drivers, "외국인·기관 수급 지지")
-    if number(facts.get("ma5Distance")) > 0:
+    if "ma5Distance" in applied_fields and number(facts.get("ma5Distance")) > 0:
         add(support_drivers, "5일 평균 위")
-    if number(facts.get("priceChangeRate")) > 0:
+    if "priceChangeRate" in applied_fields and number(facts.get("priceChangeRate")) > 0:
         add(support_drivers, "현재 가격 반등")
     for relation in relations or []:
+        if not is_primary_inference_relation(relation):
+            continue
         polarity = str((relation or {}).get("polarity") or "").lower()
         label = str((relation or {}).get("aiInfluenceLabel") or (relation or {}).get("targetLabel") or "").strip()
         if polarity == "risk":

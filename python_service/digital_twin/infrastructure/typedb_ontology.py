@@ -549,6 +549,15 @@ class NullTypeDBOntologyGraphRepository:
         })
         return metadata
 
+    def active_abox_metadata(self) -> Dict[str, object]:
+        return {
+            "configured": False,
+            "status": "disabled",
+            "graphStore": "typedb",
+            "aboxSnapshotId": "",
+            "materialFingerprint": "",
+        }
+
     def save_graph(self, graph: PortfolioOntology) -> Dict[str, object]:
         return {
             "configured": False,
@@ -1033,13 +1042,81 @@ class TypeDBOntologyGraphRepository(GraphStoreOntologyRowMapperMixin):
             ), box))
         return rows
 
+    def read_relation_rows_by_source_ids(
+        self,
+        source_ids: Iterable[str],
+        boxes: Iterable[str] = None,
+        relation_types: Iterable[str] = None,
+    ) -> List[Dict[str, object]]:
+        clean_ids = sorted(set(str(item or "").strip() for item in source_ids or [] if str(item or "").strip()))
+        if not clean_ids:
+            return []
+        clean_relation_types = sorted(set(
+            str(item or "").upper().strip()
+            for item in relation_types or []
+            if str(item or "").strip()
+        ))
+        rows: List[Dict[str, object]] = []
+        endpoint_filters = [
+            typedb_value_match("$source", "ontology-id", clean_ids, "==", "sourceIdFilter"),
+            typedb_value_match("$target", "ontology-id", clean_ids, "==", "targetIdFilter"),
+        ]
+        for box in normalized_boxes(boxes):
+            for endpoint_filter in endpoint_filters:
+                query = (
+                    "match "
+                    "$source isa ontology-node, has ontology-id $sourceId, has ontology-label $sourceLabel, "
+                    "has ontology-kind $sourceKind, has ontology-updated-at $sourceUpdatedAt, has ontology-json $sourceJson; "
+                    "$target isa ontology-node, has ontology-id $targetId, has ontology-label $targetLabel, "
+                    "has ontology-kind $targetKind, has ontology-updated-at $targetUpdatedAt, has ontology-json $targetJson; "
+                    "$r isa ontology-assertion, links (source: $source, target: $target), "
+                    "has ontology-id $id, "
+                    "has ontology-relation-type $type, "
+                    "has ontology-box " + typedb_string(box) + ", "
+                    "has ontology-updated-at $updatedAt, "
+                    "has ontology-json $json, "
+                    "has ontology-weight $weight; "
+                    + typedb_value_match("$r", "ontology-relation-type", clean_relation_types, "==", "relationTypeFilter")
+                    + endpoint_filter
+                )
+                raw_rows = self.read_rows(
+                    query,
+                    [
+                        "id", "sourceId", "sourceLabel", "sourceKind", "sourceUpdatedAt", "sourceJson",
+                        "targetId", "targetLabel", "targetKind", "targetUpdatedAt", "targetJson",
+                        "type", "updatedAt", "json", "weight",
+                    ],
+                )
+                mapped_rows = self.relation_rows_from_typeql(raw_rows, box)
+                for mapped, raw in zip(mapped_rows, raw_rows):
+                    mapped["sourceNode"] = endpoint_node_row(raw, "source", box)
+                    mapped["targetNode"] = endpoint_node_row(raw, "target", box)
+                rows.extend(mapped_rows)
+        return list({str(row.get("id") or ""): row for row in rows if str(row.get("id") or "").strip()}.values())
+
     def active_abox_snapshot_id(self) -> str:
-        rows = self.read_entity_rows(["ABox"], limit=40)
+        return str(self.active_abox_metadata().get("aboxSnapshotId") or "")
+
+    def active_abox_metadata(self) -> Dict[str, object]:
+        rows = self.read_entity_rows(["ABox"], limit=80)
         for row in rows:
             snapshot_id = str(row.get("aboxSnapshotId") or row.get("snapshotId") or "").strip()
             if snapshot_id:
-                return snapshot_id
-        return ""
+                return {
+                    "configured": True,
+                    "status": "ok",
+                    "graphStore": "typedb",
+                    "aboxSnapshotId": snapshot_id,
+                    "materialFingerprint": str(row.get("materialFingerprint") or "").strip(),
+                    "asOf": str(row.get("asOf") or "").strip(),
+                }
+        return {
+            "configured": True,
+            "status": "empty",
+            "graphStore": "typedb",
+            "aboxSnapshotId": "",
+            "materialFingerprint": "",
+        }
 
     def read_relation_rows(self, boxes: Iterable[str] = None, limit: int = 0) -> List[Dict[str, object]]:
         rows: List[Dict[str, object]] = []
@@ -1067,7 +1144,16 @@ class TypeDBOntologyGraphRepository(GraphStoreOntologyRowMapperMixin):
         rows = sorted(rows, key=lambda item: (str(item.get("updatedAt") or ""), str(item.get("source") or ""), str(item.get("target") or "")), reverse=True)
         return rows[:safe_limit] if safe_limit > 0 else rows
 
-    def read_inference_generation_records(self) -> List[Dict[str, object]]:
+    def read_inference_generation_records(self, published_only: bool = True) -> List[Dict[str, object]]:
+        published_rows = self.read_rows(
+            (
+                'match $n isa ontology-node, has ontology-box "InferenceBox", '
+                'has ontology-kind "inference-generation", '
+                "has ontology-snapshot-id $snapshotId, "
+                "has ontology-updated-at $updatedAt;"
+            ),
+            ["snapshotId", "updatedAt"],
+        )
         node_rows = self.read_rows(
             (
                 'match $n isa ontology-node, has ontology-box "InferenceBox", '
@@ -1091,7 +1177,38 @@ class TypeDBOntologyGraphRepository(GraphStoreOntologyRowMapperMixin):
             {"snapshotId": row.get("snapshotId"), "updatedAt": row.get("updatedAt"), "relationType": "ontology-assertion"}
             for row in relation_rows
         ]
-        return inference_generation_records(indexed_rows, [])
+        records = inference_generation_records(indexed_rows, [])
+        if not published_rows:
+            return records
+        published = {
+            str(row.get("snapshotId") or ""): str(row.get("updatedAt") or "")
+            for row in published_rows
+            if str(row.get("snapshotId") or "").strip()
+        }
+        if not published_only:
+            return [
+                {
+                    **record,
+                    "latestAt": published.get(str(record.get("generationId") or ""), record.get("latestAt")),
+                    "publicationStatus": (
+                        "published"
+                        if str(record.get("generationId") or "") in published
+                        else "staging"
+                    ),
+                }
+                for record in records
+            ]
+        result = []
+        for record in records:
+            generation_id = str(record.get("generationId") or "")
+            if generation_id not in published:
+                continue
+            result.append({
+                **record,
+                "latestAt": published[generation_id] or record.get("latestAt"),
+                "publicationStatus": "published",
+            })
+        return sorted(result, key=lambda item: str(item.get("latestAt") or ""), reverse=True)
 
     def read_inferencebox_entity_rows(
         self,
@@ -2769,6 +2886,8 @@ relation ontology-assertion,
             function_sync_result = self.sync_typedb_native_rule_functions(parsed_rules, force=force_schema_function_sync)
             runtime_rulebox_metadata = dict(rulebox_metadata)
             runtime_rulebox_metadata.update({
+                "targetSymbols": target_symbols,
+                "incrementalScope": "symbols" if target_symbols else "all-symbols",
                 "typedbSchemaFunctionSyncStatus": str(function_sync_result.get("status") or ""),
                 "typedbSchemaFunctionSyncCached": bool(function_sync_result.get("schemaFunctionSyncCached")),
                 "typedbSchemaFunctionSyncedCount": int(number_or_none(function_sync_result.get("syncedCount")) or 0),
@@ -2839,7 +2958,7 @@ relation ontology-assertion,
                     "typedbQueryMetrics": self.query_metrics_snapshot(),
                     **runtime_rulebox_metadata,
                 }
-            graph = self.load_graph_for_native_matches(native_match_result)
+            graph = self.load_graph_for_native_matches(native_match_result, parsed_rules)
             before_entities = len(graph.entities)
             before_relations = len(graph.relations)
             source_abox_snapshot_ids = sorted({
@@ -3197,6 +3316,11 @@ relation ontology-assertion,
         ]
         updated_at = utc_now()
         queries = self.inferencebox_insert_queries(node_rows, relation_rows, updated_at)
+        generation_id = str((graph.worldview or {}).get("inferenceGenerationId") or "").strip()
+        marker_query = self.node_insert_query(
+            inference_generation_marker_row(graph, node_rows, relation_rows),
+            updated_at,
+        ) if generation_id else ""
         statement_count = len(node_rows) + len([row for row in relation_rows if row.get("source") and row.get("target")])
         try:
             def operation():
@@ -3204,11 +3328,20 @@ relation ontology-assertion,
                     driver = self.open_driver(imported)
                     try:
                         self.ensure_database(driver)
+                        if generation_id:
+                            for cleanup_query in inference_generation_delete_queries(generation_id):
+                                with driver.transaction(self.database, TransactionType.WRITE) as tx:
+                                    tx.query(cleanup_query).resolve()
+                                    tx.commit()
                         if queries:
                             for query in queries:
                                 with driver.transaction(self.database, TransactionType.WRITE) as tx:
                                     tx.query(query).resolve()
                                     tx.commit()
+                        if marker_query:
+                            with driver.transaction(self.database, TransactionType.WRITE) as tx:
+                                tx.query(marker_query).resolve()
+                                tx.commit()
                     finally:
                         self.close_driver(driver)
             self.with_typedb_retries(operation)
@@ -3222,7 +3355,8 @@ relation ontology-assertion,
                 "statementCount": statement_count,
                 "batchCount": len(queries),
                 "insertMode": "batched",
-                "inferenceGenerationId": str((graph.worldview or {}).get("inferenceGenerationId") or ""),
+                "publicationStatus": "published" if marker_query else "legacy-unmarked",
+                "inferenceGenerationId": generation_id,
                 "inferenceGenerationAt": str((graph.worldview or {}).get("inferenceGenerationAt") or ""),
             }
         except Exception as error:  # noqa: BLE001 - materialization failure must be visible to diagnostics.
@@ -3238,7 +3372,8 @@ relation ontology-assertion,
                 "statementCount": statement_count,
                 "batchCount": len(queries),
                 "insertMode": "batched",
-                "inferenceGenerationId": str((graph.worldview or {}).get("inferenceGenerationId") or ""),
+                "publicationStatus": "not-published",
+                "inferenceGenerationId": generation_id,
             }
 
     def prune_inferencebox_generations(self, active_generation_id: str, keep_count: int = 2) -> Dict[str, object]:
@@ -3246,13 +3381,14 @@ relation ontology-assertion,
         if not active_generation_id:
             return {"configured": bool(self.address), "status": "skipped", "reason": "active generation id is empty"}
         try:
-            records = self.read_inference_generation_records()
+            records = self.read_inference_generation_records(published_only=False)
         except Exception as error:  # noqa: BLE001 - pruning must not fail materialization.
             return {"configured": True, "status": "error", "reason": str(error)[:180], "activeGenerationId": active_generation_id}
         if not records:
             return {"configured": True, "status": "skipped", "reason": "no generation-scoped InferenceBox rows", "activeGenerationId": active_generation_id}
         keep = {active_generation_id}
-        for item in sorted(records, key=lambda row: str(row.get("latestAt") or ""), reverse=True)[: max(1, int(keep_count or 2))]:
+        published_records = [item for item in records if str(item.get("publicationStatus") or "published") == "published"]
+        for item in sorted(published_records, key=lambda row: str(row.get("latestAt") or ""), reverse=True)[: max(1, int(keep_count or 2))]:
             keep.add(str(item.get("generationId") or ""))
         prune_ids = [
             str(item.get("generationId") or "")
@@ -3545,9 +3681,21 @@ relation ontology-assertion,
             ))
         return graph
 
-    def load_graph_for_native_matches(self, native_match_result: Dict[str, object]) -> PortfolioOntology:
+    def load_graph_for_native_matches(
+        self,
+        native_match_result: Dict[str, object],
+        rules: Iterable[GraphInferenceRule] = None,
+    ) -> PortfolioOntology:
         matches = [item for item in (native_match_result or {}).get("matches") or [] if isinstance(item, dict)]
         source_ids = sorted(set(str(item.get("sourceId") or "").strip() for item in matches if str(item.get("sourceId") or "").strip()))
+        matched_rule_ids = {str(item.get("ruleId") or "").strip() for item in matches}
+        evidence_relation_types = sorted(set(
+            str(condition.relation_type or "").upper().strip()
+            for rule in rules or []
+            if str(rule.rule_id or "").strip() in matched_rule_ids
+            for condition in rule.conditions or []
+            if str(condition.kind or "") == "relation" and str(condition.relation_type or "").strip()
+        ))
         rows: List[Dict[str, object]] = []
         if source_ids:
             try:
@@ -3583,6 +3731,47 @@ relation ontology-assertion,
                     "source": "unknown",
                     "queryFallback": True,
                 },
+            ))
+        relation_rows = self.read_relation_rows_by_source_ids(
+            source_ids,
+            ["ABox"],
+            evidence_relation_types,
+        ) if source_ids else []
+        related_node_rows = {
+            str(node.get("id") or ""): node
+            for item in relation_rows
+            for node in [item.get("sourceNode"), item.get("targetNode")]
+            if isinstance(node, dict)
+            and str(node.get("id") or "").strip()
+            and str(node.get("id") or "").strip() not in source_ids
+        }
+        existing_entity_ids = {item.entity_id for item in graph.entities}
+        for row in related_node_rows.values():
+            entity_id_value = str(row.get("id") or "").strip()
+            if not entity_id_value or entity_id_value in existing_entity_ids:
+                continue
+            properties = json_object(row.get("propertiesJson"))
+            properties.setdefault("ontologyBox", row.get("ontologyBox") or "ABox")
+            properties.setdefault("symbol", row.get("symbol") or symbol_from_subject(entity_id_value))
+            properties.setdefault("tboxClass", row.get("tboxClass") or "")
+            graph.entities.append(OntologyEntity(
+                entity_id_value,
+                str(row.get("label") or entity_id_value),
+                str(row.get("kind") or "observation"),
+                properties,
+            ))
+            existing_entity_ids.add(entity_id_value)
+        for row in relation_rows:
+            properties = json_object(row.get("propertiesJson"))
+            properties.setdefault("ontologyBox", row.get("ontologyBox") or "ABox")
+            properties["_relationId"] = str(row.get("id") or "")
+            graph.relations.append(OntologyRelation(
+                str(row.get("source") or ""),
+                str(row.get("target") or ""),
+                str(row.get("type") or ""),
+                float(number_or_none(row.get("weight")) or 1.0),
+                [],
+                properties,
             ))
         return graph
 
@@ -3630,6 +3819,21 @@ relation ontology-assertion,
 def normalized_boxes(boxes: Iterable[str] = None) -> List[str]:
     values = [str(item or "").strip() for item in (boxes or []) if str(item or "").strip()]
     return sorted(set(values or ["ABox"]))
+
+
+def endpoint_node_row(row: Dict[str, object], prefix: str, box: str) -> Dict[str, object]:
+    properties = json_object(row.get(prefix + "Json"))
+    return {
+        **properties,
+        "id": str(row.get(prefix + "Id") or ""),
+        "label": str(row.get(prefix + "Label") or row.get(prefix + "Id") or ""),
+        "kind": str(row.get(prefix + "Kind") or properties.get("kind") or "observation"),
+        "ontologyBox": str(box or properties.get("ontologyBox") or "ABox"),
+        "symbol": str(properties.get("symbol") or ""),
+        "tboxClass": str(properties.get("tboxClass") or ""),
+        "updatedAt": str(row.get(prefix + "UpdatedAt") or properties.get("updatedAt") or ""),
+        "propertiesJson": json.dumps(properties, ensure_ascii=False, sort_keys=True),
+    }
 
 
 def relation_type_rows_from_derivations(
@@ -4426,6 +4630,8 @@ def inference_rulebox_metadata(
         "ruleStore",
         "sourceAboxSnapshotId",
         "sourceAboxSnapshotCount",
+        "targetSymbols",
+        "incrementalScope",
     ]
     metadata: Dict[str, object] = {}
     for row in list(entity_rows or []) + list(relation_rows or []):
@@ -4485,6 +4691,51 @@ def row_inference_generation_at(row: Dict[str, object]) -> str:
     except json.JSONDecodeError:
         props = {}
     return str((props or {}).get("inferenceGenerationAt") or (props or {}).get("asOf") or "").strip()
+
+
+def inference_generation_marker_row(
+    graph: PortfolioOntology,
+    node_rows: Iterable[Dict[str, object]],
+    relation_rows: Iterable[Dict[str, object]],
+) -> Dict[str, object]:
+    worldview = dict(graph.worldview or {})
+    generation_id = str(worldview.get("inferenceGenerationId") or "").strip()
+    generation_at = str(worldview.get("inferenceGenerationAt") or utc_now()).strip()
+    properties = {
+        **worldview,
+        "ontologyBox": "InferenceBox",
+        "tboxClass": "InferenceGeneration",
+        "publicationStatus": "published",
+        "publishedAt": generation_at,
+        "expectedEntityCount": len(list(node_rows or [])),
+        "expectedRelationCount": len(list(relation_rows or [])),
+        "nativeTypeDbReasoned": True,
+    }
+    return {
+        "id": "inference-generation:" + generation_id,
+        "label": "Published InferenceBox " + generation_id,
+        "kind": "inference-generation",
+        "nodeType": "ontology-entity",
+        "ontologyBox": "InferenceBox",
+        "snapshotId": generation_id,
+        "aboxSnapshotId": generation_id,
+        "tboxClass": "InferenceGeneration",
+        "propertiesJson": json.dumps(properties, ensure_ascii=False, sort_keys=True),
+    }
+
+
+def inference_generation_delete_queries(generation_id: str) -> List[str]:
+    generation_literal = typedb_string(str(generation_id or ""))
+    return [
+        (
+            'match $r isa ontology-assertion, has ontology-box "InferenceBox", '
+            "has ontology-snapshot-id " + generation_literal + "; delete $r;"
+        ),
+        (
+            'match $n isa ontology-node, has ontology-box "InferenceBox", '
+            "has ontology-snapshot-id " + generation_literal + "; delete $n;"
+        ),
+    ]
 
 
 def inference_generation_records(

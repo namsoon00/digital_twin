@@ -795,7 +795,7 @@ class OntologyInferenceContextTests(unittest.TestCase):
         self.assertGreater(severe_score["finalStrength"], mild_score["finalStrength"])
         self.assertIn("손실률 확대", severe_score["drivers"])
 
-    def test_support_evidence_is_kept_separate_from_risk_pressure(self):
+    def test_unrelated_flow_facts_do_not_change_loss_rule_pressure(self):
         position = Position(
             symbol="000660",
             name="SK하이닉스",
@@ -873,11 +873,11 @@ class OntologyInferenceContextTests(unittest.TestCase):
 
         self.assertGreater(breakdown["riskPressure"], 0)
         self.assertGreater(breakdown["supportEvidence"], 0)
-        self.assertLess(breakdown["netRiskPressure"], breakdown["riskPressure"])
-        self.assertGreater(breakdown["opposingPressurePenalty"], 0)
-        self.assertTrue(context["signalConflicts"]["hasConflict"])
         self.assertIn("손실 구간", context["signalConflicts"]["riskDrivers"])
-        self.assertIn("체결강도 우위", context["signalConflicts"]["supportDrivers"])
+        self.assertNotIn("체결강도 우위", context["signalConflicts"]["supportDrivers"])
+        active_breakdown = context["activeRules"][0]["scoreBreakdown"]
+        self.assertNotIn("tradeStrength", active_breakdown["appliedFactFields"])
+        self.assertNotIn("investorFlowScore", active_breakdown["appliedFactFields"])
 
 
 if __name__ == "__main__":

@@ -3012,7 +3012,9 @@ class PythonServiceTests(unittest.TestCase):
         persisted = repository.graphs[0]
         self.assertTrue(result["saved"])
         self.assertEqual("abox-facts-only-graph-store-rulebox", result["projectionMode"])
-        self.assertEqual({"clearInference": True}, repository.executions[0])
+        self.assertEqual(["005930"], repository.executions[0]["symbols"])
+        self.assertTrue(repository.executions[0]["pruneOldGenerations"])
+        self.assertEqual(500, repository.executions[0]["inferenceSnapshotLimit"])
         self.assertEqual(["005930"], repository.queried_symbols[0])
         self.assertTrue(result["inferenceBox"]["nativeTypeDbReasoningUsed"])
         self.assertFalse(any((item.properties or {}).get("ontologyBox") == "RuleBox" for item in persisted.entities))

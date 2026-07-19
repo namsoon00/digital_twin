@@ -142,6 +142,8 @@ def inferencebox_trace_payload(row: Dict[str, object]) -> Dict[str, object]:
         "evidenceRelationIds": evidence_relation_ids,
         "promptHint": str(properties.get("promptHint") or row.get("promptHint") or ""),
         "conditionDetailSource": str(properties.get("conditionDetailSource") or row.get("conditionDetailSource") or ""),
+        "evidenceCoverage": number_or_none(properties.get("evidenceCoverage") if "evidenceCoverage" in properties else row.get("evidenceCoverage")),
+        "freshnessStatus": str(properties.get("freshnessStatus") or row.get("freshnessStatus") or "unknown"),
         "nativeTypeDbReasoned": bool(row.get("nativeTypeDbReasoned")),
         "typedbNativeRuleReasoned": bool(row.get("typedbNativeRuleReasoned")),
         "updatedAt": str(row.get("updatedAt") or ""),

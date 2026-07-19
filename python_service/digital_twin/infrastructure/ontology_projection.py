@@ -4,6 +4,11 @@ import hashlib
 from ..domain.ontology_contracts import PortfolioOntology
 from ..domain.ontology_rulebox_catalog import default_graph_inference_rules
 from ..domain.ontology_rulebox_governance import rulebox_rules_hash
+from ..domain.ontology_projection_fingerprint import (
+    active_material_fingerprint,
+    apply_material_graph_identity,
+    material_graph_fingerprint,
+)
 from ..domain.ontology_validator import validate_ontology
 from ..domain.portfolio_ontology_builder import build_portfolio_ontology
 from ..domain.portfolio import AccountSnapshot
@@ -65,6 +70,12 @@ class PortfolioOntologyProjectionRecorder:
                 runtime_context=self.runtime_context(snapshot),
             )
             persistence_graph = self.graph_for_graph_store_persistence(graph)
+            material_fingerprint = material_graph_fingerprint(persistence_graph)
+            material_snapshot_id = apply_material_graph_identity(
+                persistence_graph,
+                snapshot.account_id,
+                material_fingerprint,
+            )
             validation = validate_ontology(persistence_graph)
             if validation.error_count:
                 result = {
@@ -76,10 +87,58 @@ class PortfolioOntologyProjectionRecorder:
                 }
                 self.store_projection_result(snapshot, result)
                 return result
+            active_abox = self.active_abox_metadata()
+            if active_material_fingerprint(active_abox) == material_fingerprint:
+                inferencebox = self.existing_inference_result(snapshot)
+                result = {
+                    "saved": False,
+                    "status": (
+                        "unchanged-material-facts"
+                        if self.inference_result_is_reusable(
+                            inferencebox,
+                            active_abox,
+                            self.snapshot_symbols(snapshot),
+                        )
+                        else "unchanged-material-facts-reasoning-retry"
+                    ),
+                    "reason": (
+                        "가격·손익·수급·뉴스·신선도 등 추론 입력이 직전 ABox와 같습니다."
+                        if self.inference_result_is_reusable(
+                            inferencebox,
+                            active_abox,
+                            self.snapshot_symbols(snapshot),
+                        )
+                        else "ABox 입력은 같지만 정상적으로 정렬된 InferenceBox가 없어 추론을 다시 실행합니다."
+                    ),
+                    "graphStore": self.active_graph_store_key(),
+                    "materialFingerprint": material_fingerprint,
+                    "aboxSnapshotId": str(active_abox.get("aboxSnapshotId") or material_snapshot_id),
+                    "preservedActiveGeneration": True,
+                    "materialChangeDetected": False,
+                    "aboxValidation": validation.to_dict(),
+                }
+                if rulebox_bootstrap:
+                    result["ruleboxBootstrap"] = rulebox_bootstrap
+                if self.inference_result_is_reusable(
+                    inferencebox,
+                    active_abox,
+                    self.snapshot_symbols(snapshot),
+                ):
+                    inferencebox["reusedForUnchangedMaterialFacts"] = True
+                    result["inferenceBox"] = inferencebox
+                else:
+                    result["reasoningRetryRequired"] = True
+                    result["previousInferenceStatus"] = str(inferencebox.get("status") or "missing")
+                    self.attach_graph_store_inference_result(result, snapshot)
+                self.store_projection_result(snapshot, result)
+                return result
             result = self.repository.save_graph(persistence_graph)
             if not isinstance(result, dict):
                 result = {"saved": False, "status": "error", "reason": "ontology repository returned non-dict result"}
             result["projectionMode"] = "abox-facts-only-" + self.active_graph_store_key(result) + "-rulebox"
+            result["materialFingerprint"] = material_fingerprint
+            result["aboxSnapshotId"] = material_snapshot_id
+            result["materialChangeDetected"] = True
             result["aboxValidation"] = validation.to_dict()
             if rulebox_bootstrap:
                 result["ruleboxBootstrap"] = rulebox_bootstrap
@@ -93,6 +152,15 @@ class PortfolioOntologyProjectionRecorder:
             result = {"saved": False, "status": "error", "reason": str(error)[:180]}
         self.store_projection_result(snapshot, result)
         return result
+
+    def active_abox_metadata(self) -> Dict[str, object]:
+        if not hasattr(self.repository, "active_abox_metadata"):
+            return {}
+        try:
+            result = self.repository.active_abox_metadata()
+        except Exception:  # noqa: BLE001 - absence of comparison metadata falls back to persistence.
+            return {}
+        return dict(result or {}) if isinstance(result, dict) else {}
 
     def ensure_rulebox_ready(self) -> Dict[str, object]:
         if not hasattr(self.repository, "rulebox_snapshot"):
@@ -247,6 +315,46 @@ class PortfolioOntologyProjectionRecorder:
             if active_key == "typedb":
                 snapshot_payload.setdefault("source", "typedbInferenceBox")
             result["inferenceBox"] = snapshot_payload
+
+    def existing_inference_result(self, snapshot: AccountSnapshot) -> Dict[str, object]:
+        if not hasattr(self.repository, "inferencebox_snapshot"):
+            return {}
+        try:
+            inferencebox = self.repository.inferencebox_snapshot(
+                symbols=self.snapshot_symbols(snapshot),
+                limit=self.inference_snapshot_limit(),
+            )
+        except Exception as error:  # noqa: BLE001 - unchanged ABox remains valid even if readback fails.
+            inferencebox = {"status": "error", "reason": str(error)[:180]}
+        return dict(inferencebox or {}) if isinstance(inferencebox, dict) else {}
+
+    def inference_result_is_reusable(
+        self,
+        inferencebox: Dict[str, object],
+        active_abox: Dict[str, object],
+        required_symbols: List[str] = None,
+    ) -> bool:
+        if str((inferencebox or {}).get("status") or "") != "ok":
+            return False
+        if not bool((inferencebox or {}).get("nativeTypeDbReasoningUsed")):
+            return False
+        if (inferencebox or {}).get("generationAligned") is False:
+            return False
+        source_abox_id = str((inferencebox or {}).get("sourceAboxSnapshotId") or "").strip()
+        active_abox_id = str((active_abox or {}).get("aboxSnapshotId") or "").strip()
+        if not (source_abox_id and active_abox_id and source_abox_id == active_abox_id):
+            return False
+        expected = {
+            str(symbol or "").upper().strip()
+            for symbol in list(required_symbols or [])
+            if str(symbol or "").strip()
+        }
+        actual = {
+            str(symbol or "").upper().strip()
+            for symbol in list((inferencebox or {}).get("targetSymbols") or [])
+            if str(symbol or "").strip()
+        }
+        return not expected or expected.issubset(actual)
 
     def snapshot_symbols(self, snapshot: AccountSnapshot) -> List[str]:
         symbols = []

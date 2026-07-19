@@ -4054,6 +4054,10 @@ h3 {
   grid-template-columns: repeat(6, minmax(0, 1fr));
 }
 
+.feed-section-tabs {
+  grid-template-columns: repeat(auto-fit, minmax(112px, 1fr));
+}
+
 .account-section-tabs button,
 .notification-section-tabs button,
 .ontology-section-tabs button,
@@ -9888,6 +9892,9 @@ h3 {
 }
 
 .feed-view .feed-evidence-workspace,
+.feed-view .feed-impact-workspace-wide,
+.feed-view .feed-theme-workspace,
+.feed-view .feed-portfolio-workspace,
 .feed-view .feed-source-workspace {
   display: grid;
   grid-column: 1 / -1;
@@ -9896,6 +9903,19 @@ h3 {
   gap: var(--ds-page-gap);
   min-width: 0;
   max-width: 100%;
+}
+
+.feed-view-impact .feed-impact-inbox-panel,
+.feed-view-themes .feed-market-brief-panel,
+.feed-view-themes .feed-theme-cluster-panel,
+.feed-view-portfolio .feed-portfolio-news-panel,
+.feed-view-portfolio .feed-impact-inbox-panel,
+.feed-view-sources .feed-source-ledger-panel {
+  grid-column: 1 / -1;
+}
+
+.feed-view-impact .research-evidence-panel {
+  grid-column: 1 / -1;
 }
 
 .feed-view-evidence .research-evidence-panel {
@@ -9927,6 +9947,184 @@ h3 {
   display: grid;
   gap: var(--ds-section-gap);
   padding: var(--ds-panel-pad-y) var(--ds-panel-pad-x);
+}
+
+.feed-brief-grid {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 10px;
+  padding: var(--ds-panel-pad-y) var(--ds-panel-pad-x) 0;
+}
+
+.feed-source-strip,
+.feed-portfolio-summary,
+.feed-theme-metrics {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  min-width: 0;
+}
+
+.feed-source-strip {
+  padding: 0 var(--ds-panel-pad-x) var(--ds-panel-pad-y);
+}
+
+.feed-source-strip span,
+.feed-portfolio-summary span,
+.feed-theme-metrics span {
+  min-height: 28px;
+  padding: 6px 9px;
+  border: 1px solid var(--ds-card-border);
+  border-radius: var(--ds-radius-control);
+  background: var(--input);
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 850;
+}
+
+.feed-source-strip strong,
+.feed-portfolio-summary strong,
+.feed-theme-metrics strong {
+  margin-right: 5px;
+  color: var(--ink);
+}
+
+.feed-theme-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 300px), 1fr));
+  gap: var(--ds-section-gap);
+  min-width: 0;
+  padding: var(--ds-panel-pad-y) var(--ds-panel-pad-x);
+}
+
+.feed-theme-card {
+  display: grid;
+  align-content: start;
+  gap: 12px;
+  min-width: 0;
+  padding: var(--ds-row-pad-y) var(--ds-row-pad-x);
+  border: 1px solid var(--ds-card-border);
+  border-left: 3px solid var(--ds-card-status-neutral);
+  border-radius: var(--ds-radius-control);
+  background: linear-gradient(180deg, var(--ds-card-row-bg), var(--ds-card-bg));
+}
+
+.feed-theme-card.watch {
+  border-left-color: var(--green);
+}
+
+.feed-theme-card.danger {
+  border-left-color: var(--red);
+}
+
+.feed-theme-card-head,
+.feed-theme-news-row,
+.feed-portfolio-news-row,
+.feed-source-ledger-row {
+  display: grid;
+  align-items: center;
+  gap: 10px;
+  min-width: 0;
+}
+
+.feed-theme-card-head {
+  grid-template-columns: minmax(0, 1fr) auto;
+}
+
+.feed-theme-card-head > div,
+.feed-theme-news-row > div,
+.feed-portfolio-news-row > div,
+.feed-source-ledger-row > div {
+  display: grid;
+  gap: 4px;
+  min-width: 0;
+}
+
+.feed-theme-card strong,
+.feed-theme-card span,
+.feed-theme-card em,
+.feed-portfolio-news-row strong,
+.feed-portfolio-news-row span,
+.feed-portfolio-news-row em,
+.feed-portfolio-news-row b,
+.feed-source-ledger-row strong,
+.feed-source-ledger-row span,
+.feed-source-ledger-row em,
+.feed-source-ledger-row b {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.feed-theme-card-head strong,
+.feed-portfolio-news-row strong,
+.feed-source-ledger-row strong {
+  color: var(--ink);
+  font-size: 14px;
+  font-weight: 950;
+}
+
+.feed-theme-card-head span,
+.feed-theme-news-row em,
+.feed-portfolio-news-row span,
+.feed-portfolio-news-row b,
+.feed-source-ledger-row span,
+.feed-source-ledger-row b {
+  color: var(--muted);
+  font-size: 12px;
+  font-style: normal;
+  font-weight: 820;
+  line-height: 1.35;
+}
+
+.feed-theme-news-list,
+.feed-portfolio-news-list,
+.feed-source-ledger-list {
+  display: grid;
+  gap: 0;
+  min-width: 0;
+  padding: var(--ds-panel-pad-y) var(--ds-panel-pad-x);
+}
+
+.feed-theme-news-list {
+  padding: 0;
+  border-top: 1px solid var(--ds-card-rule);
+}
+
+.feed-theme-news-row {
+  grid-template-columns: auto minmax(0, 1fr);
+  padding: 9px 0;
+  border-bottom: 1px solid var(--ds-card-rule);
+}
+
+.feed-theme-news-row:last-child {
+  border-bottom: 0;
+}
+
+.feed-portfolio-summary {
+  padding: var(--ds-panel-pad-y) var(--ds-panel-pad-x) 0;
+}
+
+.feed-portfolio-news-row,
+.feed-source-ledger-row {
+  grid-template-columns: minmax(0, 1fr) auto auto;
+  padding: 12px 14px;
+  border: 1px solid var(--ds-card-border);
+  border-left: 3px solid var(--ds-card-status-neutral);
+  border-radius: 0;
+  background: transparent;
+}
+
+.feed-portfolio-news-row.watch,
+.feed-source-ledger-row.watch {
+  border-left-color: var(--green);
+}
+
+.feed-portfolio-news-row.danger {
+  border-left-color: var(--red);
+}
+
+.feed-source-ledger-row.caution {
+  border-left-color: var(--amber);
 }
 
 .feed-command-metrics {
@@ -11124,6 +11322,13 @@ h3 {
     grid-template-columns: 1fr;
   }
 
+  .feed-view .feed-impact-workspace-wide,
+  .feed-view .feed-theme-workspace,
+  .feed-view .feed-portfolio-workspace,
+  .feed-view .feed-source-workspace {
+    grid-template-columns: 1fr;
+  }
+
   .feed-view .feed-side-column {
     position: static;
     max-height: none;
@@ -11154,13 +11359,24 @@ h3 {
     justify-self: end;
     text-align: right;
   }
+
+  .feed-brief-grid {
+    grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+  }
 }
 
 @media (max-width: 980px) {
   .feed-view .feed-workbench,
   .feed-view .feed-evidence-workspace,
+  .feed-view .feed-impact-workspace-wide,
+  .feed-view .feed-theme-workspace,
+  .feed-view .feed-portfolio-workspace,
   .feed-view .feed-source-workspace,
   .feed-view .feed-overview-panel,
+  .feed-view .feed-market-brief-panel,
+  .feed-view .feed-theme-cluster-panel,
+  .feed-view .feed-portfolio-news-panel,
+  .feed-view .feed-source-ledger-panel,
   .feed-view .feed-pipeline-panel,
   .feed-view .feed-settings-panel,
   .feed-view .feed-quality-panel,
@@ -11209,6 +11425,12 @@ h3 {
   .research-evidence-filters,
   .research-evidence-item {
     grid-template-columns: 1fr;
+  }
+
+  .feed-portfolio-news-row,
+  .feed-source-ledger-row {
+    grid-template-columns: 1fr;
+    align-items: start;
   }
 
   .research-evidence-actions {

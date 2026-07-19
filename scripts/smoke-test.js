@@ -238,7 +238,7 @@ function checkFrontendAdminRender() {
       /\.console-shell \.app-nav-command \.page-command-metrics\s*\{[\s\S]*display: none;/.test(styles) &&
       /\.console-shell \.app-nav-routine > span:not\(\.app-nav-routine-action-cell\)\s*\{[\s\S]*display: none;/.test(styles) &&
       /@media \(min-width: 861px\) and \(max-width: 1180px\)[\s\S]*\.console-shell \.app-nav-flow,[\s\S]*\.console-shell \.app-nav-command \.page-command-metrics,[\s\S]*\.console-shell \.app-nav-current em,[\s\S]*\.console-shell :is\([\s\S]*\.feed-section-tabs span[\s\S]*\)\s*\{[\s\S]*display: none;/.test(styles) &&
-      indexHtml.indexOf("styles.css?v=20260719-calendar-ai-research-v1") >= 0,
+      indexHtml.indexOf("styles.css?v=20260719-today-decision-board-v1") >= 0,
     "PC 상단 영역이 탭별로 여러 줄/넘침으로 깨지지 않도록 하는 안정화 레이어가 없습니다."
   );
   assertOk(
@@ -252,7 +252,7 @@ function checkFrontendAdminRender() {
       /\.loading-progress span\s*\{[\s\S]*animation: loadingProgress/.test(styles) &&
       /\.loading-skeleton-grid\s*\{[\s\S]*grid-template-columns: repeat\(4, minmax\(0, 1fr\)\);/.test(styles) &&
       /@keyframes loadingProgress/.test(styles) &&
-      indexHtml.indexOf("app.js?v=20260719-calendar-ai-research-v1") >= 0,
+      indexHtml.indexOf("app.js?v=20260719-today-decision-board-v1") >= 0,
     "초기 로딩 화면이 운영 정보 카드 대신 progress/skeleton 화면으로 고정되지 않았습니다."
   );
   assertOk(
@@ -1660,12 +1660,15 @@ function checkFrontendAdminRender() {
     assertOk(code.indexOf('if (requested === "ontology" || requested === "relations") return "modeling";') >= 0, "기존 관계 분석 URL을 투자 분석 탭으로 매핑하지 않습니다.");
     assertOk(code.indexOf("writeStrategySectionHistory") >= 0 && code.indexOf("strategySectionUrl") >= 0, "투자 분석 내부 탭 URL 동기화 경로가 없습니다.");
     assertOk(modelingHtml.indexOf("<h1>투자 판단</h1>") >= 0, "투자 판단 탭 제목이 상단에 렌더링되지 않았습니다.");
-    assertOk(legacyOntologyHtml.indexOf("<h1>투자 판단</h1>") >= 0 && legacyOntologyHtml.indexOf("investment-bridge-panel") >= 0, "기존 관계 분석 URL이 통합 투자 판단 개요로 열리지 않습니다.");
+    assertOk(legacyOntologyHtml.indexOf("<h1>투자 판단</h1>") >= 0 && legacyOntologyHtml.indexOf("investment-today-status-panel") >= 0, "기존 관계 분석 URL이 통합 투자 판단 개요로 열리지 않습니다.");
     assertOk(modelingHtml.indexOf("investment-tab-workspace-overview") >= 0, "투자 분석 개요가 워크스페이스 컨테이너로 렌더링되지 않습니다.");
-    assertOk(modelingHtml.indexOf("investment-bridge-panel") >= 0 && modelingHtml.indexOf("전략 데이터와 관계 분석을 잇는 추론 구조") >= 0, "투자 분석 개요에 전략-관계-AI 파이프라인이 없습니다.");
-    assertOk(modelingHtml.indexOf("AI 추론 입력") >= 0 && modelingHtml.indexOf("investment-ontology-ai-inference-v1") >= 0, "투자 분석 개요에 AI inference packet 계약이 보이지 않습니다.");
+    assertOk(modelingHtml.indexOf("investment-today-status-panel") >= 0 && modelingHtml.indexOf("Daily Decision Board") >= 0, "오늘의 판단 개요가 상태 바로 시작하지 않습니다.");
+    assertOk(modelingHtml.indexOf("investment-today-action-panel") >= 0 && modelingHtml.indexOf("investment-today-action-groups") >= 0, "오늘의 판단에 그룹형 액션 큐가 없습니다.");
+    assertOk(modelingHtml.indexOf("investment-today-selected-panel") >= 0 && modelingHtml.indexOf("선택 종목 요약") >= 0, "오늘의 판단에 선택 종목 요약 패널이 없습니다.");
+    assertOk(modelingHtml.indexOf("investment-today-blockers-panel") >= 0 && modelingHtml.indexOf("오늘의 차단 요인") >= 0, "오늘의 판단에 차단 요인 패널이 없습니다.");
+    assertOk(modelingHtml.indexOf("AI 추론 입력") < 0 && modelingHtml.indexOf("investment-ontology-ai-inference-v1") < 0, "오늘의 판단 개요에 AI inference packet 상세가 섞여 있습니다.");
     assertOk(modelingHtml.indexOf("investment-evidence-panel") < 0 && modelingHtml.indexOf("투자 근거 카드") < 0, "투자 분석 개요에 근거 카드 미리보기가 중복 렌더링됩니다.");
-    assertOk(modelingHtml.indexOf("HOLDS") >= 0 && modelingHtml.indexOf("WATCHES") >= 0, "보유/관심 관계 구분이 투자 분석 개요에 표시되지 않습니다.");
+    assertOk(modelingHtml.indexOf("investment-bridge-panel") < 0 && modelingHtml.indexOf("investment-flow-panel") < 0, "오늘의 판단 개요에 자금 흐름이나 추론 구조 상세가 섞여 있습니다.");
     assertOk(modelingChartHtml.indexOf("macro-signal-panel") >= 0 && modelingChartHtml.indexOf("환율·금리 관계 신호") >= 0, "통합 차트 섹션에 환율·금리 온톨로지 신호 패널이 없습니다.");
     assertOk(modelingChartHtml.indexOf("USD/KRW 환율") >= 0 && modelingChartHtml.indexOf("미국 10년 국채금리") >= 0 && modelingChartHtml.indexOf("10Y-2Y 금리 스프레드") >= 0, "환율·금리 신호 값이 통합 차트 섹션에 표시되지 않습니다.");
     assertOk(styles.indexOf(".macro-signal-grid") >= 0 && styles.indexOf(".macro-relation-row") >= 0, "환율·금리 온톨로지 신호 UI 스타일이 없습니다.");
@@ -1675,14 +1678,11 @@ function checkFrontendAdminRender() {
     assertOk(modelingEvidenceHtml.indexOf("전략 근거") >= 0 && modelingEvidenceHtml.indexOf("관계 근거") >= 0, "근거 카드가 전략 근거와 관계 근거를 분리해서 보여주지 않습니다.");
     assertOk(modelingEvidenceHtml.indexOf("삼성전자") >= 0 && modelingEvidenceHtml.indexOf("005930 가격과") < 0, "근거 카드 본문에 종목코드가 회사명으로 치환되지 않았습니다.");
     assertOk(modelingEvidenceHtml.indexOf("체결강도") >= 0 && modelingEvidenceHtml.indexOf("모델-알림 기준") >= 0, "근거 카드 섹션에 전략 데이터 점검 항목이 없습니다.");
-    assertOk(modelingHtml.indexOf("investment-action-panel") >= 0 && modelingHtml.indexOf("model-preview-panel") < 0, "오늘의 판단 섹션은 액션 큐만 짧게 보여줘야 합니다.");
-    assertOk(modelingHtml.indexOf("Decision Inbox") >= 0 && modelingHtml.indexOf("종목별 실행 카드") >= 0, "오늘의 판단 섹션이 Decision Inbox 실행 카드 구조로 렌더링되지 않습니다.");
-    assertOk(modelingHtml.indexOf("investment-decision-summary-rail") >= 0 && modelingHtml.indexOf("investment-decision-rail") >= 0, "오늘의 판단 실행 카드에 판단 요약 레일과 카드별 조건 레일이 없습니다.");
-    assertOk(modelingHtml.indexOf("무효화 조건") >= 0 && modelingHtml.indexOf("다음 확인 시점") >= 0 && modelingHtml.indexOf("연결 알림") >= 0, "오늘의 판단 카드가 무효화 조건, 다음 확인 시점, 연결 알림을 함께 보여주지 않습니다.");
-    assertOk(modelingHtml.indexOf("investment-playbook-panel") >= 0 && modelingHtml.indexOf("전략 플레이북") >= 0, "오늘의 판단 섹션에 전략 플레이북 요약이 없습니다.");
-    assertOk(modelingHtml.indexOf("investment-performance-feedback-panel") >= 0 && modelingHtml.indexOf("성과 피드백") >= 0, "오늘의 판단 섹션에 성과 피드백 요약이 없습니다.");
-    assertOk(code.indexOf("investmentActionInvalidation") >= 0 && code.indexOf("investmentActionLinkedAlert") >= 0 && code.indexOf("investmentActionPlaybook") >= 0, "투자 판단 실행 카드 파생 로직이 없습니다.");
-    assertOk(styles.indexOf(".investment-decision-summary-rail") >= 0 && styles.indexOf(".investment-playbook-card") >= 0 && styles.indexOf(".investment-feedback-grid") >= 0, "투자 판단 실행 카드/플레이북/성과 피드백 스타일이 없습니다.");
+    assertOk(modelingHtml.indexOf("Action Queue") >= 0 && modelingHtml.indexOf("즉시 확인") >= 0 && modelingHtml.indexOf("매수 후보") >= 0 && modelingHtml.indexOf("매도·축소 후보") >= 0 && modelingHtml.indexOf("데이터 부족") >= 0, "오늘의 판단 액션 큐가 우선순위 그룹으로 구조화되지 않았습니다.");
+    assertOk(modelingHtml.indexOf("무효화 조건") >= 0 && modelingHtml.indexOf("다음 확인 액션") >= 0 && modelingHtml.indexOf("투자 근거") >= 0 && modelingHtml.indexOf("통합 차트") >= 0 && modelingHtml.indexOf("온톨로지 추적") >= 0, "선택 종목 요약이 핵심 근거/무효화/다음 액션/하위 탭 링크를 제공하지 않습니다.");
+    assertOk(modelingHtml.indexOf("investment-playbook-panel") < 0 && modelingHtml.indexOf("investment-performance-feedback-panel") < 0, "오늘의 판단 섹션에 플레이북이나 성과 피드백 상세 패널이 남아 있습니다.");
+    assertOk(code.indexOf("investmentTodayActionGroups") >= 0 && code.indexOf("renderInvestmentTodaySelectedPanel") >= 0 && code.indexOf("investmentTodayBlockers") >= 0, "오늘의 판단 전용 구조화 로직이 없습니다.");
+    assertOk(styles.indexOf(".investment-today-status-grid") >= 0 && styles.indexOf(".investment-today-action-groups") >= 0 && styles.indexOf(".investment-today-blocker-list") >= 0, "오늘의 판단 상태/액션/차단 요인 스타일이 없습니다.");
     assertOk(modelingHtml.indexOf("investment-evidence-panel") < 0, "오늘의 판단 섹션에 근거 카드가 중복 렌더링됩니다.");
     assertOk(modelingChartHtml.indexOf("investment-tab-workspace-charts") >= 0 && modelingChartHtml.indexOf("investment-chart-panel") >= 0 && modelingChartHtml.indexOf("investment-chart-periods") >= 0, "통합 차트 섹션이 별도 워크스페이스와 기간 컨트롤로 렌더링되지 않습니다.");
     assertOk(modelingChartHtml.indexOf('data-investment-chart-period="1d"') >= 0 && modelingChartHtml.indexOf('data-investment-chart-period="1w"') >= 0 && modelingChartHtml.indexOf('data-investment-chart-period="1m"') >= 0 && modelingChartHtml.indexOf('data-investment-chart-period="custom"') >= 0, "통합 차트 기간 컨트롤이 일/주/월/사용자 기간을 제공하지 않습니다.");

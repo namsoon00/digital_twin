@@ -1301,6 +1301,8 @@ function checkFrontendAdminRender() {
     renderForSearch("?tab=accounts&account=management", "namsoon00.github.io"),
     renderForSearch("?tab=accounts&account=management", null, { captureNewAccountButton: true, clickNewAccount: true }),
     renderForSearch("?tab=feed&feed=evidence"),
+    renderForSearch("?tab=feed&feed=themes"),
+    renderForSearch("?tab=feed&feed=portfolio"),
     renderForSearch("?tab=feed&feed=sources"),
     renderForSearch("?tab=feed&feed=settings"),
     renderForSearch("?tab=experiments&lab=validation"),
@@ -1334,11 +1336,13 @@ function checkFrontendAdminRender() {
     const staticAccountHtml = pages[24];
     const newAccountHtml = pages[25];
     const feedEvidenceHtml = pages[26];
-    const feedSourcesHtml = pages[27];
-    const feedExplicitSettingsHtml = pages[28];
-    const experimentsValidationHtml = pages[29];
-    const experimentsPromotionHtml = pages[30];
-    const experimentsProposalsHtml = pages[31];
+    const feedThemesHtml = pages[27];
+    const feedPortfolioHtml = pages[28];
+    const feedSourcesHtml = pages[29];
+    const feedExplicitSettingsHtml = pages[30];
+    const experimentsValidationHtml = pages[31];
+    const experimentsPromotionHtml = pages[32];
+    const experimentsProposalsHtml = pages[33];
 
     [
       ["overview", overviewHtml],
@@ -1436,7 +1440,7 @@ function checkFrontendAdminRender() {
   assertOk(code.indexOf("pageModeOptions") >= 0 && code.indexOf("setPageViewMode") >= 0 && styles.indexOf(".page-mode-switch") >= 0, "결과/설정 모드 분리 구조가 없습니다.");
   assertOk(code.indexOf('querySelectorAll("button[data-page-mode-page][data-page-mode]")') >= 0, "결과/설정 전환 이벤트가 페이지 컨테이너에 바인딩될 수 있습니다.");
   assertOk(code.indexOf('var pageModeEnabledTabs = ["accounts", "notifications", "modeling", "feed"];') >= 0, "피드 탭이 결과/설정 모드 계약에 포함되지 않았습니다.");
-  assertOk(code.indexOf("renderFeedImpactInboxPanel") >= 0 && styles.indexOf(".feed-impact-card") >= 0, "피드 투자 영향 인박스 구조가 없습니다.");
+  assertOk(code.indexOf("renderFeedImpactInboxPanel") >= 0 && code.indexOf("renderFeedThemeClusterPanel") >= 0 && code.indexOf("renderFeedPortfolioNewsPanel") >= 0 && styles.indexOf(".feed-impact-card") >= 0, "피드 투자 영향/테마/내 종목 콘솔 구조가 없습니다.");
   assertOk(code.indexOf("feed-impact-article") >= 0 && code.indexOf("research-evidence-article") >= 0, "피드/근거 카드에서 기사 메타 영역이 하단으로 분리되지 않았습니다.");
   assertOk(code.indexOf("renderSettingsResponsibilityPanel") >= 0 && styles.indexOf(".settings-responsibility-panel") >= 0, "설정 탭에 탭별 책임 지도 구조가 없습니다.");
   assertOk(accountResultsHtml.indexOf("page-mode-switch") >= 0 && accountResultsHtml.indexOf('data-page-mode="results"') >= 0 && accountResultsHtml.indexOf('data-page-mode="settings"') >= 0, "계정 탭에 결과/설정 전환이 없습니다.");
@@ -1503,17 +1507,19 @@ function checkFrontendAdminRender() {
     ["decision", "lab", "alerts", "holdings"].forEach(function (tab) {
       assertOk(overviewHtml.indexOf('data-tab="' + tab + '"') < 0, "기존 탭이 남아 있습니다: " + tab);
     });
-    assertOk(feedHtml.indexOf("feed-view feed-view-operations") >= 0 && feedHtml.indexOf("feed-section-tabs") >= 0, "피드 탭이 영향 인박스 중심 섹션 화면으로 렌더링되지 않습니다.");
+    assertOk(feedHtml.indexOf("feed-view feed-view-overview") >= 0 && feedHtml.indexOf("feed-section-tabs") >= 0, "피드 탭이 시장 영향 콘솔 기본 화면으로 렌더링되지 않습니다.");
     assertOk(feedHtml.indexOf("page-mode-switch") >= 0 && feedHtml.indexOf('data-page-mode-page="feed"') >= 0 && feedHtml.indexOf('data-page-mode="results"') >= 0 && feedHtml.indexOf('data-page-mode="settings"') >= 0, "피드 탭에 결과/설정 전환이 없습니다.");
-    assertOk(feedHtml.indexOf('data-feed-section="operations"') >= 0 && feedHtml.indexOf('data-feed-section="evidence"') >= 0 && feedHtml.indexOf('data-feed-section="sources"') >= 0 && feedHtml.indexOf('data-feed-section="settings"') < 0, "피드 결과 모드 섹션 탭이 영향/근거/수집원만 제공하지 않습니다.");
-    assertOk(feedHtml.indexOf("투자 영향 인박스") >= 0 && feedHtml.indexOf("본문 요약") >= 0 && feedHtml.indexOf("주가 영향") >= 0 && feedHtml.indexOf("feed-impact-article") > feedHtml.indexOf("본문 요약"), "피드 기본 화면이 기사 본문 요약과 주가 영향 판단을 먼저 보여주지 않습니다.");
+    assertOk(feedHtml.indexOf('data-feed-section="overview"') >= 0 && feedHtml.indexOf('data-feed-section="impact"') >= 0 && feedHtml.indexOf('data-feed-section="themes"') >= 0 && feedHtml.indexOf('data-feed-section="portfolio"') >= 0 && feedHtml.indexOf('data-feed-section="sources"') >= 0 && feedHtml.indexOf('data-feed-section="settings"') < 0, "피드 결과 모드 섹션 탭이 요약/영향 뉴스/테마/내 종목/소스 구조로 제공되지 않습니다.");
+    assertOk(feedHtml.indexOf("오늘의 시장 요약") >= 0 && feedHtml.indexOf("테마별 자금 흐름 후보") >= 0 && feedHtml.indexOf("투자 영향 인박스") >= 0 && feedHtml.indexOf("소스 신선도 원장") >= 0, "피드 기본 화면이 요약, 테마, 영향 뉴스, 소스 품질을 먼저 보여주지 않습니다.");
     assertOk(feedHtml.indexOf("데이터 품질 상태") >= 0 && feedHtml.indexOf("피드 수집 설정") < 0 && feedHtml.indexOf('data-research-evidence-form') < 0, "피드 기본 화면이 설정 폼이나 긴 근거 목록과 분리되지 않았습니다.");
-    assertOk(feedEvidenceHtml.indexOf("feed-view feed-view-evidence") >= 0 && feedEvidenceHtml.indexOf("저장 근거 조회·관리") >= 0 && feedEvidenceHtml.indexOf("research-evidence-article") >= 0 && feedEvidenceHtml.indexOf('data-research-evidence-form') >= 0, "피드 근거 DB 섹션에 영향 판단형 저장 근거 조회/관리 폼이 없습니다.");
-    assertOk(feedSourcesHtml.indexOf("feed-view feed-view-sources") >= 0 && feedSourcesHtml.indexOf("수집 채널 매트릭스") >= 0 && feedSourcesHtml.indexOf("수집·판단 흐름") >= 0, "피드 수집원 섹션이 채널과 데이터 흐름을 함께 보여주지 않습니다.");
+    assertOk(feedEvidenceHtml.indexOf("feed-view feed-view-impact") >= 0 && feedEvidenceHtml.indexOf("투자 영향 인박스") >= 0 && feedEvidenceHtml.indexOf("저장 근거 조회·관리") >= 0 && feedEvidenceHtml.indexOf("research-evidence-article") >= 0 && feedEvidenceHtml.indexOf('data-research-evidence-form') >= 0, "피드 영향 뉴스 섹션에 영향 판단형 저장 근거 조회/관리 폼이 없습니다.");
+    assertOk(feedThemesHtml.indexOf("feed-view feed-view-themes") >= 0 && feedThemesHtml.indexOf("테마별 자금 흐름 후보") >= 0 && feedThemesHtml.indexOf("feed-theme-grid") >= 0, "피드 테마 섹션이 섹터·자산 흐름 묶음으로 렌더링되지 않습니다.");
+    assertOk(feedPortfolioHtml.indexOf("feed-view feed-view-portfolio") >= 0 && feedPortfolioHtml.indexOf("내 종목 영향 뉴스") >= 0 && feedPortfolioHtml.indexOf("Portfolio Lens") >= 0, "피드 내 종목 섹션이 보유·관심 종목 뉴스 렌즈로 렌더링되지 않습니다.");
+    assertOk(feedSourcesHtml.indexOf("feed-view feed-view-sources") >= 0 && feedSourcesHtml.indexOf("소스 신선도 원장") >= 0 && feedSourcesHtml.indexOf("수집 채널 매트릭스") >= 0 && feedSourcesHtml.indexOf("수집·판단 흐름") >= 0, "피드 소스 섹션이 소스 원장, 채널, 데이터 흐름을 함께 보여주지 않습니다.");
     assertOk(feedSettingsHtml.indexOf("피드 수집 설정") >= 0 && feedSettingsHtml.indexOf("feed-settings-action-grid") >= 0 && feedSettingsHtml.indexOf("뉴스·아카이브") >= 0 && feedSettingsHtml.indexOf("그래프 추론") >= 0 && feedSettingsHtml.indexOf("긴 매핑값") >= 0, "피드 설정 섹션이 요약 카드와 상세 레이어 진입점 구조로 렌더링되지 않습니다.");
     assertOk(code.indexOf("renderFeedSettingsEditorPanel") >= 0 && code.indexOf('newsCollectionRateLimitSeconds') >= 0 && code.indexOf('data-setting="externalSecCompanyCiks"') >= 0, "피드 설정 상세 레이어에 세부 수집 설정 필드가 없습니다.");
-    assertOk(feedSettingsHtml.indexOf('data-section-mode="settings"') >= 0 && feedSettingsHtml.indexOf('data-feed-section="settings"') >= 0 && feedSettingsHtml.indexOf('data-feed-section="operations"') < 0, "피드 설정 모드가 수집 설정 섹션으로만 분리되지 않았습니다.");
-    assertOk(/\.feed-view-settings \.feed-settings-panel\s*\{[\s\S]*grid-column: 1 \/ -1;/.test(styles) && styles.indexOf(".feed-impact-inbox-panel") >= 0 && styles.indexOf(".feed-settings-sections") >= 0 && styles.indexOf(".feed-evidence-workspace") >= 0 && styles.indexOf(".feed-source-workspace") >= 0, "PC 피드 섹션별 워크스페이스 스타일이 정의되지 않았습니다.");
+    assertOk(feedSettingsHtml.indexOf('data-section-mode="settings"') >= 0 && feedSettingsHtml.indexOf('data-feed-section="settings"') >= 0 && feedSettingsHtml.indexOf('data-feed-section="overview"') < 0, "피드 설정 모드가 수집 설정 섹션으로만 분리되지 않았습니다.");
+    assertOk(/\.feed-view-settings \.feed-settings-panel\s*\{[\s\S]*grid-column: 1 \/ -1;/.test(styles) && styles.indexOf(".feed-impact-inbox-panel") >= 0 && styles.indexOf(".feed-market-brief-panel") >= 0 && styles.indexOf(".feed-theme-grid") >= 0 && styles.indexOf(".feed-source-ledger-panel") >= 0 && styles.indexOf(".feed-source-workspace") >= 0, "PC 피드 섹션별 워크스페이스 스타일이 정의되지 않았습니다.");
     assertOk(settingsHtml.indexOf("settings-responsibility-panel") >= 0 && settingsHtml.indexOf("탭별 결과와 설정 책임") >= 0 && settingsHtml.indexOf("뉴스·근거") >= 0 && settingsHtml.indexOf("피드 설정") >= 0, "운영 설정 탭에 결과/설정 책임 지도가 렌더링되지 않습니다.");
     assertOk(systemHtml.indexOf("<h1>구조·흐름</h1>") >= 0, "구조·흐름 탭 제목이 상단에 렌더링되지 않았습니다.");
     assertOk(systemHtml.indexOf("system-guide-view") >= 0, "시스템 설명 탭이 전용 레이아웃으로 렌더링되지 않습니다.");

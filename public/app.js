@@ -156,7 +156,7 @@
       settings: ["rules"]
     },
     feed: {
-      results: ["operations", "evidence", "sources"],
+      results: ["overview", "impact", "themes", "portfolio", "sources"],
       settings: ["settings"]
     }
   };
@@ -362,9 +362,11 @@
   var topbarCollapsed = false;
   var topbarScrollTicking = false;
   var feedSections = [
-    { id: "operations", label: "영향 인박스", description: "주가 영향" },
-    { id: "evidence", label: "근거 DB", description: "본문 요약" },
-    { id: "sources", label: "수집원", description: "채널 상태" },
+    { id: "overview", label: "요약", description: "시장 흐름" },
+    { id: "impact", label: "영향 뉴스", description: "투자 영향" },
+    { id: "themes", label: "테마", description: "섹터·자산" },
+    { id: "portfolio", label: "내 종목", description: "보유·관심" },
+    { id: "sources", label: "소스", description: "품질·신선도" },
     { id: "settings", label: "피드 설정", description: "수집 정책" }
   ];
   var cachedSnapshot = loadCachedSnapshot();
@@ -1185,11 +1187,13 @@
 
   function normalizeFeedSection(value) {
     var requested = String(value || "").toLowerCase();
-    if (requested === "status" || requested === "overview" || requested === "monitoring" || requested === "pipeline") return "operations";
-    if (requested === "db" || requested === "research" || requested === "research-evidence" || requested === "evidences") return "evidence";
+    if (requested === "status" || requested === "operations" || requested === "monitoring" || requested === "pipeline" || requested === "summary") return "overview";
+    if (requested === "db" || requested === "research" || requested === "research-evidence" || requested === "evidences" || requested === "evidence" || requested === "inbox" || requested === "news") return "impact";
+    if (requested === "theme" || requested === "themes" || requested === "sector" || requested === "sectors" || requested === "asset" || requested === "assets") return "themes";
+    if (requested === "portfolio" || requested === "holdings" || requested === "holding" || requested === "watchlist" || requested === "mine" || requested === "symbols") return "portfolio";
     if (requested === "source" || requested === "channel" || requested === "channels" || requested === "provider" || requested === "providers") return "sources";
     if (requested === "config" || requested === "policy" || requested === "policies" || requested === "setting") return "settings";
-    return feedSections.some(function (section) { return section.id === requested; }) ? requested : "operations";
+    return feedSections.some(function (section) { return section.id === requested; }) ? requested : "overview";
   }
 
   function normalizeExperimentSection(value) {
@@ -1365,7 +1369,7 @@
     if (normalized === "settings") {
       params.set("mode", "settings");
     }
-    if (normalized === "operations") {
+    if (normalized === "overview") {
       params.delete("feed");
     } else {
       params.set("feed", normalized);
@@ -19387,18 +19391,34 @@
     if (active === "settings") {
       return renderFeedSettingsPanel();
     }
-    if (active === "evidence") {
+    if (active === "impact") {
       return [
-        '<div class="feed-evidence-workspace">',
-        renderFeedImpactInboxPanel(snapshot, { compact: true }),
+        '<div class="feed-impact-workspace-wide">',
+        renderFeedImpactInboxPanel(snapshot, { limit: 12 }),
         renderResearchEvidencePanel(),
-        renderFeedQualityPanel(),
+        '</div>'
+      ].join("");
+    }
+    if (active === "themes") {
+      return [
+        '<div class="feed-theme-workspace">',
+        renderFeedMarketBriefPanel(snapshot),
+        renderFeedThemeClusterPanel(snapshot, { full: true }),
+        '</div>'
+      ].join("");
+    }
+    if (active === "portfolio") {
+      return [
+        '<div class="feed-portfolio-workspace">',
+        renderFeedPortfolioNewsPanel(snapshot, { full: true }),
+        renderFeedImpactInboxPanel(snapshot, { compact: true, portfolioOnly: true, limit: 8 }),
         '</div>'
       ].join("");
     }
     if (active === "sources") {
       return [
         '<div class="feed-source-workspace">',
+        renderFeedSourceLedgerPanel({ full: true }),
         renderFeedChannelPanel(),
         renderFeedPipelinePanel(),
         renderFeedQualityPanel(),
@@ -19406,15 +19426,16 @@
       ].join("");
     }
     return [
-      '<div class="feed-workbench feed-operations-workbench">',
+      '<div class="feed-workbench feed-overview-workbench">',
       '<div class="feed-primary-column">',
-      renderFeedImpactInboxPanel(snapshot),
-      renderFeedOverviewPanel(),
+      renderFeedMarketBriefPanel(snapshot),
+      renderFeedThemeClusterPanel(snapshot, { limit: 4 }),
+      renderFeedImpactInboxPanel(snapshot, { compact: true, limit: 5 }),
       '</div>',
       '<aside class="feed-side-column">',
-      renderFeedPipelinePanel(),
+      renderFeedPortfolioNewsPanel(snapshot, { compact: true }),
+      renderFeedSourceLedgerPanel({ compact: true }),
       renderFeedQualityPanel(),
-      renderFeedChannelPanel(),
       '</aside>',
       '</div>'
     ].join("");
@@ -19511,6 +19532,415 @@
       { step: "04", title: "관계 추론", tone: settingEnabled("ontologyReasoningEnabled") ? "watch" : "hold", value: "TypeDB", detail: "배치 " + (settingValue("ontologyReasoningBatchSize") || defaultSettings.ontologyReasoningBatchSize || "20") },
       { step: "05", title: "알림 후보", tone: settingEnabled("materialityGateEnabled") ? "watch" : "hold", value: (settingValue("materialityMinimumScore") || defaultSettings.materialityMinimumScore || "65") + "점", detail: "중요도 게이트 기준" }
     ];
+  }
+
+  function feedEvidencePayload(item) {
+    return item && item.payload && typeof item.payload === "object" ? item.payload : {};
+  }
+
+  function feedResearchEvidenceItems(options) {
+    options = options || {};
+    var evidence = currentResearchEvidence();
+    var fromCache = Boolean(evidence.fromCache || evidence.cached);
+    var items = Array.isArray(evidence.items) ? evidence.items.map(function (item) {
+      return fromCache ? Object.assign({}, item || {}, { fromCache: true }) : item;
+    }) : [];
+    if (options.portfolioOnly) {
+      var symbolSet = feedPortfolioSymbolSet(options.snapshot || state.snapshot || {});
+      items = items.filter(function (item) {
+        return feedEvidenceSymbols(item).some(function (symbol) {
+          return Boolean(symbolSet[symbol]);
+        });
+      });
+    }
+    if (options.limit) {
+      return items.slice(0, Math.max(1, Number(options.limit) || items.length));
+    }
+    return items;
+  }
+
+  function feedEvidenceDataMeta(item) {
+    item = item || {};
+    var payload = feedEvidencePayload(item);
+    var source = String(item.source || item.provider || payload.source || payload.provider || payload.articleProvider || "").trim();
+    var sourceLabel = source || researchEvidenceKindLabel(item.kind || payload.kind || "근거");
+    var quality = String(item.dataQuality || item.quality || payload.dataQuality || payload.sourceQuality || payload.articleAnalysisSource || payload.articleReadStatus || "").toLowerCase();
+    var id = String(item.evidenceId || item.id || "").toLowerCase();
+    var mock = Boolean(item.mock || item.isMock || payload.mock || payload.isMock || id.indexOf("preview:") === 0 || quality.indexOf("mock") >= 0);
+    var cached = Boolean(item.fromCache || item.cached || payload.fromCache || payload.cached || item.cachedAt || payload.cachedAt || quality.indexOf("cache") >= 0 || quality.indexOf("cached") >= 0);
+    var actual = !mock && Boolean(item.evidenceId || item.url || item.publishedAt || item.observedAt || payload.url || payload.publishedAt);
+    var dataLabel = mock ? "mock 데이터" : (cached ? "저장/캐시 데이터" : (actual ? "실제 데이터" : "출처 미상"));
+    return {
+      source: sourceLabel,
+      dataLabel: dataLabel,
+      tone: mock ? "caution" : (actual ? "watch" : "hold"),
+      key: sourceLabel + "|" + dataLabel
+    };
+  }
+
+  function feedEvidenceSymbols(item) {
+    item = item || {};
+    var payload = feedEvidencePayload(item);
+    var symbols = [];
+    function add(value) {
+      String(value || "").split(/[,\s]+/).forEach(function (symbol) {
+        var normalized = String(symbol || "").trim().toUpperCase();
+        if (normalized && symbols.indexOf(normalized) < 0) symbols.push(normalized);
+      });
+    }
+    add(item.symbol || payload.symbol);
+    [item.symbols, item.relatedSymbols, payload.symbols, payload.relatedSymbols, payload.tickers].forEach(function (list) {
+      if (Array.isArray(list)) list.forEach(add);
+      else add(list);
+    });
+    add(inferKnownStockSymbolFromText(researchEvidenceTextCorpus(item)));
+    return symbols;
+  }
+
+  function feedPortfolioInstrumentItems(snapshot) {
+    var toss = snapshot && snapshot.toss ? snapshot.toss : {};
+    var rows = [];
+    var seen = {};
+    function add(item, source) {
+      item = item || {};
+      var symbol = String(item.symbol || "").trim().toUpperCase();
+      if (!symbol || symbol === "CASH") return;
+      var existing = seen[symbol];
+      var merged = Object.assign(clientKnownStockInfo(symbol), item, { symbol: symbol, source: source || item.source || "watchlist" });
+      if (existing && existing.source === "holding") return;
+      if (existing && merged.source !== "holding") return;
+      if (!existing) rows.push(merged);
+      seen[symbol] = merged;
+      if (existing && merged.source === "holding") {
+        rows = rows.map(function (row) { return String(row.symbol || "").toUpperCase() === symbol ? merged : row; });
+      }
+    }
+    (Array.isArray(toss.positions) ? toss.positions : []).forEach(function (item) {
+      if (item && item.source !== "cash" && item.sector !== "현금") add(item, "holding");
+    });
+    (Array.isArray(toss.watchlist) ? toss.watchlist : []).forEach(function (item) {
+      add(item, "watchlist");
+    });
+    watchlistSymbols().concat(allAccountWatchlistSymbols()).forEach(function (symbol) {
+      add(clientKnownStockInfo(symbol), "watchlist");
+    });
+    return rows;
+  }
+
+  function feedPortfolioSymbolSet(snapshot) {
+    var set = {};
+    feedPortfolioInstrumentItems(snapshot || {}).forEach(function (item) {
+      var symbol = String(item.symbol || "").toUpperCase();
+      if (symbol) set[symbol] = true;
+    });
+    return set;
+  }
+
+  function feedThemeLabelsForItem(item) {
+    item = item || {};
+    var payload = feedEvidencePayload(item);
+    var labels = [];
+    function add(label) {
+      var value = String(label || "").trim();
+      if (value && labels.indexOf(value) < 0) labels.push(value);
+    }
+    [item.theme, item.sector, item.asset, payload.theme, payload.sector, payload.asset].forEach(add);
+    [item.themes, item.sectors, item.assets, payload.themes, payload.sectors, payload.assets].forEach(function (list) {
+      if (Array.isArray(list)) list.forEach(add);
+      else String(list || "").split(/[,\|]+/).forEach(add);
+    });
+    feedEvidenceSymbols(item).forEach(function (symbol) {
+      add(clientKnownStockInfo(symbol).sector);
+    });
+    var corpus = researchEvidenceTextCorpus(item);
+    [
+      { label: "AI·플랫폼", pattern: /ai|인공지능|openai|llm|platform|software|cloud|데이터센터|클라우드|플랫폼/ },
+      { label: "반도체·HBM", pattern: /반도체|hbm|memory|chip|foundry|nvidia|tsmc|gpu|semiconductor/ },
+      { label: "금리·유동성", pattern: /fed|fomc|rate|yield|inflation|cpi|ppi|금리|인플레|국채|유동성/ },
+      { label: "환율·달러", pattern: /usd|dollar|fx|환율|달러|원화|엔화|원달러/ },
+      { label: "크립토·디지털자산", pattern: /bitcoin|btc|ethereum|crypto|coin|비트코인|이더리움|코인|디지털자산/ },
+      { label: "금·원자재", pattern: /gold|oil|copper|commodity|crude|금값|금 |원유|구리|원자재/ },
+      { label: "한국시장 접근성", pattern: /kospi|kosdaq|krx|korea|한국|코스피|코스닥|미국 개미|retail investor|외국인/ }
+    ].forEach(function (entry) {
+      if (entry.pattern.test(corpus)) add(entry.label);
+    });
+    if (!labels.length) add("미분류 흐름");
+    return labels.slice(0, 4);
+  }
+
+  function feedThemeClusters(snapshot, options) {
+    options = options || {};
+    var items = feedResearchEvidenceItems({ snapshot: snapshot });
+    var portfolioSymbols = feedPortfolioSymbolSet(snapshot || {});
+    var clusters = {};
+    items.forEach(function (item, index) {
+      var impact = researchEvidenceImpactMeta(item);
+      var time = item.publishedAt || item.observedAt || "";
+      var timeValue = feedTimeValue(time);
+      var symbols = feedEvidenceSymbols(item);
+      var linkedPortfolio = symbols.some(function (symbol) { return Boolean(portfolioSymbols[symbol]); });
+      feedThemeLabelsForItem(item).forEach(function (label) {
+        if (!clusters[label]) {
+          clusters[label] = {
+            label: label,
+            items: [],
+            sources: {},
+            watch: 0,
+            danger: 0,
+            hold: 0,
+            latestTime: 0,
+            portfolioCount: 0
+          };
+        }
+        var cluster = clusters[label];
+        cluster.items.push({ item: item, index: index, impact: impact, symbols: symbols, linkedPortfolio: linkedPortfolio });
+        cluster.sources[feedEvidenceDataMeta(item).source] = true;
+        if (impact.tone === "watch") cluster.watch += 1;
+        else if (impact.tone === "danger") cluster.danger += 1;
+        else cluster.hold += 1;
+        cluster.latestTime = Math.max(cluster.latestTime, timeValue || 0);
+        if (linkedPortfolio) cluster.portfolioCount += 1;
+      });
+    });
+    return Object.keys(clusters).map(function (key) {
+      var cluster = clusters[key];
+      cluster.count = cluster.items.length;
+      cluster.sourceCount = Object.keys(cluster.sources).length;
+      cluster.tone = cluster.danger > cluster.watch ? "danger" : (cluster.watch > 0 ? "watch" : "hold");
+      cluster.latestLabel = feedFreshness(cluster.latestTime).label;
+      return cluster;
+    }).sort(function (a, b) {
+      return (b.portfolioCount - a.portfolioCount) || (b.count - a.count) || (b.latestTime - a.latestTime);
+    }).slice(0, options.limit || 12);
+  }
+
+  function feedSourceLedgerRows() {
+    var grouped = {};
+    feedResearchEvidenceItems().forEach(function (item) {
+      var meta = feedEvidenceDataMeta(item);
+      var kind = researchEvidenceKindLabel(item.kind);
+      var key = meta.key + "|" + kind;
+      if (!grouped[key]) {
+        grouped[key] = {
+          source: meta.source,
+          dataLabel: meta.dataLabel,
+          kind: kind,
+          tone: meta.tone,
+          count: 0,
+          latestTime: 0
+        };
+      }
+      grouped[key].count += 1;
+      grouped[key].latestTime = Math.max(grouped[key].latestTime, feedTimeValue(item.publishedAt || item.observedAt || "") || 0);
+      if (meta.tone === "caution") grouped[key].tone = "caution";
+    });
+    return Object.keys(grouped).map(function (key) {
+      var row = grouped[key];
+      row.latestLabel = feedFreshness(row.latestTime).label;
+      return row;
+    }).sort(function (a, b) {
+      return (b.latestTime - a.latestTime) || (b.count - a.count);
+    });
+  }
+
+  function renderFeedMarketBriefPanel(snapshot) {
+    var evidence = currentResearchEvidence();
+    var summary = evidence.summary || {};
+    var items = feedResearchEvidenceItems();
+    var impacts = feedImpactCounts();
+    var clusters = feedThemeClusters(snapshot, { limit: 99 });
+    var portfolioItems = feedPortfolioInstrumentItems(snapshot || {});
+    var sources = feedSourceLedgerRows();
+    var actualCount = sources.filter(function (row) { return row.dataLabel === "실제 데이터"; }).reduce(function (total, row) { return total + row.count; }, 0);
+    var mockCount = sources.filter(function (row) { return row.dataLabel === "mock 데이터"; }).reduce(function (total, row) { return total + row.count; }, 0);
+    return [
+      '<article class="panel feed-market-brief-panel">',
+      '<div class="panel-head">',
+      '<div>',
+      '<p class="label">Market Impact Console</p>',
+      '<h2>오늘의 시장 요약</h2>',
+      '<span>뉴스·공시 근거를 영향, 테마, 내 종목, 소스 품질 순서로 재배치합니다.</span>',
+      '</div>',
+      '<span class="tone-chip ' + escapeHtml(items.length ? "watch" : "caution") + '">' + escapeHtml(items.length ? "근거 " + items.length + "건" : "수집 대기") + '</span>',
+      '</div>',
+      '<div class="feed-brief-grid">',
+      renderFeedCommandMetric("저장 근거", Number(summary.total || items.length || 0) + "건", "최근 " + feedFreshness(summary.latestSeenAt).label, Number(summary.total || items.length) ? feedFreshness(summary.latestSeenAt).tone : "caution"),
+      renderFeedCommandMetric("영향 뉴스", "호재 " + impacts.watch + " · 악재 " + impacts.danger, "중립 " + impacts.hold + "건", impacts.danger ? "danger" : (impacts.watch ? "watch" : "hold")),
+      renderFeedCommandMetric("테마 흐름", clusters.length + "개", clusters.slice(0, 2).map(function (cluster) { return cluster.label; }).join(" · ") || "대기", clusters.length ? "watch" : "hold"),
+      renderFeedCommandMetric("내 종목 연결", portfolioItems.length + "종목", "보유·관심 기준", portfolioItems.length ? "watch" : "hold"),
+      '</div>',
+      '<div class="feed-source-strip">',
+      '<span><strong>실제</strong>' + escapeHtml(actualCount) + '건</span>',
+      '<span><strong>mock</strong>' + escapeHtml(mockCount) + '건</span>',
+      '<span><strong>소스</strong>' + escapeHtml(sources.length || 0) + '개</span>',
+      '</div>',
+      '</article>'
+    ].join("");
+  }
+
+  function renderFeedThemeClusterPanel(snapshot, options) {
+    options = options || {};
+    var clusters = feedThemeClusters(snapshot, { limit: options.full ? 16 : (options.limit || 6) });
+    return [
+      '<article class="panel feed-theme-cluster-panel">',
+      '<div class="panel-head">',
+      '<div>',
+      '<p class="label">Theme Flow</p>',
+      '<h2>테마별 자금 흐름 후보</h2>',
+      '<span>섹터·자산·거시 키워드로 묶은 근거입니다. 방향 예측이 아니라 확인할 흐름의 묶음입니다.</span>',
+      '</div>',
+      '<span class="metric">' + escapeHtml(clusters.length) + '</span>',
+      '</div>',
+      clusters.length ? '<div class="feed-theme-grid">' + clusters.map(function (cluster) {
+        return renderFeedThemeClusterCard(cluster, options.full);
+      }).join("") + '</div>' : renderEmptyState({
+        tone: "muted",
+        label: "Theme",
+        title: "아직 묶을 뉴스 흐름이 없습니다",
+        description: "뉴스 아카이브가 쌓이면 AI, 반도체, 금리, 환율, 크립토, 한국시장 접근성 같은 축으로 자동 그룹화됩니다.",
+        meta: ["테마", "소스", "내 종목"]
+      }),
+      '</article>'
+    ].join("");
+  }
+
+  function renderFeedThemeClusterCard(cluster, full) {
+    var rows = (cluster.items || []).slice(0, full ? 4 : 2).map(function (entry) {
+      var item = entry.item || {};
+      var symbol = feedEvidenceSymbols(item)[0] || "";
+      var displayName = stockDisplayName(symbol, item.payload || item);
+      return [
+        '<div class="feed-theme-news-row">',
+        '<span class="tone-chip ' + escapeHtml(entry.impact.tone || "hold") + '">' + escapeHtml(entry.impact.label || "중립") + '</span>',
+        '<div>',
+        '<strong>' + escapeHtml(item.title || "제목 없음") + '</strong>',
+        '<em>' + escapeHtml([displayName || symbol || "관련 종목", feedEvidenceDataMeta(item).source, formatFeedTime(item.publishedAt || item.observedAt || "")].filter(Boolean).join(" · ")) + '</em>',
+        '</div>',
+        '</div>'
+      ].join("");
+    }).join("");
+    return [
+      '<section class="feed-theme-card ' + escapeHtml(cluster.tone || "hold") + '"' + cardTypeAttrs("theme-card", cluster.tone || "hold") + cardFormatAttrs("summary-list-card", full ? "expanded" : "compact") + '>',
+      '<div class="feed-theme-card-head">',
+      '<div>',
+      '<strong>' + escapeHtml(cluster.label) + '</strong>',
+      '<span>' + escapeHtml("근거 " + cluster.count + "건 · 소스 " + cluster.sourceCount + "개 · 최근 " + cluster.latestLabel) + '</span>',
+      '</div>',
+      '<span class="tone-chip ' + escapeHtml(cluster.tone || "hold") + '">' + escapeHtml(cluster.danger ? "리스크 포함" : (cluster.watch ? "강세 재료" : "관찰")) + '</span>',
+      '</div>',
+      '<div class="feed-theme-metrics">',
+      '<span>호재 <strong>' + escapeHtml(cluster.watch) + '</strong></span>',
+      '<span>악재 <strong>' + escapeHtml(cluster.danger) + '</strong></span>',
+      '<span>내 종목 <strong>' + escapeHtml(cluster.portfolioCount) + '</strong></span>',
+      '</div>',
+      rows ? '<div class="feed-theme-news-list">' + rows + '</div>' : '',
+      '</section>'
+    ].join("");
+  }
+
+  function renderFeedPortfolioNewsPanel(snapshot, options) {
+    options = options || {};
+    var instruments = feedPortfolioInstrumentItems(snapshot || {});
+    var allItems = feedResearchEvidenceItems({ snapshot: snapshot, portfolioOnly: true });
+    var rows = instruments.map(function (instrument) {
+      var symbol = String(instrument.symbol || "").toUpperCase();
+      var related = allItems.filter(function (item) {
+        return feedEvidenceSymbols(item).indexOf(symbol) >= 0;
+      });
+      return { instrument: instrument, related: related };
+    }).filter(function (row) {
+      return options.full || row.related.length;
+    }).sort(function (a, b) {
+      return b.related.length - a.related.length;
+    }).slice(0, options.compact ? 5 : 24);
+    var holdings = instruments.filter(function (item) { return item.source === "holding"; }).length;
+    return [
+      '<article class="panel feed-portfolio-news-panel">',
+      '<div class="panel-head">',
+      '<div>',
+      '<p class="label">Portfolio Lens</p>',
+      '<h2>내 종목 영향 뉴스</h2>',
+      '<span>보유·관심 종목과 연결된 기사만 먼저 모아 봅니다.</span>',
+      '</div>',
+      '<span class="metric">' + escapeHtml(allItems.length) + '</span>',
+      '</div>',
+      '<div class="feed-portfolio-summary">',
+      '<span>보유 <strong>' + escapeHtml(holdings) + '</strong></span>',
+      '<span>관심 <strong>' + escapeHtml(Math.max(0, instruments.length - holdings)) + '</strong></span>',
+      '<span>연결 근거 <strong>' + escapeHtml(allItems.length) + '</strong></span>',
+      '</div>',
+      rows.length ? '<div class="feed-portfolio-news-list">' + rows.map(renderFeedPortfolioNewsRow).join("") + '</div>' : renderEmptyState({
+        tone: "muted",
+        label: "Portfolio",
+        title: "내 종목과 연결된 뉴스가 아직 없습니다",
+        description: "보유·관심 종목 코드가 저장 근거에 들어오면 이곳에서 먼저 볼 수 있습니다.",
+        meta: ["보유", "관심", "뉴스"]
+      }),
+      '</article>'
+    ].join("");
+  }
+
+  function renderFeedPortfolioNewsRow(row) {
+    var instrument = row.instrument || {};
+    var symbol = String(instrument.symbol || "").toUpperCase();
+    var related = row.related || [];
+    var impacts = { watch: 0, danger: 0, hold: 0 };
+    related.forEach(function (item) {
+      var meta = researchEvidenceImpactMeta(item);
+      if (meta.tone === "watch") impacts.watch += 1;
+      else if (meta.tone === "danger") impacts.danger += 1;
+      else impacts.hold += 1;
+    });
+    var tone = impacts.danger ? "danger" : (impacts.watch ? "watch" : "hold");
+    var latest = related.reduce(function (time, item) {
+      return Math.max(time, feedTimeValue(item.publishedAt || item.observedAt || "") || 0);
+    }, 0);
+    return [
+      '<div class="feed-portfolio-news-row ' + escapeHtml(tone) + '"' + cardTypeAttrs("portfolio-news-row", tone) + cardFormatAttrs("summary-list-card", "compact") + '>',
+      '<div>',
+      '<strong>' + escapeHtml(stockDisplayName(symbol, instrument)) + '</strong>',
+      '<span>' + escapeHtml([symbol, sourceLabel(instrument.source), marketLabel(instrument.market || instrument.exchange), instrument.sector || ""].filter(Boolean).join(" · ")) + '</span>',
+      '</div>',
+      '<em>' + escapeHtml("호재 " + impacts.watch + " · 악재 " + impacts.danger + " · 중립 " + impacts.hold) + '</em>',
+      '<b>' + escapeHtml(related.length ? ("최근 " + feedFreshness(latest).label) : "연결 뉴스 대기") + '</b>',
+      '</div>'
+    ].join("");
+  }
+
+  function renderFeedSourceLedgerPanel(options) {
+    options = options || {};
+    var rows = feedSourceLedgerRows();
+    var visibleRows = rows.slice(0, options.compact ? 5 : 24);
+    return [
+      '<article class="panel feed-source-ledger-panel">',
+      '<div class="panel-head">',
+      '<div>',
+      '<p class="label">Source Ledger</p>',
+      '<h2>소스 신선도 원장</h2>',
+      '<span>각 근거가 실제 데이터인지, 캐시인지, mock인지 출처별로 분리합니다.</span>',
+      '</div>',
+      '<span class="metric">' + escapeHtml(rows.length) + '</span>',
+      '</div>',
+      visibleRows.length ? '<div class="feed-source-ledger-list">' + visibleRows.map(function (row) {
+        return [
+          '<div class="feed-source-ledger-row ' + escapeHtml(row.tone || "hold") + '"' + cardTypeAttrs("source-ledger-row", row.tone || "hold") + cardFormatAttrs("summary-list-card", "compact") + '>',
+          '<div>',
+          '<strong>' + escapeHtml(row.source) + '</strong>',
+          '<span>' + escapeHtml(row.kind + " · " + row.dataLabel) + '</span>',
+          '</div>',
+          '<em>' + escapeHtml(row.count + "건") + '</em>',
+          '<b>' + escapeHtml(row.latestLabel) + '</b>',
+          '</div>'
+        ].join("");
+      }).join("") + '</div>' : renderEmptyState({
+        tone: "muted",
+        label: "Source",
+        title: "표시할 소스 원장이 없습니다",
+        description: "저장 근거가 쌓이면 실제 데이터, 저장/캐시 데이터, mock 데이터를 분리해 보여줍니다.",
+        meta: ["API", "캐시", "mock"]
+      }),
+      '</article>'
+    ].join("");
   }
 
   function renderFeedOverviewPanel() {
@@ -19955,7 +20385,7 @@
   }
 
   function feedFreshness(value) {
-    var time = feedTimeValue(value);
+    var time = typeof value === "number" ? value : feedTimeValue(value);
     if (!time) return { label: "미수집", tone: "caution" };
     var hours = Math.max(0, (Date.now() - time) / 3600000);
     if (hours < 1) return { label: "1시간 이내", tone: "watch" };
@@ -20215,8 +20645,11 @@
 
   function renderFeedImpactInboxPanel(snapshot, options) {
     options = options || {};
-    var evidence = currentResearchEvidence();
-    var items = Array.isArray(evidence.items) ? evidence.items.slice(0, options.compact ? 4 : 6) : [];
+    var items = feedResearchEvidenceItems({
+      snapshot: snapshot,
+      portfolioOnly: options.portfolioOnly,
+      limit: options.limit || (options.compact ? 4 : 6)
+    });
     var metas = items.map(researchEvidenceImpactMeta);
     var good = metas.filter(function (item) { return item.tone === "watch"; }).length;
     var bad = metas.filter(function (item) { return item.tone === "danger"; }).length;
@@ -20226,8 +20659,8 @@
       '<div class="panel-head">',
       '<div>',
       '<p class="label">Impact Inbox</p>',
-      '<h2>투자 영향 인박스</h2>',
-      '<span>뉴스·공시 본문 요약을 먼저 읽고 종목별 주가 영향 방향을 구분합니다.</span>',
+      '<h2>' + escapeHtml(options.portfolioOnly ? "내 종목 영향 인박스" : "투자 영향 인박스") + '</h2>',
+      '<span>뉴스·공시 본문 요약을 먼저 읽고 종목별 영향, 출처, 데이터 상태를 함께 구분합니다.</span>',
       '</div>',
       '<div class="feed-impact-metrics" aria-label="주가 영향 요약">',
       renderFeedImpactMetric("호재", good, "watch"),
@@ -20275,6 +20708,7 @@
     var displayName = stockDisplayName(symbol, item.payload || item);
     var time = item.publishedAt || item.observedAt || "";
     var impact = researchEvidenceImpactMeta(item);
+    var sourceMeta = feedEvidenceDataMeta(item);
     var summary = researchEvidenceKoreanSummary(item);
     var confidence = item.confidence == null ? "-" : (Math.round(Number(item.confidence || 0) * 100) + "%");
     var key = feedEvidenceKey(item, index);
@@ -20294,7 +20728,8 @@
       '<h3>주가 영향: ' + escapeHtml(impact.label) + ' · ' + escapeHtml(researchEvidenceKindLabel(item.kind)) + '</h3>',
       '<div class="feed-impact-tags">',
       '<span>신뢰 ' + escapeHtml(confidence) + '</span>',
-      '<span>' + escapeHtml(item.source || "-") + '</span>',
+      '<span>' + escapeHtml(sourceMeta.source || "-") + '</span>',
+      '<span class="' + escapeHtml(sourceMeta.tone || "hold") + '">' + escapeHtml(sourceMeta.dataLabel) + '</span>',
       '<span>' + escapeHtml(formatFeedTime(time) || "-") + '</span>',
       '</div>',
       '</div>',
@@ -20334,6 +20769,7 @@
     var displayName = stockDisplayName(symbol, item.payload || item);
     var time = item.publishedAt || item.observedAt || "";
     var impact = researchEvidenceImpactMeta(item);
+    var sourceMeta = feedEvidenceDataMeta(item);
     var summary = researchEvidenceKoreanSummary(item);
     var confidence = item.confidence == null ? "-" : (Math.round(Number(item.confidence || 0) * 100) + "%");
     var canDelete = Boolean(item.evidenceId) && item.evidenceId !== "preview:005930:news";
@@ -20345,6 +20781,7 @@
       renderNotificationDetailMetric("영향 점수", impact.scoreLabel, impact.tone),
       renderNotificationDetailMetric("근거 종류", researchEvidenceKindLabel(item.kind), "muted"),
       renderNotificationDetailMetric("신뢰도", confidence, "muted"),
+      renderNotificationDetailMetric("데이터", sourceMeta.dataLabel, sourceMeta.tone),
       '</div>',
       '<section class="inline-detail-block primary">',
       '<strong>본문 요약</strong>',
@@ -20359,7 +20796,7 @@
       '<p>' + escapeHtml(item.title || "제목 없음") + '</p>',
       '<div class="inline-detail-tags">',
       '<span>종목 ' + escapeHtml(displayName || symbol || "-") + '</span>',
-      '<span>출처 ' + escapeHtml(item.source || "-") + '</span>',
+      '<span>출처 ' + escapeHtml(sourceMeta.source || "-") + '</span>',
       '<span>시간 ' + escapeHtml(formatFeedTime(time) || "-") + '</span>',
       '<span>방향 ' + escapeHtml(researchEvidencePolarityLabel(item.polarity)) + '</span>',
       '</div>',
@@ -20379,6 +20816,7 @@
     var displayName = stockDisplayName(symbol, item.payload || item);
     var time = item.publishedAt || item.observedAt || "";
     var impact = researchEvidenceImpactMeta(item);
+    var sourceMeta = feedEvidenceDataMeta(item);
     var summary = researchEvidenceKoreanSummary(item);
     var confidence = item.confidence == null ? "-" : (Math.round(Number(item.confidence || 0) * 100) + "%");
     return {
@@ -20392,6 +20830,7 @@
         renderNotificationDetailMetric("영향 점수", impact.scoreLabel, impact.tone),
         renderNotificationDetailMetric("근거 종류", researchEvidenceKindLabel(item.kind), "muted"),
         renderNotificationDetailMetric("신뢰도", confidence, "muted"),
+        renderNotificationDetailMetric("데이터", sourceMeta.dataLabel, sourceMeta.tone),
         '</div>',
         '</section>',
         '<section class="work-detail-section primary">',
@@ -20406,7 +20845,7 @@
         '<strong>기사</strong>',
         '<p>' + escapeHtml(item.title || "제목 없음") + '</p>',
         '<div class="notification-detail-tags">',
-        '<span>출처 ' + escapeHtml(item.source || "-") + '</span>',
+        '<span>출처 ' + escapeHtml(sourceMeta.source || "-") + '</span>',
         '<span>시간 ' + escapeHtml(formatFeedTime(time) || "-") + '</span>',
         '<span>방향 ' + escapeHtml(researchEvidencePolarityLabel(item.polarity)) + '</span>',
         '</div>',
@@ -20537,6 +20976,7 @@
     var displayName = stockDisplayName(symbol, item.payload || item);
     var time = item.publishedAt || item.observedAt || "";
     var impact = researchEvidenceImpactMeta(item);
+    var sourceMeta = feedEvidenceDataMeta(item);
     var summary = researchEvidenceKoreanSummary(item);
     var key = feedEvidenceKey(item, index);
     var expanded = state.expandedResearchEvidenceKey === key;
@@ -20558,7 +20998,7 @@
       '<footer class="research-evidence-article">',
       '<span>기사</span>',
       '<strong>' + escapeHtml(item.title || "제목 없음") + '</strong>',
-      '<em>' + escapeHtml([item.source || "-", formatFeedTime(time) || "-"].join(" · ")) + '</em>',
+      '<em>' + escapeHtml([sourceMeta.source || "-", sourceMeta.dataLabel, formatFeedTime(time) || "-"].join(" · ")) + '</em>',
       '</footer>',
       '</div>',
       '</div>'

@@ -18563,9 +18563,22 @@ html[data-theme="dark"] .ontology-graph-expanded-toolbar .icon-button.danger {
   font-size: var(--ds-type-label);
 }
 
+.ontology-experiment-recommendation-title > div:first-child {
+  display: grid;
+  gap: 3px;
+  min-width: 0;
+}
+
 .ontology-experiment-recommendation-title span {
   color: var(--muted);
   font-weight: 850;
+}
+
+.ontology-experiment-recommendation-actions {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: 8px;
 }
 
 .ontology-experiment-recommendation {
@@ -18574,6 +18587,35 @@ html[data-theme="dark"] .ontology-graph-expanded-toolbar .icon-button.danger {
   border-left: 3px solid var(--ds-card-status-neutral);
   border-radius: var(--ds-radius-control);
   background: var(--ds-card-row-bg);
+}
+
+.ontology-experiment-recommendation.selectable {
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  align-items: center;
+}
+
+.ontology-experiment-recommendation.selected {
+  border-color: color-mix(in srgb, var(--ds-card-status-positive) 55%, var(--ds-card-border));
+  border-left-color: var(--ds-card-status-positive);
+  background: color-mix(in srgb, var(--ds-card-status-positive) 8%, var(--ds-card-row-bg));
+}
+
+.ontology-experiment-recommendation-check {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  min-height: 34px;
+  color: var(--muted);
+  font-size: var(--ds-type-caption);
+  font-weight: 850;
+  white-space: nowrap;
+}
+
+.ontology-experiment-recommendation-check input {
+  inline-size: 18px;
+  block-size: 18px;
+  margin: 0;
+  accent-color: var(--ds-card-status-positive);
 }
 
 .ontology-experiment-recommendation strong,
@@ -18618,6 +18660,21 @@ html[data-theme="dark"] .ontology-graph-expanded-toolbar .icon-button.danger {
 
   .ontology-experiment-stage-grid {
     grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .ontology-experiment-recommendation-title,
+  .ontology-experiment-recommendation.selectable {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .ontology-experiment-recommendation-actions {
+    justify-content: stretch;
+  }
+
+  .ontology-experiment-recommendation-actions .text-button,
+  .ontology-experiment-recommendation-check {
+    width: 100%;
+    justify-content: center;
   }
 
   .ontology-experiment-workbench {
@@ -20940,6 +20997,120 @@ html[data-theme="dark"] .ontology-graph-expanded-toolbar .icon-button.danger {
 }
 
 /* PC information architecture refinement layer */
+.single-screen-flow-panel {
+  display: grid;
+  grid-template-columns: minmax(220px, 0.28fr) minmax(0, 1fr) auto;
+  align-items: center;
+  gap: var(--ds-space-4);
+  min-width: 0;
+  padding: 10px var(--ds-panel-pad-x);
+  border: 1px solid var(--ds-card-border);
+  border-radius: var(--ds-radius-panel);
+  background:
+    linear-gradient(180deg, color-mix(in srgb, var(--panel) 96%, var(--panel-soft) 4%), var(--panel));
+}
+
+.single-screen-flow-copy,
+.single-screen-flow-node {
+  display: grid;
+  min-width: 0;
+}
+
+.single-screen-flow-copy {
+  gap: 2px;
+}
+
+.single-screen-flow-copy strong,
+.single-screen-flow-copy em,
+.single-screen-flow-node strong,
+.single-screen-flow-node em {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.single-screen-flow-copy strong {
+  color: var(--ink);
+  font-size: 14px;
+  font-weight: 950;
+}
+
+.single-screen-flow-copy em {
+  color: var(--muted);
+  font-size: 11px;
+  font-style: normal;
+  font-weight: 820;
+}
+
+.single-screen-flow-map,
+.screen-info-flow {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 8px;
+  min-width: 0;
+}
+
+.single-screen-flow-node {
+  gap: 2px;
+  min-height: 48px;
+  justify-content: stretch;
+  padding: 8px 10px;
+  border: 1px solid color-mix(in srgb, var(--ds-card-border) 86%, transparent);
+  border-radius: var(--ds-radius-control);
+  background: color-mix(in srgb, var(--panel-soft) 64%, transparent);
+}
+
+.single-screen-flow-node em {
+  color: var(--muted);
+  font-size: 10px;
+  font-style: normal;
+  font-weight: 950;
+  text-transform: uppercase;
+}
+
+.single-screen-flow-node strong {
+  color: var(--ink);
+  font-size: 12px;
+  font-weight: 900;
+}
+
+.screen-info-button {
+  width: 34px;
+  min-width: 34px;
+  height: 34px;
+  border-radius: 999px;
+  font-family: ui-serif, Georgia, serif;
+  font-style: italic;
+  font-weight: 900;
+}
+
+.feed-drilldown-bar .feed-drilldown-rail {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  width: auto;
+  min-width: 0;
+  gap: 8px;
+  padding: 0;
+  border: 0;
+  background: transparent;
+}
+
+.feed-drilldown-bar .feed-drilldown-rail .text-button {
+  min-height: 34px;
+  padding: 7px 12px;
+}
+
+.feed-unified-console .feed-primary-column,
+.feed-unified-console .feed-side-column {
+  align-content: start;
+}
+
+.work-detail-body :is(.feed-impact-workspace-wide, .feed-theme-workspace, .feed-portfolio-workspace, .feed-source-workspace) {
+  min-width: 0;
+}
+
 .investment-calendar-summary-panel,
 .investment-calendar-list-panel,
 .investment-calendar-rail,

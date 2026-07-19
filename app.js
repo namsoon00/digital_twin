@@ -476,6 +476,7 @@
     ontologyExperimentsLoaded: false,
     ontologyExperimentsError: "",
     ontologyExperimentAction: "",
+    ontologyExperimentRecommendationSelections: {},
     activeExperimentSection: initialExperimentSection(),
     activeOntologyExperimentId: initialOntologyExperimentId(),
     ontologyInferenceLedger: null,
@@ -587,6 +588,18 @@
     return String(value == null ? "" : value)
       .replace(/\bthesisScore\b/g, "buyReasonScore")
       .replace(/\bthesisWeight\b/g, "buyReasonWeight");
+  }
+
+  function uniqueTextItems(values) {
+    var seen = {};
+    var result = [];
+    (Array.isArray(values) ? values : []).forEach(function (value) {
+      var text = String(value || "").trim();
+      if (!text || seen[text]) return;
+      seen[text] = true;
+      result.push(text);
+    });
+    return result;
   }
 
   function requestJson(path) {
@@ -4490,21 +4503,41 @@
     ontologyExperimentCommand(experimentId, "pause", "실험을 일시정지했습니다.");
   }
 
-  function applyOntologyExperiment(experimentId) {
+  function applyOntologyExperiment(experimentId, options) {
+    options = options || {};
     var experiment = ontologyExperimentById(experimentId);
     var latest = ontologyExperimentLatestRun(experiment);
     var readiness = String(((latest.promotionReadiness || {}).status) || latest.promotionStatus || "");
     var gate = ontologyExperimentPromotionGate(experiment, latest);
     var payload = {};
+    var recommendationIds = Array.isArray(options.recommendationIds) ? uniqueTextItems(options.recommendationIds) : [];
+    if (options.requireRecommendationSelection && !recommendationIds.length) {
+      showSnackbar("적용할 제안을 먼저 선택하세요.", "caution");
+      return;
+    }
+    if (recommendationIds.length) payload.recommendationIds = recommendationIds;
     if (readiness === "needs-review" || gate.requiresReviewApproval) {
       if (window.confirm && !window.confirm("이 실험은 needs-review 상태입니다. 검토 승인 기록을 남기고 운영 온톨로지에 반영할까요?")) return;
-      payload = {
+      payload = Object.assign({}, payload, {
         reviewApproved: true,
         reviewedBy: "web-main",
         reviewReason: "웹 실험 탭에서 needs-review 결과를 수동 승인"
-      };
+      });
     }
-    ontologyExperimentCommand(experimentId, "apply", "온톨로지 제안을 운영 반영했습니다.", payload);
+    ontologyExperimentCommand(
+      experimentId,
+      "apply",
+      recommendationIds.length ? recommendationIds.length + "개 제안을 운영 반영했습니다." : "온톨로지 제안을 운영 반영했습니다.",
+      payload
+    );
+  }
+
+  function applySelectedOntologyExperimentRecommendations(experimentId) {
+    var id = String(experimentId || "").trim();
+    var selectedIds = ontologyExperimentSelectedRecommendationIds(id).filter(function (recommendationId) {
+      return applicableOntologyExperimentRecommendationIds(id).indexOf(recommendationId) >= 0;
+    });
+    applyOntologyExperiment(id, { recommendationIds: selectedIds, requireRecommendationSelection: true });
   }
 
   function ontologyExperimentCommand(experimentId, action, successMessage, payload) {
@@ -4518,11 +4551,13 @@
     }
     state.ontologyExperimentAction = action + ":" + id;
     state.ontologyExperimentsError = "";
+    var requestPayload = payload || {};
     render();
-    sendJson("/api/ontology/experiments/" + encodeURIComponent(id) + "/" + action, "POST", payload || {})
-      .then(function (payload) {
-        var failureMessage = ontologyExperimentCommandFailureMessage(action, payload);
+    sendJson("/api/ontology/experiments/" + encodeURIComponent(id) + "/" + action, "POST", requestPayload)
+      .then(function (responsePayload) {
+        var failureMessage = ontologyExperimentCommandFailureMessage(action, responsePayload);
         if (failureMessage) throw new Error(failureMessage);
+        if (action === "apply") clearOntologyExperimentRecommendationSelection(id, requestPayload.recommendationIds);
         showSnackbar(successMessage || "실험 상태를 변경했습니다.");
         return loadOntologyExperiments(true);
       })
@@ -4543,6 +4578,8 @@
     if (status === "not-found") return "실험을 찾지 못했습니다.";
     if (status === "no-result") return "아직 적용할 실험 결과가 없습니다.";
     if (action === "apply" && reason === "experiment-needs-review-approval") return "needs-review 실험은 검토 승인 후 적용할 수 있습니다.";
+    if (action === "apply" && reason === "experiment-recommendations-not-found") return "선택한 제안 중 현재 결과에 없는 항목이 있습니다.";
+    if (action === "apply" && reason === "experiment-selected-recommendations-not-applicable") return "선택한 제안은 자동 적용 대상이 아닙니다.";
     if (action === "apply" && status === "not-ready") return "완료된 샌드박스 실행 결과가 있어야 적용할 수 있습니다." + (reason ? " (" + reason + ")" : "");
     if (action === "apply" && status === "disabled") return "온톨로지 저장소가 비활성화되어 적용할 수 없습니다.";
     if (action === "apply" && status === "pending") return "온톨로지 제안 적용이 완료되지 않았습니다.";
@@ -7822,6 +7859,17 @@
     ].join("");
   }
 
+  function renderInfoIconButton(key, label) {
+    var text = label || "이 화면의 흐름과 상세 설명";
+    return renderWorkDetailButton(
+      "screen-info",
+      key || state.activeTab || "overview",
+      "i",
+      "icon-button screen-info-button",
+      ' title="' + escapeHtml(text) + '" aria-label="' + escapeHtml(text) + '"'
+    );
+  }
+
   function renderWorkDetailLayer() {
     var detail = state.workDetailLayer || {};
     if (!detail.type) return "";
@@ -7848,6 +7896,11 @@
   }
 
   function workDetailPayload(type, key) {
+    if (type === "screen-info") return screenInfoWorkDetailPayload(key);
+    if (type === "feed-impact-board") return feedImpactBoardWorkDetailPayload();
+    if (type === "feed-theme-board") return feedThemeBoardWorkDetailPayload();
+    if (type === "feed-portfolio-board") return feedPortfolioBoardWorkDetailPayload();
+    if (type === "feed-source-board") return feedSourceBoardWorkDetailPayload();
     if (type === "notification-job") return notificationWorkDetailPayload(key);
     if (type === "feed-impact" || type === "research-evidence") return researchEvidenceWorkDetailPayload(key);
     if (type === "feed-pipeline") return feedPipelineWorkDetailPayload();
@@ -8411,6 +8464,7 @@
       '<div class="managed-page managed-page-' + escapeHtml(pageId || "overview") + ' ' + escapeHtml(webStyleContract.pageClass) + ' web-style-screen-' + escapeHtml(pageId || "overview") + '" data-style-contract="' + escapeHtml(webStyleContract.id) + '" data-style-screen="' + escapeHtml(pageId || "overview") + '" data-page-mode="' + escapeHtml(mode) + '" data-structure-group="' + escapeHtml(structure.groupId) + '" data-structure-layer="' + escapeHtml(structure.layer) + '" data-structure-entity="' + escapeHtml(structure.entity) + '">',
       renderPageCommandStrip(pageId, snapshot),
       renderPageRoutinePanel(pageId, snapshot),
+      renderSingleScreenFlowPanel(pageId, snapshot),
       content,
       '</div>'
     ].join("");
@@ -9827,6 +9881,118 @@
     ].join("");
   }
 
+  function renderSingleScreenFlowPanel(pageId, snapshot) {
+    var normalized = normalizeTabId(pageId || state.activeTab || "overview");
+    var profile = pageCommandProfile(normalized, snapshot || {});
+    var flow = Array.isArray(profile.flow) ? profile.flow : [];
+    if (flow.length < 3) return "";
+    return [
+      '<section class="single-screen-flow-panel" aria-label="탭 단일 화면 흐름">',
+      '<div class="single-screen-flow-copy">',
+      '<span class="label">One Screen Flow</span>',
+      '<strong>' + escapeHtml(profile.entity || activeTabMeta().label) + '</strong>',
+      '<em>' + escapeHtml((profile.steps || []).map(function (step) { return step[1]; }).join(" · ")) + '</em>',
+      '</div>',
+      '<div class="single-screen-flow-map">',
+      renderSingleScreenFlowNode("입력", flow[0]),
+      renderSingleScreenFlowNode("처리", flow[1]),
+      renderSingleScreenFlowNode("출력", flow[2]),
+      '</div>',
+      renderInfoIconButton(normalized, "이 탭의 데이터 흐름과 상세 설명"),
+      '</section>'
+    ].join("");
+  }
+
+  function renderSingleScreenFlowNode(label, value) {
+    return [
+      '<span class="single-screen-flow-node">',
+      '<em>' + escapeHtml(label) + '</em>',
+      '<strong>' + escapeHtml(value || "-") + '</strong>',
+      '</span>'
+    ].join("");
+  }
+
+  function screenInfoWorkDetailPayload(key) {
+    var pageId = normalizeTabId(String(key || state.activeTab || "overview").replace(/^page:/, ""));
+    var snapshot = state.snapshot || {};
+    var profile = pageCommandProfile(pageId, snapshot);
+    var structure = pageStructureMeta(pageId);
+    var drilldowns = screenDrilldownItems(pageId);
+    return editorWorkDetailPayload(
+      "Screen Architecture",
+      (tabById(pageId) || {}).label || profile.entity || "운영 화면",
+      "기본 화면은 하나의 콘솔로 압축하고, 설명·상세·설정은 필요할 때만 엽니다.",
+      [
+        '<section class="work-detail-section primary">',
+        '<strong>이 탭의 역할</strong>',
+        '<p>' + escapeHtml(structure.objective || profile.objective || "") + '</p>',
+        '</section>',
+        '<section class="work-detail-section">',
+        '<strong>데이터 흐름</strong>',
+        '<div class="screen-info-flow">',
+        renderSingleScreenFlowNode("입력", (profile.flow || [])[0]),
+        renderSingleScreenFlowNode("처리", (profile.flow || [])[1]),
+        renderSingleScreenFlowNode("출력", (profile.flow || [])[2]),
+        '</div>',
+        '</section>',
+        '<section class="work-detail-section">',
+        '<strong>기본 화면에 남기는 것</strong>',
+        '<div class="work-detail-metric-row">',
+        (profile.steps || []).map(function (step) {
+          return renderNotificationDetailMetric(step[1], step[2], "hold");
+        }).join(""),
+        '</div>',
+        '</section>',
+        drilldowns.length ? '<section class="work-detail-section"><strong>상세로 분리되는 것</strong><div class="work-detail-list">' + drilldowns.map(function (item) {
+          return [
+            '<div class="work-detail-row">',
+            '<b>' + escapeHtml(item[0]) + '</b>',
+            '<div><strong>' + escapeHtml(item[1]) + '</strong><span>' + escapeHtml(item[2]) + '</span></div>',
+            '<em>' + escapeHtml(item[3]) + '</em>',
+            '</div>'
+          ].join("");
+        }).join("") + '</div></section>' : ''
+      ].join("")
+    );
+  }
+
+  function screenDrilldownItems(pageId) {
+    var rows = {
+      accounts: [
+        ["계정", "API 원문·계좌 순번", "수정 폼과 secret 확인은 계정 상세에서만 엽니다.", "설정 레이어"],
+        ["자산", "금액 산식과 환율 기준", "요약에는 합계만 두고 산식은 검증 상세로 분리합니다.", "상세 레저"]
+      ],
+      notifications: [
+        ["후보", "발송 전 신호", "기본 화면은 최근 판단 중심, 후보군은 드릴다운으로 봅니다.", "전체화면"],
+        ["정책", "반복·쿨다운·템플릿", "운영 중 자주 보지 않는 설정은 설정 레이어로 숨깁니다.", "설정 레이어"]
+      ],
+      modeling: [
+        ["근거", "뉴스·차트·온톨로지", "오늘의 판단 큐에서 선택한 종목만 상세 근거를 엽니다.", "상세 레이어"],
+        ["룰", "RuleBox·프롬프트", "운영 화면이 아니라 편집 화면으로 분리합니다.", "설정 레이어"]
+      ],
+      feed: [
+        ["영향", "호재·악재 뉴스", "리스트는 핵심 영향만, 본문 요약과 원문 근거는 상세로 봅니다.", "전체화면"],
+        ["소스", "수집 채널·품질", "기본 화면에는 상태만 두고 채널/품질 원장은 상세로 엽니다.", "상세 레이어"]
+      ],
+      experiments: [
+        ["검증", "리플레이·비교", "실험 목록에서 선택한 항목만 전체화면으로 검증합니다.", "전체화면"],
+        ["승격", "운영 반영 조건", "승격 체크리스트와 추천 적용은 상세 심사로 보냅니다.", "상세 레이어"]
+      ],
+      system: [
+        ["문서", "전체 설명과 용어", "기본 화면은 상태와 지도만, 긴 설명은 접기와 정보 화면으로 보냅니다.", "정보 화면"],
+        ["감사", "TypeDB 행·RuleBox·InferenceBox", "요약 카드만 남기고 원장 행은 상세로 확인합니다.", "상세 레저"]
+      ],
+      settings: [
+        ["기본", "표시·전달", "저장 상태만 보이고 입력 폼은 펼침 영역에서 수정합니다.", "설정 레이어"],
+        ["고급", "외부 API·신선도·매핑", "운영 중 자주 보지 않는 값은 고급 상세로 숨깁니다.", "상세 편집"]
+      ]
+    };
+    return rows[pageId] || [
+      ["요약", "핵심 상태", "기본 화면에는 오늘 판단에 필요한 정보만 남깁니다.", "운영 콘솔"],
+      ["상세", "원장·본문·설정", "긴 데이터는 클릭 후 별도 화면에서 확인합니다.", "상세 레이어"]
+    ];
+  }
+
   function renderPageModeSwitch(pageId) {
     var normalized = normalizeTabId(pageId || state.activeTab);
     if (!pageSupportsMode(normalized)) return "";
@@ -10041,6 +10207,9 @@
       run: "이 실험만 샌드박스에서 실행해 관계 변화와 승격 조건을 다시 계산합니다.",
       apply: "승격 조건을 통과한 검증 결과를 운영 RuleBox 기준에 반영합니다.",
       applyRecommendation: "AI 보완 제안이 포함된 실험 결과를 운영 기준에 적용합니다.",
+      applySelectedRecommendations: "체크한 보완 제안만 묶어서 운영 RuleBox와 TBox 기준에 적용합니다.",
+      selectAllRecommendations: "현재 실험에서 자동 적용 가능한 보완 제안을 모두 선택합니다.",
+      clearRecommendations: "현재 실험의 보완 제안 선택을 모두 해제합니다.",
       pause: "이 실험을 자동 검증 대상에서 제외해 다음 실행부터 멈춥니다.",
       activate: "이 실험을 활성 상태로 바꿔 다음 자동 검증 대상에 포함합니다."
     };
@@ -10190,6 +10359,72 @@
 
   function ontologyExperimentRecommendations(source) {
     return Array.isArray((source || {}).recommendations) ? source.recommendations : [];
+  }
+
+  function ontologyRecommendationIdOf(item) {
+    return String((item || {}).id || "").trim();
+  }
+
+  function ontologyRecommendationCanApply(item) {
+    var type = String((item || {}).type || "");
+    var applyStatus = String((item || {}).applyStatus || "").toLowerCase();
+    if (applyStatus === "applied" || applyStatus === "already-applied") return false;
+    return {
+      "promote-rule": true,
+      "review-rule-promotion": true,
+      "reuse-existing-relation-types": true,
+      "run-typedb-materialization": true,
+      "register-relation-types": true,
+      "register-decision-stages": true,
+      "register-tbox-classes": true
+    }[type] === true;
+  }
+
+  function ontologyExperimentSelectedRecommendationIds(experimentId) {
+    var id = String(experimentId || "").trim();
+    var selections = state.ontologyExperimentRecommendationSelections || {};
+    return uniqueTextItems(Array.isArray(selections[id]) ? selections[id] : []);
+  }
+
+  function setOntologyExperimentRecommendationSelection(experimentId, ids) {
+    var id = String(experimentId || "").trim();
+    if (!id) return;
+    var next = Object.assign({}, state.ontologyExperimentRecommendationSelections || {});
+    var clean = uniqueTextItems(ids || []);
+    if (clean.length) next[id] = clean;
+    else delete next[id];
+    state.ontologyExperimentRecommendationSelections = next;
+  }
+
+  function clearOntologyExperimentRecommendationSelection(experimentId, appliedIds) {
+    var id = String(experimentId || "").trim();
+    if (!id) return;
+    if (!Array.isArray(appliedIds) || !appliedIds.length) {
+      setOntologyExperimentRecommendationSelection(id, []);
+      return;
+    }
+    var applied = {};
+    appliedIds.forEach(function (item) { applied[String(item || "").trim()] = true; });
+    setOntologyExperimentRecommendationSelection(id, ontologyExperimentSelectedRecommendationIds(id).filter(function (item) {
+      return !applied[item];
+    }));
+  }
+
+  function toggleOntologyExperimentRecommendation(experimentId, recommendationId, checked) {
+    var id = String(experimentId || "").trim();
+    var recommendation = String(recommendationId || "").trim();
+    if (!id || !recommendation) return;
+    var selected = ontologyExperimentSelectedRecommendationIds(id).filter(function (item) {
+      return item !== recommendation;
+    });
+    if (checked) selected.push(recommendation);
+    setOntologyExperimentRecommendationSelection(id, selected);
+  }
+
+  function applicableOntologyExperimentRecommendationIds(experimentId) {
+    var experiment = ontologyExperimentById(experimentId);
+    var latest = ontologyExperimentLatestRun(experiment);
+    return ontologyExperimentRecommendations(latest).filter(ontologyRecommendationCanApply).map(ontologyRecommendationIdOf).filter(Boolean);
   }
 
   function ontologyRecommendationTone(priority) {
@@ -10655,8 +10890,9 @@
       '<div class="ontology-experiment-checklist">',
       checks.map(renderOntologyExperimentPromotionCheck).join(""),
       '</div>',
+      recommendations.length ? renderOntologyExperimentRecommendationList(recommendations, recommendations.length, { experimentId: id, selectable: canApply }) : '',
       '<div class="ontology-experiment-actions">',
-      canApply ? '<button class="text-button primary" type="button" data-lab-apply="' + escapeHtml(id) + '"' + ontologyExperimentTooltipAttrs(ontologyExperimentActionTooltip("apply")) + (ontologyExperimentBusy("apply", id) ? ' disabled' : '') + '>' + escapeHtml(ontologyExperimentBusy("apply", id) ? "반영 중" : "검증 제안 운영 반영") + '</button>' : '',
+      canApply ? '<button class="text-button primary" type="button" data-lab-apply="' + escapeHtml(id) + '"' + ontologyExperimentTooltipAttrs(ontologyExperimentActionTooltip("apply")) + (ontologyExperimentBusy("apply", id) ? ' disabled' : '') + '>' + escapeHtml(ontologyExperimentBusy("apply", id) ? "반영 중" : "전체 제안 운영 반영") + '</button>' : '',
       id ? renderWorkDetailButton("ontology-experiment", id, "상세 심사", "text-button compact", ontologyExperimentTooltipAttrs(ontologyExperimentActionTooltip("detail"))) : '',
       '</div>',
       '</article>'
@@ -10783,23 +11019,57 @@
     ].join("");
   }
 
-  function renderOntologyExperimentRecommendationList(recommendations, limit) {
-    var items = (recommendations || []).slice(0, limit || 4);
+  function renderOntologyExperimentRecommendationList(recommendations, limit, options) {
+    if (limit && typeof limit === "object") {
+      options = limit;
+      limit = 0;
+    }
+    options = options || {};
+    var allItems = Array.isArray(recommendations) ? recommendations : [];
+    var items = allItems.slice(0, limit || 4);
     if (!items.length) return "";
+    var experimentId = String(options.experimentId || "").trim();
+    var selectable = Boolean(options.selectable && experimentId);
+    var selectedIds = selectable ? ontologyExperimentSelectedRecommendationIds(experimentId) : [];
+    var applicableIds = selectable ? items.filter(ontologyRecommendationCanApply).map(ontologyRecommendationIdOf).filter(Boolean) : [];
+    var selectedApplicableCount = applicableIds.filter(function (id) {
+      return selectedIds.indexOf(id) >= 0;
+    }).length;
     return [
       '<div class="ontology-experiment-recommendations">',
-      '<div class="ontology-experiment-recommendation-title"><strong>온톨로지 보완 제안</strong><span>' + escapeHtml(items.length) + '</span></div>',
-      items.map(renderOntologyExperimentRecommendation).join(""),
+      '<div class="ontology-experiment-recommendation-title">',
+      '<div><strong>온톨로지 보완 제안</strong><span>' + escapeHtml(selectable ? ("선택 " + selectedApplicableCount + "/" + applicableIds.length) : items.length) + '</span></div>',
+      selectable ? [
+        '<div class="ontology-experiment-recommendation-actions">',
+        '<button class="text-button compact" type="button" data-lab-recommendations-select-all="' + escapeHtml(experimentId) + '"' + ontologyExperimentTooltipAttrs(ontologyExperimentActionTooltip("selectAllRecommendations")) + (!applicableIds.length || ontologyExperimentBusy("apply", experimentId) ? ' disabled' : '') + '>전체 선택</button>',
+        '<button class="text-button compact" type="button" data-lab-recommendations-clear="' + escapeHtml(experimentId) + '"' + ontologyExperimentTooltipAttrs(ontologyExperimentActionTooltip("clearRecommendations")) + (!selectedApplicableCount || ontologyExperimentBusy("apply", experimentId) ? ' disabled' : '') + '>해제</button>',
+        '<button class="text-button primary compact" type="button" data-lab-apply-selected="' + escapeHtml(experimentId) + '"' + ontologyExperimentTooltipAttrs(ontologyExperimentActionTooltip("applySelectedRecommendations")) + (!selectedApplicableCount || ontologyExperimentBusy("apply", experimentId) ? ' disabled' : '') + '>' + escapeHtml(ontologyExperimentBusy("apply", experimentId) ? "반영 중" : "선택 적용") + '</button>',
+        '</div>'
+      ].join("") : '',
+      '</div>',
+      items.map(function (item) {
+        return renderOntologyExperimentRecommendation(item, { experimentId: experimentId, selectable: selectable, selectedIds: selectedIds });
+      }).join(""),
       '</div>'
     ].join("");
   }
 
-  function renderOntologyExperimentRecommendation(item) {
+  function renderOntologyExperimentRecommendation(item, options) {
     item = item || {};
+    options = options || {};
+    var id = ontologyRecommendationIdOf(item);
+    var selectable = Boolean(options.selectable && id && ontologyRecommendationCanApply(item));
+    var selected = selectable && (options.selectedIds || []).indexOf(id) >= 0;
     var appliedAt = item.appliedAt ? formatClock(item.appliedAt) : "";
     var applyStatus = String(item.applyStatus || "");
     return [
-      '<section class="ontology-experiment-recommendation">',
+      '<section class="ontology-experiment-recommendation' + (selected ? " selected" : "") + (selectable ? " selectable" : "") + '">',
+      selectable ? [
+        '<label class="ontology-experiment-recommendation-check">',
+        '<input type="checkbox" data-lab-recommendation-experiment="' + escapeHtml(options.experimentId || "") + '" data-lab-recommendation-toggle="' + escapeHtml(id) + '"' + (selected ? ' checked' : '') + ' />',
+        '<span>선택</span>',
+        '</label>'
+      ].join("") : '',
       '<div>',
       '<strong>' + escapeHtml(item.title || "보완 제안") + '</strong>',
       item.reason ? '<p>' + escapeHtml(item.reason) + '</p>' : '',
@@ -19382,10 +19652,11 @@
   function renderFeedPage(snapshot) {
     var section = activeSectionForPageMode("feed", feedSections, normalizeFeedSection(state.activeFeedSection));
     state.activeFeedSection = section;
+    var settingsMode = activePageMode("feed") === "settings";
     var body = [
-      '<section class="admin-grid feed-view feed-view-' + escapeHtml(section) + '">',
+      '<section class="admin-grid feed-view feed-view-' + escapeHtml(settingsMode ? "settings" : "console") + '" data-single-tab-console="feed">',
       renderFeedSectionBar(),
-      renderFeedSectionContent(snapshot, section),
+      settingsMode ? renderFeedSettingsPanel() : renderFeedUnifiedConsole(snapshot),
       '</section>'
     ].join("");
     return renderManagedPage("feed", snapshot, [
@@ -19396,6 +19667,23 @@
   function renderFeedSectionBar() {
     var visibleSections = modeSectionsForPage("feed", feedSections);
     var activeId = activeSectionForPageMode("feed", feedSections, state.activeFeedSection);
+    if (activePageMode("feed") !== "settings") {
+      return [
+        '<div class="feed-section-bar feed-drilldown-bar" data-section-mode="results" data-feed-active-section="' + escapeHtml(activeId) + '">',
+        '<div class="feed-section-tabs feed-drilldown-rail" role="toolbar" aria-label="피드 상세 보기">',
+        renderWorkDetailButton("feed-impact-board", "", "영향 뉴스", "text-button compact"),
+        renderWorkDetailButton("feed-theme-board", "", "테마", "text-button compact"),
+        renderWorkDetailButton("feed-portfolio-board", "", "내 종목", "text-button compact"),
+        renderWorkDetailButton("feed-source-board", "", "소스·품질", "text-button compact"),
+        renderInfoIconButton("feed", "뉴스·근거 탭의 단일 화면 운영 방식"),
+        '</div>',
+        '<div class="feed-section-actions">',
+        '<button class="text-button" data-action="refresh-research-evidence">' + (state.researchEvidenceLoading ? "조회 중" : "근거 새로고침") + '</button>',
+        '<button class="text-button" data-page-mode-page="feed" data-page-mode="settings">수집 설정</button>',
+        '</div>',
+        '</div>'
+      ].join("");
+    }
     return [
       '<div class="feed-section-bar" data-section-mode="' + escapeHtml(activePageMode("feed")) + '" data-feed-active-section="' + escapeHtml(activeId) + '">',
       '<div class="feed-section-tabs" role="tablist" aria-label="피드 섹션">',
@@ -19417,6 +19705,59 @@
       '</div>',
       '</div>'
     ].join("");
+  }
+
+  function renderFeedUnifiedConsole(snapshot) {
+    return [
+      '<div class="feed-workbench feed-overview-workbench feed-unified-console">',
+      '<div class="feed-primary-column">',
+      renderFeedImpactInboxPanel(snapshot, { compact: true, limit: 6 }),
+      renderFeedMarketBriefPanel(snapshot),
+      '</div>',
+      '<aside class="feed-side-column">',
+      renderFeedPortfolioNewsPanel(snapshot, { compact: true }),
+      renderFeedThemeClusterPanel(snapshot, { limit: 4 }),
+      renderFeedSourceLedgerPanel({ compact: true }),
+      renderFeedQualityPanel(),
+      '</aside>',
+      '</div>'
+    ].join("");
+  }
+
+  function feedImpactBoardWorkDetailPayload() {
+    return editorWorkDetailPayload(
+      "News Impact",
+      "영향 뉴스 전체 보기",
+      "기본 화면은 핵심 뉴스만, 상세 화면은 본문 요약·주가 영향·근거 원장을 함께 봅니다.",
+      '<div class="feed-impact-workspace-wide">' + renderFeedImpactInboxPanel(state.snapshot || {}, { limit: 16 }) + renderResearchEvidencePanel() + '</div>'
+    );
+  }
+
+  function feedThemeBoardWorkDetailPayload() {
+    return editorWorkDetailPayload(
+      "Market Themes",
+      "테마와 시장 흐름",
+      "섹터·자산 흐름은 투자 판단의 배경 데이터로만 보고, 세부 항목은 여기서 확인합니다.",
+      '<div class="feed-theme-workspace">' + renderFeedMarketBriefPanel(state.snapshot || {}) + renderFeedThemeClusterPanel(state.snapshot || {}, { full: true }) + '</div>'
+    );
+  }
+
+  function feedPortfolioBoardWorkDetailPayload() {
+    return editorWorkDetailPayload(
+      "Portfolio Evidence",
+      "내 종목 관련 근거",
+      "보유·관심 종목에 직접 연결되는 뉴스만 분리해서 확인합니다.",
+      '<div class="feed-portfolio-workspace">' + renderFeedPortfolioNewsPanel(state.snapshot || {}, { full: true }) + renderFeedImpactInboxPanel(state.snapshot || {}, { compact: true, portfolioOnly: true, limit: 12 }) + '</div>'
+    );
+  }
+
+  function feedSourceBoardWorkDetailPayload() {
+    return editorWorkDetailPayload(
+      "Source Quality",
+      "소스와 수집 품질",
+      "수집 채널, 파이프라인, 품질 신호는 운영 점검이 필요할 때만 엽니다.",
+      '<div class="feed-source-workspace">' + renderFeedSourceLedgerPanel({ full: true }) + renderFeedChannelPanel() + renderFeedPipelinePanel() + renderFeedQualityPanel() + '</div>'
+    );
   }
 
   function renderFeedSectionContent(snapshot, section) {
@@ -22324,6 +22665,38 @@
     Array.prototype.slice.call(app.querySelectorAll("[data-lab-apply]")).forEach(function (button) {
       button.addEventListener("click", function () {
         applyOntologyExperiment(button.getAttribute("data-lab-apply"));
+      });
+    });
+
+    Array.prototype.slice.call(app.querySelectorAll("[data-lab-recommendation-toggle]")).forEach(function (input) {
+      input.addEventListener("change", function () {
+        toggleOntologyExperimentRecommendation(
+          input.getAttribute("data-lab-recommendation-experiment"),
+          input.getAttribute("data-lab-recommendation-toggle"),
+          input.checked
+        );
+        render();
+      });
+    });
+
+    Array.prototype.slice.call(app.querySelectorAll("[data-lab-recommendations-select-all]")).forEach(function (button) {
+      button.addEventListener("click", function () {
+        var id = button.getAttribute("data-lab-recommendations-select-all");
+        setOntologyExperimentRecommendationSelection(id, applicableOntologyExperimentRecommendationIds(id));
+        render();
+      });
+    });
+
+    Array.prototype.slice.call(app.querySelectorAll("[data-lab-recommendations-clear]")).forEach(function (button) {
+      button.addEventListener("click", function () {
+        setOntologyExperimentRecommendationSelection(button.getAttribute("data-lab-recommendations-clear"), []);
+        render();
+      });
+    });
+
+    Array.prototype.slice.call(app.querySelectorAll("[data-lab-apply-selected]")).forEach(function (button) {
+      button.addEventListener("click", function () {
+        applySelectedOntologyExperimentRecommendations(button.getAttribute("data-lab-apply-selected"));
       });
     });
 

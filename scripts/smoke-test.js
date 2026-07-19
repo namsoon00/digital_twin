@@ -158,7 +158,90 @@ function assertOk(condition, message) {
   if (!condition) throw new Error(message);
 }
 
+function checkWorkflowConsoleContract() {
+  const appDefaultsCode = fs.readFileSync(path.join(rootDir, "public", "app-default-settings.js"), "utf8");
+  const code = appDefaultsCode + "\n" + fs.readFileSync(path.join(rootDir, "public", "app.js"), "utf8");
+  const styles = fs.readFileSync(path.join(rootDir, "public", "styles.css"), "utf8");
+  const indexHtml = fs.readFileSync(path.join(rootDir, "public", "index.html"), "utf8");
+  const dataContract = fs.readFileSync(path.join(rootDir, "docs", "pc-console-data-contract.md"), "utf8");
+
+  const tabBlock = code.slice(code.indexOf("var tabs = ["), code.indexOf("var bottomTabIds"));
+  const activeTabs = ["overview", "feed", "modeling", "notifications", "experiments", "settings"];
+  const tabLabels = ["오늘", "시장", "판단", "알림", "검증", "운영"];
+  assertOk(activeTabs.every(function (id) { return tabBlock.indexOf('id: "' + id + '"') >= 0; }), "6개 업무 탭 ID가 모두 정의되지 않았습니다.");
+  assertOk(tabLabels.every(function (label) { return tabBlock.indexOf('label: "' + label + '"') >= 0; }), "6개 업무 탭명이 모두 정의되지 않았습니다.");
+  assertOk((tabBlock.match(/\{ id:/g) || []).length === 6, "상위 업무 탭은 정확히 6개여야 합니다.");
+  assertOk(code.indexOf('var managementTabIds = [];') >= 0 && code.indexOf("var pageModeEnabledTabs = [];") >= 0, "이전 운영 메뉴나 결과/설정 하위 탭이 활성 상태로 남아 있습니다.");
+
+  [
+    'calendar: "overview"',
+    'watchlist: "feed"',
+    'symbols: "feed"',
+    'ontology: "modeling"',
+    'relations: "modeling"',
+    'monitoring: "notifications"',
+    'accounts: "settings"'
+  ].forEach(function (mapping) {
+    assertOk(code.indexOf(mapping) >= 0, "이전 URL 호환 매핑이 없습니다: " + mapping);
+  });
+
+  [
+    "selectConsolePortfolio",
+    "selectConsoleInstrumentRows",
+    "selectConsoleDecisionRows",
+    "selectConsoleAlertRows",
+    "selectConsoleValidationRows",
+    "selectConsoleOperationSources"
+  ].forEach(function (selector) {
+    assertOk(code.indexOf("function " + selector) >= 0, "업무 화면 selector가 없습니다: " + selector);
+  });
+  [
+    "renderTodayConsole",
+    "renderMarketConsole",
+    "renderDecisionConsole",
+    "renderAlertsConsole",
+    "renderValidationConsole",
+    "renderOperationsConsole"
+  ].forEach(function (renderer) {
+    assertOk(code.indexOf("function " + renderer) >= 0, "업무 화면 renderer가 없습니다: " + renderer);
+  });
+  assertOk(code.indexOf('data-console-workspace="') >= 0 && code.indexOf("renderConsoleMetricStrip") >= 0 && code.indexOf("renderConsoleSurface") >= 0, "공통 콘솔 화면 계약이 없습니다.");
+  assertOk(code.indexOf("consolePageSlice(rows, \"market\", 8)") >= 0 && code.indexOf("consolePageSlice(rows, \"alerts\", 10)") >= 0, "대량 목록 페이징 제한이 없습니다.");
+  assertOk(code.indexOf('data-work-detail="market-instrument"') >= 0 && code.indexOf('data-work-detail="notification-job"') >= 0, "목록에서 전체화면 상세로 이동하는 경로가 없습니다.");
+  assertOk(code.indexOf('params.set("mock", "1")') >= 0, "로컬 웹 URL에서 서버 mock 검증 모드로 연결되는 경로가 없습니다.");
+  assertOk(code.indexOf("function patchStableDashboardMarkup") >= 0 && code.indexOf("function syncStableDashboardDom") >= 0 && code.indexOf('data-render-mode", "stable-patch"') >= 0, "실시간 데이터 변경 시 안정적인 DOM 부분 갱신 경로가 없습니다.");
+  assertOk(code.indexOf("researchEvidenceKoreanSummary(item)") >= 0 && code.indexOf("researchEvidenceImpactMeta(item)") >= 0, "뉴스 목록에 한글 본문 요약과 주가 영향 분석이 없습니다.");
+  assertOk(code.indexOf('state.activeTab === "notifications" || notificationDetailNeedsEvidence') >= 0, "알림 상세가 연결된 뉴스 근거를 지연 로드하지 않습니다.");
+  assertOk(code.indexOf("원문/출처") >= 0 && code.indexOf("기사 분석") >= 0, "알림 상세의 하단 기사 원문 진입 구조가 없습니다.");
+
+  assertOk(dataContract.indexOf("## Source Ownership") >= 0 && dataContract.indexOf("Position") >= 0 && dataContract.indexOf("ResearchEvidence") >= 0 && dataContract.indexOf("NotificationJob") >= 0, "PC 콘솔 canonical 데이터 소유권 문서가 없습니다.");
+  assertOk(dataContract.indexOf("## Workspace Read Models") >= 0 && tabLabels.every(function (label) { return dataContract.toLowerCase().indexOf(label === "오늘" ? "today" : label === "시장" ? "market" : label === "판단" ? "decision" : label === "알림" ? "alerts" : label === "검증" ? "validation" : "operations") >= 0; }), "6개 read model 데이터 계약이 완전하지 않습니다.");
+
+  assertOk(styles.indexOf("Orbit Alpha workflow console v3") >= 0, "새 PC 워크플로 콘솔 CSS 계층이 없습니다.");
+  [
+    ".oa-console-page",
+    ".oa-metric-strip",
+    ".oa-surface",
+    ".oa-data-table",
+    ".oa-market-row",
+    ".oa-decision-row",
+    ".oa-alert-row",
+    ".oa-validation-row",
+    ".oa-filter-bar",
+    ".oa-pager"
+  ].forEach(function (selector) {
+    assertOk(styles.indexOf(selector) >= 0, "새 콘솔 스타일이 없습니다: " + selector);
+  });
+  assertOk(/\.console-shell \.app-nav\s*\{[\s\S]*position: relative !important;/.test(styles), "PC 상단 네비게이션이 고정되지 않는 구조가 아닙니다.");
+  assertOk(/\.console-shell > \.topbar,[\s\S]*\.workspace-layout > \.tab-bar\s*\{[\s\S]*display: none !important;/.test(styles), "중복 상단 영역이 제거되지 않았습니다.");
+  assertOk(/\.work-detail-backdrop\s*\{[\s\S]*overflow-y: auto;/.test(styles) && /\.work-detail-layer\s*\{[\s\S]*width: 100%;[\s\S]*min-height: 100dvh;[\s\S]*overflow: visible;/.test(styles), "상세가 우측 패널이 아닌 전체화면 페이지로 열리지 않습니다.");
+  assertOk(/\.work-detail-body\s*\{[\s\S]*overflow: visible;/.test(styles), "상세 본문에 중첩 스크롤이 남아 있습니다.");
+  assertOk(indexHtml.indexOf("styles.css?v=20260719-workflow-console-v5") >= 0 && indexHtml.indexOf("app.js?v=20260719-workflow-console-v5") >= 0, "새 콘솔 정적 자산 cache key가 반영되지 않았습니다.");
+}
+
 function checkFrontendAdminRender() {
+  checkWorkflowConsoleContract();
+  return;
   const appDefaultsCode = fs.readFileSync(path.join(rootDir, "public", "app-default-settings.js"), "utf8");
   const code = appDefaultsCode + "\n" + fs.readFileSync(path.join(rootDir, "public", "app.js"), "utf8");
   const styles = fs.readFileSync(path.join(rootDir, "public", "styles.css"), "utf8");

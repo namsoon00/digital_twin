@@ -4,17 +4,12 @@
   var defaultSettings = window.OrbitAlphaDefaultSettings || {};
 
   var tabs = [
-    { id: "overview", label: "관제 홈", description: "오늘의 운영 현황", groupId: "command" },
-    { id: "accounts", label: "계정·연결", description: "계좌·API", groupId: "market" },
-    { id: "watchlist", label: "관심 관리", description: "관찰 종목", groupId: "market" },
-    { id: "calendar", label: "투자 캘린더", description: "이벤트·리마인더", groupId: "market" },
-    { id: "symbols", label: "종목 탐색", description: "시장 카탈로그", groupId: "market" },
-    { id: "notifications", label: "알림 운영", description: "점수·발송 게이트", groupId: "decision" },
-    { id: "modeling", label: "투자 판단", description: "근거·액션 큐", groupId: "decision" },
-    { id: "experiments", label: "전략 검증", description: "규칙 실험", groupId: "decision" },
-    { id: "feed", label: "뉴스·근거", description: "본문 요약·영향", groupId: "market" },
-    { id: "system", label: "구조·흐름", description: "데이터 파이프라인", groupId: "control" },
-    { id: "settings", label: "운영 설정", description: "환경·연결", groupId: "control" }
+    { id: "overview", label: "오늘", description: "판단·일정·위험", groupId: "workspace" },
+    { id: "feed", label: "시장", description: "종목·뉴스·수급", groupId: "workspace" },
+    { id: "modeling", label: "판단", description: "액션·근거", groupId: "workspace" },
+    { id: "notifications", label: "알림", description: "점수·발송", groupId: "workspace" },
+    { id: "experiments", label: "검증", description: "규칙·온톨로지", groupId: "workspace" },
+    { id: "settings", label: "운영", description: "계정·데이터·설정", groupId: "workspace" }
   ];
   var appBrandName = "Orbit Alpha";
   var appBrandSubtitle = "포트폴리오 신호 궤도 관제";
@@ -25,20 +20,17 @@
     pageClass: "web-style-page",
     commandClass: "web-style-command-strip"
   };
-  var bottomTabIds = ["overview", "watchlist", "calendar", "notifications", "modeling"];
-  var managementTabIds = ["accounts", "symbols", "feed", "system", "settings"];
+  var bottomTabIds = ["overview", "feed", "modeling", "notifications", "experiments", "settings"];
+  var managementTabIds = [];
   var navigationGroups = [
-    { id: "command", label: "관제 홈", description: "오늘 먼저 보는 현황", tabIds: ["overview"] },
-    { id: "market", label: "데이터 관리", description: "계정·종목·근거 수집", tabIds: ["accounts", "watchlist", "calendar", "symbols", "feed"] },
-    { id: "decision", label: "판단 운영", description: "투자 판단·알림·검증", tabIds: ["modeling", "notifications", "experiments"] },
-    { id: "control", label: "운영 관리", description: "구조·환경 관리", tabIds: ["system", "settings"] }
+    { id: "workspace", label: "투자 콘솔", description: "오늘부터 운영까지 한 흐름", tabIds: bottomTabIds }
   ];
   var pageStructureCatalog = {
     overview: {
-      layer: "운영 현황",
-      entity: "포트폴리오 스냅샷",
-      objective: "계정, 포트폴리오, 신호, 모델 상태를 한 화면에서 먼저 판단합니다.",
-      workflow: ["상태 확인", "위험 노출", "즉시 조치"]
+      layer: "오늘의 관제",
+      entity: "오늘의 작업 큐",
+      objective: "포트폴리오, 판단, 일정, 운영 이상 중 지금 처리할 일만 우선순위로 봅니다.",
+      workflow: ["핵심 상태", "우선순위", "다음 행동"]
     },
     accounts: {
       layer: "계정 원장",
@@ -65,28 +57,28 @@
       workflow: ["목록 조회", "필터 적용", "계정 편입"]
     },
     notifications: {
-      layer: "알림 운영",
+      layer: "발송 판단",
       entity: "알림 판단 기록",
-      objective: "알림이 발생한 점수 변화와 발송·보류 이유를 먼저 확인합니다.",
-      workflow: ["판단 확인", "정책 조정", "본문 발송"]
+      objective: "점수 변화, 알림이 온 이유, 발송·보류 상태를 한 원장에서 확인합니다.",
+      workflow: ["점수 변화", "발송 이유", "상세 검토"]
     },
     modeling: {
-      layer: "판단 콘솔",
+      layer: "투자 판단",
       entity: "투자 의견",
-      objective: "오늘의 판단, 투자 근거, 검증 리뷰를 한 작업 흐름으로 압축합니다.",
-      workflow: ["오늘 판단", "근거·차트", "검증 리뷰"]
+      objective: "종목별 최종 행동, 강도, 핵심 근거와 약화 조건을 한 큐에서 봅니다.",
+      workflow: ["행동 후보", "근거 확인", "실행 전 점검"]
     },
     experiments: {
-      layer: "전략 검증",
-      entity: "규칙 실험",
-      objective: "새 관계 규칙을 샌드박스에서 재생하고 승격 가능성을 검토합니다.",
-      workflow: ["규칙 초안", "재생 검증", "승격 판단"]
+      layer: "규칙·온톨로지 검증",
+      entity: "검증 작업",
+      objective: "실험 결과와 TypeDB 구조 상태를 함께 보고 운영 반영 가능성을 판단합니다.",
+      workflow: ["실험 상태", "구조 경고", "승격 판단"]
     },
     feed: {
-      layer: "뉴스 근거",
-      entity: "리서치 근거",
-      objective: "뉴스, 공시, 시장 데이터를 주가 영향 관점으로 요약하고 근거 저장소 품질을 점검합니다.",
-      workflow: ["영향 판단", "근거 확인", "수집 설정"]
+      layer: "시장 탐색",
+      entity: "종목·뉴스 컨텍스트",
+      objective: "보유·관심 종목의 현재 상태와 주가 영향 뉴스를 중복 없이 연결해 봅니다.",
+      workflow: ["종목 탐색", "영향 뉴스", "상세 분석"]
     },
     system: {
       layer: "구조 문서",
@@ -95,10 +87,10 @@
       workflow: ["구조 이해", "이벤트 흐름", "운영 기준"]
     },
     settings: {
-      layer: "운영 설정",
-      entity: "로컬 설정",
-      objective: "로컬 우선 환경, 외부 API, 전달 채널 설정을 안전하게 관리합니다.",
-      workflow: ["로컬 상태", "연결 설정", "변경 저장"]
+      layer: "운영 관리",
+      entity: "계정·데이터·설정",
+      objective: "계정 연결, 데이터 품질, 런타임 상태와 설정 진입점을 한 화면에서 관리합니다.",
+      workflow: ["연결 상태", "운영 이상", "설정 관리"]
     }
   };
   var notificationSections = [
@@ -160,7 +152,7 @@
       settings: ["settings"]
     }
   };
-  var pageModeEnabledTabs = ["accounts", "notifications", "modeling", "feed"];
+  var pageModeEnabledTabs = [];
 
   function activeTabMeta() {
     return tabs.filter(function (tab) { return tab.id === state.activeTab; })[0] || tabs[0];
@@ -445,6 +437,9 @@
     notificationJobSearch: "",
     notificationJobStatusFilter: "all",
     notificationJobTypeFilter: "all",
+    consoleMarketSearch: "",
+    consoleMarketScope: "all",
+    consolePages: { market: 1, alerts: 1, validation: 1 },
     activeNotificationSection: initialNotificationSection(),
     activeAccountSection: initialAccountSection(),
     activeStrategySection: initialStrategySection(),
@@ -1137,10 +1132,26 @@
 
   function normalizeTabId(value) {
     var requested = String(value || "").toLowerCase();
-    if (requested === "more") return "overview";
-    if (requested === "monitoring") return "notifications";
-    if (requested === "ontology" || requested === "relations") return "modeling";
-    if (requested === "lab" || requested === "experiment") return "experiments";
+    var aliases = {
+      more: "overview",
+      today: "overview",
+      calendar: "overview",
+      market: "feed",
+      watchlist: "feed",
+      symbols: "feed",
+      decision: "modeling",
+      ontology: "modeling",
+      relations: "modeling",
+      alerts: "notifications",
+      monitoring: "notifications",
+      validation: "experiments",
+      lab: "experiments",
+      experiment: "experiments",
+      system: "experiments",
+      operations: "settings",
+      accounts: "settings"
+    };
+    requested = aliases[requested] || requested;
     return tabs.some(function (tab) { return tab.id === requested; }) ? requested : "overview";
   }
 
@@ -4011,10 +4022,7 @@
   }
 
   function shouldLoadOntologyStrategyDetail() {
-    if (state.activeTab === "ontology") return true;
-    if (state.activeTab !== "modeling") return false;
-    var section = activeSectionForPageMode("modeling", strategySections, normalizeStrategySection(state.activeStrategySection));
-    return ["evidence", "charts", "graphs", "trace"].indexOf(section) >= 0;
+    return state.activeTab === "modeling" || state.activeTab === "experiments";
   }
 
   function shouldLoadStrategyProposals() {
@@ -4186,9 +4194,7 @@
   }
 
   function shouldLoadOntologyInferenceLedger() {
-    if (state.activeTab !== "modeling") return false;
-    var section = activeSectionForPageMode("modeling", strategySections, normalizeStrategySection(state.activeStrategySection));
-    return section === "trace";
+    return state.activeTab === "modeling" || state.activeTab === "experiments";
   }
 
   function ontologyInferenceLedgerPath() {
@@ -5206,6 +5212,9 @@
     options = options || {};
     var params = new URLSearchParams();
     params.set("detail", options.detail || "summary");
+    var pageParams = new URLSearchParams(window.location.search || "");
+    var mockMode = String(pageParams.get("mock") || "").toLowerCase();
+    if (["1", "true", "mock"].indexOf(mockMode) >= 0) params.set("mock", "1");
     var symbols = allAccountWatchlistSymbols();
     if (!symbols.length) symbols = watchlistSymbols();
     if (symbols.length) params.set("watchlistSymbols", symbols.join(","));
@@ -7674,6 +7683,57 @@
     });
   }
 
+  function dashboardDomMismatchPath(currentNode, nextNode, path) {
+    path = path || "root";
+    if (!currentNode || !nextNode) return path + ":missing";
+    if (currentNode.nodeType !== nextNode.nodeType) return path + ":node-type";
+    if (currentNode.nodeType === 1 && currentNode.tagName !== nextNode.tagName) return path + ":tag";
+    if (currentNode.nodeType !== 1) return "";
+    if (currentNode.childNodes.length !== nextNode.childNodes.length) return path + ":children";
+    for (var index = 0; index < currentNode.childNodes.length; index += 1) {
+      var child = currentNode.childNodes[index];
+      var childLabel = child.nodeType === 1 ? String(child.tagName || "node").toLowerCase() : "text";
+      var mismatch = dashboardDomMismatchPath(child, nextNode.childNodes[index], path + "/" + childLabel + "[" + index + "]");
+      if (mismatch) return mismatch;
+    }
+    return "";
+  }
+
+  function syncStableDashboardDom(currentNode, nextNode) {
+    if (currentNode.nodeType === 3 || currentNode.nodeType === 8) {
+      if (currentNode.nodeValue !== nextNode.nodeValue) currentNode.nodeValue = nextNode.nodeValue;
+      return;
+    }
+    if (currentNode.nodeType !== 1) return;
+    Array.prototype.slice.call(currentNode.attributes || []).forEach(function (attribute) {
+      if (!nextNode.hasAttribute(attribute.name)) currentNode.removeAttribute(attribute.name);
+    });
+    Array.prototype.slice.call(nextNode.attributes || []).forEach(function (attribute) {
+      if (currentNode.getAttribute(attribute.name) !== attribute.value) currentNode.setAttribute(attribute.name, attribute.value);
+    });
+    for (var index = 0; index < currentNode.childNodes.length; index += 1) {
+      syncStableDashboardDom(currentNode.childNodes[index], nextNode.childNodes[index]);
+    }
+  }
+
+  function patchStableDashboardMarkup(markup) {
+    var current = app.firstElementChild;
+    if (!current || !current.classList || !current.classList.contains("console-shell")) return false;
+    var template = document.createElement("template");
+    template.innerHTML = String(markup || "").trim();
+    var next = template.content.firstElementChild;
+    if (!next || !next.classList || !next.classList.contains("console-shell")) return false;
+    var mismatch = dashboardDomMismatchPath(current, next);
+    if (mismatch) {
+      document.documentElement.setAttribute("data-dashboard-render-mode", "full:" + (mismatch || "structure"));
+      return false;
+    }
+    syncStableDashboardDom(current, next);
+    current.setAttribute("data-render-mode", "stable-patch");
+    document.documentElement.setAttribute("data-dashboard-render-mode", "stable-patch");
+    return true;
+  }
+
   function render() {
     if (renderSuppressionDepth > 0) {
       renderQueuedDuringSuppression = true;
@@ -7681,33 +7741,40 @@
     }
     applyAppTheme();
     rememberRenderedPageScrollPosition();
-    destroyOntologyCytoscapeGraphs();
     if (state.loading && !state.snapshot) {
+      destroyOntologyCytoscapeGraphs();
       app.innerHTML = renderLoading();
       return;
     }
     if (!state.snapshot) {
+      destroyOntologyCytoscapeGraphs();
       app.innerHTML = renderError();
       bindAutoGrowingTextareas(app);
       bindActions();
       return;
     }
-    app.innerHTML = renderDashboard(state.snapshot);
-    bindAutoGrowingTextareas(app);
-    bindActions();
-    initOntologyCytoscapeGraphs();
-    restoreTabBarPosition();
-    restoreRenderedPageScrollPosition();
-    bindPageScrollMemory();
+    var dashboardMarkup = renderDashboard(state.snapshot);
+    var patchedDashboard = patchStableDashboardMarkup(dashboardMarkup);
+    if (!patchedDashboard) {
+      destroyOntologyCytoscapeGraphs();
+      app.innerHTML = dashboardMarkup;
+      bindAutoGrowingTextareas(app);
+      bindActions();
+      initOntologyCytoscapeGraphs();
+      restoreTabBarPosition();
+      restoreRenderedPageScrollPosition();
+      bindPageScrollMemory();
+    }
     syncAppNavScrollState();
     syncTopbarScrollState();
-    if (state.activeTab === "feed" && !state.researchEvidence && !state.researchEvidenceLoading) {
+    var notificationDetailNeedsEvidence = state.workDetailLayer && state.workDetailLayer.type === "notification-job";
+    if ((state.activeTab === "feed" || state.activeTab === "notifications" || notificationDetailNeedsEvidence) && !state.researchEvidence && !state.researchEvidenceLoading) {
       loadResearchEvidence(false);
     }
-    if (state.activeTab === "calendar" && !state.investmentCalendar && !state.investmentCalendarLoading) {
+    if (state.activeTab === "overview" && !state.investmentCalendar && !state.investmentCalendarLoading) {
       loadInvestmentCalendar(false);
     }
-    if (state.activeTab === "calendar" && !state.investmentCalendarCandidates && !state.investmentCalendarCandidatesLoading) {
+    if (state.activeTab === "overview" && !state.investmentCalendarCandidates && !state.investmentCalendarCandidatesLoading) {
       loadInvestmentCalendarCandidates(false);
     }
     if (state.activeTab === "experiments" && !state.ontologyExperimentsLoaded && !state.ontologyExperimentsLoading) {
@@ -7716,7 +7783,7 @@
     if (shouldLoadStrategyProposals() && !state.strategyProposalsLoaded && !state.strategyProposalsLoading) {
       loadStrategyProposals(false);
     }
-    if (state.activeTab === "system" && !state.ontologyAuditLoaded && !state.ontologyAuditLoading) {
+    if (state.activeTab === "experiments" && !state.ontologyAuditLoaded && !state.ontologyAuditLoading) {
       loadOntologyAudit(false);
     }
     if (shouldLoadOntologyInferenceLedger() && !state.ontologyInferenceLedgerLoaded && !state.ontologyInferenceLedgerLoading) {
@@ -7897,10 +7964,28 @@
 
   function workDetailPayload(type, key) {
     if (type === "screen-info") return screenInfoWorkDetailPayload(key);
+    if (type === "market-instrument") return marketInstrumentWorkDetailPayload(key);
     if (type === "feed-impact-board") return feedImpactBoardWorkDetailPayload();
     if (type === "feed-theme-board") return feedThemeBoardWorkDetailPayload();
     if (type === "feed-portfolio-board") return feedPortfolioBoardWorkDetailPayload();
     if (type === "feed-source-board") return feedSourceBoardWorkDetailPayload();
+    if (type === "account-connections-board") return accountConnectionsWorkDetailPayload();
+    if (type === "account-balance-board") return accountBalanceWorkDetailPayload();
+    if (type === "account-history-board") return accountHistoryWorkDetailPayload();
+    if (type === "account-identity-board") return accountIdentityWorkDetailPayload();
+    if (type === "notification-candidates-board") return notificationCandidatesWorkDetailPayload();
+    if (type === "notification-policy-board") return notificationPolicyWorkDetailPayload();
+    if (type === "notification-templates-board") return notificationTemplatesWorkDetailPayload();
+    if (type === "notification-diagnostics-board") return notificationDiagnosticsWorkDetailPayload();
+    if (type === "strategy-evidence-board") return strategyEvidenceWorkDetailPayload();
+    if (type === "strategy-charts-board") return strategyChartsWorkDetailPayload();
+    if (type === "strategy-graphs-board") return strategyGraphsWorkDetailPayload();
+    if (type === "strategy-proposals-board") return strategyProposalsWorkDetailPayload();
+    if (type === "strategy-trace-board") return strategyTraceBoardWorkDetailPayload();
+    if (type === "experiment-validation-board") return experimentValidationWorkDetailPayload();
+    if (type === "experiment-promotion-board") return experimentPromotionWorkDetailPayload();
+    if (type === "experiment-audit-board") return experimentAuditWorkDetailPayload();
+    if (type === "experiment-proposals-board") return experimentProposalsWorkDetailPayload();
     if (type === "notification-job") return notificationWorkDetailPayload(key);
     if (type === "feed-impact" || type === "research-evidence") return researchEvidenceWorkDetailPayload(key);
     if (type === "feed-pipeline") return feedPipelineWorkDetailPayload();
@@ -8187,6 +8272,179 @@
     );
   }
 
+  function accountConnectionsWorkDetailPayload() {
+    return editorWorkDetailPayload(
+      "Account Detail",
+      "증권사 연결과 데이터 출처",
+      "기본 계정 콘솔에서는 상태만 보고, API 출처와 품질 원장은 여기서 확인합니다.",
+      renderAccountConnectionsPanel(state.snapshot || {})
+    );
+  }
+
+  function accountBalanceWorkDetailPayload() {
+    return editorWorkDetailPayload(
+      "Account Detail",
+      "자산 검증 상세",
+      "평가액, 현금, 환율, 보유 원장 산식을 한 화면에서 대조합니다.",
+      renderAccountBalancePanel(state.snapshot || {})
+    );
+  }
+
+  function accountHistoryWorkDetailPayload() {
+    return editorWorkDetailPayload(
+      "Account Detail",
+      "계정 데이터 이력",
+      "스냅샷 생성 시각, 캐시 사용 여부, 데이터 신선도를 확인합니다.",
+      renderAccountDataHistoryPanel(state.snapshot || {})
+    );
+  }
+
+  function accountIdentityWorkDetailPayload() {
+    return editorWorkDetailPayload(
+      "Account Settings",
+      "계정 설정",
+      "계정 식별값과 API 자격 정보는 기본 화면에서 숨기고 필요한 때만 편집합니다.",
+      renderAdminAccountPanel()
+    );
+  }
+
+  function notificationCandidatesWorkDetailPayload() {
+    return editorWorkDetailPayload(
+      "Notification Detail",
+      "알림 후보 신호",
+      "발송 전 후보, 종목 감지, 포트폴리오 상태를 전체화면에서 검토합니다.",
+      renderNotificationCandidatePanel(state.snapshot || {})
+    );
+  }
+
+  function notificationPolicyWorkDetailPayload() {
+    return editorWorkDetailPayload(
+      "Notification Settings",
+      "알림 정책",
+      "메시지 타입별 사용 여부와 발송 게이트는 설정 레이어에서 관리합니다.",
+      renderAdminMessagePanel()
+    );
+  }
+
+  function notificationTemplatesWorkDetailPayload() {
+    return editorWorkDetailPayload(
+      "Notification Settings",
+      "알림 템플릿",
+      "본문 형식과 미리보기는 운영 콘솔에서 분리해 필요할 때만 엽니다.",
+      renderNotificationTemplateManagerPanel()
+    );
+  }
+
+  function notificationDiagnosticsWorkDetailPayload() {
+    return editorWorkDetailPayload(
+      "Notification Detail",
+      "알림 진단",
+      "채널, 반복 차단, 임계값, 발송 실패 원인을 점검합니다.",
+      renderNotificationDiagnosticsPanel()
+    );
+  }
+
+  function strategyEvidenceWorkDetailPayload() {
+    var snapshot = state.snapshot || {};
+    var parts = ontologyStrategyParts(snapshot);
+    return editorWorkDetailPayload(
+      "Investment Detail",
+      "투자 근거 상세",
+      "선택한 판단의 근거 카드, 실행 계획, 데이터 계보를 확인합니다.",
+      renderInvestmentTabWorkspace("evidence", [
+        { role: "main", html: renderInvestmentEvidenceWorkbenchPanel(snapshot) },
+        { role: "side", html: renderOntologyExecutionPlanPanel(investmentReasoningCards(snapshot), parts) + renderInvestmentDataLineagePanel(snapshot) + renderStrategyDataPanel(snapshot) }
+      ])
+    );
+  }
+
+  function strategyChartsWorkDetailPayload() {
+    var snapshot = state.snapshot || {};
+    var parts = ontologyStrategyParts(snapshot);
+    return editorWorkDetailPayload(
+      "Investment Detail",
+      "통합 차트 상세",
+      "가격, 수급, 거시 신호, 그래프 게이트를 같은 화면에서 비교합니다.",
+      renderInvestmentTabWorkspace("charts", [
+        { role: "summary", html: renderInvestmentChartControlPanel(snapshot, parts) },
+        { role: "main", html: renderInvestmentIntegratedChartPanel(snapshot, parts) },
+        { role: "side", html: renderInvestmentMoneyFlowPanel(snapshot) + renderOntologyMacroSignalPanel(parts) + renderInvestmentGraphGatePanel(snapshot) + renderInvestmentDataLineagePanel(snapshot) }
+      ])
+    );
+  }
+
+  function strategyGraphsWorkDetailPayload() {
+    var snapshot = state.snapshot || {};
+    var parts = ontologyStrategyParts(snapshot);
+    return editorWorkDetailPayload(
+      "Investment Detail",
+      "온톨로지 그래프 상세",
+      "TBox, ABox, 근거 관계, 추론 결과를 전체화면으로 확인합니다.",
+      renderInvestmentTabWorkspace("graphs", [
+        { role: "full", html: renderInvestmentOntologyWorkspacePanel(snapshot, parts) }
+      ])
+    );
+  }
+
+  function strategyProposalsWorkDetailPayload() {
+    return editorWorkDetailPayload(
+      "Investment Detail",
+      "전략 제안",
+      "승인 후보와 성과 기록은 판단 콘솔에서 분리해 상세로 검토합니다.",
+      renderStrategyProposalConsolePanel()
+    );
+  }
+
+  function strategyTraceBoardWorkDetailPayload() {
+    var snapshot = state.snapshot || {};
+    var parts = ontologyStrategyParts(snapshot);
+    return editorWorkDetailPayload(
+      "Investment Detail",
+      "검증·리뷰 상세",
+      "모델 리뷰, 관계 trace, 품질 점검을 전체화면에서 확인합니다.",
+      renderInvestmentTabWorkspace("trace", [
+        { role: "summary", html: renderStrategyReviewStatusPanel(snapshot, parts) },
+        { role: "full", html: renderStrategyTraceOverviewPanel(snapshot, parts) }
+      ])
+    );
+  }
+
+  function experimentValidationWorkDetailPayload() {
+    return editorWorkDetailPayload(
+      "Experiment Detail",
+      "전략 검증 리플레이",
+      "선택한 실험의 샌드박스 실행과 후보 비교 결과를 검토합니다.",
+      '<div class="ontology-experiment-workbench ontology-experiment-workbench-validation"><div class="ontology-experiment-workbench-side">' + renderOntologyExperimentListPanel({ selectable: true, compact: true }) + '</div><div class="ontology-experiment-workbench-main">' + renderOntologyExperimentSelectedPanel() + renderOntologyExperimentReplayPanel() + renderOntologyExperimentComparisonPanel() + '</div></div>'
+    );
+  }
+
+  function experimentPromotionWorkDetailPayload() {
+    return editorWorkDetailPayload(
+      "Experiment Detail",
+      "승격 심사",
+      "운영 RuleBox에 반영 가능한지 체크리스트와 최근 실행 결과를 봅니다.",
+      '<div class="ontology-experiment-workbench ontology-experiment-workbench-promotion"><div class="ontology-experiment-workbench-side">' + renderOntologyExperimentListPanel({ selectable: true, compact: true }) + '</div><div class="ontology-experiment-workbench-main">' + renderOntologyExperimentSelectedPanel() + renderOntologyExperimentPromotionPanel() + renderOntologyExperimentLatestPanel() + '</div></div>'
+    );
+  }
+
+  function experimentAuditWorkDetailPayload() {
+    return editorWorkDetailPayload(
+      "Experiment Detail",
+      "실험 이력",
+      "실행, 승격 판정, 운영 반영 이력을 확인합니다.",
+      renderOntologyExperimentAuditPanel() + renderOntologyExperimentListPanel({ selectable: true })
+    );
+  }
+
+  function experimentProposalsWorkDetailPayload() {
+    return editorWorkDetailPayload(
+      "Experiment Detail",
+      "전략 제안 검토",
+      "검증된 가설의 조건, 성과, 승인 상태를 확인합니다.",
+      renderStrategyProposalConsolePanel()
+    );
+  }
+
   function feedSettingsWorkDetailPayload(key) {
     var label = feedSettingsEditorLabel(key);
     return editorWorkDetailPayload(
@@ -8333,14 +8591,16 @@
       '<div class="app-nav-tabs" aria-label="업무 구조 탭">',
       navigationGroups.map(renderAppNavGroup).join(""),
       '</div>',
-      '<details class="app-nav-menu">',
-      '<summary><strong>운영</strong><span>' + escapeHtml(managementActive ? activeTab.label : "관리 탭") + '</span></summary>',
-      '<div class="app-nav-menu-list">',
-      managementTabs.map(function (tab) {
-        return navTabButton(tab, "app-nav-menu-item");
-      }).join(""),
-      '</div>',
-      '</details>',
+      managementTabs.length ? [
+        '<details class="app-nav-menu">',
+        '<summary><strong>운영</strong><span>' + escapeHtml(managementActive ? activeTab.label : "관리 탭") + '</span></summary>',
+        '<div class="app-nav-menu-list">',
+        managementTabs.map(function (tab) {
+          return navTabButton(tab, "app-nav-menu-item");
+        }).join(""),
+        '</div>',
+        '</details>'
+      ].join("") : '',
       '<div class="app-nav-tools">',
       '<span class="status-pill ' + modeClass + '">' + escapeHtml(modeLabel) + "</span>",
       '<button class="icon-button" type="button" data-action="refresh" title="새로고침" aria-label="새로고침">' + (state.refreshing ? "…" : "↻") + "</button>",
@@ -8355,24 +8615,29 @@
     var tab = tabById(normalized) || activeTabMeta();
     var activeSnapshot = snapshot || state.snapshot || {};
     var profile = pageCommandProfile(normalized, activeSnapshot);
-    var routine = pageRoutineProfile(normalized, activeSnapshot);
-    var hasMode = pageSupportsMode(normalized);
+    var actionMap = {
+      overview: ["screen-info", "overview", "오늘의 데이터 기준"],
+      feed: ["feed-impact-board", "", "영향 뉴스 전체"],
+      modeling: ["strategy-evidence-board", "", "투자 근거 전체"],
+      notifications: ["notification-policy-board", "", "알림 정책"],
+      experiments: ["experiment-validation-board", "", "검증 워크벤치"],
+      settings: ["account-identity-board", "", "계정 관리"]
+    };
+    var action = actionMap[normalized] || ["screen-info", normalized, "상세 보기"];
     return [
-      '<div class="app-nav-command ' + (hasMode ? "has-mode" : "no-mode") + '" data-style-layer="unified-command" data-command-group="' + escapeHtml(profile.groupId) + '" aria-label="현재 화면 작업 요약">',
+      '<div class="app-nav-command oa-console-command no-mode" data-style-layer="unified-command" data-command-group="' + escapeHtml(profile.groupId) + '" aria-label="현재 화면 작업 요약">',
       '<div class="app-nav-current">',
-      '<span class="app-nav-command-kicker">' + escapeHtml(profile.group + " / " + profile.layer) + '</span>',
+      '<span class="app-nav-command-kicker">' + escapeHtml(profile.layer) + '</span>',
       '<strong>' + escapeHtml(tab.label || profile.entity) + '</strong>',
-      '<em>' + escapeHtml(profile.objective || tab.description || "") + '</em>',
       '</div>',
-      hasMode ? '<div class="app-nav-mode">' + renderPageModeSwitch(normalized) + '</div>' : '',
-      '<div class="app-nav-flow">' + renderPageFlowSpine(profile) + '</div>',
-      '<div class="app-nav-command-metrics page-command-metrics">',
-      profile.metrics.map(renderPageCommandMetric).join(""),
+      '<p class="oa-console-command-objective">' + escapeHtml(profile.objective || tab.description || "") + '</p>',
+      '<div class="oa-console-command-status">',
+      '<span class="status-pill ' + escapeHtml(state.snapshotFromCache ? "mock" : "live") + '">' + escapeHtml(state.snapshotFromCache ? "직전 데이터" : "최신 데이터") + '</span>',
+      '<em>' + escapeHtml(formatClock(activeSnapshot.generatedAt) || "갱신 시각 확인") + '</em>',
       '</div>',
-      '<div class="app-nav-routine ' + escapeHtml(routine.tone || "hold") + '">',
-      '<span><em>현재 상태</em><strong>' + escapeHtml(routine.current || "-") + '</strong></span>',
-      '<span class="app-nav-routine-reason"><em>왜 봐야 하나</em><strong>' + escapeHtml(routine.reason || "-") + '</strong></span>',
-      '<span class="app-nav-routine-action-cell"><em>다음 행동</em><a class="text-button primary app-nav-routine-action" href="' + escapeHtml(routine.href || "?tab=" + normalized) + '">' + escapeHtml(routine.action || "상세 보기") + '</a></span>',
+      '<div class="oa-console-command-actions">',
+      renderInfoIconButton(normalized, "이 화면의 데이터 기준"),
+      renderWorkDetailButton(action[0], action[1], action[2], "text-button primary compact"),
       '</div>',
       '</div>'
     ].join("");
@@ -8392,69 +8657,664 @@
     ].join("");
   }
 
-  function renderActiveTab(snapshot) {
-    if (state.activeTab === "overview") {
-      return renderManagedPage("overview", snapshot, [
-        '<section class="admin-grid home-view">',
-        renderAdminOverviewPanel(snapshot),
-        renderAccountDirectoryPanel({ compact: true }),
-        renderAccountWatchlistPanel({ compact: true }),
-        renderAdminMonitoringPanel(snapshot),
-        '</section>'
-      ].join(""));
-    }
-    if (state.activeTab === "accounts") {
-      return renderManagedPage("accounts", snapshot, [
-        '<section class="admin-grid accounts-view">',
-        renderAccountSectionBar(),
-        renderAccountSectionContent(snapshot),
-        '</section>'
-      ].join(""));
-    }
-    if (state.activeTab === "watchlist") {
-      return renderManagedPage("watchlist", snapshot, [
-        '<section class="admin-grid watchlist-view">',
-        renderAccountWatchlistPanel({ full: true, editable: true }, snapshot),
-        '</section>'
-      ].join(""));
-    }
-    if (state.activeTab === "symbols") {
-      return renderManagedPage("symbols", snapshot, [
-        '<section class="admin-grid symbol-universe-view">',
-        renderSymbolUniversePanel({ full: true }),
-        '</section>'
-      ].join(""));
-    }
-    if (state.activeTab === "calendar") {
-      return renderInvestmentCalendarPage(snapshot);
-    }
-    if (state.activeTab === "feed") {
-      return renderFeedPage(snapshot);
-    }
-    if (state.activeTab === "system") {
-      return renderSystemGuidePage(snapshot);
-    }
-    if (state.activeTab === "notifications") {
-      return renderNotificationsPage();
-    }
-    if (state.activeTab === "modeling") {
-      return renderStrategyModelingPage(snapshot);
-    }
-    if (state.activeTab === "experiments") {
-      return renderOntologyExperimentsPage(snapshot);
-    }
-    if (state.activeTab === "ontology") {
-      return renderOntologyPage(snapshot);
-    }
-    if (state.activeTab === "settings") {
-      return renderSettingsPage();
-    }
-    return renderManagedPage("overview", snapshot, [
-      '<section class="admin-grid">',
-      renderAdminOverviewPanel(snapshot),
-      renderAdminMonitoringPanel(snapshot),
+  function consolePageNumber(key) {
+    var page = Number(((state.consolePages || {})[key]) || 1);
+    return Math.max(1, isFinite(page) ? Math.floor(page) : 1);
+  }
+
+  function consolePageSlice(items, key, pageSize) {
+    items = Array.isArray(items) ? items : [];
+    pageSize = Math.max(1, Number(pageSize || 8));
+    var totalPages = Math.max(1, Math.ceil(items.length / pageSize));
+    var page = Math.min(consolePageNumber(key), totalPages);
+    if (!state.consolePages) state.consolePages = {};
+    state.consolePages[key] = page;
+    return {
+      items: items.slice((page - 1) * pageSize, page * pageSize),
+      page: page,
+      total: items.length,
+      totalPages: totalPages
+    };
+  }
+
+  function renderConsolePager(key, pageInfo) {
+    if (!pageInfo || pageInfo.totalPages <= 1) return "";
+    return [
+      '<nav class="oa-pager" aria-label="목록 페이지">',
+      '<span>전체 ' + escapeHtml(pageInfo.total) + '건</span>',
+      '<div>',
+      '<button class="icon-button" type="button" data-console-page="' + escapeHtml(key) + '" data-console-page-value="' + escapeHtml(pageInfo.page - 1) + '"' + (pageInfo.page <= 1 ? ' disabled' : '') + ' title="이전 페이지" aria-label="이전 페이지">&larr;</button>',
+      '<strong>' + escapeHtml(pageInfo.page) + ' / ' + escapeHtml(pageInfo.totalPages) + '</strong>',
+      '<button class="icon-button" type="button" data-console-page="' + escapeHtml(key) + '" data-console-page-value="' + escapeHtml(pageInfo.page + 1) + '"' + (pageInfo.page >= pageInfo.totalPages ? ' disabled' : '') + ' title="다음 페이지" aria-label="다음 페이지">&rarr;</button>',
+      '</div>',
+      '</nav>'
+    ].join("");
+  }
+
+  function consoleToneRank(tone) {
+    return { danger: 5, caution: 4, watch: 3, hold: 2, muted: 1 }[String(tone || "hold")] || 0;
+  }
+
+  function consoleQualityMeta(value) {
+    var quality = String(value || "").toLowerCase();
+    if (["actual", "live", "fresh", "ok"].indexOf(quality) >= 0) return { label: "실데이터", tone: "watch" };
+    if (["cache", "cached", "stale"].indexOf(quality) >= 0) return { label: quality === "stale" ? "지연" : "캐시", tone: "caution" };
+    if (["mock", "demo"].indexOf(quality) >= 0) return { label: "데모", tone: "hold" };
+    if (["missing", "gap", "error", "failed"].indexOf(quality) >= 0) return { label: "부족", tone: "danger" };
+    return { label: value || "확인", tone: "hold" };
+  }
+
+  function renderConsoleMetricStrip(metrics) {
+    return [
+      '<section class="oa-metric-strip" aria-label="핵심 지표">',
+      (metrics || []).slice(0, 6).map(function (metric) {
+        return [
+          '<div class="oa-metric ' + escapeHtml(metric.tone || "neutral") + '">',
+          '<span>' + escapeHtml(metric.label || "-") + '</span>',
+          '<strong>' + escapeHtml(metric.value == null ? "-" : metric.value) + '</strong>',
+          '<em>' + escapeHtml(metric.detail || "") + '</em>',
+          '</div>'
+        ].join("");
+      }).join(""),
       '</section>'
+    ].join("");
+  }
+
+  function renderConsoleSurface(options) {
+    options = options || {};
+    return [
+      '<section class="oa-surface ' + escapeHtml(options.className || "") + '">',
+      '<header class="oa-surface-head">',
+      '<div>',
+      options.kicker ? '<span>' + escapeHtml(options.kicker) + '</span>' : '',
+      '<h2>' + escapeHtml(options.title || "") + '</h2>',
+      options.description ? '<p>' + escapeHtml(options.description) + '</p>' : '',
+      '</div>',
+      options.meta ? '<strong>' + escapeHtml(options.meta) + '</strong>' : '',
+      options.actions ? '<div class="oa-surface-actions">' + options.actions + '</div>' : '',
+      '</header>',
+      options.body || '',
+      options.footer || '',
+      '</section>'
+    ].join("");
+  }
+
+  function renderConsoleEmpty(title, description, action) {
+    return [
+      '<div class="oa-empty">',
+      '<strong>' + escapeHtml(title || "표시할 데이터가 없습니다") + '</strong>',
+      '<span>' + escapeHtml(description || "데이터가 수집되면 이 목록에 표시합니다.") + '</span>',
+      action || '',
+      '</div>'
+    ].join("");
+  }
+
+  function renderConsoleManagedPage(pageId, metrics, content) {
+    var structure = pageStructureMeta(pageId);
+    return [
+      '<div class="managed-page oa-console-page oa-console-page-' + escapeHtml(pageId) + '" data-console-workspace="' + escapeHtml(pageId) + '" data-structure-layer="' + escapeHtml(structure.layer) + '">',
+      renderConsoleMetricStrip(metrics),
+      content,
+      '</div>'
+    ].join("");
+  }
+
+  function selectConsolePortfolio(snapshot) {
+    snapshot = snapshot || {};
+    var portfolio = snapshot.portfolio || {};
+    var items = instrumentItems(snapshot);
+    var holdings = items.filter(function (item) { return String(item.source || "") !== "watchlist"; });
+    var pnl = holdings.reduce(function (sum, item) { return sum + numeric(item.profitLoss); }, 0);
+    var freshness = accountFreshness(snapshot);
+    return {
+      total: numeric(portfolio.total),
+      invested: numeric(portfolio.invested),
+      cash: numeric(portfolio.cash),
+      pnl: pnl,
+      holdingCount: holdings.length,
+      watchCount: items.length - holdings.length,
+      freshness: freshness,
+      holdings: holdings
+    };
+  }
+
+  function consoleResearchItems() {
+    var payload = currentResearchEvidence();
+    return Array.isArray(payload.items) ? payload.items : [];
+  }
+
+  function consoleEvidenceBySymbol() {
+    return consoleResearchItems().reduce(function (map, item, index) {
+      var symbol = String(item && item.symbol || "").toUpperCase();
+      if (!symbol) return map;
+      if (!map[symbol]) map[symbol] = [];
+      map[symbol].push(Object.assign({ consoleKey: feedEvidenceKey(item, index) }, item));
+      return map;
+    }, {});
+  }
+
+  function consoleDecisionBySymbol(snapshot) {
+    var analysis = investmentAnalysisModel(snapshot || {});
+    var rows = Array.isArray(analysis.actionQueue) ? analysis.actionQueue : [];
+    return rows.reduce(function (map, row, index) {
+      var symbol = String(row && row.symbol || "").toUpperCase();
+      if (symbol && !map[symbol]) map[symbol] = Object.assign({ consoleKey: investmentActionKey(row, index) }, row);
+      return map;
+    }, {});
+  }
+
+  function selectConsoleInstrumentRows(snapshot) {
+    var evidenceMap = consoleEvidenceBySymbol();
+    var decisionMap = consoleDecisionBySymbol(snapshot);
+    var accountId = String(((snapshot || {}).toss || {}).accountId || ((snapshot || {}).accountId || "default"));
+    return instrumentItems(snapshot || {}).map(function (item) {
+      var symbol = String(item.symbol || "").toUpperCase();
+      var evidence = evidenceMap[symbol] || [];
+      var decision = decisionMap[symbol] || null;
+      var signal = marketSignalForItem(item, parseMarketSignals());
+      var foreign = numeric(signal.foreignNet || item.foreignNet || item.foreignNetVolume);
+      var institution = numeric(signal.institutionNet || item.institutionNet || item.institutionNetVolume);
+      var quality = consoleQualityMeta(item.dataQuality || item.quoteStatus || (((snapshot || {}).toss || {}).mode));
+      var strongestEvidence = evidence.slice().sort(function (a, b) {
+        return Number((b.stockImpactScore != null ? b.stockImpactScore : b.impactScore) || 0) - Number((a.stockImpactScore != null ? a.stockImpactScore : a.impactScore) || 0);
+      })[0] || null;
+      var impact = strongestEvidence ? researchEvidenceImpactMeta(strongestEvidence) : { label: "근거 대기", tone: "hold" };
+      return {
+        key: [accountId, item.market || "-", symbol].join(":"),
+        symbol: symbol,
+        name: item.name || stockDisplayName(symbol, item),
+        source: item.source || "watchlist",
+        market: item.market || "-",
+        currency: item.currency || "",
+        currentPrice: currentPriceOf(item),
+        changeRate: numeric(item.changeRate || signal.priceChangeRate),
+        profitLossRate: numeric(item.profitLossRate),
+        foreignInstitutionNet: foreign + institution,
+        evidence: evidence,
+        evidenceCount: evidence.length,
+        impact: impact,
+        decision: decision,
+        quality: quality,
+        updatedAt: item.updatedAt || ((snapshot || {}).generatedAt || ""),
+        raw: item
+      };
+    }).sort(function (a, b) {
+      if (a.source !== b.source) return a.source === "watchlist" ? 1 : -1;
+      if (a.impact.tone !== b.impact.tone) return consoleToneRank(b.impact.tone) - consoleToneRank(a.impact.tone);
+      return Math.abs(b.profitLossRate) - Math.abs(a.profitLossRate);
+    });
+  }
+
+  function filteredConsoleInstrumentRows(snapshot) {
+    var query = String(state.consoleMarketSearch || "").trim().toLowerCase();
+    var scope = String(state.consoleMarketScope || "all");
+    return selectConsoleInstrumentRows(snapshot).filter(function (row) {
+      if (scope === "holding" && row.source === "watchlist") return false;
+      if (scope === "watchlist" && row.source !== "watchlist") return false;
+      if (!query) return true;
+      return [row.symbol, row.name, row.market, row.impact.label, row.decision && (row.decision.decision || row.decision.action)].filter(Boolean).join(" ").toLowerCase().indexOf(query) >= 0;
+    });
+  }
+
+  function selectConsoleDecisionRows(snapshot) {
+    var analysis = investmentAnalysisModel(snapshot || {});
+    var rows = Array.isArray(analysis.actionQueue) ? analysis.actionQueue : [];
+    return rows.map(function (row, index) {
+      var graph = row.graph || {};
+      var confidence = investmentActionConfidence(row);
+      var reasons = Array.isArray(row.reasons) ? row.reasons : [];
+      return {
+        key: investmentActionKey(row, index),
+        symbol: String(row.symbol || "").toUpperCase(),
+        name: row.name || stockDisplayName(row.symbol, row),
+        decision: row.decision || row.action || "검토",
+        tone: row.tone || "hold",
+        confidence: confidence,
+        reason: reasons[0] || graph.reason || "근거 확인 필요",
+        invalidation: investmentActionInvalidation(row),
+        quality: consoleQualityMeta(row.dataQuality || row.quality),
+        blocked: Boolean(graph.blocked),
+        score: Number(row.relationStrength || row.ontologyPressure || row.conviction || 0),
+        profitLossRate: numeric(row.profitLossRate),
+        raw: row
+      };
+    }).sort(function (a, b) {
+      if (a.blocked !== b.blocked) return a.blocked ? -1 : 1;
+      if (a.tone !== b.tone) return consoleToneRank(b.tone) - consoleToneRank(a.tone);
+      return b.score - a.score;
+    });
+  }
+
+  function selectConsoleAlertRows() {
+    return filteredNotificationJobs(state.notificationJobItems || []).map(function (job) {
+      var symbol = notificationJobResolvedSymbol(job);
+      var factors = notificationJobScoreFactors(job);
+      var movement = notificationJobScoreMovement(job);
+      var title = textWithKnownDisplaySymbols(job.title || "", symbol, job) || (symbol ? stockDisplayName(symbol, job) : notificationJobTypeLabel(notificationJobTypeKey(job), [job]));
+      return {
+        key: notificationJobKey(job),
+        time: job.createdAt,
+        symbol: symbol,
+        title: title,
+        type: notificationJobTypeLabel(notificationJobTypeKey(job), [job]),
+        movement: movement,
+        reason: (factors[0] || {}).label || (Array.isArray(job.honeyReasons) ? job.honeyReasons[0] : "") || job.suppressionSummary || job.textPreview || "발송 판단 기록",
+        status: notificationJobStatusLabel(job.status),
+        tone: notificationJobToneClass(job.status),
+        channel: job.channel || job.deliveryChannel || "Telegram",
+        raw: job
+      };
+    });
+  }
+
+  function selectConsoleValidationRows() {
+    return ontologyExperimentItems().map(function (experiment) {
+      var result = experiment.lastResult || {};
+      var warnings = Array.isArray(experiment.validationWarnings) ? experiment.validationWarnings : [];
+      return {
+        key: experiment.id || experiment.experimentId || experiment.title,
+        title: experiment.title || "규칙 실험",
+        status: experiment.status || "draft",
+        candidateCount: Array.isArray(experiment.candidateRules) ? experiment.candidateRules.length : 0,
+        relationDelta: Number(result.delta || result.relationDelta || result.derivedRelationDelta || 0),
+        score: Number(result.score || result.validationScore || 0),
+        warnings: warnings.length,
+        updatedAt: experiment.updatedAt || experiment.createdAt || "",
+        tone: warnings.length ? "caution" : (experiment.status === "active" ? "watch" : "hold"),
+        raw: experiment
+      };
+    }).sort(function (a, b) {
+      if (a.warnings !== b.warnings) return b.warnings - a.warnings;
+      return Date.parse(b.updatedAt || 0) - Date.parse(a.updatedAt || 0);
+    });
+  }
+
+  function selectConsoleTodayTasks(snapshot) {
+    var tasks = [];
+    selectConsoleDecisionRows(snapshot).slice(0, 8).forEach(function (row) {
+      tasks.push({
+        priority: row.tone === "danger" ? 1 : (row.tone === "caution" ? 2 : 3),
+        kind: "판단",
+        target: row.name || row.symbol,
+        reason: row.reason,
+        state: row.decision,
+        tone: row.tone,
+        action: "판단 상세",
+        detailType: "investment-action",
+        detailKey: row.key
+      });
+    });
+    (state.notificationJobItems || []).filter(function (job) {
+      return job.status === "failed" || job.status === "pending" || job.recoverableProcessing;
+    }).slice(0, 4).forEach(function (job) {
+      tasks.push({
+        priority: job.status === "failed" ? 1 : 2,
+        kind: "알림",
+        target: textWithKnownDisplaySymbols(job.title || notificationJobTypeLabel(job.messageType, [job]), notificationJobResolvedSymbol(job), job),
+        reason: job.lastError || job.suppressionSummary || "전달 상태 확인 필요",
+        state: notificationJobStatusLabel(job.status),
+        tone: notificationJobToneClass(job.status),
+        action: "알림 상세",
+        detailType: "notification-job",
+        detailKey: notificationJobKey(job)
+      });
+    });
+    investmentCalendarUpcomingEvents().slice(0, 4).forEach(function (event) {
+      tasks.push({
+        priority: Number(event.importance || 0) >= 80 ? 2 : 4,
+        kind: "일정",
+        target: event.title || "투자 이벤트",
+        reason: investmentCalendarImpactText(event),
+        state: formatClock(event.startsAt),
+        tone: Number(event.importance || 0) >= 80 ? "caution" : "hold",
+        action: "일정 상세",
+        detailType: "investment-calendar-event",
+        detailKey: event.eventId || event.id || event.title || ""
+      });
+    });
+    var toss = (snapshot || {}).toss || {};
+    if (toss.mode !== "live") {
+      tasks.push({
+        priority: 1,
+        kind: "데이터",
+        target: "Toss 계정 연결",
+        reason: toss.status || "실계좌 데이터 연결 상태를 확인해야 합니다.",
+        state: toss.mode || "unknown",
+        tone: "danger",
+        action: "연결 상세",
+        detailType: "account-connections-board",
+        detailKey: ""
+      });
+    }
+    return tasks.sort(function (a, b) {
+      if (a.priority !== b.priority) return a.priority - b.priority;
+      return consoleToneRank(b.tone) - consoleToneRank(a.tone);
+    });
+  }
+
+  function renderConsoleTaskRow(task) {
+    return [
+      '<button class="oa-work-row" type="button" data-work-detail="' + escapeHtml(task.detailType || "") + '" data-work-detail-key="' + escapeHtml(task.detailKey || "") + '">',
+      '<span class="oa-row-kind">' + escapeHtml(task.kind || "-") + '</span>',
+      '<span class="oa-row-main"><strong>' + escapeHtml(task.target || "-") + '</strong><em>' + escapeHtml(task.reason || "") + '</em></span>',
+      '<span class="tone-chip ' + escapeHtml(task.tone || "hold") + '">' + escapeHtml(task.state || "-") + '</span>',
+      '<span class="oa-row-action">' + escapeHtml(task.action || "상세") + ' &rarr;</span>',
+      '</button>'
+    ].join("");
+  }
+
+  function renderTodayConsole(snapshot) {
+    var portfolio = selectConsolePortfolio(snapshot);
+    var tasks = selectConsoleTodayTasks(snapshot);
+    var urgent = tasks.filter(function (task) { return task.priority <= 2; }).length;
+    var upcoming = investmentCalendarUpcomingEvents();
+    var riskHoldings = portfolio.holdings.slice().sort(function (a, b) {
+      return numeric(a.profitLossRate) - numeric(b.profitLossRate);
+    }).slice(0, 5);
+    var metrics = [
+      { label: "총 평가", value: formatMoney(portfolio.total), detail: portfolio.holdingCount + "개 보유" },
+      { label: "평가 손익", value: formatMoney(portfolio.pnl), detail: "현재 보유 기준", tone: portfolio.pnl < 0 ? "danger" : "watch" },
+      { label: "긴급 작업", value: urgent + "건", detail: "우선순위 1·2", tone: urgent ? "danger" : "watch" },
+      { label: "예정 일정", value: upcoming.length + "건", detail: upcoming[0] ? formatClock(upcoming[0].startsAt) : "일정 없음" },
+      { label: "데이터", value: portfolio.freshness.label, detail: portfolio.freshness.detail, tone: portfolio.freshness.tone }
+    ];
+    var taskBody = tasks.length ? '<div class="oa-work-list">' + tasks.slice(0, 8).map(renderConsoleTaskRow).join("") + '</div>' : renderConsoleEmpty("오늘 처리할 작업이 없습니다", "새 판단, 알림 실패, 예정 일정이 생기면 우선순위에 따라 표시합니다.");
+    var contextBody = [
+      '<div class="oa-context-list">',
+      riskHoldings.length ? riskHoldings.map(function (item) {
+        var tone = numeric(item.profitLossRate) < 0 ? "danger" : "watch";
+        return '<div class="oa-context-row"><span><strong>' + escapeHtml(stockDisplayName(item.symbol, item)) + '</strong><em>' + escapeHtml(item.symbol || "") + '</em></span><b class="' + escapeHtml(tone) + '">' + escapeHtml(signedPct(item.profitLossRate)) + '</b></div>';
+      }).join("") : '<div class="oa-context-row"><span><strong>보유 데이터 없음</strong><em>시장 화면에서 종목을 확인하세요.</em></span></div>',
+      '</div>',
+      upcoming[0] ? '<div class="oa-next-event"><span>다음 일정</span><strong>' + escapeHtml(upcoming[0].title || "투자 이벤트") + '</strong><em>' + escapeHtml(formatClock(upcoming[0].startsAt)) + '</em></div>' : '',
+    ].join("");
+    return renderConsoleManagedPage("overview", metrics, [
+      '<div class="oa-console-grid oa-console-grid-primary">',
+      renderConsoleSurface({ kicker: "PRIORITY QUEUE", title: "지금 처리할 일", description: "판단·알림·일정·데이터 이상을 한 큐로 정렬합니다.", meta: tasks.length + "건", body: taskBody }),
+      renderConsoleSurface({ kicker: "PORTFOLIO CONTEXT", title: "현재 노출", description: "상세 분석이 아니라 손익 위험과 다음 일정만 참조합니다.", body: contextBody }),
+      '</div>'
     ].join(""));
+  }
+
+  function renderMarketInstrumentRow(row) {
+    var flowTone = row.foreignInstitutionNet > 0 ? "watch" : (row.foreignInstitutionNet < 0 ? "danger" : "hold");
+    var changeTone = row.changeRate > 0 ? "watch" : (row.changeRate < 0 ? "danger" : "hold");
+    var decisionLabel = row.decision ? (row.decision.decision || row.decision.action || "판단 있음") : "판단 대기";
+    return [
+      '<button class="oa-data-row oa-market-row" type="button" data-work-detail="market-instrument" data-work-detail-key="' + escapeHtml(row.symbol) + '">',
+      '<span class="oa-symbol-cell"><strong>' + escapeHtml(row.name || row.symbol) + '</strong><em>' + escapeHtml([row.symbol, row.source === "watchlist" ? "관심" : "보유"].join(" · ")) + '</em></span>',
+      '<span><strong>' + escapeHtml(row.currentPrice ? formatPrice(row.currentPrice, row.currency) : "시세 대기") + '</strong><em class="' + escapeHtml(changeTone) + '">' + escapeHtml(signedPct(row.changeRate)) + '</em></span>',
+      '<span><strong class="' + escapeHtml(row.profitLossRate < 0 ? "danger" : "watch") + '">' + escapeHtml(row.source === "watchlist" ? "-" : signedPct(row.profitLossRate)) + '</strong><em>보유 손익</em></span>',
+      '<span><strong class="' + escapeHtml(flowTone) + '">' + escapeHtml(formatSignalVolume(row.foreignInstitutionNet)) + '</strong><em>외국인+기관</em></span>',
+      '<span><strong class="' + escapeHtml(row.impact.tone || "hold") + '">' + escapeHtml(row.impact.label || "근거 대기") + '</strong><em>근거 ' + escapeHtml(row.evidenceCount) + '건</em></span>',
+      '<span><strong>' + escapeHtml(decisionLabel) + '</strong><em class="' + escapeHtml(row.quality.tone) + '">' + escapeHtml(row.quality.label) + '</em></span>',
+      '<span class="oa-open-cell">상세 &rarr;</span>',
+      '</button>'
+    ].join("");
+  }
+
+  function renderMarketNewsRow(item, index) {
+    var key = feedEvidenceKey(item, index);
+    var impact = researchEvidenceImpactMeta(item);
+    var symbol = String(item.symbol || "").toUpperCase();
+    return [
+      '<button class="oa-news-row" type="button" data-work-detail="research-evidence" data-work-detail-key="' + escapeHtml(key) + '">',
+      '<span class="tone-chip ' + escapeHtml(impact.tone || "hold") + '">' + escapeHtml(impact.label || "중립") + '</span>',
+      '<span><strong>' + escapeHtml(item.title || "제목 없음") + '</strong><em>' + escapeHtml(researchEvidenceKoreanSummary(item)) + '</em></span>',
+      '<small>' + escapeHtml([stockDisplayName(symbol, item), item.source, formatFeedTime(item.publishedAt || item.observedAt)].filter(Boolean).join(" · ")) + '</small>',
+      '</button>'
+    ].join("");
+  }
+
+  function renderMarketConsole(snapshot) {
+    var rows = filteredConsoleInstrumentRows(snapshot);
+    var page = consolePageSlice(rows, "market", 8);
+    var evidence = consoleResearchItems().slice().sort(function (a, b) {
+      return Number((b.stockImpactScore != null ? b.stockImpactScore : b.impactScore) || 0) - Number((a.stockImpactScore != null ? a.stockImpactScore : a.impactScore) || 0);
+    });
+    var negative = evidence.filter(function (item) { return researchEvidenceImpactMeta(item).tone === "danger"; }).length;
+    var portfolio = selectConsolePortfolio(snapshot);
+    var metrics = [
+      { label: "보유 종목", value: portfolio.holdingCount + "개", detail: "계정 기준" },
+      { label: "관심 종목", value: portfolio.watchCount + "개", detail: "중복 제거" },
+      { label: "저장 근거", value: evidence.length + "건", detail: "뉴스·공시" },
+      { label: "주요 악재", value: negative + "건", detail: "영향 분석", tone: negative ? "danger" : "watch" },
+      { label: "시세 상태", value: portfolio.freshness.label, detail: portfolio.freshness.detail, tone: portfolio.freshness.tone }
+    ];
+    var toolbar = [
+      '<form class="oa-filter-bar" data-console-market-form>',
+      '<label><span>종목 검색</span><input type="search" data-console-market-search value="' + escapeHtml(state.consoleMarketSearch || "") + '" placeholder="종목명 또는 코드" /></label>',
+      '<label><span>범위</span><select data-console-market-scope><option value="all"' + (state.consoleMarketScope === "all" ? " selected" : "") + '>전체</option><option value="holding"' + (state.consoleMarketScope === "holding" ? " selected" : "") + '>보유</option><option value="watchlist"' + (state.consoleMarketScope === "watchlist" ? " selected" : "") + '>관심</option></select></label>',
+      '<button class="text-button primary compact" type="submit">적용</button>',
+      '</form>'
+    ].join("");
+    var table = page.items.length ? '<div class="oa-data-table"><div class="oa-table-head oa-market-row"><span>종목</span><span>현재가</span><span>손익</span><span>수급</span><span>뉴스 영향</span><span>판단·품질</span><span></span></div>' + page.items.map(renderMarketInstrumentRow).join("") + '</div>' : renderConsoleEmpty("조건에 맞는 종목이 없습니다", "검색어 또는 범위를 조정하세요.");
+    var news = evidence.length ? '<div class="oa-news-list">' + evidence.slice(0, 5).map(renderMarketNewsRow).join("") + '</div>' : renderConsoleEmpty("저장된 시장 근거가 없습니다", "뉴스 워커가 본문을 읽고 영향 분석을 완료하면 표시합니다.", renderWorkDetailButton("feed-source-board", "", "수집 상태", "text-button compact"));
+    return renderConsoleManagedPage("feed", metrics, [
+      toolbar,
+      '<div class="oa-console-grid oa-market-grid">',
+      renderConsoleSurface({ kicker: "INSTRUMENTS", title: "종목 통합 목록", description: "보유와 관심 종목을 하나의 canonical 행으로 봅니다.", meta: rows.length + "개", body: table, footer: renderConsolePager("market", page) }),
+      renderConsoleSurface({ kicker: "MARKET IMPACT", title: "영향 뉴스", description: "본문 대신 호재·악재와 한글 요약만 표시합니다.", actions: renderWorkDetailButton("feed-impact-board", "", "전체 뉴스", "text-button compact"), body: news }),
+      '</div>'
+    ].join(""));
+  }
+
+  function renderDecisionConsoleRow(row) {
+    return [
+      '<button class="oa-data-row oa-decision-row" type="button" data-work-detail="investment-action" data-work-detail-key="' + escapeHtml(row.key) + '">',
+      '<span class="oa-symbol-cell"><strong>' + escapeHtml(row.name || row.symbol) + '</strong><em>' + escapeHtml(row.symbol || "") + '</em></span>',
+      '<span><strong class="' + escapeHtml(row.tone) + '">' + escapeHtml(row.decision) + '</strong><em>' + escapeHtml(row.confidence.label) + '</em></span>',
+      '<span><strong>' + escapeHtml(row.score ? Math.round(row.score) + "점" : "점수 대기") + '</strong><em>' + escapeHtml(row.blocked ? "추론 차단" : "InferenceBox") + '</em></span>',
+      '<span class="oa-reason-cell"><strong>' + escapeHtml(row.reason) + '</strong><em>약화: ' + escapeHtml(row.invalidation) + '</em></span>',
+      '<span><strong class="' + escapeHtml(row.quality.tone) + '">' + escapeHtml(row.quality.label) + '</strong><em>손익 ' + escapeHtml(signedPct(row.profitLossRate)) + '</em></span>',
+      '<span class="oa-open-cell">근거 보기 &rarr;</span>',
+      '</button>'
+    ].join("");
+  }
+
+  function renderDecisionConsole(snapshot) {
+    var rows = selectConsoleDecisionRows(snapshot);
+    var blocked = rows.filter(function (row) { return row.blocked; });
+    var buy = rows.filter(function (row) { return /매수|추가/.test(row.decision); }).length;
+    var sell = rows.filter(function (row) { return /매도|축소|정리/.test(row.decision); }).length;
+    var metrics = [
+      { label: "판단 후보", value: rows.length + "건", detail: "현재 큐" },
+      { label: "매수 검토", value: buy + "건", detail: "조건 확인", tone: buy ? "watch" : "neutral" },
+      { label: "매도 검토", value: sell + "건", detail: "위험 관리", tone: sell ? "danger" : "neutral" },
+      { label: "추론 차단", value: blocked.length + "건", detail: "TypeDB 확인", tone: blocked.length ? "danger" : "watch" },
+      { label: "근거 준비", value: rows.filter(function (row) { return row.quality.tone === "watch"; }).length + "/" + rows.length, detail: "실데이터" }
+    ];
+    var table = rows.length ? '<div class="oa-data-table"><div class="oa-table-head oa-decision-row"><span>종목</span><span>행동</span><span>관계 점수</span><span>핵심 근거·약화 조건</span><span>데이터</span><span></span></div>' + rows.slice(0, 10).map(renderDecisionConsoleRow).join("") + '</div>' : renderConsoleEmpty("현재 판단 후보가 없습니다", "TypeDB InferenceBox와 투자 분석 데이터가 생성되면 종목별 행동 큐가 표시됩니다.", renderWorkDetailButton("strategy-trace-board", "", "추론 상태", "text-button compact"));
+    var blockers = blocked.length ? '<div class="oa-context-list">' + blocked.slice(0, 6).map(function (row) {
+      return '<button type="button" class="oa-context-row" data-work-detail="investment-action" data-work-detail-key="' + escapeHtml(row.key) + '"><span><strong>' + escapeHtml(row.name || row.symbol) + '</strong><em>' + escapeHtml(row.reason) + '</em></span><b class="danger">차단</b></button>';
+    }).join("") + '</div>' : renderConsoleEmpty("차단 요인이 없습니다", "그래프 추론과 데이터 품질 게이트가 통과된 상태입니다.");
+    return renderConsoleManagedPage("modeling", metrics, [
+      '<div class="oa-console-grid oa-decision-grid">',
+      renderConsoleSurface({ kicker: "ACTION QUEUE", title: "투자 행동 후보", description: "최종 행동과 가장 중요한 근거만 표시합니다.", meta: rows.length + "건", body: table }),
+      renderConsoleSurface({ kicker: "BLOCKERS", title: "실행 차단 요인", description: "상세 trace는 클릭 후 전체화면에서 확인합니다.", actions: renderWorkDetailButton("strategy-trace-board", "", "검증 전체", "text-button compact"), body: blockers }),
+      '</div>'
+    ].join(""));
+  }
+
+  function renderAlertConsoleRow(row) {
+    return [
+      '<button class="oa-data-row oa-alert-row" type="button" data-work-detail="notification-job" data-work-detail-key="' + escapeHtml(row.key) + '">',
+      '<span><strong>' + escapeHtml(formatClock(row.time)) + '</strong><em>' + escapeHtml(row.channel) + '</em></span>',
+      '<span class="oa-symbol-cell"><strong>' + escapeHtml(row.title) + '</strong><em>' + escapeHtml(row.type) + '</em></span>',
+      '<span><strong class="' + escapeHtml(row.movement.tone) + '">' + escapeHtml(row.movement.label) + '</strong><em>' + escapeHtml(row.movement.relation || "점수") + '</em></span>',
+      '<span class="oa-reason-cell"><strong>' + escapeHtml(row.reason) + '</strong><em>알림이 온 이유</em></span>',
+      '<span><strong class="' + escapeHtml(row.tone) + '">' + escapeHtml(row.status) + '</strong><em>발송 상태</em></span>',
+      '<span class="oa-open-cell">리포트 &rarr;</span>',
+      '</button>'
+    ].join("");
+  }
+
+  function renderAlertsConsole() {
+    var rows = selectConsoleAlertRows();
+    var page = consolePageSlice(rows, "alerts", 10);
+    var summary = state.notificationJobsSummary || state.realtime.notificationJobs || {};
+    var metrics = [
+      { label: "대기", value: Number(summary.pending || 0) + "건", detail: "발송 전" },
+      { label: "발송", value: Number(summary.done || 0) + "건", detail: "완료", tone: "watch" },
+      { label: "보류", value: Number(summary.suppressed || 0) + "건", detail: "게이트 적용", tone: Number(summary.suppressed || 0) ? "caution" : "neutral" },
+      { label: "실패", value: Number(summary.failed || 0) + "건", detail: "재시도 확인", tone: Number(summary.failed || 0) ? "danger" : "watch" },
+      { label: "활성 규칙", value: notificationPolicyCatalog().filter(function (rule) { return enabledAlertRule(alertRules(), rule.key); }).length + "개", detail: "투자·운영" }
+    ];
+    var toolbar = renderNotificationJobFilterToolbar(state.notificationJobItems || [], filteredNotificationJobs(state.notificationJobItems || []));
+    var table = page.items.length ? '<div class="oa-data-table"><div class="oa-table-head oa-alert-row"><span>시각</span><span>대상·유형</span><span>점수 변화</span><span>알림이 온 이유</span><span>상태</span><span></span></div>' + page.items.map(renderAlertConsoleRow).join("") + '</div>' : renderConsoleEmpty("조건에 맞는 알림이 없습니다", "검색어와 발송 상태를 조정하거나 알림 워커 상태를 확인하세요.", renderWorkDetailButton("notification-diagnostics-board", "", "알림 진단", "text-button compact"));
+    return renderConsoleManagedPage("notifications", metrics, [
+      renderConsoleSurface({ kicker: "DISPATCH LEDGER", title: "알림 판단 원장", description: "목록에는 점수 변화와 발송 이유만 남기고 전체 메시지는 상세에서 봅니다.", actions: renderWorkDetailButton("notification-policy-board", "", "알림 정책", "text-button compact"), body: toolbar + table, footer: renderConsolePager("alerts", page) })
+    ].join(""));
+  }
+
+  function renderValidationConsoleRow(row) {
+    return [
+      '<button class="oa-data-row oa-validation-row" type="button" data-work-detail="ontology-experiment" data-work-detail-key="' + escapeHtml(row.key) + '">',
+      '<span class="oa-symbol-cell"><strong>' + escapeHtml(row.title) + '</strong><em>' + escapeHtml(formatClock(row.updatedAt) || "실행 이력 없음") + '</em></span>',
+      '<span><strong class="' + escapeHtml(row.tone) + '">' + escapeHtml(row.status) + '</strong><em>실험 상태</em></span>',
+      '<span><strong>' + escapeHtml(row.candidateCount) + '개</strong><em>후보 규칙</em></span>',
+      '<span><strong class="' + escapeHtml(row.relationDelta < 0 ? "danger" : "watch") + '">' + escapeHtml((row.relationDelta > 0 ? "+" : "") + row.relationDelta) + '</strong><em>관계 변화</em></span>',
+      '<span><strong>' + escapeHtml(row.score || "-") + '</strong><em>검증 점수</em></span>',
+      '<span><strong class="' + escapeHtml(row.warnings ? "danger" : "watch") + '">' + escapeHtml(row.warnings) + '건</strong><em>구조 경고</em></span>',
+      '<span class="oa-open-cell">검증 상세 &rarr;</span>',
+      '</button>'
+    ].join("");
+  }
+
+  function renderValidationConsole(snapshot) {
+    var rows = selectConsoleValidationRows();
+    var page = consolePageSlice(rows, "validation", 8);
+    var parts = ontologyStrategyParts(snapshot || {});
+    var experimentPayload = ontologyExperimentPayload();
+    var warningCount = rows.reduce(function (sum, row) { return sum + row.warnings; }, 0);
+    var metrics = [
+      { label: "활성 실험", value: Number(experimentPayload.activeCount || rows.filter(function (row) { return row.status === "active"; }).length) + "개", detail: "샌드박스" },
+      { label: "검토 필요", value: rows.filter(function (row) { return row.warnings || row.status === "needs-review"; }).length + "건", detail: "승격 전", tone: warningCount ? "caution" : "watch" },
+      { label: "ABox", value: parts.aboxEntities.length + "개", detail: "현재 엔티티" },
+      { label: "관계", value: parts.aboxRelations.length + "개", detail: "TypeDB 투영" },
+      { label: "구조 경고", value: warningCount + "건", detail: "실험 합계", tone: warningCount ? "danger" : "watch" }
+    ];
+    var table = page.items.length ? '<div class="oa-data-table"><div class="oa-table-head oa-validation-row"><span>실험</span><span>상태</span><span>후보</span><span>관계 변화</span><span>점수</span><span>경고</span><span></span></div>' + page.items.map(renderValidationConsoleRow).join("") + '</div>' : renderConsoleEmpty("등록된 검증 실험이 없습니다", "AI 실험 제안 또는 새 후보 규칙을 만든 뒤 TypeDB에서 검증하세요.", renderWorkDetailButton("experiment-validation-board", "", "검증 워크벤치", "text-button compact"));
+    var graphBody = [
+      '<div class="oa-health-list">',
+      '<div><span>TypeDB ABox</span><strong>' + escapeHtml(parts.aboxEntities.length) + ' entities</strong></div>',
+      '<div><span>저장 관계</span><strong>' + escapeHtml(parts.aboxRelations.length) + ' relations</strong></div>',
+      '<div><span>근거</span><strong>' + escapeHtml(parts.evidence.length) + ' evidence</strong></div>',
+      '<div><span>의견</span><strong>' + escapeHtml(parts.opinions.length) + ' opinions</strong></div>',
+      '<div><span>추론 trace</span><strong>' + escapeHtml((parts.strategy.inferenceTraces || []).length || 0) + ' traces</strong></div>',
+      '</div>',
+      '<div class="oa-button-grid">',
+      renderWorkDetailButton("strategy-graphs-board", "", "온톨로지 전체", "text-button compact"),
+      renderWorkDetailButton("strategy-trace-board", "", "Inference trace", "text-button compact"),
+      renderWorkDetailButton("strategy-rulebox-editor", "", "RuleBox", "text-button compact"),
+      '</div>'
+    ].join("");
+    return renderConsoleManagedPage("experiments", metrics, [
+      '<div class="oa-console-grid oa-validation-grid">',
+      renderConsoleSurface({ kicker: "EXPERIMENTS", title: "검증 작업", description: "실험별 변화와 경고만 보고 상세 리플레이는 분리합니다.", meta: rows.length + "개", body: table, footer: renderConsolePager("validation", page) }),
+      renderConsoleSurface({ kicker: "TYPE DB", title: "온톨로지 상태", description: "구조 수치와 상세 진입점만 표시합니다.", body: graphBody }),
+      '</div>'
+    ].join(""));
+  }
+
+  function selectConsoleOperationSources(snapshot) {
+    var toss = (snapshot || {}).toss || {};
+    var parts = ontologyStrategyParts(snapshot || {});
+    var diagnostics = state.ontologyDiagnostics || {};
+    var researchCount = consoleResearchItems().length;
+    return [
+      { label: "Toss Open API", state: toss.mode === "live" ? "정상" : "확인", detail: toss.status || "계정 데이터", updatedAt: snapshot.generatedAt, tone: toss.mode === "live" ? "watch" : "danger", detailType: "account-connections-board" },
+      { label: "실시간 WebSocket", state: state.realtime.connected ? "연결" : "폴링", detail: state.realtime.lastEvent || "실시간 이벤트", updatedAt: state.realtime.lastEventAt, tone: state.realtime.connected ? "watch" : "caution", detailType: "notification-diagnostics-board" },
+      { label: "TypeDB InferenceBox", state: parts.aboxEntities.length ? "준비" : "확인", detail: diagnostics.reason || parts.strategy.reasoningMode || "그래프 추론", updatedAt: diagnostics.updatedAt || snapshot.generatedAt, tone: parts.aboxEntities.length ? "watch" : "danger", detailType: "strategy-trace-board" },
+      { label: "리서치 근거", state: researchCount ? "수집" : "대기", detail: researchCount + "건 저장", updatedAt: (currentResearchEvidence().summary || {}).latestSeenAt, tone: researchCount ? "watch" : "hold", detailType: "feed-source-board" },
+      { label: "운영 설정 DB", state: state.serverSettingsLoaded ? "연결" : "확인", detail: "MySQL 운영 설정", updatedAt: snapshot.generatedAt, tone: state.serverSettingsLoaded ? "watch" : "caution", detailType: "settings-runtime" }
+    ];
+  }
+
+  function renderOperationsConsole(snapshot) {
+    var accounts = serviceAccounts();
+    var activeAccounts = enabledServiceAccounts();
+    var sources = selectConsoleOperationSources(snapshot);
+    var failures = sources.filter(function (source) { return source.tone === "danger" || source.tone === "caution"; }).length;
+    var metrics = [
+      { label: "활성 계정", value: activeAccounts.length + "/" + accounts.length, detail: "서비스 계정" },
+      { label: "데이터 소스", value: sources.filter(function (source) { return source.tone === "watch"; }).length + "/" + sources.length, detail: "정상·준비" },
+      { label: "운영 이상", value: failures + "건", detail: "확인 필요", tone: failures ? "danger" : "watch" },
+      { label: "실시간", value: state.realtime.connected ? "연결" : "폴링", detail: "WebSocket", tone: state.realtime.connected ? "watch" : "caution" },
+      { label: "설정 상태", value: state.serverSettingsLoaded ? "로드됨" : "확인", detail: "MySQL", tone: state.serverSettingsLoaded ? "watch" : "caution" }
+    ];
+    var sourceList = '<div class="oa-operation-list">' + sources.map(function (source) {
+      return [
+        '<button type="button" class="oa-operation-row" data-work-detail="' + escapeHtml(source.detailType) + '" data-work-detail-key="">',
+        '<span><strong>' + escapeHtml(source.label) + '</strong><em>' + escapeHtml(source.detail) + '</em></span>',
+        '<span class="tone-chip ' + escapeHtml(source.tone) + '">' + escapeHtml(source.state) + '</span>',
+        '<small>' + escapeHtml(formatClock(source.updatedAt) || "시각 확인") + '</small>',
+        '<b>점검 &rarr;</b>',
+        '</button>'
+      ].join("");
+    }).join("") + '</div>';
+    var settings = [
+      ["계정·API", "계정 식별, Toss 인증, 알림 채널", "account-identity-board"],
+      ["자산 산식", "현금, 환율, 보유 원장 검증", "account-balance-board"],
+      ["알림 정책", "메시지 타입, 발송 게이트", "notification-policy-board"],
+      ["전달 채널", "Telegram, 링크, 저장 상태", "notification-delivery-settings"],
+      ["모델·RuleBox", "TypeDB 규칙과 모델 정책", "strategy-rulebox-editor"],
+      ["런타임 설정", "데이터 API와 로컬 환경", "settings-runtime"]
+    ];
+    var settingGrid = '<div class="oa-settings-list">' + settings.map(function (item) {
+      return '<button type="button" data-work-detail="' + escapeHtml(item[2]) + '" data-work-detail-key=""><span><strong>' + escapeHtml(item[0]) + '</strong><em>' + escapeHtml(item[1]) + '</em></span><b>&rarr;</b></button>';
+    }).join("") + '</div>';
+    return renderConsoleManagedPage("settings", metrics, [
+      '<div class="oa-console-grid oa-operations-grid">',
+      renderConsoleSurface({ kicker: "DATA SOURCES", title: "운영 상태", description: "평가액 대신 연결·신선도·실패 단계만 관리합니다.", body: sourceList }),
+      renderConsoleSurface({ kicker: "SETTINGS", title: "설정 카테고리", description: "설정 폼은 클릭 후 전체화면에서 편집합니다.", body: settingGrid }),
+      '</div>'
+    ].join(""));
+  }
+
+  function marketInstrumentWorkDetailPayload(key) {
+    var symbol = String(key || "").toUpperCase();
+    var row = selectConsoleInstrumentRows(state.snapshot || {}).filter(function (item) { return item.symbol === symbol; })[0];
+    if (!row) return null;
+    var signal = marketSignalForItem(row.raw || {}, parseMarketSignals());
+    var evidence = row.evidence || [];
+    return {
+      kicker: "Instrument Context",
+      title: row.name || row.symbol,
+      meta: [row.symbol, row.market, row.source === "watchlist" ? "관심" : "보유", formatClock(row.updatedAt)].filter(Boolean).join(" · "),
+      body: [
+        '<section class="work-detail-section"><div class="work-detail-metric-row">',
+        renderNotificationDetailMetric("현재가", row.currentPrice ? formatPrice(row.currentPrice, row.currency) : "대기", row.changeRate < 0 ? "danger" : "watch"),
+        renderNotificationDetailMetric("등락", signedPct(row.changeRate), row.changeRate < 0 ? "danger" : "watch"),
+        renderNotificationDetailMetric("보유 손익", row.source === "watchlist" ? "-" : signedPct(row.profitLossRate), row.profitLossRate < 0 ? "danger" : "watch"),
+        renderNotificationDetailMetric("외국인+기관", formatSignalVolume(row.foreignInstitutionNet), row.foreignInstitutionNet < 0 ? "danger" : "watch"),
+        renderNotificationDetailMetric("뉴스 근거", row.evidenceCount + "건", row.impact.tone),
+        renderNotificationDetailMetric("데이터", row.quality.label, row.quality.tone),
+        '</div></section>',
+        '<section class="work-detail-section primary"><strong>현재 상황</strong><p>' + escapeHtml([row.decision && (row.decision.decision || row.decision.action), row.impact.label, row.source === "watchlist" ? "관심 종목" : "보유 종목"].filter(Boolean).join(" · ") || "시장 데이터 확인") + '</p></section>',
+        '<section class="work-detail-section"><strong>가격·수급</strong><div class="work-detail-list">',
+        '<div class="work-detail-row"><b>가격</b><div><strong>' + escapeHtml(row.currentPrice ? formatPrice(row.currentPrice, row.currency) : "대기") + '</strong><span>등락 ' + escapeHtml(signedPct(row.changeRate)) + '</span></div><em>' + escapeHtml(formatClock(row.updatedAt)) + '</em></div>',
+        '<div class="work-detail-row"><b>수급</b><div><strong>외국인+기관 ' + escapeHtml(formatSignalVolume(row.foreignInstitutionNet)) + '</strong><span>거래량 비율 ' + escapeHtml(formatSignalRatio(signal.volumeRatio)) + '</span></div><em>' + escapeHtml(row.quality.label) + '</em></div>',
+        '</div></section>',
+        row.decision ? '<section class="work-detail-section"><strong>연결된 투자 판단</strong><p>' + escapeHtml((row.decision.reasons || [])[0] || row.decision.decision || row.decision.action || "판단 근거 확인") + '</p>' + renderWorkDetailButton("investment-action", row.decision.consoleKey, "판단 상세", "text-button primary compact") + '</section>' : '',
+        '<section class="work-detail-section"><strong>관련 뉴스</strong>',
+        evidence.length ? '<div class="work-detail-list">' + evidence.slice(0, 12).map(function (item) {
+          var impact = researchEvidenceImpactMeta(item);
+          return '<div class="work-detail-row"><span class="tone-chip ' + escapeHtml(impact.tone) + '">' + escapeHtml(impact.label) + '</span><div><strong>' + escapeHtml(item.title || "제목 없음") + '</strong><span>' + escapeHtml(researchEvidenceKoreanSummary(item)) + '</span></div>' + renderWorkDetailButton("research-evidence", item.consoleKey, "기사 분석", "mini-button") + '</div>';
+        }).join("") + '</div>' : '<p>연결된 뉴스 근거가 없습니다.</p>',
+        '</section>'
+      ].join("")
+    };
+  }
+
+  function renderActiveTab(snapshot) {
+    if (state.activeTab === "overview") return renderTodayConsole(snapshot);
+    if (state.activeTab === "feed") return renderMarketConsole(snapshot);
+    if (state.activeTab === "modeling") return renderDecisionConsole(snapshot);
+    if (state.activeTab === "notifications") return renderAlertsConsole();
+    if (state.activeTab === "experiments") return renderValidationConsole(snapshot);
+    if (state.activeTab === "settings") return renderOperationsConsole(snapshot);
+    return renderTodayConsole(snapshot);
   }
 
   function renderManagedPage(pageId, snapshot, content) {
@@ -10219,17 +11079,13 @@
   function renderOntologyExperimentSectionBar() {
     var activeId = normalizeExperimentSection(state.activeExperimentSection);
     return [
-      '<div class="strategy-section-bar ontology-experiment-section-bar">',
-      '<div class="strategy-section-tabs ontology-experiment-section-tabs" role="tablist" aria-label="전략 검증 섹션">',
-      experimentSections.map(function (item) {
-        var active = activeId === item.id;
-        return [
-          '<button type="button" role="tab" class="' + (active ? "active" : "") + '" data-lab-section="' + escapeHtml(item.id) + '"' + ontologyExperimentTooltipAttrs(ontologyExperimentSectionTooltip(item.id)) + (active ? ' aria-selected="true"' : ' aria-selected="false"') + '>',
-          '<strong>' + escapeHtml(item.label) + '</strong>',
-          '<span>' + escapeHtml(item.description) + '</span>',
-          '</button>'
-        ].join("");
-      }).join(""),
+      '<div class="strategy-section-bar ontology-experiment-section-bar experiment-drilldown-bar">',
+      '<div class="strategy-section-tabs ontology-experiment-section-tabs experiment-drilldown-rail" role="toolbar" aria-label="전략 검증 상세 보기">',
+      renderWorkDetailButton("experiment-validation-board", "", "검증", "text-button compact", ontologyExperimentTooltipAttrs(ontologyExperimentSectionTooltip("validation"))),
+      renderWorkDetailButton("experiment-promotion-board", "", "승격", "text-button compact", ontologyExperimentTooltipAttrs(ontologyExperimentSectionTooltip("promotion"))),
+      renderWorkDetailButton("experiment-audit-board", "", "이력", "text-button compact", ontologyExperimentTooltipAttrs(ontologyExperimentSectionTooltip("audit"))),
+      renderWorkDetailButton("experiment-proposals-board", "", "전략제안", "text-button compact", ontologyExperimentTooltipAttrs(ontologyExperimentSectionTooltip("proposals"))),
+      renderInfoIconButton("experiments", "전략 검증 탭의 단일 화면 운영 방식"),
       '</div>',
       '</div>'
     ].join("");
@@ -10238,6 +11094,15 @@
   function renderOntologyExperimentSectionContent(section, experiments) {
     section = normalizeExperimentSection(section);
     experiments = experiments || ontologyExperimentItems();
+    return [
+      '<div class="single-tab-console experiment-unified-console">',
+      renderOntologyExperimentOverviewPanel(),
+      renderOntologyExperimentPipelinePanel(),
+      renderOntologyExperimentLatestPanel(),
+      !experiments.length ? renderOntologyExperimentStarterPanel() : '',
+      renderOntologyExperimentListPanel({ selectable: true, compact: true }),
+      '</div>'
+    ].join("");
     if (section === "validation") {
       return [
         '<div class="ontology-experiment-workbench ontology-experiment-workbench-validation">',
@@ -11203,6 +12068,20 @@
   function renderStrategySectionBar() {
     var visibleSections = modeSectionsForPage("modeling", strategySections);
     var activeId = activeSectionForPageMode("modeling", strategySections, state.activeStrategySection);
+    if (activePageMode("modeling") !== "settings") {
+      return [
+        '<div class="strategy-section-bar strategy-drilldown-bar" data-section-mode="results">',
+        '<div class="strategy-section-tabs strategy-drilldown-rail" role="toolbar" aria-label="투자 판단 상세 보기">',
+        renderWorkDetailButton("strategy-evidence-board", "", "투자 근거", "text-button compact"),
+        renderWorkDetailButton("strategy-charts-board", "", "통합 차트", "text-button compact"),
+        renderWorkDetailButton("strategy-graphs-board", "", "온톨로지", "text-button compact"),
+        renderWorkDetailButton("strategy-proposals-board", "", "전략 제안", "text-button compact"),
+        renderWorkDetailButton("strategy-trace-board", "", "검증·리뷰", "text-button compact"),
+        renderInfoIconButton("modeling", "투자 판단 탭의 단일 화면 운영 방식"),
+        '</div>',
+        '</div>'
+      ].join("");
+    }
     return [
       '<div class="strategy-section-bar" data-section-mode="' + escapeHtml(activePageMode("modeling")) + '">',
       '<div class="strategy-section-tabs" role="tablist" aria-label="투자 판단 섹션">',
@@ -13739,6 +14618,9 @@
   function renderStrategySectionContent(snapshot) {
     var section = activeSectionForPageMode("modeling", strategySections, normalizeStrategySection(state.activeStrategySection));
     var parts = ontologyStrategyParts(snapshot);
+    if (activePageMode("modeling") !== "settings") {
+      return renderStrategyUnifiedConsole(snapshot, parts);
+    }
     if (section === "evidence") {
       return renderInvestmentTabWorkspace("evidence", [
         { role: "main", html: renderInvestmentEvidenceWorkbenchPanel(snapshot) },
@@ -13778,6 +14660,15 @@
       { role: "summary", html: renderInvestmentTodayStatusPanel(snapshot, parts) },
       { role: "main", html: renderInvestmentTodayActionBoardPanel(snapshot) },
       { role: "side", html: renderInvestmentTodaySelectedPanel(snapshot) },
+      { role: "blockers", html: renderInvestmentTodayBlockersPanel(snapshot) }
+    ]);
+  }
+
+  function renderStrategyUnifiedConsole(snapshot, parts) {
+    return renderInvestmentTabWorkspace("overview strategy-unified-console", [
+      { role: "summary", html: renderInvestmentTodayStatusPanel(snapshot, parts) },
+      { role: "main", html: renderInvestmentTodayActionBoardPanel(snapshot) },
+      { role: "side", html: renderInvestmentTodaySelectedPanel(snapshot) + renderStrategyDataPanel(snapshot) },
       { role: "blockers", html: renderInvestmentTodayBlockersPanel(snapshot) }
     ]);
   }
@@ -15075,6 +15966,23 @@
   function renderAccountSectionBar() {
     var visibleSections = modeSectionsForPage("accounts", accountSections);
     var activeId = activeSectionForPageMode("accounts", accountSections, state.activeAccountSection);
+    if (activePageMode("accounts") !== "settings") {
+      return [
+        '<div class="account-section-bar account-drilldown-bar" data-section-mode="results">',
+        '<div class="account-section-tabs account-drilldown-rail" role="toolbar" aria-label="계정 상세 보기">',
+        renderWorkDetailButton("account-connections-board", "", "연결", "text-button compact"),
+        renderWorkDetailButton("account-balance-board", "", "자산 검증", "text-button compact"),
+        renderWorkDetailButton("account-history-board", "", "데이터 이력", "text-button compact"),
+        renderWorkDetailButton("account-identity-board", "", "계정 설정", "text-button compact"),
+        renderInfoIconButton("accounts", "계정·연결 탭의 단일 화면 운영 방식"),
+        '</div>',
+        '<div class="account-section-actions">',
+        '<button class="text-button" data-action="refresh">데이터 새로고침</button>',
+        '<button class="text-button" data-page-mode-page="accounts" data-page-mode="settings">계정 관리</button>',
+        '</div>',
+        '</div>'
+      ].join("");
+    }
     return [
       '<div class="account-section-bar" data-section-mode="' + escapeHtml(activePageMode("accounts")) + '">',
       '<div class="account-section-tabs" role="tablist" aria-label="계정 섹션">',
@@ -15100,11 +16008,22 @@
 
   function renderAccountSectionContent(snapshot) {
     var section = activeSectionForPageMode("accounts", accountSections, normalizeAccountSection(state.activeAccountSection));
+    if (activePageMode("accounts") !== "settings") return renderAccountUnifiedConsole(snapshot);
     if (section === "connections") return renderAccountConnectionsPanel(snapshot);
     if (section === "balance") return renderAccountBalancePanel(snapshot);
     if (section === "history") return renderAccountDataHistoryPanel(snapshot);
     if (section === "identity") return renderAdminAccountPanel();
     return renderAccountCommandCenter(snapshot);
+  }
+
+  function renderAccountUnifiedConsole(snapshot) {
+    return [
+      '<div class="single-tab-console account-unified-console">',
+      renderAccountCommandCenter(snapshot),
+      renderAccountConnectionsPanel(snapshot),
+      renderAccountBalancePanel(snapshot),
+      '</div>'
+    ].join("");
   }
 
   function renderAccountConnectionsPanel(snapshot) {
@@ -15372,6 +16291,23 @@
   function renderNotificationSectionBar() {
     var visibleSections = modeSectionsForPage("notifications", notificationSections);
     var activeId = activeSectionForPageMode("notifications", notificationSections, state.activeNotificationSection);
+    if (activePageMode("notifications") !== "settings") {
+      return [
+        '<div class="notification-section-bar notification-drilldown-bar" data-section-mode="results">',
+        '<div class="notification-section-tabs notification-drilldown-rail" role="toolbar" aria-label="알림 상세 보기">',
+        renderWorkDetailButton("notification-candidates-board", "", "후보 신호", "text-button compact"),
+        renderWorkDetailButton("notification-diagnostics-board", "", "진단", "text-button compact"),
+        renderWorkDetailButton("notification-policy-board", "", "정책", "text-button compact"),
+        renderWorkDetailButton("notification-templates-board", "", "템플릿", "text-button compact"),
+        renderInfoIconButton("notifications", "알림 운영 탭의 단일 화면 운영 방식"),
+        '</div>',
+        '<div class="notification-section-actions">',
+        '<button class="text-button" data-action="refresh-notification-jobs"' + (state.notificationJobsLoading ? ' disabled' : '') + '>판단 새로고침</button>',
+        '<button class="text-button" data-page-mode-page="notifications" data-page-mode="settings">알림 설정</button>',
+        '</div>',
+        '</div>'
+      ].join("");
+    }
     return [
       '<div class="notification-section-bar" data-section-mode="' + escapeHtml(activePageMode("notifications")) + '">',
       '<div class="notification-section-tabs" role="tablist" aria-label="알림 설정 섹션">',
@@ -15451,11 +16387,21 @@
 
   function renderNotificationSectionContent() {
     var section = activeSectionForPageMode("notifications", notificationSections, normalizeNotificationSection(state.activeNotificationSection));
+    if (activePageMode("notifications") !== "settings") return renderNotificationUnifiedConsole();
     if (section === "candidates") return renderNotificationCandidatePanel(state.snapshot || {});
     if (section === "policy") return renderAdminMessagePanel();
     if (section === "templates") return renderNotificationTemplateManagerPanel();
     if (section === "diagnostics") return renderNotificationDiagnosticsPanel();
     return renderNotificationDecisionPanel();
+  }
+
+  function renderNotificationUnifiedConsole() {
+    return [
+      '<div class="single-tab-console notification-unified-console">',
+      renderNotificationDecisionPanel(),
+      renderNotificationDiagnosticsSummaryPanel(),
+      '</div>'
+    ].join("");
   }
 
   function renderNotificationCandidatePanel(snapshot) {
@@ -16118,6 +17064,44 @@
     };
   }
 
+  function notificationJobResearchEvidence(job) {
+    var symbol = notificationJobResolvedSymbol(job);
+    if (!symbol) return [];
+    return consoleResearchItems().map(function (item, index) {
+      return { item: item, key: feedEvidenceKey(item, index) };
+    }).filter(function (entry) {
+      return String((entry.item || {}).symbol || "").toUpperCase() === symbol;
+    }).sort(function (a, b) {
+      return Date.parse((b.item || {}).publishedAt || (b.item || {}).observedAt || 0)
+        - Date.parse((a.item || {}).publishedAt || (a.item || {}).observedAt || 0);
+    }).slice(0, 12);
+  }
+
+  function renderNotificationJobResearchEvidence(job) {
+    var entries = notificationJobResearchEvidence(job);
+    if (!entries.length) return "";
+    return [
+      '<section class="notification-detail-section notification-source-section">',
+      '<strong>원문/출처</strong>',
+      '<p>기사 본문을 읽고 정리한 한글 요약과 주가 영향을 표시합니다.</p>',
+      '<div class="work-detail-list">',
+      entries.map(function (entry) {
+        var item = entry.item || {};
+        var impact = researchEvidenceImpactMeta(item);
+        var source = feedEvidenceDataMeta(item);
+        return [
+          '<div class="work-detail-row">',
+          '<span class="tone-chip ' + escapeHtml(impact.tone || "hold") + '">' + escapeHtml(impact.label || "중립") + '</span>',
+          '<div><strong>' + escapeHtml(item.title || "제목 없음") + '</strong><span>' + escapeHtml(researchEvidenceKoreanSummary(item)) + '</span><em>' + escapeHtml([source.source, formatFeedTime(item.publishedAt || item.observedAt)].filter(Boolean).join(" · ")) + '</em></div>',
+          renderWorkDetailButton("research-evidence", entry.key, "기사 분석", "mini-button"),
+          '</div>'
+        ].join("");
+      }).join(""),
+      '</div>',
+      '</section>'
+    ].join("");
+  }
+
   function renderNotificationDecisionDetail(job, options) {
     if (!job) {
       return renderEmptyState({
@@ -16181,6 +17165,7 @@
       detailButton,
       !compact && payload.fullText && payload.fullText !== payload.preview ? '<section class="notification-detail-section"><strong>전체 메시지</strong><pre class="notification-full-message">' + escapeHtml(payload.fullText) + '</pre></section>' : '',
       !compact && fingerprint ? '<section class="notification-detail-section"><strong>중복 판단 키</strong><code class="notification-fingerprint">' + escapeHtml(fingerprint) + '</code></section>' : '',
+      !compact ? renderNotificationJobResearchEvidence(job) : '',
       '</aside>'
     ].join("");
   }
@@ -22127,6 +23112,29 @@
       });
     });
 
+    Array.prototype.slice.call(app.querySelectorAll("[data-console-page]")).forEach(function (button) {
+      button.addEventListener("click", function () {
+        var key = button.getAttribute("data-console-page") || "";
+        var value = Math.max(1, Number(button.getAttribute("data-console-page-value") || 1));
+        if (!key) return;
+        if (!state.consolePages) state.consolePages = {};
+        state.consolePages[key] = value;
+        render();
+      });
+    });
+
+    Array.prototype.slice.call(app.querySelectorAll("[data-console-market-form]")).forEach(function (form) {
+      form.addEventListener("submit", function (event) {
+        event.preventDefault();
+        var search = form.querySelector("[data-console-market-search]");
+        var scope = form.querySelector("[data-console-market-scope]");
+        state.consoleMarketSearch = search ? search.value : "";
+        state.consoleMarketScope = scope ? scope.value : "all";
+        state.consolePages.market = 1;
+        render();
+      });
+    });
+
     Array.prototype.slice.call(app.querySelectorAll("[data-feed-detail-toggle]")).forEach(function (button) {
       button.addEventListener("click", function () {
         var key = button.getAttribute("data-feed-detail-toggle") || "";
@@ -23151,6 +24159,7 @@
         event.preventDefault();
         var field = form.querySelector("[data-notification-job-search]");
         state.notificationJobSearch = field ? field.value : state.notificationJobSearch;
+        state.consolePages.alerts = 1;
         render();
       });
     });
@@ -23160,6 +24169,7 @@
         var filter = field.getAttribute("data-notification-job-filter");
         if (filter === "status") state.notificationJobStatusFilter = field.value || "all";
         if (filter === "messageType") state.notificationJobTypeFilter = field.value || "all";
+        state.consolePages.alerts = 1;
         render();
       });
     });
@@ -23170,6 +24180,7 @@
         state.notificationJobSearch = "";
         state.notificationJobStatusFilter = "all";
         state.notificationJobTypeFilter = "all";
+        state.consolePages.alerts = 1;
         render();
         showSnackbar("알림 검색 조건을 초기화했습니다.");
       });

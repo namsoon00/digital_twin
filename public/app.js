@@ -450,6 +450,8 @@
     activeInvestmentEvidenceKey: "",
     activeInvestmentGraphLayer: initialInvestmentGraphLayer(),
     activeOntologyWorldLens: initialOntologyWorldLens(),
+    activeOntologyWorldFocusId: initialOntologyWorldFocusId(),
+    activeOntologyWorldDepth: initialOntologyWorldDepth(),
     activeOntologyWorldNodeId: "",
     activeOntologySection: initialOntologySection(),
     activeNotificationMessageType: "investmentInsight",
@@ -1058,6 +1060,18 @@
     return normalizeOntologyWorldLens(params.get("ontologyLens") || params.get("worldLens"));
   }
 
+  function initialOntologyWorldFocusId() {
+    var params = new URLSearchParams(window.location.search);
+    var requested = String(params.get("ontologyFocus") || params.get("worldFocus") || "").trim();
+    if (!requested) return "";
+    return requested.indexOf("stock:") === 0 ? requested : "stock:" + requested.toUpperCase();
+  }
+
+  function initialOntologyWorldDepth() {
+    var params = new URLSearchParams(window.location.search);
+    return normalizeOntologyWorldDepth(params.get("ontologyDepth") || params.get("worldDepth"));
+  }
+
   function initialOntologySection() {
     var params = new URLSearchParams(window.location.search);
     return normalizeOntologySection(params.get("ontology"));
@@ -1253,6 +1267,10 @@
     return ["reality", "portfolio", "risk", "inference", "evidence"].indexOf(requested) >= 0 ? requested : "reality";
   }
 
+  function normalizeOntologyWorldDepth(value) {
+    return Number(value) === 1 ? 1 : 2;
+  }
+
   function normalizeOntologySection(value) {
     var requested = String(value || "").toLowerCase();
     if (requested === "graph") return "graphs";
@@ -1295,10 +1313,10 @@
       var lens = ontologyWorldLensDefinition(state.activeOntologyWorldLens);
       return {
         title: lens.title,
-        eyebrow: "Reality Graph",
+        eyebrow: "Decision Topology",
         description: lens.description,
-        fitLabel: "현재 세계 그래프 맞춤",
-        layoutLabel: "현재 세계 그래프 자동 배치"
+        fitLabel: "의사결정 지도 맞춤",
+        layoutLabel: "의미 계층 배치 초기화"
       };
     }
     if (normalized === "decision-chain") {
@@ -15388,6 +15406,10 @@
     }
     var lensId = normalizeOntologyWorldLens(state.activeOntologyWorldLens);
     state.activeOntologyWorldLens = lensId;
+    state.activeOntologyWorldDepth = normalizeOntologyWorldDepth(state.activeOntologyWorldDepth);
+    var focusItems = ontologyWorldFocusItems(parts, snapshot);
+    var focusId = ontologyResolveWorldFocusId(parts, snapshot, focusItems);
+    state.activeOntologyWorldFocusId = focusId;
     var lens = ontologyWorldLensDefinition(lensId);
     var graph = ontologyBuildWorldGraph(parts, snapshot, lensId);
     var summary = ontologyWorldSummary(parts, graph);
@@ -15396,13 +15418,13 @@
       '<header class="ontology-world-command">',
       '<div>',
       '<p class="label">Reality Intelligence</p>',
-      '<h2>시장 관계 지도</h2>',
-      '<p>계좌, 종목, 시장 사건, 근거와 TypeDB 추론을 현재 시점의 한 세계 모델로 읽습니다.</p>',
+      '<h2>실세계 의사결정 지도</h2>',
+      '<p>선택 종목의 실데이터가 근거와 규칙을 거쳐 판단으로 이어지는 경로를 추적합니다.</p>',
       '</div>',
       '<span class="ontology-world-asof">기준 ' + escapeHtml(formatClock(snapshot.generatedAt)) + '</span>',
       '</header>',
       renderOntologyWorldMetrics(summary),
-      '<nav class="ontology-world-lenses" aria-label="시장 관계 지도 렌즈">',
+      '<nav class="ontology-world-lenses" aria-label="실세계 의사결정 지도 렌즈">',
       ontologyWorldLensItems(parts, snapshot).map(function (item) {
         var active = item.id === lensId;
         return '<button type="button" class="' + (active ? 'active' : '') + '" data-ontology-world-lens="' + escapeHtml(item.id) + '" aria-pressed="' + (active ? 'true' : 'false') + '"><strong>' + escapeHtml(item.label) + '</strong><span>' + escapeHtml(item.count) + '</span></button>';
@@ -15411,15 +15433,21 @@
       '<section class="ontology-world-stage">',
       '<div class="ontology-world-stage-head">',
       '<div><span>' + escapeHtml(lens.eyebrow) + '</span><strong>' + escapeHtml(lens.title) + '</strong><p>' + escapeHtml(lens.description) + '</p></div>',
+      '<div class="ontology-world-stage-controls">',
+      '<label class="ontology-world-focus"><span>중심 종목</span><select data-ontology-world-focus aria-label="온톨로지 그래프 중심 종목">',
+      focusItems.map(function (item) { return '<option value="' + escapeHtml(item.id) + '"' + (item.id === focusId ? ' selected' : '') + '>' + escapeHtml(item.label) + '</option>'; }).join(""),
+      '</select></label>',
+      '<div class="ontology-world-depth" role="group" aria-label="관계 탐색 깊이"><span>관계 범위</span><div><button type="button" data-ontology-world-depth="1" class="' + (state.activeOntologyWorldDepth === 1 ? 'active' : '') + '" aria-pressed="' + (state.activeOntologyWorldDepth === 1 ? 'true' : 'false') + '">1단계</button><button type="button" data-ontology-world-depth="2" class="' + (state.activeOntologyWorldDepth === 2 ? 'active' : '') + '" aria-pressed="' + (state.activeOntologyWorldDepth === 2 ? 'true' : 'false') + '">2단계</button></div></div>',
       '<div class="ontology-world-stage-actions">',
-      '<span>' + escapeHtml(Object.keys(graph.nodesById || {}).length) + ' nodes · ' + escapeHtml((graph.edges || []).length) + ' relations</span>',
       '<button class="icon-button" type="button" data-ontology-graph-expand="world" title="그래프 전체 화면" aria-label="그래프 전체 화면">⤢</button>',
       '<button class="icon-button" type="button" data-ontology-graph-fit="world" title="그래프 화면 맞춤" aria-label="그래프 화면 맞춤">⌖</button>',
-      '<button class="icon-button" type="button" data-ontology-graph-layout="world" title="그래프 자동 배치" aria-label="그래프 자동 배치">↺</button>',
+      '<button class="icon-button" type="button" data-ontology-graph-layout="world" title="의미 계층 배치 초기화" aria-label="의미 계층 배치 초기화">↺</button>',
       '</div>',
       '</div>',
-      '<div class="ontology-world-legend" aria-label="그래프 범례"><span data-kind="fact">확인된 사실</span><span data-kind="inference">추론 관계</span><span data-kind="risk">위험·결측</span><span data-kind="selection">선택 대상</span></div>',
-      '<div class="ontology-cytoscape ontology-world-cytoscape" data-ontology-cytoscape="world"><span>실세계 그래프를 구성하는 중</span></div>',
+      '</div>',
+      '<div class="ontology-world-legend" aria-label="그래프 범례"><span data-kind="fact">확인된 사실</span><span data-kind="inference">규칙·추론</span><span data-kind="risk">위험·결측</span><span data-kind="selection">중심 종목</span><em>' + escapeHtml(Object.keys(graph.nodesById || {}).length) + ' nodes · ' + escapeHtml((graph.edges || []).length) + ' relations</em></div>',
+      renderOntologyWorldLaneHeaders(graph),
+      '<div class="ontology-world-graph-shell"><div class="ontology-world-lane-grid" aria-hidden="true"><i></i><i></i><i></i><i></i><i></i></div><div class="ontology-cytoscape ontology-world-cytoscape" data-ontology-cytoscape="world"><span>의사결정 토폴로지를 구성하는 중</span></div></div>',
       '</section>',
       renderOntologyWorldNodeInspector(parts, snapshot, graph),
       renderOntologyWorldCausalPath(parts, snapshot),
@@ -15439,7 +15467,7 @@
   function renderOntologyWorldLoadingState(snapshot) {
     return [
       '<article class="investment-ontology-world ontology-world-loading" aria-busy="true">',
-      '<header class="ontology-world-command"><div><p class="label">Reality Intelligence</p><h2>시장 관계 지도</h2><p>온톨로지 상세 데이터를 동기화하고 있습니다.</p></div><span class="ontology-world-asof">기준 ' + escapeHtml(formatClock(snapshot.generatedAt)) + '</span></header>',
+      '<header class="ontology-world-command"><div><p class="label">Reality Intelligence</p><h2>실세계 의사결정 지도</h2><p>온톨로지 상세 데이터를 동기화하고 있습니다.</p></div><span class="ontology-world-asof">기준 ' + escapeHtml(formatClock(snapshot.generatedAt)) + '</span></header>',
       '<div class="ontology-world-loading-metrics" aria-hidden="true"><span></span><span></span><span></span><span></span><span></span></div>',
       '<section class="ontology-world-loading-stage" aria-label="실세계 그래프 로딩 중">',
       '<div><span></span><strong></strong><em></em></div>',
@@ -15452,7 +15480,7 @@
   function ontologyWorldLensDefinition(value) {
     var id = normalizeOntologyWorldLens(value);
     var definitions = {
-      reality: { id: "reality", label: "전체 세계", eyebrow: "Current Reality", title: "현재 세계 그래프", description: "실계좌 사실과 시장 관계, 근거, 추론 결과를 연결한 현재 상태입니다." },
+      reality: { id: "reality", label: "전체 흐름", eyebrow: "Decision Topology", title: "실세계 의사결정 토폴로지", description: "실데이터에서 판단과 알림까지 이어지는 현재 종목의 의미 경로를 봅니다." },
       portfolio: { id: "portfolio", label: "포트폴리오", eyebrow: "Portfolio Exposure", title: "보유·관심·노출 관계", description: "계좌에서 종목, 업종, 시장, 환율과 금리로 이어지는 실제 노출만 봅니다." },
       risk: { id: "risk", label: "위험", eyebrow: "Risk Transmission", title: "위험 전이 지도", description: "손실, 추세 이탈, 데이터 결측과 알림 후보가 어디에서 시작되는지 추적합니다." },
       inference: { id: "inference", label: "추론", eyebrow: "Inference Path", title: "TypeDB 추론 지도", description: "근거가 RuleBox와 InferenceBox를 거쳐 투자 의견으로 파생되는 경로입니다." },
@@ -15467,6 +15495,69 @@
       var graph = ontologyBuildWorldGraph(parts, snapshot, id);
       return Object.assign({}, definition, { count: Object.keys(graph.nodesById || {}).length });
     });
+  }
+
+  function ontologyWorldFocusItems(parts, snapshot) {
+    parts = parts || {};
+    var rows = [];
+    var seen = {};
+    var activeSymbols = ontologyDecisionChainRows(parts, snapshot || state.snapshot || {}).map(function (item) {
+      return String(item && item.symbol || "").toUpperCase();
+    }).filter(Boolean);
+    (parts.aboxEntities || []).forEach(function (entity) {
+      if (String(entity && entity.kind || "") !== "stock") return;
+      var properties = entity.properties || {};
+      var symbol = String(properties.symbol || ontologyAboxSymbolFromId(entity.id) || "").toUpperCase();
+      var id = String(entity.id || (symbol ? "stock:" + symbol : ""));
+      if (!id || seen[id]) return;
+      seen[id] = true;
+      rows.push({ id: id, symbol: symbol, label: ontologyEntityGraphLabel(entity) + (symbol ? " · " + symbol : "") });
+    });
+    (parts.opinions || []).forEach(function (opinion) {
+      var symbol = String(opinion && opinion.symbol || "").toUpperCase();
+      var id = symbol ? "stock:" + symbol : "";
+      if (!id || seen[id]) return;
+      seen[id] = true;
+      rows.push({ id: id, symbol: symbol, label: stockDisplayName(symbol) + " · " + symbol });
+    });
+    return rows.sort(function (a, b) {
+      var activeA = activeSymbols.indexOf(a.symbol);
+      var activeB = activeSymbols.indexOf(b.symbol);
+      if (activeA >= 0 || activeB >= 0) {
+        if (activeA < 0) return 1;
+        if (activeB < 0) return -1;
+        if (activeA !== activeB) return activeA - activeB;
+      }
+      return String(a.label).localeCompare(String(b.label));
+    });
+  }
+
+  function ontologyResolveWorldFocusId(parts, snapshot, items) {
+    var rows = items || ontologyWorldFocusItems(parts, snapshot);
+    var requested = String(state.activeOntologyWorldFocusId || "");
+    if (rows.some(function (item) { return item.id === requested; })) return requested;
+    var activeChain = ontologyDecisionChainActiveRow(ontologyDecisionChainRows(parts || {}, snapshot || state.snapshot || {}));
+    var activeId = activeChain && activeChain.symbol ? "stock:" + String(activeChain.symbol).toUpperCase() : "";
+    if (activeId && rows.some(function (item) { return item.id === activeId; })) return activeId;
+    return rows.length ? rows[0].id : "";
+  }
+
+  function renderOntologyWorldLaneHeaders(graph) {
+    var counts = {};
+    Object.keys((graph || {}).nodesById || {}).forEach(function (id) {
+      var lane = String(graph.nodesById[id].lane || "reality");
+      counts[lane] = Number(counts[lane] || 0) + 1;
+    });
+    var lanes = [
+      ["reality", "01", "실세계", "계좌·시장"],
+      ["evidence", "02", "관측·근거", "데이터·출처"],
+      ["rule", "03", "규칙·정책", "RuleBox"],
+      ["inference", "04", "추론·위험", "InferenceBox"],
+      ["decision", "05", "판단·실행", "의견·알림"]
+    ];
+    return '<div class="ontology-world-lane-heads" aria-label="온톨로지 의미 계층">' + lanes.map(function (lane) {
+      return '<div data-lane="' + lane[0] + '"><span>' + lane[1] + '</span><strong>' + lane[2] + '</strong><em>' + lane[3] + ' · ' + Number(counts[lane[0]] || 0) + '</em></div>';
+    }).join("") + '</div>';
   }
 
   function ontologyWorldQualityNodes(parts) {
@@ -19308,10 +19399,10 @@
 
   function ontologyWorldLensNodeKinds(lensId) {
     var map = {
-      portfolio: ["portfolio", "stock", "sector", "market", "cash", "currency", "fx-pair", "fx-rate", "interest-rate", "yield-curve"],
-      risk: ["risk", "missing-data", "temporal-coverage-gap", "data-quality", "data-freshness", "source-reliability", "fact-change", "trend-transition", "alert-candidate", "next-check"],
-      inference: ["evidence", "belief", "opinion", "rule", "review", "model", "inference-trace", "alert-candidate", "next-check"],
-      evidence: ["evidence", "research-evidence", "news-article", "disclosure-filing", "source-reliability", "data-quality", "provenance"]
+      portfolio: ["portfolio", "account", "position", "stock", "company", "security", "sector", "industry", "market", "cash", "currency", "fx-pair", "fx-rate", "interest-rate", "yield-curve", "factor", "instrument-profile", "market-proxy-instrument"],
+      risk: ["risk", "missing-data", "temporal-coverage-gap", "coverage-gap", "data-quality", "data-freshness", "data-latency", "source-reliability", "fact-change", "trend-transition", "signal-transition", "relation-state", "competing-hypothesis", "materiality-assessment", "alert-candidate", "next-check"],
+      inference: ["evidence", "belief", "opinion", "active-opinion", "insight", "decision-driver", "competing-hypothesis", "rule", "review", "model", "model-score", "strategy-signal", "inference-trace", "reasoning-cycle", "alert-candidate", "next-check", "execution-plan"],
+      evidence: ["evidence", "research-evidence", "news-article", "disclosure-filing", "financial-fact", "fundamental-event", "market-observation", "price-metric", "price-bar", "volume-profile", "source-reliability", "data-quality", "provenance", "fact-change", "trend-transition"]
     };
     return (map[normalizeOntologyWorldLens(lensId)] || []).reduce(function (memo, kind) { memo[kind] = true; return memo; }, {});
   }
@@ -19325,77 +19416,205 @@
     return true;
   }
 
-  function ontologyPruneWorldGraph(graph, maxNodes, maxEdges) {
-    var nodes = graph.nodesById || {};
-    var edges = graph.edges || [];
+  function ontologyWorldLaneForKind(kind) {
+    var value = String(kind || "entity");
+    var lanes = {
+      reality: ["portfolio", "account", "position", "stock", "company", "security", "cash", "currency", "sector", "industry", "market", "fx-pair", "fx-rate", "interest-rate", "yield-curve", "instrument-profile", "investment-archetype", "factor-sensitivity", "market-proxy-instrument", "market-proxy-theme", "crypto-exposure"],
+      evidence: ["evidence", "relation-evidence", "research-evidence", "news-article", "disclosure-filing", "financial-fact", "fundamental-event", "market-observation", "price-bar", "price-metric", "volume-profile", "key-level", "liquidity-profile", "source-reliability", "data-quality", "data-freshness", "data-latency", "missing-data", "temporal-coverage-gap", "coverage-gap", "provenance", "fact-change", "trend-transition", "signal-transition", "relation-state", "temporal-window", "price-path", "price-path-pattern", "flow-pattern", "event-cluster", "trend-episode", "observed-outcome"],
+      rule: ["rule", "rule-condition", "relation-rule", "relation-rule-condition", "relation-rule-template", "relation-template", "threshold-policy", "strategy", "investment-thesis", "instrument-policy", "runtime-setting", "valuation-assumption", "data-pipeline", "collection-schedule", "model", "review"],
+      inference: ["belief", "insight", "inference-trace", "reasoning-cycle", "model-score", "strategy-signal", "trend-scenario", "macro-regime", "risk", "opportunity", "decision-driver", "competing-hypothesis", "materiality-assessment", "margin-of-safety", "factor"],
+      decision: ["opinion", "active-opinion", "execution-plan", "next-check", "alert-candidate", "notification-intent", "notification-dispatch", "decision-episode", "investment-opinion", "performance-feedback"]
+    };
+    var lane = Object.keys(lanes).filter(function (key) { return lanes[key].indexOf(value) >= 0; })[0];
+    return lane || "evidence";
+  }
+
+  function ontologyWorldNodeDegree(edges) {
     var degree = {};
-    edges.forEach(function (edge) {
+    (edges || []).forEach(function (edge) {
       degree[edge.source] = (degree[edge.source] || 0) + 1;
       degree[edge.target] = (degree[edge.target] || 0) + 1;
     });
-    var kindPriority = {
-      portfolio: 0, stock: 1, risk: 2, "alert-candidate": 3, "next-check": 4, opinion: 5, belief: 6,
-      evidence: 7, rule: 8, "inference-trace": 9, "missing-data": 10, "data-quality": 11,
-      "trend-transition": 12, "fact-change": 13, sector: 14, market: 15, "fx-rate": 16,
-      "interest-rate": 17, "yield-curve": 18
-    };
-    var ids = Object.keys(nodes).sort(function (a, b) {
-      var aPriority = kindPriority[String((nodes[a] || {}).kind || "")];
-      var bPriority = kindPriority[String((nodes[b] || {}).kind || "")];
-      if (aPriority == null) aPriority = 99;
-      if (bPriority == null) bPriority = 99;
-      if (aPriority !== bPriority) return aPriority - bPriority;
-      if (Number(degree[b] || 0) !== Number(degree[a] || 0)) return Number(degree[b] || 0) - Number(degree[a] || 0);
-      return String((nodes[a] || {}).label || a).localeCompare(String((nodes[b] || {}).label || b));
-    }).slice(0, maxNodes || 52);
-    var keep = ids.reduce(function (memo, id) { memo[id] = true; return memo; }, {});
-    var keptEdges = edges.filter(function (edge) { return keep[edge.source] && keep[edge.target]; }).sort(function (a, b) {
-      var aDerived = a.kind === "derived" || a.kind === "rule" ? 0 : 1;
-      var bDerived = b.kind === "derived" || b.kind === "rule" ? 0 : 1;
-      if (aDerived !== bDerived) return aDerived - bDerived;
-      return ontologyRelationPriority(a.type) - ontologyRelationPriority(b.type);
-    }).slice(0, maxEdges || 72);
-    var connected = {};
-    keptEdges.forEach(function (edge) { connected[edge.source] = true; connected[edge.target] = true; });
-    ids.slice(0, 12).forEach(function (id) { connected[id] = true; });
+    return degree;
+  }
+
+  function ontologyWorldNeighborhood(graph, focusId, depth) {
+    var nodes = graph.nodesById || {};
+    var edges = graph.edges || [];
+    if (!focusId || !nodes[focusId]) return graph;
+    var focusSymbol = String((nodes[focusId] || {}).symbol || ontologyAboxSymbolFromId(focusId) || "").toUpperCase();
+    var keep = {};
+    keep[focusId] = true;
+    Object.keys(nodes).forEach(function (id) {
+      if (focusSymbol && String(nodes[id].symbol || "").toUpperCase() === focusSymbol) keep[id] = true;
+    });
+    for (var step = 0; step < normalizeOntologyWorldDepth(depth); step += 1) {
+      var next = Object.assign({}, keep);
+      edges.forEach(function (edge) {
+        if (keep[edge.source]) next[edge.target] = true;
+        if (keep[edge.target]) next[edge.source] = true;
+      });
+      keep = next;
+    }
     var nodesById = {};
-    Object.keys(connected).forEach(function (id) { if (nodes[id]) nodesById[id] = nodes[id]; });
-    return Object.keys(nodesById).length ? { nodesById: nodesById, edges: keptEdges } : graph;
+    Object.keys(keep).forEach(function (id) { if (nodes[id]) nodesById[id] = nodes[id]; });
+    return {
+      nodesById: nodesById,
+      edges: edges.filter(function (edge) { return keep[edge.source] && keep[edge.target]; })
+    };
+  }
+
+  function ontologyWorldCompactTopology(graph, focusId) {
+    var nodes = graph.nodesById || {};
+    var edges = graph.edges || [];
+    var degree = ontologyWorldNodeDegree(edges);
+    var focusSymbol = String(((nodes[focusId] || {}).symbol) || ontologyAboxSymbolFromId(focusId) || "").toUpperCase();
+    var groups = { reality: [], evidence: [], rule: [], inference: [], decision: [] };
+    Object.keys(nodes).forEach(function (id) {
+      var node = nodes[id] || {};
+      var lane = ontologyWorldLaneForKind(node.kind);
+      node.lane = lane;
+      groups[lane].push(id);
+    });
+    function nodeScore(id) {
+      var node = nodes[id] || {};
+      var score = Number(degree[id] || 0) * 20;
+      if (id === focusId) score += 10000;
+      if (focusSymbol && String(node.symbol || "").toUpperCase() === focusSymbol) score += 4000;
+      if (id === "runtime-rules") score += 2500;
+      if (["risk", "alert-candidate", "opinion", "active-opinion", "next-check", "inference-trace"].indexOf(String(node.kind || "")) >= 0) score += 900;
+      if (String(node.kind || "") === "portfolio") score += 700;
+      return score;
+    }
+    var keep = {};
+    Object.keys(groups).forEach(function (lane) {
+      groups[lane].sort(function (a, b) {
+        var score = nodeScore(b) - nodeScore(a);
+        return score || String((nodes[a] || {}).label || a).localeCompare(String((nodes[b] || {}).label || b));
+      }).slice(0, 6).forEach(function (id) { keep[id] = true; });
+    });
+    if (nodes[focusId]) keep[focusId] = true;
+    var nodesById = {};
+    Object.keys(keep).forEach(function (id) { if (nodes[id]) nodesById[id] = nodes[id]; });
+    var relationLabels = {};
+    var labelCount = 0;
+    var keptEdges = edges.filter(function (edge) { return keep[edge.source] && keep[edge.target]; }).sort(function (a, b) {
+      var directA = a.source === focusId || a.target === focusId ? 0 : 1;
+      var directB = b.source === focusId || b.target === focusId ? 0 : 1;
+      if (directA !== directB) return directA - directB;
+      var derivedA = a.kind === "derived" || a.kind === "rule" ? 0 : 1;
+      var derivedB = b.kind === "derived" || b.kind === "rule" ? 0 : 1;
+      if (derivedA !== derivedB) return derivedA - derivedB;
+      return ontologyRelationPriority(a.type) - ontologyRelationPriority(b.type);
+    }).slice(0, 38).map(function (edge) {
+      var type = String(edge.type || "");
+      var direct = edge.source === focusId || edge.target === focusId;
+      var semantic = edge.kind === "derived" || edge.kind === "rule" || ontologyRelationPriority(type) < 7;
+      var noisyObservation = /EXTERNAL_SIGNAL|DATA_QUALITY|HAS_PRICE|HAS_OBSERVATION/.test(type.toUpperCase());
+      var crossLane = String((nodes[edge.source] || {}).lane || "") !== String((nodes[edge.target] || {}).lane || "");
+      var showLabel = labelCount < 10 && crossLane && (semantic || (direct && !noisyObservation)) && Number(relationLabels[type] || 0) < 2;
+      if (showLabel) {
+        labelCount += 1;
+        relationLabels[type] = Number(relationLabels[type] || 0) + 1;
+      }
+      return Object.assign({}, edge, { showLabel: showLabel });
+    });
+    var laneX = { reality: 120, evidence: 380, rule: 640, inference: 900, decision: 1160 };
+    Object.keys(groups).forEach(function (lane) {
+      var ids = groups[lane].filter(function (id) { return Boolean(keep[id]); });
+      var spacing = ids.length > 5 ? 76 : 84;
+      var firstY = 284 - ((ids.length - 1) * spacing / 2);
+      ids.forEach(function (id, index) {
+        var node = nodesById[id];
+        node.x = laneX[lane];
+        node.y = firstY + index * spacing;
+        node.focus = id === focusId;
+        node.context = Boolean(focusSymbol && String(node.symbol || "").toUpperCase() === focusSymbol);
+      });
+    });
+    return { nodesById: nodesById, edges: keptEdges, focusId: focusId };
+  }
+
+  function ontologyAddWorldDecisionCorridor(graph, parts, snapshot, focusId) {
+    var symbol = ontologyAboxSymbolFromId(focusId);
+    if (!symbol) return graph;
+    var row = ontologyDecisionChainRows(parts || {}, snapshot || state.snapshot || {}).filter(function (item) {
+      return String(item && item.symbol || "").toUpperCase() === symbol;
+    })[0];
+    if (!row) return graph;
+    var nodes = graph.nodesById || {};
+    var edges = graph.edges || [];
+    var ids = {
+      relation: "world-relation:" + symbol,
+      rule: "world-rule:" + symbol,
+      inference: "world-inference:" + symbol,
+      decision: "world-decision:" + symbol,
+      alert: "world-alert:" + symbol,
+      performance: "world-performance:" + symbol
+    };
+    ontologyAddGraphNode(nodes, ids.relation, row.relationLabel || "관계 근거", "relation-evidence", row.relationDetail || "관계 근거", symbol);
+    ontologyAddGraphNode(nodes, ids.rule, row.ruleLabel || "RuleBox", "rule", row.ruleDetail || "RuleBox 조건", symbol);
+    ontologyAddGraphNode(nodes, ids.inference, row.inferenceLabel || "InferenceBox", "inference-trace", row.inferenceDetail || "InferenceBox 출력", symbol);
+    ontologyAddGraphNode(nodes, ids.decision, row.actionLabel || "판단 대기", "opinion", row.actionDetail || "현재 투자 판단", symbol);
+    ontologyAddGraphNode(nodes, ids.alert, row.alertLabel || "알림 대기", "notification-intent", row.alertDetail || "알림 생성 상태", symbol);
+    ontologyAddGraphNode(nodes, ids.performance, row.performanceLabel || "성과 대기", "performance-feedback", row.performanceDetail || "성과 표본 상태", symbol);
+    [
+      [focusId, ids.relation, "HAS_DECISION_CONTEXT", "derived"],
+      [ids.relation, ids.rule, "EVALUATED_BY", "rule"],
+      [ids.rule, ids.inference, "DERIVES", "rule"],
+      [ids.inference, ids.decision, "HAS_OPINION", "derived"],
+      [ids.decision, ids.alert, "CREATES_NOTIFICATION_INTENT", "derived"],
+      [ids.decision, ids.performance, "EVALUATED_BY_OUTCOME", "derived"]
+    ].forEach(function (item) {
+      edges.push({ source: item[0], target: item[1], type: item[2], kind: item[3] });
+    });
+    return { nodesById: nodes, edges: edges };
   }
 
   function ontologyBuildWorldGraph(parts, snapshot, lensValue) {
     parts = parts || ontologyStrategyParts(snapshot || state.snapshot || {});
     var lensId = normalizeOntologyWorldLens(lensValue);
     var base = ontologyBuildAboxGraph(parts.aboxEntities, parts.aboxRelations, parts.evidence, parts.beliefs, parts.opinions, parts.entityLabels);
-    if (lensId === "reality") return ontologyPruneWorldGraph(base, 32, 42);
-    var kinds = ontologyWorldLensNodeKinds(lensId);
-    var selected = {};
-    Object.keys(base.nodesById || {}).forEach(function (id) {
-      if (kinds[String((base.nodesById[id] || {}).kind || "")]) selected[id] = true;
-    });
-    var edges = (base.edges || []).filter(function (edge) {
-      return ontologyWorldLensRelationMatches(lensId, edge.type) || (selected[edge.source] && selected[edge.target]);
-    });
-    edges.forEach(function (edge) {
-      selected[edge.source] = true;
-      selected[edge.target] = true;
-    });
-    (base.edges || []).forEach(function (edge) {
-      if (!selected[edge.source] && !selected[edge.target]) return;
-      var sourceKind = String(((base.nodesById || {})[edge.source] || {}).kind || "");
-      var targetKind = String(((base.nodesById || {})[edge.target] || {}).kind || "");
-      if (["portfolio", "stock"].indexOf(sourceKind) < 0 && ["portfolio", "stock"].indexOf(targetKind) < 0) return;
-      if (!/HOLDS|WATCHES|BELONGS|HAS_OPINION|HAS_EVIDENCE|HAS_INFERRED/.test(String(edge.type || "").toUpperCase())) return;
-      if (edges.indexOf(edge) < 0) edges.push(edge);
-      selected[edge.source] = true;
-      selected[edge.target] = true;
-    });
-    var nodesById = {};
-    Object.keys(selected).forEach(function (id) {
-      if (base.nodesById[id]) nodesById[id] = base.nodesById[id];
-    });
-    if (!Object.keys(nodesById).length) return ontologyPruneWorldGraph(base, 32, 42);
-    return ontologyPruneWorldGraph({ nodesById: nodesById, edges: edges.slice(0, 90) }, 28, 38);
+    var focusId = ontologyResolveWorldFocusId(parts, snapshot || state.snapshot || {}, ontologyWorldFocusItems(parts, snapshot || state.snapshot || {}));
+    if (focusId && !base.nodesById[focusId]) {
+      var focusItem = (parts.aboxEntities || []).filter(function (item) { return String(item && item.id || "") === focusId; })[0];
+      if (focusItem) ontologyAddGraphNode(base.nodesById, focusId, ontologyEntityGraphLabel(focusItem), "stock", ontologyEntityGraphLabel(focusItem), ontologyAboxSymbolFromId(focusId));
+    }
+    base = ontologyAddWorldDecisionCorridor(base, parts, snapshot || state.snapshot || {}, focusId);
+    var candidate = base;
+    if (lensId !== "reality") {
+      var kinds = ontologyWorldLensNodeKinds(lensId);
+      var selected = {};
+      Object.keys(base.nodesById || {}).forEach(function (id) {
+        if (kinds[String((base.nodesById[id] || {}).kind || "")]) selected[id] = true;
+      });
+      var edges = (base.edges || []).filter(function (edge) {
+        return ontologyWorldLensRelationMatches(lensId, edge.type) || (selected[edge.source] && selected[edge.target]);
+      });
+      edges.forEach(function (edge) {
+        selected[edge.source] = true;
+        selected[edge.target] = true;
+      });
+      (base.edges || []).forEach(function (edge) {
+        if (!selected[edge.source] && !selected[edge.target]) return;
+        var sourceKind = String(((base.nodesById || {})[edge.source] || {}).kind || "");
+        var targetKind = String(((base.nodesById || {})[edge.target] || {}).kind || "");
+        if (["portfolio", "stock"].indexOf(sourceKind) < 0 && ["portfolio", "stock"].indexOf(targetKind) < 0) return;
+        if (!/HOLDS|WATCHES|BELONGS|HAS_OPINION|HAS_EVIDENCE|HAS_INFERRED/.test(String(edge.type || "").toUpperCase())) return;
+        if (edges.indexOf(edge) < 0) edges.push(edge);
+        selected[edge.source] = true;
+        selected[edge.target] = true;
+      });
+      var nodesById = {};
+      Object.keys(selected).forEach(function (id) {
+        if (base.nodesById[id]) nodesById[id] = base.nodesById[id];
+      });
+      if (focusId && base.nodesById[focusId]) nodesById[focusId] = base.nodesById[focusId];
+      candidate = Object.keys(nodesById).length ? { nodesById: nodesById, edges: edges.slice(0, 120) } : base;
+    }
+    var neighborhood = ontologyWorldNeighborhood(candidate, focusId, state.activeOntologyWorldDepth);
+    if (Object.keys(neighborhood.nodesById || {}).length < 2) neighborhood = candidate;
+    return ontologyWorldCompactTopology(neighborhood, focusId);
   }
 
   function renderOntologyAboxGraph(abox, aboxEntities, aboxRelations, evidence, beliefs, opinions, entityLabels) {
@@ -19448,8 +19667,10 @@
   function ontologyCyElements(nodesById, edges) {
     var nodes = Object.keys(nodesById || {}).map(function (id) {
       var node = nodesById[id] || {};
-      var nodeClasses = ["node-" + ontologyGraphClass(node.kind)];
+      var nodeClasses = ["node-" + ontologyGraphClass(node.kind), "lane-" + ontologyGraphClass(node.lane || "")];
       if (node.active) nodeClasses.push("node-active-chain");
+      if (node.context) nodeClasses.push("node-world-context");
+      if (node.focus) nodeClasses.push("node-world-focus");
       return {
         group: "nodes",
         data: {
@@ -19457,6 +19678,7 @@
           label: ontologyShortText(node.label || id, node.kind === "rule" ? 10 : 18),
           fullLabel: node.label || id,
           kind: node.kind || "entity",
+          lane: node.lane || "",
           title: node.title || node.label || id,
           chainKey: node.chainKey || ""
         },
@@ -19481,7 +19703,7 @@
           id: id,
           source: edge.source,
           target: edge.target,
-          label: ontologyShortText(ontologyEdgeLabel(edge.type), 18),
+          label: edge.showLabel === false ? "" : ontologyShortText(ontologyEdgeLabel(edge.type), 18),
           fullLabel: edge.type || "",
           kind: edge.kind || "assertion",
           chainKey: edge.chainKey || ""
@@ -19557,7 +19779,14 @@
       { selector: ".node-investment-opinion", style: { "background-color": "#eff6ff", "border-color": blue, "font-weight": 900 } },
       { selector: ".node-notification-intent", style: { "background-color": "#f8fafc", "border-color": ink } },
       { selector: ".node-performance-feedback", style: { "background-color": "#ecfdf5", "border-color": green } },
-      { selector: ".node-active-chain", style: { "border-width": 3, "border-color": ink, "shadow-blur": 12, "shadow-color": blue, "shadow-opacity": 0.18 } },
+      { selector: ".lane-reality", style: { "shape": "round-rectangle", "background-color": panel, "border-color": blue, "border-width": 1.6 } },
+      { selector: ".lane-evidence", style: { "shape": "round-rectangle", "background-color": panel, "border-color": muted, "border-width": 1.3 } },
+      { selector: ".lane-rule", style: { "shape": "diamond", "width": 88, "height": 54, "background-color": "#fffaf0", "border-color": amber, "color": ink, "font-size": 9 } },
+      { selector: ".lane-inference", style: { "shape": "hexagon", "width": 126, "height": 52, "background-color": "#f8f7ff", "border-color": violet, "color": ink } },
+      { selector: ".lane-decision", style: { "shape": "round-rectangle", "background-color": ink, "border-color": ink, "color": panel, "font-weight": 900 } },
+      { selector: ".node-world-context", style: { "border-width": 2.2 } },
+      { selector: ".node-world-focus", style: { "shape": "round-rectangle", "width": 146, "height": 50, "background-color": ink, "border-width": 3, "border-color": blue, "color": panel, "font-size": 11, "font-weight": 900 } },
+      { selector: ".node-active-chain", style: { "border-width": 3, "border-color": ink } },
       {
         selector: "edge",
         style: {
@@ -19577,7 +19806,7 @@
           "text-background-color": panel,
           "text-background-opacity": 0.82,
           "text-background-padding": 2,
-          "text-rotation": "autorotate",
+          "text-rotation": "none",
           "text-margin-y": -6
         }
       },
@@ -19621,23 +19850,11 @@
         container: container,
         elements: graph.elements,
         style: ontologyCytoscapeStyle(),
-        layout: sourceGraphId === "world" ? {
-          name: "cose",
-          fit: true,
-          padding: 42,
-          animate: false,
-          randomize: true,
-          nodeRepulsion: 420000,
-          idealEdgeLength: 96,
-          edgeElasticity: 120,
-          gravity: 0.7,
-          numIter: 900
-        } : { name: "preset", fit: true, padding: 28 },
+        layout: { name: "preset", fit: true, padding: sourceGraphId === "world" ? 34 : 28 },
         minZoom: 0.25,
         maxZoom: 2.4,
-        wheelSensitivity: 0.18,
         boxSelectionEnabled: false,
-        autoungrabify: false
+        autoungrabify: sourceGraphId === "world"
       });
       ontologyGraphInstances[graphId].ready(function () {
         this.fit(undefined, 30);
@@ -19674,6 +19891,10 @@
   function layoutOntologyGraph(graphId) {
     var instance = ontologyGraphInstances[graphId];
     if (!instance) return;
+    if (normalizeOntologyGraphId(graphId) === "world") {
+      render();
+      return;
+    }
     instance.layout({
       name: "breadthfirst",
       directed: true,
@@ -23808,6 +24029,11 @@
         var key = button.getAttribute("data-ontology-chain-select") || "";
         if (!key) return;
         state.activeOntologyChainKey = key;
+        var chain = ontologyDecisionChainRows(ontologyStrategyParts(state.snapshot || {}), state.snapshot || {}).filter(function (item) { return item.key === key; })[0];
+        if (chain && chain.symbol) {
+          state.activeOntologyWorldFocusId = "stock:" + String(chain.symbol).toUpperCase();
+          state.activeOntologyWorldNodeId = state.activeOntologyWorldFocusId;
+        }
         render();
       });
     });
@@ -23829,11 +24055,41 @@
       });
     });
 
+    Array.prototype.slice.call(app.querySelectorAll("[data-ontology-world-focus]")).forEach(function (select) {
+      select.addEventListener("change", function () {
+        var focusId = String(select.value || "");
+        if (!focusId || focusId === state.activeOntologyWorldFocusId) return;
+        state.activeOntologyWorldFocusId = focusId;
+        state.activeOntologyWorldNodeId = focusId;
+        var focusSymbol = ontologyAboxSymbolFromId(focusId);
+        var focusChain = ontologyDecisionChainRows(ontologyStrategyParts(state.snapshot || {}), state.snapshot || {}).filter(function (item) {
+          return String(item && item.symbol || "").toUpperCase() === focusSymbol;
+        })[0];
+        if (focusChain) state.activeOntologyChainKey = focusChain.key;
+        render();
+      });
+    });
+
+    Array.prototype.slice.call(app.querySelectorAll("[data-ontology-world-depth]")).forEach(function (button) {
+      button.addEventListener("click", function () {
+        var depth = normalizeOntologyWorldDepth(button.getAttribute("data-ontology-world-depth"));
+        if (depth === state.activeOntologyWorldDepth) return;
+        state.activeOntologyWorldDepth = depth;
+        state.activeOntologyWorldNodeId = "";
+        render();
+      });
+    });
+
     Array.prototype.slice.call(app.querySelectorAll("[data-ontology-world-chain]")).forEach(function (select) {
       select.addEventListener("change", function () {
         var key = select.value || "";
         if (!key || key === state.activeOntologyChainKey) return;
         state.activeOntologyChainKey = key;
+        var chain = ontologyDecisionChainRows(ontologyStrategyParts(state.snapshot || {}), state.snapshot || {}).filter(function (item) { return item.key === key; })[0];
+        if (chain && chain.symbol) {
+          state.activeOntologyWorldFocusId = "stock:" + String(chain.symbol).toUpperCase();
+          state.activeOntologyWorldNodeId = state.activeOntologyWorldFocusId;
+        }
         render();
       });
     });

@@ -27,10 +27,29 @@ from digital_twin.infrastructure.typedb_ontology import (
     rulebox_rules_to_payload,
     rulebox_snapshot_from_rows,
 )
+from digital_twin.infrastructure.graph_store_rulebox import derivation_payload_from_row
 from digital_twin.domain.ontology_rulebox_governance import rulebox_governance_candidates, rulebox_rules_hash, rulebox_version_payload
 
 
 class OntologyRuleBoxTests(unittest.TestCase):
+    def test_rulebox_derivation_keeps_its_evidence_role_over_template_default(self):
+        payload = derivation_payload_from_row({
+            "evidenceRole": "context",
+            "polarity": "support",
+            "propertiesJson": json.dumps({
+                "derivation": {
+                    "relation_type": "HAS_INFERRED_SUPPORT",
+                    "target_kind": "support",
+                    "target_key": "MSTR:support",
+                    "target_label": "지지 근거",
+                    "polarity": "support",
+                    "evidence_role": "support",
+                },
+            }),
+        })
+
+        self.assertEqual("support", payload["evidence_role"])
+
     def test_rulebox_projects_threshold_policy_nodes(self):
         graph = rulebox_graph_from_rules(default_graph_inference_rules(), include_tbox=False)
         policies = [

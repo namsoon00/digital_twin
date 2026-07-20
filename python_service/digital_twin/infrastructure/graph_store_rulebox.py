@@ -315,7 +315,18 @@ def derivation_payload_from_row(row: Dict[str, object]) -> Dict[str, object]:
         "tbox_class": str(row.get("derivationTboxClass") or derivation.get("tbox_class") or row.get("tboxClass") or ""),
         "tbox_classes": list_of_strings(row.get("derivationTboxClasses") or derivation.get("tbox_classes") or row.get("tboxClasses") or []),
         "polarity": str(row.get("polarity") or derivation.get("polarity") or "context"),
-        "evidence_role": str(row.get("evidenceRole") or derivation.get("evidence_role") or derivation.get("evidenceRole") or derivation.get("polarity") or "context"),
+        # The entity-level role describes the RuleBox template itself and commonly
+        # defaults to context. Preserve the role explicitly assigned to this
+        # derivation so a support/risk relation survives a TypeDB round trip.
+        "evidence_role": str(
+            derivation.get("evidence_role")
+            or derivation.get("evidenceRole")
+            or row.get("derivationEvidenceRole")
+            or derivation.get("polarity")
+            or row.get("evidenceRole")
+            or row.get("polarity")
+            or "context"
+        ),
         "belief_label": str(row.get("beliefLabel") or derivation.get("belief_label") or ""),
         "ai_influence_label": str(row.get("aiInfluenceLabel") or derivation.get("ai_influence_label") or ""),
         "action_group": str(row.get("actionGroup") or derivation.get("action_group") or ""),

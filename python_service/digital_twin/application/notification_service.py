@@ -6,7 +6,7 @@ from zoneinfo import ZoneInfo
 from ..domain.disclosure_analysis import local_disclosure_analysis
 from ..domain.investment_brain import decision_episode_from_context
 from ..domain.market_data import number
-from ..domain.message_types import INVESTMENT_INSIGHT, OPERATOR_REASONING_REPORT
+from ..domain.message_types import INVESTMENT_INSIGHT, OPERATOR_REASONING_REPORT, is_operations_delivery_message_type
 from ..domain.monitoring import RealtimeMonitor
 from ..domain.notification_ai import enrich_notification_ai_context
 from ..domain.notification_ai_gate_contracts import ai_gate_enabled_for_message_type
@@ -315,6 +315,7 @@ class NotificationQueueRunner:
         queue,
         account_repository,
         notifier_factory: Callable,
+        operations_notifier_factory: Callable = None,
         dry_run: bool = False,
         send_gap_seconds: float = 0.0,
         stale_after_minutes: int = 30,
@@ -326,6 +327,7 @@ class NotificationQueueRunner:
         self.queue = queue
         self.account_repository = account_repository
         self.notifier_factory = notifier_factory
+        self.operations_notifier_factory = operations_notifier_factory
         self.dry_run = dry_run
         self.send_gap_seconds = max(0.0, float(send_gap_seconds or 0))
         self.stale_after_minutes = max(1, int(stale_after_minutes or 30))
@@ -464,8 +466,18 @@ class NotificationQueueRunner:
             context["readableMessage"] = readable_message
 
     def deliver(self, job: NotificationJob, accounts: Dict[str, object], message: str) -> None:
-        notifier = self.notifier_factory(accounts.get(job.account_id))
+        operations_delivery = is_operations_delivery_message_type(job.message_type)
+        factory = self.operations_notifier_factory if operations_delivery and self.operations_notifier_factory else self.notifier_factory
+        context = dict(job.context or {})
+        context["deliveryAudience"] = "operations" if operations_delivery else "account"
+        context["deliveryChannel"] = "operationsTelegram" if operations_delivery else "accountNotification"
+        job.context = context
+        notifier = factory(accounts.get(job.account_id))
         delivery = notifier.send(message)
+        context["deliveryProvider"] = str(getattr(delivery, "label", "") or "")
+        if getattr(delivery, "reason", ""):
+            context["deliveryNote"] = str(delivery.reason)
+        job.context = context
         if not delivery.delivered:
             raise RuntimeError(delivery.reason or "notification delivery failed")
 

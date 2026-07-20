@@ -168,6 +168,31 @@ class TelegramNotifier:
         return result
 
 
+class FallbackNotifier:
+    def __init__(self, primary, fallback, label: str = "Fallback notifier"):
+        self.primary = primary
+        self.fallback = fallback
+        self.label = label
+
+    def send(self, text: str) -> NotificationResult:
+        primary_result = self.primary.send(text)
+        if primary_result.delivered:
+            return primary_result
+        fallback_result = self.fallback.send(text)
+        if fallback_result.delivered:
+            return NotificationResult(
+                True,
+                fallback_result.label,
+                self.primary.label + " 실패 후 기존 계정 채널로 대체 발송: " + str(primary_result.reason or ""),
+            )
+        return NotificationResult(
+            False,
+            self.label,
+            self.primary.label + " 실패: " + str(primary_result.reason or "")
+            + " · 기존 계정 채널 실패: " + str(fallback_result.reason or ""),
+        )
+
+
 def notifier_from_settings():
     settings = runtime_settings()
     provider = str(settings.get("notifyProvider") or "").strip().lower()
@@ -183,6 +208,22 @@ def notifier_for_account(account: AccountConfig = None):
     if provider == "telegram" or (not provider and account.telegram_bot_token and account.telegram_chat_id):
         return TelegramNotifier(account.telegram_bot_token, account.telegram_chat_id)
     return notifier_from_settings()
+
+
+def notifier_for_operations(account: AccountConfig = None):
+    settings = runtime_settings()
+    token = str(settings.get("operationsTelegramBotToken") or "").strip()
+    chat_id = str(
+        settings.get("operationsTelegramChatId")
+        or settings.get("telegramChatId")
+        or (account.telegram_chat_id if account else "")
+        or ""
+    ).strip()
+    if token and chat_id:
+        notifier = TelegramNotifier(token, chat_id)
+        notifier.label = "Telegram Operations"
+        return FallbackNotifier(notifier, notifier_for_account(account), "Operations delivery")
+    return notifier_for_account(account)
 
 
 def notification_queue():

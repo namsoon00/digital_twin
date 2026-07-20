@@ -508,7 +508,11 @@ def snake_arg(name: str) -> str:
     return "".join(result).lstrip("_")
 
 
-MASKED_RUNTIME_SETTING_KEYS = set(SECRET_SETTING_KEYS) | {"tossAccountSeq", "telegramChatId"}
+MASKED_RUNTIME_SETTING_KEYS = set(SECRET_SETTING_KEYS) | {
+    "tossAccountSeq",
+    "telegramChatId",
+    "operationsTelegramChatId",
+}
 
 
 def public_settings_payload(settings):

@@ -54,6 +54,7 @@ from .rule_change_candidate_ai import rule_change_candidate_advisor_from_setting
 from .notifications import queued_notifier_for_account
 from .notifications import send_events
 from .notifications import notifier_for_account
+from .notifications import notifier_for_operations
 from .news_sources import NewsSourceGateway
 from .news_ai_analyzer import news_ai_analyzer_from_settings
 from .settings import currency_rates, runtime_settings
@@ -172,6 +173,7 @@ def build_notification_queue_runner(dry_run: bool = False) -> NotificationQueueR
         queue=stores.notification_job_store(settings),
         account_repository=stores.account_registry(settings),
         notifier_factory=notifier_for_account,
+        operations_notifier_factory=notifier_for_operations,
         dry_run=dry_run,
         send_gap_seconds=float(settings.get("notificationSendGapSeconds") or 0),
         stale_after_minutes=int(settings.get("notificationProcessingStaleMinutes") or 30),

@@ -1,6 +1,7 @@
 import sys
 import unittest
 from pathlib import Path
+from types import SimpleNamespace
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
@@ -18,12 +19,98 @@ from digital_twin.application.notification_ai_gate_message import (
     prepend_execution_start_badge,
 )
 from digital_twin.domain.notification_templates import prepend_message_start_badge
+from digital_twin.domain.accounts import AccountConfig
+from digital_twin.domain.message_types import INVESTMENT_INSIGHT, WORK_HANDOFF, is_operations_delivery_message_type
 from digital_twin.domain.notifications import NotificationJob
 from digital_twin.domain.strategy_alerts import StrategyAlertMixin
 from digital_twin.domain.portfolio import utc_now_iso
+from digital_twin.application.notification_service import NotificationQueueRunner
+from digital_twin.infrastructure.cli import public_settings_payload
+from digital_twin.infrastructure.notifications import FallbackNotifier, NotificationResult
 
 
 class NotificationDataQualityPolicyTests(unittest.TestCase):
+    def test_operational_delivery_types_are_separate_from_investment_messages(self):
+        self.assertTrue(is_operations_delivery_message_type(WORK_HANDOFF))
+        self.assertTrue(is_operations_delivery_message_type("ontologyInferenceMissing"))
+        self.assertTrue(is_operations_delivery_message_type("monitorConnection"))
+        self.assertTrue(is_operations_delivery_message_type("externalDataConnection"))
+        self.assertFalse(is_operations_delivery_message_type(INVESTMENT_INSIGHT))
+        self.assertFalse(is_operations_delivery_message_type("newsDigest"))
+        self.assertFalse(is_operations_delivery_message_type("modelReview"))
+
+    def test_notification_runner_routes_operational_jobs_to_operations_notifier(self):
+        account = AccountConfig("main", "메인", "toss", "https://example.test", "", "", "", ["AAPL"])
+        jobs = [
+            NotificationJob.create("투자 알림", account_id="main", message_type=INVESTMENT_INSIGHT),
+            NotificationJob.create("작업 완료", account_id="main", message_type=WORK_HANDOFF),
+        ]
+
+        class Queue:
+            def pending(self, limit=10):
+                return [job for job in jobs if job.status == "pending"][:limit]
+
+            def mark_processing(self, job):
+                job.status = "processing"
+
+            def mark_done(self, job):
+                job.status = "done"
+
+            def mark_failed(self, job, reason):
+                job.status = "failed"
+                job.last_error = reason
+
+        class Accounts:
+            def load_all(self):
+                return [account]
+
+        account_messages = []
+        operations_messages = []
+        account_notifier = SimpleNamespace(send=lambda message: account_messages.append(message) or NotificationResult(True, "Account Telegram"))
+        operations_notifier = SimpleNamespace(send=lambda message: operations_messages.append(message) or NotificationResult(True, "Operations Telegram"))
+        runner = NotificationQueueRunner(
+            Queue(),
+            Accounts(),
+            lambda _account: account_notifier,
+            operations_notifier_factory=lambda _account: operations_notifier,
+        )
+
+        self.assertEqual(2, runner.run_once(limit=2))
+        self.assertEqual(["투자 알림"], account_messages)
+        self.assertEqual(["작업 완료"], operations_messages)
+        self.assertEqual("account", jobs[0].context["deliveryAudience"])
+        self.assertEqual("operations", jobs[1].context["deliveryAudience"])
+        self.assertEqual("Account Telegram", jobs[0].context["deliveryProvider"])
+        self.assertEqual("Operations Telegram", jobs[1].context["deliveryProvider"])
+
+    def test_operations_telegram_credentials_are_masked_from_public_settings(self):
+        payload = public_settings_payload({
+            "operationsTelegramBotToken": "secret-token",
+            "operationsTelegramChatId": "123456",
+        })
+
+        self.assertEqual("", payload["settings"]["operationsTelegramBotToken"])
+        self.assertEqual("", payload["settings"]["operationsTelegramChatId"])
+        self.assertTrue(payload["configured"]["operationsTelegramBotToken"])
+        self.assertTrue(payload["configured"]["operationsTelegramChatId"])
+
+    def test_operations_notifier_falls_back_without_losing_alert(self):
+        primary = SimpleNamespace(
+            label="Telegram Operations",
+            send=lambda _message: NotificationResult(False, "Telegram Operations", "chat not found"),
+        )
+        delivered = []
+        fallback = SimpleNamespace(
+            label="Telegram",
+            send=lambda message: delivered.append(message) or NotificationResult(True, "Telegram"),
+        )
+
+        result = FallbackNotifier(primary, fallback, "Operations delivery").send("운영 알림")
+
+        self.assertTrue(result.delivered)
+        self.assertEqual(["운영 알림"], delivered)
+        self.assertIn("대체 발송", result.reason)
+
     def test_topline_change_summary_is_separated_from_new_alert_badge(self):
         message = prepend_execution_start_badge(
             "<b>[주의] 🛡️ SK하이닉스: 분할축소 점검</b>",

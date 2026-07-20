@@ -3897,6 +3897,8 @@
       notifyProvider: settingValue("notifyProvider"),
       telegramBotToken: settingValue("telegramBotToken"),
       telegramChatId: settingValue("telegramChatId"),
+      operationsTelegramBotToken: settingValue("operationsTelegramBotToken"),
+      operationsTelegramChatId: settingValue("operationsTelegramChatId"),
       notifyLinkUrl: settingValue("notifyLinkUrl"),
       operatorReasoningReportEnabled: settingValue("operatorReasoningReportEnabled"),
       symbolUniverseMaxAgeHours: settingValue("symbolUniverseMaxAgeHours"),
@@ -20696,6 +20698,8 @@
       ]),
       renderSettingField("telegramBotToken", "Telegram Bot Token", secretType, "bot token", { preserveConfigured: true }),
       renderSettingField("telegramChatId", "Telegram Chat ID", "text", "chat id", { preserveConfigured: true }),
+      renderSettingField("operationsTelegramBotToken", "운영 알림 Bot Token", secretType, "operations bot token", { preserveConfigured: true }),
+      renderSettingField("operationsTelegramChatId", "운영 알림 Chat ID", "text", "기존 Chat ID 사용 가능", { preserveConfigured: true }),
       '</div>',
       '<div class="settings-actions">',
       '<button class="' + settingsSaveButtonClass() + '" data-action="save-settings"' + settingsSaveDisabledAttr() + '>' + settingsSaveButtonLabel() + '</button>',
@@ -23394,6 +23398,10 @@
         configuredChip("Chat ID", isConfiguredSetting("telegramChatId"), isConfiguredSetting("telegramChatId") ? "저장됨" : ""),
         configuredChip("알림 링크", Boolean(settingValue("notifyLinkUrl")))
       ]),
+      renderSettingsApiCard("운영 텔레그램", "기술 운영 알림", [
+        configuredChip("Bot token", isConfiguredSetting("operationsTelegramBotToken")),
+        configuredChip("Chat ID", isConfiguredSetting("operationsTelegramChatId"), isConfiguredSetting("operationsTelegramChatId") ? "저장됨" : "계정 채널 사용")
+      ]),
       renderSettingsApiCard("외부 데이터", "가격·크립토·거시·공시", [
         configuredChip("Alpha", settingEnabled("externalAlphaEnabled"), isConfiguredSetting("alphaVantageApiKey") ? "키 저장됨" : "키 필요"),
         configuredChip("CoinGecko", settingEnabled("externalCoinGeckoEnabled"), isConfiguredSetting("coingeckoApiKey") ? "키 저장됨" : "키 없음"),
@@ -23426,6 +23434,10 @@
         configuredChip("Bot token", isConfiguredSetting("telegramBotToken")),
         configuredChip("Chat ID", isConfiguredSetting("telegramChatId"), isConfiguredSetting("telegramChatId") ? "저장됨" : ""),
         configuredChip("알림 링크", Boolean(settingValue("notifyLinkUrl")))
+      ]),
+      renderSettingsApiCard("운영 알림", "별도 Telegram 봇", [
+        configuredChip("Bot token", isConfiguredSetting("operationsTelegramBotToken")),
+        configuredChip("Chat ID", isConfiguredSetting("operationsTelegramChatId"), isConfiguredSetting("operationsTelegramChatId") ? "저장됨" : "계정 채널 사용")
       ]),
       renderSettingsApiCard("외부 데이터", externalEnabledCount + "/6개 수집 사용", [
         configuredChip("Alpha", settingEnabled("externalAlphaEnabled"), isConfiguredSetting("alphaVantageApiKey") ? "키 저장됨" : "키 필요"),
@@ -23762,7 +23774,7 @@
       '</div>',
       '</div>',
       '<div class="settings-body">',
-      renderSettingsGroup("텔레그램 전달 채널", "사용자에게 나가는 링크와 채널 자격 정보를 관리합니다.", [
+      renderSettingsGroup("계정 알림 채널", "투자 인사이트와 뉴스처럼 계정 사용자에게 전달할 채널입니다.", [
         renderSettingField("notifyProvider", "알림 제공자", "text", "telegram"),
         renderSettingSelect("operatorReasoningReportEnabled", "운영자 추론 보고서", [
           { value: "0", label: "끄기" },
@@ -23772,6 +23784,10 @@
         renderSettingField("telegramChatId", "Telegram Chat ID", "text", "chat id", { preserveConfigured: true }),
         renderSettingField("notifyLinkUrl", "알림 링크 URL", "url", "http://127.0.0.1:3000?tab=notifications")
       ].join(""), "delivery"),
+      renderSettingsGroup("운영 알림 채널", "연결 장애, 데이터 파이프라인, 추론 상태, 작업 완료 알림만 별도 봇으로 보냅니다.", [
+        renderSettingField("operationsTelegramBotToken", "운영 알림 Bot Token", secretType, "operations bot token", { preserveConfigured: true }),
+        renderSettingField("operationsTelegramChatId", "운영 알림 Chat ID", "text", "기존 Chat ID 사용 가능", { preserveConfigured: true })
+      ].join(""), "operations-delivery"),
       '</div>',
       '</article>'
     ].join("");

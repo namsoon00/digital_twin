@@ -49,6 +49,7 @@ TEXT_SETTING_KEYS = [
     "kisMarketSignalUnchangedStaleCount",
     "notifyProvider",
     "telegramChatId",
+    "operationsTelegramChatId",
     "notifyLinkUrl",
     "fxRates",
     "valuationAssumptions",
@@ -293,6 +294,7 @@ SECRET_SETTING_KEYS = [
     "tossClientId",
     "tossClientSecret",
     "telegramBotToken",
+    "operationsTelegramBotToken",
     "mysqlPassword",
     "kisAppKey",
     "kisAppSecret",
@@ -560,6 +562,9 @@ def save_runtime_settings(input_settings: Dict[str, object]) -> Dict[str, str]:
     if input_settings.get("clearTelegramCredentials"):
         for key in ["telegramBotToken", "telegramChatId"]:
             next_settings.pop(key, None)
+    if input_settings.get("clearOperationsTelegramCredentials"):
+        for key in ["operationsTelegramBotToken", "operationsTelegramChatId"]:
+            next_settings.pop(key, None)
     if "modelDecisionThresholds" in input_settings:
         next_settings["alertThresholds"] = synced_model_alert_thresholds(
             next_settings.get("alertThresholds", ""),
@@ -661,6 +666,8 @@ def runtime_settings() -> Dict[str, str]:
         "notifyProvider": value("notifyProvider", "NOTIFY_PROVIDER"),
         "telegramBotToken": value("telegramBotToken", "TELEGRAM_BOT_TOKEN"),
         "telegramChatId": value("telegramChatId", "TELEGRAM_CHAT_ID"),
+        "operationsTelegramBotToken": value("operationsTelegramBotToken", "OPERATIONS_TELEGRAM_BOT_TOKEN"),
+        "operationsTelegramChatId": value("operationsTelegramChatId", "OPERATIONS_TELEGRAM_CHAT_ID"),
         "notifyLinkUrl": value("notifyLinkUrl", "NOTIFY_LINK_URL", "http://127.0.0.1:3000?tab=notifications"),
         "valuationAssumptions": value("valuationAssumptions", "VALUATION_ASSUMPTIONS", ""),
         "aiValuationAutoProposalEnabled": value("aiValuationAutoProposalEnabled", "AI_VALUATION_AUTO_PROPOSAL_ENABLED", "1"),

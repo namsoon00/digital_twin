@@ -1,6 +1,7 @@
 from typing import Dict, Iterable, List
 
 from ..domain.investment_research import NewsCollectionTarget, ResearchEvidence
+from ..domain.market_data import number
 from ..domain.news_ai_analysis import (
     apply_news_ai_analysis,
     local_news_ai_analysis,

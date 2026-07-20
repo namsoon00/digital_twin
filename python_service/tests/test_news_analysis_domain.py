@@ -6,6 +6,7 @@ from unittest.mock import patch
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from digital_twin.domain.investment_research import NewsCollectionTarget, ResearchEvidence, research_evidence_from_facts
+from digital_twin.application.news_ai_analysis_service import int_setting
 from digital_twin.domain.news_analysis import (
     article_analysis_facts,
     classify_news_relevance,
@@ -33,6 +34,9 @@ from digital_twin.infrastructure.news_ai_analyzer import FallbackNewsAiAnalyzer,
 
 
 class NewsAnalysisDomainTests(unittest.TestCase):
+    def test_news_analysis_setting_accepts_numeric_text(self):
+        self.assertEqual(12, int_setting({"newsAiAnalysisLimit": "12"}, "newsAiAnalysisLimit", 5))
+
     def test_news_ai_analyzer_uses_explicit_compatible_codex_model(self):
         with patch("digital_twin.infrastructure.news_ai_analyzer.codex_command", return_value="codex --model gpt-test exec -") as command:
             analyzer = news_ai_analyzer_from_settings({

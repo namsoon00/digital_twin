@@ -85,6 +85,7 @@ class MarketDataCollectionRunner:
         event_publisher=None,
         sleep_fn=time.sleep,
         time_series_store=None,
+        health_service=None,
     ):
         self.account_repository = account_repository
         self.symbol_service = symbol_service
@@ -94,6 +95,22 @@ class MarketDataCollectionRunner:
         self.event_publisher = event_publisher
         self.sleep_fn = sleep_fn
         self.time_series_store = time_series_store
+        self.health_service = health_service
+
+    def attach_pipeline_health(self, result: Dict[str, object]) -> Dict[str, object]:
+        if not self.health_service or not hasattr(self.health_service, "record_market_data_collection"):
+            return result
+        try:
+            health, event = self.health_service.record_market_data_collection(result)
+            result["pipelineHealth"] = health.to_dict() if hasattr(health, "to_dict") else dict(health or {})
+            if event and self.event_publisher:
+                if hasattr(self.event_publisher, "publish"):
+                    self.event_publisher.publish(event)
+                else:
+                    self.event_publisher.handle(event)
+        except Exception as error:  # noqa: BLE001 - health telemetry must not block collection.
+            result["pipelineHealth"] = {"state": "unknown", "reason": str(error)[:180]}
+        return result
 
     def enabled(self) -> bool:
         return truthy(self.settings.get("marketDataCollectionEnabled"), True)
@@ -359,16 +376,16 @@ class MarketDataCollectionRunner:
 
     def run_once(self, force: bool = False) -> Dict[str, object]:
         if not self.enabled() and not force:
-            return {"status": "disabled", "savedCount": 0}
+            return self.attach_pipeline_health({"status": "disabled", "savedCount": 0})
         universe_refresh = self.refresh_symbol_universe_if_needed()
         accounts = self.select_accounts()
         if not accounts:
-            return {
+            return self.attach_pipeline_health({
                 "status": "missingCredentials",
                 "message": "Toss credentials가 설정된 계정이 없습니다.",
                 "universeRefresh": universe_refresh,
                 "savedCount": 0,
-            }
+            })
         markets = self.markets()
         focused_by_account: List[Dict[str, object]] = []
         unavailable_accounts: List[Dict[str, str]] = []
@@ -394,7 +411,7 @@ class MarketDataCollectionRunner:
                 "positions": focused_positions,
             })
         if not focused_by_account:
-            return {
+            return self.attach_pipeline_health({
                 "status": "accountDataUnavailable",
                 "message": "실데이터를 읽은 계정이 없습니다.",
                 "markets": markets,
@@ -405,7 +422,7 @@ class MarketDataCollectionRunner:
                 "universeRefresh": universe_refresh,
                 "savedCount": 0,
                 "cache": self.quote_cache.summary("toss", MARKET_DATA_ACCOUNT_ID),
-            }
+            })
         focused_symbols = [
             str(position.symbol or "").upper()
             for entry in focused_by_account
@@ -420,7 +437,7 @@ class MarketDataCollectionRunner:
             market_signal_targets,
         )
         if not merge_summary.get("symbols"):
-            return {
+            return self.attach_pipeline_health({
                 "status": "fresh",
                 "markets": markets,
                 "collectionScope": "account-focus",
@@ -430,7 +447,7 @@ class MarketDataCollectionRunner:
                 "universeRefresh": universe_refresh,
                 "savedCount": 0,
                 "cache": self.quote_cache.summary("toss", MARKET_DATA_ACCOUNT_ID),
-            }
+            })
         symbols = list(merge_summary.get("symbols") or [])
         saved = 0
         account_saved = 0
@@ -527,6 +544,7 @@ class MarketDataCollectionRunner:
             "universeRefresh": universe_refresh,
             "cache": self.quote_cache.summary("toss", MARKET_DATA_ACCOUNT_ID),
         }
+        self.attach_pipeline_health(result)
         ontology_symbols = changed_symbols
         if self.event_publisher and saved:
             event = market_data_collected_event(result)

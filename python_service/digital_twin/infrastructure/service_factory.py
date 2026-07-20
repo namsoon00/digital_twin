@@ -111,6 +111,18 @@ def news_event_bus(settings=None) -> EventBus:
     )
     return bus
 
+def data_pipeline_health_event_bus(settings=None) -> EventBus:
+    configured_settings = settings or runtime_settings()
+    bus = default_event_bus()
+    bus.subscribe(
+        DATA_PIPELINE_HEALTH_CHANGED,
+        DataPipelineHealthNotificationEnqueuer(
+            account_repository=stores.account_registry(configured_settings),
+            queue=stores.notification_job_store(configured_settings),
+            settings=configured_settings,
+        ).handle,
+    )
+    return bus
 
 def monitor_account_job_store_from_settings(settings):
     return stores.monitor_account_job_store(settings)
@@ -280,8 +292,12 @@ def build_market_data_collection_runner(settings=None, event_publisher=None) -> 
         quote_cache=stores.market_quote_cache(configured_settings),
         settings=configured_settings,
         provider_factory=lambda account, quote_cache: TossProvider(account, quote_cache=quote_cache),
-        event_publisher=event_publisher or default_event_bus(),
+        event_publisher=event_publisher or data_pipeline_health_event_bus(configured_settings),
         time_series_store=stores.market_time_series_store(configured_settings),
+        health_service=DataPipelineHealthService(
+            stores.data_pipeline_health_store(configured_settings),
+            configured_settings,
+        ),
     )
 
 

@@ -177,3 +177,84 @@ def evaluate_news_collection_health(
         state_changed=state_changed,
         alert_required=alert_required,
     )
+
+
+def evaluate_market_data_collection_health(
+    result: Dict[str, object],
+    previous: Dict[str, object] = None,
+    now: datetime = None,
+) -> DataPipelineHealth:
+    """Classify quote, candle, and durable-history coverage from one market collection run."""
+    current = now or datetime.now(timezone.utc)
+    if current.tzinfo is None:
+        current = current.replace(tzinfo=timezone.utc)
+    checked_at = current.astimezone(timezone.utc).isoformat().replace("+00:00", "Z")
+    previous = dict(previous or {})
+    status = str(result.get("status") or "").strip()
+    previous_state = str(previous.get("state") or "")
+    first_observed_at = str(previous.get("firstObservedAt") or checked_at)
+    target_count = integer(result.get("selectedCount"))
+    quote_count = integer(result.get("priceCount"))
+    candle_count = integer(result.get("candleCount"))
+    saved_count = integer(result.get("savedCount"))
+    time_series = result.get("timeSeries") if isinstance(result.get("timeSeries"), dict) else {}
+    history_failed = str(time_series.get("status") or "").strip().lower() == "error"
+    failed_statuses = {"missingCredentials", "accountDataUnavailable", "error", "failed"}
+    zero_runs = 0 if quote_count else integer(previous.get("consecutiveZeroRuns")) + 1
+    last_non_zero_at = checked_at if quote_count else str(previous.get("lastNonZeroAt") or "")
+
+    if status == "disabled":
+        state, reason_code, reason = "disabled", "collection-disabled", "시장 데이터 수집 기능이 비활성화되어 있습니다."
+    elif status in failed_statuses:
+        state, reason_code, reason = "failed", "market-collection-unavailable", (
+            str(result.get("message") or "시장 데이터 수집이 계좌 또는 공급자 상태 때문에 완료되지 않았습니다.")
+        )
+    elif not target_count:
+        state, reason_code, reason = "idle", "no-observation-targets", "현재 수집할 보유·관심·시장 프록시 종목이 없습니다."
+    elif not quote_count:
+        state, reason_code, reason = "failed", "quote-coverage-empty", "수집 대상 종목의 현재가를 확보하지 못했습니다."
+    elif quote_count < target_count:
+        state, reason_code, reason = "degraded", "quote-coverage-partial", "일부 수집 대상의 현재가가 비어 있어 시세 커버리지가 불완전합니다."
+    elif not candle_count:
+        state, reason_code, reason = "degraded", "technical-history-empty", "현재가는 확보했지만 캔들 기반 기술 지표를 만들지 못했습니다."
+    elif candle_count < target_count:
+        state, reason_code, reason = "degraded", "technical-history-partial", "일부 수집 대상의 캔들 기반 기술 지표가 비어 있습니다."
+    elif history_failed:
+        state, reason_code, reason = "degraded", "time-series-write-failed", "시세는 확보했지만 장기 시계열 저장에 실패했습니다."
+    else:
+        state, reason_code, reason = "healthy", "market-observations-collected", "현재가·기술 지표·장기 시계열 저장 상태를 확인했습니다."
+
+    provider_rows = [{
+        "source": str(result.get("provider") or "market-data-provider"),
+        "requestCount": 2 if target_count else 0,
+        "successCount": int(bool(quote_count)) + int(bool(candle_count)),
+        "failureCount": int(state == "failed"),
+        "itemCount": quote_count + candle_count,
+        "candidateCount": target_count,
+        "quoteCount": quote_count,
+        "candleCount": candle_count,
+        "timeSeriesStatus": str(time_series.get("status") or "ok"),
+    }]
+    state_changed = state != previous_state
+    state_since = checked_at if state_changed else str(previous.get("stateSince") or checked_at)
+    alert_required = state_changed and (state in ALERT_STATES or previous_state in ALERT_STATES)
+    return DataPipelineHealth(
+        pipeline="marketSnapshot",
+        state=state,
+        reason_code=reason_code,
+        reason=reason,
+        checked_at=checked_at,
+        state_since=state_since,
+        first_observed_at=first_observed_at,
+        last_non_zero_at=last_non_zero_at,
+        consecutive_zero_runs=zero_runs,
+        target_count=target_count,
+        fetched_count=quote_count + candle_count,
+        saved_count=saved_count,
+        provider_failure_count=int(state == "failed"),
+        provider_candidate_count=target_count,
+        provider_rows=provider_rows,
+        previous_state=previous_state,
+        state_changed=state_changed,
+        alert_required=alert_required,
+    )

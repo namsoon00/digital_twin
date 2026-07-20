@@ -2,7 +2,7 @@ import unittest
 from datetime import datetime, timezone
 
 from digital_twin.application.data_pipeline_health_service import DataPipelineHealthService
-from digital_twin.domain.data_pipeline_health import evaluate_news_collection_health
+from digital_twin.domain.data_pipeline_health import evaluate_market_data_collection_health, evaluate_news_collection_health
 
 
 class MemoryStore:
@@ -105,6 +105,57 @@ class DataPipelineHealthTests(unittest.TestCase):
         self.assertEqual("idle", health.state)
         self.assertEqual("candidates-filtered", health.reason_code)
         self.assertFalse(health.alert_required)
+
+    def test_market_collection_partial_quote_coverage_is_degraded(self):
+        health = evaluate_market_data_collection_health({
+            "status": "ok",
+            "provider": "toss",
+            "selectedCount": 4,
+            "priceCount": 3,
+            "candleCount": 4,
+            "savedCount": 3,
+            "timeSeries": {"enabled": True, "savedCount": 4},
+        }, now=datetime(2026, 7, 21, 1, 0, tzinfo=timezone.utc))
+
+        self.assertEqual("marketSnapshot", health.pipeline)
+        self.assertEqual("degraded", health.state)
+        self.assertEqual("quote-coverage-partial", health.reason_code)
+        self.assertEqual(4, health.target_count)
+        self.assertEqual(7, health.fetched_count)
+
+    def test_market_collection_time_series_write_failure_is_degraded(self):
+        health = evaluate_market_data_collection_health({
+            "status": "ok",
+            "provider": "toss",
+            "selectedCount": 2,
+            "priceCount": 2,
+            "candleCount": 2,
+            "savedCount": 2,
+            "timeSeries": {"enabled": True, "status": "error", "reason": "database unavailable"},
+        }, previous={"state": "healthy"}, now=datetime(2026, 7, 21, 1, 0, tzinfo=timezone.utc))
+
+        self.assertEqual("degraded", health.state)
+        self.assertEqual("time-series-write-failed", health.reason_code)
+        self.assertTrue(health.alert_required)
+
+    def test_service_persists_market_snapshot_health(self):
+        store = MemoryStore()
+        service = DataPipelineHealthService(store)
+
+        health, event = service.record_market_data_collection({
+            "status": "ok",
+            "provider": "toss",
+            "selectedCount": 1,
+            "priceCount": 1,
+            "candleCount": 1,
+            "savedCount": 1,
+            "timeSeries": {"enabled": True, "savedCount": 1},
+        })
+
+        self.assertEqual("healthy", health.state)
+        self.assertIsNotNone(event)
+        self.assertFalse(event.payload["alertRequired"])
+        self.assertEqual("healthy", store.load()["pipelines"]["marketSnapshot"]["state"])
 
 
 if __name__ == "__main__":

@@ -1,6 +1,6 @@
 from typing import Dict
 
-from ..domain.data_pipeline_health import evaluate_news_collection_health
+from ..domain.data_pipeline_health import evaluate_market_data_collection_health, evaluate_news_collection_health
 from ..domain.events import DATA_PIPELINE_HEALTH_CHANGED, DomainEvent, data_pipeline_health_changed_event
 from ..domain.message_types import EXTERNAL_DATA_CONNECTION
 from ..domain.notifications import NotificationJob
@@ -42,6 +42,13 @@ class DataPipelineHealthService:
                 10080,
             ),
         )
+        self.save(health.to_dict())
+        event = data_pipeline_health_changed_event(health.to_dict()) if health.state_changed else None
+        return health, event
+
+    def record_market_data_collection(self, result: Dict[str, object]):
+        previous = self.pipeline_state("marketSnapshot")
+        health = evaluate_market_data_collection_health(result, previous)
         self.save(health.to_dict())
         event = data_pipeline_health_changed_event(health.to_dict()) if health.state_changed else None
         return health, event
@@ -108,7 +115,12 @@ class DataPipelineHealthNotificationEnqueuer:
         pipeline = str(payload.get("pipeline") or "데이터 파이프라인")
         state = str(payload.get("state") or "unknown")
         recovered = state in {"healthy", "idle"} and str(payload.get("previousState") or "") in {"degraded", "failed", "stale"}
-        title = "뉴스 수집 정상화" if recovered else "뉴스 수집 품질 점검 필요"
+        labels = {
+            "newsCollection": "뉴스 수집",
+            "marketSnapshot": "시장 데이터 수집",
+        }
+        display_name = labels.get(pipeline, pipeline)
+        title = display_name + (" 정상화" if recovered else " 품질 점검 필요")
         provider_failures = int(payload.get("providerFailureCount") or 0)
         text = "\n".join([
             "[운영] " + title,
@@ -123,7 +135,7 @@ class DataPipelineHealthNotificationEnqueuer:
             "messageType": EXTERNAL_DATA_CONNECTION,
             "accountId": str(getattr(account, "account_id", "") or ""),
             "accountLabel": str(getattr(account, "label", "") or ""),
-            "displayTarget": "뉴스 수집",
+            "displayTarget": display_name,
             "title": title,
             "rawTitle": title,
             "readableMessage": text,
@@ -134,5 +146,5 @@ class DataPipelineHealthNotificationEnqueuer:
             "pipelineHealth": payload,
             "eventGeneratedAt": event.occurred_at,
             "notificationSignals": ["connectionIssue" if not recovered else "connectionRecovered", "actionable"],
-            "criteria": ["공급자별 성공·실패", "연속 0건", "본문·관련성 품질 통과 여부"],
+            "criteria": ["공급자별 성공·실패", "수집 대상 대비 확보 건수", "원천 데이터 품질 통과 여부"],
         }

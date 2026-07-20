@@ -491,6 +491,7 @@ class GraphStoreOntologyRowMapperMixin:
                 "signalGroup": str(properties.get("signalGroup") or ""),
                 "materialityPassed": bool(properties.get("materialityPassed")) if "materialityPassed" in properties else None,
                 "materialityScore": number_or_none(properties.get("materialityScore")),
+                "evidenceRole": str(properties.get("evidenceRole") or properties.get("polarity") or "context"),
                 "riskImpact": number_or_none(properties.get("riskImpact") or properties.get("opinionImpact")),
                 "supportImpact": number_or_none(properties.get("supportImpact")),
                 "decisionStage": str(properties.get("decisionStage") or ""),

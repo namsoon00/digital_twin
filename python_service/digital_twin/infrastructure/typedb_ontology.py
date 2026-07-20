@@ -501,6 +501,7 @@ TYPEDB_FUNCTION_RELATION_FILTERS = {
     "minMaterialityScore",
     "minRiskImpact",
     "minSupportImpact",
+    "evidenceRole",
 }
 TYPEDB_FUNCTION_OPERATORS = {"==", "eq", "!=", "ne", "<=", "lte", ">=", "gte", "<", "lt", ">", "gt", "exists", "present"}
 TYPEDB_STRING_ATTRIBUTES = {
@@ -524,6 +525,7 @@ TYPEDB_STRING_ATTRIBUTES = {
     "ontology-relation-scope",
     "ontology-group",
     "ontology-polarity",
+    "ontology-evidence-role",
     "ontology-transition-type",
     "ontology-signal-group",
     "ontology-event-type",
@@ -1541,6 +1543,7 @@ attribute ontology-data-scope, value string;
 attribute ontology-domain-scope, value string;
 attribute ontology-relation-scope, value string;
 attribute ontology-group, value string;
+attribute ontology-evidence-role, value string;
 attribute ontology-polarity, value string;
 attribute ontology-transition-type, value string;
 attribute ontology-signal-group, value string;
@@ -1734,6 +1737,7 @@ entity ontology-node @abstract,
     owns ontology-relation-type,
     owns ontology-relation-scope,
     owns ontology-group,
+    owns ontology-evidence-role,
     owns ontology-polarity,
     owns ontology-event-type,
     owns ontology-materiality-passed,
@@ -1924,6 +1928,7 @@ relation ontology-assertion,
     owns ontology-json,
     owns ontology-weight,
     owns ontology-field,
+    owns ontology-evidence-role,
     owns ontology-polarity,
     owns ontology-transition-type,
     owns ontology-signal-group,
@@ -2124,6 +2129,7 @@ relation ontology-assertion,
             + typeql_has("ontology-domain-scope", row.get("domainScope"))
             + typeql_has("ontology-relation-scope", row.get("relationScope"))
             + typeql_has("ontology-group", row.get("group"))
+            + typeql_has("ontology-evidence-role", row.get("evidenceRole"))
             + typeql_has("ontology-polarity", row.get("polarity"))
             + typeql_has("ontology-event-type", row.get("eventType"))
             + typeql_has_bool_string("ontology-materiality-passed", row.get("materialityPassed"))
@@ -2191,6 +2197,7 @@ relation ontology-assertion,
             + typeql_has("ontology-json", row.get("propertiesJson"))
             + typeql_has("ontology-weight", row.get("weight"), numeric=True)
             + typeql_has("ontology-field", row.get("field"))
+            + typeql_has("ontology-evidence-role", row.get("evidenceRole"))
             + typeql_has("ontology-polarity", row.get("polarity"))
             + typeql_has("ontology-transition-type", row.get("transitionType"))
             + typeql_has("ontology-signal-group", row.get("signalGroup"))
@@ -4595,6 +4602,7 @@ def typedb_relation_attribute(field: str) -> str:
     return {
         "field": "ontology-field",
         "signalGroup": "ontology-signal-group",
+        "evidenceRole": "ontology-evidence-role",
         "polarity": "ontology-polarity",
         "transitionType": "ontology-transition-type",
         "materialityPassed": "ontology-materiality-passed",

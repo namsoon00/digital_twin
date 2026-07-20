@@ -246,11 +246,11 @@ class TypeDBOntologyRepositoryTests(unittest.TestCase):
 
         with patch("digital_twin.infrastructure.typedb_ontology.runtime_settings", return_value={
             "typedbABoxNodeBatchSize": "10",
-            "typedbABoxRelationBatchSize": "10",
+            "typedbABoxRelationBatchSize": "1",
         }):
             queries = repository.graph_insert_queries(graph)
 
-        self.assertEqual(7, len(queries))
+        self.assertEqual(34, len(queries))
         self.assertTrue(queries[0].startswith("insert $n0 isa ontology-entity"))
         self.assertTrue(any(query.startswith("match $source0 isa ontology-node") for query in queries))
 

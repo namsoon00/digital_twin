@@ -743,7 +743,7 @@ def runtime_settings() -> Dict[str, str]:
         "ontologyReasoningEventScanLimit": value("ontologyReasoningEventScanLimit", "ONTOLOGY_REASONING_EVENT_SCAN_LIMIT", "1500"),
         "ontologyReasoningTypeDbNativeRuleExecutionEnabled": value("ontologyReasoningTypeDbNativeRuleExecutionEnabled", "ONTOLOGY_REASONING_TYPEDB_NATIVE_RULE_EXECUTION_ENABLED", "1"),
         "typedbABoxNodeBatchSize": value("typedbABoxNodeBatchSize", "TYPEDB_ABOX_NODE_BATCH_SIZE", "25"),
-        "typedbABoxRelationBatchSize": value("typedbABoxRelationBatchSize", "TYPEDB_ABOX_RELATION_BATCH_SIZE", "15"),
+        "typedbABoxRelationBatchSize": value("typedbABoxRelationBatchSize", "TYPEDB_ABOX_RELATION_BATCH_SIZE", "1"),
         "temporalWindowPeriods": value("temporalWindowPeriods", "TEMPORAL_WINDOW_PERIODS", "1D=1:2\n3D=3:3\n5D=5:4\n20D=20:5"),
         "ontologyLabEnabled": value("ontologyLabEnabled", "ONTOLOGY_LAB_ENABLED", "1"),
         "ontologyLabIntervalSeconds": value("ontologyLabIntervalSeconds", "ONTOLOGY_LAB_INTERVAL_SECONDS", "300"),

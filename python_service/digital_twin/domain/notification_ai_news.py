@@ -69,6 +69,11 @@ def target_symbols_from_context(context: Dict[str, object]) -> List[str]:
         facts.get("symbol"),
         subject.get("symbol"),
     ]
+    for value in [context.get("target"), context.get("displayTarget")]:
+        for token in re.split(r"[/|,()\s]+", str(value or "")):
+            normalized = normalized_news_symbol(token)
+            if re.fullmatch(r"\d{6}|[A-Z][A-Z0-9.-]{0,9}", normalized):
+                candidates.append(normalized)
     symbols: List[str] = []
     for value in candidates:
         symbol = normalized_news_symbol(value)
@@ -114,8 +119,9 @@ def _items_from_target_group(raw: object, context: Dict[str, object]) -> List[Di
     if isinstance(raw.get("items"), list):
         return [item for item in raw.get("items") or [] if isinstance(item, dict)]
     rows: List[Dict[str, object]] = []
-    for symbol in target_symbols_from_context(context):
-        group = raw.get(symbol)
+    target_symbols = target_symbols_from_context(context)
+    groups = [raw.get(symbol) for symbol in target_symbols] if target_symbols else list(raw.values())
+    for group in groups:
         if isinstance(group, list):
             rows.extend(item for item in group if isinstance(item, dict))
         elif isinstance(group, dict) and isinstance(group.get("items"), list):

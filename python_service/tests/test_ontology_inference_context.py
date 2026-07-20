@@ -78,23 +78,18 @@ class OntologyInferenceContextTests(unittest.TestCase):
             text,
         )
 
-    def test_action_selection_threshold_policy_can_override_watchlist_entry_gate(self):
+    def test_watchlist_entry_requires_sufficient_support_state(self):
         position = Position(symbol="AAPL", name="Apple", source="watchlist")
         context = {
-            "decision": {"actionGroup": "entry", "score": 58},
-            "signalStrength": 58,
+            "decision": {"actionGroup": "entry", "decisionStage": "ENTRY_READY"},
+            "decisionState": {"dataState": "insufficient"},
         }
 
-        self.assertEqual("AVOID", choose_action(position, context, support_score=11, risk_score=0))
+        self.assertEqual("AVOID", choose_action(position, context, conflict_state="support-only"))
 
-        context["thresholdPolicy"] = {
-            "actionSelection": {
-                "watchlistEntryRelationScore": 50,
-                "watchlistEntryWeakSupportMargin": 10,
-            }
-        }
+        context["decisionState"]["dataState"] = "sufficient"
 
-        self.assertEqual("BUY", choose_action(position, context, support_score=11, risk_score=0))
+        self.assertEqual("BUY", choose_action(position, context, conflict_state="support-only"))
 
     def test_missing_data_driver_preserves_stale_value_reason(self):
         drivers = decision_drivers_from_relation_context(
@@ -148,7 +143,7 @@ class OntologyInferenceContextTests(unittest.TestCase):
             },
         )
 
-        self.assertEqual("available", facts["valuationDataStatus"])
+        self.assertEqual("sufficient", facts["valuationDataStatus"])
         self.assertEqual("user", facts["valuationSourceType"])
         self.assertEqual("사용자 입력", facts["valuationSourceLabel"])
         self.assertEqual("적정가 = 예상 EPS x 목표 PER", facts["valuationFormula"])
@@ -175,10 +170,10 @@ class OntologyInferenceContextTests(unittest.TestCase):
             settings={"aiValuationAutoProposalEnabled": "0"},
         )
 
-        self.assertEqual("missing", facts["valuationDataStatus"])
+        self.assertEqual("unavailable", facts["valuationDataStatus"])
         self.assertEqual("missing", facts["valuationSourceType"])
         self.assertIn("사용자 입력 없음", facts["valuationSourceLabel"])
-        self.assertEqual("판단 보류", facts["valuationReliabilityLabel"])
+        self.assertEqual("판단 보류", facts["valuationDataStateLabel"])
         self.assertEqual(["적정가", "예상 EPS", "목표 PER"], facts["valuationMissingInputs"])
         self.assertEqual(164.25, facts["valuationCurrentPrice"])
 
@@ -209,7 +204,7 @@ class OntologyInferenceContextTests(unittest.TestCase):
             settings={},
         )
 
-        self.assertEqual("available", facts["valuationDataStatus"])
+        self.assertEqual("partial", facts["valuationDataStatus"])
         self.assertEqual("ai", facts["valuationSourceType"])
         self.assertEqual("AI 제안", facts["valuationSourceLabel"])
         self.assertEqual("ai-preferred-income-yield-scenarios", facts["valuationMethod"])
@@ -492,7 +487,8 @@ class OntologyInferenceContextTests(unittest.TestCase):
 
         self.assertEqual(1, len(decisions))
         self.assertEqual("ontologyInferenceRequired", decisions[0].decision_basis)
-        self.assertEqual(0, decisions[0].exit_pressure)
+        self.assertEqual("blocked", decisions[0].review_level)
+        self.assertEqual("unavailable", decisions[0].data_state)
         self.assertTrue(decisions[0].relation_rule_context["blocked"])
         self.assertFalse(decisions[0].relation_rule_context["fallbackUsed"])
 
@@ -764,7 +760,7 @@ class OntologyInferenceContextTests(unittest.TestCase):
         self.assertNotIn("TRIM", context["executionPlan"]["primaryAction"])
         self.assertIn("SELL", context["executionPlan"]["blockedActionCodes"])
 
-    def test_inference_score_uses_fact_magnitude_not_rule_weight_only(self):
+    def test_inference_keeps_fact_magnitude_without_creating_an_aggregate_score(self):
         def context_for(position: Position):
             snapshot = AccountSnapshot(
                 "acct",
@@ -852,12 +848,13 @@ class OntologyInferenceContextTests(unittest.TestCase):
             sector="반도체",
         )
 
-        mild_score = context_for(mild)["scoreBreakdown"]
-        severe_score = context_for(severe)["scoreBreakdown"]
+        mild_context = context_for(mild)
+        severe_context = context_for(severe)
 
-        self.assertGreater(severe_score["riskPressure"], mild_score["riskPressure"])
-        self.assertGreater(severe_score["finalStrength"], mild_score["finalStrength"])
-        self.assertIn("손실률 확대", severe_score["drivers"])
+        self.assertEqual(-4.4, mild_context["facts"]["profitLossRate"])
+        self.assertEqual(-18.4, severe_context["facts"]["profitLossRate"])
+        self.assertEqual("risk-only", severe_context["conflictState"])
+        self.assertNotIn("scoreBreakdown", severe_context)
 
     def test_unrelated_flow_facts_do_not_change_loss_rule_pressure(self):
         position = Position(
@@ -933,15 +930,14 @@ class OntologyInferenceContextTests(unittest.TestCase):
         )
 
         context = relation_contexts_from_snapshot(snapshot)["000660"]
-        breakdown = context["scoreBreakdown"]
+        evidence_state = context["evidenceState"]
 
-        self.assertGreater(breakdown["riskPressure"], 0)
-        self.assertGreater(breakdown["supportEvidence"], 0)
-        self.assertIn("손실 구간", context["signalConflicts"]["riskDrivers"])
+        self.assertIn("risk", evidence_state["evidenceRoles"])
+        self.assertIn("SK하이닉스 손실 방어 리스크", context["signalConflicts"]["riskDrivers"])
         self.assertNotIn("체결강도 우위", context["signalConflicts"]["supportDrivers"])
-        active_breakdown = context["activeRules"][0]["scoreBreakdown"]
-        self.assertNotIn("tradeStrength", active_breakdown["appliedFactFields"])
-        self.assertNotIn("investorFlowScore", active_breakdown["appliedFactFields"])
+        active_evidence = context["activeRules"][0]["evidenceState"]
+        self.assertNotIn("tradeStrength", active_evidence["appliedFactFields"])
+        self.assertNotIn("investorFlowScore", active_evidence["appliedFactFields"])
 
 
 if __name__ == "__main__":

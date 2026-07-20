@@ -5,6 +5,20 @@ from typing import Dict, List
 
 from .notification_ai_context import relation_context_value
 from .notification_ai_gate_sources import all_source_urls_for_context, source_detail_map
+from .news_analysis import (
+    NEWS_MATERIALITY_STATE_LABELS,
+    NEWS_RELEVANCE_STATE_LABELS,
+    NEWS_SOURCE_TRUST_STATE_LABELS,
+    news_state_payload,
+)
+from .ontology_decision_state import (
+    CHANGE_STATE_LABELS,
+    CONFLICT_STATE_LABELS,
+    DATA_STATE_LABELS,
+    REVIEW_LEVEL_LABELS,
+    VALIDATION_STATE_LABELS,
+    review_level_for,
+)
 
 
 FACT_FIELDS = [
@@ -31,7 +45,6 @@ FACT_FIELDS = [
     ("timeAdjustedVolumeRatio", "시간 보정 거래량 배율"),
     ("tradeStrength", "체결강도"),
     ("bidAskImbalance", "매수·매도 호가 차이(%)"),
-    ("investorFlowScore", "투자자 수급 점수"),
     ("foreignNetVolume", "외국인 순매수"),
     ("institutionNetVolume", "기관 순매수"),
     ("individualNetVolume", "개인 순매수"),
@@ -43,8 +56,7 @@ FACT_FIELDS = [
     ("valuationMarginOfSafetyPct", "안전마진(%)"),
     ("valuationMinimumMarginOfSafetyPct", "요구 안전마진(%)"),
     ("valuationSourceLabel", "밸류에이션 출처"),
-    ("valuationReliabilityLabel", "밸류에이션 신뢰도"),
-    ("valuationReliabilityScore", "밸류에이션 신뢰도 점수"),
+    ("valuationDataStateLabel", "밸류에이션 자료 상태"),
     ("valuationApprovalStatus", "밸류에이션 승인 상태"),
     ("valuationDataStatus", "밸류에이션 데이터 상태"),
     ("usdKrw", "원·달러 환율"),
@@ -55,7 +67,6 @@ FACT_FIELDS = [
     ("btcChange7d", "비트코인 7일 변화(%)"),
     ("directNewsCount", "직접 관련 뉴스 수"),
     ("dataQuality", "데이터 품질"),
-    ("dataQualityScore", "데이터 품질 점수"),
 ]
 
 
@@ -78,7 +89,7 @@ class NotificationReasoningReport:
     reference_rules: List[Dict[str, object]] = field(default_factory=list)
     inferred_facts: List[str] = field(default_factory=list)
     decision: Dict[str, object] = field(default_factory=dict)
-    score_audit: Dict[str, object] = field(default_factory=dict)
+    state_audit: Dict[str, object] = field(default_factory=dict)
     validation_checks: List[Dict[str, str]] = field(default_factory=list)
     ai_audit: Dict[str, object] = field(default_factory=dict)
     delivery_audit: Dict[str, object] = field(default_factory=dict)
@@ -104,7 +115,7 @@ class NotificationReasoningReport:
             "referenceRules": payload.pop("reference_rules"),
             "inferredFacts": payload.pop("inferred_facts"),
             "decision": payload.pop("decision"),
-            "scoreAudit": payload.pop("score_audit"),
+            "stateAudit": payload.pop("state_audit"),
             "validationChecks": payload.pop("validation_checks"),
             "aiAudit": payload.pop("ai_audit"),
             "deliveryAudit": payload.pop("delivery_audit"),
@@ -163,13 +174,15 @@ def _rule_rows(value: object) -> List[Dict[str, object]]:
     for item in _list(value):
         if not isinstance(item, dict):
             continue
-        score_breakdown = item.get("scoreBreakdown") if isinstance(item.get("scoreBreakdown"), dict) else {}
         rows.append({
             "ruleId": str(item.get("ruleId") or item.get("rule_id") or ""),
             "label": _text(item.get("label") or item.get("name") or item.get("ruleId") or "", 240),
-            "strengthScore": round(_number(item.get("strengthScore") or item.get("strength_score") or item.get("score") or item.get("relationScore")), 1),
-            "confidence": round(_number(item.get("confidence")), 1),
-            "scoreBreakdown": dict(score_breakdown),
+            "reviewLevel": str(item.get("reviewLevel") or item.get("review_level") or ""),
+            "reviewLabel": str(item.get("reviewLabel") or item.get("review_label") or ""),
+            "dataState": str(item.get("dataState") or item.get("data_state") or ""),
+            "dataStateLabel": str(item.get("dataStateLabel") or item.get("data_state_label") or ""),
+            "evidenceRole": str(item.get("evidenceRole") or item.get("evidence_role") or item.get("polarity") or "context"),
+            "evidenceState": dict(item.get("evidenceState") or {}) if isinstance(item.get("evidenceState"), dict) else {},
             "evidence": [_text(row, 240) for row in _list(item.get("evidence")) if _text(row, 240)],
             "inferenceTraceId": str(item.get("inferenceTraceId") or item.get("inference_trace_id") or ""),
             "referenceOnly": bool(item.get("referenceOnly") or item.get("reference_only")),
@@ -199,14 +212,15 @@ def _source_rows(context: Dict[str, object]) -> List[Dict[str, object]]:
     for url in urls:
         item = details.get(url) if isinstance(details.get(url), dict) else {}
         payload = item.get("payload") if isinstance(item.get("payload"), dict) else {}
+        states = news_state_payload({**payload, **item})
         rows.append({
             "url": str(url),
             "title": _text(item.get("title") or item.get("summary") or "", 240),
             "source": _text(item.get("source") or item.get("domain") or item.get("provider") or "", 100),
             "publishedAt": str(item.get("publishedAt") or item.get("published_at") or ""),
-            "reliability": item.get("sourceReliability", payload.get("sourceReliability")),
-            "relevanceScore": item.get("relevanceScore", payload.get("relevanceScore")),
-            "materialityScore": item.get("materialityScore", payload.get("materialityScore")),
+            "reliabilityLabel": NEWS_SOURCE_TRUST_STATE_LABELS.get(states["sourceTrustState"], "출처 확인 필요"),
+            "relevanceLabel": NEWS_RELEVANCE_STATE_LABELS.get(states["relevanceState"], "투자 판단에서 제외"),
+            "materialityLabel": NEWS_MATERIALITY_STATE_LABELS.get(states["materialityState"], "참고 정보"),
             "stockImpactLabel": _text(item.get("stockImpactLabel") or payload.get("stockImpactLabel") or "", 80),
             "stockImpactReason": _text(item.get("stockImpactReasonKo") or payload.get("stockImpactReasonKo") or "", 300),
             "readStatus": _text(item.get("readStatusLabel") or payload.get("readStatusLabel") or "", 80),
@@ -214,27 +228,31 @@ def _source_rows(context: Dict[str, object]) -> List[Dict[str, object]]:
     return rows
 
 
-def _decision_and_score_audit(relation: Dict[str, object], active_rules: List[Dict[str, object]]):
+def _decision_and_state_audit(relation: Dict[str, object], active_rules: List[Dict[str, object]]):
     decision = relation.get("decision") if isinstance(relation.get("decision"), dict) else {}
     plan = relation.get("executionPlan") if isinstance(relation.get("executionPlan"), dict) else {}
     selected_id = str(decision.get("selectedRuleId") or "")
     selected_rule = next((item for item in active_rules if item.get("ruleId") == selected_id), {})
-    decision_score = round(_number(decision.get("score")), 1)
-    selected_score = round(_number(selected_rule.get("strengthScore")), 1)
-    highest_rule = max(active_rules, key=lambda item: _number(item.get("strengthScore")), default={})
-    score_audit = {
-        "decisionScore": decision_score,
-        "selectedRuleScore": selected_score,
-        "selectedRuleScoreMatches": bool(selected_rule) and abs(decision_score - selected_score) <= 0.1,
-        "highestRelationScore": round(_number(highest_rule.get("strengthScore")), 1),
-        "highestRelationRuleId": str(highest_rule.get("ruleId") or ""),
-        "highestRelationLabel": str(highest_rule.get("label") or ""),
-        "aggregateScoreBreakdown": dict(relation.get("scoreBreakdown") or {}),
-        "selectedScoreBreakdown": dict(decision.get("scoreBreakdown") or selected_rule.get("scoreBreakdown") or {}),
+    data_state = str(decision.get("dataState") or relation.get("dataState") or "partial")
+    review_level = str(decision.get("reviewLevel") or relation.get("reviewLevel") or "")
+    if not review_level:
+        review_level = review_level_for(decision.get("actionLevel"), data_state)
+    change_state = str(decision.get("changeState") or relation.get("changeState") or "unchanged")
+    conflict_state = str(decision.get("conflictState") or relation.get("conflictState") or "context-only")
+    state_audit = {
+        "selectedRuleIsActive": bool(selected_rule),
+        "reviewLevel": review_level,
+        "reviewLabel": str(decision.get("reviewLabel") or relation.get("reviewLevelLabel") or REVIEW_LEVEL_LABELS.get(review_level, "변화 관찰")),
+        "dataState": data_state,
+        "dataStateLabel": str(decision.get("dataStateLabel") or relation.get("dataStateLabel") or DATA_STATE_LABELS.get(data_state, "일부 자료만 있음")),
+        "changeState": change_state,
+        "changeStateLabel": str(decision.get("changeStateLabel") or relation.get("changeStateLabel") or CHANGE_STATE_LABELS.get(change_state, "이전과 같은 상태")),
+        "conflictState": conflict_state,
+        "conflictStateLabel": str(decision.get("conflictStateLabel") or relation.get("conflictStateLabel") or CONFLICT_STATE_LABELS.get(conflict_state, "방향을 정하기 어려운 참고 근거")),
+        "activeRuleCount": len(active_rules),
     }
     decision_payload = {
         "label": str(decision.get("label") or plan.get("decisionLabel") or ""),
-        "score": decision_score,
         "decisionStage": str(decision.get("decisionStage") or plan.get("decisionStage") or ""),
         "actionGroup": str(decision.get("actionGroup") or plan.get("actionGroup") or ""),
         "primaryAction": str(plan.get("primaryAction") or ""),
@@ -244,14 +262,15 @@ def _decision_and_score_audit(relation: Dict[str, object], active_rules: List[Di
         "selectedInferenceTraceId": str(decision.get("selectedInferenceTraceId") or selected_rule.get("inferenceTraceId") or ""),
         "targetRole": str(decision.get("targetRole") or plan.get("targetRole") or ""),
         "actionPolicy": str(decision.get("actionPolicy") or plan.get("actionPolicy") or ""),
+        **state_audit,
     }
-    return decision_payload, score_audit
+    return decision_payload, state_audit
 
 
 def _validation_checks(
     relation: Dict[str, object],
     decision: Dict[str, object],
-    score_audit: Dict[str, object],
+    state_audit: Dict[str, object],
     customer_message: str,
     source_items: List[Dict[str, object]],
 ) -> List[Dict[str, str]]:
@@ -279,9 +298,14 @@ def _validation_checks(
             "detail": str(decision.get("selectedRuleId") or "선택 규칙 없음"),
         },
         {
-            "name": "선택 규칙과 판단 점수 일치",
-            "status": "정상" if score_audit.get("selectedRuleScoreMatches") else "오류",
-            "detail": "판단 " + str(score_audit.get("decisionScore")) + "점 / 선택 규칙 " + str(score_audit.get("selectedRuleScore")) + "점",
+            "name": "선택 규칙이 현재 성립 규칙에 포함",
+            "status": "정상" if state_audit.get("selectedRuleIsActive") else "오류",
+            "detail": str(decision.get("selectedRuleId") or "선택 규칙 없음"),
+        },
+        {
+            "name": "판단 자료 사용 가능",
+            "status": "정상" if state_audit.get("dataState") == "sufficient" else "확인 필요" if state_audit.get("dataState") == "partial" else "오류",
+            "detail": str(state_audit.get("dataStateLabel") or "자료 상태 없음"),
         },
         {
             "name": "사용자 메시지 밸류에이션 보존",
@@ -312,7 +336,7 @@ def build_notification_reasoning_report(context: Dict[str, object], customer_job
     facts = relation.get("facts") if isinstance(relation.get("facts"), dict) else {}
     active_rules = _rule_rows(relation.get("activeRules") or relation.get("matchedRules"))
     reference_rules = _rule_rows(relation.get("referenceRules"))
-    decision, score_audit = _decision_and_score_audit(relation, active_rules)
+    decision, state_audit = _decision_and_state_audit(relation, active_rules)
     plan = relation.get("executionPlan") if isinstance(relation.get("executionPlan"), dict) else {}
     inferred_facts = []
     for driver in _list(plan.get("decisionDrivers")):
@@ -333,15 +357,14 @@ def build_notification_reasoning_report(context: Dict[str, object], customer_job
     source_items = _source_rows(values)
     is_direct_test = bool(values.get("testDispatch") and values.get("notificationTestBypassPolicy"))
     delivery = {
-        "priority": values.get("honeyScore"),
-        "threshold": values.get("honeyThreshold"),
-        "decision": values.get("honeyDecision"),
-        "reasons": list(values.get("honeyReasons") or []),
-        "stateReason": values.get("honeyStateReason"),
-        "similarityReason": values.get("honeySimilarityReason"),
-        "similarityBypassReason": values.get("honeySimilarityBypassReason"),
-        "similarityCount": values.get("honeySimilarityCount"),
-        "marketHoursReason": values.get("honeyMarketHoursReason"),
+        "decision": values.get("deliveryDecision"),
+        "gateState": values.get("deliveryGateState"),
+        "gateReason": values.get("deliveryGateReason"),
+        "reasons": list(values.get("deliveryReasons") or []),
+        "stateReason": values.get("cooldownReason"),
+        "similarityBypassReason": values.get("repeatBypassReason"),
+        "similarityCount": values.get("repeatRecentCount"),
+        "marketHoursReason": values.get("marketHoursReason"),
         "quietHoursReason": values.get("quietHoursReason"),
         "freshnessStatus": values.get("dataFreshnessStatus"),
         "freshnessReason": values.get("dataFreshnessReason"),
@@ -400,14 +423,19 @@ def build_notification_reasoning_report(context: Dict[str, object], customer_job
         reference_rules=reference_rules,
         inferred_facts=inferred_facts,
         decision=decision,
-        score_audit=score_audit,
-        validation_checks=_validation_checks(relation, decision, score_audit, customer_message, source_items),
+        state_audit=state_audit,
+        validation_checks=_validation_checks(relation, decision, state_audit, customer_message, source_items),
         ai_audit={
             "engineVersion": ai.get("engineVersion"),
             "source": ai.get("source"),
             "action": ai.get("action"),
             "actionLabel": ai.get("actionLabel"),
-            "confidence": ai.get("confidence"),
+            "validationState": ai.get("validationState"),
+            "validationLabel": ai.get("validationLabel"),
+            "dataState": ai.get("dataState"),
+            "dataStateLabel": ai.get("dataStateLabel"),
+            "reviewLevel": ai.get("reviewLevel"),
+            "reviewLabel": ai.get("reviewLabel"),
             "precomputedAction": ai.get("precomputedAction"),
             "disagreementReason": ai.get("disagreementReason"),
             "validationWarnings": list(ai.get("validationWarnings") or []),
@@ -429,11 +457,19 @@ def customer_alert_reason_lines(context: Dict[str, object]) -> List[str]:
         text = _text(item, 260)
         if text and "핵심 룰:" not in text and not re.search(r"[A-Z][A-Z0-9_]{3,}", text) and text not in rows:
             rows.append(text)
-    score = _number(decision.get("score"))
     label = _text(decision.get("label"), 100)
-    if score:
-        rows.append((label + " " if label else "관계 판단 ") + str(round(score, 1)) + "점으로 설정한 투자 판단 기준을 충족했습니다.")
-    state_reason = _text(context.get("honeyStateReason") or context.get("honeySimilarityBypassReason"), 260)
+    data_state = str(decision.get("dataState") or relation.get("dataState") or "partial")
+    review_level = str(decision.get("reviewLevel") or relation.get("reviewLevel") or "")
+    if not review_level:
+        review_level = review_level_for(decision.get("actionLevel"), data_state)
+    change_state = str(decision.get("changeState") or relation.get("changeState") or "unchanged")
+    rows.append(
+        (label + " 관계가 성립했습니다. " if label else "투자 판단 관계가 성립했습니다. ")
+        + "현재는 " + str(decision.get("reviewLabel") or relation.get("reviewLevelLabel") or REVIEW_LEVEL_LABELS.get(review_level, "변화 관찰"))
+        + " 단계이고, " + str(decision.get("changeStateLabel") or relation.get("changeStateLabel") or CHANGE_STATE_LABELS.get(change_state, "이전과 같은 상태"))
+        + "입니다."
+    )
+    state_reason = _text(context.get("cooldownReason") or context.get("repeatBypassReason"), 260)
     if state_reason and state_reason not in rows:
         rows.append("이전 알림과 비교: " + state_reason)
     return rows[:5]
@@ -457,14 +493,14 @@ def customer_inferred_fact_lines(context: Dict[str, object]) -> List[str]:
     return rows[:4]
 
 
-def customer_confidence_and_missing_lines(context: Dict[str, object]) -> List[str]:
+def customer_data_state_and_missing_lines(context: Dict[str, object]) -> List[str]:
     relation = relation_context_value(context or {})
     facts = relation.get("facts") if isinstance(relation.get("facts"), dict) else {}
-    score = relation.get("scoreBreakdown") if isinstance(relation.get("scoreBreakdown"), dict) else {}
     rows = []
-    confidence = _number(score.get("dataConfidence") or relation.get("confidence"))
-    if confidence:
-        rows.append("데이터 근거 신뢰도 " + str(round(confidence, 1)) + "점입니다. 가격 예측 성공률이 아니라 사용한 데이터의 완성도입니다.")
+    decision = relation.get("decision") if isinstance(relation.get("decision"), dict) else {}
+    data_state = str(decision.get("dataState") or relation.get("dataState") or "partial")
+    data_label = str(decision.get("dataStateLabel") or relation.get("dataStateLabel") or DATA_STATE_LABELS.get(data_state, "일부 자료만 있음"))
+    rows.append("자료 상태는 '" + data_label + "'입니다.")
     rows.extend(_missing_rows(relation, facts))
     return rows[:6]
 
@@ -516,15 +552,19 @@ def render_operator_reasoning_report(report: NotificationReasoningReport) -> str
     sections.extend(["", "성립한 관계 규칙"])
     if report.active_rules:
         for item in report.active_rules:
-            sections.append("• " + (item.get("label") or item.get("ruleId") or "규칙") + " · " + str(item.get("strengthScore")) + "점 · 신뢰도 " + str(item.get("confidence")))
+            sections.append(
+                "• " + (item.get("label") or item.get("ruleId") or "규칙")
+                + " · " + (item.get("reviewLabel") or item.get("reviewLevel") or "단계 미확인")
+                + " · " + (item.get("dataStateLabel") or item.get("dataState") or "자료 상태 미확인")
+            )
             sections.append("  ID: " + (item.get("ruleId") or "-") + " · 추론 경로: " + (item.get("inferenceTraceId") or "-"))
-            if item.get("scoreBreakdown"):
-                sections.append("  점수 구성: " + _display(item.get("scoreBreakdown")))
+            if item.get("evidenceState"):
+                sections.append("  근거 상태: " + _display(item.get("evidenceState")))
     else:
         sections.append("• 성립 규칙 없음")
     if report.reference_rules:
         sections.extend(["", "참고·최종 판단 제외 규칙"])
-        sections.extend("• " + (item.get("label") or item.get("ruleId") or "규칙") + " · " + str(item.get("strengthScore")) + "점" for item in report.reference_rules)
+        sections.extend("• " + (item.get("label") or item.get("ruleId") or "규칙") + " · 참고 근거" for item in report.reference_rules)
     sections.extend(["", "추론으로 새로 확인한 사실"])
     sections.extend(["• " + item for item in report.inferred_facts] or ["• 추론 사실 없음"])
     sections.extend([
@@ -534,11 +574,10 @@ def render_operator_reasoning_report(report: NotificationReasoningReport) -> str
         "• 판단 단계: " + _display(report.decision.get("decisionStage")),
         "• 대응: " + _display(report.decision.get("primaryActionLabel") or report.decision.get("primaryAction")),
         "• 선택 규칙: " + _display(report.decision.get("selectedRuleLabel") or report.decision.get("selectedRuleId")),
-        "• 판단 점수: " + _display(report.score_audit.get("decisionScore")) + "점",
-        "• 선택 규칙 점수: " + _display(report.score_audit.get("selectedRuleScore")) + "점",
-        "• 가장 강한 관계: " + _display(report.score_audit.get("highestRelationLabel")) + " · " + _display(report.score_audit.get("highestRelationScore")) + "점",
-        "• 선택 점수 구성: " + _display(report.score_audit.get("selectedScoreBreakdown")),
-        "• 전체 관계 점수 구성: " + _display(report.score_audit.get("aggregateScoreBreakdown")),
+        "• 확인 단계: " + _display(report.state_audit.get("reviewLabel")),
+        "• 자료 상태: " + _display(report.state_audit.get("dataStateLabel")),
+        "• 이번 변화: " + _display(report.state_audit.get("changeStateLabel")),
+        "• 근거 조합: " + _display(report.state_audit.get("conflictStateLabel")),
         "",
         "온톨로지 검증",
     ])
@@ -549,13 +588,13 @@ def render_operator_reasoning_report(report: NotificationReasoningReport) -> str
         "• 엔진: " + _display(report.ai_audit.get("engineVersion")),
         "• 출처: " + _display(report.ai_audit.get("source")),
         "• AI 표현 대응: " + _display(report.ai_audit.get("actionLabel") or report.ai_audit.get("action")),
-        "• AI 설명 확신도: " + _display(report.ai_audit.get("confidence")),
+        "• AI 검증 상태: " + _display(report.ai_audit.get("validationLabel") or report.ai_audit.get("validationState")),
+        "• AI 자료 상태: " + _display(report.ai_audit.get("dataStateLabel") or report.ai_audit.get("dataState")),
         "• 온톨로지 후보 대응: " + _display(report.ai_audit.get("precomputedAction")),
         "• 판단 차이 이유: " + _display(report.ai_audit.get("disagreementReason")),
         "• 검증 경고: " + _display(report.ai_audit.get("validationWarnings")),
         "",
         "알림 발송 감사",
-        "• 발송 우선도: " + _display(report.delivery_audit.get("priority")) + "/" + _display(report.delivery_audit.get("threshold")),
         "• 발송 판정: " + _display(report.delivery_audit.get("decision")),
         "• 판정 내역: " + _display(report.delivery_audit.get("reasons")),
         "• 상태 쿨다운: " + _display(report.delivery_audit.get("stateReason")),
@@ -570,7 +609,7 @@ def render_operator_reasoning_report(report: NotificationReasoningReport) -> str
         sections.extend(["", "기사·공시 원문 감사"])
         for index, item in enumerate(report.source_items, start=1):
             sections.append("• " + str(index) + ". " + (item.get("title") or item.get("source") or "원문"))
-            sections.append("  출처=" + _display(item.get("source")) + " · 게시=" + _display(item.get("publishedAt")) + " · 신뢰도=" + _display(item.get("reliability")) + " · 관련성=" + _display(item.get("relevanceScore")) + " · 중요도=" + _display(item.get("materialityScore")))
+            sections.append("  출처=" + _display(item.get("source")) + " · 게시=" + _display(item.get("publishedAt")) + " · 출처 신뢰=" + _display(item.get("reliabilityLabel")) + " · 종목 관련=" + _display(item.get("relevanceLabel")) + " · 투자 영향=" + _display(item.get("materialityLabel")))
             if item.get("stockImpactReason"):
                 sections.append("  영향=" + _display(item.get("stockImpactReason")))
             sections.append("  " + str(item.get("url") or ""))

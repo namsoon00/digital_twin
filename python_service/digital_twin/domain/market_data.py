@@ -577,7 +577,7 @@ def normalize_position(item: Dict[str, object]) -> Position:
         updated_at=str(item.get("updatedAt") or item.get("updated_at") or item.get("timestamp") or ""),
         source_as_of=str(item.get("sourceAsOf") or item.get("source_as_of") or ""),
         source_fetched_at=str(item.get("sourceFetchedAt") or item.get("source_fetched_at") or item.get("fetchedAt") or ""),
-        source_as_of_confidence=str(item.get("sourceAsOfConfidence") or item.get("source_as_of_confidence") or ""),
+        source_timestamp_state=str(item.get("sourceTimestampState") or item.get("source_timestamp_state") or ""),
         indicator_as_of=str(item.get("indicatorAsOf") or item.get("indicator_as_of") or ""),
         indicator_fetched_at=str(item.get("indicatorFetchedAt") or item.get("indicator_fetched_at") or ""),
         market_value=native_market_value,

@@ -22,16 +22,10 @@ from .portfolio_calculations import (
     serialize_dataclass,
     value_in_base,
 )
-from .strategy import (
-    SafeFormula,
-    StrategyModel,
-    decision_for_position,
-    decisions_for_positions,
-)
+from .strategy import StrategyModel, decision_for_position, decisions_for_positions
 
 __all__ = [
     "DEFAULT_FX_RATES",
-    "SafeFormula",
     "StrategyModel",
     "candle_close",
     "clamp",

@@ -63,11 +63,6 @@ TEXT_SETTING_KEYS = [
     "aiValuationBaselineMinimumMarginPct",
     "marketSignalInputs",
     "fairValueFormula",
-    "buyScoreFormula",
-    "sellScoreFormula",
-    "profitTakeScoreFormula",
-    "lossCutScoreFormula",
-    "notificationScoreFormula",
     "ontologyRelationRules",
     "instrumentProfiles",
     "investmentLanguageRegistryJson",
@@ -75,11 +70,6 @@ TEXT_SETTING_KEYS = [
     "aiPromptPolicy",
     "modelName",
     "modelHypothesis",
-    "customBuyModelFormula",
-    "customSellModelFormula",
-    "formulaWeights",
-    "decisionThresholds",
-    "modelDecisionThresholds",
     "modelTimingScenario",
     "modelTimingSymbols",
     "alertRules",
@@ -102,9 +92,12 @@ TEXT_SETTING_KEYS = [
     "ontologyReasoningEventScanLimit",
     "ontologyReasoningMinIntervalSeconds",
     "ontologyReasoningUrgentMinIntervalSeconds",
-    "ontologyReasoningUrgentMaterialityScore",
+    "ontologyReasoningUrgentReviewLevels",
     "ontologyReasoningProcessedEventLimit",
     "ontologyReasoningTypeDbNativeRuleExecutionEnabled",
+    "psychologyShadowEnabled",
+    "psychologyMinimumComponentCount",
+    "psychologyNewsMaxAgeMinutes",
     "typedbABoxNodeBatchSize",
     "typedbABoxRelationBatchSize",
     "ontologyLabEnabled",
@@ -112,7 +105,7 @@ TEXT_SETTING_KEYS = [
     "ontologyLabBatchSize",
     "ontologyLabRunHistoryLimit",
     "ontologyLabAutoApplyEnabled",
-    "ontologyLabAutoApplyMinScore",
+    "ontologyLabAutoApplyValidationStates",
     "ontologyLabAutoApplyNeedsReviewEnabled",
     "ontologyLabNotifyEnabled",
     "ontologyRuleCandidateAiEnabled",
@@ -124,12 +117,9 @@ TEXT_SETTING_KEYS = [
         "temporalWindowPeriods",
     "temporalWindowHistoryLimit",
     "materialityGateEnabled",
-    "materialityMinimumScore",
-    "marketMaterialityMinimumScore",
     "marketMaterialityPriceChangePct",
     "marketMaterialityTrendDistancePct",
     "marketMaterialityVolumeRatio",
-    "newsMaterialityMinimumScore",
     "typedbAddress",
     "typedbUser",
     "typedbDatabase",
@@ -165,13 +155,12 @@ TEXT_SETTING_KEYS = [
     "investmentBrainResearchMaxRounds",
     "investmentBrainResearchEvidenceLimit",
     "investmentBrainResearchMinimumVerifiedCount",
-    "investmentBrainResearchMinimumSourceReliability",
+    "investmentBrainResearchMinimumSourceTrustState",
     "investmentBrainResearchCooldownMinutes",
     "investmentBrainResearchWorkerIntervalSeconds",
     "investmentBrainResearchWorkerBatchSize",
     "investmentBrainResearchProcessingStaleMinutes",
     "investmentBrainPerformanceMinimumSamples",
-    "investmentBrainPerformanceMinimumAccuracyPct",
     "investmentBrainNotificationResearchEnabled",
     "investmentBrainNovelHypothesisAiEnabled",
     "investmentBrainNovelHypothesisAiCommand",
@@ -254,7 +243,11 @@ TEXT_SETTING_KEYS = [
     "newsCollectionLookbackMinutes",
     "newsCollectionPerSymbolLimit",
     "newsCollectionProviders",
-    "newsCollectionMinRelevanceScore",
+    "newsCollectionMinimumRelevanceState",
+    "newsDigestMinimumRelevanceState",
+    "newsDigestMinimumMaterialityState",
+    "newsDigestMinimumNeutralMaterialityState",
+    "newsDigestMinimumSourceTrustState",
     "newsCollectionRequireArticleBodyForRss",
     "newsCollectionIncludeWatchlist",
     "newsCollectionIncludeHoldings",
@@ -283,9 +276,7 @@ TEXT_SETTING_KEYS = [
     "newsAiAnalysisMaxPerRun",
     "investmentCalendarAutoExtractEnabled",
     "investmentCalendarAutoExtractRegisterUndated",
-    "investmentCalendarAutoExtractMinConfidence",
     "investmentCalendarAutoExtractReviewEnabled",
-    "investmentCalendarAutoExtractReviewMinConfidence",
     "investmentCalendarOfficialMacroSyncEnabled",
     "investmentCalendarOfficialMacroSyncIntervalHours",
     "investmentCalendarOfficialMacroSyncRateLimitSeconds",
@@ -319,50 +310,6 @@ SECRET_SETTING_KEYS = [
     "typedbPassword",
 ]
 
-DEFAULT_BUY_SCORE_FORMULA = (
-    "50 + (executionScore * 0.42 + directionalVolumePressure * 0.9 + buyShareScore * 0.55 "
-    "+ orderbookScore * 0.32 + momentumScore * 0.35 + trendScore * 0.45 "
-    "+ investorFlowScore * 0.35) * flowWeight + undervalueBonus * valuationWeight - expensivePenalty * valuationWeight"
-)
-DEFAULT_SELL_SCORE_FORMULA = (
-    "50 + (-executionScore * 0.38 - directionalVolumePressure * 0.85 - buyShareScore * 0.55 "
-    "- orderbookScore * 0.3 - momentumScore * 0.4 - trendScore * 0.35 "
-    "- investorFlowScore * 0.3) * flowWeight + expensiveBonus * valuationWeight"
-)
-DEFAULT_PROFIT_TAKE_SCORE_FORMULA = (
-    "baseScore + profitTakePnlScore + sectorConcentrationScore + sellableScore + holdingSignalScore"
-)
-LEGACY_LOSS_CUT_SCORE_FORMULA = (
-    "baseScore + lossCutPnlScore + sectorConcentrationScore + sellableScore + holdingSignalScore"
-)
-DEFAULT_LOSS_CUT_SCORE_FORMULA = (
-    "baseScore + lossCutPnlScore + sectorConcentrationScore + sellableScore + holdingSignalScore "
-    "+ lossGuardConfirmationScore - lossGuardWeakEvidencePenalty"
-)
-DEFAULT_NOTIFICATION_SCORE_FORMULA = "rawScore"
-DEFAULT_FORMULA_WEIGHTS = [
-    ("growthWeight", 1),
-    ("qualityWeight", 1),
-    ("riskWeight", 1),
-    ("flowWeight", 1),
-    ("valuationWeight", 1),
-    ("buyReasonWeight", 0.25),
-    ("confidenceWeight", 0.15),
-    ("riskControlWeight", 0.35),
-]
-DEFAULT_DECISION_THRESHOLDS = [
-    ("buyCandidate", 78),
-    ("chaseCaution", 70),
-    ("strongHold", 72),
-    ("sellTrim", 70),
-    ("riskReduce", 66),
-    ("sellWatch", 64),
-]
-DEFAULT_MODEL_DECISION_THRESHOLDS = [
-    ("graphSignalMinScore", 55),
-    ("graphSignalAlertScore", 78),
-    ("graphSignalConfidenceMin", 50),
-]
 DEFAULT_ALERT_THRESHOLDS = [
     ("volumeRatioHigh", 2),
     ("buyShareHigh", 65),
@@ -374,9 +321,6 @@ DEFAULT_ALERT_THRESHOLDS = [
     ("priceNearPercent", 1),
     ("staleMinutes", 30),
     ("pendingOrderMinutes", 30),
-    ("graphSignalMinScore", 55),
-    ("graphSignalAlertScore", 78),
-    ("graphSignalConfidenceMin", 50),
 ]
 DEFAULT_RELATION_RULE_THRESHOLDS = [
     (key, DEFAULT_RELATION_THRESHOLDS[key])
@@ -385,7 +329,6 @@ DEFAULT_RELATION_RULE_THRESHOLDS = [
         "lossRateBufferPct",
         "lossGuardVolumeConfirmRatio",
         "lossGuardMa60SupportPct",
-        "lossGuardWeakEvidencePenalty",
         "profitRateHigh",
         "sectorWeightHigh",
         "positionWeightHigh",
@@ -417,8 +360,6 @@ DEFAULT_RELATION_RULE_THRESHOLDS = [
         "fxExposureReview",
         "fxExposureHigh",
         "newsDirectFreshMaxAgeMinutes",
-        "newsDirectRelevanceMin",
-        "newsDirectMaterialityMin",
     ]
 ]
 
@@ -434,11 +375,6 @@ def assignment_text(items) -> str:
 
 DEFAULT_STRATEGY_SETTINGS = {
     "fairValueFormula": "eps * targetPer * growthWeight * qualityWeight * riskWeight",
-    "buyScoreFormula": DEFAULT_BUY_SCORE_FORMULA,
-    "sellScoreFormula": DEFAULT_SELL_SCORE_FORMULA,
-    "profitTakeScoreFormula": DEFAULT_PROFIT_TAKE_SCORE_FORMULA,
-    "lossCutScoreFormula": DEFAULT_LOSS_CUT_SCORE_FORMULA,
-    "notificationScoreFormula": DEFAULT_NOTIFICATION_SCORE_FORMULA,
     "ontologyRelationRules": default_ontology_relation_reasoning_text(),
     "instrumentProfiles": default_instrument_profiles_text(),
     "aiPromptTemplates": default_ai_prompt_templates_text(),
@@ -449,12 +385,7 @@ DEFAULT_STRATEGY_SETTINGS = {
     "notificationAiModel": "gpt-5.4",
     "notificationAiTimeoutSeconds": "120",
     "modelName": "나의 매수/매도 모델",
-    "modelHypothesis": "수급, 가치, 내 점수, 리스크를 함께 봐서 매수 후보와 매도 후보를 분리한다.",
-    "customBuyModelFormula": "buyScore * 0.35 + buyReasonScore * buyReasonWeight + confidenceScore * confidenceWeight + max(0, targetReturn) * 0.15 + undervalueBonus * valuationWeight - riskScore * riskControlWeight",
-    "customSellModelFormula": "sellScore * 0.35 + riskScore * riskControlWeight + expensivePenalty * valuationWeight + max(0, -targetReturn) * 0.2 - buyReasonScore * 0.1",
-    "formulaWeights": assignment_text(DEFAULT_FORMULA_WEIGHTS),
-    "decisionThresholds": assignment_text(DEFAULT_DECISION_THRESHOLDS),
-    "modelDecisionThresholds": assignment_text(DEFAULT_MODEL_DECISION_THRESHOLDS),
+    "modelHypothesis": "손익, 가격 흐름, 수급, 가치, 뉴스와 반대 근거를 상태로 나눠 행동 조건을 결정한다.",
     "alertThresholds": assignment_text(DEFAULT_ALERT_THRESHOLDS),
     "relationRuleThresholds": assignment_text(DEFAULT_RELATION_RULE_THRESHOLDS),
 }
@@ -462,27 +393,6 @@ DEFAULT_STRATEGY_SETTINGS = {
 
 def assignment_defaults(items) -> Dict[str, float]:
     return {str(key): float(value) for key, value in items}
-
-
-def assignment_text_from_map(values: Dict[str, float], ordered_items) -> str:
-    ordered_keys = [key for key, _value in ordered_items]
-    seen = set()
-    rows = []
-    for key in ordered_keys:
-        if key in values:
-            rows.append((key, values[key]))
-            seen.add(key)
-    for key in sorted(str(key) for key in values.keys() if str(key) not in seen):
-        rows.append((key, values[key]))
-    return assignment_text(rows)
-
-
-def synced_model_alert_thresholds(alert_thresholds: str, model_thresholds: str) -> str:
-    alerts = parse_assignments(alert_thresholds, assignment_defaults(DEFAULT_ALERT_THRESHOLDS))
-    models = parse_assignments(model_thresholds, assignment_defaults(DEFAULT_MODEL_DECISION_THRESHOLDS))
-    for key in ["graphSignalMinScore", "graphSignalAlertScore", "graphSignalConfidenceMin"]:
-        alerts[key] = models.get(key, alerts.get(key, 0))
-    return assignment_text_from_map(alerts, DEFAULT_ALERT_THRESHOLDS)
 
 
 def data_dir() -> Path:
@@ -537,6 +447,26 @@ def utc_now() -> str:
     return datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
 
 
+def source_trust_state(value: object, fallback: str = "standard") -> str:
+    """Normalize historical source-reliability settings at the settings edge."""
+    text = str(value or "").strip().lower()
+    if text in {"unknown", "limited", "standard", "trusted"}:
+        return text
+    try:
+        numeric = float(text)
+    except (TypeError, ValueError):
+        return fallback
+    if numeric > 1:
+        numeric /= 100.0
+    if numeric >= 0.8:
+        return "trusted"
+    if numeric >= 0.55:
+        return "standard"
+    if numeric > 0:
+        return "limited"
+    return "unknown"
+
+
 def read_settings_store() -> Dict[str, str]:
     try:
         from .mysql_operational import MySQLRuntimeSettingsStore
@@ -570,6 +500,9 @@ def save_runtime_settings(input_settings: Dict[str, object]) -> Dict[str, str]:
             value = str(input_settings.get(key) or "").strip()
             if value:
                 next_settings[key] = value
+    legacy_source_reliability = input_settings.get("investmentBrainResearchMinimumSourceReliability")
+    if "investmentBrainResearchMinimumSourceTrustState" not in input_settings and legacy_source_reliability not in (None, ""):
+        next_settings["investmentBrainResearchMinimumSourceTrustState"] = source_trust_state(legacy_source_reliability)
     if input_settings.get("clearTossCredentials"):
         for key in ["tossClientId", "tossClientSecret", "tossAccountSeq"]:
             next_settings.pop(key, None)
@@ -579,11 +512,33 @@ def save_runtime_settings(input_settings: Dict[str, object]) -> Dict[str, str]:
     if input_settings.get("clearOperationsTelegramCredentials"):
         for key in ["operationsTelegramBotToken", "operationsTelegramChatId"]:
             next_settings.pop(key, None)
-    if "modelDecisionThresholds" in input_settings:
-        next_settings["alertThresholds"] = synced_model_alert_thresholds(
-            next_settings.get("alertThresholds", ""),
-            next_settings.get("modelDecisionThresholds", ""),
-        )
+    for retired_key in {
+        "buyScoreFormula",
+        "sellScoreFormula",
+        "profitTakeScoreFormula",
+        "lossCutScoreFormula",
+        "customBuyModelFormula",
+        "customSellModelFormula",
+        "formulaWeights",
+        "decisionThresholds",
+        "modelDecisionThresholds",
+        "ontologyReasoningUrgentMaterialityScore",
+        "ontologyLabAutoApplyMinScore",
+        "materialityMinimumScore",
+        "marketMaterialityMinimumScore",
+        "newsMaterialityMinimumScore",
+        "newsCollectionMinRelevanceScore",
+        "newsDigestMinRelevanceScore",
+        "newsDigestMinMaterialityScore",
+        "newsDigestMinNeutralMaterialityScore",
+        "newsDigestMinSourceReliability",
+        "investmentBrainResearchMinimumSourceReliability",
+        "investmentBrainPerformanceMinimumAccuracyPct",
+        "investmentCalendarAutoExtractMinConfidence",
+        "investmentCalendarAutoExtractReviewMinConfidence",
+        "investmentCalendarAiResearchReviewMinConfidence",
+    }:
+        next_settings.pop(retired_key, None)
     next_settings["updatedAt"] = utc_now()
     write_settings_store(next_settings)
     return runtime_settings()
@@ -699,22 +654,12 @@ def runtime_settings() -> Dict[str, str]:
         "relationRuleThresholds": value("relationRuleThresholds", "RELATION_RULE_THRESHOLDS", DEFAULT_STRATEGY_SETTINGS["relationRuleThresholds"]),
         "alertCadenceMinutes": value("alertCadenceMinutes", "ALERT_CADENCE_MINUTES"),
         "monitorConnectionFailureAlertStreak": value("monitorConnectionFailureAlertStreak", "MONITOR_CONNECTION_FAILURE_ALERT_STREAK", "3"),
-        "buyScoreFormula": value("buyScoreFormula", "BUY_SCORE_FORMULA", DEFAULT_STRATEGY_SETTINGS["buyScoreFormula"]),
-        "sellScoreFormula": value("sellScoreFormula", "SELL_SCORE_FORMULA", DEFAULT_STRATEGY_SETTINGS["sellScoreFormula"]),
-        "profitTakeScoreFormula": value("profitTakeScoreFormula", "PROFIT_TAKE_SCORE_FORMULA", DEFAULT_STRATEGY_SETTINGS["profitTakeScoreFormula"]),
-        "lossCutScoreFormula": value("lossCutScoreFormula", "LOSS_CUT_SCORE_FORMULA", DEFAULT_STRATEGY_SETTINGS["lossCutScoreFormula"]),
-        "notificationScoreFormula": value("notificationScoreFormula", "NOTIFICATION_SCORE_FORMULA", DEFAULT_STRATEGY_SETTINGS["notificationScoreFormula"]),
         "ontologyRelationRules": value("ontologyRelationRules", "ONTOLOGY_RELATION_RULES", DEFAULT_STRATEGY_SETTINGS["ontologyRelationRules"]),
         "investmentLanguageRegistryJson": value("investmentLanguageRegistryJson", "INVESTMENT_LANGUAGE_REGISTRY_JSON", ""),
         "aiPromptTemplates": value("aiPromptTemplates", "AI_PROMPT_TEMPLATES", DEFAULT_STRATEGY_SETTINGS["aiPromptTemplates"]),
         "aiPromptPolicy": value("aiPromptPolicy", "AI_PROMPT_POLICY", DEFAULT_STRATEGY_SETTINGS["aiPromptPolicy"]),
         "modelName": value("modelName", "MODEL_NAME", DEFAULT_STRATEGY_SETTINGS["modelName"]),
         "modelHypothesis": value("modelHypothesis", "MODEL_HYPOTHESIS", DEFAULT_STRATEGY_SETTINGS["modelHypothesis"]),
-        "customBuyModelFormula": value("customBuyModelFormula", "CUSTOM_BUY_MODEL_FORMULA", DEFAULT_STRATEGY_SETTINGS["customBuyModelFormula"]),
-        "customSellModelFormula": value("customSellModelFormula", "CUSTOM_SELL_MODEL_FORMULA", DEFAULT_STRATEGY_SETTINGS["customSellModelFormula"]),
-        "formulaWeights": value("formulaWeights", "FORMULA_WEIGHTS", DEFAULT_STRATEGY_SETTINGS["formulaWeights"]),
-        "decisionThresholds": value("decisionThresholds", "DECISION_THRESHOLDS", DEFAULT_STRATEGY_SETTINGS["decisionThresholds"]),
-        "modelDecisionThresholds": value("modelDecisionThresholds", "MODEL_DECISION_THRESHOLDS", DEFAULT_STRATEGY_SETTINGS["modelDecisionThresholds"]),
         "modelTimingScenario": value("modelTimingScenario", "MODEL_TIMING_SCENARIO", "recent-one-year"),
         "modelTimingSymbols": value("modelTimingSymbols", "MODEL_TIMING_SYMBOLS", "NVDA,AAPL,005930,000660,TSLA"),
         "modelReviewCommand": value("modelReviewCommand", "MODEL_REVIEW_COMMAND", ""),
@@ -735,13 +680,17 @@ def runtime_settings() -> Dict[str, str]:
         "investmentBrainResearchMaxRounds": value("investmentBrainResearchMaxRounds", "INVESTMENT_BRAIN_RESEARCH_MAX_ROUNDS", "2"),
         "investmentBrainResearchEvidenceLimit": value("investmentBrainResearchEvidenceLimit", "INVESTMENT_BRAIN_RESEARCH_EVIDENCE_LIMIT", "40"),
         "investmentBrainResearchMinimumVerifiedCount": value("investmentBrainResearchMinimumVerifiedCount", "INVESTMENT_BRAIN_RESEARCH_MINIMUM_VERIFIED_COUNT", "2"),
-        "investmentBrainResearchMinimumSourceReliability": value("investmentBrainResearchMinimumSourceReliability", "INVESTMENT_BRAIN_RESEARCH_MINIMUM_SOURCE_RELIABILITY", "55"),
+        "investmentBrainResearchMinimumSourceTrustState": source_trust_state(
+            value("investmentBrainResearchMinimumSourceTrustState", "INVESTMENT_BRAIN_RESEARCH_MINIMUM_SOURCE_TRUST_STATE", ""),
+            source_trust_state(
+                value("investmentBrainResearchMinimumSourceReliability", "INVESTMENT_BRAIN_RESEARCH_MINIMUM_SOURCE_RELIABILITY", "55"),
+            ),
+        ),
         "investmentBrainResearchCooldownMinutes": value("investmentBrainResearchCooldownMinutes", "INVESTMENT_BRAIN_RESEARCH_COOLDOWN_MINUTES", "30"),
         "investmentBrainResearchWorkerIntervalSeconds": value("investmentBrainResearchWorkerIntervalSeconds", "INVESTMENT_BRAIN_RESEARCH_WORKER_INTERVAL_SECONDS", "15"),
         "investmentBrainResearchWorkerBatchSize": value("investmentBrainResearchWorkerBatchSize", "INVESTMENT_BRAIN_RESEARCH_WORKER_BATCH_SIZE", "3"),
         "investmentBrainResearchProcessingStaleMinutes": value("investmentBrainResearchProcessingStaleMinutes", "INVESTMENT_BRAIN_RESEARCH_PROCESSING_STALE_MINUTES", "30"),
         "investmentBrainPerformanceMinimumSamples": value("investmentBrainPerformanceMinimumSamples", "INVESTMENT_BRAIN_PERFORMANCE_MINIMUM_SAMPLES", "5"),
-        "investmentBrainPerformanceMinimumAccuracyPct": value("investmentBrainPerformanceMinimumAccuracyPct", "INVESTMENT_BRAIN_PERFORMANCE_MINIMUM_ACCURACY_PCT", "55"),
         "investmentBrainNotificationResearchEnabled": value("investmentBrainNotificationResearchEnabled", "INVESTMENT_BRAIN_NOTIFICATION_RESEARCH_ENABLED", "1"),
         "investmentBrainNovelHypothesisAiEnabled": value("investmentBrainNovelHypothesisAiEnabled", "INVESTMENT_BRAIN_NOVEL_HYPOTHESIS_AI_ENABLED", "1"),
         "investmentBrainNovelHypothesisAiCommand": value("investmentBrainNovelHypothesisAiCommand", "INVESTMENT_BRAIN_NOVEL_HYPOTHESIS_AI_COMMAND", ""),
@@ -754,9 +703,12 @@ def runtime_settings() -> Dict[str, str]:
         "ontologyReasoningEventScanLimit": value("ontologyReasoningEventScanLimit", "ONTOLOGY_REASONING_EVENT_SCAN_LIMIT", "1500"),
         "ontologyReasoningMinIntervalSeconds": value("ontologyReasoningMinIntervalSeconds", "ONTOLOGY_REASONING_MIN_INTERVAL_SECONDS", "180"),
         "ontologyReasoningUrgentMinIntervalSeconds": value("ontologyReasoningUrgentMinIntervalSeconds", "ONTOLOGY_REASONING_URGENT_MIN_INTERVAL_SECONDS", "60"),
-        "ontologyReasoningUrgentMaterialityScore": value("ontologyReasoningUrgentMaterialityScore", "ONTOLOGY_REASONING_URGENT_MATERIALITY_SCORE", "85"),
+        "ontologyReasoningUrgentReviewLevels": value("ontologyReasoningUrgentReviewLevels", "ONTOLOGY_REASONING_URGENT_REVIEW_LEVELS", "act,immediate,blocked"),
         "ontologyReasoningProcessedEventLimit": value("ontologyReasoningProcessedEventLimit", "ONTOLOGY_REASONING_PROCESSED_EVENT_LIMIT", "10000"),
         "ontologyReasoningTypeDbNativeRuleExecutionEnabled": value("ontologyReasoningTypeDbNativeRuleExecutionEnabled", "ONTOLOGY_REASONING_TYPEDB_NATIVE_RULE_EXECUTION_ENABLED", "1"),
+        "psychologyShadowEnabled": value("psychologyShadowEnabled", "PSYCHOLOGY_SHADOW_ENABLED", "1"),
+        "psychologyMinimumComponentCount": value("psychologyMinimumComponentCount", "PSYCHOLOGY_MINIMUM_COMPONENT_COUNT", "2"),
+        "psychologyNewsMaxAgeMinutes": value("psychologyNewsMaxAgeMinutes", "PSYCHOLOGY_NEWS_MAX_AGE_MINUTES", "1440"),
         "typedbABoxNodeBatchSize": value("typedbABoxNodeBatchSize", "TYPEDB_ABOX_NODE_BATCH_SIZE", "25"),
         "typedbABoxRelationBatchSize": value("typedbABoxRelationBatchSize", "TYPEDB_ABOX_RELATION_BATCH_SIZE", "5"),
         "temporalWindowPeriods": value("temporalWindowPeriods", "TEMPORAL_WINDOW_PERIODS", "1D=1:2\n3D=3:3\n5D=5:4\n20D=20:5"),
@@ -765,7 +717,7 @@ def runtime_settings() -> Dict[str, str]:
         "ontologyLabBatchSize": value("ontologyLabBatchSize", "ONTOLOGY_LAB_BATCH_SIZE", "5"),
         "ontologyLabRunHistoryLimit": value("ontologyLabRunHistoryLimit", "ONTOLOGY_LAB_RUN_HISTORY_LIMIT", "50"),
         "ontologyLabAutoApplyEnabled": value("ontologyLabAutoApplyEnabled", "ONTOLOGY_LAB_AUTO_APPLY_ENABLED", "1"),
-        "ontologyLabAutoApplyMinScore": value("ontologyLabAutoApplyMinScore", "ONTOLOGY_LAB_AUTO_APPLY_MIN_SCORE", "75"),
+        "ontologyLabAutoApplyValidationStates": value("ontologyLabAutoApplyValidationStates", "ONTOLOGY_LAB_AUTO_APPLY_VALIDATION_STATES", "ready"),
         "ontologyLabAutoApplyNeedsReviewEnabled": value("ontologyLabAutoApplyNeedsReviewEnabled", "ONTOLOGY_LAB_AUTO_APPLY_NEEDS_REVIEW_ENABLED", "0"),
         "ontologyLabNotifyEnabled": value("ontologyLabNotifyEnabled", "ONTOLOGY_LAB_NOTIFY_ENABLED", "1"),
         "ontologyRuleCandidateAiEnabled": value("ontologyRuleCandidateAiEnabled", "ONTOLOGY_RULE_CANDIDATE_AI_ENABLED", "1"),
@@ -776,12 +728,9 @@ def runtime_settings() -> Dict[str, str]:
         "ontologyRuleCandidateAiMaxCandidates": value("ontologyRuleCandidateAiMaxCandidates", "ONTOLOGY_RULE_CANDIDATE_AI_MAX_CANDIDATES", "3"),
         "temporalWindowHistoryLimit": value("temporalWindowHistoryLimit", "TEMPORAL_WINDOW_HISTORY_LIMIT", "96"),
         "materialityGateEnabled": value("materialityGateEnabled", "MATERIALITY_GATE_ENABLED", "1"),
-        "materialityMinimumScore": value("materialityMinimumScore", "MATERIALITY_MINIMUM_SCORE", "65"),
-        "marketMaterialityMinimumScore": value("marketMaterialityMinimumScore", "MARKET_MATERIALITY_MINIMUM_SCORE", "65"),
         "marketMaterialityPriceChangePct": value("marketMaterialityPriceChangePct", "MARKET_MATERIALITY_PRICE_CHANGE_PCT", "0.6"),
         "marketMaterialityTrendDistancePct": value("marketMaterialityTrendDistancePct", "MARKET_MATERIALITY_TREND_DISTANCE_PCT", "2"),
         "marketMaterialityVolumeRatio": value("marketMaterialityVolumeRatio", "MARKET_MATERIALITY_VOLUME_RATIO", "1.5"),
-        "newsMaterialityMinimumScore": value("newsMaterialityMinimumScore", "NEWS_MATERIALITY_MINIMUM_SCORE", "65"),
         "typedbAddress": value("typedbAddress", "TYPEDB_ADDRESS", "127.0.0.1:1729"),
         "typedbUser": value("typedbUser", "TYPEDB_USER", "admin"),
         "typedbPassword": value("typedbPassword", "TYPEDB_PASSWORD", "password"),
@@ -900,7 +849,11 @@ def runtime_settings() -> Dict[str, str]:
         "newsCollectionLookbackMinutes": value("newsCollectionLookbackMinutes", "NEWS_COLLECTION_LOOKBACK_MINUTES", "180"),
         "newsCollectionPerSymbolLimit": value("newsCollectionPerSymbolLimit", "NEWS_COLLECTION_PER_SYMBOL_LIMIT", "8"),
         "newsCollectionProviders": value("newsCollectionProviders", "NEWS_COLLECTION_PROVIDERS", "yahoo_search,yahoo_finance"),
-        "newsCollectionMinRelevanceScore": value("newsCollectionMinRelevanceScore", "NEWS_COLLECTION_MIN_RELEVANCE_SCORE", "35"),
+        "newsCollectionMinimumRelevanceState": value("newsCollectionMinimumRelevanceState", "NEWS_COLLECTION_MINIMUM_RELEVANCE_STATE", "context"),
+        "newsDigestMinimumRelevanceState": value("newsDigestMinimumRelevanceState", "NEWS_DIGEST_MINIMUM_RELEVANCE_STATE", "direct"),
+        "newsDigestMinimumMaterialityState": value("newsDigestMinimumMaterialityState", "NEWS_DIGEST_MINIMUM_MATERIALITY_STATE", "notable"),
+        "newsDigestMinimumNeutralMaterialityState": value("newsDigestMinimumNeutralMaterialityState", "NEWS_DIGEST_MINIMUM_NEUTRAL_MATERIALITY_STATE", "material"),
+        "newsDigestMinimumSourceTrustState": value("newsDigestMinimumSourceTrustState", "NEWS_DIGEST_MINIMUM_SOURCE_TRUST_STATE", "standard"),
         "newsCollectionRequireArticleBodyForRss": value("newsCollectionRequireArticleBodyForRss", "NEWS_COLLECTION_REQUIRE_ARTICLE_BODY_FOR_RSS", "1"),
         "newsCollectionIncludeWatchlist": value("newsCollectionIncludeWatchlist", "NEWS_COLLECTION_INCLUDE_WATCHLIST", "1"),
         "newsCollectionIncludeHoldings": value("newsCollectionIncludeHoldings", "NEWS_COLLECTION_INCLUDE_HOLDINGS", "1"),
@@ -929,9 +882,7 @@ def runtime_settings() -> Dict[str, str]:
         "newsAiAnalysisMaxPerRun": value("newsAiAnalysisMaxPerRun", "NEWS_AI_ANALYSIS_MAX_PER_RUN", "2"),
         "investmentCalendarAutoExtractEnabled": value("investmentCalendarAutoExtractEnabled", "INVESTMENT_CALENDAR_AUTO_EXTRACT_ENABLED", "1"),
         "investmentCalendarAutoExtractRegisterUndated": value("investmentCalendarAutoExtractRegisterUndated", "INVESTMENT_CALENDAR_AUTO_EXTRACT_REGISTER_UNDATED", "0"),
-        "investmentCalendarAutoExtractMinConfidence": value("investmentCalendarAutoExtractMinConfidence", "INVESTMENT_CALENDAR_AUTO_EXTRACT_MIN_CONFIDENCE", "0.45"),
         "investmentCalendarAutoExtractReviewEnabled": value("investmentCalendarAutoExtractReviewEnabled", "INVESTMENT_CALENDAR_AUTO_EXTRACT_REVIEW_ENABLED", "1"),
-        "investmentCalendarAutoExtractReviewMinConfidence": value("investmentCalendarAutoExtractReviewMinConfidence", "INVESTMENT_CALENDAR_AUTO_EXTRACT_REVIEW_MIN_CONFIDENCE", "0.35"),
         "investmentCalendarOfficialMacroSyncEnabled": value("investmentCalendarOfficialMacroSyncEnabled", "INVESTMENT_CALENDAR_OFFICIAL_MACRO_SYNC_ENABLED", "1"),
         "investmentCalendarOfficialMacroSyncIntervalHours": value("investmentCalendarOfficialMacroSyncIntervalHours", "INVESTMENT_CALENDAR_OFFICIAL_MACRO_SYNC_INTERVAL_HOURS", "12"),
         "investmentCalendarOfficialMacroSyncRateLimitSeconds": value("investmentCalendarOfficialMacroSyncRateLimitSeconds", "INVESTMENT_CALENDAR_OFFICIAL_MACRO_SYNC_RATE_LIMIT_SECONDS", "600"),
@@ -955,12 +906,6 @@ def runtime_settings() -> Dict[str, str]:
         "opendartApiKey": value("opendartApiKey", "OPENDART_API_KEY"),
         "fxRates": value("fxRates", "FX_RATES", "KRW=1\nUSD=1400"),
     }
-    if str(settings.get("lossCutScoreFormula") or "").strip() == LEGACY_LOSS_CUT_SCORE_FORMULA:
-        settings["lossCutScoreFormula"] = DEFAULT_LOSS_CUT_SCORE_FORMULA
-    settings["alertThresholds"] = synced_model_alert_thresholds(
-        settings.get("alertThresholds", ""),
-        settings.get("modelDecisionThresholds", ""),
-    )
     return settings
 
 

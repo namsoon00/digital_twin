@@ -13,7 +13,6 @@ from .notification_ontology_sections import (
     RATE_REGIME_LABELS,
     ai_prompt_lines,
     append_unique_lines,
-    beginner_score_breakdown_line,
     beginner_relation_decision_line,
     beginner_rule_explanation,
     block_from_lines,
@@ -51,7 +50,6 @@ from .notification_text_formatting import (
     data_value,
     dominant_signed_direction,
     first_data_text,
-    format_score_value,
     formatted_data_rows,
     grouped_data_rows,
     html_bullet,
@@ -88,7 +86,7 @@ from .notification_title_rules import (
 from .notifications import notification_debug_number
 from .notification_start_badge import labeled_message_start_badge
 from .portfolio import AlertEvent
-from .scoring import notification_signal_labels
+from .notification_signal_classification import notification_signal_categories
 
 
 LEGACY_DEFAULT_TEMPLATE = "{title}\n{lines}"
@@ -122,7 +120,7 @@ SEVERITY_LABELS = {
     "ALERT": "주의",
 }
 
-SCORE_EXPLANATION_SKIP_TYPES = {
+REASONING_EXPLANATION_SKIP_TYPES = {
     "newsDigest",
     "workHandoff",
     OPERATOR_REASONING_REPORT,
@@ -151,7 +149,6 @@ CUSTOMER_FACING_MESSAGE_TYPES = {
     "newsDigest",
 }
 
-SCORE_VALUE_PATTERN = re.compile(r"\d+(?:\.\d+)?점")
 
 DEFAULT_NOTIFICATION_TEMPLATES = {
     "default": {
@@ -384,7 +381,7 @@ def alert_context(event: AlertEvent) -> Dict[str, object]:
     headline = targeted_headline(status_headline, title_icon, target_value, title_headline)
     target_line = "대상: " + target_value if target_value else ""
     criteria = event_criterion_lines(event, raw_lines, trigger_summary)
-    signals = notification_signal_labels(event.rule, raw_lines)
+    signals = notification_signal_categories(event.rule, raw_lines)
     trigger_block_rows = criterion_rows(criteria, False)
     trigger_block = ("발송 기준\n" + trigger_block_rows) if trigger_block_rows else ""
     display_raw_lines = notification_data_lines(raw_lines, metadata)
@@ -570,117 +567,8 @@ def context_raw_lines(context: Dict[str, object]) -> List[str]:
     return [line.strip() for line in str(raw or "").splitlines() if line.strip()]
 
 
-def has_score_value(value: str) -> bool:
-    return bool(SCORE_VALUE_PATTERN.search(str(value or "")))
-
-
-
-
 def context_message_type(context: Dict[str, object]) -> str:
     return str((context or {}).get("messageType") or (context or {}).get("rule") or "").strip()
-
-
-def formula_number(value: object) -> str:
-    try:
-        number = float(value)
-    except (TypeError, ValueError):
-        return str(value or "").strip()
-    if number.is_integer():
-        return str(int(number))
-    return ("%.4f" % number).rstrip("0").rstrip(".")
-
-
-def formula_audit_items(context: Dict[str, object], domain: str = "all") -> List[Dict[str, object]]:
-    audits: List[Dict[str, object]] = []
-    if domain in {"all", "model"}:
-        raw_audits = (context or {}).get("formulaAudits")
-    else:
-        raw_audits = []
-    if isinstance(raw_audits, list):
-        audits.extend([item for item in raw_audits if isinstance(item, dict)])
-    if domain in {"all", "delivery"}:
-        notification_audit = (context or {}).get("notificationFormulaAudit")
-        if isinstance(notification_audit, dict) and notification_audit:
-            audits.append(notification_audit)
-        elif (context or {}).get("honeyScore") not in (None, ""):
-            expression = str((context or {}).get("notificationScoreFormula") or "rawScore").strip() or "rawScore"
-            audits.append({
-                "key": "notificationScoreFormula",
-                "label": "알림 발송 공식",
-                "expression": expression,
-                "result": context.get("honeyScore"),
-                "variables": {"rawScore": context.get("honeyScore")},
-                "missing": [],
-                "note": "상세 발송 변수표가 없는 이전 알림이어서 최종 발송 우선도를 rawScore로 표시합니다.",
-            })
-    seen = set()
-    unique: List[Dict[str, object]] = []
-    for audit in audits:
-        key = str(audit.get("key") or audit.get("label") or "").strip()
-        if not key or key in seen:
-            continue
-        seen.add(key)
-        unique.append(audit)
-    return unique
-
-
-def formula_variables_text(audit: Dict[str, object]) -> str:
-    variables = audit.get("variables") if isinstance(audit, dict) else {}
-    if not isinstance(variables, dict) or not variables:
-        return "없음"
-    return ", ".join(
-        str(key) + "=" + formula_number(variables.get(key))
-        for key in sorted(variables.keys())
-    )
-
-
-def formula_missing_text(audit: Dict[str, object]) -> str:
-    missing = audit.get("missing") if isinstance(audit, dict) else []
-    if isinstance(missing, str):
-        missing = [missing]
-    if not isinstance(missing, list) or not missing:
-        return "없음"
-    return ", ".join(str(item) for item in missing if str(item or "").strip()) or "없음"
-
-
-def formula_detail_text(label: str, detail: str) -> str:
-    return "없음" if detail == "없음" else label + " " + detail
-
-
-def formula_audit_lines(context: Dict[str, object], domain: str = "model") -> List[str]:
-    lines: List[str] = []
-    is_delivery = domain == "delivery"
-    for audit in formula_audit_items(context, domain):
-        key = str(audit.get("key") or "").strip()
-        label = str(audit.get("label") or key or "공식").strip()
-        expression = str(audit.get("expression") or "").strip()
-        result = formula_number(audit.get("result"))
-        if is_delivery:
-            result_text = "우선도 " + result
-            formula_label = "발송 공식"
-            variable_label = "발송 대입값"
-            missing_label = "발송 부족 데이터"
-            note_label = "발송 참고"
-        else:
-            result_text = ("선택됨, " if audit.get("selected") else "") + result + "점"
-            formula_label = "모델 공식"
-            variable_label = "모델 대입값"
-            missing_label = "모델 부족 데이터"
-            note_label = "모델 참고"
-        if expression:
-            lines.append(formula_label + ": " + label + "(" + key + ") = " + expression + " -> " + result_text)
-        else:
-            lines.append(formula_label + ": " + label + "(" + key + ") -> " + result_text)
-        lines.append(variable_label + ": " + formula_detail_text(label, formula_variables_text(audit)))
-        lines.append(missing_label + ": " + formula_detail_text(label, formula_missing_text(audit)))
-        if is_delivery and key == "notificationScoreFormula" and (context or {}).get("honeyScore") not in (None, ""):
-            final_score = formula_number((context or {}).get("honeyScore"))
-            if result and final_score and result != final_score:
-                lines.append("최종 발송 우선도: 공식 결과 " + result + "에서 반복·장 시간 정책 반영 후 " + final_score)
-        note = str(audit.get("note") or "").strip()
-        if note:
-            lines.append(note_label + ": " + note)
-    return lines
 
 
 MODELING_LABELS = {
@@ -719,7 +607,7 @@ MODEL_DATA_HINTS = {
     "watchlistOntologySignal": "관심종목 ABox 관측값, 관계 규칙, 추세 동역학, 데이터 품질",
     "holdingTiming": "보유 스냅샷, 손익률, 수급, 추세, 매도 가능 수량",
     "ontologyInferenceMissing": "실계좌 스냅샷, 그래프 저장소 InferenceBox 상태, 관계·근거 추론 개수",
-    "monitorDecisionChange": "이전/현재 보유 모델 점수와 보유 스냅샷",
+    "monitorDecisionChange": "이전/현재 보유 판단 상태와 보유 스냅샷",
     "monitorTrendChange": "현재가와 20일/60일 이동평균 비교",
     "monitorPnlChange": "이전/현재 손익률",
     "monitorValueChange": "이전/현재 평가액",
@@ -737,15 +625,15 @@ def strategy_formula_line(context: Dict[str, object]) -> str:
     if ontology_relation_context(context) and message_type in {"modelBuy", "modelSell", "watchlistBuyCandidate", "holdingTiming", "monitorDecisionChange"}:
         return "판단 기준: 관계 규칙(ontologyRelationRules)"
     if message_type == "investmentInsight":
-        return "판단 기준: 온톨로지 관계 인사이트(sourceSignalTypes + ontologyInsight)"
+        return "판단 기준: 온톨로지 관계와 현재 자료 상태"
     if message_type in {"modelBuy", "watchlistBuyCandidate"}:
-        return "판단 기준: 관계 규칙 점수"
+        return "판단 기준: 진입 조건과 반대 근거"
     if message_type == "modelSell":
-        return "판단 기준: 관계 규칙 점수"
+        return "판단 기준: 손실 관리 조건과 반대 근거"
     if message_type in {"holdingTiming", "monitorDecisionChange"}:
         return "판단 기준: 관계 규칙"
     if message_type == "externalCryptoMove":
-        return "판단 공식: 크립토 변동 공식(cryptoMoveScoreFormula)"
+        return "판단 기준: 크립토 변동 조건과 연결 종목 반응"
     return ""
 
 
@@ -756,16 +644,12 @@ def crypto_model_summary_lines(context: Dict[str, object]) -> List[str]:
     if not isinstance(model, dict):
         model = {}
     title = str(model.get("titleLabel") or context.get("cryptoMoveTitle") or "").strip()
-    score = model.get("score", context.get("cryptoMoveScore"))
     period = str(model.get("dominantPeriodLabel") or context.get("cryptoMoveDominantPeriod") or "").strip()
     change = model.get("dominantChange", context.get("cryptoMoveDominantChange"))
     reason = str(model.get("reason") or context.get("cryptoMoveReason") or "").strip()
     lines: List[str] = []
-    if title or score not in (None, ""):
-        result = title or "크립토 가격 변동"
-        if score not in (None, ""):
-            result += " (모델 점수 " + format_score_value(score) + "점)"
-        lines.append("판단 결과: " + result)
+    if title:
+        lines.append("판단 결과: " + title)
     if period or change not in (None, ""):
         change_text = signed_pct(change) if isinstance(change, (int, float)) else str(change or "").strip()
         lines.append("대표 변화: " + " ".join(part for part in [period, change_text] if part))
@@ -776,7 +660,7 @@ def crypto_model_summary_lines(context: Dict[str, object]) -> List[str]:
 
 def modeling_lines(context: Dict[str, object]) -> List[str]:
     message_type = context_message_type(context)
-    if message_type in SCORE_EXPLANATION_SKIP_TYPES:
+    if message_type in REASONING_EXPLANATION_SKIP_TYPES:
         return []
     label = MODELING_LABELS.get(message_type, "기본 알림 모델")
     lines = ["모델: " + label]
@@ -787,55 +671,6 @@ def modeling_lines(context: Dict[str, object]) -> List[str]:
     if data_hint:
         lines.append("사용 데이터: " + data_hint)
     lines.extend(crypto_model_summary_lines(context))
-    return lines
-
-
-def investment_score_lines(context: Dict[str, object]) -> List[str]:
-    message_type = context_message_type(context)
-    raw_lines = context_raw_lines(context)
-    lines: List[str] = []
-    buy_value = data_value(raw_lines, "매수 판단") or data_value(raw_lines, "모델 매수 점수")
-    sell_value = data_value(raw_lines, "매도 판단") or data_value(raw_lines, "모델 매도 점수")
-    status_value = data_value(raw_lines, "상태")
-    previous_value = data_value(raw_lines, "이전")
-    current_value = data_value(raw_lines, "현재")
-
-    if message_type == "investmentInsight":
-        insight = context.get("ontologyInsight") if isinstance(context, dict) else {}
-        score = insight.get("score") if isinstance(insight, dict) else context.get("score")
-        confidence = insight.get("confidence") if isinstance(insight, dict) else context.get("confidence")
-        source_types = insight.get("sourceSignalTypes") if isinstance(insight, dict) else context.get("sourceSignalTypes")
-        if isinstance(source_types, list):
-            source_text = ", ".join(str(item) for item in source_types[:5])
-        else:
-            source_text = str(source_types or "").strip()
-        parts = []
-        if score not in (None, ""):
-            parts.append("관계 강도 " + formula_number(score) + "점")
-        if confidence not in (None, ""):
-            parts.append("신뢰도 " + formula_number(confidence) + "%")
-        if source_text:
-            parts.append("근거 신호 " + source_text)
-        lines.append(
-            "온톨로지 인사이트 점수: 개별 알림 타입을 직접 발송하지 않고, 보유·관심종목·외부 신호가 만든 관계 조합을 하나의 투자 인사이트로 합성합니다."
-            + (" " + ", ".join(parts) + "." if parts else "")
-        )
-    if message_type in {"modelBuy", "watchlistBuyCandidate"} and has_score_value(buy_value):
-        lines.append(
-            "매수 관계 점수: 직접 공식 하나가 아니라 성립한 관계 규칙의 강도를 0~100점으로 표시합니다. 눌림목, 지지선, 거래량, 체결강도, 투자자 수급, 뉴스·공시 리스크가 관계 규칙 안에서 함께 확인될 때 매수 후보에 가까워집니다."
-        )
-    if message_type == "modelSell" and has_score_value(sell_value):
-        lines.append(
-            "매도 관계 점수: 성립한 관계 규칙의 강도를 0~100점으로 표시합니다. 손실 관리, 수익 보호, 추세 훼손, 매도 수급, 포트폴리오 집중, 뉴스·공시 리스크가 강하게 연결될수록 분할매도나 손실 관리 점검에 가까워집니다."
-        )
-    if message_type in {"holdingTiming", "monitorDecisionChange"} and any(has_score_value(item) for item in [status_value, previous_value, current_value]):
-        lines.append(
-            "보유 관계 점수: 사용자가 설정한 개별 공식이 아니라 성립한 관계 규칙의 강도입니다. 손익률, 20일선·60일선, 거래량, 체결강도, 투자자 수급, 포트폴리오 비중, 뉴스·공시가 어떤 관계로 연결됐는지를 보고 점수와 판단 이름을 정합니다."
-        )
-    if message_type == "externalCryptoMove" and (context or {}).get("cryptoMoveScore") not in (None, ""):
-        lines.append(
-            "크립토 변동 모델 점수: 24시간 변화율과 7일 변화율이 각각의 기준값을 얼마나 넘었는지 비교해 0~100점으로 계산합니다. 모델은 더 강하게 기준을 넘은 기간을 대표 변화로 고르고, 그 방향으로 제목과 관찰/주의 등급을 정합니다."
-        )
     return lines
 
 
@@ -855,15 +690,6 @@ def ontology_modeling_lines(context: Dict[str, object]) -> List[str]:
     ]
     if subject_text:
         lines.append("대상: " + subject_text)
-    strength = relation_context.get("signalStrength")
-    if strength not in (None, ""):
-        lines.append(
-            "관계 신호: "
-            + str(relation_context.get("signalStrengthLabel") or "")
-            + " ("
-            + format_score_value(strength)
-            + "점)"
-        )
     decision = relation_context.get("decision") if isinstance(relation_context.get("decision"), dict) else {}
     if decision:
         selected = str(decision.get("selectedRuleId") or "").strip()
@@ -998,23 +824,19 @@ def absolute_beginner_ontology_modeling_lines(context: Dict[str, object]) -> Lis
         return []
     lines: List[str] = []
     subject_name = relation_subject_name(context, relation_context)
-    strength = relation_context.get("signalStrength")
-    strength_label = str(relation_context.get("signalStrengthLabel") or "").strip()
-    confidence = relation_context.get("confidence")
     decision = relation_context.get("decision") if isinstance(relation_context.get("decision"), dict) else {}
     decision_label = str(decision.get("label") or "").strip()
     if decision_label:
         lines.append(sentence_text("관계 분석은 " + subject_name + "에 대해 '" + decision_label + "' 상태로 봤습니다"))
-    if strength not in (None, ""):
-        score_text = format_score_value(strength) + "점"
-        if strength_label:
-            score_text += "으로 '" + strength_label + "' 수준"
-        if confidence not in (None, ""):
-            score_text += "이고, 신뢰도는 " + format_score_value(confidence) + "%"
-        lines.append(sentence_text(score_text + "입니다. 이 점수는 가격이 오를지 맞히는 값이 아니라, 지금 다시 확인해야 할 정도를 나타냅니다"))
-    breakdown_line = beginner_score_breakdown_line(context)
-    if breakdown_line:
-        lines.append(sentence_text(breakdown_line))
+    review_label = str(decision.get("reviewLabel") or relation_context.get("reviewLevelLabel") or "").strip()
+    data_label = str(decision.get("dataStateLabel") or relation_context.get("dataStateLabel") or "").strip()
+    change_label = str(decision.get("changeStateLabel") or relation_context.get("changeStateLabel") or "").strip()
+    if review_label:
+        lines.append(sentence_text("지금은 '" + review_label + "' 단계라서 아래 조건을 다시 확인해야 합니다"))
+    if data_label:
+        lines.append(sentence_text("판단에 사용한 자료 상태는 '" + data_label + "'입니다"))
+    if change_label:
+        lines.append(sentence_text("이전 알림과 비교하면 '" + change_label + "'입니다"))
     action_sentence = absolute_beginner_action_group_sentence(relation_context)
     if action_sentence:
         lines.append(action_sentence)
@@ -1040,8 +862,8 @@ def ontology_missing_lines(context: Dict[str, object]) -> List[str]:
     return ["부족 데이터 없음"] if ontology_relation_context(context) and not lines else lines
 
 
-def score_explanation_sections(context: Dict[str, object]) -> List[tuple]:
-    if context_message_type(context) in SCORE_EXPLANATION_SKIP_TYPES:
+def reasoning_explanation_sections(context: Dict[str, object]) -> List[tuple]:
+    if context_message_type(context) in REASONING_EXPLANATION_SKIP_TYPES:
         return []
     message_type = context_message_type(context)
     has_relation_context = bool(ontology_relation_context(context))
@@ -1058,8 +880,6 @@ def score_explanation_sections(context: Dict[str, object]) -> List[tuple]:
     else:
         model_lines = modeling_lines(context)
         model_title = "모델 판단"
-        model_lines.extend(formula_audit_lines(context, "model"))
-        model_lines.extend(investment_score_lines(context))
         if has_relation_context:
             model_lines.extend(ontology_rule_lines(context)[:3])
         missing_lines = []
@@ -1072,8 +892,8 @@ def score_explanation_sections(context: Dict[str, object]) -> List[tuple]:
     return sections
 
 
-def score_explanation_block(context: Dict[str, object], rich: bool = False) -> str:
-    sections = score_explanation_sections(context)
+def reasoning_explanation_block(context: Dict[str, object], rich: bool = False) -> str:
+    sections = reasoning_explanation_sections(context)
     if not sections:
         return ""
     blocks = []
@@ -1110,7 +930,7 @@ def ai_opinion_block(context: Dict[str, object], rich: bool = False) -> str:
     return "AI 의견\n" + "\n".join(plain_bullet(line) for line in lines)
 
 
-def context_with_score_explanation(context: Dict[str, object]) -> Dict[str, object]:
+def context_with_reasoning_explanation(context: Dict[str, object]) -> Dict[str, object]:
     values = enrich_notification_ai_context(dict(context or {}))
     raw_symbol = str(values.get("rawSymbol") or values.get("symbol") or "").strip().upper()
     display_symbol = str(
@@ -1129,12 +949,12 @@ def context_with_score_explanation(context: Dict[str, object]) -> Dict[str, obje
         values["target"] = display_target
     values["aiOpinionBlock"] = ai_opinion_block(values, False)
     values["telegramAiOpinionBlock"] = ai_opinion_block(values, True)
-    values["scoreExplanation"] = score_explanation_block(values, False)
-    values["telegramScoreExplanation"] = score_explanation_block(values, True)
+    values["reasoningExplanation"] = reasoning_explanation_block(values, False)
+    values["telegramReasoningExplanation"] = reasoning_explanation_block(values, True)
     return values
 
 
-def template_prefers_rich_score(template: str, rendered: str) -> bool:
+def template_prefers_rich_text(template: str, rendered: str) -> bool:
     text = str(template or "")
     return "{telegramMessage}" in text or "<b>" in rendered or "<code>" in rendered
 
@@ -1188,7 +1008,7 @@ def append_message_footer(rendered: str, context: Dict[str, object], rich: bool 
     return rendered_text + "\n\n" + footer
 
 
-def append_score_explanation(rendered: str, context: Dict[str, object], rich: bool = False) -> str:
+def append_reasoning_explanation(rendered: str, context: Dict[str, object], rich: bool = False) -> str:
     rendered_text = str(rendered or "")
     if isinstance(context, dict) and context.get("notificationAiValidatedResponse"):
         return rendered
@@ -1202,7 +1022,7 @@ def append_score_explanation(rendered: str, context: Dict[str, object], rich: bo
         return rendered
     if not rendered_text.strip() or "점수 계산" in rendered_text or "모델 판단" in rendered_text or "관계 판단" in rendered_text or "온톨로지 판단" in rendered_text or "알림 발송" in rendered_text:
         return rendered
-    block = score_explanation_block(context, rich)
+    block = reasoning_explanation_block(context, rich)
     if not block:
         return rendered
     return str(rendered).rstrip() + "\n\n" + block
@@ -1210,7 +1030,7 @@ def append_score_explanation(rendered: str, context: Dict[str, object], rich: bo
 
 def append_ai_opinion(rendered: str, context: Dict[str, object], rich: bool = False) -> str:
     rendered_text = str(rendered or "")
-    if context_message_type(context) in SCORE_EXPLANATION_SKIP_TYPES:
+    if context_message_type(context) in REASONING_EXPLANATION_SKIP_TYPES:
         return rendered
     if isinstance(context, dict) and context.get("notificationAiValidatedResponse"):
         return rendered
@@ -1307,25 +1127,25 @@ def compact_investment_notification(rendered: str, context: Dict[str, object], m
 
 
 def render_notification(template: NotificationTemplate, context: Dict[str, object]) -> str:
-    values = context_with_score_explanation(context)
+    values = context_with_reasoning_explanation(context)
     if context_message_type(values) == OPERATOR_REASONING_REPORT:
         configured_template = template.template if template and template.enabled else BODY_TEMPLATE
         rendered = render_template(configured_template, values)
         return append_message_footer(rendered, values, False)
     if template and template.enabled:
         rendered = render_template(template.template, values)
-        rich = template_prefers_rich_score(template.template, rendered)
+        rich = template_prefers_rich_text(template.template, rendered)
         rendered = append_ai_opinion(rendered, values, rich)
-        rendered = beginner_friendly_text(append_score_explanation(rendered, values, rich))
+        rendered = beginner_friendly_text(append_reasoning_explanation(rendered, values, rich))
         rendered = append_external_api_sources(rendered, values, rich)
         rendered = append_message_footer(rendered, values, rich)
         rendered = prepend_message_start_badge(rendered, rich, values)
         rendered = prepend_test_dispatch_notice(rendered, values, rich)
         return compact_investment_notification(rendered, values)
     rendered = render_template(BODY_TEMPLATE, values)
-    rich = template_prefers_rich_score(BODY_TEMPLATE, rendered)
+    rich = template_prefers_rich_text(BODY_TEMPLATE, rendered)
     rendered = append_ai_opinion(rendered, values, rich)
-    rendered = beginner_friendly_text(append_score_explanation(rendered, values, rich))
+    rendered = beginner_friendly_text(append_reasoning_explanation(rendered, values, rich))
     rendered = append_external_api_sources(rendered, values, rich)
     rendered = append_message_footer(rendered, values, rich)
     rendered = prepend_message_start_badge(rendered, rich, values)
@@ -1398,13 +1218,14 @@ def template_variables() -> List[str]:
         "telegramDisclosureAnalysis",
         "disclosureAnalysisSource",
         "disclosureAnalysisVersion",
-        "scoreExplanation",
-        "telegramScoreExplanation",
-        "honeyScore",
-        "honeyThreshold",
-        "honeyScoreText",
-        "honeyDecision",
-        "honeyReasons",
+        "deliveryDecision",
+        "deliveryGateState",
+        "deliveryGateReason",
+        "deliveryReasons",
+        "deliveryFingerprint",
+        "cooldownDecision",
+        "cooldownReason",
+        "repeatBypassReason",
         "metadata",
         "formulaAudits",
         "legacyFormulaAudits",
@@ -1414,15 +1235,13 @@ def template_variables() -> List[str]:
         "ontologyPromptContext",
         "externalApiSources",
         "externalApiSourceLines",
-        "notificationFormulaAudit",
-        "buyScoreFormula",
-        "sellScoreFormula",
-        "profitTakeScoreFormula",
-        "lossCutScoreFormula",
-        "notificationScoreFormula",
         "holdingDecision",
         "holdingDecisionBasis",
-        "holdingDecisionScore",
+        "reviewLevel",
+        "dataState",
+        "changeState",
+        "conflictState",
+        "validationState",
         "profitLossRate",
         "market",
         "changePercent",
@@ -1433,7 +1252,7 @@ def template_variables() -> List[str]:
         "volume24h",
         "provider",
         "cryptoMoveModel",
-        "cryptoMoveScore",
+        "cryptoMoveState",
         "cryptoMoveDirection",
         "cryptoMoveDominantPeriod",
         "cryptoMoveDominantChange",

@@ -48,7 +48,7 @@ class ExternalSignalAlertMixin:
             settings=getattr(self, "settings", {}),
             source_fetched_at=freshness.get("fetchedAt") or signals.get("fetchedAt"),
             source_as_of=source_as_of,
-            data_quality=quality.get("score"),
+            data_quality=quality.get("dataState"),
         )
 
     def external_signal_events(self, snapshot: AccountSnapshot, previous: Dict[str, object]) -> List[AlertEvent]:
@@ -102,7 +102,13 @@ class ExternalSignalAlertMixin:
         direction = "상승" if dominant["change"] > 0 else "하락" if dominant["change"] < 0 else "변동"
         asset_label = _crypto_asset_label(coin_id, item)
         title = _crypto_title(asset_label, direction)
-        score = min(100.0, max(0.0, dominant["ratio"] * 60.0))
+        threshold_multiple = float(dominant["ratio"] or 0)
+        if threshold_multiple >= 2.0:
+            review_level = "immediate"
+        elif threshold_multiple >= 1.5:
+            review_level = "act"
+        else:
+            review_level = "check"
         reason = (
             dominant["label"]
             + " 변화율 "
@@ -119,7 +125,11 @@ class ExternalSignalAlertMixin:
             "assetLabel": asset_label,
             "direction": direction,
             "titleLabel": title,
-            "score": round(score, 1),
+            "reviewLevel": review_level,
+            "dataState": "sufficient",
+            "changeState": "new-condition",
+            "conflictState": "context-only",
+            "validationState": "conditional",
             "dominantPeriod": dominant["key"],
             "dominantPeriodLabel": dominant["label"],
             "dominantChange": round(dominant["change"], 2),
@@ -144,8 +154,8 @@ class ExternalSignalAlertMixin:
             provider = str(item.get("provider") or "CoinGecko").strip() or "CoinGecko"
             change24h = number(item.get("change24h"))
             change7d = number(item.get("change7d"))
-            score = number(model.get("score"))
-            severity = "ALERT" if score >= 80 else "WATCH"
+            review_level = str(model.get("reviewLevel") or "check")
+            severity = "ALERT" if review_level in {"act", "immediate"} else "WATCH"
             thresholds = model.get("thresholds") if isinstance(model.get("thresholds"), dict) else {}
             threshold_line = (
                 "설정: "
@@ -190,7 +200,12 @@ class ExternalSignalAlertMixin:
                     "volume24h": number(item.get("volume24h")),
                     "lastUpdated": str(item.get("lastUpdated") or ""),
                     "cryptoMoveModel": model,
-                    "cryptoMoveScore": round(score, 1),
+                    "cryptoMoveState": review_level,
+                    "reviewLevel": review_level,
+                    "dataState": str(model.get("dataState") or "sufficient"),
+                    "changeState": str(model.get("changeState") or "new-condition"),
+                    "conflictState": str(model.get("conflictState") or "context-only"),
+                    "validationState": str(model.get("validationState") or "conditional"),
                     "cryptoMoveDirection": str(model.get("direction") or ""),
                     "cryptoMoveDominantPeriod": str(model.get("dominantPeriodLabel") or ""),
                     "cryptoMoveDominantChange": model.get("dominantChange"),

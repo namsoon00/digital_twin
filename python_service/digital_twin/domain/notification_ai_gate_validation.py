@@ -26,9 +26,7 @@ from .notification_ai_gate_sources import (
     source_urls_from_context,
 )
 from .notification_ai_gate_text import (
-    _clamp,
     _line_after_colon,
-    _number,
     _raw_lines,
     _text,
     append_unique_text,
@@ -41,6 +39,13 @@ from .notification_ai_gate_text import (
     user_friendly_ai_text,
 )
 from .notification_ai_context import is_watchlist_context, target_position_role
+from .ontology_decision_state import (
+    DATA_STATE_LABELS,
+    REVIEW_LEVEL_LABELS,
+    VALIDATION_STATE_LABELS,
+    review_level_for,
+    validation_state_for,
+)
 from .ontology_rulebox_contracts import WATCHLIST_ACTION_POLICY
 
 
@@ -74,11 +79,7 @@ def _driver_summary(driver: Dict[str, object]) -> str:
 def _driver_rows(context: Dict[str, object], directions: List[str] = None, limit: int = 5) -> List[str]:
     accepted = {str(item) for item in directions or []}
     rows: List[str] = []
-    for driver in sorted(
-        _decision_drivers_from_context(context),
-        key=lambda item: float(item.get("importance") or 0),
-        reverse=True,
-    ):
+    for driver in _decision_drivers_from_context(context):
         direction = str(driver.get("direction") or "")
         if accepted and direction not in accepted:
             continue
@@ -103,8 +104,7 @@ def fallback_evidence_rows(context: Dict[str, object], limit: int = 5) -> List[s
     for item in relation_context.get("activeRules") or relation_context.get("matchedRules") or []:
         if isinstance(item, dict):
             label = item.get("label") or item.get("ruleId") or item.get("rule_id")
-            score = item.get("strengthScore") or item.get("score")
-            append_unique_text(rows, str(label or "") + ((" " + str(score) + "점") if score not in (None, "") else ""), 140)
+            append_unique_text(rows, str(label or ""), 140)
     for label in ["핵심 결론", "현재가", "수익률", "추세", "수급", "뉴스·공시", "공시"]:
         value = _line_after_colon(_raw_lines(context or {}), label)
         if value:
@@ -138,7 +138,7 @@ def default_invalidation_for_action(action: str) -> str:
         return "주요 평균선 회복, 거래량 동반 반등, 부정 뉴스·공시 해소가 확인되면 매도 강도를 낮춥니다."
     if action == "AVOID":
         return "부정 근거가 해소되고 가격·수급 회복이 확인되면 신규 진입 회피 의견을 재검토합니다."
-    return "새 뉴스·공시나 관계 점수 급변이 나오면 보유 의견을 재검토합니다."
+    return "새 뉴스·공시, 가격 방향 변경, 핵심 자료 상태 변화가 나오면 보유 의견을 재검토합니다."
 
 def default_next_checks_for_action(action: str) -> List[str]:
     if action in {"BUY", "ADD"}:
@@ -316,15 +316,15 @@ def soften_profitable_short_term_recovery_sell(context: Dict[str, object], respo
         response.opinion = "5일 평균 위 반등이 있어 전량 매도보다 분할축소로 봅니다."
     return response
 
-def soften_low_confidence_sell(context: Dict[str, object], response: NotificationAIValidatedResponse) -> NotificationAIValidatedResponse:
+def soften_conditional_profitable_sell(context: Dict[str, object], response: NotificationAIValidatedResponse) -> NotificationAIValidatedResponse:
     if response.action != "SELL":
         return response
     pnl = profit_loss_rate_for_context(context)
-    if pnl <= 0 or response.confidence >= 70:
+    if pnl <= 0 or response.validation_state == "ready":
         return response
     response.action = "TRIM"
     response.action_label = ACTION_LABELS["TRIM"]
-    reason = "수익 구간이고 AI 판단 강도가 높지 않아 전량 매도보다 일부 축소로 완화했습니다."
+    reason = "수익 구간이고 검증 결과가 조건부라 전량 매도보다 일부 축소로 완화했습니다."
     append_unique_text(response.counter_evidence, reason, 180)
     append_unique_text(response.validation_warnings, reason, 180)
     if response.opinion and "매도" in response.opinion:
@@ -394,7 +394,7 @@ def _normalize_missing_data_impact(
             missing_impact.append(user_friendly_ai_text(item + "는 결론 강도를 낮추는 요소입니다."))
     return missing_impact[:limit]
 
-def confidence_cap_for_response(
+def validation_state_for_response(
     context: Dict[str, object],
     evidence_count: int,
     ai_counter_missing: bool,
@@ -402,40 +402,50 @@ def confidence_cap_for_response(
     source_labels: List[str],
     missing_labels: List[str],
     raw_invalidation: str,
-) -> Tuple[float, List[str]]:
-    cap = 100.0
+) -> Tuple[str, str, str, str, List[str]]:
     reasons: List[str] = []
-
-    def lower(next_cap: float, reason: str) -> None:
-        nonlocal cap
-        if next_cap < cap:
-            cap = next_cap
-        append_unique_text(reasons, reason, 120)
-
     if evidence_count < 2:
-        lower(72.0, "AI 응답 근거가 2개 미만이라 확신도를 제한했습니다.")
+        append_unique_text(reasons, "AI가 제시한 직접 근거가 2개 미만입니다.", 120)
     if ai_counter_missing:
-        lower(78.0, "AI 응답에 반대 근거가 없어 확신도를 제한했습니다.")
+        append_unique_text(reasons, "AI 응답에 반대 근거가 없습니다.", 120)
     if not raw_invalidation:
-        lower(82.0, "의견이 약해지는 조건이 없어 확신도를 제한했습니다.")
+        append_unique_text(reasons, "의견이 바뀌는 조건이 빠져 있습니다.", 120)
     if missing_labels:
-        lower(80.0, "부족 데이터가 있어 확신도를 제한했습니다.")
+        append_unique_text(reasons, "핵심 자료 일부가 부족합니다.", 120)
     relation_context = relation_context_value(context or {})
     relation_facts = relation_context.get("facts") if isinstance(relation_context.get("facts"), dict) else {}
     quality_warnings = relation_facts.get("dataQualityWarnings") if isinstance(relation_facts.get("dataQualityWarnings"), list) else []
     if quality_warnings:
-        lower(88.0, "실시간 확정값이 아닌 데이터 품질 경고가 있어 확신도를 제한했습니다.")
+        append_unique_text(reasons, "실시간 확정값이 아닌 자료가 포함됐습니다.", 120)
     freshness = (context or {}).get("dataFreshness") if isinstance((context or {}).get("dataFreshness"), dict) else {}
     freshness_status = str((context or {}).get("dataFreshnessStatus") or freshness.get("status") or "").strip().lower()
     freshness_decision = str((context or {}).get("dataFreshnessDecision") or "").strip().lower()
+    data_state = str(relation_context.get("dataState") or (relation_context.get("decisionState") or {}).get("dataState") or "").strip()
+    if not data_state:
+        data_state = "partial" if missing_labels or quality_warnings else "sufficient"
     if freshness_status in {"stale", "missing"} or freshness_decision == "suppressed":
-        lower(60.0, "데이터 신선도에 문제가 있어 확신도를 제한했습니다.")
+        data_state = "unavailable" if freshness_decision == "suppressed" else "partial"
+        append_unique_text(reasons, "자료가 오래됐거나 비어 있어 현재 판단에 제한이 있습니다.", 120)
     prompt_context = notification_ai_prompt_context(str((context or {}).get("messageType") or (context or {}).get("rule") or "notification"), context or {})
     facts = prompt_context.get("facts") if isinstance(prompt_context.get("facts"), dict) else {}
     has_external_research = bool(facts.get("researchEvidence") or facts.get("newsHeadlines") or facts.get("disclosure"))
     if has_external_research and not source_urls and not source_labels:
-        lower(75.0, "뉴스·공시·리서치 출처가 없어 확신도를 제한했습니다.")
-    return cap, reasons
+        append_unique_text(reasons, "뉴스·공시·리서치 출처를 확인할 수 없습니다.", 120)
+        if data_state == "sufficient":
+            data_state = "partial"
+    graph_backed = has_graph_backed_relation_context(context)
+    validation_state = validation_state_for(
+        graph_backed=graph_backed,
+        evidence_count=evidence_count,
+        has_counter_evidence=not ai_counter_missing,
+        has_invalidation_condition=bool(raw_invalidation),
+        data_state=data_state,
+    )
+    decision = relation_context.get("decision") if isinstance(relation_context.get("decision"), dict) else {}
+    review_level = str(decision.get("reviewLevel") or relation_context.get("reviewLevel") or "").strip()
+    if not review_level:
+        review_level = review_level_for(decision.get("actionLevel"), data_state)
+    return validation_state, data_state, review_level, VALIDATION_STATE_LABELS[validation_state], reasons
 
 def disagreement_reason_text(precomputed_action: str, action: str, payload: Dict[str, object], evidence: List[str], counter: List[str]) -> str:
     if not precomputed_action or precomputed_action == action:
@@ -477,7 +487,7 @@ def normalized_strategy_guide_payload(context: Dict[str, object], payload: Dict[
         "interpretation": text("interpretation", "aiInterpretation", "summary", limit=320),
         "executionCriteria": text("executionCriteria", "executionRule", "actionCriteria", limit=360),
         "confirmationData": rows("confirmationData", "dataToCheck", "checkData", limit=5),
-        "dataLimitations": rows("dataLimitations", "confidenceLimiters", "limitations", limit=5),
+        "dataLimitations": rows("dataLimitations", "validationLimiters", "confidenceLimiters", "limitations", limit=5),
         "aiHypothesis": text("aiHypothesis", "backgroundHypothesis", "hypothesis", limit=360),
         "hypothesisBoundary": text("hypothesisBoundary", "hypothesisDisclaimer", limit=260),
         "invalidationCondition": text("invalidationCondition", "weakenCondition", limit=260),
@@ -515,8 +525,6 @@ def normalized_hypothesis_reviews(
             "templateLabel": user_friendly_ai_text(candidate.get("templateLabel") or "", 240),
             "claim": user_friendly_ai_text(ai.get("claim") or candidate.get("claim") or "", 320),
             "stance": str(ai.get("stance") or candidate.get("stance") or "uncertain"),
-            "confidence": _clamp(_number(ai.get("confidence"), candidate.get("priorConfidence") or 0), 0, 100),
-            "priorConfidence": _clamp(_number(candidate.get("priorConfidence"), 0), 0, 100),
             "supportingEvidenceIds": user_friendly_ai_list(
                 ai.get("supportingEvidenceIds") or candidate.get("supportingEvidenceIds") or [],
                 12,
@@ -541,7 +549,8 @@ def normalized_hypothesis_reviews(
     if selected_id not in candidate_ids:
         selected_id = str(epistemic_state.get("leadingHypothesisId") or "")
     if selected_id not in candidate_ids and reviews:
-        selected_id = str(max(reviews, key=lambda item: _number(item.get("confidence"), 0)).get("hypothesisId") or "")
+        supported = next((item for item in reviews if str(item.get("verdict") or "") == "supported"), None)
+        selected_id = str((supported or reviews[0]).get("hypothesisId") or "")
     unresolved = user_friendly_ai_list(
         payload.get("unresolvedQuestions")
         or payload.get("unresolved_questions")
@@ -565,8 +574,12 @@ def local_validated_ai_response(context: Dict[str, object], source: str = "local
         return NotificationAIValidatedResponse(
             action="HOLD",
             action_label=ACTION_LABELS["HOLD"],
-            confidence=0.0,
-            original_confidence=0.0,
+            validation_state="blocked",
+            validation_label=VALIDATION_STATE_LABELS["blocked"],
+            data_state="unavailable",
+            data_state_label=DATA_STATE_LABELS["unavailable"],
+            review_level="blocked",
+            review_label=REVIEW_LEVEL_LABELS["blocked"],
             summary="그래프 저장소 InferenceBox 관계가 없어 투자 판단을 만들지 않았습니다.",
             opinion="그래프 저장소의 온톨로지 추론 결과가 생성될 때까지 투자 의견을 보류합니다.",
             evidence=[],
@@ -595,9 +608,6 @@ def local_validated_ai_response(context: Dict[str, object], source: str = "local
         )
     original_action = action
     action = normalized_action_for_target(context, action)
-    confidence = _clamp((opinion or {}).get("conviction") if isinstance(opinion, dict) else 0, 0, 100)
-    if not confidence:
-        confidence = 60.0
     evidence = []
     for item in _driver_rows(context, ["risk", "support", "neutral"], 5):
         evidence.append(item)
@@ -643,11 +653,25 @@ def local_validated_ai_response(context: Dict[str, object], source: str = "local
     missing_impact = _normalize_missing_data_impact(context, missing_impact, missing, 4)
     warnings: List[str] = []
     append_watchlist_action_warning(context, original_action, action, warnings)
-    return soften_low_confidence_sell(context, NotificationAIValidatedResponse(
+    source_urls = source_urls_from_context(context)
+    validation_state, data_state, review_level, validation_label, validation_reasons = validation_state_for_response(
+        context,
+        len([item for item in evidence if item]),
+        not bool(counter),
+        source_urls,
+        source_labels_from_context(context),
+        missing,
+        str(invalidation or ""),
+    )
+    response = NotificationAIValidatedResponse(
         action=action,
         action_label=action_label_for_target(context, action),
-        confidence=confidence,
-        original_confidence=confidence,
+        validation_state=validation_state,
+        validation_label=validation_label,
+        data_state=data_state,
+        data_state_label=DATA_STATE_LABELS[data_state],
+        review_level=review_level,
+        review_label=REVIEW_LEVEL_LABELS.get(review_level, REVIEW_LEVEL_LABELS["check"]),
         summary=watchlist_friendly_text(context, user_friendly_ai_text(_line_after_colon(lines, "해석") or _line_after_colon(raw_lines, "핵심 결론") or "관계 분석 실행 계획이 생성됐습니다.")),
         opinion=watchlist_friendly_text(context, user_friendly_ai_text(str(execution_plan.get("primaryActionLabel") or "").strip() or _line_after_colon(lines, "의견") or _line_after_colon(raw_lines, "권장 액션") or "다음 데이터에서도 같은 신호가 유지되는지 확인하세요.")),
         evidence=watchlist_friendly_rows(context, user_friendly_ai_list(evidence, 5)),
@@ -655,17 +679,19 @@ def local_validated_ai_response(context: Dict[str, object], source: str = "local
         invalidation_condition=watchlist_friendly_text(context, user_friendly_ai_text(invalidation, 220)),
         next_checks=watchlist_friendly_rows(context, user_friendly_ai_list([next_check], 3)),
         missing_data_impact=watchlist_friendly_rows(context, user_friendly_ai_list(missing_impact, 4)),
-        source_urls=source_urls_from_context(context),
+        source_urls=source_urls,
         precomputed_action=precomputed_action_value(context),
         reference_date=reference_date(context),
         validation_warnings=warnings,
+        validation_reasons=validation_reasons,
         strategy_guide={},
         hypotheses=hypotheses,
         selected_hypothesis_id=selected_hypothesis_id,
         unresolved_questions=unresolved_questions,
         epistemic_summary=epistemic_summary,
         source=source,
-    ))
+    )
+    return soften_conditional_profitable_sell(context, response)
 
 def delivery_profile_from_context(context: Dict[str, object]) -> Dict[str, object]:
     profile = context.get("messageDeliveryProfile") if isinstance(context, dict) else {}
@@ -710,8 +736,14 @@ def ai_decision_input_packet(
             "actionPolicy": relation_context.get("actionPolicy") or execution_plan.get("actionPolicy") or "",
             "allowedActions": relation_context.get("allowedActions") or execution_plan.get("allowedActions") or [],
             "blockedActions": relation_context.get("blockedActions") or execution_plan.get("blockedActionCodes") or [],
-            "signalStrength": relation_context.get("signalStrength"),
-            "signalStrengthLabel": relation_context.get("signalStrengthLabel"),
+            "reviewLevel": relation_context.get("reviewLevel"),
+            "reviewLevelLabel": relation_context.get("reviewLevelLabel"),
+            "dataState": relation_context.get("dataState"),
+            "dataStateLabel": relation_context.get("dataStateLabel"),
+            "changeState": relation_context.get("changeState"),
+            "changeStateLabel": relation_context.get("changeStateLabel"),
+            "conflictState": relation_context.get("conflictState"),
+            "conflictStateLabel": relation_context.get("conflictStateLabel"),
             "activeRules": compact_rule_rows(relation_context.get("activeRules") or relation_context.get("matchedRules") or [], 16),
             "executionPlan": execution_plan,
             "decisionDrivers": decision_drivers,
@@ -749,19 +781,16 @@ def compact_rule_rows(rows: object, limit: int = 16) -> List[Dict[str, object]]:
     for item in rows or []:
         if not isinstance(item, dict):
             continue
-        breakdown = item.get("scoreBreakdown") if isinstance(item.get("scoreBreakdown"), dict) else {}
+        evidence_state = item.get("evidenceState") if isinstance(item.get("evidenceState"), dict) else {}
         result.append({
             "ruleId": item.get("ruleId") or item.get("rule_id"),
             "label": item.get("label"),
             "relationType": item.get("relationType") or item.get("relation_type"),
-            "strengthScore": item.get("strengthScore") or item.get("strength_score"),
-            "confidence": item.get("confidence"),
+            "reviewLevel": item.get("reviewLevel") or item.get("review_level"),
+            "dataState": item.get("dataState") or item.get("data_state"),
+            "evidenceRole": item.get("evidenceRole") or item.get("evidence_role"),
             "evidence": list(item.get("evidence") or [])[:4],
-            "scoreBreakdown": {
-                key: breakdown.get(key)
-                for key in ["riskPressure", "supportEvidence", "dataConfidence", "actionability", "novelty", "finalStrength", "drivers"]
-                if breakdown.get(key) not in (None, "", [], {})
-            },
+            "evidenceState": evidence_state,
         })
         if len(result) >= limit:
             break
@@ -795,8 +824,9 @@ def compact_relation_context_for_ai(context: object) -> Dict[str, object]:
     context = context if isinstance(context, dict) else {}
     keep_keys = [
         "engineVersion", "source", "graphStore", "graphStoreUsed", "nativeTypeDbReasoningUsed",
-        "subject", "facts", "missingData", "dominantSignals", "signalStrength", "signalStrengthLabel",
-        "confidence", "scoreBreakdown", "thresholdPolicy", "whyNow", "signalConflicts",
+        "subject", "facts", "missingData", "dominantSignals", "reviewLevel", "reviewLevelLabel",
+        "dataState", "dataStateLabel", "changeState", "changeStateLabel", "conflictState", "conflictStateLabel",
+        "decisionState", "evidenceState", "whyNow", "signalConflicts",
         "inferenceTimeline", "inferenceGenerationId", "inferenceGenerationAt", "ruleboxRulesHash",
         "targetRole", "actionPolicy", "allowedActions", "blockedActions", "decision", "executionPlan",
         "investmentBrain", "hypothesisTemplates", "hypothesisSet", "researchPlan", "selfQuestions", "epistemicState",
@@ -879,9 +909,9 @@ def build_notification_ai_gate_prompt(context: Dict[str, object]) -> str:
         "researchCycle이 있으면 investmentJudgmentEligible=true이고 reasoningRefreshed=true인 verifiedClaims만 새 판단 근거로 사용한다. rejectedClaims와 unappliedVerifiedClaims는 데이터 품질·재추론 실패를 설명하는 데만 사용하고 투자 방향의 근거로 승격하지 않는다. changedEvidenceCount가 0이면 기존 TypeDB 추론 세대를 새로운 사실처럼 해석하지 않는다.",
         "hypotheses 배열에 모든 입력 가설을 빠짐없이 평가하고 selectedHypothesisId에는 최종 action을 가장 잘 설명하는 가설 ID를 쓴다. 결론이 혼합형이면 불확실성 가설을 선택할 수 있다.",
         "unresolvedQuestions에는 결론을 바꿀 수 있지만 아직 답하지 못한 질문만 쓴다. epistemicSummary에는 무엇을 알고, 무엇을 모르며, 어떤 반증이 남았는지 한 문단으로 쓴다.",
-        "summary와 opinion의 첫 문장은 관계 규칙 이름이나 점수 요약이 아니라 AI가 독립적으로 고른 최종 판단과 그 이유여야 한다.",
-        "관계 규칙명, 점수, 사전 계산 후보는 판단 재료로만 쓰고, 사용자에게 보이는 문장에서는 가격·수급·뉴스·공시·반대 근거를 비교한 결론을 먼저 말한다.",
-        "relationshipDatabaseInference.decisionDrivers는 온톨로지 실행계획이 고른 핵심 판단 축이다. 이 항목을 먼저 읽고, 방향(risk/support/counter/neutral), 중요도, dataKeys를 근거·반대근거·다음 확인에 반영한다.",
+        "summary와 opinion의 첫 문장은 관계 규칙 이름이나 상태 이름을 반복하지 말고 AI가 독립적으로 고른 최종 판단과 그 이유여야 한다.",
+        "관계 규칙명, 확인 단계, 자료 상태, 사전 계산 후보는 판단 재료다. 사용자에게 보이는 문장에서는 가격·수급·뉴스·공시·반대 근거를 비교한 결론을 먼저 말한다.",
+        "relationshipDatabaseInference.decisionDrivers는 온톨로지 실행계획이 고른 핵심 판단 축이다. 이 항목을 입력 순서대로 읽고, 방향(risk/support/counter/context), evidenceRole, dataKeys를 근거·반대근거·다음 확인에 반영한다.",
         "relationshipDatabaseInference.whyNow는 새로 달라진 이유이고, signalConflicts는 위험과 지지 근거의 충돌이며, inferenceTimeline은 이전 관측→현재 사실→현재 추론 세대 흐름이다. 반복 상태인지 새 의미 변화인지 먼저 구분한다.",
         "executionPlan.addBuyAssessment는 손실 구간 추가매수 판단이고, 수익 구간 추가매수는 activeRules/decisionDrivers의 상승 보유 추가매수 근거로 판단한다. ADD는 손실 구간에서는 addBuyAssessment.stage가 ADD_BUY_REVIEW일 때만, 수익 구간에서는 5일선·20일선·60일선 회복, 거래 확인, 비중 한도, 뉴스 리스크가 함께 설명될 때만 고른다.",
         "5일선은 아주 짧은 가격 타이밍 근거다. 20일선·60일선과 방향이 다르면 반드시 반대 근거에 넣는다. 보유 종목이 수익 구간이고 5일선 위에 있으면 SELL을 고르기 전에 추가매수, 보유, 분할축소 중 무엇이 더 맞는지 비교한다. 다만 20일선이나 60일선이 아직 아래라면 5일선 회복만으로 ADD를 고르지 않는다.",
@@ -908,11 +938,11 @@ def build_notification_ai_gate_prompt(context: Dict[str, object]) -> str:
         "HOLD를 고르면 '그냥 보유'라고 쓰지 않는다. 보유 유지 조건, 추가매수 보류 조건, 분할축소/매도 판단으로 바뀌는 가격·수급 조건을 반드시 쓴다.",
         "손실 구간 HOLD는 낙관 표현이 아니라 손실 방어 대기 상태로 설명한다. 예: 현재 수량 유지, 추가매수 보류, 5일선 또는 20일선 회복 실패 시 일부 축소 검토.",
         "수익 구간 HOLD는 수익 보호 기준을 포함한다. 예: 20일선 아래로 내려가면 일부 이익 보호, 20일선 위에서 거래량이 붙으면 보유 유지.",
+        "확률, 확신도, 관계 점수, 종합 점수는 만들거나 출력하지 않는다. 판단 품질은 시스템이 자료 상태와 검증 상태로 따로 확인한다.",
         "응답 JSON이 최종 메시지의 원천이다. 설명 문장 없이 JSON 객체 하나만 출력한다.",
         "스키마:",
         json.dumps({
             "action": "BUY|ADD|HOLD|TRIM|SELL|AVOID",
-            "confidence": "number 0-100",
             "summary": "string",
             "opinion": "string",
             "evidence": ["string"],
@@ -925,7 +955,6 @@ def build_notification_ai_gate_prompt(context: Dict[str, object]) -> str:
                 "templateId": "input approved template id",
                 "claim": "string",
                 "stance": "risk|support|uncertain|context",
-                "confidence": "number 0-100",
                 "supportingEvidenceIds": ["input evidence id"],
                 "counterEvidenceIds": ["input evidence id"],
                 "verdict": "supported|weakened|rejected|unresolved",
@@ -975,7 +1004,6 @@ def validated_response_from_payload(
     original_action = action
     action = normalized_action_for_target(context, action)
     append_watchlist_action_warning(context, original_action, action, warnings)
-    original_confidence = _clamp(_number(payload.get("confidence"), fallback.confidence), 0, 100)
     summary = watchlist_friendly_text(context, user_friendly_ai_text(payload.get("summary") or fallback.summary))
     opinion = soften_order_language(watchlist_friendly_text(context, user_friendly_ai_text(payload.get("opinion") or fallback.opinion)))
     raw_evidence = watchlist_friendly_rows(context, user_friendly_ai_list(payload.get("evidence") or [], 5))
@@ -1027,7 +1055,7 @@ def validated_response_from_payload(
         append_unique_text(counter, disagreement, 180)
         if not (payload.get("disagreementReason") or payload.get("disagreement_reason")):
             warnings.append("AI 판단이 사전 계산 후보와 달라 불일치 사유를 감사 로그에 기록했습니다.")
-    cap, cap_reasons = confidence_cap_for_response(
+    validation_state, data_state, review_level, validation_label, validation_reasons = validation_state_for_response(
         context,
         len(raw_evidence),
         not bool(raw_counter),
@@ -1036,9 +1064,8 @@ def validated_response_from_payload(
         missing_labels,
         raw_invalidation,
     )
-    confidence = min(original_confidence, cap)
-    if confidence < original_confidence:
-        warnings.append("AI 확신도 " + str(round(original_confidence, 1)) + "%를 검증 기준에 따라 " + str(round(confidence, 1)) + "%로 낮췄습니다.")
+    if validation_state != "ready":
+        warnings.append("AI 의견은 자료와 검증 조건이 모두 충족되지 않아 조건부로 사용합니다.")
     hypotheses, selected_hypothesis_id, unresolved_questions, epistemic_summary = normalized_hypothesis_reviews(context, payload)
     if len(hypotheses) < 3:
         warnings.append("경쟁 가설이 3개 미만이라 최종 판단의 가설 비교 범위가 제한됐습니다.")
@@ -1047,8 +1074,12 @@ def validated_response_from_payload(
     response = NotificationAIValidatedResponse(
         action=action,
         action_label=action_label_for_target(context, action),
-        confidence=confidence,
-        original_confidence=original_confidence,
+        validation_state=validation_state,
+        validation_label=validation_label,
+        data_state=data_state,
+        data_state_label=DATA_STATE_LABELS.get(data_state, DATA_STATE_LABELS["partial"]),
+        review_level=review_level,
+        review_label=REVIEW_LEVEL_LABELS.get(review_level, REVIEW_LEVEL_LABELS["check"]),
         summary=summary,
         opinion=opinion,
         evidence=evidence[:5],
@@ -1059,8 +1090,7 @@ def validated_response_from_payload(
         source_urls=source_urls,
         precomputed_action=precomputed_action,
         disagreement_reason=disagreement,
-        confidence_cap=cap,
-        confidence_cap_reasons=cap_reasons,
+        validation_reasons=validation_reasons,
         reference_date=response_reference,
         validation_warnings=warnings,
         strategy_guide=normalized_strategy_guide_payload(context, payload),
@@ -1072,7 +1102,7 @@ def validated_response_from_payload(
         raw_response=raw_response,
     )
     response = soften_profitable_short_term_recovery_sell(context, response)
-    return soften_low_confidence_sell(context, response)
+    return soften_conditional_profitable_sell(context, response)
 
 def validated_response_from_text(context: Dict[str, object], text: str, source: str = "ai") -> NotificationAIValidatedResponse:
     return validated_response_from_payload(context, parse_ai_response_json(text), raw_response=str(text or ""), source=source)

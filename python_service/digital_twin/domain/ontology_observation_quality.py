@@ -162,8 +162,8 @@ def observation_profile(
         "sourceAsOf": source_as_of,
         "sourceFetchedAt": source_fetched_at,
         "sourceTimestampPresent": timestamp_present,
-        "sourceAsOfConfidence": str((record or {}).get("sourceAsOfConfidence") or ("provider" if timestamp_present else "missing")),
-        "sourceReliability": source_reliability(record),
+        "sourceTimestampState": str((record or {}).get("sourceTimestampState") or ("provider" if timestamp_present else "missing")),
+        "sourceTrustState": source_trust_state(record),
         "judgementEvidenceUsable": evidence_usable,
         "market": market,
         "marketSessionStatus": session_status,
@@ -192,15 +192,15 @@ def static_observation_profile(
     }
 
 
-def source_reliability(record: Dict[str, object]) -> float:
+def source_trust_state(record: Dict[str, object]) -> str:
     quality = str((record or {}).get("dataQuality") or "").strip().lower()
     if quality in {"actual", "live", "verified"}:
-        return 90.0
+        return "trusted"
     if quality in {"mixed", "partial"}:
-        return 65.0
+        return "standard"
     if quality in {"cached", "stale", "unavailable"}:
-        return 35.0
-    return 55.0
+        return "limited"
+    return "unknown"
 
 
 def profile_for_domain(

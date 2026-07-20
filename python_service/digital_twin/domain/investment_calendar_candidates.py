@@ -19,14 +19,6 @@ def bounded_int(value: object, fallback: int, lower: int = 0, upper: int = 100) 
     return max(lower, min(upper, parsed))
 
 
-def bounded_float(value: object, fallback: float, lower: float = 0.0, upper: float = 1.0) -> float:
-    try:
-        parsed = float(str(value).strip())
-    except (TypeError, ValueError):
-        parsed = fallback
-    return max(lower, min(upper, parsed))
-
-
 @dataclass
 class InvestmentCalendarReviewCandidate:
     candidate_id: str
@@ -39,7 +31,7 @@ class InvestmentCalendarReviewCandidate:
     status: str = CANDIDATE_STATUS_PENDING
     review_reason: str = "needsReview"
     importance: int = 60
-    confidence: float = 0.0
+    readiness_state: str = "needs-review"
     symbols: List[str] = field(default_factory=list)
     markets: List[str] = field(default_factory=list)
     account_ids: List[str] = field(default_factory=list)
@@ -69,7 +61,7 @@ class InvestmentCalendarReviewCandidate:
             status=clean_text(payload.get("status") or CANDIDATE_STATUS_PENDING, 32) or CANDIDATE_STATUS_PENDING,
             review_reason=clean_text(payload.get("reviewReason") or payload.get("review_reason") or "needsReview", 80),
             importance=bounded_int(payload.get("importance"), 60),
-            confidence=bounded_float(payload.get("confidence"), 0.0),
+            readiness_state=readiness_state_from_payload(payload),
             symbols=normalized_list(payload.get("symbols"), normalize_symbol, 100),
             markets=normalized_list(payload.get("markets"), normalize_market, 50),
             account_ids=normalized_list(
@@ -106,7 +98,7 @@ class InvestmentCalendarReviewCandidate:
             "status": payload["status"],
             "reviewReason": payload["review_reason"],
             "importance": payload["importance"],
-            "confidence": payload["confidence"],
+            "readinessState": payload["readiness_state"],
             "symbols": payload["symbols"],
             "markets": payload["markets"],
             "accountIds": payload["account_ids"],
@@ -148,3 +140,16 @@ class InvestmentCalendarReviewCandidate:
             "reminderOffsetsMinutes": list(self.reminder_offsets_minutes or []),
             "payload": body,
         }
+
+
+def readiness_state_from_payload(payload: Dict[str, object]) -> str:
+    value = str((payload or {}).get("readinessState") or (payload or {}).get("readiness_state") or "").strip().lower()
+    if value in {"ready", "needs-review", "blocked"}:
+        return value
+    # Old rows had a numeric confidence.  Convert it at read time only; new
+    # candidates persist the named review state instead.
+    try:
+        legacy = float((payload or {}).get("confidence") or 0)
+    except (TypeError, ValueError):
+        legacy = 0.0
+    return "ready" if legacy >= 0.75 else "needs-review"

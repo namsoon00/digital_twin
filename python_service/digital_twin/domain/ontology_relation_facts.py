@@ -6,7 +6,7 @@ from .alert_formatting import compact_number, price_money
 from .investment_research import research_evidence_from_external_signals, research_evidence_from_facts
 from .investor_flow_psychology import investor_flow_psychology, investor_flow_values_reliable
 from .macro_context import macro_context_facts
-from .market_data import clamp, number
+from .market_data import number
 from . import news_analysis as news_domain
 from .accounts import investment_strategy_profile
 from .instrument_profiles import instrument_profile_for_position
@@ -54,13 +54,15 @@ def _investor_flow(position: Position) -> Dict[str, object]:
             "individualNetAmount": 0.0,
             "smartMoneyNetVolume": 0.0,
             "investorFlowBase": 0.0,
-            "investorFlowScore": 0.0,
             "jointSmartMoneyInflow": False,
             "jointSmartMoneyOutflow": False,
             "smartMoneyDirection": "unknown",
             "investorFlowPsychology": "investorFlowUnavailable",
             "investorFlowPsychologyLabel": str(psychology.get("sentimentLabel") or "투자자별 수급 신뢰도 낮음"),
             "investorFlowPsychologyPolarity": "context",
+            "investorFlowEvidenceRole": "blocking",
+            "investorFlowDataState": "unavailable",
+            "investorFlowReviewLevel": "blocked",
         }
     return {
         "foreignNetVolume": number(psychology.get("foreignNetVolume")),
@@ -71,13 +73,15 @@ def _investor_flow(position: Position) -> Dict[str, object]:
         "individualNetAmount": number(psychology.get("individualNetAmount")),
         "smartMoneyNetVolume": number(psychology.get("smartMoneyNetVolume")),
         "investorFlowBase": number(psychology.get("investorFlowBase")),
-        "investorFlowScore": number(psychology.get("investorFlowScore")),
         "jointSmartMoneyInflow": bool(psychology.get("jointSmartMoneyInflow")),
         "jointSmartMoneyOutflow": bool(psychology.get("jointSmartMoneyOutflow")),
         "smartMoneyDirection": str(psychology.get("smartMoneyDirection") or "mixed"),
         "investorFlowPsychology": str(psychology.get("field") or "mixedInvestorPsychology"),
         "investorFlowPsychologyLabel": str(psychology.get("sentimentLabel") or "투자자별 수급 혼조"),
         "investorFlowPsychologyPolarity": str(psychology.get("polarity") or "context"),
+        "investorFlowEvidenceRole": str(psychology.get("evidenceRole") or "context"),
+        "investorFlowDataState": str(psychology.get("dataState") or "partial"),
+        "investorFlowReviewLevel": str(psychology.get("reviewLevel") or "observe"),
     }
 
 
@@ -112,28 +116,34 @@ def _trend_facts(position: Position) -> Dict[str, object]:
             or (ma60_distance <= -5.0 and ma20_slope < 0 and ma60_slope < 0)
         )
     )
-    dynamic_risk = trend_dynamic_risk_score(
-        ma20_distance,
-        ma60_distance,
-        price_change,
-        ma20_slope,
-        trend_curve,
-        support_retest,
-        recovery_attempt,
-    )
     state = trend_state_label(ma20_distance, ma60_distance, support_retest, recovery_attempt, breakdown_acceleration)
     curve_label = trend_curve_label(trend_curve)
     slope_label = trend_slope_label(ma20_slope, ma60_slope)
     price_momentum_label = direction_label(price_change, "상승", "하락")
-    score = clamp(
-        ma20_distance * 0.45
-        + ma60_distance * 0.25
-        + ma20_slope * 3.0
-        + ma60_slope * 2.0
-        + price_change * 0.4,
-        -35.0,
-        35.0,
-    )
+    if breakdown_acceleration:
+        risk_state = "accelerating-decline"
+        review_level = "act"
+        evidence_role = "risk"
+    elif short_term_breakdown and not medium_term_support:
+        risk_state = "broad-weakness"
+        review_level = "check"
+        evidence_role = "risk"
+    elif recovery_attempt:
+        risk_state = "recovery-attempt"
+        review_level = "observe"
+        evidence_role = "support"
+    elif support_retest:
+        risk_state = "support-retest"
+        review_level = "check"
+        evidence_role = "counter"
+    elif ma20_distance > 0 and ma60_distance > 0:
+        risk_state = "supportive-trend"
+        review_level = "normal"
+        evidence_role = "support"
+    else:
+        risk_state = "mixed-trend"
+        review_level = "observe"
+        evidence_role = "context"
     return {
         "currentPrice": current,
         "ma5": ma5,
@@ -155,7 +165,10 @@ def _trend_facts(position: Position) -> Dict[str, object]:
         "supportRetest": support_retest,
         "recoveryAttempt": recovery_attempt,
         "breakdownAcceleration": breakdown_acceleration,
-        "trendDynamicRiskScore": dynamic_risk,
+        "trendRiskState": risk_state,
+        "trendReviewLevel": review_level,
+        "trendEvidenceRole": evidence_role,
+        "trendDataState": "sufficient" if current and (ma20 or ma60) else "partial",
         "trendDynamics": {
             "state": state,
             "priceMomentum": price_momentum_label,
@@ -173,9 +186,10 @@ def _trend_facts(position: Position) -> Dict[str, object]:
             "supportRetest": support_retest,
             "recoveryAttempt": recovery_attempt,
             "breakdownAcceleration": breakdown_acceleration,
-            "dynamicRiskScore": round(dynamic_risk, 1),
+            "riskState": risk_state,
+            "reviewLevel": review_level,
+            "evidenceRole": evidence_role,
         },
-        "trendScore": score,
     }
 
 
@@ -211,7 +225,8 @@ def _temporal_facts(position: Position, previous_state: Dict[str, object] = None
         "previousProfitLossRate": previous_pnl,
         "previousMa20Distance": previous_ma20_distance,
         "previousMa60Distance": previous_ma60_distance,
-        "previousRelationScore": state_number(previous_decision, "exitPressure", "exit_pressure", "score"),
+        "previousReviewLevel": str(previous_decision.get("reviewLevel") or previous_decision.get("review_level") or ""),
+        "previousChangeState": str(previous_decision.get("changeState") or previous_decision.get("change_state") or ""),
         "previousSelectedRuleId": previous_rule,
         "previousDecisionLabel": previous_label,
         "priceDeltaFromPreviousPct": price_delta,
@@ -233,19 +248,25 @@ def _liquidity_facts(position: Position) -> Dict[str, object]:
     position_to_trading_value = (market_value / trading_value) * 100 if market_value and trading_value else 0.0
     exit_days = market_value / max(1.0, trading_value * 0.1) if market_value and trading_value else 0.0
     sellable_blocked = bool(quantity and sellable_quantity <= 0)
-    liquidity_risk = clamp(
-        position_to_trading_value * 2.0
-        + max(0.0, 1.0 - volume_ratio) * 18.0
-        + max(0.0, -bid_ask_imbalance) * 0.25
-        + (25.0 if sellable_blocked else 0.0),
-        0.0,
-        100.0,
-    )
+    if sellable_blocked:
+        liquidity_state = "sell-blocked"
+        review_level = "immediate"
+    elif position_to_trading_value >= 3.0 or exit_days >= 1.0:
+        liquidity_state = "difficult-exit"
+        review_level = "act"
+    elif (volume_ratio and volume_ratio < 0.5) or bid_ask_imbalance <= -35.0:
+        liquidity_state = "thin-market"
+        review_level = "check"
+    else:
+        liquidity_state = "normal"
+        review_level = "normal"
     return {
         "positionToTradingValuePct": position_to_trading_value,
         "exitDaysAtTenPctADV": exit_days,
         "sellableBlocked": sellable_blocked,
-        "liquidityRiskScore": liquidity_risk,
+        "liquidityState": liquidity_state,
+        "liquidityReviewLevel": review_level,
+        "liquidityDataState": "sufficient" if trading_value else "partial",
     }
 
 
@@ -254,12 +275,17 @@ def _external_quality_facts(external_signals: Dict[str, object]) -> Dict[str, ob
     freshness = external_signals.get("freshness") if isinstance(external_signals.get("freshness"), dict) else {}
     statuses = external_signals.get("statuses") if isinstance(external_signals.get("statuses"), list) else []
     error_count = len([item for item in statuses if isinstance(item, dict) and not item.get("ok")])
+    freshness_status = str(freshness.get("status") or "").strip().lower()
+    if error_count or freshness_status in {"error", "unavailable", "missing"}:
+        data_state = "unavailable"
+    elif not quality or freshness_status in {"stale", "partial", "unknown", ""}:
+        data_state = "partial"
+    else:
+        data_state = "sufficient"
     return {
-        "externalSignalQualityScore": number(quality.get("score")) if quality else 0.0,
-        "externalSignalCoverageScore": number(quality.get("coverageScore")) if quality else 0.0,
-        "externalSignalSourceHealthScore": number(quality.get("sourceHealthScore")) if quality else 0.0,
+        "externalSignalDataState": data_state,
         "externalSignalAgeMinutes": number(freshness.get("ageMinutes")) if freshness else 0.0,
-        "externalSignalFreshnessStatus": str(freshness.get("status") or ""),
+        "externalSignalFreshnessStatus": freshness_status,
         "externalSignalErrorCount": error_count,
     }
 
@@ -292,7 +318,7 @@ def _valuation_source_metadata(row: Dict[str, object]) -> Dict[str, object]:
             "sourceLabel": "AI 제안",
             "provider": provider or "Orbit Alpha AI",
             "reliabilityLabel": "AI 초안(사용자 검토 전)",
-            "reliabilityScore": number(row.get("reliabilityScore")) or 45.0,
+            "sourceDataState": "partial",
         }
     if source_lower == "runtime-settings" or provider_lower == "runtimesettings":
         return {
@@ -300,7 +326,7 @@ def _valuation_source_metadata(row: Dict[str, object]) -> Dict[str, object]:
             "sourceLabel": "사용자 입력",
             "provider": provider or "RuntimeSettings",
             "reliabilityLabel": "사용자 가정",
-            "reliabilityScore": 55.0,
+            "sourceDataState": "partial",
         }
     if source_lower == "company-overview":
         return {
@@ -308,7 +334,7 @@ def _valuation_source_metadata(row: Dict[str, object]) -> Dict[str, object]:
             "sourceLabel": (provider or "Alpha Vantage") + " 기업개요",
             "provider": provider or "Alpha Vantage",
             "reliabilityLabel": "외부 기업개요",
-            "reliabilityScore": 70.0,
+            "sourceDataState": "sufficient",
         }
     if source_lower == "earnings-report":
         return {
@@ -316,7 +342,7 @@ def _valuation_source_metadata(row: Dict[str, object]) -> Dict[str, object]:
             "sourceLabel": (provider or "Alpha Vantage") + " 실적",
             "provider": provider or "Alpha Vantage",
             "reliabilityLabel": "외부 실적",
-            "reliabilityScore": 65.0,
+            "sourceDataState": "sufficient",
         }
     if provider:
         return {
@@ -324,14 +350,14 @@ def _valuation_source_metadata(row: Dict[str, object]) -> Dict[str, object]:
             "sourceLabel": provider,
             "provider": provider,
             "reliabilityLabel": "외부/혼합 데이터",
-            "reliabilityScore": 60.0,
+            "sourceDataState": "partial",
         }
     return {
         "sourceType": "unknown",
         "sourceLabel": "밸류에이션 데이터",
         "provider": "",
         "reliabilityLabel": "출처 미확인",
-        "reliabilityScore": 45.0,
+        "sourceDataState": "unavailable",
     }
 
 
@@ -429,7 +455,7 @@ def _valuation_explanation(values: Dict[str, object], row: Dict[str, object], cu
     if fair_value_low and fair_value_high and fair_value_low != fair_value_high:
         base += " 보수적·낙관적 가정을 반영한 적정가 범위는 " + _valuation_price_text(fair_value_low, currency) + "~" + _valuation_price_text(fair_value_high, currency) + "입니다."
     if not bool(values.get("valuationDecisionEligible")):
-        base += " 이 계산은 신뢰도나 승인 조건이 부족해 매수·매도 추론에는 직접 사용하지 않습니다."
+        base += " 이 계산은 자료 상태나 사용자 검토 조건이 부족해 매수·매도 추론에는 직접 사용하지 않습니다."
     return base
 
 
@@ -443,17 +469,21 @@ def _valuation_row_payload(position: Position, row: Dict[str, object]) -> Dict[s
         if str(item or "").strip()
     ]
     fair_value = number(values.get("fairValue"))
-    has_formula = bool(str(values.get("formula") or row.get("formula") or "").strip())
-    complete_score = (
-        (30.0 if fair_value else 0.0)
-        + (10.0 if not missing_inputs else 0.0)
-        + (5.0 if has_formula else 0.0)
-        + (10.0 if bool(row.get("aiGenerated")) and str(values.get("valuationMethod") or "") != "ai-current-price-anchor" else 0.0)
-    )
-    source_score = 12.0 if source.get("sourceType") == "user" else 6.0 if source.get("sourceType") == "external" else 4.0 if source.get("sourceType") == "ai" else 0.0
-    reliability_score = number(values.get("valuationReliabilityScore")) or number(source.get("reliabilityScore"))
     decision_eligible = bool(values.get("valuationDecisionEligible"))
     formula = str(values.get("formula") or row.get("formula") or "").strip()
+    has_formula = bool(formula)
+    data_state = (
+        "sufficient"
+        if fair_value and not missing_inputs and decision_eligible
+        else "partial"
+        if fair_value or values.get("expectedEPS") or values.get("targetPER") or bool(row.get("aiGenerated"))
+        else "unavailable"
+    )
+    clean_values = {
+        key: value
+        for key, value in values.items()
+        if key not in {"valuationReliabilityScore", "valuationInputCoveragePct", "reliabilityScore"}
+    }
     payload = {
         "assumptionKey": str(row.get("assumptionKey") or row.get("symbol") or position.symbol or "").strip(),
         "label": str(row.get("label") or row.get("name") or (position.name or position.symbol or "") + " 밸류에이션").strip(),
@@ -461,14 +491,15 @@ def _valuation_row_payload(position: Position, row: Dict[str, object]) -> Dict[s
         "provider": source.get("provider") or str(row.get("provider") or ""),
         "sourceType": source.get("sourceType"),
         "sourceLabel": source.get("sourceLabel"),
-        "reliabilityLabel": values.get("valuationConfidenceLabel") or source.get("reliabilityLabel"),
-        "reliabilityScore": reliability_score,
+        "dataStateLabel": values.get("valuationDataStateLabel") or source.get("dataStateLabel"),
+        "reliabilityState": data_state,
+        "sourceDataState": source.get("sourceDataState"),
         "formula": formula,
         "substitution": _valuation_substitution(values, row, currency),
         "explanation": _valuation_explanation(values, row, currency),
         "missingInputs": missing_inputs,
-        "dataStatus": "available" if fair_value and not missing_inputs else "partial" if fair_value or values.get("expectedEPS") or values.get("targetPER") or bool(row.get("aiGenerated")) else "missing",
-        "selectionScore": complete_score + source_score + reliability_score * 0.25 + (40.0 if decision_eligible else 0.0),
+        "dataState": data_state,
+        "hasFormula": has_formula,
         "hasUserInput": source.get("sourceType") == "user",
         "hasExternalInput": source.get("sourceType") == "external",
         "hasAiProposal": source.get("sourceType") == "ai",
@@ -483,7 +514,7 @@ def _valuation_row_payload(position: Position, row: Dict[str, object]) -> Dict[s
         "perValuationReason": str(values.get("perValuationReason") or row.get("perValuationReason") or "").strip(),
         "preferredValuationMetric": str(values.get("preferredValuationMetric") or row.get("preferredValuationMetric") or "").strip(),
         "fundamentalDataSourcePriority": str(values.get("fundamentalDataSourcePriority") or row.get("fundamentalDataSourcePriority") or "").strip(),
-        **values,
+        **clean_values,
     }
     return payload
 
@@ -491,7 +522,22 @@ def _valuation_row_payload(position: Position, row: Dict[str, object]) -> Dict[s
 def _primary_valuation_row(rows: List[Dict[str, object]]) -> Dict[str, object]:
     if not rows:
         return {}
-    return sorted(rows, key=lambda item: number(item.get("selectionScore")), reverse=True)[0]
+    data_order = {"sufficient": 0, "partial": 1, "unavailable": 2}
+    source_order = {"user": 0, "external": 1, "ai": 2, "unknown": 3}
+    return sorted(
+        rows,
+        key=lambda item: (
+            not bool(item.get("valuationDecisionEligible")),
+            # An EPS-only external observation is useful context, but it is
+            # not an investable valuation. Prefer a calculated fair value
+            # (including an auto-applied AI scenario) over an empty row.
+            not bool(number(item.get("fairValue"))),
+            data_order.get(str(item.get("dataState") or "unavailable"), 3),
+            source_order.get(str(item.get("sourceType") or "unknown"), 4),
+            not bool(item.get("hasFormula")),
+            str(item.get("provider") or ""),
+        ),
+    )[0]
 
 
 def _valuation_facts(position: Position, external_signals: Dict[str, object], settings: Optional[Dict[str, object]]) -> Dict[str, object]:
@@ -506,11 +552,11 @@ def _valuation_facts(position: Position, external_signals: Dict[str, object], se
     if not rows:
         return {
             "valuationRows": [],
-            "valuationDataStatus": "missing",
+            "valuationDataStatus": "unavailable",
+            "valuationDataState": "unavailable",
             "valuationSourceType": "missing",
             "valuationSourceLabel": "사용자 입력 없음 · 외부 밸류에이션 데이터 없음",
-            "valuationReliabilityLabel": "판단 보류",
-            "valuationReliabilityScore": 0.0,
+            "valuationReliabilityState": "unavailable",
             "valuationFormula": "",
             "valuationSubstitution": "",
             "valuationExplanation": "적정가 공식이나 적정가 입력값이 없어 현재가가 싼지 비싼지 계산하지 않았습니다.",
@@ -550,8 +596,7 @@ def _valuation_facts(position: Position, external_signals: Dict[str, object], se
             "valuationDecisionEligible": False,
             "valuationFreshnessStatus": "unknown",
             "valuationAsOf": "",
-            "valuationInputCoveragePct": 0.0,
-            "valuationConfidenceLabel": "판단 보류",
+            "valuationDataStateLabel": "판단 보류",
             "valuationModelCount": 0,
             "valuationConsensusPrice": 0.0,
             "valuationDisagreementPct": 0.0,
@@ -576,12 +621,12 @@ def _valuation_facts(position: Position, external_signals: Dict[str, object], se
     return {
         "valuationRows": rows,
         "primaryValuation": primary,
-        "valuationDataStatus": primary.get("dataStatus") or ("available" if fair_value and current_price else "partial"),
+        "valuationDataStatus": primary.get("dataState") or ("sufficient" if fair_value and current_price else "partial"),
+        "valuationDataState": primary.get("dataState") or ("sufficient" if fair_value and current_price else "partial"),
         "valuationSourceType": primary.get("sourceType"),
         "valuationSourceLabel": primary.get("sourceLabel"),
         "valuationProvider": primary.get("provider"),
-        "valuationReliabilityLabel": primary.get("reliabilityLabel"),
-        "valuationReliabilityScore": number(primary.get("reliabilityScore")),
+        "valuationReliabilityState": primary.get("reliabilityState") or "partial",
         "valuationFormula": primary.get("formula"),
         "valuationSubstitution": primary.get("substitution"),
         "valuationExplanation": primary.get("explanation"),
@@ -614,8 +659,7 @@ def _valuation_facts(position: Position, external_signals: Dict[str, object], se
         "valuationConsensusStatus": consensus_status,
         "valuationFreshnessStatus": primary.get("valuationFreshnessStatus"),
         "valuationAsOf": primary.get("valuationAsOf"),
-        "valuationInputCoveragePct": number(primary.get("valuationInputCoveragePct")),
-        "valuationConfidenceLabel": primary.get("valuationConfidenceLabel"),
+        "valuationDataStateLabel": primary.get("valuationDataStateLabel"),
         "valuationEpsPeriod": primary.get("epsPeriod"),
         "valuationMultiplePeriod": primary.get("multiplePeriod"),
         "valuationMissingInputs": missing_inputs,
@@ -955,7 +999,7 @@ def _availability_with_coverage(status: str, source: str, coverage: Dict[str, ob
         "realTime",
         "transport",
         "freshnessStatus",
-        "sourceAsOfConfidence",
+        "sourceTimestampState",
         "aiUsableAsStrongEvidence",
         "judgementEvidenceUsable",
         "cadence",
@@ -971,22 +1015,6 @@ def _availability_with_coverage(status: str, source: str, coverage: Dict[str, ob
         if key in stage_item and stage_item.get(key) not in (None, ""):
             item[key] = stage_item.get(key)
     return item
-
-
-def _missing_penalty(item: Dict[str, object]) -> float:
-    status = str(item.get("status") or "missing")
-    if status in {"zero", "proxy", "empty"}:
-        return 6.0
-    return 12.0
-
-
-def _warning_penalty(item: Dict[str, object]) -> float:
-    status = str(item.get("status") or "warning")
-    if status == "stale":
-        return 8.0
-    if status == "unknown":
-        return 6.0
-    return 3.0
 
 
 def moving_average_distance_text(label: str, distance: float) -> str:
@@ -1055,33 +1083,6 @@ def trend_state_label(
     if ma20_distance > 0 and ma60_distance > 0:
         return "추세 상방"
     return "추세 혼조"
-
-
-def trend_dynamic_risk_score(
-    ma20_distance: float,
-    ma60_distance: float,
-    price_change: float,
-    ma20_slope: float,
-    trend_curve: float,
-    support_retest: bool,
-    recovery_attempt: bool,
-) -> float:
-    risk = 0.0
-    if ma20_distance <= -5:
-        risk += min(30.0, abs(ma20_distance) * 2.0)
-    if ma60_distance < 0:
-        risk += min(20.0, abs(ma60_distance) * 3.0)
-    if price_change < 0:
-        risk += min(15.0, abs(price_change) * 4.0)
-    if ma20_slope < 0:
-        risk += min(15.0, abs(ma20_slope) * 8.0)
-    if trend_curve < 0:
-        risk += min(10.0, abs(trend_curve) * 6.0)
-    if support_retest and ma60_distance >= 0:
-        risk -= 5.0
-    if recovery_attempt:
-        risk -= 10.0
-    return clamp(risk, 0.0, 100.0)
 
 
 def position_signal_facts(
@@ -1318,11 +1319,11 @@ def position_signal_facts(
         missing.append(_missing("tradeStrength", "체결강도", effect, trade_strength_status, "KIS ccnl"))
     if expects_kr_signals and not total_execution_volume and not execution_direction_proxy:
         if execution_volume_status == "zero":
-            effect = "방향별 체결량 응답은 있었지만 매수·매도 합계가 0으로 들어와 수급 방향 점수는 중립에 가깝게 처리합니다."
+            effect = "방향별 체결량 응답은 있었지만 매수·매도 합계가 0으로 들어와 수급 방향을 판단하지 않습니다."
         elif execution_volume_status == "empty":
             effect = "KIS 체결 단계 응답이 비어 있어 매수·매도 방향별 체결 압력을 확인하지 못합니다."
         else:
-            effect = "매수·매도 방향별 체결 압력을 확인하지 못해 수급 방향 점수는 중립에 가깝게 처리합니다."
+            effect = "매수·매도 방향별 체결 압력을 확인하지 못해 수급 방향을 판단하지 않습니다."
         missing.append(_missing("executionVolume", "방향별 매수/매도 체결량", effect, execution_volume_status, "KIS ccnl"))
     if expects_kr_signals and not facts["investorFlowBase"]:
         if investor_flow_status == "zero":
@@ -1348,16 +1349,17 @@ def position_signal_facts(
             "missing",
             str(facts.get("valuationSourceLabel") or "valuation"),
         ))
-    data_quality = clamp(
-        100.0
-        - sum(_missing_penalty(item) for item in missing)
-        - sum(_warning_penalty(item) for item in data_quality_warnings),
-        35.0,
-        100.0,
+    unavailable_keys = {"currentPrice", "ontologyInference", "position"}
+    has_unavailable = any(
+        str(item.get("key") or "") in unavailable_keys
+        or str(item.get("status") or "").lower() in {"error", "unavailable"}
+        for item in missing
+        if isinstance(item, dict)
     )
+    data_state = "unavailable" if has_unavailable else "partial" if missing or data_quality_warnings else "sufficient"
     facts["missingData"] = missing
     facts["dataQualityWarnings"] = data_quality_warnings
-    facts["dataQualityScore"] = data_quality
+    facts["sourceDataState"] = data_state
     return facts
 
 
@@ -1371,16 +1373,6 @@ def _evidence_scope(item: Dict[str, object]) -> str:
     return str(item.get("relationScope") or payload.get("relationScope") or "").strip().lower()
 
 
-def _evidence_relevance(item: Dict[str, object]) -> float:
-    payload = _evidence_payload(item)
-    return number(item.get("relevanceScore") or payload.get("relevanceScore"))
-
-
-def _evidence_source_reliability(item: Dict[str, object]) -> float:
-    payload = _evidence_payload(item)
-    return number(item.get("sourceReliability") or payload.get("sourceReliability") or item.get("confidence"))
-
-
 def _evidence_title(item: Dict[str, object]) -> str:
     return " ".join(str(item.get("title") or item.get("summary") or "").split())[:180]
 
@@ -1390,9 +1382,19 @@ def _evidence_event_type(item: Dict[str, object]) -> str:
     return str(item.get("eventType") or payload.get("eventType") or "general").strip() or "general"
 
 
-def _evidence_materiality(item: Dict[str, object]) -> float:
+def _evidence_relevance_state(item: Dict[str, object]) -> str:
     payload = _evidence_payload(item)
-    return number(item.get("materialityScore") or payload.get("materialityScore"))
+    return news_domain.news_state_payload({**payload, **item})["relevanceState"]
+
+
+def _evidence_materiality_state(item: Dict[str, object]) -> str:
+    payload = _evidence_payload(item)
+    return news_domain.news_state_payload({**payload, **item})["materialityState"]
+
+
+def _evidence_source_trust_state(item: Dict[str, object]) -> str:
+    payload = _evidence_payload(item)
+    return news_domain.news_state_payload({**payload, **item})["sourceTrustState"]
 
 
 def _evidence_minutes_since(item: Dict[str, object]) -> float:
@@ -1428,11 +1430,7 @@ def research_evidence_facts(evidence_items: Iterable[Dict[str, object]]) -> Dict
     market = [item for item in news_items if _evidence_scope(item) == "market"]
     risk = [item for item in direct if str(item.get("polarity") or "").lower() in {"risk", "contradiction"}]
     support = [item for item in direct if str(item.get("polarity") or "").lower() == "support"]
-    material = [
-        item
-        for item in news_items
-        if _evidence_scope(item) == "direct" or _evidence_relevance(item) >= 55 or _evidence_materiality(item) >= 45
-    ]
+    material = [item for item in news_items if _evidence_materiality_state(item) in {"material", "notable"}]
     event_type_counts: Dict[str, int] = {}
     for item in news_items:
         event_type = _evidence_event_type(item)
@@ -1440,7 +1438,19 @@ def research_evidence_facts(evidence_items: Iterable[Dict[str, object]]) -> Dict
 
     def titles(rows: List[Dict[str, object]], limit: int = 4) -> List[str]:
         result: List[str] = []
-        for row in sorted(rows, key=lambda item: (_evidence_relevance(item), number(item.get("impactScore"))), reverse=True):
+        relevance_rank = {"direct": 3, "related": 2, "context": 1, "unrelated": 0}
+        materiality_rank = {"material": 2, "notable": 1, "context": 0}
+        trust_rank = {"trusted": 3, "standard": 2, "limited": 1, "unknown": 0}
+        for row in sorted(
+            rows,
+            key=lambda item: (
+                relevance_rank.get(_evidence_relevance_state(item), 0),
+                materiality_rank.get(_evidence_materiality_state(item), 0),
+                trust_rank.get(_evidence_source_trust_state(item), 0),
+                -_evidence_minutes_since(item),
+            ),
+            reverse=True,
+        ):
             title = _evidence_title(row)
             if title and title not in result:
                 result.append(title)
@@ -1448,12 +1458,14 @@ def research_evidence_facts(evidence_items: Iterable[Dict[str, object]]) -> Dict
                 break
         return result
 
-    relevance_values = [_evidence_relevance(item) for item in news_items if _evidence_relevance(item)]
-    reliability_values = [_evidence_source_reliability(item) for item in news_items if _evidence_source_reliability(item)]
-    materiality_values = [_evidence_materiality(item) for item in news_items if _evidence_materiality(item)]
-    risk_score = sum((number(item.get("impactScore")) or 2.0) * max(0.35, _evidence_relevance(item) / 100) * max(0.8, _evidence_materiality(item) / 55 if _evidence_materiality(item) else 1) for item in risk)
-    support_score = sum((number(item.get("impactScore")) or 2.0) * max(0.35, _evidence_relevance(item) / 100) * max(0.8, _evidence_materiality(item) / 55 if _evidence_materiality(item) else 1) for item in support)
     latest_direct_age = min([_evidence_minutes_since(item) for item in direct if _evidence_minutes_since(item)], default=0.0)
+    evidence_state = "mixed" if risk and support else "risk" if risk else "support" if support else "context"
+    conflict_state = "mixed" if risk and support else "risk-only" if risk else "support-only" if support else "context-only"
+    material_state = "material" if any(_evidence_materiality_state(item) == "material" for item in news_items) else ("notable" if material else "context")
+    source_states = {_evidence_source_trust_state(item) for item in news_items}
+    source_trust_state = "trusted" if "trusted" in source_states else "standard" if "standard" in source_states else "limited" if "limited" in source_states else "unknown"
+    news_data_state = "sufficient" if source_trust_state in {"trusted", "standard"} and direct else ("partial" if news_items else "insufficient")
+    review_level = "act" if risk and material_state == "material" else "check" if risk or material_state == "material" else "observe" if news_items else "normal"
     return {
         "researchEvidenceCount": len([item for item in evidence_items or [] if isinstance(item, dict)]),
         "newsEvidenceCount": len(news_items),
@@ -1464,14 +1476,16 @@ def research_evidence_facts(evidence_items: Iterable[Dict[str, object]]) -> Dict
         "sectorNewsCount": len(sector),
         "marketNewsCount": len(market),
         "materialNewsCount": len(material),
-        "averageNewsRelevanceScore": round(sum(relevance_values) / len(relevance_values), 1) if relevance_values else 0.0,
-        "averageNewsSourceReliability": round(sum(reliability_values) / len(reliability_values), 2) if reliability_values else 0.0,
-        "averageNewsMaterialityScore": round(sum(materiality_values) / len(materiality_values), 1) if materiality_values else 0.0,
+        "newsRelevanceState": "direct" if direct else ("related" if peer or sector else "context" if market else "unrelated"),
+        "newsSourceTrustState": source_trust_state,
+        "newsMaterialityState": material_state,
+        "newsEvidenceState": evidence_state,
+        "newsConflictState": conflict_state,
+        "newsReviewLevel": review_level,
+        "newsDataState": news_data_state,
         "newsEventTypeCounts": event_type_counts,
         "topNewsEventTypes": [key for key, _count in sorted(event_type_counts.items(), key=lambda entry: entry[1], reverse=True)[:5]],
         "latestDirectNewsAgeMinutes": round(latest_direct_age, 1),
-        "newsMomentumScore": round(support_score - risk_score, 1),
-        "newsConflictScore": round(min(support_score, risk_score), 1) if risk_score and support_score else 0.0,
         "topNewsTitles": titles(material or news_items, 5),
         "directRiskNewsTitles": titles(risk, 4),
         "directSupportNewsTitles": titles(support, 4),

@@ -69,14 +69,9 @@ def rule_from_row(row) -> NotificationRuleConfig:
     return NotificationRuleConfig.from_dict({
         "messageType": row["message_type"],
         "enabled": bool(row["enabled"]),
-        "threshold": row["threshold"],
-        "baseScore": row["base_score"],
-        "lowScoreAction": row["low_score_action"],
         "conditions": conditions if isinstance(conditions, list) else [],
         "similarityEnabled": bool(row["similarity_enabled"]),
         "similarityWindowMinutes": row["similarity_window_minutes"],
-        "similarityPenalty": row["similarity_penalty"],
-        "similarityBypassScoreDelta": row["similarity_bypass_score_delta"],
         "similarityBypassConditions": similarity_bypass_conditions if isinstance(similarity_bypass_conditions, list) else [],
         "similarityFields": similarity_fields if isinstance(similarity_fields, list) else [],
         "stateCooldownEnabled": bool(row["state_cooldown_enabled"]) if "state_cooldown_enabled" in row_keys else None,
@@ -102,6 +97,8 @@ def research_evidence_from_row(row) -> ResearchEvidence:
         payload = json.loads(row["payload_json"] or "{}")
     except json.JSONDecodeError:
         payload = {}
+    keys = set(row.keys()) if hasattr(row, "keys") else set()
+    raw_payload = payload if isinstance(payload, dict) else {}
     return ResearchEvidence(
         evidence_id=row["evidence_id"],
         symbol=row["symbol"],
@@ -112,8 +109,14 @@ def research_evidence_from_row(row) -> ResearchEvidence:
         url=row["url"],
         observed_at=row["observed_at"],
         polarity=row["polarity"],
-        impact_score=row["impact_score"],
-        confidence=row["confidence"],
         published_at=row["published_at"],
-        raw_payload=payload if isinstance(payload, dict) else {},
+        raw_payload=raw_payload,
+        source_trust_state=(row["source_trust_state"] if "source_trust_state" in keys else ""),
+        materiality_state=(row["materiality_state"] if "materiality_state" in keys else ""),
+        data_state=(row["data_state"] if "data_state" in keys else ""),
+        validation_state=(row["validation_state"] if "validation_state" in keys else ""),
+        # Read legacy columns only while older local rows remain.  The
+        # ResearchEvidence constructor converts them into categorical states.
+        impact_score=(row["impact_score"] if "impact_score" in keys else None),
+        confidence=(row["confidence"] if "confidence" in keys else None),
     )

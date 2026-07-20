@@ -32,6 +32,7 @@ HYPOTHESIS_PROPOSED = "investment_hypothesis.proposed"
 HYPOTHESIS_REVIEWED = "investment_hypothesis.reviewed"
 ONTOLOGY_REASONING_REQUESTED = "ontology.reasoning_requested"
 ONTOLOGY_REASONING_COMPLETED = "ontology.reasoning_completed"
+PSYCHOLOGY_SHADOW_EVALUATED = "psychology.shadow_evaluated"
 INVESTMENT_CALENDAR_EVENT_SAVED = "investment_calendar.event_saved"
 INVESTMENT_CALENDAR_EVENT_REMOVED = "investment_calendar.event_removed"
 INVESTMENT_CALENDAR_REMINDER_DUE = "investment_calendar.reminder_due"
@@ -124,7 +125,7 @@ def compact_ontology_projection_metadata(value: Dict[str, object]) -> Dict[str, 
         "aboxEntityCount",
         "aboxRelationCount",
         "qualitySampleId",
-        "qualityScore",
+        "qualityState",
     ]
     compact = {
         key: value.get(key)
@@ -401,6 +402,42 @@ def ontology_reasoning_completed_event(
             "status": str(status or "ok"),
             "reason": str(reason or ""),
             "dispatchMode": "data-update-driven",
+        },
+    )
+
+
+def psychology_shadow_evaluated_event(payload: Dict[str, object], changed_symbols: Iterable[str] = None) -> DomainEvent:
+    summary = payload.get("summary") if isinstance((payload or {}).get("summary"), dict) else {}
+    symbols = payload.get("symbols") if isinstance((payload or {}).get("symbols"), dict) else {}
+    compact_rows = {}
+    for symbol, row in list(symbols.items())[:200]:
+        if not isinstance(row, dict):
+            continue
+        compact_rows[str(symbol)] = {
+            key: row.get(key)
+            for key in [
+                "state",
+                "stateLabel",
+                "reviewLevel",
+                "dataState",
+                "conflictState",
+                "freshnessStatus",
+                "typeDbShadowConfirmed",
+            ]
+        }
+        compact_rows[str(symbol)]["comparison"] = dict(row.get("comparison") or {})
+    return DomainEvent(
+        name=PSYCHOLOGY_SHADOW_EVALUATED,
+        aggregate_id=str(payload.get("accountId") or "psychology-shadow"),
+        payload={
+            "accountId": str(payload.get("accountId") or ""),
+            "generatedAt": str(payload.get("generatedAt") or ""),
+            "mode": "shadow",
+            "summary": dict(summary or {}),
+            "changedSymbols": sorted(set(str(item or "").upper().strip() for item in (changed_symbols or []) if str(item or "").strip())),
+            "symbols": compact_rows,
+            "decisionImpactApplied": False,
+            "dispatchEligible": False,
         },
     )
 

@@ -22,7 +22,6 @@ def candidate_from_row(row) -> InvestmentCalendarReviewCandidate:
         "status": row["status"],
         "reviewReason": row["review_reason"],
         "importance": row["importance"],
-        "confidence": row["confidence"],
         "symbols": _json_loads(row["symbols_json"], []),
         "markets": _json_loads(row["markets_json"], []),
         "accountIds": _json_loads(row["account_ids_json"], []),
@@ -36,6 +35,13 @@ def candidate_from_row(row) -> InvestmentCalendarReviewCandidate:
         "reviewedAt": row["reviewed_at"],
         "reviewNote": row["review_note"],
     })
+    # Existing local rows may predate the categorical readiness column. Keep
+    # their migration at the storage boundary instead of losing the old value
+    # before the domain object can translate it to a named state.
+    if "readiness_state" in row:
+        payload["readinessState"] = row["readiness_state"]
+    elif "confidence" in row:
+        payload["confidence"] = row["confidence"]
     return InvestmentCalendarReviewCandidate.from_payload(payload)
 
 
@@ -53,7 +59,7 @@ class MySQLInvestmentCalendarCandidateStore(MySQLOperationalConnection):
                 """
                 INSERT INTO investment_calendar_candidates (
                     candidate_id, proposed_event_id, title, event_type, starts_at, timezone_name, all_day,
-                    status, review_reason, importance, confidence, symbols_json, markets_json, account_ids_json,
+                    status, review_reason, importance, readiness_state, symbols_json, markets_json, account_ids_json,
                     source, source_url, notes, reminder_offsets_json, source_evidence_id, payload_json,
                     created_at, updated_at, reviewed_at, review_note
                 )
@@ -66,7 +72,7 @@ class MySQLInvestmentCalendarCandidateStore(MySQLOperationalConnection):
                     all_day = IF(status = 'pending', VALUES(all_day), all_day),
                     review_reason = IF(status = 'pending', VALUES(review_reason), review_reason),
                     importance = IF(status = 'pending', VALUES(importance), importance),
-                    confidence = IF(status = 'pending', VALUES(confidence), confidence),
+                    readiness_state = IF(status = 'pending', VALUES(readiness_state), readiness_state),
                     symbols_json = IF(status = 'pending', VALUES(symbols_json), symbols_json),
                     markets_json = IF(status = 'pending', VALUES(markets_json), markets_json),
                     account_ids_json = IF(status = 'pending', VALUES(account_ids_json), account_ids_json),
@@ -89,7 +95,7 @@ class MySQLInvestmentCalendarCandidateStore(MySQLOperationalConnection):
                     candidate.status,
                     candidate.review_reason,
                     int(candidate.importance or 0),
-                    float(candidate.confidence or 0),
+                    candidate.readiness_state,
                     json_dumps(candidate.symbols),
                     json_dumps(candidate.markets),
                     json_dumps(candidate.account_ids),

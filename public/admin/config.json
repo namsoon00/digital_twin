@@ -13,10 +13,10 @@
     "공유 미리보기에서는 서버 설정과 계정 DB 쓰기를 차단합니다."
   ],
   "localData": {
-    "generatedAt": "2026-07-17T21:18:06.015261Z",
+    "generatedAt": "2026-07-20T22:54:39.043161Z",
     "sources": {
       "settings": "data/settings.json",
-      "settingsExists": false
+      "settingsExists": true
     },
     "accountSource": "operational-db",
     "savedAccountCount": 1,
@@ -25,7 +25,7 @@
     "accounts": [
       {
         "id": "default",
-        "label": "남순",
+        "label": "기본 계정",
         "provider": "toss",
         "baseUrl": "https://openapi.tossinvest.com",
         "clientId": true,
@@ -34,7 +34,13 @@
         "watchlistSymbols": [
           "TSLA",
           "AAPL",
-          "NVDA"
+          "NVDA",
+          "000660",
+          "PLTR",
+          "005380",
+          "066570",
+          "035420",
+          "035720"
         ],
         "notifyProvider": "telegram",
         "telegramBotToken": true,
@@ -57,24 +63,14 @@
       "notifyLinkUrl": "http://127.0.0.1:3000",
       "fxRates": "KRW=1\nUSD=1400",
       "fairValueFormula": "eps * targetPer * growthWeight * qualityWeight * riskWeight",
-      "buyScoreFormula": "50 + (executionScore * 0.42 + directionalVolumePressure * 0.9 + buyShareScore * 0.55 + orderbookScore * 0.32 + momentumScore * 0.35 + trendScore * 0.45 + investorFlowScore * 0.35) * flowWeight + undervalueBonus * valuationWeight - expensivePenalty * valuationWeight",
-      "sellScoreFormula": "50 + (-executionScore * 0.38 - directionalVolumePressure * 0.85 - buyShareScore * 0.55 - orderbookScore * 0.3 - momentumScore * 0.4 - trendScore * 0.35 - investorFlowScore * 0.3) * flowWeight + expensiveBonus * valuationWeight",
-      "profitTakeScoreFormula": "baseScore + profitTakePnlScore + sectorConcentrationScore + sellableScore + holdingSignalScore",
-      "lossCutScoreFormula": "baseScore + lossCutPnlScore + sectorConcentrationScore + sellableScore + holdingSignalScore + lossGuardConfirmationScore - lossGuardWeakEvidencePenalty",
-      "notificationScoreFormula": "rawScore",
       "monitorAccountQueueEnabled": "0",
       "monitorAccountIntervalSeconds": "180",
       "monitorAccountBatchSize": "10",
       "monitorAccountLockSeconds": "600",
       "modelName": "나의 매수/매도 모델",
-      "modelHypothesis": "수급, 가치, 내 점수, 리스크를 함께 봐서 매수 후보와 매도 후보를 분리한다.",
-      "customBuyModelFormula": "buyScore * 0.35 + buyReasonScore * buyReasonWeight + confidenceScore * confidenceWeight + max(0, targetReturn) * 0.15 + undervalueBonus * valuationWeight - riskScore * riskControlWeight",
-      "customSellModelFormula": "sellScore * 0.35 + riskScore * riskControlWeight + expensivePenalty * valuationWeight + max(0, -targetReturn) * 0.2 - buyReasonScore * 0.1",
-      "formulaWeights": "growthWeight=1\nqualityWeight=1\nriskWeight=1\nflowWeight=1\nvaluationWeight=1\nbuyReasonWeight=0.25\nconfidenceWeight=0.15\nriskControlWeight=0.35",
-      "decisionThresholds": "buyCandidate=78\nchaseCaution=70\nstrongHold=72\nsellTrim=70\nriskReduce=66\nsellWatch=64",
-      "modelDecisionThresholds": "graphSignalMinScore=55\ngraphSignalAlertScore=78\ngraphSignalConfidenceMin=50",
-      "alertThresholds": "volumeRatioHigh=2\nbuyShareHigh=65\nsellShareHigh=65\norderbookImbalance=25\nmomentumUp=3\nmomentumDown=-3\nmarketCashLow=10\npriceNearPercent=1\nstaleMinutes=30\npendingOrderMinutes=30\ngraphSignalMinScore=55\ngraphSignalAlertScore=78\ngraphSignalConfidenceMin=50",
-      "relationRuleThresholds": "lossRateLow=-8\nlossRateBufferPct=1\nlossGuardVolumeConfirmRatio=0.8\nlossGuardMa60SupportPct=0\nlossGuardWeakEvidencePenalty=30\nprofitRateHigh=20\nsectorWeightHigh=50\npositionWeightHigh=30\nexternalBitcoinChange24hPct=3\nexternalBitcoinChange7dPct=4\nentryPullbackMa20BelowPct=-2\nentryPullbackMa20DeepPct=-8\nentryMa5TimingMinPct=-0.5\nentryMomentumMa20MinPct=-0.5\nentryMomentumMa60MinPct=0\nentryMa60SupportPct=-1\nentryVolumeMinRatio=0.8\nentryVolumeMaxRatio=1.8\nentrySmartMoneyMin=10\nentryTradeStrengthMin=100\nentryOrderbookImbalanceMin=5\nentryMaxPositionWeight=20\nentryMaxSectorWeight=45\nmacroRateDeltaBp=15\nmacroRateHighPct=4.5\nmacroRateLowPct=3\nmacroCurveInversionPct=0\nusdKrwDeltaKrw=15\nusdKrwDeltaPct=1\nusdKrw7dDeltaKrw=30\nusdKrw7dDeltaPct=2\nusdKrwHigh=1450\nusdKrwLow=1300\nfxExposureReview=5\nfxExposureHigh=10\nnewsDirectFreshMaxAgeMinutes=1440\nnewsDirectRelevanceMin=75\nnewsDirectMaterialityMin=60",
+      "modelHypothesis": "손익, 가격 흐름, 수급, 가치, 뉴스와 반대 근거를 상태로 나눠 행동 조건을 결정한다.",
+      "alertThresholds": "volumeRatioHigh=2\nbuyShareHigh=65\nsellShareHigh=65\norderbookImbalance=25\nmomentumUp=3\nmomentumDown=-3\nmarketCashLow=10\npriceNearPercent=1\nstaleMinutes=30\npendingOrderMinutes=30",
+      "relationRuleThresholds": "lossRateLow=-8\nlossRateBufferPct=1\nlossGuardVolumeConfirmRatio=0.8\nlossGuardMa60SupportPct=0\nprofitRateHigh=20\nsectorWeightHigh=50\npositionWeightHigh=30\nexternalBitcoinChange24hPct=3\nexternalBitcoinChange7dPct=4\nentryPullbackMa20BelowPct=-2\nentryPullbackMa20DeepPct=-8\nentryMa5TimingMinPct=-0.5\nentryMomentumMa20MinPct=-0.5\nentryMomentumMa60MinPct=0\nentryMa60SupportPct=-1\nentryVolumeMinRatio=0.8\nentryVolumeMaxRatio=1.8\nentrySmartMoneyMin=10\nentryTradeStrengthMin=100\nentryOrderbookImbalanceMin=5\nentryMaxPositionWeight=20\nentryMaxSectorWeight=45\nmacroRateDeltaBp=15\nmacroRateHighPct=4.5\nmacroRateLowPct=3\nmacroCurveInversionPct=0\nusdKrwDeltaKrw=15\nusdKrwDeltaPct=1\nusdKrw7dDeltaKrw=30\nusdKrw7dDeltaPct=2\nusdKrwHigh=1450\nusdKrwLow=1300\nfxExposureReview=5\nfxExposureHigh=10\nnewsDirectFreshMaxAgeMinutes=1440",
       "modelReviewUseCodex": "1",
       "modelReviewTimeoutSeconds": "180",
       "modelReviewIntervalSeconds": "300",
@@ -132,7 +128,7 @@
       "externalDartEnabled": "1",
       "externalDartLookbackDays": "14",
       "externalDartCorpCodes": "005930=00126380\n000660=00164779\n035420=00266961",
-      "externalNewsEnabled": "1",
+      "externalNewsEnabled": "0",
       "externalNewsProvider": "auto",
       "externalNewsMaxSymbols": "3",
       "externalNewsLookbackHours": "48",
@@ -142,20 +138,20 @@
       "newsCollectionMaxSymbols": "3",
       "newsCollectionLookbackMinutes": "180",
       "newsCollectionPerSymbolLimit": "8",
-      "newsCollectionProviders": "yahoo_finance,gdelt,google_rss_kr,google_rss_us",
-      "newsCollectionMinRelevanceScore": "35",
+      "newsCollectionProviders": "yahoo_search,yahoo_finance",
+      "newsCollectionMinimumRelevanceState": "context",
+      "newsDigestMinimumRelevanceState": "direct",
+      "newsDigestMinimumMaterialityState": "notable",
+      "newsDigestMinimumNeutralMaterialityState": "material",
+      "newsDigestMinimumSourceTrustState": "standard",
+      "investmentBrainResearchMinimumSourceTrustState": "standard",
       "newsCollectionRequireArticleBodyForRss": "1",
       "newsCollectionIncludeWatchlist": "1",
       "newsCollectionIncludeHoldings": "1",
       "newsCollectionRateLimitSeconds": "0.25",
       "newsAiAnalysisEnabled": "1",
-      "newsAiAnalysisUseCodex": "0",
-      "newsAiAnalysisTimeoutSeconds": "15",
-      "investmentCalendarAiResearchEnabled": "1",
-      "investmentCalendarAiResearchRunCollection": "1",
-      "investmentCalendarAiResearchEvidenceLimit": "120",
-      "investmentCalendarAiResearchCandidateLimit": "50",
-      "investmentCalendarAiResearchReviewMinConfidence": "0.25",
+      "newsAiAnalysisUseCodex": "1",
+      "newsAiAnalysisTimeoutSeconds": "90",
       "investmentCalendarOfficialMacroSyncEnabled": "1",
       "investmentCalendarOfficialMacroSyncIntervalHours": "12",
       "investmentCalendarOfficialMacroSyncRateLimitSeconds": "600",
@@ -165,18 +161,19 @@
       "investmentCalendarBokPolicyDecisionLookaheadYears": "1",
       "ontologyReasoningEnabled": "1",
       "ontologyReasoningIntervalSeconds": "10",
-      "ontologyReasoningBatchSize": "20",
+      "ontologyReasoningBatchSize": "200",
+      "ontologyReasoningMaxSymbolsPerRun": "3",
+      "ontologyReasoningMinIntervalSeconds": "180",
+      "ontologyReasoningUrgentMinIntervalSeconds": "60",
+      "ontologyReasoningUrgentReviewLevels": "act,immediate,blocked",
       "ontologyLabEnabled": "1",
       "ontologyLabIntervalSeconds": "300",
       "ontologyLabBatchSize": "5",
       "ontologyLabRunHistoryLimit": "50",
       "materialityGateEnabled": "1",
-      "materialityMinimumScore": "65",
-      "marketMaterialityMinimumScore": "65",
       "marketMaterialityPriceChangePct": "0.6",
       "marketMaterialityTrendDistancePct": "2",
       "marketMaterialityVolumeRatio": "1.5",
-      "newsMaterialityMinimumScore": "65",
       "dartDisclosureAiAnalysisEnabled": "1",
       "dartDisclosureAiUseCodex": "1",
       "dartDisclosureAiTimeoutSeconds": "90"
@@ -247,21 +244,6 @@
       ],
       "alertThresholds": [
         {
-          "key": "graphSignalMinScore",
-          "default": 55.0,
-          "unit": ""
-        },
-        {
-          "key": "graphSignalAlertScore",
-          "default": 78.0,
-          "unit": ""
-        },
-        {
-          "key": "graphSignalConfidenceMin",
-          "default": 50.0,
-          "unit": ""
-        },
-        {
           "key": "volumeRatioHigh",
           "default": 2.0,
           "unit": ""
@@ -331,11 +313,6 @@
         {
           "key": "lossGuardMa60SupportPct",
           "default": 0.0,
-          "unit": ""
-        },
-        {
-          "key": "lossGuardWeakEvidencePenalty",
-          "default": 30.0,
           "unit": ""
         },
         {
@@ -491,16 +468,6 @@
         {
           "key": "newsDirectFreshMaxAgeMinutes",
           "default": 1440.0,
-          "unit": ""
-        },
-        {
-          "key": "newsDirectRelevanceMin",
-          "default": 75.0,
-          "unit": ""
-        },
-        {
-          "key": "newsDirectMaterialityMin",
-          "default": 60.0,
           "unit": ""
         }
       ],
@@ -858,9 +825,9 @@
         },
         {
           "key": "externalNewsEnabled",
-          "label": "뉴스 헤드라인 수집 사용",
+          "label": "레거시 뉴스 헤드라인 수집",
           "type": "toggle",
-          "default": "1"
+          "default": "0"
         },
         {
           "key": "externalNewsProvider",
@@ -1051,13 +1018,47 @@
           "key": "newsCollectionProviders",
           "label": "뉴스 수집 채널",
           "type": "text",
-          "default": "yahoo_finance,gdelt,google_rss_kr,google_rss_us"
+          "default": "yahoo_search,yahoo_finance"
         },
         {
-          "key": "newsCollectionMinRelevanceScore",
-          "label": "뉴스 관련성 최소 점수",
-          "type": "number",
-          "default": "35"
+          "key": "newsCollectionMinimumRelevanceState",
+          "label": "뉴스 수집 최소 관련성",
+          "type": "text",
+          "default": "context"
+        },
+        {
+          "key": "newsDigestMinimumRelevanceState",
+          "label": "뉴스 알림 최소 관련성",
+          "type": "text",
+          "default": "direct"
+        },
+        {
+          "key": "newsDigestMinimumMaterialityState",
+          "label": "뉴스 알림 최소 중요 상태",
+          "type": "text",
+          "default": "notable"
+        },
+        {
+          "key": "newsDigestMinimumNeutralMaterialityState",
+          "label": "중립 뉴스 최소 중요 상태",
+          "type": "text",
+          "default": "material"
+        },
+        {
+          "key": "newsDigestMinimumSourceTrustState",
+          "label": "뉴스 알림 최소 출처 상태",
+          "type": "text",
+          "default": "standard"
+        },
+        {
+          "key": "investmentBrainResearchMinimumSourceTrustState",
+          "label": "리서치 최소 출처 상태",
+          "type": "select",
+          "options": [
+            "standard",
+            "trusted"
+          ],
+          "default": "standard"
         },
         {
           "key": "newsCollectionRequireArticleBodyForRss",
@@ -1100,38 +1101,6 @@
           "type": "number",
           "default": "90",
           "unit": "seconds"
-        },
-        {
-          "key": "investmentCalendarAiResearchEnabled",
-          "label": "AI 캘린더 후보 추천",
-          "type": "toggle",
-          "default": "1"
-        },
-        {
-          "key": "investmentCalendarAiResearchRunCollection",
-          "label": "추천 전 뉴스 수집 실행",
-          "type": "toggle",
-          "default": "1"
-        },
-        {
-          "key": "investmentCalendarAiResearchEvidenceLimit",
-          "label": "추천 근거 스캔 수",
-          "type": "number",
-          "default": "120",
-          "unit": "items"
-        },
-        {
-          "key": "investmentCalendarAiResearchCandidateLimit",
-          "label": "추천 후보 저장 한도",
-          "type": "number",
-          "default": "50",
-          "unit": "items"
-        },
-        {
-          "key": "investmentCalendarAiResearchReviewMinConfidence",
-          "label": "추천 후보 최소 신뢰도",
-          "type": "number",
-          "default": "0.25"
         },
         {
           "key": "investmentCalendarOfficialMacroSyncEnabled",
@@ -1184,6 +1153,32 @@
           "default": "20"
         },
         {
+          "key": "ontologyReasoningMaxSymbolsPerRun",
+          "label": "한 번에 추론할 종목 수",
+          "type": "number",
+          "default": "3"
+        },
+        {
+          "key": "ontologyReasoningMinIntervalSeconds",
+          "label": "종목별 추론 병합 간격",
+          "type": "number",
+          "default": "180",
+          "unit": "seconds"
+        },
+        {
+          "key": "ontologyReasoningUrgentMinIntervalSeconds",
+          "label": "긴급 추론 최소 간격",
+          "type": "number",
+          "default": "60",
+          "unit": "seconds"
+        },
+        {
+          "key": "ontologyReasoningUrgentReviewLevels",
+          "label": "긴급 추론 검토 단계",
+          "type": "text",
+          "default": "act,immediate,blocked"
+        },
+        {
           "key": "ontologyLabEnabled",
           "label": "온톨로지 실험 워커 사용",
           "type": "toggle",
@@ -1215,18 +1210,6 @@
           "default": "1"
         },
         {
-          "key": "materialityMinimumScore",
-          "label": "중요 변경 기본 기준",
-          "type": "number",
-          "default": "65"
-        },
-        {
-          "key": "marketMaterialityMinimumScore",
-          "label": "시장 데이터 중요 기준",
-          "type": "number",
-          "default": "65"
-        },
-        {
           "key": "marketMaterialityPriceChangePct",
           "label": "가격 중요 변화율",
           "type": "number",
@@ -1246,12 +1229,6 @@
           "type": "number",
           "default": "1.5",
           "unit": "x"
-        },
-        {
-          "key": "newsMaterialityMinimumScore",
-          "label": "뉴스 중요 기준",
-          "type": "number",
-          "default": "65"
         },
         {
           "key": "dartDisclosureAiAnalysisEnabled",
@@ -1339,6 +1316,12 @@
           "default": "1"
         },
         {
+          "key": "typedbAgeResetEnabled",
+          "label": "TypeDB 보관 시간 초과 재생성",
+          "type": "toggle",
+          "default": "0"
+        },
+        {
           "key": "typedbDataRetentionHours",
           "label": "TypeDB 보관 시간",
           "type": "number",
@@ -1351,31 +1334,6 @@
           "type": "number",
           "default": "2048",
           "unit": "MB"
-        },
-        {
-          "key": "formulaWeights",
-          "label": "참고 가중치",
-          "type": "assignmentText"
-        },
-        {
-          "key": "profitTakeScoreFormula",
-          "label": "참고 익절 계산식",
-          "type": "formula"
-        },
-        {
-          "key": "lossCutScoreFormula",
-          "label": "참고 손실 관리 계산식",
-          "type": "formula"
-        },
-        {
-          "key": "notificationScoreFormula",
-          "label": "알림 발송 공식",
-          "type": "formula"
-        },
-        {
-          "key": "modelDecisionThresholds",
-          "label": "모델 판단 기준",
-          "type": "assignmentText"
         }
       ]
     },
@@ -1450,18 +1408,53 @@
         ],
         "alertThresholds": [
           {
-            "key": "graphSignalMinScore",
-            "default": 55,
+            "key": "volumeRatioHigh",
+            "default": 2,
             "unit": ""
           },
           {
-            "key": "graphSignalAlertScore",
-            "default": 78,
+            "key": "buyShareHigh",
+            "default": 65,
             "unit": ""
           },
           {
-            "key": "graphSignalConfidenceMin",
-            "default": 50,
+            "key": "sellShareHigh",
+            "default": 65,
+            "unit": ""
+          },
+          {
+            "key": "orderbookImbalance",
+            "default": 25,
+            "unit": ""
+          },
+          {
+            "key": "momentumUp",
+            "default": 3,
+            "unit": ""
+          },
+          {
+            "key": "momentumDown",
+            "default": -3,
+            "unit": ""
+          },
+          {
+            "key": "marketCashLow",
+            "default": 10,
+            "unit": ""
+          },
+          {
+            "key": "priceNearPercent",
+            "default": 1,
+            "unit": ""
+          },
+          {
+            "key": "staleMinutes",
+            "default": 30,
+            "unit": ""
+          },
+          {
+            "key": "pendingOrderMinutes",
+            "default": 30,
             "unit": ""
           }
         ],
@@ -1484,11 +1477,6 @@
           {
             "key": "lossGuardMa60SupportPct",
             "default": 0,
-            "unit": ""
-          },
-          {
-            "key": "lossGuardWeakEvidencePenalty",
-            "default": 30,
             "unit": ""
           },
           {
@@ -1644,16 +1632,6 @@
           {
             "key": "newsDirectFreshMaxAgeMinutes",
             "default": 1440,
-            "unit": ""
-          },
-          {
-            "key": "newsDirectRelevanceMin",
-            "default": 75,
-            "unit": ""
-          },
-          {
-            "key": "newsDirectMaterialityMin",
-            "default": 60,
             "unit": ""
           }
         ],
@@ -1873,6 +1851,7 @@
         "POST /api/ontology/experiments",
         "POST /api/ontology/experiments/once",
         "POST /api/ontology/experiments/suggest",
+        "POST /api/ontology/experiments/apply",
         "POST /api/ontology/experiments/{id}/run",
         "POST /api/ontology/experiments/{id}/apply",
         "POST /api/ontology/experiments/{id}/activate",
@@ -1967,5 +1946,5 @@
       ]
     }
   ],
-  "buildId": "255ffe028d8e"
+  "buildId": "e6a0d4150061"
 }

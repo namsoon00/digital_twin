@@ -64,8 +64,12 @@ DEFAULT_AI_GATE_MESSAGE_TYPES = {
 class NotificationAIValidatedResponse:
     action: str = "HOLD"
     action_label: str = "보유"
-    confidence: float = 50.0
-    original_confidence: float = 0.0
+    validation_state: str = "conditional"
+    validation_label: str = "조건부 사용"
+    data_state: str = "partial"
+    data_state_label: str = "일부 자료만 있음"
+    review_level: str = "check"
+    review_label: str = "조건 확인"
     summary: str = ""
     opinion: str = ""
     evidence: List[str] = field(default_factory=list)
@@ -76,8 +80,7 @@ class NotificationAIValidatedResponse:
     source_urls: List[str] = field(default_factory=list)
     precomputed_action: str = ""
     disagreement_reason: str = ""
-    confidence_cap: float = 100.0
-    confidence_cap_reasons: List[str] = field(default_factory=list)
+    validation_reasons: List[str] = field(default_factory=list)
     reference_date: str = ""
     validation_warnings: List[str] = field(default_factory=list)
     strategy_guide: Dict[str, object] = field(default_factory=dict)
@@ -92,7 +95,12 @@ class NotificationAIValidatedResponse:
         payload = asdict(self)
         payload["engineVersion"] = NOTIFICATION_AI_GATE_VERSION
         payload["actionLabel"] = payload.pop("action_label")
-        payload["originalConfidence"] = payload.pop("original_confidence")
+        payload["validationState"] = payload.pop("validation_state")
+        payload["validationLabel"] = payload.pop("validation_label")
+        payload["dataState"] = payload.pop("data_state")
+        payload["dataStateLabel"] = payload.pop("data_state_label")
+        payload["reviewLevel"] = payload.pop("review_level")
+        payload["reviewLabel"] = payload.pop("review_label")
         payload["counterEvidence"] = payload.pop("counter_evidence")
         payload["invalidationCondition"] = payload.pop("invalidation_condition")
         payload["nextChecks"] = payload.pop("next_checks")
@@ -100,8 +108,7 @@ class NotificationAIValidatedResponse:
         payload["sourceUrls"] = payload.pop("source_urls")
         payload["precomputedAction"] = payload.pop("precomputed_action")
         payload["disagreementReason"] = payload.pop("disagreement_reason")
-        payload["confidenceCap"] = payload.pop("confidence_cap")
-        payload["confidenceCapReasons"] = payload.pop("confidence_cap_reasons")
+        payload["validationReasons"] = payload.pop("validation_reasons")
         payload["referenceDate"] = payload.pop("reference_date")
         payload["validationWarnings"] = payload.pop("validation_warnings")
         payload["strategyGuide"] = payload.pop("strategy_guide")

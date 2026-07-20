@@ -45,7 +45,7 @@ class ValuationContractTests(unittest.TestCase):
         self.assertFalse(
             valuation_decision_eligible(
                 source_type="ai",
-                reliability_score=90,
+                reliability_state="sufficient",
                 approval_status="ai_applied_pending_review",
                 freshness_status="fresh",
                 period_compatible=True,
@@ -55,7 +55,7 @@ class ValuationContractTests(unittest.TestCase):
         self.assertTrue(
             valuation_decision_eligible(
                 source_type="ai",
-                reliability_score=90,
+                reliability_state="sufficient",
                 approval_status="user_approved",
                 freshness_status="fresh",
                 period_compatible=True,

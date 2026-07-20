@@ -744,8 +744,9 @@ function checkFrontendAdminRender() {
           observedAt: "2026-07-08T00:00:00Z",
           publishedAt: "2026-07-08T00:00:00Z",
           polarity: "support",
-          impactScore: 6,
-          confidence: 0.62,
+          relevanceState: "direct",
+          sourceTrustState: "standard",
+          materialityState: "notable",
           payload: { name: "삼성전자" }
         }
       ],
@@ -804,19 +805,16 @@ function checkFrontendAdminRender() {
         {
           messageType: "investmentInsight",
           enabled: true,
-          threshold: 50,
-          baseScore: 35,
-          lowScoreAction: "suppress",
           similarityEnabled: true,
           similarityWindowMinutes: 360,
-          similarityPenalty: -40,
-          similarityBypassScoreDelta: 20,
+          stateCooldownEnabled: true,
+          stateCooldownMinutes: 360,
           similarityFields: ["messageType", "accountId", "symbol", "severity", "title"],
           marketHoursEnabled: true,
           marketHoursMarkets: ["KR", "US"],
           conditions: [
-            { id: "severity_watch", label: "관찰 등급", type: "context_equals", field: "severity", value: "WATCH", terms: [], score: 10, enabled: true },
-            { id: "status_noise", label: "상태성 노이즈", type: "text_contains_any", field: "", value: "", terms: ["정상 작동", "시세 대기"], score: -25, enabled: true }
+            { id: "severity_watch", label: "관찰 등급", type: "context_equals", field: "severity", value: "WATCH", terms: [], enabled: true },
+            { id: "status_noise", label: "상태성 노이즈", type: "text_contains_any", field: "", value: "", terms: ["정상 작동", "시세 대기"], enabled: true }
           ],
           updatedAt: "2026-07-01T00:00:00.000Z"
         }
@@ -825,7 +823,6 @@ function checkFrontendAdminRender() {
         { type: "text_contains_any", label: "메시지에 단어 포함" },
         { type: "context_equals", label: "정보 값 일치" }
       ],
-      defaultThreshold: 45,
       marketHoursSessions: [
         {
           market: "KR",
@@ -870,15 +867,21 @@ function checkFrontendAdminRender() {
           title: "035420 판단 리뷰",
           symbol: "",
           textPreview: "035420 판단 리뷰: 조건부 보유에서 손실 관리 기준 확인으로 방어 쪽으로 이동.",
-          honeyScore: 55,
-          honeyThreshold: 74,
-          honeyDecision: "suppressed",
-          honeyReasons: ["035420 관찰 등급", "국장 닫힘"],
-          honeyFingerprint: "messageType=modelreview|accountId=main|symbol=|title=035420 판단 리뷰",
-          honeySimilarityRecentCount: 0,
-          honeySimilarityPenalty: 0,
-          honeySimilarityWindowMinutes: 360,
-          honeySimilarityBypassed: false,
+          deliveryDecision: "suppressed",
+          deliveryGateState: "blocked",
+          deliveryGateReason: "국장 닫힘",
+          deliveryReasons: ["관찰 단계 확인", "국장 닫힘"],
+          deliveryReviewLevel: "observe",
+          deliveryDataState: "sufficient",
+          deliveryChangeState: "unchanged",
+          deliveryConflictState: "context-only",
+          deliveryValidationState: "ready",
+          deliveryFingerprint: "messageType=modelreview|accountId=main|symbol=|title=035420 판단 리뷰",
+          repeatFilterEnabled: true,
+          repeatRecentCount: 0,
+          repeatWindowMinutes: 360,
+          repeatBypassed: false,
+          cooldownEnabled: false,
           marketHoursEnabled: true,
           marketHoursMarket: "KR",
           marketHoursLabel: "국장",
@@ -899,18 +902,27 @@ function checkFrontendAdminRender() {
           title: "크립토 변동",
           symbol: "ETH",
           textPreview: "ETH 24h +5.4%, 7d +10.3%",
-          lastError: "발송 우선도 30이 기준 45보다 낮아 발송하지 않았습니다.",
-          honeyScore: 30,
-          honeyThreshold: 45,
-          honeyDecision: "suppressed",
-          honeyReasons: ["기본 35점", "유사 메시지 360분 내 반복 -55"],
-          honeyFingerprint: "messageType=externalcryptomove|symbol=eth",
-          honeySimilarityRecentCount: 7,
-          honeySimilarityPenalty: -55,
-          honeySimilarityWindowMinutes: 360,
-          honeySimilarityPreviousScore: 85,
-          honeySimilarityBypassed: false,
-          honeySuppressionReason: "market_closed",
+          lastError: "같은 내용이 360분 안에 반복되어 발송을 보류했습니다.",
+          deliveryDecision: "suppressed",
+          deliveryGateState: "blocked",
+          deliveryGateReason: "같은 내용이 360분 안에 반복되어 발송을 보류했습니다.",
+          deliveryReasons: ["새 조건이나 새 근거가 확인되지 않았습니다."],
+          deliveryReviewLevel: "observe",
+          deliveryDataState: "partial",
+          deliveryChangeState: "unchanged",
+          deliveryConflictState: "context-only",
+          deliveryValidationState: "conditional",
+          deliveryFingerprint: "messageType=externalcryptomove|symbol=eth",
+          repeatFilterEnabled: true,
+          repeatRecentCount: 7,
+          repeatWindowMinutes: 360,
+          repeatBypassed: false,
+          deliverySuppressionReason: "repeat_detected",
+          cooldownEnabled: true,
+          cooldownMinutes: 360,
+          cooldownDecision: "unchanged",
+          cooldownReason: "같은 상태가 지속되어 보류했습니다.",
+          cooldownSuppressed: true,
           marketHoursEnabled: true,
           marketHoursMarket: "US",
           marketHoursLabel: "미장",
@@ -1029,7 +1041,6 @@ function checkFrontendAdminRender() {
     "/api/flow-lens": {
       generatedAt: "2026-07-01T00:00:00.000Z",
       headline: "테스트 스냅샷",
-      exitScore: 0,
       toss: {
         mode: "live",
         status: "ok",
@@ -1755,7 +1766,7 @@ function checkFrontendAdminRender() {
     assertOk(code.indexOf("renderNotificationTemplateRow(template, { policyDetail: true })") >= 0, "알림 타입별 템플릿 상세 렌더링 경로가 없습니다.");
     assertOk(code.indexOf("renderNotificationRuleEditor(rule.key, { inline: true })") >= 0, "정책 상세의 전체 룰 편집 경로가 없습니다.");
     assertOk(notificationDiagnosticsHtml.indexOf("notification-diagnostics-summary-panel") >= 0 && notificationDiagnosticsHtml.indexOf('data-work-detail="notification-rule-diagnostics"') >= 0 && notificationDiagnosticsHtml.indexOf("조건 진단") >= 0, "진단 섹션이 요약 카드와 조건 진단 상세 진입점으로 렌더링되지 않았습니다.");
-    assertOk(code.indexOf("renderNotificationAdvancedRulePanel") >= 0 && code.indexOf("renderNotificationRuleEditor(rule.key, { inline: true })") >= 0 && code.indexOf("최소 발송 우선도") >= 0, "진단 섹션의 전체 룰 상세 레이어 렌더링 경로가 없습니다.");
+    assertOk(code.indexOf("renderNotificationAdvancedRulePanel") >= 0 && code.indexOf("renderNotificationRuleEditor(rule.key, { inline: true })") >= 0 && code.indexOf("상태 기반 발송 규칙") >= 0, "진단 섹션의 상태 기반 발송 규칙 상세 레이어가 없습니다.");
     assertOk(code.indexOf("유사 메시지") >= 0 && code.indexOf("data-notification-rule-similarity-enabled") >= 0, "유사 메시지 억제 설정 경로가 없습니다.");
     assertOk(code.indexOf("data-notification-rule-fields") >= 0, "유사 메시지 fingerprint 필드 입력 경로가 없습니다.");
     assertOk(code.indexOf("장 시간 필터") >= 0 && code.indexOf("data-notification-rule-market-hours-enabled") >= 0, "장 시간 필터 설정 경로가 없습니다.");
@@ -1766,9 +1777,9 @@ function checkFrontendAdminRender() {
     assertOk(code.indexOf("data-rule-save") >= 0 && code.indexOf("investmentInsight") >= 0, "알림 타입별 룰 저장 경로가 없습니다.");
     assertOk(code.indexOf("investmentInsight") >= 0 && code.indexOf("watchlistOntologySignal") >= 0, "온톨로지 투자 알림 룰 저장 경로가 없습니다.");
     assertOk(notificationHtml.indexOf("최근 알림 판단") >= 0, "최근 알림 판단 제목이 렌더링되지 않았습니다.");
-    assertOk(notificationHtml.indexOf("notification-score-route") >= 0 && notificationHtml.indexOf("85 → 30 (-55)") >= 0, "최근 알림 판단의 점수 변화가 렌더링되지 않았습니다.");
-    assertOk(notificationHtml.indexOf("notification-score-factors") >= 0, "최근 알림 판단의 상승/감점 요인이 렌더링되지 않았습니다.");
-    assertOk(notificationHtml.indexOf("360분 내 7회 · 우선도 -55") >= 0, "최근 알림 판단의 유사 메시지 감점이 렌더링되지 않았습니다.");
+    assertOk(notificationHtml.indexOf("notification-delivery-route") >= 0 && notificationHtml.indexOf("발송 보류") >= 0, "최근 알림 판단의 범주형 발송 상태가 렌더링되지 않았습니다.");
+    assertOk(notificationHtml.indexOf("notification-delivery-factors") >= 0, "최근 알림 판단의 발송 근거가 렌더링되지 않았습니다.");
+    assertOk(notificationHtml.indexOf("같은 내용 360분 내 7회 확인") >= 0, "최근 알림 판단의 유사 메시지 보류 사유가 렌더링되지 않았습니다.");
     assertOk(notificationHtml.indexOf("미장 닫힘") >= 0, "최근 알림 판단의 장 시간 외 보류 사유가 렌더링되지 않았습니다.");
     assertOk(notificationHtml.indexOf("최근 4개 판단만 먼저 표시합니다") < 0, "최근 알림 판단 목록이 여전히 4건 요약 안내를 노출합니다.");
     assertOk(
@@ -1791,7 +1802,7 @@ function checkFrontendAdminRender() {
     assertOk(notificationDiagnosticsHtml.indexOf('data-work-detail="notification-threshold-settings"') >= 0 && code.indexOf("renderNotificationThresholdPanel") >= 0 && code.indexOf("alert-threshold-grid") >= 0, "진단 섹션에 알림 임계값 상세 레이어 진입점이 없습니다.");
     assertOk(code.indexOf("data-template-test-send") >= 0, "실제 데이터 알림 테스트 발송 경로가 없습니다.");
     assertOk(code.indexOf("모니터링 정상 작동") >= 0, "상태 확인 템플릿 미리보기 샘플 경로가 없습니다.");
-    assertOk(code.indexOf("매수 점수") >= 0, "타입별 템플릿 미리보기 샘플 경로가 없습니다.");
+    assertOk(code.indexOf("확인 단계") >= 0, "타입별 템플릿 미리보기에 상태 기반 판단 설명이 없습니다.");
     assertOk(code.indexOf("data-notification-template") >= 0 && code.indexOf("investmentInsight") >= 0, "투자 인사이트 템플릿 textarea 경로가 없습니다.");
     assertOk(notificationTemplateHtml.indexOf("{rawLines}") >= 0, "알림 템플릿 변수가 렌더링되지 않았습니다.");
     assertOk(notificationDiagnosticsHtml.indexOf("tab=notifications") >= 0, "알림 링크 기본값이 새 알림 탭을 가리키지 않습니다.");
@@ -1873,7 +1884,7 @@ function checkFrontendAdminRender() {
     assertOk(/@media \(max-width: 860px\)[\s\S]*\.prompt-registry-row\s*\{[\s\S]*grid-template-columns: 1fr;/.test(styles), "프롬프트 레지스트리 행이 모바일에서 1열 카드로 전환되지 않습니다.");
     assertOk(/@media \(max-width: 860px\)[\s\S]*\.prompt-registry-panel \.prompt-registry-row\s*\{[\s\S]*grid-template-columns: 1fr;/.test(styles), "프롬프트 레지스트리 모바일 1열 전환 규칙의 우선순위가 충분하지 않습니다.");
     assertOk(modelingRulesHtml.indexOf('data-work-detail="strategy-model-policy-editor"') >= 0 && code.indexOf("admin-modeling-panel") >= 0 && modelingRulesHtml.indexOf("model-version-panel") < 0, "전략 룰 섹션은 보조 모델 정책 상세 진입점만 유지하고 로컬 모델 버전 패널은 제거해야 합니다.");
-    assertOk(code.indexOf("notificationScoreFormula") >= 0 && code.indexOf("알림 발송 공식") >= 0, "전략 룰 상세 레이어에 알림 발송 공식 편집기가 없습니다.");
+    assertOk(code.indexOf("notification-rule-state-grid") >= 0 && code.indexOf("상태 기반 발송 규칙") >= 0, "전략 룰 상세 레이어에 상태 기반 발송 규칙이 없습니다.");
     assertOk(modelingTraceHtml.indexOf("<h2>검증·리뷰</h2>") >= 0 && modelingTraceHtml.indexOf("strategy-trace-overview-panel") >= 0 && modelingTraceHtml.indexOf('data-work-detail="strategy-trace-detail"') >= 0 && modelingTraceHtml.indexOf("규칙 추적") >= 0, "검증·리뷰 섹션이 요약 카드와 상세 추적 레이어 진입점으로 렌더링되지 않았습니다.");
     assertOk(modelingTraceHtml.indexOf("추론 원장") >= 0 && modelingTraceHtml.indexOf("원장 보기") >= 0, "검증·리뷰 섹션에 Inference Trace Ledger 진입점이 없습니다.");
     assertOk(code.indexOf("/api/ontology/inference-ledger") >= 0 && code.indexOf("loadOntologyInferenceLedger") >= 0 && code.indexOf("renderInferenceTraceLedgerPanel") >= 0, "Inference Trace Ledger API 로더나 상세 패널이 없습니다.");
@@ -2174,7 +2185,7 @@ async function checkNormalMode(port, context) {
   assertOk(settingsPayload.settings && settingsPayload.configured, "설정 API 응답 형식이 맞지 않습니다.");
   assertOk(settingsPayload.settings.tossClientSecret === "", "설정 API가 secret 원문을 내려주고 있습니다.");
   assertOk(Object.prototype.hasOwnProperty.call(settingsPayload.settings, "alertRules"), "설정 API에 알림 규칙 필드가 없습니다.");
-  assertOk(Object.prototype.hasOwnProperty.call(settingsPayload.settings, "modelDecisionThresholds"), "설정 API에 모델 판단 기준 필드가 없습니다.");
+  assertOk(!Object.prototype.hasOwnProperty.call(settingsPayload.settings, "modelDecisionThresholds"), "설정 API가 제거된 점수형 모델 판단 기준을 다시 노출합니다.");
   assertOk(Object.prototype.hasOwnProperty.call(settingsPayload.settings, "ontologyRelationRules"), "설정 API에 관계 규칙 필드가 없습니다.");
   assertOk(Object.prototype.hasOwnProperty.call(settingsPayload.settings, "temporalWindowPeriods"), "설정 API에 기간 판단 구간 필드가 없습니다.");
   assertOk(Object.prototype.hasOwnProperty.call(settingsPayload.settings, "temporalWindowHistoryLimit"), "설정 API에 기간 히스토리 제한 필드가 없습니다.");
@@ -2183,9 +2194,9 @@ async function checkNormalMode(port, context) {
   assertOk(settingsPayload.settings.ontologyRelationRules.indexOf("holding.loss_guard.breakdown.v1") >= 0, "설정 API의 기본 관계 규칙이 비어 있습니다.");
   assertOk(String(settingsPayload.settings.temporalWindowPeriods || "").indexOf("1D=1:2") >= 0, "설정 API의 기간 판단 구간 기본값이 비어 있습니다.");
   assertOk(String(settingsPayload.settings.temporalWindowHistoryLimit || "") === "96", "설정 API의 기간 히스토리 제한 기본값이 맞지 않습니다.");
-  assertOk(settingsPayload.settings.modelDecisionThresholds.indexOf("graphSignalAlertScore=78") >= 0, "설정 API의 그래프 신호 기본 판단 기준이 비어 있습니다.");
-  assertOk(settingsPayload.settings.alertThresholds.indexOf("graphSignalMinScore=55") >= 0, "설정 API의 그래프 신호 최소 기준이 비어 있습니다.");
-  assertOk(settingsPayload.settings.alertThresholds.indexOf("graphSignalConfidenceMin=50") >= 0, "설정 API의 그래프 신호 신뢰도 기준이 비어 있습니다.");
+  assertOk(settingsPayload.settings.ontologyReasoningUrgentReviewLevels === "act,immediate,blocked", "설정 API의 긴급 확인 단계 기본값이 맞지 않습니다.");
+  assertOk(settingsPayload.settings.investmentBrainResearchMinimumSourceTrustState === "standard", "설정 API의 최소 출처 신뢰 상태 기본값이 맞지 않습니다.");
+  assertOk(String(settingsPayload.settings.alertThresholds || "").indexOf("graphSignal") < 0, "설정 API의 실제 수치 기준에 제거된 그래프 점수 기준이 남아 있습니다.");
   assertOk(Object.prototype.hasOwnProperty.call(settingsPayload.settings, "appTheme"), "설정 API에 화면 테마 필드가 없습니다.");
   assertOk(settingsPayload.settings.dartDisclosureAiAnalysisEnabled === "1", "설정 API의 공시 AI 해석 기본값이 없습니다.");
   assertOk(Object.prototype.hasOwnProperty.call(settingsPayload.settings, "externalAlphaEnabled"), "설정 API에 Alpha Vantage 사용 옵션이 없습니다.");
@@ -2283,7 +2294,8 @@ async function checkNormalMode(port, context) {
         externalSignalCacheMaxAgeMinutes: "9",
         marketDataMaxAgeMinutes: "180",
         alertRules: "investmentInsight=1\nwatchlistOntologySignal=1",
-        modelDecisionThresholds: "graphSignalMinScore=60\ngraphSignalAlertScore=82\ngraphSignalConfidenceMin=55"
+        ontologyReasoningUrgentReviewLevels: "act,immediate,blocked",
+        investmentBrainResearchMinimumSourceTrustState: "trusted"
       }
     })
   });
@@ -2301,10 +2313,9 @@ async function checkNormalMode(port, context) {
   assertOk(savedSettingsPayload.settings.kisMarketSignalCacheMinutes === "7", "저장된 KIS 수급 캐시 설정이 응답에 없습니다.");
   assertOk(savedSettingsPayload.settings.watchlistSymbols === "TSLA,AAPL,NVDA", "저장된 관심 종목 값이 응답에 없습니다.");
   assertOk(savedSettingsPayload.settings.alertRules.indexOf("investmentInsight=1") >= 0, "저장된 알림 규칙이 응답에 없습니다.");
-  assertOk(savedSettingsPayload.settings.modelDecisionThresholds.indexOf("graphSignalAlertScore=82") >= 0, "저장된 그래프 신호 기준값이 응답에 없습니다.");
-  assertOk(savedSettingsPayload.settings.alertThresholds.indexOf("graphSignalMinScore=60") >= 0, "그래프 신호 최소 기준이 알림 기준으로 동기화되지 않았습니다.");
-  assertOk(savedSettingsPayload.settings.alertThresholds.indexOf("graphSignalAlertScore=82") >= 0, "그래프 신호 알림 기준이 알림 기준으로 동기화되지 않았습니다.");
-  assertOk(savedSettingsPayload.settings.alertThresholds.indexOf("graphSignalConfidenceMin=55") >= 0, "그래프 신호 신뢰도 기준이 알림 기준으로 동기화되지 않았습니다.");
+  assertOk(savedSettingsPayload.settings.ontologyReasoningUrgentReviewLevels === "act,immediate,blocked", "저장된 긴급 확인 단계 설정이 응답에 없습니다.");
+  assertOk(savedSettingsPayload.settings.investmentBrainResearchMinimumSourceTrustState === "trusted", "저장된 최소 출처 신뢰 상태가 응답에 없습니다.");
+  assertOk(!Object.prototype.hasOwnProperty.call(savedSettingsPayload.settings, "modelDecisionThresholds"), "저장 응답이 제거된 점수형 모델 판단 기준을 노출합니다.");
   assertOk(savedSettingsPayload.settings.appTheme === "dark", "저장된 화면 테마 값이 응답에 없습니다.");
   assertOk(savedSettingsPayload.settings.dartDisclosureAiUseCodex === "0", "저장된 공시 AI 엔진 설정이 응답에 없습니다.");
   assertOk(savedSettingsPayload.settings.dartDisclosureAiTimeoutSeconds === "45", "저장된 공시 AI 타임아웃 설정이 응답에 없습니다.");
@@ -2364,27 +2375,29 @@ async function checkNormalMode(port, context) {
     body: JSON.stringify({
       messageType: "investmentInsight",
       enabled: true,
-      threshold: 40,
-      baseScore: 20,
-      lowScoreAction: "suppress",
       similarityEnabled: true,
       similarityWindowMinutes: 90,
-      similarityPenalty: -35,
-      similarityBypassScoreDelta: 12,
+      stateCooldownEnabled: true,
+      stateCooldownMinutes: 90,
       similarityFields: ["messageType", "accountId", "symbol", "title"],
       marketHoursEnabled: true,
       marketHoursMarkets: ["KR"],
       conditions: [
-        { id: "severity_watch", label: "관찰 등급", type: "context_equals", field: "severity", value: "WATCH", terms: [], score: 12, enabled: true }
+        { id: "severity_watch", label: "관찰 등급", type: "context_equals", field: "severity", value: "WATCH", terms: [], enabled: true }
+      ],
+      similarityBypassConditions: [
+        { id: "new_evidence", label: "새 뉴스·공시 추가", type: "list_new_items_gte", field: "ontologyInsight.sourceEventKeys", value: 1, enabled: true }
       ]
     })
   });
   assertOk(savedRule.statusCode === 200, "알림 룰 저장 API 응답 코드가 200이 아닙니다: " + savedRule.statusCode);
   const savedRulePayload = JSON.parse(savedRule.body);
-  assertOk(savedRulePayload.rule.threshold === 40, "저장된 알림 룰 기준점이 응답에 없습니다.");
-  assertOk(savedRulePayload.rule.conditions[0].score === 12, "저장된 알림 룰 조건 점수가 응답에 없습니다.");
+  assertOk(!Object.prototype.hasOwnProperty.call(savedRulePayload.rule, "threshold"), "저장된 알림 룰에 제거된 점수 기준이 남아 있습니다.");
+  assertOk(!Object.prototype.hasOwnProperty.call(savedRulePayload.rule.conditions[0], "score"), "저장된 알림 룰 조건에 점수 입력이 남아 있습니다.");
+  assertOk(savedRulePayload.rule.conditions[0].field === "severity", "저장된 알림 룰 조건의 정보 필드가 응답에 없습니다.");
   assertOk(savedRulePayload.rule.similarityWindowMinutes === 90, "저장된 유사 메시지 억제 시간이 응답에 없습니다.");
-  assertOk(savedRulePayload.rule.similarityPenalty === -35, "저장된 유사 메시지 반복 감점이 응답에 없습니다.");
+  assertOk(savedRulePayload.rule.stateCooldownEnabled === true && savedRulePayload.rule.stateCooldownMinutes === 90, "저장된 상태 지속 억제 설정이 응답에 없습니다.");
+  assertOk(savedRulePayload.rule.similarityBypassConditions[0].conditionType === undefined || savedRulePayload.rule.similarityBypassConditions[0].type === "list_new_items_gte", "저장된 새 근거 반복 해제 조건이 응답에 없습니다.");
   assertOk(savedRulePayload.rule.similarityFields.indexOf("symbol") >= 0, "저장된 fingerprint 필드가 응답에 없습니다.");
   assertOk(savedRulePayload.rule.marketHoursEnabled === true, "저장된 장 시간 필터 토글이 응답에 없습니다.");
   assertOk(savedRulePayload.rule.marketHoursMarkets.indexOf("KR") >= 0, "저장된 장 시간 시장 설정이 응답에 없습니다.");
@@ -2401,7 +2414,7 @@ async function checkNormalMode(port, context) {
   assertOk(notificationJobsPayload.limit === 10, "최근 알림 판단 API limit이 반영되지 않았습니다.");
 
   const emptyAccounts = await request(port, "/api/service-accounts");
-  assertOk(emptyAccounts.statusCode === 200, "계정 DB API 응답 코드가 200이 아닙니다: " + emptyAccounts.statusCode);
+  assertOk(emptyAccounts.statusCode === 200, "계정 DB API 응답 코드가 200이 아닙니다: " + emptyAccounts.statusCode + " · " + emptyAccounts.body.slice(0, 500));
   const emptyAccountsPayload = JSON.parse(emptyAccounts.body);
   assertOk(Array.isArray(emptyAccountsPayload.accounts), "계정 DB API accounts가 배열이 아닙니다.");
   assertOk(emptyAccountsPayload.accounts[0].clientSecret !== "fake-secret", "계정 DB API가 secret 원문을 내려주고 있습니다.");
@@ -2442,7 +2455,7 @@ async function checkNormalMode(port, context) {
   assertOk(JSON.parse(removedAccount.body).removed === true, "계정 DB 삭제 응답이 removed=true가 아닙니다.");
 
   const tossLens = await request(port, "/api/flow-lens?mock=1");
-  assertOk(tossLens.statusCode === 200, "토스 판단 API 응답 코드가 200이 아닙니다: " + tossLens.statusCode);
+  assertOk(tossLens.statusCode === 200, "토스 판단 API 응답 코드가 200이 아닙니다: " + tossLens.statusCode + " · " + tossLens.body.slice(0, 500));
   const tossPayload = JSON.parse(tossLens.body);
   assertOk(tossPayload.toss && Array.isArray(tossPayload.toss.positions), "토스 판단 API에 보유 종목 배열이 없습니다.");
   assertOk(tossPayload.tossDecision && Array.isArray(tossPayload.tossDecision.items), "토스 판단 API에 판단 항목이 없습니다.");

@@ -34,7 +34,9 @@ def build_ai_prompt_context(
         "outputSchema": {
             "activeInvestmentOpinion": {
                 "action": "BUY|ADD|HOLD|TRIM|SELL|AVOID",
-                "conviction": "number 0-100",
+                "reviewLevel": "normal|observe|check|act|immediate|blocked",
+                "dataState": "sufficient|partial|insufficient|unavailable",
+                "validationState": "ready|conditional|blocked",
                 "thesis": "string",
                 "evidence": ["ResearchEvidence"],
                 "counterEvidence": ["ResearchEvidence"],

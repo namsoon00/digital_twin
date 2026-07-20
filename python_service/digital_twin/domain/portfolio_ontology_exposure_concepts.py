@@ -119,35 +119,38 @@ def market_proxy_observation_pressure(quote: Dict[str, object]) -> Dict[str, obj
     ma20_distance = number(quote.get("ma20Distance"))
     ma60_distance = number(quote.get("ma60Distance"))
     volume_ratio = number(quote.get("volumeRatio"))
-    risk_score = 0.0
-    support_score = 0.0
-    if change_rate < 0:
-        risk_score += abs(change_rate) * 2.0
+    risk_conditions = [
+        key for key, matched in [
+            ("price-down", change_rate < 0),
+            ("below-ma20", ma20_distance < 0),
+            ("below-ma60", ma60_distance < 0),
+        ] if matched
+    ]
+    support_conditions = [
+        key for key, matched in [
+            ("price-up", change_rate > 0),
+            ("above-ma20", ma20_distance >= 0),
+            ("above-ma60", ma60_distance >= 0),
+        ] if matched
+    ]
+    volume_confirmed = volume_ratio >= policy.volume_confirmation_ratio
+    if len(risk_conditions) >= 2 and len(support_conditions) >= 2:
+        conflict_state, evidence_role, polarity = "mixed", "counter", "context"
+    elif len(risk_conditions) >= 2:
+        conflict_state, evidence_role, polarity = "risk-only", "risk", "risk"
+    elif len(support_conditions) >= 2:
+        conflict_state, evidence_role, polarity = "support-only", "support", "support"
     else:
-        support_score += change_rate * 1.6
-    if ma20_distance < 0:
-        risk_score += abs(ma20_distance) * 0.8
-    else:
-        support_score += ma20_distance * 0.5
-    if ma60_distance < 0:
-        risk_score += abs(ma60_distance) * 0.5
-    else:
-        support_score += ma60_distance * 0.3
-    if volume_ratio >= policy.volume_confirmation_ratio:
-        if risk_score >= support_score:
-            risk_score += 2.0
-        else:
-            support_score += 1.5
-    if risk_score >= support_score + policy.directional_margin_score and risk_score >= policy.minimum_directional_score:
-        polarity = "risk"
-    elif support_score >= risk_score + policy.directional_margin_score and support_score >= policy.minimum_directional_score:
-        polarity = "support"
-    else:
-        polarity = "context"
+        conflict_state, evidence_role, polarity = "context-only", "context", "context"
     return {
         "polarity": polarity,
-        "riskImpact": round(min(14.0, risk_score), 2),
-        "supportImpact": round(min(10.0, support_score), 2),
+        "evidenceRole": evidence_role,
+        "conflictState": conflict_state,
+        "reviewLevel": "check" if evidence_role in {"risk", "support", "counter"} and volume_confirmed else "observe",
+        "dataState": "sufficient",
+        "volumeConfirmed": volume_confirmed,
+        "riskConditions": risk_conditions,
+        "supportConditions": support_conditions,
     }
 
 
@@ -197,15 +200,19 @@ def add_market_proxy_observation_concepts(
     add_relation(graph, proxy_id, observation_id, "HAS_OBSERVATION", weight=0.72, properties={
         "source": source,
         "polarity": pressure["polarity"],
-        "riskImpact": pressure["riskImpact"],
-        "supportImpact": pressure["supportImpact"],
+        "evidenceRole": pressure["evidenceRole"],
+        "reviewLevel": pressure["reviewLevel"],
+        "dataState": pressure["dataState"],
+        "conflictState": pressure["conflictState"],
         "aiInfluenceLabel": profile.label + " 시장 센서 관측",
     })
     add_relation(graph, proxy_id, observation_id, "HAS_PRICE", weight=0.65, properties={
         "source": source,
         "polarity": pressure["polarity"],
-        "riskImpact": pressure["riskImpact"],
-        "supportImpact": pressure["supportImpact"],
+        "evidenceRole": pressure["evidenceRole"],
+        "reviewLevel": pressure["reviewLevel"],
+        "dataState": pressure["dataState"],
+        "conflictState": pressure["conflictState"],
         "aiInfluenceLabel": profile.label + " 가격 맥락",
     })
     return observation_id
@@ -340,8 +347,10 @@ def add_stock_market_proxy_context_concepts(
             "source": "market-proxy-context",
             "overlapFactors": overlap,
             "polarity": pressure["polarity"],
-            "riskImpact": pressure["riskImpact"],
-            "supportImpact": pressure["supportImpact"],
+            "evidenceRole": pressure["evidenceRole"],
+            "reviewLevel": pressure["reviewLevel"],
+            "dataState": pressure["dataState"],
+            "conflictState": pressure["conflictState"],
             "aiInfluenceLabel": profile.label + " 시장 프록시 관측",
         })
 

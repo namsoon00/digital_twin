@@ -61,21 +61,22 @@ class MySQLOntologyQualitySampleStore(MySQLOperationalConnection):
             connection.execute(
                 """
                 INSERT INTO ontology_ai_opinion_samples (
-                    sample_id, portfolio_id, created_at, overall_score, data_coverage_score,
-                    context_coverage_score, reasoning_readiness_score, relation_density_score,
+                    sample_id, portfolio_id, created_at, overall_state, data_state,
+                    context_state, reasoning_state, relation_state, validation_state,
                     entity_count, relation_count, evidence_count, belief_count, opinion_count,
-                    reasoning_card_count, data_gap_count, bounded_context_count, high_pressure_count,
+                    reasoning_card_count, data_gap_count, bounded_context_count, action_required_count,
                     payload_json
                 )
-                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
                 ON DUPLICATE KEY UPDATE
                     portfolio_id = VALUES(portfolio_id),
                     created_at = VALUES(created_at),
-                    overall_score = VALUES(overall_score),
-                    data_coverage_score = VALUES(data_coverage_score),
-                    context_coverage_score = VALUES(context_coverage_score),
-                    reasoning_readiness_score = VALUES(reasoning_readiness_score),
-                    relation_density_score = VALUES(relation_density_score),
+                    overall_state = VALUES(overall_state),
+                    data_state = VALUES(data_state),
+                    context_state = VALUES(context_state),
+                    reasoning_state = VALUES(reasoning_state),
+                    relation_state = VALUES(relation_state),
+                    validation_state = VALUES(validation_state),
                     entity_count = VALUES(entity_count),
                     relation_count = VALUES(relation_count),
                     evidence_count = VALUES(evidence_count),
@@ -84,18 +85,19 @@ class MySQLOntologyQualitySampleStore(MySQLOperationalConnection):
                     reasoning_card_count = VALUES(reasoning_card_count),
                     data_gap_count = VALUES(data_gap_count),
                     bounded_context_count = VALUES(bounded_context_count),
-                    high_pressure_count = VALUES(high_pressure_count),
+                    action_required_count = VALUES(action_required_count),
                     payload_json = VALUES(payload_json)
                 """,
                 (
                     sample.sample_id,
                     sample.portfolio_id,
                     stamp,
-                    float(sample.overall_score or 0),
-                    float(sample.data_coverage_score or 0),
-                    float(sample.context_coverage_score or 0),
-                    float(sample.reasoning_readiness_score or 0),
-                    float(sample.relation_density_score or 0),
+                    sample.overall_state,
+                    sample.data_state,
+                    sample.context_state,
+                    sample.reasoning_state,
+                    sample.relation_state,
+                    sample.validation_state,
                     int(sample.entity_count or 0),
                     int(sample.relation_count or 0),
                     int(sample.evidence_count or 0),
@@ -104,7 +106,7 @@ class MySQLOntologyQualitySampleStore(MySQLOperationalConnection):
                     int(sample.reasoning_card_count or 0),
                     int(sample.data_gap_count or 0),
                     int(sample.bounded_context_count or 0),
-                    int(sample.high_pressure_count or 0),
+                    int(sample.action_required_count or 0),
                     json_dumps(sample.payload),
                 ),
             )
@@ -121,10 +123,10 @@ class MySQLOntologyQualitySampleStore(MySQLOperationalConnection):
             clauses.append("portfolio_id = %s")
             params.append(str(portfolio_id))
         sql = """
-            SELECT sample_id, portfolio_id, created_at, overall_score, data_coverage_score,
-                   context_coverage_score, reasoning_readiness_score, relation_density_score,
+            SELECT sample_id, portfolio_id, created_at, overall_state, data_state,
+                   context_state, reasoning_state, relation_state, validation_state,
                    entity_count, relation_count, evidence_count, belief_count, opinion_count,
-                   reasoning_card_count, data_gap_count, bounded_context_count, high_pressure_count,
+                   reasoning_card_count, data_gap_count, bounded_context_count, action_required_count,
                    payload_json
             FROM ontology_ai_opinion_samples
         """
@@ -140,11 +142,12 @@ class MySQLOntologyQualitySampleStore(MySQLOperationalConnection):
                 "sampleId": row["sample_id"],
                 "portfolioId": row["portfolio_id"],
                 "createdAt": row["created_at"],
-                "overallScore": row["overall_score"],
-                "dataCoverageScore": row["data_coverage_score"],
-                "contextCoverageScore": row["context_coverage_score"],
-                "reasoningReadinessScore": row["reasoning_readiness_score"],
-                "relationDensityScore": row["relation_density_score"],
+                "overallState": row["overall_state"],
+                "dataState": row["data_state"],
+                "contextState": row["context_state"],
+                "reasoningState": row["reasoning_state"],
+                "relationState": row["relation_state"],
+                "validationState": row["validation_state"],
                 "entityCount": row["entity_count"],
                 "relationCount": row["relation_count"],
                 "evidenceCount": row["evidence_count"],
@@ -153,7 +156,7 @@ class MySQLOntologyQualitySampleStore(MySQLOperationalConnection):
                 "reasoningCardCount": row["reasoning_card_count"],
                 "dataGapCount": row["data_gap_count"],
                 "boundedContextCount": row["bounded_context_count"],
-                "highPressureCount": row["high_pressure_count"],
+                "actionRequiredCount": row["action_required_count"],
                 "payload": _json_loads(row["payload_json"], {}),
             })
         return result

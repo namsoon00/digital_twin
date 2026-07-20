@@ -20,13 +20,6 @@ from .settings import runtime_settings, utc_now
 TELEGRAM_HTML_PATTERN = re.compile(r"</?(?:b|strong|i|em|u|ins|s|strike|del|code|pre|a|blockquote)(?:\s+[^>]*)?>", re.IGNORECASE)
 TELEGRAM_MESSAGE_LIMIT = 3900
 TELEGRAM_API_GUARD_STATE: Dict[str, object] = {}
-FORMULA_SETTING_KEYS = [
-    "buyScoreFormula",
-    "sellScoreFormula",
-    "profitTakeScoreFormula",
-    "lossCutScoreFormula",
-    "notificationScoreFormula",
-]
 
 
 def uses_telegram_html(text: str) -> bool:
@@ -211,15 +204,6 @@ def notification_templates():
     return notification_template_store()
 
 
-def formula_settings_context() -> Dict[str, object]:
-    settings = runtime_settings()
-    return {
-        key: str(settings.get(key) or "").strip()
-        for key in FORMULA_SETTING_KEYS
-        if str(settings.get(key) or "").strip()
-    }
-
-
 def account_delivery_context(account: AccountConfig = None) -> Dict[str, object]:
     if account and hasattr(account, "message_delivery_context"):
         return account.message_delivery_context()
@@ -251,7 +235,6 @@ class QueueingNotifier:
             self.account.label if self.account else "",
         )
         context.update(account_delivery_context(self.account))
-        context.update({key: value for key, value in formula_settings_context().items() if key not in context})
         if self.message_type == PORTFOLIO_HOLDINGS_SNAPSHOT and data_freshness_required(self.message_type):
             context.setdefault("dataFreshnessRequired", True)
             context.setdefault(
@@ -327,14 +310,12 @@ def send_events(
 ) -> NotificationResult:
     events = list(events)
     templates = notification_templates()
-    formula_context = formula_settings_context()
     ai_settings = runtime_settings()
     contexts = []
     for event in events:
         context = alert_context(event)
         account = accounts.get(event.account_id) if accounts else None
         context.update(account_delivery_context(account))
-        context.update({key: value for key, value in formula_context.items() if key not in context})
         context = enrich_notification_ai_context(context, ai_settings)
         contexts.append(context)
     messages = [templates.render(event.rule, context) for event, context in zip(events, contexts)]

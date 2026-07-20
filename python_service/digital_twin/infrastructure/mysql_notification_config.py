@@ -159,24 +159,19 @@ class MySQLNotificationRuleStore(MySQLOperationalConnection):
                 connection.execute(
                     """
                     INSERT IGNORE INTO notification_rules (
-                        message_type, enabled, threshold, base_score, low_score_action, conditions_json,
-                        similarity_enabled, similarity_window_minutes, similarity_penalty, similarity_bypass_score_delta,
+                        message_type, enabled, conditions_json,
+                        similarity_enabled, similarity_window_minutes,
                         similarity_bypass_conditions_json, similarity_fields_json, state_cooldown_enabled,
                         state_cooldown_minutes, market_hours_enabled, market_hours_markets_json, updated_at
                     )
-                    VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                    VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
                     """,
                     (
                         message_type,
                         1 if rule.enabled else 0,
-                        int(rule.threshold),
-                        int(rule.base_score),
-                        rule.low_score_action,
                         json_dumps([condition.to_dict() for condition in rule.conditions]),
                         1 if rule.similarity_enabled else 0,
                         int(rule.similarity_window_minutes),
-                        int(rule.similarity_penalty),
-                        int(rule.similarity_bypass_score_delta),
                         json_dumps([condition.to_dict() for condition in rule.similarity_bypass_conditions]),
                         json_dumps(rule.similarity_fields),
                         1 if rule.state_cooldown_enabled else 0,
@@ -330,18 +325,14 @@ class MySQLNotificationRuleStore(MySQLOperationalConnection):
             connection.execute(
                 """
                 INSERT INTO notification_rules (
-                    message_type, enabled, threshold, base_score, low_score_action, conditions_json,
-                    similarity_enabled, similarity_window_minutes, similarity_penalty, similarity_bypass_score_delta,
+                    message_type, enabled, conditions_json,
+                    similarity_enabled, similarity_window_minutes,
                     similarity_bypass_conditions_json, similarity_fields_json, state_cooldown_enabled,
                     state_cooldown_minutes, market_hours_enabled, market_hours_markets_json, updated_at
                 )
-                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
-                ON DUPLICATE KEY UPDATE enabled = VALUES(enabled), threshold = VALUES(threshold),
-                    base_score = VALUES(base_score), low_score_action = VALUES(low_score_action),
-                    conditions_json = VALUES(conditions_json), similarity_enabled = VALUES(similarity_enabled),
+                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                ON DUPLICATE KEY UPDATE enabled = VALUES(enabled), conditions_json = VALUES(conditions_json), similarity_enabled = VALUES(similarity_enabled),
                     similarity_window_minutes = VALUES(similarity_window_minutes),
-                    similarity_penalty = VALUES(similarity_penalty),
-                    similarity_bypass_score_delta = VALUES(similarity_bypass_score_delta),
                     similarity_bypass_conditions_json = VALUES(similarity_bypass_conditions_json),
                     similarity_fields_json = VALUES(similarity_fields_json),
                     state_cooldown_enabled = VALUES(state_cooldown_enabled),
@@ -353,14 +344,9 @@ class MySQLNotificationRuleStore(MySQLOperationalConnection):
                 (
                     normalized.message_type,
                     1 if normalized.enabled else 0,
-                    int(normalized.threshold),
-                    int(normalized.base_score),
-                    normalized.low_score_action,
                     json_dumps([condition.to_dict() for condition in normalized.conditions]),
                     1 if normalized.similarity_enabled else 0,
                     int(normalized.similarity_window_minutes),
-                    int(normalized.similarity_penalty),
-                    int(normalized.similarity_bypass_score_delta),
                     json_dumps([condition.to_dict() for condition in normalized.similarity_bypass_conditions]),
                     json_dumps(normalized.similarity_fields),
                     1 if normalized.state_cooldown_enabled else 0,
@@ -381,8 +367,16 @@ class MySQLNotificationRuleStore(MySQLOperationalConnection):
     def evaluate_job(self, job: NotificationJob):
         rule = self.get(job.message_type)
         decision = evaluate_notification_rule(job, rule)
-        recent_count, previous_score, previous_context, last_sent_at = self.similar_history(job, rule, decision.fingerprint)
-        decision = apply_state_cooldown_rule(decision, rule, recent_count, previous_score, previous_context, last_sent_at, age_minutes_since(last_sent_at), job)
-        decision = apply_similarity_rule(decision, rule, recent_count, previous_score, previous_context, job)
+        recent_count, previous_context, last_sent_at = self.similar_history(job, rule, decision.fingerprint)
+        decision = apply_state_cooldown_rule(
+            decision,
+            rule,
+            recent_count,
+            previous_context,
+            last_sent_at,
+            age_minutes_since(last_sent_at),
+            job,
+        )
+        decision = apply_similarity_rule(decision, rule, recent_count, previous_context, job)
         decision = attach_previous_profit_loss_context(decision, job, previous_context)
         return apply_market_hours_rule(decision, rule, job)

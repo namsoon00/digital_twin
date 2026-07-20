@@ -47,19 +47,21 @@ class BeginnerRelationLanguageTests(unittest.TestCase):
         opinion = build_active_investment_opinion(
             self.holding_position(),
             {
-                "signalStrength": 94,
                 "decision": {
                     "actionGroup": "executionRisk",
                     "actionLevel": "watch",
-                    "score": 94,
                     "label": "실행 가능 용량 확인",
+                    "reviewLevel": "observe",
+                    "dataState": "sufficient",
+                    "changeState": "new-condition",
+                    "conflictState": "context-only",
                 },
                 "activeRules": [
                     {
                         "ruleId": "graph.execution.capacity_safe.v1",
                         "label": "보유 종목 + 작은 실행 노출 -> 실행 가능 용량 확인",
-                        "strengthScore": 94,
                         "relationType": "HAS_EXECUTION_CAPACITY",
+                        "evidenceRole": "context",
                     }
                 ],
             },
@@ -72,11 +74,13 @@ class BeginnerRelationLanguageTests(unittest.TestCase):
         position = self.holding_position()
         position.profit_loss_rate = 6.5
         relation_context = {
-            "signalStrength": 78,
             "decision": {
                 "actionGroup": "addBuy",
                 "decisionStage": "ADD_BUY_REVIEW",
-                "score": 78,
+                "reviewLevel": "act",
+                "dataState": "sufficient",
+                "changeState": "new-condition",
+                "conflictState": "support-only",
             },
             "executionPlan": {
                 "addBuyAssessment": {
@@ -89,7 +93,7 @@ class BeginnerRelationLanguageTests(unittest.TestCase):
                     "relationType": "ALLOWS_ACTION",
                     "tboxClass": "AddBuyEligibility",
                     "label": "성장·사이클 회복 추가매수 후보",
-                    "strengthScore": 78,
+                    "evidenceRole": "support",
                 }
             ],
         }
@@ -97,25 +101,28 @@ class BeginnerRelationLanguageTests(unittest.TestCase):
         opinion = build_active_investment_opinion(position, relation_context)
 
         self.assertEqual("ADD", opinion.action)
-        self.assertGreater(opinion.score_breakdown["supportScore"], opinion.score_breakdown["riskScore"])
+        self.assertEqual("support-only", opinion.conflict_state)
+        self.assertEqual("sufficient", opinion.data_state)
 
     def test_event_risk_without_price_breakdown_does_not_force_sell(self):
         opinion = build_active_investment_opinion(
             self.holding_position(),
             {
-                "signalStrength": 94,
                 "decision": {
                     "actionGroup": "eventRisk",
                     "actionLevel": "review",
-                    "score": 94,
                     "label": "뉴스 리스크 대응 검토",
+                    "reviewLevel": "check",
+                    "dataState": "sufficient",
+                    "changeState": "new-evidence",
+                    "conflictState": "risk-only",
                 },
                 "activeRules": [
                     {
                         "ruleId": "graph.news.direct_material_risk.v1",
                         "label": "보유 종목 + 직접 중요 리스크 뉴스 -> 이벤트 리스크 추론",
-                        "strengthScore": 94,
                         "relationType": "HAS_INFERRED_RISK",
+                        "evidenceRole": "risk",
                     }
                 ],
             },
@@ -127,18 +134,19 @@ class BeginnerRelationLanguageTests(unittest.TestCase):
     def test_relation_lines_explain_execution_capacity_in_plain_language(self):
         lines = ontology_rule_lines({
             "ontologyRelationContext": {
-                "signalStrength": 94,
-                "signalStrengthLabel": "매우 강함",
-                "confidence": 94,
                 "decision": {
                     "actionGroup": "executionRisk",
                     "label": "실행 가능 용량 확인",
+                    "reviewLevel": "observe",
+                    "dataState": "sufficient",
+                    "changeState": "new-condition",
+                    "conflictState": "context-only",
                 },
                 "activeRules": [
                     {
                         "ruleId": "graph.execution.capacity_safe.v1",
                         "label": "보유 종목 + 작은 실행 노출 -> 실행 가능 용량 확인",
-                        "strengthScore": 94,
+                        "evidenceRole": "context",
                     }
                 ],
             }
@@ -152,7 +160,9 @@ class BeginnerRelationLanguageTests(unittest.TestCase):
         response = NotificationAIValidatedResponse(
             action="HOLD",
             action_label="보유",
-            confidence=64,
+            validation_state="conditional",
+            data_state="partial",
+            review_level="check",
             summary="관계 강도와 RuleBox 결과를 확인했습니다.",
             opinion="실행 가능 용량은 매도 뜻이 아니라 주문해도 무리가 없는지 보는 값입니다.",
             evidence=[
@@ -216,7 +226,7 @@ class BeginnerRelationLanguageTests(unittest.TestCase):
             self.assertIn(expected, message)
         for hidden in ["[AI]", "근거 4", "근거 5", "반대 2", "반대 3", "확인 3", "확인 4", "부족 3", "부족 4", "부족 5", "검증 3", "고객이 실제 투자 판단 전에"]:
             self.assertNotIn(hidden, message)
-        self.assertIn("AI 판단 확신도", message)
+        self.assertIn("AI 검증", message)
         self.assertNotIn("<b>점수 안내</b>", message)
         self.assertIn("관계 분석 규칙", message)
         self.assertIn("실행 조건", message)
@@ -225,7 +235,9 @@ class BeginnerRelationLanguageTests(unittest.TestCase):
         response = NotificationAIValidatedResponse(
             action="HOLD",
             action_label="보유",
-            confidence=64,
+            validation_state="conditional",
+            data_state="partial",
+            review_level="check",
             summary="관계 강도와 RuleBox를 확인했습니다.",
             opinion="벤치마크 베타와 실행 가능 용량을 함께 봅니다.",
             evidence=["근거 1", "근거 2", "근거 3", "근거 4", "근거 5"],
@@ -264,7 +276,7 @@ class BeginnerRelationLanguageTests(unittest.TestCase):
         self.assertNotIn("부족 3", message)
         self.assertNotIn("부족 4", message)
         self.assertNotIn("부족 5", message)
-        self.assertIn("AI 판단 확신도", message)
+        self.assertIn("AI 검증", message)
         self.assertNotIn("<b>점수 안내</b>", message)
         self.assertNotIn("관계 강도", message)
         self.assertIn("RuleBox(관계 분석 규칙)", message)
@@ -273,7 +285,9 @@ class BeginnerRelationLanguageTests(unittest.TestCase):
         response = NotificationAIValidatedResponse(
             action="TRIM",
             action_label="분할축소",
-            confidence=74,
+            validation_state="ready",
+            data_state="sufficient",
+            review_level="act",
             summary="손실과 가격 흐름을 함께 봐 일부 줄이는 판단입니다.",
             evidence=["20일 평균보다 낮음"],
             counter_evidence=["외국인·기관 순매수"],
@@ -327,23 +341,19 @@ class BeginnerRelationLanguageTests(unittest.TestCase):
         self.assertIn("수급 심리", message)
         self.assertIn("투자 성향·정책", message)
         self.assertIn("20일 평균보다 12.9%", message)
-        self.assertIn("확인 필요 점수", message)
-        self.assertIn("86.0/100점", message)
-        self.assertIn("<b>점수 안내</b>", message)
-        self.assertIn("상승·하락 확률이나 매수·매도 확률이 아니며", message)
-        self.assertIn("0~34 참고", message)
-        self.assertIn("70~84 대응 검토", message)
-        self.assertIn("85~100 즉시 재확인", message)
-        self.assertIn("규칙 신뢰도 25%", message)
-        self.assertIn("위험·기회 근거 42%", message)
-        self.assertIn("약한 쪽 점수의 18%", message)
-        self.assertIn("데이터 신뢰도가 55.0점 미만이면 추가로 감점", message)
+        self.assertIn("확인 단계", message)
+        self.assertIn("자료 상태", message)
+        self.assertIn("AI 검증", message)
+        self.assertNotIn("점수 안내", message)
+        self.assertNotIn("/100점", message)
 
     def test_execution_message_includes_deterministic_valuation_details(self):
         response = NotificationAIValidatedResponse(
             action="BUY",
             action_label="매수 점검",
-            confidence=72,
+            validation_state="ready",
+            data_state="sufficient",
+            review_level="act",
             summary="현재가와 적정가를 비교해 진입 조건을 확인합니다.",
             evidence=["안전마진이 요구 기준을 넘었습니다."],
             next_checks=["추세와 거래량 확인"],
@@ -372,9 +382,9 @@ class BeginnerRelationLanguageTests(unittest.TestCase):
                     "valuationMinimumMarginOfSafetyPct": 20,
                     "valuationSourceLabel": "사용자 입력",
                     "valuationReliabilityLabel": "사용자 가정",
-                    "valuationReliabilityScore": 55,
+                    "valuationDataState": "sufficient",
                     "valuationExplanation": "예상 EPS 9,000원에 목표 PER 11배를 적용해 적정가 99,000원으로 계산했습니다.",
-                    "valuationDataStatus": "available",
+                    "valuationDataStatus": "sufficient",
                     "valuationMissingInputs": [],
                     "valuationHasUserInput": True,
                     "valuationHasExternalInput": False,
@@ -408,7 +418,7 @@ class BeginnerRelationLanguageTests(unittest.TestCase):
         self.assertIn("99,000원", message)
         self.assertIn("계정 기준 +20.0% 충족", message)
         self.assertIn("사용자 입력", message)
-        self.assertIn("사용자 가정", message)
+        self.assertIn("자료 상태", message)
         self.assertIn("사용자 적정가 기준 안전마진", message)
         self.assertNotIn("대입값", message)
 
@@ -416,7 +426,9 @@ class BeginnerRelationLanguageTests(unittest.TestCase):
         response = NotificationAIValidatedResponse(
             action="HOLD",
             action_label="보유",
-            confidence=74,
+            validation_state="conditional",
+            data_state="partial",
+            review_level="check",
             summary="AI 제안 적정가를 기준으로 보유 조건을 확인합니다.",
             evidence=["우선주는 배당수익률 기준으로 봅니다."],
             next_checks=["사용자 적정가 승인 여부 확인"],
@@ -441,9 +453,9 @@ class BeginnerRelationLanguageTests(unittest.TestCase):
                         "valuationMinimumMarginOfSafetyPct": 8,
                         "valuationSourceLabel": "AI 제안",
                         "valuationReliabilityLabel": "AI 초안(사용자 검토 전)",
-                        "valuationReliabilityScore": 58,
+                        "valuationDataState": "partial",
                         "valuationExplanation": "연간 배당 $9을 요구수익률 9.5%로 나눠 적정가 $94.74로 계산했습니다. 이 값은 AI 제안값이라 사용자 검토 전 초안입니다.",
-                        "valuationDataStatus": "available",
+                        "valuationDataStatus": "partial",
                         "valuationMissingInputs": [],
                         "valuationHasUserInput": False,
                         "valuationHasExternalInput": False,
@@ -476,7 +488,9 @@ class BeginnerRelationLanguageTests(unittest.TestCase):
         response = NotificationAIValidatedResponse(
             action="HOLD",
             action_label="보유",
-            confidence=61,
+            validation_state="conditional",
+            data_state="insufficient",
+            review_level="blocked",
             summary="가격 흐름을 먼저 확인합니다.",
             evidence=["20일 평균선 근처입니다."],
             next_checks=["적정가 입력 여부 확인"],
@@ -493,7 +507,7 @@ class BeginnerRelationLanguageTests(unittest.TestCase):
                         "currency": "USD",
                         "currentPrice": 164.25,
                         "valuationRows": [],
-                        "valuationDataStatus": "missing",
+                        "valuationDataStatus": "unavailable",
                         "valuationMissingInputs": ["적정가", "예상 EPS", "목표 PER"],
                     },
                     "activeRules": [
@@ -577,24 +591,25 @@ class BeginnerRelationLanguageTests(unittest.TestCase):
                     "graphStoreUsed": True,
                     "inferenceBoxUsed": True,
                     "engineVersion": "typedb-inferencebox-relation-context-v1",
-                    "signalStrength": 94,
-                    "signalStrengthLabel": "매우 강함",
-                    "confidence": 94,
                     "decision": {
                         "actionGroup": "eventRisk",
                         "label": "뉴스 리스크 대응 검토",
                         "selectedRuleId": "graph.disclosure.event_risk.v1",
+                        "reviewLevel": "act",
+                        "dataState": "sufficient",
+                        "changeState": "new-evidence",
+                        "conflictState": "risk-only",
                     },
                     "activeRules": [
                         {
                             "ruleId": "graph.disclosure.event_risk.v1",
                             "label": "보유 종목 + 공시/신고 이벤트 -> 공시 이벤트 리스크 추론",
-                            "strengthScore": 94,
+                            "evidenceRole": "risk",
                         },
                         {
                             "ruleId": "graph.execution.capacity_safe.v1",
                             "label": "보유 종목 + 작은 실행 노출 -> 실행 가능 용량 확인",
-                            "strengthScore": 94,
+                            "evidenceRole": "context",
                         },
                     ],
                 },
@@ -603,8 +618,8 @@ class BeginnerRelationLanguageTests(unittest.TestCase):
 
         self.assertIn("<b>관계 판단 쉽게 보기</b>", message)
         self.assertIn("관계 분석은 SK하이닉스", message)
-        self.assertIn("94점으로", message)
-        self.assertIn("가격이 오를지 맞히는 값이 아니라", message)
+        self.assertIn("뉴스 리스크 대응 검토", message)
+        self.assertIn("관계 판단 쉽게 보기", message)
         self.assertIn("뉴스나 공시 때문에 보유 이유를 다시 확인", message)
         self.assertIn("매도 확정은 아닙니다", message)
         self.assertIn("추론은 SK하이닉스의 현재 데이터가", message)

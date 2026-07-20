@@ -1,7 +1,7 @@
 from typing import Dict, List
 
 from .investor_flow_psychology import investor_flow_psychology
-from .market_data import clamp, investor_net_volume, number
+from .market_data import investor_net_volume, number
 from .ontology_contracts import PortfolioOntology
 from .ontology_observation_quality import profile_for_domain
 from .ontology_schema import add_entity, add_relation
@@ -26,23 +26,6 @@ def metric_tbox_classes(tbox_class: str, field_name: str) -> List[str]:
 def symbol_key(position: Position) -> str:
     return str(position.symbol or position.name or "").upper().strip()
 
-
-def smart_money_score(position: Position) -> float:
-    profile = investor_flow_psychology(position)
-    smart_money = number(profile.get("smartMoneyNetVolume"))
-    base = abs(number(profile.get("foreignNetVolume"))) + abs(number(profile.get("institutionNetVolume")))
-    return clamp((smart_money / base) * 100, -100.0, 100.0) if base else 0.0
-
-def trend_score(position: Position) -> float:
-    return clamp(
-        number(position.ma20_distance) * 0.45
-        + number(position.ma60_distance) * 0.25
-        + number(position.ma20_slope) * 4
-        + number(position.ma60_slope) * 3
-        + number(position.change_rate) * 0.4,
-        -35.0,
-        35.0,
-    )
 
 def trend_dynamic_facts(position: Position) -> Dict[str, object]:
     ma20_distance = number(position.ma20_distance)
@@ -74,37 +57,33 @@ def trend_dynamic_facts(position: Position) -> Dict[str, object]:
     if breakdown_acceleration:
         state = "하락 가속"
         polarity = "risk"
-        impact = 16.0
+        review_level = "immediate"
+        change_state = "worsening"
     elif support_retest:
         state = "60일선 지지 재확인"
         polarity = "context"
-        impact = 7.0
+        review_level = "check"
+        change_state = "new-condition"
     elif recovery_attempt:
         state = "회복 시도"
         polarity = "support"
-        impact = 7.0
+        review_level = "check"
+        change_state = "improving"
     elif has_ma20_context and has_ma60_context and ma20_distance >= 0 and ma60_distance >= 0:
         state = "상승 추세 유지"
         polarity = "support"
-        impact = 6.0
+        review_level = "observe"
+        change_state = "unchanged"
     elif short_term_breakdown:
-        state = "단기 추세 훼손"
+        state = "단기 추세 약화"
         polarity = "risk"
-        impact = 10.0
+        review_level = "act"
+        change_state = "worsening"
     else:
         state = "중립 추세"
         polarity = "context"
-        impact = 0.0
-    risk_score = clamp(
-        abs(min(0.0, ma20_distance)) * 2.0
-        + abs(min(0.0, ma60_distance)) * 1.4
-        + abs(min(0.0, price_change)) * 3.0
-        + abs(min(0.0, ma20_slope)) * 6.0
-        + abs(min(0.0, trend_curve)) * 4.0
-        - (10.0 if support_retest or recovery_attempt else 0.0),
-        0.0,
-        100.0,
-    )
+        review_level = "normal"
+        change_state = "unchanged"
     return {
         "state": state,
         "priceChangeRate": round(price_change, 2),
@@ -118,24 +97,28 @@ def trend_dynamic_facts(position: Position) -> Dict[str, object]:
         "supportRetest": support_retest,
         "recoveryAttempt": recovery_attempt,
         "breakdownAcceleration": breakdown_acceleration,
-        "dynamicRiskScore": round(risk_score, 1),
         "polarity": polarity,
-        "opinionImpact": impact,
+        "evidenceRole": polarity if polarity in {"risk", "support"} else "context",
+        "reviewLevel": review_level,
+        "dataState": "sufficient" if has_ma20_context and has_ma60_context else "partial",
+        "changeState": change_state,
     }
 
-def data_quality_score(position: Position) -> float:
-    missing = 0
-    for value in [
+def data_quality_state(position: Position) -> Dict[str, object]:
+    values = [
         position.current_price,
         position.market_value,
         position.quantity,
         position.profit_loss_rate,
         position.ma20,
         position.ma60,
-    ]:
-        if value in (None, "", 0):
-            missing += 1
-    return clamp(100 - missing * 14, 15.0, 100.0)
+    ]
+    missing = sum(1 for value in values if value in (None, "", 0))
+    if missing >= 3:
+        return {"dataState": "insufficient", "reviewLevel": "blocked", "missingCoreFieldCount": missing}
+    if missing:
+        return {"dataState": "partial", "reviewLevel": "check", "missingCoreFieldCount": missing}
+    return {"dataState": "sufficient", "reviewLevel": "normal", "missingCoreFieldCount": 0}
 
 def metric_value(position: Position, field_name: str) -> float:
     return number(getattr(position, field_name, 0))
@@ -156,21 +139,21 @@ def metric_relation_properties(field_name: str, value: float, source: str) -> Di
     properties: Dict[str, object] = {"field": field_name, "source": source}
     if field_name == "profit_loss_rate":
         if value <= -8:
-            properties.update({"polarity": "risk", "opinionImpact": min(18.0, abs(value)), "aiInfluenceLabel": "손실률이 관계 리스크를 높임"})
+            properties.update({"polarity": "risk", "evidenceRole": "risk", "reviewLevel": "act", "aiInfluenceLabel": "손실률이 손실 관리 조건에 들어감"})
         elif value >= 20:
-            properties.update({"polarity": "risk", "opinionImpact": 8.0, "aiInfluenceLabel": "큰 수익 구간이 이익 보호 필요성을 높임"})
+            properties.update({"polarity": "risk", "evidenceRole": "risk", "reviewLevel": "check", "aiInfluenceLabel": "큰 수익 구간이라 이익 보호 조건을 확인"})
         elif value > 0:
-            properties.update({"polarity": "support", "supportImpact": min(8.0, value / 3), "aiInfluenceLabel": "수익 구간이 보유 근거를 보강"})
+            properties.update({"polarity": "support", "evidenceRole": "support", "reviewLevel": "observe", "aiInfluenceLabel": "수익 구간이 보유 근거를 보강"})
     elif field_name in {"ma20_distance", "ma60_distance", "ma20_slope", "ma60_slope"}:
         if value <= -5:
-            properties.update({"polarity": "risk", "opinionImpact": min(14.0, abs(value)), "aiInfluenceLabel": "추세 지표 약화"})
+            properties.update({"polarity": "risk", "evidenceRole": "risk", "reviewLevel": "act", "aiInfluenceLabel": "평균 가격과 기울기 조건이 약함"})
         elif value >= 5:
-            properties.update({"polarity": "support", "supportImpact": min(10.0, value), "aiInfluenceLabel": "추세 지표 우호"})
+            properties.update({"polarity": "support", "evidenceRole": "support", "reviewLevel": "check", "aiInfluenceLabel": "평균 가격과 기울기 조건이 우호적"})
     elif field_name in {"foreign_net_volume", "institution_net_volume", "foreign_net_amount", "institution_net_amount"}:
         if value < 0:
-            properties.update({"polarity": "risk", "opinionImpact": 5.0, "aiInfluenceLabel": "주요 수급 순매도"})
+            properties.update({"polarity": "risk", "evidenceRole": "risk", "reviewLevel": "check", "aiInfluenceLabel": "주요 투자자 순매도"})
         elif value > 0:
-            properties.update({"polarity": "support", "supportImpact": 5.0, "aiInfluenceLabel": "주요 수급 순매수"})
+            properties.update({"polarity": "support", "evidenceRole": "support", "reviewLevel": "check", "aiInfluenceLabel": "주요 투자자 순매수"})
     elif field_name in {"volume_ratio", "trade_strength", "bid_ask_imbalance"}:
         if value:
             properties.update({"polarity": "context", "aiInfluenceLabel": "단기 수급 맥락"})
@@ -205,15 +188,10 @@ def liquidity_profile(position: Position) -> Dict[str, object]:
     position_to_bid_depth_value = (market_value / bid_depth_value) * 100 if market_value and bid_depth_value else 0.0
     sellable_ratio = (sellable_quantity / quantity) * 100 if quantity else 0.0
     sellable_gap = 100.0 if quantity and sellable_quantity <= 0 else 0.0
-    liquidity_risk = clamp(position_to_value * 2.0 + max(0.0, 1.0 - volume_ratio) * 18.0 + ask_pressure * 0.25 + sellable_gap * 0.25, 0.0, 100.0)
-    slippage_risk = clamp(
-        position_to_value * 1.4
-        + position_to_bid_depth * 0.35
-        + ask_pressure * 0.35
-        + max(0.0, 0.8 - volume_ratio) * 20.0,
-        0.0,
-        100.0,
-    )
+    liquidity_blocked = bool(sellable_gap or exit_days >= 2 or position_to_value >= 5)
+    liquidity_limited = bool(position_to_value >= 0.5 or (volume_ratio and volume_ratio < 0.8) or ask_pressure >= 35)
+    slippage_high = bool(position_to_bid_depth >= 30 or ask_pressure >= 35)
+    slippage_low = bool(position_to_value <= 0.1 and (not position_to_bid_depth or position_to_bid_depth <= 10) and ask_pressure < 10)
     return {
         "hasMarketValue": bool(market_value),
         "hasTradingValue": bool(trading_value),
@@ -230,8 +208,11 @@ def liquidity_profile(position: Position) -> Dict[str, object]:
         "sellableRatioPct": round(sellable_ratio, 2),
         "sellableBlocked": bool(quantity and sellable_quantity <= 0),
         "exitDaysAtTenPctADV": round(exit_days, 2),
-        "liquidityRiskScore": round(liquidity_risk, 1),
-        "slippageRiskScore": round(slippage_risk, 1),
+        "liquidityState": "blocked" if liquidity_blocked else "limited" if liquidity_limited else "available",
+        "slippageState": "high" if slippage_high else "low" if slippage_low else "unknown",
+        "reviewLevel": "act" if liquidity_blocked or slippage_high else "check" if liquidity_limited else "normal",
+        "dataState": "sufficient" if trading_value and volume else "partial",
+        "evidenceRole": "risk" if liquidity_blocked or liquidity_limited or slippage_high else "context",
         "volumeRatio": round(volume_ratio, 3),
         "bidAskImbalance": round(number(position.bid_ask_imbalance), 2),
         "tradingValue": round(trading_value, 2),
@@ -262,8 +243,6 @@ def add_execution_metric_concepts(
         ("sellableRatioPct", "매도가능수량 비율", "execution-capacity", ["hasQuantity"]),
         ("sellableBlocked", "매도가능 제한", "execution-capacity", ["hasQuantity"]),
         ("exitDaysAtTenPctADV", "10% ADV 청산 일수", "execution-capacity", ["hasMarketValue", "hasTradingValue"]),
-        ("liquidityRiskScore", "유동성 위험 원천 점수", "liquidity-profile", []),
-        ("slippageRiskScore", "슬리피지 위험 원천 점수", "slippage-estimate", []),
     ]
     for field_name, label, metric_role, required_flags in metric_rows:
         if any(not liquidity.get(flag) for flag in required_flags):
@@ -448,7 +427,7 @@ def add_market_signal_latency_concepts(graph: PortfolioOntology, stock_id: str, 
         "realTime": bool(investor.get("realTime")) if "realTime" in investor else None,
         "transport": str(investor.get("transport") or ""),
         "freshnessStatus": str(investor.get("freshnessStatus") or ""),
-        "sourceAsOfConfidence": str(investor.get("sourceAsOfConfidence") or ""),
+        "sourceTimestampState": str(investor.get("sourceTimestampState") or ""),
         "aiUsableAsStrongEvidence": bool(investor.get("aiUsableAsStrongEvidence")) if "aiUsableAsStrongEvidence" in investor else None,
         "judgementEvidenceUsable": bool(investor.get("judgementEvidenceUsable")) if "judgementEvidenceUsable" in investor else None,
         "cadence": str(investor.get("cadence") or ""),
@@ -462,15 +441,17 @@ def add_market_signal_latency_concepts(graph: PortfolioOntology, stock_id: str, 
     })
     properties = {
         "source": source,
-        "polarity": "counter",
-        "opinionImpact": 3.0 if status not in {"stale", "unknown"} else 8.0,
+        "polarity": "blocking",
+        "evidenceRole": "blocking",
+        "reviewLevel": "blocked" if status in {"stale", "unknown"} else "check",
+        "dataState": "unavailable" if status in {"stale", "unknown"} else "partial",
         "aiInfluenceLabel": str(investor.get("latencyLabel") or "투자자별 수급 지연 가능"),
         "dataScope": "market-microstructure",
         "scope": "investor-flow",
     }
     add_relation(graph, stock_id, latency_id, "HAS_DATA_QUALITY", weight=0.76, properties=properties)
     add_relation(graph, stock_id, latency_id, "HAS_DATA_FRESHNESS", weight=0.76, properties=properties)
-    add_relation(graph, latency_id, stock_id, "WEIGHTED_BY_CONFIDENCE", weight=0.76, properties={**properties, "confidenceImpact": "decrease"})
+    add_relation(graph, latency_id, stock_id, "WEIGHTED_BY_DATA_STATE", weight=1.0, properties=properties)
 
 
 def add_metric_concepts(
@@ -523,26 +504,34 @@ def add_metric_concepts(
     trend_properties = {
         "source": source,
         "polarity": str(trend_dynamic.get("polarity") or "context"),
-        "opinionImpact": number(trend_dynamic.get("opinionImpact")),
+        "evidenceRole": str(trend_dynamic.get("evidenceRole") or "context"),
+        "reviewLevel": str(trend_dynamic.get("reviewLevel") or "normal"),
+        "dataState": str(trend_dynamic.get("dataState") or "partial"),
+        "changeState": str(trend_dynamic.get("changeState") or "unchanged"),
         "aiInfluenceLabel": "추세 동역학: " + str(trend_dynamic.get("state") or "중립 추세"),
     }
     add_relation(graph, stock_id, scenario_id, "HAS_OBSERVATION", weight=1.0, properties=trend_properties)
     add_relation(graph, stock_id, scenario_id, "HAS_TECHNICAL_INDICATOR", weight=1.0, properties=trend_properties)
-    quality = data_quality_score(position)
+    quality = data_quality_state(position)
     quote_observation = profile_for_domain(observation_profiles or {}, "quote")
     quality_id = add_entity(graph, "data-quality", symbol, "데이터 품질", {
         "tboxClass": "DataQuality",
         "tboxClasses": metric_tbox_classes("DataQuality", "dataQuality"),
-        "qualityScore": round(quality, 2),
+        **quality,
         "dataQuality": position.data_quality,
         "quoteStatus": position.quote_status,
         **quote_observation,
     })
-    quality_properties = {"field": "dataQuality", "source": source, "aiInfluenceLabel": "데이터 품질"}
-    if quality < 60:
-        quality_properties.update({"polarity": "risk", "opinionImpact": round((60 - quality) * 0.2, 2)})
-    add_relation(graph, stock_id, quality_id, "HAS_OBSERVATION", weight=round(quality / 100, 4), properties=quality_properties)
-    add_relation(graph, stock_id, quality_id, "HAS_DATA_QUALITY", weight=round(quality / 100, 4), properties=quality_properties)
+    quality_properties = {
+        "field": "dataQuality",
+        "source": source,
+        "polarity": "blocking" if quality["dataState"] in {"unavailable", "insufficient"} else "context",
+        "evidenceRole": "blocking" if quality["dataState"] in {"unavailable", "insufficient"} else "context",
+        "aiInfluenceLabel": "데이터 품질",
+        **quality,
+    }
+    add_relation(graph, stock_id, quality_id, "HAS_OBSERVATION", weight=1.0, properties=quality_properties)
+    add_relation(graph, stock_id, quality_id, "HAS_DATA_QUALITY", weight=1.0, properties=quality_properties)
     add_market_signal_latency_concepts(graph, stock_id, position, source)
 
 def add_data_source_concept(
@@ -553,7 +542,7 @@ def add_data_source_concept(
     observation_profiles: Dict[str, Dict[str, object]] = None,
 ) -> None:
     label = str(position.quote_source or position.data_quality or source or "runtime-data")
-    quality = data_quality_score(position)
+    quality = data_quality_state(position)
     source_id = add_entity(graph, "data-source", label, label, {
         "tboxClass": "DataSource",
         "tboxClasses": ["DataSource", "Provenance"],
@@ -562,48 +551,20 @@ def add_data_source_concept(
         "dataQuality": position.data_quality,
         "sourceAsOf": position.source_as_of,
         "sourceFetchedAt": position.source_fetched_at,
-        "sourceAsOfConfidence": position.source_as_of_confidence,
+        "sourceTimestampState": position.source_timestamp_state,
     })
     add_relation(graph, stock_id, source_id, "OBSERVED_FROM", weight=1.0, properties={"source": source, "basis": "quote-source"})
     add_relation(graph, stock_id, source_id, "HAS_PROVENANCE", weight=1.0, properties={"source": source, "basis": "quote-source"})
     reliability_id = add_entity(graph, "source-reliability", label, label + " 신뢰도", {
         "tboxClass": "SourceReliability",
         "tboxClasses": ["Provenance", "SourceReliability", "DataQuality"],
-        "qualityScore": round(quality, 2),
+        **quality,
         "quoteStatus": position.quote_status,
         "quoteMessage": position.quote_message,
     })
-    props = {"source": source, "aiInfluenceLabel": label + " 신뢰도", "confidence": round(quality / 100, 3)}
-    if quality < 60:
-        props.update({"polarity": "risk", "opinionImpact": round((60 - quality) * 0.18, 2)})
-    add_relation(graph, source_id, reliability_id, "HAS_SOURCE_RELIABILITY", weight=round(quality / 100, 4), properties=props)
-    add_relation(graph, stock_id, reliability_id, "WEIGHTED_BY_CONFIDENCE", weight=round(quality / 100, 4), properties=props)
-
-def add_legacy_model_score_concepts(graph: PortfolioOntology, stock_id: str, symbol: str, legacy: Dict[str, object]) -> None:
-    score_rows = [
-        ("exitPressure", "관계 규칙 강도", number(legacy.get("exitPressure") or legacy.get("exit_pressure")), "risk"),
-        ("profitTakePressure", "익절 관계 강도", number(legacy.get("profitTakePressure") or legacy.get("profit_take_pressure")), "risk"),
-        ("lossCutPressure", "손실 관리 관계 강도", number(legacy.get("lossCutPressure") or legacy.get("loss_cut_pressure")), "risk"),
-        ("buyScore", "매수 관계 점수", number(legacy.get("buyScore") or legacy.get("modelBuyScore")), "support"),
-        ("sellScore", "매도 관계 점수", number(legacy.get("sellScore") or legacy.get("modelSellScore")), "risk"),
-    ]
-    for key, label, value, polarity in score_rows:
-        if not value:
-            continue
-        score_id = add_entity(graph, "model-score", symbol + ":" + key, label, {
-            "tboxClass": "ModelScore",
-            "tboxClasses": ["Signal", "StrategySignal", "ModelScore"],
-            "field": key,
-            "value": round(value, 2),
-            "modelRole": "relation-rule-score",
-        })
-        properties = {"field": key, "polarity": polarity, "aiInfluenceLabel": label, "source": "relation-rule"}
-        if polarity == "risk" and value >= 55:
-            properties["opinionImpact"] = min(18.0, (value - 45) * 0.35)
-        if polarity == "support" and value >= 55:
-            properties["supportImpact"] = min(14.0, (value - 45) * 0.35)
-        add_relation(graph, stock_id, score_id, "HAS_MODEL_SCORE", weight=round(value / 100, 4), properties=properties)
-        add_relation(graph, score_id, stock_id, "USED_AS_EVIDENCE", weight=round(value / 100, 4), properties={**properties, "source": "relation-rule"})
+    props = {"source": source, "aiInfluenceLabel": label + " 자료 상태", **quality}
+    add_relation(graph, source_id, reliability_id, "HAS_SOURCE_DATA_STATE", weight=1.0, properties=props)
+    add_relation(graph, stock_id, reliability_id, "WEIGHTED_BY_DATA_STATE", weight=1.0, properties=props)
 
 def add_price_level_and_liquidity_concepts(
     graph: PortfolioOntology,
@@ -656,7 +617,7 @@ def add_price_level_and_liquidity_concepts(
         })
         flow_props = {"source": source, "aiInfluenceLabel": "거래량/체결/호가 프로파일", "polarity": "context"}
         if number(flow.get("volumeRatio")) >= 1.5 or abs(number(flow.get("bidAskImbalance"))) >= 35:
-            flow_props["opinionImpact"] = min(12.0, number(flow.get("volumeRatio")) * 3 + abs(number(flow.get("bidAskImbalance"))) * 0.08)
+            flow_props.update({"reviewLevel": "check", "changeState": "new-condition"})
         add_relation(graph, stock_id, volume_id, "HAS_OBSERVATION", weight=1.0, properties=flow_props)
         add_relation(graph, stock_id, volume_id, "HAS_TRADE_FLOW", weight=1.0, properties=flow_props)
     smart_money_flow = smart_money_joint_flow_profile(position)
@@ -677,8 +638,9 @@ def add_price_level_and_liquidity_concepts(
             "field": field_name,
             "signalGroup": "smartMoney",
             "polarity": polarity,
-            "supportImpact": 7.0 if polarity == "support" else 0.0,
-            "riskImpact": 7.0 if polarity == "risk" else 0.0,
+            "evidenceRole": polarity,
+            "reviewLevel": "check",
+            "dataState": "sufficient",
             "aiInfluenceLabel": "외국인·기관 동반 " + ("순매수" if polarity == "support" else "순매도"),
         }
         add_relation(graph, stock_id, smart_money_id, "HAS_OBSERVATION", weight=0.86, properties=smart_money_props)
@@ -702,13 +664,13 @@ def add_price_level_and_liquidity_concepts(
             "field": field_name,
             "signalGroup": "investorPsychology",
             "polarity": polarity,
-            "supportImpact": number(investor_psychology.get("supportImpact")),
-            "riskImpact": number(investor_psychology.get("riskImpact")),
+            "evidenceRole": str(investor_psychology.get("evidenceRole") or "context"),
+            "reviewLevel": str(investor_psychology.get("reviewLevel") or "observe"),
+            "dataState": str(investor_psychology.get("dataState") or "partial"),
             "aiInfluenceLabel": sentiment_label,
         }
-        weight = number(investor_psychology.get("weight")) or 0.7
-        add_relation(graph, stock_id, sentiment_id, "HAS_OBSERVATION", weight=weight, properties=sentiment_props)
-        add_relation(graph, stock_id, sentiment_id, "HAS_INVESTOR_FLOW_SENTIMENT", weight=weight, properties=sentiment_props)
+        add_relation(graph, stock_id, sentiment_id, "HAS_OBSERVATION", weight=1.0, properties=sentiment_props)
+        add_relation(graph, stock_id, sentiment_id, "HAS_INVESTOR_FLOW_SENTIMENT", weight=1.0, properties=sentiment_props)
     missing_fields = missing_market_microstructure_fields(position)
     if missing_fields:
         missing_id = add_entity(graph, "missing-data", symbol + ":market-microstructure", (position.name or symbol) + " 부족 데이터", {
@@ -724,8 +686,10 @@ def add_price_level_and_liquidity_concepts(
         })
         missing_props = {
             "source": source,
-            "polarity": "risk",
-            "opinionImpact": min(10.0, len(missing_fields) * 0.8),
+            "polarity": "blocking",
+            "evidenceRole": "blocking",
+            "reviewLevel": "blocked",
+            "dataState": "insufficient",
             "aiInfluenceLabel": "체결/호가/투자자별 수급 결측",
             "dataScope": "market-microstructure",
             "scope": "market-microstructure",
@@ -765,7 +729,9 @@ def add_price_level_and_liquidity_concepts(
             "tboxClasses": ["Risk", "DataQualityRisk"],
             "symbol": symbol,
             "missingFields": [item["field"] for item in missing_fields],
-            "riskScore": min(100, len(missing_fields) * 8),
+            "reviewLevel": "blocked",
+            "dataState": "insufficient",
+            "evidenceRole": "blocking",
         })
         add_relation(graph, stock_id, risk_id, "EXPOSED_TO", weight=round(min(1.0, len(missing_fields) / 10), 4), properties=missing_props)
         add_relation(graph, missing_id, risk_id, "AFFECTS", weight=round(min(1.0, len(missing_fields) / 10), 4), properties=missing_props)
@@ -782,7 +748,7 @@ def add_price_level_and_liquidity_concepts(
             "observedAt": position.updated_at,
             **quote_observation,
         })
-        add_relation(graph, stock_id, stale_id, "HAS_DATA_QUALITY", weight=0.35, properties={"source": source, "polarity": "risk", "opinionImpact": 6.0, "aiInfluenceLabel": "시세 신선도 저하"})
+        add_relation(graph, stock_id, stale_id, "HAS_DATA_QUALITY", weight=1.0, properties={"source": source, "polarity": "blocking", "evidenceRole": "blocking", "reviewLevel": "blocked", "dataState": "unavailable", "aiInfluenceLabel": "시세 신선도 저하"})
     def technical_distance(level: float, explicit_distance: float) -> float:
         calculated = pct_distance_safe(current_price, level) if current_price and level else 0.0
         return calculated if calculated else number(explicit_distance)
@@ -812,9 +778,9 @@ def add_price_level_and_liquidity_concepts(
         if -1.0 <= distance <= 1.5:
             add_relation(graph, stock_id, level_id, "RETESTS_LEVEL", weight=0.82, properties={"source": source, "polarity": "context", "aiInfluenceLabel": label + " 재시험"})
         elif distance <= -5.0:
-            add_relation(graph, stock_id, level_id, "BREAKS_LEVEL", weight=0.88, properties={"source": source, "polarity": "risk", "opinionImpact": min(14.0, abs(distance)), "aiInfluenceLabel": label + " 이탈"})
+            add_relation(graph, stock_id, level_id, "BREAKS_LEVEL", weight=1.0, properties={"source": source, "polarity": "risk", "evidenceRole": "risk", "reviewLevel": "act", "changeState": "worsening", "aiInfluenceLabel": label + " 아래로 내려감"})
         elif distance >= 0 and number(position.change_rate) > 0:
-            add_relation(graph, stock_id, level_id, "RECLAIMS_LEVEL", weight=0.74, properties={"source": source, "polarity": "support", "supportImpact": min(8.0, distance + 2), "aiInfluenceLabel": label + " 회복"})
+            add_relation(graph, stock_id, level_id, "RECLAIMS_LEVEL", weight=1.0, properties={"source": source, "polarity": "support", "evidenceRole": "support", "reviewLevel": "check", "changeState": "improving", "aiInfluenceLabel": label + " 위로 회복"})
     liquidity = liquidity_profile(position)
     liquidity_id = add_entity(graph, "liquidity-profile", symbol, (position.name or symbol) + " 유동성 프로파일", {
         "tboxClass": "LiquidityProfile",
@@ -832,19 +798,21 @@ def add_price_level_and_liquidity_concepts(
     )
     add_execution_metric_concepts(graph, stock_id, symbol, position.name or symbol, liquidity, source, flow_observation)
     risk_props = {"source": source, "aiInfluenceLabel": "유동성/실행 가능성", "polarity": "context"}
-    liquidity_risk = number(liquidity.get("liquidityRiskScore"))
-    slippage_risk = number(liquidity.get("slippageRiskScore"))
-    if liquidity_risk >= 55:
+    liquidity_state = str(liquidity.get("liquidityState") or "unknown")
+    slippage_state = str(liquidity.get("slippageState") or "unknown")
+    if liquidity_state in {"blocked", "limited"}:
         add_relation(
             graph,
             stock_id,
             liquidity_id,
             "LIMITED_BY_LIQUIDITY",
-            weight=round(liquidity_risk / 100, 4),
+            weight=1.0,
             properties={
                 **risk_props,
                 "polarity": "risk",
-                "opinionImpact": min(16.0, liquidity_risk * 0.18),
+                "evidenceRole": "risk",
+                "reviewLevel": "act" if liquidity_state == "blocked" else "check",
+                "liquidityState": liquidity_state,
             },
         )
     capacity_id = add_entity(graph, "exit-capacity", symbol, (position.name or symbol) + " 청산 가능 용량", {
@@ -870,21 +838,25 @@ def add_price_level_and_liquidity_concepts(
     slippage_id = add_entity(graph, "slippage-estimate", symbol, (position.name or symbol) + " 슬리피지 추정", {
         "tboxClass": "SlippageEstimate",
         "tboxClasses": ["Risk", "ExecutionRisk", "SlippageEstimate"],
-        "slippageRiskScore": liquidity.get("slippageRiskScore"),
+        "slippageState": slippage_state,
+        "reviewLevel": "act" if slippage_state == "high" else "normal",
+        "dataState": str(liquidity.get("dataState") or "partial"),
         "bidAskImbalance": round(number(position.bid_ask_imbalance), 2),
         "volumeRatio": round(number(position.volume_ratio), 3),
         "positionToBidDepthPct": liquidity.get("positionToBidDepthPct"),
     })
-    if slippage_risk >= 55:
+    if slippage_state == "high":
         add_relation(
             graph,
             stock_id,
             slippage_id,
             "HAS_SLIPPAGE_RISK",
-            weight=round(slippage_risk / 100, 4),
+            weight=1.0,
             properties={
                 **risk_props,
                 "polarity": "risk",
-                "opinionImpact": min(16.0, slippage_risk * 0.18),
+                "evidenceRole": "risk",
+                "reviewLevel": "act",
+                "slippageState": slippage_state,
             },
         )

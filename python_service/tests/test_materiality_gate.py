@@ -76,7 +76,7 @@ class MaterialityGateTests(unittest.TestCase):
             ["AAPL"],
             changed_count=1,
             fact_types=["MarketQuote"],
-            materiality_assessments=[{"score": 90}],
+            materiality_assessments=[{"reviewLevel": "act", "changeState": "new-condition"}],
         )
 
         class Reader:
@@ -97,7 +97,7 @@ class MaterialityGateTests(unittest.TestCase):
             settings={
                 "ontologyReasoningMinIntervalSeconds": "180",
                 "ontologyReasoningUrgentMinIntervalSeconds": "60",
-                "ontologyReasoningUrgentMaterialityScore": "85",
+                "ontologyReasoningUrgentReviewLevels": "act,immediate,blocked",
             },
             now_provider=lambda: datetime(2026, 7, 20, 0, 1, tzinfo=timezone.utc),
         )
@@ -148,10 +148,10 @@ class MaterialityGateTests(unittest.TestCase):
         )
 
         self.assertFalse(small.passed)
-        self.assertEqual("record", small.grade)
+        self.assertEqual("normal", small.grade)
         self.assertTrue(material.passed)
-        self.assertIn("ma20Threshold", material.components)
-        self.assertIn("volumeConfirmation", material.components)
+        self.assertIn("ma20-cross", material.matched_conditions)
+        self.assertIn("volume-confirmation", material.matched_conditions)
 
     def test_evidence_materiality_requires_direct_reliable_material_news(self):
         weak = ResearchEvidence(
@@ -166,7 +166,13 @@ class MaterialityGateTests(unittest.TestCase):
             "context",
             1.0,
             0.4,
-            raw_payload={"relationScope": "sector", "relevanceScore": 40, "sourceReliability": 20, "materialityScore": 20},
+            raw_payload={
+                "relationScope": "sector",
+                "relevanceState": "related",
+                "sourceTrustState": "limited",
+                "materialityState": "context",
+                "articleReadStatus": "feed-summary",
+            },
         )
         strong = ResearchEvidence(
             "strong",
@@ -180,7 +186,14 @@ class MaterialityGateTests(unittest.TestCase):
             "support",
             8.0,
             0.8,
-            raw_payload={"relationScope": "direct", "relevanceScore": 92, "sourceReliability": 88, "materialityScore": 82},
+            raw_payload={
+                "relationScope": "direct",
+                "relevanceState": "direct",
+                "sourceTrustState": "trusted",
+                "materialityState": "material",
+                "articleReadStatus": "body",
+                "evidenceGovernance": {"investmentJudgmentEligible": True, "dataState": "sufficient"},
+            },
         )
 
         self.assertFalse(evidence_materiality(weak).passed)
@@ -199,7 +212,13 @@ class MaterialityGateTests(unittest.TestCase):
             "context",
             1.0,
             0.4,
-            raw_payload={"relationScope": "sector", "relevanceScore": 40, "sourceReliability": 20, "materialityScore": 20},
+            raw_payload={
+                "relationScope": "sector",
+                "relevanceState": "related",
+                "sourceTrustState": "limited",
+                "materialityState": "context",
+                "articleReadStatus": "feed-summary",
+            },
         )
         strong = ResearchEvidence(
             "strong",
@@ -213,7 +232,14 @@ class MaterialityGateTests(unittest.TestCase):
             "support",
             8.0,
             0.8,
-            raw_payload={"relationScope": "direct", "relevanceScore": 92, "sourceReliability": 88, "materialityScore": 82},
+            raw_payload={
+                "relationScope": "direct",
+                "relevanceState": "direct",
+                "sourceTrustState": "trusted",
+                "materialityState": "material",
+                "articleReadStatus": "body",
+                "evidenceGovernance": {"investmentJudgmentEligible": True, "dataState": "sufficient"},
+            },
         )
 
         class MemoryEvidenceStore:
@@ -306,25 +332,26 @@ class MaterialityGateTests(unittest.TestCase):
                         "version": "news-ai-analysis-v1",
                         "impactPolarity": "risk" if item.evidence_id == "first" else "support",
                         "impactLabelKo": "악재" if item.evidence_id == "first" else "호재",
-                        "confidence": 0.8,
-                        "materialityScore": 88,
+                        "relevanceState": "direct",
+                        "sourceTrustState": "standard",
+                        "materialityState": "material",
+                        "dataState": "partial",
+                        "validationState": "conditional",
                         "summary": {"briefKo": item.title, "watchPoints": ["가격 반응"]},
                     }
                     payload["stockImpactLabel"] = payload["aiAnalysis"]["impactLabelKo"]
                     result.append(ResearchEvidence(
-                        item.evidence_id,
-                        item.symbol,
-                        item.kind,
-                        item.source,
-                        item.title,
-                        item.summary,
-                        item.url,
-                        item.observed_at,
-                        item.polarity,
-                        item.impact_score,
-                        item.confidence,
-                        item.published_at,
-                        payload,
+                        evidence_id=item.evidence_id,
+                        symbol=item.symbol,
+                        kind=item.kind,
+                        source=item.source,
+                        title=item.title,
+                        summary=item.summary,
+                        url=item.url,
+                        observed_at=item.observed_at,
+                        polarity=item.polarity,
+                        published_at=item.published_at,
+                        raw_payload=payload,
                     ))
                 return result
 

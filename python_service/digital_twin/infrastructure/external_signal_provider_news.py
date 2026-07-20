@@ -2,7 +2,6 @@ import urllib.parse
 from datetime import datetime, timedelta, timezone
 from typing import Dict, List
 
-from ..domain.market_data import number
 from ..domain.portfolio import Position, utc_now_iso
 
 
@@ -105,17 +104,24 @@ class ExternalSignalNewsMixin:
                 continue
             seen.add(dedupe_key)
             ticker_sentiment = self.alpha_news_ticker_sentiment(article, symbol)
+            sentiment_label = str(ticker_sentiment.get("ticker_sentiment_label") or "").strip().lower() if ticker_sentiment else ""
+            if "bullish" in sentiment_label:
+                impact_polarity = "support"
+            elif "bearish" in sentiment_label:
+                impact_polarity = "risk"
+            else:
+                impact_polarity = "context"
             items.append({
                 "title": title,
                 "url": url_value,
                 "domain": str(article.get("source") or "").strip(),
                 "summary": str(article.get("summary") or "").strip(),
                 "seenDate": str(article.get("time_published") or "").strip(),
-                "overallSentimentScore": number(article.get("overall_sentiment_score")),
-                "overallSentimentLabel": str(article.get("overall_sentiment_label") or "").strip(),
-                "relevanceScore": number(ticker_sentiment.get("relevance_score")) if ticker_sentiment else 0.0,
-                "tickerSentimentScore": number(ticker_sentiment.get("ticker_sentiment_score")) if ticker_sentiment else 0.0,
-                "tickerSentimentLabel": str(ticker_sentiment.get("ticker_sentiment_label") or "").strip() if ticker_sentiment else "",
+                "relationScope": "direct" if ticker_sentiment else "related_product",
+                "relevanceState": "direct" if ticker_sentiment else "related",
+                "stockImpactPolarity": impact_polarity,
+                "dataState": "partial",
+                "validationState": "conditional",
             })
             if len(items) >= 5:
                 break

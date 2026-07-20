@@ -1,6 +1,6 @@
 # Ontology Strategy Model
 
-투자전략의 기준 모델은 관계 규칙 구조다. 기존 익절/손절 공식과 매수/매도 점수는 최종 판단 주체가 아니며 `legacyModelRole=supporting-evidence`로 보조 근거에만 남긴다.
+투자전략의 기준 모델은 관계 규칙 구조다. 원시 가격·수익률·거래량 같은 숫자는 사실로 보관하지만, 최종 판단은 합산 점수 대신 TypeDB가 만든 범주형 상태와 근거 관계로 결정한다.
 
 ## Domain Vocabulary
 
@@ -10,7 +10,7 @@ TBox 정의는 `python_service/digital_twin/domain/ontology_tbox.py`에 둔다. 
 
 - `investment-core`: `Account`, `Portfolio`, `Instrument`, `Stock`, `Position`, `Watchlist`, `Cash`, `Sector`, `Market`, `Currency`, `MarketExposure`.
 - `observation-data`: `Observation`, `PriceObservation`, `TechnicalObservation`, `FlowObservation`, `ExternalSignal`, `DataSource`, `DataFreshness`, `Provenance`, `SignalHorizon`, `MissingData`.
-- `strategy-thesis`: `Strategy`, `InvestmentThesis`, `EntryCondition`, `ExitCondition`, `RiskManagementRule`, `RebalancingRule`, `PositionSizingRule`, `ModelScore`, `LegacyScoreModel`, `RuntimeSetting`.
+- `strategy-thesis`: `Strategy`, `InvestmentThesis`, `EntryCondition`, `ExitCondition`, `RiskManagementRule`, `RebalancingRule`, `PositionSizingRule`, `DecisionState`, `ValidationState`, `RuntimeSetting`.
 - `risk-exposure`: `Risk`, `MarketRisk`, `LiquidityRisk`, `ConcentrationRisk`, `CurrencyRisk`, `EventRisk`, `DataQualityRisk`, `ModelRisk`, `RegimeRisk`.
 - `reasoning-insight`: `Signal`, `Evidence`, `Belief`, `Opinion`, `Opportunity`, `Contradiction`, `Insight`, `ReasoningCard`, `AIReview`.
 - `operations-dispatch`: `DataPipeline`, `CollectionSchedule`, `CollectionPolicy`, `AnalysisJob`, `ReasoningCycle`, `NotificationDispatch`, `CooldownPolicy`, `NoveltyPolicy`, `SuppressionPolicy`, `MarketSession`.
@@ -40,8 +40,8 @@ AI 프롬프트에는 TBox, `boundedContexts`, ABox, operational ontology, reaso
 - `SUPPORTS_THESIS`, `WEAKENS_THESIS`, `INVALIDATES_THESIS`: 근거, 기회, 리스크, 모순이 투자 가설에 미치는 방향.
 - `HAS_TIME_HORIZON`, `APPLIES_TO_HORIZON`: 보유/관심 판단의 유효 기간과 관찰 범위.
 - `SUPPORTED_BY`: 종목 보유 이유를 뒷받침하는 기회 관계.
-- `CONTRADICTS`: 기존 점수, 추세, 수급, 집중도 사이에 충돌이 있다.
-- `USES_EVIDENCE_FROM`: 기존 점수 모델을 보조 근거로 사용한다.
+- `CONTRADICTS`: 추세, 수급, 보유 비중, 뉴스·공시 근거 사이에 충돌이 있다.
+- `USES_EVIDENCE_FROM`: 관측 사실과 검증된 외부 근거를 판단에 연결한다.
 - `REQUESTS_OPINION_FROM`: AI 투자 의견 정보로 넘긴다.
 - `HAS_EVIDENCE`, `HAS_BELIEF`, `HAS_OPINION`: TypeDB/그래프 저장소 저장용 세부 관계.
 
@@ -49,8 +49,8 @@ AI 프롬프트에는 TBox, `boundedContexts`, ABox, operational ontology, reaso
 
 1. Toss 계좌, 시장 데이터, 외부 API 데이터를 `Position`, `PortfolioSummary`, `externalSignals`로 정규화한다.
 2. `infrastructure/ontology_projection.py`가 종목별 ABox fact와 부족 데이터를 TypeDB에 저장하고, TypeDB schema function rule materialization 결과를 InferenceBox로 읽어 운영 판단에 사용한다. `domain/ontology_relation_reasoning.py`는 프롬프트 조립과 read model formatting helper로만 사용하며 추론을 실행하지 않는다.
-3. `DecisionItem.decision`, `exit_pressure`, `decision_basis`는 관계 규칙 결과에서 나온다. `decision_basis`는 `ontologyRelationRules`다.
-4. 기존 공식 기반 `profitTakePressure`, `lossCutPressure`, 매수/매도 점수는 보조 근거와 과거 비교용으로만 보관한다.
+3. `DecisionItem.decision`, `reviewLevel`, `dataState`, `changeState`, `conflictState`, `validationState`, `decisionBasis`는 관계 규칙 결과에서 나온다. `decisionBasis`는 `ontologyRelationRules`다.
+4. 과거 점수 기반 데이터가 남아 있으면 읽기 경계에서 범주형 상태로만 변환하며, 새 판단과 메시지에는 다시 저장하거나 사용하지 않는다.
 5. `domain/ontology.py`가 TBox/ABox 그래프와 `OntologyOpinion`을 만든다. 이때 `Strategy`, `InvestmentThesis`, `Observation`, `Risk`, `Insight`, `NotificationDispatch`까지 모두 ABox 노드로 만든다.
 6. `DecisionItem.relation_rule_context`, `ai_prompt_context`, `ai_context`에 관계 규칙 결과와 프롬프트 입력 계약을 함께 붙인다.
 7. 실시간 모니터링은 알림 metadata에 `ontologyRelationContext`, `ontologyPromptContext`, `ontologyReviewContext`를 포함한다.
@@ -68,7 +68,7 @@ AI 프롬프트에는 TBox, `boundedContexts`, ABox, operational ontology, reaso
 1. `portfolio_ontology_builder.py`가 계좌, 보유/관심 종목, 가격, 이동평균, 수급, 투자자별 매수·매도, 뉴스, 공시, 거시, 투자 성향, 데이터 품질을 ABox fact로 만든다.
 2. `typedb_ontology.py`가 ABox를 TypeDB에 저장한다.
 3. RuleBox semantic profile은 TypeDB schema function으로 컴파일된다. 각 function은 TypeDB ABox를 직접 조회하며, 필수 조건, 후보 조건 중 N개 이상, 부정 조건을 TypeQL 안에서 처리한다.
-4. 성립한 규칙은 InferenceBox 노드와 관계로 저장된다. 각 결과에는 `sourceRuleId`, `nativeRuleId`, `semanticRuleId`, `reasoningMode`, `materializationSource`, `matchedConditions`, `confidence`, `sourceEvidenceIds`가 남는다.
+4. 성립한 규칙은 InferenceBox 노드와 관계로 저장된다. 각 결과에는 `sourceRuleId`, `nativeRuleId`, `semanticRuleId`, `reasoningMode`, `materializationSource`, `matchedConditions`, `reviewLevel`, `dataState`, `evidenceRole`, `conflictState`, `validationState`, `sourceEvidenceIds`가 남는다.
 5. `ontology_inference_context.py`가 최신 generation의 InferenceBox만 읽어 투자 판단 후보, 근거, 반대 근거, 부족 데이터, AI 질문을 만든다.
 6. AI는 이 컨텍스트를 받아 최종 의견을 쓰고, 시스템은 없는 데이터 생성 여부와 규칙 충돌 여부를 검증한 뒤 알림 메시지에 넣는다.
 
@@ -80,16 +80,16 @@ AI 프롬프트에는 TBox, `boundedContexts`, ABox, operational ontology, reaso
 - 수급 심리 관계: `HAS_TRADE_FLOW`, `HAS_INVESTOR_FLOW_SENTIMENT`로 체결강도, 호가 불균형, 외국인·기관·개인 순매수 심리를 표현한다. `CONFIRMS_WITH_FLOW`, `DIVERGES_FROM_FLOW`는 가격 변화와 큰 자금 흐름이 같은 방향인지 또는 어긋나는지를 추론한다.
 - 뉴스·공시 영향 관계: `HAS_EXTERNAL_SIGNAL`, `NEWS_CONTEXT_FOR`, `NEWS_RISK_FOR`, `NEWS_SUPPORTS_ENTRY`, `HAS_DILUTION_RISK`, `CONFIRMS_EVENT_IMPACT`로 기사/공시 존재와 실제 가격·거래 반응을 분리한다. 새 뉴스나 공시가 있더라도 신선도, 관련성, 중요도, 원문 확보, 가격 반응이 약하면 실행 강도를 낮춘다.
 
-관계 점수는 단일 공식 점수가 아니다. TypeDB가 먼저 규칙 성립 여부와 InferenceBox 관계를 만들고, `ontology_inference_context.py`는 성립한 관계를 현재 ABox fact의 크기로 다시 해석해 다음 분해 점수를 만든다.
+TypeDB는 먼저 규칙 성립 여부와 InferenceBox 관계를 만들고, `ontology_inference_context.py`는 성립한 관계와 ABox 사실을 다음 범주형 상태로 정리한다. 원시 숫자는 사실 설명에만 남고 합산 투자 점수나 확률을 만들지 않는다.
 
-- `ruleReliability`: TypeDB 규칙 weight와 trace confidence에서 온 규칙 신뢰도.
-- `riskPressure`: 손실률, 5/20/60일 평균 가격 아래 위치, 하락 속도, 체결강도 약화, 매도 호가, 외국인·기관 매도, 악재 뉴스가 키우는 위험 압력.
-- `supportEvidence`: 수익 구간, 5/20/60일 평균 가격 위 위치, 당일 회복, 체결강도 우위, 매수 호가, 외국인·기관 순매수, 우호 뉴스가 만드는 버티는 근거.
-- `dataConfidence`: TypeDB trace confidence, ABox 데이터 품질, 부족 데이터, 지연/반복 수급, 뉴스 충돌을 반영한 확신도.
-- `actionability`: 보유 비중, 매도 가능 수량, 손실/수익 구간, 관심종목 진입 조건처럼 실제 행동으로 옮길 수 있는 정도.
-- `novelty`: 손익률 변화, 당일 가격 변화, 새 뉴스/공시, 새 trace처럼 쿨다운 우회 판단에 쓰이는 새 변화.
+- `reviewLevel`: `normal`, `observe`, `check`, `act`, `immediate`, `blocked` 중 현재 다시 확인해야 할 단계.
+- `dataState`: `sufficient`, `partial`, `insufficient`, `unavailable` 중 판단에 쓸 자료의 상태.
+- `evidenceRole`: `risk`, `support`, `counter`, `context`, `blocking` 중 근거가 판단에서 맡는 역할.
+- `conflictState`: 위험 근거와 버티는 근거가 한쪽만 있는지, 함께 있는지, 참고 수준인지 나타낸다.
+- `changeState`: 이전 알림과 비교해 새 조건, 개선, 악화, 방향 변경, 새 뉴스·공시가 있었는지 나타낸다.
+- `validationState`: `ready`, `conditional`, `blocked` 중 해당 판단을 실제 안내에 사용할 수 있는지 나타낸다.
 
-사용자에게 보이는 `signalStrength`와 `decision.score`는 위 분해 점수의 합성 결과다. 따라서 같은 TypeDB 규칙이 성립해도 손실률이 -3%인지 -18%인지, 5일선 회복과 외국인·기관 순매수가 있는지, 데이터가 지연됐는지에 따라 점수와 AI 의견 강도가 달라져야 한다. 이 점수는 가격 방향 예측 확률이 아니라 지금 확인해야 할 투자 관계의 강도다.
+따라서 같은 TypeDB 규칙이 성립해도 손실률, 5일선·20일선·60일선 위치, 외국인·기관 흐름, 뉴스 원문 확보, 데이터 지연에 따라 확인 단계와 자료 상태가 달라진다. 이 상태는 가격 방향 예측 확률이 아니라 사용자가 무엇을 다시 확인해야 하는지 설명한다.
 
 운영 상태를 해석하는 기준:
 
@@ -120,7 +120,7 @@ Projection은 다음 용도로만 사용한다.
 
 외부 신호는 수집 결과에 `quality`, `freshness`, `provenance` 메타를 붙인다. 이 값은 `domain/external_signal_quality.py`에서 계산한다.
 
-- `quality.score`: 심볼 커버리지, 공급자 상태, 에러 수를 합산한 외부 신호 품질 점수.
+- `quality.dataState`: 심볼 커버리지, 공급자 상태, 에러 수를 바탕으로 한 자료 상태.
 - `quality.symbolCoverage`: 현재 보유/관심 종목 중 외부 신호가 연결된 비율.
 - `quality.sourceCoverage`: Alpha Vantage, CoinGecko, FRED, SEC EDGAR, OpenDART, GDELT News별 설정 여부, 수집 건수, 오류 메시지.
 - `freshness`: 외부 신호의 마지막 수집 시각, 나이, stale 여부.
@@ -138,15 +138,15 @@ Projection은 다음 용도로만 사용한다.
 
 모니터링 사이클에서 온톨로지 그래프를 만들면 MySQL 운영 DB의 `ontology_ai_opinion_samples` 테이블에 품질 샘플을 남긴다.
 
-- 전체 점수: 데이터 커버리지, 바운디드 컨텍스트 커버리지, reasoning card 준비도, 관계 밀도.
+- 전체 상태: 데이터 커버리지, 바운디드 컨텍스트 커버리지, reasoning card 준비도, 관계 연결 상태.
 - 데이터 공백: reasoning card가 표시한 부족 데이터.
-- 고압력 종목: `ontology_pressure >= 55`인 종목.
+- 우선 점검 종목: `reviewLevel`이 `act` 또는 `immediate`인 종목.
 
 이 샘플은 AI 의견 품질을 나중에 회귀 테스트하거나 운영 튜닝할 때 쓰는 로컬 히스토리다. 개인 계좌 데이터가 포함될 수 있으므로 git에 넣지 않는다.
 
 ## Ontology Lab
 
-실험 환경은 운영 TypeDB schema function rule과 TypeDB를 직접 바꾸지 않는 후보 검증 단계다. 후보 규칙을 `candidateRules`로 저장하고, 최근 모니터 스냅샷에서 만든 ABox facts-only 그래프와 규칙 구조를 검증한다. 파생 관계, 추론 trace, 품질 점수 변화는 후보가 승인되어 TypeDB schema function으로 동기화되고 `run_rulebox` materialization을 실행한 뒤에만 확인한다. API/화면 이름에 남아 있는 `RuleBox`는 호환 이름이며, 운영 의미는 TypeDB schema function rule이다.
+실험 환경은 운영 TypeDB schema function rule과 TypeDB를 직접 바꾸지 않는 후보 검증 단계다. 후보 규칙을 `candidateRules`로 저장하고, 최근 모니터 스냅샷에서 만든 ABox facts-only 그래프와 규칙 구조를 검증한다. 파생 관계, 추론 trace, 자료·검증 상태 변화는 후보가 승인되어 TypeDB schema function으로 동기화되고 `run_rulebox` materialization을 실행한 뒤에만 확인한다. API/화면 이름에 남아 있는 `RuleBox`는 호환 이름이며, 운영 의미는 TypeDB schema function rule이다.
 
 CLI:
 
@@ -203,15 +203,15 @@ API:
 - `ai-bitcoin-treasury-nav-scenarios`: MSTR 같은 비트코인 프록시 종목. BTC 보유량·희석주식수·순부채·우선주 부담이 모두 있을 때만 NAV 범위를 계산한다. 입력이 없으면 가격 추세를 적정가로 바꾸지 않고 계산을 보류한다.
 - `ai-preferred-income-yield-scenarios`: STRC 같은 우선주/인컴형. 연간 배당을 보수적·기준·낙관 요구수익률로 나눠 적정가 범위를 만든다.
 - `ai-semiconductor-eps-per-scenarios`: 삼성전자, SK하이닉스 같은 반도체 종목. 연간·TTM·선행 12개월 EPS와 반도체 유형별 PER 범위를 사용한다. 5/20/60일 가격 흐름은 적정가 계산에 넣지 않고 별도 추세 근거로만 쓴다.
-- `ai-growth-eps-per-scenarios`: Apple, NVIDIA, Tesla 같은 성장/플랫폼 종목. 연간 호환 EPS와 종목 유형별 PER 범위에 금리 부담을 적용한다. 성장률·마진·피어 배수가 없으면 부족 데이터와 낮은 신뢰도를 남긴다.
+- `ai-growth-eps-per-scenarios`: Apple, NVIDIA, Tesla 같은 성장/플랫폼 종목. 연간 호환 EPS와 종목 유형별 PER 범위에 금리 부담을 적용한다. 성장률·마진·피어 배수가 없으면 부족 데이터와 `partial` 자료 상태를 남긴다.
 
-모든 밸류에이션 ABox에는 `fairValueLow`, `fairValueBase`, `fairValueHigh`, 세 시나리오의 안전마진, `epsPeriod`, `multiplePeriod`, `valuationAsOf`, `valuationFreshnessStatus`, `valuationReliabilityScore`, `valuationInputCoveragePct`, `valuationDecisionEligible`을 저장한다. 분기 EPS와 연간 PER를 섞는 계산은 허용하지 않는다. TypeDB 저평가·고평가 규칙은 신뢰도 65점 이상, 판단 사용 가능 상태, 오래되지 않은 적정가만 사용한다. 저평가 후보는 기준 시나리오 안전마진 15% 이상이면서 보수적 시나리오 안전마진도 0% 이상이어야 한다.
+모든 밸류에이션 ABox에는 `fairValueLow`, `fairValueBase`, `fairValueHigh`, 세 시나리오의 안전마진, `epsPeriod`, `multiplePeriod`, `valuationAsOf`, `valuationFreshnessStatus`, `valuationDataState`, `valuationReliabilityState`, `valuationDecisionEligible`을 저장한다. 분기 EPS와 연간 PER를 섞는 계산은 허용하지 않는다. TypeDB 저평가·고평가 규칙은 자료 상태가 `sufficient`이고, 검증 상태가 `ready`이며, 오래되지 않은 적정가만 사용한다. 저평가 후보는 기준 시나리오 안전마진 15% 이상이면서 보수적 시나리오 안전마진도 0% 이상이어야 한다.
 
 검증 가능한 모델이 둘 이상이면 `ValuationConsensus` ABox가 기준 적정가 차이를 비교한다. 모델 간 차이가 합의 가격의 35%를 넘으면 `valuationConsensusStatus=conflict`로 저장하고 해당 사이클의 밸류에이션 매매 추론을 막는다. 모델별 결과와 부족 데이터는 그대로 남겨 사용자가 어느 가정이 충돌했는지 확인할 수 있게 한다.
 
 `aiValuationCurrentPriceAnchorEnabled`는 기본 꺼짐이다. 이 값을 켜면 마지막 수단으로 `AI 초기 기준가 = 현재가`가 생성될 수 있지만, 알림에서는 `입력 부족 · 임시 기준`으로만 보여야 한다.
 
-사용자 검토는 `valuationReviewOverrides` 설정으로 먼저 지원한다. 형식은 `MSTR,user_approved,메모` 또는 `MSTR=user_rejected`이며, 승인/수정 승인 시 AI 제안의 신뢰도를 높이고 거절 시 해당 AI 제안을 활성 밸류에이션에서 제외한다. 버튼형 검토 UI를 추가하더라도 이 설정과 같은 상태값(`user_approved`, `user_modified`, `user_rejected`)을 사용해야 한다.
+사용자 검토는 `valuationReviewOverrides` 설정으로 먼저 지원한다. 형식은 `MSTR,user_approved,메모` 또는 `MSTR=user_rejected`이며, 승인/수정 승인 시 AI 제안의 검증 상태를 높이고 거절 시 해당 AI 제안을 활성 밸류에이션에서 제외한다. 버튼형 검토 UI를 추가하더라도 이 설정과 같은 상태값(`user_approved`, `user_modified`, `user_rejected`)을 사용해야 한다.
 
 ## Graph Store Configuration
 
@@ -260,5 +260,5 @@ AI에는 다음 데이터를 함께 전달한다.
 - 새 관계가 AI 의견을 바꿔야 하면 relation properties에 `polarity`, `opinionImpact`, `riskImpact`, `supportImpact`, `aiInfluenceLabel`을 명시한다.
 - 외부 공급자 연동을 새로 추가하면 `domain/external_signal_quality.py`의 `SOURCE_KEYS`와 품질 계산도 함께 갱신한다.
 - AI 의견 품질 지표를 바꾸면 `domain/ontology_quality.py`와 `ontology_ai_opinion_samples` 소비 화면/문서를 같이 갱신한다.
-- 기존 공식 점수를 다시 최종 판단 주체로 올리지 않는다. 공식은 보조 근거로만 둔다.
+- 합산 점수나 확률을 다시 최종 판단 주체로 만들지 않는다. 원시 수치와 공식은 사실 설명 또는 밸류에이션 계산에만 사용한다.
 - TypeDB 저장 실패가 실시간 알림, snapshot 저장, notification outbox를 막으면 안 된다.

@@ -4,6 +4,12 @@ from typing import Dict, Iterable, List
 POSITIVE_ACTIONS = {"BUY", "ADD", "HOLD", "KEEP", "WATCH"}
 NEGATIVE_ACTIONS = {"SELL", "TRIM", "REDUCE", "EXIT", "CUT"}
 DECISIVE_STATUSES = {"directionally-corroborated", "directionally-contradicted"}
+CORROBORATION_STATES = (
+    "insufficient-history",
+    "mixed",
+    "more-contradicted",
+    "more-corroborated",
+)
 
 
 def number(value: object) -> float:
@@ -53,7 +59,6 @@ def performance_observations(episodes: Iterable[object]) -> List[Dict[str, objec
                 "accountId": str(episode.get("accountId") or ""),
                 "symbol": str(episode.get("symbol") or "").upper(),
                 "action": str(episode.get("action") or "HOLD").upper(),
-                "confidence": number(episode.get("confidence")),
                 "hypothesisId": str(hypothesis.get("hypothesisId") or episode.get("selectedHypothesisId") or ""),
                 "hypothesisTemplateId": str(hypothesis.get("templateId") or ""),
                 "hypothesisTemplateLabel": str(hypothesis.get("templateLabel") or hypothesis.get("claim") or ""),
@@ -69,12 +74,37 @@ def performance_observations(episodes: Iterable[object]) -> List[Dict[str, objec
     return observations
 
 
+def corroboration_state(
+    corroborated_count: int,
+    contradicted_count: int,
+    enough_samples: bool,
+) -> str:
+    if not enough_samples:
+        return "insufficient-history"
+    if corroborated_count > contradicted_count:
+        return "more-corroborated"
+    if contradicted_count > corroborated_count:
+        return "more-contradicted"
+    return "mixed"
+
+
+def action_return_state(values: Iterable[object]) -> str:
+    usable = [number(value) for value in values if value is not None]
+    if not usable:
+        return "unavailable"
+    average = sum(usable) / len(usable)
+    if average > 0:
+        return "non-negative"
+    if average < 0:
+        return "negative"
+    return "flat"
+
+
 def metric_slice(
     observations: Iterable[Dict[str, object]],
     key: str = "",
     label: str = "",
     minimum_sample_count: int = 5,
-    minimum_accuracy_pct: float = 55.0,
 ) -> Dict[str, object]:
     rows = list(observations or [])
     decisive = [item for item in rows if item.get("decisive")]
@@ -82,15 +112,11 @@ def metric_slice(
     contradicted = [item for item in decisive if not item.get("corroborated")]
     adjusted = [number(item.get("actionAdjustedReturnPct")) for item in rows if item.get("actionAdjustedReturnPct") is not None]
     negative_adjusted = [value for value in adjusted if value < 0]
-    accuracy = (len(corroborated) / len(decisive) * 100.0) if decisive else 0.0
-    brier_values = []
-    for item in decisive:
-        probability = max(0.0, min(1.0, number(item.get("confidence")) / 100.0))
-        actual = 1.0 if item.get("corroborated") else 0.0
-        brier_values.append((probability - actual) ** 2)
     avg_adjusted = sum(adjusted) / len(adjusted) if adjusted else 0.0
     enough_samples = len(decisive) >= max(1, int(minimum_sample_count or 1))
-    promotion_eligible = enough_samples and accuracy >= minimum_accuracy_pct and avg_adjusted >= 0
+    corroboration = corroboration_state(len(corroborated), len(contradicted), enough_samples)
+    return_state = action_return_state(adjusted)
+    promotion_eligible = corroboration == "more-corroborated" and return_state == "non-negative"
     return {
         "key": str(key or "all"),
         "label": str(label or key or "전체"),
@@ -100,14 +126,14 @@ def metric_slice(
         "corroboratedCount": len(corroborated),
         "contradictedCount": len(contradicted),
         "inconclusiveCount": len(rows) - len(decisive),
-        "directionalAccuracyPct": round(accuracy, 2),
         "averageRawReturnPct": round(sum(number(item.get("rawReturnPct")) for item in rows) / len(rows), 4) if rows else 0.0,
         "averageActionAdjustedReturnPct": round(avg_adjusted, 4),
         "averageDownsidePct": round(sum(negative_adjusted) / len(negative_adjusted), 4) if negative_adjusted else 0.0,
         "worstActionAdjustedReturnPct": round(min(adjusted), 4) if adjusted else 0.0,
-        "brierScore": round(sum(brier_values) / len(brier_values), 4) if brier_values else 0.0,
         "minimumSampleCount": int(minimum_sample_count or 0),
-        "sampleStatus": "usable" if enough_samples else "insufficient-sample",
+        "sampleStatus": "usable" if enough_samples else "insufficient-history",
+        "corroborationState": corroboration,
+        "actionReturnState": return_state,
         "promotionEligible": promotion_eligible,
         "governance": "human-review-required" if promotion_eligible else "not-eligible",
     }
@@ -117,7 +143,6 @@ def grouped_metrics(
     observations: List[Dict[str, object]],
     value_key: str,
     minimum_sample_count: int,
-    minimum_accuracy_pct: float,
     multi_value: bool = False,
 ) -> List[Dict[str, object]]:
     grouped: Dict[str, List[Dict[str, object]]] = {}
@@ -132,8 +157,14 @@ def grouped_metrics(
             grouped.setdefault(key, []).append(item)
             labels[key] = str(item.get("hypothesisTemplateLabel") or key) if value_key == "hypothesisTemplateId" else key
     return sorted(
-        [metric_slice(rows, key, labels.get(key, key), minimum_sample_count, minimum_accuracy_pct) for key, rows in grouped.items()],
-        key=lambda item: (int(item.get("decisiveOutcomeCount") or 0), float(item.get("directionalAccuracyPct") or 0)),
+        [metric_slice(rows, key, labels.get(key, key), minimum_sample_count) for key, rows in grouped.items()],
+        key=lambda item: (
+            {"more-corroborated": 3, "mixed": 2, "more-contradicted": 1, "insufficient-history": 0}.get(
+                str(item.get("corroborationState") or ""),
+                0,
+            ),
+            int(item.get("decisiveOutcomeCount") or 0),
+        ),
         reverse=True,
     )
 
@@ -141,7 +172,6 @@ def grouped_metrics(
 def evaluate_decision_performance(
     episodes: Iterable[object],
     minimum_sample_count: int = 5,
-    minimum_accuracy_pct: float = 55.0,
 ) -> Dict[str, object]:
     episode_rows = [episode_payload(item) for item in episodes or []]
     observations = performance_observations(episode_rows)
@@ -154,14 +184,13 @@ def evaluate_decision_performance(
         "outcomeCoveragePct": round(coverage, 2),
         "outcomeCount": len(observations),
         "minimumSampleCount": int(minimum_sample_count or 0),
-        "minimumAccuracyPct": float(minimum_accuracy_pct or 0),
-        "summary": metric_slice(observations, "all", "전체 판단", minimum_sample_count, minimum_accuracy_pct),
-        "byHorizon": grouped_metrics(observations, "horizonMinutes", minimum_sample_count, minimum_accuracy_pct),
-        "byAction": grouped_metrics(observations, "action", minimum_sample_count, minimum_accuracy_pct),
-        "byRule": grouped_metrics(observations, "ruleIds", minimum_sample_count, minimum_accuracy_pct, multi_value=True),
-        "byHypothesis": grouped_metrics(observations, "hypothesisTemplateId", minimum_sample_count, minimum_accuracy_pct),
+        "summary": metric_slice(observations, "all", "전체 판단", minimum_sample_count),
+        "byHorizon": grouped_metrics(observations, "horizonMinutes", minimum_sample_count),
+        "byAction": grouped_metrics(observations, "action", minimum_sample_count),
+        "byRule": grouped_metrics(observations, "ruleIds", minimum_sample_count, multi_value=True),
+        "byHypothesis": grouped_metrics(observations, "hypothesisTemplateId", minimum_sample_count),
         "governance": {
             "automaticDeployment": False,
-            "promotionRequires": ["minimum-sample", "directional-accuracy", "non-negative-action-adjusted-return", "human-review"],
+            "promotionRequires": ["minimum-history", "more-corroborated-outcomes", "non-negative-action-adjusted-return", "human-review"],
         },
     }

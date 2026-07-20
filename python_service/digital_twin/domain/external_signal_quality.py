@@ -1,7 +1,7 @@
 from datetime import datetime, timezone
 from typing import Dict, Iterable, List
 
-from .market_data import clamp, number
+from .market_data import number
 from .portfolio import Position
 
 
@@ -178,17 +178,23 @@ def evaluate_external_signal_quality(
     healthy_rows = [row for row in configured_rows if row["ok"] and row["itemCount"] > 0]
     source_health = (len(healthy_rows) / len(configured_rows)) if configured_rows else 1.0
     error_count = len([row for row in statuses if not row.get("ok")])
-    coverage_score = coverage["ratio"] * 100
-    source_score = source_health * 100
-    error_penalty = min(25.0, error_count * 6.0)
-    score = clamp(coverage_score * 0.45 + source_score * 0.4 + (100 - error_penalty) * 0.15, 0.0, 100.0)
+    if configured_rows and not healthy_rows:
+        data_state = "unavailable"
+    elif coverage["ratio"] < 0.5 or source_health < 0.5:
+        data_state = "insufficient"
+    elif coverage["ratio"] < 1.0 or source_health < 1.0 or error_count:
+        data_state = "partial"
+    else:
+        data_state = "sufficient"
+    coverage_state = "complete" if coverage["ratio"] >= 1.0 else ("partial" if coverage["ratio"] >= 0.5 else "insufficient")
+    source_health_state = "healthy" if source_health >= 1.0 else ("degraded" if source_health >= 0.5 else "unavailable")
     return {
         "generatedAt": utc_iso(now),
         "fetchedAt": fetched_at,
         "ageMinutes": age_minutes(fetched_at, now=now),
-        "score": round(score, 2),
-        "coverageScore": round(coverage_score, 2),
-        "sourceHealthScore": round(source_score, 2),
+        "dataState": data_state,
+        "coverageState": coverage_state,
+        "sourceHealthState": source_health_state,
         "errorCount": error_count,
         "symbolCoverage": coverage,
         "sourceCoverage": source_rows,

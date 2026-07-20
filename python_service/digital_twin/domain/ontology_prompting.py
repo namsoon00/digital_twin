@@ -4,7 +4,7 @@ from typing import Dict, List
 from .market_data import number
 from .ontology_contracts import OntologyBelief, OntologyEvidence, OntologyRelation, PortfolioOntology
 from .ontology_schema import ontology_abox, ontology_tbox
-from .ontology_threshold_policy import default_ontology_threshold_policy
+from .ontology_decision_state import evidence_role_from_relation, without_aggregate_decision_fields
 from .ontology_tbox import BOUNDED_CONTEXTS, bounded_contexts_payload
 from .portfolio import PortfolioSummary
 
@@ -24,7 +24,7 @@ def reasoning_card_data_gaps(evidence_rows: List[OntologyEvidence]) -> List[str]
     gaps: List[str] = []
     for item in evidence_rows:
         value = item.value or {}
-        if item.kind == "data-quality" and number(value.get("qualityScore")) < 60:
+        if item.kind == "data-quality" and item.data_state != "sufficient":
             gaps.append("가격·이동평균·수급 데이터 일부 부족")
         if item.kind == "market-observation" and not number(value.get("currentPrice")):
             gaps.append("현재가 미확인")
@@ -46,9 +46,7 @@ def reasoning_card_coverage_gaps(relations: List[OntologyRelation], entities: Di
 
 
 def compact_evidence_row(item: OntologyEvidence) -> Dict[str, object]:
-    payload = item.to_dict()
-    payload["confidence"] = round(number(payload.get("confidence")), 2)
-    return payload
+    return without_aggregate_decision_fields(item.to_dict())
 
 
 def compact_relation_row(item: OntologyRelation, labels: Dict[str, str]) -> Dict[str, object]:
@@ -59,9 +57,8 @@ def compact_relation_row(item: OntologyRelation, labels: Dict[str, str]) -> Dict
         "target": item.target,
         "targetLabel": labels.get(item.target, item.target),
         "type": item.relation_type,
-        "weight": round(number(item.weight), 4),
         "evidenceIds": list(item.evidence_ids or []),
-        "properties": dict(item.properties or {}),
+        "properties": without_aggregate_decision_fields(dict(item.properties or {})),
     }
 
 
@@ -70,7 +67,7 @@ def compact_entity_row(item) -> Dict[str, object]:
         "id": item.entity_id,
         "label": item.label,
         "kind": item.kind,
-        "properties": dict(item.properties or {}),
+        "properties": without_aggregate_decision_fields(dict(item.properties or {})),
     }
 
 
@@ -220,11 +217,11 @@ def build_reasoning_cards(graph: PortfolioOntology) -> List[Dict[str, object]]:
             "finalOpinion": {
                 "action": opinion_payload.get("action") or "",
                 "tone": opinion_payload.get("tone") or "",
-                "ontologyPressure": opinion_payload.get("ontology_pressure") or opinion_payload.get("ontologyPressure") or 0,
-                "conviction": opinion_payload.get("conviction") or 0,
+                "reviewLevel": opinion_payload.get("review_level") or opinion_payload.get("reviewLevel") or "check",
+                "dataState": opinion_payload.get("data_state") or opinion_payload.get("dataState") or "partial",
+                "validationState": opinion_payload.get("validation_state") or opinion_payload.get("validationState") or "conditional",
                 "thesis": opinion_payload.get("thesis") or "",
             },
-            "legacyModel": dict(opinion_payload.get("legacy_model") or opinion_payload.get("legacyModel") or {}),
             "relationInfluences": list(opinion_payload.get("relation_influences") or opinion_payload.get("relationInfluences") or []),
             "executionPlans": execution_plans,
             "strategyEvidence": [compact_evidence_row(item) for item in evidence_rows],
@@ -244,7 +241,7 @@ def build_reasoning_cards(graph: PortfolioOntology) -> List[Dict[str, object]]:
             "aiInference": {
                 "role": "ontology-first-investment-opinion",
                 "promptVersion": ONTOLOGY_PROMPT_VERSION,
-                "legacyModelRole": "not-used-for-scoring",
+                "stateContract": "review-data-change-evidence-validation",
                 "question": "전략 근거와 관계 근거를 함께 읽고 보유/관심 상태에 맞는 투자 의견, 반대 신호, 다음 검증 순서를 설명합니다.",
             },
         })
@@ -276,7 +273,7 @@ def build_ai_inference_packet(graph: PortfolioOntology) -> Dict[str, object]:
         "contract": "investment-ontology-ai-inference-v1",
         "promptVersion": ONTOLOGY_PROMPT_VERSION,
         "role": "ontology-first-investment-opinion",
-        "legacyModelRole": "not-used-for-scoring",
+        "stateContract": "review-data-change-evidence-validation",
         "notificationRole": "insight-driven-dispatch",
         "inputOrder": ["tbox", "boundedContexts", "ruleBox", "abox", "inferenceBox", "derivedRelations", "inferenceTraces", "investmentQuestions", "hypothesisSets", "decisionEpisodes", "decisionPerformance", "observedOutcomes", "operationalOntology", "temporalWindows", "coverageGaps", "macroRegimes", "marketProxyContext", "cryptoExposures", "valuationContext", "newsQuality", "reasoningCards", "relationInfluences", "researchEvidence", "signalTransitions", "factorExposure", "liquidityConstraints", "insights", "activeInvestmentOpinions", "executionPlans", "relations", "evidence", "beliefs", "opinions"],
         "reasoningCardCount": len(graph.reasoning_cards),
@@ -313,11 +310,11 @@ def build_ai_inference_packet(graph: PortfolioOntology) -> Dict[str, object]:
             "portfolioView": "string",
             "relationThesis": "string",
             "companyOpinions": ["symbol", "action", "thesis", "relationInfluences", "executionPlan", "contradictions", "nextChecks"],
-            "activeInvestmentOpinions": ["symbol", "action", "conviction", "evidence", "counterEvidence", "executionPlan", "invalidationCondition"],
+            "activeInvestmentOpinions": ["symbol", "action", "reviewLevel", "dataState", "validationState", "evidence", "counterEvidence", "executionPlan", "invalidationCondition"],
             "executionPlans": ["symbol", "primaryAction", "decisionDrivers", "blockedActions", "riskSignals", "supportSignals", "counterSignals", "strengthenConditions", "weakenConditions", "nextChecks"],
-            "insightDispatch": ["subject", "insightType", "novelty", "confidence", "dispatchDecision"],
+            "insightDispatch": ["subject", "insightType", "changeState", "deliveryState", "dispatchDecision"],
             "missingDataImpact": ["string"],
-            "hypothesisComparison": ["hypothesisId", "claim", "supportingEvidenceIds", "counterEvidenceIds", "verdict", "confidence"],
+            "hypothesisComparison": ["hypothesisId", "claim", "supportingEvidenceIds", "counterEvidenceIds", "evidenceState", "verdict"],
             "selectedHypothesisId": "string",
             "unresolvedQuestions": ["string"],
         },
@@ -325,7 +322,7 @@ def build_ai_inference_packet(graph: PortfolioOntology) -> Dict[str, object]:
             "제공된 TBox, ABox, reasoning card, 관계 행만 사용합니다.",
             "RuleBox의 조건과 InferenceBox의 파생 관계를 우선 읽고, 어떤 규칙이 결론을 만들었는지 설명합니다.",
             "보유 종목 HOLDS와 관심 종목 WATCHES를 다른 판단 단계로 설명합니다.",
-            "최종 점수는 관계 규칙과 관계 근거로만 계산합니다.",
+            "합산 점수나 확률을 만들지 말고 확인 단계, 자료 상태, 변화, 근거 역할로 판단합니다.",
             "알림 타입 이름보다 온톨로지 인사이트, 신규성, 쿨다운, 억제 정책을 우선합니다.",
             "BUY, ADD, HOLD, TRIM, SELL, AVOID 중 하나의 투자 의견을 고르되 자동 주문 지시로 표현하지 않습니다.",
             "뉴스·공시·SEC/OpenDART 출처와 반대 근거, 무효화 조건을 함께 제시합니다.",
@@ -336,7 +333,7 @@ def build_ai_inference_packet(graph: PortfolioOntology) -> Dict[str, object]:
             "macroRegimes와 cryptoExposures는 종목 가격 신호의 상위 환경으로만 사용하고 단독 매수·매도 결론으로 쓰지 않습니다.",
             "marketProxyContext는 위험선호, 금리, 크레딧, IPO, 변동성, 달러, 원자재, 섹터 사이클의 배경 맥락이며 단독 매수·매도 결론으로 쓰지 않습니다.",
             "최소 세 개의 경쟁 가설을 지지·반대 근거로 비교하고, 과거 DecisionEpisode와 ObservedOutcome에서 반복 반증된 가설을 그대로 재사용하지 않습니다.",
-            "hypothesis-calibration은 서로 다른 판단 에피소드의 사후 결과 표본입니다. 표본이 3개 미만이면 점수를 조정하지 않고, 그 이상이어도 제안된 보정치를 설명에만 반영하며 규칙을 자동 변경하지 않습니다.",
+            "hypothesis-calibration은 서로 다른 판단 에피소드의 사후 결과 표본입니다. 표본이 3개 미만이면 상태 계약을 바꾸지 않고, 그 이상이어도 제안된 보정은 설명에만 반영하며 규칙을 자동 변경하지 않습니다.",
         ],
     }
 
@@ -349,8 +346,7 @@ def portfolio_worldview(
     risk_count = len([item for item in graph.beliefs if item.polarity == "risk"])
     support_count = len([item for item in graph.beliefs if item.polarity == "support"])
     contradictions = sum(len(item.contradictions) for item in graph.opinions)
-    pressure_policy = default_ontology_threshold_policy().score_breakdown
-    high_pressure = [item.symbol for item in graph.opinions if item.ontology_pressure >= pressure_policy.high_ontology_pressure_score]
+    action_required = [item.symbol for item in graph.opinions if item.review_level in {"act", "immediate", "blocked"}]
     relation_influence_count = sum(len(item.relation_influences or []) for item in graph.opinions)
     pipeline_nodes = [item for item in graph.entities if item.kind == "data-pipeline"]
     insight_nodes = [item for item in graph.entities if item.kind == "insight"]
@@ -388,7 +384,7 @@ def portfolio_worldview(
         "ontologyRelationBoxCounts": ontology_relation_box_counts,
         "boundedContexts": bounded_contexts_payload(),
         "aboxBoundedContextCounts": bounded_context_counts,
-        "legacyModelRole": "not-used-for-scoring",
+        "stateContract": "review-data-change-evidence-validation",
         "dominantSector": top_sector.get("sector") or "",
         "dominantSectorRatio": number(top_sector.get("ratio")) if top_sector else 0.0,
         "cash": number(portfolio.cash),
@@ -409,36 +405,18 @@ def portfolio_worldview(
                 for item in pipeline_nodes
             ],
         },
-        "highPressureSymbols": high_pressure,
+        "actionRequiredSymbols": action_required,
         "externalSignalKeys": sorted(str(key) for key in external_signals.keys()) if isinstance(external_signals, dict) else [],
     }
 
 
-def relation_influence_score(relation: OntologyRelation) -> (float, float):
-    properties = relation.properties or {}
-    polarity = str(properties.get("polarity") or properties.get("signalPolarity") or "").lower()
-    if polarity == "context":
-        return 0.0, 0.0
-    risk = number(properties.get("opinionImpact") or properties.get("riskImpact") or properties.get("impactScore"))
-    support = number(properties.get("supportImpact"))
-    if not risk and polarity == "risk":
-        risk = number(relation.weight) * 8
-    if not support and polarity == "support":
-        support = number(relation.weight) * 8
-    if relation.relation_type in {"CONTRADICTS", "EXPOSED_TO"} and not support:
-        risk = max(risk, number(relation.weight) * (12 if relation.relation_type == "CONTRADICTS" else 8))
-    if relation.relation_type == "SUPPORTED_BY" and not risk:
-        support = max(support, number(relation.weight) * 8)
-    return max(0.0, risk), max(0.0, support)
-
-
-def prompt_relation_priority(item: OntologyRelation) -> float:
+def prompt_relation_sort_key(item: OntologyRelation):
     if (item.properties or {}).get("ontologyBox") == "TBox":
-        return -100.0
-    risk, support = relation_influence_score(item)
+        return (0, 0, 0, 0, relation_key(item))
     properties = item.properties or {}
-    priority = max(risk, support) + number(item.weight) * 10
-    if item.relation_type in {
+    box_order = {"InferenceBox": 3, "ABox": 2, "RuleBox": 1}.get(str(properties.get("ontologyBox") or "ABox"), 1)
+    role_order = {"blocking": 5, "risk": 4, "counter": 3, "support": 2, "context": 1}.get(evidence_role_from_relation(properties), 0)
+    focus = item.relation_type in {
         "CHANGED_FROM",
         "CONFIRMED_OVER",
         "FAILED_AFTER",
@@ -460,42 +438,35 @@ def prompt_relation_priority(item: OntologyRelation) -> float:
         "HAS_COVERAGE_GAP",
         "HAS_MACRO_REGIME",
         "HAS_CRYPTO_EXPOSURE",
-    }:
-        priority += 18
-    if properties.get("polarity") in {"risk", "support"}:
-        priority += 8
-    if ontology_box(properties) == "InferenceBox":
-        priority += 22
-    return priority
+    }
+    return (box_order, role_order, 1 if focus else 0, 1 if item.evidence_ids else 0, relation_key(item))
 
 
-def prompt_evidence_priority(item: OntologyEvidence) -> float:
+def prompt_evidence_sort_key(item: OntologyEvidence):
     payload = item.value or {}
-    impact = number(payload.get("impactScore") or payload.get("impact_score"))
-    polarity = str(payload.get("polarity") or "")
-    priority = number(item.confidence) * 20 + impact
-    if polarity in {"risk", "support"}:
-        priority += 10
-    if item.kind in {"disclosure", "filing", "news", "market-move", "financial-fact"}:
-        priority += 8
-    if item.kind == "inference-trace" or ontology_box(payload) == "InferenceBox":
-        priority += 18
-    return priority
+    kind_order = {
+        "inference-trace": 8,
+        "disclosure": 7,
+        "filing": 7,
+        "financial-fact": 6,
+        "market-move": 5,
+        "news": 4,
+        "data-quality": 3,
+    }.get(item.kind, 1)
+    box_order = 2 if ontology_box(payload) == "InferenceBox" else 1
+    freshness = str(payload.get("publishedAt") or payload.get("asOf") or payload.get("updatedAt") or "")
+    return (box_order, kind_order, 1 if item.summary else 0, freshness, item.evidence_id)
 
 
-def prompt_belief_priority(item: OntologyBelief) -> float:
-    priority = number(item.confidence) * 20
-    if item.polarity == "risk":
-        priority += 8
-    if item.polarity == "support":
-        priority += 4
-    return priority
+def prompt_belief_sort_key(item: OntologyBelief):
+    polarity_order = {"risk": 3, "support": 2, "context": 1}.get(item.polarity, 0)
+    return (polarity_order, 1 if item.evidence_ids else 0, item.belief_id)
 
 
 def prompt_payload(graph: PortfolioOntology) -> Dict[str, object]:
-    relations = sorted(graph.relations, key=prompt_relation_priority, reverse=True)
-    evidence = sorted(graph.evidence, key=prompt_evidence_priority, reverse=True)
-    beliefs = sorted(graph.beliefs, key=prompt_belief_priority, reverse=True)
+    relations = sorted(graph.relations, key=prompt_relation_sort_key, reverse=True)
+    evidence = sorted(graph.evidence, key=prompt_evidence_sort_key, reverse=True)
+    beliefs = sorted(graph.beliefs, key=prompt_belief_sort_key, reverse=True)
     inferencebox = inferencebox_payload(graph)
     return {
         "tbox": ontology_tbox(),
@@ -567,13 +538,13 @@ def build_investment_opinion_prompt(graph: PortfolioOntology) -> str:
         "너는 투자전략 관계 분석 데이터를 읽는 AI 투자 의견 리뷰어다.",
         "규칙 구조는 투자 핵심, 관측 데이터, 전략 가설, 리스크, 추론 인사이트, 운영/알림 바운디드 컨텍스트와 RuleBox로 나뉜 세계관이다.",
         "현재 데이터는 계좌의 실제 보유, 근거, 판단 근거, 운영 정책, 의견 기록이며 InferenceBox는 RuleBox가 파생한 관계와 추론 경로다.",
-        "하나의 최고 점수를 답으로 쓰지 말고 위험 지속, 회복·지지, 데이터 불확실성 가설을 동시에 비교한 뒤 가장 설명력이 높은 잠정 가설을 선택해라.",
+        "위험 지속, 회복·지지, 데이터 불확실성 가설을 동시에 비교한 뒤 현재 사실을 가장 잘 설명하는 잠정 가설을 선택해라.",
         "과거 DecisionEpisode, ObservedOutcome, hypothesis-calibration을 읽어 반복 반증된 가정과 규칙을 경고하되 표본 3건 미만의 보정값은 사용하지 말고, 답하지 못한 질문은 다음 수집 과제로 남겨라.",
         "제공된 근거 안에서 BUY, ADD, HOLD, TRIM, SELL, AVOID 중 하나의 투자 의견을 반드시 고르되 자동 주문 지시로 표현하지 마라.",
-        "최종 판단과 점수는 관계 규칙과 근거 충돌을 기준으로 설명해라.",
+        "최종 판단은 확인 단계, 자료 상태, 변화, 근거 충돌을 기준으로 설명하고 숫자 점수나 확률을 만들지 마라.",
         "뉴스, 공시, SEC/OpenDART 근거와 출처 URL을 적극적으로 반영하고, 반대 근거와 무효화 조건을 함께 제시해라.",
         "새 관측값이나 관계가 추가되면 어떤 RuleBox 조건이 켜지고 어떤 InferenceBox 관계가 생겨 투자 가설, 리스크, 인사이트, 알림 정책에 영향을 주는지 먼저 추론해라.",
-        "알림은 알림 타입별 주기가 아니라 온톨로지 인사이트의 신규성, 신뢰도, 쿨다운, 억제 정책으로 설명해라.",
+        "알림은 알림 타입별 주기가 아니라 새 조건·방향 변경·새 근거 여부와 쿨다운·억제 정책으로 설명해라.",
         "계좌번호, API 키, 토큰, 개인 식별정보를 추정하거나 요청하지 마라.",
         "응답 섹션은 반드시 투자 관점, 핵심 관계, 보유 이유와 반대 신호, 종목별 의견, 다음 검증 순서로 작성해라.",
         "",

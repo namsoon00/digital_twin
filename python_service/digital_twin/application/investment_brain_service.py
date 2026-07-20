@@ -485,12 +485,12 @@ class InvestmentBrainService:
                     if not isinstance(payload, dict):
                         continue
                     item = position_from_payload(payload, item_symbol, source)
-                    score = subject_match_score(message, requested_symbol, item)
-                    if score:
-                        candidates.append((score, state, item, source))
+                    match_kind = subject_match_kind(message, requested_symbol, item)
+                    if match_kind != "none":
+                        candidates.append((match_kind, state, item, source))
         if not candidates:
             return {}, None, ""
-        _, state, item, source = max(candidates, key=lambda row: row[0])
+        _, state, item, source = max(candidates, key=lambda row: subject_match_priority(row[0]))
         return state, item, source
 
     def load_relation_context(self, state: Dict[str, object], position: Position, source: str) -> Dict[str, object]:
@@ -614,17 +614,21 @@ def subject_from_notification_graph_context(
     return state, position, "notification-graph-context"
 
 
-def subject_match_score(message: str, requested_symbol: str, position: Position) -> int:
+def subject_match_kind(message: str, requested_symbol: str, position: Position) -> str:
     if requested_symbol and requested_symbol == position.symbol.upper():
-        return 100
+        return "exact"
     compact = str(message or "").lower().replace(" ", "")
     symbol = position.symbol.lower().replace(" ", "")
     name = position.name.lower().replace(" ", "")
     if symbol and symbol in compact:
-        return 90
+        return "symbol"
     if name and name in compact:
-        return 80
-    return 0
+        return "name"
+    return "none"
+
+
+def subject_match_priority(match_kind: str) -> int:
+    return ("none", "name", "symbol", "exact").index(str(match_kind or "none"))
 
 
 def answer_text(payload: Dict[str, object]) -> str:

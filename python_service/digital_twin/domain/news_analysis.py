@@ -3,7 +3,6 @@ import re
 from typing import Dict, Iterable, List, Tuple
 
 from .market_data import clamp, number
-from .ontology_threshold_policy import default_ontology_threshold_policy
 
 
 NEWS_ANALYSIS_VERSION = "news-analysis-v3-entity-linking"
@@ -346,14 +345,219 @@ NUMERIC_TOKEN_RE = re.compile(
     re.IGNORECASE,
 )
 
+NEWS_RELEVANCE_STATE_LABELS = {
+    "direct": "종목 직접 관련",
+    "related": "종목과 연결된 내용",
+    "context": "시장·업종 참고",
+    "unrelated": "투자 판단에서 제외",
+}
+NEWS_SOURCE_TRUST_STATE_LABELS = {
+    "trusted": "출처 확인됨",
+    "standard": "일반 출처",
+    "limited": "출처 제한",
+    "unknown": "출처 확인 필요",
+}
+NEWS_MATERIALITY_STATE_LABELS = {
+    "material": "투자 판단에 중요한 사건",
+    "notable": "확인할 가치가 있는 변화",
+    "context": "참고 정보",
+}
+
+# These orders are deterministic tie-breakers for article selection. They are
+# deliberately not exposed as investment scores or probabilities.
+NEWS_RELEVANCE_STATE_ORDER = ("unrelated", "context", "related", "direct")
+NEWS_SOURCE_TRUST_STATE_ORDER = ("unknown", "limited", "standard", "trusted")
+NEWS_MATERIALITY_STATE_ORDER = ("context", "notable", "material")
+PUBLIC_NEWS_RETIRED_FIELDS = {
+    "confidence",
+    "confidenceScore",
+    "dataQualityRiskScore",
+    "impactScore",
+    "impact_score",
+    "materialityScore",
+    "materiality_score",
+    "relevanceScore",
+    "relevance_score",
+    "sourceReliability",
+    "source_reliability",
+    "stockImpactScore",
+    "stock_impact_score",
+}
+
+
+def news_relevance_state(relation_scope: object, relevance_score: object = 0) -> str:
+    scope = str(relation_scope or "").strip().lower()
+    if scope == "direct":
+        return "direct"
+    if scope in {"related_product", "peer", "sector"}:
+        return "related"
+    if scope == "market":
+        return "context"
+    if number(relevance_score) >= 80:
+        return "direct"
+    if number(relevance_score) >= 50:
+        return "related"
+    if number(relevance_score) >= 35:
+        return "context"
+    return "unrelated"
+
+
+def news_source_trust_state(source_reliability: object) -> str:
+    """Map legacy persisted source values into the public categorical state.
+
+    Older rows can still contain a numeric source reliability.  New analysis
+    never emits it, but this migration helper lets old rows participate in the
+    same state-based policy until retention removes them.
+    """
+    reliability = number(source_reliability)
+    if reliability > 1:
+        reliability /= 100.0
+    if reliability >= 0.8:
+        return "trusted"
+    if reliability >= 0.6:
+        return "standard"
+    if reliability > 0:
+        return "limited"
+    return "unknown"
+
+
+def source_trust_state_for_source(source: object, provider: object = "") -> str:
+    """Classify a publisher without manufacturing a reliability score."""
+    source_text = _lower_text(source)
+    provider_text = _lower_text(provider)
+    text = source_text + " " + provider_text
+    if source_is_social_feed(source, provider):
+        return "limited"
+    if any(token in text for token in LOW_RELIABILITY_SOURCE_TERMS):
+        return "limited"
+    if any(token in text for token in HIGH_RELIABILITY_SOURCE_TERMS):
+        return "trusted"
+    if any(token in text for token in MEDIUM_RELIABILITY_SOURCE_TERMS):
+        return "standard"
+    if any(token in provider_text for token in ["google news", "google_rss", "gdelt"]):
+        return "standard"
+    if any(token in text for token in ["yahoo finance", "investing"]):
+        return "standard"
+    return "standard"
+
+
+def news_materiality_state(
+    event_type: object,
+    materiality_score: object = 0,
+    *,
+    relation_scope: object = "",
+    impact_polarity: object = "",
+    source_trust_state: object = "",
+) -> str:
+    explicit_state = str(materiality_score or "").strip().lower()
+    if explicit_state in NEWS_MATERIALITY_STATE_ORDER:
+        return explicit_state
+    event = str(event_type or "").strip().lower()
+    materiality = number(materiality_score)
+    if materiality >= 75 or (materiality >= 65 and event in {"earnings", "guidance", "regulation", "capital_policy"}):
+        return "material"
+    if materiality >= 55:
+        return "notable"
+    scope = str(relation_scope or "").strip().lower()
+    polarity = str(impact_polarity or "").strip().lower()
+    trust = str(source_trust_state or "").strip().lower()
+    if scope == "direct" and event in {"earnings", "guidance", "regulation", "capital_policy"}:
+        return "notable" if trust in {"limited", "unknown"} else "material"
+    if scope == "direct" and polarity in {"risk", "support", "mixed"}:
+        return "notable"
+    if scope in {"related_product", "peer", "sector"}:
+        return "notable" if event in {"earnings", "guidance", "regulation", "capital_policy"} else "context"
+    return "context"
+
+
+def news_state_payload(payload: Dict[str, object]) -> Dict[str, str]:
+    payload = payload if isinstance(payload, dict) else {}
+    relevance_state = str(payload.get("relevanceState") or "").strip().lower() or news_relevance_state(
+        payload.get("relationScope"), payload.get("relevanceScore")
+    )
+    source_trust_state = str(payload.get("sourceTrustState") or "").strip().lower()
+    if not source_trust_state:
+        legacy_source_reliability = payload.get("sourceReliability")
+        source_trust_state = news_source_trust_state(legacy_source_reliability)
+        if source_trust_state == "unknown" and legacy_source_reliability in (None, ""):
+            source_trust_state = source_trust_state_for_source(
+                payload.get("source") or payload.get("domain"),
+                payload.get("provider"),
+            )
+    materiality_state = str(payload.get("materialityState") or "").strip().lower() or news_materiality_state(
+        payload.get("eventType"),
+        payload.get("materialityScore"),
+        relation_scope=payload.get("relationScope"),
+        impact_polarity=payload.get("stockImpactPolarity") or payload.get("impactPolarity") or payload.get("polarity"),
+        source_trust_state=source_trust_state,
+    )
+    excluded = bool(payload.get("excludedReason")) or relevance_state == "unrelated"
+    body_read = str(payload.get("articleReadStatus") or payload.get("readScope") or "").strip().lower() in {
+        "body", "full", "full-body", "article-body"
+    }
+    data_state = "insufficient" if excluded else "sufficient" if body_read and relevance_state == "direct" else "partial"
+    validation_state = "blocked" if excluded else "ready" if data_state == "sufficient" and source_trust_state in {"trusted", "standard"} else "conditional"
+    data_state = str(payload.get("dataState") or data_state).strip().lower()
+    validation_state = str(payload.get("validationState") or validation_state).strip().lower()
+    if relevance_state not in NEWS_RELEVANCE_STATE_ORDER:
+        relevance_state = "unrelated"
+    if source_trust_state not in NEWS_SOURCE_TRUST_STATE_ORDER:
+        source_trust_state = "unknown"
+    if materiality_state not in NEWS_MATERIALITY_STATE_ORDER:
+        materiality_state = "context"
+    if data_state not in {"sufficient", "partial", "insufficient", "unavailable"}:
+        data_state = "partial"
+    if validation_state not in {"ready", "conditional", "blocked"}:
+        validation_state = "conditional"
+    return {
+        "relevanceState": relevance_state,
+        "sourceTrustState": source_trust_state,
+        "materialityState": materiality_state,
+        "dataState": data_state,
+        "validationState": validation_state,
+    }
+
+
+def news_state_rank(payload: Dict[str, object]) -> tuple:
+    """Return a categorical ordering key used only to choose article order."""
+    states = news_state_payload(payload)
+    relevance_rank = NEWS_RELEVANCE_STATE_ORDER.index(states["relevanceState"])
+    trust_rank = NEWS_SOURCE_TRUST_STATE_ORDER.index(states["sourceTrustState"])
+    materiality_rank = NEWS_MATERIALITY_STATE_ORDER.index(states["materialityState"])
+    validation_rank = {"blocked": 0, "conditional": 1, "ready": 2}.get(states["validationState"], 0)
+    return materiality_rank, relevance_rank, trust_rank, validation_rank
+
+
+def _without_retired_news_fields(value: object) -> object:
+    if isinstance(value, dict):
+        return {
+            str(key): _without_retired_news_fields(item)
+            for key, item in value.items()
+            if str(key) not in PUBLIC_NEWS_RETIRED_FIELDS
+        }
+    if isinstance(value, list):
+        return [_without_retired_news_fields(item) for item in value]
+    if isinstance(value, tuple):
+        return [_without_retired_news_fields(item) for item in value]
+    return value
+
+
+def public_news_payload(payload: Dict[str, object]) -> Dict[str, object]:
+    """Keep article facts and categorical states while removing retired scores."""
+    source = dict(payload or {})
+    source.update(news_state_payload(source))
+    return _without_retired_news_fields(source)
+
 
 @dataclass(frozen=True)
 class NewsAnalysis:
-    relevance_score: float
     relation_scope: str
-    source_reliability: float
     event_type: str
-    materiality_score: float
+    relevance_state: str = "context"
+    source_trust_state: str = "unknown"
+    materiality_state: str = "context"
+    data_state: str = "partial"
+    validation_state: str = "conditional"
     ontology_relations: List[Dict[str, object]] = field(default_factory=list)
     matched_aliases: List[str] = field(default_factory=list)
     mentioned_peers: List[str] = field(default_factory=list)
@@ -368,31 +572,26 @@ class NewsAnalysis:
     entity_links: List[Dict[str, object]] = field(default_factory=list)
     quality_gate: Dict[str, object] = field(default_factory=dict)
 
-    def confidence(self) -> float:
-        policy = default_ontology_threshold_policy().news_impact
-        if self.excluded_reason:
-            return policy.excluded_confidence
-        return round(clamp(
-            self.relevance_score / 100 * 0.45
-            + self.source_reliability * 0.35
-            + self.materiality_score / 100 * 0.20,
-            policy.confidence_floor,
-            policy.confidence_cap,
-        ), 2)
-
     def to_payload(self) -> Dict[str, object]:
-        return {
+        states = news_state_payload({
+            "relationScope": self.relation_scope,
+            "eventType": self.event_type,
+            "excludedReason": self.excluded_reason,
+            "relevanceState": self.relevance_state,
+            "sourceTrustState": self.source_trust_state,
+            "materialityState": self.materiality_state,
+            "dataState": self.data_state,
+            "validationState": self.validation_state,
+        })
+        return public_news_payload({
             "analysisVersion": NEWS_ANALYSIS_VERSION,
-            "relevanceScore": round(number(self.relevance_score), 1),
             "relationScope": self.relation_scope,
             "matchedAliases": list(self.matched_aliases),
             "mentionedPeers": list(self.mentioned_peers),
             "topicTags": list(self.topic_tags),
             "marketTopics": list(self.market_topics),
-            "sourceReliability": round(number(self.source_reliability), 2),
             "directMention": bool(self.direct_mention),
             "eventType": self.event_type,
-            "materialityScore": round(number(self.materiality_score), 1),
             "ontologyRelations": list(self.ontology_relations),
             "excludedReason": self.excluded_reason,
             "analysisSummary": self.summary(),
@@ -402,7 +601,8 @@ class NewsAnalysis:
             "sourcePlatform": self.source_platform,
             "entityLinks": list(self.entity_links),
             "qualityGate": dict(self.quality_gate or {}),
-        }
+            **states,
+        })
 
     def summary(self) -> str:
         scope = {
@@ -433,7 +633,16 @@ class NewsAnalysis:
         }.get(self.event_type, self.event_type)
         if self.excluded_reason:
             return scope + " · 제외 사유: " + self.excluded_reason
-        return scope + " · " + event + " · 관련성 " + ("%.1f" % self.relevance_score) + "점"
+        return scope + " · " + event + " · " + self.relevance_state_label()
+
+    def relevance_state_label(self) -> str:
+        return {
+            "direct": "종목에 직접 관련",
+            "related_product": "연결 상품 관련",
+            "peer": "비교 기업 관련",
+            "sector": "같은 업종 관련",
+            "market": "시장 환경 참고",
+        }.get(self.relation_scope, "투자 관련성이 낮음")
 
 
 def _lower_text(value: object) -> str:
@@ -492,7 +701,12 @@ def relation_scope_is_excluded(scope: object) -> bool:
 def analysis_payload_requires_refresh(payload: Dict[str, object]) -> bool:
     payload = payload if isinstance(payload, dict) else {}
     version = str(payload.get("analysisVersion") or "").strip()
-    return (bool(version) and version != NEWS_ANALYSIS_VERSION) or not str(payload.get("relationScope") or "").strip()
+    required_states = ("relevanceState", "sourceTrustState", "materialityState", "dataState", "validationState")
+    return (
+        (bool(version) and version != NEWS_ANALYSIS_VERSION)
+        or not str(payload.get("relationScope") or "").strip()
+        or any(not str(payload.get(key) or "").strip() for key in required_states)
+    )
 
 
 def source_identity(source: object, provider: object = "") -> Dict[str, object]:
@@ -565,7 +779,7 @@ def entity_link_rows(
     rows: List[Dict[str, object]] = []
     symbol = target_symbol(target)
 
-    def add(entity: str, role: str, terms: Iterable[str], confidence: float, reason: str = "") -> None:
+    def add(entity: str, role: str, terms: Iterable[str], link_state: str, reason: str = "") -> None:
         clean_terms = _unique_texts(terms)
         if not entity or not clean_terms:
             return
@@ -573,23 +787,23 @@ def entity_link_rows(
             "entity": entity,
             "role": role,
             "terms": clean_terms,
-            "confidence": round(clamp(confidence, 0.0, 1.0), 2),
+            "linkState": link_state,
             "reason": reason,
         })
 
-    add(symbol, "target_subject", direct_title, 0.95, "제목 본문 영역에서 대상 종목명이 확인됨")
-    add(symbol, "target_context", direct_body, 0.72, "요약/본문 영역에서 대상 종목명이 확인됨")
-    add(symbol, "platform_reference", platform_alias_hits, 0.15, "회사명이 아니라 게시 플랫폼/출처명에서 감지됨")
-    add(symbol, "related_product_context", related_product_hits, 0.68, "대상 종목과 연결된 상품/증권 라인이 기사 주어로 확인됨")
-    add("peer_or_other_company", "peer_context", peer_hits, 0.62, "비교 기업 또는 동종 기업명이 확인됨")
-    add("other_company", "article_subject", other_company_hits, 0.78, "기사 제목의 주어가 다른 회사로 보임")
+    add(symbol, "target_subject", direct_title, "confirmed", "제목 본문 영역에서 대상 종목명이 확인됨")
+    add(symbol, "target_context", direct_body, "mentioned", "요약/본문 영역에서 대상 종목명이 확인됨")
+    add(symbol, "platform_reference", platform_alias_hits, "ambiguous", "회사명이 아니라 게시 플랫폼/출처명에서 감지됨")
+    add(symbol, "related_product_context", related_product_hits, "linked", "대상 종목과 연결된 상품/증권 라인이 기사 주어로 확인됨")
+    add("peer_or_other_company", "peer_context", peer_hits, "related", "비교 기업 또는 동종 기업명이 확인됨")
+    add("other_company", "article_subject", other_company_hits, "other-subject", "기사 제목의 주어가 다른 회사로 보임")
     identity = source_identity(source, provider)
     if identity.get("sourcePlatform"):
         rows.append({
             "entity": str(identity.get("sourcePlatform")),
             "role": "publishing_platform",
             "terms": [str(identity.get("sourcePlatform"))],
-            "confidence": 0.98,
+            "linkState": "source",
             "reason": "출처/게시 플랫폼으로 정규화됨",
         })
     return rows
@@ -726,7 +940,7 @@ def article_sentence_candidates(text: object, target: object, analysis: Dict[str
         *RISK_KEYWORDS,
         *EVENT_TYPE_KEYWORDS.get(str(analysis.get("eventType") or ""), []),
     ]
-    scored: List[Tuple[float, int, str]] = []
+    ranked: List[Tuple[float, int, str]] = []
     for index, raw in enumerate(raw_parts[:80]):
         sentence = compact_text(raw, 180)
         if len(sentence) < 24:
@@ -734,13 +948,13 @@ def article_sentence_candidates(text: object, target: object, analysis: Dict[str
         if is_news_boilerplate_sentence(sentence):
             continue
         lowered = _lower_text(sentence)
-        score = max(0.0, 12.0 - index * 0.25)
-        score += sum(4.0 for term in terms if _keyword_in_lowered_text(term, lowered))
-        score += min(8.0, len(numeric_highlights(sentence, 4)) * 2.0)
-        scored.append((score, index, sentence))
-    scored.sort(key=lambda item: (-item[0], item[1]))
+        priority = max(0.0, 12.0 - index * 0.25)
+        priority += sum(4.0 for term in terms if _keyword_in_lowered_text(term, lowered))
+        priority += min(8.0, len(numeric_highlights(sentence, 4)) * 2.0)
+        ranked.append((priority, index, sentence))
+    ranked.sort(key=lambda item: (-item[0], item[1]))
     result: List[str] = []
-    for _score, _index, sentence in scored:
+    for _priority, _index, sentence in ranked:
         if sentence not in result:
             result.append(sentence)
         if len(result) >= limit:
@@ -1174,8 +1388,7 @@ def impact_channel_text(event_type: object, text: object) -> str:
     return "가격을 움직일 만큼 구체적인 사건인지 원문과 다음 가격 반응으로 확인해야 합니다"
 
 
-def impact_watch_text(impact: str, materiality: float, text: object) -> str:
-    policy = default_ontology_threshold_policy().news_impact
+def impact_watch_text(impact: str, materiality_state: object, text: object) -> str:
     lowered = _lower_text(text)
     if impact == "positive":
         return "호재라면 가격 상승이 거래량 증가와 함께 이어지는지 확인하세요"
@@ -1183,7 +1396,7 @@ def impact_watch_text(impact: str, materiality: float, text: object) -> str:
         return "악재라면 하락이 하루짜리 반응인지, 거래량을 동반한 재평가인지 확인하세요"
     if re.search(r"trading volume|거래량|거래대금", lowered):
         return "거래가 늘어난 이유가 매수 수요인지 단순 변동성인지 가격 반응으로 확인하세요"
-    if materiality >= policy.materiality_watch_score:
+    if str(materiality_state or "") in {"material", "notable"}:
         return "중요도는 높지만 방향은 단정하지 말고 당일·익일 가격과 거래량 반응을 보세요"
     return "방향성이 약하므로 다른 가격·수급 신호와 같이 봐야 합니다"
 
@@ -1195,11 +1408,10 @@ def stock_impact_analysis(
     feed_summary: object = "",
     analysis: Dict[str, object] = None,
     polarity: str = "",
-    impact_score: object = 0,
 ) -> Dict[str, object]:
     analysis = analysis if isinstance(analysis, dict) else {}
     text = str(title or "") + " " + str(article_text or feed_summary or "")
-    detected_polarity = str(polarity or "").strip() or keyword_polarity(text)[0]
+    detected_polarity = str(polarity or "").strip() or keyword_polarity(text)
     if detected_polarity == "support":
         impact = "positive"
         label = "호재"
@@ -1215,22 +1427,22 @@ def stock_impact_analysis(
     scope_label = relation_scope_label(analysis.get("relationScope"))
     event_label = event_type_label(analysis.get("eventType") or classify_news_event_type(title, text))
     event_type = str(analysis.get("eventType") or classify_news_event_type(title, text))
-    materiality = number(analysis.get("materialityScore"))
-    relevance = number(analysis.get("relevanceScore"))
+    states = news_state_payload(analysis)
     takeaway = article_event_takeaway(target, title, article_text, feed_summary)
     channel = impact_channel_text(event_type, text)
-    watch = impact_watch_text(impact, materiality, text)
+    watch = impact_watch_text(impact, states["materialityState"], text)
     reason_parts = []
     if takeaway:
         reason_parts.append("핵심: " + takeaway + ".")
     reason_parts.append("영향 경로: " + channel + ".")
-    score_bits = [
+    classification_bits = [
         scope_label,
         event_label,
-        ("관련성 " + ("%.1f" % relevance).rstrip("0").rstrip(".") + "점") if relevance else "",
-        ("중요도 " + ("%.1f" % materiality).rstrip("0").rstrip(".") + "점") if materiality else "",
+        NEWS_RELEVANCE_STATE_LABELS.get(states["relevanceState"], ""),
+        NEWS_MATERIALITY_STATE_LABELS.get(states["materialityState"], ""),
+        NEWS_SOURCE_TRUST_STATE_LABELS.get(states["sourceTrustState"], ""),
     ]
-    reason_parts.append("주가 영향: " + label + "로 분류했습니다(" + ", ".join(bit for bit in score_bits if bit) + ").")
+    reason_parts.append("주가 영향: " + label + "로 분류했습니다(" + ", ".join(bit for bit in classification_bits if bit) + ").")
     if hits:
         reason_parts.append(("긍정 표현: " if impact == "positive" else "부정 표현: ") + ", ".join(hits[:3]) + ".")
     reason_parts.append("확인: " + watch + ".")
@@ -1240,8 +1452,8 @@ def stock_impact_analysis(
         "stockImpact": impact,
         "stockImpactLabel": label,
         "stockImpactPolarity": detected_polarity or "context",
-        "stockImpactScore": round(number(impact_score), 1),
         "stockImpactReasonKo": compact_text(reason, 520),
+        **states,
     }
 
 
@@ -1299,6 +1511,10 @@ def article_analysis_facts(
         analysis,
     )
     combined_text = title_text + " " + source_text
+    states = news_state_payload({
+        **analysis,
+        "articleReadStatus": status,
+    })
     facts = {
         "version": ARTICLE_FACTS_VERSION,
         "readStatus": status,
@@ -1317,16 +1533,13 @@ def article_analysis_facts(
         "eventTypeLabel": event_type_label(event_type),
         "relationScope": str(analysis.get("relationScope") or "").strip(),
         "relationScopeLabel": relation_scope_label(analysis.get("relationScope")),
-        "relevanceScore": round(number(analysis.get("relevanceScore")), 1),
-        "materialityScore": round(number(analysis.get("materialityScore")), 1),
-        "sourceReliability": round(number(analysis.get("sourceReliability")), 2),
+        **states,
         "summaryKo": compact_text(summary_text, 760),
         "eventTakeaway": compact_text(article_event_takeaway(target, title_text, body_text, feed_text), 260),
         "impactReasonKo": compact_text(stock_impact.get("stockImpactReasonKo") or "", 520),
         "stockImpact": str(stock_impact.get("stockImpact") or "").strip(),
         "stockImpactLabel": str(stock_impact.get("stockImpactLabel") or "").strip(),
         "stockImpactPolarity": str(stock_impact.get("stockImpactPolarity") or "").strip(),
-        "stockImpactScore": round(number(stock_impact.get("stockImpactScore")), 1),
         "topics": detected_topic_labels(combined_text, 6),
         "numbers": numeric_highlights(source_text, 6),
         "keySentences": article_sentence_candidates(source_text, target, analysis, 5),
@@ -1352,41 +1565,20 @@ def article_analysis_facts(
     return facts
 
 
-def source_reliability_score(source: object, provider: object = "") -> float:
-    policy = default_ontology_threshold_policy().news_impact
-    source_text = _lower_text(source)
-    provider_text = _lower_text(provider)
-    text = source_text + " " + provider_text
-    if source_is_social_feed(source, provider):
-        return policy.social_source_reliability
-    if any(token in source_text for token in LOW_RELIABILITY_SOURCE_TERMS):
-        return policy.low_source_reliability
-    if any(token in source_text for token in HIGH_RELIABILITY_SOURCE_TERMS):
-        return policy.high_source_reliability
-    if any(token in source_text for token in MEDIUM_RELIABILITY_SOURCE_TERMS):
-        return policy.medium_source_reliability
-    if any(token in provider_text for token in ["google news", "google_rss", "gdelt"]):
-        return policy.aggregator_source_reliability
-    if any(token in text for token in ["yahoo finance", "investing"]):
-        return policy.medium_source_reliability
-    return policy.default_source_reliability
-
-
 def source_is_social_feed(source: object, provider: object = "") -> bool:
     text = _lower_text(str(source or "") + " " + str(provider or ""))
     return any(token in text for token in SOCIAL_SOURCE_TERMS)
 
 
-def keyword_polarity(text: object) -> Tuple[str, float]:
-    policy = default_ontology_threshold_policy().news_impact
+def keyword_polarity(text: object) -> str:
     lowered = _lower_text(text)
     support_hits = sum(1 for item in SUPPORT_KEYWORDS if _keyword_in_lowered_text(item, lowered))
     risk_hits = sum(1 for item in RISK_KEYWORDS if _keyword_in_lowered_text(item, lowered))
     if risk_hits > support_hits:
-        return "risk", min(policy.risk_impact_cap, policy.risk_impact_base + risk_hits * policy.risk_impact_per_hit)
+        return "risk"
     if support_hits > risk_hits:
-        return "support", min(policy.support_impact_cap, policy.support_impact_base + support_hits * policy.support_impact_per_hit)
-    return "context", policy.context_impact_score
+        return "support"
+    return "context"
 
 
 def classify_news_event_type(title: object, summary: object = "") -> str:
@@ -1480,29 +1672,6 @@ def ambiguous_company_alias_noise(
     return False
 
 
-def confidence_from_analysis_payload(payload: Dict[str, object]) -> float:
-    policy = default_ontology_threshold_policy().news_impact
-    payload = payload if isinstance(payload, dict) else {}
-    if payload.get("excludedReason"):
-        return policy.excluded_confidence
-    return round(clamp(
-        number(payload.get("relevanceScore")) / 100 * 0.45
-        + number(payload.get("sourceReliability")) * 0.35
-        + number(payload.get("materialityScore")) / 100 * 0.20,
-        policy.confidence_floor,
-        policy.confidence_cap,
-    ), 2)
-
-
-def impact_from_analysis_payload(base_impact: object, payload: Dict[str, object]) -> float:
-    payload = payload if isinstance(payload, dict) else {}
-    relevance = number(payload.get("relevanceScore"))
-    materiality = number(payload.get("materialityScore"))
-    weight = max(0.55, min(1.35, relevance / 80 if relevance else 0.7))
-    materiality_bonus = min(4.0, materiality / 25) if materiality else 0.0
-    return round(number(base_impact) * weight + materiality_bonus, 1)
-
-
 def analyze_news_item(
     target: object,
     title: object,
@@ -1531,67 +1700,38 @@ def analyze_news_item(
     market_hits = matched_terms(combined, MARKET_TOPIC_KEYWORDS)
     other_subject_hits = other_company_subject_hits(target, normalized_title)
     identity = source_identity(source, provider)
-    reliability = source_reliability_score(source, provider)
+    source_trust_state = source_trust_state_for_source(source, provider)
     event_type = classify_news_event_type(title_text, summary_text)
-    polarity, impact = keyword_polarity(combined)
+    polarity = keyword_polarity(combined)
     platform_reference_only = target_symbol(target) == "035420" and bool(platform_alias_hits) and not direct_title and not direct_body
     platform_only = platform_reference_only or platform_source_only_noise(target, title_text, summary_text, source, [*direct_title, *direct_body], topic_hits, event_type)
     alias_noise = ambiguous_company_alias_noise(target, title_text, summary_text, [*direct_title, *direct_body], topic_hits, event_type)
     low_confidence_platform = low_confidence_platform_context(source, provider, [*direct_title, *direct_body])
-    social_feed = source_is_social_feed(source, provider)
     related_product_focus = bool(related_product_title_hits) and not direct_title
 
-    score = 24.0
     scope = "noise"
     if platform_only:
-        score = 16.0
         scope = "platform_noise"
     elif alias_noise:
-        score = 18.0
         scope = "noise"
     elif low_confidence_platform:
-        score = 42.0
         scope = "low_confidence_context"
     elif other_subject_hits and not direct_title:
-        score = 26.0
         scope = "entity_mismatch"
     elif direct_title:
-        score = 95.0
         scope = "direct"
     elif related_product_focus:
-        score = 68.0
         scope = "related_product"
     elif direct_body:
-        score = 82.0
         scope = "direct"
     elif peer_hits and topic_hits:
-        score = 64.0
         scope = "peer"
     elif peer_hits:
-        score = 58.0
         scope = "peer"
     elif topic_hits:
-        score = 52.0
         scope = "sector"
     elif market_hits:
-        score = 40.0
         scope = "market"
-
-    if relation_scope_is_investable(scope):
-        score += max(-8.0, min(8.0, (reliability - 0.6) * 25.0))
-    score = clamp(score, 0.0, 100.0)
-    if social_feed and scope == "direct":
-        score = min(score, 62.0)
-    if identity.get("isPlatformSource") and scope == "direct":
-        score = min(score, 58.0)
-    materiality = clamp(
-        score * 0.45
-        + reliability * 30
-        + min(20, number(impact) * 1.2)
-        + (8 if event_type in {"earnings", "guidance", "regulation", "capital_policy"} else 0),
-        0.0,
-        100.0,
-    )
     excluded_reason = ""
     if platform_only:
         excluded_reason = "회사 뉴스가 아니라 플랫폼/블로그 출처명이 종목명처럼 잡힌 항목"
@@ -1603,6 +1743,15 @@ def analyze_news_item(
         excluded_reason = "기사 제목의 핵심 주어가 대상 종목이 아니라 " + ", ".join(other_subject_hits[:3]) + "로 보임"
     elif not relation_scope_is_investable(scope):
         excluded_reason = "종목명, 비교 기업, 업종, 시장 주제가 기사 제목/요약에서 확인되지 않음"
+    relevance_state = news_relevance_state(scope)
+    materiality_state = news_materiality_state(
+        event_type,
+        relation_scope=scope,
+        impact_polarity=polarity,
+        source_trust_state=source_trust_state,
+    )
+    data_state = "insufficient" if excluded_reason else "partial"
+    validation_state = "blocked" if excluded_reason else "conditional"
     entity_links = entity_link_rows(
         target,
         normalized_title,
@@ -1627,11 +1776,13 @@ def analyze_news_item(
         "relatedProductContext": bool(related_product_focus),
     }
     return NewsAnalysis(
-        relevance_score=round(score, 1),
         relation_scope=scope,
-        source_reliability=round(reliability, 2),
         event_type=event_type,
-        materiality_score=round(materiality, 1),
+        relevance_state=relevance_state,
+        source_trust_state=source_trust_state,
+        materiality_state=materiality_state,
+        data_state=data_state,
+        validation_state=validation_state,
         ontology_relations=ontology_relations_for_news(scope, polarity, event_type),
         matched_aliases=_unique_texts([*direct_title, *direct_body]),
         mentioned_peers=peer_hits,

@@ -3,6 +3,13 @@ from typing import Dict, List
 from .message_types import WATCHLIST_ONTOLOGY_SIGNAL
 from .ontology_inference_context import relation_contexts_from_snapshot
 from .ontology_insights import relation_news_event_key_suffix
+from .ontology_decision_state import (
+    CHANGE_STATE_LABELS,
+    DATA_STATE_LABELS,
+    REVIEW_LEVEL_LABELS,
+    data_state_is_usable,
+    review_level_at_least,
+)
 from .ontology_threshold_policy import ontology_threshold_policy_from_context
 from .portfolio import AccountSnapshot, AlertEvent
 
@@ -68,8 +75,13 @@ class StrategyAlertMixin:
         if not isinstance(decision, dict):
             decision = {}
         threshold_policy = ontology_threshold_policy_from_context(relation_context).watchlist_dispatch
-        relation_score = float(decision.get("score") or relation_context.get("signalStrength") or 0)
-        if relation_score < threshold_policy.minimum_relation_score:
+        review_level = str(relation_context.get("reviewLevel") or decision.get("reviewLevel") or "normal")
+        data_state = str(relation_context.get("dataState") or decision.get("dataState") or "partial")
+        change_state = str(relation_context.get("changeState") or decision.get("changeState") or "unchanged")
+        conflict_state = str(relation_context.get("conflictState") or decision.get("conflictState") or "context-only")
+        if not data_state_is_usable(data_state) or data_state not in set(threshold_policy.usable_data_states):
+            return None
+        if not review_level_at_least(review_level, threshold_policy.minimum_review_level):
             return None
         signal_type = self.watchlist_ontology_signal_type(relation_context)
         decision_label = str(decision.get("label") or "관심종목 관계 신호")
@@ -87,11 +99,13 @@ class StrategyAlertMixin:
         news_event_suffix = relation_news_event_key_suffix(relation_context)
         if news_event_suffix:
             rule_signature = rule_signature + "+" + news_event_suffix
-        severity = "ALERT" if signal_type == "riskWatch" and (relation_score >= threshold_policy.risk_alert_relation_score or decision.get("tone") == "danger") else "WATCH"
+        severity = "ALERT" if signal_type == "riskWatch" and review_level in set(threshold_policy.risk_alert_review_levels) else "WATCH"
         symbol = position.symbol.upper()
         lines = [
             "관심종목 온톨로지 관계 신호",
-            "상태: " + decision_label + " (" + ("%.1f" % relation_score) + "점)",
+            "상태: " + decision_label + " · " + REVIEW_LEVEL_LABELS.get(review_level, REVIEW_LEVEL_LABELS["observe"]),
+            "자료: " + DATA_STATE_LABELS.get(data_state, DATA_STATE_LABELS["partial"]),
+            "변화: " + CHANGE_STATE_LABELS.get(change_state, CHANGE_STATE_LABELS["unchanged"]),
             self.current_price_line(position_context),
             self.flow_context_line(position_context),
             self.trend_context_line(position_context),
@@ -103,19 +117,23 @@ class StrategyAlertMixin:
             snapshot.account_label,
             severity,
             WATCHLIST_ONTOLOGY_SIGNAL,
-            ":".join([snapshot.account_id, "watchlist-ontology", symbol, signal_type, rule_signature, str(round(relation_score, 1))]),
+            ":".join([snapshot.account_id, "watchlist-ontology", symbol, signal_type, rule_signature, change_state]),
             position.name,
             [line for line in lines if line],
             symbol,
             criteria=self.criteria(
                 "관심종목 온톨로지 관계 그래프에서 진입·회복·리스크 규칙이 성립할 때",
-                decision_label + " · 관계 강도 " + ("%.1f" % relation_score) + "점",
+                decision_label
+                + " · " + REVIEW_LEVEL_LABELS.get(review_level, REVIEW_LEVEL_LABELS["observe"])
+                + " · " + CHANGE_STATE_LABELS.get(change_state, CHANGE_STATE_LABELS["unchanged"]),
             ),
             metadata={
                 "watchlistOntologySignalType": signal_type,
-                "watchlistSignalScore": round(relation_score, 1),
                 "watchlistActiveRelationRules": active_rule_ids,
-                "relationRuleScore": round(relation_score, 1),
+                "reviewLevel": review_level,
+                "dataState": data_state,
+                "changeState": change_state,
+                "conflictState": conflict_state,
                 "ontologyRelationContext": relation_context,
                 "ontologyPromptContext": relation_context.get("promptContext") if isinstance(relation_context, dict) else {},
             },
@@ -124,10 +142,6 @@ class StrategyAlertMixin:
     def relation_decision(self, relation_context: Dict[str, object]) -> Dict[str, object]:
         decision = relation_context.get("decision") if isinstance(relation_context, dict) else {}
         return decision if isinstance(decision, dict) else {}
-
-    def relation_score(self, relation_context: Dict[str, object]) -> float:
-        decision = self.relation_decision(relation_context)
-        return float(decision.get("score") or relation_context.get("signalStrength") or 0)
 
     def ontology_signal_events(self, snapshot: AccountSnapshot) -> List[AlertEvent]:
         events: List[AlertEvent] = []
@@ -150,5 +164,5 @@ class StrategyAlertMixin:
                 events.append(ontology_event)
         return events
 
-    def model_score_events(self, snapshot: AccountSnapshot) -> List[AlertEvent]:
+    def model_state_events(self, snapshot: AccountSnapshot) -> List[AlertEvent]:
         return self.ontology_signal_events(snapshot)

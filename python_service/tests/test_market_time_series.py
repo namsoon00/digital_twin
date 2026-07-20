@@ -188,7 +188,8 @@ class MarketTimeSeriesTests(unittest.TestCase):
 
         self.assertFalse(window.properties["hasSufficientHistory"])
         self.assertEqual(1, window.properties["coveredSessionCount"])
-        self.assertEqual(0, window.properties["temporalRiskScore"])
+        self.assertEqual("blocked", window.properties["temporalReviewLevel"])
+        self.assertEqual("insufficient", window.properties["temporalDataState"])
         self.assertTrue(any(item.kind == "temporal-coverage-gap" for item in graph.entities))
 
 

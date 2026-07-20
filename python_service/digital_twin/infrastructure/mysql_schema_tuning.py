@@ -44,6 +44,17 @@ class MySQLColumnDefinition:
 
 
 @dataclass(frozen=True)
+class MySQLColumnRetirementDefinition:
+    """A no-longer-used column that can be removed after its replacement ships."""
+
+    table: str
+    name: str
+
+    def alter_sql(self) -> str:
+        return "ALTER TABLE " + quote_identifier(self.table) + " DROP COLUMN " + quote_identifier(self.name)
+
+
+@dataclass(frozen=True)
 class MySQLKeyPartitionDefinition:
     table: str
     columns: Sequence[str]
@@ -165,6 +176,102 @@ MYSQL_OPERATIONAL_COLUMNS: Dict[str, Sequence[MySQLColumnDefinition]] = {
             "VARCHAR(64) NOT NULL DEFAULT 'balanced'",
         ),
     ),
+    "investment_calendar_candidates": (
+        MySQLColumnDefinition(
+            "investment_calendar_candidates",
+            "readiness_state",
+            "VARCHAR(32) NOT NULL DEFAULT 'needs-review'",
+        ),
+    ),
+    "investment_decision_episodes": (
+        MySQLColumnDefinition(
+            "investment_decision_episodes",
+            "review_level",
+            "VARCHAR(32) NOT NULL DEFAULT 'check'",
+        ),
+        MySQLColumnDefinition(
+            "investment_decision_episodes",
+            "data_state",
+            "VARCHAR(32) NOT NULL DEFAULT 'partial'",
+        ),
+        MySQLColumnDefinition(
+            "investment_decision_episodes",
+            "validation_state",
+            "VARCHAR(32) NOT NULL DEFAULT 'conditional'",
+        ),
+    ),
+    "research_evidence": (
+        MySQLColumnDefinition(
+            "research_evidence",
+            "source_trust_state",
+            "VARCHAR(32) NOT NULL DEFAULT 'unknown'",
+        ),
+        MySQLColumnDefinition(
+            "research_evidence",
+            "materiality_state",
+            "VARCHAR(32) NOT NULL DEFAULT 'context'",
+        ),
+        MySQLColumnDefinition(
+            "research_evidence",
+            "data_state",
+            "VARCHAR(32) NOT NULL DEFAULT 'partial'",
+        ),
+        MySQLColumnDefinition(
+            "research_evidence",
+            "validation_state",
+            "VARCHAR(32) NOT NULL DEFAULT 'conditional'",
+        ),
+    ),
+    "ontology_ai_opinion_samples": (
+        MySQLColumnDefinition(
+            "ontology_ai_opinion_samples",
+            "overall_state",
+            "VARCHAR(32) NOT NULL DEFAULT 'blocked'",
+        ),
+        MySQLColumnDefinition(
+            "ontology_ai_opinion_samples",
+            "data_state",
+            "VARCHAR(32) NOT NULL DEFAULT 'unavailable'",
+        ),
+        MySQLColumnDefinition(
+            "ontology_ai_opinion_samples",
+            "context_state",
+            "VARCHAR(32) NOT NULL DEFAULT 'insufficient'",
+        ),
+        MySQLColumnDefinition(
+            "ontology_ai_opinion_samples",
+            "reasoning_state",
+            "VARCHAR(32) NOT NULL DEFAULT 'blocked'",
+        ),
+        MySQLColumnDefinition(
+            "ontology_ai_opinion_samples",
+            "relation_state",
+            "VARCHAR(32) NOT NULL DEFAULT 'empty'",
+        ),
+        MySQLColumnDefinition(
+            "ontology_ai_opinion_samples",
+            "validation_state",
+            "VARCHAR(32) NOT NULL DEFAULT 'blocked'",
+        ),
+        MySQLColumnDefinition(
+            "ontology_ai_opinion_samples",
+            "action_required_count",
+            "INT NOT NULL DEFAULT 0",
+        ),
+    ),
+}
+
+
+# The delivery system now stores only categorical conditions and state-based
+# cooldowns. These former aggregate score columns have no remaining readers.
+MYSQL_OPERATIONAL_RETIRED_COLUMNS: Dict[str, Sequence[MySQLColumnRetirementDefinition]] = {
+    "notification_rules": (
+        MySQLColumnRetirementDefinition("notification_rules", "threshold"),
+        MySQLColumnRetirementDefinition("notification_rules", "base_score"),
+        MySQLColumnRetirementDefinition("notification_rules", "low_score_action"),
+        MySQLColumnRetirementDefinition("notification_rules", "similarity_penalty"),
+        MySQLColumnRetirementDefinition("notification_rules", "similarity_bypass_score_delta"),
+    ),
 }
 
 
@@ -242,6 +349,20 @@ def ensure_mysql_columns(
                 raise
             created.append(definition.table + "." + definition.name)
     return created
+
+
+def retire_mysql_columns(
+    connection,
+    column_map: Mapping[str, Sequence[MySQLColumnRetirementDefinition]],
+) -> List[str]:
+    retired: List[str] = []
+    for table, definitions in column_map.items():
+        for definition in definitions:
+            if not mysql_column_exists(connection, table, definition.name):
+                continue
+            _execute(connection, definition.alter_sql())
+            retired.append(table + "." + definition.name)
+    return retired
 
 
 def ensure_mysql_indexes(
@@ -332,6 +453,7 @@ def ensure_mysql_key_partitions(
 def ensure_mysql_operational_schema_tuning(connection, settings: Mapping[str, object] = None) -> Dict[str, List[str]]:
     return {
         "columns": ensure_mysql_columns(connection, MYSQL_OPERATIONAL_COLUMNS),
+        "retiredColumns": retire_mysql_columns(connection, MYSQL_OPERATIONAL_RETIRED_COLUMNS),
         "indexes": ensure_mysql_indexes(connection, MYSQL_OPERATIONAL_INDEXES),
         "partitions": ensure_mysql_key_partitions(connection, MYSQL_OPERATIONAL_KEY_PARTITIONS, settings),
     }

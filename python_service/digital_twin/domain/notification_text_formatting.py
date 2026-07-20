@@ -13,8 +13,6 @@ DATA_LABEL_PREFIXES = [
     "크립토 거래액",
     "매수 판단",
     "매도 판단",
-    "모델 매수 점수",
-    "모델 매도 점수",
     "적정가 대비",
     "24h 거래액",
     "현재가",
@@ -163,7 +161,7 @@ BEGINNER_FRIENDLY_REPLACEMENTS = [
     ("evidence", "근거"),
     ("belief", "판단 근거"),
     ("assertion", "기록"),
-    ("legacy score", "기존 점수"),
+    ("legacy score", "예전 판단 방식"),
     ("legacy", "기존"),
     ("증거", "근거"),
     ("컨텍스트", "정보"),
@@ -398,12 +396,3 @@ def text_parts_from_value(value: object) -> List[str]:
         return parts
     text = str(value or "").strip()
     return [text] if text else []
-
-def format_score_value(value: object) -> str:
-    try:
-        number = float(str(value).replace(",", "").strip())
-    except (TypeError, ValueError):
-        return str(value or "").strip()
-    if number.is_integer():
-        return str(int(number))
-    return ("%.1f" % number).rstrip("0").rstrip(".")

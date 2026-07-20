@@ -404,8 +404,14 @@ class NewsSourceGateway:
     def lookback_minutes(self) -> int:
         return int_setting(self.settings, "newsCollectionLookbackMinutes", 180, 5, 1440 * 7)
 
-    def min_relevance_score(self) -> float:
-        return float(int_setting(self.settings, "newsCollectionMinRelevanceScore", 35, 0, 100))
+    def minimum_relevance_state(self) -> str:
+        value = str(self.settings.get("newsCollectionMinimumRelevanceState") or "context").strip().lower()
+        return value if value in {"direct", "related", "context", "unrelated"} else "context"
+
+    def relevance_state_passes(self, payload: Dict[str, object]) -> bool:
+        order = {"unrelated": 0, "context": 1, "related": 2, "direct": 3}
+        states = news_domain.news_state_payload(payload or {})
+        return order.get(states["relevanceState"], 0) >= order[self.minimum_relevance_state()]
 
     def provider_timeout_seconds(self, provider: str) -> float:
         normalized = str(provider or "").strip().lower().replace("-", "_")
@@ -521,7 +527,7 @@ class NewsSourceGateway:
             and str(preliminary.get("relationScope") or "") != "direct"
             and not list(preliminary.get("matchedAliases") or [])
         )
-        if search_target_unconfirmed or number(preliminary.get("relevanceScore")) < self.min_relevance_score() or not news_domain.relation_scope_is_investable(preliminary.get("relationScope")):
+        if search_target_unconfirmed or not self.relevance_state_passes(preliminary) or not news_domain.relation_scope_is_investable(preliminary.get("relationScope")):
             self.record_provider_diagnostic("preliminaryRejectedCount")
             return None
         article_source_allowed = article_body_allowed_for_source(source, provider)
@@ -538,12 +544,10 @@ class NewsSourceGateway:
             return None
         analysis_text = article_text or feed_summary or title
         relevance = classify_news_relevance(target, title, analysis_text, source, provider)
-        if number(relevance.get("relevanceScore")) < self.min_relevance_score() or not news_domain.relation_scope_is_investable(relevance.get("relationScope")):
+        if not self.relevance_state_passes(relevance) or not news_domain.relation_scope_is_investable(relevance.get("relationScope")):
             self.record_provider_diagnostic("finalRelevanceRejectedCount")
             return None
-        polarity, impact = keyword_polarity(title + " " + analysis_text)
-        confidence = news_domain.confidence_from_analysis_payload(relevance)
-        impact_score = news_domain.impact_from_analysis_payload(impact, relevance)
+        polarity = keyword_polarity(title + " " + analysis_text)
         summary_ko = news_domain.korean_article_summary(
             target,
             title,
@@ -558,7 +562,6 @@ class NewsSourceGateway:
             feed_summary,
             relevance,
             polarity,
-            impact_score,
         )
         read_status = "body" if article_text else ("source-blocked" if not article_source_allowed else "feed-summary")
         analysis_source = "article-body" if article_text else ("source-quality-gate" if not article_source_allowed else "feed-summary")
@@ -592,19 +595,17 @@ class NewsSourceGateway:
             "articleTextPreview": compact_text(article_text, 700) if article_text else "",
         }
         evidence = ResearchEvidence(
-            "research:" + symbol + ":news:" + stable_evidence_token(provider, title, link),
-            symbol,
-            "news",
-            source,
-            title,
-            summary_ko or compact_text(feed_summary or title, 360),
-            link,
-            utc_now_iso(),
-            polarity,
-            impact_score,
-            confidence,
-            iso_or_empty(published),
-            payload,
+            evidence_id="research:" + symbol + ":news:" + stable_evidence_token(provider, title, link),
+            symbol=symbol,
+            kind="news",
+            source=source,
+            title=title,
+            summary=summary_ko or compact_text(feed_summary or title, 360),
+            url=link,
+            observed_at=utc_now_iso(),
+            polarity=polarity,
+            published_at=iso_or_empty(published),
+            raw_payload=payload,
         )
         self.record_provider_diagnostic("acceptedCount")
         return evidence
@@ -660,15 +661,14 @@ class NewsSourceGateway:
         ranked = sorted(items, key=self.evidence_rank_key, reverse=True)
         return ranked[: self.per_symbol_limit()], statuses
 
-    def evidence_rank_key(self, item: ResearchEvidence) -> Tuple[float, float, float, float]:
+    def evidence_rank_key(self, item: ResearchEvidence) -> tuple:
         payload = item.raw_payload if isinstance(item.raw_payload, dict) else {}
         facts = payload.get("articleFacts") if isinstance(payload.get("articleFacts"), dict) else {}
-        body_score = 1.0 if facts.get("bodyAvailable") else 0.0
-        reliability = number(payload.get("sourceReliability") or facts.get("sourceReliability"))
-        materiality = number(payload.get("materialityScore") or facts.get("materialityScore") or item.impact_score)
+        body_available = bool(facts.get("bodyAvailable"))
+        states = news_domain.news_state_rank({**facts, **payload})
         published = parse_news_datetime(item.published_at or item.observed_at)
         timestamp = published.timestamp() if published else 0.0
-        return body_score, reliability, materiality, timestamp
+        return body_available, *states, timestamp
 
     def fetch_provider(self, provider: str, target: NewsCollectionTarget) -> List[ResearchEvidence]:
         if provider in {"google_rss_kr", "rss_kr", "kr"}:

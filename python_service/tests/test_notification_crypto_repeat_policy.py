@@ -67,6 +67,20 @@ class CryptoRepeatPolicyTests(unittest.TestCase):
                     "sourceSignalTypes": ["externalCryptoMove"],
                     "sourceEventKeys": [event_key],
                 },
+                "ontologyRelationContext": {
+                    "source": "typedbInferenceBox",
+                    "graphStoreUsed": True,
+                    "fallbackUsed": False,
+                    "facts": {"isHolding": False, "isWatchlist": True},
+                    "decision": {"basis": "typedbInferenceBox"},
+                    "decisionState": {
+                        "reviewLevel": "observe",
+                        "dataState": "partial",
+                        "changeState": "new-condition",
+                        "conflictState": "context-only",
+                        "validationState": "conditional",
+                    },
+                },
                 "sourceSignalTypes": ["externalCryptoMove"],
                 "dataFreshness": self.fresh_data_freshness(),
             },
@@ -92,9 +106,9 @@ class CryptoRepeatPolicyTests(unittest.TestCase):
 
         jobs = queue.jobs()
         self.assertEqual(["done", "suppressed"], [job.status for job in jobs])
-        self.assertEqual(jobs[0].context["honeyFingerprint"], jobs[1].context["honeyFingerprint"])
-        self.assertEqual("cooldown", jobs[1].context["honeyStateDecision"])
-        self.assertFalse(jobs[1].context.get("honeySimilarityBypassed"))
+        self.assertEqual(jobs[0].context["deliveryFingerprint"], jobs[1].context["deliveryFingerprint"])
+        self.assertEqual("cooldown", jobs[1].context["cooldownDecision"])
+        self.assertFalse(jobs[1].context.get("repeatBypassed"))
         self.assertIn("같은 임계값 상태 지속", jobs[1].last_error)
 
 

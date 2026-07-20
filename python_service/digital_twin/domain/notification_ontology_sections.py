@@ -1,16 +1,20 @@
 import html
 from typing import Dict, List
 
-from .market_data import number
 from .notification_text_formatting import (
     FOOTER_DATA_LABELS,
-    format_score_value,
     html_bullet,
     is_ontology_internal_data_line,
     plain_bullet,
     split_data_line,
 )
-from .ontology_relation_reasoning import relation_score_meaning
+from .ontology_decision_state import (
+    CHANGE_STATE_LABELS,
+    CONFLICT_STATE_LABELS,
+    DATA_STATE_LABELS,
+    REVIEW_LEVEL_LABELS,
+    review_level_for,
+)
 
 
 def notification_data_lines(raw_lines: List[str], metadata: Dict[str, object]) -> List[str]:
@@ -378,18 +382,12 @@ def relation_axis_from_driver(driver: Dict[str, object]) -> str:
     return relation_axis_from_rule(driver.get("ruleId") or driver.get("rule_id"), driver.get("label") or driver.get("summary"))
 
 
-def relation_rule_score(item: Dict[str, object]) -> float:
-    if not isinstance(item, dict):
-        return 0.0
-    return number(item.get("strengthScore") or item.get("strength_score") or item.get("score") or item.get("relationScore"))
-
-
-def relation_axis_sort_key(axis: str, importance: float) -> tuple:
+def relation_axis_sort_key(axis: str) -> tuple:
     try:
         order = RELATION_AXIS_ORDER.index(axis)
     except ValueError:
         order = len(RELATION_AXIS_ORDER)
-    return (order, -float(importance or 0))
+    return (order,)
 
 
 def relation_axis_line(axis: str, direction: object, summary: object) -> str:
@@ -421,7 +419,6 @@ def relation_axis_summary_lines(context_or_metadata: Dict[str, object], limit: i
                 "axis": axis,
                 "direction": item.get("direction"),
                 "summary": summary,
-                "importance": number(item.get("importance")),
             })
     rules = relation_context.get("activeRules") or relation_context.get("matchedRules") or []
     for item in rules:
@@ -434,16 +431,15 @@ def relation_axis_summary_lines(context_or_metadata: Dict[str, object], limit: i
                 "axis": axis,
                 "direction": rule_value(item, "direction", "polarity") or "neutral",
                 "summary": label,
-                "importance": relation_rule_score(item),
             })
     selected: Dict[str, Dict[str, object]] = {}
     for item in candidates:
         axis = str(item.get("axis") or "")
         current = selected.get(axis)
-        if current is None or float(item.get("importance") or 0) > float(current.get("importance") or 0):
+        if current is None:
             selected[axis] = item
     rows: List[str] = []
-    for item in sorted(selected.values(), key=lambda value: relation_axis_sort_key(str(value.get("axis") or ""), float(value.get("importance") or 0))):
+    for item in sorted(selected.values(), key=lambda value: relation_axis_sort_key(str(value.get("axis") or ""))):
         line = relation_axis_line(str(item.get("axis") or ""), item.get("direction"), item.get("summary"))
         if line:
             rows.append(line)
@@ -457,7 +453,7 @@ def beginner_relation_decision_line(relation_context: Dict[str, object]) -> str:
     action_group = str(decision.get("actionGroup") or "").strip()
     label = str(decision.get("label") or "").strip()
     if action_group == "executionRisk":
-        return "쉽게 말하면: 이 점수는 팔아야 한다는 뜻이 아니라, 팔기로 결정했을 때 주문이 무리 없이 가능한지 보는 보조 확인입니다."
+        return "쉽게 말하면: 이 관계는 팔아야 한다는 뜻이 아니라, 팔기로 결정했을 때 주문이 무리 없이 가능한지 보는 보조 확인입니다."
     if action_group in {"eventRisk", "disclosure"}:
         return "쉽게 말하면: 뉴스나 공시 때문에 보유 이유를 다시 확인하라는 뜻입니다. 이것만으로 매도 확정은 아닙니다."
     if action_group == "factorRisk":
@@ -471,71 +467,6 @@ def beginner_relation_decision_line(relation_context: Dict[str, object]) -> str:
     if "보유" in label or "관찰" in label:
         return "쉽게 말하면: 바로 행동하기보다 다음 데이터에서도 같은 신호가 유지되는지 보는 단계입니다."
     return ""
-
-
-def relation_score_breakdown(context_or_metadata: Dict[str, object]) -> Dict[str, object]:
-    relation_context = ontology_relation_context(context_or_metadata)
-    if not relation_context:
-        return {}
-    decision = relation_context.get("decision") if isinstance(relation_context.get("decision"), dict) else {}
-    for candidate in [
-        decision.get("scoreBreakdown") if isinstance(decision, dict) else {},
-        relation_context.get("scoreBreakdown"),
-    ]:
-        if isinstance(candidate, dict) and candidate:
-            return candidate
-    return {}
-
-
-def relation_score_breakdown_line(context_or_metadata: Dict[str, object]) -> str:
-    breakdown = relation_score_breakdown(context_or_metadata)
-    if not breakdown:
-        return ""
-    parts = []
-    labels = [
-        ("위험 압력", "riskPressure", "점"),
-        ("버티는 근거", "supportEvidence", "점"),
-        ("데이터 확신", "dataConfidence", "%"),
-        ("실행 필요도", "actionability", "점"),
-        ("새 변화", "novelty", "점"),
-    ]
-    for label, key, unit in labels:
-        value = breakdown.get(key)
-        if value in (None, ""):
-            continue
-        parts.append(label + " " + format_score_value(value) + unit)
-    if not parts:
-        return ""
-    return "점수 구성: " + ", ".join(parts)
-
-
-def beginner_score_breakdown_line(context_or_metadata: Dict[str, object]) -> str:
-    breakdown = relation_score_breakdown(context_or_metadata)
-    if not breakdown:
-        return ""
-    risk = number(breakdown.get("riskPressure"))
-    support = number(breakdown.get("supportEvidence"))
-    confidence = number(breakdown.get("dataConfidence"))
-    drivers = [str(item or "").strip() for item in breakdown.get("drivers") or [] if str(item or "").strip()]
-    if risk and support:
-        base = (
-            "위험 쪽 근거는 "
-            + format_score_value(risk)
-            + "점이고, 버티는 근거는 "
-            + format_score_value(support)
-            + "점입니다."
-        )
-    elif risk:
-        base = "위험 쪽 근거가 " + format_score_value(risk) + "점으로 더 크게 보입니다."
-    elif support:
-        base = "버티는 근거가 " + format_score_value(support) + "점으로 더 크게 보입니다."
-    else:
-        base = "아직 한쪽으로 강하게 기운 근거는 약합니다."
-    if confidence:
-        base += " 데이터 확신도는 " + format_score_value(confidence) + "%입니다."
-    if drivers:
-        base += " 특히 " + ", ".join(drivers[:3]) + "을 중요하게 봤습니다."
-    return base
 
 
 def beginner_rule_explanation(item: Dict[str, object]) -> str:
@@ -563,16 +494,19 @@ def ontology_rule_lines(context_or_metadata: Dict[str, object]) -> List[str]:
     if not relation_context:
         return []
     lines: List[str] = []
-    strength = relation_context.get("signalStrength")
-    label = str(relation_context.get("signalStrengthLabel") or "").strip()
-    confidence = relation_context.get("confidence")
-    if strength not in (None, ""):
-        suffix = "신뢰도 " + format_score_value(confidence) if confidence not in (None, "") else ""
-        lines.append("관계 신호: " + " ".join(part for part in [label + " (" + format_score_value(strength) + "점)", suffix] if part))
-        lines.append("점수 해석: " + relation_score_meaning(float(strength)) + "입니다. 점수 상승은 대응 필요 강도 강화, 하락은 완화를 뜻하며 가격 방향 예측 점수가 아닙니다.")
-    breakdown_line = relation_score_breakdown_line(context_or_metadata)
-    if breakdown_line:
-        lines.append(breakdown_line)
+    decision = relation_context.get("decision") if isinstance(relation_context.get("decision"), dict) else {}
+    data_state = str(decision.get("dataState") or relation_context.get("dataState") or "partial")
+    review_level = str(decision.get("reviewLevel") or relation_context.get("reviewLevel") or "")
+    if not review_level:
+        review_level = review_level_for(decision.get("actionLevel"), data_state)
+    change_state = str(decision.get("changeState") or relation_context.get("changeState") or "unchanged")
+    conflict_state = str(decision.get("conflictState") or relation_context.get("conflictState") or "context-only")
+    lines.extend([
+        "확인 단계: " + str(decision.get("reviewLabel") or relation_context.get("reviewLevelLabel") or REVIEW_LEVEL_LABELS.get(review_level, REVIEW_LEVEL_LABELS["observe"])),
+        "자료 상태: " + str(decision.get("dataStateLabel") or relation_context.get("dataStateLabel") or DATA_STATE_LABELS.get(data_state, DATA_STATE_LABELS["partial"])),
+        "이번 변화: " + str(decision.get("changeStateLabel") or relation_context.get("changeStateLabel") or CHANGE_STATE_LABELS.get(change_state, CHANGE_STATE_LABELS["unchanged"])),
+        "근거 조합: " + str(decision.get("conflictStateLabel") or relation_context.get("conflictStateLabel") or CONFLICT_STATE_LABELS.get(conflict_state, CONFLICT_STATE_LABELS["context-only"])),
+    ])
     easy_decision = beginner_relation_decision_line(relation_context)
     if easy_decision:
         lines.append(easy_decision)
@@ -584,12 +518,9 @@ def ontology_rule_lines(context_or_metadata: Dict[str, object]) -> List[str]:
         if item.get("referenceOnly") or item.get("reference_only"):
             continue
         rule_label = str(rule_value(item, "label", "rule_id", "ruleId")).strip()
-        score = rule_value(item, "strengthScore", "strength_score")
         evidence = item.get("evidence") if isinstance(item.get("evidence"), list) else []
         evidence_text = ", ".join(str(value) for value in evidence[:3] if str(value or "").strip())
         value = rule_label
-        if score not in (None, ""):
-            value += " (" + format_score_value(score) + "점)"
         if evidence_text:
             value += " - " + evidence_text
         if value.strip():

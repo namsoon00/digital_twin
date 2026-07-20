@@ -36,6 +36,53 @@ from digital_twin.infrastructure.notifications import NotificationResult, Telegr
 
 
 class NotificationDataQualityPolicyTests(unittest.TestCase):
+    @staticmethod
+    def _typedb_relation_context(context):
+        """Give cooldown tests the same TypeDB-backed contract as production."""
+        prepared = dict(context or {})
+        relation = dict(prepared.get("ontologyRelationContext") or {})
+        decision = dict(relation.get("decision") or {})
+        relation.setdefault("source", "typedbInferenceBox")
+        relation.setdefault("graphStore", "typedb")
+        relation["graphStoreUsed"] = True
+        relation["fallbackUsed"] = False
+        relation.setdefault("reviewLevel", "act")
+        relation.setdefault("dataState", "sufficient")
+        relation.setdefault("changeState", "new-condition")
+        relation.setdefault("conflictState", "risk-only")
+        decision.setdefault("basis", "typedbInferenceBox")
+        decision.setdefault("reviewLevel", relation["reviewLevel"])
+        decision.setdefault("dataState", relation["dataState"])
+        decision.setdefault("changeState", relation["changeState"])
+        decision.setdefault("conflictState", relation["conflictState"])
+        relation["decision"] = decision
+        prepared["ontologyRelationContext"] = relation
+        return prepared
+
+    @classmethod
+    def setUpClass(cls):
+        super().setUpClass()
+        cls._notification_job_create = NotificationJob.create
+
+        def create_with_typedb_context(*args, **kwargs):
+            message_type = kwargs.get("message_type")
+            if message_type == INVESTMENT_INSIGHT:
+                kwargs = dict(kwargs)
+                kwargs["context"] = cls._typedb_relation_context(kwargs.get("context") or {})
+            return cls._notification_job_create(*args, **kwargs)
+
+        cls._notification_job_create_patcher = patch.object(
+            NotificationJob,
+            "create",
+            side_effect=create_with_typedb_context,
+        )
+        cls._notification_job_create_patcher.start()
+
+    @classmethod
+    def tearDownClass(cls):
+        cls._notification_job_create_patcher.stop()
+        super().tearDownClass()
+
     def test_dispatch_freshness_recomputes_age_instead_of_trusting_stored_status(self):
         decision = evaluate_notification_data_freshness(
             {
@@ -71,7 +118,12 @@ class NotificationDataQualityPolicyTests(unittest.TestCase):
                         "investor": {"status": "stale"},
                     },
                 },
-                "decision": {"scoreBreakdown": {"appliedFactFields": ["currentPrice"]}},
+                "evidenceState": {"appliedFactFields": ["currentPrice"]},
+                "decision": {
+                    "basis": "typedbInferenceBox",
+                    "reviewLevel": "check",
+                    "dataState": "sufficient",
+                },
             },
             "dataFreshness": {
                 "sources": [
@@ -396,7 +448,6 @@ class NotificationDataQualityPolicyTests(unittest.TestCase):
             decision,
             rule,
             sent_count=1,
-            previous_score=decision.score,
             previous_context=previous_context,
             last_sent_at=utc_now_iso(),
             last_sent_age_minutes=80,
@@ -434,7 +485,6 @@ class NotificationDataQualityPolicyTests(unittest.TestCase):
             decision,
             rule,
             sent_count=1,
-            previous_score=decision.score,
             previous_context={
                 "severity": "WATCH",
                 "rawLines": "현재가: 2,014,000원\n평균매입가: 2,571,000원\n수익률: -21.8%",
@@ -479,7 +529,6 @@ class NotificationDataQualityPolicyTests(unittest.TestCase):
             decision,
             rule,
             sent_count=1,
-            previous_score=decision.score,
             previous_context={
                 "severity": "WATCH",
                 "ontologyInsight": {
@@ -618,7 +667,6 @@ class NotificationDataQualityPolicyTests(unittest.TestCase):
             decision,
             rule,
             sent_count=1,
-            previous_score=decision.score,
             previous_context={
                 "severity": "WATCH",
                 "rawLines": "현재가: 2,122,000원\n평균매입가: 2,571,000원\n수익률: -17.4%",
@@ -630,7 +678,7 @@ class NotificationDataQualityPolicyTests(unittest.TestCase):
         )
 
         self.assertTrue(decision.should_send)
-        self.assertEqual("mandatory_profit_loss_band", decision.state_decision)
+        self.assertEqual("required-profit-loss-change", decision.state_decision)
         self.assertTrue(decision.similarity_bypassed)
         self.assertIn("더 깊은 손실 구간", decision.state_reason)
 
@@ -661,7 +709,6 @@ class NotificationDataQualityPolicyTests(unittest.TestCase):
             decision,
             rule,
             sent_count=1,
-            previous_score=decision.score,
             previous_context={
                 "rawLines": "수익률: -21.7%",
                 "ontologyInsight": {"subject": "000660", "dispatchInsightType": "riskManagement"},
@@ -673,7 +720,7 @@ class NotificationDataQualityPolicyTests(unittest.TestCase):
         )
 
         self.assertTrue(decision.should_send)
-        self.assertEqual("material_change", decision.state_decision)
+        self.assertEqual("meaningful-change", decision.state_decision)
         self.assertTrue(decision.similarity_bypassed)
         self.assertIn("손익률 추가 악화", decision.state_reason)
         self.assertIn("-21.7% -> -23%", decision.state_reason)
@@ -706,7 +753,6 @@ class NotificationDataQualityPolicyTests(unittest.TestCase):
             decision,
             rule,
             recent_count=1,
-            previous_score=decision.score,
             previous_context={"profitLossRate": 19.0},
             job=job,
         )
@@ -735,7 +781,6 @@ class NotificationDataQualityPolicyTests(unittest.TestCase):
             decision,
             rule,
             sent_count=1,
-            previous_score=decision.score,
             previous_context={
                 "rawLines": "수익률: -8.9%\n추세: 60일선 2,000,000원보다 3.2% 높음",
                 "ontologyInsight": {"subject": "000660", "dispatchInsightType": "riskManagement"},
@@ -747,7 +792,7 @@ class NotificationDataQualityPolicyTests(unittest.TestCase):
         )
 
         self.assertTrue(decision.should_send)
-        self.assertEqual("material_change", decision.state_decision)
+        self.assertEqual("meaningful-change", decision.state_decision)
         self.assertIn("손익률 추가 악화", decision.state_reason)
 
     def test_profit_loss_improvement_bypasses_investment_insight_cooldown(self):
@@ -770,7 +815,6 @@ class NotificationDataQualityPolicyTests(unittest.TestCase):
             decision,
             rule,
             sent_count=1,
-            previous_score=decision.score,
             previous_context={
                 "rawLines": "수익률: -19.2%\n추세: 60일선 2,011,467원보다 16.4% 낮음",
                 "ontologyInsight": {"subject": "000660", "dispatchInsightType": "riskManagement"},
@@ -782,7 +826,7 @@ class NotificationDataQualityPolicyTests(unittest.TestCase):
         )
 
         self.assertTrue(decision.should_send)
-        self.assertEqual("material_change", decision.state_decision)
+        self.assertEqual("meaningful-change", decision.state_decision)
         self.assertTrue(decision.similarity_bypassed)
         self.assertIn("손익률 개선", decision.state_reason)
         self.assertIn("-19.2% -> -18%", decision.state_reason)
@@ -813,7 +857,6 @@ class NotificationDataQualityPolicyTests(unittest.TestCase):
             decision,
             rule,
             sent_count=1,
-            previous_score=decision.score,
             previous_context={
                 "profitLossRate": 5.0,
                 "ontologyInsight": {
@@ -862,7 +905,6 @@ class NotificationDataQualityPolicyTests(unittest.TestCase):
             decision,
             rule,
             sent_count=1,
-            previous_score=decision.score,
             previous_context={
                 "profitLossRate": 2.0,
                 "ontologyInsight": {
@@ -909,7 +951,6 @@ class NotificationDataQualityPolicyTests(unittest.TestCase):
             decision,
             rule,
             sent_count=1,
-            previous_score=decision.score,
             previous_context={
                 "profitLossRate": 4.0,
                 "ontologyInsight": {
@@ -927,9 +968,9 @@ class NotificationDataQualityPolicyTests(unittest.TestCase):
         )
 
         self.assertTrue(decision.should_send)
-        self.assertEqual("material_change", decision.state_decision)
+        self.assertEqual("meaningful-change", decision.state_decision)
         self.assertTrue(decision.similarity_bypassed)
-        self.assertIn("새 뉴스/공시 원천 근거 추가", decision.state_reason)
+        self.assertIn("새 뉴스·공시 추가", decision.state_reason)
 
     def test_ma60_cross_down_bypasses_investment_insight_cooldown(self):
         rule = default_notification_rule("investmentInsight")
@@ -951,7 +992,6 @@ class NotificationDataQualityPolicyTests(unittest.TestCase):
             decision,
             rule,
             sent_count=1,
-            previous_score=decision.score,
             previous_context={
                 "rawLines": "수익률: -3.8%\n추세: 60일선 289,838원보다 0.4% 높음",
                 "ontologyInsight": {"subject": "005930", "dispatchInsightType": "riskManagement"},
@@ -963,8 +1003,8 @@ class NotificationDataQualityPolicyTests(unittest.TestCase):
         )
 
         self.assertTrue(decision.should_send)
-        self.assertEqual("material_change", decision.state_decision)
-        self.assertIn("60일 평균 아래 전환", decision.state_reason)
+        self.assertEqual("meaningful-change", decision.state_decision)
+        self.assertIn("60일 평균 아래로 전환", decision.state_reason)
 
     def test_action_change_bypasses_investment_insight_cooldown(self):
         rule = default_notification_rule("investmentInsight")
@@ -987,7 +1027,6 @@ class NotificationDataQualityPolicyTests(unittest.TestCase):
             decision,
             rule,
             sent_count=1,
-            previous_score=decision.score,
             previous_context={
                 "profitLossRate": 6.2,
                 "notificationAiValidatedResponse": {"actionLabel": "보유"},
@@ -1000,8 +1039,8 @@ class NotificationDataQualityPolicyTests(unittest.TestCase):
         )
 
         self.assertTrue(decision.should_send)
-        self.assertEqual("material_change", decision.state_decision)
-        self.assertIn("판단 액션 변경", decision.state_reason)
+        self.assertEqual("meaningful-change", decision.state_decision)
+        self.assertIn("권장 대응 변경", decision.state_reason)
 
     def test_new_news_or_disclosure_event_bypasses_investment_insight_cooldown(self):
         rule = default_notification_rule("investmentInsight")
@@ -1029,7 +1068,6 @@ class NotificationDataQualityPolicyTests(unittest.TestCase):
             decision,
             rule,
             sent_count=1,
-            previous_score=decision.score,
             previous_context={
                 "profitLossRate": -4.0,
                 "ontologyInsight": {
@@ -1045,8 +1083,8 @@ class NotificationDataQualityPolicyTests(unittest.TestCase):
         )
 
         self.assertTrue(decision.should_send)
-        self.assertEqual("material_change", decision.state_decision)
-        self.assertIn("새 근거 신호 추가", decision.state_reason)
+        self.assertEqual("meaningful-change", decision.state_decision)
+        self.assertIn("새 근거 종류 추가", decision.state_reason)
 
 
 if __name__ == "__main__":

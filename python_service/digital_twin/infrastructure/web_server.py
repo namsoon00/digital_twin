@@ -54,7 +54,7 @@ from ..domain.message_types import (
 )
 from ..domain.market_hours import DEFAULT_MARKET_HOUR_SESSIONS
 from ..domain.monitoring import RealtimeMonitor
-from ..domain.notification_rules import CONDITION_TYPE_LABELS, DEFAULT_HONEY_THRESHOLD, NotificationRuleConfig
+from ..domain.notification_rules import CONDITION_TYPE_LABELS, NotificationRuleConfig
 from ..domain.notifications import NotificationJob
 from ..domain.notification_templates import DEFAULT_NOTIFICATION_TEMPLATES, MESSAGE_TYPE_LABELS, TRIGGER_SUMMARIES, NotificationTemplate, alert_context, template_variables
 from ..domain.ontology_inference_ledger import inference_trace_ledger_payload
@@ -472,11 +472,6 @@ def settings_status_payload() -> Dict[str, object]:
         "notifyLinkUrl",
         "fxRates",
         "fairValueFormula",
-        "buyScoreFormula",
-        "sellScoreFormula",
-        "profitTakeScoreFormula",
-        "lossCutScoreFormula",
-        "notificationScoreFormula",
         "ontologyRelationRules",
         "aiPromptTemplates",
         "aiPromptPolicy",
@@ -492,18 +487,13 @@ def settings_status_payload() -> Dict[str, object]:
         "investmentBrainResearchMaxRounds",
         "investmentBrainResearchEvidenceLimit",
         "investmentBrainResearchMinimumVerifiedCount",
-        "investmentBrainResearchMinimumSourceReliability",
+        "investmentBrainResearchMinimumSourceTrustState",
         "investmentBrainResearchCooldownMinutes",
         "investmentBrainNotificationResearchEnabled",
         "investmentBrainNovelHypothesisAiEnabled",
         "investmentBrainNovelHypothesisAiTimeoutSeconds",
         "modelName",
         "modelHypothesis",
-        "customBuyModelFormula",
-        "customSellModelFormula",
-        "formulaWeights",
-        "decisionThresholds",
-        "modelDecisionThresholds",
         "modelTimingScenario",
         "modelTimingSymbols",
         "operatorReasoningReportEnabled",
@@ -518,11 +508,14 @@ def settings_status_payload() -> Dict[str, object]:
         "ontologyReasoningMaxSymbolsPerRun",
         "ontologyReasoningMinIntervalSeconds",
         "ontologyReasoningUrgentMinIntervalSeconds",
-        "ontologyReasoningUrgentMaterialityScore",
+        "ontologyReasoningUrgentReviewLevels",
+        "psychologyShadowEnabled",
+        "psychologyMinimumComponentCount",
+        "psychologyNewsMaxAgeMinutes",
         "temporalWindowPeriods",
         "temporalWindowHistoryLimit",
         "ontologyLabAutoApplyEnabled",
-        "ontologyLabAutoApplyMinScore",
+        "ontologyLabAutoApplyValidationStates",
         "ontologyLabAutoApplyNeedsReviewEnabled",
         "ontologyLabNotifyEnabled",
         "ontologyRuleCandidateAiEnabled",
@@ -532,12 +525,9 @@ def settings_status_payload() -> Dict[str, object]:
         "ontologyRuleCandidateAiIntervalMinutes",
         "ontologyRuleCandidateAiMaxCandidates",
         "materialityGateEnabled",
-        "materialityMinimumScore",
-        "marketMaterialityMinimumScore",
         "marketMaterialityPriceChangePct",
         "marketMaterialityTrendDistancePct",
         "marketMaterialityVolumeRatio",
-        "newsMaterialityMinimumScore",
         "typedbAddress",
         "typedbUser",
         "typedbDatabase",
@@ -593,7 +583,11 @@ def settings_status_payload() -> Dict[str, object]:
         "newsCollectionLookbackMinutes",
         "newsCollectionPerSymbolLimit",
         "newsCollectionProviders",
-        "newsCollectionMinRelevanceScore",
+        "newsCollectionMinimumRelevanceState",
+        "newsDigestMinimumRelevanceState",
+        "newsDigestMinimumMaterialityState",
+        "newsDigestMinimumNeutralMaterialityState",
+        "newsDigestMinimumSourceTrustState",
         "newsCollectionRequireArticleBodyForRss",
         "newsCollectionIncludeWatchlist",
         "newsCollectionIncludeHoldings",
@@ -614,9 +608,7 @@ def settings_status_payload() -> Dict[str, object]:
         "investmentCalendarReminderLookbackMinutes",
         "investmentCalendarAutoExtractEnabled",
         "investmentCalendarAutoExtractRegisterUndated",
-        "investmentCalendarAutoExtractMinConfidence",
         "investmentCalendarAutoExtractReviewEnabled",
-        "investmentCalendarAutoExtractReviewMinConfidence",
         "investmentCalendarOfficialMacroSyncEnabled",
         "investmentCalendarOfficialMacroSyncIntervalHours",
         "investmentCalendarOfficialMacroSyncRateLimitSeconds",
@@ -718,6 +710,88 @@ def save_settings_payload(payload: Dict[str, object]) -> Dict[str, object]:
         },
     )
     return status
+
+
+def psychology_shadow_payload(query: Dict[str, List[str]] = None) -> Dict[str, object]:
+    query = query or {}
+    requested_account = configured((query.get("accountId") or [""])[0])
+    requested_symbol = configured((query.get("symbol") or [""])[0]).upper()
+    try:
+        history_limit = max(1, min(100, int((query.get("historyLimit") or ["20"])[0] or 20)))
+    except (TypeError, ValueError):
+        history_limit = 20
+    try:
+        account_limit = max(1, min(500, int((query.get("accountLimit") or ["50"])[0] or 50)))
+    except (TypeError, ValueError):
+        account_limit = 50
+    read_store = stores.psychology_shadow_read_store(runtime_settings())
+    account_page = read_store.load_latest_page(requested_account, limit=account_limit)
+    account_states = dict(account_page.get("states") or {})
+    accounts = []
+    latest_rows = []
+    history_rows = []
+    for account_id, state in sorted(account_states.items()):
+        if not isinstance(state, dict) or not state:
+            continue
+        metadata = state.get("metadata") if isinstance(state.get("metadata"), dict) else {}
+        psychology = metadata.get("psychologyShadow") if isinstance(metadata.get("psychologyShadow"), dict) else {}
+        symbols = psychology.get("symbols") if isinstance(psychology.get("symbols"), dict) else {}
+        account_row_count = 0
+        for symbol, row in symbols.items():
+            if requested_symbol and str(symbol or "").upper() != requested_symbol:
+                continue
+            if not isinstance(row, dict):
+                continue
+            latest_rows.append({
+                **dict(row),
+                "accountId": account_id,
+                "accountLabel": str(state.get("accountLabel") or account_id),
+                "generatedAt": str(psychology.get("generatedAt") or state.get("generatedAt") or ""),
+            })
+            account_row_count += 1
+        accounts.append({
+            "accountId": account_id,
+            "accountLabel": str(state.get("accountLabel") or account_id),
+            "generatedAt": str(state.get("generatedAt") or ""),
+            "symbolCount": account_row_count,
+        })
+        if requested_account and account_id == requested_account:
+            for historical in read_store.load_history(account_id, limit=history_limit):
+                historical_metadata = historical.get("metadata") if isinstance(historical.get("metadata"), dict) else {}
+                historical_psychology = historical_metadata.get("psychologyShadow") if isinstance(historical_metadata.get("psychologyShadow"), dict) else {}
+                for symbol, row in (historical_psychology.get("symbols") or {}).items():
+                    if requested_symbol and str(symbol or "").upper() != requested_symbol:
+                        continue
+                    if not isinstance(row, dict):
+                        continue
+                    history_rows.append({
+                        "accountId": account_id,
+                        "symbol": str(symbol or "").upper(),
+                        "state": row.get("state"),
+                        "stateLabel": row.get("stateLabel"),
+                        "reviewLevel": row.get("reviewLevel"),
+                        "dataState": row.get("dataState"),
+                        "conflictState": row.get("conflictState"),
+                        "generatedAt": str(historical_psychology.get("generatedAt") or historical.get("generatedAt") or ""),
+                        "comparison": dict(row.get("comparison") or {}),
+                    })
+    settings = settings_status_payload().get("settings") or {}
+    policy_keys = [
+        "psychologyShadowEnabled",
+        "psychologyMinimumComponentCount",
+        "psychologyNewsMaxAgeMinutes",
+    ]
+    return {
+        "mode": "shadow",
+        "accounts": accounts,
+        "rows": sorted(latest_rows, key=lambda item: (str(item.get("accountId") or ""), str(item.get("symbol") or ""))),
+        "history": history_rows[-history_limit:],
+        "accountLimit": account_limit,
+        "accountPageTruncated": bool(account_page.get("truncated")),
+        "policy": {key: settings.get(key, "") for key in policy_keys},
+        "decisionImpactApplied": False,
+        "dispatchEligible": False,
+    }
 
 
 def ontology_rulebox_payload() -> Dict[str, object]:
@@ -1449,7 +1523,6 @@ def list_notification_rules_payload(include_internal: bool = False) -> Dict[str,
     payload = {
         "rules": [item.to_dict() for item in visible_rules],
         "conditionTypes": CONDITION_TYPE_LABELS,
-        "defaultThreshold": DEFAULT_HONEY_THRESHOLD,
         "marketHoursSessions": list(DEFAULT_MARKET_HOUR_SESSIONS.values()),
         "messageCatalog": public_message_catalog(),
         "managedMessageTypes": user_managed_notification_types(),
@@ -1489,15 +1562,15 @@ def notification_processing_age_minutes(job: NotificationJob) -> float:
 
 
 def notification_next_eligible_at(context: Dict[str, object]) -> str:
-    if not context.get("honeyStateCooldownEnabled"):
+    if not context.get("cooldownEnabled"):
         return ""
-    if str(context.get("honeyStateDecision") or "") != "cooldown" and not context.get("honeyStateSuppressed"):
+    if str(context.get("cooldownDecision") or "") != "cooldown" and not context.get("cooldownSuppressed"):
         return ""
-    last_sent_at = parse_utc(str(context.get("honeyStateLastSentAt") or ""))
+    last_sent_at = parse_utc(str(context.get("cooldownLastSentAt") or ""))
     if not last_sent_at:
         return ""
     try:
-        minutes = int(float(context.get("honeyStateCooldownMinutes") or 0))
+        minutes = int(float(context.get("cooldownMinutes") or 0))
     except (TypeError, ValueError):
         minutes = 0
     if minutes <= 0:
@@ -1511,13 +1584,13 @@ def notification_suppression_summary(job: NotificationJob) -> str:
         return ""
     if job.last_error:
         return job.last_error
-    if context.get("honeyStateReason"):
-        return str(context.get("honeyStateReason"))
+    if context.get("cooldownReason"):
+        return str(context.get("cooldownReason"))
     if context.get("marketHoursReason"):
         return str(context.get("marketHoursReason"))
     if context.get("quietHoursReason"):
         return str(context.get("quietHoursReason"))
-    reason = str(context.get("honeySuppressionReason") or "").strip()
+    reason = str(context.get("deliverySuppressionReason") or "").strip()
     if reason == "stale_data":
         return "데이터 신선도 기준 미통과"
     if reason == "market_closed":
@@ -1551,7 +1624,7 @@ def notification_job_diagnostics(jobs: List[NotificationJob]) -> Dict[str, objec
 
 def notification_job_public_payload(job: NotificationJob) -> Dict[str, object]:
     context = job.context or {}
-    reasons = context.get("honeyReasons") if isinstance(context.get("honeyReasons"), list) else []
+    reasons = context.get("deliveryReasons") if isinstance(context.get("deliveryReasons"), list) else []
     title = str(context.get("title") or context.get("headline") or "").strip()
     processing_age = notification_processing_age_minutes(job)
     try:
@@ -1580,26 +1653,29 @@ def notification_job_public_payload(job: NotificationJob) -> Dict[str, object]:
         "nextEligibleAt": notification_next_eligible_at(context),
         "processingAgeMinutes": round(processing_age, 1),
         "recoverableProcessing": bool(job.status == "processing" and processing_age >= stale_minutes),
-        "honeyScore": context.get("honeyScore"),
-        "honeyThreshold": context.get("honeyThreshold"),
-        "honeyDecision": context.get("honeyDecision") or ("send" if job.status in {"pending", "processing", "done"} else job.status),
-        "honeyReasons": [str(item) for item in reasons],
-        "honeyFingerprint": context.get("honeyFingerprint") or "",
-        "honeySimilarityRecentCount": context.get("honeySimilarityRecentCount"),
-        "honeySimilarityPenalty": context.get("honeySimilarityPenalty"),
-        "honeySimilarityWindowMinutes": context.get("honeySimilarityWindowMinutes"),
-        "honeySimilarityPreviousScore": context.get("honeySimilarityPreviousScore"),
-        "honeySimilarityBypassed": bool(context.get("honeySimilarityBypassed")),
-        "honeySimilarityBypassReason": context.get("honeySimilarityBypassReason") or "",
-        "honeySuppressionReason": context.get("honeySuppressionReason") or "",
-        "honeyStateCooldownEnabled": bool(context.get("honeyStateCooldownEnabled")),
-        "honeyStateCooldownMinutes": context.get("honeyStateCooldownMinutes"),
-        "honeyStateRecentSentCount": context.get("honeyStateRecentSentCount"),
-        "honeyStateLastSentAt": context.get("honeyStateLastSentAt") or "",
-        "honeyStateLastSentAgeMinutes": context.get("honeyStateLastSentAgeMinutes"),
-        "honeyStateDecision": context.get("honeyStateDecision") or "",
-        "honeyStateReason": context.get("honeyStateReason") or "",
-        "honeyStateSuppressed": bool(context.get("honeyStateSuppressed")),
+        "deliveryDecision": context.get("deliveryDecision") or ("send" if job.status in {"pending", "processing", "done"} else job.status),
+        "deliveryGateState": context.get("deliveryGateState") or "",
+        "deliveryGateReason": context.get("deliveryGateReason") or "",
+        "deliveryReasons": [str(item) for item in reasons],
+        "deliveryFingerprint": context.get("deliveryFingerprint") or "",
+        "deliveryReviewLevel": context.get("deliveryReviewLevel") or "",
+        "deliveryDataState": context.get("deliveryDataState") or "",
+        "deliveryChangeState": context.get("deliveryChangeState") or "",
+        "deliveryConflictState": context.get("deliveryConflictState") or "",
+        "deliveryValidationState": context.get("deliveryValidationState") or "",
+        "repeatRecentCount": context.get("repeatRecentCount"),
+        "repeatWindowMinutes": context.get("repeatWindowMinutes"),
+        "repeatBypassed": bool(context.get("repeatBypassed")),
+        "repeatBypassReason": context.get("repeatBypassReason") or "",
+        "deliverySuppressionReason": context.get("deliverySuppressionReason") or "",
+        "cooldownEnabled": bool(context.get("cooldownEnabled")),
+        "cooldownMinutes": context.get("cooldownMinutes"),
+        "cooldownRecentSentCount": context.get("cooldownRecentSentCount"),
+        "cooldownLastSentAt": context.get("cooldownLastSentAt") or "",
+        "cooldownLastSentAgeMinutes": context.get("cooldownLastSentAgeMinutes"),
+        "cooldownDecision": context.get("cooldownDecision") or "",
+        "cooldownReason": context.get("cooldownReason") or "",
+        "cooldownSuppressed": bool(context.get("cooldownSuppressed")),
         "marketHoursEnabled": bool(context.get("marketHoursEnabled")),
         "marketHoursMarket": context.get("marketHoursMarket") or "",
         "marketHoursLabel": context.get("marketHoursLabel") or "",
@@ -1896,11 +1972,8 @@ def save_notification_rule_payload(payload: Dict[str, object]) -> Dict[str, obje
         {
             "messageType": saved.message_type,
             "enabled": saved.enabled,
-            "threshold": saved.threshold,
-            "baseScore": saved.base_score,
             "similarityEnabled": saved.similarity_enabled,
             "similarityWindowMinutes": saved.similarity_window_minutes,
-            "similarityPenalty": saved.similarity_penalty,
             "similarityBypassConditionCount": len(saved.similarity_bypass_conditions),
             "stateCooldownEnabled": saved.state_cooldown_enabled,
             "stateCooldownMinutes": saved.state_cooldown_minutes,
@@ -1922,11 +1995,8 @@ def reset_notification_rule_payload(message_type: str) -> Dict[str, object]:
         {
             "messageType": saved.message_type,
             "enabled": saved.enabled,
-            "threshold": saved.threshold,
-            "baseScore": saved.base_score,
             "similarityEnabled": saved.similarity_enabled,
             "similarityWindowMinutes": saved.similarity_window_minutes,
-            "similarityPenalty": saved.similarity_penalty,
             "stateCooldownEnabled": saved.state_cooldown_enabled,
             "stateCooldownMinutes": saved.state_cooldown_minutes,
             "updatedAt": saved.updated_at,
@@ -2127,9 +2197,9 @@ def notification_template_test_payload(payload: Dict[str, object]):
                 "provider": "Notification Queue",
                 "messageType": message_type,
                 "event": public_event,
-                "score": (job.context or {}).get("honeyScore"),
-                "threshold": (job.context or {}).get("honeyThreshold"),
-                "reasons": (job.context or {}).get("honeyReasons") or [],
+                "deliveryDecision": (job.context or {}).get("deliveryDecision"),
+                "deliveryGateState": (job.context or {}).get("deliveryGateState"),
+                "reasons": (job.context or {}).get("deliveryReasons") or [],
                 "error": job.last_error,
             }
         return 409, {
@@ -3001,6 +3071,9 @@ class DigitalTwinHandler(BaseHTTPRequestHandler):
                 if not self.ensure_writable("공유 모드에서는 TypeDB RuleBox를 변경할 수 없습니다."):
                     return
                 return self.send_payload(200, save_ontology_rulebox_payload(self.read_json_body()))
+
+        if path == "/api/psychology-shadow" and self.command == "GET":
+            return self.send_payload(200, psychology_shadow_payload(query))
 
         if path == "/api/ontology/language":
             if self.command == "GET":

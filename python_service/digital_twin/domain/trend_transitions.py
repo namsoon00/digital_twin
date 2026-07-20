@@ -89,7 +89,7 @@ def normalize_points(points: Iterable[Dict[str, object]]) -> List[Dict[str, obje
 def phase_from_points(points: List[Dict[str, object]], threshold_policy=None) -> Dict[str, object]:
     policy = threshold_policy or default_ontology_threshold_policy().temporal_pattern
     if not points:
-        return {"phase": "unknown", "label": "이력 부족", "confidence": 0.0}
+        return {"phase": "unknown", "label": "이력 부족", "dataState": "insufficient"}
     current = points[-1]
     total_delta = pct_delta(float(current.get("price") or 0.0), float(points[0].get("price") or 0.0)) if len(points) >= 2 else float(current.get("changeRate") or 0.0)
     last_delta = pct_delta(float(current.get("price") or 0.0), float(points[-2].get("price") or 0.0)) if len(points) >= 2 else float(current.get("changeRate") or 0.0)
@@ -97,19 +97,19 @@ def phase_from_points(points: List[Dict[str, object]], threshold_policy=None) ->
     ma60_distance = float(current.get("ma60Distance") or 0.0)
     ma20_slope = float(current.get("ma20Slope") or 0.0)
     trend_curve = ma20_slope - float(current.get("ma60Slope") or 0.0)
-    confidence = min(policy.phase_confidence_cap, policy.phase_confidence_base + len(points) * policy.phase_confidence_per_point)
+    data_state = "sufficient" if len(points) >= 3 else "partial"
 
     if abs(total_delta) <= policy.sideways_total_delta_pct and abs(last_delta) <= policy.sideways_last_delta_pct and abs(ma20_distance) <= policy.sideways_ma20_distance_pct:
-        return {"phase": "sideways", "label": "횡보", "confidence": confidence}
+        return {"phase": "sideways", "label": "횡보", "dataState": data_state}
     if total_delta <= policy.falling_total_delta_pct or ma20_distance <= policy.falling_ma20_distance_pct or (last_delta < policy.falling_last_delta_pct and ma20_slope < 0):
-        return {"phase": "falling", "label": "하락", "confidence": confidence}
+        return {"phase": "falling", "label": "하락", "dataState": data_state}
     if total_delta >= policy.rising_total_delta_pct or ma20_distance >= policy.rising_ma20_distance_pct or (last_delta > policy.rising_last_delta_pct and ma20_slope >= 0):
-        return {"phase": "rising", "label": "상승", "confidence": confidence}
+        return {"phase": "rising", "label": "상승", "dataState": data_state}
     if trend_curve >= policy.recovery_curve_pct or ma20_slope >= policy.recovery_ma20_slope_pct:
-        return {"phase": "recovering", "label": "회복 시도", "confidence": confidence * policy.recovery_confidence_multiplier}
+        return {"phase": "recovering", "label": "회복 시도", "dataState": data_state}
     if trend_curve <= policy.weakening_curve_pct or ma20_slope <= policy.weakening_ma20_slope_pct:
-        return {"phase": "weakening", "label": "약화", "confidence": confidence * policy.recovery_confidence_multiplier}
-    return {"phase": "mixed", "label": "혼조", "confidence": confidence * policy.mixed_confidence_multiplier}
+        return {"phase": "weakening", "label": "약화", "dataState": data_state}
+    return {"phase": "mixed", "label": "혼조", "dataState": data_state}
 
 
 def trend_transition_assessment(
@@ -131,7 +131,7 @@ def trend_transition_assessment(
     raw_points.append(position_point(position, source))
     points = normalize_points(raw_points)
     current_phase = phase_from_points(points, policy)
-    previous_phase = phase_from_points(points[:-1], policy) if len(points) >= 2 else {"phase": "unknown", "label": "이력 부족", "confidence": 0.0}
+    previous_phase = phase_from_points(points[:-1], policy) if len(points) >= 2 else {"phase": "unknown", "label": "이력 부족", "dataState": "insufficient"}
     current = points[-1] if points else {}
     previous = points[-2] if len(points) >= 2 else {}
     last_delta = pct_delta(float(current.get("price") or 0.0), float(previous.get("price") or 0.0)) if previous else float(current.get("changeRate") or 0.0)
@@ -141,101 +141,87 @@ def trend_transition_assessment(
         "transitionType": "none",
         "label": "의미 있는 추세 전이 없음",
         "polarity": "context",
-        "score": 0.0,
-        "riskImpact": 0.0,
-        "supportImpact": 0.0,
+        "evidenceRole": "context",
+        "reviewLevel": "normal",
+        "changeState": "unchanged",
+        "dataState": "sufficient" if len(points) >= 3 else "partial",
         "relationHint": "",
     }
     prev = previous_phase.get("phase")
     curr = current_phase.get("phase")
 
     if prev == "falling" and curr in {"recovering", "rising", "sideways"} and (last_delta >= policy.rebound_last_delta_pct or ma20_delta >= policy.rebound_ma20_delta_pct):
-        score = 60 + min(18.0, max(last_delta, ma20_delta) * 4.0) + (8 if volume_ratio >= policy.rebound_volume_ratio else 0)
         transition.update({
             "transitionType": "falling_to_rebound",
             "label": "하락 후 반등/안정 전환",
             "polarity": "support",
-            "score": min(100.0, score),
-            "supportImpact": min(14.0, 6.0 + max(last_delta, ma20_delta) * 1.6),
+            "evidenceRole": "support",
+            "reviewLevel": "check",
+            "changeState": "improving",
             "relationHint": "INDICATES_REVERSAL",
         })
     elif prev == "sideways" and curr in {"rising", "recovering"} and (last_delta >= policy.breakout_last_delta_pct or volume_ratio >= policy.breakout_volume_ratio):
-        score = 64 + min(18.0, max(last_delta, 0.0) * 4.0) + (8 if volume_ratio >= policy.breakout_volume_ratio else 0)
         transition.update({
             "transitionType": "sideways_to_breakout",
             "label": "횡보 후 상방 이탈",
             "polarity": "support",
-            "score": min(100.0, score),
-            "supportImpact": min(15.0, 7.0 + max(last_delta, 0.0) * 1.8),
+            "evidenceRole": "support",
+            "reviewLevel": "act" if volume_ratio >= policy.breakout_volume_ratio else "check",
+            "changeState": "new-condition",
             "relationHint": "BREAKS_CONSOLIDATION",
         })
     elif prev == "sideways" and curr in {"falling", "weakening"} and (last_delta <= policy.breakdown_last_delta_pct or ma20_delta <= policy.breakdown_ma20_delta_pct):
-        score = 64 + min(18.0, abs(min(last_delta, ma20_delta)) * 4.0) + (8 if volume_ratio >= policy.breakout_volume_ratio else 0)
         transition.update({
             "transitionType": "sideways_to_breakdown",
             "label": "횡보 후 하방 이탈",
             "polarity": "risk",
-            "score": min(100.0, score),
-            "riskImpact": min(16.0, 7.0 + abs(min(last_delta, ma20_delta)) * 1.8),
+            "evidenceRole": "risk",
+            "reviewLevel": "act" if volume_ratio >= policy.breakout_volume_ratio else "check",
+            "changeState": "worsening",
             "relationHint": "BREAKS_CONSOLIDATION",
         })
     elif prev == "rising" and curr in {"weakening", "falling", "sideways"} and (last_delta <= policy.distribution_last_delta_pct or ma20_delta <= policy.distribution_ma20_delta_pct):
-        score = 60 + min(18.0, abs(min(last_delta, ma20_delta)) * 4.0)
         transition.update({
             "transitionType": "rising_to_distribution",
             "label": "상승 후 탄력 둔화/분배",
             "polarity": "risk",
-            "score": min(100.0, score),
-            "riskImpact": min(15.0, 6.0 + abs(min(last_delta, ma20_delta)) * 1.6),
+            "evidenceRole": "risk",
+            "reviewLevel": "check",
+            "changeState": "worsening",
             "relationHint": "INDICATES_DECELERATION",
         })
     elif prev == "falling" and curr == "falling" and (last_delta <= policy.falling_acceleration_last_delta_pct or ma20_delta <= policy.falling_acceleration_ma20_delta_pct):
-        score = 62 + min(20.0, abs(min(last_delta, ma20_delta)) * 4.0)
         transition.update({
             "transitionType": "falling_acceleration",
             "label": "하락 가속",
             "polarity": "risk",
-            "score": min(100.0, score),
-            "riskImpact": min(18.0, 8.0 + abs(min(last_delta, ma20_delta)) * 1.8),
+            "evidenceRole": "risk",
+            "reviewLevel": "immediate" if volume_ratio >= policy.confirmation_volume_ratio else "act",
+            "changeState": "worsening",
             "relationHint": "INDICATES_ACCELERATION",
         })
     elif transition["transitionType"] == "none" and curr in {"falling", "weakening"}:
         ma20_distance = float(current.get("ma20Distance") or 0.0)
         ma60_distance = float(current.get("ma60Distance") or 0.0)
-        ma20_slope = float(current.get("ma20Slope") or 0.0)
-        risk_driver = max(
-            abs(min(0.0, ma20_distance + policy.path_risk_ma20_offset_pct)) * 4.0,
-            abs(min(0.0, ma60_distance + policy.path_risk_ma60_offset_pct)) * 3.0,
-            abs(min(0.0, last_delta + policy.path_risk_last_delta_offset_pct)) * 5.0,
-            abs(min(0.0, ma20_slope + policy.path_risk_ma20_slope_offset_pct)) * 8.0,
-        )
-        if risk_driver >= policy.path_risk_driver_score or ma20_distance <= policy.path_risk_ma20_distance_pct or ma60_distance <= policy.path_risk_ma60_distance_pct:
-            score = 58 + min(24.0, risk_driver) + (6 if volume_ratio >= policy.confirmation_volume_ratio else 0)
+        if ma20_distance <= policy.path_risk_ma20_distance_pct or ma60_distance <= policy.path_risk_ma60_distance_pct:
             transition.update({
                 "transitionType": "current_path_risk_confirmation",
                 "label": "현재 경로 위험 확인",
                 "polarity": "risk",
-                "score": min(100.0, score),
-                "riskImpact": min(15.0, 6.0 + risk_driver * 0.35),
+                "evidenceRole": "risk",
+                "reviewLevel": "act" if volume_ratio >= policy.confirmation_volume_ratio else "check",
+                "changeState": "new-condition",
                 "relationHint": "INDICATES_WEAKENING",
             })
     elif transition["transitionType"] == "none" and curr in {"recovering", "rising"}:
-        ma20_distance = float(current.get("ma20Distance") or 0.0)
-        ma20_slope = float(current.get("ma20Slope") or 0.0)
-        support_driver = max(
-            max(0.0, last_delta - policy.path_support_last_delta_offset_pct) * 5.0,
-            max(0.0, ma20_delta - policy.path_support_ma20_delta_offset_pct) * 4.0,
-            max(0.0, ma20_distance - policy.path_support_ma20_distance_offset_pct) * 2.5,
-            max(0.0, ma20_slope - policy.path_support_ma20_slope_offset_pct) * 8.0,
-        )
-        if support_driver >= policy.path_support_driver_score or (last_delta >= policy.path_support_last_delta_pct and volume_ratio >= policy.path_support_volume_ratio):
-            score = 58 + min(24.0, support_driver) + (6 if volume_ratio >= policy.confirmation_volume_ratio else 0)
+        if last_delta >= policy.path_support_last_delta_pct and volume_ratio >= policy.path_support_volume_ratio:
             transition.update({
                 "transitionType": "current_path_support_confirmation",
                 "label": "현재 경로 우호 확인",
                 "polarity": "support",
-                "score": min(100.0, score),
-                "supportImpact": min(14.0, 5.0 + support_driver * 0.35),
+                "evidenceRole": "support",
+                "reviewLevel": "check",
+                "changeState": "improving",
                 "relationHint": "INDICATES_REVERSAL",
             })
 

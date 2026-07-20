@@ -115,7 +115,9 @@ def add_cross_listing_coverage_gap(
         "domainScope": "securityLine",
         "description": description,
         "impact": "ADR 프리미엄과 레버리지 수급 증폭 판단의 신뢰도를 낮춥니다.",
-        "riskImpact": 5.0,
+        "reviewLevel": "blocked",
+        "dataState": "insufficient",
+        "evidenceRole": "blocking",
         "source": "security-line-ontology",
         "observationDomain": "data-quality",
         "freshnessRequired": True,
@@ -129,8 +131,10 @@ def add_cross_listing_coverage_gap(
         "source": "security-line-ontology",
         "field": field,
         "dataScope": "crossListedSecurity",
-        "polarity": "risk",
-        "riskImpact": 5.0,
+        "polarity": "blocking",
+        "reviewLevel": "blocked",
+        "dataState": "insufficient",
+        "evidenceRole": "blocking",
         "aiInfluenceLabel": label,
     })
 

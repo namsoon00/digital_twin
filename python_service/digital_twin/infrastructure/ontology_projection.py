@@ -3,7 +3,7 @@ import hashlib
 
 from ..domain.ontology_contracts import PortfolioOntology
 from ..domain.decision_performance import evaluate_decision_performance
-from ..domain.ontology_rulebox_catalog import default_graph_inference_rules
+from ..domain.ontology_rulebox_catalog import additive_system_graph_inference_rules, default_graph_inference_rules
 from ..domain.ontology_rulebox_governance import rulebox_rules_hash
 from ..domain.ontology_projection_fingerprint import (
     active_material_fingerprint,
@@ -153,7 +153,7 @@ class PortfolioOntologyProjectionRecorder:
             if self.quality_store:
                 sample = self.quality_store.record_graph(graph, source=self.source)
                 result["qualitySampleId"] = sample.sample_id
-                result["qualityScore"] = sample.overall_score
+                result["qualityState"] = sample.overall_state
         except Exception as error:  # noqa: BLE001 - ontology projection must not block realtime monitoring.
             result = {"saved": False, "status": "error", "reason": str(error)[:180]}
         self.store_projection_result(snapshot, result)
@@ -185,6 +185,12 @@ class PortfolioOntologyProjectionRecorder:
                 "status": "disabled",
                 "reason": str(snapshot.get("reason") or "Ontology graph storage is not configured."),
             }
+        migration = self.ensure_additive_system_rules(snapshot)
+        if migration.get("saved"):
+            try:
+                snapshot = self.repository.rulebox_snapshot()
+            except Exception:  # noqa: BLE001 - successful save metadata still proves the migration ran.
+                snapshot = dict(migration.get("result") or snapshot)
         stored_count = int(snapshot.get("ruleboxRuleCount") or snapshot.get("ruleCount") or 0)
         stored_hash = str(snapshot.get("ruleboxRulesHash") or snapshot.get("rulesHash") or "").strip()
         if not stored_hash and isinstance(snapshot.get("rules"), list) and snapshot.get("rules"):
@@ -198,6 +204,7 @@ class PortfolioOntologyProjectionRecorder:
                 "bootstrapRuleCount": expected_count,
                 "bootstrapRulesHash": expected_hash,
                 "codeDefaultHashMismatch": bool(stored_hash and stored_hash != expected_hash),
+                "additiveRuleMigration": migration,
             }
             if result["codeDefaultHashMismatch"]:
                 result["reason"] = (
@@ -237,6 +244,56 @@ class PortfolioOntologyProjectionRecorder:
             "bootstrapRuleCount": expected_count,
             "bootstrapRulesHash": expected_hash,
             "reason": str((seeded or {}).get("reason") or ""),
+        }
+
+    def ensure_additive_system_rules(self, snapshot: Dict[str, object]) -> Dict[str, object]:
+        if str(self.settings.get("psychologyShadowEnabled") or "1").strip().lower() in {"0", "false", "no", "off", "disabled"}:
+            return {"status": "disabled", "saved": False, "missingRuleIds": []}
+        stored_rules = snapshot.get("rules") if isinstance(snapshot.get("rules"), list) else []
+        if not stored_rules:
+            return {"status": "not-inspectable", "saved": False, "missingRuleIds": []}
+        existing_ids = {
+            str(item.get("rule_id") or item.get("ruleId") or "").strip()
+            for item in stored_rules
+            if isinstance(item, dict)
+        }
+        required = additive_system_graph_inference_rules()
+        missing = [rule for rule in required if rule.rule_id not in existing_ids]
+        if not missing:
+            return {"status": "ready", "saved": False, "missingRuleIds": []}
+        missing_ids = [rule.rule_id for rule in missing]
+        if not hasattr(self.repository, "save_rulebox"):
+            return {"status": "unsupported", "saved": False, "missingRuleIds": missing_ids}
+        try:
+            result = self.repository.save_rulebox({
+                "rules": list(stored_rules) + rulebox_rules_to_payload(missing),
+                "changeReason": "시스템 가산 마이그레이션: 시장 심리 Shadow 규칙 등록",
+            })
+        except Exception as error:  # noqa: BLE001 - Shadow migration must not block existing investment inference.
+            return {"status": "error", "saved": False, "missingRuleIds": missing_ids, "reason": str(error)[:180]}
+        saved = bool((result or {}).get("saved")) and str((result or {}).get("status") or "") == "ok"
+        schema_sync = {}
+        if saved and hasattr(self.repository, "sync_typedb_native_rule_functions"):
+            try:
+                schema_sync = self.repository.sync_typedb_native_rule_functions(missing, force=True)
+            except Exception as error:  # noqa: BLE001 - the stored rule remains available for a later sync retry.
+                schema_sync = {"status": "error", "reason": str(error)[:180]}
+        return {
+            "status": (
+                "migrated"
+                if saved and str(schema_sync.get("status") or "ok") == "ok"
+                else "stored-sync-pending"
+                if saved
+                else str((result or {}).get("status") or "not-saved")
+            ),
+            "saved": saved,
+            "missingRuleIds": missing_ids,
+            "schemaFunctionSync": schema_sync,
+            "result": {
+                "status": str((result or {}).get("status") or ""),
+                "ruleCount": int((result or {}).get("ruleCount") or (result or {}).get("ruleboxRuleCount") or 0),
+                "reason": str((result or {}).get("reason") or "")[:180],
+            },
         }
 
     def graph_for_graph_store_persistence(self, graph: PortfolioOntology) -> PortfolioOntology:
@@ -425,7 +482,6 @@ class PortfolioOntologyProjectionRecorder:
         decision_performance = evaluate_decision_performance(
             decision_episodes,
             minimum_sample_count=int(self.performance_setting("investmentBrainPerformanceMinimumSamples", 5)),
-            minimum_accuracy_pct=self.performance_setting("investmentBrainPerformanceMinimumAccuracyPct", 55),
         )
         return {
             "settings": dict(self.settings),

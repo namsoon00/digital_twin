@@ -11,12 +11,11 @@ from digital_twin.domain.news_analysis import (
     classify_news_relevance,
     classify_news_event_type,
     clean_article_summary_noise,
-    confidence_from_analysis_payload,
     english_fragment_to_korean,
-    impact_from_analysis_payload,
     korean_article_summary,
+    news_state_payload,
     relation_scope_is_investable,
-    source_reliability_score,
+    source_trust_state_for_source,
     stock_impact_analysis,
 )
 from digital_twin.domain.news_ai_analysis import (
@@ -128,11 +127,11 @@ class NewsAnalysisDomainTests(unittest.TestCase):
 
         self.assertEqual("direct", analysis["relationScope"])
         self.assertEqual("earnings", analysis["eventType"])
-        self.assertGreaterEqual(analysis["relevanceScore"], 90)
-        self.assertGreaterEqual(analysis["materialityScore"], 60)
+        self.assertEqual("direct", analysis["relevanceState"])
+        self.assertEqual("trusted", analysis["sourceTrustState"])
+        self.assertEqual("material", analysis["materialityState"])
         self.assertTrue(any(item["type"] == "NEWS_SUPPORTS_ENTRY" for item in analysis["ontologyRelations"]))
-        self.assertGreater(confidence_from_analysis_payload(analysis), 0.7)
-        self.assertGreater(impact_from_analysis_payload(8, analysis), 8)
+        self.assertEqual("conditional", analysis["validationState"])
 
     def test_news_analysis_flags_noise_for_unrelated_search_result(self):
         target = NewsCollectionTarget("035420", "NAVER", "KOSPI", "KRW", "플랫폼")
@@ -146,7 +145,7 @@ class NewsAnalysisDomainTests(unittest.TestCase):
         )
 
         self.assertEqual("platform_noise", analysis["relationScope"])
-        self.assertLess(analysis["relevanceScore"], 35)
+        self.assertEqual("unrelated", analysis["relevanceState"])
         self.assertIn("플랫폼/블로그", analysis["excludedReason"])
         self.assertFalse(relation_scope_is_investable(analysis["relationScope"]))
         self.assertEqual([], analysis["ontologyRelations"])
@@ -163,7 +162,7 @@ class NewsAnalysisDomainTests(unittest.TestCase):
         )
 
         self.assertEqual("platform_noise", analysis["relationScope"])
-        self.assertLess(analysis["relevanceScore"], 35)
+        self.assertEqual("unrelated", analysis["relevanceState"])
         self.assertIn("플랫폼/블로그", analysis["excludedReason"])
         self.assertEqual("Naver Blog", analysis["sourcePlatform"])
         self.assertEqual("exclude", analysis["qualityGate"]["decision"])
@@ -181,7 +180,7 @@ class NewsAnalysisDomainTests(unittest.TestCase):
         )
 
         self.assertEqual("platform_noise", analysis["relationScope"])
-        self.assertLess(analysis["relevanceScore"], 35)
+        self.assertEqual("unrelated", analysis["relevanceState"])
         self.assertEqual([], analysis["ontologyRelations"])
         self.assertEqual("exclude", analysis["qualityGate"]["decision"])
         self.assertFalse(analysis["directMention"])
@@ -271,8 +270,10 @@ class NewsAnalysisDomainTests(unittest.TestCase):
 
         self.assertEqual(1, facts["directSupportNewsCount"])
         self.assertIn("earnings", facts["topNewsEventTypes"])
-        self.assertGreaterEqual(facts["averageNewsMaterialityScore"], 60)
-        self.assertGreater(facts["newsMomentumScore"], 0)
+        self.assertIn(facts["newsMaterialityState"], {"material", "notable"})
+        self.assertEqual("support", facts["newsEvidenceState"])
+        self.assertEqual("support-only", facts["newsConflictState"])
+        self.assertIn(facts["newsDataState"], {"sufficient", "partial"})
 
     def test_ai_article_analysis_treats_earnings_concern_collapse_as_risk(self):
         target = NewsCollectionTarget("000660", "SK하이닉스", "KOSPI", "KRW", "반도체")
@@ -652,14 +653,25 @@ class NewsAnalysisDomainTests(unittest.TestCase):
         )
 
         self.assertEqual("direct", analysis["relationScope"])
-        self.assertLessEqual(analysis["sourceReliability"], 0.3)
-        self.assertLess(confidence_from_analysis_payload(analysis), 0.55)
+        self.assertEqual("limited", analysis["sourceTrustState"])
+        self.assertEqual("conditional", analysis["validationState"])
 
-    def test_news_analysis_scores_known_publishers_above_digest_gate(self):
-        self.assertGreaterEqual(source_reliability_score("The Economist", "Google News US"), 0.8)
-        self.assertGreaterEqual(source_reliability_score("YTN", "Google News KR"), 0.68)
-        self.assertGreaterEqual(source_reliability_score("뉴스핌", "Google News KR"), 0.68)
-        self.assertLess(source_reliability_score("Naver Blog", "Google News KR"), 0.5)
+    def test_news_analysis_classifies_known_publishers_without_scores(self):
+        self.assertEqual("trusted", source_trust_state_for_source("The Economist", "Google News US"))
+        self.assertEqual("standard", source_trust_state_for_source("YTN", "Google News KR"))
+        self.assertEqual("standard", source_trust_state_for_source("뉴스핌", "Google News KR"))
+        self.assertEqual("limited", source_trust_state_for_source("Naver Blog", "Google News KR"))
+
+    def test_legacy_news_payload_uses_publisher_state_without_reliability_number(self):
+        states = news_state_payload({
+            "provider": "Reuters",
+            "relevanceScore": 91,
+            "stockImpactLabel": "중립",
+        })
+
+        self.assertEqual("direct", states["relevanceState"])
+        self.assertEqual("trusted", states["sourceTrustState"])
+        self.assertEqual("conditional", states["validationState"])
 
     def test_news_analysis_filters_apple_common_noun_false_positive(self):
         target = NewsCollectionTarget("AAPL", "Apple", "NASDAQ", "USD", "AI")
@@ -673,7 +685,7 @@ class NewsAnalysisDomainTests(unittest.TestCase):
         )
 
         self.assertEqual("noise", analysis["relationScope"])
-        self.assertLess(analysis["relevanceScore"], 35)
+        self.assertEqual("unrelated", analysis["relevanceState"])
         self.assertIn("일반 명사", analysis["excludedReason"])
         self.assertEqual([], analysis["ontologyRelations"])
 
@@ -735,7 +747,7 @@ class NewsAnalysisDomainTests(unittest.TestCase):
             "The article says investor demand for Strategy preferred shares stayed active while crypto prices weakened."
         )
         analysis = classify_news_relevance(target, title, body, "CryptoRank", "Google News US")
-        impact = stock_impact_analysis(target, title, body, "", analysis, "support", 12)
+        impact = stock_impact_analysis(target, title, body, "", analysis, "support")
 
         facts = article_analysis_facts(
             target,
@@ -806,11 +818,11 @@ class NewsAnalysisDomainTests(unittest.TestCase):
             analysis={
                 "relationScope": "direct",
                 "eventType": "capital_policy",
-                "relevanceScore": 94.5,
-                "materialityScore": 72,
+                "relevanceState": "direct",
+                "materialityState": "material",
+                "sourceTrustState": "trusted",
             },
             polarity="risk",
-            impact_score=11,
         )
 
         reason = result["stockImpactReasonKo"]

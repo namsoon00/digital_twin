@@ -2,7 +2,7 @@ import unittest
 from datetime import datetime, timezone
 
 from digital_twin.domain.ontology_contracts import OntologyEntity, OntologyRelation, PortfolioOntology
-from digital_twin.domain.ontology_inference_context import inference_score_breakdown, matches_from_inference
+from digital_twin.domain.ontology_inference_context import inference_evidence_state, matches_from_inference
 from digital_twin.domain.ontology_inference_materializer import materialize_rule_inference
 from digital_twin.domain.ontology_observation_quality import position_observation_profiles
 from digital_twin.domain.ontology_projection_fingerprint import material_graph_fingerprint
@@ -103,7 +103,7 @@ class OntologyInferenceQualityTests(unittest.TestCase):
         self.assertEqual(-12.5, conditions["holding-loss"]["observedValue"])
         self.assertEqual("relation:ma20", conditions["ma-break"]["relationId"])
         self.assertEqual("fresh", conditions["ma-break"]["freshnessStatus"])
-        self.assertEqual(100.0, trace.properties["evidenceCoverage"])
+        self.assertEqual("sufficient", trace.properties["dataState"])
         self.assertEqual("typedb-match+abox-grounding", trace.properties["conditionDetailSource"])
         self.assertTrue(trace.properties["evidenceUsableForJudgement"])
 
@@ -167,25 +167,22 @@ class OntologyInferenceQualityTests(unittest.TestCase):
         self.assertEqual("closed", profile["marketSessionStatus"])
         self.assertFalse(profile["judgementEvidenceUsable"])
 
-    def test_inference_score_is_capped_when_temporal_evidence_is_blocked(self):
-        score = inference_score_breakdown(
+    def test_inference_is_blocked_when_temporal_evidence_is_stale(self):
+        state = inference_evidence_state(
             {
                 "type": "HAS_INFERRED_RISK",
                 "ruleId": "graph.loss_guard.breakdown.v1",
                 "actionGroup": "lossControl",
                 "polarity": "risk",
-                "riskImpact": 18,
-                "weight": 0.94,
+                "evidenceRole": "risk",
             },
             {
                 "isHolding": True,
                 "profitLossRate": -25,
                 "ma20Distance": -20,
                 "ma60Distance": -12,
-                "dataQualityScore": 100,
             },
             {
-                "confidence": 0.94,
                 "evidenceUsableForJudgement": False,
                 "freshnessStatus": "stale",
                 "freshnessGateReason": "원천 가격 기준시각이 오래되었습니다.",
@@ -198,19 +195,11 @@ class OntologyInferenceQualityTests(unittest.TestCase):
             },
         )
 
-        self.assertTrue(score["judgementBlocked"])
-        self.assertLessEqual(score["finalStrength"], 35)
-        self.assertLessEqual(score["actionability"], 20)
-        self.assertLessEqual(score["dataConfidence"], 35)
-        self.assertEqual(0.0, score["scoreMinimum"])
-        self.assertEqual(100.0, score["scoreMaximum"])
-        self.assertEqual(0.25, score["componentWeights"]["ruleReliability"])
-        self.assertEqual(0.42, score["componentWeights"]["dominantEvidence"])
-        self.assertEqual(14.0, score["maximumOpposingPressurePenalty"])
-        self.assertEqual(0.18, score["opposingPressurePenaltyRate"])
-        self.assertEqual(4.0, score["directionalDominanceBonus"])
-        self.assertEqual(55.0, score["directionalDominanceThreshold"])
-        self.assertEqual(55.0, score["dataConfidencePenaltyThreshold"])
+        self.assertTrue(state["judgementBlocked"])
+        self.assertEqual("unavailable", state["dataState"])
+        self.assertEqual("risk", state["evidenceRole"])
+        self.assertFalse(state["evidenceUsableForJudgement"])
+        self.assertIn("원천 가격 기준시각", state["freshnessGateReason"])
 
     def test_material_fingerprint_ignores_poll_time_but_changes_with_price(self):
         position = normalize_position({

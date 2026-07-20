@@ -18,7 +18,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from digital_twin.admin_preview import admin_preview_config, write_admin_preview
 from digital_twin.application.account_service import AccountApplicationService
-from digital_twin.application.flow_lens_service import FlowLensService
+from digital_twin.application.flow_lens_service import FlowLensService, ontology_box
 from digital_twin.application.kis_realtime_service import KISRealtimeWebSocketRunner
 from digital_twin.application.market_data_collection_service import MARKET_DATA_ACCOUNT_ID, MarketDataCollectionRunner
 from digital_twin.application.model_review_service import ModelReviewRunner
@@ -45,7 +45,7 @@ from digital_twin.domain.ontology_validator import validate_ontology
 from digital_twin.domain.portfolio_ontology_builder import build_portfolio_ontology
 from digital_twin.domain.ontology_relation_reasoning import decision_action_group_for_label, prompt_template_for_message_type
 from digital_twin.domain.portfolio_calculations import portfolio_summary
-from digital_twin.domain.strategy import SafeFormula, StrategyModel, decisions_for_positions
+from digital_twin.domain.strategy import StrategyModel, decisions_for_positions
 from digital_twin.domain.trend_transitions import trend_transition_assessment
 from digital_twin.domain.events import ACCOUNT_SAVED, MARKET_DATA_COLLECTED, MONITORING_ALERTS_DETECTED, MONITORING_CYCLE_COMPLETED, MONITORING_SNAPSHOT_COLLECTED, ONTOLOGY_REASONING_COMPLETED, ONTOLOGY_REASONING_REQUESTED, RESEARCH_EVIDENCE_COLLECTED, DomainEvent, alerts_detected_event, monitoring_cycle_completed_event, ontology_reasoning_requested_event, snapshot_collected_event
 from digital_twin.domain.monitoring import RealtimeMonitor
@@ -2126,48 +2126,16 @@ class PythonServiceTests(unittest.TestCase):
 
         self.assertEqual([], account.watchlist_symbols)
 
-    def test_strategy_formula_is_safe_and_scores(self):
-        formula = SafeFormula("max(0, buyShare - 50) + abs(priceChangeRate) + clamp(9, 0, 3)")
-        self.assertEqual(20, formula.evaluate({"buyShare": 65, "priceChangeRate": -2}))
-        with self.assertRaises(ValueError):
-            SafeFormula("__import__('os').system('echo no')")
+    def test_strategy_model_keeps_raw_relation_thresholds_without_formula_engine(self):
+        model = StrategyModel({"relationRuleThresholds": "lossRateLow=-8\npositionWeightHigh=25"})
 
-        model = StrategyModel({
-            "buyScoreFormula": "50 + tradeStrength / 10",
-            "sellScoreFormula": "50 - priceChangeRate",
-            "formulaWeights": "flowWeight=1",
-        })
-        score = model.score({"tradeStrength": 120, "priceChangeRate": -3})
-        self.assertEqual(62, score["buyScore"])
-        self.assertEqual(53, score["sellScore"])
+        self.assertEqual(-8, model.thresholds["lossRateLow"])
+        self.assertEqual(25, model.thresholds["positionWeightHigh"])
+        self.assertFalse(hasattr(model, "score"))
+        self.assertFalse(hasattr(model, "feature_variables"))
 
-    def test_strategy_default_formula_uses_directional_volume(self):
-        model = StrategyModel({"formulaWeights": "flowWeight=1\nvaluationWeight=1"})
-
-        buy_side = model.score({
-            "tradeStrength": 130,
-            "volumeRatio": 2.2,
-            "buyVolume": 700,
-            "sellVolume": 300,
-            "bidAskImbalance": 14,
-            "priceChangeRate": 2.0,
-        })
-        sell_side = model.score({
-            "tradeStrength": 72,
-            "volumeRatio": 2.2,
-            "buyVolume": 300,
-            "sellVolume": 700,
-            "bidAskImbalance": -14,
-            "priceChangeRate": -2.0,
-        })
-
-        self.assertGreater(buy_side["buyScore"], buy_side["sellScore"])
-        self.assertGreater(sell_side["sellScore"], sell_side["buyScore"])
-
-    def test_strategy_prefers_investor_buy_sell_difference_over_reported_net(self):
-        model = StrategyModel({})
-
-        variables = model.feature_variables({
+    def test_investor_flow_prefers_buy_sell_difference_over_reported_net(self):
+        position = normalize_position({
             "foreignNetVolume": 999999,
             "foreignBuyVolume": 1300,
             "foreignSellVolume": 600,
@@ -2182,23 +2150,9 @@ class PythonServiceTests(unittest.TestCase):
             "symbol": "000660",
         })
 
-        self.assertEqual(700, variables["foreignNet"])
-        self.assertEqual(-300, variables["institutionNet"])
-        self.assertEqual(-500, variables["individualNet"])
-        self.assertNotIn("investorFlowScore", model.market_formula_missing_inputs({
-            "foreignNetVolume": 999999,
-            "foreignBuyVolume": 1300,
-            "foreignSellVolume": 600,
-            "institutionNetVolume": 999999,
-            "institutionBuyVolume": 200,
-            "institutionSellVolume": 500,
-            "individualNetVolume": 999999,
-            "individualBuyVolume": 400,
-            "individualSellVolume": 900,
-            "market": "KR",
-            "currency": "KRW",
-            "symbol": "000660",
-        }))
+        self.assertEqual(700, position.foreign_net_volume)
+        self.assertEqual(-300, position.institution_net_volume)
+        self.assertEqual(-500, position.individual_net_volume)
 
     def test_holding_decision_uses_ontology_reasoning_not_user_score_formulas(self):
         loss_position = normalize_position({
@@ -7241,6 +7195,11 @@ class PythonServiceTests(unittest.TestCase):
         self.assertIn("HAS_POSITION", abox_relation_types)
         self.assertFalse("news" in payload)
 
+    def test_flow_lens_ontology_box_reads_nested_properties(self):
+        self.assertEqual("TBOX", ontology_box({"ontologyBox": "TBox"}))
+        self.assertEqual("INFERENCEBOX", ontology_box({"properties": {"ontologyBox": "InferenceBox"}}))
+        self.assertEqual("", ontology_box({}))
+
     def test_mock_market_contract_is_python_native(self):
         payload = mock_market_payload({"scenario": "semiconductor-boom", "symbols": "NVDA,005930", "seed": "unit"})
 
@@ -9020,7 +8979,7 @@ class PythonServiceTests(unittest.TestCase):
         self.assertEqual(10, payload["limit"])
         self.assertEqual({"suppressed": 1}, payload["summary"])
 
-    def test_alert_context_scores_from_structured_notification_signals(self):
+    def test_alert_context_classifies_structured_notification_signals(self):
         event = AlertEvent(
             "main",
             "메인",
@@ -9044,8 +9003,8 @@ class PythonServiceTests(unittest.TestCase):
 
         self.assertIn("important", context["notificationSignals"])
         self.assertIn("confirmingData", context["notificationSignals"])
-        self.assertIn("핵심 투자 단어 +15", decision.reasons)
-        self.assertIn("확인 데이터 포함 +10", decision.reasons)
+        self.assertIn("중요 투자 내용", decision.reasons)
+        self.assertIn("확인 자료 포함", decision.reasons)
 
     def test_notification_render_uses_symbol_display_name(self):
         event = AlertEvent(

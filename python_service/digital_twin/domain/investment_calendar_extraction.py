@@ -407,7 +407,7 @@ class CalendarEventCandidate:
     source: str = "research-evidence"
     source_url: str = ""
     notes: str = ""
-    confidence: float = 0.0
+    readiness_state: str = "needs-review"
     matched_keywords: List[str] = field(default_factory=list)
     source_evidence_id: str = ""
     review_candidate_id: str = ""
@@ -449,7 +449,7 @@ class CalendarEventCandidate:
             "status": "pending",
             "reviewReason": self.review_reason or "needsReview",
             "importance": self.importance,
-            "confidence": self.confidence,
+            "readinessState": self.readiness_state,
             "symbols": list(self.symbols or []),
             "markets": list(self.markets or []),
             "accountIds": unique_texts(account_ids or [], 50),
@@ -487,20 +487,19 @@ def review_candidate_id(item: Dict[str, object], event_type: str, starts_at: str
     return "calendar-review-" + hashlib.sha1(token.encode("utf-8")).hexdigest()[:24]
 
 
-def feedback_adjustment(event_type: str, feedback: Dict[str, object] = None) -> float:
+def feedback_requires_review(event_type: str, feedback: Dict[str, object] = None) -> bool:
     entry = (feedback or {}).get(event_type) if isinstance(feedback, dict) else None
     if not isinstance(entry, dict):
-        return 0.0
+        return False
     accepted = int(entry.get("accepted") or 0)
     rejected = int(entry.get("rejected") or 0)
     total = accepted + rejected
     if total < 3:
-        return 0.0
-    rate = accepted / total
-    return max(-0.10, min(0.10, (rate - 0.5) * 0.18))
+        return False
+    return rejected > accepted
 
 
-def confidence_for(
+def readiness_for(
     item: Dict[str, object],
     matched_keywords: List[str],
     starts_at,
@@ -510,28 +509,26 @@ def confidence_for(
     date_source: str = "",
     structured_match: bool = False,
     feedback: Dict[str, object] = None,
-) -> float:
+) -> tuple:
     payload = evidence_payload(item)
-    score = 0.35
-    score += min(0.25, len(matched_keywords) * 0.08)
-    if starts_at:
-        score += 0.22
-    if official:
-        score += 0.18
-    if parser != "generic":
-        score += 0.06
-    if structured_match:
-        score += 0.06
-    if date_source and date_source != "text":
-        score += 0.04
-    try:
-        materiality = float(item.get("materialityScore") or payload.get("materialityScore") or 0)
-    except (TypeError, ValueError):
-        materiality = 0
-    if materiality >= 80:
-        score += 0.08
-    score += feedback_adjustment(event_type, feedback)
-    return round(max(0.01, min(score, 0.99)), 2)
+    source_trust = str(item.get("sourceTrustState") or payload.get("sourceTrustState") or "unknown").strip().lower()
+    data_state = str(item.get("dataState") or payload.get("dataState") or "partial").strip().lower()
+    validation_state = str(item.get("validationState") or payload.get("validationState") or "conditional").strip().lower()
+    if not starts_at:
+        return "needs-review", "missingDate"
+    if validation_state == "blocked" or data_state in {"insufficient", "unavailable"}:
+        return "blocked", "sourceDataUnavailable"
+    if not official:
+        return "needs-review", "sourceNeedsVerification"
+    if source_trust not in {"trusted", "standard"}:
+        return "needs-review", "sourceTrustNeedsReview"
+    if not matched_keywords:
+        return "needs-review", "eventTermsUnclear"
+    if date_source == "text" and not structured_match:
+        return "needs-review", "dateNeedsVerification"
+    if feedback_requires_review(event_type, feedback):
+        return "needs-review", "feedbackReview"
+    return "ready", ""
 
 
 def markets_for_candidate(item: Dict[str, object], pattern: Dict[str, object], text: str) -> List[str]:
@@ -559,9 +556,8 @@ def markets_for_candidate(item: Dict[str, object], pattern: Dict[str, object], t
 def calendar_candidate_from_research_item(
     item: Dict[str, object],
     register_undated: bool = False,
-    min_confidence: float = 0.45,
     include_review: bool = False,
-    review_min_confidence: float = 0.35,
+    force_review: bool = False,
     feedback: Dict[str, object] = None,
 ):
     if not isinstance(item, dict):
@@ -588,7 +584,7 @@ def calendar_candidate_from_research_item(
     else:
         event_date_utc = utc_iso(event_date)
     official = official_source(item)
-    confidence = confidence_for(
+    readiness_state, readiness_reason = readiness_for(
         item,
         matched_keywords,
         event_date,
@@ -599,22 +595,17 @@ def calendar_candidate_from_research_item(
         structured_match=bool(structured_type),
         feedback=feedback,
     )
-    review_reason = ""
-    if missing_date and not register_undated:
-        review_reason = "missingDate"
-    elif confidence < float(min_confidence or 0):
-        review_reason = "lowConfidence"
-    if review_reason:
-        if not include_review or confidence < float(review_min_confidence or 0):
-            return None
-    if not review_reason and confidence < float(min_confidence or 0):
+    if force_review and readiness_state == "ready":
+        readiness_state, readiness_reason = "needs-review", "aiResearchReview"
+    review_reason = readiness_reason if readiness_state != "ready" else ""
+    if readiness_state != "ready" and not include_review:
         return None
     title = clean_text(item.get("title"), 180) or str(pattern["label"])
     symbol = clean_text(item.get("symbol"), 24).upper()
     symbols = [symbol] if symbol else []
     markets = markets_for_candidate(item, pattern, text)
-    status = "active" if event_date and official and event_date >= reference - timedelta(days=2) else "tentative"
-    if review_reason:
+    status = "active" if readiness_state == "ready" and event_date and event_date >= reference - timedelta(days=2) else "tentative"
+    if readiness_state != "ready":
         status = "needsReview"
     source = clean_text(item.get("source") or "research-evidence", 120)
     evidence_id = clean_text(item.get("evidenceId") or item.get("id"), 191)
@@ -626,12 +617,12 @@ def calendar_candidate_from_research_item(
     )
     if review_reason == "missingDate":
         notes += " 날짜가 명확하지 않아 후보함에서 검토해야 합니다."
-    elif review_reason == "lowConfidence":
-        notes += " 신뢰도가 자동 등록 기준보다 낮아 후보함에서 검토해야 합니다."
+    elif review_reason:
+        notes += " 원문·출처·일정 조건이 충분히 확인되지 않아 후보함에서 검토해야 합니다."
     payload = {
         "autoDetected": True,
         "detector": "research-evidence-calendar-extractor-v1",
-        "confidence": confidence,
+        "readinessState": readiness_state,
         "matchedKeywords": matched_keywords[:12],
         "sourceEvidenceId": evidence_id,
         "sourcePublishedAt": clean_text(item.get("publishedAt"), 80),
@@ -659,7 +650,7 @@ def calendar_candidate_from_research_item(
         source=source,
         source_url=clean_text(item.get("url"), 1000),
         notes=notes,
-        confidence=confidence,
+        readiness_state=readiness_state,
         matched_keywords=matched_keywords,
         source_evidence_id=evidence_id,
         review_reason=review_reason,
@@ -670,7 +661,6 @@ def calendar_candidate_from_research_item(
 def calendar_candidates_from_research_items(
     items: Iterable[Dict[str, object]],
     register_undated: bool = False,
-    min_confidence: float = 0.45,
     feedback: Dict[str, object] = None,
 ) -> List[CalendarEventCandidate]:
     candidates = []
@@ -679,7 +669,6 @@ def calendar_candidates_from_research_items(
         candidate = calendar_candidate_from_research_item(
             item,
             register_undated,
-            min_confidence,
             feedback=feedback,
         )
         if not candidate or candidate.review_required() or candidate.event_id in seen:
@@ -692,8 +681,7 @@ def calendar_candidates_from_research_items(
 def calendar_candidate_sets_from_research_items(
     items: Iterable[Dict[str, object]],
     register_undated: bool = False,
-    min_confidence: float = 0.45,
-    review_min_confidence: float = 0.35,
+    force_review: bool = False,
     feedback: Dict[str, object] = None,
 ) -> Dict[str, List[CalendarEventCandidate]]:
     ready = []
@@ -704,9 +692,8 @@ def calendar_candidate_sets_from_research_items(
         candidate = calendar_candidate_from_research_item(
             item,
             register_undated=register_undated,
-            min_confidence=min_confidence,
             include_review=True,
-            review_min_confidence=review_min_confidence,
+            force_review=force_review,
             feedback=feedback,
         )
         if not candidate:

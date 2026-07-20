@@ -168,6 +168,31 @@ class FakeNotificationQueue:
         return True
 
 
+def mark_native_materialization_ready(experiment, readiness_status="promote-candidate"):
+    """Simulate the TypeDB sandbox result; Python graph inference is retired."""
+    result = dict(experiment.last_result or {})
+    inference = dict(result.get("inference") or {})
+    delta = dict(inference.get("aggregateDelta") or {})
+    delta.update({
+        "derivedRelationCount": 1,
+        "traceCount": 1,
+        "requiresTypeDbMaterializationCount": 0,
+        "newRuleIds": ["graph.lab.symbol-review.v1"],
+        "newRelationTypes": list((result.get("proposedOntologyChanges") or {}).get("newRelationTypes") or []),
+        "newDecisionStages": list((result.get("proposedOntologyChanges") or {}).get("newDecisionStages") or []),
+    })
+    inference["aggregateDelta"] = delta
+    result["inference"] = inference
+    result["promotionReadiness"] = {
+        "status": readiness_status,
+        "validationState": "ready" if readiness_status == "promote-candidate" else "conditional",
+        "dataState": "sufficient",
+        "reason": "TypeDB 네이티브 materialization 검증 완료",
+    }
+    experiment.last_result = result
+    return experiment
+
+
 class OntologyLabTests(unittest.TestCase):
     def test_create_normalizes_candidate_rule_as_disabled(self):
         service = OntologyLabService(
@@ -229,6 +254,7 @@ class OntologyLabTests(unittest.TestCase):
             "rules": [candidate_rule()],
         })["experiment"]["id"]
         service.run(experiment_id)
+        store.save(mark_native_materialization_ready(store.get(experiment_id), "needs-review"))
 
         result = service.apply_recommendations(experiment_id, {
             "reviewApproved": True,
@@ -267,6 +293,7 @@ class OntologyLabTests(unittest.TestCase):
             "rules": [candidate_rule()],
         })["experiment"]["id"]
         service.run(experiment_id)
+        store.save(mark_native_materialization_ready(store.get(experiment_id)))
         experiment = store.get(experiment_id)
         recommendations = experiment.last_result["recommendations"]
         selected_ids = [
@@ -313,6 +340,7 @@ class OntologyLabTests(unittest.TestCase):
             "rules": [rule],
         })["experiment"]["id"]
         service.run(experiment_id)
+        store.save(mark_native_materialization_ready(store.get(experiment_id)))
         recommendations = store.get(experiment_id).last_result["recommendations"]
         relation_recommendation = [
             item
@@ -362,6 +390,8 @@ class OntologyLabTests(unittest.TestCase):
         second_id = service.create({"title": "Second lab", "symbols": ["AAPL"], "rules": [second_rule]})["experiment"]["id"]
         service.run(first_id)
         service.run(second_id)
+        store.save(mark_native_materialization_ready(store.get(first_id)))
+        store.save(mark_native_materialization_ready(store.get(second_id)))
 
         result = service.apply_recommendation_batch({
             "reviewApproved": True,
@@ -409,6 +439,7 @@ class OntologyLabTests(unittest.TestCase):
             "rules": [rule],
         })["experiment"]["id"]
         service.run(experiment_id)
+        store.save(mark_native_materialization_ready(store.get(experiment_id)))
 
         result = service.apply_recommendations(experiment_id, {
             "reviewApproved": True,
@@ -439,6 +470,7 @@ class OntologyLabTests(unittest.TestCase):
             "rules": [candidate_rule()],
         })["experiment"]["id"]
         service.run(experiment_id)
+        store.save(mark_native_materialization_ready(store.get(experiment_id), "needs-review"))
 
         result = service.apply_recommendations(experiment_id)
 
@@ -462,6 +494,7 @@ class OntologyLabTests(unittest.TestCase):
             "rules": [candidate_rule()],
         })["experiment"]["id"]
         service.run(experiment_id)
+        store.save(mark_native_materialization_ready(store.get(experiment_id), "needs-review"))
 
         experiment = service.status()["experiments"][0]
         gate = experiment["promotionGate"]
@@ -727,12 +760,7 @@ class OntologyLabTests(unittest.TestCase):
             "rules": [candidate_rule()],
         })["experiment"]["id"]
         service.run(experiment_id)
-        experiment = store.get(experiment_id)
-        experiment.last_result["promotionReadiness"] = {
-            "status": "promote-candidate",
-            "score": 82,
-            "reason": "unit-test promotable",
-        }
+        experiment = mark_native_materialization_ready(store.get(experiment_id))
         experiment.last_result["inference"]["aggregateDelta"]["derivedRelationCount"] = 8
         store.save(experiment)
 
@@ -755,7 +783,7 @@ class OntologyLabTests(unittest.TestCase):
         self.assertEqual("applied", experiment.last_result["automation"]["status"])
         self.assertEqual("applied", experiment.run_history[0]["automation"]["status"])
 
-    def test_scheduled_needs_review_experiment_only_queues_review_notification(self):
+    def test_scheduled_experiment_without_native_materialization_only_observes(self):
         store = MemoryExperimentStore()
         repository = FakeOntologyRepository()
         queue = FakeNotificationQueue()
@@ -776,12 +804,13 @@ class OntologyLabTests(unittest.TestCase):
         result = service.run_once(force=True)
 
         self.assertEqual(1, result["runCount"])
-        self.assertEqual("review-required", result["experiments"][0]["automation"]["status"])
+        self.assertEqual("observed", result["experiments"][0]["automation"]["status"])
+        self.assertEqual("needs-materialization", result["experiments"][0]["automation"]["readinessStatus"])
         self.assertEqual(0, len(repository.saved_rulebox_payloads))
         self.assertEqual(0, len(repository.run_rulebox_payloads))
         self.assertEqual(0, len(repository.saved_tbox_graphs))
         self.assertEqual(1, len(queue.jobs))
-        self.assertIn("검토 후 반영 필요", queue.jobs[0].text)
+        self.assertIn("실험 결과", queue.jobs[0].text)
         self.assertEqual("active", store.get(experiment_id).status)
 
     def test_pause_experiment_removes_it_from_active_batch(self):
@@ -866,9 +895,8 @@ def candidate_rule():
                 "tbox_class": "NextCheck",
                 "tbox_classes": ["NextCheck"],
                 "polarity": "context",
-                "weight": 0.72,
-                "decision_stage": "LAB_REVIEW",
-                "stage_priority": 40,
+        "evidence_role": "context",
+        "decision_stage": "LAB_REVIEW",
             }
         ],
     }

@@ -2,6 +2,7 @@ from typing import Dict, Iterable, List
 
 from .market_data import number
 from .ontology_contracts import PortfolioOntology, entity_id
+from .ontology_decision_state import data_state_from_evidence
 from .ontology_schema import add_entity, add_relation
 from .parsing import parse_assignments
 from .portfolio import PortfolioSummary, Position
@@ -14,6 +15,50 @@ RATE_SERIES_LABELS = {
     "DGS2": "미국 2년 국채금리",
     "DFF": "미국 실효 연방기금금리",
 }
+
+
+def external_evidence_properties(
+    *,
+    source: str,
+    label: str,
+    role: str = "context",
+    review_level: str = "normal",
+    data_state: str = "sufficient",
+    change_state: str = "unchanged",
+    **extra: object,
+) -> Dict[str, object]:
+    """Build the categorical evidence contract used by external ABox facts."""
+    properties = {
+        "source": source,
+        "polarity": role,
+        "evidenceRole": role,
+        "reviewLevel": review_level,
+        "dataState": data_state,
+        "changeState": change_state,
+        "aiInfluenceLabel": label,
+    }
+    properties.update(extra)
+    return properties
+
+
+def external_quality_data_state(
+    quality: Dict[str, object],
+    freshness: Dict[str, object],
+    provenance: Dict[str, object],
+) -> str:
+    status = str(quality.get("status") or freshness.get("status") or "").strip().lower()
+    if status in {"error", "failed", "unavailable", "missing"}:
+        return "unavailable"
+    error_count = int(number(quality.get("errorCount")))
+    unavailable_sources = list(provenance.get("unavailableSources") or [])
+    symbol_coverage = quality.get("symbolCoverage") if isinstance(quality.get("symbolCoverage"), dict) else {}
+    incomplete_coverage = bool(symbol_coverage) and any(value in (False, None, "", 0) for value in symbol_coverage.values())
+    return data_state_from_evidence(
+        usable=True,
+        freshness_status=status,
+        missing=[error_count if error_count else None, unavailable_sources, incomplete_coverage or None],
+        has_evidence=bool(quality or freshness or provenance),
+    )
 
 
 def external_observation_profile(
@@ -358,32 +403,35 @@ def macro_regime_profile(macro: Dict[str, object]) -> Dict[str, object]:
         regime = "high-rate-inverted-curve"
         label = "고금리·역전 수익률곡선"
         polarity = "risk"
-        impact = 9.0
+        review_level = "act"
     elif high_rate:
         regime = "high-rate"
         label = "고금리 레짐"
         polarity = "risk"
-        impact = 7.0
+        review_level = "check"
     elif inverted_curve:
         regime = "inverted-curve"
         label = "역전 수익률곡선"
         polarity = "risk"
-        impact = 6.5
+        review_level = "check"
     elif rate_shock:
         regime = "rate-shock"
         label = "금리 변화 확대"
         polarity = "risk"
-        impact = 6.0
+        review_level = "check"
     else:
         regime = "rate-context"
         label = "금리 맥락"
         polarity = "context"
-        impact = 0.0
+        review_level = "normal"
     return {
         "regime": regime,
         "label": label,
         "polarity": polarity,
-        "opinionImpact": impact,
+        "evidenceRole": polarity,
+        "reviewLevel": review_level,
+        "dataState": "sufficient",
+        "changeState": "new-condition" if polarity == "risk" else "unchanged",
         "dgs10": round(dgs10, 4),
         "dgs2": round(dgs2, 4),
         "dff": round(dff, 4),
@@ -416,11 +464,10 @@ def add_external_signal_concepts(
             "value": safe_signal_value(str(key), value),
             **external_observation_profile(external_signals, value),
         })
-        properties = {"source": "external-signals", "aiInfluenceLabel": "외부 신호 " + str(key)}
-        if isinstance(value, dict):
-            magnitude = max([abs(number(item)) for item in value.values()] + [0.0])
-            if magnitude >= 3:
-                properties.update({"polarity": "risk", "opinionImpact": min(12.0, magnitude)})
+        properties = external_evidence_properties(
+            source="external-signals",
+            label="외부 신호 " + str(key),
+        )
         add_relation(graph, portfolio_node_id, signal_id, "HAS_EXTERNAL_SIGNAL", weight=1.0, properties=properties)
         add_relation(graph, portfolio_node_id, signal_id, "HAS_OBSERVATION", weight=1.0, properties=properties)
 
@@ -441,13 +488,15 @@ def add_portfolio_macro_and_cross_asset_concepts(
             "source": "macro",
             **regime,
         })
-        regime_props = {
-            "source": "macro",
-            "polarity": str(regime.get("polarity") or "context"),
-            "opinionImpact": number(regime.get("opinionImpact")),
-            "aiInfluenceLabel": str(regime.get("label") or "거시 레짐"),
-            "dataScope": "macro",
-        }
+        regime_props = external_evidence_properties(
+            source="macro",
+            label=str(regime.get("label") or "거시 레짐"),
+            role=str(regime.get("evidenceRole") or regime.get("polarity") or "context"),
+            review_level=str(regime.get("reviewLevel") or "normal"),
+            data_state=str(regime.get("dataState") or "sufficient"),
+            change_state=str(regime.get("changeState") or "unchanged"),
+            dataScope="macro",
+        )
         add_relation(graph, portfolio_node_id, regime_id, "HAS_MACRO_REGIME", weight=0.78, properties=regime_props)
         add_relation(graph, regime_id, portfolio_node_id, "AFFECTS", weight=0.70, properties=regime_props)
     for series_id, item in sorted(series.items()):
@@ -463,9 +512,14 @@ def add_portfolio_macro_and_cross_asset_concepts(
             "value": round(value, 4),
             **external_observation_profile(external_signals, item, "macro", 4320),
         })
-        props = {"source": "macro", "polarity": "context", "aiInfluenceLabel": rate_series_label(str(series_id))}
-        if str(series_id).upper() in {"DGS10", "DGS2", "DFF"}:
-            props.update({"polarity": "risk" if value >= 4.5 else "context", "opinionImpact": 5.0 if value >= 4.5 else 0.0})
+        is_high_rate = str(series_id).upper() in {"DGS10", "DGS2", "DFF"} and value >= 4.5
+        props = external_evidence_properties(
+            source="macro",
+            label=rate_series_label(str(series_id)),
+            role="risk" if is_high_rate else "context",
+            review_level="check" if is_high_rate else "normal",
+            change_state="new-condition" if is_high_rate else "unchanged",
+        )
         add_relation(graph, portfolio_node_id, macro_id, "HAS_EXTERNAL_SIGNAL", weight=1.0, properties=props)
         if rate_series_kind(str(series_id)) == "interest-rate":
             add_relation(graph, portfolio_node_id, macro_id, "HAS_RATE_SENSITIVITY", weight=0.72, properties=props)
@@ -477,7 +531,13 @@ def add_portfolio_macro_and_cross_asset_concepts(
             "tboxClasses": ["Observation", "ExternalObservation", "ExternalSignal", "MacroIndicator", "RateSignal", "YieldCurve", "CreditSpreadSignal", "RegimeRisk"],
             "value": round(spread, 4),
         })
-        props = {"source": "macro", "polarity": "risk" if spread < 0 else "context", "opinionImpact": 6.0 if spread < 0 else 0.0, "aiInfluenceLabel": "금리 스프레드 레짐"}
+        props = external_evidence_properties(
+            source="macro",
+            label="금리 스프레드 레짐",
+            role="risk" if spread < 0 else "context",
+            review_level="check" if spread < 0 else "normal",
+            change_state="new-condition" if spread < 0 else "unchanged",
+        )
         add_relation(graph, portfolio_node_id, spread_id, "HAS_EXTERNAL_SIGNAL", weight=1.0, properties=props)
         add_relation(graph, portfolio_node_id, spread_id, "HAS_RATE_SENSITIVITY", weight=0.74, properties=props)
         add_relation(graph, spread_id, portfolio_node_id, "AFFECTS", weight=0.72, properties=props)
@@ -505,15 +565,16 @@ def add_portfolio_macro_and_cross_asset_concepts(
             "marketRate": round(number(item.get("marketRate")), 6) if number(item.get("marketRate")) else 0.0,
             "valuationRate": round(number(item.get("valuationRate")), 6) if number(item.get("valuationRate")) else 0.0,
         })
-        props = {
-            "source": "fxRates",
-            "polarity": "context",
-            "aiInfluenceLabel": pair_label + " 환율",
-            "sourceType": str(item.get("sourceType") or ""),
-            "evidenceStrength": str(item.get("evidenceStrength") or ""),
-        }
-        if base == "USD" and quote == "KRW" and (rate >= 1450 or (rate and rate <= 1300)):
-            props.update({"polarity": "risk", "opinionImpact": 4.0})
+        unusual_fx = base == "USD" and quote == "KRW" and (rate >= 1450 or (rate and rate <= 1300))
+        props = external_evidence_properties(
+            source="fxRates",
+            label=pair_label + " 환율",
+            role="risk" if unusual_fx else "context",
+            review_level="check" if unusual_fx else "normal",
+            change_state="new-condition" if unusual_fx else "unchanged",
+            sourceType=str(item.get("sourceType") or ""),
+            evidenceStrength=str(item.get("evidenceStrength") or ""),
+        )
         add_relation(graph, pair_id, rate_id, "HAS_OBSERVATION", weight=1.0, properties=props)
         add_relation(graph, portfolio_node_id, rate_id, "HAS_EXTERNAL_SIGNAL", weight=1.0, properties=props)
         add_relation(graph, portfolio_node_id, rate_id, "HAS_FX_EXPOSURE", weight=0.7, properties=props)
@@ -548,14 +609,15 @@ def add_portfolio_macro_and_cross_asset_concepts(
             "lastUpdated": str(item.get("lastUpdated") or ""),
         })
         magnitude = max(abs(change24h), abs(change7d))
-        props = {
-            "source": "cryptoMarkets",
-            "symbol": symbol,
-            "polarity": "risk" if magnitude >= 4 else "context",
-            "opinionImpact": min(12.0, magnitude) if magnitude >= 4 else 0.0,
-            "aiInfluenceLabel": name + " 변동성",
-            "dataScope": "crypto",
-        }
+        props = external_evidence_properties(
+            source="cryptoMarkets",
+            label=name + " 변동성",
+            role="risk" if magnitude >= 4 else "context",
+            review_level="check" if magnitude >= 4 else "observe",
+            change_state="new-condition" if magnitude >= 4 else "unchanged",
+            symbol=symbol,
+            dataScope="crypto",
+        )
         price_id = add_entity(graph, "price-bar", symbol + ":crypto:latest", name + " 현재 가격", {
             "tboxClass": "PriceBar",
             "tboxClasses": ["Observation", "PriceObservation", "PriceBar"],
@@ -595,7 +657,7 @@ def add_portfolio_macro_and_cross_asset_concepts(
             "coinId": str(coin_id),
             "volume24h": round(volume24h, 2),
             "marketCap": round(number(item.get("marketCap")), 2),
-            "liquidityScore": round(min(100.0, (volume24h / 1000000000) * 8), 2) if volume24h else 0.0,
+            "liquidityState": "deep" if volume24h >= 1000000000 else ("available" if volume24h > 0 else "unavailable"),
             "provider": str(item.get("provider") or "CoinGecko"),
         })
         quality_id = add_entity(graph, "data-quality", symbol + ":crypto", name + " 크립토 데이터 품질", {
@@ -616,8 +678,8 @@ def add_portfolio_macro_and_cross_asset_concepts(
         add_relation(graph, asset_id, path_id, "HAS_PRICE_PATH", weight=1.0, properties=props)
         add_relation(graph, asset_id, volume_id, "HAS_TRADE_FLOW", weight=1.0, properties={**props, "polarity": "context"})
         add_relation(graph, asset_id, liquidity_id, "HAS_LIQUIDITY_PROFILE", weight=0.72, properties={**props, "polarity": "context"})
-        add_relation(graph, asset_id, quality_id, "HAS_DATA_QUALITY", weight=0.84, properties={**props, "polarity": "context", "opinionImpact": 0.0})
-        add_relation(graph, crypto_id, portfolio_node_id, "AFFECTS", weight=min(1.0, magnitude / 10), properties=props)
+        add_relation(graph, asset_id, quality_id, "HAS_DATA_QUALITY", weight=1.0, properties={**props, "polarity": "context", "evidenceRole": "context"})
+        add_relation(graph, crypto_id, portfolio_node_id, "AFFECTS", weight=1.0, properties=props)
         add_relation(graph, path_id, crypto_id, "CONFIRMS_SIGNAL", weight=0.76, properties=props)
 
 
@@ -638,30 +700,47 @@ def add_external_signal_quality_concepts(graph: PortfolioOntology, portfolio_nod
     freshness = external_signals.get("freshness") if isinstance(external_signals.get("freshness"), dict) else {}
     provenance = external_signals.get("provenance") if isinstance(external_signals.get("provenance"), dict) else {}
     if quality:
+        data_state = external_quality_data_state(quality, freshness, provenance)
         quality_id = add_entity(graph, "data-quality", "externalSignals", "외부 신호 품질", {
             "tboxClass": "DataQuality",
             "tboxClasses": ["Observation", "DataQuality", "DataQualitySignal", "Provenance"],
-            "qualityScore": number(quality.get("score")),
-            "coverageScore": number(quality.get("coverageScore")),
-            "sourceHealthScore": number(quality.get("sourceHealthScore")),
+            "dataState": data_state,
             "errorCount": number(quality.get("errorCount")),
             "symbolCoverage": quality.get("symbolCoverage") if isinstance(quality.get("symbolCoverage"), dict) else {},
         })
-        relation_props = {"source": "external-signal-quality", "aiInfluenceLabel": "외부 신호 품질"}
-        if number(quality.get("score")) < 60:
-            relation_props.update({"polarity": "risk", "opinionImpact": round((60 - number(quality.get("score"))) * 0.25, 2)})
-        add_relation(graph, portfolio_node_id, quality_id, "HAS_DATA_QUALITY", weight=round(number(quality.get("score")) / 100, 4), properties=relation_props)
-        add_relation(graph, portfolio_node_id, quality_id, "HAS_OBSERVATION", weight=round(number(quality.get("score")) / 100, 4), properties=relation_props)
+        blocked = data_state in {"insufficient", "unavailable"}
+        partial = data_state == "partial"
+        relation_props = external_evidence_properties(
+            source="external-signal-quality",
+            label="외부 신호 품질",
+            role="blocking" if blocked else ("risk" if partial else "context"),
+            review_level="blocked" if blocked else ("check" if partial else "normal"),
+            data_state=data_state,
+        )
+        add_relation(graph, portfolio_node_id, quality_id, "HAS_DATA_QUALITY", weight=1.0, properties=relation_props)
+        add_relation(graph, portfolio_node_id, quality_id, "HAS_OBSERVATION", weight=1.0, properties=relation_props)
     if freshness:
+        freshness_status = str(freshness.get("status") or "").strip().lower()
+        freshness_data_state = data_state_from_evidence(
+            usable=freshness_status not in {"error", "unavailable", "missing"},
+            freshness_status=freshness_status,
+            has_evidence=True,
+        )
         freshness_id = add_entity(graph, "data-freshness", "externalSignals-runtime", "외부 신호 신선도", {
             "tboxClass": "DataFreshness",
             "fetchedAt": str(freshness.get("fetchedAt") or ""),
             "ageMinutes": number(freshness.get("ageMinutes")),
-            "status": str(freshness.get("status") or ""),
+            "status": freshness_status,
+            "dataState": freshness_data_state,
         })
-        relation_props = {"source": "external-signal-freshness", "aiInfluenceLabel": "외부 신호 신선도"}
-        if str(freshness.get("status") or "") == "stale":
-            relation_props.update({"polarity": "risk", "opinionImpact": 8.0})
+        stale_or_missing = freshness_data_state != "sufficient"
+        relation_props = external_evidence_properties(
+            source="external-signal-freshness",
+            label="외부 신호 신선도",
+            role="blocking" if freshness_data_state in {"insufficient", "unavailable"} else ("risk" if stale_or_missing else "context"),
+            review_level="blocked" if freshness_data_state in {"insufficient", "unavailable"} else ("check" if stale_or_missing else "normal"),
+            data_state=freshness_data_state,
+        )
         add_relation(graph, portfolio_node_id, freshness_id, "HAS_DATA_FRESHNESS", weight=1.0, properties=relation_props)
     if provenance:
         provenance_id = add_entity(graph, "provenance", "externalSignals", "외부 신호 출처", {
@@ -680,8 +759,7 @@ def add_position_macro_context_concepts(
     external_signals: Dict[str, object],
     runtime_context: Dict[str, object],
 ) -> None:
-    weight = round(position_weight(position, portfolio) / 100, 4) if is_holding_position(position) else 0.15
-    context_weight = max(0.15, weight or 0.15)
+    holding_weight_pct = round(position_weight(position, portfolio), 4) if is_holding_position(position) else 0.0
     currency = str(position.currency or "").upper().strip()
     for pair, item in sorted(fx_rate_entries(external_signals, runtime_context).items()):
         base = str(item.get("base") or "").upper()
@@ -690,42 +768,45 @@ def add_position_macro_context_concepts(
             continue
         rate_id = entity_id("fx-rate", pair)
         pair_label = base + "/" + quote
-        props = {
-            "source": "fxRates",
-            "polarity": "context",
-            "aiInfluenceLabel": pair_label + " 환율 민감도",
-            "rate": round(number(item.get("rate")), 6),
-        }
-        add_relation(graph, stock_id, rate_id, "HAS_FX_EXPOSURE", weight=context_weight, properties=props)
-        add_relation(graph, rate_id, stock_id, "AFFECTS", weight=0.62, properties=props)
+        props = external_evidence_properties(
+            source="fxRates",
+            label=pair_label + " 환율 민감도",
+            rate=round(number(item.get("rate")), 6),
+            positionWeightPct=holding_weight_pct,
+        )
+        add_relation(graph, stock_id, rate_id, "HAS_FX_EXPOSURE", weight=1.0, properties=props)
+        add_relation(graph, rate_id, stock_id, "AFFECTS", weight=1.0, properties=props)
     if not rate_sensitive_position(position):
-        add_position_crypto_exposure_concepts(graph, stock_id, position, external_signals, weight)
+        add_position_crypto_exposure_concepts(graph, stock_id, position, external_signals, holding_weight_pct)
         return
     macro = external_signals.get("macro") if isinstance(external_signals, dict) and isinstance(external_signals.get("macro"), dict) else {}
     regime = macro_regime_profile(macro)
     if regime:
         regime_id = entity_id("macro-regime", "rates")
-        props = {
-            "source": "macro",
-            "polarity": str(regime.get("polarity") or "context"),
-            "opinionImpact": number(regime.get("opinionImpact")),
-            "aiInfluenceLabel": str(regime.get("label") or "거시 레짐") + " 민감도",
-            "dataScope": "macro",
-        }
-        add_relation(graph, stock_id, regime_id, "HAS_MACRO_REGIME", weight=context_weight, properties=props)
-        add_relation(graph, regime_id, stock_id, "AFFECTS", weight=0.60, properties=props)
+        props = external_evidence_properties(
+            source="macro",
+            label=str(regime.get("label") or "거시 레짐") + " 민감도",
+            role=str(regime.get("evidenceRole") or regime.get("polarity") or "context"),
+            review_level=str(regime.get("reviewLevel") or "normal"),
+            data_state=str(regime.get("dataState") or "sufficient"),
+            change_state=str(regime.get("changeState") or "unchanged"),
+            dataScope="macro",
+            positionWeightPct=holding_weight_pct,
+        )
+        add_relation(graph, stock_id, regime_id, "HAS_MACRO_REGIME", weight=1.0, properties=props)
+        add_relation(graph, regime_id, stock_id, "AFFECTS", weight=1.0, properties=props)
     for series_id, rate_id in sorted(interest_rate_signal_ids(external_signals).items()):
         is_curve = series_id == "YIELDSPREAD10Y2Y"
-        props = {
-            "source": "macro",
-            "polarity": "context",
-            "aiInfluenceLabel": "금리 스프레드 민감도" if is_curve else rate_series_label(series_id) + " 민감도",
-        }
+        props = external_evidence_properties(
+            source="macro",
+            label="금리 스프레드 민감도" if is_curve else rate_series_label(series_id) + " 민감도",
+            positionWeightPct=holding_weight_pct,
+        )
         if series_id in {"DGS10", "DGS2", "DFF"}:
             props["rateSeriesId"] = series_id
-        add_relation(graph, stock_id, rate_id, "HAS_RATE_SENSITIVITY", weight=context_weight, properties=props)
-        add_relation(graph, rate_id, stock_id, "AFFECTS", weight=0.58 if is_curve else 0.62, properties=props)
-    add_position_crypto_exposure_concepts(graph, stock_id, position, external_signals, weight)
+        add_relation(graph, stock_id, rate_id, "HAS_RATE_SENSITIVITY", weight=1.0, properties=props)
+        add_relation(graph, rate_id, stock_id, "AFFECTS", weight=1.0, properties=props)
+    add_position_crypto_exposure_concepts(graph, stock_id, position, external_signals, holding_weight_pct)
 
 
 def add_position_crypto_exposure_concepts(
@@ -733,7 +814,7 @@ def add_position_crypto_exposure_concepts(
     stock_id: str,
     position: Position,
     external_signals: Dict[str, object],
-    weight: float,
+    holding_weight_pct: float,
 ) -> None:
     if not crypto_sensitive_position(position):
         return
@@ -761,17 +842,19 @@ def add_position_crypto_exposure_concepts(
             "pathState": crypto_path_state(change24h, change7d),
             "exposureBasis": "business-model-or-sector",
         })
-        props = {
-            "source": "cryptoMarkets",
-            "symbol": symbol,
-            "cryptoSymbol": coin_symbol,
-            "polarity": "risk" if magnitude >= 4 else "context",
-            "opinionImpact": min(10.0, magnitude) if magnitude >= 4 else 0.0,
-            "aiInfluenceLabel": coin_symbol + " 가격 경로 노출",
-            "dataScope": "crypto",
-        }
-        add_relation(graph, stock_id, exposure_id, "HAS_CRYPTO_EXPOSURE", weight=max(0.18, weight or 0.15), properties=props)
-        add_relation(graph, exposure_id, entity_id("crypto-asset", coin_symbol), "AFFECTS", weight=0.62, properties=props)
+        props = external_evidence_properties(
+            source="cryptoMarkets",
+            label=coin_symbol + " 가격 경로 노출",
+            role="risk" if magnitude >= 4 else "context",
+            review_level="check" if magnitude >= 4 else "observe",
+            change_state="new-condition" if magnitude >= 4 else "unchanged",
+            symbol=symbol,
+            cryptoSymbol=coin_symbol,
+            dataScope="crypto",
+            positionWeightPct=holding_weight_pct,
+        )
+        add_relation(graph, stock_id, exposure_id, "HAS_CRYPTO_EXPOSURE", weight=1.0, properties=props)
+        add_relation(graph, exposure_id, entity_id("crypto-asset", coin_symbol), "AFFECTS", weight=1.0, properties=props)
 
 
 def symbol_external_signal_items(external_signals: Dict[str, object], symbol: str) -> List[Dict[str, object]]:
@@ -794,17 +877,30 @@ def symbol_external_signal_items(external_signals: Dict[str, object], symbol: st
 
 
 def external_signal_relation_properties(group: str, value: object) -> Dict[str, object]:
-    properties = {"source": "external-signals", "signalGroup": group, "aiInfluenceLabel": "외부 신호 " + group}
+    role = "context"
+    label = "외부 신호 " + group
     if isinstance(value, dict):
         count = number(value.get("count"))
-        sentiment = number(value.get("sentiment") or value.get("score") or value.get("riskScore"))
         if count and group in {"newsHeadlines", "secFilings", "dartDisclosures"}:
-            properties.update({"polarity": "context", "aiInfluenceLabel": group + " " + str(int(count)) + "건"})
-        if sentiment < 0:
-            properties.update({"polarity": "risk", "opinionImpact": min(12.0, abs(sentiment)), "aiInfluenceLabel": group + " 부정 신호"})
-        elif sentiment > 0:
-            properties.update({"polarity": "support", "supportImpact": min(10.0, sentiment), "aiInfluenceLabel": group + " 긍정 신호"})
-    return properties
+            label = group + " " + str(int(count)) + "건"
+        sentiment_state = str(value.get("sentimentState") or value.get("polarity") or "").strip().lower()
+        if not sentiment_state and value.get("sentiment") not in (None, ""):
+            sentiment = number(value.get("sentiment"))
+            sentiment_state = "negative" if sentiment < 0 else ("positive" if sentiment > 0 else "neutral")
+        if sentiment_state in {"negative", "bearish", "risk"}:
+            role = "risk"
+            label = group + " 부정 신호"
+        elif sentiment_state in {"positive", "bullish", "support"}:
+            role = "support"
+            label = group + " 긍정 신호"
+    return external_evidence_properties(
+        source="external-signals",
+        label=label,
+        role=role,
+        review_level="check" if role == "risk" else ("observe" if role == "support" else "normal"),
+        change_state="new-evidence" if role in {"risk", "support"} else "unchanged",
+        signalGroup=group,
+    )
 
 
 def add_symbol_external_signal_concepts(graph: PortfolioOntology, stock_id: str, symbol: str, external_signals: Dict[str, object]) -> None:
@@ -948,7 +1044,14 @@ def add_symbol_regulatory_event_concept(
         "receiptNo": str(value.get("receiptNo") or value.get("receipt_no") or latest.get("accessionNumber") or ""),
         "eventDate": str(value.get("receiptDate") or value.get("receipt_date") or latest.get("filingDate") or latest.get("reportDate") or ""),
     })
-    props = {"source": group, "polarity": "risk", "opinionImpact": 10.0, "aiInfluenceLabel": "규제 이벤트: " + label, "eventType": event_type}
+    props = external_evidence_properties(
+        source=group,
+        label="규제 이벤트: " + label,
+        role="risk",
+        review_level="act",
+        change_state="new-evidence",
+        eventType=event_type,
+    )
     add_relation(graph, stock_id, regulatory_id, "HAS_OBSERVATION", weight=1.0, properties=props)
     add_relation(graph, stock_id, regulatory_id, "HAS_EXTERNAL_SIGNAL", weight=1.0, properties=props)
     add_relation(graph, regulatory_id, stock_id, "AFFECTS", weight=0.85, properties=props)
@@ -1108,9 +1211,16 @@ def add_symbol_earnings_report_concepts(graph: PortfolioOntology, stock_id: str,
         "surprise": number(latest.get("surprise")),
         "surprisePercentage": number(latest.get("surprisePercentage")),
     })
-    props = {"source": group, "polarity": "context", "aiInfluenceLabel": label}
-    if abs(number(latest.get("surprisePercentage"))) >= 5:
-        props.update({"polarity": "support" if number(latest.get("surprisePercentage")) > 0 else "risk", "opinionImpact": min(12.0, abs(number(latest.get("surprisePercentage"))) * 0.6)})
+    surprise_pct = number(latest.get("surprisePercentage"))
+    meaningful_surprise = abs(surprise_pct) >= 5
+    role = "support" if meaningful_surprise and surprise_pct > 0 else ("risk" if meaningful_surprise else "context")
+    props = external_evidence_properties(
+        source=group,
+        label=label,
+        role=role,
+        review_level="check" if meaningful_surprise else "normal",
+        change_state="new-evidence" if meaningful_surprise else "unchanged",
+    )
     add_relation(graph, stock_id, earnings_id, "HAS_OBSERVATION", weight=1.0, properties=props)
     add_relation(graph, stock_id, earnings_id, "HAS_EXTERNAL_SIGNAL", weight=1.0, properties=props)
     add_relation(graph, stock_id, earnings_id, "HAS_VALUATION", weight=0.78, properties=props)

@@ -7,7 +7,7 @@
     { id: "overview", label: "오늘", description: "판단·일정·위험", groupId: "workspace" },
     { id: "feed", label: "시장", description: "종목·뉴스·수급", groupId: "workspace" },
     { id: "modeling", label: "판단", description: "액션·근거", groupId: "workspace" },
-    { id: "notifications", label: "알림", description: "점수·발송", groupId: "workspace" },
+    { id: "notifications", label: "알림", description: "상태·발송", groupId: "workspace" },
     { id: "experiments", label: "검증", description: "규칙·온톨로지", groupId: "workspace" },
     { id: "settings", label: "운영", description: "계정·데이터·설정", groupId: "workspace" }
   ];
@@ -59,8 +59,8 @@
     notifications: {
       layer: "발송 판단",
       entity: "알림 판단 기록",
-      objective: "점수 변화, 알림이 온 이유, 발송·보류 상태를 한 원장에서 확인합니다.",
-      workflow: ["점수 변화", "발송 이유", "상세 검토"]
+      objective: "상태 변화, 알림이 온 이유, 발송·보류 상태를 한 원장에서 확인합니다.",
+      workflow: ["상태 변화", "발송 이유", "상세 검토"]
     },
     modeling: {
       layer: "투자 판단",
@@ -226,7 +226,6 @@
     modelBuy: "🟢",
     modelSell: "🔴",
     watchlistBuyCandidate: "👀",
-    modelScoreGap: "⚖️",
     flowVolume: "📊",
     flowBuyShare: "🟢",
     flowSellShare: "🔴",
@@ -271,10 +270,6 @@
     return [icon, text].filter(Boolean).join(" ");
   }
   var alertThresholdCatalog = [
-    { key: "modelBuyScore", label: "모델 매수 점수", unit: "점", step: "1" },
-    { key: "modelSellScore", label: "모델 매도 점수", unit: "점", step: "1" },
-    { key: "watchlistBuyScore", label: "관심종목 매수 점수", unit: "점", step: "1" },
-    { key: "modelScoreGap", label: "모델 점수 차이", unit: "점", step: "1" },
     { key: "volumeRatioHigh", label: "거래량 배율", unit: "x", step: "0.1" },
     { key: "buyShareHigh", label: "매수 체결 비중", unit: "%", step: "1" },
     { key: "sellShareHigh", label: "매도 체결 비중", unit: "%", step: "1" },
@@ -286,7 +281,6 @@
     { key: "lossRateBufferPct", label: "손실 기준 완충폭", unit: "%p", step: "0.1" },
     { key: "lossGuardVolumeConfirmRatio", label: "손실 확인 거래량 배율", unit: "x", step: "0.1" },
     { key: "lossGuardMa60SupportPct", label: "60일선 유지 기준", unit: "%", step: "0.1" },
-    { key: "lossGuardWeakEvidencePenalty", label: "확인 약할 때 감점", unit: "점", step: "1" },
     { key: "positionWeightHigh", label: "단일 종목 비중", unit: "%", step: "1" },
     { key: "sectorWeightHigh", label: "섹터 비중", unit: "%", step: "1" },
     { key: "marketCashLow", label: "시장별 현금 하단", unit: "%", step: "1" },
@@ -298,7 +292,6 @@
     { key: "monitorValueDelta", label: "실시간 평가액 변화", unit: "%", step: "0.1" },
     { key: "monitorMaDistance", label: "이동평균과 현재가 차이", unit: "%", step: "0.1" },
     { key: "monitorCashDelta", label: "실시간 현금비중 변화", unit: "%p", step: "1" },
-    { key: "monitorExitPressureDelta", label: "실시간 판단 점수 변화", unit: "점", step: "1" },
     { key: "externalEquityChangePct", label: "미장 가격 변화", unit: "%", step: "0.1" },
     { key: "externalCryptoChange24hPct", label: "크립토 24h 변화", unit: "%", step: "0.1" },
     { key: "externalCryptoChange7dPct", label: "크립토 7d 변화", unit: "%", step: "0.1" },
@@ -313,8 +306,8 @@
     { key: "entryMa60SupportPct", label: "매수 60일선 지지", unit: "%", step: "0.1" },
     { key: "entryVolumeMinRatio", label: "매수 최소 거래량", unit: "x", step: "0.1" },
     { key: "entryVolumeMaxRatio", label: "매수 과열 거래량", unit: "x", step: "0.1" },
-    { key: "entrySmartMoneyMin", label: "매수 수급 회복", unit: "점", step: "1" },
-    { key: "entryTradeStrengthMin", label: "매수 체결강도", unit: "점", step: "1" },
+    { key: "entrySmartMoneyMin", label: "외국인·기관 합산 순매수", unit: "주", step: "1" },
+    { key: "entryTradeStrengthMin", label: "매수 체결강도", unit: "", step: "1" },
     { key: "entryOrderbookImbalanceMin", label: "매수 호가 우위", unit: "%", step: "1" },
     { key: "entryMaxPositionWeight", label: "매수 가능 종목 비중", unit: "%", step: "1" },
     { key: "entryMaxSectorWeight", label: "매수 가능 섹터 비중", unit: "%", step: "1" },
@@ -472,6 +465,10 @@
     notificationJobsSummary: {},
     notificationJobDiagnostics: {},
     notificationExpandedJobs: {},
+    psychologyShadow: { rows: [], history: [], accounts: [], policy: {} },
+    psychologyShadowLoading: false,
+    psychologyShadowLoaded: false,
+    psychologyShadowError: "",
     ontologyExperiments: null,
     ontologyExperimentsLoading: false,
     ontologyExperimentsLoaded: false,
@@ -593,12 +590,6 @@
       text = text.split(pair[0]).join(pair[1]);
     });
     return text;
-  }
-
-  function normalizeFormulaAliases(value) {
-    return String(value == null ? "" : value)
-      .replace(/\bthesisScore\b/g, "buyReasonScore")
-      .replace(/\bthesisWeight\b/g, "buyReasonWeight");
   }
 
   function uniqueTextItems(values) {
@@ -784,6 +775,8 @@
           tasks.push(loadNotificationSchedules());
         } else if (/^investment_strategy\./.test(eventType)) {
           tasks.push(loadStrategyProposals(true));
+        } else if (/^psychology\./.test(eventType)) {
+          tasks.push(loadPsychologyShadow());
         } else if (/^symbol_universe\./.test(eventType)) {
           tasks.push(loadSymbolUniverse());
         } else if (/^app\.|^chat\./.test(eventType)) {
@@ -2081,51 +2074,19 @@
 
   function defaultNotificationRuleConditions() {
     return [
-      { id: "severity_alert", label: "주의 등급", type: "context_equals", field: "severity", value: "ALERT", terms: [], score: 25, enabled: true },
-      { id: "severity_watch", label: "관찰 등급", type: "context_equals", field: "severity", value: "WATCH", terms: [], score: 10, enabled: true },
-      { id: "has_symbol", label: "종목 지정", type: "context_present", field: "symbol", value: "", terms: [], score: 10, enabled: true },
-      {
-        id: "important_terms",
-        label: "핵심 투자 단어",
-        type: "text_contains_any",
-        field: "",
-        value: "",
-        terms: ["판단 변화", "모델 매수", "모델 매도", "손익률 급변", "평가액 급변", "보유 수량 변경", "새 보유", "이동평균", "신규 공시", "가격 변동", "크립토 변동", "거시 지표", "손절", "분할매도", "리스크"],
-        score: 15,
-        enabled: true
-      },
-      { id: "confirming_data", label: "확인 데이터 포함", type: "text_contains_any", field: "", value: "", terms: ["수급", "거래량", "투자자", "추세", "20일선", "60일선", "외국인", "기관"], score: 10, enabled: true },
-      { id: "actionable_terms", label: "행동 필요 표현", type: "text_contains_any", field: "", value: "", terms: ["확인", "재확인", "점검", "기준", "후보", "검토"], score: 10, enabled: true },
-      { id: "body_present", label: "본문 있음", type: "context_present", field: "body", value: "", terms: [], score: 5, enabled: true },
-      { id: "status_noise", label: "상태성 노이즈", type: "text_contains_any", field: "", value: "", terms: ["정상 작동", "시세 대기", "현재가를 아직", "연결 확인 필요", "템플릿 테스트"], score: -25, enabled: true }
+      { id: "severity_alert", label: "주의 단계", type: "context_equals", field: "severity", value: "ALERT", terms: [], enabled: true },
+      { id: "severity_watch", label: "관찰 단계", type: "context_equals", field: "severity", value: "WATCH", terms: [], enabled: true },
+      { id: "has_symbol", label: "종목 지정", type: "context_present", field: "symbol", value: "", terms: [], enabled: true },
+      { id: "important_terms", label: "중요 투자 내용", type: "context_contains_any", field: "notificationSignals", value: "", terms: ["important"], enabled: true },
+      { id: "confirming_data", label: "확인 자료 포함", type: "context_contains_any", field: "notificationSignals", value: "", terms: ["confirmingData"], enabled: true },
+      { id: "actionable_terms", label: "대응 확인 필요", type: "context_contains_any", field: "notificationSignals", value: "", terms: ["actionable"], enabled: true },
+      { id: "body_present", label: "본문 있음", type: "context_present", field: "body", value: "", terms: [], enabled: true },
+      { id: "status_noise", label: "상태성 반복 내용", type: "context_contains_any", field: "notificationSignals", value: "", terms: ["statusNoise"], enabled: true }
     ];
-  }
-
-  function defaultNotificationRuleBaseScore(messageType) {
-    var type = String(messageType || "");
-    var systemTypes = ["default", "modelReview", "workHandoff", "notification"];
-    var highSignalTypes = [
-      "investmentInsight", "modelBuy", "modelSell", "watchlistBuyCandidate", "holdingTiming", "monitorPositionChange", "monitorPnlChange", "monitorValueChange",
-      "monitorTrendChange", "monitorCashChange", "monitorDecisionChange", "externalEquityMove", "externalCryptoMove",
-      "externalMacroShift", "externalDartDisclosure"
-    ];
-    var lowSignalTypes = ["monitorHeartbeat", "watchlistQuotePending", "externalDataConnection"];
-    if (systemTypes.indexOf(type) >= 0) return 85;
-    if (highSignalTypes.indexOf(type) >= 0) return 35;
-    if (lowSignalTypes.indexOf(type) >= 0) return 15;
-    return 25;
   }
 
   function defaultNotificationRuleSimilarityEnabled(messageType) {
     return ["default", "modelReview", "workHandoff", "notification"].indexOf(String(messageType || "")) < 0;
-  }
-
-  function defaultNotificationRuleThreshold(messageType) {
-    var type = String(messageType || "");
-    if (["default", "modelReview", "workHandoff", "notification"].indexOf(type) >= 0) return 20;
-    if (type === "investmentInsight") return 50;
-    if (type === "externalEquityMove" || type === "externalCryptoMove") return 60;
-    return 45;
   }
 
   function defaultNotificationRuleSimilarityWindow(messageType) {
@@ -2135,19 +2096,6 @@
     if (["watchlistQuotePending", "externalDataConnection"].indexOf(type) >= 0) return 180;
     if (["monitorPnlChange", "monitorValueChange", "monitorTrendChange", "monitorCashChange"].indexOf(type) >= 0) return 60;
     return 120;
-  }
-
-  function defaultNotificationRuleSimilarityPenalty(messageType) {
-    var type = String(messageType || "");
-    if (type === "investmentInsight") return -35;
-    if (["externalEquityMove", "externalCryptoMove"].indexOf(type) >= 0) return -55;
-    if (type === "holdingTiming" || type === "monitorHeartbeat") return -40;
-    if (["watchlistQuotePending", "externalDataConnection"].indexOf(type) >= 0) return -30;
-    return -20;
-  }
-
-  function defaultNotificationRuleSimilarityBypassDelta(messageType) {
-    return ["investmentInsight", "modelBuy", "modelSell", "watchlistBuyCandidate", "monitorDecisionChange"].indexOf(String(messageType || "")) >= 0 ? 15 : 20;
   }
 
   function defaultNotificationRuleSimilarityBypassConditions(messageType) {
@@ -2169,9 +2117,25 @@
     }
     if (type === "holdingTiming") {
       return [
-        { id: "severity_upgrade", label: "등급 상승", type: "severity_upgrade", field: "", value: "", enabled: true, description: "관찰에서 주의처럼 중요도가 올라가면 반복이어도 보냅니다." },
-        { id: "holding_score_delta", label: "보유 모델 점수 변화", type: "abs_number_delta_gte", field: "holdingDecisionScore", value: 8, enabled: true, description: "이전 보유 타이밍 알림보다 모델 점수가 기준점 이상 달라지면 보냅니다." },
-        { id: "loss_rate_worsened", label: "손익률 추가 악화", type: "number_delta_lte", field: "profitLossRate", value: 2, enabled: true, description: "이전 보유 타이밍 알림보다 손익률이 기준 %p 이상 나빠지면 보냅니다." }
+        { id: "severity_upgrade", label: "알림 단계 상승", type: "severity_upgrade", field: "", value: "", enabled: true, description: "관찰에서 주의처럼 단계가 올라가면 다시 보냅니다." },
+        { id: "loss_rate_worsened", label: "손익률 추가 악화", type: "profit_loss_worsened_lte", field: "", value: 1, enabled: true, description: "이전 알림보다 손익률이 1%p 이상 나빠지면 다시 보냅니다." },
+        { id: "loss_rate_improved", label: "손익률 개선", type: "profit_loss_improved_gte", field: "", value: 1, enabled: true, description: "이전 알림보다 손익률이 1%p 이상 좋아지면 다시 보냅니다." },
+        { id: "holding_ma60_crossed_below", label: "60일 평균 아래로 전환", type: "ma60_crossed_below", field: "", value: 0, enabled: true, description: "가격이 60일 평균 아래로 내려가면 다시 보냅니다." },
+        { id: "holding_ma60_crossed_above", label: "60일 평균 위로 회복", type: "ma60_crossed_above", field: "", value: 0, enabled: true, description: "가격이 60일 평균 위로 회복하면 다시 보냅니다." },
+        { id: "holding_action_changed", label: "권장 대응 변경", type: "field_changed_any", field: "holdingDecision,holdingAction,actionLabel,activeInvestmentOpinion.actionLabel,activeInvestmentOpinion.action", value: "", enabled: true, description: "최종 대응이 바뀌면 다시 보냅니다." }
+      ];
+    }
+    if (type === "investmentInsight") {
+      return [
+        { id: "insight_severity_upgrade", label: "알림 단계 상승", type: "severity_upgrade", field: "", value: "", enabled: true, description: "알림 단계가 올라가면 다시 보냅니다." },
+        { id: "review_level_upgrade", label: "확인 단계 상승", type: "review_level_upgrade", field: "ontologyInsight.reviewLevel", value: "", enabled: true, description: "관찰에서 대응 준비처럼 확인 단계가 올라가면 다시 보냅니다." },
+        { id: "new_source_signal", label: "새 근거 종류 추가", type: "list_new_items_gte", field: "sourceSignalTypes", value: 1, enabled: true, description: "이전에 없던 근거 종류가 추가되면 다시 보냅니다." },
+        { id: "new_relation_event", label: "새 뉴스·공시 추가", type: "list_new_items_gte", field: "ontologyInsight.sourceEventKeys", value: 1, enabled: true, description: "새 뉴스나 공시 원문이 추가되면 다시 보냅니다." },
+        { id: "insight_profit_loss_worsened", label: "손익률 추가 악화", type: "profit_loss_worsened_lte", field: "", value: 1, enabled: true, description: "손익률이 1%p 이상 나빠지면 다시 보냅니다." },
+        { id: "insight_profit_loss_improved", label: "손익률 개선", type: "profit_loss_improved_gte", field: "", value: 1, enabled: true, description: "손익률이 1%p 이상 좋아지면 다시 보냅니다." },
+        { id: "insight_ma60_crossed_below", label: "60일 평균 아래로 전환", type: "ma60_crossed_below", field: "", value: 0, enabled: true, description: "가격이 60일 평균 아래로 내려가면 다시 보냅니다." },
+        { id: "insight_ma60_crossed_above", label: "60일 평균 위로 회복", type: "ma60_crossed_above", field: "", value: 0, enabled: true, description: "가격이 60일 평균 위로 회복하면 다시 보냅니다." },
+        { id: "insight_action_changed", label: "권장 대응 변경", type: "field_changed_any", field: "notificationAiValidatedResponse.actionLabel,notificationAiValidatedResponse.action,aiOpinion.actionLabel,aiOpinion.action", value: "", enabled: true, description: "검증된 최종 대응이 바뀌면 다시 보냅니다." }
       ];
     }
     return [];
@@ -2251,16 +2215,11 @@
     return {
       messageType: type,
       enabled: true,
-      threshold: defaultNotificationRuleThreshold(type),
-      baseScore: defaultNotificationRuleBaseScore(type),
-      lowScoreAction: "suppress",
       conditions: defaultNotificationRuleConditions().map(function (condition) {
         return Object.assign({}, condition, { terms: (condition.terms || []).slice() });
       }),
       similarityEnabled: defaultNotificationRuleSimilarityEnabled(type),
       similarityWindowMinutes: defaultNotificationRuleSimilarityWindow(type),
-      similarityPenalty: defaultNotificationRuleSimilarityPenalty(type),
-      similarityBypassScoreDelta: defaultNotificationRuleSimilarityBypassDelta(type),
       similarityBypassConditions: defaultNotificationRuleSimilarityBypassConditions(type),
       similarityFields: defaultNotificationRuleSimilarityFields(),
       stateCooldownEnabled: defaultNotificationRuleStateCooldownEnabled(type),
@@ -2412,6 +2371,30 @@
       });
   }
 
+  function loadPsychologyShadow() {
+    state.psychologyShadowLoading = true;
+    state.psychologyShadowError = "";
+    if (isStaticPreviewHost()) {
+      state.psychologyShadow = { rows: [], history: [], accounts: [], policy: {} };
+      state.psychologyShadowLoaded = true;
+      state.psychologyShadowLoading = false;
+      return Promise.resolve();
+    }
+    return requestJson("/api/psychology-shadow")
+      .then(function (payload) {
+        state.psychologyShadow = payload && typeof payload === "object" ? payload : { rows: [], history: [], accounts: [], policy: {} };
+        state.psychologyShadowLoaded = true;
+      })
+      .catch(function (error) {
+        state.psychologyShadowError = error.message || "심리 Shadow 상태를 읽지 못했습니다.";
+        state.psychologyShadow = { rows: [], history: [], accounts: [], policy: {} };
+      })
+      .finally(function () {
+        state.psychologyShadowLoading = false;
+        if (state.snapshot) render();
+      });
+  }
+
   function applyNotificationSchedules(payload) {
     state.messageSchedules = Array.isArray(payload.schedules) ? payload.schedules : [];
     state.messageSchedulesLoaded = true;
@@ -2491,20 +2474,15 @@
 
   function normalizeNotificationRule(rule) {
     var normalized = Object.assign(defaultNotificationRule(rule && rule.messageType), rule || {});
-    normalized.threshold = clampInteger(normalized.threshold, 0, 100, defaultNotificationRuleThreshold(normalized.messageType));
-    normalized.baseScore = clampInteger(normalized.baseScore, 0, 100, defaultNotificationRuleBaseScore(normalized.messageType));
     normalized.enabled = normalized.enabled !== false;
-    normalized.lowScoreAction = normalized.lowScoreAction || "suppress";
     normalized.similarityEnabled = normalized.similarityEnabled !== false;
     normalized.similarityWindowMinutes = clampInteger(normalized.similarityWindowMinutes, 0, 10080, defaultNotificationRuleSimilarityWindow(normalized.messageType));
-    normalized.similarityPenalty = clampInteger(normalized.similarityPenalty, -100, 0, defaultNotificationRuleSimilarityPenalty(normalized.messageType));
-    normalized.similarityBypassScoreDelta = clampInteger(normalized.similarityBypassScoreDelta, 0, 100, defaultNotificationRuleSimilarityBypassDelta(normalized.messageType));
     normalized.similarityBypassConditions = Array.isArray(normalized.similarityBypassConditions) && normalized.similarityBypassConditions.length
       ? normalized.similarityBypassConditions.map(function (condition) {
         return Object.assign({
           id: "",
           label: "",
-          type: "abs_number_delta_gte",
+          type: "field_changed",
           field: "",
           value: "",
           enabled: true,
@@ -2536,11 +2514,9 @@
           field: "",
           value: "",
           terms: [],
-          score: 0,
           enabled: true
         }, condition, {
           terms: Array.isArray(condition.terms) ? condition.terms.slice() : String(condition.terms || "").split(",").map(function (term) { return term.trim(); }).filter(Boolean),
-          score: clampInteger(condition.score, -100, 100, 0),
           enabled: condition.enabled !== false
         });
       })
@@ -2576,20 +2552,10 @@
     var rule = ensureNotificationRule(messageType);
     if (field === "enabled") {
       rule.enabled = Boolean(value);
-    } else if (field === "threshold") {
-      rule.threshold = clampInteger(value, 0, 100, defaultNotificationRuleThreshold(messageType));
-    } else if (field === "baseScore") {
-      rule.baseScore = clampInteger(value, 0, 100, defaultNotificationRuleBaseScore(messageType));
-    } else if (field === "lowScoreAction") {
-      rule.lowScoreAction = String(value || "suppress");
     } else if (field === "similarityEnabled") {
       rule.similarityEnabled = Boolean(value);
     } else if (field === "similarityWindowMinutes") {
       rule.similarityWindowMinutes = clampInteger(value, 0, 10080, defaultNotificationRuleSimilarityWindow(messageType));
-    } else if (field === "similarityPenalty") {
-      rule.similarityPenalty = clampInteger(value, -100, 0, defaultNotificationRuleSimilarityPenalty(messageType));
-    } else if (field === "similarityBypassScoreDelta") {
-      rule.similarityBypassScoreDelta = clampInteger(value, 0, 100, defaultNotificationRuleSimilarityBypassDelta(messageType));
     } else if (field === "similarityFields") {
       rule.similarityFields = String(value || "").split(",").map(function (item) { return item.trim(); }).filter(Boolean);
     } else if (field === "stateCooldownEnabled") {
@@ -2626,8 +2592,6 @@
     if (!condition) return;
     if (field === "enabled") {
       condition.enabled = Boolean(value);
-    } else if (field === "score") {
-      condition.score = clampInteger(value, -100, 100, 0);
     } else if (field === "field") {
       condition.field = String(value || "").trim();
     } else if (field === "value") {
@@ -2679,8 +2643,8 @@
       "크립토 거래액",
       "매수 판단",
       "매도 판단",
-      "모델 매수 점수",
-      "모델 매도 점수",
+      "확인 단계",
+      "자료 상태",
       "적정가 대비",
       "24h 거래액",
       "현재가",
@@ -3174,8 +3138,8 @@
         title: "SK하이닉스",
         symbol: "000660",
         severity: "WATCH",
-        lines: ["판단 변화", "이전 위험 관찰 (36점)", "현재 조건부 보유 (52점)", "현재가: 150,000원", "평단가: 155,000원", "수익률: -3.2%", "권장 액션: 보유 유지, 추가매수는 새 매수 신호가 뜰 때까지 보류", "Codex 답변: 판단명이 바뀌어 재검토 필요"],
-        criteria: ["설정: 판단 이름 변경 또는 위험 점수 변화 15점 이상", "감지: 이전 위험 관찰 (36점), 현재 조건부 보유 (52점)"]
+        lines: ["판단 변화", "이전 확인 단계: 관찰", "현재 확인 단계: 조건 확인", "변화: 방향 변경", "현재가: 150,000원", "평단가: 155,000원", "수익률: -3.2%", "권장 액션: 보유 유지, 추가매수는 새 매수 신호가 뜰 때까지 보류", "Codex 답변: 판단 방향이 바뀌어 재검토 필요"],
+        criteria: ["설정: 판단 행동 또는 확인 단계가 바뀔 때", "감지: 관찰 → 조건 확인, 방향 변경"]
       },
       externalEquityMove: {
         title: "미국 주식 변동",
@@ -3189,14 +3153,16 @@
         symbol: "BTC",
         severity: "WATCH",
         lines: ["비트코인 변동 24h +4.5% · 7d +11.2%", "크립토 가격 $61,227", "크립토 거래액 $42,000,000,000", "MSTR 등 비트코인 민감 종목 점검"],
-        criteria: ["설정: 크립토 24h ±4% 또는 7d ±10% 이상", "감지: 크립토 변동 모델 100점, 7일 +11.2% (기준 ±4%), 24시간 +4.5%, 7일 +11.2%"],
+        criteria: ["설정: 크립토 24h ±4% 또는 7d ±10% 이상", "감지: 7일 변동 +11.2%로 새 조건 성립 · 24시간 +4.5%"],
         cryptoMoveTitle: "비트코인 가격 급등",
-        cryptoMoveScore: 100,
+        reviewLevel: "check",
+        changeState: "new-condition",
+        dataState: "sufficient",
         cryptoMoveDirection: "상승",
         cryptoMoveDominantPeriod: "7일",
         cryptoMoveDominantChange: 11.2,
         cryptoMoveReason: "7일 변동률 +11.2%가 기준 ±4%를 넘어서 비트코인 가격 급등으로 판단했습니다.",
-        cryptoMoveModel: { titleLabel: "비트코인 가격 급등", score: 100, dominantPeriodLabel: "7일", dominantChange: 11.2, reason: "7일 변동률 +11.2%가 기준 ±4%를 넘어서 비트코인 가격 급등으로 판단했습니다." }
+        cryptoMoveModel: { titleLabel: "비트코인 가격 급등", reviewLevel: "check", changeState: "new-condition", dataState: "sufficient", dominantPeriodLabel: "7일", dominantChange: 11.2, reason: "7일 변동률 +11.2%가 기준 ±4%를 넘어서 비트코인 가격 급등으로 판단했습니다." }
       },
       externalMacroShift: {
         title: "매크로 지표 변화",
@@ -3348,7 +3314,9 @@
       accountLabel: "기본 계정",
       accountId: "default",
       cryptoMoveModel: sample.cryptoMoveModel || "",
-      cryptoMoveScore: sample.cryptoMoveScore || "",
+      reviewLevel: sample.reviewLevel || "observe",
+      changeState: sample.changeState || "unchanged",
+      dataState: sample.dataState || "partial",
       cryptoMoveDirection: sample.cryptoMoveDirection || "",
       cryptoMoveDominantPeriod: sample.cryptoMoveDominantPeriod || "",
       cryptoMoveDominantChange: sample.cryptoMoveDominantChange || "",
@@ -3529,7 +3497,7 @@
       .then(function (payload) {
         var event = payload.event || {};
         if (payload.suppressed) {
-          showSnackbar(payload.error || ("발송 우선도 " + (payload.score || 0) + "/" + (payload.threshold || 0) + "로 발송하지 않았습니다."), "danger");
+          showSnackbar(payload.error || payload.deliveryGateReason || "자료 또는 검증 상태가 발송 조건을 충족하지 않아 보류했습니다.", "danger");
         } else if (payload.delivered) {
           showSnackbar("테스트 알림을 실제 발송했습니다: " + (event.title || notificationTemplateLabel(messageType)));
         } else {
@@ -3968,7 +3936,11 @@
       newsCollectionLookbackMinutes: settingValue("newsCollectionLookbackMinutes"),
       newsCollectionPerSymbolLimit: settingValue("newsCollectionPerSymbolLimit"),
       newsCollectionProviders: settingValue("newsCollectionProviders"),
-      newsCollectionMinRelevanceScore: settingValue("newsCollectionMinRelevanceScore"),
+      newsCollectionMinimumRelevanceState: settingValue("newsCollectionMinimumRelevanceState"),
+      newsDigestMinimumRelevanceState: settingValue("newsDigestMinimumRelevanceState"),
+      newsDigestMinimumMaterialityState: settingValue("newsDigestMinimumMaterialityState"),
+      newsDigestMinimumNeutralMaterialityState: settingValue("newsDigestMinimumNeutralMaterialityState"),
+      newsDigestMinimumSourceTrustState: settingValue("newsDigestMinimumSourceTrustState"),
       newsCollectionIncludeWatchlist: settingValue("newsCollectionIncludeWatchlist"),
       newsCollectionIncludeHoldings: settingValue("newsCollectionIncludeHoldings"),
       newsCollectionRateLimitSeconds: settingValue("newsCollectionRateLimitSeconds"),
@@ -3979,10 +3951,12 @@
       ontologyReasoningEnabled: settingValue("ontologyReasoningEnabled"),
       ontologyReasoningIntervalSeconds: settingValue("ontologyReasoningIntervalSeconds"),
       ontologyReasoningBatchSize: settingValue("ontologyReasoningBatchSize"),
+      psychologyShadowEnabled: settingValue("psychologyShadowEnabled"),
+      psychologyMinimumComponentCount: settingValue("psychologyMinimumComponentCount"),
+      psychologyNewsMaxAgeMinutes: settingValue("psychologyNewsMaxAgeMinutes"),
       temporalWindowPeriods: settingValue("temporalWindowPeriods"),
       temporalWindowHistoryLimit: settingValue("temporalWindowHistoryLimit"),
       ontologyLabAutoApplyEnabled: settingValue("ontologyLabAutoApplyEnabled"),
-      ontologyLabAutoApplyMinScore: settingValue("ontologyLabAutoApplyMinScore"),
       ontologyLabAutoApplyNeedsReviewEnabled: settingValue("ontologyLabAutoApplyNeedsReviewEnabled"),
       ontologyLabNotifyEnabled: settingValue("ontologyLabNotifyEnabled"),
       ontologyRuleCandidateAiEnabled: settingValue("ontologyRuleCandidateAiEnabled"),
@@ -4003,12 +3977,9 @@
       typedbDataRetentionHours: settingValue("typedbDataRetentionHours"),
       typedbDataMaxSizeMb: settingValue("typedbDataMaxSizeMb"),
       materialityGateEnabled: settingValue("materialityGateEnabled"),
-      materialityMinimumScore: settingValue("materialityMinimumScore"),
-      marketMaterialityMinimumScore: settingValue("marketMaterialityMinimumScore"),
       marketMaterialityPriceChangePct: settingValue("marketMaterialityPriceChangePct"),
       marketMaterialityTrendDistancePct: settingValue("marketMaterialityTrendDistancePct"),
       marketMaterialityVolumeRatio: settingValue("marketMaterialityVolumeRatio"),
-      newsMaterialityMinimumScore: settingValue("newsMaterialityMinimumScore"),
       externalDartCorpCodes: settingValue("externalDartCorpCodes"),
       dartDisclosureAiAnalysisEnabled: settingValue("dartDisclosureAiAnalysisEnabled"),
       dartDisclosureAiUseCodex: settingValue("dartDisclosureAiUseCodex"),
@@ -4029,11 +4000,6 @@
       aiValuationBaselineMinimumMarginPct: settingValue("aiValuationBaselineMinimumMarginPct"),
       marketSignalInputs: settingValue("marketSignalInputs"),
       fairValueFormula: settingValue("fairValueFormula"),
-      buyScoreFormula: settingValue("buyScoreFormula"),
-      sellScoreFormula: settingValue("sellScoreFormula"),
-      profitTakeScoreFormula: settingValue("profitTakeScoreFormula"),
-      lossCutScoreFormula: settingValue("lossCutScoreFormula"),
-      notificationScoreFormula: settingValue("notificationScoreFormula"),
       ontologyRelationRules: settingValue("ontologyRelationRules"),
       aiPromptTemplates: settingValue("aiPromptTemplates"),
       aiPromptPolicy: settingValue("aiPromptPolicy"),
@@ -4043,11 +4009,6 @@
       notificationAiTimeoutSeconds: settingValue("notificationAiTimeoutSeconds"),
       modelName: settingValue("modelName"),
       modelHypothesis: settingValue("modelHypothesis"),
-      customBuyModelFormula: settingValue("customBuyModelFormula"),
-      customSellModelFormula: settingValue("customSellModelFormula"),
-      formulaWeights: settingValue("formulaWeights"),
-      decisionThresholds: settingValue("decisionThresholds"),
-      modelDecisionThresholds: settingValue("modelDecisionThresholds"),
       alertRules: settingValue("alertRules"),
       alertThresholds: settingValue("alertThresholds"),
       relationRuleThresholds: settingValue("relationRuleThresholds"),
@@ -4063,7 +4024,7 @@
     return sendJson("/api/settings", "PUT", { settings: serverSettingsPayload() })
       .then(function (payload) {
         applyServerSettings(payload);
-        var reloads = [loadNotificationSchedules()];
+        var reloads = [loadNotificationSchedules(), loadPsychologyShadow()];
         if (state.ontologyRuleboxLoaded) reloads.push(loadOntologyRulebox(true));
         return Promise.all(reloads)
           .catch(function (error) {
@@ -4482,7 +4443,10 @@
           ruleId: row.detail || row.type || "",
           ruleLabel: row.type || "InferenceBox",
           status: "preview",
-          confidence: row.weight,
+          reviewLevel: "observe",
+          dataState: "partial",
+          validationState: "conditional",
+          evidenceRole: "context",
           decisionStage: row.detail || "",
           relationTypes: [row.type].filter(Boolean),
           matchedConditionCount: 0,
@@ -4491,7 +4455,7 @@
           derivedEntityCount: 0,
           conditions: [],
           derivations: [],
-          relations: [{ type: row.type, sourceLabel: row.source, targetLabel: row.target, aiInfluenceLabel: row.detail, weight: row.weight }],
+          relations: [{ type: row.type, sourceLabel: row.source, targetLabel: row.target, aiInfluenceLabel: row.detail, evidenceRole: "context" }],
           stages: [
             { id: "source-data", label: "Source facts", status: "preview", detail: "snapshot relation" },
             { id: "rulebox", label: "RuleBox", status: "preview", detail: row.detail || "" },
@@ -5607,9 +5571,11 @@
           observedAt: stamped,
           publishedAt: stamped,
           polarity: "support",
-          impactScore: 6.5,
-          confidence: 0.62,
-          payload: { name: "삼성전자" }
+          materialityState: "notable",
+          relevanceState: "direct",
+          sourceTrustState: "standard",
+          dataState: "partial",
+          payload: { name: "삼성전자", materialityState: "notable", relevanceState: "direct", sourceTrustState: "standard" }
         }
       ],
       summary: {
@@ -6115,7 +6081,6 @@
       generatedAt: stamped,
       preview: true,
       headline: accountCount ? "빌드 시점 로컬 DB 설정을 표시합니다." : "로컬 서버에서 계정과 알림 설정을 관리합니다.",
-      exitScore: 0,
       regime: "정적 미리보기",
       summary: [],
       toss: {
@@ -6136,7 +6101,6 @@
       },
       tossDecision: {
         headline: "로컬 서버에서 실제 계정 데이터를 조회합니다.",
-        overallPressure: 0,
         urgentCount: 0,
         holdingCount: 0,
         watchCount: 0,
@@ -6226,7 +6190,7 @@
   }
 
   function formulaSetting(name) {
-    return normalizeFormulaAliases(settingValue(name) || defaultSettings[name] || "").trim();
+    return String(settingValue(name) || defaultSettings[name] || "").trim();
   }
 
   function tokenizeFormula(expression) {
@@ -6408,11 +6372,6 @@
   function strategyDefaultSettingNames() {
     return [
       "fairValueFormula",
-      "buyScoreFormula",
-      "sellScoreFormula",
-      "profitTakeScoreFormula",
-      "lossCutScoreFormula",
-      "notificationScoreFormula",
       "ontologyRelationRules",
       "aiPromptTemplates",
       "aiPromptPolicy",
@@ -6422,11 +6381,6 @@
       "notificationAiTimeoutSeconds",
       "modelName",
       "modelHypothesis",
-      "customBuyModelFormula",
-      "customSellModelFormula",
-      "formulaWeights",
-      "decisionThresholds",
-      "modelDecisionThresholds",
       "relationRuleThresholds",
       "alertThresholds"
     ];
@@ -6443,33 +6397,11 @@
   }
 
   function syncedModelAlertSettings(settings) {
-    var next = withDefaultStrategySettings(settings);
-    var modelThresholds = parseNumberAssignments(next.modelDecisionThresholds, parseNumberAssignments(defaultSettings.modelDecisionThresholds));
-    var thresholds = parseNumberAssignments(next.alertThresholds, parseNumberAssignments(defaultSettings.alertThresholds));
-    thresholds.modelBuyScore = modelThresholds.modelBuy;
-    thresholds.watchlistBuyScore = modelThresholds.modelBuy;
-    thresholds.modelSellScore = modelThresholds.modelSell;
-    next.alertThresholds = serializeNumberAssignments(thresholds, assignmentOrder("alertThresholds"));
-    return next;
+    return withDefaultStrategySettings(settings);
   }
 
   function syncModelAlertThresholdSettings() {
     state.settings = syncedModelAlertSettings(state.settings);
-  }
-
-  function formulaWeights() {
-    var parsed = parseNumberAssignments(settingValue("formulaWeights"), parseNumberAssignments(defaultSettings.formulaWeights));
-    if (parsed.buyReasonWeight == null && parsed.thesisWeight != null) parsed.buyReasonWeight = parsed.thesisWeight;
-    if (parsed.thesisWeight == null && parsed.buyReasonWeight != null) parsed.thesisWeight = parsed.buyReasonWeight;
-    return parsed;
-  }
-
-  function decisionThresholds() {
-    return parseNumberAssignments(settingValue("decisionThresholds"), parseNumberAssignments(defaultSettings.decisionThresholds));
-  }
-
-  function modelDecisionThresholds() {
-    return parseNumberAssignments(settingValue("modelDecisionThresholds"), parseNumberAssignments(defaultSettings.modelDecisionThresholds));
   }
 
   function assignmentOrder(settingName) {
@@ -6500,9 +6432,6 @@
     var map = parseNumberAssignments(settingValue(settingName), parseNumberAssignments(defaultSettings[settingName]));
     map[key] = numeric(value);
     state.settings[settingName] = serializeNumberAssignments(map, assignmentOrder(settingName));
-    if (settingName === "modelDecisionThresholds") {
-      syncModelAlertThresholdSettings();
-    }
     persistSettings();
     state.settingsSaved = false;
     render();
@@ -6537,6 +6466,81 @@
     var number = Number(value || 0);
     if (!Number.isFinite(number) || number === 0) return "-";
     return formatMoney(number);
+  }
+
+  var decisionStateCatalog = {
+    review: {
+      normal: { label: "평소 관찰", tone: "hold", rank: 0 },
+      observe: { label: "변화 관찰", tone: "watch", rank: 1 },
+      check: { label: "조건 확인", tone: "caution", rank: 2 },
+      act: { label: "대응 준비", tone: "danger", rank: 3 },
+      immediate: { label: "즉시 재확인", tone: "danger", rank: 4 },
+      blocked: { label: "판단 보류", tone: "caution", rank: 5 }
+    },
+    data: {
+      sufficient: { label: "판단 자료 충분", tone: "watch" },
+      partial: { label: "일부 자료만 있음", tone: "caution" },
+      insufficient: { label: "핵심 자료 부족", tone: "danger" },
+      unavailable: { label: "자료 사용 불가", tone: "danger" }
+    },
+    change: {
+      unchanged: { label: "이전과 같음", tone: "hold" },
+      "new-condition": { label: "새 조건 성립", tone: "caution" },
+      improving: { label: "이전보다 개선", tone: "watch" },
+      worsening: { label: "이전보다 악화", tone: "danger" },
+      "direction-changed": { label: "판단 방향 변경", tone: "caution" },
+      "new-evidence": { label: "새 뉴스·공시·근거", tone: "watch" }
+    },
+    conflict: {
+      "risk-only": { label: "위험 근거만 확인", tone: "danger" },
+      "support-only": { label: "버티거나 좋아질 근거만 확인", tone: "watch" },
+      mixed: { label: "위험과 반대 근거가 함께 있음", tone: "caution" },
+      "context-only": { label: "방향을 정하기 어려운 참고 근거", tone: "hold" }
+    },
+    validation: {
+      ready: { label: "검증 완료", tone: "watch" },
+      conditional: { label: "조건부 사용", tone: "caution" },
+      blocked: { label: "판단 보류", tone: "danger" }
+    },
+    evidence: {
+      risk: { label: "위험 근거", tone: "danger" },
+      support: { label: "버티거나 좋아질 근거", tone: "watch" },
+      counter: { label: "반대 근거", tone: "caution" },
+      context: { label: "참고 근거", tone: "hold" },
+      blocking: { label: "판단을 막는 자료 문제", tone: "danger" }
+    }
+  };
+
+  function decisionStateMeta(kind, value, fallback) {
+    var catalog = decisionStateCatalog[kind] || {};
+    var key = String(value || fallback || "").trim().toLowerCase();
+    if (catalog[key]) return Object.assign({ key: key }, catalog[key]);
+    var fallbackKey = String(fallback || Object.keys(catalog)[0] || "");
+    return Object.assign({ key: fallbackKey }, catalog[fallbackKey] || { label: key || "확인 필요", tone: "hold", rank: 0 });
+  }
+
+  function stateValueFromSources(sources, keys, fallback) {
+    var result = "";
+    (sources || []).some(function (source) {
+      if (!source || typeof source !== "object") return false;
+      return (keys || []).some(function (key) {
+        var value = String(source[key] == null ? "" : source[key]).trim();
+        if (!value) return false;
+        result = value;
+        return true;
+      });
+    });
+    return result || fallback;
+  }
+
+  function evidenceConflictState(conditions) {
+    var roles = (conditions || []).map(function (item) { return String(item.evidenceRole || "context"); });
+    var hasRisk = roles.some(function (role) { return role === "risk" || role === "blocking"; });
+    var hasSupport = roles.some(function (role) { return role === "support" || role === "counter"; });
+    if (hasRisk && hasSupport) return "mixed";
+    if (hasRisk) return "risk-only";
+    if (hasSupport) return "support-only";
+    return "context-only";
   }
 
   function parseValuationAssumptions() {
@@ -6665,11 +6669,10 @@
 
   function buildValuationItems(snapshot) {
     var assumptions = parseValuationAssumptions();
-    var weights = formulaWeights();
     var formula = formulaSetting("fairValueFormula");
     return instrumentItems(snapshot)
       .map(function (item) {
-        return buildValuationForItem(item, assumptions, weights, formula);
+        return buildValuationForItem(item, assumptions, {}, formula);
       })
       .sort(function (a, b) {
         if (a.rank !== b.rank) return a.rank - b.rank;
@@ -6752,122 +6755,39 @@
     var institutionNet = Number(signal.institutionNet || 0);
     var individualNet = Number(signal.individualNet || 0);
     var smartMoneyNet = foreignNet + institutionNet;
-    var investorBase = Math.abs(foreignNet) + Math.abs(institutionNet) + Math.abs(individualNet);
-    var investorBalance = smartMoneyNet - individualNet * 0.35;
     var bidAskImbalance = Number(signal.bidAskImbalance || 0);
     var priceChangeRate = Number(signal.priceChangeRate || 0);
     var trendDistance20 = current && ma20 ? ((current / ma20) - 1) * 100 : 0;
     var trendDistance60 = current && ma60 ? ((current / ma60) - 1) * 100 : 0;
     var maSpread = ma20 && ma60 ? ((ma20 / ma60) - 1) * 100 : 0;
-    var volumePressure = clamp((volumeRatio - 1) * 10, -10, 25);
-    var trendScore = clamp(trendDistance20 * 0.35 + trendDistance60 * 0.2 + maSpread * 0.4, -15, 15);
-    var investorFlowScore = investorBase ? clamp((investorBalance / investorBase) * 100, -30, 30) : 0;
-    var executionScore = clamp((tradeStrength - 100) * 0.5, -25, 25);
-    var buyShareScore = clamp((buyShare - 50) * 0.7, -25, 25);
-    var orderbookScore = clamp(bidAskImbalance * 0.5, -20, 20);
-    var momentumScore = clamp(priceChangeRate * 4, -20, 20);
-    var flowDirectionScore = clamp(
-      executionScore * 0.35
-        + buyShareScore * 0.35
-        + orderbookScore * 0.2
-        + momentumScore * 0.25
-        + trendScore * 0.25
-        + investorFlowScore * 0.2,
-      -25,
-      25
-    );
-    var volumeConfirmation = clamp(flowDirectionScore / 12, -1, 1);
+    var buySignals = [tradeStrength >= 105, buyShare >= 55, bidAskImbalance >= 5, priceChangeRate > 0, smartMoneyNet > 0].filter(Boolean).length;
+    var sellSignals = [tradeStrength > 0 && tradeStrength <= 95, buyShare <= 45, bidAskImbalance <= -5, priceChangeRate < 0, smartMoneyNet < 0].filter(Boolean).length;
+    var flowDirection = buySignals > sellSignals ? "buy" : (sellSignals > buySignals ? "sell" : "mixed");
     return {
       tradeStrength: tradeStrength,
       volumeRatio: volumeRatio,
-      volumePressure: volumePressure,
-      directionalVolumePressure: volumePressure * volumeConfirmation,
-      volumeConfirmation: volumeConfirmation,
-      volumeDryness: volumeRatio && volumeRatio < 1 ? clamp((1 - volumeRatio) * 10, 0, 10) : 0,
       buyVolume: buyVolume,
       sellVolume: sellVolume,
       buyShare: buyShare,
       sellShare: Math.max(0, 100 - buyShare),
       bidAskImbalance: bidAskImbalance,
       priceChangeRate: priceChangeRate,
-      executionScore: executionScore,
-      buyShareScore: buyShareScore,
-      orderbookScore: orderbookScore,
-      momentumScore: momentumScore,
-      flowDirectionScore: flowDirectionScore,
+      flowDirection: flowDirection,
+      buySignalCount: buySignals,
+      sellSignalCount: sellSignals,
       ma20: ma20,
       ma60: ma60,
       trendDistance20: trendDistance20,
       trendDistance60: trendDistance60,
       maSpread: maSpread,
-      trendScore: trendScore,
       foreignNet: foreignNet,
       institutionNet: institutionNet,
       individualNet: individualNet,
       smartMoneyNet: smartMoneyNet,
-      investorFlowBalance: investorBalance,
-      investorFlowScore: investorFlowScore,
       currentPrice: current,
       fairValue: Number(valuation.fairValue || 0),
       fairValueGap: Number(valuation.gap || 0),
       valuationRank: Number(valuation.rank || 0)
-    };
-  }
-
-  function marketSignalScores(signal, context) {
-    context = context || {};
-    var valuation = context.valuation || {};
-    var item = context.item || {};
-    var weights = formulaWeights();
-    var featureVars = modelFeatureVariables(item, signal, valuation);
-    var valuationGap = Number(valuation.gap || 0);
-    var expensivePenalty = valuationGap < 0 ? Math.min(18, Math.abs(valuationGap) / 2) : 0;
-    var undervalueBonus = valuationGap > 0 ? Math.min(14, valuationGap / 3) : 0;
-    var expensiveBonus = expensivePenalty;
-    var flowWeight = Number(weights.flowWeight || 1);
-    var valuationWeight = Number(weights.valuationWeight || 1);
-    var variables = Object.assign({}, weights, featureVars, {
-      expensivePenalty: expensivePenalty,
-      expensiveBonus: expensiveBonus,
-      undervalueBonus: undervalueBonus,
-      profitLossRate: numeric(item.profitLossRate),
-      marketValue: numeric(item.marketValue),
-      holding: item.source === "watchlist" ? 0 : 1,
-      watchlist: item.source === "watchlist" ? 1 : 0
-    });
-    var fallbackBuyScore = 50
-      + (
-        featureVars.executionScore * 0.42
-        + featureVars.directionalVolumePressure * 0.9
-        + featureVars.buyShareScore * 0.55
-        + featureVars.orderbookScore * 0.32
-        + featureVars.momentumScore * 0.35
-        + featureVars.trendScore * 0.45
-        + featureVars.investorFlowScore * 0.35
-      ) * flowWeight
-      + undervalueBonus * valuationWeight
-      - expensivePenalty * valuationWeight;
-    var fallbackSellScore = 50
-      + (
-        -featureVars.executionScore * 0.38
-        - featureVars.directionalVolumePressure * 0.85
-        - featureVars.buyShareScore * 0.55
-        - featureVars.orderbookScore * 0.3
-        - featureVars.momentumScore * 0.4
-        - featureVars.trendScore * 0.35
-        - featureVars.investorFlowScore * 0.3
-      ) * flowWeight
-      + expensiveBonus * valuationWeight;
-    var buyResult = evaluateConfiguredFormula(formulaSetting("buyScoreFormula"), variables, fallbackBuyScore);
-    var sellResult = evaluateConfiguredFormula(formulaSetting("sellScoreFormula"), variables, fallbackSellScore);
-    var errors = [];
-    if (buyResult.error) errors.push("참고 매수 계산식 오류: " + buyResult.error);
-    if (sellResult.error) errors.push("참고 매도 계산식 오류: " + sellResult.error);
-    return {
-      buyScore: Math.round(clamp(buyResult.value, 0, 100)),
-      sellScore: Math.round(clamp(sellResult.value, 0, 100)),
-      buyShare: Math.round(clamp(featureVars.buyShare, 0, 100)),
-      errors: errors
     };
   }
 
@@ -6891,16 +6811,15 @@
     return items;
   }
 
-  function tradeSignalReasons(signal, scores, valuation, hasData, relationRules) {
+  function tradeSignalReasons(signal, valuation, hasData, conditions, stateContract) {
     if (!hasData) {
-      return ["설정에서 거래량 배율, 매수/매도 체결량, 이동평균을 입력하면 관계 규칙을 평가합니다."];
+      return ["현재가, 이동평균, 거래량·수급 중 필요한 자료가 부족해 투자 행동을 정하지 않습니다."];
     }
-    var topRule = (relationRules || [])[0] || null;
-    var reasons = [
-      topRule ? "가장 강한 관계 규칙은 " + topRule.label + "이며 강도는 " + topRule.score + "점입니다." : "아직 강하게 성립한 관계 규칙은 없습니다.",
-      "거래량: " + formatSignalRatio(signal.volumeRatio) + "을 보고 이동평균, 가격 변화, 수급 방향과의 관계를 확인합니다.",
-      "매수 체결 비중은 " + scores.buyShare + "%이고 호가 불균형은 " + formatSignalNumber(signal.bidAskImbalance, "%") + "입니다."
-    ];
+    var reasons = (conditions || []).slice(0, 4).map(function (condition) {
+      return condition.label;
+    });
+    if (!reasons.length) reasons.push("새 행동 조건은 성립하지 않아 현재 상태를 유지합니다.");
+    reasons.push("자료 상태: " + decisionStateMeta("data", stateContract.dataState, "partial").label + ".");
     if (signal.ma20 || signal.ma60) {
       reasons.push("이동평균은 20일선 " + formatSignalNumber(signal.ma20, "") + ", 60일선 " + formatSignalNumber(signal.ma60, "") + "을 판단 항목으로 반영합니다.");
     }
@@ -6912,58 +6831,80 @@
     } else {
       reasons.push("밸류에이션 가정이 없으면 가격·수급·추세 관계만으로 관찰 라벨을 만듭니다.");
     }
-    (scores.errors || []).forEach(function (error) {
-      reasons.push(error + " 기본 추천 공식을 대신 사용했습니다.");
-    });
     return reasons;
   }
 
-  function clientOntologyRuleMatches(item, signal, hasData) {
+  function clientOntologyStateMatches(item, signal, hasData, valuation) {
     var matches = [];
     var pnl = numeric(item.profitLossRate);
-    var ma20Distance = numeric(signal && signal.trendDistance20);
-    var ma60Distance = numeric(signal && signal.trendDistance60);
+    var features = modelFeatureVariables(item, signal, valuation || {});
+    var ma20Distance = numeric(features.trendDistance20);
+    var ma60Distance = numeric(features.trendDistance60);
     var foreignNet = numeric(signal && signal.foreignNet);
     var institutionNet = numeric(signal && signal.institutionNet);
     var symbol = String(item.symbol || "").toUpperCase();
+    var thresholds = relationRuleThresholds();
+    var lossLimit = Number(thresholds.lossRateLow == null ? -8 : thresholds.lossRateLow);
+    function add(label, evidenceRole, reviewLevel, tone) {
+      matches.push({
+        label: label,
+        evidenceRole: evidenceRole,
+        reviewLevel: reviewLevel,
+        dataState: hasData ? "sufficient" : "insufficient",
+        changeState: "new-condition",
+        tone: tone
+      });
+    }
+    if (!hasData || !currentPriceOf(item)) {
+      add("현재가와 핵심 시장 자료가 부족해 판단을 보류합니다.", "blocking", "blocked", "danger");
+      return matches;
+    }
     if (pnl >= 10 && (ma20Distance <= -2 || ma60Distance <= -5)) {
-      matches.push({ label: "수익 보유 + 추세 약화", score: Math.min(100, 55 + Math.abs(ma20Distance) + Math.max(0, pnl - 10)), tone: "caution" });
+      add("수익은 남아 있지만 주요 평균 가격 아래여서 수익 보호 기준을 확인합니다.", "risk", "check", "caution");
     }
-    if (pnl <= -8 || ma20Distance <= -5) {
-      matches.push({ label: "손실 보유 + 기준선 이탈", score: Math.min(100, 60 + Math.abs(pnl) + Math.abs(ma20Distance)), tone: "danger" });
+    if (item.source !== "watchlist" && (pnl <= lossLimit || (ma20Distance <= -5 && ma60Distance < 0))) {
+      add("손실이 계정의 관리 기준을 넘었거나 주요 평균 가격 아래에 있어 손실 관리 조건을 확인합니다.", "risk", pnl <= lossLimit && ma60Distance < 0 ? "act" : "check", "danger");
     }
-    if ((foreignNet || institutionNet) && ma20Distance) {
-      var sameDirection = (ma20Distance > 0 && foreignNet + institutionNet > 0) || (ma20Distance < 0 && foreignNet + institutionNet < 0);
-      if (sameDirection) {
-        matches.push({ label: "추세와 수급 방향 일치", score: 55 + Math.min(25, Math.abs(ma20Distance)), tone: "watch" });
-      }
+    if (ma20Distance < 0 && ma60Distance < 0) {
+      add("현재가가 20일·60일 평균 가격보다 모두 낮아 가격 회복이 확인되지 않았습니다.", "risk", "check", "caution");
+    } else if (ma20Distance >= 0 && ma60Distance >= 0) {
+      add("현재가가 20일·60일 평균 가격 위에 있어 가격 흐름이 버티고 있습니다.", "support", "observe", "watch");
+    } else if (ma20Distance >= 0 || ma60Distance >= 0) {
+      add("짧은 흐름과 중간 흐름이 엇갈려 다음 가격 확인이 필요합니다.", "context", "observe", "hold");
     }
-    if (String(item.source || "") === "watchlist" && ma20Distance <= -2 && ma20Distance >= -8 && ma60Distance >= -1 && numeric(signal && signal.tradeStrength) >= 100) {
-      matches.push({ label: "눌림목 + 지지 수급", score: 64 + Math.min(16, numeric(signal.tradeStrength) - 100), tone: "watch" });
+    if (foreignNet + institutionNet > 0) {
+      add("외국인과 기관을 합친 순매수가 플러스라 가격을 버티는 근거가 있습니다.", "support", "check", "watch");
+    } else if (foreignNet + institutionNet < 0) {
+      add("외국인과 기관을 합친 순매도가 마이너스라 수급 부담이 있습니다.", "risk", "check", "caution");
+    }
+    if (features.flowDirection === "buy") {
+      add("체결·호가·가격 변화 중 매수 쪽 조건이 더 많이 확인됐습니다.", "support", "observe", "watch");
+    } else if (features.flowDirection === "sell") {
+      add("체결·호가·가격 변화 중 매도 쪽 조건이 더 많이 확인됐습니다.", "risk", "check", "caution");
     }
     if (["MSTR", "STRC", "COIN", "MARA", "RIOT"].indexOf(symbol) >= 0) {
-      matches.push({ label: "비트코인 민감 종목", score: 55, tone: "watch" });
+      add("비트코인 움직임에 민감한 종목이라 현지 주가와 비트코인 방향을 함께 확인합니다.", "context", "observe", "hold");
     }
-    if (!hasData || !numeric(signal && signal.tradeStrength) || !numeric(signal && signal.ma20)) {
-      matches.push({ label: "핵심 데이터 부족", score: 45, tone: "hold" });
-    }
-    return matches.sort(function (a, b) { return b.score - a.score; });
+    return matches.sort(function (a, b) {
+      return decisionStateMeta("review", b.reviewLevel, "normal").rank - decisionStateMeta("review", a.reviewLevel, "normal").rank;
+    });
   }
 
-  function relationDecisionFromClientRules(item, relationRules, hasData) {
-    if (!hasData) return { label: "관계 데이터 필요", tone: "hold", priority: 9 };
-    var top = (relationRules || [])[0] || { label: "관계 관망", score: 35, tone: "hold" };
-    var label = top.label || "관계 관망";
+  function relationDecisionFromClientStates(item, stateContract, conditions) {
+    var review = decisionStateMeta("review", stateContract.reviewLevel, "observe");
+    var conflict = stateContract.conflictState;
     var holding = item.source !== "watchlist";
-    var priority = 6;
-    if (/손실|이탈|매도|리스크/.test(label)) priority = holding ? 1 : 4;
-    else if (/수익|익절|추세 약화/.test(label)) priority = 2;
-    else if (/눌림목|매수/.test(label)) priority = holding ? 4 : 2;
-    else if (/방향 일치|민감/.test(label)) priority = 3;
+    if (review.key === "blocked") return { label: "판단 보류", tone: "caution", priority: 0 };
+    var label = holding ? "보유 유지" : "관심 유지";
+    if (holding && ["act", "immediate"].indexOf(review.key) >= 0) label = conflict === "mixed" ? "분할 대응 확인" : "손실 관리 확인";
+    else if (holding && review.key === "check" && conflict === "risk-only") label = "비중 축소 조건 확인";
+    else if (!holding && ["check", "act", "immediate"].indexOf(review.key) >= 0 && conflict === "support-only") label = "진입 조건 확인";
+    else if (!holding && conflict === "risk-only") label = "신규 진입 보류";
     return {
       label: label,
-      tone: top.tone || "watch",
-      priority: priority
+      tone: review.tone,
+      priority: 5 - review.rank,
+      reasons: conditions || []
     };
   }
 
@@ -6973,14 +6914,39 @@
     buildValuationItems(snapshot).forEach(function (item) {
       valuationMap[item.symbol] = item;
     });
+    var backendRows = {};
+    var analysis = investmentAnalysisModel(snapshot || {});
+    (Array.isArray(analysis.actionQueue) ? analysis.actionQueue : []).forEach(function (row) {
+      var key = String(row.symbol || "").toUpperCase();
+      if (key) backendRows[key] = row;
+    });
     return instrumentItems(snapshot).map(function (item) {
       var symbol = String(item.symbol || "").toUpperCase();
       var signal = marketSignalForItem(item, signalMap);
       var hasData = hasMarketSignal(signal);
       var valuation = valuationMap[symbol] || null;
-      var scores = hasData ? marketSignalScores(signal, { item: item, valuation: valuation }) : { buyScore: 0, sellScore: 0, buyShare: 0, errors: [] };
-      var relationRules = clientOntologyRuleMatches(item, signal, hasData);
-      var decision = relationDecisionFromClientRules(item, relationRules, hasData);
+      var conditions = clientOntologyStateMatches(item, signal, hasData, valuation);
+      var backend = backendRows[symbol] || {};
+      var backendGraph = backend.graph || backend.ontologyRelationContext || {};
+      var sources = [backend, backendGraph, item.ontologyOpinion, item.ontologyRelationContext, item];
+      var fallbackReview = conditions.reduce(function (selected, condition) {
+        return decisionStateMeta("review", condition.reviewLevel, "normal").rank > decisionStateMeta("review", selected, "normal").rank ? condition.reviewLevel : selected;
+      }, hasData ? "observe" : "blocked");
+      var dataState = stateValueFromSources(sources, ["dataState", "data_state"], hasData ? (signal.ma20 && signal.ma60 ? "sufficient" : "partial") : "insufficient");
+      var reviewLevel = stateValueFromSources(sources, ["reviewLevel", "review_level"], fallbackReview);
+      var conflictState = stateValueFromSources(sources, ["conflictState", "conflict_state"], evidenceConflictState(conditions));
+      var changeState = stateValueFromSources(sources, ["changeState", "change_state"], numeric(signal.priceChangeRate) > 0.6 ? "improving" : (numeric(signal.priceChangeRate) < -0.6 ? "worsening" : (conditions.length ? "new-condition" : "unchanged")));
+      var validationState = stateValueFromSources(sources, ["validationState", "validation_state"], dataState === "sufficient" && conditions.length >= 2 ? "ready" : (dataState === "unavailable" || dataState === "insufficient" ? "blocked" : "conditional"));
+      var stateContract = {
+        reviewLevel: reviewLevel,
+        dataState: dataState,
+        changeState: changeState,
+        conflictState: conflictState,
+        validationState: validationState
+      };
+      var decision = relationDecisionFromClientStates(item, stateContract, conditions);
+      var backendDecision = backend.decision || backend.action || "";
+      if (backendDecision) decision.label = backendDecision;
       return {
         symbol: symbol,
         name: item.name || symbol,
@@ -6996,22 +6962,25 @@
         profitLoss: numeric(item.profitLoss),
         profitLossRate: numeric(item.profitLossRate),
         signal: signal,
+        features: modelFeatureVariables(item, signal, valuation || {}),
         hasData: hasData,
-        buyScore: scores.buyScore,
-        sellScore: scores.sellScore,
-        buyShare: scores.buyShare,
+        buyShare: Math.round(clamp(buyVolumeShare(signal), 0, 100)),
         valuation: valuation,
         action: decision.label,
         tone: decision.tone,
         priority: decision.priority,
-        relationRules: relationRules,
-        relationStrength: relationRules.length ? relationRules[0].score : 0,
-        reasons: tradeSignalReasons(signal, scores, valuation, hasData, relationRules),
+        reviewLevel: reviewLevel,
+        dataState: dataState,
+        changeState: changeState,
+        conflictState: conflictState,
+        validationState: validationState,
+        relationRules: conditions,
+        reasons: tradeSignalReasons(signal, valuation, hasData, conditions, stateContract),
         triggers: ["관계 규칙", "거래량", "이동평균", "투자자 수급"]
       };
     }).sort(function (a, b) {
       if (a.priority !== b.priority) return a.priority - b.priority;
-      return b.relationStrength - a.relationStrength;
+      return String(a.symbol || "").localeCompare(String(b.symbol || ""));
     });
   }
 
@@ -7052,10 +7021,6 @@
     return Math.max(0, totalCount - missingCount) + "/" + totalCount;
   }
 
-  function settingUsesDefault(name) {
-    return String(settingValue(name) || "").trim() === String(defaultSettings[name] || "").trim();
-  }
-
   function settingEnabled(name) {
     var value = String(settingValue(name) || defaultSettings[name] || "1").trim().toLowerCase();
     return ["0", "false", "no", "off", "disabled"].indexOf(value) < 0;
@@ -7068,13 +7033,20 @@
     return "Auto";
   }
 
+  function newsStateSettingLabel(name, value) {
+    var catalogs = {
+      relevance: { context: "관련 맥락", related: "관련 기사", direct: "종목 직접 기사" },
+      materiality: { routine: "일상 정보", notable: "확인할 정보", material: "중요 정보", critical: "즉시 확인 정보" },
+      trust: { limited: "제한적 출처", standard: "일반 출처", trusted: "신뢰 출처", primary: "공식 원문" }
+    };
+    var catalog = catalogs[name] || {};
+    var key = String(value || "").trim().toLowerCase();
+    return catalog[key] || key || "설정 필요";
+  }
+
   function strategyDataDiagnostics(snapshot) {
     var items = buildTradeSignalItems(snapshot);
     var total = items.length;
-    var modelThresholds = modelDecisionThresholds();
-    var thresholds = alertThresholds();
-    var thresholdMismatch = Math.round(Number(modelThresholds.modelBuy || 0)) !== Math.round(Number(thresholds.modelBuyScore || 0))
-      || Math.round(Number(modelThresholds.modelSell || 0)) !== Math.round(Number(thresholds.modelSellScore || 0));
     var toss = snapshot && snapshot.toss ? snapshot.toss : {};
 
     function missingSymbols(predicate) {
@@ -7131,7 +7103,7 @@
         label: "체결강도",
         value: diagnosticCoverage(total, missingTradeStrength.length),
         tone: diagnosticTone(missingTradeStrength.length, total),
-        description: "체결강도가 없으면 매수/매도 방향 점수가 중립값으로 계산됩니다.",
+        description: "체결강도가 없으면 당일 매수·매도 방향을 확정하지 않고 자료 상태를 일부 부족으로 표시합니다.",
         symbols: missingTradeStrength,
         action: "Toss 체결 데이터 연결 또는 수동 수급 입력"
       },
@@ -7147,7 +7119,7 @@
         label: "투자자 수급",
         value: diagnosticCoverage(total, missingInvestorFlow.length),
         tone: diagnosticTone(missingInvestorFlow.length, total),
-        description: "외국인·기관·개인 순매수가 없으면 스마트머니 점수는 중립 처리됩니다.",
+        description: "외국인·기관·개인 순매수가 없으면 큰 투자자의 수급 방향을 근거에 넣지 않습니다.",
         symbols: missingInvestorFlow,
         action: "외국인/기관/개인 순매수 입력 또는 공급자 연결"
       },
@@ -7160,26 +7132,20 @@
         action: "호가 데이터 연결 또는 수동 수급 입력"
       },
       {
-        label: "모델-알림 기준",
-        value: thresholdMismatch ? "불일치" : "동기화",
-        tone: thresholdMismatch ? "caution" : "watch",
-        description: "모델 매수/매도 기준과 실제 알림 발송 기준을 같은 값으로 맞춥니다.",
-        symbols: thresholdMismatch ? ["modelBuy/modelSell"] : [],
-        action: "모델 설정 저장"
+        label: "자료 상태",
+        value: items.filter(function (item) { return item.dataState === "sufficient"; }).length + "/" + total,
+        tone: items.some(function (item) { return ["insufficient", "unavailable"].indexOf(item.dataState) >= 0; }) ? "caution" : "watch",
+        description: "필수 자료의 존재와 신선도를 충분·일부·부족·사용 불가로 구분합니다.",
+        symbols: missingPrice,
+        action: "부족한 원천 데이터 연결"
       },
       {
-        label: "공식 저장 상태",
-        value: [
-          "buyScoreFormula",
-          "sellScoreFormula",
-          "profitTakeScoreFormula",
-          "lossCutScoreFormula",
-          "notificationScoreFormula"
-        ].every(settingUsesDefault) ? "기본 공식" : "사용자 공식",
-        tone: "watch",
-        description: "기본 공식은 방향성 거래량, 이동평균, 투자자 수급, 보유 손익, 알림 중요도를 함께 씁니다.",
-        symbols: [],
-        action: "고급 공식은 필요할 때만 수정"
+        label: "AI 검증 상태",
+        value: items.filter(function (item) { return item.validationState === "ready"; }).length + "/" + total,
+        tone: items.some(function (item) { return item.validationState === "blocked"; }) ? "danger" : "watch",
+        description: "근거, 반대 근거, 무효화 조건이 갖춰졌는지 검증 완료·조건부·보류로 나눕니다.",
+        symbols: items.filter(function (item) { return item.validationState !== "ready"; }).map(function (item) { return item.symbol; }),
+        action: "조건부 또는 보류 사유 확인"
       }
     ];
   }
@@ -7209,263 +7175,50 @@
     ];
   }
 
-  function labDraftDefaults(item) {
-    var valuation = item.valuation || {};
-    var current = Number(item.currentPrice || 0);
-    var targetReturn = current && valuation.fairValue ? ((valuation.fairValue / current) - 1) * 100 : 15;
+  function categoricalModelState(item) {
+    item = item || {};
+    var review = decisionStateMeta("review", item.reviewLevel, item.hasData ? "observe" : "blocked");
     return {
-      thesisScore: item.hasData ? item.buyScore : 50,
-      riskScore: item.hasData ? item.sellScore : 50,
-      confidenceScore: item.hasData ? Math.max(item.buyScore, item.sellScore) : 50,
-      targetReturn: Math.round(clamp(targetReturn, -50, 200)),
-      stopLoss: 8,
-      positionSize: item.source === "watchlist" ? 10 : 100
+      action: item.action || (item.source === "watchlist" ? "관심 유지" : "보유 유지"),
+      tone: item.tone || review.tone,
+      rank: 5 - review.rank,
+      reviewLevel: review.key,
+      dataState: decisionStateMeta("data", item.dataState, "partial").key,
+      changeState: decisionStateMeta("change", item.changeState, "unchanged").key,
+      conflictState: decisionStateMeta("conflict", item.conflictState, "context-only").key,
+      validationState: decisionStateMeta("validation", item.validationState, "conditional").key,
+      variables: item.features || modelFeatureVariables(item, item.signal || {}, item.valuation || {}),
+      conditions: item.relationRules || []
     };
   }
 
-  function labDraftForItem(item) {
-    return labDraftDefaults(item);
-  }
-
-  function modelFormulaVariables(item) {
-    var valuation = item.valuation || {};
-    var signal = item.signal || {};
-    var draft = labDraftForItem(item);
-    var weights = formulaWeights();
-    var valuationGap = Number(valuation.gap || 0);
-    var expensivePenalty = valuationGap < 0 ? Math.min(18, Math.abs(valuationGap) / 2) : 0;
-    var undervalueBonus = valuationGap > 0 ? Math.min(14, valuationGap / 3) : 0;
-    var featureVars = modelFeatureVariables(item, signal, valuation);
-    var buyShare = Number(item.buyShare || featureVars.buyShare || 0);
-    return Object.assign({}, weights, featureVars, {
-      buyScore: Number(item.buyScore || 0),
-      sellScore: Number(item.sellScore || 0),
-      systemBuyScore: Number(item.buyScore || 0),
-      systemSellScore: Number(item.sellScore || 0),
-      buyShare: buyShare,
-      sellShare: Math.max(0, 100 - buyShare),
-      averagePrice: Number(item.averagePrice || 0),
-      fairValueGap: valuationGap,
-      expensivePenalty: expensivePenalty,
-      expensiveBonus: expensivePenalty,
-      undervalueBonus: undervalueBonus,
-      profitLossRate: Number(item.profitLossRate || 0),
-      buyReasonScore: Number(draft.buyReasonScore || draft.thesisScore || 0),
-      thesisScore: Number(draft.thesisScore || 0),
-      riskScore: Number(draft.riskScore || 0),
-      confidenceScore: Number(draft.confidenceScore || 0),
-      targetReturn: Number(draft.targetReturn || 0),
-      stopLoss: Number(draft.stopLoss || 0),
-      positionSize: Number(draft.positionSize || 0),
-      holding: item.source === "watchlist" ? 0 : 1,
-      watchlist: item.source === "watchlist" ? 1 : 0
-    });
-  }
-
-  function customModelDecision(item, buyScore, sellScore) {
-    var thresholds = modelDecisionThresholds();
-    var holding = item.source !== "watchlist";
-    if (holding && sellScore >= thresholds.modelSell) return { label: "내 모델 분할매도", tone: "danger", rank: 1 };
-    if (holding && sellScore >= thresholds.modelReduce) return { label: "내 모델 리스크 축소", tone: "caution", rank: 2 };
-    if (buyScore >= thresholds.modelBuy && !holding) return { label: "내 모델 매수 후보", tone: "watch", rank: 2 };
-    if (buyScore >= thresholds.modelAdd && holding) return { label: "내 모델 보유 강화", tone: "watch", rank: 3 };
-    if (Math.max(buyScore, sellScore) >= thresholds.modelHold) return { label: "내 모델 관찰", tone: "hold", rank: 4 };
-    return { label: "내 모델 관망", tone: "hold", rank: 5 };
-  }
-
-  function customModelScoresFromVariables(item, variables) {
-    variables = variables || {};
-    var fallbackBuy = variables.buyScore * 0.35
-      + Number(variables.buyReasonScore || variables.thesisScore || 0) * Number(variables.buyReasonWeight || variables.thesisWeight || 0.25)
-      + variables.confidenceScore * Number(variables.confidenceWeight || 0.15)
-      + Math.max(0, variables.targetReturn) * 0.15
-      + variables.undervalueBonus * Number(variables.valuationWeight || 1)
-      - variables.riskScore * Number(variables.riskControlWeight || 0.35);
-    var fallbackSell = variables.sellScore * 0.35
-      + variables.riskScore * Number(variables.riskControlWeight || 0.35)
-      + variables.expensivePenalty * Number(variables.valuationWeight || 1)
-      + Math.max(0, -variables.targetReturn) * 0.2
-      - Number(variables.buyReasonScore || variables.thesisScore || 0) * 0.1;
-    var buyResult = evaluateConfiguredFormula(formulaSetting("customBuyModelFormula"), variables, fallbackBuy);
-    var sellResult = evaluateConfiguredFormula(formulaSetting("customSellModelFormula"), variables, fallbackSell);
-    var buy = Math.round(clamp(buyResult.value, 0, 100));
-    var sell = Math.round(clamp(sellResult.value, 0, 100));
-    var decision = customModelDecision(item, buy, sell);
-    var errors = [];
-    if (buyResult.error) errors.push("참고 매수 계산식 오류: " + buyResult.error);
-    if (sellResult.error) errors.push("참고 매도 계산식 오류: " + sellResult.error);
-    return {
-      buyScore: buy,
-      sellScore: sell,
-      action: decision.label,
-      tone: decision.tone,
-      rank: decision.rank,
-      errors: errors,
-      variables: variables
-    };
-  }
-
-  function customModelScores(item) {
-    return customModelScoresFromVariables(item, modelFormulaVariables(item));
-  }
-
-  function modelFeatureGroups() {
-    return [
-      {
-        key: "execution",
-        label: "체결량/호가",
-        neutral: function () {
-          return { tradeStrength: 100, buyVolume: 50, sellVolume: 50, bidAskImbalance: 0 };
-        }
-      },
-      {
-        key: "volume",
-        label: "거래량",
-        neutral: function () {
-          return { volumeRatio: 1 };
-        }
-      },
-      {
-        key: "trend",
-        label: "이동평균",
-        neutral: function (item) {
-          var current = currentPriceOf(item || {});
-          return { ma20: current, ma60: current };
-        }
-      },
-      {
-        key: "investor",
-        label: "투자자 수급",
-        neutral: function () {
-          return { foreignNet: 0, institutionNet: 0, individualNet: 0 };
-        }
-      }
-    ];
-  }
-
-  function modelWithFeatureOverrides(item, overrides) {
-    var baseSignal = Object.assign({}, item.signal || {}, overrides || {});
-    var valuation = item.valuation || buildValuationForItem(item, parseValuationAssumptions(), formulaWeights(), formulaSetting("fairValueFormula"));
-    var scores = marketSignalScores(baseSignal, { item: item, valuation: valuation });
-    var nextItem = Object.assign({}, item, {
-      signal: baseSignal,
-      hasData: true,
-      buyScore: scores.buyScore,
-      sellScore: scores.sellScore,
-      buyShare: scores.buyShare,
-      valuation: valuation
-    });
-    return customModelScores(nextItem);
-  }
-
-  function modelFeatureContributions(variables) {
-    variables = variables || {};
-    var flowWeight = Number(variables.flowWeight || 1);
-    var valuationWeight = Number(variables.valuationWeight || 1);
-    return [
-      {
-        key: "execution",
-        label: "체결 방향",
-        buy: Number(variables.executionScore || 0) * 0.42 * flowWeight,
-        sell: -Number(variables.executionScore || 0) * 0.38 * flowWeight,
-        description: "실제 데이터가 연결될 때만 반영되는 체결 방향"
-      },
-      {
-        key: "directionalVolume",
-        label: "방향성 거래량",
-        buy: Number(variables.directionalVolumePressure || 0) * 0.9 * flowWeight,
-        sell: -Number(variables.directionalVolumePressure || 0) * 0.85 * flowWeight,
-        description: "거래량 급증이 매수 쪽인지 매도 쪽인지 확인"
-      },
-      {
-        key: "buyShare",
-        label: "매수비중",
-        buy: Number(variables.buyShareScore || 0) * 0.55 * flowWeight,
-        sell: -Number(variables.buyShareScore || 0) * 0.55 * flowWeight,
-        description: "매수 체결량과 매도 체결량의 상대 비중"
-      },
-      {
-        key: "orderbook",
-        label: "호가",
-        buy: Number(variables.orderbookScore || 0) * 0.32 * flowWeight,
-        sell: -Number(variables.orderbookScore || 0) * 0.3 * flowWeight,
-        description: "호가 잔량 불균형"
-      },
-      {
-        key: "momentum",
-        label: "가격 변화",
-        buy: Number(variables.momentumScore || 0) * 0.35 * flowWeight,
-        sell: -Number(variables.momentumScore || 0) * 0.4 * flowWeight,
-        description: "당일 또는 입력 기간 가격 변화"
-      },
-      {
-        key: "trend",
-        label: "이동평균",
-        buy: Number(variables.trendScore || 0) * 0.45 * flowWeight,
-        sell: -Number(variables.trendScore || 0) * 0.35 * flowWeight,
-        description: "20일선, 60일선, 단기/중기 간격"
-      },
-      {
-        key: "investor",
-        label: "투자자 수급",
-        buy: Number(variables.investorFlowScore || 0) * 0.35 * flowWeight,
-        sell: -Number(variables.investorFlowScore || 0) * 0.3 * flowWeight,
-        description: "외국인과 기관 순매수 대비 개인 순매수"
-      },
-      {
-        key: "valuation",
-        label: "밸류에이션",
-        buy: (Number(variables.undervalueBonus || 0) - Number(variables.expensivePenalty || 0)) * valuationWeight,
-        sell: Number(variables.expensiveBonus || variables.expensivePenalty || 0) * valuationWeight,
-        description: "적정가 대비 저평가 또는 고평가"
-      }
-    ];
-  }
-
-  function modelFeatureAudit(item, model) {
-    var baseline = model || customModelScores(item);
-    var replay = customModelScoresFromVariables(item, Object.assign({}, baseline.variables || modelFormulaVariables(item)));
-    var stable = replay.buyScore === baseline.buyScore
-      && replay.sellScore === baseline.sellScore
-      && replay.action === baseline.action;
-    var groups = modelFeatureGroups().map(function (group) {
-      var next = modelWithFeatureOverrides(item, group.neutral(item));
-      var buyDelta = next.buyScore - baseline.buyScore;
-      var sellDelta = next.sellScore - baseline.sellScore;
-      var changed = next.action !== baseline.action || Math.abs(buyDelta) >= 3 || Math.abs(sellDelta) >= 3;
+  function modelFeatureAudit(item) {
+    var conditions = item.relationRules || [];
+    var groups = ["risk", "support", "counter", "context", "blocking"].map(function (role) {
       return {
-        key: group.key,
-        label: group.label,
-        buyDelta: buyDelta,
-        sellDelta: sellDelta,
-        action: next.action,
-        changed: changed
+        key: role,
+        label: decisionStateMeta("evidence", role, "context").label,
+        count: conditions.filter(function (condition) { return String(condition.evidenceRole || "context") === role; }).length
       };
-    });
-    var variables = baseline.variables || {};
-    return { stable: stable, replay: replay, groups: groups, variables: variables, contributions: modelFeatureContributions(variables) };
+    }).filter(function (group) { return group.count > 0; });
+    return {
+      stable: item.changeState === "unchanged",
+      groups: groups,
+      variables: item.features || modelFeatureVariables(item, item.signal || {}, item.valuation || {}),
+      conditions: conditions
+    };
   }
 
   function modelStatsForItems(items) {
-    var scored = items.map(function (item) {
-      return {
-        relationStrength: Number(item.relationStrength || 0),
-        tone: item.tone || "hold"
-      };
-    });
-    var relationAverage = scored.length ? scored.reduce(function (sum, score) { return sum + score.relationStrength; }, 0) / scored.length : 0;
-    var riskAverage = scored.length ? scored.reduce(function (sum, score) {
-      return sum + (score.tone === "danger" || score.tone === "caution" ? score.relationStrength : 0);
-    }, 0) / scored.length : 0;
-    var actionCount = scored.filter(function (score) {
-      return score.relationStrength >= 55 || score.tone === "danger" || score.tone === "caution";
-    }).length;
+    var states = (items || []).map(categoricalModelState);
+    var actionCount = states.filter(function (item) { return ["act", "immediate"].indexOf(item.reviewLevel) >= 0; }).length;
     return {
-      buyAverage: relationAverage,
-      sellAverage: riskAverage,
-      relationAverage: relationAverage,
-      riskAverage: riskAverage,
-      actionCount: actionCount
+      actionCount: actionCount,
+      checkCount: states.filter(function (item) { return item.reviewLevel === "check"; }).length,
+      observeCount: states.filter(function (item) { return item.reviewLevel === "observe"; }).length,
+      blockedCount: states.filter(function (item) { return item.reviewLevel === "blocked" || item.validationState === "blocked"; }).length,
+      readyCount: states.filter(function (item) { return item.validationState === "ready"; }).length,
+      conditionalCount: states.filter(function (item) { return item.validationState === "conditional"; }).length
     };
   }
 
@@ -7486,7 +7239,7 @@
   }
 
   function enabledAlertRule(rules, key) {
-    return Number((rules || {})[key]) !== 0;
+    return Object.prototype.hasOwnProperty.call(rules || {}, key) && Number((rules || {})[key]) !== 0;
   }
 
   function alertSeverityRank(severity) {
@@ -7578,42 +7331,44 @@
   }
 
   function addModelAlerts(alerts, rules, thresholds, item) {
-    var model = customModelScores(item);
-    if (model.buyScore >= Number(thresholds.modelBuyScore || 0)) {
+    void thresholds;
+    var model = categoricalModelState(item);
+    var review = decisionStateMeta("review", model.reviewLevel, "observe");
+    var validation = decisionStateMeta("validation", model.validationState, "conditional");
+    if (item.source === "watchlist" && model.conflictState === "support-only" && ["check", "act", "immediate"].indexOf(model.reviewLevel) >= 0) {
       addAlert(alerts, rules, {
         rule: "modelBuy",
-        severity: item.source === "watchlist" ? "watch" : "info",
+        severity: "watch",
         symbol: item.symbol,
-        title: item.name + " 내 모델 매수 신호",
+        title: item.name + " 진입 조건 확인",
         message: model.action,
-        value: Math.round(model.buyScore) + "점",
-        threshold: Math.round(thresholds.modelBuyScore || 0) + "점",
-        source: "내 모델"
+        value: review.label,
+        threshold: validation.label,
+        source: "상태 판단"
       });
     }
-    if (model.sellScore >= Number(thresholds.modelSellScore || 0)) {
+    if (item.source !== "watchlist" && ["act", "immediate"].indexOf(model.reviewLevel) >= 0) {
       addAlert(alerts, rules, {
         rule: "modelSell",
-        severity: item.source === "watchlist" ? "caution" : "danger",
+        severity: model.reviewLevel === "immediate" ? "danger" : "caution",
         symbol: item.symbol,
-        title: item.name + " 내 모델 매도 신호",
+        title: item.name + " 손실·비중 관리 조건 확인",
         message: model.action,
-        value: Math.round(model.sellScore) + "점",
-        threshold: Math.round(thresholds.modelSellScore || 0) + "점",
-        source: "내 모델"
+        value: review.label,
+        threshold: validation.label,
+        source: "상태 판단"
       });
     }
-    var gap = Math.abs(Number(model.buyScore || 0) - Number(model.sellScore || 0));
-    if (gap >= Number(thresholds.modelScoreGap || 0)) {
+    if (["direction-changed", "worsening", "improving", "new-evidence"].indexOf(model.changeState) >= 0) {
       addAlert(alerts, rules, {
-        rule: "modelScoreGap",
-        severity: model.sellScore > model.buyScore ? "caution" : "watch",
+        rule: "monitorDecisionChange",
+        severity: model.changeState === "worsening" ? "caution" : "watch",
         symbol: item.symbol,
-        title: item.name + " 모델 방향성 확대",
-        message: "매수 점수와 매도 점수의 차이가 커졌습니다.",
-        value: Math.round(model.buyScore) + " / " + Math.round(model.sellScore),
-        threshold: Math.round(thresholds.modelScoreGap || 0) + "점 차이",
-        source: "내 모델"
+        title: item.name + " 판단 상태 변경",
+        message: decisionStateMeta("change", model.changeState, "unchanged").label,
+        value: review.label,
+        threshold: decisionStateMeta("conflict", model.conflictState, "context-only").label,
+        source: "상태 변화"
       });
     }
   }
@@ -8675,14 +8430,16 @@
     var conditions = Array.isArray(row.conditions) ? row.conditions : [];
     var stages = Array.isArray(row.stages) ? row.stages : [];
     var relations = Array.isArray(row.relations) ? row.relations : [];
-    var confidence = row.confidence == null || row.confidence === "" ? "-" : Math.round(Number(row.confidence || 0) * 100) + "%";
+    var review = decisionStateMeta("review", row.reviewLevel || row.review_level, "observe");
+    var data = decisionStateMeta("data", row.dataState || row.data_state, "partial");
+    var validation = decisionStateMeta("validation", row.validationState || row.validation_state, "conditional");
     return [
       '<article class="inference-ledger-row"' + cardTypeAttrs("ledger-row", inferenceLedgerTone(row.status)) + '>',
       '<div class="inference-ledger-row-head">',
       '<div>',
       '<span class="tone-chip ' + escapeHtml(inferenceLedgerTone(row.status)) + '">' + escapeHtml(row.status || "trace") + '</span>',
       '<strong>' + escapeHtml([row.symbol, row.ruleLabel || row.ruleId].filter(Boolean).join(" · ") || "Inference trace") + '</strong>',
-      '<em>' + escapeHtml([row.decisionStage, row.actionPolicy, "confidence " + confidence].filter(Boolean).join(" · ")) + '</em>',
+      '<em>' + escapeHtml([row.decisionStage, row.actionPolicy, review.label, data.label, validation.label].filter(Boolean).join(" · ")) + '</em>',
       '</div>',
       '<span>' + escapeHtml(row.updatedAt || row.traceId || "-") + '</span>',
       '</div>',
@@ -8726,7 +8483,7 @@
       );
     }
     if (key === "model") {
-      return editorWorkDetailPayload("Review Trace", "모델 리뷰 상세", "종목별 점수와 판단 근거", renderModelPreviewPanel(snapshot));
+      return editorWorkDetailPayload("Review Trace", "모델 리뷰 상세", "종목별 확인 단계와 판단 근거", renderModelPreviewPanel(snapshot));
     }
     if (key === "projection") {
       return editorWorkDetailPayload(
@@ -8777,7 +8534,7 @@
     return editorWorkDetailPayload(
       "Diagnostics Rule",
       "반복·시간 조건 상세",
-      rule.label + " · 유사 메시지, 장 시간, 조건 점수",
+      rule.label + " · 유사 메시지, 장 시간, 조건 변화",
       renderNotificationAdvancedRulePanel()
     );
   }
@@ -9039,7 +8796,6 @@
     var enabledRules = policyRules.filter(function (rule) {
       return enabledAlertRule(rules, rule.key);
     }).length;
-    var thresholds = modelDecisionThresholds();
     var decision = snapshot.tossDecision || {};
     var strategy = decision.ontologyStrategy || {};
     var abox = strategy.abox || {};
@@ -9049,7 +8805,7 @@
       '<section class="deskbar deskbar-full web-style-deskbar" data-style-region="deskbar" data-style-rail="full" aria-label="운영 상태 요약">',
       renderDeskbarCell("Data", modeLabel, "Last " + formatClock(snapshot.generatedAt), modeClass),
       renderDeskbarCell("Portfolio", formatMoney(portfolio.total || 0), positions + " positions", "neutral"),
-      renderDeskbarCell("Model", settingValue("modelName") || defaultSettings.modelName, "Buy " + Math.round(thresholds.modelBuy || 0) + " · Sell " + Math.round(thresholds.modelSell || 0), "neutral"),
+      renderDeskbarCell("Model", settingValue("modelName") || defaultSettings.modelName, "상태 계약 · 조건 기반", "neutral"),
       renderDeskbarCell("Ontology", (tbox.classes || []).length + " TBox / " + relationCount + " rel", (abox.entityCount || 0) + " ABox entities", "neutral"),
       renderDeskbarCell("Alerts", enabledRules + "/" + policyRules.length, state.realtime.connected ? "WebSocket live" : "HTTP polling", state.realtime.connected ? "live" : "demo"),
       '</section>'
@@ -9338,9 +9094,7 @@
       var foreign = numeric(signal.foreignNet || item.foreignNet || item.foreignNetVolume);
       var institution = numeric(signal.institutionNet || item.institutionNet || item.institutionNetVolume);
       var quality = consoleQualityMeta(item.dataQuality || item.quoteStatus || (((snapshot || {}).toss || {}).mode));
-      var strongestEvidence = evidence.slice().sort(function (a, b) {
-        return Number((b.stockImpactScore != null ? b.stockImpactScore : b.impactScore) || 0) - Number((a.stockImpactScore != null ? a.stockImpactScore : a.impactScore) || 0);
-      })[0] || null;
+      var strongestEvidence = evidence.slice().sort(compareResearchEvidenceForDisplay)[0] || null;
       var impact = strongestEvidence ? researchEvidenceImpactMeta(strongestEvidence) : { label: "근거 대기", tone: "hold" };
       return {
         key: [accountId, item.market || "-", symbol].join(":"),
@@ -9384,35 +9138,45 @@
     var rows = Array.isArray(analysis.actionQueue) ? analysis.actionQueue : [];
     return rows.map(function (row, index) {
       var graph = row.graph || {};
-      var confidence = investmentActionConfidence(row);
       var reasons = Array.isArray(row.reasons) ? row.reasons : [];
+      var sources = [row, graph, row.ontologyRelationContext, row.stateContract];
+      var reviewLevel = stateValueFromSources(sources, ["reviewLevel", "review_level"], graph.blocked ? "blocked" : "observe");
+      var dataState = stateValueFromSources(sources, ["dataState", "data_state"], "partial");
+      var changeState = stateValueFromSources(sources, ["changeState", "change_state"], "unchanged");
+      var conflictState = stateValueFromSources(sources, ["conflictState", "conflict_state"], "context-only");
+      var validationState = stateValueFromSources(sources, ["validationState", "validation_state"], dataState === "sufficient" ? "conditional" : "blocked");
+      var review = decisionStateMeta("review", reviewLevel, "observe");
       return {
         key: investmentActionKey(row, index),
         symbol: String(row.symbol || "").toUpperCase(),
         name: stockDisplayName(row.symbol, row),
         decision: row.decision || row.action || "검토",
-        tone: row.tone || "hold",
-        confidence: confidence,
+        tone: row.tone || review.tone,
         reason: formatConsoleNarrative(reasons[0] || graph.reason || "근거 확인 필요"),
         invalidation: formatConsoleNarrative(investmentActionInvalidation(row)),
         quality: consoleQualityMeta(row.dataQuality || row.quality),
-        blocked: Boolean(graph.blocked),
-        score: Number(row.relationStrength || row.ontologyPressure || row.conviction || 0),
+        blocked: Boolean(graph.blocked) || reviewLevel === "blocked" || validationState === "blocked",
+        reviewLevel: reviewLevel,
+        dataState: dataState,
+        changeState: changeState,
+        conflictState: conflictState,
+        validationState: validationState,
         profitLossRate: numeric(row.profitLossRate),
         raw: row
       };
     }).sort(function (a, b) {
       if (a.blocked !== b.blocked) return a.blocked ? -1 : 1;
-      if (a.tone !== b.tone) return consoleToneRank(b.tone) - consoleToneRank(a.tone);
-      return b.score - a.score;
+      var reviewDiff = decisionStateMeta("review", b.reviewLevel, "normal").rank - decisionStateMeta("review", a.reviewLevel, "normal").rank;
+      if (reviewDiff) return reviewDiff;
+      return String(a.symbol || "").localeCompare(String(b.symbol || ""));
     });
   }
 
   function selectConsoleAlertRows() {
     return filteredNotificationJobs(state.notificationJobItems || []).map(function (job) {
       var symbol = notificationJobResolvedSymbol(job);
-      var factors = notificationJobScoreFactors(job);
-      var movement = notificationJobScoreMovement(job);
+      var factors = notificationJobDecisionFactors(job);
+      var movement = notificationJobDecisionRoute(job);
       var title = textWithKnownDisplaySymbols(job.title || "", symbol, job) || (symbol ? stockDisplayName(symbol, job) : notificationJobTypeLabel(notificationJobTypeKey(job), [job]));
       return {
         key: notificationJobKey(job),
@@ -9421,7 +9185,7 @@
         title: title,
         type: notificationJobTypeLabel(notificationJobTypeKey(job), [job]),
         movement: movement,
-        reason: formatConsoleNarrative((factors[0] || {}).label || (Array.isArray(job.honeyReasons) ? job.honeyReasons[0] : "") || job.suppressionSummary || job.textPreview || "발송 판단 기록"),
+        reason: formatConsoleNarrative((factors[0] || {}).label || (Array.isArray(job.deliveryReasons) ? job.deliveryReasons[0] : "") || job.suppressionSummary || job.textPreview || "발송 판단 기록"),
         status: notificationJobStatusLabel(job.status),
         tone: notificationJobToneClass(job.status),
         channel: job.channel || job.deliveryChannel || "Telegram",
@@ -9433,6 +9197,7 @@
   function selectConsoleValidationRows() {
     return ontologyExperimentItems().map(function (experiment) {
       var result = experiment.lastResult || {};
+      var readiness = result.promotionReadiness || {};
       var warnings = Array.isArray(experiment.validationWarnings) ? experiment.validationWarnings : [];
       return {
         key: experiment.id || experiment.experimentId || experiment.title,
@@ -9440,7 +9205,9 @@
         status: experiment.status || "draft",
         candidateCount: Array.isArray(experiment.candidateRules) ? experiment.candidateRules.length : 0,
         relationDelta: Number(result.delta || result.relationDelta || result.derivedRelationDelta || 0),
-        score: Number(result.score || result.validationScore || 0),
+        validationState: String(result.validationState || readiness.validationState || "conditional"),
+        dataState: String(result.dataState || readiness.dataState || "partial"),
+        qualityState: String(result.qualityState || readiness.qualityState || "needs-review"),
         warnings: warnings.length,
         updatedAt: experiment.updatedAt || experiment.createdAt || "",
         tone: warnings.length ? "caution" : (experiment.status === "active" ? "watch" : "hold"),
@@ -9612,9 +9379,7 @@
   function renderMarketConsole(snapshot) {
     var rows = filteredConsoleInstrumentRows(snapshot);
     var page = consolePageSlice(rows, "market", 8);
-    var evidence = consoleResearchItems().slice().sort(function (a, b) {
-      return Number((b.stockImpactScore != null ? b.stockImpactScore : b.impactScore) || 0) - Number((a.stockImpactScore != null ? a.stockImpactScore : a.impactScore) || 0);
-    });
+    var evidence = consoleResearchItems().slice().sort(compareResearchEvidenceForDisplay);
     var negative = evidence.filter(function (item) { return researchEvidenceImpactMeta(item).tone === "danger"; }).length;
     var portfolio = selectConsolePortfolio(snapshot);
     var metrics = [
@@ -9643,13 +9408,17 @@
   }
 
   function renderDecisionConsoleRow(row) {
+    var review = decisionStateMeta("review", row.reviewLevel, "observe");
+    var conflict = decisionStateMeta("conflict", row.conflictState, "context-only");
+    var data = decisionStateMeta("data", row.dataState, "partial");
+    var validation = decisionStateMeta("validation", row.validationState, "conditional");
     return [
       '<button class="oa-data-row oa-decision-row" type="button" data-console-row-key="' + escapeHtml(row.key) + '" data-work-detail="investment-action" data-work-detail-key="' + escapeHtml(row.key) + '">',
       '<span class="oa-symbol-cell"><strong>' + escapeHtml(row.name || row.symbol) + '</strong><em>' + escapeHtml(row.symbol || "") + '</em></span>',
-      '<span><strong class="' + escapeHtml(row.tone) + '">' + escapeHtml(row.decision) + '</strong><em>' + escapeHtml(row.confidence.label) + '</em></span>',
-      '<span><strong>' + escapeHtml(row.score ? Math.round(row.score) + "점" : "점수 대기") + '</strong><em>' + escapeHtml(row.blocked ? "추론 차단" : "InferenceBox") + '</em></span>',
+      '<span><strong class="' + escapeHtml(row.tone) + '">' + escapeHtml(row.decision) + '</strong><em>' + escapeHtml(decisionStateMeta("change", row.changeState, "unchanged").label) + '</em></span>',
+      '<span><strong class="' + escapeHtml(review.tone) + '">' + escapeHtml(review.label) + '</strong><em>' + escapeHtml(conflict.label) + '</em></span>',
       '<span class="oa-reason-cell"><strong>' + escapeHtml(row.reason) + '</strong><em>약화: ' + escapeHtml(row.invalidation) + '</em></span>',
-      '<span><strong class="' + escapeHtml(row.quality.tone) + '">' + escapeHtml(row.quality.label) + '</strong><em>손익 ' + escapeHtml(signedPct(row.profitLossRate)) + '</em></span>',
+      '<span><strong class="' + escapeHtml(data.tone) + '">' + escapeHtml(data.label) + '</strong><em>' + escapeHtml(validation.label) + ' · 손익 ' + escapeHtml(signedPct(row.profitLossRate)) + '</em></span>',
       '<span class="oa-open-cell">근거 보기 &rarr;</span>',
       '</button>'
     ].join("");
@@ -9659,7 +9428,7 @@
     var rows = selectConsoleDecisionRows(state.snapshot || {});
     var page = consolePageSlice(rows, "decision", 12);
     var body = page.items.length
-      ? '<div class="oa-data-table" data-console-keyed-list="decision-full"><div class="oa-table-head oa-decision-row"><span>종목</span><span>행동</span><span>관계 점수</span><span>핵심 근거·약화 조건</span><span>데이터</span><span></span></div>' + page.items.map(renderDecisionConsoleRow).join("") + '</div>'
+      ? '<div class="oa-data-table" data-console-keyed-list="decision-full"><div class="oa-table-head oa-decision-row"><span>종목</span><span>행동·변화</span><span>확인 단계·근거</span><span>핵심 근거·약화 조건</span><span>자료·검증</span><span></span></div>' + page.items.map(renderDecisionConsoleRow).join("") + '</div>'
       : renderConsoleEmpty("현재 판단 후보가 없습니다", "TypeDB 추론과 투자 분석 데이터가 생성되면 표시합니다.");
     return editorWorkDetailPayload(
       "Action Queue",
@@ -9681,7 +9450,7 @@
       { label: "추론 차단", value: blocked.length + "건", detail: "TypeDB 확인", tone: blocked.length ? "danger" : "watch" },
       { label: "근거 준비", value: rows.filter(function (row) { return row.quality.tone === "watch"; }).length + "/" + rows.length, detail: "실데이터" }
     ];
-    var table = rows.length ? '<div class="oa-data-table" data-console-keyed-list="decision-primary"><div class="oa-table-head oa-decision-row"><span>종목</span><span>행동</span><span>관계 점수</span><span>핵심 근거·약화 조건</span><span>데이터</span><span></span></div>' + rows.slice(0, 10).map(renderDecisionConsoleRow).join("") + '</div>' : renderConsoleEmpty("현재 판단 후보가 없습니다", "TypeDB InferenceBox와 투자 분석 데이터가 생성되면 종목별 행동 큐가 표시됩니다.", renderWorkDetailButton("strategy-trace-board", "", "추론 상태", "text-button compact"));
+    var table = rows.length ? '<div class="oa-data-table" data-console-keyed-list="decision-primary"><div class="oa-table-head oa-decision-row"><span>종목</span><span>행동·변화</span><span>확인 단계·근거</span><span>핵심 근거·약화 조건</span><span>자료·검증</span><span></span></div>' + rows.slice(0, 10).map(renderDecisionConsoleRow).join("") + '</div>' : renderConsoleEmpty("현재 판단 후보가 없습니다", "TypeDB InferenceBox와 투자 분석 데이터가 생성되면 종목별 행동 큐가 표시됩니다.", renderWorkDetailButton("strategy-trace-board", "", "추론 상태", "text-button compact"));
     var blockers = blocked.length ? '<div class="oa-context-list" data-console-keyed-list="decision-blockers">' + blocked.slice(0, 6).map(function (row) {
       return '<button type="button" class="oa-context-row" data-console-row-key="' + escapeHtml(row.key) + '" data-work-detail="investment-action" data-work-detail-key="' + escapeHtml(row.key) + '"><span><strong>' + escapeHtml(row.name || row.symbol) + '</strong><em>' + escapeHtml(row.reason) + '</em></span><b class="danger">차단</b></button>';
     }).join("") + '</div>' : renderConsoleEmpty("차단 요인이 없습니다", "그래프 추론과 데이터 품질 게이트가 통과된 상태입니다.");
@@ -9698,7 +9467,7 @@
       '<button class="oa-data-row oa-alert-row" type="button" data-console-row-key="' + escapeHtml(row.key) + '" data-work-detail="notification-job" data-work-detail-key="' + escapeHtml(row.key) + '">',
       '<span><strong>' + escapeHtml(formatClock(row.time)) + '</strong><em>' + escapeHtml(row.channel) + '</em></span>',
       '<span class="oa-symbol-cell"><strong>' + escapeHtml(row.title) + '</strong><em>' + escapeHtml(row.type) + '</em></span>',
-      '<span><strong class="' + escapeHtml(row.movement.tone) + '">' + escapeHtml(row.movement.label) + '</strong><em>' + escapeHtml(row.movement.relation || "점수") + '</em></span>',
+      '<span><strong class="' + escapeHtml(row.movement.tone) + '">' + escapeHtml(row.movement.label) + '</strong><em>' + escapeHtml(row.movement.change || row.movement.relation || "상태") + '</em></span>',
       '<span class="oa-reason-cell"><strong>' + escapeHtml(row.reason) + '</strong><em>알림이 온 이유</em></span>',
       '<span><strong class="' + escapeHtml(row.tone) + '">' + escapeHtml(row.status) + '</strong><em>발송 상태</em></span>',
       '<span class="oa-open-cell">리포트 &rarr;</span>',
@@ -9718,20 +9487,23 @@
       { label: "활성 규칙", value: notificationPolicyCatalog().filter(function (rule) { return enabledAlertRule(alertRules(), rule.key); }).length + "개", detail: "투자·운영" }
     ];
     var toolbar = renderNotificationJobFilterToolbar(state.notificationJobItems || [], filteredNotificationJobs(state.notificationJobItems || []));
-    var table = page.items.length ? '<div class="oa-data-table" data-console-keyed-list="alerts-ledger"><div class="oa-table-head oa-alert-row"><span>시각</span><span>대상·유형</span><span>점수 변화</span><span>알림이 온 이유</span><span>상태</span><span></span></div>' + page.items.map(renderAlertConsoleRow).join("") + '</div>' : renderConsoleEmpty("조건에 맞는 알림이 없습니다", "검색어와 발송 상태를 조정하거나 알림 워커 상태를 확인하세요.", renderWorkDetailButton("notification-diagnostics-board", "", "알림 진단", "text-button compact"));
+    var table = page.items.length ? '<div class="oa-data-table" data-console-keyed-list="alerts-ledger"><div class="oa-table-head oa-alert-row"><span>시각</span><span>대상·유형</span><span>발송 판단</span><span>알림이 온 이유</span><span>상태</span><span></span></div>' + page.items.map(renderAlertConsoleRow).join("") + '</div>' : renderConsoleEmpty("조건에 맞는 알림이 없습니다", "검색어와 발송 상태를 조정하거나 알림 워커 상태를 확인하세요.", renderWorkDetailButton("notification-diagnostics-board", "", "알림 진단", "text-button compact"));
     return renderConsoleManagedPage("notifications", metrics, [
-      renderConsoleSurface({ kicker: "DISPATCH LEDGER", title: "알림 판단 원장", description: "목록에는 점수 변화와 발송 이유만 남기고 전체 메시지는 상세에서 봅니다.", actions: renderWorkDetailButton("notification-policy-board", "", "알림 정책", "text-button compact"), body: toolbar + renderConsoleLiveRegion("alerts-ledger-body", table), footer: renderConsolePager("alerts", page) })
+      renderPsychologyShadowPanel(false),
+      renderConsoleSurface({ kicker: "DISPATCH LEDGER", title: "알림 판단 원장", description: "목록에는 발송 상태와 이유만 남기고 전체 메시지는 상세에서 봅니다.", actions: renderWorkDetailButton("notification-policy-board", "", "알림 정책", "text-button compact"), body: toolbar + renderConsoleLiveRegion("alerts-ledger-body", table), footer: renderConsolePager("alerts", page) })
     ].join(""));
   }
 
   function renderValidationConsoleRow(row) {
+    var validation = decisionStateMeta("validation", row.validationState, "conditional");
+    var data = decisionStateMeta("data", row.dataState, "partial");
     return [
       '<button class="oa-data-row oa-validation-row" type="button" data-console-row-key="' + escapeHtml(row.key) + '" data-work-detail="ontology-experiment" data-work-detail-key="' + escapeHtml(row.key) + '">',
       '<span class="oa-symbol-cell"><strong>' + escapeHtml(row.title) + '</strong><em>' + escapeHtml(formatClock(row.updatedAt) || "실행 이력 없음") + '</em></span>',
       '<span><strong class="' + escapeHtml(row.tone) + '">' + escapeHtml(row.status) + '</strong><em>실험 상태</em></span>',
       '<span><strong>' + escapeHtml(row.candidateCount) + '개</strong><em>후보 규칙</em></span>',
       '<span><strong class="' + escapeHtml(row.relationDelta < 0 ? "danger" : "watch") + '">' + escapeHtml((row.relationDelta > 0 ? "+" : "") + row.relationDelta) + '</strong><em>관계 변화</em></span>',
-      '<span><strong>' + escapeHtml(row.score || "-") + '</strong><em>검증 점수</em></span>',
+      '<span><strong class="' + escapeHtml(validation.tone) + '">' + escapeHtml(validation.label) + '</strong><em>' + escapeHtml(data.label) + '</em></span>',
       '<span><strong class="' + escapeHtml(row.warnings ? "danger" : "watch") + '">' + escapeHtml(row.warnings) + '건</strong><em>구조 경고</em></span>',
       '<span class="oa-open-cell">검증 상세 &rarr;</span>',
       '</button>'
@@ -9751,7 +9523,7 @@
       { label: "관계", value: parts.aboxRelations.length + "개", detail: "TypeDB 투영" },
       { label: "구조 경고", value: warningCount + "건", detail: "실험 합계", tone: warningCount ? "danger" : "watch" }
     ];
-    var table = page.items.length ? '<div class="oa-data-table" data-console-keyed-list="validation-experiments"><div class="oa-table-head oa-validation-row"><span>실험</span><span>상태</span><span>후보</span><span>관계 변화</span><span>점수</span><span>경고</span><span></span></div>' + page.items.map(renderValidationConsoleRow).join("") + '</div>' : renderConsoleEmpty("등록된 검증 실험이 없습니다", "AI 실험 제안 또는 새 후보 규칙을 만든 뒤 TypeDB에서 검증하세요.", renderWorkDetailButton("experiment-validation-board", "", "검증 워크벤치", "text-button compact"));
+    var table = page.items.length ? '<div class="oa-data-table" data-console-keyed-list="validation-experiments"><div class="oa-table-head oa-validation-row"><span>실험</span><span>상태</span><span>후보</span><span>관계 변화</span><span>검증·자료</span><span>경고</span><span></span></div>' + page.items.map(renderValidationConsoleRow).join("") + '</div>' : renderConsoleEmpty("등록된 검증 실험이 없습니다", "AI 실험 제안 또는 새 후보 규칙을 만든 뒤 TypeDB에서 검증하세요.", renderWorkDetailButton("experiment-validation-board", "", "검증 워크벤치", "text-button compact"));
     var graphBody = [
       '<div class="oa-health-list">',
       '<div><span>TypeDB ABox</span><strong>' + escapeHtml(parts.aboxEntities.length) + ' entities</strong></div>',
@@ -10395,13 +10167,26 @@
     var busy = state.investmentCalendarCandidateReviewing === id;
     var payload = investmentCalendarPayload(candidate);
     var aiRecommended = Boolean(payload.aiResearchRecommended);
-    var reason = candidate.reviewReason === "missingDate" ? "날짜 확인 필요" : (candidate.reviewReason === "lowConfidence" ? "신뢰도 확인 필요" : (candidate.reviewReason === "aiResearchRecommended" ? "AI 추천 검토" : "검토 필요"));
+    var reviewReason = String(candidate.reviewReason || "");
+    var reason = {
+      missingDate: "날짜 확인 필요",
+      sourceDataUnavailable: "원문 자료 사용 불가",
+      sourceNeedsVerification: "출처 확인 필요",
+      sourceTrustNeedsReview: "출처 상태 확인 필요",
+      eventTermsUnclear: "일정 내용 확인 필요",
+      dateNeedsVerification: "날짜 원문 확인 필요",
+      feedbackReview: "이전 검토 반영 필요",
+      aiResearchReview: "AI 검토 필요",
+      aiResearchRecommended: "AI 추천 검토"
+    }[reviewReason] || "검토 필요";
+    var readinessState = String(candidate.readinessState || payload.readinessState || "needs-review");
+    var candidateDataState = readinessState === "blocked" ? "unavailable" : (readinessState === "ready" ? "sufficient" : "partial");
     return [
       '<section class="investment-calendar-event watch"' + cardTypeAttrs("calendar-event", "watch") + cardFormatAttrs("summary-list-card", "compact") + '>',
       '<div class="investment-calendar-event-main">',
       '<div class="investment-calendar-event-date">',
       '<strong>' + escapeHtml(candidate.startsAt ? formatClock(candidate.startsAt) : "날짜 필요") + '</strong>',
-      '<span>' + escapeHtml(Math.round(Number(candidate.confidence || 0) * 100)) + '%</span>',
+      '<span>' + escapeHtml(decisionStateMeta("data", candidateDataState, "partial").label) + '</span>',
       '</div>',
       '<div class="investment-calendar-event-copy">',
       '<p class="label">' + escapeHtml((aiRecommended ? "AI 추천 · " : "") + investmentCalendarEventTypeLabel(candidate.eventType) + " · " + reason) + '</p>',
@@ -11007,7 +10792,7 @@
       ["무조건 후보가 되는 변화", "손익률이 계정 손실 구간에 들어가거나 수익 보호 구간에 들어갈 때", "보유 종목은 관심 종목보다 손익과 비중을 우선합니다.", "손익 구간, 보유 비중, 매도 가능 수량을 먼저 봅니다."],
       ["쿨다운을 풀 수 있는 변화", "손익률 1%p 이상 개선·악화, 60일 평균 아래 전환, 새 뉴스·공시, 최종 행동 변경", "같은 유형이어도 실제 상태가 바뀐 것으로 보고 다시 보낼 수 있습니다.", "메시지 상단과 알림이 온 이유에 어떤 변화였는지 표시합니다."],
       ["메시지를 막는 경우", "이전과 같은 조건이 계속되고 새 원천 근거가 없으며 쿨다운 시간도 지나지 않았을 때", "반복 알림으로 집중이 깨지지 않도록 발송을 보류합니다.", "하이닉스가 올라도 1%p 기준을 넘지 않거나 최종 행동이 그대로면 메시지가 안 올 수 있습니다."],
-      ["데이터를 약하게 보는 경우", "투자자별 수급이 이전 조회와 같거나 KIS 응답이 비어 있거나 지연 상태일 때", "수급이 판단에 들어가더라도 확신을 낮춥니다.", "메시지의 데이터 빈 곳 또는 최신성 설명에 남깁니다."],
+      ["데이터를 약하게 보는 경우", "투자자별 수급이 이전 조회와 같거나 KIS 응답이 비어 있거나 지연 상태일 때", "자료 상태를 일부 부족으로 바꾸고 행동 판단을 제한합니다.", "메시지의 데이터 빈 곳 또는 최신성 설명에 남깁니다."],
       ["추론 상태 알림", "TypeDB InferenceBox 결과가 0개이거나 네이티브 규칙 실행이 실패할 때", "투자 신호가 아니라 판단 엔진 점검 신호입니다.", "매수·매도 의견을 만들지 않고 TypeDB, 네이티브 규칙, 워커 상태를 확인하라고 보냅니다."]
     ];
     return [
@@ -11190,9 +10975,9 @@
         flow: ["앱 구조", "데이터 흐름 문서", "운영 기준"]
       },
       notifications: {
-        steps: [["01", "점수", "상승·감점"], ["02", "게이트", "발송·보류"], ["03", "본문", "템플릿·발송"]],
+        steps: [["01", "상태", "조건·변화"], ["02", "게이트", "발송·보류"], ["03", "본문", "템플릿·발송"]],
         metrics: [["관리 룰", enabledRules + "/" + notificationPolicyCatalog().length], ["템플릿", notificationTemplateItems().length], ["큐", notificationJobSummaryText(state.realtime.notificationJobs)]],
-        flow: ["추론 결과·중요도 점수", "발송/보류 게이트", "알림 이력"]
+        flow: ["추론 결과·변화 상태", "발송/보류 게이트", "알림 이력"]
       },
       modeling: {
         steps: [["01", "판단", "오늘 할 일"], ["02", "근거", "뉴스·차트"], ["03", "검증", "그래프·품질"]],
@@ -11441,7 +11226,7 @@
     var watchlist = Array.isArray(toss.watchlist) ? toss.watchlist : [];
     var notificationJobs = state.notificationJobItems || [];
     var activeJob = activeNotificationDecisionJob(notificationJobs);
-    var movement = notificationJobScoreMovement(activeJob);
+    var movement = notificationJobDecisionRoute(activeJob);
     var evidence = currentResearchEvidence();
     var feedImpact = feedImpactCounts();
     var experiments = ontologyExperimentPayload();
@@ -11490,8 +11275,8 @@
       },
       notifications: {
         tone: movement.tone,
-        current: activeJob ? "최근 판단 " + notificationJobStatusLabel(activeJob.status) + " · " + movement.compact : "최근 판단 없음",
-        reason: activeJob ? "알림은 제목보다 점수 변화와 발송·보류 게이트를 먼저 봐야 합니다." : "알림 워커가 판단을 남기면 점수 변화와 게이트를 이 위치에 표시합니다.",
+        current: activeJob ? "최근 판단 " + notificationJobStatusLabel(activeJob.status) + " · " + movement.label : "최근 판단 없음",
+        reason: activeJob ? "알림은 제목보다 상태 변화와 발송·보류 이유를 먼저 봐야 합니다." : "알림 워커가 판단을 남기면 상태 변화와 게이트를 이 위치에 표시합니다.",
         action: activeJob ? "판단 상세 확인" : "후보 신호 보기",
         href: activeJob ? "?tab=notifications" : "?tab=notifications&notification=candidates"
       },
@@ -11767,7 +11552,9 @@
     return {
       completedAt: lastResult.completedAt || "",
       promotionStatus: readiness.status || "",
-      promotionScore: readiness.score,
+      validationState: readiness.validationState || lastResult.validationState || "conditional",
+      dataState: readiness.dataState || lastResult.dataState || "partial",
+      qualityState: readiness.qualityState || lastResult.qualityState || "needs-review",
       graphRunCount: sandbox.graphRunCount || 0,
       derivedRelationDelta: aggregate.derivedRelationCount || 0,
       newRelationTypes: aggregate.newRelationTypes || [],
@@ -12400,7 +12187,8 @@
         '<div class="ontology-experiment-run-grid">',
         renderOntologyExperimentMetric("그래프", latest.graphRunCount || 0, "graphs"),
         renderOntologyExperimentMetric("파생 변화", latest.derivedRelationDelta || 0, "delta"),
-        renderOntologyExperimentMetric("점수", latest.promotionScore == null ? "-" : latest.promotionScore, "score"),
+        renderOntologyExperimentMetric("검증", decisionStateMeta("validation", latest.validationState, "conditional").label, "validation"),
+        renderOntologyExperimentMetric("자료", decisionStateMeta("data", latest.dataState, "partial").label, "data"),
         '</div>',
         relationTypes.length ? '<div class="theme-radar ontology-experiment-tags">' + relationTypes.slice(0, 8).map(function (item) { return '<span>' + escapeHtml(item) + '</span>'; }).join("") + '</div>' : '',
         findings.length ? '<div class="ontology-experiment-findings">' + findings.slice(0, 4).map(function (item) { return '<span>' + escapeHtml(item) + '</span>'; }).join("") + '</div>' : '',
@@ -12425,8 +12213,8 @@
       '</div>',
       '<div class="ontology-experiment-starter-grid">',
       renderExperimentStarterStep("01", "후보 규칙 생성", "최근 판단 실패와 누락 근거에서 RuleBox 후보를 만듭니다.", "process-card"),
-      renderExperimentStarterStep("02", "샌드박스 실행", "활성 실험을 스냅샷에 적용해 관계 변화와 점수 변화를 비교합니다.", "diagnostic-card"),
-      renderExperimentStarterStep("03", "운영 반영", "검증 점수와 권고안을 확인한 뒤 실제 온톨로지 기준에 반영합니다.", "relationship-card"),
+      renderExperimentStarterStep("02", "샌드박스 실행", "활성 실험을 스냅샷에 적용해 관계 변화, 자료 상태, 검증 상태를 비교합니다.", "diagnostic-card"),
+      renderExperimentStarterStep("03", "운영 반영", "검증 완료 여부와 권고안을 확인한 뒤 실제 온톨로지 기준에 반영합니다.", "relationship-card"),
       '</div>',
       '</article>'
     ].join("");
@@ -13294,7 +13082,6 @@
     return buildTradeSignalItems(snapshot).map(function (item) {
       var decisionItem = decisionMap[item.symbol] || {};
       var opinion = ontologyOpinionOf(decisionItem);
-      var pressure = ontologyPressureOf(opinion) || item.relationStrength || 0;
       return {
         id: "reasoning-card:" + item.symbol,
         symbol: item.symbol,
@@ -13306,20 +13093,18 @@
         finalOpinion: {
           action: opinion.action || item.action,
           tone: opinion.tone || item.tone || "hold",
-          ontologyPressure: pressure,
-          conviction: opinion.conviction || 0,
+          reviewLevel: item.reviewLevel,
+          dataState: item.dataState,
+          changeState: item.changeState,
+          conflictState: item.conflictState,
+          validationState: item.validationState,
           thesis: opinion.thesis || (item.reasons || [])[0] || ""
         },
-        legacyModel: {
-          buyScore: item.buyScore,
-          sellScore: item.sellScore,
-          decision: item.action
-        },
         strategyEvidence: (item.reasons || []).slice(0, 5).map(function (reason, index) {
-          return { id: "client-evidence:" + item.symbol + ":" + index, kind: "strategy", source: "client-model", summary: reason, value: {}, confidence: item.hasData ? 0.65 : 0.35 };
+          return { id: "client-evidence:" + item.symbol + ":" + index, kind: "strategy", source: "client-model", summary: reason, value: {}, dataState: item.dataState };
         }),
         relationEvidence: (item.relationRules || []).slice(0, 5).map(function (rule, index) {
-          return { id: "client-relation:" + item.symbol + ":" + index, type: rule.label || "RELATION_RULE", sourceLabel: stockDisplayName(item.symbol, item), targetLabel: rule.label || "관계 규칙", weight: Number(rule.score || 0) / 100 };
+          return { id: "client-relation:" + item.symbol + ":" + index, type: rule.label || "RELATION_RULE", sourceLabel: stockDisplayName(item.symbol, item), targetLabel: rule.label || "관계 규칙", evidenceRole: rule.evidenceRole || "context", reviewLevel: rule.reviewLevel || "observe" };
         }),
         beliefs: [],
         dataGaps: item.hasData ? [] : ["시장 신호 데이터 부족"],
@@ -13334,7 +13119,7 @@
         },
         aiInference: {
           role: "ontology-first-investment-opinion",
-          legacyModelRole: "not-used-for-scoring",
+          stateContract: "categorical-decision-state-v1",
           question: "전략 근거와 관계 근거를 함께 읽고 다음 검증 순서를 설명합니다."
         }
       };
@@ -13418,10 +13203,18 @@
     return state.activeInvestmentChartPeriod;
   }
 
-  function investmentChartScore(value) {
-    var number = Number(value || 0);
-    if (!isFinite(number)) return 0;
-    return Math.max(-100, Math.min(100, number));
+  function investmentChartState(direction, fallback) {
+    var value = String(direction || fallback || "context").toLowerCase();
+    if (["risk", "negative", "sell", "danger", "risk-only", "worsening"].indexOf(value) >= 0) {
+      return { key: "risk", label: "위험 근거", tone: "danger" };
+    }
+    if (["support", "positive", "buy", "watch", "support-only", "improving"].indexOf(value) >= 0) {
+      return { key: "support", label: "버티거나 좋아질 근거", tone: "watch" };
+    }
+    if (["mixed", "caution"].indexOf(value) >= 0) {
+      return { key: "mixed", label: "엇갈린 근거", tone: "caution" };
+    }
+    return { key: "context", label: "참고 근거", tone: "hold" };
   }
 
   function investmentChartSourceText(source, quality) {
@@ -13437,12 +13230,14 @@
     var rows = [];
     var analysis = investmentAnalysisModel(snapshot);
     buildTradeSignalItems(snapshot).slice(0, 6).forEach(function (item) {
-      var score = investmentChartScore((Number(item.buyScore || 0) - Number(item.sellScore || 0)) || item.relationStrength || 0);
+      var stateMeta = investmentChartState(item.conflictState, item.changeState);
       rows.push({
         group: item.source === "watchlist" ? "관심" : "보유",
         label: stockDisplayName(item.symbol, item),
         detail: stockDisplayMeta(item, [marketLabel(item.market || "-"), item.sector || "-", item.action || "관망"]),
-        score: score,
+        state: stateMeta.key,
+        stateLabel: decisionStateMeta("review", item.reviewLevel, "observe").label + " · " + stateMeta.label,
+        tone: stateMeta.tone,
         value: item.currentPrice ? formatPrice(item.currentPrice, item.currency) : "시세 대기",
         source: item.quoteSource || item.source || "portfolio",
         quality: item.hasData ? "actual" : "missing"
@@ -13450,23 +13245,29 @@
     });
     var flow = analysis.moneyFlow || {};
     (Array.isArray(flow.buckets) ? flow.buckets : []).slice(0, 5).forEach(function (bucket) {
-      var raw = bucket.score != null ? bucket.score : (bucket.changeRate != null ? Number(bucket.changeRate) * 100 : bucket.ratio || bucket.value || 0);
+      var changeRate = Number(bucket.changeRate || 0);
+      var stateMeta = investmentChartState(bucket.direction || bucket.polarity, changeRate > 0 ? "support" : (changeRate < 0 ? "risk" : "context"));
       rows.push({
         group: "자금",
         label: bucket.label || bucket.name || bucket.asset || "Money flow",
         detail: bucket.caption || bucket.description || bucket.kind || "global flow",
-        score: investmentChartScore(raw),
+        state: stateMeta.key,
+        stateLabel: stateMeta.label,
+        tone: stateMeta.tone,
         value: bucket.valueText || bucket.value || bucket.amount || "-",
         source: bucket.source || bucket.provider || "investmentAnalysis.moneyFlow",
         quality: bucket.mock ? "mock" : (bucket.quality || "actual")
       });
     });
     (Array.isArray(flow.emergingFlows) ? flow.emergingFlows : []).slice(0, 3).forEach(function (item) {
+      var stateMeta = investmentChartState(item.direction || item.polarity, "context");
       rows.push({
         group: "새 흐름",
         label: item.label || item.name || "Emerging flow",
         detail: item.reason || item.description || "새 자금 흐름 후보",
-        score: investmentChartScore(item.score || item.strength || 0),
+        state: stateMeta.key,
+        stateLabel: stateMeta.label,
+        tone: stateMeta.tone,
         value: item.value || item.signal || "-",
         source: item.source || "investmentAnalysis.emergingFlows",
         quality: item.mock ? "mock" : (item.quality || "actual")
@@ -13479,7 +13280,9 @@
         group: String(entity.kind || "").indexOf("fx") >= 0 ? "환율" : "금리",
         label: ontologyEntityDisplayLabel(entity, entity && entity.id),
         detail: ontologyMacroMetaText(entity),
-        score: investmentChartScore(relationCount * 12),
+        state: "context",
+        stateLabel: relationCount ? "연결 관계 있음" : "참고 근거",
+        tone: "hold",
         value: ontologyMacroValueText(entity),
         source: ((entity.properties || {}).provider) || "ontology ABox",
         quality: (entity.properties || {}).mock ? "mock" : "actual"
@@ -13505,22 +13308,21 @@
   }
 
   function renderInvestmentIntegratedChartRow(row) {
-    var score = investmentChartScore(row.score);
-    var magnitude = Math.min(50, Math.max(2, Math.abs(score) / 2));
-    var direction = score >= 0 ? "positive" : "negative";
+    var stateMeta = investmentChartState(row.state, "context");
+    var direction = stateMeta.key === "support" ? "positive" : (stateMeta.key === "risk" ? "negative" : "mixed");
     return [
-      '<div class="investment-chart-row ' + escapeHtml(direction) + '"' + cardTypeAttrs("signal-card", score >= 0 ? "watch" : "danger") + '>',
+      '<div class="investment-chart-row ' + escapeHtml(direction) + '"' + cardTypeAttrs("signal-card", row.tone || stateMeta.tone) + '>',
       '<div class="investment-chart-label">',
       '<span>' + escapeHtml(row.group || "-") + '</span>',
       '<strong>' + escapeHtml(row.label || "-") + '</strong>',
       '<em>' + escapeHtml(row.detail || "") + '</em>',
       '</div>',
-      '<div class="investment-chart-track" aria-label="' + escapeHtml((row.label || "") + " 흐름 점수 " + Math.round(score)) + '">',
-      '<span class="investment-chart-bar" style="width:' + escapeHtml(magnitude.toFixed(1)) + '%"></span>',
+      '<div class="investment-chart-track state" aria-label="' + escapeHtml((row.label || "") + " 상태 " + (row.stateLabel || stateMeta.label)) + '">',
+      '<span class="tone-chip ' + escapeHtml(row.tone || stateMeta.tone) + '">' + escapeHtml(row.stateLabel || stateMeta.label) + '</span>',
       '</div>',
       '<div class="investment-chart-value">',
       '<strong>' + escapeHtml(row.value == null ? "-" : row.value) + '</strong>',
-      '<span>' + escapeHtml(Math.round(score) + "점") + '</span>',
+      '<span>' + escapeHtml(row.stateLabel || stateMeta.label) + '</span>',
       '<em>' + escapeHtml(investmentChartSourceText(row.source, row.quality)) + '</em>',
       '</div>',
       '</div>'
@@ -13548,7 +13350,7 @@
       '<span>실제 데이터 <strong>' + escapeHtml(actualCount) + '</strong></span>',
       '<span>mock <strong>' + escapeHtml(mockCount) + '</strong></span>',
       '</div>',
-      '<div class="investment-chart-axis"><span>리스크/매도</span><strong>중립</strong><span>기회/매수</span></div>',
+      '<div class="investment-chart-axis"><span>위험 근거</span><strong>엇갈림·참고</strong><span>버티는 근거</span></div>',
       '<div class="investment-chart-lanes">',
       rows.length ? rows.map(renderInvestmentIntegratedChartRow).join("") : renderEmptyState({
         tone: "muted",
@@ -13559,7 +13361,7 @@
       }),
       '</div>',
       '<div class="rule-strip">',
-      '<span>점수는 차트 표시용 방향성입니다. 최종 투자 판단은 온톨로지 InferenceBox와 전략 룰 근거를 우선합니다.</span>',
+      '<span>각 행은 합산값 없이 위험·버팀·엇갈림·참고 상태를 표시합니다. 최종 판단은 TypeDB의 성립 조건과 실제 값을 함께 봅니다.</span>',
       '<span>각 행 끝에 실제/mock 여부와 API·스냅샷 출처를 표시합니다.</span>',
       '</div>',
       '</article>'
@@ -13708,7 +13510,7 @@
     return "watch";
   }
 
-  function investmentActionConfidence(row) {
+  function investmentActionValidation(row) {
     row = row || {};
     var graph = row.graph || {};
     var quality = String(row.dataQuality || "").toLowerCase();
@@ -13997,7 +13799,7 @@
     var graph = row.graph || {};
     var reasons = Array.isArray(row.reasons) ? row.reasons.slice(0, 3) : [];
     var checks = Array.isArray(graph.nextChecks) ? graph.nextChecks.slice(0, 3) : [];
-    var confidence = investmentActionConfidence(row);
+    var validation = investmentActionValidation(row);
     var playbook = investmentActionPlaybook(row);
     var displayName = row.name || stockDisplayName(row.symbol, row);
     return [
@@ -14015,7 +13817,7 @@
       '<span>' + escapeHtml([row.symbol, sourceLabel(row.source), row.market, row.sector].filter(Boolean).join(" · ")) + '</span>',
       '</div>',
       '<div class="investment-today-selected-metrics">',
-      renderInvestmentTodayStatusCell("신뢰도", confidence.label, confidence.detail, confidence.tone),
+      renderInvestmentTodayStatusCell("검증 상태", validation.label, validation.detail, validation.tone),
       renderInvestmentTodayStatusCell("전략", playbook.label, playbook.detail, playbook.tone),
       renderInvestmentTodayStatusCell("데이터", row.dataQuality || "-", row.apiSource || "출처 확인", row.dataQuality === "actual" ? "watch" : "caution"),
       '</div>',
@@ -14128,7 +13930,7 @@
   function investmentActionSearchText(row) {
     row = row || {};
     var graph = row.graph || {};
-    var confidence = investmentActionConfidence(row);
+    var validation = investmentActionValidation(row);
     var playbook = investmentActionPlaybook(row);
     return [
       row.symbol,
@@ -14141,8 +13943,8 @@
       row.apiSource,
       graph.reason,
       graph.basis,
-      confidence.label,
-      confidence.detail,
+      validation.label,
+      validation.detail,
       playbook.label,
       investmentActionInvalidation(row),
       investmentActionNextWindow(row),
@@ -14227,7 +14029,7 @@
     var reasons = Array.isArray(row.reasons) ? row.reasons : [];
     var checks = Array.isArray(graph.nextChecks) ? graph.nextChecks : [];
     var name = row.name || stockDisplayName(row.symbol, row);
-    var confidence = investmentActionConfidence(row);
+    var validation = investmentActionValidation(row);
     var playbook = investmentActionPlaybook(row);
     var invalidation = investmentActionInvalidation(row);
     var nextWindow = investmentActionNextWindow(row);
@@ -14240,7 +14042,7 @@
         '<section class="work-detail-section">',
         '<div class="work-detail-metric-row">',
         renderNotificationDetailMetric("판단", row.decision || "판단 대기", row.tone || "hold"),
-        renderNotificationDetailMetric("신뢰도", confidence.label, confidence.tone || "hold"),
+        renderNotificationDetailMetric("검증 상태", validation.label, validation.tone || "hold"),
         renderNotificationDetailMetric("플레이북", playbook.label, playbook.tone || "hold"),
         renderNotificationDetailMetric("데이터", row.dataQuality || "-", "muted"),
         renderNotificationDetailMetric("API", row.apiSource || "-", "muted"),
@@ -14273,7 +14075,7 @@
     var name = row.name || stockDisplayName(row.symbol, row);
     var key = investmentActionKey(row, index);
     var expanded = state.expandedInvestmentActionKey === key;
-    var confidence = investmentActionConfidence(row);
+    var validation = investmentActionValidation(row);
     var playbook = investmentActionPlaybook(row);
     var invalidation = investmentActionInvalidation(row);
     var nextWindow = investmentActionNextWindow(row);
@@ -14292,12 +14094,12 @@
       '<span>데이터 <strong>' + escapeHtml(row.dataQuality || "-") + '</strong></span>',
       '<span>손익률 <strong>' + escapeHtml(row.profitLossRate || 0) + '%</strong></span>',
       graph.blocked ? '<span>차단 <strong>' + escapeHtml(graph.basis || "InferenceBox") + '</strong></span>' : '<span>추론 <strong>ready</strong></span>',
-      '<span>신뢰도 <strong>' + escapeHtml(confidence.label) + '</strong></span>',
+      '<span>검증 <strong>' + escapeHtml(validation.label) + '</strong></span>',
       '</div>',
       '<p>' + escapeHtml((reasons[0] || graph.reason || "다음 확인 조건을 먼저 봅니다.")) + '</p>',
       '<div class="investment-decision-rail">',
       renderInvestmentDecisionCell("무효화 조건", invalidation, "", playbook.tone),
-      renderInvestmentDecisionCell("다음 확인 시점", nextWindow, "", confidence.tone),
+      renderInvestmentDecisionCell("다음 확인 시점", nextWindow, "", validation.tone),
       renderInvestmentDecisionCell("연결 알림", linkedAlert, "알림 정책과 연결", row.tone || "hold"),
       '</div>',
       '<div class="investment-action-checks">',
@@ -14334,7 +14136,7 @@
     var graph = row.graph || {};
     var reasons = Array.isArray(row.reasons) ? row.reasons : [];
     var checks = Array.isArray(graph.nextChecks) ? graph.nextChecks : [];
-    var confidence = investmentActionConfidence(row);
+    var validation = investmentActionValidation(row);
     var playbook = investmentActionPlaybook(row);
     var invalidation = investmentActionInvalidation(row);
     var nextWindow = investmentActionNextWindow(row);
@@ -14343,7 +14145,7 @@
       '<div class="investment-action-detail inline-detail-surface">',
       '<div class="inline-detail-metrics">',
       renderNotificationDetailMetric("판단", row.decision || "판단 대기", row.tone || "hold"),
-      renderNotificationDetailMetric("신뢰도", confidence.label, confidence.tone || "hold"),
+      renderNotificationDetailMetric("검증 상태", validation.label, validation.tone || "hold"),
       renderNotificationDetailMetric("플레이북", playbook.label, playbook.tone || "hold"),
       renderNotificationDetailMetric("데이터", row.dataQuality || "-", "muted"),
       renderNotificationDetailMetric("API", row.apiSource || "-", "muted"),
@@ -14554,7 +14356,7 @@
     var packet = investmentAiInferencePacket(snapshot);
     var graphInputs = packet.graphInputs || {};
     var steps = [
-      ["01", "전략 근거", "가격·수급·추세·관계 점수", cards.length + " cards"],
+      ["01", "전략 근거", "가격·수급·추세·관계 조건", cards.length + " cards"],
       ["02", "관계 그래프", "HOLDS/WATCHES와 TBox 규칙", (graphInputs.relationCount || parts.relations.length || 0) + " relations"],
       ["03", "AI 추론 입력", packet.contract || "investment-ontology-ai-inference-v1", (packet.reasoningCardCount || cards.length || 0) + " refs"],
       ["04", "투자 의견", "관계·반대 신호·다음 검증", (graphInputs.opinionCount || parts.opinions.length || 0) + " opinions"]
@@ -14565,7 +14367,7 @@
       '<div>',
       '<p class="label">Investment Analysis</p>',
       '<h2>전략 데이터와 관계 분석을 잇는 추론 구조</h2>',
-      '<p class="subtle">최종 점수는 관계 규칙으로 계산하고, AI는 TBox/ABox 관계와 reasoning card를 기준으로 의견을 만듭니다.</p>',
+      '<p class="subtle">TypeDB가 실제 값으로 성립 조건과 근거 역할을 만들고, AI는 TBox/ABox 관계와 reasoning card를 읽어 의견을 설명합니다.</p>',
       '</div>',
       '<span class="tone-chip watch">ontology-first</span>',
       '</div>',
@@ -14603,7 +14405,7 @@
       '</div>',
       '<div class="investment-packet-grid">',
       '<section><strong>계약</strong><span>' + escapeHtml(packet.contract || "investment-ontology-ai-inference-v1") + '</span><em>' + escapeHtml(packet.promptVersion || "-") + '</em></section>',
-      '<section><strong>입력 순서</strong><span>' + escapeHtml(inputOrder.join(" → ") || "tbox → abox → reasoningCards") + '</span><em>legacyModelRole=' + escapeHtml(packet.legacyModelRole || "not-used-for-scoring") + '</em></section>',
+      '<section><strong>입력 순서</strong><span>' + escapeHtml(inputOrder.join(" → ") || "tbox → abox → reasoningCards") + '</span><em>상태 계약: 확인 단계 · 자료 상태 · 변화 · 근거 역할</em></section>',
       '<section><strong>가드레일</strong><span>' + escapeHtml(guardrails.slice(0, 2).join(" / ") || "제공된 관계 데이터만 사용") + '</span><em>AI가 없는 값은 추정하지 않음</em></section>',
       '</div>',
       '</article>'
@@ -14718,6 +14520,13 @@
     ].join("");
   }
 
+  function reasoningInfluenceText(item) {
+    item = item || {};
+    var role = item.evidenceRole || item.evidence_role || item.role || item.polarity || "context";
+    var roleMeta = decisionStateMeta("evidence", role, "context");
+    return [item.label || item.type, item.scope, roleMeta.label].filter(Boolean).join(" · ");
+  }
+
   function renderInvestmentEvidenceSelectedPanel(active) {
     if (!active || !active.card) {
       return [
@@ -14735,6 +14544,8 @@
     var gaps = Array.isArray(card.dataGaps) ? card.dataGaps : [];
     var displayName = card.companyName || card.displayName || stockDisplayName(card.symbol);
     var tone = finalOpinion.tone || (gaps.length ? "caution" : "watch");
+    var review = decisionStateMeta("review", finalOpinion.reviewLevel || finalOpinion.review_level, gaps.length ? "blocked" : "observe");
+    var validation = decisionStateMeta("validation", finalOpinion.validationState || finalOpinion.validation_state, gaps.length ? "blocked" : "conditional");
     var thesis = textWithKnownDisplaySymbols(beginnerFriendlyText(finalOpinion.thesis || finalOpinion.action || ""), card.symbol, { symbol: card.symbol, name: displayName });
     return [
       '<section class="investment-evidence-selected-panel">',
@@ -14747,8 +14558,8 @@
       renderWorkDetailButton("investment-reasoning-card", active.key, "상세", "mini-button"),
       '</div>',
       '<div class="investment-evidence-focus-grid">',
-      renderInvestmentTodayStatusCell("관계 신호", Math.round(Number(finalOpinion.ontologyPressure || finalOpinion.ontology_pressure || 0)), "InferenceBox", tone),
-      renderInvestmentTodayStatusCell("확신", finalOpinion.conviction || 0, "AI 의견", tone),
+      renderInvestmentTodayStatusCell("확인 단계", review.label, "InferenceBox", review.tone),
+      renderInvestmentTodayStatusCell("AI 검증", validation.label, "검증 상태", validation.tone),
       renderInvestmentTodayStatusCell("전략 근거", evidenceRows.length, "가격·수급·추세", evidenceRows.length ? "watch" : "hold"),
       renderInvestmentTodayStatusCell("관계 근거", relationRows.length, "TBox/ABox 연결", relationRows.length ? "watch" : "hold"),
       '</div>',
@@ -14763,10 +14574,7 @@
         return [item.type, item.sourceLabel, item.targetLabel].filter(Boolean).join(" · ");
       })),
       renderReasoningCardList("의견 영향", influenceRows.slice(0, 5).map(function (item) {
-        var risk = Number(item.riskImpact || 0);
-        var support = Number(item.supportImpact || 0);
-        var impact = risk ? ("리스크 +" + Math.round(risk)) : support ? ("지지 +" + Math.round(support)) : "";
-        return [item.label || item.type, item.scope, impact].filter(Boolean).join(" · ");
+        return reasoningInfluenceText(item);
       })),
       '</div>',
       renderReasoningExecutionPlan(planRows[0]),
@@ -14806,6 +14614,8 @@
     var gaps = Array.isArray(card.dataGaps) ? card.dataGaps : [];
     var displayName = card.companyName || card.displayName || stockDisplayName(card.symbol);
     var tone = finalOpinion.tone || (gaps.length ? "hold" : "watch");
+    var review = decisionStateMeta("review", finalOpinion.reviewLevel || finalOpinion.review_level, gaps.length ? "blocked" : "observe");
+    var validation = decisionStateMeta("validation", finalOpinion.validationState || finalOpinion.validation_state, gaps.length ? "blocked" : "conditional");
     var thesis = textWithKnownDisplaySymbols(beginnerFriendlyText(finalOpinion.thesis || finalOpinion.action || ""), card.symbol, { symbol: card.symbol, name: displayName });
     return {
       kicker: "Reasoning Card",
@@ -14818,8 +14628,8 @@
         gaps.length ? '<p>데이터 공백: ' + escapeHtml(gaps.join(", ")) + '</p>' : '',
         '</section>',
         '<div class="work-detail-metric-row">',
-        renderNotificationDetailMetric("관계 신호", Math.round(Number(finalOpinion.ontologyPressure || finalOpinion.ontology_pressure || 0)), tone),
-        renderNotificationDetailMetric("확신", finalOpinion.conviction || 0, tone),
+        renderNotificationDetailMetric("확인 단계", review.label, review.tone),
+        renderNotificationDetailMetric("AI 검증", validation.label, validation.tone),
         renderNotificationDetailMetric("전략 근거", evidenceRows.length, "hold"),
         renderNotificationDetailMetric("관계 근거", relationRows.length, "hold"),
         renderNotificationDetailMetric("관계 영향", influenceRows.length, "hold"),
@@ -14827,10 +14637,7 @@
         '</div>',
         '<section class="work-detail-section"><strong>전략 근거</strong>' + renderReasoningCardList("전략 근거", evidenceRows.map(function (item) { return item.summary || item.kind || item.id; })) + '</section>',
         '<section class="work-detail-section"><strong>의견 영향</strong>' + renderReasoningCardList("의견 영향", influenceRows.map(function (item) {
-          var risk = Number(item.riskImpact || 0);
-          var support = Number(item.supportImpact || 0);
-          var impact = risk ? ("리스크 +" + Math.round(risk)) : support ? ("지지 +" + Math.round(support)) : "";
-          return [item.label || item.type, item.scope, impact].filter(Boolean).join(" · ");
+          return reasoningInfluenceText(item);
         })) + '</section>',
         '<section class="work-detail-section"><strong>관계 근거</strong>' + renderReasoningCardList("관계 근거", relationRows.map(function (item) {
           return [item.type, item.sourceLabel, item.targetLabel].filter(Boolean).join(" · ");
@@ -14850,6 +14657,8 @@
     var gaps = Array.isArray(card.dataGaps) ? card.dataGaps : [];
     var displayName = card.companyName || card.displayName || stockDisplayName(card.symbol);
     var tone = finalOpinion.tone || (gaps.length ? "hold" : "watch");
+    var review = decisionStateMeta("review", finalOpinion.reviewLevel || finalOpinion.review_level, gaps.length ? "blocked" : "observe");
+    var validation = decisionStateMeta("validation", finalOpinion.validationState || finalOpinion.validation_state, gaps.length ? "blocked" : "conditional");
     var thesis = textWithKnownDisplaySymbols(beginnerFriendlyText(finalOpinion.thesis || finalOpinion.action || ""), card.symbol, { symbol: card.symbol, name: displayName });
     var key = investmentReasoningCardKey(card, index);
     return [
@@ -14862,8 +14671,8 @@
       '<span class="tone-chip ' + escapeHtml(tone || "hold") + '">' + escapeHtml(finalOpinion.action || "관계 의견 대기") + '</span>',
       '</div>',
       '<div class="investment-evidence-grid">',
-      '<span>관계 신호 <strong>' + escapeHtml(Math.round(Number(finalOpinion.ontologyPressure || finalOpinion.ontology_pressure || 0))) + '</strong></span>',
-      '<span>확신 <strong>' + escapeHtml(finalOpinion.conviction || 0) + '</strong></span>',
+      '<span>확인 단계 <strong>' + escapeHtml(review.label) + '</strong></span>',
+      '<span>AI 검증 <strong>' + escapeHtml(validation.label) + '</strong></span>',
       '<span>전략 근거 <strong>' + escapeHtml(evidenceRows.length) + '</strong></span>',
       '<span>관계 근거 <strong>' + escapeHtml(relationRows.length) + '</strong></span>',
       '<span>관계 영향 <strong>' + escapeHtml(influenceRows.length) + '</strong></span>',
@@ -14876,10 +14685,7 @@
       '<div class="investment-evidence-columns">',
       renderReasoningCardList("전략 근거", evidenceRows.slice(0, 3).map(function (item) { return item.summary || item.kind || item.id; })),
       renderReasoningCardList("의견 영향", influenceRows.slice(0, 3).map(function (item) {
-        var risk = Number(item.riskImpact || 0);
-        var support = Number(item.supportImpact || 0);
-        var impact = risk ? ("리스크 +" + Math.round(risk)) : support ? ("지지 +" + Math.round(support)) : "";
-        return [item.label || item.type, item.scope, impact].filter(Boolean).join(" · ");
+        return reasoningInfluenceText(item);
       })),
       renderReasoningCardList("관계 근거", relationRows.slice(0, 3).map(function (item) {
         return [item.type, item.sourceLabel, item.targetLabel].filter(Boolean).join(" · ");
@@ -15117,17 +14923,17 @@
 
   function renderOntologyInsightRow(item) {
     var properties = (item && item.properties) || {};
-    var tone = properties.severity || "hold";
-    var score = properties.score == null ? "-" : Math.round(Number(properties.score || 0));
-    var confidence = properties.confidence == null ? "-" : Math.round(Number(properties.confidence || 0));
+    var review = decisionStateMeta("review", properties.reviewLevel || properties.review_level, "observe");
+    var validation = decisionStateMeta("validation", properties.validationState || properties.validation_state, "conditional");
+    var tone = review.tone;
     return [
       '<div class="ontology-insight-row"' + cardTypeAttrs("signal-card", tone || "hold") + '>',
       '<div>',
       '<strong>' + escapeHtml(ontologyEntityDisplayLabel(item, item && item.id)) + '</strong>',
       '<span>' + escapeHtml([properties.symbol, properties.insightType, properties.dispatchCandidate ? "dispatch candidate" : "reference"].filter(Boolean).join(" · ")) + '</span>',
       '</div>',
-      '<span class="tone-chip ' + escapeHtml(tone || "hold") + '">' + escapeHtml(score) + '</span>',
-      '<em>confidence ' + escapeHtml(confidence) + '</em>',
+      '<span class="tone-chip ' + escapeHtml(tone || "hold") + '">' + escapeHtml(review.label) + '</span>',
+      '<em>' + escapeHtml(validation.label) + '</em>',
       properties.thesis ? '<p>' + escapeHtml(textWithKnownDisplaySymbols(beginnerFriendlyText(properties.thesis), properties.symbol, { symbol: properties.symbol })) + '</p>' : '',
       '</div>'
     ].join("");
@@ -15155,7 +14961,8 @@
 
   function renderOntologyDataQualityRow(item) {
     var properties = (item && item.properties) || {};
-    var value = properties.qualityScore != null ? Math.round(Number(properties.qualityScore || 0)) : (properties.status || properties.provider || properties.kind || "-");
+    var data = decisionStateMeta("data", properties.dataState || properties.data_state, properties.status === "error" ? "unavailable" : (properties.status === "stale" ? "partial" : "sufficient"));
+    var value = data.label;
     var meta = [
       item && item.kind,
       properties.fetchedAt ? formatClock(properties.fetchedAt) : "",
@@ -15326,7 +15133,7 @@
         tone: modelStats.actionCount ? "watch" : "hold",
         value: modelStats.actionCount + "개",
         title: "모델 리뷰",
-        description: "종목별 판단 라벨과 점수 구성은 상세에서 확인합니다.",
+        description: "종목별 행동, 확인 단계, 자료 상태, 근거 역할은 상세에서 확인합니다.",
         type: "strategy-trace-detail",
         key: "model",
         button: "모델 리뷰"
@@ -15565,7 +15372,7 @@
         source: ontologyEndpointLabel(relation.source, labels),
         target: ontologyEndpointLabel(relation.target, labels),
         detail: [props.aiInfluenceLabel, props.decisionStage, props.ruleId].filter(Boolean).join(" · "),
-        weight: relation.weight
+        stateLabel: decisionStateMeta("evidence", props.evidenceRole || props.evidence_role, "context").label
       };
     });
     if (rows.length) return rows;
@@ -15575,8 +15382,8 @@
         type: "INSIGHT",
         source: props.symbol ? stockDisplayName(props.symbol) : "ontology",
         target: ontologyEntityDisplayLabel(item, item && item.id),
-        detail: [props.insightType, props.severity, props.confidence != null ? "confidence " + Math.round(Number(props.confidence || 0)) : ""].filter(Boolean).join(" · "),
-        weight: props.score
+        detail: [props.insightType, props.severity].filter(Boolean).join(" · "),
+        stateLabel: decisionStateMeta("review", props.reviewLevel || props.review_level, "observe").label
       };
     });
   }
@@ -15825,7 +15632,7 @@
 
   function ontologyWorldPropertyRows(entity) {
     var properties = (entity && entity.properties) || {};
-    var preferred = ["symbol", "name", "status", "provider", "source", "qualityScore", "confidence", "score", "value", "rate", "ageMinutes"];
+    var preferred = ["symbol", "name", "status", "provider", "source", "reviewLevel", "dataState", "changeState", "conflictState", "validationState", "evidenceRole", "value", "rate", "ageMinutes"];
     return preferred.filter(function (key) {
       var value = properties[key];
       return value != null && value !== "" && typeof value !== "object";
@@ -15902,7 +15709,8 @@
     var inferenceRows = ontologyReadableInferenceRows(parts).slice(0, 4);
     var relationRows = ontologyReadableRelationRows(parts).slice(0, Math.max(0, 5 - inferenceRows.length));
     var rows = inferenceRows.map(function (row) {
-      return { type: "추론", title: [row.source, row.target].filter(Boolean).join(" → "), detail: [row.type, row.detail].filter(Boolean).join(" · "), value: row.weight == null ? "active" : Number(row.weight || 0).toFixed(2) };
+      var role = decisionStateMeta("evidence", row.evidenceRole || "context", "context");
+      return { type: "추론", title: [row.source, row.target].filter(Boolean).join(" → "), detail: [row.type, row.detail].filter(Boolean).join(" · "), value: role.label };
     }).concat(relationRows.map(function (row) {
       return { type: "관계", title: row.type, detail: (row.examples || []).join(" · "), value: row.count + " rows" };
     }));
@@ -15923,7 +15731,7 @@
       '<header><div><span>Evidence Ledger</span><strong>판단 근거·출처</strong></div>' + renderWorkDetailButton("strategy-evidence-board", "", "근거 전체", "text-button compact") + '</header>',
       '<div class="ontology-ledger-rows">',
       rows.length ? rows.map(function (item) {
-        var value = item.confidence != null ? Math.round(Number(item.confidence || 0) * (Number(item.confidence || 0) <= 1 ? 100 : 1)) + "%" : (item.value && typeof item.value !== "object" ? item.value : "linked");
+        var value = decisionStateMeta("evidence", item.evidenceRole || item.polarity || "context", "context").label;
         return '<div><span>' + escapeHtml(item.kind || "evidence") + '</span><p><strong>' + escapeHtml(item.summary || item.label || item.id || "근거") + '</strong><em>' + escapeHtml([item.source, item.subject].filter(Boolean).join(" · ") || "온톨로지 근거") + '</em></p><b>' + escapeHtml(value) + '</b></div>';
       }).join("") : '<div class="ontology-empty">연결된 근거가 없습니다.</div>',
       '</div>',
@@ -15934,7 +15742,8 @@
   function renderOntologyWorldRiskLedger(parts, snapshot) {
     var quality = ontologyWorldQualityNodes(parts).slice(0, 4).map(function (item) {
       var props = item.properties || {};
-      return { type: "품질", title: ontologyEntityDisplayLabel(item, item && item.id), detail: [item.kind, props.provider, props.status].filter(Boolean).join(" · "), value: props.qualityScore != null ? Math.round(Number(props.qualityScore || 0)) : (props.ageMinutes != null ? Math.round(Number(props.ageMinutes || 0)) + "m" : "check") };
+      var data = decisionStateMeta("data", props.dataState || props.data_state, props.status === "error" ? "unavailable" : (props.status === "stale" ? "partial" : "sufficient"));
+      return { type: "품질", title: ontologyEntityDisplayLabel(item, item && item.id), detail: [item.kind, props.provider, props.status, props.ageMinutes != null ? Math.round(Number(props.ageMinutes || 0)) + "분" : ""].filter(Boolean).join(" · "), value: data.label };
     });
     var blocked = ontologyDecisionChainRows(parts, snapshot).filter(function (row) { return row.inferenceTone === "caution" || row.tone === "danger"; }).slice(0, Math.max(0, 4 - quality.length)).map(function (row) {
       return { type: "판단", title: row.displayName || row.symbol || "추론 점검", detail: row.inferenceDetail || row.actionDetail, value: row.inferenceLabel || "review" };
@@ -16026,12 +15835,11 @@
   }
 
   function renderInvestmentInferenceTextRow(row) {
-    var weight = row.weight == null || row.weight === "" ? "" : "weight " + Number(row.weight || 0).toFixed(2);
     return [
       '<div class="investment-relation-text-row inference">',
       '<strong>' + escapeHtml(row.type || "-") + '</strong>',
       '<span>' + escapeHtml([row.source, row.target].filter(Boolean).join(" → ")) + '</span>',
-      '<em>' + escapeHtml([row.detail, weight].filter(Boolean).join(" · ") || "-") + '</em>',
+      '<em>' + escapeHtml([row.detail, row.stateLabel].filter(Boolean).join(" · ") || "-") + '</em>',
       '</div>'
     ].join("");
   }
@@ -16039,7 +15847,6 @@
   function renderStrategyProcessPanel(snapshot) {
     var items = buildTradeSignalItems(snapshot);
     var stats = modelStatsForItems(items);
-    var thresholds = modelDecisionThresholds();
     var ruleboxRules = ontologyRuleboxRules();
     var ruleboxCount = state.ontologyRuleboxLoaded
       ? (ruleboxRules.length || ((state.ontologyRulebox || {}).ruleCount || 0))
@@ -16049,7 +15856,7 @@
       ["02", "근거 추출", "손익·수급·추세·외부 신호", modelVariableGuide().length + " fields"],
       ["03", "RuleBox", "TypeDB 네이티브 관계 추론", (state.ontologyRuleboxLoaded ? ruleboxCount : "lazy") + " rules"],
       ["04", "AI Prompt", "비동기 해석 정보", promptTemplateRows().length + " prompts"],
-      ["05", "Result", "종목별 판단 결과", Math.round(stats.buyAverage || 0) + " / " + Math.round(stats.sellAverage || 0)],
+      ["05", "Result", "종목별 판단 결과", "대응 " + stats.actionCount + " · 확인 " + stats.checkCount],
       ["06", "Alert", "주기·템플릿·발송 정책 연결", notificationEnabledRuleCount() + " types"]
     ];
     return [
@@ -16065,8 +15872,8 @@
       steps.map(renderProcessStep).join(""),
       '</div>',
       '<div class="rule-strip">',
-      '<span>모델링 화면은 입력값, 공식, 기준값, 결과를 순서대로 검증하는 운영 화면입니다.</span>',
-      '<span>공식 오류는 기본값으로 대체하고 결과 카드에 오류를 표시합니다.</span>',
+      '<span>모델링 화면은 실제 값, 성립 조건, 자료 상태, 결과를 순서대로 검증하는 운영 화면입니다.</span>',
+      '<span>자료가 부족하거나 AI 검증이 막히면 행동 판단을 만들지 않고 보류 이유를 표시합니다.</span>',
       '</div>',
       '</article>'
     ].join("");
@@ -17270,9 +17077,117 @@
   function renderNotificationUnifiedConsole() {
     return [
       '<div class="single-tab-console notification-unified-console">',
+      renderPsychologyShadowPanel(false),
       renderNotificationDecisionPanel(),
       renderNotificationDiagnosticsSummaryPanel(),
       '</div>'
+    ].join("");
+  }
+
+  function psychologyShadowTone(row) {
+    var stateKey = String((row || {}).state || "insufficient");
+    if (stateKey === "cautious") return "danger";
+    if (stateKey === "optimistic") return "watch";
+    if (stateKey === "mixed") return "caution";
+    return stateKey === "insufficient" ? "muted" : "hold";
+  }
+
+  function decisionStateLabel(value) {
+    return ({
+      sufficient: "자료 충분",
+      partial: "일부 자료만 있음",
+      insufficient: "자료 부족",
+      unavailable: "자료 없음",
+      "risk-only": "위험 근거만 있음",
+      "support-only": "우호 근거만 있음",
+      mixed: "우호·위험 근거 혼재",
+      "context-only": "방향 없는 참고 근거",
+      normal: "평소 상태",
+      observe: "관찰",
+      check: "확인 필요",
+      act: "대응 검토",
+      immediate: "즉시 확인",
+      blocked: "판단 보류"
+    })[String(value || "")] || String(value || "-");
+  }
+
+  function renderPsychologyShadowPanel(editable) {
+    var payload = state.psychologyShadow || {};
+    var rows = Array.isArray(payload.rows) ? payload.rows : [];
+    var usableCount = rows.filter(function (row) { return row.state !== "insufficient"; }).length;
+    var typedbCount = rows.filter(function (row) { return Boolean(row.typeDbShadowConfirmed); }).length;
+    var content = state.psychologyShadowError
+      ? renderNotificationStateMessage("danger", "심리 상태 조회 실패", state.psychologyShadowError)
+      : (rows.length
+        ? '<div class="psychology-shadow-list">' + rows.map(renderPsychologyShadowRow).join("") + '</div>'
+        : renderNotificationStateMessage("hold", "심리 관측 대기", "다음 실데이터 모니터링 주기부터 종목별 심리 상태가 쌓입니다."));
+    return [
+      '<article class="panel psychology-shadow-panel">',
+      '<div class="panel-head">',
+      '<div><p class="label">Psychology Shadow</p><h3>사람들의 심리 관측</h3><p>기존 투자 판단과 나란히 비교하며 알림 발송에는 직접 반영하지 않습니다.</p></div>',
+      '<div class="panel-actions"><span class="tone-chip hold">비교 전용</span>' + (editable ? '' : renderWorkDetailButton("notification-diagnostics-board", "", "심리 설정", "text-button")) + '<button class="text-button" type="button" data-action="refresh-psychology-shadow"' + (state.psychologyShadowLoading ? ' disabled' : '') + '>새로고침</button></div>',
+      '</div>',
+      '<div class="psychology-shadow-summary">',
+      renderNotificationDetailMetric("관측 종목", rows.length + "개", rows.length ? "watch" : "muted"),
+      renderNotificationDetailMetric("판단 가능", usableCount + "개", usableCount ? "watch" : "hold"),
+      renderNotificationDetailMetric("TypeDB 확인", typedbCount + "개", typedbCount ? "watch" : "muted"),
+      renderNotificationDetailMetric("발송 영향", "없음", "hold"),
+      '</div>',
+      content,
+      editable ? renderPsychologyShadowPolicyEditor() : '',
+      '</article>'
+    ].join("");
+  }
+
+  function renderPsychologyShadowRow(row) {
+    var components = Array.isArray(row.components) ? row.components : [];
+    var available = components.filter(function (item) { return item.available; });
+    var comparison = row.comparison || {};
+    var displayName = stockDisplayName(row.symbol, row) || row.label || row.symbol || "종목";
+    return [
+      '<details class="psychology-shadow-row">',
+      '<summary>',
+      '<span><strong>' + escapeHtml(displayName) + '</strong><em>' + escapeHtml(row.accountLabel || row.accountId || "") + '</em></span>',
+      '<span class="tone-chip ' + psychologyShadowTone(row) + '">' + escapeHtml(row.stateLabel || "근거 부족") + '</span>',
+      '</summary>',
+      '<div class="psychology-shadow-body">',
+      '<p>' + escapeHtml(row.summary || "심리 상태 요약 대기") + '</p>',
+      row.contradiction ? '<p class="psychology-shadow-contrast"><strong>엇갈림:</strong> ' + escapeHtml(row.contradiction) + '</p>' : '',
+      '<div class="psychology-shadow-metrics">',
+      renderNotificationDetailMetric("자료 상태", decisionStateLabel(row.dataState || "unavailable"), row.dataState === "sufficient" ? "watch" : "caution"),
+      renderNotificationDetailMetric("근거 구성", decisionStateLabel(row.conflictState || "context-only"), row.conflictState === "mixed" ? "caution" : "hold"),
+      renderNotificationDetailMetric("사용 원천", available.length + "/" + components.length, available.length >= 2 ? "watch" : "hold"),
+      renderNotificationDetailMetric("TypeDB", row.typeDbShadowConfirmed ? "Shadow 확인" : "다음 추론 대기", row.typeDbShadowConfirmed ? "watch" : "muted"),
+      renderNotificationDetailMetric("기존 판단 변경", "없음", "hold"),
+      '</div>',
+      '<div class="psychology-component-list">',
+      components.map(function (item) {
+        return [
+          '<span class="psychology-component ' + (item.available ? 'available' : 'unavailable') + '">',
+          '<strong>' + escapeHtml(item.label || item.key || "원천") + '</strong>',
+          '<em>' + escapeHtml(item.available ? (item.stateLabel || item.state || "확인") : "수집 안 됨") + '</em>',
+          '<small>' + escapeHtml(item.reason || item.freshnessStatus || "") + '</small>',
+          '</span>'
+        ].join("");
+      }).join(""),
+      '</div>',
+      '<p class="psychology-shadow-comparison">' + escapeHtml(comparison.explanation || "심리 후보는 비교용이며 실제 판단에는 반영하지 않습니다.") + '</p>',
+      '</div>',
+      '</details>'
+    ].join("");
+  }
+
+  function renderPsychologyShadowPolicyEditor() {
+    return [
+      '<section class="psychology-shadow-policy">',
+      '<div><strong>Shadow 정책</strong><p>서로 다른 원천이 최소 몇 개 있어야 심리 상태를 만들지 정합니다.</p></div>',
+      '<div class="psychology-policy-grid">',
+      renderSettingSelect("psychologyShadowEnabled", "Shadow 사용", [{ value: "1", label: "사용" }, { value: "0", label: "중지" }]),
+      renderSettingField("psychologyMinimumComponentCount", "최소 원천 수", "number", "2"),
+      renderSettingField("psychologyNewsMaxAgeMinutes", "뉴스 유효시간(분)", "number", "1440"),
+      '</div>',
+      '<p class="subtle">심리 상태는 비교 자료로만 저장되며 투자 행동이나 발송 여부를 직접 바꾸지 않습니다.</p>',
+      '</section>'
     ].join("");
   }
 
@@ -17286,7 +17201,7 @@
   }
 
   function renderNotificationDiagnosticsPanel() {
-    return renderNotificationDiagnosticsSummaryPanel();
+    return renderNotificationDiagnosticsSummaryPanel() + renderPsychologyShadowPanel(true);
   }
 
   function renderNotificationDiagnosticsSummaryPanel() {
@@ -17539,87 +17454,96 @@
     return "muted";
   }
 
-  function notificationJobScoreText(job) {
-    if (job.honeyScore === null || typeof job.honeyScore === "undefined") return "-";
-    return String(job.honeyScore) + "/" + String(job.honeyThreshold || 0);
+  function notificationDeliveryStateLabel(value) {
+    var labels = {
+      send: "발송 가능",
+      suppressed: "발송 보류",
+      bypass: "필터 우회"
+    };
+    return labels[String(value || "")] || "확인 중";
   }
 
-  function notificationJobScoreMovement(job) {
-    if (!job || job.honeyScore === null || typeof job.honeyScore === "undefined") {
-      return { before: "-", after: "-", delta: 0, compact: "점수 대기", label: "점수 대기", tone: "hold" };
-    }
-    var after = Number(job.honeyScore || 0);
-    var explicitBefore = [
-      job.honeyPreviousScore,
-      job.previousHoneyScore,
-      job.previousScore,
-      job.honeySimilarityPreviousScore
-    ].filter(function (value) {
-      return value !== null && typeof value !== "undefined" && value !== "";
-    })[0];
-    var before = explicitBefore === null || typeof explicitBefore === "undefined" ? Number(job.honeyThreshold || 0) : Number(explicitBefore || 0);
-    var delta = Math.round(after - before);
-    var relation = explicitBefore === null || typeof explicitBefore === "undefined" ? "기준 대비" : "이전 대비";
-    var sign = delta > 0 ? "+" : "";
-    var tone = delta > 0 ? "watch" : (delta < 0 ? "danger" : "hold");
+  function notificationReviewLevelLabel(value) {
+    var labels = {
+      normal: "평소 관찰",
+      observe: "변화 관찰",
+      check: "조건 확인",
+      act: "대응 준비",
+      immediate: "즉시 재확인",
+      blocked: "판단 보류"
+    };
+    return labels[String(value || "")] || "확인 단계 없음";
+  }
+
+  function notificationChangeStateLabel(value) {
+    var labels = {
+      unchanged: "이전과 같은 상태",
+      "new-condition": "새 조건 성립",
+      improving: "이전보다 개선",
+      worsening: "이전보다 악화",
+      "direction-changed": "판단 방향 변경",
+      "new-evidence": "새 뉴스·공시·근거"
+    };
+    return labels[String(value || "")] || "변화 정보 없음";
+  }
+
+  function notificationJobDecisionRoute(job) {
+    var decision = String((job && job.deliveryDecision) || "");
+    var gateState = String((job && job.deliveryGateState) || "");
+    var tone = decision === "suppressed" || gateState === "blocked" ? "danger" : (decision === "send" ? "watch" : "hold");
     return {
-      before: Math.round(before),
-      after: Math.round(after),
-      delta: delta,
-      relation: relation,
-      compact: relation + " " + sign + delta + "점",
-      label: Math.round(before) + " → " + Math.round(after) + " (" + sign + delta + ")",
+      label: notificationDeliveryStateLabel(decision),
+      relation: notificationReviewLevelLabel(job && job.deliveryReviewLevel),
+      change: notificationChangeStateLabel(job && job.deliveryChangeState),
       tone: tone
     };
   }
 
-  function notificationScoreFactorTone(text) {
+  function notificationDecisionFactorTone(text) {
     var value = String(text || "");
-    if (/[+-]\d+/.test(value)) {
-      var number = Number((value.match(/[+-]\d+/) || ["0"])[0]);
-      if (number > 0) return "watch";
-      if (number < 0) return "danger";
-    }
-    if (/닫힘|보류|감점|반복|실패|억제|낮아|부족|금지/.test(value)) return "danger";
-    if (/상승|증가|충족|예외|통과|확인|기본/.test(value)) return "watch";
+    if (/닫힘|보류|반복|실패|억제|낮아|부족|금지|차단/.test(value)) return "danger";
+    if (/상승|증가|충족|예외|통과|확인|회복|새 /.test(value)) return "watch";
     return "hold";
   }
 
-  function notificationJobScoreFactors(job) {
+  function notificationJobDecisionFactors(job) {
     if (!job) return [];
     var rows = [];
-    (Array.isArray(job.honeyReasons) ? job.honeyReasons : []).slice(0, 5).forEach(function (reason) {
-      rows.push({ label: String(reason || ""), tone: notificationScoreFactorTone(reason) });
+    if (job.deliveryGateReason) {
+      rows.push({ label: String(job.deliveryGateReason), tone: notificationDecisionFactorTone(job.deliveryGateReason) });
+    }
+    (Array.isArray(job.deliveryReasons) ? job.deliveryReasons : []).slice(0, 5).forEach(function (reason) {
+      rows.push({ label: String(reason || ""), tone: notificationDecisionFactorTone(reason) });
     });
-    if (job.honeySimilarityPenalty) {
+    if (Number(job.repeatRecentCount || 0) > 0) {
       rows.push({
-        label: "유사 메시지 " + String(job.honeySimilarityWindowMinutes || 0) + "분 내 " + String(job.honeySimilarityRecentCount || 0) + "회 " + String(job.honeySimilarityPenalty),
-        tone: "danger"
+        label: "같은 내용 " + String(job.repeatWindowMinutes || 0) + "분 내 " + String(job.repeatRecentCount || 0) + "회 확인",
+        tone: job.repeatBypassed ? "watch" : "danger"
       });
     }
     if (job.marketHoursReason) rows.push({ label: job.marketHoursReason, tone: job.marketHoursDecision === "suppressed" ? "danger" : "hold" });
     if (job.quietHoursReason) rows.push({ label: job.quietHoursReason, tone: "danger" });
-    if (job.honeySimilarityBypassed) rows.push({ label: job.honeySimilarityBypassReason || "반복 예외 적용", tone: "watch" });
+    if (job.repeatBypassed) rows.push({ label: job.repeatBypassReason || "새 변화로 반복 보류 해제", tone: "watch" });
     return rows.slice(0, 7);
   }
 
-  function renderNotificationScoreRoute(job) {
-    var movement = notificationJobScoreMovement(job);
+  function renderNotificationDecisionRoute(job) {
+    var route = notificationJobDecisionRoute(job);
     return [
-      '<div class="notification-score-route ' + escapeHtml(movement.tone || "hold") + '">',
-      '<span>점수 변화</span>',
-      '<strong>' + escapeHtml(movement.label) + '</strong>',
-      '<em>' + escapeHtml(movement.relation || "기준 대비") + '</em>',
+      '<div class="notification-delivery-route ' + escapeHtml(route.tone || "hold") + '">',
+      '<span>발송 판단</span>',
+      '<strong>' + escapeHtml(route.label) + '</strong>',
+      '<em>' + escapeHtml(route.relation + " · " + route.change) + '</em>',
       '</div>'
     ].join("");
   }
 
-  function renderNotificationScoreFactors(job, limit) {
-    var factors = notificationJobScoreFactors(job);
+  function renderNotificationDecisionFactors(job, limit) {
+    var factors = notificationJobDecisionFactors(job);
     if (Number.isFinite(Number(limit))) factors = factors.slice(0, Number(limit));
     if (!factors.length) return "";
     return [
-      '<div class="notification-score-factors">',
+      '<div class="notification-delivery-factors">',
       factors.map(function (factor) {
         return '<span class="' + escapeHtml(factor.tone || "hold") + '">' + escapeHtml(textWithKnownDisplaySymbols(factor.label, notificationJobResolvedSymbol(job), job)) + '</span>';
       }).join(""),
@@ -17628,11 +17552,11 @@
   }
 
   function notificationJobSimilarityText(job) {
-    var count = Number(job.honeySimilarityRecentCount || 0);
-    var penalty = Number(job.honeySimilarityPenalty || 0);
-    var windowMinutes = Number(job.honeySimilarityWindowMinutes || 0);
-    if (!count && !penalty) return "유사 감점 없음";
-    return windowMinutes + "분 내 " + count + "회 · 우선도 " + penalty;
+    var count = Number(job.repeatRecentCount || 0);
+    var windowMinutes = Number(job.repeatWindowMinutes || 0);
+    if (!count) return "같은 내용 없음";
+    if (job.repeatBypassed) return windowMinutes + "분 내 " + count + "회 · 새 변화로 재발송";
+    return windowMinutes + "분 내 " + count + "회 · 반복 보류";
   }
 
   function notificationJobMarketHoursText(job) {
@@ -17649,12 +17573,12 @@
   }
 
   function notificationJobStateCooldownText(job) {
-    if (!job.honeyStateCooldownEnabled && !job.honeyStateReason) return "";
-    if (job.honeyStateReason) return job.honeyStateReason;
-    if (job.honeyStateDecision === "new_threshold") return "신규 임계값 상태";
-    if (job.honeyStateDecision === "material_change") return "의미 있는 추가 확대";
-    if (job.honeyStateDecision === "sustained_summary") return "지속 상태 요약";
-    if (job.honeyStateDecision === "cooldown") return "같은 임계값 상태 지속";
+    if (!job.cooldownEnabled && !job.cooldownReason) return "";
+    if (job.cooldownReason) return job.cooldownReason;
+    if (job.cooldownDecision === "new-condition") return "처음 확인된 상태";
+    if (job.cooldownDecision === "meaningful-change") return "의미 있는 변화";
+    if (job.cooldownDecision === "scheduled-summary") return "지속 상태 요약";
+    if (job.cooldownDecision === "cooldown") return "같은 상태 지속";
     return "";
   }
 
@@ -17690,8 +17614,8 @@
     job = job || {};
     var resolvedSymbol = notificationJobResolvedSymbol(job);
     var displaySymbol = resolvedSymbol ? stockDisplayName(resolvedSymbol, job) : "";
-    var reasons = Array.isArray(job.honeyReasons) ? job.honeyReasons : [];
-    var scoreFactors = notificationJobScoreFactors(job).map(function (factor) {
+    var reasons = Array.isArray(job.deliveryReasons) ? job.deliveryReasons : [];
+    var decisionFactors = notificationJobDecisionFactors(job).map(function (factor) {
       return factor.label;
     });
     return [
@@ -17715,9 +17639,9 @@
       notificationJobStateCooldownText(job),
       notificationJobMarketHoursText(job),
       notificationJobQuietHoursText(job),
-      job.honeyFingerprint,
+      job.deliveryFingerprint,
       reasons.join(" "),
-      scoreFactors.join(" "),
+      decisionFactors.join(" "),
       formatClock(job.createdAt)
     ].filter(Boolean).join(" ").toLowerCase();
   }
@@ -17825,7 +17749,7 @@
         title: "검색 결과가 없습니다",
         description: "종목명, 알림 타입, 발송 상태, 본문 문구를 바꿔 다시 검색하세요.",
         meta: ["전체 리스트", "검색"]
-      })) + '</section><section class="notification-detail-pane" aria-label="알림 상세 보기"><div class="notification-detail-pane-head"><div><p class="label">Selected Report</p><h3>상세 보기</h3><span>선택한 알림의 점수 변화, 보류 조건, 상세 리포트를 확인합니다.</span></div></div>' + detailHtml + '</section></div>' : stateMessage,
+      })) + '</section><section class="notification-detail-pane" aria-label="알림 상세 보기"><div class="notification-detail-pane-head"><div><p class="label">Selected Report</p><h3>상세 보기</h3><span>선택한 알림의 발송 판단, 보류 조건, 상세 리포트를 확인합니다.</span></div></div>' + detailHtml + '</section></div>' : stateMessage,
       '</div>',
       '</div>',
       '</article>'
@@ -17844,7 +17768,7 @@
       '<section' + cardTypeAttrs("decision-row", "hold") + '>',
       '<span>02 판단</span>',
       '<strong>발송·보류 이력 대기</strong>',
-      '<p>워커가 점수 변화와 게이트 사유를 남기면 이 영역에 시간순 판단 행으로 표시됩니다.</p>',
+      '<p>워커가 상태 변화와 발송 사유를 남기면 이 영역에 시간순 판단 행으로 표시됩니다.</p>',
       '</section>',
       '<section' + cardTypeAttrs("config-panel", "hold") + '>',
       '<span>03 설정</span>',
@@ -17926,7 +17850,7 @@
     var title = textWithKnownDisplaySymbols(job.title || "", resolvedSymbol, job);
     var preview = textWithKnownDisplaySymbols(job.lastError || job.textPreview || "-", resolvedSymbol, job);
     var fullText = notificationJobFullText(job, resolvedSymbol);
-    var reasons = Array.isArray(job.honeyReasons) ? job.honeyReasons.slice(0, 6) : [];
+    var reasons = Array.isArray(job.deliveryReasons) ? job.deliveryReasons.slice(0, 6) : [];
     return {
       resolvedSymbol: resolvedSymbol,
       displaySymbol: displaySymbol,
@@ -17995,8 +17919,8 @@
       job.suppressionSummary || "",
       job.nextEligibleAt ? "다음 발송 가능 " + formatClock(job.nextEligibleAt) : ""
     ].filter(Boolean);
-    var fingerprint = textWithKnownDisplaySymbols(job.honeyFingerprint || "", payload.resolvedSymbol, job);
-    var scoreFactors = notificationJobScoreFactors(job);
+    var fingerprint = textWithKnownDisplaySymbols(job.deliveryFingerprint || "", payload.resolvedSymbol, job);
+    var decisionFactors = notificationJobDecisionFactors(job);
     var visibleGateRows = compact ? [] : gateRows;
     var visibleReasons = compact ? [] : payload.reasons;
     var detailButton = compact ? '<div class="notification-detail-actions">' + renderWorkDetailButton("notification-job", notificationJobKey(job), "상세 리포트", "text-button primary compact") + '</div>' : '';
@@ -18011,18 +17935,19 @@
       '<span class="tone-chip ' + escapeHtml(notificationJobToneClass(job.status)) + '">' + escapeHtml(notificationJobStatusLabel(job.status)) + '</span>',
       '</div>',
       '<div class="notification-detail-metrics">',
-      renderNotificationDetailMetric("우선도", notificationJobScoreText(job), "score"),
-      renderNotificationDetailMetric("점수 변화", notificationJobScoreMovement(job).label, notificationJobScoreMovement(job).tone),
+      renderNotificationDetailMetric("발송 판단", notificationDeliveryStateLabel(job.deliveryDecision), notificationJobDecisionRoute(job).tone),
+      renderNotificationDetailMetric("확인 단계", notificationReviewLevelLabel(job.deliveryReviewLevel), "muted"),
+      renderNotificationDetailMetric("이번 변화", notificationChangeStateLabel(job.deliveryChangeState), "muted"),
       renderNotificationDetailMetric("상태", notificationJobStatusLabel(job.status), notificationJobToneClass(job.status)),
       renderNotificationDetailMetric("반복 판단", notificationJobSimilarityText(job), "muted"),
       renderNotificationDetailMetric("발송 가능", job.nextEligibleAt ? formatClock(job.nextEligibleAt) : "조건 충족 시", "muted"),
       '</div>',
-      '<section class="notification-detail-section notification-score-section">',
-      '<strong>점수 변화와 요인</strong>',
-      renderNotificationScoreRoute(job),
-      scoreFactors.length ? '<div class="notification-detail-tags notification-score-tags">' + (compact ? scoreFactors.slice(0, 3) : scoreFactors).map(function (factor) {
+      '<section class="notification-detail-section notification-delivery-section">',
+      '<strong>발송 판단과 근거</strong>',
+      renderNotificationDecisionRoute(job),
+      decisionFactors.length ? '<div class="notification-detail-tags notification-delivery-tags">' + (compact ? decisionFactors.slice(0, 3) : decisionFactors).map(function (factor) {
         return '<span class="' + escapeHtml(factor.tone || "hold") + '">' + escapeHtml(textWithKnownDisplaySymbols(factor.label, payload.resolvedSymbol, job)) + '</span>';
-      }).join("") + '</div>' : '<p>점수 요인이 아직 기록되지 않았습니다.</p>',
+      }).join("") + '</div>' : '<p>발송 판단 근거가 아직 기록되지 않았습니다.</p>',
       '</section>',
       '<section class="notification-detail-section primary">',
       '<strong>판단 요약</strong>',
@@ -18056,7 +17981,7 @@
   }
 
   function renderNotificationDecisionRow(job, selected) {
-    var reasons = Array.isArray(job.honeyReasons) ? job.honeyReasons.slice(0, 5) : [];
+    var reasons = Array.isArray(job.deliveryReasons) ? job.deliveryReasons.slice(0, 5) : [];
     var resolvedSymbol = notificationJobResolvedSymbol(job);
     var displaySymbol = resolvedSymbol ? stockDisplayName(resolvedSymbol, job) : "";
     var title = textWithKnownDisplaySymbols(job.title || "", resolvedSymbol, job);
@@ -18080,7 +18005,7 @@
       suppression,
       nextEligible,
       processing,
-      job.honeySimilarityBypassed ? (job.honeySimilarityBypassReason ? "반복 예외 " + job.honeySimilarityBypassReason : "반복 예외 적용") : ""
+      job.repeatBypassed ? (job.repeatBypassReason ? "반복 보류 해제 " + job.repeatBypassReason : "반복 보류 해제") : ""
     ].filter(Boolean).slice(0, 3);
     return [
       '<div class="notification-decision-row ' + (selected ? "active " : "") + escapeHtml(notificationJobToneClass(job.status)) + '"' + cardTypeAttrs("decision-row", notificationJobToneClass(job.status)) + cardFormatAttrs("decision-ticket", "compact") + ' role="option" tabindex="0" data-notification-job-select="' + escapeHtml(rowKey) + '" aria-selected="' + escapeHtml(selected ? "true" : "false") + '">',
@@ -18090,8 +18015,8 @@
       '<span>' + escapeHtml(formatClock(job.createdAt)) + '</span>',
       '</div>',
       '<div class="notification-decision-target">' + escapeHtml(target || job.messageType || "-") + '</div>',
-      '<div class="notification-decision-score">',
-      renderNotificationScoreRoute(job),
+      '<div class="notification-decision-state">',
+      renderNotificationDecisionRoute(job),
       rowSignals.map(function (signal) {
         return '<span>' + escapeHtml(signal) + '</span>';
       }).join(""),
@@ -18100,7 +18025,7 @@
       '<div class="notification-decision-actions">',
       '<span class="mini-button ghost">' + escapeHtml(selected ? "리포트 표시 중" : "행 선택") + '</span>',
       '</div>',
-      renderNotificationScoreFactors(job, 4),
+      renderNotificationDecisionFactors(job, 4),
       reasons.length ? '<div class="notification-decision-reasons compact">' + reasons.slice(0, 1).map(function (reason) {
         return '<span>' + escapeHtml(textWithKnownDisplaySymbols(reason, resolvedSymbol, job)) + '</span>';
       }).join("") + '</div>' : '',
@@ -18111,12 +18036,12 @@
   function notificationJobResolvedSymbol(job) {
     var explicit = String(job && (job.symbol || job.rawSymbol) || "").trim().toUpperCase();
     if (explicit) return explicit;
-    var reasons = Array.isArray(job && job.honeyReasons) ? job.honeyReasons.join(" ") : "";
+    var reasons = Array.isArray(job && job.deliveryReasons) ? job.deliveryReasons.join(" ") : "";
     return inferKnownStockSymbolFromText([
       job && job.title,
       job && job.textPreview,
       job && job.lastError,
-      job && job.honeyFingerprint,
+      job && job.deliveryFingerprint,
       reasons
     ].join(" "));
   }
@@ -18212,7 +18137,6 @@
       '<input type="checkbox" data-notification-rule-condition-enabled="' + escapeHtml(messageType) + '" data-condition-id="' + escapeHtml(conditionId) + '"' + (condition.enabled !== false ? " checked" : "") + (disabled ? " disabled" : "") + ' />',
       '<span><strong>' + escapeHtml(condition.label || conditionId) + '</strong><em>' + escapeHtml(notificationRuleConditionTypeLabel(condition.type)) + '</em></span>',
       '</label>',
-      '<label><span>점수</span><input type="number" min="-100" max="100" step="1" data-notification-rule-condition-score="' + escapeHtml(messageType) + '" data-condition-id="' + escapeHtml(conditionId) + '" value="' + escapeHtml(condition.score) + '"' + (disabled ? " disabled" : "") + ' /></label>',
       fieldNeeded ? '<label><span>필드</span><input type="text" data-notification-rule-condition-field="' + escapeHtml(messageType) + '" data-condition-id="' + escapeHtml(conditionId) + '" value="' + escapeHtml(condition.field || "") + '"' + (disabled ? " disabled" : "") + ' /></label>' : '',
       termsNeeded ? '<label class="notification-rule-condition-value"><span>단어</span><textarea rows="2" data-notification-rule-condition-value="' + escapeHtml(messageType) + '" data-condition-id="' + escapeHtml(conditionId) + '"' + (disabled ? " disabled" : "") + '>' + escapeHtml(notificationRuleConditionValue(condition)) + '</textarea></label>' : '',
       valueNeeded ? '<label class="notification-rule-condition-value"><span>값</span><input type="text" data-notification-rule-condition-value="' + escapeHtml(messageType) + '" data-condition-id="' + escapeHtml(conditionId) + '" value="' + escapeHtml(notificationRuleConditionValue(condition)) + '"' + (disabled ? " disabled" : "") + ' /></label>' : '',
@@ -18227,7 +18151,14 @@
   function notificationRuleBypassTypeLabel(type) {
     var labels = {
       severity_upgrade: "등급 상승",
-      score_delta_gte: "발송 우선도 상승",
+      review_level_upgrade: "확인 단계 상승",
+      list_new_items_gte: "새 근거 추가",
+      profit_loss_worsened_lte: "손익률 악화",
+      profit_loss_improved_gte: "손익률 개선",
+      ma60_crossed_below: "60일 평균 아래로 전환",
+      ma60_crossed_above: "60일 평균 위로 회복",
+      field_changed: "상태 변경",
+      field_changed_any: "권장 대응 변경",
       abs_number_delta_gte: "절대값 차이 이상",
       number_delta_gte: "숫자 증가 이상",
       number_delta_lte: "숫자 감소 이상",
@@ -18237,11 +18168,11 @@
   }
 
   function notificationRuleBypassNeedsField(type) {
-    return ["severity_upgrade", "abs_number_delta_gte", "number_delta_gte", "number_delta_lte", "number_multiplier_gte"].indexOf(type) >= 0;
+    return ["review_level_upgrade", "list_new_items_gte", "field_changed", "field_changed_any", "abs_number_delta_gte", "number_delta_gte", "number_delta_lte", "number_multiplier_gte"].indexOf(type) >= 0;
   }
 
   function notificationRuleBypassNeedsValue(type) {
-    return ["score_delta_gte", "abs_number_delta_gte", "number_delta_gte", "number_delta_lte", "number_multiplier_gte"].indexOf(type) >= 0;
+    return ["list_new_items_gte", "profit_loss_worsened_lte", "profit_loss_improved_gte", "ma60_crossed_below", "ma60_crossed_above", "abs_number_delta_gte", "number_delta_gte", "number_delta_lte", "number_multiplier_gte"].indexOf(type) >= 0;
   }
 
   function renderNotificationBypassCondition(messageType, condition, disabled) {
@@ -18265,7 +18196,7 @@
     return [
       '<div class="notification-rule-bypass-list">',
       '<div class="notification-rule-head notification-rule-subhead">',
-      '<div><strong>반복 예외 조건</strong><span>조건이 맞으면 유사 감점을 적용하지 않고 발송합니다.</span></div>',
+      '<div><strong>반복 예외 조건</strong><span>실제 값이나 근거가 의미 있게 바뀌면 반복 보류를 해제합니다.</span></div>',
       '</div>',
       conditions.map(function (condition) {
         return renderNotificationBypassCondition(messageType, condition, disabled);
@@ -18277,17 +18208,15 @@
   function renderNotificationSimilarityEditor(messageType, rule, disabled) {
     var summary = rule.similarityEnabled === false
       ? "유사 억제 꺼짐"
-      : String(rule.similarityWindowMinutes || 0) + "분 내 같으면 " + String(rule.similarityPenalty || 0) + "점";
+      : String(rule.similarityWindowMinutes || 0) + "분 안에 같은 내용이면 보류";
     return [
       '<div class="notification-rule-similarity">',
       '<div class="notification-rule-head notification-rule-subhead">',
       '<div><strong>유사 메시지</strong><span>' + escapeHtml(summary) + '</span></div>',
       '<label class="notification-rule-toggle"><input type="checkbox" data-notification-rule-similarity-enabled="' + escapeHtml(messageType) + '"' + (rule.similarityEnabled !== false ? " checked" : "") + (disabled ? " disabled" : "") + ' /> 억제</label>',
       '</div>',
-      '<div class="notification-rule-score-grid">',
+      '<div class="notification-rule-state-grid">',
       '<label><span>억제 시간</span><input type="number" min="0" max="10080" step="10" data-notification-rule-number="' + escapeHtml(messageType) + '" data-rule-field="similarityWindowMinutes" value="' + escapeHtml(rule.similarityWindowMinutes) + '"' + (disabled ? " disabled" : "") + ' /></label>',
-      '<label><span>반복 우선도 조정</span><input type="number" min="-100" max="0" step="1" data-notification-rule-number="' + escapeHtml(messageType) + '" data-rule-field="similarityPenalty" value="' + escapeHtml(rule.similarityPenalty) + '"' + (disabled ? " disabled" : "") + ' /></label>',
-      '<label><span>우선도 상승 예외</span><input type="number" min="0" max="100" step="1" data-notification-rule-number="' + escapeHtml(messageType) + '" data-rule-field="similarityBypassScoreDelta" value="' + escapeHtml(rule.similarityBypassScoreDelta) + '"' + (disabled ? " disabled" : "") + ' /></label>',
       '</div>',
       '<label class="notification-rule-fields"><span>fingerprint 필드</span><textarea rows="2" data-notification-rule-fields="' + escapeHtml(messageType) + '"' + (disabled ? " disabled" : "") + '>' + escapeHtml(notificationRuleSimilarityFieldsText(rule)) + '</textarea></label>',
       renderNotificationBypassConditionsEditor(messageType, rule, disabled),
@@ -18305,7 +18234,7 @@
       '<div><strong>상태 지속 억제</strong><span>' + escapeHtml(summary) + '</span></div>',
       '<label class="notification-rule-toggle"><input type="checkbox" data-notification-rule-state-enabled="' + escapeHtml(messageType) + '"' + (rule.stateCooldownEnabled !== false ? " checked" : "") + (disabled ? " disabled" : "") + ' /> 적용</label>',
       '</div>',
-      '<div class="notification-rule-score-grid">',
+      '<div class="notification-rule-state-grid">',
       '<label><span>요약 쿨다운</span><input type="number" min="0" max="10080" step="10" data-notification-rule-number="' + escapeHtml(messageType) + '" data-rule-field="stateCooldownMinutes" value="' + escapeHtml(rule.stateCooldownMinutes) + '"' + (disabled ? " disabled" : "") + ' /></label>',
       '<label><span>신규 돌파</span><input type="text" value="발송" disabled /></label>',
       '<label><span>같은 상태</span><input type="text" value="보류" disabled /></label>',
@@ -18358,21 +18287,18 @@
     var disabled = state.serverSettingsLocked || isStaticPreviewHost();
     var compact = Boolean(options.compact);
     var summary = rule.enabled === false
-      ? "룰 꺼짐 · 점수만 기록하지 않고 그대로 보냅니다."
-      : "발송 우선도 " + rule.threshold + " 이상이면 발송합니다.";
+      ? "상태 확인을 건너뛰고 이벤트를 그대로 전달합니다."
+      : "확인 단계, 자료 상태, 새 변화, AI 검증 상태를 함께 확인합니다.";
     return [
       '<div class="notification-rule-editor' + (options.inline ? " admin-message-rule" : "") + '">',
       '<div class="notification-rule-head">',
-      '<div><strong>발송 우선도 룰</strong><span>' + escapeHtml(summary) + '</span></div>',
+      '<div><strong>상태 기반 발송 규칙</strong><span>' + escapeHtml(summary) + '</span></div>',
       '<label class="notification-rule-toggle"><input type="checkbox" data-notification-rule-enabled="' + escapeHtml(messageType) + '"' + (rule.enabled !== false ? " checked" : "") + (disabled ? " disabled" : "") + ' /> 적용</label>',
       '</div>',
-      '<div class="notification-rule-score-grid">',
-      '<label><span>최소 발송 우선도</span><input type="number" min="0" max="100" step="1" data-notification-rule-number="' + escapeHtml(messageType) + '" data-rule-field="threshold" value="' + escapeHtml(rule.threshold) + '"' + (disabled ? " disabled" : "") + ' /></label>',
-      '<label><span>기본 우선도</span><input type="number" min="0" max="100" step="1" data-notification-rule-number="' + escapeHtml(messageType) + '" data-rule-field="baseScore" value="' + escapeHtml(rule.baseScore) + '"' + (disabled ? " disabled" : "") + ' /></label>',
-      '<label><span>낮은 우선도 처리</span><select data-notification-rule-action="' + escapeHtml(messageType) + '"' + (disabled ? " disabled" : "") + '>',
-      '<option value="suppress"' + (rule.lowScoreAction === "suppress" ? " selected" : "") + '>발송 안 함</option>',
-      '<option value="tag_only"' + (rule.lowScoreAction === "tag_only" ? " selected" : "") + '>우선도만 기록</option>',
-      '</select></label>',
+      '<div class="notification-rule-state-grid">',
+      '<label><span>관계 판단</span><input type="text" value="TypeDB 추론 상태" disabled /></label>',
+      '<label><span>자료 확인</span><input type="text" value="충분 · 일부 · 부족 · 사용 불가" disabled /></label>',
+      '<label><span>AI 검증</span><input type="text" value="검증 완료 · 조건부 · 판단 보류" disabled /></label>',
       '</div>',
       compact ? '<p class="subtle">유사 메시지, 상태 지속 억제, 장 시간 필터, 세부 조건은 진단 탭에서 조정합니다.</p>' : renderNotificationSimilarityEditor(messageType, rule, disabled),
       compact ? '' : renderNotificationStateCooldownEditor(messageType, rule, disabled),
@@ -18503,7 +18429,7 @@
       '<div>',
       '<p class="label">Diagnostics Rule</p>',
       '<h2>반복·시간 조건</h2>',
-      '<p class="subtle">정책 탭에서 선택한 타입의 유사 메시지, 장 시간, 조건 점수를 진단합니다.</p>',
+      '<p class="subtle">정책 탭에서 선택한 타입의 유사 메시지, 장 시간, 조건 변화를 진단합니다.</p>',
       '</div>',
       '<span class="tone-chip hold">' + escapeHtml(rule.label) + '</span>',
       '</div>',
@@ -18540,7 +18466,6 @@
   function renderModelOperatingGuidePanel(snapshot) {
     var items = buildTradeSignalItems(snapshot);
     var stats = modelStatsForItems(items);
-    var thresholds = modelDecisionThresholds();
     var cards = [
       {
         label: "1. 종목",
@@ -18559,15 +18484,15 @@
       },
       {
         label: "4. 행동",
-        value: Math.round(thresholds.modelBuy || 0) + " / " + Math.round(thresholds.modelSell || 0) + "점",
-        description: "기준 근처에서는 어떤 항목이 판단을 움직였는지와 판단 변화 가능성을 먼저 확인합니다."
+        value: "확인 단계",
+        description: "평소 관찰, 변화 관찰, 조건 확인, 대응 준비, 즉시 재확인, 판단 보류로 구분합니다."
       }
     ];
     var steps = [
-      ["기본값으로 보기", "처음에는 수식을 바꾸지 말고 모델이 어떤 종목에 신호를 내는지 확인합니다."],
-      ["영향 항목 확인", "점수보다 먼저 거래량, 이동평균, 가격 변화 중 무엇이 라벨을 움직였는지 봅니다."],
-      ["가중치 조정", "가치, 수급, 리스크 중 더 믿는 축만 0.1~0.5씩 천천히 바꿉니다."],
-      ["판단 기준 조정", "신호가 너무 많으면 기준 점수를 올리고, 너무 적으면 조금 낮춥니다."]
+      ["원시 값 확인", "손익률, 평균 가격, 수급, 거래량, 가치평가가 실제 값인지 먼저 확인합니다."],
+      ["조건 확인", "어떤 TypeDB 관계 조건이 새로 성립했는지 확인합니다."],
+      ["반대 근거 확인", "위험 근거와 버티는 근거가 함께 있는지 분리해 봅니다."],
+      ["자료·검증 확인", "자료가 부족하거나 검증이 보류된 판단은 실행 후보로 올리지 않습니다."]
     ];
     return [
       '<article class="panel model-guide-panel">',
@@ -18586,7 +18511,7 @@
         return '<div><b>' + escapeHtml(index + 1) + '</b><span><strong>' + escapeHtml(step[0]) + '</strong><em>' + escapeHtml(step[1]) + '</em></span></div>';
       }).join(""),
       '</div>',
-      '<div class="rule-strip"><span>이 화면은 주문 실행이 아니라 판단 기준을 만들고 검증하는 계산판입니다.</span><span>재료는 문헌과 실무에서 쓰이는 값이지만 계수는 초기 추천값이므로 저장 실험과 알림 이력으로 검증해야 합니다.</span></div>',
+      '<div class="rule-strip"><span>이 화면은 주문 실행이 아니라 조건과 상태 전이를 검증하는 운영 화면입니다.</span><span>실제 값, 성립 조건, 반대 근거, 자료 상태를 그대로 추적합니다.</span></div>',
       '</article>'
     ].join("");
   }
@@ -18605,16 +18530,16 @@
 
   function volumeBeginnerText(item, variables) {
     var ratio = Number(variables.volumeRatio || 0);
-    var pressure = Number(variables.directionalVolumePressure || 0);
     if (!ratio) return "거래량은 평소보다 관심이 늘었는지 보는 값입니다. 방향성 거래량은 그 관심이 매수 쪽인지 매도 쪽인지 분리합니다.";
-    var direction = pressure > 0 ? "매수 쪽 거래량 확인" : (pressure < 0 ? "매도 쪽 거래량 확인" : "아직 뚜렷한 방향 없음");
+    var direction = variables.flowDirection === "buy" ? "매수 쪽 조건이 더 많음" : (variables.flowDirection === "sell" ? "매도 쪽 조건이 더 많음" : "아직 뚜렷한 방향 없음");
     return item.name + "의 거래량은 평소 대비 " + formatSignalRatio(ratio)
-      + "이고 방향성 거래량은 " + signedNumber(pressure) + "입니다. 이 예시는 " + direction + "으로 읽습니다.";
+      + "입니다. 체결·호가·가격 조건을 함께 보면 " + direction + "으로 읽습니다.";
   }
 
   function decisionBeginnerText(item, model) {
-    return item.name + "의 종합 판단은 매수 " + model.buyScore + "점, 매도 " + model.sellScore
-      + "점입니다. 현재 라벨은 '" + model.action + "'이며, 실제 주문 전에 가격·수급·리스크를 다시 확인하는 신호로 봅니다.";
+    return item.name + "의 현재 판단은 '" + model.action + "'입니다. "
+      + decisionStateMeta("review", model.reviewLevel, "observe").label + " 단계이며, "
+      + decisionStateMeta("conflict", model.conflictState, "context-only").label + " 상태입니다.";
   }
 
   function beginnerModelRows(item, model) {
@@ -18622,10 +18547,10 @@
       return [
         ["가격", "보유 또는 관심 종목 데이터가 들어오면 현재가와 적정가 예시를 표시합니다."],
         ["수급", "거래량, 매수비중, 이동평균을 쉬운 문장으로 풀어 표시합니다."],
-        ["판단", "매수 점수와 매도 점수를 비교해 왜 해당 라벨이 나왔는지 설명합니다."]
+        ["판단", "성립 조건과 반대 근거를 비교해 왜 해당 행동이 나왔는지 설명합니다."]
       ];
     }
-    var variables = model.variables || modelFormulaVariables(item);
+    var variables = model.variables || item.features || modelFeatureVariables(item, item.signal || {}, item.valuation || {});
     return [
       ["가격", valuationBeginnerText(item)],
       ["거래량", volumeBeginnerText(item, variables)],
@@ -18682,69 +18607,10 @@
     ].join("");
   }
 
-  function modelWeightCatalog() {
-    return [
-      { key: "valuationWeight", label: "적정가 영향", description: "현재가가 적정가보다 싼지 비싼지를 얼마나 크게 볼지", step: "0.05", unit: "배" },
-      { key: "flowWeight", label: "수급 영향", description: "거래량, 매수비중, 이동평균을 얼마나 크게 볼지", step: "0.05", unit: "배" },
-      { key: "riskControlWeight", label: "위험 영향", description: "위험 점수가 높을 때 매수 점수를 낮추고 매도 점수를 높이는 정도", step: "0.05", unit: "배" },
-      { key: "buyReasonWeight", label: "내 판단 영향", description: "종목별로 입력한 내 매수 점수를 얼마나 반영할지", step: "0.05", unit: "배" },
-      { key: "confidenceWeight", label: "확신 영향", description: "확신 점수가 높을 때 매수 판단을 얼마나 보강할지", step: "0.05", unit: "배" },
-      { key: "growthWeight", label: "성장성", description: "적정가 계산에서 성장 기대를 얼마나 반영할지", step: "0.05", unit: "배" },
-      { key: "qualityWeight", label: "이익 품질", description: "EPS와 목표 PER을 얼마나 신뢰할지", step: "0.05", unit: "배" },
-      { key: "riskWeight", label: "안전성", description: "적정가 계산에서 사업·재무 위험을 얼마나 보수적으로 볼지", step: "0.05", unit: "배" }
-    ];
-  }
-
-  function modelThresholdCatalog() {
-    return [
-      { key: "modelBuy", label: "관심 종목 매수 후보", description: "관심 종목의 매수 점수가 이 값 이상이면 매수 후보로 표시", step: "1", unit: "점" },
-      { key: "modelAdd", label: "보유 종목 보유 강화", description: "이미 보유한 종목의 매수 점수가 이 값 이상이면 추가 확인", step: "1", unit: "점" },
-      { key: "modelSell", label: "분할매도 검토", description: "보유 종목의 매도 점수가 이 값 이상이면 분할매도 후보", step: "1", unit: "점" },
-      { key: "modelReduce", label: "리스크 축소", description: "매도 압력이 커졌지만 즉시 매도 전 한 번 더 확인할 구간", step: "1", unit: "점" },
-      { key: "modelHold", label: "관찰 시작", description: "매수나 매도까지는 아니지만 계속 볼 종목으로 표시", step: "1", unit: "점" }
-    ];
-  }
-
-  function renderModelWeightGrid(weights) {
-    return [
-      '<div class="model-setting-card-grid">',
-      modelWeightCatalog().map(function (item) {
-        return renderModelNumberCard("formulaWeights", item, weights[item.key]);
-      }).join(""),
-      '</div>'
-    ].join("");
-  }
-
-  function renderModelThresholdGrid(thresholds) {
-    return [
-      '<div class="model-setting-card-grid threshold-grid">',
-      modelThresholdCatalog().map(function (item) {
-        return renderModelNumberCard("modelDecisionThresholds", item, thresholds[item.key]);
-      }).join(""),
-      '</div>'
-    ].join("");
-  }
-
-  function renderModelNumberCard(settingName, item, value) {
-    return [
-      '<label class="model-setting-card">',
-      '<span>',
-      '<strong>' + escapeHtml(item.label) + '</strong>',
-      '<em>' + escapeHtml(item.description) + '</em>',
-      '</span>',
-      '<div class="model-setting-input">',
-      '<input type="number" step="' + escapeHtml(item.step || "0.01") + '" value="' + escapeHtml(value == null ? 0 : value) + '" data-number-setting="' + escapeHtml(settingName) + '" data-number-key="' + escapeHtml(item.key) + '" />',
-      item.unit ? '<b>' + escapeHtml(item.unit) + '</b>' : '',
-      '</div>',
-      '</label>'
-    ].join("");
-  }
-
   function renderAdminModelingPanel(snapshot) {
     var items = buildTradeSignalItems(snapshot);
     var stats = modelStatsForItems(items);
-    var weights = formulaWeights();
-    var thresholds = modelDecisionThresholds();
+    var reviewStates = ["normal", "observe", "check", "act", "immediate", "blocked"];
     return [
       '<article class="panel admin-modeling-panel">',
       '<div class="panel-head">',
@@ -18757,42 +18623,32 @@
       '</div>',
       '</div>',
       '<div class="lab-stats-grid model-stats-grid">',
-      renderLabStat("평균 관계 강도", Math.round(stats.relationAverage || stats.buyAverage), "점"),
-      renderLabStat("위험 관계 강도", Math.round(stats.riskAverage || stats.sellAverage), "점"),
-      renderLabStat("판단 발생", stats.actionCount, "개"),
+      renderLabStat("대응 준비", stats.actionCount, "개"),
+      renderLabStat("조건 확인", stats.checkCount, "개"),
+      renderLabStat("판단 보류", stats.blockedCount, "개"),
       '</div>',
       '<div class="model-editor">',
       '<div class="settings-note model-settings-note">',
-      '<strong>처음 운영할 때</strong>',
-      '<p>최종 판단 점수는 관계 규칙으로만 계산합니다. 기본값으로 운영하고, 반복 알림이나 과소 알림이 보일 때 관계 기준값을 조정합니다.</p>',
+      '<strong>상태 기반 판단</strong>',
+      '<p>손익률·가격·수급 같은 실제 값이 TypeDB 조건을 만족하면 확인 단계가 바뀝니다. 서로 다른 조건은 각각 독립적으로 남깁니다.</p>',
       '</div>',
       '<div class="settings-grid">',
       renderModelSettingField("modelName", "운영 정책 이름", "text", "나의 모델"),
       renderModelFormulaField("modelHypothesis", "보조 모델 설명", "예: 수급이 살아 있고 적정가보다 싸며 리스크가 낮을 때만 산다."),
       '</div>',
       '<div class="model-section">',
-      '<div class="flow-title"><div><strong>관계 점수 기준</strong><span>성립한 관계 규칙의 점수가 기준 이상이면 종목 카드와 알림 라벨이 바뀝니다.</span></div></div>',
-      renderModelThresholdGrid(thresholds),
+      '<div class="flow-title"><div><strong>확인 단계</strong><span>낮은 단계부터 높은 단계로 상태를 올리되 자료 부족은 별도로 판단을 막습니다.</span></div></div>',
+      '<div class="model-setting-card-grid threshold-grid">',
+      reviewStates.map(function (key) {
+        var meta = decisionStateMeta("review", key, "normal");
+        return '<div class="model-setting-card"><span><strong>' + escapeHtml(meta.label) + '</strong><em>' + escapeHtml(key === "blocked" ? "자료나 검증 문제로 행동 판단을 만들지 않음" : "성립 조건과 근거 역할로 결정") + '</em></span><span class="tone-chip ' + escapeHtml(meta.tone) + '">' + escapeHtml(key) + '</span></div>';
+      }).join(""),
+      '</div>',
       '</div>',
       '<div class="model-section">',
-      '<div class="flow-title"><div><strong>참고 가중치</strong><span>적정가와 보조 계산에 쓰는 값입니다. 최종 판단 점수는 관계 규칙이 정합니다.</span></div></div>',
-      renderModelWeightGrid(weights),
-      '</div>',
-      '<div class="model-section advanced-model-section">',
-      '<div class="flow-title"><div><strong>고급 참고 공식</strong><span>관계 규칙을 보조하는 참고 계산입니다. 최종 매수·매도 점수로 쓰지 않습니다.</span></div></div>',
-      '<div class="settings-grid">',
-      renderModelFormulaField("customBuyModelFormula", "참고 매수 계산식", "buyScore * 0.35 + buyReasonScore * buyReasonWeight"),
-      renderModelFormulaField("customSellModelFormula", "참고 매도 계산식", "sellScore * 0.35 + riskScore * riskControlWeight"),
-      renderModelFormulaField("profitTakeScoreFormula", "참고 익절 계산식", "baseScore + profitTakePnlScore + holdingSignalScore"),
-      renderModelFormulaField("lossCutScoreFormula", "참고 손실 관리 계산식", "baseScore + lossCutPnlScore + holdingSignalScore + lossGuardConfirmationScore - lossGuardWeakEvidencePenalty"),
-      renderModelFormulaField("notificationScoreFormula", "알림 발송 공식", "rawScore"),
-      '</div>',
-      '<div class="settings-note model-settings-note">',
-      '<strong>공식 변수 도움말</strong>',
-      '<p>아래 이름들은 고급 공식에서 사용할 수 있는 값입니다. 수식 편집이 익숙하지 않으면 기본 공식과 위의 가중치만 사용하고, 변경 결과는 알림 이력과 실제 종목 흐름으로 검증하세요.</p>',
-      '</div>',
-      renderVariableGuide(modelVariableGuide()),
-      '<div class="rule-strip"><span>공식은 +, -, *, /, 괄호와 min, max, abs, round, sqrt, pow, clamp 함수를 지원합니다.</span><span>공식 오류가 있으면 기본 공식으로 계산하고 종목 카드에 오류를 표시합니다.</span></div>',
+      '<div class="flow-title"><div><strong>실제 값 기준</strong><span>수치 자체는 유지하되 합산하지 않습니다. 각 조건이 어떤 상태 전이를 만드는지만 관리합니다.</span></div></div>',
+      '<label class="setting-field wide"><span>관계 조건 임계값</span><textarea data-model-setting="relationRuleThresholds" rows="12" autocomplete="off">' + escapeHtml(settingValue("relationRuleThresholds") || defaultSettings.relationRuleThresholds || "") + '</textarea></label>',
+      '<div class="rule-strip"><span>예: 손실률 -8%, 가격 변화 1%, 거래량 1.5배는 각각 독립된 사실 조건입니다.</span><span>최종 화면에는 확인 단계, 근거 충돌, 자료 상태, 검증 상태가 표시됩니다.</span></div>',
       '</div>',
       '</div>',
       '</article>'
@@ -18805,10 +18661,6 @@
 
   function ontologyOpinionOf(item) {
     return item && item.ontologyOpinion ? item.ontologyOpinion : {};
-  }
-
-  function ontologyPressureOf(opinion) {
-    return Number(opinion.ontology_pressure || opinion.ontologyPressure || 0);
   }
 
   function ontologyTypeOf(relation) {
@@ -18936,7 +18788,7 @@
     }
     if (index === 2) {
       return {
-        input: "관계 점수 + 시장 근거",
+        input: "관계 상태 + 시장 근거",
         relation: "USES_EVIDENCE_FROM",
         output: "반대 신호 " + ontologyContradictionCount(opinions) + "개",
         rows: Number(relationCounts.USES_EVIDENCE_FROM || 0) + ontologyEvidenceCount(evidence, "relation-rule")
@@ -18953,7 +18805,7 @@
     if (index === 4) {
       return {
         input: "관계 규칙 근거",
-        relation: "최종 점수로 사용",
+        relation: "최종 상태 근거로 사용",
         output: "AI 의견 " + (opinions || []).length + "개",
         rows: Number(relationCounts.USES_EVIDENCE_FROM || 0)
       };
@@ -19616,7 +19468,7 @@
     var map = {
       portfolio: ["portfolio", "account", "position", "stock", "company", "security", "sector", "industry", "market", "cash", "currency", "fx-pair", "fx-rate", "interest-rate", "yield-curve", "factor", "instrument-profile", "market-proxy-instrument"],
       risk: ["risk", "missing-data", "temporal-coverage-gap", "coverage-gap", "data-quality", "data-freshness", "data-latency", "source-reliability", "fact-change", "trend-transition", "signal-transition", "relation-state", "competing-hypothesis", "materiality-assessment", "alert-candidate", "next-check"],
-      inference: ["evidence", "belief", "opinion", "active-opinion", "insight", "decision-driver", "competing-hypothesis", "rule", "review", "model", "model-score", "strategy-signal", "inference-trace", "reasoning-cycle", "alert-candidate", "next-check", "execution-plan"],
+      inference: ["evidence", "belief", "opinion", "active-opinion", "insight", "decision-driver", "competing-hypothesis", "rule", "review", "model", "strategy-signal", "inference-trace", "reasoning-cycle", "alert-candidate", "next-check", "execution-plan"],
       evidence: ["evidence", "research-evidence", "news-article", "disclosure-filing", "financial-fact", "fundamental-event", "market-observation", "price-metric", "price-bar", "volume-profile", "source-reliability", "data-quality", "provenance", "fact-change", "trend-transition"]
     };
     return (map[normalizeOntologyWorldLens(lensId)] || []).reduce(function (memo, kind) { memo[kind] = true; return memo; }, {});
@@ -19637,7 +19489,7 @@
       reality: ["portfolio", "account", "position", "stock", "company", "security", "cash", "currency", "sector", "industry", "market", "fx-pair", "fx-rate", "interest-rate", "yield-curve", "instrument-profile", "investment-archetype", "factor-sensitivity", "market-proxy-instrument", "market-proxy-theme", "crypto-exposure"],
       evidence: ["evidence", "relation-evidence", "research-evidence", "news-article", "disclosure-filing", "financial-fact", "fundamental-event", "market-observation", "price-bar", "price-metric", "volume-profile", "key-level", "liquidity-profile", "source-reliability", "data-quality", "data-freshness", "data-latency", "missing-data", "temporal-coverage-gap", "coverage-gap", "provenance", "fact-change", "trend-transition", "signal-transition", "relation-state", "temporal-window", "price-path", "price-path-pattern", "flow-pattern", "event-cluster", "trend-episode", "observed-outcome"],
       rule: ["rule", "rule-condition", "relation-rule", "relation-rule-condition", "relation-rule-template", "relation-template", "threshold-policy", "strategy", "investment-thesis", "instrument-policy", "runtime-setting", "valuation-assumption", "data-pipeline", "collection-schedule", "model", "review"],
-      inference: ["belief", "insight", "inference-trace", "reasoning-cycle", "model-score", "strategy-signal", "trend-scenario", "macro-regime", "risk", "opportunity", "decision-driver", "competing-hypothesis", "materiality-assessment", "margin-of-safety", "factor"],
+      inference: ["belief", "insight", "inference-trace", "reasoning-cycle", "strategy-signal", "trend-scenario", "macro-regime", "risk", "opportunity", "decision-driver", "competing-hypothesis", "materiality-assessment", "margin-of-safety", "factor"],
       decision: ["opinion", "active-opinion", "execution-plan", "next-check", "alert-candidate", "notification-intent", "notification-dispatch", "decision-episode", "investment-opinion", "performance-feedback"]
     };
     var lane = Object.keys(lanes).filter(function (key) { return lanes[key].indexOf(value) >= 0; })[0];
@@ -19691,21 +19543,21 @@
       node.lane = lane;
       groups[lane].push(id);
     });
-    function nodeScore(id) {
+    function nodePriority(id) {
       var node = nodes[id] || {};
-      var score = Number(degree[id] || 0) * 20;
-      if (id === focusId) score += 10000;
-      if (focusSymbol && String(node.symbol || "").toUpperCase() === focusSymbol) score += 4000;
-      if (id === "runtime-rules") score += 2500;
-      if (["risk", "alert-candidate", "opinion", "active-opinion", "next-check", "inference-trace"].indexOf(String(node.kind || "")) >= 0) score += 900;
-      if (String(node.kind || "") === "portfolio") score += 700;
-      return score;
+      var priority = Number(degree[id] || 0) * 20;
+      if (id === focusId) priority += 10000;
+      if (focusSymbol && String(node.symbol || "").toUpperCase() === focusSymbol) priority += 4000;
+      if (id === "runtime-rules") priority += 2500;
+      if (["risk", "alert-candidate", "opinion", "active-opinion", "next-check", "inference-trace"].indexOf(String(node.kind || "")) >= 0) priority += 900;
+      if (String(node.kind || "") === "portfolio") priority += 700;
+      return priority;
     }
     var keep = {};
     Object.keys(groups).forEach(function (lane) {
       groups[lane].sort(function (a, b) {
-        var score = nodeScore(b) - nodeScore(a);
-        return score || String((nodes[a] || {}).label || a).localeCompare(String((nodes[b] || {}).label || b));
+        var priority = nodePriority(b) - nodePriority(a);
+        return priority || String((nodes[a] || {}).label || a).localeCompare(String((nodes[b] || {}).label || b));
       }).slice(0, 6).forEach(function (id) { keep[id] = true; });
     });
     if (nodes[focusId]) keep[focusId] = true;
@@ -20447,7 +20299,7 @@
       '<label class="setting-field"><span>주기(분)</span><input data-model-setting="ontologyRuleCandidateAiIntervalMinutes" type="number" min="5" step="5" value="' + escapeHtml(settingValue("ontologyRuleCandidateAiIntervalMinutes") || defaultSettings.ontologyRuleCandidateAiIntervalMinutes) + '"></label>',
       '<label class="setting-field"><span>최대 후보</span><input data-model-setting="ontologyRuleCandidateAiMaxCandidates" type="number" min="1" max="10" step="1" value="' + escapeHtml(settingValue("ontologyRuleCandidateAiMaxCandidates") || defaultSettings.ontologyRuleCandidateAiMaxCandidates) + '"></label>',
       '<label class="setting-field"><span>자동 반영</span><select data-model-setting="ontologyLabAutoApplyEnabled"><option value="1"' + ((settingValue("ontologyLabAutoApplyEnabled") || defaultSettings.ontologyLabAutoApplyEnabled || "1") !== "0" ? " selected" : "") + '>사용</option><option value="0"' + ((settingValue("ontologyLabAutoApplyEnabled") || defaultSettings.ontologyLabAutoApplyEnabled || "1") === "0" ? " selected" : "") + '>끄기</option></select></label>',
-      '<label class="setting-field"><span>반영 점수</span><input data-model-setting="ontologyLabAutoApplyMinScore" type="number" min="0" max="100" step="1" value="' + escapeHtml(settingValue("ontologyLabAutoApplyMinScore") || defaultSettings.ontologyLabAutoApplyMinScore || "75") + '"></label>',
+      '<div class="setting-field"><span>자동 반영 조건</span><strong>검증 완료 · 자료 충분</strong></div>',
       '<label class="setting-field"><span>검토 자동승인</span><select data-model-setting="ontologyLabAutoApplyNeedsReviewEnabled"><option value="0"' + ((settingValue("ontologyLabAutoApplyNeedsReviewEnabled") || defaultSettings.ontologyLabAutoApplyNeedsReviewEnabled || "0") === "0" ? " selected" : "") + '>끄기</option><option value="1"' + ((settingValue("ontologyLabAutoApplyNeedsReviewEnabled") || defaultSettings.ontologyLabAutoApplyNeedsReviewEnabled || "0") !== "0" ? " selected" : "") + '>사용</option></select></label>',
       '<label class="setting-field"><span>성장 알림</span><select data-model-setting="ontologyLabNotifyEnabled"><option value="1"' + ((settingValue("ontologyLabNotifyEnabled") || defaultSettings.ontologyLabNotifyEnabled || "1") !== "0" ? " selected" : "") + '>사용</option><option value="0"' + ((settingValue("ontologyLabNotifyEnabled") || defaultSettings.ontologyLabNotifyEnabled || "1") === "0" ? " selected" : "") + '>끄기</option></select></label>',
       '</div>',
@@ -20586,10 +20438,10 @@
 
   function renderModelPreviewPanel(snapshot) {
     var items = buildTradeSignalItems(snapshot).map(function (item) {
-      return Object.assign({}, item, { model: customModelScores(item) });
+      return Object.assign({}, item, { model: categoricalModelState(item) });
     }).sort(function (a, b) {
       if (a.model.rank !== b.model.rank) return a.model.rank - b.model.rank;
-      return Math.max(b.model.buyScore, b.model.sellScore) - Math.max(a.model.buyScore, a.model.sellScore);
+      return String(a.symbol || "").localeCompare(String(b.symbol || ""));
     });
     return [
       '<article class="panel model-preview-panel">',
@@ -20608,8 +20460,13 @@
   }
 
   function renderModelPreviewRow(item) {
-    var model = item.model || customModelScores(item);
+    var model = item.model || categoricalModelState(item);
     var displayName = stockDisplayName(item.symbol, item);
+    var review = decisionStateMeta("review", model.reviewLevel, "observe");
+    var data = decisionStateMeta("data", model.dataState, "partial");
+    var change = decisionStateMeta("change", model.changeState, "unchanged");
+    var conflict = decisionStateMeta("conflict", model.conflictState, "context-only");
+    var validation = decisionStateMeta("validation", model.validationState, "conditional");
     return [
       '<div class="signal-row model-preview-row"' + cardTypeAttrs("signal-card", model.tone || "hold") + cardFormatAttrs("summary-list-card", "compact") + '>',
       '<div class="signal-main">',
@@ -20622,16 +20479,15 @@
       '</div>',
       renderModelRelationRuleSummary(item),
       '<div class="lab-model-grid">',
-      '<span>관계 신호 <strong>' + escapeHtml(Math.round(item.relationStrength || 0)) + '</strong></span>',
-      '<span>성립 규칙 <strong>' + escapeHtml((item.relationRules || []).length) + '</strong></span>',
-      '<span>참고 매수 <strong class="buy">' + escapeHtml(model.buyScore) + '</strong></span>',
-      '<span>참고 매도 <strong class="sell">' + escapeHtml(model.sellScore) + '</strong></span>',
-      '<span>기본 매수 점수 <strong>' + escapeHtml(item.hasData ? item.buyScore : "-") + '</strong></span>',
-      '<span>기본 매도 점수 <strong>' + escapeHtml(item.hasData ? item.sellScore : "-") + '</strong></span>',
+      '<span>확인 단계 <strong>' + escapeHtml(review.label) + '</strong></span>',
+      '<span>자료 상태 <strong>' + escapeHtml(data.label) + '</strong></span>',
+      '<span>변화 <strong>' + escapeHtml(change.label) + '</strong></span>',
+      '<span>근거 관계 <strong>' + escapeHtml(conflict.label) + '</strong></span>',
+      '<span>AI 검증 <strong>' + escapeHtml(validation.label) + '</strong></span>',
+      '<span>성립 조건 <strong>' + escapeHtml((item.relationRules || []).length) + '</strong></span>',
       '</div>',
       renderModelPlainLanguageExplanation(item, model),
       renderModelFeatureAudit(item, model),
-      model.errors.length ? '<div class="exit-reasons">' + model.errors.map(function (error) { return '<p>' + escapeHtml(error) + '</p>'; }).join("") + '</div>' : '',
       '</div>',
       '</div>'
     ].join("");
@@ -20639,15 +20495,19 @@
 
   function renderModelRelationRuleSummary(item) {
     var rules = item.relationRules || [];
+    var first = rules[0] || {};
+    var firstRole = decisionStateMeta("evidence", first.evidenceRole, "context");
     return [
-      '<div class="model-feature-audit model-relation-summary"' + cardTypeAttrs("relationship-card", (rules[0] && rules[0].tone) || "hold") + '>',
+      '<div class="model-feature-audit model-relation-summary"' + cardTypeAttrs("relationship-card", first.tone || firstRole.tone) + '>',
       '<div class="feature-audit-head">',
       '<strong>관계 규칙</strong>',
-      '<span class="tone-chip ' + escapeHtml((rules[0] && rules[0].tone) || "hold") + '">' + escapeHtml(rules.length ? Math.round(rules[0].score) + "점" : "대기") + '</span>',
+      '<span class="tone-chip ' + escapeHtml(first.tone || firstRole.tone) + '">' + escapeHtml(rules.length ? firstRole.label : "성립 조건 없음") + '</span>',
       '</div>',
       '<div class="feature-audit-grid">',
       rules.length ? rules.slice(0, 4).map(function (rule) {
-        return '<span>' + escapeHtml(rule.label) + ' <strong>' + escapeHtml(Math.round(rule.score || 0)) + '</strong></span>';
+        var role = decisionStateMeta("evidence", rule.evidenceRole, "context");
+        var review = decisionStateMeta("review", rule.reviewLevel, "observe");
+        return '<span>' + escapeHtml(rule.label) + ' <strong>' + escapeHtml(role.label + " · " + review.label) + '</strong></span>';
       }).join("") : '<span>성립한 관계 규칙이 없습니다.</span>',
       '</div>',
       '</div>'
@@ -20671,7 +20531,7 @@
     ].join("");
   }
 
-  function renderModelFeatureAudit(item, model) {
+  function renderModelFeatureAudit(item) {
     if (!item.hasData) {
       return [
         '<div class="model-feature-audit"' + cardTypeAttrs("diagnostic-card", "hold") + '>',
@@ -20679,26 +20539,24 @@
         '<strong>재계산 확인</strong>',
         '<span class="tone-chip hold">데이터 부족</span>',
         '</div>',
-        '<div class="feature-audit-grid"><span>거래량, 이동평균, 투자자별 수급을 입력하면 같은 입력으로 다시 계산하고, 항목별 제외 실험을 실행합니다.</span></div>',
+        '<div class="feature-audit-grid"><span>현재가, 이동평균, 거래량, 투자자별 수급이 채워지면 TypeDB 성립 조건과 자료 상태를 다시 확인합니다.</span></div>',
         '</div>'
       ].join("");
     }
-    var audit = modelFeatureAudit(item, model);
+    var audit = modelFeatureAudit(item);
     var variables = audit.variables || {};
     var signal = item.signal || {};
-    var contributionRows = (audit.contributions || []).slice().sort(function (a, b) {
-      return (Math.abs(b.buy) + Math.abs(b.sell)) - (Math.abs(a.buy) + Math.abs(a.sell));
-    }).slice(0, 6);
+    var flowLabel = variables.flowDirection === "buy" ? "매수 쪽 조건 우세" : (variables.flowDirection === "sell" ? "매도 쪽 조건 우세" : "엇갈림");
     var featureRows = [
       ["거래량", formatSignalRatio(variables.volumeRatio)],
-      ["방향성 거래량", signedNumber(variables.directionalVolumePressure)],
-      ["흐름 방향", signedNumber(variables.flowDirectionScore)],
+      ["체결강도", formatSignalNumber(variables.tradeStrength, "")],
+      ["흐름 방향", flowLabel],
       ["20일선 차이", formatSignalNumber(variables.trendDistance20, "%")],
       ["60일선 차이", formatSignalNumber(variables.trendDistance60, "%")],
       ["외국인", formatSignalVolume(signal.foreignNet)],
       ["기관", formatSignalVolume(signal.institutionNet)],
       ["개인", formatSignalVolume(signal.individualNet)],
-      ["수급점수", formatSignalNumber(variables.investorFlowScore, "")]
+      ["외국인+기관", formatSignalVolume(variables.smartMoneyNet)]
     ];
     return [
       '<div class="model-feature-audit"' + cardTypeAttrs("diagnostic-card", audit.stable ? "watch" : "caution") + '>',
@@ -20713,16 +20571,16 @@
       '</div>',
       '<div class="feature-delta-grid">',
       audit.groups.map(function (group) {
-        var tone = group.changed ? "changed" : "stable";
-        return '<span class="' + tone + '"><b>' + escapeHtml(group.label) + '</b><strong>매수 ' + escapeHtml(signedNumber(group.buyDelta)) + ' / 매도 ' + escapeHtml(signedNumber(group.sellDelta)) + '</strong><em>' + escapeHtml(group.changed ? "판단 변화 가능" : "판단 유지") + '</em></span>';
+        var role = decisionStateMeta("evidence", group.key, "context");
+        return '<span class="' + escapeHtml(role.tone) + '"><b>' + escapeHtml(group.label) + '</b><strong>' + escapeHtml(group.count + "개") + '</strong><em>' + escapeHtml(role.label) + '</em></span>';
       }).join(""),
       '</div>',
       '<div class="feature-contribution-grid">',
-      '<strong>판단을 움직인 항목</strong>',
-      contributionRows.map(function (row) {
-        var tone = Math.abs(row.buy) >= Math.abs(row.sell) ? "buy" : "sell";
-        return '<span class="' + tone + '"><b>' + escapeHtml(row.label) + '</b><strong>매수 ' + escapeHtml(signedNumber(row.buy)) + ' / 매도 ' + escapeHtml(signedNumber(row.sell)) + '</strong><em>' + escapeHtml(row.description) + '</em></span>';
-      }).join(""),
+      '<strong>성립한 조건</strong>',
+      (audit.conditions || []).slice(0, 6).map(function (condition) {
+        var role = decisionStateMeta("evidence", condition.evidenceRole, "context");
+        return '<span class="' + escapeHtml(role.tone) + '"><b>' + escapeHtml(condition.label || "조건") + '</b><strong>' + escapeHtml(role.label) + '</strong><em>' + escapeHtml(decisionStateMeta("review", condition.reviewLevel, "observe").label) + '</em></span>';
+      }).join("") || '<span><b>성립 조건 없음</b><em>현재 상태 유지</em></span>',
       '</div>',
       '</div>'
     ].join("");
@@ -20752,7 +20610,7 @@
         return renderAlertRow(alert, index);
       }).join("") + (alerts.length > visibleAlerts.length ? '<p class="data-refresh-status">위험도 높은 6개 알림만 먼저 표시합니다. 나머지 ' + escapeHtml(alerts.length - visibleAlerts.length) + '개는 선택 상세와 알림 운영 흐름에서 확인하세요.</p>' : '') : '<p class="subtle">현재 켜진 규칙에서 발생한 알림이 없습니다.</p>',
       '</div>',
-      '<div class="rule-strip"><span>알림은 주문 지시가 아니라 가격선, 수급, 모델 점수, 보유 리스크를 다시 확인하라는 신호입니다.</span></div>',
+      '<div class="rule-strip"><span>알림은 주문 지시가 아니라 가격선, 수급, 성립 조건, 보유 위험을 다시 확인하라는 신호입니다.</span></div>',
       '</article>'
     ].join("");
   }
@@ -20870,7 +20728,7 @@
   }
 
   function numberSettingCatalogItem(key) {
-    var catalogs = alertThresholdCatalog.concat(modelWeightCatalog()).concat(modelThresholdCatalog());
+    var catalogs = alertThresholdCatalog;
     return catalogs.filter(function (item) { return item.key === key; })[0] || null;
   }
 
@@ -20889,59 +20747,34 @@
 
   function modelVariableGuide() {
     return [
-      ["buyScore", "수급/가치 기반 시스템 매수 점수"],
-      ["sellScore", "수급/가치 기반 시스템 매도 점수"],
+      ["currentPrice", "현재가"],
+      ["averagePrice", "평균매입가"],
+      ["profitLossRate", "보유 수익률"],
+      ["positionWeightPct", "계좌 안 종목 비중"],
       ["volumeRatio", "거래량 배율"],
       ["buyShare", "매수 체결 비중"],
       ["sellShare", "매도 체결 비중"],
       ["bidAskImbalance", "호가 불균형"],
       ["priceChangeRate", "가격 변화율"],
-      ["volumePressure", "거래량 배율을 -10~25 범위로 점수화"],
-      ["directionalVolumePressure", "거래량이 매수/매도 어느 방향을 확인하는지 반영"],
-      ["volumeConfirmation", "거래량 방향 확인 강도"],
-      ["buyShareScore", "매수 체결 비중을 -25~25 범위로 점수화"],
-      ["orderbookScore", "호가 불균형을 -20~20 범위로 점수화"],
-      ["momentumScore", "가격 변화율을 -20~20 범위로 점수화"],
-      ["flowDirectionScore", "체결, 비중, 호가, 가격, 추세, 투자자 수급의 합성 방향"],
+      ["flowDirection", "체결·호가·가격 조건 중 어느 방향이 더 많이 성립했는지"],
+      ["ma5", "5일 이동평균"],
       ["ma20", "20일 이동평균"],
       ["ma60", "60일 이동평균"],
       ["trendDistance20", "20일선과 현재가 차이"],
       ["trendDistance60", "60일선과 현재가 차이"],
       ["maSpread", "20일선과 60일선의 간격"],
-      ["trendScore", "이동평균 추세 점수"],
       ["foreignNet", "외국인 순매수"],
       ["institutionNet", "기관 순매수"],
       ["individualNet", "개인 순매수"],
-      ["smartMoneyNet", "외국인+기관 순매수"],
-      ["investorFlowScore", "투자자별 수급 점수"],
-      ["buyReasonScore", "실험실에서 입력한 내 매수 점수"],
-      ["riskScore", "실험실에서 입력한 위험 점수"],
-      ["confidenceScore", "확신 점수"],
-      ["targetReturn", "목표 수익률"],
-      ["stopLoss", "허용 손절률"],
-      ["positionSize", "비중 계획"],
-      ["fairValueGap", "적정가와 현재가 차이"],
-      ["undervalueBonus", "저평가 보너스"],
-      ["expensivePenalty", "고평가/매도 보너스"],
-      ["profitLossRate", "보유 수익률"],
-      ["baseScore", "보유 모델 기본 점수"],
-      ["profitTakePnlScore", "수익 구간에서 익절을 점검하게 하는 점수"],
-      ["lossCutPnlScore", "손실 구간에서 손실 관리를 점검하게 하는 점수"],
+      ["smartMoneyNet", "외국인과 기관을 합친 순매수"],
       ["lossThreshold", "손실 관리 기준 손익률"],
       ["lossRateBufferPct", "손실 기준 근처 흔들림을 흡수하는 완충 구간"],
-      ["lossRateDepth", "손실 기준을 넘은 폭"],
-      ["lossRateNearThreshold", "손실 기준 완충 구간 안에 있는지 여부"],
-      ["lossGuardConfirmationCount", "손실 관리 확인 신호 개수"],
-      ["lossGuardConfirmationScore", "60일선 이탈, 거래량, 매도 체결, 투자자 수급, 이동평균 기울기가 손실 관리를 확인할 때 더하는 점수"],
-      ["lossGuardWeakEvidencePenalty", "손실 기준 근처인데 60일선은 유지되고 거래량·수급 확인이 약할 때 빼는 점수"],
-      ["sectorConcentrationScore", "한 업종에 많이 몰렸을 때 더하는 점수"],
-      ["sellableScore", "팔 수 있는 수량이 있을 때 더하는 점수"],
-      ["holdingSignalScore", "수급과 이동평균 흐름을 반영한 보유 점수"],
-      ["rawScore", "알림 조건을 모두 더한 기본 발송 우선도"],
-      ["symbolScore", "종목명이 있는 알림에 더하는 점수"],
-      ["confirmingDataScore", "수급·추세 같은 확인 데이터가 있는 알림 점수"],
-      ["actionableScore", "확인이나 점검이 필요한 알림 점수"],
-      ["noisePenalty", "상태성 반복 알림을 낮추는 점수"]
+      ["reviewLevel", "정상·관찰·조건 확인·대응 준비·즉시 확인·판단 보류 단계"],
+      ["dataState", "자료 충분·일부 부족·부족·사용 불가 상태"],
+      ["changeState", "변화 없음·새 조건·개선·악화·방향 변경·새 근거"],
+      ["conflictState", "위험만·버팀만·엇갈림·참고만 있는 근거 상태"],
+      ["validationState", "AI 검증 완료·조건부 사용·판단 보류 상태"],
+      ["evidenceRole", "위험·버팀·반대·참고·판단 차단 중 근거 역할"]
     ];
   }
 
@@ -21156,7 +20989,7 @@
       ? signedMoney(item.profitLoss, item.currency) + " · " + signedPct(item.profitLossRate)
       : (item.changeRate == null ? "등락률 대기" : signedPct(item.changeRate));
     var signalText = signal && signal.hasData
-      ? "매수 " + signal.buyScore + " · 매도 " + signal.sellScore
+      ? decisionStateMeta("review", signal.reviewLevel, "observe").label + " · " + decisionStateMeta("data", signal.dataState, "partial").label
       : "수급 입력 필요";
     var displayName = stockDisplayName(symbol, item);
     return [
@@ -21226,7 +21059,7 @@
       '<div class="flow-title">',
       '<div>',
       '<strong>신호 입력값</strong>',
-      '<span>매수·매도 점수를 만든 수급, 추세, 투자자별 데이터입니다.</span>',
+      '<span>성립 조건과 근거 역할을 확인하는 수급, 추세, 투자자별 실제 값입니다.</span>',
       '</div>',
       '</div>',
       '<div class="monitoring-detail-signal-grid">',
@@ -21302,8 +21135,10 @@
       renderMonitoringDetailMetric("평단", monitoringDetailCurrency(item.averagePrice, item.currency)),
       renderMonitoringDetailMetric("수량", monitoringDetailQuantity(item.quantity)),
       renderMonitoringDetailMetric("손익", pnlText, Number(item.profitLoss || 0) < 0 ? "sell" : "buy"),
-      renderMonitoringDetailMetric("매수 점수", item.hasData ? Math.round(item.buyScore) + "점" : "-", "buy"),
-      renderMonitoringDetailMetric("매도 점수", item.hasData ? Math.round(item.sellScore) + "점" : "-", "sell"),
+      renderMonitoringDetailMetric("확인 단계", decisionStateMeta("review", item.reviewLevel, "observe").label, decisionStateMeta("review", item.reviewLevel, "observe").tone),
+      renderMonitoringDetailMetric("자료 상태", decisionStateMeta("data", item.dataState, "partial").label, decisionStateMeta("data", item.dataState, "partial").tone),
+      renderMonitoringDetailMetric("근거 관계", decisionStateMeta("conflict", item.conflictState, "context-only").label),
+      renderMonitoringDetailMetric("AI 검증", decisionStateMeta("validation", item.validationState, "conditional").label),
       renderMonitoringDetailMetric("매수 체결비중", item.hasData ? pct(item.buyShare) : "-"),
       renderMonitoringDetailMetric("가치 판단", valuationText),
       '</div>',
@@ -21321,14 +21156,15 @@
       '<div class="flow-title">',
       '<div>',
       '<strong>관련 종목 신호</strong>',
-      '<span>알림이 가리키는 종목의 현재 매수·매도 판단입니다.</span>',
+      '<span>알림이 가리키는 종목의 현재 행동과 확인 상태입니다.</span>',
       '</div>',
       '<span class="tone-chip ' + escapeHtml(item.tone || "hold") + '">' + escapeHtml(item.action || "관망") + '</span>',
       '</div>',
       '<div class="monitoring-detail-metric-grid compact">',
       renderMonitoringDetailMetric("현재가", monitoringDetailCurrency(item.currentPrice, item.currency)),
-      renderMonitoringDetailMetric("매수 점수", item.hasData ? Math.round(item.buyScore) + "점" : "-", "buy"),
-      renderMonitoringDetailMetric("매도 점수", item.hasData ? Math.round(item.sellScore) + "점" : "-", "sell"),
+      renderMonitoringDetailMetric("확인 단계", decisionStateMeta("review", item.reviewLevel, "observe").label),
+      renderMonitoringDetailMetric("자료 상태", decisionStateMeta("data", item.dataState, "partial").label),
+      renderMonitoringDetailMetric("변화", decisionStateMeta("change", item.changeState, "unchanged").label),
       renderMonitoringDetailMetric("매수 체결비중", item.hasData ? pct(item.buyShare) : "-"),
       '</div>',
       '<div class="monitoring-detail-reasons compact">',
@@ -22015,7 +21851,7 @@
       { step: "02", title: "준비도 확인", tone: readyChannels === activeChannels ? "watch" : "caution", value: readyChannels + "/" + Math.max(activeChannels, 1), detail: "키·연결·무키 채널 확인" },
       { step: "03", title: "근거 저장", tone: Number(summary.total || 0) ? latest.tone : "caution", value: Number(summary.total || 0) + "건", detail: "최근 저장 " + latest.label },
       { step: "04", title: "관계 추론", tone: settingEnabled("ontologyReasoningEnabled") ? "watch" : "hold", value: "TypeDB", detail: "배치 " + (settingValue("ontologyReasoningBatchSize") || defaultSettings.ontologyReasoningBatchSize || "20") },
-      { step: "05", title: "알림 후보", tone: settingEnabled("materialityGateEnabled") ? "watch" : "hold", value: (settingValue("materialityMinimumScore") || defaultSettings.materialityMinimumScore || "65") + "점", detail: "중요도 게이트 기준" }
+      { step: "05", title: "알림 후보", tone: settingEnabled("materialityGateEnabled") ? "watch" : "hold", value: settingEnabled("materialityGateEnabled") ? "조건 기반" : "꺼짐", detail: "실제 변화와 상태 전이 확인" }
     ];
   }
 
@@ -22450,7 +22286,7 @@
       renderFeedCommandMetric("저장 근거", Number(summary.total || 0) + "건", "최근 " + latest.label, Number(summary.total || 0) ? latest.tone : "caution"),
       renderFeedCommandMetric("수집 채널", activeChannels + "/" + channels.length, warningChannels ? warningChannels + "개 키 확인" : "준비 완료", warningChannels ? "caution" : "watch"),
       renderFeedCommandMetric("근거 종류", kinds.length + "종", kinds.slice(0, 3).map(function (entry) { return researchEvidenceKindLabel(entry.name); }).join(" · ") || "대기", kinds.length ? "watch" : "hold"),
-      renderFeedCommandMetric("게이트", (settingValue("materialityMinimumScore") || defaultSettings.materialityMinimumScore || "65") + "점", "관계 알림 기준", settingEnabled("materialityGateEnabled") ? "watch" : "hold"),
+      renderFeedCommandMetric("게이트", settingEnabled("materialityGateEnabled") ? "조건 기반" : "꺼짐", "관계·변화 상태", settingEnabled("materialityGateEnabled") ? "watch" : "hold"),
       '</div>',
       '<div class="feed-flow-map">',
       feedPipelineStages().slice(0, 3).map(renderFeedFlowNode).join(""),
@@ -22597,7 +22433,7 @@
       },
       {
         tone: settingEnabled("materialityGateEnabled") ? "watch" : "hold",
-        value: (settingValue("materialityMinimumScore") || defaultSettings.materialityMinimumScore || "65") + "점",
+        value: settingEnabled("materialityGateEnabled") ? "조건 기반" : "꺼짐",
         title: "중요도 게이트",
         description: "가격·추세·거래량·뉴스가 알림 후보로 들어가는 기준입니다.",
         type: "feed-settings-editor",
@@ -22645,12 +22481,12 @@
       renderSettingsApiCard("아카이브 범위", archiveScope, [
         configuredChip("관심", settingValue("newsCollectionIncludeWatchlist") !== "0", "포함"),
         configuredChip("보유", settingValue("newsCollectionIncludeHoldings") !== "0", "포함"),
-        configuredChip("관련성", true, (settingValue("newsCollectionMinRelevanceScore") || defaultSettings.newsCollectionMinRelevanceScore || "35") + "점")
+        configuredChip("관련성", true, newsStateSettingLabel("relevance", settingValue("newsCollectionMinimumRelevanceState") || defaultSettings.newsCollectionMinimumRelevanceState))
       ]),
       renderSettingsApiCard("추론 흐름", reasoningScope, [
         configuredChip("추론", settingEnabled("ontologyReasoningEnabled"), settingValue("ontologyReasoningBatchSize") || defaultSettings.ontologyReasoningBatchSize || "20"),
-        configuredChip("게이트", settingEnabled("materialityGateEnabled"), (settingValue("materialityMinimumScore") || defaultSettings.materialityMinimumScore || "65") + "점"),
-        configuredChip("뉴스 기준", true, (settingValue("newsMaterialityMinimumScore") || defaultSettings.newsMaterialityMinimumScore || "65") + "점")
+        configuredChip("게이트", settingEnabled("materialityGateEnabled"), "상태 전이"),
+        configuredChip("뉴스 기준", true, newsStateSettingLabel("materiality", settingValue("newsDigestMinimumMaterialityState") || defaultSettings.newsDigestMinimumMaterialityState))
       ]),
       '</div>',
       '<div class="work-detail-grid feed-settings-action-grid">',
@@ -22690,12 +22526,12 @@
       renderSettingsApiCard("아카이브 범위", archiveScope, [
         configuredChip("관심", settingValue("newsCollectionIncludeWatchlist") !== "0", "포함"),
         configuredChip("보유", settingValue("newsCollectionIncludeHoldings") !== "0", "포함"),
-        configuredChip("관련성", true, (settingValue("newsCollectionMinRelevanceScore") || defaultSettings.newsCollectionMinRelevanceScore || "35") + "점")
+        configuredChip("관련성", true, newsStateSettingLabel("relevance", settingValue("newsCollectionMinimumRelevanceState") || defaultSettings.newsCollectionMinimumRelevanceState))
       ]),
       renderSettingsApiCard("추론 흐름", reasoningScope, [
         configuredChip("추론", settingEnabled("ontologyReasoningEnabled"), settingValue("ontologyReasoningBatchSize") || defaultSettings.ontologyReasoningBatchSize || "20"),
-        configuredChip("게이트", settingEnabled("materialityGateEnabled"), (settingValue("materialityMinimumScore") || defaultSettings.materialityMinimumScore || "65") + "점"),
-        configuredChip("뉴스 기준", true, (settingValue("newsMaterialityMinimumScore") || defaultSettings.newsMaterialityMinimumScore || "65") + "점")
+        configuredChip("게이트", settingEnabled("materialityGateEnabled"), "상태 전이"),
+        configuredChip("뉴스 기준", true, newsStateSettingLabel("materiality", settingValue("newsDigestMinimumMaterialityState") || defaultSettings.newsDigestMinimumMaterialityState))
       ]),
       '</div>',
       '<div class="feed-settings-sections">',
@@ -22744,7 +22580,33 @@
         renderSettingField("newsCollectionLookbackMinutes", "뉴스 조회 기간(분)", "number", "180"),
         renderSettingField("newsCollectionPerSymbolLimit", "종목별 저장 기사 수", "number", "8"),
         renderSettingField("newsCollectionProviders", "뉴스 수집 채널", "text", "yahoo_search,yahoo_finance"),
-        renderSettingField("newsCollectionMinRelevanceScore", "뉴스 관련성 최소 점수", "number", "35"),
+        renderSettingSelect("newsCollectionMinimumRelevanceState", "저장할 최소 관련성", [
+          { value: "context", label: "관련 맥락부터" },
+          { value: "related", label: "관련 기사부터" },
+          { value: "direct", label: "종목 직접 기사만" }
+        ]),
+        renderSettingSelect("newsDigestMinimumRelevanceState", "알림에 넣을 최소 관련성", [
+          { value: "related", label: "관련 기사부터" },
+          { value: "direct", label: "종목 직접 기사만" },
+          { value: "context", label: "관련 맥락부터" }
+        ]),
+        renderSettingSelect("newsDigestMinimumMaterialityState", "알림에 넣을 최소 중요성", [
+          { value: "notable", label: "확인할 정보부터" },
+          { value: "material", label: "중요 정보부터" },
+          { value: "critical", label: "즉시 확인 정보만" },
+          { value: "routine", label: "일상 정보부터" }
+        ]),
+        renderSettingSelect("newsDigestMinimumNeutralMaterialityState", "중립 기사 최소 중요성", [
+          { value: "material", label: "중요 정보부터" },
+          { value: "critical", label: "즉시 확인 정보만" },
+          { value: "notable", label: "확인할 정보부터" }
+        ]),
+        renderSettingSelect("newsDigestMinimumSourceTrustState", "최소 출처 신뢰", [
+          { value: "standard", label: "일반 출처부터" },
+          { value: "trusted", label: "신뢰 출처부터" },
+          { value: "primary", label: "공식 원문만" },
+          { value: "limited", label: "제한적 출처도 포함" }
+        ]),
         renderSettingSelect("newsCollectionRequireArticleBodyForRss", "RSS 원문 본문 필수", [
           { value: "1", label: "본문 있는 RSS만 저장" },
           { value: "0", label: "제목/RSS 요약도 저장" }
@@ -22799,17 +22661,20 @@
         renderSettingField("temporalWindowHistoryLimit", "기간 판단 히스토리 수", "number", "96"),
         '<label><span>기간 판단 구간</span><div class="form-control-shell"><textarea data-setting="temporalWindowPeriods" rows="4" autocomplete="off" placeholder="1D=1:2">' + escapeHtml(settingValue("temporalWindowPeriods") || defaultSettings.temporalWindowPeriods) + '</textarea></div></label>'
       ].join(""), "gate feed-wide"),
-      renderSettingsGroup("중요도 게이트", "시세·뉴스·거래량 변화가 알림 후보로 들어가는 기준입니다.", [
+      renderSettingsGroup("변화 게이트", "실제 가격·추세·거래량 변화와 뉴스 상태가 알림 후보로 들어가는 조건입니다.", [
         renderSettingSelect("materialityGateEnabled", "중요 변경 게이트", [
           { value: "1", label: "사용" },
           { value: "0", label: "사용 안 함" }
         ]),
-        renderSettingField("materialityMinimumScore", "중요 변경 기본 기준", "number", "65"),
-        renderSettingField("marketMaterialityMinimumScore", "시장 데이터 중요 기준", "number", "65"),
         renderSettingField("marketMaterialityPriceChangePct", "가격 중요 변화율(%)", "number", "0.6"),
         renderSettingField("marketMaterialityTrendDistancePct", "추세 중요 이격(%)", "number", "2"),
         renderSettingField("marketMaterialityVolumeRatio", "거래량 중요 배율", "number", "1.5"),
-        renderSettingField("newsMaterialityMinimumScore", "뉴스 중요 기준", "number", "65")
+        renderSettingSelect("newsDigestMinimumMaterialityState", "뉴스 중요성 상태", [
+          { value: "notable", label: "확인할 정보부터" },
+          { value: "material", label: "중요 정보부터" },
+          { value: "critical", label: "즉시 확인 정보만" },
+          { value: "routine", label: "일상 정보부터" }
+        ])
       ].join(""), "gate feed-compact"),
       renderSettingsGroup("공시·외부 원천", "공시, 미장, 거시, 크립토 원천의 사용 여부입니다.", [
         renderSettingSelect("externalDartEnabled", "OpenDART 공시 수집", [
@@ -23051,12 +22916,10 @@
     }[String(polarity || "").toLowerCase()] || polarity || "맥락";
   }
 
-  function researchEvidenceNormalizedImpactScore(item) {
-    var value = item && item.impactScore != null ? item.impactScore : (item && item.materialityScore != null ? item.materialityScore : "");
-    var score = Number(value);
-    if (!isFinite(score)) return null;
-    if (Math.abs(score) <= 10) score *= 10;
-    return Math.round(score);
+  function researchEvidenceState(item, key, fallback) {
+    item = item || {};
+    var payload = item.payload && typeof item.payload === "object" ? item.payload : {};
+    return String(item[key] || payload[key] || fallback || "").trim().toLowerCase();
   }
 
   function researchEvidenceTextCorpus(item) {
@@ -23088,31 +22951,62 @@
 
   function researchEvidenceImpactMeta(item) {
     var polarity = String((item || {}).polarity || (item || {}).sentiment || (item || {}).direction || "").toLowerCase();
-    var score = researchEvidenceNormalizedImpactScore(item || {});
     var corpus = researchEvidenceTextCorpus(item || {});
     var positive = /호재|개선|상향|수주|계약|성장|흑자|회복|증가|강세|기대|beat|upgrade|growth|record|demand/.test(corpus);
     var negative = /악재|부진|하향|소송|규제|손실|적자|감소|약세|리콜|제재|miss|downgrade|lawsuit|weak|recall/.test(corpus);
     var tone = "hold";
-    if (["risk", "negative", "bearish", "downside"].indexOf(polarity) >= 0 || negative || (score != null && score <= -30)) {
+    if (["risk", "negative", "bearish", "downside"].indexOf(polarity) >= 0 || negative) {
       tone = "danger";
-    } else if (["support", "positive", "bullish", "upside"].indexOf(polarity) >= 0 || positive || (score != null && score >= 65)) {
+    } else if (["support", "positive", "bullish", "upside"].indexOf(polarity) >= 0 || positive) {
       tone = "watch";
-    } else if (score != null && score >= 45) {
-      tone = "caution";
     }
     var label = tone === "watch" ? "호재" : (tone === "danger" ? "악재" : "중립");
+    var relevanceState = researchEvidenceState(item, "relevanceState", "context");
+    var materialityState = researchEvidenceState(item, "materialityState", "notable");
+    var sourceTrustState = researchEvidenceState(item, "sourceTrustState", "standard");
     var summary = tone === "watch"
-      ? "주가에는 긍정적인 기사입니다. 실적, 업황, 수요, 계약, 정책 기대 같은 점수 상승 요인으로 볼 수 있습니다."
+      ? "주가에는 긍정적인 기사입니다. 실적, 업황, 수요, 계약, 정책 기대가 실제 가격과 거래량에 이어지는지 확인합니다."
       : (tone === "danger"
         ? "주가에는 부정적인 기사입니다. 실적 둔화, 비용, 규제, 수요 약화 같은 리스크 점검 요인으로 볼 수 있습니다."
         : "주가 영향은 아직 중립입니다. 단독 기사만으로 방향을 정하기보다 시세와 수급 변화가 같이 올라오는지 확인해야 합니다.");
     return {
       tone: tone,
       label: label,
-      score: score,
-      scoreLabel: score == null ? "-" : (score + "점"),
+      relevanceState: relevanceState,
+      relevanceLabel: newsStateSettingLabel("relevance", relevanceState),
+      materialityState: materialityState,
+      materialityLabel: newsStateSettingLabel("materiality", materialityState),
+      sourceTrustState: sourceTrustState,
+      sourceTrustLabel: newsStateSettingLabel("trust", sourceTrustState),
       summary: summary
     };
+  }
+
+  function categoricalStateOrder(value, states) {
+    var index = states.indexOf(String(value || "").toLowerCase());
+    return index < 0 ? 0 : index + 1;
+  }
+
+  function compareResearchEvidenceForDisplay(left, right) {
+    var leftMeta = researchEvidenceImpactMeta(left);
+    var rightMeta = researchEvidenceImpactMeta(right);
+    var leftStates = [
+      categoricalStateOrder(leftMeta.materialityState, ["context", "notable", "material"]),
+      categoricalStateOrder(leftMeta.relevanceState, ["unrelated", "context", "related", "direct"]),
+      categoricalStateOrder(leftMeta.sourceTrustState, ["unknown", "limited", "standard", "trusted"])
+    ];
+    var rightStates = [
+      categoricalStateOrder(rightMeta.materialityState, ["context", "notable", "material"]),
+      categoricalStateOrder(rightMeta.relevanceState, ["unrelated", "context", "related", "direct"]),
+      categoricalStateOrder(rightMeta.sourceTrustState, ["unknown", "limited", "standard", "trusted"])
+    ];
+    for (var index = 0; index < leftStates.length; index += 1) {
+      if (leftStates[index] !== rightStates[index]) return rightStates[index] - leftStates[index];
+    }
+    var leftPublishedAt = Date.parse((left || {}).publishedAt || (left || {}).observedAt || "") || 0;
+    var rightPublishedAt = Date.parse((right || {}).publishedAt || (right || {}).observedAt || "") || 0;
+    if (leftPublishedAt !== rightPublishedAt) return rightPublishedAt - leftPublishedAt;
+    return String((left || {}).title || "").localeCompare(String((right || {}).title || ""));
   }
 
   function feedImpactCounts() {
@@ -23195,7 +23089,6 @@
     var impact = researchEvidenceImpactMeta(item);
     var sourceMeta = feedEvidenceDataMeta(item);
     var summary = researchEvidenceKoreanSummary(item);
-    var confidence = item.confidence == null ? "-" : (Math.round(Number(item.confidence || 0) * 100) + "%");
     var key = feedEvidenceKey(item, index);
     var expanded = state.expandedResearchEvidenceKey === key;
     return [
@@ -23206,13 +23099,14 @@
       '<strong>' + escapeHtml(displayName || symbol || "관련 종목") + '</strong>',
       symbol && displayName !== symbol ? '<em>' + escapeHtml(symbol) + '</em>' : '',
       '</div>',
-      '<b>' + escapeHtml(impact.scoreLabel) + '</b>',
+      '<b>' + escapeHtml(impact.materialityLabel) + '</b>',
       '</div>',
       '<div class="feed-impact-body">',
       '<p><strong>본문 요약</strong> ' + escapeHtml(summary) + '</p>',
       '<h3>주가 영향: ' + escapeHtml(impact.label) + ' · ' + escapeHtml(researchEvidenceKindLabel(item.kind)) + '</h3>',
       '<div class="feed-impact-tags">',
-      '<span>신뢰 ' + escapeHtml(confidence) + '</span>',
+      '<span>' + escapeHtml(impact.sourceTrustLabel) + '</span>',
+      '<span>' + escapeHtml(impact.relevanceLabel) + '</span>',
       '<span>' + escapeHtml(sourceMeta.source || "-") + '</span>',
       '<span class="' + escapeHtml(sourceMeta.tone || "hold") + '">' + escapeHtml(sourceMeta.dataLabel) + '</span>',
       '<span>' + escapeHtml(formatFeedTime(time) || "-") + '</span>',
@@ -23256,16 +23150,16 @@
     var impact = researchEvidenceImpactMeta(item);
     var sourceMeta = feedEvidenceDataMeta(item);
     var summary = researchEvidenceKoreanSummary(item);
-    var confidence = item.confidence == null ? "-" : (Math.round(Number(item.confidence || 0) * 100) + "%");
     var canDelete = Boolean(item.evidenceId) && item.evidenceId !== "preview:005930:news";
     var deleting = state.researchEvidenceDeleting === item.evidenceId;
     return [
       '<div class="research-evidence-detail inline-detail-surface">',
       '<div class="inline-detail-metrics">',
       renderNotificationDetailMetric("주가 영향", impact.label, impact.tone),
-      renderNotificationDetailMetric("영향 점수", impact.scoreLabel, impact.tone),
+      renderNotificationDetailMetric("기사 중요성", impact.materialityLabel, impact.tone),
+      renderNotificationDetailMetric("종목 관련성", impact.relevanceLabel, "muted"),
       renderNotificationDetailMetric("근거 종류", researchEvidenceKindLabel(item.kind), "muted"),
-      renderNotificationDetailMetric("신뢰도", confidence, "muted"),
+      renderNotificationDetailMetric("출처 신뢰", impact.sourceTrustLabel, "muted"),
       renderNotificationDetailMetric("데이터", sourceMeta.dataLabel, sourceMeta.tone),
       '</div>',
       '<section class="inline-detail-block primary">',
@@ -23303,7 +23197,6 @@
     var impact = researchEvidenceImpactMeta(item);
     var sourceMeta = feedEvidenceDataMeta(item);
     var summary = researchEvidenceKoreanSummary(item);
-    var confidence = item.confidence == null ? "-" : (Math.round(Number(item.confidence || 0) * 100) + "%");
     return {
       kicker: "Research Evidence",
       title: item.title || displayName || symbol || "뉴스·근거 상세",
@@ -23312,9 +23205,10 @@
         '<section class="work-detail-section">',
         '<div class="work-detail-metric-row">',
         renderNotificationDetailMetric("주가 영향", impact.label, impact.tone),
-        renderNotificationDetailMetric("영향 점수", impact.scoreLabel, impact.tone),
+        renderNotificationDetailMetric("기사 중요성", impact.materialityLabel, impact.tone),
+        renderNotificationDetailMetric("종목 관련성", impact.relevanceLabel, "muted"),
         renderNotificationDetailMetric("근거 종류", researchEvidenceKindLabel(item.kind), "muted"),
-        renderNotificationDetailMetric("신뢰도", confidence, "muted"),
+        renderNotificationDetailMetric("출처 신뢰", impact.sourceTrustLabel, "muted"),
         renderNotificationDetailMetric("데이터", sourceMeta.dataLabel, sourceMeta.tone),
         '</div>',
         '</section>',
@@ -23474,11 +23368,12 @@
       '<span>' + escapeHtml(researchEvidenceKindLabel(item.kind)) + '</span>',
       '</div>',
       '<p><strong>본문 요약</strong> ' + escapeHtml(summary) + '</p>',
-      '<h3>주가 영향: ' + escapeHtml(impact.label) + ' · ' + escapeHtml(impact.scoreLabel) + '</h3>',
+      '<h3>주가 영향: ' + escapeHtml(impact.label) + ' · ' + escapeHtml(impact.materialityLabel) + '</h3>',
       '<div class="research-evidence-metrics">',
       '<span>방향 <strong>' + escapeHtml(researchEvidencePolarityLabel(item.polarity)) + '</strong></span>',
-      '<span>영향 <strong>' + escapeHtml(impact.scoreLabel) + '</strong></span>',
-      '<span>신뢰 <strong>' + escapeHtml(Math.round(Number(item.confidence || 0) * 100)) + '%</strong></span>',
+      '<span>중요성 <strong>' + escapeHtml(impact.materialityLabel) + '</strong></span>',
+      '<span>관련성 <strong>' + escapeHtml(impact.relevanceLabel) + '</strong></span>',
+      '<span>출처 <strong>' + escapeHtml(impact.sourceTrustLabel) + '</strong></span>',
       '</div>',
       '<footer class="research-evidence-article">',
       '<span>기사</span>',
@@ -23832,7 +23727,7 @@
       },
       {
         tab: "알림 운영",
-        result: "점수 변화, 후보 신호, 발송/보류 판단",
+        result: "조건 변화, 후보 신호, 발송/보류 판단",
         setting: "메시지 타입별 정책, 템플릿, 채널 진단",
         href: "?tab=notifications&notification=policy",
         action: "알림 설정"
@@ -24171,7 +24066,21 @@
         renderSettingField("newsCollectionIntervalSeconds", "뉴스 수집 주기(초)", "number", "60"),
         renderSettingField("newsCollectionMaxSymbols", "뉴스 수집 종목 수", "number", "40"),
         renderSettingField("newsCollectionLookbackMinutes", "뉴스 조회 기간(분)", "number", "180"),
-        renderSettingField("newsCollectionMinRelevanceScore", "뉴스 관련성 최소 점수", "number", "35")
+        renderSettingSelect("newsCollectionMinimumRelevanceState", "저장할 최소 관련성", [
+          { value: "context", label: "관련 맥락부터" },
+          { value: "related", label: "관련 기사부터" },
+          { value: "direct", label: "종목 직접 기사만" }
+        ]),
+        renderSettingSelect("newsDigestMinimumMaterialityState", "알림 뉴스 최소 중요성", [
+          { value: "notable", label: "확인할 정보부터" },
+          { value: "material", label: "중요 정보부터" },
+          { value: "critical", label: "즉시 확인 정보만" }
+        ]),
+        renderSettingSelect("newsDigestMinimumSourceTrustState", "최소 출처 신뢰", [
+          { value: "standard", label: "일반 출처부터" },
+          { value: "trusted", label: "신뢰 출처부터" },
+          { value: "primary", label: "공식 원문만" }
+        ])
       ].join(""), "research"),
       renderSettingsGroup("신선도·추론 게이트", "알림과 온톨로지 추론에 들어가기 전 데이터 유효성을 제한합니다.", [
         renderSettingField("externalApiFetchIntervalMinutes", "외부 API 캐시(분)", "number", "30"),
@@ -24193,9 +24102,9 @@
         renderSettingField("marketDataMaxAgeMinutes", "추천 시세 신선도(분)", "number", "240"),
         renderSettingField("ontologyReasoningIntervalSeconds", "추론 요청 확인 주기(초)", "number", "10"),
         renderSettingField("ontologyReasoningBatchSize", "추론 요청 배치", "number", "20"),
-        renderSettingField("materialityMinimumScore", "중요 변경 기본 기준", "number", "65"),
         renderSettingField("marketMaterialityPriceChangePct", "가격 중요 변화율(%)", "number", "0.6"),
-        renderSettingField("newsMaterialityMinimumScore", "뉴스 중요 기준", "number", "65")
+        renderSettingField("marketMaterialityTrendDistancePct", "추세 중요 이격(%)", "number", "2"),
+        renderSettingField("marketMaterialityVolumeRatio", "거래량 중요 배율", "number", "1.5")
       ].join(""), "gate"),
       renderSettingsGroup("공시 AI와 매핑", "AI 해석 방식과 종목·CIK·환율 매핑처럼 긴 설정값을 관리합니다.", [
         renderSettingSelect("dartDisclosureAiAnalysisEnabled", "공시 AI 해석", [
@@ -25364,12 +25273,6 @@
       });
     });
 
-    Array.prototype.slice.call(app.querySelectorAll("[data-notification-rule-action]")).forEach(function (field) {
-      field.addEventListener("change", function () {
-        updateNotificationRuleField(field.getAttribute("data-notification-rule-action"), "lowScoreAction", field.value);
-      });
-    });
-
     Array.prototype.slice.call(app.querySelectorAll("[data-notification-rule-similarity-enabled]")).forEach(function (field) {
       field.addEventListener("change", function () {
         updateNotificationRuleField(field.getAttribute("data-notification-rule-similarity-enabled"), "similarityEnabled", field.checked);
@@ -25454,17 +25357,6 @@
       });
     });
 
-    Array.prototype.slice.call(app.querySelectorAll("[data-notification-rule-condition-score]")).forEach(function (field) {
-      field.addEventListener("change", function () {
-        updateNotificationRuleCondition(
-          field.getAttribute("data-notification-rule-condition-score"),
-          field.getAttribute("data-condition-id"),
-          "score",
-          field.value
-        );
-      });
-    });
-
     Array.prototype.slice.call(app.querySelectorAll("[data-notification-rule-condition-field]")).forEach(function (field) {
       field.addEventListener("change", function () {
         updateNotificationRuleCondition(
@@ -25506,6 +25398,14 @@
         render();
       });
     }
+
+    Array.prototype.slice.call(app.querySelectorAll('[data-action="refresh-psychology-shadow"]')).forEach(function (button) {
+      button.addEventListener("click", function () {
+        if (state.psychologyShadowLoading) return;
+        loadPsychologyShadow();
+        render();
+      });
+    });
 
     Array.prototype.slice.call(app.querySelectorAll("[data-notification-job-search]")).forEach(function (field) {
       field.addEventListener("input", function () {
@@ -25851,6 +25751,7 @@
     loadNotificationRules(),
     loadNotificationJobs(),
     loadNotificationSchedules(),
+    loadPsychologyShadow(),
     loadInvestmentCalendar(),
     loadSymbolUniverse(),
     loadInvestmentLanguage(false)

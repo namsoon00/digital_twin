@@ -266,7 +266,10 @@ class InvestmentCalendarServiceTests(unittest.TestCase):
                         "url": "https://www.sec.gov/example/f6",
                         "publishedAt": "2026-07-15T00:00:00Z",
                         "observedAt": "2026-07-15T00:10:00Z",
-                        "materialityScore": 91,
+                        "materialityState": "material",
+                        "sourceTrustState": "trusted",
+                        "dataState": "sufficient",
+                        "validationState": "ready",
                     }
                 ]
             },
@@ -306,7 +309,10 @@ class InvestmentCalendarServiceTests(unittest.TestCase):
                         "url": "https://www.sec.gov/example/f6-undated",
                         "publishedAt": "2026-07-15T00:00:00Z",
                         "observedAt": "2026-07-15T00:10:00Z",
-                        "materialityScore": 91,
+                        "materialityState": "material",
+                        "sourceTrustState": "trusted",
+                        "dataState": "sufficient",
+                        "validationState": "ready",
                     }
                 ]
             },
@@ -341,7 +347,10 @@ class InvestmentCalendarServiceTests(unittest.TestCase):
                         "url": "https://www.sec.gov/example/f6-undated",
                         "publishedAt": "2026-07-15T00:00:00Z",
                         "observedAt": "2026-07-15T00:10:00Z",
-                        "materialityScore": 91,
+                        "materialityState": "material",
+                        "sourceTrustState": "trusted",
+                        "dataState": "sufficient",
+                        "validationState": "ready",
                     }
                 ]
             },
@@ -370,7 +379,7 @@ class InvestmentCalendarServiceTests(unittest.TestCase):
             "eventType": "adrListing",
             "startsAt": "",
             "importance": 92,
-            "confidence": 0.71,
+            "readinessState": "needs-review",
             "symbols": ["AAPL"],
             "markets": ["NYSE"],
             "source": "SEC EDGAR",
@@ -402,7 +411,7 @@ class InvestmentCalendarServiceTests(unittest.TestCase):
                 "eventType": "indexInclusion",
                 "startsAt": "2026-08-" + str(10 + index).zfill(2),
                 "importance": 80,
-                "confidence": 0.55,
+                "readinessState": "needs-review",
             })
         service = InvestmentCalendarCandidateService(
             candidate_repository=candidate_store,
@@ -434,9 +443,14 @@ class InvestmentCalendarServiceTests(unittest.TestCase):
                 url="https://www.sec.gov/example/f6-ai",
                 published_at="2026-07-15T00:00:00Z",
                 observed_at="2026-07-15T00:10:00Z",
-                impact_score=91,
-                confidence=0.91,
-                raw_payload={"form": "F-6", "eventDate": "2026-08-20", "materialityScore": 91},
+                raw_payload={
+                    "form": "F-6",
+                    "eventDate": "2026-08-20",
+                    "materialityState": "material",
+                    "sourceTrustState": "trusted",
+                    "dataState": "sufficient",
+                    "validationState": "ready",
+                },
             )
         ])
         service = InvestmentCalendarResearchRecommendationService(
@@ -444,7 +458,7 @@ class InvestmentCalendarServiceTests(unittest.TestCase):
             evidence_repository=evidence_store,
             account_repository=SimpleNamespace(load_all=lambda: [self.account()]),
             news_collection_runner_factory=lambda: runner,
-            settings={"investmentCalendarAiResearchReviewMinConfidence": "0.2"},
+            settings={},
         )
 
         result = service.recommend({"symbol": "AAPL", "runCollection": True})
@@ -487,7 +501,10 @@ class InvestmentCalendarServiceTests(unittest.TestCase):
                         "url": "https://www.sec.gov/example/f6-structured",
                         "publishedAt": "2026-07-15T00:00:00Z",
                         "observedAt": "2026-07-15T00:10:00Z",
-                        "materialityScore": 91,
+                        "materialityState": "material",
+                        "sourceTrustState": "trusted",
+                        "dataState": "sufficient",
+                        "validationState": "ready",
                         "payload": {"form": "F-6", "eventDate": "2026-08-20"},
                     }
                 ]
@@ -509,25 +526,26 @@ class InvestmentCalendarServiceTests(unittest.TestCase):
             "evidenceId": "research:AAPL:listing-blog",
             "symbol": "AAPL",
             "kind": "news",
-            "source": "Market Blog",
-            "title": "Apple listing event expected on 2026-08-20",
-            "summary": "Listing schedule mentioned without official confirmation.",
-            "url": "https://example.test/listing",
+            "source": "SEC EDGAR",
+            "title": "Apple files F-6 for ADR listing on NYSE on 2026-08-20",
+            "summary": "Official filing confirms the listing schedule.",
+            "url": "https://www.sec.gov/example/listing",
             "publishedAt": "2026-07-15T00:00:00Z",
+            "sourceTrustState": "trusted",
+            "dataState": "sufficient",
+            "validationState": "ready",
         }
 
         candidate = calendar_candidate_from_research_item(
             item,
-            min_confidence=0.60,
             include_review=True,
-            review_min_confidence=0.30,
-            feedback={"listing": {"accepted": 0, "rejected": 3}},
+            feedback={"adrListing": {"accepted": 0, "rejected": 3}},
         )
 
         self.assertIsNotNone(candidate)
         self.assertTrue(candidate.review_required())
-        self.assertEqual("lowConfidence", candidate.review_reason)
-        self.assertLess(candidate.confidence, 0.60)
+        self.assertEqual("feedbackReview", candidate.review_reason)
+        self.assertEqual("needs-review", candidate.readiness_state)
 
     def test_adr_listing_reminder_message_includes_event_guidance_and_strategy_profile(self):
         now_at = datetime(2026, 8, 20, 0, 0, tzinfo=timezone.utc)

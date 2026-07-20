@@ -70,7 +70,7 @@ class Position:
     updated_at: str = ""
     source_as_of: str = ""
     source_fetched_at: str = ""
-    source_as_of_confidence: str = ""
+    source_timestamp_state: str = ""
     indicator_as_of: str = ""
     indicator_fetched_at: str = ""
     market_value: float = 0.0
@@ -143,12 +143,14 @@ class DecisionItem:
     market_value: float
     profit_loss: float
     profit_loss_rate: float
-    exit_pressure: float
     decision: str
     tone: str
     source: str = "holding"
-    profit_take_pressure: float = 0.0
-    loss_cut_pressure: float = 0.0
+    review_level: str = "check"
+    data_state: str = "partial"
+    change_state: str = "unchanged"
+    conflict_state: str = "context-only"
+    validation_state: str = "conditional"
     decision_basis: str = ""
     ontology_opinion: Dict[str, object] = field(default_factory=dict)
     ontology_worldview: Dict[str, object] = field(default_factory=dict)

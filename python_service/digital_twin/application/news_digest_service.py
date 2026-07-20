@@ -10,7 +10,17 @@ from ..domain.market_data import number
 from ..domain.message_types import NEWS_DIGEST
 from ..domain.investment_research import NewsCollectionTarget
 from ..domain.investment_strategy_guidance import merge_strategy_context, strategy_message_lines
-from ..domain.news_analysis import analysis_payload_requires_refresh, classify_news_relevance, clean_article_summary_noise, relation_scope_is_investable
+from ..domain.news_analysis import (
+    NEWS_MATERIALITY_STATE_LABELS,
+    NEWS_RELEVANCE_STATE_LABELS,
+    NEWS_SOURCE_TRUST_STATE_LABELS,
+    analysis_payload_requires_refresh,
+    classify_news_relevance,
+    clean_article_summary_noise,
+    news_state_rank,
+    news_state_payload,
+    relation_scope_is_investable,
+)
 from ..domain.news_ai_analysis import clean_summary_text, summary_texts_similar
 from ..domain.notifications import NotificationJob, notification_debug_number
 from ..domain.portfolio import utc_now_iso
@@ -83,29 +93,14 @@ def short_datetime_text(value: object) -> str:
     return parsed.astimezone(KST).strftime("%m/%d %H:%M KST")
 
 
-def score_text(value: object, suffix: str = "점") -> str:
-    numeric = number(value)
-    if numeric == 0 and str(value or "").strip() not in {"0", "0.0"}:
-        return ""
-    if abs(numeric - round(numeric)) < 0.05:
-        return str(int(round(numeric))) + suffix
-    return ("%.1f" % numeric).rstrip("0").rstrip(".") + suffix
+def item_news_states(item: Dict[str, object]) -> Dict[str, str]:
+    payload = item.get("payload") if isinstance(item.get("payload"), dict) else {}
+    return news_state_payload({**payload, **item})
 
 
-def normalized_score(value: object) -> float:
-    score = number(value)
-    return score * 100 if 0 < score <= 1 else score
-
-
-def reliability_label(value: object) -> str:
-    score = normalized_score(value)
-    if score >= 80:
-        return "높음"
-    if score >= 60:
-        return "보통"
-    if score > 0:
-        return "낮음"
-    return "미확인"
+def state_at_least(value: object, minimum: object, order: Tuple[str, ...]) -> bool:
+    ranks = {state: index for index, state in enumerate(order)}
+    return ranks.get(str(value or ""), -1) >= ranks.get(str(minimum or ""), 0)
 
 
 def impact_label(item: Dict[str, object]) -> str:
@@ -344,16 +339,15 @@ def alert_reason_context_item(item: Dict[str, object]) -> Dict[str, object]:
     name = clean_text(item.get("displayName") or symbol or "종목")
     title = bounded_text(item.get("title"), 90)
     bucket = clean_text(item.get("portfolioBucket") or "대상")
-    relevance = score_text(item.get("relevanceScore") or (item.get("payload") or {}).get("relevanceScore"))
-    importance = score_text(item.get("materialityScore") or (item.get("payload") or {}).get("materialityScore"))
+    states = item_news_states(item)
     return {
         "symbol": symbol,
         "name": name,
         "title": title,
         "bucket": bucket,
         "impact": impact_label(item),
-        "relevance": relevance,
-        "importance": importance,
+        "relevance": NEWS_RELEVANCE_STATE_LABELS.get(states["relevanceState"], ""),
+        "importance": NEWS_MATERIALITY_STATE_LABELS.get(states["materialityState"], ""),
         "watch": item_watch_text(item),
     }
 
@@ -366,14 +360,14 @@ def alert_reason_lines(items: List[Dict[str, object]]) -> List[str]:
     symbol = str(primary.get("symbol") or "")
     target = name + ((" / " + symbol) if symbol and symbol != name else "")
     bucket = str(primary.get("bucket") or "대상")
-    score_parts = [part for part in [primary.get("relevance"), primary.get("importance")] if part]
-    score_text_value = "·".join(str(part) for part in score_parts)
+    passed_conditions = [part for part in [primary.get("relevance"), primary.get("importance")] if part]
+    condition_text = " · ".join(str(part) for part in passed_conditions)
     lines = []
-    if score_text_value:
+    if condition_text:
         lines.append(
             "• " + html_text(target) + " " + html_text(bucket)
-            + " 종목의 새 기사이며 관련성·중요도 " + html_text(score_text_value)
-            + " 기준을 통과했습니다."
+            + " 종목의 새 기사이며 " + html_text(condition_text)
+            + " 조건을 통과했습니다."
         )
     else:
         lines.append("• " + html_text(target) + "의 새 기사가 보유/관심 종목 기준을 통과했습니다.")
@@ -398,11 +392,14 @@ def ai_watch_line(item: Dict[str, object]) -> str:
     return ", ".join(rows)
 
 
-def item_sort_key(item: Dict[str, object]) -> Tuple[float, float, float]:
-    materiality = number(item.get("materialityScore") or (item.get("payload") or {}).get("materialityScore"))
-    relevance = number(item.get("relevanceScore") or (item.get("payload") or {}).get("relevanceScore"))
-    impact = number(item.get("stockImpactScore") or item.get("impactScore"))
-    return materiality, relevance, impact
+def item_sort_key(item: Dict[str, object]) -> Tuple[int, int, int, int, float]:
+    payload = item.get("payload") if isinstance(item.get("payload"), dict) else {}
+    states = news_state_rank({**payload, **item})
+    polarity = normalized_impact_kind(item)
+    directional = 1 if polarity in {"risk", "support", "mixed"} else 0
+    published = parse_datetime(item.get("publishedAt") or item.get("observedAt"))
+    timestamp = published.timestamp() if published else 0.0
+    return (*states, directional, timestamp)
 
 
 def latest_timestamp(items: Iterable[Dict[str, object]]) -> str:
@@ -455,17 +452,17 @@ class NewsDigestEnqueuer:
             return True
         return str(value).strip().lower() not in {"0", "false", "no", "off", "disabled"}
 
-    def min_relevance_score(self) -> float:
-        return number(self.settings.get("newsDigestMinRelevanceScore")) or 85
+    def minimum_relevance_state(self) -> str:
+        return clean_text(self.settings.get("newsDigestMinimumRelevanceState") or "direct").lower()
 
-    def min_materiality_score(self) -> float:
-        return number(self.settings.get("newsDigestMinMaterialityScore")) or 70
+    def minimum_materiality_state(self) -> str:
+        return clean_text(self.settings.get("newsDigestMinimumMaterialityState") or "notable").lower()
 
-    def min_neutral_materiality_score(self) -> float:
-        return number(self.settings.get("newsDigestMinNeutralMaterialityScore")) or 78
+    def minimum_neutral_materiality_state(self) -> str:
+        return clean_text(self.settings.get("newsDigestMinimumNeutralMaterialityState") or "material").lower()
 
-    def min_source_reliability(self) -> float:
-        return number(self.settings.get("newsDigestMinSourceReliability")) or 68
+    def minimum_source_trust_state(self) -> str:
+        return clean_text(self.settings.get("newsDigestMinimumSourceTrustState") or "standard").lower()
 
     def sent_article_filter_enabled(self) -> bool:
         value = self.settings.get("sentArticleFilterEnabled", self.settings.get("newsSentArticleFilterEnabled"))
@@ -475,10 +472,6 @@ class NewsDigestEnqueuer:
 
     def sent_article_history_limit(self) -> int:
         return max(20, min(200, int(number(self.settings.get("sentArticleFilterHistoryLimit")) or 200)))
-
-    def item_payload_score(self, item: Dict[str, object], key: str) -> float:
-        payload = item.get("payload") if isinstance(item.get("payload"), dict) else {}
-        return normalized_score(item.get(key) if item.get(key) not in (None, "") else payload.get(key))
 
     def item_relation_scope(self, item: Dict[str, object]) -> str:
         payload = item.get("payload") if isinstance(item.get("payload"), dict) else {}
@@ -521,17 +514,15 @@ class NewsDigestEnqueuer:
         summary = item_summary(item)
         if not summary or "Comprehensive" in summary or "Google News입니다" in summary or "상승-으로-date" in summary:
             return False
-        reliability = self.item_payload_score(item, "sourceReliability")
-        relevance = self.item_payload_score(item, "relevanceScore")
-        materiality = self.item_payload_score(item, "materialityScore")
-        impact = normalized_score(item.get("stockImpactScore") or item.get("impactScore"))
+        states = item_news_states(item)
         polarity = clean_text(item.get("stockImpactPolarity") or item.get("polarity")).lower()
         label = impact_label(item)
-        required_materiality = self.min_neutral_materiality_score() if label == "중립" or polarity in {"context", "neutral"} else self.min_materiality_score()
+        required_materiality = self.minimum_neutral_materiality_state() if label == "중립" or polarity in {"context", "neutral"} else self.minimum_materiality_state()
         return (
-            reliability >= self.min_source_reliability()
-            and relevance >= self.min_relevance_score()
-            and max(materiality, impact) >= required_materiality
+            state_at_least(states["sourceTrustState"], self.minimum_source_trust_state(), ("unknown", "limited", "standard", "trusted"))
+            and state_at_least(states["relevanceState"], self.minimum_relevance_state(), ("unrelated", "context", "related", "direct"))
+            and state_at_least(states["materialityState"], required_materiality, ("context", "notable", "material"))
+            and states["validationState"] != "blocked"
         )
 
     def handle(self, event: DomainEvent) -> None:
@@ -658,8 +649,8 @@ class NewsDigestEnqueuer:
     def context(self, account: AccountConfig, items: List[Dict[str, object]], event: DomainEvent) -> Dict[str, object]:
         primary = items[0]
         symbols = [normalized_symbol(item.get("symbol")) for item in items if normalized_symbol(item.get("symbol"))]
-        materiality_scores = [number(item.get("materialityScore") or (item.get("payload") or {}).get("materialityScore")) for item in items]
-        severity = "ALERT" if max(materiality_scores or [0]) >= 80 or impact_label(primary) == "위험" else "WATCH"
+        materiality_states = [item_news_states(item)["materialityState"] for item in items]
+        severity = "ALERT" if "material" in materiality_states or impact_label(primary) == "위험" else "WATCH"
         article_items = [article_digest_context_item(item) for item in items]
         article_keys = sorted({key for item in items for key in article_identity_keys(item)})
         context = {
@@ -685,7 +676,7 @@ class NewsDigestEnqueuer:
                 "primaryTitle": clean_text(primary.get("title")),
                 "primaryPublishedAt": clean_text(primary.get("publishedAt") or primary.get("observedAt")),
                 "primaryArticleReadStatus": article_read_status(primary),
-                "materialityScores": materiality_scores,
+                "materialityStates": materiality_states,
             },
         }
         return merge_strategy_context(context, account)
@@ -702,9 +693,10 @@ class NewsDigestEnqueuer:
             title = clean_text(item.get("title"))
             source = clean_text(item.get("source") or "출처 미확인")
             published_at = short_datetime_text(item.get("publishedAt") or item.get("observedAt")) or "기사일 미확인"
-            relevance = score_text(item.get("relevanceScore") or (item.get("payload") or {}).get("relevanceScore"))
-            importance = score_text(item.get("materialityScore") or (item.get("payload") or {}).get("materialityScore"))
-            reliability = reliability_label(item.get("sourceReliability") or (item.get("payload") or {}).get("sourceReliability"))
+            states = item_news_states(item)
+            relevance = NEWS_RELEVANCE_STATE_LABELS.get(states["relevanceState"], "확인 필요")
+            importance = NEWS_MATERIALITY_STATE_LABELS.get(states["materialityState"], "참고 정보")
+            reliability = NEWS_SOURCE_TRUST_STATE_LABELS.get(states["sourceTrustState"], "출처 확인 필요").replace("신뢰도 ", "")
             url = clean_text(item.get("url"))
             link = '<a href="' + html_attr(url) + '">원문 보기</a>' if url else "원문 없음"
             item_lines.extend([

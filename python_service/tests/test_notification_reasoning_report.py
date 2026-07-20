@@ -63,50 +63,61 @@ def relation_context():
             "valuationMarginOfSafetyPct": -3.38,
             "valuationMinimumMarginOfSafetyPct": 10,
             "valuationSourceLabel": "AI 제안",
-            "valuationReliabilityLabel": "AI 초안(사용자 검토 전)",
-            "valuationReliabilityScore": 58,
+            "valuationDataStateLabel": "일부 자료만 있음",
             "valuationApprovalStatus": "ai_applied_pending_review",
             "valuationDataStatus": "partial",
             "valuationExplanation": "비트코인 보유가치를 기준으로 계산한 검토 전 초안입니다.",
             "directNewsCount": 1,
             "btcChange24h": 3.4,
             "btcChange7d": 1.6,
-            "dataQualityScore": 88,
             "missingData": [{"key": "tradeStrength", "label": "체결강도", "effect": "실제 매수·매도 힘 판단이 제한됩니다."}],
         },
         "activeRules": [
             {
                 "ruleId": "graph.execution.capacity.v1",
                 "label": "보유 종목 + 작은 실행 노출 → 실행 가능 용량 확인",
-                "strengthScore": 94,
-                "confidence": 94,
-                "scoreBreakdown": {"actionability": 94, "finalStrength": 94},
+                "reviewLevel": "act",
+                "reviewLabel": "대응 준비",
+                "dataState": "sufficient",
+                "dataStateLabel": "판단에 필요한 자료 있음",
+                "evidenceRole": "context",
+                "evidenceState": {"dataState": "sufficient", "evidenceRole": "context"},
                 "inferenceTraceId": "trace-execution",
             },
             {
                 "ruleId": "graph.disclosure.event_risk.v1",
                 "label": "보유 종목 + 공시 이벤트 → 공시 위험 확인",
-                "strengthScore": 78,
-                "confidence": 86,
-                "scoreBreakdown": {"riskPressure": 78, "finalStrength": 78},
+                "reviewLevel": "act",
+                "reviewLabel": "대응 준비",
+                "dataState": "sufficient",
+                "dataStateLabel": "판단에 필요한 자료 있음",
+                "evidenceRole": "risk",
+                "evidenceState": {"dataState": "sufficient", "evidenceRole": "risk"},
                 "inferenceTraceId": "trace-disclosure",
             },
         ],
         "referenceRules": [{
             "ruleId": "graph.benchmark.beta.v1",
             "label": "시장 민감도 참고",
-            "strengthScore": 72,
-            "confidence": 80,
+            "reviewLevel": "observe",
+            "dataState": "partial",
+            "evidenceRole": "context",
             "referenceOnly": True,
         }],
         "decision": {
             "label": "공시 이벤트 위험 점검",
-            "score": 78,
             "selectedRuleId": "graph.disclosure.event_risk.v1",
             "selectedInferenceTraceId": "trace-disclosure",
             "decisionStage": "EVENT_RISK_REVIEW",
             "actionGroup": "eventRisk",
-            "scoreBreakdown": {"riskPressure": 78, "finalStrength": 78},
+            "reviewLevel": "act",
+            "reviewLabel": "대응 준비",
+            "dataState": "sufficient",
+            "dataStateLabel": "판단에 필요한 자료 있음",
+            "changeState": "new-evidence",
+            "changeStateLabel": "새 뉴스·공시·근거",
+            "conflictState": "mixed",
+            "conflictStateLabel": "위험과 반대 근거가 함께 있음",
             "targetRole": "holding",
             "actionPolicy": "HOLDING_MANAGEMENT",
         },
@@ -119,7 +130,14 @@ def relation_context():
                 {"category": "news", "direction": "risk", "summary": "보유 종목과 직접 관련된 공시 위험이 확인됐습니다."},
             ],
         },
-        "scoreBreakdown": {"riskPressure": 78, "supportEvidence": 34, "dataConfidence": 88, "finalStrength": 94},
+        "reviewLevel": "act",
+        "reviewLevelLabel": "대응 준비",
+        "dataState": "sufficient",
+        "dataStateLabel": "판단에 필요한 자료 있음",
+        "changeState": "new-evidence",
+        "changeStateLabel": "새 뉴스·공시·근거",
+        "conflictState": "mixed",
+        "conflictStateLabel": "위험과 반대 근거가 함께 있음",
         "whyNow": {
             "changeDrivers": ["직접 뉴스/리서치 근거 1건이 추론에 포함됐습니다.", "현재 판단 단계는 EVENT_RISK_REVIEW입니다."],
         },
@@ -158,11 +176,9 @@ def notification_context():
                 "url": article_url,
                 "domain": "example.com",
                 "publishedAt": "2026-07-19T05:30:00Z",
-                "payload": {"sourceReliability": 0.82, "relevanceScore": 91, "materialityScore": 74},
+                "payload": {"sourceTrustState": "trusted", "relevanceState": "direct", "materialityState": "notable"},
             }]
         },
-        "honeyScore": 76,
-        "honeyThreshold": 65,
         "honeyDecision": "send",
         "honeyReasons": ["관계 인사이트 기준 통과", "본문 있음"],
         "honeyStateReason": "새 공시 근거가 추가되어 쿨다운을 해제했습니다.",
@@ -175,7 +191,9 @@ def validated_response(article_url):
     return NotificationAIValidatedResponse(
         action="HOLD",
         action_label="보유",
-        confidence=74,
+        validation_state="ready",
+        data_state="sufficient",
+        review_level="act",
         precomputed_action="HOLD",
         summary="수익을 지키면서 공시 영향과 가격 회복을 확인합니다.",
         opinion="현재는 보유하되 공시 원문을 확인합니다.",
@@ -244,8 +262,8 @@ class NotificationReasoningReportTests(unittest.TestCase):
             },
         )
 
-        self.assertEqual(85, rule.base_score)
-        self.assertEqual(20, rule.threshold)
+        self.assertTrue(rule.enabled)
+        self.assertFalse(rule.state_cooldown_enabled)
         self.assertFalse(rule.similarity_enabled)
         self.assertTrue(rendered.startswith("🛠 운영자 추론 보고서"))
         self.assertIn("InferenceBox", rendered)
@@ -269,9 +287,10 @@ class NotificationReasoningReportTests(unittest.TestCase):
         self.assertIn("<b>뉴스·공시 요약</b>", message)
         self.assertIn("핵심 사실: 회사는 신규 자금조달 계획을 공시했습니다", message)
         self.assertIn(article_url, message)
-        self.assertIn("높음 (78.0/100점)", message)
-        self.assertIn("<b>점수 안내</b>", message)
-        self.assertIn("상승·하락 확률이나 매수·매도 확률이 아니며", message)
+        self.assertIn("대응 준비", message)
+        self.assertIn("판단에 필요한 자료 있음", message)
+        self.assertNotIn("/100점", message)
+        self.assertNotIn("점수 안내", message)
         self.assertNotIn("<b>관계 분석으로 새로 확인한 사실</b>", message)
         self.assertNotIn("<b>전략 가이드</b>", message)
         self.assertIn("분석: [AI] 제목/RSS 요약 기반", message)
@@ -445,19 +464,20 @@ class NotificationReasoningReportTests(unittest.TestCase):
         self.assertEqual("공격형", context["investmentStrategyProfileLabel"])
         self.assertEqual("aggressive", context["investmentStrategyProfile"])
 
-    def test_operator_report_separates_selected_decision_score_from_highest_relation(self):
+    def test_operator_report_connects_selected_decision_to_categorical_states(self):
         context, article_url = notification_context()
         context["notificationNumber"] = "N-ABCDEF12"
         enriched = context_with_validated_ai_response(context, validated_response(article_url))
         report = build_notification_reasoning_report(enriched, "customer-job", enriched["telegramMessage"])
         message = render_operator_reasoning_report(report)
 
-        self.assertEqual(78, report.score_audit["decisionScore"])
-        self.assertEqual(78, report.score_audit["selectedRuleScore"])
-        self.assertEqual(94, report.score_audit["highestRelationScore"])
-        self.assertTrue(report.score_audit["selectedRuleScoreMatches"])
-        self.assertIn("판단 점수: 78.0점", message)
-        self.assertIn("가장 강한 관계: 보유 종목 + 작은 실행 노출", message)
+        self.assertEqual("act", report.state_audit["reviewLevel"])
+        self.assertEqual("sufficient", report.state_audit["dataState"])
+        self.assertEqual("new-evidence", report.state_audit["changeState"])
+        self.assertEqual("mixed", report.state_audit["conflictState"])
+        self.assertTrue(report.state_audit["selectedRuleIsActive"])
+        self.assertIn("확인 단계: 대응 준비", message)
+        self.assertNotIn("판단 점수", message)
         self.assertIn("graph.disclosure.event_risk.v1", message)
         self.assertIn("TypeDB InferenceBox 실행", message)
         self.assertIn("BTC 보유가치/NAV + 추세 보정", message)

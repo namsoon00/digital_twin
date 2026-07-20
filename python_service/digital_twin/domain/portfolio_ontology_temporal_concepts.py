@@ -202,10 +202,6 @@ def percentage_change(start: float, end: float) -> float:
     return ((end / start) - 1.0) * 100.0
 
 
-def relation_weight(score: float) -> float:
-    return min(1.0, max(0.2, number(score) / 100.0))
-
-
 def window_rows(rows: List[Dict[str, object]], definition: TemporalWindowDefinition, current_time: Optional[datetime]) -> List[Dict[str, object]]:
     if not rows:
         return []
@@ -257,26 +253,60 @@ def flow_pattern(values: Dict[str, float]) -> str:
     return "NeutralFlow"
 
 
-def temporal_scores(path_pattern: str, flow: str, risk_events: int, support_events: int, values: Dict[str, float]) -> Dict[str, float]:
-    risk = 0.0
-    support = 0.0
-    if path_pattern == "PersistentDecline":
-        risk = max(risk, 72 + min(18, abs(values.get("priceChangePct", 0.0)) * 1.6))
-    if path_pattern == "FailedRecovery":
-        risk = max(risk, 74)
+def temporal_decision_state(
+    path_pattern: str,
+    flow: str,
+    risk_events: int,
+    support_events: int,
+    *,
+    has_sufficient_history: bool,
+) -> Dict[str, object]:
+    if not has_sufficient_history:
+        return {
+            "temporalEvidenceRole": "blocking",
+            "temporalReviewLevel": "blocked",
+            "temporalDataState": "insufficient",
+            "temporalChangeState": "unchanged",
+            "temporalConflictState": "context-only",
+            "temporalRiskConditions": [],
+            "temporalSupportConditions": [],
+        }
+
+    risk_conditions: List[str] = []
+    support_conditions: List[str] = []
+    if path_pattern in {"PersistentDecline", "FailedRecovery"}:
+        risk_conditions.append(path_pattern)
     if flow in {"SmartMoneyOutflow", "DistributionDuringBounce"}:
-        risk = max(risk, 66)
+        risk_conditions.append(flow)
     if risk_events >= 2:
-        risk = max(risk, 68 + min(18, risk_events * 4))
-    if path_pattern == "DeclineDeceleration":
-        support = max(support, 62)
-    if path_pattern == "RecoveryAttempt":
-        support = max(support, 64)
+        risk_conditions.append("EventDrivenRiskCluster")
+    if path_pattern in {"DeclineDeceleration", "RecoveryAttempt"}:
+        support_conditions.append(path_pattern)
     if flow in {"AccumulationDuringWeakness", "SmartMoneySupport"}:
-        support = max(support, 66)
+        support_conditions.append(flow)
     if support_events >= 2:
-        support = max(support, 60 + min(14, support_events * 3))
-    return {"temporalRiskScore": round(risk, 1), "temporalSupportScore": round(support, 1)}
+        support_conditions.append("SupportiveEventCluster")
+
+    if risk_conditions and support_conditions:
+        conflict_state = "mixed"
+    elif risk_conditions:
+        conflict_state = "risk-only"
+    elif support_conditions:
+        conflict_state = "support-only"
+    else:
+        conflict_state = "context-only"
+    evidence_role = "risk" if risk_conditions else ("support" if support_conditions else "context")
+    review_level = "act" if path_pattern in {"PersistentDecline", "FailedRecovery"} or risk_events >= 2 else ("check" if risk_conditions else ("observe" if support_conditions else "normal"))
+    change_state = "worsening" if risk_conditions else ("improving" if support_conditions else "unchanged")
+    return {
+        "temporalEvidenceRole": evidence_role,
+        "temporalReviewLevel": review_level,
+        "temporalDataState": "sufficient",
+        "temporalChangeState": change_state,
+        "temporalConflictState": conflict_state,
+        "temporalRiskConditions": risk_conditions,
+        "temporalSupportConditions": support_conditions,
+    }
 
 
 def research_events_for_state(symbol: str, state: Dict[str, object]) -> List[Dict[str, object]]:
@@ -419,7 +449,9 @@ def add_temporal_coverage_gap(
         "requiredSampleCount": definition.min_samples,
         "coveredSessionCount": covered_session_count,
         "requiredSessionCount": max(1, int(round(definition.lookback_days))),
-        "riskImpact": 4.0,
+        "reviewLevel": "blocked",
+        "dataState": "insufficient",
+        "evidenceRole": "blocking",
         "description": definition.key + " 기간 판단에 필요한 거래일 이력이 부족합니다.",
         "source": "temporal-window-ontology",
         **dict(observation_profile or {}),
@@ -429,8 +461,10 @@ def add_temporal_coverage_gap(
         "field": "temporalWindow",
         "windowKey": definition.key,
         "dataScope": "temporal-window",
-        "polarity": "risk",
-        "riskImpact": 4.0,
+        "polarity": "blocking",
+        "reviewLevel": "blocked",
+        "dataState": "insufficient",
+        "evidenceRole": "blocking",
         "aiInfluenceLabel": definition.key + " 기간 히스토리 부족",
     })
 
@@ -467,18 +501,15 @@ def add_position_temporal_concepts(
                 selected[-1] = {**selected[-1], "externalSignals": external_signals}
         values = temporal_window_values(selected, definition)
         cluster = event_cluster(symbol, selected)
-        scores = temporal_scores(
+        temporal_state = temporal_decision_state(
             str(values.get("pricePathPattern") or ""),
             str(values.get("flowPattern") or ""),
             int(cluster.get("riskEventCount") or 0),
             int(cluster.get("supportEventCount") or 0),
-            values,
+            has_sufficient_history=bool(values.get("hasSufficientHistory")),
         )
         values.update(cluster)
-        values.update(scores if values.get("hasSufficientHistory") else {
-            "temporalRiskScore": 0.0,
-            "temporalSupportScore": 0.0,
-        })
+        values.update(temporal_state)
         values["symbol"] = symbol
         values["source"] = str(values.get("observationSource") or "monitor-snapshot-history")
         values["retentionTier"] = str(values.get("observationGranularity") or "snapshot")
@@ -487,15 +518,20 @@ def add_position_temporal_concepts(
             "tboxClass": "MultiDayWindow" if definition.lookback_days > 1 else "DailyWindow",
             "tboxClasses": ["Observation", "TemporalWindow", "MultiDayWindow" if definition.lookback_days > 1 else "DailyWindow", "TemporalMateriality"],
             "field": "temporalWindow",
-            "value": values.get("temporalRiskScore") or values.get("temporalSupportScore") or 0,
+            "value": str(values.get("pricePathPattern") or "UnknownPath"),
             **values,
             **trend_observation,
         })
-        add_relation(graph, stock_id, window_id, "HAS_TEMPORAL_WINDOW", weight=relation_weight(max(values.get("temporalRiskScore", 0), values.get("temporalSupportScore", 0), 35)), properties={
+        add_relation(graph, stock_id, window_id, "HAS_TEMPORAL_WINDOW", properties={
             "source": values["source"],
             "field": "temporalWindow",
             "windowKey": definition.key,
-            "polarity": "risk" if values.get("temporalRiskScore", 0) >= values.get("temporalSupportScore", 0) else "support",
+            "polarity": values.get("temporalEvidenceRole"),
+            "evidenceRole": values.get("temporalEvidenceRole"),
+            "reviewLevel": values.get("temporalReviewLevel"),
+            "dataState": values.get("temporalDataState"),
+            "changeState": values.get("temporalChangeState"),
+            "conflictState": values.get("temporalConflictState"),
             "aiInfluenceLabel": definition.key + " 기간 흐름",
         })
 
@@ -503,14 +539,18 @@ def add_position_temporal_concepts(
             "tboxClass": "PricePathPattern",
             "tboxClasses": ["Observation", "PricePathPattern", "TemporalMateriality"],
             "field": "pricePathPattern",
-            "value": values.get("temporalRiskScore") or values.get("temporalSupportScore") or 0,
+            "value": str(values.get("pricePathPattern") or "UnknownPath"),
             **values,
             **trend_observation,
         })
-        add_relation(graph, window_id, path_id, "HAS_PRICE_PATH_PATTERN", weight=relation_weight(max(values.get("temporalRiskScore", 0), values.get("temporalSupportScore", 0), 45)), properties={
+        add_relation(graph, window_id, path_id, "HAS_PRICE_PATH_PATTERN", properties={
             "source": values["source"],
             "field": "pricePathPattern",
             "windowKey": definition.key,
+            "polarity": values.get("temporalEvidenceRole"),
+            "evidenceRole": values.get("temporalEvidenceRole"),
+            "reviewLevel": values.get("temporalReviewLevel"),
+            "dataState": values.get("temporalDataState"),
             "aiInfluenceLabel": definition.key + " " + str(values.get("pricePathPattern")),
         })
 
@@ -518,14 +558,18 @@ def add_position_temporal_concepts(
             "tboxClass": "FlowPattern",
             "tboxClasses": ["Observation", "FlowPattern", "TemporalMateriality"],
             "field": "flowPattern",
-            "value": values.get("temporalRiskScore") or values.get("temporalSupportScore") or 0,
+            "value": str(values.get("flowPattern") or "NeutralFlow"),
             **values,
             **flow_observation,
         })
-        add_relation(graph, window_id, flow_id, "HAS_FLOW_PATTERN", weight=0.64, properties={
+        flow_role = "risk" if values.get("flowPattern") in {"SmartMoneyOutflow", "DistributionDuringBounce"} else "support" if values.get("flowPattern") in {"AccumulationDuringWeakness", "SmartMoneySupport"} else "context"
+        add_relation(graph, window_id, flow_id, "HAS_FLOW_PATTERN", properties={
             "source": values["source"],
             "field": "flowPattern",
             "windowKey": definition.key,
+            "polarity": flow_role,
+            "evidenceRole": flow_role,
+            "dataState": values.get("temporalDataState"),
             "aiInfluenceLabel": definition.key + " " + str(values.get("flowPattern")),
         })
 
@@ -536,11 +580,14 @@ def add_position_temporal_concepts(
             "value": max(cluster.get("riskEventCount", 0), cluster.get("supportEventCount", 0)),
             **values,
         })
-        add_relation(graph, window_id, event_id, "HAS_EVENT_CLUSTER", weight=0.55 if cluster.get("eventCount") else 0.25, properties={
+        event_role = "risk" if cluster.get("riskEventCount", 0) >= 2 else "support" if cluster.get("supportEventCount", 0) >= 2 else "context"
+        add_relation(graph, window_id, event_id, "HAS_EVENT_CLUSTER", properties={
             "source": values["source"],
             "field": "eventClusterType",
             "windowKey": definition.key,
-            "polarity": "risk" if cluster.get("riskEventCount", 0) >= 2 else "context",
+            "polarity": event_role,
+            "evidenceRole": event_role,
+            "dataState": values.get("temporalDataState"),
             "aiInfluenceLabel": definition.key + " 이벤트 묶음",
         })
 
@@ -549,16 +596,20 @@ def add_position_temporal_concepts(
                 "tboxClass": episode if episode != "TemporalObservation" else "TrendEpisode",
                 "tboxClasses": ["Signal", "SignalTransition", "TrendEpisode", "TemporalMateriality", episode],
                 "field": "trendEpisodeType",
-                "value": values.get("temporalRiskScore") or values.get("temporalSupportScore") or 0,
+                "value": episode,
                 "trendEpisodeType": episode,
                 **values,
                 **trend_observation,
             })
-            add_relation(graph, stock_id, episode_id, "DERIVES_TREND_EPISODE", weight=relation_weight(max(values.get("temporalRiskScore", 0), values.get("temporalSupportScore", 0), 50)), properties={
+            episode_role = "support" if episode in {"DeclineDeceleration", "RecoveryAttempt", "AccumulationDuringWeakness"} else "risk" if episode in {"PersistentDecline", "FailedRecovery", "DistributionDuringBounce", "EventDrivenRiskCluster"} else "context"
+            add_relation(graph, stock_id, episode_id, "DERIVES_TREND_EPISODE", properties={
                 "source": values["source"],
                 "field": "trendEpisodeType",
                 "windowKey": definition.key,
-                "polarity": "support" if episode in {"DeclineDeceleration", "RecoveryAttempt", "AccumulationDuringWeakness"} else "risk" if episode in {"PersistentDecline", "FailedRecovery", "DistributionDuringBounce", "EventDrivenRiskCluster"} else "context",
+                "polarity": episode_role,
+                "evidenceRole": episode_role,
+                "reviewLevel": values.get("temporalReviewLevel"),
+                "dataState": values.get("temporalDataState"),
                 "aiInfluenceLabel": definition.key + " " + episode,
             })
 

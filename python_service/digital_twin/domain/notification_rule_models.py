@@ -2,21 +2,17 @@ import re
 from dataclasses import dataclass, field as dataclass_field
 from typing import Dict, List
 
+from .market_hours import default_market_hours_enabled, default_market_hours_markets
 from .message_types import (
-    DEFAULT_ALERT_RULES,
-    DEFAULT_CADENCE,
     INVESTMENT_CALENDAR_REMINDER,
     INVESTMENT_INSIGHT,
     NEWS_DIGEST,
     SYSTEM_MESSAGE_TYPES,
     notification_message_types,
 )
-from .market_hours import default_market_hours_enabled, default_market_hours_markets
 from .notification_templates import DEFAULT_NOTIFICATION_TEMPLATES
 
 
-DEFAULT_HONEY_THRESHOLD = 45
-DEFAULT_LOW_SCORE_ACTION = "suppress"
 DEFAULT_SIMILARITY_FIELDS = ["messageType", "accountId", "symbol", "severity", "title"]
 STATE_COOLDOWN_MESSAGE_TYPES = {
     INVESTMENT_INSIGHT,
@@ -33,38 +29,21 @@ STATE_COOLDOWN_MESSAGE_TYPES = {
     "externalMacroShift",
     "externalDartDisclosure",
 }
-DEFAULT_NOTIFICATION_SCORE_FORMULA = "rawScore"
-VOLATILE_SCORE_SUFFIX = re.compile(r":[+-]?\d+(?:\.\d+)?%?$")
-FORMULA_VARIABLE_BY_CONDITION_ID = {
-    "severity_alert": "severityScore",
-    "severity_watch": "severityScore",
-    "has_symbol": "symbolScore",
-    "important_terms": "importantScore",
-    "confirming_data": "confirmingDataScore",
-    "actionable_terms": "actionableScore",
-    "body_present": "bodyScore",
-    "status_noise": "noisePenalty",
-}
-DATA_QUALITY_REPEAT_BYPASS_IDS = {"novelty_score_delta", "new_source_signal", "new_relation_event"}
+VOLATILE_VALUE_SUFFIX = re.compile(r":[+-]?\d+(?:\.\d+)?%?$")
+DATA_QUALITY_REPEAT_BYPASS_IDS = {"new_source_signal", "new_relation_event"}
+
+DELIVERY_STATES = ("send", "suppressed", "bypass")
+DELIVERY_GATE_STATES = ("eligible", "conditional", "blocked", "bypass")
 
 CONDITION_TYPE_LABELS = [
-    {"type": "text_contains_any", "label": "메시지에 단어 포함", "description": "본문이나 알림 정보에 지정 단어 중 하나가 있으면 점수를 더합니다."},
-    {"type": "context_contains_any", "label": "정보 필드에 단어 포함", "description": "선택한 정보 필드에 지정 단어 중 하나가 있으면 점수를 더합니다."},
-    {"type": "context_equals", "label": "정보 값 일치", "description": "선택한 정보 필드가 지정 값과 같으면 점수를 더합니다."},
-    {"type": "context_present", "label": "정보 값 존재", "description": "선택한 정보 필드가 비어 있지 않으면 점수를 더합니다."},
-    {"type": "context_number_gte", "label": "정보 숫자 이상", "description": "선택한 정보 필드의 숫자가 기준 이상이면 점수를 더합니다."},
-    {"type": "context_number_lte", "label": "정보 숫자 이하", "description": "선택한 정보 필드의 숫자가 기준 이하이면 점수를 더합니다."},
-    {"type": "always", "label": "항상 적용", "description": "룰이 켜져 있으면 항상 점수를 더하거나 뺍니다."},
+    {"type": "text_contains_any", "label": "메시지에 단어 포함", "description": "본문이나 알림 정보에 지정 단어 중 하나가 있는지 확인합니다."},
+    {"type": "context_contains_any", "label": "정보 필드에 단어 포함", "description": "선택한 정보 필드에 지정 단어 중 하나가 있는지 확인합니다."},
+    {"type": "context_equals", "label": "정보 값 일치", "description": "선택한 정보 필드가 지정 값과 같은지 확인합니다."},
+    {"type": "context_present", "label": "정보 값 존재", "description": "선택한 정보 필드가 비어 있지 않은지 확인합니다."},
+    {"type": "context_number_gte", "label": "정보 숫자 이상", "description": "선택한 실제 수치가 기준 이상인지 확인합니다."},
+    {"type": "context_number_lte", "label": "정보 숫자 이하", "description": "선택한 실제 수치가 기준 이하인지 확인합니다."},
+    {"type": "always", "label": "항상 확인", "description": "규칙이 켜져 있으면 항상 확인 근거로 남깁니다."},
 ]
-
-HIGH_SIGNAL_MESSAGE_TYPES = {
-    INVESTMENT_INSIGHT,
-    INVESTMENT_CALENDAR_REMINDER,
-    NEWS_DIGEST,
-    "watchlistOntologySignal",
-    "holdingTiming",
-}
-LOW_SIGNAL_MESSAGE_TYPES = {"monitorHeartbeat", "externalDataConnection"}
 
 
 def clamp_int(value, minimum: int, maximum: int, fallback: int) -> int:
@@ -94,68 +73,19 @@ def default_rule_message_types() -> List[str]:
     return notification_message_types(list(DEFAULT_NOTIFICATION_TEMPLATES.keys()))
 
 
-def default_base_score(message_type: str) -> int:
-    key = str(message_type or "")
-    if key in SYSTEM_MESSAGE_TYPES:
-        return 85
-    if key in HIGH_SIGNAL_MESSAGE_TYPES:
-        return 35
-    if key in LOW_SIGNAL_MESSAGE_TYPES:
-        return 15
-    return 25
-
-
-def default_threshold(message_type: str) -> int:
-    key = str(message_type or "")
-    if key in SYSTEM_MESSAGE_TYPES:
-        return 20
-    if key == INVESTMENT_INSIGHT:
-        return 50
-    if key == NEWS_DIGEST:
-        return 45
-    return DEFAULT_HONEY_THRESHOLD
-
-
 def default_similarity_enabled(message_type: str) -> bool:
     return str(message_type or "") not in SYSTEM_MESSAGE_TYPES
 
 
 def default_similarity_window_minutes(message_type: str) -> int:
     key = str(message_type or "")
-    if key == NEWS_DIGEST:
+    if key in {NEWS_DIGEST, INVESTMENT_CALENDAR_REMINDER}:
         return 1440
-    if key == INVESTMENT_CALENDAR_REMINDER:
-        return 1440
-    if key == INVESTMENT_INSIGHT:
+    if key == INVESTMENT_INSIGHT or key in STATE_COOLDOWN_MESSAGE_TYPES or key == "monitorHeartbeat":
         return 360
-    if key in STATE_COOLDOWN_MESSAGE_TYPES or key == "monitorHeartbeat":
-        return 360
-    if key in LOW_SIGNAL_MESSAGE_TYPES:
+    if key in {"monitorHeartbeat", "externalDataConnection"}:
         return 180
     return 120
-
-
-def default_similarity_penalty(message_type: str) -> int:
-    key = str(message_type or "")
-    if key == NEWS_DIGEST:
-        return -60
-    if key == INVESTMENT_CALENDAR_REMINDER:
-        return -80
-    if key == INVESTMENT_INSIGHT:
-        return -50
-    if key in STATE_COOLDOWN_MESSAGE_TYPES or key == "monitorHeartbeat":
-        return -40
-    if key in LOW_SIGNAL_MESSAGE_TYPES:
-        return -30
-    return -20
-
-
-def default_similarity_bypass_score_delta(message_type: str) -> int:
-    if str(message_type or "") == NEWS_DIGEST:
-        return 30
-    if str(message_type or "") == INVESTMENT_CALENDAR_REMINDER:
-        return 60
-    return 15 if str(message_type or "") in {INVESTMENT_INSIGHT, "holdingTiming", "watchlistOntologySignal"} else 20
 
 
 def default_state_cooldown_enabled(message_type: str) -> bool:
@@ -166,131 +96,13 @@ def default_state_cooldown_minutes(message_type: str) -> int:
     return 360 if default_state_cooldown_enabled(message_type) else 0
 
 
-def default_similarity_bypass_conditions(message_type: str) -> List["SimilarityBypassCondition"]:
-    key = str(message_type or "")
-    if key == INVESTMENT_INSIGHT:
-        return [
-            SimilarityBypassCondition(
-                "insight_severity_upgrade",
-                "인사이트 등급 상승",
-                "severity_upgrade",
-                description="온톨로지 인사이트 중요도가 올라가면 반복이어도 보냅니다.",
-            ),
-            SimilarityBypassCondition(
-                "relation_score_delta",
-                "관계 강도 변화",
-                "abs_number_delta_gte",
-                field="ontologyInsight.score",
-                value=15,
-                description="이전 유사 인사이트보다 관계 강도가 기준점 이상 달라지면 보냅니다.",
-            ),
-            SimilarityBypassCondition(
-                "novelty_score_delta",
-                "신규성 변화",
-                "abs_number_delta_gte",
-                field="ontologyInsight.noveltyScore",
-                value=12,
-                description="관계 신규성이 기준점 이상 달라지면 보냅니다.",
-            ),
-            SimilarityBypassCondition(
-                "new_source_signal",
-                "새 근거 신호 추가",
-                "list_new_items_gte",
-                field="sourceSignalTypes",
-                value=1,
-                description="이전 유사 인사이트에 없던 근거 신호 타입이 추가되면 보냅니다.",
-            ),
-            SimilarityBypassCondition(
-                "new_relation_event",
-                "새 뉴스/공시 원천 근거 추가",
-                "list_new_items_gte",
-                field="ontologyInsight.sourceEventKeys",
-                value=1,
-                description="같은 신호 타입이어도 새 뉴스·공시·원문 기사 같은 실제 원천 근거가 추가되면 보냅니다. 반복 계산용 관계 규칙 키는 제외합니다.",
-            ),
-            SimilarityBypassCondition(
-                "insight_profit_loss_worsened",
-                "손익률 추가 악화",
-                "profit_loss_worsened_lte",
-                value=1,
-                description="이전 투자 인사이트보다 손익률이 1%p 이상 나빠지면 반복이어도 보냅니다.",
-            ),
-            SimilarityBypassCondition(
-                "insight_profit_loss_improved",
-                "손익률 개선",
-                "profit_loss_improved_gte",
-                value=1,
-                description="이전 투자 인사이트보다 손익률이 1%p 이상 좋아지면 회복 신호로 보고 반복이어도 보냅니다.",
-            ),
-            SimilarityBypassCondition(
-                "insight_ma60_crossed_below",
-                "60일 평균 아래 전환",
-                "ma60_crossed_below",
-                value=0,
-                description="이전에는 60일 평균 이상이었지만 현재 60일 평균 아래로 내려가면 보냅니다.",
-            ),
-            SimilarityBypassCondition(
-                "insight_action_changed",
-                "판단 액션 변경",
-                "field_changed_any",
-                field="notificationAiValidatedResponse.actionLabel,notificationAiValidatedResponse.action,aiOpinion.actionLabel,aiOpinion.action",
-                description="최종 AI 판단의 우선 행동이 바뀌면 반복이어도 보냅니다. 사전 계산 후보 변화만으로는 보내지 않습니다.",
-            ),
-        ]
-    if key == "holdingTiming":
-        return [
-            SimilarityBypassCondition(
-                "severity_upgrade",
-                "등급 상승",
-                "severity_upgrade",
-                description="관찰에서 주의처럼 중요도가 올라가면 반복이어도 보냅니다.",
-            ),
-            SimilarityBypassCondition(
-                "holding_score_delta",
-                "보유 모델 점수 변화",
-                "abs_number_delta_gte",
-                field="holdingDecisionScore",
-                value=8,
-                description="이전 보유 타이밍 알림보다 판단 점수가 기준점 이상 달라지면 보냅니다.",
-            ),
-            SimilarityBypassCondition(
-                "loss_rate_worsened",
-                "손익률 추가 악화",
-                "profit_loss_worsened_lte",
-                value=1,
-                description="이전 보유 타이밍 알림보다 손익률이 1%p 이상 나빠지면 보냅니다.",
-            ),
-            SimilarityBypassCondition(
-                "loss_rate_improved",
-                "손익률 개선",
-                "profit_loss_improved_gte",
-                value=1,
-                description="이전 보유 타이밍 알림보다 손익률이 1%p 이상 좋아지면 회복 신호로 보고 반복이어도 보냅니다.",
-            ),
-            SimilarityBypassCondition(
-                "holding_ma60_crossed_below",
-                "60일 평균 아래 전환",
-                "ma60_crossed_below",
-                value=0,
-                description="이전에는 60일 평균 이상이었지만 현재 60일 평균 아래로 내려가면 보냅니다.",
-            ),
-            SimilarityBypassCondition(
-                "holding_action_changed",
-                "판단 액션 변경",
-                "field_changed_any",
-                field="holdingDecision,holdingAction,actionLabel,activeInvestmentOpinion.actionLabel,activeInvestmentOpinion.action",
-                description="보유 판단 또는 우선 행동이 바뀌면 반복이어도 보냅니다.",
-            ),
-        ]
-    return []
-
-
 @dataclass
 class NotificationRuleCondition:
+    """A named observation used in delivery diagnostics, never a score input."""
+
     condition_id: str
     label: str
     condition_type: str
-    score: int
     field: str = ""
     value: object = ""
     terms: List[str] = dataclass_field(default_factory=list)
@@ -309,7 +121,6 @@ class NotificationRuleCondition:
             condition_id=str(payload.get("id") or payload.get("conditionId") or payload.get("condition_id") or "").strip(),
             label=str(payload.get("label") or "").strip(),
             condition_type=str(payload.get("type") or payload.get("conditionType") or payload.get("condition_type") or "").strip(),
-            score=clamp_int(payload.get("score"), -100, 100, 0),
             field=str(payload.get("field") or "").strip(),
             value=payload.get("value", ""),
             terms=terms,
@@ -324,7 +135,6 @@ class NotificationRuleCondition:
             "field": self.field,
             "value": self.value,
             "terms": list(self.terms or []),
-            "score": int(self.score or 0),
             "enabled": bool(self.enabled),
         }
 
@@ -363,18 +173,99 @@ class SimilarityBypassCondition:
         }
 
 
+def default_similarity_bypass_conditions(message_type: str) -> List[SimilarityBypassCondition]:
+    key = str(message_type or "")
+    if key == INVESTMENT_INSIGHT:
+        return [
+            SimilarityBypassCondition(
+                "insight_severity_upgrade",
+                "알림 단계 상승",
+                "severity_upgrade",
+                description="관찰에서 주의처럼 알림 단계가 올라가면 다시 보냅니다.",
+            ),
+            SimilarityBypassCondition(
+                "review_level_upgrade",
+                "확인 단계 상승",
+                "review_level_upgrade",
+                field="ontologyInsight.reviewLevel",
+                description="관찰에서 대응 준비처럼 확인 단계가 올라가면 다시 보냅니다.",
+            ),
+            SimilarityBypassCondition(
+                "new_source_signal",
+                "새 근거 종류 추가",
+                "list_new_items_gte",
+                field="sourceSignalTypes",
+                value=1,
+                description="이전에 없던 근거 종류가 추가되면 다시 보냅니다.",
+            ),
+            SimilarityBypassCondition(
+                "new_relation_event",
+                "새 뉴스·공시 추가",
+                "list_new_items_gte",
+                field="ontologyInsight.sourceEventKeys",
+                value=1,
+                description="같은 판단이라도 새 뉴스·공시 원문이 추가되면 다시 보냅니다.",
+            ),
+            SimilarityBypassCondition(
+                "insight_profit_loss_worsened",
+                "손익률 추가 악화",
+                "profit_loss_worsened_lte",
+                value=1,
+                description="이전 알림보다 손익률이 1%p 이상 나빠지면 다시 보냅니다.",
+            ),
+            SimilarityBypassCondition(
+                "insight_profit_loss_improved",
+                "손익률 개선",
+                "profit_loss_improved_gte",
+                value=1,
+                description="이전 알림보다 손익률이 1%p 이상 좋아지면 다시 보냅니다.",
+            ),
+            SimilarityBypassCondition(
+                "insight_ma60_crossed_below",
+                "60일 평균 아래로 전환",
+                "ma60_crossed_below",
+                value=0,
+                description="가격이 60일 평균 위에서 아래로 내려가면 다시 보냅니다.",
+            ),
+            SimilarityBypassCondition(
+                "insight_ma60_crossed_above",
+                "60일 평균 위로 회복",
+                "ma60_crossed_above",
+                value=0,
+                description="가격이 60일 평균 아래에서 위로 회복하면 다시 보냅니다.",
+            ),
+            SimilarityBypassCondition(
+                "insight_action_changed",
+                "권장 대응 변경",
+                "field_changed_any",
+                field="notificationAiValidatedResponse.actionLabel,notificationAiValidatedResponse.action,aiOpinion.actionLabel,aiOpinion.action",
+                description="검증된 최종 대응이 바뀌면 다시 보냅니다.",
+            ),
+        ]
+    if key == "holdingTiming":
+        return [
+            SimilarityBypassCondition("severity_upgrade", "알림 단계 상승", "severity_upgrade"),
+            SimilarityBypassCondition("loss_rate_worsened", "손익률 추가 악화", "profit_loss_worsened_lte", value=1),
+            SimilarityBypassCondition("loss_rate_improved", "손익률 개선", "profit_loss_improved_gte", value=1),
+            SimilarityBypassCondition("holding_ma60_crossed_below", "60일 평균 아래로 전환", "ma60_crossed_below", value=0),
+            SimilarityBypassCondition("holding_ma60_crossed_above", "60일 평균 위로 회복", "ma60_crossed_above", value=0),
+            SimilarityBypassCondition(
+                "holding_action_changed",
+                "권장 대응 변경",
+                "field_changed_any",
+                field="holdingDecision,holdingAction,actionLabel,activeInvestmentOpinion.actionLabel,activeInvestmentOpinion.action",
+            ),
+        ]
+    return []
+
+
 @dataclass
 class NotificationRuleConfig:
     message_type: str
     enabled: bool = True
-    threshold: int = DEFAULT_HONEY_THRESHOLD
-    base_score: int = 25
-    low_score_action: str = DEFAULT_LOW_SCORE_ACTION
     conditions: List[NotificationRuleCondition] = dataclass_field(default_factory=list)
     similarity_enabled: bool = True
     similarity_window_minutes: int = 120
-    similarity_penalty: int = -20
-    similarity_bypass_score_delta: int = 20
     similarity_bypass_conditions: List[SimilarityBypassCondition] = dataclass_field(default_factory=list)
     similarity_fields: List[str] = dataclass_field(default_factory=lambda: list(DEFAULT_SIMILARITY_FIELDS))
     state_cooldown_enabled: bool = False
@@ -385,7 +276,9 @@ class NotificationRuleConfig:
 
     @classmethod
     def from_dict(cls, payload: Dict[str, object]) -> "NotificationRuleConfig":
-        raw_conditions = payload.get("conditions") if isinstance(payload, dict) else []
+        payload = payload if isinstance(payload, dict) else {}
+        message_type = str(payload.get("messageType") or payload.get("message_type") or "").strip()
+        raw_conditions = payload.get("conditions") or []
         conditions = []
         if isinstance(raw_conditions, list):
             for item in raw_conditions:
@@ -393,64 +286,66 @@ class NotificationRuleConfig:
                     condition = NotificationRuleCondition.from_dict(item)
                     if condition.condition_id and condition.condition_type:
                         conditions.append(condition)
-        message_type = str(payload.get("messageType") or payload.get("message_type") or "").strip()
-        raw_bypass_conditions = (
-            payload.get("similarityBypassConditions")
-            if "similarityBypassConditions" in payload
-            else payload.get("similarity_bypass_conditions")
-        )
+
+        bypass_key_present = "similarityBypassConditions" in payload or "similarity_bypass_conditions" in payload
+        raw_bypass = payload.get("similarityBypassConditions", payload.get("similarity_bypass_conditions", []))
         bypass_conditions = []
-        if isinstance(raw_bypass_conditions, list):
-            for item in raw_bypass_conditions:
+        if isinstance(raw_bypass, list):
+            for item in raw_bypass:
                 if isinstance(item, dict):
                     condition = SimilarityBypassCondition.from_dict(item)
                     if condition.condition_id and condition.condition_type:
                         bypass_conditions.append(condition)
-        else:
+        if not bypass_key_present:
             bypass_conditions = default_similarity_bypass_conditions(message_type)
-        base_score_value = payload["baseScore"] if "baseScore" in payload else payload.get("base_score")
-        raw_similarity_fields = payload.get("similarityFields") if "similarityFields" in payload else payload.get("similarity_fields")
-        if isinstance(raw_similarity_fields, str):
-            similarity_fields = [item.strip() for item in raw_similarity_fields.split(",") if item.strip()]
-        elif isinstance(raw_similarity_fields, list):
-            similarity_fields = [str(item or "").strip() for item in raw_similarity_fields if str(item or "").strip()]
+
+        raw_fields = payload.get("similarityFields", payload.get("similarity_fields"))
+        if isinstance(raw_fields, str):
+            similarity_fields = [item.strip() for item in raw_fields.split(",") if item.strip()]
+        elif isinstance(raw_fields, list):
+            similarity_fields = [str(item or "").strip() for item in raw_fields if str(item or "").strip()]
         else:
             similarity_fields = list(DEFAULT_SIMILARITY_FIELDS)
-        raw_market_hours_markets = payload.get("marketHoursMarkets") if "marketHoursMarkets" in payload else payload.get("market_hours_markets")
-        if isinstance(raw_market_hours_markets, str):
-            market_hours_markets = [item.strip().upper() for item in raw_market_hours_markets.split(",") if item.strip()]
-        elif isinstance(raw_market_hours_markets, list):
-            market_hours_markets = [str(item or "").strip().upper() for item in raw_market_hours_markets if str(item or "").strip()]
+
+        raw_markets = payload.get("marketHoursMarkets", payload.get("market_hours_markets"))
+        if isinstance(raw_markets, str):
+            markets = [item.strip().upper() for item in raw_markets.split(",") if item.strip()]
+        elif isinstance(raw_markets, list):
+            markets = [str(item or "").strip().upper() for item in raw_markets if str(item or "").strip()]
         else:
-            market_hours_markets = default_market_hours_markets(message_type)
-        similarity_enabled_value = payload["similarityEnabled"] if "similarityEnabled" in payload else payload.get("similarity_enabled")
-        similarity_window_value = payload["similarityWindowMinutes"] if "similarityWindowMinutes" in payload else payload.get("similarity_window_minutes")
-        similarity_penalty_value = payload["similarityPenalty"] if "similarityPenalty" in payload else payload.get("similarity_penalty")
-        similarity_bypass_value = (
-            payload["similarityBypassScoreDelta"]
-            if "similarityBypassScoreDelta" in payload
-            else payload.get("similarity_bypass_score_delta")
-        )
-        state_cooldown_enabled_value = payload["stateCooldownEnabled"] if "stateCooldownEnabled" in payload else payload.get("state_cooldown_enabled")
-        state_cooldown_minutes_value = payload["stateCooldownMinutes"] if "stateCooldownMinutes" in payload else payload.get("state_cooldown_minutes")
-        market_hours_enabled_value = payload["marketHoursEnabled"] if "marketHoursEnabled" in payload else payload.get("market_hours_enabled")
+            markets = default_market_hours_markets(message_type)
+
         return cls(
             message_type=message_type,
             enabled=bool_value(payload.get("enabled"), True),
-            threshold=clamp_int(payload.get("threshold"), 0, 100, default_threshold(message_type)),
-            base_score=clamp_int(base_score_value, 0, 100, default_base_score(message_type)),
-            low_score_action=str(payload.get("lowScoreAction") or payload.get("low_score_action") or DEFAULT_LOW_SCORE_ACTION).strip() or DEFAULT_LOW_SCORE_ACTION,
             conditions=conditions,
-            similarity_enabled=bool_value(similarity_enabled_value, default_similarity_enabled(message_type)),
-            similarity_window_minutes=clamp_int(similarity_window_value, 0, 10080, default_similarity_window_minutes(message_type)),
-            similarity_penalty=clamp_int(similarity_penalty_value, -100, 0, default_similarity_penalty(message_type)),
-            similarity_bypass_score_delta=clamp_int(similarity_bypass_value, 0, 100, default_similarity_bypass_score_delta(message_type)),
+            similarity_enabled=bool_value(
+                payload.get("similarityEnabled", payload.get("similarity_enabled")),
+                default_similarity_enabled(message_type),
+            ),
+            similarity_window_minutes=clamp_int(
+                payload.get("similarityWindowMinutes", payload.get("similarity_window_minutes")),
+                0,
+                10080,
+                default_similarity_window_minutes(message_type),
+            ),
             similarity_bypass_conditions=bypass_conditions,
             similarity_fields=similarity_fields,
-            state_cooldown_enabled=bool_value(state_cooldown_enabled_value, default_state_cooldown_enabled(message_type)),
-            state_cooldown_minutes=clamp_int(state_cooldown_minutes_value, 0, 10080, default_state_cooldown_minutes(message_type)),
-            market_hours_enabled=bool_value(market_hours_enabled_value, default_market_hours_enabled(message_type)),
-            market_hours_markets=market_hours_markets,
+            state_cooldown_enabled=bool_value(
+                payload.get("stateCooldownEnabled", payload.get("state_cooldown_enabled")),
+                default_state_cooldown_enabled(message_type),
+            ),
+            state_cooldown_minutes=clamp_int(
+                payload.get("stateCooldownMinutes", payload.get("state_cooldown_minutes")),
+                0,
+                10080,
+                default_state_cooldown_minutes(message_type),
+            ),
+            market_hours_enabled=bool_value(
+                payload.get("marketHoursEnabled", payload.get("market_hours_enabled")),
+                default_market_hours_enabled(message_type),
+            ),
+            market_hours_markets=markets,
             updated_at=str(payload.get("updatedAt") or payload.get("updated_at") or ""),
         )
 
@@ -458,14 +353,9 @@ class NotificationRuleConfig:
         return {
             "messageType": self.message_type,
             "enabled": bool(self.enabled),
-            "threshold": int(self.threshold or 0),
-            "baseScore": int(self.base_score or 0),
-            "lowScoreAction": self.low_score_action or DEFAULT_LOW_SCORE_ACTION,
             "conditions": [condition.to_dict() for condition in self.conditions],
             "similarityEnabled": bool(self.similarity_enabled),
             "similarityWindowMinutes": int(self.similarity_window_minutes or 0),
-            "similarityPenalty": int(self.similarity_penalty or 0),
-            "similarityBypassScoreDelta": int(self.similarity_bypass_score_delta or 0),
             "similarityBypassConditions": [condition.to_dict() for condition in self.similarity_bypass_conditions],
             "similarityFields": list(self.similarity_fields or []),
             "stateCooldownEnabled": bool(self.state_cooldown_enabled),
@@ -480,17 +370,21 @@ class NotificationRuleConfig:
 class NotificationRuleDecision:
     message_type: str
     enabled: bool
-    score: int
-    threshold: int
     should_send: bool
-    low_score_action: str
+    delivery_state: str
+    gate_state: str
+    gate_reason: str
+    review_level: str = "observe"
+    data_state: str = "partial"
+    change_state: str = "unchanged"
+    conflict_state: str = "context-only"
+    validation_state: str = "conditional"
     reasons: List[str] = dataclass_field(default_factory=list)
+    matched_conditions: List[str] = dataclass_field(default_factory=list)
     fingerprint: str = ""
     similarity_enabled: bool = False
     similarity_window_minutes: int = 0
-    similarity_penalty: int = 0
     similarity_recent_count: int = 0
-    similarity_previous_score: int = 0
     similarity_bypassed: bool = False
     similarity_bypass_reason: str = ""
     suppression_reason: str = ""
@@ -512,39 +406,50 @@ class NotificationRuleDecision:
     market_hours_close_time: str = ""
     market_hours_timezone: str = ""
     market_hours_markets: List[str] = dataclass_field(default_factory=list)
-    notification_formula_audit: Dict[str, object] = dataclass_field(default_factory=dict)
     previous_profit_loss_rate: object = None
     profit_loss_rate_delta_pct: object = None
 
+    def mark_suppressed(self, reason_code: str, reason: str) -> None:
+        self.should_send = False
+        self.delivery_state = "suppressed"
+        self.gate_state = "blocked"
+        self.suppression_reason = reason_code
+        self.gate_reason = reason
+
+    def mark_bypass(self, reason: str) -> None:
+        self.should_send = True
+        self.delivery_state = "bypass"
+        self.gate_state = "bypass"
+        self.gate_reason = reason
+
     def to_context(self) -> Dict[str, object]:
-        decision = "send" if self.should_send else "suppressed"
-        if not self.enabled:
-            decision = "bypass"
         payload = {
-            "honeyScore": self.score,
-            "honeyThreshold": self.threshold,
-            "honeyScoreText": str(self.score) + "/" + str(self.threshold),
-            "honeyDecision": decision,
-            "honeyReasons": list(self.reasons or []),
-            "honeyRuleEnabled": bool(self.enabled),
-            "honeyLowScoreAction": self.low_score_action,
-            "honeyFingerprint": self.fingerprint,
-            "honeySimilarityEnabled": bool(self.similarity_enabled),
-            "honeySimilarityWindowMinutes": self.similarity_window_minutes,
-            "honeySimilarityPenalty": self.similarity_penalty,
-            "honeySimilarityRecentCount": self.similarity_recent_count,
-            "honeySimilarityPreviousScore": self.similarity_previous_score,
-            "honeySimilarityBypassed": bool(self.similarity_bypassed),
-            "honeySimilarityBypassReason": self.similarity_bypass_reason,
-            "honeySuppressionReason": self.suppression_reason,
-            "honeyStateCooldownEnabled": bool(self.state_cooldown_enabled),
-            "honeyStateCooldownMinutes": self.state_cooldown_minutes,
-            "honeyStateRecentSentCount": self.state_recent_sent_count,
-            "honeyStateLastSentAt": self.state_last_sent_at,
-            "honeyStateLastSentAgeMinutes": self.state_last_sent_age_minutes,
-            "honeyStateDecision": self.state_decision,
-            "honeyStateReason": self.state_reason,
-            "honeyStateSuppressed": bool(self.state_suppressed),
+            "deliveryDecision": self.delivery_state,
+            "deliveryGateState": self.gate_state,
+            "deliveryGateReason": self.gate_reason,
+            "deliveryReasons": list(self.reasons or []),
+            "deliveryMatchedConditions": list(self.matched_conditions or []),
+            "deliveryRuleEnabled": bool(self.enabled),
+            "deliveryFingerprint": self.fingerprint,
+            "deliveryReviewLevel": self.review_level,
+            "deliveryDataState": self.data_state,
+            "deliveryChangeState": self.change_state,
+            "deliveryConflictState": self.conflict_state,
+            "deliveryValidationState": self.validation_state,
+            "repeatFilterEnabled": bool(self.similarity_enabled),
+            "repeatWindowMinutes": self.similarity_window_minutes,
+            "repeatRecentCount": self.similarity_recent_count,
+            "repeatBypassed": bool(self.similarity_bypassed),
+            "repeatBypassReason": self.similarity_bypass_reason,
+            "deliverySuppressionReason": self.suppression_reason,
+            "cooldownEnabled": bool(self.state_cooldown_enabled),
+            "cooldownMinutes": self.state_cooldown_minutes,
+            "cooldownRecentSentCount": self.state_recent_sent_count,
+            "cooldownLastSentAt": self.state_last_sent_at,
+            "cooldownLastSentAgeMinutes": self.state_last_sent_age_minutes,
+            "cooldownDecision": self.state_decision,
+            "cooldownReason": self.state_reason,
+            "cooldownSuppressed": bool(self.state_suppressed),
             "marketHoursEnabled": bool(self.market_hours_enabled),
             "marketHoursMarket": self.market_hours_market,
             "marketHoursLabel": self.market_hours_label,
@@ -556,7 +461,6 @@ class NotificationRuleDecision:
             "marketHoursCloseTime": self.market_hours_close_time,
             "marketHoursTimezone": self.market_hours_timezone,
             "marketHoursMarkets": list(self.market_hours_markets or []),
-            "notificationFormulaAudit": dict(self.notification_formula_audit or {}),
         }
         if self.previous_profit_loss_rate is not None:
             payload["previousProfitLossRate"] = self.previous_profit_loss_rate
@@ -567,57 +471,23 @@ class NotificationRuleDecision:
 
 def default_conditions() -> List[NotificationRuleCondition]:
     return [
-        NotificationRuleCondition("severity_alert", "주의 등급", "context_equals", 25, field="severity", value="ALERT"),
-        NotificationRuleCondition("severity_watch", "관찰 등급", "context_equals", 10, field="severity", value="WATCH"),
-        NotificationRuleCondition("has_symbol", "종목 지정", "context_present", 10, field="symbol"),
-        NotificationRuleCondition(
-            "important_terms",
-            "핵심 투자 단어",
-            "context_contains_any",
-            15,
-            field="notificationSignals",
-            terms=["important"],
-        ),
-        NotificationRuleCondition(
-            "confirming_data",
-            "확인 데이터 포함",
-            "context_contains_any",
-            10,
-            field="notificationSignals",
-            terms=["confirmingData"],
-        ),
-        NotificationRuleCondition(
-            "actionable_terms",
-            "행동 필요 표현",
-            "context_contains_any",
-            10,
-            field="notificationSignals",
-            terms=["actionable"],
-        ),
-        NotificationRuleCondition(
-            "body_present",
-            "본문 있음",
-            "context_present",
-            5,
-            field="body",
-        ),
-        NotificationRuleCondition(
-            "status_noise",
-            "상태성 노이즈",
-            "context_contains_any",
-            -25,
-            field="notificationSignals",
-            terms=["statusNoise"],
-        ),
+        NotificationRuleCondition("severity_alert", "주의 단계", "context_equals", field="severity", value="ALERT"),
+        NotificationRuleCondition("severity_watch", "관찰 단계", "context_equals", field="severity", value="WATCH"),
+        NotificationRuleCondition("has_symbol", "종목 지정", "context_present", field="symbol"),
+        NotificationRuleCondition("important_terms", "중요 투자 내용", "context_contains_any", field="notificationSignals", terms=["important"]),
+        NotificationRuleCondition("confirming_data", "확인 자료 포함", "context_contains_any", field="notificationSignals", terms=["confirmingData"]),
+        NotificationRuleCondition("actionable_terms", "대응 확인 필요", "context_contains_any", field="notificationSignals", terms=["actionable"]),
+        NotificationRuleCondition("body_present", "본문 있음", "context_present", field="body"),
+        NotificationRuleCondition("status_noise", "상태성 반복 내용", "context_contains_any", field="notificationSignals", terms=["statusNoise"]),
     ]
 
 
 def ontology_insight_conditions() -> List[NotificationRuleCondition]:
     return [
-        NotificationRuleCondition("ontology_relation_score", "관계 강도", "context_number_gte", 15, field="ontologyInsight.score", value=55),
-        NotificationRuleCondition("ontology_novelty_score", "관계 신규성", "context_number_gte", 15, field="ontologyInsight.noveltyScore", value=65),
-        NotificationRuleCondition("ontology_confidence", "인사이트 신뢰도", "context_number_gte", 10, field="ontologyInsight.confidence", value=70),
-        NotificationRuleCondition("ontology_source_signals", "근거 신호 묶음", "context_present", 5, field="sourceSignalTypes"),
+        NotificationRuleCondition("ontology_review_act", "대응 준비 단계", "context_equals", field="ontologyInsight.reviewLevel", value="act"),
+        NotificationRuleCondition("ontology_review_immediate", "즉시 재확인 단계", "context_equals", field="ontologyInsight.reviewLevel", value="immediate"),
+        NotificationRuleCondition("ontology_change", "관계 변화 있음", "context_present", field="ontologyInsight.changeState"),
+        NotificationRuleCondition("ontology_source_signals", "근거 종류 있음", "context_present", field="sourceSignalTypes"),
     ]
 
 
@@ -635,15 +505,13 @@ def default_notification_rule(message_type: str) -> NotificationRuleConfig:
     return NotificationRuleConfig(
         message_type=key,
         enabled=True,
-        threshold=default_threshold(key),
-        base_score=default_base_score(key),
-        low_score_action=DEFAULT_LOW_SCORE_ACTION,
         conditions=conditions,
         similarity_enabled=default_similarity_enabled(key),
         similarity_window_minutes=default_similarity_window_minutes(key),
-        similarity_penalty=default_similarity_penalty(key),
-        similarity_bypass_score_delta=default_similarity_bypass_score_delta(key),
-        similarity_bypass_conditions=[SimilarityBypassCondition.from_dict(condition.to_dict()) for condition in default_similarity_bypass_conditions(key)],
+        similarity_bypass_conditions=[
+            SimilarityBypassCondition.from_dict(condition.to_dict())
+            for condition in default_similarity_bypass_conditions(key)
+        ],
         similarity_fields=similarity_fields,
         state_cooldown_enabled=default_state_cooldown_enabled(key),
         state_cooldown_minutes=default_state_cooldown_minutes(key),

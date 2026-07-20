@@ -91,7 +91,8 @@ def add_coverage_gap_concepts(
             continue
         coverage_ratio = len(present) / max(1, len(required))
         severity = coverage_severity(coverage_ratio, missing)
-        impact = coverage_opinion_impact(severity, missing)
+        data_state = "unavailable" if severity == "high" else "insufficient" if severity == "medium" else "partial"
+        review_level = "blocked" if severity == "high" else "check" if severity == "medium" else "observe"
         label = (position.name or symbol) + " 온톨로지 커버리지 부족"
         gap_id = add_entity(graph, "coverage-gap", symbol, label, {
             "tboxClass": "CoverageGap",
@@ -107,16 +108,18 @@ def add_coverage_gap_concepts(
             "coverageRatio": round(coverage_ratio, 3),
             "severity": severity,
             "missingCount": len(missing),
-            "opinionImpact": impact,
+            "reviewLevel": review_level,
+            "dataState": data_state,
+            "evidenceRole": "blocking",
             "dataScope": "ontology-coverage",
             "scope": "ontology-coverage",
         })
         properties = {
             "source": "ontology-coverage-gate",
-            "polarity": "risk",
-            "riskImpact": impact,
-            "opinionImpact": impact,
-            "confidenceImpact": "decrease",
+            "polarity": "blocking",
+            "evidenceRole": "blocking",
+            "reviewLevel": review_level,
+            "dataState": data_state,
             "aiInfluenceLabel": "온톨로지 커버리지 부족: " + ", ".join(CATEGORY_LABELS.get(category, category) for category in missing[:4]),
             "dataScope": "ontology-coverage",
             "scope": "ontology-coverage",
@@ -124,8 +127,8 @@ def add_coverage_gap_concepts(
             "coverageRatio": round(coverage_ratio, 3),
             "severity": severity,
         }
-        add_relation(graph, stock_id, gap_id, "HAS_COVERAGE_GAP", weight=round(max(0.12, 1 - coverage_ratio), 4), properties=properties)
-        add_relation(graph, stock_id, gap_id, "HAS_DATA_QUALITY", weight=round(max(0.12, coverage_ratio), 4), properties=properties)
+        add_relation(graph, stock_id, gap_id, "HAS_COVERAGE_GAP", weight=1.0, properties=properties)
+        add_relation(graph, stock_id, gap_id, "HAS_DATA_QUALITY", weight=1.0, properties=properties)
 
 
 def relation_types_for_symbols(graph: PortfolioOntology) -> Dict[str, Set[str]]:
@@ -153,11 +156,6 @@ def coverage_severity(coverage_ratio: float, missing: List[str]) -> str:
     if number(coverage_ratio) < 0.72 or {"externalEvidence", "valuation"}.intersection(missing):
         return "medium"
     return "low"
-
-
-def coverage_opinion_impact(severity: str, missing: List[str]) -> float:
-    base = {"high": 9.0, "medium": 5.5, "low": 2.5}.get(str(severity or ""), 4.0)
-    return round(min(14.0, base + len(missing) * 0.6), 2)
 
 
 def unique_list(values: Iterable[str]) -> List[str]:

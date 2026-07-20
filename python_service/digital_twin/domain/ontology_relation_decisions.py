@@ -1,23 +1,7 @@
 from typing import Dict
 
-from .ontology_relation_contracts import DEFAULT_RELATION_THRESHOLDS, DecisionStageDefinition, ScoreBandDefinition
-from .ontology_relation_catalog import DECISION_LABEL_ALIASES, DECISION_STAGE_DEFINITIONS, SCORE_BANDS
-
-
-def score_band(score: float) -> ScoreBandDefinition:
-    value = float(score or 0)
-    for band in SCORE_BANDS:
-        if band.contains(value):
-            return band
-    return SCORE_BANDS[-1]
-
-
-def strength_label(score: float) -> str:
-    return score_band(score).label
-
-
-def relation_score_meaning(score: float) -> str:
-    return score_band(score).meaning
+from .ontology_relation_catalog import DECISION_LABEL_ALIASES, DECISION_STAGE_DEFINITIONS
+from .ontology_relation_contracts import DEFAULT_RELATION_THRESHOLDS, DecisionStageDefinition
 
 
 def decision_stage_by_key(stage_key: str) -> DecisionStageDefinition:
@@ -65,109 +49,87 @@ def decision_action_group_for_label(label: object) -> str:
     return text
 
 
-def _stage_for_score(review_stage: str, action_stage: str, score: float) -> DecisionStageDefinition:
-    return decision_stage_by_key(action_stage if float(score or 0) >= 70 else review_stage)
+def _stage_for_level(review_stage: str, action_stage: str, action_level: str) -> DecisionStageDefinition:
+    return decision_stage_by_key(action_stage if action_level in {"action", "urgent"} else review_stage)
 
 
-def resolve_decision_stage(rule_id: str, score: float, facts: Dict[str, object]) -> DecisionStageDefinition:
-    value = float(score or 0)
-    pnl = float(facts.get("profitLossRate") or 0)
-    loss_threshold = float(facts.get("lossThreshold") or DEFAULT_RELATION_THRESHOLDS["lossRateLow"])
-    if rule_id == "trend.breakdown_acceleration.v1":
-        return decision_stage_by_key("BREAKDOWN_ACCELERATION" if value >= 70 else "LOSS_REDUCE")
-    if rule_id == "breakout.failure.v1":
-        return decision_stage_by_key("BREAKOUT_FAILURE" if value >= 70 else "LOSS_REDUCE")
-    if rule_id == "support.retest.failed.v1":
-        return decision_stage_by_key("SUPPORT_RETEST_FAILED")
-    if rule_id == "support.retest.confirmed.v1":
-        return decision_stage_by_key("SUPPORT_RETEST")
-    if rule_id == "trend.support_retest.v1":
-        return decision_stage_by_key("SUPPORT_RETEST")
-    if rule_id == "trend.recovery_attempt.v1":
-        return decision_stage_by_key("RECOVERY_CONFIRM")
+def resolve_decision_stage(
+    rule_id: str,
+    facts: Dict[str, object],
+    action_level: str = "review",
+) -> DecisionStageDefinition:
+    """Resolve a fallback stage without manufacturing an aggregate score.
+
+    Native TypeDB relations normally provide ``decisionStage`` directly.  This
+    mapping is only for old persisted relations that predate that attribute.
+    """
+    facts = facts or {}
+    level = str(action_level or "review").strip().lower()
+    try:
+        pnl = float(facts.get("profitLossRate") or 0)
+    except (TypeError, ValueError):
+        pnl = 0.0
+    try:
+        loss_threshold = float(facts.get("lossThreshold") or DEFAULT_RELATION_THRESHOLDS["lossRateLow"])
+    except (TypeError, ValueError):
+        loss_threshold = float(DEFAULT_RELATION_THRESHOLDS["lossRateLow"])
+
+    fixed = {
+        "trend.breakdown_acceleration.v1": "BREAKDOWN_ACCELERATION",
+        "breakout.failure.v1": "BREAKOUT_FAILURE",
+        "support.retest.failed.v1": "SUPPORT_RETEST_FAILED",
+        "support.retest.confirmed.v1": "SUPPORT_RETEST",
+        "trend.support_retest.v1": "SUPPORT_RETEST",
+        "trend.recovery_attempt.v1": "RECOVERY_CONFIRM",
+        "factor.crowding.v1": "FACTOR_CROWDING",
+        "distribution.detected.v1": "DISTRIBUTION_REVIEW",
+        "profit.protection.volatility.v1": "PROFIT_PROTECT",
+        "data.conflict.v1": "DATA_CONFLICT",
+        "macro.regime.shift.v1": "MACRO_REGIME",
+        "disclosure.material_event.v1": "DISCLOSURE_REVIEW",
+        "news.direct_risk.new_material.v1": "NEWS_RISK",
+        "news.direct_risk.price_confirmed.v1": "NEWS_RISK",
+        "news.direct_support.new_material.v1": "NEWS_CONFIRMATION",
+        "news.direct_support.price_confirmed.v1": "NEWS_CONFIRMATION",
+        "news.direct_material.new.v1": "NEWS_CONFIRMATION",
+        "news.sector_peer_context.v1": "SECTOR_NEWS",
+        "holding.loss_smart_money.defense.v1": "FLOW_DEFENSE",
+        "holding.investor_flow.smart_money_accumulation.v1": "FLOW_DEFENSE",
+        "graph.investor_flow.smart_money_accumulation.v1": "FLOW_DEFENSE",
+        "holding.investor_flow.retail_dip_buying_risk.v1": "ADD_BUY_BLOCKED",
+        "graph.investor_flow.retail_dip_buying_risk.v1": "ADD_BUY_BLOCKED",
+        "holding.investor_flow.smart_money_outflow_risk.v1": "LIQUIDITY_REVIEW",
+        "graph.investor_flow.smart_money_outflow_risk.v1": "LIQUIDITY_REVIEW",
+        "holding.loss_smart_money.reversal_watch.v1": "ADD_BUY_WATCH",
+        "holding.loss_smart_money.add_buy_review.v1": "ADD_BUY_REVIEW",
+        "holding.winner_momentum.add_buy_review.v1": "ADD_BUY_REVIEW",
+        "entry.wait_for_confirmation.v1": "ENTRY_WAIT",
+        "entry.add_buy.blocked.v1": "ADD_BUY_BLOCKED",
+        "averaging_down.block.v1": "ADD_BUY_BLOCKED",
+        "holding.averaging_down.risk_guard.v1": "ADD_BUY_BLOCKED",
+    }
+    if rule_id in fixed:
+        return decision_stage_by_key(fixed[rule_id])
     if rule_id == "holding.loss_guard.breakdown.v1":
-        if value >= 70 and pnl <= loss_threshold:
+        if pnl <= loss_threshold and level in {"action", "urgent"}:
             return decision_stage_by_key("LOSS_CUT")
-        if value >= 55:
-            return decision_stage_by_key("LOSS_REDUCE")
-        return decision_stage_by_key("LOSS_WATCH")
+        return decision_stage_by_key("LOSS_REDUCE" if pnl < 0 else "LOSS_WATCH")
     if rule_id == "holding.profit_take.trend_weakness.v1":
-        return _stage_for_score("PROFIT_PARTIAL", "PROFIT_SPLIT", value)
+        return _stage_for_level("PROFIT_PARTIAL", "PROFIT_SPLIT", level)
     if rule_id == "holding.concentration.rebalance.v1":
-        return _stage_for_score("REBALANCE_REVIEW", "REBALANCE_ACTION", value)
-    if rule_id == "factor.crowding.v1":
-        return decision_stage_by_key("FACTOR_CROWDING")
+        return _stage_for_level("REBALANCE_REVIEW", "REBALANCE_ACTION", level)
     if rule_id == "liquidity.exit_capacity.v1":
-        return _stage_for_score("LIQUIDITY_REVIEW", "LIQUIDITY_ACTION", value)
-    if rule_id == "distribution.detected.v1":
-        return decision_stage_by_key("DISTRIBUTION_REVIEW")
-    if rule_id == "profit.protection.volatility.v1":
-        return decision_stage_by_key("PROFIT_PROTECT")
-    if rule_id == "data.conflict.v1":
-        return decision_stage_by_key("DATA_CONFLICT")
-    if rule_id == "macro.regime.shift.v1":
-        return decision_stage_by_key("MACRO_REGIME")
+        return _stage_for_level("LIQUIDITY_REVIEW", "LIQUIDITY_ACTION", level)
     if rule_id == "rates.interest_rate.sensitivity.v1":
-        return _stage_for_score("RATE_REVIEW", "RATE_ACTION", value)
+        return _stage_for_level("RATE_REVIEW", "RATE_ACTION", level)
     if rule_id == "fx.usd_krw.exposure.v1":
-        return _stage_for_score("FX_REVIEW", "FX_ACTION", value)
+        return _stage_for_level("FX_REVIEW", "FX_ACTION", level)
     if rule_id == "external.crypto.btc_sensitivity.v1":
-        return _stage_for_score("BTC_REVIEW", "BTC_REDUCE", value)
-    if rule_id == "disclosure.material_event.v1":
-        return decision_stage_by_key("DISCLOSURE_REVIEW")
-    if rule_id == "news.direct_risk.new_material.v1":
-        return decision_stage_by_key("NEWS_RISK")
-    if rule_id == "news.direct_risk.price_confirmed.v1":
-        return decision_stage_by_key("NEWS_RISK")
-    if rule_id == "news.direct_support.new_material.v1":
-        return decision_stage_by_key("NEWS_CONFIRMATION")
-    if rule_id == "news.direct_support.price_confirmed.v1":
-        return decision_stage_by_key("NEWS_CONFIRMATION")
-    if rule_id == "news.direct_material.new.v1":
-        return decision_stage_by_key("NEWS_CONFIRMATION")
-    if rule_id == "news.sector_peer_context.v1":
-        return decision_stage_by_key("SECTOR_NEWS")
+        return _stage_for_level("BTC_REVIEW", "BTC_REDUCE", level)
     if rule_id == "holding.trend_flow.confirmation.v1":
-        return decision_stage_by_key("FLOW_DEFENSE" if value >= 55 else "FLOW_WATCH")
-    if rule_id == "holding.loss_smart_money.defense.v1":
-        return decision_stage_by_key("FLOW_DEFENSE")
-    if rule_id in {"holding.investor_flow.smart_money_accumulation.v1", "graph.investor_flow.smart_money_accumulation.v1"}:
-        return decision_stage_by_key("FLOW_DEFENSE")
-    if rule_id in {"holding.investor_flow.retail_dip_buying_risk.v1", "graph.investor_flow.retail_dip_buying_risk.v1"}:
-        return decision_stage_by_key("ADD_BUY_BLOCKED")
-    if rule_id in {"holding.investor_flow.smart_money_outflow_risk.v1", "graph.investor_flow.smart_money_outflow_risk.v1"}:
-        return decision_stage_by_key("LIQUIDITY_REVIEW")
-    if rule_id == "holding.loss_smart_money.reversal_watch.v1":
-        return decision_stage_by_key("ADD_BUY_WATCH")
-    if rule_id == "holding.loss_smart_money.add_buy_review.v1":
-        return decision_stage_by_key("ADD_BUY_REVIEW")
-    if rule_id == "holding.winner_momentum.add_buy_review.v1":
-        return decision_stage_by_key("ADD_BUY_REVIEW")
-    if rule_id == "entry.pullback.supported.v1":
-        if value >= 70:
+        return decision_stage_by_key("FLOW_DEFENSE" if level in {"review", "action", "urgent"} else "FLOW_WATCH")
+    if rule_id in {"entry.pullback.supported.v1", "entry.momentum.confirmed.v1"}:
+        if level in {"action", "urgent"}:
             return decision_stage_by_key("ENTRY_READY")
-        if value >= 55:
-            return decision_stage_by_key("ENTRY_SPLIT_BUY")
-        return decision_stage_by_key("ENTRY_WATCH")
-    if rule_id == "entry.momentum.confirmed.v1":
-        if value >= 70:
-            return decision_stage_by_key("ENTRY_READY")
-        return decision_stage_by_key("ENTRY_SPLIT_BUY")
-    if rule_id == "entry.wait_for_confirmation.v1":
-        return decision_stage_by_key("ENTRY_WAIT")
-    if rule_id == "entry.add_buy.blocked.v1":
-        return decision_stage_by_key("ADD_BUY_BLOCKED")
-    if rule_id == "averaging_down.block.v1":
-        return decision_stage_by_key("ADD_BUY_BLOCKED")
-    if rule_id == "holding.averaging_down.risk_guard.v1":
-        return decision_stage_by_key("ADD_BUY_BLOCKED")
+        return decision_stage_by_key("ENTRY_SPLIT_BUY" if level == "review" else "ENTRY_WATCH")
     return decision_stage_by_key("HOLD_KEEP")
-
-
-def relation_score_direction_meaning(delta: float) -> str:
-    value = float(delta or 0)
-    if abs(value) < 0.05:
-        return "이전과 같은 수준의 대응 필요 강도"
-    if value > 0:
-        return "대응 필요 강도가 커졌다는 뜻이며, 가격 상승 예측 점수가 아닙니다"
-    return "대응 필요 강도가 완화됐다는 뜻이며, 매수 신호는 아닙니다"

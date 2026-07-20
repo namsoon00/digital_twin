@@ -380,7 +380,7 @@ class ExternalApiSourceTests(unittest.TestCase):
         evidence = research_evidence_from_external_signals("AAPL", signals)
         self.assertTrue(any(item.kind == "financial-fact" and item.raw_payload.get("provider") == "yfinance" for item in evidence))
 
-    def test_yfinance_stale_modules_reduce_financial_fact_confidence(self):
+    def test_yfinance_stale_modules_mark_financial_fact_as_partial(self):
         signals = {
             "yfinanceData": {
                 "AAPL": {
@@ -409,7 +409,8 @@ class ExternalApiSourceTests(unittest.TestCase):
         evidence = research_evidence_from_external_signals("AAPL", signals)
         item = next(row for row in evidence if row.kind == "financial-fact")
 
-        self.assertEqual(0.42, item.confidence)
+        self.assertEqual("limited", item.source_trust_state)
+        self.assertEqual("partial", item.data_state)
         self.assertEqual("stale", item.raw_payload["freshness"]["status"])
         self.assertIn("stale-yfinance-modules", item.raw_payload["dataQualityRisk"])
 
@@ -513,7 +514,9 @@ class ExternalApiSourceTests(unittest.TestCase):
             NotificationAIValidatedResponse(
                 action="HOLD",
                 action_label="보유",
-                confidence=70,
+                validation_state="conditional",
+                data_state="partial",
+                review_level="check",
                 summary="보유 판단입니다.",
                 evidence=["가격 흐름을 확인했습니다."],
                 opinion="바로 매매보다 확인이 우선입니다.",

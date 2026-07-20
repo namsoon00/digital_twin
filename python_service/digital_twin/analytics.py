@@ -1,5 +1,4 @@
 from .domain.analytics import (
-    SafeFormula,
     StrategyModel,
     clamp,
     decision_for_position,
@@ -14,7 +13,6 @@ from .domain.analytics import (
 )
 
 __all__ = [
-    "SafeFormula",
     "StrategyModel",
     "clamp",
     "decision_for_position",

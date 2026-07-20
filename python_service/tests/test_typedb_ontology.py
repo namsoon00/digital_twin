@@ -57,10 +57,12 @@ class TypeDBOntologyRepositoryTests(unittest.TestCase):
         self.assertIn("owns ontology-leverage-factor", schema)
         self.assertIn("owns ontology-security-line-role", schema)
         self.assertIn("attribute ontology-window-key, value string", schema)
-        self.assertIn("attribute ontology-temporal-risk-score, value double", schema)
+        self.assertIn("attribute ontology-review-level, value string", schema)
+        self.assertIn("attribute ontology-data-state, value string", schema)
         self.assertIn("attribute ontology-event-cluster-type, value string", schema)
         self.assertIn("owns ontology-window-key", schema)
-        self.assertIn("owns ontology-temporal-risk-score", schema)
+        self.assertNotIn("ontology-temporal-risk-score", schema)
+        self.assertNotIn("ontology-temporal-support-score", schema)
 
     def test_typedb_save_graph_returns_error_when_write_operation_times_out(self):
         graph = PortfolioOntology("typedb-timeout-test")
@@ -138,7 +140,7 @@ class TypeDBOntologyRepositoryTests(unittest.TestCase):
 
         self.assertEqual(1, len(inference_graph.entities))
         self.assertEqual(1, len(inference_graph.relations))
-        self.assertEqual(0.8, inference_graph.relations[0].weight)
+        self.assertEqual(1.0, inference_graph.relations[0].weight)
         self.assertEqual(["evidence:1"], inference_graph.relations[0].evidence_ids)
 
     def test_typedb_repository_factory_inherits_ontology_reasoning_native_rule_setting(self):
@@ -336,14 +338,17 @@ class TypeDBOntologyRepositoryTests(unittest.TestCase):
             "pricePathPattern": "PersistentDecline",
             "flowPattern": "SmartMoneyOutflow",
             "trendEpisodeType": "PersistentDecline",
-            "temporalRiskScore": 84,
-            "temporalSupportScore": 0,
+            "reviewLevel": "act",
+            "dataState": "sufficient",
+            "evidenceRole": "risk",
             "hasSufficientHistory": True,
         }))
         graph.relations.append(OntologyRelation("stock:005930", "level:005930:ma20", "BREAKS_LEVEL", 0.8, properties={
             "ontologyBox": "ABox",
-            "riskImpact": 3.2,
             "polarity": "risk",
+            "evidenceRole": "risk",
+            "reviewLevel": "act",
+            "dataState": "sufficient",
             "field": "ma20Distance",
         }))
         repository = TypeDBOntologyGraphRepository("127.0.0.1:1729")
@@ -353,7 +358,9 @@ class TypeDBOntologyRepositoryTests(unittest.TestCase):
         self.assertTrue(any('has ontology-source-value "holding"' in query for query in queries))
         self.assertTrue(any("has ontology-profit-loss-rate -12.5" in query for query in queries))
         self.assertTrue(any('has ontology-level-type "ma20"' in query for query in queries))
-        self.assertTrue(any("has ontology-risk-impact 3.2" in query for query in queries))
+        self.assertTrue(any('has ontology-evidence-role "risk"' in query for query in queries))
+        self.assertTrue(any('has ontology-review-level "act"' in query for query in queries))
+        self.assertTrue(any('has ontology-data-state "sufficient"' in query for query in queries))
         self.assertTrue(any('has ontology-allow-add-on-strength "true"' in query for query in queries))
         self.assertTrue(any('has ontology-avoid-averaging-down "true"' in query for query in queries))
         self.assertTrue(any('has ontology-impact-polarity "risk"' in query for query in queries))
@@ -380,7 +387,7 @@ class TypeDBOntologyRepositoryTests(unittest.TestCase):
         self.assertTrue(any("has ontology-risk-event-count 2.0" in query for query in queries))
         self.assertTrue(any('has ontology-event-cluster-type "EventDrivenRiskCluster"' in query for query in queries))
         self.assertTrue(any('has ontology-trend-episode-type "PersistentDecline"' in query for query in queries))
-        self.assertTrue(any("has ontology-temporal-risk-score 84.0" in query for query in queries))
+        self.assertFalse(any("ontology-temporal-risk-score" in query for query in queries))
 
     def test_typedb_read_query_metrics_record_row_count_and_hash(self):
         class FakeConcept:
@@ -1170,15 +1177,18 @@ class TypeDBOntologyRepositoryTests(unittest.TestCase):
                 "symbol": "005930",
                 "ruleId": "graph.loss_guard.breakdown.v1",
                 "tboxClass": "RiskSignal",
-                "confidence": 0.86,
+                "reviewLevel": "act",
+                "dataState": "sufficient",
+                "validationState": "conditional",
                 "nativeTypeDbReasoned": True,
                 "propertiesJson": json.dumps({
                     "ontologyBox": "InferenceBox",
                     "symbol": "005930",
                     "ruleId": "graph.loss_guard.breakdown.v1",
-                    "confidence": 0.86,
+                    "reviewLevel": "act",
+                    "dataState": "sufficient",
+                    "validationState": "conditional",
                     "decisionStage": "LOSS_REDUCE",
-                    "stagePriority": 90,
                     "nativeTypeDbReasoned": True,
                 }),
             },
@@ -1189,15 +1199,18 @@ class TypeDBOntologyRepositoryTests(unittest.TestCase):
                 "ontologyBox": "InferenceBox",
                 "symbol": "005930",
                 "ruleId": "graph.loss_guard.breakdown.v1",
-                "confidence": 0.86,
+                "reviewLevel": "act",
+                "dataState": "sufficient",
+                "validationState": "conditional",
                 "nativeTypeDbReasoned": True,
                 "propertiesJson": json.dumps({
                     "ontologyBox": "InferenceBox",
                     "symbol": "005930",
                     "ruleId": "graph.loss_guard.breakdown.v1",
-                    "confidence": 0.86,
+                    "reviewLevel": "act",
+                    "dataState": "sufficient",
+                    "validationState": "conditional",
                     "matchedConditions": [{"conditionId": "holding-loss"}],
-                    "evidenceCoverage": 100,
                     "freshnessStatus": "fresh",
                     "nativeTypeDbReasoned": True,
                 }),
@@ -1219,9 +1232,10 @@ class TypeDBOntologyRepositoryTests(unittest.TestCase):
                     "ontologyBox": "InferenceBox",
                     "symbol": "005930",
                     "ruleId": "graph.loss_guard.breakdown.v1",
-                    "riskImpact": 13,
+                    "evidenceRole": "risk",
+                    "reviewLevel": "act",
+                    "dataState": "sufficient",
                     "decisionStage": "LOSS_REDUCE",
-                    "stagePriority": 90,
                     "aiInfluenceLabel": "손실 방어 추론",
                     "inferenceTraceId": "inference-trace:005930:graph.loss_guard.breakdown.v1",
                     "nativeTypeDbReasoned": True,
@@ -1251,7 +1265,9 @@ class TypeDBOntologyRepositoryTests(unittest.TestCase):
         self.assertEqual(23, snapshot["ruleboxRuleCount"])
         self.assertEqual(0, snapshot["ignoredNonNativeRelationCount"])
         self.assertEqual(["holding-loss"], snapshot["traces"][0]["matchedConditionIds"])
-        self.assertEqual(100, snapshot["traces"][0]["evidenceCoverage"])
+        self.assertEqual("act", snapshot["traces"][0]["reviewLevel"])
+        self.assertEqual("sufficient", snapshot["traces"][0]["dataState"])
+        self.assertEqual("conditional", snapshot["traces"][0]["validationState"])
         self.assertEqual("fresh", snapshot["traces"][0]["freshnessStatus"])
 
     def test_typedb_inferencebox_snapshot_exposes_typeql_read_errors(self):

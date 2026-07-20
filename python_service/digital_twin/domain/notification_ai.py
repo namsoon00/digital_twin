@@ -182,8 +182,9 @@ def compact_trend_dynamics_summary(context: Dict[str, object]) -> str:
         scenario_parts.append("하락 가속")
     if scenario_parts:
         rows.append("/".join(scenario_parts[:2]))
-    if dynamics.get("dynamicRiskScore") not in (None, ""):
-        rows.append("리스크 " + str(dynamics.get("dynamicRiskScore")) + "점")
+    review_label = str(dynamics.get("reviewLabel") or dynamics.get("reviewLevelLabel") or "").strip()
+    if review_label:
+        rows.append(review_label)
     return ", ".join(rows[:3])
 
 
@@ -272,8 +273,9 @@ def trend_dynamics_summary(context: Dict[str, object]) -> str:
         scenario_parts.append("하락 가속")
     if scenario_parts:
         parts.append("시나리오 " + ", ".join(scenario_parts))
-    if dynamics.get("dynamicRiskScore") not in (None, ""):
-        parts.append("동역학 리스크 " + str(dynamics.get("dynamicRiskScore")) + "점")
+    review_label = str(dynamics.get("reviewLabel") or dynamics.get("reviewLevelLabel") or "").strip()
+    if review_label:
+        parts.append("확인 단계 " + review_label)
     return " / ".join(parts[:6])
 
 
@@ -472,7 +474,8 @@ def opinion_lines_for_type(message_type: str, context: Dict[str, object]) -> Lis
     target = target_label(context)
     active_opinion = active_investment_opinion_value(context)
     active_label = str(active_opinion.get("actionLabel") or active_opinion.get("action") or "").strip()
-    active_conviction = active_opinion.get("conviction")
+    active_review_label = str(active_opinion.get("reviewLevelLabel") or "").strip()
+    active_data_label = str(active_opinion.get("dataStateLabel") or "").strip()
     active_thesis = str(active_opinion.get("thesis") or "").strip()
     active_next_check = str(active_opinion.get("nextCheck") or "").strip()
     active_invalidation = str(active_opinion.get("invalidationCondition") or "").strip()
@@ -508,7 +511,7 @@ def opinion_lines_for_type(message_type: str, context: Dict[str, object]) -> Lis
         if any(term in (insight_label + thesis + action_line) for term in ["분할매도", "익절", "리밸런싱"]):
             stance = "분할매도·비중 조정 우선"
         if active_label:
-            stance = active_label + (" · 확신 " + str(active_conviction) + "%" if active_conviction not in (None, "") else "")
+            stance = active_label + (" · " + active_review_label if active_review_label else "")
             if primary_action and primary_action not in stance:
                 stance += " · " + primary_action
         reason_text = investment_reason_text(
@@ -568,7 +571,9 @@ def opinion_lines_for_type(message_type: str, context: Dict[str, object]) -> Lis
         next_check = active_next_check or action or "비중 확대 여부보다 손실 기준, 분할 대응 기준, 추세 회복 조건을 먼저 확인하세요."
         result = []
         if active_label:
-            result.append("판단: " + active_label + (" · 확신 " + str(active_conviction) + "%" if active_conviction not in (None, "") else ""))
+            result.append("판단: " + active_label + (" · " + active_review_label if active_review_label else ""))
+            if active_data_label:
+                result.append("자료 상태: " + active_data_label)
         result.append("상황: " + situation)
         if active_thesis:
             result.append("투자 의견 근거: " + active_thesis)
@@ -614,7 +619,7 @@ def opinion_lines_for_type(message_type: str, context: Dict[str, object]) -> Lis
         current_value = line_value(lines, "현재")
         result = []
         if active_label:
-            result.append("판단: " + active_label + (" · 확신 " + str(active_conviction) + "%" if active_conviction not in (None, "") else ""))
+            result.append("판단: " + active_label + (" · " + active_review_label if active_review_label else ""))
         result.extend([
             "해석: 판단명이 바뀐 알림입니다. " + " -> ".join(part for part in [previous_value, current_value] if part),
         ])
@@ -623,7 +628,7 @@ def opinion_lines_for_type(message_type: str, context: Dict[str, object]) -> Lis
         if active_counter:
             result.append("반대 근거: " + active_counter)
         result.extend([
-            "의견: " + (active_label or "점수 변화만 보지 말고 선택 규칙과 성립 규칙 조합이 바뀌었는지 먼저 확인해야 합니다.") + (". 무효화 조건: " + active_invalidation if active_invalidation else ""),
+            "의견: " + (active_label or "표시된 단계만 보지 말고 어떤 규칙과 근거 조합이 새로 성립했는지 먼저 확인해야 합니다.") + (". 무효화 조건: " + active_invalidation if active_invalidation else ""),
             "다음 확인: " + (active_next_check or "같은 판단이 다음 조회에서도 유지되는지, 임계값 근처 흔들림인지 구분하세요."),
         ])
         return result
@@ -642,7 +647,7 @@ def opinion_lines_for_type(message_type: str, context: Dict[str, object]) -> Lis
     if message_type == "monitorTrendChange":
         return [
             "해석: 이동평균과 현재가의 관계가 바뀌었습니다. " + (signal or trend or ""),
-            "의견: 추세 알림은 방향 신호입니다. 거래량과 투자자 수급이 같이 붙으면 신뢰도가 올라가고, 없으면 노이즈 가능성이 남습니다.",
+            "의견: 추세 알림은 방향 신호입니다. 거래량과 투자자 수급이 같이 움직이면 근거가 보강되고, 그렇지 않으면 일시적 흔들림일 수 있습니다.",
             "다음 확인: 20일선 회복/이탈이 다음 봉에서도 유지되는지와 거래량 배율을 같이 보세요.",
         ]
     if message_type == "monitorPnlChange":

@@ -30,14 +30,6 @@ def int_setting(settings: Dict[str, object], key: str, fallback: int, lower: int
     return max(lower, min(upper, int(parsed or fallback)))
 
 
-def float_setting(settings: Dict[str, object], key: str, fallback: float, lower: float = 0.0, upper: float = 1.0) -> float:
-    raw = settings.get(key) if isinstance(settings, dict) else None
-    parsed = number(raw)
-    if parsed == 0 and raw in (None, ""):
-        parsed = fallback
-    return max(lower, min(upper, float(parsed or fallback)))
-
-
 def source_item_id(item: Dict[str, object]) -> str:
     return clean_text(item.get("evidenceId") or item.get("id"), 191)
 
@@ -129,9 +121,6 @@ class InvestmentCalendarResearchRecommendationService:
     def candidate_limit(self) -> int:
         return int_setting(self.settings, "investmentCalendarAiResearchCandidateLimit", 50, 1, 200)
 
-    def review_min_confidence(self) -> float:
-        return float_setting(self.settings, "investmentCalendarAiResearchReviewMinConfidence", 0.25, 0.01, 0.99)
-
     def feedback(self) -> Dict[str, object]:
         if not self.candidate_repository or not hasattr(self.candidate_repository, "feedback_summary"):
             return {}
@@ -204,8 +193,10 @@ class InvestmentCalendarResearchRecommendationService:
             "sourceEvidenceSummary": clean_text(source_item.get("summary") or source_item.get("analysisSummary") or source_item.get("articleSummaryKo"), 700),
             "sourcePublishedAt": clean_text(source_item.get("publishedAt"), 80),
             "sourceObservedAt": clean_text(source_item.get("observedAt"), 80),
-            "sourceReliability": source_item.get("sourceReliability"),
-            "materialityScore": source_item.get("materialityScore"),
+            "sourceTrustState": source_item.get("sourceTrustState"),
+            "materialityState": source_item.get("materialityState"),
+            "dataState": source_item.get("dataState"),
+            "validationState": source_item.get("validationState"),
             "collection": compact_collection_result(collection_result),
         })
         payload["payload"] = body
@@ -227,8 +218,7 @@ class InvestmentCalendarResearchRecommendationService:
         candidate_sets = calendar_candidate_sets_from_research_items(
             items,
             register_undated=False,
-            min_confidence=1.01,
-            review_min_confidence=self.review_min_confidence(),
+            force_review=True,
             feedback=self.feedback(),
         )
         candidates = list(candidate_sets.get("review") or [])[: self.candidate_limit()]

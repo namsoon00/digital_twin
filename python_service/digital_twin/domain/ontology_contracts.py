@@ -2,6 +2,8 @@ import re
 from dataclasses import asdict, dataclass, field
 from typing import Dict, List, Optional
 
+from .ontology_decision_state import without_aggregate_decision_fields
+
 
 @dataclass
 class OntologyEntity:
@@ -9,6 +11,9 @@ class OntologyEntity:
     label: str
     kind: str
     properties: Dict[str, object] = field(default_factory=dict)
+
+    def __post_init__(self) -> None:
+        self.properties = without_aggregate_decision_fields(dict(self.properties or {}))
 
     def to_dict(self) -> Dict[str, object]:
         payload = asdict(self)
@@ -25,6 +30,10 @@ class OntologyRelation:
     evidence_ids: List[str] = field(default_factory=list)
     properties: Dict[str, object] = field(default_factory=dict)
 
+    def __post_init__(self) -> None:
+        self.weight = 1.0
+        self.properties = without_aggregate_decision_fields(dict(self.properties or {}))
+
     def to_dict(self) -> Dict[str, object]:
         payload = asdict(self)
         payload["type"] = payload.pop("relation_type")
@@ -39,7 +48,11 @@ class OntologyEvidence:
     source: str
     summary: str
     value: Dict[str, object] = field(default_factory=dict)
-    confidence: float = 0.7
+    evidence_role: str = "context"
+    data_state: str = "partial"
+
+    def __post_init__(self) -> None:
+        self.value = without_aggregate_decision_fields(dict(self.value or {}))
 
     def to_dict(self) -> Dict[str, object]:
         payload = asdict(self)
@@ -53,7 +66,9 @@ class OntologyBelief:
     subject: str
     label: str
     polarity: str
-    confidence: float
+    evidence_role: str = "context"
+    review_level: str = "observe"
+    data_state: str = "partial"
     evidence_ids: List[str] = field(default_factory=list)
 
     def to_dict(self) -> Dict[str, object]:
@@ -67,9 +82,10 @@ class OntologyOpinion:
     symbol: str
     action: str
     tone: str
-    conviction: float
-    ontology_pressure: float
     thesis: str
+    review_level: str = "check"
+    data_state: str = "partial"
+    validation_state: str = "conditional"
     supporting_beliefs: List[str] = field(default_factory=list)
     contradictions: List[str] = field(default_factory=list)
     dominant_risks: List[str] = field(default_factory=list)
@@ -77,6 +93,10 @@ class OntologyOpinion:
     legacy_model: Dict[str, object] = field(default_factory=dict)
     evidence_ids: List[str] = field(default_factory=list)
     relation_influences: List[Dict[str, object]] = field(default_factory=list)
+
+    def __post_init__(self) -> None:
+        self.legacy_model = without_aggregate_decision_fields(dict(self.legacy_model or {}))
+        self.relation_influences = without_aggregate_decision_fields(list(self.relation_influences or []))
 
     def to_dict(self) -> Dict[str, object]:
         return asdict(self)

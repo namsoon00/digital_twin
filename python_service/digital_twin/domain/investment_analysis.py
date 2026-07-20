@@ -1,6 +1,7 @@
 from typing import Dict, List
 
 from .market_data import number
+from .ontology_decision_state import REVIEW_LEVEL_RANK
 
 
 def _list(value) -> List[Dict[str, object]]:
@@ -58,6 +59,9 @@ def _graph_context(item: Dict[str, object]) -> Dict[str, object]:
         "blocked": bool(context.get("blocked")) or str(decision.get("actionLevel") or "") == "blocked",
         "basis": str(decision.get("basis") or item.get("decisionBasis") or ""),
         "decisionStage": str(decision.get("decisionStage") or plan.get("decisionStage") or ""),
+        "reviewLevel": str(decision.get("reviewLevel") or context.get("reviewLevel") or "observe"),
+        "dataState": str(decision.get("dataState") or context.get("dataState") or "partial"),
+        "validationState": str(decision.get("validationState") or context.get("validationState") or "conditional"),
         "reason": str(context.get("reason") or ""),
         "missingData": _list(context.get("missingData")),
         "nextChecks": list(plan.get("nextChecks") or [])[:5] if isinstance(plan.get("nextChecks"), list) else [],
@@ -80,8 +84,9 @@ def _action_queue(decisions: List[Dict[str, object]], positions: List[Dict[str, 
             "sector": str(item.get("sector") or source.get("sector") or ""),
             "decision": str(item.get("decision") or "판단 대기"),
             "tone": str(item.get("tone") or ("caution" if graph["blocked"] else "hold")),
-            "priority": int(number(item.get("priority")) or 9),
-            "score": round(number(item.get("exitPressure")) or number(item.get("score")) or 0, 2),
+            "reviewLevel": str(item.get("reviewLevel") or graph.get("reviewLevel") or "observe"),
+            "dataState": str(item.get("dataState") or graph.get("dataState") or "partial"),
+            "validationState": str(item.get("validationState") or graph.get("validationState") or "conditional"),
             "profitLossRate": round(number(item.get("profitLossRate")) or 0, 2),
             "dataQuality": _data_quality(source),
             "apiSource": _api_source(source),
@@ -90,7 +95,11 @@ def _action_queue(decisions: List[Dict[str, object]], positions: List[Dict[str, 
             "reasons": list(item.get("reasons") or [])[:4] if isinstance(item.get("reasons"), list) else [],
             "triggers": list(item.get("triggers") or [])[:5] if isinstance(item.get("triggers"), list) else [],
         })
-    rows.sort(key=lambda row: (row["priority"], 0 if row["graph"]["blocked"] else 1, -number(row["score"]), row["name"]))
+    rows.sort(key=lambda row: (
+        0 if row["graph"]["blocked"] else 1,
+        -REVIEW_LEVEL_RANK.get(str(row.get("reviewLevel") or "observe"), 1),
+        row["name"],
+    ))
     return rows
 
 

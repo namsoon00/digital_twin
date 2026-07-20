@@ -8,7 +8,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from digital_twin.domain.ontology_prompting import prompt_payload
 from digital_twin.domain.ontology_inference_ledger import inference_trace_ledger_payload
 from digital_twin.domain.instrument_profiles import market_signal_profiles, parse_instrument_profiles_text
-from digital_twin.domain.ontology_decision_policy import decision_stage_from_action, relation_stage_priority
+from digital_twin.domain.ontology_decision_policy import decision_stage_from_action
 from digital_twin.domain.ontology_rulebox_catalog import default_graph_inference_rules
 from digital_twin.domain.ontology_tbox import tbox_class_def
 from digital_twin.domain.ontology_threshold_policy import default_ontology_threshold_policy
@@ -39,17 +39,18 @@ class OntologyRuleBoxTests(unittest.TestCase):
             if item.kind == "threshold-policy" and (item.properties or {}).get("ontologyBox") == "RuleBox"
         ]
         policy_ids = {str((item.properties or {}).get("policyId") or "") for item in policies}
-        action_policy = next(
+        dispatch_policy = next(
             item
             for item in policies
-            if (item.properties or {}).get("policyId") == default_ontology_threshold_policy().action_selection.policy_id
+            if (item.properties or {}).get("policyId") == default_ontology_threshold_policy().watchlist_dispatch.policy_id
         )
-        threshold_payload = action_policy.properties.get("thresholds") or {}
+        threshold_payload = dispatch_policy.properties.get("thresholds") or {}
 
         self.assertIn(default_ontology_threshold_policy().why_now.policy_id, policy_ids)
         self.assertIn(default_ontology_threshold_policy().profit_loss_delivery.policy_id, policy_ids)
-        self.assertEqual("ActionPolicy", action_policy.properties["tboxClass"])
-        self.assertEqual(70.0, threshold_payload["watchlistEntryStrongRelationScore"])
+        self.assertEqual("NotificationPolicy", dispatch_policy.properties["tboxClass"])
+        self.assertEqual("observe", threshold_payload["minimumReviewLevel"])
+        self.assertEqual(("sufficient", "partial"), tuple(threshold_payload["usableDataStates"]))
         self.assertTrue(any(item.relation_type == "DEFINES_POLICY" for item in graph.relations))
 
     def test_rulebox_derivation_and_investor_flow_classes_exist_in_tbox(self):
@@ -682,7 +683,8 @@ class OntologyRuleBoxTests(unittest.TestCase):
         self.assertEqual("HAS_INFERRED_RISK", template_row["derivationRelationType"])
         self.assertEqual("risk", template_row["derivationTargetKind"])
         self.assertEqual("LOSS_REDUCE", template_row["derivationDecisionStage"])
-        self.assertGreaterEqual(template_row["derivationStagePriority"], 40)
+        self.assertEqual("review", template_row["derivationActionLevel"])
+        self.assertEqual("risk", template_row["derivationEvidenceRole"])
         self.assertIn("attribute ontology-rule-id", schema_text)
         self.assertIn("attribute ontology-json", schema_text)
         self.assertIn("attribute ontology-tbox-class", schema_text)
@@ -733,7 +735,7 @@ class OntologyRuleBoxTests(unittest.TestCase):
         self.assertIn("attribute ontology-margin-of-safety-pct", schema_text)
         self.assertIn("owns ontology-margin-of-safety-pct", schema_text)
         self.assertIn("valuationDecisionEligible", margin_condition["conditionTargetFields"])
-        self.assertIn("valuationReliabilityScore", margin_condition["conditionTargetFields"])
+        self.assertIn('"valuationDataState": "sufficient"', margin_condition["propertiesJson"])
         self.assertIn("conservativeMarginOfSafetyPct", margin_condition["conditionTargetFields"])
         self.assertIn("attribute ontology-valuation-decision-eligible", schema_text)
         self.assertIn("attribute ontology-fair-value-low", schema_text)
@@ -874,7 +876,7 @@ class OntologyRuleBoxTests(unittest.TestCase):
         execution_slippage = next(
             item
             for item in condition_rows
-            if item["id"] == "rule-condition:graph.execution.liquidity_or_slippage_block.v1:slippage-score-block"
+            if item["id"] == "rule-condition:graph.execution.liquidity_or_slippage_block.v1:visible-depth-block"
         )
         price_reclaim_not = next(
             item
@@ -989,7 +991,7 @@ class OntologyRuleBoxTests(unittest.TestCase):
         coverage_gap = next(
             item
             for item in condition_rows
-            if item["id"] == "rule-condition:graph.coverage.gap.confidence_limit.v1:coverage-gap"
+            if item["id"] == "rule-condition:graph.coverage.gap.validation_state.v1:coverage-gap"
         )
         bitcoin_profile = next(
             item
@@ -1029,7 +1031,7 @@ class OntologyRuleBoxTests(unittest.TestCase):
         news_quality = next(
             item
             for item in condition_rows
-            if item["id"] == "rule-condition:graph.news.quality.confidence_limit.v1:news-quality-risk"
+            if item["id"] == "rule-condition:graph.news.quality.validation_state.v1:news-quality-risk"
         )
 
         self.assertIn("graph.materiality.alert_candidate.v1", rule_ids)
@@ -1062,10 +1064,10 @@ class OntologyRuleBoxTests(unittest.TestCase):
         self.assertIn("graph.factor.position_crowding.v1", rule_ids)
         self.assertIn("graph.benchmark.beta.context.v1", rule_ids)
         self.assertIn("graph.price.reclaim.thesis_support.v1", rule_ids)
-        self.assertIn("graph.coverage.gap.confidence_limit.v1", rule_ids)
+        self.assertIn("graph.coverage.gap.validation_state.v1", rule_ids)
         self.assertIn("graph.macro.regime.risk.v1", rule_ids)
         self.assertIn("graph.crypto.exposure.volatility_risk.v1", rule_ids)
-        self.assertIn("graph.news.quality.confidence_limit.v1", rule_ids)
+        self.assertIn("graph.news.quality.validation_state.v1", rule_ids)
         self.assertIn("graph.valuation.high_beta_or_expensive.review.v1", rule_ids)
         self.assertIn("graph.portfolio.concentration.review.v1", rule_ids)
         self.assertEqual(["support"], support_transition["conditionRelationPolarities"])
@@ -1077,17 +1079,17 @@ class OntologyRuleBoxTests(unittest.TestCase):
         self.assertEqual(["direct"], direct_news_risk["conditionTargetRelationScopes"])
         self.assertEqual(["risk"], direct_news_risk["conditionTargetPolarities"])
         self.assertTrue(direct_news_risk["conditionTargetMaterialityPassed"])
-        self.assertEqual(65.0, direct_news_risk["conditionTargetMinMaterialityScore"])
+        self.assertEqual(["material", "notable"], direct_news_risk["conditionTargetMaterialityStates"])
         self.assertEqual(["direct"], direct_news_context["conditionTargetRelationScopes"])
         self.assertEqual(["context"], direct_news_context["conditionTargetPolarities"])
-        self.assertEqual(60.0, direct_news_context["conditionTargetMinMaterialityScore"])
+        self.assertEqual(["material", "notable"], direct_news_context["conditionTargetMaterialityStates"])
         self.assertTrue(fact_change_gate["conditionTargetMaterialityPassed"])
         self.assertEqual(["market-microstructure"], microstructure_gap["conditionTargetDataScopes"])
         self.assertEqual(["news-analysis-conflict"], news_analysis_conflict["conditionTargetDataScopes"])
-        self.assertEqual(5.0, news_analysis_conflict["conditionRelationMinRiskImpact"])
+        self.assertEqual(["risk"], news_analysis_conflict["conditionRelationEvidenceRoles"])
         self.assertEqual("any", execution_slippage["conditionRole"])
-        self.assertEqual(["slippageRiskScore"], execution_slippage["conditionTargetFields"])
-        self.assertEqual(70.0, execution_slippage["conditionTargetMinValue"])
+        self.assertEqual(["positionToBidDepthPct"], execution_slippage["conditionTargetFields"])
+        self.assertEqual(30.0, execution_slippage["conditionTargetMinValue"])
         self.assertEqual("not", price_reclaim_not["conditionRole"])
         self.assertEqual("any", portfolio_concentration["conditionRole"])
         self.assertEqual(["ConcentrationRisk"], portfolio_concentration["conditionTargetTboxClasses"])
@@ -1142,7 +1144,7 @@ class OntologyRuleBoxTests(unittest.TestCase):
         self.assertEqual(["avoidAveragingDown"], profile_averaging_policy["conditionTargetFields"])
         self.assertEqual("HAS_COVERAGE_GAP", coverage_gap["conditionRelationType"])
         self.assertEqual("coverage-gap", coverage_gap["conditionTargetKind"])
-        self.assertEqual(4.0, coverage_gap["conditionRelationMinRiskImpact"])
+        self.assertEqual(["risk"], coverage_gap["conditionRelationEvidenceRoles"])
         self.assertEqual("HAS_ARCHETYPE", bitcoin_profile["conditionRelationType"])
         self.assertEqual(["BitcoinProxy", "BitcoinSensitiveIncome"], bitcoin_profile["conditionTargetInstrumentArchetypes"])
         self.assertEqual("HAS_CRYPTO_EXPOSURE", bitcoin_exposure["conditionRelationType"])
@@ -1272,14 +1274,6 @@ class OntologyRuleBoxTests(unittest.TestCase):
                     item["action_level"] = rule.get("action_level")
                 if not item.get("decision_stage"):
                     item["decision_stage"] = decision_stage_from_action(item.get("action_group"), item.get("action_level"))
-                if not item.get("stage_priority"):
-                    item["stage_priority"] = float(relation_stage_priority({
-                        "decisionStage": item.get("decision_stage"),
-                        "actionGroup": item.get("action_group"),
-                        "actionLevel": item.get("action_level"),
-                        "riskImpact": item.get("risk_impact"),
-                        "supportImpact": item.get("support_impact"),
-                    }))
                 derivations.append(item)
             copy["derivations"] = derivations
             enriched.append(copy)
@@ -1377,7 +1371,7 @@ class OntologyRuleBoxTests(unittest.TestCase):
         )
 
         self.assertEqual("risk", observation.properties["polarity"])
-        self.assertGreaterEqual(observation.properties["riskImpact"], 3.0)
+        self.assertEqual("risk", observation.properties["evidenceRole"])
         self.assertEqual("risk", stock_relation.properties["polarity"])
         self.assertIn("btc", stock_relation.properties["overlapFactors"])
 
@@ -1493,7 +1487,8 @@ class OntologyRuleBoxTests(unittest.TestCase):
         self.assertTrue(loss_guard["conditions"])
         self.assertTrue(loss_guard["derivations"])
         self.assertEqual("LOSS_REDUCE", loss_guard["derivations"][0]["decision_stage"])
-        self.assertGreaterEqual(loss_guard["derivations"][0]["stage_priority"], 40)
+        self.assertEqual("review", loss_guard["derivations"][0]["action_level"])
+        self.assertEqual("risk", loss_guard["derivations"][0]["evidence_role"])
         self.assertEqual("bidAskImbalance", ask_pressure["target_property_filters"]["field"])
         self.assertEqual(-15, ask_pressure["target_property_filters"]["maxValue"])
         self.assertIn("HAS_INFERRED_RISK", snapshot["relationTypes"])
@@ -1555,10 +1550,11 @@ class OntologyRuleBoxTests(unittest.TestCase):
                     "targetLabel": "삼성전자 손실 방어 리스크",
                     "ruleId": "graph.loss_guard.breakdown.v1",
                     "polarity": "risk",
-                    "riskImpact": 13,
                     "weight": 0.86,
                     "decisionStage": "LOSS_REDUCE",
-                    "stagePriority": 43,
+                    "evidenceRole": "risk",
+                    "reviewLevel": "check",
+                    "dataState": "sufficient",
                     "aiInfluenceLabel": "손실 방어 추론",
                     "nativeTypeDbReasoned": True,
                 }
@@ -1583,7 +1579,8 @@ class OntologyRuleBoxTests(unittest.TestCase):
         self.assertEqual(2, payload["nativeRelationCount"])
         self.assertEqual("HAS_INFERRED_RISK", payload["relations"][0]["type"])
         self.assertEqual("LOSS_REDUCE", payload["relations"][0]["decisionStage"])
-        self.assertEqual(43, payload["relations"][0]["stagePriority"])
+        self.assertEqual("risk", payload["relations"][0]["evidenceRole"])
+        self.assertEqual("check", payload["relations"][0]["reviewLevel"])
         self.assertEqual(["holding-loss", "holding-source", "ma-break"], payload["traces"][0]["matchedConditionIds"])
 
     def test_inference_trace_ledger_reconstructs_rulebox_audit_path(self):
@@ -1599,7 +1596,7 @@ class OntologyRuleBoxTests(unittest.TestCase):
                         {"condition_id": "ma-break", "kind": "relation", "description": "기준선 이탈", "relation_type": "BREAKS_LEVEL", "min_weight": 0.6},
                     ],
                     "derivations": [
-                        {"relation_type": "HAS_INFERRED_RISK", "target_kind": "risk", "target_label": "손실 방어 리스크", "polarity": "risk", "risk_impact": 13, "decision_stage": "LOSS_REDUCE"}
+                        {"relation_type": "HAS_INFERRED_RISK", "target_kind": "risk", "target_label": "손실 방어 리스크", "polarity": "risk", "evidence_role": "risk", "decision_stage": "LOSS_REDUCE"}
                     ],
                 }
             ],
@@ -1645,9 +1642,10 @@ class OntologyRuleBoxTests(unittest.TestCase):
                     "targetLabel": "삼성전자 손실 방어 리스크",
                     "ruleId": "graph.loss_guard.breakdown.v1",
                     "symbol": "005930",
-                    "riskImpact": 13,
                     "decisionStage": "LOSS_REDUCE",
-                    "stagePriority": 43,
+                    "evidenceRole": "risk",
+                    "reviewLevel": "check",
+                    "dataState": "sufficient",
                     "inferenceTraceId": "inference-trace:005930:graph.loss_guard.breakdown.v1",
                     "nativeTypeDbReasoned": True,
                 }

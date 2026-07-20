@@ -132,9 +132,6 @@ class OntologyLabService:
     def auto_apply_enabled(self) -> bool:
         return truthy(self.settings.get("ontologyLabAutoApplyEnabled"), True)
 
-    def auto_apply_min_score(self) -> int:
-        return int_setting(self.settings, "ontologyLabAutoApplyMinScore", 75, 0, 100)
-
     def auto_apply_needs_review_enabled(self) -> bool:
         return truthy(self.settings.get("ontologyLabAutoApplyNeedsReviewEnabled"), False)
 
@@ -167,7 +164,6 @@ class OntologyLabService:
             "autoSuggestIntervalMinutes": self.auto_suggest_interval_minutes(),
             "autoSuggestLimit": self.auto_suggest_limit(),
             "autoApplyEnabled": self.auto_apply_enabled(),
-            "autoApplyMinScore": self.auto_apply_min_score(),
             "autoApplyNeedsReviewEnabled": self.auto_apply_needs_review_enabled(),
             "autoNotifyEnabled": self.auto_notify_enabled(),
             "notificationConfigured": self.notification_configured(),
@@ -618,28 +614,53 @@ class OntologyLabService:
 
     def auto_apply_eligibility(self, last_result: Dict[str, object]) -> Dict[str, object]:
         if not self.auto_apply_enabled():
-            return {"eligible": False, "reason": "auto-apply-disabled", "minScore": self.auto_apply_min_score()}
+            return {"eligible": False, "reason": "auto-apply-disabled"}
         readiness = last_result.get("promotionReadiness") if isinstance(last_result.get("promotionReadiness"), dict) else {}
         status = str(readiness.get("status") or "").lower()
-        score = numeric_value(readiness.get("score"), 100.0 if status == "approved" else 0.0)
+        validation_state = str(readiness.get("validationState") or "conditional").lower()
+        data_state = str(readiness.get("dataState") or "partial").lower()
         review_approved = False
         if status == "needs-review" and self.auto_apply_needs_review_enabled():
             review_approved = True
         elif status not in {"promote-candidate", "ready", "approved"}:
-            return {"eligible": False, "reason": "readiness-" + (status or "missing"), "readinessStatus": status, "score": score, "minScore": self.auto_apply_min_score()}
-        if score < self.auto_apply_min_score():
-            return {"eligible": False, "reason": "score-below-auto-apply-threshold", "readinessStatus": status, "score": score, "minScore": self.auto_apply_min_score()}
+            return {
+                "eligible": False,
+                "reason": "readiness-" + (status or "missing"),
+                "readinessStatus": status,
+                "validationState": validation_state,
+                "dataState": data_state,
+            }
+        if validation_state == "blocked" or data_state in {"insufficient", "unavailable"}:
+            return {
+                "eligible": False,
+                "reason": "state-not-auto-applicable",
+                "readinessStatus": status,
+                "validationState": validation_state,
+                "dataState": data_state,
+            }
         readiness_error = ontology_apply_readiness(last_result, {"reviewApproved": review_approved})
         if readiness_error:
-            return {"eligible": False, "reason": readiness_error, "readinessStatus": status, "score": score, "minScore": self.auto_apply_min_score()}
+            return {
+                "eligible": False,
+                "reason": readiness_error,
+                "readinessStatus": status,
+                "validationState": validation_state,
+                "dataState": data_state,
+            }
         if not ontology_result_has_apply_targets(last_result):
-            return {"eligible": False, "reason": "no-apply-targets", "readinessStatus": status, "score": score, "minScore": self.auto_apply_min_score()}
+            return {
+                "eligible": False,
+                "reason": "no-apply-targets",
+                "readinessStatus": status,
+                "validationState": validation_state,
+                "dataState": data_state,
+            }
         return {
             "eligible": True,
             "reason": "auto-apply-eligible",
             "readinessStatus": status,
-            "score": score,
-            "minScore": self.auto_apply_min_score(),
+            "validationState": validation_state,
+            "dataState": data_state,
             "reviewApproved": review_approved,
         }
 
@@ -720,7 +741,8 @@ class OntologyLabService:
             "snapshotKey": snapshot_key,
             "graphRunCount": int(sandbox.get("graphRunCount") or 0),
             "promotionStatus": str(readiness.get("status") or ""),
-            "promotionScore": readiness.get("score"),
+            "validationState": str(readiness.get("validationState") or ""),
+            "dataState": str(readiness.get("dataState") or ""),
             "derivedRelationDelta": int(aggregate_delta.get("derivedRelationCount") or 0),
             "newRelationTypes": list(aggregate_delta.get("newRelationTypes") or [])[:12],
             "findings": list(result.get("findings") or [])[:6],
@@ -1185,13 +1207,6 @@ def normalize_apply_batch_payload(payload: Dict[str, object]) -> List[Dict[str, 
     return [{**shared, "experimentId": item} for item in ids]
 
 
-def numeric_value(value: object, fallback: float = 0.0) -> float:
-    try:
-        return float(str(value if value is not None else "").strip())
-    except (TypeError, ValueError):
-        return fallback
-
-
 def ontology_result_has_apply_targets(last_result: Dict[str, object]) -> bool:
     proposed = last_result.get("proposedOntologyChanges") if isinstance(last_result.get("proposedOntologyChanges"), dict) else {}
     target_keys = [
@@ -1273,8 +1288,8 @@ def ontology_lab_automation_payload(
         "runId": latest_run_id(experiment),
         "runKind": str(run_kind or ""),
         "readinessStatus": readiness_status,
-        "readinessScore": readiness.get("score", eligibility.get("score")),
-        "autoApplyMinScore": eligibility.get("minScore"),
+        "validationState": str(readiness.get("validationState") or eligibility.get("validationState") or "conditional"),
+        "dataState": str(readiness.get("dataState") or eligibility.get("dataState") or "partial"),
         "derivedRelationDelta": int(delta.get("derivedRelationCount") or 0),
         "ruleIds": clean_text_list(proposed.get("ruleIds") or []),
         "relationTypes": clean_text_list(proposed.get("newRelationTypes") or proposed.get("relationTypes") or []),
@@ -1292,8 +1307,8 @@ def comma_text(values: Iterable[object], fallback: str = "-") -> str:
 def ontology_lab_notification_text(experiment: OntologyExperiment, automation: Dict[str, object]) -> str:
     action = str((automation or {}).get("action") or "")
     readiness = str((automation or {}).get("readinessStatus") or "-")
-    score = (automation or {}).get("readinessScore")
-    score_text = "-" if score in (None, "") else str(score)
+    validation_state = str((automation or {}).get("validationState") or "conditional")
+    data_state = str((automation or {}).get("dataState") or "partial")
     application = str((automation or {}).get("applicationStatus") or "")
     if action == "auto-applied":
         headline = "[온톨로지 실험실] 자동 반영 완료"
@@ -1313,7 +1328,7 @@ def ontology_lab_notification_text(experiment: OntologyExperiment, automation: D
     lines = [
         headline,
         "실험: " + str(experiment.title or experiment.experiment_id),
-        "판정: " + readiness + " / 점수 " + score_text,
+        "판정: " + readiness + " / 검증 " + validation_state + " / 데이터 " + data_state,
         "개선 후보: 파생 관계 +" + str((automation or {}).get("derivedRelationDelta") or 0)
         + ", 관계 " + comma_text((automation or {}).get("relationTypes") or [])
         + ", 단계 " + comma_text((automation or {}).get("decisionStages") or []),
@@ -1556,7 +1571,8 @@ def ontology_promotion_gate(experiment: OntologyExperiment) -> Dict[str, object]
         "requiresReviewApproval": requires_review,
         "completedAt": str(last_result.get("completedAt") or ""),
         "readinessStatus": str(readiness.get("status") or ""),
-        "readinessScore": readiness.get("score"),
+        "validationState": str(readiness.get("validationState") or ""),
+        "dataState": str(readiness.get("dataState") or ""),
         "applyStatus": apply_status,
         "checks": checks,
     }
@@ -1651,7 +1667,8 @@ def ontology_review_approval(last_result: Dict[str, object], payload: Dict[str, 
         "reviewedBy": str(payload.get("reviewedBy") or payload.get("reviewed_by") or "local-user"),
         "reviewReason": str(payload.get("reviewReason") or payload.get("review_reason") or "needs-review result approved for ontology lab apply"),
         "readinessStatus": str(readiness.get("status") or ""),
-        "readinessScore": readiness.get("score"),
+        "validationState": str(readiness.get("validationState") or ""),
+        "dataState": str(readiness.get("dataState") or ""),
     }
 
 

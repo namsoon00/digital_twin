@@ -249,7 +249,7 @@ def stage_coverage(
     session: Dict[str, object] = None,
     real_time: bool = False,
     transport: str = "rest",
-    source_as_of_confidence: str = "",
+    source_timestamp_state: str = "",
     ai_usable_as_strong_evidence: Optional[bool] = None,
 ) -> Dict[str, object]:
     session = session or {}
@@ -276,8 +276,8 @@ def stage_coverage(
     if source_as_of:
         payload["sourceAsOf"] = source_as_of
     payload["transport"] = str(transport or "rest")
-    if source_as_of_confidence:
-        payload["sourceAsOfConfidence"] = str(source_as_of_confidence)
+    if source_timestamp_state:
+        payload["sourceTimestampState"] = str(source_timestamp_state)
     if ai_usable_as_strong_evidence is not None:
         payload["aiUsableAsStrongEvidence"] = bool(ai_usable_as_strong_evidence)
     if payload["status"] == "available":
@@ -908,7 +908,7 @@ class KISMarketSignalProvider:
             if not microstructure_available:
                 normalized_price.pop("foreignNetVolume", None)
             merge_if_present(signal, normalized_price)
-            price_as_of, price_as_of_confidence = stage_source_as_of("price", price, fetched_at)
+            price_as_of, price_as_of_state = stage_source_as_of("price", price, fetched_at)
             coverage["price"] = stage_coverage(
                 "price",
                 price,
@@ -928,7 +928,7 @@ class KISMarketSignalProvider:
                 ],
                 fetched_at=fetched_at,
                 source_as_of=price_as_of,
-                source_as_of_confidence=price_as_of_confidence,
+                source_timestamp_state=price_as_of_state,
                 session=session,
                 transport="rest",
                 ai_usable_as_strong_evidence=True,
@@ -938,28 +938,28 @@ class KISMarketSignalProvider:
         if isinstance(ccnl, list):
             normalized_ccnl = normalize_ccnl(ccnl)
             merge_if_present(signal, normalized_ccnl)
-            ccnl_as_of, ccnl_as_of_confidence = stage_source_as_of("ccnl", ccnl, fetched_at)
-            coverage["ccnl"] = stage_coverage("ccnl", ccnl, normalized_ccnl, ["tradeStrength", "buyVolume", "sellVolume"], fetched_at=fetched_at, source_as_of=ccnl_as_of, source_as_of_confidence=ccnl_as_of_confidence, session=session, transport="rest", ai_usable_as_strong_evidence=True)
+            ccnl_as_of, ccnl_as_of_state = stage_source_as_of("ccnl", ccnl, fetched_at)
+            coverage["ccnl"] = stage_coverage("ccnl", ccnl, normalized_ccnl, ["tradeStrength", "buyVolume", "sellVolume"], fetched_at=fetched_at, source_as_of=ccnl_as_of, source_timestamp_state=ccnl_as_of_state, session=session, transport="rest", ai_usable_as_strong_evidence=True)
         else:
             coverage["ccnl"] = unavailable_stage_coverage("ccnl", session) if not microstructure_available else stage_coverage("ccnl", ccnl, {}, ["tradeStrength", "buyVolume", "sellVolume"], fetched_at=fetched_at, session=session)
         if isinstance(investor, list):
             normalized_investor = normalize_investor(investor)
             merge_if_present(signal, normalized_investor)
-            investor_as_of, investor_as_of_confidence = stage_source_as_of("investor", investor, fetched_at)
+            investor_as_of, investor_as_of_state = stage_source_as_of("investor", investor, fetched_at)
             investor_real_time = self.investor_realtime_enabled() and microstructure_available
-            coverage["investor"] = stage_coverage("investor", investor, normalized_investor, INVESTOR_SIGNAL_KEYS, fetched_at=fetched_at, source_as_of=investor_as_of, source_as_of_confidence=investor_as_of_confidence, session=session, real_time=investor_real_time, transport="rest", ai_usable_as_strong_evidence=investor_real_time)
+            coverage["investor"] = stage_coverage("investor", investor, normalized_investor, INVESTOR_SIGNAL_KEYS, fetched_at=fetched_at, source_as_of=investor_as_of, source_timestamp_state=investor_as_of_state, session=session, real_time=investor_real_time, transport="rest", ai_usable_as_strong_evidence=investor_real_time)
         elif isinstance(investor, dict):
             normalized_investor = normalize_investor([investor])
             merge_if_present(signal, normalized_investor)
-            investor_as_of, investor_as_of_confidence = stage_source_as_of("investor", investor, fetched_at)
+            investor_as_of, investor_as_of_state = stage_source_as_of("investor", investor, fetched_at)
             investor_real_time = self.investor_realtime_enabled() and microstructure_available
-            coverage["investor"] = stage_coverage("investor", investor, normalized_investor, INVESTOR_SIGNAL_KEYS, fetched_at=fetched_at, source_as_of=investor_as_of, source_as_of_confidence=investor_as_of_confidence, session=session, real_time=investor_real_time, transport="rest", ai_usable_as_strong_evidence=investor_real_time)
+            coverage["investor"] = stage_coverage("investor", investor, normalized_investor, INVESTOR_SIGNAL_KEYS, fetched_at=fetched_at, source_as_of=investor_as_of, source_timestamp_state=investor_as_of_state, session=session, real_time=investor_real_time, transport="rest", ai_usable_as_strong_evidence=investor_real_time)
         else:
             coverage["investor"] = unavailable_stage_coverage("investor", session) if not microstructure_available else stage_coverage("investor", investor, {}, INVESTOR_SIGNAL_KEYS, fetched_at=fetched_at, session=session)
         if isinstance(orderbook, dict):
             normalized_orderbook = normalize_orderbook(orderbook)
             merge_if_present(signal, normalized_orderbook)
-            orderbook_as_of, orderbook_as_of_confidence = stage_source_as_of("orderbook", orderbook, fetched_at)
+            orderbook_as_of, orderbook_as_of_state = stage_source_as_of("orderbook", orderbook, fetched_at)
             coverage["orderbook"] = stage_coverage(
                 "orderbook",
                 orderbook,
@@ -967,7 +967,7 @@ class KISMarketSignalProvider:
                 ["orderbookBidVolume", "orderbookAskVolume", "bidAskImbalance"],
                 fetched_at=fetched_at,
                 source_as_of=orderbook_as_of,
-                source_as_of_confidence=orderbook_as_of_confidence,
+                source_timestamp_state=orderbook_as_of_state,
                 session=session,
                 transport="rest",
                 ai_usable_as_strong_evidence=True,

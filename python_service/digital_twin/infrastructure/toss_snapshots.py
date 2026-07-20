@@ -379,7 +379,7 @@ def normalize_price_payload(item: Dict[str, object]) -> Dict[str, object]:
         "updatedAt": timestamp or fetched_at,
         "sourceAsOf": timestamp,
         "sourceFetchedAt": fetched_at,
-        "sourceAsOfConfidence": "provider" if timestamp else "missing",
+        "sourceTimestampState": "provider" if timestamp else "missing",
     }
 
 
@@ -737,7 +737,7 @@ class TossProvider:
             "updatedAt": position.updated_at or utc_now_iso(),
             "sourceAsOf": position.source_as_of,
             "sourceFetchedAt": position.source_fetched_at,
-            "sourceAsOfConfidence": position.source_as_of_confidence,
+            "sourceTimestampState": position.source_timestamp_state,
             "indicatorAsOf": position.indicator_as_of,
             "indicatorFetchedAt": position.indicator_fetched_at,
             "tradingValue": position.trading_value,
@@ -827,7 +827,7 @@ class TossProvider:
         updated_at = str(quote.get("updatedAt") or "")
         source_as_of = str(quote.get("sourceAsOf") or "")
         source_fetched_at = str(quote.get("sourceFetchedAt") or "")
-        source_as_of_confidence = str(quote.get("sourceAsOfConfidence") or "")
+        source_timestamp_state = str(quote.get("sourceTimestampState") or "")
         indicator_as_of = str(indicator_source.get("sourceAsOf") or indicator_source.get("latestCandleAt") or "")
         indicator_fetched_at = str(indicator_source.get("sourceFetchedAt") or "")
         if used_cached_price:
@@ -838,7 +838,7 @@ class TossProvider:
             updated_at = str(cached.get("updatedAt") or "")
             source_as_of = str(cached.get("sourceAsOf") or "")
             source_fetched_at = str(cached.get("sourceFetchedAt") or cached.get("fetchedAt") or "")
-            source_as_of_confidence = str(cached.get("sourceAsOfConfidence") or "cached")
+            source_timestamp_state = str(cached.get("sourceTimestampState") or "cached")
             indicator_as_of = str(cached.get("indicatorAsOf") or indicator_as_of)
             indicator_fetched_at = str(cached.get("indicatorFetchedAt") or indicator_fetched_at)
         elif live_price and not indicators_live and cached:
@@ -856,7 +856,7 @@ class TossProvider:
             updated_at = position.updated_at
             source_as_of = position.source_as_of
             source_fetched_at = position.source_fetched_at
-            source_as_of_confidence = position.source_as_of_confidence
+            source_timestamp_state = position.source_timestamp_state
             indicator_as_of = position.indicator_as_of or indicator_as_of
             indicator_fetched_at = position.indicator_fetched_at or indicator_fetched_at
         selected_updated_at = updated_at
@@ -900,7 +900,7 @@ class TossProvider:
             updated_at=selected_updated_at,
             source_as_of=source_as_of,
             source_fetched_at=source_fetched_at,
-            source_as_of_confidence=source_as_of_confidence,
+            source_timestamp_state=source_timestamp_state,
             indicator_as_of=indicator_as_of,
             indicator_fetched_at=indicator_fetched_at,
             currency=str(quote.get("currency") or position.currency or cached.get("currency") or ""),

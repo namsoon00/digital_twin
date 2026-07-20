@@ -33,6 +33,7 @@ from ..application.official_calendar_sync_service import OfficialCalendarSyncSer
 from ..application.ontology_reasoning_service import OntologyReasoningRunner
 from ..application.ontology_lab_service import OntologyLabService
 from ..application.ontology_rule_candidate_service import RuleChangeCandidateProposalService
+from ..application.psychology_shadow_service import PsychologyShadowService
 from ..application.symbol_universe_service import SymbolUniverseService
 from ..domain.accounts import AccountConfig
 from ..domain.events import DATA_PIPELINE_HEALTH_CHANGED, RESEARCH_EVIDENCE_COLLECTED
@@ -111,6 +112,7 @@ def news_event_bus(settings=None) -> EventBus:
     )
     return bus
 
+
 def data_pipeline_health_event_bus(settings=None) -> EventBus:
     configured_settings = settings or runtime_settings()
     bus = default_event_bus()
@@ -123,6 +125,7 @@ def data_pipeline_health_event_bus(settings=None) -> EventBus:
         ).handle,
     )
     return bus
+
 
 def monitor_account_job_store_from_settings(settings):
     return stores.monitor_account_job_store(settings)
@@ -168,6 +171,7 @@ def build_monitor_runner(
         account_job_lock_seconds=int(configured_settings.get("monitorAccountLockSeconds") or os.environ.get("MONITOR_ACCOUNT_LOCK_SECONDS") or max(600, interval_seconds * 4)),
         worker_id=os.environ.get("MONITOR_WORKER_ID") or ("monitor-" + uuid.uuid4().hex[:12]),
         progress_callback=progress_callback,
+        psychology_shadow_service=PsychologyShadowService(configured_settings),
     )
 
 

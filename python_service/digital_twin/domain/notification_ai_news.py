@@ -10,7 +10,7 @@ from .notification_ai_context import (
     normalized_text,
     relation_facts,
 )
-from .news_analysis import relation_scope_is_excluded
+from .news_analysis import news_state_payload, news_state_rank, relation_scope_is_excluded
 from .security_lines import security_lines_for_symbol
 
 
@@ -163,15 +163,6 @@ def news_item_value(item: Dict[str, object], *keys: str) -> object:
     return ""
 
 
-def news_item_number(item: Dict[str, object], *keys: str) -> float:
-    value = news_item_value(item, *keys)
-    try:
-        number = float(str(value).replace(",", "").strip())
-    except (TypeError, ValueError):
-        return 0.0
-    return number * 100 if 0 < number <= 1 else number
-
-
 def target_terms_from_context(context: Dict[str, object]) -> List[str]:
     values = [
         context.get("symbol") if isinstance(context, dict) else "",
@@ -227,17 +218,19 @@ def news_item_quality_reason(item: Dict[str, object], context: Dict[str, object]
     scope = str(news_item_value(item, "relationScope", "relation_scope") or "").strip().lower()
     if scope in LOW_QUALITY_RELATION_SCOPES or relation_scope_is_excluded(scope):
         return "relationScope=" + scope
-    relevance = news_item_number(item, "relevanceScore", "relevance_score")
-    reliability = news_item_number(item, "sourceReliability", "confidence")
-    materiality = news_item_number(item, "materialityScore", "impactScore", "impact_score")
-    if relevance and relevance < 35:
+    payload = item.get("payload") if isinstance(item.get("payload"), dict) else {}
+    states = news_state_payload({**payload, **item})
+    if states["relevanceState"] == "unrelated":
         return "low relevance"
-    if reliability and reliability < 35:
+    if states["sourceTrustState"] in {"limited", "unknown"}:
         return "low reliability"
     target_terms = target_terms_from_context(context)
     text = normalized_text(news_item_text(item))
     mentions_target = any(normalized_text(term) in text for term in target_terms if len(str(term)) >= 2)
-    if target_terms and not mentions_target and (relevance < 55 or materiality < 45):
+    if target_terms and not mentions_target and (
+        states["relevanceState"] not in {"direct", "related"}
+        or states["materialityState"] == "context"
+    ):
         return "target not mentioned"
     symbol = str((context or {}).get("symbol") or (target_terms[0] if target_terms else "")).upper()
     misleading = MISLEADING_KEYWORDS_BY_SYMBOL.get(symbol, set())
@@ -311,10 +304,10 @@ def news_reference_datetime(context: Dict[str, object] = None) -> datetime:
     return datetime.now(timezone.utc)
 
 
-def news_freshness_score(item: Dict[str, object], reference: datetime = None) -> float:
+def news_freshness_state(item: Dict[str, object], reference: datetime = None) -> str:
     published = news_item_published_at(item)
     if not published:
-        return 30.0
+        return "unknown"
     reference = reference or datetime.now(timezone.utc)
     if reference.tzinfo is None:
         reference = reference.replace(tzinfo=timezone.utc)
@@ -322,24 +315,26 @@ def news_freshness_score(item: Dict[str, object], reference: datetime = None) ->
         published = published.replace(tzinfo=timezone.utc)
     age_hours = max(0.0, (reference.astimezone(timezone.utc) - published.astimezone(timezone.utc)).total_seconds() / 3600.0)
     if age_hours <= 6:
-        return 100.0
+        return "current"
     if age_hours <= 24:
-        return 85.0
+        return "today"
     if age_hours <= 72:
-        return 65.0
+        return "recent"
     if age_hours <= 168:
-        return 35.0
-    return 10.0
+        return "aging"
+    return "stale"
 
 
-def news_item_rank_score(item: Dict[str, object], reference: datetime = None) -> float:
-    relevance = news_item_number(item, "relevanceScore", "relevance_score")
-    materiality = news_item_number(item, "materialityScore", "impactScore", "impact_score")
-    reliability = news_item_number(item, "sourceReliability", "confidence")
-    freshness = news_freshness_score(item, reference)
+def news_item_rank_key(item: Dict[str, object], reference: datetime = None) -> tuple:
+    payload = item.get("payload") if isinstance(item.get("payload"), dict) else {}
+    states = news_state_rank({**payload, **item})
+    freshness = news_freshness_state(item, reference)
+    freshness_rank = {"stale": 0, "aging": 1, "recent": 2, "today": 3, "current": 4, "unknown": 0}[freshness]
     impact_label = str(news_item_value(item, "stockImpactLabel") or "").strip()
-    impact_bonus = 6.0 if impact_label and impact_label not in {"중립", "neutral", "Neutral"} else 0.0
-    return round(relevance * 0.45 + freshness * 0.30 + reliability * 0.15 + materiality * 0.10 + impact_bonus, 3)
+    directional = 1 if impact_label and impact_label not in {"중립", "neutral", "Neutral"} else 0
+    published = news_item_published_at(item)
+    timestamp = published.timestamp() if published else 0.0
+    return (*states, freshness_rank, directional, timestamp)
 
 
 def news_cluster_key(item: Dict[str, object]) -> str:
@@ -363,16 +358,12 @@ def rank_news_items(items: List[Dict[str, object]], context: Dict[str, object] =
             continue
         if cluster:
             seen_clusters.add(cluster)
-        relevance = news_item_number(item, "relevanceScore", "relevance_score")
-        freshness = news_freshness_score(item, reference)
         ranked.append({
             "index": index,
-            "score": news_item_rank_score(item, reference),
-            "relevance": relevance,
-            "freshness": freshness,
+            "key": news_item_rank_key(item, reference),
             "item": item,
         })
-    ranked.sort(key=lambda row: (row["score"], row["relevance"], row["freshness"], -row["index"]), reverse=True)
+    ranked.sort(key=lambda row: (*row["key"], -row["index"]), reverse=True)
     rows = [row["item"] for row in ranked]
     return rows[:limit] if limit and limit > 0 else rows
 

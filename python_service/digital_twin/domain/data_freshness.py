@@ -77,7 +77,6 @@ KIS_STAGE_EVIDENCE_FIELDS = {
         "ma20Slope",
         "ma60Slope",
         "trendCurve",
-        "trendDynamicRiskScore",
         "volume",
         "volumeRatio",
         "timeAdjustedVolumeRatio",
@@ -86,7 +85,6 @@ KIS_STAGE_EVIDENCE_FIELDS = {
     "ccnl": {"tradeStrength", "buyVolume", "sellVolume", "buyShare", "sellShare"},
     "orderbook": {"bidAskImbalance", "orderbookAskVolume", "orderbookBidVolume"},
     "investor": {
-        "investorFlowScore",
         "smartMoneyNetVolume",
         "foreignBuyVolume",
         "foreignNetAmount",
@@ -289,7 +287,7 @@ def kis_stage_freshness_records(position: Dict[str, object], message_type: str, 
                 "cadence",
                 "transport",
                 "freshnessStatus",
-                "sourceAsOfConfidence",
+                "sourceTimestampState",
                 "latencyStatus",
                 "latencyLabel",
                 "latencyReason",
@@ -318,7 +316,7 @@ def kis_stage_freshness_records(position: Dict[str, object], message_type: str, 
                 "realTime": bool(stage_payload.get("realTime")) if "realTime" in stage_payload else None,
                 "transport": stage_payload.get("transport"),
                 "freshnessStatus": stage_payload.get("freshnessStatus"),
-                "sourceAsOfConfidence": stage_payload.get("sourceAsOfConfidence"),
+                "sourceTimestampState": stage_payload.get("sourceTimestampState"),
                 "aiUsableAsStrongEvidence": stage_payload.get("aiUsableAsStrongEvidence"),
                 "judgementEvidenceUsable": stage_payload.get("judgementEvidenceUsable"),
                 "cadence": stage_payload.get("cadence"),
@@ -544,15 +542,12 @@ def selected_inference_fact_fields(context: Dict[str, object]) -> List[str]:
     relation_context = context.get("ontologyRelationContext")
     if not isinstance(relation_context, dict):
         return []
-    decision = relation_context.get("decision")
-    if not isinstance(decision, dict):
-        return []
-    breakdown = decision.get("scoreBreakdown")
-    if not isinstance(breakdown, dict):
+    evidence_state = relation_context.get("evidenceState")
+    if not isinstance(evidence_state, dict):
         return []
     return list(dict.fromkeys(
         str(field or "").strip()
-        for field in breakdown.get("appliedFactFields") or []
+        for field in evidence_state.get("appliedFactFields") or []
         if str(field or "").strip()
     ))
 

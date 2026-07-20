@@ -12,7 +12,7 @@ The PC console presents one operational question per workspace without copying f
 | Portfolio totals and current holdings | `AccountSnapshot.portfolio` and `Position` | Today and Market | balance ledger and instrument detail |
 | Investment action and decision-time values | `DecisionItem` and TypeDB-backed InferenceBox context | Decision | evidence, chart and inference trace detail |
 | Research article and stock impact | `ResearchEvidence` | Market | Korean article summary, impact analysis and source |
-| Delivery state and dispatch score | `NotificationJob` | Alerts | gates, full message and linked article detail |
+| Delivery state and dispatch reason | `NotificationJob` | Alerts | gates, full message and linked article detail |
 | Ontology graph and inference | TypeDB TBox, ABox, schema functions and InferenceBox | Validation | graph, rule and trace detail |
 | Experiment lifecycle | `OntologyExperiment` | Validation | replay, comparison and promotion detail |
 | Calendar event | investment calendar event repository | Today | event rationale and reminder detail |
@@ -30,7 +30,7 @@ The PC console presents one operational question per workspace without copying f
 ## Duplication Rules
 
 1. Exact display duplicates are removed. A field is rendered once per summary screen unless the second value is an explicit comparison.
-2. Derived values are calculated by one selector. Render functions format values but do not recompute portfolio totals, score deltas or freshness.
+2. Derived values are calculated by one selector. Render functions format values but do not recompute portfolio totals, state changes or freshness.
 3. Context repetition is reference-only. Another workspace may show a short state, count or label and link to the owning detail.
 4. Audit snapshots are preserved. Current position values and decision-time values are distinct records and must be labelled by time instead of merged.
 5. Summary rows do not include article bodies, graph traces, raw settings, notification messages or balance ledgers.
@@ -41,7 +41,7 @@ The PC console presents one operational question per workspace without copying f
 - Today: portfolio summary, due events, urgent decisions, alert failures and data-health count.
 - Market: one instrument row per canonical identity plus linked evidence count and top impact.
 - Decision: one action row per canonical decision with action, conviction, reason, invalidation and freshness.
-- Alerts: one dispatch row per notification job with score movement, trigger reason and delivery state.
+- Alerts: one dispatch row per notification job with state change, trigger reason and delivery state.
 - Validation: experiment rows plus TypeDB health and structural warnings.
 - Operations: provider and worker health plus settings category entry points.
 

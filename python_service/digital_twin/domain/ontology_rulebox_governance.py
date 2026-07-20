@@ -3,7 +3,7 @@ import json
 import re
 from typing import Dict, Iterable, List
 
-from .ontology_decision_policy import decision_stage_from_action, relation_stage_priority
+from .ontology_decision_policy import decision_stage_from_action
 from .ontology_rulebox_contracts import GRAPH_REASONER_VERSION, GraphInferenceRule, GraphRuleCondition, GraphRuleDerivation
 
 
@@ -68,19 +68,13 @@ def canonical_rulebox_derivation(derivation: Dict[str, object], rule: Dict[str, 
             result["decision_stage"] = decision_stage
         else:
             result["decisionStage"] = decision_stage
-    stage_priority = result.get("stage_priority") if "stage_priority" in result else result.get("stagePriority")
-    if not float_or_zero(stage_priority):
-        stage_priority = relation_stage_priority({
-            "decisionStage": decision_stage,
-            "actionGroup": action_group,
-            "actionLevel": action_level,
-            "riskImpact": result.get("risk_impact") or result.get("riskImpact"),
-            "supportImpact": result.get("support_impact") or result.get("supportImpact"),
-        })
-    if "stage_priority" in result or "stagePriority" not in result:
-        result["stage_priority"] = canonical_json_value(stage_priority)
-    else:
-        result["stagePriority"] = canonical_json_value(stage_priority)
+    evidence_role = str(result.get("evidence_role") or result.get("evidenceRole") or result.get("polarity") or "context").strip().lower()
+    result["evidence_role"] = evidence_role if evidence_role in {"risk", "support", "counter", "context", "blocking"} else "context"
+    for legacy_key in (
+        "stage_priority", "stagePriority", "risk_impact", "riskImpact",
+        "support_impact", "supportImpact", "weight", "min_weight", "minWeight",
+    ):
+        result.pop(legacy_key, None)
     return result
 
 
@@ -98,13 +92,6 @@ def canonical_json_value(value: object) -> object:
     if isinstance(value, dict):
         return {str(key): canonical_json_value(value[key]) for key in sorted(value.keys(), key=str)}
     return value
-
-
-def float_or_zero(value: object) -> float:
-    try:
-        return float(value or 0)
-    except (TypeError, ValueError):
-        return 0.0
 
 
 def rulebox_version_payload(
@@ -179,7 +166,7 @@ def rulebox_governance_candidates(
             "status": "review",
             "priority": 88,
             "source": "rulebox-governance",
-            "rationale": "decisionStage와 stagePriority가 없는 파생 관계는 AI 판단 라우팅이 약해집니다.",
+            "rationale": "decisionStage와 evidenceRole이 없는 파생 관계는 AI가 확인 순서와 근거 방향을 구분하기 어렵습니다.",
             "action": "complete-decision-policy",
             "requiresData": [],
             "proposedRule": None,
@@ -248,7 +235,7 @@ def build_rule_change_candidate_prompt(context: Dict[str, object]) -> str:
         "- proposedRule.enabled는 반드시 false다.",
         "- ABox에 없는 데이터가 필요하면 proposedRule을 비우고 requiresData에 적는다.",
         "- relation_type, condition field, target filters는 제공된 RuleBox/InferenceBox/TBox에서 확인 가능한 형태를 우선 사용한다.",
-        "- derivations에는 decision_stage와 stage_priority를 포함한다.",
+        "- derivations에는 decision_stage와 evidence_role을 포함한다.",
         "- 중복 rule_id를 만들지 않는다.",
         "- 응답은 설명 없이 JSON 하나만 반환한다.",
         "JSON 계약:",
@@ -293,7 +280,7 @@ def compact_candidate_context(context: Dict[str, object]) -> Dict[str, object]:
                     "ruleId": item.get("ruleId"),
                     "polarity": item.get("polarity"),
                     "decisionStage": item.get("decisionStage"),
-                    "stagePriority": item.get("stagePriority"),
+                    "evidenceRole": item.get("evidenceRole") or item.get("polarity") or "context",
                     "label": item.get("label") or item.get("aiInfluenceLabel"),
                 }
                 for item in list(inferencebox.get("relations") or [])[:40]
@@ -426,7 +413,7 @@ def missing_decision_policy_count(rules_payload: List[Dict[str, object]]) -> int
                 continue
             if not (derivation.get("decision_stage") or derivation.get("decisionStage")):
                 count += 1
-            elif not (derivation.get("stage_priority") or derivation.get("stagePriority")):
+            elif not (derivation.get("evidence_role") or derivation.get("evidenceRole") or derivation.get("polarity")):
                 count += 1
     return count
 
@@ -452,7 +439,7 @@ def curated_rule_candidates() -> List[Dict[str, object]]:
             "source": "ai-relation-candidate",
             "rationale": "직접 종목 뉴스가 아니어도 피어·섹터 이벤트가 투자 논리의 확인 항목이 될 수 있습니다.",
             "action": "append-disabled-rule",
-            "requiresData": ["HAS_EXTERNAL_SIGNAL", "relationScope=peer|sector", "materialityScore"],
+            "requiresData": ["HAS_EXTERNAL_SIGNAL", "relationScope=peer|sector", "materialityState=material|notable"],
             "proposedRule": peer_sector_news_candidate_rule().to_dict(),
         },
         {
@@ -461,9 +448,9 @@ def curated_rule_candidates() -> List[Dict[str, object]]:
             "status": "data-required",
             "priority": 64,
             "source": "ai-relation-candidate",
-            "rationale": "데이터 품질 점수는 ABox에 있지만 현재 네이티브 조건 엔진의 target numeric 필터는 valueNumber 중심입니다.",
+            "rationale": "자료 상태가 부족하거나 사용할 수 없을 때 투자 판단을 막는 상태 규칙이 필요합니다.",
             "action": "extend-abox-schema",
-            "requiresData": ["data-quality.valueNumber 또는 qualityScore 조건 필터"],
+            "requiresData": ["data-quality.dataState=insufficient|unavailable", "validationState=blocked"],
             "proposedRule": None,
         },
     ]
@@ -494,7 +481,6 @@ def factor_concentration_candidate_rule() -> GraphInferenceRule:
                 "팩터 노출 관계가 포트폴리오 관점에서 의미 있습니다.",
                 relation_type="HAS_FACTOR_EXPOSURE",
                 target_kind="factor",
-                min_weight=0.25,
             ),
         ],
         derivations=[
@@ -506,13 +492,11 @@ def factor_concentration_candidate_rule() -> GraphInferenceRule:
                 tbox_class="NextCheck",
                 tbox_classes=["NextCheck", "ExposureAssessment", "FactorExposure"],
                 polarity="context",
-                weight=0.68,
                 belief_label="팩터 노출이 커서 포트폴리오 리스크를 함께 확인해야 합니다.",
                 ai_influence_label="팩터 집중 점검",
                 action_group="factorRisk",
                 action_level="review",
                 decision_stage="FACTOR_CROWDING",
-                stage_priority=32,
             )
         ],
     )
@@ -538,9 +522,8 @@ def peer_sector_news_candidate_rule() -> GraphInferenceRule:
                 target_property_filters={
                     "relationScope": ["peer", "sector"],
                     "materialityPassed": True,
-                    "minMaterialityScore": 65,
+                    "materialityState": ["material", "notable"],
                 },
-                min_weight=0.25,
             )
         ],
         derivations=[
@@ -552,13 +535,11 @@ def peer_sector_news_candidate_rule() -> GraphInferenceRule:
                 tbox_class="NextCheck",
                 tbox_classes=["NextCheck", "NewsEvent", "PeerContext"],
                 polarity="context",
-                weight=0.66,
                 belief_label="피어·섹터 뉴스가 투자 논리에 영향을 줄 수 있어 연결성을 확인합니다.",
                 ai_influence_label="피어·섹터 뉴스 컨텍스트",
                 action_group="alertReview",
                 action_level="watch",
                 decision_stage="SECTOR_NEWS",
-                stage_priority=28,
             )
         ],
     )

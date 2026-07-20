@@ -3,7 +3,8 @@ import re
 from typing import Dict, Iterable, List
 
 from ..domain.ontology_contracts import PortfolioOntology
-from ..domain.ontology_decision_policy import decision_stage_from_action, relation_stage_priority
+from ..domain.ontology_decision_policy import decision_stage_from_action
+from ..domain.ontology_decision_state import without_aggregate_decision_fields
 from ..domain.ontology_schema import default_tbox_metadata
 
 
@@ -20,7 +21,7 @@ def symbol_from_graph_reference(*values: object) -> str:
     symbol_prefixes = {
         "action-candidate",
         "blocked-action",
-        "confidence-assessment",
+        "validation-assessment",
         "execution-capacity",
         "inference-trace",
         "investment-thesis",
@@ -63,19 +64,6 @@ def derivation_decision_stage(derivation: Dict[str, object]) -> str:
         str(derivation.get("action_level") or derivation.get("actionLevel") or ""),
     )
 
-def derivation_stage_priority(derivation: Dict[str, object]):
-    explicit = number_or_none(derivation.get("stage_priority") or derivation.get("stagePriority"))
-    if explicit:
-        return explicit
-    stage = derivation_decision_stage(derivation)
-    return float(relation_stage_priority({
-        "decisionStage": stage,
-        "actionGroup": derivation.get("action_group") or derivation.get("actionGroup"),
-        "actionLevel": derivation.get("action_level") or derivation.get("actionLevel"),
-        "riskImpact": derivation.get("risk_impact") or derivation.get("riskImpact"),
-        "supportImpact": derivation.get("support_impact") or derivation.get("supportImpact"),
-    }))
-
 def list_of_strings(value: object) -> List[str]:
     if isinstance(value, list):
         return [str(item) for item in value if str(item or "").strip()]
@@ -98,7 +86,8 @@ KNOWN_TARGET_FILTER_KEYS = {
     "eventType",
     "polarity",
     "materialityPassed",
-    "minMaterialityScore",
+    "materialityState",
+    "valuationDataState",
     "minValue",
     "maxValue",
     "tboxClass",
@@ -142,7 +131,6 @@ PROMOTED_NUMERIC_ENTITY_FIELDS = [
     "individualNetVolume",
     "individualNetAmount",
     "smartMoneyNetVolume",
-    "investorFlowScore",
     "adrRatio",
     "adrPriceUsd",
     "adrVolume",
@@ -161,8 +149,6 @@ PROMOTED_NUMERIC_ENTITY_FIELDS = [
     "optimisticMarginOfSafetyPct",
     "expensivePremiumPct",
     "minimumMarginOfSafetyPct",
-    "valuationReliabilityScore",
-    "valuationInputCoveragePct",
     "valuationDecisionEligible",
     "valuationModelCount",
     "valuationConsensusPrice",
@@ -200,8 +186,6 @@ PROMOTED_NUMERIC_ENTITY_FIELDS = [
     "eventCount",
     "riskEventCount",
     "supportEventCount",
-    "temporalRiskScore",
-    "temporalSupportScore",
 ]
 
 PROMOTED_TEXT_ENTITY_FIELDS = [
@@ -241,7 +225,10 @@ PROMOTED_TEXT_ENTITY_FIELDS = [
     "multiplePeriod",
     "valuationAsOf",
     "valuationFreshnessStatus",
-    "valuationConfidenceLabel",
+    "valuationDataStateLabel",
+    "valuationDataState",
+    "valuationInputState",
+    "valuationReliabilityState",
     "valuationSourceType",
     "valuationCurrency",
     "valuationConsensusStatus",
@@ -264,6 +251,20 @@ PROMOTED_TEXT_ENTITY_FIELDS = [
     "deliveryLevel",
     "deliveryLevelLabel",
     "renderedLabel",
+    "smartMoneyDirection",
+    "investorFlowPsychology",
+    "investorFlowEvidenceRole",
+    "investorFlowDataState",
+    "investorFlowReviewLevel",
+    "trendRiskState",
+    "trendReviewLevel",
+    "trendEvidenceRole",
+    "trendDataState",
+    "liquidityState",
+    "liquidityReviewLevel",
+    "liquidityDataState",
+    "sourceDataState",
+    "externalSignalDataState",
 ]
 
 def condition_target_filter_values(condition: Dict[str, object], key: str) -> List[str]:
@@ -317,7 +318,7 @@ class GraphStoreOntologyRowMapperMixin:
     def rows_for_entities(self, graph: PortfolioOntology) -> List[Dict[str, object]]:
         rows: List[Dict[str, object]] = []
         for item in graph.entities:
-            properties = item.properties or {}
+            properties = without_aggregate_decision_fields(dict(item.properties or {}))
             condition = properties.get("condition") if isinstance(properties.get("condition"), dict) else {}
             derivation = properties.get("derivation") if isinstance(properties.get("derivation"), dict) else {}
             rows.append({
@@ -368,12 +369,10 @@ class GraphStoreOntologyRowMapperMixin:
                 "url": str(properties.get("url") or ""),
                 "publishedAt": str(properties.get("publishedAt") or ""),
                 "observedAt": str(properties.get("observedAt") or properties.get("updatedAt") or ""),
-                "materialityScore": number_or_none(properties.get("materialityScore")),
                 "materialityPassed": bool(properties.get("materialityPassed")) if "materialityPassed" in properties else None,
-                "relevanceScore": number_or_none(properties.get("relevanceScore")),
-                "sourceReliability": number_or_none(properties.get("sourceReliability")),
-                "impactScore": number_or_none(properties.get("impactScore")),
-                "confidence": number_or_none(properties.get("confidence")),
+                "relevanceState": str(properties.get("relevanceState") or ""),
+                "sourceTrustState": str(properties.get("sourceTrustState") or ""),
+                "materialityState": str(properties.get("materialityState") or ""),
                 "allowAddOnStrength": bool(properties.get("allowAddOnStrength")) if "allowAddOnStrength" in properties else None,
                 "trimOnTrendBreak": bool(properties.get("trimOnTrendBreak")) if "trimOnTrendBreak" in properties else None,
                 "avoidAveragingDown": bool(properties.get("avoidAveragingDown")) if "avoidAveragingDown" in properties else None,
@@ -425,17 +424,15 @@ class GraphStoreOntologyRowMapperMixin:
                 "conditionTargetEventTypes": condition_target_filter_values(condition, "eventType"),
                 "conditionTargetPolarities": condition_target_filter_values(condition, "polarity"),
                 "conditionTargetMaterialityPassed": condition_target_filter_bool(condition, "materialityPassed"),
-                "conditionTargetMinMaterialityScore": condition_target_filter_number(condition, "minMaterialityScore"),
+                "conditionTargetMaterialityStates": condition_target_filter_values(condition, "materialityState"),
                 "conditionTargetMinValue": condition_target_filter_number(condition, "minValue"),
                 "conditionTargetMaxValue": condition_target_filter_number(condition, "maxValue"),
                 "conditionRelationPolarities": condition_relation_filter_values(condition, "polarity"),
+                "conditionRelationEvidenceRoles": condition_relation_filter_values(condition, "evidenceRole"),
                 "conditionRelationTransitionTypes": condition_relation_filter_values(condition, "transitionType"),
                 "conditionRelationFields": condition_relation_filter_values(condition, "field"),
                 "conditionRelationSignalGroups": condition_relation_filter_values(condition, "signalGroup"),
                 "conditionRelationMaterialityPassed": condition_relation_filter_bool(condition, "materialityPassed"),
-                "conditionRelationMinRiskImpact": condition_relation_filter_number(condition, "minRiskImpact"),
-                "conditionRelationMinSupportImpact": condition_relation_filter_number(condition, "minSupportImpact"),
-                "conditionMinWeight": float(condition.get("min_weight") or 0),
                 "derivationRelationType": str(derivation.get("relation_type") or "").upper(),
                 "derivationIndex": int(properties.get("derivationIndex") or 0),
                 "derivationTargetKind": str(derivation.get("target_kind") or ""),
@@ -444,15 +441,12 @@ class GraphStoreOntologyRowMapperMixin:
                 "derivationTboxClass": str(derivation.get("tbox_class") or ""),
                 "derivationTboxClasses": list_of_strings(derivation.get("tbox_classes")),
                 "derivationPolarity": str(derivation.get("polarity") or ""),
-                "derivationRiskImpact": float(derivation.get("risk_impact") or 0),
-                "derivationSupportImpact": float(derivation.get("support_impact") or 0),
-                "derivationWeight": float(derivation.get("weight") or 0),
+                "derivationEvidenceRole": str(derivation.get("evidence_role") or derivation.get("evidenceRole") or derivation.get("polarity") or "context"),
                 "derivationBeliefLabel": str(derivation.get("belief_label") or ""),
                 "derivationAiInfluenceLabel": str(derivation.get("ai_influence_label") or ""),
                 "derivationActionGroup": str(derivation.get("action_group") or ""),
                 "derivationActionLevel": str(derivation.get("action_level") or ""),
                 "derivationDecisionStage": derivation_decision_stage(derivation),
-                "derivationStagePriority": derivation_stage_priority(derivation),
                 "derivationTargetRole": str(derivation.get("target_role") or derivation.get("targetRole") or ""),
                 "derivationActionPolicy": str(derivation.get("action_policy") or derivation.get("actionPolicy") or ""),
                 "derivationAllowedActions": list_of_strings(derivation.get("allowed_actions") or derivation.get("allowedActions")),
@@ -464,7 +458,7 @@ class GraphStoreOntologyRowMapperMixin:
     def rows_for_relations(self, graph: PortfolioOntology) -> List[Dict[str, object]]:
         rows: List[Dict[str, object]] = []
         for item in graph.relations:
-            properties = dict(item.properties or {})
+            properties = without_aggregate_decision_fields(dict(item.properties or {}))
             symbol = str(properties.get("symbol") or symbol_from_graph_reference(item.source, item.target))
             if symbol:
                 properties.setdefault("symbol", symbol)
@@ -472,7 +466,7 @@ class GraphStoreOntologyRowMapperMixin:
                 "source": item.source,
                 "target": item.target,
                 "type": safe_relation_type(item.relation_type),
-                "weight": float(item.weight or 0),
+                "weight": 1.0,
                 "symbol": symbol,
                 "ontologyBox": str(properties.get("ontologyBox") or "ABox"),
                 "accountId": str(properties.get("accountId") or ""),
@@ -490,12 +484,16 @@ class GraphStoreOntologyRowMapperMixin:
                 "field": str(properties.get("field") or properties.get("observationField") or ""),
                 "signalGroup": str(properties.get("signalGroup") or ""),
                 "materialityPassed": bool(properties.get("materialityPassed")) if "materialityPassed" in properties else None,
-                "materialityScore": number_or_none(properties.get("materialityScore")),
+                "relevanceState": str(properties.get("relevanceState") or ""),
+                "sourceTrustState": str(properties.get("sourceTrustState") or ""),
+                "materialityState": str(properties.get("materialityState") or ""),
                 "evidenceRole": str(properties.get("evidenceRole") or properties.get("polarity") or "context"),
-                "riskImpact": number_or_none(properties.get("riskImpact") or properties.get("opinionImpact")),
-                "supportImpact": number_or_none(properties.get("supportImpact")),
                 "decisionStage": str(properties.get("decisionStage") or ""),
-                "stagePriority": number_or_none(properties.get("stagePriority")),
+                "reviewLevel": str(properties.get("reviewLevel") or ""),
+                "dataState": str(properties.get("dataState") or ""),
+                "changeState": str(properties.get("changeState") or ""),
+                "conflictState": str(properties.get("conflictState") or ""),
+                "validationState": str(properties.get("validationState") or ""),
                 "targetRole": str(properties.get("targetRole") or ""),
                 "actionPolicy": str(properties.get("actionPolicy") or ""),
                 "allowedActions": list_of_strings(properties.get("allowedActions")),
@@ -523,8 +521,9 @@ class GraphStoreOntologyRowMapperMixin:
                 "asOf": str((item.value or {}).get("asOf") or ""),
                 "isCurrent": bool((item.value or {}).get("isCurrent")) if "isCurrent" in (item.value or {}) else False,
                 "tboxVersion": str((item.value or {}).get("tboxVersion") or ""),
-                "valueJson": json.dumps(item.value or {}, ensure_ascii=False, sort_keys=True),
-                "confidence": float(item.confidence or 0),
+                "valueJson": json.dumps(without_aggregate_decision_fields(item.value or {}), ensure_ascii=False, sort_keys=True),
+                "evidenceRole": str(item.evidence_role or "context"),
+                "dataState": str(item.data_state or "partial"),
             }
             for item in graph.evidence
         ]
@@ -536,7 +535,9 @@ class GraphStoreOntologyRowMapperMixin:
                 "subject": item.subject,
                 "label": item.label,
                 "polarity": item.polarity,
-                "confidence": float(item.confidence or 0),
+                "evidenceRole": str(item.evidence_role or item.polarity or "context"),
+                "reviewLevel": str(item.review_level or "observe"),
+                "dataState": str(item.data_state or "partial"),
                 "ontologyBox": "InferenceBox" if str(item.belief_id or "").startswith("belief:inference:") else "ABox",
                 "accountId": "",
                 "aboxSnapshotId": "",
@@ -556,8 +557,9 @@ class GraphStoreOntologyRowMapperMixin:
                 "symbol": item.symbol,
                 "action": item.action,
                 "tone": item.tone,
-                "conviction": float(item.conviction or 0),
-                "ontologyPressure": float(item.ontology_pressure or 0),
+                "reviewLevel": item.review_level,
+                "dataState": item.data_state,
+                "validationState": item.validation_state,
                 "ontologyBox": "ABox",
                 "accountId": str((item.legacy_model or {}).get("accountId") or ""),
                 "aboxSnapshotId": str((item.legacy_model or {}).get("aboxSnapshotId") or ""),
@@ -565,7 +567,7 @@ class GraphStoreOntologyRowMapperMixin:
                 "asOf": str((item.legacy_model or {}).get("asOf") or ""),
                 "isCurrent": bool((item.legacy_model or {}).get("isCurrent")) if "isCurrent" in (item.legacy_model or {}) else False,
                 "tboxVersion": str((item.legacy_model or {}).get("tboxVersion") or ""),
-                "payloadJson": json.dumps(item.to_dict(), ensure_ascii=False, sort_keys=True),
+                "payloadJson": json.dumps(without_aggregate_decision_fields(item.to_dict()), ensure_ascii=False, sort_keys=True),
             }
             for item in graph.opinions
         ]
@@ -586,7 +588,7 @@ class GraphStoreOntologyRowMapperMixin:
                 "asOf": str(item.get("asOf") or ""),
                 "isCurrent": bool(item.get("isCurrent")) if "isCurrent" in item else False,
                 "tboxVersion": str(item.get("tboxVersion") or ""),
-                "payloadJson": json.dumps(item, ensure_ascii=False, sort_keys=True),
+                "payloadJson": json.dumps(without_aggregate_decision_fields(item), ensure_ascii=False, sort_keys=True),
             }
             for item in (getattr(graph, "reasoning_cards", []) or [])
             if isinstance(item, dict) and item.get("id") and item.get("symbol")

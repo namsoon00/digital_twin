@@ -45,14 +45,16 @@ def relation_context():
             "missingData": ["공시 본문"],
         },
         "activeRules": [
-            {"ruleId": "risk-rule", "strengthScore": 82, "scoreBreakdown": {"riskPressure": 82}},
-            {"ruleId": "support-rule", "strengthScore": 68, "scoreBreakdown": {"supportEvidence": 68}},
+            {"ruleId": "risk-rule", "evidenceRole": "risk", "reviewLevel": "act", "dataState": "sufficient"},
+            {"ruleId": "support-rule", "evidenceRole": "support", "reviewLevel": "check", "dataState": "sufficient"},
         ],
-        "signalConflicts": {
-            "hasConflict": True,
-            "riskPressure": 82,
-            "supportEvidence": 68,
+        "decisionState": {
+            "reviewLevel": "act",
+            "dataState": "sufficient",
+            "changeState": "new-condition",
+            "conflictState": "mixed",
         },
+        "signalConflicts": {"hasConflict": True, "conflictState": "mixed"},
         "missingData": ["공시 본문"],
         "inferenceGenerationId": "generation-1",
         "inferenceGenerationAt": "2026-07-19T01:00:00Z",
@@ -66,7 +68,8 @@ def relation_context():
                     "type": "HAS_INFERRED_RISK",
                     "ruleId": "risk-rule",
                     "polarity": "risk",
-                    "strength": 82,
+                    "evidenceRole": "risk",
+                    "reviewLevel": "act",
                 },
                 {
                     "id": "relation-support",
@@ -75,7 +78,8 @@ def relation_context():
                     "type": "HAS_INFERRED_SUPPORT",
                     "ruleId": "support-rule",
                     "polarity": "support",
-                    "strength": 68,
+                    "evidenceRole": "support",
+                    "reviewLevel": "check",
                 },
             ],
             "traces": [],
@@ -131,7 +135,9 @@ class FakeReviewer:
         return NotificationAIValidatedResponse(
             action="HOLD",
             action_label="보유",
-            confidence=72,
+            validation_state="ready",
+            data_state="sufficient",
+            review_level="act",
             summary="위험과 지지 근거가 충돌해 현재 수량을 유지하며 다음 관계를 확인합니다.",
             opinion="다음 TypeDB 추론 세대에서 위험 관계가 유지되는지 확인합니다.",
             hypotheses=[
@@ -139,7 +145,7 @@ class FakeReviewer:
                     "hypothesisId": item["hypothesisId"],
                     "claim": item["claim"],
                     "stance": item["stance"],
-                    "confidence": item["priorConfidence"],
+                    "evidenceState": item["evidenceState"],
                     "verdict": "unresolved",
                 }
                 for item in hypotheses
@@ -300,7 +306,6 @@ class InvestmentBrainTest(unittest.TestCase):
                 "accountId": "account-1",
                 "symbol": "005930",
                 "action": "TRIM",
-                "confidence": 80,
                 "selectedHypothesisId": "hypothesis-" + str(index),
                 "hypothesisSet": {
                     "hypotheses": [{
@@ -317,10 +322,10 @@ class InvestmentBrainTest(unittest.TestCase):
                     "payload": {"horizonMinutes": 1440},
                 }],
             })
-        result = evaluate_decision_performance(episodes, minimum_sample_count=3, minimum_accuracy_pct=60)
+        result = evaluate_decision_performance(episodes, minimum_sample_count=3)
 
         self.assertEqual(3, result["summary"]["decisiveOutcomeCount"])
-        self.assertEqual(66.67, result["summary"]["directionalAccuracyPct"])
+        self.assertEqual("more-corroborated", result["summary"]["corroborationState"])
         self.assertTrue(result["summary"]["promotionEligible"])
         self.assertEqual("rule:risk", result["byRule"][0]["key"])
         self.assertEqual("template:risk", result["byHypothesis"][0]["key"])
@@ -335,8 +340,8 @@ class InvestmentBrainTest(unittest.TestCase):
         support = next(item for item in hypotheses if item["stance"] == "support")
         self.assertIn("relation-risk", risk["supportingEvidenceIds"])
         self.assertIn("relation-support", support["supportingEvidenceIds"])
-        self.assertEqual(82.0, risk["priorConfidence"])
-        self.assertEqual(68.0, support["priorConfidence"])
+        self.assertEqual("supported", risk["evidenceState"])
+        self.assertEqual("supported", support["evidenceState"])
         self.assertTrue(payload["researchPlan"]["tasks"])
         self.assertTrue(payload["selfQuestions"])
 
@@ -354,7 +359,7 @@ class InvestmentBrainTest(unittest.TestCase):
 
     def test_rule_relation_polarity_is_not_overwritten_by_global_risk_pressure(self):
         context = relation_context()
-        context["activeRules"][1]["scoreBreakdown"] = {"riskPressure": 95, "supportEvidence": 5}
+        context["activeRules"][1]["evidenceRole"] = "support"
         hypotheses = hypothesis_set_from_relation_context(context)["hypothesisSet"]["hypotheses"]
         support = next(item for item in hypotheses if item["templateId"] == "hypothesis-template:support-rule")
         self.assertEqual("support", support["stance"])
@@ -375,7 +380,6 @@ class InvestmentBrainTest(unittest.TestCase):
         selected = hypotheses[0]["hypothesisId"]
         payload = {
             "action": "TRIM",
-            "confidence": 75,
             "summary": "위험 가설이 우세합니다.",
             "opinion": "일부 축소를 검토합니다.",
             "evidence": ["relation-risk"],
@@ -385,7 +389,7 @@ class InvestmentBrainTest(unittest.TestCase):
                     "hypothesisId": item["hypothesisId"],
                     "claim": item["claim"],
                     "stance": item["stance"],
-                    "confidence": item["priorConfidence"],
+                    "evidenceState": item["evidenceState"],
                     "supportingEvidenceIds": item["supportingEvidenceIds"],
                     "counterEvidenceIds": item["counterEvidenceIds"],
                     "verdict": "supported" if item["hypothesisId"] == selected else "weakened",
@@ -511,8 +515,12 @@ class InvestmentBrainTest(unittest.TestCase):
             title="삼성전자 공식 사업 업데이트",
             observed_at="2026-07-19T11:00:00Z",
             published_at="2026-07-19T11:00:00Z",
-            confidence=0.9,
-            raw_payload={"relationScope": "direct", "sourceReliability": 90},
+            raw_payload={
+                "relationScope": "direct",
+                "sourceTrustState": "trusted",
+                "dataState": "sufficient",
+                "validationState": "ready",
+            },
         )
         unresolved = ResearchEvidence(
             evidence_id="evidence-unresolved",
@@ -522,11 +530,15 @@ class InvestmentBrainTest(unittest.TestCase):
             title="다른 회사 이야기",
             observed_at="2026-07-19T11:00:00Z",
             published_at="2026-07-19T11:00:00Z",
-            confidence=0.9,
-            raw_payload={"relationScope": "related_product", "sourceReliability": 90},
+            raw_payload={
+                "relationScope": "related_product",
+                "sourceTrustState": "trusted",
+                "dataState": "sufficient",
+                "validationState": "ready",
+            },
         )
         accepted, verified, rejected = governed_evidence(
-            [valid, unresolved], target, max_age_minutes=10**8, minimum_source_reliability=55
+            [valid, unresolved], target, max_age_minutes=10**8, minimum_source_trust_state="standard"
         )
         self.assertEqual(["evidence-valid"], [item.evidence_id for item in accepted])
         self.assertEqual("verified-secondary", verified[0].verification_status)
@@ -554,8 +566,12 @@ class InvestmentBrainTest(unittest.TestCase):
             title="삼성전자 공급 계약 확인",
             observed_at=observed_at,
             published_at=observed_at,
-            confidence=0.92,
-            raw_payload={"relationScope": "direct", "sourceReliability": 92},
+            raw_payload={
+                "relationScope": "direct",
+                "sourceTrustState": "trusted",
+                "dataState": "sufficient",
+                "validationState": "ready",
+            },
         )
         evidence_store = FakeEvidenceStore()
         run_store = FakeResearchStore()
@@ -624,7 +640,7 @@ class InvestmentBrainTest(unittest.TestCase):
             rows,
             target,
             max_age_minutes=10**8,
-            minimum_source_reliability=55,
+            minimum_source_trust_state="standard",
         )
         self.assertEqual(1, len(accepted))
         self.assertEqual("verified-primary", verified[0].verification_status)

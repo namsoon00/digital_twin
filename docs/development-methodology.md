@@ -14,7 +14,7 @@ This project uses a local-first, DDD-oriented, event-driven architecture. Future
 - Run `npm test` before handoff, then commit and push to `origin/main` unless explicitly told not to.
 - After commit and push, restart project-managed local runtime processes with `npm run python:service:restart`, then confirm with `npm run python:service:status`. Also restart any web, preview, share, or watcher process that the current Codex session started. Do not kill unrelated or user-started processes that cannot be safely identified; report any process that could not be restarted.
 - After commit and push, send a work-complete notification with `npm run python:handoff:notify -- --summary "<short summary>" --commit "$(git rev-parse --short HEAD)" --validation "npm test 통과" --push "origin/main 성공"` so other local workers can see the task is finished.
-- Notification wording must keep investment model scores separate from notification delivery priority. Follow `docs/notification-terminology.md` when changing alert messages, rule labels, or notification UI.
+- Notification wording must keep categorical investment judgement separate from notification delivery priority. Follow `docs/notification-terminology.md` when changing alert messages, rule labels, or notification UI.
 - User-facing investment language must follow `docs/investment-ubiquitous-language.md`. Internal TypeDB identifiers stay stable, while alerts, AI final text, and UI use the TBox-backed Korean domain labels.
 
 ## Ontology-First Development Rules
@@ -24,7 +24,7 @@ Investment-analysis code must treat the ontology as the shared world model, not 
 Required flow for new investment behavior:
 
 1. Define the concept in the TBox.
-   Add or reuse a class, relation type, bounded context, score band, decision stage, and policy vocabulary before adding runtime behavior. TBox definitions belong in `domain/ontology_tbox.py`, `domain/ontology_relation_contracts.py`, `domain/ontology_relation_catalog.py`, `domain/ontology_decision_policy.py`, or the closest existing ontology catalog module. Do not introduce a new investment meaning only as a string in an alert template.
+   Add or reuse a class, relation type, bounded context, review level, data state, decision stage, and policy vocabulary before adding runtime behavior. TBox definitions belong in `domain/ontology_tbox.py`, `domain/ontology_relation_contracts.py`, `domain/ontology_relation_catalog.py`, `domain/ontology_decision_policy.py`, or the closest existing ontology catalog module. Do not introduce a new investment meaning only as a string in an alert template.
 
 2. Materialize real-world data as ABox facts.
    Every collected or derived investment fact should become an ABox entity or relation with `ontologyBox`, `tboxClass` or `tboxClasses`, `boundedContext` when applicable, provenance, freshness, and missing-data semantics. A quote, disclosure, news item, macro series, FX rate, liquidity observation, investor-flow value, valuation assumption, account exposure, data-source status, or collection schedule should be represented as facts before it is used for judgement.
@@ -41,17 +41,17 @@ Required flow for new investment behavior:
 6. Treat graph inference as mandatory for investment alerts.
    Legacy message types such as `modelBuy`, `modelSell`, `monitorPnlChange`, `monitorTrendChange`, `externalCryptoMove`, and `externalDartDisclosure` must not be generated, enabled by default, or registered as standalone investment dispatch inputs. `holdingTiming` and `watchlistOntologySignal` may exist only as graph-backed evidence signals inside an `investmentInsight`. New investment notifications must be `investmentInsight` events derived from graph-backed InferenceBox relation context from the active graph store.
 
-7. Separate reasoning score from delivery priority.
-   Ontology relation scores describe investment meaning, relationship strength, confidence, novelty, and decision stage. Notification scores describe whether a message should be delivered after cooldown, similarity, market-hours, and freshness gates. Do not use delivery priority as an investment score or present it as model confidence.
+7. Separate investment meaning from delivery priority.
+   Ontology relations describe review level, data state, evidence role, change state, conflict state, validation state, and decision stage. Delivery priority only decides whether a message is sent after cooldown, similarity, market-hours, and freshness gates. Do not present delivery ordering as an investment judgement or as a probability.
 
 8. Send AI the graph context, not loose facts only.
    AI investment opinions should receive the relevant TBox vocabulary, ABox facts, InferenceBox relations, matched TypeDB schema function traces, evidence subgraph, missing data, freshness, provenance, and guardrails. Prompt builders should not invent facts that are absent from the graph; missing data should be explicit.
 
 9. Compare competing hypotheses before choosing an action.
-   A single highest-scoring relation or rule is a baseline candidate, not the final investment opinion. Create one current-situation hypothesis from each relevant active TypeDB rule and causal trace, then keep at least one evidence-sufficiency or counterfactual safety hypothesis when the graph does not provide enough independent alternatives. Do not maintain a fixed Python catalog of risk/recovery claims. Each hypothesis must carry an approved template ID, graph evidence IDs, counter-evidence IDs, causal trace IDs, assumptions, invalidation conditions, horizon, verification status, and a provisional confidence. The selected hypothesis and unresolved questions must be part of the structured AI response.
+   A single active relation or rule is a baseline candidate, not the final investment opinion. Create one current-situation hypothesis from each relevant active TypeDB rule and causal trace, then keep at least one evidence-sufficiency or counterfactual safety hypothesis when the graph does not provide enough independent alternatives. Do not maintain a fixed Python catalog of risk/recovery claims. Each hypothesis must carry an approved template ID, graph evidence IDs, counter-evidence IDs, causal trace IDs, assumptions, invalidation conditions, horizon, verification status, and validation state. The selected hypothesis and unresolved questions must be part of the structured AI response.
 
 10. Make data quality part of the graph.
-   Missing feeds, stale quotes, source errors, partial symbol coverage, unmatched news, and disabled vendors should become `DataQuality`, `DataFreshness`, `Provenance`, `DataSource`, `CoverageGap`, or equivalent ABox facts. They should affect confidence and dispatch policy without being hidden as logs only.
+   Missing feeds, stale quotes, source errors, partial symbol coverage, unmatched news, and disabled vendors should become `DataQuality`, `DataFreshness`, `Provenance`, `DataSource`, `CoverageGap`, or equivalent ABox facts. They should affect data and validation states plus dispatch policy without being hidden as logs only.
 
 11. Persist decisions and evaluate outcomes.
     Save every final AI investment judgement as a `DecisionEpisode` with its `InvestmentQuestion`, `HypothesisSet`, selected hypothesis, inference generation, evidence IDs, and facts at decision time. Evaluate later ontology observations at configured horizons and project `ObservedOutcome` facts back into the ABox. Do not count repeated observations of one decision as multiple independent decisions.
@@ -121,29 +121,29 @@ Domain:
 - `python_service/digital_twin/domain/analytics.py`: compatibility facade for legacy analytics imports only
 - `python_service/digital_twin/domain/market_data.py`: market-data normalization, symbol hints, moving-average helpers, and numeric coercion
 - `python_service/digital_twin/domain/portfolio_calculations.py`: portfolio exposure, FX conversion, and summary calculations
-- `python_service/digital_twin/domain/strategy.py`: scoring formulas, strategy feature variables, and position decision rules
+- `python_service/digital_twin/domain/strategy.py`: TypeDB inference-backed strategy compatibility facade, raw market facts, and categorical position decision state
 - `python_service/digital_twin/domain/ontology_tbox.py`: bounded-context TBox vocabulary, relation definitions, and ontology reasoning rule catalog
 - `python_service/digital_twin/domain/ontology_contracts.py`: ontology graph data contracts such as entities, relations, evidence, beliefs, opinions, and portfolio ontology snapshots
 - `python_service/digital_twin/domain/ontology_schema.py`: TBox/ABox payloads, bounded-context property assignment, and basic ontology graph mutation helpers
-- `python_service/digital_twin/domain/ontology_relation_contracts.py`: ontology relation-reasoning data contracts, prompt template contracts, score bands, decision stages, and threshold constants
-- `python_service/digital_twin/domain/ontology_relation_catalog.py`: bootstrap ontology relation catalog, score-band catalog, and decision-stage catalog used to seed ontology/native-rule management views; new runtime logic should not be added here first
+- `python_service/digital_twin/domain/ontology_relation_contracts.py`: ontology relation-reasoning data contracts, prompt template contracts, categorical review/data/change states, decision stages, and raw threshold constants
+- `python_service/digital_twin/domain/ontology_relation_catalog.py`: bootstrap ontology relation catalog and decision-stage catalog used to seed ontology/native-rule management views; new runtime logic should not be added here first
 - `python_service/digital_twin/domain/ontology_prompt_registry.py`: default AI prompt registry text, prompt guardrails, and prompt policy defaults
 - `python_service/digital_twin/domain/ontology_relation_facts.py`: position, temporal, liquidity, macro, research-evidence, and missing-data facts used by ontology relation evaluation
 - `python_service/digital_twin/domain/portfolio_ontology_builder.py`: portfolio snapshot to ontology builder; graph-store projection produces ABox facts only and leaves opinions, insights, and inference to TypeDB schema-function/AI stages
 - `python_service/digital_twin/domain/portfolio_ontology_cognitive_concepts.py`: decision memory, hypotheses, assumptions, unresolved questions, and outcomes projected into the ABox
 - `python_service/digital_twin/domain/portfolio_ontology_catalog.py`: portfolio ontology projection catalogs for metrics, runtime settings, operational pipelines, insight types, factors, and sectors
-- `python_service/digital_twin/domain/portfolio_ontology_market_concepts.py`: market metric, trend, data-source, model-score, price-level, and liquidity ABox concept builders
+- `python_service/digital_twin/domain/portfolio_ontology_market_concepts.py`: market metric, trend, data-source, price-level, and liquidity ABox concept builders
 - `python_service/digital_twin/domain/portfolio_ontology_runtime_concepts.py`: runtime settings, account delivery profile, operational pipeline, strategy world, and decision-item ABox concept builders
 - `python_service/digital_twin/domain/ontology_prompting.py`: ontology read models for reasoning cards, AI inference packets, worldview summaries, and prompt payloads
-- `python_service/digital_twin/domain/external_signal_quality.py`: external signal provenance, freshness, source-health, and symbol-coverage scoring
+- `python_service/digital_twin/domain/external_signal_quality.py`: external signal provenance, freshness, source-health, and symbol-coverage state
 - `python_service/digital_twin/domain/ontology_quality.py`: AI opinion readiness and ontology graph quality sample metrics
 - `python_service/digital_twin/domain/ontology_relation_reasoning.py`: prompt/read-model helpers for relation-context formatting; it must not materialize InferenceBox output or run offline investment-rule comparisons
 - `python_service/digital_twin/domain/ontology_inference_context.py`: active graph-store InferenceBox to relation-context adapter; runtime monitoring should require TypeDB-stored InferenceBox evidence for TypeDB-backed investment judgement
-- `python_service/digital_twin/domain/scoring.py`: reusable scoring signals and fallback vocabularies used by notification and strategy-adjacent scores
+- `python_service/digital_twin/domain/ontology_decision_state.py`: categorical review, data, evidence, conflict, change, and validation states shared by reasoning, AI, and delivery
 - `python_service/digital_twin/domain/message_types.py`: shared message-type catalog, labels, default alert rules, thresholds, and cadence
 - `python_service/digital_twin/domain/alert_formatting.py`: money, percentage, and compact-number formatting used by alerts
 - `python_service/digital_twin/domain/monitoring.py`: realtime monitoring orchestration rules and cadence filtering
-- `python_service/digital_twin/domain/strategy_alerts.py`: strategy-score alert rules
+- `python_service/digital_twin/domain/strategy_alerts.py`: compatibility alert helpers that must not create standalone investment judgement
 - `python_service/digital_twin/domain/external_signal_alerts.py`: external market, crypto, macro, DART, and data-connection alert rules
 - `python_service/digital_twin/domain/model_review.py`: model-change explanation, data validation, and improvement hints for alert messages
 - `python_service/digital_twin/domain/events.py`: event names and event payload factories
@@ -207,10 +207,10 @@ Use these slices when multiple chat windows work independently:
 
 - Account management: `domain/accounts.py`, `application/account_service.py`, `infrastructure/operational_store.py`, and account store adapters
 - Monitoring and scheduling: `domain/monitoring.py`, `domain/strategy_alerts.py`, `domain/external_signal_alerts.py`, `application/monitoring_service.py`, `application/scheduler.py`, `infrastructure/operational_store.py`, and monitor store adapters
-- Notifications and messages: `domain/message_types.py`, `domain/notifications.py`, `domain/notification_rules.py`, `domain/notification_templates.py`, `domain/scoring.py`, `application/notification_service.py`, `infrastructure/notifications.py`, `infrastructure/operational_store.py`, and notification store adapters
+- Notifications and messages: `domain/message_types.py`, `domain/notifications.py`, `domain/notification_rules.py`, `domain/notification_templates.py`, `domain/notification_signal_classification.py`, `application/notification_service.py`, `infrastructure/notifications.py`, `infrastructure/operational_store.py`, and notification store adapters
 - Symbol universe: `domain/symbol_universe.py`, `application/symbol_universe_service.py`, `infrastructure/symbol_sources.py`, `infrastructure/operational_store.py`, and symbol store adapters
 - Providers/data collection: `infrastructure/toss_snapshots.py`
-- Model scoring and strategy: `domain/market_data.py`, `domain/portfolio_calculations.py`, `domain/strategy.py`, `domain/scoring.py`, and future model-lab application services
+- Market state and strategy: `domain/market_data.py`, `domain/portfolio_calculations.py`, `domain/strategy.py`, `domain/ontology_decision_state.py`, and future model-lab application services
 - Model review and validation: `domain/model_review.py`, `application/model_review_service.py`, `infrastructure/operational_store.py`, `infrastructure/model_review_queue.py`, `infrastructure/model_reviewer.py`, and model-review store adapters
 - Runtime/configuration: `infrastructure/settings.py`, `infrastructure/service_factory.py`, `service_manager.py`
 

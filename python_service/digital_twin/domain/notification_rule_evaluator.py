@@ -2,27 +2,29 @@ import re
 from typing import Dict, Iterable, List, Optional, Tuple
 
 from .market_hours import evaluate_market_hours
+from .message_types import INVESTMENT_INSIGHT, NEWS_DIGEST, SYSTEM_MESSAGE_TYPES
+from .notification_ai_context import is_graph_backed_relation_context
+from .ontology_decision_state import (
+    CHANGE_STATES,
+    CONFLICT_STATES,
+    DATA_STATES,
+    REVIEW_LEVELS,
+    VALIDATION_STATES,
+)
 from .notification_rule_models import (
     DATA_QUALITY_REPEAT_BYPASS_IDS,
-    DEFAULT_LOW_SCORE_ACTION,
-    DEFAULT_NOTIFICATION_SCORE_FORMULA,
     DEFAULT_SIMILARITY_FIELDS,
-    FORMULA_VARIABLE_BY_CONDITION_ID,
-    VOLATILE_SCORE_SUFFIX,
+    VOLATILE_VALUE_SUFFIX,
     NotificationRuleCondition,
     NotificationRuleConfig,
     NotificationRuleDecision,
     SimilarityBypassCondition,
     clamp_int,
-    default_base_score,
-    default_similarity_penalty,
     default_state_cooldown_minutes,
-    default_threshold,
 )
 from .notifications import NotificationJob
 from .ontology_threshold_policy import default_ontology_threshold_policy
-from .scoring import fallback_terms_for_condition
-from .strategy import SafeFormula
+from .notification_signal_classification import fallback_terms_for_delivery_condition
 
 
 def mandatory_profit_loss_policy():
@@ -94,6 +96,17 @@ ACTION_FIELD_CANDIDATES = [
     "holdingDecision",
     "holdingAction",
 ]
+INVESTMENT_STATE_GATED_MESSAGE_TYPES = {
+    INVESTMENT_INSIGHT,
+    "holdingTiming",
+    "watchlistOntologySignal",
+    "monitorDecisionChange",
+    "monitorPositionChange",
+    "monitorPnlChange",
+    "monitorValueChange",
+    "monitorTrendChange",
+}
+REVIEW_LEVEL_RANK = {value: index for index, value in enumerate(REVIEW_LEVELS)}
 
 
 def flattened_strings(value) -> Iterable[str]:
@@ -132,6 +145,70 @@ def field_value(context: Dict[str, object], field: str):
         else:
             return ""
     return current
+
+
+def nested_dict(value: object) -> Dict[str, object]:
+    return value if isinstance(value, dict) else {}
+
+
+def notification_state_context(context: Dict[str, object]) -> Dict[str, str]:
+    """Read the categorical decision contract without manufacturing a score."""
+
+    context = context if isinstance(context, dict) else {}
+    metadata = nested_dict(context.get("metadata"))
+    relation_context = relation_context_from_notification_context(context)
+    relation_state = nested_dict(relation_context.get("decisionState"))
+    relation_decision = nested_dict(relation_context.get("decision"))
+    insight = nested_dict(context.get("ontologyInsight")) or nested_dict(metadata.get("ontologyInsight"))
+    validated = nested_dict(context.get("notificationAiValidatedResponse")) or nested_dict(
+        metadata.get("notificationAiValidatedResponse")
+    )
+    opinion = nested_dict(context.get("activeInvestmentOpinion")) or nested_dict(
+        metadata.get("activeInvestmentOpinion")
+    )
+    containers = [validated, insight, opinion, relation_state, relation_decision, relation_context, context, metadata]
+
+    def first_known(key: str, allowed, fallback: str) -> str:
+        for container in containers:
+            value = str(container.get(key) or "").strip().lower()
+            if value in allowed:
+                return value
+        return fallback
+
+    review_level = first_known("reviewLevel", REVIEW_LEVELS, "observe")
+    data_state = first_known("dataState", DATA_STATES, "partial")
+    change_state = first_known("changeState", CHANGE_STATES, "unchanged")
+    conflict_state = first_known("conflictState", CONFLICT_STATES, "context-only")
+    validation_state = first_known("validationState", VALIDATION_STATES, "conditional")
+    return {
+        "reviewLevel": review_level,
+        "dataState": data_state,
+        "changeState": change_state,
+        "conflictState": conflict_state,
+        "validationState": validation_state,
+    }
+
+
+def graph_backed_notification(context: Dict[str, object]) -> bool:
+    return is_graph_backed_relation_context(relation_context_from_notification_context(context or {}))
+
+
+def material_evidence_present(context: Dict[str, object]) -> bool:
+    context = context or {}
+    insight = nested_dict(context.get("ontologyInsight"))
+    change_state = str(insight.get("changeState") or context.get("changeState") or "").strip().lower()
+    if change_state == "new-evidence":
+        return True
+    for field in (
+        "sourceSignalTypes",
+        "ontologyInsight.sourceEventKeys",
+        "researchEvidence",
+        "newsItems",
+        "disclosures",
+    ):
+        if is_present(field_value(context, field)):
+            return True
+    return False
 
 
 def is_data_quality_insight_context(context: Dict[str, object]) -> bool:
@@ -326,6 +403,10 @@ def apply_mandatory_profit_loss_delivery(
     previous_context: Dict[str, object] = None,
     allow_without_previous: bool = True,
 ) -> bool:
+    # 손익 구간은 반복·쿨다운만 우회할 수 있다. TypeDB, 데이터, AI 검증
+    # 같은 필수 관문이 막힌 알림을 다시 살리면 ontology-first 계약이 깨진다.
+    if not decision.should_send and decision.suppression_reason not in {"similar_repeat", "state_cooldown"}:
+        return False
     reason = mandatory_profit_loss_delivery_reason(
         job,
         previous_context=previous_context,
@@ -334,9 +415,12 @@ def apply_mandatory_profit_loss_delivery(
     if not reason:
         return False
     decision.should_send = True
+    decision.delivery_state = "send"
+    decision.gate_state = "eligible"
+    decision.gate_reason = reason
     decision.suppression_reason = ""
     decision.state_suppressed = False
-    decision.state_decision = "mandatory_profit_loss_band"
+    decision.state_decision = "required-profit-loss-change"
     decision.state_reason = reason
     decision.similarity_bypassed = True
     decision.similarity_bypass_reason = reason
@@ -433,9 +517,9 @@ def notification_state_group_key(job: NotificationJob) -> str:
         subject,
         normalize_fingerprint_part(state_group),
     ]
-    semantic_state = ontology_relation_state_signature(context)
-    if semantic_state:
-        parts.append(semantic_state)
+    relation_signature = ontology_relation_state_signature(context)
+    if relation_signature:
+        parts.append(relation_signature)
     return "|".join(parts)
 
 
@@ -527,7 +611,7 @@ def condition_matches(condition: NotificationRuleCondition, job: NotificationJob
 def default_signal_fallback_matches(condition: NotificationRuleCondition, blob: str, context: Dict[str, object]) -> bool:
     if is_present(field_value(context, condition.field)):
         return False
-    fallback_terms = [normalized_text(term) for term in fallback_terms_for_condition(condition.condition_id)]
+    fallback_terms = [normalized_text(term) for term in fallback_terms_for_delivery_condition(condition.condition_id)]
     return any(term in blob for term in fallback_terms if term)
 
 
@@ -539,7 +623,7 @@ def format_rule_number(value: float) -> str:
 def normalize_similarity_list_item(field: str, value: object) -> str:
     normalized = normalize_fingerprint_part(value)
     if str(field or "").endswith("sourceEventKeys"):
-        return VOLATILE_SCORE_SUFFIX.sub("", normalized)
+        return VOLATILE_VALUE_SUFFIX.sub("", normalized)
     return normalized
 
 
@@ -558,7 +642,7 @@ def normalize_similarity_list_items(field: str, value: object) -> List[str]:
         return [normalized]
     parts = []
     for item in normalized.split("+"):
-        key = VOLATILE_SCORE_SUFFIX.sub("", normalize_fingerprint_part(item))
+        key = VOLATILE_VALUE_SUFFIX.sub("", normalize_fingerprint_part(item))
         if key and material_source_event_key(key):
             parts.append(key)
     return parts
@@ -569,7 +653,6 @@ def similarity_bypass_match(
     job: NotificationJob,
     previous_context: Dict[str, object],
     decision: NotificationRuleDecision,
-    previous_score: int,
 ) -> Tuple[bool, str]:
     context = job.context or {}
     condition_type = condition.condition_type
@@ -577,19 +660,20 @@ def similarity_bypass_match(
     field = condition.field or ""
     if condition.condition_id in DATA_QUALITY_REPEAT_BYPASS_IDS and is_data_quality_insight_context(context):
         return False, ""
-    if condition_type == "score_delta_gte":
-        current = int(decision.score or 0)
-        previous = int(previous_score or 0)
-        minimum = numeric_value(condition.value)
-        if minimum is not None and previous and current - previous >= minimum:
-            return True, label + " +" + str(current - previous) + "점"
-        return False, ""
     if condition_type == "severity_upgrade":
         target_field = field or "severity"
         current_rank = severity_rank(field_value(context, target_field))
         previous_rank = severity_rank(field_value(previous_context, target_field))
         if current_rank > previous_rank >= 0:
             return True, label + " " + str(field_value(previous_context, target_field) or "-") + " -> " + str(field_value(context, target_field) or "-")
+        return False, ""
+    if condition_type == "review_level_upgrade":
+        target_field = field or "ontologyInsight.reviewLevel"
+        current = str(field_value(context, target_field) or "").strip().lower()
+        previous = str(field_value(previous_context, target_field) or "").strip().lower()
+        if current in REVIEW_LEVEL_RANK and previous in REVIEW_LEVEL_RANK:
+            if REVIEW_LEVEL_RANK[current] > REVIEW_LEVEL_RANK[previous]:
+                return True, label + " " + previous + " -> " + current
         return False, ""
     if condition_type == "field_changed":
         current = normalize_fingerprint_part(field_value(context, field))
@@ -626,6 +710,31 @@ def similarity_bypass_match(
         if new_items and len(new_items) >= int(minimum or 1):
             return True, label + " " + ", ".join(new_items[:4])
         return False, ""
+    if condition_type in {
+        "abs_number_delta_gte",
+        "number_delta_gte",
+        "number_delta_lte",
+        "number_multiplier_gte",
+    }:
+        # 가격·거래량 같은 실제 관측값만 반복 해제에 사용할 수 있다.
+        # 이름에 score가 들어간 예전 합산 점수 필드는 명시적으로 거부한다.
+        if "score" in str(field or "").strip().lower():
+            return False, ""
+        current = numeric_value(field_value(context, field))
+        previous = numeric_value(field_value(previous_context, field))
+        threshold = numeric_value(condition.value)
+        if current is None or previous is None or threshold is None:
+            return False, ""
+        delta = current - previous
+        if condition_type == "abs_number_delta_gte" and abs(delta) >= threshold:
+            return True, label + " " + format_rule_number(previous) + " -> " + format_rule_number(current)
+        if condition_type == "number_delta_gte" and delta >= threshold:
+            return True, label + " " + format_rule_number(previous) + " -> " + format_rule_number(current)
+        if condition_type == "number_delta_lte" and delta <= threshold:
+            return True, label + " " + format_rule_number(previous) + " -> " + format_rule_number(current)
+        if condition_type == "number_multiplier_gte" and previous != 0 and current / previous >= threshold:
+            return True, label + " " + format_rule_number(previous) + " -> " + format_rule_number(current)
+        return False, ""
     if condition_type == "profit_loss_worsened_lte":
         current = profit_loss_rate_from_context(context, job.text if job else "")
         previous = profit_loss_rate_from_context(previous_context)
@@ -657,136 +766,107 @@ def similarity_bypass_match(
         if previous >= threshold and current < threshold:
             return True, label + " " + format_rule_number(previous) + "% -> " + format_rule_number(current) + "%"
         return False, ""
-    if condition_type in {"abs_number_delta_gte", "number_delta_gte", "number_delta_lte", "number_multiplier_gte"}:
-        current = numeric_value(field_value(context, field))
-        previous = numeric_value(field_value(previous_context, field))
-        minimum = numeric_value(condition.value)
-        if current is None or previous is None or minimum is None:
+    if condition_type == "ma60_crossed_above":
+        current = ma60_distance_from_context(context, job.text if job else "")
+        previous = ma60_distance_from_context(previous_context)
+        threshold = numeric_value(condition.value)
+        if threshold is None:
+            threshold = 0.0
+        if current is None or previous is None:
             return False, ""
-        if condition_type == "abs_number_delta_gte":
-            delta = abs(current) - abs(previous)
-            if delta >= minimum:
-                return True, label + " " + format_rule_number(previous) + " -> " + format_rule_number(current)
-        if condition_type == "number_delta_gte":
-            delta = current - previous
-            if delta >= minimum:
-                return True, label + " +" + format_rule_number(delta)
-        if condition_type == "number_delta_lte":
-            delta = current - previous
-            if delta <= -minimum:
-                return True, label + " " + format_rule_number(delta)
-        if condition_type == "number_multiplier_gte" and previous > 0:
-            multiplier = current / previous
-            if multiplier >= minimum:
-                return True, label + " x" + format_rule_number(multiplier)
+        if previous < threshold and current >= threshold:
+            return True, label + " " + format_rule_number(previous) + "% -> " + format_rule_number(current) + "%"
+        return False, ""
     return False, ""
 
 
 def evaluate_notification_rule(job: NotificationJob, config: NotificationRuleConfig) -> NotificationRuleDecision:
-    base_score = clamp_int(config.base_score, 0, 100, default_base_score(config.message_type))
-    score = base_score
-    reasons = ["기본 " + str(score) + "점"]
-    formula_variables = {
-        "baseScore": float(base_score),
-        "severityScore": 0.0,
-        "symbolScore": 0.0,
-        "importantScore": 0.0,
-        "confirmingDataScore": 0.0,
-        "actionableScore": 0.0,
-        "bodyScore": 0.0,
-        "noisePenalty": 0.0,
-        "conditionScore": 0.0,
-        "threshold": float(clamp_int(config.threshold, 0, 100, default_threshold(config.message_type))),
-        "severityRank": float(severity_rank((job.context or {}).get("severity"))),
-        "hasSymbol": 1.0 if is_present((job.context or {}).get("symbol")) else 0.0,
-        "hasBody": 1.0 if is_present((job.context or {}).get("body")) else 0.0,
-        "signalCount": float(len((job.context or {}).get("notificationSignals") or [])),
-    }
+    state = notification_state_context(job.context or {})
+    reasons: List[str] = []
+    matched_conditions: List[str] = []
     blob = job_search_blob(job)
     for condition in config.conditions:
         if not condition.enabled:
             continue
         if condition_matches(condition, job, blob):
-            score += int(condition.score or 0)
-            formula_variables["conditionScore"] += float(condition.score or 0)
-            variable_name = FORMULA_VARIABLE_BY_CONDITION_ID.get(condition.condition_id)
-            if variable_name:
-                formula_variables[variable_name] += float(condition.score or 0)
-            reasons.append(condition.label + " " + ("+" if condition.score >= 0 else "") + str(condition.score))
-    threshold = clamp_int(config.threshold, 0, 100, default_threshold(config.message_type))
-    raw_score = clamp_int(score, 0, 100, 0)
-    formula_variables["rawScore"] = float(raw_score)
-    score, formula_audit = notification_formula_score(job.context or {}, formula_variables, raw_score, reasons)
-    action = config.low_score_action or DEFAULT_LOW_SCORE_ACTION
-    should_send = True
-    if config.enabled and action == "suppress":
-        should_send = score >= threshold
-    return NotificationRuleDecision(
+            matched_conditions.append(condition.condition_id)
+            reasons.append(condition.label)
+
+    message_type = str(job.message_type or config.message_type or "")
+    decision = NotificationRuleDecision(
         message_type=job.message_type or config.message_type,
         enabled=bool(config.enabled),
-        score=score,
-        threshold=threshold,
-        should_send=bool(should_send),
-        low_score_action=action,
+        should_send=True,
+        delivery_state="send",
+        gate_state="eligible",
+        gate_reason="발송 가능한 이벤트입니다.",
+        review_level=state["reviewLevel"],
+        data_state=state["dataState"],
+        change_state=state["changeState"],
+        conflict_state=state["conflictState"],
+        validation_state=state["validationState"],
         reasons=reasons,
+        matched_conditions=matched_conditions,
         fingerprint=notification_fingerprint(job, config),
         similarity_enabled=bool(config.similarity_enabled),
         similarity_window_minutes=int(config.similarity_window_minutes or 0),
-        similarity_penalty=int(config.similarity_penalty or 0),
-        notification_formula_audit=formula_audit,
     )
-
-
-def notification_formula_score(
-    context: Dict[str, object],
-    variables: Dict[str, float],
-    raw_score: int,
-    reasons: List[str],
-) -> Tuple[int, Dict[str, object]]:
-    formula_text = str(context.get("notificationScoreFormula") or "").strip()
-    if not formula_text:
-        formula_text = DEFAULT_NOTIFICATION_SCORE_FORMULA
-    formula = None
-    missing = []
-    used_variables = {"rawScore": float(raw_score)}
-    try:
-        formula = SafeFormula(formula_text)
-        used_names = formula.variable_names()
-        missing = [name for name in used_names if name not in variables]
-        used_variables = {
-            name: round(float(variables.get(name, 0.0)), 4)
-            for name in used_names
-            if name in variables
-        }
-        score = clamp_int(formula.evaluate(variables), 0, 100, raw_score)
-    except (SyntaxError, ValueError, NameError, ArithmeticError) as error:
-        reasons.append("사용자 발송 공식 오류: " + str(error))
-        score = raw_score
-    else:
-        if formula_text != DEFAULT_NOTIFICATION_SCORE_FORMULA:
-            reasons.append("사용자 발송 공식 적용 " + str(score) + "점")
-    audit = {
-        "key": "notificationScoreFormula",
-        "label": "알림 발송 공식",
-        "expression": formula_text,
-        "result": score,
-        "variables": used_variables,
-        "missing": missing,
-        "note": "반복 알림 패널티나 장 시간 정책 적용 전의 공식 결과입니다.",
-    }
-    return score, audit
+    if not config.enabled:
+        decision.mark_bypass("발송 필터가 꺼져 있어 이벤트를 그대로 보냅니다.")
+        return decision
+    if not str(job.text or "").strip():
+        decision.mark_suppressed("empty_body", "알림 본문이 비어 있어 보내지 않습니다.")
+        return decision
+    if message_type in SYSTEM_MESSAGE_TYPES:
+        decision.gate_reason = "연결·운영 상태 알림은 투자 판단과 분리해 보냅니다."
+        return decision
+    if message_type == NEWS_DIGEST:
+        decision.gate_reason = "새 기사 근거가 선별되어 뉴스 알림을 보냅니다."
+        return decision
+    if is_data_quality_insight_context(job.context or {}):
+        decision.gate_state = "conditional"
+        decision.gate_reason = "투자 의견이 아니라 자료 상태 경고이므로 별도로 보냅니다."
+        return decision
+    if message_type in INVESTMENT_STATE_GATED_MESSAGE_TYPES:
+        if not graph_backed_notification(job.context or {}):
+            decision.mark_suppressed("missing_graph_inference", "TypeDB 추론 근거가 없어 투자 판단 알림을 보내지 않습니다.")
+            return decision
+        if state["dataState"] in {"insufficient", "unavailable"}:
+            decision.mark_suppressed("insufficient_data", "핵심 자료가 부족하거나 사용할 수 없어 투자 판단 알림을 보내지 않습니다.")
+            return decision
+        if state["validationState"] == "blocked" or state["reviewLevel"] == "blocked":
+            decision.mark_suppressed("validation_blocked", "AI 검증 또는 관계 판단이 보류 상태라 투자 판단 알림을 보내지 않습니다.")
+            return decision
+        if (
+            state["reviewLevel"] == "normal"
+            and state["changeState"] == "unchanged"
+            and not material_evidence_present(job.context or {})
+        ):
+            decision.mark_suppressed("unchanged_normal_state", "평소 상태가 그대로이고 새 근거가 없어 반복 알림을 보내지 않습니다.")
+            return decision
+        if state["dataState"] == "partial" or state["validationState"] == "conditional":
+            decision.gate_state = "conditional"
+            decision.gate_reason = "일부 자료가 비어 있어 한계를 함께 표시한 조건부 알림입니다."
+        else:
+            decision.gate_reason = "TypeDB 관계 판단과 AI 검증을 통과한 변화입니다."
+        return decision
+    if "status_noise" in matched_conditions and not set(matched_conditions).intersection(
+        {"severity_alert", "severity_watch", "important_terms", "confirming_data", "actionable_terms"}
+    ):
+        decision.mark_suppressed("status_noise", "새 변화 없이 상태 설명만 반복되어 보내지 않습니다.")
+        return decision
+    decision.gate_reason = "해당 이벤트의 직접 발송 조건이 성립했습니다."
+    return decision
 
 
 def apply_similarity_rule(
     decision: NotificationRuleDecision,
     config: NotificationRuleConfig,
     recent_count: int,
-    previous_score: int = 0,
     previous_context: Dict[str, object] = None,
     job: NotificationJob = None,
 ) -> NotificationRuleDecision:
     decision.similarity_recent_count = max(0, int(recent_count or 0))
-    decision.similarity_previous_score = max(0, int(previous_score or 0))
     previous_context = previous_context or {}
     if config.enabled and apply_mandatory_profit_loss_delivery(
         decision,
@@ -795,7 +875,7 @@ def apply_similarity_rule(
         allow_without_previous=decision.similarity_recent_count <= 0,
     ):
         return decision
-    if decision.suppression_reason == "state_cooldown" or decision.similarity_bypassed:
+    if not decision.should_send or decision.suppression_reason == "state_cooldown" or decision.similarity_bypassed:
         return decision
     if not config.enabled or not config.similarity_enabled or decision.similarity_recent_count <= 0:
         return decision
@@ -803,25 +883,20 @@ def apply_similarity_rule(
         for condition in config.similarity_bypass_conditions or []:
             if not condition.enabled:
                 continue
-            matched, reason = similarity_bypass_match(condition, job=job, previous_context=previous_context, decision=decision, previous_score=decision.similarity_previous_score)
+            matched, reason = similarity_bypass_match(
+                condition,
+                job=job,
+                previous_context=previous_context,
+                decision=decision,
+            )
             if matched:
                 decision.similarity_bypassed = True
                 decision.similarity_bypass_reason = reason
-                decision.reasons.append("유사 메시지 예외: " + reason)
+                decision.reasons.append("반복 보류 해제: " + reason)
                 return decision
-    score_delta = decision.score - decision.similarity_previous_score if decision.similarity_previous_score else 0
-    bypass_delta = int(config.similarity_bypass_score_delta or 0)
-    if bypass_delta and decision.similarity_previous_score and score_delta >= bypass_delta:
-        decision.similarity_bypassed = True
-        decision.similarity_bypass_reason = "발송 우선도 +" + str(score_delta) + " 상승"
-        decision.reasons.append("유사 메시지 예외: " + decision.similarity_bypass_reason)
-        return decision
-    penalty = clamp_int(config.similarity_penalty, -100, 0, default_similarity_penalty(config.message_type))
-    if penalty:
-        decision.score = clamp_int(decision.score + penalty, 0, 100, 0)
-        decision.reasons.append("유사 메시지 " + str(config.similarity_window_minutes) + "분 내 반복 " + str(penalty))
-    if config.low_score_action == "suppress":
-        decision.should_send = decision.score >= decision.threshold
+    reason = "같은 내용이 " + str(config.similarity_window_minutes) + "분 안에 이미 발송되어 다시 보내지 않습니다."
+    decision.mark_suppressed("similar_repeat", reason)
+    decision.reasons.append("반복 정책: " + reason)
     return decision
 
 
@@ -829,7 +904,6 @@ def apply_state_cooldown_rule(
     decision: NotificationRuleDecision,
     config: NotificationRuleConfig,
     sent_count: int,
-    previous_score: int = 0,
     previous_context: Dict[str, object] = None,
     last_sent_at: str = "",
     last_sent_age_minutes: int = 0,
@@ -857,30 +931,33 @@ def apply_state_cooldown_rule(
     ):
         return decision
     if decision.state_recent_sent_count <= 0:
-        decision.state_decision = "new_threshold"
-        decision.state_reason = "신규 임계값 상태"
+        decision.state_decision = "new-condition"
+        decision.state_reason = "처음 확인된 상태"
         decision.reasons.append("상태 정책: " + decision.state_reason)
         return decision
     if job is not None:
         for condition in config.similarity_bypass_conditions or []:
             if not condition.enabled:
                 continue
-            matched, reason = similarity_bypass_match(condition, job=job, previous_context=previous_context, decision=decision, previous_score=previous_score)
+            matched, reason = similarity_bypass_match(
+                condition,
+                job=job,
+                previous_context=previous_context,
+                decision=decision,
+            )
             if matched:
-                decision.state_decision = "material_change"
-                if condition.condition_id == "semantic_signature_changed":
-                    change_label = "관계 경로 변경"
-                elif condition.condition_type == "profit_loss_improved_gte":
+                decision.state_decision = "meaningful-change"
+                if condition.condition_type in {"profit_loss_improved_gte", "ma60_crossed_above"}:
                     change_label = "의미 있는 회복"
                 else:
-                    change_label = "의미 있는 추가 확대"
+                    change_label = "의미 있는 변화"
                 decision.state_reason = change_label + ": " + reason
                 decision.similarity_bypassed = True
                 decision.similarity_bypass_reason = reason
                 decision.reasons.append("상태 정책: " + decision.state_reason)
                 return decision
     if decision.state_cooldown_minutes and decision.state_last_sent_age_minutes >= decision.state_cooldown_minutes:
-        decision.state_decision = "sustained_summary"
+        decision.state_decision = "scheduled-summary"
         decision.state_reason = "지속 상태 요약 " + str(decision.state_cooldown_minutes) + "분 경과"
         decision.similarity_bypassed = True
         decision.similarity_bypass_reason = decision.state_reason
@@ -896,6 +973,9 @@ def apply_state_cooldown_rule(
         + "분"
     )
     decision.should_send = False
+    decision.delivery_state = "suppressed"
+    decision.gate_state = "blocked"
+    decision.gate_reason = decision.state_reason
     decision.suppression_reason = "state_cooldown"
     decision.reasons.append("상태 정책: " + decision.state_reason)
     return decision
@@ -927,6 +1007,6 @@ def apply_market_hours_rule(
     if config.enabled and config.market_hours_enabled and market_decision.status in {"open", "closed", "closed_exception"}:
         decision.reasons.append("장 시간 " + market_decision.reason)
     if config.enabled and config.market_hours_enabled and not market_decision.should_send:
-        decision.should_send = False
-        decision.suppression_reason = "market_closed" if market_decision.status == "closed" else "market_hours"
+        reason_code = "market_closed" if market_decision.status == "closed" else "market_hours"
+        decision.mark_suppressed(reason_code, market_decision.reason or "장 운영 시간 정책으로 발송을 보류합니다.")
     return decision

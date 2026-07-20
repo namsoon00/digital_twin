@@ -11,6 +11,7 @@ from ..domain.market_data import (
     sector_from_symbol,
 )
 from ..domain.investment_analysis import build_investment_analysis
+from ..domain.ontology_decision_state import REVIEW_LEVEL_RANK
 from ..domain.ontology_prompting import ONTOLOGY_PROMPT_VERSION
 from ..domain.portfolio_ontology_builder import build_portfolio_ontology
 from ..domain.portfolio import PortfolioSummary, Position, utc_now_iso
@@ -401,12 +402,11 @@ def toss_decision_for_holding(item: Dict[str, object], portfolio: Dict[str, obje
     relation_decision = relation_context.get("decision") if isinstance(relation_context, dict) else {}
     if not isinstance(relation_decision, dict):
         relation_decision = {}
-    exit_pressure = 0
     label = str(relation_decision.get("label") or "온톨로지 추론 대기")
     tone = str(relation_decision.get("tone") or "hold")
-    profit_take_pressure = 0
-    loss_cut_pressure = 0
-    priority = 5
+    review_level = str(relation_decision.get("reviewLevel") or "blocked")
+    data_state = str(relation_decision.get("dataState") or "insufficient")
+    validation_state = str(relation_decision.get("validationState") or "blocked")
     reasons = [
         "토스 잔고 기준 수익률이 " + ("+" if pnl_rate > 0 else "") + str(pnl_rate) + "%입니다.",
         "평가손익은 " + format(round(number(item.get("profitLoss"))), ",") + " " + str(item.get("currency") or "") + "입니다.",
@@ -425,13 +425,12 @@ def toss_decision_for_holding(item: Dict[str, object], portfolio: Dict[str, obje
         "marketValue": number(item.get("marketValue")),
         "profitLoss": number(item.get("profitLoss")),
         "profitLossRate": pnl_rate,
-        "exitPressure": exit_pressure,
-        "profitTakePressure": profit_take_pressure,
-        "lossCutPressure": loss_cut_pressure,
+        "reviewLevel": review_level,
+        "dataState": data_state,
+        "validationState": validation_state,
         "decisionBasis": relation_decision.get("basis") or "ontologyInferenceRequired",
         "decision": label,
         "tone": tone,
-        "priority": priority,
         "reasons": reasons[:3],
         "triggers": ["온톨로지 추론 대기"],
         "ontologyRelationContext": relation_context,
@@ -449,10 +448,11 @@ def toss_decision_for_watch(item: Dict[str, object]) -> Dict[str, object]:
         "marketValue": 0,
         "profitLoss": 0,
         "profitLossRate": 0,
-        "exitPressure": 32,
+        "reviewLevel": "observe",
+        "dataState": "partial",
+        "validationState": "conditional",
         "decision": "시세 기준 대기",
         "tone": "hold",
-        "priority": 5,
         "reasons": ["보유 종목이 아니므로 매도 판단 대신 토스 시세 기준을 기다립니다."],
         "triggers": ["관심 종목", "현재가", "기준가"],
     }
@@ -520,12 +520,7 @@ def ontology_relation_priority(payload: Dict[str, object]) -> float:
         "HAS_TRADE_FLOW": 66,
         "HAS_OBSERVATION": 62,
     }
-    score = float(priority_map.get(relation_type, 40))
-    if properties.get("polarity") in {"risk", "support"}:
-        score += 8
-    if properties.get("opinionImpact") or properties.get("supportImpact") or properties.get("riskImpact"):
-        score += 10
-    return score
+    return float(priority_map.get(relation_type, 40))
 
 
 def ontology_entity_priority(payload: Dict[str, object]) -> float:
@@ -563,7 +558,6 @@ def ontology_entity_priority(payload: Dict[str, object]) -> float:
         "opportunity": 78,
         "investment-thesis": 77,
         "strategy-signal": 76,
-        "model-score": 75,
         "market-exposure": 74,
         "factor": 73,
         "benchmark-index": 72,
@@ -676,30 +670,40 @@ def build_toss_decision(
         item["aiContext"] = {
             "promptVersion": ONTOLOGY_PROMPT_VERSION,
             "role": "ontology-first-investment-opinion",
-            "legacyModelRole": "not-used-for-scoring",
+            "stateContract": "review-data-change-evidence-validation",
             "worldview": dict(ontology.worldview or {}),
             "opinion": opinion_payload,
             "reasoningCard": reasoning_card,
             "reasoningCardId": reasoning_card.get("id"),
             "prompt": ontology.prompt,
         }
-    items = sorted(holding_items + watch_items, key=lambda item: (item.get("priority", 9), -number(item.get("exitPressure"))))
+    items = sorted(
+        holding_items + watch_items,
+        key=lambda item: (
+            -REVIEW_LEVEL_RANK.get(str(item.get("reviewLevel") or "observe"), 1),
+            0 if item.get("source") == "holding" else 1,
+            str(item.get("name") or ""),
+        ),
+    )
     urgent_count = len([item for item in holding_items if item.get("tone") in {"danger", "caution"}])
-    top_items = items[:3]
-    overall_pressure = round(sum(number(item.get("exitPressure")) for item in top_items) / len(top_items)) if top_items else 0
+    overall_review_level = max(
+        (str(item.get("reviewLevel") or "normal") for item in items),
+        key=lambda level: REVIEW_LEVEL_RANK.get(level, 0),
+        default="normal",
+    )
     return {
         "headline": (
             "내 토스 계좌 기준으로 " + str(items[0].get("name")) + " " + str(items[0].get("decision")) + "이 우선입니다."
             if items
             else "토스 잔고에서 점검할 종목이 아직 없습니다."
         ),
-        "overallPressure": overall_pressure,
+        "overallReviewLevel": overall_review_level,
         "urgentCount": urgent_count,
         "holdingCount": len(holding_items),
         "watchCount": len(watch_items),
         "items": items,
         "rules": [
-            "투자전략 점수는 온톨로지 관계 규칙과 성립한 관계 강도만 사용합니다.",
+            "투자 판단은 온톨로지 관계 상태와 실제 수치를 함께 사용합니다.",
             "수익률, 평가손익, 수급, 추세, 섹터 집중도, 뉴스·공시 리서치를 AI 의견 정보에 함께 넣습니다.",
             "관심 종목은 보유가 아니므로 매도 판단 대신 시세 기준 대기 상태로 둡니다.",
             "TypeDB 설정이 있으면 같은 관계 그래프를 저장합니다.",
@@ -708,7 +712,7 @@ def build_toss_decision(
         "investmentAnalysis": {
             "mode": "ontology-first",
             "contract": "investment-ontology-ai-inference-v1",
-            "legacyModelRole": "not-used-for-scoring",
+            "stateContract": "review-data-change-evidence-validation",
             "reasoningCards": reasoning_cards[:40],
             "aiInferencePacket": ontology_payload.get("aiInferencePacket", {}),
             "graphSummary": {
@@ -771,7 +775,7 @@ def build_toss_lens_snapshot(
         "dataMode": "mock" if mock else "live",
         "mock": bool(mock),
         "headline": toss_decision["headline"],
-        "exitScore": toss_decision["overallPressure"],
+        "overallReviewLevel": toss_decision["overallReviewLevel"],
         "regime": "토스 조회 전용",
         "summary": [
             "보유 종목 " + str(toss_decision["holdingCount"]) + "개와 관심 종목 " + str(toss_decision["watchCount"]) + "개를 분리했습니다.",

@@ -21,8 +21,10 @@ def research_evidence_change_payload(
     url: str,
     published_at: str,
     polarity: str,
-    impact_score: float,
-    confidence: float,
+    source_trust_state: str,
+    materiality_state: str,
+    data_state: str,
+    validation_state: str,
     payload: Dict[str, object],
 ) -> Dict[str, object]:
     return research_evidence_fact_payload({
@@ -34,8 +36,10 @@ def research_evidence_change_payload(
         "url": url,
         "publishedAt": published_at,
         "polarity": polarity,
-        "impactScore": round(float(impact_score or 0), 6),
-        "confidence": round(float(confidence or 0), 6),
+        "sourceTrustState": str(source_trust_state or "unknown"),
+        "materialityState": str(materiality_state or "context"),
+        "dataState": str(data_state or "partial"),
+        "validationState": str(validation_state or "conditional"),
         "payload": payload if isinstance(payload, dict) else {},
     })
 

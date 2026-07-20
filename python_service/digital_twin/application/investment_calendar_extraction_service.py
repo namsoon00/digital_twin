@@ -14,13 +14,6 @@ def truthy(value: object, default: bool = True) -> bool:
     return text not in DISABLED_VALUES
 
 
-def number(value: object, fallback: float = 0.0) -> float:
-    try:
-        return float(str(value).strip())
-    except (TypeError, ValueError):
-        return fallback
-
-
 def item_identity(item: Dict[str, object]) -> str:
     if not isinstance(item, dict):
         return ""
@@ -60,14 +53,8 @@ class InvestmentCalendarExtractionService:
     def register_undated(self) -> bool:
         return truthy(self.settings.get("investmentCalendarAutoExtractRegisterUndated"), False)
 
-    def min_confidence(self) -> float:
-        return max(0.0, min(1.0, number(self.settings.get("investmentCalendarAutoExtractMinConfidence"), 0.45)))
-
     def review_enabled(self) -> bool:
         return truthy(self.settings.get("investmentCalendarAutoExtractReviewEnabled"), True)
-
-    def review_min_confidence(self) -> float:
-        return max(0.0, min(1.0, number(self.settings.get("investmentCalendarAutoExtractReviewMinConfidence"), 0.35)))
 
     def feedback(self) -> Dict[str, object]:
         if not self.candidate_repository or not hasattr(self.candidate_repository, "feedback_summary"):
@@ -113,8 +100,6 @@ class InvestmentCalendarExtractionService:
         candidate_sets = calendar_candidate_sets_from_research_items(
             self.event_items(event),
             register_undated=self.register_undated(),
-            min_confidence=self.min_confidence(),
-            review_min_confidence=self.review_min_confidence(),
             feedback=self.feedback(),
         )
         candidates = candidate_sets["ready"]

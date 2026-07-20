@@ -109,9 +109,16 @@ EVIDENCE_ONLY_MESSAGE_TYPES = [
 ]
 
 DEFAULT_ALERT_THRESHOLDS = {
-    "graphSignalMinScore": 55,
-    "graphSignalAlertScore": 78,
-    "graphSignalConfidenceMin": 50,
+    "volumeRatioHigh": 2,
+    "buyShareHigh": 65,
+    "sellShareHigh": 65,
+    "orderbookImbalance": 25,
+    "momentumUp": 3,
+    "momentumDown": -3,
+    "marketCashLow": 10,
+    "priceNearPercent": 1,
+    "staleMinutes": 30,
+    "pendingOrderMinutes": 30,
 }
 
 DEFAULT_RELATION_RULE_THRESHOLDS = {
@@ -119,7 +126,6 @@ DEFAULT_RELATION_RULE_THRESHOLDS = {
     "lossRateBufferPct": 1,
     "lossGuardVolumeConfirmRatio": 0.8,
     "lossGuardMa60SupportPct": 0,
-    "lossGuardWeakEvidencePenalty": 30,
     "profitRateHigh": 20,
     "sectorWeightHigh": 50,
     "positionWeightHigh": 30,
@@ -151,8 +157,6 @@ DEFAULT_RELATION_RULE_THRESHOLDS = {
     "fxExposureReview": 5,
     "fxExposureHigh": 10,
     "newsDirectFreshMaxAgeMinutes": 1440,
-    "newsDirectRelevanceMin": 75,
-    "newsDirectMaterialityMin": 60,
 }
 
 DEFAULT_CADENCE = {
@@ -235,9 +239,9 @@ TRIGGER_SUMMARIES = {
     PORTFOLIO_HOLDINGS_SNAPSHOT: "강제 점검이나 수동 확인 요청에서 모든 보유 종목의 현재 상태를 한 번에 확인할 때 보냅니다.",
     INVESTMENT_CALENDAR_REMINDER: "등록한 투자 이벤트가 설정한 리마인더 시점에 도달하면 보냅니다. 투자 판단은 별도 온톨로지 인사이트로만 보냅니다.",
     NEWS_DIGEST: "보유/관심 종목에 신선도·관련성·중요도 기준을 통과한 새 뉴스나 피드 근거가 들어올 때 보냅니다.",
-    MODEL_BUY: "내가 정한 매수 점수가 기준값을 넘을 때 보냅니다.",
-    MODEL_SELL: "내가 정한 매도 점수가 기준값을 넘을 때 보냅니다.",
-    WATCHLIST_BUY_CANDIDATE: "관심 종목의 매수 점수가 기준값을 넘을 때 보냅니다.",
+    MODEL_BUY: "관심 종목의 진입 조건이 새로 성립하고 자료 검증을 통과할 때 보냅니다.",
+    MODEL_SELL: "보유 종목의 손실 관리 또는 비중 축소 조건이 새로 성립할 때 보냅니다.",
+    WATCHLIST_BUY_CANDIDATE: "관심 종목의 가격·수급·가치 조건이 함께 확인되어 진입 검토 상태가 될 때 보냅니다.",
     WATCHLIST_QUOTE: "관심 종목의 시세와 추세 데이터가 갱신될 때 보냅니다.",
     WATCHLIST_QUOTE_PENDING: "관심 종목 시세를 아직 받지 못했을 때 보냅니다.",
     WATCHLIST_ONTOLOGY_SIGNAL: "관심 종목의 온톨로지 관계 규칙에서 진입, 회복, 리스크 신호가 생성될 때 보냅니다.",
@@ -250,7 +254,7 @@ TRIGGER_SUMMARIES = {
     MONITOR_VALUE_CHANGE: "직전 기록과 비교해 평가액 변화가 기준값을 넘을 때 보냅니다.",
     MONITOR_TREND_CHANGE: "이동평균 돌파, 크로스, 현재가와 이동평균 차이가 커질 때 보냅니다.",
     MONITOR_CASH_CHANGE: "시장별 현금 비중 변화가 기준값을 넘을 때 보냅니다.",
-    MONITOR_DECISION_CHANGE: "종목 판단이나 위험 점수가 바뀔 때 보냅니다.",
+    MONITOR_DECISION_CHANGE: "종목의 권장 행동, 확인 단계 또는 근거 방향이 바뀔 때 보냅니다.",
     EXTERNAL_EQUITY_MOVE: "Alpha Vantage 기준 미국 보유 종목의 가격 변화가 기준값을 넘을 때 보냅니다.",
     EXTERNAL_CRYPTO_MOVE: "CoinGecko 기준 크립토 가격 변화가 기준값을 넘을 때 보냅니다.",
     EXTERNAL_MACRO_SHIFT: "FRED 금리·스프레드 변화가 기준값을 넘을 때 보냅니다.",

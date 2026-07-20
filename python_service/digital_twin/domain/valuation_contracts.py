@@ -1,7 +1,7 @@
 from datetime import datetime, timezone
 from typing import Dict, Iterable, List
 
-from .market_data import clamp, number
+from .market_data import number
 
 
 ANNUAL_EPS_PERIODS = {"annual", "annualized", "ttm", "trailing-12m", "forward-12m", "fy1"}
@@ -138,59 +138,51 @@ def scenario_margins(current_price: object, low: object, base: object, high: obj
     }
 
 
-def valuation_input_coverage(required_inputs: Iterable[str], available_inputs: Iterable[str]) -> float:
+def valuation_input_state(required_inputs: Iterable[str], available_inputs: Iterable[str]) -> str:
     required = {str(item) for item in required_inputs if str(item or "").strip()}
     available = {str(item) for item in available_inputs if str(item or "").strip()}
     if not required:
-        return 100.0
-    return round(100.0 * len(required.intersection(available)) / len(required), 1)
+        return "sufficient"
+    present = len(required.intersection(available))
+    if present == len(required):
+        return "sufficient"
+    if present:
+        return "partial"
+    return "unavailable"
 
 
-def valuation_reliability_score(
+def valuation_reliability_state(
     source_type: str,
-    input_coverage_pct: object,
+    input_state: object,
     eps_period: object = "",
     freshness_status: str = "unknown",
     scenario_complete: bool = False,
     model_count: int = 1,
-) -> float:
-    source_base = {
-        "official": 76.0,
-        "broker": 72.0,
-        "external": 66.0,
-        "user": 64.0,
-        "ai": 42.0,
-    }.get(str(source_type or "").strip().lower(), 45.0)
-    score = source_base
-    score += (clamp(number(input_coverage_pct), 0.0, 100.0) - 50.0) * 0.16
-    if period_is_annual_per_share(eps_period):
-        score += 6.0
-    if scenario_complete:
-        score += 5.0
-    score += min(6.0, max(0, int(model_count) - 1) * 3.0)
-    if freshness_status == "fresh":
-        score += 4.0
-    elif freshness_status == "aging":
-        score -= 5.0
-    elif freshness_status == "stale":
-        score -= 16.0
-    return round(clamp(score, 0.0, 95.0), 1)
+) -> str:
+    del scenario_complete, model_count
+    state = str(input_state or "unavailable").strip().lower()
+    freshness = str(freshness_status or "unknown").strip().lower()
+    source = str(source_type or "").strip().lower()
+    if state == "unavailable" or freshness == "stale":
+        return "unavailable"
+    if state != "sufficient" or freshness == "aging" or source in {"ai", "unknown", ""}:
+        return "partial"
+    if eps_period and not period_is_annual_per_share(eps_period):
+        return "partial"
+    return "sufficient"
 
 
-def valuation_confidence_label(score: object) -> str:
-    value = number(score)
-    if value >= 80:
-        return "높음"
-    if value >= 65:
-        return "보통"
-    if value >= 50:
-        return "낮음"
-    return "매우 낮음"
+def valuation_reliability_label(state: object) -> str:
+    return {
+        "sufficient": "판단에 필요한 자료 있음",
+        "partial": "일부 자료만 있음",
+        "unavailable": "자료 사용 불가",
+    }.get(str(state or "").strip().lower(), "자료 확인 필요")
 
 
 def valuation_decision_eligible(
     source_type: str,
-    reliability_score: object,
+    reliability_state: object,
     approval_status: object,
     freshness_status: str,
     period_compatible: bool,
@@ -202,7 +194,7 @@ def valuation_decision_eligible(
     approval = str(approval_status or "").strip().lower()
     if source == "ai" and approval not in {"user_approved", "user_modified", "approved", "modified"}:
         return False
-    return number(reliability_score) >= 65.0
+    return str(reliability_state or "").strip().lower() == "sufficient"
 
 
 def unique_missing(values: Iterable[object]) -> List[str]:

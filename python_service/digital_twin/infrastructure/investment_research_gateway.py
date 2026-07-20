@@ -5,6 +5,7 @@ from ..domain.investment_research import (
     ResearchEvidence,
     research_evidence_from_external_signals,
 )
+from ..domain import news_analysis as news_domain
 from ..domain.portfolio import Position
 from .external_signals import ExternalSignalProvider
 
@@ -126,7 +127,7 @@ class CompositeInvestmentResearchGateway:
             for item in items or []:
                 if isinstance(item, ResearchEvidence) and str(item.evidence_id or "").strip():
                     current = evidence_by_id.get(item.evidence_id)
-                    if current is None or evidence_completeness_score(item) > evidence_completeness_score(current):
+                    if current is None or evidence_completeness_key(item) > evidence_completeness_key(current):
                         evidence_by_id[item.evidence_id] = item
             statuses.extend(dict(item) for item in gateway_statuses or [] if isinstance(item, dict))
         return list(evidence_by_id.values()), statuses
@@ -143,16 +144,15 @@ def normalized_source_types(values: Iterable[str]) -> set:
     }
 
 
-def evidence_completeness_score(item: ResearchEvidence) -> float:
+def evidence_completeness_key(item: ResearchEvidence) -> tuple:
+    """Prefer the more usable duplicate without inventing an evidence score."""
     payload = item.raw_payload if isinstance(item.raw_payload, dict) else {}
-    score = 0.0
-    score += 2.0 if str(item.published_at or item.observed_at or "").strip() else 0.0
-    score += 2.0 if str(item.url or "").strip() else 0.0
-    score += 1.0 if str(item.summary or "").strip() else 0.0
-    score += min(3.0, len(payload) / 5.0)
-    try:
-        confidence = float(item.confidence or 0)
-    except (TypeError, ValueError):
-        confidence = 0.0
-    score += max(0.0, min(1.0, confidence))
-    return score
+    states = item.state_payload()
+    return (
+        news_domain.news_state_rank(states),
+        bool(str(item.published_at or item.observed_at or "").strip()),
+        bool(str(item.url or "").strip()),
+        bool(str(item.summary or "").strip()),
+        bool(payload.get("articleSummaryKo")),
+        str(item.observed_at or item.published_at or ""),
+    )

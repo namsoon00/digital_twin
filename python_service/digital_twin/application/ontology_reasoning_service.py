@@ -48,26 +48,47 @@ def event_changed_count(event: object) -> int:
     return int(float_value(payload.get("changedCount"), 0.0) or 0)
 
 
-def event_materiality_score(event: object) -> float:
-    payload = event_payload(event)
-    scores: List[float] = []
-    for item in payload.get("materialityAssessments") or []:
-        if not isinstance(item, dict):
-            continue
-        for key in ("score", "materialityScore", "importanceScore", "changeScore"):
-            if item.get(key) is not None:
-                scores.append(float_value(item.get(key), 0.0))
-    return max(scores or [0.0])
-
-
-TRIGGER_PRIORITY = {
-    "research-evidence-update": 45.0,
-    "investment-calendar-update": 40.0,
-    "market-data-update": 30.0,
-    "kis-realtime-update": 26.0,
-    "portfolio-snapshot-update": 24.0,
-    "data-update": 20.0,
+REVIEW_LEVEL_ORDER = {
+    "normal": 0,
+    "observe": 1,
+    "check": 2,
+    "act": 3,
+    "immediate": 4,
+    "blocked": 4,
 }
+
+TRIGGER_ORDER = {
+    "research-evidence-update": 6,
+    "investment-calendar-update": 5,
+    "market-data-update": 4,
+    "kis-realtime-update": 3,
+    "portfolio-snapshot-update": 2,
+    "data-update": 1,
+}
+
+
+def materiality_assessments(event: object) -> List[Dict[str, object]]:
+    raw = event_payload(event).get("materialityAssessments") or []
+    if isinstance(raw, dict):
+        raw = list(raw.values())
+    return [dict(item) for item in raw if isinstance(item, dict)]
+
+
+def event_review_level(event: object) -> str:
+    levels = [str(item.get("reviewLevel") or "normal").strip().lower() for item in materiality_assessments(event)]
+    return max(levels or ["normal"], key=lambda item: REVIEW_LEVEL_ORDER.get(item, 0))
+
+
+def event_order_key(event: object) -> Tuple[int, int, int, int]:
+    payload = event_payload(event)
+    trigger = str(payload.get("trigger") or "data-update").strip()
+    fact_types = {str(item or "").strip() for item in payload.get("factTypes") or []}
+    return (
+        REVIEW_LEVEL_ORDER.get(event_review_level(event), 0),
+        TRIGGER_ORDER.get(trigger, 0),
+        1 if "ResearchEvidence" in fact_types else 0,
+        1 if "MarketQuote" in fact_types else 0,
+    )
 
 
 class OntologyReasoningRunner:
@@ -110,8 +131,11 @@ class OntologyReasoningRunner:
     def urgent_min_interval_seconds(self) -> int:
         return int_setting(self.settings, "ontologyReasoningUrgentMinIntervalSeconds", 60, 0, 3600)
 
-    def urgent_materiality_score(self) -> int:
-        return int_setting(self.settings, "ontologyReasoningUrgentMaterialityScore", 85, 0, 100)
+    def urgent_review_levels(self) -> set:
+        raw = str(self.settings.get("ontologyReasoningUrgentReviewLevels") or "act,immediate,blocked")
+        allowed = set(REVIEW_LEVEL_ORDER)
+        levels = {item.strip().lower() for item in raw.split(",") if item.strip().lower() in allowed}
+        return levels or {"act", "immediate", "blocked"}
 
     def rule_candidate_ai_enabled(self) -> bool:
         return truthy(self.settings.get("ontologyRuleCandidateAiEnabled"), True)
@@ -163,7 +187,7 @@ class OntologyReasoningRunner:
         trigger = str(event_payload(event).get("trigger") or "data-update").strip()
         if trigger in {"research-evidence-update", "investment-calendar-update"}:
             return self.urgent_min_interval_seconds()
-        if event_materiality_score(event) >= self.urgent_materiality_score():
+        if event_review_level(event) in self.urgent_review_levels():
             return self.urgent_min_interval_seconds()
         return self.min_interval_seconds()
 
@@ -198,20 +222,6 @@ class OntologyReasoningRunner:
         processed = set(progress.get(str(getattr(event, "event_id", "") or ""), []) or [])
         return [symbol for symbol in symbols if symbol not in processed]
 
-    def request_priority(self, event: object) -> float:
-        payload = event_payload(event)
-        trigger = str(payload.get("trigger") or "data-update").strip()
-        materiality = event_materiality_score(event)
-        changed = min(25.0, float(event_changed_count(event)))
-        source_bonus = TRIGGER_PRIORITY.get(trigger, 18.0)
-        fact_bonus = 0.0
-        fact_types = {str(item or "").strip() for item in payload.get("factTypes") or []}
-        if "ResearchEvidence" in fact_types:
-            fact_bonus += 12.0
-        if "MarketQuote" in fact_types:
-            fact_bonus += 5.0
-        return materiality + changed + source_bonus + fact_bonus
-
     def pending_requests(self, limit: int = 0) -> List[object]:
         processed = set(self.cursor_store.processed_event_ids())
         cursor_payload = self.cursor_payload()
@@ -236,8 +246,8 @@ class OntologyReasoningRunner:
         ]
         events.sort(
             key=lambda event: (
-                (1000.0 if str(getattr(event, "event_id", "") or "") in progress else 0.0)
-                + self.request_priority(event),
+                1 if str(getattr(event, "event_id", "") or "") in progress else 0,
+                *event_order_key(event),
                 getattr(event, "occurred_at", ""),
                 getattr(event, "event_id", ""),
             ),

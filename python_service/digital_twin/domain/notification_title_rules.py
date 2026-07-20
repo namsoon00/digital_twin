@@ -359,13 +359,13 @@ def inferred_criterion_lines(event: AlertEvent, raw_lines: List[str], trigger_su
     profit = data_value(raw_lines, "손익") or data_value(raw_lines, "수익률")
 
     if rule in {"modelBuy", "watchlistBuyCandidate"}:
-        score = data_value(raw_lines, "매수 판단") or data_value(raw_lines, "모델 매수 점수")
-        if score:
-            details.append("감지: " + score)
+        decision = data_value(raw_lines, "매수 판단") or data_value(raw_lines, "판단 상태")
+        if decision:
+            details.append("감지: " + decision)
     elif rule == "modelSell":
-        score = data_value(raw_lines, "매도 판단") or data_value(raw_lines, "모델 매도 점수")
-        if score:
-            details.append("감지: " + score)
+        decision = data_value(raw_lines, "매도 판단") or data_value(raw_lines, "판단 상태")
+        if decision:
+            details.append("감지: " + decision)
     elif rule == "holdingTiming":
         detected = ", ".join(part for part in ["상태 " + status if status else "", "수익률 " + profit if profit else ""] if part)
         if detected:

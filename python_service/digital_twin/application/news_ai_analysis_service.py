@@ -6,7 +6,7 @@ from ..domain.news_ai_analysis import (
     local_news_ai_analysis,
     news_ai_analysis_is_current,
 )
-from ..domain.market_data import number
+from ..domain.news_analysis import news_state_rank, news_state_payload
 
 
 DISABLED_VALUES = {"0", "false", "no", "off", "disabled"}
@@ -31,13 +31,16 @@ def int_setting(settings: Dict[str, object], key: str, fallback: int, lower: int
 def analysis_priority(item: ResearchEvidence):
     payload = item.raw_payload if isinstance(item.raw_payload, dict) else {}
     facts = payload.get("articleFacts") if isinstance(payload.get("articleFacts"), dict) else {}
-    materiality = number(payload.get("materialityScore") or payload.get("stockImpactScore") or facts.get("materialityScore") or item.impact_score)
-    reliability = number(payload.get("sourceReliability") or facts.get("sourceReliability") or item.confidence)
-    body_available = 1 if facts.get("bodyAvailable") else 0
+    states = news_state_payload({**payload, **facts})
+    body_available = bool(facts.get("bodyAvailable"))
+    actionable_state = {
+        "blocked": 0,
+        "conditional": 1,
+        "ready": 2,
+    }.get(states["validationState"], 0)
     return (
-        materiality or 0,
-        reliability or 0,
-        number(item.confidence) or 0,
+        *news_state_rank(states),
+        actionable_state,
         body_available,
         str(item.published_at or item.observed_at or ""),
     )

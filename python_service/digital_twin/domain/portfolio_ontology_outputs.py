@@ -9,7 +9,6 @@ from .ontology_contracts import (
     PortfolioOntology,
 )
 from .ontology_schema import abox_relation_properties, add_entity, add_relation
-from .ontology_threshold_policy import default_ontology_threshold_policy
 
 
 def dedupe_entities(items: List[OntologyEntity]) -> List[OntologyEntity]:
@@ -42,14 +41,13 @@ def dedupe_evidence(items: List[OntologyEvidence]) -> List[OntologyEvidence]:
     return list(merged.values())
 
 def insight_type_for_opinion(opinion: OntologyOpinion, stock_source: str) -> str:
-    pressure_policy = default_ontology_threshold_policy().score_breakdown
     if opinion.contradictions:
         return "contradictionDetected"
     if any("데이터" in str(item) or "부족" in str(item) for item in opinion.dominant_risks + opinion.contradictions):
         return "dataQualityWarning"
     if stock_source == "watchlist":
         return "watchlistEntrySignal"
-    if opinion.ontology_pressure >= pressure_policy.high_ontology_pressure_score or opinion.tone in {"danger", "caution"}:
+    if opinion.review_level in {"act", "immediate"} or opinion.tone in {"danger", "caution"}:
         return "riskIncrease"
     if opinion.opportunities or opinion.supporting_beliefs:
         return "opportunityDetected"
@@ -66,25 +64,25 @@ def add_ontology_insight_concepts(graph: PortfolioOntology) -> None:
     insight_policy_id = entity_id("insight-policy", "meaningful-change")
     importance_gate_id = entity_id("importance-gate", "materiality-first")
     ai_review_id = entity_id("concept", "ai-investment-review")
-    pressure_policy = default_ontology_threshold_policy().score_breakdown
     for opinion in graph.opinions:
         stock = stock_entities.get(str(opinion.symbol or "").upper())
         if not stock:
             continue
         source = str((stock.properties or {}).get("source") or "holding")
         insight_type = insight_type_for_opinion(opinion, source)
-        materiality_score = max(number(opinion.ontology_pressure), number(opinion.conviction))
-        if opinion.contradictions:
-            materiality_score = max(materiality_score, pressure_policy.contradiction_materiality_score)
-        materiality_threshold = pressure_policy.high_ontology_pressure_score
-        dispatch_candidate = bool(materiality_score >= materiality_threshold or opinion.contradictions or source == "watchlist")
+        dispatch_candidate = bool(
+            opinion.review_level in {"check", "act", "immediate"}
+            or opinion.contradictions
+            or source == "watchlist"
+        )
         insight_id = add_entity(graph, "insight", opinion.symbol + ":" + insight_type, stock.label + " " + opinion.action, {
             "tboxClass": "Insight",
             "symbol": opinion.symbol,
             "insightType": insight_type,
             "severity": opinion.tone,
-            "score": number(opinion.ontology_pressure),
-            "confidence": number(opinion.conviction),
+            "reviewLevel": opinion.review_level,
+            "dataState": opinion.data_state,
+            "validationState": opinion.validation_state,
             "thesis": opinion.thesis,
             "relationInfluenceCount": len(opinion.relation_influences or []),
             "dispatchCandidate": dispatch_candidate,
@@ -92,31 +90,28 @@ def add_ontology_insight_concepts(graph: PortfolioOntology) -> None:
         assessment_id = add_entity(graph, "materiality-assessment", opinion.symbol + ":" + insight_type, stock.label + " 중요 변경 평가", {
             "tboxClass": "MaterialityAssessment",
             "symbol": opinion.symbol,
-            "score": round(materiality_score, 1),
-            "threshold": materiality_threshold,
             "passed": dispatch_candidate,
-            "grade": "watch" if dispatch_candidate else "record",
-            "components": {
-                "relationStrength": round(number(opinion.ontology_pressure), 1),
-                "confidence": round(number(opinion.conviction), 1),
-                "contradiction": 78 if opinion.contradictions else 0,
-            },
+            "state": "send-candidate" if dispatch_candidate else "record-only",
+            "reviewLevel": opinion.review_level,
+            "dataState": opinion.data_state,
+            "hasContradiction": bool(opinion.contradictions),
         })
-        add_relation(graph, reasoning_id, insight_id, "PRODUCES_INSIGHT", weight=round(number(opinion.conviction) / 100, 4), properties={"source": "ontology-reasoning"})
-        add_relation(graph, stock.entity_id, insight_id, "CREATED_FROM_RELATION", weight=round(number(opinion.ontology_pressure) / 100, 4), properties={"source": "ontology-reasoning"})
+        add_relation(graph, reasoning_id, insight_id, "PRODUCES_INSIGHT", weight=1.0, properties={"source": "ontology-reasoning"})
+        add_relation(graph, stock.entity_id, insight_id, "CREATED_FROM_RELATION", weight=1.0, properties={"source": "ontology-reasoning"})
         add_relation(graph, insight_id, entity_id("insight-type", insight_type), "HAS_INSIGHT_TYPE", weight=1.0, properties={"source": "ontology-reasoning"})
         add_relation(graph, insight_id, insight_policy_id, "EVALUATED_BY", weight=1.0, properties={"source": "ontology-reasoning"})
-        add_relation(graph, insight_id, assessment_id, "EVALUATED_BY", weight=round(materiality_score / 100, 4), properties={"source": "materiality-gate"})
-        add_relation(graph, assessment_id, importance_gate_id, "PASSES_IMPORTANCE_GATE" if dispatch_candidate else "BLOCKED_BY_IMPORTANCE_GATE", weight=round(materiality_score / 100, 4), properties={"source": "materiality-gate"})
+        add_relation(graph, insight_id, assessment_id, "EVALUATED_BY", weight=1.0, properties={"source": "materiality-gate"})
+        add_relation(graph, assessment_id, importance_gate_id, "PASSES_IMPORTANCE_GATE" if dispatch_candidate else "BLOCKED_BY_IMPORTANCE_GATE", weight=1.0, properties={"source": "materiality-gate"})
         add_relation(graph, insight_id, dispatch_id, "DISPATCHED_BY", weight=1.0, properties={"source": "ontology-reasoning", "mode": "insight-driven-only"})
         if dispatch_candidate:
             intent_id = add_entity(graph, "notification-intent", opinion.symbol + ":" + insight_type, stock.label + " 알림 의도", {
                 "tboxClass": "NotificationIntent",
                 "symbol": opinion.symbol,
                 "insightType": insight_type,
-                "materialityScore": round(materiality_score, 1),
+                "reviewLevel": opinion.review_level,
+                "dataState": opinion.data_state,
                 "status": "send-candidate",
             })
-            add_relation(graph, insight_id, intent_id, "CREATES_NOTIFICATION_INTENT", weight=round(materiality_score / 100, 4), properties={"source": "materiality-gate"})
-            add_relation(graph, intent_id, dispatch_id, "DISPATCHED_BY", weight=round(materiality_score / 100, 4), properties={"source": "materiality-gate"})
+            add_relation(graph, insight_id, intent_id, "CREATES_NOTIFICATION_INTENT", weight=1.0, properties={"source": "materiality-gate"})
+            add_relation(graph, intent_id, dispatch_id, "DISPATCHED_BY", weight=1.0, properties={"source": "materiality-gate"})
         add_relation(graph, insight_id, ai_review_id, "REQUESTS_OPINION_FROM", weight=1.0, properties={"source": "ontology-reasoning"})

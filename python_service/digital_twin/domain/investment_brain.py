@@ -5,6 +5,8 @@ import json
 import re
 from typing import Dict, Iterable, List, Optional
 
+from .ontology_decision_state import DATA_STATES, REVIEW_LEVELS, VALIDATION_STATES
+
 
 INVESTMENT_BRAIN_VERSION = "ontology-investment-brain-v2"
 HYPOTHESIS_SET_VERSION = "typedb-causal-hypotheses-v2"
@@ -37,12 +39,18 @@ def unique_texts(values: Iterable[object], limit: int = 12) -> List[str]:
     return rows
 
 
-def bounded_score(value: object, default: float = 0.0) -> float:
-    try:
-        parsed = float(value)
-    except (TypeError, ValueError):
-        parsed = default
-    return round(max(0.0, min(100.0, parsed)), 1)
+HYPOTHESIS_EVIDENCE_STATES = ("supported", "contested", "unresolved", "blocked")
+HYPOTHESIS_EVIDENCE_STATE_LABELS = {
+    "supported": "현재 근거로 확인됨",
+    "contested": "반대 근거가 함께 있음",
+    "unresolved": "추가 확인 필요",
+    "blocked": "자료 문제로 판단 보류",
+}
+
+
+def known_state(value: object, allowed: Iterable[str], fallback: str) -> str:
+    text = str(value or "").strip().lower()
+    return text if text in set(allowed) else fallback
 
 
 @dataclass(frozen=True)
@@ -95,7 +103,7 @@ class ResearchTask:
     related_hypothesis_ids: List[str] = field(default_factory=list)
     source_types: List[str] = field(default_factory=list)
     max_age_minutes: int = 180
-    decision_impact: float = 0.0
+    decision_relevance: str = "supporting"
     execution_mode: str = "cache-first-on-demand"
     result_evidence_ids: List[str] = field(default_factory=list)
     priority: int = 50
@@ -145,7 +153,8 @@ class InvestmentHypothesis:
     claim: str
     stance: str
     horizon: str
-    prior_confidence: float
+    evidence_state: str
+    evidence_state_label: str
     supporting_evidence_ids: List[str] = field(default_factory=list)
     counter_evidence_ids: List[str] = field(default_factory=list)
     supporting_rule_ids: List[str] = field(default_factory=list)
@@ -205,7 +214,9 @@ class DecisionEpisode:
     question: InvestmentQuestion
     hypothesis_set: HypothesisSet
     action: str
-    confidence: float
+    review_level: str
+    data_state: str
+    validation_state: str
     selected_hypothesis_id: str = ""
     inference_generation_id: str = ""
     evidence_ids: List[str] = field(default_factory=list)
@@ -257,7 +268,16 @@ class DecisionEpisode:
                 claim=str(item.get("claim") or ""),
                 stance=str(item.get("stance") or "uncertain"),
                 horizon=str(item.get("horizon") or "multi-horizon"),
-                prior_confidence=bounded_score(item.get("priorConfidence") or item.get("prior_confidence")),
+                evidence_state=known_state(
+                    item.get("evidenceState") or item.get("evidence_state"),
+                    HYPOTHESIS_EVIDENCE_STATES,
+                    "unresolved",
+                ),
+                evidence_state_label=str(
+                    item.get("evidenceStateLabel")
+                    or item.get("evidence_state_label")
+                    or HYPOTHESIS_EVIDENCE_STATE_LABELS["unresolved"]
+                ),
                 supporting_evidence_ids=list(item.get("supportingEvidenceIds") or item.get("supporting_evidence_ids") or []),
                 counter_evidence_ids=list(item.get("counterEvidenceIds") or item.get("counter_evidence_ids") or []),
                 supporting_rule_ids=list(item.get("supportingRuleIds") or item.get("supporting_rule_ids") or []),
@@ -304,7 +324,13 @@ class DecisionEpisode:
             question=question,
             hypothesis_set=hypothesis_set,
             action=str(payload.get("action") or "HOLD"),
-            confidence=bounded_score(payload.get("confidence")),
+            review_level=known_state(payload.get("reviewLevel") or payload.get("review_level"), REVIEW_LEVELS, "check"),
+            data_state=known_state(payload.get("dataState") or payload.get("data_state"), DATA_STATES, "partial"),
+            validation_state=known_state(
+                payload.get("validationState") or payload.get("validation_state"),
+                VALIDATION_STATES,
+                "conditional",
+            ),
             selected_hypothesis_id=str(payload.get("selectedHypothesisId") or ""),
             inference_generation_id=str(payload.get("inferenceGenerationId") or ""),
             evidence_ids=list(payload.get("evidenceIds") or []),
@@ -464,7 +490,6 @@ def build_competing_hypotheses(
         for rule_id in rule_keys
     ]
     hypotheses = [item for item in hypotheses if item is not None]
-    hypotheses.sort(key=lambda item: (-item.prior_confidence, item.template_id))
     hypotheses = diverse_hypotheses(hypotheses, maximum_count)
     hypotheses = add_safety_hypotheses(
         hypotheses,
@@ -531,41 +556,28 @@ def primary_inference_rows(rows: Iterable[Dict[str, object]]) -> List[Dict[str, 
 
 
 def hypothesis_stance(rows: Iterable[Dict[str, object]], matches: Iterable[Dict[str, object]]) -> str:
-    risk = 0.0
-    support = 0.0
-    for item in primary_inference_rows(rows):
-        risk += max(0.0, float_or_zero(item.get("riskImpact")))
-        support += max(0.0, float_or_zero(item.get("supportImpact")))
-        polarity = relation_polarity(item)
-        if polarity == "risk":
-            risk += max(1.0, normalize_score(item.get("weight")) / 10.0)
-        elif polarity == "support":
-            support += max(1.0, normalize_score(item.get("weight")) / 10.0)
-    if risk > support:
+    polarities = {relation_polarity(item) for item in primary_inference_rows(rows)}
+    if "risk" in polarities and "support" not in polarities:
         return "risk"
-    if support > risk:
+    if "support" in polarities and "risk" not in polarities:
         return "support"
     return "context"
 
 
-def hypothesis_confidence(
+def hypothesis_evidence_state(
     rows: Iterable[Dict[str, object]],
     traces: Iterable[Dict[str, object]],
     matches: Iterable[Dict[str, object]],
-) -> float:
-    values: List[float] = []
-    for item in rows or []:
-        values.extend([
-            normalize_score(item.get("weight")),
-            normalize_score(item.get("confidence")),
-            min(100.0, max(float_or_zero(item.get("riskImpact")), float_or_zero(item.get("supportImpact"))) * 10.0),
-        ])
-    for item in traces or []:
-        values.append(normalize_score(item.get("confidence")))
-    for item in matches or []:
-        values.append(normalize_score(item.get("strengthScore") or item.get("strength_score")))
-        values.append(normalize_score(item.get("confidence")))
-    return bounded_score(max(values or [25.0]), 25.0)
+) -> str:
+    evidence_rows = primary_inference_rows(rows)
+    if any(item.get("evidenceUsableForJudgement") is False for item in evidence_rows):
+        return "blocked"
+    if not evidence_rows and not list(traces or []) and not list(matches or []):
+        return "unresolved"
+    polarities = {relation_polarity(item) for item in evidence_rows}
+    if "risk" in polarities and "support" in polarities:
+        return "contested"
+    return "supported"
 
 
 def causal_label(name: str, rows: Iterable[Dict[str, object]], traces: Iterable[Dict[str, object]], matches: Iterable[Dict[str, object]]) -> str:
@@ -632,6 +644,7 @@ def hypothesis_from_inference_rule(
     requirements = trace_requirements(traces)
     label = causal_label(name, rows, traces, matches)
     template_id = "hypothesis-template:" + rule_id
+    evidence_state = hypothesis_evidence_state(rows, traces, matches)
     return InvestmentHypothesis(
         hypothesis_id=stable_id("hypothesis", hypothesis_seed, template_id),
         template_id=template_id,
@@ -639,7 +652,8 @@ def hypothesis_from_inference_rule(
         claim=name + "에서 TypeDB가 확인한 '" + label + "' 인과 경로가 현재 상황을 설명한다.",
         stance=stance,
         horizon=question.horizon,
-        prior_confidence=hypothesis_confidence(rows, traces, matches),
+        evidence_state=evidence_state,
+        evidence_state_label=HYPOTHESIS_EVIDENCE_STATE_LABELS[evidence_state],
         supporting_evidence_ids=evidence_ids,
         counter_evidence_ids=relation_ids(opposite_rows),
         supporting_rule_ids=[rule_id],
@@ -668,7 +682,6 @@ def diverse_hypotheses(hypotheses: List[InvestmentHypothesis], maximum_count: in
             selected.append(item)
         if len(selected) >= maximum_count:
             break
-    selected.sort(key=lambda item: (-item.prior_confidence, item.template_id))
     return selected[:maximum_count]
 
 
@@ -687,9 +700,8 @@ def add_safety_hypotheses(
     directional_stances = {item.stance for item in result if item.stance in {"risk", "support"}}
     evidence_safety_needed = len(result) < minimum_count or bool(list(missing_data or [])) or bool((conflicts or {}).get("hasConflict"))
     if result and evidence_safety_needed:
-        risk_score = max([item.prior_confidence for item in result if item.stance == "risk"] or [25.0])
-        support_score = max([item.prior_confidence for item in result if item.stance == "support"] or [25.0])
         missing = unique_texts(missing_data)
+        evidence_state = "contested" if bool((conflicts or {}).get("hasConflict")) else "unresolved"
         safety = InvestmentHypothesis(
             hypothesis_id=stable_id("hypothesis", hypothesis_seed, SYSTEM_ABSTENTION_TEMPLATE_ID),
             template_id=SYSTEM_ABSTENTION_TEMPLATE_ID,
@@ -697,7 +709,8 @@ def add_safety_hypotheses(
             claim=name + "의 현재 근거만으로는 경쟁 인과 경로를 충분히 배제할 수 없어 행동 판단을 유보해야 한다.",
             stance="uncertain",
             horizon=question.horizon,
-            prior_confidence=uncertainty_prior(missing, conflicts, risk_score, support_score),
+            evidence_state=evidence_state,
+            evidence_state_label=HYPOTHESIS_EVIDENCE_STATE_LABELS[evidence_state],
             supporting_evidence_ids=relation_ids([item for item in relation_rows if relation_polarity(item) in {"context", "neutral"}]),
             counter_evidence_ids=unique_texts([evidence for item in result for evidence in item.supporting_evidence_ids]),
             supporting_rule_ids=[],
@@ -720,7 +733,8 @@ def add_safety_hypotheses(
             claim=name + "의 현재 TypeDB 경로가 지속 가능한 인과가 아니라 일시적 동행일 수 있다.",
             stance="context",
             horizon=question.horizon,
-            prior_confidence=bounded_score(max(25.0, 100.0 - leading.prior_confidence)),
+            evidence_state="unresolved",
+            evidence_state_label=HYPOTHESIS_EVIDENCE_STATE_LABELS["unresolved"],
             supporting_evidence_ids=relation_ids([item for item in relation_rows if relation_polarity(item) == "context"]),
             counter_evidence_ids=list(leading.supporting_evidence_ids),
             supporting_rule_ids=[],
@@ -747,9 +761,8 @@ def with_reserved_safety_slot(
     if len(result) >= maximum_count:
         removable = [item for item in result if item.approval_status == "approved-active"]
         if removable:
-            result.remove(min(removable, key=lambda item: item.prior_confidence))
+            result.remove(removable[-1])
     result.append(safety)
-    result.sort(key=lambda item: (-item.prior_confidence, item.template_id))
     return result
 
 
@@ -783,9 +796,17 @@ def hypothesis_templates_from_rulebox_snapshot(snapshot: Dict[str, object]) -> L
         if not rule_id:
             continue
         derivations = [item for item in rule.get("derivations") or [] if isinstance(item, dict)]
-        risk = sum(max(0.0, float_or_zero(item.get("risk_impact") or item.get("riskImpact"))) for item in derivations)
-        support = sum(max(0.0, float_or_zero(item.get("support_impact") or item.get("supportImpact"))) for item in derivations)
-        stance = "risk" if risk > support else "support" if support > risk else "context"
+        polarities = {
+            str(item.get("polarity") or "").strip().lower()
+            for item in derivations
+            if str(item.get("polarity") or "").strip().lower() in {"risk", "support"}
+        }
+        if "risk" in polarities and "support" not in polarities:
+            stance = "risk"
+        elif "support" in polarities and "risk" not in polarities:
+            stance = "support"
+        else:
+            stance = "context"
         requirements = unique_texts([
             condition.get("relation_type") or condition.get("relationType") or condition.get("field") or condition.get("condition_id") or condition.get("conditionId")
             for condition in rule.get("conditions") or []
@@ -813,10 +834,9 @@ def relation_polarity(item: Dict[str, object]) -> str:
     explicit = str(item.get("polarity") or "").strip().lower()
     if explicit in {"risk", "support", "context", "neutral"}:
         return explicit
-    if float_or_zero(item.get("riskImpact")) > float_or_zero(item.get("supportImpact")):
-        return "risk"
-    if float_or_zero(item.get("supportImpact")) > float_or_zero(item.get("riskImpact")):
-        return "support"
+    role = str(item.get("evidenceRole") or item.get("evidence_role") or "").strip().lower()
+    if role in {"risk", "support", "counter", "context", "blocking"}:
+        return "risk" if role == "blocking" else "support" if role == "counter" else role
     relation_type = str(item.get("type") or "").upper()
     if any(term in relation_type for term in ["RISK", "FAIL", "VIOLATE", "WEAKEN", "INVALIDATE", "BLOCK"]):
         return "risk"
@@ -838,23 +858,6 @@ def relation_ids(rows: Iterable[Dict[str, object]]) -> List[str]:
     return unique_texts(values)
 
 
-def uncertainty_prior(
-    missing_data: Iterable[object],
-    conflicts: Dict[str, object],
-    risk_score: float,
-    support_score: float,
-) -> float:
-    conflict = bool((conflicts or {}).get("hasConflict"))
-    missing_count = len(list(missing_data or []))
-    balance = max(0.0, 100.0 - abs(risk_score - support_score))
-    components = [35.0, balance * 0.55]
-    if conflict:
-        components.append(70.0)
-    if missing_count:
-        components.append(min(85.0, 45.0 + missing_count * 8.0))
-    return bounded_score(max(components))
-
-
 def research_plan_for_hypotheses(
     question: InvestmentQuestion,
     hypotheses: List[InvestmentHypothesis],
@@ -864,7 +867,7 @@ def research_plan_for_hypotheses(
     missing = unique_texts(missing_data)
     unresolved: List[str] = []
     tasks: List[ResearchTask] = []
-    for index, hypothesis in enumerate(sorted(hypotheses, key=lambda item: item.prior_confidence, reverse=True)[:5]):
+    for index, hypothesis in enumerate(hypotheses[:5]):
         question_text = "가설 '" + hypothesis.template_label + "'을 확인하거나 반박할 가장 직접적이고 최신인 근거는 무엇인가?"
         unresolved.append(question_text)
         requirements = unique_texts(hypothesis.required_evidence_types or ["provenance", "observation-time", "independent-confirmation"])
@@ -876,7 +879,7 @@ def research_plan_for_hypotheses(
             related_hypothesis_ids=[hypothesis.hypothesis_id],
             source_types=source_types_for_requirements(requirements),
             max_age_minutes=research_max_age_minutes(question.horizon),
-            decision_impact=max(0.0, 100.0 - index * 12.5),
+            decision_relevance="direct" if index == 0 else "important" if index < 3 else "supporting",
             priority=max(55, 100 - index * 10),
             status="blocked-by-data" if hypothesis.verification_status == "requires-research" else "ready",
         ))
@@ -891,7 +894,7 @@ def research_plan_for_hypotheses(
             related_hypothesis_ids=[item.hypothesis_id for item in hypotheses],
             source_types=["official", "market-data", "news-full-text"],
             max_age_minutes=research_max_age_minutes(question.horizon),
-            decision_impact=90.0,
+            decision_relevance="direct",
             priority=90,
         ))
     if missing:
@@ -905,7 +908,7 @@ def research_plan_for_hypotheses(
             related_hypothesis_ids=[item.hypothesis_id for item in hypotheses],
             source_types=source_types_for_requirements(missing[:6]),
             max_age_minutes=research_max_age_minutes(question.horizon),
-            decision_impact=85.0,
+            decision_relevance="direct",
             priority=80,
             status="blocked-by-data",
         ))
@@ -943,13 +946,20 @@ def research_max_age_minutes(horizon: str) -> int:
 
 
 def epistemic_state(hypothesis_set: HypothesisSet, research_plan: ResearchPlan) -> Dict[str, object]:
-    ranked = sorted(hypothesis_set.hypotheses, key=lambda item: item.prior_confidence, reverse=True)
-    gap = ranked[0].prior_confidence - ranked[1].prior_confidence if len(ranked) > 1 else 0.0
+    hypotheses = list(hypothesis_set.hypotheses)
+    directional_stances = {item.stance for item in hypotheses if item.stance in {"risk", "support"}}
+    if not hypotheses or all(item.evidence_state in {"unresolved", "blocked"} for item in hypotheses):
+        status = "blocked"
+    elif directional_stances == {"risk", "support"} or any(item.evidence_state == "contested" for item in hypotheses):
+        status = "contested"
+    else:
+        status = "provisional"
+    leading = next((item for item in hypotheses if item.evidence_state == "supported"), hypotheses[0] if hypotheses else None)
     return {
         "tboxClass": "BeliefState",
-        "status": "contested" if gap < 15 else "provisional",
-        "leadingHypothesisId": ranked[0].hypothesis_id if ranked else "",
-        "priorConfidenceGap": round(gap, 1),
+        "status": status,
+        "leadingHypothesisId": leading.hypothesis_id if leading else "",
+        "evidenceStates": unique_texts(item.evidence_state for item in hypotheses),
         "unresolvedQuestionCount": len(research_plan.unresolved_questions),
         "finalDecisionRequiredFromAI": True,
         "ruleDerivedPriorsAreNotFinalOpinion": True,
@@ -978,7 +988,9 @@ def decision_episode_from_context(
         "symbol": (relation_context.get("subject") or {}).get("symbol") if isinstance(relation_context.get("subject"), dict) else "",
         "subjectName": (relation_context.get("subject") or {}).get("name") if isinstance(relation_context.get("subject"), dict) else "",
         "action": validated_response.get("action"),
-        "confidence": validated_response.get("confidence"),
+        "reviewLevel": validated_response.get("reviewLevel"),
+        "dataState": validated_response.get("dataState"),
+        "validationState": validated_response.get("validationState"),
     })
     decided_at = str(validated_response.get("referenceDate") or context.get("referenceDate") or utc_now_iso())
     episode_id = stable_id(
@@ -1013,7 +1025,9 @@ def decision_episode_from_context(
         question=seed_episode.question,
         hypothesis_set=seed_episode.hypothesis_set,
         action=str(validated_response.get("action") or "HOLD"),
-        confidence=bounded_score(validated_response.get("confidence"), 50.0),
+        review_level=known_state(validated_response.get("reviewLevel"), REVIEW_LEVELS, "check"),
+        data_state=known_state(validated_response.get("dataState"), DATA_STATES, "partial"),
+        validation_state=known_state(validated_response.get("validationState"), VALIDATION_STATES, "conditional"),
         selected_hypothesis_id=selected_id,
         inference_generation_id=str(relation_context.get("inferenceGenerationId") or ""),
         evidence_ids=evidence_ids,
@@ -1026,13 +1040,6 @@ def decision_episode_from_context(
         research_plan=dict(brain.get("researchPlan") or relation_context.get("researchPlan") or {}),
         research_audit=dict(relation_context.get("researchCycle") or {}),
     )
-
-
-def normalize_score(value: object) -> float:
-    parsed = float_or_zero(value)
-    if 0 < parsed <= 1:
-        parsed *= 100
-    return bounded_score(parsed)
 
 
 def float_or_zero(value: object) -> float:

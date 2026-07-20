@@ -1,6 +1,6 @@
 from typing import Dict
 
-from .market_data import clamp, investor_net_volume, number
+from .market_data import investor_net_volume, number
 from .portfolio import Position, expects_kr_microstructure_signals
 
 
@@ -33,6 +33,9 @@ def investor_flow_psychology(position: Position) -> Dict[str, object]:
             "reason": "investor-flow-unreliable",
             "field": "investorFlowUnavailable",
             "polarity": "context",
+            "evidenceRole": "blocking",
+            "reviewLevel": "blocked",
+            "dataState": "unavailable",
             "sentimentLabel": "투자자별 수급 신뢰도 낮음",
         }
 
@@ -44,7 +47,6 @@ def investor_flow_psychology(position: Position) -> Dict[str, object]:
     individual = individual_volume or number(position.individual_net_amount)
     base = abs(foreign) + abs(institution) + abs(individual)
     smart_money = foreign + institution
-    score = clamp((smart_money - individual * 0.35) / base * 100.0, -100.0, 100.0) if base else 0.0
     joint_inflow = foreign > 0 and institution > 0
     joint_outflow = foreign < 0 and institution < 0
     price_change = number(position.change_rate)
@@ -59,9 +61,8 @@ def investor_flow_psychology(position: Position) -> Dict[str, object]:
     sentiment = "투자자별 수급 혼조"
     tbox_class = "InvestorFlowSentiment"
     tbox_classes = ["Observation", "FlowObservation", "InvestorFlowSentiment"]
-    support_impact = 0.0
-    risk_impact = 0.0
-    weight = 0.62
+    review_level = "observe"
+    evidence_role = "context"
 
     if joint_inflow and individual < 0:
         field = "smartMoneyDipAbsorption" if price_weak else "smartMoneyAccumulation"
@@ -69,55 +70,57 @@ def investor_flow_psychology(position: Position) -> Dict[str, object]:
         sentiment = "외국인·기관이 사고 개인이 파는 큰 자금 매집"
         tbox_class = "SmartMoneyAccumulation"
         tbox_classes.extend(["SmartMoneyFlow", "SmartMoneyAccumulation"])
-        support_impact = 8.5 if price_weak else 7.5
-        weight = 0.88
+        review_level = "check"
+        evidence_role = "support"
     elif joint_inflow:
         field = "broadInflowConfirmation"
         polarity = "support"
         sentiment = "외국인·기관 동반 순매수"
         tbox_class = "SmartMoneyJointInflow"
         tbox_classes.extend(["SmartMoneyFlow", "SmartMoneyJointInflow"])
-        support_impact = 7.0 if price_strong else 6.0
-        weight = 0.82
+        review_level = "check"
+        evidence_role = "support"
     elif joint_outflow and individual > 0:
         field = "retailDipBuyingRisk"
         polarity = "risk"
         sentiment = "외국인·기관 매도 물량을 개인이 받아내는 흐름"
         tbox_class = "RetailDipBuyingRisk"
         tbox_classes.extend(["SmartMoneyFlow", "RetailFlowPsychology", "AveragingDownRisk"])
-        risk_impact = 9.0 if price_weak else 7.0
-        weight = 0.88
+        review_level = "act" if price_weak else "check"
+        evidence_role = "risk"
     elif joint_outflow:
         field = "broadOutflowRisk"
         polarity = "risk"
         sentiment = "외국인·기관 동반 순매도"
         tbox_class = "SmartMoneyJointOutflow"
         tbox_classes.extend(["SmartMoneyFlow", "SmartMoneyJointOutflow"])
-        risk_impact = 8.0
-        weight = 0.84
+        review_level = "act" if price_weak else "check"
+        evidence_role = "risk"
     elif smart_money > 0:
         field = "partialSmartMoneySupport"
         polarity = "support"
         sentiment = "외국인·기관 합산 순매수"
         tbox_class = "PartialSmartMoneySupport"
         tbox_classes.extend(["SmartMoneyFlow", "PartialSmartMoneySupport"])
-        support_impact = 4.5
-        weight = 0.70
+        review_level = "observe"
+        evidence_role = "support"
     elif smart_money < 0:
         field = "partialSmartMoneyRisk"
         polarity = "risk"
         sentiment = "외국인·기관 합산 순매도"
         tbox_class = "PartialSmartMoneyRisk"
         tbox_classes.extend(["SmartMoneyFlow", "PartialSmartMoneyRisk"])
-        risk_impact = 4.5
-        weight = 0.70
+        review_level = "observe"
+        evidence_role = "risk"
 
     return {
         "available": bool(base),
         "field": field,
-        "value": round(score, 2),
-        "valueNumber": round(score, 2),
+        "value": field,
         "polarity": polarity,
+        "evidenceRole": evidence_role,
+        "reviewLevel": review_level,
+        "dataState": "sufficient" if base else "insufficient",
         "sentimentLabel": sentiment,
         "tboxClass": tbox_class,
         "tboxClasses": tbox_classes,
@@ -129,12 +132,8 @@ def investor_flow_psychology(position: Position) -> Dict[str, object]:
         "individualNetAmount": round(number(position.individual_net_amount), 2),
         "smartMoneyNetVolume": round(smart_money, 2),
         "investorFlowBase": round(base, 2),
-        "investorFlowScore": round(score, 2),
         "jointSmartMoneyInflow": joint_inflow,
         "jointSmartMoneyOutflow": joint_outflow,
         "smartMoneyDirection": "joint_inflow" if joint_inflow else "joint_outflow" if joint_outflow else "mixed",
         "priceContext": "weakness" if price_weak else "strength" if price_strong else "neutral",
-        "supportImpact": support_impact,
-        "riskImpact": risk_impact,
-        "weight": weight,
     }

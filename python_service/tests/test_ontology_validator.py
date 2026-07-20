@@ -54,7 +54,8 @@ class OntologyValidatorTests(unittest.TestCase):
         self.assertEqual("valid", report.status)
         self.assertEqual(0, report.error_count)
         self.assertEqual("valid", quality.payload["validation"]["status"])
-        self.assertEqual(0, quality.payload["scores"]["validationPenalty"])
+        self.assertEqual("ready", quality.payload["states"]["validation"])
+        self.assertNotIn("scores", quality.payload)
 
     def test_portfolio_ontology_records_coverage_gap_as_abox_fact(self):
         position = Position(

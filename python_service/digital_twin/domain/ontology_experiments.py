@@ -3,7 +3,6 @@ import json
 from dataclasses import asdict, dataclass, field
 from typing import Dict, Iterable, List, Tuple
 
-from .market_data import clamp, number
 from .ontology_contracts import PortfolioOntology
 from .ontology_quality import build_ontology_quality_sample
 from .ontology_rulebox_contracts import GraphInferenceRule
@@ -153,8 +152,8 @@ def normalize_candidate_rules(
                 continue
             if not str(derivation.get("decision_stage") or derivation.get("decisionStage") or "").strip():
                 warnings.append("candidate rule " + rule_id + " has derivation without decision_stage")
-            if number(derivation.get("stage_priority") or derivation.get("stagePriority")) <= 0:
-                warnings.append("candidate rule " + rule_id + " has derivation without positive stage_priority")
+            if not str(derivation.get("evidence_role") or derivation.get("evidenceRole") or derivation.get("polarity") or "").strip():
+                warnings.append("candidate rule " + rule_id + " has derivation without evidence_role")
         normalized.append(rule_payload)
     return normalized, sorted(set(warnings))
 
@@ -282,13 +281,14 @@ def inference_metrics_from_graph(graph: PortfolioOntology) -> Dict[str, object]:
         "decisionStages": sorted(set(decision_stages)),
         "symbols": sorted(set(symbols)),
         "quality": {
-            "overallScore": sample.overall_score,
-            "dataCoverageScore": sample.data_coverage_score,
-            "contextCoverageScore": sample.context_coverage_score,
-            "reasoningReadinessScore": sample.reasoning_readiness_score,
-            "relationDensityScore": sample.relation_density_score,
+            "overallState": sample.overall_state,
+            "dataState": sample.data_state,
+            "contextState": sample.context_state,
+            "reasoningState": sample.reasoning_state,
+            "relationState": sample.relation_state,
+            "validationState": sample.validation_state,
             "dataGapCount": sample.data_gap_count,
-            "highPressureCount": sample.high_pressure_count,
+            "actionRequiredCount": sample.action_required_count,
         },
     }
 
@@ -326,11 +326,12 @@ def inference_metric_delta(baseline: Dict[str, object], candidate: Dict[str, obj
         "newRuleIds": sorted(set(candidate.get("ruleIds") or []) - set(baseline.get("ruleIds") or [])),
         "newRelationTypes": sorted(set(candidate.get("relationTypes") or []) - set(baseline.get("relationTypes") or [])),
         "newDecisionStages": sorted(set(candidate.get("decisionStages") or []) - set(baseline.get("decisionStages") or [])),
-        "qualityScore": round(
-            number((candidate.get("quality") or {}).get("overallScore"))
-            - number((baseline.get("quality") or {}).get("overallScore")),
-            2,
+        "qualityStateChanged": (
+            str((baseline.get("quality") or {}).get("overallState") or "")
+            != str((candidate.get("quality") or {}).get("overallState") or "")
         ),
+        "baselineQualityState": str((baseline.get("quality") or {}).get("overallState") or ""),
+        "candidateQualityState": str((candidate.get("quality") or {}).get("overallState") or ""),
     }
 
 
@@ -446,7 +447,7 @@ def experiment_recommendations(
                 "high",
                 "후보 규칙 구조 경고 해결",
                 "구조 경고 " + str(len(warnings)) + "개가 있어 운영 RuleBox 승격 전에 수정이 필요합니다.",
-                "candidateRules의 condition, derivation, decision_stage, stage_priority를 보완합니다.",
+                "candidateRules의 condition, derivation, decision_stage, evidence_role을 보완합니다.",
                 proposed_changes,
                 {"warnings": list(warnings or [])[:6]},
             )
@@ -464,7 +465,6 @@ def experiment_recommendations(
                 {
                     "derivedRelationDelta": derived_count,
                     "promotionStatus": readiness_status,
-                    "promotionScore": readiness.get("score"),
                 },
             )
         )
@@ -573,7 +573,7 @@ def aggregate_graph_deltas(graph_runs: List[Dict[str, object]]) -> Dict[str, obj
         "relationCount": 0,
         "derivedRelationCount": 0,
         "traceCount": 0,
-        "qualityScore": 0.0,
+        "qualityStateChangedCount": 0,
         "requiresTypeDbMaterializationCount": 0,
         "newRuleIds": [],
         "newRelationTypes": [],
@@ -586,35 +586,40 @@ def aggregate_graph_deltas(graph_runs: List[Dict[str, object]]) -> Dict[str, obj
         delta = run.get("delta") if isinstance(run.get("delta"), dict) else {}
         for key in ["entityCount", "relationCount", "derivedRelationCount", "traceCount"]:
             result[key] += int(delta.get(key) or 0)
-        result["qualityScore"] += number(delta.get("qualityScore"))
+        if bool(delta.get("qualityStateChanged")):
+            result["qualityStateChangedCount"] += 1
         for key in ["newRuleIds", "newRelationTypes", "newDecisionStages"]:
             result[key].extend(str(item) for item in (delta.get(key) or []) if str(item or "").strip())
     for key in ["newRuleIds", "newRelationTypes", "newDecisionStages"]:
         result[key] = sorted(set(result[key]))
-    result["qualityScore"] = round(result["qualityScore"], 2)
     return result
 
 
 def promotion_readiness(warnings: List[str], aggregate_delta: Dict[str, object], graph_run_count: int) -> Dict[str, object]:
-    score = 52.0
-    score += min(22.0, max(0, int(aggregate_delta.get("derivedRelationCount") or 0)) * 4.0)
-    score += min(12.0, len(aggregate_delta.get("newDecisionStages") or []) * 3.0)
-    score += clamp(number(aggregate_delta.get("qualityScore")) * 0.4, -10.0, 10.0)
-    score -= min(24.0, len(warnings or []) * 6.0)
-    if graph_run_count <= 0:
-        score -= 18.0
-    rounded = round(clamp(score, 0.0, 100.0), 2)
     if warnings:
         status = "needs-review"
+        validation_state = "blocked"
+        data_state = "partial" if graph_run_count > 0 else "insufficient"
     elif graph_run_count <= 0:
         status = "needs-data"
-    elif rounded >= 72 and int(aggregate_delta.get("derivedRelationCount") or 0) > 0:
+        validation_state = "conditional"
+        data_state = "insufficient"
+    elif int(aggregate_delta.get("requiresTypeDbMaterializationCount") or 0) > 0:
+        status = "needs-materialization"
+        validation_state = "conditional"
+        data_state = "sufficient"
+    elif int(aggregate_delta.get("derivedRelationCount") or 0) > 0:
         status = "promote-candidate"
+        validation_state = "ready"
+        data_state = "sufficient"
     else:
         status = "needs-review"
+        validation_state = "conditional"
+        data_state = "sufficient"
     return {
         "status": status,
-        "score": rounded,
+        "validationState": validation_state,
+        "dataState": data_state,
         "reason": readiness_reason(status),
     }
 
@@ -624,6 +629,8 @@ def readiness_reason(status: str) -> str:
         return "후보 규칙이 샌드박스 그래프에서 새 추론 관계를 만들었고 구조 경고가 없습니다."
     if status == "needs-data":
         return "비교할 최근 ABox 스냅샷이 없어 구조 검증만 수행했습니다."
+    if status == "needs-materialization":
+        return "후보 규칙을 TypeDB에서 실행한 결과가 아직 없어 승격 판단을 보류합니다."
     return "후보 규칙을 승격하기 전에 경고, 데이터 커버리지, 추론 변화량을 검토해야 합니다."
 
 

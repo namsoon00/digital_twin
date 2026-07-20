@@ -11,11 +11,11 @@ from .valuation_contracts import (
     period_is_annual_per_share,
     scenario_margins,
     unique_missing,
-    valuation_confidence_label,
     valuation_decision_eligible,
     valuation_freshness_status,
-    valuation_input_coverage,
-    valuation_reliability_score,
+    valuation_input_state,
+    valuation_reliability_label,
+    valuation_reliability_state,
 )
 
 
@@ -49,7 +49,7 @@ def macro_dgs10_as_of(external_signals: Dict[str, object]) -> str:
     return str(dgs10.get("date") or dgs10.get("fetchedAt") or macro.get("fetchedAt") or "")
 
 
-def _base_row(position: Position, method: str, formula: str, reliability: float) -> Dict[str, object]:
+def _base_row(position: Position, method: str, formula: str, reliability_state: str) -> Dict[str, object]:
     symbol = str(position.symbol or "").upper().strip()
     return {
         "assumptionKey": symbol + ":ai-valuation-proposal",
@@ -59,8 +59,9 @@ def _base_row(position: Position, method: str, formula: str, reliability: float)
         "source": "ai-valuation-proposal",
         "valuationMethod": method,
         "formula": formula,
-        "reliabilityScore": reliability,
-        "valuationConfidenceLabel": valuation_confidence_label(reliability),
+        "valuationDataState": reliability_state,
+        "valuationReliabilityState": reliability_state,
+        "valuationDataStateLabel": valuation_reliability_label(reliability_state),
         "valuationDecisionEligible": False,
         "valuationSourceType": "ai",
         "valuationCurrency": str(position.currency or ("KRW" if str(position.market or "").upper() == "KR" else "USD")),
@@ -129,20 +130,24 @@ def apply_review_override(row: Dict[str, object], settings: Dict[str, object]) -
         row["approvalStatus"] = "user_approved"
         row["activeStatus"] = "active"
         row["requiresUserApproval"] = False
-        row["reliabilityScore"] = max(number(row.get("reliabilityScore")), 72.0)
+        if str(row.get("valuationInputState") or "") == "sufficient":
+            row["valuationDataState"] = "sufficient"
+            row["valuationReliabilityState"] = "sufficient"
     elif status in {"user_modified", "modified"}:
         row["approvalStatus"] = "user_modified"
         row["activeStatus"] = "active"
         row["requiresUserApproval"] = False
-        row["reliabilityScore"] = max(number(row.get("reliabilityScore")), 78.0)
+        if str(row.get("valuationInputState") or "") == "sufficient":
+            row["valuationDataState"] = "sufficient"
+            row["valuationReliabilityState"] = "sufficient"
     elif status in {"user_rejected", "rejected"}:
         row["approvalStatus"] = "user_rejected"
         row["activeStatus"] = "rejected"
         row["requiresUserApproval"] = False
-    row["valuationConfidenceLabel"] = valuation_confidence_label(row.get("reliabilityScore"))
+    row["valuationDataStateLabel"] = valuation_reliability_label(row.get("valuationReliabilityState"))
     row["valuationDecisionEligible"] = valuation_decision_eligible(
         source_type=str(row.get("valuationSourceType") or "ai"),
-        reliability_score=row.get("reliabilityScore"),
+        reliability_state=row.get("valuationReliabilityState"),
         approval_status=row.get("approvalStatus"),
         freshness_status=str(row.get("valuationFreshnessStatus") or "unknown"),
         period_compatible=bool(row.get("periodCompatible", True)),
@@ -201,7 +206,7 @@ def bitcoin_proxy_ai_valuation_row(
         }.items()
         if value or key in {"netDebt", "preferredEquity"}
     ]
-    coverage = valuation_input_coverage(required, available)
+    input_state = valuation_input_state(required, available)
     nav_per_share = (
         (btc_price * btc_holdings - net_debt - preferred_equity) / diluted_shares
         if btc_price and btc_holdings and diluted_shares
@@ -217,14 +222,14 @@ def bitcoin_proxy_ai_valuation_row(
         }
     as_of = btc.get("fetchedAt") or btc.get("updatedAt") or btc.get("lastUpdated")
     freshness = valuation_freshness_status(as_of, 2.0)
-    reliability = valuation_reliability_score(
-        "ai", coverage, freshness_status=freshness, scenario_complete=bool(scenarios)
+    reliability_state = valuation_reliability_state(
+        "ai", input_state, freshness_status=freshness, scenario_complete=bool(scenarios)
     )
     row = _base_row(
         position,
         "ai-bitcoin-treasury-nav-scenarios",
         "적정가 범위 = (BTC 가격 x BTC 보유량 - 순부채 - 우선주 부담) / 희석주식수 x NAV 프리미엄 시나리오",
-        reliability,
+        reliability_state,
     )
     row.update({
         "currentPrice": current,
@@ -240,7 +245,7 @@ def bitcoin_proxy_ai_valuation_row(
         "navPerShare": round(nav_per_share, 4) if nav_per_share else 0.0,
         "valuationAsOf": str(as_of or ""),
         "valuationFreshnessStatus": freshness,
-        "inputCoveragePct": coverage,
+        "valuationInputState": input_state,
         "missingInputs": unique_missing([
             "BTC 보유량" if not btc_holdings else "",
             "희석주식수" if not diluted_shares else "",
@@ -366,16 +371,16 @@ def _fundamental_scenario_row(
     available = ["annualEPS"] if eps_value else []
     if multiples:
         available.append("targetMultipleBand")
-    coverage = valuation_input_coverage(required + (["cycleData"] if model_family == "semiconductor" else ["growthData"]), available)
-    reliability = valuation_reliability_score(
+    input_state = valuation_input_state(required + (["cycleData"] if model_family == "semiconductor" else ["growthData"]), available)
+    reliability_state = valuation_reliability_state(
         str(context.get("sourceType") or "external"),
-        coverage,
+        input_state,
         eps_period=eps_period,
         freshness_status=freshness,
         scenario_complete=bool(scenarios),
     )
     method = "ai-semiconductor-eps-per-scenarios" if model_family == "semiconductor" else "ai-growth-eps-per-scenarios"
-    row = _base_row(position, method, "적정가 범위 = 연간/TTM EPS x 종목 유형별 PER 시나리오", reliability)
+    row = _base_row(position, method, "적정가 범위 = 연간/TTM EPS x 종목 유형별 PER 시나리오", reliability_state)
     row.update({
         "currentPrice": current,
         **scenarios,
@@ -388,7 +393,7 @@ def _fundamental_scenario_row(
         "periodCompatible": period_is_annual_per_share(eps_period),
         "valuationAsOf": str(as_of or ""),
         "valuationFreshnessStatus": freshness,
-        "inputCoveragePct": coverage,
+        "valuationInputState": input_state,
         "sourceProvider": str(context.get("provider") or ""),
         "sourceSymbol": source_symbol,
         "underlyingSymbol": source_symbol if source_symbol != str(position.symbol or "").upper() else "",
@@ -454,18 +459,18 @@ def preferred_income_ai_valuation_row(
     fair_value_high = annual_dividend / (bull_yield / 100.0)
     valuation_as_of = macro_dgs10_as_of(external_signals)
     freshness = valuation_freshness_status(valuation_as_of, 14.0)
-    coverage = valuation_input_coverage(
+    input_state = valuation_input_state(
         ["coupon", "parValue", "requiredYield"],
         ["coupon", "parValue", "requiredYield"],
     )
-    reliability = valuation_reliability_score(
-        "ai", coverage, freshness_status=freshness, scenario_complete=True
+    reliability_state = valuation_reliability_state(
+        "ai", input_state, freshness_status=freshness, scenario_complete=True
     )
     row = _base_row(
         position,
         "ai-preferred-income-yield-scenarios",
         "적정가 범위 = 연간 배당 / 요구수익률 시나리오",
-        reliability,
+        reliability_state,
     )
     row.update({
         "currentPrice": current,
@@ -487,7 +492,7 @@ def preferred_income_ai_valuation_row(
         "fundamentalDataSourcePriority": "배당 조건 > 금리/요구수익률 > 외부 PER",
         "valuationFreshnessStatus": freshness,
         "valuationAsOf": valuation_as_of,
-        "inputCoveragePct": coverage,
+        "valuationInputState": input_state,
         "periodCompatible": True,
         "valuationDecisionEligible": False,
     })
@@ -514,7 +519,7 @@ def current_price_anchor_ai_valuation_row(position: Position, settings: Dict[str
         position,
         "ai-current-price-anchor",
         "AI 초기 기준가 = 현재가",
-        35.0,
+        "partial",
     )
     row.update({
         "currentPrice": current,
@@ -526,6 +531,7 @@ def current_price_anchor_ai_valuation_row(position: Position, settings: Dict[str
         "preferredValuationMetric": "임시 현재가 기준",
         "fundamentalDataSourcePriority": "사용자 적정가 또는 외부 PER/EPS 필요",
         "valuationFreshnessStatus": "unknown",
+        "valuationInputState": "partial",
         "periodCompatible": False,
         "valuationDecisionEligible": False,
     })

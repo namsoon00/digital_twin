@@ -11,7 +11,7 @@ from ..domain.notification_ai_gate_contracts import (
 )
 from .notification_ai_gate_message import execution_telegram_message, prepend_execution_start_badge, strategy_guide_quality
 from ..domain.notification_ai_gate_sources import source_labels_from_context
-from ..domain.notification_ai_gate_text import _number, _text, reference_date
+from ..domain.notification_ai_gate_text import _text, reference_date
 from ..domain.notification_ai_gate_validation import ai_decision_input_packet, delivery_profile_from_context
 
 
@@ -57,7 +57,12 @@ def notification_ai_validation_assertions(
             "tboxClass": "ValidatedOpinion",
             "action": response.action,
             "actionLabel": response.action_label,
-            "confidence": round(_number(response.confidence), 1),
+            "validationState": response.validation_state,
+            "validationLabel": response.validation_label,
+            "dataState": response.data_state,
+            "dataStateLabel": response.data_state_label,
+            "reviewLevel": response.review_level,
+            "reviewLabel": response.review_label,
             "decisionMode": AI_DECISION_MODE,
             "validatedOpinion": dict(payload or {}),
         },
@@ -76,10 +81,10 @@ def notification_ai_validation_assertions(
             "precomputedAction": response.precomputed_action,
             "aiAction": response.action,
             "disagreementReason": response.disagreement_reason,
-            "originalConfidence": round(_number(response.original_confidence), 1),
-            "adjustedConfidence": round(_number(response.confidence), 1),
-            "confidenceCap": round(_number(response.confidence_cap), 1),
-            "confidenceCapReasons": list(response.confidence_cap_reasons or []),
+            "validationState": response.validation_state,
+            "dataState": response.data_state,
+            "reviewLevel": response.review_level,
+            "validationReasons": list(response.validation_reasons or []),
         },
         {
             "id": delivery_id,
@@ -89,7 +94,6 @@ def notification_ai_validation_assertions(
             "label": delivery_profile.get("label"),
             "detailLevel": delivery_profile.get("detailLevel"),
             "terminology": delivery_profile.get("terminology"),
-            "scoreVisibility": delivery_profile.get("scoreVisibility"),
             "ruleVisibility": delivery_profile.get("ruleVisibility"),
         },
     ]
@@ -150,10 +154,13 @@ def notification_ai_decision_audit(
         "aiAction": response.action,
         "disagreement": bool(response.disagreement_reason),
         "disagreementReason": response.disagreement_reason,
-        "originalConfidence": round(_number(response.original_confidence), 1),
-        "adjustedConfidence": round(_number(response.confidence), 1),
-        "confidenceCap": round(_number(response.confidence_cap), 1),
-        "confidenceCapReasons": list(response.confidence_cap_reasons or []),
+        "validationState": response.validation_state,
+        "validationLabel": response.validation_label,
+        "dataState": response.data_state,
+        "dataStateLabel": response.data_state_label,
+        "reviewLevel": response.review_level,
+        "reviewLabel": response.review_label,
+        "validationReasons": list(response.validation_reasons or []),
         "validationWarnings": list(response.validation_warnings or []),
         "sourceUrls": source_urls,
         "sourceLabels": source_labels,
@@ -195,6 +202,9 @@ def context_with_validated_ai_response(
         "decisionMode": AI_DECISION_MODE,
         "source": response.source,
         "validationWarnings": list(response.validation_warnings or []),
+        "validationState": response.validation_state,
+        "dataState": response.data_state,
+        "reviewLevel": response.review_level,
         "messageDeliveryProfile": delivery_profile_from_context(enriched),
         "auditIds": audit_entity_ids,
         "strategyGuideQuality": guide_quality,
@@ -211,7 +221,10 @@ def context_with_validated_ai_response(
             "precomputedAction": response.precomputed_action,
             "aiAction": response.action,
             "disagreementReason": response.disagreement_reason,
-            "confidenceCap": round(_number(response.confidence_cap), 1),
+            "validationState": response.validation_state,
+            "dataState": response.data_state,
+            "reviewLevel": response.review_level,
+            "validationReasons": list(response.validation_reasons or []),
         },
         "validationWarnings": list(response.validation_warnings or []),
         "strategyGuideQuality": guide_quality,
@@ -220,7 +233,8 @@ def context_with_validated_ai_response(
     }
     enriched["ontologyAssertions"] = assertions
     lines = [
-        "판단: " + response.action_label + " · 확신 " + str(round(response.confidence, 1)) + "%",
+        "판단: " + response.action_label + " · " + response.review_label,
+        "자료 상태: " + response.data_state_label + " · AI 검증: " + response.validation_label,
         "해석: " + response.summary,
     ]
     if response.evidence:

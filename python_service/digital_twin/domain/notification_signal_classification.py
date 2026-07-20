@@ -1,3 +1,9 @@
+"""Classify notification evidence for delivery diagnostics.
+
+This module only labels the kinds of data included in a notification. It does
+not calculate a composite investment judgement or rank a buy/sell decision.
+"""
+
 from typing import Iterable, List
 
 
@@ -62,21 +68,21 @@ DEFAULT_SIGNAL_FALLBACK_TERMS = {
 }
 
 
-def notification_signal_labels(rule: str, raw_lines: Iterable[str]) -> List[str]:
-    labels = {scoring_data_label(line) for line in raw_lines}
-    signals: List[str] = []
+def notification_signal_categories(rule: str, raw_lines: Iterable[str]) -> List[str]:
+    labels = {signal_data_label(line) for line in raw_lines}
+    categories: List[str] = []
     if str(rule or "").strip() in IMPORTANT_NOTIFICATION_RULES:
-        signals.append("important")
+        categories.append("important")
     if labels.intersection(CONFIRMING_DATA_LABELS):
-        signals.append("confirmingData")
+        categories.append("confirmingData")
     if str(rule or "").strip() in ACTIONABLE_NOTIFICATION_RULES:
-        signals.append("actionable")
+        categories.append("actionable")
     if str(rule or "").strip() in LOW_SIGNAL_NOTIFICATION_RULES:
-        signals.append("statusNoise")
-    return signals
+        categories.append("statusNoise")
+    return categories
 
 
-def scoring_data_label(line: object) -> str:
+def signal_data_label(line: object) -> str:
     text = str(line or "").strip()
     for label in sorted(CONFIRMING_DATA_LABELS, key=len, reverse=True):
         if text.startswith(label + ": ") or text.startswith(label + " "):
@@ -84,5 +90,5 @@ def scoring_data_label(line: object) -> str:
     return ""
 
 
-def fallback_terms_for_condition(condition_id: str) -> List[str]:
+def fallback_terms_for_delivery_condition(condition_id: str) -> List[str]:
     return list(DEFAULT_SIGNAL_FALLBACK_TERMS.get(str(condition_id or ""), []))

@@ -8,11 +8,16 @@ from .accounts import normalize_message_delivery_level
 from .notification_ai import notification_ai_prompt_context
 from .notification_ai_news import (
     news_headline_items,
-    news_item_number,
-    news_item_rank_score,
+    news_item_rank_key,
     research_evidence_items,
 )
-from .news_analysis import clean_article_summary_noise
+from .news_analysis import (
+    NEWS_MATERIALITY_STATE_LABELS,
+    NEWS_RELEVANCE_STATE_LABELS,
+    NEWS_SOURCE_TRUST_STATE_LABELS,
+    clean_article_summary_noise,
+    news_state_payload,
+)
 from .news_ai_analysis import clean_summary_text, summary_texts_similar
 from .notification_ai_gate_contracts import KST
 from .notification_ai_gate_text import (
@@ -171,23 +176,16 @@ def source_detail_number(item: Dict[str, object], *keys: str) -> float:
 
 
 def source_reliability_text(item: Dict[str, object]) -> str:
-    value = source_detail_number(item, "sourceReliability", "confidence")
-    if not value:
-        return ""
-    pct = value * 100 if value <= 1 else value
-    if pct >= 75:
-        label = "높음"
-    elif pct >= 55:
-        label = "보통"
-    else:
-        label = "낮음"
-    return label + "(" + str(round(pct, 1)).rstrip("0").rstrip(".") + "%)"
+    states = source_news_states(item)
+    return NEWS_SOURCE_TRUST_STATE_LABELS.get(states["sourceTrustState"], "출처 확인 필요").replace("신뢰도 ", "")
 
 
-def source_score_piece(label: str, value: float) -> str:
-    if not value:
-        return ""
-    return label + " " + str(round(value, 1)).rstrip("0").rstrip(".") + "점"
+def source_news_states(item: Dict[str, object]) -> Dict[str, str]:
+    if not isinstance(item, dict):
+        return news_state_payload({})
+    payload = item.get("payload") if isinstance(item.get("payload"), dict) else {}
+    raw_payload = item.get("rawPayload") if isinstance(item.get("rawPayload"), dict) else {}
+    return news_state_payload({**raw_payload, **payload, **item})
 
 
 def source_detail_map(context: Dict[str, object]) -> Dict[str, Dict[str, object]]:
@@ -205,7 +203,7 @@ def source_detail_map(context: Dict[str, object]) -> Dict[str, Dict[str, object]
             details[url] = item
             continue
         current = details[url]
-        if news_item_rank_score(item, news_reference_datetime_for_source(context)) > news_item_rank_score(current, news_reference_datetime_for_source(context)):
+        if news_item_rank_key(item, news_reference_datetime_for_source(context)) > news_item_rank_key(current, news_reference_datetime_for_source(context)):
             details[url] = merge_source_detail(item, current)
         else:
             details[url] = merge_source_detail(current, item)
@@ -288,26 +286,25 @@ def source_url_display_limit(context: Dict[str, object]) -> int:
     return 2
 
 
-def source_url_kind_priority(url: str, detail: Dict[str, object]) -> float:
+def source_url_kind_rank(url: str, detail: Dict[str, object]) -> int:
     text = str(url or "").lower()
     kind = str((detail or {}).get("kind") or "").lower()
     if "dart.fss.or.kr" in text or "opendart" in text or kind == "disclosure":
-        return 40.0
+        return 3
     if "sec.gov" in text:
-        return 34.0
-    return 0.0
+        return 2
+    return 1
 
 
-def source_url_rank_score(url: str, detail: Dict[str, object], context: Dict[str, object]) -> float:
+def source_url_rank_key(url: str, detail: Dict[str, object], context: Dict[str, object]) -> tuple:
     if isinstance(detail, dict) and detail:
-        relevance = news_item_number(detail, "relevanceScore", "relevance_score")
-        return source_url_kind_priority(url, detail) + news_item_rank_score(detail, news_reference_datetime_for_source(context)) + (5.0 if relevance >= 80 else 0.0)
+        return (source_url_kind_rank(url, detail), *news_item_rank_key(detail, news_reference_datetime_for_source(context)))
     text = str(url or "").lower()
     if "dart.fss.or.kr" in text or "opendart" in text:
-        return 70.0
+        return (3, 0, 0, 0, 0, 0, 0)
     if "sec.gov" in text:
-        return 64.0
-    return 20.0
+        return (2, 0, 0, 0, 0, 0, 0)
+    return (1, 0, 0, 0, 0, 0, 0)
 
 
 def source_url_cluster_key(url: str, detail: Dict[str, object]) -> str:
@@ -350,20 +347,21 @@ def select_source_urls_for_message(
         if details and not detail:
             continue
         seen_urls.add(text)
+        states = source_news_states(detail) if detail else news_state_payload({})
         candidates.append({
             "url": text,
             "detail": detail,
-            "score": source_url_rank_score(text, detail, context),
-            "relevance": news_item_number(detail, "relevanceScore", "relevance_score") if detail else 0.0,
+            "rankKey": source_url_rank_key(text, detail, context),
+            "relevanceState": states["relevanceState"],
         })
-    candidates.sort(key=lambda item: (item["score"], item["relevance"], item["url"]), reverse=True)
+    candidates.sort(key=lambda item: (*item["rankKey"], item["url"]), reverse=True)
     selected: List[str] = []
     selected_clusters = set()
     for item in candidates:
         cluster = source_url_cluster_key(item["url"], item["detail"])
         if cluster in selected_clusters:
             continue
-        if item["relevance"] and item["relevance"] < 35 and len(candidates) > limit:
+        if item["relevanceState"] in {"unrelated", "context"} and len(candidates) > limit:
             continue
         selected.append(item["url"])
         selected_clusters.add(cluster)
@@ -654,8 +652,9 @@ def source_url_rows(urls: List[str], context: Dict[str, object]) -> List[str]:
         title = _text((detail or {}).get("title") or (detail or {}).get("summary"), 92)
         source = _text((detail or {}).get("source") or (detail or {}).get("domain") or (detail or {}).get("provider"), 40)
         reliability = source_reliability_text(detail)
-        relevance = source_score_piece("관련성", source_detail_number(detail, "relevanceScore"))
-        materiality = source_score_piece("중요도", source_detail_number(detail, "materialityScore"))
+        states = source_news_states(detail)
+        relevance = NEWS_RELEVANCE_STATE_LABELS.get(states["relevanceState"], "")
+        materiality = NEWS_MATERIALITY_STATE_LABELS.get(states["materialityState"], "")
         impact_label = source_detail_text(detail, "stockImpactLabel")
         published_at = source_published_at_text(detail)
         link_text = "• <a href=\"" + html.escape(text, quote=True) + "\">" + html.escape(label, quote=False) + "</a>"

@@ -7,7 +7,7 @@ from ..domain.events import (
     ontology_reasoning_requested_event,
 )
 from ..domain.investment_brain import InvestmentQuestion, stable_id, utc_now_iso
-from ..domain.investment_evidence_governance import ResearchRun, governed_evidence
+from ..domain.investment_evidence_governance import ResearchRun, governed_evidence, normalized_source_trust_state
 from ..domain.investment_research import NewsCollectionTarget, ResearchEvidence
 from ..domain.data_freshness import parse_datetime
 from ..domain.materiality import evidence_materiality
@@ -68,8 +68,14 @@ class InvestmentResearchOrchestrationService:
     def minimum_verified_count(self) -> int:
         return int_setting(self.settings, "investmentBrainResearchMinimumVerifiedCount", 2, 1, 10)
 
-    def minimum_source_reliability(self) -> float:
-        return float_setting(self.settings, "investmentBrainResearchMinimumSourceReliability", 55.0, 0.0, 100.0)
+    def minimum_source_trust_state(self) -> str:
+        configured = str(self.settings.get("investmentBrainResearchMinimumSourceTrustState") or "").strip().lower()
+        if configured:
+            return normalized_source_trust_state(configured)
+        # One-way compatibility for existing local settings.  New settings use
+        # the named state and never expose a numeric reliability threshold.
+        legacy = self.settings.get("investmentBrainResearchMinimumSourceReliability")
+        return normalized_source_trust_state(legacy, "standard")
 
     def cooldown_minutes(self) -> int:
         return int_setting(self.settings, "investmentBrainResearchCooldownMinutes", 30, 0, 1440)
@@ -115,7 +121,7 @@ class InvestmentResearchOrchestrationService:
             cached_items,
             target,
             max_age,
-            self.minimum_source_reliability(),
+            self.minimum_source_trust_state(),
         )
         needs_research = force or self.plan_requires_research(brain, tasks)
         if not needs_research:
@@ -184,7 +190,7 @@ class InvestmentResearchOrchestrationService:
             collected,
             target,
             max_age,
-            self.minimum_source_reliability(),
+            self.minimum_source_trust_state(),
         )
         changed_count = self.persist_evidence(accepted, question, target, run_id)
         status = "evidence-collected" if changed_count else ("verified-no-change" if verified else "evidence-unavailable")

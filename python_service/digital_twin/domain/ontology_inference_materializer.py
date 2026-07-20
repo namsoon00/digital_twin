@@ -3,7 +3,14 @@ from typing import Dict, List
 from .data_freshness import age_minutes
 from .market_data import number
 from .ontology_contracts import OntologyBelief, OntologyEntity, OntologyEvidence, OntologyRelation, PortfolioOntology, entity_id
-from .ontology_decision_policy import decision_stage_from_action, relation_stage_priority
+from .ontology_decision_policy import decision_stage_from_action
+from .ontology_decision_state import (
+    DATA_STATE_LABELS,
+    DECISION_STAGE_ORDER,
+    REVIEW_LEVEL_LABELS,
+    conflict_state_from_roles,
+    review_level_for,
+)
 from .ontology_rulebox_contracts import (
     GRAPH_REASONER_VERSION,
     HOLDING_TARGET_ROLE,
@@ -14,7 +21,6 @@ from .ontology_rulebox_contracts import (
     GraphInferenceRule,
 )
 from .ontology_schema import abox_relation_properties
-from .ontology_threshold_policy import default_ontology_threshold_policy
 
 
 def materialize_rule_inference(
@@ -28,7 +34,8 @@ def materialize_rule_inference(
     subject_key = stock.entity_id.replace(":", "-")
     symbol = str(properties.get("symbol") or subject_key).upper()
     display_name = stock.label or symbol
-    confidence = number(context.get("confidence"))
+    data_state = str(context.get("dataState") or "partial")
+    review_level = review_level_for(rule.action_level, data_state)
     evidence_relation_ids = [str(item) for item in context.get("evidenceRelationIds") or []]
     trace_id = entity_id("inference-trace", symbol + ":" + rule.rule_id)
     trace_label = display_name + " · " + rule.label
@@ -39,11 +46,15 @@ def materialize_rule_inference(
         "ruleId": rule.rule_id,
         "ruleLabel": rule.label,
         "engineVersion": GRAPH_REASONER_VERSION,
-        "confidence": confidence,
+        "reviewLevel": review_level,
+        "reviewLevelLabel": REVIEW_LEVEL_LABELS[review_level],
+        "dataState": data_state,
+        "dataStateLabel": DATA_STATE_LABELS[data_state],
         "matchedConditions": list(context.get("matchedConditions") or []),
         "evidenceRelationIds": evidence_relation_ids,
         "conditionDetailSource": str(context.get("conditionDetailSource") or ""),
-        "evidenceCoverage": number(context.get("evidenceCoverage")),
+        "requiredConditionCount": int(number(context.get("requiredConditionCount"))),
+        "groundedConditionCount": int(number(context.get("groundedConditionCount"))),
         "freshnessStatus": str(context.get("freshnessStatus") or "unknown"),
         "freshnessGateReason": str(context.get("freshnessGateReason") or ""),
         "temporalEvidenceCount": int(number(context.get("temporalEvidenceCount"))),
@@ -57,15 +68,15 @@ def materialize_rule_inference(
         symbol,
         display_name,
         trace_id,
-        confidence,
         evidence_relation_ids,
+        data_state,
     )
     rule_entity_id = entity_id("rule", rule.rule_id)
     graph.relations.append(OntologyRelation(
         rule_entity_id,
         trace_id,
         "TRIGGERED_INFERENCE",
-        weight=confidence,
+        weight=1.0,
         evidence_ids=evidence_relation_ids,
         properties=inference_relation_properties("TRIGGERED_INFERENCE", {
             "symbol": symbol,
@@ -78,7 +89,7 @@ def materialize_rule_inference(
         stock.entity_id,
         trace_id,
         "HAS_INFERENCE_TRACE",
-        weight=confidence,
+        weight=1.0,
         evidence_ids=evidence_relation_ids,
         properties=inference_relation_properties("HAS_INFERENCE_TRACE", {
             "symbol": symbol,
@@ -101,14 +112,16 @@ def materialize_rule_inference(
             "matchedConditions": list(context.get("matchedConditions") or []),
             "evidenceRelationIds": evidence_relation_ids,
             "conditionDetailSource": str(context.get("conditionDetailSource") or ""),
-            "evidenceCoverage": number(context.get("evidenceCoverage")),
+            "requiredConditionCount": int(number(context.get("requiredConditionCount"))),
+            "groundedConditionCount": int(number(context.get("groundedConditionCount"))),
             "freshnessStatus": str(context.get("freshnessStatus") or "unknown"),
             "freshnessGateReason": str(context.get("freshnessGateReason") or ""),
             "temporalEvidenceCount": int(number(context.get("temporalEvidenceCount"))),
             "evidenceUsableForJudgement": bool(context.get("evidenceUsableForJudgement")),
             "promptHint": rule.prompt_hint,
         },
-        confidence,
+        "context",
+        data_state,
     ))
     for index, derivation in enumerate(rule.derivations):
         target_key = fill_template(derivation.target_key, symbol, display_name, subject_key)
@@ -118,13 +131,8 @@ def materialize_rule_inference(
         action_level = derivation.action_level or rule.action_level
         action_policy = action_policy_properties(derivation, properties)
         decision_stage = derivation.decision_stage or decision_stage_from_action(action_group, action_level)
-        stage_priority = derivation.stage_priority or relation_stage_priority({
-            "decisionStage": decision_stage,
-            "actionGroup": action_group,
-            "actionLevel": action_level,
-            "riskImpact": derivation.risk_impact,
-            "supportImpact": derivation.support_impact,
-        })
+        evidence_role = derivation_evidence_role(derivation)
+        derivation_review_level = review_level_for(action_level, data_state)
         graph.entities.append(OntologyEntity(target_id, target_label, derivation.target_kind, inference_properties({
             "tboxClass": derivation.tbox_class,
             "tboxClasses": derivation.tbox_classes or [derivation.tbox_class],
@@ -135,7 +143,11 @@ def materialize_rule_inference(
             "actionGroup": action_group,
             "actionLevel": action_level,
             "decisionStage": decision_stage,
-            "stagePriority": stage_priority,
+            "evidenceRole": evidence_role,
+            "reviewLevel": derivation_review_level,
+            "reviewLevelLabel": REVIEW_LEVEL_LABELS[derivation_review_level],
+            "dataState": data_state,
+            "dataStateLabel": DATA_STATE_LABELS[data_state],
             **action_policy,
             "inferenceTraceId": trace_id,
         })))
@@ -145,12 +157,12 @@ def materialize_rule_inference(
             "ruleLabel": rule.label,
             "derivationIndex": index,
             "polarity": derivation.polarity,
-            "riskImpact": derivation.risk_impact,
-            "supportImpact": derivation.support_impact,
+            "evidenceRole": evidence_role,
             "actionGroup": action_group,
             "actionLevel": action_level,
             "decisionStage": decision_stage,
-            "stagePriority": stage_priority,
+            "reviewLevel": derivation_review_level,
+            "dataState": data_state,
             **action_policy,
             "aiInfluenceLabel": derivation.ai_influence_label or derivation.belief_label or target_label,
             "inferenceTraceId": trace_id,
@@ -163,7 +175,7 @@ def materialize_rule_inference(
             stock.entity_id,
             target_id,
             derivation.relation_type,
-            weight=derivation.weight,
+            weight=1.0,
             evidence_ids=[evidence_id_value] + evidence_relation_ids,
             properties=inference_relation_properties(derivation.relation_type, relation_properties),
         ))
@@ -171,7 +183,7 @@ def materialize_rule_inference(
             target_id,
             trace_id,
             "EXPLAINED_BY_TRACE",
-            weight=confidence,
+            weight=1.0,
             evidence_ids=[evidence_id_value] + evidence_relation_ids,
             properties=inference_relation_properties("EXPLAINED_BY_TRACE", {
                 "symbol": symbol,
@@ -187,7 +199,9 @@ def materialize_rule_inference(
                 stock.entity_id,
                 derivation.belief_label,
                 derivation.polarity if derivation.polarity in {"risk", "support"} else "context",
-                confidence,
+                evidence_role,
+                derivation_review_level,
+                data_state,
                 [evidence_id_value] + evidence_relation_ids,
             ))
     for explanation_id, relation_type, label in explanation_entities:
@@ -195,7 +209,7 @@ def materialize_rule_inference(
             stock.entity_id,
             explanation_id,
             relation_type,
-            weight=confidence,
+            weight=1.0,
             evidence_ids=[evidence_id_value] + evidence_relation_ids,
             properties=inference_relation_properties(relation_type, {
                 "symbol": symbol,
@@ -209,7 +223,7 @@ def materialize_rule_inference(
             explanation_id,
             trace_id,
             "EXPLAINED_BY_TRACE",
-            weight=confidence,
+            weight=1.0,
             evidence_ids=[evidence_id_value] + evidence_relation_ids,
             properties=inference_relation_properties("EXPLAINED_BY_TRACE", {
                 "symbol": symbol,
@@ -227,45 +241,31 @@ def materialize_inference_explanation_entities(
     symbol: str,
     display_name: str,
     trace_id: str,
-    confidence: float,
     evidence_relation_ids: List[str],
+    data_state: str,
 ) -> List[tuple]:
-    threshold_policy = default_ontology_threshold_policy().inference_materialization
-    risk_impact = max([number(getattr(item, "risk_impact", 0)) for item in rule.derivations or []], default=0)
-    support_impact = max([number(getattr(item, "support_impact", 0)) for item in rule.derivations or []], default=0)
     primary = primary_derivation(rule)
     action_group = (getattr(primary, "action_group", "") or rule.action_group) if primary else rule.action_group
     action_level = (getattr(primary, "action_level", "") or rule.action_level) if primary else rule.action_level
     decision_stage = getattr(primary, "decision_stage", "") if primary else ""
     decision_stage = decision_stage or decision_stage_from_action(action_group, action_level)
-    stage_priority = relation_stage_priority({
-        "decisionStage": decision_stage,
-        "actionGroup": action_group,
-        "actionLevel": action_level,
-        "riskImpact": risk_impact,
-        "supportImpact": support_impact,
-    })
-    conflict_type = signal_conflict_type(risk_impact, support_impact)
-    should_escalate = bool(
-        stage_priority >= threshold_policy.escalate_stage_priority
-        or risk_impact >= threshold_policy.escalate_risk_impact
-        or support_impact >= threshold_policy.escalate_support_impact
-        or confidence >= threshold_policy.escalate_confidence
-    )
+    review_level = review_level_for(action_level, data_state)
+    evidence_roles = [derivation_evidence_role(item) for item in rule.derivations or []]
+    conflict_state = conflict_state_from_roles(evidence_roles)
+    should_escalate = review_level in {"act", "immediate", "blocked"}
     state_key = "|".join([value for value in [decision_stage, rule.rule_id] if str(value or "").strip()])
     common = {
         "symbol": symbol,
         "ruleId": rule.rule_id,
         "ruleLabel": rule.label,
         "engineVersion": GRAPH_REASONER_VERSION,
-        "confidence": confidence,
         "sourceTraceId": trace_id,
         "evidenceRelationIds": evidence_relation_ids,
         "decisionStage": decision_stage,
-        "stagePriority": stage_priority,
-        "thresholdPolicyId": threshold_policy.policy_id,
-        "thresholdPolicyVersion": threshold_policy.version,
-        "thresholdPolicySource": threshold_policy.source,
+        "reviewLevel": review_level,
+        "reviewLevelLabel": REVIEW_LEVEL_LABELS[review_level],
+        "dataState": data_state,
+        "dataStateLabel": DATA_STATE_LABELS[data_state],
     }
     why_id = entity_id("why-now", symbol + ":" + rule.rule_id)
     conflict_id = entity_id("signal-conflict", symbol + ":" + rule.rule_id)
@@ -282,11 +282,9 @@ def materialize_inference_explanation_entities(
         **common,
         "tboxClass": "SignalConflict",
         "tboxClasses": ["Contradiction", "SignalConflict"],
-        "hasConflict": conflict_type != "none",
-        "conflictType": conflict_type,
-        "riskPressure": risk_impact,
-        "supportEvidence": support_impact,
-        "netRiskPressure": risk_impact - support_impact,
+        "hasConflict": conflict_state == "mixed",
+        "conflictState": conflict_state,
+        "evidenceRoles": evidence_roles,
     })))
     graph.entities.append(OntologyEntity(timeline_id, display_name + " 추론 타임라인", "inference-timeline", inference_properties({
         **common,
@@ -307,21 +305,33 @@ def primary_derivation(rule: GraphInferenceRule):
     derivations = list(rule.derivations or [])
     if not derivations:
         return None
-    return max(derivations, key=lambda item: (
-        number(getattr(item, "risk_impact", 0)) + number(getattr(item, "support_impact", 0)),
-        number(getattr(item, "weight", 0)),
-    ))
+    return min(derivations, key=derivation_semantic_sort_key)
 
 
-def signal_conflict_type(risk_impact: float, support_impact: float) -> str:
-    threshold_policy = default_ontology_threshold_policy().inference_materialization
-    if risk_impact <= 0 or support_impact <= 0:
-        return "none"
-    if risk_impact > support_impact + threshold_policy.conflict_dominance_gap:
-        return "risk-dominant-with-support"
-    if support_impact > risk_impact + threshold_policy.conflict_dominance_gap:
-        return "support-dominant-with-risk"
-    return "mixed-signal"
+def derivation_evidence_role(derivation) -> str:
+    explicit = str(getattr(derivation, "evidence_role", "") or "").strip().lower()
+    if explicit in {"risk", "support", "counter", "context", "blocking"}:
+        return explicit
+    polarity = str(getattr(derivation, "polarity", "") or "").strip().lower()
+    return polarity if polarity in {"risk", "support", "counter", "context"} else "context"
+
+
+def derivation_semantic_sort_key(derivation):
+    stage = str(getattr(derivation, "decision_stage", "") or "").strip()
+    if not stage:
+        stage = decision_stage_from_action(
+            str(getattr(derivation, "action_group", "") or ""),
+            str(getattr(derivation, "action_level", "") or ""),
+        )
+    try:
+        stage_index = DECISION_STAGE_ORDER.index(stage)
+    except ValueError:
+        stage_index = len(DECISION_STAGE_ORDER)
+    role_index = {"blocking": 0, "risk": 1, "counter": 2, "support": 3, "context": 4}.get(
+        derivation_evidence_role(derivation),
+        5,
+    )
+    return stage_index, role_index, str(getattr(derivation, "relation_type", "") or "")
 
 
 def unique_non_empty(values: List[object]) -> List[str]:
@@ -424,7 +434,11 @@ def grounded_inference_context(
                     item["targetKind"] = target.kind if target else ""
         grounded_conditions.append(item)
     grounded_count = sum(1 for item in grounded_conditions if condition_is_grounded(item))
-    coverage = grounded_count / max(1, len(grounded_conditions))
+    required_conditions = [
+        item
+        for item in grounded_conditions
+        if str(item.get("role") or "required").strip().lower() not in {"optional"}
+    ]
     freshness_status = aggregate_condition_freshness(grounded_conditions)
     temporal_conditions = [
         item
@@ -436,8 +450,18 @@ def grounded_inference_context(
         for item in temporal_conditions
         if not bool(item.get("judgementEvidenceUsable"))
     ]
-    evidence_usable = coverage >= 0.65 and not blocked_temporal_conditions
-    if coverage < 0.65:
+    required_count = len(required_conditions)
+    grounded_required_count = sum(1 for item in required_conditions if condition_is_grounded(item))
+    if blocked_temporal_conditions:
+        data_state = "unavailable" if grounded_required_count <= len(blocked_temporal_conditions) else "partial"
+    elif required_count and grounded_required_count < required_count:
+        data_state = "partial" if grounded_required_count else "insufficient"
+    elif grounded_count:
+        data_state = "sufficient"
+    else:
+        data_state = "insufficient"
+    evidence_usable = data_state in {"sufficient", "partial"} and not blocked_temporal_conditions
+    if data_state == "insufficient":
         freshness_gate_reason = "성립 조건의 실제 관측값이 충분하지 않습니다."
     elif blocked_temporal_conditions:
         freshness_gate_reason = str(
@@ -448,21 +472,18 @@ def grounded_inference_context(
         freshness_gate_reason = "시간에 민감한 근거가 원천 시각과 거래 세션 기준을 통과했습니다."
     else:
         freshness_gate_reason = "시간에 민감한 조건이 없는 구조·정책 추론입니다."
-    rule_reliability = max([number(getattr(item, "weight", 0)) for item in rule.derivations or []], default=0.72)
-    freshness_factor = {"fresh": 1.0, "aging": 0.72, "delayed": 0.65, "stale": 0.1, "not-applicable": 1.0}.get(freshness_status, 0.2)
-    confidence = min(0.96, max(0.25, rule_reliability * 0.45 + coverage * 0.35 + freshness_factor * 0.20))
-    if not evidence_usable:
-        confidence = min(confidence, 0.35)
     payload.update({
         "matchedConditions": grounded_conditions,
         "evidenceRelationIds": sorted(evidence_relation_ids),
         "conditionDetailSource": "typedb-match+abox-grounding",
-        "evidenceCoverage": round(coverage * 100.0, 1),
+        "requiredConditionCount": required_count,
+        "groundedConditionCount": grounded_required_count,
+        "dataState": data_state,
+        "dataStateLabel": DATA_STATE_LABELS[data_state],
         "freshnessStatus": freshness_status,
         "freshnessGateReason": freshness_gate_reason,
         "temporalEvidenceCount": len(temporal_conditions),
         "evidenceUsableForJudgement": evidence_usable,
-        "confidence": round(confidence, 3),
     })
     return payload
 
@@ -484,8 +505,6 @@ def matching_evidence_relation(graph: PortfolioOntology, stock_id: str, conditio
         target_kind = str(getattr(condition, "target_kind", "") or "")
         if target_kind and (not target or target.kind != target_kind):
             continue
-        if number(relation.weight) < number(getattr(condition, "min_weight", 0)):
-            continue
         if not ontology_properties_match(
             target.properties if target else {},
             getattr(condition, "target_property_filters", {}) or {},
@@ -499,7 +518,13 @@ def matching_evidence_relation(graph: PortfolioOntology, stock_id: str, conditio
         candidates.append((relation, target))
     if not candidates:
         return None, None
-    return max(candidates, key=lambda item: number(item[0].weight))
+    return sorted(
+        candidates,
+        key=lambda item: (
+            str((item[0].properties or {}).get("_relationId") or ""),
+            str(item[0].target or ""),
+        ),
+    )[0]
 
 
 def ontology_properties_match(properties: Dict[str, object], filters: Dict[str, object]) -> bool:
@@ -558,7 +583,7 @@ def evidence_observed_value(target: OntologyEntity, condition):
         for key in filters.keys()
         if properties.get(str(key)) not in (None, "")
     }
-    for key in ["value", "valueNumber", "currentValue", "materialityScore", "score"]:
+    for key in ["value", "valueNumber", "currentValue", "state", "status", "level"]:
         if properties.get(key) not in (None, ""):
             return properties.get(key)
     return filter_values or target.label
@@ -640,9 +665,13 @@ def observation_metadata(properties: Dict[str, object], observed_value: object) 
         "marketSessionStatus": str(properties.get("marketSessionStatus") or ""),
         "judgementEvidenceUsable": judgement_usable,
     }
-    reliability = number(properties.get("sourceReliability") or properties.get("reliabilityScore"))
-    if reliability > 0:
-        result["sourceReliability"] = round(reliability, 1)
+    source_trust_state = str(properties.get("sourceTrustState") or "").strip().lower()
+    if not source_trust_state:
+        legacy_reliability = number(properties.get("sourceReliability") or properties.get("reliabilityScore"))
+        if legacy_reliability > 1:
+            legacy_reliability /= 100.0
+        source_trust_state = "trusted" if legacy_reliability >= 0.8 else "standard" if legacy_reliability >= 0.6 else "limited" if legacy_reliability > 0 else "unknown"
+    result["sourceTrustState"] = source_trust_state
     return result
 
 

@@ -4,7 +4,12 @@ from typing import Dict, Iterable, List, Tuple
 
 from .market_data import clamp, number
 from . import news_analysis as news_domain
-from .ontology_threshold_policy import ontology_threshold_policy_from_context
+from .ontology_decision_state import (
+    DATA_STATE_LABELS,
+    REVIEW_LEVEL_LABELS,
+    VALIDATION_STATE_LABELS,
+    conflict_state_from_roles,
+)
 from .portfolio import Position
 from .symbol_universe import normalize_market
 
@@ -128,7 +133,7 @@ LOW_RELIABILITY_SOURCE_TERMS = ["blog", "블로그", "cafe", "reddit", "rumor"]
 HIGH_RELIABILITY_SOURCE_TERMS = ["dart", "sec", "edgar", "reuters", "bloomberg", "연합", "yonhap", "cnbc", "wsj", "marketwatch"]
 
 
-@dataclass
+@dataclass(init=False)
 class ResearchEvidence:
     evidence_id: str
     symbol: str
@@ -139,13 +144,113 @@ class ResearchEvidence:
     url: str = ""
     observed_at: str = ""
     polarity: str = "context"
-    impact_score: float = 0.0
-    confidence: float = 0.55
     published_at: str = ""
     raw_payload: Dict[str, object] = field(default_factory=dict)
+    source_trust_state: str = "unknown"
+    materiality_state: str = "context"
+    data_state: str = "partial"
+    validation_state: str = "conditional"
+
+    def __init__(
+        self,
+        evidence_id: str,
+        symbol: str,
+        kind: str,
+        source: str,
+        title: str,
+        summary: str = "",
+        url: str = "",
+        observed_at: str = "",
+        polarity: str = "context",
+        *legacy_values: object,
+        published_at: str = "",
+        raw_payload: Dict[str, object] = None,
+        source_trust_state: str = "",
+        materiality_state: str = "",
+        data_state: str = "",
+        validation_state: str = "",
+        **deprecated_values: object,
+    ):
+        """Create categorical evidence while accepting one legacy row shape.
+
+        Historical rows used ``impact_score, confidence, published_at,
+        raw_payload`` after ``polarity``.  We only read those values to map old
+        persisted rows into categorical states; newly created evidence does not
+        retain or expose them.
+        """
+        legacy_impact = deprecated_values.pop("impact_score", None)
+        legacy_confidence = deprecated_values.pop("confidence", None)
+        if deprecated_values:
+            unknown = ", ".join(sorted(str(key) for key in deprecated_values))
+            raise TypeError("Unexpected ResearchEvidence fields: " + unknown)
+        if len(legacy_values) > 4:
+            raise TypeError("ResearchEvidence accepts at most four legacy values")
+        if legacy_values:
+            legacy_impact = legacy_values[0]
+        if len(legacy_values) >= 2:
+            legacy_confidence = legacy_values[1]
+        if len(legacy_values) >= 3 and not published_at:
+            published_at = str(legacy_values[2] or "")
+        if len(legacy_values) >= 4 and raw_payload is None and isinstance(legacy_values[3], dict):
+            raw_payload = legacy_values[3]
+
+        payload = dict(raw_payload or {}) if isinstance(raw_payload, dict) else {}
+        if source_trust_state:
+            payload["sourceTrustState"] = source_trust_state
+        if materiality_state:
+            payload["materialityState"] = materiality_state
+        if data_state:
+            payload["dataState"] = data_state
+        if validation_state:
+            payload["validationState"] = validation_state
+        if not payload.get("sourceTrustState"):
+            payload["sourceTrustState"] = (
+                news_domain.news_source_trust_state(legacy_confidence)
+                if legacy_confidence not in (None, "")
+                else news_domain.source_trust_state_for_source(source, payload.get("provider") or "")
+            )
+        if not payload.get("materialityState"):
+            payload["materialityState"] = news_domain.news_materiality_state(
+                payload.get("eventType"),
+                legacy_impact,
+                relation_scope=payload.get("relationScope"),
+                impact_polarity=payload.get("stockImpactPolarity") or polarity,
+                source_trust_state=payload.get("sourceTrustState"),
+            )
+        states = news_domain.news_state_payload(payload)
+
+        self.evidence_id = str(evidence_id or "")
+        self.symbol = str(symbol or "").upper().strip()
+        self.kind = str(kind or "news").strip() or "news"
+        self.source = str(source or "Research").strip() or "Research"
+        self.title = str(title or "").strip()
+        self.summary = str(summary or "").strip()
+        self.url = str(url or "").strip()
+        self.observed_at = str(observed_at or "").strip()
+        self.polarity = str(polarity or "context").strip().lower() or "context"
+        self.published_at = str(published_at or "").strip()
+        self.raw_payload = news_domain.public_news_payload(payload)
+        self.source_trust_state = states["sourceTrustState"]
+        self.materiality_state = states["materialityState"]
+        self.data_state = states["dataState"]
+        self.validation_state = states["validationState"]
+
+    def state_payload(self) -> Dict[str, str]:
+        payload = dict(self.raw_payload or {})
+        payload.update({
+            "sourceTrustState": self.source_trust_state,
+            "materialityState": self.materiality_state,
+            "dataState": self.data_state,
+            "validationState": self.validation_state,
+        })
+        return news_domain.news_state_payload(payload)
 
     def to_dict(self) -> Dict[str, object]:
-        payload = dict(self.raw_payload or {})
+        payload = news_domain.public_news_payload(self.raw_payload or {})
+        states = self.state_payload()
+        evidence_role = str(self.polarity or "context").strip().lower()
+        if evidence_role not in {"risk", "support", "counter", "context", "blocking"}:
+            evidence_role = "context"
         return {
             "evidenceId": self.evidence_id,
             "symbol": self.symbol,
@@ -157,13 +262,10 @@ class ResearchEvidence:
             "observedAt": self.observed_at,
             "publishedAt": self.published_at,
             "polarity": self.polarity,
-            "impactScore": round(number(self.impact_score), 1),
-            "confidence": round(number(self.confidence), 2),
-            "relevanceScore": round(number(payload.get("relevanceScore")), 1),
+            "evidenceRole": evidence_role,
             "relationScope": str(payload.get("relationScope") or ""),
-            "sourceReliability": round(number(payload.get("sourceReliability")), 2),
             "eventType": str(payload.get("eventType") or ""),
-            "materialityScore": round(number(payload.get("materialityScore")), 1),
+            **states,
             "ontologyRelations": list(payload.get("ontologyRelations") or []),
             "excludedReason": str(payload.get("excludedReason") or ""),
             "analysisSummary": str(payload.get("analysisSummary") or ""),
@@ -173,7 +275,6 @@ class ResearchEvidence:
             "stockImpact": str(payload.get("stockImpact") or ""),
             "stockImpactLabel": str(payload.get("stockImpactLabel") or ""),
             "stockImpactPolarity": str(payload.get("stockImpactPolarity") or ""),
-            "stockImpactScore": round(number(payload.get("stockImpactScore")), 1),
             "stockImpactReasonKo": str(payload.get("stockImpactReasonKo") or ""),
             "aiAnalysis": dict(payload.get("aiAnalysis") or {}),
             "articleAiAnalysisVersion": str(payload.get("articleAiAnalysisVersion") or ""),
@@ -183,7 +284,6 @@ class ResearchEvidence:
             "analysisConflictAiPolarity": str(payload.get("analysisConflictAiPolarity") or ""),
             "analysisConflictReasonKo": str(payload.get("analysisConflictReasonKo") or ""),
             "dataQualityRisk": str(payload.get("dataQualityRisk") or ""),
-            "dataQualityRiskScore": round(number(payload.get("dataQualityRiskScore")), 1),
             "sourceKind": str(payload.get("sourceKind") or ""),
             "sourcePlatform": str(payload.get("sourcePlatform") or ""),
             "entityLinks": list(payload.get("entityLinks") or []),
@@ -271,8 +371,8 @@ def matched_terms(text: str, terms: Iterable[str]) -> List[str]:
     return [term for term in _unique_texts(terms) if _lower_text(term) and _lower_text(term) in lowered]
 
 
-def source_reliability_score(source: object, provider: object = "") -> float:
-    return news_domain.source_reliability_score(source, provider)
+def source_trust_state(source: object, provider: object = "") -> str:
+    return news_domain.source_trust_state_for_source(source, provider)
 
 
 def classify_news_relevance(
@@ -289,15 +389,17 @@ def classify_news_relevance(
 class ActiveInvestmentOpinion:
     symbol: str
     action: str
-    conviction: float
     thesis: str
+    review_level: str = "check"
+    data_state: str = "partial"
+    validation_state: str = "conditional"
+    conflict_state: str = "context-only"
     time_horizon: str = "days"
     evidence: List[ResearchEvidence] = field(default_factory=list)
     counter_evidence: List[ResearchEvidence] = field(default_factory=list)
     missing_data: List[Dict[str, object]] = field(default_factory=list)
     invalidation_condition: str = ""
     next_check: str = ""
-    score_breakdown: Dict[str, object] = field(default_factory=dict)
     execution_plan: Dict[str, object] = field(default_factory=dict)
 
     def to_dict(self) -> Dict[str, object]:
@@ -306,7 +408,13 @@ class ActiveInvestmentOpinion:
             "symbol": self.symbol,
             "action": self.action,
             "actionLabel": ACTION_LABELS.get(self.action, self.action),
-            "conviction": round(number(self.conviction), 1),
+            "reviewLevel": self.review_level,
+            "reviewLevelLabel": REVIEW_LEVEL_LABELS.get(self.review_level, REVIEW_LEVEL_LABELS["check"]),
+            "dataState": self.data_state,
+            "dataStateLabel": DATA_STATE_LABELS.get(self.data_state, DATA_STATE_LABELS["partial"]),
+            "validationState": self.validation_state,
+            "validationStateLabel": VALIDATION_STATE_LABELS.get(self.validation_state, VALIDATION_STATE_LABELS["conditional"]),
+            "conflictState": self.conflict_state,
             "timeHorizon": self.time_horizon,
             "thesis": self.thesis,
             "evidence": [item.to_dict() for item in self.evidence],
@@ -316,11 +424,10 @@ class ActiveInvestmentOpinion:
             "nextCheck": self.next_check,
             "executionPlan": dict(self.execution_plan or {}),
             "sourceUrls": source_urls([*self.evidence, *self.counter_evidence]),
-            "scoreBreakdown": dict(self.score_breakdown or {}),
             "promptContract": {
                 "requiredDecision": "BUY|ADD|HOLD|TRIM|SELL|AVOID",
                 "decisionRole": "investment_opinion_not_order",
-                "mustInclude": ["conviction", "evidence", "counterEvidence", "invalidationCondition", "sourceUrls"],
+                "mustInclude": ["reviewLevel", "dataState", "evidence", "counterEvidence", "invalidationCondition", "sourceUrls"],
                 "guardrails": [
                     "제공된 가격, 수급, 뉴스, 공시, SEC/OpenDART 자료만 사용합니다.",
                     "하나의 행동 의견은 반드시 선택하되 자동 주문 지시로 표현하지 않습니다.",
@@ -411,36 +518,35 @@ def research_evidence_from_payload(payload: Dict[str, object], fallback_symbol: 
             raw_payload[key] = value
     polarity = str(source_payload.get("polarity") or "").strip()
     if kind == "news" and not polarity:
-        polarity, _unused_impact = keyword_polarity(title + " " + str(source_payload.get("summary") or ""))
-    confidence = number(source_payload.get("confidence")) or (news_domain.confidence_from_analysis_payload(raw_payload) if kind == "news" else 0.55)
-    impact_score = number(source_payload.get("impactScore") or source_payload.get("impact_score"))
-    if kind == "news" and not impact_score:
-        _polarity, base_impact = keyword_polarity(title + " " + str(source_payload.get("summary") or ""))
-        impact_score = news_domain.impact_from_analysis_payload(base_impact, raw_payload)
+        polarity = keyword_polarity(title + " " + str(source_payload.get("summary") or ""))
     summary_value = (
         source_payload.get("articleSummaryKo")
         or raw_payload.get("articleSummaryKo")
         or source_payload.get("summary")
         or title
     )
+    raw_payload = news_domain.public_news_payload(raw_payload)
+    states = news_domain.news_state_payload(raw_payload)
     return ResearchEvidence(
-        evidence_id,
-        symbol,
-        kind,
-        source or "Research",
-        title,
-        compact_text(summary_value, 520),
-        url,
-        str(source_payload.get("observedAt") or source_payload.get("observed_at") or source_payload.get("seenDate") or ""),
-        polarity or "context",
-        impact_score,
-        confidence,
-        str(source_payload.get("publishedAt") or source_payload.get("published_at") or source_payload.get("seenDate") or ""),
-        raw_payload,
+        evidence_id=evidence_id,
+        symbol=symbol,
+        kind=kind,
+        source=source or "Research",
+        title=title,
+        summary=compact_text(summary_value, 520),
+        url=url,
+        observed_at=str(source_payload.get("observedAt") or source_payload.get("observed_at") or source_payload.get("seenDate") or ""),
+        polarity=polarity or "context",
+        published_at=str(source_payload.get("publishedAt") or source_payload.get("published_at") or source_payload.get("seenDate") or ""),
+        raw_payload=raw_payload,
+        source_trust_state=states["sourceTrustState"],
+        materiality_state=states["materialityState"],
+        data_state=states["dataState"],
+        validation_state=states["validationState"],
     )
 
 
-def keyword_polarity(text: object) -> Tuple[str, float]:
+def keyword_polarity(text: object) -> str:
     return news_domain.keyword_polarity(text)
 
 
@@ -500,19 +606,26 @@ def sec_research_evidence(symbol: str, sec: Dict[str, object]) -> List[ResearchE
         form = str(latest.get("form") or "SEC filing").strip()
         filing_date = str(latest.get("filingDate") or latest.get("filed") or "").strip()
         url = str(latest.get("url") or "").strip() or sec_filing_url(sec.get("cik"), latest.get("accessionNumber"), latest.get("primaryDocument"))
-        polarity, impact = keyword_polarity(form + " " + company_name)
+        polarity = keyword_polarity(form + " " + company_name)
         evidence.append(ResearchEvidence(
-            "research:" + normalized_symbol + ":sec:" + (str(latest.get("accessionNumber") or form)),
-            normalized_symbol,
-            "filing",
-            str(sec.get("provider") or "SEC EDGAR"),
-            form,
-            (company_name + ", 제출일 " + (filing_date or "-")).strip(", "),
-            url,
-            filing_date,
-            polarity,
-            impact,
-            0.72,
+            evidence_id="research:" + normalized_symbol + ":sec:" + (str(latest.get("accessionNumber") or form)),
+            symbol=normalized_symbol,
+            kind="filing",
+            source=str(sec.get("provider") or "SEC EDGAR"),
+            title=form,
+            summary=(company_name + ", 제출일 " + (filing_date or "-")).strip(", "),
+            url=url,
+            observed_at=filing_date,
+            polarity=polarity,
+            published_at=filing_date,
+            raw_payload={
+                "relationScope": "direct",
+                "eventType": "capital_policy",
+                "sourceTrustState": "trusted",
+                "materialityState": "material",
+                "dataState": "sufficient",
+                "validationState": "ready",
+            },
         ))
     facts = sec.get("facts") if isinstance(sec.get("facts"), dict) else {}
     financial_rows = []
@@ -530,7 +643,6 @@ def sec_research_evidence(symbol: str, sec: Dict[str, object]) -> List[ResearchE
     if financial_rows:
         net_income = facts.get("netIncome") if isinstance(facts.get("netIncome"), dict) else {}
         polarity = "risk" if number(net_income.get("value")) < 0 else "context"
-        impact = 7.0 if polarity == "risk" else 4.0
         latest_end = next(
             (
                 str(item.get("end") or "").strip()
@@ -540,17 +652,23 @@ def sec_research_evidence(symbol: str, sec: Dict[str, object]) -> List[ResearchE
             "",
         )
         evidence.append(ResearchEvidence(
-            "research:" + normalized_symbol + ":financial-facts",
-            normalized_symbol,
-            "financial-fact",
-            str(sec.get("provider") or "SEC EDGAR"),
-            "회사 재무 요약",
-            company_name + ": " + ", ".join(financial_rows[:5]),
-            "",
-            latest_end,
-            polarity,
-            impact,
-            0.7,
+            evidence_id="research:" + normalized_symbol + ":financial-facts",
+            symbol=normalized_symbol,
+            kind="financial-fact",
+            source=str(sec.get("provider") or "SEC EDGAR"),
+            title="회사 재무 요약",
+            summary=company_name + ": " + ", ".join(financial_rows[:5]),
+            observed_at=latest_end,
+            polarity=polarity,
+            published_at=latest_end,
+            raw_payload={
+                "relationScope": "direct",
+                "eventType": "earnings",
+                "sourceTrustState": "trusted",
+                "materialityState": "notable",
+                "dataState": "sufficient",
+                "validationState": "ready",
+            },
         ))
     return evidence
 
@@ -563,20 +681,27 @@ def research_evidence_from_facts(symbol: str, facts: Dict[str, object]) -> List[
     disclosure = facts.get("dartDisclosure") if isinstance(facts.get("dartDisclosure"), dict) else {}
     if disclosure:
         report = str(disclosure.get("reportName") or disclosure.get("report_name") or "OpenDART 공시").strip()
-        polarity, impact = keyword_polarity(report)
+        polarity = keyword_polarity(report)
         receipt_no = str(disclosure.get("receiptNo") or disclosure.get("receipt_no") or "")
         evidence.append(ResearchEvidence(
-            "research:" + normalized_symbol + ":dart:" + (receipt_no or report),
-            normalized_symbol,
-            "disclosure",
-            str(disclosure.get("provider") or "OpenDART"),
-            report,
-            "접수일 " + str(disclosure.get("receiptDate") or disclosure.get("receipt_date") or "-"),
-            opendart_url(receipt_no),
-            str(disclosure.get("receiptDate") or disclosure.get("receipt_date") or ""),
-            polarity,
-            impact,
-            0.78,
+            evidence_id="research:" + normalized_symbol + ":dart:" + (receipt_no or report),
+            symbol=normalized_symbol,
+            kind="disclosure",
+            source=str(disclosure.get("provider") or "OpenDART"),
+            title=report,
+            summary="접수일 " + str(disclosure.get("receiptDate") or disclosure.get("receipt_date") or "-"),
+            url=opendart_url(receipt_no),
+            observed_at=str(disclosure.get("receiptDate") or disclosure.get("receipt_date") or ""),
+            polarity=polarity,
+            published_at=str(disclosure.get("receiptDate") or disclosure.get("receipt_date") or ""),
+            raw_payload={
+                "relationScope": "direct",
+                "eventType": "capital_policy",
+                "sourceTrustState": "trusted",
+                "materialityState": "material",
+                "dataState": "sufficient",
+                "validationState": "ready",
+            },
         ))
     news = facts.get("newsHeadlines") if isinstance(facts.get("newsHeadlines"), dict) else {}
     for item in (news.get("items") if isinstance(news.get("items"), list) else []):
@@ -585,7 +710,7 @@ def research_evidence_from_facts(symbol: str, facts: Dict[str, object]) -> List[
         title = str(item.get("title") or "").strip()
         if not title:
             continue
-        polarity, impact = keyword_polarity(title)
+        polarity = keyword_polarity(title)
         url = str(item.get("url") or "").strip()
         source = str(item.get("domain") or item.get("source") or news.get("provider") or "GDELT").strip()
         summary = compact_text(item.get("articleSummaryKo") or item.get("summary") or title, 520)
@@ -615,21 +740,18 @@ def research_evidence_from_facts(symbol: str, facts: Dict[str, object]) -> List[
             ))
         if not news_domain.relation_scope_is_investable(raw_payload.get("relationScope")):
             continue
-        confidence = news_domain.confidence_from_analysis_payload(raw_payload)
         evidence.append(ResearchEvidence(
-            "research:" + normalized_symbol + ":news:" + stable_evidence_token(source, title, url, item.get("seenDate") or item.get("seendate")),
-            normalized_symbol,
-            "news",
-            source,
-            title,
-            summary,
-            url,
-            str(item.get("seenDate") or item.get("seendate") or ""),
-            polarity,
-            news_domain.impact_from_analysis_payload(impact, raw_payload),
-            confidence,
-            str(item.get("publishedAt") or item.get("seenDate") or item.get("seendate") or ""),
-            raw_payload,
+            evidence_id="research:" + normalized_symbol + ":news:" + stable_evidence_token(source, title, url, item.get("seenDate") or item.get("seendate")),
+            symbol=normalized_symbol,
+            kind="news",
+            source=source,
+            title=title,
+            summary=summary,
+            url=url,
+            observed_at=str(item.get("seenDate") or item.get("seendate") or ""),
+            polarity=polarity,
+            published_at=str(item.get("publishedAt") or item.get("seenDate") or item.get("seendate") or ""),
+            raw_payload=raw_payload,
         ))
     sec = facts.get("secFiling") if isinstance(facts.get("secFiling"), dict) else {}
     evidence.extend(sec_research_evidence(normalized_symbol, sec))
@@ -662,17 +784,23 @@ def research_evidence_from_external_signals(symbol: str, external_signals: Dict[
         if abs(change) >= 2.0:
             polarity = "support" if change > 0 else "risk"
             evidence.append(ResearchEvidence(
-                "research:" + normalized_symbol + ":quote",
-                normalized_symbol,
-                "market-move",
-                str(quote.get("provider") or "market-data"),
-                "가격 변동 " + signed_pct(change),
-                "현재가 " + str(quote.get("price") or "-") + ", 거래량 " + str(quote.get("volume") or "-"),
-                "",
-                str(quote.get("latestTradingDay") or ""),
-                polarity,
-                min(12.0, abs(change) * 1.5),
-                0.65,
+                evidence_id="research:" + normalized_symbol + ":quote",
+                symbol=normalized_symbol,
+                kind="market-move",
+                source=str(quote.get("provider") or "market-data"),
+                title="가격 변동 " + signed_pct(change),
+                summary="현재가 " + str(quote.get("price") or "-") + ", 거래량 " + str(quote.get("volume") or "-"),
+                observed_at=str(quote.get("latestTradingDay") or ""),
+                polarity=polarity,
+                published_at=str(quote.get("latestTradingDay") or ""),
+                raw_payload={
+                    "relationScope": "direct",
+                    "eventType": "price_commentary",
+                    "sourceTrustState": "standard",
+                    "materialityState": "notable",
+                    "dataState": "partial",
+                    "validationState": "conditional",
+                },
             ))
     yfinance_group = external_signals.get("yfinanceData") if isinstance(external_signals.get("yfinanceData"), dict) else {}
     yfinance_data = yfinance_group.get(normalized_symbol) if isinstance(yfinance_group.get(normalized_symbol), dict) else {}
@@ -685,11 +813,6 @@ def research_evidence_from_external_signals(symbol: str, external_signals: Dict[
         freshness = yfinance_data.get("freshness") if isinstance(yfinance_data.get("freshness"), dict) else {}
         freshness_status = str(freshness.get("status") or "unknown")
         stale_modules = [str(item) for item in freshness.get("staleModules") or [] if str(item or "").strip()]
-        confidence = 0.58
-        if freshness_status == "stale":
-            confidence = 0.42
-        elif freshness_status == "unknown":
-            confidence = 0.48
         title = "yfinance 종합 데이터"
         summary = compact_text(
             ", ".join([
@@ -702,19 +825,16 @@ def research_evidence_from_external_signals(symbol: str, external_signals: Dict[
             360,
         )
         evidence.append(ResearchEvidence(
-            "research:" + normalized_symbol + ":yfinance",
-            normalized_symbol,
-            "financial-fact",
-            "yfinance",
-            title,
-            summary,
-            "",
-            str(yfinance_data.get("collectedAt") or ""),
-            "context",
-            4.0 if modules else 1.0,
-            confidence,
-            str(yfinance_data.get("collectedAt") or ""),
-            {
+            evidence_id="research:" + normalized_symbol + ":yfinance",
+            symbol=normalized_symbol,
+            kind="financial-fact",
+            source="yfinance",
+            title=title,
+            summary=summary,
+            observed_at=str(yfinance_data.get("collectedAt") or ""),
+            polarity="context",
+            published_at=str(yfinance_data.get("collectedAt") or ""),
+            raw_payload={
                 "provider": "yfinance",
                 "sourceKind": "unofficial-yahoo-finance-wrapper",
                 "querySymbol": str(yfinance_data.get("querySymbol") or ""),
@@ -730,9 +850,11 @@ def research_evidence_from_external_signals(symbol: str, external_signals: Dict[
                     "balanceSheet": len(yfinance_data.get("balanceSheet") or []),
                     "cashFlow": len(yfinance_data.get("cashFlow") or []),
                 },
-                "sourceReliability": confidence,
+                "sourceTrustState": "limited" if freshness_status == "stale" else "standard",
                 "dataQualityRisk": "stale-yfinance-modules:" + ",".join(stale_modules[:5]) if stale_modules else "unofficial-yahoo-finance-wrapper",
-                "materialityScore": 45,
+                "materialityState": "context",
+                "dataState": "partial" if freshness_status in {"stale", "unknown"} else "sufficient",
+                "validationState": "conditional",
             },
         ))
     return evidence
@@ -780,77 +902,22 @@ def active_rule_labels(relation_context: Dict[str, object]) -> List[str]:
     return labels
 
 
-def support_risk_scores(evidence: List[ResearchEvidence], relation_context: Dict[str, object]) -> Tuple[float, float]:
-    def evidence_weight(item: ResearchEvidence) -> float:
-        payload = item.raw_payload if isinstance(item.raw_payload, dict) else {}
-        scope = str(payload.get("relationScope") or ("direct" if item.kind in {"disclosure", "filing", "market-move"} else "context")).lower()
-        scope_weight = {
-            "direct": 1.0,
-            "peer": 0.62,
-            "sector": 0.48,
-            "market": 0.28,
-            "context": 0.5,
-        }.get(scope, 0.5)
-        if not news_domain.relation_scope_is_investable(scope) and scope != "context":
-            scope_weight = 0.0
-        relevance = clamp(number(payload.get("relevanceScore")) / 100, 0.25, 1.0) if payload.get("relevanceScore") not in (None, "") else 0.75
-        reliability = clamp(number(payload.get("sourceReliability")) or number(item.confidence) or 0.55, 0.35, 0.95)
-        return round(scope_weight * (0.5 + relevance * 0.5) * (0.7 + reliability * 0.3), 4)
-
-    support = sum(number(item.impact_score) * evidence_weight(item) for item in evidence if item.polarity == "support")
-    risk = sum(number(item.impact_score) * evidence_weight(item) for item in evidence if item.polarity in {"risk", "contradiction"})
+def evidence_roles(evidence: List[ResearchEvidence], relation_context: Dict[str, object]) -> List[str]:
+    roles: List[str] = []
+    for item in evidence:
+        if item.polarity in {"risk", "contradiction"}:
+            roles.append("risk")
+        elif item.polarity == "support":
+            roles.append("support")
+        else:
+            roles.append("context")
     for item in relation_rule_items(relation_context):
         if not isinstance(item, dict):
             continue
-        score = number(item.get("strengthScore") or item.get("strength_score"))
-        rule_id = str(item.get("ruleId") or item.get("rule_id") or "")
-        relation_type = str(item.get("relationType") or item.get("relation_type") or "").upper()
-        label = str(item.get("label") or "")
-        combined = relation_type + " " + label
-        if relation_type in {
-            "LOSS_DEFENSE_EVIDENCE",
-            "ADD_BUY_WATCH",
-            "ADD_BUY_ELIGIBILITY",
-            "ALLOWS_ACTION",
-            "MATCHES_INVESTOR_PROFILE",
-            "SUPPORTS_THESIS",
-            "HAS_INFERRED_SUPPORT",
-        } or rule_id in {
-            "holding.loss_smart_money.defense.v1",
-            "holding.investor_flow.smart_money_accumulation.v1",
-            "graph.investor_flow.smart_money_accumulation.v1",
-            "holding.loss_smart_money.reversal_watch.v1",
-            "holding.loss_smart_money.add_buy_review.v1",
-            "holding.winner_momentum.add_buy_review.v1",
-            "graph.winner_momentum.add_buy_review.v1",
-            "graph.aggressive.loss_recovery.add_buy_review.v1",
-            "graph.strategy_profile.aggressive_recovery_room.v1",
-            "graph.instrument_profile.cyclical_growth.recovery_add_review.v1",
-            "graph.instrument_profile.strategy_fit.support.v1",
-        }:
-            support += min(18.0, score * 0.22)
-            continue
-        if relation_type in {
-            "AVERAGING_DOWN_RISK",
-            "BLOCKS_ACTION",
-            "VIOLATES_STRATEGY_FIT",
-            "VIOLATES_RISK_TOLERANCE",
-        } or rule_id in {
-            "holding.averaging_down.risk_guard.v1",
-            "holding.investor_flow.retail_dip_buying_risk.v1",
-            "graph.investor_flow.retail_dip_buying_risk.v1",
-            "holding.investor_flow.smart_money_outflow_risk.v1",
-            "graph.investor_flow.smart_money_outflow_risk.v1",
-            "graph.instrument_profile.averaging_down_policy.v1",
-        }:
-            risk += min(22.0, score * 0.28)
-            continue
-        if any(token in combined for token in ["ENTRY_WAIT", "ENTRY_RISK", "LOSS", "RISK", "DISCLOSURE", "CONCENTRATION", "리스크", "손실", "매도", "하락", "대기", "보류", "차단"]):
-            risk += min(22.0, score * 0.28)
-            continue
-        if any(token in combined for token in ["ENTRY_OPPORTUNITY", "ADD_BUY", "SUPPORT", "CONFIRM", "기회", "소액 진입", "추가매수", "우호"]):
-            support += min(18.0, score * 0.22)
-    return support, risk
+        role = str(item.get("evidenceRole") or item.get("evidence_role") or "").strip().lower()
+        if role in {"risk", "support", "counter", "context", "blocking"}:
+            roles.append(role)
+    return roles or ["context"]
 
 
 def has_add_buy_candidate(relation_context: Dict[str, object]) -> bool:
@@ -877,47 +944,47 @@ def has_add_buy_candidate(relation_context: Dict[str, object]) -> bool:
     return False
 
 
-def choose_action(position: Position, relation_context: Dict[str, object], support_score: float, risk_score: float) -> str:
-    policy = ontology_threshold_policy_from_context(relation_context or {}).action_selection
+def choose_action(position: Position, relation_context: Dict[str, object], conflict_state: str = "context-only") -> str:
     decision = relation_context.get("decision") if isinstance(relation_context.get("decision"), dict) else {}
     action_group = str(decision.get("actionGroup") or "")
     action_level = str(decision.get("actionLevel") or "")
     decision_stage = str(decision.get("decisionStage") or "")
-    relation_score = number(decision.get("score") or relation_context.get("signalStrength"))
+    decision_state = relation_context.get("decisionState") if isinstance(relation_context.get("decisionState"), dict) else {}
+    data_state = str(decision_state.get("dataState") or decision.get("dataState") or relation_context.get("dataState") or "partial")
     is_watchlist = str(position.source or "") == "watchlist"
+    if data_state in {"unavailable", "insufficient"}:
+        return "AVOID" if is_watchlist else "HOLD"
     if is_watchlist:
-        if risk_score >= support_score + policy.watchlist_risk_margin or action_group in {"entryRisk", "entryWait", "lossControl", "dataQuality", "rateRegime", "fxRegime", "macroRegime"}:
+        if action_group in {"entryRisk", "entryWait", "lossControl", "dataQuality", "rateRegime", "fxRegime", "macroRegime"}:
             return "AVOID"
-        if action_group == "entry" and relation_score >= policy.watchlist_entry_strong_relation_score and support_score >= risk_score + policy.watchlist_entry_support_margin:
-            return "BUY"
-        if action_group == "entry" and relation_score >= policy.watchlist_entry_relation_score and support_score >= risk_score + policy.watchlist_entry_weak_support_margin:
+        if action_group == "entry" and decision_stage in {"ENTRY_READY", "ENTRY_SPLIT_BUY"} and conflict_state == "support-only":
             return "BUY"
         return "AVOID"
     if action_group == "addBuy" or decision_stage == "ADD_BUY_REVIEW" or has_add_buy_candidate(relation_context):
         execution_plan = relation_context.get("executionPlan") if isinstance(relation_context.get("executionPlan"), dict) else {}
         add_buy_assessment = execution_plan.get("addBuyAssessment") if isinstance(execution_plan.get("addBuyAssessment"), dict) else {}
         blocked_reasons = list(add_buy_assessment.get("blockedReasons") or [])
-        if not blocked_reasons and relation_score >= policy.add_buy_relation_score and support_score >= risk_score + policy.add_buy_support_margin:
+        if not blocked_reasons and conflict_state == "support-only" and data_state == "sufficient":
             return "ADD"
         return "HOLD"
-    if action_group == "lossControl":
-        return "SELL" if relation_score >= policy.loss_control_sell_relation_score or risk_score >= support_score + policy.loss_control_sell_risk_margin else "TRIM"
+    if decision_stage == "LOSS_CUT":
+        return "SELL"
+    if action_group == "lossControl" or decision_stage in {"BREAKDOWN_ACCELERATION", "SUPPORT_RETEST_FAILED"}:
+        return "SELL" if action_level == "urgent" and conflict_state == "risk-only" else "TRIM"
     if action_group in {"profitTake", "rebalance"}:
         return "TRIM"
     if action_group in {"eventRisk", "disclosure"}:
         return "HOLD"
     if action_group in {"executionRisk", "dataQuality", "factorRisk", "rateRegime", "fxRegime", "macroRegime"}:
         return "HOLD"
-    if action_level == "urgent" and risk_score >= support_score + policy.urgent_trim_risk_margin:
+    if action_level == "urgent" and conflict_state == "risk-only":
         return "TRIM"
-    if action_group == "entryRisk" or risk_score >= support_score + policy.risk_hold_margin:
+    if action_group == "entryRisk" or conflict_state in {"risk-only", "mixed"}:
         return "HOLD"
-    if support_score >= risk_score + policy.unsupported_add_support_margin and relation_score < policy.unsupported_add_max_relation_score:
-        return "ADD"
     return "HOLD"
 
 
-def thesis_for_action(action: str, position: Position, labels: List[str], support_score: float, risk_score: float) -> str:
+def thesis_for_action(action: str, position: Position, labels: List[str]) -> str:
     rule_text = " · ".join(labels[:3]) if labels else "가격·수급·외부 리서치"
     name = str(position.name or position.symbol or "대상")
     if action == "BUY":
@@ -927,7 +994,7 @@ def thesis_for_action(action: str, position: Position, labels: List[str], suppor
     if action == "TRIM":
         return name + "는 " + rule_text + " 기준에서 리스크 관리가 우선이라 분할매도 의견입니다."
     if action == "SELL":
-        return name + "는 리스크 점수 " + str(round(risk_score, 1)) + "가 지지 점수 " + str(round(support_score, 1)) + "보다 커 매도 의견입니다."
+        return name + "는 손실 방어 조건이 성립했고 즉시 확인 단계라 매도 의견입니다."
     if action == "AVOID":
         return name + "는 진입 전 확인할 리스크가 커 매수보류 의견입니다."
     return name + "는 바로 사고팔기보다 보유 이유와 반대 신호를 한 번 더 확인하는 단계입니다."
@@ -940,7 +1007,7 @@ def invalidation_for_action(action: str) -> str:
         return "20일선 회복, 거래량 동반 반등, 부정 공시 해소가 확인되면 매도 강도를 낮춥니다."
     if action == "AVOID":
         return "뉴스·공시 반대 근거가 해소되고 진입 관계 규칙이 재성립하면 재검토합니다."
-    return "새 뉴스/공시 또는 관계 점수 급변이 나오면 보유 의견을 재검토합니다."
+    return "새 뉴스·공시가 들어오거나 확인 단계가 바뀌면 보유 의견을 재검토합니다."
 
 
 def next_check_for_action(action: str, evidence: List[ResearchEvidence]) -> str:
@@ -949,7 +1016,7 @@ def next_check_for_action(action: str, evidence: List[ResearchEvidence]) -> str:
     if any(item.kind == "news" for item in evidence):
         return "뉴스 출처와 후속 보도, 가격·수급 동조 여부를 확인하세요."
     if action in {"TRIM", "SELL"}:
-        return "매도 가능 수량, 손실 기준, 다음 조회의 관계 점수 유지 여부를 확인하세요."
+        return "매도 가능 수량, 손실 기준, 다음 조회에서도 같은 위험 조건이 유지되는지 확인하세요."
     if action in {"BUY", "ADD"}:
         return "진입 가격, 손절 기준, 20일선·거래량 확인 조건을 함께 정하세요."
     return "다음 데이터 업데이트에서 같은 관계 규칙과 반대 근거를 다시 확인하세요."
@@ -978,15 +1045,20 @@ def build_active_investment_opinion(
         evidence_by_key[item.evidence_id] = item
     evidence = list(evidence_by_key.values())
     execution_plan = relation_context.get("executionPlan") if isinstance(relation_context.get("executionPlan"), dict) else {}
-    support_score, risk_score = support_risk_scores(evidence, relation_context)
-    action = choose_action(position, relation_context, support_score, risk_score)
+    roles = evidence_roles(evidence, relation_context)
+    conflict_state = str((relation_context.get("decisionState") or {}).get("conflictState") or conflict_state_from_roles(roles))
+    action = choose_action(position, relation_context, conflict_state)
     support_evidence = [item for item in evidence if item.polarity == "support"]
     risk_evidence = [item for item in evidence if item.polarity in {"risk", "contradiction"}]
     context_evidence = [item for item in evidence if item.polarity == "context"]
     primary = support_evidence if action in {"BUY", "ADD"} else risk_evidence if action in {"TRIM", "SELL", "AVOID"} else context_evidence + support_evidence
     counter = risk_evidence if action in {"BUY", "ADD", "HOLD"} else support_evidence
-    relation_score = number((relation_context.get("decision") or {}).get("score") if isinstance(relation_context.get("decision"), dict) else relation_context.get("signalStrength"))
-    conviction = clamp(48.0 + max(support_score, risk_score) * 0.45 + relation_score * 0.28 - len(missing_data_rows(relation_context)) * 4.0, 35.0, 94.0)
+    decision = relation_context.get("decision") if isinstance(relation_context.get("decision"), dict) else {}
+    decision_state = relation_context.get("decisionState") if isinstance(relation_context.get("decisionState"), dict) else {}
+    review_level = str(decision_state.get("reviewLevel") or decision.get("reviewLevel") or "check")
+    data_state = str(decision_state.get("dataState") or decision.get("dataState") or "partial")
+    graph_backed = bool(relation_context.get("graphStoreUsed") or relation_context.get("inferenceGenerationId"))
+    validation_state = "blocked" if not graph_backed or data_state in {"unavailable", "insufficient"} else "conditional" if data_state == "partial" or conflict_state == "mixed" else "ready"
     labels = active_rule_labels(relation_context)
     invalidation = invalidation_for_action(action)
     if execution_plan.get("weakenConditions"):
@@ -997,20 +1069,15 @@ def build_active_investment_opinion(
     return ActiveInvestmentOpinion(
         symbol=symbol,
         action=action,
-        conviction=conviction,
-        thesis=thesis_for_action(action, position, labels, support_score, risk_score),
+        thesis=thesis_for_action(action, position, labels),
+        review_level=review_level,
+        data_state=data_state,
+        validation_state=validation_state,
+        conflict_state=conflict_state,
         evidence=primary[:5],
         counter_evidence=counter[:5],
         missing_data=missing_data_rows(relation_context)[:8],
         invalidation_condition=invalidation,
         next_check=next_check,
-        score_breakdown={
-            "supportScore": round(support_score, 1),
-            "riskScore": round(risk_score, 1),
-            "relationScore": round(relation_score, 1),
-            "ontologyPressure": round(number(ontology_opinion.get("ontology_pressure") or ontology_opinion.get("ontologyPressure")), 1),
-            "evidenceCount": len(evidence),
-            "scoringBasis": "ontologyRelationRules",
-        },
         execution_plan=dict(execution_plan or {}),
     )

@@ -75,17 +75,6 @@ class MonitoringPositionContextMixin:
                 return number(item.get("ratio"))
         return 0.0
 
-    def holding_formula_audits(self, snapshot: AccountSnapshot, position_state: Dict[str, object], decision_state: Dict[str, object] = None) -> List[Dict[str, object]]:
-        position = self.position_from_state(position_state)
-        sector_ratio = self.sector_ratio_for_position(snapshot, position.sector)
-        scores = None
-        if isinstance(decision_state, dict):
-            scores = {
-                "profitTakePressure": number(decision_state.get("profit_take_pressure") if "profit_take_pressure" in decision_state else decision_state.get("profitTakePressure")),
-                "lossCutPressure": number(decision_state.get("loss_cut_pressure") if "loss_cut_pressure" in decision_state else decision_state.get("lossCutPressure")),
-            }
-        return self.strategy_model.holding_formula_audits(position, sector_ratio, scores)
-
     def ontology_opinion_from_decision(self, decision_state: Dict[str, object]) -> Dict[str, object]:
         if not isinstance(decision_state, dict):
             return {}
@@ -159,8 +148,8 @@ class MonitoringPositionContextMixin:
             return []
         lines = [
             "관계 판단: " + str(opinion.get("action") or "-")
-            + " · 관계 신호 " + compact_number(float(opinion.get("ontology_pressure") or opinion.get("ontologyPressure") or 0)) + "점"
-            + " · 확신 " + compact_number(float(opinion.get("conviction") or 0)) + "점",
+            + " · 확인 단계 " + str(opinion.get("review_level") or opinion.get("reviewLevel") or "check")
+            + " · 자료 상태 " + str(opinion.get("data_state") or opinion.get("dataState") or "partial"),
         ]
         thesis = str(opinion.get("thesis") or "").strip()
         if thesis:
@@ -178,11 +167,14 @@ class MonitoringPositionContextMixin:
         if not opinion:
             return []
         action = str(opinion.get("actionLabel") or opinion.get("action") or "").strip()
-        conviction = opinion.get("conviction")
+        review_label = str(opinion.get("reviewLevelLabel") or "").strip()
+        data_label = str(opinion.get("dataStateLabel") or "").strip()
         thesis = str(opinion.get("thesis") or "").strip()
         lines = []
         if action:
-            lines.append("AI 적극 의견: " + action + (" · 확신 " + compact_number(float(conviction or 0)) + "%" if conviction not in (None, "") else ""))
+            lines.append("AI 적극 의견: " + action + (" · " + review_label if review_label else ""))
+        if data_label:
+            lines.append("자료 상태: " + data_label)
         if thesis:
             lines.append("의견 근거: " + thesis)
         return lines

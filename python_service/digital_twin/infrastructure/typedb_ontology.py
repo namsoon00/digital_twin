@@ -35,7 +35,12 @@ from .graph_store_lifecycle import (
     graph_box_relation_counts,
     ontology_seed_graph,
 )
-from .graph_store_payloads import GraphStoreOntologyRowMapperMixin, list_of_strings, number_or_none
+from .graph_store_payloads import (
+    GraphStoreOntologyRowMapperMixin,
+    condition_relation_filter_values,
+    list_of_strings,
+    number_or_none,
+)
 from .graph_store_rulebox import (
     rulebox_graph_from_rules,
     rulebox_rules_from_payload,
@@ -335,7 +340,6 @@ TYPEDB_PROMOTED_NUMERIC_ATTRIBUTES = {
     "individualNetVolume": "ontology-individual-net-volume",
     "individualNetAmount": "ontology-individual-net-amount",
     "smartMoneyNetVolume": "ontology-smart-money-net-volume",
-    "investorFlowScore": "ontology-investor-flow-score",
     "adrRatio": "ontology-adr-ratio",
     "adrPriceUsd": "ontology-adr-price-usd",
     "adrVolume": "ontology-adr-volume",
@@ -354,8 +358,6 @@ TYPEDB_PROMOTED_NUMERIC_ATTRIBUTES = {
     "optimisticMarginOfSafetyPct": "ontology-optimistic-margin-of-safety-pct",
     "expensivePremiumPct": "ontology-expensive-premium-pct",
     "minimumMarginOfSafetyPct": "ontology-minimum-margin-of-safety-pct",
-    "valuationReliabilityScore": "ontology-valuation-reliability-score",
-    "valuationInputCoveragePct": "ontology-valuation-input-coverage-pct",
     "valuationDecisionEligible": "ontology-valuation-decision-eligible",
     "valuationModelCount": "ontology-valuation-model-count",
     "valuationConsensusPrice": "ontology-valuation-consensus-price",
@@ -393,8 +395,6 @@ TYPEDB_PROMOTED_NUMERIC_ATTRIBUTES = {
     "eventCount": "ontology-event-count",
     "riskEventCount": "ontology-risk-event-count",
     "supportEventCount": "ontology-support-event-count",
-    "temporalRiskScore": "ontology-temporal-risk-score",
-    "temporalSupportScore": "ontology-temporal-support-score",
 }
 TYPEDB_PROMOTED_TEXT_ATTRIBUTES = {
     "investmentStrategyProfile": "ontology-investment-strategy-profile",
@@ -433,7 +433,10 @@ TYPEDB_PROMOTED_TEXT_ATTRIBUTES = {
     "multiplePeriod": "ontology-multiple-period",
     "valuationAsOf": "ontology-valuation-as-of",
     "valuationFreshnessStatus": "ontology-valuation-freshness-status",
-    "valuationConfidenceLabel": "ontology-valuation-confidence-label",
+    "valuationDataStateLabel": "ontology-valuation-data-state-label",
+    "valuationDataState": "ontology-valuation-data-state",
+    "valuationInputState": "ontology-valuation-input-state",
+    "valuationReliabilityState": "ontology-valuation-reliability-state",
     "valuationSourceType": "ontology-valuation-source-type",
     "valuationCurrency": "ontology-valuation-currency",
     "valuationConsensusStatus": "ontology-valuation-consensus-status",
@@ -456,6 +459,23 @@ TYPEDB_PROMOTED_TEXT_ATTRIBUTES = {
     "deliveryLevel": "ontology-language-delivery-level",
     "deliveryLevelLabel": "ontology-language-delivery-level-label",
     "renderedLabel": "ontology-language-rendered-label",
+    "smartMoneyDirection": "ontology-smart-money-direction",
+    "investorFlowPsychology": "ontology-investor-flow-psychology",
+    "investorFlowEvidenceRole": "ontology-investor-flow-evidence-role",
+    "investorFlowDataState": "ontology-investor-flow-data-state",
+    "investorFlowReviewLevel": "ontology-investor-flow-review-level",
+    "trendRiskState": "ontology-trend-risk-state",
+    "trendReviewLevel": "ontology-trend-review-level",
+    "trendEvidenceRole": "ontology-trend-evidence-role",
+    "trendDataState": "ontology-trend-data-state",
+    "liquidityState": "ontology-liquidity-state",
+    "liquidityReviewLevel": "ontology-liquidity-review-level",
+    "liquidityDataState": "ontology-liquidity-data-state",
+    "sourceDataState": "ontology-source-data-state",
+    "externalSignalDataState": "ontology-external-signal-data-state",
+    "relevanceState": "ontology-relevance-state",
+    "sourceTrustState": "ontology-source-trust-state",
+    "materialityState": "ontology-materiality-state",
 }
 TYPEDB_FUNCTION_SUBJECT_FIELDS = {
     "source",
@@ -477,7 +497,10 @@ TYPEDB_FUNCTION_TARGET_FILTERS = {
     "polarity",
     "eventType",
     "materialityPassed",
-    "minMaterialityScore",
+    "materialityState",
+    "relevanceState",
+    "sourceTrustState",
+    "valuationDataState",
     "minValue",
     "maxValue",
     "tboxClass",
@@ -485,7 +508,6 @@ TYPEDB_FUNCTION_TARGET_FILTERS = {
     "allowAddOnStrength",
     "trimOnTrendBreak",
     "avoidAveragingDown",
-    "confidence",
     "impactPolarity",
     "needsReview",
     "readScope",
@@ -498,10 +520,14 @@ TYPEDB_FUNCTION_RELATION_FILTERS = {
     "polarity",
     "transitionType",
     "materialityPassed",
-    "minMaterialityScore",
-    "minRiskImpact",
-    "minSupportImpact",
+    "materialityState",
+    "relevanceState",
+    "sourceTrustState",
     "evidenceRole",
+    "reviewLevel",
+    "dataState",
+    "changeState",
+    "conflictState",
 }
 TYPEDB_FUNCTION_OPERATORS = {"==", "eq", "!=", "ne", "<=", "lte", ">=", "gte", "<", "lt", ">", "gt", "exists", "present"}
 TYPEDB_STRING_ATTRIBUTES = {
@@ -526,6 +552,11 @@ TYPEDB_STRING_ATTRIBUTES = {
     "ontology-group",
     "ontology-polarity",
     "ontology-evidence-role",
+    "ontology-review-level",
+    "ontology-data-state",
+    "ontology-change-state",
+    "ontology-conflict-state",
+    "ontology-validation-state",
     "ontology-transition-type",
     "ontology-signal-group",
     "ontology-event-type",
@@ -539,13 +570,8 @@ TYPEDB_STRING_ATTRIBUTES = {
 } | set(TYPEDB_PROMOTED_TEXT_ATTRIBUTES.values())
 TYPEDB_NUMERIC_ATTRIBUTES = {
     "ontology-weight",
-    "ontology-confidence",
     "ontology-value-number",
     "ontology-profit-loss-rate",
-    "ontology-materiality-score",
-    "ontology-risk-impact",
-    "ontology-support-impact",
-    "ontology-stage-priority",
     "ontology-pe-ratio",
     "ontology-beta",
 } | set(TYPEDB_PROMOTED_NUMERIC_ATTRIBUTES.values())
@@ -1367,7 +1393,7 @@ class TypeDBOntologyGraphRepository(GraphStoreOntologyRowMapperMixin):
             "conditionRelationType": str(condition.get("relation_type") or merged.get("conditionRelationType") or "").upper(),
             "conditionDirection": str(condition.get("direction") or merged.get("conditionDirection") or "out"),
             "conditionTargetKind": str(condition.get("target_kind") or merged.get("conditionTargetKind") or ""),
-            "conditionMinWeight": float(number_or_none(condition.get("min_weight") if "min_weight" in condition else merged.get("conditionMinWeight")) or 0),
+            "conditionRelationEvidenceRoles": condition_relation_filter_values(condition, "evidenceRole"),
             "derivationIndex": int(number_or_none(merged.get("derivationIndex")) or 0),
             "derivationRelationType": str(derivation.get("relation_type") or merged.get("derivationRelationType") or "").upper(),
             "derivationTargetKind": str(derivation.get("target_kind") or merged.get("derivationTargetKind") or ""),
@@ -1376,23 +1402,24 @@ class TypeDBOntologyGraphRepository(GraphStoreOntologyRowMapperMixin):
             "derivationTboxClass": str(derivation.get("tbox_class") or merged.get("derivationTboxClass") or ""),
             "derivationTboxClasses": list_of_strings(derivation.get("tbox_classes") or merged.get("derivationTboxClasses")),
             "derivationPolarity": str(derivation.get("polarity") or merged.get("derivationPolarity") or ""),
-            "derivationRiskImpact": number_or_none(derivation.get("risk_impact") or merged.get("derivationRiskImpact")),
-            "derivationSupportImpact": number_or_none(derivation.get("support_impact") or merged.get("derivationSupportImpact")),
-            "derivationWeight": number_or_none(derivation.get("weight") or merged.get("derivationWeight")),
+            "derivationEvidenceRole": str(derivation.get("evidence_role") or derivation.get("evidenceRole") or merged.get("derivationEvidenceRole") or derivation.get("polarity") or "context"),
             "derivationBeliefLabel": str(derivation.get("belief_label") or merged.get("derivationBeliefLabel") or ""),
             "derivationAiInfluenceLabel": str(derivation.get("ai_influence_label") or merged.get("derivationAiInfluenceLabel") or ""),
             "derivationActionGroup": str(derivation.get("action_group") or merged.get("derivationActionGroup") or ""),
             "derivationActionLevel": str(derivation.get("action_level") or merged.get("derivationActionLevel") or ""),
             "derivationDecisionStage": str(derivation.get("decision_stage") or derivation.get("decisionStage") or merged.get("derivationDecisionStage") or ""),
-            "derivationStagePriority": number_or_none(derivation.get("stage_priority") or derivation.get("stagePriority") or merged.get("derivationStagePriority")),
             "derivationTargetRole": str(derivation.get("target_role") or derivation.get("targetRole") or merged.get("derivationTargetRole") or ""),
             "derivationActionPolicy": str(derivation.get("action_policy") or derivation.get("actionPolicy") or merged.get("derivationActionPolicy") or ""),
             "derivationAllowedActions": list_of_strings(derivation.get("allowed_actions") or derivation.get("allowedActions") or merged.get("derivationAllowedActions")),
             "derivationBlockedActions": list_of_strings(derivation.get("blocked_actions") or derivation.get("blockedActions") or merged.get("derivationBlockedActions")),
             "polarity": str(merged.get("polarity") or ""),
-            "confidence": number_or_none(merged.get("confidence")),
+            "evidenceRole": str(merged.get("evidenceRole") or "context"),
             "decisionStage": str(merged.get("decisionStage") or ""),
-            "stagePriority": number_or_none(merged.get("stagePriority")),
+            "reviewLevel": str(merged.get("reviewLevel") or "observe"),
+            "reviewLevelLabel": str(merged.get("reviewLevelLabel") or ""),
+            "dataState": str(merged.get("dataState") or "partial"),
+            "dataStateLabel": str(merged.get("dataStateLabel") or ""),
+            "conflictState": str(merged.get("conflictState") or "context-only"),
             "nativeTypeDbReasoned": bool(merged.get("nativeTypeDbReasoned")),
             "title": str(merged.get("title") or row.get("label") or ""),
             "status": str(merged.get("status") or ""),
@@ -1450,10 +1477,10 @@ class TypeDBOntologyGraphRepository(GraphStoreOntologyRowMapperMixin):
             "updatedAt": str(row.get("updatedAt") or merged.get("updatedAt") or ""),
             "propertiesJson": json.dumps(props, ensure_ascii=False, sort_keys=True),
             "polarity": str(merged.get("polarity") or ""),
-            "riskImpact": number_or_none(merged.get("riskImpact")),
-            "supportImpact": number_or_none(merged.get("supportImpact")),
+            "evidenceRole": str(merged.get("evidenceRole") or "context"),
             "decisionStage": str(merged.get("decisionStage") or ""),
-            "stagePriority": number_or_none(merged.get("stagePriority")),
+            "reviewLevel": str(merged.get("reviewLevel") or "observe"),
+            "dataState": str(merged.get("dataState") or "partial"),
             "targetRole": str(merged.get("targetRole") or ""),
             "actionPolicy": str(merged.get("actionPolicy") or ""),
             "allowedActions": list_of_strings(merged.get("allowedActions")),
@@ -1535,7 +1562,6 @@ attribute ontology-relation-type, value string;
 attribute ontology-updated-at, value string;
 attribute ontology-json, value string;
 attribute ontology-weight, value double;
-attribute ontology-confidence, value double;
 attribute ontology-source-value, value string;
 attribute ontology-field, value string;
 attribute ontology-level-type, value string;
@@ -1543,18 +1569,22 @@ attribute ontology-data-scope, value string;
 attribute ontology-domain-scope, value string;
 attribute ontology-relation-scope, value string;
 attribute ontology-group, value string;
-attribute ontology-evidence-role, value string;
 attribute ontology-polarity, value string;
+attribute ontology-evidence-role, value string;
+attribute ontology-review-level, value string;
+attribute ontology-data-state, value string;
+attribute ontology-change-state, value string;
+attribute ontology-conflict-state, value string;
+attribute ontology-validation-state, value string;
 attribute ontology-transition-type, value string;
 attribute ontology-signal-group, value string;
 attribute ontology-event-type, value string;
 attribute ontology-materiality-passed, value string;
+attribute ontology-materiality-state, value string;
+attribute ontology-relevance-state, value string;
+attribute ontology-source-trust-state, value string;
 attribute ontology-value-number, value double;
 attribute ontology-profit-loss-rate, value double;
-attribute ontology-materiality-score, value double;
-attribute ontology-risk-impact, value double;
-attribute ontology-support-impact, value double;
-attribute ontology-stage-priority, value double;
 attribute ontology-allow-add-on-strength, value string;
 attribute ontology-trim-on-trend-break, value string;
 attribute ontology-avoid-averaging-down, value string;
@@ -1601,7 +1631,6 @@ attribute ontology-institution-net-amount, value double;
 attribute ontology-individual-net-volume, value double;
 attribute ontology-individual-net-amount, value double;
 attribute ontology-smart-money-net-volume, value double;
-attribute ontology-investor-flow-score, value double;
 attribute ontology-adr-ratio, value double;
 attribute ontology-adr-price-usd, value double;
 attribute ontology-adr-volume, value double;
@@ -1620,8 +1649,6 @@ attribute ontology-conservative-margin-of-safety-pct, value double;
 attribute ontology-optimistic-margin-of-safety-pct, value double;
 attribute ontology-expensive-premium-pct, value double;
 attribute ontology-minimum-margin-of-safety-pct, value double;
-attribute ontology-valuation-reliability-score, value double;
-attribute ontology-valuation-input-coverage-pct, value double;
 attribute ontology-valuation-decision-eligible, value double;
 attribute ontology-valuation-model-count, value double;
 attribute ontology-valuation-consensus-price, value double;
@@ -1659,8 +1686,6 @@ attribute ontology-individual-net-latest, value double;
 attribute ontology-event-count, value double;
 attribute ontology-risk-event-count, value double;
 attribute ontology-support-event-count, value double;
-attribute ontology-temporal-risk-score, value double;
-attribute ontology-temporal-support-score, value double;
 attribute ontology-investment-strategy-profile, value string;
 attribute ontology-investment-strategy-profile-label, value string;
 attribute ontology-position-role, value string;
@@ -1692,7 +1717,7 @@ attribute ontology-eps-period, value string;
 attribute ontology-multiple-period, value string;
 attribute ontology-valuation-as-of, value string;
 attribute ontology-valuation-freshness-status, value string;
-attribute ontology-valuation-confidence-label, value string;
+attribute ontology-valuation-data-state-label, value string;
 attribute ontology-valuation-source-type, value string;
 attribute ontology-valuation-currency, value string;
 attribute ontology-valuation-consensus-status, value string;
@@ -1728,7 +1753,6 @@ entity ontology-node @abstract,
     owns ontology-tbox-class,
     owns ontology-updated-at,
     owns ontology-json,
-    owns ontology-confidence,
     owns ontology-source-value,
     owns ontology-field,
     owns ontology-level-type,
@@ -1737,13 +1761,20 @@ entity ontology-node @abstract,
     owns ontology-relation-type,
     owns ontology-relation-scope,
     owns ontology-group,
-    owns ontology-evidence-role,
     owns ontology-polarity,
+    owns ontology-evidence-role,
+    owns ontology-review-level,
+    owns ontology-data-state,
+    owns ontology-change-state,
+    owns ontology-conflict-state,
+    owns ontology-validation-state,
     owns ontology-event-type,
     owns ontology-materiality-passed,
+    owns ontology-materiality-state,
+    owns ontology-relevance-state,
+    owns ontology-source-trust-state,
     owns ontology-value-number,
     owns ontology-profit-loss-rate,
-    owns ontology-materiality-score,
     owns ontology-allow-add-on-strength,
     owns ontology-trim-on-trend-break,
     owns ontology-avoid-averaging-down,
@@ -1790,7 +1821,6 @@ entity ontology-node @abstract,
     owns ontology-individual-net-volume,
     owns ontology-individual-net-amount,
     owns ontology-smart-money-net-volume,
-    owns ontology-investor-flow-score,
     owns ontology-adr-ratio,
     owns ontology-adr-price-usd,
     owns ontology-adr-volume,
@@ -1809,8 +1839,6 @@ entity ontology-node @abstract,
     owns ontology-optimistic-margin-of-safety-pct,
     owns ontology-expensive-premium-pct,
     owns ontology-minimum-margin-of-safety-pct,
-    owns ontology-valuation-reliability-score,
-    owns ontology-valuation-input-coverage-pct,
     owns ontology-valuation-decision-eligible,
     owns ontology-valuation-model-count,
     owns ontology-valuation-consensus-price,
@@ -1848,8 +1876,6 @@ entity ontology-node @abstract,
     owns ontology-event-count,
     owns ontology-risk-event-count,
     owns ontology-support-event-count,
-    owns ontology-temporal-risk-score,
-    owns ontology-temporal-support-score,
     owns ontology-investment-strategy-profile,
     owns ontology-investment-strategy-profile-label,
     owns ontology-position-role,
@@ -1881,7 +1907,7 @@ entity ontology-node @abstract,
     owns ontology-multiple-period,
     owns ontology-valuation-as-of,
     owns ontology-valuation-freshness-status,
-    owns ontology-valuation-confidence-label,
+    owns ontology-valuation-data-state-label,
     owns ontology-valuation-source-type,
     owns ontology-valuation-currency,
     owns ontology-valuation-consensus-status,
@@ -1928,15 +1954,19 @@ relation ontology-assertion,
     owns ontology-json,
     owns ontology-weight,
     owns ontology-field,
-    owns ontology-evidence-role,
     owns ontology-polarity,
+    owns ontology-evidence-role,
+    owns ontology-review-level,
+    owns ontology-data-state,
+    owns ontology-change-state,
+    owns ontology-conflict-state,
+    owns ontology-validation-state,
     owns ontology-transition-type,
     owns ontology-signal-group,
     owns ontology-materiality-passed,
-    owns ontology-materiality-score,
-    owns ontology-risk-impact,
-    owns ontology-support-impact,
-    owns ontology-stage-priority;
+    owns ontology-materiality-state,
+    owns ontology-relevance-state,
+    owns ontology-source-trust-state;
 """.strip()
 
     def delete_queries(self, boxes: Iterable[str]) -> List[str]:
@@ -2057,7 +2087,7 @@ relation ontology-assertion,
                 "source": row.get("subject"),
                 "target": row.get("id"),
                 "type": "HAS_EVIDENCE",
-                "weight": row.get("confidence") or 0.7,
+                "weight": 1.0,
                 "ontologyBox": row.get("ontologyBox") or "ABox",
                 "accountId": row.get("accountId") or "",
                 "snapshotId": row.get("snapshotId") or row.get("aboxSnapshotId") or "",
@@ -2069,7 +2099,7 @@ relation ontology-assertion,
                 "source": row.get("subject"),
                 "target": row.get("id"),
                 "type": "HAS_BELIEF",
-                "weight": row.get("confidence") or 0.7,
+                "weight": 1.0,
                 "ontologyBox": row.get("ontologyBox") or "ABox",
                 "accountId": row.get("accountId") or "",
                 "snapshotId": row.get("snapshotId") or row.get("aboxSnapshotId") or "",
@@ -2081,7 +2111,7 @@ relation ontology-assertion,
                 "source": "stock:" + str(row.get("symbol") or "").upper(),
                 "target": row.get("id"),
                 "type": "HAS_OPINION",
-                "weight": row.get("conviction") or 0.0,
+                "weight": 1.0,
                 "ontologyBox": row.get("ontologyBox") or "ABox",
                 "accountId": row.get("accountId") or "",
                 "snapshotId": row.get("snapshotId") or row.get("aboxSnapshotId") or "",
@@ -2121,7 +2151,6 @@ relation ontology-assertion,
             + typeql_has("ontology-relation-type", row.get("relationTypeName"))
             + typeql_has("ontology-updated-at", updated_at)
             + typeql_has("ontology-json", row.get("propertiesJson"))
-            + typeql_has("ontology-confidence", row.get("confidence"), numeric=True)
             + typeql_has("ontology-source-value", row.get("sourceValue"))
             + typeql_has("ontology-field", row.get("field"))
             + typeql_has("ontology-level-type", row.get("levelType"))
@@ -2129,13 +2158,17 @@ relation ontology-assertion,
             + typeql_has("ontology-domain-scope", row.get("domainScope"))
             + typeql_has("ontology-relation-scope", row.get("relationScope"))
             + typeql_has("ontology-group", row.get("group"))
-            + typeql_has("ontology-evidence-role", row.get("evidenceRole"))
             + typeql_has("ontology-polarity", row.get("polarity"))
+            + typeql_has("ontology-evidence-role", row.get("evidenceRole"))
+            + typeql_has("ontology-review-level", row.get("reviewLevel"))
+            + typeql_has("ontology-data-state", row.get("dataState"))
+            + typeql_has("ontology-change-state", row.get("changeState"))
+            + typeql_has("ontology-conflict-state", row.get("conflictState"))
+            + typeql_has("ontology-validation-state", row.get("validationState"))
             + typeql_has("ontology-event-type", row.get("eventType"))
             + typeql_has_bool_string("ontology-materiality-passed", row.get("materialityPassed"))
             + typeql_has("ontology-value-number", row.get("valueNumber"), numeric=True)
             + typeql_has("ontology-profit-loss-rate", row.get("profitLossRate"), numeric=True)
-            + typeql_has("ontology-materiality-score", row.get("materialityScore"), numeric=True)
             + typeql_has_bool_string("ontology-allow-add-on-strength", row.get("allowAddOnStrength"))
             + typeql_has_bool_string("ontology-trim-on-trend-break", row.get("trimOnTrendBreak"))
             + typeql_has_bool_string("ontology-avoid-averaging-down", row.get("avoidAveragingDown"))
@@ -2197,15 +2230,19 @@ relation ontology-assertion,
             + typeql_has("ontology-json", row.get("propertiesJson"))
             + typeql_has("ontology-weight", row.get("weight"), numeric=True)
             + typeql_has("ontology-field", row.get("field"))
-            + typeql_has("ontology-evidence-role", row.get("evidenceRole"))
             + typeql_has("ontology-polarity", row.get("polarity"))
+            + typeql_has("ontology-evidence-role", row.get("evidenceRole"))
+            + typeql_has("ontology-review-level", row.get("reviewLevel"))
+            + typeql_has("ontology-data-state", row.get("dataState"))
+            + typeql_has("ontology-change-state", row.get("changeState"))
+            + typeql_has("ontology-conflict-state", row.get("conflictState"))
+            + typeql_has("ontology-validation-state", row.get("validationState"))
             + typeql_has("ontology-transition-type", row.get("transitionType"))
             + typeql_has("ontology-signal-group", row.get("signalGroup"))
             + typeql_has_bool_string("ontology-materiality-passed", row.get("materialityPassed"))
-            + typeql_has("ontology-materiality-score", row.get("materialityScore"), numeric=True)
-            + typeql_has("ontology-risk-impact", row.get("riskImpact"), numeric=True)
-            + typeql_has("ontology-support-impact", row.get("supportImpact"), numeric=True)
-            + typeql_has("ontology-stage-priority", row.get("stagePriority"), numeric=True)
+            + typeql_has("ontology-materiality-state", row.get("materialityState"))
+            + typeql_has("ontology-relevance-state", row.get("relevanceState"))
+            + typeql_has("ontology-source-trust-state", row.get("sourceTrustState"))
         )
 
     def batched_node_insert_queries(
@@ -2548,7 +2585,7 @@ relation ontology-assertion,
                 "sourceLabel": str(row.get("sourceLabel") or ""),
                 "matchedConditions": list(condition_context.get("matchedConditions") or []),
                 "evidenceRelationIds": sorted(set(evidence_relation_ids)),
-                "confidence": number_or_none(condition_context.get("confidence")) or typedb_native_match_confidence(rule),
+                "conditionDetailSource": str(condition_context.get("conditionDetailSource") or "schema-function-match"),
             }
             match_index[match_key] = match
             matches.append(match)
@@ -2611,15 +2648,12 @@ relation ontology-assertion,
                     evidence_relation_ids.append(relation_id)
                 payload.update({
                     "relationType": condition_payload.get("relation_type") or condition_payload.get("relationType"),
-                    "weight": condition_payload.get("min_weight") or condition_payload.get("minWeight"),
                 })
             matched_conditions.append(payload)
-        confidence_conditions = [item for item in matched_conditions if not item.get("absenceSatisfied")]
-        confidence = round(min(0.94, 0.62 + len(confidence_conditions) * 0.08), 3)
         return {
             "matchedConditions": matched_conditions,
             "evidenceRelationIds": sorted(set(evidence_relation_ids)),
-            "confidence": confidence,
+            "conditionDetailSource": "schema-function-detail-query",
         }
 
     def probe_typedb_native_rule_functions(self, rules: Iterable[GraphInferenceRule]) -> Dict[str, object]:
@@ -4136,12 +4170,8 @@ def materialize_typedb_native_matches(
         materialize_rule_inference(graph, rule, subject, {
             "matchedConditions": list(match.get("matchedConditions") or []),
             "evidenceRelationIds": list(match.get("evidenceRelationIds") or []),
-            "confidence": number_or_none(match.get("confidence")) or typedb_native_match_confidence(rule),
+            "conditionDetailSource": str(match.get("conditionDetailSource") or "schema-function-match"),
         })
-
-
-def typedb_native_match_confidence(rule: GraphInferenceRule) -> float:
-    return round(min(0.94, 0.62 + len(list(getattr(rule, "conditions", []) or [])) * 0.08), 3)
 
 
 def typedb_native_matched_conditions(
@@ -4163,7 +4193,7 @@ def typedb_native_matched_conditions(
         if condition.kind == "subject_property":
             payload.update({"field": condition.field, "operator": condition.operator, "value": condition.value})
         elif condition.kind == "relation":
-            payload.update({"relationType": condition.relation_type, "weight": condition.min_weight})
+            payload.update({"relationType": condition.relation_type})
         result.append(payload)
     return result
 
@@ -4198,7 +4228,6 @@ def typedb_static_schema_function_condition_context(
             elif getattr(condition, "kind", "") == "relation":
                 payload.update({
                     "relationType": getattr(condition, "relation_type", ""),
-                    "weight": getattr(condition, "min_weight", 0),
                 })
             matched_conditions.append(payload)
     evidence_relation_ids = [
@@ -4206,12 +4235,9 @@ def typedb_static_schema_function_condition_context(
         for column in (query_plan.get("evidenceColumns") or [])
         if str(row.get(column) or "").strip()
     ]
-    confidence_conditions = [item for item in matched_conditions if not item.get("absenceSatisfied")]
-    confidence = round(min(0.94, 0.62 + len(confidence_conditions) * 0.08), 3)
     return {
         "matchedConditions": matched_conditions,
         "evidenceRelationIds": sorted(set(evidence_relation_ids)),
-        "confidence": confidence,
         "conditionDetailSource": "schema-function-match",
     }
 
@@ -4283,10 +4309,6 @@ def typedb_condition_pattern(
                 + relation_var + " isa ontology-assertion, links (source: " + source_var + ", target: " + target_var + "), "
                 + "has ontology-id $" + relation_id_var + ", has ontology-relation-type " + typedb_string(rel_type) + ";"
             )
-        min_weight = number_or_none(condition.get("min_weight") or condition.get("minWeight"))
-        if min_weight:
-            weight_var = "relationWeight" + str(index)
-            clauses.append(relation_var + " has ontology-weight $" + weight_var + "; $" + weight_var + " >= " + str(float(min_weight)) + ";")
         target_kind = str(condition.get("target_kind") or condition.get("targetKind") or "")
         if target_kind:
             clauses.append(target_var + " has ontology-kind " + typedb_string(target_kind) + ";")
@@ -4564,8 +4586,8 @@ def typedb_subject_attribute(field: str) -> str:
 
 
 def typedb_target_attribute(field: str) -> str:
-    if field in {"minMaterialityScore", "minValue", "maxValue"}:
-        field = "materialityScore" if field == "minMaterialityScore" else "value"
+    if field in {"minValue", "maxValue"}:
+        field = "value"
     promoted_attribute = TYPEDB_PROMOTED_NUMERIC_ATTRIBUTES.get(field) or TYPEDB_PROMOTED_TEXT_ATTRIBUTES.get(field)
     if promoted_attribute:
         return promoted_attribute
@@ -4579,14 +4601,15 @@ def typedb_target_attribute(field: str) -> str:
         "polarity": "ontology-polarity",
         "eventType": "ontology-event-type",
         "materialityPassed": "ontology-materiality-passed",
-        "materialityScore": "ontology-materiality-score",
+        "materialityState": "ontology-materiality-state",
+        "relevanceState": "ontology-relevance-state",
+        "sourceTrustState": "ontology-source-trust-state",
         "value": "ontology-value-number",
         "tboxClass": "ontology-tbox-class",
         "tboxClasses": "ontology-tbox-class",
         "allowAddOnStrength": "ontology-allow-add-on-strength",
         "trimOnTrendBreak": "ontology-trim-on-trend-break",
         "avoidAveragingDown": "ontology-avoid-averaging-down",
-        "confidence": "ontology-confidence",
         "impactPolarity": "ontology-impact-polarity",
         "needsReview": "ontology-needs-review",
         "readScope": "ontology-read-scope",
@@ -4596,19 +4619,20 @@ def typedb_target_attribute(field: str) -> str:
 
 
 def typedb_relation_attribute(field: str) -> str:
-    if field in {"minRiskImpact", "minSupportImpact", "minMaterialityScore"}:
-        field = field.replace("min", "", 1)
-        field = field[:1].lower() + field[1:]
     return {
         "field": "ontology-field",
         "signalGroup": "ontology-signal-group",
-        "evidenceRole": "ontology-evidence-role",
         "polarity": "ontology-polarity",
         "transitionType": "ontology-transition-type",
         "materialityPassed": "ontology-materiality-passed",
-        "materialityScore": "ontology-materiality-score",
-        "riskImpact": "ontology-risk-impact",
-        "supportImpact": "ontology-support-impact",
+        "materialityState": "ontology-materiality-state",
+        "relevanceState": "ontology-relevance-state",
+        "sourceTrustState": "ontology-source-trust-state",
+        "evidenceRole": "ontology-evidence-role",
+        "reviewLevel": "ontology-review-level",
+        "dataState": "ontology-data-state",
+        "changeState": "ontology-change-state",
+        "conflictState": "ontology-conflict-state",
     }.get(field, "")
 
 
@@ -4710,7 +4734,8 @@ def typedb_inferencebox_graph(
             item.source,
             item.summary,
             typedb_reasoned_properties(item.value, generation_id, generation_at, item.evidence_id, rulebox_metadata),
-            item.confidence,
+            item.evidence_role,
+            item.data_state,
         )
         for item in graph.evidence
         if str((item.value or {}).get("ontologyBox") or ("InferenceBox" if item.kind == "inference-trace" else "")) == "InferenceBox"
@@ -4750,7 +4775,7 @@ def dedupe_inferencebox_graph(graph: PortfolioOntology) -> PortfolioOntology:
         if existing is None:
             relations_by_id[row_id] = item
             continue
-        existing.weight = max(number_or_none(existing.weight) or 0, number_or_none(item.weight) or 0)
+        existing.weight = 1.0
         existing.evidence_ids = list(dict.fromkeys(list(existing.evidence_ids or []) + list(item.evidence_ids or [])))
         existing.properties = merge_ontology_properties(existing.properties, item.properties)
 
@@ -4761,7 +4786,10 @@ def dedupe_inferencebox_graph(graph: PortfolioOntology) -> PortfolioOntology:
             evidence_by_id[item.evidence_id] = item
             continue
         existing.value = merge_ontology_properties(existing.value, item.value)
-        existing.confidence = max(number_or_none(existing.confidence) or 0, number_or_none(item.confidence) or 0)
+        if existing.evidence_role == "context" and item.evidence_role != "context":
+            existing.evidence_role = item.evidence_role
+        if existing.data_state == "sufficient" and item.data_state != "sufficient":
+            existing.data_state = item.data_state
 
     return PortfolioOntology(
         graph.portfolio_id,

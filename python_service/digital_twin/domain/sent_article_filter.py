@@ -38,11 +38,11 @@ ARTICLE_MARKER_KEYS = {
     "articleFacts",
     "articleReadStatus",
     "articleSummaryKo",
-    "materialityScore",
-    "relevanceScore",
+    "materialityState",
+    "relevanceState",
+    "sourceTrustState",
     "stockImpactLabel",
     "stockImpactPolarity",
-    "stockImpactScore",
 }
 URL_KEYS = {"url", "sourceUrl", "sourceURL", "source_url", "link"}
 SOURCE_URL_LIST_KEYS = {"sourceUrls", "source_urls"}

@@ -60,7 +60,7 @@ The Python service now follows a conservative DDD layout:
 - Infrastructure adapters satisfy those ports with local implementations.
 - Message type ownership lives in `domain/message_types.py`; notification templates and rules read that catalog instead of importing monitoring internals.
 - Strategy ownership lives in `domain/strategy.py`, market-data normalization in `domain/market_data.py`, and portfolio exposure math in `domain/portfolio_calculations.py`.
-- Reusable scoring signals live in `domain/scoring.py`; notification templates should consume those signals instead of deriving scores from rendered message text.
+- Categorical investment state lives in `domain/ontology_decision_state.py`; notification templates consume the verified state and raw facts instead of deriving investment judgement from rendered message text.
 - Legacy import paths such as `digital_twin.models`, `digital_twin.config.AccountConfig`, and `digital_twin.scheduler.MonitorRunner` remain available as thin wrappers so the Node API and existing scripts keep working.
 
 When adding a feature, put business vocabulary and state transitions in `domain/`, orchestration in `application/`, and vendor/file/database code in `infrastructure/` or an existing adapter. UI and API routes should call application services rather than reaching into repositories directly.
@@ -87,10 +87,10 @@ For parallel work across multiple chat windows, keep each conversation inside on
 
 - Account management: `domain/accounts.py`, `application/account_service.py`, `infrastructure/operational_store.py`, `infrastructure/mysql_operational.py`
 - Monitoring and scheduling: `domain/monitoring.py`, `domain/strategy_alerts.py`, `domain/external_signal_alerts.py`, `application/monitoring_service.py`, `monitor.py`, `scheduler.py`
-- Notifications and messages: `domain/message_types.py`, `domain/notifications.py`, `domain/notification_rules.py`, `domain/notification_templates.py`, `domain/scoring.py`, `infrastructure/notifications.py`, `application/notification_service.py`, `infrastructure/operational_store.py`, and the MySQL store adapters
+- Notifications and messages: `domain/message_types.py`, `domain/notifications.py`, `domain/notification_rules.py`, `domain/notification_templates.py`, `domain/notification_signal_classification.py`, `infrastructure/notifications.py`, `application/notification_service.py`, `infrastructure/operational_store.py`, and the MySQL store adapters
 - Symbol universe: `domain/symbol_universe.py`, `application/symbol_universe_service.py`, `infrastructure/symbol_sources.py`, `infrastructure/operational_store.py`, and the MySQL store adapters
 - Providers/data collection: `providers.py`, `infrastructure/toss_snapshots.py`
-- Model scoring and strategy: `domain/market_data.py`, `domain/portfolio_calculations.py`, `domain/strategy.py`, `domain/scoring.py`, and future model-lab modules
+- Market state and strategy: `domain/market_data.py`, `domain/portfolio_calculations.py`, `domain/strategy.py`, `domain/ontology_decision_state.py`, and future model-lab modules
 
 If a feature needs another feature's result, subscribe to or publish a domain event instead of importing the other feature's application service. This keeps separate development sessions from editing the same orchestration code.
 
@@ -198,7 +198,7 @@ The monitor detects account-scoped operational alerts and investment evidence fo
 - P/L rate moves
 - market value moves
 - market cash ratio moves
-- decision score changes
+- decision state changes
 - holding timing checks
 - Alpha Vantage US quote/volume moves
 - CoinGecko crypto market moves

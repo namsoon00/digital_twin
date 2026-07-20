@@ -144,7 +144,7 @@ def add_account_delivery_profile_concepts(
         "label": profile.get("label"),
         "detailLevel": profile.get("detailLevel"),
         "terminology": profile.get("terminology"),
-        "scoreVisibility": profile.get("scoreVisibility"),
+        "decisionStateVisibility": profile.get("decisionStateVisibility"),
         "ruleVisibility": profile.get("ruleVisibility"),
         "description": profile.get("description"),
     })
@@ -353,21 +353,22 @@ def add_operational_world_concepts(
     strategy_analysis_id = add_entity(graph, "analysis-job", "strategyAnalysis", "전략 분석", {
         "tboxClass": "AnalysisJob",
         "role": "supporting-analysis",
-        "description": "기존 모델 점수와 관계 규칙을 보조 분석으로 유지합니다.",
+        "description": "실제 측정값과 관계 상태를 보조 분석으로 정리합니다.",
     })
     insight_policy_id = add_entity(graph, "insight-policy", "meaningful-change", "의미 변화 인사이트 정책", {
         "tboxClass": "InsightPolicy",
         "mode": "meaningful-change",
-        "minimumNovelty": number(settings.get("notificationNoveltyThreshold")) or 0.65,
-        "minimumConfidence": number(settings.get("notificationConfidenceThreshold")) or 0.55,
+        "minimumReviewLevel": "check",
+        "usableDataStates": ["sufficient", "partial"],
+        "allowedValidationStates": ["ready", "conditional"],
+        "meaningfulChangeStates": ["new-condition", "improving", "worsening", "direction-changed", "new-evidence"],
     })
     importance_gate_id = add_entity(graph, "importance-gate", "materiality-first", "중요 변경 게이트", {
         "tboxClass": "ImportanceGate",
         "mode": "materiality-first",
         "enabled": str(settings.get("materialityGateEnabled") or "1") not in {"0", "false", "False", "off"},
-        "minimumScore": number(settings.get("materialityMinimumScore")) or 65,
-        "marketMinimumScore": number(settings.get("marketMaterialityMinimumScore")) or 65,
-        "newsMinimumScore": number(settings.get("newsMaterialityMinimumScore")) or 65,
+        "marketReviewLevel": "check",
+        "newsReviewLevel": "check",
         "priceChangePct": number(settings.get("marketMaterialityPriceChangePct")) or 0.6,
         "trendDistancePct": number(settings.get("marketMaterialityTrendDistancePct")) or 2.0,
         "volumeRatio": number(settings.get("marketMaterialityVolumeRatio")) or 1.5,
@@ -375,7 +376,7 @@ def add_operational_world_concepts(
     })
     novelty_policy_id = add_entity(graph, "novelty-policy", "relation-novelty", "관계 신규성 정책", {
         "tboxClass": "NoveltyPolicy",
-        "minimumNovelty": number(settings.get("notificationNoveltyThreshold")) or 0.65,
+        "meaningfulChangeStates": ["new-condition", "improving", "worsening", "direction-changed", "new-evidence"],
     })
     cooldown_policy_id = add_entity(graph, "cooldown-policy", "insight-cooldown", "인사이트 발송 쿨다운", {
         "tboxClass": "CooldownPolicy",
@@ -435,7 +436,7 @@ def add_operational_world_concepts(
             "tboxClass": "DataFreshness",
             "targetMinutes": target_minutes,
             "configuredMinutes": minutes,
-            "freshnessRole": "ai-confidence-input",
+            "freshnessRole": "ai-validation-input",
         })
         add_relation(graph, portfolio_node_id, pipeline_id, "HAS_PIPELINE", properties={"source": "operational-ontology"})
         add_relation(graph, pipeline_id, source_id, "COLLECTS_DATA_FROM", properties={"source": "operational-ontology"})
@@ -468,16 +469,15 @@ def add_strategy_world_concepts(
     portfolio_node_id: str,
     runtime_context: Dict[str, object],
 ) -> str:
-    settings = runtime_settings(runtime_context)
     strategy_id = add_entity(graph, "strategy", "ontology-first-investment-strategy", "온톨로지 투자전략", {
         "tboxClass": "Strategy",
         "mode": "ontology-first",
-        "description": "최종 점수는 TBox/ABox 관계 규칙, 근거 충돌, 데이터 품질, 운영 정책으로만 계산합니다.",
+        "description": "최종 판단은 TBox/ABox 관계 규칙, 근거 충돌, 데이터 상태와 운영 정책으로 결정합니다.",
     })
     thesis_id = add_entity(graph, "investment-thesis", "portfolio-relation-thesis", "포트폴리오 관계 투자 가설", {
         "tboxClass": "InvestmentThesis",
         "scope": "portfolio",
-        "thesis": "실세계 관측값과 포트폴리오 노출이 투자 의견과 점수의 근거이며 개별 공식 점수는 최종 판단에 쓰지 않습니다.",
+        "thesis": "실세계 관측값과 포트폴리오 노출을 근거로 투자 의견과 행동 조건을 결정하며 합산 점수는 사용하지 않습니다.",
     })
     entry_id = add_entity(graph, "entry-condition", "evidence-confirmed-entry", "근거 확인 진입 조건", {
         "tboxClass": "EntryCondition",
@@ -489,8 +489,8 @@ def add_strategy_world_concepts(
     })
     risk_rule_id = add_entity(graph, "risk-management-rule", "relation-risk-first", "관계 리스크 우선 규칙", {
         "tboxClass": "RiskManagementRule",
-        "minimumDataQuality": 60,
-        "riskPressureThreshold": 55,
+        "usableDataStates": ["sufficient", "partial"],
+        "riskReviewLevels": ["check", "act", "immediate"],
     })
     sizing_id = add_entity(graph, "position-sizing-rule", "exposure-aware-sizing", "노출 기반 비중 규칙", {
         "tboxClass": "PositionSizingRule",
@@ -498,7 +498,7 @@ def add_strategy_world_concepts(
     })
     rebalance_id = add_entity(graph, "rebalancing-rule", "meaningful-exposure-change", "의미 있는 노출 변화 리밸런싱", {
         "tboxClass": "RebalancingRule",
-        "noveltyThreshold": number(settings.get("notificationNoveltyThreshold")) or 0.65,
+        "changeStates": ["new-condition", "improving", "worsening", "direction-changed"],
     })
     add_relation(graph, portfolio_node_id, strategy_id, "USES_STRATEGY", properties={"source": "strategy-ontology"})
     add_relation(graph, strategy_id, thesis_id, "BASED_ON_THESIS", properties={"source": "strategy-ontology"})
@@ -526,12 +526,27 @@ def add_decision_item_concepts(graph: PortfolioOntology, runtime_context: Dict[s
             "source": str(item.get("source") or ""),
             "tone": str(item.get("tone") or ""),
             "priority": number(item.get("priority")),
-            "exitPressure": number(item.get("exitPressure")),
+            "reviewLevel": str(item.get("reviewLevel") or item.get("review_level") or "check"),
+            "dataState": str(item.get("dataState") or item.get("data_state") or "partial"),
+            "changeState": str(item.get("changeState") or item.get("change_state") or "unchanged"),
+            "conflictState": str(item.get("conflictState") or item.get("conflict_state") or "context-only"),
+            "validationState": str(item.get("validationState") or item.get("validation_state") or "conditional"),
             "reasons": list(item.get("reasons") or [])[:5],
             "triggers": list(item.get("triggers") or [])[:8],
         })
-        properties = {"source": "decision-item", "aiInfluenceLabel": str(item.get("decision") or "전략 판단")}
-        if number(item.get("exitPressure")) >= 55:
-            properties.update({"polarity": "risk", "opinionImpact": min(16.0, (number(item.get("exitPressure")) - 45) * 0.3)})
-        add_relation(graph, stock_id, signal_id, "DERIVES", weight=round(number(item.get("exitPressure")) / 100, 4), properties=properties)
-        add_relation(graph, signal_id, stock_id, "USED_AS_EVIDENCE", weight=0.55, properties={"source": "decision-item"})
+        review_level = str(item.get("reviewLevel") or item.get("review_level") or "check")
+        data_state = str(item.get("dataState") or item.get("data_state") or "partial")
+        properties = {
+            "source": "decision-item",
+            "aiInfluenceLabel": str(item.get("decision") or "전략 판단"),
+            "reviewLevel": review_level,
+            "dataState": data_state,
+            "evidenceRole": "blocking" if data_state in {"insufficient", "unavailable"} else (
+                "risk" if review_level in {"act", "immediate"} else "context"
+            ),
+        }
+        add_relation(graph, stock_id, signal_id, "DERIVES", weight=1.0, properties=properties)
+        add_relation(graph, signal_id, stock_id, "USED_AS_EVIDENCE", weight=1.0, properties={
+            "source": "decision-item",
+            "evidenceRole": properties["evidenceRole"],
+        })

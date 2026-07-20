@@ -21,7 +21,13 @@ from .message_types import (
 from .ontology_inference_context import inferencebox_source_name, ontology_projection_from_metadata, relation_contexts_from_snapshot
 from .ontology_insights import build_investment_insight_events, relation_news_event_key_suffix, split_operational_and_investment_events
 from .ontology_relation_reasoning import decision_action_group_for_label, relation_rule_context_summary_lines, relation_thresholds_from_settings
-from .ontology_threshold_policy import ontology_threshold_policy_from_context
+from .ontology_decision_state import (
+    CHANGE_STATE_LABELS,
+    DATA_STATE_LABELS,
+    REVIEW_LEVEL_LABELS,
+    data_state_is_usable,
+    review_level_at_least,
+)
 from .parsing import parse_assignments
 from .portfolio import AccountSnapshot, AlertEvent, Position, monitor_state_has_live_account_data, status_has_account_data_failure
 from .portfolio_calculations import DEFAULT_FX_RATES, fx_rates_with_external_signals, runtime_fx_currencies_from_external_signals, value_in_base
@@ -42,22 +48,42 @@ def now_ms() -> int:
     return int(datetime.now(timezone.utc).timestamp() * 1000)
 
 
-def ontology_quality_event_metadata(snapshot: AccountSnapshot, min_score: float) -> Dict[str, object]:
+def ontology_quality_event_metadata(snapshot: AccountSnapshot) -> Dict[str, object]:
     metadata = snapshot.metadata if isinstance(snapshot.metadata, dict) else {}
     projection = ontology_projection_from_metadata(metadata)
-    if not isinstance(projection, dict) or "qualityScore" not in projection:
+    if not isinstance(projection, dict) or not projection:
         return {}
-    if projection.get("qualityScore") in (None, ""):
-        return {}
-    score = number(projection.get("qualityScore"))
-    status = "passed" if score >= float(min_score or 0) else "limited"
+    validation = projection.get("aboxValidation") if isinstance(projection.get("aboxValidation"), dict) else {}
+    errors = list(validation.get("errors") or [])
+    warnings = list(validation.get("warnings") or [])
+    status = str(projection.get("status") or "").strip().lower()
+    if status in {"error", "failed", "missing", "unavailable"} or errors:
+        data_state = "unavailable"
+        validation_state = "blocked"
+        reason = "온톨로지 연결 또는 검증 오류가 있어 투자 판단을 보류합니다."
+    elif status in {"partial", "limited", "degraded", "stale"} or warnings:
+        data_state = "partial"
+        validation_state = "conditional"
+        reason = "온톨로지 자료에 누락이나 경고가 있어 투자 판단을 조건부로 사용합니다."
+    else:
+        data_state = "sufficient"
+        validation_state = "ready"
+        reason = "온톨로지 연결과 필수 근거가 확인됐습니다."
     return {
-        "score": round(score, 2),
-        "minScore": round(float(min_score or 0), 2),
-        "status": status,
+        "status": validation_state,
+        "validationState": validation_state,
+        "dataState": data_state,
+        "validationStateLabel": {
+            "ready": "검증 완료",
+            "conditional": "조건부 사용",
+            "blocked": "판단 보류",
+        }[validation_state],
+        "dataStateLabel": DATA_STATE_LABELS[data_state],
         "qualitySampleId": str(projection.get("qualitySampleId") or ""),
         "source": "ontologyProjection",
-        "reason": "온톨로지 품질 점수가 알림 판단 기준 이상입니다." if status == "passed" else "온톨로지 품질 점수가 알림 판단 기준보다 낮아 판단 강도를 제한합니다.",
+        "reason": reason,
+        "errors": errors[:5],
+        "warnings": warnings[:5],
     }
 
 
@@ -139,8 +165,10 @@ def ontology_inference_event_metadata(snapshot: AccountSnapshot) -> Dict[str, ob
             "ruleId": str(item.get("ruleId") or ""),
             "label": str(item.get("label") or item.get("targetLabel") or ""),
             "polarity": str(item.get("polarity") or ""),
-            "riskImpact": item.get("riskImpact"),
-            "supportImpact": item.get("supportImpact"),
+            "evidenceRole": str(item.get("evidenceRole") or "context"),
+            "reviewLevel": str(item.get("reviewLevel") or "observe"),
+            "dataState": str(item.get("dataState") or "partial"),
+            "changeState": str(item.get("changeState") or "unchanged"),
             "nativeTypeDbReasoned": bool(item.get("nativeTypeDbReasoned")),
         }
         for item in (inference.get("relations") or [])[:8]
@@ -150,7 +178,9 @@ def ontology_inference_event_metadata(snapshot: AccountSnapshot) -> Dict[str, ob
         {
             "ruleId": str(item.get("ruleId") or ""),
             "label": str(item.get("label") or ""),
-            "confidence": item.get("confidence"),
+            "reviewLevel": str(item.get("reviewLevel") or "observe"),
+            "dataState": str(item.get("dataState") or "partial"),
+            "validationState": str(item.get("validationState") or "conditional"),
             "matchedConditionIds": list(item.get("matchedConditionIds") or [])[:8] if isinstance(item.get("matchedConditionIds"), list) else [],
             "nativeTypeDbReasoned": bool(item.get("nativeTypeDbReasoned")),
         }
@@ -257,13 +287,6 @@ class RealtimeMonitor(MonitoringSampleDataMixin, MonitoringPositionContextMixin,
                 return ":".join(["cadence", "python", event.account_id, event.rule, event.key])
         return event.cadence_key()
 
-    def ontology_quality_min_score(self) -> float:
-        raw = self.settings.get("notificationOntologyQualityMinScore") or self.settings.get("ontologyNotificationQualityMinScore") or 55
-        try:
-            return float(raw)
-        except (TypeError, ValueError):
-            return 55.0
-
     def ontology_inference_missing_required_cycles(self) -> int:
         raw = self.settings.get("ontologyInferenceMissingConsecutiveCycles") or self.settings.get("notificationOntologyInferenceMissingConsecutiveCycles") or 2
         try:
@@ -283,31 +306,10 @@ class RealtimeMonitor(MonitoringSampleDataMixin, MonitoringPositionContextMixin,
     def threshold_text(self, key: str, suffix: str = "") -> str:
         return compact_number(float(self.thresholds.get(key, DEFAULT_THRESHOLDS.get(key, 0)) or 0)) + suffix
 
-    def model_score_phrase(self, side: str, score: float) -> str:
-        value = round(float(score or 0), 1)
-        if side == "buy":
-            if value >= 85:
-                label = "강한 매수 후보"
-            elif value >= 74:
-                label = "매수 후보"
-            elif value >= 60:
-                label = "관찰 후보"
-            else:
-                label = "매수 기준 미달"
-        else:
-            if value >= 85:
-                label = "강한 매도 압력"
-            elif value >= 72:
-                label = "분할매도 압력"
-            elif value >= 60:
-                label = "리스크 관찰"
-            else:
-                label = "매도 기준 미달"
-        return label + " (" + compact_number(value) + "점)"
-
-    def decision_score_phrase(self, label: object, score: object) -> str:
+    def decision_state_phrase(self, label: object, review_level: object) -> str:
         text = str(label or "-").strip() or "-"
-        return text + " (" + compact_number(float(score or 0)) + "점)"
+        state = str(review_level or "check").strip().lower()
+        return text + " · " + REVIEW_LEVEL_LABELS.get(state, REVIEW_LEVEL_LABELS["check"])
 
     def decision_action_group(self, label: object) -> str:
         return decision_action_group_for_label(label)
@@ -315,22 +317,12 @@ class RealtimeMonitor(MonitoringSampleDataMixin, MonitoringPositionContextMixin,
     def enabled_signal_events(self, events: List[AlertEvent]) -> List[AlertEvent]:
         return [event for event in events or [] if self.enabled(event.rule)]
 
-    def meaningful_decision_change(self, current_decision: Dict[str, object], previous_decision: Dict[str, object], pressure_delta: float) -> bool:
-        current_label = str(current_decision.get("decision") or "").strip()
-        previous_label = str(previous_decision.get("decision") or "").strip()
-        if not current_label or not previous_label or current_label == previous_label:
-            return False
-        if self.decision_action_group(current_label) != self.decision_action_group(previous_label):
-            return True
-        label_buffer = float(self.thresholds.get("monitorDecisionLabelBuffer", 5) or 0)
-        return abs(float(pressure_delta or 0)) >= label_buffer
-
     def events_for_snapshot(self, snapshot: AccountSnapshot, previous: Dict[str, object]) -> List[AlertEvent]:
         self.use_external_fx_rates(snapshot.external_signals)
         raw_events: List[AlertEvent] = []
         snapshot = self.snapshot_with_external_signal_deltas(snapshot, previous or {})
         signal_snapshot = snapshot
-        decision_snapshot = self.snapshot_with_strategy_scores(snapshot)
+        decision_snapshot = self.snapshot_with_strategy_states(snapshot)
         has_account_data = decision_snapshot.has_live_account_data()
         inference_missing_events: List[AlertEvent] = []
         inference_missing = False
@@ -365,7 +357,7 @@ class RealtimeMonitor(MonitoringSampleDataMixin, MonitoringPositionContextMixin,
     def type_check_events_for_snapshot(self, snapshot: AccountSnapshot) -> List[AlertEvent]:
         self.use_external_fx_rates(snapshot.external_signals)
         events: List[AlertEvent] = []
-        snapshot = self.snapshot_with_strategy_scores(snapshot)
+        snapshot = self.snapshot_with_strategy_states(snapshot)
         events.extend(self.connection_events(snapshot, {"status": "이전 연결 상태"}))
         events.extend(self.heartbeat_events(snapshot))
         inference_missing_events = self.only_rule(
@@ -421,15 +413,12 @@ class RealtimeMonitor(MonitoringSampleDataMixin, MonitoringPositionContextMixin,
 
     def stamp_events(self, snapshot: AccountSnapshot, events: List[AlertEvent]) -> List[AlertEvent]:
         generated_at = str(snapshot.generated_at or "").strip()
-        formula_metadata = self.notification_formula_metadata()
-        ontology_quality = ontology_quality_event_metadata(snapshot, self.ontology_quality_min_score())
+        ontology_quality = ontology_quality_event_metadata(snapshot)
         ontology_inference = ontology_inference_event_metadata(snapshot)
         external_api_sources = external_api_source_metadata(snapshot)
         for event in events:
             if generated_at:
                 event.generated_at = generated_at
-            if formula_metadata:
-                event.metadata.update({key: value for key, value in formula_metadata.items() if key not in event.metadata})
             if ontology_quality:
                 event.metadata.setdefault("ontologyQuality", ontology_quality)
             if ontology_inference:
@@ -439,7 +428,7 @@ class RealtimeMonitor(MonitoringSampleDataMixin, MonitoringPositionContextMixin,
                 event.metadata.setdefault("externalApiSourceLines", external_api_sources.get("externalApiSourceLines"))
         return events
 
-    def snapshot_with_strategy_scores(self, snapshot: AccountSnapshot) -> AccountSnapshot:
+    def snapshot_with_strategy_states(self, snapshot: AccountSnapshot) -> AccountSnapshot:
         if not snapshot.has_live_account_data():
             return snapshot
         inference_contexts = relation_contexts_from_snapshot(snapshot, getattr(self.strategy_model, "settings", {}) if self.strategy_model else {})
@@ -455,14 +444,6 @@ class RealtimeMonitor(MonitoringSampleDataMixin, MonitoringPositionContextMixin,
             require_inference_context=True,
         )
         return snapshot
-
-    def notification_formula_metadata(self) -> Dict[str, object]:
-        keys = ["notificationScoreFormula"]
-        return {
-            key: str(self.settings.get(key) or "").strip()
-            for key in keys
-            if str(self.settings.get(key) or "").strip()
-        }
 
     def only_rule(self, rule: str, events: List[AlertEvent]) -> List[AlertEvent]:
         return [event for event in events if event.rule == rule]
@@ -1014,44 +995,58 @@ class RealtimeMonitor(MonitoringSampleDataMixin, MonitoringPositionContextMixin,
         forced_loss_threshold = loss_threshold - loss_buffer
         for item in snapshot.decisions:
             position = positions.get(item.symbol.upper()) or item.to_dict()
-            decision_phrase = self.decision_score_phrase(item.decision, item.exit_pressure)
             decision_state = item.to_dict()
             relation_context = self.relation_context_from_decision(decision_state)
             if not is_graph_backed_relation_context(relation_context):
                 continue
-            dispatch_policy = ontology_threshold_policy_from_context(relation_context).watchlist_dispatch
-            relation_score = float((relation_context.get("decision") or {}).get("score") or relation_context.get("signalStrength") or item.exit_pressure or 0)
-            if item.tone not in {"danger", "caution"} and item.profit_loss_rate > forced_loss_threshold and relation_score < dispatch_policy.minimum_relation_score:
+            relation_decision = relation_context.get("decision") if isinstance(relation_context.get("decision"), dict) else {}
+            review_level = str(relation_context.get("reviewLevel") or relation_decision.get("reviewLevel") or item.review_level or "normal")
+            data_state = str(relation_context.get("dataState") or relation_decision.get("dataState") or item.data_state or "partial")
+            change_state = str(relation_context.get("changeState") or relation_decision.get("changeState") or item.change_state or "unchanged")
+            if not data_state_is_usable(data_state):
                 continue
+            factual_loss_trigger = item.profit_loss_rate <= forced_loss_threshold
+            meaningful_change = change_state in {"new-condition", "improving", "worsening", "direction-changed", "new-evidence"}
+            if not (review_level_at_least(review_level, "check") or factual_loss_trigger or meaningful_change):
+                continue
+            decision_phrase = self.decision_state_phrase(item.decision, review_level)
             prompt_context = self.prompt_context_from_decision(decision_state)
             relation_lines = self.relation_context_lines(decision_state)
             ontology_lines = self.ontology_context_lines(decision_state)
             active_lines = self.active_investment_opinion_lines(decision_state)
-            event_key_parts = [snapshot.account_id, "timing", item.symbol, item.decision]
+            event_key_parts = [snapshot.account_id, "timing", item.symbol, item.decision, change_state]
             news_event_suffix = relation_news_event_key_suffix(relation_context)
             if news_event_suffix:
                 event_key_parts.append(news_event_suffix)
             events.append(AlertEvent(
                 snapshot.account_id,
                 snapshot.account_label,
-                "ALERT" if item.tone == "danger" else "WATCH",
+                "ALERT" if review_level in {"act", "immediate"} and item.tone in {"danger", "caution"} else "WATCH",
                 "holdingTiming",
                 ":".join(event_key_parts),
                 item.name,
                 ["상태 " + decision_phrase, *self.holding_price_lines(position, snapshot.portfolio, positions.values()), self.flow_context_line(position), self.investor_context_line(position), self.trend_context_line(position), self.holding_action_line(item.decision, item.profit_loss_rate)] + relation_lines + ontology_lines + active_lines,
                 item.symbol,
                 criteria=self.criteria(
-                    "관계 규칙이 위험/주의 상태로 성립하거나 손익률이 손실 기준 "
+                    "관계 규칙이 확인·대응 상태로 바뀌거나 손익률이 손실 기준 "
                     + compact_number(loss_threshold)
                     + "%에서 완충 "
                     + compact_number(loss_buffer)
                     + "%p 이상 더 악화될 때",
-                    "상태 " + decision_phrase + ", 수익률 " + signed_pct(item.profit_loss_rate) + (", " + " · ".join(relation_lines[:2]) if relation_lines else ""),
+                    "상태 " + decision_phrase
+                    + ", 자료 " + DATA_STATE_LABELS.get(data_state, DATA_STATE_LABELS["partial"])
+                    + ", 변화 " + CHANGE_STATE_LABELS.get(change_state, CHANGE_STATE_LABELS["unchanged"])
+                    + ", 수익률 " + signed_pct(item.profit_loss_rate)
+                    + (", " + " · ".join(relation_lines[:2]) if relation_lines else ""),
                 ),
                 metadata={
                     "holdingDecision": item.decision,
                     "holdingDecisionBasis": item.decision_basis,
-                    "holdingDecisionScore": round(float(item.exit_pressure or 0), 1),
+                    "reviewLevel": review_level,
+                    "dataState": data_state,
+                    "changeState": change_state,
+                    "conflictState": str(relation_context.get("conflictState") or item.conflict_state or "context-only"),
+                    "validationState": str(relation_context.get("validationState") or item.validation_state or "conditional"),
                     "profitLossRate": round(float(item.profit_loss_rate or 0), 2),
                     "ontologyRelationContext": relation_context,
                     "ontologyPromptContext": prompt_context,

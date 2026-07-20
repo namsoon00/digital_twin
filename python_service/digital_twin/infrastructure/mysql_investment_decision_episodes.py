@@ -23,12 +23,15 @@ class MySQLInvestmentDecisionEpisodeStore(MySQLOperationalConnection):
                 """
                 INSERT INTO investment_decision_episodes (
                     episode_id, account_id, symbol, subject_name, question_id,
-                    hypothesis_set_id, selected_hypothesis_id, action, confidence,
+                    hypothesis_set_id, selected_hypothesis_id, action,
+                    review_level, data_state, validation_state,
                     inference_generation_id, status, decided_at, source,
                     payload_json, created_at, updated_at
-                ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
                 ON DUPLICATE KEY UPDATE selected_hypothesis_id = VALUES(selected_hypothesis_id),
-                    action = VALUES(action), confidence = VALUES(confidence), status = VALUES(status),
+                    action = VALUES(action), review_level = VALUES(review_level),
+                    data_state = VALUES(data_state), validation_state = VALUES(validation_state),
+                    status = VALUES(status),
                     payload_json = VALUES(payload_json), updated_at = VALUES(updated_at)
                 """,
                 (
@@ -40,7 +43,9 @@ class MySQLInvestmentDecisionEpisodeStore(MySQLOperationalConnection):
                     episode.hypothesis_set.hypothesis_set_id,
                     episode.selected_hypothesis_id,
                     episode.action,
-                    episode.confidence,
+                    episode.review_level,
+                    episode.data_state,
+                    episode.validation_state,
                     episode.inference_generation_id,
                     episode.status,
                     episode.decided_at,
@@ -93,15 +98,10 @@ class MySQLInvestmentDecisionEpisodeStore(MySQLOperationalConnection):
             minimum_samples = int(float(str(self.runtime_settings.get("investmentBrainPerformanceMinimumSamples") or "5")))
         except ValueError:
             minimum_samples = 5
-        try:
-            minimum_accuracy = float(str(self.runtime_settings.get("investmentBrainPerformanceMinimumAccuracyPct") or "55"))
-        except ValueError:
-            minimum_accuracy = 55.0
         episodes = self.list(account_id=account_id, symbol=symbol, limit=max(1, min(500, int(limit or 500))))
         return evaluate_decision_performance(
             episodes,
             minimum_sample_count=max(2, min(100, minimum_samples)),
-            minimum_accuracy_pct=max(0.0, min(100.0, minimum_accuracy)),
         )
 
     def outcomes_for_episode(self, episode_id: str, limit: int = 30) -> List[ObservedOutcome]:

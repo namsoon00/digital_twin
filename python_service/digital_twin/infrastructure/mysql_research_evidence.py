@@ -77,6 +77,7 @@ class MySQLResearchEvidenceStore(MySQLOperationalConnection):
             published_at = str(item.published_at or item.observed_at or "").strip()
             dedupe_key = "|".join([symbol, kind, source, title, str(item.url or "").strip()])[:191]
             payload = dict(item.raw_payload or {})
+            states = item.state_payload()
             current_signature = fact_signature(research_evidence_change_payload(
                 symbol,
                 kind,
@@ -86,14 +87,17 @@ class MySQLResearchEvidenceStore(MySQLOperationalConnection):
                 str(item.url or ""),
                 published_at,
                 str(item.polarity or "context"),
-                float(item.impact_score or 0),
-                float(item.confidence or 0),
+                states["sourceTrustState"],
+                states["materialityState"],
+                states["dataState"],
+                states["validationState"],
                 payload,
             ))
             previous_row = connection.execute(
                 """
                 SELECT symbol, kind, source, title, summary, url, published_at,
-                       polarity, impact_score, confidence, payload_json
+                       polarity, source_trust_state, materiality_state, data_state,
+                       validation_state, payload_json
                 FROM research_evidence
                 WHERE evidence_id = %s
                 """,
@@ -111,18 +115,20 @@ class MySQLResearchEvidenceStore(MySQLOperationalConnection):
                     str(previous_row["url"] or ""),
                     str(previous_row["published_at"] or ""),
                     str(previous_row["polarity"] or "context"),
-                    float(previous_row["impact_score"] or 0),
-                    float(previous_row["confidence"] or 0),
+                    str(previous_row["source_trust_state"] or "unknown"),
+                    str(previous_row["materiality_state"] or "context"),
+                    str(previous_row["data_state"] or "partial"),
+                    str(previous_row["validation_state"] or "conditional"),
                     previous_payload,
                 ))
             connection.execute(
                 """
                 INSERT INTO research_evidence (
                     evidence_id, symbol, kind, source, title, summary, url, published_at,
-                    observed_at, first_seen_at, last_seen_at, polarity, impact_score,
-                    confidence, dedupe_key, payload_json
+                    observed_at, first_seen_at, last_seen_at, polarity, source_trust_state,
+                    materiality_state, data_state, validation_state, dedupe_key, payload_json
                 )
-                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
                 ON DUPLICATE KEY UPDATE
                     symbol = VALUES(symbol),
                     kind = VALUES(kind),
@@ -134,8 +140,10 @@ class MySQLResearchEvidenceStore(MySQLOperationalConnection):
                     observed_at = VALUES(observed_at),
                     last_seen_at = VALUES(last_seen_at),
                     polarity = VALUES(polarity),
-                    impact_score = VALUES(impact_score),
-                    confidence = VALUES(confidence),
+                    source_trust_state = VALUES(source_trust_state),
+                    materiality_state = VALUES(materiality_state),
+                    data_state = VALUES(data_state),
+                    validation_state = VALUES(validation_state),
                     dedupe_key = VALUES(dedupe_key),
                     payload_json = VALUES(payload_json)
                 """,
@@ -152,8 +160,10 @@ class MySQLResearchEvidenceStore(MySQLOperationalConnection):
                     stamp,
                     stamp,
                     str(item.polarity or "context"),
-                    float(item.impact_score or 0),
-                    float(item.confidence or 0),
+                    states["sourceTrustState"],
+                    states["materialityState"],
+                    states["dataState"],
+                    states["validationState"],
                     dedupe_key,
                     json_dumps(payload),
                 ),

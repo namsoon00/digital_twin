@@ -96,7 +96,7 @@ class InvestmentUbiquitousLanguageRegistryTests(unittest.TestCase):
     def test_short_position_intent_id_does_not_corrupt_other_words(self):
         audit = audit_user_facing_investment_text("relation score와 core 역할을 봅니다.")
 
-        self.assertIn("확인 필요 점수", audit["renderedText"])
+        self.assertIn("확인 단계", audit["renderedText"])
         self.assertIn("핵심 보유", audit["renderedText"])
         self.assertNotIn("s핵심 보유", audit["renderedText"])
 
@@ -119,7 +119,9 @@ class InvestmentUbiquitousLanguageRegistryTests(unittest.TestCase):
         response = NotificationAIValidatedResponse(
             action="HOLD",
             action_label="보유",
-            confidence=60,
+            validation_state="conditional",
+            data_state="partial",
+            review_level="check",
             summary="feature 기여도와 thesis를 확인합니다.",
             opinion="feature 기여도와 thesis를 확인합니다.",
             source="test",

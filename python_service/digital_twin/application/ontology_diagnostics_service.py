@@ -67,7 +67,8 @@ class OntologyDiagnosticsService:
             "episodeCount": int(result.get("episodeCount") or 0),
             "outcomeCount": int(result.get("outcomeCount") or 0),
             "outcomeCoveragePct": float(result.get("outcomeCoveragePct") or 0),
-            "directionalAccuracyPct": float(summary.get("directionalAccuracyPct") or 0),
+            "corroborationState": str(summary.get("corroborationState") or "insufficient-history"),
+            "actionReturnState": str(summary.get("actionReturnState") or "unavailable"),
             "averageActionAdjustedReturnPct": float(summary.get("averageActionAdjustedReturnPct") or 0),
             "sampleStatus": str(summary.get("sampleStatus") or "insufficient-sample"),
             "promotionEligible": bool(summary.get("promotionEligible")),
@@ -193,7 +194,7 @@ class OntologyDiagnosticsService:
             if isinstance(item, dict) and str(item.get("type") or item.get("relationType") or "")
         ))[:20]
         summary["recentTraces"] = [
-            self.pick(item, ["id", "ruleId", "label", "symbol", "confidence", "inferenceGenerationId"])
+            self.pick(item, ["id", "ruleId", "label", "symbol", "validationState", "dataState", "inferenceGenerationId"])
             for item in (payload.get("traces") or [])[:5]
             if isinstance(item, dict)
         ]

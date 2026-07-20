@@ -267,7 +267,7 @@ class MySQLNotificationJobStore(MySQLOperationalConnection):
             job.status = "suppressed"
             job.updated_at = utc_now()
             job.last_error = "이미 발송한 기사 또는 같은 제목의 기사만 남아 다시 판단하지 않았습니다."
-            job.context["honeySuppressionReason"] = "sent_article_repeat"
+            job.context["deliverySuppressionReason"] = "sent_article_repeat"
             self.upsert_job_with_connection(connection, job)
             return True
         return False
@@ -286,7 +286,7 @@ class MySQLNotificationJobStore(MySQLOperationalConnection):
         state_minutes = int(rule.state_cooldown_minutes or 0) + 60 if rule.state_cooldown_enabled and int(rule.state_cooldown_minutes or 0) else 0
         history_minutes = max(similarity_minutes, state_minutes)
         if not history_minutes or not fingerprint:
-            return 0, 0, {}, ""
+            return 0, {}, ""
         cutoff = datetime.now(timezone.utc) - timedelta(minutes=history_minutes)
         cutoff_text = cutoff.isoformat().replace("+00:00", "Z")
         rows = connection.execute(
@@ -299,7 +299,6 @@ class MySQLNotificationJobStore(MySQLOperationalConnection):
             (job.message_type, cutoff_text, NOTIFICATION_HISTORY_LOOKBACK_LIMIT),
         ).fetchall()
         count = 0
-        previous_score = 0
         most_recent_context: Dict[str, object] = {}
         most_recent_at = ""
         state_group_key = notification_state_group_key(job)
@@ -308,8 +307,16 @@ class MySQLNotificationJobStore(MySQLOperationalConnection):
             if previous.job_id == job.job_id:
                 continue
             previous_context = previous.context or {}
-            previous_fingerprint = str(previous_context.get("honeyFingerprint") or notification_fingerprint(previous, rule))
-            previous_state_group_key = str(previous_context.get("honeyStateGroupKey") or notification_state_group_key(previous))
+            previous_fingerprint = str(
+                previous_context.get("deliveryFingerprint")
+                or previous_context.get("honeyFingerprint")
+                or notification_fingerprint(previous, rule)
+            )
+            previous_state_group_key = str(
+                previous_context.get("deliveryStateGroupKey")
+                or previous_context.get("honeyStateGroupKey")
+                or notification_state_group_key(previous)
+            )
             if previous_fingerprint != fingerprint and (not state_group_key or previous_state_group_key != state_group_key):
                 continue
             status = str(row["status"] or "").strip()
@@ -320,24 +327,27 @@ class MySQLNotificationJobStore(MySQLOperationalConnection):
                 most_recent_context = dict(previous_context)
             if status == "done" and not most_recent_at:
                 most_recent_at = row["created_at"] or previous.created_at
-            previous_score = max(previous_score, int(previous_context.get("honeyScore") or 0))
-        return count, previous_score, most_recent_context, most_recent_at
+        return count, most_recent_context, most_recent_at
 
     def evaluate_job_with_connection(self, connection, job: NotificationJob):
         rule = self.rule_for_connection(connection, job.message_type)
         decision = evaluate_notification_rule(job, rule)
-        recent_count, previous_score, previous_context, last_sent_at = self.similar_history_with_connection(connection, job, rule, decision.fingerprint)
+        recent_count, previous_context, last_sent_at = self.similar_history_with_connection(
+            connection,
+            job,
+            rule,
+            decision.fingerprint,
+        )
         decision = apply_state_cooldown_rule(
             decision,
             rule,
             recent_count,
-            previous_score,
             previous_context,
             last_sent_at,
             age_minutes_since(last_sent_at),
             job,
         )
-        decision = apply_similarity_rule(decision, rule, recent_count, previous_score, previous_context, job)
+        decision = apply_similarity_rule(decision, rule, recent_count, previous_context, job)
         decision = attach_previous_profit_loss_context(decision, job, previous_context)
         return apply_market_hours_rule(decision, rule, job)
 
@@ -364,7 +374,7 @@ class MySQLNotificationJobStore(MySQLOperationalConnection):
         context.update(decision.to_context())
         state_group_key = notification_state_group_key(job)
         if state_group_key:
-            context["honeyStateGroupKey"] = state_group_key
+            context["deliveryStateGroupKey"] = state_group_key
         freshness_decision = evaluate_notification_data_freshness(context, self.runtime_settings)
         context.update(freshness_decision.to_context())
         context = sanitize_notification_context_for_freshness(context, freshness_decision)
@@ -373,7 +383,7 @@ class MySQLNotificationJobStore(MySQLOperationalConnection):
             job.status = "suppressed"
             job.updated_at = utc_now()
             job.last_error = "데이터 신선도 기준 미통과로 발송하지 않았습니다. " + str(freshness_decision.reason or "")
-            job.context["honeySuppressionReason"] = "stale_data"
+            job.context["deliverySuppressionReason"] = "stale_data"
             try:
                 self.upsert_job_with_connection(connection, job)
             except Exception as error:
@@ -389,7 +399,7 @@ class MySQLNotificationJobStore(MySQLOperationalConnection):
             elif decision.suppression_reason == "state_cooldown":
                 job.last_error = decision.state_reason or "같은 임계값 상태가 지속되어 발송하지 않았습니다."
             else:
-                job.last_error = "발송 우선도 " + str(decision.score) + "이 기준 " + str(decision.threshold) + "보다 낮아 발송하지 않았습니다."
+                job.last_error = decision.gate_reason or "발송 조건을 충족하지 않아 보내지 않았습니다."
             try:
                 self.upsert_job_with_connection(connection, job)
             except Exception as error:

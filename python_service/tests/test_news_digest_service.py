@@ -213,7 +213,7 @@ class NewsDigestEnqueuerTests(unittest.TestCase):
         self.assertNotIn("핵심 근거:", job.text)
         self.assertIn("알림이 온 이유", job.text)
         self.assertIn("Apple / AAPL 관심 종목의 새 기사", job.text)
-        self.assertIn("관련성·중요도 97점·84점 기준을 통과", job.text)
+        self.assertIn("종목 직접 관련 · 확인할 가치가 있는 변화 조건을 통과", job.text)
         self.assertIn("기사 한 건만으로 매수·매도를 결정하지 않고", job.text)
         self.assertNotIn("실제 영향 요약", job.text)
         self.assertNotIn("먼저 볼 것", job.text)

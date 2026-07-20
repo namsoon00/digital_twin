@@ -5,13 +5,11 @@ import re
 from typing import Dict, Iterable, List, Tuple
 
 from .investment_research import NewsCollectionTarget, ResearchEvidence
-from .market_data import clamp, number
 from . import news_analysis as news_domain
-from .ontology_threshold_policy import default_ontology_threshold_policy
 
 
-NEWS_AI_ANALYSIS_VERSION = "news-ai-analysis-v3"
-NEWS_AI_PROMPT_VERSION = "news-ai-prompt-v3"
+NEWS_AI_ANALYSIS_VERSION = "news-ai-analysis-v4"
+NEWS_AI_PROMPT_VERSION = "news-ai-prompt-v4"
 
 IMPACT_LABELS = {
     "support": "호재",
@@ -366,7 +364,8 @@ def news_analysis_conflict_payload(
                 + "로 판단했습니다."
             ),
             "dataQualityRisk": "article-ai-impact-conflict",
-            "dataQualityRiskScore": 7.0,
+            "dataState": "partial",
+            "validationState": "conditional",
         }
     return {}
 
@@ -400,9 +399,11 @@ class NewsAiAnalysis:
     event_type: str = "general"
     impact_polarity: str = "neutral"
     impact_label_ko: str = "중립"
-    confidence: float = 0.5
-    materiality_score: float = 0.0
-    relevance_score: float = 0.0
+    relevance_state: str = "context"
+    source_trust_state: str = "unknown"
+    materiality_state: str = "context"
+    data_state: str = "partial"
+    validation_state: str = "conditional"
     summary: Dict[str, object] = field(default_factory=dict)
     risk_signals: List[str] = field(default_factory=list)
     support_signals: List[str] = field(default_factory=list)
@@ -412,7 +413,7 @@ class NewsAiAnalysis:
     impact_reason_ko: str = ""
     portfolio_implication_ko: str = ""
     action_boundary_ko: str = ""
-    confidence_reason_ko: str = ""
+    validation_reason_ko: str = ""
     needs_review: bool = False
     reasoning_limitations: List[str] = field(default_factory=list)
 
@@ -428,9 +429,11 @@ class NewsAiAnalysis:
             "eventType": self.event_type,
             "impactPolarity": self.impact_polarity,
             "impactLabelKo": self.impact_label_ko,
-            "confidence": round(clamp(number(self.confidence), 0.0, 1.0), 2),
-            "materialityScore": round(clamp(number(self.materiality_score), 0.0, 100.0), 1),
-            "relevanceScore": round(clamp(number(self.relevance_score), 0.0, 100.0), 1),
+            "relevanceState": self.relevance_state,
+            "sourceTrustState": self.source_trust_state,
+            "materialityState": self.materiality_state,
+            "dataState": self.data_state,
+            "validationState": self.validation_state,
             "summary": dict(self.summary or {}),
             "riskSignals": list(self.risk_signals or []),
             "supportSignals": list(self.support_signals or []),
@@ -440,7 +443,7 @@ class NewsAiAnalysis:
             "impactReasonKo": compact_text(self.impact_reason_ko, 520),
             "portfolioImplicationKo": compact_text(self.portfolio_implication_ko, 520),
             "actionBoundaryKo": compact_text(self.action_boundary_ko, 360),
-            "confidenceReasonKo": compact_text(self.confidence_reason_ko, 360),
+            "validationReasonKo": compact_text(self.validation_reason_ko, 360),
             "needsReview": bool(self.needs_review),
             "reasoningLimitations": list(self.reasoning_limitations or []),
         }
@@ -455,6 +458,9 @@ def normalize_ai_analysis(payload: Dict[str, object], fallback: NewsAiAnalysis =
     summary = payload.get("summary") if isinstance(payload.get("summary"), dict) else {}
     fallback_summary = fallback.summary if isinstance(fallback.summary, dict) else {}
     normalized_summary = normalized_summary_payload(summary, fallback_summary)
+    state_payload = dict(fallback.to_dict())
+    state_payload.update(payload)
+    states = news_domain.news_state_payload(state_payload)
     return NewsAiAnalysis(
         status=str(payload.get("status") or fallback.status or "ok"),
         version=str(payload.get("version") or fallback.version or NEWS_AI_ANALYSIS_VERSION),
@@ -466,9 +472,11 @@ def normalize_ai_analysis(payload: Dict[str, object], fallback: NewsAiAnalysis =
         event_type=str(payload.get("eventType") or payload.get("event_type") or fallback.event_type or "general"),
         impact_polarity=polarity,
         impact_label_ko=str(payload.get("impactLabelKo") or payload.get("impact_label_ko") or IMPACT_LABELS.get(polarity, "미확인")),
-        confidence=clamp(number(payload.get("confidence")) or fallback.confidence, 0.0, 1.0),
-        materiality_score=clamp(number(payload.get("materialityScore") or payload.get("materiality_score")) or fallback.materiality_score, 0.0, 100.0),
-        relevance_score=clamp(number(payload.get("relevanceScore") or payload.get("relevance_score")) or fallback.relevance_score, 0.0, 100.0),
+        relevance_state=states["relevanceState"],
+        source_trust_state=states["sourceTrustState"],
+        materiality_state=states["materialityState"],
+        data_state=states["dataState"],
+        validation_state=states["validationState"],
         summary=normalized_summary,
         risk_signals=unique_texts(payload.get("riskSignals") or payload.get("risk_signals") or fallback.risk_signals, 6),
         support_signals=unique_texts(payload.get("supportSignals") or payload.get("support_signals") or fallback.support_signals, 6),
@@ -478,30 +486,39 @@ def normalize_ai_analysis(payload: Dict[str, object], fallback: NewsAiAnalysis =
         impact_reason_ko=compact_text(payload.get("impactReasonKo") or payload.get("impact_reason_ko") or fallback.impact_reason_ko, 520),
         portfolio_implication_ko=compact_text(payload.get("portfolioImplicationKo") or payload.get("portfolio_implication_ko") or fallback.portfolio_implication_ko, 520),
         action_boundary_ko=compact_text(payload.get("actionBoundaryKo") or payload.get("action_boundary_ko") or fallback.action_boundary_ko, 360),
-        confidence_reason_ko=compact_text(payload.get("confidenceReasonKo") or payload.get("confidence_reason_ko") or fallback.confidence_reason_ko, 360),
+        validation_reason_ko=compact_text(
+            payload.get("validationReasonKo")
+            or payload.get("validation_reason_ko")
+            or payload.get("confidenceReasonKo")
+            or payload.get("confidence_reason_ko")
+            or fallback.validation_reason_ko,
+            360,
+        ),
         needs_review=bool(payload.get("needsReview") if "needsReview" in payload else fallback.needs_review),
         reasoning_limitations=unique_texts(payload.get("reasoningLimitations") or payload.get("reasoning_limitations") or fallback.reasoning_limitations, 5),
     )
 
 
 def infer_impact_polarity(text: object) -> Tuple[str, List[str], List[str], List[str]]:
-    policy = default_ontology_threshold_policy().news_impact
     risk_hits = keyword_hits(text, RISK_PHRASES)
     support_hits = keyword_hits(text, SUPPORT_PHRASES)
     contrast_hits = keyword_hits(text, CONTRAST_PHRASES)
-    risk_score = len(risk_hits) * policy.risk_keyword_weight
-    support_score = len(support_hits) * policy.support_keyword_weight
-    if "실적 우려" in risk_hits or "전망 우려" in risk_hits:
-        risk_score += policy.concern_bonus
-    if "붕괴" in risk_hits or "plunge" in risk_hits:
-        risk_score += policy.plunge_bonus
-    if contrast_hits and risk_hits and support_hits:
-        risk_score += policy.contrast_bonus
-    if risk_score >= support_score + policy.dominance_gap and risk_score > 0:
-        return "risk", risk_hits, support_hits, contrast_hits
-    if support_score >= risk_score + policy.dominance_gap and support_score > 0:
-        return "support", risk_hits, support_hits, contrast_hits
     if risk_hits and support_hits:
+        lowered = str(text or "").casefold()
+        markers = [
+            (lowered.rfind(str(phrase).casefold()), str(phrase))
+            for phrase in CONTRAST_PHRASES
+            if lowered.rfind(str(phrase).casefold()) >= 0
+        ]
+        if markers:
+            marker_index, marker = max(markers, key=lambda item: item[0])
+            trailing_text = lowered[marker_index + len(marker):]
+            trailing_risk = keyword_hits(trailing_text, RISK_PHRASES)
+            trailing_support = keyword_hits(trailing_text, SUPPORT_PHRASES)
+            if trailing_risk and not trailing_support:
+                return "risk", risk_hits, support_hits, contrast_hits
+            if trailing_support and not trailing_risk:
+                return "support", risk_hits, support_hits, contrast_hits
         return "mixed", risk_hits, support_hits, contrast_hits
     if risk_hits:
         return "risk", risk_hits, support_hits, contrast_hits
@@ -570,7 +587,7 @@ def action_boundary_text(polarity: str, read_scope: str) -> str:
     return scope_note + " 확인 신호입니다. 투자 방향을 단정하지 않고 후속 가격·거래량 반응만 점검합니다."
 
 
-def confidence_reason_text(read_scope: str, relation_scope: str, risk_hits: Iterable[str], support_hits: Iterable[str]) -> str:
+def validation_reason_text(read_scope: str, relation_scope: str, risk_hits: Iterable[str], support_hits: Iterable[str]) -> str:
     parts = []
     parts.append("본문을 읽음" if read_scope == "body" else "본문 미확보")
     if relation_scope:
@@ -590,22 +607,26 @@ def local_news_ai_analysis(target: NewsCollectionTarget, evidence: ResearchEvide
     polarity, risk_hits, support_hits, contrast_hits = infer_impact_polarity(source_text)
     event_type = str(payload.get("eventType") or facts.get("eventType") or news_domain.classify_news_event_type(title, source_text) or "general")
     relation_scope = str(payload.get("relationScope") or facts.get("relationScope") or "").strip()
-    relevance = number(payload.get("relevanceScore") or facts.get("relevanceScore"))
-    materiality_base = number(payload.get("materialityScore") or facts.get("materialityScore"))
-    hit_boost = min(22.0, len(risk_hits) * 5 + len(support_hits) * 4 + len(contrast_hits) * 3)
-    materiality = clamp(max(materiality_base, 50.0 + hit_boost if polarity != "neutral" else materiality_base), 0.0, 100.0)
-    confidence_base = 0.58
-    if read_scope == "body":
-        confidence_base += 0.12
-    if relation_scope == "direct":
-        confidence_base += 0.08
-    if risk_hits or support_hits:
-        confidence_base += 0.07
-    if polarity == "mixed":
-        confidence_base -= 0.08
-    if read_scope != "body":
-        confidence_base -= 0.06
-    confidence = clamp(confidence_base, 0.3, 0.9)
+    state_source = {
+        **payload,
+        **facts,
+        "relationScope": relation_scope,
+        "eventType": event_type,
+        "impactPolarity": polarity,
+        "articleReadStatus": "body" if read_scope == "body" else "feed-summary",
+    }
+    states = news_domain.news_state_payload(state_source)
+    if polarity in {"risk", "support", "mixed"} and states["materialityState"] == "context":
+        states["materialityState"] = news_domain.news_materiality_state(
+            event_type,
+            relation_scope=relation_scope,
+            impact_polarity=polarity,
+            source_trust_state=states["sourceTrustState"],
+        )
+    if read_scope != "body" and states["dataState"] == "sufficient":
+        states["dataState"] = "partial"
+    if read_scope != "body" or polarity in {"mixed", "unknown"}:
+        states["validationState"] = "conditional"
     key_numbers = news_domain.numeric_highlights(source_text, 6)
     target_name = target.name or evidence.symbol or "대상 종목"
     label = IMPACT_LABELS.get(polarity, "중립")
@@ -613,8 +634,7 @@ def local_news_ai_analysis(target: NewsCollectionTarget, evidence: ResearchEvide
     analysis_context = {
         "relationScope": relation_scope,
         "eventType": event_type,
-        "relevanceScore": relevance,
-        "materialityScore": materiality,
+        **states,
     }
     article_summary = news_domain.korean_article_summary(target, title, body, feed_summary, analysis_context)
     article_takeaway = news_domain.article_event_takeaway(target, title, body, feed_summary)
@@ -622,7 +642,7 @@ def local_news_ai_analysis(target: NewsCollectionTarget, evidence: ResearchEvide
     impact_reason = impact_reason_text(target_name, polarity, event_type, risk_hits, support_hits, contrast_hits, key_numbers)
     portfolio_implication = portfolio_implication_text(target_name, polarity, event_type)
     action_boundary = action_boundary_text(polarity, read_scope)
-    confidence_reason = confidence_reason_text(read_scope, relation_scope, risk_hits, support_hits)
+    validation_reason = validation_reason_text(read_scope, relation_scope, risk_hits, support_hits)
     if polarity == "risk":
         one_line = article_takeaway or target_name + " 기사에서 위험 신호가 더 강하게 확인됩니다."
         fallback_brief = impact_reason
@@ -639,7 +659,11 @@ def local_news_ai_analysis(target: NewsCollectionTarget, evidence: ResearchEvide
     brief_source = (article_summary if source_is_korean else article_takeaway) or article_summary
     brief = compact_text(brief_source, 520) or fallback_brief
     takeaways = summary_sentence_candidates(article_summary)[1:4] if source_is_korean else []
-    watch_points = [news_domain.impact_watch_text(STOCK_IMPACT_VALUES.get(polarity, "neutral"), materiality, source_text)]
+    watch_points = [news_domain.impact_watch_text(
+        STOCK_IMPACT_VALUES.get(polarity, "neutral"),
+        states["materialityState"],
+        source_text,
+    )]
     if read_scope != "body":
         watch_points.insert(0, "원문 본문 확보")
     if event_type in {"earnings", "guidance"}:
@@ -661,9 +685,11 @@ def local_news_ai_analysis(target: NewsCollectionTarget, evidence: ResearchEvide
         event_type=event_type,
         impact_polarity=polarity,
         impact_label_ko=label,
-        confidence=confidence,
-        materiality_score=materiality,
-        relevance_score=relevance,
+        relevance_state=states["relevanceState"],
+        source_trust_state=states["sourceTrustState"],
+        materiality_state=states["materialityState"],
+        data_state=states["dataState"],
+        validation_state=states["validationState"],
         summary=normalized_summary,
         risk_signals=risk_hits,
         support_signals=support_hits,
@@ -682,7 +708,7 @@ def local_news_ai_analysis(target: NewsCollectionTarget, evidence: ResearchEvide
         impact_reason_ko=impact_reason,
         portfolio_implication_ko=portfolio_implication,
         action_boundary_ko=action_boundary,
-        confidence_reason_ko=confidence_reason,
+        validation_reason_ko=validation_reason,
         needs_review=read_scope != "body" or polarity in {"mixed", "unknown"},
         reasoning_limitations=unique_texts(limitations, 5),
     )
@@ -717,7 +743,6 @@ def apply_news_ai_analysis(evidence: ResearchEvidence, analysis_payload: Dict[st
     analysis_dict = analysis.to_dict()
     summary = analysis_dict.get("summary") if isinstance(analysis_dict.get("summary"), dict) else {}
     impact_polarity = str(analysis_dict.get("impactPolarity") or "neutral")
-    stock_impact_score = number(analysis_dict.get("materialityScore")) or number(evidence.impact_score)
     article_facts_payload = article_facts(payload)
     if article_facts_payload and not article_facts_payload.get("bodyAvailable") and payload.get("articleReadStatus") == "body":
         payload["articleReadStatus"] = "feed-summary"
@@ -734,6 +759,11 @@ def apply_news_ai_analysis(evidence: ResearchEvidence, analysis_payload: Dict[st
         "analysisConflictReasonKo",
         "dataQualityRisk",
         "dataQualityRiskScore",
+        "confidenceReasonKo",
+        "stockImpactScore",
+        "materialityScore",
+        "relevanceScore",
+        "sourceReliability",
     ]:
         payload.pop(key, None)
     if conflict_payload:
@@ -744,13 +774,12 @@ def apply_news_ai_analysis(evidence: ResearchEvidence, analysis_payload: Dict[st
     payload["stockImpact"] = STOCK_IMPACT_VALUES.get(impact_polarity, "neutral")
     payload["stockImpactLabel"] = analysis_dict.get("impactLabelKo") or IMPACT_LABELS.get(impact_polarity, "중립")
     payload["stockImpactPolarity"] = impact_polarity if impact_polarity in {"support", "risk"} else "context"
-    payload["stockImpactScore"] = round(clamp(stock_impact_score, 0.0, 100.0), 1)
     payload["stockImpactReasonKo"] = analysis_dict.get("impactReasonKo") or analysis_dict.get("rationaleKo") or payload.get("stockImpactReasonKo") or ""
     payload["portfolioImplicationKo"] = analysis_dict.get("portfolioImplicationKo") or payload.get("portfolioImplicationKo") or ""
     payload["actionBoundaryKo"] = analysis_dict.get("actionBoundaryKo") or payload.get("actionBoundaryKo") or ""
-    payload["confidenceReasonKo"] = analysis_dict.get("confidenceReasonKo") or payload.get("confidenceReasonKo") or ""
-    if analysis_dict.get("materialityScore"):
-        payload["materialityScore"] = max(number(payload.get("materialityScore")), number(analysis_dict.get("materialityScore")))
+    payload["validationReasonKo"] = analysis_dict.get("validationReasonKo") or payload.get("validationReasonKo") or ""
+    for key in ["relevanceState", "sourceTrustState", "materialityState", "dataState", "validationState"]:
+        payload[key] = analysis_dict.get(key) or payload.get(key) or ""
     if analysis_dict.get("relationScope") and not payload.get("relationScope"):
         payload["relationScope"] = analysis_dict.get("relationScope")
     if analysis_dict.get("eventType") and not payload.get("eventType"):
@@ -766,28 +795,31 @@ def apply_news_ai_analysis(evidence: ResearchEvidence, analysis_payload: Dict[st
             "stockImpact": payload["stockImpact"],
             "stockImpactPolarity": payload["stockImpactPolarity"],
             "stockImpactLabel": payload["stockImpactLabel"],
-            "stockImpactScore": payload["stockImpactScore"],
             "stockImpactReasonKo": payload["stockImpactReasonKo"],
             "analysisConflict": bool(conflict_payload),
         })
         if conflict_payload:
             article_facts_payload.update(conflict_payload)
         payload["articleFacts"] = article_facts_payload
+    payload = news_domain.public_news_payload(payload)
     evidence_polarity = impact_polarity if impact_polarity in {"support", "risk"} else "context"
+    states = news_domain.news_state_payload(payload)
     return ResearchEvidence(
-        evidence.evidence_id,
-        evidence.symbol,
-        evidence.kind,
-        evidence.source,
-        evidence.title,
-        compact_text(payload.get("articleSummaryKo") or evidence.summary, 520),
-        evidence.url,
-        evidence.observed_at,
-        evidence_polarity,
-        payload["stockImpactScore"],
-        max(number(evidence.confidence), number(analysis_dict.get("confidence"))),
-        evidence.published_at,
-        payload,
+        evidence_id=evidence.evidence_id,
+        symbol=evidence.symbol,
+        kind=evidence.kind,
+        source=evidence.source,
+        title=evidence.title,
+        summary=compact_text(payload.get("articleSummaryKo") or evidence.summary, 520),
+        url=evidence.url,
+        observed_at=evidence.observed_at,
+        polarity=evidence_polarity,
+        published_at=evidence.published_at,
+        raw_payload=payload,
+        source_trust_state=states["sourceTrustState"],
+        materiality_state=states["materialityState"],
+        data_state=states["dataState"],
+        validation_state=states["validationState"],
     )
 
 
@@ -803,8 +835,11 @@ def build_news_ai_analysis_prompt(target: NewsCollectionTarget, evidence: Resear
             "status": "ok|error",
             "impactPolarity": "support|risk|neutral|mixed|unknown",
             "impactLabelKo": "호재|악재|중립|혼재|미확인",
-            "confidence": "0.0-1.0",
-            "materialityScore": "0-100",
+            "relevanceState": "direct|related|context|unrelated",
+            "sourceTrustState": "trusted|standard|limited|unknown",
+            "materialityState": "material|notable|context",
+            "dataState": "sufficient|partial|insufficient|unavailable",
+            "validationState": "ready|conditional|blocked",
             "summary": {
                 "oneLineKo": "기사에서 실제로 일어난 일과 종목 관련성을 담은 한 문장",
                 "briefKo": "핵심 사실만 담은 자연스러운 한국어 2-3문장",
@@ -820,7 +855,7 @@ def build_news_ai_analysis_prompt(target: NewsCollectionTarget, evidence: Resear
             "impactReasonKo": "why this article is support/risk/mixed/neutral for the stock in Korean",
             "portfolioImplicationKo": "what this means for a holding/watchlist user without trading instruction",
             "actionBoundaryKo": "what to check next and what not to conclude",
-            "confidenceReasonKo": "why confidence is high/medium/low",
+            "validationReasonKo": "which source or data condition limits use of this analysis",
             "needsReview": True,
             "reasoningLimitations": ["missing data"],
         },
@@ -832,9 +867,9 @@ def build_news_ai_analysis_prompt(target: NewsCollectionTarget, evidence: Resear
             "Do not repeat the same fact across oneLineKo, briefKo, keyTakeaways, whyItMatters, and watchPoints. Each field has a distinct role: core fact, supporting facts, investment impact, and verification condition.",
             "whyItMatters must explain the causal path to revenue, cost, valuation, regulation, liquidity, or investor sentiment. Do not restate the headline.",
             "watchPoints must name a measurable follow-up such as an official filing, guidance number, price reaction, or volume confirmation. Avoid generic phrases when a specific condition is available.",
-            "Write the Korean summary as complete natural sentences. Do not repeat the title, source name, relation score, or phrases such as 확인할 뉴스, 관련 뉴스입니다, 핵심 내용은.",
+            "Write the Korean summary as complete natural sentences. Do not repeat the title, source name, relation status, or phrases such as 확인할 뉴스, 관련 뉴스입니다, 핵심 내용은.",
             "Do not use generic sector templates such as AI/data-center demand unless that fact is present in the title, feed summary, or body preview.",
-            "If the body is missing, state that limitation and lower confidence.",
+            "If the body is missing, set dataState to partial and validationState to conditional.",
             "A phrase such as 실적 by itself is not positive; 실적 우려, 붕괴, 하락, 덮은 are risk context.",
             "Ignore newsletter or CTA boilerplate such as Never miss important updates, Simply Wall St tools, make better investment decisions, and cut through noise.",
             "The word miss is a risk signal only in earnings or estimate-miss context, not in Never miss important updates.",
@@ -858,9 +893,11 @@ def build_news_ai_analysis_prompt(target: NewsCollectionTarget, evidence: Resear
             "existingAnalysis": {
                 "relationScope": payload.get("relationScope"),
                 "eventType": payload.get("eventType"),
-                "relevanceScore": payload.get("relevanceScore"),
-                "materialityScore": payload.get("materialityScore"),
-                "sourceReliability": payload.get("sourceReliability"),
+                "relevanceState": payload.get("relevanceState"),
+                "materialityState": payload.get("materialityState"),
+                "sourceTrustState": payload.get("sourceTrustState"),
+                "dataState": payload.get("dataState"),
+                "validationState": payload.get("validationState"),
             },
         },
     }

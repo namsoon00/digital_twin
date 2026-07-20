@@ -31,7 +31,7 @@ The official OpenAPI document was available as OpenAPI `3.1.0`, API title `토�
   - Order: create, modify, cancel, list, detail, buying power, sellable quantity, commissions
 - No public endpoint for reading the user's Toss app watchlist was present in the official OpenAPI document reviewed here. Orbit Alpha manages watchlist symbols as app-local user settings and can pass those symbols to its own BFF query, but it does not claim to sync Toss app watchlists.
 - The `수급` screen is designed around the market data group: current price and price change from current-price/candle style responses, trade strength and buy/sell prints from trades, bid/ask imbalance from orderbook, and moving-average indicators calculated locally from Toss daily candles. Toss OpenAPI returns OHLCV candles, not `ma20`/`ma60` fields, so Orbit Alpha owns moving-average calculation. Until live mappings are connected, Web mock mode uses app-local manual signal input with the same normalized field names.
-- Fair value, buy score, and sell score are user-configurable formulas in the client. The app ships a recommended default formula set, but user-defined weights and threshold values are treated as local strategy settings, not Toss raw data.
+- Toss raw data does not contain fair value or a buy/sell conclusion. Orbit Alpha stores valuation assumptions and categorical decision policy locally, then combines them with TypeDB inference; neither is claimed as a Toss-provided value.
 
 ## Product Decisions
 

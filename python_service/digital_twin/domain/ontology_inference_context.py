@@ -1,8 +1,21 @@
 from typing import Dict, Iterable, List, Optional
 
 from .investment_brain import hypothesis_set_from_relation_context
-from .market_data import clamp, number
-from .ontology_decision_policy import decision_stage_from_action, relation_stage_priority
+from .market_data import number
+from .ontology_decision_policy import decision_stage_from_action
+from .ontology_decision_state import (
+    CHANGE_STATE_LABELS,
+    CONFLICT_STATE_LABELS,
+    DATA_STATE_LABELS,
+    REVIEW_LEVEL_LABELS,
+    change_state_from_facts,
+    conflict_state_from_roles,
+    data_state_from_evidence,
+    evidence_role_from_relation,
+    review_level_for,
+    semantic_relation_sort_key,
+    state_payload,
+)
 from .ontology_rulebox_contracts import (
     HOLDING_TARGET_ROLE,
     WATCHLIST_ACTION_POLICY,
@@ -17,8 +30,6 @@ from .ontology_relation_reasoning import (
     decision_stage_by_key,
     execution_plan_from_relation_context,
     position_signal_facts,
-    score_band,
-    strength_label,
 )
 from .portfolio import AccountSnapshot, PortfolioSummary, Position
 
@@ -34,6 +45,14 @@ META_INFERENCE_RELATION_TYPES = {
     "HAS_WHY_NOW",
     "TRIGGERED_INFERENCE",
 }
+
+SHADOW_INFERENCE_RELATION_TYPES = {
+    "HAS_PSYCHOLOGY_SHADOW",
+}
+
+SHADOW_INFERENCE_RULE_PREFIXES = (
+    "shadow.market_psychology.",
+)
 
 EVIDENCE_DOMAIN_TOKENS = {
     "position": {"holding", "loss", "profit", "pnl", "position", "rebalance", "concentration"},
@@ -62,14 +81,11 @@ FIELD_EVIDENCE_DOMAINS = {
     "ma20Slope": {"trend"},
     "ma60Slope": {"trend"},
     "trendCurve": {"trend"},
-    "trendDynamicRiskScore": {"trend"},
     "volume": {"flow"},
     "volumeRatio": {"flow"},
     "tradeStrength": {"flow"},
     "bidAskImbalance": {"flow", "execution"},
-    "investorFlowScore": {"flow"},
     "smartMoneyNetVolume": {"flow"},
-    "newsMomentumScore": {"news"},
     "directNewsCount": {"news"},
     "usdKrwRate": {"macro"},
     "us10yRate": {"macro"},
@@ -163,8 +179,16 @@ def relation_context_from_inferencebox(
         return {}
     source_name = inferencebox_source_name(inferencebox)
     context_version = relation_context_version(source_name)
-    relations = symbol_inference_relations(symbol, inferencebox.get("relations") or [])
-    traces = symbol_inference_traces(symbol, inferencebox.get("traces") or [])
+    relations = [
+        item
+        for item in symbol_inference_relations(symbol, inferencebox.get("relations") or [])
+        if not is_shadow_inference_relation(item)
+    ]
+    traces = [
+        item
+        for item in symbol_inference_traces(symbol, inferencebox.get("traces") or [])
+        if not is_shadow_inference_trace(item)
+    ]
     if not relations and not traces:
         return {}
     facts = position_signal_facts(
@@ -174,20 +198,27 @@ def relation_context_from_inferencebox(
         settings=settings or {},
     )
     threshold_policy = ontology_threshold_policy_from_context(settings or {})
-    matches = matches_from_inference(relations, traces, facts=facts, source_name=source_name, context_version=context_version, threshold_policy=threshold_policy)
+    matches = matches_from_inference(relations, traces, facts=facts, source_name=source_name, context_version=context_version)
     if not matches:
         return {}
     decision = decision_from_inference(facts, matches, relations, traces, source_name=source_name)
     execution_plan = execution_plan_from_relation_context(facts, decision, matches)
     prompt_context = build_ai_prompt_context(prompt_id, facts, matches, settings or {}, execution_plan)
     active_matches = [item for item in matches if item.matched and not item.reference_only]
-    max_strength = max([item.strength_score for item in active_matches], default=decision.get("score") or 0)
-    score_breakdown = aggregate_score_breakdown(active_matches, threshold_policy)
+    evidence_state = aggregate_evidence_state(active_matches or matches)
     evidence_subgraph = evidence_subgraph_packet(position, facts, matches, relations, traces)
-    why_now = why_now_packet(facts, active_matches, score_breakdown, decision, relations, traces, inferencebox, threshold_policy)
-    signal_conflicts = signal_conflict_packet(facts, active_matches, score_breakdown, relations, threshold_policy)
+    why_now = why_now_packet(facts, active_matches, decision, relations, traces, inferencebox, threshold_policy)
+    signal_conflicts = signal_conflict_packet(facts, active_matches, relations, threshold_policy)
+    data_state = str(evidence_state.get("dataState") or "partial")
+    review_level = review_level_for(decision.get("actionLevel"), data_state)
+    decision_state = state_payload(
+        review_level,
+        data_state,
+        str(why_now.get("changeState") or "unchanged"),
+        str(signal_conflicts.get("conflictState") or "context-only"),
+    )
+    decision.update(decision_state)
     inference_timeline = inference_timeline_packet(facts, active_matches, decision, inferencebox)
-    threshold_policy_payload = threshold_policy.to_dict()
     investment_brain = hypothesis_set_from_relation_context({
         "subject": {
             "symbol": facts.get("symbol"),
@@ -212,11 +243,11 @@ def relation_context_from_inferencebox(
     })
     if isinstance(prompt_context, dict):
         prompt_context["evidenceSubgraph"] = evidence_subgraph
-        prompt_context["scoreBreakdown"] = score_breakdown
+        prompt_context["evidenceState"] = evidence_state
+        prompt_context["decisionState"] = decision_state
         prompt_context["whyNow"] = why_now
         prompt_context["signalConflicts"] = signal_conflicts
         prompt_context["inferenceTimeline"] = inference_timeline
-        prompt_context["thresholdPolicy"] = threshold_policy_payload
         prompt_context["investmentBrain"] = investment_brain
         prompt_context["hypothesisSet"] = investment_brain.get("hypothesisSet") or {}
         prompt_context["researchPlan"] = investment_brain.get("researchPlan") or {}
@@ -240,11 +271,16 @@ def relation_context_from_inferencebox(
         "referenceRules": [item.to_dict() for item in matches if item.reference_only],
         "missingData": list(facts.get("missingData") or []),
         "dominantSignals": [item.label for item in active_matches[:3]],
-        "signalStrength": round(float(max_strength or 0), 1),
-        "signalStrengthLabel": strength_label(max_strength),
-        "confidence": round(max([item.confidence for item in active_matches], default=0), 1),
-        "scoreBreakdown": score_breakdown,
-        "thresholdPolicy": threshold_policy_payload,
+        "reviewLevel": decision_state["reviewLevel"],
+        "reviewLevelLabel": decision_state["reviewLevelLabel"],
+        "dataState": decision_state["dataState"],
+        "dataStateLabel": decision_state["dataStateLabel"],
+        "changeState": decision_state["changeState"],
+        "changeStateLabel": decision_state["changeStateLabel"],
+        "conflictState": decision_state["conflictState"],
+        "conflictStateLabel": decision_state["conflictStateLabel"],
+        "decisionState": decision_state,
+        "evidenceState": evidence_state,
         "whyNow": why_now,
         "signalConflicts": signal_conflicts,
         "inferenceTimeline": inference_timeline,
@@ -365,7 +401,6 @@ def matches_from_inference(
     facts: Optional[Dict[str, object]] = None,
     source_name: str = "typedbInferenceBox",
     context_version: str = TYPEDB_RELATION_CONTEXT_VERSION,
-    threshold_policy=None,
 ) -> List[OntologyRuleMatch]:
     trace_by_rule: Dict[str, Dict[str, object]] = {}
     for item in traces or []:
@@ -375,12 +410,12 @@ def matches_from_inference(
         if not rule_id:
             continue
         existing = trace_by_rule.get(rule_id)
-        if existing is None or trace_grounding_score(item) > trace_grounding_score(existing):
+        if existing is None or trace_grounding_key(item) > trace_grounding_key(existing):
             trace_by_rule[rule_id] = item
     matches: List[OntologyRuleMatch] = []
     seen = set()
     primary_relations = [item for item in relations or [] if is_primary_inference_relation(item)]
-    for relation in sorted(primary_relations, key=relation_signal_priority, reverse=True):
+    for relation in sorted(primary_relations, key=semantic_relation_sort_key):
         rule_id = str(relation.get("ruleId") or "").strip()
         if not rule_id:
             continue
@@ -389,8 +424,11 @@ def matches_from_inference(
             continue
         seen.add(key)
         trace = trace_by_rule.get(rule_id, {})
-        score_breakdown = inference_score_breakdown(relation, facts or {}, trace, threshold_policy)
-        score = float(score_breakdown.get("finalStrength") or inference_strength_score(relation))
+        evidence_state = inference_evidence_state(relation, facts or {}, trace)
+        data_state = str(evidence_state.get("dataState") or "partial")
+        stage = decision_stage_by_key(stage_key_for_inference(rule_id, relation))
+        review_level = review_level_for(stage.action_level, data_state)
+        role = evidence_role_from_relation(relation)
         label = str(relation.get("aiInfluenceLabel") or relation.get("targetLabel") or trace.get("label") or rule_id)
         evidence = [
             value
@@ -408,26 +446,30 @@ def matches_from_inference(
             relation_type=str(relation.get("type") or "INFERRED_RELATION"),
             signal_type=inference_signal_type(source_name),
             matched=True,
-            strength_score=score,
-            strength_label=strength_label(score),
-            confidence=round(float(score_breakdown.get("dataConfidence") or 0), 1),
+            review_level=review_level,
+            review_label=REVIEW_LEVEL_LABELS[review_level],
+            data_state=data_state,
+            evidence_role=role,
             evidence=evidence,
-            missing=[],
-            reference_only=bool(score_breakdown.get("judgementBlocked")),
+            missing=list((facts or {}).get("missingData") or []),
+            reference_only=bool(evidence_state.get("judgementBlocked")),
             prompt_hint=inference_prompt_hint(source_name, "relation"),
-            score_breakdown=score_breakdown,
+            evidence_state=evidence_state,
         ))
     if matches:
-        return sorted(matches, key=lambda item: (-item.strength_score, item.rule_id))
+        return sorted(matches, key=lambda item: semantic_relation_sort_key(relation_for_match(item, primary_relations)))
     for trace in traces or []:
         rule_id = str(trace.get("ruleId") or "").strip()
         if not rule_id:
             continue
-        score_policy = (threshold_policy or ontology_threshold_policy_from_context({})).score_breakdown
         trace_blocked = trace.get("evidenceUsableForJudgement") is False
-        score = max(score_policy.trace_floor_score, min(100.0, number(trace.get("confidence")) * 100))
-        if trace_blocked:
-            score = min(score, 35.0)
+        data_state = data_state_from_evidence(
+            usable=not trace_blocked,
+            freshness_status=trace.get("freshnessStatus"),
+            missing=(facts or {}).get("missingData") or [],
+            has_evidence=bool(trace.get("matchedConditions") or trace.get("evidenceRelationIds")),
+        )
+        review_level = "blocked" if trace_blocked else "observe"
         matches.append(OntologyRuleMatch(
             rule_id=rule_id,
             label=str(trace.get("label") or rule_id),
@@ -435,52 +477,53 @@ def matches_from_inference(
             relation_type="HAS_INFERENCE_TRACE",
             signal_type=inference_signal_type(source_name),
             matched=True,
-            strength_score=score,
-            strength_label=strength_label(score),
-            confidence=round(number(trace.get("confidence")) * 100, 1),
+            review_level=review_level,
+            review_label=REVIEW_LEVEL_LABELS[review_level],
+            data_state=data_state,
+            evidence_role="blocking" if trace_blocked else "context",
             evidence=[str(trace.get("label") or rule_id)],
-            missing=[],
+            missing=list((facts or {}).get("missingData") or []),
             reference_only=trace_blocked,
             prompt_hint=inference_prompt_hint(source_name, "trace"),
-            score_breakdown={
-                "ruleReliability": round(max(0.0, min(100.0, number(trace.get("confidence")) * 100)), 1),
-                "riskPressure": 0.0,
-                "supportEvidence": 0.0,
-                "netRiskPressure": 0.0,
-                "dataConfidence": round(max(0.0, min(100.0, number(trace.get("confidence")) * 100)), 1),
-                "actionability": score_policy.trace_actionability_score,
-                "novelty": score_policy.trace_novelty_score,
-                "finalStrength": round(score, 1),
-                "opposingPressurePenalty": 0.0,
-                "thresholdPolicyId": score_policy.policy_id,
-                "thresholdPolicyVersion": score_policy.version,
-                "thresholdPolicySource": score_policy.source,
+            evidence_state={
+                "dataState": data_state,
+                "evidenceRole": "blocking" if trace_blocked else "context",
                 "evidenceUsableForJudgement": not trace_blocked,
                 "judgementBlocked": trace_blocked,
                 "freshnessStatus": str(trace.get("freshnessStatus") or "unknown"),
                 "freshnessGateReason": str(trace.get("freshnessGateReason") or ""),
-                "drivers": ["시간 민감 근거 신선도 미충족" if trace_blocked else "TypeDB trace confidence"],
+                "drivers": ["시간 민감 근거 신선도 미충족" if trace_blocked else "TypeDB에서 조건 성립 확인"],
             },
         ))
-    return sorted(matches, key=lambda item: (-item.strength_score, item.rule_id))
+    return matches
 
 
 def is_primary_inference_relation(relation: Dict[str, object]) -> bool:
     if not isinstance(relation, dict):
         return False
     relation_type = str(relation.get("type") or relation.get("relationType") or "").strip().upper()
-    if not relation_type or relation_type in META_INFERENCE_RELATION_TYPES:
+    if not relation_type or relation_type in META_INFERENCE_RELATION_TYPES or relation_type in SHADOW_INFERENCE_RELATION_TYPES:
         return False
     if relation.get("derivationIndex") not in (None, ""):
         return True
-    if bool(
-        str(relation.get("decisionStage") or relation.get("actionGroup") or "").strip()
-        or number(relation.get("riskImpact"))
-        or number(relation.get("supportImpact"))
-    ):
+    if bool(str(relation.get("decisionStage") or relation.get("actionGroup") or relation.get("polarity") or "").strip()):
         return True
     # Keep previously materialized rule relations readable during rolling upgrades.
     return bool(str(relation.get("ruleId") or "").strip())
+
+
+def is_shadow_inference_relation(relation: Dict[str, object]) -> bool:
+    if not isinstance(relation, dict):
+        return False
+    relation_type = str(relation.get("type") or relation.get("relationType") or "").strip().upper()
+    rule_id = str(relation.get("ruleId") or "").strip()
+    return relation_type in SHADOW_INFERENCE_RELATION_TYPES or rule_id.startswith(SHADOW_INFERENCE_RULE_PREFIXES)
+
+
+def is_shadow_inference_trace(trace: Dict[str, object]) -> bool:
+    if not isinstance(trace, dict):
+        return False
+    return str(trace.get("ruleId") or "").strip().startswith(SHADOW_INFERENCE_RULE_PREFIXES)
 
 
 def inference_causal_path_key(relation: Dict[str, object]) -> str:
@@ -492,16 +535,7 @@ def inference_causal_path_key(relation: Dict[str, object]) -> str:
     ])
 
 
-def relation_signal_priority(relation: Dict[str, object]):
-    return (
-        number(relation.get("stagePriority")),
-        number(relation.get("riskImpact")) + number(relation.get("supportImpact")),
-        number(relation.get("weight")),
-        str(relation.get("type") or ""),
-    )
-
-
-def trace_grounding_score(trace: Dict[str, object]) -> float:
+def trace_grounding_key(trace: Dict[str, object]):
     conditions = [item for item in (trace or {}).get("matchedConditions") or [] if isinstance(item, dict)]
     grounded = sum(
         1
@@ -510,7 +544,7 @@ def trace_grounding_score(trace: Dict[str, object]) -> float:
         or str(item.get("relationId") or "").strip()
         or bool(item.get("absenceSatisfied"))
     )
-    return grounded * 10 + len((trace or {}).get("evidenceRelationIds") or [])
+    return grounded, len((trace or {}).get("evidenceRelationIds") or [])
 
 
 def inference_evidence_domains(
@@ -547,35 +581,6 @@ def inference_evidence_domains(
     return sorted(domains or {"semantic"})
 
 
-def trace_evidence_quality(trace: Dict[str, object]) -> Dict[str, float]:
-    conditions = [item for item in (trace or {}).get("matchedConditions") or [] if isinstance(item, dict)]
-    if not conditions:
-        return {}
-    grounded = [
-        item
-        for item in conditions
-        if item.get("observedValue") not in (None, "")
-        or str(item.get("relationId") or "").strip()
-        or bool(item.get("absenceSatisfied"))
-    ]
-    temporal = [item for item in grounded if bool(item.get("freshnessRequired"))]
-    statuses = [str(item.get("freshnessStatus") or "").strip().lower() for item in temporal]
-    freshness_scores = [
-        100.0 if status == "fresh" else 65.0 if status in {"aging", "delayed"} else 10.0 if status == "stale" else 20.0
-        for status in statuses
-    ]
-    reliability_scores = [
-        number(item.get("sourceReliability"))
-        for item in grounded
-        if number(item.get("sourceReliability")) > 0
-    ]
-    return {
-        "coverage": round(len(grounded) / max(1, len(conditions)) * 100.0, 1),
-        "freshness": round(sum(freshness_scores) / len(freshness_scores), 1) if freshness_scores else 100.0,
-        "sourceReliability": round(sum(reliability_scores) / len(reliability_scores), 1) if reliability_scores else 65.0,
-    }
-
-
 def inference_signal_type(source_name: str) -> str:
     if source_name == "typedbInferenceBox":
         return "typedb_inference"
@@ -585,364 +590,107 @@ def inference_signal_type(source_name: str) -> str:
 def inference_prompt_hint(source_name: str, unit: str) -> str:
     store_label = "TypeDB" if source_name == "typedbInferenceBox" else "그래프 저장소"
     suffix = "trace" if unit == "trace" else "관계"
-    return f"{store_label} RuleBox InferenceBox에서 생성된 {suffix}를 우선 근거로 사용합니다."
+    return f"{store_label}의 추론 결과에서 생성된 {suffix}를 우선 근거로 사용합니다."
 
 
-def _bounded_score(value: object, minimum: float = 0.0, maximum: float = 100.0) -> float:
-    return round(clamp(number(value), minimum, maximum), 1)
-
-
-def _add_driver(drivers: List[str], label: str, value: float, threshold: float = 0.1) -> None:
-    if abs(float(value or 0)) >= threshold and label not in drivers:
-        drivers.append(label)
-
-
-def _impact_pressure(value: float, reliability: float, polarity_active: bool) -> float:
-    if not value and not polarity_active:
-        return 0.0
-    base = number(value) * 4.2
-    if polarity_active:
-        base += reliability * 0.25
-    return base
-
-
-INFERENCE_SCORE_COMPONENT_WEIGHTS = {
-    "ruleReliability": 0.25,
-    "dominantEvidence": 0.42,
-    "actionability": 0.18,
-    "novelty": 0.10,
-    "dataConfidence": 0.05,
-}
-INFERENCE_SCORE_MAX_OPPOSING_PENALTY = 14.0
-INFERENCE_SCORE_OPPOSING_PENALTY_RATE = 0.18
-INFERENCE_SCORE_DIRECTIONAL_BONUS = 4.0
-
-
-def inference_score_breakdown(
+def inference_evidence_state(
     relation: Dict[str, object],
     facts: Dict[str, object],
     trace: Optional[Dict[str, object]] = None,
-    threshold_policy=None,
 ) -> Dict[str, object]:
-    """Explain a TypeDB inference score with data-driven pressure components.
-
-    TypeDB remains the source of the semantic match. This function does not
-    decide whether a rule is true; it interprets a true relation with current
-    ABox fact magnitudes so equal rule weights do not hide different situations.
-    """
     relation = relation or {}
     facts = facts or {}
     trace = trace or {}
-    policy = (threshold_policy or ontology_threshold_policy_from_context({})).score_breakdown
-    polarity = str(relation.get("polarity") or "").strip().lower()
-    relation_type = str(relation.get("type") or "").strip().upper()
-    action_group = str(relation.get("actionGroup") or "").strip()
-    evidence_usable = trace.get("evidenceUsableForJudgement")
-    if evidence_usable is None and "evidenceUsableForJudgement" in relation:
-        evidence_usable = relation.get("evidenceUsableForJudgement")
-    judgement_blocked = evidence_usable is False and action_group.lower() != "dataquality"
-    freshness_gate_reason = str(trace.get("freshnessGateReason") or relation.get("freshnessGateReason") or "")
-    evidence_domains = inference_evidence_domains(relation, trace)
-    domain_set = set(evidence_domains)
-    applied_fact_fields: List[str] = []
-    trace_confidence = number(trace.get("confidence")) * 100
-    relation_weight = number(relation.get("weight")) * 100
-    rule_reliability = _bounded_score(relation_weight or trace_confidence or policy.default_rule_reliability, 0.0, 100.0)
-    risk_impact = number(relation.get("riskImpact"))
-    support_impact = number(relation.get("supportImpact"))
-    risk = _impact_pressure(risk_impact, rule_reliability, polarity in {"risk", "negative"} or "RISK" in relation_type)
-    support = _impact_pressure(support_impact, rule_reliability, polarity in {"support", "positive"} or "SUPPORT" in relation_type)
-    drivers: List[str] = []
-    if risk_impact:
-        _add_driver(drivers, "TypeDB 위험 관계 강도", risk_impact)
-    if support_impact:
-        _add_driver(drivers, "TypeDB 지지 관계 강도", support_impact)
-
-    pnl = number(facts.get("profitLossRate"))
-    if facts.get("isHolding") and "position" in domain_set:
-        applied_fact_fields.append("profitLossRate")
-        if pnl <= policy.holding_loss_pressure_rate:
-            addition = min(36.0, abs(pnl) * 1.15 + max(0.0, abs(pnl) - 8.0) * 0.65)
-            risk += addition
-            _add_driver(drivers, "손실률 확대", addition)
-        elif pnl > 0:
-            addition = min(18.0, pnl * 0.8)
-            support += addition
-            _add_driver(drivers, "수익 구간", addition)
-
-    ma5_distance = number(facts.get("ma5Distance"))
-    ma20_distance = number(facts.get("ma20Distance"))
-    ma60_distance = number(facts.get("ma60Distance"))
-    if "trend" in domain_set:
-        applied_fact_fields.extend(["ma5Distance", "ma20Distance", "ma60Distance"])
-        for key, distance, risk_weight, support_weight, risk_cap, support_cap in [
-            ("5일 평균", ma5_distance, 0.7, 0.45, 7.0, 5.0),
-            ("20일 평균", ma20_distance, 1.0, 0.75, 18.0, 13.0),
-            ("60일 평균", ma60_distance, 1.1, 0.75, 20.0, 14.0),
-        ]:
-            if distance < 0:
-                addition = min(risk_cap, abs(distance) * risk_weight)
-                risk += addition
-                _add_driver(drivers, key + " 아래", addition)
-            elif distance > 0:
-                addition = min(support_cap, distance * support_weight)
-                support += addition
-                _add_driver(drivers, key + " 위", addition)
-
-    price_change = number(facts.get("priceChangeRate"))
-    if "trend" in domain_set and price_change <= -policy.price_change_pressure_pct:
-        applied_fact_fields.append("priceChangeRate")
-        addition = min(12.0, abs(price_change) * 1.5)
-        risk += addition
-        _add_driver(drivers, "당일 가격 약화", addition)
-    elif "trend" in domain_set and price_change >= policy.price_change_pressure_pct:
-        applied_fact_fields.append("priceChangeRate")
-        addition = min(10.0, price_change * 1.2)
-        support += addition
-        _add_driver(drivers, "당일 가격 회복", addition)
-
-    dynamic_risk = number(facts.get("trendDynamicRiskScore"))
-    if "trend" in domain_set and dynamic_risk:
-        applied_fact_fields.append("trendDynamicRiskScore")
-        addition = min(14.0, max(0.0, dynamic_risk - policy.trend_dynamic_risk_baseline) * 0.35)
-        risk += addition
-        _add_driver(drivers, "하락 속도/추세 약화", addition)
-
-    trade_strength = number(facts.get("tradeStrength"))
-    flow_relevant = bool(domain_set & {"flow", "execution"})
-    if flow_relevant and trade_strength >= policy.support_trade_strength:
-        applied_fact_fields.append("tradeStrength")
-        addition = min(8.0, (trade_strength - 100.0) * 0.2)
-        support += addition
-        _add_driver(drivers, "체결강도 우위", addition)
-    elif flow_relevant and 0.0 < trade_strength <= policy.weak_trade_strength:
-        applied_fact_fields.append("tradeStrength")
-        addition = min(8.0, (100.0 - trade_strength) * 0.25)
-        risk += addition
-        _add_driver(drivers, "체결강도 약화", addition)
-
-    bid_ask_imbalance = number(facts.get("bidAskImbalance"))
-    if flow_relevant and bid_ask_imbalance > 0:
-        applied_fact_fields.append("bidAskImbalance")
-        addition = min(8.0, bid_ask_imbalance * 0.12)
-        support += addition
-        _add_driver(drivers, "매수 호가 우위", addition)
-    elif flow_relevant and bid_ask_imbalance < 0:
-        applied_fact_fields.append("bidAskImbalance")
-        addition = min(8.0, abs(bid_ask_imbalance) * 0.12)
-        risk += addition
-        _add_driver(drivers, "매도 호가 우위", addition)
-
-    investor_score = number(facts.get("investorFlowScore"))
-    if "flow" in domain_set and investor_score > 0:
-        applied_fact_fields.append("investorFlowScore")
-        addition = min(14.0, investor_score * 0.14)
-        support += addition
-        _add_driver(drivers, "외국인·기관 수급 지지", addition)
-    elif "flow" in domain_set and investor_score < 0:
-        applied_fact_fields.append("investorFlowScore")
-        addition = min(14.0, abs(investor_score) * 0.14)
-        risk += addition
-        _add_driver(drivers, "외국인·기관 수급 부담", addition)
-
-    news_momentum = number(facts.get("newsMomentumScore"))
-    if "news" in domain_set and news_momentum > 0:
-        applied_fact_fields.append("newsMomentumScore")
-        addition = min(12.0, news_momentum * 0.4)
-        support += addition
-        _add_driver(drivers, "뉴스 근거 지지", addition)
-    elif "news" in domain_set and news_momentum < 0:
-        applied_fact_fields.append("newsMomentumScore")
-        addition = min(12.0, abs(news_momentum) * 0.4)
-        risk += addition
-        _add_driver(drivers, "뉴스 근거 부담", addition)
-
-    position_weight = number(facts.get("positionAccountWeight") or facts.get("positionWeight"))
-    sellable_quantity = number(facts.get("sellableQuantity"))
-    quantity = number(facts.get("quantity"))
-    actionability = 30.0
-    if facts.get("isHolding") and domain_set & {"position", "portfolio", "execution"}:
-        actionability += min(24.0, position_weight * 0.9)
-        if sellable_quantity or quantity:
-            actionability += min(14.0, (sellable_quantity / quantity) * 14.0 if quantity else 8.0)
-        if pnl <= policy.loss_actionability_rate:
-            actionability += min(18.0, abs(pnl - policy.loss_actionability_rate) * 1.1 + 8.0)
-        elif pnl >= policy.profit_actionability_rate:
-            actionability += min(12.0, pnl * 0.5)
-    elif facts.get("isWatchlist") and domain_set & {"position", "trend", "valuation"}:
-        actionability += 10.0
-        if ma5_distance >= 0 and ma20_distance >= 0:
-            actionability += 10.0
-        if number(facts.get("volumeRatio")) >= policy.watchlist_volume_ratio or number(facts.get("timeAdjustedVolumeRatio")) >= policy.watchlist_volume_ratio:
-            actionability += 8.0
-    actionability = _bounded_score(actionability, 0.0, 100.0)
-
-    data_quality = number(facts.get("dataQualityScore")) or 100.0
-    missing_count = len(facts.get("missingData") or []) if isinstance(facts.get("missingData"), list) else 0
-    warning_count = len(facts.get("dataQualityWarnings") or []) if isinstance(facts.get("dataQualityWarnings"), list) else 0
-    conflict_penalty = min(10.0, number(facts.get("newsConflictScore")) * 0.4)
-    evidence_quality = trace_evidence_quality(trace)
-    if evidence_quality:
-        data_confidence = _bounded_score(
-            (trace_confidence or rule_reliability) * 0.30
-            + data_quality * 0.25
-            + evidence_quality["coverage"] * 0.20
-            + evidence_quality["freshness"] * 0.15
-            + evidence_quality["sourceReliability"] * 0.10
-            - missing_count * 2.5
-            - warning_count * 3.0
-            - conflict_penalty,
-            20.0,
-            100.0,
-        )
-    else:
-        data_confidence = _bounded_score(
-            (trace_confidence or rule_reliability) * 0.55
-            + data_quality * 0.45
-            - missing_count * 2.5
-            - warning_count * 3.0
-            - conflict_penalty,
-            20.0,
-            100.0,
-        )
-    if judgement_blocked:
-        data_confidence = min(data_confidence, 35.0)
-        actionability = min(actionability, 20.0)
-        _add_driver(drivers, "시간 민감 근거 신선도 미충족", 1.0)
-
-    novelty = 25.0
-    pnl_delta = number(facts.get("profitLossRateDeltaPct"))
-    if "position" in domain_set:
-        novelty += min(24.0, abs(pnl_delta) * 5.0)
-    if "trend" in domain_set:
-        novelty += min(18.0, abs(price_change) * 2.2)
-    if "news" in domain_set and number(facts.get("directNewsCount")):
-        latest_age = number(facts.get("latestDirectNewsAgeMinutes"))
-        novelty += 14.0 if not latest_age or latest_age <= policy.recent_news_age_minutes else 6.0
-    if relation.get("inferenceTraceId") or trace.get("id"):
-        novelty += 6.0
-    novelty = _bounded_score(novelty, 0.0, 100.0)
-
-    risk = _bounded_score(risk, 0.0, 100.0)
-    support = _bounded_score(support, 0.0, 100.0)
-    net_risk = round(risk - support, 1)
-    dominant = max(risk, support)
-    opposing_penalty = 0.0
-    if risk and support:
-        opposing_penalty = min(
-            INFERENCE_SCORE_MAX_OPPOSING_PENALTY,
-            min(risk, support) * INFERENCE_SCORE_OPPOSING_PENALTY_RATE,
-        )
-    final = (
-        rule_reliability * INFERENCE_SCORE_COMPONENT_WEIGHTS["ruleReliability"]
-        + dominant * INFERENCE_SCORE_COMPONENT_WEIGHTS["dominantEvidence"]
-        + actionability * INFERENCE_SCORE_COMPONENT_WEIGHTS["actionability"]
-        + novelty * INFERENCE_SCORE_COMPONENT_WEIGHTS["novelty"]
-        + data_confidence * INFERENCE_SCORE_COMPONENT_WEIGHTS["dataConfidence"]
-        - opposing_penalty
+    matched_conditions = [item for item in trace.get("matchedConditions") or [] if isinstance(item, dict)]
+    applied_fields = unique_texts([item.get("field") for item in matched_conditions])
+    domains = inference_evidence_domains(relation, trace)
+    freshness = str(trace.get("freshnessStatus") or relation.get("freshnessStatus") or "unknown")
+    usable = trace.get("evidenceUsableForJudgement")
+    if usable is None:
+        usable = relation.get("evidenceUsableForJudgement")
+    if usable is None:
+        usable = True
+    missing = list(facts.get("missingData") or [])
+    data_state = data_state_from_evidence(
+        usable=usable,
+        freshness_status=freshness,
+        missing=missing,
+        has_evidence=bool(matched_conditions or trace.get("evidenceRelationIds") or relation.get("ruleId")),
     )
-    if abs(net_risk) >= policy.net_risk_bonus_threshold:
-        final += INFERENCE_SCORE_DIRECTIONAL_BONUS
-    if data_confidence < policy.data_confidence_penalty_threshold:
-        final -= (policy.data_confidence_penalty_threshold - data_confidence) * 0.18
-    final = _bounded_score(max(policy.minimum_final_strength, final), 0.0, 100.0)
-    if judgement_blocked:
-        final = min(final, 35.0)
+    role = evidence_role_from_relation(relation)
+    drivers = unique_texts([
+        relation.get("aiInfluenceLabel"),
+        relation.get("targetLabel"),
+        trace.get("label"),
+        trace.get("freshnessGateReason") if usable is False else "",
+    ])
     return {
-        "ruleReliability": rule_reliability,
-        "riskPressure": risk,
-        "supportEvidence": support,
-        "netRiskPressure": net_risk,
-        "dataConfidence": data_confidence,
-        "actionability": actionability,
-        "novelty": novelty,
-        "finalStrength": final,
-        "opposingPressurePenalty": round(opposing_penalty, 1),
-        "scoreMinimum": 0.0,
-        "scoreMaximum": 100.0,
-        "componentWeights": dict(INFERENCE_SCORE_COMPONENT_WEIGHTS),
-        "maximumOpposingPressurePenalty": INFERENCE_SCORE_MAX_OPPOSING_PENALTY,
-        "opposingPressurePenaltyRate": INFERENCE_SCORE_OPPOSING_PENALTY_RATE,
-        "directionalDominanceBonus": INFERENCE_SCORE_DIRECTIONAL_BONUS,
-        "directionalDominanceThreshold": policy.net_risk_bonus_threshold,
-        "dataConfidencePenaltyThreshold": policy.data_confidence_penalty_threshold,
-        "thresholdPolicyId": policy.policy_id,
-        "thresholdPolicyVersion": policy.version,
-        "thresholdPolicySource": policy.source,
-        "evidenceDomains": evidence_domains,
-        "appliedFactFields": list(dict.fromkeys(applied_fact_fields)),
-        "evidenceQuality": evidence_quality,
-        "evidenceUsableForJudgement": evidence_usable is not False,
-        "judgementBlocked": judgement_blocked,
-        "freshnessStatus": str(trace.get("freshnessStatus") or relation.get("freshnessStatus") or "unknown"),
-        "freshnessGateReason": freshness_gate_reason,
-        "drivers": drivers[:policy.max_drivers],
+        "dataState": data_state,
+        "dataStateLabel": DATA_STATE_LABELS[data_state],
+        "evidenceRole": role,
+        "evidenceDomains": domains,
+        "appliedFactFields": applied_fields,
+        "evidenceCount": len(matched_conditions) or len(trace.get("evidenceRelationIds") or []) or 1,
+        "evidenceUsableForJudgement": usable is not False,
+        "judgementBlocked": data_state in {"unavailable", "insufficient"},
+        "freshnessStatus": freshness,
+        "freshnessGateReason": str(trace.get("freshnessGateReason") or relation.get("freshnessGateReason") or ""),
+        "drivers": drivers[:6],
     }
 
 
-def aggregate_score_breakdown(matches: List[OntologyRuleMatch], threshold_policy=None) -> Dict[str, object]:
-    policy = (threshold_policy or ontology_threshold_policy_from_context({})).score_breakdown
-    breakdowns = [
-        item.score_breakdown
-        for item in matches or []
-        if isinstance(getattr(item, "score_breakdown", None), dict) and item.score_breakdown
-    ]
-    if not breakdowns:
-        return {}
-    def max_value(key: str) -> float:
-        return round(max([number(item.get(key)) for item in breakdowns], default=0.0), 1)
-
-    risk = max_value("riskPressure")
-    support = max_value("supportEvidence")
-    final = max_value("finalStrength")
-    drivers: List[str] = []
-    for item in sorted(breakdowns, key=lambda row: number(row.get("finalStrength")), reverse=True):
-        for driver in item.get("drivers") or []:
-            text = str(driver or "").strip()
-            if text and text not in drivers:
-                drivers.append(text)
-            if len(drivers) >= policy.max_drivers:
-                break
-        if len(drivers) >= policy.max_drivers:
-            break
+def aggregate_evidence_state(matches: List[OntologyRuleMatch]) -> Dict[str, object]:
+    rows = [item.evidence_state for item in matches or [] if isinstance(item.evidence_state, dict)]
+    if not rows:
+        return {
+            "dataState": "insufficient",
+            "dataStateLabel": DATA_STATE_LABELS["insufficient"],
+            "conflictState": "context-only",
+            "conflictStateLabel": CONFLICT_STATE_LABELS["context-only"],
+            "evidenceRoles": [],
+            "drivers": [],
+        }
+    states = {str(item.get("dataState") or "partial") for item in rows}
+    if states == {"unavailable"}:
+        data_state = "unavailable"
+    elif not (states & {"sufficient", "partial"}):
+        data_state = "insufficient"
+    elif "partial" in states or "unavailable" in states or "insufficient" in states:
+        data_state = "partial"
+    else:
+        data_state = "sufficient"
+    roles = unique_texts([item.get("evidenceRole") for item in rows])
+    conflict_state = conflict_state_from_roles(roles)
+    drivers = unique_texts([
+        driver
+        for item in rows
+        for driver in item.get("drivers") or []
+    ])
     return {
-        "ruleReliability": max_value("ruleReliability"),
-        "riskPressure": risk,
-        "supportEvidence": support,
-        "netRiskPressure": round(risk - support, 1),
-        "dataConfidence": max_value("dataConfidence"),
-        "actionability": max_value("actionability"),
-        "novelty": max_value("novelty"),
-        "finalStrength": final,
-        "opposingPressurePenalty": max_value("opposingPressurePenalty"),
-        "scoreMinimum": 0.0,
-        "scoreMaximum": 100.0,
-        "componentWeights": dict(INFERENCE_SCORE_COMPONENT_WEIGHTS),
-        "maximumOpposingPressurePenalty": INFERENCE_SCORE_MAX_OPPOSING_PENALTY,
-        "opposingPressurePenaltyRate": INFERENCE_SCORE_OPPOSING_PENALTY_RATE,
-        "directionalDominanceBonus": INFERENCE_SCORE_DIRECTIONAL_BONUS,
-        "directionalDominanceThreshold": policy.net_risk_bonus_threshold,
-        "dataConfidencePenaltyThreshold": policy.data_confidence_penalty_threshold,
-        "thresholdPolicyId": policy.policy_id,
-        "thresholdPolicyVersion": policy.version,
-        "thresholdPolicySource": policy.source,
-        "activeRuleCount": len(matches or []),
-        "uniqueRuleCount": len({item.rule_id for item in matches or [] if item.rule_id}),
-        "judgementBlockedCount": sum(1 for item in breakdowns if bool(item.get("judgementBlocked"))),
-        "evidenceUsableForJudgement": any(bool(item.get("evidenceUsableForJudgement")) for item in breakdowns),
-        "freshnessGateReasons": list(dict.fromkeys(
-            str(item.get("freshnessGateReason") or "")
-            for item in breakdowns
-            if str(item.get("freshnessGateReason") or "").strip()
-        ))[:3],
-        "drivers": drivers,
+        "dataState": data_state,
+        "dataStateLabel": DATA_STATE_LABELS[data_state],
+        "conflictState": conflict_state,
+        "conflictStateLabel": CONFLICT_STATE_LABELS[conflict_state],
+        "evidenceRoles": roles,
+        "evidenceDomains": unique_texts([
+            domain
+            for item in rows
+            for domain in item.get("evidenceDomains") or []
+        ]),
+        "appliedFactFields": unique_texts([
+            field
+            for item in rows
+            for field in item.get("appliedFactFields") or []
+        ]),
+        "usableEvidenceCount": sum(1 for item in rows if item.get("evidenceUsableForJudgement") is not False),
+        "blockedEvidenceCount": sum(1 for item in rows if item.get("judgementBlocked")),
+        "drivers": drivers[:8],
     }
 
 
 def why_now_packet(
     facts: Dict[str, object],
     active_matches: List[OntologyRuleMatch],
-    score_breakdown: Dict[str, object],
     decision: Dict[str, object],
     relations: List[Dict[str, object]],
     traces: List[Dict[str, object]],
@@ -951,7 +699,6 @@ def why_now_packet(
 ) -> Dict[str, object]:
     policy = (threshold_policy or ontology_threshold_policy_from_context({})).why_now
     facts = facts or {}
-    score_breakdown = score_breakdown or {}
     decision = decision or {}
     drivers: List[str] = []
     changed_facts: List[Dict[str, object]] = []
@@ -990,11 +737,6 @@ def why_now_packet(
     if abs(price_change) >= policy.price_change_driver_pct:
         add_change("priceChangeRate", "현재 가격 변화", facts.get("priceChangeRate"), delta=price_change, threshold=policy.price_change_driver_pct)
         add_driver("현재 가격 변화율이 " + signed_number_text(price_change) + "%입니다.")
-    novelty = number(score_breakdown.get("novelty"))
-    if novelty >= policy.novelty_driver_score:
-        add_driver("새 변화 점수가 " + str(round(novelty, 1)) + "점으로 의미 있는 변경에 가깝습니다.")
-    elif novelty:
-        add_driver("새 변화 점수는 " + str(round(novelty, 1)) + "점이라 반복 상태인지 함께 봐야 합니다.")
     direct_news_count = number(facts.get("directNewsCount"))
     if direct_news_count:
         add_driver("직접 뉴스/리서치 근거 " + str(int(direct_news_count)) + "건이 추론에 포함됐습니다.")
@@ -1005,21 +747,20 @@ def why_now_packet(
     trace_ids = unique_texts([str(item.get("id") or "") for item in traces or [] if isinstance(item, dict)])
     if relation_rule_ids:
         add_driver("이번 세대에서 성립한 핵심 룰: " + ", ".join(relation_rule_ids[:3]))
+    has_new_evidence = bool(direct_news_count or facts.get("disclosure") or facts.get("sourceAlertEvents"))
+    change_state = change_state_from_facts(facts, has_new_evidence=has_new_evidence)
+    review_level = review_level_for(decision.get("actionLevel"))
     should_escalate = bool(
-        novelty >= policy.novelty_driver_score
+        change_state != "unchanged"
         or abs(pnl_delta) >= policy.escalate_profit_loss_delta_pct
         or abs(price_change) >= policy.escalate_price_change_pct
-        or number(score_breakdown.get("riskPressure")) >= policy.escalate_pressure_score
-        or number(score_breakdown.get("supportEvidence")) >= policy.escalate_pressure_score
-        or number(decision.get("stagePriority")) >= policy.escalate_stage_priority
+        or review_level in {"act", "immediate", "blocked"}
     )
     return {
         "tboxClass": "WhyNow",
-        "thresholdPolicyId": policy.policy_id,
-        "thresholdPolicyVersion": policy.version,
-        "thresholdPolicySource": policy.source,
         "reasoningQuestion": "왜 지금 다시 봐야 하는가",
-        "noveltyScore": round(novelty, 1),
+        "changeState": change_state,
+        "changeStateLabel": CHANGE_STATE_LABELS[change_state],
         "shouldEscalate": should_escalate,
         "changeDrivers": drivers[:policy.max_change_drivers],
         "changedFacts": changed_facts[:policy.max_changed_facts],
@@ -1034,19 +775,15 @@ def why_now_packet(
 def signal_conflict_packet(
     facts: Dict[str, object],
     active_matches: List[OntologyRuleMatch],
-    score_breakdown: Dict[str, object],
     relations: List[Dict[str, object]],
     threshold_policy=None,
 ) -> Dict[str, object]:
     policy = (threshold_policy or ontology_threshold_policy_from_context({})).signal_conflict
     facts = facts or {}
-    score_breakdown = score_breakdown or {}
-    risk = number(score_breakdown.get("riskPressure"))
-    support = number(score_breakdown.get("supportEvidence"))
     applied_fields = {
         str(field)
         for match in active_matches or []
-        for field in (match.score_breakdown or {}).get("appliedFactFields") or []
+        for field in (match.evidence_state or {}).get("appliedFactFields") or []
         if str(field or "").strip()
     }
     risk_drivers: List[str] = []
@@ -1065,13 +802,14 @@ def signal_conflict_packet(
         add(risk_drivers, "60일 평균 아래")
     if "tradeStrength" in applied_fields and number(facts.get("tradeStrength")) and number(facts.get("tradeStrength")) < policy.weak_trade_strength:
         add(risk_drivers, "체결강도 약화")
-    if "investorFlowScore" in applied_fields and number(facts.get("investorFlowScore")) < 0:
+    smart_money = number(facts.get("foreignNetVolume")) + number(facts.get("institutionNetVolume"))
+    if smart_money < 0:
         add(risk_drivers, "외국인·기관 수급 부담")
     if "tradeStrength" in applied_fields and number(facts.get("tradeStrength")) >= policy.support_trade_strength:
         add(support_drivers, "체결강도 우위")
     if "bidAskImbalance" in applied_fields and number(facts.get("bidAskImbalance")) >= policy.support_bid_ask_imbalance:
         add(support_drivers, "매수 호가 우위")
-    if "investorFlowScore" in applied_fields and number(facts.get("investorFlowScore")) > 0:
+    if smart_money > 0:
         add(support_drivers, "외국인·기관 수급 지지")
     if "ma5Distance" in applied_fields and number(facts.get("ma5Distance")) > 0:
         add(support_drivers, "5일 평균 위")
@@ -1080,37 +818,33 @@ def signal_conflict_packet(
     for relation in relations or []:
         if not is_primary_inference_relation(relation):
             continue
-        polarity = str((relation or {}).get("polarity") or "").lower()
+        polarity = evidence_role_from_relation(relation)
         label = str((relation or {}).get("aiInfluenceLabel") or (relation or {}).get("targetLabel") or "").strip()
         if polarity == "risk":
             add(risk_drivers, label)
-        elif polarity == "support":
+        elif polarity in {"support", "counter"}:
             add(support_drivers, label)
 
-    has_conflict = bool(risk >= policy.minimum_risk_pressure and support >= policy.minimum_support_evidence and risk_drivers and support_drivers)
-    if has_conflict and risk > support + policy.dominance_gap:
-        conflict_type = "risk-dominant-with-support"
-        effect = "위험이 우세하지만 지지 근거 때문에 전량 판단보다 강도 조절이 필요합니다."
-    elif has_conflict and support > risk + policy.dominance_gap:
-        conflict_type = "support-dominant-with-risk"
-        effect = "지지 근거가 우세하지만 위험 근거 때문에 확인 조건이 필요합니다."
-    elif has_conflict:
-        conflict_type = "mixed-signal"
+    roles = [item.evidence_role for item in active_matches or []]
+    if risk_drivers:
+        roles.append("risk")
+    if support_drivers:
+        roles.append("support")
+    conflict_state = conflict_state_from_roles(roles)
+    has_conflict = conflict_state == "mixed"
+    if has_conflict:
         effect = "위험과 지지 근거가 동시에 강해 단정적 판단을 낮춰야 합니다."
+    elif conflict_state == "risk-only":
+        effect = "현재 확인된 근거는 위험 관리 쪽입니다."
+    elif conflict_state == "support-only":
+        effect = "현재 확인된 근거는 버티거나 좋아질 가능성을 확인하는 쪽입니다."
     else:
-        conflict_type = "none"
-        effect = "뚜렷한 신호 충돌은 약합니다."
+        effect = "방향을 정하기보다 참고 자료로 확인할 근거입니다."
     return {
         "tboxClass": "SignalConflict",
-        "thresholdPolicyId": policy.policy_id,
-        "thresholdPolicyVersion": policy.version,
-        "thresholdPolicySource": policy.source,
         "hasConflict": has_conflict,
-        "conflictType": conflict_type,
-        "riskPressure": round(risk, 1),
-        "supportEvidence": round(support, 1),
-        "netRiskPressure": round(risk - support, 1),
-        "opposingPressurePenalty": round(number(score_breakdown.get("opposingPressurePenalty")), 1),
+        "conflictState": conflict_state,
+        "conflictStateLabel": CONFLICT_STATE_LABELS[conflict_state],
         "riskDrivers": risk_drivers[:8],
         "supportDrivers": support_drivers[:8],
         "decisionEffect": effect,
@@ -1146,7 +880,7 @@ def inference_timeline_packet(
         "label": "현재 추론 세대",
         "decisionStage": decision.get("decisionStage"),
         "selectedRuleId": decision.get("selectedRuleId"),
-        "score": decision.get("score"),
+        "reviewLevel": decision.get("reviewLevel"),
         "inferenceGenerationId": str(inferencebox.get("inferenceGenerationId") or ""),
         "inferenceGenerationAt": str(inferencebox.get("inferenceGenerationAt") or ""),
     })
@@ -1182,10 +916,6 @@ def unique_texts(values: Iterable[object]) -> List[str]:
     return result
 
 
-def inference_strength_score(relation: Dict[str, object]) -> float:
-    return float(inference_score_breakdown(relation, {}, {}).get("finalStrength") or 0)
-
-
 def decision_from_inference(
     facts: Dict[str, object],
     matches: List[OntologyRuleMatch],
@@ -1193,7 +923,9 @@ def decision_from_inference(
     traces: List[Dict[str, object]],
     source_name: str = "typedbInferenceBox",
 ) -> Dict[str, object]:
-    selected = max(matches, key=lambda item: (stage_priority_for_match(item, relations), item.strength_score, item.confidence))
+    active = [item for item in matches if item.matched and not item.reference_only]
+    candidates = active or [item for item in matches if item.matched]
+    selected = min(candidates, key=lambda item: semantic_relation_sort_key(relation_for_match(item, relations)))
     relation = relation_for_match(selected, relations)
     action_policy = action_policy_from_relation_or_facts(facts, relation)
     stage_key = stage_key_for_inference(selected.rule_id, relation)
@@ -1204,14 +936,12 @@ def decision_from_inference(
             stage_key = "ADD_BUY_BLOCKED"
             action_policy_applied = True
     stage = decision_stage_by_key(stage_key)
-    band = score_band(selected.strength_score)
     trace = next((item for item in traces if str(item.get("ruleId") or "") == selected.rule_id), {})
     label = "신규 진입 보류" if action_policy_applied and action_policy.get("targetRole") == WATCHLIST_TARGET_ROLE else stage.label
+    review_level = review_level_for(stage.action_level, selected.data_state)
     return {
         "label": label,
         "tone": stage.tone,
-        "score": round(float(selected.strength_score or 0), 1),
-        "scoreBreakdown": dict(selected.score_breakdown or {}),
         "basis": source_name,
         "selectedRuleId": selected.rule_id,
         "selectionRole": "rule-derived-baseline-not-final-opinion",
@@ -1226,11 +956,13 @@ def decision_from_inference(
         "decisionStage": stage.stage_key,
         "actionGroup": stage.action_group,
         "actionLevel": stage.action_level,
-        "scoreBand": band.to_dict(),
-        "nextStageAt": stage.next_stage_at,
+        "reviewLevel": review_level,
+        "reviewLevelLabel": REVIEW_LEVEL_LABELS[review_level],
+        "dataState": selected.data_state,
+        "dataStateLabel": DATA_STATE_LABELS.get(selected.data_state, DATA_STATE_LABELS["partial"]),
+        "evidenceRole": selected.evidence_role,
         "sourceRelationType": str(relation.get("type") or ""),
-        "stagePriority": relation_stage_priority(relation),
-        "stagePolicySource": inference_relation_policy_source(source_name) if relation.get("decisionStage") or relation.get("stagePriority") else "actionFallback",
+        "stagePolicySource": inference_relation_policy_source(source_name) if relation.get("decisionStage") else "actionFallback",
         **action_policy,
         "actionPolicyApplied": action_policy_applied,
         "nativeTypeDbReasoned": bool(relation.get("nativeTypeDbReasoned") or trace.get("nativeTypeDbReasoned")),
@@ -1289,10 +1021,6 @@ def stage_key_from_action(action_group: str, action_level: str) -> str:
     return decision_stage_from_action(action_group, action_level)
 
 
-def stage_priority_for_match(match: OntologyRuleMatch, relations: List[Dict[str, object]]) -> int:
-    return relation_stage_priority(relation_for_match(match, relations))
-
-
 def relation_for_match(match: OntologyRuleMatch, relations: List[Dict[str, object]]) -> Dict[str, object]:
     matched = next(
         (
@@ -1349,12 +1077,9 @@ def evidence_subgraph_packet(
             "target": target,
             "type": str(relation.get("type") or "INFERRED_RELATION"),
             "ruleId": str(relation.get("ruleId") or ""),
-            "weight": number(relation.get("weight")),
-            "polarity": str(relation.get("polarity") or ""),
-            "riskImpact": number(relation.get("riskImpact")),
-            "supportImpact": number(relation.get("supportImpact")),
+            "evidenceRole": evidence_role_from_relation(relation),
             "decisionStage": str(relation.get("decisionStage") or ""),
-            "stagePriority": number(relation.get("stagePriority")),
+            "actionLevel": str(relation.get("actionLevel") or ""),
             "targetRole": str(relation.get("targetRole") or ""),
             "actionPolicy": str(relation.get("actionPolicy") or ""),
             "allowedActions": string_list(relation.get("allowedActions")),
@@ -1378,7 +1103,11 @@ def evidence_subgraph_packet(
                 "id": str(item.get("id") or ""),
                 "ruleId": str(item.get("ruleId") or ""),
                 "label": str(item.get("label") or ""),
-                "confidence": number(item.get("confidence")),
+                "dataState": data_state_from_evidence(
+                    usable=item.get("evidenceUsableForJudgement") is not False,
+                    freshness_status=item.get("freshnessStatus"),
+                    has_evidence=bool(item.get("matchedConditions") or item.get("evidenceRelationIds")),
+                ),
                 "matchedConditionIds": list(item.get("matchedConditionIds") or [])[:12],
                 "evidenceRelationIds": list(item.get("evidenceRelationIds") or [])[:12],
             }
@@ -1396,9 +1125,10 @@ def evidence_subgraph_packet(
             "timeAdjustedVolumeRatio": facts.get("timeAdjustedVolumeRatio"),
             "tradeStrength": facts.get("tradeStrength"),
             "bidAskImbalance": facts.get("bidAskImbalance"),
-            "investorFlowScore": facts.get("investorFlowScore"),
+            "foreignNetVolume": facts.get("foreignNetVolume"),
+            "institutionNetVolume": facts.get("institutionNetVolume"),
+            "individualNetVolume": facts.get("individualNetVolume"),
             "dataQuality": facts.get("dataQuality"),
-            "dataQualityScore": facts.get("dataQualityScore"),
             "targetRole": WATCHLIST_TARGET_ROLE if facts.get("isWatchlist") else (HOLDING_TARGET_ROLE if facts.get("isHolding") else ""),
         },
         "missingData": list(facts.get("missingData") or [])[:8],

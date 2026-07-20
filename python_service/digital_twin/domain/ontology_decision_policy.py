@@ -1,8 +1,3 @@
-from typing import Dict
-
-from .market_data import number
-
-
 def decision_stage_from_action(action_group: str, action_level: str) -> str:
     group = str(action_group or "")
     level = str(action_level or "")
@@ -29,42 +24,3 @@ def decision_stage_from_action(action_group: str, action_level: str) -> str:
     if group == "alertReview":
         return "RELATION_WATCH"
     return ""
-
-
-def relation_stage_priority(relation: Dict[str, object]) -> int:
-    explicit = number((relation or {}).get("stagePriority"))
-    if explicit:
-        return int(round(explicit))
-    stage = str((relation or {}).get("decisionStage") or "").strip()
-    if not stage:
-        stage = decision_stage_from_action(
-            str((relation or {}).get("actionGroup") or ""),
-            str((relation or {}).get("actionLevel") or ""),
-        )
-    base = {
-        "LOSS_CUT": 46,
-        "LOSS_REDUCE": 40,
-        "EXECUTION_OK": 18,
-        "LIQUIDITY_ACTION": 38,
-        "LIQUIDITY_REVIEW": 34,
-        "PROFIT_SPLIT": 37,
-        "PROFIT_PARTIAL": 33,
-        "ADD_BUY_BLOCKED": 36,
-        "FACTOR_CROWDING": 32,
-        "REBALANCE_ACTION": 39,
-        "REBALANCE_REVIEW": 34,
-        "DATA_CONFLICT": 34,
-        "RECOVERY_CONFIRM": 30,
-        "NEWS_RISK": 36,
-        "NEWS_CONFIRMATION": 31,
-        "FLOW_DEFENSE": 35,
-        "ADD_BUY_REVIEW": 35,
-        "ADD_BUY_WATCH": 24,
-        "ENTRY_READY": 35,
-        "ENTRY_SPLIT_BUY": 30,
-        "ENTRY_WAIT": 26,
-        "ENTRY_WATCH": 22,
-        "RELATION_WATCH": 24,
-    }.get(stage, 10)
-    impact = max(number((relation or {}).get("riskImpact")), number((relation or {}).get("supportImpact")))
-    return int(round(min(50, base + min(6, impact / 4 if impact else 0))))

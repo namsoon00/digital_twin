@@ -1,17 +1,17 @@
 import re
 import uuid
 from dataclasses import asdict, dataclass, field
-from typing import Dict, List, Tuple
+from typing import Dict, List
 
-from .ontology_relation_reasoning import relation_score_direction_meaning
 from .notification_templates import symbol_display_name, symbol_with_code
+from .ontology_decision_state import CHANGE_STATE_LABELS, DATA_STATE_LABELS, REVIEW_LEVEL_LABELS, review_level_for
 from .portfolio import utc_now_iso
 
 
 MODEL_REVIEW_PROMPT_VERSION = "model-review-v2-ontology"
 MODEL_REVIEW_FOLLOWUP_NOTICE = "이 메시지는 실시간 알림 이후 생성된 후속 분석입니다. 실시간 판단과 겹치는 내용은 줄이고, 나중에 모델을 고칠 때 볼 기록으로 저장됩니다."
 ACTIONABLE_REVIEW_ACTIONS = {"SELL", "TRIM", "AVOID"}
-SCORED_DECISION_LINE = re.compile(r"^(이전|현재)[:\s]+(.+?)\s+\(([-+]?\d+(?:\.\d+)?)점\)")
+DECISION_LINE = re.compile(r"^(이전|현재)[:\s]+(.+)$")
 LEGACY_ACTION_LABELS = {
     "손절 기준 확인": "손절·분할축소 권장",
     "손실 관리 기준 확인": "손실 축소 권장",
@@ -192,15 +192,15 @@ def build_model_review_prompt(job: ModelReviewJob) -> str:
         ])
     return "\n".join([
         "너는 투자 판단 기준을 지속적으로 개선하는 금융 데이터 리뷰어다.",
-        "이번 모델은 단순 점수 계산이 아니라 관계 규칙, 근거, 부족 데이터, 근거끼리의 충돌을 우선한다.",
+        "이번 모델은 관계 규칙, 근거, 부족 데이터, 근거끼리의 충돌을 우선한다.",
         "적극 투자 의견이 있으면 BUY/ADD/HOLD/TRIM/SELL/AVOID 선택 근거, 반대 근거, 무효화 조건을 검토한다.",
         "자동 주문 지시가 아니라 판단 변화의 원인, 데이터 검증, 다음 실험을 분석한다.",
         "한국어로 텔레그램 메시지에 맞게 간결하지만 충분히 분석해라. 영어 또는 어려운 용어는 쉬운 한국어로 풀어 써라.",
         "메시지 제목에는 계정명이나 계정 ID를 넣지 마라. 계정 정보는 전송 라우팅에만 사용한다.",
         "메시지 첫 줄에는 종목코드만 쓰지 말고 반드시 종목명 / 종목코드 형태의 대상을 먼저 써라.",
         "섹션은 반드시 다음 순서로 작성한다: 성립 규칙, 관계/반대 신호, 부족 데이터, 모델 보완, 다음 실험.",
-        "판단 점수가 같은데 판단명이 바뀐 경우에는 점수 악화가 아니라 선택 규칙, 성립 규칙 조합, 라벨 체계 변경 중 무엇 때문인지 분리해서 설명해라.",
-        "최종 점수는 온톨로지 관계 규칙과 관계 근거로만 다뤄라.",
+        "판단명이 바뀐 경우에는 선택 규칙, 성립 규칙 조합, 자료 상태, 라벨 체계 변경 중 무엇 때문인지 분리해서 설명해라.",
+        "확률, 확신도, 관계 점수, 종합 점수는 만들지 말고 확인 단계와 자료 상태로 설명해라.",
         "API 키, 토큰, 계좌 식별정보를 추정하거나 요청하지 마라.",
         "",
         "리뷰 버전: " + MODEL_REVIEW_PROMPT_VERSION,
@@ -214,18 +214,14 @@ def build_model_review_prompt(job: ModelReviewJob) -> str:
     ])
 
 
-def parsed_alert_decisions(lines: List[str]) -> Dict[str, Tuple[str, float]]:
-    parsed: Dict[str, Tuple[str, float]] = {}
+def parsed_alert_decisions(lines: List[str]) -> Dict[str, str]:
+    parsed: Dict[str, str] = {}
     for raw_line in lines or []:
         line = str(raw_line or "").strip()
-        match = SCORED_DECISION_LINE.match(line)
+        match = DECISION_LINE.match(line)
         if not match:
             continue
-        try:
-            score = float(match.group(3))
-        except ValueError:
-            score = 0.0
-        parsed[match.group(1)] = (match.group(2).strip(), score)
+        parsed[match.group(1)] = match.group(2).strip()
     return parsed
 
 
@@ -279,33 +275,57 @@ def decision_change_context(
     previous_decision: Dict[str, object],
     pressure_threshold: float,
 ) -> Dict[str, object]:
+    del pressure_threshold
     current_label = text(current_decision, "decision")
     previous_label = text(previous_decision, "decision")
-    previous_score = value(previous_decision, "exit_pressure")
-    current_score = value(current_decision, "exit_pressure")
     previous_rules = active_rule_labels(previous_decision)
     current_rules = active_rule_labels(current_decision)
+    previous_relation = relation_context_from_decision(previous_decision)
+    current_relation = relation_context_from_decision(current_decision)
+
+    def state_snapshot(relation: Dict[str, object]) -> Dict[str, str]:
+        decision = relation.get("decision") if isinstance(relation.get("decision"), dict) else {}
+        data_state = str(decision.get("dataState") or relation.get("dataState") or "partial")
+        review_level = str(decision.get("reviewLevel") or relation.get("reviewLevel") or "")
+        if not review_level:
+            review_level = review_level_for(decision.get("actionLevel"), data_state)
+        return {
+            "reviewLevel": review_level,
+            "reviewLabel": str(decision.get("reviewLabel") or relation.get("reviewLevelLabel") or REVIEW_LEVEL_LABELS.get(review_level, "변화 관찰")),
+            "dataState": data_state,
+            "dataStateLabel": str(decision.get("dataStateLabel") or relation.get("dataStateLabel") or DATA_STATE_LABELS.get(data_state, "일부 자료만 있음")),
+        }
+
+    previous_state = state_snapshot(previous_relation)
+    current_state = state_snapshot(current_relation)
+    added_rules = [item for item in current_rules if item not in previous_rules]
+    removed_rules = [item for item in previous_rules if item not in current_rules]
+    if current_label and previous_label and current_label != previous_label:
+        change_state = "direction-changed"
+    elif added_rules or removed_rules:
+        change_state = "new-evidence"
+    else:
+        change_state = "unchanged"
     return {
         "previous": {
             "label": previous_label,
-            "score": round(previous_score, 1),
             "selectedRuleId": selected_rule_id(previous_decision),
             "selectedRuleLabel": selected_rule_label(previous_decision),
             "activeRules": previous_rules,
+            **previous_state,
         },
         "current": {
             "label": current_label,
-            "score": round(current_score, 1),
             "selectedRuleId": selected_rule_id(current_decision),
             "selectedRuleLabel": selected_rule_label(current_decision),
             "activeRules": current_rules,
+            **current_state,
         },
-        "scoreDelta": round(current_score - previous_score, 2),
         "labelChanged": bool(current_label and previous_label and current_label != previous_label),
-        "sameScoreLabelChanged": bool(abs(current_score - previous_score) < 0.05 and current_label and previous_label and current_label != previous_label),
-        "pressureThreshold": round(float(pressure_threshold or 0), 1),
-        "addedRules": [item for item in current_rules if item not in previous_rules],
-        "removedRules": [item for item in previous_rules if item not in current_rules],
+        "changeState": change_state,
+        "changeStateLabel": CHANGE_STATE_LABELS[change_state],
+        "addedRules": added_rules,
+        "removedRules": removed_rules,
     }
 
 
@@ -334,12 +354,11 @@ def label_change_phrase(previous_label: str, current_label: str) -> str:
     return previous + "에서 " + current + particle_to(current)
 
 
-def same_score_label_change_reason(change: Dict[str, object]) -> str:
+def label_change_reason(change: Dict[str, object]) -> str:
     previous = change.get("previous") if isinstance(change.get("previous"), dict) else {}
     current = change.get("current") if isinstance(change.get("current"), dict) else {}
     previous_label = str(previous.get("label") or "-")
     current_label = str(current.get("label") or "-")
-    score = float(current.get("score") or previous.get("score") or 0)
     reason = label_transition_reason(previous_label, current_label)
     previous_rule = str(previous.get("selectedRuleLabel") or previous.get("selectedRuleId") or "").strip()
     current_rule = str(current.get("selectedRuleLabel") or current.get("selectedRuleId") or "").strip()
@@ -349,15 +368,9 @@ def same_score_label_change_reason(change: Dict[str, object]) -> str:
     elif current_rule:
         rule_text = " 선택 규칙은 " + current_rule + "로 유지됩니다"
     return (
-        "판단 점수는 " + compact_score(score) + "점으로 같지만 판단명이 "
-        + label_change_phrase(previous_label, current_label) + " 바뀌었습니다. "
-        + reason + "이므로 수치 악화로 해석하지 않습니다." + rule_text
+        "판단명이 " + label_change_phrase(previous_label, current_label) + " 바뀌었습니다. "
+        + reason + "이므로 가격 악화로 단정하지 않습니다." + rule_text
     )
-
-
-def compact_score(score: float) -> str:
-    value = round(float(score or 0), 1)
-    return str(int(value)) if value.is_integer() else str(value)
 
 
 def local_model_review(job: ModelReviewJob) -> str:
@@ -365,23 +378,18 @@ def local_model_review(job: ModelReviewJob) -> str:
     alert_decisions = parsed_alert_decisions(job.alert_lines)
     previous_alert = alert_decisions.get("이전")
     current_alert = alert_decisions.get("현재")
-    same_score_label_changed = bool(
-        previous_alert
-        and current_alert
-        and previous_alert[0] != current_alert[0]
-        and abs(previous_alert[1] - current_alert[1]) < 0.05
-    )
+    label_changed = bool(previous_alert and current_alert and previous_alert != current_alert)
     validation = "실시간 알림의 데이터 검증 라인을 우선 확인하고, 가격/수량/평가액/손익률 원천이 모두 같은 시점인지 대조하세요."
     improvement = "거래량, 이동평균, 평가액 변화를 판단 요소로 추가해 같은 판단 변화가 반복 재현되는지 검증하세요."
-    if same_score_label_changed:
-        validation = "판단 점수가 같으므로 가격 악화나 점수 상승보다 선택 규칙, 성립 규칙 조합, 라벨 체계 변경 여부를 먼저 대조하세요."
-        improvement = "같은 점수에서 라벨만 바뀐 알림은 선택 규칙 ID와 라벨 버전을 함께 저장하고, 라벨 체계 변경만 원인이면 반복 알림 우선도를 낮추세요."
+    if label_changed:
+        validation = "판단명이 달라졌으므로 가격 변화뿐 아니라 선택 규칙, 성립 규칙 조합, 자료 상태, 라벨 체계 변경 여부를 먼저 대조하세요."
+        improvement = "판단명이 바뀐 알림은 선택 규칙 ID와 라벨 버전을 함께 저장하고, 라벨 체계 변경만 원인이면 반복 알림을 막으세요."
     if "손익률 급변" in joined:
         validation = "손익률 급변이 가격 원천 변경, 환율, 분할/배당, 장중 급등락 중 무엇에서 왔는지 먼저 분리하세요."
-        improvement = "손익률 단독 변화와 거래량/이동평균 동반 변화를 분리해 급변 이벤트의 신뢰도를 점수화하세요."
+        improvement = "손익률 단독 변화와 거래량·이동평균이 함께 바뀐 경우를 분리하고, 자료 상태가 충분할 때만 판단에 사용하세요."
     if "현재가/평균매입가 없음" in joined or "현재가/평단 없음" in joined or "평가액 없음" in joined:
         validation = "가격 또는 평가액 필드가 부족하므로 판단 변화의 근거가 약합니다. 원천 API 매핑부터 보완하세요."
-        improvement = "필수 판단 요소가 빠졌을 때는 점수 산출을 보류하거나 신뢰도를 낮추는 게 좋습니다."
+        improvement = "필수 판단 요소가 빠졌을 때는 판단을 보류하고 부족한 자료를 명시하세요."
     ontology_line = "관계 분석 정보가 없어서 알림 라인과 관측 데이터 근거만 사용했습니다."
     if job.review_context:
         opinion = job.review_context.get("opinion") if isinstance(job.review_context, dict) else {}
@@ -401,15 +409,14 @@ def local_model_review(job: ModelReviewJob) -> str:
                 "보유 이유는 " + (thesis or "요약 없음")
                 + ("이며, 지배 섹터는 " + dominant_sector + "입니다." if dominant_sector else "입니다.")
             )
-    if same_score_label_changed and previous_alert and current_alert:
+    if label_changed and previous_alert and current_alert:
         ontology_line = (
-            "점수는 " + compact_score(current_alert[1]) + "점으로 같고, 판단명만 "
-            + label_change_phrase(previous_alert[0], current_alert[0]) + " 바뀌었습니다. "
-            + label_transition_reason(previous_alert[0], current_alert[0]) + "입니다."
+            "판단명이 " + label_change_phrase(previous_alert, current_alert) + " 바뀌었습니다. "
+            + label_transition_reason(previous_alert, current_alert) + "입니다."
         )
     return "\n".join([
         review_subject(job) + " 모델 리뷰",
-        "- 성립 규칙: 실시간 판단 기준이 감지한 관계 규칙 또는 관계 신호 강도 변화가 기준선을 넘었습니다.",
+        "- 성립 규칙: 실시간 판단 기준에서 새 관계가 성립했거나 기존 관계가 해제됐습니다.",
         "- 관계/모순: " + ontology_line,
         "- 데이터 검증: " + validation,
         "- 모델 보완: " + improvement,
@@ -437,10 +444,6 @@ def signed_pct(number: float, suffix: str = "%") -> str:
     return ("+" if rounded > 0 else "") + str(rounded) + suffix
 
 
-def score_change_meaning(delta: float) -> str:
-    return "점수 변화 " + signed_pct(delta, "점") + "은 " + relation_score_direction_meaning(delta) + "."
-
-
 def pct_delta(current: float, previous: float) -> float:
     base = float(previous or 0)
     if not base:
@@ -456,18 +459,13 @@ def decision_change_review_lines(
     pressure_threshold: float,
 ) -> List[str]:
     change = decision_change_context(current_decision, previous_decision, pressure_threshold)
-    pressure_delta = value(current_decision, "exit_pressure") - value(previous_decision, "exit_pressure")
     pnl_delta = value(current_position, "profit_loss_rate") - value(previous_position, "profit_loss_rate")
     market_value_delta = pct_delta(value(current_position, "market_value"), value(previous_position, "market_value"))
     decision_changed = text(current_decision, "decision") != text(previous_decision, "decision")
 
     reasons: List[str] = []
-    if change.get("sameScoreLabelChanged"):
-        reasons.append(same_score_label_change_reason(change))
-    elif decision_changed:
-        reasons.append("판단명이 " + label_change_phrase(text(previous_decision, "decision") or "-", text(current_decision, "decision") or "-") + " 바뀜")
-    if abs(pressure_delta) >= float(pressure_threshold or 0):
-        reasons.append("관계 신호 강도가 " + signed_pct(pressure_delta, "점") + " 변해 기준 " + str(round(float(pressure_threshold or 0), 1)) + "점 이상")
+    if decision_changed:
+        reasons.append(label_change_reason(change))
 
     drivers: List[str] = []
     if abs(pnl_delta) >= 1:
@@ -476,10 +474,12 @@ def decision_change_review_lines(
         drivers.append("평가액 " + signed_pct(market_value_delta))
     if value(current_position, "quantity") != value(previous_position, "quantity"):
         drivers.append("수량 " + str(previous_position.get("quantity", 0)) + " -> " + str(current_position.get("quantity", 0)))
-    if change.get("sameScoreLabelChanged"):
-        previous = change.get("previous") if isinstance(change.get("previous"), dict) else {}
-        current = change.get("current") if isinstance(change.get("current"), dict) else {}
-        drivers.append(label_transition_reason(str(previous.get("label") or ""), str(current.get("label") or "")))
+    previous = change.get("previous") if isinstance(change.get("previous"), dict) else {}
+    current = change.get("current") if isinstance(change.get("current"), dict) else {}
+    if previous.get("reviewLevel") != current.get("reviewLevel"):
+        drivers.append("확인 단계 " + str(previous.get("reviewLabel") or "-") + " → " + str(current.get("reviewLabel") or "-"))
+    if previous.get("dataState") != current.get("dataState"):
+        drivers.append("자료 상태 " + str(previous.get("dataStateLabel") or "-") + " → " + str(current.get("dataStateLabel") or "-"))
     added_rules = change.get("addedRules") if isinstance(change.get("addedRules"), list) else []
     removed_rules = change.get("removedRules") if isinstance(change.get("removedRules"), list) else []
     if added_rules:
@@ -488,11 +488,11 @@ def decision_change_review_lines(
         drivers.append("해제 규칙 " + " · ".join(str(item) for item in removed_rules[:2]))
 
     validation = model_data_validation(current_position, previous_position, current_decision, previous_decision, pnl_delta)
-    improvement = model_improvement_hint(current_position, current_decision, previous_decision, pressure_delta, pnl_delta, pressure_threshold)
+    improvement = model_improvement_hint(current_position, current_decision, previous_decision, pnl_delta)
 
     return [
-        "Codex 답변: " + first_sentence(reasons, "판단 기준에 의미 있는 변화가 감지됨") + ". 주요 변화는 " + first_sentence(drivers, "점수 구성값 변화") + "입니다.",
-        "점수 해석: " + score_change_meaning(pressure_delta),
+        "Codex 답변: " + first_sentence(reasons, "판단 기준에 의미 있는 변화가 감지됨") + ". 주요 변화는 " + first_sentence(drivers, "관계 조합 변화") + "입니다.",
+        "변화 상태: " + str(change.get("changeStateLabel") or CHANGE_STATE_LABELS["unchanged"]),
         "데이터 검증: " + validation,
         "모델 보완: " + improvement,
     ]
@@ -531,18 +531,14 @@ def model_improvement_hint(
     current_position: Dict[str, object],
     current_decision: Dict[str, object],
     previous_decision: Dict[str, object],
-    pressure_delta: float,
     pnl_delta: float,
-    pressure_threshold: float,
 ) -> str:
-    if abs(pressure_delta) < 0.05 and text(current_decision, "decision") != text(previous_decision, "decision"):
-        return "판단 라벨 버전과 선택 규칙 ID를 저장하고, 점수와 선택 규칙이 같고 라벨명만 바뀐 경우 반복 알림을 억제"
-    if abs(pressure_delta) < float(pressure_threshold or 0) and text(current_decision, "decision") != text(previous_decision, "decision"):
-        return "판단 기준값 근처 흔들림을 줄이도록 완충 구간과 최소 유지 시간을 추가"
+    if text(current_decision, "decision") != text(previous_decision, "decision"):
+        return "판단 라벨 버전, 선택 규칙 ID, 자료 상태를 함께 저장하고 실제 관계 변화가 없으면 반복 알림을 억제"
     if abs(pnl_delta) >= 5:
         return "거래량과 이동평균으로 손익률 급변이 추세인지 일시 변동인지 검증"
     if value(current_position, "current_price") <= 0:
-        return "현재가 원천을 연결해 평가액 기반 점수의 신뢰도를 먼저 보강"
+        return "현재가 원천을 연결한 뒤에만 투자 판단을 다시 생성"
     if not text(current_position, "sector"):
-        return "업종 매핑을 보강해 집중도 기반 매도/손절 압력 점수의 잘못된 알림을 줄이기"
+        return "업종 매핑을 보강해 집중도 관계의 잘못된 알림을 줄이기"
     return "거래량, 이동평균, 평가액 변화를 판단 요소로 추가해 판단 변화의 재현성을 검증"

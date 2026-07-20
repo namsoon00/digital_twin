@@ -133,7 +133,6 @@ def _append_driver(
     direction: str,
     label: str,
     summary: object,
-    importance: float,
     data_keys: List[str],
 ) -> None:
     text = str(summary or "").strip()
@@ -143,12 +142,18 @@ def _append_driver(
     if key in seen:
         return
     seen.add(key)
+    evidence_role = {
+        "risk": "risk",
+        "support": "support",
+        "counter": "counter",
+        "neutral": "context",
+    }.get(direction, "context")
     rows.append({
         "category": category,
         "direction": direction,
+        "evidenceRole": evidence_role,
         "label": label,
         "summary": text,
-        "importance": round(max(0.0, min(100.0, _float_value(importance))), 1),
         "dataKeys": [str(item) for item in data_keys or [] if str(item or "").strip()],
         "source": "ABox facts + relation rules",
     })
@@ -206,7 +211,6 @@ def decision_drivers_from_relation_context(
             "neutral",
             "종목 성격",
             summary,
-            58,
             [
                 "instrumentProfile",
                 "instrumentArchetypes",
@@ -225,7 +229,6 @@ def decision_drivers_from_relation_context(
             "risk",
             "손익 위치",
             "보유 수익률이 " + _signed_pct(pnl) + "라 손실 관리 기준을 먼저 봐야 합니다.",
-            62 + min(30, abs(pnl) * 1.8),
             ["profitLossRate", "averagePrice", "currentPrice"],
         )
     elif facts.get("isHolding") and pnl > 0:
@@ -236,7 +239,6 @@ def decision_drivers_from_relation_context(
             "support" if action_group not in {"profitTake", "rebalance"} else "counter",
             "손익 위치",
             "보유 수익률이 " + _signed_pct(pnl) + "라 손실 구간은 아니며 수익 보호 기준을 함께 봅니다.",
-            55 + min(24, pnl * 1.2),
             ["profitLossRate", "averagePrice", "currentPrice"],
         )
 
@@ -251,7 +253,6 @@ def decision_drivers_from_relation_context(
             "support" if ma5_distance >= 0 else "risk",
             "5일 가격 위치",
             "현재가가 5일 평균보다 " + ("높아" if ma5_distance >= 0 else "낮아") + " 아주 짧은 가격 흐름은 " + ("살아 있습니다." if ma5_distance >= 0 else "약합니다."),
-            48 + min(22, abs(ma5_distance) * 3.0),
             ["currentPrice", "ma5", "ma5Distance"],
         )
     if facts.get("ma20") or facts.get("ma60"):
@@ -285,7 +286,6 @@ def decision_drivers_from_relation_context(
             direction,
             "20일·60일 가격 위치",
             summary,
-            58 + min(32, abs(ma20_distance) * 1.5 + abs(ma60_distance)),
             ["currentPrice", "ma20", "ma20Distance", "ma60", "ma60Distance"],
         )
 
@@ -314,7 +314,6 @@ def decision_drivers_from_relation_context(
             direction,
             "거래량 확인",
             summary,
-            52 + min(28, abs(volume_ratio - 1) * 12),
             ["volumeRatio", "rawVolumeRatio", "timeAdjustedVolumeRatio", "expectedVolumeRatioNow", "volumePaceElapsedPct", "volume"],
         )
     if trade_strength:
@@ -325,7 +324,6 @@ def decision_drivers_from_relation_context(
             "support" if trade_strength >= 100 else "risk",
             "체결강도",
             "체결강도 " + _plain_number(trade_strength) + "로 당일 체결 흐름은 " + ("매수 쪽이 우세합니다." if trade_strength >= 100 else "매수 우위가 약합니다."),
-            55 + min(25, abs(trade_strength - 100) * 0.6),
             ["tradeStrength"],
         )
     if bid_ask_imbalance:
@@ -336,7 +334,6 @@ def decision_drivers_from_relation_context(
             "support" if bid_ask_imbalance > 0 else "risk",
             "호가 잔량",
             "호가 잔량은 " + ("매수" if bid_ask_imbalance > 0 else "매도") + " 쪽이 " + _plain_number(abs(bid_ask_imbalance)) + "% 많습니다.",
-            50 + min(25, abs(bid_ask_imbalance) * 0.4),
             ["bidAskImbalance", "orderbookBidVolume", "orderbookAskVolume"],
         )
 
@@ -349,8 +346,7 @@ def decision_drivers_from_relation_context(
             "support" if smart_money > 0 else "risk",
             "외국인·기관 흐름",
             "외국인과 기관 합산 흐름은 " + ("순매수 " if smart_money > 0 else "순매도 ") + _plain_number(abs(smart_money)) + "주입니다.",
-            58 + min(24, abs(_float_value(facts.get("investorFlowScore"))) * 0.25),
-            ["foreignNetVolume", "institutionNetVolume", "smartMoneyNetVolume", "investorFlowScore"],
+            ["foreignNetVolume", "institutionNetVolume", "smartMoneyNetVolume", "smartMoneyDirection"],
         )
     add_buy_stage = str(facts.get("addBuyEligibilityStage") or "")
     if facts.get("isHolding") and _float_value(facts.get("profitLossRate")) < 0 and add_buy_stage not in {"", "NONE"}:
@@ -364,7 +360,6 @@ def decision_drivers_from_relation_context(
             + " · 회복 확인 "
             + _plain_number(facts.get("lossRecoverySignalCount"))
             + "개",
-            54 + min(28, _float_value(facts.get("lossRecoverySignalCount")) * 5),
             ["addBuyEligibilityStage", "lossRecoverySignalCount", "jointSmartMoneyInflow", "investmentStrategyProfile"],
         )
 
@@ -378,7 +373,6 @@ def decision_drivers_from_relation_context(
             "risk" if abs(btc24) >= 3 or abs(btc7) >= 4 else "neutral",
             "비트코인 민감도",
             "비트코인 민감 종목입니다. BTC 24시간 " + _signed_pct(btc24) + ", 7일 " + _signed_pct(btc7) + "와 종목 가격 반응을 같이 확인해야 합니다.",
-            56 + min(28, abs(btc24) * 2.0 + abs(btc7)),
             ["isBtcSensitive", "btcChange24h", "btcChange7d", "btcPrice"],
         )
 
@@ -390,7 +384,6 @@ def decision_drivers_from_relation_context(
             "risk" if _float_value(facts.get("macroDgs10")) >= 4 else "neutral",
             "금리 환경",
             "미국 10년 금리 " + _plain_number(facts.get("macroDgs10")) + "% 환경이라 성장주·테마주에는 부담 여부를 봅니다.",
-            52 + min(25, max(0.0, _float_value(facts.get("macroDgs10")) - 3.5) * 10),
             ["macroDgs10", "macroDgs2", "macroYieldSpread10y2y", "rateRegime"],
         )
     if _float_value(facts.get("usdKrwRate") or facts.get("fxRateToKrw")) and _float_value(facts.get("fxExposureRatio")):
@@ -403,7 +396,6 @@ def decision_drivers_from_relation_context(
             "risk" if fx_exposure >= fx_review_threshold else "neutral",
             "환율 영향",
             "외화 노출 " + _plain_number(fx_exposure) + "%입니다. 계정 성향의 환율 점검 기준 " + _plain_number(fx_review_threshold) + "%와 비교해 원화 평가금액과 현지 주가를 나눠서 봐야 합니다.",
-            50 + min(20, max(0.0, fx_exposure - fx_review_threshold) * 0.6 + fx_exposure * 0.15),
             ["usdKrwRate", "fxRateToKrw", "fxExposureRatio", "strategyFxExposureReviewPct", "fxRegime"],
         )
 
@@ -411,11 +403,11 @@ def decision_drivers_from_relation_context(
     support_title = _first_text(list(facts.get("directSupportNewsTitles") or []))
     top_title = _first_text(list(facts.get("topNewsTitles") or []))
     if _float_value(facts.get("directRiskNewsCount")):
-        _append_driver(rows, seen, "research", "risk", "위험 뉴스", "직접 위험 뉴스가 확인됐습니다: " + (risk_title or top_title), 72, ["directRiskNewsCount", "directRiskNewsTitles", "researchEvidence"])
+        _append_driver(rows, seen, "research", "risk", "위험 뉴스", "직접 위험 뉴스가 확인됐습니다: " + (risk_title or top_title), ["directRiskNewsCount", "directRiskNewsTitles", "researchEvidence"])
     if _float_value(facts.get("directSupportNewsCount")):
-        _append_driver(rows, seen, "research", "support", "우호 뉴스", "직접 우호 뉴스가 확인됐습니다: " + (support_title or top_title), 68, ["directSupportNewsCount", "directSupportNewsTitles", "researchEvidence"])
+        _append_driver(rows, seen, "research", "support", "우호 뉴스", "직접 우호 뉴스가 확인됐습니다: " + (support_title or top_title), ["directSupportNewsCount", "directSupportNewsTitles", "researchEvidence"])
     if _float_value(facts.get("directNewsCount")) and not (_float_value(facts.get("directRiskNewsCount")) or _float_value(facts.get("directSupportNewsCount"))):
-        _append_driver(rows, seen, "research", "neutral", "새 직접 뉴스", "새 직접 뉴스가 확인됐습니다. 방향이 명확하지 않아 원문과 가격 반응을 함께 확인해야 합니다: " + top_title, 62, ["directNewsCount", "topNewsTitles", "researchEvidence"])
+        _append_driver(rows, seen, "research", "neutral", "새 직접 뉴스", "새 직접 뉴스가 확인됐습니다. 방향이 명확하지 않아 원문과 가격 반응을 함께 확인해야 합니다: " + top_title, ["directNewsCount", "topNewsTitles", "researchEvidence"])
     if facts.get("dartDisclosure"):
         disclosure = facts.get("dartDisclosure") if isinstance(facts.get("dartDisclosure"), dict) else {}
         _append_driver(
@@ -425,7 +417,6 @@ def decision_drivers_from_relation_context(
             "risk",
             "공시 이벤트",
             "새 공시가 있어 원문 조건과 가격 반응을 함께 확인해야 합니다: " + str(disclosure.get("reportName") or "공시"),
-            64,
             ["dartDisclosure"],
         )
 
@@ -449,7 +440,6 @@ def decision_drivers_from_relation_context(
             "counter",
             "부족 데이터",
             "데이터 확인 한계가 있어 판단 강도를 낮춥니다: " + " / ".join(missing_notes[:4]),
-            66,
             ["missingData", "dataAvailability"],
         )
 
@@ -462,7 +452,6 @@ def decision_drivers_from_relation_context(
             "counter",
             "데이터 품질 주의",
             "실시간 확정값이 아닌 근거가 있어 판단 강도를 낮춥니다: " + ", ".join(quality_warning_labels[:4]),
-            58,
             ["dataQualityWarnings", "dataAvailability"],
         )
 
@@ -475,11 +464,30 @@ def decision_drivers_from_relation_context(
             "neutral",
             "성립 규칙",
             "관계 규칙은 " + " · ".join(active_labels[:3]) + "를 핵심 근거로 봅니다.",
-            60,
             ["activeRules", "matchedRules"],
         )
 
-    return sorted(rows, key=lambda item: float(item.get("importance") or 0), reverse=True)[:10]
+    direction_order = {"risk": 0, "counter": 1, "support": 2, "neutral": 3}
+    category_order = {
+        "position": 0,
+        "trend": 1,
+        "investorFlow": 2,
+        "liquidity": 3,
+        "research": 4,
+        "macro": 5,
+        "addBuy": 6,
+        "instrumentProfile": 7,
+        "dataQuality": 8,
+        "dataQualityWarning": 9,
+        "relationRule": 10,
+    }
+    return sorted(
+        rows,
+        key=lambda item: (
+            direction_order.get(str(item.get("direction") or "neutral"), 4),
+            category_order.get(str(item.get("category") or ""), 99),
+        ),
+    )[:10]
 
 
 def execution_plan_from_relation_context(
@@ -816,7 +824,8 @@ def execution_plan_from_relation_context(
             "positionAccountWeight": round(float(facts.get("positionAccountWeight") or 0), 2),
             "positionToTradingValuePct": round(float(facts.get("positionToTradingValuePct") or 0), 2),
             "exitDaysAtTenPctADV": round(float(facts.get("exitDaysAtTenPctADV") or 0), 2),
-            "liquidityRiskScore": round(float(facts.get("liquidityRiskScore") or 0), 1),
+            "liquidityState": facts.get("liquidityState"),
+            "liquidityReviewLevel": facts.get("liquidityReviewLevel"),
             "priceDeltaFromPreviousPct": round(float(facts.get("priceDeltaFromPreviousPct") or 0), 2),
             "profitLossRateDeltaPct": round(float(facts.get("profitLossRateDeltaPct") or 0), 2),
             "researchEvidenceCount": facts.get("researchEvidenceCount"),
@@ -826,8 +835,13 @@ def execution_plan_from_relation_context(
             "peerNewsCount": facts.get("peerNewsCount"),
             "sectorNewsCount": facts.get("sectorNewsCount"),
             "marketNewsCount": facts.get("marketNewsCount"),
-            "averageNewsRelevanceScore": facts.get("averageNewsRelevanceScore"),
-            "averageNewsSourceReliability": facts.get("averageNewsSourceReliability"),
+            "newsRelevanceState": facts.get("newsRelevanceState"),
+            "newsSourceTrustState": facts.get("newsSourceTrustState"),
+            "newsMaterialityState": facts.get("newsMaterialityState"),
+            "newsEvidenceState": facts.get("newsEvidenceState"),
+            "newsConflictState": facts.get("newsConflictState"),
+            "newsReviewLevel": facts.get("newsReviewLevel"),
+            "newsDataState": facts.get("newsDataState"),
             "topNewsTitles": list(facts.get("topNewsTitles") or [])[:5],
             "macroDgs10": facts.get("macroDgs10"),
             "macroDgs2": facts.get("macroDgs2"),

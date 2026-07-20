@@ -129,7 +129,9 @@ class RuleChangeCandidateProposalService:
                 for item in (metadata.get("sourceAlertEvents") or [])
                 if isinstance(item, dict)
             ][:12],
-            "relationRuleScore": metadata.get("relationRuleScore"),
+            "reviewLevel": metadata.get("reviewLevel"),
+            "dataState": metadata.get("dataState"),
+            "changeState": metadata.get("changeState"),
             "insightType": metadata.get("insightType"),
         }
 

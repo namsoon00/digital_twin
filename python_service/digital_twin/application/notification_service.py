@@ -6,7 +6,6 @@ from zoneinfo import ZoneInfo
 from ..domain.disclosure_analysis import local_disclosure_analysis
 from ..domain.data_freshness import evaluate_notification_data_freshness, sanitize_notification_context_for_freshness
 from ..domain.investment_brain import decision_episode_from_context
-from ..domain.market_data import number
 from ..domain.message_types import INVESTMENT_INSIGHT, OPERATOR_REASONING_REPORT, is_operations_delivery_message_type
 from ..domain.monitoring import RealtimeMonitor
 from ..domain.notification_ai import enrich_notification_ai_context
@@ -14,6 +13,11 @@ from ..domain.notification_ai_gate_contracts import ai_gate_enabled_for_message_
 from ..domain.notification_ai_gate_validation import local_validated_ai_response
 from ..domain.notifications import NotificationJob, notification_debug_number
 from ..domain.notification_reasoning_report import build_notification_reasoning_report, render_operator_reasoning_report
+from ..domain.ontology_decision_state import (
+    DATA_STATE_LABELS,
+    REVIEW_LEVEL_LABELS,
+    VALIDATION_STATE_LABELS,
+)
 from .notification_ai_gate_audit import context_with_validated_ai_response
 from .notification_disclosure_rendering import context_with_disclosure_analysis
 
@@ -135,15 +139,6 @@ class NotificationHoldingSnapshotEnricher:
         return bool(text and len(text) <= 12 and all(ch.isalnum() or ch in {".", "-"} for ch in text))
 
 
-def notification_ontology_quality_min_score(settings: Dict[str, object] = None) -> float:
-    settings = settings or {}
-    raw = settings.get("notificationOntologyQualityMinScore") or settings.get("ontologyNotificationQualityMinScore") or 55
-    try:
-        return float(raw)
-    except (TypeError, ValueError):
-        return 55.0
-
-
 def _dict_value(value: object) -> Dict[str, object]:
     return value if isinstance(value, dict) else {}
 
@@ -164,67 +159,79 @@ def ontology_quality_candidates(context: Dict[str, object]) -> List[Dict[str, ob
     ]
 
 
-def ontology_quality_score(candidate: Dict[str, object]):
-    candidate = _dict_value(candidate)
-    for key in ["score", "qualityScore", "overallScore", "overall_score"]:
-        if key in candidate:
-            if candidate.get(key) in (None, ""):
-                return None
-            return number(candidate.get(key))
-    scores = _dict_value(candidate.get("scores"))
-    if "overall" in scores:
-        if scores.get("overall") in (None, ""):
-            return None
-        return number(scores.get("overall"))
-    payload_scores = _dict_value(_dict_value(candidate.get("payload")).get("scores"))
-    if "overall" in payload_scores:
-        if payload_scores.get("overall") in (None, ""):
-            return None
-        return number(payload_scores.get("overall"))
-    return None
-
-
 def ontology_quality_gate_context(context: Dict[str, object], settings: Dict[str, object] = None) -> Dict[str, object]:
-    min_score = notification_ontology_quality_min_score(settings)
+    del settings
     for candidate in ontology_quality_candidates(context):
-        score = ontology_quality_score(candidate)
-        if score is None:
+        if not candidate:
             continue
-        status = "passed" if score >= min_score else "limited"
-        cap = 100.0 if status == "passed" else max(35.0, min(75.0, score + 20.0))
+        raw_status = str(
+            candidate.get("status")
+            or candidate.get("projectionStatus")
+            or candidate.get("state")
+            or ""
+        ).strip().lower()
+        errors = list(candidate.get("errors") or candidate.get("violations") or [])
+        warnings = list(candidate.get("warnings") or candidate.get("qualityWarnings") or [])
+        if raw_status in {"error", "failed", "unavailable", "missing", "blocked"}:
+            validation_state = "blocked"
+            data_state = "unavailable"
+            reason = "온톨로지 연결 또는 추론 결과를 사용할 수 없어 투자 판단을 보류합니다."
+        elif errors or warnings or raw_status in {"limited", "partial", "degraded", "stale"}:
+            validation_state = "conditional"
+            data_state = "partial"
+            reason = "온톨로지 자료에 누락이나 경고가 있어 AI 의견을 조건부로 사용합니다."
+        else:
+            validation_state = "ready"
+            data_state = "sufficient"
+            reason = "온톨로지 연결과 필수 근거가 확인됐습니다."
         return {
             "enabled": True,
-            "status": status,
-            "score": round(score, 2),
-            "minScore": round(min_score, 2),
-            "confidenceCap": round(cap, 1),
+            "status": validation_state,
+            "validationState": validation_state,
+            "validationLabel": VALIDATION_STATE_LABELS[validation_state],
+            "dataState": data_state,
+            "dataStateLabel": DATA_STATE_LABELS[data_state],
             "qualitySampleId": str(candidate.get("qualitySampleId") or candidate.get("sampleId") or candidate.get("sample_id") or ""),
             "source": str(candidate.get("source") or "ontologyQuality"),
-            "reason": "온톨로지 품질 점수가 알림 기준 이상입니다." if status == "passed" else "온톨로지 품질 점수가 알림 기준보다 낮아 확신도와 판단 강도를 제한합니다.",
+            "reason": reason,
+            "errors": errors[:5],
+            "warnings": warnings[:5],
         }
     return {
         "enabled": True,
         "status": "unknown",
-        "minScore": round(min_score, 2),
-        "confidenceCap": 100.0,
-        "reason": "알림 컨텍스트에 온톨로지 품질 점수가 없어 별도 제한을 적용하지 않았습니다.",
+        "validationState": "conditional",
+        "validationLabel": VALIDATION_STATE_LABELS["conditional"],
+        "dataState": "partial",
+        "dataStateLabel": DATA_STATE_LABELS["partial"],
+        "reason": "온톨로지 품질 상태가 없어 AI 의견을 조건부로 사용합니다.",
     }
 
 
 def apply_ontology_quality_gate_to_response(response, gate: Dict[str, object]) -> None:
-    if not response or not isinstance(gate, dict) or gate.get("status") != "limited":
+    if not response or not isinstance(gate, dict):
         return
-    cap = number(gate.get("confidenceCap")) or 75.0
-    reason = str(gate.get("reason") or "온톨로지 품질 점수가 낮아 확신도를 제한했습니다.")
-    if reason not in response.confidence_cap_reasons:
-        response.confidence_cap_reasons.append(reason)
+    gate_state = str(gate.get("validationState") or "conditional")
+    if gate_state == "ready":
+        return
+    reason = str(gate.get("reason") or "온톨로지 자료 상태 때문에 AI 의견을 조건부로 사용합니다.")
+    if reason not in response.validation_reasons:
+        response.validation_reasons.append(reason)
     if reason not in response.validation_warnings:
         response.validation_warnings.append(reason)
-    if number(response.confidence_cap) > cap:
-        response.confidence_cap = cap
-    if number(response.confidence) > cap:
-        response.validation_warnings.append("온톨로지 품질 게이트로 AI 확신도 " + str(round(number(response.confidence), 1)) + "%를 " + str(round(cap, 1)) + "%로 낮췄습니다.")
-        response.confidence = cap
+    if gate_state == "blocked":
+        response.validation_state = "blocked"
+        response.validation_label = VALIDATION_STATE_LABELS["blocked"]
+        response.data_state = "unavailable"
+        response.data_state_label = DATA_STATE_LABELS["unavailable"]
+        response.review_level = "blocked"
+        response.review_label = REVIEW_LEVEL_LABELS["blocked"]
+    elif response.validation_state == "ready":
+        response.validation_state = "conditional"
+        response.validation_label = VALIDATION_STATE_LABELS["conditional"]
+        if response.data_state == "sufficient":
+            response.data_state = "partial"
+            response.data_state_label = DATA_STATE_LABELS["partial"]
 
 
 class NotificationAIValidatedGateEnricher:
@@ -417,7 +424,7 @@ class NotificationQueueRunner:
         if decision.should_send:
             return True
         reason = stage + " 데이터 신선도 기준 미통과: " + str(decision.reason or decision.status)
-        job.context["honeySuppressionReason"] = "stale_data_at_dispatch"
+        job.context["deliverySuppressionReason"] = "stale_data_at_dispatch"
         if hasattr(self.queue, "mark_suppressed"):
             self.queue.mark_suppressed(job, reason)
         else:

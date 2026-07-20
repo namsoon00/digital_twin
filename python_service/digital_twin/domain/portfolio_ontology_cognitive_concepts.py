@@ -29,7 +29,9 @@ def add_investment_brain_concepts(
             "tboxClass": "DecisionEpisode",
             "symbol": symbol,
             "action": episode.get("action"),
-            "confidence": episode.get("confidence"),
+            "reviewLevel": episode.get("reviewLevel"),
+            "dataState": episode.get("dataState"),
+            "validationState": episode.get("validationState"),
             "selectedHypothesisId": episode.get("selectedHypothesisId"),
             "inferenceGenerationId": episode.get("inferenceGenerationId"),
             "decidedAt": episode.get("decidedAt"),
@@ -92,7 +94,7 @@ def add_investment_brain_concepts(
                 "status": task.get("status"),
                 "sourceTypes": task.get("sourceTypes") or [],
                 "maxAgeMinutes": task.get("maxAgeMinutes"),
-                "decisionImpact": task.get("decisionImpact"),
+                "decisionRelevance": task.get("decisionRelevance"),
                 "executionMode": task.get("executionMode"),
                 "resultEvidenceIds": task.get("resultEvidenceIds") or [],
             })
@@ -119,7 +121,8 @@ def add_investment_brain_concepts(
                 "tboxClass": "CompetingHypothesis",
                 "stance": hypothesis.get("stance"),
                 "horizon": hypothesis.get("horizon"),
-                "priorConfidence": hypothesis.get("priorConfidence"),
+                "evidenceState": hypothesis.get("evidenceState"),
+                "evidenceStateLabel": hypothesis.get("evidenceStateLabel"),
                 "status": hypothesis.get("status"),
                 "templateId": hypothesis.get("templateId"),
                 "templateLabel": hypothesis.get("templateLabel"),
@@ -329,8 +332,18 @@ def add_hypothesis_calibration_concepts(
         inconclusive_count = statuses.count("inconclusive")
         decisive_count = corroborated_count + contradicted_count
         independent_count = len(row["episodeOutcomes"])
-        smoothed_rate = (corroborated_count + 1) / (decisive_count + 2)
-        adjustment = max(-10.0, min(10.0, (smoothed_rate - 0.5) * 20.0)) if decisive_count >= 3 else 0.0
+        if decisive_count < 3:
+            outcome_state = "insufficient-history"
+            review_recommendation = "continue-observation"
+        elif corroborated_count > contradicted_count:
+            outcome_state = "more-corroborated"
+            review_recommendation = "eligible-for-human-review"
+        elif contradicted_count > corroborated_count:
+            outcome_state = "more-contradicted"
+            review_recommendation = "review-for-revision"
+        else:
+            outcome_state = "mixed"
+            review_recommendation = "continue-observation"
         calibration_id = add_entity(graph, "hypothesis-calibration", template_id, str(row["templateLabel"]) + " 결과 보정", {
             "tboxClass": "HypothesisCalibration",
             "templateId": template_id,
@@ -339,9 +352,9 @@ def add_hypothesis_calibration_concepts(
             "corroboratedCount": corroborated_count,
             "contradictedCount": contradicted_count,
             "inconclusiveCount": inconclusive_count,
-            "smoothedCorroborationRate": round(smoothed_rate, 4),
-            "suggestedPriorAdjustmentPoints": round(adjustment, 2),
-            "calibrationStatus": "usable" if decisive_count >= 3 else "insufficient-sample",
+            "outcomeState": outcome_state,
+            "reviewRecommendation": review_recommendation,
+            "calibrationStatus": "usable" if decisive_count >= 3 else "insufficient-history",
             "minimumDecisiveOutcomes": 3,
             "automaticDeployment": False,
             "source": "investment-brain-feedback",
@@ -409,14 +422,18 @@ def add_verified_claim_concepts(
             "tboxClass": "VerifiedClaim",
             "verificationStatus": claim.get("verificationStatus"),
             "entityResolutionStatus": claim.get("entityResolutionStatus"),
-            "confidence": claim.get("confidence"),
+            "sourceTrustState": claim.get("sourceTrustState"),
+            "dataState": claim.get("dataState"),
+            "validationState": claim.get("validationState"),
             "evidenceId": evidence_key,
         })
         assessment_id = add_entity(graph, "evidence-assessment", claim_key, "근거 품질 검증", {
             "tboxClass": "EvidenceAssessment",
             "verificationStatus": claim.get("verificationStatus"),
             "entityResolutionStatus": claim.get("entityResolutionStatus"),
-            "confidence": claim.get("confidence"),
+            "sourceTrustState": claim.get("sourceTrustState"),
+            "dataState": claim.get("dataState"),
+            "validationState": claim.get("validationState"),
             "reasons": claim.get("reasons") or [],
         })
         source_id = add_entity(graph, "research-source", str(claim.get("source") or "unknown"), str(claim.get("source") or "출처 미상"), {

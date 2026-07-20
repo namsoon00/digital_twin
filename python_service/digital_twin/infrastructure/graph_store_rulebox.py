@@ -4,7 +4,7 @@ from typing import Dict, Iterable, List
 
 from ..domain.ontology_contracts import PortfolioOntology
 from ..domain.investment_ubiquitous_language import add_investment_language_governance_concepts
-from ..domain.ontology_decision_policy import decision_stage_from_action, relation_stage_priority
+from ..domain.ontology_decision_policy import decision_stage_from_action
 from ..domain.ontology_rulebox_catalog import default_graph_inference_rules
 from ..domain.ontology_rulebox_contracts import GRAPH_REASONER_VERSION, GraphInferenceRule
 from ..domain.ontology_rulebox_governance import (
@@ -254,8 +254,10 @@ def condition_payload_from_row(row: Dict[str, object]) -> Dict[str, object]:
                 target_filters[filter_key] = values
         if row.get("targetMaterialityPassed") is not None:
             target_filters["materialityPassed"] = bool(row.get("targetMaterialityPassed"))
+        materiality_states = row.get("targetMaterialityStates") if isinstance(row.get("targetMaterialityStates"), list) else []
+        if materiality_states:
+            target_filters["materialityState"] = materiality_states
         for row_key, filter_key in [
-            ("targetMinMaterialityScore", "minMaterialityScore"),
             ("targetMinValue", "minValue"),
             ("targetMaxValue", "maxValue"),
         ]:
@@ -276,6 +278,9 @@ def condition_payload_from_row(row: Dict[str, object]) -> Dict[str, object]:
             relation_filters["field"] = fields
         if signal_groups:
             relation_filters["signalGroup"] = signal_groups
+        evidence_roles = row.get("relationEvidenceRoles") if isinstance(row.get("relationEvidenceRoles"), list) else []
+        if evidence_roles:
+            relation_filters["evidenceRole"] = evidence_roles
         if row.get("relationMaterialityPassed") is not None:
             relation_filters["materialityPassed"] = bool(row.get("relationMaterialityPassed"))
         for row_key, filter_key in [
@@ -297,7 +302,6 @@ def condition_payload_from_row(row: Dict[str, object]) -> Dict[str, object]:
         "target_kind": str(condition.get("target_kind") or row.get("targetKind") or ""),
         "target_property_filters": target_filters,
         "relation_property_filters": relation_filters,
-        "min_weight": float(condition.get("min_weight") or row.get("minWeight") or 0),
     }
 
 def derivation_payload_from_row(row: Dict[str, object]) -> Dict[str, object]:
@@ -311,15 +315,12 @@ def derivation_payload_from_row(row: Dict[str, object]) -> Dict[str, object]:
         "tbox_class": str(row.get("derivationTboxClass") or derivation.get("tbox_class") or row.get("tboxClass") or ""),
         "tbox_classes": list_of_strings(row.get("derivationTboxClasses") or derivation.get("tbox_classes") or row.get("tboxClasses") or []),
         "polarity": str(row.get("polarity") or derivation.get("polarity") or "context"),
-        "risk_impact": float(row.get("riskImpact") or derivation.get("risk_impact") or 0),
-        "support_impact": float(row.get("supportImpact") or derivation.get("support_impact") or 0),
-        "weight": float(row.get("weight") or derivation.get("weight") or 0.72),
+        "evidence_role": str(row.get("evidenceRole") or derivation.get("evidence_role") or derivation.get("evidenceRole") or derivation.get("polarity") or "context"),
         "belief_label": str(row.get("beliefLabel") or derivation.get("belief_label") or ""),
         "ai_influence_label": str(row.get("aiInfluenceLabel") or derivation.get("ai_influence_label") or ""),
         "action_group": str(row.get("actionGroup") or derivation.get("action_group") or ""),
         "action_level": str(row.get("actionLevel") or derivation.get("action_level") or ""),
         "decision_stage": str(row.get("decisionStage") or row.get("derivationDecisionStage") or derivation.get("decision_stage") or derivation.get("decisionStage") or ""),
-        "stage_priority": float(row.get("stagePriority") or row.get("derivationStagePriority") or derivation.get("stage_priority") or derivation.get("stagePriority") or 0),
         "target_role": str(row.get("targetRole") or row.get("derivationTargetRole") or derivation.get("target_role") or derivation.get("targetRole") or ""),
         "action_policy": str(row.get("actionPolicy") or row.get("derivationActionPolicy") or derivation.get("action_policy") or derivation.get("actionPolicy") or ""),
         "allowed_actions": list_of_strings(row.get("allowedActions") or row.get("derivationAllowedActions") or derivation.get("allowed_actions") or derivation.get("allowedActions")),
@@ -327,14 +328,6 @@ def derivation_payload_from_row(row: Dict[str, object]) -> Dict[str, object]:
     }
     if not payload["decision_stage"]:
         payload["decision_stage"] = decision_stage_from_action(payload["action_group"], payload["action_level"])
-    if not payload["stage_priority"]:
-        payload["stage_priority"] = float(relation_stage_priority({
-            "decisionStage": payload["decision_stage"],
-            "actionGroup": payload["action_group"],
-            "actionLevel": payload["action_level"],
-            "riskImpact": payload["risk_impact"],
-            "supportImpact": payload["support_impact"],
-        }))
     return payload
 
 def json_object(value: object) -> Dict[str, object]:

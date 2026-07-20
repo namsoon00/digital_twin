@@ -1,9 +1,7 @@
 import re
 from typing import Dict, Iterable, List, Tuple
 
-from .alert_formatting import compact_number
 from .data_freshness import aggregate_freshness
-from .market_data import number
 from .message_types import (
     EXTERNAL_CRYPTO_MOVE,
     EXTERNAL_DATA_CONNECTION,
@@ -18,11 +16,18 @@ from .message_types import (
     WORK_HANDOFF,
 )
 from .notification_ai_context import is_graph_backed_relation_context
+from .ontology_decision_state import (
+    CHANGE_STATE_LABELS,
+    CONFLICT_STATE_LABELS,
+    DATA_STATE_LABELS,
+    REVIEW_LEVEL_LABELS,
+    conflict_state_from_roles,
+)
 from .portfolio import AccountSnapshot, AlertEvent
 
 
 INSIGHT_RULE = INVESTMENT_INSIGHT
-VOLATILE_SCORE_SUFFIX = re.compile(r":-?\d+(?:\.\d+)?$")
+VOLATILE_VALUE_SUFFIX = re.compile(r":-?\d+(?:\.\d+)?$")
 
 SYSTEM_ALERT_TYPES = {
     MONITOR_CONNECTION,
@@ -58,28 +63,11 @@ INSIGHT_TYPE_LABELS = {
     "relationshipChange": "관계 변화",
 }
 
-SCORE_KEYS = (
-    "graphSignalScore",
-    "graphSignalStrength",
-    "relationRuleScore",
-    "ontologyPressure",
-    "ontology_pressure",
-    "holdingDecisionScore",
-    "watchlistSignalScore",
-    "profitLossRate",
-)
-
-SEVERITY_SCORE = {"ALERT": 82.0, "WATCH": 62.0, "INFO": 35.0}
 SOURCE_METADATA_KEYS = {
     "market",
     "provider",
-    "graphSignalScore",
-    "graphSignalStrength",
-    "graphSignalConfidence",
-    "watchlistSignalScore",
     "watchlistOntologySignalType",
     "watchlistActiveRelationRules",
-    "holdingDecisionScore",
     "profitLossRate",
     "disclosureCount",
     "latestTradingDay",
@@ -146,44 +134,63 @@ def signal_type_label(rule: str) -> str:
     return MESSAGE_TYPE_LABELS.get(rule, str(rule or "신호"))
 
 
-def event_score(event: AlertEvent) -> float:
-    metadata = event.metadata or {}
+REVIEW_LEVEL_ORDER = ("normal", "observe", "check", "act", "immediate", "blocked")
+DATA_STATE_ORDER = ("sufficient", "partial", "insufficient", "unavailable")
+CHANGE_STATE_ORDER = ("unchanged", "new-condition", "new-evidence", "improving", "worsening", "direction-changed")
+
+
+def event_decision_state(event: AlertEvent) -> Dict[str, str]:
     relation_context = event_relation_context(event)
-    if relation_context:
-        decision = relation_context.get("decision") if isinstance(relation_context.get("decision"), dict) else {}
-        score_breakdown = {}
-        for candidate in [
-            decision.get("scoreBreakdown") if isinstance(decision, dict) else {},
-            relation_context.get("scoreBreakdown"),
-        ]:
-            if isinstance(candidate, dict) and candidate:
-                score_breakdown = candidate
-                break
-        graph_scores = [
-            number(score_breakdown.get("finalStrength")),
-            number(decision.get("score")),
-            number(relation_context.get("signalStrength")),
-            number(metadata.get("relationRuleScore")),
-            number(metadata.get("watchlistSignalScore")),
-            number(metadata.get("holdingDecisionScore")),
+    decision = relation_context.get("decision") if isinstance(relation_context.get("decision"), dict) else {}
+    state = relation_context.get("decisionState") if isinstance(relation_context.get("decisionState"), dict) else {}
+    severity = str(event.severity or "").upper()
+    review_level = str(state.get("reviewLevel") or decision.get("reviewLevel") or "").strip().lower()
+    if review_level not in REVIEW_LEVEL_ORDER:
+        review_level = "immediate" if severity == "ALERT" else "check" if severity == "WATCH" else "observe"
+    data_state = str(state.get("dataState") or decision.get("dataState") or "partial").strip().lower()
+    if data_state not in DATA_STATE_ORDER:
+        data_state = "partial"
+    change_state = str(state.get("changeState") or relation_context.get("changeState") or "unchanged").strip().lower()
+    if change_state not in CHANGE_STATE_ORDER:
+        change_state = "unchanged"
+    conflict_state = str(state.get("conflictState") or "").strip().lower()
+    if conflict_state not in CONFLICT_STATE_LABELS:
+        roles = [
+            str(item.get("evidenceRole") or item.get("evidence_role") or "context")
+            for item in relation_context.get("activeRules") or relation_context.get("matchedRules") or []
+            if isinstance(item, dict)
         ]
-        graph_scores = [score for score in graph_scores if score]
-        if graph_scores:
-            return max(0.0, min(100.0, max(graph_scores)))
-    nested_opinion = metadata.get("ontologyOpinion") if isinstance(metadata.get("ontologyOpinion"), dict) else {}
-    candidates: List[float] = []
-    for key in SCORE_KEYS:
-        value = metadata.get(key)
-        if value in (None, "") and isinstance(nested_opinion, dict):
-            value = nested_opinion.get(key)
-        if value in (None, ""):
-            continue
-        parsed = abs(number(value))
-        if parsed:
-            candidates.append(parsed)
-    if candidates:
-        return max(0.0, min(100.0, max(candidates)))
-    return SEVERITY_SCORE.get(str(event.severity or "").upper(), 40.0)
+        conflict_state = conflict_state_from_roles(roles)
+    return {
+        "reviewLevel": review_level,
+        "dataState": data_state,
+        "changeState": change_state,
+        "conflictState": conflict_state,
+    }
+
+
+def merged_decision_state(events: Iterable[AlertEvent]) -> Dict[str, str]:
+    states = [event_decision_state(event) for event in events or []]
+    if not states:
+        return event_decision_state(AlertEvent("", "", "INFO", "", "", "", []))
+    review_level = max((item["reviewLevel"] for item in states), key=REVIEW_LEVEL_ORDER.index)
+    data_state = max((item["dataState"] for item in states), key=DATA_STATE_ORDER.index)
+    change_state = max((item["changeState"] for item in states), key=CHANGE_STATE_ORDER.index)
+    conflict_values = {item["conflictState"] for item in states}
+    if "mixed" in conflict_values or {"risk-only", "support-only"}.issubset(conflict_values):
+        conflict_state = "mixed"
+    elif "risk-only" in conflict_values:
+        conflict_state = "risk-only"
+    elif "support-only" in conflict_values:
+        conflict_state = "support-only"
+    else:
+        conflict_state = "context-only"
+    return {
+        "reviewLevel": review_level,
+        "dataState": data_state,
+        "changeState": change_state,
+        "conflictState": conflict_state,
+    }
 
 
 def event_subject(event: AlertEvent) -> str:
@@ -285,7 +292,7 @@ def highest_severity(events: List[AlertEvent]) -> str:
 
 
 def stable_source_event_key(value: object) -> str:
-    return VOLATILE_SCORE_SUFFIX.sub("", str(value or "").strip())
+    return VOLATILE_VALUE_SUFFIX.sub("", str(value or "").strip())
 
 
 def relation_rule_ids(events: Iterable[AlertEvent]) -> List[str]:
@@ -375,18 +382,26 @@ def insight_semantic_components(
     source_types: List[str],
     events: List[AlertEvent],
 ) -> Dict[str, List[str]]:
+    state = merged_decision_state(events)
     return {
         "subject": [str(subject or "").strip().upper() or "portfolio"],
         "dispatchType": [str(dispatch_type or "").strip()],
         "sourceSignalTypes": sorted(set(str(item or "").strip() for item in source_types or [] if str(item or "").strip())),
         "relationRuleIds": sorted(set(relation_rule_ids(events))),
         "materialSourceEventKeys": sorted(set(material_relation_event_keys(events))),
+        "reviewLevel": [state["reviewLevel"]],
+        "dataState": [state["dataState"]],
+        "changeState": [state["changeState"]],
+        "conflictState": [state["conflictState"]],
     }
 
 
 def insight_semantic_signature(components: Dict[str, List[str]]) -> str:
     parts = []
-    for key in ["subject", "dispatchType", "sourceSignalTypes", "relationRuleIds", "materialSourceEventKeys"]:
+    for key in [
+        "subject", "dispatchType", "sourceSignalTypes", "relationRuleIds",
+        "materialSourceEventKeys", "reviewLevel", "dataState", "changeState", "conflictState",
+    ]:
         values = [str(item or "").strip() for item in components.get(key) or [] if str(item or "").strip()]
         parts.append(key + "=" + "+".join(values))
     return "|".join(parts)
@@ -436,13 +451,13 @@ def promoted_reference_lines(events: List[AlertEvent]) -> List[str]:
     ]
 
 
-def insight_thesis(insight_type: str, subject_name: str, source_labels: List[str], score: float) -> str:
+def insight_thesis(insight_type: str, subject_name: str, source_labels: List[str], review_level: str) -> str:
     sources = ", ".join(source_labels[:4]) if source_labels else "관계 신호"
-    score_text = compact_number(round(score, 1))
+    review_text = REVIEW_LEVEL_LABELS.get(review_level, REVIEW_LEVEL_LABELS["check"])
     if insight_type == "riskIncrease":
-        return subject_name + "에서 확인할 위험 신호가 늘었습니다. 바로 매도하라는 뜻은 아니고, 보유 이유와 가격 반응을 먼저 다시 보라는 알림입니다. 관계 강도는 " + score_text + "점입니다."
+        return subject_name + "에서 확인할 위험 조건이 늘었습니다. 바로 매도하라는 뜻은 아니고, 보유 이유와 가격 반응을 먼저 다시 보라는 " + review_text + " 알림입니다."
     if insight_type == "riskManagement":
-        return subject_name + "은 " + sources + " 때문에 보유 이유를 다시 확인해야 합니다. 관계 강도 " + score_text + "점은 확인 필요 강도이지, 가격 하락 확률이나 매도 확정 점수가 아닙니다."
+        return subject_name + "은 " + sources + " 때문에 보유 이유를 다시 확인해야 합니다. 현재 단계는 " + review_text + "이며 가격 하락 확률이나 매도 확정을 뜻하지 않습니다."
     if insight_type == "opportunityDetected":
         return subject_name + "에서 " + sources + "가 매수 후보 쪽으로 모였습니다. 아직 실행보다 확인 조건을 먼저 봐야 합니다."
     if insight_type == "portfolioShift":
@@ -526,46 +541,41 @@ def build_investment_insight_events(snapshot: AccountSnapshot, signal_events: It
             continue
         source_types = unique_preserve(event.rule for event in events)
         source_labels = unique_preserve(signal_type_label(rule) for rule in source_types)
-        scores = [event_score(event) for event in events]
-        score = max(scores) if scores else 0.0
-        confidence = max(55.0, min(95.0, (sum(scores) / len(scores) if scores else score) * 0.72 + min(len(source_types), 5) * 5))
-        novelty_score = max(25.0, min(100.0, len(source_types) * 18.0 + min(len(events), 6) * 6.0))
+        decision_state = merged_decision_state(events)
         insight_type = infer_insight_type(events)
         policy_group = holding_position_policy_group(source_types)
         policy_dispatch_type = dispatch_insight_type(insight_type, source_types)
         insight_label = INSIGHT_TYPE_LABELS.get(insight_type, insight_type)
         subject_name = subject_display_name(snapshot, subject, events)
-        thesis = insight_thesis(insight_type, subject_name, source_labels, score)
+        thesis = insight_thesis(insight_type, subject_name, source_labels, decision_state["reviewLevel"])
         next_check = next_check_for_insight(insight_type, source_types)
         reference_lines = promoted_reference_lines(events)
         source_lines = unique_preserve(compact_source_line(event) for event in events)[:7]
         promoted_context = promoted_ontology_context(events)
-        promoted_breakdown = {}
-        relation_context = promoted_context.get("ontologyRelationContext")
-        if isinstance(relation_context, dict):
-            promoted_breakdown = relation_context.get("scoreBreakdown") if isinstance(relation_context.get("scoreBreakdown"), dict) else {}
         active_opinion = promoted_active_opinion(promoted_context)
         active_label = str(active_opinion.get("actionLabel") or active_opinion.get("action") or "").strip()
-        active_conviction = active_opinion.get("conviction")
+        active_review_label = str(active_opinion.get("reviewLevelLabel") or "").strip()
         active_thesis = str(active_opinion.get("thesis") or "").strip()
         active_lines = []
         if active_label:
             active_lines.append(
                 "적극 의견: "
                 + active_label
-                + (" · 확신 " + compact_number(float(active_conviction or 0)) + "%" if active_conviction not in (None, "") else "")
+                + (" · " + active_review_label if active_review_label else "")
             )
         if active_thesis:
             active_lines.append("의견 근거: " + active_thesis)
         source_key = "|".join(sorted(source_types))
         policy_source_key = dispatch_source_key(source_key, source_types)
-        score_bucket = str(int(round(score / 5.0) * 5))
         insight_id = ":".join([snapshot.account_id, "ontology-insight", subject, insight_type, source_key])
         semantic_components = insight_semantic_components(subject, policy_dispatch_type, source_types, events)
         semantic_signature = insight_semantic_signature(semantic_components)
         criteria = [
             "설정: 온톨로지 관계 그래프에서 의미 있는 투자 인사이트가 생성될 때",
-            "감지: " + ", ".join(source_labels) + " · 관계 강도 " + compact_number(round(score, 1)) + "점 · 신뢰도 " + compact_number(round(confidence, 1)) + "%",
+            "감지: " + ", ".join(source_labels)
+            + " · 확인 단계 " + REVIEW_LEVEL_LABELS.get(decision_state["reviewLevel"], decision_state["reviewLevel"])
+            + " · 자료 상태 " + DATA_STATE_LABELS.get(decision_state["dataState"], decision_state["dataState"])
+            + " · 변화 " + CHANGE_STATE_LABELS.get(decision_state["changeState"], decision_state["changeState"]),
         ]
         metadata = {
             "ontologyInsight": {
@@ -578,13 +588,16 @@ def build_investment_insight_events(snapshot: AccountSnapshot, signal_events: It
                 "insightLabel": insight_label,
                 "subject": subject,
                 "subjectName": subject_name,
-                "score": round(score, 1),
-                "confidence": round(confidence, 1),
-                "noveltyScore": round(novelty_score, 1),
-                "scoreBreakdown": dict(promoted_breakdown or {}),
+                "reviewLevel": decision_state["reviewLevel"],
+                "reviewLevelLabel": REVIEW_LEVEL_LABELS.get(decision_state["reviewLevel"], decision_state["reviewLevel"]),
+                "dataState": decision_state["dataState"],
+                "dataStateLabel": DATA_STATE_LABELS.get(decision_state["dataState"], decision_state["dataState"]),
+                "changeState": decision_state["changeState"],
+                "changeStateLabel": CHANGE_STATE_LABELS.get(decision_state["changeState"], decision_state["changeState"]),
+                "conflictState": decision_state["conflictState"],
+                "conflictStateLabel": CONFLICT_STATE_LABELS.get(decision_state["conflictState"], decision_state["conflictState"]),
                 "severity": highest_severity(events),
                 "sourceSignalTypes": source_types,
-                "scoreBucket": score_bucket,
                 "semanticSignature": semantic_signature,
                 "semanticComponents": semantic_components,
                 "sourceEventKeys": [stable_source_event_key(event.key) for event in events],

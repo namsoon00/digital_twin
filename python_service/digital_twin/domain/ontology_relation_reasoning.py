@@ -23,7 +23,6 @@ from .ontology_relation_contracts import (
     OntologyPromptTemplate,
     OntologyRuleMatch,
     RelationRuleDefinition,
-    ScoreBandDefinition,
 )
 from .ontology_relation_facts import (
     _bp_text,
@@ -39,17 +38,12 @@ from .ontology_relation_catalog import (
     DECISION_LABEL_ALIASES,
     DECISION_STAGE_DEFINITIONS,
     DEFAULT_RELATION_RULES,
-    SCORE_BANDS,
 )
 from .portfolio import PortfolioSummary, Position
 from .ontology_relation_decisions import (
     decision_action_group_for_label,
     decision_stage_by_key,
-    relation_score_direction_meaning,
-    relation_score_meaning,
     resolve_decision_stage,
-    score_band,
-    strength_label,
 )
 from .ontology_relation_execution_plan import execution_plan_from_relation_context
 from .ontology_relation_prompt_context import build_ai_prompt_context
@@ -70,10 +64,13 @@ def relation_rule_context_summary_lines(context: Dict[str, object]) -> List[str]
     if not isinstance(context, dict) or not context:
         return []
     lines: List[str] = []
-    strength = context.get("signalStrength")
-    strength_label_value = str(context.get("signalStrengthLabel") or "").strip()
-    if strength not in (None, ""):
-        lines.append("관계 신호 " + strength_label_value + " (" + ("%.1f" % float(strength)) + "점)")
+    state = context.get("decisionState") if isinstance(context.get("decisionState"), dict) else {}
+    review_label = str(state.get("reviewLevelLabel") or context.get("reviewLevelLabel") or "").strip()
+    data_label = str(state.get("dataStateLabel") or context.get("dataStateLabel") or "").strip()
+    if review_label:
+        lines.append("확인 단계 " + review_label)
+    if data_label:
+        lines.append("자료 상태 " + data_label)
     fact_rows: List[Dict[str, object]] = []
     for candidate in [
         context.get("facts"),

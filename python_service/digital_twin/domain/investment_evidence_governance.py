@@ -5,6 +5,7 @@ from typing import Dict, Iterable, List, Tuple
 from .data_freshness import parse_datetime
 from .investment_brain import stable_id, utc_now_iso
 from .investment_research import NewsCollectionTarget, ResearchEvidence, target_aliases
+from . import news_analysis as news_domain
 
 
 PRIMARY_SOURCE_MARKERS = (
@@ -33,7 +34,9 @@ class EvidenceClaim:
     observed_at: str
     verification_status: str
     entity_resolution_status: str
-    confidence: float
+    source_trust_state: str
+    data_state: str
+    validation_state: str
     reasons: List[str] = field(default_factory=list)
 
     def to_dict(self) -> Dict[str, object]:
@@ -83,7 +86,11 @@ class ResearchRun:
                 observed_at=str(item.get("observedAt") or item.get("observed_at") or ""),
                 verification_status=str(item.get("verificationStatus") or item.get("verification_status") or ""),
                 entity_resolution_status=str(item.get("entityResolutionStatus") or item.get("entity_resolution_status") or ""),
-                confidence=float(item.get("confidence") or 0),
+                source_trust_state=normalized_source_trust_state(
+                    item.get("sourceTrustState") or item.get("source_trust_state") or item.get("confidence")
+                ),
+                data_state=normalized_data_state(item.get("dataState") or item.get("data_state")),
+                validation_state=normalized_validation_state(item.get("validationState") or item.get("validation_state")),
                 reasons=list(item.get("reasons") or []),
             )
 
@@ -113,14 +120,34 @@ def camel_key(value: str) -> str:
     return head + "".join(item[:1].upper() + item[1:] for item in tail)
 
 
-def normalized_score(value: object) -> float:
-    try:
-        parsed = float(value)
-    except (TypeError, ValueError):
-        return 0.0
-    if 0 < parsed <= 1:
-        parsed *= 100
-    return max(0.0, min(100.0, parsed))
+SOURCE_TRUST_ORDER = tuple(news_domain.NEWS_SOURCE_TRUST_STATE_ORDER)
+DATA_STATES = {"sufficient", "partial", "insufficient", "unavailable"}
+VALIDATION_STATES = {"ready", "conditional", "blocked"}
+
+
+def normalized_source_trust_state(value: object, fallback: str = "standard") -> str:
+    text = str(value or "").strip().lower()
+    if text in SOURCE_TRUST_ORDER:
+        return text
+    # Legacy persisted rows may still carry a numeric reliability.  The value
+    # is converted once at the boundary and is never kept in the claim.
+    return news_domain.news_source_trust_state(value) if value not in (None, "") else fallback
+
+
+def normalized_data_state(value: object, fallback: str = "partial") -> str:
+    text = str(value or "").strip().lower()
+    return text if text in DATA_STATES else fallback
+
+
+def normalized_validation_state(value: object, fallback: str = "conditional") -> str:
+    text = str(value or "").strip().lower()
+    return text if text in VALIDATION_STATES else fallback
+
+
+def source_trust_meets_policy(actual: object, required: object) -> bool:
+    return SOURCE_TRUST_ORDER.index(normalized_source_trust_state(actual)) >= SOURCE_TRUST_ORDER.index(
+        normalized_source_trust_state(required)
+    )
 
 
 def evidence_age_minutes(item: ResearchEvidence, now=None):
@@ -169,8 +196,11 @@ def verification_for_evidence(
     item: ResearchEvidence,
     target: NewsCollectionTarget,
     max_age_minutes: int,
-    minimum_source_reliability: float,
+    minimum_source_trust_state: str = "standard",
+    **legacy_policy: object,
 ) -> Tuple[EvidenceClaim, bool]:
+    if "minimum_source_reliability" in legacy_policy:
+        minimum_source_trust_state = normalized_source_trust_state(legacy_policy["minimum_source_reliability"])
     payload = item.raw_payload if isinstance(item.raw_payload, dict) else {}
     resolution, reasons = entity_resolution(item, target)
     age = evidence_age_minutes(item)
@@ -178,12 +208,19 @@ def verification_for_evidence(
         reasons.append("reference-time-missing")
     elif age > max(1, int(max_age_minutes or 1)):
         reasons.append("evidence-stale")
-    reliability = normalized_score(payload.get("sourceReliability") or item.confidence)
+    states = item.state_payload()
+    source_trust_state = normalized_source_trust_state(states.get("sourceTrustState"))
+    data_state = normalized_data_state(states.get("dataState"))
+    validation_state = normalized_validation_state(states.get("validationState"))
     quality_gate = payload.get("qualityGate") if isinstance(payload.get("qualityGate"), dict) else {}
     if quality_gate and quality_gate.get("passed") is False:
         reasons.append("source-quality-gate-failed")
-    if reliability < normalized_score(minimum_source_reliability):
-        reasons.append("source-reliability-below-policy")
+    if not source_trust_meets_policy(source_trust_state, minimum_source_trust_state):
+        reasons.append("source-trust-below-policy")
+    if data_state in {"insufficient", "unavailable"}:
+        reasons.append("evidence-data-insufficient")
+    if validation_state == "blocked":
+        reasons.append("evidence-validation-blocked")
     if not str(item.source or "").strip():
         reasons.append("source-missing")
     if not str(item.title or "").strip():
@@ -207,7 +244,9 @@ def verification_for_evidence(
         observed_at=str(item.observed_at or ""),
         verification_status=status,
         entity_resolution_status=resolution,
-        confidence=round(reliability, 1),
+        source_trust_state=source_trust_state,
+        data_state=data_state,
+        validation_state=validation_state,
         reasons=reasons,
     )
     return claim, accepted
@@ -217,8 +256,11 @@ def governed_evidence(
     items: Iterable[ResearchEvidence],
     target: NewsCollectionTarget,
     max_age_minutes: int,
-    minimum_source_reliability: float,
+    minimum_source_trust_state: str = "standard",
+    **legacy_policy: object,
 ) -> Tuple[List[ResearchEvidence], List[EvidenceClaim], List[EvidenceClaim]]:
+    if "minimum_source_reliability" in legacy_policy:
+        minimum_source_trust_state = normalized_source_trust_state(legacy_policy["minimum_source_reliability"])
     accepted_items: List[ResearchEvidence] = []
     verified: List[EvidenceClaim] = []
     rejected: List[EvidenceClaim] = []
@@ -227,7 +269,7 @@ def governed_evidence(
             item,
             target,
             max_age_minutes,
-            minimum_source_reliability,
+            minimum_source_trust_state,
         )
         payload = dict(item.raw_payload or {})
         payload["evidenceGovernance"] = {
@@ -238,6 +280,9 @@ def governed_evidence(
             "reasons": list(claim.reasons),
             "investmentJudgmentEligible": bool(accepted),
             "sourcePolicy": "official-first-cache-first-v1",
+            "sourceTrustState": claim.source_trust_state,
+            "dataState": claim.data_state,
+            "validationState": claim.validation_state,
         }
         item.raw_payload = payload
         if accepted:

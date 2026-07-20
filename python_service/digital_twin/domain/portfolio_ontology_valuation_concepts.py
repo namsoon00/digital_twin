@@ -15,11 +15,11 @@ from .valuation_contracts import (
     period_is_annual_per_share,
     scenario_margins,
     unique_missing,
-    valuation_confidence_label,
     valuation_decision_eligible,
     valuation_freshness_status,
-    valuation_input_coverage,
-    valuation_reliability_score,
+    valuation_input_state,
+    valuation_reliability_label,
+    valuation_reliability_state,
 )
 
 
@@ -55,8 +55,6 @@ VALUATION_NUMERIC_KEYS = {
     "conservativeMarginOfSafetyPct": ("conservativeMarginOfSafetyPct", "conservativeMarginOfSafetyPct", "보수적 안전마진"),
     "optimisticMarginOfSafetyPct": ("optimisticMarginOfSafetyPct", "optimisticMarginOfSafetyPct", "낙관적 안전마진"),
     "minimumMarginOfSafetyPct": ("minimumMarginOfSafetyPct", "minimumMarginOfSafetyPct", "요구 안전마진"),
-    "reliabilityScore": ("reliabilityScore", "valuationReliabilityScore", "밸류에이션 신뢰도"),
-    "inputCoveragePct": ("inputCoveragePct", "valuationInputCoveragePct", "입력 데이터 충족률"),
     "valuationDecisionEligible": ("valuationDecisionEligible", "valuationDecisionEligible", "투자 판단 사용 가능"),
     "peerPER": ("peerPER", "peerPER", "피어 PER"),
     "historicalMedianPER": ("historicalMedianPER", "historicalMedianPER", "과거 중앙 PER"),
@@ -278,18 +276,18 @@ def valuation_values(row: Dict[str, object], position: Position) -> Dict[str, ob
         available_inputs.append("currentPrice")
     if fair_value:
         available_inputs.append("fairValue")
-    coverage = value_for(row, "inputCoveragePct", "valuationInputCoveragePct") or valuation_input_coverage(required_inputs, available_inputs)
+    input_state = str(row.get("valuationInputState") or valuation_input_state(required_inputs, available_inputs))
     scenario_complete = bool(value_for(row, "fairValueLow") and fair_value and value_for(row, "fairValueHigh"))
-    reliability = value_for(row, "reliabilityScore", "valuationReliabilityScore") or valuation_reliability_score(
+    reliability_state = str(row.get("valuationReliabilityState") or row.get("valuationDataState") or valuation_reliability_state(
         source_type,
-        coverage,
+        input_state,
         eps_period=eps_period,
         freshness_status=freshness,
         scenario_complete=scenario_complete,
-    )
+    ))
     calculated_eligible = valuation_decision_eligible(
         source_type,
-        reliability,
+        reliability_state,
         row.get("approvalStatus"),
         freshness,
         period_compatible,
@@ -331,9 +329,10 @@ def valuation_values(row: Dict[str, object], position: Position) -> Dict[str, ob
         "valuationSourceType": source_type,
         "valuationCurrency": str(row.get("valuationCurrency") or position.currency or ""),
         "perShare": bool(row.get("perShare", True)),
-        "valuationInputCoveragePct": round(coverage, 1),
-        "valuationReliabilityScore": round(reliability, 1),
-        "valuationConfidenceLabel": str(row.get("valuationConfidenceLabel") or valuation_confidence_label(reliability)),
+        "valuationInputState": input_state,
+        "valuationDataState": reliability_state,
+        "valuationReliabilityState": reliability_state,
+        "valuationDataStateLabel": str(row.get("valuationDataStateLabel") or valuation_reliability_label(reliability_state)),
         "valuationDecisionEligible": decision_eligible,
         "scenarioComplete": scenario_complete,
     }
@@ -367,9 +366,10 @@ def valuation_relation_props(row: Dict[str, object], values: Dict[str, object], 
         "fairValueHigh": values.get("fairValueHigh"),
         "peRatio": values.get("peRatio"),
         "pbr": values.get("pbr"),
-        "valuationReliabilityScore": values.get("valuationReliabilityScore"),
-        "valuationInputCoveragePct": values.get("valuationInputCoveragePct"),
-        "valuationConfidenceLabel": values.get("valuationConfidenceLabel"),
+        "valuationDataState": values.get("valuationDataState"),
+        "valuationInputState": values.get("valuationInputState"),
+        "valuationReliabilityState": values.get("valuationReliabilityState"),
+        "valuationDataStateLabel": values.get("valuationDataStateLabel"),
         "valuationDecisionEligible": values.get("valuationDecisionEligible"),
         "valuationFreshnessStatus": values.get("valuationFreshnessStatus"),
         "valuationAsOf": values.get("valuationAsOf"),
@@ -506,12 +506,12 @@ def add_valuation_row_concepts(
         })
         add_relation(graph, stock_id, range_id, "HAS_FAIR_VALUE_RANGE", weight=0.88, properties=props)
         add_relation(graph, range_id, assumption_id, "DERIVED_FROM_VALUATION_ASSUMPTION", weight=0.84, properties=props)
-        confidence_id = add_entity(graph, "valuation-confidence", symbol + ":" + key, (position.name or symbol) + " 밸류에이션 신뢰도", {
-            "tboxClass": "ValuationConfidence",
-            "tboxClasses": ["ValuationAssumption", "ValuationConfidence", "DataQualitySignal"],
+        data_state_id = add_entity(graph, "valuation-data-state", symbol + ":" + key, (position.name or symbol) + " 밸류에이션 자료 상태", {
+            "tboxClass": "ValuationDataState",
+            "tboxClasses": ["ValuationAssumption", "ValuationDataState", "DataQualitySignal"],
             **base_props,
         })
-        add_relation(graph, stock_id, confidence_id, "HAS_VALUATION_CONFIDENCE", weight=0.82, properties=props)
+        add_relation(graph, stock_id, data_state_id, "HAS_VALUATION_DATA_STATE", weight=1.0, properties=props)
     if number(values.get("marginOfSafetyPct")):
         margin = number(values.get("marginOfSafetyPct"))
         margin_id = add_entity(graph, "margin-of-safety", symbol + ":" + key, (position.name or symbol) + " 안전마진 " + str(round(margin, 1)) + "%", {
@@ -523,8 +523,9 @@ def add_valuation_row_concepts(
         margin_props = {
             **props,
             "polarity": "support" if margin >= number(values.get("minimumMarginOfSafetyPct")) else "risk" if margin <= -10 else "context",
-            "supportImpact": min(12.0, max(0.0, margin / 2)) if margin > 0 else 0.0,
-            "riskImpact": min(12.0, abs(margin) / 2) if margin < 0 else 0.0,
+            "evidenceRole": "support" if margin >= number(values.get("minimumMarginOfSafetyPct")) else "risk" if margin <= -10 else "context",
+            "reviewLevel": "check" if margin <= -10 else "observe" if margin < number(values.get("minimumMarginOfSafetyPct")) else "normal",
+            "dataState": values.get("valuationDataState") or "partial",
             "aiInfluenceLabel": "안전마진 " + str(round(margin, 1)) + "%",
         }
         add_relation(graph, stock_id, margin_id, "HAS_MARGIN_OF_SAFETY", weight=0.9, properties=margin_props)
@@ -555,7 +556,9 @@ def add_valuation_row_concepts(
         add_relation(graph, stock_id, missing_id, "HAS_DATA_QUALITY", weight=0.72, properties={
             "source": "valuation-gate",
             "polarity": "risk",
-            "riskImpact": 5.0,
+            "evidenceRole": "blocking",
+            "reviewLevel": "blocked",
+            "dataState": "insufficient",
             "dataScope": "valuation",
             "aiInfluenceLabel": "밸류에이션 부족 데이터: " + ", ".join(values.get("missingInputs") or []),
         })
@@ -617,7 +620,9 @@ def add_position_valuation_concepts(
     add_relation(graph, stock_id, consensus_id, "HAS_VALUATION_CONSENSUS", weight=0.86, properties={
         "source": "valuation-consensus",
         "polarity": "risk" if consensus_status == "conflict" else "context",
-        "riskImpact": 6.0 if consensus_status == "conflict" else 0.0,
+        "evidenceRole": "risk" if consensus_status == "conflict" else "context",
+        "reviewLevel": "check" if consensus_status == "conflict" else "observe",
+        "dataState": "partial" if consensus_status == "conflict" else "sufficient" if eligible_values else "insufficient",
         "aiInfluenceLabel": "밸류에이션 모델 차이 " + str(round(disagreement_pct, 1)) + "%" if len(eligible_values) >= 2 else "검증 가능한 밸류에이션 모델 1개 이하",
         "valuationModelCount": len(eligible_values),
         "valuationDisagreementPct": round(disagreement_pct, 2),

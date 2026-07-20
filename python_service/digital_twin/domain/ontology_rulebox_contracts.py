@@ -52,7 +52,6 @@ class GraphRuleCondition:
     target_kind: str = ""
     target_property_filters: Dict[str, object] = dataclass_field(default_factory=dict)
     relation_property_filters: Dict[str, object] = dataclass_field(default_factory=dict)
-    min_weight: float = 0.0
     role: str = "required"
 
     def to_dict(self) -> Dict[str, object]:
@@ -73,7 +72,6 @@ class GraphRuleCondition:
             target_kind=str(payload.get("target_kind") or payload.get("targetKind") or ""),
             target_property_filters=dict(payload.get("target_property_filters") or payload.get("targetPropertyFilters") or {}),
             relation_property_filters=dict(payload.get("relation_property_filters") or payload.get("relationPropertyFilters") or {}),
-            min_weight=float(payload.get("min_weight") or payload.get("minWeight") or 0),
             role=str(payload.get("role") or payload.get("conditionRole") or "required"),
         )
 
@@ -87,15 +85,14 @@ class GraphRuleDerivation:
     tbox_class: str
     tbox_classes: List[str] = dataclass_field(default_factory=list)
     polarity: str = "context"
-    risk_impact: float = 0.0
-    support_impact: float = 0.0
-    weight: float = 0.72
+    # Empty means "inherit the derivation polarity".  Defaulting this to
+    # context silently flattened risk/support rules into neutral evidence.
+    evidence_role: str = ""
     belief_label: str = ""
     ai_influence_label: str = ""
     action_group: str = ""
     action_level: str = ""
     decision_stage: str = ""
-    stage_priority: float = 0.0
     target_role: str = ""
     action_policy: str = ""
     allowed_actions: List[str] = dataclass_field(default_factory=list)
@@ -115,15 +112,12 @@ class GraphRuleDerivation:
             tbox_class=str(payload.get("tbox_class") or payload.get("tboxClass") or ""),
             tbox_classes=[str(item) for item in (payload.get("tbox_classes") or payload.get("tboxClasses") or [])],
             polarity=str(payload.get("polarity") or "context"),
-            risk_impact=float(payload.get("risk_impact") or payload.get("riskImpact") or 0),
-            support_impact=float(payload.get("support_impact") or payload.get("supportImpact") or 0),
-            weight=float(payload.get("weight") or 0.72),
+            evidence_role=str(payload.get("evidence_role") or payload.get("evidenceRole") or payload.get("polarity") or "context"),
             belief_label=str(payload.get("belief_label") or payload.get("beliefLabel") or ""),
             ai_influence_label=str(payload.get("ai_influence_label") or payload.get("aiInfluenceLabel") or ""),
             action_group=str(payload.get("action_group") or payload.get("actionGroup") or ""),
             action_level=str(payload.get("action_level") or payload.get("actionLevel") or ""),
             decision_stage=str(payload.get("decision_stage") or payload.get("decisionStage") or ""),
-            stage_priority=float(payload.get("stage_priority") or payload.get("stagePriority") or 0),
             target_role=str(payload.get("target_role") or payload.get("targetRole") or ""),
             action_policy=str(payload.get("action_policy") or payload.get("actionPolicy") or ""),
             allowed_actions=string_list(payload.get("allowed_actions") or payload.get("allowedActions")),

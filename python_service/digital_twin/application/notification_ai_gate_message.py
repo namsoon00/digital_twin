@@ -15,22 +15,20 @@ from ..domain.notification_ai_context import is_watchlist_context
 from ..domain.external_api_sources import external_api_source_line
 from ..domain.notification_ai_gate_contracts import ACTION_LABELS, MESSAGE_START_BADGE, NotificationAIValidatedResponse
 from ..domain.investment_ubiquitous_language import user_facing_investment_language
-from ..domain.ontology_inference_context import (
-    INFERENCE_SCORE_COMPONENT_WEIGHTS,
-    INFERENCE_SCORE_DIRECTIONAL_BONUS,
-    INFERENCE_SCORE_MAX_OPPOSING_PENALTY,
-    INFERENCE_SCORE_OPPOSING_PENALTY_RATE,
+from ..domain.ontology_decision_state import (
+    CHANGE_STATE_LABELS,
+    DATA_STATE_LABELS,
+    REVIEW_LEVEL_LABELS,
+    VALIDATION_STATE_LABELS,
+    review_level_for,
 )
-from ..domain.ontology_relation_catalog import SCORE_BANDS
-from ..domain.ontology_relation_decisions import score_band
 from ..domain.notification_ai_gate_sources import source_detail_text, source_url_rows
 from ..domain.notification_reasoning_report import (
     customer_alert_reason_lines,
-    customer_confidence_and_missing_lines,
+    customer_data_state_and_missing_lines,
     customer_inferred_fact_lines,
 )
 from ..domain.notification_ai_gate_text import (
-    _clamp,
     _line_after_colon,
     _number,
     _raw_lines,
@@ -158,7 +156,7 @@ DATA_COLLECTION_TRANSPORT_LABELS = {
     "rest": "REST",
     "http": "REST",
 }
-DATA_COLLECTION_SOURCE_AS_OF_CONFIDENCE_LABELS = {
+DATA_COLLECTION_SOURCE_TIMESTAMP_STATE_LABELS = {
     "exchange-tick": "거래소 틱 기준",
     "provider-timestamp": "제공 기준시각",
     "business-date-only": "영업일자 기준",
@@ -170,15 +168,15 @@ ABSOLUTE_BEGINNER_TERM_REPLACEMENTS = [
     ("실행 가능 용량", "지금 주문해도 무리가 없는지"),
     ("실행 차단", "지금 바로 주문하기 어려운 조건"),
     ("벤치마크 베타", "시장과 같이 움직이는 정도"),
-    ("관계 강도", "확인 필요 강도"),
-    ("관계 점수", "확인 필요 점수"),
+    ("관계 강도", "확인 단계"),
+    ("관계 점수", "확인 단계"),
     ("관계 신호", "연결된 근거 신호"),
     ("RuleBox", "관계 분석 규칙"),
     ("InferenceBox", "관계 분석 결과"),
     ("actionGroup", "판단 묶음"),
     ("actionLevel", "판단 단계"),
-    ("signalStrength", "관계 점수"),
-    ("confidence", "신뢰도"),
+    ("signalStrength", "확인 단계"),
+    ("confidence", "검증 상태"),
     ("팩터 노출", "영향받는 요인"),
     ("익스포저", "쏠림 정도"),
     ("슬리피지", "원하는 가격과 실제 거래 가격 차이"),
@@ -186,8 +184,8 @@ ABSOLUTE_BEGINNER_TERM_REPLACEMENTS = [
 ]
 
 BEGINNER_TERM_HINTS = [
-    ("관계 강도", "여러 근거가 같은 방향인지 보는 확인 필요 점수"),
-    ("관계 점수", "여러 근거가 같은 방향인지 보는 확인 필요 점수"),
+    ("관계 강도", "현재 자료로 어느 정도 대응 준비가 필요한지 나타내는 단계"),
+    ("관계 점수", "현재 자료로 어느 정도 대응 준비가 필요한지 나타내는 단계"),
     ("관계 신호", "가격·뉴스·보유 상태를 연결해서 본 신호"),
     ("벤치마크 베타", "시장과 같이 움직이는 정도"),
     ("실행 가능 용량", "지금 주문해도 무리가 없는지"),
@@ -198,7 +196,7 @@ BEGINNER_TERM_HINTS = [
 ]
 
 INTERMEDIATE_TERM_HINTS = [
-    ("관계 강도", "대응 필요 강도"),
+    ("관계 강도", "대응 확인 단계"),
     ("벤치마크 베타", "시장 민감도"),
     ("실행 가능 용량", "주문 소화 가능성"),
     ("실행 차단", "주문 실행 제약"),
@@ -320,7 +318,12 @@ def customer_data_note_rows(values: List[object]) -> List[str]:
 
 def notification_topline_change_summary(context: Dict[str, object]) -> str:
     context = context or {}
-    reason = str(context.get("honeyStateReason") or context.get("honeySimilarityBypassReason") or "").strip()
+    reason = str(
+        context.get("cooldownReason")
+        or context.get("repeatBypassReason")
+        or context.get("honeyStateReason")
+        or ""
+    ).strip()
     source_types = " ".join(str(item or "") for item in (context.get("sourceSignalTypes") or []))
     profit_loss_summary = "" if is_watchlist_context(context) else _profit_loss_change_summary(context, reason)
     if profit_loss_summary:
@@ -339,8 +342,8 @@ def notification_topline_change_summary(context: Dict[str, object]) -> str:
         return "새 근거"
     if "새 뉴스/공시/관계 근거" in reason or "새 관계 이벤트" in reason:
         return "새 뉴스·공시"
-    if "관계 강도 변화" in reason:
-        return "관계 강도 변화"
+    if "관계 강도 변화" in reason or "확인 단계 변화" in reason:
+        return "확인 단계 변화"
     if "신규성 변화" in reason:
         return "신규성 변화"
     if "인사이트 유형 변경" in reason:
@@ -351,8 +354,8 @@ def notification_topline_change_summary(context: Dict[str, object]) -> str:
     if reason_summary:
         if "뉴스" in reason_summary or "공시" in reason_summary:
             return "새 뉴스·공시"
-        if "관계 점수" in reason_summary:
-            return "관계 점수 상승"
+        if "관계 점수" in reason_summary or "확인 단계" in reason_summary:
+            return "확인 단계 변경"
         return _clean_reason_text(reason_summary, 18)
     return ""
 
@@ -384,148 +387,28 @@ def prepend_execution_start_badge(rendered: str, context: Dict[str, object] = No
         return html_badge + "\n" + html_summary_line + "\n\n" + text
     return html_badge + "\n\n" + text
 
-def confidence_text(value: object) -> str:
-    score = _clamp(_number(value), 0, 100)
-    if score >= 85:
-        label = "높음"
-    elif score >= 65:
-        label = "보통"
-    else:
-        label = "낮음"
-    return label + " (" + str(round(score, 1)) + "%)"
-
 def action_label_for_action(action: object, context: Dict[str, object] = None) -> str:
     text = str(action or "").strip().upper()
     if context is not None:
         return action_label_for_target(context, text)
     return ACTION_LABELS.get(text, str(action or "").strip())
 
-def ai_confidence_display(response: NotificationAIValidatedResponse, level: str) -> str:
-    if level in {"absoluteBeginner", "beginner"}:
-        return confidence_text(response.confidence)
-    return str(round(response.confidence, 1)) + "%"
-
-
-def relation_judgment_score(context: Dict[str, object]) -> float:
+def relation_state_values(context: Dict[str, object]) -> Dict[str, str]:
     relation_context = relation_context_value(context or {})
     decision = relation_context.get("decision") if isinstance(relation_context.get("decision"), dict) else {}
-    score = _number(decision.get("score") or relation_context.get("signalStrength"))
-    if not score:
-        rules = relation_context.get("activeRules") or relation_context.get("matchedRules") or []
-        score = max(
-            [
-                _number(item.get("strengthScore") or item.get("score") or item.get("relationScore"))
-                for item in rules
-                if isinstance(item, dict) and not item.get("referenceOnly") and not item.get("reference_only")
-            ],
-            default=0.0,
-        )
-    return _clamp(score, 0.0, 100.0)
-
-
-def relation_judgment_strength_display(context: Dict[str, object], level: str) -> str:
-    score = relation_judgment_score(context)
-    if not score:
-        return ""
-    if score >= 85:
-        label = "매우 높음"
-    elif score >= 70:
-        label = "높음"
-    elif score >= 55:
-        label = "보통"
-    else:
-        label = "낮음"
-    return "[관계 분석] " + label + " (" + str(round(score, 1)) + "/100점)"
-
-
-RELATION_SCORE_CUSTOMER_BAND_LABELS = {
-    "LOW": "참고",
-    "WATCH": "관찰",
-    "REVIEW": "확인",
-    "ACTION": "대응 검토",
-    "URGENT": "즉시 재확인",
-}
-
-
-def relation_score_band_ranges_text() -> str:
-    ordered = sorted(SCORE_BANDS, key=lambda item: item.min_score)
-    rows: List[str] = []
-    for index, band in enumerate(ordered):
-        lower = int(band.min_score)
-        upper = int(ordered[index + 1].min_score - 1) if index + 1 < len(ordered) else 100
-        label = RELATION_SCORE_CUSTOMER_BAND_LABELS.get(band.key, band.label)
-        rows.append(str(lower) + "~" + str(upper) + " " + label)
-    return " · ".join(rows)
-
-
-def relation_score_breakdown(context: Dict[str, object]) -> Dict[str, object]:
-    relation_context = relation_context_value(context or {})
-    decision = relation_context.get("decision") if isinstance(relation_context.get("decision"), dict) else {}
-    if isinstance(decision.get("scoreBreakdown"), dict) and decision.get("scoreBreakdown"):
-        return dict(decision.get("scoreBreakdown") or {})
-    if isinstance(relation_context.get("scoreBreakdown"), dict):
-        return dict(relation_context.get("scoreBreakdown") or {})
-    return {}
-
-
-def relation_score_guide_rows(context: Dict[str, object], level: str) -> List[str]:
-    score = relation_judgment_score(context)
-    if not score:
-        return []
-    band = score_band(score)
-    band_label = RELATION_SCORE_CUSTOMER_BAND_LABELS.get(band.key, band.label)
-    breakdown = relation_score_breakdown(context)
-    weights = breakdown.get("componentWeights") if isinstance(breakdown.get("componentWeights"), dict) else INFERENCE_SCORE_COMPONENT_WEIGHTS
-    weight_text = (
-        "규칙 신뢰도 " + str(round(_number(weights.get("ruleReliability")) * 100)) + "%"
-        + " + 위험·기회 근거 " + str(round(_number(weights.get("dominantEvidence")) * 100)) + "%"
-        + " + 실제 대응 필요 " + str(round(_number(weights.get("actionability")) * 100)) + "%"
-        + " + 새 변화 " + str(round(_number(weights.get("novelty")) * 100)) + "%"
-        + " + 데이터 신뢰도 " + str(round(_number(weights.get("dataConfidence")) * 100)) + "%"
-    )
-    rows = [
-        _html_bullet(
-            "뜻: 100점 만점으로 지금 다시 확인할 필요가 얼마나 큰지 나타냅니다. "
-            "상승·하락 확률이나 매수·매도 확률이 아니며, 방향은 위의 대응과 핵심 근거에서 확인합니다.",
-            level,
-        ),
-        _html_bullet(
-            "현재 구간: " + str(round(score, 1)) + "점은 " + band_label + " 단계입니다. 기준은 " + relation_score_band_ranges_text() + "입니다.",
-            level,
-        ),
-        _html_bullet(
-            "계산 기준: " + weight_text + ". 위험과 기회가 함께 있으면 약한 쪽 점수의 "
-            + str(round((_number(breakdown.get("opposingPressurePenaltyRate")) or INFERENCE_SCORE_OPPOSING_PENALTY_RATE) * 100))
-            + "%를 최대 "
-            + str(int(_number(breakdown.get("maximumOpposingPressurePenalty")) or INFERENCE_SCORE_MAX_OPPOSING_PENALTY))
-            + "점까지 빼고, 두 방향의 차이가 "
-            + str(round(_number(breakdown.get("directionalDominanceThreshold")) or 55.0, 1))
-            + "점 이상이면 "
-            + str(int(_number(breakdown.get("directionalDominanceBonus")) or INFERENCE_SCORE_DIRECTIONAL_BONUS))
-            + "점을 더합니다. 데이터 신뢰도가 "
-            + str(round(_number(breakdown.get("dataConfidencePenaltyThreshold")) or 55.0, 1))
-            + "점 미만이면 추가로 감점합니다.",
-            level,
-        ),
-    ]
-    component_values = [
-        ("규칙 신뢰도", breakdown.get("ruleReliability")),
-        ("위험 근거", breakdown.get("riskPressure")),
-        ("기회 근거", breakdown.get("supportEvidence")),
-        ("실제 대응 필요", breakdown.get("actionability")),
-        ("새 변화", breakdown.get("novelty")),
-        ("데이터 신뢰도", breakdown.get("dataConfidence")),
-    ]
-    if any(value not in (None, "") for _, value in component_values):
-        rows.append(_html_bullet(
-            "이번 반영값: " + " · ".join(
-                label + " " + str(round(_clamp(_number(value), 0.0, 100.0), 1)) + "점"
-                for label, value in component_values
-                if value not in (None, "")
-            ),
-            level,
-        ))
-    return [row for row in rows if row]
+    data_state = str(decision.get("dataState") or relation_context.get("dataState") or "partial")
+    review_level = str(decision.get("reviewLevel") or relation_context.get("reviewLevel") or "")
+    if not review_level:
+        review_level = review_level_for(decision.get("actionLevel"), data_state)
+    change_state = str(decision.get("changeState") or relation_context.get("changeState") or "unchanged")
+    return {
+        "reviewLevel": review_level,
+        "reviewLabel": str(decision.get("reviewLabel") or relation_context.get("reviewLevelLabel") or REVIEW_LEVEL_LABELS.get(review_level, REVIEW_LEVEL_LABELS["observe"])),
+        "dataState": data_state,
+        "dataLabel": str(decision.get("dataStateLabel") or relation_context.get("dataStateLabel") or DATA_STATE_LABELS.get(data_state, DATA_STATE_LABELS["partial"])),
+        "changeState": change_state,
+        "changeLabel": str(decision.get("changeStateLabel") or relation_context.get("changeStateLabel") or CHANGE_STATE_LABELS.get(change_state, CHANGE_STATE_LABELS["unchanged"])),
+    }
 
 def ai_judgment_section_title(level: str) -> str:
     return "전략 요약"
@@ -571,10 +454,13 @@ def account_profile_rows(context: Dict[str, object], level: str) -> List[str]:
     return [row for row in rows if row]
 
 def ai_judgment_rows(response: NotificationAIValidatedResponse, level: str, context: Dict[str, object] = None) -> List[str]:
-    relation_strength = relation_judgment_strength_display(context or {}, level)
+    relation_state = relation_state_values(context or {})
     rows = [
         _html_row(ai_action_row_label(level), _ai_marked_value(action_label_for_action(response.action, context) or response.action_label), level=level),
-        _html_row("확인 필요 점수" if relation_strength else "AI 판단 확신도", relation_strength or _ai_marked_value(ai_confidence_display(response, level)), level=level),
+        _html_row("확인 단계", relation_state.get("reviewLabel") or response.review_label, level=level),
+        _html_row("자료 상태", relation_state.get("dataLabel") or response.data_state_label, level=level),
+        _html_row("AI 검증", response.validation_label, level=level),
+        _html_row("이번 변화", relation_state.get("changeLabel"), level=level),
     ]
     rows.extend(account_profile_rows(context or {}, level))
     summary_label = "이유" if level == "absoluteBeginner" else "AI 판단 이유"
@@ -604,10 +490,7 @@ def hypothesis_comparison_rows(response: NotificationAIValidatedResponse, level:
     }
     ordered = sorted(
         [item for item in response.hypotheses or [] if isinstance(item, dict)],
-        key=lambda item: (
-            str(item.get("hypothesisId") or "") != response.selected_hypothesis_id,
-            -_number(item.get("confidence")),
-        ),
+        key=lambda item: str(item.get("hypothesisId") or "") != response.selected_hypothesis_id,
     )
     for item in ordered[:3]:
         label = stance_labels.get(str(item.get("stance") or ""), "경쟁 가설")
@@ -615,11 +498,8 @@ def hypothesis_comparison_rows(response: NotificationAIValidatedResponse, level:
         if selected:
             label = "선택 가설"
         claim = _text(item.get("claim"), 260)
-        confidence = _number(item.get("confidence"))
         verdict = str(item.get("verdict") or "").strip()
         suffix = []
-        if confidence:
-            suffix.append(str(round(confidence, 1)) + "%")
         if verdict and verdict != "unreviewed":
             suffix.append(verdict)
         if suffix:
@@ -755,7 +635,7 @@ def data_collection_time_rows(context: Dict[str, object], limit: int = MESSAGE_D
         transport: object = "",
         freshness_status: object = "",
         ai_usable_as_strong_evidence: object = None,
-        source_as_of_confidence: object = "",
+        source_timestamp_state: object = "",
     ) -> None:
         if len(rows) >= limit:
             return
@@ -778,9 +658,9 @@ def data_collection_time_rows(context: Dict[str, object], limit: int = MESSAGE_D
         freshness_label = DATA_COLLECTION_FRESHNESS_LABELS.get(str(freshness_status or "").strip().lower(), str(freshness_status or "").strip())
         if freshness_label:
             parts.append("품질 " + freshness_label)
-        confidence_label = DATA_COLLECTION_SOURCE_AS_OF_CONFIDENCE_LABELS.get(str(source_as_of_confidence or "").strip().lower(), str(source_as_of_confidence or "").strip())
-        if confidence_label:
-            parts.append("기준 " + confidence_label)
+        timestamp_state_label = DATA_COLLECTION_SOURCE_TIMESTAMP_STATE_LABELS.get(str(source_timestamp_state or "").strip().lower(), str(source_timestamp_state or "").strip())
+        if timestamp_state_label:
+            parts.append("기준 " + timestamp_state_label)
         if ai_usable_as_strong_evidence is False:
             parts.append("AI 강근거 제외")
         if detail:
@@ -818,7 +698,7 @@ def data_collection_time_rows(context: Dict[str, object], limit: int = MESSAGE_D
             transport=freshness.get("transport"),
             freshness_status=freshness.get("freshnessStatus") or freshness.get("status"),
             ai_usable_as_strong_evidence=freshness.get("aiUsableAsStrongEvidence"),
-            source_as_of_confidence=freshness.get("sourceAsOfConfidence"),
+            source_timestamp_state=freshness.get("sourceTimestampState"),
         )
 
     roots = [
@@ -869,7 +749,7 @@ def data_collection_time_rows(context: Dict[str, object], limit: int = MESSAGE_D
                 transport=value.get("transport"),
                 freshness_status=value.get("freshnessStatus") or value.get("latencyStatus") or value.get("status"),
                 ai_usable_as_strong_evidence=value.get("aiUsableAsStrongEvidence"),
-                source_as_of_confidence=value.get("sourceAsOfConfidence"),
+                source_timestamp_state=value.get("sourceTimestampState"),
             )
         for child in value.values():
             if isinstance(child, (dict, list)):
@@ -883,14 +763,6 @@ def data_collection_time_rows(context: Dict[str, object], limit: int = MESSAGE_D
             break
     return rows[:limit]
 
-
-def _point_text(value: object) -> str:
-    number = _number(value)
-    if not number:
-        return ""
-    if float(number).is_integer():
-        return str(int(number))
-    return ("%.1f" % number).rstrip("0").rstrip(".")
 
 def _criterion_value(lines: List[str], label: str) -> str:
     prefix = str(label or "").strip()
@@ -906,49 +778,25 @@ def _clean_reason_text(value: object, limit: int = 100) -> str:
     text = text.replace(" -> ", " → ")
     return _text(text, limit)
 
-def _rule_score(item: Dict[str, object]) -> float:
-    if not isinstance(item, dict):
-        return 0.0
-    return _number(item.get("strengthScore") or item.get("strength_score") or item.get("score") or item.get("relationScore"))
-
 def _top_relation_rule_reasons(relation_context: Dict[str, object], limit: int = 2) -> List[str]:
     rules = relation_context.get("activeRules") or relation_context.get("matchedRules") or []
     rows: List[str] = []
-    ranked = sorted(
-        [item for item in rules if isinstance(item, dict) and not item.get("referenceOnly") and not item.get("reference_only")],
-        key=_rule_score,
-        reverse=True,
-    )
-    for item in ranked:
+    for item in rules:
+        if not isinstance(item, dict) or item.get("referenceOnly") or item.get("reference_only"):
+            continue
         label = _clean_reason_text(item.get("label") or item.get("ruleId") or item.get("rule_id"), 70)
-        score = _point_text(_rule_score(item))
         if label:
-            rows.append(label + ((" " + score + "점") if score else ""))
+            rows.append(label)
         if len(rows) >= limit:
             break
     return rows
 
-def _relation_score_reason(context: Dict[str, object]) -> str:
+def _relation_state_reason(context: Dict[str, object]) -> str:
     relation_context = relation_context_value(context)
     if not relation_context:
         return ""
     decision = relation_context.get("decision") if isinstance(relation_context.get("decision"), dict) else {}
-    score = _number(
-        decision.get("score")
-        or relation_context.get("signalStrength")
-        or relation_context.get("score")
-    )
-    if not score:
-        rules = relation_context.get("activeRules") or relation_context.get("matchedRules") or []
-        score = max([_rule_score(item) for item in rules if isinstance(item, dict)], default=0.0)
-    if not score:
-        return ""
-    previous = _number(
-        decision.get("previousScore")
-        or decision.get("previousRelationScore")
-        or relation_context.get("previousScore")
-        or relation_context.get("previousRelationScore")
-    )
+    state = relation_state_values(context)
     label = _clean_reason_text(
         decision.get("label")
         or decision.get("actionLabel")
@@ -956,33 +804,17 @@ def _relation_score_reason(context: Dict[str, object]) -> str:
         or relation_context.get("decisionLabel"),
         64,
     )
-    if previous and score > previous:
-        score_text = "관계 점수 " + _point_text(previous) + "점→" + _point_text(score) + "점"
-    else:
-        score_text = "관계 점수 " + _point_text(score) + "점까지 상승"
-    stage = "주의 기준" if score >= 85 else "실행 기준" if score >= 70 else "관찰 기준"
-    parts = [score_text + "해 " + stage + "을 넘었습니다"]
+    parts = [
+        state.get("changeLabel") or CHANGE_STATE_LABELS["unchanged"],
+        "현재 " + (state.get("reviewLabel") or REVIEW_LEVEL_LABELS["observe"]) + " 단계입니다",
+        "자료 상태는 " + (state.get("dataLabel") or DATA_STATE_LABELS["partial"]) + "입니다",
+    ]
     if label:
         parts.append(label)
     reasons = _top_relation_rule_reasons(relation_context)
     if reasons:
         parts.append("주요 요인: " + ", ".join(reasons))
     return " · ".join(parts)
-
-def _score_text_reason(context: Dict[str, object]) -> str:
-    lines = [*criterion_lines(context), *_raw_lines(context)]
-    for line in lines:
-        text = _clean_reason_text(line, 130)
-        if "점" not in text:
-            continue
-        if "설정" in str(line or "") and "감지" not in str(line or ""):
-            continue
-        score_match = re.search(r"(\d+(?:\.\d+)?)점", text)
-        if not score_match:
-            continue
-        if any(token in text for token in ["상태", "판단", "점수", "관계", "강도", "감지"]):
-            return text + "까지 올라 알림 기준을 넘었습니다."
-    return ""
 
 def _threshold_reason(context: Dict[str, object]) -> str:
     criteria = criterion_lines(context)
@@ -1000,8 +832,7 @@ def _threshold_reason(context: Dict[str, object]) -> str:
 
 def notification_reason_summary(context: Dict[str, object]) -> str:
     return (
-        _relation_score_reason(context)
-        or _score_text_reason(context)
+        _relation_state_reason(context)
         or _threshold_reason(context)
     )
 
@@ -1191,29 +1022,38 @@ def _human_readable_cooldown_reason(value: object) -> str:
 
 def notification_cooldown_release_summary(context: Dict[str, object]) -> str:
     context = context or {}
-    if context.get("honeyStateSuppressed"):
+    if context.get("cooldownSuppressed") or context.get("honeyStateSuppressed"):
         return ""
-    decision = str(context.get("honeyStateDecision") or "").strip()
+    decision = str(context.get("cooldownDecision") or context.get("honeyStateDecision") or "").strip()
+    decision = {
+        "material_change": "meaningful-change",
+        "threshold_change": "new-condition",
+        "scheduled_summary": "scheduled-summary",
+    }.get(decision, decision)
     if not decision or decision == "cooldown":
         return ""
-    cooldown_enabled = bool(context.get("honeyStateCooldownEnabled"))
-    reason = _human_readable_cooldown_reason(context.get("honeyStateReason") or context.get("honeySimilarityBypassReason"))
+    cooldown_enabled = bool(context.get("cooldownEnabled") or context.get("honeyStateCooldownEnabled"))
+    reason = _human_readable_cooldown_reason(
+        context.get("cooldownReason")
+        or context.get("repeatBypassReason")
+        or context.get("honeyStateReason")
+    )
     if not cooldown_enabled and not reason:
         return ""
-    age = _number(context.get("honeyStateLastSentAgeMinutes"))
-    cooldown = _number(context.get("honeyStateCooldownMinutes"))
+    age = _number(context.get("cooldownLastSentAgeMinutes") or context.get("honeyStateLastSentAgeMinutes"))
+    cooldown = _number(context.get("cooldownMinutes") or context.get("honeyStateCooldownMinutes"))
     age_text = _minute_count_text(age)
     cooldown_text = _minute_count_text(cooldown)
     before_cooldown = bool(age_text and cooldown_text and age < cooldown)
-    if decision == "new_threshold":
+    if decision == "new-condition":
         if age_text and cooldown_text:
             return "현재 조건 조합이 처음 감지되어 기본 쿨다운 " + cooldown_text + "과 별개로 보냈습니다."
         return "현재 조건 조합이 처음 감지되어 반복 제한 없이 보냈습니다."
-    if decision == "sustained_summary":
+    if decision == "scheduled-summary":
         if age_text and cooldown_text:
             return "마지막 발송 후 " + age_text + "이 지나 기본 쿨다운 " + cooldown_text + "을 충족했습니다."
         return reason or "지속 상태 요약 기준을 충족해 다시 보냈습니다."
-    if decision in {"material_change", "mandatory_profit_loss_band"}:
+    if decision in {"meaningful-change", "required-profit-loss-change"}:
         if before_cooldown and reason:
             return "마지막 발송 후 " + age_text + "으로 기본 쿨다운 " + cooldown_text + " 전이지만, " + reason + " 때문에 다시 보냈습니다."
         if reason:
@@ -1856,7 +1696,7 @@ def _derived_execution_criteria(context: Dict[str, object], response: Notificati
 def _derived_invalidation_condition(context: Dict[str, object], response: NotificationAIValidatedResponse) -> str:
     explicit = _strategy_guide_value(response, "invalidationCondition") or response.invalidation_condition
     explicit = watchlist_friendly_text(context, explicit)
-    if explicit and not (response.action == "HOLD" and "관계 점수 급변" in explicit):
+    if explicit and not (response.action == "HOLD" and "확인 단계 급변" in explicit):
         return explicit
     if response.action != "HOLD":
         return ""
@@ -1882,10 +1722,10 @@ def _derived_invalidation_condition(context: Dict[str, object], response: Notifi
     condition = (_price_clause("확인 기준", guard) + " 아래로 내려가고 거래가 늘지 않으면 보유 의견이 약해집니다.") if guard else "가격과 거래가 같이 약해지면 보유 의견이 약해집니다."
     return watchlist_friendly_text(context, condition)
 
-def _strategy_confidence_limiters(context: Dict[str, object], response: NotificationAIValidatedResponse) -> List[str]:
+def _strategy_validation_limiters(context: Dict[str, object], response: NotificationAIValidatedResponse) -> List[str]:
     rows = list(_strategy_guide_list(response, "dataLimitations"))
     if _is_outside_regular_session(context):
-        append_unique_text(rows, "정규 거래시간 밖이라 거래가 적고 현재가 신뢰도가 낮을 수 있습니다.", 0)
+        append_unique_text(rows, "정규 거래시간 밖이라 거래가 적고 현재가 정보가 불안정할 수 있습니다.", 0)
     if _has_low_volume_context(context):
         append_unique_text(rows, "거래량이 평균보다 크게 낮아 강한 매수세나 투매로 단정하지 않습니다.", 0)
     for item in customer_data_note_rows(list(response.missing_data_impact)):
@@ -1917,14 +1757,14 @@ def strategy_guide_quality(context: Dict[str, object], response: NotificationAIV
         ("actionMode", bool(_derived_action_mode(context, response))),
         ("positionSizing", bool(_derived_position_sizing(context, response))),
         ("priceCriteria", bool(prices.get("risk") or prices.get("recovery"))),
-        ("dataLimitations", bool(_strategy_confidence_limiters(context, response))),
+        ("dataLimitations", bool(_strategy_validation_limiters(context, response))),
         ("aiHypothesisSeparated", bool(_derived_ai_hypothesis(context, response))),
         ("invalidationCondition", bool(_derived_invalidation_condition(context, response))),
     ]
     passed = [key for key, ok in checks if ok]
     missing = [key for key, ok in checks if not ok]
-    score = round(100 * len(passed) / max(1, len(checks)), 1)
-    return {"score": score, "passed": passed, "missing": missing}
+    state = "complete" if not missing else "partial" if passed else "missing"
+    return {"state": state, "passed": passed, "missing": missing}
 
 def strategy_guide_rows(context: Dict[str, object], response: NotificationAIValidatedResponse, level: str) -> List[str]:
     rows: List[str] = []
@@ -1949,7 +1789,7 @@ def strategy_guide_rows(context: Dict[str, object], response: NotificationAIVali
     check_summary = watchlist_friendly_text(context, _compact_text_segments(check_items, 3, 140))
     if check_summary:
         append_unique_text(rows, "확인할 데이터/다음 확인: " + check_summary, 0)
-    limiters = _strategy_confidence_limiters(context, response)
+    limiters = _strategy_validation_limiters(context, response)
     if limiters:
         append_unique_text(rows, "추가 확인 데이터: " + _compact_text_segments(limiters, 3, 140), 0)
     hypothesis = _derived_ai_hypothesis(context, response)
@@ -2019,8 +1859,8 @@ def customer_inference_rows(context: Dict[str, object], level: str) -> List[str]
     return [_html_bullet(item, level) for item in customer_inferred_fact_lines(context) if str(item or "").strip()]
 
 
-def customer_data_confidence_rows(context: Dict[str, object], level: str) -> List[str]:
-    return [_html_bullet(item, level) for item in customer_confidence_and_missing_lines(context) if str(item or "").strip()]
+def customer_data_state_rows(context: Dict[str, object], level: str) -> List[str]:
+    return [_html_bullet(item, level) for item in customer_data_state_and_missing_lines(context) if str(item or "").strip()]
 
 
 def _valuation_value_present(value: object) -> bool:
@@ -2080,8 +1920,7 @@ def valuation_detail_rows(context: Dict[str, object], level: str) -> List[str]:
             "valuationPerReason",
             "valuationPreferredMetric",
             "valuationFundamentalDataSourcePriority",
-            "valuationReliabilityLabel",
-            "valuationReliabilityScore",
+            "valuationDataStateLabel",
             "valuationExplanation",
             "valuationDataStatus",
         ]
@@ -2141,16 +1980,7 @@ def valuation_detail_rows(context: Dict[str, object], level: str) -> List[str]:
         }
         status_label = status_labels.get(status, status)
         approval = status_label
-    reliability = str(facts.get("valuationReliabilityLabel") or "").strip()
-    reliability_score = facts.get("valuationReliabilityScore")
-    if reliability and _valuation_value_present(reliability_score):
-        reliability += " (" + str(round(_number(reliability_score), 1)).rstrip("0").rstrip(".") + "%)"
-    elif _valuation_value_present(reliability_score):
-        reliability = str(round(_number(reliability_score), 1)).rstrip("0").rstrip(".") + "%"
-    if not reliability:
-        reliability = "판단 보류"
-    if reliability:
-        reliability += " · 예측 성공률이 아니라 출처와 공식 완성도 기준"
+    valuation_data_state = str(facts.get("valuationDataStateLabel") or "").strip() or "판단 보류"
     freshness_labels = {"fresh": "최신", "aging": "업데이트 필요", "stale": "오래됨", "unknown": "기준일 미확인"}
     freshness = freshness_labels.get(str(facts.get("valuationFreshnessStatus") or "unknown"), str(facts.get("valuationFreshnessStatus") or "기준일 미확인"))
     valuation_as_of = str(facts.get("valuationAsOf") or "").strip()
@@ -2197,7 +2027,7 @@ def valuation_detail_rows(context: Dict[str, object], level: str) -> List[str]:
         _html_row("대체 기준", preferred_metric, level=level, max_len=180),
         _html_row("데이터 우선순위", source_priority, level=level, max_len=220),
         _html_row("계산 근거", str(facts.get("valuationSourceReason") or "").strip(), level=level, max_len=260),
-        _html_row("근거 신뢰도", reliability, level=level, max_len=260),
+        _html_row("자료 상태", valuation_data_state, level=level, max_len=260),
         _html_row("데이터 기준", freshness + ((" · " + valuation_as_of) if valuation_as_of else ""), level=level, max_len=220),
         _html_row("판단 사용", decision_status, level=level, max_len=220),
         _html_row("모델 비교", consensus, level=level, max_len=220),
@@ -2233,10 +2063,7 @@ def compact_valuation_detail_rows(context: Dict[str, object], level: str) -> Lis
         meets_requirement = _number(margin_value) >= _number(minimum_value)
         margin_text += " · 계정 기준 " + minimum_margin + (" 충족" if meets_requirement else " 미달")
     source = str(facts.get("valuationSourceLabel") or "").strip()
-    reliability = str(facts.get("valuationReliabilityLabel") or "").strip()
-    reliability_score = facts.get("valuationReliabilityScore")
-    if _valuation_value_present(reliability_score):
-        reliability += (" " if reliability else "") + str(round(_number(reliability_score), 1)).rstrip("0").rstrip(".") + "%"
+    valuation_data_state = str(facts.get("valuationDataStateLabel") or "").strip()
     review_status = str(facts.get("valuationReviewStatus") or facts.get("valuationApprovalStatus") or "").strip()
     review_labels = {
         "suggested": "사용자 검토 전",
@@ -2248,7 +2075,7 @@ def compact_valuation_detail_rows(context: Dict[str, object], level: str) -> Lis
         "modified": "사용자 수정 승인",
         "rejected": "사용자 거절",
     }
-    basis = " · ".join(part for part in [source, reliability, review_labels.get(review_status, review_status)] if part)
+    basis = " · ".join(part for part in [source, valuation_data_state, review_labels.get(review_status, review_status)] if part)
     if "valuationDecisionEligible" in facts:
         basis += (" · " if basis else "") + ("투자 판단에 사용" if facts.get("valuationDecisionEligible") else "참고만 사용")
     per_status = str(facts.get("valuationPerStatus") or "").strip()
@@ -2261,7 +2088,7 @@ def compact_valuation_detail_rows(context: Dict[str, object], level: str) -> Lis
         _html_row("평가 방법", method, level=level, max_len=180),
         _html_row("기준 적정가", fair_value_text, level=level, max_len=240),
         _html_row("현재가와 적정가 차이", margin_text, level=level, max_len=180),
-        _html_row("근거 수준", basis, level=level, max_len=240),
+        _html_row("자료 상태", basis, level=level, max_len=240),
         _html_row("PER/EPS 기준", per_inputs, level=level, max_len=220),
         _html_row("확인할 데이터", " · ".join(missing_parts), level=level, max_len=260),
     ]
@@ -2273,12 +2100,15 @@ def compact_beginner_judgment_rows(
     response: NotificationAIValidatedResponse,
     level: str,
 ) -> List[str]:
-    relation_strength = relation_judgment_strength_display(context or {}, level).replace("[관계 분석] ", "")
+    relation_state = relation_state_values(context or {})
     profile = " · ".join(part for part in [account_strategy_label(context), account_delivery_level_label(context)] if part)
     rows = [
         _html_row("대응", action_label_for_action(response.action, context) or response.action_label, level=level),
         _html_row("이유", response.summary, level=level, max_len=420),
-        _html_row("확인 필요 점수" if relation_strength else "AI 판단 확신도", relation_strength or ai_confidence_display(response, level), level=level),
+        _html_row("확인 단계", relation_state.get("reviewLabel") or response.review_label, level=level),
+        _html_row("자료 상태", relation_state.get("dataLabel") or response.data_state_label, level=level),
+        _html_row("이번 변화", relation_state.get("changeLabel"), level=level),
+        _html_row("AI 검증", response.validation_label, level=level),
         _html_row("계정 기준", profile, level=level),
         _html_row("안내", "실행 전 참고용이며 자동 주문되지 않습니다.", level=level),
     ]
@@ -2391,9 +2221,6 @@ def execution_telegram_message(context: Dict[str, object], response: Notificatio
         "<b>" + ai_judgment_section_title(level) + "</b>",
         *ai_judgment_rows(response, level, context),
     ]
-    score_guide_rows = relation_score_guide_rows(context, level)
-    if score_guide_rows:
-        parts.extend(["", "<b>점수 안내</b>", *score_guide_rows])
     hypothesis_rows = hypothesis_comparison_rows(response, level)
     if hypothesis_rows:
         parts.extend(["", "<b>AI 경쟁 가설</b>", *hypothesis_rows])
@@ -2414,9 +2241,9 @@ def execution_telegram_message(context: Dict[str, object], response: Notificatio
     opinion_rows = strategy_guide_rows(context, response, level)
     if opinion_rows:
         parts.extend(["", "<b>전략 가이드</b>", *opinion_rows])
-    confidence_rows = customer_data_confidence_rows(context, level)
-    if confidence_rows:
-        parts.extend(["", "<b>신뢰도와 부족 데이터</b>", *confidence_rows])
+    data_state_rows = customer_data_state_rows(context, level)
+    if data_state_rows:
+        parts.extend(["", "<b>자료 상태와 부족 데이터</b>", *data_state_rows])
     if response.source_urls:
         parts.extend(["", "<b>출처</b>"])
         parts.extend(source_url_rows(response.source_urls, context))
@@ -2444,9 +2271,6 @@ def execution_telegram_message_compact_beginner(
         "<b>판단</b>",
         *compact_beginner_judgment_rows(context, response, level),
     ]
-    score_guide_rows = relation_score_guide_rows(context, level)
-    if score_guide_rows:
-        parts.extend(["", "<b>점수 안내</b>", *score_guide_rows])
     reason_rows = compact_beginner_reason_rows(context, level)
     if reason_rows:
         parts.extend(["", "<b>왜 알림이 왔나요?</b>", *reason_rows])
@@ -2492,9 +2316,8 @@ def relation_rule_summary(context: Dict[str, object], limit: int = 4) -> List[st
         for item in matches:
             if isinstance(item, dict):
                 label = str(item.get("label") or item.get("name") or item.get("rule") or item.get("ruleId") or "").strip()
-                score = item.get("score") or item.get("strength") or item.get("relationScore")
                 if label:
-                    rows.append(label + ((" (" + str(score) + "점)") if score not in (None, "") else ""))
+                    rows.append(label)
             elif str(item or "").strip():
                 rows.append(str(item).strip())
             if len(rows) >= limit:

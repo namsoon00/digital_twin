@@ -1,6 +1,12 @@
 from datetime import datetime, timezone
 from typing import Dict, Iterable, List, Tuple
 
+from .ontology_decision_state import (
+    conflict_state_from_roles,
+    evidence_role_from_relation,
+    semantic_relation_sort_key,
+)
+
 
 def utc_now_iso() -> str:
     return datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
@@ -12,13 +18,6 @@ def clean_text(value: object) -> str:
 
 def clean_symbol(value: object) -> str:
     return clean_text(value).upper()
-
-
-def clean_number(value: object, default: float = 0.0) -> float:
-    try:
-        return float(value)
-    except (TypeError, ValueError):
-        return default
 
 
 def list_of_strings(value: object) -> List[str]:
@@ -179,8 +178,9 @@ def derivation_ledger_rows(rule: Dict[str, object]) -> List[Dict[str, object]]:
             "targetKind": clean_text(derivation.get("target_kind") or derivation.get("targetKind")),
             "targetLabel": clean_text(derivation.get("target_label") or derivation.get("targetLabel")),
             "polarity": clean_text(derivation.get("polarity")),
-            "riskImpact": derivation.get("risk_impact") if "risk_impact" in derivation else derivation.get("riskImpact"),
-            "supportImpact": derivation.get("support_impact") if "support_impact" in derivation else derivation.get("supportImpact"),
+            "evidenceRole": clean_text(derivation.get("evidence_role") or derivation.get("evidenceRole") or derivation.get("polarity") or "context"),
+            "reviewLevel": clean_text(derivation.get("review_level") or derivation.get("reviewLevel")),
+            "dataState": clean_text(derivation.get("data_state") or derivation.get("dataState")),
             "decisionStage": clean_text(derivation.get("decision_stage") or derivation.get("decisionStage")),
             "actionGroup": clean_text(derivation.get("action_group") or derivation.get("actionGroup")),
             "actionLevel": clean_text(derivation.get("action_level") or derivation.get("actionLevel")),
@@ -189,15 +189,10 @@ def derivation_ledger_rows(rule: Dict[str, object]) -> List[Dict[str, object]]:
     return rows
 
 
-def strongest_relation(relations: Iterable[Dict[str, object]]) -> Dict[str, object]:
+def primary_relation(relations: Iterable[Dict[str, object]]) -> Dict[str, object]:
     ranked = sorted(
         [dict(item) for item in relations or [] if isinstance(item, dict)],
-        key=lambda item: (
-            clean_number(item.get("stagePriority"), 0.0),
-            clean_number(item.get("riskImpact"), 0.0) + clean_number(item.get("supportImpact"), 0.0),
-            clean_number(item.get("weight"), 0.0),
-        ),
-        reverse=True,
+        key=semantic_relation_sort_key,
     )
     return ranked[0] if ranked else {}
 
@@ -211,7 +206,7 @@ def trace_stage_rows(
 ) -> List[Dict[str, object]]:
     matched_count = len([item for item in conditions if item.get("status") in {"matched", "absence-satisfied"}])
     not_returned = len([item for item in conditions if item.get("status") == "not-returned"])
-    decision = strongest_relation(relations)
+    decision = primary_relation(relations)
     notification_count = len([
         item for item in relations
         if relation_type_of(item) in {"CREATES_NOTIFICATION_INTENT", "REQUIRES_NEXT_CHECK"}
@@ -241,7 +236,7 @@ def trace_ledger_row(
 ) -> Dict[str, object]:
     conditions = condition_ledger_rows(rule, trace)
     derivations = derivation_ledger_rows(rule)
-    decision = strongest_relation(relations)
+    decision = primary_relation(relations)
     matched_count = len([item for item in conditions if item.get("status") in {"matched", "absence-satisfied"}])
     not_returned = len([item for item in conditions if item.get("status") == "not-returned"])
     relation_types = []
@@ -250,6 +245,11 @@ def trace_ledger_row(
         if relation_type and relation_type not in relation_types:
             relation_types.append(relation_type)
     rule_id = clean_text(trace.get("ruleId") or trace.get("sourceRuleId") or rule_id_of(rule))
+    evidence_roles = [evidence_role_from_relation(item) for item in relations]
+    conflict_state = conflict_state_from_roles(evidence_roles)
+    data_state = clean_text(decision.get("dataState") or trace.get("dataState") or "partial")
+    review_level = clean_text(decision.get("reviewLevel") or trace.get("reviewLevel") or "observe")
+    validation_state = clean_text(decision.get("validationState") or trace.get("validationState") or ("ready" if matched_count and not not_returned else "conditional"))
     return {
         "key": clean_text(trace.get("id") or (rule_id + ":" + clean_symbol(trace.get("symbol")))) or ("trace-" + str(index + 1)),
         "traceId": clean_text(trace.get("id")),
@@ -260,16 +260,19 @@ def trace_ledger_row(
         "status": "complete" if matched_count and not not_returned else "review",
         "reasoningMode": clean_text(trace.get("reasoningMode")),
         "materializationSource": clean_text(trace.get("materializationSource")),
-        "confidence": trace.get("confidence"),
         "updatedAt": clean_text(trace.get("updatedAt")),
+        "reviewLevel": review_level,
+        "dataState": data_state,
+        "changeState": clean_text(decision.get("changeState") or trace.get("changeState") or "unchanged"),
+        "conflictState": conflict_state,
+        "validationState": validation_state,
+        "evidenceRoles": sorted(set(evidence_roles)),
         "decisionStage": clean_text(decision.get("decisionStage")),
         "actionGroup": clean_text(decision.get("actionGroup")),
         "actionLevel": clean_text(decision.get("actionLevel")),
         "actionPolicy": clean_text(decision.get("actionPolicy")),
         "allowedActions": list_of_strings(decision.get("allowedActions")),
         "blockedActions": list_of_strings(decision.get("blockedActions")),
-        "riskImpact": max([clean_number(item.get("riskImpact")) for item in relations], default=0.0),
-        "supportImpact": max([clean_number(item.get("supportImpact")) for item in relations], default=0.0),
         "matchedConditionCount": matched_count,
         "conditionCount": len(conditions),
         "notReturnedConditionCount": not_returned,

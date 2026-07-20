@@ -26,6 +26,7 @@ class MonitorRunner:
         account_job_lock_seconds: int = 600,
         worker_id: str = "",
         progress_callback: Callable[[str, Dict[str, object]], None] = None,
+        psychology_shadow_service=None,
     ):
         self.accounts = list(accounts)
         self.account_map = {account.account_id: account for account in self.accounts}
@@ -42,6 +43,7 @@ class MonitorRunner:
         self.account_job_lock_seconds = max(60, int(account_job_lock_seconds or 600))
         self.worker_id = worker_id or ("monitor-" + uuid.uuid4().hex[:12])
         self.progress_callback = progress_callback
+        self.psychology_shadow_service = psychology_shadow_service
 
     def run_once(self, dry_run: bool = False, force: bool = False, symbol_filter: Iterable[str] = None) -> List[AlertEvent]:
         if self.use_account_job_queue(dry_run, force, symbol_filter):
@@ -205,6 +207,7 @@ class MonitorRunner:
             status=projection.get("status") if isinstance(projection, dict) else "",
             graphStore=projection.get("graphStore") if isinstance(projection, dict) else "",
         )
+        self.evaluate_psychology_shadow(snapshot, publish=not dry_run)
         events = self.monitor.events_for_snapshot(snapshot, previous)
         if force and hasattr(self.monitor, "forced_holdings_snapshot_events"):
             events.extend(self.monitor.forced_holdings_snapshot_events(snapshot))
@@ -215,6 +218,23 @@ class MonitorRunner:
         events = self.monitor.apply_cadence(events, self.store, force=force)
         self.progress("events.ready", accountId=account.account_id, eventCount=len(events), force=bool(force))
         return snapshot, events
+
+    def evaluate_psychology_shadow(self, snapshot: AccountSnapshot, publish: bool = True) -> None:
+        if not self.psychology_shadow_service:
+            return
+        try:
+            events = self.psychology_shadow_service.evaluate(snapshot)
+            if publish:
+                for event in events or []:
+                    self.publish(event)
+        except Exception as error:  # noqa: BLE001 - shadow experiments must never block live monitoring.
+            snapshot.metadata["psychologyShadow"] = {
+                "enabled": True,
+                "mode": "shadow",
+                "status": "error",
+                "reason": str(error)[:300],
+                "decisionImpactApplied": 0.0,
+            }
 
     def next_account_run_at(self, seconds: int) -> str:
         return (datetime.now(timezone.utc) + timedelta(seconds=max(1, int(seconds or 1)))).isoformat().replace("+00:00", "Z")
@@ -274,6 +294,8 @@ class MonitorRunner:
     def compact_previous_state(self, previous: dict) -> dict:
         if not isinstance(previous, dict) or not previous:
             return {}
+        metadata = previous.get("metadata") if isinstance(previous.get("metadata"), dict) else {}
+        psychology_shadow = metadata.get("psychologyShadow") if isinstance(metadata.get("psychologyShadow"), dict) else {}
         return {
             "generatedAt": previous.get("generatedAt"),
             "portfolio": previous.get("portfolio") if isinstance(previous.get("portfolio"), dict) else {},
@@ -281,6 +303,7 @@ class MonitorRunner:
             "watchlist": previous.get("watchlist") if isinstance(previous.get("watchlist"), dict) else {},
             "decisions": previous.get("decisions") if isinstance(previous.get("decisions"), dict) else {},
             "externalSignals": previous.get("externalSignals") if isinstance(previous.get("externalSignals"), dict) else {},
+            "metadata": {"psychologyShadow": psychology_shadow} if psychology_shadow else {},
         }
 
     def load_snapshot_history(self, account_id: str) -> List[dict]:

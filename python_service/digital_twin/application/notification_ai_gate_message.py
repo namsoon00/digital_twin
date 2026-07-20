@@ -356,7 +356,7 @@ def notification_topline_change_summary(context: Dict[str, object]) -> str:
             return "새 뉴스·공시"
         if "관계 점수" in reason_summary or "확인 단계" in reason_summary:
             return "확인 단계 변경"
-        return _clean_reason_text(reason_summary, 18)
+        return _clean_reason_text(reason_summary, 0)
     return ""
 
 def prepend_execution_start_badge(rendered: str, context: Dict[str, object] = None) -> str:
@@ -823,12 +823,12 @@ def _threshold_reason(context: Dict[str, object]) -> str:
     detected = _criterion_value(criteria, "감지")
     setting = _criterion_value(criteria, "설정")
     if detected and setting:
-        return "감지값 " + _clean_reason_text(detected, 90) + "이 기준(" + _clean_reason_text(setting, 70) + ")을 넘었습니다."
+        return "감지값 " + _clean_reason_text(detected, 0) + "이 기준(" + _clean_reason_text(setting, 0) + ")을 넘었습니다."
     if detected:
-        return "감지값 " + _clean_reason_text(detected, 120) + " 때문에 알림이 발생했습니다."
+        return "감지값 " + _clean_reason_text(detected, 0) + " 때문에 알림이 발생했습니다."
     if setting:
-        return _clean_reason_text(setting, 120)
-    return _clean_reason_text(criteria[0], 120) if criteria else ""
+        return _clean_reason_text(setting, 0)
+    return _clean_reason_text(criteria[0], 0) if criteria else ""
 
 def notification_reason_summary(context: Dict[str, object]) -> str:
     return (

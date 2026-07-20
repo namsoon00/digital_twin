@@ -21,6 +21,7 @@ from digital_twin.domain.data_freshness import (
 )
 from digital_twin.application.notification_ai_gate_message import (
     notification_cooldown_release_summary,
+    notification_reason_summary,
     notification_topline_change_summary,
     prepend_execution_start_badge,
 )
@@ -290,6 +291,21 @@ class NotificationDataQualityPolicyTests(unittest.TestCase):
 
         self.assertTrue(message.startswith("<b>🔔 새 알림</b>\n<code>손익 구간: 손실 관리(-10.4%) · 이전 알림 대비 1.5%p 악화</code>"))
         self.assertEqual(1, message.count("🔔 새 알림"))
+
+    def test_threshold_summary_keeps_full_detected_and_configured_values(self):
+        detected = "비트코인 24시간 +1.2%, 7일 +5.0%로 최근 일주일 상승 흐름이 이어지고 있으며 실제 보유 종목의 가격 반응을 함께 확인해야 합니다"
+        configured = "비트코인 7일 변동률이 +4% 이상 또는 -4% 이하"
+        context = {
+            "criterionLines": [
+                "감지: " + detected,
+                "설정: " + configured,
+            ],
+        }
+        expected = "감지값 " + detected + "이 기준(" + configured + ")을 넘었습니다."
+
+        self.assertEqual(expected, notification_reason_summary(context))
+        self.assertEqual(expected, notification_topline_change_summary(context))
+        self.assertNotIn("...", notification_topline_change_summary(context))
 
     def test_message_start_badge_adds_work_handoff_keyword(self):
         message = prepend_message_start_badge("작업 완료\n- 요약: 테스트", context={"messageType": "workHandoff"})

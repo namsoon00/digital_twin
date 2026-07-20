@@ -168,31 +168,6 @@ class TelegramNotifier:
         return result
 
 
-class FallbackNotifier:
-    def __init__(self, primary, fallback, label: str = "Fallback notifier"):
-        self.primary = primary
-        self.fallback = fallback
-        self.label = label
-
-    def send(self, text: str) -> NotificationResult:
-        primary_result = self.primary.send(text)
-        if primary_result.delivered:
-            return primary_result
-        fallback_result = self.fallback.send(text)
-        if fallback_result.delivered:
-            return NotificationResult(
-                True,
-                fallback_result.label,
-                self.primary.label + " 실패 후 기존 계정 채널로 대체 발송: " + str(primary_result.reason or ""),
-            )
-        return NotificationResult(
-            False,
-            self.label,
-            self.primary.label + " 실패: " + str(primary_result.reason or "")
-            + " · 기존 계정 채널 실패: " + str(fallback_result.reason or ""),
-        )
-
-
 def notifier_from_settings():
     settings = runtime_settings()
     provider = str(settings.get("notifyProvider") or "").strip().lower()
@@ -219,11 +194,9 @@ def notifier_for_operations(account: AccountConfig = None):
         or (account.telegram_chat_id if account else "")
         or ""
     ).strip()
-    if token and chat_id:
-        notifier = TelegramNotifier(token, chat_id)
-        notifier.label = "Telegram Operations"
-        return FallbackNotifier(notifier, notifier_for_account(account), "Operations delivery")
-    return notifier_for_account(account)
+    notifier = TelegramNotifier(token, chat_id)
+    notifier.label = "Telegram Operations"
+    return notifier
 
 
 def notification_queue():

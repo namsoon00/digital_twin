@@ -2,6 +2,7 @@ import sys
 import unittest
 from pathlib import Path
 from types import SimpleNamespace
+from unittest.mock import patch
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
@@ -26,7 +27,7 @@ from digital_twin.domain.strategy_alerts import StrategyAlertMixin
 from digital_twin.domain.portfolio import utc_now_iso
 from digital_twin.application.notification_service import NotificationQueueRunner
 from digital_twin.infrastructure.cli import public_settings_payload
-from digital_twin.infrastructure.notifications import FallbackNotifier, NotificationResult
+from digital_twin.infrastructure.notifications import NotificationResult, TelegramNotifier, notifier_for_operations
 
 
 class NotificationDataQualityPolicyTests(unittest.TestCase):
@@ -94,22 +95,22 @@ class NotificationDataQualityPolicyTests(unittest.TestCase):
         self.assertTrue(payload["configured"]["operationsTelegramBotToken"])
         self.assertTrue(payload["configured"]["operationsTelegramChatId"])
 
-    def test_operations_notifier_falls_back_without_losing_alert(self):
-        primary = SimpleNamespace(
-            label="Telegram Operations",
-            send=lambda _message: NotificationResult(False, "Telegram Operations", "chat not found"),
-        )
-        delivered = []
-        fallback = SimpleNamespace(
-            label="Telegram",
-            send=lambda message: delivered.append(message) or NotificationResult(True, "Telegram"),
-        )
+    def test_operations_notifier_never_falls_back_to_account_bot(self):
+        with patch(
+            "digital_twin.infrastructure.notifications.runtime_settings",
+            return_value={
+                "operationsTelegramBotToken": "operations-token",
+                "operationsTelegramChatId": "operations-chat",
+                "telegramBotToken": "account-token",
+                "telegramChatId": "account-chat",
+            },
+        ):
+            notifier = notifier_for_operations()
 
-        result = FallbackNotifier(primary, fallback, "Operations delivery").send("운영 알림")
-
-        self.assertTrue(result.delivered)
-        self.assertEqual(["운영 알림"], delivered)
-        self.assertIn("대체 발송", result.reason)
+        self.assertIsInstance(notifier, TelegramNotifier)
+        self.assertEqual("Telegram Operations", notifier.label)
+        self.assertEqual("operations-token", notifier.bot_token)
+        self.assertEqual("operations-chat", notifier.chat_id)
 
     def test_topline_change_summary_is_separated_from_new_alert_badge(self):
         message = prepend_execution_start_badge(

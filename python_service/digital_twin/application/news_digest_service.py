@@ -11,6 +11,7 @@ from ..domain.message_types import NEWS_DIGEST
 from ..domain.investment_research import NewsCollectionTarget
 from ..domain.investment_strategy_guidance import merge_strategy_context, strategy_message_lines
 from ..domain.news_analysis import analysis_payload_requires_refresh, classify_news_relevance, clean_article_summary_noise, relation_scope_is_investable
+from ..domain.news_ai_analysis import clean_summary_text, summary_texts_similar
 from ..domain.notifications import NotificationJob, notification_debug_number
 from ..domain.portfolio import utc_now_iso
 from ..domain.sent_article_filter import (
@@ -270,6 +271,12 @@ def item_action_boundary(item: Dict[str, object]) -> str:
     return ai_text(item, "actionBoundaryKo", 320)
 
 
+def item_investment_impact(item: Dict[str, object]) -> str:
+    summary = ai_summary(item)
+    why_it_matters = bounded_text(clean_summary_text(summary.get("whyItMatters")), 360)
+    return why_it_matters or item_portfolio_implication(item) or item_impact_reason(item)
+
+
 def normalized_impact_kind(item: Dict[str, object]) -> str:
     analysis = ai_analysis(item)
     payload = item.get("payload") if isinstance(item.get("payload"), dict) else {}
@@ -318,14 +325,13 @@ def impact_summary_lines(items: List[Dict[str, object]]) -> List[str]:
     return rows
 
 
-def compact_digest_line(label: str, value: object, seen: set, limit: int = 420) -> str:
-    text = bounded_text(value, limit)
+def compact_digest_line(label: str, value: object, seen: List[str], limit: int = 420) -> str:
+    text = bounded_text(clean_summary_text(value), limit)
     if not text:
         return ""
-    key = re.sub(r"\s+", "", text).casefold()
-    if key in seen:
+    if any(summary_texts_similar(text, existing) for existing in seen):
         return ""
-    seen.add(key)
+    seen.append(text)
     return "• " + label + ": " + html_text(text)
 
 
@@ -360,22 +366,18 @@ def alert_reason_lines(items: List[Dict[str, object]]) -> List[str]:
     symbol = str(primary.get("symbol") or "")
     target = name + ((" / " + symbol) if symbol and symbol != name else "")
     bucket = str(primary.get("bucket") or "대상")
-    title = str(primary.get("title") or "제목 미확인")
-    impact = str(primary.get("impact") or "중립")
     score_parts = [part for part in [primary.get("relevance"), primary.get("importance")] if part]
     score_text_value = "·".join(str(part) for part in score_parts)
-    lines = [
-        "• 새 뉴스가 들어왔습니다: " + html_text(title),
-        "• 이 뉴스는 " + html_text(target) + " " + html_text(bucket) + " 종목과 직접 관련된 " + html_text(impact) + " 뉴스로 분류됐습니다.",
-    ]
+    lines = []
     if score_text_value:
-        lines.append("• 관련성·중요도 " + html_text(score_text_value) + " 기준을 통과해서 지금 알림을 보냈습니다.")
+        lines.append(
+            "• " + html_text(target) + " " + html_text(bucket)
+            + " 종목의 새 기사이며 관련성·중요도 " + html_text(score_text_value)
+            + " 기준을 통과했습니다."
+        )
     else:
-        lines.append("• 새 근거가 기존 보유/관심 종목과 연결되어 지금 알림을 보냈습니다.")
-    lines.extend([
-        "• 단독 매수·매도 신호가 아니라, 가격 반응과 거래량이 같은 방향으로 따라오는지 확인하라는 알림입니다.",
-        "• 확인할 것: " + html_text(primary.get("watch") or "다음 장 가격 반응과 거래량 동반 여부"),
-    ])
+        lines.append("• " + html_text(target) + "의 새 기사가 보유/관심 종목 기준을 통과했습니다.")
+    lines.append("• 기사 한 건만으로 매수·매도를 결정하지 않고, 기사 상세의 확인 조건과 함께 판단합니다.")
     if len(items) > 1:
         lines.append("• 함께 들어온 새 뉴스가 " + str(len(items)) + "건이라 기사 상세에서 각각 확인할 수 있습니다.")
     return lines
@@ -692,7 +694,6 @@ class NewsDigestEnqueuer:
         reference = latest_timestamp(items)
         strategy_context = merge_strategy_context({}, account)
         strategy_lines = strategy_message_lines(strategy_context)
-        effect_lines = impact_summary_lines(items)
         reason_lines = alert_reason_lines(items)
         item_lines = []
         for index, item in enumerate(items, start=1):
@@ -712,30 +713,23 @@ class NewsDigestEnqueuer:
                 "• 기사일: " + html_text(published_at) + ", 출처: " + html_text(source),
                 "• 분석: " + html_text(article_analysis_label(item)),
             ])
-            facts_line = article_facts_line(item)
             summary_line = item_summary(item)
-            impact_reason = item_impact_reason(item)
-            portfolio_implication = item_portfolio_implication(item)
+            investment_impact = item_investment_impact(item)
             action_boundary = item_action_boundary(item)
-            reason_line = ai_reason_line(item)
-            watch_line = ai_watch_line(item)
+            watch_line = item_watch_text(item)
             item_lines.extend([
                 "• 판단: 영향 " + html_text(impact_label(item)) + ", 신뢰도 " + html_text(reliability)
                 + (", 관련성 " + html_text(relevance) if relevance else "")
                 + (", 중요도 " + html_text(importance) if importance else ""),
             ])
-            seen_detail_lines = set()
+            seen_detail_lines: List[str] = []
             for line in [
-                compact_digest_line("핵심 내용", summary_line, seen_detail_lines),
-                compact_digest_line("투자 영향", portfolio_implication or impact_reason, seen_detail_lines),
-                compact_digest_line("판단 근거", facts_line or reason_line, seen_detail_lines, limit=260),
+                compact_digest_line("핵심 사실", summary_line, seen_detail_lines),
+                compact_digest_line("투자 영향", investment_impact, seen_detail_lines),
+                compact_digest_line("확인할 점", watch_line or action_boundary, seen_detail_lines, limit=320),
             ]:
                 if line:
                     item_lines.append(line)
-            if action_boundary:
-                item_lines.append("• 대응 경계: " + html_text(action_boundary))
-            if watch_line:
-                item_lines.append("• 확인할 것: " + html_text(watch_line))
             item_lines.append("• 원문: " + link)
             if index < len(items):
                 item_lines.append("")
@@ -753,9 +747,6 @@ class NewsDigestEnqueuer:
             "",
             "계정 성향 기준",
             *(html_text(line) for line in strategy_lines),
-            "",
-            "이번 뉴스 핵심",
-            *(html_text(line) for line in effect_lines or ["• 기사별 영향 해석을 확인하세요."]),
             "",
             "기사 상세",
             *item_lines,

@@ -1,6 +1,7 @@
 import sys
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
@@ -11,20 +12,109 @@ from digital_twin.domain.news_analysis import (
     classify_news_event_type,
     clean_article_summary_noise,
     confidence_from_analysis_payload,
+    english_fragment_to_korean,
     impact_from_analysis_payload,
     korean_article_summary,
     relation_scope_is_investable,
     source_reliability_score,
     stock_impact_analysis,
 )
-from digital_twin.domain.news_ai_analysis import apply_news_ai_analysis, local_news_ai_analysis, normalize_ai_analysis
+from digital_twin.domain.news_ai_analysis import (
+    NewsAiAnalysis,
+    apply_news_ai_analysis,
+    local_news_ai_analysis,
+    normalize_ai_analysis,
+    summary_texts_similar,
+)
 from digital_twin.domain.ontology_contracts import PortfolioOntology
 from digital_twin.domain.ontology_relation_reasoning import research_evidence_facts
 from digital_twin.domain.ontology_schema import add_entity
 from digital_twin.domain.portfolio_ontology_research_concepts import add_research_evidence_concepts
+from digital_twin.infrastructure.news_ai_analyzer import FallbackNewsAiAnalyzer, news_ai_analyzer_from_settings
 
 
 class NewsAnalysisDomainTests(unittest.TestCase):
+    def test_news_ai_analyzer_uses_explicit_compatible_codex_model(self):
+        with patch("digital_twin.infrastructure.news_ai_analyzer.codex_command", return_value="codex --model gpt-test exec -") as command:
+            analyzer = news_ai_analyzer_from_settings({
+                "newsAiAnalysisUseCodex": "1",
+                "newsAiAnalysisModel": "gpt-test",
+                "newsAiAnalysisTimeoutSeconds": "30",
+            })
+
+        self.assertIsInstance(analyzer, FallbackNewsAiAnalyzer)
+        command.assert_called_once_with("gpt-test")
+
+    def test_normalizes_article_summary_fields_without_repeating_the_same_fact(self):
+        fallback = NewsAiAnalysis(
+            summary={
+                "whyItMatters": "서비스 가격 인상은 매출과 고객 이탈률에 함께 영향을 줄 수 있습니다.",
+                "watchPoints": ["다음 분기 서비스 매출과 고객 이탈률"],
+            },
+        )
+
+        analysis = normalize_ai_analysis({
+            "summary": {
+                "oneLineKo": "Apple이 서비스 가격을 10% 인상했습니다.",
+                "briefKo": "기사 요약: Apple이 서비스 가격을 10% 인상했습니다. Apple이 서비스 가격을 10% 인상했습니다.",
+                "keyTakeaways": [
+                    "Apple이 서비스 가격을 10% 인상했습니다.",
+                    "인상은 다음 결제일부터 적용됩니다.",
+                ],
+                "whyItMatters": "Apple이 서비스 가격을 10% 인상했습니다.",
+                "watchPoints": [
+                    "Apple이 서비스 가격을 10% 인상했습니다.",
+                    "다음 분기 서비스 매출과 고객 이탈률",
+                ],
+            },
+        }, fallback).to_dict()["summary"]
+
+        self.assertEqual(1, analysis["briefKo"].count("10% 인상"))
+        self.assertEqual(["인상은 다음 결제일부터 적용됩니다"], analysis["keyTakeaways"])
+        self.assertIn("매출과 고객 이탈률", analysis["whyItMatters"])
+        self.assertEqual(["다음 분기 서비스 매출과 고객 이탈률"], analysis["watchPoints"])
+        self.assertFalse(summary_texts_similar(analysis["briefKo"], analysis["whyItMatters"]))
+
+    def test_english_modal_may_is_not_translated_as_the_month_of_may(self):
+        modal = english_fragment_to_korean("Apple may increase iPhone prices")
+        dated = english_fragment_to_korean("Apple event starts May 12")
+
+        self.assertNotIn("5월", modal)
+        self.assertIn("5월 12", dated)
+
+    def test_local_english_fallback_uses_event_fact_instead_of_word_by_word_translation(self):
+        target = NewsCollectionTarget("MSTR", "스트래티지", "NASDAQ", "USD", "디지털자산")
+        evidence = ResearchEvidence(
+            "research:MSTR:news:stock-sale",
+            "MSTR",
+            "news",
+            "Reuters",
+            "Strategy may sell $466 million of MSTR stock while maintaining bitcoin reserves",
+            "Strategy may sell $466 million of its stock and said its bitcoin reserve policy remains unchanged.",
+            "https://example.test/mstr-sale",
+            "2026-07-20T01:00:00Z",
+            "context",
+            70,
+            0.8,
+            "2026-07-20T00:30:00Z",
+            raw_payload={
+                "articleReadStatus": "body",
+                "relationScope": "direct",
+                "articleFacts": {
+                    "bodyAvailable": True,
+                    "bodyPreview": "Strategy may sell $466 million of its stock. The company said its bitcoin reserve policy remains unchanged.",
+                },
+            },
+        )
+
+        summary = local_news_ai_analysis(target, evidence).to_dict()["summary"]
+
+        self.assertIn("주식 매각 가능성", summary["briefKo"])
+        self.assertIn("비트코인 준비금 정책은 유지", summary["briefKo"])
+        self.assertNotIn(" may ", " " + summary["briefKo"] + " ")
+        self.assertNotIn(" its ", " " + summary["briefKo"] + " ")
+        self.assertEqual([], summary["keyTakeaways"])
+
     def test_news_analysis_marks_direct_material_event_for_ontology(self):
         target = NewsCollectionTarget("005930", "삼성전자", "KOSPI", "KRW", "반도체")
 
@@ -283,6 +373,8 @@ class NewsAnalysisDomainTests(unittest.TestCase):
         self.assertTrue(updated.raw_payload["analysisConflict"])
         self.assertEqual("support", updated.raw_payload["analysisConflictExistingPolarity"])
         self.assertEqual("risk", updated.raw_payload["analysisConflictAiPolarity"])
+        self.assertEqual("소송 부담이 투자심리에 부담입니다", updated.raw_payload["articleFacts"]["summaryKo"])
+        self.assertIn("소송·규제 이슈", updated.raw_payload["articleFacts"]["eventTakeaway"])
         self.assertTrue(any(item.kind == "article-analysis-conflict" for item in graph.entities))
         self.assertTrue(any(item.source == stock_id and item.relation_type == "HAS_DATA_QUALITY" for item in graph.relations))
 

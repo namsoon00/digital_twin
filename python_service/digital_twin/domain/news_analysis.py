@@ -843,7 +843,7 @@ def english_fragment_to_korean(value: object, target: object = None) -> str:
         (r"\bfebruary\b", "2월"),
         (r"\bmarch\b", "3월"),
         (r"\bapril\b", "4월"),
-        (r"\bmay\b", "5월"),
+        (r"\bmay(?=\s+(?:\d{1,2}(?:st|nd|rd|th)?\b|20\d{2}\b))", "5월"),
         (r"\bjune\b", "6월"),
         (r"\bjuly\b", "7월"),
         (r"\baugust\b", "8월"),
@@ -1088,6 +1088,18 @@ def article_event_takeaway(target: object, title: object, article_text: object =
     combined = title_text + " " + text
     lowered = _lower_text(combined)
     target_name = _target_name_for_summary(target)
+    stock_sale = re.search(
+        r"(?:may|plans?\s+to|will)\s+sell\s+([$€£]?\d[\d,.]*(?:\.\d+)?\s?(?:billion|million|trillion|bn|mn|B|M)?)\s+(?:of\s+)?(?:its\s+)?(?:[A-Z]{1,6}\s+)?(?:stock|shares?)",
+        combined,
+        re.IGNORECASE,
+    )
+    if stock_sale:
+        amount = stock_sale.group(1).replace("B", " billion").replace("M", " million")
+        reserve_unchanged = bool(re.search(r"bitcoin\s+(?:reserve|treasury).{0,45}(?:remain|unchanged|maintain)", combined, re.IGNORECASE))
+        return (
+            target_name + "가 " + amount + " 규모 주식 매각 가능성을 밝혔고"
+            + (", 비트코인 준비금 정책은 유지한다고 설명" if reserve_unchanged else "")
+        )
     preferred_volume = re.search(
         r"preferred shares?\s+hit record\s+([$€£]?\d[\d,.]*(?:\.\d+)?\s?(?:billion|million|trillion|bn|mn|B|M)?)\s+in\s+combined\s+(.+?)\s+trading volume(?:\s+despite\s+(.+))?",
         combined,

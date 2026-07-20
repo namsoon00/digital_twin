@@ -10,8 +10,8 @@ from . import news_analysis as news_domain
 from .ontology_threshold_policy import default_ontology_threshold_policy
 
 
-NEWS_AI_ANALYSIS_VERSION = "news-ai-analysis-v2"
-NEWS_AI_PROMPT_VERSION = "news-ai-prompt-v2"
+NEWS_AI_ANALYSIS_VERSION = "news-ai-analysis-v3"
+NEWS_AI_PROMPT_VERSION = "news-ai-prompt-v3"
 
 IMPACT_LABELS = {
     "support": "호재",
@@ -145,6 +145,130 @@ def unique_texts(values: Iterable[object], limit: int = 6) -> List[str]:
         if len(rows) >= limit:
             break
     return rows
+
+
+SUMMARY_PREFIX_PATTERN = re.compile(
+    r"^(?:(?:전체\s*)?본문|RSS/제공|RSS|제공|기사|AI\s*기사)\s*(?:요약|분석)\s*:\s*|^요약\s*:\s*",
+    re.IGNORECASE,
+)
+
+SUMMARY_STOP_WORDS = {
+    "관련", "기사", "내용", "핵심", "요약", "분석", "확인", "대상", "종목",
+    "있습니다", "합니다", "됩니다", "입니다", "그리고", "하지만", "대한", "위한",
+    "with", "from", "that", "this", "into", "after", "before", "about", "stock", "shares",
+}
+
+
+def clean_summary_text(value: object, limit: int = 760) -> str:
+    text = news_domain.clean_article_summary_noise(compact_text(value, limit + 120))
+    previous = ""
+    while text and text != previous:
+        previous = text
+        text = SUMMARY_PREFIX_PATTERN.sub("", text).strip()
+    text = re.sub(r"\s*/\s*(?=[가-힣A-Za-z])", ". ", text)
+    text = re.sub(r"\s+", " ", text).strip(" .·;:-")
+    return compact_text(text, limit)
+
+
+def summary_sentence_candidates(value: object) -> List[str]:
+    text = clean_summary_text(value, 1200)
+    if not text:
+        return []
+    parts = re.split(r"(?<=[.!?])\s+|[\r\n]+|\s*[•·]\s+", text)
+    return [clean_summary_text(part, 520) for part in parts if clean_summary_text(part, 520)]
+
+
+def summary_tokens(value: object) -> set:
+    text = clean_summary_text(value, 1200).casefold()
+    tokens = re.findall(r"[가-힣]{2,}|[a-z][a-z0-9'-]{2,}|[$€£]?\d[\d,.]*(?:%|점|주|원|달러)?", text)
+    return {token for token in tokens if token not in SUMMARY_STOP_WORDS}
+
+
+def summary_texts_similar(left: object, right: object) -> bool:
+    left_text = re.sub(r"[^0-9a-z가-힣]+", "", clean_summary_text(left, 1200).casefold())
+    right_text = re.sub(r"[^0-9a-z가-힣]+", "", clean_summary_text(right, 1200).casefold())
+    if not left_text or not right_text:
+        return False
+    shorter, longer = sorted([left_text, right_text], key=len)
+    if len(shorter) >= 16 and shorter in longer:
+        return True
+    left_tokens = summary_tokens(left)
+    right_tokens = summary_tokens(right)
+    if not left_tokens or not right_tokens:
+        return False
+    overlap = len(left_tokens.intersection(right_tokens)) / max(1, min(len(left_tokens), len(right_tokens)))
+    return overlap >= 0.78 and len(left_tokens.intersection(right_tokens)) >= 3
+
+
+def semantically_unique_texts(
+    values: Iterable[object],
+    limit: int = 6,
+    against: Iterable[object] = (),
+) -> List[str]:
+    rows: List[str] = []
+    comparison = [clean_summary_text(value, 760) for value in against or [] if clean_summary_text(value, 760)]
+    for value in values or []:
+        candidates = summary_sentence_candidates(value) or [clean_summary_text(value, 520)]
+        for candidate in candidates:
+            if not candidate or any(summary_texts_similar(candidate, existing) for existing in comparison + rows):
+                continue
+            rows.append(candidate)
+            if len(rows) >= limit:
+                return rows
+    return rows
+
+
+def normalized_summary_payload(summary: Dict[str, object], fallback_summary: Dict[str, object]) -> Dict[str, object]:
+    summary = summary if isinstance(summary, dict) else {}
+    fallback_summary = fallback_summary if isinstance(fallback_summary, dict) else {}
+    raw_one_line = (
+        summary.get("oneLineKo")
+        or summary.get("one_line_ko")
+        or fallback_summary.get("oneLineKo")
+        or ""
+    )
+    raw_brief = (
+        summary.get("briefKo")
+        or summary.get("brief_ko")
+        or fallback_summary.get("briefKo")
+        or raw_one_line
+    )
+    brief_rows = semantically_unique_texts(summary_sentence_candidates(raw_brief), 3)
+    brief = compact_text(". ".join(row.rstrip(". ") for row in brief_rows), 520)
+    one_line = clean_summary_text(raw_one_line, 220) or (brief_rows[0] if brief_rows else "")
+    takeaways = semantically_unique_texts(
+        summary.get("keyTakeaways")
+        or summary.get("key_takeaways")
+        or fallback_summary.get("keyTakeaways")
+        or [],
+        4,
+        against=[one_line, brief],
+    )
+    why_it_matters = clean_summary_text(
+        summary.get("whyItMatters")
+        or summary.get("why_it_matters")
+        or fallback_summary.get("whyItMatters")
+        or "",
+        360,
+    )
+    if summary_texts_similar(why_it_matters, brief):
+        fallback_why = clean_summary_text(fallback_summary.get("whyItMatters"), 360)
+        why_it_matters = "" if summary_texts_similar(fallback_why, brief) else fallback_why
+    watch_points = semantically_unique_texts(
+        summary.get("watchPoints")
+        or summary.get("watch_points")
+        or fallback_summary.get("watchPoints")
+        or [],
+        4,
+        against=[one_line, brief, why_it_matters],
+    )
+    return {
+        "oneLineKo": one_line,
+        "briefKo": brief or one_line,
+        "keyTakeaways": takeaways,
+        "whyItMatters": why_it_matters,
+        "watchPoints": watch_points,
+    }
 
 
 def keyword_hits(text: object, phrases: Iterable[str], limit: int = 6) -> List[str]:
@@ -330,6 +454,7 @@ def normalize_ai_analysis(payload: Dict[str, object], fallback: NewsAiAnalysis =
         polarity = "unknown"
     summary = payload.get("summary") if isinstance(payload.get("summary"), dict) else {}
     fallback_summary = fallback.summary if isinstance(fallback.summary, dict) else {}
+    normalized_summary = normalized_summary_payload(summary, fallback_summary)
     return NewsAiAnalysis(
         status=str(payload.get("status") or fallback.status or "ok"),
         version=str(payload.get("version") or fallback.version or NEWS_AI_ANALYSIS_VERSION),
@@ -344,13 +469,7 @@ def normalize_ai_analysis(payload: Dict[str, object], fallback: NewsAiAnalysis =
         confidence=clamp(number(payload.get("confidence")) or fallback.confidence, 0.0, 1.0),
         materiality_score=clamp(number(payload.get("materialityScore") or payload.get("materiality_score")) or fallback.materiality_score, 0.0, 100.0),
         relevance_score=clamp(number(payload.get("relevanceScore") or payload.get("relevance_score")) or fallback.relevance_score, 0.0, 100.0),
-        summary={
-            "oneLineKo": compact_text(summary.get("oneLineKo") or summary.get("one_line_ko") or fallback_summary.get("oneLineKo") or "", 220),
-            "briefKo": compact_text(summary.get("briefKo") or summary.get("brief_ko") or fallback_summary.get("briefKo") or "", 520),
-            "keyTakeaways": unique_texts(summary.get("keyTakeaways") or summary.get("key_takeaways") or fallback_summary.get("keyTakeaways") or [], 5),
-            "whyItMatters": compact_text(summary.get("whyItMatters") or summary.get("why_it_matters") or fallback_summary.get("whyItMatters") or "", 360),
-            "watchPoints": unique_texts(summary.get("watchPoints") or summary.get("watch_points") or fallback_summary.get("watchPoints") or [], 5),
-        },
+        summary=normalized_summary,
         risk_signals=unique_texts(payload.get("riskSignals") or payload.get("risk_signals") or fallback.risk_signals, 6),
         support_signals=unique_texts(payload.get("supportSignals") or payload.get("support_signals") or fallback.support_signals, 6),
         contrast_signals=unique_texts(payload.get("contrastSignals") or payload.get("contrast_signals") or fallback.contrast_signals, 6),
@@ -516,23 +635,11 @@ def local_news_ai_analysis(target: NewsCollectionTarget, evidence: ResearchEvide
     else:
         one_line = article_takeaway or target_name + " 관련 새 정보지만 방향성은 중립입니다."
         fallback_brief = impact_reason
-    brief_source = article_summary or article_takeaway
+    source_is_korean = news_domain.contains_hangul(body or feed_summary or title)
+    brief_source = (article_summary if source_is_korean else article_takeaway) or article_summary
     brief = compact_text(brief_source, 520) or fallback_brief
-    takeaways = [
-        "기사 요약: " + compact_text(article_takeaway or article_summary, 140),
-        "영향 방향: " + label,
-        "분석 범위: " + evidence_scope,
-        "이벤트 유형: " + news_domain.event_type_label(event_type),
-    ] if (article_takeaway or article_summary) else [
-        "영향 방향: " + label,
-        "분석 범위: " + evidence_scope,
-        "이벤트 유형: " + news_domain.event_type_label(event_type),
-    ]
-    if risk_hits:
-        takeaways.append("위험 신호: " + ", ".join(risk_hits[:3]))
-    if support_hits:
-        takeaways.append("우호 신호: " + ", ".join(support_hits[:3]))
-    watch_points = ["다음 장 가격 반응", "거래량 동반 여부"]
+    takeaways = summary_sentence_candidates(article_summary)[1:4] if source_is_korean else []
+    watch_points = [news_domain.impact_watch_text(STOCK_IMPACT_VALUES.get(polarity, "neutral"), materiality, source_text)]
     if read_scope != "body":
         watch_points.insert(0, "원문 본문 확보")
     if event_type in {"earnings", "guidance"}:
@@ -540,6 +647,13 @@ def local_news_ai_analysis(target: NewsCollectionTarget, evidence: ResearchEvide
     limitations = [] if read_scope == "body" else ["본문 원문 미수집으로 제목/RSS 요약 기반 분석"]
     if contrast_hits:
         limitations.append("상반된 표현이 있어 문맥 확인 필요")
+    normalized_summary = normalized_summary_payload({
+        "oneLineKo": compact_text(one_line, 220),
+        "briefKo": compact_text(brief, 520),
+        "keyTakeaways": takeaways,
+        "whyItMatters": compact_text(news_domain.impact_channel_text(event_type, source_text), 360),
+        "watchPoints": watch_points,
+    }, {})
     return NewsAiAnalysis(
         read_scope=read_scope,
         source_text_hash=source_text_hash(title, body, feed_summary),
@@ -550,13 +664,7 @@ def local_news_ai_analysis(target: NewsCollectionTarget, evidence: ResearchEvide
         confidence=confidence,
         materiality_score=materiality,
         relevance_score=relevance,
-        summary={
-            "oneLineKo": compact_text(one_line, 220),
-            "briefKo": compact_text(brief, 520),
-            "keyTakeaways": unique_texts(takeaways, 5),
-            "whyItMatters": compact_text(news_domain.impact_channel_text(event_type, source_text), 360),
-            "watchPoints": unique_texts(watch_points, 5),
-        },
+        summary=normalized_summary,
         risk_signals=risk_hits,
         support_signals=support_hits,
         contrast_signals=contrast_hits,
@@ -652,6 +760,9 @@ def apply_news_ai_analysis(evidence: ResearchEvidence, analysis_payload: Dict[st
         article_facts_payload.setdefault("preAiStockImpactPolarity", article_facts_payload.get("stockImpactPolarity") or article_facts_payload.get("impactPolarity"))
         article_facts_payload.setdefault("preAiStockImpactLabel", article_facts_payload.get("stockImpactLabel"))
         article_facts_payload.update({
+            "summaryKo": payload["articleSummaryKo"],
+            "eventTakeaway": summary.get("oneLineKo") or article_facts_payload.get("eventTakeaway") or "",
+            "impactReasonKo": payload["stockImpactReasonKo"],
             "stockImpact": payload["stockImpact"],
             "stockImpactPolarity": payload["stockImpactPolarity"],
             "stockImpactLabel": payload["stockImpactLabel"],
@@ -696,10 +807,10 @@ def build_news_ai_analysis_prompt(target: NewsCollectionTarget, evidence: Resear
             "materialityScore": "0-100",
             "summary": {
                 "oneLineKo": "기사에서 실제로 일어난 일과 종목 관련성을 담은 한 문장",
-                "briefKo": "기사 전체 흐름을 이해할 수 있는 구체적인 한국어 2-3문장",
-                "keyTakeaways": ["fact"],
-                "whyItMatters": "investment relevance path",
-                "watchPoints": ["next check"],
+                "briefKo": "핵심 사실만 담은 자연스러운 한국어 2-3문장",
+                "keyTakeaways": ["briefKo에 없는 보조 사실"],
+                "whyItMatters": "사실을 반복하지 않고 설명한 종목 영향 경로",
+                "watchPoints": ["불확실성을 해소할 구체적인 다음 확인 항목"],
             },
             "riskSignals": ["phrase"],
             "supportSignals": ["phrase"],
@@ -718,6 +829,9 @@ def build_news_ai_analysis_prompt(target: NewsCollectionTarget, evidence: Resear
             "Use only the provided title, feed summary, body preview, and existing metadata.",
             "summary.oneLineKo and summary.briefKo must summarize article facts first; keep stock impact reasoning in rationaleKo.",
             "summary.briefKo must state who did what, the material number or condition when present, and why the event matters; do not merely name an event category.",
+            "Do not repeat the same fact across oneLineKo, briefKo, keyTakeaways, whyItMatters, and watchPoints. Each field has a distinct role: core fact, supporting facts, investment impact, and verification condition.",
+            "whyItMatters must explain the causal path to revenue, cost, valuation, regulation, liquidity, or investor sentiment. Do not restate the headline.",
+            "watchPoints must name a measurable follow-up such as an official filing, guidance number, price reaction, or volume confirmation. Avoid generic phrases when a specific condition is available.",
             "Write the Korean summary as complete natural sentences. Do not repeat the title, source name, relation score, or phrases such as 확인할 뉴스, 관련 뉴스입니다, 핵심 내용은.",
             "Do not use generic sector templates such as AI/data-center demand unless that fact is present in the title, feed summary, or body preview.",
             "If the body is missing, state that limitation and lower confidence.",

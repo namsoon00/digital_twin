@@ -13,6 +13,7 @@ from .notification_ai_news import (
     research_evidence_items,
 )
 from .news_analysis import clean_article_summary_noise
+from .news_ai_analysis import clean_summary_text, summary_texts_similar
 from .notification_ai_gate_contracts import KST
 from .notification_ai_gate_text import (
     _line_after_colon,
@@ -420,9 +421,79 @@ def source_detail_summary(item: Dict[str, object]) -> str:
         or facts.get("eventTakeaway")
     )
     return _text(
-        clean_article_summary_noise(summary),
+        clean_summary_text(clean_article_summary_noise(summary)),
         360,
     )
+
+
+def source_detail_ai_analysis(item: Dict[str, object]) -> Dict[str, object]:
+    if not isinstance(item, dict):
+        return {}
+    payload = item.get("payload") if isinstance(item.get("payload"), dict) else {}
+    raw_payload = item.get("rawPayload") if isinstance(item.get("rawPayload"), dict) else {}
+    for source in [item, payload, raw_payload]:
+        analysis = source.get("aiAnalysis") if isinstance(source, dict) else None
+        if isinstance(analysis, dict):
+            return analysis
+    return {}
+
+
+def source_detail_ai_text(item: Dict[str, object], *keys: str) -> str:
+    analysis = source_detail_ai_analysis(item)
+    for key in keys:
+        value = clean_summary_text(analysis.get(key))
+        if value:
+            return _text(value, 360)
+    return ""
+
+
+def source_detail_investment_impact(item: Dict[str, object]) -> str:
+    analysis = source_detail_ai_analysis(item)
+    summary = analysis.get("summary") if isinstance(analysis.get("summary"), dict) else {}
+    return (
+        _text(clean_summary_text(summary.get("whyItMatters")), 360)
+        or source_detail_ai_text(item, "portfolioImplicationKo", "impactReasonKo")
+        or source_detail_text(item, "portfolioImplicationKo", "stockImpactReasonKo", "impactReasonKo")
+    )
+
+
+def source_detail_watch_text(item: Dict[str, object]) -> str:
+    analysis = source_detail_ai_analysis(item)
+    summary = analysis.get("summary") if isinstance(analysis.get("summary"), dict) else {}
+    watch_points = summary.get("watchPoints") if isinstance(summary.get("watchPoints"), list) else []
+    rows: List[str] = []
+    for value in watch_points:
+        text = _text(clean_summary_text(value), 140)
+        if text and not any(summary_texts_similar(text, existing) for existing in rows):
+            rows.append(text)
+        if len(rows) >= 3:
+            break
+    return ", ".join(rows) or source_detail_ai_text(item, "actionBoundaryKo") or source_detail_text(item, "actionBoundaryKo")
+
+
+def source_detail_analysis_basis(item: Dict[str, object]) -> str:
+    facts = source_detail_article_facts(item)
+    status = str(facts.get("readStatus") or source_detail_raw_text(item, "articleReadStatus") or "").strip()
+    if status == "body" or facts.get("bodyAvailable") is True:
+        return "[AI] 전체 본문 기반"
+    return "[AI] 제목/RSS 요약 기반"
+
+
+def source_detail_summary_rows(item: Dict[str, object], title: str, indent: str = "  ") -> List[str]:
+    candidates = [
+        ("핵심 사실", source_detail_summary(item)),
+        ("투자 영향", source_detail_investment_impact(item)),
+        ("확인할 점", source_detail_watch_text(item)),
+    ]
+    rows: List[str] = []
+    seen = [title] if title else []
+    for label, value in candidates:
+        text = _text(clean_summary_text(value), 420)
+        if not text or any(summary_texts_similar(text, existing) for existing in seen):
+            continue
+        seen.append(text)
+        rows.append(indent + html.escape(label + ": " + text, quote=False))
+    return rows
 
 
 def source_detail_text(item: Dict[str, object], *keys: str) -> str:
@@ -586,9 +657,7 @@ def source_url_rows(urls: List[str], context: Dict[str, object]) -> List[str]:
         relevance = source_score_piece("관련성", source_detail_number(detail, "relevanceScore"))
         materiality = source_score_piece("중요도", source_detail_number(detail, "materialityScore"))
         impact_label = source_detail_text(detail, "stockImpactLabel")
-        impact_reason = source_detail_text(detail, "stockImpactReasonKo")
         published_at = source_published_at_text(detail)
-        summary = source_detail_summary(detail)
         link_text = "• <a href=\"" + html.escape(text, quote=True) + "\">" + html.escape(label, quote=False) + "</a>"
         rows.append(link_text + (": " + html.escape(title, quote=False) if title else ""))
         meta = ", ".join(item for item in [
@@ -601,12 +670,8 @@ def source_url_rows(urls: List[str], context: Dict[str, object]) -> List[str]:
         ] if item)
         if meta:
             rows.append("  " + html.escape(meta, quote=False))
-        for fact_row in source_detail_article_fact_rows(detail):
-            rows.append("  " + html.escape(fact_row, quote=False))
-        if summary and summary != title:
-            rows.append("  " + html.escape("요약: " + summary, quote=False))
-        if impact_reason:
-            rows.append("  " + html.escape("영향 분석: " + impact_reason, quote=False))
+        rows.append("  " + html.escape("분석: " + source_detail_analysis_basis(detail), quote=False))
+        rows.extend(source_detail_summary_rows(detail, title))
     all_urls = set(all_source_urls_for_context(context))
     all_urls.update(details.keys())
     omitted = len([url for url in all_urls if url and url not in displayed_urls])
@@ -629,8 +694,6 @@ def compact_source_url_rows(urls: List[str], context: Dict[str, object]) -> List
         published_at = source_published_at_text(detail)
         reliability = source_reliability_text(detail)
         impact_label = source_detail_text(detail, "stockImpactLabel")
-        impact_reason = source_detail_text(detail, "stockImpactReasonKo", "impactReasonKo")
-        summary = source_detail_summary(detail)
         lower_url = text.lower()
         is_disclosure = "dart.fss.or.kr" in lower_url or "opendart" in lower_url or "sec.gov" in lower_url
         is_news = str((detail or {}).get("kind") or "").lower() == "news" or not is_disclosure
@@ -645,12 +708,12 @@ def compact_source_url_rows(urls: List[str], context: Dict[str, object]) -> List
         ] if item)
         if meta:
             rows.append("  " + html.escape(meta, quote=False))
-        if summary and summary != title:
-            rows.append("  " + html.escape("내용: " + summary, quote=False))
+        rows.append("  " + html.escape("분석: " + source_detail_analysis_basis(detail), quote=False))
+        detail_rows = source_detail_summary_rows(detail, title)
+        if detail_rows:
+            rows.extend(detail_rows)
         else:
-            rows.append("  " + html.escape("내용: 기사 본문 요약이 아직 준비되지 않았습니다.", quote=False))
-        if impact_reason:
-            rows.append("  " + html.escape("투자 영향: " + impact_reason, quote=False))
+            rows.append("  " + html.escape("핵심 사실: 기사 요약이 아직 준비되지 않았습니다.", quote=False))
     all_urls = set(all_source_urls_for_context(context))
     all_urls.update(details.keys())
     omitted = len([url for url in all_urls if url and url not in displayed_urls])

@@ -91,7 +91,13 @@ def news_ai_analyzer_from_settings(settings: Dict[str, str] = None) -> NewsAiAna
     if command:
         return FallbackNewsAiAnalyzer(CommandNewsAiAnalyzer(command, timeout, "External article AI"))
     if use_codex:
-        command = codex_command()
+        model = str(
+            configured.get("newsAiAnalysisModel")
+            or os.environ.get("NEWS_AI_ANALYSIS_MODEL")
+            or configured.get("notificationAiModel")
+            or "gpt-5.5"
+        ).strip()
+        command = codex_command(model)
         if command:
-            return FallbackNewsAiAnalyzer(CommandNewsAiAnalyzer(command, timeout, "Codex AI"))
+            return FallbackNewsAiAnalyzer(CommandNewsAiAnalyzer(command, timeout, "Codex AI (" + model + ")"))
     return LocalNewsAiAnalyzer()

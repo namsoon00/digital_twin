@@ -11273,12 +11273,12 @@ class PythonServiceTests(unittest.TestCase):
         message = context_with_validated_ai_response(context, response)["telegramMessage"]
 
         self.assertIn("<b>출처</b>", message)
-        self.assertIn("주가 영향 호재", message)
-        self.assertIn("기사일 2026-07-09", message)
-        self.assertIn("기사 분석: 전체 본문 읽음", message)
-        self.assertIn("핵심: HBM 수요 회복", message)
-        self.assertIn("요약: 본문 요약: HBM 수요 회복", message)
-        self.assertIn("영향 분석: 주가 영향은 긍정적으로 봅니다.", message)
+        self.assertIn("영향 호재", message)
+        self.assertIn("2026-07-09 · 연합뉴스", message)
+        self.assertIn("분석: [AI] 전체 본문 기반", message)
+        self.assertIn("핵심 사실: HBM 수요 회복", message)
+        self.assertIn("투자 영향: 주가 영향은 긍정적으로 봅니다.", message)
+        self.assertNotIn("기사 분석:", message)
         self.assertGreater(message.rfind("<b>출처</b>"), message.rfind("<b>전략 가이드</b>"))
 
     def test_notification_worker_waits_for_validated_ai_before_rendering(self):

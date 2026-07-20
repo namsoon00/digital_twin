@@ -15,6 +15,13 @@ from ..domain.notification_ai_context import is_watchlist_context
 from ..domain.external_api_sources import external_api_source_line
 from ..domain.notification_ai_gate_contracts import ACTION_LABELS, MESSAGE_START_BADGE, NotificationAIValidatedResponse
 from ..domain.investment_ubiquitous_language import user_facing_investment_language
+from ..domain.ontology_inference_context import (
+    INFERENCE_SCORE_COMPONENT_WEIGHTS,
+    INFERENCE_SCORE_DIRECTIONAL_BONUS,
+    INFERENCE_SCORE_MAX_OPPOSING_PENALTY,
+)
+from ..domain.ontology_relation_catalog import SCORE_BANDS
+from ..domain.ontology_relation_decisions import score_band
 from ..domain.notification_ai_gate_sources import source_detail_text, source_url_rows
 from ..domain.notification_reasoning_report import (
     customer_alert_reason_lines,
@@ -398,10 +405,25 @@ def ai_confidence_display(response: NotificationAIValidatedResponse, level: str)
     return str(round(response.confidence, 1)) + "%"
 
 
-def relation_judgment_strength_display(context: Dict[str, object], level: str) -> str:
+def relation_judgment_score(context: Dict[str, object]) -> float:
     relation_context = relation_context_value(context or {})
     decision = relation_context.get("decision") if isinstance(relation_context.get("decision"), dict) else {}
     score = _number(decision.get("score") or relation_context.get("signalStrength"))
+    if not score:
+        rules = relation_context.get("activeRules") or relation_context.get("matchedRules") or []
+        score = max(
+            [
+                _number(item.get("strengthScore") or item.get("score") or item.get("relationScore"))
+                for item in rules
+                if isinstance(item, dict) and not item.get("referenceOnly") and not item.get("reference_only")
+            ],
+            default=0.0,
+        )
+    return _clamp(score, 0.0, 100.0)
+
+
+def relation_judgment_strength_display(context: Dict[str, object], level: str) -> str:
+    score = relation_judgment_score(context)
     if not score:
         return ""
     if score >= 85:
@@ -412,7 +434,91 @@ def relation_judgment_strength_display(context: Dict[str, object], level: str) -
         label = "보통"
     else:
         label = "낮음"
-    return "[온톨로지] " + label + " (" + str(round(score, 1)) + "점)"
+    return "[관계 분석] " + label + " (" + str(round(score, 1)) + "/100점)"
+
+
+RELATION_SCORE_CUSTOMER_BAND_LABELS = {
+    "LOW": "참고",
+    "WATCH": "관찰",
+    "REVIEW": "확인",
+    "ACTION": "대응 검토",
+    "URGENT": "즉시 재확인",
+}
+
+
+def relation_score_band_ranges_text() -> str:
+    ordered = sorted(SCORE_BANDS, key=lambda item: item.min_score)
+    rows: List[str] = []
+    for index, band in enumerate(ordered):
+        lower = int(band.min_score)
+        upper = int(ordered[index + 1].min_score - 1) if index + 1 < len(ordered) else 100
+        label = RELATION_SCORE_CUSTOMER_BAND_LABELS.get(band.key, band.label)
+        rows.append(str(lower) + "~" + str(upper) + " " + label)
+    return " · ".join(rows)
+
+
+def relation_score_breakdown(context: Dict[str, object]) -> Dict[str, object]:
+    relation_context = relation_context_value(context or {})
+    decision = relation_context.get("decision") if isinstance(relation_context.get("decision"), dict) else {}
+    if isinstance(decision.get("scoreBreakdown"), dict) and decision.get("scoreBreakdown"):
+        return dict(decision.get("scoreBreakdown") or {})
+    if isinstance(relation_context.get("scoreBreakdown"), dict):
+        return dict(relation_context.get("scoreBreakdown") or {})
+    return {}
+
+
+def relation_score_guide_rows(context: Dict[str, object], level: str) -> List[str]:
+    score = relation_judgment_score(context)
+    if not score:
+        return []
+    band = score_band(score)
+    band_label = RELATION_SCORE_CUSTOMER_BAND_LABELS.get(band.key, band.label)
+    breakdown = relation_score_breakdown(context)
+    weights = breakdown.get("componentWeights") if isinstance(breakdown.get("componentWeights"), dict) else INFERENCE_SCORE_COMPONENT_WEIGHTS
+    weight_text = (
+        "규칙 신뢰도 " + str(round(_number(weights.get("ruleReliability")) * 100)) + "%"
+        + " + 위험·기회 근거 " + str(round(_number(weights.get("dominantEvidence")) * 100)) + "%"
+        + " + 실제 대응 필요 " + str(round(_number(weights.get("actionability")) * 100)) + "%"
+        + " + 새 변화 " + str(round(_number(weights.get("novelty")) * 100)) + "%"
+        + " + 데이터 신뢰도 " + str(round(_number(weights.get("dataConfidence")) * 100)) + "%"
+    )
+    rows = [
+        _html_bullet(
+            "뜻: 100점 만점으로 지금 다시 확인할 필요가 얼마나 큰지 나타냅니다. "
+            "상승·하락 확률이나 매수·매도 확률이 아니며, 방향은 위의 대응과 핵심 근거에서 확인합니다.",
+            level,
+        ),
+        _html_bullet(
+            "현재 구간: " + str(round(score, 1)) + "점은 " + band_label + " 단계입니다. 기준은 " + relation_score_band_ranges_text() + "입니다.",
+            level,
+        ),
+        _html_bullet(
+            "계산 기준: " + weight_text + ". 위험과 기회가 함께 강하면 최대 "
+            + str(int(_number(breakdown.get("maximumOpposingPressurePenalty")) or INFERENCE_SCORE_MAX_OPPOSING_PENALTY))
+            + "점을 빼고, 한쪽이 매우 우세하면 "
+            + str(int(_number(breakdown.get("directionalDominanceBonus")) or INFERENCE_SCORE_DIRECTIONAL_BONUS))
+            + "점을 더합니다.",
+            level,
+        ),
+    ]
+    component_values = [
+        ("규칙 신뢰도", breakdown.get("ruleReliability")),
+        ("위험 근거", breakdown.get("riskPressure")),
+        ("기회 근거", breakdown.get("supportEvidence")),
+        ("실제 대응 필요", breakdown.get("actionability")),
+        ("새 변화", breakdown.get("novelty")),
+        ("데이터 신뢰도", breakdown.get("dataConfidence")),
+    ]
+    if any(value not in (None, "") for _, value in component_values):
+        rows.append(_html_bullet(
+            "이번 반영값: " + " · ".join(
+                label + " " + str(round(_clamp(_number(value), 0.0, 100.0), 1)) + "점"
+                for label, value in component_values
+                if value not in (None, "")
+            ),
+            level,
+        ))
+    return [row for row in rows if row]
 
 def ai_judgment_section_title(level: str) -> str:
     return "전략 요약"
@@ -461,7 +567,7 @@ def ai_judgment_rows(response: NotificationAIValidatedResponse, level: str, cont
     relation_strength = relation_judgment_strength_display(context or {}, level)
     rows = [
         _html_row(ai_action_row_label(level), _ai_marked_value(action_label_for_action(response.action, context) or response.action_label), level=level),
-        _html_row("관계 판단 강도", relation_strength or _ai_marked_value(ai_confidence_display(response, level)), level=level),
+        _html_row("확인 필요 점수" if relation_strength else "AI 판단 확신도", relation_strength or _ai_marked_value(ai_confidence_display(response, level)), level=level),
     ]
     rows.extend(account_profile_rows(context or {}, level))
     summary_label = "이유" if level == "absoluteBeginner" else "AI 판단 이유"
@@ -2160,12 +2266,12 @@ def compact_beginner_judgment_rows(
     response: NotificationAIValidatedResponse,
     level: str,
 ) -> List[str]:
-    relation_strength = relation_judgment_strength_display(context or {}, level).replace("[온톨로지] ", "")
+    relation_strength = relation_judgment_strength_display(context or {}, level).replace("[관계 분석] ", "")
     profile = " · ".join(part for part in [account_strategy_label(context), account_delivery_level_label(context)] if part)
     rows = [
         _html_row("대응", action_label_for_action(response.action, context) or response.action_label, level=level),
         _html_row("이유", response.summary, level=level, max_len=420),
-        _html_row("확인 필요 점수", relation_strength or ai_confidence_display(response, level), level=level),
+        _html_row("확인 필요 점수" if relation_strength else "AI 판단 확신도", relation_strength or ai_confidence_display(response, level), level=level),
         _html_row("계정 기준", profile, level=level),
         _html_row("안내", "실행 전 참고용이며 자동 주문되지 않습니다.", level=level),
     ]
@@ -2278,6 +2384,9 @@ def execution_telegram_message(context: Dict[str, object], response: Notificatio
         "<b>" + ai_judgment_section_title(level) + "</b>",
         *ai_judgment_rows(response, level, context),
     ]
+    score_guide_rows = relation_score_guide_rows(context, level)
+    if score_guide_rows:
+        parts.extend(["", "<b>점수 안내</b>", *score_guide_rows])
     hypothesis_rows = hypothesis_comparison_rows(response, level)
     if hypothesis_rows:
         parts.extend(["", "<b>AI 경쟁 가설</b>", *hypothesis_rows])
@@ -2328,6 +2437,9 @@ def execution_telegram_message_compact_beginner(
         "<b>판단</b>",
         *compact_beginner_judgment_rows(context, response, level),
     ]
+    score_guide_rows = relation_score_guide_rows(context, level)
+    if score_guide_rows:
+        parts.extend(["", "<b>점수 안내</b>", *score_guide_rows])
     reason_rows = compact_beginner_reason_rows(context, level)
     if reason_rows:
         parts.extend(["", "<b>왜 알림이 왔나요?</b>", *reason_rows])

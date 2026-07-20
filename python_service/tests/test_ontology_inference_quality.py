@@ -202,6 +202,12 @@ class OntologyInferenceQualityTests(unittest.TestCase):
         self.assertLessEqual(score["finalStrength"], 35)
         self.assertLessEqual(score["actionability"], 20)
         self.assertLessEqual(score["dataConfidence"], 35)
+        self.assertEqual(0.0, score["scoreMinimum"])
+        self.assertEqual(100.0, score["scoreMaximum"])
+        self.assertEqual(0.25, score["componentWeights"]["ruleReliability"])
+        self.assertEqual(0.42, score["componentWeights"]["dominantEvidence"])
+        self.assertEqual(14.0, score["maximumOpposingPressurePenalty"])
+        self.assertEqual(4.0, score["directionalDominanceBonus"])
 
     def test_material_fingerprint_ignores_poll_time_but_changes_with_price(self):
         position = normalize_position({

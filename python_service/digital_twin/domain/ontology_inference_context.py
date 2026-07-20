@@ -606,6 +606,17 @@ def _impact_pressure(value: float, reliability: float, polarity_active: bool) ->
     return base
 
 
+INFERENCE_SCORE_COMPONENT_WEIGHTS = {
+    "ruleReliability": 0.25,
+    "dominantEvidence": 0.42,
+    "actionability": 0.18,
+    "novelty": 0.10,
+    "dataConfidence": 0.05,
+}
+INFERENCE_SCORE_MAX_OPPOSING_PENALTY = 14.0
+INFERENCE_SCORE_DIRECTIONAL_BONUS = 4.0
+
+
 def inference_score_breakdown(
     relation: Dict[str, object],
     facts: Dict[str, object],
@@ -817,17 +828,17 @@ def inference_score_breakdown(
     dominant = max(risk, support)
     opposing_penalty = 0.0
     if risk and support:
-        opposing_penalty = min(14.0, min(risk, support) * 0.18)
+        opposing_penalty = min(INFERENCE_SCORE_MAX_OPPOSING_PENALTY, min(risk, support) * 0.18)
     final = (
-        rule_reliability * 0.25
-        + dominant * 0.42
-        + actionability * 0.18
-        + novelty * 0.10
-        + data_confidence * 0.05
+        rule_reliability * INFERENCE_SCORE_COMPONENT_WEIGHTS["ruleReliability"]
+        + dominant * INFERENCE_SCORE_COMPONENT_WEIGHTS["dominantEvidence"]
+        + actionability * INFERENCE_SCORE_COMPONENT_WEIGHTS["actionability"]
+        + novelty * INFERENCE_SCORE_COMPONENT_WEIGHTS["novelty"]
+        + data_confidence * INFERENCE_SCORE_COMPONENT_WEIGHTS["dataConfidence"]
         - opposing_penalty
     )
     if abs(net_risk) >= policy.net_risk_bonus_threshold:
-        final += 4.0
+        final += INFERENCE_SCORE_DIRECTIONAL_BONUS
     if data_confidence < policy.data_confidence_penalty_threshold:
         final -= (policy.data_confidence_penalty_threshold - data_confidence) * 0.18
     final = _bounded_score(max(policy.minimum_final_strength, final), 0.0, 100.0)
@@ -843,6 +854,11 @@ def inference_score_breakdown(
         "novelty": novelty,
         "finalStrength": final,
         "opposingPressurePenalty": round(opposing_penalty, 1),
+        "scoreMinimum": 0.0,
+        "scoreMaximum": 100.0,
+        "componentWeights": dict(INFERENCE_SCORE_COMPONENT_WEIGHTS),
+        "maximumOpposingPressurePenalty": INFERENCE_SCORE_MAX_OPPOSING_PENALTY,
+        "directionalDominanceBonus": INFERENCE_SCORE_DIRECTIONAL_BONUS,
         "thresholdPolicyId": policy.policy_id,
         "thresholdPolicyVersion": policy.version,
         "thresholdPolicySource": policy.source,
@@ -892,6 +908,11 @@ def aggregate_score_breakdown(matches: List[OntologyRuleMatch], threshold_policy
         "novelty": max_value("novelty"),
         "finalStrength": final,
         "opposingPressurePenalty": max_value("opposingPressurePenalty"),
+        "scoreMinimum": 0.0,
+        "scoreMaximum": 100.0,
+        "componentWeights": dict(INFERENCE_SCORE_COMPONENT_WEIGHTS),
+        "maximumOpposingPressurePenalty": INFERENCE_SCORE_MAX_OPPOSING_PENALTY,
+        "directionalDominanceBonus": INFERENCE_SCORE_DIRECTIONAL_BONUS,
         "thresholdPolicyId": policy.policy_id,
         "thresholdPolicyVersion": policy.version,
         "thresholdPolicySource": policy.source,

@@ -216,7 +216,8 @@ class BeginnerRelationLanguageTests(unittest.TestCase):
             self.assertIn(expected, message)
         for hidden in ["[AI]", "근거 4", "근거 5", "반대 2", "반대 3", "확인 3", "확인 4", "부족 3", "부족 4", "부족 5", "검증 3", "고객이 실제 투자 판단 전에"]:
             self.assertNotIn(hidden, message)
-        self.assertIn("확인 필요 점수", message)
+        self.assertIn("AI 판단 확신도", message)
+        self.assertNotIn("<b>점수 안내</b>", message)
         self.assertIn("관계 분석 규칙", message)
         self.assertIn("실행 조건", message)
 
@@ -263,7 +264,8 @@ class BeginnerRelationLanguageTests(unittest.TestCase):
         self.assertNotIn("부족 3", message)
         self.assertNotIn("부족 4", message)
         self.assertNotIn("부족 5", message)
-        self.assertIn("확인 필요 점수", message)
+        self.assertIn("AI 판단 확신도", message)
+        self.assertNotIn("<b>점수 안내</b>", message)
         self.assertNotIn("관계 강도", message)
         self.assertIn("RuleBox(관계 분석 규칙)", message)
 
@@ -325,6 +327,15 @@ class BeginnerRelationLanguageTests(unittest.TestCase):
         self.assertIn("수급 심리", message)
         self.assertIn("투자 성향·정책", message)
         self.assertIn("20일 평균보다 12.9%", message)
+        self.assertIn("확인 필요 점수", message)
+        self.assertIn("86.0/100점", message)
+        self.assertIn("<b>점수 안내</b>", message)
+        self.assertIn("상승·하락 확률이나 매수·매도 확률이 아니며", message)
+        self.assertIn("0~34 참고", message)
+        self.assertIn("70~84 대응 검토", message)
+        self.assertIn("85~100 즉시 재확인", message)
+        self.assertIn("규칙 신뢰도 25%", message)
+        self.assertIn("위험·기회 근거 42%", message)
 
     def test_execution_message_includes_deterministic_valuation_details(self):
         response = NotificationAIValidatedResponse(

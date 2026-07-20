@@ -93,10 +93,10 @@ class OntologyReasoningRunner:
         return truthy(self.settings.get("ontologyReasoningEnabled"), True)
 
     def batch_size(self) -> int:
-        return int_setting(self.settings, "ontologyReasoningBatchSize", 20, 1, 200)
+        return int_setting(self.settings, "ontologyReasoningBatchSize", 200, 1, 200)
 
     def max_symbols_per_run(self) -> int:
-        return int_setting(self.settings, "ontologyReasoningMaxSymbolsPerRun", 3, 0, 200)
+        return int_setting(self.settings, "ontologyReasoningMaxSymbolsPerRun", 50, 0, 200)
 
     def event_scan_limit(self, requested_limit: int = 0) -> int:
         fallback = max(1500, int(requested_limit or self.batch_size()) * 40)
@@ -164,12 +164,20 @@ class OntologyReasoningRunner:
     def pending_requests(self, limit: int = 0) -> List[object]:
         processed = set(self.cursor_store.processed_event_ids())
         progress = self.event_symbol_progress()
-        events = [
-            event
-            for event in self.event_reader.events(
+        reader = getattr(self.event_reader, "recent_events", None)
+        if callable(reader):
+            source_events = reader(
                 name=ONTOLOGY_REASONING_REQUESTED,
                 limit=self.event_scan_limit(limit),
             )
+        else:
+            source_events = self.event_reader.events(
+                name=ONTOLOGY_REASONING_REQUESTED,
+                limit=self.event_scan_limit(limit),
+            )
+        events = [
+            event
+            for event in source_events
             if event.event_id not in processed
             and event_changed_count(event) > 0
             and (not event_symbols(event) or self.remaining_event_symbols(event, progress))

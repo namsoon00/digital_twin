@@ -1464,7 +1464,7 @@ class TypeDBOntologyGraphRepository(GraphStoreOntologyRowMapperMixin):
     def write_graph(self, driver, imported, graph: PortfolioOntology) -> None:
         _TypeDB, _Credentials, _DriverOptions, _DriverTlsConfig, TransactionType = imported[0]
         boxes = node_boxes(graph)
-        queries = self.delete_queries(boxes) + self.insert_queries(graph)
+        queries = self.delete_queries(boxes) + self.graph_insert_queries(graph)
         if not queries:
             return
         with driver.transaction(self.database, TransactionType.WRITE) as tx:
@@ -1959,6 +1959,24 @@ relation ontology-assertion,
             if str(row.get("source") or "") in node_ids and str(row.get("target") or "") in node_ids:
                 queries.append(self.relation_insert_query(row, updated_at))
         return [item for item in queries if item]
+
+    def graph_insert_queries(self, graph: PortfolioOntology) -> List[str]:
+        updated_at = utc_now()
+        node_rows = self.node_rows(graph)
+        node_ids = {str(row.get("id") or "") for row in node_rows}
+        relation_rows = [
+            row
+            for row in self.rows_for_relations(graph) + self.support_relation_rows(graph)
+            if str(row.get("source") or "") in node_ids
+            and str(row.get("target") or "") in node_ids
+        ]
+        settings = runtime_settings()
+        node_batch_size = int(number_or_none(settings.get("typedbABoxNodeBatchSize")) or 25)
+        relation_batch_size = int(number_or_none(settings.get("typedbABoxRelationBatchSize")) or 15)
+        return [
+            *self.batched_node_insert_queries(node_rows, updated_at, node_batch_size),
+            *self.batched_relation_insert_queries(relation_rows, updated_at, relation_batch_size),
+        ]
 
     def node_rows(self, graph: PortfolioOntology) -> List[Dict[str, object]]:
         rows = []

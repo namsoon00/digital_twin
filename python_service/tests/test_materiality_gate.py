@@ -473,6 +473,35 @@ class MaterialityGateTests(unittest.TestCase):
         self.assertEqual(1, second["completedEventCount"])
         self.assertEqual([request.event_id], cursor.processed_event_ids())
 
+    def test_ontology_reasoning_reads_recent_events_when_supported(self):
+        request = ontology_reasoning_requested_event(
+            DomainEvent(name="market_data.collected", aggregate_id="market:KR", payload={}),
+            "market-data-update",
+            ["035420"],
+            changed_count=1,
+            fact_types=["MarketQuote"],
+        )
+
+        class Reader:
+            def events(self, **_kwargs):
+                raise AssertionError("oldest-first event scan must not be used")
+
+            def recent_events(self, name="", aggregate_id="", limit=0):
+                return [request] if name == ONTOLOGY_REASONING_REQUESTED else []
+
+        class Cursor:
+            def processed_event_ids(self):
+                return []
+
+        runner = OntologyReasoningRunner(
+            Reader(),
+            Cursor(),
+            monitor_runner_factory=lambda: None,
+            settings={"ontologyReasoningEnabled": "1"},
+        )
+
+        self.assertEqual([request.event_id], [event.event_id for event in runner.pending_requests()])
+
 
 if __name__ == "__main__":
     unittest.main()

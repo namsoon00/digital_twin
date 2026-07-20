@@ -288,6 +288,26 @@ class MySQLEventLog(MySQLOperationalConnection):
             rows = connection.execute(sql, params).fetchall()
         return [DomainEvent.from_dict(_json_loads(row["event_json"], {})) for row in rows]
 
+    def recent_events(self, name: str = "", aggregate_id: str = "", limit: int = 0) -> List[DomainEvent]:
+        clauses = []
+        params = []
+        if name:
+            clauses.append("name = %s")
+            params.append(name)
+        if aggregate_id:
+            clauses.append("aggregate_id = %s")
+            params.append(aggregate_id)
+        sql = "SELECT event_json FROM domain_events"
+        if clauses:
+            sql += " WHERE " + " AND ".join(clauses)
+        sql += " ORDER BY occurred_at DESC, event_id DESC"
+        if limit:
+            sql += " LIMIT %s"
+            params.append(int(limit))
+        with self.connect() as connection:
+            rows = connection.execute(sql, params).fetchall()
+        return [DomainEvent.from_dict(_json_loads(row["event_json"], {})) for row in reversed(rows)]
+
     def latest_events(self, limit: int = 12) -> List[DomainEvent]:
         with self.connect() as connection:
             rows = connection.execute(

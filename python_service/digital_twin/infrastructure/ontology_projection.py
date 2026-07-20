@@ -237,26 +237,28 @@ class PortfolioOntologyProjectionRecorder:
         }
 
     def graph_for_graph_store_persistence(self, graph: PortfolioOntology) -> PortfolioOntology:
-        stripped_boxes = {"RuleBox", "InferenceBox"}
+        # TBox, RuleBox, and language governance are seeded separately. Rewriting
+        # them on every quote update turns a small ABox refresh into a full graph
+        # replacement and quickly overwhelms TypeDB's transaction log.
         stripped_ids: Set[str] = set()
         entities = []
         for item in graph.entities:
             box = str((item.properties or {}).get("ontologyBox") or "ABox")
-            if box in stripped_boxes:
+            if box != "ABox":
                 stripped_ids.add(item.entity_id)
                 continue
             entities.append(item)
         relations = [
             item
             for item in graph.relations
-            if str((item.properties or {}).get("ontologyBox") or "ABox") not in stripped_boxes
+            if str((item.properties or {}).get("ontologyBox") or "ABox") == "ABox"
             and item.source not in stripped_ids
             and item.target not in stripped_ids
         ]
         evidence = [
             item
             for item in graph.evidence
-            if str((item.value or {}).get("ontologyBox") or "ABox") not in stripped_boxes
+            if str((item.value or {}).get("ontologyBox") or "ABox") == "ABox"
         ]
         beliefs = [
             item

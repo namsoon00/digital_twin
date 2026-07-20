@@ -133,22 +133,26 @@ class KISRealtimeWebSocketRunner:
         }
         if self.event_publisher:
             event = market_data_collected_event(result)
-            reasoning = ontology_reasoning_requested_event(
-                event,
-                "kis-realtime-websocket",
-                changed_symbols,
-                changed_count=len(changed_symbols),
-                observed_count=len(changed_symbols),
-                fact_types=["MarketQuote", "ExecutionFlow", "OrderBook"],
-                reason="KIS WebSocket 체결·호가 변경을 TypeDB ABox에 반영하고 네이티브 규칙 추론을 갱신합니다. 투자자별 수급은 별도 REST live-poll 품질로 분리합니다.",
-                materiality_assessments=[materiality_assessments[symbol] for symbol in changed_symbols if symbol in materiality_assessments],
-            )
+            reasoning = None
+            if material_symbols:
+                reasoning = ontology_reasoning_requested_event(
+                    event,
+                    "kis-realtime-websocket",
+                    material_symbols,
+                    changed_count=len(material_symbols),
+                    observed_count=len(changed_symbols),
+                    fact_types=["MarketQuote", "ExecutionFlow", "OrderBook"],
+                    reason="중요도가 확인된 KIS WebSocket 체결·호가 변경만 TypeDB ABox와 네이티브 규칙 추론에 반영합니다.",
+                    materiality_assessments=[materiality_assessments[symbol] for symbol in material_symbols],
+                )
             if hasattr(self.event_publisher, "publish"):
                 self.event_publisher.publish(event)
-                self.event_publisher.publish(reasoning)
+                if reasoning:
+                    self.event_publisher.publish(reasoning)
             else:
                 self.event_publisher.handle(event)
-                self.event_publisher.handle(reasoning)
+                if reasoning:
+                    self.event_publisher.handle(reasoning)
         return {"status": "ok", "published": bool(self.event_publisher), **result}
 
     def run_once(self, duration_seconds: int = 0, force: bool = False) -> Dict[str, object]:

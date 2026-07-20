@@ -325,6 +325,27 @@ class PythonServiceTests(unittest.TestCase):
         self.assertEqual(["005930"], events.published[-1].payload["symbols"])
         self.assertIn("OrderBook", events.published[-1].payload["factTypes"])
 
+    def test_kis_realtime_runner_does_not_reason_over_immaterial_ticks(self):
+        cache = TestMarketQuoteCache(test_store_seed(self.temp.name))
+        events = EventBus()
+        runner = KISRealtimeWebSocketRunner(
+            client=SimpleNamespace(enabled=lambda: True, configured=lambda: True),
+            symbol_selector=SimpleNamespace(symbols=lambda: ["005930"]),
+            quote_cache=cache,
+            settings={"materialityGateEnabled": "1"},
+            event_publisher=events,
+        )
+
+        runner.record_updates([{
+            "symbol": "005930",
+            "previous": {"symbol": "005930", "currentPrice": 70000, "tradeStrength": 100},
+            "payload": {"symbol": "005930", "currentPrice": 70001, "tradeStrength": 100, "market": "KR", "dataQuality": "actual"},
+        }])
+        result = runner.flush_events(force=True)
+
+        self.assertEqual(0, result["materialChangedCount"])
+        self.assertEqual([MARKET_DATA_COLLECTED], [event.name for event in events.published])
+
     def test_kis_market_signal_provider_preserves_fresh_websocket_ccnl_and_orderbook(self):
         cache = TestMarketQuoteCache(test_store_seed(self.temp.name))
         fetched_at = utc_now_iso()
@@ -3025,6 +3046,8 @@ class PythonServiceTests(unittest.TestCase):
         self.assertTrue(result["inferenceBox"]["nativeTypeDbReasoningUsed"])
         self.assertFalse(any((item.properties or {}).get("ontologyBox") == "RuleBox" for item in persisted.entities))
         self.assertFalse(any((item.properties or {}).get("ontologyBox") == "InferenceBox" for item in persisted.entities))
+        self.assertTrue(all((item.properties or {}).get("ontologyBox") == "ABox" for item in persisted.entities))
+        self.assertTrue(all((item.properties or {}).get("ontologyBox") == "ABox" for item in persisted.relations))
         self.assertFalse(any(item.kind == "active-opinion" for item in persisted.entities))
         self.assertFalse(any(item.kind == "insight" for item in persisted.entities))
         self.assertFalse(persisted.opinions)

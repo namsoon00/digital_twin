@@ -226,6 +226,34 @@ class TypeDBOntologyRepositoryTests(unittest.TestCase):
         self.assertTrue(any('has ontology-relation-type "HAS_EVIDENCE"' in query for query in queries))
         self.assertEqual(relation_row_id(repository.rows_for_relations(graph)[0]), relation_row_id(repository.rows_for_relations(graph)[0]))
 
+    def test_typedb_graph_insert_queries_batch_abox_rows(self):
+        graph = PortfolioOntology("portfolio:batched-abox")
+        for index in range(31):
+            graph.entities.append(OntologyEntity(
+                "stock:" + str(index),
+                "Stock " + str(index),
+                "stock",
+                {"ontologyBox": "ABox", "symbol": str(index), "tboxClass": "Stock"},
+            ))
+        for index in range(30):
+            graph.relations.append(OntologyRelation(
+                "stock:" + str(index),
+                "stock:" + str(index + 1),
+                "RELATED_TO",
+                properties={"ontologyBox": "ABox"},
+            ))
+        repository = TypeDBOntologyGraphRepository("127.0.0.1:1729")
+
+        with patch("digital_twin.infrastructure.typedb_ontology.runtime_settings", return_value={
+            "typedbABoxNodeBatchSize": "10",
+            "typedbABoxRelationBatchSize": "10",
+        }):
+            queries = repository.graph_insert_queries(graph)
+
+        self.assertEqual(7, len(queries))
+        self.assertTrue(queries[0].startswith("insert $n0 isa ontology-entity"))
+        self.assertTrue(any(query.startswith("match $source0 isa ontology-node") for query in queries))
+
     def test_typedb_insert_queries_promote_reasoning_fields_to_attributes(self):
         graph = PortfolioOntology("portfolio:typed-fields")
         graph.entities.append(OntologyEntity("stock:005930", "삼성전자", "stock", {

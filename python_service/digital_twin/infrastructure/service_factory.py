@@ -126,6 +126,7 @@ def build_monitor_runner(
     configured_settings = dict(settings or runtime_settings())
     configured_settings["typedbNativeRuleExecutionEnabled"] = "1" if typedb_native_rule_execution_enabled else "0"
     store = stores.monitor_store(configured_settings)
+    market_time_series_store = stores.market_time_series_store(configured_settings)
     ontology_quality_store = stores.ontology_quality_sample_store(configured_settings)
     interval_seconds = int(os.environ.get("PYTHON_REALTIME_INTERVAL_SECONDS") or os.environ.get("REALTIME_NOTIFY_INTERVAL_SECONDS") or configured_settings.get("monitorAccountIntervalSeconds") or 180)
     return MonitorRunner(
@@ -135,13 +136,18 @@ def build_monitor_runner(
         snapshot_builder=build_snapshot,
         event_sender=send_events,
         event_publisher=event_publisher or monitor_event_bus(),
-        cycle_recorder=stores.monitoring_cycle_recorder(configured_settings, store),
+        cycle_recorder=stores.monitoring_cycle_recorder(
+            configured_settings,
+            store,
+            market_time_series_store,
+        ),
         ontology_projection_recorder=PortfolioOntologyProjectionRecorder(
             ontology_repository_from_settings(configured_settings),
             quality_store=ontology_quality_store,
             decision_episode_store=stores.investment_decision_episode_store(configured_settings),
             hypothesis_proposal_store=stores.investment_research_store(configured_settings),
             data_pipeline_health_store=stores.data_pipeline_health_store(configured_settings),
+            market_time_series_store=market_time_series_store,
             settings=configured_settings,
         ),
         account_job_store=monitor_account_job_store_from_settings(configured_settings),
@@ -275,6 +281,7 @@ def build_market_data_collection_runner(settings=None, event_publisher=None) -> 
         settings=configured_settings,
         provider_factory=lambda account, quote_cache: TossProvider(account, quote_cache=quote_cache),
         event_publisher=event_publisher or default_event_bus(),
+        time_series_store=stores.market_time_series_store(configured_settings),
     )
 
 

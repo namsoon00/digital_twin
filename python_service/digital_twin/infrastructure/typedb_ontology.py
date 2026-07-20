@@ -1972,7 +1972,7 @@ relation ontology-assertion,
         ]
         settings = runtime_settings()
         node_batch_size = int(number_or_none(settings.get("typedbABoxNodeBatchSize")) or 25)
-        relation_batch_size = int(number_or_none(settings.get("typedbABoxRelationBatchSize")) or 1)
+        relation_batch_size = int(number_or_none(settings.get("typedbABoxRelationBatchSize")) or 5)
         return [
             *self.batched_node_insert_queries(node_rows, updated_at, node_batch_size),
             *self.batched_relation_insert_queries(relation_rows, updated_at, relation_batch_size),

@@ -24,6 +24,7 @@ from .mysql_market_stores import (
     MySQLResearchEvidenceStore,
     MySQLSymbolUniverseStore,
 )
+from .mysql_market_time_series import MySQLMarketTimeSeriesStore
 from .mysql_investment_calendar import MySQLInvestmentCalendarStore
 from .mysql_investment_calendar_candidates import MySQLInvestmentCalendarCandidateStore
 from .mysql_investment_strategy_proposals import MySQLInvestmentStrategyProposalStore

@@ -12,6 +12,7 @@ from ..domain.ontology_projection_fingerprint import (
 )
 from ..domain.ontology_validator import validate_ontology
 from ..domain.portfolio_ontology_builder import build_portfolio_ontology
+from ..domain.portfolio_ontology_temporal_concepts import parse_temporal_windows
 from ..domain.portfolio import AccountSnapshot
 from .graph_store_rulebox import rulebox_rules_to_payload
 
@@ -24,6 +25,7 @@ class PortfolioOntologyProjectionRecorder:
         decision_episode_store=None,
         hypothesis_proposal_store=None,
         data_pipeline_health_store=None,
+        market_time_series_store=None,
         settings: Dict[str, object] = None,
         source: str = "monitoring",
     ):
@@ -32,6 +34,7 @@ class PortfolioOntologyProjectionRecorder:
         self.decision_episode_store = decision_episode_store
         self.hypothesis_proposal_store = hypothesis_proposal_store
         self.data_pipeline_health_store = data_pipeline_health_store
+        self.market_time_series_store = market_time_series_store
         self.settings = dict(settings or {})
         self.source = source or "monitoring"
 
@@ -443,7 +446,28 @@ class PortfolioOntologyProjectionRecorder:
             "decisionPerformance": decision_performance,
             "hypothesisProposals": self.hypothesis_proposal_context(snapshot),
             "dataPipelineHealth": self.data_pipeline_health_context(),
+            "temporalObservationWindows": self.temporal_observation_windows(snapshot),
         }
+
+    def temporal_observation_windows(self, snapshot: AccountSnapshot) -> Dict[str, object]:
+        if not self.market_time_series_store or not hasattr(self.market_time_series_store, "load_temporal_windows"):
+            return {}
+        symbols = {
+            str(getattr(position, "symbol", "") or "").upper().strip()
+            for position in list(snapshot.positions or []) + list(snapshot.watchlist or [])
+            if str(getattr(position, "symbol", "") or "").strip() and not position.is_cash()
+        }
+        if not symbols:
+            return {}
+        definitions = parse_temporal_windows(self.settings.get("temporalWindowPeriods"))
+        try:
+            return self.market_time_series_store.load_temporal_windows(
+                snapshot.account_id,
+                symbols,
+                definitions,
+            )
+        except Exception:  # noqa: BLE001 - short snapshot history remains a valid compatibility fallback.
+            return {}
 
     def performance_setting(self, key: str, fallback: float) -> float:
         try:

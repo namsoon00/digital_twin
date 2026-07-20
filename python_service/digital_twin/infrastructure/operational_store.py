@@ -14,6 +14,7 @@ from .mysql_operational import (
     MySQLInvestmentDecisionEpisodeStore,
     MySQLInvestmentResearchStore,
     MySQLMarketQuoteCache,
+    MySQLMarketTimeSeriesStore,
     MySQLModelReviewJobStore,
     MySQLMonitorStore,
     MySQLMonitoringCycleRecorder,
@@ -71,9 +72,17 @@ def monitor_store(settings: Dict[str, str] = None):
     return MySQLMonitorStore(configured)
 
 
-def monitoring_cycle_recorder(settings: Dict[str, str] = None, monitor_store_instance=None):
+def monitoring_cycle_recorder(
+    settings: Dict[str, str] = None,
+    monitor_store_instance=None,
+    market_time_series_store_instance=None,
+):
     configured = configured_settings(settings)
-    return MySQLMonitoringCycleRecorder(configured, monitor_store=monitor_store_instance)
+    return MySQLMonitoringCycleRecorder(
+        configured,
+        monitor_store=monitor_store_instance,
+        market_time_series_store=market_time_series_store_instance,
+    )
 
 
 def event_log(settings: Dict[str, str] = None):
@@ -104,6 +113,11 @@ def notification_rule_store(settings: Dict[str, str] = None):
 def market_quote_cache(settings: Dict[str, str] = None):
     configured = configured_settings(settings)
     return MySQLMarketQuoteCache(configured)
+
+
+def market_time_series_store(settings: Dict[str, str] = None):
+    configured = configured_settings(settings)
+    return MySQLMarketTimeSeriesStore(configured)
 
 
 def symbol_universe_store(settings: Dict[str, str] = None):

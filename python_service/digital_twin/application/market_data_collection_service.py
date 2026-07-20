@@ -84,6 +84,7 @@ class MarketDataCollectionRunner:
         provider_factory: MarketDataProviderFactory,
         event_publisher=None,
         sleep_fn=time.sleep,
+        time_series_store=None,
     ):
         self.account_repository = account_repository
         self.symbol_service = symbol_service
@@ -92,6 +93,7 @@ class MarketDataCollectionRunner:
         self.provider_factory = provider_factory
         self.event_publisher = event_publisher
         self.sleep_fn = sleep_fn
+        self.time_series_store = time_series_store
 
     def enabled(self) -> bool:
         return truthy(self.settings.get("marketDataCollectionEnabled"), True)
@@ -254,7 +256,12 @@ class MarketDataCollectionRunner:
             prices, token = provider.fetch_prices(token, symbol_order)
         except Exception:
             prices = {}
-        indicators, token = self.collect_candles(provider, token, symbol_order)
+        indicators, candles_by_symbol, token = self.collect_candles(provider, token, symbol_order)
+        time_series = self.record_daily_history(
+            candles_by_symbol,
+            focused_by_account,
+            market_signal_targets,
+        )
         merged_entries: List[Dict[str, object]] = []
         for entry in focused_by_account:
             merged_positions = []
@@ -291,21 +298,64 @@ class MarketDataCollectionRunner:
             "symbols": symbol_order,
             "priceCount": len(prices),
             "candleCount": len(indicators),
+            "dailyHistorySavedCount": int(time_series.get("savedCount") or 0),
+            "dailyHistorySymbolCount": int(time_series.get("symbolCount") or 0),
+            "timeSeries": time_series,
         }
 
     def collect_candles(self, provider: MarketDataProvider, token: str, symbols: Iterable[str]):
         result: Dict[str, Dict[str, object]] = {}
+        candles_by_symbol: Dict[str, List[Dict[str, object]]] = {}
         for index, symbol in enumerate(symbols):
             try:
                 if index:
                     self.sleep_fn(0.22)
                 candles, token = provider.fetch_daily_candles(token, symbol)
+                if candles:
+                    candles_by_symbol[str(symbol or "").upper()] = list(candles)
                 indicators = technical_indicators_from_candles(candles)
                 if indicators:
                     result[symbol] = indicators
             except Exception:
                 continue
-        return result, token
+        return result, candles_by_symbol, token
+
+    def record_daily_history(
+        self,
+        candles_by_symbol: Dict[str, List[Dict[str, object]]],
+        focused_by_account: List[Dict[str, object]],
+        market_signal_targets: List[Tuple[Position, Dict[str, object]]],
+    ) -> Dict[str, object]:
+        if not self.time_series_store or not candles_by_symbol:
+            return {"enabled": bool(self.time_series_store), "savedCount": 0, "symbolCount": 0}
+        metadata: Dict[str, Dict[str, object]] = {}
+        for entry in focused_by_account or []:
+            for position in entry.get("positions") or []:
+                symbol = str(position.symbol or "").upper().strip()
+                if symbol:
+                    metadata[symbol] = {
+                        "name": position.name,
+                        "market": position.market,
+                        "currency": position.currency,
+                    }
+        for position, base in market_signal_targets or []:
+            symbol = str(position.symbol or "").upper().strip()
+            if symbol:
+                metadata.setdefault(symbol, {
+                    "name": position.name or str(base.get("name") or symbol),
+                    "market": position.market or str(base.get("market") or ""),
+                    "currency": position.currency or str(base.get("currency") or ""),
+                })
+        try:
+            return self.time_series_store.record_daily_candles(candles_by_symbol, metadata)
+        except Exception as error:  # noqa: BLE001 - quote cache collection must survive history persistence failure.
+            return {
+                "enabled": True,
+                "savedCount": 0,
+                "symbolCount": 0,
+                "status": "error",
+                "reason": str(error)[:180],
+            }
 
     def run_once(self, force: bool = False) -> Dict[str, object]:
         if not self.enabled() and not force:
@@ -462,6 +512,9 @@ class MarketDataCollectionRunner:
             "marketSignalSymbols": market_signal_symbols,
             "priceCount": int(merge_summary.get("priceCount") or 0),
             "candleCount": int(merge_summary.get("candleCount") or 0),
+            "dailyHistorySavedCount": int(merge_summary.get("dailyHistorySavedCount") or 0),
+            "dailyHistorySymbolCount": int(merge_summary.get("dailyHistorySymbolCount") or 0),
+            "timeSeries": dict(merge_summary.get("timeSeries") or {}),
             "savedCount": saved,
             "accountSavedCount": account_saved,
             "changedCount": changed,
@@ -506,7 +559,7 @@ class MarketDataCollectionRunner:
         return result
 
     def status(self) -> Dict[str, object]:
-        return {
+        result = {
             "enabled": self.enabled(),
             "markets": self.markets(),
             "priceBatchSize": self.price_batch_size(),
@@ -518,3 +571,9 @@ class MarketDataCollectionRunner:
             "cache": self.quote_cache.summary("toss", MARKET_DATA_ACCOUNT_ID),
             "symbolUniverse": self.symbol_service.summary(),
         }
+        if self.time_series_store:
+            try:
+                result["timeSeries"] = self.time_series_store.summary()
+            except Exception as error:  # noqa: BLE001 - collection status should still report the cache state.
+                result["timeSeries"] = {"enabled": True, "status": "error", "reason": str(error)[:180]}
+        return result

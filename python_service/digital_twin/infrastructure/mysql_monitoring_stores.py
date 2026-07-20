@@ -57,6 +57,7 @@ from .mysql_operational_helpers import (
 
 from .mysql_notification_config import MySQLNotificationTemplateStore
 from .mysql_market_stores import MySQLModelReviewJobStore
+from .mysql_market_time_series import MySQLMarketTimeSeriesStore
 class MySQLMonitorStore(MySQLOperationalConnection):
     def __init__(self, settings: Dict[str, str] = None):
         super().__init__(settings)
@@ -166,17 +167,29 @@ class MySQLMonitorStore(MySQLOperationalConnection):
         self.sent.update(entries)
 
     def record_cycle(self, account_ids: List[str], snapshots: List[AccountSnapshot], alert_events: List[AlertEvent], dry_run: bool = False):
-        return MySQLMonitoringCycleRecorder(self.runtime_settings, monitor_store=self).record_cycle(account_ids, snapshots, alert_events, dry_run=dry_run)
+        return MySQLMonitoringCycleRecorder(
+            self.runtime_settings,
+            monitor_store=self,
+            market_time_series_store=MySQLMarketTimeSeriesStore(self.runtime_settings),
+        ).record_cycle(account_ids, snapshots, alert_events, dry_run=dry_run)
 
     def write(self) -> None:
         pass
 
 class MySQLMonitoringCycleRecorder(MySQLOperationalConnection):
-    def __init__(self, settings: Dict[str, str] = None, monitor_store: MySQLMonitorStore = None):
+    def __init__(
+        self,
+        settings: Dict[str, str] = None,
+        monitor_store: MySQLMonitorStore = None,
+        market_time_series_store=None,
+    ):
         self.monitor_store = monitor_store
+        self.market_time_series_store = market_time_series_store
         super().__init__(settings)
         if self.monitor_store is None:
             self.monitor_store = MySQLMonitorStore(settings)
+        if self.market_time_series_store is None:
+            self.market_time_series_store = MySQLMarketTimeSeriesStore(settings)
 
     def account_context_map(self) -> Dict[str, AccountConfig]:
         try:
@@ -226,6 +239,7 @@ class MySQLMonitoringCycleRecorder(MySQLOperationalConnection):
         model_review_store = MySQLModelReviewJobStore(self.runtime_settings)
         account_contexts = self.account_context_map() if alert_events else {}
         with self.transaction() as connection:
+            self.market_time_series_store.record_snapshots_with_connection(connection, snapshots)
             for snapshot in snapshots:
                 insert_domain_event_with_connection(connection, snapshot_collected_event(snapshot))
             if alert_source_event:

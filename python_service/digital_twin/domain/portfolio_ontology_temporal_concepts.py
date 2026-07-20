@@ -4,6 +4,7 @@ from typing import Dict, Iterable, List, Optional
 
 from .investment_research import research_evidence_from_external_signals
 from .market_data import number
+from .market_time_series import market_session_date
 from .ontology_contracts import PortfolioOntology
 from .ontology_observation_quality import profile_for_domain
 from .ontology_schema import add_entity, add_relation
@@ -72,6 +73,11 @@ def camel_to_snake(value: str) -> str:
 def position_payload(position: Position, generated_at: str = "") -> Dict[str, object]:
     payload = position.to_dict()
     payload["generatedAt"] = generated_at or position.updated_at
+    payload["marketSessionDate"] = market_session_date(
+        payload["generatedAt"],
+        position.market,
+        position.currency,
+    )
     return payload
 
 
@@ -116,6 +122,74 @@ def temporal_history_rows(
         deduped.values(),
         key=lambda item: parse_timestamp(item.get("generatedAt") or item.get("updated_at") or item.get("updatedAt")) or datetime.min.replace(tzinfo=timezone.utc),
     )
+
+
+def stored_temporal_window_rows(
+    runtime_context: Dict[str, object],
+    symbol: str,
+    window_key: str,
+) -> Optional[List[Dict[str, object]]]:
+    windows = runtime_context.get("temporalObservationWindows") if isinstance(runtime_context, dict) else None
+    if not isinstance(windows, dict):
+        return None
+    by_symbol = windows.get(str(symbol or "").upper().strip())
+    if not isinstance(by_symbol, dict):
+        return None
+    rows = by_symbol.get(str(window_key or "").upper().strip())
+    if not isinstance(rows, list):
+        return None
+    return [dict(row) for row in rows if isinstance(row, dict)]
+
+
+def dedupe_temporal_rows(rows: Iterable[Dict[str, object]], symbol: str) -> List[Dict[str, object]]:
+    deduped: Dict[str, Dict[str, object]] = {}
+    for index, row in enumerate(rows or []):
+        stamp = str(
+            row.get("bucketAt")
+            or row.get("generatedAt")
+            or row.get("updated_at")
+            or row.get("updatedAt")
+            or "row-" + str(index)
+        )
+        deduped[stamp + ":" + str(symbol or "").upper()] = row
+    return sorted(
+        deduped.values(),
+        key=lambda item: parse_timestamp(
+            item.get("bucketAt")
+            or item.get("generatedAt")
+            or item.get("updated_at")
+            or item.get("updatedAt")
+        ) or datetime.min.replace(tzinfo=timezone.utc),
+    )
+
+
+def trim_to_recent_sessions(rows: List[Dict[str, object]], required_sessions: int) -> List[Dict[str, object]]:
+    if required_sessions <= 0:
+        return rows
+    recent_dates = []
+    for row in reversed(rows or []):
+        session_date = str(
+            row.get("marketSessionDate")
+            or row.get("bucketAt")
+            or row.get("generatedAt")
+            or row.get("updatedAt")
+            or ""
+        )[:10]
+        if session_date and session_date not in recent_dates:
+            recent_dates.append(session_date)
+        if len(recent_dates) >= required_sessions:
+            break
+    allowed = set(recent_dates)
+    return [
+        row for row in rows or []
+        if str(
+            row.get("marketSessionDate")
+            or row.get("bucketAt")
+            or row.get("generatedAt")
+            or row.get("updatedAt")
+            or ""
+        )[:10] in allowed
+    ]
 
 
 def row_number(row: Dict[str, object], camel: str, snake: str = "") -> float:
@@ -249,13 +323,44 @@ def temporal_window_values(rows: List[Dict[str, object]], definition: TemporalWi
     smart_money_start = row_number(first, "foreignNetVolume", "foreign_net_volume") + row_number(first, "institutionNetVolume", "institution_net_volume")
     smart_money_end = row_number(last, "foreignNetVolume", "foreign_net_volume") + row_number(last, "institutionNetVolume", "institution_net_volume")
     elapsed_hours = ((last_time - first_time).total_seconds() / 3600.0) if first_time and last_time and last_time >= first_time else 0.0
+    session_dates = {
+        str(
+            row.get("marketSessionDate")
+            or row.get("bucketAt")
+            or row.get("generatedAt")
+            or row.get("updated_at")
+            or row.get("updatedAt")
+            or ""
+        )[:10]
+        for row in rows
+        if row
+    }
+    session_dates.discard("")
+    required_sessions = max(1, int(round(definition.lookback_days)))
+    sample_coverage = len(rows) / max(1.0, definition.min_samples)
+    session_coverage = len(session_dates) / max(1.0, required_sessions)
+    sufficient = len(rows) >= definition.min_samples and len(session_dates) >= required_sessions
+    observation_source = next(
+        (str(row.get("observationSource") or "") for row in reversed(rows) if row.get("observationSource")),
+        "monitor-snapshot-history",
+    )
+    observation_granularity = next(
+        (str(row.get("observationGranularity") or "") for row in reversed(rows) if row.get("observationGranularity")),
+        "snapshot",
+    )
     values = {
         "windowKey": definition.key,
         "lookbackDays": definition.lookback_days,
         "requiredSampleCount": definition.min_samples,
         "sampleCount": len(rows),
-        "hasSufficientHistory": len(rows) >= definition.min_samples,
-        "coverageRatio": round(min(1.0, len(rows) / max(1.0, definition.min_samples)), 3),
+        "requiredSessionCount": required_sessions,
+        "coveredSessionCount": len(session_dates),
+        "hasSufficientHistory": sufficient,
+        "coverageRatio": round(min(1.0, sample_coverage, session_coverage), 3),
+        "observationSource": observation_source,
+        "observationGranularity": observation_granularity,
+        "firstObservedAt": first_time.isoformat().replace("+00:00", "Z") if first_time else "",
+        "lastObservedAt": last_time.isoformat().replace("+00:00", "Z") if last_time else "",
         "elapsedHours": round(elapsed_hours, 2),
         "startPrice": round(start_price, 4),
         "currentPrice": round(end_price, 4),
@@ -299,6 +404,7 @@ def add_temporal_coverage_gap(
     symbol: str,
     definition: TemporalWindowDefinition,
     sample_count: int,
+    covered_session_count: int = 0,
     observation_profile: Dict[str, object] = None,
 ) -> None:
     gap_id = add_entity(graph, "temporal-coverage-gap", symbol + ":temporal:" + definition.key, definition.key + " 기간 히스토리 부족", {
@@ -311,8 +417,10 @@ def add_temporal_coverage_gap(
         "domainScope": "temporalReasoning",
         "sampleCount": sample_count,
         "requiredSampleCount": definition.min_samples,
+        "coveredSessionCount": covered_session_count,
+        "requiredSessionCount": max(1, int(round(definition.lookback_days))),
         "riskImpact": 4.0,
-        "description": definition.key + " 기간 판단에 필요한 스냅샷 히스토리가 부족합니다.",
+        "description": definition.key + " 기간 판단에 필요한 거래일 이력이 부족합니다.",
         "source": "temporal-window-ontology",
         **dict(observation_profile or {}),
     })
@@ -347,7 +455,16 @@ def add_position_temporal_concepts(
     flow_observation = profile_for_domain(observation_profiles or {}, "flow")
 
     for definition in definitions:
-        selected = window_rows(rows, definition, current_time)
+        stored_rows = stored_temporal_window_rows(runtime_context, symbol, definition.key)
+        if stored_rows is None:
+            selected = window_rows(rows, definition, current_time)
+        else:
+            selected = trim_to_recent_sessions(dedupe_temporal_rows(
+                stored_rows + [position_payload(position, str(runtime_context.get("asOf") or ""))],
+                symbol,
+            ), max(1, int(round(definition.lookback_days))))
+            if isinstance(external_signals, dict) and selected:
+                selected[-1] = {**selected[-1], "externalSignals": external_signals}
         values = temporal_window_values(selected, definition)
         cluster = event_cluster(symbol, selected)
         scores = temporal_scores(
@@ -358,9 +475,13 @@ def add_position_temporal_concepts(
             values,
         )
         values.update(cluster)
-        values.update(scores)
+        values.update(scores if values.get("hasSufficientHistory") else {
+            "temporalRiskScore": 0.0,
+            "temporalSupportScore": 0.0,
+        })
         values["symbol"] = symbol
-        values["source"] = "monitor-snapshot-history"
+        values["source"] = str(values.get("observationSource") or "monitor-snapshot-history")
+        values["retentionTier"] = str(values.get("observationGranularity") or "snapshot")
 
         window_id = add_entity(graph, "temporal-window", symbol + ":" + definition.key, symbol + " " + definition.key + " 기간 흐름", {
             "tboxClass": "MultiDayWindow" if definition.lookback_days > 1 else "DailyWindow",
@@ -371,7 +492,7 @@ def add_position_temporal_concepts(
             **trend_observation,
         })
         add_relation(graph, stock_id, window_id, "HAS_TEMPORAL_WINDOW", weight=relation_weight(max(values.get("temporalRiskScore", 0), values.get("temporalSupportScore", 0), 35)), properties={
-            "source": "monitor-snapshot-history",
+            "source": values["source"],
             "field": "temporalWindow",
             "windowKey": definition.key,
             "polarity": "risk" if values.get("temporalRiskScore", 0) >= values.get("temporalSupportScore", 0) else "support",
@@ -387,7 +508,7 @@ def add_position_temporal_concepts(
             **trend_observation,
         })
         add_relation(graph, window_id, path_id, "HAS_PRICE_PATH_PATTERN", weight=relation_weight(max(values.get("temporalRiskScore", 0), values.get("temporalSupportScore", 0), 45)), properties={
-            "source": "monitor-snapshot-history",
+            "source": values["source"],
             "field": "pricePathPattern",
             "windowKey": definition.key,
             "aiInfluenceLabel": definition.key + " " + str(values.get("pricePathPattern")),
@@ -402,7 +523,7 @@ def add_position_temporal_concepts(
             **flow_observation,
         })
         add_relation(graph, window_id, flow_id, "HAS_FLOW_PATTERN", weight=0.64, properties={
-            "source": "monitor-snapshot-history",
+            "source": values["source"],
             "field": "flowPattern",
             "windowKey": definition.key,
             "aiInfluenceLabel": definition.key + " " + str(values.get("flowPattern")),
@@ -416,7 +537,7 @@ def add_position_temporal_concepts(
             **values,
         })
         add_relation(graph, window_id, event_id, "HAS_EVENT_CLUSTER", weight=0.55 if cluster.get("eventCount") else 0.25, properties={
-            "source": "monitor-snapshot-history",
+            "source": values["source"],
             "field": "eventClusterType",
             "windowKey": definition.key,
             "polarity": "risk" if cluster.get("riskEventCount", 0) >= 2 else "context",
@@ -434,7 +555,7 @@ def add_position_temporal_concepts(
                 **trend_observation,
             })
             add_relation(graph, stock_id, episode_id, "DERIVES_TREND_EPISODE", weight=relation_weight(max(values.get("temporalRiskScore", 0), values.get("temporalSupportScore", 0), 50)), properties={
-                "source": "monitor-snapshot-history",
+                "source": values["source"],
                 "field": "trendEpisodeType",
                 "windowKey": definition.key,
                 "polarity": "support" if episode in {"DeclineDeceleration", "RecoveryAttempt", "AccumulationDuringWeakness"} else "risk" if episode in {"PersistentDecline", "FailedRecovery", "DistributionDuringBounce", "EventDrivenRiskCluster"} else "context",
@@ -448,5 +569,6 @@ def add_position_temporal_concepts(
                 symbol,
                 definition,
                 int(values.get("sampleCount") or 0),
+                int(values.get("coveredSessionCount") or 0),
                 trend_observation,
             )

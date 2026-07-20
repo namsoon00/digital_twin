@@ -347,6 +347,34 @@ class MarketQuoteRepository(Protocol):
         ...
 
 
+class MarketTimeSeriesRepository(Protocol):
+    def record_snapshots_with_connection(
+        self,
+        connection,
+        snapshots: Iterable[AccountSnapshot],
+    ) -> Dict[str, object]:
+        ...
+
+    def record_daily_candles(
+        self,
+        candles_by_symbol: Dict[str, List[Dict[str, object]]],
+        metadata_by_symbol: Dict[str, Dict[str, object]] = None,
+        provider: str = "toss-candles",
+    ) -> Dict[str, object]:
+        ...
+
+    def load_temporal_windows(
+        self,
+        account_id: str,
+        symbols: Iterable[str],
+        definitions: Iterable[object],
+    ) -> Dict[str, Dict[str, List[Dict[str, object]]]]:
+        ...
+
+    def summary(self, account_id: str = "") -> Dict[str, object]:
+        ...
+
+
 class ResearchEvidenceRepository(Protocol):
     def upsert_many(self, items: Iterable[ResearchEvidence]) -> int:
         ...

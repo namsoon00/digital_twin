@@ -14,6 +14,12 @@ DEFAULT_SNAPSHOT_HISTORY_KEEP_COUNT = 6
 DEFAULT_SUPPRESSED_NOTIFICATION_RETENTION_MINUTES = 120
 DEFAULT_LARGE_DOMAIN_EVENT_KEEP_COUNT = 100
 DEFAULT_LARGE_DOMAIN_EVENT_NAMES = ("monitoring.alerts_detected",)
+DEFAULT_MARKET_TIME_SERIES_RETENTION_DAYS = {
+    "3m": 7,
+    "15m": 120,
+    "1h": 730,
+    "1d": 3650,
+}
 RETENTION_LOCK_NAME = "orbit_alpha_operational_history_retention"
 
 
@@ -130,6 +136,16 @@ def operational_large_domain_event_names(settings: Mapping[str, object] = None) 
     )
 
 
+def market_time_series_retention_days(settings: Mapping[str, object] = None) -> Dict[str, int]:
+    configured = settings or {}
+    return {
+        "3m": _int_setting(configured, "marketTimeSeriesRawRetentionDays", 7, 1, 3650),
+        "15m": _int_setting(configured, "marketTimeSeries15mRetentionDays", 120, 1, 36500),
+        "1h": _int_setting(configured, "marketTimeSeries1hRetentionDays", 730, 1, 36500),
+        "1d": _int_setting(configured, "marketTimeSeriesDailyRetentionDays", 3650, 1, 36500),
+    }
+
+
 def operational_history_retention_cutoff(
     settings: Mapping[str, object] = None,
     now: Optional[datetime] = None,
@@ -152,6 +168,20 @@ def operational_suppressed_notification_cutoff(
     current = current.astimezone(timezone.utc)
     cutoff = current - timedelta(minutes=operational_suppressed_notification_retention_minutes(settings))
     return cutoff.replace(microsecond=0).isoformat().replace("+00:00", "Z")
+
+
+def market_time_series_retention_cutoffs(
+    settings: Mapping[str, object] = None,
+    now: Optional[datetime] = None,
+) -> Dict[str, str]:
+    current = now or datetime.now(timezone.utc)
+    if current.tzinfo is None:
+        current = current.replace(tzinfo=timezone.utc)
+    current = current.astimezone(timezone.utc)
+    return {
+        granularity: (current - timedelta(days=days)).replace(microsecond=0).isoformat().replace("+00:00", "Z")
+        for granularity, days in market_time_series_retention_days(settings).items()
+    }
 
 
 def _fetch_scalar(cursor):
@@ -209,6 +239,30 @@ def _delete_suppressed_notification_rows(connection, cutoff_iso: str, batch_size
     )
     while True:
         cursor = _execute(connection, sql, (cutoff_iso, batch_size))
+        affected = int(getattr(cursor, "rowcount", 0) or 0)
+        total += affected
+        if affected < batch_size:
+            break
+    return total
+
+
+def _delete_market_time_series_rows(
+    connection,
+    granularity: str,
+    cutoff_iso: str,
+    batch_size: int,
+) -> int:
+    total = 0
+    cutoff_sql = "CAST(%s AS CHAR CHARACTER SET utf8mb4) COLLATE utf8mb4_unicode_ci"
+    sql = (
+        "DELETE FROM `market_time_series_observations`"
+        " WHERE `granularity` = %s"
+        " AND `bucket_at` < "
+        + cutoff_sql
+        + " ORDER BY `bucket_at`, `account_id`, `symbol` LIMIT %s"
+    )
+    while True:
+        cursor = _execute(connection, sql, (granularity, cutoff_iso, batch_size))
         affected = int(getattr(cursor, "rowcount", 0) or 0)
         total += affected
         if affected < batch_size:
@@ -306,6 +360,7 @@ def apply_mysql_operational_history_retention(
 
     cutoff_iso = operational_history_retention_cutoff(configured, now=now)
     suppressed_cutoff_iso = operational_suppressed_notification_cutoff(configured, now=now)
+    time_series_cutoffs = market_time_series_retention_cutoffs(configured, now=now)
     batch_size = operational_history_retention_batch_size(configured)
     locked = False
     if use_lock:
@@ -341,6 +396,18 @@ def apply_mysql_operational_history_retention(
         )
         deleted_by_table["domain_events"] = deleted_by_table.get("domain_events", 0) + domain_event_deleted
         deleted_by_policy["count:domain_events"] = domain_event_deleted
+
+        time_series_deleted = 0
+        for granularity, series_cutoff in time_series_cutoffs.items():
+            deleted = _delete_market_time_series_rows(
+                connection,
+                granularity,
+                series_cutoff,
+                batch_size,
+            )
+            time_series_deleted += deleted
+            deleted_by_policy["tier:market_time_series_observations:" + granularity] = deleted
+        deleted_by_table["market_time_series_observations"] = time_series_deleted
     finally:
         if locked:
             try:
@@ -357,6 +424,8 @@ def apply_mysql_operational_history_retention(
         "suppressedNotificationRetentionMinutes": operational_suppressed_notification_retention_minutes(configured),
         "largeDomainEventKeepCount": operational_large_domain_event_keep_count(configured),
         "largeDomainEventNames": operational_large_domain_event_names(configured),
+        "marketTimeSeriesRetentionDays": market_time_series_retention_days(configured),
+        "marketTimeSeriesCutoffs": time_series_cutoffs,
         "deleted": sum(deleted_by_table.values()),
         "tables": deleted_by_table,
         "policies": deleted_by_policy,

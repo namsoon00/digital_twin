@@ -11,6 +11,7 @@ from .notification_ai_context import (
     relation_facts,
 )
 from .news_analysis import relation_scope_is_excluded
+from .security_lines import security_lines_for_symbol
 
 
 NEWS_DATE_KEYS = (
@@ -30,15 +31,108 @@ MISLEADING_KEYWORDS_BY_SYMBOL = {
     "PLTR": {"전기차", "ev", "electric vehicle", "battery", "배터리"},
 }
 
+NEWS_SYMBOL_KEYS = (
+    "symbol",
+    "ticker",
+    "targetSymbol",
+    "target_symbol",
+    "securitySymbol",
+    "security_symbol",
+    "instrumentSymbol",
+    "instrument_symbol",
+)
+NEWS_SYMBOL_LIST_KEYS = (
+    "symbols",
+    "tickers",
+    "targetSymbols",
+    "target_symbols",
+    "relatedSymbols",
+    "related_symbols",
+)
+
+
+def normalized_news_symbol(value: object) -> str:
+    text = str(value or "").upper().strip()
+    if text.endswith((".KS", ".KQ")):
+        text = text[:-3]
+    return text
+
+
+def target_symbols_from_context(context: Dict[str, object]) -> List[str]:
+    context = context if isinstance(context, dict) else {}
+    relation_context = context.get("ontologyRelationContext") if isinstance(context.get("ontologyRelationContext"), dict) else {}
+    facts = relation_context.get("facts") if isinstance(relation_context.get("facts"), dict) else {}
+    subject = relation_context.get("subject") if isinstance(relation_context.get("subject"), dict) else {}
+    candidates = [
+        context.get("symbol"),
+        context.get("rawSymbol"),
+        facts.get("symbol"),
+        subject.get("symbol"),
+    ]
+    symbols: List[str] = []
+    for value in candidates:
+        symbol = normalized_news_symbol(value)
+        if symbol and symbol not in symbols:
+            symbols.append(symbol)
+    for base_symbol in list(symbols):
+        for line in security_lines_for_symbol(base_symbol):
+            for value in [line.local_symbol, line.symbol, line.underlying_symbol]:
+                symbol = normalized_news_symbol(value)
+                if symbol and symbol not in symbols:
+                    symbols.append(symbol)
+    return symbols
+
+
+def news_item_explicit_symbols(item: Dict[str, object]) -> List[str]:
+    symbols: List[str] = []
+    for payload in _nested_payloads(item):
+        for key in NEWS_SYMBOL_KEYS:
+            symbol = normalized_news_symbol(payload.get(key))
+            if symbol and symbol not in symbols:
+                symbols.append(symbol)
+        for key in NEWS_SYMBOL_LIST_KEYS:
+            raw = payload.get(key)
+            values = raw if isinstance(raw, list) else re.split(r"[,|/\s]+", str(raw or ""))
+            for value in values:
+                symbol = normalized_news_symbol(value)
+                if symbol and symbol not in symbols:
+                    symbols.append(symbol)
+    return symbols
+
+
+def news_item_targets_context(item: Dict[str, object], context: Dict[str, object]) -> bool:
+    targets = set(target_symbols_from_context(context))
+    explicit = set(news_item_explicit_symbols(item))
+    return not targets or not explicit or bool(targets.intersection(explicit))
+
+
+def _items_from_target_group(raw: object, context: Dict[str, object]) -> List[Dict[str, object]]:
+    if isinstance(raw, list):
+        return [item for item in raw if isinstance(item, dict)]
+    if not isinstance(raw, dict):
+        return []
+    if isinstance(raw.get("items"), list):
+        return [item for item in raw.get("items") or [] if isinstance(item, dict)]
+    rows: List[Dict[str, object]] = []
+    for symbol in target_symbols_from_context(context):
+        group = raw.get(symbol)
+        if isinstance(group, list):
+            rows.extend(item for item in group if isinstance(item, dict))
+        elif isinstance(group, dict) and isinstance(group.get("items"), list):
+            rows.extend(item for item in group.get("items") or [] if isinstance(item, dict))
+    return rows
+
 
 def news_headline_items(context: Dict[str, object]) -> List[Dict[str, object]]:
     facts = relation_facts(context)
-    news = facts.get("newsHeadlines") if isinstance(facts.get("newsHeadlines"), dict) else {}
-    if not news:
-        metadata = context.get("metadata") if isinstance(context.get("metadata"), dict) else {}
-        news = metadata.get("newsHeadlines") if isinstance(metadata.get("newsHeadlines"), dict) else {}
-    raw_items = news.get("items") if isinstance(news, dict) and isinstance(news.get("items"), list) else []
-    return [item for item in raw_items if isinstance(item, dict) and str(item.get("title") or "").strip()]
+    metadata = context.get("metadata") if isinstance(context.get("metadata"), dict) else {}
+    rows: List[Dict[str, object]] = []
+    for container in [facts, metadata, context]:
+        rows.extend(_items_from_target_group(container.get("newsHeadlines"), context))
+    return [
+        item for item in rows
+        if str(item.get("title") or "").strip() and news_item_targets_context(item, context)
+    ]
 
 
 def _nested_payloads(item: Dict[str, object]) -> List[Dict[str, object]]:
@@ -122,6 +216,8 @@ def news_summary_candidate(item: Dict[str, object]) -> str:
 
 def news_item_quality_reason(item: Dict[str, object], context: Dict[str, object] = None) -> str:
     context = context or {}
+    if not news_item_targets_context(item, context):
+        return "different target symbol"
     scope = str(news_item_value(item, "relationScope", "relation_scope") or "").strip().lower()
     if scope in LOW_QUALITY_RELATION_SCOPES or relation_scope_is_excluded(scope):
         return "relationScope=" + scope
@@ -283,19 +379,18 @@ def research_evidence_items(context: Dict[str, object]) -> List[Dict[str, object
     rows: List[Dict[str, object]] = []
 
     def add_items(raw_items) -> None:
-        if not isinstance(raw_items, list):
-            return
-        for item in raw_items:
+        for item in _items_from_target_group(raw_items, context):
             if not isinstance(item, dict):
                 continue
             title = str(item.get("title") or item.get("summary") or "").strip()
-            if title:
+            if title and news_item_targets_context(item, context):
                 rows.append(item)
 
     facts = relation_facts(context)
     add_items(facts.get("researchEvidence"))
     metadata = context.get("metadata") if isinstance(context.get("metadata"), dict) else {}
     add_items(metadata.get("researchEvidence"))
+    add_items(context.get("researchEvidence"))
     active_opinion = active_investment_opinion_value(context)
     if active_opinion:
         add_items(active_opinion.get("evidence"))

@@ -12,6 +12,10 @@ from digital_twin.application.notification_service import NotificationQueueRunne
 from digital_twin.domain.accounts import AccountConfig
 from digital_twin.domain.message_types import INVESTMENT_INSIGHT, OPERATOR_REASONING_REPORT
 from digital_twin.domain.notification_ai_gate_contracts import NotificationAIValidatedResponse
+from digital_twin.domain.notification_ai_gate_validation import (
+    build_notification_ai_gate_prompt,
+    validated_response_from_payload,
+)
 from digital_twin.domain.ontology_relation_execution_plan import execution_plan_from_relation_context
 from digital_twin.domain.notification_reasoning_report import (
     build_notification_reasoning_report,
@@ -274,6 +278,85 @@ class NotificationReasoningReportTests(unittest.TestCase):
         self.assertIn("N-TEST1234", message)
         self.assertNotIn("EVENT_RISK_REVIEW", message)
         self.assertNotIn("graph.disclosure.event_risk.v1", message)
+
+    def test_investment_alert_excludes_other_symbol_news_from_research_refresh_snapshot(self):
+        hynix_url = "https://dart.fss.or.kr/dsaf001/main.do?rcpNo=20260716000582"
+        strategy_url = "https://news.example.com/strategy-strc-cross-symbol-leak"
+        context = {
+            "messageType": "investmentInsight",
+            "messageDeliveryLevel": "absoluteBeginner",
+            "displayTarget": "SK하이닉스 / 000660",
+            "target": "000660",
+            "symbol": "000660",
+            "rawSymbol": "000660",
+            "title": "SK하이닉스",
+            "referenceDate": "2026-07-20 08:04 KST",
+            "rawLines": ["현재가: 1,842,000원", "수익률: -25.5%"],
+            "ontologyRelationContext": {
+                "source": "typedbInferenceBox",
+                "graphStore": "typedb",
+                "graphStoreUsed": True,
+                "nativeTypeDbReasoningUsed": True,
+                "subject": {"symbol": "000660", "name": "SK하이닉스", "market": "KR"},
+                "facts": {
+                    "symbol": "000660",
+                    "name": "SK하이닉스",
+                    "isHolding": True,
+                    "researchEvidence": [{
+                        "evidenceId": "research:000660:dart:20260716000582",
+                        "symbol": "000660",
+                        "kind": "disclosure",
+                        "source": "OpenDART",
+                        "title": "임원ㆍ주요주주특정증권등소유상황보고서",
+                        "url": hynix_url,
+                    }],
+                },
+                "researchCycle": {
+                    "symbol": "000660",
+                    "status": "reasoning-refresh-failed",
+                    "reasoningRefresh": {
+                        "status": "error",
+                        "refreshed": False,
+                        "state": {
+                            "externalSignals": {
+                                "researchEvidence": {
+                                    "MSTR": [{
+                                        "evidenceId": "research:MSTR:news:cross-symbol",
+                                        "symbol": "MSTR",
+                                        "kind": "news",
+                                        "title": "Cross-symbol Strategy STRC article",
+                                        "url": strategy_url,
+                                    }]
+                                }
+                            }
+                        },
+                    },
+                },
+            },
+        }
+        payload = {
+            "action": "HOLD",
+            "confidence": 60,
+            "summary": "보유 상태를 다시 확인합니다.",
+            "opinion": "가격과 공시를 확인합니다.",
+            "evidence": ["손실 구간입니다.", "공시가 있습니다."],
+            "counterEvidence": ["추가 수급은 확인되지 않았습니다."],
+            "invalidationCondition": "가격이 회복되면 다시 판단합니다.",
+            "nextChecks": ["공시 원문을 확인합니다."],
+            "sourceUrls": [strategy_url],
+            "referenceDate": "2026-07-20 08:04 KST",
+        }
+
+        prompt = build_notification_ai_gate_prompt(context)
+        response = validated_response_from_payload(context, payload, source="test AI")
+        message = context_with_validated_ai_response(context, response)["telegramMessage"]
+
+        self.assertNotIn("Cross-symbol Strategy STRC article", prompt)
+        self.assertNotIn(strategy_url, prompt)
+        self.assertEqual([hynix_url], response.source_urls)
+        self.assertIn(hynix_url, message)
+        self.assertNotIn(strategy_url, message)
+        self.assertNotIn("외 1건은 웹 상세에서 확인", message)
 
     def test_beginner_message_preserves_nested_article_summary_when_duplicate_headline_is_sparse(self):
         context, _article_url = notification_context()

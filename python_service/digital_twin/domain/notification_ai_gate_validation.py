@@ -799,13 +799,35 @@ def compact_relation_context_for_ai(context: object) -> Dict[str, object]:
         "confidence", "scoreBreakdown", "thresholdPolicy", "whyNow", "signalConflicts",
         "inferenceTimeline", "inferenceGenerationId", "inferenceGenerationAt", "ruleboxRulesHash",
         "targetRole", "actionPolicy", "allowedActions", "blockedActions", "decision", "executionPlan",
-        "investmentBrain", "hypothesisTemplates", "hypothesisSet", "researchPlan", "researchCycle", "selfQuestions", "epistemicState",
+        "investmentBrain", "hypothesisTemplates", "hypothesisSet", "researchPlan", "selfQuestions", "epistemicState",
     ]
     compact = {key: context.get(key) for key in keep_keys if context.get(key) not in (None, "", [], {})}
     compact["activeRules"] = compact_rule_rows(context.get("activeRules") or context.get("matchedRules") or [], 16)
     compact["referenceRules"] = compact_rule_rows(context.get("referenceRules") or [], 6)
     compact["evidenceSubgraph"] = compact_evidence_subgraph_for_ai(context.get("evidenceSubgraph"))
     compact["facts"] = compact_relation_facts(compact.get("facts") or {})
+    compact["researchCycle"] = compact_research_cycle_for_ai(context.get("researchCycle"))
+    return compact
+
+
+def compact_research_cycle_for_ai(payload: object) -> Dict[str, object]:
+    payload = payload if isinstance(payload, dict) else {}
+    if not payload:
+        return {}
+    keep_keys = [
+        "runId", "questionId", "symbol", "status", "reason", "sourceTypes", "startedAt", "completedAt",
+        "roundCount", "changedEvidenceCount", "investmentJudgmentEligible", "reasoningRefreshed",
+        "subjectResolutionSource", "reusedEvidenceIds", "verifiedClaims", "rejectedClaims",
+        "unappliedVerifiedClaims", "providerStatuses", "taskIds",
+    ]
+    compact = {key: payload.get(key) for key in keep_keys if payload.get(key) not in (None, "", [], {})}
+    refresh = payload.get("reasoningRefresh") if isinstance(payload.get("reasoningRefresh"), dict) else {}
+    if refresh:
+        compact["reasoningRefresh"] = {
+            key: refresh.get(key)
+            for key in ["status", "refreshed", "inferenceGenerationId", "position", "projection"]
+            if refresh.get(key) not in (None, "", [], {})
+        }
     return compact
 
 

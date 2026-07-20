@@ -108,9 +108,9 @@ def collect_source_detail_items(value: object, limit: int = 32) -> List[Dict[str
 
 
 def source_urls_from_context(context: Dict[str, object], payload: Dict[str, object] = None) -> List[str]:
-    message_type = str((context or {}).get("messageType") or (context or {}).get("rule") or "notification")
-    prompt_context = notification_ai_prompt_context(message_type, context or {})
-    raw_urls = collect_source_urls([context or {}, prompt_context or {}, payload or {}], 24)
+    details = source_detail_map(context or {})
+    raw_urls = list(details.keys())
+    raw_urls.extend(collect_source_urls(payload or {}, 24))
     return select_source_urls_for_message(context or {}, raw_urls, payload or {})
 
 
@@ -190,12 +190,9 @@ def source_score_piece(label: str, value: float) -> str:
 
 
 def source_detail_map(context: Dict[str, object]) -> Dict[str, Dict[str, object]]:
-    message_type = str((context or {}).get("messageType") or (context or {}).get("rule") or "notification")
-    prompt_context = notification_ai_prompt_context(message_type, context or {})
     rows: List[Dict[str, object]] = []
     rows.extend(research_evidence_items(context or {}))
     rows.extend(news_headline_items(context or {}))
-    rows.extend(collect_source_detail_items([context or {}, prompt_context or {}], 48))
     details: Dict[str, Dict[str, object]] = {}
     for item in rows:
         if not isinstance(item, dict):
@@ -321,9 +318,18 @@ def source_url_cluster_key(url: str, detail: Dict[str, object]) -> str:
 
 
 def all_source_urls_for_context(context: Dict[str, object], payload: Dict[str, object] = None) -> List[str]:
-    message_type = str((context or {}).get("messageType") or (context or {}).get("rule") or "notification")
-    prompt_context = notification_ai_prompt_context(message_type, context or {})
-    return collect_source_urls([context or {}, prompt_context or {}, payload or {}], 48)
+    details = source_detail_map(context or {})
+    candidates = list(details.keys())
+    candidates.extend(collect_source_urls(payload or {}, 48))
+    selected: List[str] = []
+    for url in candidates:
+        text = str(url or "").strip()
+        if not text or text in selected:
+            continue
+        if details and not source_detail_for_url(text, details):
+            continue
+        selected.append(text)
+    return selected[:48]
 
 
 def select_source_urls_for_message(
@@ -339,8 +345,10 @@ def select_source_urls_for_message(
         text = str(url or "").strip()
         if not text or text in seen_urls:
             continue
-        seen_urls.add(text)
         detail = source_detail_for_url(text, details)
+        if details and not detail:
+            continue
+        seen_urls.add(text)
         candidates.append({
             "url": text,
             "detail": detail,

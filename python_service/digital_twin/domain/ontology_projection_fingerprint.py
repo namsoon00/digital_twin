@@ -68,7 +68,8 @@ def material_graph_fingerprint(graph: PortfolioOntology) -> str:
                 "source": item.source,
                 "summary": item.summary,
                 "value": stable_value(item.value),
-                "confidence": stable_value(item.confidence),
+                "evidenceRole": stable_value(getattr(item, "evidence_role", "context")),
+                "dataState": stable_value(getattr(item, "data_state", "partial")),
             }
             for item in graph.evidence
             if item.subject not in excluded_ids

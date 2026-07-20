@@ -284,10 +284,15 @@ class NotificationHypothesisResearchEnricher:
         context = dict(job.context or {})
         if context.get("researchCycle"):
             return
-        if not self.investment_brain_service or not hasattr(self.investment_brain_service, "enrich_notification_context"):
+        if not self.investment_brain_service:
             return
         try:
-            job.context = self.investment_brain_service.enrich_notification_context(
+            enricher = (
+                self.investment_brain_service.enqueue_notification_research_context
+                if hasattr(self.investment_brain_service, "enqueue_notification_research_context")
+                else self.investment_brain_service.enrich_notification_context
+            )
+            job.context = enricher(
                 context,
                 account_id=job.account_id,
                 event_id=job.job_id,

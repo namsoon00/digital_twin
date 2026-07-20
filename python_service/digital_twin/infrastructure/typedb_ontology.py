@@ -1150,6 +1150,16 @@ class TypeDBOntologyGraphRepository(GraphStoreOntologyRowMapperMixin):
                 'match $n isa ontology-node, has ontology-box "InferenceBox", '
                 'has ontology-kind "inference-generation", '
                 "has ontology-snapshot-id $snapshotId, "
+                "has ontology-updated-at $updatedAt, "
+                "has ontology-json $json;"
+            ),
+            ["snapshotId", "updatedAt", "json"],
+        )
+        candidate_rows = self.read_rows(
+            (
+                'match $n isa ontology-node, has ontology-box "InferenceBox", '
+                'has ontology-kind "inference-generation-candidate", '
+                "has ontology-snapshot-id $snapshotId, "
                 "has ontology-updated-at $updatedAt;"
             ),
             ["snapshotId", "updatedAt"],
@@ -1178,12 +1188,23 @@ class TypeDBOntologyGraphRepository(GraphStoreOntologyRowMapperMixin):
             for row in relation_rows
         ]
         records = inference_generation_records(indexed_rows, [])
+        candidate_ids = {
+            str(row.get("snapshotId") or "")
+            for row in candidate_rows
+            if str(row.get("snapshotId") or "").strip()
+        }
         if not published_rows:
-            return records
+            if published_only:
+                return []
+            return [
+                {**record, "publicationStatus": "candidate" if str(record.get("generationId") or "") in candidate_ids else "staging"}
+                for record in records
+            ]
         published = {
             str(row.get("snapshotId") or ""): str(row.get("updatedAt") or "")
             for row in published_rows
             if str(row.get("snapshotId") or "").strip()
+            and inference_marker_is_active(row.get("json"))
         }
         if not published_only:
             return [
@@ -1191,9 +1212,9 @@ class TypeDBOntologyGraphRepository(GraphStoreOntologyRowMapperMixin):
                     **record,
                     "latestAt": published.get(str(record.get("generationId") or ""), record.get("latestAt")),
                     "publicationStatus": (
-                        "published"
+                        "active"
                         if str(record.get("generationId") or "") in published
-                        else "staging"
+                        else ("candidate" if str(record.get("generationId") or "") in candidate_ids else "staging")
                     ),
                 }
                 for record in records
@@ -1206,7 +1227,7 @@ class TypeDBOntologyGraphRepository(GraphStoreOntologyRowMapperMixin):
             result.append({
                 **record,
                 "latestAt": published[generation_id] or record.get("latestAt"),
-                "publicationStatus": "published",
+                "publicationStatus": "active",
             })
         return sorted(result, key=lambda item: str(item.get("latestAt") or ""), reverse=True)
 
@@ -3329,7 +3350,7 @@ relation ontology-assertion,
         queries = self.inferencebox_insert_queries(node_rows, relation_rows, updated_at)
         generation_id = str((graph.worldview or {}).get("inferenceGenerationId") or "").strip()
         marker_query = self.node_insert_query(
-            inference_generation_marker_row(graph, node_rows, relation_rows),
+            inference_generation_marker_row(graph, node_rows, relation_rows, "candidate"),
             updated_at,
         ) if generation_id else ""
         statement_count = len(node_rows) + len([row for row in relation_rows if row.get("source") and row.get("target")])
@@ -3356,6 +3377,48 @@ relation ontology-assertion,
                     finally:
                         self.close_driver(driver)
             self.with_typedb_retries(operation)
+            candidate_validation = self.validate_inference_generation_candidate(
+                graph,
+                generation_id,
+                len(node_rows),
+                len(relation_rows),
+            ) if generation_id else {"status": "legacy", "valid": True}
+            if not candidate_validation.get("valid"):
+                return {
+                    "configured": True,
+                    "saved": False,
+                    "status": "candidate-validation-failed",
+                    "graphStore": "typedb",
+                    "reason": str(candidate_validation.get("reason") or "InferenceBox candidate validation failed."),
+                    "entityCount": len(node_rows),
+                    "relationCount": len(relation_rows),
+                    "statementCount": statement_count,
+                    "batchCount": len(queries),
+                    "insertMode": "batched-candidate",
+                    "publicationStatus": "candidate",
+                    "preservedPreviousInference": True,
+                    "inferenceGenerationId": generation_id,
+                    "candidateValidation": candidate_validation,
+                }
+            activation = self.activate_inference_generation(graph, node_rows, relation_rows) if generation_id else {"status": "legacy", "activated": True}
+            if not activation.get("activated"):
+                return {
+                    "configured": True,
+                    "saved": False,
+                    "status": "activation-failed",
+                    "graphStore": "typedb",
+                    "reason": str(activation.get("reason") or "InferenceBox candidate activation failed."),
+                    "entityCount": len(node_rows),
+                    "relationCount": len(relation_rows),
+                    "statementCount": statement_count,
+                    "batchCount": len(queries),
+                    "insertMode": "batched-candidate",
+                    "publicationStatus": "candidate",
+                    "preservedPreviousInference": True,
+                    "inferenceGenerationId": generation_id,
+                    "candidateValidation": candidate_validation,
+                    "activation": activation,
+                }
             return {
                 "configured": True,
                 "saved": True,
@@ -3365,10 +3428,12 @@ relation ontology-assertion,
                 "relationCount": len(relation_rows),
                 "statementCount": statement_count,
                 "batchCount": len(queries),
-                "insertMode": "batched",
-                "publicationStatus": "published" if marker_query else "legacy-unmarked",
+                "insertMode": "batched-candidate-activation",
+                "publicationStatus": "active" if marker_query else "legacy-unmarked",
                 "inferenceGenerationId": generation_id,
                 "inferenceGenerationAt": str((graph.worldview or {}).get("inferenceGenerationAt") or ""),
+                "candidateValidation": candidate_validation,
+                "activation": activation,
             }
         except Exception as error:  # noqa: BLE001 - materialization failure must be visible to diagnostics.
             return {
@@ -3387,6 +3452,97 @@ relation ontology-assertion,
                 "inferenceGenerationId": generation_id,
             }
 
+    def validate_inference_generation_candidate(
+        self,
+        graph: PortfolioOntology,
+        generation_id: str,
+        expected_entity_count: int,
+        expected_relation_count: int,
+    ) -> Dict[str, object]:
+        entity_rows = self.read_inferencebox_entity_rows(generation_id, [], 0)
+        relation_rows = self.read_inferencebox_relation_rows(generation_id, [], 0)
+        metadata = inference_rulebox_metadata(entity_rows, relation_rows)
+        expected_source_abox = str((graph.worldview or {}).get("sourceAboxSnapshotId") or metadata.get("sourceAboxSnapshotId") or "").strip()
+        active_abox = self.active_abox_snapshot_id()
+        actual_relations = len(relation_rows)
+        actual_traces = len([row for row in entity_rows if str(row.get("kind") or "") == "inference-trace"])
+        expected_traces = len([item for item in graph.entities if item.kind == "inference-trace"])
+        reasons = []
+        if expected_relation_count <= 0 or actual_relations < expected_relation_count:
+            reasons.append("candidate-relation-count-mismatch")
+        if expected_traces > 0 and actual_traces < expected_traces:
+            reasons.append("candidate-trace-count-mismatch")
+        if not expected_source_abox:
+            reasons.append("candidate-source-abox-missing")
+        elif not active_abox or expected_source_abox != active_abox:
+            reasons.append("candidate-source-abox-not-active")
+        return {
+            "status": "ok" if not reasons else "invalid",
+            "valid": not reasons,
+            "reason": ", ".join(reasons),
+            "generationId": generation_id,
+            "expectedEntityCount": int(expected_entity_count or 0),
+            "actualEntityCount": len(entity_rows),
+            "expectedRelationCount": int(expected_relation_count or 0),
+            "actualRelationCount": actual_relations,
+            "expectedTraceCount": expected_traces,
+            "actualTraceCount": actual_traces,
+            "sourceAboxSnapshotId": expected_source_abox,
+            "activeAboxSnapshotId": active_abox,
+            "generationAligned": bool(expected_source_abox and expected_source_abox == active_abox),
+        }
+
+    def activate_inference_generation(
+        self,
+        graph: PortfolioOntology,
+        node_rows: Iterable[Dict[str, object]],
+        relation_rows: Iterable[Dict[str, object]],
+    ) -> Dict[str, object]:
+        generation_id = str((graph.worldview or {}).get("inferenceGenerationId") or "").strip()
+        if not generation_id:
+            return {"status": "invalid", "activated": False, "reason": "generation id is empty"}
+        imported = self.driver_imports()
+        if imported[0] is None:
+            return {"status": "driver-missing", "activated": False, "reason": str(imported[1])[:180]}
+        _TypeDB, _Credentials, _DriverOptions, _DriverTlsConfig, TransactionType = imported[0]
+        active_marker_query = self.node_insert_query(
+            inference_generation_marker_row(graph, node_rows, relation_rows, "active"),
+            utc_now(),
+        )
+        delete_markers = [
+            'match $n isa ontology-node, has ontology-box "InferenceBox", has ontology-kind "inference-generation"; delete $n;',
+            'match $n isa ontology-node, has ontology-box "InferenceBox", has ontology-kind "inference-generation-candidate"; delete $n;',
+        ]
+        try:
+            def operation():
+                with typedb_operation_timeout(self.write_operation_timeout_seconds(), "TypeDB InferenceBox generation activation"):
+                    driver = self.open_driver(imported)
+                    try:
+                        self.ensure_database(driver)
+                        with driver.transaction(self.database, TransactionType.WRITE) as tx:
+                            for query in delete_markers:
+                                tx.query(query).resolve()
+                            tx.query(active_marker_query).resolve()
+                            tx.commit()
+                    finally:
+                        self.close_driver(driver)
+            self.with_typedb_retries(operation)
+            return {
+                "status": "ok",
+                "activated": True,
+                "activeGenerationId": generation_id,
+                "activationMode": "validated-candidate-pointer-swap",
+            }
+        except Exception as error:  # noqa: BLE001 - preserve the previous active marker on transaction failure.
+            return {
+                "status": "error",
+                "activated": False,
+                "activeGenerationId": generation_id,
+                "reasonCode": typedb_error_code(error),
+                "reason": str(error)[:220],
+                "preservedPreviousInference": True,
+            }
+
     def prune_inferencebox_generations(self, active_generation_id: str, keep_count: int = 2) -> Dict[str, object]:
         active_generation_id = str(active_generation_id or "").strip()
         if not active_generation_id:
@@ -3398,7 +3554,7 @@ relation ontology-assertion,
         if not records:
             return {"configured": True, "status": "skipped", "reason": "no generation-scoped InferenceBox rows", "activeGenerationId": active_generation_id}
         keep = {active_generation_id}
-        published_records = [item for item in records if str(item.get("publicationStatus") or "published") == "published"]
+        published_records = [item for item in records if str(item.get("publicationStatus") or "active") in {"active", "published"}]
         for item in sorted(published_records, key=lambda row: str(row.get("latestAt") or ""), reverse=True)[: max(1, int(keep_count or 2))]:
             keep.add(str(item.get("generationId") or ""))
         prune_ids = [
@@ -4708,6 +4864,7 @@ def inference_generation_marker_row(
     graph: PortfolioOntology,
     node_rows: Iterable[Dict[str, object]],
     relation_rows: Iterable[Dict[str, object]],
+    publication_status: str = "candidate",
 ) -> Dict[str, object]:
     worldview = dict(graph.worldview or {})
     generation_id = str(worldview.get("inferenceGenerationId") or "").strip()
@@ -4715,24 +4872,35 @@ def inference_generation_marker_row(
     properties = {
         **worldview,
         "ontologyBox": "InferenceBox",
-        "tboxClass": "InferenceGeneration",
-        "publicationStatus": "published",
-        "publishedAt": generation_at,
+        "tboxClass": "ActiveGeneration" if publication_status == "active" else "CandidateGeneration",
+        "tboxClasses": ["InferenceGeneration", "ActiveGeneration" if publication_status == "active" else "CandidateGeneration"],
+        "publicationStatus": publication_status,
+        "candidateCreatedAt": generation_at,
+        "activatedAt": generation_at if publication_status == "active" else "",
         "expectedEntityCount": len(list(node_rows or [])),
         "expectedRelationCount": len(list(relation_rows or [])),
         "nativeTypeDbReasoned": True,
     }
     return {
-        "id": "inference-generation:" + generation_id,
-        "label": "Published InferenceBox " + generation_id,
-        "kind": "inference-generation",
+        "id": "inference-generation" + ("" if publication_status == "active" else "-candidate") + ":" + generation_id,
+        "label": ("Active" if publication_status == "active" else "Candidate") + " InferenceBox " + generation_id,
+        "kind": "inference-generation" if publication_status == "active" else "inference-generation-candidate",
         "nodeType": "ontology-entity",
         "ontologyBox": "InferenceBox",
         "snapshotId": generation_id,
         "aboxSnapshotId": generation_id,
-        "tboxClass": "InferenceGeneration",
+        "tboxClass": "ActiveGeneration" if publication_status == "active" else "CandidateGeneration",
         "propertiesJson": json.dumps(properties, ensure_ascii=False, sort_keys=True),
     }
+
+
+def inference_marker_is_active(raw_json: object) -> bool:
+    try:
+        payload = json.loads(str(raw_json or "{}"))
+    except (TypeError, ValueError, json.JSONDecodeError):
+        payload = {}
+    status = str((payload or {}).get("publicationStatus") or "").strip().lower()
+    return status in {"", "active", "published"}
 
 
 def inference_generation_delete_queries(generation_id: str) -> List[str]:

@@ -244,9 +244,55 @@ class NewsCollectionScheduler:
             started = time.monotonic()
             try:
                 result = self.runner.run_once()
-                print("News collection " + str(result.get("status")) + " saved=" + str(result.get("savedCount", 0)) + " fetched=" + str(result.get("fetchedCount", 0)))
+                health = result.get("pipelineHealth") if isinstance(result.get("pipelineHealth"), dict) else {}
+                print(
+                    "News collection "
+                    + str(result.get("status"))
+                    + " saved="
+                    + str(result.get("savedCount", 0))
+                    + " fetched="
+                    + str(result.get("fetchedCount", 0))
+                    + " health="
+                    + str(health.get("state") or "unknown")
+                    + " zeroStreak="
+                    + str(health.get("consecutiveZeroRuns") or 0)
+                    + " providerFailures="
+                    + str(health.get("providerFailureCount") or 0),
+                    flush=True,
+                )
             except Exception as error:  # noqa: BLE001 - long-running collector must continue after provider failures.
                 print("Python news collector error: " + str(error))
+            end_at = time.monotonic() + max(1.0, self.interval_seconds - (time.monotonic() - started))
+            wait_until_running(lambda: self.running, end_at)
+
+
+class InvestmentResearchScheduler:
+    def __init__(self, runner, interval_seconds: int, batch_size: int = 3):
+        self.runner = runner
+        self.interval_seconds = max(5, int(interval_seconds or 15))
+        self.batch_size = max(1, min(20, int(batch_size or 3)))
+        self.running = True
+
+    def stop(self, *_args) -> None:
+        self.running = False
+
+    def run_forever(self) -> None:
+        install_stop_handlers(self.stop)
+        print("Python investment research worker started. interval=" + str(self.interval_seconds) + "s")
+        while self.running:
+            started = time.monotonic()
+            try:
+                result = self.runner.run_once(limit=self.batch_size)
+                if result.get("processedCount"):
+                    print(
+                        "Investment research processed="
+                        + str(result.get("processedCount") or 0)
+                        + " queued="
+                        + str(result.get("queuedCount") or 0),
+                        flush=True,
+                    )
+            except Exception as error:  # noqa: BLE001 - research queue must continue after one failed task.
+                print("Python investment research worker error: " + str(error), flush=True)
             end_at = time.monotonic() + max(1.0, self.interval_seconds - (time.monotonic() - started))
             wait_until_running(lambda: self.running, end_at)
 

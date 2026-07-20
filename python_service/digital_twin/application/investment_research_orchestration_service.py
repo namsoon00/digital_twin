@@ -81,8 +81,10 @@ class InvestmentResearchOrchestrationService:
         brain: Dict[str, object],
         account_id: str = "",
         force: bool = False,
+        run_id: str = "",
+        started_at: str = "",
     ) -> ResearchRun:
-        started_at = utc_now_iso()
+        started_at = started_at or utc_now_iso()
         plan = brain.get("researchPlan") if isinstance(brain.get("researchPlan"), dict) else {}
         tasks = [item for item in plan.get("tasks") or [] if isinstance(item, dict)]
         task_ids = [str(item.get("taskId") or "") for item in tasks if str(item.get("taskId") or "")]
@@ -91,7 +93,7 @@ class InvestmentResearchOrchestrationService:
             for item in tasks
             for source in (item.get("sourceTypes") or [])
         )
-        run_id = stable_id("research-run", question.question_id, target.normalized_symbol(), started_at)
+        run_id = run_id or stable_id("research-run", question.question_id, target.normalized_symbol(), started_at)
         if not self.enabled() or self.max_rounds() <= 0:
             return self.persist_run(ResearchRun(
                 run_id=run_id,
@@ -231,7 +233,7 @@ class InvestmentResearchOrchestrationService:
             return 0
         now = datetime.now(timezone.utc)
         for item in rows or []:
-            if not isinstance(item, dict) or str(item.get("status") or "") in {"not-required", "cache-satisfied", "research-cooldown"}:
+            if not isinstance(item, dict) or str(item.get("status") or "") in {"queued", "processing", "not-required", "cache-satisfied", "research-cooldown"}:
                 continue
             stamp = parse_datetime(str(item.get("startedAt") or item.get("completedAt") or ""))
             if not stamp:
@@ -304,6 +306,119 @@ class InvestmentResearchOrchestrationService:
             status = "reasoning-refresh-failed"
         updated = replace(run, status=status, reasoning_refreshed=bool(refreshed), completed_at=utc_now_iso())
         return self.persist_run(updated)
+
+    def enqueue(
+        self,
+        question: InvestmentQuestion,
+        target: NewsCollectionTarget,
+        brain: Dict[str, object],
+        account_id: str = "",
+        notification_event_id: str = "",
+    ) -> ResearchRun:
+        plan = brain.get("researchPlan") if isinstance(brain.get("researchPlan"), dict) else {}
+        tasks = [item for item in plan.get("tasks") or [] if isinstance(item, dict)]
+        task_ids = [str(item.get("taskId") or "") for item in tasks if str(item.get("taskId") or "")]
+        source_types = unique_strings(source for item in tasks for source in (item.get("sourceTypes") or []))
+        status = "queued" if self.enabled() and self.plan_requires_research(brain, tasks) else "not-required"
+        run = ResearchRun(
+            run_id=stable_id("research-run-queued", question.question_id, target.normalized_symbol()),
+            question_id=question.question_id,
+            account_id=account_id,
+            symbol=target.normalized_symbol(),
+            status=status,
+            task_ids=task_ids,
+            source_types=source_types,
+            request_context={
+                "question": question.to_dict(),
+                "target": {
+                    "symbol": target.normalized_symbol(),
+                    "name": target.name,
+                    "market": target.market,
+                    "currency": target.currency,
+                    "sector": target.sector,
+                },
+                "brain": dict(brain or {}),
+                "notificationEventId": str(notification_event_id or ""),
+            },
+            completed_at=utc_now_iso() if status == "not-required" else "",
+        )
+        return self.persist_run(run)
+
+    def execute_queued(self, queued: ResearchRun) -> ResearchRun:
+        request = dict(queued.request_context or {})
+        question_payload = request.get("question") if isinstance(request.get("question"), dict) else {}
+        target_payload = request.get("target") if isinstance(request.get("target"), dict) else {}
+        brain = request.get("brain") if isinstance(request.get("brain"), dict) else {}
+        question = InvestmentQuestion(
+            question_id=str(question_payload.get("questionId") or queued.question_id),
+            text=str(question_payload.get("text") or "투자 판단 근거를 비동기로 검증한다."),
+            intent=str(question_payload.get("intent") or "investment-decision"),
+            subject_symbol=str(question_payload.get("subjectSymbol") or queued.symbol),
+            subject_name=str(question_payload.get("subjectName") or target_payload.get("name") or queued.symbol),
+            horizon=str(question_payload.get("horizon") or "multi-horizon"),
+            account_id=str(question_payload.get("accountId") or queued.account_id),
+            asked_at=str(question_payload.get("askedAt") or queued.started_at),
+            source=str(question_payload.get("source") or "notification"),
+        )
+        target = NewsCollectionTarget(
+            symbol=str(target_payload.get("symbol") or queued.symbol),
+            name=str(target_payload.get("name") or queued.symbol),
+            market=str(target_payload.get("market") or ""),
+            currency=str(target_payload.get("currency") or ""),
+            sector=str(target_payload.get("sector") or ""),
+        )
+        completed = self.run(
+            question,
+            target,
+            brain,
+            account_id=queued.account_id,
+            run_id=queued.run_id,
+            started_at=queued.started_at,
+        )
+        if queued.request_context and not completed.request_context:
+            completed = replace(completed, request_context=dict(queued.request_context))
+            self.persist_run(completed)
+        return completed
+
+
+class InvestmentResearchQueueRunner:
+    def __init__(self, store, orchestrator: InvestmentResearchOrchestrationService):
+        self.store = store
+        self.orchestrator = orchestrator
+        self.last_results: List[Dict[str, object]] = []
+
+    def run_once(self, limit: int = 5) -> Dict[str, object]:
+        self.last_results = []
+        runs = self.store.claim_queued_runs(limit) if self.store and hasattr(self.store, "claim_queued_runs") else []
+        for queued in runs:
+            try:
+                completed = self.orchestrator.execute_queued(queued)
+                if completed.changed_evidence_count > 0:
+                    completed = replace(completed, status="reasoning-queued", reasoning_refreshed=False)
+                    self.orchestrator.persist_run(completed)
+                self.last_results.append(completed.to_dict())
+            except Exception as error:  # noqa: BLE001 - one research task must not stop the queue.
+                failed = replace(
+                    queued,
+                    status="error",
+                    completed_at=utc_now_iso(),
+                    provider_statuses=[{"provider": "research-worker", "status": "error", "reason": str(error)[:180]}],
+                )
+                self.orchestrator.persist_run(failed)
+                self.last_results.append(failed.to_dict())
+        return {
+            "status": "ok",
+            "processedCount": len(runs),
+            "queuedCount": self.store.queued_count() if self.store and hasattr(self.store, "queued_count") else 0,
+            "results": self.last_results,
+        }
+
+    def status(self) -> Dict[str, object]:
+        return {
+            "status": "ready",
+            "queuedCount": self.store.queued_count() if self.store and hasattr(self.store, "queued_count") else 0,
+            "lastResults": self.last_results[-20:],
+        }
 
 
 def unique_strings(values: Iterable[object]) -> List[str]:

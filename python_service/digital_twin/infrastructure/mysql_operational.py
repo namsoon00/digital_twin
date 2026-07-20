@@ -10,6 +10,7 @@ from .mysql_notification_jobs import MySQLNotificationJobStore
 from .mysql_operational_core_stores import (
     MySQLAccountRegistry,
     MySQLAppStore,
+    MySQLDataPipelineHealthStore,
     MySQLExternalSignalCache,
     MySQLOntologyReasoningCursorStore,
     MySQLRuntimeSettingsStore,

@@ -71,7 +71,7 @@ class InvestmentBrainService:
         if research_run and self.research_requires_reasoning_refresh(research_run):
             refresh_result = self.refresh_reasoning(resolved_account_id, position.symbol)
             refreshed = str(refresh_result.get("status") or "") in {"ok", "completed"} or bool(refresh_result.get("refreshed"))
-            if self.research_orchestrator and hasattr(self.research_orchestrator, "mark_reasoning_refreshed"):
+            if str(refresh_result.get("status") or "") != "queued" and self.research_orchestrator and hasattr(self.research_orchestrator, "mark_reasoning_refreshed"):
                 research_run = self.research_orchestrator.mark_reasoning_refreshed(research_run, refreshed)
             if refreshed:
                 refreshed_position = refresh_result.get("position") if isinstance(refresh_result.get("position"), dict) else {}
@@ -244,7 +244,7 @@ class InvestmentBrainService:
         if research_run and self.research_requires_reasoning_refresh(research_run):
             refresh_result = self.refresh_reasoning(resolved_account_id, position.symbol)
             refreshed = str(refresh_result.get("status") or "") in {"ok", "completed"} or bool(refresh_result.get("refreshed"))
-            if self.research_orchestrator and hasattr(self.research_orchestrator, "mark_reasoning_refreshed"):
+            if str(refresh_result.get("status") or "") != "queued" and self.research_orchestrator and hasattr(self.research_orchestrator, "mark_reasoning_refreshed"):
                 research_run = self.research_orchestrator.mark_reasoning_refreshed(research_run, refreshed)
             if refreshed:
                 refreshed_position = refresh_result.get("position") if isinstance(refresh_result.get("position"), dict) else {}
@@ -290,9 +290,84 @@ class InvestmentBrainService:
         enriched["researchCycle"] = research_cycle
         return enriched
 
+    def enqueue_notification_research_context(
+        self,
+        context: Dict[str, object],
+        account_id: str = "",
+        event_id: str = "",
+    ) -> Dict[str, object]:
+        enriched = dict(context or {})
+        relation_context = enriched.get("ontologyRelationContext")
+        if not isinstance(relation_context, dict) or not relation_context:
+            return enriched
+        subject = relation_context.get("subject") if isinstance(relation_context.get("subject"), dict) else {}
+        symbol = str(subject.get("symbol") or enriched.get("rawSymbol") or enriched.get("symbol") or "").upper().strip()
+        if not symbol:
+            return enriched
+        state, position, source = self.resolve_subject(symbol, account_id, symbol)
+        if not state or not position:
+            state, position, source = subject_from_notification_graph_context(relation_context, enriched, account_id)
+        if not state or not position:
+            enriched["researchCycle"] = {
+                "status": "subject-not-found",
+                "executionMode": "asynchronous",
+                "symbol": symbol,
+            }
+            return enriched
+        resolved_account_id = str(state.get("accountId") or account_id or "")
+        reference_at = str(relation_context.get("inferenceGenerationAt") or enriched.get("referenceDate") or state.get("generatedAt") or "")
+        question = InvestmentQuestion.create(
+            str(enriched.get("investmentBrainQuestionText") or position.name + "의 현재 알림 판단을 반증 가능한 가설로 다시 검증한다."),
+            subject_symbol=position.symbol,
+            subject_name=position.name,
+            account_id=resolved_account_id,
+            asked_at=reference_at,
+            source="notification",
+        )
+        brain = hypothesis_set_from_relation_context(relation_context, question)
+        research_run = None
+        if self.research_orchestrator and hasattr(self.research_orchestrator, "enqueue"):
+            research_run = self.research_orchestrator.enqueue(
+                question,
+                NewsCollectionTarget(
+                    symbol=position.symbol,
+                    name=position.name,
+                    market=position.market,
+                    currency=position.currency,
+                    sector=getattr(position, "sector", ""),
+                ),
+                brain,
+                account_id=resolved_account_id,
+                notification_event_id=event_id,
+            )
+        research_cycle = research_run.to_dict() if research_run and hasattr(research_run, "to_dict") else {
+            "status": "unavailable",
+            "reason": "비동기 ResearchRun 저장소를 사용할 수 없습니다.",
+        }
+        research_cycle.update({
+            "executionMode": "asynchronous",
+            "notificationEventId": str(event_id or ""),
+            "subjectResolutionSource": source,
+            "usesActiveInferenceGeneration": True,
+            "investmentJudgmentEligible": True,
+        })
+        relation_context.update({
+            "investmentBrain": brain,
+            "hypothesisTemplates": brain.get("hypothesisTemplates") or [],
+            "hypothesisSet": brain.get("hypothesisSet") or {},
+            "researchPlan": brain.get("researchPlan") or {},
+            "selfQuestions": brain.get("selfQuestions") or [],
+            "epistemicState": brain.get("epistemicState") or {},
+            "researchCycle": research_cycle,
+        })
+        enriched["ontologyRelationContext"] = relation_context
+        enriched["investmentBrainQuestion"] = question.to_dict()
+        enriched["researchCycle"] = research_cycle
+        return enriched
+
     def refresh_reasoning(self, account_id: str, symbol: str) -> Dict[str, object]:
         if not self.reasoning_refresher:
-            return {"status": "unavailable", "refreshed": False}
+            return {"status": "queued", "refreshed": False, "reason": "전용 온톨로지 추론 워커가 TypeDB 활성 세대를 갱신합니다."}
         try:
             result = self.reasoning_refresher(account_id, symbol)
         except Exception as error:  # noqa: BLE001 - caller keeps the previous usable inference generation.
@@ -342,6 +417,18 @@ class InvestmentBrainService:
             "engine": "ontology-investment-brain",
             "count": len(rows),
             "episodes": [item.to_dict() for item in rows],
+        }
+
+    def performance(self, account_id: str = "", symbol: str = "", limit: int = 500) -> Dict[str, object]:
+        if not self.decision_episode_store or not hasattr(self.decision_episode_store, "performance"):
+            return {"status": "unavailable", "engine": "ontology-investment-brain"}
+        result = self.decision_episode_store.performance(account_id, symbol, limit)
+        return {
+            "engine": "ontology-investment-brain",
+            "source": "DecisionEpisode+ObservedOutcome",
+            "accountId": account_id,
+            "symbol": str(symbol or "").upper(),
+            **dict(result or {}),
         }
 
     def learning_proposals(self, status: str = "", limit: int = 50) -> Dict[str, object]:

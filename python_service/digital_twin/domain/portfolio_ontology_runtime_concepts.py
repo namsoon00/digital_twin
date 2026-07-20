@@ -311,6 +311,9 @@ def add_operational_world_concepts(
     observed_positions: List[Position],
 ) -> None:
     settings = runtime_settings(runtime_context)
+    health_payload = runtime_context.get("dataPipelineHealth") if isinstance(runtime_context, dict) else {}
+    health_pipelines = health_payload.get("pipelines") if isinstance(health_payload, dict) else {}
+    health_pipelines = health_pipelines if isinstance(health_pipelines, dict) else {}
     session_rows = []
     seen_sessions = set()
     for position in observed_positions:
@@ -441,6 +444,24 @@ def add_operational_world_concepts(
         add_relation(graph, pipeline_id, collection_policy_id, "USES_COLLECTION_POLICY", properties={"source": "operational-ontology"})
         add_relation(graph, pipeline_id, portfolio_node_id, "UPDATES_GRAPH", properties={"source": "operational-ontology"})
         add_relation(graph, pipeline_id, reasoning_id, "TRIGGERS_REASONING", properties={"source": "operational-ontology"})
+        health_key = "newsCollection" if key == "externalSignals" else key
+        observed_health = health_pipelines.get(health_key) if isinstance(health_pipelines.get(health_key), dict) else {}
+        if observed_health:
+            health_id = add_entity(graph, "data-pipeline-health", health_key, str(pipeline["label"]) + " 상태", {
+                "tboxClass": "DataPipelineHealth",
+                "pipeline": health_key,
+                "state": str(observed_health.get("state") or "unknown"),
+                "reasonCode": str(observed_health.get("reasonCode") or ""),
+                "reason": str(observed_health.get("reason") or ""),
+                "checkedAt": str(observed_health.get("checkedAt") or ""),
+                "stateSince": str(observed_health.get("stateSince") or ""),
+                "lastNonZeroAt": str(observed_health.get("lastNonZeroAt") or ""),
+                "consecutiveZeroRuns": int(observed_health.get("consecutiveZeroRuns") or 0),
+                "providerFailureCount": int(observed_health.get("providerFailureCount") or 0),
+                "providerCandidateCount": int(observed_health.get("providerCandidateCount") or 0),
+                "providers": list(observed_health.get("providers") or [])[:20],
+            })
+            add_relation(graph, pipeline_id, health_id, "HAS_PIPELINE_HEALTH", properties={"source": "operational-observation"})
 
 def add_strategy_world_concepts(
     graph: PortfolioOntology,

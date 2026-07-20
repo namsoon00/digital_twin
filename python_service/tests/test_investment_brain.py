@@ -10,6 +10,7 @@ from digital_twin.domain.investment_brain import (
     hypothesis_set_from_relation_context,
 )
 from digital_twin.domain.investment_evidence_governance import ResearchRun, governed_evidence
+from digital_twin.domain.decision_performance import evaluate_decision_performance
 from digital_twin.domain.investment_research import NewsCollectionTarget, ResearchEvidence
 from digital_twin.domain.notifications import NotificationJob
 from digital_twin.domain.notification_ai_gate_contracts import NotificationAIValidatedResponse
@@ -275,8 +276,56 @@ class FakeResearchOrchestrator:
             }
         )
 
+    def enqueue(self, question, target, brain, account_id="", notification_event_id=""):
+        run = ResearchRun(
+            run_id="research-run-queued-test",
+            question_id=question.question_id,
+            account_id=account_id,
+            symbol=target.normalized_symbol(),
+            status="queued",
+            task_ids=[],
+            source_types=[],
+            request_context={"notificationEventId": notification_event_id},
+        )
+        self.runs.append(run)
+        return run
+
 
 class InvestmentBrainTest(unittest.TestCase):
+    def test_decision_performance_groups_rule_hypothesis_and_horizon(self):
+        episodes = []
+        for index, status in enumerate(["directionally-corroborated", "directionally-corroborated", "directionally-contradicted"]):
+            episodes.append({
+                "episodeId": "episode-" + str(index),
+                "accountId": "account-1",
+                "symbol": "005930",
+                "action": "TRIM",
+                "confidence": 80,
+                "selectedHypothesisId": "hypothesis-" + str(index),
+                "hypothesisSet": {
+                    "hypotheses": [{
+                        "hypothesisId": "hypothesis-" + str(index),
+                        "templateId": "template:risk",
+                        "templateLabel": "위험 가설",
+                        "supportingRuleIds": ["rule:risk"],
+                    }],
+                },
+                "outcomes": [{
+                    "outcomeId": "outcome-" + str(index),
+                    "selectedHypothesisStatus": status,
+                    "priceChangeFromDecisionPct": -5 if status == "directionally-corroborated" else 3,
+                    "payload": {"horizonMinutes": 1440},
+                }],
+            })
+        result = evaluate_decision_performance(episodes, minimum_sample_count=3, minimum_accuracy_pct=60)
+
+        self.assertEqual(3, result["summary"]["decisiveOutcomeCount"])
+        self.assertEqual(66.67, result["summary"]["directionalAccuracyPct"])
+        self.assertTrue(result["summary"]["promotionEligible"])
+        self.assertEqual("rule:risk", result["byRule"][0]["key"])
+        self.assertEqual("template:risk", result["byHypothesis"][0]["key"])
+        self.assertEqual("1440", result["byHorizon"][0]["key"])
+
     def test_relation_context_builds_three_competing_hypotheses_with_graph_evidence(self):
         payload = hypothesis_set_from_relation_context(relation_context())
         hypotheses = payload["hypothesisSet"]["hypotheses"]
@@ -527,6 +576,20 @@ class InvestmentBrainTest(unittest.TestCase):
         self.assertTrue(gateway.requested_source_types)
         self.assertTrue(evidence_store.saved[0].raw_payload["evidenceGovernance"]["investmentJudgmentEligible"])
 
+        queued_service = InvestmentResearchOrchestrationService(
+            FakeEvidenceStore(),
+            FakeResearchGateway([evidence]),
+            research_store=FakeResearchStore(),
+            settings={"investmentBrainResearchMinimumVerifiedCount": 2},
+        )
+        queued = queued_service.enqueue(question, target, brain, account_id="account-1", notification_event_id="notification-1")
+        self.assertEqual("queued", queued.status)
+        restored = ResearchRun.from_dict(queued.to_dict())
+        self.assertEqual("notification-1", restored.request_context["notificationEventId"])
+        completed = queued_service.execute_queued(restored)
+        self.assertEqual("evidence-collected", completed.status)
+        self.assertEqual(queued.run_id, completed.run_id)
+
         cached_store = FakeEvidenceStore([evidence])
         cached_gateway = FakeResearchGateway([])
         cached_service = InvestmentResearchOrchestrationService(
@@ -567,7 +630,7 @@ class InvestmentBrainTest(unittest.TestCase):
         self.assertEqual("verified-primary", verified[0].verification_status)
         self.assertFalse(rejected)
 
-    def test_notification_research_refreshes_only_when_evidence_changed(self):
+    def test_notification_research_is_queued_without_blocking_delivery(self):
         refresh_calls = []
 
         def refresher(account_id, symbol):
@@ -591,8 +654,10 @@ class InvestmentBrainTest(unittest.TestCase):
             context={"ontologyRelationContext": relation_context()},
         )
         NotificationHypothesisResearchEnricher(service, {})(job)
-        self.assertEqual([("account-1", "005930")], refresh_calls)
-        self.assertEqual("reasoning-refreshed", job.context["researchCycle"]["status"])
+        self.assertEqual([], refresh_calls)
+        self.assertEqual("queued", job.context["researchCycle"]["status"])
+        self.assertEqual("asynchronous", job.context["researchCycle"]["executionMode"])
+        self.assertTrue(job.context["researchCycle"]["usesActiveInferenceGeneration"])
         self.assertTrue(job.context["ontologyRelationContext"]["hypothesisTemplates"])
 
         no_change_service = InvestmentBrainService(
@@ -611,8 +676,8 @@ class InvestmentBrainTest(unittest.TestCase):
             context={"ontologyRelationContext": relation_context()},
         )
         NotificationHypothesisResearchEnricher(no_change_service, {})(second)
-        self.assertEqual(1, len(refresh_calls))
-        self.assertEqual("cache-satisfied", second.context["researchCycle"]["status"])
+        self.assertEqual(0, len(refresh_calls))
+        self.assertEqual("queued", second.context["researchCycle"]["status"])
 
     def test_notification_research_uses_graph_subject_when_monitor_snapshot_is_missing(self):
         class EmptyMonitorStore:

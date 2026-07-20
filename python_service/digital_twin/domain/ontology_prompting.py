@@ -278,7 +278,7 @@ def build_ai_inference_packet(graph: PortfolioOntology) -> Dict[str, object]:
         "role": "ontology-first-investment-opinion",
         "legacyModelRole": "not-used-for-scoring",
         "notificationRole": "insight-driven-dispatch",
-        "inputOrder": ["tbox", "boundedContexts", "ruleBox", "abox", "inferenceBox", "derivedRelations", "inferenceTraces", "investmentQuestions", "hypothesisSets", "decisionEpisodes", "observedOutcomes", "operationalOntology", "temporalWindows", "coverageGaps", "macroRegimes", "marketProxyContext", "cryptoExposures", "valuationContext", "newsQuality", "reasoningCards", "relationInfluences", "researchEvidence", "signalTransitions", "factorExposure", "liquidityConstraints", "insights", "activeInvestmentOpinions", "executionPlans", "relations", "evidence", "beliefs", "opinions"],
+        "inputOrder": ["tbox", "boundedContexts", "ruleBox", "abox", "inferenceBox", "derivedRelations", "inferenceTraces", "investmentQuestions", "hypothesisSets", "decisionEpisodes", "decisionPerformance", "observedOutcomes", "operationalOntology", "temporalWindows", "coverageGaps", "macroRegimes", "marketProxyContext", "cryptoExposures", "valuationContext", "newsQuality", "reasoningCards", "relationInfluences", "researchEvidence", "signalTransitions", "factorExposure", "liquidityConstraints", "insights", "activeInvestmentOpinions", "executionPlans", "relations", "evidence", "beliefs", "opinions"],
         "reasoningCardCount": len(graph.reasoning_cards),
         "reasoningCardIds": [item.get("id") for item in graph.reasoning_cards],
         "graphInputs": {
@@ -508,6 +508,7 @@ def prompt_payload(graph: PortfolioOntology) -> Dict[str, object]:
         "investmentQuestions": compact_entities_by_kind(graph, ["investment-question", "self-question"], 80),
         "hypothesisSets": compact_entities_by_kind(graph, ["hypothesis-set", "competing-hypothesis", "assumption", "hypothesis-calibration"], 160),
         "decisionEpisodes": compact_entities_by_kind(graph, ["decision-episode"], 80),
+        "decisionPerformance": compact_entities_by_kind(graph, ["decision-performance", "rule-performance", "hypothesis-performance"], 120),
         "observedOutcomes": compact_entities_by_kind(graph, ["observed-outcome"], 120),
         "worldview": graph.worldview,
         "aiInferencePacket": build_ai_inference_packet(graph),

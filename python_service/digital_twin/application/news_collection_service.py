@@ -122,6 +122,7 @@ class NewsCollectionRunner:
         settings: Dict[str, str],
         event_publisher=None,
         article_analysis_service=None,
+        health_service=None,
         sleep_fn=time.sleep,
     ):
         self.account_repository = account_repository
@@ -132,7 +133,23 @@ class NewsCollectionRunner:
         self.settings = dict(settings or {})
         self.event_publisher = event_publisher
         self.article_analysis_service = article_analysis_service
+        self.health_service = health_service
         self.sleep_fn = sleep_fn
+
+    def with_health(self, result: Dict[str, object]) -> Dict[str, object]:
+        if not self.health_service or not hasattr(self.health_service, "record_news_collection"):
+            return result
+        try:
+            health, event = self.health_service.record_news_collection(result)
+            result["pipelineHealth"] = health.to_dict()
+            if event and self.event_publisher:
+                if hasattr(self.event_publisher, "publish"):
+                    self.event_publisher.publish(event)
+                else:
+                    self.event_publisher.handle(event)
+        except Exception as error:  # noqa: BLE001 - observability must not stop collection.
+            result["pipelineHealth"] = {"state": "unknown", "reason": str(error)[:180]}
+        return result
 
     def enabled(self) -> bool:
         return truthy(self.settings.get("newsCollectionEnabled"), True)
@@ -308,12 +325,12 @@ class NewsCollectionRunner:
 
     def run_once(self, force: bool = False) -> Dict[str, object]:
         if not self.enabled() and not force:
-            return {"status": "disabled", "targetCount": 0, "fetchedCount": 0, "savedCount": 0}
+            return self.with_health({"status": "disabled", "targetCount": 0, "fetchedCount": 0, "savedCount": 0})
         cleanup = self.delete_stale_news()
         feed_only_cleanup = self.delete_feed_only_rss_news()
         targets = self.targets()
         if not targets:
-            return {"status": "noTargets", "targetCount": 0, "fetchedCount": 0, "savedCount": 0, "staleDeletedCount": cleanup.get("deleted", 0), "staleCleanup": cleanup, "feedOnlyRssCleanup": feed_only_cleanup}
+            return self.with_health({"status": "noTargets", "targetCount": 0, "fetchedCount": 0, "savedCount": 0, "staleDeletedCount": cleanup.get("deleted", 0), "staleCleanup": cleanup, "feedOnlyRssCleanup": feed_only_cleanup})
         collected: List[ResearchEvidence] = []
         stale_items: List[ResearchEvidence] = []
         statuses: List[Dict[str, object]] = []
@@ -408,7 +425,7 @@ class NewsCollectionRunner:
                 )
             for event in recorded_events:
                 self.event_publisher.dispatch_recorded(event)
-            return result
+            return self.with_health(result)
 
         saved = self.evidence_store.upsert_many(collected) if collected else 0
         result = build_collection_result(
@@ -422,7 +439,7 @@ class NewsCollectionRunner:
                     self.event_publisher.publish(event)
                 else:
                     self.event_publisher.handle(event)
-        return result
+        return self.with_health(result)
 
     def status(self) -> Dict[str, object]:
         targets = self.targets()
@@ -439,4 +456,5 @@ class NewsCollectionRunner:
                 "maxAgeMinutes": self.max_news_age_minutes(),
                 "cleanupBatchSize": self.cleanup_batch_size(),
             },
+            "pipelineHealth": self.health_service.pipeline_state("newsCollection") if self.health_service and hasattr(self.health_service, "pipeline_state") else {},
         }

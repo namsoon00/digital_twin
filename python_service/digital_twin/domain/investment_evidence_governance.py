@@ -57,6 +57,7 @@ class ResearchRun:
     round_count: int = 0
     changed_evidence_count: int = 0
     reasoning_refreshed: bool = False
+    request_context: Dict[str, object] = field(default_factory=dict)
     started_at: str = field(default_factory=utc_now_iso)
     completed_at: str = ""
 
@@ -65,6 +66,46 @@ class ResearchRun:
         payload["verifiedClaims"] = [item.to_dict() for item in self.verified_claims]
         payload["rejectedClaims"] = [item.to_dict() for item in self.rejected_claims]
         return payload
+
+    @classmethod
+    def from_dict(cls, payload: Dict[str, object]):
+        payload = dict(payload or {})
+
+        def claim(item: Dict[str, object]) -> EvidenceClaim:
+            return EvidenceClaim(
+                claim_id=str(item.get("claimId") or item.get("claim_id") or ""),
+                evidence_id=str(item.get("evidenceId") or item.get("evidence_id") or ""),
+                symbol=str(item.get("symbol") or ""),
+                statement=str(item.get("statement") or ""),
+                source=str(item.get("source") or ""),
+                source_url=str(item.get("sourceUrl") or item.get("source_url") or ""),
+                published_at=str(item.get("publishedAt") or item.get("published_at") or ""),
+                observed_at=str(item.get("observedAt") or item.get("observed_at") or ""),
+                verification_status=str(item.get("verificationStatus") or item.get("verification_status") or ""),
+                entity_resolution_status=str(item.get("entityResolutionStatus") or item.get("entity_resolution_status") or ""),
+                confidence=float(item.get("confidence") or 0),
+                reasons=list(item.get("reasons") or []),
+            )
+
+        return cls(
+            run_id=str(payload.get("runId") or payload.get("run_id") or ""),
+            question_id=str(payload.get("questionId") or payload.get("question_id") or ""),
+            account_id=str(payload.get("accountId") or payload.get("account_id") or ""),
+            symbol=str(payload.get("symbol") or "").upper(),
+            status=str(payload.get("status") or "ready"),
+            task_ids=list(payload.get("taskIds") or payload.get("task_ids") or []),
+            source_types=list(payload.get("sourceTypes") or payload.get("source_types") or []),
+            reused_evidence_ids=list(payload.get("reusedEvidenceIds") or payload.get("reused_evidence_ids") or []),
+            verified_claims=[claim(item) for item in payload.get("verifiedClaims") or [] if isinstance(item, dict)],
+            rejected_claims=[claim(item) for item in payload.get("rejectedClaims") or [] if isinstance(item, dict)],
+            provider_statuses=list(payload.get("providerStatuses") or payload.get("provider_statuses") or []),
+            round_count=int(payload.get("roundCount") or payload.get("round_count") or 0),
+            changed_evidence_count=int(payload.get("changedEvidenceCount") or payload.get("changed_evidence_count") or 0),
+            reasoning_refreshed=bool(payload.get("reasoningRefreshed") or payload.get("reasoning_refreshed")),
+            request_context=dict(payload.get("requestContext") or payload.get("request_context") or {}),
+            started_at=str(payload.get("startedAt") or payload.get("started_at") or utc_now_iso()),
+            completed_at=str(payload.get("completedAt") or payload.get("completed_at") or ""),
+        )
 
 
 def camel_key(value: str) -> str:

@@ -729,6 +729,7 @@ def ontology_diagnostics_payload(query: Dict[str, List[str]]) -> Dict[str, objec
         event_log=stores.event_log(settings),
         notification_queue=stores.notification_job_store(settings),
         strategy_proposal_service=build_investment_strategy_proposal_service(settings),
+        decision_episode_store=stores.investment_decision_episode_store(settings),
     ).status(symbols=symbols, limit=limit)
 
 
@@ -3209,6 +3210,17 @@ class DigitalTwinHandler(BaseHTTPRequestHandler):
             except ValueError:
                 limit = 50
             return self.send_payload(200, build_investment_brain_service().episodes(
+                account_id=first_query(query, "accountId"),
+                symbol=first_query(query, "symbol"),
+                limit=limit,
+            ))
+
+        if path == "/api/investment-brain/performance" and self.command == "GET":
+            try:
+                limit = int(first_query(query, "limit") or 500)
+            except ValueError:
+                limit = 500
+            return self.send_payload(200, build_investment_brain_service().performance(
                 account_id=first_query(query, "accountId"),
                 symbol=first_query(query, "symbol"),
                 limit=limit,

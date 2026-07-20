@@ -79,6 +79,7 @@ class OntologyReasoningRunner:
         event_publisher=None,
         settings: Dict[str, object] = None,
         rule_candidate_service=None,
+        research_store=None,
     ):
         self.event_reader = event_reader
         self.cursor_store = cursor_store
@@ -86,6 +87,7 @@ class OntologyReasoningRunner:
         self.event_publisher = event_publisher
         self.settings = dict(settings or {})
         self.rule_candidate_service = rule_candidate_service
+        self.research_store = research_store
 
     def enabled(self) -> bool:
         return truthy(self.settings.get("ontologyReasoningEnabled"), True)
@@ -294,6 +296,7 @@ class OntologyReasoningRunner:
             ),
         )
         rule_candidate_result = self.propose_rule_candidates(symbols, requests, alerts, force=False)
+        refreshed_research_runs = self.mark_research_runs_refreshed(requests)
         self.publish(completed)
         progress_result = self.mark_requests_processed(requests, symbol_batches)
         return {
@@ -307,7 +310,24 @@ class OntologyReasoningRunner:
             "omittedSymbolCount": omitted_symbol_count,
             "accountIds": [item for item in account_ids if item],
             "ruleCandidateResult": rule_candidate_result,
+            "refreshedResearchRunIds": refreshed_research_runs,
         }
+
+    def mark_research_runs_refreshed(self, requests: Iterable[object]) -> List[str]:
+        if not self.research_store or not hasattr(self.research_store, "mark_reasoning_refreshed"):
+            return []
+        refreshed = []
+        for event in requests or []:
+            run_id = str(event_payload(event).get("researchRunId") or "").strip()
+            if not run_id or run_id in refreshed:
+                continue
+            try:
+                result = self.research_store.mark_reasoning_refreshed(run_id, True)
+            except Exception:  # noqa: BLE001 - run audit failure must not invalidate the active graph generation.
+                continue
+            if result:
+                refreshed.append(run_id)
+        return refreshed
 
     def propose_rule_candidates(
         self,

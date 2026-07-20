@@ -494,16 +494,16 @@ class TypeDBOntologyRepositoryTests(unittest.TestCase):
         repository.read_inferencebox_relation_rows("generation:active", ["AAPL"], 4)
 
         self.assertIn('has ontology-kind "inference-generation"', repository.queries[0])
-        self.assertIn('has ontology-box "InferenceBox"', repository.queries[1])
-        self.assertIn("has ontology-snapshot-id $snapshotId", repository.queries[1])
         self.assertIn('has ontology-box "InferenceBox"', repository.queries[2])
         self.assertIn("has ontology-snapshot-id $snapshotId", repository.queries[2])
-        self.assertIn('has ontology-snapshot-id "generation:active"', repository.queries[3])
-        self.assertIn('has ontology-symbol "AAPL"', repository.queries[3])
-        self.assertIn("limit 3;", repository.queries[3])
+        self.assertIn('has ontology-box "InferenceBox"', repository.queries[3])
+        self.assertIn("has ontology-snapshot-id $snapshotId", repository.queries[3])
         self.assertIn('has ontology-snapshot-id "generation:active"', repository.queries[4])
         self.assertIn('has ontology-symbol "AAPL"', repository.queries[4])
-        self.assertIn("limit 4;", repository.queries[4])
+        self.assertIn("limit 3;", repository.queries[4])
+        self.assertIn('has ontology-snapshot-id "generation:active"', repository.queries[5])
+        self.assertIn('has ontology-symbol "AAPL"', repository.queries[5])
+        self.assertIn("limit 4;", repository.queries[5])
 
     def test_typedb_active_generation_ignores_unpublished_partial_generation(self):
         class PublishedOnlyRepository(TypeDBOntologyGraphRepository):
@@ -527,7 +527,30 @@ class TypeDBOntologyRepositoryTests(unittest.TestCase):
 
         self.assertEqual(1, len(records))
         self.assertEqual("generation:complete", records[0]["generationId"])
-        self.assertEqual("published", records[0]["publicationStatus"])
+        self.assertEqual("active", records[0]["publicationStatus"])
+
+    def test_typedb_candidate_generation_requires_active_abox_alignment(self):
+        repository = TypeDBOntologyGraphRepository("127.0.0.1:1729")
+        graph = PortfolioOntology("candidate-validation")
+        graph.worldview = {
+            "inferenceGenerationId": "generation:candidate",
+            "sourceAboxSnapshotId": "abox:active",
+        }
+        graph.entities.append(OntologyEntity(
+            "trace:1",
+            "trace",
+            "inference-trace",
+            {"ontologyBox": "InferenceBox"},
+        ))
+        with patch.object(repository, "read_inferencebox_entity_rows", return_value=[{"kind": "inference-trace"}]), patch.object(repository, "read_inferencebox_relation_rows", return_value=[{"type": "HAS_INFERENCE_TRACE"}]), patch.object(repository, "active_abox_snapshot_id", return_value="abox:active"):
+            valid = repository.validate_inference_generation_candidate(graph, "generation:candidate", 1, 1)
+        with patch.object(repository, "read_inferencebox_entity_rows", return_value=[{"kind": "inference-trace"}]), patch.object(repository, "read_inferencebox_relation_rows", return_value=[{"type": "HAS_INFERENCE_TRACE"}]), patch.object(repository, "active_abox_snapshot_id", return_value="abox:new"):
+            invalid = repository.validate_inference_generation_candidate(graph, "generation:candidate", 1, 1)
+
+        self.assertTrue(valid["valid"])
+        self.assertTrue(valid["generationAligned"])
+        self.assertFalse(invalid["valid"])
+        self.assertIn("candidate-source-abox-not-active", invalid["reason"])
 
     def test_typedb_inferencebox_insert_queries_batch_rows(self):
         repository = TypeDBOntologyGraphRepository("127.0.0.1:1729")

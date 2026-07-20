@@ -16,6 +16,33 @@ from digital_twin.infrastructure.event_bus import EventBus
 
 
 class MaterialityGateTests(unittest.TestCase):
+    def test_reasoning_worker_marks_async_research_run_refreshed(self):
+        class ResearchStore:
+            def __init__(self):
+                self.ids = []
+
+            def mark_reasoning_refreshed(self, run_id, refreshed):
+                self.ids.append((run_id, refreshed))
+                return {"runId": run_id, "reasoningRefreshed": refreshed}
+
+        research_store = ResearchStore()
+        runner = OntologyReasoningRunner(
+            event_reader=None,
+            cursor_store=None,
+            monitor_runner_factory=lambda: None,
+            research_store=research_store,
+        )
+        request = DomainEvent(
+            name=ONTOLOGY_REASONING_REQUESTED,
+            aggregate_id="ontology:005930",
+            payload={"researchRunId": "research-run-1", "symbols": ["005930"], "changedCount": 1},
+        )
+
+        refreshed = runner.mark_research_runs_refreshed([request])
+
+        self.assertEqual(["research-run-1"], refreshed)
+        self.assertEqual([("research-run-1", True)], research_store.ids)
+
     def test_market_materiality_blocks_small_refresh_and_passes_threshold_crossing(self):
         small = market_change_materiality(
             "AAPL",

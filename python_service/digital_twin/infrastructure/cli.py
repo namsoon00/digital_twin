@@ -20,6 +20,7 @@ from .service_factory import (
     build_investment_calendar_research_service,
     build_investment_calendar_runner,
     build_investment_calendar_service,
+    build_investment_research_queue_runner,
     build_investment_strategy_proposal_service,
     build_kis_realtime_websocket_runner,
     build_market_data_collection_runner,
@@ -36,6 +37,7 @@ from .service_factory import (
 )
 from .schedulers import (
     InvestmentCalendarScheduler,
+    InvestmentResearchScheduler,
     KISRealtimeWebSocketScheduler,
     MIN_REALTIME_INTERVAL_SECONDS,
     MarketDataCollectionScheduler,
@@ -645,6 +647,25 @@ def news_command(args) -> int:
     return 1
 
 
+def investment_research_command(args) -> int:
+    settings = runtime_settings()
+    runner = build_investment_research_queue_runner(settings)
+    if args.investment_research_action == "status":
+        print(json.dumps(runner.status(), ensure_ascii=False))
+        return 0
+    if args.investment_research_action == "once":
+        print(json.dumps(runner.run_once(limit=int(args.limit or 3)), ensure_ascii=False))
+        return 0
+    if args.investment_research_action == "watch":
+        InvestmentResearchScheduler(
+            runner,
+            int(settings.get("investmentBrainResearchWorkerIntervalSeconds") or 15),
+            int(settings.get("investmentBrainResearchWorkerBatchSize") or 3),
+        ).run_forever()
+        return 0
+    return 1
+
+
 def investment_calendar_command(args) -> int:
     settings = runtime_settings()
     service = build_investment_calendar_service(settings)
@@ -960,6 +981,14 @@ def build_parser() -> argparse.ArgumentParser:
     news_actions.add_parser("watch")
     news_actions.add_parser("status")
     news.set_defaults(func=news_command)
+
+    investment_research = subparsers.add_parser("investment-research", help="Process queued hypothesis research runs")
+    investment_research_actions = investment_research.add_subparsers(dest="investment_research_action", required=True)
+    investment_research_once = investment_research_actions.add_parser("once")
+    investment_research_once.add_argument("--limit", default="3")
+    investment_research_actions.add_parser("watch")
+    investment_research_actions.add_parser("status")
+    investment_research.set_defaults(func=investment_research_command)
 
     investment_calendar = subparsers.add_parser("investment-calendar", help="Manage investment calendar events and reminders")
     investment_calendar_actions = investment_calendar.add_subparsers(dest="investment_calendar_action", required=True)

@@ -26,6 +26,7 @@ CHAT_MESSAGE_APPENDED = "chat.message_appended"
 SYMBOL_UNIVERSE_REFRESHED = "symbol_universe.refreshed"
 MARKET_DATA_COLLECTED = "market_data.collected"
 RESEARCH_EVIDENCE_COLLECTED = "research_evidence.collected"
+DATA_PIPELINE_HEALTH_CHANGED = "data_pipeline.health_changed"
 HYPOTHESIS_RESEARCH_COMPLETED = "investment_hypothesis.research_completed"
 HYPOTHESIS_PROPOSED = "investment_hypothesis.proposed"
 HYPOTHESIS_REVIEWED = "investment_hypothesis.reviewed"
@@ -280,6 +281,33 @@ def research_evidence_collected_event(payload: Dict[str, object]) -> DomainEvent
     )
 
 
+def data_pipeline_health_changed_event(payload: Dict[str, object]) -> DomainEvent:
+    pipeline = str(payload.get("pipeline") or "unknown")
+    return DomainEvent(
+        name=DATA_PIPELINE_HEALTH_CHANGED,
+        aggregate_id="data-pipeline:" + pipeline,
+        payload={
+            "pipeline": pipeline,
+            "state": str(payload.get("state") or "unknown"),
+            "previousState": str(payload.get("previousState") or ""),
+            "reasonCode": str(payload.get("reasonCode") or ""),
+            "reason": str(payload.get("reason") or ""),
+            "checkedAt": str(payload.get("checkedAt") or ""),
+            "stateSince": str(payload.get("stateSince") or ""),
+            "lastNonZeroAt": str(payload.get("lastNonZeroAt") or ""),
+            "consecutiveZeroRuns": int(payload.get("consecutiveZeroRuns") or 0),
+            "targetCount": int(payload.get("targetCount") or 0),
+            "fetchedCount": int(payload.get("fetchedCount") or 0),
+            "savedCount": int(payload.get("savedCount") or 0),
+            "providerFailureCount": int(payload.get("providerFailureCount") or 0),
+            "providerCandidateCount": int(payload.get("providerCandidateCount") or 0),
+            "providers": list(payload.get("providers") or [])[:20],
+            "stateChanged": bool(payload.get("stateChanged")),
+            "alertRequired": bool(payload.get("alertRequired")),
+        },
+    )
+
+
 def hypothesis_research_completed_event(payload: Dict[str, object]) -> DomainEvent:
     symbol = str(payload.get("symbol") or "").upper().strip()
     return DomainEvent(
@@ -346,6 +374,7 @@ def ontology_reasoning_requested_event(
             "dispatchMode": "data-update-driven",
             "importanceGate": "materiality-first",
             "materialityAssessments": materiality_assessments if materiality_assessments is not None else [],
+            "researchRunId": str((source_event.payload or {}).get("runId") or ""),
         },
     )
 

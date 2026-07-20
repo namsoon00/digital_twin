@@ -281,6 +281,11 @@ class MySQLAppStore(MySQLOperationalConnection):
 class MySQLExternalSignalCache(MySQLAppStore):
     store_id = "external_signals"
 
+
+class MySQLDataPipelineHealthStore(MySQLAppStore):
+    store_id = "data_pipeline_health"
+
+
 class MySQLOntologyReasoningCursorStore(MySQLAppStore):
     store_id = "ontology_reasoning_cursor"
 

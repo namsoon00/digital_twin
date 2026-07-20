@@ -5,6 +5,7 @@ from .ontology_lab_store import JsonOntologyExperimentStore
 from .mysql_operational import (
     MySQLAccountRegistry,
     MySQLAppStore,
+    MySQLDataPipelineHealthStore,
     MySQLEventLog,
     MySQLExternalSignalCache,
     MySQLInvestmentCalendarCandidateStore,
@@ -53,6 +54,11 @@ def app_store(settings: Dict[str, str] = None):
 def external_signal_cache(settings: Dict[str, str] = None):
     configured = configured_settings(settings)
     return MySQLExternalSignalCache(configured)
+
+
+def data_pipeline_health_store(settings: Dict[str, str] = None):
+    configured = configured_settings(settings)
+    return MySQLDataPipelineHealthStore(configured)
 
 
 def ontology_reasoning_cursor_store(settings: Dict[str, str] = None):

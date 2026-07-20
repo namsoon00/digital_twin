@@ -2,6 +2,7 @@ from typing import Dict, List, Set
 import hashlib
 
 from ..domain.ontology_contracts import PortfolioOntology
+from ..domain.decision_performance import evaluate_decision_performance
 from ..domain.ontology_rulebox_catalog import default_graph_inference_rules
 from ..domain.ontology_rulebox_governance import rulebox_rules_hash
 from ..domain.ontology_projection_fingerprint import (
@@ -22,6 +23,7 @@ class PortfolioOntologyProjectionRecorder:
         quality_store=None,
         decision_episode_store=None,
         hypothesis_proposal_store=None,
+        data_pipeline_health_store=None,
         settings: Dict[str, object] = None,
         source: str = "monitoring",
     ):
@@ -29,6 +31,7 @@ class PortfolioOntologyProjectionRecorder:
         self.quality_store = quality_store
         self.decision_episode_store = decision_episode_store
         self.hypothesis_proposal_store = hypothesis_proposal_store
+        self.data_pipeline_health_store = data_pipeline_health_store
         self.settings = dict(settings or {})
         self.source = source or "monitoring"
 
@@ -414,6 +417,11 @@ class PortfolioOntologyProjectionRecorder:
         metadata = dict(snapshot.metadata or {})
         account_context = metadata.get("accountContext") if isinstance(metadata.get("accountContext"), dict) else {}
         decision_episodes = self.decision_episode_context(snapshot)
+        decision_performance = evaluate_decision_performance(
+            decision_episodes,
+            minimum_sample_count=int(self.performance_setting("investmentBrainPerformanceMinimumSamples", 5)),
+            minimum_accuracy_pct=self.performance_setting("investmentBrainPerformanceMinimumAccuracyPct", 55),
+        )
         return {
             "settings": dict(self.settings),
             "snapshotId": "abox-snapshot:" + hashlib.sha256(snapshot_seed.encode("utf-8")).hexdigest()[:16],
@@ -430,8 +438,25 @@ class PortfolioOntologyProjectionRecorder:
             "metadata": metadata,
             "decisionItems": [item.to_dict() for item in snapshot.decisions],
             "decisionEpisodes": decision_episodes,
+            "decisionPerformance": decision_performance,
             "hypothesisProposals": self.hypothesis_proposal_context(snapshot),
+            "dataPipelineHealth": self.data_pipeline_health_context(),
         }
+
+    def performance_setting(self, key: str, fallback: float) -> float:
+        try:
+            return float(str(self.settings.get(key) or fallback))
+        except (TypeError, ValueError):
+            return float(fallback)
+
+    def data_pipeline_health_context(self) -> Dict[str, object]:
+        if not self.data_pipeline_health_store or not hasattr(self.data_pipeline_health_store, "load"):
+            return {}
+        try:
+            payload = self.data_pipeline_health_store.load()
+            return dict(payload or {}) if isinstance(payload, dict) else {}
+        except Exception:  # noqa: BLE001 - operational health is confidence context, not a projection blocker.
+            return {}
 
     def decision_episode_context(self, snapshot: AccountSnapshot) -> List[Dict[str, object]]:
         if not self.decision_episode_store:

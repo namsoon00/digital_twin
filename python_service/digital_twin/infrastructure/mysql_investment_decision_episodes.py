@@ -8,6 +8,7 @@ from ..domain.investment_brain import (
     stable_id,
     utc_now_iso,
 )
+from ..domain.decision_performance import evaluate_decision_performance
 from .mysql_operational_connection import MySQLOperationalConnection
 from .mysql_operational_helpers import _json_loads
 from .operational_common import json_dumps
@@ -86,6 +87,22 @@ class MySQLInvestmentDecisionEpisodeStore(MySQLOperationalConnection):
         for episode in episodes:
             episode.outcomes = self.outcomes_for_episode(episode.episode_id)
         return episodes
+
+    def performance(self, account_id: str = "", symbol: str = "", limit: int = 500) -> Dict[str, object]:
+        try:
+            minimum_samples = int(float(str(self.runtime_settings.get("investmentBrainPerformanceMinimumSamples") or "5")))
+        except ValueError:
+            minimum_samples = 5
+        try:
+            minimum_accuracy = float(str(self.runtime_settings.get("investmentBrainPerformanceMinimumAccuracyPct") or "55"))
+        except ValueError:
+            minimum_accuracy = 55.0
+        episodes = self.list(account_id=account_id, symbol=symbol, limit=max(1, min(500, int(limit or 500))))
+        return evaluate_decision_performance(
+            episodes,
+            minimum_sample_count=max(2, min(100, minimum_samples)),
+            minimum_accuracy_pct=max(0.0, min(100.0, minimum_accuracy)),
+        )
 
     def outcomes_for_episode(self, episode_id: str, limit: int = 30) -> List[ObservedOutcome]:
         with self.connect() as connection:

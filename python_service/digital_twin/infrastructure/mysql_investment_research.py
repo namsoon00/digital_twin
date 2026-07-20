@@ -1,3 +1,5 @@
+from dataclasses import replace
+from datetime import datetime, timedelta, timezone
 from typing import Dict, List
 
 from ..domain.investment_brain import NovelHypothesisProposal, utc_now_iso
@@ -12,7 +14,13 @@ class MySQLInvestmentResearchStore(MySQLOperationalConnection):
         stamp = utc_now_iso()
         payload = run.to_dict()
         with self.connect() as connection:
-            connection.execute(
+            self.save_run_with_connection(connection, run, payload, stamp)
+        return run
+
+    def save_run_with_connection(self, connection, run: ResearchRun, payload=None, stamp: str = "") -> None:
+        stamp = stamp or utc_now_iso()
+        payload = payload or run.to_dict()
+        connection.execute(
                 """
                 INSERT INTO investment_research_runs (
                     run_id, question_id, account_id, symbol, status, started_at,
@@ -40,7 +48,68 @@ class MySQLInvestmentResearchStore(MySQLOperationalConnection):
                     stamp,
                 ),
             )
-        return run
+
+    def claim_queued_runs(self, limit: int = 5) -> List[ResearchRun]:
+        claimed: List[ResearchRun] = []
+        try:
+            stale_minutes = max(5, min(240, int(float(str(self.runtime_settings.get("investmentBrainResearchProcessingStaleMinutes") or "30")))))
+        except ValueError:
+            stale_minutes = 30
+        cutoff = (datetime.now(timezone.utc) - timedelta(minutes=stale_minutes)).isoformat().replace("+00:00", "Z")
+        with self.connect() as connection:
+            connection.execute(
+                "UPDATE investment_research_runs SET status = 'queued', updated_at = %s WHERE status = 'processing' AND updated_at < %s",
+                (utc_now_iso(), cutoff),
+            )
+        for _ in range(max(1, min(50, int(limit or 5)))):
+            with self.transaction() as connection:
+                row = connection.execute(
+                    """
+                    SELECT run_id, payload_json
+                    FROM investment_research_runs
+                    WHERE status = 'queued'
+                    ORDER BY started_at, run_id
+                    LIMIT 1
+                    FOR UPDATE
+                    """
+                ).fetchone()
+                if not row:
+                    break
+                run = ResearchRun.from_dict(_json_loads(row.get("payload_json"), {}))
+                processing = replace(run, status="processing", completed_at="")
+                cursor = connection.execute(
+                    "UPDATE investment_research_runs SET status = 'processing', payload_json = %s, updated_at = %s WHERE run_id = %s AND status = 'queued'",
+                    (json_dumps(processing.to_dict()), utc_now_iso(), run.run_id),
+                )
+                if int(cursor.rowcount or 0):
+                    claimed.append(processing)
+        return claimed
+
+    def queued_count(self) -> int:
+        with self.connect() as connection:
+            row = connection.execute("SELECT COUNT(*) AS count FROM investment_research_runs WHERE status = 'queued'").fetchone()
+        return int(row.get("count") or 0) if row else 0
+
+    def mark_reasoning_refreshed(self, run_id: str, refreshed: bool = True) -> Dict[str, object]:
+        normalized = str(run_id or "").strip()
+        if not normalized:
+            return {}
+        with self.transaction() as connection:
+            row = connection.execute(
+                "SELECT payload_json FROM investment_research_runs WHERE run_id = %s FOR UPDATE",
+                (normalized,),
+            ).fetchone()
+            if not row:
+                return {}
+            run = ResearchRun.from_dict(_json_loads(row.get("payload_json"), {}))
+            updated = replace(
+                run,
+                status="reasoning-refreshed" if refreshed else "reasoning-refresh-failed",
+                reasoning_refreshed=bool(refreshed),
+                completed_at=utc_now_iso(),
+            )
+            self.save_run_with_connection(connection, updated)
+        return updated.to_dict()
 
     def list_runs(self, account_id: str = "", symbol: str = "", limit: int = 50) -> List[Dict[str, object]]:
         where = []

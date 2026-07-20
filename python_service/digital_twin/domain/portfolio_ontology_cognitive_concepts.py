@@ -9,6 +9,7 @@ def add_investment_brain_concepts(
     portfolio_id: str,
     decision_episodes: Iterable[Dict[str, object]],
     hypothesis_proposals: Iterable[Dict[str, object]] = None,
+    decision_performance: Dict[str, object] = None,
 ) -> None:
     portfolio_node_id = entity_id("portfolio", portfolio_id)
     episode_rows = [item for item in decision_episodes or [] if isinstance(item, dict)]
@@ -232,7 +233,59 @@ def add_investment_brain_concepts(
             add_relation(graph, episode_id, outcome_id, "RESULTED_IN_OUTCOME", weight=1.0, properties={"source": "investment-brain-feedback"})
             add_relation(graph, stock_id, outcome_id, "OBSERVES_OUTCOME", weight=1.0, properties={"source": "investment-brain-feedback"})
     add_hypothesis_calibration_concepts(graph, portfolio_id, episode_rows)
+    add_decision_performance_concepts(graph, portfolio_id, decision_performance or {})
     add_novel_hypothesis_proposal_concepts(graph, portfolio_id, hypothesis_proposals or [])
+
+
+def add_decision_performance_concepts(
+    graph: PortfolioOntology,
+    portfolio_id: str,
+    performance: Dict[str, object],
+) -> None:
+    if not isinstance(performance, dict) or not int(performance.get("outcomeCount") or 0):
+        return
+    portfolio_node_id = entity_id("portfolio", portfolio_id)
+    summary = performance.get("summary") if isinstance(performance.get("summary"), dict) else {}
+    summary_id = add_entity(graph, "decision-performance", portfolio_id, "투자 판단 성과", {
+        "tboxClass": "DecisionPerformance",
+        **dict(summary),
+        "episodeCount": performance.get("episodeCount"),
+        "episodeWithOutcomeCount": performance.get("episodeWithOutcomeCount"),
+        "outcomeCoveragePct": performance.get("outcomeCoveragePct"),
+        "byHorizon": list(performance.get("byHorizon") or []),
+        "byAction": list(performance.get("byAction") or []),
+        "automaticDeployment": False,
+        "source": "DecisionEpisode+ObservedOutcome",
+    })
+    add_relation(graph, portfolio_node_id, summary_id, "HAS_DECISION_PERFORMANCE", weight=1.0, properties={"source": "investment-brain-feedback"})
+    for metric in performance.get("byRule") or []:
+        if not isinstance(metric, dict) or not str(metric.get("key") or "").strip():
+            continue
+        rule_key = str(metric.get("key") or "")
+        performance_id = add_entity(graph, "rule-performance", rule_key, rule_key + " 성과", {
+            "tboxClass": "RulePerformance",
+            **dict(metric),
+            "automaticDeployment": False,
+        })
+        rule_id = entity_id("graph-inference-rule", rule_key)
+        if not any(item.entity_id == rule_id for item in graph.entities):
+            add_entity(graph, "graph-inference-rule", rule_key, rule_key, {"tboxClass": "GraphInferenceRule", "ruleId": rule_key})
+        add_relation(graph, summary_id, performance_id, "HAS_PERFORMANCE_SLICE", weight=1.0, properties={"source": "investment-brain-feedback"})
+        add_relation(graph, performance_id, rule_id, "EVALUATES_RULE", weight=1.0, properties={"source": "investment-brain-feedback"})
+    for metric in performance.get("byHypothesis") or []:
+        if not isinstance(metric, dict) or not str(metric.get("key") or "").strip():
+            continue
+        template_key = str(metric.get("key") or "")
+        performance_id = add_entity(graph, "hypothesis-performance", template_key, str(metric.get("label") or template_key) + " 성과", {
+            "tboxClass": "HypothesisPerformance",
+            **dict(metric),
+            "automaticDeployment": False,
+        })
+        template_id = entity_id("hypothesis-template", template_key)
+        if not any(item.entity_id == template_id for item in graph.entities):
+            add_entity(graph, "hypothesis-template", template_key, str(metric.get("label") or template_key), {"tboxClass": "ApprovedHypothesisTemplate"})
+        add_relation(graph, summary_id, performance_id, "HAS_PERFORMANCE_SLICE", weight=1.0, properties={"source": "investment-brain-feedback"})
+        add_relation(graph, performance_id, template_id, "EVALUATES_HYPOTHESIS", weight=1.0, properties={"source": "investment-brain-feedback"})
 
 
 def add_hypothesis_calibration_concepts(

@@ -19,6 +19,7 @@ class OntologyDiagnosticsService:
         notification_queue=None,
         service_status_provider=None,
         strategy_proposal_service=None,
+        decision_episode_store=None,
     ):
         self.ontology_repository = ontology_repository
         self.settings = settings or {}
@@ -26,6 +27,7 @@ class OntologyDiagnosticsService:
         self.notification_queue = notification_queue
         self.service_status_provider = service_status_provider
         self.strategy_proposal_service = strategy_proposal_service
+        self.decision_episode_store = decision_episode_store
 
     def status(self, symbols: Iterable[str] = None, limit: int = 80) -> Dict[str, object]:
         clean_symbols = sorted(set(str(item or "").upper().strip() for item in (symbols or []) if str(item or "").strip()))
@@ -47,7 +49,31 @@ class OntologyDiagnosticsService:
             "latestEvents": self.latest_events(),
             "notificationBoundary": self.notification_boundary(),
             "strategyProposalBoundary": self.strategy_proposal_boundary(),
+            "decisionPerformanceBoundary": self.decision_performance_boundary(clean_symbols),
             "serviceStatus": self.service_status(),
+        }
+
+    def decision_performance_boundary(self, symbols: Iterable[str]) -> Dict[str, object]:
+        if not self.decision_episode_store or not hasattr(self.decision_episode_store, "performance"):
+            return {"status": "unavailable"}
+        clean_symbols = list(symbols or [])
+        try:
+            result = self.decision_episode_store.performance(symbol=clean_symbols[0] if len(clean_symbols) == 1 else "", limit=500)
+        except Exception as error:  # noqa: BLE001 - diagnostics must remain available without feedback history.
+            return {"status": "error", "reason": str(error)[:180]}
+        summary = result.get("summary") if isinstance(result.get("summary"), dict) else {}
+        return {
+            "status": str(result.get("status") or "insufficient-data"),
+            "episodeCount": int(result.get("episodeCount") or 0),
+            "outcomeCount": int(result.get("outcomeCount") or 0),
+            "outcomeCoveragePct": float(result.get("outcomeCoveragePct") or 0),
+            "directionalAccuracyPct": float(summary.get("directionalAccuracyPct") or 0),
+            "averageActionAdjustedReturnPct": float(summary.get("averageActionAdjustedReturnPct") or 0),
+            "sampleStatus": str(summary.get("sampleStatus") or "insufficient-sample"),
+            "promotionEligible": bool(summary.get("promotionEligible")),
+            "ruleCount": len(result.get("byRule") or []),
+            "hypothesisCount": len(result.get("byHypothesis") or []),
+            "automaticDeployment": False,
         }
 
     def safe_call(self, method_name: str, fallback: Dict[str, object], *args):

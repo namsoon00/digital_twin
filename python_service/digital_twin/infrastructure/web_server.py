@@ -515,6 +515,7 @@ def settings_status_payload() -> Dict[str, object]:
         "ontologyReasoningEnabled",
         "ontologyReasoningIntervalSeconds",
         "ontologyReasoningBatchSize",
+        "ontologyReasoningMaxSymbolsPerRun",
         "ontologyReasoningMinIntervalSeconds",
         "ontologyReasoningUrgentMinIntervalSeconds",
         "ontologyReasoningUrgentMaterialityScore",

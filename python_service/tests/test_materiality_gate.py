@@ -17,6 +17,15 @@ from digital_twin.infrastructure.event_bus import EventBus
 
 
 class MaterialityGateTests(unittest.TestCase):
+    def test_reasoning_worker_defaults_to_small_time_bounded_symbol_batch(self):
+        runner = OntologyReasoningRunner(
+            event_reader=None,
+            cursor_store=None,
+            monitor_runner_factory=lambda: None,
+        )
+
+        self.assertEqual(3, runner.max_symbols_per_run())
+
     def test_reasoning_worker_coalesces_recent_symbol_events_and_releases_them_when_due(self):
         request = ontology_reasoning_requested_event(
             DomainEvent(name="market_data.collected", aggregate_id="market:AAPL", payload={}),

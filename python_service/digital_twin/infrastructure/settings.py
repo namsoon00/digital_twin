@@ -744,7 +744,7 @@ def runtime_settings() -> Dict[str, str]:
         "ontologyReasoningEnabled": value("ontologyReasoningEnabled", "ONTOLOGY_REASONING_ENABLED", "1"),
         "ontologyReasoningIntervalSeconds": value("ontologyReasoningIntervalSeconds", "ONTOLOGY_REASONING_INTERVAL_SECONDS", "10"),
         "ontologyReasoningBatchSize": value("ontologyReasoningBatchSize", "ONTOLOGY_REASONING_BATCH_SIZE", "200"),
-        "ontologyReasoningMaxSymbolsPerRun": value("ontologyReasoningMaxSymbolsPerRun", "ONTOLOGY_REASONING_MAX_SYMBOLS_PER_RUN", "50"),
+        "ontologyReasoningMaxSymbolsPerRun": value("ontologyReasoningMaxSymbolsPerRun", "ONTOLOGY_REASONING_MAX_SYMBOLS_PER_RUN", "3"),
         "ontologyReasoningEventScanLimit": value("ontologyReasoningEventScanLimit", "ONTOLOGY_REASONING_EVENT_SCAN_LIMIT", "1500"),
         "ontologyReasoningMinIntervalSeconds": value("ontologyReasoningMinIntervalSeconds", "ONTOLOGY_REASONING_MIN_INTERVAL_SECONDS", "180"),
         "ontologyReasoningUrgentMinIntervalSeconds": value("ontologyReasoningUrgentMinIntervalSeconds", "ONTOLOGY_REASONING_URGENT_MIN_INTERVAL_SECONDS", "60"),

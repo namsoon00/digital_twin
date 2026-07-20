@@ -98,7 +98,7 @@ class OntologyReasoningRunner:
         return int_setting(self.settings, "ontologyReasoningBatchSize", 200, 1, 200)
 
     def max_symbols_per_run(self) -> int:
-        return int_setting(self.settings, "ontologyReasoningMaxSymbolsPerRun", 50, 0, 200)
+        return int_setting(self.settings, "ontologyReasoningMaxSymbolsPerRun", 3, 0, 200)
 
     def event_scan_limit(self, requested_limit: int = 0) -> int:
         fallback = max(1500, int(requested_limit or self.batch_size()) * 40)

@@ -217,7 +217,7 @@ def sector_from_symbol(value: str) -> str:
         return "한국시장"
     if any(token in normalized for token in ["005930", "000660", "NVDA", "AMD", "TSM", "CHIP", "SEMICONDUCTOR"]):
         return "반도체"
-    if any(token in normalized for token in ["AAPL", "MSFT", "GOOGL", "META", "AMZN", "PLTR", "AI", "SOFTWARE"]):
+    if any(token in normalized for token in ["035420", "035720", "AAPL", "MSFT", "GOOGL", "META", "AMZN", "PLTR", "AI", "SOFTWARE"]):
         return "AI/플랫폼"
     if normalized in {"TSLA", "RIVN", "GM", "F"} or any(token in normalized for token in ["EV", "BATTERY", "AUTO"]):
         return "모빌리티"
@@ -234,6 +234,7 @@ def known_stock(symbol: str) -> Dict[str, str]:
         "005930": {"name": "삼성전자", "market": "KR", "currency": "KRW", "sector": "반도체"},
         "000660": {"name": "SK하이닉스", "market": "KR", "currency": "KRW", "sector": "반도체"},
         "035420": {"name": "NAVER", "market": "KR", "currency": "KRW", "sector": "AI/플랫폼"},
+        "035720": {"name": "카카오", "market": "KR", "currency": "KRW", "sector": "AI/플랫폼"},
         "069500": {"name": "KODEX 200", "market": "KR", "currency": "KRW", "sector": "한국시장", "assetType": "ETF"},
         "229200": {"name": "KODEX 코스닥150", "market": "KR", "currency": "KRW", "sector": "한국시장", "assetType": "ETF"},
         "091160": {"name": "KODEX 반도체", "market": "KR", "currency": "KRW", "sector": "반도체", "assetType": "ETF"},

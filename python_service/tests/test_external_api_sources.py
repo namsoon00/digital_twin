@@ -1,5 +1,6 @@
 import sys
 import unittest
+from datetime import datetime, timezone
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -8,6 +9,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from digital_twin.application.notification_ai_gate_message import execution_telegram_message
 from digital_twin.domain.external_api_sources import external_api_source_metadata
 from digital_twin.domain.investment_research import research_evidence_from_external_signals
+from digital_twin.domain.investor_flow_psychology import investor_flow_psychology
 from digital_twin.domain.market_data import normalize_position
 from digital_twin.domain.notification_ai_gate_contracts import NotificationAIValidatedResponse
 from digital_twin.domain.notification_templates import NotificationTemplate, alert_context, render_notification
@@ -16,9 +18,100 @@ from digital_twin.domain.portfolio_calculations import portfolio_summary
 from digital_twin.domain.monitoring import RealtimeMonitor
 from digital_twin.infrastructure.external_signals import ExternalSignalProvider
 from digital_twin.infrastructure.external_signal_utils import sanitize_sensitive_text
+from digital_twin.infrastructure.kis_market_signals import KISMarketSignalProvider
 
 
 class ExternalApiSourceTests(unittest.TestCase):
+    def test_repeated_kis_investor_totals_remain_reference_evidence(self):
+        provider = KISMarketSignalProvider(
+            settings={"kisMarketSignalUnchangedStaleCount": "3"},
+            quote_cache=SimpleNamespace(),
+            now_provider=lambda: datetime(2026, 7, 20, 4, 40, tzinfo=timezone.utc),
+        )
+        investor_values = {
+            "foreignBuyVolume": 1550648,
+            "foreignSellVolume": 1354573,
+            "foreignNetVolume": 196075,
+            "institutionBuyVolume": 400313,
+            "institutionSellVolume": 197899,
+            "institutionNetVolume": 202414,
+            "individualBuyVolume": 721925,
+            "individualSellVolume": 1102553,
+            "individualNetVolume": -380628,
+        }
+        fields = sorted(investor_values)
+        previous = {
+            **investor_values,
+            "marketSignalCoverage": {
+                "investor": {"status": "available", "fields": fields, "unchangedCount": 57}
+            },
+        }
+        signal = {
+            **investor_values,
+            "currentPrice": 34550,
+            "marketSignalCoverage": {
+                "investor": {
+                    "status": "available",
+                    "fields": fields,
+                    "realTime": True,
+                    "cadence": "live-poll",
+                }
+            },
+            "quoteStatus": "KIS 투자자별 수급 반영",
+            "quoteSource": "KIS Open API",
+            "dataQuality": "actual",
+        }
+
+        marked = provider.mark_unchanged_stage_health(signal, previous)
+        position = provider.merge_position(
+            normalize_position({"symbol": "035720", "name": "카카오", "market": "KR", "currency": "KRW"}),
+            marked,
+        )
+        coverage = position.market_signal_coverage["investor"]
+        psychology = investor_flow_psychology(position)
+
+        self.assertEqual("available", coverage["status"])
+        self.assertEqual(58, coverage["unchangedCount"])
+        self.assertIs(True, coverage["judgementEvidenceUsable"])
+        self.assertIs(False, coverage["aiUsableAsStrongEvidence"])
+        self.assertEqual(196075, position.foreign_net_volume)
+        self.assertEqual(202414, position.institution_net_volume)
+        self.assertEqual(-380628, position.individual_net_volume)
+        self.assertTrue(psychology["available"])
+        self.assertEqual("smartMoneyAccumulation", psychology["field"])
+
+    def test_current_day_legacy_stale_investor_cache_is_restored_as_reference(self):
+        provider = KISMarketSignalProvider(
+            settings={},
+            quote_cache=SimpleNamespace(),
+            now_provider=lambda: datetime(2026, 7, 20, 5, 20, tzinfo=timezone.utc),
+        )
+        signal = {
+            "foreignNetVolume": 196075,
+            "institutionNetVolume": 202414,
+            "individualNetVolume": -380628,
+            "marketSignalCoverage": {
+                "investor": {
+                    "status": "stale",
+                    "fields": ["foreignNetVolume", "institutionNetVolume", "individualNetVolume"],
+                    "freshnessStatus": "stale-repeat",
+                    "cadence": "stale-repeat",
+                    "unchangedCount": 60,
+                    "sourceAsOf": "2026-07-20T00:00:00+09:00",
+                    "judgementEvidenceUsable": False,
+                }
+            },
+        }
+
+        restored = provider.signal_for_current_session(signal)
+        coverage = restored["marketSignalCoverage"]["investor"]
+
+        self.assertEqual("available", coverage["status"])
+        self.assertEqual("reference-repeat", coverage["freshnessStatus"])
+        self.assertIs(True, coverage["judgementEvidenceUsable"])
+        self.assertIs(False, coverage["aiUsableAsStrongEvidence"])
+        self.assertNotIn("staleReason", coverage)
+
     def test_external_api_error_redacts_key_disclosed_by_provider(self):
         message = "We have detected your API key as 8YHIHMCZZ3W8L64E and our standard rate limit applies"
 

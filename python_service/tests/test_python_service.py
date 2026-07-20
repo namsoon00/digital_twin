@@ -1593,7 +1593,7 @@ class PythonServiceTests(unittest.TestCase):
         self.assertEqual("2026-07-07T00:00:00+09:00", positions[0].market_signal_coverage["investor"]["sourceAsOf"])
         self.assertIn("/uapi/domestic-stock/v1/quotations/inquire-investor", calls)
 
-    def test_kis_market_signal_provider_marks_repeated_microstructure_stale_during_regular_hours(self):
+    def test_kis_market_signal_provider_keeps_repeated_investor_totals_as_reference(self):
         db_path = test_store_seed(self.temp.name)
         cache = TestMarketQuoteCache(db_path)
         cache.save(KIS_CACHE_PROVIDER, KIS_CACHE_ACCOUNT_ID, "035420", {
@@ -1662,16 +1662,19 @@ class PythonServiceTests(unittest.TestCase):
         positions, _watchlist = provider.enrich_collections([naver], [])
         coverage = positions[0].market_signal_coverage
 
-        self.assertEqual("stale", coverage["investor"]["status"])
+        self.assertEqual("available", coverage["investor"]["status"])
         self.assertEqual(3, coverage["investor"]["unchangedCount"])
-        self.assertIn("지연 가능성", coverage["investor"]["staleReason"])
+        self.assertEqual("reference-repeat", coverage["investor"]["freshnessStatus"])
+        self.assertEqual("unchanged-repeat", coverage["investor"]["latencyStatus"])
+        self.assertIs(True, coverage["investor"]["judgementEvidenceUsable"])
+        self.assertIs(False, coverage["investor"]["aiUsableAsStrongEvidence"])
         self.assertEqual("stale", coverage["ccnl"]["status"])
         self.assertEqual("stale", coverage["orderbook"]["status"])
-        self.assertEqual(0, positions[0].foreign_net_volume)
-        self.assertEqual(0, positions[0].institution_net_volume)
-        self.assertEqual(0, positions[0].individual_net_volume)
-        self.assertNotIn("투자자별 수급", positions[0].quote_status)
-        self.assertIn("수치 근거에서 제외", positions[0].quote_message)
+        self.assertEqual(243601, positions[0].foreign_net_volume)
+        self.assertEqual(67401, positions[0].institution_net_volume)
+        self.assertEqual(-304684, positions[0].individual_net_volume)
+        self.assertIn("투자자별 수급", positions[0].quote_status)
+        self.assertIn("판단 참고 근거", positions[0].quote_message)
 
     def test_position_freshness_uses_kis_stage_staleness(self):
         now = datetime(2026, 7, 7, 2, 0, tzinfo=timezone.utc)

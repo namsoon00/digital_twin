@@ -582,7 +582,7 @@ class MonitoringPositionContextMixin:
             reason = str(investor.get("staleReason") or investor.get("reason") or "").strip()
             return "신선도 주의" + (" - " + reason if reason else "")
         if investor.get("unchangedCount") not in (None, "", 0):
-            return "이전 조회와 같은 투자자 수급 값 " + str(investor.get("unchangedCount")) + "회 연속"
+            return "KIS 오늘 누적 수급 · 이전 조회 이후 변화 없음 · 새 움직임 확인 전 참고값"
         latency_label = str(investor.get("latencyLabel") or "").strip()
         if investor.get("aiUsableAsStrongEvidence") is False:
             reason = str(investor.get("latencyReason") or investor.get("reason") or "").strip()

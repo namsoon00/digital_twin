@@ -1927,6 +1927,21 @@ def _valuation_pct_display(value: object) -> str:
     return signed_pct(_number(value))
 
 
+def _valuation_per_inputs(facts: Dict[str, object], currency: object) -> str:
+    current_per = _number(facts.get("valuationCurrentPER"))
+    expected_eps = _number(facts.get("valuationExpectedEPS"))
+    target_per = _number(facts.get("valuationTargetPER"))
+    return " · ".join(
+        part
+        for part in [
+            ("현재 PER " + str(round(current_per, 2)).rstrip("0").rstrip(".") + "배") if current_per else "",
+            ("사용 EPS " + _valuation_price_display(expected_eps, currency)) if expected_eps else "",
+            ("기준 PER " + str(round(target_per, 2)).rstrip("0").rstrip(".") + "배") if target_per else "",
+        ]
+        if part
+    )
+
+
 def valuation_detail_rows(context: Dict[str, object], level: str) -> List[str]:
     facts = relation_facts(context or {})
     if not facts:
@@ -1985,6 +2000,7 @@ def valuation_detail_rows(context: Dict[str, object], level: str) -> List[str]:
         source = "사용자 입력 없음 · 외부 밸류에이션 데이터 없음"
     per_status = str(facts.get("valuationPerStatus") or "").strip()
     per_reason = str(facts.get("valuationPerReason") or "").strip()
+    per_inputs = _valuation_per_inputs(facts, currency)
     preferred_metric = str(facts.get("valuationPreferredMetric") or "").strip()
     source_priority = str(facts.get("valuationFundamentalDataSourcePriority") or "").strip()
     per_status_labels = {
@@ -2063,6 +2079,7 @@ def valuation_detail_rows(context: Dict[str, object], level: str) -> List[str]:
         _html_row("안전마진", margin_text or "계산 불가", level=level),
         _html_row("시나리오 안전마진", ("보수 " + conservative_margin + " / 낙관 " + optimistic_margin) if conservative_margin and optimistic_margin else "", level=level),
         _html_row("데이터 출처", source, level=level),
+        _html_row("PER/EPS 입력", per_inputs, level=level, max_len=220),
         _html_row("PER 기준", per_line, level=level, max_len=300),
         _html_row("대체 기준", preferred_metric, level=level, max_len=180),
         _html_row("데이터 우선순위", source_priority, level=level, max_len=220),
@@ -2123,6 +2140,7 @@ def compact_valuation_detail_rows(context: Dict[str, object], level: str) -> Lis
         basis += (" · " if basis else "") + ("투자 판단에 사용" if facts.get("valuationDecisionEligible") else "참고만 사용")
     per_status = str(facts.get("valuationPerStatus") or "").strip()
     per_reason = str(facts.get("valuationPerReason") or "").strip()
+    per_inputs = _valuation_per_inputs(facts, currency)
     missing_parts = [str(item) for item in missing_inputs[:4] if str(item or "").strip()]
     if per_status in {"missing", "conversion_missing", "partial_conversion_missing"} and per_reason:
         missing_parts.append(per_reason)
@@ -2131,6 +2149,7 @@ def compact_valuation_detail_rows(context: Dict[str, object], level: str) -> Lis
         _html_row("기준 적정가", fair_value_text, level=level, max_len=240),
         _html_row("현재가와 적정가 차이", margin_text, level=level, max_len=180),
         _html_row("근거 수준", basis, level=level, max_len=240),
+        _html_row("PER/EPS 기준", per_inputs, level=level, max_len=220),
         _html_row("확인할 데이터", " · ".join(missing_parts), level=level, max_len=260),
     ]
     return [row for row in rows if row]

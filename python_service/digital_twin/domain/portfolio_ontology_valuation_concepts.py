@@ -185,6 +185,8 @@ def valuation_values(row: Dict[str, object], position: Position) -> Dict[str, ob
     fair_value_high = value_for(row, "fairValueHigh") or fair_value
     expected_eps = value_for(row, "expectedEPS", "expectedEps", "eps", "estimatedEPS", "reportedEPS")
     target_per = value_for(row, "targetPER", "targetPer", "targetPE")
+    current_per = value_for(row, "peRatio")
+    pbr = value_for(row, "pbr")
     annual_dividend = value_for(row, "annualDividend", "annualDividendPerShare")
     required_yield = value_for(row, "requiredYieldPct", "requiredYield")
     coupon_pct = value_for(row, "couponPct", "coupon")
@@ -303,6 +305,8 @@ def valuation_values(row: Dict[str, object], position: Position) -> Dict[str, ob
         "fairValueHigh": round(fair_value_high, 4) if fair_value_high else 0.0,
         "expectedEPS": round(expected_eps, 4) if expected_eps else 0.0,
         "targetPER": round(target_per, 4) if target_per else 0.0,
+        "peRatio": round(current_per, 4) if current_per else 0.0,
+        "pbr": round(pbr, 4) if pbr else 0.0,
         "annualDividend": round(annual_dividend, 4) if annual_dividend else 0.0,
         "requiredYieldPct": round(required_yield, 4) if required_yield else 0.0,
         "couponPct": round(coupon_pct, 4) if coupon_pct else 0.0,
@@ -361,6 +365,8 @@ def valuation_relation_props(row: Dict[str, object], values: Dict[str, object], 
         "fairValueLow": values.get("fairValueLow"),
         "fairValueBase": values.get("fairValueBase"),
         "fairValueHigh": values.get("fairValueHigh"),
+        "peRatio": values.get("peRatio"),
+        "pbr": values.get("pbr"),
         "valuationReliabilityScore": values.get("valuationReliabilityScore"),
         "valuationInputCoveragePct": values.get("valuationInputCoveragePct"),
         "valuationConfidenceLabel": values.get("valuationConfidenceLabel"),

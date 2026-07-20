@@ -380,6 +380,9 @@ def _fundamental_scenario_row(
         "currentPrice": current,
         **scenarios,
         "expectedEPS": round(eps_value, 4) if eps_value else 0.0,
+        "targetPERLow": multiples[0] if len(multiples) >= 1 else 0.0,
+        "targetPER": multiples[1] if len(multiples) >= 2 else 0.0,
+        "targetPERHigh": multiples[2] if len(multiples) >= 3 else 0.0,
         "epsPeriod": eps_period,
         "multiplePeriod": "annual-compatible",
         "periodCompatible": period_is_annual_per_share(eps_period),
@@ -555,6 +558,10 @@ def ai_valuation_proposal_rows(
     if not rows and ({"PlatformGrowth", "MegaCapQuality", "AIGrowth", "HighVolatilityGrowth"} & archetypes):
         row = growth_quality_ai_valuation_row(position, external_signals or {}, settings)
         if row:
+            rows.append(row)
+    if not rows:
+        row = external_fundamental_ai_valuation_row(position, external_signals or {}, settings)
+        if row and number(row.get("expectedEPS")):
             rows.append(row)
     if not rows and truthy(settings.get("aiValuationCurrentPriceAnchorEnabled"), False):
         row = current_price_anchor_ai_valuation_row(position, settings)

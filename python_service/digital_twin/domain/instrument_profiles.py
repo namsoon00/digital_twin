@@ -21,6 +21,8 @@ SKHZ|SK하이닉스 1x 숏 ETF|InverseProduct,SingleStockETF,CrossListedSecurity
 SKUU|SK하이닉스 2x 롱 ETF|DailyLeveragedProduct,SingleStockETF,CrossListedSecurity|trading|cycle:high,fx:high,leverage:high|allowAddOnStrength=0,trimOnTrendBreak=1,avoidAveragingDown=1
 SKDD|SK하이닉스 -2x 숏 ETF|InverseProduct,DailyLeveragedProduct,SingleStockETF,CrossListedSecurity|trading|cycle:high,fx:high,inverse:high,leverage:high|allowAddOnStrength=0,trimOnTrendBreak=1,avoidAveragingDown=1
 005930|대형 반도체 우량주|MegaCapQuality,SemiconductorCyclical|core|cycle:medium,fx:medium|allowAddOnStrength=1,trimOnTrendBreak=1,avoidAveragingDown=1
+035420|대형 플랫폼 성장주|PlatformGrowth,MegaCapQuality|core|rate:medium,consumer:medium|allowAddOnStrength=1,trimOnTrendBreak=1,avoidAveragingDown=1
+035720|플랫폼 성장주|PlatformGrowth,HighVolatilityGrowth|growth|rate:medium,consumer:medium|allowAddOnStrength=1,trimOnTrendBreak=1,avoidAveragingDown=1
 AAPL|대형 플랫폼 우량 성장주|MegaCapQuality,PlatformGrowth|core|rate:medium,fx:high|allowAddOnStrength=1,trimOnTrendBreak=1,avoidAveragingDown=1
 NVDA|AI 인프라 성장주|AIGrowth,SemiconductorHBM|growth|ai:high,rate:medium,fx:high|allowAddOnStrength=1,trimOnTrendBreak=1,avoidAveragingDown=1
 TSLA|고변동 성장주|HighVolatilityGrowth,CyclicalGrowth|trading|rate:high,cycle:high,fx:high|allowAddOnStrength=0,trimOnTrendBreak=1,avoidAveragingDown=1

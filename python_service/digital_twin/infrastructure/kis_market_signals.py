@@ -765,12 +765,34 @@ class KISMarketSignalProvider:
         session = self.kr_market_session()
         signal["marketSession"] = str(session.get("key") or "")
         signal["marketSessionLabel"] = str(session.get("label") or "")
+        coverage = signal.get("marketSignalCoverage") if isinstance(signal.get("marketSignalCoverage"), dict) else {}
+        coverage = dict(coverage or {})
+        investor = coverage.get("investor") if isinstance(coverage.get("investor"), dict) else {}
+        source_as_of = parse_iso(investor.get("sourceAsOf")) if investor else None
+        is_today = bool(source_as_of and source_as_of.astimezone(KST).date() == self.now().astimezone(KST).date())
+        repeated_investor = (
+            str(investor.get("status") or "") == "stale"
+            and str(investor.get("freshnessStatus") or "") == "stale-repeat"
+            and bool(comparable_stage_values(signal, INVESTOR_SIGNAL_KEYS))
+        )
+        if repeated_investor and is_today and session.get("microstructureAvailable"):
+            investor = dict(investor)
+            investor["status"] = "available"
+            investor["realTime"] = False
+            investor["cadence"] = "rest-reference"
+            investor["judgementEvidenceUsable"] = True
+            investor["aiUsableAsStrongEvidence"] = False
+            investor["freshnessStatus"] = "reference-repeat"
+            investor["latencyStatus"] = "unchanged-repeat"
+            investor["latencyLabel"] = INVESTOR_DELAYED_LABEL
+            investor["latencyReason"] = "오늘 조회한 KIS 장중 누적 수급입니다. 이전 조회와 같아 새 변화 신호는 아니지만 매수·매도 참고값으로 유지합니다."
+            investor.pop("staleReason", None)
+            coverage["investor"] = investor
+            signal["marketSignalCoverage"] = coverage
         if session.get("microstructureAvailable"):
             return signal
         for key in MICROSTRUCTURE_SIGNAL_KEYS:
             signal.pop(key, None)
-        coverage = signal.get("marketSignalCoverage") if isinstance(signal.get("marketSignalCoverage"), dict) else {}
-        coverage = dict(coverage or {})
         for stage in ["ccnl", "investor", "orderbook"]:
             coverage[stage] = unavailable_stage_coverage(stage, session)
         signal["marketSignalCoverage"] = coverage
@@ -818,16 +840,9 @@ class KISMarketSignalProvider:
                     next_item["freshnessStatus"] = "reference-repeat"
                     next_item["latencyStatus"] = "unchanged-repeat"
                     next_item["latencyLabel"] = INVESTOR_DELAYED_LABEL
-                    next_item["latencyReason"] = "KIS 투자자별 수급이 이전 조회와 같아 실시간 변화 신호는 아니지만 판단 참고 근거로 반영합니다."
-                if stage != "price" and unchanged_count >= stale_threshold:
+                    next_item["latencyReason"] = "KIS 투자자별 수급은 장중 누적값이므로 이전 조회와 같아도 수치를 유지합니다. 새 매수·매도 변화가 확인되지 않아 강한 실시간 근거로는 사용하지 않습니다."
+                if stage not in {"price", "investor"} and unchanged_count >= stale_threshold:
                     next_item["status"] = "stale"
-                    if stage == "investor":
-                        next_item["realTime"] = False
-                        next_item["cadence"] = "stale-repeat"
-                        next_item["latencyStatus"] = "stale"
-                        next_item["latencyLabel"] = INVESTOR_DELAYED_LABEL
-                        next_item["freshnessStatus"] = "stale-repeat"
-                        next_item["judgementEvidenceUsable"] = False
                     next_item["staleReason"] = "장중 같은 " + stage + " 값이 " + str(unchanged_count) + "회 연속 반복되어 지연 가능성이 있습니다."
             else:
                 next_item["unchangedCount"] = 0

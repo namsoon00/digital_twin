@@ -4,10 +4,13 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
+from digital_twin.domain.instrument_profiles import instrument_profile_for_position
+from digital_twin.domain.market_data import known_stock, normalize_position
 from digital_twin.domain.portfolio import Position
 from digital_twin.domain.ontology_relation_facts import position_signal_facts
 from digital_twin.domain.portfolio_calculations import portfolio_summary
 from digital_twin.domain.valuation_ai_proposals import ai_valuation_proposal_rows
+from digital_twin.application.notification_ai_gate_message import compact_valuation_detail_rows
 from digital_twin.domain.valuation_contracts import (
     annual_eps_observation,
     fair_value_scenarios,
@@ -86,6 +89,70 @@ class ValuationContractTests(unittest.TestCase):
         self.assertEqual("ai-semiconductor-eps-per-scenarios", rows[0]["valuationMethod"])
         self.assertNotIn("이동평균", rows[0]["formula"])
         self.assertFalse(rows[0]["valuationDecisionEligible"])
+
+    def test_kakao_uses_platform_profile_and_kis_eps_per_valuation(self):
+        info = known_stock("035720")
+        position = normalize_position({
+            "symbol": "035720",
+            "name": "카카오",
+            "market": "KR",
+            "currency": "KRW",
+            "currentPrice": 34900,
+        })
+        rows = ai_valuation_proposal_rows(
+            position,
+            {
+                "companyOverviews": {
+                    "035720": {
+                        "provider": "KIS Open API",
+                        "trailingEPS": 1110,
+                        "epsPeriod": "annual",
+                        "peRatio": 31.13,
+                        "pbr": 1.35,
+                        "bps": 25625,
+                    }
+                }
+            },
+            {},
+        )
+
+        self.assertEqual("AI/플랫폼", info["sector"])
+        self.assertIn("PlatformGrowth", instrument_profile_for_position(position).archetypes)
+        self.assertEqual(1, len(rows))
+        self.assertEqual("ai-growth-eps-per-scenarios", rows[0]["valuationMethod"])
+        self.assertEqual(1110, rows[0]["expectedEPS"])
+        self.assertEqual(31.13, rows[0]["peRatio"])
+        self.assertEqual(26, rows[0]["targetPER"])
+        self.assertGreater(rows[0]["fairValue"], 0)
+        self.assertGreater(rows[0]["fairValueHigh"], rows[0]["fairValueLow"])
+
+        facts = position_signal_facts(
+            position,
+            portfolio_summary([], account_cash=1000000),
+            external_signals={
+                "companyOverviews": {
+                    "035720": {
+                        "provider": "KIS Open API",
+                        "trailingEPS": 1110,
+                        "epsPeriod": "annual",
+                        "peRatio": 31.13,
+                        "pbr": 1.35,
+                        "bps": 25625,
+                    }
+                }
+            },
+        )
+        message_rows = compact_valuation_detail_rows(
+            {"ontologyRelationContext": {"facts": facts}},
+            "absolute_beginner",
+        )
+        message = "\n".join(message_rows)
+        self.assertEqual(31.13, facts["valuationCurrentPER"])
+        self.assertEqual(1110, facts["valuationExpectedEPS"])
+        self.assertEqual(26, facts["valuationTargetPER"])
+        self.assertIn("현재 PER 31.13배", message)
+        self.assertIn("사용 EPS 1,110원", message)
+        self.assertIn("기준 PER 26배", message)
 
     def test_bitcoin_proxy_without_treasury_inputs_has_no_fair_value(self):
         position = Position(symbol="MSTR", name="Strategy", market="US", currency="USD", current_price=100)

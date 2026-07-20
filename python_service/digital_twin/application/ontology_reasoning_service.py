@@ -80,6 +80,7 @@ class OntologyReasoningRunner:
         settings: Dict[str, object] = None,
         rule_candidate_service=None,
         research_store=None,
+        now_provider: Callable = None,
     ):
         self.event_reader = event_reader
         self.cursor_store = cursor_store
@@ -88,6 +89,7 @@ class OntologyReasoningRunner:
         self.settings = dict(settings or {})
         self.rule_candidate_service = rule_candidate_service
         self.research_store = research_store
+        self.now_provider = now_provider or (lambda: datetime.now(timezone.utc))
 
     def enabled(self) -> bool:
         return truthy(self.settings.get("ontologyReasoningEnabled"), True)
@@ -101,6 +103,15 @@ class OntologyReasoningRunner:
     def event_scan_limit(self, requested_limit: int = 0) -> int:
         fallback = max(1500, int(requested_limit or self.batch_size()) * 40)
         return int_setting(self.settings, "ontologyReasoningEventScanLimit", fallback, 50, 10000)
+
+    def min_interval_seconds(self) -> int:
+        return int_setting(self.settings, "ontologyReasoningMinIntervalSeconds", 180, 0, 3600)
+
+    def urgent_min_interval_seconds(self) -> int:
+        return int_setting(self.settings, "ontologyReasoningUrgentMinIntervalSeconds", 60, 0, 3600)
+
+    def urgent_materiality_score(self) -> int:
+        return int_setting(self.settings, "ontologyReasoningUrgentMaterialityScore", 85, 0, 100)
 
     def rule_candidate_ai_enabled(self) -> bool:
         return truthy(self.settings.get("ontologyRuleCandidateAiEnabled"), True)
@@ -139,6 +150,46 @@ class OntologyReasoningRunner:
                 progress[clean_event_id] = clean_symbols
         return progress
 
+    def last_reasoned_at_by_symbol(self, payload: Dict[str, object] = None) -> Dict[str, str]:
+        payload = self.cursor_payload() if payload is None else dict(payload or {})
+        raw = payload.get("lastReasonedAtBySymbol") if isinstance(payload.get("lastReasonedAtBySymbol"), dict) else {}
+        return {
+            str(symbol or "").upper().strip(): str(stamp or "").strip()
+            for symbol, stamp in raw.items()
+            if str(symbol or "").strip() and str(stamp or "").strip()
+        }
+
+    def event_min_interval_seconds(self, event: object) -> int:
+        trigger = str(event_payload(event).get("trigger") or "data-update").strip()
+        if trigger in {"research-evidence-update", "investment-calendar-update"}:
+            return self.urgent_min_interval_seconds()
+        if event_materiality_score(event) >= self.urgent_materiality_score():
+            return self.urgent_min_interval_seconds()
+        return self.min_interval_seconds()
+
+    def event_symbol_due(self, event: object, symbol: str, cursor_payload: Dict[str, object] = None) -> bool:
+        interval = self.event_min_interval_seconds(event)
+        if interval <= 0:
+            return True
+        raw = self.last_reasoned_at_by_symbol(cursor_payload).get(str(symbol or "").upper().strip(), "")
+        if not raw:
+            return True
+        try:
+            parsed = datetime.fromisoformat(raw.replace("Z", "+00:00"))
+        except ValueError:
+            return True
+        now = self.now_provider()
+        if now.tzinfo is None:
+            now = now.replace(tzinfo=timezone.utc)
+        return (now.astimezone(timezone.utc) - parsed.astimezone(timezone.utc)).total_seconds() >= interval
+
+    def due_event_symbols(self, event: object, progress: Dict[str, List[str]] = None, cursor_payload: Dict[str, object] = None) -> List[str]:
+        remaining = self.remaining_event_symbols(event, progress)
+        event_id = str(getattr(event, "event_id", "") or "")
+        if event_id and event_id in (progress or {}):
+            return remaining
+        return [symbol for symbol in remaining if self.event_symbol_due(event, symbol, cursor_payload)]
+
     def remaining_event_symbols(self, event: object, progress: Dict[str, List[str]] = None) -> List[str]:
         symbols = event_symbols(event)
         if not symbols:
@@ -163,7 +214,8 @@ class OntologyReasoningRunner:
 
     def pending_requests(self, limit: int = 0) -> List[object]:
         processed = set(self.cursor_store.processed_event_ids())
-        progress = self.event_symbol_progress()
+        cursor_payload = self.cursor_payload()
+        progress = self.event_symbol_progress(cursor_payload)
         reader = getattr(self.event_reader, "recent_events", None)
         if callable(reader):
             source_events = reader(
@@ -180,7 +232,7 @@ class OntologyReasoningRunner:
             for event in source_events
             if event.event_id not in processed
             and event_changed_count(event) > 0
-            and (not event_symbols(event) or self.remaining_event_symbols(event, progress))
+            and (not event_symbols(event) or self.due_event_symbols(event, progress, cursor_payload))
         ]
         events.sort(
             key=lambda event: (
@@ -211,7 +263,8 @@ class OntologyReasoningRunner:
 
     def request_symbol_batches(self, requests: Iterable[object]) -> Tuple[Dict[str, List[str]], List[str], int]:
         max_symbols = self.max_symbols_per_run()
-        progress = self.event_symbol_progress()
+        cursor_payload = self.cursor_payload()
+        progress = self.event_symbol_progress(cursor_payload)
         batches: Dict[str, List[str]] = {}
         selected: List[str] = []
         omitted_symbols: List[str] = []
@@ -219,7 +272,7 @@ class OntologyReasoningRunner:
         processing_partial_events = False
         for event in requests or []:
             event_id = str(getattr(event, "event_id", "") or "")
-            remaining = self.remaining_event_symbols(event, progress)
+            remaining = self.due_event_symbols(event, progress, cursor_payload)
             if not event_symbols(event):
                 batches[event_id] = []
                 continue
@@ -307,6 +360,7 @@ class OntologyReasoningRunner:
         refreshed_research_runs = self.mark_research_runs_refreshed(requests)
         self.publish(completed)
         progress_result = self.mark_requests_processed(requests, symbol_batches)
+        self.mark_symbols_reasoned(symbols)
         return {
             "status": "ok",
             "processedCount": len(trigger_event_ids),
@@ -320,6 +374,21 @@ class OntologyReasoningRunner:
             "ruleCandidateResult": rule_candidate_result,
             "refreshedResearchRunIds": refreshed_research_runs,
         }
+
+    def mark_symbols_reasoned(self, symbols: Iterable[str]) -> None:
+        clean_symbols = [str(symbol or "").upper().strip() for symbol in symbols or [] if str(symbol or "").strip()]
+        if not clean_symbols or not hasattr(self.cursor_store, "load") or not hasattr(self.cursor_store, "save"):
+            return
+        payload = self.cursor_payload()
+        last_by_symbol = self.last_reasoned_at_by_symbol(payload)
+        now = self.now_provider()
+        if now.tzinfo is None:
+            now = now.replace(tzinfo=timezone.utc)
+        stamp = now.astimezone(timezone.utc).isoformat().replace("+00:00", "Z")
+        for symbol in clean_symbols:
+            last_by_symbol[symbol] = stamp
+        payload["lastReasonedAtBySymbol"] = dict(sorted(last_by_symbol.items()))
+        self.save_cursor_payload(payload)
 
     def mark_research_runs_refreshed(self, requests: Iterable[object]) -> List[str]:
         if not self.research_store or not hasattr(self.research_store, "mark_reasoning_refreshed"):

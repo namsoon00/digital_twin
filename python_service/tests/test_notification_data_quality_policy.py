@@ -1,5 +1,6 @@
 import sys
 import unittest
+from datetime import datetime, timezone
 from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import patch
@@ -13,6 +14,10 @@ from digital_twin.domain.notification_rules import (
     default_notification_rule,
     evaluate_notification_rule,
     notification_state_group_key,
+)
+from digital_twin.domain.data_freshness import (
+    evaluate_notification_data_freshness,
+    sanitize_notification_context_for_freshness,
 )
 from digital_twin.application.notification_ai_gate_message import (
     notification_cooldown_release_summary,
@@ -31,6 +36,119 @@ from digital_twin.infrastructure.notifications import NotificationResult, Telegr
 
 
 class NotificationDataQualityPolicyTests(unittest.TestCase):
+    def test_dispatch_freshness_recomputes_age_instead_of_trusting_stored_status(self):
+        decision = evaluate_notification_data_freshness(
+            {
+                "messageType": INVESTMENT_INSIGHT,
+                "dataFreshness": {
+                    "source": "KIS price",
+                    "stage": "price",
+                    "status": "fresh",
+                    "sourceAsOf": "2026-07-20T00:00:00Z",
+                    "ageMinutes": 0,
+                    "maxAgeMinutes": 3,
+                },
+            },
+            settings={"dataFreshnessEnabled": "1"},
+            now=datetime(2026, 7, 20, 0, 4, tzinfo=timezone.utc),
+        )
+
+        self.assertFalse(decision.should_send)
+        self.assertEqual("stale", decision.status)
+        self.assertEqual(4, decision.age_minutes)
+
+    def test_ignored_stale_kis_values_are_removed_before_ai_enrichment(self):
+        context = {
+            "messageType": INVESTMENT_INSIGHT,
+            "rawLines": "현재가: 100원\n외국인: 순매도 10주\n체결강도: 88",
+            "ontologyRelationContext": {
+                "facts": {
+                    "currentPrice": 100,
+                    "foreignNetVolume": -10,
+                    "tradeStrength": 88,
+                    "marketSignalCoverage": {
+                        "price": {"status": "available"},
+                        "investor": {"status": "stale"},
+                    },
+                },
+                "decision": {"scoreBreakdown": {"appliedFactFields": ["currentPrice"]}},
+            },
+            "dataFreshness": {
+                "sources": [
+                    {"source": "KIS price", "stage": "price", "status": "fresh", "sourceAsOf": "2026-07-20T00:00:00Z", "maxAgeMinutes": 3},
+                    {"source": "KIS investor", "stage": "investor", "status": "stale", "sourceAsOf": "2026-07-19T23:50:00Z", "maxAgeMinutes": 5},
+                    {"source": "KIS ccnl", "stage": "ccnl", "status": "stale", "sourceAsOf": "2026-07-19T23:50:00Z", "maxAgeMinutes": 2},
+                ],
+            },
+        }
+        decision = evaluate_notification_data_freshness(
+            context,
+            settings={"dataFreshnessEnabled": "1"},
+            now=datetime(2026, 7, 20, 0, 1, tzinfo=timezone.utc),
+        )
+
+        cleaned = sanitize_notification_context_for_freshness(
+            context,
+            decision,
+            now=datetime(2026, 7, 20, 0, 1, tzinfo=timezone.utc),
+        )
+
+        facts = cleaned["ontologyRelationContext"]["facts"]
+        self.assertTrue(decision.should_send)
+        self.assertEqual(["ccnl", "investor"], cleaned["dataFreshnessExcludedStages"])
+        self.assertEqual(100, facts["currentPrice"])
+        self.assertNotIn("foreignNetVolume", facts)
+        self.assertNotIn("tradeStrength", facts)
+        self.assertNotIn("외국인", cleaned["rawLines"])
+        self.assertNotIn("체결강도", cleaned["rawLines"])
+        self.assertEqual("stale-at-dispatch", facts["marketSignalCoverage"]["investor"]["status"])
+
+    def test_notification_runner_suppresses_job_that_expired_while_waiting(self):
+        job = NotificationJob.create(
+            "오래된 투자 알림",
+            account_id="main",
+            message_type=INVESTMENT_INSIGHT,
+            context={
+                "messageType": INVESTMENT_INSIGHT,
+                "dataFreshness": {
+                    "source": "KIS price",
+                    "stage": "price",
+                    "status": "fresh",
+                    "sourceAsOf": "2026-07-20T00:00:00Z",
+                    "maxAgeMinutes": 3,
+                },
+            },
+        )
+
+        class Queue:
+            def pending(self, limit=10):
+                return [job] if job.status == "pending" else []
+
+            def mark_processing(self, target):
+                target.status = "processing"
+
+            def mark_suppressed(self, target, reason):
+                target.status = "suppressed"
+                target.last_error = reason
+
+            def mark_failed(self, target, reason):
+                target.status = "failed"
+                target.last_error = reason
+
+        sent = []
+        runner = NotificationQueueRunner(
+            Queue(),
+            SimpleNamespace(load_all=lambda: []),
+            lambda _account: SimpleNamespace(send=lambda message: sent.append(message)),
+            settings={"dataFreshnessEnabled": "1"},
+            now_provider=lambda: datetime(2026, 7, 20, 0, 4, tzinfo=timezone.utc),
+        )
+
+        self.assertEqual(1, runner.run_once())
+        self.assertEqual([], sent)
+        self.assertEqual("suppressed", job.status)
+        self.assertIn("AI 판단 전", job.last_error)
+
     def test_operational_delivery_types_are_separate_from_investment_messages(self):
         self.assertTrue(is_operations_delivery_message_type(WORK_HANDOFF))
         self.assertTrue(is_operations_delivery_message_type("ontologyInferenceMissing"))

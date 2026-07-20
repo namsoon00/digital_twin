@@ -1,7 +1,7 @@
 from datetime import datetime, timedelta, timezone
 from typing import Dict, List
 
-from ..domain.data_freshness import evaluate_notification_data_freshness
+from ..domain.data_freshness import evaluate_notification_data_freshness, sanitize_notification_context_for_freshness
 from ..domain.message_types import INVESTMENT_INSIGHT, NEWS_DIGEST, OPERATOR_REASONING_REPORT
 from ..domain.notification_rules import (
     DEFAULT_NOTIFICATION_RULES,
@@ -367,6 +367,7 @@ class MySQLNotificationJobStore(MySQLOperationalConnection):
             context["honeyStateGroupKey"] = state_group_key
         freshness_decision = evaluate_notification_data_freshness(context, self.runtime_settings)
         context.update(freshness_decision.to_context())
+        context = sanitize_notification_context_for_freshness(context, freshness_decision)
         job.context = context
         if decision.should_send and not freshness_decision.should_send:
             job.status = "suppressed"

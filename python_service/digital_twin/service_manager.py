@@ -134,6 +134,7 @@ def typedb_worker_spec(settings: Dict[str, object]) -> Dict[str, object]:
         "retentionHours": str((settings or {}).get("typedbDataRetentionHours") or "24"),
         "maxSizeMb": str((settings or {}).get("typedbDataMaxSizeMb") or "2048"),
         "autoResetEnabled": str((settings or {}).get("typedbAutoResetEnabled") or "1"),
+        "ageResetEnabled": str((settings or {}).get("typedbAgeResetEnabled") or "0"),
         "healthAddress": address,
         "startupWaitSeconds": str((settings or {}).get("typedbStartupWaitSeconds") or "60"),
         "seedOnStart": str((settings or {}).get("typedbSeedOnStart") or os.environ.get("TYPEDB_SEED_ON_START") or "1"),
@@ -269,6 +270,7 @@ def typedb_data_age_hours(path: Path, marker: Dict[str, object]) -> float:
 def typedb_reset_needed(spec: Dict[str, object]) -> Dict[str, object]:
     data_path = Path(spec.get("dataPath") or "")
     enabled = truthy(spec.get("autoResetEnabled"))
+    age_reset_enabled = truthy(spec.get("ageResetEnabled")) if spec.get("ageResetEnabled") not in (None, "") else False
     retention_hours = int_value(spec.get("retentionHours"), 24, 1)
     max_size_mb = int_value(spec.get("maxSizeMb"), 2048, 1)
     size_bytes = directory_size_bytes(data_path)
@@ -279,7 +281,7 @@ def typedb_reset_needed(spec: Dict[str, object]) -> Dict[str, object]:
         return {"needed": False, "reason": "disabled", "sizeBytes": size_bytes, "ageHours": age_hours}
     if not data_path.exists() or size_bytes <= 0:
         return {"needed": False, "reason": "empty", "sizeBytes": size_bytes, "ageHours": age_hours}
-    if age_hours >= retention_hours:
+    if age_reset_enabled and age_hours >= retention_hours:
         reasons.append("age " + str(round(age_hours, 2)) + "h >= " + str(retention_hours) + "h")
     if size_bytes >= max_size_mb * 1024 * 1024:
         reasons.append("size " + str(round(size_bytes / 1024 / 1024, 1)) + "MB >= " + str(max_size_mb) + "MB")
@@ -289,6 +291,7 @@ def typedb_reset_needed(spec: Dict[str, object]) -> Dict[str, object]:
         "sizeBytes": size_bytes,
         "ageHours": age_hours,
         "retentionHours": retention_hours,
+        "ageResetEnabled": age_reset_enabled,
         "maxSizeMb": max_size_mb,
     }
 

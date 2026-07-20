@@ -54,7 +54,7 @@ class DataPipelineHealthTests(unittest.TestCase):
             }],
         }, previous=previous, blocked_warning_streak=3, now=datetime(2026, 7, 20, 1, 0, tzinfo=timezone.utc))
         self.assertEqual(health.state, "degraded")
-        self.assertEqual(health.reason_code, "candidates-rejected")
+        self.assertEqual(health.reason_code, "article-body-unavailable")
         self.assertEqual(health.provider_candidate_count, 5)
         self.assertTrue(health.alert_required)
 
@@ -77,7 +77,7 @@ class DataPipelineHealthTests(unittest.TestCase):
             "targetCount": 1,
             "fetchedCount": 0,
             "savedCount": 0,
-            "statuses": [{"source": "yahoo", "ok": True, "count": 0, "candidateCount": 1}],
+            "statuses": [{"source": "yahoo", "ok": True, "count": 0, "candidateCount": 1, "bodyMissingCount": 1}],
         }
         first, _ = service.record_news_collection(dict(result))
         second, event = service.record_news_collection(dict(result))
@@ -85,6 +85,26 @@ class DataPipelineHealthTests(unittest.TestCase):
         self.assertEqual(second.state, "degraded")
         self.assertEqual(second.consecutive_zero_runs, 2)
         self.assertIsNotNone(event)
+
+    def test_relevance_filtering_only_remains_idle_after_repeated_empty_cycles(self):
+        health = evaluate_news_collection_health({
+            "status": "ok",
+            "targetCount": 3,
+            "fetchedCount": 0,
+            "savedCount": 0,
+            "statuses": [{
+                "source": "yahoo_search",
+                "ok": True,
+                "count": 0,
+                "candidateCount": 11,
+                "preliminaryRejectedCount": 11,
+                "bodyMissingCount": 0,
+            }],
+        }, previous={"state": "idle", "consecutiveZeroRuns": 50}, blocked_warning_streak=3)
+
+        self.assertEqual("idle", health.state)
+        self.assertEqual("candidates-filtered", health.reason_code)
+        self.assertFalse(health.alert_required)
 
 
 if __name__ == "__main__":

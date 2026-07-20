@@ -1,5 +1,6 @@
 import sys
 import unittest
+from datetime import datetime, timezone
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -16,6 +17,84 @@ from digital_twin.infrastructure.event_bus import EventBus
 
 
 class MaterialityGateTests(unittest.TestCase):
+    def test_reasoning_worker_coalesces_recent_symbol_events_and_releases_them_when_due(self):
+        request = ontology_reasoning_requested_event(
+            DomainEvent(name="market_data.collected", aggregate_id="market:AAPL", payload={}),
+            "market-data-update",
+            ["AAPL"],
+            changed_count=1,
+            fact_types=["MarketQuote"],
+        )
+
+        class Reader:
+            def recent_events(self, **_kwargs):
+                return [request]
+
+        class Cursor:
+            def __init__(self):
+                self.payload = {"lastReasonedAtBySymbol": {"AAPL": "2026-07-20T00:00:00Z"}}
+
+            def processed_event_ids(self):
+                return []
+
+            def load(self):
+                return dict(self.payload)
+
+            def save(self, payload):
+                self.payload = dict(payload)
+
+        cursor = Cursor()
+        now = {"value": datetime(2026, 7, 20, 0, 2, tzinfo=timezone.utc)}
+        runner = OntologyReasoningRunner(
+            Reader(),
+            cursor,
+            monitor_runner_factory=lambda: None,
+            settings={
+                "ontologyReasoningMinIntervalSeconds": "180",
+                "ontologyReasoningUrgentMinIntervalSeconds": "60",
+            },
+            now_provider=lambda: now["value"],
+        )
+
+        self.assertEqual([], runner.pending_requests())
+        now["value"] = datetime(2026, 7, 20, 0, 3, tzinfo=timezone.utc)
+        self.assertEqual([request.event_id], [event.event_id for event in runner.pending_requests()])
+
+    def test_reasoning_worker_uses_shorter_interval_for_high_materiality_events(self):
+        request = ontology_reasoning_requested_event(
+            DomainEvent(name="market_data.collected", aggregate_id="market:AAPL", payload={}),
+            "market-data-update",
+            ["AAPL"],
+            changed_count=1,
+            fact_types=["MarketQuote"],
+            materiality_assessments=[{"score": 90}],
+        )
+
+        class Reader:
+            def recent_events(self, **_kwargs):
+                return [request]
+
+        class Cursor:
+            def processed_event_ids(self):
+                return []
+
+            def load(self):
+                return {"lastReasonedAtBySymbol": {"AAPL": "2026-07-20T00:00:00Z"}}
+
+        runner = OntologyReasoningRunner(
+            Reader(),
+            Cursor(),
+            monitor_runner_factory=lambda: None,
+            settings={
+                "ontologyReasoningMinIntervalSeconds": "180",
+                "ontologyReasoningUrgentMinIntervalSeconds": "60",
+                "ontologyReasoningUrgentMaterialityScore": "85",
+            },
+            now_provider=lambda: datetime(2026, 7, 20, 0, 1, tzinfo=timezone.utc),
+        )
+
+        self.assertEqual([request.event_id], [event.event_id for event in runner.pending_requests()])
+
     def test_reasoning_worker_marks_async_research_run_refreshed(self):
         class ResearchStore:
             def __init__(self):

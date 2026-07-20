@@ -4,6 +4,7 @@ from typing import Callable, Dict, List
 from zoneinfo import ZoneInfo
 
 from ..domain.disclosure_analysis import local_disclosure_analysis
+from ..domain.data_freshness import evaluate_notification_data_freshness, sanitize_notification_context_for_freshness
 from ..domain.investment_brain import decision_episode_from_context
 from ..domain.market_data import number
 from ..domain.message_types import INVESTMENT_INSIGHT, OPERATOR_REASONING_REPORT, is_operations_delivery_message_type
@@ -323,6 +324,7 @@ class NotificationQueueRunner:
         context_enricher: Callable = None,
         now_provider: Callable = None,
         operator_reports_enabled: bool = False,
+        settings: Dict[str, object] = None,
     ):
         self.queue = queue
         self.account_repository = account_repository
@@ -335,6 +337,8 @@ class NotificationQueueRunner:
         self.context_enricher = context_enricher
         self.now_provider = now_provider or (lambda: datetime.now(ZoneInfo("UTC")))
         self.operator_reports_enabled = bool(operator_reports_enabled)
+        self.dispatch_freshness_enabled = settings is not None
+        self.settings = dict(settings or {})
         self.last_run_details = []
 
     def account_map(self) -> Dict[str, object]:
@@ -371,10 +375,16 @@ class NotificationQueueRunner:
                 continue
             if not self.dry_run and not use_claim:
                 self.queue.mark_processing(job)
+            if not self.apply_dispatch_freshness_gate(job, "AI 판단 전"):
+                processed += 1
+                continue
             message = self.render(job)
             if not message:
                 self.queue.mark_failed(job, "empty rendered notification text")
                 self.last_run_details.append(self.job_detail(job, "failed", "empty rendered text"))
+                continue
+            if not self.apply_dispatch_freshness_gate(job, "발송 직전"):
+                processed += 1
                 continue
             if self.dry_run:
                 print(message)
@@ -393,6 +403,27 @@ class NotificationQueueRunner:
             if self.send_gap_seconds and processed < len(jobs):
                 time.sleep(self.send_gap_seconds)
         return processed
+
+    def apply_dispatch_freshness_gate(self, job: NotificationJob, stage: str) -> bool:
+        if not self.dispatch_freshness_enabled:
+            return True
+        now = self.now_provider()
+        if not isinstance(now, datetime):
+            now = datetime.now(ZoneInfo("UTC"))
+        decision = evaluate_notification_data_freshness(job.context or {}, self.settings, now=now)
+        context = dict(job.context or {})
+        context.update(decision.to_context())
+        job.context = sanitize_notification_context_for_freshness(context, decision, now=now)
+        if decision.should_send:
+            return True
+        reason = stage + " 데이터 신선도 기준 미통과: " + str(decision.reason or decision.status)
+        job.context["honeySuppressionReason"] = "stale_data_at_dispatch"
+        if hasattr(self.queue, "mark_suppressed"):
+            self.queue.mark_suppressed(job, reason)
+        else:
+            self.queue.mark_failed(job, reason)
+        self.last_run_details.append(self.job_detail(job, "suppressed", reason[:160]))
+        return False
 
     def job_detail(self, job: NotificationJob, status: str, reason: str = "") -> str:
         context = job.context if isinstance(job.context, dict) else {}

@@ -22,6 +22,7 @@ from digital_twin.infrastructure.typedb_ontology import (
     NullTypeDBOntologyGraphRepository,
     TypeDBOperationTimeout,
     TypeDBOntologyGraphRepository,
+    node_boxes,
     relation_row_id,
     typedb_repository_from_settings,
     typedb_inferencebox_graph,
@@ -847,6 +848,7 @@ class TypeDBOntologyRepositoryTests(unittest.TestCase):
         self.assertEqual("typedb", workers["typedb"]["role"])
         self.assertEqual("24", workers["typedb"]["retentionHours"])
         self.assertEqual("2048", workers["typedb"]["maxSizeMb"])
+        self.assertEqual("0", workers["typedb"]["ageResetEnabled"])
         self.assertEqual("127.0.0.1:1729", workers["typedb"]["healthAddress"])
         self.assertEqual("60", workers["typedb"]["startupWaitSeconds"])
         self.assertEqual("1", workers["typedb"]["seedOnStart"])
@@ -995,6 +997,28 @@ class TypeDBOntologyRepositoryTests(unittest.TestCase):
             self.assertEqual("skipped", result["status"])
             self.assertTrue(data_path.exists())
 
+    def test_typedb_retention_does_not_delete_active_store_for_age_by_default(self):
+        with tempfile.TemporaryDirectory() as temp:
+            data_path = Path(temp) / "typedb-data"
+            data_path.mkdir(parents=True)
+            (data_path / "active").write_text("ok", encoding="utf-8")
+            spec = {
+                "role": "typedb",
+                "dataPath": data_path,
+                "autoResetEnabled": "1",
+                "ageResetEnabled": "0",
+                "retentionHours": "1",
+                "maxSizeMb": "1024",
+            }
+
+            with patch.object(service_manager, "data_dir", return_value=Path(temp)), \
+                    patch.object(service_manager, "typedb_data_age_hours", return_value=72.0):
+                result = service_manager.run_typedb_data_retention(spec)
+
+            self.assertEqual("skipped", result["status"])
+            self.assertFalse(result["ageResetEnabled"])
+            self.assertTrue(data_path.exists())
+
     def test_graph_store_contract_is_shared_by_all_adapters(self):
         repositories = [
             NullTypeDBOntologyGraphRepository(),
@@ -1106,6 +1130,9 @@ class TypeDBOntologyRepositoryTests(unittest.TestCase):
         self.assertEqual(result["expectedRuleBoxRuleCount"], result["activeRuleBoxRuleCount"])
         self.assertEqual(result["expectedRuleBoxShortHash"], result["activeRuleBoxShortHash"])
         self.assertEqual(1, repository.inference_clear_count)
+        saved_boxes = {box for graph in repository.saved_graphs for box in node_boxes(graph)}
+        self.assertNotIn("ABox", saved_boxes)
+        self.assertNotIn("InferenceBox", saved_boxes)
 
     def test_typedb_rule_condition_rows_keep_node_kind_separate_from_condition_kind(self):
         repository = TypeDBOntologyGraphRepository("127.0.0.1:1729")

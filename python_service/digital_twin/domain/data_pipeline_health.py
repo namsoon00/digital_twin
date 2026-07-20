@@ -27,6 +27,7 @@ def provider_health_rows(statuses: Iterable[Dict[str, object]]) -> List[Dict[str
             "itemCount": 0,
             "candidateCount": 0,
             "bodyMissingCount": 0,
+            "sourceBlockedCount": 0,
             "relevanceRejectedCount": 0,
             "messages": [],
         })
@@ -41,6 +42,7 @@ def provider_health_rows(statuses: Iterable[Dict[str, object]]) -> List[Dict[str
         row["itemCount"] += integer(status.get("count"))
         row["candidateCount"] += integer(status.get("candidateCount"))
         row["bodyMissingCount"] += integer(status.get("bodyMissingCount"))
+        row["sourceBlockedCount"] += integer(status.get("sourceBlockedCount"))
         row["relevanceRejectedCount"] += integer(status.get("preliminaryRejectedCount"))
         row["relevanceRejectedCount"] += integer(status.get("finalRelevanceRejectedCount"))
     return list(grouped.values())
@@ -121,6 +123,10 @@ def evaluate_news_collection_health(
     provider_failures = sum(integer(row.get("failureCount")) for row in providers)
     provider_successes = sum(integer(row.get("successCount")) for row in providers)
     provider_candidates = sum(integer(row.get("candidateCount")) for row in providers)
+    body_missing_count = sum(integer(row.get("bodyMissingCount")) for row in providers)
+    source_blocked_count = sum(integer(row.get("sourceBlockedCount")) for row in providers)
+    body_failure_count = max(body_missing_count, source_blocked_count)
+    body_failure_ratio = (body_failure_count / provider_candidates) if provider_candidates else 0.0
     baseline_at = last_non_zero_at or first_observed_at
     zero_age_minutes = elapsed_minutes(baseline_at, current)
 
@@ -134,10 +140,17 @@ def evaluate_news_collection_health(
         state, reason_code, reason = "degraded", "partial-provider-failure", "일부 뉴스 공급자 요청이 실패해 나머지 공급자 데이터만 사용합니다."
     elif fetched_count:
         state, reason_code, reason = "healthy", "fresh-evidence-collected", "신선도와 품질 기준을 통과한 뉴스 근거를 수집했습니다."
-    elif provider_candidates and zero_runs >= max(1, int(blocked_warning_streak or 1)):
-        state, reason_code, reason = "degraded", "candidates-rejected", "공급자는 후보를 반환했지만 본문·관련성·신선도 기준을 통과한 뉴스가 연속으로 없었습니다."
+    elif (
+        provider_candidates
+        and body_failure_count
+        and body_failure_ratio >= 0.5
+        and zero_runs >= max(1, int(blocked_warning_streak or 1))
+    ):
+        state, reason_code, reason = "degraded", "article-body-unavailable", "뉴스 후보의 절반 이상에서 원문 본문을 확보하지 못하는 상태가 반복되고 있습니다."
     elif zero_age_minutes >= max(1, int(stale_after_minutes or 1)):
         state, reason_code, reason = "stale", "coverage-stale", "품질 기준을 통과한 최신 뉴스가 허용된 공백 시간 동안 수집되지 않았습니다."
+    elif provider_candidates:
+        state, reason_code, reason = "idle", "candidates-filtered", "공급자는 정상이며 후보가 종목 관련성·본문·신선도 품질 기준에서 제외되었습니다."
     else:
         state, reason_code, reason = "idle", "no-new-evidence", "공급자 장애는 없으며 현재 새로 반영할 투자 관련 뉴스가 없습니다."
 

@@ -1,3 +1,4 @@
+import copy
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from typing import Dict, Iterable, List, Optional, Set
@@ -100,6 +101,19 @@ KIS_STAGE_EVIDENCE_FIELDS = {
         "institutionNetVolume",
         "institutionSellVolume",
     },
+}
+
+KIS_STAGE_LINE_MARKERS = {
+    "ccnl": ("체결강도", "매수 체결", "매도 체결", "매수체결", "매도체결"),
+    "orderbook": ("호가", "잔량", "호가불균형"),
+    "investor": ("외국인", "기관", "개인", "투자자별 수급", "순매수", "순매도"),
+}
+
+LINE_CONTAINER_KEYS = {
+    "rawLines",
+    "lines",
+    "referenceDataLines",
+    "telegramDataLines",
 }
 
 
@@ -408,6 +422,124 @@ def freshness_leaf_records(records: Iterable[Dict[str, object]]) -> List[Dict[st
     return leaves
 
 
+def refreshed_freshness_record(record: Dict[str, object], now=None) -> Dict[str, object]:
+    item = dict(record or {})
+    original_status = str(item.get("status") or "").strip()
+    source_as_of = item.get("sourceAsOf")
+    source_fetched_at = item.get("sourceFetchedAt")
+    require_source_as_of = bool(item.get("sourceAsOfRequired")) or bool(item.get("stage"))
+    timestamp = source_as_of or ("" if require_source_as_of else source_fetched_at)
+    age = age_minutes(timestamp, now=now)
+    try:
+        max_age = max(1, int(float(item.get("maxAgeMinutes") or 0)))
+    except (TypeError, ValueError):
+        max_age = 1
+    evidence_disabled = item.get("judgementEvidenceUsable") is False
+    if evidence_disabled:
+        item["status"] = "stale"
+        item["reason"] = str(item.get("staleReason") or item.get("latencyReason") or "판단 근거 사용 불가")
+    elif original_status == "stale" and age is None:
+        item["status"] = "stale"
+    elif age is None:
+        item["status"] = "unknown"
+        item["reason"] = "기준시각 없음"
+    elif age <= max_age:
+        item["status"] = "fresh"
+        item["reason"] = "발송 직전 신선도 기준 통과"
+    else:
+        item["status"] = "stale"
+        item["reason"] = "발송 직전 기준 " + str(max_age) + "분 초과"
+    item["ageMinutes"] = age
+    item["maxAgeMinutes"] = max_age
+    item["checkedAt"] = utc_iso(now)
+    return item
+
+
+def ignored_kis_stages(decision: DataFreshnessDecision) -> Set[str]:
+    stages: Set[str] = set()
+    for source in decision.ignored_sources or []:
+        text = str(source or "").strip()
+        if text.startswith("KIS "):
+            stage = text[4:].strip()
+            if stage in KIS_STAGE_EVIDENCE_FIELDS:
+                stages.add(stage)
+    return stages
+
+
+def _filter_stale_lines(value: object, markers: Iterable[str]):
+    marker_list = tuple(str(marker or "") for marker in markers if str(marker or ""))
+    if isinstance(value, list):
+        return [item for item in value if not any(marker in str(item or "") for marker in marker_list)]
+    if isinstance(value, str):
+        return "\n".join(
+            line
+            for line in value.splitlines()
+            if not any(marker in line for marker in marker_list)
+        )
+    return value
+
+
+def _sanitize_stale_stage_values(value: object, excluded_fields: Set[str], markers: Iterable[str], parent_key: str = ""):
+    if isinstance(value, dict):
+        cleaned = {}
+        for key, child in value.items():
+            if str(key) in excluded_fields:
+                continue
+            if str(key) in LINE_CONTAINER_KEYS:
+                cleaned[key] = _filter_stale_lines(child, markers)
+            elif str(key) == "appliedFactFields" and isinstance(child, list):
+                cleaned[key] = [item for item in child if str(item or "") not in excluded_fields]
+            else:
+                cleaned[key] = _sanitize_stale_stage_values(child, excluded_fields, markers, str(key))
+        return cleaned
+    if isinstance(value, list):
+        return [_sanitize_stale_stage_values(item, excluded_fields, markers, parent_key) for item in value]
+    if parent_key in LINE_CONTAINER_KEYS:
+        return _filter_stale_lines(value, markers)
+    return value
+
+
+def _mark_ignored_coverage(value: object, stages: Set[str], checked_at: str) -> None:
+    if isinstance(value, dict):
+        coverage = value.get("marketSignalCoverage") or value.get("market_signal_coverage")
+        if isinstance(coverage, dict):
+            for stage in stages:
+                stage_payload = coverage.get(stage)
+                if not isinstance(stage_payload, dict):
+                    continue
+                stage_payload.update({
+                    "status": "stale-at-dispatch",
+                    "judgementEvidenceUsable": False,
+                    "aiUsableAsStrongEvidence": False,
+                    "staleReason": "발송 직전 신선도 기준을 넘겨 AI 판단 입력에서 제외했습니다.",
+                    "freshnessCheckedAt": checked_at,
+                })
+        for child in value.values():
+            _mark_ignored_coverage(child, stages, checked_at)
+    elif isinstance(value, list):
+        for child in value:
+            _mark_ignored_coverage(child, stages, checked_at)
+
+
+def sanitize_notification_context_for_freshness(
+    context: Dict[str, object],
+    decision: DataFreshnessDecision,
+    now=None,
+) -> Dict[str, object]:
+    stages = ignored_kis_stages(decision)
+    if not stages:
+        return dict(context or {})
+    excluded_fields = set().union(*(KIS_STAGE_EVIDENCE_FIELDS.get(stage, set()) for stage in stages))
+    markers = tuple(marker for stage in stages for marker in KIS_STAGE_LINE_MARKERS.get(stage, ()))
+    cleaned = _sanitize_stale_stage_values(copy.deepcopy(context or {}), excluded_fields, markers)
+    checked_at = utc_iso(now)
+    _mark_ignored_coverage(cleaned, stages, checked_at)
+    cleaned["dataFreshnessExcludedStages"] = sorted(stages)
+    cleaned["dataFreshnessExcludedFields"] = sorted(excluded_fields)
+    cleaned["dataFreshnessSanitizedAt"] = checked_at
+    return cleaned
+
+
 def selected_inference_fact_fields(context: Dict[str, object]) -> List[str]:
     relation_context = context.get("ontologyRelationContext")
     if not isinstance(relation_context, dict):
@@ -454,7 +586,10 @@ def evaluate_notification_data_freshness(context: Dict[str, object], settings: D
             reason="신선도 메타데이터 없음",
             stale_sources=["unknown"],
         )
-    records = freshness_leaf_records(data.get("sources") or [data])
+    records = [
+        refreshed_freshness_record(item, now=now)
+        for item in freshness_leaf_records(data.get("sources") or [data])
+    ]
     required_kis_stages = required_kis_stages_for_notification(context)
     ignored_records = []
     if required_kis_stages is not None:

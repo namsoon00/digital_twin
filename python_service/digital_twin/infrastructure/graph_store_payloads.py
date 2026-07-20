@@ -255,6 +255,15 @@ PROMOTED_TEXT_ENTITY_FIELDS = [
     "flowPattern",
     "eventClusterType",
     "trendEpisodeType",
+    "registryVersion",
+    "termId",
+    "termCategory",
+    "termStatus",
+    "termVersion",
+    "preferredLabel",
+    "deliveryLevel",
+    "deliveryLevelLabel",
+    "renderedLabel",
 ]
 
 def condition_target_filter_values(condition: Dict[str, object], key: str) -> List[str]:

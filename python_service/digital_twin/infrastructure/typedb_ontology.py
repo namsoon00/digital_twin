@@ -12,6 +12,7 @@ from contextlib import contextmanager
 from typing import Dict, Iterable, List, Tuple
 
 from ..domain.ontology_contracts import OntologyEntity, OntologyEvidence, OntologyRelation, PortfolioOntology
+from ..domain.investment_ubiquitous_language import investment_language_registry
 from ..domain.ontology_inference_materializer import materialize_rule_inference
 from ..domain.ontology_rulebox_catalog import default_graph_inference_rules
 from ..domain.ontology_rulebox_contracts import GRAPH_REASONER_VERSION, GraphInferenceRule
@@ -446,6 +447,15 @@ TYPEDB_PROMOTED_TEXT_ATTRIBUTES = {
     "flowPattern": "ontology-flow-pattern",
     "eventClusterType": "ontology-event-cluster-type",
     "trendEpisodeType": "ontology-trend-episode-type",
+    "registryVersion": "ontology-language-registry-version",
+    "termId": "ontology-language-term-id",
+    "termCategory": "ontology-language-term-category",
+    "termStatus": "ontology-language-term-status",
+    "termVersion": "ontology-language-term-version",
+    "preferredLabel": "ontology-language-preferred-label",
+    "deliveryLevel": "ontology-language-delivery-level",
+    "deliveryLevelLabel": "ontology-language-delivery-level-label",
+    "renderedLabel": "ontology-language-rendered-label",
 }
 TYPEDB_FUNCTION_SUBJECT_FIELDS = {
     "source",
@@ -576,7 +586,7 @@ class NullTypeDBOntologyGraphRepository:
         }
 
     def seed_ontology(self, payload: Dict[str, object] = None) -> Dict[str, object]:
-        graph = ontology_seed_graph()
+        graph = ontology_seed_graph(language_registry=investment_language_registry(runtime_settings()))
         result = self.save_graph(graph)
         result.update({
             "seeded": False,
@@ -889,10 +899,12 @@ class TypeDBOntologyGraphRepository(GraphStoreOntologyRowMapperMixin):
             "tboxEntityCount": box_entity_counts.get("TBox", 0),
             "aboxEntityCount": box_entity_counts.get("ABox", 0),
             "ruleBoxEntityCount": box_entity_counts.get("RuleBox", 0),
+            "languageGovernanceEntityCount": box_entity_counts.get("LanguageGovernance", 0),
             "inferenceBoxEntityCount": box_entity_counts.get("InferenceBox", 0),
             "tboxRelationCount": box_relation_counts.get("TBox", 0),
             "aboxRelationCount": box_relation_counts.get("ABox", 0),
             "ruleBoxRelationCount": box_relation_counts.get("RuleBox", 0),
+            "languageGovernanceRelationCount": box_relation_counts.get("LanguageGovernance", 0),
             "inferenceBoxRelationCount": box_relation_counts.get("InferenceBox", 0),
             "evidenceCount": len(graph.evidence),
             "reasoningCardCount": len(getattr(graph, "reasoning_cards", []) or []),
@@ -1691,6 +1703,15 @@ attribute ontology-price-path-pattern, value string;
 attribute ontology-flow-pattern, value string;
 attribute ontology-event-cluster-type, value string;
 attribute ontology-trend-episode-type, value string;
+attribute ontology-language-registry-version, value string;
+attribute ontology-language-term-id, value string;
+attribute ontology-language-term-category, value string;
+attribute ontology-language-term-status, value string;
+attribute ontology-language-term-version, value string;
+attribute ontology-language-preferred-label, value string;
+attribute ontology-language-delivery-level, value string;
+attribute ontology-language-delivery-level-label, value string;
+attribute ontology-language-rendered-label, value string;
 
 entity ontology-node @abstract,
     owns ontology-id @key,
@@ -1870,6 +1891,15 @@ entity ontology-node @abstract,
     owns ontology-flow-pattern,
     owns ontology-event-cluster-type,
     owns ontology-trend-episode-type,
+    owns ontology-language-registry-version,
+    owns ontology-language-term-id,
+    owns ontology-language-term-category,
+    owns ontology-language-term-status,
+    owns ontology-language-term-version,
+    owns ontology-language-preferred-label,
+    owns ontology-language-delivery-level,
+    owns ontology-language-delivery-level-label,
+    owns ontology-language-rendered-label,
     plays ontology-assertion:source,
     plays ontology-assertion:target;
 
@@ -2219,7 +2249,10 @@ relation ontology-assertion,
         rules = list(rules)
         rules_payload = rulebox_rules_to_payload(rules)
         self._last_rules = rules
-        result = self.save_graph(ontology_seed_graph(rules))
+        result = self.save_graph(ontology_seed_graph(
+            rules,
+            language_registry=investment_language_registry(runtime_settings()),
+        ))
         result.update({
             "configured": True,
             "seeded": bool(result.get("saved")),
@@ -2339,7 +2372,11 @@ relation ontology-assertion,
             return {"configured": True, "saved": False, "status": "invalid-rulebox", "graphStore": "typedb", "reason": str(error)}
         self._last_rules = list(rules)
         self.clear_rulebox_snapshot_cache()
-        save_result = self.save_graph(rulebox_graph_from_rules(self._last_rules, include_tbox=False))
+        save_result = self.save_graph(rulebox_graph_from_rules(
+            self._last_rules,
+            include_tbox=False,
+            language_registry=investment_language_registry(runtime_settings()),
+        ))
         self.clear_rulebox_snapshot_cache()
         snapshot = self.rulebox_snapshot()
         snapshot.update({

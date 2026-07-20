@@ -353,11 +353,14 @@ def add_instrument_profile_concepts(
     position: Position,
     runtime_context: Dict[str, object] = None,
 ) -> None:
-    profile = instrument_profile_for_position(position, profile_settings_from_runtime(runtime_context))
+    language_settings = profile_settings_from_runtime(runtime_context)
+    account_context = runtime_context.get("account") if isinstance(runtime_context, dict) and isinstance(runtime_context.get("account"), dict) else {}
+    delivery_level = str(account_context.get("messageDeliveryLevel") or runtime_context.get("messageDeliveryLevel") or "beginner") if isinstance(runtime_context, dict) else "beginner"
+    profile = instrument_profile_for_position(position, language_settings)
     symbol = symbol_key(position)
-    archetype_labels = investment_archetype_labels(profile.archetypes)
-    intent_label = position_intent_label(profile.position_intent)
-    intent_description = position_intent_sentence(profile.position_intent)
+    archetype_labels = investment_archetype_labels(profile.archetypes, language_settings, delivery_level)
+    intent_label = position_intent_label(profile.position_intent, language_settings, delivery_level)
+    intent_description = position_intent_sentence(profile.position_intent, language_settings)
     profile_id = add_entity(graph, "instrument-profile", symbol, profile.label, {
         "tboxClass": "InstrumentProfile",
         "tboxClasses": profile_tbox_classes(profile),
@@ -396,7 +399,7 @@ def add_instrument_profile_concepts(
     add_relation(graph, profile_id, intent_id, "HAS_POSITION_INTENT", weight=1.0, properties={"source": "instrument-profile"})
 
     for archetype in profile.archetypes:
-        archetype_label = investment_archetype_label(archetype)
+        archetype_label = investment_archetype_label(archetype, language_settings, delivery_level)
         archetype_id = add_entity(graph, "investment-archetype", archetype, archetype_label, {
             "tboxClass": "InvestmentArchetype",
             "tboxClasses": ["InvestmentArchetype", archetype],

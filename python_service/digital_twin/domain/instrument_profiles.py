@@ -120,15 +120,15 @@ class InstrumentProfile:
     def avoid_averaging_down(self) -> bool:
         return bool(self.policies.get("avoidAveragingDown"))
 
-    def to_dict(self) -> Dict[str, object]:
+    def to_dict(self, language_settings: Dict[str, object] = None, delivery_level: str = "beginner") -> Dict[str, object]:
         return {
             "symbol": self.symbol,
             "label": self.label,
             "archetypes": list(self.archetypes),
-            "archetypeLabels": investment_archetype_labels(self.archetypes),
+            "archetypeLabels": investment_archetype_labels(self.archetypes, language_settings, delivery_level),
             "positionIntent": self.position_intent,
-            "positionIntentLabel": position_intent_label(self.position_intent),
-            "positionIntentDescription": position_intent_sentence(self.position_intent),
+            "positionIntentLabel": position_intent_label(self.position_intent, language_settings, delivery_level),
+            "positionIntentDescription": position_intent_sentence(self.position_intent, language_settings),
             "sensitivities": dict(self.sensitivities),
             "policies": dict(self.policies),
             "allowAddOnStrength": self.allow_add_on_strength,

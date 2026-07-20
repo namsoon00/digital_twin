@@ -1196,7 +1196,8 @@ def position_signal_facts(
         "expectsKrMicrostructureSignals": expects_kr_microstructure_signals(position.market, position.currency, symbol),
     }
     profile = instrument_profile_for_position(position, settings)
-    profile_payload = profile.to_dict()
+    delivery_level = str((account_context or {}).get("messageDeliveryLevel") or "beginner")
+    profile_payload = profile.to_dict(settings, delivery_level)
     facts.update({
         "instrumentProfile": profile_payload,
         "instrumentProfileLabel": profile.label,

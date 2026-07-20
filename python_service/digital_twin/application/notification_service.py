@@ -270,7 +270,7 @@ class NotificationAIValidatedGateEnricher:
                     context["investmentDecisionEpisode"] = episode.to_dict()
             except Exception as error:  # noqa: BLE001 - memory persistence must not block a time-sensitive alert.
                 response.validation_warnings.append("투자 판단 기억 저장 실패: " + str(error)[:140])
-        job.context = context_with_validated_ai_response(context, response)
+        job.context = context_with_validated_ai_response(context, response, self.settings)
 
 
 class NotificationHypothesisResearchEnricher:

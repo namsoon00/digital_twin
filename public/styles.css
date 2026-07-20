@@ -24290,6 +24290,267 @@ html[data-theme="dark"] .ontology-graph-expanded-toolbar .icon-button.danger {
   border-radius: var(--ds-radius-control);
 }
 
+.investment-language-panel {
+  min-width: 0;
+}
+
+.investment-language-summary {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  border-top: 1px solid var(--ds-card-border);
+  border-bottom: 1px solid var(--ds-card-border);
+}
+
+.investment-language-summary span {
+  display: grid;
+  gap: 4px;
+  min-width: 0;
+  padding: 14px 18px;
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 800;
+}
+
+.investment-language-summary span + span {
+  border-left: 1px solid var(--ds-card-border);
+}
+
+.investment-language-summary strong {
+  overflow-wrap: anywhere;
+  color: var(--ink);
+  font-size: 16px;
+}
+
+.investment-language-error {
+  margin: 14px 18px 0;
+}
+
+.investment-language-workspace {
+  display: grid;
+  grid-template-columns: minmax(240px, 0.3fr) minmax(0, 1fr);
+  min-height: 560px;
+}
+
+.investment-language-list {
+  min-width: 0;
+  padding: 16px;
+  border-right: 1px solid var(--ds-card-border);
+  background: color-mix(in srgb, var(--panel) 95%, var(--blue-soft) 5%);
+}
+
+.investment-language-search,
+.investment-language-form-grid label {
+  display: grid;
+  gap: 6px;
+  min-width: 0;
+}
+
+.investment-language-search > span,
+.investment-language-form-grid label > span {
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 900;
+}
+
+.investment-language-search input,
+.investment-language-form-grid input,
+.investment-language-form-grid select,
+.investment-language-form-grid textarea,
+.investment-language-preview textarea,
+.investment-language-preview select {
+  width: 100%;
+  min-width: 0;
+  border: 1px solid var(--ds-card-border);
+  border-radius: var(--ds-radius-control);
+  background: var(--panel);
+  color: var(--ink);
+  font: inherit;
+}
+
+.investment-language-search input,
+.investment-language-form-grid input,
+.investment-language-form-grid select,
+.investment-language-preview select {
+  min-height: 40px;
+  padding: 8px 10px;
+}
+
+.investment-language-form-grid textarea,
+.investment-language-preview textarea {
+  padding: 10px;
+  line-height: 1.55;
+  resize: vertical;
+}
+
+.investment-language-term-list {
+  display: grid;
+  gap: 4px;
+  max-height: 500px;
+  margin-top: 12px;
+  overflow: auto;
+}
+
+.investment-language-term-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 8px;
+  align-items: center;
+  width: 100%;
+  min-width: 0;
+  padding: 10px;
+  border: 1px solid transparent;
+  border-radius: var(--ds-radius-control);
+  background: transparent;
+  color: var(--ink);
+  text-align: left;
+  cursor: pointer;
+}
+
+.investment-language-term-row:hover,
+.investment-language-term-row.active {
+  border-color: var(--ds-card-border);
+  background: var(--blue-soft);
+}
+
+.investment-language-term-row > span {
+  display: grid;
+  gap: 3px;
+  min-width: 0;
+}
+
+.investment-language-term-row strong,
+.investment-language-term-row small {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.investment-language-term-row small {
+  color: var(--muted);
+  font-size: 11px;
+  font-weight: 800;
+}
+
+.investment-language-term-row .tone-chip {
+  font-style: normal;
+}
+
+.investment-language-editor {
+  min-width: 0;
+  padding: 18px;
+}
+
+.investment-language-editor-head,
+.investment-language-preview-head {
+  display: flex;
+  gap: 12px;
+  align-items: flex-start;
+  justify-content: space-between;
+}
+
+.investment-language-editor-head > div,
+.investment-language-preview-head > div:first-child {
+  display: grid;
+  gap: 4px;
+}
+
+.investment-language-editor-head strong,
+.investment-language-preview-head strong {
+  color: var(--ink);
+  font-size: 15px;
+}
+
+.investment-language-editor-head span,
+.investment-language-preview-head span {
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 750;
+}
+
+.investment-language-form-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 14px;
+  margin-top: 18px;
+}
+
+.investment-language-form-grid .wide {
+  grid-column: 1 / -1;
+}
+
+.investment-language-preview {
+  display: grid;
+  gap: 12px;
+  padding: 18px;
+  border-top: 1px solid var(--ds-card-border);
+}
+
+.investment-language-preview-head > div:last-child {
+  display: grid;
+  grid-template-columns: minmax(100px, 1fr) auto;
+  gap: 8px;
+}
+
+.investment-language-preview-result {
+  display: grid;
+  gap: 5px;
+  padding: 12px;
+  border-left: 3px solid var(--teal);
+  background: var(--green-soft);
+}
+
+.investment-language-preview-result span,
+.investment-language-preview-result small {
+  color: var(--muted);
+  font-size: 11px;
+  font-weight: 850;
+}
+
+.investment-language-preview-result p {
+  margin: 0;
+  color: var(--ink);
+  line-height: 1.55;
+}
+
+@media (max-width: 860px) {
+  .investment-language-summary {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .investment-language-summary span:nth-child(3) {
+    border-left: 0;
+    border-top: 1px solid var(--ds-card-border);
+  }
+
+  .investment-language-summary span:nth-child(4) {
+    border-top: 1px solid var(--ds-card-border);
+  }
+
+  .investment-language-workspace,
+  .investment-language-form-grid {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .investment-language-list {
+    border-right: 0;
+    border-bottom: 1px solid var(--ds-card-border);
+  }
+
+  .investment-language-term-list {
+    max-height: 280px;
+  }
+
+  .investment-language-form-grid .wide {
+    grid-column: auto;
+  }
+
+  .investment-language-editor-head,
+  .investment-language-preview-head {
+    align-items: stretch;
+    flex-direction: column;
+  }
+}
+
 @media (min-width: 1181px) {
   .strategy-view .investment-tab-workspace {
     height: auto;

@@ -1,6 +1,7 @@
 import re
-from typing import Dict
+from typing import Dict, Optional
 
+from ..domain.investment_ubiquitous_language import user_facing_investment_language
 from ..domain.notification_ai import active_investment_opinion_value, notification_ai_prompt_context, relation_context_value
 from ..domain.notification_ai_gate_contracts import (
     AI_DECISION_MODE,
@@ -173,6 +174,7 @@ def notification_ai_decision_audit(
 def context_with_validated_ai_response(
     context: Dict[str, object],
     response: NotificationAIValidatedResponse,
+    settings: Optional[Dict[str, object]] = None,
 ) -> Dict[str, object]:
     enriched = dict(context or {})
     payload = response.to_dict()
@@ -239,6 +241,12 @@ def context_with_validated_ai_response(
         "lines": lines,
         "validatedResponse": payload,
     }
-    enriched["telegramMessage"] = prepend_execution_start_badge(execution_telegram_message(enriched, response), enriched)
+    telegram_message = prepend_execution_start_badge(execution_telegram_message(enriched, response), enriched)
+    delivery_level = str(delivery_profile_from_context(enriched).get("level") or "beginner")
+    enriched["telegramMessage"] = user_facing_investment_language(
+        telegram_message,
+        settings,
+        delivery_level,
+    )
     enriched["readableMessage"] = re.sub(r"</?(?:b|code)>", "", enriched["telegramMessage"])
     return enriched

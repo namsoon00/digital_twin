@@ -514,6 +514,16 @@
     ontologyRuleboxError: "",
     ontologyRuleboxLastRun: null,
     ontologyRuleboxChangeReason: "",
+    investmentLanguage: null,
+    investmentLanguageLoading: false,
+    investmentLanguageLoaded: false,
+    investmentLanguageSaving: false,
+    investmentLanguageError: "",
+    investmentLanguageSearch: "",
+    activeInvestmentLanguageTermId: "",
+    investmentLanguagePreviewLevel: "absoluteBeginner",
+    investmentLanguagePreviewText: "종목 타입: PlatformGrowth. 계좌 안 역할: growth. feature 기여도와 thesis를 확인합니다.",
+    investmentLanguagePreview: null,
     ontologyDiagnostics: null,
     ontologyDiagnosticsLoading: false,
     ontologyDiagnosticsError: "",
@@ -4081,6 +4091,121 @@
         state.ontologyRuleboxLoading = false;
         if (state.snapshot) render();
       });
+  }
+
+  function applyInvestmentLanguagePayload(payload) {
+    state.investmentLanguage = payload || null;
+    state.investmentLanguageLoaded = Boolean(payload && payload.registry);
+    state.investmentLanguageError = "";
+    var terms = payload && payload.registry && Array.isArray(payload.registry.terms) ? payload.registry.terms : [];
+    if (!state.activeInvestmentLanguageTermId && terms.length) {
+      state.activeInvestmentLanguageTermId = String(terms[0].termId || "");
+    }
+  }
+
+  function loadInvestmentLanguage(force) {
+    if (isStaticPreviewHost()) return Promise.resolve(null);
+    if (state.investmentLanguageLoading && !force) return Promise.resolve(state.investmentLanguage);
+    if (state.investmentLanguageLoaded && !force) return Promise.resolve(state.investmentLanguage);
+    state.investmentLanguageLoading = true;
+    state.investmentLanguageError = "";
+    return requestJson("/api/ontology/language")
+      .then(function (payload) {
+        applyInvestmentLanguagePayload(payload);
+        return payload;
+      })
+      .catch(function (error) {
+        state.investmentLanguageError = error.message || "보편언어 사전을 읽지 못했습니다.";
+        return null;
+      })
+      .finally(function () {
+        state.investmentLanguageLoading = false;
+        if (state.snapshot) render();
+      });
+  }
+
+  function investmentLanguageTerms() {
+    var registry = state.investmentLanguage && state.investmentLanguage.registry;
+    return registry && Array.isArray(registry.terms) ? registry.terms : [];
+  }
+
+  function activeInvestmentLanguageTerm() {
+    var activeId = String(state.activeInvestmentLanguageTermId || "");
+    return investmentLanguageTerms().filter(function (item) {
+      return String(item.termId || "") === activeId;
+    })[0] || investmentLanguageTerms()[0] || null;
+  }
+
+  function commaSeparatedLanguageValues(value) {
+    return String(value || "").split(/[\n,]/).map(function (item) {
+      return item.trim();
+    }).filter(Boolean);
+  }
+
+  function investmentLanguageTermFromForm(form) {
+    var current = activeInvestmentLanguageTerm() || {};
+    var value = function (name) {
+      var field = form.querySelector('[name="' + name + '"]');
+      return field ? field.value.trim() : "";
+    };
+    return Object.assign({}, current, {
+      termId: value("termId") || current.termId,
+      category: value("category"),
+      preferredLabel: value("preferredLabel"),
+      definition: value("definition"),
+      status: value("status") || "draft",
+      owner: value("owner") || "ontology",
+      aliases: commaSeparatedLanguageValues(value("aliases")),
+      forbiddenExpressions: commaSeparatedLanguageValues(value("forbiddenExpressions")),
+      renderings: {
+        absoluteBeginner: value("renderingAbsoluteBeginner"),
+        beginner: value("renderingBeginner"),
+        intermediate: value("renderingIntermediate"),
+        advanced: value("renderingAdvanced")
+      }
+    });
+  }
+
+  function saveInvestmentLanguageTerm(form) {
+    if (state.investmentLanguageSaving || !form) return;
+    var payload = state.investmentLanguage || {};
+    var registry = Object.assign({}, payload.registry || {});
+    var nextTerm = investmentLanguageTermFromForm(form);
+    registry.terms = investmentLanguageTerms().map(function (item) {
+      return String(item.termId || "") === String(nextTerm.termId || "") ? nextTerm : item;
+    });
+    state.investmentLanguageSaving = true;
+    state.investmentLanguageError = "";
+    render();
+    sendJson("/api/ontology/language", "PUT", { registry: registry })
+      .then(function (response) {
+        applyInvestmentLanguagePayload(response);
+        showSnackbar("보편언어 사전과 TypeDB 관리 개념을 저장했습니다.");
+      })
+      .catch(function (error) {
+        state.investmentLanguageError = error.message || "보편언어 사전을 저장하지 못했습니다.";
+        showSnackbar(state.investmentLanguageError, "danger");
+      })
+      .finally(function () {
+        state.investmentLanguageSaving = false;
+        render();
+      });
+  }
+
+  function previewInvestmentLanguage() {
+    if (isStaticPreviewHost()) return;
+    state.investmentLanguagePreview = null;
+    sendJson("/api/ontology/language/preview", "POST", {
+      text: state.investmentLanguagePreviewText,
+      level: state.investmentLanguagePreviewLevel,
+      registry: state.investmentLanguage && state.investmentLanguage.registry
+    }).then(function (payload) {
+      state.investmentLanguagePreview = payload || {};
+      render();
+    }).catch(function (error) {
+      state.investmentLanguageError = error.message || "표현 미리보기를 만들지 못했습니다.";
+      render();
+    });
   }
 
   function loadOntologyDiagnostics(force) {
@@ -8043,6 +8168,9 @@
       if (!state.ontologyRuleboxLoaded && !state.ontologyRuleboxLoading) loadOntologyRulebox(false);
       if (!state.ontologyDiagnostics && !state.ontologyDiagnosticsLoading) loadOntologyDiagnostics(false);
     }
+    if (state.workDetailLayer && state.workDetailLayer.type === "settings-investment-language") {
+      if (!state.investmentLanguageLoaded && !state.investmentLanguageLoading) loadInvestmentLanguage(false);
+    }
   }
 
   function renderLoading() {
@@ -8274,6 +8402,7 @@
       "strategy-rulebox-editor",
       "strategy-prompt-editor",
       "strategy-model-policy-editor",
+      "settings-investment-language",
       "notification-delivery-settings",
       "notification-threshold-settings",
       "settings-runtime"
@@ -8388,6 +8517,7 @@
     if (type === "strategy-rulebox-editor") return strategyRuleboxWorkDetailPayload();
     if (type === "strategy-prompt-editor") return strategyPromptWorkDetailPayload();
     if (type === "strategy-model-policy-editor") return strategyModelPolicyWorkDetailPayload();
+    if (type === "settings-investment-language") return investmentLanguageWorkDetailPayload();
     if (type === "strategy-trace-detail") return strategyTraceWorkDetailPayload(key);
     if (type === "ontology-audit-section") return ontologyAuditSectionWorkDetailPayload(key);
     if (type === "ontology-audit-row") return ontologyAuditRowWorkDetailPayload(key);
@@ -9686,6 +9816,7 @@
       ["알림 정책", "메시지 타입, 발송 게이트", "notification-policy-board"],
       ["전달 채널", "Telegram, 링크, 저장 상태", "notification-delivery-settings"],
       ["모델·RuleBox", "TypeDB 규칙과 모델 정책", "strategy-rulebox-editor"],
+      ["보편언어", "승인 용어, 수준별 표현, 금지 표현", "settings-investment-language"],
       ["런타임 설정", "데이터 API와 로컬 환경", "settings-runtime"]
     ];
     var settingGrid = '<div class="oa-settings-list" data-console-keyed-list="operation-settings">' + settings.map(function (item) {
@@ -23558,9 +23689,123 @@
       '</div>',
       '<div class="settings-detail-grid">',
       renderSettingsDetailDisclosure("기본 설정 편집", "화면 표시와 알림 전달 채널", renderSettingsEnvironmentPanel() + renderSettingsDeliverySettingsPanel()),
+      renderSettingsDetailDisclosure("보편언어 관리", "승인 용어, 사용자 수준별 표현, 금지 표현", renderInvestmentLanguagePanel()),
       renderSettingsDetailDisclosure("고급 설정", "외부 API, 신선도 게이트, 추론, 매핑값", renderSettingsExternalDataPanel()),
       renderSettingsDetailDisclosure("진단", "저장 상태, 잠금, API 준비도", renderSettingsDiagnosticsPanel()),
       '</div>',
+      '</article>'
+    ].join("");
+  }
+
+  function investmentLanguageStatusLabel(status) {
+    return ({ approved: "승인", draft: "검토 중", deprecated: "사용 중지" })[String(status || "")] || "검토 중";
+  }
+
+  function investmentLanguageCategoryLabel(category) {
+    return ({
+      "instrument-archetype": "종목 성격",
+      "position-intent": "계좌 역할",
+      "investment-concept": "투자 개념",
+      "decision-concept": "판단 개념",
+      "market-concept": "가격·시장",
+      "risk-concept": "위험 관리"
+    })[String(category || "")] || "기타 용어";
+  }
+
+  function investmentLanguageWorkDetailPayload() {
+    var payload = state.investmentLanguage || {};
+    var registry = payload.registry || {};
+    var terms = Array.isArray(registry.terms) ? registry.terms : [];
+    return editorWorkDetailPayload(
+      "Ubiquitous Language",
+      "투자 보편언어 관리",
+      [registry.version || "버전 확인", terms.length + "개 용어", "TypeDB LanguageGovernance"].join(" · "),
+      renderInvestmentLanguagePanel()
+    );
+  }
+
+  function renderInvestmentLanguagePanel() {
+    var payload = state.investmentLanguage || {};
+    var registry = payload.registry || {};
+    var validation = payload.validation || {};
+    var active = activeInvestmentLanguageTerm();
+    var query = String(state.investmentLanguageSearch || "").toLowerCase();
+    var terms = investmentLanguageTerms().filter(function (item) {
+      var haystack = [item.termId, item.preferredLabel, item.category, item.definition].join(" ").toLowerCase();
+      return !query || haystack.indexOf(query) >= 0;
+    });
+    if (state.investmentLanguageLoading && !state.investmentLanguageLoaded) {
+      return '<article class="panel investment-language-panel"><div class="settings-body"><p class="lab-message">보편언어 사전을 읽는 중입니다.</p></div></article>';
+    }
+    if (!registry.terms) {
+      return [
+        '<article class="panel investment-language-panel">',
+        '<div class="settings-body">',
+        '<p class="form-error">' + escapeHtml(state.investmentLanguageError || "보편언어 사전을 불러오지 못했습니다.") + '</p>',
+        '<button class="text-button" type="button" data-action="refresh-investment-language">다시 불러오기</button>',
+        '</div>',
+        '</article>'
+      ].join("");
+    }
+    var renderings = active && active.renderings ? active.renderings : {};
+    var preview = state.investmentLanguagePreview || {};
+    var coverage = validation.coverage || {};
+    return [
+      '<article class="panel investment-language-panel">',
+      '<div class="panel-head">',
+      '<div><p class="label">Ubiquitous Language</p><h2>투자 보편언어 사전</h2><span>내부 식별자는 유지하고 사용자에게 보이는 표현만 승인·관리합니다.</span></div>',
+      '<div class="settings-actions">',
+      '<span class="tone-chip ' + (validation.valid ? "watch" : "danger") + '">' + escapeHtml(validation.valid ? "검증 통과" : "수정 필요") + '</span>',
+      '<button class="mini-button" type="button" data-action="refresh-investment-language">새로고침</button>',
+      '</div>',
+      '</div>',
+      '<div class="investment-language-summary">',
+      '<span><strong>' + escapeHtml(String((registry.terms || []).length)) + '</strong> 전체 용어</span>',
+      '<span><strong>' + escapeHtml(String((registry.terms || []).filter(function (item) { return item.status === "approved"; }).length)) + '</strong> 승인</span>',
+      '<span><strong>' + escapeHtml(String(coverage.coveredCount || 0)) + '/' + escapeHtml(String(coverage.requiredCount || 0)) + '</strong> TBox 적용</span>',
+      '<span><strong>' + escapeHtml(String(registry.version || "-")) + '</strong> 사전 버전</span>',
+      '</div>',
+      state.investmentLanguageError ? '<p class="form-error investment-language-error">' + escapeHtml(state.investmentLanguageError) + '</p>' : '',
+      '<div class="investment-language-workspace">',
+      '<aside class="investment-language-list">',
+      '<label class="investment-language-search"><span>용어 찾기</span><input type="search" value="' + escapeHtml(state.investmentLanguageSearch || "") + '" placeholder="표현 또는 내부 식별자" data-investment-language-search></label>',
+      '<div class="investment-language-term-list" role="listbox">',
+      terms.map(function (item) {
+        var selected = active && String(active.termId || "") === String(item.termId || "");
+        return [
+          '<button type="button" class="investment-language-term-row' + (selected ? " active" : "") + '" data-language-term="' + escapeHtml(item.termId || "") + '" role="option" aria-selected="' + (selected ? "true" : "false") + '">',
+          '<span><strong>' + escapeHtml(item.preferredLabel || item.termId || "-") + '</strong><small>' + escapeHtml(investmentLanguageCategoryLabel(item.category)) + '</small></span>',
+          '<em class="tone-chip ' + (item.status === "approved" ? "watch" : item.status === "deprecated" ? "danger" : "caution") + '">' + escapeHtml(investmentLanguageStatusLabel(item.status)) + '</em>',
+          '</button>'
+        ].join("");
+      }).join("") || '<p class="empty-state compact">검색 결과가 없습니다.</p>',
+      '</div>',
+      '</aside>',
+      active ? [
+        '<form class="investment-language-editor" data-investment-language-form>',
+        '<div class="investment-language-editor-head"><div><strong>' + escapeHtml(active.preferredLabel || active.termId) + '</strong><span>내부 식별자 ' + escapeHtml(active.termId || "-") + '</span></div><button class="text-button primary" type="submit"' + (state.investmentLanguageSaving || state.serverSettingsLocked ? ' disabled' : '') + '>' + escapeHtml(state.investmentLanguageSaving ? "저장 중" : "검증 후 저장") + '</button></div>',
+        '<div class="investment-language-form-grid">',
+        '<label><span>내부 식별자</span><input name="termId" value="' + escapeHtml(active.termId || "") + '" readonly></label>',
+        '<label><span>분류</span><input name="category" value="' + escapeHtml(active.category || "") + '"></label>',
+        '<label><span>대표 표현</span><input name="preferredLabel" value="' + escapeHtml(active.preferredLabel || "") + '" required></label>',
+        '<label><span>상태</span><select name="status"><option value="approved"' + (active.status === "approved" ? " selected" : "") + '>승인</option><option value="draft"' + (active.status === "draft" ? " selected" : "") + '>검토 중</option><option value="deprecated"' + (active.status === "deprecated" ? " selected" : "") + '>사용 중지</option></select></label>',
+        '<label class="wide"><span>뜻</span><textarea name="definition" rows="3">' + escapeHtml(active.definition || "") + '</textarea></label>',
+        '<label><span>왕초보 표현</span><input name="renderingAbsoluteBeginner" value="' + escapeHtml(renderings.absoluteBeginner || active.preferredLabel || "") + '"></label>',
+        '<label><span>초보 표현</span><input name="renderingBeginner" value="' + escapeHtml(renderings.beginner || active.preferredLabel || "") + '"></label>',
+        '<label><span>중수 표현</span><input name="renderingIntermediate" value="' + escapeHtml(renderings.intermediate || active.preferredLabel || "") + '"></label>',
+        '<label><span>고수 표현</span><input name="renderingAdvanced" value="' + escapeHtml(renderings.advanced || active.preferredLabel || "") + '"></label>',
+        '<label class="wide"><span>같은 뜻의 과거 표현</span><textarea name="aliases" rows="2" placeholder="쉼표 또는 줄바꿈으로 구분">' + escapeHtml((active.aliases || []).join(", ")) + '</textarea></label>',
+        '<label class="wide"><span>사용 금지 표현</span><textarea name="forbiddenExpressions" rows="2" placeholder="알림에서 승인 표현으로 바꿀 말">' + escapeHtml((active.forbiddenExpressions || []).join(", ")) + '</textarea></label>',
+        '<input name="owner" type="hidden" value="' + escapeHtml(active.owner || "ontology") + '">',
+        '</div>',
+        '</form>'
+      ].join("") : '',
+      '</div>',
+      '<section class="investment-language-preview">',
+      '<div class="investment-language-preview-head"><div><strong>문장 미리보기</strong><span>금지 표현과 내부 식별자가 사용자 수준에 맞게 바뀌는지 확인합니다.</span></div><div><select data-investment-language-preview-level><option value="absoluteBeginner"' + (state.investmentLanguagePreviewLevel === "absoluteBeginner" ? " selected" : "") + '>왕초보</option><option value="beginner"' + (state.investmentLanguagePreviewLevel === "beginner" ? " selected" : "") + '>초보</option><option value="intermediate"' + (state.investmentLanguagePreviewLevel === "intermediate" ? " selected" : "") + '>중수</option><option value="advanced"' + (state.investmentLanguagePreviewLevel === "advanced" ? " selected" : "") + '>고수</option></select><button class="mini-button" type="button" data-action="preview-investment-language">검사</button></div></div>',
+      '<textarea rows="3" data-investment-language-preview-text>' + escapeHtml(state.investmentLanguagePreviewText || "") + '</textarea>',
+      preview.renderedText ? '<div class="investment-language-preview-result"><span>변환 결과</span><p>' + escapeHtml(preview.renderedText) + '</p><small>' + escapeHtml(String((preview.findings || []).length)) + '개 표현을 확인했습니다.</small></div>' : '',
+      '</section>',
       '</article>'
     ].join("");
   }
@@ -24595,6 +24840,57 @@
       });
     });
 
+    Array.prototype.slice.call(app.querySelectorAll("[data-language-term]")).forEach(function (button) {
+      button.addEventListener("click", function () {
+        state.activeInvestmentLanguageTermId = button.getAttribute("data-language-term") || "";
+        state.investmentLanguagePreview = null;
+        render();
+      });
+    });
+
+    var languageSearch = app.querySelector("[data-investment-language-search]");
+    if (languageSearch) {
+      languageSearch.addEventListener("change", function () {
+        state.investmentLanguageSearch = languageSearch.value || "";
+        render();
+      });
+    }
+
+    var languageForm = app.querySelector("[data-investment-language-form]");
+    if (languageForm) {
+      languageForm.addEventListener("submit", function (event) {
+        event.preventDefault();
+        saveInvestmentLanguageTerm(languageForm);
+      });
+    }
+
+    var refreshInvestmentLanguage = app.querySelector('[data-action="refresh-investment-language"]');
+    if (refreshInvestmentLanguage) {
+      refreshInvestmentLanguage.addEventListener("click", function () {
+        state.investmentLanguageLoaded = false;
+        loadInvestmentLanguage(true);
+      });
+    }
+
+    var previewLanguageText = app.querySelector("[data-investment-language-preview-text]");
+    if (previewLanguageText) {
+      previewLanguageText.addEventListener("input", function () {
+        state.investmentLanguagePreviewText = previewLanguageText.value || "";
+      });
+    }
+
+    var previewLanguageLevel = app.querySelector("[data-investment-language-preview-level]");
+    if (previewLanguageLevel) {
+      previewLanguageLevel.addEventListener("change", function () {
+        state.investmentLanguagePreviewLevel = previewLanguageLevel.value || "absoluteBeginner";
+      });
+    }
+
+    var previewInvestmentLanguageButton = app.querySelector('[data-action="preview-investment-language"]');
+    if (previewInvestmentLanguageButton) {
+      previewInvestmentLanguageButton.addEventListener("click", previewInvestmentLanguage);
+    }
+
     var refreshRuleboxButton = app.querySelector('[data-action="refresh-rulebox"]');
     if (refreshRuleboxButton) {
       refreshRuleboxButton.addEventListener("click", function () {
@@ -25556,7 +25852,8 @@
     loadNotificationJobs(),
     loadNotificationSchedules(),
     loadInvestmentCalendar(),
-    loadSymbolUniverse()
+    loadSymbolUniverse(),
+    loadInvestmentLanguage(false)
   ];
   Promise.all(snapshotPrerequisites.map(function (task) {
     return task.catch(function () {

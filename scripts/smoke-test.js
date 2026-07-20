@@ -218,6 +218,8 @@ function checkWorkflowConsoleContract() {
   assertOk(code.indexOf("researchEvidenceKoreanSummary(item)") >= 0 && code.indexOf("researchEvidenceImpactMeta(item)") >= 0, "뉴스 목록에 한글 본문 요약과 주가 영향 분석이 없습니다.");
   assertOk(code.indexOf('state.activeTab === "notifications" || notificationDetailNeedsEvidence') >= 0, "알림 상세가 연결된 뉴스 근거를 지연 로드하지 않습니다.");
   assertOk(code.indexOf("원문/출처") >= 0 && code.indexOf("기사 분석") >= 0, "알림 상세의 하단 기사 원문 진입 구조가 없습니다.");
+  assertOk(code.indexOf('"settings-investment-language"') >= 0, "운영 화면에 보편언어 관리 진입점이 없습니다.");
+  assertOk(code.indexOf("투자 보편언어 관리") >= 0, "보편언어 관리 상세 화면이 없습니다.");
 
   assertOk(dataContract.indexOf("## Source Ownership") >= 0 && dataContract.indexOf("Position") >= 0 && dataContract.indexOf("ResearchEvidence") >= 0 && dataContract.indexOf("NotificationJob") >= 0, "PC 콘솔 canonical 데이터 소유권 문서가 없습니다.");
   assertOk(dataContract.indexOf("## Workspace Read Models") >= 0 && tabLabels.every(function (label) { return dataContract.toLowerCase().indexOf(label === "오늘" ? "today" : label === "시장" ? "market" : label === "판단" ? "decision" : label === "알림" ? "alerts" : label === "검증" ? "validation" : "operations") >= 0; }), "6개 read model 데이터 계약이 완전하지 않습니다.");
@@ -246,7 +248,7 @@ function checkWorkflowConsoleContract() {
   assertOk(/\.work-detail-body\s*\{[\s\S]*overflow: visible;/.test(styles), "상세 본문에 중첩 스크롤이 남아 있습니다.");
   assertOk(styles.indexOf("Centered overlay alignment for legacy detail and editor dialogs") >= 0 && code.indexOf("activeOverlayDialog") >= 0 && code.indexOf("syncOverlayPageState") >= 0 && styles.indexOf("html.oa-overlay-open") >= 0, "기존 상세·편집 팝업이 공통 중앙 레이어와 키보드·스크롤 계약을 따르지 않습니다.");
   assertOk(styles.indexOf("Workflow console continuity and detail navigation pass") >= 0 && styles.indexOf(".oa-detail-queue") >= 0, "전체 목록 상세와 포커스 스타일이 없습니다.");
-  assertOk(indexHtml.indexOf("styles.css?v=20260720-centered-detail-v9") >= 0 && indexHtml.indexOf("app.js?v=20260720-centered-detail-v9") >= 0, "중앙 상세 레이어 정적 자산 cache key가 반영되지 않았습니다.");
+  assertOk(indexHtml.indexOf("styles.css?v=20260720-investment-language-v10") >= 0 && indexHtml.indexOf("app.js?v=20260720-investment-language-v10") >= 0, "보편언어 관리 화면 정적 자산 cache key가 반영되지 않았습니다.");
 }
 
 function checkFrontendAdminRender() {
@@ -2201,6 +2203,28 @@ async function checkNormalMode(port, context) {
   assertOk(settingsPayload.settings.watchlistSymbols.indexOf("TSLA") >= 0, "기본 관심 종목에 TSLA가 없습니다.");
   assertOk(settingsPayload.settings.watchlistSymbols.indexOf("AAPL") >= 0, "기본 관심 종목에 AAPL이 없습니다.");
 
+  const investmentLanguage = await request(port, "/api/ontology/language");
+  assertOk(investmentLanguage.statusCode === 200, "보편언어 API 응답 코드가 200이 아닙니다: " + investmentLanguage.statusCode);
+  const investmentLanguagePayload = JSON.parse(investmentLanguage.body);
+  assertOk(investmentLanguagePayload.validation && investmentLanguagePayload.validation.valid === true, "기본 보편언어 사전 검증이 통과하지 않았습니다.");
+  assertOk(investmentLanguagePayload.registry && Array.isArray(investmentLanguagePayload.registry.terms), "보편언어 API에 용어 목록이 없습니다.");
+  assertOk(investmentLanguagePayload.registry.terms.some(function (item) { return item.termId === "PlatformGrowth"; }), "보편언어 사전에 플랫폼 성장주가 없습니다.");
+
+  const investmentLanguagePreview = await request(port, "/api/ontology/language/preview", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      level: "absoluteBeginner",
+      text: "PlatformGrowth 종목의 feature 기여도와 thesis를 확인합니다."
+    })
+  });
+  assertOk(investmentLanguagePreview.statusCode === 200, "보편언어 미리보기 API 응답 코드가 200이 아닙니다: " + investmentLanguagePreview.statusCode);
+  const investmentLanguagePreviewPayload = JSON.parse(investmentLanguagePreview.body);
+  assertOk(
+    investmentLanguagePreviewPayload.renderedText === "플랫폼 성장주 종목의 판단에 미친 영향과 보유 이유를 확인합니다.",
+    "왕초보 보편언어 미리보기 문장이 자연스럽지 않습니다: " + investmentLanguagePreviewPayload.renderedText
+  );
+
   const websocketResponse = await websocketHandshake(port);
   assertOk(websocketResponse.indexOf("101 Switching Protocols") >= 0, "웹소켓 업그레이드 응답이 101이 아닙니다.");
   assertOk(websocketResponse.toLowerCase().indexOf("sec-websocket-accept") >= 0, "웹소켓 accept 헤더가 없습니다.");
@@ -2263,7 +2287,10 @@ async function checkNormalMode(port, context) {
       }
     })
   });
-  assertOk(savedSettings.statusCode === 200, "설정 저장 API 응답 코드가 200이 아닙니다: " + savedSettings.statusCode);
+  assertOk(
+    savedSettings.statusCode === 200,
+    "설정 저장 API 응답 코드가 200이 아닙니다: " + savedSettings.statusCode + " · " + savedSettings.body.slice(0, 500)
+  );
   const savedSettingsPayload = JSON.parse(savedSettings.body);
   assertOk(savedSettingsPayload.configured.tossClientSecret === true, "저장된 토스 secret 설정 상태가 true가 아닙니다.");
   assertOk(savedSettingsPayload.configured.kisAppKey === true, "저장된 KIS app key 설정 상태가 true가 아닙니다.");

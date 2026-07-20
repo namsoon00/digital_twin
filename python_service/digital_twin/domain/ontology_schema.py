@@ -42,12 +42,12 @@ def _default_tbox_metadata_tuple():
         "source": "code",
         "version": ONTOLOGY_TBOX_VERSION,
         "fingerprint": tbox_fingerprint(),
-        "entityCount": 4 + len(BOUNDED_CONTEXTS) + len(TBOX_CLASSES) + len(TBOX_RELATION_TYPES),
+        "entityCount": 5 + len(BOUNDED_CONTEXTS) + len(TBOX_CLASSES) + len(TBOX_RELATION_TYPES),
         "relationCount": len(BOUNDED_CONTEXTS)
         + len(TBOX_CLASSES)
         + len([name for name in TBOX_CLASSES if tbox_class_def(name) and tbox_class_def(name).parent])
         + len(TBOX_RELATION_TYPES)
-        + 4,
+        + 5,
     }
 
 
@@ -143,6 +143,13 @@ def tbox_entities() -> List[OntologyEntity]:
             "tboxFingerprint": tbox_fingerprint(),
             "description": "Derived assertion layer for inference traces and rule-produced relations.",
         }),
+        OntologyEntity(entity_id("ontology-box", "LanguageGovernance"), "LanguageGovernance", "ontology-box", {
+            "ontologyBox": "TBox",
+            "version": ONTOLOGY_TBOX_VERSION,
+            "tboxVersion": ONTOLOGY_TBOX_VERSION,
+            "tboxFingerprint": tbox_fingerprint(),
+            "description": "Governed user-facing investment terms, level renderings, aliases, and forbidden expressions.",
+        }),
     ]
     for context in BOUNDED_CONTEXTS:
         entities.append(OntologyEntity(entity_id("bounded-context", context.key), context.label, "bounded-context", {
@@ -198,6 +205,7 @@ def tbox_relations() -> List[OntologyRelation]:
     abox_id = entity_id("ontology-box", "ABox")
     rulebox_id = entity_id("ontology-box", "RuleBox")
     inferencebox_id = entity_id("ontology-box", "InferenceBox")
+    language_governance_id = entity_id("ontology-box", "LanguageGovernance")
     for context in BOUNDED_CONTEXTS:
         context_id = entity_id("bounded-context", context.key)
         relations.append(OntologyRelation(tbox_id, context_id, "DEFINES_BOUNDED_CONTEXT", properties={
@@ -230,6 +238,7 @@ def tbox_relations() -> List[OntologyRelation]:
     relations.append(OntologyRelation(tbox_id, rulebox_id, "CONSTRAINS_RULES", properties={"ontologyBox": "TBox"}))
     relations.append(OntologyRelation(rulebox_id, inferencebox_id, "DERIVES_ASSERTIONS", properties={"ontologyBox": "TBox"}))
     relations.append(OntologyRelation(inferencebox_id, abox_id, "CONSTRAINS_ASSERTIONS", properties={"ontologyBox": "TBox"}))
+    relations.append(OntologyRelation(tbox_id, language_governance_id, "CONSTRAINS_ASSERTIONS", properties={"ontologyBox": "TBox"}))
     for item in relations:
         item.properties.setdefault("version", ONTOLOGY_TBOX_VERSION)
         item.properties.setdefault("tboxVersion", ONTOLOGY_TBOX_VERSION)

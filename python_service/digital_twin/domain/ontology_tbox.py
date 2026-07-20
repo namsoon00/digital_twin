@@ -425,6 +425,12 @@ CLASS_DEFS: List[TBoxClassDef] = [
     TBoxClassDef("RuleBoxGovernance", "reasoning-insight", "RuleBox 운영 거버넌스"),
     TBoxClassDef("RuleBoxVersion", "reasoning-insight", "RuleBox 저장 버전", parent="RuleBoxGovernance"),
     TBoxClassDef("RuleChangeCandidate", "reasoning-insight", "규칙 변경 후보", parent="RuleBoxGovernance"),
+    TBoxClassDef("LanguageRegistryVersion", "operations-dispatch", "보편언어 사전 버전", description="사용자에게 보여줄 투자 용어와 수준별 표현의 승인 버전입니다."),
+    TBoxClassDef("DomainTerm", "operations-dispatch", "투자 도메인 용어", description="안정적인 내부 식별자와 승인된 사용자 표현을 연결합니다."),
+    TBoxClassDef("TermRendering", "operations-dispatch", "사용자 수준별 표현", description="왕초보, 초보, 중수, 고수에게 보여줄 용어 표현입니다."),
+    TBoxClassDef("TermAlias", "operations-dispatch", "용어 별칭", description="입력과 과거 문구에서 같은 뜻으로 인식할 표현입니다."),
+    TBoxClassDef("ForbiddenExpression", "operations-dispatch", "사용 금지 표현", description="알림과 화면에서 승인된 표현으로 바꿔야 하는 내부 또는 어려운 용어입니다."),
+    TBoxClassDef("LanguageChangeProposal", "operations-dispatch", "보편언어 변경 제안", description="자동 적용하지 않고 검토와 승인을 기다리는 용어 변경 제안입니다."),
     TBoxClassDef("DerivedAssertion", "reasoning-insight", "파생 어설션"),
     TBoxClassDef("InferenceTrace", "reasoning-insight", "추론 경로"),
     TBoxClassDef("InferencePath", "reasoning-insight", "추론 패스", parent="InferenceTrace"),
@@ -783,6 +789,11 @@ RELATION_DEFS: List[TBoxRelationDef] = [
     TBoxRelationDef("HAS_NOVELTY_POLICY", "operations-dispatch", "operations-dispatch", "operations-dispatch"),
     TBoxRelationDef("OBSERVES_MARKET_SESSION", "operations-dispatch", "investment-core", "operations-dispatch"),
     TBoxRelationDef("TRIGGERS_ALERT", "operations-dispatch", "reasoning-insight", "operations-dispatch"),
+    TBoxRelationDef("GOVERNS_TERM", "operations-dispatch", "operations-dispatch", "operations-dispatch", "보편언어 사전 버전이 승인 상태와 함께 용어를 관리합니다."),
+    TBoxRelationDef("HAS_TERM_RENDERING", "operations-dispatch", "operations-dispatch", "operations-dispatch", "투자 도메인 용어를 사용자 수준별 표현과 연결합니다."),
+    TBoxRelationDef("HAS_TERM_ALIAS", "operations-dispatch", "operations-dispatch", "operations-dispatch", "투자 도메인 용어를 같은 뜻의 과거 표현과 연결합니다."),
+    TBoxRelationDef("FORBIDS_EXPRESSION", "operations-dispatch", "operations-dispatch", "operations-dispatch", "사용자 화면에 노출하면 안 되는 표현을 승인된 용어에 연결합니다."),
+    TBoxRelationDef("PROPOSES_TERM_CHANGE", "operations-dispatch", "operations-dispatch", "operations-dispatch", "검사나 AI가 만든 변경 제안을 용어와 연결하며 자동 적용을 금지합니다."),
 ]
 
 
@@ -838,6 +849,8 @@ RULE_DEFS: List[TBoxRuleDef] = [
     TBoxRuleDef("research tasks retrieve only decision-relevant evidence through approved source policies, then verified claims enter ABox before TypeDB re-runs inference", "reasoning-insight"),
     TBoxRuleDef("unverified or disputed claims can trigger further research but cannot independently strengthen a buy, trim, or sell opinion", "reasoning-insight"),
     TBoxRuleDef("novel hypotheses remain review-required proposals until evidence replay and governance approval promote them into active TypeDB rules", "reasoning-insight"),
+    TBoxRuleDef("user-facing investment terms keep stable internal identifiers while approved level-specific renderings are managed as TypeDB language-governance concepts", "operations-dispatch"),
+    TBoxRuleDef("forbidden or unregistered expressions create review-required language proposals and never mutate approved terminology automatically", "operations-dispatch"),
 ]
 
 
@@ -1168,6 +1181,15 @@ _GOVERNANCE_CLASS_NAMES = {
     "RuleChangeCandidate",
 }
 
+_LANGUAGE_GOVERNANCE_CLASS_NAMES = {
+    "LanguageRegistryVersion",
+    "DomainTerm",
+    "TermRendering",
+    "TermAlias",
+    "ForbiddenExpression",
+    "LanguageChangeProposal",
+}
+
 _OPERATIONAL_CLASS_NAMES = {
     "DataPipeline",
     "DataPipelineHealth",
@@ -1211,6 +1233,14 @@ _RULEBOX_RELATION_NAMES = {
     "SUPERSEDES_RULE_VERSION",
 }
 
+_LANGUAGE_GOVERNANCE_RELATION_NAMES = {
+    "GOVERNS_TERM",
+    "HAS_TERM_RENDERING",
+    "HAS_TERM_ALIAS",
+    "FORBIDS_EXPRESSION",
+    "PROPOSES_TERM_CHANGE",
+}
+
 
 def tbox_class_def(name: str) -> Optional[TBoxClassDef]:
     return _CLASS_BY_NAME.get(str(name or ""))
@@ -1222,6 +1252,8 @@ def tbox_relation_def(name: str) -> Optional[TBoxRelationDef]:
 
 def tbox_class_materialization_policy(name: str) -> str:
     value = str(name or "")
+    if value in _LANGUAGE_GOVERNANCE_CLASS_NAMES:
+        return "language-governance"
     if value in _GOVERNANCE_CLASS_NAMES:
         return "governance"
     if value in _RULEBOX_CLASS_NAMES:
@@ -1245,6 +1277,8 @@ def tbox_materialization_box(policy: str) -> str:
         return "RuleBox"
     if value == "governance":
         return "RuleBoxGovernance"
+    if value == "language-governance":
+        return "LanguageGovernance"
     if value == "inferred":
         return "InferenceBox"
     return "ABox"
@@ -1252,6 +1286,8 @@ def tbox_materialization_box(policy: str) -> str:
 
 def tbox_relation_materialization_policy(name: str) -> str:
     value = str(name or "").upper()
+    if value in _LANGUAGE_GOVERNANCE_RELATION_NAMES:
+        return "language-governance"
     if value in _SCHEMA_RELATION_NAMES:
         return "schema"
     if value in _RULEBOX_RELATION_NAMES:

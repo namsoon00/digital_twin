@@ -3,6 +3,7 @@ import re
 from typing import Dict, Iterable, List
 
 from ..domain.ontology_contracts import PortfolioOntology
+from ..domain.investment_ubiquitous_language import add_investment_language_governance_concepts
 from ..domain.ontology_decision_policy import decision_stage_from_action, relation_stage_priority
 from ..domain.ontology_rulebox_catalog import default_graph_inference_rules
 from ..domain.ontology_rulebox_contracts import GRAPH_REASONER_VERSION, GraphInferenceRule
@@ -47,12 +48,18 @@ def rulebox_rules_from_payload(payload: Dict[str, object]) -> List[GraphInferenc
         raise ValueError("RuleBox rules are empty.")
     return rules
 
-def rulebox_graph_from_rules(rules: Iterable[GraphInferenceRule], include_tbox: bool = True) -> PortfolioOntology:
+def rulebox_graph_from_rules(
+    rules: Iterable[GraphInferenceRule],
+    include_tbox: bool = True,
+    language_registry: Dict[str, object] = None,
+) -> PortfolioOntology:
     graph = PortfolioOntology("typedb-rulebox-admin")
     if include_tbox:
         graph.entities.extend(tbox_entities())
         graph.relations.extend(tbox_relations())
     add_rulebox_concepts(graph, rules)
+    if language_registry is not None:
+        add_investment_language_governance_concepts(graph, language_registry)
     tbox = default_tbox_metadata()
     for item in graph.entities:
         if str((item.properties or {}).get("ontologyBox") or "") == "RuleBox":
@@ -69,6 +76,7 @@ def rulebox_graph_from_rules(rules: Iterable[GraphInferenceRule], include_tbox: 
         "engineVersion": GRAPH_REASONER_VERSION,
         "adminEditable": True,
         "activeTBox": tbox,
+        "languageRegistryVersion": str((language_registry or {}).get("version") or ""),
     }
     return graph
 

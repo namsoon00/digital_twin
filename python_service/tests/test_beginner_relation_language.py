@@ -216,7 +216,7 @@ class BeginnerRelationLanguageTests(unittest.TestCase):
             self.assertIn(expected, message)
         for hidden in ["[AI]", "근거 4", "근거 5", "반대 2", "반대 3", "확인 3", "확인 4", "부족 3", "부족 4", "부족 5", "검증 3", "고객이 실제 투자 판단 전에"]:
             self.assertNotIn(hidden, message)
-        self.assertIn("확인 필요 강도", message)
+        self.assertIn("확인 필요 점수", message)
         self.assertIn("관계 분석 규칙", message)
         self.assertIn("실행 조건", message)
 
@@ -263,7 +263,8 @@ class BeginnerRelationLanguageTests(unittest.TestCase):
         self.assertNotIn("부족 3", message)
         self.assertNotIn("부족 4", message)
         self.assertNotIn("부족 5", message)
-        self.assertIn("관계 강도(여러 근거가 같은 방향인지 보는 확인 필요 점수)", message)
+        self.assertIn("확인 필요 점수", message)
+        self.assertNotIn("관계 강도", message)
         self.assertIn("RuleBox(관계 분석 규칙)", message)
 
     def test_execution_message_includes_relation_axis_summary(self):

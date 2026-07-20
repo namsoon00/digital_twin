@@ -7,8 +7,14 @@ from ..domain.ontology_schema import default_tbox_metadata, normalize_tbox_metad
 from .graph_store_rulebox import rulebox_graph_from_rules
 
 
-def ontology_seed_graph(rules: Iterable[GraphInferenceRule] = None) -> PortfolioOntology:
-    graph = rulebox_graph_from_rules(rules or default_graph_inference_rules())
+def ontology_seed_graph(
+    rules: Iterable[GraphInferenceRule] = None,
+    language_registry: Dict[str, object] = None,
+) -> PortfolioOntology:
+    graph = rulebox_graph_from_rules(
+        rules or default_graph_inference_rules(),
+        language_registry=language_registry,
+    )
     graph.portfolio_id = "ontology-seed"
     graph.worldview.update({
         "model": "investment-ontology-seed",

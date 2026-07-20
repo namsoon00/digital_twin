@@ -58,6 +58,14 @@ from ..domain.notification_rules import CONDITION_TYPE_LABELS, DEFAULT_HONEY_THR
 from ..domain.notifications import NotificationJob
 from ..domain.notification_templates import DEFAULT_NOTIFICATION_TEMPLATES, MESSAGE_TYPE_LABELS, TRIGGER_SUMMARIES, NotificationTemplate, alert_context, template_variables
 from ..domain.ontology_inference_ledger import inference_trace_ledger_payload
+from ..domain.investment_ubiquitous_language import (
+    LANGUAGE_REGISTRY_SETTING_KEY,
+    audit_user_facing_investment_text,
+    investment_language_registry,
+    normalize_investment_language_registry,
+    propose_investment_language_changes,
+    validate_investment_language_registry,
+)
 from ..domain.parsing import parse_assignments
 from ..domain.portfolio import utc_now_iso
 from ..domain.symbol_universe import symbol_search_symbol_candidates
@@ -715,6 +723,93 @@ def save_ontology_rulebox_payload(payload: Dict[str, object]) -> Dict[str, objec
     return ontology_repository_from_settings(runtime_settings()).save_rulebox(payload)
 
 
+def ontology_language_payload() -> Dict[str, object]:
+    settings = runtime_settings()
+    registry = investment_language_registry(settings)
+    validation = validate_investment_language_registry(registry)
+    return {
+        "registry": registry,
+        "validation": {key: value for key, value in validation.items() if key != "registry"},
+        "typeDb": {
+            "configured": bool(str(settings.get("typedbAddress") or "").strip()),
+            "ontologyBox": "LanguageGovernance",
+            "projection": "보편언어 사전은 TypeDB 관리 개념으로 저장되며 투자 규칙과 별도로 버전 관리됩니다.",
+        },
+    }
+
+
+def save_ontology_language_payload(payload: Dict[str, object]) -> Dict[str, object]:
+    body = payload if isinstance(payload, dict) else {}
+    registry_input = body.get("registry") if isinstance(body.get("registry"), dict) else body
+    registry = normalize_investment_language_registry(registry_input)
+    registry["updatedAt"] = now()
+    registry["source"] = "admin-approved"
+    validation = validate_investment_language_registry(registry)
+    if not validation.get("valid"):
+        raise ValueError("보편언어 사전에 오류가 있어 저장하지 않았습니다: " + "; ".join(
+            str(item.get("message") or "") for item in validation.get("errors") or []
+        ))
+    saved_settings = save_runtime_settings({
+        LANGUAGE_REGISTRY_SETTING_KEY: json.dumps(registry, ensure_ascii=False, sort_keys=True),
+    })
+    type_db_sync: Dict[str, object] = {"status": "skipped", "reason": "활성 TypeDB 규칙을 확인하지 못했습니다."}
+    repository = ontology_repository_from_settings(saved_settings)
+    try:
+        rulebox = repository.rulebox_snapshot()
+        active_rules = rulebox.get("rules") if isinstance(rulebox.get("rules"), list) else []
+        if active_rules:
+            type_db_sync = repository.save_rulebox({"rules": active_rules})
+        elif not str(saved_settings.get("typedbAddress") or "").strip():
+            type_db_sync = {"status": "disabled", "saved": False, "reason": "TypeDB가 설정되지 않아 로컬 사전만 저장했습니다."}
+    except Exception as error:  # noqa: BLE001 - the approved registry remains locally recoverable.
+        type_db_sync = {"status": "error", "saved": False, "reason": str(error)[:220]}
+    result = ontology_language_payload()
+    result["saved"] = True
+    result["typeDbSync"] = type_db_sync
+    new_domain_event(
+        SETTINGS_UPDATED,
+        "investment-language",
+        {
+            "keys": [LANGUAGE_REGISTRY_SETTING_KEY],
+            "registryVersion": registry.get("version"),
+            "termCount": len(registry.get("terms") or []),
+            "typeDbStatus": type_db_sync.get("status"),
+        },
+    )
+    return result
+
+
+def validate_ontology_language_payload(payload: Dict[str, object]) -> Dict[str, object]:
+    body = payload if isinstance(payload, dict) else {}
+    registry_input = body.get("registry") if isinstance(body.get("registry"), dict) else body
+    validation = validate_investment_language_registry(registry_input)
+    return {key: value for key, value in validation.items() if key != "registry"}
+
+
+def preview_ontology_language_payload(payload: Dict[str, object]) -> Dict[str, object]:
+    body = payload if isinstance(payload, dict) else {}
+    settings = runtime_settings()
+    if isinstance(body.get("registry"), dict):
+        settings = {**settings, LANGUAGE_REGISTRY_SETTING_KEY: body.get("registry")}
+    return audit_user_facing_investment_text(
+        body.get("text") or "",
+        settings,
+        str(body.get("level") or "absoluteBeginner"),
+    )
+
+
+def suggest_ontology_language_payload(payload: Dict[str, object]) -> Dict[str, object]:
+    body = payload if isinstance(payload, dict) else {}
+    settings = runtime_settings()
+    if isinstance(body.get("registry"), dict):
+        settings = {**settings, LANGUAGE_REGISTRY_SETTING_KEY: body.get("registry")}
+    return propose_investment_language_changes(
+        body.get("text") or "",
+        settings,
+        str(body.get("level") or "absoluteBeginner"),
+    )
+
+
 def run_ontology_rulebox_payload(payload: Dict[str, object]) -> Dict[str, object]:
     return ontology_repository_from_settings(runtime_settings()).run_rulebox(payload)
 
@@ -764,12 +859,13 @@ def ontology_inference_ledger_api_payload(query: Dict[str, List[str]]) -> Dict[s
     return payload
 
 
-ONTOLOGY_AUDIT_BOXES = ["TBox", "ABox", "RuleBox", "RuleBoxGovernance", "InferenceBox"]
+ONTOLOGY_AUDIT_BOXES = ["TBox", "ABox", "RuleBox", "RuleBoxGovernance", "LanguageGovernance", "InferenceBox"]
 ONTOLOGY_AUDIT_SECTION_LABELS = {
     "tbox": ("TBox", "스키마와 관계 타입"),
     "abox": ("ABox", "현재 실체 데이터"),
     "rulebox": ("RuleBox", "운영 규칙과 후보"),
     "inferencebox": ("InferenceBox", "세대별 추론 결과"),
+    "language": ("LanguageGovernance", "보편언어 사전과 승인 상태"),
     "evidence": ("Evidence Trace", "근거, 믿음, 의견, 실행 계획"),
     "sync": ("TypeDB Sync", "동기화와 저장소 상태"),
 }
@@ -2900,6 +2996,23 @@ class DigitalTwinHandler(BaseHTTPRequestHandler):
                 if not self.ensure_writable("공유 모드에서는 TypeDB RuleBox를 변경할 수 없습니다."):
                     return
                 return self.send_payload(200, save_ontology_rulebox_payload(self.read_json_body()))
+
+        if path == "/api/ontology/language":
+            if self.command == "GET":
+                return self.send_payload(200, ontology_language_payload())
+            if self.command in {"POST", "PUT"}:
+                if not self.ensure_writable("공유 모드에서는 보편언어 사전을 변경할 수 없습니다."):
+                    return
+                return self.send_payload(200, save_ontology_language_payload(self.read_json_body()))
+
+        if path == "/api/ontology/language/validate" and self.command == "POST":
+            return self.send_payload(200, validate_ontology_language_payload(self.read_json_body()))
+
+        if path == "/api/ontology/language/preview" and self.command == "POST":
+            return self.send_payload(200, preview_ontology_language_payload(self.read_json_body()))
+
+        if path == "/api/ontology/language/suggest" and self.command == "POST":
+            return self.send_payload(200, suggest_ontology_language_payload(self.read_json_body()))
 
         if path == "/api/ontology/rulebox/run" and self.command == "POST":
             if not self.ensure_writable("공유 모드에서는 TypeDB 네이티브 규칙 추론을 실행할 수 없습니다."):

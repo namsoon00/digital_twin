@@ -19,6 +19,7 @@ from ..domain.ontology_inference_context import (
     INFERENCE_SCORE_COMPONENT_WEIGHTS,
     INFERENCE_SCORE_DIRECTIONAL_BONUS,
     INFERENCE_SCORE_MAX_OPPOSING_PENALTY,
+    INFERENCE_SCORE_OPPOSING_PENALTY_RATE,
 )
 from ..domain.ontology_relation_catalog import SCORE_BANDS
 from ..domain.ontology_relation_decisions import score_band
@@ -493,11 +494,17 @@ def relation_score_guide_rows(context: Dict[str, object], level: str) -> List[st
             level,
         ),
         _html_bullet(
-            "계산 기준: " + weight_text + ". 위험과 기회가 함께 강하면 최대 "
+            "계산 기준: " + weight_text + ". 위험과 기회가 함께 있으면 약한 쪽 점수의 "
+            + str(round((_number(breakdown.get("opposingPressurePenaltyRate")) or INFERENCE_SCORE_OPPOSING_PENALTY_RATE) * 100))
+            + "%를 최대 "
             + str(int(_number(breakdown.get("maximumOpposingPressurePenalty")) or INFERENCE_SCORE_MAX_OPPOSING_PENALTY))
-            + "점을 빼고, 한쪽이 매우 우세하면 "
+            + "점까지 빼고, 두 방향의 차이가 "
+            + str(round(_number(breakdown.get("directionalDominanceThreshold")) or 55.0, 1))
+            + "점 이상이면 "
             + str(int(_number(breakdown.get("directionalDominanceBonus")) or INFERENCE_SCORE_DIRECTIONAL_BONUS))
-            + "점을 더합니다.",
+            + "점을 더합니다. 데이터 신뢰도가 "
+            + str(round(_number(breakdown.get("dataConfidencePenaltyThreshold")) or 55.0, 1))
+            + "점 미만이면 추가로 감점합니다.",
             level,
         ),
     ]

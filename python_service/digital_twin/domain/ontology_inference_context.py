@@ -614,6 +614,7 @@ INFERENCE_SCORE_COMPONENT_WEIGHTS = {
     "dataConfidence": 0.05,
 }
 INFERENCE_SCORE_MAX_OPPOSING_PENALTY = 14.0
+INFERENCE_SCORE_OPPOSING_PENALTY_RATE = 0.18
 INFERENCE_SCORE_DIRECTIONAL_BONUS = 4.0
 
 
@@ -828,7 +829,10 @@ def inference_score_breakdown(
     dominant = max(risk, support)
     opposing_penalty = 0.0
     if risk and support:
-        opposing_penalty = min(INFERENCE_SCORE_MAX_OPPOSING_PENALTY, min(risk, support) * 0.18)
+        opposing_penalty = min(
+            INFERENCE_SCORE_MAX_OPPOSING_PENALTY,
+            min(risk, support) * INFERENCE_SCORE_OPPOSING_PENALTY_RATE,
+        )
     final = (
         rule_reliability * INFERENCE_SCORE_COMPONENT_WEIGHTS["ruleReliability"]
         + dominant * INFERENCE_SCORE_COMPONENT_WEIGHTS["dominantEvidence"]
@@ -858,7 +862,10 @@ def inference_score_breakdown(
         "scoreMaximum": 100.0,
         "componentWeights": dict(INFERENCE_SCORE_COMPONENT_WEIGHTS),
         "maximumOpposingPressurePenalty": INFERENCE_SCORE_MAX_OPPOSING_PENALTY,
+        "opposingPressurePenaltyRate": INFERENCE_SCORE_OPPOSING_PENALTY_RATE,
         "directionalDominanceBonus": INFERENCE_SCORE_DIRECTIONAL_BONUS,
+        "directionalDominanceThreshold": policy.net_risk_bonus_threshold,
+        "dataConfidencePenaltyThreshold": policy.data_confidence_penalty_threshold,
         "thresholdPolicyId": policy.policy_id,
         "thresholdPolicyVersion": policy.version,
         "thresholdPolicySource": policy.source,
@@ -912,7 +919,10 @@ def aggregate_score_breakdown(matches: List[OntologyRuleMatch], threshold_policy
         "scoreMaximum": 100.0,
         "componentWeights": dict(INFERENCE_SCORE_COMPONENT_WEIGHTS),
         "maximumOpposingPressurePenalty": INFERENCE_SCORE_MAX_OPPOSING_PENALTY,
+        "opposingPressurePenaltyRate": INFERENCE_SCORE_OPPOSING_PENALTY_RATE,
         "directionalDominanceBonus": INFERENCE_SCORE_DIRECTIONAL_BONUS,
+        "directionalDominanceThreshold": policy.net_risk_bonus_threshold,
+        "dataConfidencePenaltyThreshold": policy.data_confidence_penalty_threshold,
         "thresholdPolicyId": policy.policy_id,
         "thresholdPolicyVersion": policy.version,
         "thresholdPolicySource": policy.source,

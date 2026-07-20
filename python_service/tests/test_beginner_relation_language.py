@@ -336,6 +336,8 @@ class BeginnerRelationLanguageTests(unittest.TestCase):
         self.assertIn("85~100 즉시 재확인", message)
         self.assertIn("규칙 신뢰도 25%", message)
         self.assertIn("위험·기회 근거 42%", message)
+        self.assertIn("약한 쪽 점수의 18%", message)
+        self.assertIn("데이터 신뢰도가 55.0점 미만이면 추가로 감점", message)
 
     def test_execution_message_includes_deterministic_valuation_details(self):
         response = NotificationAIValidatedResponse(

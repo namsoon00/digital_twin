@@ -26,6 +26,8 @@
     notifyProvider: "",
     telegramBotToken: "",
     telegramChatId: "",
+    operationsTelegramBotToken: "",
+    operationsTelegramChatId: "",
     notifyLinkUrl: "http://127.0.0.1:3000?tab=notifications",
     symbolUniverseMaxAgeHours: "24",
     marketDataMaxAgeMinutes: "240",

@@ -893,6 +893,7 @@ def build_notification_ai_gate_prompt(context: Dict[str, object]) -> str:
         "가능하면 sourceUrls에 판단에 사용한 원문 URL을 넣고, URL이 없으면 evidence에 데이터 출처명을 함께 쓴다.",
         "action 필드에만 BUY/ADD/HOLD/TRIM/SELL/AVOID 코드를 쓰고, summary/opinion/evidence/counterEvidence/nextChecks에는 매수/추가매수/보유/분할축소/매도/회피처럼 한국어 행동명만 쓴다.",
         "사용자에게 보이는 문장에는 snake_case, camelCase, true/false, entryAllocationRoom, entrySupportCount, entryExternalRiskBlocked 같은 내부 변수명을 쓰지 않는다. 반드시 쉬운 한국어 문장으로 풀어쓴다.",
+        "instrumentArchetypes와 instrumentPositionIntent의 영문 값은 TypeDB 내부 식별자다. 사용자 문장에는 instrumentArchetypeLabels와 instrumentPositionIntentDescription을 사용하고 PlatformGrowth, HighVolatilityGrowth, growth, core 같은 내부 값을 그대로 쓰지 않는다. 종목 타입은 종목 성격, 계좌 안 역할은 계좌에서의 역할이라고 표현한다.",
         "어려운 표현은 피한다. '기준선 이탈'은 '주요 평균선 아래로 내려감', '추세 훼손'은 '가격 흐름 약화', '하락 가속'은 '하락 속도 증가', '괴리'는 '차이'처럼 바꿔 쓴다. 왕초보에게는 '중기 회복' 대신 '최근보다 조금 긴 기간의 가격 회복', '중기 방어선' 대신 '최근보다 조금 긴 기간의 버티는 가격대'처럼 풀어 쓴다.",
         "계정의 메시지 전달 수준은 " + str(delivery_profile.get("label") or "") + "이다. " + str(delivery_profile.get("promptInstruction") or ""),
         "계정의 투자 성향은 " + strategy_label + "이다. " + str(strategy_guidance.get("stance") or "") + " " + str(strategy_guidance.get("response") or ""),

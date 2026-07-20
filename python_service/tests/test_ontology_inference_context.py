@@ -7,6 +7,11 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from digital_twin.domain.ontology_inference_context import relation_contexts_from_snapshot
 from digital_twin.domain.ontology_relation_execution_plan import decision_drivers_from_relation_context
 from digital_twin.domain.ontology_relation_facts import position_signal_facts
+from digital_twin.domain.instrument_profiles import InstrumentProfile, profile_settings
+from digital_twin.domain.investment_ubiquitous_language import (
+    investment_archetype_label,
+    user_facing_investment_language,
+)
 from digital_twin.domain.investment_research import choose_action
 from digital_twin.domain.portfolio import AccountSnapshot, Position
 from digital_twin.domain.portfolio_calculations import portfolio_summary
@@ -14,6 +19,65 @@ from digital_twin.domain.strategy import decisions_for_positions
 
 
 class OntologyInferenceContextTests(unittest.TestCase):
+    def test_instrument_profile_driver_uses_tbox_domain_language(self):
+        profile = InstrumentProfile(
+            symbol="CPNG",
+            label="이커머스 플랫폼 성장주",
+            archetypes=["PlatformGrowth", "HighVolatilityGrowth"],
+            position_intent="growth",
+            policies={
+                "allowAddOnStrength": True,
+                "trimOnTrendBreak": True,
+                "avoidAveragingDown": True,
+            },
+        )
+        payload = profile.to_dict()
+        drivers = decision_drivers_from_relation_context(
+            {
+                "instrumentProfileLabel": profile.label,
+                "instrumentArchetypes": profile.archetypes,
+                "instrumentArchetypeLabels": payload["archetypeLabels"],
+                "instrumentPositionIntent": profile.position_intent,
+                "instrumentPositionIntentDescription": payload["positionIntentDescription"],
+                "allowAddOnStrength": True,
+                "trimOnTrendBreak": True,
+                "avoidAveragingDown": True,
+            },
+            {},
+            [],
+        )
+
+        driver = next(item for item in drivers if item["category"] == "instrumentProfile")
+        summary = driver["summary"]
+        self.assertEqual("종목 성격", driver["label"])
+        self.assertIn("세부 성격은 플랫폼 성장주, 가격 변동이 큰 성장주입니다", summary)
+        self.assertIn("계좌에서는 성장 가능성을 보고 투자하는 종목으로 관리합니다", summary)
+        self.assertIn("관리 원칙은", summary)
+        self.assertNotIn("PlatformGrowth", summary)
+        self.assertNotIn("HighVolatilityGrowth", summary)
+        self.assertNotIn("계좌 안 역할", summary)
+        self.assertNotIn(" 타입:", summary)
+
+    def test_every_default_profile_archetype_has_a_tbox_domain_label(self):
+        profiles = profile_settings()
+        identifiers = sorted({item for profile in profiles.values() for item in profile.archetypes})
+
+        for identifier in identifiers:
+            label = investment_archetype_label(identifier)
+            self.assertTrue(label, identifier)
+            self.assertNotEqual("사용자 정의 종목 성격", label, identifier)
+            self.assertNotEqual(identifier, label)
+
+    def test_user_facing_language_removes_internal_profile_identifiers(self):
+        text = user_facing_investment_language(
+            "종목 타입: PlatformGrowth, HighVolatilityGrowth. 계좌 안 역할: growth."
+        )
+
+        self.assertEqual(
+            "종목 성격: 플랫폼 성장주, 가격 변동이 큰 성장주. 계좌에서의 역할: 성장 투자.",
+            text,
+        )
+
     def test_action_selection_threshold_policy_can_override_watchlist_entry_gate(self):
         position = Position(symbol="AAPL", name="Apple", source="watchlist")
         context = {

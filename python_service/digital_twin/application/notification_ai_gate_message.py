@@ -14,6 +14,7 @@ from ..domain.notification_ai_context import relation_facts
 from ..domain.notification_ai_context import is_watchlist_context
 from ..domain.external_api_sources import external_api_source_line
 from ..domain.notification_ai_gate_contracts import ACTION_LABELS, MESSAGE_START_BADGE, NotificationAIValidatedResponse
+from ..domain.investment_ubiquitous_language import user_facing_investment_language
 from ..domain.notification_ai_gate_sources import source_detail_text, source_url_rows
 from ..domain.notification_reasoning_report import (
     customer_alert_reason_lines,
@@ -240,7 +241,7 @@ def _annotate_term_once(text: str, term: str, hint: str) -> str:
 
 
 def _message_text(value: object, level: str = "") -> str:
-    text = str(value or "")
+    text = user_facing_investment_language(value)
     normalized = str(level or "").strip()
     if normalized == "absoluteBeginner":
         for before, after in ABSOLUTE_BEGINNER_TERM_REPLACEMENTS:

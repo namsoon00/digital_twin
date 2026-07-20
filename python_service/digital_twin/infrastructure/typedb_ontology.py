@@ -401,8 +401,13 @@ TYPEDB_PROMOTED_TEXT_ATTRIBUTES = {
     "positionRole": "ontology-position-role",
     "targetPositionRole": "ontology-target-position-role",
     "positionIntent": "ontology-position-intent",
+    "positionIntentLabel": "ontology-position-intent-label",
+    "positionIntentDescription": "ontology-position-intent-description",
     "instrumentArchetype": "ontology-instrument-archetype",
     "instrumentArchetypes": "ontology-instrument-archetype",
+    "archetypeLabel": "ontology-instrument-archetype-label",
+    "archetypeLabels": "ontology-instrument-archetype-label",
+    "instrumentArchetypeLabels": "ontology-instrument-archetype-label",
     "factor": "ontology-factor",
     "sensitivityLevel": "ontology-sensitivity-level",
     "cryptoSymbol": "ontology-crypto-symbol",
@@ -1646,7 +1651,10 @@ attribute ontology-investment-strategy-profile-label, value string;
 attribute ontology-position-role, value string;
 attribute ontology-target-position-role, value string;
 attribute ontology-position-intent, value string;
+attribute ontology-position-intent-label, value string;
+attribute ontology-position-intent-description, value string;
 attribute ontology-instrument-archetype, value string;
+attribute ontology-instrument-archetype-label, value string;
 attribute ontology-factor, value string;
 attribute ontology-sensitivity-level, value string;
 attribute ontology-crypto-symbol, value string;
@@ -1822,7 +1830,10 @@ entity ontology-node @abstract,
     owns ontology-position-role,
     owns ontology-target-position-role,
     owns ontology-position-intent,
+    owns ontology-position-intent-label,
+    owns ontology-position-intent-description,
     owns ontology-instrument-archetype,
+    owns ontology-instrument-archetype-label,
     owns ontology-factor,
     owns ontology-sensitivity-level,
     owns ontology-crypto-symbol,

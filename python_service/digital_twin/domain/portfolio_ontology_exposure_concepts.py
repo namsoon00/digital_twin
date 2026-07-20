@@ -1,5 +1,12 @@
 from typing import Dict, List
 
+from .investment_ubiquitous_language import (
+    investment_archetype_label,
+    investment_archetype_labels,
+    position_intent_label,
+    position_intent_sentence,
+)
+
 from .market_data import known_stock, number
 from .instrument_profiles import (
     InstrumentProfile,
@@ -212,13 +219,18 @@ def add_market_proxy_profile_concepts(
     source: str = "market-proxy-universe",
     quote: Dict[str, object] = None,
 ) -> str:
+    archetype_labels = investment_archetype_labels(profile.archetypes)
+    intent_label = position_intent_label(profile.position_intent)
     proxy_id = add_entity(graph, "market-proxy-instrument", profile.symbol, profile.label, {
         "tboxClass": "MarketProxyInstrument",
         "tboxClasses": market_proxy_instrument_classes(profile),
         "symbol": profile.symbol,
         "label": profile.label,
         "archetypes": list(profile.archetypes),
+        "archetypeLabels": archetype_labels,
         "positionIntent": profile.position_intent,
+        "positionIntentLabel": intent_label,
+        "positionIntentDescription": position_intent_sentence(profile.position_intent),
         "sensitivities": dict(profile.sensitivities),
         "source": source,
     })
@@ -343,13 +355,19 @@ def add_instrument_profile_concepts(
 ) -> None:
     profile = instrument_profile_for_position(position, profile_settings_from_runtime(runtime_context))
     symbol = symbol_key(position)
+    archetype_labels = investment_archetype_labels(profile.archetypes)
+    intent_label = position_intent_label(profile.position_intent)
+    intent_description = position_intent_sentence(profile.position_intent)
     profile_id = add_entity(graph, "instrument-profile", symbol, profile.label, {
         "tboxClass": "InstrumentProfile",
         "tboxClasses": profile_tbox_classes(profile),
         "symbol": symbol,
         "label": profile.label,
         "archetypes": list(profile.archetypes),
+        "archetypeLabels": archetype_labels,
         "positionIntent": profile.position_intent,
+        "positionIntentLabel": intent_label,
+        "positionIntentDescription": intent_description,
         "sensitivities": dict(profile.sensitivities),
         "policies": dict(profile.policies),
         "allowAddOnStrength": profile.allow_add_on_strength,
@@ -361,33 +379,38 @@ def add_instrument_profile_concepts(
         "source": "instrument-profile",
         "aiInfluenceLabel": profile.label,
         "positionIntent": profile.position_intent,
+        "positionIntentLabel": intent_label,
     })
     add_relation(graph, portfolio_node_id, profile_id, "HAS_INSTRUMENT_PROFILE", weight=0.5, properties={
         "source": "instrument-profile",
         "symbol": symbol,
     })
 
-    intent_id = add_entity(graph, "position-intent", profile.position_intent, profile.position_intent, {
+    intent_id = add_entity(graph, "position-intent", profile.position_intent, intent_label, {
         "tboxClass": "PositionIntent",
         "intent": profile.position_intent,
         "positionIntent": profile.position_intent,
+        "positionIntentLabel": intent_label,
+        "description": intent_description,
     })
     add_relation(graph, profile_id, intent_id, "HAS_POSITION_INTENT", weight=1.0, properties={"source": "instrument-profile"})
 
     for archetype in profile.archetypes:
-        archetype_id = add_entity(graph, "investment-archetype", archetype, archetype, {
+        archetype_label = investment_archetype_label(archetype)
+        archetype_id = add_entity(graph, "investment-archetype", archetype, archetype_label, {
             "tboxClass": "InvestmentArchetype",
             "tboxClasses": ["InvestmentArchetype", archetype],
             "archetype": archetype,
             "instrumentArchetype": archetype,
+            "archetypeLabel": archetype_label,
         })
         add_relation(graph, profile_id, archetype_id, "HAS_ARCHETYPE", weight=1.0, properties={
             "source": "instrument-profile",
-            "aiInfluenceLabel": archetype + " 타입",
+            "aiInfluenceLabel": archetype_label,
         })
         add_relation(graph, stock_id, archetype_id, "HAS_ARCHETYPE", weight=0.8, properties={
             "source": "instrument-profile",
-            "aiInfluenceLabel": archetype + " 타입",
+            "aiInfluenceLabel": archetype_label,
         })
 
     for factor, level in sorted(profile.sensitivities.items()):

@@ -1196,11 +1196,15 @@ def position_signal_facts(
         "expectsKrMicrostructureSignals": expects_kr_microstructure_signals(position.market, position.currency, symbol),
     }
     profile = instrument_profile_for_position(position, settings)
+    profile_payload = profile.to_dict()
     facts.update({
-        "instrumentProfile": profile.to_dict(),
+        "instrumentProfile": profile_payload,
         "instrumentProfileLabel": profile.label,
         "instrumentArchetypes": list(profile.archetypes),
+        "instrumentArchetypeLabels": list(profile_payload.get("archetypeLabels") or []),
         "instrumentPositionIntent": profile.position_intent,
+        "instrumentPositionIntentLabel": profile_payload.get("positionIntentLabel") or "",
+        "instrumentPositionIntentDescription": profile_payload.get("positionIntentDescription") or "",
         "instrumentSensitivities": dict(profile.sensitivities),
         "instrumentPolicies": dict(profile.policies),
         "allowAddOnStrength": profile.allow_add_on_strength,

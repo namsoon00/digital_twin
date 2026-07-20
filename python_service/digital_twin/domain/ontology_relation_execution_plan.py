@@ -1,5 +1,9 @@
 from typing import Dict, List
 
+from .investment_ubiquitous_language import (
+    investment_archetype_labels,
+    position_intent_sentence,
+)
 from .ontology_relation_contracts import OntologyRuleMatch
 from .ontology_rulebox_contracts import (
     WATCHLIST_ACTION_POLICY,
@@ -171,6 +175,11 @@ def decision_drivers_from_relation_context(
 
     profile_label = str(facts.get("instrumentProfileLabel") or "").strip()
     archetypes = [str(item) for item in (facts.get("instrumentArchetypes") or []) if str(item or "").strip()]
+    archetype_labels = [
+        str(item)
+        for item in (facts.get("instrumentArchetypeLabels") or investment_archetype_labels(archetypes))
+        if str(item or "").strip()
+    ]
     position_intent = str(facts.get("instrumentPositionIntent") or "").strip()
     if profile_label or archetypes:
         policy_bits = []
@@ -181,21 +190,30 @@ def decision_drivers_from_relation_context(
         if facts.get("avoidAveragingDown"):
             policy_bits.append("손실 구간 물타기 회피")
         summary = (profile_label or "종목 프로필") + "입니다."
-        if archetypes:
-            summary += " 타입: " + ", ".join(archetypes[:3]) + "."
+        if archetype_labels:
+            summary += " 세부 성격은 " + ", ".join(archetype_labels[:3]) + "입니다."
         if position_intent:
-            summary += " 계좌 안 역할: " + position_intent + "."
+            summary += " " + str(
+                facts.get("instrumentPositionIntentDescription")
+                or position_intent_sentence(position_intent)
+            ).strip()
         if policy_bits:
-            summary += " 정책: " + ", ".join(policy_bits[:3]) + "."
+            summary += " 관리 원칙은 " + ", ".join(policy_bits[:3]) + "입니다."
         _append_driver(
             rows,
             seen,
             "instrumentProfile",
             "neutral",
-            "종목 타입",
+            "종목 성격",
             summary,
             58,
-            ["instrumentProfile", "instrumentArchetypes", "instrumentPolicies"],
+            [
+                "instrumentProfile",
+                "instrumentArchetypes",
+                "instrumentArchetypeLabels",
+                "instrumentPositionIntentLabel",
+                "instrumentPolicies",
+            ],
         )
 
     pnl = _float_value(facts.get("profitLossRate"))

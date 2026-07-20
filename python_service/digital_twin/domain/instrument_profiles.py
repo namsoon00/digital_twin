@@ -1,6 +1,11 @@
 from dataclasses import dataclass, field
 from typing import Dict, List
 
+from .investment_ubiquitous_language import (
+    investment_archetype_labels,
+    position_intent_label,
+    position_intent_sentence,
+)
 from .portfolio import Position
 
 
@@ -120,7 +125,10 @@ class InstrumentProfile:
             "symbol": self.symbol,
             "label": self.label,
             "archetypes": list(self.archetypes),
+            "archetypeLabels": investment_archetype_labels(self.archetypes),
             "positionIntent": self.position_intent,
+            "positionIntentLabel": position_intent_label(self.position_intent),
+            "positionIntentDescription": position_intent_sentence(self.position_intent),
             "sensitivities": dict(self.sensitivities),
             "policies": dict(self.policies),
             "allowAddOnStrength": self.allow_add_on_strength,

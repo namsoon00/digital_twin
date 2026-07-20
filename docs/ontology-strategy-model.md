@@ -74,7 +74,7 @@ AI 프롬프트에는 TBox, `boundedContexts`, ABox, operational ontology, reaso
 
 우선적으로 강화한 추론 관계 축은 다음 5개다.
 
-- 종목 타입 관계: `HAS_INSTRUMENT_PROFILE`, `HAS_ARCHETYPE`, `HAS_POSITION_INTENT`로 종목을 성장주, 반도체 사이클, 비트코인 프록시, 우선주/인컴, 대형 우량 등으로 분류한다. `MATCHES_INVESTOR_PROFILE`, `VIOLATES_STRATEGY_FIT` 추론은 이 타입이 현재 가격 흐름과 계정 성향에 맞는지 분리한다.
+- 종목 성격 관계: `HAS_INSTRUMENT_PROFILE`, `HAS_ARCHETYPE`, `HAS_POSITION_INTENT`로 종목을 성장주, 반도체 업황 민감주, 비트코인 가격에 민감한 주식, 배당 중심 우선주, 대형 우량주 등으로 분류한다. `MATCHES_INVESTOR_PROFILE`, `VIOLATES_STRATEGY_FIT` 추론은 이 성격이 현재 가격 흐름과 계정 성향에 맞는지 분리한다. 내부 TypeDB ID와 사용자 표현의 기준은 [투자 보편언어](investment-ubiquitous-language.md)를 따른다.
 - 투자 성향 적합 관계: `HAS_RISK_BUDGET`, `HAS_PROFIT_POLICY`, `EVALUATED_UNDER_STRATEGY`를 통해 공격형/성장형/균형형/보수형의 손실 허용폭, 수익 보호 기준, 단일 종목 비중 한도를 적용한다. `VIOLATES_RISK_TOLERANCE`, `FITS_INVESTOR_RISK_PROFILE` 추론은 모든 계정에 같은 손절/추가매수 기준을 쓰지 않게 한다.
 - 가격 회복 관계: `RECLAIMS_LEVEL`, `BREAKS_LEVEL`, `HAS_TREND_TRANSITION`과 5/20/60일 평균 가격 거리, 당일 등락, 거래량을 묶어 `CONFIRMS_RECOVERY`, `FAILS_RECOVERY`를 만든다. 단순 반등, 확인된 회복, 반등 실패 위험을 다른 관계로 남긴다.
 - 수급 심리 관계: `HAS_TRADE_FLOW`, `HAS_INVESTOR_FLOW_SENTIMENT`로 체결강도, 호가 불균형, 외국인·기관·개인 순매수 심리를 표현한다. `CONFIRMS_WITH_FLOW`, `DIVERGES_FROM_FLOW`는 가격 변화와 큰 자금 흐름이 같은 방향인지 또는 어긋나는지를 추론한다.

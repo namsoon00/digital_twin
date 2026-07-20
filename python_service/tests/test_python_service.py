@@ -1713,6 +1713,87 @@ class PythonServiceTests(unittest.TestCase):
         self.assertFalse(decision.should_send)
         self.assertIn("KIS investor", decision.stale_sources)
 
+    def test_investment_insight_ignores_stale_kis_stages_not_used_by_selected_rule(self):
+        now = datetime(2026, 7, 7, 2, 0, tzinfo=timezone.utc)
+        freshness = freshness_from_position(
+            {
+                "symbol": "035420",
+                "quoteSource": "KIS Open API",
+                "dataQuality": "actual",
+                "updatedAt": "2026-07-07T01:59:30Z",
+                "marketSignalCoverage": {
+                    "price": {
+                        "status": "available",
+                        "fields": ["currentPrice"],
+                        "sourceAsOf": "2026-07-07T01:59:30Z",
+                    },
+                    "ccnl": {
+                        "status": "stale",
+                        "fields": ["tradeStrength"],
+                        "sourceAsOf": "2026-07-07T01:56:00Z",
+                    },
+                    "investor": {
+                        "status": "stale",
+                        "fields": ["foreignNetVolume"],
+                        "sourceAsOf": "2026-07-07T01:56:00Z",
+                        "judgementEvidenceUsable": False,
+                    },
+                    "orderbook": {
+                        "status": "stale",
+                        "fields": ["bidAskImbalance"],
+                        "sourceAsOf": "2026-07-07T01:56:00Z",
+                    },
+                },
+            },
+            "investmentInsight",
+            now=now,
+        )
+
+        decision = evaluate_notification_data_freshness(
+            {
+                "messageType": "investmentInsight",
+                "dataFreshness": freshness,
+                "ontologyRelationContext": {
+                    "decision": {
+                        "scoreBreakdown": {
+                            "appliedFactFields": ["ma5Distance", "ma20Distance", "priceChangeRate"],
+                        },
+                    },
+                },
+            },
+            settings={"dataFreshnessEnabled": "1"},
+            now=now,
+        )
+
+        self.assertTrue(decision.should_send)
+        self.assertEqual("fresh", decision.status)
+        self.assertEqual(["KIS ccnl", "KIS investor", "KIS orderbook"], decision.ignored_sources)
+
+    def test_investment_insight_requires_stale_kis_stage_used_by_selected_rule(self):
+        decision = evaluate_notification_data_freshness(
+            {
+                "messageType": "investmentInsight",
+                "dataFreshness": {
+                    "status": "stale",
+                    "sources": [
+                        {"source": "KIS Open API", "status": "fresh", "ageMinutes": 1, "maxAgeMinutes": 10},
+                        {"source": "KIS price", "stage": "price", "status": "fresh", "ageMinutes": 1, "maxAgeMinutes": 3},
+                        {"source": "KIS investor", "stage": "investor", "status": "stale", "ageMinutes": 7, "maxAgeMinutes": 5},
+                    ],
+                },
+                "ontologyRelationContext": {
+                    "decision": {
+                        "scoreBreakdown": {"appliedFactFields": ["investorFlowScore"]},
+                    },
+                },
+            },
+            settings={"dataFreshnessEnabled": "1"},
+        )
+
+        self.assertFalse(decision.should_send)
+        self.assertEqual(["KIS investor"], decision.stale_sources)
+        self.assertEqual([], decision.ignored_sources)
+
     def test_position_freshness_rejects_kis_available_stage_without_timestamp(self):
         now = datetime(2026, 7, 7, 2, 0, tzinfo=timezone.utc)
         freshness = freshness_from_position(
@@ -1931,6 +2012,17 @@ class PythonServiceTests(unittest.TestCase):
         self.assertTrue(status["configured"]["kisAppSecret"])
         self.assertNotIn("kisAccountNo", status["configured"])
         self.assertNotIn("kisAccountProductCode", status["configured"])
+
+    def test_ontology_reasoning_cursor_retains_more_ids_than_event_scan_window(self):
+        store = TestOntologyReasoningCursorStore(test_store_seed(self.temp.name))
+        store.runtime_settings["ontologyReasoningProcessedEventLimit"] = "1200"
+
+        store.mark_processed(["event-" + str(index) for index in range(1205)])
+
+        processed = store.processed_event_ids()
+        self.assertEqual(1200, len(processed))
+        self.assertEqual("event-5", processed[0])
+        self.assertEqual("event-1204", processed[-1])
 
     def test_save_json_preserves_existing_secrets_when_omitted(self):
         registry = AccountRegistry()

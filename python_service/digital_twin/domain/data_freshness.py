@@ -1,6 +1,6 @@
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
-from typing import Dict, Iterable, List
+from typing import Dict, Iterable, List, Optional, Set
 
 from .message_types import (
     EXTERNAL_CRYPTO_MOVE,
@@ -63,6 +63,43 @@ KIS_STAGE_MAX_AGE_SETTINGS = {
     "ccnl": ("dataFreshnessKisMicrostructureMaxAgeMinutes", 2),
     "orderbook": ("dataFreshnessKisMicrostructureMaxAgeMinutes", 2),
     "investor": ("dataFreshnessKisInvestorMaxAgeMinutes", 5),
+}
+
+KIS_STAGE_EVIDENCE_FIELDS = {
+    "price": {
+        "currentPrice",
+        "changeRate",
+        "priceChangeRate",
+        "ma5Distance",
+        "ma20Distance",
+        "ma60Distance",
+        "ma20Slope",
+        "ma60Slope",
+        "trendCurve",
+        "trendDynamicRiskScore",
+        "volume",
+        "volumeRatio",
+        "timeAdjustedVolumeRatio",
+        "tradingValue",
+    },
+    "ccnl": {"tradeStrength", "buyVolume", "sellVolume", "buyShare", "sellShare"},
+    "orderbook": {"bidAskImbalance", "orderbookAskVolume", "orderbookBidVolume"},
+    "investor": {
+        "investorFlowScore",
+        "smartMoneyNetVolume",
+        "foreignBuyVolume",
+        "foreignNetAmount",
+        "foreignNetVolume",
+        "foreignSellVolume",
+        "individualBuyVolume",
+        "individualNetAmount",
+        "individualNetVolume",
+        "individualSellVolume",
+        "institutionBuyVolume",
+        "institutionNetAmount",
+        "institutionNetVolume",
+        "institutionSellVolume",
+    },
 }
 
 
@@ -342,6 +379,7 @@ class DataFreshnessDecision:
     age_minutes: object = None
     max_age_minutes: object = None
     stale_sources: List[str] = field(default_factory=list)
+    ignored_sources: List[str] = field(default_factory=list)
 
     def to_context(self) -> Dict[str, object]:
         return {
@@ -353,7 +391,49 @@ class DataFreshnessDecision:
             "dataFreshnessAgeMinutes": self.age_minutes,
             "dataFreshnessMaxAgeMinutes": self.max_age_minutes,
             "dataFreshnessStaleSources": list(self.stale_sources),
+            "dataFreshnessIgnoredSources": list(self.ignored_sources),
         }
+
+
+def freshness_leaf_records(records: Iterable[Dict[str, object]]) -> List[Dict[str, object]]:
+    leaves: List[Dict[str, object]] = []
+    for item in records or []:
+        if not isinstance(item, dict):
+            continue
+        children = item.get("sources")
+        if isinstance(children, list) and children:
+            leaves.extend(freshness_leaf_records(children))
+        else:
+            leaves.append(dict(item))
+    return leaves
+
+
+def selected_inference_fact_fields(context: Dict[str, object]) -> List[str]:
+    relation_context = context.get("ontologyRelationContext")
+    if not isinstance(relation_context, dict):
+        return []
+    decision = relation_context.get("decision")
+    if not isinstance(decision, dict):
+        return []
+    breakdown = decision.get("scoreBreakdown")
+    if not isinstance(breakdown, dict):
+        return []
+    return list(dict.fromkeys(
+        str(field or "").strip()
+        for field in breakdown.get("appliedFactFields") or []
+        if str(field or "").strip()
+    ))
+
+
+def required_kis_stages_for_notification(context: Dict[str, object]) -> Optional[Set[str]]:
+    fields = set(selected_inference_fact_fields(context or {}))
+    if not fields:
+        return None
+    required = {"price"}
+    for stage, stage_fields in KIS_STAGE_EVIDENCE_FIELDS.items():
+        if fields & stage_fields:
+            required.add(stage)
+    return required
 
 
 def evaluate_notification_data_freshness(context: Dict[str, object], settings: Dict[str, object] = None, now=None) -> DataFreshnessDecision:
@@ -374,7 +454,21 @@ def evaluate_notification_data_freshness(context: Dict[str, object], settings: D
             reason="신선도 메타데이터 없음",
             stale_sources=["unknown"],
         )
-    record = aggregate_freshness(data.get("sources") or [data], message_type, settings=settings, now=now)
+    records = freshness_leaf_records(data.get("sources") or [data])
+    required_kis_stages = required_kis_stages_for_notification(context)
+    ignored_records = []
+    if required_kis_stages is not None:
+        required_records = []
+        for item in records:
+            stage = str(item.get("stage") or "").strip()
+            status = str(item.get("status") or "").strip()
+            if stage in KIS_STAGE_MAX_AGE_SETTINGS and stage not in required_kis_stages:
+                if status in {"stale", "unknown"}:
+                    ignored_records.append(item)
+                continue
+            required_records.append(item)
+        records = required_records
+    record = aggregate_freshness(records, message_type, settings=settings, now=now)
     status = str(record.get("status") or "unknown")
     stale_sources = [
         str(item.get("source") or "unknown")
@@ -391,4 +485,8 @@ def evaluate_notification_data_freshness(context: Dict[str, object], settings: D
         age_minutes=record.get("ageMinutes"),
         max_age_minutes=record.get("maxAgeMinutes"),
         stale_sources=stale_sources,
+        ignored_sources=list(dict.fromkeys(
+            str(item.get("source") or "unknown")
+            for item in ignored_records
+        )),
     )

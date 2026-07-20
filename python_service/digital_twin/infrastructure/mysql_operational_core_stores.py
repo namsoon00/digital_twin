@@ -313,5 +313,12 @@ class MySQLOntologyReasoningCursorStore(MySQLAppStore):
                 seen.add(clean)
                 merged.append(clean)
         payload = self.load()
-        payload["processedEventIds"] = merged[-1000:]
+        try:
+            retention_limit = int(float(str(
+                self.runtime_settings.get("ontologyReasoningProcessedEventLimit") or "10000"
+            )))
+        except (TypeError, ValueError):
+            retention_limit = 10000
+        retention_limit = max(1000, min(50000, retention_limit))
+        payload["processedEventIds"] = merged[-retention_limit:]
         self.save(payload)

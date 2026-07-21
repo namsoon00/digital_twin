@@ -18,19 +18,6 @@ WATCHLIST_ENTRY_POLICY = {
     "blocked_actions": WATCHLIST_BLOCKED_ACTIONS,
 }
 
-ADDITIVE_SYSTEM_RULE_IDS = {
-    "shadow.market_psychology.state.v1",
-}
-
-
-def additive_system_graph_inference_rules() -> List[GraphInferenceRule]:
-    return [
-        rule
-        for rule in default_graph_inference_rules()
-        if rule.rule_id in ADDITIVE_SYSTEM_RULE_IDS
-    ]
-
-
 def default_graph_inference_rules() -> List[GraphInferenceRule]:
     return [
         GraphInferenceRule(
@@ -85,6 +72,7 @@ def default_graph_inference_rules() -> List[GraphInferenceRule]:
                     polarity="risk",
                     belief_label="손실 구간에서 기준선 이탈이 겹쳐 손실 방어 판단이 필요합니다.",
                     ai_influence_label="손실 방어 추론",
+                    decision_stage="LOSS_REDUCE",
                 ),
                 GraphRuleDerivation(
                     relation_type="REQUIRES_NEXT_CHECK",
@@ -98,6 +86,7 @@ def default_graph_inference_rules() -> List[GraphInferenceRule]:
                     ai_influence_label="회복 조건 재확인",
                     action_group="lossControl",
                     action_level="watch",
+                    decision_stage="LOSS_WATCH",
                 ),
             ],
         ),
@@ -738,6 +727,7 @@ def default_graph_inference_rules() -> List[GraphInferenceRule]:
                     ai_influence_label="수익 보호 추론",
                     action_group="profitTake",
                     action_level="review",
+                    decision_stage="PROFIT_PARTIAL",
                 )
             ],
         ),
@@ -1584,6 +1574,7 @@ def default_graph_inference_rules() -> List[GraphInferenceRule]:
                     ai_influence_label="관심 종목 진입 관찰",
                     action_group="entry",
                     action_level="watch",
+                    decision_stage="ENTRY_WATCH",
                     **WATCHLIST_ENTRY_POLICY,
                 )
             ],
@@ -1647,6 +1638,7 @@ def default_graph_inference_rules() -> List[GraphInferenceRule]:
                     ai_influence_label="실행 유동성 추론",
                     action_group="executionRisk",
                     action_level="review",
+                    decision_stage="LIQUIDITY_REVIEW",
                 )
             ],
         ),
@@ -1874,6 +1866,7 @@ def default_graph_inference_rules() -> List[GraphInferenceRule]:
                     ai_influence_label="미시구조 데이터 결측 추론",
                     action_group="alertReview",
                     action_level="watch",
+                    decision_stage="DATA_CONFLICT",
                 ),
                 GraphRuleDerivation(
                     relation_type="BLOCKS_VALIDATION_OF",
@@ -2088,6 +2081,7 @@ def default_graph_inference_rules() -> List[GraphInferenceRule]:
                     ai_influence_label="매도 수급 압력 추론",
                     action_group="executionRisk",
                     action_level="review",
+                    decision_stage="LIQUIDITY_REVIEW",
                 )
             ],
         ),
@@ -2145,6 +2139,7 @@ def default_graph_inference_rules() -> List[GraphInferenceRule]:
                     ai_influence_label="수급 매집 진입 후보",
                     action_group="entry",
                     action_level="review",
+                    decision_stage="ENTRY_SPLIT_BUY",
                     **WATCHLIST_ENTRY_POLICY,
                 )
             ],
@@ -2726,6 +2721,7 @@ def default_graph_inference_rules() -> List[GraphInferenceRule]:
                     ai_influence_label="직접 뉴스 우호 이벤트",
                     action_group="entry",
                     action_level="review",
+                    decision_stage="NEWS_CONFIRMATION",
                 ),
                 GraphRuleDerivation(
                     relation_type="SUPPORTS_THESIS",
@@ -2779,6 +2775,7 @@ def default_graph_inference_rules() -> List[GraphInferenceRule]:
                     ai_influence_label="직접 중요 맥락 뉴스 확인",
                     action_group="alertReview",
                     action_level="watch",
+                    decision_stage="NEWS_CONFIRMATION",
                 )
             ],
         ),
@@ -3071,6 +3068,7 @@ def default_graph_inference_rules() -> List[GraphInferenceRule]:
                     ai_influence_label="중요 변경 알림 후보",
                     action_group="alertReview",
                     action_level="watch",
+                    decision_stage="RELATION_WATCH",
                 )
             ],
         ),
@@ -3113,6 +3111,7 @@ def default_graph_inference_rules() -> List[GraphInferenceRule]:
                     ai_influence_label="추세 전이 리스크",
                     action_group="lossControl",
                     action_level="review",
+                    decision_stage="LOSS_REDUCE",
                 ),
                 GraphRuleDerivation(
                     relation_type="WEAKENS_THESIS",
@@ -3429,6 +3428,7 @@ def default_graph_inference_rules() -> List[GraphInferenceRule]:
                     ai_influence_label="추세 전이 진입 관찰",
                     action_group="entry",
                     action_level="review",
+                    decision_stage="ENTRY_SPLIT_BUY",
                     **WATCHLIST_ENTRY_POLICY,
                 ),
                 GraphRuleDerivation(
@@ -4278,40 +4278,6 @@ def default_graph_inference_rules() -> List[GraphInferenceRule]:
                     action_group="valuation",
                     action_level="review",
                     decision_stage="VALUATION_RISK",
-                )
-            ],
-        ),
-        GraphInferenceRule(
-            rule_id="shadow.market_psychology.state.v1",
-            label="신선한 심리 관측 묶음 -> Shadow 심리 상태 확인",
-            version="v1",
-            source_kind="stock",
-            action_group="",
-            action_level="",
-            prompt_hint="이 추론은 실제 매수·매도 판단이나 알림 발송에 반영하지 않고, 기존 판단과 비교하는 Shadow 검증에만 사용합니다.",
-            conditions=[
-                GraphRuleCondition(
-                    "usable-market-psychology-state",
-                    "relation",
-                    "신선도와 최소 근거 수를 통과한 시장 심리 상태가 있습니다.",
-                    relation_type="HAS_MARKET_PSYCHOLOGY_STATE",
-                    target_kind="market-psychology-state",
-                    target_property_filters={
-                        "field": ["optimistic", "mixed", "cautious", "neutral"],
-                    },
-                )
-            ],
-            derivations=[
-                GraphRuleDerivation(
-                    relation_type="HAS_PSYCHOLOGY_SHADOW",
-                    target_kind="psychology-shadow",
-                    target_key="{symbol}:market-psychology-shadow",
-                    target_label="{displayName} 시장 심리 Shadow 관찰",
-                    tbox_class="PsychologyShadowComparison",
-                    tbox_classes=["PsychologyShadowComparison", "MarketPsychologyState", "ActionabilityAssessment"],
-                    polarity="context",
-                    belief_label="신선한 심리 관측 묶음을 TypeDB가 확인했지만 실제 투자 판단에는 반영하지 않습니다.",
-                    ai_influence_label="시장 심리 Shadow 관찰",
                 )
             ],
         ),

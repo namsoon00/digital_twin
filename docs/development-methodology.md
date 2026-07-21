@@ -24,7 +24,7 @@ Investment-analysis code must treat the ontology as the shared world model, not 
 Required flow for new investment behavior:
 
 1. Define the concept in the TBox.
-   Add or reuse a class, relation type, bounded context, review level, data state, decision stage, and policy vocabulary before adding runtime behavior. TBox definitions belong in `domain/ontology_tbox.py`, `domain/ontology_relation_contracts.py`, `domain/ontology_relation_catalog.py`, `domain/ontology_decision_policy.py`, or the closest existing ontology catalog module. Do not introduce a new investment meaning only as a string in an alert template.
+   Add or reuse a class, relation type, bounded context, review level, data state, decision stage, and policy vocabulary before adding runtime behavior. TBox definitions belong in `domain/ontology_tbox.py`, `domain/ontology_relation_contracts.py`, `domain/ontology_relation_catalog.py`, `domain/ontology_relation_decisions.py`, or the closest existing ontology catalog module. Runtime decision conditions and their explicit decision stages belong in the TypeDB-backed rule catalog, not a Python fallback policy. Do not introduce a new investment meaning only as a string in an alert template.
 
 2. Materialize real-world data as ABox facts.
    Every collected or derived investment fact should become an ABox entity or relation with `ontologyBox`, `tboxClass` or `tboxClasses`, `boundedContext` when applicable, provenance, freshness, and missing-data semantics. A quote, disclosure, news item, macro series, FX rate, liquidity observation, investor-flow value, valuation assumption, account exposure, data-source status, or collection schedule should be represented as facts before it is used for judgement.

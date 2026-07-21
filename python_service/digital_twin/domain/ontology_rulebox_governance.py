@@ -3,7 +3,6 @@ import json
 import re
 from typing import Dict, Iterable, List
 
-from .ontology_decision_policy import decision_stage_from_action
 from .ontology_rulebox_contracts import GRAPH_REASONER_VERSION, GraphInferenceRule, GraphRuleCondition, GraphRuleDerivation
 
 
@@ -61,8 +60,6 @@ def canonical_rulebox_derivation(derivation: Dict[str, object], rule: Dict[str, 
         else:
             result["actionLevel"] = action_level
     decision_stage = str(result.get("decision_stage") or result.get("decisionStage") or "").strip()
-    if not decision_stage:
-        decision_stage = decision_stage_from_action(action_group, action_level)
     if decision_stage:
         if "decision_stage" in result or "decisionStage" not in result:
             result["decision_stage"] = decision_stage

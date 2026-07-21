@@ -2,7 +2,6 @@ from typing import Dict, Iterable, List, Optional
 
 from .investment_brain import hypothesis_set_from_relation_context
 from .market_data import number
-from .ontology_decision_policy import decision_stage_from_action
 from .ontology_decision_state import (
     CHANGE_STATE_LABELS,
     CONFLICT_STATE_LABELS,
@@ -24,10 +23,10 @@ from .ontology_rulebox_contracts import (
     WATCHLIST_TARGET_ROLE,
 )
 from .ontology_threshold_policy import ontology_threshold_policy_from_context
+from .ontology_relation_decisions import decision_stage_by_key
 from .ontology_relation_reasoning import (
     OntologyRuleMatch,
     build_ai_prompt_context,
-    decision_stage_by_key,
     execution_plan_from_relation_context,
     position_signal_facts,
 )
@@ -45,14 +44,6 @@ META_INFERENCE_RELATION_TYPES = {
     "HAS_WHY_NOW",
     "TRIGGERED_INFERENCE",
 }
-
-SHADOW_INFERENCE_RELATION_TYPES = {
-    "HAS_PSYCHOLOGY_SHADOW",
-}
-
-SHADOW_INFERENCE_RULE_PREFIXES = (
-    "shadow.market_psychology.",
-)
 
 EVIDENCE_DOMAIN_TOKENS = {
     "position": {"holding", "loss", "profit", "pnl", "position", "rebalance", "concentration"},
@@ -179,16 +170,8 @@ def relation_context_from_inferencebox(
         return {}
     source_name = inferencebox_source_name(inferencebox)
     context_version = relation_context_version(source_name)
-    relations = [
-        item
-        for item in symbol_inference_relations(symbol, inferencebox.get("relations") or [])
-        if not is_shadow_inference_relation(item)
-    ]
-    traces = [
-        item
-        for item in symbol_inference_traces(symbol, inferencebox.get("traces") or [])
-        if not is_shadow_inference_trace(item)
-    ]
+    relations = symbol_inference_relations(symbol, inferencebox.get("relations") or [])
+    traces = symbol_inference_traces(symbol, inferencebox.get("traces") or [])
     if not relations and not traces:
         return {}
     facts = position_signal_facts(
@@ -210,7 +193,11 @@ def relation_context_from_inferencebox(
     why_now = why_now_packet(facts, active_matches, decision, relations, traces, inferencebox, threshold_policy)
     signal_conflicts = signal_conflict_packet(facts, active_matches, relations, threshold_policy)
     data_state = str(evidence_state.get("dataState") or "partial")
-    review_level = review_level_for(decision.get("actionLevel"), data_state)
+    review_level = (
+        "blocked"
+        if decision.get("judgementBlocked")
+        else review_level_for(decision.get("actionLevel"), data_state)
+    )
     decision_state = state_payload(
         review_level,
         data_state,
@@ -426,7 +413,18 @@ def matches_from_inference(
         trace = trace_by_rule.get(rule_id, {})
         evidence_state = inference_evidence_state(relation, facts or {}, trace)
         data_state = str(evidence_state.get("dataState") or "partial")
-        stage = decision_stage_by_key(stage_key_for_inference(rule_id, relation))
+        stage_key = stage_key_for_inference(rule_id, relation)
+        policy_missing = not stage_key
+        stage = decision_stage_by_key(stage_key or "RELATION_WATCH")
+        if policy_missing:
+            evidence_state.update({
+                "dataState": "unavailable",
+                "evidenceUsableForJudgement": False,
+                "judgementBlocked": True,
+                "freshnessGateReason": "TypeDB 추론 관계에 decisionStage가 없습니다.",
+                "drivers": ["TypeDB 판단 단계 누락"],
+            })
+            data_state = "unavailable"
         review_level = review_level_for(stage.action_level, data_state)
         role = evidence_role_from_relation(relation)
         label = str(relation.get("aiInfluenceLabel") or relation.get("targetLabel") or trace.get("label") or rule_id)
@@ -462,14 +460,14 @@ def matches_from_inference(
         rule_id = str(trace.get("ruleId") or "").strip()
         if not rule_id:
             continue
-        trace_blocked = trace.get("evidenceUsableForJudgement") is False
+        trace_blocked = True
         data_state = data_state_from_evidence(
             usable=not trace_blocked,
             freshness_status=trace.get("freshnessStatus"),
             missing=(facts or {}).get("missingData") or [],
             has_evidence=bool(trace.get("matchedConditions") or trace.get("evidenceRelationIds")),
         )
-        review_level = "blocked" if trace_blocked else "observe"
+        review_level = "blocked"
         matches.append(OntologyRuleMatch(
             rule_id=rule_id,
             label=str(trace.get("label") or rule_id),
@@ -480,19 +478,19 @@ def matches_from_inference(
             review_level=review_level,
             review_label=REVIEW_LEVEL_LABELS[review_level],
             data_state=data_state,
-            evidence_role="blocking" if trace_blocked else "context",
+            evidence_role="blocking",
             evidence=[str(trace.get("label") or rule_id)],
             missing=list((facts or {}).get("missingData") or []),
-            reference_only=trace_blocked,
+            reference_only=True,
             prompt_hint=inference_prompt_hint(source_name, "trace"),
             evidence_state={
                 "dataState": data_state,
-                "evidenceRole": "blocking" if trace_blocked else "context",
-                "evidenceUsableForJudgement": not trace_blocked,
-                "judgementBlocked": trace_blocked,
+                "evidenceRole": "blocking",
+                "evidenceUsableForJudgement": False,
+                "judgementBlocked": True,
                 "freshnessStatus": str(trace.get("freshnessStatus") or "unknown"),
                 "freshnessGateReason": str(trace.get("freshnessGateReason") or ""),
-                "drivers": ["시간 민감 근거 신선도 미충족" if trace_blocked else "TypeDB에서 조건 성립 확인"],
+                "drivers": ["TypeDB 조건 추적은 있으나 판단 관계가 없습니다."],
             },
         ))
     return matches
@@ -502,28 +500,13 @@ def is_primary_inference_relation(relation: Dict[str, object]) -> bool:
     if not isinstance(relation, dict):
         return False
     relation_type = str(relation.get("type") or relation.get("relationType") or "").strip().upper()
-    if not relation_type or relation_type in META_INFERENCE_RELATION_TYPES or relation_type in SHADOW_INFERENCE_RELATION_TYPES:
+    if not relation_type or relation_type in META_INFERENCE_RELATION_TYPES:
         return False
     if relation.get("derivationIndex") not in (None, ""):
         return True
     if bool(str(relation.get("decisionStage") or relation.get("actionGroup") or relation.get("polarity") or "").strip()):
         return True
-    # Keep previously materialized rule relations readable during rolling upgrades.
-    return bool(str(relation.get("ruleId") or "").strip())
-
-
-def is_shadow_inference_relation(relation: Dict[str, object]) -> bool:
-    if not isinstance(relation, dict):
-        return False
-    relation_type = str(relation.get("type") or relation.get("relationType") or "").strip().upper()
-    rule_id = str(relation.get("ruleId") or "").strip()
-    return relation_type in SHADOW_INFERENCE_RELATION_TYPES or rule_id.startswith(SHADOW_INFERENCE_RULE_PREFIXES)
-
-
-def is_shadow_inference_trace(trace: Dict[str, object]) -> bool:
-    if not isinstance(trace, dict):
-        return False
-    return str(trace.get("ruleId") or "").strip().startswith(SHADOW_INFERENCE_RULE_PREFIXES)
+    return False
 
 
 def inference_causal_path_key(relation: Dict[str, object]) -> str:
@@ -923,8 +906,39 @@ def decision_from_inference(
     traces: List[Dict[str, object]],
     source_name: str = "typedbInferenceBox",
 ) -> Dict[str, object]:
-    active = [item for item in matches if item.matched and not item.reference_only]
-    candidates = active or [item for item in matches if item.matched]
+    active = [
+        item
+        for item in matches
+        if item.matched
+        and not item.reference_only
+        and stage_key_for_inference(item.rule_id, relation_for_match(item, relations))
+    ]
+    candidates = active
+    if not candidates:
+        return {
+            "label": "TypeDB 판단 정책 누락",
+            "tone": "caution",
+            "basis": source_name,
+            "selectedRuleId": "",
+            "selectionRole": "blocked-missing-typedb-decision-policy",
+            "finalDecisionOwner": "typedb-schema-function-rules",
+            "candidateRuleIds": unique_texts([item.rule_id for item in matches if item.matched])[:12],
+            "candidateDecisionStages": [],
+            "selectedInferenceTraceId": "",
+            "decisionStage": "",
+            "actionGroup": "dataQuality",
+            "actionLevel": "reference",
+            "reviewLevel": "blocked",
+            "reviewLevelLabel": REVIEW_LEVEL_LABELS["blocked"],
+            "dataState": "unavailable",
+            "dataStateLabel": DATA_STATE_LABELS["unavailable"],
+            "evidenceRole": "blocking",
+            "sourceRelationType": "",
+            "stagePolicySource": "missingTypeDbDecisionStage",
+            "judgementBlocked": True,
+            "actionPolicyApplied": False,
+            "nativeTypeDbReasoned": False,
+        }
     selected = min(candidates, key=lambda item: semantic_relation_sort_key(relation_for_match(item, relations)))
     relation = relation_for_match(selected, relations)
     action_policy = action_policy_from_relation_or_facts(facts, relation)
@@ -962,7 +976,8 @@ def decision_from_inference(
         "dataStateLabel": DATA_STATE_LABELS.get(selected.data_state, DATA_STATE_LABELS["partial"]),
         "evidenceRole": selected.evidence_role,
         "sourceRelationType": str(relation.get("type") or ""),
-        "stagePolicySource": inference_relation_policy_source(source_name) if relation.get("decisionStage") else "actionFallback",
+        "stagePolicySource": inference_relation_policy_source(source_name),
+        "judgementBlocked": False,
         **action_policy,
         "actionPolicyApplied": action_policy_applied,
         "nativeTypeDbReasoned": bool(relation.get("nativeTypeDbReasoned") or trace.get("nativeTypeDbReasoned")),
@@ -1010,15 +1025,7 @@ def string_list(value: object) -> List[str]:
 
 
 def stage_key_for_inference(rule_id: str, relation: Dict[str, object]) -> str:
-    explicit = str((relation or {}).get("decisionStage") or "").strip()
-    if explicit:
-        return explicit
-    explicit = stage_key_from_action(str((relation or {}).get("actionGroup") or ""), str((relation or {}).get("actionLevel") or ""))
-    return explicit or "RELATION_WATCH"
-
-
-def stage_key_from_action(action_group: str, action_level: str) -> str:
-    return decision_stage_from_action(action_group, action_level)
+    return str((relation or {}).get("decisionStage") or "").strip()
 
 
 def relation_for_match(match: OntologyRuleMatch, relations: List[Dict[str, object]]) -> Dict[str, object]:

@@ -3,7 +3,6 @@ from typing import Dict, List
 from .data_freshness import age_minutes
 from .market_data import number
 from .ontology_contracts import OntologyBelief, OntologyEntity, OntologyEvidence, OntologyRelation, PortfolioOntology, entity_id
-from .ontology_decision_policy import decision_stage_from_action
 from .ontology_decision_state import (
     DATA_STATE_LABELS,
     DECISION_STAGE_ORDER,
@@ -130,7 +129,7 @@ def materialize_rule_inference(
         action_group = derivation.action_group or rule.action_group
         action_level = derivation.action_level or rule.action_level
         action_policy = action_policy_properties(derivation, properties)
-        decision_stage = derivation.decision_stage or decision_stage_from_action(action_group, action_level)
+        decision_stage = derivation.decision_stage
         evidence_role = derivation_evidence_role(derivation)
         derivation_review_level = review_level_for(action_level, data_state)
         graph.entities.append(OntologyEntity(target_id, target_label, derivation.target_kind, inference_properties({
@@ -248,7 +247,6 @@ def materialize_inference_explanation_entities(
     action_group = (getattr(primary, "action_group", "") or rule.action_group) if primary else rule.action_group
     action_level = (getattr(primary, "action_level", "") or rule.action_level) if primary else rule.action_level
     decision_stage = getattr(primary, "decision_stage", "") if primary else ""
-    decision_stage = decision_stage or decision_stage_from_action(action_group, action_level)
     review_level = review_level_for(action_level, data_state)
     evidence_roles = [derivation_evidence_role(item) for item in rule.derivations or []]
     conflict_state = conflict_state_from_roles(evidence_roles)
@@ -318,11 +316,6 @@ def derivation_evidence_role(derivation) -> str:
 
 def derivation_semantic_sort_key(derivation):
     stage = str(getattr(derivation, "decision_stage", "") or "").strip()
-    if not stage:
-        stage = decision_stage_from_action(
-            str(getattr(derivation, "action_group", "") or ""),
-            str(getattr(derivation, "action_level", "") or ""),
-        )
     try:
         stage_index = DECISION_STAGE_ORDER.index(stage)
     except ValueError:

@@ -454,6 +454,15 @@ class MemoryProjectionRepository:
     def active_tbox_metadata(self):
         return {"status": "ok", "source": "test", "version": "test", "fingerprint": "test"}
 
+    def rulebox_snapshot(self):
+        rules = [item.to_dict() for item in default_graph_inference_rules()]
+        return {
+            "configured": True,
+            "status": "ok",
+            "rules": rules,
+            "ruleCount": len(rules),
+        }
+
     def active_abox_metadata(self):
         return dict(self.active)
 

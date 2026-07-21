@@ -1,9 +1,10 @@
+from copy import deepcopy
 from typing import Dict, List, Set
 import hashlib
 
 from ..domain.ontology_contracts import PortfolioOntology
 from ..domain.decision_performance import evaluate_decision_performance
-from ..domain.ontology_rulebox_catalog import additive_system_graph_inference_rules, default_graph_inference_rules
+from ..domain.ontology_rulebox_catalog import default_graph_inference_rules
 from ..domain.ontology_rulebox_governance import rulebox_rules_hash
 from ..domain.ontology_projection_fingerprint import (
     active_material_fingerprint,
@@ -23,82 +24,78 @@ from ..domain.portfolio import AccountSnapshot
 from .graph_store_rulebox import rulebox_rules_to_payload
 
 
-def native_rule_filter_value(properties: Dict[str, object], field: str):
-    values = dict(properties or {})
-    key = str(field or "")
-    if key in {"minValue", "maxValue"}:
-        return values.get("valueNumber", values.get("value"))
-    if key == "tboxClasses":
-        return values.get("tboxClasses", values.get("tboxClass"))
-    return values.get(key)
+DEPRECATED_TYPEDB_RULE_IDS = {"shadow.market_psychology.state.v1"}
 
 
-def native_rule_filter_matches(actual: object, expected: object) -> bool:
-    """Return a conservative match for one stored RuleBox filter.
-
-    Missing projection fields remain in the ABox candidate instead of being
-    discarded here; TypeDB then records the missing-data effect through its
-    normal rule path. This reducer may only remove a relation when the stored
-    value clearly cannot satisfy the condition.
-    """
-    if actual in (None, "", [], {}):
-        return True
-    if isinstance(expected, dict):
-        operator = str(expected.get("operator") or "").strip()
-        expected = expected.get("value")
-        if operator:
-            try:
-                left = float(actual)
-                right = float(expected)
-            except (TypeError, ValueError):
-                return True
-            return {
-                ">=": left >= right,
-                "gte": left >= right,
-                ">": left > right,
-                "gt": left > right,
-                "<=": left <= right,
-                "lte": left <= right,
-                "<": left < right,
-                "lt": left < right,
-                "==": left == right,
-                "eq": left == right,
-            }.get(operator, True)
-    actual_values = list(actual) if isinstance(actual, (list, tuple, set)) else [actual]
-    expected_values = list(expected) if isinstance(expected, (list, tuple, set)) else [expected]
-    return any(str(left) == str(right) for left in actual_values for right in expected_values)
+def rule_id_from_payload(rule: Dict[str, object]) -> str:
+    return str((rule or {}).get("rule_id") or (rule or {}).get("ruleId") or "").strip()
 
 
-def native_rule_relation_is_relevant(
-    relation,
-    entities_by_id: Dict[str, object],
-    source_kind: str,
-    condition,
-) -> bool:
-    if str(relation.relation_type or "").upper().strip() != str(condition.relation_type or "").upper().strip():
-        return False
-    direction = str(condition.direction or "out").strip().lower()
-    source_id, target_id = (
-        (relation.target, relation.source)
-        if direction == "in"
-        else (relation.source, relation.target)
-    )
-    source = entities_by_id.get(str(source_id or ""))
-    target = entities_by_id.get(str(target_id or ""))
-    if not source or str(source.kind or "") != str(source_kind or ""):
-        return False
-    target_kind = str(condition.target_kind or "")
-    if target_kind and (not target or str(target.kind or "") != target_kind):
-        return False
-    target_properties = dict(getattr(target, "properties", {}) or {}) if target else {}
-    for field, expected in dict(condition.target_property_filters or {}).items():
-        if not native_rule_filter_matches(native_rule_filter_value(target_properties, field), expected):
-            return False
-    relation_properties = dict(getattr(relation, "properties", {}) or {})
-    for field, expected in dict(condition.relation_property_filters or {}).items():
-        if not native_rule_filter_matches(native_rule_filter_value(relation_properties, field), expected):
-            return False
-    return True
+def rulebox_input_relation_types(rules: List[Dict[str, object]]) -> List[str]:
+    relation_types = set()
+    for rule in rules or []:
+        if not isinstance(rule, dict) or rule.get("enabled") is False:
+            continue
+        for condition in rule.get("conditions") or []:
+            if not isinstance(condition, dict) or str(condition.get("kind") or "") != "relation":
+                continue
+            relation_type = str(condition.get("relation_type") or condition.get("relationType") or "").upper().strip()
+            if relation_type:
+                relation_types.add(relation_type)
+    return sorted(relation_types)
+
+
+def rulebox_rules_missing_decision_stage(rules: List[Dict[str, object]]) -> List[str]:
+    missing = []
+    for rule in rules or []:
+        if not isinstance(rule, dict) or rule.get("enabled") is False:
+            continue
+        if any(
+            isinstance(item, dict)
+            and not str(item.get("decision_stage") or item.get("decisionStage") or "").strip()
+            for item in rule.get("derivations") or []
+        ):
+            missing.append(rule_id_from_payload(rule))
+    return sorted(set(item for item in missing if item))
+
+
+def migrate_typedb_rule_catalog(
+    stored_rules: List[Dict[str, object]],
+    bootstrap_rules: List[Dict[str, object]],
+) -> Dict[str, object]:
+    """Remove retired rules and add explicit policy only to known bootstrap rules."""
+    defaults_by_id = {rule_id_from_payload(item): item for item in bootstrap_rules or [] if isinstance(item, dict)}
+    migrated = []
+    removed = []
+    updated = []
+    for raw_rule in stored_rules or []:
+        if not isinstance(raw_rule, dict):
+            continue
+        rule_id = rule_id_from_payload(raw_rule)
+        if rule_id in DEPRECATED_TYPEDB_RULE_IDS:
+            removed.append(rule_id)
+            continue
+        rule = deepcopy(raw_rule)
+        default_rule = defaults_by_id.get(rule_id) or {}
+        default_derivations = default_rule.get("derivations") or []
+        changed = False
+        for index, derivation in enumerate(rule.get("derivations") or []):
+            if not isinstance(derivation, dict) or derivation.get("decision_stage") or derivation.get("decisionStage"):
+                continue
+            default_derivation = default_derivations[index] if index < len(default_derivations) else {}
+            stage = str((default_derivation or {}).get("decision_stage") or (default_derivation or {}).get("decisionStage") or "").strip()
+            if stage:
+                derivation["decision_stage"] = stage
+                changed = True
+        if changed:
+            updated.append(rule_id)
+        migrated.append(rule)
+    return {
+        "changed": bool(removed or updated),
+        "rules": migrated,
+        "removedRuleIds": sorted(set(removed)),
+        "decisionPolicyUpdatedRuleIds": sorted(set(updated)),
+    }
 
 
 class PortfolioOntologyProjectionRecorder:
@@ -155,6 +152,16 @@ class PortfolioOntologyProjectionRecorder:
             return result
         try:
             rulebox_bootstrap = self.ensure_rulebox_ready()
+            if str(rulebox_bootstrap.get("status") or "") not in {"ready", "seeded"}:
+                result = {
+                    "saved": False,
+                    "status": "typedb-rule-catalog-not-ready",
+                    "reason": str(rulebox_bootstrap.get("reason") or "TypeDB 추론 규칙을 사용할 수 없습니다."),
+                    "preservedActiveGeneration": True,
+                    "ruleCatalog": rulebox_bootstrap,
+                }
+                self.store_projection_result(snapshot, result, projection_run)
+                return result
             graph = build_portfolio_ontology(
                 list(snapshot.positions or []) + list(snapshot.watchlist or []),
                 snapshot.portfolio,
@@ -172,7 +179,7 @@ class PortfolioOntologyProjectionRecorder:
                 include_tbox=False,
                 include_presentation=False,
             )
-            persistence_graph = self.graph_for_graph_store_persistence(graph)
+            persistence_graph = self.graph_for_graph_store_persistence(graph, rulebox_bootstrap)
             material_fingerprint = material_graph_fingerprint(persistence_graph)
             material_snapshot_id = apply_material_graph_identity(
                 persistence_graph,
@@ -262,7 +269,7 @@ class PortfolioOntologyProjectionRecorder:
             result = self.repository.save_graph(persistence_graph)
             if not isinstance(result, dict):
                 result = {"saved": False, "status": "error", "reason": "ontology repository returned non-dict result"}
-            result["projectionMode"] = "abox-facts-only-" + self.active_graph_store_key(result) + "-rulebox"
+            result["projectionMode"] = "abox-facts-only-typedb-native-rules"
             result["materialFingerprint"] = material_fingerprint
             result["aboxSnapshotId"] = material_snapshot_id
             result["materialChangeDetected"] = True
@@ -306,7 +313,14 @@ class PortfolioOntologyProjectionRecorder:
                 "status": "disabled",
                 "reason": str(snapshot.get("reason") or "Ontology graph storage is not configured."),
             }
-        migration = self.ensure_additive_system_rules(snapshot)
+        migration = self.migrate_typedb_rule_catalog(snapshot, expected_rules)
+        if migration.get("required") and not migration.get("saved"):
+            return {
+                "status": "not-ready",
+                "reason": str(migration.get("reason") or "TypeDB 추론 규칙 마이그레이션에 실패했습니다."),
+                "ruleCount": int(snapshot.get("ruleboxRuleCount") or snapshot.get("ruleCount") or 0),
+                "ruleCatalogMigration": migration,
+            }
         if migration.get("saved"):
             try:
                 snapshot = self.repository.rulebox_snapshot()
@@ -316,21 +330,32 @@ class PortfolioOntologyProjectionRecorder:
         stored_hash = str(snapshot.get("ruleboxRulesHash") or snapshot.get("rulesHash") or "").strip()
         if not stored_hash and isinstance(snapshot.get("rules"), list) and snapshot.get("rules"):
             stored_hash = rulebox_rules_hash(snapshot.get("rules") or [])
+        missing_decision_policy = rulebox_rules_missing_decision_stage(snapshot.get("rules") or [])
+        if missing_decision_policy:
+            return {
+                "status": "not-ready",
+                "reason": "TypeDB 추론 규칙의 파생 관계에 decisionStage가 없습니다.",
+                "ruleCount": stored_count,
+                "missingDecisionStageRuleIds": missing_decision_policy,
+                "ruleCatalogMigration": migration,
+            }
         if stored_count > 0 and str(snapshot.get("status") or "") == "ok":
             result = {
                 "status": "ready",
                 "ruleCount": stored_count,
                 "ruleboxRulesHash": stored_hash,
-                "sourceOfTruth": "typedb-rulebox",
+                "sourceOfTruth": "typedb-schema-function-rules",
+                "ruleCatalogStore": "typedb",
+                "inputRelationTypes": rulebox_input_relation_types(snapshot.get("rules") or []),
                 "bootstrapRuleCount": expected_count,
                 "bootstrapRulesHash": expected_hash,
                 "codeDefaultHashMismatch": bool(stored_hash and stored_hash != expected_hash),
-                "additiveRuleMigration": migration,
+                "ruleCatalogMigration": migration,
             }
             if result["codeDefaultHashMismatch"]:
                 result["reason"] = (
-                    "TypeDB RuleBox is the source of truth. Code default rules are bootstrap-only "
-                    "and will not overwrite stored RuleBox rules."
+                    "TypeDB 추론 규칙이 운영 기준입니다. 코드 기본값은 빈 저장소를 시작할 때만 사용하며 "
+                    "저장된 규칙을 덮어쓰지 않습니다."
                 )
             return result
         if str(snapshot.get("status") or "") != "empty":
@@ -361,55 +386,41 @@ class PortfolioOntologyProjectionRecorder:
         return {
             "status": "seeded" if bool((seeded or {}).get("seeded")) else str((seeded or {}).get("status") or "not-seeded"),
             "ruleCount": int((seeded or {}).get("ruleCount") or 0),
-            "sourceOfTruth": "typedb-rulebox",
+            "sourceOfTruth": "typedb-schema-function-rules",
+            "ruleCatalogStore": "typedb",
+            "inputRelationTypes": rulebox_input_relation_types(expected_rules),
             "bootstrapRuleCount": expected_count,
             "bootstrapRulesHash": expected_hash,
             "reason": str((seeded or {}).get("reason") or ""),
         }
 
-    def ensure_additive_system_rules(self, snapshot: Dict[str, object]) -> Dict[str, object]:
-        if str(self.settings.get("psychologyShadowEnabled") or "1").strip().lower() in {"0", "false", "no", "off", "disabled"}:
-            return {"status": "disabled", "saved": False, "missingRuleIds": []}
+    def migrate_typedb_rule_catalog(
+        self,
+        snapshot: Dict[str, object],
+        bootstrap_rules: List[Dict[str, object]],
+    ) -> Dict[str, object]:
         stored_rules = snapshot.get("rules") if isinstance(snapshot.get("rules"), list) else []
         if not stored_rules:
-            return {"status": "not-inspectable", "saved": False, "missingRuleIds": []}
-        existing_ids = {
-            str(item.get("rule_id") or item.get("ruleId") or "").strip()
-            for item in stored_rules
-            if isinstance(item, dict)
-        }
-        required = additive_system_graph_inference_rules()
-        missing = [rule for rule in required if rule.rule_id not in existing_ids]
-        if not missing:
-            return {"status": "ready", "saved": False, "missingRuleIds": []}
-        missing_ids = [rule.rule_id for rule in missing]
+            return {"status": "not-inspectable", "required": False, "saved": False}
+        migration = migrate_typedb_rule_catalog(stored_rules, bootstrap_rules)
+        if not migration.get("changed"):
+            return {"status": "ready", "required": False, "saved": False}
         if not hasattr(self.repository, "save_rulebox"):
-            return {"status": "unsupported", "saved": False, "missingRuleIds": missing_ids}
+            return {**migration, "status": "unsupported", "required": True, "saved": False}
         try:
             result = self.repository.save_rulebox({
-                "rules": list(stored_rules) + rulebox_rules_to_payload(missing),
-                "changeReason": "시스템 가산 마이그레이션: 시장 심리 Shadow 규칙 등록",
+                "rules": migration.get("rules") or [],
+                "changeReason": "TypeDB 단일 추론 경로 전환: 폐기 규칙 제거 및 판단 단계 명시",
             })
-        except Exception as error:  # noqa: BLE001 - Shadow migration must not block existing investment inference.
-            return {"status": "error", "saved": False, "missingRuleIds": missing_ids, "reason": str(error)[:180]}
+        except Exception as error:  # noqa: BLE001 - failed migration must stop new inference generations.
+            return {**migration, "status": "error", "required": True, "saved": False, "reason": str(error)[:180]}
         saved = bool((result or {}).get("saved")) and str((result or {}).get("status") or "") == "ok"
-        schema_sync = {}
-        if saved and hasattr(self.repository, "sync_typedb_native_rule_functions"):
-            try:
-                schema_sync = self.repository.sync_typedb_native_rule_functions(missing, force=True)
-            except Exception as error:  # noqa: BLE001 - the stored rule remains available for a later sync retry.
-                schema_sync = {"status": "error", "reason": str(error)[:180]}
         return {
-            "status": (
-                "migrated"
-                if saved and str(schema_sync.get("status") or "ok") == "ok"
-                else "stored-sync-pending"
-                if saved
-                else str((result or {}).get("status") or "not-saved")
-            ),
+            **migration,
+            "status": "migrated" if saved else str((result or {}).get("status") or "not-saved"),
+            "required": True,
             "saved": saved,
-            "missingRuleIds": missing_ids,
-            "schemaFunctionSync": schema_sync,
+            "reason": str((result or {}).get("reason") or "")[:180],
             "result": {
                 "status": str((result or {}).get("status") or ""),
                 "ruleCount": int((result or {}).get("ruleCount") or (result or {}).get("ruleboxRuleCount") or 0),
@@ -417,12 +428,14 @@ class PortfolioOntologyProjectionRecorder:
             },
         }
 
-    def graph_for_graph_store_persistence(self, graph: PortfolioOntology) -> PortfolioOntology:
-        # TBox, RuleBox, and language governance are seeded separately. The live
-        # ABox needs only the one-hop facts that TypeDB native rules can match
-        # from a stock or portfolio source. Persisting every generated display,
-        # valuation, and runtime detail made a 13-symbol account write thousands
-        # of rows on each tick and delayed market-open alerts.
+    def graph_for_graph_store_persistence(
+        self,
+        graph: PortfolioOntology,
+        rule_catalog: Dict[str, object] = None,
+    ) -> PortfolioOntology:
+        # TypeDB owns condition evaluation. Projection only retains relation
+        # types referenced by the active TypeDB catalog and never evaluates
+        # target values, thresholds, or polarity in Python.
         stripped_ids: Set[str] = set()
         abox_entities = []
         for item in graph.entities:
@@ -438,19 +451,11 @@ class PortfolioOntologyProjectionRecorder:
             and item.source not in stripped_ids
             and item.target not in stripped_ids
         ]
-        enabled_rules = [item for item in default_graph_inference_rules() if item.enabled]
-        native_relation_conditions = [
-            (rule.source_kind, condition)
-            for rule in enabled_rules
-            for condition in rule.conditions or []
-            if str(condition.kind or "") == "relation"
-            and str(condition.relation_type or "").strip()
-        ]
         native_relation_types = {
-            str(condition.relation_type or "").upper().strip()
-            for _source_kind, condition in native_relation_conditions
+            str(item or "").upper().strip()
+            for item in (rule_catalog or {}).get("inputRelationTypes") or []
+            if str(item or "").strip()
         }
-        entities_by_id = {item.entity_id: item for item in abox_entities}
         source_ids = {
             item.entity_id
             for item in abox_entities
@@ -459,9 +464,10 @@ class PortfolioOntologyProjectionRecorder:
         relations = [
             item
             for item in abox_relations
-            if any(
-                native_rule_relation_is_relevant(item, entities_by_id, source_kind, condition)
-                for source_kind, condition in native_relation_conditions
+            if (
+                str(item.relation_type or "").upper().strip() in native_relation_types
+                if native_relation_types
+                else item.source in source_ids or item.target in source_ids
             )
         ]
         persisted_entity_ids = source_ids | {
@@ -493,8 +499,8 @@ class PortfolioOntologyProjectionRecorder:
             reasoning_cards=[],
             worldview={
                 **dict(graph.worldview or {}),
-                "runtimeProjectionMode": "abox-facts-only-graph-store-rulebox",
-                "runtimeProjectionScope": "native-rule-one-hop-context",
+                "runtimeProjectionMode": "abox-facts-only-typedb-native-rules",
+                "runtimeProjectionScope": "typedb-rule-input-relations",
                 "runtimeProjectionSourceEntityCount": len(source_ids),
                 "runtimeProjectionRelationTypeCount": len(native_relation_types),
             },

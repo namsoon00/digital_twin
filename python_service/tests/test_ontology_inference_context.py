@@ -4,7 +4,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from digital_twin.domain.ontology_inference_context import relation_contexts_from_snapshot
+from digital_twin.domain.ontology_inference_context import decision_from_inference, matches_from_inference, relation_contexts_from_snapshot
 from digital_twin.domain.ontology_relation_execution_plan import decision_drivers_from_relation_context
 from digital_twin.domain.ontology_relation_facts import position_signal_facts
 from digital_twin.domain.instrument_profiles import InstrumentProfile, profile_settings
@@ -420,6 +420,9 @@ class OntologyInferenceContextTests(unittest.TestCase):
                                     "weight": 0.86,
                                     "aiInfluenceLabel": "손실 방어 추론",
                                     "inferenceTraceId": "inference-trace:005930:graph.loss_guard.breakdown.v1",
+                                    "decisionStage": "LOSS_REDUCE",
+                                    "actionGroup": "lossControl",
+                                    "actionLevel": "review",
                                     "nativeTypeDbReasoned": True,
                                 }
                             ],
@@ -464,6 +467,26 @@ class OntologyInferenceContextTests(unittest.TestCase):
         self.assertEqual(1, len(decisions))
         self.assertEqual("typedbInferenceBox", decisions[0].relation_rule_context["decision"]["basis"])
         self.assertTrue(decisions[0].relation_rule_context["graphStoreUsed"])
+
+    def test_missing_typedb_decision_stage_blocks_python_policy_fallback(self):
+        relations = [{
+            "type": "HAS_INFERRED_RISK",
+            "source": "stock:005930",
+            "target": "risk:005930:test",
+            "ruleId": "graph.loss_guard.breakdown.v1",
+            "derivationIndex": 0,
+            "polarity": "risk",
+            "actionGroup": "lossControl",
+            "actionLevel": "review",
+            "nativeTypeDbReasoned": True,
+        }]
+        matches = matches_from_inference(relations, [], facts={"symbol": "005930"})
+
+        decision = decision_from_inference({}, matches, relations, [], source_name="typedbInferenceBox")
+
+        self.assertTrue(decision["judgementBlocked"])
+        self.assertEqual("missingTypeDbDecisionStage", decision["stagePolicySource"])
+        self.assertEqual("", decision["decisionStage"])
 
     def test_strict_decision_path_blocks_python_relation_rule_fallback(self):
         position = Position(

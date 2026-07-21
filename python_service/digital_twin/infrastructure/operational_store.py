@@ -1,7 +1,6 @@
 from typing import Dict
 
 from .mysql_monitoring import MySQLMonitorAccountJobStore
-from .mysql_psychology_shadow_read_store import MySQLPsychologyShadowReadStore
 from .ontology_lab_store import JsonOntologyExperimentStore
 from .mysql_operational import (
     MySQLAccountRegistry,
@@ -72,11 +71,6 @@ def ontology_reasoning_cursor_store(settings: Dict[str, str] = None):
 def monitor_store(settings: Dict[str, str] = None):
     configured = configured_settings(settings)
     return MySQLMonitorStore(configured)
-
-
-def psychology_shadow_read_store(settings: Dict[str, str] = None):
-    configured = configured_settings(settings)
-    return MySQLPsychologyShadowReadStore(configured)
 
 
 def monitoring_cycle_recorder(

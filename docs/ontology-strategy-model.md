@@ -63,6 +63,8 @@ AI 프롬프트에는 TBox, `boundedContexts`, ABox, operational ontology, reaso
 
 운영 판단의 기준은 TypeDB에 저장된 ABox와 TypeDB schema function materialization 결과다. TypeDB 3에서는 예전 TypeDB 2의 `define rule` 대신 schema `fun`이 rule-equivalent 추론 단위다. Python 공식, 템플릿 조건, 알림 임계값은 투자 의미를 직접 만들지 않는다.
 
+운영 경로는 다음 경계를 강제한다. Python의 ABox projection은 TypeDB에 활성화된 규칙이 참조하는 관계 타입만 전달하며 조건값이나 임계값을 미리 판정하지 않는다. 모든 파생 관계는 TypeDB RuleBox 정의에 `decisionStage`를 명시해야 하고, 이 값이 없으면 해당 관계는 설명 자료로만 남아 투자 판단을 차단한다. Python action label fallback과 별도 Psychology Shadow 판단 경로는 사용하지 않는다.
+
 실행 흐름은 다음과 같다.
 
 1. `portfolio_ontology_builder.py`가 계좌, 보유/관심 종목, 가격, 이동평균, 수급, 투자자별 매수·매도, 뉴스, 공시, 거시, 투자 성향, 데이터 품질을 ABox fact로 만든다.

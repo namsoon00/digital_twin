@@ -3,7 +3,6 @@ import re
 from typing import Dict, Iterable, List
 
 from ..domain.ontology_contracts import PortfolioOntology
-from ..domain.ontology_decision_policy import decision_stage_from_action
 from ..domain.ontology_decision_state import without_aggregate_decision_fields
 from ..domain.ontology_schema import default_tbox_metadata
 
@@ -56,13 +55,7 @@ def number_or_none(value: object):
         return None
 
 def derivation_decision_stage(derivation: Dict[str, object]) -> str:
-    explicit = str(derivation.get("decision_stage") or derivation.get("decisionStage") or "").strip()
-    if explicit:
-        return explicit
-    return decision_stage_from_action(
-        str(derivation.get("action_group") or derivation.get("actionGroup") or ""),
-        str(derivation.get("action_level") or derivation.get("actionLevel") or ""),
-    )
+    return str(derivation.get("decision_stage") or derivation.get("decisionStage") or "").strip()
 
 def list_of_strings(value: object) -> List[str]:
     if isinstance(value, list):

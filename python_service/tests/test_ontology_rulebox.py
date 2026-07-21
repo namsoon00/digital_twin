@@ -8,7 +8,6 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from digital_twin.domain.ontology_prompting import prompt_payload
 from digital_twin.domain.ontology_inference_ledger import inference_trace_ledger_payload
 from digital_twin.domain.instrument_profiles import market_signal_profiles, parse_instrument_profiles_text
-from digital_twin.domain.ontology_decision_policy import decision_stage_from_action
 from digital_twin.domain.ontology_rulebox_catalog import default_graph_inference_rules
 from digital_twin.domain.ontology_tbox import tbox_class_def
 from digital_twin.domain.ontology_threshold_policy import default_ontology_threshold_policy
@@ -1276,12 +1275,28 @@ class OntologyRuleBoxTests(unittest.TestCase):
         self.assertTrue(any(item.kind == "rule" and (item.properties or {}).get("ontologyBox") == "RuleBox" for item in graph.entities))
         self.assertTrue(any(item.relation_type == "DERIVES_RELATION" for item in graph.relations))
 
+    def test_every_default_derivation_has_explicit_decision_stage(self):
+        missing = [
+            rule.rule_id
+            for rule in default_graph_inference_rules()
+            if any(not derivation.decision_stage for derivation in rule.derivations)
+        ]
+
+        self.assertEqual([], missing)
+
+    def test_rulebox_payload_rejects_derivation_without_decision_stage(self):
+        payload = rulebox_rules_to_payload(default_graph_inference_rules()[:1])
+        payload[0]["derivations"][0]["decision_stage"] = ""
+
+        with self.assertRaisesRegex(ValueError, "requires decision_stage"):
+            rulebox_rules_from_payload({"rules": payload})
+
     def test_rulebox_hash_is_independent_of_rule_read_order(self):
         payload = rulebox_rules_to_payload(default_graph_inference_rules())
 
         self.assertEqual(rulebox_rules_hash(payload), rulebox_rules_hash(list(reversed(payload))))
 
-    def test_rulebox_hash_matches_store_enriched_decision_policy(self):
+    def test_rulebox_hash_matches_store_enriched_action_policy(self):
         payload = rulebox_rules_to_payload(default_graph_inference_rules())
         enriched = []
         for rule in payload:
@@ -1294,8 +1309,6 @@ class OntologyRuleBoxTests(unittest.TestCase):
                     item["action_group"] = rule.get("action_group")
                 if not item.get("action_level"):
                     item["action_level"] = rule.get("action_level")
-                if not item.get("decision_stage"):
-                    item["decision_stage"] = decision_stage_from_action(item.get("action_group"), item.get("action_level"))
                 derivations.append(item)
             copy["derivations"] = derivations
             enriched.append(copy)

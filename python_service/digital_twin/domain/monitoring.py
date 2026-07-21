@@ -20,7 +20,7 @@ from .message_types import (
 )
 from .ontology_inference_context import inferencebox_source_name, ontology_projection_from_metadata, relation_contexts_from_snapshot
 from .ontology_insights import build_investment_insight_events, relation_news_event_key_suffix, split_operational_and_investment_events
-from .ontology_relation_reasoning import decision_action_group_for_label, relation_rule_context_summary_lines, relation_thresholds_from_settings
+from .ontology_relation_reasoning import relation_rule_context_summary_lines, relation_thresholds_from_settings
 from .ontology_decision_state import (
     CHANGE_STATE_LABELS,
     DATA_STATE_LABELS,
@@ -310,9 +310,6 @@ class RealtimeMonitor(MonitoringSampleDataMixin, MonitoringPositionContextMixin,
         text = str(label or "-").strip() or "-"
         state = str(review_level or "check").strip().lower()
         return text + " · " + REVIEW_LEVEL_LABELS.get(state, REVIEW_LEVEL_LABELS["check"])
-
-    def decision_action_group(self, label: object) -> str:
-        return decision_action_group_for_label(label)
 
     def enabled_signal_events(self, events: List[AlertEvent]) -> List[AlertEvent]:
         return [event for event in events or [] if self.enabled(event.rule)]

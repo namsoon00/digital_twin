@@ -43,7 +43,7 @@ from digital_twin.domain.ontology_rulebox_governance import rulebox_rules_hash
 from digital_twin.domain.ontology_schema import abox_properties
 from digital_twin.domain.ontology_validator import validate_ontology
 from digital_twin.domain.portfolio_ontology_builder import build_portfolio_ontology
-from digital_twin.domain.ontology_relation_reasoning import decision_action_group_for_label, prompt_template_for_message_type
+from digital_twin.domain.ontology_relation_reasoning import prompt_template_for_message_type
 from digital_twin.domain.portfolio_calculations import portfolio_summary
 from digital_twin.domain.strategy import StrategyModel, decisions_for_positions
 from digital_twin.domain.trend_transitions import trend_transition_assessment
@@ -3701,14 +3701,6 @@ class PythonServiceTests(unittest.TestCase):
         self.assertEqual("cryptoSensitivity", context["decision"]["actionGroup"])
         self.assertEqual("action", context["decision"]["actionLevel"])
         self.assertEqual("ACTION", context["decision"]["scoreBand"]["key"])
-
-    def test_decision_action_group_uses_ontology_stage_aliases(self):
-        self.assertEqual("cryptoSensitivity", decision_action_group_for_label("비트코인 민감도 점검"))
-        self.assertEqual("cryptoSensitivity", decision_action_group_for_label("비트코인 민감도 축소 검토"))
-        self.assertEqual("lossControl", decision_action_group_for_label("손실 관리 기준 확인"))
-        self.assertEqual("profitTake", decision_action_group_for_label("분할 매도 기준 확인"))
-        self.assertEqual("entry", decision_action_group_for_label("소액 분할매수 검토"))
-        self.assertEqual("entryRisk", decision_action_group_for_label("추가매수 보류"))
 
     def test_ontology_relation_thresholds_are_separate_from_alert_thresholds(self):
         position = Position(

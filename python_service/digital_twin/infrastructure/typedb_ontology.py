@@ -2531,29 +2531,37 @@ class TypeDBOntologyGraphRepository(GraphStoreOntologyRowMapperMixin):
     ) -> None:
         _TypeDB, _Credentials, _DriverOptions, _DriverTlsConfig, TransactionType = imported[0]
         boxes = node_boxes(graph) if delete_boxes is None else list(delete_boxes or [])
-        queries = self.delete_queries(boxes) + self.graph_insert_queries(graph)
-        if not queries:
+        delete_queries = self.delete_queries(boxes)
+        insert_queries = self.graph_insert_queries(graph)
+        if not delete_queries and not insert_queries:
             return
         transaction_query_count = (
             self.abox_write_transaction_query_count()
             if "ABox" in node_boxes(graph)
             else self.graph_write_transaction_query_count()
         )
-        for offset in range(0, len(queries), transaction_query_count):
-            query_batch = queries[offset: offset + transaction_query_count]
+        static_replacement_boxes = {"TBox", "RuleBox", "RuleBoxGovernance", "LanguageGovernance"}
+        separate_static_replacement = bool(static_replacement_boxes.intersection(boxes))
+        # Large static replacements span multiple batches. Commit their deletes
+        # first so a later insert batch cannot collide with an old @unique
+        # storage ID. Small ABoxControl pointer swaps remain one transaction.
+        phases = [delete_queries, insert_queries] if separate_static_replacement else [delete_queries + insert_queries]
+        for queries in phases:
+            for offset in range(0, len(queries), transaction_query_count):
+                query_batch = queries[offset: offset + transaction_query_count]
 
-            def write_batch():
-                with typedb_operation_timeout(self.write_operation_timeout_seconds(), "TypeDB graph write batch"):
-                    with driver.transaction(
-                        self.database,
-                        TransactionType.WRITE,
-                        options=self.write_transaction_options(),
-                    ) as tx:
-                        for query in query_batch:
-                            tx.query(query).resolve()
-                        tx.commit()
+                def write_batch():
+                    with typedb_operation_timeout(self.write_operation_timeout_seconds(), "TypeDB graph write batch"):
+                        with driver.transaction(
+                            self.database,
+                            TransactionType.WRITE,
+                            options=self.write_transaction_options(),
+                        ) as tx:
+                            for query in query_batch:
+                                tx.query(query).resolve()
+                            tx.commit()
 
-            self.with_typedb_retries(write_batch)
+                self.with_typedb_retries(write_batch)
 
     def clear_inferencebox(self) -> Dict[str, object]:
         if not self.address:
@@ -3083,9 +3091,26 @@ relation ontology-assertion,
 
     def graph_persistence_rows(self, graph: PortfolioOntology) -> Tuple[List[Dict[str, object]], List[Dict[str, object]]]:
         node_rows = self.node_rows(graph)
-        node_ids = {str(row.get("id") or "") for row in node_rows}
+        node_rows_by_id = {
+            str(row.get("id") or ""): row
+            for row in node_rows
+            if str(row.get("id") or "")
+        }
+        node_ids = set(node_rows_by_id)
         relation_rows = [
-            row
+            {
+                **row,
+                "sourceStorageId": ontology_storage_id(
+                    node_rows_by_id[str(row.get("source") or "")],
+                    row.get("source"),
+                    "node",
+                ),
+                "targetStorageId": ontology_storage_id(
+                    node_rows_by_id[str(row.get("target") or "")],
+                    row.get("target"),
+                    "node",
+                ),
+            }
             for row in self.rows_for_relations(graph) + self.support_relation_rows(graph)
             if str(row.get("source") or "") in node_ids
             and str(row.get("target") or "") in node_ids
@@ -3361,6 +3386,15 @@ relation ontology-assertion,
         )
 
     def relation_match_clause(self, row: Dict[str, object], source_variable: str, target_variable: str) -> str:
+        source_storage_id = str(row.get("sourceStorageId") or "").strip()
+        target_storage_id = str(row.get("targetStorageId") or "").strip()
+        if source_storage_id and target_storage_id:
+            return (
+                str(source_variable or "$source") + " isa ontology-node, has ontology-storage-id "
+                + typedb_string(source_storage_id) + "; "
+                + str(target_variable or "$target") + " isa ontology-node, has ontology-storage-id "
+                + typedb_string(target_storage_id) + "; "
+            )
         snapshot_id = row.get("snapshotId") or row.get("aboxSnapshotId")
         ontology_box = str(row.get("ontologyBox") or "ABox").strip() or "ABox"
         # A live ABox generation can contain the same public ontology ID as

@@ -57,7 +57,6 @@ from .portfolio_ontology_exposure_concepts import (
 from .portfolio_ontology_research_concepts import (
     add_research_evidence_concepts,
 )
-from .portfolio_ontology_psychology_concepts import add_market_psychology_concepts
 from .portfolio_ontology_pipeline_quality_concepts import add_position_pipeline_quality_concepts
 from .portfolio_ontology_security_line_concepts import add_security_line_concepts
 from .portfolio_ontology_temporal_concepts import add_position_temporal_concepts
@@ -310,14 +309,6 @@ def build_portfolio_ontology(
         add_metric_concepts(graph, stock_id, position, source, observation_profiles)
         add_position_pipeline_quality_concepts(graph, stock_id, position, runtime_context)
         add_price_level_and_liquidity_concepts(graph, stock_id, position, source, observation_profiles)
-        add_market_psychology_concepts(
-            graph,
-            stock_id,
-            position,
-            external_signals,
-            runtime_context,
-            observation_profiles,
-        )
         add_security_line_concepts(graph, stock_id, position, observed_positions, external_signals, runtime_context)
         add_position_temporal_concepts(graph, stock_id, position, external_signals, runtime_context, observation_profiles)
         add_symbol_external_signal_concepts(graph, stock_id, symbol, external_signals)

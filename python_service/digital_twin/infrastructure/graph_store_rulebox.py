@@ -4,7 +4,6 @@ from typing import Dict, Iterable, List
 
 from ..domain.ontology_contracts import PortfolioOntology
 from ..domain.investment_ubiquitous_language import add_investment_language_governance_concepts
-from ..domain.ontology_decision_policy import decision_stage_from_action
 from ..domain.ontology_rulebox_catalog import default_graph_inference_rules
 from ..domain.ontology_rulebox_contracts import GRAPH_REASONER_VERSION, GraphInferenceRule
 from ..domain.ontology_rulebox_governance import (
@@ -46,6 +45,13 @@ def rulebox_rules_from_payload(payload: Dict[str, object]) -> List[GraphInferenc
     rules = [GraphInferenceRule.from_dict(item) for item in raw_rules if isinstance(item, dict)]
     if not rules:
         raise ValueError("RuleBox rules are empty.")
+    missing_policy = [
+        rule.rule_id
+        for rule in rules
+        if any(not str(derivation.decision_stage or "").strip() for derivation in rule.derivations)
+    ]
+    if missing_policy:
+        raise ValueError("Every TypeDB rule derivation requires decision_stage: " + ", ".join(missing_policy[:10]))
     return rules
 
 def rulebox_graph_from_rules(
@@ -337,8 +343,6 @@ def derivation_payload_from_row(row: Dict[str, object]) -> Dict[str, object]:
         "allowed_actions": list_of_strings(row.get("allowedActions") or row.get("derivationAllowedActions") or derivation.get("allowed_actions") or derivation.get("allowedActions")),
         "blocked_actions": list_of_strings(row.get("blockedActions") or row.get("derivationBlockedActions") or derivation.get("blocked_actions") or derivation.get("blockedActions")),
     }
-    if not payload["decision_stage"]:
-        payload["decision_stage"] = decision_stage_from_action(payload["action_group"], payload["action_level"])
     return payload
 
 def json_object(value: object) -> Dict[str, object]:

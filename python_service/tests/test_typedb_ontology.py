@@ -17,8 +17,8 @@ from digital_twin.domain.repositories import (
     ontology_graph_repository_contract_errors,
 )
 from digital_twin.infrastructure.ontology_graph_store import ontology_repository_from_settings
-from digital_twin.infrastructure.ontology_projection import PortfolioOntologyProjectionRecorder
-from digital_twin.infrastructure.graph_store_rulebox import rulebox_graph_from_rules
+from digital_twin.infrastructure.ontology_projection import PortfolioOntologyProjectionRecorder, migrate_typedb_rule_catalog
+from digital_twin.infrastructure.graph_store_rulebox import rulebox_graph_from_rules, rulebox_rules_to_payload
 from digital_twin.infrastructure.typedb_ontology import (
     NullTypeDBOntologyGraphRepository,
     TypeDBOperationTimeout,
@@ -156,9 +156,10 @@ class TypeDBOntologyRepositoryTests(unittest.TestCase):
         _nodes, relations = repository.graph_persistence_rows(graph)
         query = repository.batched_relation_insert_queries(relations, "2026-07-21T00:00:00Z")[0]
 
-        self.assertIn('has ontology-id "ontology-box:RuleBox";', query)
-        self.assertIn('has ontology-id "rule-registry:test";', query)
-        self.assertNotIn('has ontology-box "RuleBox";', query)
+        self.assertIn(relations[0]["sourceStorageId"], query)
+        self.assertIn(relations[0]["targetStorageId"], query)
+        self.assertNotIn('has ontology-id "ontology-box:RuleBox";', query)
+        self.assertNotIn('has ontology-id "rule-registry:test";', query)
 
     def test_seed_ontology_repairs_missing_static_relations_before_full_reseed(self):
         repository = TypeDBOntologyGraphRepository("127.0.0.1:1729")
@@ -618,6 +619,80 @@ class TypeDBOntologyRepositoryTests(unittest.TestCase):
         self.assertIn('has ontology-box "ABoxControl"', calls)
         self.assertNotIn('has ontology-box "ABox"; delete', calls)
 
+    def test_typedb_static_replacement_commits_delete_before_insert(self):
+        class FakePromise:
+            def resolve(self):
+                return []
+
+        class FakeTransaction:
+            def __init__(self, calls):
+                self.calls = calls
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, _exc_type, _exc, _traceback):
+                return False
+
+            def query(self, query):
+                self.calls.append(query)
+                return FakePromise()
+
+            def commit(self):
+                self.calls.append("COMMIT")
+
+        class FakeDriver:
+            def __init__(self):
+                self.calls = []
+
+            def transaction(self, *_args, **_kwargs):
+                return FakeTransaction(self.calls)
+
+        repository = TypeDBOntologyGraphRepository("127.0.0.1:1729", retry_count=0)
+        driver = FakeDriver()
+        graph = PortfolioOntology("rules", entities=[OntologyEntity(
+            "rule:test",
+            "Test rule",
+            "rule",
+            {"ontologyBox": "RuleBox"},
+        )])
+
+        repository.write_graph(
+            driver,
+            ((object, object, object, object, SimpleNamespace(WRITE="write")), None),
+            graph,
+            delete_boxes=["RuleBox"],
+        )
+
+        self.assertEqual(2, driver.calls.count("COMMIT"))
+        delete_index = next(index for index, item in enumerate(driver.calls) if "delete $n" in item)
+        insert_index = next(index for index, item in enumerate(driver.calls) if "insert $n0" in item)
+        self.assertIn("COMMIT", driver.calls[delete_index + 1:insert_index])
+
+    def test_typedb_relation_matches_exact_persisted_endpoints(self):
+        graph = PortfolioOntology(
+            "rules",
+            entities=[
+                OntologyEntity("rule-registry:test", "Registry", "rule-registry", {"ontologyBox": "RuleBox"}),
+                OntologyEntity("rule:test", "Rule", "rule", {"ontologyBox": "RuleBox"}),
+            ],
+            relations=[OntologyRelation(
+                "rule-registry:test",
+                "rule:test",
+                "DEFINES_RULE",
+                properties={"ontologyBox": "RuleBox"},
+            )],
+        )
+        repository = TypeDBOntologyGraphRepository("127.0.0.1:1729")
+
+        _nodes, relations = repository.graph_persistence_rows(graph)
+        query = repository.relation_insert_query(relations[0], "2026-07-21T00:00:00Z")
+
+        self.assertIn("has ontology-storage-id", query)
+        self.assertIn(relations[0]["sourceStorageId"], query)
+        self.assertIn(relations[0]["targetStorageId"], query)
+        self.assertNotIn('has ontology-id "rule:test"', query)
+
     def test_typedb_abox_write_graph_commits_query_chunks(self):
         class FakePromise:
             def resolve(self):
@@ -958,11 +1033,13 @@ class TypeDBOntologyRepositoryTests(unittest.TestCase):
             OntologyEntity("stock:000660", "SK hynix", "stock", {"ontologyBox": "ABox"}),
             OntologyEntity("portfolio:default", "Portfolio", "portfolio", {"ontologyBox": "ABox"}),
             OntologyEntity("risk-budget:default", "Risk budget", "risk-budget", {"ontologyBox": "ABox"}),
+            OntologyEntity("key-level:000660:ma5", "5-day average", "key-level", {"ontologyBox": "ABox", "levelType": "ma5"}),
             OntologyEntity("runtime:irrelevant", "Runtime setting", "runtime-setting", {"ontologyBox": "ABox"}),
             OntologyEntity("orphan:irrelevant", "Orphan", "technical-metric", {"ontologyBox": "ABox"}),
         ])
         graph.relations.extend([
             OntologyRelation("stock:000660", "risk-budget:default", "HAS_RISK_BUDGET", properties={"ontologyBox": "ABox"}),
+            OntologyRelation("stock:000660", "key-level:000660:ma5", "BREAKS_LEVEL", properties={"ontologyBox": "ABox"}),
             OntologyRelation("stock:000660", "runtime:irrelevant", "HAS_RUNTIME_SETTING", properties={"ontologyBox": "ABox"}),
             OntologyRelation("orphan:irrelevant", "runtime:irrelevant", "HAS_RUNTIME_SETTING", properties={"ontologyBox": "ABox"}),
         ])
@@ -971,15 +1048,37 @@ class TypeDBOntologyRepositoryTests(unittest.TestCase):
             OntologyEvidence("evidence:orphan", "orphan:irrelevant", "news", "test", "orphan evidence", {"ontologyBox": "ABox"}),
         ])
 
-        persisted = PortfolioOntologyProjectionRecorder(None).graph_for_graph_store_persistence(graph)
+        persisted = PortfolioOntologyProjectionRecorder(None).graph_for_graph_store_persistence(
+            graph,
+            {"inputRelationTypes": ["HAS_RISK_BUDGET", "BREAKS_LEVEL"]},
+        )
 
         self.assertEqual(
-            {"stock:000660", "portfolio:default", "risk-budget:default"},
+            {"stock:000660", "portfolio:default", "risk-budget:default", "key-level:000660:ma5"},
             {item.entity_id for item in persisted.entities},
         )
-        self.assertEqual(["HAS_RISK_BUDGET"], [item.relation_type for item in persisted.relations])
+        self.assertEqual(
+            ["HAS_RISK_BUDGET", "BREAKS_LEVEL"],
+            [item.relation_type for item in persisted.relations],
+        )
         self.assertEqual(["evidence:stock"], [item.evidence_id for item in persisted.evidence])
-        self.assertEqual("native-rule-one-hop-context", persisted.worldview["runtimeProjectionScope"])
+        self.assertEqual("typedb-rule-input-relations", persisted.worldview["runtimeProjectionScope"])
+
+    def test_typedb_rule_catalog_migration_removes_shadow_and_fills_known_policy(self):
+        bootstrap = rulebox_rules_to_payload(default_graph_inference_rules())
+        stored = [dict(item) for item in bootstrap[:2]]
+        stored[0]["derivations"] = [dict(item) for item in stored[0]["derivations"]]
+        stored[0]["derivations"][0]["decision_stage"] = ""
+        stored.append({
+            "rule_id": "shadow.market_psychology.state.v1",
+            "derivations": [{"decision_stage": ""}],
+        })
+
+        migration = migrate_typedb_rule_catalog(stored, bootstrap)
+
+        self.assertTrue(migration["changed"])
+        self.assertEqual(["shadow.market_psychology.state.v1"], migration["removedRuleIds"])
+        self.assertEqual("LOSS_REDUCE", migration["rules"][0]["derivations"][0]["decision_stage"])
 
     def test_typedb_insert_queries_project_same_ontology_graph_shape(self):
         graph = PortfolioOntology("portfolio:test")
@@ -1514,6 +1613,15 @@ class TypeDBOntologyRepositoryTests(unittest.TestCase):
 
             def save_graph(self, _graph):
                 return {"saved": True, "status": "ok", "graphStore": "typedb"}
+
+            def rulebox_snapshot(self):
+                rules = rulebox_rules_to_payload(default_graph_inference_rules())
+                return {
+                    "configured": True,
+                    "status": "ok",
+                    "rules": rules,
+                    "ruleCount": len(rules),
+                }
 
             def run_rulebox(self, _payload):
                 return {

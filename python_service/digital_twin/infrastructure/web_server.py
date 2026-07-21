@@ -513,9 +513,6 @@ def settings_status_payload() -> Dict[str, object]:
         "ontologyReasoningUrgentMinIntervalSeconds",
         "ontologyReasoningProjectionRetrySeconds",
         "ontologyReasoningUrgentReviewLevels",
-        "psychologyShadowEnabled",
-        "psychologyMinimumComponentCount",
-        "psychologyNewsMaxAgeMinutes",
         "temporalWindowPeriods",
         "temporalWindowHistoryLimit",
         "ontologyLabAutoApplyEnabled",
@@ -714,88 +711,6 @@ def save_settings_payload(payload: Dict[str, object]) -> Dict[str, object]:
         },
     )
     return status
-
-
-def psychology_shadow_payload(query: Dict[str, List[str]] = None) -> Dict[str, object]:
-    query = query or {}
-    requested_account = configured((query.get("accountId") or [""])[0])
-    requested_symbol = configured((query.get("symbol") or [""])[0]).upper()
-    try:
-        history_limit = max(1, min(100, int((query.get("historyLimit") or ["20"])[0] or 20)))
-    except (TypeError, ValueError):
-        history_limit = 20
-    try:
-        account_limit = max(1, min(500, int((query.get("accountLimit") or ["50"])[0] or 50)))
-    except (TypeError, ValueError):
-        account_limit = 50
-    read_store = stores.psychology_shadow_read_store(runtime_settings())
-    account_page = read_store.load_latest_page(requested_account, limit=account_limit)
-    account_states = dict(account_page.get("states") or {})
-    accounts = []
-    latest_rows = []
-    history_rows = []
-    for account_id, state in sorted(account_states.items()):
-        if not isinstance(state, dict) or not state:
-            continue
-        metadata = state.get("metadata") if isinstance(state.get("metadata"), dict) else {}
-        psychology = metadata.get("psychologyShadow") if isinstance(metadata.get("psychologyShadow"), dict) else {}
-        symbols = psychology.get("symbols") if isinstance(psychology.get("symbols"), dict) else {}
-        account_row_count = 0
-        for symbol, row in symbols.items():
-            if requested_symbol and str(symbol or "").upper() != requested_symbol:
-                continue
-            if not isinstance(row, dict):
-                continue
-            latest_rows.append({
-                **dict(row),
-                "accountId": account_id,
-                "accountLabel": str(state.get("accountLabel") or account_id),
-                "generatedAt": str(psychology.get("generatedAt") or state.get("generatedAt") or ""),
-            })
-            account_row_count += 1
-        accounts.append({
-            "accountId": account_id,
-            "accountLabel": str(state.get("accountLabel") or account_id),
-            "generatedAt": str(state.get("generatedAt") or ""),
-            "symbolCount": account_row_count,
-        })
-        if requested_account and account_id == requested_account:
-            for historical in read_store.load_history(account_id, limit=history_limit):
-                historical_metadata = historical.get("metadata") if isinstance(historical.get("metadata"), dict) else {}
-                historical_psychology = historical_metadata.get("psychologyShadow") if isinstance(historical_metadata.get("psychologyShadow"), dict) else {}
-                for symbol, row in (historical_psychology.get("symbols") or {}).items():
-                    if requested_symbol and str(symbol or "").upper() != requested_symbol:
-                        continue
-                    if not isinstance(row, dict):
-                        continue
-                    history_rows.append({
-                        "accountId": account_id,
-                        "symbol": str(symbol or "").upper(),
-                        "state": row.get("state"),
-                        "stateLabel": row.get("stateLabel"),
-                        "reviewLevel": row.get("reviewLevel"),
-                        "dataState": row.get("dataState"),
-                        "conflictState": row.get("conflictState"),
-                        "generatedAt": str(historical_psychology.get("generatedAt") or historical.get("generatedAt") or ""),
-                        "comparison": dict(row.get("comparison") or {}),
-                    })
-    settings = settings_status_payload().get("settings") or {}
-    policy_keys = [
-        "psychologyShadowEnabled",
-        "psychologyMinimumComponentCount",
-        "psychologyNewsMaxAgeMinutes",
-    ]
-    return {
-        "mode": "shadow",
-        "accounts": accounts,
-        "rows": sorted(latest_rows, key=lambda item: (str(item.get("accountId") or ""), str(item.get("symbol") or ""))),
-        "history": history_rows[-history_limit:],
-        "accountLimit": account_limit,
-        "accountPageTruncated": bool(account_page.get("truncated")),
-        "policy": {key: settings.get(key, "") for key in policy_keys},
-        "decisionImpactApplied": False,
-        "dispatchEligible": False,
-    }
 
 
 def ontology_rulebox_payload() -> Dict[str, object]:
@@ -3078,9 +2993,6 @@ class DigitalTwinHandler(BaseHTTPRequestHandler):
                 if not self.ensure_writable("공유 모드에서는 TypeDB RuleBox를 변경할 수 없습니다."):
                     return
                 return self.send_payload(200, save_ontology_rulebox_payload(self.read_json_body()))
-
-        if path == "/api/psychology-shadow" and self.command == "GET":
-            return self.send_payload(200, psychology_shadow_payload(query))
 
         if path == "/api/ontology/language":
             if self.command == "GET":

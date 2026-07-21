@@ -40,11 +40,7 @@ from .ontology_relation_catalog import (
     DEFAULT_RELATION_RULES,
 )
 from .portfolio import PortfolioSummary, Position
-from .ontology_relation_decisions import (
-    decision_action_group_for_label,
-    decision_stage_by_key,
-    resolve_decision_stage,
-)
+from .ontology_relation_decisions import decision_stage_by_key
 from .ontology_relation_execution_plan import execution_plan_from_relation_context
 from .ontology_relation_prompt_context import build_ai_prompt_context
 from .ontology_relation_settings import (
@@ -57,7 +53,6 @@ from .ontology_relation_settings import (
     relation_rule_definitions_from_settings,
     relation_thresholds_from_settings,
 )
-from .ontology_relation_matches import _match, _rule, decision_from_matches
 
 
 def relation_rule_context_summary_lines(context: Dict[str, object]) -> List[str]:

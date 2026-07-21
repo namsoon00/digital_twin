@@ -259,6 +259,26 @@ def typedb_concept_value(concept: object):
     get_value = getattr(concept, "get_value", None)
     if callable(get_value):
         return get_value()
+    # Aggregate TypeQL results are Value concepts. They expose typed getters
+    # rather than get_value(), so inspect them before falling back to the type
+    # label (for example, "integer" instead of the actual count).
+    for getter_name in [
+        "get_boolean",
+        "get_integer",
+        "get_double",
+        "get_decimal",
+        "get_string",
+        "get_datetime_tz",
+        "get_datetime",
+        "get_date",
+        "get_duration",
+    ]:
+        getter = getattr(concept, getter_name, None)
+        if callable(getter):
+            try:
+                return getter()
+            except Exception:
+                continue
     value = getattr(concept, "value", None)
     if callable(value):
         return value()
@@ -768,6 +788,8 @@ class TypeDBOntologyGraphRepository(GraphStoreOntologyRowMapperMixin):
         self._native_rule_execution_enabled = bool(native_rule_execution_enabled)
         self._last_graph = None
         self._last_rules: List[GraphInferenceRule] = []
+        self._base_schema_ready_fingerprint = ""
+        self._base_schema_type_names: set = set()
         self._schema_function_sync_cache_key = ""
         self._schema_function_sync_cache_result: Dict[str, object] = {}
         self._rulebox_snapshot_cache_at = 0.0
@@ -889,27 +911,69 @@ class TypeDBOntologyGraphRepository(GraphStoreOntologyRowMapperMixin):
         imported = self.driver_imports()
         if imported[0] is None:
             return self.driver_missing_result(imported[1], graph)
+        boxes = node_boxes(graph)
+        abox_projection_verification: Dict[str, object] = {}
         try:
             def operation():
+                nonlocal abox_projection_verification
                 with typedb_operation_timeout(self.write_operation_timeout_seconds(), "TypeDB graph save"):
                     driver = self.open_driver(imported)
-                    try:
-                        self.ensure_database(driver)
-                        self.ensure_schema(driver, imported)
-                        self.write_graph(driver, imported, graph)
-                    finally:
-                        self.close_driver(driver)
+                try:
+                    self.ensure_database(driver)
+                    self.ensure_schema(driver, imported)
+                    expected_entity_count = 0
+                    expected_relation_count = 0
+                    if "ABox" in boxes:
+                        node_rows, relation_rows = self.graph_persistence_rows(graph)
+                        expected_entity_count = len(node_rows)
+                        expected_relation_count = len(relation_rows)
+                        self.delete_box_rows_in_batches(driver, imported, ["ABox"])
+                    with typedb_operation_timeout(self.write_operation_timeout_seconds(), "TypeDB graph save"):
+                        self.write_graph(
+                            driver,
+                            imported,
+                            graph,
+                            delete_boxes=[box for box in boxes if box != "ABox"],
+                        )
+                        if "ABox" in boxes:
+                            marker_graph = self.abox_projection_marker_graph(
+                                graph,
+                                expected_entity_count,
+                                expected_relation_count,
+                            )
+                            if marker_graph.entities:
+                                self.write_graph(driver, imported, marker_graph, delete_boxes=[])
+                                abox_projection_verification = self.verify_abox_projection(
+                                    graph,
+                                    expected_entity_count,
+                                    expected_relation_count,
+                                )
+                                if abox_projection_verification.get("status") != "ok":
+                                    raise RuntimeError(
+                                        "ABox projection verification failed: "
+                                        + json.dumps(abox_projection_verification, ensure_ascii=False, sort_keys=True)
+                                    )
+                            else:
+                                abox_projection_verification = {
+                                    "status": "skipped",
+                                    "reason": "ABox material identity is unavailable.",
+                                }
+                finally:
+                    self.close_driver(driver)
             self.with_typedb_retries(operation)
         except Exception as error:  # noqa: BLE001 - graph-store persistence must not block monitoring.
+            cleanup = self.clear_boxes_in_batches(["ABox"]) if "ABox" in boxes else {}
             return {
                 "configured": True,
                 "saved": False,
                 "status": "error",
                 "graphStore": "typedb",
                 "reason": str(error)[:240],
+                "partialWriteCleanup": cleanup,
                 "entityCount": len(graph.entities),
                 "relationCount": len(graph.relations),
                 "reasoningCardCount": len(getattr(graph, "reasoning_cards", []) or []),
+                "aboxPersistenceVerification": abox_projection_verification,
             }
         self._last_graph = copy.deepcopy(graph)
         box_entity_counts = graph_box_entity_counts(graph)
@@ -936,6 +1000,7 @@ class TypeDBOntologyGraphRepository(GraphStoreOntologyRowMapperMixin):
             "inferenceBoxRelationCount": box_relation_counts.get("InferenceBox", 0),
             "evidenceCount": len(graph.evidence),
             "reasoningCardCount": len(getattr(graph, "reasoning_cards", []) or []),
+            "aboxPersistenceVerification": abox_projection_verification,
         }
 
     def driver_missing_result(self, error: Exception, graph: PortfolioOntology) -> Dict[str, object]:
@@ -967,8 +1032,29 @@ class TypeDBOntologyGraphRepository(GraphStoreOntologyRowMapperMixin):
             DriverOptions(
                 tls_config,
                 primary_failover_retries=max(0, min(2, self.retry_count)),
-                request_timeout_millis=max(1000, int(self.timeout_seconds * 1000)),
+                # A write transaction can legitimately outlive an individual read
+                # deadline while replacing a large ABox. Do not let the driver's
+                # channel deadline invalidate that transaction before its explicit
+                # write-operation timeout is reached.
+                request_timeout_millis=max(1000, int(self.driver_request_timeout_seconds() * 1000)),
             ),
+        )
+
+    def driver_request_timeout_seconds(self) -> float:
+        return max(
+            float(self.timeout_seconds or 0),
+            float(self._query_timeout_seconds or 0),
+            float(self._schema_operation_timeout_seconds or 0),
+            float(self._write_operation_timeout_seconds or 0),
+        )
+
+    def write_transaction_options(self):
+        try:
+            from typedb.driver import TransactionOptions
+        except Exception:  # noqa: BLE001 - retain compatibility with older optional drivers.
+            return None
+        return TransactionOptions(
+            transaction_timeout_millis=max(1000, int(self.write_operation_timeout_seconds() * 1000)),
         )
 
     def close_driver(self, driver) -> None:
@@ -992,12 +1078,54 @@ class TypeDBOntologyGraphRepository(GraphStoreOntologyRowMapperMixin):
             if "already" not in str(error).lower() and "exist" not in str(error).lower():
                 raise
 
+    def base_schema_type_names(self) -> set:
+        if self._base_schema_type_names:
+            return set(self._base_schema_type_names)
+        names = set(re.findall(
+            r"^\s*(?:attribute|entity|relation)\s+([A-Za-z_][A-Za-z0-9_-]*)\b",
+            self.schema_query(),
+            flags=re.MULTILINE,
+        ))
+        self._base_schema_type_names = names
+        return set(names)
+
+    def typedb_schema_type_names(self, driver) -> set:
+        databases = getattr(driver, "databases", None)
+        get_database = getattr(databases, "get", None) if databases is not None else None
+        if not callable(get_database):
+            raise RuntimeError("TypeDB database schema listing is unavailable.")
+        database = get_database(self.database)
+        schema_reader = getattr(database, "type_schema", None)
+        if not callable(schema_reader):
+            schema_reader = getattr(database, "schema", None)
+        if not callable(schema_reader):
+            raise RuntimeError("TypeDB database schema reader is unavailable.")
+        schema_text = str(schema_reader() or "")
+        return set(re.findall(
+            r"^\s*(?:attribute|entity|relation)\s+([A-Za-z_][A-Za-z0-9_-]*)\b",
+            schema_text,
+            flags=re.MULTILINE,
+        ))
+
     def ensure_schema(self, driver, imported) -> None:
+        schema = self.schema_query()
+        schema_fingerprint = hashlib.sha256(schema.encode("utf-8")).hexdigest()
+        if self._base_schema_ready_fingerprint == schema_fingerprint:
+            return
+        try:
+            if self.base_schema_type_names().issubset(self.typedb_schema_type_names(driver)):
+                self._base_schema_ready_fingerprint = schema_fingerprint
+                return
+        except Exception:
+            # On a new database or an older driver without schema inspection,
+            # fall through to the idempotent schema definition below.
+            pass
         _TypeDB, _Credentials, _DriverOptions, _DriverTlsConfig, TransactionType = imported[0]
         with typedb_operation_timeout(self.schema_operation_timeout_seconds(), "TypeDB base schema sync"):
             with driver.transaction(self.database, TransactionType.SCHEMA) as tx:
-                tx.query(self.schema_query()).resolve()
+                tx.query(schema).resolve()
                 tx.commit()
+        self._base_schema_ready_fingerprint = schema_fingerprint
 
     def read_rows(self, query: str, columns: Iterable[str], label: str = "typedb.read") -> List[Dict[str, object]]:
         if not self.address:
@@ -1140,21 +1268,102 @@ class TypeDBOntologyGraphRepository(GraphStoreOntologyRowMapperMixin):
         return list({str(row.get("id") or ""): row for row in rows if str(row.get("id") or "").strip()}.values())
 
     def active_abox_snapshot_id(self) -> str:
-        return str(self.active_abox_metadata().get("aboxSnapshotId") or "")
+        metadata = self.active_abox_metadata()
+        if str(metadata.get("status") or "") != "ok":
+            return ""
+        return str(metadata.get("aboxSnapshotId") or "")
+
+    def box_snapshot_row_counts(self, box: str, snapshot_id: str) -> Dict[str, int]:
+        clean_box = str(box or "").strip()
+        clean_snapshot_id = str(snapshot_id or "").strip()
+        if not clean_box or not clean_snapshot_id:
+            return {"entityCount": 0, "relationCount": 0}
+
+        def count(type_label: str) -> int:
+            query = (
+                "match $item isa " + type_label
+                + ", has ontology-box " + typedb_string(clean_box)
+                + ", has ontology-snapshot-id " + typedb_string(clean_snapshot_id)
+                + "; reduce $count = count;"
+            )
+            rows = self.read_rows(query, ["count"], label="typedb.box-snapshot-count")
+            return int(number_or_none((rows[0] if rows else {}).get("count")) or 0)
+
+        return {
+            "entityCount": count("ontology-node"),
+            "relationCount": count("ontology-assertion"),
+        }
+
+    def abox_projection_marker_rows(self) -> List[Dict[str, object]]:
+        query = (
+            "match $n isa ontology-node, "
+            "has ontology-id $id, "
+            "has ontology-label $label, "
+            "has ontology-kind \"abox-projection-marker\", "
+            "has ontology-box \"ABox\", "
+            "has ontology-updated-at $updatedAt, "
+            "has ontology-json $json;"
+        )
+        return self.entity_rows_from_typeql(
+            self.read_rows(query, ["id", "label", "kind", "updatedAt", "json"], label="typedb.abox-marker"),
+            "ABox",
+        )
 
     def active_abox_metadata(self) -> Dict[str, object]:
-        rows = self.read_entity_rows(["ABox"], limit=80)
-        for row in rows:
-            snapshot_id = str(row.get("aboxSnapshotId") or row.get("snapshotId") or "").strip()
-            if snapshot_id:
+        markers = sorted(
+            self.abox_projection_marker_rows(),
+            key=lambda row: (str(row.get("updatedAt") or ""), str(row.get("id") or "")),
+            reverse=True,
+        )
+        for marker in markers:
+            snapshot_id = str(marker.get("aboxSnapshotId") or marker.get("snapshotId") or "").strip()
+            expected_entities = number_or_none(marker.get("expectedAboxEntityCount"))
+            expected_relations = number_or_none(marker.get("expectedAboxRelationCount"))
+            if not snapshot_id or expected_entities is None or expected_relations is None:
+                continue
+            try:
+                actual = self.box_snapshot_row_counts("ABox", snapshot_id)
+            except Exception as error:  # noqa: BLE001 - metadata must describe a read verification failure.
                 return {
                     "configured": True,
-                    "status": "ok",
+                    "status": "error",
                     "graphStore": "typedb",
                     "aboxSnapshotId": snapshot_id,
-                    "materialFingerprint": str(row.get("materialFingerprint") or "").strip(),
-                    "asOf": str(row.get("asOf") or "").strip(),
+                    "materialFingerprint": str(marker.get("materialFingerprint") or "").strip(),
+                    "reason": str(error)[:180],
                 }
+            expected = {
+                "entityCount": int(expected_entities),
+                "relationCount": int(expected_relations),
+            }
+            complete = (
+                actual["entityCount"] == expected["entityCount"] + 1
+                and actual["relationCount"] == expected["relationCount"]
+            )
+            return {
+                "configured": True,
+                "status": "ok" if complete else "incomplete",
+                "graphStore": "typedb",
+                "aboxSnapshotId": snapshot_id,
+                "materialFingerprint": str(marker.get("materialFingerprint") or "").strip(),
+                "asOf": str(marker.get("asOf") or ""),
+                "expectedEntityCount": expected["entityCount"],
+                "expectedRelationCount": expected["relationCount"],
+                "actualEntityCount": actual["entityCount"] - 1 if actual["entityCount"] else 0,
+                "actualRelationCount": actual["relationCount"],
+                "completionMarkerId": str(marker.get("id") or ""),
+            }
+        rows = self.read_entity_rows(["ABox"], limit=1)
+        if rows:
+            row = rows[0]
+            return {
+                "configured": True,
+                "status": "incomplete",
+                "graphStore": "typedb",
+                "aboxSnapshotId": str(row.get("aboxSnapshotId") or row.get("snapshotId") or "").strip(),
+                "materialFingerprint": str(row.get("materialFingerprint") or "").strip(),
+                "reason": "ABox completion marker is missing.",
+            }
         return {
             "configured": True,
             "status": "empty",
@@ -1490,16 +1699,133 @@ class TypeDBOntologyGraphRepository(GraphStoreOntologyRowMapperMixin):
             "nativeTypeDbReasoned": bool(merged.get("nativeTypeDbReasoned")),
         }
 
-    def write_graph(self, driver, imported, graph: PortfolioOntology) -> None:
+    def abox_delete_batch_size(self, settings: Dict[str, object] = None) -> int:
+        raw = (settings or runtime_settings()).get("typedbABoxDeleteBatchSize")
+        parsed = number_or_none(raw)
+        if parsed is None:
+            parsed = 100
+        # ABox replacement is a bounded operational cleanup, not a per-row
+        # workflow. Small batches turn a few thousand facts into hundreds of
+        # TypeDB commits and can starve the live reasoning worker.
+        return max(100, min(5000, int(parsed)))
+
+    def abox_write_transaction_query_count(self, settings: Dict[str, object] = None) -> int:
+        raw = (settings or runtime_settings()).get("typedbABoxWriteTransactionQueryCount")
+        parsed = number_or_none(raw)
+        if parsed is None:
+            parsed = 8
+        # A single ABox refresh can produce dozens of insert queries. Keeping
+        # fifty of them in one transaction made the TypeDB writer hold its lock
+        # for several minutes under live market load, which starved the next
+        # reasoning and notification cycle. The caller clears a partial ABox on
+        # failure, so short committed chunks are the safer operational boundary.
+        return max(1, min(50, int(parsed)))
+
+    def inferencebox_write_transaction_query_count(self, settings: Dict[str, object] = None) -> int:
+        raw = (settings or runtime_settings()).get("typedbInferenceBoxWriteTransactionQueryCount")
+        parsed = number_or_none(raw)
+        if parsed is None:
+            parsed = 8
+        # InferenceBox output is produced after the ABox is stable. Writing one
+        # TypeQL statement per transaction made a single live cycle hold the
+        # TypeDB writer for minutes. Keep this bounded independently from the
+        # ABox so publication remains atomic enough for a generation while the
+        # next portfolio event can still make progress.
+        return max(1, min(50, int(parsed)))
+
+    def box_instance_exists(self, driver, imported, box: str, type_label: str) -> bool:
         _TypeDB, _Credentials, _DriverOptions, _DriverTlsConfig, TransactionType = imported[0]
-        boxes = node_boxes(graph)
+        query = (
+            "match $item isa " + str(type_label) + ", has ontology-box " + typedb_string(box) + "; limit 1;"
+        )
+        with driver.transaction(self.database, TransactionType.READ) as tx:
+            return bool(self.read_rows_in_transaction(tx, query, [], label="typedb.box-exists"))
+
+    def box_delete_batch_query(self, box: str, type_label: str, batch_size: int) -> str:
+        variable = "$r" if str(type_label) == "ontology-assertion" else "$n"
+        return (
+            "match " + variable + " isa " + str(type_label) + ", has ontology-box " + typedb_string(box)
+            + "; limit " + str(max(1, int(batch_size or 1))) + "; delete " + variable + ";"
+        )
+
+    def delete_box_rows_in_batches(self, driver, imported, boxes: Iterable[str]) -> Dict[str, object]:
+        _TypeDB, _Credentials, _DriverOptions, _DriverTlsConfig, TransactionType = imported[0]
+        batch_size = self.abox_delete_batch_size()
+        deleted_batches = 0
+        for box in sorted({str(item or "").strip() for item in boxes or [] if str(item or "").strip()}):
+            for type_label in ["ontology-assertion", "ontology-node"]:
+                while self.box_instance_exists(driver, imported, box, type_label):
+                    query = self.box_delete_batch_query(box, type_label, batch_size)
+
+                    def delete_batch():
+                        with driver.transaction(
+                            self.database,
+                            TransactionType.WRITE,
+                            options=self.write_transaction_options(),
+                        ) as tx:
+                            tx.query(query).resolve()
+                            tx.commit()
+
+                    self.with_typedb_retries(delete_batch)
+                    deleted_batches += 1
+        return {
+            "status": "ok",
+            "boxes": sorted({str(item or "").strip() for item in boxes or [] if str(item or "").strip()}),
+            "batchSize": batch_size,
+            "deletedBatchCount": deleted_batches,
+        }
+
+    def clear_boxes_in_batches(self, boxes: Iterable[str]) -> Dict[str, object]:
+        clean_boxes = sorted({str(item or "").strip() for item in boxes or [] if str(item or "").strip()})
+        if not clean_boxes:
+            return {"status": "skipped", "boxes": [], "deletedBatchCount": 0}
+        imported = self.driver_imports()
+        if imported[0] is None:
+            return {"status": "driver-missing", "boxes": clean_boxes, "reason": str(imported[1])[:180]}
+        try:
+            def operation():
+                driver = self.open_driver(imported)
+                try:
+                    self.ensure_database(driver)
+                    self.ensure_schema(driver, imported)
+                    return self.delete_box_rows_in_batches(driver, imported, clean_boxes)
+                finally:
+                    self.close_driver(driver)
+            return self.with_typedb_retries(operation)
+        except Exception as error:  # noqa: BLE001 - preserve the original write failure while reporting cleanup state.
+            return {"status": "error", "boxes": clean_boxes, "reason": str(error)[:180]}
+
+    def write_graph(
+        self,
+        driver,
+        imported,
+        graph: PortfolioOntology,
+        delete_boxes: Iterable[str] = None,
+    ) -> None:
+        _TypeDB, _Credentials, _DriverOptions, _DriverTlsConfig, TransactionType = imported[0]
+        boxes = node_boxes(graph) if delete_boxes is None else list(delete_boxes or [])
         queries = self.delete_queries(boxes) + self.graph_insert_queries(graph)
         if not queries:
             return
-        with driver.transaction(self.database, TransactionType.WRITE) as tx:
-            for query in queries:
-                tx.query(query).resolve()
-            tx.commit()
+        transaction_query_count = (
+            self.abox_write_transaction_query_count()
+            if "ABox" in node_boxes(graph)
+            else len(queries)
+        )
+        for offset in range(0, len(queries), transaction_query_count):
+            query_batch = queries[offset: offset + transaction_query_count]
+
+            def write_batch():
+                with driver.transaction(
+                    self.database,
+                    TransactionType.WRITE,
+                    options=self.write_transaction_options(),
+                ) as tx:
+                    for query in query_batch:
+                        tx.query(query).resolve()
+                    tx.commit()
+
+            self.with_typedb_retries(write_batch)
 
     def clear_inferencebox(self) -> Dict[str, object]:
         if not self.address:
@@ -1740,6 +2066,23 @@ attribute ontology-language-preferred-label, value string;
 attribute ontology-language-delivery-level, value string;
 attribute ontology-language-delivery-level-label, value string;
 attribute ontology-language-rendered-label, value string;
+attribute ontology-smart-money-direction, value string;
+attribute ontology-investor-flow-psychology, value string;
+attribute ontology-investor-flow-evidence-role, value string;
+attribute ontology-investor-flow-data-state, value string;
+attribute ontology-investor-flow-review-level, value string;
+attribute ontology-trend-risk-state, value string;
+attribute ontology-trend-review-level, value string;
+attribute ontology-trend-evidence-role, value string;
+attribute ontology-trend-data-state, value string;
+attribute ontology-liquidity-state, value string;
+attribute ontology-liquidity-review-level, value string;
+attribute ontology-liquidity-data-state, value string;
+attribute ontology-source-data-state, value string;
+attribute ontology-external-signal-data-state, value string;
+attribute ontology-valuation-data-state, value string;
+attribute ontology-valuation-input-state, value string;
+attribute ontology-valuation-reliability-state, value string;
 
 entity ontology-node @abstract,
     owns ontology-id @key,
@@ -1930,6 +2273,23 @@ entity ontology-node @abstract,
     owns ontology-language-delivery-level,
     owns ontology-language-delivery-level-label,
     owns ontology-language-rendered-label,
+    owns ontology-smart-money-direction,
+    owns ontology-investor-flow-psychology,
+    owns ontology-investor-flow-evidence-role,
+    owns ontology-investor-flow-data-state,
+    owns ontology-investor-flow-review-level,
+    owns ontology-trend-risk-state,
+    owns ontology-trend-review-level,
+    owns ontology-trend-evidence-role,
+    owns ontology-trend-data-state,
+    owns ontology-liquidity-state,
+    owns ontology-liquidity-review-level,
+    owns ontology-liquidity-data-state,
+    owns ontology-source-data-state,
+    owns ontology-external-signal-data-state,
+    owns ontology-valuation-data-state,
+    owns ontology-valuation-input-state,
+    owns ontology-valuation-reliability-state,
     plays ontology-assertion:source,
     plays ontology-assertion:target;
 
@@ -1983,20 +2343,14 @@ relation ontology-assertion,
     def insert_queries(self, graph: PortfolioOntology) -> List[str]:
         queries: List[str] = []
         updated_at = utc_now()
-        node_rows = self.node_rows(graph)
+        node_rows, relation_rows = self.graph_persistence_rows(graph)
         for row in node_rows:
             queries.append(self.node_insert_query(row, updated_at))
-        node_ids = {str(row.get("id") or "") for row in node_rows}
-        for row in self.rows_for_relations(graph):
-            if str(row.get("source") or "") in node_ids and str(row.get("target") or "") in node_ids:
-                queries.append(self.relation_insert_query(row, updated_at))
-        for row in self.support_relation_rows(graph):
-            if str(row.get("source") or "") in node_ids and str(row.get("target") or "") in node_ids:
-                queries.append(self.relation_insert_query(row, updated_at))
+        for row in relation_rows:
+            queries.append(self.relation_insert_query(row, updated_at))
         return [item for item in queries if item]
 
-    def graph_insert_queries(self, graph: PortfolioOntology) -> List[str]:
-        updated_at = utc_now()
+    def graph_persistence_rows(self, graph: PortfolioOntology) -> Tuple[List[Dict[str, object]], List[Dict[str, object]]]:
         node_rows = self.node_rows(graph)
         node_ids = {str(row.get("id") or "") for row in node_rows}
         relation_rows = [
@@ -2005,13 +2359,86 @@ relation ontology-assertion,
             if str(row.get("source") or "") in node_ids
             and str(row.get("target") or "") in node_ids
         ]
+        return node_rows, relation_rows
+
+    def abox_projection_marker_graph(
+        self,
+        graph: PortfolioOntology,
+        expected_entity_count: int,
+        expected_relation_count: int,
+    ) -> PortfolioOntology:
+        worldview = dict(getattr(graph, "worldview", {}) or {})
+        snapshot_id = str(worldview.get("aboxSnapshotId") or worldview.get("snapshotId") or "").strip()
+        fingerprint = str(worldview.get("materialFingerprint") or "").strip()
+        if not snapshot_id or not fingerprint:
+            return PortfolioOntology(str(graph.portfolio_id or "typedb-abox-marker"))
+        as_of = str(worldview.get("asOf") or worldview.get("generatedAt") or utc_now())
+        marker = OntologyEntity(
+            entity_id="abox-projection-marker:" + snapshot_id,
+            label="ABox projection completion",
+            kind="abox-projection-marker",
+            properties={
+                "ontologyBox": "ABox",
+                "tboxClass": "ABoxProjectionMarker",
+                "snapshotId": snapshot_id,
+                "aboxSnapshotId": snapshot_id,
+                "materialFingerprint": fingerprint,
+                "asOf": as_of,
+                "expectedAboxEntityCount": int(expected_entity_count),
+                "expectedAboxRelationCount": int(expected_relation_count),
+                "projectionStatus": "complete",
+            },
+        )
+        return PortfolioOntology(str(graph.portfolio_id or "typedb-abox-marker"), entities=[marker])
+
+    def verify_abox_projection(
+        self,
+        graph: PortfolioOntology,
+        expected_entity_count: int,
+        expected_relation_count: int,
+    ) -> Dict[str, object]:
+        worldview = dict(getattr(graph, "worldview", {}) or {})
+        snapshot_id = str(worldview.get("aboxSnapshotId") or worldview.get("snapshotId") or "").strip()
+        if not snapshot_id:
+            return {"status": "skipped", "reason": "ABox material identity is unavailable."}
+        actual = self.box_snapshot_row_counts("ABox", snapshot_id)
+        complete = (
+            actual["entityCount"] == int(expected_entity_count) + 1
+            and actual["relationCount"] == int(expected_relation_count)
+        )
+        return {
+            "status": "ok" if complete else "incomplete",
+            "aboxSnapshotId": snapshot_id,
+            "expectedEntityCount": int(expected_entity_count),
+            "expectedRelationCount": int(expected_relation_count),
+            "actualEntityCount": actual["entityCount"] - 1 if actual["entityCount"] else 0,
+            "actualRelationCount": actual["relationCount"],
+            "completionMarkerCount": 1 if actual["entityCount"] else 0,
+        }
+
+    def graph_insert_queries(self, graph: PortfolioOntology) -> List[str]:
+        updated_at = utc_now()
+        node_rows, relation_rows = self.graph_persistence_rows(graph)
         settings = runtime_settings()
-        node_batch_size = int(number_or_none(settings.get("typedbABoxNodeBatchSize")) or 25)
-        relation_batch_size = int(number_or_none(settings.get("typedbABoxRelationBatchSize")) or 5)
+        node_batch_size = int(number_or_none(settings.get("typedbABoxNodeBatchSize")) or 100)
+        relation_batch_size = int(number_or_none(settings.get("typedbABoxRelationBatchSize")) or 50)
+        max_query_bytes = self.write_query_max_bytes(settings)
         return [
-            *self.batched_node_insert_queries(node_rows, updated_at, node_batch_size),
-            *self.batched_relation_insert_queries(relation_rows, updated_at, relation_batch_size),
+            *self.batched_node_insert_queries(node_rows, updated_at, node_batch_size, max_query_bytes),
+            *self.batched_relation_insert_queries(relation_rows, updated_at, relation_batch_size, max_query_bytes),
         ]
+
+    def write_query_max_bytes(self, settings: Dict[str, object] = None) -> int:
+        configured_settings = runtime_settings() if settings is None else settings
+        raw = dict(configured_settings or {}).get("typedbWriteMaxQueryBytes")
+        parsed = number_or_none(raw)
+        if parsed is None:
+            parsed = 192000
+        return max(4096, min(256000, int(parsed)))
+
+    @staticmethod
+    def query_byte_size(query: str) -> int:
+        return len(str(query or "").encode("utf-8"))
 
     def node_rows(self, graph: PortfolioOntology) -> List[Dict[str, object]]:
         rows = []
@@ -2250,43 +2677,89 @@ relation ontology-assertion,
         rows: Iterable[Dict[str, object]],
         updated_at: str,
         batch_size: int = 40,
+        max_query_bytes: int = 0,
     ) -> List[str]:
         items = [row for row in rows or [] if str((row or {}).get("id") or "").strip()]
+        maximum_count = max(1, int(batch_size or 40))
+        maximum_bytes = max(0, int(max_query_bytes or 0))
         queries: List[str] = []
-        for offset in range(0, len(items), max(1, int(batch_size or 40))):
-            batch = items[offset: offset + max(1, int(batch_size or 40))]
-            inserts = [
-                self.node_insert_clause(row, updated_at, "$n" + str(index)) + ";"
-                for index, row in enumerate(batch)
-            ]
-            if inserts:
-                queries.append("insert " + " ".join(inserts))
+        clauses: List[str] = []
+        query_bytes = self.query_byte_size("insert ")
+        for row in items:
+            clause = self.node_insert_clause(row, updated_at, "$n" + str(len(clauses))) + ";"
+            clause_bytes = self.query_byte_size(clause)
+            candidate_bytes = query_bytes + clause_bytes + (1 if clauses else 0)
+            if clauses and (len(clauses) >= maximum_count or (maximum_bytes and candidate_bytes > maximum_bytes)):
+                queries.append("insert " + " ".join(clauses))
+                clauses = []
+                query_bytes = self.query_byte_size("insert ")
+                clause = self.node_insert_clause(row, updated_at, "$n0") + ";"
+                clause_bytes = self.query_byte_size(clause)
+            clauses.append(clause)
+            query_bytes += clause_bytes + (1 if len(clauses) > 1 else 0)
+        if clauses:
+            queries.append("insert " + " ".join(clauses))
         return queries
+
+    def node_batch_insert_query(self, rows: Iterable[Dict[str, object]], updated_at: str) -> str:
+        inserts = [
+            self.node_insert_clause(row, updated_at, "$n" + str(index)) + ";"
+            for index, row in enumerate(rows or [])
+        ]
+        return "insert " + " ".join(inserts)
 
     def batched_relation_insert_queries(
         self,
         rows: Iterable[Dict[str, object]],
         updated_at: str,
         batch_size: int = 25,
+        max_query_bytes: int = 0,
     ) -> List[str]:
         items = [
             row for row in rows or []
             if str((row or {}).get("source") or "").strip() and str((row or {}).get("target") or "").strip()
         ]
+        maximum_count = max(1, int(batch_size or 25))
+        maximum_bytes = max(0, int(max_query_bytes or 0))
         queries: List[str] = []
-        for offset in range(0, len(items), max(1, int(batch_size or 25))):
-            batch = items[offset: offset + max(1, int(batch_size or 25))]
-            matches = []
-            inserts = []
-            for index, row in enumerate(batch):
-                source_var = "$source" + str(index)
-                target_var = "$target" + str(index)
-                relation_var = "$r" + str(index)
-                matches.append(self.relation_match_clause(row, source_var, target_var))
-                inserts.append(self.relation_insert_clause(row, updated_at, relation_var, source_var, target_var) + ";")
-            if matches and inserts:
+        matches: List[str] = []
+        inserts: List[str] = []
+        query_bytes = self.query_byte_size("match ") + self.query_byte_size(" insert ")
+        for row in items:
+            index = len(matches)
+            source_var = "$source" + str(index)
+            target_var = "$target" + str(index)
+            relation_var = "$r" + str(index)
+            match = self.relation_match_clause(row, source_var, target_var)
+            insert = self.relation_insert_clause(row, updated_at, relation_var, source_var, target_var) + ";"
+            candidate_bytes = query_bytes + self.query_byte_size(match) + self.query_byte_size(insert) + (2 if matches else 0)
+            if matches and (len(matches) >= maximum_count or (maximum_bytes and candidate_bytes > maximum_bytes)):
                 queries.append("match " + " ".join(matches) + " insert " + " ".join(inserts))
+                matches = []
+                inserts = []
+                query_bytes = self.query_byte_size("match ") + self.query_byte_size(" insert ")
+                source_var = "$source0"
+                target_var = "$target0"
+                relation_var = "$r0"
+                match = self.relation_match_clause(row, source_var, target_var)
+                insert = self.relation_insert_clause(row, updated_at, relation_var, source_var, target_var) + ";"
+            matches.append(match)
+            inserts.append(insert)
+            query_bytes += self.query_byte_size(match) + self.query_byte_size(insert) + (2 if len(matches) > 1 else 0)
+        if matches:
+            queries.append("match " + " ".join(matches) + " insert " + " ".join(inserts))
         return queries
+
+    def relation_batch_insert_query(self, rows: Iterable[Dict[str, object]], updated_at: str) -> str:
+        matches = []
+        inserts = []
+        for index, row in enumerate(rows or []):
+            source_var = "$source" + str(index)
+            target_var = "$target" + str(index)
+            relation_var = "$r" + str(index)
+            matches.append(self.relation_match_clause(row, source_var, target_var))
+            inserts.append(self.relation_insert_clause(row, updated_at, relation_var, source_var, target_var) + ";")
+        return "match " + " ".join(matches) + " insert " + " ".join(inserts)
 
     def inferencebox_insert_queries(
         self,
@@ -2295,11 +2768,12 @@ relation ontology-assertion,
         updated_at: str,
     ) -> List[str]:
         settings = runtime_settings()
-        node_batch_size = int(number_or_none(settings.get("typedbInferenceBoxNodeBatchSize")) or 5)
-        relation_batch_size = int(number_or_none(settings.get("typedbInferenceBoxRelationBatchSize")) or 5)
+        node_batch_size = int(number_or_none(settings.get("typedbInferenceBoxNodeBatchSize")) or 25)
+        relation_batch_size = int(number_or_none(settings.get("typedbInferenceBoxRelationBatchSize")) or 25)
+        max_query_bytes = self.write_query_max_bytes(settings)
         return [
-            *self.batched_node_insert_queries(node_rows, updated_at, node_batch_size),
-            *self.batched_relation_insert_queries(relation_rows, updated_at, relation_batch_size),
+            *self.batched_node_insert_queries(node_rows, updated_at, node_batch_size, max_query_bytes),
+            *self.batched_relation_insert_queries(relation_rows, updated_at, relation_batch_size, max_query_bytes),
         ]
 
     def seed_ontology(self, payload: Dict[str, object] = None) -> Dict[str, object]:
@@ -2656,6 +3130,18 @@ relation ontology-assertion,
             "conditionDetailSource": "schema-function-detail-query",
         }
 
+    def typedb_schema_function_names(self, driver) -> set:
+        databases = getattr(driver, "databases", None)
+        get_database = getattr(databases, "get", None) if databases is not None else None
+        if not callable(get_database):
+            raise RuntimeError("TypeDB database schema listing is unavailable.")
+        database = get_database(self.database)
+        schema_reader = getattr(database, "schema", None)
+        if not callable(schema_reader):
+            raise RuntimeError("TypeDB database schema reader is unavailable.")
+        schema_text = str(schema_reader() or "")
+        return set(re.findall(r"\bfun\s+([A-Za-z_][A-Za-z0-9_]*)\s*\(", schema_text))
+
     def probe_typedb_native_rule_functions(self, rules: Iterable[GraphInferenceRule]) -> Dict[str, object]:
         ready_rules = []
         for rule in rules or []:
@@ -2672,41 +3158,128 @@ relation ontology-assertion,
                 "probedCount": 0,
                 "reason": str(imported[1])[:180],
             }
-        _TypeDB, _Credentials, _DriverOptions, _DriverTlsConfig, TransactionType = imported[0]
         probed_count = 0
-        sentinel_rule, sentinel_payload = ready_rules[0]
+        verified_rule_ids: List[str] = []
+        missing_rule_ids: List[str] = []
+        missing_function_names: List[str] = []
+        unresolved_function_names: List[str] = []
         try:
             def operation():
-                nonlocal probed_count
+                nonlocal probed_count, verified_rule_ids, missing_rule_ids, missing_function_names, unresolved_function_names
+                probed_count = 0
+                verified_rule_ids = []
+                missing_rule_ids = []
+                missing_function_names = []
+                unresolved_function_names = []
                 driver = self.open_driver(imported)
                 try:
                     self.ensure_database(driver)
-                    with driver.transaction(self.database, TransactionType.READ) as tx:
-                        query_plan = typedb_native_function_call_query(sentinel_payload, ["__ORBIT_SCHEMA_PROBE__"])
-                        self.read_rows_in_transaction(
-                            tx,
-                            str(query_plan.get("query") or ""),
-                            query_plan.get("columns") or ["sourceId"],
-                            label="nativeRuleSentinelProbe:" + str(sentinel_rule.rule_id or ""),
-                        )
+                    available_function_names = self.typedb_schema_function_names(driver)
+                    for rule, rule_payload in ready_rules:
+                        rule_id = str(rule.rule_id or "")
+                        query_plan = typedb_native_function_call_query(rule_payload, ["__ORBIT_SCHEMA_PROBE__"])
+                        function_name = str(query_plan.get("functionName") or "")
+                        if function_name not in available_function_names:
+                            missing_rule_ids.append(rule_id)
+                            missing_function_names.append(function_name)
+                            unresolved_function_names.append(function_name)
+                            continue
+                        probed_count += 1
+                        verified_rule_ids.append(rule_id)
+                finally:
+                    self.close_driver(driver)
+
+            self.with_typedb_retries(operation)
+            if missing_rule_ids:
+                return {
+                    "status": "missing",
+                    "available": False,
+                    "probedCount": probed_count,
+                    "verifiedRuleCount": len(ready_rules),
+                    "verifiedRuleIds": verified_rule_ids,
+                    "missingRuleIds": sorted(set(missing_rule_ids)),
+                    "missingFunctionNames": sorted(set(missing_function_names)),
+                    "unresolvedFunctionNames": sorted(set(unresolved_function_names)),
+                    "probeMode": "all-root-functions",
+                    "reasonCode": "typedbSchemaFunctionMissing",
+                    "reason": "TypeDB schema function is missing.",
+                }
+            return {
+                "status": "ok",
+                "available": probed_count == len(ready_rules),
+                "probedCount": probed_count,
+                "verifiedRuleCount": len(ready_rules),
+                "probeMode": "all-root-functions",
+                "verifiedRuleIds": verified_rule_ids,
+            }
+        except Exception as error:  # noqa: BLE001 - schema listing failures must block inference rather than look like missing rules.
+            return {
+                "status": "error",
+                "available": False,
+                "probedCount": probed_count,
+                "verifiedRuleCount": len(ready_rules),
+                "verifiedRuleIds": verified_rule_ids,
+                "missingRuleIds": sorted(set(missing_rule_ids)),
+                "missingFunctionNames": sorted(set(missing_function_names)),
+                "unresolvedFunctionNames": sorted(set(unresolved_function_names)),
+                "probeMode": "all-root-functions",
+                "reasonCode": typedb_error_code(error),
+                "reason": str(error)[:180],
+            }
+
+    def probe_typedb_schema_function_definitions(self, definitions: Iterable[Dict[str, object]]) -> Dict[str, object]:
+        function_names = sorted({
+            str((item or {}).get("functionName") or "").strip()
+            for item in definitions or []
+            if str((item or {}).get("functionName") or "").strip()
+        })
+        if not function_names:
+            return {"status": "empty", "available": True, "probedCount": 0, "missingFunctionNames": []}
+        imported = self.driver_imports()
+        if imported[0] is None:
+            return {
+                "status": "driver-missing",
+                "available": False,
+                "probedCount": 0,
+                "missingFunctionNames": [],
+                "reason": str(imported[1])[:180],
+            }
+        probed_count = 0
+        missing_function_names: List[str] = []
+        try:
+            def operation():
+                nonlocal probed_count, missing_function_names
+                probed_count = 0
+                missing_function_names = []
+                driver = self.open_driver(imported)
+                try:
+                    self.ensure_database(driver)
+                    available_function_names = self.typedb_schema_function_names(driver)
+                    for function_name in function_names:
+                        if function_name not in available_function_names:
+                            missing_function_names.append(function_name)
+                            continue
                         probed_count += 1
                 finally:
                     self.close_driver(driver)
 
             self.with_typedb_retries(operation)
             return {
-                "status": "ok",
-                "available": probed_count == 1,
+                "status": "ok" if not missing_function_names else "missing",
+                "available": not missing_function_names,
                 "probedCount": probed_count,
-                "verifiedRuleCount": len(ready_rules),
-                "probeMode": "sentinel-root-function",
-                "sentinelRuleId": str(sentinel_rule.rule_id or ""),
+                "verifiedFunctionCount": len(function_names),
+                "missingFunctionNames": sorted(set(missing_function_names)),
+                "probeMode": "all-generated-functions",
             }
-        except Exception as error:  # noqa: BLE001 - a missing function falls through to schema synchronization.
+        except Exception as error:  # noqa: BLE001 - do not mask read or connectivity failures as missing functions.
             return {
-                "status": "missing",
+                "status": "error",
                 "available": False,
                 "probedCount": probed_count,
+                "verifiedFunctionCount": len(function_names),
+                "missingFunctionNames": sorted(set(missing_function_names)),
+                "probeMode": "all-generated-functions",
                 "reasonCode": typedb_error_code(error),
                 "reason": str(error)[:180],
             }
@@ -2768,44 +3341,132 @@ relation ontology-assertion,
                 "syncFingerprint": sync_fingerprint,
             })
             return cached_result
-        if not force:
-            probe_result = self.probe_typedb_native_rule_functions(rules)
-            if probe_result.get("available"):
-                synced_rule_ids = sorted(set(
-                    str(item.get("ruleId") or "")
-                    for item in definitions
-                    if str(item.get("ruleId") or "")
-                ))
-                result = {
-                    "configured": True,
-                    "status": "ok",
-                    "graphStore": "typedb",
-                    "engineVersion": TYPEDB_NATIVE_RULE_ENGINE_VERSION,
-                    "schemaFunctionSyncUsed": True,
-                    "schemaFunctionSyncCached": True,
-                    "schemaFunctionProbeUsed": True,
-                    "syncFingerprint": sync_fingerprint,
-                    "syncedCount": len(synced_rule_ids),
-                    "syncedFunctionCount": len(definitions),
-                    "skippedCount": len(skipped),
-                    "failedCount": 0,
-                    "syncedRules": [{"ruleId": item} for item in synced_rule_ids[:40]],
-                    "syncedFunctions": [
-                        {
-                            "ruleId": item.get("ruleId"),
-                            "nativeRuleId": item.get("nativeRuleId"),
-                            "schemaFunctionName": item.get("functionName"),
-                            "rootSchemaFunctionName": item.get("rootFunctionName") or item.get("functionName"),
-                            "schemaFunctionSyncStatus": "verified-existing",
-                        }
-                        for item in definitions[:60]
-                    ],
-                    "skippedRules": skipped[:40],
-                    "functionProbe": probe_result,
-                }
-                self._schema_function_sync_cache_key = sync_fingerprint
-                self._schema_function_sync_cache_result = dict(result)
-                return result
+        probe_result = self.probe_typedb_native_rule_functions(rules)
+        if probe_result.get("available"):
+            synced_rule_ids = sorted(set(
+                str(item.get("ruleId") or "")
+                for item in definitions
+                if str(item.get("ruleId") or "")
+            ))
+            result = {
+                "configured": True,
+                "status": "ok",
+                "graphStore": "typedb",
+                "engineVersion": TYPEDB_NATIVE_RULE_ENGINE_VERSION,
+                "schemaFunctionSyncUsed": True,
+                "schemaFunctionSyncCached": True,
+                "schemaFunctionProbeUsed": True,
+                "syncFingerprint": sync_fingerprint,
+                "syncedCount": len(synced_rule_ids),
+                "syncedFunctionCount": len(definitions),
+                "skippedCount": len(skipped),
+                "failedCount": 0,
+                "syncedRules": [{"ruleId": item} for item in synced_rule_ids[:40]],
+                "syncedFunctions": [
+                    {
+                        "ruleId": item.get("ruleId"),
+                        "nativeRuleId": item.get("nativeRuleId"),
+                        "schemaFunctionName": item.get("functionName"),
+                        "rootSchemaFunctionName": item.get("rootFunctionName") or item.get("functionName"),
+                        "schemaFunctionSyncStatus": "verified-existing",
+                    }
+                    for item in definitions[:60]
+                ],
+                "skippedRules": skipped[:40],
+                "functionProbe": probe_result,
+            }
+            self._schema_function_sync_cache_key = sync_fingerprint
+            self._schema_function_sync_cache_result = dict(result)
+            return result
+        missing_rule_ids = {
+            str(item or "").strip()
+            for item in (probe_result.get("missingRuleIds") or [])
+            if str(item or "").strip()
+        }
+        if not missing_rule_ids:
+            return {
+                "configured": True,
+                "status": "error",
+                "graphStore": "typedb",
+                "engineVersion": TYPEDB_NATIVE_RULE_ENGINE_VERSION,
+                "schemaFunctionSyncUsed": True,
+                "schemaFunctionProbeUsed": True,
+                "syncedCount": 0,
+                "syncedFunctionCount": 0,
+                "skippedCount": len(skipped),
+                "failedCount": 1,
+                "skippedRules": skipped[:40],
+                "functionProbe": probe_result,
+                "reasonCode": str(probe_result.get("reasonCode") or "typedbSchemaFunctionProbeError"),
+                "reason": str(probe_result.get("reason") or "TypeDB schema function probe failed.")[:220],
+            }
+        definitions_to_sync = [
+            item for item in definitions
+            if str(item.get("ruleId") or "") in missing_rule_ids
+        ]
+        if not definitions_to_sync:
+            return {
+                "configured": True,
+                "status": "error",
+                "graphStore": "typedb",
+                "engineVersion": TYPEDB_NATIVE_RULE_ENGINE_VERSION,
+                "schemaFunctionSyncUsed": True,
+                "schemaFunctionProbeUsed": True,
+                "syncedCount": 0,
+                "syncedFunctionCount": 0,
+                "skippedCount": len(skipped),
+                "failedCount": 1,
+                "skippedRules": skipped[:40],
+                "functionProbe": probe_result,
+                "reasonCode": "typedbSchemaFunctionDefinitionMissing",
+                "reason": "Missing TypeDB schema function has no generated definition.",
+            }
+        definition_probe = self.probe_typedb_schema_function_definitions(definitions_to_sync)
+        if str(definition_probe.get("status") or "") == "error":
+            return {
+                "configured": True,
+                "status": "error",
+                "graphStore": "typedb",
+                "engineVersion": TYPEDB_NATIVE_RULE_ENGINE_VERSION,
+                "schemaFunctionSyncUsed": True,
+                "schemaFunctionProbeUsed": True,
+                "syncedCount": 0,
+                "syncedFunctionCount": 0,
+                "skippedCount": len(skipped),
+                "failedCount": 1,
+                "skippedRules": skipped[:40],
+                "functionProbe": probe_result,
+                "functionDefinitionProbe": definition_probe,
+                "reasonCode": str(definition_probe.get("reasonCode") or "typedbSchemaFunctionProbeError"),
+                "reason": str(definition_probe.get("reason") or "TypeDB schema helper function probe failed.")[:220],
+            }
+        missing_function_names = {
+            str(item or "").strip()
+            for item in (definition_probe.get("missingFunctionNames") or [])
+            if str(item or "").strip()
+        }
+        definitions_to_sync = [
+            item for item in definitions_to_sync
+            if str(item.get("functionName") or "") in missing_function_names
+        ]
+        if not definitions_to_sync:
+            return {
+                "configured": True,
+                "status": "error",
+                "graphStore": "typedb",
+                "engineVersion": TYPEDB_NATIVE_RULE_ENGINE_VERSION,
+                "schemaFunctionSyncUsed": True,
+                "schemaFunctionProbeUsed": True,
+                "syncedCount": 0,
+                "syncedFunctionCount": 0,
+                "skippedCount": len(skipped),
+                "failedCount": 1,
+                "skippedRules": skipped[:40],
+                "functionProbe": probe_result,
+                "functionDefinitionProbe": definition_probe,
+                "reasonCode": "typedbSchemaFunctionVerificationMismatch",
+                "reason": "TypeDB root function is unavailable although its generated definitions are present.",
+            }
         imported = self.driver_imports()
         if imported[0] is None:
             return {
@@ -2817,12 +3478,6 @@ relation ontology-assertion,
             }
         _TypeDB, _Credentials, _DriverOptions, _DriverTlsConfig, TransactionType = imported[0]
 
-        def apply_schema_query(driver, query: str) -> None:
-            with typedb_operation_timeout(self.schema_operation_timeout_seconds(), "TypeDB schema function sync"):
-                with driver.transaction(self.database, TransactionType.SCHEMA) as tx:
-                    tx.query(query).resolve()
-                    tx.commit()
-
         def is_already_existing_schema_function(error: Exception) -> bool:
             error_text = str(error).lower()
             return "already exists" in error_text or "with name" in error_text
@@ -2831,26 +3486,30 @@ relation ontology-assertion,
         failed: List[Dict[str, object]] = []
         try:
             def operation():
+                synced.clear()
                 driver = self.open_driver(imported)
                 try:
                     self.ensure_database(driver)
                     self.ensure_schema(driver, imported)
-                    for definition in definitions:
-                        define_query = str(definition.get("define") or "")
-                        sync_status = "defined"
-                        try:
-                            apply_schema_query(driver, define_query)
-                        except Exception as define_error:  # noqa: BLE001 - TypeDB reports existing schema functions as exceptions.
-                            if not is_already_existing_schema_function(define_error):
-                                raise
-                            sync_status = "already-exists"
-                        synced.append({
-                            "ruleId": definition.get("ruleId"),
-                            "nativeRuleId": definition.get("nativeRuleId"),
-                            "schemaFunctionName": definition.get("functionName"),
-                            "rootSchemaFunctionName": definition.get("rootFunctionName") or definition.get("functionName"),
-                            "schemaFunctionSyncStatus": sync_status,
-                        })
+                    with typedb_operation_timeout(self.schema_operation_timeout_seconds(), "TypeDB schema function sync"):
+                        with driver.transaction(self.database, TransactionType.SCHEMA) as tx:
+                            for definition in definitions_to_sync:
+                                define_query = str(definition.get("define") or "")
+                                sync_status = "defined"
+                                try:
+                                    tx.query(define_query).resolve()
+                                except Exception as define_error:  # noqa: BLE001 - content-hashed functions can already exist after an interrupted sync.
+                                    if not is_already_existing_schema_function(define_error):
+                                        raise
+                                    sync_status = "already-exists"
+                                synced.append({
+                                    "ruleId": definition.get("ruleId"),
+                                    "nativeRuleId": definition.get("nativeRuleId"),
+                                    "schemaFunctionName": definition.get("functionName"),
+                                    "rootSchemaFunctionName": definition.get("rootFunctionName") or definition.get("functionName"),
+                                    "schemaFunctionSyncStatus": sync_status,
+                                })
+                            tx.commit()
                 finally:
                     self.close_driver(driver)
             self.with_typedb_retries(operation)
@@ -2874,8 +3533,32 @@ relation ontology-assertion,
                 "syncedFunctions": synced[:60],
                 "skippedRules": skipped[:40],
                 "failedRules": failed[:10],
+                "functionProbe": probe_result,
+                "functionDefinitionProbe": definition_probe,
                 "reasonCode": typedb_error_code(error),
                 "reason": str(error)[:220],
+            }
+        verification_result = self.probe_typedb_native_rule_functions(rules)
+        if not verification_result.get("available"):
+            return {
+                "configured": True,
+                "status": "error",
+                "graphStore": "typedb",
+                "engineVersion": TYPEDB_NATIVE_RULE_ENGINE_VERSION,
+                "schemaFunctionSyncUsed": True,
+                "schemaFunctionProbeUsed": True,
+                "syncedCount": len(sorted(set(str(item.get("ruleId") or "") for item in synced if str(item.get("ruleId") or "")))),
+                "syncedFunctionCount": len(synced),
+                "skippedCount": len(skipped),
+                "failedCount": 1,
+                "syncedRules": [{"ruleId": item} for item in sorted(set(str(item.get("ruleId") or "") for item in synced if str(item.get("ruleId") or "")))[:40]],
+                "syncedFunctions": synced[:60],
+                "skippedRules": skipped[:40],
+                "functionProbe": probe_result,
+                "functionDefinitionProbe": definition_probe,
+                "verificationProbe": verification_result,
+                "reasonCode": str(verification_result.get("reasonCode") or "typedbSchemaFunctionVerificationError"),
+                "reason": "TypeDB schema function sync did not verify every executable rule.",
             }
         synced_rule_ids = sorted(set(str(item.get("ruleId") or "") for item in synced if str(item.get("ruleId") or "")))
         result = {
@@ -2893,6 +3576,9 @@ relation ontology-assertion,
             "syncedRules": [{"ruleId": item} for item in synced_rule_ids[:40]],
             "syncedFunctions": synced[:60],
             "skippedRules": skipped[:40],
+            "functionProbe": probe_result,
+            "functionDefinitionProbe": definition_probe,
+            "verificationProbe": verification_result,
         }
         self._schema_function_sync_cache_key = sync_fingerprint
         self._schema_function_sync_cache_result = dict(result)
@@ -2954,6 +3640,7 @@ relation ontology-assertion,
             }
         try:
             abox_available = self.has_box_rows("ABox")
+            abox_metadata = self.active_abox_metadata() if abox_available else {}
         except Exception as error:  # noqa: BLE001 - report TypeDB read failures through diagnostics.
             return {
                 "configured": True,
@@ -2986,6 +3673,24 @@ relation ontology-assertion,
                 "typedbBootstrapReasoningUsed": False,
                 "pythonBootstrapDisabled": True,
                 "clearResult": clear_result,
+                "typedbQueryMetrics": self.query_metrics_snapshot(),
+            }
+        if str(abox_metadata.get("status") or "") != "ok":
+            return {
+                "configured": True,
+                "status": "incomplete-abox",
+                "graphStore": "typedb",
+                "source": "typedbNativeRule",
+                "reasoningMode": TYPEDB_NATIVE_BLOCKED_MODE,
+                "reason": "TypeDB ABox 저장이 아직 완료되지 않아 투자 추론을 보류했습니다. " + str(abox_metadata.get("reason") or "완료 표식 또는 저장 건수를 다시 확인해야 합니다.")[:180],
+                "statementCount": 0,
+                "relationTypes": [],
+                "nativeTypeDbReasoningUsed": False,
+                "typedbNativeFunctionReasoningUsed": False,
+                "typedbBootstrapReasoningUsed": False,
+                "pythonBootstrapDisabled": True,
+                "clearResult": clear_result,
+                "aboxMetadata": abox_metadata,
                 "typedbQueryMetrics": self.query_metrics_snapshot(),
             }
         snapshot = self.rulebox_snapshot()
@@ -3297,6 +4002,7 @@ relation ontology-assertion,
         native_profile = typedb_native_reasoning_profile(enabled_rules)
         try:
             abox_available = self.has_box_rows("ABox")
+            abox_metadata = self.active_abox_metadata() if abox_available else {}
         except Exception as error:  # noqa: BLE001 - expose TypeDB read failures to strategy validation.
             return {
                 "configured": True,
@@ -3326,6 +4032,21 @@ relation ontology-assertion,
                 "nativeReasoningProfile": native_profile,
                 "baselineInferenceBox": {},
                 "diff": materialization_preview_diff_payload({}, 0, len(enabled_rules), False),
+                "typedbQueryMetrics": self.query_metrics_snapshot(),
+            }
+        if str(abox_metadata.get("status") or "") != "ok":
+            return {
+                "configured": True,
+                "status": "incomplete-abox",
+                "graphStore": "typedb",
+                "reasonCode": "typedbIncompleteAbox",
+                "reason": "TypeDB ABox 저장이 아직 완료되지 않아 후보 규칙 검증을 보류했습니다. " + str(abox_metadata.get("reason") or "완료 표식 또는 저장 건수를 다시 확인해야 합니다.")[:180],
+                "validationOnly": True,
+                "mutatedOperationalRuleBox": False,
+                "wroteInferenceBox": False,
+                "candidateRuleCount": len(enabled_rules),
+                "nativeReasoningProfile": native_profile,
+                "aboxMetadata": abox_metadata,
                 "typedbQueryMetrics": self.query_metrics_snapshot(),
             }
         try:
@@ -3467,20 +4188,29 @@ relation ontology-assertion,
                     driver = self.open_driver(imported)
                     try:
                         self.ensure_database(driver)
+                        transaction_query_count = self.inferencebox_write_transaction_query_count()
+
+                        def write_query_chunks(query_rows: Iterable[str]) -> None:
+                            query_list = [str(query) for query in query_rows or [] if str(query or "").strip()]
+                            for offset in range(0, len(query_list), transaction_query_count):
+                                query_batch = query_list[offset: offset + transaction_query_count]
+
+                                def write_batch():
+                                    with driver.transaction(
+                                        self.database,
+                                        TransactionType.WRITE,
+                                        options=self.write_transaction_options(),
+                                    ) as tx:
+                                        for query in query_batch:
+                                            tx.query(query).resolve()
+                                        tx.commit()
+
+                                self.with_typedb_retries(write_batch)
+
                         if generation_id:
-                            for cleanup_query in inference_generation_delete_queries(generation_id):
-                                with driver.transaction(self.database, TransactionType.WRITE) as tx:
-                                    tx.query(cleanup_query).resolve()
-                                    tx.commit()
-                        if queries:
-                            for query in queries:
-                                with driver.transaction(self.database, TransactionType.WRITE) as tx:
-                                    tx.query(query).resolve()
-                                    tx.commit()
-                        if marker_query:
-                            with driver.transaction(self.database, TransactionType.WRITE) as tx:
-                                tx.query(marker_query).resolve()
-                                tx.commit()
+                            write_query_chunks(inference_generation_delete_queries(generation_id))
+                        write_query_chunks(queries)
+                        write_query_chunks([marker_query])
                     finally:
                         self.close_driver(driver)
             self.with_typedb_retries(operation)
@@ -3900,17 +4630,26 @@ relation ontology-assertion,
         })
         source_abox_snapshot_id = str(generation_rulebox_metadata.get("sourceAboxSnapshotId") or "").strip()
         if source_abox_snapshot_id:
-            active_abox_snapshot_id = self.active_abox_snapshot_id()
+            active_abox_metadata = self.active_abox_metadata()
+            active_abox_status = str(active_abox_metadata.get("status") or "")
+            active_abox_snapshot_id = str(active_abox_metadata.get("aboxSnapshotId") or "").strip() if active_abox_status == "ok" else ""
             generation_aligned = bool(active_abox_snapshot_id and active_abox_snapshot_id == source_abox_snapshot_id)
             snapshot.update({
                 "sourceAboxSnapshotId": source_abox_snapshot_id,
                 "activeAboxSnapshotId": active_abox_snapshot_id,
+                "activeAboxStatus": active_abox_status,
                 "generationAligned": generation_aligned,
             })
             if not generation_aligned:
+                incomplete_abox = active_abox_status != "ok"
                 snapshot.update({
-                    "status": "stale-generation",
-                    "reason": "현재 ABox와 InferenceBox의 원본 ABox 세대가 달라 투자 판단에서 제외합니다.",
+                    "status": "incomplete-abox" if incomplete_abox else "stale-generation",
+                    "reason": (
+                        "현재 ABox 저장이 완료되지 않아 InferenceBox 결과를 투자 판단에서 제외합니다. "
+                        + str(active_abox_metadata.get("reason") or "완료 표식 또는 저장 건수를 확인해야 합니다.")[:180]
+                        if incomplete_abox
+                        else "현재 ABox와 InferenceBox의 원본 ABox 세대가 달라 투자 판단에서 제외합니다."
+                    ),
                     "entities": [],
                     "relations": [],
                     "traces": [],

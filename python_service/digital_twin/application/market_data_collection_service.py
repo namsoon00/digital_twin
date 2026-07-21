@@ -545,7 +545,14 @@ class MarketDataCollectionRunner:
             "cache": self.quote_cache.summary("toss", MARKET_DATA_ACCOUNT_ID),
         }
         self.attach_pipeline_health(result)
-        ontology_symbols = changed_symbols
+        # Market proxy symbols keep macro and sector context fresh, but they are
+        # not investment subjects by themselves. Only account holdings and
+        # watchlist names may enqueue an investment-reasoning cycle; otherwise
+        # proxy refreshes can make a live holding wait behind background ticks.
+        focus_symbols = {str(symbol or "").upper().strip() for symbol in focused_symbols if str(symbol or "").strip()}
+        ontology_symbols = [symbol for symbol in changed_symbols if symbol in focus_symbols]
+        result["investmentReasoningSymbols"] = ontology_symbols
+        result["backgroundMaterialSymbolCount"] = len([symbol for symbol in material_symbols if symbol not in focus_symbols])
         if self.event_publisher and saved:
             event = market_data_collected_event(result)
             if hasattr(self.event_publisher, "publish"):

@@ -79,11 +79,47 @@ def event_review_level(event: object) -> str:
     return max(levels or ["normal"], key=lambda item: REVIEW_LEVEL_ORDER.get(item, 0))
 
 
-def event_order_key(event: object) -> Tuple[int, int, int, int]:
+def normalized_priority_symbols(raw: object) -> Dict[str, int]:
+    """Normalize runtime portfolio roles into a scheduler-only priority map.
+
+    This is intentionally a delivery/worker scheduling concern. It never
+    changes the TypeDB rule result or the investment judgement; it only keeps
+    a live holding from waiting behind background market-data ticks.
+    """
+    priorities: Dict[str, int] = {}
+    if not isinstance(raw, dict):
+        return priorities
+    role_weights = {
+        "holdingSymbols": 2,
+        "holdings": 2,
+        "positions": 2,
+        "watchlistSymbols": 1,
+        "watchlist": 1,
+    }
+    for role, weight in role_weights.items():
+        values = raw.get(role) or []
+        if isinstance(values, str):
+            values = values.split(",")
+        if not isinstance(values, (list, tuple, set)):
+            continue
+        for value in values:
+            symbol = str(value or "").upper().strip()
+            if symbol:
+                priorities[symbol] = max(weight, priorities.get(symbol, 0))
+    return priorities
+
+
+def event_subject_priority(event: object, priority_symbols: Dict[str, int] = None) -> int:
+    priorities = priority_symbols or {}
+    return max([int(priorities.get(symbol, 0) or 0) for symbol in event_symbols(event)] or [0])
+
+
+def event_order_key(event: object, priority_symbols: Dict[str, int] = None) -> Tuple[int, int, int, int, int]:
     payload = event_payload(event)
     trigger = str(payload.get("trigger") or "data-update").strip()
     fact_types = {str(item or "").strip() for item in payload.get("factTypes") or []}
     return (
+        event_subject_priority(event, priority_symbols),
         REVIEW_LEVEL_ORDER.get(event_review_level(event), 0),
         TRIGGER_ORDER.get(trigger, 0),
         1 if "ResearchEvidence" in fact_types else 0,
@@ -102,6 +138,7 @@ class OntologyReasoningRunner:
         rule_candidate_service=None,
         research_store=None,
         now_provider: Callable = None,
+        priority_symbols_provider: Callable = None,
     ):
         self.event_reader = event_reader
         self.cursor_store = cursor_store
@@ -111,6 +148,7 @@ class OntologyReasoningRunner:
         self.rule_candidate_service = rule_candidate_service
         self.research_store = research_store
         self.now_provider = now_provider or (lambda: datetime.now(timezone.utc))
+        self.priority_symbols_provider = priority_symbols_provider
 
     def enabled(self) -> bool:
         return truthy(self.settings.get("ontologyReasoningEnabled"), True)
@@ -142,6 +180,23 @@ class OntologyReasoningRunner:
 
     def rule_candidate_interval_minutes(self) -> int:
         return int_setting(self.settings, "ontologyRuleCandidateAiIntervalMinutes", 60, 5, 1440)
+
+    def priority_symbols(self) -> Dict[str, int]:
+        if not self.priority_symbols_provider:
+            return {}
+        try:
+            return normalized_priority_symbols(self.priority_symbols_provider())
+        except Exception:  # noqa: BLE001 - scheduler prioritization must not block graph reasoning.
+            return {}
+
+    def ordered_event_symbols(self, event: object, priority_symbols: Dict[str, int] = None) -> List[str]:
+        priorities = priority_symbols or {}
+        original = event_symbols(event)
+        order = {symbol: index for index, symbol in enumerate(original)}
+        return sorted(
+            original,
+            key=lambda symbol: (-int(priorities.get(symbol, 0) or 0), order.get(symbol, 0)),
+        )
 
     def cursor_payload(self) -> Dict[str, object]:
         if not hasattr(self.cursor_store, "load"):
@@ -207,15 +262,26 @@ class OntologyReasoningRunner:
             now = now.replace(tzinfo=timezone.utc)
         return (now.astimezone(timezone.utc) - parsed.astimezone(timezone.utc)).total_seconds() >= interval
 
-    def due_event_symbols(self, event: object, progress: Dict[str, List[str]] = None, cursor_payload: Dict[str, object] = None) -> List[str]:
-        remaining = self.remaining_event_symbols(event, progress)
+    def due_event_symbols(
+        self,
+        event: object,
+        progress: Dict[str, List[str]] = None,
+        cursor_payload: Dict[str, object] = None,
+        priority_symbols: Dict[str, int] = None,
+    ) -> List[str]:
+        remaining = self.remaining_event_symbols(event, progress, priority_symbols)
         event_id = str(getattr(event, "event_id", "") or "")
         if event_id and event_id in (progress or {}):
             return remaining
         return [symbol for symbol in remaining if self.event_symbol_due(event, symbol, cursor_payload)]
 
-    def remaining_event_symbols(self, event: object, progress: Dict[str, List[str]] = None) -> List[str]:
-        symbols = event_symbols(event)
+    def remaining_event_symbols(
+        self,
+        event: object,
+        progress: Dict[str, List[str]] = None,
+        priority_symbols: Dict[str, int] = None,
+    ) -> List[str]:
+        symbols = self.ordered_event_symbols(event, priority_symbols)
         if not symbols:
             return []
         progress = self.event_symbol_progress() if progress is None else progress
@@ -226,6 +292,7 @@ class OntologyReasoningRunner:
         processed = set(self.cursor_store.processed_event_ids())
         cursor_payload = self.cursor_payload()
         progress = self.event_symbol_progress(cursor_payload)
+        priority_symbols = self.priority_symbols()
         reader = getattr(self.event_reader, "recent_events", None)
         if callable(reader):
             source_events = reader(
@@ -242,12 +309,12 @@ class OntologyReasoningRunner:
             for event in source_events
             if event.event_id not in processed
             and event_changed_count(event) > 0
-            and (not event_symbols(event) or self.due_event_symbols(event, progress, cursor_payload))
+            and (not event_symbols(event) or self.due_event_symbols(event, progress, cursor_payload, priority_symbols))
         ]
         events.sort(
             key=lambda event: (
+                *event_order_key(event, priority_symbols),
                 1 if str(getattr(event, "event_id", "") or "") in progress else 0,
-                *event_order_key(event),
                 getattr(event, "occurred_at", ""),
                 getattr(event, "event_id", ""),
             ),
@@ -275,24 +342,16 @@ class OntologyReasoningRunner:
         max_symbols = self.max_symbols_per_run()
         cursor_payload = self.cursor_payload()
         progress = self.event_symbol_progress(cursor_payload)
+        priority_symbols = self.priority_symbols()
         batches: Dict[str, List[str]] = {}
         selected: List[str] = []
         omitted_symbols: List[str] = []
-        partial_event_ids = {str(event_id or "") for event_id in progress.keys()}
-        processing_partial_events = False
         for event in requests or []:
             event_id = str(getattr(event, "event_id", "") or "")
-            remaining = self.due_event_symbols(event, progress, cursor_payload)
+            remaining = self.due_event_symbols(event, progress, cursor_payload, priority_symbols)
             if not event_symbols(event):
                 batches[event_id] = []
                 continue
-            if processing_partial_events and event_id not in partial_event_ids:
-                for symbol in remaining:
-                    if symbol not in selected and symbol not in omitted_symbols:
-                        omitted_symbols.append(symbol)
-                continue
-            if event_id in partial_event_ids:
-                processing_partial_events = True
             for symbol in remaining:
                 if max_symbols and len(selected) >= max_symbols and symbol not in selected:
                     if symbol not in omitted_symbols:

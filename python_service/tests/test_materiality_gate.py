@@ -26,6 +26,72 @@ class MaterialityGateTests(unittest.TestCase):
 
         self.assertEqual(3, runner.max_symbols_per_run())
 
+    def test_reasoning_worker_prioritizes_live_holdings_over_background_realtime_ticks(self):
+        background = ontology_reasoning_requested_event(
+            DomainEvent(name="market_data.collected", aggregate_id="market:000150", payload={}),
+            "kis-realtime-websocket",
+            ["000150"],
+            changed_count=1,
+            fact_types=["MarketQuote", "ExecutionFlow"],
+            materiality_assessments=[{"reviewLevel": "act", "changeState": "worsening"}],
+        )
+        holding = ontology_reasoning_requested_event(
+            DomainEvent(name="market_data.collected", aggregate_id="market:005930", payload={}),
+            "market-data-update",
+            ["005930"],
+            changed_count=1,
+            fact_types=["MarketQuote"],
+            materiality_assessments=[{"reviewLevel": "check", "changeState": "improving"}],
+        )
+
+        class Reader:
+            def recent_events(self, **_kwargs):
+                return [background, holding]
+
+        class Cursor:
+            def __init__(self):
+                self.payload = {}
+                self.ids = []
+
+            def processed_event_ids(self):
+                return list(self.ids)
+
+            def mark_processed(self, event_ids):
+                self.ids.extend(event_ids)
+
+            def load(self):
+                return dict(self.payload)
+
+            def save(self, payload):
+                self.payload = dict(payload or {})
+
+        class FakeMonitorRunner:
+            def __init__(self):
+                self.accounts = []
+                self.symbol_filter = []
+
+            def run_once(self, dry_run=False, force=False, symbol_filter=None):
+                self.symbol_filter = list(symbol_filter or [])
+                return []
+
+        fake_monitor = FakeMonitorRunner()
+        runner = OntologyReasoningRunner(
+            Reader(),
+            Cursor(),
+            monitor_runner_factory=lambda: fake_monitor,
+            settings={
+                "ontologyReasoningEnabled": "1",
+                "ontologyReasoningMaxSymbolsPerRun": "1",
+                "ontologyRuleCandidateAiEnabled": "0",
+            },
+            priority_symbols_provider=lambda: {"holdingSymbols": ["005930"]},
+        )
+
+        result = runner.run_once()
+
+        self.assertEqual("ok", result["status"])
+        self.assertEqual(["005930"], fake_monitor.symbol_filter)
+
     def test_reasoning_worker_coalesces_recent_symbol_events_and_releases_them_when_due(self):
         request = ontology_reasoning_requested_event(
             DomainEvent(name="market_data.collected", aggregate_id="market:AAPL", payload={}),

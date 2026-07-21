@@ -255,6 +255,29 @@ class OntologyInferenceQualityTests(unittest.TestCase):
         self.assertTrue(result["reasoningRetryRequired"])
         self.assertEqual(2, repository.rulebox_count)
 
+    def test_incomplete_abox_with_matching_fingerprint_is_reprojected(self):
+        position = normalize_position({
+            "symbol": "005930",
+            "name": "삼성전자",
+            "market": "KR",
+            "currency": "KRW",
+            "source": "holding",
+            "quantity": 10,
+            "currentPrice": 250000,
+            "marketValue": 2500000,
+        })
+        repository = MemoryProjectionRepository()
+        recorder = PortfolioOntologyProjectionRecorder(repository)
+        snapshot = self.snapshot(position, "2026-07-20T00:01:00Z")
+
+        first = recorder.record_snapshot(snapshot)
+        repository.active["status"] = "incomplete"
+        second = recorder.record_snapshot(self.snapshot(position, "2026-07-20T00:04:00Z"))
+
+        self.assertTrue(first["saved"])
+        self.assertTrue(second["saved"])
+        self.assertEqual(2, repository.save_count)
+
     def test_unchanged_abox_retries_when_inference_scope_is_partial(self):
         first_position = normalize_position({
             "symbol": "005930",

@@ -22,6 +22,7 @@ from digital_twin.infrastructure.typedb_ontology import (
     NullTypeDBOntologyGraphRepository,
     TypeDBOperationTimeout,
     TypeDBOntologyGraphRepository,
+    TYPEDB_PROMOTED_TEXT_ATTRIBUTES,
     node_boxes,
     relation_row_id,
     typedb_repository_from_settings,
@@ -63,6 +64,194 @@ class TypeDBOntologyRepositoryTests(unittest.TestCase):
         self.assertIn("owns ontology-window-key", schema)
         self.assertNotIn("ontology-temporal-risk-score", schema)
         self.assertNotIn("ontology-temporal-support-score", schema)
+
+    def test_typedb_schema_declares_every_promoted_text_attribute_used_by_nodes(self):
+        repository = TypeDBOntologyGraphRepository("127.0.0.1:1729")
+        schema = repository.schema_query()
+
+        for attribute in TYPEDB_PROMOTED_TEXT_ATTRIBUTES.values():
+            self.assertIn("attribute " + attribute + ", value string;", schema)
+            self.assertIn("owns " + attribute + ",", schema)
+
+    def test_typedb_schema_sync_skips_write_when_base_schema_is_already_current(self):
+        repository = TypeDBOntologyGraphRepository("127.0.0.1:1729")
+
+        class FakeDatabase:
+            def __init__(self):
+                self.type_schema_calls = 0
+
+            def type_schema(self):
+                self.type_schema_calls += 1
+                return repository.schema_query()
+
+        class FakeDriver:
+            def __init__(self):
+                self.database = FakeDatabase()
+                self.databases = SimpleNamespace(get=lambda _name: self.database)
+                self.transaction_calls = 0
+
+            def transaction(self, *_args, **_kwargs):
+                self.transaction_calls += 1
+                raise AssertionError("current TypeDB schema must not be redefined for every snapshot")
+
+        driver = FakeDriver()
+        imported = (object, object, object, object, SimpleNamespace(SCHEMA="schema"))
+
+        repository.ensure_schema(driver, imported)
+        repository.ensure_schema(driver, imported)
+
+        self.assertEqual(0, driver.transaction_calls)
+        self.assertEqual(1, driver.database.type_schema_calls)
+
+    def test_typedb_driver_request_timeout_covers_longer_write_operation(self):
+        repository = TypeDBOntologyGraphRepository(
+            "127.0.0.1:1729",
+            timeout_seconds=20,
+            query_timeout_seconds=20,
+            schema_operation_timeout_seconds=120,
+            write_operation_timeout_seconds=180,
+        )
+
+        self.assertEqual(180, repository.driver_request_timeout_seconds())
+
+    def test_typedb_write_transaction_options_cover_write_operation_timeout(self):
+        repository = TypeDBOntologyGraphRepository(
+            "127.0.0.1:1729",
+            write_operation_timeout_seconds=180,
+        )
+
+        options = repository.write_transaction_options()
+
+        self.assertIsNotNone(options)
+        self.assertEqual(180000, options.transaction_timeout_millis)
+
+    def test_typedb_abox_delete_query_limits_each_transaction(self):
+        repository = TypeDBOntologyGraphRepository("127.0.0.1:1729")
+
+        query = repository.box_delete_batch_query("ABox", "ontology-assertion", 200)
+
+        self.assertEqual(
+            'match $r isa ontology-assertion, has ontology-box "ABox"; limit 200; delete $r;',
+            query,
+        )
+
+    def test_typedb_abox_write_graph_commits_query_chunks(self):
+        class FakePromise:
+            def resolve(self):
+                return []
+
+        class FakeTransaction:
+            def __init__(self, calls):
+                self.calls = calls
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, _exc_type, _exc, _traceback):
+                return False
+
+            def query(self, query):
+                self.calls.append(("query", query))
+                return FakePromise()
+
+            def commit(self):
+                self.calls.append(("commit", ""))
+
+        class FakeDriver:
+            def __init__(self):
+                self.calls = []
+
+            def transaction(self, *_args, **_kwargs):
+                return FakeTransaction(self.calls)
+
+        graph = PortfolioOntology("typedb-write-chunks")
+        graph.entities.append(OntologyEntity(
+            entity_id="stock:chunk",
+            label="Chunk Stock",
+            kind="stock",
+            properties={"ontologyBox": "ABox", "tboxClass": "Stock"},
+        ))
+        repository = TypeDBOntologyGraphRepository("127.0.0.1:1729", retry_count=0)
+        driver = FakeDriver()
+
+        with patch.object(repository, "graph_insert_queries", return_value=["insert one", "insert two", "insert three"]), \
+                patch.object(repository, "abox_write_transaction_query_count", return_value=2):
+            repository.write_graph(
+                driver,
+                ((object, object, object, object, SimpleNamespace(WRITE="write")), None),
+                graph,
+                delete_boxes=[],
+            )
+
+        self.assertEqual(2, len([item for item in driver.calls if item[0] == "commit"]))
+        self.assertEqual(
+            ["insert one", "insert two", "insert three"],
+            [item[1] for item in driver.calls if item[0] == "query"],
+        )
+
+    def test_typedb_inferencebox_write_commits_query_chunks(self):
+        class FakePromise:
+            def resolve(self):
+                return []
+
+        class FakeTransaction:
+            def __init__(self, calls):
+                self.calls = calls
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, _exc_type, _exc, _traceback):
+                return False
+
+            def query(self, query):
+                self.calls.append(("query", query))
+                return FakePromise()
+
+            def commit(self):
+                self.calls.append(("commit", ""))
+
+        class FakeDriver:
+            def __init__(self):
+                self.calls = []
+
+            def transaction(self, *_args, **_kwargs):
+                return FakeTransaction(self.calls)
+
+        graph = PortfolioOntology("typedb-inference-write-chunks")
+        graph.entities.append(OntologyEntity(
+            entity_id="inference:chunk",
+            label="Inference Chunk",
+            kind="inference",
+            properties={"ontologyBox": "InferenceBox"},
+        ))
+        repository = TypeDBOntologyGraphRepository("127.0.0.1:1729", retry_count=0)
+        driver = FakeDriver()
+
+        with patch.object(repository, "open_driver", return_value=driver), \
+                patch.object(repository, "close_driver"), \
+                patch.object(repository, "ensure_database"), \
+                patch.object(repository, "inferencebox_insert_queries", return_value=["insert one", "insert two", "insert three"]), \
+                patch.object(repository, "inferencebox_write_transaction_query_count", return_value=2):
+            result = repository.write_inferencebox_graph(graph)
+
+        self.assertTrue(result["saved"])
+        self.assertEqual(2, len([item for item in driver.calls if item[0] == "commit"]))
+        self.assertEqual(
+            ["insert one", "insert two", "insert three"],
+            [item[1] for item in driver.calls if item[0] == "query"],
+        )
+
+    def test_typedb_inferencebox_write_transaction_query_count_is_bounded(self):
+        repository = TypeDBOntologyGraphRepository("127.0.0.1:1729")
+
+        self.assertEqual(8, repository.inferencebox_write_transaction_query_count({}))
+        self.assertEqual(1, repository.inferencebox_write_transaction_query_count({
+            "typedbInferenceBoxWriteTransactionQueryCount": "0",
+        }))
+        self.assertEqual(50, repository.inferencebox_write_transaction_query_count({
+            "typedbInferenceBoxWriteTransactionQueryCount": "1000",
+        }))
 
     def test_typedb_save_graph_returns_error_when_write_operation_times_out(self):
         graph = PortfolioOntology("typedb-timeout-test")
@@ -256,6 +445,59 @@ class TypeDBOntologyRepositoryTests(unittest.TestCase):
         self.assertEqual(10, len(queries))
         self.assertTrue(queries[0].startswith("insert $n0 isa ontology-entity"))
         self.assertTrue(any(query.startswith("match $source0 isa ontology-node") for query in queries))
+
+    def test_typedb_graph_insert_queries_split_large_payloads_by_byte_size(self):
+        graph = PortfolioOntology("portfolio:large-payload-batches")
+        for index in range(3):
+            graph.entities.append(OntologyEntity(
+                "stock:large:" + str(index),
+                "Large Stock " + str(index),
+                "stock",
+                {
+                    "ontologyBox": "ABox",
+                    "symbol": "LARGE" + str(index),
+                    "tboxClass": "Stock",
+                    "sourcePayload": "x" * 1600,
+                },
+            ))
+        graph.relations.extend([
+            OntologyRelation(
+                "stock:large:0",
+                "stock:large:1",
+                "RELATED_TO",
+                properties={"ontologyBox": "ABox", "sourcePayload": "y" * 1600},
+            ),
+            OntologyRelation(
+                "stock:large:1",
+                "stock:large:2",
+                "RELATED_TO",
+                properties={"ontologyBox": "ABox", "sourcePayload": "z" * 1600},
+            ),
+        ])
+        repository = TypeDBOntologyGraphRepository("127.0.0.1:1729")
+
+        with patch("digital_twin.infrastructure.typedb_ontology.runtime_settings", return_value={
+            "typedbABoxNodeBatchSize": "10",
+            "typedbABoxRelationBatchSize": "10",
+            "typedbWriteMaxQueryBytes": "4096",
+        }):
+            queries = repository.graph_insert_queries(graph)
+
+        self.assertGreater(len(queries), 2)
+        self.assertTrue(all(repository.query_byte_size(query) <= 4096 for query in queries))
+        self.assertEqual(3, sum(query.count(" isa ontology-entity") for query in queries if query.startswith("insert ")))
+        self.assertEqual(2, sum(query.count(" isa ontology-assertion") for query in queries if query.startswith("match ")))
+
+    def test_typedb_write_query_max_bytes_is_bounded(self):
+        repository = TypeDBOntologyGraphRepository("127.0.0.1:1729")
+
+        self.assertEqual(192000, repository.write_query_max_bytes({}))
+        self.assertEqual(4096, repository.write_query_max_bytes({
+            "typedbWriteMaxQueryBytes": "1",
+        }))
+        self.assertEqual(256000, repository.write_query_max_bytes({
+            "typedbWriteMaxQueryBytes": "999999",
+        }))
 
     def test_typedb_insert_queries_promote_reasoning_fields_to_attributes(self):
         graph = PortfolioOntology("portfolio:typed-fields")
@@ -794,7 +1036,30 @@ class TypeDBOntologyRepositoryTests(unittest.TestCase):
 
         repository = FakeRepository()
 
-        result = repository.sync_typedb_native_rule_functions(default_graph_inference_rules()[:1])
+        rule = default_graph_inference_rules()[0]
+        with patch.object(repository, "probe_typedb_native_rule_functions", side_effect=[
+            {
+                "status": "missing",
+                "available": False,
+                "missingRuleIds": [rule.rule_id],
+                "probedCount": 0,
+            },
+            {
+                "status": "ok",
+                "available": True,
+                "probedCount": 1,
+                "verifiedRuleCount": 1,
+            },
+        ]), patch.object(
+            repository,
+            "probe_typedb_schema_function_definitions",
+            side_effect=lambda definitions: {
+                "status": "missing",
+                "available": False,
+                "missingFunctionNames": [item.get("functionName") for item in definitions],
+            },
+        ):
+            result = repository.sync_typedb_native_rule_functions([rule])
 
         self.assertEqual("ok", result["status"])
         self.assertGreater(repository.fake_driver.define_attempts, 0)
@@ -1311,7 +1576,7 @@ class TypeDBOntologyRepositoryTests(unittest.TestCase):
                 "sourceAboxSnapshotId": "abox-snapshot:old",
             }),
         }]
-        with patch.object(repository, "read_inference_generation_records", return_value=[{"generationId": "inference-generation:test", "latestAt": "2026-07-20T00:00:00Z"}]), patch.object(repository, "read_inferencebox_entity_rows", return_value=entity_rows), patch.object(repository, "read_inferencebox_relation_rows", return_value=relation_rows), patch.object(repository, "active_abox_snapshot_id", return_value="abox-snapshot:new"):
+        with patch.object(repository, "read_inference_generation_records", return_value=[{"generationId": "inference-generation:test", "latestAt": "2026-07-20T00:00:00Z"}]), patch.object(repository, "read_inferencebox_entity_rows", return_value=entity_rows), patch.object(repository, "read_inferencebox_relation_rows", return_value=relation_rows), patch.object(repository, "active_abox_metadata", return_value={"status": "ok", "aboxSnapshotId": "abox-snapshot:new"}):
             snapshot = repository.inferencebox_snapshot(symbols=["005930"])
 
         self.assertEqual("stale-generation", snapshot["status"])
@@ -1376,7 +1641,7 @@ class TypeDBOntologyRepositoryTests(unittest.TestCase):
             captured["graph"] = inference_graph
             return {"configured": True, "saved": True, "status": "ok", "graphStore": "typedb"}
 
-        with patch.object(repository, "has_box_rows", return_value=True), patch.object(repository, "rulebox_snapshot", return_value=rule_snapshot), patch.object(repository, "sync_typedb_native_rule_functions", return_value={"status": "ok", "syncedCount": 1, "syncedFunctionCount": 1, "skippedCount": 0, "failedCount": 0}), patch.object(repository, "match_typedb_native_rules", return_value=native_match), patch.object(repository, "clear_inferencebox", return_value={"status": "ok", "graphStore": "typedb"}), patch.object(repository, "load_graph_for_native_matches", return_value=graph), patch.object(repository, "write_inferencebox_graph", side_effect=capture_inferencebox):
+        with patch.object(repository, "has_box_rows", return_value=True), patch.object(repository, "active_abox_metadata", return_value={"status": "ok", "aboxSnapshotId": "abox-snapshot:test"}), patch.object(repository, "rulebox_snapshot", return_value=rule_snapshot), patch.object(repository, "sync_typedb_native_rule_functions", return_value={"status": "ok", "syncedCount": 1, "syncedFunctionCount": 1, "skippedCount": 0, "failedCount": 0}), patch.object(repository, "match_typedb_native_rules", return_value=native_match), patch.object(repository, "clear_inferencebox", return_value={"status": "ok", "graphStore": "typedb"}), patch.object(repository, "load_graph_for_native_matches", return_value=graph), patch.object(repository, "write_inferencebox_graph", side_effect=capture_inferencebox):
             result = repository.run_rulebox({"clearInference": True})
 
         self.assertEqual("ok", result["status"])
@@ -1440,7 +1705,7 @@ class TypeDBOntologyRepositoryTests(unittest.TestCase):
             "relations": [{"type": "HAS_INFERRED_RISK"}],
             "traces": [],
         }
-        with patch.object(repository, "has_box_rows", return_value=True), patch.object(repository, "rulebox_snapshot", return_value=rule_snapshot), patch.object(repository, "sync_typedb_native_rule_functions", return_value={"status": "ok", "syncedCount": 1, "skippedCount": 0, "failedCount": 0}), patch.object(repository, "match_typedb_native_rules", return_value=native_match), patch.object(repository, "load_graph_for_native_matches", return_value=PortfolioOntology("empty")), patch.object(repository, "inferencebox_snapshot", return_value=previous), patch.object(repository, "write_inferencebox_graph") as write_mock, patch.object(repository, "clear_inferencebox") as clear_mock:
+        with patch.object(repository, "has_box_rows", return_value=True), patch.object(repository, "active_abox_metadata", return_value={"status": "ok", "aboxSnapshotId": "abox-snapshot:test"}), patch.object(repository, "rulebox_snapshot", return_value=rule_snapshot), patch.object(repository, "sync_typedb_native_rule_functions", return_value={"status": "ok", "syncedCount": 1, "skippedCount": 0, "failedCount": 0}), patch.object(repository, "match_typedb_native_rules", return_value=native_match), patch.object(repository, "load_graph_for_native_matches", return_value=PortfolioOntology("empty")), patch.object(repository, "inferencebox_snapshot", return_value=previous), patch.object(repository, "write_inferencebox_graph") as write_mock, patch.object(repository, "clear_inferencebox") as clear_mock:
             result = repository.run_rulebox({"forceClearInference": True, "allowDestructiveInferenceClear": True})
 
         write_mock.assert_not_called()
@@ -1461,6 +1726,59 @@ class TypeDBOntologyRepositoryTests(unittest.TestCase):
         self.assertIn("ABox", result["reason"])
         self.assertEqual("skipped", result["clearResult"]["status"])
         self.assertTrue(result["clearResult"]["preservedPreviousInference"])
+
+    def test_typedb_rulebox_blocks_incomplete_abox_before_native_matching(self):
+        repository = TypeDBOntologyGraphRepository("127.0.0.1:1729")
+
+        with patch.object(repository, "has_box_rows", return_value=True), \
+                patch.object(repository, "active_abox_metadata", return_value={
+                    "status": "incomplete",
+                    "aboxSnapshotId": "abox-snapshot:partial",
+                    "reason": "ABox completion marker is missing.",
+                }), \
+                patch.object(repository, "rulebox_snapshot") as rulebox_snapshot, \
+                patch.object(repository, "match_typedb_native_rules") as native_match:
+            result = repository.run_rulebox({})
+
+        self.assertEqual("incomplete-abox", result["status"])
+        self.assertFalse(result["nativeTypeDbReasoningUsed"])
+        self.assertIn("ABox", result["reason"])
+        rulebox_snapshot.assert_not_called()
+        native_match.assert_not_called()
+
+    def test_typedb_inferencebox_snapshot_blocks_incomplete_active_abox(self):
+        repository = TypeDBOntologyGraphRepository("127.0.0.1:1729")
+        entity_rows = [{
+            "id": "risk:005930:gen:test",
+            "kind": "risk-signal",
+            "symbol": "005930",
+            "ontologyBox": "InferenceBox",
+            "nativeTypeDbReasoned": True,
+            "propertiesJson": json.dumps({
+                "nativeTypeDbReasoned": True,
+                "sourceAboxSnapshotId": "abox-snapshot:partial",
+            }),
+        }]
+        relation_rows = [{
+            "source": "stock:005930",
+            "target": "risk:005930:gen:test",
+            "type": "HAS_INFERRED_RISK",
+            "symbol": "005930",
+            "ontologyBox": "InferenceBox",
+            "nativeTypeDbReasoned": True,
+            "propertiesJson": json.dumps({
+                "nativeTypeDbReasoned": True,
+                "sourceAboxSnapshotId": "abox-snapshot:partial",
+            }),
+        }]
+
+        with patch.object(repository, "read_inference_generation_records", return_value=[{"generationId": "inference-generation:test", "latestAt": "2026-07-20T00:00:00Z"}]), patch.object(repository, "read_inferencebox_entity_rows", return_value=entity_rows), patch.object(repository, "read_inferencebox_relation_rows", return_value=relation_rows), patch.object(repository, "active_abox_metadata", return_value={"status": "incomplete", "aboxSnapshotId": "abox-snapshot:partial", "reason": "ABox completion marker is missing."}):
+            snapshot = repository.inferencebox_snapshot(symbols=["005930"])
+
+        self.assertEqual("incomplete-abox", snapshot["status"])
+        self.assertFalse(snapshot["generationAligned"])
+        self.assertFalse(snapshot["nativeTypeDbReasoningUsed"])
+        self.assertEqual([], snapshot["relations"])
 
     def test_typedb_inferencebox_graph_rewrites_ids_by_generation(self):
         graph = PortfolioOntology("typedb-generation")
@@ -1567,7 +1885,7 @@ class TypeDBOntologyRepositoryTests(unittest.TestCase):
             }],
         }
 
-        with patch.object(repository, "has_box_rows", return_value=True), patch.object(repository, "rulebox_snapshot", return_value=rule_snapshot), patch.object(repository, "sync_typedb_native_rule_functions", return_value={"status": "ok", "syncedCount": 1, "syncedFunctionCount": 1, "skippedCount": 0, "failedCount": 0}), patch.object(repository, "match_typedb_native_rules", return_value=native_match), patch.object(repository, "clear_inferencebox", return_value={"status": "ok", "graphStore": "typedb"}), patch.object(repository, "load_graph_for_native_matches", return_value=graph), patch.object(repository, "write_inferencebox_graph", return_value={"configured": True, "saved": False, "status": "error", "reason": "write failed"}):
+        with patch.object(repository, "has_box_rows", return_value=True), patch.object(repository, "active_abox_metadata", return_value={"status": "ok", "aboxSnapshotId": "abox-snapshot:save-failure"}), patch.object(repository, "rulebox_snapshot", return_value=rule_snapshot), patch.object(repository, "sync_typedb_native_rule_functions", return_value={"status": "ok", "syncedCount": 1, "syncedFunctionCount": 1, "skippedCount": 0, "failedCount": 0}), patch.object(repository, "match_typedb_native_rules", return_value=native_match), patch.object(repository, "clear_inferencebox", return_value={"status": "ok", "graphStore": "typedb"}), patch.object(repository, "load_graph_for_native_matches", return_value=graph), patch.object(repository, "write_inferencebox_graph", return_value={"configured": True, "saved": False, "status": "error", "reason": "write failed"}):
             result = repository.run_rulebox({"clearInference": True})
 
         self.assertEqual("error", result["status"])
@@ -1698,33 +2016,36 @@ class TypeDBOntologyRepositoryTests(unittest.TestCase):
         self.assertGreater(result["syncedFunctionCount"], 0)
         self.assertTrue(all(item["schemaFunctionSyncStatus"] == "verified-existing" for item in result["syncedFunctions"]))
 
-    def test_typedb_schema_function_probe_uses_one_sentinel_query(self):
-        class FakeTransaction:
-            def __enter__(self):
-                return self
+    def test_typedb_schema_function_probe_verifies_every_root_function(self):
+        rules = default_graph_inference_rules()[:4]
+        function_names = [
+            str(typedb_native_function_definition(rule.to_dict()).get("functionName") or "")
+            for rule in rules
+        ]
 
-            def __exit__(self, _exc_type, _exc, _traceback):
-                return False
+        class FakeDatabase:
+            def schema(self):
+                return "define\n" + "\n".join(
+                    "fun " + function_name + "() -> { ontology-node }:"
+                    for function_name in function_names
+                )
 
         class FakeDriver:
-            def transaction(self, *_args, **_kwargs):
-                return FakeTransaction()
+            def __init__(self):
+                self.databases = SimpleNamespace(get=lambda _name: FakeDatabase())
 
         repository = TypeDBOntologyGraphRepository("127.0.0.1:1729", retry_count=0)
-        rules = default_graph_inference_rules()[:4]
-        queries = []
 
-        with patch.object(repository, "driver_imports", return_value=((object, object, object, object, SimpleNamespace(READ="read")), None)), \
+        with patch.object(repository, "driver_imports", return_value=((object, object, object, object, SimpleNamespace()), None)), \
                 patch.object(repository, "open_driver", return_value=FakeDriver()), \
                 patch.object(repository, "ensure_database"), \
-                patch.object(repository, "close_driver"), \
-                patch.object(repository, "read_rows_in_transaction", side_effect=lambda _tx, query, _columns, label="": queries.append((query, label)) or []):
+                patch.object(repository, "close_driver"):
             result = repository.probe_typedb_native_rule_functions(rules)
 
         self.assertEqual("ok", result["status"])
-        self.assertEqual(1, result["probedCount"])
-        self.assertEqual(1, len(queries))
-        self.assertEqual("sentinel-root-function", result["probeMode"])
+        self.assertEqual(result["verifiedRuleCount"], result["probedCount"])
+        self.assertEqual("all-root-functions", result["probeMode"])
+        self.assertEqual([rule.rule_id for rule in rules], result["verifiedRuleIds"])
         self.assertGreaterEqual(result["verifiedRuleCount"], 1)
 
 

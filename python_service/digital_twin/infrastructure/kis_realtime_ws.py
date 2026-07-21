@@ -550,10 +550,10 @@ class KISRealtimeSymbolSelector:
             rows = []
         return [clean_symbol(row.get("symbol")) for row in rows if clean_symbol(row.get("symbol"))]
 
-    def symbols(self) -> List[str]:
+    def bounded_symbols(self, candidates: Iterable[str]) -> List[str]:
         ordered: List[str] = []
         seen = set()
-        for symbol in self.configured_symbols() + self.monitor_symbols() + self.account_symbols() + self.cache_symbols():
+        for symbol in candidates:
             clean = clean_symbol(symbol)
             if not clean or not (clean.isdigit() and len(clean) == 6) or clean in seen:
                 continue
@@ -562,3 +562,19 @@ class KISRealtimeSymbolSelector:
             if len(ordered) >= self.max_symbols():
                 break
         return ordered
+
+    def reasoning_symbols(self) -> List[str]:
+        """Korean names that may affect a user's investment alert.
+
+        Cache-fill symbols are useful for keeping market data warm, but they
+        must not fill the TypeDB investment-reasoning queue ahead of positions
+        or the configured watchlist.
+        """
+        return self.bounded_symbols(
+            self.configured_symbols() + self.monitor_symbols() + self.account_symbols()
+        )
+
+    def symbols(self) -> List[str]:
+        return self.bounded_symbols(
+            self.configured_symbols() + self.monitor_symbols() + self.account_symbols() + self.cache_symbols()
+        )

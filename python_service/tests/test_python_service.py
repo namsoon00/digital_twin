@@ -325,6 +325,40 @@ class PythonServiceTests(unittest.TestCase):
         self.assertEqual(["005930"], events.published[-1].payload["symbols"])
         self.assertIn("OrderBook", events.published[-1].payload["factTypes"])
 
+    def test_kis_realtime_runner_excludes_background_ticks_from_investment_reasoning(self):
+        cache = TestMarketQuoteCache(test_store_seed(self.temp.name))
+        events = EventBus()
+        selector = SimpleNamespace(
+            symbols=lambda: ["005930", "000150"],
+            reasoning_symbols=lambda: ["005930"],
+        )
+        runner = KISRealtimeWebSocketRunner(
+            client=SimpleNamespace(enabled=lambda: True, configured=lambda: True),
+            symbol_selector=selector,
+            quote_cache=cache,
+            settings={"materialityGateEnabled": "0"},
+            event_publisher=events,
+        )
+
+        runner.record_updates([
+            {
+                "symbol": "005930",
+                "previous": {"symbol": "005930", "currentPrice": 70000, "tradeStrength": 90},
+                "payload": {"symbol": "005930", "currentPrice": 72000, "tradeStrength": 118, "market": "KR", "dataQuality": "actual"},
+            },
+            {
+                "symbol": "000150",
+                "previous": {"symbol": "000150", "currentPrice": 70000, "tradeStrength": 90},
+                "payload": {"symbol": "000150", "currentPrice": 72000, "tradeStrength": 118, "market": "KR", "dataQuality": "actual"},
+            },
+        ])
+        result = runner.flush_events(force=True)
+
+        self.assertEqual([MARKET_DATA_COLLECTED, ONTOLOGY_REASONING_REQUESTED], [event.name for event in events.published])
+        self.assertEqual(["005930"], events.published[-1].payload["symbols"])
+        self.assertEqual(1, result["backgroundMaterialSymbolCount"])
+        self.assertEqual(["005930"], result["investmentReasoningSymbols"])
+
     def test_kis_realtime_runner_does_not_reason_over_immaterial_ticks(self):
         cache = TestMarketQuoteCache(test_store_seed(self.temp.name))
         events = EventBus()
@@ -6871,6 +6905,7 @@ class PythonServiceTests(unittest.TestCase):
         registry = AccountRegistry()
         registry.upsert(AccountConfig("main", "메인", "toss", "https://example.test", "id", "secret", "1", ["AAPL"]))
         price_calls = []
+        events = EventBus()
 
         class StaticSymbolService:
             def summary(self):
@@ -6945,6 +6980,7 @@ class PythonServiceTests(unittest.TestCase):
                 "marketSignalDataBatchSize": "2",
             },
             provider_factory=lambda account, cache: FakeProvider(account, cache),
+            event_publisher=events,
             sleep_fn=lambda _seconds: None,
         )
 
@@ -6961,6 +6997,9 @@ class PythonServiceTests(unittest.TestCase):
         self.assertEqual("market-proxy", cached_spy["collectionTarget"])
         self.assertEqual("ETF", cached_spy["assetType"])
         self.assertEqual("market-signal", cached_qqq["collectionPurpose"])
+        self.assertEqual([MARKET_DATA_COLLECTED, ONTOLOGY_REASONING_REQUESTED], [event.name for event in events.published])
+        self.assertEqual(["AAPL"], result["investmentReasoningSymbols"])
+        self.assertEqual(["AAPL"], events.published[-1].payload["symbols"])
 
     def test_ontology_reasoning_runner_consumes_data_update_requests_once(self):
         source = DomainEvent(

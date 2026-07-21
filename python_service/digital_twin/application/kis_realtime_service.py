@@ -134,16 +134,31 @@ class KISRealtimeWebSocketRunner:
         if self.event_publisher:
             event = market_data_collected_event(result)
             reasoning = None
-            if material_symbols:
+            focus_symbols = []
+            reasoning_symbols = getattr(self.symbol_selector, "reasoning_symbols", None)
+            if callable(reasoning_symbols):
+                try:
+                    focus_symbols = [str(item or "").upper().strip() for item in reasoning_symbols() if str(item or "").strip()]
+                except Exception:  # noqa: BLE001 - retaining the normal symbol set is safer than losing a real holding tick.
+                    focus_symbols = []
+            if not focus_symbols:
+                fallback_symbols = getattr(self.symbol_selector, "symbols", None)
+                if callable(fallback_symbols):
+                    focus_symbols = [str(item or "").upper().strip() for item in fallback_symbols() if str(item or "").strip()]
+            focus_set = set(focus_symbols)
+            investment_material_symbols = [symbol for symbol in material_symbols if symbol in focus_set]
+            result["investmentReasoningSymbols"] = investment_material_symbols
+            result["backgroundMaterialSymbolCount"] = len([symbol for symbol in material_symbols if symbol not in focus_set])
+            if investment_material_symbols:
                 reasoning = ontology_reasoning_requested_event(
                     event,
                     "kis-realtime-websocket",
-                    material_symbols,
-                    changed_count=len(material_symbols),
+                    investment_material_symbols,
+                    changed_count=len(investment_material_symbols),
                     observed_count=len(changed_symbols),
                     fact_types=["MarketQuote", "ExecutionFlow", "OrderBook"],
-                    reason="중요도가 확인된 KIS WebSocket 체결·호가 변경만 TypeDB ABox와 네이티브 규칙 추론에 반영합니다.",
-                    materiality_assessments=[materiality_assessments[symbol] for symbol in material_symbols],
+                    reason="보유·관심 종목에서 중요도가 확인된 KIS WebSocket 체결·호가 변경만 TypeDB ABox와 네이티브 규칙 추론에 반영합니다.",
+                    materiality_assessments=[materiality_assessments[symbol] for symbol in investment_material_symbols],
                 )
             if hasattr(self.event_publisher, "publish"):
                 self.event_publisher.publish(event)

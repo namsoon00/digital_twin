@@ -396,6 +396,46 @@ def build_investment_calendar_runner(settings=None, event_publisher=None) -> Inv
     )
 
 
+def ontology_reasoning_priority_symbols(account_repository, settings=None) -> Dict[str, list]:
+    """Return the latest account focus set for worker scheduling only.
+
+    Holdings are handled before watchlist names and both are handled before
+    background universe ticks. The snapshot remains the source of truth for
+    positions; this helper does not create investment facts or decisions.
+    """
+    configured_settings = settings or runtime_settings()
+    roles = {"holdingSymbols": [], "watchlistSymbols": []}
+
+    def add(role: str, value: object) -> None:
+        symbol = str(value or "").upper().strip()
+        if symbol and symbol not in roles[role]:
+            roles[role].append(symbol)
+
+    try:
+        previous = stores.monitor_store(configured_settings).previous
+    except Exception:  # noqa: BLE001 - a missing snapshot simply leaves account config priorities.
+        previous = {}
+    for state in (previous or {}).values():
+        if not isinstance(state, dict):
+            continue
+        for container, role in (("positions", "holdingSymbols"), ("watchlist", "watchlistSymbols")):
+            items = state.get(container)
+            if isinstance(items, dict):
+                for key, item in items.items():
+                    add(role, item.get("symbol") if isinstance(item, dict) else key)
+            elif isinstance(items, list):
+                for item in items:
+                    add(role, item.get("symbol") if isinstance(item, dict) else item)
+    try:
+        accounts = account_repository.load()
+    except Exception:  # noqa: BLE001 - the live snapshot above is still sufficient when available.
+        accounts = []
+    for account in accounts:
+        for symbol in getattr(account, "watchlist_symbols", []) or []:
+            add("watchlistSymbols", symbol)
+    return roles
+
+
 def build_ontology_reasoning_runner(settings=None, event_publisher=None) -> OntologyReasoningRunner:
     configured_settings = settings or runtime_settings()
     reasoning_store_settings = dict(configured_settings)
@@ -428,6 +468,7 @@ def build_ontology_reasoning_runner(settings=None, event_publisher=None) -> Onto
             strategy_proposal_service=build_investment_strategy_proposal_service(configured_settings, event_publisher=event_publisher),
         ),
         research_store=stores.investment_research_store(reasoning_store_settings),
+        priority_symbols_provider=lambda: ontology_reasoning_priority_symbols(registry, reasoning_store_settings),
     )
 
 

@@ -94,7 +94,8 @@ class PortfolioOntologyProjectionRecorder:
                 self.store_projection_result(snapshot, result)
                 return result
             active_abox = self.active_abox_metadata()
-            if active_material_fingerprint(active_abox) == material_fingerprint:
+            active_abox_complete = str(active_abox.get("status") or "ok") == "ok"
+            if active_abox_complete and active_material_fingerprint(active_abox) == material_fingerprint:
                 inferencebox = self.existing_inference_result(snapshot)
                 result = {
                     "saved": False,

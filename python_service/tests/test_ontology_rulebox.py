@@ -773,6 +773,9 @@ class OntologyRuleBoxTests(unittest.TestCase):
             def has_box_rows(self, box):
                 return str(box or "") == "ABox"
 
+            def active_abox_metadata(self):
+                return {"status": "ok", "aboxSnapshotId": "abox-snapshot:test"}
+
             def load_graph_for_native_matches(self, native_match_result, rules=None):
                 return self._last_graph
 

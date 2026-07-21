@@ -465,10 +465,6 @@
     notificationJobsSummary: {},
     notificationJobDiagnostics: {},
     notificationExpandedJobs: {},
-    psychologyShadow: { rows: [], history: [], accounts: [], policy: {} },
-    psychologyShadowLoading: false,
-    psychologyShadowLoaded: false,
-    psychologyShadowError: "",
     ontologyExperiments: null,
     ontologyExperimentsLoading: false,
     ontologyExperimentsLoaded: false,
@@ -775,8 +771,6 @@
           tasks.push(loadNotificationSchedules());
         } else if (/^investment_strategy\./.test(eventType)) {
           tasks.push(loadStrategyProposals(true));
-        } else if (/^psychology\./.test(eventType)) {
-          tasks.push(loadPsychologyShadow());
         } else if (/^symbol_universe\./.test(eventType)) {
           tasks.push(loadSymbolUniverse());
         } else if (/^app\.|^chat\./.test(eventType)) {
@@ -2371,30 +2365,6 @@
       });
   }
 
-  function loadPsychologyShadow() {
-    state.psychologyShadowLoading = true;
-    state.psychologyShadowError = "";
-    if (isStaticPreviewHost()) {
-      state.psychologyShadow = { rows: [], history: [], accounts: [], policy: {} };
-      state.psychologyShadowLoaded = true;
-      state.psychologyShadowLoading = false;
-      return Promise.resolve();
-    }
-    return requestJson("/api/psychology-shadow")
-      .then(function (payload) {
-        state.psychologyShadow = payload && typeof payload === "object" ? payload : { rows: [], history: [], accounts: [], policy: {} };
-        state.psychologyShadowLoaded = true;
-      })
-      .catch(function (error) {
-        state.psychologyShadowError = error.message || "심리 Shadow 상태를 읽지 못했습니다.";
-        state.psychologyShadow = { rows: [], history: [], accounts: [], policy: {} };
-      })
-      .finally(function () {
-        state.psychologyShadowLoading = false;
-        if (state.snapshot) render();
-      });
-  }
-
   function applyNotificationSchedules(payload) {
     state.messageSchedules = Array.isArray(payload.schedules) ? payload.schedules : [];
     state.messageSchedulesLoaded = true;
@@ -3951,9 +3921,6 @@
       ontologyReasoningEnabled: settingValue("ontologyReasoningEnabled"),
       ontologyReasoningIntervalSeconds: settingValue("ontologyReasoningIntervalSeconds"),
       ontologyReasoningBatchSize: settingValue("ontologyReasoningBatchSize"),
-      psychologyShadowEnabled: settingValue("psychologyShadowEnabled"),
-      psychologyMinimumComponentCount: settingValue("psychologyMinimumComponentCount"),
-      psychologyNewsMaxAgeMinutes: settingValue("psychologyNewsMaxAgeMinutes"),
       temporalWindowPeriods: settingValue("temporalWindowPeriods"),
       temporalWindowHistoryLimit: settingValue("temporalWindowHistoryLimit"),
       ontologyLabAutoApplyEnabled: settingValue("ontologyLabAutoApplyEnabled"),
@@ -4024,7 +3991,7 @@
     return sendJson("/api/settings", "PUT", { settings: serverSettingsPayload() })
       .then(function (payload) {
         applyServerSettings(payload);
-        var reloads = [loadNotificationSchedules(), loadPsychologyShadow()];
+        var reloads = [loadNotificationSchedules()];
         if (state.ontologyRuleboxLoaded) reloads.push(loadOntologyRulebox(true));
         return Promise.all(reloads)
           .catch(function (error) {
@@ -9489,7 +9456,6 @@
     var toolbar = renderNotificationJobFilterToolbar(state.notificationJobItems || [], filteredNotificationJobs(state.notificationJobItems || []));
     var table = page.items.length ? '<div class="oa-data-table" data-console-keyed-list="alerts-ledger"><div class="oa-table-head oa-alert-row"><span>시각</span><span>대상·유형</span><span>발송 판단</span><span>알림이 온 이유</span><span>상태</span><span></span></div>' + page.items.map(renderAlertConsoleRow).join("") + '</div>' : renderConsoleEmpty("조건에 맞는 알림이 없습니다", "검색어와 발송 상태를 조정하거나 알림 워커 상태를 확인하세요.", renderWorkDetailButton("notification-diagnostics-board", "", "알림 진단", "text-button compact"));
     return renderConsoleManagedPage("notifications", metrics, [
-      renderPsychologyShadowPanel(false),
       renderConsoleSurface({ kicker: "DISPATCH LEDGER", title: "알림 판단 원장", description: "목록에는 발송 상태와 이유만 남기고 전체 메시지는 상세에서 봅니다.", actions: renderWorkDetailButton("notification-policy-board", "", "알림 정책", "text-button compact"), body: toolbar + renderConsoleLiveRegion("alerts-ledger-body", table), footer: renderConsolePager("alerts", page) })
     ].join(""));
   }
@@ -17077,19 +17043,10 @@
   function renderNotificationUnifiedConsole() {
     return [
       '<div class="single-tab-console notification-unified-console">',
-      renderPsychologyShadowPanel(false),
       renderNotificationDecisionPanel(),
       renderNotificationDiagnosticsSummaryPanel(),
       '</div>'
     ].join("");
-  }
-
-  function psychologyShadowTone(row) {
-    var stateKey = String((row || {}).state || "insufficient");
-    if (stateKey === "cautious") return "danger";
-    if (stateKey === "optimistic") return "watch";
-    if (stateKey === "mixed") return "caution";
-    return stateKey === "insufficient" ? "muted" : "hold";
   }
 
   function decisionStateLabel(value) {
@@ -17111,86 +17068,6 @@
     })[String(value || "")] || String(value || "-");
   }
 
-  function renderPsychologyShadowPanel(editable) {
-    var payload = state.psychologyShadow || {};
-    var rows = Array.isArray(payload.rows) ? payload.rows : [];
-    var usableCount = rows.filter(function (row) { return row.state !== "insufficient"; }).length;
-    var typedbCount = rows.filter(function (row) { return Boolean(row.typeDbShadowConfirmed); }).length;
-    var content = state.psychologyShadowError
-      ? renderNotificationStateMessage("danger", "심리 상태 조회 실패", state.psychologyShadowError)
-      : (rows.length
-        ? '<div class="psychology-shadow-list">' + rows.map(renderPsychologyShadowRow).join("") + '</div>'
-        : renderNotificationStateMessage("hold", "심리 관측 대기", "다음 실데이터 모니터링 주기부터 종목별 심리 상태가 쌓입니다."));
-    return [
-      '<article class="panel psychology-shadow-panel">',
-      '<div class="panel-head">',
-      '<div><p class="label">Psychology Shadow</p><h3>사람들의 심리 관측</h3><p>기존 투자 판단과 나란히 비교하며 알림 발송에는 직접 반영하지 않습니다.</p></div>',
-      '<div class="panel-actions"><span class="tone-chip hold">비교 전용</span>' + (editable ? '' : renderWorkDetailButton("notification-diagnostics-board", "", "심리 설정", "text-button")) + '<button class="text-button" type="button" data-action="refresh-psychology-shadow"' + (state.psychologyShadowLoading ? ' disabled' : '') + '>새로고침</button></div>',
-      '</div>',
-      '<div class="psychology-shadow-summary">',
-      renderNotificationDetailMetric("관측 종목", rows.length + "개", rows.length ? "watch" : "muted"),
-      renderNotificationDetailMetric("판단 가능", usableCount + "개", usableCount ? "watch" : "hold"),
-      renderNotificationDetailMetric("TypeDB 확인", typedbCount + "개", typedbCount ? "watch" : "muted"),
-      renderNotificationDetailMetric("발송 영향", "없음", "hold"),
-      '</div>',
-      content,
-      editable ? renderPsychologyShadowPolicyEditor() : '',
-      '</article>'
-    ].join("");
-  }
-
-  function renderPsychologyShadowRow(row) {
-    var components = Array.isArray(row.components) ? row.components : [];
-    var available = components.filter(function (item) { return item.available; });
-    var comparison = row.comparison || {};
-    var displayName = stockDisplayName(row.symbol, row) || row.label || row.symbol || "종목";
-    return [
-      '<details class="psychology-shadow-row">',
-      '<summary>',
-      '<span><strong>' + escapeHtml(displayName) + '</strong><em>' + escapeHtml(row.accountLabel || row.accountId || "") + '</em></span>',
-      '<span class="tone-chip ' + psychologyShadowTone(row) + '">' + escapeHtml(row.stateLabel || "근거 부족") + '</span>',
-      '</summary>',
-      '<div class="psychology-shadow-body">',
-      '<p>' + escapeHtml(row.summary || "심리 상태 요약 대기") + '</p>',
-      row.contradiction ? '<p class="psychology-shadow-contrast"><strong>엇갈림:</strong> ' + escapeHtml(row.contradiction) + '</p>' : '',
-      '<div class="psychology-shadow-metrics">',
-      renderNotificationDetailMetric("자료 상태", decisionStateLabel(row.dataState || "unavailable"), row.dataState === "sufficient" ? "watch" : "caution"),
-      renderNotificationDetailMetric("근거 구성", decisionStateLabel(row.conflictState || "context-only"), row.conflictState === "mixed" ? "caution" : "hold"),
-      renderNotificationDetailMetric("사용 원천", available.length + "/" + components.length, available.length >= 2 ? "watch" : "hold"),
-      renderNotificationDetailMetric("TypeDB", row.typeDbShadowConfirmed ? "Shadow 확인" : "다음 추론 대기", row.typeDbShadowConfirmed ? "watch" : "muted"),
-      renderNotificationDetailMetric("기존 판단 변경", "없음", "hold"),
-      '</div>',
-      '<div class="psychology-component-list">',
-      components.map(function (item) {
-        return [
-          '<span class="psychology-component ' + (item.available ? 'available' : 'unavailable') + '">',
-          '<strong>' + escapeHtml(item.label || item.key || "원천") + '</strong>',
-          '<em>' + escapeHtml(item.available ? (item.stateLabel || item.state || "확인") : "수집 안 됨") + '</em>',
-          '<small>' + escapeHtml(item.reason || item.freshnessStatus || "") + '</small>',
-          '</span>'
-        ].join("");
-      }).join(""),
-      '</div>',
-      '<p class="psychology-shadow-comparison">' + escapeHtml(comparison.explanation || "심리 후보는 비교용이며 실제 판단에는 반영하지 않습니다.") + '</p>',
-      '</div>',
-      '</details>'
-    ].join("");
-  }
-
-  function renderPsychologyShadowPolicyEditor() {
-    return [
-      '<section class="psychology-shadow-policy">',
-      '<div><strong>Shadow 정책</strong><p>서로 다른 원천이 최소 몇 개 있어야 심리 상태를 만들지 정합니다.</p></div>',
-      '<div class="psychology-policy-grid">',
-      renderSettingSelect("psychologyShadowEnabled", "Shadow 사용", [{ value: "1", label: "사용" }, { value: "0", label: "중지" }]),
-      renderSettingField("psychologyMinimumComponentCount", "최소 원천 수", "number", "2"),
-      renderSettingField("psychologyNewsMaxAgeMinutes", "뉴스 유효시간(분)", "number", "1440"),
-      '</div>',
-      '<p class="subtle">심리 상태는 비교 자료로만 저장되며 투자 행동이나 발송 여부를 직접 바꾸지 않습니다.</p>',
-      '</section>'
-    ].join("");
-  }
-
   function renderNotificationCandidatePanel(snapshot) {
     return [
       renderAdminMonitoringPanel(snapshot),
@@ -17201,7 +17078,7 @@
   }
 
   function renderNotificationDiagnosticsPanel() {
-    return renderNotificationDiagnosticsSummaryPanel() + renderPsychologyShadowPanel(true);
+    return renderNotificationDiagnosticsSummaryPanel();
   }
 
   function renderNotificationDiagnosticsSummaryPanel() {
@@ -25399,14 +25276,6 @@
       });
     }
 
-    Array.prototype.slice.call(app.querySelectorAll('[data-action="refresh-psychology-shadow"]')).forEach(function (button) {
-      button.addEventListener("click", function () {
-        if (state.psychologyShadowLoading) return;
-        loadPsychologyShadow();
-        render();
-      });
-    });
-
     Array.prototype.slice.call(app.querySelectorAll("[data-notification-job-search]")).forEach(function (field) {
       field.addEventListener("input", function () {
         state.notificationJobSearch = field.value;
@@ -25751,7 +25620,6 @@
     loadNotificationRules(),
     loadNotificationJobs(),
     loadNotificationSchedules(),
-    loadPsychologyShadow(),
     loadInvestmentCalendar(),
     loadSymbolUniverse(),
     loadInvestmentLanguage(false)

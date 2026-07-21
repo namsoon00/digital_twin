@@ -128,9 +128,6 @@
     ontologyReasoningEnabled: "1",
     ontologyReasoningIntervalSeconds: "10",
     ontologyReasoningBatchSize: "20",
-    psychologyShadowEnabled: "1",
-    psychologyMinimumComponentCount: "2",
-    psychologyNewsMaxAgeMinutes: "1440",
     temporalWindowPeriods: [
       "1D=1:2",
       "3D=3:3",

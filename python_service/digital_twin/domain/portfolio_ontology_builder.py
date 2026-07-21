@@ -87,7 +87,16 @@ def build_portfolio_ontology(
     external_signals: Dict[str, object] = None,
     portfolio_id: str = "portfolio",
     runtime_context: Dict[str, object] = None,
+    include_tbox: bool = True,
+    include_presentation: bool = True,
 ) -> PortfolioOntology:
+    """Build an ontology graph for a portfolio snapshot.
+
+    The TypeDB runtime projection persists ABox facts only.  It therefore does
+    not need to allocate the static TBox or build user-facing cards/prompts on
+    every market tick.  Read models and diagnostics retain the existing full
+    graph by using the default arguments.
+    """
     external_signals = external_signals or {}
     runtime_context = runtime_context or {}
     lifecycle_metadata = abox_lifecycle_metadata(
@@ -105,8 +114,9 @@ def build_portfolio_ontology(
             observed_by_symbol[key] = item
     observed_positions = list(observed_by_symbol.values())
     graph = PortfolioOntology(portfolio_id=portfolio_id)
-    graph.entities.extend(tbox_entities())
-    graph.relations.extend(tbox_relations())
+    if include_tbox:
+        graph.entities.extend(tbox_entities())
+        graph.relations.extend(tbox_relations())
     portfolio_node_id = entity_id("portfolio", portfolio_id)
     account_context = runtime_context.get("account") if isinstance(runtime_context, dict) else {}
     account_context = account_context if isinstance(account_context, dict) else {}
@@ -348,8 +358,9 @@ def build_portfolio_ontology(
     graph.relations = dedupe_relations(graph.relations)
     graph.evidence = dedupe_evidence(graph.evidence)
     apply_abox_lifecycle(graph, lifecycle_metadata)
-    graph.reasoning_cards = build_reasoning_cards(graph)
-    graph.prompt = build_investment_opinion_prompt(graph)
+    if include_presentation:
+        graph.reasoning_cards = build_reasoning_cards(graph)
+        graph.prompt = build_investment_opinion_prompt(graph)
     graph.worldview = {
         "model": "ontology-abox-facts",
         "runtimeProjectionMode": "abox-facts-only-typedb-native-rules",
@@ -358,5 +369,6 @@ def build_portfolio_ontology(
         "watchlistCount": len([item for item in observed_positions if is_watchlist_position(item)]),
         "aboxLifecycle": dict(lifecycle_metadata),
         "activeTBox": dict(runtime_context.get("activeTBox") or {}),
+        "presentationDeferred": not include_presentation,
     }
     return graph

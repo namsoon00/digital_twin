@@ -649,6 +649,24 @@ class NullTypeDBOntologyGraphRepository:
             "materialFingerprint": "",
         }
 
+    def prune_inactive_abox_generations(
+        self,
+        _driver=None,
+        _imported=None,
+        active_snapshot_id: str = "",
+        keep_inactive_count: int = 1,
+        max_generations: int = 1,
+    ) -> Dict[str, object]:
+        return {
+            "configured": False,
+            "status": "disabled",
+            "graphStore": "typedb",
+            "activeAboxSnapshotId": str(active_snapshot_id or ""),
+            "retainedInactiveSnapshotIds": [],
+            "removedCandidateSnapshotIds": [],
+            "deletedBatchCount": 0,
+        }
+
     def save_graph(self, graph: PortfolioOntology) -> Dict[str, object]:
         return {
             "configured": False,
@@ -981,23 +999,6 @@ class TypeDBOntologyGraphRepository(GraphStoreOntologyRowMapperMixin):
                             active_before = self.active_abox_metadata()
                             active_snapshot_id = str(active_before.get("aboxSnapshotId") or "").strip()
                             if active_snapshot_id != snapshot_id:
-                                # The active-generation pointer gives readers a
-                                # complete, immutable ABox while a new candidate
-                                # is being written.  Do not sweep every older
-                                # candidate here: on a busy market session that
-                                # deletion can acquire the TypeDB writer lock for
-                                # longer than the alert cycle itself, leaving the
-                                # cooldown path with no candidate to evaluate.
-                                #
-                                # A retry still clears this exact snapshot below.
-                                # Inactive generations are instead removed by
-                                # explicit maintenance / the bounded TypeDB data
-                                # retention policy, outside the realtime path.
-                                candidate_cleanup = {
-                                    "status": "deferred",
-                                    "activeAboxSnapshotId": active_snapshot_id,
-                                    "reason": "Inactive ABox candidate cleanup is deferred from realtime activation.",
-                                }
                                 # A candidate shares the physical ABox box with the
                                 # active generation, but storage IDs include the
                                 # snapshot. Clear only an interrupted retry of this
@@ -1035,6 +1036,24 @@ class TypeDBOntologyGraphRepository(GraphStoreOntologyRowMapperMixin):
                                     pointer_graph,
                                     delete_boxes=["ABoxControl"],
                                 )
+                                # The pointer now protects the complete new
+                                # generation. Prune only a small, marker-backed
+                                # set of older *complete* generations while this
+                                # single writer owns the activation path. This
+                                # prevents unbounded ABox growth without racing an
+                                # in-progress candidate from another cycle.
+                                try:
+                                    candidate_cleanup = self.prune_inactive_abox_generations(
+                                        driver,
+                                        imported,
+                                        active_snapshot_id=snapshot_id,
+                                    )
+                                except Exception as cleanup_error:  # noqa: BLE001 - active pointer remains valid.
+                                    candidate_cleanup = {
+                                        "status": "error",
+                                        "activeAboxSnapshotId": snapshot_id,
+                                        "reason": str(cleanup_error)[:180],
+                                    }
                             abox_projection_verification = {
                                 **self.verify_abox_projection(
                                     candidate_graph,
@@ -2063,6 +2082,24 @@ class TypeDBOntologyGraphRepository(GraphStoreOntologyRowMapperMixin):
         # it reaches the first insert batch.
         return max(100, min(5000, int(parsed)))
 
+    def abox_inactive_generation_keep_count(self, settings: Dict[str, object] = None) -> int:
+        raw = (settings or runtime_settings()).get("typedbABoxInactiveGenerationKeepCount")
+        parsed = number_or_none(raw)
+        if parsed is None:
+            parsed = 1
+        # Keep one completed predecessor for operational inspection/rollback,
+        # but never turn ABox history into an unbounded time-series store.
+        return max(0, min(5, int(parsed)))
+
+    def abox_inactive_generation_max_prune_per_save(self, settings: Dict[str, object] = None) -> int:
+        raw = (settings or runtime_settings()).get("typedbABoxInactiveGenerationMaxPrunePerSave")
+        parsed = number_or_none(raw)
+        if parsed is None:
+            parsed = 2
+        # Deletes are deliberately bounded so a live activation cannot spend
+        # minutes reclaiming a historic backlog under TypeDB's writer lock.
+        return max(0, min(10, int(parsed)))
+
     def abox_write_transaction_query_count(self, settings: Dict[str, object] = None) -> int:
         raw = (settings or runtime_settings()).get("typedbABoxWriteTransactionQueryCount")
         parsed = number_or_none(raw)
@@ -2296,6 +2333,79 @@ class TypeDBOntologyGraphRepository(GraphStoreOntologyRowMapperMixin):
             "removedCandidateSnapshotIds": stale_candidates,
             "deletedBatchCount": deleted_batches,
             "legacyStagingCleanup": legacy,
+        }
+
+    def prune_inactive_abox_generations(
+        self,
+        driver,
+        imported,
+        active_snapshot_id: str = "",
+        keep_inactive_count: int = None,
+        max_generations: int = None,
+    ) -> Dict[str, object]:
+        """Bound retention to completed ABox generations after activation.
+
+        This intentionally operates on completion markers, not every physical
+        ABox row. A marker is written only after the candidate rows are present
+        and verified; preserving the active pointer plus recent marked
+        generations makes deletion safe in the single-writer activation path.
+        Unmarked interrupted candidates remain available for retry diagnostics
+        and are cleared only when that exact snapshot is retried.
+        """
+        active = str(active_snapshot_id or "").strip()
+        keep_count = (
+            self.abox_inactive_generation_keep_count()
+            if keep_inactive_count is None
+            else max(0, min(5, int(keep_inactive_count or 0)))
+        )
+        max_count = (
+            self.abox_inactive_generation_max_prune_per_save()
+            if max_generations is None
+            else max(0, min(10, int(max_generations or 0)))
+        )
+        markers = self.abox_projection_marker_rows()
+        marker_by_snapshot: Dict[str, Dict[str, object]] = {}
+        for marker in markers:
+            snapshot_id = str(marker.get("aboxSnapshotId") or marker.get("snapshotId") or "").strip()
+            if not snapshot_id or snapshot_id == active:
+                continue
+            previous = marker_by_snapshot.get(snapshot_id)
+            if previous is None or (
+                str(marker.get("updatedAt") or ""), str(marker.get("id") or "")
+            ) > (
+                str(previous.get("updatedAt") or ""), str(previous.get("id") or "")
+            ):
+                marker_by_snapshot[snapshot_id] = marker
+        ordered_inactive = sorted(
+            marker_by_snapshot,
+            key=lambda snapshot_id: (
+                str(marker_by_snapshot[snapshot_id].get("updatedAt") or ""),
+                str(marker_by_snapshot[snapshot_id].get("id") or ""),
+                snapshot_id,
+            ),
+            reverse=True,
+        )
+        retained = ordered_inactive[:keep_count]
+        # Preserve the most recent completed predecessor, then drain the
+        # oldest backlog first. This keeps a useful rollback/audit generation
+        # while reducing the worst historical amplification immediately.
+        removable = list(reversed(ordered_inactive[keep_count:]))[:max_count]
+        deleted_batches = 0
+        removed = []
+        for snapshot_id in removable:
+            result = self.delete_box_snapshot_rows_in_batches(driver, imported, "ABox", snapshot_id)
+            deleted_batches += int(number_or_none(result.get("deletedBatchCount")) or 0)
+            removed.append(snapshot_id)
+        return {
+            "status": "ok",
+            "activeAboxSnapshotId": active,
+            "keepInactiveGenerationCount": keep_count,
+            "maxGenerationsPerSave": max_count,
+            "completedInactiveCandidateCount": len(ordered_inactive),
+            "retainedInactiveSnapshotIds": retained,
+            "removedCandidateSnapshotIds": removed,
+            "remainingInactiveCandidateCount": max(0, len(ordered_inactive) - len(removed)),
+            "deletedBatchCount": deleted_batches,
         }
 
     def clear_boxes_in_batches(self, boxes: Iterable[str]) -> Dict[str, object]:
@@ -6775,9 +6885,20 @@ def ensure_inference_reference_entities(
     )
 
     endpoints = set()
+    native_rule_ids_by_endpoint: Dict[str, List[str]] = {}
     for relation in list(getattr(inference_graph, "relations", []) or []):
-        endpoints.add(str(relation.source or ""))
-        endpoints.add(str(relation.target or ""))
+        relation_endpoints = [str(relation.source or ""), str(relation.target or "")]
+        endpoints.update(relation_endpoints)
+        relation_properties = dict(getattr(relation, "properties", {}) or {})
+        native_rule_id = str(
+            relation_properties.get("nativeRuleId")
+            or typedb_native_rule_id(relation_properties.get("ruleId"))
+            or ""
+        ).strip()
+        if native_rule_id:
+            for endpoint_id in relation_endpoints:
+                if endpoint_id and native_rule_id not in native_rule_ids_by_endpoint.setdefault(endpoint_id, []):
+                    native_rule_ids_by_endpoint[endpoint_id].append(native_rule_id)
     for evidence in list(getattr(inference_graph, "evidence", []) or []):
         endpoints.add(str(evidence.subject or ""))
     for belief in list(getattr(inference_graph, "beliefs", []) or []):
@@ -6790,6 +6911,7 @@ def ensure_inference_reference_entities(
         source_box = str(source_properties.get("ontologyBox") or "external")
         symbol = str(source_properties.get("symbol") or symbol_from_subject(endpoint_id) or "").upper()
         label = str((source.label if source else "") or endpoint_id)
+        native_rule_ids = sorted(native_rule_ids_by_endpoint.get(endpoint_id, []))
         inference_graph.entities.append(OntologyEntity(
             endpoint_id,
             label,
@@ -6803,6 +6925,8 @@ def ensure_inference_reference_entities(
                 "referenceEntityKind": source_kind,
                 "referenceOntologyBox": source_box,
                 "referenceOnly": True,
+                "nativeRuleId": native_rule_ids[0] if native_rule_ids else "",
+                "nativeRuleIds": native_rule_ids,
             }, generation_id, generation_at, endpoint_id, worldview),
         ))
         known_ids.add(endpoint_id)

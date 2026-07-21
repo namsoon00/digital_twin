@@ -61,9 +61,21 @@ TRIGGER_ORDER = {
     "research-evidence-update": 6,
     "investment-calendar-update": 5,
     "market-data-update": 4,
+    "kis-realtime-websocket": 3,
     "kis-realtime-update": 3,
     "portfolio-snapshot-update": 2,
     "data-update": 1,
+}
+
+# A KIS or market-data event represents a new observation of a complete live
+# portfolio snapshot. It is safe to replace an older event only when the newer
+# event covers every older subject and fact family. Research/calendar events
+# deliberately never enter this path because their evidence is not fungible.
+COALESCIBLE_REALTIME_TRIGGERS = {
+    "market-data-update",
+    "kis-realtime-update",
+    "kis-realtime-websocket",
+    "portfolio-snapshot-update",
 }
 
 
@@ -127,6 +139,29 @@ def event_order_key(event: object, priority_symbols: Dict[str, int] = None) -> T
     )
 
 
+def event_time_key(event: object) -> Tuple[str, str]:
+    return (
+        str(getattr(event, "occurred_at", "") or ""),
+        str(getattr(event, "event_id", "") or ""),
+    )
+
+
+def realtime_coalescing_key(event: object) -> Tuple[str, Tuple[str, ...]]:
+    """Return a conservative replacement key for redundant live observations."""
+    payload = event_payload(event)
+    trigger = str(payload.get("trigger") or "").strip()
+    review_level = event_review_level(event)
+    if trigger not in COALESCIBLE_REALTIME_TRIGGERS:
+        return ()
+    if REVIEW_LEVEL_ORDER.get(review_level, 0) > REVIEW_LEVEL_ORDER["check"]:
+        return ()
+    symbols = event_symbols(event)
+    if not symbols:
+        return ()
+    fact_types = tuple(sorted({str(item or "").strip() for item in payload.get("factTypes") or [] if str(item or "").strip()}))
+    return trigger, fact_types
+
+
 class OntologyReasoningRunner:
     def __init__(
         self,
@@ -158,6 +193,12 @@ class OntologyReasoningRunner:
 
     def max_symbols_per_run(self) -> int:
         return int_setting(self.settings, "ontologyReasoningMaxSymbolsPerRun", 3, 0, 200)
+
+    def coherent_snapshot_enabled(self) -> bool:
+        return truthy(self.settings.get("ontologyReasoningCoherentSnapshotEnabled"), True)
+
+    def coherent_snapshot_max_symbols(self) -> int:
+        return int_setting(self.settings, "ontologyReasoningCoherentSnapshotMaxSymbols", 20, 1, 50)
 
     def event_scan_limit(self, requested_limit: int = 0) -> int:
         fallback = max(1500, int(requested_limit or self.batch_size()) * 40)
@@ -345,6 +386,53 @@ class OntologyReasoningRunner:
         )
         return events[: max(1, int(limit or self.batch_size()))]
 
+    def pending_work(self, limit: int = 0) -> Dict[str, object]:
+        """Collapse redundant, lower-materiality realtime snapshot requests.
+
+        A newer market observation may supersede an older one only when it
+        includes all of the older event's symbols and exactly the same fact
+        family. The older cursor is advanced only after the newer snapshot has
+        completed TypeDB projection and inference.
+        """
+        requests = self.pending_requests(limit)
+        superseded_by_lead: Dict[str, List[str]] = {}
+        superseded_ids = set()
+        for older in requests:
+            older_id = str(getattr(older, "event_id", "") or "").strip()
+            older_key = realtime_coalescing_key(older)
+            older_symbols = set(event_symbols(older))
+            if not older_id or not older_key or not older_symbols:
+                continue
+            leads = [
+                newer
+                for newer in requests
+                if str(getattr(newer, "event_id", "") or "").strip() != older_id
+                and realtime_coalescing_key(newer) == older_key
+                and event_time_key(newer) > event_time_key(older)
+                and set(event_symbols(newer)).issuperset(older_symbols)
+            ]
+            if not leads:
+                continue
+            lead = max(leads, key=event_time_key)
+            lead_id = str(getattr(lead, "event_id", "") or "").strip()
+            if not lead_id:
+                continue
+            superseded_ids.add(older_id)
+            superseded_by_lead.setdefault(lead_id, []).append(older_id)
+        active_requests = [
+            event for event in requests
+            if str(getattr(event, "event_id", "") or "").strip() not in superseded_ids
+        ]
+        return {
+            "requests": active_requests,
+            "rawRequestCount": len(requests),
+            "coalescedEventIds": sorted(superseded_ids),
+            "supersededByLead": {
+                lead_id: sorted(set(event_ids))
+                for lead_id, event_ids in superseded_by_lead.items()
+            },
+        }
+
     def publish(self, event) -> None:
         if not self.event_publisher:
             return
@@ -369,6 +457,47 @@ class OntologyReasoningRunner:
         batches: Dict[str, List[str]] = {}
         candidates: Dict[str, Tuple[Tuple[int, int, int, int, int, int], str]] = {}
         requested_events = list(requests or [])
+
+        if self.coherent_snapshot_enabled():
+            event_candidates = []
+            all_due_symbols = []
+            global_events = []
+            for event_index, event in enumerate(requested_events):
+                event_id = str(getattr(event, "event_id", "") or "").strip()
+                all_symbols = event_symbols(event)
+                if not all_symbols:
+                    if event_id:
+                        global_events.append((event_index, event))
+                    continue
+                due_symbols = self.due_event_symbols(event, progress, cursor_payload, priority_symbols)
+                if not due_symbols:
+                    continue
+                for symbol in due_symbols:
+                    if symbol not in all_due_symbols:
+                        all_due_symbols.append(symbol)
+                fact_types = {str(item or "").strip() for item in event_payload(event).get("factTypes") or []}
+                rank = (
+                    max([int(priority_symbols.get(symbol, 0) or 0) for symbol in due_symbols] or [0]),
+                    REVIEW_LEVEL_ORDER.get(event_review_level(event), 0),
+                    TRIGGER_ORDER.get(str(event_payload(event).get("trigger") or "data-update").strip(), 0),
+                    1 if "ResearchEvidence" in fact_types else 0,
+                    event_time_key(event),
+                    -event_index,
+                )
+                event_candidates.append((rank, event_id, due_symbols))
+            if event_candidates:
+                _rank, event_id, due_symbols = max(event_candidates, key=lambda item: item[0])
+                snapshot_limit = self.coherent_snapshot_max_symbols()
+                selected = list(due_symbols[:snapshot_limit])
+                batches[event_id] = selected
+                return batches, selected, max(0, len(all_due_symbols) - len(selected))
+            if global_events:
+                # A subject-less operational/macro update still needs one full
+                # portfolio projection. Do not mark other global events until
+                # their own turn.
+                _index, event = min(global_events, key=lambda item: item[0])
+                event_id = str(getattr(event, "event_id", "") or "").strip()
+                return ({event_id: []} if event_id else {}), [], 0
 
         # Pick symbols globally before assigning them to their source events.
         # The previous event-by-event loop could consume the complete per-run
@@ -418,7 +547,12 @@ class OntologyReasoningRunner:
                 batches[event_id] = selected_for_event
         return batches, selected, len(omitted_symbols)
 
-    def mark_requests_processed(self, requests: Iterable[object], batches: Dict[str, List[str]]) -> Dict[str, object]:
+    def mark_requests_processed(
+        self,
+        requests: Iterable[object],
+        batches: Dict[str, List[str]],
+        superseded_by_lead: Dict[str, List[str]] = None,
+    ) -> Dict[str, object]:
         cursor_payload = self.cursor_payload()
         progress = self.event_symbol_progress(cursor_payload)
         completed_event_ids: List[str] = []
@@ -430,8 +564,9 @@ class OntologyReasoningRunner:
             all_symbols = event_symbols(event)
             selected_symbols = [symbol for symbol in batches.get(event_id, []) if symbol]
             if not all_symbols:
-                completed_event_ids.append(event_id)
-                progress.pop(event_id, None)
+                if event_id in batches:
+                    completed_event_ids.append(event_id)
+                    progress.pop(event_id, None)
                 continue
             existing_symbols = list(progress.get(event_id, []) or [])
             merged = []
@@ -446,14 +581,27 @@ class OntologyReasoningRunner:
             else:
                 partial_event_ids.append(event_id)
                 progress[event_id] = merged[:200]
+        superseded_event_ids: List[str] = []
+        for event_id in completed_event_ids:
+            for superseded_id in (superseded_by_lead or {}).get(event_id, []) or []:
+                clean = str(superseded_id or "").strip()
+                if clean and clean not in superseded_event_ids:
+                    superseded_event_ids.append(clean)
+        for event_id in superseded_event_ids:
+            progress.pop(event_id, None)
         if hasattr(self.cursor_store, "save"):
             cursor_payload["eventSymbolProgress"] = progress
             self.save_cursor_payload(cursor_payload)
-        if completed_event_ids:
-            self.cursor_store.mark_processed(completed_event_ids)
+        processed_event_ids = []
+        for event_id in completed_event_ids + superseded_event_ids:
+            if event_id not in processed_event_ids:
+                processed_event_ids.append(event_id)
+        if processed_event_ids:
+            self.cursor_store.mark_processed(processed_event_ids)
         return {
             "completedEventIds": completed_event_ids,
             "partialEventIds": partial_event_ids,
+            "supersededEventIds": superseded_event_ids,
         }
 
     def projection_gate(self, monitor_runner) -> Dict[str, object]:
@@ -550,12 +698,18 @@ class OntologyReasoningRunner:
         payload["lastProjectionAttemptAtBySymbol"] = dict(sorted(attempts.items()))
         self.save_cursor_payload(payload)
 
-    def run_once(self, limit: int = 0, force: bool = True) -> Dict[str, object]:
+    def run_once(self, limit: int = 0, force: bool = False) -> Dict[str, object]:
         if not self.enabled():
             return {"status": "disabled", "processedCount": 0, "alertCount": 0}
-        requests = self.pending_requests(limit)
+        work = self.pending_work(limit)
+        requests = list(work.get("requests") or [])
         if not requests:
-            return {"status": "idle", "processedCount": 0, "alertCount": 0}
+            return {
+                "status": "idle",
+                "processedCount": 0,
+                "alertCount": 0,
+                "coalescedEventCount": len(work.get("coalescedEventIds") or []),
+            }
         symbol_batches, symbols, omitted_symbol_count = self.request_symbol_batches(requests)
         runner = self.monitor_runner_factory()
         if "symbol_filter" in inspect.signature(runner.run_once).parameters:
@@ -575,6 +729,7 @@ class OntologyReasoningRunner:
                 "retryAfterSeconds": self.projection_retry_seconds(),
                 "deferredReason": str(projection_gate.get("reason") or "TypeDB graph cycle is not ready."),
                 "projectionFailures": list(projection_gate.get("results") or []),
+                "coalescedEventCount": len(work.get("coalescedEventIds") or []),
             }
         account_ids = [getattr(account, "account_id", "") for account in getattr(runner, "accounts", [])]
         trigger_event_ids = [event.event_id for event in requests]
@@ -592,13 +747,18 @@ class OntologyReasoningRunner:
         rule_candidate_result = self.propose_rule_candidates(symbols, requests, alerts, force=False)
         refreshed_research_runs = self.mark_research_runs_refreshed(requests)
         self.publish(completed)
-        progress_result = self.mark_requests_processed(requests, symbol_batches)
+        progress_result = self.mark_requests_processed(
+            requests,
+            symbol_batches,
+            superseded_by_lead=work.get("supersededByLead"),
+        )
         self.mark_symbols_reasoned(symbols)
         return {
             "status": "ok",
             "processedCount": len(trigger_event_ids),
             "completedEventCount": len(progress_result.get("completedEventIds") or []),
             "partialEventCount": len(progress_result.get("partialEventIds") or []),
+            "coalescedEventCount": len(progress_result.get("supersededEventIds") or []),
             "alertCount": len(alerts or []),
             "symbols": symbols,
             "maxSymbolsPerRun": self.max_symbols_per_run(),
@@ -691,7 +851,8 @@ class OntologyReasoningRunner:
         self.cursor_store.save(payload)
 
     def status(self) -> Dict[str, object]:
-        pending = self.pending_requests(self.batch_size())
+        work = self.pending_work(self.batch_size())
+        pending = list(work.get("requests") or [])
         progress = self.event_symbol_progress()
         _batches, next_symbols, omitted_count = self.request_symbol_batches(pending)
         return {
@@ -699,7 +860,11 @@ class OntologyReasoningRunner:
             "pendingCount": len(pending),
             "batchSize": self.batch_size(),
             "maxSymbolsPerRun": self.max_symbols_per_run(),
+            "coherentSnapshotEnabled": self.coherent_snapshot_enabled(),
+            "coherentSnapshotMaxSymbols": self.coherent_snapshot_max_symbols(),
             "processedCount": len(self.cursor_store.processed_event_ids()),
+            "rawPendingCount": int(work.get("rawRequestCount") or len(pending)),
+            "coalescedPendingEventCount": len(work.get("coalescedEventIds") or []),
             "pendingSymbols": self.request_symbols(pending),
             "nextSymbols": next_symbols,
             "nextOmittedSymbolCount": omitted_count,

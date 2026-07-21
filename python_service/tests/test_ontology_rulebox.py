@@ -804,7 +804,7 @@ class OntologyRuleBoxTests(unittest.TestCase):
                     "failedCount": 0,
                 }
 
-            def match_typedb_native_rules(self, rules, target_symbols=None):
+            def match_typedb_native_rules(self, rules, target_symbols=None, **_kwargs):
                 rule = list(rules or [])[0]
                 return {
                     "status": "ok",

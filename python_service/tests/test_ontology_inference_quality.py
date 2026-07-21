@@ -7,6 +7,7 @@ from digital_twin.domain.ontology_inference_materializer import materialize_rule
 from digital_twin.domain.ontology_observation_quality import position_observation_profiles
 from digital_twin.domain.ontology_projection_fingerprint import material_graph_fingerprint
 from digital_twin.domain.ontology_rulebox_catalog import default_graph_inference_rules
+from digital_twin.domain.portfolio_ontology_builder import build_portfolio_ontology
 from digital_twin.domain.portfolio import AccountSnapshot, Position
 from digital_twin.domain.portfolio_calculations import portfolio_summary
 from digital_twin.domain.market_data import normalize_position
@@ -231,6 +232,31 @@ class OntologyInferenceQualityTests(unittest.TestCase):
         third = recorder.record_snapshot(self.snapshot(changed, "2026-07-20T00:07:00Z"))
         self.assertTrue(third["saved"])
         self.assertNotEqual(first["materialFingerprint"], third["materialFingerprint"])
+
+    def test_runtime_projection_can_skip_static_tbox_and_presentation_payload(self):
+        position = normalize_position({
+            "symbol": "005930",
+            "name": "삼성전자",
+            "market": "KR",
+            "currency": "KRW",
+            "source": "holding",
+            "quantity": 1,
+            "currentPrice": 70000,
+            "marketValue": 70000,
+        })
+
+        graph = build_portfolio_ontology(
+            [position],
+            portfolio_summary([position]),
+            portfolio_id="runtime-abox-only",
+            include_tbox=False,
+            include_presentation=False,
+        )
+
+        self.assertFalse(any((item.properties or {}).get("ontologyBox") == "TBox" for item in graph.entities))
+        self.assertFalse(graph.reasoning_cards)
+        self.assertFalse(graph.prompt)
+        self.assertTrue(graph.worldview["presentationDeferred"])
 
     def test_unchanged_abox_retries_when_inference_generation_is_stale(self):
         position = normalize_position({

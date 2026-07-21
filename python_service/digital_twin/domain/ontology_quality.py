@@ -70,7 +70,12 @@ def build_ontology_quality_sample(graph: PortfolioOntology, source: str = "runti
     validation = validate_ontology(graph)
     data_state = "unavailable" if entity_count <= 0 else "insufficient" if evidence_count <= 0 else "partial" if gaps else "sufficient"
     context_state = "sufficient" if len(contexts) >= 6 else "partial" if contexts else "insufficient"
-    reasoning_state = "ready" if card_count > 0 and ready_cards == card_count else "conditional" if ready_cards > 0 else "blocked"
+    presentation_deferred = bool((graph.worldview or {}).get("presentationDeferred"))
+    reasoning_state = (
+        "conditional"
+        if presentation_deferred
+        else "ready" if card_count > 0 and ready_cards == card_count else "conditional" if ready_cards > 0 else "blocked"
+    )
     relation_state = "connected" if relation_count >= entity_count and entity_count > 0 else "sparse" if relation_count > 0 else "empty"
     validation_state = "blocked" if validation.error_count else "conditional" if validation.warning_count else "ready"
     overall_state = "blocked" if "blocked" in {reasoning_state, validation_state} or data_state in {"unavailable", "insufficient"} else "conditional" if data_state == "partial" or context_state != "sufficient" or relation_state != "connected" or validation_state == "conditional" else "ready"

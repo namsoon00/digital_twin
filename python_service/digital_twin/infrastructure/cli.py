@@ -319,7 +319,7 @@ def ontology_reasoning_command(args) -> int:
         print(json.dumps(runner.status(), ensure_ascii=False))
         return 0
     if args.ontology_reasoning_action == "once":
-        print(json.dumps(runner.run_once(limit=limit, force=True), ensure_ascii=False))
+        print(json.dumps(runner.run_once(limit=limit, force=bool(getattr(args, "force", False))), ensure_ascii=False))
         return 0
     if args.ontology_reasoning_action == "watch":
         interval = int(
@@ -846,6 +846,7 @@ def build_parser() -> argparse.ArgumentParser:
     ontology_reasoning_actions = ontology_reasoning.add_subparsers(dest="ontology_reasoning_action", required=True)
     ontology_once = ontology_reasoning_actions.add_parser("once")
     ontology_once.add_argument("--limit", default="")
+    ontology_once.add_argument("--force", action="store_true")
     ontology_watch = ontology_reasoning_actions.add_parser("watch")
     ontology_watch.add_argument("--limit", default="")
     ontology_reasoning_actions.add_parser("status")

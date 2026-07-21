@@ -645,7 +645,7 @@ class MaterialityGateTests(unittest.TestCase):
         self.assertEqual("ok", result["status"])
         self.assertEqual(["AAPL"], fake_monitor.symbol_filter)
 
-    def test_ontology_reasoning_processes_large_events_by_symbol_cursor(self):
+    def test_ontology_reasoning_projects_a_large_event_as_one_coherent_snapshot(self):
         request = ontology_reasoning_requested_event(
             DomainEvent(
                 name="market_data.collected",
@@ -665,7 +665,10 @@ class MaterialityGateTests(unittest.TestCase):
 
         class Cursor:
             def __init__(self):
-                self.payload = {"processedEventIds": []}
+                self.payload = {
+                    "processedEventIds": [],
+                    "eventSymbolProgress": {"old-realtime-event": ["005930"]},
+                }
 
             def processed_event_ids(self):
                 return list(self.payload.get("processedEventIds") or [])
@@ -700,6 +703,8 @@ class MaterialityGateTests(unittest.TestCase):
             settings={
                 "ontologyReasoningEnabled": "1",
                 "ontologyReasoningMaxSymbolsPerRun": "2",
+                "ontologyReasoningCoherentSnapshotEnabled": "1",
+                "ontologyReasoningCoherentSnapshotMaxSymbols": "20",
                 "ontologyRuleCandidateAiEnabled": "0",
             },
         )
@@ -707,11 +712,93 @@ class MaterialityGateTests(unittest.TestCase):
         first = runner.run_once()
         second = runner.run_once()
 
-        self.assertEqual(["AAPL", "MSFT"], fake_monitor.calls[0])
-        self.assertEqual(["TSLA"], fake_monitor.calls[1])
-        self.assertEqual(1, first["partialEventCount"])
-        self.assertEqual(1, second["completedEventCount"])
+        self.assertEqual([["AAPL", "MSFT", "TSLA"]], fake_monitor.calls)
+        self.assertEqual(0, first["partialEventCount"])
+        self.assertEqual(1, first["completedEventCount"])
+        self.assertEqual("idle", second["status"])
         self.assertEqual([request.event_id], cursor.processed_event_ids())
+
+    def test_ontology_reasoning_coalesces_superseded_realtime_snapshots_after_projection(self):
+        source = DomainEvent(
+            name="market_data.collected",
+            aggregate_id="market:KR",
+            payload={"changedCount": 2, "symbols": ["005930", "000660"]},
+        )
+        old_payload = ontology_reasoning_requested_event(
+            source,
+            "kis-realtime-websocket",
+            ["005930", "000660"],
+            changed_count=2,
+            fact_types=["MarketQuote", "ExecutionFlow", "OrderBook"],
+        ).payload
+        new_payload = ontology_reasoning_requested_event(
+            source,
+            "kis-realtime-websocket",
+            ["005930", "000660"],
+            changed_count=2,
+            fact_types=["MarketQuote", "ExecutionFlow", "OrderBook"],
+        ).payload
+        old_request = DomainEvent(
+            name=ONTOLOGY_REASONING_REQUESTED,
+            aggregate_id="ontology:old",
+            payload=old_payload,
+            occurred_at="2026-07-21T00:00:00Z",
+            event_id="old-realtime-event",
+        )
+        new_request = DomainEvent(
+            name=ONTOLOGY_REASONING_REQUESTED,
+            aggregate_id="ontology:new",
+            payload=new_payload,
+            occurred_at="2026-07-21T00:00:15Z",
+            event_id="new-realtime-event",
+        )
+
+        class Reader:
+            def recent_events(self, **_kwargs):
+                return [old_request, new_request]
+
+        class Cursor:
+            def __init__(self):
+                self.payload = {"processedEventIds": []}
+
+            def processed_event_ids(self):
+                return list(self.payload["processedEventIds"])
+
+            def mark_processed(self, event_ids):
+                self.payload["processedEventIds"].extend(event_ids)
+
+            def load(self):
+                return dict(self.payload)
+
+            def save(self, payload):
+                self.payload = dict(payload or {})
+
+        class FakeMonitorRunner:
+            def __init__(self):
+                self.accounts = []
+                self.calls = []
+
+            def run_once(self, dry_run=False, force=False, symbol_filter=None):
+                self.calls.append({"force": force, "symbols": list(symbol_filter or [])})
+                return []
+
+        cursor = Cursor()
+        monitor = FakeMonitorRunner()
+        runner = OntologyReasoningRunner(
+            Reader(),
+            cursor,
+            monitor_runner_factory=lambda: monitor,
+            event_publisher=EventBus(),
+            settings={"ontologyRuleCandidateAiEnabled": "0"},
+        )
+
+        result = runner.run_once()
+
+        self.assertEqual("ok", result["status"])
+        self.assertEqual(1, result["coalescedEventCount"])
+        self.assertEqual([{"force": False, "symbols": ["000660", "005930"]}], monitor.calls)
+        self.assertEqual({"old-realtime-event", "new-realtime-event"}, set(cursor.processed_event_ids()))
+        self.assertNotIn("old-realtime-event", cursor.payload.get("eventSymbolProgress") or {})
 
     def test_ontology_reasoning_retries_type_db_projection_without_advancing_event_cursor(self):
         request = ontology_reasoning_requested_event(

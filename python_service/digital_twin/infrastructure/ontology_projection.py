@@ -156,6 +156,12 @@ class PortfolioOntologyProjectionRecorder:
                 external_signals=snapshot.external_signals,
                 portfolio_id=snapshot.account_id,
                 runtime_context=self.runtime_context(snapshot),
+                # The realtime path persists only ABox facts.  Static TBox
+                # vocabulary is seeded independently and presentation output
+                # is rebuilt later from the active InferenceBox for an alert
+                # or UI request.
+                include_tbox=False,
+                include_presentation=False,
             )
             persistence_graph = self.graph_for_graph_store_persistence(graph)
             material_fingerprint = material_graph_fingerprint(persistence_graph)

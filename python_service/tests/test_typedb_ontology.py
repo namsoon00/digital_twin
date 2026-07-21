@@ -391,13 +391,8 @@ class TypeDBOntologyRepositoryTests(unittest.TestCase):
         delete_candidate.assert_called_once_with(driver, imported, "ABox", "failed")
         delete_legacy.assert_called_once_with(driver, imported, ["ABoxStaging"])
 
-    def test_typedb_save_graph_defers_stale_abox_cleanup_from_realtime_activation(self):
-        """A live projection must reach native reasoning before maintenance work.
-
-        The active ABox pointer isolates readers from incomplete candidates, so
-        deleting every old candidate inline is unnecessary and can block market
-        alerts behind a long TypeDB writer lock.
-        """
+    def test_typedb_save_graph_prunes_a_bounded_completed_abox_backlog_after_activation(self):
+        """Activation keeps the new pointer, then reclaims only bounded stale rows."""
         repository = TypeDBOntologyGraphRepository("127.0.0.1:1729", retry_count=0)
         graph = PortfolioOntology(
             "typedb-live-abox",
@@ -432,15 +427,46 @@ class TypeDBOntologyRepositoryTests(unittest.TestCase):
                     {"status": "ok", "aboxSnapshotId": "active"},
                     {"status": "ok", "aboxSnapshotId": "candidate"},
                 ]), \
-                patch.object(repository, "cleanup_inactive_abox_candidates") as cleanup:
+                patch.object(repository, "prune_inactive_abox_generations", return_value={
+                    "status": "ok",
+                    "activeAboxSnapshotId": "candidate",
+                    "removedCandidateSnapshotIds": ["old"],
+                    "deletedBatchCount": 2,
+                }) as cleanup:
             result = repository.save_graph(graph)
 
         self.assertTrue(result["saved"])
-        self.assertEqual("deferred", result["aboxPersistenceVerification"]["candidateCleanup"]["status"])
-        self.assertEqual("active", result["aboxPersistenceVerification"]["candidateCleanup"]["activeAboxSnapshotId"])
-        cleanup.assert_not_called()
+        self.assertEqual("ok", result["aboxPersistenceVerification"]["candidateCleanup"]["status"])
+        self.assertEqual("candidate", result["aboxPersistenceVerification"]["candidateCleanup"]["activeAboxSnapshotId"])
+        cleanup.assert_called_once()
         clear_retry.assert_called_once()
         self.assertEqual(3, write_graph.call_count)
+
+    def test_typedb_abox_retention_keeps_recent_completed_generation_and_prunes_oldest_first(self):
+        repository = TypeDBOntologyGraphRepository("127.0.0.1:1729")
+        markers = [
+            {"id": "marker:active", "aboxSnapshotId": "active", "updatedAt": "2026-07-21T00:04:00Z"},
+            {"id": "marker:newest", "aboxSnapshotId": "newest", "updatedAt": "2026-07-21T00:03:00Z"},
+            {"id": "marker:middle", "aboxSnapshotId": "middle", "updatedAt": "2026-07-21T00:02:00Z"},
+            {"id": "marker:oldest", "aboxSnapshotId": "oldest", "updatedAt": "2026-07-21T00:01:00Z"},
+        ]
+        with patch.object(repository, "abox_projection_marker_rows", return_value=markers), \
+                patch.object(repository, "delete_box_snapshot_rows_in_batches", side_effect=[
+                    {"status": "ok", "deletedBatchCount": 2},
+                    {"status": "ok", "deletedBatchCount": 3},
+                ]) as delete_candidate:
+            result = repository.prune_inactive_abox_generations(
+                object(),
+                (object(), None),
+                active_snapshot_id="active",
+                keep_inactive_count=1,
+                max_generations=2,
+            )
+
+        self.assertEqual(["newest"], result["retainedInactiveSnapshotIds"])
+        self.assertEqual(["oldest", "middle"], result["removedCandidateSnapshotIds"])
+        self.assertEqual(5, result["deletedBatchCount"])
+        self.assertEqual(2, delete_candidate.call_count)
 
     def test_typedb_active_abox_keeps_last_completed_generation_when_newer_marker_is_incomplete(self):
         repository = TypeDBOntologyGraphRepository("127.0.0.1:1729")

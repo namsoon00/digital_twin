@@ -7077,7 +7077,7 @@ class PythonServiceTests(unittest.TestCase):
         self.assertEqual("ok", result["status"])
         self.assertEqual(1, result["processedCount"])
         self.assertEqual(1, result["alertCount"])
-        self.assertEqual([{"dryRun": False, "force": True}], fake_monitor.calls)
+        self.assertEqual([{"dryRun": False, "force": False}], fake_monitor.calls)
         self.assertEqual([request.event_id], cursor.processed_event_ids())
         self.assertEqual([ONTOLOGY_REASONING_COMPLETED], [event.name for event in events.published])
         self.assertEqual("idle", repeat["status"])

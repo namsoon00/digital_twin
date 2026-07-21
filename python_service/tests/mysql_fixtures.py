@@ -31,6 +31,18 @@ from digital_twin.infrastructure.mysql_schema_tuning import mysql_partitioning_m
 
 
 _CREATED_TEST_DATABASES = {}
+DEFAULT_TEST_DATABASE = "orbit_alpha_test"
+
+
+def is_managed_test_database(database: object) -> bool:
+    """Return whether a schema is owned by the local test fixture.
+
+    The exact default name is deliberately accepted in addition to the
+    historical worker/override prefix.  It lets a terminated test run leave
+    at most one reusable schema instead of one schema per temporary directory.
+    """
+    name = str(database or "")
+    return name == DEFAULT_TEST_DATABASE or name.startswith(DEFAULT_TEST_DATABASE + "_")
 
 
 def mysql_test_database_config(settings):
@@ -47,7 +59,7 @@ def mysql_test_database_config(settings):
 
 def register_mysql_test_database(config) -> None:
     database = str((config or {}).get("database") or "")
-    if database.startswith("orbit_alpha_test_"):
+    if is_managed_test_database(database):
         _CREATED_TEST_DATABASES[database] = dict(config)
 
 
@@ -59,7 +71,7 @@ def _test_database_cleanup() -> None:
         return
     grouped = {}
     for database, config in list(_CREATED_TEST_DATABASES.items()):
-        if not str(database).startswith("orbit_alpha_test_"):
+        if not is_managed_test_database(database):
             continue
         key = (
             str(config.get("host") or ""),
@@ -123,8 +135,23 @@ def _seed_value(seed=None) -> str:
 
 
 def test_database_name(seed=None) -> str:
-    digest = hashlib.sha1(_seed_value(seed).encode("utf-8")).hexdigest()[:20]
-    return "orbit_alpha_test_" + digest
+    """Return a bounded reusable schema name for the current test worker.
+
+    Earlier versions hashed every ``TemporaryDirectory`` seed, which created
+    a new ``orbit_alpha_test_<hash>`` database for almost every test case.
+    A normal suite is sequential, so it now reuses one schema and resets it
+    before fixtures need isolation. Parallel runners may opt into a stable
+    worker namespace without reintroducing a per-test schema leak.
+    """
+    worker = (
+        os.environ.get("DIGITAL_TWIN_TEST_WORKER")
+        or os.environ.get("PYTEST_XDIST_WORKER")
+        or ""
+    ).strip()
+    if not worker:
+        return DEFAULT_TEST_DATABASE
+    digest = hashlib.sha1(worker.encode("utf-8")).hexdigest()[:12]
+    return DEFAULT_TEST_DATABASE + "_worker_" + digest
 
 
 def mysql_test_settings(seed=None):

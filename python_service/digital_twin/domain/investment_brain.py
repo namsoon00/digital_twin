@@ -1,5 +1,5 @@
 from dataclasses import asdict, dataclass, field
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 import hashlib
 import json
 import re
@@ -21,6 +21,51 @@ META_INFERENCE_RELATION_TYPES = {
 
 def utc_now_iso() -> str:
     return datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
+
+
+def parse_investment_timestamp(value: object) -> Optional[datetime]:
+    """Parse persisted decision timestamps into an aware UTC datetime.
+
+    Early notification records used the user-facing ``KST`` display format,
+    while newer records use ISO-8601. Outcome evaluation must treat both as
+    the same temporal contract instead of comparing their raw strings.
+    """
+    text = str(value or "").strip()
+    if not text:
+        return None
+    suffix_timezones = {
+        " KST": timezone(timedelta(hours=9)),
+        " UTC": timezone.utc,
+        " GMT": timezone.utc,
+    }
+    timezone_hint = None
+    upper = text.upper()
+    for suffix, zone in suffix_timezones.items():
+        if upper.endswith(suffix):
+            text = text[:-len(suffix)].strip()
+            timezone_hint = zone
+            break
+    if text.endswith("Z"):
+        text = text[:-1] + "+00:00"
+    try:
+        parsed = datetime.fromisoformat(text)
+    except ValueError:
+        for pattern in ("%Y-%m-%d %H:%M:%S", "%Y-%m-%d %H:%M", "%Y-%m-%d"):
+            try:
+                parsed = datetime.strptime(text, pattern)
+                break
+            except ValueError:
+                continue
+        else:
+            return None
+    if parsed.tzinfo is None:
+        parsed = parsed.replace(tzinfo=timezone_hint or timezone.utc)
+    return parsed.astimezone(timezone.utc)
+
+
+def canonical_investment_timestamp(value: object) -> str:
+    parsed = parse_investment_timestamp(value)
+    return parsed.isoformat().replace("+00:00", "Z") if parsed else ""
 
 
 def stable_id(prefix: str, *parts: object) -> str:
@@ -992,7 +1037,8 @@ def decision_episode_from_context(
         "dataState": validated_response.get("dataState"),
         "validationState": validated_response.get("validationState"),
     })
-    decided_at = str(validated_response.get("referenceDate") or context.get("referenceDate") or utc_now_iso())
+    raw_decided_at = str(validated_response.get("referenceDate") or context.get("referenceDate") or utc_now_iso())
+    decided_at = canonical_investment_timestamp(raw_decided_at) or utc_now_iso()
     episode_id = stable_id(
         "decision-episode",
         context.get("accountId"),
@@ -1036,7 +1082,10 @@ def decision_episode_from_context(
         decision_summary=str(validated_response.get("summary") or ""),
         decided_at=decided_at,
         source="notification-ai-hypothesis-competition",
-        facts_at_decision=dict(relation_context.get("facts") or {}),
+        facts_at_decision={
+            **dict(relation_context.get("facts") or {}),
+            **({"decisionReferenceDateRaw": raw_decided_at} if raw_decided_at != decided_at else {}),
+        },
         research_plan=dict(brain.get("researchPlan") or relation_context.get("researchPlan") or {}),
         research_audit=dict(relation_context.get("researchCycle") or {}),
     )

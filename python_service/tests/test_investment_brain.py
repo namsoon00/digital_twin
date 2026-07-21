@@ -2,11 +2,13 @@ import unittest
 
 from digital_twin.application.hypothesis_proposal_service import HypothesisProposalService
 from digital_twin.application.investment_brain_service import InvestmentBrainService
+from digital_twin.application.investment_outcome_observation_service import InvestmentOutcomeObservationService
 from digital_twin.application.investment_research_orchestration_service import InvestmentResearchOrchestrationService
 from digital_twin.application.notification_service import NotificationHypothesisResearchEnricher
 from digital_twin.domain.investment_brain import (
     DecisionEpisode,
     InvestmentQuestion,
+    canonical_investment_timestamp,
     hypothesis_set_from_relation_context,
 )
 from digital_twin.domain.investment_evidence_governance import ResearchRun, governed_evidence
@@ -23,7 +25,8 @@ from digital_twin.domain.ontology_tbox import CLASS_DEFS, RELATION_DEFS
 from digital_twin.domain.portfolio_ontology_cognitive_concepts import add_investment_brain_concepts
 from digital_twin.domain.portfolio_ontology_research_concepts import add_governed_claim_concepts
 from digital_twin.domain.ontology_schema import add_entity
-from digital_twin.domain.portfolio import utc_now_iso
+from digital_twin.domain.portfolio import AccountSnapshot, PortfolioSummary, utc_now_iso
+from digital_twin.domain.market_data import normalize_position
 from digital_twin.infrastructure.mysql_investment_decision_episodes import due_outcome_horizon_minutes
 from digital_twin.infrastructure.investment_research_gateway import (
     CompositeInvestmentResearchGateway,
@@ -319,7 +322,11 @@ class InvestmentBrainTest(unittest.TestCase):
                     "outcomeId": "outcome-" + str(index),
                     "selectedHypothesisStatus": status,
                     "priceChangeFromDecisionPct": -5 if status == "directionally-corroborated" else 3,
-                    "payload": {"horizonMinutes": 1440},
+                    "payload": {
+                        "horizonMinutes": 1440,
+                        "observationTiming": "on-time",
+                        "calibrationEligibility": "eligible",
+                    },
                 }],
             })
         result = evaluate_decision_performance(episodes, minimum_sample_count=3)
@@ -752,6 +759,69 @@ class InvestmentBrainTest(unittest.TestCase):
         self.assertEqual(0, due_outcome_horizon_minutes(episode, "2026-07-19T02:00:00Z", "60,1440"))
         self.assertEqual(1440, due_outcome_horizon_minutes(episode, "2026-07-20T01:00:00Z", "60,1440"))
 
+    def test_outcome_timestamp_normalizes_legacy_kst_display_value(self):
+        self.assertEqual("2026-07-19T19:40:00Z", canonical_investment_timestamp("2026-07-20 04:40 KST"))
+        brain = hypothesis_set_from_relation_context(relation_context())
+        episode = DecisionEpisode.from_dict({
+            "episodeId": "episode-kst-time",
+            "accountId": "account-1",
+            "symbol": "005930",
+            "subjectName": "삼성전자",
+            "question": brain["question"],
+            "hypothesisSet": brain["hypothesisSet"],
+            "action": "HOLD",
+            "decidedAt": "2026-07-20 04:40 KST",
+        })
+        self.assertEqual(60, due_outcome_horizon_minutes(episode, "2026-07-19T20:40:00Z", "60,1440"))
+
+    def test_outcome_service_prefers_historical_observation_at_horizon(self):
+        class FakeEpisodeStore:
+            def __init__(self):
+                self.records = []
+
+            def pending_outcome_targets(self, account_id, observed_at, limit=0):
+                return [{
+                    "requestId": "target-1",
+                    "episodeId": "episode-1",
+                    "symbol": "005930",
+                    "horizonMinutes": 60,
+                    "targetAt": "2026-07-20T01:00:00Z",
+                }]
+
+            def record_outcome_observations(self, account_id, records):
+                self.records = list(records)
+                return [type("Outcome", (), {"outcome_id": "outcome-1"})()]
+
+        class FakeTimeSeriesStore:
+            def load_outcome_observations(self, account_id, targets, max_delay_minutes=0):
+                return {
+                    "target-1": {
+                        "currentPrice": 71000,
+                        "generatedAt": "2026-07-20T01:03:00Z",
+                        "sourceAsOf": "2026-07-20T01:03:00Z",
+                        "observationSource": "mysql-market-time-series",
+                        "observationBasis": "historical-market-time-series",
+                        "dataQuality": "actual",
+                    },
+                }
+
+        snapshot = AccountSnapshot(
+            "account-1", "테스트", "toss", "live", "ok", "2026-07-20T03:00:00Z",
+            PortfolioSummary(1000000, 0, 1000000, [], [], 0),
+            positions=[normalize_position({
+                "symbol": "005930", "name": "삼성전자", "market": "KR", "currency": "KRW",
+                "currentPrice": 73000, "dataQuality": "actual",
+            })],
+        )
+        store = FakeEpisodeStore()
+        result = InvestmentOutcomeObservationService(store, FakeTimeSeriesStore()).observe_snapshot(snapshot)
+
+        self.assertEqual("observed", result["status"])
+        self.assertEqual(1, result["historicalObservationCount"])
+        self.assertEqual(0, result["snapshotFallbackCount"])
+        self.assertEqual("2026-07-20T01:03:00Z", store.records[0]["observedAt"])
+        self.assertEqual(71000, store.records[0]["facts"]["currentPrice"])
+
     def test_hypothesis_calibration_uses_independent_episode_outcomes(self):
         brain = hypothesis_set_from_relation_context(relation_context())
         hypothesis_set = brain["hypothesisSet"]
@@ -769,6 +839,7 @@ class InvestmentBrainTest(unittest.TestCase):
                     "outcomeId": "outcome-" + str(index),
                     "observedAt": "2026-07-2" + str(index) + "T01:00:00Z",
                     "selectedHypothesisStatus": status,
+                    "payload": {"calibrationEligibility": "eligible"},
                 }],
             })
         episodes.append({
@@ -777,6 +848,7 @@ class InvestmentBrainTest(unittest.TestCase):
                 "outcomeId": "outcome-duplicate",
                 "observedAt": "2026-07-29T01:00:00Z",
                 "selectedHypothesisStatus": "directionally-corroborated",
+                "payload": {"calibrationEligibility": "eligible"},
             }],
         })
 

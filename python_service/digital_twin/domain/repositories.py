@@ -245,6 +245,21 @@ class DecisionEpisodeRepository(Protocol):
     ) -> List[ObservedOutcome]:
         ...
 
+    def pending_outcome_targets(
+        self,
+        account_id: str,
+        observed_at: str = "",
+        limit: int = 0,
+    ) -> List[Dict[str, object]]:
+        ...
+
+    def record_outcome_observations(
+        self,
+        account_id: str,
+        observations: Iterable[Dict[str, object]],
+    ) -> List[ObservedOutcome]:
+        ...
+
     def save_learning_proposal(self, proposal: LearningProposal) -> LearningProposal:
         ...
 
@@ -374,6 +389,15 @@ class MarketTimeSeriesRepository(Protocol):
         candles_by_symbol: Dict[str, List[Dict[str, object]]],
         metadata_by_symbol: Dict[str, Dict[str, object]] = None,
         provider: str = "toss-candles",
+    ) -> Dict[str, object]:
+        ...
+
+    def record_positions(
+        self,
+        account_id: str,
+        positions: Iterable[object],
+        observed_at: str,
+        provider: str = "",
     ) -> Dict[str, object]:
         ...
 

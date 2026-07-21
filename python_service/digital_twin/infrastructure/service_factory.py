@@ -301,6 +301,7 @@ def build_market_data_collection_runner(settings=None, event_publisher=None) -> 
             stores.data_pipeline_health_store(configured_settings),
             configured_settings,
         ),
+        decision_episode_store=stores.investment_decision_episode_store(configured_settings),
     )
 
 

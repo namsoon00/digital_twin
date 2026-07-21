@@ -86,6 +86,7 @@ class MarketDataCollectionRunner:
         sleep_fn=time.sleep,
         time_series_store=None,
         health_service=None,
+        decision_episode_store=None,
     ):
         self.account_repository = account_repository
         self.symbol_service = symbol_service
@@ -96,6 +97,7 @@ class MarketDataCollectionRunner:
         self.sleep_fn = sleep_fn
         self.time_series_store = time_series_store
         self.health_service = health_service
+        self.decision_episode_store = decision_episode_store
 
     def attach_pipeline_health(self, result: Dict[str, object]) -> Dict[str, object]:
         if not self.health_service or not hasattr(self.health_service, "record_market_data_collection"):
@@ -247,6 +249,64 @@ class MarketDataCollectionRunner:
             focused.append(position)
         return mode, status, token, focused
 
+    def outcome_observation_targets(
+        self,
+        account_entries: Iterable[Dict[str, object]],
+        excluded_symbols: Iterable[str] = None,
+    ) -> List[Tuple[Position, Dict[str, object]]]:
+        """Collect quotes for due decision outcomes without turning them into alerts.
+
+        A sold or removed watchlist symbol still needs a quote at the decision
+        horizon. These are bounded by the outcome store and are deliberately
+        tagged as background collection so only the feedback loop consumes
+        them.
+        """
+        if not self.decision_episode_store or not hasattr(self.decision_episode_store, "pending_outcome_targets"):
+            return []
+        excluded = {str(symbol or "").upper().strip() for symbol in excluded_symbols or [] if str(symbol or "").strip()}
+        selected_markets = set(self.markets())
+        result: List[Tuple[Position, Dict[str, object]]] = []
+        seen = set(excluded)
+        limit = max(1, min(self.price_batch_size(), int_setting(self.settings, "investmentBrainOutcomeEpisodeBatchSize", 200, 10, 1000)))
+        for entry in account_entries or []:
+            account = entry.get("account")
+            account_id = str(getattr(account, "account_id", "") or "")
+            if not account_id:
+                continue
+            try:
+                pending = self.decision_episode_store.pending_outcome_targets(account_id, utc_now_iso(), limit=limit)
+            except Exception:
+                continue
+            for target in pending:
+                symbol = str(target.get("symbol") or "").upper().strip()
+                if not symbol or symbol in seen:
+                    continue
+                cached = self.quote_cache.load("toss", MARKET_DATA_ACCOUNT_ID, symbol)
+                enriched = {}
+                if hasattr(self.symbol_service, "enrich"):
+                    try:
+                        enriched = self.symbol_service.enrich(symbol) or {}
+                    except Exception:
+                        enriched = {}
+                base = {
+                    **dict(cached or {}),
+                    **dict(target or {}),
+                    **dict(enriched or {}),
+                    "symbol": symbol,
+                    "name": str((enriched or {}).get("name") or target.get("subjectName") or (cached or {}).get("name") or symbol),
+                    "market": str((enriched or {}).get("market") or target.get("market") or (cached or {}).get("market") or ""),
+                    "currency": str((enriched or {}).get("currency") or target.get("currency") or (cached or {}).get("currency") or ""),
+                }
+                if normalize_market(str(base.get("market") or "")) not in selected_markets:
+                    continue
+                position = self.base_position(base)
+                position.source = "decision-outcome"
+                result.append((position, base))
+                seen.add(symbol)
+                if len(result) >= limit:
+                    return result
+        return result
+
     def merge_focus_market_data(
         self,
         provider: MarketDataProvider,
@@ -374,6 +434,31 @@ class MarketDataCollectionRunner:
                 "reason": str(error)[:180],
             }
 
+    def record_outcome_time_series(self, targets: Iterable[Tuple[Position, Dict[str, object]]]) -> Dict[str, object]:
+        if not self.time_series_store or not hasattr(self.time_series_store, "record_positions"):
+            return {"enabled": bool(self.time_series_store), "savedCount": 0, "symbolCount": 0}
+        positions = [
+            position for position, _base in targets or []
+            if str(getattr(position, "source", "") or "") == "decision-outcome"
+        ]
+        if not positions:
+            return {"enabled": True, "savedCount": 0, "symbolCount": 0}
+        try:
+            return self.time_series_store.record_positions(
+                MARKET_DATA_ACCOUNT_ID,
+                positions,
+                utc_now_iso(),
+                provider="market-data-collector:decision-outcome",
+            )
+        except Exception as error:  # noqa: BLE001 - quote cache collection must survive feedback history failure.
+            return {
+                "enabled": True,
+                "savedCount": 0,
+                "symbolCount": 0,
+                "status": "error",
+                "reason": str(error)[:180],
+            }
+
     def run_once(self, force: bool = False) -> Dict[str, object]:
         if not self.enabled() and not force:
             return self.attach_pipeline_health({"status": "disabled", "savedCount": 0})
@@ -429,13 +514,17 @@ class MarketDataCollectionRunner:
             for position in (entry.get("positions") or [])
             if str(position.symbol or "").strip()
         ]
-        market_signal_targets = self.market_signal_targets(focused_symbols)
-        focused_by_account, market_signal_targets, merge_summary = self.merge_focus_market_data(
+        outcome_targets = self.outcome_observation_targets(focused_by_account, focused_symbols)
+        auxiliary_exclusions = focused_symbols + [str(position.symbol or "").upper() for position, _base in outcome_targets]
+        market_signal_targets = self.market_signal_targets(auxiliary_exclusions)
+        auxiliary_targets = list(market_signal_targets) + list(outcome_targets)
+        focused_by_account, auxiliary_targets, merge_summary = self.merge_focus_market_data(
             merge_provider,
             merge_token,
             focused_by_account,
-            market_signal_targets,
+            auxiliary_targets,
         )
+        outcome_time_series = self.record_outcome_time_series(auxiliary_targets)
         if not merge_summary.get("symbols"):
             return self.attach_pipeline_health({
                 "status": "fresh",
@@ -489,20 +578,27 @@ class MarketDataCollectionRunner:
                     if assessment.passed:
                         material_symbols.append(symbol)
             account_symbol_counts[account.account_id] = account_count
-        for position, base in market_signal_targets:
+        outcome_saved = 0
+        outcome_symbols: List[str] = []
+        for position, base in auxiliary_targets:
             symbol = str(position.symbol or "").upper()
             if not symbol or symbol in global_saved_symbols:
                 continue
-            payload = position_payload(position, base, "market-signal")
-            payload["collectionTarget"] = "market-proxy"
+            is_outcome_target = str(getattr(position, "source", "") or "") == "decision-outcome"
+            payload = position_payload(position, base, "decision-outcome" if is_outcome_target else "market-signal")
+            payload["collectionTarget"] = "decision-outcome" if is_outcome_target else "market-proxy"
             if not number(payload.get("currentPrice")) and not any(number(payload.get(key)) for key in ["ma20", "ma60", "volume"]):
                 continue
             cached = self.quote_cache.load("toss", MARKET_DATA_ACCOUNT_ID, symbol)
             change = market_fact_change(cached, payload)
             self.quote_cache.save("toss", MARKET_DATA_ACCOUNT_ID, symbol, payload)
             global_saved_symbols.add(symbol)
-            market_signal_saved += 1
-            market_signal_symbols.append(symbol)
+            if is_outcome_target:
+                outcome_saved += 1
+                outcome_symbols.append(symbol)
+            else:
+                market_signal_saved += 1
+                market_signal_symbols.append(symbol)
             saved += 1
             if change.get("changed"):
                 changed += 1
@@ -516,7 +612,10 @@ class MarketDataCollectionRunner:
             "status": "ok",
             "provider": "toss",
             "markets": markets,
-            "collectionScope": "account-focus+market-signals" if market_signal_targets else "account-focus",
+            "collectionScope": (
+                "account-focus+market-signals+decision-outcomes" if outcome_targets
+                else ("account-focus+market-signals" if auxiliary_targets else "account-focus")
+            ),
             "accountCount": len(accounts),
             "liveAccountCount": len(focused_by_account),
             "unavailableAccounts": unavailable_accounts,
@@ -524,9 +623,13 @@ class MarketDataCollectionRunner:
             "symbols": symbols,
             "selectedCount": len(symbols),
             "accountSelectedCount": sum(account_symbol_counts.values()),
-            "marketSignalSelectedCount": len(market_signal_targets),
+            "marketSignalSelectedCount": len([item for item in auxiliary_targets if str(getattr(item[0], "source", "") or "") != "decision-outcome"]),
             "marketSignalSavedCount": market_signal_saved,
             "marketSignalSymbols": market_signal_symbols,
+            "decisionOutcomeSelectedCount": len(outcome_targets),
+            "decisionOutcomeSavedCount": outcome_saved,
+            "decisionOutcomeSymbols": outcome_symbols,
+            "decisionOutcomeTimeSeriesSavedCount": int(outcome_time_series.get("savedCount") or 0),
             "priceCount": int(merge_summary.get("priceCount") or 0),
             "candleCount": int(merge_summary.get("candleCount") or 0),
             "dailyHistorySavedCount": int(merge_summary.get("dailyHistorySavedCount") or 0),
@@ -592,7 +695,7 @@ class MarketDataCollectionRunner:
             "marketSignalCollectionEnabled": self.market_signal_collection_enabled(),
             "marketSignalBatchSize": self.market_signal_batch_size(),
             "maxAgeMinutes": self.max_age_minutes(),
-            "collectionScope": "account-focus+market-signals",
+            "collectionScope": "account-focus+market-signals+decision-outcomes",
             "cache": self.quote_cache.summary("toss", MARKET_DATA_ACCOUNT_ID),
             "symbolUniverse": self.symbol_service.summary(),
         }

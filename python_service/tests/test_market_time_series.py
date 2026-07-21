@@ -101,6 +101,19 @@ class MarketTimeSeriesTests(unittest.TestCase):
         self.assertIn("INSERT IGNORE INTO market_time_series_observations", connection.calls[0][0])
         self.assertTrue(all("ON DUPLICATE KEY UPDATE" in sql for sql, _params in connection.calls[1:]))
 
+    def test_background_outcome_quote_creates_temporal_observation(self):
+        store = MySQLMarketTimeSeriesStore.__new__(MySQLMarketTimeSeriesStore)
+        store.runtime_settings = {"marketTimeSeriesEnabled": "1"}
+        connection = RecordingConnection()
+        store.transaction = lambda: TransactionContext(connection)
+
+        result = store.record_positions("__market_data__", [position(135)], "2026-07-20T06:04:00Z", "outcome-test")
+
+        self.assertEqual(1, result["savedCount"])
+        self.assertEqual(3, result["aggregateCount"])
+        self.assertEqual(4, len(connection.calls))
+        self.assertIn("ON DUPLICATE KEY UPDATE", connection.calls[0][0])
+
     def test_tiered_retention_is_configurable(self):
         settings = {
             "marketTimeSeriesRawRetentionDays": "5",

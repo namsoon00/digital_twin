@@ -118,6 +118,7 @@ class OntologyLabService:
             default={},
         )
         result = dict(experiment.last_result or {})
+        promotion_gate = ontology_promotion_gate(experiment)
         return {
             "id": experiment.experiment_id,
             "title": experiment.title,
@@ -141,6 +142,7 @@ class OntologyLabService:
                 for key in ["status", "relationDelta", "score", "warningCount", "completedAt"]
                 if result.get(key) not in (None, "", [], {})
             },
+            "promotionGate": promotion_gate,
             "detailPath": "/api/ontology/experiments/" + experiment.experiment_id,
         }
 

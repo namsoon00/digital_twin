@@ -9,6 +9,7 @@ const vm = require("vm");
 
 const rootDir = path.resolve(__dirname, "..");
 const requestTimeoutMs = Number(process.env.SMOKE_REQUEST_TIMEOUT_MS || 30000);
+const flowLensReadyTimeoutMs = Math.max(1000, Number(process.env.FLOW_LENS_SMOKE_READY_TIMEOUT_MS || 30000) || 30000);
 
 function randomPort() {
   return 43000 + (crypto.randomBytes(2).readUInt16BE(0) % 1000);
@@ -183,7 +184,8 @@ function wait(ms) {
 
 async function requestReadyFlowLens(port, pathname) {
   let latest = null;
-  for (let attempt = 0; attempt < 100; attempt += 1) {
+  const maxAttempts = Math.ceil(flowLensReadyTimeoutMs / 100);
+  for (let attempt = 0; attempt < maxAttempts; attempt += 1) {
     latest = await request(port, pathname);
     if (latest.statusCode !== 200) return latest;
     const payload = JSON.parse(latest.body);

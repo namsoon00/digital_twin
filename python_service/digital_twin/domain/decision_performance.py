@@ -54,6 +54,7 @@ def performance_observations(episodes: Iterable[object]) -> List[Dict[str, objec
             payload = outcome.get("payload") if isinstance(outcome.get("payload"), dict) else {}
             status = str(outcome.get("selectedHypothesisStatus") or "inconclusive")
             raw_return = number(outcome.get("priceChangeFromDecisionPct"))
+            calibration_eligibility = str(payload.get("calibrationEligibility") or "legacy-unverified")
             observations.append({
                 "episodeId": str(episode.get("episodeId") or ""),
                 "accountId": str(episode.get("accountId") or ""),
@@ -67,6 +68,10 @@ def performance_observations(episodes: Iterable[object]) -> List[Dict[str, objec
                 "status": status,
                 "corroborated": status == "directionally-corroborated",
                 "decisive": status in DECISIVE_STATUSES,
+                "calibrationEligibility": calibration_eligibility,
+                "calibrationEligible": calibration_eligibility == "eligible",
+                "observationTiming": str(payload.get("observationTiming") or "legacy-unknown"),
+                "observationDelayMinutes": number(payload.get("observationDelayMinutes")),
                 "rawReturnPct": raw_return,
                 "actionAdjustedReturnPct": action_adjusted_return(str(episode.get("action") or ""), raw_return),
                 "observedAt": str(outcome.get("observedAt") or ""),
@@ -107,10 +112,11 @@ def metric_slice(
     minimum_sample_count: int = 5,
 ) -> Dict[str, object]:
     rows = list(observations or [])
-    decisive = [item for item in rows if item.get("decisive")]
+    eligible_rows = [item for item in rows if item.get("calibrationEligible")]
+    decisive = [item for item in eligible_rows if item.get("decisive")]
     corroborated = [item for item in decisive if item.get("corroborated")]
     contradicted = [item for item in decisive if not item.get("corroborated")]
-    adjusted = [number(item.get("actionAdjustedReturnPct")) for item in rows if item.get("actionAdjustedReturnPct") is not None]
+    adjusted = [number(item.get("actionAdjustedReturnPct")) for item in eligible_rows if item.get("actionAdjustedReturnPct") is not None]
     negative_adjusted = [value for value in adjusted if value < 0]
     avg_adjusted = sum(adjusted) / len(adjusted) if adjusted else 0.0
     enough_samples = len(decisive) >= max(1, int(minimum_sample_count or 1))
@@ -122,16 +128,22 @@ def metric_slice(
         "label": str(label or key or "전체"),
         "outcomeCount": len(rows),
         "independentEpisodeCount": len({str(item.get("episodeId") or "") for item in rows if str(item.get("episodeId") or "")}),
+        "calibrationEligibleOutcomeCount": len(eligible_rows),
+        "calibrationEligibleEpisodeCount": len({str(item.get("episodeId") or "") for item in eligible_rows if str(item.get("episodeId") or "")}),
+        "excludedOutcomeCount": len(rows) - len(eligible_rows),
+        "delayedOutcomeCount": len([item for item in rows if item.get("observationTiming") == "delayed"]),
+        "legacyUnverifiedOutcomeCount": len([item for item in rows if item.get("calibrationEligibility") == "legacy-unverified"]),
         "decisiveOutcomeCount": len(decisive),
         "corroboratedCount": len(corroborated),
         "contradictedCount": len(contradicted),
-        "inconclusiveCount": len(rows) - len(decisive),
-        "averageRawReturnPct": round(sum(number(item.get("rawReturnPct")) for item in rows) / len(rows), 4) if rows else 0.0,
+        "inconclusiveCount": len([item for item in rows if not item.get("decisive")]),
+        "averageRawReturnPct": round(sum(number(item.get("rawReturnPct")) for item in eligible_rows) / len(eligible_rows), 4) if eligible_rows else 0.0,
+        "observedAverageRawReturnPct": round(sum(number(item.get("rawReturnPct")) for item in rows) / len(rows), 4) if rows else 0.0,
         "averageActionAdjustedReturnPct": round(avg_adjusted, 4),
         "averageDownsidePct": round(sum(negative_adjusted) / len(negative_adjusted), 4) if negative_adjusted else 0.0,
         "worstActionAdjustedReturnPct": round(min(adjusted), 4) if adjusted else 0.0,
         "minimumSampleCount": int(minimum_sample_count or 0),
-        "sampleStatus": "usable" if enough_samples else "insufficient-history",
+        "sampleStatus": "usable" if enough_samples else ("awaiting-eligible-outcomes" if rows and not eligible_rows else "insufficient-history"),
         "corroborationState": corroboration,
         "actionReturnState": return_state,
         "promotionEligible": promotion_eligible,
@@ -176,6 +188,8 @@ def evaluate_decision_performance(
     episode_rows = [episode_payload(item) for item in episodes or []]
     observations = performance_observations(episode_rows)
     episodes_with_outcomes = {str(item.get("episodeId") or "") for item in observations if str(item.get("episodeId") or "")}
+    calibration_episodes = {str(item.get("episodeId") or "") for item in observations if item.get("calibrationEligible") and str(item.get("episodeId") or "")}
+    calibration_observations = [item for item in observations if item.get("calibrationEligible")]
     coverage = (len(episodes_with_outcomes) / len(episode_rows) * 100.0) if episode_rows else 0.0
     return {
         "status": "ok" if observations else "insufficient-data",
@@ -183,6 +197,9 @@ def evaluate_decision_performance(
         "episodeWithOutcomeCount": len(episodes_with_outcomes),
         "outcomeCoveragePct": round(coverage, 2),
         "outcomeCount": len(observations),
+        "calibrationEligibleEpisodeCount": len(calibration_episodes),
+        "calibrationEligibleOutcomeCount": len(calibration_observations),
+        "calibrationCoveragePct": round((len(calibration_episodes) / len(episode_rows) * 100.0), 2) if episode_rows else 0.0,
         "minimumSampleCount": int(minimum_sample_count or 0),
         "summary": metric_slice(observations, "all", "전체 판단", minimum_sample_count),
         "byHorizon": grouped_metrics(observations, "horizonMinutes", minimum_sample_count),

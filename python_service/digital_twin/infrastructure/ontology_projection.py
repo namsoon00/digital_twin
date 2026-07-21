@@ -2,6 +2,7 @@ from copy import deepcopy
 from typing import Dict, List, Set
 import hashlib
 
+from ..application.investment_outcome_observation_service import InvestmentOutcomeObservationService
 from ..domain.ontology_contracts import PortfolioOntology
 from ..domain.decision_performance import evaluate_decision_performance
 from ..domain.ontology_rulebox_catalog import default_graph_inference_rules
@@ -117,6 +118,7 @@ class PortfolioOntologyProjectionRecorder:
         data_pipeline_health_store=None,
         market_time_series_store=None,
         projection_run_store=None,
+        outcome_observation_service=None,
         settings: Dict[str, object] = None,
         source: str = "monitoring",
     ):
@@ -128,6 +130,11 @@ class PortfolioOntologyProjectionRecorder:
         self.market_time_series_store = market_time_series_store
         self.projection_run_store = projection_run_store
         self.settings = dict(settings or {})
+        self.outcome_observation_service = outcome_observation_service or InvestmentOutcomeObservationService(
+            decision_episode_store=decision_episode_store,
+            market_time_series_store=market_time_series_store,
+            settings=self.settings,
+        )
         self.source = source or "monitoring"
 
     def record_snapshot(
@@ -870,9 +877,9 @@ class PortfolioOntologyProjectionRecorder:
                 active_tbox = {"status": "error", "reason": str(error)[:180], "source": "code-fallback"}
         as_of = str(snapshot.generated_at or "").strip()
         snapshot_seed = "|".join([str(snapshot.account_id or ""), as_of or "unknown"])
+        decision_episodes = self.decision_episode_context(snapshot)
         metadata = dict(snapshot.metadata or {})
         account_context = metadata.get("accountContext") if isinstance(metadata.get("accountContext"), dict) else {}
-        decision_episodes = self.decision_episode_context(snapshot)
         decision_performance = evaluate_decision_performance(
             decision_episodes,
             minimum_sample_count=int(self.performance_setting("investmentBrainPerformanceMinimumSamples", 5)),
@@ -937,36 +944,24 @@ class PortfolioOntologyProjectionRecorder:
     def decision_episode_context(self, snapshot: AccountSnapshot) -> List[Dict[str, object]]:
         if not self.decision_episode_store:
             return []
-        symbols = []
-        for position in list(snapshot.positions or []) + list(snapshot.watchlist or []):
-            symbol = str(getattr(position, "symbol", "") or "").upper().strip()
-            if not symbol or position.is_cash():
-                continue
-            symbols.append(symbol)
-            try:
-                self.decision_episode_store.record_observation(
-                    snapshot.account_id,
-                    symbol,
-                    {
-                        "currentPrice": getattr(position, "current_price", 0),
-                        "profitLossRate": getattr(position, "profit_loss_rate", 0),
-                        "priceChangeRate": getattr(position, "change_rate", 0),
-                        "observedAt": snapshot.generated_at,
-                    },
-                    snapshot.generated_at,
-                )
-            except Exception:  # noqa: BLE001 - feedback memory must not block ABox projection.
-                continue
-        episodes = []
-        for symbol in list(dict.fromkeys(symbols)):
-            try:
-                episodes.extend(
-                    item.to_dict()
-                    for item in self.decision_episode_store.list(snapshot.account_id, symbol, limit=6)
-                )
-            except Exception:  # noqa: BLE001 - projection remains valid without historical memory.
-                continue
-        return episodes[:30]
+        try:
+            observation = self.outcome_observation_service.observe_snapshot(snapshot)
+            snapshot.metadata.setdefault("investmentBrain", {})["outcomeObservation"] = observation
+        except Exception as error:  # noqa: BLE001 - feedback memory must not block ABox projection.
+            snapshot.metadata.setdefault("investmentBrain", {})["outcomeObservation"] = {
+                "status": "error",
+                "reason": str(error)[:180],
+            }
+        try:
+            # Outcome facts must remain visible after a position is sold or
+            # removed from a watchlist. The cognitive ABox is bounded, but it
+            # is account-history based rather than current-symbol based.
+            return [
+                item.to_dict()
+                for item in self.decision_episode_store.list(snapshot.account_id, limit=30)
+            ]
+        except Exception:  # noqa: BLE001 - projection remains valid without historical memory.
+            return []
 
     def hypothesis_proposal_context(self, snapshot: AccountSnapshot) -> List[Dict[str, object]]:
         if not self.hypothesis_proposal_store or not hasattr(self.hypothesis_proposal_store, "list_hypothesis_proposals"):

@@ -1,11 +1,14 @@
 from collections import defaultdict
+from datetime import timedelta
 from typing import Dict, Iterable, List
 
 from ..domain.market_time_series import (
     MarketTimeSeriesObservation,
     bucket_start,
     granularity_preferences,
+    iso_utc,
     market_session_date,
+    parse_timestamp,
     required_session_count,
 )
 from ..domain.portfolio import AccountSnapshot
@@ -86,6 +89,43 @@ class MySQLMarketTimeSeriesStore(MySQLOperationalConnection):
     def record_snapshots(self, snapshots: Iterable[AccountSnapshot]) -> Dict[str, object]:
         with self.transaction() as connection:
             return self.record_snapshots_with_connection(connection, snapshots)
+
+    def record_positions(
+        self,
+        account_id: str,
+        positions: Iterable[object],
+        observed_at: str,
+        provider: str = "",
+    ) -> Dict[str, object]:
+        """Persist non-account quote observations for later outcome matching."""
+        if not self.enabled():
+            return {"enabled": False, "savedCount": 0, "aggregateCount": 0}
+        saved = 0
+        aggregate_count = 0
+        symbols = set()
+        with self.transaction() as connection:
+            for position in positions or []:
+                if not position or position.is_cash():
+                    continue
+                observation = MarketTimeSeriesObservation.from_position(
+                    str(account_id or GLOBAL_MARKET_ACCOUNT_ID),
+                    position,
+                    observed_at,
+                    provider=provider,
+                )
+                if not observation.valid():
+                    continue
+                if self.insert_observation_with_connection(connection, observation, replace=True):
+                    saved += 1
+                    symbols.add(observation.symbol)
+                for granularity in ["15m", "1h", "1d"]:
+                    aggregate_count += self.upsert_aggregate_with_connection(connection, observation, granularity)
+        return {
+            "enabled": True,
+            "savedCount": saved,
+            "aggregateCount": aggregate_count,
+            "symbolCount": len(symbols),
+        }
 
     def record_daily_candles(
         self,
@@ -284,6 +324,100 @@ class MySQLMarketTimeSeriesStore(MySQLOperationalConnection):
         if account_sessions >= global_sessions and account_rows:
             return account_rows
         return global_rows or account_rows
+
+    def load_outcome_observations(
+        self,
+        account_id: str,
+        targets: Iterable[Dict[str, object]],
+        max_delay_minutes: int = 180,
+    ) -> Dict[str, Dict[str, object]]:
+        """Return the first usable stored market observation after each target.
+
+        An outcome must be tied to the decision's configured horizon. Selecting
+        the latest quote here would turn a multi-day-late quote into a false
+        60-minute result. The query keeps the nearest account and global time
+        series observations separately, then prefers the account observation.
+        """
+        try:
+            delay_minutes = int(float(max_delay_minutes or 180))
+        except (TypeError, ValueError):
+            delay_minutes = 180
+        delay_minutes = max(1, min(60 * 24 * 14, delay_minutes))
+        clean_targets = []
+        for raw in targets or []:
+            target = dict(raw or {}) if isinstance(raw, dict) else {}
+            request_id = str(target.get("requestId") or "").strip()
+            symbol = str(target.get("symbol") or "").upper().strip()
+            target_at = iso_utc(target.get("targetAt"))
+            parsed_target = parse_timestamp(target_at)
+            if not request_id or not symbol or not parsed_target:
+                continue
+            clean_targets.append({
+                "requestId": request_id,
+                "symbol": symbol,
+                "targetAt": target_at,
+                "deadlineAt": (parsed_target + timedelta(minutes=delay_minutes)).isoformat().replace("+00:00", "Z"),
+            })
+            if len(clean_targets) >= 1000:
+                break
+        if not self.enabled() or not clean_targets:
+            return {}
+        target_sql = " UNION ALL ".join(
+            "SELECT %s AS request_key, %s AS symbol, %s AS target_at, %s AS deadline_at"
+            for _ in clean_targets
+        )
+        params: List[object] = []
+        for target in clean_targets:
+            params.extend([target["requestId"], target["symbol"], target["targetAt"], target["deadlineAt"]])
+        params.extend([str(account_id or ""), GLOBAL_MARKET_ACCOUNT_ID])
+        with self.connect() as connection:
+            rows = connection.execute(
+                """
+                SELECT * FROM (
+                    SELECT target_requests.request_key,
+                           observations.*,
+                           ROW_NUMBER() OVER (
+                               PARTITION BY target_requests.request_key, observations.account_id
+                               ORDER BY observations.observed_at ASC,
+                                        CASE observations.granularity
+                                            WHEN '3m' THEN 1
+                                            WHEN '15m' THEN 2
+                                            WHEN '1h' THEN 3
+                                            WHEN '1d' THEN 4
+                                            ELSE 5
+                                        END ASC,
+                                        observations.bucket_at ASC
+                           ) AS row_number_value
+                    FROM (""" + target_sql + """) AS target_requests
+                    JOIN market_time_series_observations observations
+                      ON observations.symbol = target_requests.symbol
+                     AND observations.account_id IN (%s, %s)
+                     AND observations.current_price > 0
+                     AND observations.observed_at >= target_requests.target_at
+                     AND observations.observed_at <= target_requests.deadline_at
+                ) ranked
+                WHERE ranked.row_number_value = 1
+                """,
+                params,
+            ).fetchall()
+        preferred: Dict[str, Dict[str, object]] = {}
+        for row in rows or []:
+            request_id = str(row.get("request_key") or "")
+            if not request_id:
+                continue
+            current = preferred.get(request_id)
+            is_account_row = str(row.get("account_id") or "") == str(account_id or "")
+            current_is_account_row = str((current or {}).get("account_id") or "") == str(account_id or "")
+            if current and current_is_account_row and not is_account_row:
+                continue
+            preferred[request_id] = row
+        results: Dict[str, Dict[str, object]] = {}
+        for request_id, row in preferred.items():
+            payload = self.observation_payload(row)
+            payload["outcomeRequestId"] = request_id
+            payload["observationBasis"] = "historical-market-time-series"
+            results[request_id] = payload
+        return results
 
     def limit_for_window(
         self,

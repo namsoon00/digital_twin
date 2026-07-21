@@ -231,6 +231,13 @@ def add_investment_brain_concepts(
                 "profitLossRate": outcome.get("profitLossRate"),
                 "priceChangeFromDecisionPct": outcome.get("priceChangeFromDecisionPct"),
                 "selectedHypothesisStatus": outcome.get("selectedHypothesisStatus"),
+                "horizonMinutes": (outcome.get("payload") or {}).get("horizonMinutes") if isinstance(outcome.get("payload"), dict) else None,
+                "targetAt": (outcome.get("payload") or {}).get("targetAt") if isinstance(outcome.get("payload"), dict) else "",
+                "observationTiming": (outcome.get("payload") or {}).get("observationTiming") if isinstance(outcome.get("payload"), dict) else "legacy-unknown",
+                "calibrationEligibility": (outcome.get("payload") or {}).get("calibrationEligibility") if isinstance(outcome.get("payload"), dict) else "legacy-unverified",
+                "observationSource": (outcome.get("payload") or {}).get("observationSource") if isinstance(outcome.get("payload"), dict) else "",
+                "sourceAsOf": (outcome.get("payload") or {}).get("sourceAsOf") if isinstance(outcome.get("payload"), dict) else "",
+                "dataQuality": (outcome.get("payload") or {}).get("dataQuality") if isinstance(outcome.get("payload"), dict) else "",
                 "source": "investment-brain-feedback",
             })
             add_relation(graph, episode_id, outcome_id, "RESULTED_IN_OUTCOME", weight=1.0, properties={"source": "investment-brain-feedback"})
@@ -304,7 +311,12 @@ def add_hypothesis_calibration_concepts(
             item for item in hypothesis_set.get("hypotheses") or []
             if isinstance(item, dict) and str(item.get("hypothesisId") or "") == selected_id
         ), None)
-        outcomes = [item for item in episode.get("outcomes") or [] if isinstance(item, dict)]
+        outcomes = [
+            item for item in episode.get("outcomes") or []
+            if isinstance(item, dict)
+            and isinstance(item.get("payload"), dict)
+            and str((item.get("payload") or {}).get("calibrationEligibility") or "") == "eligible"
+        ]
         if not selected or not outcomes:
             continue
         latest = sorted(outcomes, key=lambda item: str(item.get("observedAt") or ""))[-1]

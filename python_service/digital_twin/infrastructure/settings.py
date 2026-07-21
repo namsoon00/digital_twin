@@ -824,12 +824,12 @@ def runtime_settings() -> Dict[str, str]:
         "typedbNativeRuleQueryTimeoutSeconds": value(
             "typedbNativeRuleQueryTimeoutSeconds",
             "TYPEDB_NATIVE_RULE_QUERY_TIMEOUT_SECONDS",
-            "3",
+            "6",
         ),
         "typedbNativeRuleExecutionBudgetSeconds": value(
             "typedbNativeRuleExecutionBudgetSeconds",
             "TYPEDB_NATIVE_RULE_EXECUTION_BUDGET_SECONDS",
-            "12",
+            "30",
         ),
         "typedbAutoResetEnabled": value("typedbAutoResetEnabled", "TYPEDB_AUTO_RESET_ENABLED", "1"),
         "typedbAgeResetEnabled": value("typedbAgeResetEnabled", "TYPEDB_AGE_RESET_ENABLED", "0"),

@@ -293,7 +293,7 @@ class TypeDBOntologyRepositoryTests(unittest.TestCase):
         self.assertEqual("typedb-schema-function-filtered-planned", result["nativeExecutionMode"])
         self.assertTrue(result["schemaFunctionUsed"])
         self.assertEqual(1, result["readQueryCount"])
-        self.assertEqual(3000, transaction_options[0].transaction_timeout_millis)
+        self.assertEqual(6000, transaction_options[0].transaction_timeout_millis)
         self.assertIn('has ontology-symbol "005930"', queries[0])
         self.assertIn("let $source in orbit_rule_", queries[0])
         self.assertIn("($candidate)", queries[0])
@@ -1250,6 +1250,8 @@ class TypeDBOntologyRepositoryTests(unittest.TestCase):
         self.assertFalse(factory_disabled.native_rule_execution_enabled())
         self.assertEqual(20.0, factory_default.query_timeout_seconds())
         self.assertEqual(20.0, factory_default.schema_operation_timeout_seconds())
+        self.assertEqual(6.0, factory_default.native_rule_query_timeout_seconds())
+        self.assertEqual(30.0, factory_default.native_rule_execution_budget_seconds())
 
     def test_typedb_symbol_filters_keep_numeric_stock_codes_as_strings(self):
         rule = next(item for item in default_graph_inference_rules() if item.rule_id == "graph.loss_guard.breakdown.v1")

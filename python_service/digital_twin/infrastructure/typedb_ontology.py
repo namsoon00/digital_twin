@@ -349,8 +349,13 @@ TYPEDB_NATIVE_REASONING_LAYER = "typedb-native-rule"
 # Version 2 accepts the candidate source as an input so TypeDB can constrain
 # rule evaluation before expanding relation branches for a changed holding.
 TYPEDB_SCHEMA_FUNCTION_PREFIX = "orbit_rule_active_abox_subject_v2_"
-DEFAULT_TYPEDB_NATIVE_RULE_QUERY_TIMEOUT_SECONDS = 3.0
-DEFAULT_TYPEDB_NATIVE_RULE_EXECUTION_BUDGET_SECONDS = 12.0
+# The production RuleBox currently plans up to 57 native functions for one
+# material symbol.  Measured local execution completes in roughly 16 seconds,
+# while the most complex combination rule can take just over four seconds.
+# Keep enough headroom for a complete generation; the reasoning scheduler's
+# projection cadence and circuit breaker bound aggregate CPU separately.
+DEFAULT_TYPEDB_NATIVE_RULE_QUERY_TIMEOUT_SECONDS = 6.0
+DEFAULT_TYPEDB_NATIVE_RULE_EXECUTION_BUDGET_SECONDS = 30.0
 TYPEDB_PROMOTED_NUMERIC_ATTRIBUTES = {
     "currentPrice": "ontology-current-price",
     "averagePrice": "ontology-average-price",

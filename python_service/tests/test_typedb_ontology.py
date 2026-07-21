@@ -2519,6 +2519,23 @@ class TypeDBOntologyRepositoryTests(unittest.TestCase):
         )
         kill.assert_called_once_with(123, service_manager.signal.SIGTERM)
 
+    def test_service_manager_launch_agent_allows_complete_shutdown(self):
+        with tempfile.TemporaryDirectory() as temp:
+            launch_agent = Path(temp) / "com.orbitalpha.services.plist"
+            supervisor_log = Path(temp) / "python-supervisor.log"
+            completed = SimpleNamespace(returncode=0, stdout="", stderr="")
+            with patch.object(service_manager, "launch_agent_path", return_value=launch_agent), \
+                    patch.object(service_manager, "supervisor_log_path", return_value=supervisor_log), \
+                    patch.object(service_manager.subprocess, "run", return_value=completed):
+                self.assertEqual(0, service_manager.install_supervisor())
+
+            with launch_agent.open("rb") as handle:
+                payload = service_manager.plistlib.load(handle)
+
+        self.assertEqual(180, payload["ExitTimeOut"])
+        self.assertTrue(payload["KeepAlive"])
+        self.assertTrue(payload["RunAtLoad"])
+
     def test_typedb_retention_resets_projection_data_when_size_exceeds_limit(self):
         with tempfile.TemporaryDirectory() as temp:
             data_path = Path(temp) / "typedb-data"

@@ -858,7 +858,7 @@ def stop_supervisor() -> None:
     except OSError:
         remove_pid(supervisor_pid_path())
         return
-    for _index in range(150):
+    for _index in range(900):
         if not pid_exists(pid):
             remove_pid(supervisor_pid_path())
             return
@@ -921,6 +921,7 @@ def install_supervisor() -> int:
         "WorkingDirectory": str(ROOT_DIR),
         "RunAtLoad": True,
         "KeepAlive": True,
+        "ExitTimeOut": 180,
         "ProcessType": "Background",
         "EnvironmentVariables": {"PYTHONUNBUFFERED": "1"},
         "StandardOutPath": str(supervisor_log_path()),

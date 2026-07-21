@@ -3067,29 +3067,29 @@
         title: "삼성전자",
         symbol: "005930",
         severity: "WATCH",
-        lines: ["인사이트 유형: 리스크 관리", "상태: 분할매도 권장 (77.6점)", "현재가: 101,300원", "평단가: 90,200원", "수익률: +12.2%", "수급: 거래량 1,200,000(1.4x), 거래액 1216억 원", "추세: 20일선보다 6.5% 낮음, 60일선보다 30.7% 낮음", "권장 액션: 분할매도·리밸런싱 기준 점검", "핵심 결론: 보유 판단과 외부 신호가 리스크 관리 쪽으로 기울었습니다.", "근거 신호: 보유 타이밍, 판단 변화, 거시 지표 변화", "다음 확인: 손절/분할축소 기준과 다음 조회 유지 여부를 확인하세요."],
-        criteria: ["설정: 온톨로지 관계 그래프에서 의미 있는 투자 인사이트가 생성될 때", "감지: 보유 타이밍, 판단 변화 · 관계 강도 72점 · 신뢰도 81%"]
+        lines: ["인사이트 유형: 리스크 관리", "판단: 수익 보호를 위한 분할축소 검토", "현재가: 101,300원", "평단가: 90,200원", "수익률: +12.2%", "수급: 거래량 1,200,000(1.4x), 거래액 1216억 원", "추세: 20일선보다 6.5% 낮음, 60일선보다 30.7% 낮음", "권장 대응: 보유 수량 일부를 줄일 기준 점검", "핵심 결론: 보유 판단과 외부 신호가 위험 관리 쪽으로 기울었습니다.", "근거 신호: 보유 타이밍, 판단 변화, 거시 지표 변화", "다음 확인: 손절/분할축소 기준과 다음 조회 유지 여부를 확인하세요."],
+        criteria: ["설정: TypeDB 관계 규칙에서 의미 있는 투자 변화가 확인될 때", "감지: 수익 보호와 가격 흐름 약화 조건이 함께 확인"]
       },
       modelBuy: {
         title: "삼성전자 매수 후보",
         symbol: "005930",
         severity: "WATCH",
-        lines: ["매수 판단 매수 후보 (78점)", "현재가: 71,000원", "평단가: 74,000원", "수익률: -4.1%", "적정가 대비 -12.4%", "거래량과 이동평균이 기준 이상"],
-        criteria: ["설정: 모델 매수 기준 매수 후보 이상 (74점)", "감지: 매수 후보 (78점)"]
+        lines: ["판단: 소액 진입 조건 확인", "현재가: 71,000원", "평단가: 74,000원", "수익률: -4.1%", "적정가 대비 -12.4%", "가격 흐름과 거래량 조건 확인"],
+        criteria: ["설정: TypeDB 진입 관계와 자료 상태가 모두 확인될 때", "감지: 가격 회복과 거래량 조건이 함께 확인"]
       },
       modelSell: {
         title: "엔비디아 분할매도 검토",
         symbol: "NVDA",
         severity: "ALERT",
-        lines: ["매도 판단 분할매도 압력 (74점)", "현재가: $180", "평단가: $142", "수익률: +26.8%", "목표 수익률 도달", "20일선 이탈 여부 확인"],
-        criteria: ["설정: 모델 매도 기준 분할매도 압력 이상 (72점)", "감지: 분할매도 압력 (74점)"]
+        lines: ["판단: 수익 보호를 위한 분할축소 검토", "현재가: $180", "평단가: $142", "수익률: +26.8%", "수익 보호 기준 확인", "20일선 이탈 여부 확인"],
+        criteria: ["설정: TypeDB 수익 보호 관계가 확인될 때", "감지: 수익 구간과 가격 흐름 약화가 함께 확인"]
       },
       watchlistBuyCandidate: {
         title: "Apple 관심종목 매수 후보",
         symbol: "AAPL",
         severity: "WATCH",
-        lines: ["관심종목 매수 후보 (78점)", "관심 종목", "현재 $185", "거래량과 이동평균이 기준 이상"],
-        criteria: ["설정: 관심종목 매수 기준 이상 (74점)", "감지: 매수 후보 (78점)"]
+        lines: ["판단: 관심 유지·진입 조건 확인", "관심 종목", "현재 $185", "거래량과 이동평균 조건 확인"],
+        criteria: ["설정: TypeDB 진입 관찰 관계가 확인될 때", "감지: 가격 흐름과 거래량 조건 확인"]
       },
       watchlistQuote: {
         title: "엔비디아",
@@ -3109,8 +3109,8 @@
         title: "SK하이닉스 매수·매도 타이밍",
         symbol: "000660",
         severity: "WATCH",
-        lines: ["상태 조건부 보유 (52점)", "현재가: 150,000원", "평단가: 155,000원", "수익률: -3.2%", "추세: 현재 150,000원, 20일선 144,000원(+4.2%)", "수급: 거래량 31,000(1.7x), 거래액 48억 원", "투자자: 외국인 +22,000, 기관 -8,000", "권장 액션: 보유 유지, 추가매수는 새 매수 신호가 뜰 때까지 보류"],
-        criteria: ["설정: 판단 상태가 위험/주의이거나 손익률이 -8% 이하일 때", "감지: 상태 조건부 보유 (52점), 수익률 -3.2%"]
+        lines: ["판단: 보유 유지·다음 조건 확인", "현재가: 150,000원", "평단가: 155,000원", "수익률: -3.2%", "추세: 현재 150,000원, 20일선 144,000원(+4.2%)", "수급: 거래량 31,000(1.7x), 거래액 48억 원", "투자자: 외국인 +22,000, 기관 -8,000", "권장 대응: 보유 유지, 추가매수는 가격 회복과 수급 확인 전 보류"],
+        criteria: ["설정: TypeDB 보유 관계가 새 조건 또는 의미 있는 변화로 확인될 때", "감지: 보유 손익과 가격 흐름 변화 확인"]
       },
       monitorHeartbeat: {
         title: "실시간 모니터링",
@@ -6520,7 +6520,9 @@
       check: { label: "조건 확인", tone: "caution", rank: 2 },
       act: { label: "대응 준비", tone: "danger", rank: 3 },
       immediate: { label: "즉시 재확인", tone: "danger", rank: 4 },
-      blocked: { label: "판단 보류", tone: "caution", rank: 5 }
+      // A blocked decision is a data/inference problem, not the strongest
+      // investment action. Keep it out of investment-priority ordering.
+      blocked: { label: "판단 보류", tone: "caution", rank: -1 }
     },
     data: {
       sufficient: { label: "판단 자료 충분", tone: "watch" },
@@ -6943,7 +6945,9 @@
       validationState: validationState,
       action: action || "서버 추론 대기",
       tone: String(decision.tone || (reviewLevel === "blocked" ? "caution" : "watch")),
-      priority: 5 - decisionStateMeta("review", reviewLevel, "blocked").rank
+      priority: reviewLevel === "blocked"
+        ? 99
+        : 5 - decisionStateMeta("review", reviewLevel, "blocked").rank
     };
   }
 
@@ -7179,7 +7183,7 @@
     return {
       action: item.action || (item.source === "watchlist" ? "관심 유지" : "보유 유지"),
       tone: item.tone || review.tone,
-      rank: 5 - review.rank,
+      rank: review.key === "blocked" ? 99 : 5 - review.rank,
       reviewLevel: review.key,
       dataState: decisionStateMeta("data", item.dataState, "partial").key,
       changeState: decisionStateMeta("change", item.changeState, "unchanged").key,
@@ -8980,7 +8984,7 @@
         raw: row
       };
     }).sort(function (a, b) {
-      if (a.blocked !== b.blocked) return a.blocked ? -1 : 1;
+      if (a.blocked !== b.blocked) return a.blocked ? 1 : -1;
       var reviewDiff = decisionStateMeta("review", b.reviewLevel, "normal").rank - decisionStateMeta("review", a.reviewLevel, "normal").rank;
       if (reviewDiff) return reviewDiff;
       return String(a.symbol || "").localeCompare(String(b.symbol || ""));

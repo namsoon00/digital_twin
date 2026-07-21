@@ -24,19 +24,11 @@ from .notification_rule_models import (
     default_state_cooldown_minutes,
 )
 from .notifications import NotificationJob
-from .ontology_threshold_policy import default_ontology_threshold_policy
 from .notification_signal_classification import fallback_terms_for_delivery_condition
 
 
-def mandatory_profit_loss_policy():
-    return default_ontology_threshold_policy().profit_loss_delivery
-
-
-MANDATORY_PROFIT_LOSS_MESSAGE_TYPES = set(mandatory_profit_loss_policy().message_types)
-MANDATORY_LOSS_RATE_THRESHOLD = mandatory_profit_loss_policy().loss_rate_threshold
-MANDATORY_PROFIT_RATE_THRESHOLD = mandatory_profit_loss_policy().profit_rate_threshold
-MANDATORY_LOSS_BANDS = list(mandatory_profit_loss_policy().loss_bands)
-MANDATORY_PROFIT_BANDS = list(mandatory_profit_loss_policy().profit_bands)
+PROFIT_LOSS_DELIVERY_MESSAGE_TYPES = {"investmentInsight", "holdingTiming"}
+PROFIT_LOSS_ACTION_GROUPS = {"lossControl", "profitTake"}
 MATERIAL_SOURCE_EVENT_MARKERS = [
     ":news:",
     ":article:",
@@ -327,75 +319,61 @@ def first_normalized_field_value(context: Dict[str, object], fields: List[str]) 
     return ""
 
 
-def format_profit_loss_percent(value: float) -> str:
-    prefix = "+" if float(value or 0) > 0 else ""
-    return prefix + format_rule_number(value) + "%"
+def typedb_action_groups(context: Dict[str, object]) -> List[str]:
+    """Return action groups already materialized by TypeDB.
+
+    Delivery may inspect these categorical groups to decide whether a real
+    TypeDB change can bypass repetition.  It must not recreate the loss or
+    profit thresholds from raw P&L values in Python.
+    """
+
+    relation_context = relation_context_from_notification_context(context or {})
+    groups: List[str] = []
+    queue: List[object] = [relation_context]
+    while queue:
+        current = queue.pop(0)
+        if isinstance(current, dict):
+            value = str(current.get("actionGroup") or current.get("action_group") or "").strip()
+            if value and value not in groups:
+                groups.append(value)
+            queue.extend(current.values())
+        elif isinstance(current, (list, tuple)):
+            queue.extend(current)
+    return groups
 
 
-def mandatory_loss_band_rank(value: float) -> int:
-    policy = mandatory_profit_loss_policy()
-    return len([threshold for threshold in policy.loss_bands if float(value or 0) <= threshold])
-
-
-def mandatory_profit_band_rank(value: float) -> int:
-    policy = mandatory_profit_loss_policy()
-    return len([threshold for threshold in policy.profit_bands if float(value or 0) >= threshold])
-
-
-def mandatory_profit_loss_delivery_reason(
+def typedb_profit_loss_delivery_reason(
     job: NotificationJob = None,
     previous_context: Dict[str, object] = None,
     allow_without_previous: bool = True,
 ) -> str:
     if job is None:
         return ""
-    policy = mandatory_profit_loss_policy()
-    if str(job.message_type or "") not in set(policy.message_types):
+    if str(job.message_type or "") not in PROFIT_LOSS_DELIVERY_MESSAGE_TYPES:
         return ""
-    profit_loss_rate = profit_loss_rate_from_context(job.context or {}, job.text or "")
-    if profit_loss_rate is None:
+    context = job.context or {}
+    if not graph_backed_notification(context):
         return ""
-    previous_rate = profit_loss_rate_from_context(previous_context or {})
-    if profit_loss_rate <= policy.loss_rate_threshold:
-        current_text = format_profit_loss_percent(profit_loss_rate)
-        if previous_rate is not None:
-            previous_text = format_profit_loss_percent(previous_rate)
-            if previous_rate > policy.loss_rate_threshold:
-                return "손실률 " + previous_text + " -> " + current_text + "로 필수 발송 구간에 신규 진입"
-            if mandatory_loss_band_rank(profit_loss_rate) > mandatory_loss_band_rank(previous_rate):
-                return "손실률 " + previous_text + " -> " + current_text + "로 더 깊은 손실 구간 진입"
-            return ""
-        if not allow_without_previous:
-            return ""
-        return (
-            "손실률 "
-            + current_text
-            + "가 필수 발송 구간("
-            + format_rule_number(policy.loss_rate_threshold)
-            + "% 이하)에 있음"
-        )
-    if profit_loss_rate >= policy.profit_rate_threshold:
-        current_text = format_profit_loss_percent(profit_loss_rate)
-        if previous_rate is not None:
-            previous_text = format_profit_loss_percent(previous_rate)
-            if previous_rate < policy.profit_rate_threshold:
-                return "수익률 " + previous_text + " -> " + current_text + "로 필수 발송 구간에 신규 진입"
-            if mandatory_profit_band_rank(profit_loss_rate) > mandatory_profit_band_rank(previous_rate):
-                return "수익률 " + previous_text + " -> " + current_text + "로 더 높은 수익 구간 진입"
-            return ""
-        if not allow_without_previous:
-            return ""
-        return (
-            "수익률 "
-            + current_text
-            + "가 필수 발송 구간(+"
-            + format_rule_number(policy.profit_rate_threshold)
-            + "% 이상)에 있음"
-        )
+    state = notification_state_context(context)
+    if state["reviewLevel"] == "blocked" or state["dataState"] in {"insufficient", "unavailable"}:
+        return ""
+    current_groups = set(typedb_action_groups(context))
+    relevant_groups = current_groups.intersection(PROFIT_LOSS_ACTION_GROUPS)
+    if not relevant_groups:
+        return ""
+    previous_context = previous_context or {}
+    previous_groups = set(typedb_action_groups(previous_context))
+    change_state = state["changeState"]
+    if change_state == "new-condition" and (allow_without_previous or not previous_groups.intersection(PROFIT_LOSS_ACTION_GROUPS)):
+        return "TypeDB 손익 관리 조건이 새로 성립"
+    if change_state == "worsening" and "lossControl" in relevant_groups:
+        return "TypeDB 손실 관리 조건과 손익 악화가 함께 확인"
+    if change_state == "improving" and "profitTake" in relevant_groups:
+        return "TypeDB 수익 보호 조건과 손익 개선이 함께 확인"
     return ""
 
 
-def apply_mandatory_profit_loss_delivery(
+def apply_typedb_profit_loss_delivery(
     decision: NotificationRuleDecision,
     job: NotificationJob = None,
     previous_context: Dict[str, object] = None,
@@ -405,7 +383,7 @@ def apply_mandatory_profit_loss_delivery(
     # 같은 필수 관문이 막힌 알림을 다시 살리면 ontology-first 계약이 깨진다.
     if not decision.should_send and decision.suppression_reason not in {"similar_repeat", "state_cooldown"}:
         return False
-    reason = mandatory_profit_loss_delivery_reason(
+    reason = typedb_profit_loss_delivery_reason(
         job,
         previous_context=previous_context,
         allow_without_previous=allow_without_previous,
@@ -418,11 +396,11 @@ def apply_mandatory_profit_loss_delivery(
     decision.gate_reason = reason
     decision.suppression_reason = ""
     decision.state_suppressed = False
-    decision.state_decision = "required-profit-loss-change"
+    decision.state_decision = "typedb-profit-loss-change"
     decision.state_reason = reason
     decision.similarity_bypassed = True
     decision.similarity_bypass_reason = reason
-    marker = "손익 필수 발송: " + reason
+    marker = "TypeDB 손익 조건 발송: " + reason
     if marker not in decision.reasons:
         decision.reasons.append(marker)
     return True
@@ -871,7 +849,7 @@ def apply_similarity_rule(
 ) -> NotificationRuleDecision:
     decision.similarity_recent_count = max(0, int(recent_count or 0))
     previous_context = previous_context or {}
-    if config.enabled and apply_mandatory_profit_loss_delivery(
+    if config.enabled and apply_typedb_profit_loss_delivery(
         decision,
         job,
         previous_context=previous_context,
@@ -926,7 +904,7 @@ def apply_state_cooldown_rule(
         decision.state_reason = "상태 fingerprint 없음"
         return decision
     previous_context = previous_context or {}
-    if apply_mandatory_profit_loss_delivery(
+    if apply_typedb_profit_loss_delivery(
         decision,
         job,
         previous_context=previous_context,

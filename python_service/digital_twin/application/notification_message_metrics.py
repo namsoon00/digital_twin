@@ -146,7 +146,7 @@ def _profit_loss_delta(context: Dict[str, object], reason: str = ""):
 
 
 def _profit_loss_reason_present(reason: str) -> bool:
-    return any(term in str(reason or "") for term in ["손익", "손실률", "수익률", "필수 발송 구간"])
+    return any(term in str(reason or "") for term in ["손익", "손실률", "수익률", "TypeDB 손익 조건"])
 
 
 def _profit_loss_change_summary(context: Dict[str, object], reason: str = "") -> str:

@@ -1053,7 +1053,7 @@ def notification_cooldown_release_summary(context: Dict[str, object]) -> str:
         if age_text and cooldown_text:
             return "마지막 발송 후 " + age_text + "이 지나 기본 쿨다운 " + cooldown_text + "을 충족했습니다."
         return reason or "지속 상태 요약 기준을 충족해 다시 보냈습니다."
-    if decision in {"meaningful-change", "required-profit-loss-change"}:
+    if decision in {"meaningful-change", "typedb-profit-loss-change"}:
         if before_cooldown and reason:
             return "마지막 발송 후 " + age_text + "으로 기본 쿨다운 " + cooldown_text + " 전이지만, " + reason + " 때문에 다시 보냈습니다."
         if reason:

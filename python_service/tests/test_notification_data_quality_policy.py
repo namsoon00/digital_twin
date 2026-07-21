@@ -774,7 +774,7 @@ class NotificationDataQualityPolicyTests(unittest.TestCase):
         self.assertIn("timeline=temporal_risk", notification_state_group_key(same_state).lower())
         self.assertIn("conflict=risk-dominant-with-support", notification_state_group_key(same_state).lower())
 
-    def test_critical_loss_new_band_entry_bypasses_state_cooldown(self):
+    def test_typedb_loss_control_new_condition_bypasses_state_cooldown(self):
         rule = default_notification_rule("investmentInsight")
         job = NotificationJob.create(
             "SK하이닉스 손실 점검",
@@ -793,6 +793,9 @@ class NotificationDataQualityPolicyTests(unittest.TestCase):
                     "confidence": 70,
                 },
                 "sourceSignalTypes": ["holdingTiming"],
+                "ontologyRelationContext": {
+                    "decision": {"actionGroup": "lossControl"},
+                },
             },
         )
         decision = evaluate_notification_rule(job, rule)
@@ -812,11 +815,11 @@ class NotificationDataQualityPolicyTests(unittest.TestCase):
         )
 
         self.assertTrue(decision.should_send)
-        self.assertEqual("required-profit-loss-change", decision.state_decision)
+        self.assertEqual("typedb-profit-loss-change", decision.state_decision)
         self.assertTrue(decision.similarity_bypassed)
-        self.assertIn("더 깊은 손실 구간", decision.state_reason)
+        self.assertIn("TypeDB 손익 관리 조건", decision.state_reason)
 
-    def test_critical_loss_additional_worsening_inside_same_band_bypasses_state_cooldown(self):
+    def test_typedb_loss_control_worsening_bypasses_state_cooldown(self):
         rule = default_notification_rule("investmentInsight")
         job = NotificationJob.create(
             "SK하이닉스 손실 점검",
@@ -835,6 +838,10 @@ class NotificationDataQualityPolicyTests(unittest.TestCase):
                     "confidence": 70,
                 },
                 "sourceSignalTypes": ["holdingTiming"],
+                "ontologyRelationContext": {
+                    "changeState": "worsening",
+                    "decision": {"actionGroup": "lossControl"},
+                },
             },
         )
         decision = evaluate_notification_rule(job, rule)
@@ -854,12 +861,11 @@ class NotificationDataQualityPolicyTests(unittest.TestCase):
         )
 
         self.assertTrue(decision.should_send)
-        self.assertEqual("meaningful-change", decision.state_decision)
+        self.assertEqual("typedb-profit-loss-change", decision.state_decision)
         self.assertTrue(decision.similarity_bypassed)
-        self.assertIn("손익률 추가 악화", decision.state_reason)
-        self.assertIn("-21.7% -> -23%", decision.state_reason)
+        self.assertIn("TypeDB 손실 관리 조건", decision.state_reason)
 
-    def test_mandatory_profit_band_bypasses_similarity_penalty(self):
+    def test_typedb_profit_take_improving_bypasses_similarity_penalty(self):
         rule = default_notification_rule("investmentInsight")
         rule.similarity_penalty = -100
         job = NotificationJob.create(
@@ -879,6 +885,10 @@ class NotificationDataQualityPolicyTests(unittest.TestCase):
                     "confidence": 70,
                 },
                 "sourceSignalTypes": ["holdingTiming"],
+                "ontologyRelationContext": {
+                    "changeState": "improving",
+                    "decision": {"actionGroup": "profitTake"},
+                },
             },
         )
         decision = evaluate_notification_rule(job, rule)
@@ -893,7 +903,38 @@ class NotificationDataQualityPolicyTests(unittest.TestCase):
 
         self.assertTrue(decision.should_send)
         self.assertTrue(decision.similarity_bypassed)
-        self.assertIn("+24.5%", decision.similarity_bypass_reason)
+        self.assertIn("TypeDB 수익 보호 조건", decision.similarity_bypass_reason)
+
+    def test_raw_profit_loss_value_cannot_bypass_cooldown_without_typedb_action_group(self):
+        rule = default_notification_rule("investmentInsight")
+        rule.similarity_bypass_conditions = []
+        job = NotificationJob.create(
+            "손실 구간 점검",
+            account_id="main",
+            message_type="investmentInsight",
+            context={
+                "severity": "WATCH",
+                "symbol": "000660",
+                "profitLossRate": -25.0,
+                "ontologyInsight": {"subject": "000660", "dispatchInsightType": "riskManagement"},
+                "sourceSignalTypes": ["holdingTiming"],
+            },
+        )
+        decision = evaluate_notification_rule(job, rule)
+
+        decision = apply_state_cooldown_rule(
+            decision,
+            rule,
+            sent_count=1,
+            previous_context={"profitLossRate": -20.0},
+            last_sent_at=utc_now_iso(),
+            last_sent_age_minutes=5,
+            job=job,
+        )
+
+        self.assertFalse(decision.should_send)
+        self.assertEqual("cooldown", decision.state_decision)
+        self.assertFalse(decision.similarity_bypassed)
 
     def test_profit_loss_worsening_bypasses_investment_insight_cooldown(self):
         rule = default_notification_rule("investmentInsight")

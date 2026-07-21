@@ -936,7 +936,10 @@ def install_supervisor() -> int:
     if result.returncode != 0:
         print("LaunchAgent install failed: " + str(result.stderr or result.stdout).strip())
         return result.returncode
-    subprocess.run(["launchctl", "kickstart", "-k", domain + "/com.orbitalpha.services"], capture_output=True, text=True)
+    # RunAtLoad normally starts the service during bootstrap. A non-destructive
+    # kickstart covers the narrow case where launchd has not scheduled it yet;
+    # ``-k`` would kill that first supervisor and interrupt healthy workers.
+    subprocess.run(["launchctl", "kickstart", domain + "/com.orbitalpha.services"], capture_output=True, text=True)
     print("Orbit Alpha supervisor installed: " + str(path))
     return 0
 

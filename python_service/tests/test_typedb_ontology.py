@@ -2526,7 +2526,7 @@ class TypeDBOntologyRepositoryTests(unittest.TestCase):
             completed = SimpleNamespace(returncode=0, stdout="", stderr="")
             with patch.object(service_manager, "launch_agent_path", return_value=launch_agent), \
                     patch.object(service_manager, "supervisor_log_path", return_value=supervisor_log), \
-                    patch.object(service_manager.subprocess, "run", return_value=completed):
+                    patch.object(service_manager.subprocess, "run", return_value=completed) as run:
                 self.assertEqual(0, service_manager.install_supervisor())
 
             with launch_agent.open("rb") as handle:
@@ -2535,6 +2535,10 @@ class TypeDBOntologyRepositoryTests(unittest.TestCase):
         self.assertEqual(180, payload["ExitTimeOut"])
         self.assertTrue(payload["KeepAlive"])
         self.assertTrue(payload["RunAtLoad"])
+        self.assertEqual(
+            ["launchctl", "kickstart", "gui/" + str(service_manager.os.getuid()) + "/com.orbitalpha.services"],
+            run.call_args_list[-1].args[0],
+        )
 
     def test_typedb_retention_resets_projection_data_when_size_exceeds_limit(self):
         with tempfile.TemporaryDirectory() as temp:

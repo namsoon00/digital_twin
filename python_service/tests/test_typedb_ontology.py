@@ -284,10 +284,14 @@ class TypeDBOntologyRepositoryTests(unittest.TestCase):
         self.assertEqual("typedb-schema-function-filtered-planned", result["nativeExecutionMode"])
         self.assertTrue(result["schemaFunctionUsed"])
         self.assertEqual(1, result["readQueryCount"])
-        self.assertEqual(17000, transaction_options[0].transaction_timeout_millis)
+        self.assertEqual(3000, transaction_options[0].transaction_timeout_millis)
         self.assertIn('has ontology-symbol "005930"', queries[0])
         self.assertIn("let $source in orbit_rule_", queries[0])
         self.assertIn("($candidate)", queries[0])
+        self.assertLess(
+            queries[0].index('has ontology-symbol "005930"'),
+            queries[0].index("let $source in orbit_rule_"),
+        )
         self.assertEqual(1, result["executionPlan"]["selectedRuleCount"])
 
     def test_typedb_native_rule_execution_plan_prunes_impossible_rules_before_function_calls(self):
@@ -315,29 +319,99 @@ class TypeDBOntologyRepositoryTests(unittest.TestCase):
 
     def test_active_abox_rule_context_reads_relation_types_without_evaluating_rule_values(self):
         repository = TypeDBOntologyGraphRepository("127.0.0.1:1729")
-        entity_rows = [{
-            "id": "stock:000660",
-            "kind": "stock",
-            "symbol": "000660",
-            "propertiesJson": json.dumps({"symbol": "000660"}),
-        }]
-        relation_rows = [{
-            "id": "relation:trend",
-            "source": "stock:000660",
-            "target": "trend:000660",
-            "type": "HAS_TREND_TRANSITION",
-        }]
-
-        with patch.object(repository, "read_entity_rows", return_value=entity_rows), patch.object(
+        with patch.object(
             repository,
-            "read_relation_rows_by_source_ids",
-            return_value=relation_rows,
+            "active_abox_relation_types_by_symbol",
+            return_value={
+                "status": "ok",
+                "symbols": ["000660"],
+                "sourceIdsBySymbol": {"000660": ["stock:000660"]},
+                "relationTypesBySymbol": {"000660": ["HAS_TREND_TRANSITION"]},
+                "relationCount": 1,
+            },
         ):
             context = repository.active_abox_rule_context(["000660"])
 
         self.assertEqual("ok", context["status"])
         self.assertEqual(["stock:000660"], context["sourceIdsBySymbol"]["000660"])
         self.assertEqual(["HAS_TREND_TRANSITION"], context["relationTypesBySymbol"]["000660"])
+
+    def test_active_abox_relation_type_reader_returns_compact_topology_only(self):
+        repository = TypeDBOntologyGraphRepository("127.0.0.1:1729")
+        queries = []
+
+        def read_rows(query, _columns, **_kwargs):
+            queries.append(query)
+            if "links (source: $stock, target: $other)" in query:
+                return [{
+                    "sourceId": "stock:000660",
+                    "symbol": "000660",
+                    "relationId": "relation:trend",
+                    "relationType": "HAS_TREND_TRANSITION",
+                }]
+            return [{
+                "sourceId": "stock:000660",
+                "symbol": "000660",
+                "relationId": "relation:portfolio",
+                "relationType": "IN_PORTFOLIO",
+            }]
+
+        with patch.object(repository, "read_rows", side_effect=read_rows):
+            topology = repository.active_abox_relation_types_by_symbol(["000660"])
+
+        self.assertEqual("ok", topology["status"])
+        self.assertEqual(["stock:000660"], topology["sourceIdsBySymbol"]["000660"])
+        self.assertEqual(
+            ["HAS_TREND_TRANSITION", "IN_PORTFOLIO"],
+            topology["relationTypesBySymbol"]["000660"],
+        )
+        self.assertEqual(2, topology["relationCount"])
+        self.assertEqual(2, len(queries))
+        self.assertTrue(all("ontology-json" not in query for query in queries))
+
+    def test_typedb_native_rule_query_timeout_returns_partial_result(self):
+        repository = TypeDBOntologyGraphRepository(
+            "127.0.0.1:1729",
+            retry_count=0,
+            native_rule_query_timeout_seconds=0.5,
+            native_rule_execution_budget_seconds=1,
+        )
+        rule = default_graph_inference_rules()[0]
+
+        class FakePromise:
+            def resolve(self):
+                raise RuntimeError("TypeDB read query timed out after 0.5s")
+
+        class FakeTransaction:
+            def __enter__(self):
+                return self
+
+            def __exit__(self, _exc_type, _exc, _traceback):
+                return False
+
+            def query(self, _query):
+                return FakePromise()
+
+        class FakeDriver:
+            def transaction(self, _database, _transaction_type, options=None):
+                return FakeTransaction()
+
+        driver = FakeDriver()
+        imported = (object, object, object, object, SimpleNamespace(READ="read"))
+        with patch.object(repository, "driver_imports", return_value=(imported, None)), \
+                patch.object(repository, "open_driver", return_value=driver), \
+                patch.object(repository, "ensure_database"), \
+                patch.object(repository, "close_driver"), \
+                patch.object(repository, "active_abox_rule_context", return_value={
+                    "status": "ok",
+                    "relationTypesBySymbol": {"005930": ["HAS_RISK_BUDGET", "BREAKS_LEVEL"]},
+                }):
+            result = repository.match_typedb_native_rules([rule], target_symbols=["005930"])
+
+        self.assertEqual("partial", result["status"])
+        self.assertFalse(result["nativeQueryUsed"])
+        self.assertEqual(1, result["readTransactionCount"])
+        self.assertEqual("query-timeout", result["skippedRules"][0]["status"])
 
     def test_typedb_abox_delete_query_limits_each_transaction(self):
         repository = TypeDBOntologyGraphRepository("127.0.0.1:1729")
@@ -360,14 +434,29 @@ class TypeDBOntologyRepositoryTests(unittest.TestCase):
             "typedbABoxDeleteBatchSize": "99999",
         }))
 
+    def test_typedb_incremental_abox_cleanup_uses_small_bounded_defaults(self):
+        repository = TypeDBOntologyGraphRepository("127.0.0.1:1729")
+
+        self.assertEqual(50, repository.abox_incremental_cleanup_batch_size({}))
+        self.assertEqual(10, repository.abox_incremental_cleanup_batch_size({
+            "typedbABoxIncrementalCleanupBatchSize": "1",
+        }))
+        self.assertEqual(500, repository.abox_incremental_cleanup_batch_size({
+            "typedbABoxIncrementalCleanupBatchSize": "99999",
+        }))
+        self.assertEqual(1, repository.abox_incremental_cleanup_max_batches_per_save({}))
+        self.assertEqual(4, repository.abox_incremental_cleanup_max_batches_per_save({
+            "typedbABoxIncrementalCleanupMaxBatchesPerSave": "999",
+        }))
+
     def test_typedb_abox_relation_batch_size_caps_expensive_endpoint_matches(self):
         repository = TypeDBOntologyGraphRepository("127.0.0.1:1729")
 
-        self.assertEqual(1, repository.abox_relation_batch_size({}))
+        self.assertEqual(4, repository.abox_relation_batch_size({}))
         self.assertEqual(1, repository.abox_relation_batch_size({
             "typedbABoxRelationBatchSize": "1",
         }))
-        self.assertEqual(1, repository.abox_relation_batch_size({
+        self.assertEqual(8, repository.abox_relation_batch_size({
             "typedbABoxRelationBatchSize": "1000",
         }))
 
@@ -393,8 +482,46 @@ class TypeDBOntologyRepositoryTests(unittest.TestCase):
         delete_candidate.assert_called_once_with(driver, imported, "ABox", "failed")
         delete_legacy.assert_called_once_with(driver, imported, ["ABoxStaging"])
 
-    def test_typedb_save_graph_removes_previous_active_abox_after_activation(self):
-        """Activation keeps only the new pointer and retires the prior ABox facts."""
+    def test_typedb_incremental_abox_cleanup_limits_historical_deletion_to_one_slice(self):
+        repository = TypeDBOntologyGraphRepository("127.0.0.1:1729")
+        driver = object()
+        imported = (object(), None)
+        with patch.object(repository, "pending_abox_activation", return_value={"status": "empty"}), \
+                patch.object(repository, "abox_candidate_snapshot_ids", return_value=["active", "partial", "old"]), \
+                patch.object(repository, "abox_projection_marker_rows", return_value=[{
+                    "id": "marker:old",
+                    "aboxSnapshotId": "old",
+                    "updatedAt": "2026-07-21T00:01:00Z",
+                }]), \
+                patch.object(repository, "abox_inactive_generation_keep_count", return_value=0), \
+                patch.object(repository, "abox_incremental_cleanup_batch_size", return_value=50), \
+                patch.object(repository, "abox_incremental_cleanup_max_batches_per_save", return_value=1), \
+                patch.object(repository, "delete_box_snapshot_rows_in_batches", return_value={
+                    "status": "partial",
+                    "aboxSnapshotId": "partial",
+                    "deletedBatchCount": 1,
+                }) as delete_slice:
+            result = repository.drain_inactive_abox_generations_incrementally(
+                driver,
+                imported,
+                "active",
+            )
+
+        self.assertEqual("partial", result["status"])
+        self.assertEqual(["partial"], result["attemptedSnapshotIds"])
+        self.assertEqual(["partial", "old"], result["remainingSnapshotIds"])
+        self.assertEqual(1, result["deletedBatchCount"])
+        delete_slice.assert_called_once_with(
+            driver,
+            imported,
+            "ABox",
+            "partial",
+            batch_size=50,
+            max_batches=1,
+        )
+
+    def test_typedb_save_graph_retains_previous_active_abox_until_inference_finalizes(self):
+        """Activation retains the predecessor so failed inference can restore it."""
         repository = TypeDBOntologyGraphRepository("127.0.0.1:1729", retry_count=0)
         graph = PortfolioOntology(
             "typedb-live-abox",
@@ -438,18 +565,14 @@ class TypeDBOntologyRepositoryTests(unittest.TestCase):
             result = repository.save_graph(graph)
 
         self.assertTrue(result["saved"])
-        self.assertEqual("ok", result["aboxPersistenceVerification"]["candidateCleanup"]["status"])
-        self.assertEqual("candidate", result["aboxPersistenceVerification"]["candidateCleanup"]["activeAboxSnapshotId"])
-        self.assertEqual("ok", result["aboxPersistenceVerification"]["retiredActiveCleanup"]["status"])
-        self.assertEqual(2, clear_retry.call_count)
+        activation = result["aboxPersistenceVerification"]["activation"]
+        self.assertEqual("activated", activation["status"])
+        self.assertEqual("candidate", activation["snapshotId"])
+        self.assertEqual("active", activation["previousSnapshotId"])
+        self.assertTrue(activation["finalizationRequired"])
+        self.assertEqual(1, clear_retry.call_count)
         self.assertEqual("candidate", clear_retry.call_args_list[0].args[3])
-        self.assertEqual("active", clear_retry.call_args_list[1].args[3])
-        cleanup.assert_called_once_with(
-            ANY,
-            ANY,
-            active_snapshot_id="candidate",
-            keep_inactive_count=0,
-        )
+        cleanup.assert_not_called()
         self.assertEqual(3, write_graph.call_count)
 
     def test_typedb_abox_default_retention_keeps_no_inactive_generation(self):
@@ -560,6 +683,94 @@ class TypeDBOntologyRepositoryTests(unittest.TestCase):
         self.assertTrue(all(item.value["ontologyBox"] == "ABox" for item in candidate.evidence))
         self.assertEqual("ABoxControl", pointer.entities[0].properties["ontologyBox"])
         self.assertEqual("abox-material:test", pointer.entities[0].properties["snapshotId"])
+
+    def test_typedb_abox_pointer_persists_pending_native_inference_handoff(self):
+        repository = TypeDBOntologyGraphRepository("127.0.0.1:1729")
+        candidate = PortfolioOntology(
+            "typedb-pending-control",
+            worldview={
+                "aboxSnapshotId": "abox-material:candidate",
+                "materialFingerprint": "candidate-fingerprint",
+                "inferenceTargetSymbols": ["000660", "005930"],
+            },
+        )
+
+        pointer = repository.abox_active_pointer_graph(candidate, previous_snapshot_id="abox-material:previous")
+        pending = next(item for item in pointer.entities if item.kind == "abox-activation-pending")
+        cleared = repository.abox_active_pointer_graph(candidate, pending_activation=False)
+
+        self.assertEqual("abox-material:candidate", pending.properties["candidateAboxSnapshotId"])
+        self.assertEqual("abox-material:previous", pending.properties["previousAboxSnapshotId"])
+        self.assertEqual(["000660", "005930"], pending.properties["targetSymbols"])
+        self.assertEqual(1, len(cleared.entities))
+        self.assertEqual("abox-active-pointer", cleared.entities[0].kind)
+
+    def test_typedb_pending_abox_recovery_restores_previous_generation_on_stale_inference(self):
+        repository = TypeDBOntologyGraphRepository("127.0.0.1:1729")
+        pending = {
+            "status": "pending",
+            "candidateAboxSnapshotId": "abox-material:candidate",
+            "previousAboxSnapshotId": "abox-material:previous",
+            "targetSymbols": ["000660"],
+        }
+        with patch.object(repository, "pending_abox_activation", return_value=pending), \
+                patch.object(repository, "active_abox_metadata", return_value={
+                    "status": "ok", "aboxSnapshotId": "abox-material:candidate",
+                }), \
+                patch.object(repository, "inferencebox_snapshot", return_value={
+                    "status": "stale-generation",
+                    "sourceAboxSnapshotId": "abox-material:previous",
+                    "generationAligned": False,
+                }), \
+                patch.object(repository, "activate_abox_generation", return_value={"status": "ok"}) as restore:
+            result = repository.recover_pending_abox_activation()
+
+        self.assertEqual("restored", result["status"])
+        restore.assert_called_once_with("abox-material:previous")
+
+    def test_typedb_pending_abox_recovery_finalizes_aligned_inference(self):
+        repository = TypeDBOntologyGraphRepository("127.0.0.1:1729")
+        pending = {
+            "status": "pending",
+            "candidateAboxSnapshotId": "abox-material:candidate",
+            "previousAboxSnapshotId": "abox-material:previous",
+            "targetSymbols": ["000660"],
+        }
+        with patch.object(repository, "pending_abox_activation", return_value=pending), \
+                patch.object(repository, "active_abox_metadata", return_value={
+                    "status": "ok", "aboxSnapshotId": "abox-material:candidate",
+                }), \
+                patch.object(repository, "inferencebox_snapshot", return_value={
+                    "status": "ok",
+                    "nativeTypeDbReasoningUsed": True,
+                    "generationAligned": True,
+                    "sourceAboxSnapshotId": "abox-material:candidate",
+                    "targetSymbols": ["000660"],
+                }), \
+                patch.object(repository, "finalize_abox_generation", return_value={"status": "ok"}) as finalize:
+            result = repository.recover_pending_abox_activation()
+
+        self.assertEqual("finalized", result["status"])
+        finalize.assert_called_once_with("abox-material:candidate", "abox-material:previous")
+
+    def test_typedb_abox_finalization_clears_journal_without_blocking_on_predecessor_cleanup(self):
+        repository = TypeDBOntologyGraphRepository("127.0.0.1:1729")
+        with patch.object(repository, "active_abox_metadata", return_value={
+            "status": "ok", "aboxSnapshotId": "abox-material:candidate",
+        }), \
+                patch.object(repository, "activate_abox_generation", return_value={"status": "ok"}) as activate, \
+                patch.object(repository, "driver_imports") as driver_imports:
+            result = repository.finalize_abox_generation(
+                "abox-material:candidate",
+                "abox-material:previous",
+            )
+
+        self.assertEqual("ok", result["status"])
+        self.assertTrue(result["clearedPendingActivation"])
+        self.assertTrue(result["cleanupDeferred"])
+        self.assertEqual("deferred", result["cleanup"]["status"])
+        activate.assert_called_once_with("abox-material:candidate")
+        driver_imports.assert_not_called()
 
     def test_typedb_abox_activation_replaces_only_control_pointer_in_one_transaction(self):
         class FakePromise:
@@ -1062,7 +1273,36 @@ class TypeDBOntologyRepositoryTests(unittest.TestCase):
             [item.relation_type for item in persisted.relations],
         )
         self.assertEqual(["evidence:stock"], [item.evidence_id for item in persisted.evidence])
-        self.assertEqual("typedb-rule-input-relations", persisted.worldview["runtimeProjectionScope"])
+        self.assertEqual(
+            "typedb-rule-input-and-semantic-coverage-relations",
+            persisted.worldview["runtimeProjectionScope"],
+        )
+
+    def test_typedb_projection_keeps_semantic_coverage_relations_outside_rule_inputs(self):
+        graph = PortfolioOntology("semantic-context")
+        graph.entities.extend([
+            OntologyEntity("stock:000660", "SK hynix", "stock", {"ontologyBox": "ABox"}),
+            OntologyEntity("price:000660", "Current price", "price", {"ontologyBox": "ABox"}),
+            OntologyEntity("liquidity:000660", "Liquidity", "liquidity-profile", {"ontologyBox": "ABox"}),
+            OntologyEntity("runtime:irrelevant", "Runtime setting", "runtime-setting", {"ontologyBox": "ABox"}),
+        ])
+        graph.relations.extend([
+            OntologyRelation("stock:000660", "price:000660", "HAS_PRICE", properties={"ontologyBox": "ABox"}),
+            OntologyRelation("stock:000660", "liquidity:000660", "HAS_LIQUIDITY_PROFILE", properties={"ontologyBox": "ABox"}),
+            OntologyRelation("stock:000660", "runtime:irrelevant", "HAS_RUNTIME_SETTING", properties={"ontologyBox": "ABox"}),
+        ])
+
+        persisted = PortfolioOntologyProjectionRecorder(None).graph_for_graph_store_persistence(
+            graph,
+            {"inputRelationTypes": ["HAS_RISK_BUDGET"]},
+        )
+
+        self.assertEqual(
+            ["HAS_PRICE", "HAS_LIQUIDITY_PROFILE"],
+            [item.relation_type for item in persisted.relations],
+        )
+        self.assertEqual(1, persisted.worldview["runtimeProjectionRuleInputRelationTypeCount"])
+        self.assertGreater(persisted.worldview["runtimeProjectionSemanticRelationTypeCount"], 1)
 
     def test_typedb_rule_catalog_migration_removes_shadow_and_fills_known_policy(self):
         bootstrap = rulebox_rules_to_payload(default_graph_inference_rules())
@@ -1139,11 +1379,11 @@ class TypeDBOntologyRepositoryTests(unittest.TestCase):
         }):
             queries = repository.graph_insert_queries(graph)
 
-        self.assertEqual(34, len(queries))
+        self.assertEqual(10, len(queries))
         self.assertTrue(queries[0].startswith("insert $n0 isa ontology-entity"))
         relation_queries = [query for query in queries if query.startswith("match $source0 isa ontology-node")]
-        self.assertEqual(30, len(relation_queries))
-        self.assertTrue(all(query.count(" isa ontology-assertion") == 1 for query in relation_queries))
+        self.assertEqual(6, len(relation_queries))
+        self.assertTrue(all(query.count(" isa ontology-assertion") == 5 for query in relation_queries))
 
     def test_typedb_graph_insert_queries_split_large_payloads_by_byte_size(self):
         graph = PortfolioOntology("portfolio:large-payload-batches")
@@ -1655,6 +1895,157 @@ class TypeDBOntologyRepositoryTests(unittest.TestCase):
         self.assertFalse(repository.snapshot_read_called)
         self.assertEqual("ok", result["inferenceBox"]["status"])
         self.assertEqual("skipped", result["inferenceBox"]["typedbReadStatus"])
+
+    def test_projection_recorder_rolls_back_new_abox_when_native_inference_is_not_aligned(self):
+        class FakeRepository:
+            store_key = "typedb"
+
+            def __init__(self):
+                self.restored_snapshot_ids = []
+                self.finalized_snapshot_ids = []
+
+            def active_abox_metadata(self):
+                return {
+                    "status": "ok",
+                    "aboxSnapshotId": "abox:previous",
+                    "materialFingerprint": "previous-material",
+                }
+
+            def save_graph(self, _graph):
+                return {
+                    "saved": True,
+                    "status": "ok",
+                    "graphStore": "typedb",
+                    "aboxPersistenceVerification": {
+                        "activation": {
+                            "status": "activated",
+                            "snapshotId": "abox:new",
+                            "previousSnapshotId": "abox:previous",
+                        },
+                    },
+                }
+
+            def rulebox_snapshot(self):
+                rules = rulebox_rules_to_payload(default_graph_inference_rules())
+                return {
+                    "configured": True,
+                    "status": "ok",
+                    "rules": rules,
+                    "ruleCount": len(rules),
+                }
+
+            def run_rulebox(self, _payload):
+                return {"status": "error", "reason": "TypeDB native rule query timed out"}
+
+            def inferencebox_snapshot(self, *_args, **_kwargs):
+                return {
+                    "status": "stale-generation",
+                    "nativeTypeDbReasoningUsed": True,
+                    "sourceAboxSnapshotId": "abox:previous",
+                    "generationAligned": False,
+                }
+
+            def activate_abox_generation(self, snapshot_id):
+                self.restored_snapshot_ids.append(snapshot_id)
+                return {
+                    "status": "ok",
+                    "activeAbox": {"status": "ok", "aboxSnapshotId": snapshot_id},
+                }
+
+            def finalize_abox_generation(self, active_snapshot_id, previous_snapshot_id):
+                self.finalized_snapshot_ids.append((active_snapshot_id, previous_snapshot_id))
+                return {"status": "ok"}
+
+        repository = FakeRepository()
+        snapshot = AccountSnapshot(
+            "main",
+            "메인",
+            "toss",
+            "live",
+            "ok",
+            utc_now_iso(),
+            PortfolioSummary(total=1000, invested=1000, cash=0, markets=[], sectors=[], concentration=0),
+            positions=[Position("AAPL", "Apple", market="US", currency="USD", quantity=1, current_price=100, market_value=100, market_value_krw=140000)],
+        )
+
+        result = PortfolioOntologyProjectionRecorder(repository).record_snapshot(snapshot)
+
+        self.assertFalse(result["saved"])
+        self.assertEqual("inference-failed-rolled-back", result["status"])
+        self.assertTrue(result["preservedActiveGeneration"])
+        self.assertEqual(["abox:previous"], repository.restored_snapshot_ids)
+        self.assertEqual([], repository.finalized_snapshot_ids)
+
+    def test_projection_recorder_finalizes_abox_after_aligned_native_inference(self):
+        class FakeRepository:
+            store_key = "typedb"
+
+            def __init__(self):
+                self.finalized_snapshot_ids = []
+
+            def active_abox_metadata(self):
+                return {
+                    "status": "ok",
+                    "aboxSnapshotId": "abox:previous",
+                    "materialFingerprint": "previous-material",
+                }
+
+            def save_graph(self, _graph):
+                return {
+                    "saved": True,
+                    "status": "ok",
+                    "graphStore": "typedb",
+                    "aboxPersistenceVerification": {
+                        "activation": {
+                            "status": "activated",
+                            "snapshotId": "abox:new",
+                            "previousSnapshotId": "abox:previous",
+                        },
+                    },
+                }
+
+            def rulebox_snapshot(self):
+                rules = rulebox_rules_to_payload(default_graph_inference_rules())
+                return {
+                    "configured": True,
+                    "status": "ok",
+                    "rules": rules,
+                    "ruleCount": len(rules),
+                }
+
+            def run_rulebox(self, _payload):
+                return {
+                    "status": "ok",
+                    "inferenceBox": {
+                        "status": "ok",
+                        "nativeTypeDbReasoningUsed": True,
+                        "generationAligned": True,
+                        "sourceAboxSnapshotId": "abox:new",
+                        "targetSymbols": ["AAPL"],
+                    },
+                }
+
+            def finalize_abox_generation(self, active_snapshot_id, previous_snapshot_id):
+                self.finalized_snapshot_ids.append((active_snapshot_id, previous_snapshot_id))
+                return {"status": "ok"}
+
+        repository = FakeRepository()
+        snapshot = AccountSnapshot(
+            "main",
+            "메인",
+            "toss",
+            "live",
+            "ok",
+            utc_now_iso(),
+            PortfolioSummary(total=1000, invested=1000, cash=0, markets=[], sectors=[], concentration=0),
+            positions=[Position("AAPL", "Apple", market="US", currency="USD", quantity=1, current_price=100, market_value=100, market_value_krw=140000)],
+        )
+
+        result = PortfolioOntologyProjectionRecorder(repository).record_snapshot(snapshot)
+
+        self.assertTrue(result["saved"])
+        self.assertEqual("ok", result["status"])
+        self.assertEqual([("abox:new", "abox:previous")], repository.finalized_snapshot_ids)
 
     def test_projection_recorder_rejects_demo_snapshot_and_defers_regular_typedb_writer(self):
         class FakeRepository:

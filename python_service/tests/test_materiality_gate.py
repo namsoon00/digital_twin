@@ -710,12 +710,15 @@ class MaterialityGateTests(unittest.TestCase):
         )
 
         first = runner.run_once()
-        second = runner.run_once()
+        second = runner.run_once(force=True)
+        third = runner.run_once()
 
-        self.assertEqual([["AAPL", "MSFT", "TSLA"]], fake_monitor.calls)
-        self.assertEqual(0, first["partialEventCount"])
-        self.assertEqual(1, first["completedEventCount"])
-        self.assertEqual("idle", second["status"])
+        self.assertEqual([["AAPL", "MSFT"], ["TSLA"]], fake_monitor.calls)
+        self.assertEqual(1, first["partialEventCount"])
+        self.assertEqual(0, first["completedEventCount"])
+        self.assertEqual(0, second["partialEventCount"])
+        self.assertEqual(1, second["completedEventCount"])
+        self.assertEqual("idle", third["status"])
         self.assertEqual([request.event_id], cursor.processed_event_ids())
 
     def test_ontology_reasoning_coalesces_superseded_realtime_snapshots_after_projection(self):

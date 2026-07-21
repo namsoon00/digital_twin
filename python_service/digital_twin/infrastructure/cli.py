@@ -341,11 +341,34 @@ def ontology_command(args) -> int:
             "clearInference": bool(args.clear_inference),
         }
         result = repository.seed_ontology(payload)
+        recovery = getattr(repository, "recover_pending_abox_activation", None)
+        if callable(recovery):
+            try:
+                result["pendingAboxActivationRecovery"] = recovery()
+            except Exception as error:  # noqa: BLE001 - do not start dependent workers against an unknown ABox generation.
+                result["pendingAboxActivationRecovery"] = {"status": "error", "reason": str(error)[:180]}
         print(json.dumps(result, ensure_ascii=False))
         # A current static ontology is a successful seed no-op. Returning a
         # non-zero code here prevents the service manager from starting all
         # dependent collection and reasoning workers after a normal restart.
-        return 0 if result.get("status") in {"ok", "unchanged", "disabled"} else 1
+        recovery_status = str((result.get("pendingAboxActivationRecovery") or {}).get("status") or "skipped")
+        return 0 if (
+            result.get("status") in {"ok", "unchanged", "disabled"}
+            and recovery_status in {"skipped", "disabled", "finalized", "restored", "cleared-stale", "retry-required"}
+        ) else 1
+    if args.ontology_action == "recover-abox-activation":
+        recovery = getattr(repository, "recover_pending_abox_activation", None)
+        if not callable(recovery):
+            result = {"status": "skipped", "reason": "Graph store has no pending ABox activation journal."}
+        else:
+            try:
+                result = recovery()
+            except Exception as error:  # noqa: BLE001 - expose the blocking TypeDB state to the operator.
+                result = {"status": "error", "reason": str(error)[:180]}
+        print(json.dumps(result, ensure_ascii=False))
+        return 0 if str(result.get("status") or "") in {
+            "skipped", "disabled", "finalized", "restored", "cleared-stale", "retry-required",
+        } else 1
     return 1
 
 
@@ -857,6 +880,7 @@ def build_parser() -> argparse.ArgumentParser:
     ontology_seed = ontology_actions.add_parser("seed")
     ontology_seed.add_argument("--replace-rulebox", action="store_true")
     ontology_seed.add_argument("--keep-inference", dest="clear_inference", action="store_false", default=True)
+    ontology_actions.add_parser("recover-abox-activation")
     ontology.set_defaults(func=ontology_command)
 
     ontology_lab = subparsers.add_parser("ontology-lab", help="Run local ontology experiments")

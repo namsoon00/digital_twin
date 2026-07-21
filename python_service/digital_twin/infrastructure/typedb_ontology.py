@@ -351,6 +351,7 @@ TYPEDB_NATIVE_REASONING_LAYER = "typedb-native-rule"
 TYPEDB_SCHEMA_FUNCTION_PREFIX = "orbit_rule_active_abox_subject_v2_"
 DEFAULT_TYPEDB_NATIVE_RULE_REALTIME_QUERY_LIMIT = 18
 DEFAULT_TYPEDB_NATIVE_RULE_QUERY_TIMEOUT_SECONDS = 3.0
+DEFAULT_TYPEDB_NATIVE_RULE_EXECUTION_BUDGET_SECONDS = 12.0
 TYPEDB_PROMOTED_NUMERIC_ATTRIBUTES = {
     "currentPrice": "ontology-current-price",
     "averagePrice": "ontology-average-price",
@@ -649,6 +650,14 @@ class NullTypeDBOntologyGraphRepository:
             "materialFingerprint": "",
         }
 
+    def recover_pending_abox_activation(self) -> Dict[str, object]:
+        return {
+            "configured": False,
+            "status": "disabled",
+            "graphStore": "typedb",
+            "reason": "TypeDB ontology storage is not configured.",
+        }
+
     def prune_inactive_abox_generations(
         self,
         _driver=None,
@@ -801,6 +810,7 @@ class TypeDBOntologyGraphRepository(GraphStoreOntologyRowMapperMixin):
         native_rule_execution_enabled: bool = True,
         native_rule_realtime_query_limit: int = DEFAULT_TYPEDB_NATIVE_RULE_REALTIME_QUERY_LIMIT,
         native_rule_query_timeout_seconds: float = DEFAULT_TYPEDB_NATIVE_RULE_QUERY_TIMEOUT_SECONDS,
+        native_rule_execution_budget_seconds: float = DEFAULT_TYPEDB_NATIVE_RULE_EXECUTION_BUDGET_SECONDS,
     ):
         self.address = str(address or "").strip()
         self.user = str(user or "admin").strip() or "admin"
@@ -840,6 +850,10 @@ class TypeDBOntologyGraphRepository(GraphStoreOntologyRowMapperMixin):
         self._native_rule_query_timeout_seconds = max(
             0.5,
             float(native_rule_query_timeout_seconds or DEFAULT_TYPEDB_NATIVE_RULE_QUERY_TIMEOUT_SECONDS),
+        )
+        self._native_rule_execution_budget_seconds = max(
+            1.0,
+            float(native_rule_execution_budget_seconds or DEFAULT_TYPEDB_NATIVE_RULE_EXECUTION_BUDGET_SECONDS),
         )
         self._last_graph = None
         self._last_rules: List[GraphInferenceRule] = []
@@ -929,6 +943,9 @@ class TypeDBOntologyGraphRepository(GraphStoreOntologyRowMapperMixin):
     def native_rule_query_timeout_seconds(self) -> float:
         return self._native_rule_query_timeout_seconds
 
+    def native_rule_execution_budget_seconds(self) -> float:
+        return self._native_rule_execution_budget_seconds
+
     def clear_rulebox_snapshot_cache(self) -> None:
         self._rulebox_snapshot_cache_at = 0.0
         self._rulebox_snapshot_cache_result = {}
@@ -974,9 +991,10 @@ class TypeDBOntologyGraphRepository(GraphStoreOntologyRowMapperMixin):
             return self.driver_missing_result(imported[1], graph)
         boxes = node_boxes(graph)
         abox_projection_verification: Dict[str, object] = {}
+        abox_persistence_timing: Dict[str, object] = {}
         try:
             def operation():
-                nonlocal abox_projection_verification
+                nonlocal abox_projection_verification, abox_persistence_timing
                 with typedb_operation_timeout(self.write_operation_timeout_seconds(), "TypeDB graph save"):
                     driver = self.open_driver(imported)
                 try:
@@ -985,11 +1003,14 @@ class TypeDBOntologyGraphRepository(GraphStoreOntologyRowMapperMixin):
                     expected_entity_count = 0
                     expected_relation_count = 0
                     if "ABox" in boxes:
+                        abox_started_at = time.monotonic()
+                        abox_persistence_timing = {"startedAt": utc_now()}
                         node_rows, relation_rows = self.graph_persistence_rows(graph)
                         expected_entity_count = len(node_rows)
                         expected_relation_count = len(relation_rows)
                         candidate_graph = self.abox_candidate_graph(graph)
                         snapshot_id = self.abox_snapshot_id_from_graph(candidate_graph)
+                        abox_persistence_timing["candidateAboxSnapshotId"] = snapshot_id
                         if not snapshot_id:
                             abox_projection_verification = {
                                 "status": "skipped",
@@ -999,17 +1020,46 @@ class TypeDBOntologyGraphRepository(GraphStoreOntologyRowMapperMixin):
                             active_before = self.active_abox_metadata()
                             active_snapshot_id = str(active_before.get("aboxSnapshotId") or "").strip()
                             if active_snapshot_id != snapshot_id:
+                                cleanup_started_at = time.monotonic()
+                                try:
+                                    incremental_cleanup = self.drain_inactive_abox_generations_incrementally(
+                                        driver,
+                                        imported,
+                                        active_snapshot_id,
+                                        excluded_snapshot_ids=[snapshot_id],
+                                    )
+                                except Exception as error:  # noqa: BLE001 - maintenance cannot block a new live generation.
+                                    incremental_cleanup = {
+                                        "status": "deferred",
+                                        "reason": str(error)[:180],
+                                        "activeAboxSnapshotId": active_snapshot_id,
+                                    }
+                                abox_persistence_timing["incrementalCleanupMs"] = round(
+                                    (time.monotonic() - cleanup_started_at) * 1000,
+                                    1,
+                                )
+                                abox_persistence_timing["incrementalCleanup"] = incremental_cleanup
                                 # A candidate shares the physical ABox box with the
                                 # active generation, but storage IDs include the
                                 # snapshot. Clear only an interrupted retry of this
                                 # exact candidate; never touch the live generation.
+                                clear_started_at = time.monotonic()
                                 self.delete_box_snapshot_rows_in_batches(
                                     driver,
                                     imported,
                                     "ABox",
                                     snapshot_id,
                                 )
+                                abox_persistence_timing["candidateRetryClearMs"] = round(
+                                    (time.monotonic() - clear_started_at) * 1000,
+                                    1,
+                                )
+                                candidate_write_started_at = time.monotonic()
                                 self.write_graph(driver, imported, candidate_graph, delete_boxes=[])
+                                abox_persistence_timing["candidateWriteMs"] = round(
+                                    (time.monotonic() - candidate_write_started_at) * 1000,
+                                    1,
+                                )
                                 marker_graph = self.abox_projection_marker_graph(
                                     candidate_graph,
                                     expected_entity_count,
@@ -1017,11 +1067,21 @@ class TypeDBOntologyGraphRepository(GraphStoreOntologyRowMapperMixin):
                                 )
                                 if not marker_graph.entities:
                                     raise RuntimeError("ABox completion marker is unavailable.")
+                                marker_write_started_at = time.monotonic()
                                 self.write_graph(driver, imported, marker_graph, delete_boxes=[])
+                                abox_persistence_timing["markerWriteMs"] = round(
+                                    (time.monotonic() - marker_write_started_at) * 1000,
+                                    1,
+                                )
+                            verification_started_at = time.monotonic()
                             candidate_verification = self.verify_abox_projection(
                                 candidate_graph,
                                 expected_entity_count,
                                 expected_relation_count,
+                            )
+                            abox_persistence_timing["candidateVerificationMs"] = round(
+                                (time.monotonic() - verification_started_at) * 1000,
+                                1,
                             )
                             if candidate_verification.get("status") != "ok":
                                 raise RuntimeError(
@@ -1029,53 +1089,26 @@ class TypeDBOntologyGraphRepository(GraphStoreOntologyRowMapperMixin):
                                     + json.dumps(candidate_verification, ensure_ascii=False, sort_keys=True)
                                 )
                             if active_snapshot_id != snapshot_id:
-                                pointer_graph = self.abox_active_pointer_graph(candidate_graph)
+                                pointer_graph = self.abox_active_pointer_graph(
+                                    candidate_graph,
+                                    previous_snapshot_id=active_snapshot_id,
+                                )
+                                pointer_write_started_at = time.monotonic()
                                 self.write_graph(
                                     driver,
                                     imported,
                                     pointer_graph,
                                     delete_boxes=["ABoxControl"],
                                 )
-                                # The pointer now protects the complete new
-                                # generation. The prior active graph is no
-                                # longer a rollback store: its source facts and
-                                # activation audit are durable in MySQL. Remove
-                                # it immediately, then drain any legacy marker
-                                # backlog without retaining inactive ABox facts.
-                                if active_snapshot_id:
-                                    try:
-                                        retired_active_cleanup = self.delete_box_snapshot_rows_in_batches(
-                                            driver,
-                                            imported,
-                                            "ABox",
-                                            active_snapshot_id,
-                                        )
-                                    except Exception as cleanup_error:  # noqa: BLE001 - new active pointer remains valid.
-                                        retired_active_cleanup = {
-                                            "status": "error",
-                                            "aboxSnapshotId": active_snapshot_id,
-                                            "reason": str(cleanup_error)[:180],
-                                        }
-                                else:
-                                    retired_active_cleanup = {
-                                        "status": "skipped",
-                                        "reason": "No previous active ABox generation exists.",
-                                        "aboxSnapshotId": "",
-                                        "deletedBatchCount": 0,
-                                    }
-                                try:
-                                    candidate_cleanup = self.prune_inactive_abox_generations(
-                                        driver,
-                                        imported,
-                                        active_snapshot_id=snapshot_id,
-                                        keep_inactive_count=0,
-                                    )
-                                except Exception as cleanup_error:  # noqa: BLE001 - active pointer remains valid.
-                                    candidate_cleanup = {
-                                        "status": "error",
-                                        "activeAboxSnapshotId": snapshot_id,
-                                        "reason": str(cleanup_error)[:180],
-                                    }
+                                abox_persistence_timing["pointerWriteMs"] = round(
+                                    (time.monotonic() - pointer_write_started_at) * 1000,
+                                    1,
+                                )
+                                # Keep the prior active generation until the
+                                # new ABox has produced an aligned native
+                                # InferenceBox. The projection recorder either
+                                # finalizes this retention after success or
+                                # restores this pointer after a rule failure.
                             abox_projection_verification = {
                                 **self.verify_abox_projection(
                                     candidate_graph,
@@ -1086,12 +1119,18 @@ class TypeDBOntologyGraphRepository(GraphStoreOntologyRowMapperMixin):
                                 "activation": {
                                     "status": "unchanged" if active_snapshot_id == snapshot_id else "activated",
                                     "snapshotId": snapshot_id,
+                                    "previousSnapshotId": active_snapshot_id,
                                     "atomic": True,
+                                    "finalizationRequired": bool(
+                                        active_snapshot_id and active_snapshot_id != snapshot_id
+                                    ),
                                 },
                             }
-                            if active_snapshot_id != snapshot_id:
-                                abox_projection_verification["candidateCleanup"] = candidate_cleanup
-                                abox_projection_verification["retiredActiveCleanup"] = retired_active_cleanup
+                            abox_persistence_timing["totalMs"] = round(
+                                (time.monotonic() - abox_started_at) * 1000,
+                                1,
+                            )
+                            abox_projection_verification["timing"] = dict(abox_persistence_timing)
                             if abox_projection_verification.get("status") != "ok":
                                 raise RuntimeError(
                                     "ABox activation verification failed: "
@@ -1128,6 +1167,7 @@ class TypeDBOntologyGraphRepository(GraphStoreOntologyRowMapperMixin):
                 "relationCount": len(graph.relations),
                 "reasoningCardCount": len(getattr(graph, "reasoning_cards", []) or []),
                 "aboxPersistenceVerification": abox_projection_verification,
+                "aboxPersistenceTiming": abox_persistence_timing,
             }
         self._last_graph = copy.deepcopy(graph)
         box_entity_counts = graph_box_entity_counts(graph)
@@ -1155,6 +1195,7 @@ class TypeDBOntologyGraphRepository(GraphStoreOntologyRowMapperMixin):
             "evidenceCount": len(graph.evidence),
             "reasoningCardCount": len(getattr(graph, "reasoning_cards", []) or []),
             "aboxPersistenceVerification": abox_projection_verification,
+            "aboxPersistenceTiming": abox_persistence_timing,
         }
 
     def driver_missing_result(self, error: Exception, graph: PortfolioOntology) -> Dict[str, object]:
@@ -1211,7 +1252,7 @@ class TypeDBOntologyGraphRepository(GraphStoreOntologyRowMapperMixin):
             transaction_timeout_millis=max(1000, int(self.write_operation_timeout_seconds() * 1000)),
         )
 
-    def read_transaction_options(self):
+    def read_transaction_options(self, timeout_seconds: float = None):
         """Bound a TypeDB read transaction, not only the individual query call.
 
         A driver-side transaction deadline is required because a schema function
@@ -1223,8 +1264,9 @@ class TypeDBOntologyGraphRepository(GraphStoreOntologyRowMapperMixin):
             from typedb.driver import TransactionOptions
         except Exception:  # noqa: BLE001 - retain compatibility with older optional drivers.
             return None
+        timeout = self.query_timeout_seconds() if timeout_seconds is None else max(0.5, float(timeout_seconds))
         return TransactionOptions(
-            transaction_timeout_millis=max(1000, int(self.query_timeout_seconds() * 1000)),
+            transaction_timeout_millis=max(1000, int(timeout * 1000)),
         )
 
     def close_driver(self, driver) -> None:
@@ -1343,7 +1385,13 @@ class TypeDBOntologyGraphRepository(GraphStoreOntologyRowMapperMixin):
                 tx.commit()
         self._base_schema_ready_fingerprint = schema_fingerprint
 
-    def read_rows(self, query: str, columns: Iterable[str], label: str = "typedb.read") -> List[Dict[str, object]]:
+    def read_rows(
+        self,
+        query: str,
+        columns: Iterable[str],
+        label: str = "typedb.read",
+        timeout_seconds: float = None,
+    ) -> List[Dict[str, object]]:
         if not self.address:
             return []
         imported = self.driver_imports()
@@ -1357,9 +1405,15 @@ class TypeDBOntologyGraphRepository(GraphStoreOntologyRowMapperMixin):
                 with driver.transaction(
                     self.database,
                     TransactionType.READ,
-                    self.read_transaction_options(),
+                    self.read_transaction_options(timeout_seconds),
                 ) as tx:
-                    return self.read_rows_in_transaction(tx, query, columns, label=label)
+                    return self.read_rows_in_transaction(
+                        tx,
+                        query,
+                        columns,
+                        label=label,
+                        timeout_seconds=timeout_seconds,
+                    )
             finally:
                 self.close_driver(driver)
         return self.with_typedb_retries(operation)
@@ -1524,15 +1578,86 @@ class TypeDBOntologyGraphRepository(GraphStoreOntologyRowMapperMixin):
                 rows.extend(mapped_rows)
         return list({str(row.get("id") or ""): row for row in rows if str(row.get("id") or "").strip()}.values())
 
+    def active_abox_relation_types_by_symbol(
+        self,
+        symbols: Iterable[str] = None,
+        timeout_seconds: float = None,
+    ) -> Dict[str, object]:
+        """Read a compact active-ABox topology index for stock subjects.
+
+        Native rule planning only needs each stock's available relation types.
+        Loading every endpoint's JSON payload for that purpose made the planner
+        compete with ABox projection writes and could exceed the realtime read
+        deadline. This query keeps the TypeDB-owned topology while returning
+        only stock id, symbol, and relation type.
+        """
+        clean_symbols = clean_symbols_from_payload(list(symbols or []))
+        source_ids_by_symbol: Dict[str, set] = {symbol: set() for symbol in clean_symbols}
+        relation_types_by_symbol: Dict[str, set] = {symbol: set() for symbol in clean_symbols}
+        relation_ids = set()
+        symbol_filter = typedb_value_match(
+            "$stock",
+            "ontology-symbol",
+            clean_symbols,
+            "==",
+            "stockSymbolFilter",
+        )
+        active_scope = typedb_active_abox_pointer_clause() + " "
+        for role, links_clause in [
+            ("source", "links (source: $stock, target: $other)"),
+            ("target", "links (source: $other, target: $stock)"),
+        ]:
+            query = (
+                "match " + active_scope
+                + "$stock isa ontology-node, has ontology-id $sourceId, has ontology-kind \"stock\", "
+                "has ontology-box \"ABox\", has ontology-snapshot-id $activeAboxSnapshotId, "
+                "has ontology-symbol $symbol; "
+                + "$r isa ontology-assertion, " + links_clause + ", has ontology-id $relationId, "
+                "has ontology-box \"ABox\", has ontology-snapshot-id $activeAboxSnapshotId, "
+                "has ontology-relation-type $relationType; "
+                + symbol_filter
+            )
+            rows = self.read_rows(
+                query,
+                ["sourceId", "symbol", "relationId", "relationType"],
+                label="typedb.active-abox-relation-types:" + role,
+                timeout_seconds=timeout_seconds,
+            )
+            for row in rows:
+                symbol = str(row.get("symbol") or "").upper().strip()
+                source_id = str(row.get("sourceId") or "").strip()
+                relation_type = str(row.get("relationType") or "").upper().strip()
+                relation_id = str(row.get("relationId") or "").strip()
+                if not symbol:
+                    continue
+                source_ids_by_symbol.setdefault(symbol, set())
+                relation_types_by_symbol.setdefault(symbol, set())
+                if source_id:
+                    source_ids_by_symbol[symbol].add(source_id)
+                if relation_type:
+                    relation_types_by_symbol[symbol].add(relation_type)
+                if relation_id:
+                    relation_ids.add(relation_id)
+        symbols_out = clean_symbols or sorted(source_ids_by_symbol)
+        return {
+            "status": "ok",
+            "symbols": symbols_out,
+            "sourceIdsBySymbol": {
+                symbol: sorted(source_ids_by_symbol.get(symbol, set()))
+                for symbol in symbols_out
+            },
+            "relationTypesBySymbol": {
+                symbol: sorted(relation_types_by_symbol.get(symbol, set()))
+                for symbol in symbols_out
+            },
+            "relationCount": len(relation_ids),
+        }
+
     def active_abox_rule_context(self, symbols: Iterable[str]) -> Dict[str, object]:
         """Load only TypeDB facts needed to plan schema-function calls.
 
-        This is deliberately an execution planner, not a second rule engine:
-        it never evaluates a threshold or chooses an investment action.  A
-        persisted TypeDB function remains the sole evaluator for each rule.
-        The context only proves that a rule requiring (for example)
-        ``HAS_TRADE_FLOW`` cannot match a changed symbol that has no such ABox
-        relation in the active generation.
+        This remains a topology-only execution planner. TypeDB schema functions
+        still evaluate every rule condition and decide whether the rule matches.
         """
         clean_symbols = clean_symbols_from_payload(list(symbols or []))
         if not clean_symbols:
@@ -1543,47 +1668,10 @@ class TypeDBOntologyGraphRepository(GraphStoreOntologyRowMapperMixin):
                 "relationTypesBySymbol": {},
                 "relationCount": 0,
             }
-        entity_rows = self.read_entity_rows(["ABox"])
-        source_ids_by_symbol: Dict[str, List[str]] = {symbol: [] for symbol in clean_symbols}
-        for row in entity_rows:
-            if str(row.get("kind") or "") != "stock":
-                continue
-            properties = json_object(row.get("propertiesJson"))
-            symbol = str(
-                row.get("symbol")
-                or properties.get("symbol")
-                or symbol_from_subject(row.get("id"))
-                or ""
-            ).upper().strip()
-            entity_id = str(row.get("id") or "").strip()
-            if symbol in source_ids_by_symbol and entity_id:
-                source_ids_by_symbol[symbol].append(entity_id)
-        source_ids = sorted({item for values in source_ids_by_symbol.values() for item in values})
-        relation_rows = self.read_relation_rows_by_source_ids(source_ids, ["ABox"]) if source_ids else []
-        symbols_by_source_id = {
-            source_id: symbol
-            for symbol, source_ids_for_symbol in source_ids_by_symbol.items()
-            for source_id in source_ids_for_symbol
-        }
-        relation_types_by_symbol: Dict[str, set] = {symbol: set() for symbol in clean_symbols}
-        for row in relation_rows:
-            relation_type = str(row.get("type") or row.get("relationType") or "").upper().strip()
-            if not relation_type:
-                continue
-            for endpoint_id in (str(row.get("source") or ""), str(row.get("target") or "")):
-                symbol = symbols_by_source_id.get(endpoint_id)
-                if symbol:
-                    relation_types_by_symbol[symbol].add(relation_type)
-        return {
-            "status": "ok",
-            "symbols": clean_symbols,
-            "sourceIdsBySymbol": {key: sorted(set(value)) for key, value in source_ids_by_symbol.items()},
-            "relationTypesBySymbol": {
-                key: sorted(value)
-                for key, value in relation_types_by_symbol.items()
-            },
-            "relationCount": len(relation_rows),
-        }
+        return self.active_abox_relation_types_by_symbol(
+            clean_symbols,
+            timeout_seconds=self.native_rule_query_timeout_seconds(),
+        )
 
     def active_abox_snapshot_id(self) -> str:
         metadata = self.active_abox_metadata()
@@ -1758,6 +1846,63 @@ class TypeDBOntologyGraphRepository(GraphStoreOntologyRowMapperMixin):
             "graphStore": "typedb",
             "aboxSnapshotId": "",
             "materialFingerprint": "",
+        }
+
+    def abox_pending_activation_rows(self) -> List[Dict[str, object]]:
+        """Return durable ABox activation hand-offs awaiting native inference.
+
+        The active pointer is intentionally switched only after a candidate
+        ABox verifies. Native TypeDB inference follows in a separate operation,
+        so the hand-off must survive a worker or server restart. A control row
+        makes that otherwise transient state observable and recoverable.
+        """
+        query = (
+            "match $n isa ontology-node, "
+            "has ontology-id $id, "
+            "has ontology-label $label, "
+            "has ontology-kind \"abox-activation-pending\", "
+            "has ontology-box \"ABoxControl\", "
+            "has ontology-snapshot-id $snapshotId, "
+            "has ontology-updated-at $updatedAt, "
+            "has ontology-json $json;"
+        )
+        return self.entity_rows_from_typeql(
+            self.read_rows(
+                query,
+                ["id", "label", "kind", "snapshotId", "updatedAt", "json"],
+                label="typedb.abox-activation-pending",
+            ),
+            "ABoxControl",
+        )
+
+    def pending_abox_activation(self) -> Dict[str, object]:
+        rows = sorted(
+            self.abox_pending_activation_rows(),
+            key=lambda row: (str(row.get("updatedAt") or ""), str(row.get("id") or "")),
+            reverse=True,
+        )
+        if not rows:
+            return {
+                "configured": True,
+                "status": "empty",
+                "graphStore": "typedb",
+            }
+        row = rows[0]
+        candidate_snapshot_id = str(
+            row.get("candidateAboxSnapshotId") or row.get("aboxSnapshotId") or row.get("snapshotId") or ""
+        ).strip()
+        return {
+            "configured": True,
+            "status": "pending" if candidate_snapshot_id else "invalid",
+            "graphStore": "typedb",
+            "candidateAboxSnapshotId": candidate_snapshot_id,
+            "previousAboxSnapshotId": str(row.get("previousAboxSnapshotId") or "").strip(),
+            "materialFingerprint": str(row.get("materialFingerprint") or "").strip(),
+            "projectionRunId": str(row.get("projectionRunId") or "").strip(),
+            "asOf": str(row.get("asOf") or ""),
+            "targetSymbols": clean_symbols_from_payload(row.get("targetSymbols") or row.get("inferenceTargetSymbols") or []),
+            "controlId": str(row.get("id") or ""),
+            "updatedAt": str(row.get("updatedAt") or ""),
         }
 
     def read_relation_rows(self, boxes: Iterable[str] = None, limit: int = 0) -> List[Dict[str, object]]:
@@ -2106,6 +2251,26 @@ class TypeDBOntologyGraphRepository(GraphStoreOntologyRowMapperMixin):
         # it reaches the first insert batch.
         return max(100, min(5000, int(parsed)))
 
+    def abox_incremental_cleanup_batch_size(self, settings: Dict[str, object] = None) -> int:
+        """Keep one live cleanup slice below the TypeDB writer saturation point."""
+        configured_settings = runtime_settings() if settings is None else settings
+        raw = dict(configured_settings or {}).get("typedbABoxIncrementalCleanupBatchSize")
+        parsed = number_or_none(raw)
+        if parsed is None:
+            parsed = 50
+        # Full deletion remains available to explicit repair commands. Runtime
+        # projection drains only a small slice, so a historic generation can
+        # never monopolize the writer before the next market inference runs.
+        return max(10, min(500, int(parsed)))
+
+    def abox_incremental_cleanup_max_batches_per_save(self, settings: Dict[str, object] = None) -> int:
+        configured_settings = runtime_settings() if settings is None else settings
+        raw = dict(configured_settings or {}).get("typedbABoxIncrementalCleanupMaxBatchesPerSave")
+        parsed = number_or_none(raw)
+        if parsed is None:
+            parsed = 1
+        return max(0, min(4, int(parsed)))
+
     def abox_inactive_generation_keep_count(self, settings: Dict[str, object] = None) -> int:
         raw = (settings or runtime_settings()).get("typedbABoxInactiveGenerationKeepCount")
         parsed = number_or_none(raw)
@@ -2137,16 +2302,17 @@ class TypeDBOntologyGraphRepository(GraphStoreOntologyRowMapperMixin):
         return max(1, min(50, int(parsed)))
 
     def abox_relation_batch_size(self, settings: Dict[str, object] = None) -> int:
-        # A relation insert has two independent endpoint matches. Combining
-        # several of those matches into one TypeQL statement lets the query
-        # planner consider their cross product, which can lock the TypeDB
-        # writer for minutes under a live evidence graph. Keep each ABox
-        # relation in its own query; transaction batching below still provides
-        # throughput without coupling independent endpoint lookups.
-        #
-        # `typedbABoxRelationBatchSize` remains a compatibility setting, but
-        # no stored value may widen this safety boundary.
-        return 1
+        configured_settings = runtime_settings() if settings is None else settings
+        raw = dict(configured_settings or {}).get("typedbABoxRelationBatchSize")
+        parsed = number_or_none(raw)
+        if parsed is None:
+            parsed = 4
+        # Every active ABox endpoint is now matched through its generation-
+        # scoped, @unique storage identity. Small independent batches therefore
+        # have a bounded one-row lookup per endpoint rather than the legacy
+        # public-ID cross product. Eight edges keeps one TypeQL statement below
+        # the planner cliff while avoiding thousands of single-edge writes.
+        return max(1, min(8, int(parsed)))
 
     def graph_write_transaction_query_count(self, settings: Dict[str, object] = None) -> int:
         raw = (settings or runtime_settings()).get("typedbGraphWriteTransactionQueryCount")
@@ -2236,15 +2402,25 @@ class TypeDBOntologyGraphRepository(GraphStoreOntologyRowMapperMixin):
         imported,
         box: str,
         snapshot_id: str,
+        batch_size: int = None,
+        max_batches: int = None,
     ) -> Dict[str, object]:
-        """Delete one inactive ABox generation in short TypeDB writes."""
+        """Delete one inactive ABox generation in short TypeDB writes.
+
+        ``max_batches`` turns the operation into a bounded maintenance slice.
+        The active projection path uses that mode so historical cleanup cannot
+        consume an entire realtime reasoning cycle.
+        """
         clean_box = str(box or "").strip()
         clean_snapshot_id = str(snapshot_id or "").strip()
         if not clean_box or not clean_snapshot_id:
             return {"status": "skipped", "deletedBatchCount": 0}
         _TypeDB, _Credentials, _DriverOptions, _DriverTlsConfig, TransactionType = imported[0]
-        batch_size = self.abox_delete_batch_size()
+        configured_batch_size = self.abox_delete_batch_size() if batch_size is None else int(batch_size or 0)
+        safe_batch_size = max(1, min(5000, configured_batch_size))
+        safe_max_batches = None if max_batches is None else max(0, int(max_batches or 0))
         deleted_batches = 0
+        remaining_types: List[str] = []
         for type_label in ["ontology-assertion", "ontology-node"]:
             while self.box_snapshot_instance_exists(
                 driver,
@@ -2253,11 +2429,14 @@ class TypeDBOntologyGraphRepository(GraphStoreOntologyRowMapperMixin):
                 clean_snapshot_id,
                 type_label,
             ):
+                if safe_max_batches is not None and deleted_batches >= safe_max_batches:
+                    remaining_types.append(type_label)
+                    break
                 query = self.box_snapshot_delete_batch_query(
                     clean_box,
                     clean_snapshot_id,
                     type_label,
-                    batch_size,
+                    safe_batch_size,
                 )
 
                 def delete_batch():
@@ -2272,12 +2451,26 @@ class TypeDBOntologyGraphRepository(GraphStoreOntologyRowMapperMixin):
 
                 self.with_typedb_retries(delete_batch)
                 deleted_batches += 1
+            if remaining_types:
+                break
+        if safe_max_batches is not None and deleted_batches >= safe_max_batches:
+            for type_label in ["ontology-assertion", "ontology-node"]:
+                if self.box_snapshot_instance_exists(
+                    driver,
+                    imported,
+                    clean_box,
+                    clean_snapshot_id,
+                    type_label,
+                ) and type_label not in remaining_types:
+                    remaining_types.append(type_label)
         return {
-            "status": "ok",
+            "status": "partial" if remaining_types else "ok",
             "ontologyBox": clean_box,
             "aboxSnapshotId": clean_snapshot_id,
-            "batchSize": batch_size,
+            "batchSize": safe_batch_size,
+            "maxBatches": safe_max_batches,
             "deletedBatchCount": deleted_batches,
+            "remainingRowTypes": remaining_types,
         }
 
     def delete_box_rows_in_batches(self, driver, imported, boxes: Iterable[str]) -> Dict[str, object]:
@@ -2357,6 +2550,120 @@ class TypeDBOntologyGraphRepository(GraphStoreOntologyRowMapperMixin):
             "removedCandidateSnapshotIds": stale_candidates,
             "deletedBatchCount": deleted_batches,
             "legacyStagingCleanup": legacy,
+        }
+
+    def drain_inactive_abox_generations_incrementally(
+        self,
+        driver,
+        imported,
+        active_snapshot_id: str = "",
+        excluded_snapshot_ids: Iterable[str] = None,
+    ) -> Dict[str, object]:
+        """Reclaim a bounded slice of inactive ABox generations.
+
+        Native inference and notification delivery must not wait for a full
+        historical deletion. The active pointer is already verified before
+        this method runs, and pending hand-offs are never cleaned here.
+        """
+        active = str(active_snapshot_id or "").strip()
+        excluded = {
+            str(item or "").strip()
+            for item in excluded_snapshot_ids or []
+            if str(item or "").strip()
+        }
+        if not active:
+            return {
+                "status": "skipped",
+                "reason": "No active ABox generation is available for safe incremental cleanup.",
+                "activeAboxSnapshotId": active,
+                "deletedBatchCount": 0,
+            }
+        pending = self.pending_abox_activation()
+        if str(pending.get("status") or "") == "pending":
+            return {
+                "status": "skipped",
+                "reason": "ABox activation is pending native inference.",
+                "activeAboxSnapshotId": active,
+                "pendingAboxSnapshotId": str(pending.get("candidateAboxSnapshotId") or ""),
+                "deletedBatchCount": 0,
+            }
+        max_batches = self.abox_incremental_cleanup_max_batches_per_save()
+        if max_batches <= 0:
+            return {
+                "status": "skipped",
+                "reason": "Incremental ABox cleanup is disabled by runtime setting.",
+                "activeAboxSnapshotId": active,
+                "deletedBatchCount": 0,
+            }
+        candidates = [
+            snapshot_id
+            for snapshot_id in self.abox_candidate_snapshot_ids()
+            if snapshot_id != active and snapshot_id not in excluded
+        ]
+        markers = self.abox_projection_marker_rows()
+        marker_by_snapshot: Dict[str, Dict[str, object]] = {}
+        for marker in markers:
+            snapshot_id = str(marker.get("aboxSnapshotId") or marker.get("snapshotId") or "").strip()
+            if snapshot_id and snapshot_id in candidates:
+                previous = marker_by_snapshot.get(snapshot_id)
+                if previous is None or (
+                    str(marker.get("updatedAt") or ""), str(marker.get("id") or "")
+                ) > (
+                    str(previous.get("updatedAt") or ""), str(previous.get("id") or "")
+                ):
+                    marker_by_snapshot[snapshot_id] = marker
+        incomplete = sorted(snapshot_id for snapshot_id in candidates if snapshot_id not in marker_by_snapshot)
+        completed_newest_first = sorted(
+            marker_by_snapshot,
+            key=lambda snapshot_id: (
+                str(marker_by_snapshot[snapshot_id].get("updatedAt") or ""),
+                str(marker_by_snapshot[snapshot_id].get("id") or ""),
+                snapshot_id,
+            ),
+            reverse=True,
+        )
+        keep_count = self.abox_inactive_generation_keep_count()
+        retained = completed_newest_first[:keep_count]
+        completed_oldest_first = list(reversed(completed_newest_first[keep_count:]))
+        targets = incomplete + completed_oldest_first
+        deleted_batches = 0
+        attempted: List[str] = []
+        slices: List[Dict[str, object]] = []
+        remaining_budget = max_batches
+        for snapshot_id in targets:
+            if remaining_budget <= 0:
+                break
+            cleanup = self.delete_box_snapshot_rows_in_batches(
+                driver,
+                imported,
+                "ABox",
+                snapshot_id,
+                batch_size=self.abox_incremental_cleanup_batch_size(),
+                max_batches=remaining_budget,
+            )
+            attempted.append(snapshot_id)
+            slices.append(cleanup)
+            deleted = int(number_or_none(cleanup.get("deletedBatchCount")) or 0)
+            deleted_batches += deleted
+            remaining_budget = max(0, remaining_budget - deleted)
+            if str(cleanup.get("status") or "") == "partial":
+                break
+        remaining = [snapshot_id for snapshot_id in targets if snapshot_id not in attempted]
+        if slices and str(slices[-1].get("status") or "") == "partial":
+            remaining = [str(slices[-1].get("aboxSnapshotId") or "")] + remaining
+        return {
+            "status": "partial" if remaining else "ok",
+            "activeAboxSnapshotId": active,
+            "excludedSnapshotIds": sorted(excluded),
+            "candidateSnapshotIds": candidates,
+            "retainedInactiveSnapshotIds": retained,
+            "cleanupTargetSnapshotIds": targets,
+            "attemptedSnapshotIds": attempted,
+            "remainingSnapshotIds": [item for item in remaining if item],
+            "batchSize": self.abox_incremental_cleanup_batch_size(),
+            "maxBatches": max_batches,
+            "deletedBatchCount": deleted_batches,
+            "slices": slices,
         }
 
     def prune_inactive_abox_generations(
@@ -2500,12 +2807,21 @@ class TypeDBOntologyGraphRepository(GraphStoreOntologyRowMapperMixin):
                 return snapshot_id
         return ""
 
-    def abox_active_pointer_graph(self, graph: PortfolioOntology) -> PortfolioOntology:
+    def abox_active_pointer_graph(
+        self,
+        graph: PortfolioOntology,
+        previous_snapshot_id: str = "",
+        pending_activation: bool = True,
+    ) -> PortfolioOntology:
         worldview = dict(getattr(graph, "worldview", {}) or {})
         snapshot_id = self.abox_snapshot_id_from_graph(graph)
         fingerprint = str(worldview.get("materialFingerprint") or "").strip()
         if not snapshot_id:
             return PortfolioOntology(str(graph.portfolio_id or "typedb-abox-control"))
+        as_of = str(worldview.get("asOf") or worldview.get("generatedAt") or utc_now())
+        target_symbols = clean_symbols_from_payload(
+            worldview.get("inferenceTargetSymbols") or worldview.get("targetSymbols") or []
+        )
         pointer = OntologyEntity(
             entity_id="abox-active-pointer",
             label="Active ABox generation",
@@ -2517,10 +2833,291 @@ class TypeDBOntologyGraphRepository(GraphStoreOntologyRowMapperMixin):
                 "aboxSnapshotId": snapshot_id,
                 "materialFingerprint": fingerprint,
                 "projectionRunId": str(worldview.get("projectionRunId") or ""),
-                "asOf": str(worldview.get("asOf") or worldview.get("generatedAt") or utc_now()),
+                "asOf": as_of,
             },
         )
-        return PortfolioOntology(str(graph.portfolio_id or "typedb-abox-control"), entities=[pointer])
+        entities = [pointer]
+        # Store the activation hand-off in the same atomic ABoxControl write as
+        # the pointer. This is cleared only after a native InferenceBox is
+        # aligned, or after an explicit rollback to the retained predecessor.
+        if pending_activation and str(previous_snapshot_id or "").strip() != snapshot_id:
+            entities.append(OntologyEntity(
+                entity_id="abox-activation-pending",
+                label="ABox activation pending native inference",
+                kind="abox-activation-pending",
+                properties={
+                    "ontologyBox": "ABoxControl",
+                    "tboxClass": "ABoxActivationPending",
+                    "snapshotId": snapshot_id,
+                    "aboxSnapshotId": snapshot_id,
+                    "candidateAboxSnapshotId": snapshot_id,
+                    "previousAboxSnapshotId": str(previous_snapshot_id or "").strip(),
+                    "materialFingerprint": fingerprint,
+                    "projectionRunId": str(worldview.get("projectionRunId") or ""),
+                    "asOf": as_of,
+                    "targetSymbols": target_symbols,
+                    "activationStatus": "pending-native-inference",
+                },
+            ))
+        return PortfolioOntology(str(graph.portfolio_id or "typedb-abox-control"), entities=entities)
+
+    def activate_abox_generation(self, snapshot_id: str) -> Dict[str, object]:
+        """Point the active ABox control record at a verified generation.
+
+        This is used to restore the last aligned ABox when a newly activated
+        generation cannot complete TypeDB native inference. It only accepts a
+        generation with a complete ABox marker, so it cannot promote a partial
+        write left behind by an interrupted worker.
+        """
+        clean_snapshot_id = str(snapshot_id or "").strip()
+        if not clean_snapshot_id:
+            return {
+                "configured": bool(self.address),
+                "status": "skipped",
+                "graphStore": "typedb",
+                "reason": "ABox snapshot id is empty.",
+            }
+        marker = next((
+            item
+            for item in self.abox_projection_marker_rows()
+            if str(item.get("aboxSnapshotId") or item.get("snapshotId") or "").strip() == clean_snapshot_id
+        ), None)
+        metadata = self.abox_metadata_from_marker(marker or {}) if marker else {}
+        if str(metadata.get("status") or "") != "ok":
+            return {
+                "configured": bool(self.address),
+                "status": "error",
+                "graphStore": "typedb",
+                "aboxSnapshotId": clean_snapshot_id,
+                "reason": str(metadata.get("reason") or "ABox generation is not complete."),
+            }
+        imported = self.driver_imports()
+        if imported[0] is None:
+            return self.driver_missing_result(imported[1], PortfolioOntology("typedb-abox-control"))
+        pointer_graph = self.abox_active_pointer_graph(PortfolioOntology(
+            "typedb-abox-control",
+            worldview={
+                "aboxSnapshotId": clean_snapshot_id,
+                "materialFingerprint": str(metadata.get("materialFingerprint") or ""),
+                "projectionRunId": str(metadata.get("projectionRunId") or ""),
+                "asOf": str(metadata.get("asOf") or utc_now()),
+            },
+        ), pending_activation=False)
+        try:
+            def operation():
+                driver = self.open_driver(imported)
+                try:
+                    self.ensure_database(driver)
+                    self.write_graph(driver, imported, pointer_graph, delete_boxes=["ABoxControl"])
+                finally:
+                    self.close_driver(driver)
+
+            self.with_typedb_retries(operation)
+            active = self.active_abox_metadata()
+            if str(active.get("status") or "") != "ok" or str(active.get("aboxSnapshotId") or "") != clean_snapshot_id:
+                return {
+                    "configured": True,
+                    "status": "error",
+                    "graphStore": "typedb",
+                    "aboxSnapshotId": clean_snapshot_id,
+                    "reason": "ABox control pointer verification failed after activation.",
+                    "activeAbox": active,
+                }
+            return {
+                "configured": True,
+                "status": "ok",
+                "graphStore": "typedb",
+                "aboxSnapshotId": clean_snapshot_id,
+                "activeAbox": active,
+            }
+        except Exception as error:  # noqa: BLE001 - caller preserves the diagnostic failure state.
+            return {
+                "configured": True,
+                "status": "error",
+                "graphStore": "typedb",
+                "aboxSnapshotId": clean_snapshot_id,
+                "reasonCode": typedb_error_code(error),
+                "reason": str(error)[:220],
+            }
+
+    def finalize_abox_generation(self, active_snapshot_id: str, previous_snapshot_id: str = "") -> Dict[str, object]:
+        """Complete an ABox activation after aligned native inference.
+
+        Clearing the durable activation journal is a correctness boundary;
+        deleting the prior generation is storage maintenance. Keeping those
+        operations separate prevents one expensive TypeDB delete from making a
+        valid realtime inference appear incomplete or retriggering alerts.
+        """
+        active_id = str(active_snapshot_id or "").strip()
+        previous_id = str(previous_snapshot_id or "").strip()
+        if not active_id:
+            return {
+                "configured": bool(self.address),
+                "status": "error",
+                "graphStore": "typedb",
+                "activeAboxSnapshotId": active_id,
+                "previousAboxSnapshotId": previous_id,
+                "reason": "Active ABox snapshot id is empty.",
+            }
+        active = self.active_abox_metadata()
+        if str(active.get("status") or "") != "ok" or str(active.get("aboxSnapshotId") or "") != active_id:
+            return {
+                "configured": bool(self.address),
+                "status": "error",
+                "graphStore": "typedb",
+                "activeAboxSnapshotId": active_id,
+                "previousAboxSnapshotId": previous_id,
+                "reason": "Active ABox changed before retained-generation cleanup.",
+            }
+        control = self.activate_abox_generation(active_id)
+        cleared = str(control.get("status") or "") == "ok"
+        cleanup_deferred = bool(previous_id and previous_id != active_id)
+        return {
+            "configured": True,
+            "status": "ok" if cleared else "error",
+            "graphStore": "typedb",
+            "activeAboxSnapshotId": active_id,
+            "previousAboxSnapshotId": previous_id,
+            "clearedPendingActivation": cleared,
+            "cleanupDeferred": cleanup_deferred,
+            "cleanup": {
+                "status": "deferred" if cleanup_deferred else "not-required",
+                "previousAboxSnapshotId": previous_id,
+                "reason": (
+                    "Inactive ABox cleanup will run in bounded maintenance slices."
+                    if cleanup_deferred
+                    else "No prior ABox generation requires cleanup."
+                ),
+            },
+            "control": control,
+            "reason": "" if cleared else str(control.get("reason") or "ABox activation journal clear failed."),
+        }
+
+    def inferencebox_matches_pending_abox_activation(
+        self,
+        inferencebox: Dict[str, object],
+        candidate_snapshot_id: str,
+        target_symbols: Iterable[str] = None,
+    ) -> bool:
+        if str((inferencebox or {}).get("status") or "") != "ok":
+            return False
+        if not bool((inferencebox or {}).get("nativeTypeDbReasoningUsed")):
+            return False
+        if (inferencebox or {}).get("generationAligned") is False:
+            return False
+        if str((inferencebox or {}).get("sourceAboxSnapshotId") or "").strip() != str(candidate_snapshot_id or "").strip():
+            return False
+        expected = set(clean_symbols_from_payload(target_symbols or []))
+        actual = set(clean_symbols_from_payload((inferencebox or {}).get("targetSymbols") or []))
+        return not expected or expected.issubset(actual)
+
+    def recover_pending_abox_activation(self) -> Dict[str, object]:
+        """Finish or roll back an interrupted ABox-to-InferenceBox hand-off."""
+        try:
+            pending = self.pending_abox_activation()
+        except Exception as error:  # noqa: BLE001 - caller must block a new activation when control state is unreadable.
+            return {
+                "configured": bool(self.address),
+                "status": "error",
+                "graphStore": "typedb",
+                "reasonCode": typedb_error_code(error),
+                "reason": "ABox activation journal lookup failed: " + str(error)[:180],
+            }
+        if str(pending.get("status") or "") == "empty":
+            return {
+                "configured": True,
+                "status": "skipped",
+                "graphStore": "typedb",
+                "reason": "No pending ABox activation exists.",
+            }
+        if str(pending.get("status") or "") != "pending":
+            return {
+                "configured": True,
+                "status": "error",
+                "graphStore": "typedb",
+                "pendingActivation": pending,
+                "reason": "ABox activation journal is invalid.",
+            }
+        candidate_id = str(pending.get("candidateAboxSnapshotId") or "").strip()
+        previous_id = str(pending.get("previousAboxSnapshotId") or "").strip()
+        active = self.active_abox_metadata()
+        active_id = str(active.get("aboxSnapshotId") or "").strip()
+        if str(active.get("status") or "") != "ok":
+            return {
+                "configured": True,
+                "status": "error",
+                "graphStore": "typedb",
+                "pendingActivation": pending,
+                "activeAbox": active,
+                "reason": "Pending ABox activation has no complete active generation.",
+            }
+        if active_id != candidate_id:
+            # The pointer already moved by a successful rollback or a later
+            # repair. Rewriting that verified pointer clears a stale journal.
+            control = self.activate_abox_generation(active_id)
+            return {
+                "configured": True,
+                "status": "cleared-stale" if str(control.get("status") or "") == "ok" else "error",
+                "graphStore": "typedb",
+                "candidateAboxSnapshotId": candidate_id,
+                "activeAboxSnapshotId": active_id,
+                "previousAboxSnapshotId": previous_id,
+                "control": control,
+                "reason": "" if str(control.get("status") or "") == "ok" else str(control.get("reason") or "ABox control clear failed."),
+            }
+        try:
+            inferencebox = self.inferencebox_snapshot(
+                symbols=list(pending.get("targetSymbols") or []),
+                limit=80,
+            )
+        except Exception as error:  # noqa: BLE001 - preserve the old generation when inference state cannot be verified.
+            return {
+                "configured": True,
+                "status": "error",
+                "graphStore": "typedb",
+                "candidateAboxSnapshotId": candidate_id,
+                "previousAboxSnapshotId": previous_id,
+                "reason": "InferenceBox verification failed during ABox recovery: " + str(error)[:180],
+            }
+        if self.inferencebox_matches_pending_abox_activation(
+            inferencebox,
+            candidate_id,
+            pending.get("targetSymbols") or [],
+        ):
+            finalization = self.finalize_abox_generation(candidate_id, previous_id)
+            return {
+                "configured": True,
+                "status": "finalized" if str(finalization.get("status") or "") == "ok" else "error",
+                "graphStore": "typedb",
+                "candidateAboxSnapshotId": candidate_id,
+                "previousAboxSnapshotId": previous_id,
+                "inferenceBox": inferencebox,
+                "finalization": finalization,
+                "reason": "" if str(finalization.get("status") or "") == "ok" else str(finalization.get("reason") or "ABox finalization failed."),
+            }
+        if not previous_id:
+            # There is no prior verified generation to restore. The candidate
+            # remains visible but cannot produce investment judgement until a
+            # later same-material cycle retries native inference.
+            return {
+                "configured": True,
+                "status": "retry-required",
+                "graphStore": "typedb",
+                "candidateAboxSnapshotId": candidate_id,
+                "inferenceBox": inferencebox,
+                "reason": "Initial ABox activation is awaiting a retry of TypeDB native inference.",
+            }
+        rollback = self.activate_abox_generation(previous_id)
+        return {
+            "configured": True,
+            "status": "restored" if str(rollback.get("status") or "") == "ok" else "error",
+            "graphStore": "typedb",
+            "candidateAboxSnapshotId": candidate_id,
+            "previousAboxSnapshotId": previous_id,
+            "inferenceBox": inferencebox,
+            "rollback": rollback,
+            "reason": "" if str(rollback.get("status") or "") == "ok" else str(rollback.get("reason") or "ABox rollback failed."),
+        }
 
     def write_graph(
         self,
@@ -4044,15 +4641,26 @@ relation ontology-assertion,
         executed_rules = []
         skipped_rules = []
         read_call_count = 0
+        read_transaction_count = 0
         execution_plan: Dict[str, object] = {}
+        query_failures = []
+        execution_budget_exhausted = False
         try:
             relation_types_by_symbol: Dict[str, Iterable[str]] = {}
             rule_context: Dict[str, object] = {}
             if clean_symbols:
-                rule_context = self.active_abox_rule_context(clean_symbols)
-                if str(rule_context.get("status") or "") != "ok":
-                    raise RuntimeError("TypeDB active ABox rule context is unavailable.")
-                relation_types_by_symbol = dict(rule_context.get("relationTypesBySymbol") or {})
+                try:
+                    rule_context = self.active_abox_rule_context(clean_symbols)
+                    if str(rule_context.get("status") or "") != "ok":
+                        raise RuntimeError("TypeDB active ABox rule context is unavailable.")
+                    relation_types_by_symbol = dict(rule_context.get("relationTypesBySymbol") or {})
+                except Exception as error:  # noqa: BLE001 - planner topology is an optimization, never a reason to stall all rule functions.
+                    rule_context = {
+                        "status": "degraded",
+                        "symbols": clean_symbols,
+                        "reason": str(error)[:220],
+                        "relationTypesBySymbol": {},
+                    }
             execution_plan = typedb_native_rule_execution_plan(
                 rules,
                 clean_symbols,
@@ -4072,75 +4680,109 @@ relation ontology-assertion,
             _TypeDB, _Credentials, _DriverOptions, _DriverTlsConfig, TransactionType = imported[0]
 
             def operation():
-                nonlocal read_call_count
+                nonlocal read_call_count, read_transaction_count, execution_budget_exhausted
                 driver = self.open_driver(imported)
                 try:
                     self.ensure_database(driver)
-                    with driver.transaction(
-                        self.database,
-                        TransactionType.READ,
-                        self.read_transaction_options(),
-                    ) as tx:
-                        for planned in execution_plan.get("selectedEntries") or []:
-                            rule = planned.get("rule")
-                            if not rule:
-                                continue
-                            rule_payload = rule.to_dict() if hasattr(rule, "to_dict") else dict(rule or {})
-                            profile = typedb_native_rule_profile(rule_payload)
-                            if profile.get("status") != "ready":
-                                skipped_rules.append({
-                                    "ruleId": str(rule.rule_id or ""),
-                                    "status": profile.get("status"),
-                                    "reason": "Rule has JSON-bound or unsupported conditions for TypeDB schema function execution.",
-                                })
-                                continue
-                            function_name = typedb_native_rule_function_name(rule.rule_id)
-                            candidate_symbols = clean_symbols_from_payload(
-                                planned.get("candidateSymbols") or clean_symbols
-                            )
-                            query_plan = (
-                                typedb_native_function_call_query(rule_payload, candidate_symbols)
-                                if schema_function_query
-                                else typedb_native_match_query(rule_payload, candidate_symbols)
-                            )
-                            if not query_plan.get("query"):
-                                skipped_rules.append({
-                                    "ruleId": str(rule.rule_id or ""),
-                                    "status": "blocked",
-                                    "reason": "TypeDB schema function call could not be built.",
-                                })
-                                continue
-                            try:
+                    deadline = time.monotonic() + self.native_rule_execution_budget_seconds()
+                    for planned in execution_plan.get("selectedEntries") or []:
+                        rule = planned.get("rule")
+                        if not rule:
+                            continue
+                        remaining_seconds = deadline - time.monotonic()
+                        if remaining_seconds <= 0:
+                            execution_budget_exhausted = True
+                            skipped_rules.append({
+                                "ruleId": str(rule.rule_id or ""),
+                                "status": "deferred-by-runtime-budget",
+                                "reason": "TypeDB native-rule realtime execution budget is exhausted.",
+                            })
+                            continue
+                        rule_payload = rule.to_dict() if hasattr(rule, "to_dict") else dict(rule or {})
+                        profile = typedb_native_rule_profile(rule_payload)
+                        if profile.get("status") != "ready":
+                            skipped_rules.append({
+                                "ruleId": str(rule.rule_id or ""),
+                                "status": profile.get("status"),
+                                "reason": "Rule has JSON-bound or unsupported conditions for TypeDB schema function execution.",
+                            })
+                            continue
+                        function_name = typedb_native_rule_function_name(rule.rule_id)
+                        candidate_symbols = clean_symbols_from_payload(
+                            planned.get("candidateSymbols") or clean_symbols
+                        )
+                        query_plan = (
+                            typedb_native_function_call_query(rule_payload, candidate_symbols)
+                            if schema_function_query
+                            else typedb_native_match_query(rule_payload, candidate_symbols)
+                        )
+                        if not query_plan.get("query"):
+                            skipped_rules.append({
+                                "ruleId": str(rule.rule_id or ""),
+                                "status": "blocked",
+                                "reason": "TypeDB schema function call could not be built.",
+                            })
+                            continue
+                        query_timeout = min(self.native_rule_query_timeout_seconds(), remaining_seconds)
+                        try:
+                            read_transaction_count += 1
+                            with driver.transaction(
+                                self.database,
+                                TransactionType.READ,
+                                self.read_transaction_options(query_timeout),
+                            ) as tx:
                                 rows = self.read_rows_in_transaction(
                                     tx,
                                     str(query_plan.get("query")),
                                     query_plan.get("columns") or ["sourceId"],
                                     label="nativeRule:" + str(rule.rule_id or ""),
-                                    timeout_seconds=self.native_rule_query_timeout_seconds(),
+                                    timeout_seconds=query_timeout,
                                 )
-                                read_call_count += 1
-                            except Exception as error:  # noqa: BLE001 - one bad stored rule must not block every holding.
-                                skipped_rules.append({
-                                    "ruleId": str(rule.rule_id or ""),
-                                    "status": "query-timeout" if typedb_error_code(error) == "typedbTimeout" else "query-error",
-                                    "reason": str(error)[:220],
-                                    "candidateSymbols": candidate_symbols,
-                                })
-                                continue
-                            executed_rules.append({
-                                "ruleId": rule.rule_id,
-                                "nativeRuleId": typedb_native_rule_id(rule.rule_id),
-                                "schemaFunctionName": function_name,
-                                "queryMode": execution_mode,
-                                "rowCount": len(rows),
+                            read_call_count += 1
+                        except Exception as error:  # noqa: BLE001 - a failed function is explicit and cannot be silently treated as complete reasoning.
+                            failure = {
+                                "ruleId": str(rule.rule_id or ""),
+                                "status": "query-timeout" if typedb_error_code(error) == "typedbTimeout" else "query-error",
+                                "reason": str(error)[:220],
                                 "candidateSymbols": candidate_symbols,
-                                "queryComplexity": int(planned.get("queryComplexity") or 0),
-                            })
-                            self.merge_native_match_rows(rule, query_plan, rows, match_index, matches)
+                            }
+                            skipped_rules.append(failure)
+                            query_failures.append(failure)
+                            continue
+                        executed_rules.append({
+                            "ruleId": rule.rule_id,
+                            "nativeRuleId": typedb_native_rule_id(rule.rule_id),
+                            "schemaFunctionName": function_name,
+                            "queryMode": execution_mode,
+                            "rowCount": len(rows),
+                            "candidateSymbols": candidate_symbols,
+                            "queryComplexity": int(planned.get("queryComplexity") or 0),
+                        })
+                        self.merge_native_match_rows(rule, query_plan, rows, match_index, matches)
                 finally:
                     self.close_driver(driver)
 
             self.with_typedb_retries(operation)
+            if query_failures or execution_budget_exhausted:
+                return {
+                    "status": "partial",
+                    "graphStore": "typedb",
+                    "engineVersion": TYPEDB_NATIVE_RULE_ENGINE_VERSION,
+                    "nativeQueryUsed": False,
+                    "schemaFunctionUsed": schema_function_query,
+                    "nativeExecutionMode": execution_mode,
+                    "matchedCount": len(matches),
+                    "matches": matches,
+                    "reasonCode": "typedbNativeRuleExecutionPartial",
+                    "reason": "TypeDB native rule execution did not complete within the realtime boundary.",
+                    "readTransactionCount": read_transaction_count,
+                    "readQueryCount": read_call_count,
+                    "executedRules": executed_rules[:40],
+                    "skippedRules": skipped_rules[:40],
+                    "executionPlan": typedb_native_rule_execution_plan_summary(execution_plan),
+                    "ruleContext": rule_context,
+                    "typedbQueryMetrics": self.query_metrics_snapshot(),
+                }
             return {
                 "status": "ok",
                 "graphStore": "typedb",
@@ -4151,8 +4793,9 @@ relation ontology-assertion,
                 "executedRuleCount": len(executed_rules),
                 "skippedRuleCount": len(skipped_rules),
                 "matchedCount": len(matches),
-                "readTransactionCount": 1 if executed_rules else 0,
+                "readTransactionCount": read_transaction_count,
                 "readQueryCount": read_call_count,
+                "readTransactionCount": read_transaction_count,
                 "conditionDetailQueryCount": 0 if not self.condition_detail_queries_enabled() else None,
                 "typedbQueryMetrics": self.query_metrics_snapshot(),
                 "matches": matches,
@@ -6682,12 +7325,14 @@ def typedb_native_function_call_query(rule: Dict[str, object], target_symbols: I
         "has ontology-box \"ABoxControl\", has ontology-snapshot-id $activeAboxSnapshotId;",
         "$candidate isa ontology-node, has ontology-kind " + typedb_string(source_kind)
         + ", has ontology-box \"ABox\", has ontology-snapshot-id $activeAboxSnapshotId;",
-        "let $source in " + function_name + "($candidate);",
-        "$source has ontology-id $sourceId;",
-        "$source has ontology-label $sourceLabel;",
     ]
     if symbols:
         clauses.append(typedb_value_match("$candidate", "ontology-symbol", symbols, "==", "sourceSymbol"))
+    clauses.extend([
+        "let $source in " + function_name + "($candidate);",
+        "$source has ontology-id $sourceId;",
+        "$source has ontology-label $sourceLabel;",
+    ])
     return {
         "ruleId": rule_id,
         "nativeRuleId": typedb_native_rule_id(rule_id),
@@ -7529,4 +8174,6 @@ def typedb_repository_from_settings(settings: Dict[str, str] = None):
         ),
         native_rule_query_timeout_seconds=number_or_none(settings.get("typedbNativeRuleQueryTimeoutSeconds"))
         or DEFAULT_TYPEDB_NATIVE_RULE_QUERY_TIMEOUT_SECONDS,
+        native_rule_execution_budget_seconds=number_or_none(settings.get("typedbNativeRuleExecutionBudgetSeconds"))
+        or DEFAULT_TYPEDB_NATIVE_RULE_EXECUTION_BUDGET_SECONDS,
     )

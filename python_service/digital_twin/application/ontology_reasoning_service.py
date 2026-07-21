@@ -533,6 +533,12 @@ class OntologyReasoningRunner:
             if event_candidates:
                 _rank, event_id, due_symbols = max(event_candidates, key=lambda item: item[0])
                 snapshot_limit = self.coherent_snapshot_max_symbols()
+                # Coherence refers to the full ABox retained for context, not
+                # an unbounded schema-function request. Native TypeDB rules
+                # still run only for the configured incremental subjects so a
+                # broad market event cannot monopolize the realtime worker.
+                if max_symbols > 0:
+                    snapshot_limit = min(snapshot_limit, max_symbols)
                 selected = list(due_symbols[:snapshot_limit])
                 batches[event_id] = selected
                 return batches, selected, max(0, len(all_due_symbols) - len(selected))

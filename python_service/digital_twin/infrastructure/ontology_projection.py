@@ -19,6 +19,7 @@ from ..domain.ontology_projection_audit import (
 )
 from ..domain.ontology_validator import validate_ontology
 from ..domain.portfolio_ontology_builder import build_portfolio_ontology
+from ..domain.portfolio_ontology_coverage import CATEGORY_RELATIONS
 from ..domain.portfolio_ontology_temporal_concepts import parse_temporal_windows
 from ..domain.portfolio import AccountSnapshot
 from .graph_store_rulebox import rulebox_rules_to_payload
@@ -127,6 +128,7 @@ class PortfolioOntologyProjectionRecorder:
         target_symbols: List[str] = None,
     ) -> Dict[str, object]:
         projection_run = None
+        pending_activation_recovery: Dict[str, object] = {}
         if not self.repository:
             return {}
         if not self.has_projectable_data(snapshot):
@@ -147,6 +149,22 @@ class PortfolioOntologyProjectionRecorder:
                 "reason": "TypeDB ABox와 InferenceBox는 전용 온톨로지 추론 워커가 같은 주기에서 생성합니다.",
                 "preservedActiveGeneration": True,
                 "singleWriter": True,
+            }
+            self.store_projection_result(snapshot, result)
+            return result
+        pending_activation_recovery = self.recover_pending_abox_activation()
+        recovery_status = str(pending_activation_recovery.get("status") or "skipped")
+        if recovery_status not in {"skipped", "disabled", "finalized", "restored", "cleared-stale", "retry-required"}:
+            result = {
+                "saved": False,
+                "status": "pending-abox-activation-recovery-failed",
+                "reason": str(
+                    pending_activation_recovery.get("reason")
+                    or "TypeDB ABox activation recovery must complete before a new investment inference cycle."
+                )[:220],
+                "graphStore": self.active_graph_store_key(),
+                "preservedActiveGeneration": True,
+                "pendingAboxActivationRecovery": pending_activation_recovery,
             }
             self.store_projection_result(snapshot, result)
             return result
@@ -231,6 +249,8 @@ class PortfolioOntologyProjectionRecorder:
                 }
                 if rulebox_bootstrap:
                     result["ruleboxBootstrap"] = rulebox_bootstrap
+                if pending_activation_recovery:
+                    result["pendingAboxActivationRecovery"] = pending_activation_recovery
                 if self.inference_result_is_reusable(
                     inferencebox,
                     active_abox,
@@ -266,6 +286,11 @@ class PortfolioOntologyProjectionRecorder:
                 }
                 self.store_projection_result(snapshot, result)
                 return result
+            # Target subjects do not change the material ABox identity. They
+            # are persisted only in the activation journal so a restart can
+            # verify that the eventual native InferenceBox covered the exact
+            # requested incremental scope before predecessor cleanup.
+            persistence_graph.worldview["inferenceTargetSymbols"] = list(inference_symbols)
             result = self.repository.save_graph(persistence_graph)
             if not isinstance(result, dict):
                 result = {"saved": False, "status": "error", "reason": "ontology repository returned non-dict result"}
@@ -276,6 +301,8 @@ class PortfolioOntologyProjectionRecorder:
             result["aboxValidation"] = validation.to_dict()
             if rulebox_bootstrap:
                 result["ruleboxBootstrap"] = rulebox_bootstrap
+            if pending_activation_recovery:
+                result["pendingAboxActivationRecovery"] = pending_activation_recovery
             if result.get("saved"):
                 self.attach_graph_store_inference_result(result, snapshot, inference_symbols)
             if self.quality_store:
@@ -295,6 +322,21 @@ class PortfolioOntologyProjectionRecorder:
         except Exception:  # noqa: BLE001 - absence of comparison metadata falls back to persistence.
             return {}
         return dict(result or {}) if isinstance(result, dict) else {}
+
+    def recover_pending_abox_activation(self) -> Dict[str, object]:
+        if self.active_graph_store_key() != "typedb":
+            return {"status": "skipped", "reason": "Active graph store is not TypeDB."}
+        recovery = getattr(self.repository, "recover_pending_abox_activation", None)
+        if not callable(recovery):
+            return {"status": "skipped", "reason": "Graph store has no pending ABox activation journal."}
+        try:
+            result = recovery()
+        except Exception as error:  # noqa: BLE001 - do not replace a potentially recoverable active generation.
+            return {"status": "error", "reason": str(error)[:180]}
+        return dict(result or {}) if isinstance(result, dict) else {
+            "status": "error",
+            "reason": "Graph store returned an invalid ABox activation recovery result.",
+        }
 
     def ensure_rulebox_ready(self) -> Dict[str, object]:
         if not hasattr(self.repository, "rulebox_snapshot"):
@@ -456,6 +498,18 @@ class PortfolioOntologyProjectionRecorder:
             for item in (rule_catalog or {}).get("inputRelationTypes") or []
             if str(item or "").strip()
         }
+        # The active ABox is both TypeDB's native-rule input and the factual
+        # investment world shown to diagnostics and AI. Keep the category
+        # edges that define that world even when no currently enabled rule
+        # consumes one of them. Otherwise a valid Price/Liquidity concept can
+        # exist as an orphaned node, producing a misleading coverage gap.
+        semantic_relation_types = {
+            str(relation_type or "").upper().strip()
+            for category_types in CATEGORY_RELATIONS.values()
+            for relation_type in category_types
+            if str(relation_type or "").strip()
+        }
+        persisted_relation_types = native_relation_types | semantic_relation_types
         source_ids = {
             item.entity_id
             for item in abox_entities
@@ -465,8 +519,8 @@ class PortfolioOntologyProjectionRecorder:
             item
             for item in abox_relations
             if (
-                str(item.relation_type or "").upper().strip() in native_relation_types
-                if native_relation_types
+                str(item.relation_type or "").upper().strip() in persisted_relation_types
+                if persisted_relation_types
                 else item.source in source_ids or item.target in source_ids
             )
         ]
@@ -500,9 +554,11 @@ class PortfolioOntologyProjectionRecorder:
             worldview={
                 **dict(graph.worldview or {}),
                 "runtimeProjectionMode": "abox-facts-only-typedb-native-rules",
-                "runtimeProjectionScope": "typedb-rule-input-relations",
+                "runtimeProjectionScope": "typedb-rule-input-and-semantic-coverage-relations",
                 "runtimeProjectionSourceEntityCount": len(source_ids),
-                "runtimeProjectionRelationTypeCount": len(native_relation_types),
+                "runtimeProjectionRelationTypeCount": len(persisted_relation_types),
+                "runtimeProjectionRuleInputRelationTypeCount": len(native_relation_types),
+                "runtimeProjectionSemanticRelationTypeCount": len(semantic_relation_types),
             },
             prompt=graph.prompt,
         )
@@ -541,21 +597,105 @@ class PortfolioOntologyProjectionRecorder:
             if active_key == "typedb":
                 snapshot_payload.setdefault("source", "typedbInferenceBox")
             result["inferenceBox"] = snapshot_payload
+        elif hasattr(self.repository, "inferencebox_snapshot"):
+            try:
+                snapshot_payload = self.repository.inferencebox_snapshot(
+                    symbols=inference_symbols,
+                    limit=self.inference_snapshot_limit(),
+                )
+            except Exception as error:  # noqa: BLE001 - snapshot read is best effort.
+                snapshot_payload = {"status": "error", "reason": str(error)[:180], "graphStore": active_key}
+            if isinstance(snapshot_payload, dict):
+                snapshot_payload.setdefault("graphStore", active_key)
+                if active_key == "typedb":
+                    snapshot_payload.setdefault("source", "typedbInferenceBox")
+                result["inferenceBox"] = snapshot_payload
+        self.reconcile_abox_activation_after_inference(result, inference_symbols)
+
+    def reconcile_abox_activation_after_inference(
+        self,
+        result: Dict[str, object],
+        inference_symbols: List[str],
+    ) -> None:
+        """Keep active ABox and InferenceBox on the same verified generation.
+
+        ABox candidate persistence must precede TypeDB function evaluation, so
+        the pointer is briefly switched before the InferenceBox is known. The
+        predecessor stays retained until this method confirms an aligned native
+        generation. Any failed or incomplete native execution restores the
+        predecessor instead of exposing an ABox that cannot support judgement.
+        """
+        if self.active_graph_store_key(result) != "typedb":
             return
-        if not hasattr(self.repository, "inferencebox_snapshot"):
+        verification = result.get("aboxPersistenceVerification")
+        verification = verification if isinstance(verification, dict) else {}
+        activation = verification.get("activation") if isinstance(verification.get("activation"), dict) else {}
+        active_snapshot_id = str(activation.get("snapshotId") or result.get("aboxSnapshotId") or "").strip()
+        previous_snapshot_id = str(activation.get("previousSnapshotId") or "").strip()
+        activation_is_new = str(activation.get("status") or "") == "activated" and bool(result.get("saved"))
+        if not activation_is_new:
+            pending_reader = getattr(self.repository, "pending_abox_activation", None)
+            if not callable(pending_reader):
+                return
+            try:
+                pending = pending_reader()
+            except Exception:  # noqa: BLE001 - the current inference result remains independently observable.
+                return
+            if str((pending or {}).get("status") or "") != "pending":
+                return
+            active_snapshot_id = str(
+                (pending or {}).get("candidateAboxSnapshotId") or active_snapshot_id
+            ).strip()
+            previous_snapshot_id = str((pending or {}).get("previousAboxSnapshotId") or "").strip()
+            if not active_snapshot_id:
+                return
+        inferencebox = result.get("inferenceBox") if isinstance(result.get("inferenceBox"), dict) else {}
+        if self.inference_result_is_reusable(
+            inferencebox,
+            {"aboxSnapshotId": active_snapshot_id},
+            inference_symbols,
+        ):
+            finalizer = getattr(self.repository, "finalize_abox_generation", None)
+            if callable(finalizer):
+                try:
+                    result["aboxActivationFinalization"] = finalizer(
+                        active_snapshot_id,
+                        previous_snapshot_id,
+                    )
+                except Exception as error:  # noqa: BLE001 - cleanup may be retried without invalidating aligned reasoning.
+                    result["aboxActivationFinalization"] = {
+                        "status": "error",
+                        "reason": str(error)[:180],
+                        "activeAboxSnapshotId": active_snapshot_id,
+                        "previousAboxSnapshotId": previous_snapshot_id,
+                    }
             return
-        try:
-            snapshot_payload = self.repository.inferencebox_snapshot(
-                symbols=inference_symbols,
-                limit=self.inference_snapshot_limit(),
-            )
-        except Exception as error:  # noqa: BLE001 - snapshot read is best effort.
-            snapshot_payload = {"status": "error", "reason": str(error)[:180], "graphStore": active_key}
-        if isinstance(snapshot_payload, dict):
-            snapshot_payload.setdefault("graphStore", active_key)
-            if active_key == "typedb":
-                snapshot_payload.setdefault("source", "typedbInferenceBox")
-            result["inferenceBox"] = snapshot_payload
+
+        rollback = {
+            "status": "unavailable",
+            "reason": "No verified predecessor ABox generation is available for restoration.",
+        }
+        restore = getattr(self.repository, "activate_abox_generation", None)
+        if previous_snapshot_id and callable(restore):
+            try:
+                rollback = restore(previous_snapshot_id)
+            except Exception as error:  # noqa: BLE001 - preserve the explicit blocked state when restore itself fails.
+                rollback = {"status": "error", "reason": str(error)[:180]}
+        result["activationRollback"] = rollback
+        result["saved"] = False
+        result["preservedActiveGeneration"] = str(rollback.get("status") or "") == "ok"
+        result["status"] = (
+            "inference-failed-rolled-back"
+            if result["preservedActiveGeneration"]
+            else "inference-failed-no-rollback"
+        )
+        result["reason"] = (
+            "TypeDB native InferenceBox가 새 ABox 세대와 정렬되지 않아 "
+            + ("이전 검증 세대로 복원했습니다." if result["preservedActiveGeneration"] else "투자 추론을 차단했습니다.")
+        )
+        if isinstance(rollback.get("activeAbox"), dict):
+            verification["activePointer"] = dict(rollback.get("activeAbox") or {})
+            result["aboxPersistenceVerification"] = verification
 
     def existing_inference_result(
         self,

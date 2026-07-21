@@ -63,6 +63,8 @@ class FakeOntologyRepository:
             "typedbBootstrapReasoningUsed": False,
             "pythonBootstrapDisabled": True,
             "inferenceGenerationId": "inference-generation:test",
+            "sourceAboxSnapshotId": "abox-material:test",
+            "generationAligned": True,
             "ruleboxRulesHash": "hash-1",
             "ruleboxRuleCount": 2,
             "symbols": list(symbols or []),
@@ -224,6 +226,8 @@ class OntologyDiagnosticsServiceTests(unittest.TestCase):
         self.assertTrue(payload["typedb"]["addressConfigured"])
         self.assertEqual(payload["inferenceBox"]["reasoningMode"], "typedb-native-rule-materialized")
         self.assertEqual(payload["inferenceBox"]["ruleboxRulesHash"], "hash-1")
+        self.assertEqual(payload["inferenceBox"]["sourceAboxSnapshotId"], "abox-material:test")
+        self.assertTrue(payload["inferenceBox"]["generationAligned"])
         self.assertTrue(payload["reasoningBoundary"]["nativeTypeDbReasoningUsed"])
         self.assertFalse(payload["reasoningBoundary"]["typedbBootstrapReasoningUsed"])
         self.assertEqual("ok", payload["reasoningBoundary"]["ruleboxHashStatus"])
@@ -275,6 +279,49 @@ class OntologyDiagnosticsServiceTests(unittest.TestCase):
 
         self.assertEqual("ok", payload["aboxCoverage"]["status"])
         self.assertEqual(["stock:AAPL", "stock:SPY"], repository.source_ids)
+
+    def test_abox_coverage_prefers_root_holding_source_over_later_context_evidence(self):
+        class RootHoldingRepository(PrimaryCoverageRepository):
+            def read_entity_rows(self, boxes=None):
+                return [
+                    {
+                        "id": "stock:000660",
+                        "label": "SK hynix",
+                        "kind": "stock",
+                        "ontologyBox": "ABox",
+                        "symbol": "000660",
+                        "source": "holding",
+                        "tboxClass": "Stock",
+                    },
+                    {
+                        "id": "research:000660:latest",
+                        "label": "Research evidence",
+                        "kind": "research-evidence",
+                        "ontologyBox": "ABox",
+                        "symbol": "000660",
+                        "source": "external-signal",
+                        "tboxClass": "ResearchEvidence",
+                    },
+                ]
+
+            def read_relation_rows(self, boxes=None):
+                return [
+                    {"source": "stock:000660", "target": "price:000660", "type": "HAS_PRICE", "ontologyBox": "ABox", "symbol": "000660"},
+                    {"source": "stock:000660", "target": "path:000660", "type": "HAS_PRICE_PATH", "ontologyBox": "ABox", "symbol": "000660"},
+                    {"source": "stock:000660", "target": "flow:000660", "type": "HAS_TRADE_FLOW", "ontologyBox": "ABox", "symbol": "000660"},
+                    {"source": "stock:000660", "target": "liquidity:000660", "type": "HAS_LIQUIDITY_PROFILE", "ontologyBox": "ABox", "symbol": "000660"},
+                    {"source": "stock:000660", "target": "execution:000660", "type": "HAS_EXECUTION_METRIC", "ontologyBox": "ABox", "symbol": "000660"},
+                    {"source": "stock:000660", "target": "quality:000660", "type": "HAS_DATA_QUALITY", "ontologyBox": "ABox", "symbol": "000660"},
+                    {"source": "stock:000660", "target": "external:000660", "type": "HAS_EXTERNAL_SIGNAL", "ontologyBox": "ABox", "symbol": "000660"},
+                    {"source": "stock:000660", "target": "valuation:000660", "type": "HAS_VALUATION", "ontologyBox": "ABox", "symbol": "000660"},
+                    {"source": "stock:000660", "target": "macro:000660", "type": "HAS_MACRO_REGIME", "ontologyBox": "ABox", "symbol": "000660"},
+                ]
+
+        coverage = OntologyDiagnosticsService(ontology_repository=RootHoldingRepository()).status()["aboxCoverage"]
+
+        self.assertEqual("primary", coverage["symbols"][0]["diagnosticScope"])
+        self.assertEqual(1, coverage["primarySymbolCount"])
+        self.assertEqual(0, coverage["contextSymbolCount"])
 
     def test_strategy_proposal_boundary_reports_validated_backlog(self):
         service = OntologyDiagnosticsService(

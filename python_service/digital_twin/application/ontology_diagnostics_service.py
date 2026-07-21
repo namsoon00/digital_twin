@@ -174,6 +174,9 @@ class OntologyDiagnosticsService:
             "pythonBootstrapDisabled",
             "inferenceGenerationId",
             "inferenceGenerationAt",
+            "sourceAboxSnapshotId",
+            "sourceAboxMaterialFingerprint",
+            "generationAligned",
             "generationScoped",
             "generationCount",
             "inactiveGenerationEntityCount",
@@ -211,13 +214,37 @@ class OntologyDiagnosticsService:
         stock_symbols = self.abox_symbols(entities, [])
         if clean_symbols:
             stock_symbols = [item for item in stock_symbols if item in clean_symbols]
-        try:
-            relations = self.abox_coverage_relations(entities, stock_symbols)
-        except Exception as error:  # noqa: BLE001 - diagnostics must stay available.
-            return {"status": "error", "reason": str(error)[:220]}
         relation_types_by_symbol: Dict[str, set] = {symbol: set() for symbol in stock_symbols}
+        relations = []
+        relation_count = 0
+        topology_reader = getattr(self.ontology_repository, "active_abox_relation_types_by_symbol", None)
+        if callable(topology_reader):
+            try:
+                topology = topology_reader(stock_symbols)
+            except Exception as error:  # noqa: BLE001 - diagnostics must stay available.
+                return {"status": "error", "reason": str(error)[:220]}
+            if str((topology or {}).get("status") or "") == "ok":
+                relation_count = int((topology or {}).get("relationCount") or 0)
+                direct_types = (topology or {}).get("relationTypesBySymbol") or {}
+                for symbol in stock_symbols:
+                    relation_types_by_symbol[symbol].update(
+                        str(item or "").upper().strip()
+                        for item in direct_types.get(symbol, [])
+                        if str(item or "").strip()
+                    )
+            else:
+                try:
+                    relations = self.abox_coverage_relations(entities, stock_symbols)
+                except Exception as error:  # noqa: BLE001 - diagnostics must stay available.
+                    return {"status": "error", "reason": str(error)[:220]}
+        else:
+            try:
+                relations = self.abox_coverage_relations(entities, stock_symbols)
+            except Exception as error:  # noqa: BLE001 - diagnostics must stay available.
+                return {"status": "error", "reason": str(error)[:220]}
         entity_classes_by_symbol: Dict[str, set] = {symbol: set() for symbol in stock_symbols}
         source_by_symbol: Dict[str, str] = {symbol: "" for symbol in stock_symbols}
+        source_priority_by_symbol: Dict[str, int] = {symbol: -1 for symbol in stock_symbols}
         for entity in entities:
             symbol = self.row_symbol(entity)
             if symbol in entity_classes_by_symbol:
@@ -231,14 +258,19 @@ class OntologyDiagnosticsService:
                         entity_classes_by_symbol[symbol].add(str(class_name))
                 if kind:
                     entity_classes_by_symbol[symbol].add(kind)
-                if entity.get("source"):
-                    source_by_symbol[symbol] = str(entity.get("source") or "")
+                source = str(entity.get("source") or "").strip()
+                priority = self.coverage_source_priority(entity, symbol, source)
+                if source and priority >= source_priority_by_symbol[symbol]:
+                    source_by_symbol[symbol] = source
+                    source_priority_by_symbol[symbol] = priority
         for relation in relations:
             symbol = self.row_symbol(relation) or self.symbol_from_relation_endpoints(relation)
             if symbol in relation_types_by_symbol:
                 relation_type = str(relation.get("type") or relation.get("relationType") or "").upper().strip()
                 if relation_type:
                     relation_types_by_symbol[symbol].add(relation_type)
+        if relations:
+            relation_count = len(relations)
         rows = []
         all_required_categories = sorted(CATEGORY_RELATIONS.keys())
         primary_rows = []
@@ -295,7 +327,7 @@ class OntologyDiagnosticsService:
         return {
             "status": status,
             "entityCount": len(entities),
-            "relationCount": len(relations),
+            "relationCount": relation_count,
             "symbolCount": len(stock_symbols),
             "coverageRatio": coverage_ratio,
             "primarySymbolCount": len(primary_rows),
@@ -365,6 +397,28 @@ class OntologyDiagnosticsService:
         if decision_markers.intersection(class_values):
             return "primary"
         return "context"
+
+    def coverage_source_priority(self, entity: Dict[str, object], symbol: str, source: str) -> int:
+        """Prefer the root investable instrument's role over attached evidence.
+
+        Many ABox facts share a symbol. TypeDB does not promise their read
+        order, so assigning the last entity's source can turn a holding into a
+        context symbol when a news or external-signal fact is read later.
+        """
+        source_key = str(source or "").lower()
+        entity_id = str((entity or {}).get("id") or "").strip().lower()
+        kind = str((entity or {}).get("kind") or (entity or {}).get("nodeKind") or "").strip().lower()
+        is_root_instrument = entity_id in {
+            "stock:" + str(symbol or "").lower(),
+            "crypto:" + str(symbol or "").lower(),
+        } or kind in {"stock", "market-proxy", "etf", "crypto-asset", "crypto-market-signal"}
+        if source_key == "holding":
+            return 40 if is_root_instrument else 30
+        if source_key == "watchlist":
+            return 35 if is_root_instrument else 25
+        if is_root_instrument:
+            return 10
+        return 0
 
     def coverage_interpretation(self, status: str, primary_ratio: float, primary_count: int, context_count: int) -> str:
         if status == "empty":

@@ -13,7 +13,7 @@
     "공유 미리보기에서는 서버 설정과 계정 DB 쓰기를 차단합니다."
   ],
   "localData": {
-    "generatedAt": "2026-07-20T22:54:39.043161Z",
+    "generatedAt": "2026-07-21T21:55:30.485688Z",
     "sources": {
       "settings": "data/settings.json",
       "settingsExists": true
@@ -57,7 +57,7 @@
       "mysqlHost": "127.0.0.1",
       "mysqlPort": "3306",
       "mysqlDatabase": "orbit_alpha",
-      "mysqlUser": "root",
+      "mysqlUser": "orbit_alpha_app",
       "tossApiBaseUrl": "https://openapi.tossinvest.com",
       "notifyProvider": "telegram",
       "notifyLinkUrl": "http://127.0.0.1:3000",
@@ -165,7 +165,7 @@
       "ontologyReasoningMaxSymbolsPerRun": "3",
       "ontologyReasoningMinIntervalSeconds": "180",
       "ontologyReasoningUrgentMinIntervalSeconds": "60",
-      "ontologyReasoningUrgentReviewLevels": "act,immediate,blocked",
+      "ontologyReasoningUrgentReviewLevels": "act,immediate",
       "ontologyLabEnabled": "1",
       "ontologyLabIntervalSeconds": "300",
       "ontologyLabBatchSize": "5",
@@ -1061,6 +1061,26 @@
           "default": "standard"
         },
         {
+          "key": "investmentBrainOutcomeObservationMinutes",
+          "label": "판단 결과 관측 시점",
+          "type": "text",
+          "default": "60,1440,10080",
+          "unit": "minutes"
+        },
+        {
+          "key": "investmentBrainOutcomeEpisodeBatchSize",
+          "label": "결과 관측 배치",
+          "type": "number",
+          "default": "200"
+        },
+        {
+          "key": "investmentBrainOutcomeMaxDelayMinutes",
+          "label": "결과 관측 허용 지연",
+          "type": "number",
+          "default": "180",
+          "unit": "minutes"
+        },
+        {
           "key": "newsCollectionRequireArticleBodyForRss",
           "label": "RSS 원문 본문 필수",
           "type": "toggle",
@@ -1159,6 +1179,12 @@
           "default": "3"
         },
         {
+          "key": "typedbNativeRuleTargetSymbolLimit",
+          "label": "TypeDB 네이티브 추론 대상 종목 상한",
+          "type": "number",
+          "default": "1"
+        },
+        {
           "key": "ontologyReasoningMinIntervalSeconds",
           "label": "종목별 추론 병합 간격",
           "type": "number",
@@ -1176,7 +1202,7 @@
           "key": "ontologyReasoningUrgentReviewLevels",
           "label": "긴급 추론 검토 단계",
           "type": "text",
-          "default": "act,immediate,blocked"
+          "default": "act,immediate"
         },
         {
           "key": "ontologyLabEnabled",
@@ -1946,5 +1972,5 @@
       ]
     }
   ],
-  "buildId": "e6a0d4150061"
+  "buildId": "1c99c0db6d1c"
 }

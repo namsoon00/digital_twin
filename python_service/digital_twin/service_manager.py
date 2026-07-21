@@ -136,11 +136,15 @@ def typedb_worker_spec(settings: Dict[str, object]) -> Dict[str, object]:
         "autoResetEnabled": str((settings or {}).get("typedbAutoResetEnabled") or "1"),
         "ageResetEnabled": str((settings or {}).get("typedbAgeResetEnabled") or "0"),
         "healthAddress": address,
+        "typedbUser": str((settings or {}).get("typedbUser") or os.environ.get("TYPEDB_USER") or "admin"),
+        "typedbPassword": str((settings or {}).get("typedbPassword") or os.environ.get("TYPEDB_PASSWORD") or "password"),
+        "typedbDatabase": str((settings or {}).get("typedbDatabase") or os.environ.get("TYPEDB_DATABASE") or "orbit_alpha_ontology"),
+        "typedbTlsEnabled": str((settings or {}).get("typedbTlsEnabled") or os.environ.get("TYPEDB_TLS_ENABLED") or "0"),
         "startupWaitSeconds": str((settings or {}).get("typedbStartupWaitSeconds") or "60"),
         "seedOnStart": str((settings or {}).get("typedbSeedOnStart") or os.environ.get("TYPEDB_SEED_ON_START") or "1"),
         "seedReplaceRuleBox": str((settings or {}).get("typedbSeedReplaceRuleBox") or os.environ.get("TYPEDB_SEED_REPLACE_RULEBOX") or "1"),
         "seedKeepInference": str((settings or {}).get("typedbSeedKeepInference") or os.environ.get("TYPEDB_SEED_KEEP_INFERENCE") or "1"),
-        "seedTimeoutSeconds": str((settings or {}).get("typedbSeedTimeoutSeconds") or os.environ.get("TYPEDB_SEED_TIMEOUT_SECONDS") or "180"),
+        "seedTimeoutSeconds": str((settings or {}).get("typedbSeedTimeoutSeconds") or os.environ.get("TYPEDB_SEED_TIMEOUT_SECONDS") or "360"),
         "seedRetryCount": str((settings or {}).get("typedbSeedRetryCount") or os.environ.get("TYPEDB_SEED_RETRY_COUNT") or "2"),
         "missingReason": "" if executable else "TypeDB executable was not found. Install TypeDB or set TYPEDB_COMMAND.",
     }
@@ -386,6 +390,41 @@ def tcp_ready(address: object, timeout_seconds: float = 1.0) -> bool:
             pass
 
 
+def typedb_driver_ready(spec: Dict[str, object]) -> bool:
+    """Verify TypeDB accepts authenticated driver requests, not only TCP."""
+    try:
+        from typedb.driver import Credentials, DriverOptions, DriverTlsConfig, TypeDB
+    except Exception:
+        # The seed process performs the definitive driver check. Retain the
+        # socket check when the optional driver is not importable here.
+        return True
+    address = str(spec.get("healthAddress") or spec.get("typedbAddress") or "127.0.0.1:1729")
+    tls_enabled = truthy(spec.get("typedbTlsEnabled"))
+    tls_config = DriverTlsConfig.enabled() if tls_enabled else DriverTlsConfig.disabled()
+    driver = None
+    try:
+        driver = TypeDB.driver(
+            address,
+            Credentials(
+                str(spec.get("typedbUser") or "admin"),
+                str(spec.get("typedbPassword") or "password"),
+            ),
+            DriverOptions(tls_config, request_timeout_millis=1000),
+        )
+        # ``contains`` is valid before the application database is seeded. A
+        # successful response proves the server has completed gRPC startup.
+        driver.databases.contains(str(spec.get("typedbDatabase") or "orbit_alpha_ontology"))
+        return True
+    except Exception:
+        return False
+    finally:
+        try:
+            if driver:
+                driver.close()
+        except Exception:
+            pass
+
+
 def wait_for_typedb_ready(spec: Dict[str, object]) -> bool:
     wait_seconds = int_value(spec.get("startupWaitSeconds"), 60, 0)
     address = spec.get("healthAddress") or spec.get("typedbAddress") or "127.0.0.1:1729"
@@ -398,7 +437,7 @@ def wait_for_typedb_ready(spec: Dict[str, object]) -> bool:
             append_log(spec["log"], "not-ready process-exited")
             print(str(spec["label"]) + " did not become ready because the process exited.")
             return False
-        if tcp_ready(address):
+        if tcp_ready(address) and typedb_driver_ready(spec):
             append_log(spec["log"], "ready " + str(address))
             print(str(spec["label"]) + " ready. address=" + str(address))
             return True
@@ -483,8 +522,10 @@ def start_worker(spec: Dict[str, object]) -> int:
         if str(spec.get("role") or "") == "typedb":
             if not wait_for_typedb_ready(spec):
                 return 1
-            if not ensure_typedb_seeded(spec):
-                return 1
+            # A healthy TypeDB server may be serving an ABox staging write.
+            # Seeding is only required after this manager starts a new server;
+            # repeating it on every generic worker restart can interrupt that
+            # write and needlessly rewrites the static ontology boxes.
         return status_worker(spec)
     if existing:
         remove_pid(pid_path)
@@ -549,8 +590,11 @@ def status() -> int:
     return 0
 
 
-def start() -> int:
+def start(excluded_roles=None) -> int:
+    excluded = {str(role or "").strip() for role in (excluded_roles or set())}
     for spec in worker_specs().values():
+        if str(spec.get("role") or "").strip() in excluded:
+            continue
         result = start_worker(spec)
         if result != 0:
             print("Service start aborted before dependent workers. failed=" + str(spec.get("label") or "unknown"))
@@ -558,15 +602,31 @@ def start() -> int:
     return 0
 
 
-def stop() -> int:
+def stop(excluded_roles=None) -> int:
+    excluded = {str(role or "").strip() for role in (excluded_roles or set())}
     for spec in reversed(list(worker_specs().values())):
+        if str(spec.get("role") or "").strip() in excluded:
+            continue
         stop_worker(spec)
     return 0
 
 
-def restart() -> int:
-    stop()
-    return start()
+def restart(restart_typedb: bool = False) -> int:
+    """Restart application workers without disrupting an active graph store.
+
+    TypeDB owns durable graph generations and can legitimately be writing an
+    ABox for longer than a web or worker restart. Preserve it for the normal
+    restart path; explicit infrastructure maintenance can opt in to a full
+    TypeDB restart and seed.
+    """
+    excluded = set()
+    if not restart_typedb:
+        typedb_spec = worker_specs().get("typedb")
+        typedb_pid_path = typedb_spec.get("pid") if isinstance(typedb_spec, dict) else None
+        if typedb_spec and typedb_pid_path and is_running(read_pid(typedb_pid_path), typedb_spec):
+            excluded.add("typedb")
+    stop(excluded_roles=excluded)
+    return start(excluded_roles=excluded)
 
 
 def typedb_maintenance(force: bool = False) -> int:
@@ -592,7 +652,7 @@ def main(argv: List[str] = None) -> int:
     if command == "stop":
         return stop()
     if command == "restart":
-        return restart()
+        return restart(restart_typedb="--restart-typedb" in args[1:])
     if command == "status":
         return status()
     if command == "typedb-maintenance":

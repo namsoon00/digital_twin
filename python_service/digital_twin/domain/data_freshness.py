@@ -67,20 +67,15 @@ KIS_STAGE_MAX_AGE_SETTINGS = {
 }
 
 KIS_STAGE_EVIDENCE_FIELDS = {
+    # 현재가·거래량·이동평균은 기본 시세 스냅샷(Toss 캔들/가격) 또는
+    # KIS WebSocket으로도 확인한다. REST price 단계는 그 값을 다시
+    # 제공하는 보조 출처이므로, 이 단계에서만 오는 밸류에이션 값이 실제
+    # 추론에 쓰인 경우에만 발송 필수 조건으로 취급한다.
     "price": {
-        "currentPrice",
-        "changeRate",
-        "priceChangeRate",
-        "ma5Distance",
-        "ma20Distance",
-        "ma60Distance",
-        "ma20Slope",
-        "ma60Slope",
-        "trendCurve",
-        "volume",
-        "volumeRatio",
-        "timeAdjustedVolumeRatio",
-        "tradingValue",
+        "bps",
+        "pbr",
+        "peRatio",
+        "reportedEPS",
     },
     "ccnl": {"tradeStrength", "buyVolume", "sellVolume", "buyShare", "sellShare"},
     "orderbook": {"bidAskImbalance", "orderbookAskVolume", "orderbookBidVolume"},
@@ -556,7 +551,7 @@ def required_kis_stages_for_notification(context: Dict[str, object]) -> Optional
     fields = set(selected_inference_fact_fields(context or {}))
     if not fields:
         return None
-    required = {"price"}
+    required: Set[str] = set()
     for stage, stage_fields in KIS_STAGE_EVIDENCE_FIELDS.items():
         if fields & stage_fields:
             required.add(stage)
@@ -595,7 +590,10 @@ def evaluate_notification_data_freshness(context: Dict[str, object], settings: D
             if stage in KIS_STAGE_MAX_AGE_SETTINGS and stage not in required_kis_stages:
                 if status in {"stale", "unknown"}:
                     ignored_records.append(item)
-                continue
+                    continue
+                # 필수 근거는 아니어도 최신 단계는 기본 시세 신선도를
+                # 보강한다. 제거하면 KIS price만 있는 스냅샷에서 신선도
+                # 입력 자체가 사라질 수 있다.
             required_records.append(item)
         records = required_records
     record = aggregate_freshness(records, message_type, settings=settings, now=now)

@@ -1,3 +1,4 @@
+import copy
 import hashlib
 import json
 from datetime import datetime, timedelta, timezone
@@ -28,7 +29,7 @@ from ..domain.notification_rules import (
 from ..domain.notification_templates import DEFAULT_NOTIFICATION_TEMPLATES, NotificationTemplate, alert_context, render_notification
 from ..domain.notifications import NotificationJob, notification_debug_number
 from ..domain.ontology_quality import OntologyQualitySample, build_ontology_quality_sample
-from ..domain.portfolio import AccountSnapshot, AlertEvent
+from ..domain.portfolio import AccountSnapshot, AlertEvent, monitor_state_has_live_account_data
 from ..domain.repositories import MonitoringCycleRecordResult
 from ..domain.symbol_universe import ListedSymbol, normalize_market, normalize_symbol, utc_now_iso as symbol_utc_now_iso
 from .model_review_queue import model_review_payloads_from_event
@@ -58,6 +59,36 @@ from .mysql_operational_helpers import (
 from .mysql_notification_config import MySQLNotificationTemplateStore
 from .mysql_market_stores import MySQLModelReviewJobStore
 from .mysql_market_time_series import MySQLMarketTimeSeriesStore
+
+
+def snapshot_state_for_persistence(snapshot: AccountSnapshot, previous: Dict[str, object] = None) -> Dict[str, object]:
+    """Keep the last verified account data when a provider request fails.
+
+    A temporary authentication failure is operational state, not a new
+    portfolio state. Persisting it over the live snapshot made the next live
+    cycle lose its price baseline and blocked the TypeDB ABox projection.
+    The retained state carries a small failure marker so connection alerts can
+    still count consecutive failures and report recovery.
+    """
+    current = snapshot.to_monitor_state()
+    if snapshot.has_live_account_data() or not monitor_state_has_live_account_data(previous or {}):
+        return current
+
+    retained = copy.deepcopy(previous)
+    current_metadata = dict(current.get("metadata") or {})
+    metadata = dict(retained.get("metadata") or {})
+    failure = {
+        "mode": str(snapshot.mode or ""),
+        "status": str(snapshot.status or ""),
+        "generatedAt": str(snapshot.generated_at or ""),
+        "connectionFailureStreak": int(current_metadata.get("connectionFailureStreak") or 0),
+    }
+    metadata["connectionFailureStreak"] = failure["connectionFailureStreak"]
+    metadata["lastConnectionFailure"] = failure
+    retained["metadata"] = metadata
+    return retained
+
+
 class MySQLMonitorStore(MySQLOperationalConnection):
     def __init__(self, settings: Dict[str, str] = None):
         super().__init__(settings)
@@ -136,7 +167,7 @@ class MySQLMonitorStore(MySQLOperationalConnection):
             self.upsert_snapshot_state_with_connection(connection, account_id, state)
 
     def save_snapshot(self, snapshot: AccountSnapshot) -> None:
-        state = snapshot.to_monitor_state()
+        state = snapshot_state_for_persistence(snapshot, self.previous.get(snapshot.account_id))
         self.upsert_snapshot_state(snapshot.account_id, state)
         self.previous[snapshot.account_id] = state
 
@@ -229,7 +260,14 @@ class MySQLMonitoringCycleRecorder(MySQLOperationalConnection):
     def record_cycle(self, account_ids: List[str], snapshots: List[AccountSnapshot], alert_events: List[AlertEvent], dry_run: bool = False):
         if dry_run:
             return MonitoringCycleRecordResult(False, 0, "dry-run")
-        snapshot_states = {snapshot.account_id: snapshot.to_monitor_state() for snapshot in snapshots}
+        snapshot_states = {
+            snapshot.account_id: snapshot_state_for_persistence(
+                snapshot,
+                self.monitor_store.previous.get(snapshot.account_id),
+            )
+            for snapshot in snapshots
+        }
+        live_snapshots = [snapshot for snapshot in snapshots if snapshot.has_live_account_data()]
         delivered = bool(alert_events)
         alert_source_event = alerts_detected_event(alert_events) if alert_events else None
         stamp = datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
@@ -239,8 +277,8 @@ class MySQLMonitoringCycleRecorder(MySQLOperationalConnection):
         model_review_store = MySQLModelReviewJobStore(self.runtime_settings)
         account_contexts = self.account_context_map() if alert_events else {}
         with self.transaction() as connection:
-            self.market_time_series_store.record_snapshots_with_connection(connection, snapshots)
-            for snapshot in snapshots:
+            self.market_time_series_store.record_snapshots_with_connection(connection, live_snapshots)
+            for snapshot in live_snapshots:
                 insert_domain_event_with_connection(connection, snapshot_collected_event(snapshot))
             if alert_source_event:
                 insert_domain_event_with_connection(connection, alert_source_event)

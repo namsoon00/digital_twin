@@ -169,6 +169,9 @@ class OntologyReasoningRunner:
     def urgent_min_interval_seconds(self) -> int:
         return int_setting(self.settings, "ontologyReasoningUrgentMinIntervalSeconds", 60, 0, 3600)
 
+    def projection_retry_seconds(self) -> int:
+        return int_setting(self.settings, "ontologyReasoningProjectionRetrySeconds", 30, 5, 900)
+
     def urgent_review_levels(self) -> set:
         raw = str(self.settings.get("ontologyReasoningUrgentReviewLevels") or "act,immediate,blocked")
         allowed = set(REVIEW_LEVEL_ORDER)
@@ -238,6 +241,31 @@ class OntologyReasoningRunner:
             if str(symbol or "").strip() and str(stamp or "").strip()
         }
 
+    def last_projection_attempt_at_by_symbol(self, payload: Dict[str, object] = None) -> Dict[str, str]:
+        payload = self.cursor_payload() if payload is None else dict(payload or {})
+        raw = (
+            payload.get("lastProjectionAttemptAtBySymbol")
+            if isinstance(payload.get("lastProjectionAttemptAtBySymbol"), dict)
+            else {}
+        )
+        return {
+            str(symbol or "").upper().strip(): str(stamp or "").strip()
+            for symbol, stamp in raw.items()
+            if str(symbol or "").strip() and str(stamp or "").strip()
+        }
+
+    def timestamp_due(self, stamp: str, interval_seconds: int) -> bool:
+        if not stamp or interval_seconds <= 0:
+            return True
+        try:
+            parsed = datetime.fromisoformat(str(stamp).replace("Z", "+00:00"))
+        except ValueError:
+            return True
+        now = self.now_provider()
+        if now.tzinfo is None:
+            now = now.replace(tzinfo=timezone.utc)
+        return (now.astimezone(timezone.utc) - parsed.astimezone(timezone.utc)).total_seconds() >= interval_seconds
+
     def event_min_interval_seconds(self, event: object) -> int:
         trigger = str(event_payload(event).get("trigger") or "data-update").strip()
         if trigger in {"research-evidence-update", "investment-calendar-update"}:
@@ -248,19 +276,14 @@ class OntologyReasoningRunner:
 
     def event_symbol_due(self, event: object, symbol: str, cursor_payload: Dict[str, object] = None) -> bool:
         interval = self.event_min_interval_seconds(event)
-        if interval <= 0:
-            return True
         raw = self.last_reasoned_at_by_symbol(cursor_payload).get(str(symbol or "").upper().strip(), "")
-        if not raw:
-            return True
-        try:
-            parsed = datetime.fromisoformat(raw.replace("Z", "+00:00"))
-        except ValueError:
-            return True
-        now = self.now_provider()
-        if now.tzinfo is None:
-            now = now.replace(tzinfo=timezone.utc)
-        return (now.astimezone(timezone.utc) - parsed.astimezone(timezone.utc)).total_seconds() >= interval
+        if not self.timestamp_due(raw, interval):
+            return False
+        attempted_at = self.last_projection_attempt_at_by_symbol(cursor_payload).get(
+            str(symbol or "").upper().strip(),
+            "",
+        )
+        return self.timestamp_due(attempted_at, self.projection_retry_seconds())
 
     def due_event_symbols(
         self,
@@ -344,22 +367,55 @@ class OntologyReasoningRunner:
         progress = self.event_symbol_progress(cursor_payload)
         priority_symbols = self.priority_symbols()
         batches: Dict[str, List[str]] = {}
-        selected: List[str] = []
-        omitted_symbols: List[str] = []
-        for event in requests or []:
+        candidates: Dict[str, Tuple[Tuple[int, int, int, int, int, int], str]] = {}
+        requested_events = list(requests or [])
+
+        # Pick symbols globally before assigning them to their source events.
+        # The previous event-by-event loop could consume the complete per-run
+        # allowance with residual background symbols from an older event, even
+        # when a newer holding event was already waiting in the same queue.
+        for event_index, event in enumerate(requested_events):
             event_id = str(getattr(event, "event_id", "") or "")
             remaining = self.due_event_symbols(event, progress, cursor_payload, priority_symbols)
             if not event_symbols(event):
                 batches[event_id] = []
                 continue
-            for symbol in remaining:
-                if max_symbols and len(selected) >= max_symbols and symbol not in selected:
-                    if symbol not in omitted_symbols:
-                        omitted_symbols.append(symbol)
-                    continue
-                if symbol not in selected:
-                    selected.append(symbol)
-                batches.setdefault(event_id, []).append(symbol)
+            for symbol_index, symbol in enumerate(remaining):
+                rank = (
+                    int(priority_symbols.get(symbol, 0) or 0),
+                    REVIEW_LEVEL_ORDER.get(event_review_level(event), 0),
+                    TRIGGER_ORDER.get(str(event_payload(event).get("trigger") or "data-update").strip(), 0),
+                    1 if "ResearchEvidence" in {str(item or "").strip() for item in event_payload(event).get("factTypes") or []} else 0,
+                    -event_index,
+                    -symbol_index,
+                )
+                existing = candidates.get(symbol)
+                if existing is None or rank > existing[0]:
+                    candidates[symbol] = (rank, event_id)
+
+        ranked_symbols = [
+            symbol
+            for symbol, _candidate in sorted(
+                candidates.items(),
+                key=lambda item: (item[1][0], item[0]),
+                reverse=True,
+            )
+        ]
+        selected = ranked_symbols if not max_symbols else ranked_symbols[:max_symbols]
+        selected_set = set(selected)
+        omitted_symbols = [symbol for symbol in ranked_symbols if symbol not in selected_set]
+
+        for event in requested_events:
+            event_id = str(getattr(event, "event_id", "") or "")
+            if not event_symbols(event):
+                continue
+            selected_for_event = [
+                symbol
+                for symbol in self.due_event_symbols(event, progress, cursor_payload, priority_symbols)
+                if symbol in selected_set
+            ]
+            if selected_for_event:
+                batches[event_id] = selected_for_event
         return batches, selected, len(omitted_symbols)
 
     def mark_requests_processed(self, requests: Iterable[object], batches: Dict[str, List[str]]) -> Dict[str, object]:
@@ -400,6 +456,100 @@ class OntologyReasoningRunner:
             "partialEventIds": partial_event_ids,
         }
 
+    def projection_gate(self, monitor_runner) -> Dict[str, object]:
+        """Keep source events pending until TypeDB finished their graph cycle.
+
+        Monitor runners built by older tests or compatibility callers do not
+        expose projection outcomes. Preserve their existing behavior while
+        requiring every current runtime runner to prove that TypeDB accepted
+        the ABox and returned from its native-rule execution.
+        """
+        raw_results = getattr(monitor_runner, "last_ontology_projection_results", None)
+        if raw_results is None:
+            return {"ready": True, "results": [], "compatibility": True}
+        if not isinstance(raw_results, dict) or not raw_results:
+            return {
+                "ready": False,
+                "reason": "TypeDB 투영 결과가 기록되지 않았습니다.",
+                "results": [],
+            }
+        accepted_projection_statuses = {
+            "ok",
+            "partial",
+            "unchanged-material-facts",
+            "unchanged-material-facts-reasoning-retry",
+        }
+        transient_failure_statuses = {
+            "error",
+            "failed",
+            "missing",
+            "disabled",
+            "invalid",
+            "invalid-abox",
+            "incomplete",
+            "incomplete-abox",
+            "missing-abox",
+            "candidate-validation-failed",
+            "activation-failed",
+            "rulebox-not-ready",
+            "stale-generation",
+            "unavailable",
+        }
+        failures: List[Dict[str, str]] = []
+        for account_id, raw_result in raw_results.items():
+            result = dict(raw_result or {}) if isinstance(raw_result, dict) else {}
+            projection_status = str(result.get("status") or "missing").strip().lower()
+            if projection_status not in accepted_projection_statuses:
+                failures.append({
+                    "accountId": str(account_id or ""),
+                    "stage": "projection",
+                    "status": projection_status,
+                    "reason": str(result.get("reason") or "TypeDB ABox 투영이 완료되지 않았습니다."),
+                })
+                continue
+            execution = result.get("ruleboxExecution") if isinstance(result.get("ruleboxExecution"), dict) else {}
+            execution_status = str(execution.get("status") or "").strip().lower()
+            if execution_status in transient_failure_statuses:
+                failures.append({
+                    "accountId": str(account_id or ""),
+                    "stage": "native-rule",
+                    "status": execution_status,
+                    "reason": str(execution.get("reason") or "TypeDB native rule 실행이 완료되지 않았습니다."),
+                })
+                continue
+            inference = result.get("inferenceBox") if isinstance(result.get("inferenceBox"), dict) else {}
+            inference_status = str(inference.get("status") or "missing").strip().lower()
+            if not inference or inference_status in transient_failure_statuses:
+                failures.append({
+                    "accountId": str(account_id or ""),
+                    "stage": "inferencebox",
+                    "status": inference_status,
+                    "reason": str(inference.get("reason") or result.get("reason") or "TypeDB InferenceBox 응답이 없습니다."),
+                })
+        if failures:
+            first = failures[0]
+            return {
+                "ready": False,
+                "reason": "TypeDB " + first["stage"] + " 대기: " + first["reason"][:180],
+                "results": failures,
+            }
+        return {"ready": True, "results": []}
+
+    def mark_projection_attempt(self, symbols: Iterable[str]) -> None:
+        clean_symbols = [str(symbol or "").upper().strip() for symbol in symbols or [] if str(symbol or "").strip()]
+        if not clean_symbols or not hasattr(self.cursor_store, "load") or not hasattr(self.cursor_store, "save"):
+            return
+        payload = self.cursor_payload()
+        attempts = self.last_projection_attempt_at_by_symbol(payload)
+        now = self.now_provider()
+        if now.tzinfo is None:
+            now = now.replace(tzinfo=timezone.utc)
+        stamp = now.astimezone(timezone.utc).isoformat().replace("+00:00", "Z")
+        for symbol in clean_symbols:
+            attempts[symbol] = stamp
+        payload["lastProjectionAttemptAtBySymbol"] = dict(sorted(attempts.items()))
+        self.save_cursor_payload(payload)
+
     def run_once(self, limit: int = 0, force: bool = True) -> Dict[str, object]:
         if not self.enabled():
             return {"status": "disabled", "processedCount": 0, "alertCount": 0}
@@ -412,6 +562,20 @@ class OntologyReasoningRunner:
             alerts = runner.run_once(force=force, symbol_filter=symbols)
         else:
             alerts = runner.run_once(force=force)
+        projection_gate = self.projection_gate(runner)
+        if not projection_gate.get("ready"):
+            self.mark_projection_attempt(symbols)
+            return {
+                "status": "deferred",
+                "processedCount": 0,
+                "alertCount": len(alerts or []),
+                "symbols": symbols,
+                "maxSymbolsPerRun": self.max_symbols_per_run(),
+                "omittedSymbolCount": omitted_symbol_count,
+                "retryAfterSeconds": self.projection_retry_seconds(),
+                "deferredReason": str(projection_gate.get("reason") or "TypeDB graph cycle is not ready."),
+                "projectionFailures": list(projection_gate.get("results") or []),
+            }
         account_ids = [getattr(account, "account_id", "") for account in getattr(runner, "accounts", [])]
         trigger_event_ids = [event.event_id for event in requests]
         completed = ontology_reasoning_completed_event(

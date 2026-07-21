@@ -1,3 +1,4 @@
+import atexit
 import hashlib
 import os
 from pathlib import Path
@@ -27,6 +28,44 @@ from digital_twin.infrastructure.mysql_operational import (
     MySQLSymbolUniverseStore,
 )
 from digital_twin.infrastructure.mysql_schema_tuning import mysql_partitioning_mode
+
+
+_CREATED_TEST_DATABASES = {}
+
+
+def _test_database_cleanup() -> None:
+    """Drop temporary test schemas left by a completed Python test process."""
+    try:
+        import pymysql
+    except ImportError:
+        return
+    for database, config in list(_CREATED_TEST_DATABASES.items()):
+        if not str(database).startswith("orbit_alpha_test_"):
+            continue
+        kwargs = {
+            "host": config["host"],
+            "port": int(config["port"] or 3306),
+            "user": config["user"],
+            "password": config["password"],
+            "charset": "utf8mb4",
+            "autocommit": True,
+        }
+        if config.get("unix_socket"):
+            kwargs["unix_socket"] = config["unix_socket"]
+        try:
+            connection = pymysql.connect(**kwargs)
+            try:
+                with connection.cursor() as cursor:
+                    cursor.execute("DROP DATABASE IF EXISTS `" + database.replace("`", "``") + "`")
+            finally:
+                connection.close()
+        except Exception:
+            # A test failure should retain its original exit status. The next
+            # maintenance run can remove any leftover isolated test schema.
+            continue
+
+
+atexit.register(_test_database_cleanup)
 
 
 def _seed_value(seed=None) -> str:
@@ -113,6 +152,7 @@ def reset_mysql_test_database(seed=None):
     MySQLOperationalConnection._retention_last_run.pop(schema_key, None)
     MySQLOperationalConnection._retention_last_warning.pop(schema_key, None)
     ensure_mysql_database_exists(config)
+    _CREATED_TEST_DATABASES[config["database"]] = dict(config)
     return settings
 
 

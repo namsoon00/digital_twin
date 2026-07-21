@@ -156,6 +156,93 @@ class NotificationDataQualityPolicyTests(unittest.TestCase):
         self.assertNotIn("체결강도", cleaned["rawLines"])
         self.assertEqual("stale-at-dispatch", facts["marketSignalCoverage"]["investor"]["status"])
 
+    def test_stale_kis_rest_price_does_not_block_fresh_quote_and_moving_average_alert(self):
+        now = datetime(2026, 7, 20, 0, 10, tzinfo=timezone.utc)
+        decision = evaluate_notification_data_freshness(
+            {
+                "messageType": INVESTMENT_INSIGHT,
+                "ontologyRelationContext": {
+                    "evidenceState": {
+                        "appliedFactFields": [
+                            "profitLossRate",
+                            "positionAccountWeight",
+                            "ma20Distance",
+                        ],
+                    },
+                },
+                "dataFreshness": {
+                    "sources": [
+                        {
+                            "source": "Toss /api/v1/prices + KIS WebSocket",
+                            "status": "fresh",
+                            "sourceAsOf": "2026-07-20T00:09:30Z",
+                            "maxAgeMinutes": 10,
+                        },
+                        {
+                            "source": "KIS ccnl",
+                            "stage": "ccnl",
+                            "status": "fresh",
+                            "sourceAsOf": "2026-07-20T00:09:50Z",
+                            "maxAgeMinutes": 2,
+                            "transport": "websocket",
+                            "fields": ["currentPrice", "changeRate", "volume"],
+                        },
+                        {
+                            "source": "KIS price",
+                            "stage": "price",
+                            "status": "fresh",
+                            "sourceAsOf": "2026-07-20T00:01:00Z",
+                            "maxAgeMinutes": 3,
+                            "transport": "rest",
+                            "fields": ["currentPrice", "ma20Distance", "peRatio"],
+                        },
+                    ],
+                },
+            },
+            settings={"dataFreshnessEnabled": "1"},
+            now=now,
+        )
+
+        self.assertTrue(decision.should_send)
+        self.assertEqual("fresh", decision.status)
+        self.assertEqual([], decision.stale_sources)
+        self.assertEqual(["KIS price"], decision.ignored_sources)
+
+    def test_stale_kis_rest_price_remains_required_for_per_based_inference(self):
+        decision = evaluate_notification_data_freshness(
+            {
+                "messageType": INVESTMENT_INSIGHT,
+                "ontologyRelationContext": {
+                    "evidenceState": {"appliedFactFields": ["peRatio"]},
+                },
+                "dataFreshness": {
+                    "sources": [
+                        {
+                            "source": "Toss /api/v1/prices + KIS WebSocket",
+                            "status": "fresh",
+                            "sourceAsOf": "2026-07-20T00:09:30Z",
+                            "maxAgeMinutes": 10,
+                        },
+                        {
+                            "source": "KIS price",
+                            "stage": "price",
+                            "status": "fresh",
+                            "sourceAsOf": "2026-07-20T00:01:00Z",
+                            "maxAgeMinutes": 3,
+                            "transport": "rest",
+                            "fields": ["peRatio"],
+                        },
+                    ],
+                },
+            },
+            settings={"dataFreshnessEnabled": "1"},
+            now=datetime(2026, 7, 20, 0, 10, tzinfo=timezone.utc),
+        )
+
+        self.assertFalse(decision.should_send)
+        self.assertEqual("stale", decision.status)
+        self.assertEqual(["KIS price"], decision.stale_sources)
+
     def test_notification_runner_suppresses_job_that_expired_while_waiting(self):
         job = NotificationJob.create(
             "오래된 투자 알림",

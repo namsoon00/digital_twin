@@ -14,6 +14,7 @@ from digital_twin.domain.investment_research import NewsCollectionTarget, Resear
 from digital_twin.domain.materiality import evidence_materiality, market_change_materiality
 from digital_twin.domain.portfolio import AlertEvent
 from digital_twin.infrastructure.event_bus import EventBus
+from digital_twin.infrastructure.kis_realtime_ws import KISRealtimeSymbolSelector
 
 
 class MaterialityGateTests(unittest.TestCase):
@@ -91,6 +92,64 @@ class MaterialityGateTests(unittest.TestCase):
 
         self.assertEqual("ok", result["status"])
         self.assertEqual(["005930"], fake_monitor.symbol_filter)
+
+    def test_reasoning_worker_does_not_starve_a_new_holding_behind_old_event_residue(self):
+        old_event = ontology_reasoning_requested_event(
+            DomainEvent(name="market_data.collected", aggregate_id="market:residual", payload={}),
+            "kis-realtime-update",
+            ["005930", "000150", "000151"],
+            changed_count=3,
+            fact_types=["MarketQuote"],
+            materiality_assessments=[{"reviewLevel": "act", "changeState": "worsening"}],
+        )
+        new_holding_event = ontology_reasoning_requested_event(
+            DomainEvent(name="market_data.collected", aggregate_id="market:000660", payload={}),
+            "market-data-update",
+            ["000660"],
+            changed_count=1,
+            fact_types=["MarketQuote"],
+            materiality_assessments=[{"reviewLevel": "check", "changeState": "new-condition"}],
+        )
+
+        class Cursor:
+            def load(self):
+                return {"eventSymbolProgress": {old_event.event_id: ["005930"]}}
+
+        runner = OntologyReasoningRunner(
+            event_reader=None,
+            cursor_store=Cursor(),
+            monitor_runner_factory=lambda: None,
+            settings={"ontologyReasoningMaxSymbolsPerRun": "1"},
+            priority_symbols_provider=lambda: {"holdingSymbols": ["005930", "000660"]},
+        )
+
+        batches, symbols, omitted = runner.request_symbol_batches([old_event, new_holding_event])
+
+        self.assertEqual(["000660"], symbols)
+        self.assertEqual(["000660"], batches[new_holding_event.event_id])
+        self.assertNotIn(old_event.event_id, batches)
+        self.assertEqual(2, omitted)
+
+    def test_kis_configured_transport_symbols_do_not_enter_reasoning_queue_by_default(self):
+        class Accounts:
+            def load(self):
+                return [SimpleNamespace(watchlist_symbols=["000660"])]
+
+        monitor_store = SimpleNamespace(previous={
+            "account": {"positions": [{"symbol": "005930", "market": "KR"}]},
+        })
+        cache = SimpleNamespace(stale_universe_symbols=lambda *_args, **_kwargs: [])
+        selector = KISRealtimeSymbolSelector(
+            Accounts(),
+            monitor_store,
+            cache,
+            {"kisRealtimeWebSocketSymbols": "000150,000151"},
+        )
+
+        self.assertEqual(["005930", "000660"], selector.reasoning_symbols())
+
+        selector.settings["kisRealtimeWebSocketIncludeConfiguredInReasoning"] = "1"
+        self.assertEqual(["005930", "000660", "000150", "000151"], selector.reasoning_symbols())
 
     def test_reasoning_worker_coalesces_recent_symbol_events_and_releases_them_when_due(self):
         request = ontology_reasoning_requested_event(
@@ -653,6 +712,76 @@ class MaterialityGateTests(unittest.TestCase):
         self.assertEqual(1, first["partialEventCount"])
         self.assertEqual(1, second["completedEventCount"])
         self.assertEqual([request.event_id], cursor.processed_event_ids())
+
+    def test_ontology_reasoning_retries_type_db_projection_without_advancing_event_cursor(self):
+        request = ontology_reasoning_requested_event(
+            DomainEvent(
+                name="market_data.collected",
+                aggregate_id="market:KR",
+                payload={"changedCount": 1, "symbols": ["000660"]},
+            ),
+            "market-data-update",
+            ["000660"],
+            changed_count=1,
+            fact_types=["MarketQuote"],
+        )
+
+        class Reader:
+            def events(self, name="", aggregate_id="", limit=0):
+                return [request] if name == ONTOLOGY_REASONING_REQUESTED else []
+
+        class Cursor:
+            def __init__(self):
+                self.payload = {"processedEventIds": []}
+
+            def processed_event_ids(self):
+                return list(self.payload.get("processedEventIds") or [])
+
+            def mark_processed(self, event_ids):
+                self.payload["processedEventIds"] = list(event_ids or [])
+
+            def load(self):
+                return dict(self.payload)
+
+            def save(self, payload):
+                self.payload = dict(payload or {})
+
+        class FakeMonitorRunner:
+            def __init__(self):
+                self.accounts = [AccountConfig("main", "메인", "toss", "https://example.test", "", "", "", [])]
+                self.calls = []
+                self.last_ontology_projection_results = {
+                    "main": {
+                        "status": "error",
+                        "reason": "ABox staging verification failed",
+                    },
+                }
+
+            def run_once(self, dry_run=False, force=False, symbol_filter=None):
+                self.calls.append(list(symbol_filter or []))
+                return []
+
+        cursor = Cursor()
+        monitor = FakeMonitorRunner()
+        runner = OntologyReasoningRunner(
+            Reader(),
+            cursor,
+            monitor_runner_factory=lambda: monitor,
+            settings={
+                "ontologyReasoningEnabled": "1",
+                "ontologyReasoningProjectionRetrySeconds": "30",
+                "ontologyRuleCandidateAiEnabled": "0",
+            },
+        )
+
+        result = runner.run_once()
+
+        self.assertEqual("deferred", result["status"])
+        self.assertEqual(["000660"], monitor.calls[0])
+        self.assertEqual([], cursor.processed_event_ids())
+        self.assertNotIn("eventSymbolProgress", cursor.payload)
+        self.assertNotIn("lastReasonedAtBySymbol", cursor.payload)
+        self.assertIn("000660", cursor.payload["lastProjectionAttemptAtBySymbol"])
 
     def test_ontology_reasoning_reads_recent_events_when_supported(self):
         request = ontology_reasoning_requested_event(

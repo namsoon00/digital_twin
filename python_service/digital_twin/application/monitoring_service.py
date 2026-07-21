@@ -44,6 +44,9 @@ class MonitorRunner:
         self.worker_id = worker_id or ("monitor-" + uuid.uuid4().hex[:12])
         self.progress_callback = progress_callback
         self.psychology_shadow_service = psychology_shadow_service
+        # The reasoning worker advances its event cursor only after this
+        # projection has a usable TypeDB result.
+        self.last_ontology_projection_results: Dict[str, Dict[str, object]] = {}
 
     def run_once(self, dry_run: bool = False, force: bool = False, symbol_filter: Iterable[str] = None) -> List[AlertEvent]:
         if self.use_account_job_queue(dry_run, force, symbol_filter):
@@ -62,6 +65,7 @@ class MonitorRunner:
         return bool(self.account_job_store) and not dry_run and not force and not list(symbol_filter or [])
 
     def run_all_accounts_once(self, dry_run: bool = False, force: bool = False, symbol_filter: Iterable[str] = None) -> List[AlertEvent]:
+        self.last_ontology_projection_results = {}
         self.progress("monitor.start", accountCount=len(self.accounts), dryRun=bool(dry_run), force=bool(force))
         all_events: List[AlertEvent] = []
         snapshots = []
@@ -71,7 +75,7 @@ class MonitorRunner:
             snapshot, events = self.collect_account_events(account, allowed_symbols=allowed_symbols, dry_run=dry_run, force=force)
             self.progress("account.done", accountId=account.account_id, eventCount=len(events), mode=snapshot.mode, status=snapshot.status)
             snapshots.append(snapshot)
-            if not self.use_cycle_recorder(dry_run):
+            if not self.use_cycle_recorder(dry_run) and snapshot.has_live_account_data():
                 self.publish(snapshot_collected_event(snapshot))
             all_events.extend(events)
         if self.use_cycle_recorder(dry_run):
@@ -149,6 +153,7 @@ class MonitorRunner:
         return all_events
 
     def run_single_account_job(self, account: AccountConfig, job: MonitorAccountJob) -> List[AlertEvent]:
+        self.last_ontology_projection_results = {}
         self.progress("account.start", accountId=account.account_id, label=account.label, job=True)
         snapshot, events = self.collect_account_events(account, allowed_symbols=set(), dry_run=False, force=False)
         if self.cycle_recorder:
@@ -156,7 +161,8 @@ class MonitorRunner:
             snapshot.metadata.pop("monitorStateHistory", None)
             self.cycle_recorder.record_cycle([account.account_id], [snapshot], events, dry_run=False)
         else:
-            self.publish(snapshot_collected_event(snapshot))
+            if snapshot.has_live_account_data():
+                self.publish(snapshot_collected_event(snapshot))
             if events:
                 alert_event = alerts_detected_event(events)
                 self.publish(alert_event)
@@ -199,8 +205,11 @@ class MonitorRunner:
         # judgement path as live monitoring; delivery and monitor persistence
         # remain gated by dry_run below.
         self.progress("ontology_projection.start", accountId=account.account_id)
-        self.record_ontology_projection(snapshot)
+        self.record_ontology_projection(snapshot, target_symbols=allowed_symbols)
         projection = snapshot.metadata.get("ontology", {}).get("projection") if isinstance(snapshot.metadata.get("ontology"), dict) else {}
+        self.last_ontology_projection_results[account.account_id] = (
+            dict(projection) if isinstance(projection, dict) and projection else {"status": "missing"}
+        )
         self.progress(
             "ontology_projection.done",
             accountId=account.account_id,
@@ -266,11 +275,22 @@ class MonitorRunner:
         if self.event_publisher:
             self.event_publisher.publish(event)
 
-    def record_ontology_projection(self, snapshot: AccountSnapshot) -> None:
+    def record_ontology_projection(self, snapshot: AccountSnapshot, target_symbols: set = None) -> None:
         if not self.ontology_projection_recorder or not self.has_ontology_projection_data(snapshot):
             return
         try:
-            self.ontology_projection_recorder.record_snapshot(snapshot)
+            selected_symbols = {
+                str(symbol or "").upper().strip()
+                for symbol in target_symbols or set()
+                if str(symbol or "").strip()
+            }
+            if selected_symbols:
+                self.ontology_projection_recorder.record_snapshot(
+                    snapshot,
+                    target_symbols=sorted(selected_symbols),
+                )
+            else:
+                self.ontology_projection_recorder.record_snapshot(snapshot)
         except Exception as error:  # noqa: BLE001 - graph persistence must not block monitoring.
             result = {"saved": False, "status": "error", "reason": str(error)[:180]}
             snapshot.metadata.setdefault("ontology", {})["projection"] = result
@@ -279,17 +299,11 @@ class MonitorRunner:
         self.record_ontology_projection(snapshot)
 
     def has_ontology_projection_data(self, snapshot: AccountSnapshot) -> bool:
-        if snapshot.has_live_account_data():
-            return True
-        if any(item for item in snapshot.watchlist or [] if not item.is_cash()):
-            return True
-        if isinstance(snapshot.external_signals, dict) and any(
-            value not in ({}, [], "", None, False)
-            for key, value in snapshot.external_signals.items()
-            if key not in {"quality", "freshness", "provenance", "statuses"}
-        ):
-            return True
-        return False
+        # A failed account request can still contain stale watchlist or market
+        # payloads. They must not replace the live ABox or start a new
+        # investment judgement cycle. The last verified live generation stays
+        # active until a complete live account snapshot arrives.
+        return snapshot.has_live_account_data()
 
     def compact_previous_state(self, previous: dict) -> dict:
         if not isinstance(previous, dict) or not previous:

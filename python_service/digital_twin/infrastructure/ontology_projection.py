@@ -17,6 +17,84 @@ from ..domain.portfolio import AccountSnapshot
 from .graph_store_rulebox import rulebox_rules_to_payload
 
 
+def native_rule_filter_value(properties: Dict[str, object], field: str):
+    values = dict(properties or {})
+    key = str(field or "")
+    if key in {"minValue", "maxValue"}:
+        return values.get("valueNumber", values.get("value"))
+    if key == "tboxClasses":
+        return values.get("tboxClasses", values.get("tboxClass"))
+    return values.get(key)
+
+
+def native_rule_filter_matches(actual: object, expected: object) -> bool:
+    """Return a conservative match for one stored RuleBox filter.
+
+    Missing projection fields remain in the ABox candidate instead of being
+    discarded here; TypeDB then records the missing-data effect through its
+    normal rule path. This reducer may only remove a relation when the stored
+    value clearly cannot satisfy the condition.
+    """
+    if actual in (None, "", [], {}):
+        return True
+    if isinstance(expected, dict):
+        operator = str(expected.get("operator") or "").strip()
+        expected = expected.get("value")
+        if operator:
+            try:
+                left = float(actual)
+                right = float(expected)
+            except (TypeError, ValueError):
+                return True
+            return {
+                ">=": left >= right,
+                "gte": left >= right,
+                ">": left > right,
+                "gt": left > right,
+                "<=": left <= right,
+                "lte": left <= right,
+                "<": left < right,
+                "lt": left < right,
+                "==": left == right,
+                "eq": left == right,
+            }.get(operator, True)
+    actual_values = list(actual) if isinstance(actual, (list, tuple, set)) else [actual]
+    expected_values = list(expected) if isinstance(expected, (list, tuple, set)) else [expected]
+    return any(str(left) == str(right) for left in actual_values for right in expected_values)
+
+
+def native_rule_relation_is_relevant(
+    relation,
+    entities_by_id: Dict[str, object],
+    source_kind: str,
+    condition,
+) -> bool:
+    if str(relation.relation_type or "").upper().strip() != str(condition.relation_type or "").upper().strip():
+        return False
+    direction = str(condition.direction or "out").strip().lower()
+    source_id, target_id = (
+        (relation.target, relation.source)
+        if direction == "in"
+        else (relation.source, relation.target)
+    )
+    source = entities_by_id.get(str(source_id or ""))
+    target = entities_by_id.get(str(target_id or ""))
+    if not source or str(source.kind or "") != str(source_kind or ""):
+        return False
+    target_kind = str(condition.target_kind or "")
+    if target_kind and (not target or str(target.kind or "") != target_kind):
+        return False
+    target_properties = dict(getattr(target, "properties", {}) or {}) if target else {}
+    for field, expected in dict(condition.target_property_filters or {}).items():
+        if not native_rule_filter_matches(native_rule_filter_value(target_properties, field), expected):
+            return False
+    relation_properties = dict(getattr(relation, "properties", {}) or {})
+    for field, expected in dict(condition.relation_property_filters or {}).items():
+        if not native_rule_filter_matches(native_rule_filter_value(relation_properties, field), expected):
+            return False
+    return True
+
+
 class PortfolioOntologyProjectionRecorder:
     def __init__(
         self,
@@ -38,7 +116,11 @@ class PortfolioOntologyProjectionRecorder:
         self.settings = dict(settings or {})
         self.source = source or "monitoring"
 
-    def record_snapshot(self, snapshot: AccountSnapshot) -> Dict[str, object]:
+    def record_snapshot(
+        self,
+        snapshot: AccountSnapshot,
+        target_symbols: List[str] = None,
+    ) -> Dict[str, object]:
         if not self.repository:
             return {}
         if not self.has_projectable_data(snapshot):
@@ -93,10 +175,11 @@ class PortfolioOntologyProjectionRecorder:
                 }
                 self.store_projection_result(snapshot, result)
                 return result
+            inference_symbols = self.inference_symbols(snapshot, target_symbols)
             active_abox = self.active_abox_metadata()
             active_abox_complete = str(active_abox.get("status") or "ok") == "ok"
             if active_abox_complete and active_material_fingerprint(active_abox) == material_fingerprint:
-                inferencebox = self.existing_inference_result(snapshot)
+                inferencebox = self.existing_inference_result(snapshot, inference_symbols)
                 result = {
                     "saved": False,
                     "status": (
@@ -104,7 +187,7 @@ class PortfolioOntologyProjectionRecorder:
                         if self.inference_result_is_reusable(
                             inferencebox,
                             active_abox,
-                            self.snapshot_symbols(snapshot),
+                            inference_symbols,
                         )
                         else "unchanged-material-facts-reasoning-retry"
                     ),
@@ -113,7 +196,7 @@ class PortfolioOntologyProjectionRecorder:
                         if self.inference_result_is_reusable(
                             inferencebox,
                             active_abox,
-                            self.snapshot_symbols(snapshot),
+                            inference_symbols,
                         )
                         else "ABox 입력은 같지만 정상적으로 정렬된 InferenceBox가 없어 추론을 다시 실행합니다."
                     ),
@@ -129,14 +212,14 @@ class PortfolioOntologyProjectionRecorder:
                 if self.inference_result_is_reusable(
                     inferencebox,
                     active_abox,
-                    self.snapshot_symbols(snapshot),
+                    inference_symbols,
                 ):
                     inferencebox["reusedForUnchangedMaterialFacts"] = True
                     result["inferenceBox"] = inferencebox
                 else:
                     result["reasoningRetryRequired"] = True
                     result["previousInferenceStatus"] = str(inferencebox.get("status") or "missing")
-                    self.attach_graph_store_inference_result(result, snapshot)
+                    self.attach_graph_store_inference_result(result, snapshot, inference_symbols)
                 self.store_projection_result(snapshot, result)
                 return result
             result = self.repository.save_graph(persistence_graph)
@@ -150,7 +233,7 @@ class PortfolioOntologyProjectionRecorder:
             if rulebox_bootstrap:
                 result["ruleboxBootstrap"] = rulebox_bootstrap
             if result.get("saved"):
-                self.attach_graph_store_inference_result(result, snapshot)
+                self.attach_graph_store_inference_result(result, snapshot, inference_symbols)
             if self.quality_store:
                 sample = self.quality_store.record_graph(graph, source=self.source)
                 result["qualitySampleId"] = sample.sample_id
@@ -298,33 +381,70 @@ class PortfolioOntologyProjectionRecorder:
         }
 
     def graph_for_graph_store_persistence(self, graph: PortfolioOntology) -> PortfolioOntology:
-        # TBox, RuleBox, and language governance are seeded separately. Rewriting
-        # them on every quote update turns a small ABox refresh into a full graph
-        # replacement and quickly overwhelms TypeDB's transaction log.
+        # TBox, RuleBox, and language governance are seeded separately. The live
+        # ABox needs only the one-hop facts that TypeDB native rules can match
+        # from a stock or portfolio source. Persisting every generated display,
+        # valuation, and runtime detail made a 13-symbol account write thousands
+        # of rows on each tick and delayed market-open alerts.
         stripped_ids: Set[str] = set()
-        entities = []
+        abox_entities = []
         for item in graph.entities:
             box = str((item.properties or {}).get("ontologyBox") or "ABox")
             if box != "ABox":
                 stripped_ids.add(item.entity_id)
                 continue
-            entities.append(item)
-        relations = [
+            abox_entities.append(item)
+        abox_relations = [
             item
             for item in graph.relations
             if str((item.properties or {}).get("ontologyBox") or "ABox") == "ABox"
             and item.source not in stripped_ids
             and item.target not in stripped_ids
         ]
+        enabled_rules = [item for item in default_graph_inference_rules() if item.enabled]
+        native_relation_conditions = [
+            (rule.source_kind, condition)
+            for rule in enabled_rules
+            for condition in rule.conditions or []
+            if str(condition.kind or "") == "relation"
+            and str(condition.relation_type or "").strip()
+        ]
+        native_relation_types = {
+            str(condition.relation_type or "").upper().strip()
+            for _source_kind, condition in native_relation_conditions
+        }
+        entities_by_id = {item.entity_id: item for item in abox_entities}
+        source_ids = {
+            item.entity_id
+            for item in abox_entities
+            if str(item.kind or "") in {"stock", "portfolio"}
+        }
+        relations = [
+            item
+            for item in abox_relations
+            if any(
+                native_rule_relation_is_relevant(item, entities_by_id, source_kind, condition)
+                for source_kind, condition in native_relation_conditions
+            )
+        ]
+        persisted_entity_ids = source_ids | {
+            endpoint
+            for relation in relations
+            for endpoint in [relation.source, relation.target]
+            if str(endpoint or "").strip()
+        }
+        entities = [item for item in abox_entities if item.entity_id in persisted_entity_ids]
         evidence = [
             item
             for item in graph.evidence
             if str((item.value or {}).get("ontologyBox") or "ABox") == "ABox"
+            and str(item.subject or "") in source_ids
         ]
         beliefs = [
             item
             for item in graph.beliefs
             if not str(item.belief_id or "").startswith("belief:inference:")
+            and str(item.subject or "") in source_ids
         ]
         return PortfolioOntology(
             graph.portfolio_id,
@@ -334,19 +454,31 @@ class PortfolioOntologyProjectionRecorder:
             beliefs=beliefs,
             opinions=[],
             reasoning_cards=[],
-            worldview={**dict(graph.worldview or {}), "runtimeProjectionMode": "abox-facts-only-graph-store-rulebox"},
+            worldview={
+                **dict(graph.worldview or {}),
+                "runtimeProjectionMode": "abox-facts-only-graph-store-rulebox",
+                "runtimeProjectionScope": "native-rule-one-hop-context",
+                "runtimeProjectionSourceEntityCount": len(source_ids),
+                "runtimeProjectionRelationTypeCount": len(native_relation_types),
+            },
             prompt=graph.prompt,
         )
 
     def graph_for_typedb_persistence(self, graph: PortfolioOntology) -> PortfolioOntology:
         return self.graph_for_graph_store_persistence(graph)
 
-    def attach_graph_store_inference_result(self, result: Dict[str, object], snapshot: AccountSnapshot) -> None:
+    def attach_graph_store_inference_result(
+        self,
+        result: Dict[str, object],
+        snapshot: AccountSnapshot,
+        target_symbols: List[str] = None,
+    ) -> None:
         if not hasattr(self.repository, "run_rulebox"):
             return
+        inference_symbols = self.inference_symbols(snapshot, target_symbols)
         try:
             execution = self.repository.run_rulebox({
-                "symbols": self.snapshot_symbols(snapshot),
+                "symbols": inference_symbols,
                 "pruneOldGenerations": True,
                 "inferenceSnapshotLimit": self.inference_snapshot_limit(),
             })
@@ -371,7 +503,7 @@ class PortfolioOntologyProjectionRecorder:
             return
         try:
             snapshot_payload = self.repository.inferencebox_snapshot(
-                symbols=self.snapshot_symbols(snapshot),
+                symbols=inference_symbols,
                 limit=self.inference_snapshot_limit(),
             )
         except Exception as error:  # noqa: BLE001 - snapshot read is best effort.
@@ -382,12 +514,17 @@ class PortfolioOntologyProjectionRecorder:
                 snapshot_payload.setdefault("source", "typedbInferenceBox")
             result["inferenceBox"] = snapshot_payload
 
-    def existing_inference_result(self, snapshot: AccountSnapshot) -> Dict[str, object]:
+    def existing_inference_result(
+        self,
+        snapshot: AccountSnapshot,
+        target_symbols: List[str] = None,
+    ) -> Dict[str, object]:
         if not hasattr(self.repository, "inferencebox_snapshot"):
             return {}
+        inference_symbols = self.inference_symbols(snapshot, target_symbols)
         try:
             inferencebox = self.repository.inferencebox_snapshot(
-                symbols=self.snapshot_symbols(snapshot),
+                symbols=inference_symbols,
                 limit=self.inference_snapshot_limit(),
             )
         except Exception as error:  # noqa: BLE001 - unchanged ABox remains valid even if readback fails.
@@ -429,6 +566,21 @@ class PortfolioOntologyProjectionRecorder:
             if symbol and symbol not in symbols:
                 symbols.append(symbol)
         return symbols
+
+    def inference_symbols(self, snapshot: AccountSnapshot, target_symbols: List[str] = None) -> List[str]:
+        """Limit the expensive native TypeQL match to changed subjects when known.
+
+        The ABox still includes the complete live portfolio so portfolio and
+        exposure rules retain their full context. Only the TypeDB rule query and
+        InferenceBox generation are narrowed to the material event subjects.
+        """
+        available = set(self.snapshot_symbols(snapshot))
+        selected = []
+        for symbol in target_symbols or []:
+            clean = str(symbol or "").upper().strip()
+            if clean and clean in available and clean not in selected:
+                selected.append(clean)
+        return selected or self.snapshot_symbols(snapshot)
 
     def inference_snapshot_limit(self) -> int:
         try:

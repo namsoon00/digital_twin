@@ -567,12 +567,15 @@ class KISRealtimeSymbolSelector:
         """Korean names that may affect a user's investment alert.
 
         Cache-fill symbols are useful for keeping market data warm, but they
-        must not fill the TypeDB investment-reasoning queue ahead of positions
-        or the configured watchlist.
+        must not fill the TypeDB investment-reasoning queue. Configured
+        transport symbols are intentionally excluded by default: they are
+        useful for a warm quote cache, but are not necessarily a user's
+        holding or watchlist name.
         """
-        return self.bounded_symbols(
-            self.configured_symbols() + self.monitor_symbols() + self.account_symbols()
-        )
+        candidates = self.monitor_symbols() + self.account_symbols()
+        if bool_setting(self.settings, "kisRealtimeWebSocketIncludeConfiguredInReasoning", False):
+            candidates += self.configured_symbols()
+        return self.bounded_symbols(candidates)
 
     def symbols(self) -> List[str]:
         return self.bounded_symbols(

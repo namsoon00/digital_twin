@@ -483,6 +483,7 @@ class RealtimeMonitor(MonitoringSampleDataMixin, MonitoringPositionContextMixin,
         previous_failed = (
             str((previous or {}).get("mode") or "").strip().lower() != "live"
             or status_has_account_data_failure((previous or {}).get("status"))
+            or bool(previous_metadata.get("lastConnectionFailure"))
         )
         return (previous_streak if previous_failed else 0) + 1
 
@@ -538,7 +539,12 @@ class RealtimeMonitor(MonitoringSampleDataMixin, MonitoringPositionContextMixin,
                 },
             ))
         previous_status = previous.get("status") if previous else ""
-        if previous_status and previous_status != snapshot.status and not current_failed:
+        previous_metadata = dict((previous or {}).get("metadata") or {})
+        previous_connection_failure = previous_metadata.get("lastConnectionFailure")
+        if (previous_status and previous_status != snapshot.status or previous_connection_failure) and not current_failed:
+            previous_status_text = str(previous_status or "이전 연결 오류")
+            if isinstance(previous_connection_failure, dict):
+                previous_status_text = str(previous_connection_failure.get("status") or previous_status_text)
             events.append(AlertEvent(
                 snapshot.account_id,
                 snapshot.account_label,
@@ -546,10 +552,10 @@ class RealtimeMonitor(MonitoringSampleDataMixin, MonitoringPositionContextMixin,
                 "monitorConnection",
                 ":".join([snapshot.account_id, "connection-change", snapshot.status]),
                 "연결 상태 변화",
-                ["이전 " + str(previous_status), "현재 " + snapshot.status],
+                ["이전 " + previous_status_text, "현재 " + snapshot.status],
                 criteria=self.criteria(
                     "직전 스냅샷의 토스 연결 상태와 현재 상태가 다를 때",
-                    "이전 " + str(previous_status) + ", 현재 " + snapshot.status,
+                    "이전 " + previous_status_text + ", 현재 " + snapshot.status,
                 ),
             ))
         return events
@@ -954,7 +960,12 @@ class RealtimeMonitor(MonitoringSampleDataMixin, MonitoringPositionContextMixin,
                 reason += ": " + summary
             return "invalidABox", reason, common
         projection_status = str(projection.get("status") or "").strip().lower()
-        if projection_status and projection_status not in {"ok", "partial"}:
+        if projection_status and projection_status not in {
+            "ok",
+            "partial",
+            "unchanged-material-facts",
+            "unchanged-material-facts-reasoning-retry",
+        }:
             reason = graph_store_label(graph_store) + " projection 저장 실패"
             if common.get("projectionReason"):
                 reason += ": " + str(common.get("projectionReason"))

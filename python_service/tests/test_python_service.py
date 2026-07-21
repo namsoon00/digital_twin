@@ -5739,6 +5739,27 @@ class PythonServiceTests(unittest.TestCase):
         self.assertIn("실패 단계 TypeDB 투영 저장", line_text)
         self.assertIn("projectionReason=TypeQL syntax error", line_text)
 
+    def test_unchanged_material_projection_is_not_treated_as_a_type_db_save_failure(self):
+        reason_code, _reason, detail = RealtimeMonitor().ontology_inference_missing_reason_from_metadata({
+            "ontology": {
+                "typedb": {
+                    "saved": False,
+                    "status": "unchanged-material-facts",
+                    "graphStore": "typedb",
+                    "ruleboxExecution": {"status": "ok"},
+                    "inferenceBox": {
+                        "status": "ok",
+                        "nativeTypeDbReasoningUsed": True,
+                        "relations": [],
+                        "traces": [],
+                    },
+                },
+            },
+        })
+
+        self.assertEqual("emptyInferenceBox", reason_code)
+        self.assertEqual("ok", detail["status"])
+
     def test_events_do_not_report_expected_reasoning_worker_defer_as_failure(self):
         position = normalize_position({
             "symbol": "005930",
@@ -14017,6 +14038,67 @@ class PythonServiceTests(unittest.TestCase):
                 MONITORING_CYCLE_COMPLETED: 1,
             },
             event_counts,
+        )
+
+    def test_cycle_keeps_last_live_snapshot_during_temporary_account_failure(self):
+        db_path = test_store_seed(self.temp.name)
+        legacy_missing = Path(self.temp.name) / "missing.json"
+        store = TestMonitorStore(db_path, legacy_path=legacy_missing)
+        cycle_recorder = TestMonitoringCycleRecorder(db_path, monitor_store=store)
+        position = normalize_position({
+            "symbol": "000660",
+            "name": "SK하이닉스",
+            "market": "KR",
+            "currency": "KRW",
+            "quantity": 5,
+            "currentPrice": 200000,
+            "averagePrice": 210000,
+            "marketValue": 1000000,
+            "profitLossRate": -4.8,
+        })
+        portfolio = portfolio_summary([position], 1200000, "KRW")
+        live = AccountSnapshot(
+            "main", "메인", "toss", "live", "토스 계좌 동기화",
+            "2026-07-21T00:00:00Z", portfolio, [position],
+            decisions_for_positions([position], portfolio),
+        )
+        store.save_snapshot(live)
+        monitor = RealtimeMonitor()
+
+        first_failure = AccountSnapshot(
+            "main", "메인", "toss", "demo",
+            "토스 조회 실패 · Toss accounts 단계 실패 · HTTP 401 Unauthorized",
+            "2026-07-21T00:03:00Z", portfolio, [position],
+            decisions_for_positions([position], portfolio),
+        )
+        monitor.connection_events(first_failure, store.previous["main"])
+        cycle_recorder.record_cycle(["main"], [first_failure], [])
+
+        retained = store.previous["main"]
+        self.assertEqual("live", retained["mode"])
+        self.assertEqual("2026-07-21T00:00:00Z", retained["generatedAt"])
+        self.assertEqual(200000, retained["positions"]["000660"]["current_price"])
+        self.assertEqual(1, retained["metadata"]["connectionFailureStreak"])
+        self.assertIn("HTTP 401", retained["metadata"]["lastConnectionFailure"]["status"])
+
+        second_failure = AccountSnapshot(
+            "main", "메인", "toss", "demo",
+            "토스 조회 실패 · Toss accounts 단계 실패 · HTTP 401 Unauthorized",
+            "2026-07-21T00:06:00Z", portfolio, [position],
+            decisions_for_positions([position], portfolio),
+        )
+        monitor.connection_events(second_failure, retained)
+        cycle_recorder.record_cycle(["main"], [second_failure], [])
+
+        self.assertEqual(2, second_failure.metadata["connectionFailureStreak"])
+        self.assertEqual(1, mysql_fetchone(db_path, "SELECT COUNT(*) FROM monitor_snapshot_history")[0])
+        self.assertEqual(
+            0,
+            mysql_fetchone(
+                db_path,
+                "SELECT COUNT(*) FROM domain_events WHERE name = %s",
+                (MONITORING_SNAPSHOT_COLLECTED,),
+            )[0],
         )
 
     def test_application_runner_claims_account_monitor_jobs_independently(self):

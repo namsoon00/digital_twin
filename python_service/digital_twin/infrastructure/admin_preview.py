@@ -415,6 +415,7 @@ def admin_preview_config() -> Dict[str, object]:
                     {"key": "ontologyReasoningIntervalSeconds", "label": "추론 요청 확인 주기", "type": "number", "default": "10", "unit": "seconds"},
                     {"key": "ontologyReasoningBatchSize", "label": "추론 요청 배치", "type": "number", "default": "20"},
                     {"key": "ontologyReasoningMaxSymbolsPerRun", "label": "한 번에 추론할 종목 수", "type": "number", "default": "3"},
+                    {"key": "typedbNativeRuleTargetSymbolLimit", "label": "TypeDB 네이티브 추론 대상 종목 상한", "type": "number", "default": "1"},
                     {"key": "ontologyReasoningMinIntervalSeconds", "label": "종목별 추론 병합 간격", "type": "number", "default": "180", "unit": "seconds"},
                     {"key": "ontologyReasoningUrgentMinIntervalSeconds", "label": "긴급 추론 최소 간격", "type": "number", "default": "60", "unit": "seconds"},
                     {"key": "ontologyReasoningUrgentReviewLevels", "label": "긴급 추론 검토 단계", "type": "text", "default": "act,immediate,blocked"},

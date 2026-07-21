@@ -27,6 +27,47 @@ class MaterialityGateTests(unittest.TestCase):
 
         self.assertEqual(3, runner.max_symbols_per_run())
 
+    def test_reasoning_worker_serializes_native_typedb_rule_subjects(self):
+        request = ontology_reasoning_requested_event(
+            DomainEvent(name="market_data.collected", aggregate_id="market:KR", payload={}),
+            "market-data-update",
+            ["005930", "000660", "035420"],
+            changed_count=3,
+            fact_types=["MarketQuote"],
+        )
+        runner = OntologyReasoningRunner(
+            event_reader=None,
+            cursor_store=None,
+            monitor_runner_factory=lambda: None,
+            settings={
+                "ontologyReasoningMaxSymbolsPerRun": "3",
+                "ontologyReasoningTypeDbNativeRuleExecutionEnabled": "1",
+                "typedbNativeRuleTargetSymbolLimit": "1",
+            },
+        )
+
+        batches, symbols, omitted = runner.request_symbol_batches([request])
+
+        self.assertEqual(1, runner.effective_max_symbols_per_run())
+        self.assertEqual(1, len(symbols))
+        self.assertIn(symbols[0], ["005930", "000660", "035420"])
+        self.assertEqual(symbols, batches[request.event_id])
+        self.assertEqual(2, omitted)
+
+    def test_reasoning_worker_keeps_configured_batch_without_native_typedb_rules(self):
+        runner = OntologyReasoningRunner(
+            event_reader=None,
+            cursor_store=None,
+            monitor_runner_factory=lambda: None,
+            settings={
+                "ontologyReasoningMaxSymbolsPerRun": "3",
+                "ontologyReasoningTypeDbNativeRuleExecutionEnabled": "0",
+                "typedbNativeRuleTargetSymbolLimit": "1",
+            },
+        )
+
+        self.assertEqual(3, runner.effective_max_symbols_per_run())
+
     def test_reasoning_worker_prioritizes_live_holdings_over_background_realtime_ticks(self):
         background = ontology_reasoning_requested_event(
             DomainEvent(name="market_data.collected", aggregate_id="market:000150", payload={}),

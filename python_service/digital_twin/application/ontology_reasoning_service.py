@@ -194,6 +194,31 @@ class OntologyReasoningRunner:
     def max_symbols_per_run(self) -> int:
         return int_setting(self.settings, "ontologyReasoningMaxSymbolsPerRun", 3, 0, 200)
 
+    def native_typedb_rule_execution_enabled(self) -> bool:
+        """Return whether this runner delegates investment rules to TypeDB.
+
+        Unit and compatibility callers may not provide either setting.  Keep
+        their historical batching behavior unless the native runtime is
+        explicitly enabled by the service factory.
+        """
+        configured = self.settings.get("ontologyReasoningTypeDbNativeRuleExecutionEnabled")
+        if configured is None:
+            configured = self.settings.get("typedbNativeRuleExecutionEnabled")
+        return truthy(configured, False)
+
+    def native_typedb_target_symbol_limit(self) -> int:
+        """Bound schema-function work without reducing the complete ABox."""
+        return int_setting(self.settings, "typedbNativeRuleTargetSymbolLimit", 1, 1, 200)
+
+    def effective_max_symbols_per_run(self) -> int:
+        configured_limit = self.max_symbols_per_run()
+        if not self.native_typedb_rule_execution_enabled():
+            return configured_limit
+        native_limit = self.native_typedb_target_symbol_limit()
+        if configured_limit <= 0:
+            return native_limit
+        return min(configured_limit, native_limit)
+
     def coherent_snapshot_enabled(self) -> bool:
         return truthy(self.settings.get("ontologyReasoningCoherentSnapshotEnabled"), True)
 
@@ -495,7 +520,11 @@ class OntologyReasoningRunner:
         return symbols
 
     def request_symbol_batches(self, requests: Iterable[object]) -> Tuple[Dict[str, List[str]], List[str], int]:
-        max_symbols = self.max_symbols_per_run()
+        # Snapshot construction still preserves all portfolio and market
+        # entities.  Only the native schema-function subjects are serialized;
+        # a multi-symbol function batch can otherwise exceed the realtime
+        # boundary and repeatedly roll back the candidate ABox generation.
+        max_symbols = self.effective_max_symbols_per_run()
         cursor_payload = self.cursor_payload()
         progress = self.event_symbol_progress(cursor_payload)
         priority_symbols = self.priority_symbols()
@@ -780,7 +809,9 @@ class OntologyReasoningRunner:
                 "processedCount": 0,
                 "alertCount": 0,
                 "symbols": symbols,
-                "maxSymbolsPerRun": self.max_symbols_per_run(),
+                "maxSymbolsPerRun": self.effective_max_symbols_per_run(),
+                "configuredMaxSymbolsPerRun": self.max_symbols_per_run(),
+                "nativeTypeDbTargetSymbolLimit": self.native_typedb_target_symbol_limit() if self.native_typedb_rule_execution_enabled() else None,
                 "omittedSymbolCount": omitted_symbol_count,
                 "retryAfterSeconds": retry_after_seconds,
                 "projectionCooldownSeconds": self.projection_min_interval_seconds(requests),
@@ -799,7 +830,9 @@ class OntologyReasoningRunner:
                 "processedCount": 0,
                 "alertCount": len(alerts or []),
                 "symbols": symbols,
-                "maxSymbolsPerRun": self.max_symbols_per_run(),
+                "maxSymbolsPerRun": self.effective_max_symbols_per_run(),
+                "configuredMaxSymbolsPerRun": self.max_symbols_per_run(),
+                "nativeTypeDbTargetSymbolLimit": self.native_typedb_target_symbol_limit() if self.native_typedb_rule_execution_enabled() else None,
                 "omittedSymbolCount": omitted_symbol_count,
                 "retryAfterSeconds": self.projection_retry_seconds(),
                 "deferredReason": str(projection_gate.get("reason") or "TypeDB graph cycle is not ready."),
@@ -817,7 +850,7 @@ class OntologyReasoningRunner:
             status="ok",
             reason=(
                 "데이터 변경 이벤트가 온톨로지 추론 사이클을 실행했습니다."
-                + (f" 심볼 한도 {self.max_symbols_per_run()}개가 적용되어 {omitted_symbol_count}개는 다음 사이클로 이월했습니다." if omitted_symbol_count else "")
+                + (f" 네이티브 추론 대상 상한 {self.effective_max_symbols_per_run()}개가 적용되어 {omitted_symbol_count}개는 다음 사이클로 이월했습니다." if omitted_symbol_count else "")
             ),
         )
         rule_candidate_result = self.propose_rule_candidates(symbols, requests, alerts, force=False)
@@ -837,7 +870,9 @@ class OntologyReasoningRunner:
             "coalescedEventCount": len(progress_result.get("supersededEventIds") or []),
             "alertCount": len(alerts or []),
             "symbols": symbols,
-            "maxSymbolsPerRun": self.max_symbols_per_run(),
+            "maxSymbolsPerRun": self.effective_max_symbols_per_run(),
+            "configuredMaxSymbolsPerRun": self.max_symbols_per_run(),
+            "nativeTypeDbTargetSymbolLimit": self.native_typedb_target_symbol_limit() if self.native_typedb_rule_execution_enabled() else None,
             "omittedSymbolCount": omitted_symbol_count,
             "accountIds": [item for item in account_ids if item],
             "ruleCandidateResult": rule_candidate_result,
@@ -935,7 +970,9 @@ class OntologyReasoningRunner:
             "enabled": self.enabled(),
             "pendingCount": len(pending),
             "batchSize": self.batch_size(),
-            "maxSymbolsPerRun": self.max_symbols_per_run(),
+            "maxSymbolsPerRun": self.effective_max_symbols_per_run(),
+            "configuredMaxSymbolsPerRun": self.max_symbols_per_run(),
+            "nativeTypeDbTargetSymbolLimit": self.native_typedb_target_symbol_limit() if self.native_typedb_rule_execution_enabled() else None,
             "coherentSnapshotEnabled": self.coherent_snapshot_enabled(),
             "coherentSnapshotMaxSymbols": self.coherent_snapshot_max_symbols(),
             "processedCount": len(self.cursor_store.processed_event_ids()),

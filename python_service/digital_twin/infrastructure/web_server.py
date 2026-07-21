@@ -1,6 +1,7 @@
 import base64
 import csv
 import errno
+import gzip
 import hashlib
 import hmac
 import html
@@ -89,9 +90,11 @@ from ..infrastructure.service_factory import (
     build_ontology_lab_service,
     build_rule_change_candidate_service,
     build_symbol_universe_service,
+    build_flow_lens_service,
     flow_lens_snapshot,
     investment_analysis_snapshot,
 )
+from ..infrastructure.flow_lens_read_model import FlowLensReadModel
 from ..infrastructure.settings import ROOT_DIR, read_json, runtime_settings, save_runtime_settings, write_private_json
 from ..infrastructure.toss_snapshots import build_snapshot
 
@@ -102,6 +105,8 @@ MEMORY_CATEGORIES = ["identity", "preference", "finance", "travel", "asset", "sc
 DOMAIN_TYPES = ["stock", "trip", "asset", "schedule", "task", "note"]
 MAX_BODY_BYTES = 1024 * 1024
 WEB_PROXY_API_GUARD_STATE: Dict[str, object] = {}
+FLOW_LENS_READ_MODEL = None
+FLOW_LENS_READ_MODEL_LOCK = threading.Lock()
 
 NON_CADENCE_MESSAGE_GUIDES = {
     "modelReview": "판단 변화 알림이 발생하면 별도 워커가 충분히 분석한 뒤 보냅니다.",
@@ -255,6 +260,22 @@ def realtime_event_payload(event: DomainEvent) -> Dict[str, object]:
     }
 
 
+def realtime_event_summary(event: DomainEvent) -> Dict[str, object]:
+    """Expose only the fields needed to refresh a desktop status indicator."""
+    payload = dict(event.payload or {})
+    summary_keys = [
+        "accountId", "accountLabel", "count", "status", "generatedAt", "symbol",
+        "symbols", "messageType", "jobId", "sourceEventId", "snapshotCount", "eventCount",
+    ]
+    return {
+        "name": event.name,
+        "eventId": event.event_id,
+        "aggregateId": event.aggregate_id,
+        "occurredAt": event.occurred_at,
+        "payload": {key: payload[key] for key in summary_keys if key in payload},
+    }
+
+
 def realtime_status_payload() -> Dict[str, object]:
     store_warning = ""
     try:
@@ -275,11 +296,11 @@ def realtime_status_payload() -> Dict[str, object]:
         latest_by_name = {}
     monitoring = {}
     if latest_by_name.get(MONITORING_CYCLE_COMPLETED):
-        monitoring["cycle"] = realtime_event_payload(latest_by_name[MONITORING_CYCLE_COMPLETED])
+        monitoring["cycle"] = realtime_event_summary(latest_by_name[MONITORING_CYCLE_COMPLETED])
     if latest_by_name.get(MONITORING_ALERTS_DETECTED):
-        monitoring["alerts"] = realtime_event_payload(latest_by_name[MONITORING_ALERTS_DETECTED])
+        monitoring["alerts"] = realtime_event_summary(latest_by_name[MONITORING_ALERTS_DETECTED])
     if latest_by_name.get(MONITORING_SNAPSHOT_COLLECTED):
-        monitoring["snapshot"] = realtime_event_payload(latest_by_name[MONITORING_SNAPSHOT_COLLECTED])
+        monitoring["snapshot"] = realtime_event_summary(latest_by_name[MONITORING_SNAPSHOT_COLLECTED])
     try:
         notification_jobs = notification_queue_store().summary()
     except Exception as error:  # noqa: BLE001 - notification queue may share the same optional MySQL backend.
@@ -288,7 +309,7 @@ def realtime_status_payload() -> Dict[str, object]:
     return {
         **REALTIME_HUB.status(),
         "events": counts,
-        "latestEvents": [realtime_event_payload(event) for event in latest_events],
+        "latestEvents": [realtime_event_summary(event) for event in latest_events],
         "monitoring": monitoring,
         "notificationJobs": notification_jobs,
         "storeWarning": store_warning,
@@ -492,6 +513,9 @@ def settings_status_payload() -> Dict[str, object]:
         "investmentBrainResearchMinimumVerifiedCount",
         "investmentBrainResearchMinimumSourceTrustState",
         "investmentBrainResearchCooldownMinutes",
+        "investmentBrainOutcomeObservationMinutes",
+        "investmentBrainOutcomeEpisodeBatchSize",
+        "investmentBrainOutcomeMaxDelayMinutes",
         "investmentBrainNotificationResearchEnabled",
         "investmentBrainNovelHypothesisAiEnabled",
         "investmentBrainNovelHypothesisAiTimeoutSeconds",
@@ -1302,8 +1326,12 @@ def ontology_lab_service():
     return build_ontology_lab_service(runtime_settings())
 
 
-def list_ontology_experiments_payload() -> Dict[str, object]:
-    return ontology_lab_service().list()
+def list_ontology_experiments_payload(query: Dict[str, List[str]]) -> Dict[str, object]:
+    return ontology_lab_service().list(
+        limit=max(1, min(100, int(first_query(query, "limit") or 8))),
+        offset=max(0, int(first_query(query, "offset") or 0)),
+        summary=not request_bool(first_query(query, "detail"), False),
+    )
 
 
 def ontology_experiments_status_payload() -> Dict[str, object]:
@@ -1542,7 +1570,7 @@ def notification_job_diagnostics(jobs: List[NotificationJob]) -> Dict[str, objec
     }
 
 
-def notification_job_public_payload(job: NotificationJob) -> Dict[str, object]:
+def notification_job_public_payload(job: NotificationJob, detail: bool = False) -> Dict[str, object]:
     context = job.context or {}
     reasons = context.get("deliveryReasons") if isinstance(context.get("deliveryReasons"), list) else []
     title = str(context.get("title") or context.get("headline") or "").strip()
@@ -1551,7 +1579,7 @@ def notification_job_public_payload(job: NotificationJob) -> Dict[str, object]:
         stale_minutes = max(1, int(runtime_settings().get("notificationProcessingStaleMinutes") or 30))
     except (TypeError, ValueError):
         stale_minutes = 30
-    return {
+    payload = {
         "jobId": job.job_id,
         "messageType": job.message_type,
         "messageTypeLabel": MESSAGE_TYPE_LABELS.get(job.message_type, job.message_type),
@@ -1567,7 +1595,6 @@ def notification_job_public_payload(job: NotificationJob) -> Dict[str, object]:
         "rawSymbol": str(context.get("rawSymbol") or context.get("symbol") or "").strip(),
         "symbolName": str(context.get("symbolDisplayName") or context.get("displaySymbolName") or "").strip(),
         "textPreview": compact_notification_text(job.text),
-        "fullText": full_notification_text(job.text),
         "lastError": job.last_error,
         "suppressionSummary": notification_suppression_summary(job),
         "nextEligibleAt": notification_next_eligible_at(context),
@@ -1612,26 +1639,48 @@ def notification_job_public_payload(job: NotificationJob) -> Dict[str, object]:
         "quietHoursEnd": context.get("quietHoursEnd") or "",
         "quietHoursTimezone": context.get("quietHoursTimezone") or "",
     }
+    if detail:
+        payload["fullText"] = full_notification_text(job.text)
+    return payload
 
 
 def notification_jobs_payload(query: Dict[str, List[str]]) -> Dict[str, object]:
-    limit = max(1, min(200, int(first_query(query, "limit") or 40)))
+    limit = max(1, min(100, int(first_query(query, "limit") or 20)))
+    offset = max(0, int(first_query(query, "offset") or 0))
+    message_type = first_query(query, "messageType") or first_query(query, "message_type")
+    status = first_query(query, "status")
+    search = first_query(query, "query") or first_query(query, "q")
     try:
-        jobs = notification_queue_store().recent(
+        jobs, total = notification_queue_store().recent_page(
             limit=limit,
-            message_type=first_query(query, "messageType") or first_query(query, "message_type"),
-            status=first_query(query, "status"),
+            offset=offset,
+            message_type=message_type,
+            status=status,
+            query=search,
         )
         summary = notification_queue_store().summary()
     except Exception:  # noqa: BLE001 - empty queue keeps the console readable without MySQL.
         jobs = []
+        total = 0
         summary = {"pending": 0, "processing": 0, "done": 0, "suppressed": 0, "failed": 0}
     return {
-        "jobs": [notification_job_public_payload(job) for job in jobs],
+        "jobs": [notification_job_public_payload(job, detail=False) for job in jobs],
         "summary": summary,
         "diagnostics": notification_job_diagnostics(jobs),
         "limit": limit,
+        "offset": offset,
+        "total": total,
+        "query": search,
+        "messageType": message_type,
+        "status": status,
     }
+
+
+def notification_job_detail_payload(job_id: str) -> Dict[str, object]:
+    job = notification_queue_store().get(job_id)
+    if not job:
+        return {}
+    return {"job": notification_job_public_payload(job, detail=True)}
 
 
 def replay_notification_payload(payload: Dict[str, object]) -> Dict[str, object]:
@@ -1651,17 +1700,42 @@ def replay_notification_payload(payload: Dict[str, object]) -> Dict[str, object]
 
 
 def research_evidence_payload(query: Dict[str, List[str]]) -> Dict[str, object]:
-    limit = max(1, min(500, int(first_query(query, "limit") or 8)))
+    limit = max(1, min(100, int(first_query(query, "limit") or 8)))
+    offset = max(0, int(first_query(query, "offset") or 0))
     symbol = configured(first_query(query, "symbol")).upper()
     kind = configured(first_query(query, "kind"))
+    search = configured(first_query(query, "query") or first_query(query, "q"))
     store = stores.research_evidence_store()
+    items, total = store.latest_page(symbol=symbol, kind=kind, limit=limit, offset=offset, query=search)
     return {
-        "items": [item.to_dict() for item in store.latest(symbol=symbol, kind=kind, limit=limit)],
+        "items": [research_evidence_list_payload(item) for item in items],
         "summary": store.summary(),
         "symbol": symbol,
         "kind": kind,
         "limit": limit,
+        "offset": offset,
+        "total": total,
+        "query": search,
     }
+
+
+def research_evidence_list_payload(item) -> Dict[str, object]:
+    payload = item.to_dict()
+    raw = payload.pop("payload", {})
+    if isinstance(raw, dict):
+        compact_raw = {}
+        for key in ["name", "provider", "articleType", "analysisStatus", "relevanceState", "impactLabel", "impactSummary", "koreanSummary", "priceImpact", "sourceTrustState", "materialityState", "dataState", "validationState"]:
+            if raw.get(key) not in (None, "", [], {}):
+                payload[key] = raw.get(key)
+                compact_raw[key] = raw.get(key)
+        payload["payload"] = compact_raw
+    payload["detailPath"] = "/api/research-evidence/" + urllib.parse.quote(str(item.evidence_id or ""))
+    return payload
+
+
+def research_evidence_detail_payload(evidence_id: str) -> Dict[str, object]:
+    item = stores.research_evidence_store().get(evidence_id)
+    return {"item": item.to_dict()} if item else {}
 
 
 def delete_research_evidence_payload(evidence_id: str, query: Dict[str, List[str]]) -> Dict[str, object]:
@@ -2457,6 +2531,68 @@ def compact_flow_lens_payload(payload: Dict[str, object]) -> Dict[str, object]:
     return compact
 
 
+def persisted_flow_lens_snapshot(watchlist_symbols: str = "") -> Dict[str, object]:
+    """Read the latest verified monitor projection without calling vendors."""
+    try:
+        states = stores.monitor_store(runtime_settings()).previous
+        candidates = [item for item in states.values() if isinstance(item, dict) and item]
+        if not candidates:
+            return {}
+        latest = sorted(candidates, key=lambda item: str(item.get("generatedAt") or ""), reverse=True)[0]
+        return build_flow_lens_service(runtime_settings()).snapshot_from_monitor_state(
+            latest,
+            watchlist_symbols=watchlist_symbols,
+        )
+    except Exception:
+        return {}
+
+
+def flow_lens_read_model() -> FlowLensReadModel:
+    global FLOW_LENS_READ_MODEL
+    with FLOW_LENS_READ_MODEL_LOCK:
+        if FLOW_LENS_READ_MODEL is None:
+            def refresh_snapshot(mock: bool, watchlist_symbols: str) -> Dict[str, object]:
+                return flow_lens_snapshot(mock=mock, watchlist_symbols=watchlist_symbols)
+
+            def notify_ready(snapshot: Dict[str, object]) -> None:
+                REALTIME_HUB.broadcast("dashboard.snapshot_ready", {
+                    "generatedAt": snapshot.get("generatedAt"),
+                    "dataMode": snapshot.get("dataMode"),
+                })
+
+            FLOW_LENS_READ_MODEL = FlowLensReadModel(
+                snapshot_provider=refresh_snapshot,
+                persisted_provider=persisted_flow_lens_snapshot,
+                on_refresh=notify_ready,
+            )
+        return FLOW_LENS_READ_MODEL
+
+
+def flow_lens_read_payload(query: Dict[str, List[str]]) -> Dict[str, object]:
+    mock_value = configured(first_query(query, "mock") or first_query(query, "mode")).lower()
+    detail = configured(first_query(query, "detail") or first_query(query, "view")).lower()
+    refresh = request_bool(first_query(query, "refresh"), False)
+    result = flow_lens_read_model().read(
+        mock=mock_value in {"1", "true", "mock"},
+        watchlist_symbols=first_query(query, "watchlistSymbols"),
+        refresh=refresh,
+    )
+    if not result.snapshot:
+        return {
+            "generatedAt": now(),
+            "dataMode": "pending",
+            "readModel": result.metadata(),
+            "portfolio": {},
+            "tossDecision": {},
+        }
+    payload = dict(result.snapshot)
+    payload["readModel"] = result.metadata()
+    if detail not in {"full", "detail", "all"}:
+        payload = compact_flow_lens_payload(payload)
+        payload["readModel"] = result.metadata()
+    return payload
+
+
 def category_for(value: str) -> str:
     text = str(value or "")
     if re.search(r"주식|투자|종목|포트폴리오|배당|매수|매도", text):
@@ -2801,6 +2937,9 @@ class DigitalTwinHandler(BaseHTTPRequestHandler):
             return
         self.handle_request()
 
+    def do_HEAD(self):
+        self.handle_request()
+
     def do_POST(self):
         self.handle_request()
 
@@ -2876,17 +3015,34 @@ class DigitalTwinHandler(BaseHTTPRequestHandler):
         raw = self.rfile.read(length).decode("utf-8")
         return json.loads(raw) if raw else {}
 
-    def send_payload(self, status: int, payload, content_type: str = "application/json; charset=utf-8", cors: bool = False):
+    def accepts_gzip(self) -> bool:
+        return "gzip" in str(self.headers.get("Accept-Encoding") or "").lower()
+
+    def send_payload(
+        self,
+        status: int,
+        payload,
+        content_type: str = "application/json; charset=utf-8",
+        cors: bool = False,
+        cache_control: str = "no-store",
+    ):
         no_body = status in {204, 304} or self.command == "HEAD"
         body = b"" if no_body else (
             json.dumps(payload, ensure_ascii=False).encode("utf-8") if content_type.startswith("application/json") else (
                 payload if isinstance(payload, bytes) else str(payload).encode("utf-8")
             )
         )
+        compressed = False
+        if not no_body and len(body) >= 1024 and self.accepts_gzip() and (content_type.startswith("application/json") or content_type.startswith("text/")):
+            body = gzip.compress(body, compresslevel=6)
+            compressed = True
         try:
             self.send_response(status)
             self.send_header("Content-Type", content_type)
-            self.send_header("Cache-Control", "no-store")
+            self.send_header("Cache-Control", cache_control)
+            self.send_header("Vary", "Accept-Encoding")
+            if compressed:
+                self.send_header("Content-Encoding", "gzip")
             if cors:
                 self.add_cors_headers()
             self.send_header("Content-Length", str(len(body)))
@@ -3044,7 +3200,7 @@ class DigitalTwinHandler(BaseHTTPRequestHandler):
             return self.send_payload(200, seed_ontology_payload(self.read_json_body()))
 
         if path == "/api/ontology/experiments" and self.command == "GET":
-            return self.send_payload(200, list_ontology_experiments_payload())
+            return self.send_payload(200, list_ontology_experiments_payload(query))
 
         if path == "/api/ontology/experiments" and self.command == "POST":
             if not self.ensure_writable("공유 모드에서는 온톨로지 실험을 생성할 수 없습니다."):
@@ -3169,6 +3325,11 @@ class DigitalTwinHandler(BaseHTTPRequestHandler):
         if path == "/api/notification-jobs" and self.command == "GET":
             return self.send_payload(200, notification_jobs_payload(query))
 
+        notification_job_match = re.match(r"^/api/notification-jobs/([^/]+)$", path)
+        if notification_job_match and self.command == "GET":
+            payload = notification_job_detail_payload(urllib.parse.unquote(notification_job_match.group(1)))
+            return self.send_payload(200 if payload.get("job") else 404, payload or {"error": "알림 작업을 찾지 못했습니다."})
+
         if path == "/api/notification-jobs/replay" and self.command == "POST":
             if not self.ensure_writable("공유 모드에서는 알림을 재발송할 수 없습니다."):
                 return
@@ -3176,6 +3337,11 @@ class DigitalTwinHandler(BaseHTTPRequestHandler):
 
         if path == "/api/research-evidence" and self.command == "GET":
             return self.send_payload(200, research_evidence_payload(query))
+
+        research_evidence_match = re.match(r"^/api/research-evidence/([^/]+)$", path)
+        if research_evidence_match and self.command == "GET":
+            payload = research_evidence_detail_payload(urllib.parse.unquote(research_evidence_match.group(1)))
+            return self.send_payload(200 if payload.get("item") else 404, payload or {"error": "리서치 근거를 찾지 못했습니다."})
 
         if path == "/api/investment-calendar/events":
             if self.command == "GET":
@@ -3275,15 +3441,7 @@ class DigitalTwinHandler(BaseHTTPRequestHandler):
             return self.send_payload(200, mock_market_payload(flat_query), cors=True)
 
         if path == "/api/flow-lens" and self.command == "GET":
-            mock_value = configured(first_query(query, "mock") or first_query(query, "mode")).lower()
-            detail = configured(first_query(query, "detail") or first_query(query, "view")).lower()
-            payload = flow_lens_snapshot(
-                mock=mock_value in {"1", "true", "mock"},
-                watchlist_symbols=first_query(query, "watchlistSymbols"),
-            )
-            if detail not in {"full", "detail", "all"}:
-                payload = compact_flow_lens_payload(payload)
-            return self.send_payload(200, payload)
+            return self.send_payload(200, flow_lens_read_payload(query), cache_control="no-store")
 
         if path == "/api/investment-analysis" and self.command == "GET":
             mock_value = configured(first_query(query, "mock") or first_query(query, "mode")).lower()
@@ -3521,12 +3679,28 @@ class DigitalTwinHandler(BaseHTTPRequestHandler):
             return self.send_payload(404, "Not found", "text/plain; charset=utf-8")
         content_type = mimetypes.guess_type(str(file_path))[0] or "application/octet-stream"
         data = file_path.read_bytes()
+        etag = '"' + hashlib.sha256(data).hexdigest()[:20] + '"'
+        if self.headers.get("If-None-Match") == etag:
+            self.send_response(304)
+            self.send_header("ETag", etag)
+            self.send_header("Cache-Control", "no-cache" if file_path.name == "index.html" else "public, max-age=31536000, immutable")
+            self.end_headers()
+            return
+        compressed = False
+        if len(data) >= 1024 and self.accepts_gzip() and content_type.startswith(("text/", "application/javascript", "application/json")):
+            data = gzip.compress(data, compresslevel=6)
+            compressed = True
         self.send_response(200)
         self.send_header("Content-Type", content_type + ("; charset=utf-8" if content_type.startswith(("text/", "application/javascript", "application/json")) else ""))
-        self.send_header("Cache-Control", "no-store")
+        self.send_header("Cache-Control", "no-cache" if file_path.name == "index.html" else "public, max-age=31536000, immutable")
+        self.send_header("ETag", etag)
+        self.send_header("Vary", "Accept-Encoding")
+        if compressed:
+            self.send_header("Content-Encoding", "gzip")
         self.send_header("Content-Length", str(len(data)))
         self.end_headers()
-        self.wfile.write(data)
+        if self.command != "HEAD":
+            self.wfile.write(data)
 
 
 class ReusableThreadingHTTPServer(ThreadingHTTPServer):

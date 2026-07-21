@@ -201,6 +201,10 @@ class MySQLResearchEvidenceStore(MySQLOperationalConnection):
         return written, events
 
     def latest(self, symbol: str = "", kind: str = "", limit: int = 50) -> List[ResearchEvidence]:
+        items, _ = self.latest_page(symbol=symbol, kind=kind, limit=limit)
+        return items
+
+    def latest_page(self, symbol: str = "", kind: str = "", limit: int = 50, offset: int = 0, query: str = "") -> Tuple[List[ResearchEvidence], int]:
         conditions = []
         params: List[object] = []
         normalized_symbol = str(symbol or "").upper().strip()
@@ -211,14 +215,29 @@ class MySQLResearchEvidenceStore(MySQLOperationalConnection):
         if normalized_kind:
             conditions.append("kind = %s")
             params.append(normalized_kind)
+        needle = str(query or "").strip()
+        if needle:
+            conditions.append("(title LIKE %s OR summary LIKE %s OR source LIKE %s OR symbol LIKE %s)")
+            like = "%" + needle[:120] + "%"
+            params.extend([like, like, like, like])
         where = (" WHERE " + " AND ".join(conditions)) if conditions else ""
-        params.append(max(1, min(500, int(limit or 50))))
+        page_size = max(1, min(100, int(limit or 50)))
+        page_offset = max(0, int(offset or 0))
         with self.connect() as connection:
+            total_row = connection.execute("SELECT COUNT(*) AS count FROM research_evidence" + where, params).fetchone()
             rows = connection.execute(
-                "SELECT * FROM research_evidence" + where + " ORDER BY last_seen_at DESC, published_at DESC, evidence_id DESC LIMIT %s",
-                params,
+                "SELECT * FROM research_evidence" + where + " ORDER BY last_seen_at DESC, published_at DESC, evidence_id DESC LIMIT %s OFFSET %s",
+                params + [page_size, page_offset],
             ).fetchall()
-        return [research_evidence_from_row(row) for row in rows]
+        return [research_evidence_from_row(row) for row in rows], int(total_row["count"] or 0) if total_row else 0
+
+    def get(self, evidence_id: str) -> Optional[ResearchEvidence]:
+        target = str(evidence_id or "").strip()
+        if not target:
+            return None
+        with self.connect() as connection:
+            row = connection.execute("SELECT * FROM research_evidence WHERE evidence_id = %s", (target,)).fetchone()
+        return research_evidence_from_row(row) if row else None
 
     def delete(self, evidence_id: str) -> bool:
         normalized_id = str(evidence_id or "").strip()

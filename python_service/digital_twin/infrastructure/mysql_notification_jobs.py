@@ -1,5 +1,5 @@
 from datetime import datetime, timedelta, timezone
-from typing import Dict, List
+from typing import Dict, List, Optional, Tuple
 
 from ..domain.data_freshness import evaluate_notification_data_freshness, sanitize_notification_context_for_freshness
 from ..domain.message_types import INVESTMENT_INSIGHT, NEWS_DIGEST, OPERATOR_REASONING_REPORT
@@ -59,6 +59,17 @@ class MySQLNotificationJobStore(MySQLOperationalConnection):
         return [NotificationJob.from_dict(_json_loads(row["payload_json"], {})) for row in rows]
 
     def recent(self, limit: int = 40, message_type: str = "", status: str = "") -> List[NotificationJob]:
+        jobs, _ = self.recent_page(limit=limit, message_type=message_type, status=status)
+        return jobs
+
+    def recent_page(
+        self,
+        limit: int = 40,
+        offset: int = 0,
+        message_type: str = "",
+        status: str = "",
+        query: str = "",
+    ) -> Tuple[List[NotificationJob], int]:
         clauses = []
         params = []
         if str(message_type or "").strip():
@@ -67,14 +78,35 @@ class MySQLNotificationJobStore(MySQLOperationalConnection):
         if str(status or "").strip():
             clauses.append("status = %s")
             params.append(str(status or "").strip())
+        needle = str(query or "").strip()
+        if needle:
+            clauses.append("(text LIKE %s OR payload_json LIKE %s OR message_type LIKE %s)")
+            like = "%" + needle[:120] + "%"
+            params.extend([like, like, like])
         where = (" WHERE " + " AND ".join(clauses)) if clauses else ""
-        params.append(max(1, min(200, int(limit or 40))))
+        page_size = max(1, min(100, int(limit or 40)))
+        page_offset = max(0, int(offset or 0))
         with self.connect() as connection:
-            rows = connection.execute(
-                "SELECT payload_json FROM notification_jobs" + where + " ORDER BY created_at DESC, job_id DESC LIMIT %s",
+            total_row = connection.execute(
+                "SELECT COUNT(*) AS count FROM notification_jobs" + where,
                 params,
+            ).fetchone()
+            rows = connection.execute(
+                "SELECT payload_json FROM notification_jobs" + where + " ORDER BY created_at DESC, job_id DESC LIMIT %s OFFSET %s",
+                params + [page_size, page_offset],
             ).fetchall()
-        return [NotificationJob.from_dict(_json_loads(row["payload_json"], {})) for row in rows]
+        return [NotificationJob.from_dict(_json_loads(row["payload_json"], {})) for row in rows], int(total_row["count"] or 0) if total_row else 0
+
+    def get(self, job_id: str) -> Optional[NotificationJob]:
+        target = str(job_id or "").strip()
+        if not target:
+            return None
+        with self.connect() as connection:
+            row = connection.execute(
+                "SELECT payload_json FROM notification_jobs WHERE job_id = %s",
+                (target,),
+            ).fetchone()
+        return NotificationJob.from_dict(_json_loads(row["payload_json"], {})) if row else None
 
     def upsert_job_with_connection(self, connection, job: NotificationJob) -> None:
         payload = job.to_dict()

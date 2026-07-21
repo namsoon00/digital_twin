@@ -338,6 +338,11 @@
   var realtimeSocket = null;
   var realtimeReconnectTimer = null;
   var realtimeReloadTimer = null;
+  var snapshotPollTimer = null;
+  var scheduledRenderFrame = 0;
+  var activeJsonRequests = {};
+  var REQUEST_TIMEOUT_MS = 12000;
+  var cytoscapeLoadPromise = null;
   var realtimeSeenEventIds = {};
   var renderSuppressionDepth = 0;
   var renderQueuedDuringSuppression = false;
@@ -360,12 +365,14 @@
   var state = {
     loading: !cachedSnapshot,
     refreshing: false,
+    readModel: cachedSnapshot && cachedSnapshot.readModel ? cachedSnapshot.readModel : {},
     error: "",
     snapshot: cachedSnapshot,
     snapshotFromCache: Boolean(cachedSnapshot),
     researchEvidence: null,
     researchEvidenceLoading: false,
     researchEvidenceError: "",
+    researchEvidenceDetails: {},
     researchEvidenceFilters: { symbol: "", kind: "", limit: DEFAULT_RESEARCH_EVIDENCE_LIMIT },
     researchEvidenceDeleting: "",
     expandedFeedDetail: "",
@@ -464,6 +471,10 @@
     notificationJobsError: "",
     notificationJobsSummary: {},
     notificationJobDiagnostics: {},
+    notificationJobDetails: {},
+    notificationJobsTotal: 0,
+    notificationJobsOffset: 0,
+    notificationJobsPageSize: 20,
     notificationExpandedJobs: {},
     ontologyExperiments: null,
     ontologyExperimentsLoading: false,
@@ -600,16 +611,31 @@
     return result;
   }
 
-  function requestJson(path) {
-    return fetch(path, {
+  function requestJson(path, options) {
+    options = options || {};
+    var key = String(options.key || path);
+    if (!options.force && activeJsonRequests[key]) return activeJsonRequests[key];
+    var controller = typeof window.AbortController === "function" ? new window.AbortController() : null;
+    var timeoutMs = Math.max(1000, Number(options.timeoutMs || REQUEST_TIMEOUT_MS));
+    var timeout = controller ? setTimeout(function () { controller.abort(); }, timeoutMs) : null;
+    var request = fetch(path, {
       headers: { "Accept": "application/json" },
-      cache: "no-store"
+      cache: "no-store",
+      signal: controller ? controller.signal : undefined
     }).then(function (response) {
       return response.json().then(function (payload) {
         if (!response.ok) throw new Error(payload.error || "요청 실패");
         return payload;
       });
+    }).catch(function (error) {
+      if (error && error.name === "AbortError") throw new Error("응답 시간이 초과되었습니다. 마지막 데이터를 유지합니다.");
+      throw error;
+    }).finally(function () {
+      if (timeout) clearTimeout(timeout);
+      if (activeJsonRequests[key] === request) delete activeJsonRequests[key];
     });
+    activeJsonRequests[key] = request;
+    return request;
   }
 
   function loadCachedSnapshot() {
@@ -773,10 +799,10 @@
           tasks.push(loadStrategyProposals(true));
         } else if (/^symbol_universe\./.test(eventType)) {
           tasks.push(loadSymbolUniverse());
-        } else if (/^app\.|^chat\./.test(eventType)) {
+        } else if (/^(dashboard\.snapshot_ready|monitoring\.snapshot_collected|app\.|chat\.)/.test(eventType)) {
           tasks.push(load());
         }
-        if (!tasks.length) tasks.push(load());
+        if (!tasks.length) return Promise.resolve();
         return Promise.all(tasks.map(function (task) {
           return task.catch(function () { return null; });
         }));
@@ -873,6 +899,7 @@
     if (eventType === "realtime.connected" || eventType === "realtime.status" || eventType === "realtime.pong") {
       applyRealtimeStatus(message.payload || {}, eventType === "realtime.connected");
       markRealtimeState(true, eventType);
+      render();
       return;
     }
     recordRealtimeEvent((message.payload && message.payload.event) || {
@@ -881,6 +908,7 @@
       payload: message.payload || {}
     }, false);
     markRealtimeState(true, eventType);
+    render();
     if (eventType !== "realtime.connected") queueRealtimeReload(eventType);
   }
 
@@ -2330,6 +2358,9 @@
     }
     state.notificationJobsSummary = payload.summary && typeof payload.summary === "object" ? payload.summary : {};
     state.notificationJobDiagnostics = payload.diagnostics && typeof payload.diagnostics === "object" ? payload.diagnostics : {};
+    state.notificationJobsTotal = Math.max(0, Number(payload.total || state.notificationJobItems.length));
+    state.notificationJobsOffset = Math.max(0, Number(payload.offset || 0));
+    state.notificationJobsPageSize = Math.max(1, Number(payload.limit || state.notificationJobsPageSize || 20));
     state.notificationJobsLoaded = true;
     state.notificationJobsLoading = false;
     state.notificationJobsError = "";
@@ -2346,7 +2377,13 @@
       state.notificationJobsLoading = false;
       return Promise.resolve();
     }
-    return requestJson("/api/notification-jobs?limit=40")
+    var params = new URLSearchParams();
+    params.set("limit", String(state.notificationJobsPageSize || 20));
+    params.set("offset", String(state.notificationJobsOffset || 0));
+    if (state.notificationJobStatusFilter && state.notificationJobStatusFilter !== "all") params.set("status", state.notificationJobStatusFilter);
+    if (state.notificationJobTypeFilter && state.notificationJobTypeFilter !== "all") params.set("messageType", state.notificationJobTypeFilter);
+    if (state.notificationJobSearch) params.set("query", state.notificationJobSearch);
+    return requestJson("/api/notification-jobs?" + params.toString(), { key: "notification-jobs", force: true })
       .then(function (payload) {
         applyNotificationJobs(payload);
       })
@@ -2362,6 +2399,26 @@
       .finally(function () {
         state.notificationJobsLoading = false;
         if (state.snapshot) render();
+      });
+  }
+
+  function loadNotificationJobDetail(jobId) {
+    var key = String(jobId || "").trim();
+    if (!key || state.notificationJobDetails[key] || isStaticPreviewHost()) return Promise.resolve();
+    return requestJson("/api/notification-jobs/" + encodeURIComponent(key), { key: "notification-job:" + key })
+      .then(function (payload) {
+        var detail = payload && payload.job;
+        if (!detail) return;
+        state.notificationJobDetails[key] = detail;
+        state.notificationJobItems = (state.notificationJobItems || []).map(function (item) {
+          return notificationJobKey(item) === key ? Object.assign({}, item, detail) : item;
+        });
+      })
+      .catch(function () {
+        return null;
+      })
+      .finally(function () {
+        if (state.workDetailLayer && state.workDetailLayer.type === "notification-job" && state.workDetailLayer.key === key) render();
       });
   }
 
@@ -5444,6 +5501,7 @@
     var symbols = allAccountWatchlistSymbols();
     if (!symbols.length) symbols = watchlistSymbols();
     if (symbols.length) params.set("watchlistSymbols", symbols.join(","));
+    if (options.refresh) params.set("refresh", "1");
     var query = params.toString();
     return "/api/flow-lens" + (query ? "?" + query : "");
   }
@@ -5603,6 +5661,26 @@
       .finally(function () {
         state.researchEvidenceLoading = false;
         render();
+      });
+  }
+
+  function loadResearchEvidenceDetail(evidenceId) {
+    var key = String(evidenceId || "").trim();
+    if (!key || state.researchEvidenceDetails[key] || isStaticPreviewHost()) return Promise.resolve();
+    return requestJson("/api/research-evidence/" + encodeURIComponent(key), { key: "research-evidence:" + key })
+      .then(function (payload) {
+        var item = payload && payload.item;
+        if (!item) return;
+        state.researchEvidenceDetails[key] = item;
+        if (state.researchEvidence && Array.isArray(state.researchEvidence.items)) {
+          state.researchEvidence.items = state.researchEvidence.items.map(function (row) {
+            return String(row.evidenceId || row.id || "") === key ? Object.assign({}, row, item) : row;
+          });
+        }
+      })
+      .catch(function () { return null; })
+      .finally(function () {
+        if (state.workDetailLayer && state.workDetailLayer.type === "research-evidence" && state.workDetailLayer.key === key) render();
       });
   }
 
@@ -7627,7 +7705,8 @@
     }, { total: 0, danger: 0, caution: 0, watch: 0, info: 0 });
   }
 
-  function load() {
+  function load(options) {
+    options = options || {};
     state.loading = !state.snapshot;
     state.refreshing = Boolean(state.snapshot);
     state.error = "";
@@ -7635,10 +7714,17 @@
 
     var loadPromise = isStaticPreviewHost()
       ? Promise.resolve(staticPreviewSnapshot())
-      : requestJson(tossLensPath());
+      : requestJson(tossLensPath(options), { key: "flow-lens", timeoutMs: 8000, force: true });
 
     return loadPromise
       .then(function (snapshot) {
+        var readModel = snapshot && snapshot.readModel && typeof snapshot.readModel === "object" ? snapshot.readModel : {};
+        state.readModel = readModel;
+        if (!readModel.ready && readModel.status === "pending") {
+          state.error = readModel.error || "";
+          scheduleSnapshotPoll();
+          return snapshot;
+        }
         state.snapshot = snapshot;
         state.snapshotFromCache = false;
         state.ontologyStrategyDetailLoaded = snapshotHasFullOntologyDetail(snapshot);
@@ -7650,10 +7736,18 @@
         state.error = error.message;
       })
       .finally(function () {
-        state.loading = false;
-        state.refreshing = false;
+        state.loading = Boolean(!state.snapshot && state.readModel && state.readModel.status === "pending");
+        state.refreshing = Boolean(state.readModel && state.readModel.refreshing);
         render();
       });
+  }
+
+  function scheduleSnapshotPoll() {
+    if (snapshotPollTimer || isStaticPreviewHost()) return;
+    snapshotPollTimer = setTimeout(function () {
+      snapshotPollTimer = null;
+      if (!state.snapshot || (state.readModel && state.readModel.status === "pending")) load();
+    }, 1800);
   }
 
   function textareaMinimumHeight(field) {
@@ -7831,6 +7925,19 @@
       renderQueuedDuringSuppression = true;
       return;
     }
+    if (scheduledRenderFrame) return;
+    var run = function () {
+      scheduledRenderFrame = 0;
+      renderNow();
+    };
+    scheduledRenderFrame = window.requestAnimationFrame ? window.requestAnimationFrame(run) : setTimeout(run, 0);
+  }
+
+  function renderNow() {
+    if (renderSuppressionDepth > 0) {
+      renderQueuedDuringSuppression = true;
+      return;
+    }
     applyAppTheme();
     syncOverlayPageState();
     rememberRenderedPageScrollPosition();
@@ -7870,6 +7977,21 @@
     }
     if (state.activeTab === "overview" && !state.investmentCalendarCandidates && !state.investmentCalendarCandidatesLoading) {
       loadInvestmentCalendarCandidates(false);
+    }
+    if (state.activeTab === "notifications" && !state.notificationJobsLoaded && !state.notificationJobsLoading) {
+      loadNotificationJobs();
+    }
+    if (state.activeTab === "notifications" && !state.notificationTemplatesLoaded && !state.notificationTemplatesLoading) {
+      loadNotificationTemplates();
+    }
+    if (state.activeTab === "notifications" && !state.notificationRulesLoaded && !state.notificationRulesLoading) {
+      loadNotificationRules();
+    }
+    if (state.activeTab === "settings" && !state.serverSettingsLoaded && !state.serverSettingsLoading) {
+      loadServerSettings();
+    }
+    if (state.activeTab === "settings" && !state.serviceAccountsLoaded && !state.serviceAccountsLoading) {
+      loadServiceAccounts();
     }
     if (state.activeTab === "experiments" && !state.ontologyExperimentsLoaded && !state.ontologyExperimentsLoading) {
       loadOntologyExperiments(false);
@@ -8017,6 +8139,12 @@
       type: String(type || ""),
       key: String(key || "")
     };
+    if (state.workDetailLayer.type === "notification-job") {
+      loadNotificationJobDetail(state.workDetailLayer.key);
+    }
+    if (state.workDetailLayer.type === "research-evidence") {
+      loadResearchEvidenceDetail(state.workDetailLayer.key);
+    }
     writeWorkDetailHistory(type, key);
     render();
   }
@@ -9321,11 +9449,9 @@
       '<button class="oa-data-row oa-market-row" type="button" data-console-row-key="' + escapeHtml(row.key) + '" data-work-detail="market-instrument" data-work-detail-key="' + escapeHtml(row.symbol) + '">',
       '<span class="oa-symbol-cell"><strong>' + escapeHtml(row.name || row.symbol) + '</strong><em>' + escapeHtml([row.symbol, row.source === "watchlist" ? "관심" : "보유"].join(" · ")) + '</em></span>',
       '<span><strong>' + escapeHtml(row.currentPrice ? formatPrice(row.currentPrice, row.currency) : "시세 대기") + '</strong><em class="' + escapeHtml(changeTone) + '">' + escapeHtml(signedPct(row.changeRate)) + '</em></span>',
-      '<span><strong class="' + escapeHtml(row.profitLossRate < 0 ? "danger" : "watch") + '">' + escapeHtml(row.source === "watchlist" ? "-" : signedPct(row.profitLossRate)) + '</strong><em>보유 손익</em></span>',
       '<span><strong class="' + escapeHtml(flowTone) + '">' + escapeHtml(formatSignalVolume(row.foreignInstitutionNet)) + '</strong><em>외국인+기관</em></span>',
-      '<span><strong class="' + escapeHtml(row.impact.tone || "hold") + '">' + escapeHtml(row.impact.label || "근거 대기") + '</strong><em>근거 ' + escapeHtml(row.evidenceCount) + '건</em></span>',
-      '<span><strong>' + escapeHtml(decisionLabel) + '</strong><em class="' + escapeHtml(row.quality.tone) + '">' + escapeHtml(row.quality.label) + '</em></span>',
-      '<span class="oa-open-cell">상세 &rarr;</span>',
+      '<span><strong class="' + escapeHtml(row.impact.tone || "hold") + '">' + escapeHtml(row.impact.label || "근거 대기") + '</strong><em>' + escapeHtml(decisionLabel) + ' · 근거 ' + escapeHtml(row.evidenceCount) + '건</em></span>',
+      '<span class="oa-open-cell">&rarr;</span>',
       '</button>'
     ].join("");
   }
@@ -9363,7 +9489,7 @@
       '<button class="text-button primary compact" type="submit">적용</button>',
       '</form>'
     ].join("");
-    var table = page.items.length ? '<div class="oa-data-table" data-console-keyed-list="market-instruments"><div class="oa-table-head oa-market-row"><span>종목</span><span>현재가</span><span>손익</span><span>수급</span><span>뉴스 영향</span><span>판단·품질</span><span></span></div>' + page.items.map(renderMarketInstrumentRow).join("") + '</div>' : renderConsoleEmpty("조건에 맞는 종목이 없습니다", "검색어 또는 범위를 조정하세요.");
+    var table = page.items.length ? '<div class="oa-data-table" data-console-keyed-list="market-instruments"><div class="oa-table-head oa-market-row"><span>종목</span><span>현재가</span><span>수급</span><span>영향·판단</span><span></span></div>' + page.items.map(renderMarketInstrumentRow).join("") + '</div>' : renderConsoleEmpty("조건에 맞는 종목이 없습니다", "검색어 또는 범위를 조정하세요.");
     var news = evidence.length ? '<div class="oa-news-list" data-console-keyed-list="market-news">' + evidence.slice(0, 5).map(renderMarketNewsRow).join("") + '</div>' : renderConsoleEmpty("저장된 시장 근거가 없습니다", "뉴스 워커가 본문을 읽고 영향 분석을 완료하면 표시합니다.", renderWorkDetailButton("feed-source-board", "", "수집 상태", "text-button compact"));
     return renderConsoleManagedPage("feed", metrics, [
       toolbar,
@@ -9382,11 +9508,9 @@
     return [
       '<button class="oa-data-row oa-decision-row" type="button" data-console-row-key="' + escapeHtml(row.key) + '" data-work-detail="investment-action" data-work-detail-key="' + escapeHtml(row.key) + '">',
       '<span class="oa-symbol-cell"><strong>' + escapeHtml(row.name || row.symbol) + '</strong><em>' + escapeHtml(row.symbol || "") + '</em></span>',
-      '<span><strong class="' + escapeHtml(row.tone) + '">' + escapeHtml(row.decision) + '</strong><em>' + escapeHtml(decisionStateMeta("change", row.changeState, "unchanged").label) + '</em></span>',
-      '<span><strong class="' + escapeHtml(review.tone) + '">' + escapeHtml(review.label) + '</strong><em>' + escapeHtml(conflict.label) + '</em></span>',
-      '<span class="oa-reason-cell"><strong>' + escapeHtml(row.reason) + '</strong><em>약화: ' + escapeHtml(row.invalidation) + '</em></span>',
-      '<span><strong class="' + escapeHtml(data.tone) + '">' + escapeHtml(data.label) + '</strong><em>' + escapeHtml(validation.label) + ' · 손익 ' + escapeHtml(signedPct(row.profitLossRate)) + '</em></span>',
-      '<span class="oa-open-cell">근거 보기 &rarr;</span>',
+      '<span><strong class="' + escapeHtml(row.tone) + '">' + escapeHtml(row.decision) + '</strong><em>' + escapeHtml(decisionStateMeta("change", row.changeState, "unchanged").label) + ' · ' + escapeHtml(review.label) + '</em></span>',
+      '<span class="oa-reason-cell"><strong>' + escapeHtml(row.reason) + '</strong><em>약화 조건은 상세에서 확인</em></span>',
+      '<span class="oa-open-cell ' + escapeHtml(data.tone) + '">' + escapeHtml(data.label) + ' · ' + escapeHtml(validation.label) + ' &rarr;</span>',
       '</button>'
     ].join("");
   }
@@ -9395,7 +9519,7 @@
     var rows = selectConsoleDecisionRows(state.snapshot || {});
     var page = consolePageSlice(rows, "decision", 12);
     var body = page.items.length
-      ? '<div class="oa-data-table" data-console-keyed-list="decision-full"><div class="oa-table-head oa-decision-row"><span>종목</span><span>행동·변화</span><span>확인 단계·근거</span><span>핵심 근거·약화 조건</span><span>자료·검증</span><span></span></div>' + page.items.map(renderDecisionConsoleRow).join("") + '</div>'
+      ? '<div class="oa-data-table" data-console-keyed-list="decision-full"><div class="oa-table-head oa-decision-row"><span>종목</span><span>행동·확인 단계</span><span>핵심 근거</span><span>자료·검증</span></div>' + page.items.map(renderDecisionConsoleRow).join("") + '</div>'
       : renderConsoleEmpty("현재 판단 후보가 없습니다", "TypeDB 추론과 투자 분석 데이터가 생성되면 표시합니다.");
     return editorWorkDetailPayload(
       "Action Queue",
@@ -9417,7 +9541,7 @@
       { label: "추론 차단", value: blocked.length + "건", detail: "TypeDB 확인", tone: blocked.length ? "danger" : "watch" },
       { label: "근거 준비", value: rows.filter(function (row) { return row.quality.tone === "watch"; }).length + "/" + rows.length, detail: "실데이터" }
     ];
-    var table = rows.length ? '<div class="oa-data-table" data-console-keyed-list="decision-primary"><div class="oa-table-head oa-decision-row"><span>종목</span><span>행동·변화</span><span>확인 단계·근거</span><span>핵심 근거·약화 조건</span><span>자료·검증</span><span></span></div>' + rows.slice(0, 10).map(renderDecisionConsoleRow).join("") + '</div>' : renderConsoleEmpty("현재 판단 후보가 없습니다", "TypeDB InferenceBox와 투자 분석 데이터가 생성되면 종목별 행동 큐가 표시됩니다.", renderWorkDetailButton("strategy-trace-board", "", "추론 상태", "text-button compact"));
+    var table = rows.length ? '<div class="oa-data-table" data-console-keyed-list="decision-primary"><div class="oa-table-head oa-decision-row"><span>종목</span><span>행동·확인 단계</span><span>핵심 근거</span><span>자료·검증</span></div>' + rows.slice(0, 10).map(renderDecisionConsoleRow).join("") + '</div>' : renderConsoleEmpty("현재 판단 후보가 없습니다", "TypeDB InferenceBox와 투자 분석 데이터가 생성되면 종목별 행동 큐가 표시됩니다.", renderWorkDetailButton("strategy-trace-board", "", "추론 상태", "text-button compact"));
     var blockers = blocked.length ? '<div class="oa-context-list" data-console-keyed-list="decision-blockers">' + blocked.slice(0, 6).map(function (row) {
       return '<button type="button" class="oa-context-row" data-console-row-key="' + escapeHtml(row.key) + '" data-work-detail="investment-action" data-work-detail-key="' + escapeHtml(row.key) + '"><span><strong>' + escapeHtml(row.name || row.symbol) + '</strong><em>' + escapeHtml(row.reason) + '</em></span><b class="danger">차단</b></button>';
     }).join("") + '</div>' : renderConsoleEmpty("차단 요인이 없습니다", "그래프 추론과 데이터 품질 게이트가 통과된 상태입니다.");
@@ -9442,9 +9566,25 @@
     ].join("");
   }
 
+  function renderNotificationJobPager() {
+    var pageSize = Math.max(1, Number(state.notificationJobsPageSize || 20));
+    var total = Math.max(0, Number(state.notificationJobsTotal || 0));
+    var offset = Math.max(0, Number(state.notificationJobsOffset || 0));
+    var current = Math.floor(offset / pageSize) + 1;
+    var pages = Math.max(1, Math.ceil(total / pageSize));
+    return [
+      '<div class="oa-pager" aria-label="알림 원장 페이지">',
+      '<span>' + escapeHtml(total ? (offset + 1) + "-" + Math.min(total, offset + pageSize) + " / " + total + "건" : "0건") + '</span>',
+      '<div>',
+      '<button class="icon-button" type="button" data-notification-job-page="' + escapeHtml(current - 1) + '" aria-label="이전 페이지"' + (current > 1 ? "" : " disabled") + '>&larr;</button>',
+      '<span>' + escapeHtml(current + " / " + pages) + '</span>',
+      '<button class="icon-button" type="button" data-notification-job-page="' + escapeHtml(current + 1) + '" aria-label="다음 페이지"' + (current < pages ? "" : " disabled") + '>&rarr;</button>',
+      '</div></div>'
+    ].join("");
+  }
+
   function renderAlertsConsole() {
     var rows = selectConsoleAlertRows();
-    var page = consolePageSlice(rows, "alerts", 10);
     var summary = state.notificationJobsSummary || state.realtime.notificationJobs || {};
     var metrics = [
       { label: "대기", value: Number(summary.pending || 0) + "건", detail: "발송 전" },
@@ -9454,9 +9594,9 @@
       { label: "활성 규칙", value: notificationPolicyCatalog().filter(function (rule) { return enabledAlertRule(alertRules(), rule.key); }).length + "개", detail: "투자·운영" }
     ];
     var toolbar = renderNotificationJobFilterToolbar(state.notificationJobItems || [], filteredNotificationJobs(state.notificationJobItems || []));
-    var table = page.items.length ? '<div class="oa-data-table" data-console-keyed-list="alerts-ledger"><div class="oa-table-head oa-alert-row"><span>시각</span><span>대상·유형</span><span>발송 판단</span><span>알림이 온 이유</span><span>상태</span><span></span></div>' + page.items.map(renderAlertConsoleRow).join("") + '</div>' : renderConsoleEmpty("조건에 맞는 알림이 없습니다", "검색어와 발송 상태를 조정하거나 알림 워커 상태를 확인하세요.", renderWorkDetailButton("notification-diagnostics-board", "", "알림 진단", "text-button compact"));
+    var table = rows.length ? '<div class="oa-data-table" data-console-keyed-list="alerts-ledger"><div class="oa-table-head oa-alert-row"><span>시각</span><span>대상·유형</span><span>발송 판단</span><span>알림이 온 이유</span><span>상태</span><span></span></div>' + rows.map(renderAlertConsoleRow).join("") + '</div>' : renderConsoleEmpty("조건에 맞는 알림이 없습니다", "검색어와 발송 상태를 조정하거나 알림 워커 상태를 확인하세요.", renderWorkDetailButton("notification-diagnostics-board", "", "알림 진단", "text-button compact"));
     return renderConsoleManagedPage("notifications", metrics, [
-      renderConsoleSurface({ kicker: "DISPATCH LEDGER", title: "알림 판단 원장", description: "목록에는 발송 상태와 이유만 남기고 전체 메시지는 상세에서 봅니다.", actions: renderWorkDetailButton("notification-policy-board", "", "알림 정책", "text-button compact"), body: toolbar + renderConsoleLiveRegion("alerts-ledger-body", table), footer: renderConsolePager("alerts", page) })
+      renderConsoleSurface({ kicker: "DISPATCH LEDGER", title: "알림 판단 원장", description: "목록에는 발송 상태와 이유만 남기고 전체 메시지는 상세에서 봅니다.", actions: renderWorkDetailButton("notification-policy-board", "", "알림 정책", "text-button compact"), body: toolbar + renderConsoleLiveRegion("alerts-ledger-body", table), footer: renderNotificationJobPager() })
     ].join(""));
   }
 
@@ -19771,12 +19911,33 @@
     ontologyGraphInstances = {};
   }
 
+  function ensureCytoscape() {
+    if (window.cytoscape) return Promise.resolve(window.cytoscape);
+    if (cytoscapeLoadPromise) return cytoscapeLoadPromise;
+    cytoscapeLoadPromise = new Promise(function (resolve, reject) {
+      var script = document.createElement("script");
+      script.src = "vendor/cytoscape.min.js?v=20260707-ontology-graph";
+      script.async = true;
+      script.onload = function () { resolve(window.cytoscape); };
+      script.onerror = function () { reject(new Error("그래프 엔진을 불러오지 못했습니다.")); };
+      document.head.appendChild(script);
+    });
+    return cytoscapeLoadPromise;
+  }
+
   function initOntologyCytoscapeGraphs() {
     var containers = Array.prototype.slice.call(app.querySelectorAll("[data-ontology-cytoscape]"));
     if (!containers.length) return;
     if (!window.cytoscape) {
       containers.forEach(function (container) {
-        container.innerHTML = '<span>Cytoscape.js를 불러오지 못했습니다.</span>';
+        container.innerHTML = '<span>그래프 엔진을 준비하는 중입니다.</span>';
+      });
+      ensureCytoscape().then(function () {
+        if (app.querySelector("[data-ontology-cytoscape]")) initOntologyCytoscapeGraphs();
+      }).catch(function () {
+        containers.forEach(function (container) {
+          container.innerHTML = '<span>그래프 엔진을 불러오지 못했습니다.</span>';
+        });
       });
       return;
     }
@@ -22821,9 +22982,13 @@
   function researchEvidenceKoreanSummary(item) {
     item = item || {};
     var payload = item.payload && typeof item.payload === "object" ? item.payload : {};
-    return item.summaryKo || item.bodySummary || item.summary || item.description
+    var summary = item.summaryKo || item.bodySummary || item.summary || item.description
       || payload.summaryKo || payload.bodySummary || payload.summary || payload.description
       || item.title || payload.title || "본문 요약이 아직 저장되지 않았습니다.";
+    var koreanLetters = (String(summary).match(/[가-힣]/g) || []).length;
+    var latinLetters = (String(summary).match(/[A-Za-z]/g) || []).length;
+    if (latinLetters > Math.max(24, koreanLetters * 2)) return "본문 분석 요약을 준비 중입니다. 원문과 분석 결과는 상세에서 확인하세요.";
+    return summary;
   }
 
   function researchEvidenceImpactMeta(item) {
@@ -24109,6 +24274,13 @@
         if (!state.consolePages) state.consolePages = {};
         state.consolePages[key] = value;
         render();
+        return;
+      }
+      var notificationPage = event.target.closest && event.target.closest("[data-notification-job-page]");
+      if (notificationPage && app.contains(notificationPage)) {
+        var nextPage = Math.max(1, Number(notificationPage.getAttribute("data-notification-job-page") || 1));
+        state.notificationJobsOffset = (nextPage - 1) * Math.max(1, Number(state.notificationJobsPageSize || 20));
+        loadNotificationJobs();
       }
     });
     app.addEventListener("submit", function (event) {
@@ -24128,7 +24300,7 @@
     var refresh = app.querySelector('[data-action="refresh"]');
     if (refresh) {
       refresh.addEventListener("click", function () {
-        if (!state.refreshing) load();
+        if (!state.refreshing) load({ refresh: true });
       });
     }
 
@@ -25282,6 +25454,8 @@
       });
       field.addEventListener("change", function () {
         state.notificationJobSearch = field.value;
+        state.notificationJobsOffset = 0;
+        loadNotificationJobs();
         render();
       });
     });
@@ -25291,7 +25465,8 @@
         event.preventDefault();
         var field = form.querySelector("[data-notification-job-search]");
         state.notificationJobSearch = field ? field.value : state.notificationJobSearch;
-        state.consolePages.alerts = 1;
+        state.notificationJobsOffset = 0;
+        loadNotificationJobs();
         render();
       });
     });
@@ -25301,7 +25476,8 @@
         var filter = field.getAttribute("data-notification-job-filter");
         if (filter === "status") state.notificationJobStatusFilter = field.value || "all";
         if (filter === "messageType") state.notificationJobTypeFilter = field.value || "all";
-        state.consolePages.alerts = 1;
+        state.notificationJobsOffset = 0;
+        loadNotificationJobs();
         render();
       });
     });
@@ -25312,7 +25488,8 @@
         state.notificationJobSearch = "";
         state.notificationJobStatusFilter = "all";
         state.notificationJobTypeFilter = "all";
-        state.consolePages.alerts = 1;
+        state.notificationJobsOffset = 0;
+        loadNotificationJobs();
         render();
         showSnackbar("알림 검색 조건을 초기화했습니다.");
       });
@@ -25615,23 +25792,7 @@
   render();
   var snapshotLoadTask = load();
   var snapshotPrerequisites = [loadServerSettings(), loadServiceAccounts()];
-  var supportingBootstrapTasks = [
-    loadNotificationTemplates(),
-    loadNotificationRules(),
-    loadNotificationJobs(),
-    loadNotificationSchedules(),
-    loadInvestmentCalendar(),
-    loadSymbolUniverse(),
-    loadInvestmentLanguage(false)
-  ];
   Promise.all(snapshotPrerequisites.map(function (task) {
-    return task.catch(function () {
-      return null;
-    });
-  })).finally(function () {
-    if (state.snapshot) render();
-  });
-  Promise.all(supportingBootstrapTasks.map(function (task) {
     return task.catch(function () {
       return null;
     });

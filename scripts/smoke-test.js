@@ -177,6 +177,22 @@ function request(port, pathname, options) {
   });
 }
 
+function wait(ms) {
+  return new Promise(function (resolve) { setTimeout(resolve, ms); });
+}
+
+async function requestReadyFlowLens(port, pathname) {
+  let latest = null;
+  for (let attempt = 0; attempt < 100; attempt += 1) {
+    latest = await request(port, pathname);
+    if (latest.statusCode !== 200) return latest;
+    const payload = JSON.parse(latest.body);
+    if (!payload.readModel || payload.readModel.status !== "pending") return latest;
+    await wait(100);
+  }
+  return latest;
+}
+
 function websocketHandshake(port) {
   return new Promise(function (resolve, reject) {
     const key = crypto.randomBytes(16).toString("base64");
@@ -264,7 +280,13 @@ function checkWorkflowConsoleContract() {
     assertOk(code.indexOf("function " + renderer) >= 0, "업무 화면 renderer가 없습니다: " + renderer);
   });
   assertOk(code.indexOf('data-console-workspace="') >= 0 && code.indexOf("renderConsoleMetricStrip") >= 0 && code.indexOf("renderConsoleSurface") >= 0, "공통 콘솔 화면 계약이 없습니다.");
-  assertOk(code.indexOf("consolePageSlice(rows, \"market\", 8)") >= 0 && code.indexOf("consolePageSlice(rows, \"alerts\", 10)") >= 0, "대량 목록 페이징 제한이 없습니다.");
+  assertOk(
+    code.indexOf('params.set("limit", String(state.notificationJobsPageSize || 20))') >= 0 &&
+      code.indexOf('params.set("offset", String(state.notificationJobsOffset || 0))') >= 0 &&
+      code.indexOf("renderNotificationJobPager") >= 0 &&
+      code.indexOf("data-notification-job-page") >= 0,
+    "대량 알림 목록의 서버 페이징 계약이 없습니다."
+  );
   assertOk(code.indexOf("todayQueueWorkDetailPayload") >= 0 && code.indexOf("decisionQueueWorkDetailPayload") >= 0 && code.indexOf('"today-work-queue"') >= 0 && code.indexOf('"decision-action-queue"') >= 0, "오늘/판단 목록의 전체 보기 경로가 없습니다.");
   assertOk(code.indexOf('data-work-detail="market-instrument"') >= 0 && code.indexOf('data-work-detail="notification-job"') >= 0, "목록에서 전체화면 상세로 이동하는 경로가 없습니다.");
   assertOk(code.indexOf("function workDetailUrl") >= 0 && code.indexOf('params.set("detail"') >= 0 && code.indexOf('params.set("detailKey"') >= 0 && code.indexOf("closeWorkDetailLayer") >= 0, "상세 URL과 브라우저 뒤로 가기 계약이 없습니다.");
@@ -306,7 +328,11 @@ function checkWorkflowConsoleContract() {
   assertOk(/\.work-detail-body\s*\{[\s\S]*overflow: visible;/.test(styles), "상세 본문에 중첩 스크롤이 남아 있습니다.");
   assertOk(styles.indexOf("Centered overlay alignment for legacy detail and editor dialogs") >= 0 && code.indexOf("activeOverlayDialog") >= 0 && code.indexOf("syncOverlayPageState") >= 0 && styles.indexOf("html.oa-overlay-open") >= 0, "기존 상세·편집 팝업이 공통 중앙 레이어와 키보드·스크롤 계약을 따르지 않습니다.");
   assertOk(styles.indexOf("Workflow console continuity and detail navigation pass") >= 0 && styles.indexOf(".oa-detail-queue") >= 0, "전체 목록 상세와 포커스 스타일이 없습니다.");
-  assertOk(indexHtml.indexOf("styles.css?v=20260720-investment-language-v10") >= 0 && indexHtml.indexOf("app.js?v=20260720-investment-language-v10") >= 0, "보편언어 관리 화면 정적 자산 cache key가 반영되지 않았습니다.");
+  assertOk(
+    /styles\.css\?v=20260722-performance-ux-v\d+/.test(indexHtml) &&
+      /app\.js\?v=20260722-performance-ux-v\d+/.test(indexHtml),
+    "성능 개선 정적 자산 cache key가 반영되지 않았습니다."
+  );
 }
 
 function checkFrontendAdminRender() {
@@ -2516,7 +2542,7 @@ async function checkNormalMode(port, context) {
   assertOk(removedAccount.statusCode === 200, "계정 DB 삭제 API 응답 코드가 200이 아닙니다: " + removedAccount.statusCode);
   assertOk(JSON.parse(removedAccount.body).removed === true, "계정 DB 삭제 응답이 removed=true가 아닙니다.");
 
-  const tossLens = await request(port, "/api/flow-lens?mock=1");
+  const tossLens = await requestReadyFlowLens(port, "/api/flow-lens?mock=1");
   assertOk(tossLens.statusCode === 200, "토스 판단 API 응답 코드가 200이 아닙니다: " + tossLens.statusCode + " · " + tossLens.body.slice(0, 500));
   const tossPayload = JSON.parse(tossLens.body);
   assertOk(tossPayload.toss && Array.isArray(tossPayload.toss.positions), "토스 판단 API에 보유 종목 배열이 없습니다.");
@@ -2537,7 +2563,7 @@ async function checkNormalMode(port, context) {
   assertOk(!Array.isArray(tossPayload.news), "토스 전용 판단 API가 뉴스 배열을 내려주고 있습니다.");
   assertOk(!Array.isArray(tossPayload.social), "토스 전용 판단 API가 소셜 배열을 내려주고 있습니다.");
 
-  const tossLensFull = await request(port, "/api/flow-lens?mock=1&detail=full");
+  const tossLensFull = await requestReadyFlowLens(port, "/api/flow-lens?mock=1&detail=full");
   assertOk(tossLensFull.statusCode === 200, "토스 판단 상세 API 응답 코드가 200이 아닙니다: " + tossLensFull.statusCode);
   const tossFullPayload = JSON.parse(tossLensFull.body);
   assertOk(Array.isArray(tossFullPayload.tossDecision.investmentAnalysis.reasoningCards), "토스 판단 상세 API reasoning card 필드가 배열이 아닙니다.");
@@ -2612,7 +2638,7 @@ async function checkShareMode(port) {
 }
 
 async function checkLiveTossMode(port) {
-  const tossLens = await request(port, "/api/flow-lens");
+  const tossLens = await requestReadyFlowLens(port, "/api/flow-lens");
   assertOk(tossLens.statusCode === 200, "live 토스 판단 API 응답 코드가 200이 아닙니다: " + tossLens.statusCode);
   const payload = JSON.parse(tossLens.body);
   assertOk(payload.toss && payload.toss.mode === "live", "토스 live 모드가 아닙니다.");

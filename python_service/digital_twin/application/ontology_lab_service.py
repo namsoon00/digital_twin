@@ -93,17 +93,56 @@ class OntologyLabService:
         self.notification_queue = notification_queue
         self.settings = dict(settings or {})
 
-    def list(self) -> Dict[str, object]:
+    def list(self, limit: int = 8, offset: int = 0, summary: bool = True) -> Dict[str, object]:
         experiments = self.experiment_store.list()
+        page_size = max(1, min(100, int(limit or 8)))
+        page_offset = max(0, int(offset or 0))
+        visible = experiments[page_offset: page_offset + page_size]
         return {
-            "experiments": [self.experiment_payload(item) for item in experiments],
+            "experiments": [self.experiment_summary_payload(item) if summary else self.experiment_payload(item) for item in visible],
             "count": len(experiments),
+            "limit": page_size,
+            "offset": page_offset,
+            "total": len(experiments),
         }
 
     def experiment_payload(self, experiment: OntologyExperiment) -> Dict[str, object]:
         payload = experiment.to_dict()
         payload["promotionGate"] = ontology_promotion_gate(experiment)
         return payload
+
+    def experiment_summary_payload(self, experiment: OntologyExperiment) -> Dict[str, object]:
+        latest = max(
+            (dict(item) for item in (experiment.run_history or []) if isinstance(item, dict)),
+            key=lambda item: str(item.get("completedAt") or item.get("startedAt") or ""),
+            default={},
+        )
+        result = dict(experiment.last_result or {})
+        return {
+            "id": experiment.experiment_id,
+            "title": experiment.title,
+            "hypothesis": experiment.hypothesis,
+            "symbols": list(experiment.symbols or []),
+            "status": experiment.status,
+            "createdAt": experiment.created_at,
+            "updatedAt": experiment.updated_at,
+            "activeSince": experiment.active_since,
+            "pausedAt": experiment.paused_at,
+            "candidateCount": len(experiment.candidate_rules or []),
+            "warningCount": len(experiment.validation_warnings or []),
+            "validationWarnings": list(experiment.validation_warnings or [])[:3],
+            "lastRun": {
+                key: latest.get(key)
+                for key in ["startedAt", "completedAt", "status", "relationDelta", "score", "warnings"]
+                if latest.get(key) not in (None, "", [], {})
+            },
+            "lastResultSummary": {
+                key: result.get(key)
+                for key in ["status", "relationDelta", "score", "warningCount", "completedAt"]
+                if result.get(key) not in (None, "", [], {})
+            },
+            "detailPath": "/api/ontology/experiments/" + experiment.experiment_id,
+        }
 
     def enabled(self) -> bool:
         return truthy(self.settings.get("ontologyLabEnabled"), True)
@@ -169,7 +208,10 @@ class OntologyLabService:
             "notificationConfigured": self.notification_configured(),
             "latestRun": latest_run,
             "promotionSummary": ontology_promotion_summary(experiments),
-            "experiments": [self.experiment_payload(item) for item in experiments],
+            "experiments": [self.experiment_summary_payload(item) for item in experiments[:8]],
+            "total": len(experiments),
+            "limit": 8,
+            "offset": 0,
         }
 
     def create(self, payload: Dict[str, object]) -> Dict[str, object]:

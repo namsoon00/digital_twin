@@ -850,6 +850,47 @@ class FlowLensService:
             strategy_model=strategy_model,
         )
 
+    def snapshot_from_monitor_state(self, state: Dict[str, object], watchlist_symbols: str = "") -> Dict[str, object]:
+        """Build a page view from the last verified monitoring projection.
+
+        This path is deliberately read-only.  It avoids Toss, KIS, external
+        feeds and TypeDB writes during an HTTP request while retaining the
+        normal Flow Lens response shape used by the web client.
+        """
+        source = dict(state or {})
+        settings = dict(self.settings_provider() or {})
+        positions = source.get("positions") if isinstance(source.get("positions"), dict) else {}
+        watchlist = source.get("watchlist") if isinstance(source.get("watchlist"), dict) else {}
+        portfolio = source.get("portfolio") if isinstance(source.get("portfolio"), dict) else {}
+        generated_at = str(source.get("generatedAt") or utc_now_iso())
+        toss = {
+            "mode": str(source.get("mode") or "cached"),
+            "status": str(source.get("status") or "최근 모니터 스냅샷"),
+            "account": {
+                "displayNumber": str(source.get("accountLabel") or source.get("accountId") or "연결 계좌"),
+                "type": str(source.get("provider") or "BROKERAGE").upper(),
+                "currency": str(portfolio.get("currency") or "KRW"),
+            },
+            "portfolio": portfolio,
+            "positions": list(positions.values()),
+            "watchlistQuotes": list(watchlist.values()),
+            "externalSignals": dict(source.get("externalSignals") or {}),
+            "metadata": dict(source.get("metadata") or {}),
+        }
+        payload = build_toss_lens_snapshot(
+            toss,
+            mock=False,
+            watchlist_symbols=watchlist_symbols,
+            fallback_watchlist_symbols=settings.get("watchlistSymbols", ""),
+            fx_rates={},
+            enrich_symbol=None,
+            strategy_model=StrategyModel(settings),
+        )
+        payload["generatedAt"] = generated_at
+        payload["dataMode"] = "cached"
+        payload["snapshotSource"] = "monitor-snapshot"
+        return payload
+
 
 def flow_lens_snapshot(service: FlowLensService, mock: bool = False, watchlist_symbols: str = "") -> Dict[str, object]:
     return service.snapshot(mock=mock, watchlist_symbols=watchlist_symbols)

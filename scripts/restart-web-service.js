@@ -8,6 +8,7 @@ const host = process.env.HOST || "127.0.0.1";
 const port = Number(process.env.PORT || 3000);
 const pythonBin = process.env.PYTHON_BIN || "python3";
 const logPath = path.join(rootDir, "data", "python-web.log");
+const restartLockPath = path.join(rootDir, "data", "python-web-restart.lock");
 
 function commandOutput(command, args, options) {
   try {
@@ -36,6 +37,47 @@ function webPids() {
 
 function sleep(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+function processIsRunning(pid) {
+  if (!Number.isFinite(pid) || pid <= 0) return false;
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch (_error) {
+    return false;
+  }
+}
+
+function acquireRestartLock() {
+  for (let attempt = 0; attempt < 2; attempt += 1) {
+    try {
+      const descriptor = fs.openSync(restartLockPath, "wx");
+      fs.writeFileSync(descriptor, JSON.stringify({ pid: process.pid, startedAt: new Date().toISOString() }) + "\n", "utf8");
+      return descriptor;
+    } catch (error) {
+      if (!error || error.code !== "EEXIST") throw error;
+      let activePid = 0;
+      try {
+        const existing = JSON.parse(fs.readFileSync(restartLockPath, "utf8"));
+        activePid = Number(existing && existing.pid);
+      } catch (_readError) {}
+      if (processIsRunning(activePid)) {
+        throw new Error("another web restart is already in progress (pid " + activePid + ")");
+      }
+      fs.unlinkSync(restartLockPath);
+    }
+  }
+  throw new Error("could not acquire the web restart lock");
+}
+
+function releaseRestartLock(descriptor) {
+  try {
+    fs.closeSync(descriptor);
+  } catch (_error) {}
+  try {
+    fs.unlinkSync(restartLockPath);
+  } catch (_error) {}
 }
 
 async function stopWebProcesses() {
@@ -82,29 +124,34 @@ async function waitForWeb() {
 
 async function main() {
   fs.mkdirSync(path.dirname(logPath), { recursive: true });
-  const stopped = await stopWebProcesses();
-  const log = fs.openSync(logPath, "a");
-  const child = childProcess.spawn(pythonBin, ["-u", "python_service/service.py", "web", "--host", host, "--port", String(port)], {
-    cwd: rootDir,
-    detached: true,
-    stdio: ["ignore", log, log],
-    env: Object.assign({}, process.env, {
-      HOST: host,
-      PORT: String(port),
-      ALLOW_PORT_FALLBACK: "0",
-    }),
-  });
-  child.unref();
-  fs.closeSync(log);
-  const statusCode = await waitForWeb();
-  console.log(JSON.stringify({
-    status: "ok",
-    stoppedPids: stopped,
-    pid: child.pid,
-    url: "http://" + host + ":" + port,
-    bootstrapStatusCode: statusCode,
-    logPath,
-  }));
+  const restartLock = acquireRestartLock();
+  try {
+    const stopped = await stopWebProcesses();
+    const log = fs.openSync(logPath, "a");
+    const child = childProcess.spawn(pythonBin, ["-u", "python_service/service.py", "web", "--host", host, "--port", String(port)], {
+      cwd: rootDir,
+      detached: true,
+      stdio: ["ignore", log, log],
+      env: Object.assign({}, process.env, {
+        HOST: host,
+        PORT: String(port),
+        ALLOW_PORT_FALLBACK: "0",
+      }),
+    });
+    child.unref();
+    fs.closeSync(log);
+    const statusCode = await waitForWeb();
+    console.log(JSON.stringify({
+      status: "ok",
+      stoppedPids: stopped,
+      pid: child.pid,
+      url: "http://" + host + ":" + port,
+      bootstrapStatusCode: statusCode,
+      logPath,
+    }));
+  } finally {
+    releaseRestartLock(restartLock);
+  }
 }
 
 main().catch((error) => {

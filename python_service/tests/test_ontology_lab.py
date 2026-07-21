@@ -8,6 +8,7 @@ from digital_twin.application.investment_strategy_proposal_service import Invest
 from digital_twin.application.ontology_lab_service import OntologyLabService
 from digital_twin.domain.ontology_experiments import OntologyExperiment
 from digital_twin.domain.ontology_rulebox_contracts import GraphInferenceRule
+from digital_twin.domain.investment_strategy_proposals import InvestmentStrategyProposal
 
 
 class MemoryExperimentStore:
@@ -194,6 +195,25 @@ def mark_native_materialization_ready(experiment, readiness_status="promote-cand
 
 
 class OntologyLabTests(unittest.TestCase):
+    def test_strategy_proposal_hides_legacy_aggregate_scores_at_the_boundary(self):
+        proposal = InvestmentStrategyProposal.from_dict({
+            "id": "proposal-score-cleanup",
+            "title": "legacy",
+            "thesis": "legacy aggregate fields must not survive",
+            "metadata": {
+                "score": 91,
+                "nested": {"confidence": 0.8, "relationScore": 77},
+            },
+            "validation": {"qualityScore": 66},
+        })
+
+        payload = proposal.to_dict()
+
+        self.assertNotIn("score", payload["metadata"])
+        self.assertNotIn("confidence", payload["metadata"]["nested"])
+        self.assertNotIn("relationScore", payload["metadata"]["nested"])
+        self.assertNotIn("qualityScore", payload["validation"])
+
     def test_create_normalizes_candidate_rule_as_disabled(self):
         service = OntologyLabService(
             FakeOntologyRepository(),

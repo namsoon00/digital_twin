@@ -95,6 +95,8 @@ TEXT_SETTING_KEYS = [
     "ontologyReasoningMinIntervalSeconds",
     "ontologyReasoningUrgentMinIntervalSeconds",
     "ontologyReasoningProjectionRetrySeconds",
+    "ontologyProjectionCircuitFailureThreshold",
+    "ontologyProjectionCircuitCooldownSeconds",
     "ontologyReasoningUrgentReviewLevels",
     "ontologyReasoningProcessedEventLimit",
     "ontologyReasoningTypeDbNativeRuleExecutionEnabled",
@@ -144,7 +146,6 @@ TEXT_SETTING_KEYS = [
     "typedbSchemaOperationTimeoutSeconds",
     "typedbWriteOperationTimeoutSeconds",
     "typedbNativeRuleExecutionEnabled",
-    "typedbNativeRuleRealtimeQueryLimit",
     "typedbNativeRuleQueryTimeoutSeconds",
     "typedbNativeRuleExecutionBudgetSeconds",
     "typedbAutoResetEnabled",
@@ -156,6 +157,10 @@ TEXT_SETTING_KEYS = [
     "typedbSeedKeepInference",
     "typedbSeedTimeoutSeconds",
     "typedbSeedRetryCount",
+    "mysqlRuntimeManaged",
+    "mysqlConnectionPoolSize",
+    "externalSignalCacheMaxEntries",
+    "webPort",
     "dartDisclosureAiAnalysisEnabled",
     "dartDisclosureAiUseCodex",
     "dartDisclosureAiCommand",
@@ -486,6 +491,24 @@ def source_trust_state(value: object, fallback: str = "standard") -> str:
     return "unknown"
 
 
+def normalized_ontology_reasoning_urgent_review_levels(value: object) -> str:
+    """Keep only review levels that may bypass the normal reasoning interval.
+
+    ``blocked`` means TypeDB did not provide a complete decision policy. It is
+    not a more urgent investment judgement. Normalizing at this boundary also
+    prevents stale settings from silently restoring the old behaviour.
+    """
+
+    allowed = ("act", "immediate")
+    supplied = {
+        item.strip().lower()
+        for item in str(value or "").split(",")
+        if item and item.strip()
+    }
+    selected = [level for level in allowed if level in supplied]
+    return ",".join(selected or list(allowed))
+
+
 def read_settings_store() -> Dict[str, str]:
     try:
         from .mysql_operational import MySQLRuntimeSettingsStore
@@ -522,6 +545,10 @@ def save_runtime_settings(input_settings: Dict[str, object]) -> Dict[str, str]:
     legacy_source_reliability = input_settings.get("investmentBrainResearchMinimumSourceReliability")
     if "investmentBrainResearchMinimumSourceTrustState" not in input_settings and legacy_source_reliability not in (None, ""):
         next_settings["investmentBrainResearchMinimumSourceTrustState"] = source_trust_state(legacy_source_reliability)
+    if "ontologyReasoningUrgentReviewLevels" in input_settings:
+        next_settings["ontologyReasoningUrgentReviewLevels"] = normalized_ontology_reasoning_urgent_review_levels(
+            input_settings.get("ontologyReasoningUrgentReviewLevels")
+        )
     if input_settings.get("clearTossCredentials"):
         for key in ["tossClientId", "tossClientSecret", "tossAccountSeq"]:
             next_settings.pop(key, None)
@@ -728,7 +755,11 @@ def runtime_settings() -> Dict[str, str]:
         "ontologyReasoningMinIntervalSeconds": value("ontologyReasoningMinIntervalSeconds", "ONTOLOGY_REASONING_MIN_INTERVAL_SECONDS", "180"),
         "ontologyReasoningUrgentMinIntervalSeconds": value("ontologyReasoningUrgentMinIntervalSeconds", "ONTOLOGY_REASONING_URGENT_MIN_INTERVAL_SECONDS", "60"),
         "ontologyReasoningProjectionRetrySeconds": value("ontologyReasoningProjectionRetrySeconds", "ONTOLOGY_REASONING_PROJECTION_RETRY_SECONDS", "30"),
-        "ontologyReasoningUrgentReviewLevels": value("ontologyReasoningUrgentReviewLevels", "ONTOLOGY_REASONING_URGENT_REVIEW_LEVELS", "act,immediate,blocked"),
+        "ontologyProjectionCircuitFailureThreshold": value("ontologyProjectionCircuitFailureThreshold", "ONTOLOGY_PROJECTION_CIRCUIT_FAILURE_THRESHOLD", "3"),
+        "ontologyProjectionCircuitCooldownSeconds": value("ontologyProjectionCircuitCooldownSeconds", "ONTOLOGY_PROJECTION_CIRCUIT_COOLDOWN_SECONDS", "300"),
+        "ontologyReasoningUrgentReviewLevels": normalized_ontology_reasoning_urgent_review_levels(
+            value("ontologyReasoningUrgentReviewLevels", "ONTOLOGY_REASONING_URGENT_REVIEW_LEVELS", "act,immediate")
+        ),
         "ontologyReasoningProcessedEventLimit": value("ontologyReasoningProcessedEventLimit", "ONTOLOGY_REASONING_PROCESSED_EVENT_LIMIT", "10000"),
         "ontologyReasoningTypeDbNativeRuleExecutionEnabled": value("ontologyReasoningTypeDbNativeRuleExecutionEnabled", "ONTOLOGY_REASONING_TYPEDB_NATIVE_RULE_EXECUTION_ENABLED", "1"),
         "typedbNativeRuleTargetSymbolLimit": value(
@@ -772,7 +803,7 @@ def runtime_settings() -> Dict[str, str]:
         "marketMaterialityVolumeRatio": value("marketMaterialityVolumeRatio", "MARKET_MATERIALITY_VOLUME_RATIO", "1.5"),
         "typedbAddress": value("typedbAddress", "TYPEDB_ADDRESS", "127.0.0.1:1729"),
         "typedbUser": value("typedbUser", "TYPEDB_USER", "admin"),
-        "typedbPassword": value("typedbPassword", "TYPEDB_PASSWORD", "password"),
+        "typedbPassword": value("typedbPassword", "TYPEDB_PASSWORD", ""),
         "typedbDatabase": value("typedbDatabase", "TYPEDB_DATABASE", "orbit_alpha_ontology"),
         "typedbTlsEnabled": value("typedbTlsEnabled", "TYPEDB_TLS_ENABLED", "0"),
         "typedbTimeoutSeconds": value("typedbTimeoutSeconds", "TYPEDB_TIMEOUT_SECONDS", "20"),
@@ -789,11 +820,6 @@ def runtime_settings() -> Dict[str, str]:
                 "ONTOLOGY_REASONING_TYPEDB_NATIVE_RULE_EXECUTION_ENABLED",
                 "1",
             ),
-        ),
-        "typedbNativeRuleRealtimeQueryLimit": value(
-            "typedbNativeRuleRealtimeQueryLimit",
-            "TYPEDB_NATIVE_RULE_REALTIME_QUERY_LIMIT",
-            "18",
         ),
         "typedbNativeRuleQueryTimeoutSeconds": value(
             "typedbNativeRuleQueryTimeoutSeconds",
@@ -857,6 +883,10 @@ def runtime_settings() -> Dict[str, str]:
         "dataFreshnessDisclosureMaxAgeMinutes": value("dataFreshnessDisclosureMaxAgeMinutes", "DATA_FRESHNESS_DISCLOSURE_MAX_AGE_MINUTES", "120"),
         "externalApiFetchIntervalMinutes": value("externalApiFetchIntervalMinutes", "EXTERNAL_API_FETCH_INTERVAL_MINUTES", "30"),
         "externalSignalCacheMaxAgeMinutes": value("externalSignalCacheMaxAgeMinutes", "EXTERNAL_SIGNAL_CACHE_MAX_AGE_MINUTES", "10"),
+        "externalSignalCacheMaxEntries": value("externalSignalCacheMaxEntries", "EXTERNAL_SIGNAL_CACHE_MAX_ENTRIES", "6"),
+        "mysqlRuntimeManaged": value("mysqlRuntimeManaged", "MYSQL_RUNTIME_MANAGED", "1"),
+        "mysqlConnectionPoolSize": value("mysqlConnectionPoolSize", "MYSQL_CONNECTION_POOL_SIZE", "4"),
+        "webPort": value("webPort", "WEB_PORT", "3000"),
         "externalAlphaEnabled": value("externalAlphaEnabled", "EXTERNAL_ALPHA_ENABLED", "1"),
         "externalAlphaRelatedSymbolsEnabled": value("externalAlphaRelatedSymbolsEnabled", "EXTERNAL_ALPHA_RELATED_SYMBOLS_ENABLED", "1"),
         "externalAlphaRelatedMaxSymbols": value("externalAlphaRelatedMaxSymbols", "EXTERNAL_ALPHA_RELATED_MAX_SYMBOLS", "8"),

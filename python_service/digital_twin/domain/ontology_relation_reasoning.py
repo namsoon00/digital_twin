@@ -34,13 +34,7 @@ from .ontology_relation_facts import (
     position_signal_facts,
     research_evidence_facts,
 )
-from .ontology_relation_catalog import (
-    DECISION_LABEL_ALIASES,
-    DECISION_STAGE_DEFINITIONS,
-    DEFAULT_RELATION_RULES,
-)
 from .portfolio import PortfolioSummary, Position
-from .ontology_relation_decisions import decision_stage_by_key
 from .ontology_relation_execution_plan import execution_plan_from_relation_context
 from .ontology_relation_prompt_context import build_ai_prompt_context
 from .ontology_relation_settings import (

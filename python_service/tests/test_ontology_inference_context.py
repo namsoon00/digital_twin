@@ -5,7 +5,8 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from digital_twin.domain.ontology_inference_context import decision_from_inference, matches_from_inference, relation_contexts_from_snapshot
-from digital_twin.domain.ontology_relation_execution_plan import decision_drivers_from_relation_context
+from digital_twin.domain.ontology_relation_contracts import OntologyRuleMatch
+from digital_twin.domain.ontology_relation_execution_plan import decision_drivers_from_relation_context, execution_plan_from_relation_context
 from digital_twin.domain.ontology_relation_facts import position_signal_facts
 from digital_twin.domain.instrument_profiles import InstrumentProfile, profile_settings
 from digital_twin.domain.investment_ubiquitous_language import (
@@ -19,6 +20,47 @@ from digital_twin.domain.strategy import decisions_for_positions
 
 
 class OntologyInferenceContextTests(unittest.TestCase):
+    def test_execution_plan_describes_only_typedb_add_buy_relations(self):
+        facts = {
+            "symbol": "000660",
+            "name": "SK하이닉스",
+            "market": "KR",
+            "source": "holding",
+            "isHolding": True,
+            "profitLossRate": -6.0,
+            "investmentStrategyProfile": "aggressive",
+        }
+        decision = {
+            "decisionStage": "HOLD_KEEP",
+            "actionGroup": "holdWatch",
+            "actionLevel": "watch",
+            "label": "보유 유지",
+        }
+        matches = [
+            OntologyRuleMatch(
+                rule_id="graph.aggressive.loss_recovery.add_buy_review.v1",
+                label="공격형 손실 회복 추가매수 검토",
+                version="typedb",
+                relation_type="ALLOWS_ACTION",
+                signal_type="holdingTiming",
+                matched=True,
+                review_level="review",
+                review_label="확인 필요",
+                data_state="sufficient",
+                evidence_role="support",
+                decision_stage="ADD_BUY_REVIEW",
+                action_group="addBuy",
+                action_level="review",
+                decision_label="조건부 추가매수 검토",
+            ),
+        ]
+
+        plan = execution_plan_from_relation_context(facts, decision, matches)
+
+        self.assertEqual("allow", plan["addBuyAssessment"]["state"])
+        self.assertIn("TypeDB", plan["addBuyAssessment"]["statusText"])
+        self.assertNotIn("addBuyEligibilityStage", plan["sourceFacts"])
+
     def test_instrument_profile_driver_uses_tbox_domain_language(self):
         profile = InstrumentProfile(
             symbol="CPNG",
@@ -608,6 +650,8 @@ class OntologyInferenceContextTests(unittest.TestCase):
                                     "riskImpact": 8,
                                     "weight": 0.72,
                                     "decisionStage": "ENTRY_WAIT",
+                                    "decisionLabel": "신규 진입 대기",
+                                    "decisionTone": "watch",
                                     "stagePriority": 31,
                                     "actionGroup": "entryWait",
                                     "actionLevel": "review",
@@ -682,6 +726,8 @@ class OntologyInferenceContextTests(unittest.TestCase):
                                     "supportImpact": 12,
                                     "weight": 0.82,
                                     "decisionStage": "ENTRY_READY",
+                                    "decisionLabel": "소액 분할매수 검토",
+                                    "decisionTone": "caution",
                                     "stagePriority": 37,
                                     "actionGroup": "entry",
                                     "actionLevel": "action",
@@ -709,6 +755,56 @@ class OntologyInferenceContextTests(unittest.TestCase):
         self.assertEqual("ENTRY_READY", contexts["AAPL"]["decision"]["decisionStage"])
         self.assertEqual("entry", contexts["AAPL"]["decision"]["actionGroup"])
         self.assertEqual("typedbInferenceRelation", contexts["AAPL"]["decision"]["stagePolicySource"])
+
+    def test_unknown_typedb_stage_is_blocked_instead_of_becoming_hold(self):
+        watch = Position(
+            symbol="AAPL",
+            name="Apple",
+            market="US",
+            currency="USD",
+            current_price=210,
+            source="watchlist",
+        )
+        snapshot = AccountSnapshot(
+            "acct",
+            "계좌",
+            "test",
+            "live",
+            "ok",
+            "2026-07-10T00:00:00Z",
+            portfolio_summary([], fx_rates={"KRW": 1, "USD": 1400}),
+            watchlist=[watch],
+            metadata={
+                "ontology": {
+                    "typedb": {
+                        "inferenceBox": {
+                            "status": "ok",
+                            "nativeTypeDbReasoningUsed": True,
+                            "relations": [{
+                                "type": "HAS_INFERRED_ENTRY_OPPORTUNITY",
+                                "source": "stock:AAPL",
+                                "target": "entry:AAPL:unknown",
+                                "ruleId": "entry.unknown-stage.v1",
+                                "decisionStage": "FUTURE_STAGE",
+                                "actionGroup": "entry",
+                                "nativeTypeDbReasoned": True,
+                            }],
+                            "traces": [{
+                                "id": "inference-trace:AAPL:entry.unknown-stage.v1",
+                                "symbol": "AAPL",
+                                "ruleId": "entry.unknown-stage.v1",
+                            }],
+                        }
+                    }
+                }
+            },
+        )
+
+        context = relation_contexts_from_snapshot(snapshot)["AAPL"]
+
+        self.assertTrue(context["decision"]["judgementBlocked"])
+        self.assertEqual("blocked", context["decision"]["reviewLevel"])
+        self.assertNotEqual("보유 유지", context["decision"]["label"])
 
     def test_watchlist_entry_only_policy_rewrites_holding_only_inference_stage(self):
         watch = Position(
@@ -776,8 +872,8 @@ class OntologyInferenceContextTests(unittest.TestCase):
         self.assertEqual("watchlist", context["targetRole"])
         self.assertEqual("ENTRY_ONLY", context["actionPolicy"])
         self.assertTrue(context["decision"]["actionPolicyApplied"])
-        self.assertEqual("ADD_BUY_BLOCKED", context["decision"]["decisionStage"])
-        self.assertEqual("entryRisk", context["decision"]["actionGroup"])
+        self.assertEqual("LOSS_REDUCE", context["decision"]["decisionStage"])
+        self.assertEqual("lossControl", context["decision"]["actionGroup"])
         self.assertEqual("신규 진입 보류", context["decision"]["label"])
         self.assertEqual("AVOID_OR_WAIT", context["executionPlan"]["primaryAction"])
         self.assertNotIn("TRIM", context["executionPlan"]["primaryAction"])

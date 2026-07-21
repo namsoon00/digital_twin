@@ -6805,9 +6805,6 @@
     var trendDistance20 = current && ma20 ? ((current / ma20) - 1) * 100 : 0;
     var trendDistance60 = current && ma60 ? ((current / ma60) - 1) * 100 : 0;
     var maSpread = ma20 && ma60 ? ((ma20 / ma60) - 1) * 100 : 0;
-    var buySignals = [tradeStrength >= 105, buyShare >= 55, bidAskImbalance >= 5, priceChangeRate > 0, smartMoneyNet > 0].filter(Boolean).length;
-    var sellSignals = [tradeStrength > 0 && tradeStrength <= 95, buyShare <= 45, bidAskImbalance <= -5, priceChangeRate < 0, smartMoneyNet < 0].filter(Boolean).length;
-    var flowDirection = buySignals > sellSignals ? "buy" : (sellSignals > buySignals ? "sell" : "mixed");
     return {
       tradeStrength: tradeStrength,
       volumeRatio: volumeRatio,
@@ -6817,9 +6814,9 @@
       sellShare: Math.max(0, 100 - buyShare),
       bidAskImbalance: bidAskImbalance,
       priceChangeRate: priceChangeRate,
-      flowDirection: flowDirection,
-      buySignalCount: buySignals,
-      sellSignalCount: sellSignals,
+      // Raw observations only.  The browser must not combine them into a
+      // buy/sell direction; that decision is TypeDB InferenceBox-owned.
+      flowDirection: "unclassified",
       ma20: ma20,
       ma60: ma60,
       trendDistance20: trendDistance20,
@@ -6863,7 +6860,7 @@
     var reasons = (conditions || []).slice(0, 4).map(function (condition) {
       return condition.label;
     });
-    if (!reasons.length) reasons.push("새 행동 조건은 성립하지 않아 현재 상태를 유지합니다.");
+    if (!reasons.length) reasons.push("서버 TypeDB 추론 결과가 아직 없어 가격·수급 원시 자료만 표시합니다.");
     reasons.push("자료 상태: " + decisionStateMeta("data", stateContract.dataState, "partial").label + ".");
     if (signal.ma20 || signal.ma60) {
       reasons.push("이동평균은 20일선 " + formatSignalNumber(signal.ma20, "") + ", 60일선 " + formatSignalNumber(signal.ma60, "") + "을 판단 항목으로 반영합니다.");
@@ -6879,77 +6876,74 @@
     return reasons;
   }
 
-  function clientOntologyStateMatches(item, signal, hasData, valuation) {
-    var matches = [];
-    var pnl = numeric(item.profitLossRate);
-    var features = modelFeatureVariables(item, signal, valuation || {});
-    var ma20Distance = numeric(features.trendDistance20);
-    var ma60Distance = numeric(features.trendDistance60);
-    var foreignNet = numeric(signal && signal.foreignNet);
-    var institutionNet = numeric(signal && signal.institutionNet);
-    var symbol = String(item.symbol || "").toUpperCase();
-    var thresholds = relationRuleThresholds();
-    var lossLimit = Number(thresholds.lossRateLow == null ? -8 : thresholds.lossRateLow);
-    function add(label, evidenceRole, reviewLevel, tone) {
-      matches.push({
-        label: label,
-        evidenceRole: evidenceRole,
-        reviewLevel: reviewLevel,
-        dataState: hasData ? "sufficient" : "insufficient",
-        changeState: "new-condition",
-        tone: tone
+  function backendRelationContexts(sources) {
+    var contexts = [];
+    (sources || []).forEach(function (source) {
+      if (!source || typeof source !== "object") return;
+      [source, source.ontologyRelationContext, source.graph, source.decisionState].forEach(function (candidate) {
+        if (candidate && typeof candidate === "object" && contexts.indexOf(candidate) < 0) contexts.push(candidate);
       });
-    }
-    if (!hasData || !currentPriceOf(item)) {
-      add("현재가와 핵심 시장 자료가 부족해 판단을 보류합니다.", "blocking", "blocked", "danger");
-      return matches;
-    }
-    if (pnl >= 10 && (ma20Distance <= -2 || ma60Distance <= -5)) {
-      add("수익은 남아 있지만 주요 평균 가격 아래여서 수익 보호 기준을 확인합니다.", "risk", "check", "caution");
-    }
-    if (item.source !== "watchlist" && (pnl <= lossLimit || (ma20Distance <= -5 && ma60Distance < 0))) {
-      add("손실이 계정의 관리 기준을 넘었거나 주요 평균 가격 아래에 있어 손실 관리 조건을 확인합니다.", "risk", pnl <= lossLimit && ma60Distance < 0 ? "act" : "check", "danger");
-    }
-    if (ma20Distance < 0 && ma60Distance < 0) {
-      add("현재가가 20일·60일 평균 가격보다 모두 낮아 가격 회복이 확인되지 않았습니다.", "risk", "check", "caution");
-    } else if (ma20Distance >= 0 && ma60Distance >= 0) {
-      add("현재가가 20일·60일 평균 가격 위에 있어 가격 흐름이 버티고 있습니다.", "support", "observe", "watch");
-    } else if (ma20Distance >= 0 || ma60Distance >= 0) {
-      add("짧은 흐름과 중간 흐름이 엇갈려 다음 가격 확인이 필요합니다.", "context", "observe", "hold");
-    }
-    if (foreignNet + institutionNet > 0) {
-      add("외국인과 기관을 합친 순매수가 플러스라 가격을 버티는 근거가 있습니다.", "support", "check", "watch");
-    } else if (foreignNet + institutionNet < 0) {
-      add("외국인과 기관을 합친 순매도가 마이너스라 수급 부담이 있습니다.", "risk", "check", "caution");
-    }
-    if (features.flowDirection === "buy") {
-      add("체결·호가·가격 변화 중 매수 쪽 조건이 더 많이 확인됐습니다.", "support", "observe", "watch");
-    } else if (features.flowDirection === "sell") {
-      add("체결·호가·가격 변화 중 매도 쪽 조건이 더 많이 확인됐습니다.", "risk", "check", "caution");
-    }
-    if (["MSTR", "STRC", "COIN", "MARA", "RIOT"].indexOf(symbol) >= 0) {
-      add("비트코인 움직임에 민감한 종목이라 현지 주가와 비트코인 방향을 함께 확인합니다.", "context", "observe", "hold");
-    }
-    return matches.sort(function (a, b) {
-      return decisionStateMeta("review", b.reviewLevel, "normal").rank - decisionStateMeta("review", a.reviewLevel, "normal").rank;
     });
+    return contexts;
   }
 
-  function relationDecisionFromClientStates(item, stateContract, conditions) {
-    var review = decisionStateMeta("review", stateContract.reviewLevel, "observe");
-    var conflict = stateContract.conflictState;
-    var holding = item.source !== "watchlist";
-    if (review.key === "blocked") return { label: "판단 보류", tone: "caution", priority: 0 };
-    var label = holding ? "보유 유지" : "관심 유지";
-    if (holding && ["act", "immediate"].indexOf(review.key) >= 0) label = conflict === "mixed" ? "분할 대응 확인" : "손실 관리 확인";
-    else if (holding && review.key === "check" && conflict === "risk-only") label = "비중 축소 조건 확인";
-    else if (!holding && ["check", "act", "immediate"].indexOf(review.key) >= 0 && conflict === "support-only") label = "진입 조건 확인";
-    else if (!holding && conflict === "risk-only") label = "신규 진입 보류";
+  function backendRelationConditions(sources) {
+    var seen = {};
+    var conditions = [];
+    backendRelationContexts(sources).forEach(function (context) {
+      [context.activeRules, context.matchedRules, context.relationRules].forEach(function (rows) {
+        (Array.isArray(rows) ? rows : []).forEach(function (row) {
+          if (!row || typeof row !== "object") return;
+          var key = String(row.ruleId || row.rule_id || row.id || row.label || "");
+          if (!key || seen[key]) return;
+          seen[key] = true;
+          conditions.push({
+            label: String(row.label || row.ruleLabel || row.aiInfluenceLabel || key),
+            evidenceRole: String(row.evidenceRole || row.evidence_role || "context"),
+            reviewLevel: String(row.reviewLevel || row.review_level || "observe"),
+            dataState: String(row.dataState || row.data_state || "partial"),
+            changeState: String(row.changeState || row.change_state || "unchanged"),
+            tone: String(row.tone || "watch")
+          });
+        });
+      });
+    });
+    return conditions;
+  }
+
+  function backendDecisionState(sources, hasData) {
+    var contexts = backendRelationContexts(sources);
+    var decision = {};
+    var state = {};
+    contexts.some(function (context) {
+      if (context.decision && typeof context.decision === "object") {
+        decision = context.decision;
+        return true;
+      }
+      return false;
+    });
+    contexts.some(function (context) {
+      if (context.decisionState && typeof context.decisionState === "object") {
+        state = context.decisionState;
+        return true;
+      }
+      return false;
+    });
+    var reviewLevel = String(decision.reviewLevel || state.reviewLevel || "blocked");
+    var dataState = String(decision.dataState || state.dataState || (hasData ? "partial" : "insufficient"));
+    var changeState = String(decision.changeState || state.changeState || "unchanged");
+    var conflictState = String(decision.conflictState || state.conflictState || "context-only");
+    var validationState = String(decision.validationState || state.validationState || (reviewLevel === "blocked" ? "blocked" : "conditional"));
+    var action = String(decision.label || decision.action || "").trim();
     return {
-      label: label,
-      tone: review.tone,
-      priority: 5 - review.rank,
-      reasons: conditions || []
+      reviewLevel: reviewLevel,
+      dataState: dataState,
+      changeState: changeState,
+      conflictState: conflictState,
+      validationState: validationState,
+      action: action || "서버 추론 대기",
+      tone: String(decision.tone || (reviewLevel === "blocked" ? "caution" : "watch")),
+      priority: 5 - decisionStateMeta("review", reviewLevel, "blocked").rank
     };
   }
 
@@ -6970,28 +6964,12 @@
       var signal = marketSignalForItem(item, signalMap);
       var hasData = hasMarketSignal(signal);
       var valuation = valuationMap[symbol] || null;
-      var conditions = clientOntologyStateMatches(item, signal, hasData, valuation);
       var backend = backendRows[symbol] || {};
       var backendGraph = backend.graph || backend.ontologyRelationContext || {};
       var sources = [backend, backendGraph, item.ontologyOpinion, item.ontologyRelationContext, item];
-      var fallbackReview = conditions.reduce(function (selected, condition) {
-        return decisionStateMeta("review", condition.reviewLevel, "normal").rank > decisionStateMeta("review", selected, "normal").rank ? condition.reviewLevel : selected;
-      }, hasData ? "observe" : "blocked");
-      var dataState = stateValueFromSources(sources, ["dataState", "data_state"], hasData ? (signal.ma20 && signal.ma60 ? "sufficient" : "partial") : "insufficient");
-      var reviewLevel = stateValueFromSources(sources, ["reviewLevel", "review_level"], fallbackReview);
-      var conflictState = stateValueFromSources(sources, ["conflictState", "conflict_state"], evidenceConflictState(conditions));
-      var changeState = stateValueFromSources(sources, ["changeState", "change_state"], numeric(signal.priceChangeRate) > 0.6 ? "improving" : (numeric(signal.priceChangeRate) < -0.6 ? "worsening" : (conditions.length ? "new-condition" : "unchanged")));
-      var validationState = stateValueFromSources(sources, ["validationState", "validation_state"], dataState === "sufficient" && conditions.length >= 2 ? "ready" : (dataState === "unavailable" || dataState === "insufficient" ? "blocked" : "conditional"));
-      var stateContract = {
-        reviewLevel: reviewLevel,
-        dataState: dataState,
-        changeState: changeState,
-        conflictState: conflictState,
-        validationState: validationState
-      };
-      var decision = relationDecisionFromClientStates(item, stateContract, conditions);
-      var backendDecision = backend.decision || backend.action || "";
-      if (backendDecision) decision.label = backendDecision;
+      var conditions = backendRelationConditions(sources);
+      var decision = backendDecisionState(sources, hasData);
+      var stateContract = decision;
       return {
         symbol: symbol,
         name: item.name || symbol,
@@ -7014,14 +6992,14 @@
         action: decision.label,
         tone: decision.tone,
         priority: decision.priority,
-        reviewLevel: reviewLevel,
-        dataState: dataState,
-        changeState: changeState,
-        conflictState: conflictState,
-        validationState: validationState,
+        reviewLevel: decision.reviewLevel,
+        dataState: decision.dataState,
+        changeState: decision.changeState,
+        conflictState: decision.conflictState,
+        validationState: decision.validationState,
         relationRules: conditions,
         reasons: tradeSignalReasons(signal, valuation, hasData, conditions, stateContract),
-        triggers: ["관계 규칙", "거래량", "이동평균", "투자자 수급"]
+        triggers: conditions.length ? ["서버 TypeDB 관계 추론"] : ["서버 TypeDB 추론 대기"]
       };
     }).sort(function (a, b) {
       if (a.priority !== b.priority) return a.priority - b.priority;
@@ -7195,31 +7173,6 @@
     ];
   }
 
-  function labActionPrices(item) {
-    var valuation = item.valuation || {};
-    var current = Number(item.currentPrice || valuation.currentPrice || 0);
-    var average = Number(item.averagePrice || 0);
-    var reference = average || current;
-    var fairValue = Number(valuation.fairValue || 0);
-    var marginPrice = Number(valuation.marginPrice || 0);
-    var buyLimit = marginPrice || (current ? current * 0.92 : 0);
-    var stopPrice = reference ? reference * 0.92 : (buyLimit ? buyLimit * 0.92 : 0);
-    var trimOne = reference ? reference * 1.12 : (fairValue ? fairValue * 0.9 : 0);
-    var trimTwoBase = reference ? reference * 1.25 : 0;
-    var trimTwo = fairValue ? Math.max(fairValue, trimTwoBase) : trimTwoBase;
-    if (fairValue && fairValue > reference && trimOne > fairValue) trimOne = fairValue;
-    if (fairValue && trimTwo < trimOne) trimTwo = trimOne;
-    return [
-      { label: "현재가", value: current, tone: "hold" },
-      { label: item.source === "watchlist" ? "진입 기준" : "평단", value: reference, tone: "hold" },
-      { label: "매수 상한", value: buyLimit, tone: "watch" },
-      { label: "손절 기준", value: stopPrice, tone: "danger" },
-      { label: "1차 매도", value: trimOne, tone: "caution" },
-      { label: "2차 매도", value: trimTwo, tone: "danger" },
-      { label: "적정가", value: fairValue, tone: "watch" }
-    ];
-  }
-
   function categoricalModelState(item) {
     item = item || {};
     var review = decisionStateMeta("review", item.reviewLevel, item.hasData ? "observe" : "blocked");
@@ -7313,68 +7266,6 @@
     }, alert));
   }
 
-  function labActionPriceMap(item) {
-    var map = {};
-    labActionPrices(item).forEach(function (line) {
-      map[line.label] = Number(line.value || 0);
-    });
-    return map;
-  }
-
-  function priceBelowOrNear(current, target, nearPercent) {
-    if (!current || !target) return false;
-    return current <= target * (1 + Number(nearPercent || 0) / 100);
-  }
-
-  function priceAboveOrNear(current, target, nearPercent) {
-    if (!current || !target) return false;
-    return current >= target * (1 - Number(nearPercent || 0) / 100);
-  }
-
-  function addPriceAlerts(alerts, rules, thresholds, item) {
-    var current = Number(item.currentPrice || 0);
-    if (!current) return;
-    var prices = labActionPriceMap(item);
-    var near = Number(thresholds.priceNearPercent || 0);
-    if (priceBelowOrNear(current, prices["매수 상한"], near)) {
-      addAlert(alerts, rules, {
-        rule: "priceBuyLimit",
-        severity: "watch",
-        symbol: item.symbol,
-        title: item.name + " 매수 상한 접근",
-        message: "현재가가 실험실 매수 상한 기준에 접근했습니다.",
-        value: formatPrice(current, item.currency),
-        threshold: formatPrice(prices["매수 상한"], item.currency),
-        source: "가격선"
-      });
-    }
-    if (priceBelowOrNear(current, prices["손절 기준"], near)) {
-      addAlert(alerts, rules, {
-        rule: "priceStop",
-        severity: item.source === "watchlist" ? "caution" : "danger",
-        symbol: item.symbol,
-        title: item.name + " 손절 기준 접근",
-        message: "현재가가 손절 기준선에 접근했습니다. 보유 사유와 리스크 허용폭을 다시 확인해야 합니다.",
-        value: formatPrice(current, item.currency),
-        threshold: formatPrice(prices["손절 기준"], item.currency),
-        source: "가격선"
-      });
-    }
-    if (priceAboveOrNear(current, prices["2차 매도"], near) || priceAboveOrNear(current, prices["1차 매도"], near)) {
-      var trimTarget = priceAboveOrNear(current, prices["2차 매도"], near) ? prices["2차 매도"] : prices["1차 매도"];
-      addAlert(alerts, rules, {
-        rule: "priceTrim",
-        severity: priceAboveOrNear(current, prices["2차 매도"], near) ? "danger" : "caution",
-        symbol: item.symbol,
-        title: item.name + " 분할매도 기준 접근",
-        message: "현재가가 실험실 매도 기준선에 접근했습니다.",
-        value: formatPrice(current, item.currency),
-        threshold: formatPrice(trimTarget, item.currency),
-        source: "가격선"
-      });
-    }
-  }
-
   function addModelAlerts(alerts, rules, thresholds, item) {
     void thresholds;
     var model = categoricalModelState(item);
@@ -7416,172 +7307,6 @@
         source: "상태 변화"
       });
     }
-  }
-
-  function addFlowAlerts(alerts, rules, thresholds, item) {
-    var signal = item.signal || {};
-    if (!item.hasData) return;
-    var volumeRatio = Number(signal.volumeRatio || 0);
-    var buyShare = Number(item.buyShare || 0);
-    var sellShare = Math.max(0, 100 - buyShare);
-    var imbalance = Number(signal.bidAskImbalance || 0);
-    var priceChange = Number(signal.priceChangeRate || 0);
-    if (volumeRatio >= Number(thresholds.volumeRatioHigh || 0)) {
-      addAlert(alerts, rules, {
-        rule: "flowVolume",
-        severity: "watch",
-        symbol: item.symbol,
-        title: item.name + " 거래량 급증",
-        message: "평소보다 거래량이 커졌습니다.",
-        value: formatSignalRatio(volumeRatio),
-        threshold: formatSignalRatio(thresholds.volumeRatioHigh),
-        source: "수급"
-      });
-    }
-    if (buyShare >= Number(thresholds.buyShareHigh || 0)) {
-      addAlert(alerts, rules, {
-        rule: "flowBuyShare",
-        severity: "watch",
-        symbol: item.symbol,
-        title: item.name + " 매수 체결 우위",
-        message: "매수 체결 비중이 높습니다.",
-        value: pct(buyShare),
-        threshold: pct(thresholds.buyShareHigh),
-        source: "수급"
-      });
-    }
-    if (sellShare >= Number(thresholds.sellShareHigh || 0)) {
-      addAlert(alerts, rules, {
-        rule: "flowSellShare",
-        severity: item.source === "watchlist" ? "caution" : "danger",
-        symbol: item.symbol,
-        title: item.name + " 매도 체결 우위",
-        message: "매도 체결 비중이 높습니다.",
-        value: pct(sellShare),
-        threshold: pct(thresholds.sellShareHigh),
-        source: "수급"
-      });
-    }
-    if (Math.abs(imbalance) >= Number(thresholds.orderbookImbalance || 0)) {
-      addAlert(alerts, rules, {
-        rule: "flowOrderbook",
-        severity: imbalance < 0 ? "caution" : "watch",
-        symbol: item.symbol,
-        title: item.name + " 호가 불균형",
-        message: imbalance < 0 ? "매도 호가 쪽 압력이 큽니다." : "매수 호가 쪽 압력이 큽니다.",
-        value: signedPct(imbalance),
-        threshold: pct(thresholds.orderbookImbalance),
-        source: "수급"
-      });
-    }
-    if (priceChange >= Number(thresholds.momentumUp || 0)) {
-      addAlert(alerts, rules, {
-        rule: "trendMomentum",
-        severity: "watch",
-        symbol: item.symbol,
-        title: item.name + " 상승 모멘텀",
-        message: "단기 가격 변화율이 상승 임계값을 넘었습니다.",
-        value: signedPct(priceChange),
-        threshold: signedPct(thresholds.momentumUp),
-        source: "추세"
-      });
-    }
-    if (priceChange <= Number(thresholds.momentumDown || 0)) {
-      addAlert(alerts, rules, {
-        rule: "trendPullback",
-        severity: item.source === "watchlist" ? "caution" : "danger",
-        symbol: item.symbol,
-        title: item.name + " 하락 압력",
-        message: "단기 가격 변화율이 하락 임계값을 밑돌았습니다.",
-        value: signedPct(priceChange),
-        threshold: signedPct(thresholds.momentumDown),
-        source: "추세"
-      });
-    }
-  }
-
-  function addHoldingAlerts(alerts, rules, thresholds, item, portfolio) {
-    if (item.source === "watchlist") return;
-    var profitRate = Number(item.profitLossRate || 0);
-    if (profitRate >= Number(thresholds.profitRateHigh || 0)) {
-      addAlert(alerts, rules, {
-        rule: "holdingProfit",
-        severity: "caution",
-        symbol: item.symbol,
-        title: item.name + " 수익 구간",
-        message: "익절 또는 비중 조절 기준을 확인할 구간입니다.",
-        value: signedPct(profitRate),
-        threshold: signedPct(thresholds.profitRateHigh),
-        source: "보유"
-      });
-    }
-    if (profitRate <= Number(thresholds.lossRateLow || 0)) {
-      addAlert(alerts, rules, {
-        rule: "holdingLoss",
-        severity: "danger",
-        symbol: item.symbol,
-        title: item.name + " 손실 구간",
-        message: "손실 허용폭과 손절 기준을 다시 확인할 구간입니다.",
-        value: signedPct(profitRate),
-        threshold: signedPct(thresholds.lossRateLow),
-        source: "보유"
-      });
-    }
-    var invested = Number(portfolio && (portfolio.invested || portfolio.total) || 0);
-    var weight = invested ? (Number(item.marketValue || 0) / invested) * 100 : 0;
-    if (weight >= Number(thresholds.positionWeightHigh || 0)) {
-      addAlert(alerts, rules, {
-        rule: "holdingConcentration",
-        severity: "caution",
-        symbol: item.symbol,
-        title: item.name + " 단일 종목 비중 확대",
-        message: "단일 보유 종목 비중이 설정값 이상입니다.",
-        value: pct(weight),
-        threshold: pct(thresholds.positionWeightHigh),
-        source: "보유"
-      });
-    }
-  }
-
-  function addPortfolioAlerts(alerts, rules, thresholds, snapshot) {
-    var portfolio = snapshot.portfolio || {};
-    (portfolio.sectors || []).forEach(function (sector) {
-      if (!sector || sector.sector === "현금") return;
-      var ratio = Number(sector.ratio || 0);
-      if (ratio >= Number(thresholds.sectorWeightHigh || 0)) {
-        addAlert(alerts, rules, {
-          rule: "sectorConcentration",
-          severity: "caution",
-          title: sector.sector + " 섹터 비중 확대",
-          message: "계좌 내 섹터 노출이 설정값 이상입니다.",
-          value: pct(ratio),
-          threshold: pct(thresholds.sectorWeightHigh),
-          source: "포트폴리오"
-        });
-      }
-    });
-    var markets = Array.isArray(portfolio.markets) ? portfolio.markets : [];
-    if (!markets.length && Number(portfolio.total || 0) > 0) {
-      markets = [{
-        key: "total",
-        label: "전체",
-        cashRatio: Math.round((Number(portfolio.cash || 0) / Number(portfolio.total || 1)) * 100)
-      }];
-    }
-    markets.forEach(function (market) {
-      var cashRatio = Number(market.cashRatio || 0);
-      if (cashRatio <= Number(thresholds.marketCashLow || 0)) {
-        addAlert(alerts, rules, {
-          rule: "marketCashLow",
-          severity: cashRatio <= Number(thresholds.marketCashLow || 0) / 2 ? "danger" : "caution",
-          title: (market.label || "전체") + " 현금 비중 부족",
-          message: "신규 매수 전에 시장별 주문 가능 현금과 목표 비중을 확인해야 합니다.",
-          value: pct(cashRatio),
-          threshold: pct(thresholds.marketCashLow),
-          source: "포트폴리오"
-        });
-      }
-    });
   }
 
   function snapshotStamp(snapshot) {
@@ -7680,14 +7405,9 @@
     var thresholds = alertThresholds();
     var alerts = [];
     var items = buildTradeSignalItems(snapshot);
-    var portfolio = snapshot.portfolio || {};
     items.forEach(function (item) {
-      addPriceAlerts(alerts, rules, thresholds, item);
       addModelAlerts(alerts, rules, thresholds, item);
-      addFlowAlerts(alerts, rules, thresholds, item);
-      addHoldingAlerts(alerts, rules, thresholds, item, portfolio);
     });
-    addPortfolioAlerts(alerts, rules, thresholds, snapshot);
     addDataAlerts(alerts, rules, thresholds, snapshot);
     addOrderAlerts(alerts, rules, thresholds, snapshot);
     return alerts.sort(function (a, b) {

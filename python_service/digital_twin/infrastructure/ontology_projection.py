@@ -231,6 +231,15 @@ class PortfolioOntologyProjectionRecorder:
                 self.store_projection_result(snapshot, result, projection_run)
                 return result
             inference_symbols = self.inference_symbols(snapshot, target_symbols)
+            projection_scope = {
+                "triggerMode": "subject-delta-coalesced",
+                "targetSymbols": list(inference_symbols),
+                "persistenceMode": "immutable-complete-generation",
+                "atomicActivation": True,
+                "reason": (
+                    "변경 종목은 합쳐서 추론 범위를 제한하고, 활성 ABox는 롤백 가능한 완전 세대로 교체합니다."
+                ),
+            }
             active_abox = self.active_abox_metadata()
             active_abox_complete = str(active_abox.get("status") or "ok") == "ok"
             if active_abox_complete and active_material_fingerprint(active_abox) == material_fingerprint:
@@ -261,6 +270,7 @@ class PortfolioOntologyProjectionRecorder:
                     "preservedActiveGeneration": True,
                     "materialChangeDetected": False,
                     "aboxValidation": validation.to_dict(),
+                    "projectionScope": projection_scope,
                 }
                 if rulebox_bootstrap:
                     result["ruleboxBootstrap"] = rulebox_bootstrap
@@ -313,6 +323,7 @@ class PortfolioOntologyProjectionRecorder:
             result["materialFingerprint"] = material_fingerprint
             result["aboxSnapshotId"] = material_snapshot_id
             result["materialChangeDetected"] = True
+            result["projectionScope"] = projection_scope
             result["aboxValidation"] = validation.to_dict()
             if rulebox_bootstrap:
                 result["ruleboxBootstrap"] = rulebox_bootstrap
@@ -711,6 +722,17 @@ class PortfolioOntologyProjectionRecorder:
         if isinstance(rollback.get("activeAbox"), dict):
             verification["activePointer"] = dict(rollback.get("activeAbox") or {})
             result["aboxPersistenceVerification"] = verification
+        if result["preservedActiveGeneration"] and active_snapshot_id:
+            discard = getattr(self.repository, "discard_abox_generation", None)
+            if callable(discard):
+                try:
+                    result["failedCandidateCleanup"] = discard(active_snapshot_id)
+                except Exception as error:  # noqa: BLE001 - circuit breaker can retry cleanup later.
+                    result["failedCandidateCleanup"] = {
+                        "status": "error",
+                        "aboxSnapshotId": active_snapshot_id,
+                        "reason": str(error)[:180],
+                    }
 
     def existing_inference_result(
         self,

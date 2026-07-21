@@ -89,40 +89,72 @@ def _active_rule_labels(matches: List[OntologyRuleMatch]) -> List[str]:
     ]
 
 
-def _add_buy_assessment_from_facts(facts: Dict[str, object]) -> Dict[str, object]:
-    facts = facts or {}
-    stage = str(facts.get("addBuyEligibilityStage") or "NONE")
-    label = str(facts.get("addBuyEligibilityLabel") or "").strip() or "추가매수 판단 대상 아님"
-    recovery_count = int(_float_value(facts.get("lossRecoverySignalCount")))
-    watch_min = int(_float_value(facts.get("addBuyWatchSignalMin")) or 0)
-    review_min = int(_float_value(facts.get("addBuyReviewSignalMin")) or 0)
-    blockers = [str(item) for item in (facts.get("addBuyBlockedReasons") or []) if str(item or "").strip()]
-    opened = [str(item) for item in (facts.get("lossRecoverySignalLabels") or []) if str(item or "").strip()]
+def _add_buy_assessment_from_matches(
+    facts: Dict[str, object],
+    matches: List[OntologyRuleMatch],
+) -> Dict[str, object]:
+    """Describe only the add-buy relations already inferred by TypeDB.
+
+    The old implementation counted moving-average, flow, and news inputs in
+    Python, then emitted its own ``ADD_BUY_*`` stage. Native RuleBox rules now
+    own that decision. This adapter deliberately groups only the resulting
+    ``ALLOWS_ACTION`` and ``BLOCKS_ACTION`` relations for explanation.
+    """
+
+    active = [item for item in matches or [] if item.matched and not item.reference_only]
+    allowed = [
+        item for item in active
+        if str(item.relation_type or "").upper() == "ALLOWS_ACTION"
+        and str(item.action_group or "") == "addBuy"
+    ]
+    blocked = [
+        item for item in active
+        if str(item.relation_type or "").upper() == "BLOCKS_ACTION"
+        and str(item.decision_stage or "") == "ADD_BUY_BLOCKED"
+    ]
+    watches = [
+        item for item in active
+        if str(item.decision_stage or "") == "ADD_BUY_WATCH"
+    ]
+    defenses = [
+        item for item in active
+        if str(item.decision_stage or "") == "FLOW_DEFENSE"
+    ]
     profile = str(facts.get("investmentStrategyProfileLabel") or facts.get("investmentStrategyProfile") or "").strip()
-    if stage == "NONE":
-        status_text = "추가매수 판단 대상이 아닙니다."
-    elif stage == "ADD_BUY_REVIEW":
-        status_text = "외국인·기관 동반 순매수와 회복 확인이 겹쳐 소액 분할 추가매수 검토 여지가 있습니다."
-    elif stage == "ADD_BUY_WATCH":
-        status_text = "외국인·기관 동반 순매수가 있어 추가매수 후보로 관찰하되, 검토 단계에는 아직 확인이 더 필요합니다."
-    elif stage == "FLOW_DEFENSE":
-        status_text = "외국인·기관 동반 순매수가 매도 강도를 낮추는 근거지만, 추가매수 판단은 아직 열리지 않았습니다."
+    if allowed and blocked:
+        state = "conflict"
+        label = "추가매수 허용·차단 관계가 함께 있음"
+        status_text = "TypeDB가 추가매수 검토 근거와 차단 근거를 함께 찾았습니다. 차단 근거가 해소되기 전에는 추가매수를 실행하지 않습니다."
+    elif allowed:
+        state = "allow"
+        label = str(allowed[0].decision_label or allowed[0].label or "조건부 추가매수 검토")
+        status_text = "TypeDB가 소액 분할 추가매수 검토 관계를 만들었습니다. 이것은 즉시 매수 지시가 아니라 조건 확인이 필요한 후보입니다."
+    elif blocked:
+        state = "block"
+        label = str(blocked[0].decision_label or blocked[0].label or "추가매수 보류")
+        status_text = "TypeDB가 추가매수 차단 관계를 만들었습니다. 회복·수급·뉴스 조건이 바뀌기 전에는 평균매입가를 낮추지 않습니다."
+    elif watches:
+        state = "watch"
+        label = str(watches[0].decision_label or watches[0].label or "추가매수 관찰")
+        status_text = "TypeDB가 회복 가능성을 관찰하는 관계를 만들었지만, 추가매수 허용 관계는 아직 없습니다."
+    elif defenses:
+        state = "defense"
+        label = str(defenses[0].decision_label or defenses[0].label or "수급 방어 관찰")
+        status_text = "TypeDB가 매도 강도를 낮추는 수급 방어 관계를 만들었지만, 추가매수 허용 관계는 아직 없습니다."
     else:
-        status_text = "회복 확인이 부족해 추가매수는 보류합니다."
-    next_checks = []
-    if stage in {"ADD_BUY_REVIEW", "ADD_BUY_WATCH", "FLOW_DEFENSE", "ADD_BUY_BLOCKED"}:
-        next_checks.append("20일선 회복, 거래량 동반 반등, 직접 악재 뉴스 해소, 비중 한도를 함께 확인")
+        state = "none"
+        label = "추가매수 관련 TypeDB 관계 없음"
+        status_text = "추가매수 허용 또는 차단 관계가 이번 추론 결과에 없습니다."
     return {
-        "stage": stage,
+        "state": state,
         "label": label,
         "statusText": status_text,
         "investmentProfile": profile,
-        "recoverySignalCount": recovery_count,
-        "watchSignalMin": watch_min,
-        "reviewSignalMin": review_min,
-        "openedReasons": opened[:6],
-        "blockedReasons": blockers[:5],
-        "nextChecks": next_checks,
+        "allowedReasons": [str(item.label or item.decision_label or "") for item in allowed][:5],
+        "blockedReasons": [str(item.label or item.decision_label or "") for item in blocked][:5],
+        "watchReasons": [str(item.label or item.decision_label or "") for item in watches + defenses][:5],
+        "ruleIds": [str(item.rule_id or "") for item in allowed + blocked + watches + defenses][:8],
+        "nextChecks": ["20일선 회복, 거래량 동반 반등, 직접 악재 뉴스 해소, 비중 한도를 함께 확인"] if state != "none" else [],
     }
 
 
@@ -348,19 +380,16 @@ def decision_drivers_from_relation_context(
             "외국인과 기관 합산 흐름은 " + ("순매수 " if smart_money > 0 else "순매도 ") + _plain_number(abs(smart_money)) + "주입니다.",
             ["foreignNetVolume", "institutionNetVolume", "smartMoneyNetVolume", "smartMoneyDirection"],
         )
-    add_buy_stage = str(facts.get("addBuyEligibilityStage") or "")
-    if facts.get("isHolding") and _float_value(facts.get("profitLossRate")) < 0 and add_buy_stage not in {"", "NONE"}:
+    add_buy_assessment = _add_buy_assessment_from_matches(facts, matches)
+    if facts.get("isHolding") and _float_value(facts.get("profitLossRate")) < 0 and add_buy_assessment.get("state") != "none":
         _append_driver(
             rows,
             seen,
             "addBuy",
-            "support" if add_buy_stage in {"FLOW_DEFENSE", "ADD_BUY_WATCH", "ADD_BUY_REVIEW"} else "risk",
-            "추가매수 판단",
-            str(facts.get("addBuyEligibilityLabel") or "추가매수 보류")
-            + " · 회복 확인 "
-            + _plain_number(facts.get("lossRecoverySignalCount"))
-            + "개",
-            ["addBuyEligibilityStage", "lossRecoverySignalCount", "jointSmartMoneyInflow", "investmentStrategyProfile"],
+            "support" if add_buy_assessment.get("state") == "allow" else "risk" if add_buy_assessment.get("state") in {"block", "conflict"} else "counter",
+            "추가매수 관계",
+            str(add_buy_assessment.get("statusText") or ""),
+            ["activeRules", "jointSmartMoneyInflow", "investmentStrategyProfile"],
         )
 
     btc24 = _float_value(facts.get("btcChange24h"))
@@ -696,19 +725,19 @@ def execution_plan_from_relation_context(
         _append_unique(next_checks, "USD/KRW, 외화 노출 비중, 현지 통화 기준 주가 변화를 나눠 확인")
         _append_unique(weaken_conditions, "환율이 기준 구간으로 돌아오거나 외화 노출이 줄면 신호 약화")
 
-    add_buy_assessment = _add_buy_assessment_from_facts(facts)
-    add_buy_stage = str(add_buy_assessment.get("stage") or "")
-    if facts.get("isHolding") and pnl < 0 and add_buy_stage not in {"", "NONE"}:
-        if add_buy_stage == "ADD_BUY_REVIEW":
+    add_buy_assessment = _add_buy_assessment_from_matches(facts, matches)
+    add_buy_state = str(add_buy_assessment.get("state") or "none")
+    if facts.get("isHolding") and pnl < 0 and add_buy_state != "none":
+        if add_buy_state == "allow":
             _append_unique(support_signals, str(add_buy_assessment.get("statusText") or "조건부 추가매수 검토 여지"))
             _append_unique(next_checks, "추가매수는 소액 분할, 비중 한도, 손실 제한선을 먼저 정한 뒤 검토")
-        elif add_buy_stage in {"ADD_BUY_WATCH", "FLOW_DEFENSE"}:
+        elif add_buy_state in {"watch", "defense"}:
             _append_unique(counter_signals, str(add_buy_assessment.get("statusText") or "수급 방어 근거 확인"))
             _append_unique(blocked_actions, "회복 확인 전 일괄 추가매수")
-        elif add_buy_stage == "ADD_BUY_BLOCKED":
+        elif add_buy_state in {"block", "conflict"}:
             _append_unique(blocked_actions, "회복 확인 없는 추가매수")
         for reason in list(add_buy_assessment.get("blockedReasons") or [])[:3]:
-            _append_unique(risk_signals, "추가매수 보류 사유: " + str(reason))
+            _append_unique(risk_signals, "추가매수 차단 관계: " + str(reason))
         for check in list(add_buy_assessment.get("nextChecks") or [])[:2]:
             _append_unique(next_checks, str(check))
 
@@ -807,13 +836,6 @@ def execution_plan_from_relation_context(
             "smartMoneyNetVolume": facts.get("smartMoneyNetVolume"),
             "jointSmartMoneyInflow": facts.get("jointSmartMoneyInflow"),
             "jointSmartMoneyOutflow": facts.get("jointSmartMoneyOutflow"),
-            "lossSeverityBand": facts.get("lossSeverityBand"),
-            "lossSmartMoneyDefenseActive": facts.get("lossSmartMoneyDefenseActive"),
-            "lossRecoverySignalCount": facts.get("lossRecoverySignalCount"),
-            "lossRecoverySignalLabels": list(facts.get("lossRecoverySignalLabels") or [])[:8],
-            "addBuyEligibilityStage": facts.get("addBuyEligibilityStage"),
-            "addBuyEligibilityLabel": facts.get("addBuyEligibilityLabel"),
-            "addBuyBlockedReasons": list(facts.get("addBuyBlockedReasons") or [])[:5],
             "investmentStrategyProfile": facts.get("investmentStrategyProfile"),
             "investmentStrategyProfileLabel": facts.get("investmentStrategyProfileLabel"),
             "strategyLossTolerancePct": facts.get("strategyLossTolerancePct"),

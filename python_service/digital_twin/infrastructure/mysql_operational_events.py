@@ -54,6 +54,11 @@ from .mysql_operational_helpers import (
 
 
 def insert_domain_event_with_connection(connection, event: DomainEvent) -> None:
+    # ``payload_json`` is the canonical payload. Keeping it again inside
+    # ``event_json`` doubled the largest monitoring rows and amplified every
+    # ABox cycle. Readers merge the two columns for backward compatibility.
+    event_metadata = event.to_dict()
+    event_metadata.pop("payload", None)
     connection.execute(
         """
         INSERT IGNORE INTO domain_events (
@@ -68,6 +73,18 @@ def insert_domain_event_with_connection(connection, event: DomainEvent) -> None:
             event.occurred_at,
             event.correlation_id,
             json_dumps(event.payload),
-            json_dumps(event.to_dict()),
+            json_dumps(event_metadata),
         ),
     )
+
+
+def domain_event_from_row(row) -> DomainEvent:
+    event_payload = _json_loads(row.get("event_json"), {})
+    if not event_payload.get("payload"):
+        event_payload["payload"] = _json_loads(row.get("payload_json"), {})
+    event_payload.setdefault("eventId", row.get("event_id"))
+    event_payload.setdefault("name", row.get("name"))
+    event_payload.setdefault("aggregateId", row.get("aggregate_id"))
+    event_payload.setdefault("occurredAt", row.get("occurred_at"))
+    event_payload.setdefault("correlationId", row.get("correlation_id"))
+    return DomainEvent.from_dict(event_payload)

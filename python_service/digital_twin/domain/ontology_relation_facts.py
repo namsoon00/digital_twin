@@ -855,89 +855,6 @@ def _loss_severity_band(pnl: float, loss_tolerance: float) -> str:
     return "mild_loss"
 
 
-def _loss_smart_money_facts(facts: Dict[str, object]) -> Dict[str, object]:
-    pnl = number(facts.get("profitLossRate"))
-    loss_tolerance = number(facts.get("strategyLossTolerancePct")) or -8.0
-    max_position_weight = number(facts.get("strategyMaxPositionWeightPct")) or 25.0
-    watch_min = int(number(facts.get("strategyAddBuyWatchSignalMin")) or 3)
-    review_min = int(number(facts.get("strategyAddBuyReviewSignalMin")) or 5)
-    allow_review = bool(facts.get("strategyAllowLossAddBuyReview"))
-    is_holding = bool(facts.get("isHolding"))
-    joint_inflow = bool(facts.get("jointSmartMoneyInflow"))
-    direct_risk_news = int(number(facts.get("directRiskNewsCount")))
-    position_weight = number(facts.get("positionAccountWeight")) or number(facts.get("positionWeight"))
-    ma5_recovered = bool(facts.get("ma5")) and number(facts.get("ma5Distance")) >= 0
-    ma20_recovered = bool(facts.get("ma20")) and number(facts.get("ma20Distance")) >= 0
-    ma60_supported = bool(facts.get("ma60")) and number(facts.get("ma60Distance")) >= -1.0
-    volume_confirmed = number(facts.get("volumeRatio")) >= 1.0
-    trade_confirmed = number(facts.get("tradeStrength")) >= 100
-    bid_confirmed = number(facts.get("bidAskImbalance")) >= 5
-    trend_recovery = bool(facts.get("supportRetest") or facts.get("recoveryAttempt") or number(facts.get("priceChangeRate")) >= 1.0)
-    news_clear = direct_risk_news == 0
-    position_weight_ok = not position_weight or position_weight <= max_position_weight
-    avoid_averaging_down = bool(facts.get("avoidAveragingDown"))
-    recovery_flags = {
-        "5일선 회복": ma5_recovered,
-        "20일선 회복": ma20_recovered,
-        "60일선 부근 지지": ma60_supported,
-        "거래량 확인": volume_confirmed,
-        "체결강도 확인": trade_confirmed,
-        "매수 호가 우위": bid_confirmed,
-        "가격 회복 시도": trend_recovery,
-        "직접 악재 뉴스 없음": news_clear,
-    }
-    recovery_count = sum(1 for value in recovery_flags.values() if value)
-    loss_active = is_holding and pnl < 0
-    stage = "NONE"
-    label = "추가매수 판단 대상 아님"
-    blocked_reasons: List[str] = []
-    opened_reasons = [key for key, value in recovery_flags.items() if value]
-    if loss_active and not joint_inflow:
-        stage = "ADD_BUY_BLOCKED"
-        label = "추가매수 보류"
-        blocked_reasons.append("외국인·기관 동반 순매수 없음")
-    elif loss_active and joint_inflow:
-        stage = "FLOW_DEFENSE"
-        label = "매도 강도 완화"
-        review_ready = (
-            allow_review
-            and recovery_count >= review_min
-            and news_clear
-            and position_weight_ok
-            and (ma20_recovered or (ma5_recovered and ma60_supported))
-        )
-        profile_blocks_loss_add = avoid_averaging_down and not review_ready
-        if direct_risk_news:
-            blocked_reasons.append("직접 악재 뉴스 있음")
-        if not position_weight_ok:
-            blocked_reasons.append("종목 비중이 투자 성향 한도보다 큼")
-        if profile_blocks_loss_add:
-            blocked_reasons.append("종목 타입 정책상 손실 구간 추가매수 회피")
-        if recovery_count < watch_min:
-            blocked_reasons.append("회복 확인 신호 부족")
-        if recovery_count >= watch_min and not profile_blocks_loss_add:
-            stage = "ADD_BUY_WATCH"
-            label = "추가매수 관찰"
-        elif recovery_count >= watch_min and profile_blocks_loss_add:
-            stage = "FLOW_DEFENSE"
-            label = "수급 방어 관찰"
-        if review_ready:
-            stage = "ADD_BUY_REVIEW"
-            label = "조건부 추가매수 검토"
-    return {
-        "lossSeverityBand": _loss_severity_band(pnl, loss_tolerance),
-        "lossSmartMoneyDefenseActive": bool(loss_active and joint_inflow),
-        "lossRecoverySignalCount": recovery_count,
-        "lossRecoverySignalLabels": opened_reasons,
-        "addBuyEligibilityStage": stage,
-        "addBuyEligibilityLabel": label,
-        "addBuyBlockedReasons": blocked_reasons,
-        "addBuyWatchSignalMin": watch_min,
-        "addBuyReviewSignalMin": review_min,
-        "addBuyPolicy": facts.get("strategyAddBuyPolicy"),
-    }
-
-
 def _missing(key: str, label: str, effect: str, status: str = "missing", source: str = "") -> Dict[str, str]:
     item = {"key": key, "label": label, "effect": effect, "status": status}
     if source:
@@ -1230,7 +1147,6 @@ def position_signal_facts(
     facts.update(_external_quality_facts(external_signals))
     facts.update(macro_context_facts(position, portfolio, external_signals))
     facts.update(_valuation_facts(position, external_signals, settings))
-    facts.update(_loss_smart_money_facts(facts))
     missing: List[Dict[str, str]] = []
     if not facts["currentPrice"]:
         missing.append(_missing("currentPrice", "현재가", "가격·이동평균 관계 판단 신뢰도가 낮아집니다."))

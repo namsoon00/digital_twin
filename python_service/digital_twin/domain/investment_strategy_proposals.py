@@ -3,6 +3,7 @@ import json
 from dataclasses import asdict, dataclass, field
 from typing import Dict, Iterable, List
 
+from .ontology_decision_state import RETIRED_AGGREGATE_FIELDS
 from .portfolio import utc_now_iso
 
 
@@ -17,6 +18,29 @@ PROMOTABLE_STRATEGY_STATUSES = {
     STRATEGY_STATUS_VALIDATED,
     STRATEGY_STATUS_APPROVED,
 }
+
+# Strategy proposals are governance artifacts, not a second investment-score
+# channel.  Older rows can contain nested experiment/readiness scores; remove
+# them at both read and write boundaries so a legacy payload cannot re-enter
+# the API or be persisted again.
+RETIRED_STRATEGY_PROPOSAL_SCORE_FIELDS = RETIRED_AGGREGATE_FIELDS | {
+    "confidence",
+    "qualityScore",
+    "readinessScore",
+    "score",
+}
+
+
+def without_retired_strategy_score_fields(value: object) -> object:
+    if isinstance(value, dict):
+        return {
+            str(key): without_retired_strategy_score_fields(item)
+            for key, item in value.items()
+            if str(key) not in RETIRED_STRATEGY_PROPOSAL_SCORE_FIELDS
+        }
+    if isinstance(value, (list, tuple)):
+        return [without_retired_strategy_score_fields(item) for item in value]
+    return value
 
 
 @dataclass
@@ -50,7 +74,8 @@ class InvestmentStrategyProposal:
     retired_at: str = ""
 
     def to_dict(self) -> Dict[str, object]:
-        payload = asdict(self)
+        payload = without_retired_strategy_score_fields(asdict(self))
+        payload = dict(payload)
         payload["id"] = payload.pop("proposal_id")
         payload["targetUniverse"] = payload.pop("target_universe")
         payload["entryConditions"] = payload.pop("entry_conditions")
@@ -75,7 +100,7 @@ class InvestmentStrategyProposal:
 
     @staticmethod
     def from_dict(payload: Dict[str, object]):
-        payload = dict(payload or {})
+        payload = dict(without_retired_strategy_score_fields(dict(payload or {})))
         return InvestmentStrategyProposal(
             proposal_id=str(payload.get("id") or payload.get("proposalId") or payload.get("proposal_id") or ""),
             title=clean_text(payload.get("title") or "Investment strategy proposal"),

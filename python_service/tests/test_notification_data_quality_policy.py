@@ -15,6 +15,8 @@ from digital_twin.domain.notification_rules import (
     evaluate_notification_rule,
     notification_state_group_key,
 )
+from digital_twin.domain.notification_rule_evaluator import similarity_bypass_match
+from digital_twin.domain.notification_rule_models import SimilarityBypassCondition
 from digital_twin.domain.data_freshness import (
     evaluate_notification_data_freshness,
     sanitize_notification_context_for_freshness,
@@ -104,6 +106,25 @@ class NotificationDataQualityPolicyTests(unittest.TestCase):
         self.assertFalse(decision.should_send)
         self.assertEqual("stale", decision.status)
         self.assertEqual(4, decision.age_minutes)
+
+    def test_blocked_review_level_never_bypasses_cooldown_as_an_upgrade(self):
+        condition = SimilarityBypassCondition(
+            "review_level_upgrade",
+            "확인 단계 상승",
+            "review_level_upgrade",
+            field="ontologyInsight.reviewLevel",
+        )
+        job = SimpleNamespace(context={"ontologyInsight": {"reviewLevel": "blocked"}})
+
+        matched, reason = similarity_bypass_match(
+            condition,
+            job,
+            {"ontologyInsight": {"reviewLevel": "immediate"}},
+            SimpleNamespace(),
+        )
+
+        self.assertFalse(matched)
+        self.assertEqual("", reason)
 
     def test_ignored_stale_kis_values_are_removed_before_ai_enrichment(self):
         context = {

@@ -393,6 +393,8 @@ def news_relevance_state(relation_scope: object, relevance_score: object = 0) ->
         return "related"
     if scope == "market":
         return "context"
+    # Compatibility migration for old stored articles.  New collection writes
+    # the categorical relation scope and strips this value before projection.
     if number(relevance_score) >= 80:
         return "direct"
     if number(relevance_score) >= 50:
@@ -403,12 +405,7 @@ def news_relevance_state(relation_scope: object, relevance_score: object = 0) ->
 
 
 def news_source_trust_state(source_reliability: object) -> str:
-    """Map legacy persisted source values into the public categorical state.
-
-    Older rows can still contain a numeric source reliability.  New analysis
-    never emits it, but this migration helper lets old rows participate in the
-    same state-based policy until retention removes them.
-    """
+    """Map legacy stored values during the categorical-state migration only."""
     reliability = number(source_reliability)
     if reliability > 1:
         reliability /= 100.0
@@ -434,11 +431,13 @@ def source_trust_state_for_source(source: object, provider: object = "") -> str:
         return "trusted"
     if any(token in text for token in MEDIUM_RELIABILITY_SOURCE_TERMS):
         return "standard"
+    # An aggregator identifies a delivery channel, not the publisher.  Do not
+    # promote it until the article source itself is known.
     if any(token in provider_text for token in ["google news", "google_rss", "gdelt"]):
-        return "standard"
+        return "unknown"
     if any(token in text for token in ["yahoo finance", "investing"]):
         return "standard"
-    return "standard"
+    return "unknown"
 
 
 def news_materiality_state(
@@ -453,6 +452,8 @@ def news_materiality_state(
     if explicit_state in NEWS_MATERIALITY_STATE_ORDER:
         return explicit_state
     event = str(event_type or "").strip().lower()
+    # Compatibility migration for old rows.  New article analysis writes the
+    # categorical state and removes the numeric source field before ABox use.
     materiality = number(materiality_score)
     if materiality >= 75 or (materiality >= 65 and event in {"earnings", "guidance", "regulation", "capital_policy"}):
         return "material"

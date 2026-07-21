@@ -99,64 +99,18 @@ VALIDATION_STATE_LABELS = {
     "blocked": "판단 보류",
 }
 
-REVIEW_LEVEL_RANK = {level: index for index, level in enumerate(REVIEW_LEVELS)}
+# ``blocked`` describes unavailable judgement, not a stronger investment
+# action.  Keep it outside the escalation order so it cannot suppress a
+# cooldown or win a merge merely because of its array position.
+ACTIONABLE_REVIEW_LEVELS = ("normal", "observe", "check", "act", "immediate")
+REVIEW_LEVEL_RANK = {
+    **{level: index for index, level in enumerate(ACTIONABLE_REVIEW_LEVELS)},
+    "blocked": -1,
+}
 
 
 ACTION_LEVEL_ORDER = ("reference", "watch", "review", "action", "urgent")
-
-# The order is a deterministic semantic tie-breaker, not a score.  Earlier
-# stages protect an existing position or block an unsafe order first.
-DECISION_STAGE_ORDER = (
-    "LOSS_CUT",
-    "BREAKDOWN_ACCELERATION",
-    "BREAKOUT_FAILURE",
-    "TEMPORAL_ACTION",
-    "LIQUIDITY_ACTION",
-    "REBALANCE_ACTION",
-    "ADD_BUY_BLOCKED",
-    "LOSS_REDUCE",
-    "SUPPORT_RETEST_FAILED",
-    "NEWS_RISK",
-    "DISCLOSURE_REVIEW",
-    "DISTRIBUTION_REVIEW",
-    "LIQUIDITY_REVIEW",
-    "FLOW_DEFENSE",
-    "FACTOR_CROWDING",
-    "REBALANCE_REVIEW",
-    "PROFIT_SPLIT",
-    "PROFIT_PARTIAL",
-    "PROFIT_PROTECT",
-    "ADD_BUY_REVIEW",
-    "ENTRY_READY",
-    "ENTRY_SPLIT_BUY",
-    "ENTRY_WAIT",
-    "RECOVERY_CONFIRM",
-    "SUPPORT_RETEST",
-    "NEWS_CONFIRMATION",
-    "MACRO_REGIME",
-    "RATE_ACTION",
-    "FX_ACTION",
-    "RATE_REVIEW",
-    "FX_REVIEW",
-    "VALUATION_RISK",
-    "VALUATION_OPPORTUNITY",
-    "VALUATION_REVIEW",
-    "BTC_REDUCE",
-    "BTC_REVIEW",
-    "MARKET_STRUCTURE",
-    "TEMPORAL_RISK",
-    "TEMPORAL_DEFENSE",
-    "SECTOR_NEWS",
-    "FLOW_WATCH",
-    "ADD_BUY_WATCH",
-    "ENTRY_WATCH",
-    "RELATION_WATCH",
-    "EXECUTION_OK",
-    "HOLD_KEEP",
-    "LOSS_WATCH",
-    "DATA_CONFLICT",
-)
-
+ACTION_LEVEL_RANK = {level: index for index, level in enumerate(ACTION_LEVEL_ORDER)}
 
 def _known(value: object, allowed: Iterable[str], fallback: str) -> str:
     text = str(value or "").strip().lower()
@@ -288,21 +242,20 @@ def validation_state_for(
     return "ready"
 
 
-def semantic_relation_sort_key(relation: Dict[str, object]) -> Tuple[int, int, int, str]:
+def semantic_relation_sort_key(relation: Dict[str, object]) -> Tuple[int, int, str, str]:
+    """Sort TypeDB relations without a Python stage-priority policy.
+
+    The relation's TypeDB-owned action level and evidence role provide the
+    stable tie-breaker.  ``decisionStage`` is deliberately opaque here: stage
+    ordering belongs to the authored TypeDB rule data, not to a hidden Python
+    list that can silently override newly added stages.
+    """
     relation = relation or {}
     stage = str(relation.get("decisionStage") or "").strip()
     level = str(relation.get("actionLevel") or "reference").strip().lower()
     role = evidence_role_from_relation(relation)
-    try:
-        stage_index = DECISION_STAGE_ORDER.index(stage)
-    except ValueError:
-        stage_index = len(DECISION_STAGE_ORDER)
-    try:
-        level_index = ACTION_LEVEL_ORDER.index(level)
-    except ValueError:
-        level_index = 0
     role_index = {"blocking": 0, "risk": 1, "counter": 2, "support": 3, "context": 4}.get(role, 5)
-    return (stage_index, -level_index, role_index, str(relation.get("ruleId") or ""))
+    return (-ACTION_LEVEL_RANK.get(level, -1), role_index, stage, str(relation.get("ruleId") or ""))
 
 
 def state_payload(review_level: str, data_state: str, change_state: str, conflict_state: str) -> Dict[str, object]:

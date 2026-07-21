@@ -47,6 +47,14 @@ class OntologyRuleMatch:
     reference_only: bool = False
     prompt_hint: str = ""
     evidence_state: Dict[str, object] = field(default_factory=dict)
+    # Keep TypeDB RuleBox decision metadata with the match. The execution
+    # guide must describe native allowed/blocked relations, not reclassify
+    # them from raw facts in Python.
+    decision_stage: str = ""
+    action_group: str = ""
+    action_level: str = ""
+    decision_label: str = ""
+    decision_tone: str = ""
 
     def to_dict(self) -> Dict[str, object]:
         payload = asdict(self)
@@ -55,6 +63,11 @@ class OntologyRuleMatch:
         payload["dataState"] = payload.pop("data_state")
         payload["evidenceRole"] = payload.pop("evidence_role")
         payload["evidenceState"] = payload.pop("evidence_state")
+        payload["decisionStage"] = payload.pop("decision_stage")
+        payload["actionGroup"] = payload.pop("action_group")
+        payload["actionLevel"] = payload.pop("action_level")
+        payload["decisionLabel"] = payload.pop("decision_label")
+        payload["decisionTone"] = payload.pop("decision_tone")
         return payload
 
 

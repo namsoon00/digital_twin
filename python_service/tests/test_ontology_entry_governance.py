@@ -79,7 +79,7 @@ class OntologyEntryGovernanceTests(unittest.TestCase):
         self.assertEqual("regular", facts["volumePaceSession"])
         self.assertIn("미장 정규장", facts["volumePaceSessionLabel"])
 
-    def test_loss_holding_smart_money_facts_are_available_for_typedb_rules(self):
+    def test_loss_holding_smart_money_inputs_are_available_for_typedb_rules(self):
         position = Position(
             symbol="000660",
             name="SK하이닉스",
@@ -113,9 +113,9 @@ class OntologyEntryGovernanceTests(unittest.TestCase):
 
         self.assertTrue(facts["isHolding"])
         self.assertTrue(facts["jointSmartMoneyInflow"])
-        self.assertEqual("FLOW_DEFENSE", facts["addBuyEligibilityStage"])
         self.assertGreater(facts["positionAccountWeight"], 0)
         self.assertNotIn("decision", facts)
+        self.assertNotIn("addBuyEligibilityStage", facts)
 
     def test_profitable_holding_add_buy_inputs_are_facts_not_python_judgement(self):
         position = Position(

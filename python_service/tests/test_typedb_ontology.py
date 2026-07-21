@@ -321,12 +321,17 @@ class TypeDBOntologyRepositoryTests(unittest.TestCase):
         selected_ids = [item["ruleId"] for item in plan["selectedEntries"]]
         skipped = {item["ruleId"]: item for item in plan["skippedEntries"]}
 
-        self.assertEqual(1, len(selected_ids))
+        self.assertGreater(len(selected_ids), 1)
         self.assertIn("graph.holding.trend_transition.risk.v1", selected_ids)
         self.assertEqual("not-applicable", skipped["graph.winner_momentum.add_buy_review.v1"]["status"])
-        self.assertEqual("deferred-by-query-budget", skipped["graph.loss_guard.breakdown.v1"]["status"])
+        self.assertNotIn("graph.loss_guard.breakdown.v1", skipped)
+        self.assertFalse(any(
+            item.get("status") == "deferred-by-query-budget"
+            for item in plan["skippedEntries"]
+        ))
+        self.assertEqual(0, plan["queryLimit"])
 
-    def test_typedb_native_rule_execution_plan_reserves_realtime_budget_for_temporal_rules(self):
+    def test_typedb_native_rule_execution_plan_never_starves_non_temporal_rules(self):
         rules = default_graph_inference_rules()
         plan = typedb_native_rule_execution_plan(
             rules,
@@ -342,11 +347,12 @@ class TypeDBOntologyRepositoryTests(unittest.TestCase):
 
         selected_ids = [item["ruleId"] for item in plan["selectedEntries"]]
 
-        self.assertEqual(10, len(selected_ids))
-        self.assertTrue(all(
-            rule_id.startswith("graph.temporal.")
-            or rule_id == "graph.watchlist.temporal.recovery_entry.v1"
-            for rule_id in selected_ids
+        self.assertGreater(len(selected_ids), 10)
+        self.assertTrue(any(rule_id.startswith("graph.temporal.") for rule_id in selected_ids))
+        self.assertTrue(any(not rule_id.startswith("graph.temporal.") for rule_id in selected_ids))
+        self.assertFalse(any(
+            item.get("status") == "deferred-by-query-budget"
+            for item in plan["skippedEntries"]
         ))
         self.assertIn("graph.temporal.persistent_decline.risk.v1", selected_ids)
         self.assertIn("graph.temporal.stale_observation.block.v1", selected_ids)
@@ -446,6 +452,32 @@ class TypeDBOntologyRepositoryTests(unittest.TestCase):
         self.assertFalse(result["nativeQueryUsed"])
         self.assertEqual(1, result["readTransactionCount"])
         self.assertEqual("query-timeout", result["skippedRules"][0]["status"])
+
+    def test_typedb_native_rule_profile_gap_blocks_partial_investment_judgement(self):
+        repository = TypeDBOntologyGraphRepository("127.0.0.1:1729", retry_count=0)
+        rule = default_graph_inference_rules()[0]
+
+        class FakeDriver:
+            def transaction(self, *_args, **_kwargs):
+                raise AssertionError("A non-native rule profile must not execute a partial query")
+
+        driver = FakeDriver()
+        imported = (object, object, object, object, SimpleNamespace(READ="read"))
+        with patch.object(repository, "driver_imports", return_value=(imported, None)), \
+                patch.object(repository, "open_driver", return_value=driver), \
+                patch.object(repository, "ensure_database"), \
+                patch.object(repository, "close_driver"), \
+                patch.object(repository, "active_abox_rule_context", return_value={
+                    "status": "ok",
+                    "relationTypesBySymbol": {"005930": ["HAS_RISK_BUDGET", "BREAKS_LEVEL"]},
+                }), \
+                patch("digital_twin.infrastructure.typedb_ontology.typedb_native_rule_profile", return_value={"status": "partial"}):
+            result = repository.match_typedb_native_rules([rule], target_symbols=["005930"])
+
+        self.assertEqual("partial", result["status"])
+        self.assertFalse(result["nativeQueryUsed"])
+        self.assertEqual(0, result["readQueryCount"])
+        self.assertEqual("partial", result["skippedRules"][0]["status"])
 
     def test_typedb_abox_delete_query_limits_each_transaction(self):
         repository = TypeDBOntologyGraphRepository("127.0.0.1:1729")
@@ -2289,7 +2321,7 @@ class TypeDBOntologyRepositoryTests(unittest.TestCase):
             workers = service_manager.worker_specs()
 
         self.assertIn("typedb", workers)
-        self.assertEqual("typedb", next(iter(workers.keys())))
+        self.assertEqual(["mysql", "typedb"], list(workers.keys())[:2])
         command = workers["typedb"]["command"]
         self.assertIn("server", command)
         self.assertIn("--server.listen-address", command)
@@ -2430,14 +2462,14 @@ class TypeDBOntologyRepositoryTests(unittest.TestCase):
                 patch.object(service_manager, "stop", return_value=0) as stop, \
                 patch.object(service_manager, "start", return_value=0) as start:
             self.assertEqual(0, service_manager.restart())
-            stop.assert_called_once_with(excluded_roles={"typedb"})
+            stop.assert_called_once_with(excluded_roles={"typedb"}, include_supervisor=False)
             start.assert_called_once_with(excluded_roles={"typedb"})
 
         with patch.object(service_manager, "worker_specs", return_value=specs), \
                 patch.object(service_manager, "stop", return_value=0) as stop, \
                 patch.object(service_manager, "start", return_value=0) as start:
             self.assertEqual(0, service_manager.restart(restart_typedb=True))
-            stop.assert_called_once_with(excluded_roles=set())
+            stop.assert_called_once_with(excluded_roles=set(), include_supervisor=False)
             start.assert_called_once_with(excluded_roles=set())
 
     def test_service_manager_restart_starts_typedb_when_it_is_down(self):
@@ -2448,8 +2480,29 @@ class TypeDBOntologyRepositoryTests(unittest.TestCase):
                 patch.object(service_manager, "stop", return_value=0) as stop, \
                 patch.object(service_manager, "start", return_value=0) as start:
             self.assertEqual(0, service_manager.restart())
-            stop.assert_called_once_with(excluded_roles=set())
+            stop.assert_called_once_with(excluded_roles=set(), include_supervisor=False)
             start.assert_called_once_with(excluded_roles=set())
+
+    def test_service_manager_stop_detaches_launch_agent_before_supervisor_signal(self):
+        with tempfile.TemporaryDirectory() as temp:
+            launch_agent = Path(temp) / "com.orbitalpha.services.plist"
+            launch_agent.write_text("plist", encoding="utf-8")
+            with patch.object(service_manager, "launch_agent_path", return_value=launch_agent), \
+                    patch.object(service_manager.shutil, "which", return_value="/bin/launchctl"), \
+                    patch.object(service_manager.subprocess, "run") as run, \
+                    patch.object(service_manager, "read_pid", return_value=123), \
+                    patch.object(service_manager, "command_for_pid", return_value="monitor_service.py supervise"), \
+                    patch.object(service_manager.os, "kill") as kill, \
+                    patch.object(service_manager, "pid_exists", return_value=False), \
+                    patch.object(service_manager, "remove_pid"):
+                service_manager.stop_supervisor()
+
+        run.assert_called_once_with(
+            ["/bin/launchctl", "bootout", "gui/" + str(service_manager.os.getuid()), str(launch_agent)],
+            capture_output=True,
+            text=True,
+        )
+        kill.assert_called_once_with(123, service_manager.signal.SIGTERM)
 
     def test_typedb_retention_resets_projection_data_when_size_exceeds_limit(self):
         with tempfile.TemporaryDirectory() as temp:

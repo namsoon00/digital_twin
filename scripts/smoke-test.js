@@ -2284,7 +2284,7 @@ async function checkNormalMode(port, context) {
   assertOk(settingsPayload.settings.ontologyRelationRules.indexOf("holding.loss_guard.breakdown.v1") >= 0, "설정 API의 기본 관계 규칙이 비어 있습니다.");
   assertOk(String(settingsPayload.settings.temporalWindowPeriods || "").indexOf("1D=1:2") >= 0, "설정 API의 기간 판단 구간 기본값이 비어 있습니다.");
   assertOk(String(settingsPayload.settings.temporalWindowHistoryLimit || "") === "96", "설정 API의 기간 히스토리 제한 기본값이 맞지 않습니다.");
-  assertOk(settingsPayload.settings.ontologyReasoningUrgentReviewLevels === "act,immediate,blocked", "설정 API의 긴급 확인 단계 기본값이 맞지 않습니다.");
+  assertOk(settingsPayload.settings.ontologyReasoningUrgentReviewLevels === "act,immediate", "설정 API의 긴급 확인 단계 기본값이 맞지 않습니다.");
   assertOk(settingsPayload.settings.investmentBrainResearchMinimumSourceTrustState === "standard", "설정 API의 최소 출처 신뢰 상태 기본값이 맞지 않습니다.");
   assertOk(String(settingsPayload.settings.alertThresholds || "").indexOf("graphSignal") < 0, "설정 API의 실제 수치 기준에 제거된 그래프 점수 기준이 남아 있습니다.");
   assertOk(Object.prototype.hasOwnProperty.call(settingsPayload.settings, "appTheme"), "설정 API에 화면 테마 필드가 없습니다.");
@@ -2403,7 +2403,7 @@ async function checkNormalMode(port, context) {
   assertOk(savedSettingsPayload.settings.kisMarketSignalCacheMinutes === "7", "저장된 KIS 수급 캐시 설정이 응답에 없습니다.");
   assertOk(savedSettingsPayload.settings.watchlistSymbols === "TSLA,AAPL,NVDA", "저장된 관심 종목 값이 응답에 없습니다.");
   assertOk(savedSettingsPayload.settings.alertRules.indexOf("investmentInsight=1") >= 0, "저장된 알림 규칙이 응답에 없습니다.");
-  assertOk(savedSettingsPayload.settings.ontologyReasoningUrgentReviewLevels === "act,immediate,blocked", "저장된 긴급 확인 단계 설정이 응답에 없습니다.");
+  assertOk(savedSettingsPayload.settings.ontologyReasoningUrgentReviewLevels === "act,immediate", "차단 상태를 제외한 긴급 확인 단계가 저장 응답에 없습니다.");
   assertOk(savedSettingsPayload.settings.investmentBrainResearchMinimumSourceTrustState === "trusted", "저장된 최소 출처 신뢰 상태가 응답에 없습니다.");
   assertOk(!Object.prototype.hasOwnProperty.call(savedSettingsPayload.settings, "modelDecisionThresholds"), "저장 응답이 제거된 점수형 모델 판단 기준을 노출합니다.");
   assertOk(savedSettingsPayload.settings.appTheme === "dark", "저장된 화면 테마 값이 응답에 없습니다.");

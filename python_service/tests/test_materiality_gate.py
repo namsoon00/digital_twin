@@ -7,7 +7,11 @@ from types import SimpleNamespace
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from digital_twin.application.news_collection_service import NewsCollectionRunner
-from digital_twin.application.ontology_reasoning_service import OntologyReasoningRunner
+from digital_twin.application.ontology_reasoning_service import (
+    OntologyReasoningRunner,
+    event_order_key,
+    event_review_level,
+)
 from digital_twin.domain.accounts import AccountConfig
 from digital_twin.domain.events import DomainEvent, ONTOLOGY_REASONING_REQUESTED, RESEARCH_EVIDENCE_COLLECTED, ontology_reasoning_requested_event
 from digital_twin.domain.investment_research import NewsCollectionTarget, ResearchEvidence
@@ -18,6 +22,35 @@ from digital_twin.infrastructure.kis_realtime_ws import KISRealtimeSymbolSelecto
 
 
 class MaterialityGateTests(unittest.TestCase):
+    def test_blocked_materiality_is_not_scheduled_as_urgent_investment_work(self):
+        source = DomainEvent(name="market_data.collected", aggregate_id="market:KR", payload={})
+        blocked = ontology_reasoning_requested_event(
+            source,
+            "market-data-update",
+            ["005930"],
+            changed_count=1,
+            fact_types=["MarketQuote"],
+            materiality_assessments=[{"reviewLevel": "blocked"}],
+        )
+        immediate = ontology_reasoning_requested_event(
+            source,
+            "market-data-update",
+            ["000660"],
+            changed_count=1,
+            fact_types=["MarketQuote"],
+            materiality_assessments=[{"reviewLevel": "immediate"}],
+        )
+        runner = OntologyReasoningRunner(
+            event_reader=None,
+            cursor_store=None,
+            monitor_runner_factory=lambda: None,
+            settings={"ontologyReasoningUrgentReviewLevels": "act,immediate,blocked"},
+        )
+
+        self.assertEqual("blocked", event_review_level(blocked))
+        self.assertLess(event_order_key(blocked)[1], event_order_key(immediate)[1])
+        self.assertEqual({"act", "immediate"}, runner.urgent_review_levels())
+
     def test_reasoning_worker_defaults_to_small_time_bounded_symbol_batch(self):
         runner = OntologyReasoningRunner(
             event_reader=None,
@@ -972,6 +1005,53 @@ class MaterialityGateTests(unittest.TestCase):
         self.assertEqual("cooldown", result["status"])
         self.assertEqual(170, result["retryAfterSeconds"])
         self.assertEqual([], runner.cursor_store.processed_event_ids())
+
+    def test_ontology_reasoning_opens_projection_circuit_after_repeated_failures(self):
+        request = ontology_reasoning_requested_event(
+            DomainEvent(name="market_data.collected", aggregate_id="market:KR", payload={}),
+            "market-data-update",
+            ["005930"],
+            changed_count=1,
+            fact_types=["MarketQuote"],
+        )
+
+        class Reader:
+            def events(self, name="", aggregate_id="", limit=0):
+                return [request] if name == ONTOLOGY_REASONING_REQUESTED else []
+
+        class Cursor:
+            def __init__(self):
+                self.payload = {"processedEventIds": []}
+
+            def processed_event_ids(self):
+                return []
+
+            def load(self):
+                return dict(self.payload)
+
+            def save(self, payload):
+                self.payload = dict(payload or {})
+
+        cursor = Cursor()
+        runner = OntologyReasoningRunner(
+            Reader(),
+            cursor,
+            monitor_runner_factory=lambda: (_ for _ in ()).throw(AssertionError("open circuit must not project")),
+            settings={
+                "ontologyReasoningEnabled": "1",
+                "ontologyProjectionCircuitFailureThreshold": "3",
+                "ontologyProjectionCircuitCooldownSeconds": "300",
+            },
+            now_provider=lambda: datetime(2026, 7, 21, 0, 3, 0, tzinfo=timezone.utc),
+        )
+        for _index in range(3):
+            runner.record_projection_failure("native inference timeout", [{"stage": "native-rule", "status": "error"}])
+
+        result = runner.run_once()
+
+        self.assertEqual("circuit-open", result["status"])
+        self.assertEqual(300, result["retryAfterSeconds"])
+        self.assertEqual(3, result["projectionCircuit"]["consecutiveFailures"])
 
     def test_ontology_reasoning_reads_recent_events_when_supported(self):
         request = ontology_reasoning_requested_event(

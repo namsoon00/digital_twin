@@ -50,13 +50,13 @@ EXTERNAL_DART_CORP_CODES="005930=00126380;000660=00164779"
 ONTOLOGY_TYPEDB_ENABLED=1
 TYPEDB_ADDRESS=127.0.0.1:1729
 TYPEDB_USER=admin
-TYPEDB_PASSWORD=password
+TYPEDB_PASSWORD=<로컬에서 생성한 강한 비밀번호>
 TYPEDB_DATABASE=orbit_alpha_ontology
 TYPEDB_TLS_ENABLED=0
 TYPEDB_TIMEOUT_SECONDS=20
 ```
 
-`ONTOLOGY_TYPEDB_ENABLED=1`이면 `npm run python:service:start|restart|status`가 TypeDB 서버도 함께 관리합니다. TypeDB 로컬 데이터와 로그는 `data/typedb-data/`, `data/typedb-logs/`, `data/typedb.log` 아래에 저장되며 git에는 포함하지 않습니다.
+`ONTOLOGY_TYPEDB_ENABLED=1`이면 `npm run python:service:start|restart|status`가 TypeDB 서버도 함께 관리합니다. TypeDB의 gRPC/HTTP 주소는 loopback에만 바인딩하고 진단 HTTP 포트는 끕니다. 기본 비밀번호는 사용하지 않으며 `.env.local`은 파일 권한 `600`으로 유지합니다. TypeDB 로컬 데이터와 로그는 `data/typedb-data/`, `data/typedb-logs/`, `data/typedb.log` 아래에 저장되며 git에는 포함하지 않습니다.
 
 TypeDB는 원본 업무 저장소가 아니라 온톨로지 projection/read model입니다. 기본값은 하루치만 유지하도록 `TYPEDB_AUTO_RESET_ENABLED=1`, `TYPEDB_DATA_RETENTION_HOURS=24`, `TYPEDB_DATA_MAX_SIZE_MB=2048`, `TYPEDB_INFERENCE_GENERATION_KEEP_COUNT=1`로 동작합니다. 서비스 시작 전 보관 시간 또는 용량 한도를 넘은 `data/typedb-data/`는 삭제 후 재생성됩니다. 수동 정리는 TypeDB를 중지한 뒤 `npm run python:service -- typedb-maintenance --force`로 실행할 수 있습니다.
 
@@ -183,9 +183,10 @@ npm run python:service:start
 npm run python:service:status
 npm run python:service:restart
 npm run python:service:stop
+npm run python:service:supervisor:install
 ```
 
-`python:service:start`는 실시간 모니터, 비동기 모델 리뷰 worker, 알림 worker를 함께 시작합니다. Python 서비스는 계정별 연결 상태, 보유 종목 변화, 손익률/평가액 급변, 현금비중 급변, 판단 변화, 보유 타이밍을 감지합니다. 알림 메시지는 모니터링/모델 리뷰/핸드오프에서 즉시 외부 전송하지 않고 outbox인 `notification_jobs` 큐에 먼저 적재하며, 실제 텔레그램/콘솔 발송은 알림 worker 한 곳에서 순차 처리합니다. 발송 시점에는 `notification_templates`의 타입별 템플릿을 렌더링하므로 메시지 포맷 변경은 템플릿 수정만으로 반영됩니다. 모니터링 이벤트는 append-only `domain_events` 이벤트 스트림에 저장되고, 알림 outbox 작업은 source event id와 dedupe key를 함께 저장해 이벤트 재처리 시에도 중복 발송을 막습니다.
+`python:service:start`는 MySQL, TypeDB, 웹 서버와 모든 백그라운드 worker를 한 구성으로 시작합니다. `python:service:supervisor:install`은 macOS LaunchAgent를 설치해 재부팅 및 비정상 종료 뒤에도 같은 구성만 복구합니다. 웹 서버는 `127.0.0.1:3000`에서만 기동하며 점유 시 다른 포트로 우회하지 않습니다. Python 서비스는 계정별 연결 상태, 보유 종목 변화, 손익률/평가액 급변, 현금비중 급변, 판단 변화, 보유 타이밍을 감지합니다. 알림 메시지는 모니터링/모델 리뷰/핸드오프에서 즉시 외부 전송하지 않고 outbox인 `notification_jobs` 큐에 먼저 적재하며, 실제 텔레그램/콘솔 발송은 알림 worker 한 곳에서 순차 처리합니다. 발송 시점에는 `notification_templates`의 타입별 템플릿을 렌더링하므로 메시지 포맷 변경만으로 반영됩니다. 모니터링 이벤트는 append-only `domain_events` 이벤트 스트림에 저장되고, 알림 outbox 작업은 source event id와 dedupe key를 함께 저장해 이벤트 재처리 시에도 중복 발송을 막습니다.
 
 텔레그램 발송을 쓰려면 봇에게 `/start`를 보낸 뒤 계정 설정에 `notify-provider telegram`, `telegram-bot-token`, `telegram-chat-id`를 저장합니다. 자세한 구조는 `docs/python-service.md`에 정리되어 있습니다.
 

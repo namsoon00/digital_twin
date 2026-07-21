@@ -198,11 +198,18 @@ def build_ontology_projection_run(
         inference_status="",
         source_symbols=symbols,
         context_payload={
-            "sourceSnapshot": source_snapshot,
             "sourceSnapshotFingerprint": source_fingerprint,
             "sourceSnapshotReference": {
                 "accountId": str(snapshot.account_id or ""),
                 "generatedAt": str(snapshot.generated_at or ""),
+                "store": "monitor_snapshot_history",
+            },
+            "sourceSnapshotSummary": {
+                "mode": str(snapshot.mode or ""),
+                "status": str(snapshot.status or ""),
+                "positionCount": len(snapshot.positions or []),
+                "watchlistCount": len(snapshot.watchlist or []),
+                "externalSignalKeys": sorted(list((snapshot.external_signals or {}).keys()))[:80],
             },
             "targetSymbols": symbols,
             "tbox": {

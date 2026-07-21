@@ -134,12 +134,12 @@ class OntologyLabService:
             "validationWarnings": list(experiment.validation_warnings or [])[:3],
             "lastRun": {
                 key: latest.get(key)
-                for key in ["startedAt", "completedAt", "status", "relationDelta", "score", "warnings"]
+                for key in ["startedAt", "completedAt", "status", "relationDelta", "warnings"]
                 if latest.get(key) not in (None, "", [], {})
             },
             "lastResultSummary": {
                 key: result.get(key)
-                for key in ["status", "relationDelta", "score", "warningCount", "completedAt"]
+                for key in ["status", "relationDelta", "warningCount", "completedAt"]
                 if result.get(key) not in (None, "", [], {})
             },
             "promotionGate": promotion_gate,

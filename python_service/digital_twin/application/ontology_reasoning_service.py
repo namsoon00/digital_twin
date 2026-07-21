@@ -54,7 +54,10 @@ REVIEW_LEVEL_ORDER = {
     "check": 2,
     "act": 3,
     "immediate": 4,
-    "blocked": 4,
+    # ``blocked`` is an unavailable judgement, not an urgent investment
+    # condition.  Keeping it out of the escalation order prevents failed
+    # projection work from jumping ahead of a valid holding update.
+    "blocked": -1,
 }
 
 TRIGGER_ORDER = {
@@ -87,7 +90,11 @@ def materiality_assessments(event: object) -> List[Dict[str, object]]:
 
 
 def event_review_level(event: object) -> str:
-    levels = [str(item.get("reviewLevel") or "normal").strip().lower() for item in materiality_assessments(event)]
+    levels = [
+        str(item.get("reviewLevel") or "normal").strip().lower()
+        for item in materiality_assessments(event)
+    ]
+    levels = [level for level in levels if level in REVIEW_LEVEL_ORDER]
     return max(levels or ["normal"], key=lambda item: REVIEW_LEVEL_ORDER.get(item, 0))
 
 
@@ -238,11 +245,93 @@ class OntologyReasoningRunner:
     def projection_retry_seconds(self) -> int:
         return int_setting(self.settings, "ontologyReasoningProjectionRetrySeconds", 30, 5, 900)
 
+    def projection_circuit_failure_threshold(self) -> int:
+        return int_setting(self.settings, "ontologyProjectionCircuitFailureThreshold", 3, 1, 20)
+
+    def projection_circuit_cooldown_seconds(self) -> int:
+        return int_setting(self.settings, "ontologyProjectionCircuitCooldownSeconds", 300, 30, 3600)
+
+    def projection_circuit_state(self, payload: Dict[str, object] = None) -> Dict[str, object]:
+        payload = self.cursor_payload() if payload is None else dict(payload or {})
+        raw = payload.get("projectionCircuit") if isinstance(payload.get("projectionCircuit"), dict) else {}
+        return dict(raw or {})
+
+    def projection_circuit_remaining_seconds(self, payload: Dict[str, object] = None) -> int:
+        state = self.projection_circuit_state(payload)
+        return self.seconds_until(str(state.get("openUntil") or ""))
+
+    def seconds_until(self, stamp: str) -> int:
+        if not stamp:
+            return 0
+        try:
+            parsed = datetime.fromisoformat(str(stamp).replace("Z", "+00:00"))
+        except ValueError:
+            return 0
+        now = self.now_provider()
+        if now.tzinfo is None:
+            now = now.replace(tzinfo=timezone.utc)
+        return max(0, int((parsed.astimezone(timezone.utc) - now.astimezone(timezone.utc)).total_seconds()))
+
+    def record_projection_failure(self, reason: str, failures: Iterable[Dict[str, object]] = None) -> Dict[str, object]:
+        payload = self.cursor_payload()
+        previous = self.projection_circuit_state(payload)
+        count = int(previous.get("consecutiveFailures") or 0) + 1
+        now = self.now_provider()
+        if now.tzinfo is None:
+            now = now.replace(tzinfo=timezone.utc)
+        now = now.astimezone(timezone.utc)
+        threshold = self.projection_circuit_failure_threshold()
+        open_seconds = 0
+        if count >= threshold:
+            exponent = min(3, count - threshold)
+            open_seconds = min(3600, self.projection_circuit_cooldown_seconds() * (2 ** exponent))
+        state = {
+            "status": "open" if open_seconds else "closed",
+            "consecutiveFailures": count,
+            "failureThreshold": threshold,
+            "lastFailureAt": now.isoformat().replace("+00:00", "Z"),
+            "lastFailureReason": str(reason or "TypeDB projection failed.")[:500],
+            "openUntil": (
+                datetime.fromtimestamp(now.timestamp() + open_seconds, timezone.utc).isoformat().replace("+00:00", "Z")
+                if open_seconds
+                else ""
+            ),
+            "recentFailures": [
+                {
+                    "stage": str(item.get("stage") or ""),
+                    "status": str(item.get("status") or ""),
+                    "reason": str(item.get("reason") or "")[:180],
+                }
+                for item in list(failures or [])[:5]
+                if isinstance(item, dict)
+            ],
+        }
+        payload["projectionCircuit"] = state
+        self.save_cursor_payload(payload)
+        return state
+
+    def reset_projection_circuit(self) -> None:
+        payload = self.cursor_payload()
+        previous = self.projection_circuit_state(payload)
+        if not previous or (
+            int(previous.get("consecutiveFailures") or 0) == 0
+            and str(previous.get("status") or "closed") == "closed"
+        ):
+            return
+        payload["projectionCircuit"] = {
+            "status": "closed",
+            "consecutiveFailures": 0,
+            "failureThreshold": self.projection_circuit_failure_threshold(),
+            "lastSuccessAt": self.now_provider().astimezone(timezone.utc).isoformat().replace("+00:00", "Z"),
+            "openUntil": "",
+        }
+        self.save_cursor_payload(payload)
+
     def urgent_review_levels(self) -> set:
-        raw = str(self.settings.get("ontologyReasoningUrgentReviewLevels") or "act,immediate,blocked")
-        allowed = set(REVIEW_LEVEL_ORDER)
+        raw = str(self.settings.get("ontologyReasoningUrgentReviewLevels") or "act,immediate")
+        allowed = {"act", "immediate"}
         levels = {item.strip().lower() for item in raw.split(",") if item.strip().lower() in allowed}
-        return levels or {"act", "immediate", "blocked"}
+        return levels or {"act", "immediate"}
 
     def rule_candidate_ai_enabled(self) -> bool:
         return truthy(self.settings.get("ontologyRuleCandidateAiEnabled"), True)
@@ -786,6 +875,13 @@ class OntologyReasoningRunner:
         if now.tzinfo is None:
             now = now.replace(tzinfo=timezone.utc)
         payload["lastSuccessfulProjectionAt"] = now.astimezone(timezone.utc).isoformat().replace("+00:00", "Z")
+        payload["projectionCircuit"] = {
+            "status": "closed",
+            "consecutiveFailures": 0,
+            "failureThreshold": self.projection_circuit_failure_threshold(),
+            "lastSuccessAt": payload["lastSuccessfulProjectionAt"],
+            "openUntil": "",
+        }
         self.save_cursor_payload(payload)
 
     def run_once(self, limit: int = 0, force: bool = False) -> Dict[str, object]:
@@ -802,6 +898,19 @@ class OntologyReasoningRunner:
             }
         symbol_batches, symbols, omitted_symbol_count = self.request_symbol_batches(requests)
         cursor_payload = self.cursor_payload()
+        circuit_remaining = self.projection_circuit_remaining_seconds(cursor_payload)
+        if circuit_remaining > 0 and not force:
+            circuit = self.projection_circuit_state(cursor_payload)
+            return {
+                "status": "circuit-open",
+                "processedCount": 0,
+                "alertCount": 0,
+                "symbols": symbols,
+                "retryAfterSeconds": circuit_remaining,
+                "deferredReason": str(circuit.get("lastFailureReason") or "TypeDB projection circuit is open."),
+                "projectionCircuit": circuit,
+                "coalescedEventCount": len(work.get("coalescedEventIds") or []),
+            }
         if not force and not self.projection_due(requests, cursor_payload):
             retry_after_seconds = self.projection_cooldown_remaining_seconds(requests, cursor_payload)
             return {
@@ -825,8 +934,12 @@ class OntologyReasoningRunner:
         projection_gate = self.projection_gate(runner)
         if not projection_gate.get("ready"):
             self.mark_projection_attempt(symbols)
+            circuit = self.record_projection_failure(
+                str(projection_gate.get("reason") or "TypeDB graph cycle is not ready."),
+                projection_gate.get("results") or [],
+            )
             return {
-                "status": "deferred",
+                "status": "circuit-open" if str(circuit.get("status") or "") == "open" else "deferred",
                 "processedCount": 0,
                 "alertCount": len(alerts or []),
                 "symbols": symbols,
@@ -834,9 +947,10 @@ class OntologyReasoningRunner:
                 "configuredMaxSymbolsPerRun": self.max_symbols_per_run(),
                 "nativeTypeDbTargetSymbolLimit": self.native_typedb_target_symbol_limit() if self.native_typedb_rule_execution_enabled() else None,
                 "omittedSymbolCount": omitted_symbol_count,
-                "retryAfterSeconds": self.projection_retry_seconds(),
+                "retryAfterSeconds": self.projection_circuit_remaining_seconds() or self.projection_retry_seconds(),
                 "deferredReason": str(projection_gate.get("reason") or "TypeDB graph cycle is not ready."),
                 "projectionFailures": list(projection_gate.get("results") or []),
+                "projectionCircuit": circuit,
                 "coalescedEventCount": len(work.get("coalescedEventIds") or []),
             }
         self.mark_successful_projection()
@@ -984,4 +1098,6 @@ class OntologyReasoningRunner:
             "partialEventCount": len(progress),
             "ruleCandidateAiEnabled": self.rule_candidate_ai_enabled(),
             "ruleCandidateAiDue": self.rule_candidate_due(),
+            "projectionCircuit": self.projection_circuit_state(),
+            "projectionCircuitRetryAfterSeconds": self.projection_circuit_remaining_seconds(),
         }

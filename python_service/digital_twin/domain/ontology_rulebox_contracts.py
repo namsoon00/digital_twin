@@ -93,6 +93,11 @@ class GraphRuleDerivation:
     action_group: str = ""
     action_level: str = ""
     decision_stage: str = ""
+    # These are RuleBox/TBox-owned presentation semantics.  Runtime readers
+    # must use the values materialized with the inference relation instead of
+    # mapping a stage key through a separate Python policy table.
+    decision_label: str = ""
+    decision_tone: str = ""
     target_role: str = ""
     action_policy: str = ""
     allowed_actions: List[str] = dataclass_field(default_factory=list)
@@ -118,6 +123,8 @@ class GraphRuleDerivation:
             action_group=str(payload.get("action_group") or payload.get("actionGroup") or ""),
             action_level=str(payload.get("action_level") or payload.get("actionLevel") or ""),
             decision_stage=str(payload.get("decision_stage") or payload.get("decisionStage") or ""),
+            decision_label=str(payload.get("decision_label") or payload.get("decisionLabel") or ""),
+            decision_tone=str(payload.get("decision_tone") or payload.get("decisionTone") or ""),
             target_role=str(payload.get("target_role") or payload.get("targetRole") or ""),
             action_policy=str(payload.get("action_policy") or payload.get("actionPolicy") or ""),
             allowed_actions=string_list(payload.get("allowed_actions") or payload.get("allowedActions")),

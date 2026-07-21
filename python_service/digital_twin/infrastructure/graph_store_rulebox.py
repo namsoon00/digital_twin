@@ -338,6 +338,8 @@ def derivation_payload_from_row(row: Dict[str, object]) -> Dict[str, object]:
         "action_group": str(row.get("actionGroup") or derivation.get("action_group") or ""),
         "action_level": str(row.get("actionLevel") or derivation.get("action_level") or ""),
         "decision_stage": str(row.get("decisionStage") or row.get("derivationDecisionStage") or derivation.get("decision_stage") or derivation.get("decisionStage") or ""),
+        "decision_label": str(row.get("decisionLabel") or row.get("derivationDecisionLabel") or derivation.get("decision_label") or derivation.get("decisionLabel") or ""),
+        "decision_tone": str(row.get("decisionTone") or row.get("derivationDecisionTone") or derivation.get("decision_tone") or derivation.get("decisionTone") or ""),
         "target_role": str(row.get("targetRole") or row.get("derivationTargetRole") or derivation.get("target_role") or derivation.get("targetRole") or ""),
         "action_policy": str(row.get("actionPolicy") or row.get("derivationActionPolicy") or derivation.get("action_policy") or derivation.get("actionPolicy") or ""),
         "allowed_actions": list_of_strings(row.get("allowedActions") or row.get("derivationAllowedActions") or derivation.get("allowed_actions") or derivation.get("allowedActions")),

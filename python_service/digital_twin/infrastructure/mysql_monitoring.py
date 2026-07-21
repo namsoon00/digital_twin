@@ -7,6 +7,7 @@ from typing import Dict, Iterable, List
 from ..domain.accounts import AccountConfig
 from ..domain.repositories import MonitorAccountJob
 from .mysql_schema_tuning import ensure_mysql_monitoring_schema_tuning
+from .mysql_connection_pool import pooled_mysql_connection
 from .settings import utc_now
 
 
@@ -68,11 +69,20 @@ def ensure_mysql_database_exists(settings: Dict[str, object]) -> None:
     }
     if settings.get("unix_socket"):
         kwargs["unix_socket"] = settings["unix_socket"]
-    connection = pymysql.connect(**kwargs)
     try:
-        with connection.cursor() as cursor:
-            escaped = database.replace("`", "``")
-            cursor.execute("CREATE DATABASE IF NOT EXISTS `" + escaped + "` CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci")
+        connection = pymysql.connect(database=database, **kwargs)
+    except pymysql.err.OperationalError as error:
+        if int(error.args[0] if error.args else 0) != 1049:
+            raise
+        connection = pymysql.connect(**kwargs)
+        try:
+            with connection.cursor() as cursor:
+                escaped = database.replace("`", "``")
+                cursor.execute("CREATE DATABASE IF NOT EXISTS `" + escaped + "` CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci")
+        finally:
+            connection.close()
+        connection = pymysql.connect(database=database, **kwargs)
+    try:
         _MYSQL_DATABASE_READY.add(cache_key)
     finally:
         connection.close()
@@ -107,13 +117,15 @@ def monitor_account_job_from_row(row) -> MonitorAccountJob:
 
 
 class MySQLMonitorAccountJobStore:
+    _schema_ready = set()
+
     def __init__(self, settings: Dict[str, str] = None):
         self.runtime_settings = dict(settings or {})
         self.settings = mysql_settings(settings)
         ensure_mysql_database_exists(self.settings)
         self.ensure_schema()
 
-    def connect(self):
+    def raw_connection(self, autocommit: bool = False):
         try:
             import pymysql
             from pymysql.cursors import DictCursor
@@ -127,15 +139,31 @@ class MySQLMonitorAccountJobStore:
             "database": self.settings["database"],
             "charset": "utf8mb4",
             "cursorclass": DictCursor,
-            "autocommit": False,
+            "autocommit": autocommit,
         }
         if self.settings.get("unix_socket"):
             kwargs["unix_socket"] = self.settings["unix_socket"]
         return pymysql.connect(**kwargs)
 
+    def connect(self, autocommit: bool = False):
+        key = (
+            "orbit-alpha-operational",
+            str(self.settings.get("host") or ""),
+            int(self.settings.get("port") or 3306),
+            str(self.settings.get("user") or ""),
+            str(self.settings.get("database") or ""),
+            str(self.settings.get("unix_socket") or ""),
+        )
+        return pooled_mysql_connection(
+            key,
+            self.raw_connection,
+            autocommit=autocommit,
+            settings=self.runtime_settings,
+        )
+
     @contextmanager
     def transaction(self):
-        connection = self.connect()
+        connection, release = self.connect(autocommit=False)
         try:
             yield connection
             connection.commit()
@@ -143,9 +171,18 @@ class MySQLMonitorAccountJobStore:
             connection.rollback()
             raise
         finally:
-            connection.close()
+            release(connection)
 
     def ensure_schema(self) -> None:
+        schema_key = (
+            os.getpid(),
+            str(self.settings.get("host") or ""),
+            int(self.settings.get("port") or 3306),
+            str(self.settings.get("database") or ""),
+            str(self.settings.get("unix_socket") or ""),
+        )
+        if schema_key in self._schema_ready:
+            return
         with self.transaction() as connection:
             with connection.cursor() as cursor:
                 cursor.execute("""
@@ -166,6 +203,7 @@ class MySQLMonitorAccountJobStore:
                     ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
                 """)
                 ensure_mysql_monitoring_schema_tuning(connection)
+        self._schema_ready.add(schema_key)
 
     def sync_accounts(self, accounts: Iterable[AccountConfig], default_interval_seconds: int) -> None:
         enabled_accounts = [account for account in (accounts or []) if getattr(account, "enabled", True)]

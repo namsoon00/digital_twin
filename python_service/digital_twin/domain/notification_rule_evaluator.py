@@ -8,6 +8,7 @@ from .ontology_decision_state import (
     CHANGE_STATES,
     CONFLICT_STATES,
     DATA_STATES,
+    REVIEW_LEVEL_RANK,
     REVIEW_LEVELS,
     VALIDATION_STATES,
 )
@@ -106,9 +107,6 @@ INVESTMENT_STATE_GATED_MESSAGE_TYPES = {
     "monitorValueChange",
     "monitorTrendChange",
 }
-REVIEW_LEVEL_RANK = {value: index for index, value in enumerate(REVIEW_LEVELS)}
-
-
 def flattened_strings(value) -> Iterable[str]:
     if value is None:
         return []
@@ -671,6 +669,11 @@ def similarity_bypass_match(
         target_field = field or "ontologyInsight.reviewLevel"
         current = str(field_value(context, target_field) or "").strip().lower()
         previous = str(field_value(previous_context, target_field) or "").strip().lower()
+        # A blocked judgement means the graph or evidence is unusable.  It is
+        # never an investment-severity escalation and must not bypass an
+        # otherwise active cooldown.
+        if current == "blocked" or previous == "blocked":
+            return False, ""
         if current in REVIEW_LEVEL_RANK and previous in REVIEW_LEVEL_RANK:
             if REVIEW_LEVEL_RANK[current] > REVIEW_LEVEL_RANK[previous]:
                 return True, label + " " + previous + " -> " + current

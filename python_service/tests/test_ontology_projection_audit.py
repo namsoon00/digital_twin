@@ -161,11 +161,12 @@ class OntologyProjectionAuditTests(unittest.TestCase):
         }, completed_at="2026-07-20T00:01:10Z")
         store.complete(completed)
 
-        self.assertEqual(2, len(connection.calls))
-        self.assertIn("INSERT INTO ontology_projection_runs", connection.calls[0][0])
-        self.assertIn("UPDATE ontology_projection_runs", connection.calls[1][0])
-        self.assertEqual(run.run_id, connection.calls[0][1][0])
-        self.assertEqual(run.run_id, connection.calls[1][1][-1])
+        self.assertEqual(3, len(connection.calls))
+        self.assertIn("aborted-stale", connection.calls[0][0])
+        self.assertIn("INSERT INTO ontology_projection_runs", connection.calls[1][0])
+        self.assertIn("UPDATE ontology_projection_runs", connection.calls[2][0])
+        self.assertEqual(run.run_id, connection.calls[1][1][0])
+        self.assertEqual(run.run_id, connection.calls[2][1][-1])
         self.assertEqual("ok", completed.status)
         self.assertEqual("generation:1", completed.inference_generation_id)
 

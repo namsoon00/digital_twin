@@ -282,7 +282,11 @@ class OntologyInferenceQualityTests(unittest.TestCase):
         self.assertEqual(["begin", "save", "complete"], [event[0] for event in events])
         self.assertEqual(events[0][1], events[1][1])
         self.assertEqual(events[0][1], events[2][1])
-        self.assertNotIn("ontology", audit_store.runs[0].context_payload["sourceSnapshot"]["metadata"])
+        self.assertNotIn("sourceSnapshot", audit_store.runs[0].context_payload)
+        self.assertEqual(
+            "monitor_snapshot_history",
+            audit_store.runs[0].context_payload["sourceSnapshotReference"]["store"],
+        )
         self.assertEqual("unchanged-material-facts", second["status"])
         self.assertEqual(1, len(audit_store.runs))
 

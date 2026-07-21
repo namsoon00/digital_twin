@@ -421,7 +421,7 @@ def admin_preview_config() -> Dict[str, object]:
                     {"key": "typedbNativeRuleTargetSymbolLimit", "label": "TypeDB 네이티브 추론 대상 종목 상한", "type": "number", "default": "1"},
                     {"key": "ontologyReasoningMinIntervalSeconds", "label": "종목별 추론 병합 간격", "type": "number", "default": "180", "unit": "seconds"},
                     {"key": "ontologyReasoningUrgentMinIntervalSeconds", "label": "긴급 추론 최소 간격", "type": "number", "default": "60", "unit": "seconds"},
-                    {"key": "ontologyReasoningUrgentReviewLevels", "label": "긴급 추론 검토 단계", "type": "text", "default": "act,immediate,blocked"},
+                    {"key": "ontologyReasoningUrgentReviewLevels", "label": "긴급 추론 검토 단계", "type": "text", "default": "act,immediate"},
                     {"key": "ontologyLabEnabled", "label": "온톨로지 실험 워커 사용", "type": "toggle", "default": "1"},
                     {"key": "ontologyLabIntervalSeconds", "label": "실험 반복 주기", "type": "number", "default": "300", "unit": "seconds"},
                     {"key": "ontologyLabBatchSize", "label": "실험 배치 수", "type": "number", "default": "5"},

@@ -23,7 +23,7 @@ from .ontology_rulebox_contracts import (
     WATCHLIST_TARGET_ROLE,
 )
 from .ontology_threshold_policy import ontology_threshold_policy_from_context
-from .ontology_relation_decisions import decision_stage_by_key
+from .ontology_relation_decisions import decision_stage_from_relation
 from .ontology_relation_reasoning import (
     OntologyRuleMatch,
     build_ai_prompt_context,
@@ -413,19 +413,18 @@ def matches_from_inference(
         trace = trace_by_rule.get(rule_id, {})
         evidence_state = inference_evidence_state(relation, facts or {}, trace)
         data_state = str(evidence_state.get("dataState") or "partial")
-        stage_key = stage_key_for_inference(rule_id, relation)
-        policy_missing = not stage_key
-        stage = decision_stage_by_key(stage_key or "RELATION_WATCH")
+        stage = decision_stage_from_relation(relation)
+        policy_missing = stage is None
         if policy_missing:
             evidence_state.update({
                 "dataState": "unavailable",
                 "evidenceUsableForJudgement": False,
                 "judgementBlocked": True,
-                "freshnessGateReason": "TypeDB 추론 관계에 decisionStage가 없습니다.",
-                "drivers": ["TypeDB 판단 단계 누락"],
+                "freshnessGateReason": "TypeDB 추론 관계에 판단 단계·행동 그룹·행동 수준이 완전하지 않습니다.",
+                "drivers": ["TypeDB 판단 정책 누락"],
             })
             data_state = "unavailable"
-        review_level = review_level_for(stage.action_level, data_state)
+        review_level = "blocked" if policy_missing else review_level_for(stage.action_level, data_state)
         role = evidence_role_from_relation(relation)
         label = str(relation.get("aiInfluenceLabel") or relation.get("targetLabel") or trace.get("label") or rule_id)
         evidence = [
@@ -453,6 +452,11 @@ def matches_from_inference(
             reference_only=bool(evidence_state.get("judgementBlocked")),
             prompt_hint=inference_prompt_hint(source_name, "relation"),
             evidence_state=evidence_state,
+            decision_stage=stage.stage_key if stage else "",
+            action_group=stage.action_group if stage else "",
+            action_level=stage.action_level if stage else "",
+            decision_label=stage.label if stage else "",
+            decision_tone=stage.tone if stage else "",
         ))
     if matches:
         return sorted(matches, key=lambda item: semantic_relation_sort_key(relation_for_match(item, primary_relations)))
@@ -911,7 +915,7 @@ def decision_from_inference(
         for item in matches
         if item.matched
         and not item.reference_only
-        and stage_key_for_inference(item.rule_id, relation_for_match(item, relations))
+        and decision_stage_from_relation(relation_for_match(item, relations)) is not None
     ]
     candidates = active
     if not candidates:
@@ -942,17 +946,48 @@ def decision_from_inference(
     selected = min(candidates, key=lambda item: semantic_relation_sort_key(relation_for_match(item, relations)))
     relation = relation_for_match(selected, relations)
     action_policy = action_policy_from_relation_or_facts(facts, relation)
-    stage_key = stage_key_for_inference(selected.rule_id, relation)
+    stage = decision_stage_from_relation(relation)
+    if stage is None:
+        # ``active`` above already excludes this state.  Keep the guard here so
+        # a malformed relation can never be converted into a default hold.
+        return {
+            "label": "TypeDB 판단 정책 누락",
+            "tone": "caution",
+            "basis": source_name,
+            "selectedRuleId": selected.rule_id,
+            "selectionRole": "blocked-missing-typedb-decision-policy",
+            "finalDecisionOwner": "typedb-schema-function-rules",
+            "candidateRuleIds": unique_texts([item.rule_id for item in matches if item.matched])[:12],
+            "candidateDecisionStages": [],
+            "selectedInferenceTraceId": "",
+            "decisionStage": "",
+            "actionGroup": "dataQuality",
+            "actionLevel": "reference",
+            "reviewLevel": "blocked",
+            "reviewLevelLabel": REVIEW_LEVEL_LABELS["blocked"],
+            "dataState": "unavailable",
+            "dataStateLabel": DATA_STATE_LABELS["unavailable"],
+            "evidenceRole": "blocking",
+            "sourceRelationType": str(relation.get("type") or ""),
+            "stagePolicySource": "missingTypeDbDecisionMetadata",
+            "judgementBlocked": True,
+            "actionPolicyApplied": False,
+            "nativeTypeDbReasoned": False,
+        }
     action_policy_applied = False
     if action_policy.get("targetRole") == WATCHLIST_TARGET_ROLE:
-        candidate_stage = decision_stage_by_key(stage_key)
-        if candidate_stage.action_group in {"lossControl", "profitTake", "rebalance", "distributionRisk"}:
-            stage_key = "ADD_BUY_BLOCKED"
+        if stage.action_group in {"lossControl", "profitTake", "rebalance", "distributionRisk"}:
             action_policy_applied = True
-    stage = decision_stage_by_key(stage_key)
     trace = next((item for item in traces if str(item.get("ruleId") or "") == selected.rule_id), {})
     label = "신규 진입 보류" if action_policy_applied and action_policy.get("targetRole") == WATCHLIST_TARGET_ROLE else stage.label
     review_level = review_level_for(stage.action_level, selected.data_state)
+    candidate_stages = []
+    for item in matches:
+        if not item.matched:
+            continue
+        candidate_stage = decision_stage_from_relation(relation_for_match(item, relations))
+        if candidate_stage is not None:
+            candidate_stages.append(candidate_stage.stage_key)
     return {
         "label": label,
         "tone": stage.tone,
@@ -961,11 +996,7 @@ def decision_from_inference(
         "selectionRole": "rule-derived-baseline-not-final-opinion",
         "finalDecisionOwner": "ai-hypothesis-competition",
         "candidateRuleIds": unique_texts([item.rule_id for item in matches if item.matched])[:12],
-        "candidateDecisionStages": unique_texts([
-            stage_key_for_inference(item.rule_id, relation_for_match(item, relations))
-            for item in matches
-            if item.matched
-        ])[:8],
+        "candidateDecisionStages": unique_texts(candidate_stages)[:8],
         "selectedInferenceTraceId": str(trace.get("id") or ""),
         "decisionStage": stage.stage_key,
         "actionGroup": stage.action_group,

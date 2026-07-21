@@ -1,3 +1,4 @@
+from datetime import datetime, timedelta, timezone
 from typing import Dict, List
 
 from ..domain.ontology_projection_audit import OntologyProjectionRun
@@ -13,6 +14,24 @@ class MySQLOntologyProjectionRunStore(MySQLOperationalConnection):
     def begin(self, run: OntologyProjectionRun) -> OntologyProjectionRun:
         stamp = utc_now()
         with self.transaction() as connection:
+            cutoff = (datetime.now(timezone.utc) - timedelta(minutes=30)).isoformat().replace("+00:00", "Z")
+            connection.execute(
+                """
+                UPDATE ontology_projection_runs
+                SET status = 'aborted-stale', completed_at = %s, updated_at = %s,
+                    result_payload_json = %s
+                WHERE status = 'projecting' AND started_at < %s
+                """,
+                (
+                    stamp,
+                    stamp,
+                    json_dumps({
+                        "status": "aborted-stale",
+                        "reason": "Projection worker ended before activation was audited.",
+                    }),
+                    cutoff,
+                ),
+            )
             connection.execute(
                 """
                 INSERT INTO ontology_projection_runs (

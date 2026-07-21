@@ -1,16 +1,26 @@
 from typing import List
 
-from ..domain.investment_strategy_proposals import InvestmentStrategyProposal
+from ..domain.investment_strategy_proposals import (
+    InvestmentStrategyProposal,
+    without_retired_strategy_score_fields,
+)
 from .mysql_operational_connection import MySQLOperationalConnection
 from .mysql_operational_helpers import _json_loads
 from .operational_common import json_dumps
 from .settings import utc_now
 
 
+def strategy_proposal_payload_from_row(row):
+    """Return the public payload and whether a legacy score field was removed."""
+    raw_payload = _json_loads(row["payload_json"], {})
+    payload = raw_payload if isinstance(raw_payload, dict) else {}
+    sanitized = without_retired_strategy_score_fields(payload)
+    sanitized = dict(sanitized) if isinstance(sanitized, dict) else {}
+    return sanitized, sanitized != payload
+
+
 def strategy_proposal_from_row(row) -> InvestmentStrategyProposal:
-    payload = _json_loads(row["payload_json"], {})
-    if not isinstance(payload, dict):
-        payload = {}
+    payload, _changed = strategy_proposal_payload_from_row(row)
     payload.update({
         "id": row["proposal_id"],
         "status": row["status"],
@@ -28,6 +38,18 @@ def strategy_proposal_from_row(row) -> InvestmentStrategyProposal:
 
 
 class MySQLInvestmentStrategyProposalStore(MySQLOperationalConnection):
+    @staticmethod
+    def rewrite_retired_score_fields(connection, rows) -> None:
+        """Physically remove retired proposal scores without changing lifecycle dates."""
+        for row in rows or []:
+            payload, changed = strategy_proposal_payload_from_row(row)
+            if not changed:
+                continue
+            connection.execute(
+                "UPDATE investment_strategy_proposals SET payload_json = %s WHERE proposal_id = %s",
+                (json_dumps(payload), str(row["proposal_id"])),
+            )
+
     def list(self, status: str = "", limit: int = 500) -> List[InvestmentStrategyProposal]:
         clauses = []
         params = []
@@ -36,19 +58,22 @@ class MySQLInvestmentStrategyProposalStore(MySQLOperationalConnection):
             params.append(str(status))
         params.append(max(1, min(1000, int(limit or 500))))
         where = " WHERE " + " AND ".join(clauses) if clauses else ""
-        with self.connect() as connection:
+        with self.transaction() as connection:
             rows = connection.execute(
                 "SELECT * FROM investment_strategy_proposals" + where + " ORDER BY updated_at DESC, proposal_id LIMIT %s",
                 params,
             ).fetchall()
+            self.rewrite_retired_score_fields(connection, rows)
         return [strategy_proposal_from_row(row) for row in rows]
 
     def get(self, proposal_id: str):
-        with self.connect() as connection:
+        with self.transaction() as connection:
             row = connection.execute(
                 "SELECT * FROM investment_strategy_proposals WHERE proposal_id = %s",
                 (str(proposal_id or ""),),
             ).fetchone()
+            if row:
+                self.rewrite_retired_score_fields(connection, [row])
         return strategy_proposal_from_row(row) if row else None
 
     def save(self, proposal: InvestmentStrategyProposal) -> None:

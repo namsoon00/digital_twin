@@ -349,7 +349,6 @@ TYPEDB_NATIVE_REASONING_LAYER = "typedb-native-rule"
 # Version 2 accepts the candidate source as an input so TypeDB can constrain
 # rule evaluation before expanding relation branches for a changed holding.
 TYPEDB_SCHEMA_FUNCTION_PREFIX = "orbit_rule_active_abox_subject_v2_"
-DEFAULT_TYPEDB_NATIVE_RULE_REALTIME_QUERY_LIMIT = 18
 DEFAULT_TYPEDB_NATIVE_RULE_QUERY_TIMEOUT_SECONDS = 3.0
 DEFAULT_TYPEDB_NATIVE_RULE_EXECUTION_BUDGET_SECONDS = 12.0
 TYPEDB_PROMOTED_NUMERIC_ATTRIBUTES = {
@@ -686,6 +685,15 @@ class NullTypeDBOntologyGraphRepository:
             "reason": "TypeDB ontology storage is not configured.",
         }
 
+    def discard_abox_generation(self, snapshot_id: str) -> Dict[str, object]:
+        return {
+            "configured": False,
+            "status": "disabled",
+            "graphStore": "typedb",
+            "aboxSnapshotId": str(snapshot_id or ""),
+            "reason": "TypeDB ontology storage is not configured.",
+        }
+
     def prune_inactive_abox_generations(
         self,
         _driver=None,
@@ -836,7 +844,6 @@ class TypeDBOntologyGraphRepository(GraphStoreOntologyRowMapperMixin):
         query_metrics_enabled: bool = True,
         rulebox_snapshot_cache_seconds: float = 60.0,
         native_rule_execution_enabled: bool = True,
-        native_rule_realtime_query_limit: int = DEFAULT_TYPEDB_NATIVE_RULE_REALTIME_QUERY_LIMIT,
         native_rule_query_timeout_seconds: float = DEFAULT_TYPEDB_NATIVE_RULE_QUERY_TIMEOUT_SECONDS,
         native_rule_execution_budget_seconds: float = DEFAULT_TYPEDB_NATIVE_RULE_EXECUTION_BUDGET_SECONDS,
     ):
@@ -872,9 +879,6 @@ class TypeDBOntologyGraphRepository(GraphStoreOntologyRowMapperMixin):
         self._query_metrics_enabled = bool(query_metrics_enabled)
         self._rulebox_snapshot_cache_seconds = max(1.0, float(rulebox_snapshot_cache_seconds or 60.0))
         self._native_rule_execution_enabled = bool(native_rule_execution_enabled)
-        self._native_rule_realtime_query_limit = max(1, int(
-            native_rule_realtime_query_limit or DEFAULT_TYPEDB_NATIVE_RULE_REALTIME_QUERY_LIMIT
-        ))
         self._native_rule_query_timeout_seconds = max(
             0.5,
             float(native_rule_query_timeout_seconds or DEFAULT_TYPEDB_NATIVE_RULE_QUERY_TIMEOUT_SECONDS),
@@ -964,9 +968,6 @@ class TypeDBOntologyGraphRepository(GraphStoreOntologyRowMapperMixin):
 
     def native_rule_execution_enabled(self) -> bool:
         return self._native_rule_execution_enabled
-
-    def native_rule_realtime_query_limit(self) -> int:
-        return self._native_rule_realtime_query_limit
 
     def native_rule_query_timeout_seconds(self) -> float:
         return self._native_rule_query_timeout_seconds
@@ -2185,6 +2186,8 @@ class TypeDBOntologyGraphRepository(GraphStoreOntologyRowMapperMixin):
             "derivationActionGroup": str(derivation.get("action_group") or merged.get("derivationActionGroup") or ""),
             "derivationActionLevel": str(derivation.get("action_level") or merged.get("derivationActionLevel") or ""),
             "derivationDecisionStage": str(derivation.get("decision_stage") or derivation.get("decisionStage") or merged.get("derivationDecisionStage") or ""),
+            "derivationDecisionLabel": str(derivation.get("decision_label") or derivation.get("decisionLabel") or merged.get("derivationDecisionLabel") or ""),
+            "derivationDecisionTone": str(derivation.get("decision_tone") or derivation.get("decisionTone") or merged.get("derivationDecisionTone") or ""),
             "derivationTargetRole": str(derivation.get("target_role") or derivation.get("targetRole") or merged.get("derivationTargetRole") or ""),
             "derivationActionPolicy": str(derivation.get("action_policy") or derivation.get("actionPolicy") or merged.get("derivationActionPolicy") or ""),
             "derivationAllowedActions": list_of_strings(derivation.get("allowed_actions") or derivation.get("allowedActions") or merged.get("derivationAllowedActions")),
@@ -2500,6 +2503,65 @@ class TypeDBOntologyGraphRepository(GraphStoreOntologyRowMapperMixin):
             "deletedBatchCount": deleted_batches,
             "remainingRowTypes": remaining_types,
         }
+
+    def discard_abox_generation(self, snapshot_id: str) -> Dict[str, object]:
+        """Delete one failed, inactive candidate generation immediately."""
+        clean_snapshot_id = str(snapshot_id or "").strip()
+        if not clean_snapshot_id:
+            return {
+                "configured": bool(self.address),
+                "status": "skipped",
+                "graphStore": "typedb",
+                "aboxSnapshotId": "",
+                "reason": "ABox snapshot id is empty.",
+            }
+        active = self.active_abox_metadata()
+        if str(active.get("aboxSnapshotId") or "").strip() == clean_snapshot_id:
+            return {
+                "configured": True,
+                "status": "protected-active",
+                "graphStore": "typedb",
+                "aboxSnapshotId": clean_snapshot_id,
+                "reason": "The active ABox generation cannot be discarded.",
+            }
+        imported = self.driver_imports()
+        if imported[0] is None:
+            return {
+                "configured": True,
+                "status": "driver-missing",
+                "graphStore": "typedb",
+                "aboxSnapshotId": clean_snapshot_id,
+                "reason": str(imported[1])[:180],
+            }
+        try:
+            def operation():
+                driver = self.open_driver(imported)
+                try:
+                    self.ensure_database(driver)
+                    return self.delete_box_snapshot_rows_in_batches(
+                        driver,
+                        imported,
+                        "ABox",
+                        clean_snapshot_id,
+                    )
+                finally:
+                    self.close_driver(driver)
+
+            result = self.with_typedb_retries(operation)
+            return {
+                "configured": True,
+                "graphStore": "typedb",
+                **dict(result or {}),
+            }
+        except Exception as error:  # noqa: BLE001 - cleanup state remains visible to the circuit breaker.
+            return {
+                "configured": True,
+                "status": "error",
+                "graphStore": "typedb",
+                "aboxSnapshotId": clean_snapshot_id,
+                "reasonCode": typedb_error_code(error),
+                "reason": str(error)[:220],
+            }
 
     def delete_box_rows_in_batches(self, driver, imported, boxes: Iterable[str]) -> Dict[str, object]:
         _TypeDB, _Credentials, _DriverOptions, _DriverTlsConfig, TransactionType = imported[0]
@@ -4729,6 +4791,7 @@ relation ontology-assertion,
         execution_plan: Dict[str, object] = {}
         query_failures = []
         execution_budget_exhausted = False
+        execution_incomplete = False
         try:
             relation_types_by_symbol: Dict[str, Iterable[str]] = {}
             rule_context: Dict[str, object] = {}
@@ -4749,7 +4812,12 @@ relation ontology-assertion,
                 rules,
                 clean_symbols,
                 relation_types_by_symbol,
-                self.native_rule_realtime_query_limit() if clean_symbols else 0,
+                # A selected symbol is one inference unit.  Limiting individual
+                # rule calls here meant that a stable priority list could defer
+                # the same applicable rules forever and materialize a partial
+                # judgement.  Symbol scheduling happens before this method;
+                # TypeDB must evaluate every applicable rule for that symbol.
+                0,
             )
             for item in execution_plan.get("skippedEntries") or []:
                 skipped_rules.append({
@@ -4764,7 +4832,7 @@ relation ontology-assertion,
             _TypeDB, _Credentials, _DriverOptions, _DriverTlsConfig, TransactionType = imported[0]
 
             def operation():
-                nonlocal read_call_count, read_transaction_count, execution_budget_exhausted
+                nonlocal read_call_count, read_transaction_count, execution_budget_exhausted, execution_incomplete
                 driver = self.open_driver(imported)
                 try:
                     self.ensure_database(driver)
@@ -4776,6 +4844,7 @@ relation ontology-assertion,
                         remaining_seconds = deadline - time.monotonic()
                         if remaining_seconds <= 0:
                             execution_budget_exhausted = True
+                            execution_incomplete = True
                             skipped_rules.append({
                                 "ruleId": str(rule.rule_id or ""),
                                 "status": "deferred-by-runtime-budget",
@@ -4785,6 +4854,7 @@ relation ontology-assertion,
                         rule_payload = rule.to_dict() if hasattr(rule, "to_dict") else dict(rule or {})
                         profile = typedb_native_rule_profile(rule_payload)
                         if profile.get("status") != "ready":
+                            execution_incomplete = True
                             skipped_rules.append({
                                 "ruleId": str(rule.rule_id or ""),
                                 "status": profile.get("status"),
@@ -4801,6 +4871,7 @@ relation ontology-assertion,
                             else typedb_native_match_query(rule_payload, candidate_symbols)
                         )
                         if not query_plan.get("query"):
+                            execution_incomplete = True
                             skipped_rules.append({
                                 "ruleId": str(rule.rule_id or ""),
                                 "status": "blocked",
@@ -4832,6 +4903,7 @@ relation ontology-assertion,
                             }
                             skipped_rules.append(failure)
                             query_failures.append(failure)
+                            execution_incomplete = True
                             continue
                         executed_rules.append({
                             "ruleId": rule.rule_id,
@@ -4847,7 +4919,7 @@ relation ontology-assertion,
                     self.close_driver(driver)
 
             self.with_typedb_retries(operation)
-            if query_failures or execution_budget_exhausted:
+            if query_failures or execution_budget_exhausted or execution_incomplete:
                 return {
                     "status": "partial",
                     "graphStore": "typedb",
@@ -4856,9 +4928,11 @@ relation ontology-assertion,
                     "schemaFunctionUsed": schema_function_query,
                     "nativeExecutionMode": execution_mode,
                     "matchedCount": len(matches),
+                    "executedRuleCount": len(executed_rules),
+                    "skippedRuleCount": len(skipped_rules),
                     "matches": matches,
                     "reasonCode": "typedbNativeRuleExecutionPartial",
-                    "reason": "TypeDB native rule execution did not complete within the realtime boundary.",
+                    "reason": "TypeDB native rule execution did not complete for every applicable rule.",
                     "readTransactionCount": read_transaction_count,
                     "readQueryCount": read_call_count,
                     "executedRules": executed_rules[:40],
@@ -6979,69 +7053,20 @@ def typedb_native_rule_query_complexity(rule: object) -> int:
     return len(conditions) + min(64, combinations) * 3
 
 
-def typedb_native_rule_execution_priority(rule: object) -> int:
-    """Prioritize time-sensitive checks; this never alters rule semantics."""
-    rule_id = str(
-        getattr(rule, "rule_id", "")
-        if not isinstance(rule, dict)
-        else rule.get("rule_id") or rule.get("ruleId") or ""
-    ).strip()
-    action_group = str(
-        getattr(rule, "action_group", "")
-        if not isinstance(rule, dict)
-        else rule.get("action_group") or rule.get("actionGroup") or ""
-    ).strip()
-    action_level = str(
-        getattr(rule, "action_level", "")
-        if not isinstance(rule, dict)
-        else rule.get("action_level") or rule.get("actionLevel") or ""
-    ).strip().lower()
-    priorities = {
-        "lossControl": 120,
-        "eventRisk": 116,
-        "flowTrend": 114,
-        "entryRisk": 112,
-        "executionRisk": 110,
-        "strategyFit": 108,
-        "profitTake": 106,
-        "eventImpact": 104,
-        "recovery": 102,
-        "macroRegime": 100,
-        "factorRisk": 98,
-        "dataQuality": 96,
-        "valuation": 94,
-        "marketStructure": 92,
-        "marketProxy": 90,
-        "temporalRisk": 88,
-        "temporalDefense": 86,
-        "entry": 84,
-        "rebalance": 82,
-        "alertReview": 80,
-        "rateRegime": 78,
-    }
-    priority = priorities.get(action_group, 50) + (8 if action_level == "action" else 0)
-    if rule_id.startswith("graph.temporal.") or rule_id == "graph.watchlist.temporal.recovery_entry.v1":
-        # Temporal rules consume the multi-observation facts created in the
-        # current ABox. Deferring them behind static one-point rules made an
-        # otherwise valid Stage 2 inference path unreachable under the bounded
-        # realtime query plan.
-        priority = max(priority, 132)
-    return priority
-
-
 def typedb_native_rule_execution_plan(
     rules: Iterable[GraphInferenceRule],
     target_symbols: Iterable[str],
     relation_types_by_symbol: Dict[str, Iterable[str]] = None,
     query_limit: int = 0,
 ) -> Dict[str, object]:
-    """Build a bounded TypeDB-function call plan from active ABox topology.
+    """Build a complete TypeDB-function plan for selected ABox subjects.
 
     The planner only removes rule/symbol pairs that cannot satisfy a required
     relation edge in the active ABox.  TypeDB functions still evaluate every
     surviving condition, including numeric thresholds, negation, and any
-    branches.  This keeps investment judgement in TypeDB while preventing a
-    changed holding from launching unrelated schema functions.
+    branches.  A query limit is intentionally ignored: an InferenceBox
+    generation must be complete for every selected subject, otherwise the
+    caller returns a blocked partial result instead of using a biased subset.
     """
     clean_symbols = clean_symbols_from_payload(list(target_symbols or []))
     type_index = {
@@ -7083,7 +7108,6 @@ def typedb_native_rule_execution_plan(
             "anyRelationMinimum": any_relation_minimum,
             "candidateSymbols": candidate_symbols,
             "queryComplexity": typedb_native_rule_query_complexity(rule),
-            "priority": typedb_native_rule_execution_priority(rule),
         }
         if clean_symbols and not candidate_symbols:
             entry.update({
@@ -7097,25 +7121,15 @@ def typedb_native_rule_execution_plan(
     selected_entries = [item for item in entries if item.get("selected")]
     selected_entries.sort(
         key=lambda item: (
-            -int(item.get("priority") or 0),
             int(item.get("queryComplexity") or 0),
             str(item.get("ruleId") or ""),
         )
     )
-    safe_limit = max(0, int(number_or_none(query_limit) or 0))
-    if safe_limit and len(selected_entries) > safe_limit:
-        for item in selected_entries[safe_limit:]:
-            item.update({
-                "selected": False,
-                "status": "deferred-by-query-budget",
-                "reason": "Realtime TypeDB query budget will evaluate this lower-priority rule in a later cycle.",
-            })
-        selected_entries = selected_entries[:safe_limit]
     skipped_entries = [item for item in entries if not item.get("selected")]
     return {
         "status": "ok",
         "targetSymbols": clean_symbols,
-        "queryLimit": safe_limit,
+        "queryLimit": 0,
         "candidateRuleCount": len(entries),
         "selectedRuleCount": len(selected_entries),
         "skippedRuleCount": len(skipped_entries),
@@ -7149,7 +7163,6 @@ def typedb_native_rule_execution_plan_summary(plan: Dict[str, object]) -> Dict[s
             {
                 "ruleId": str(item.get("ruleId") or ""),
                 "candidateSymbols": list(item.get("candidateSymbols") or []),
-                "priority": int(number_or_none(item.get("priority")) or 0),
                 "queryComplexity": int(number_or_none(item.get("queryComplexity")) or 0),
             }
             for item in selected[:40]
@@ -8302,10 +8315,6 @@ def typedb_repository_from_settings(settings: Dict[str, str] = None):
         query_metrics_enabled=True if query_metrics_value in (None, "") else typedb_bool(query_metrics_value),
         rulebox_snapshot_cache_seconds=number_or_none(settings.get("typedbRuleBoxSnapshotCacheSeconds")) or 60.0,
         native_rule_execution_enabled=True if native_execution_value in (None, "") else typedb_bool(native_execution_value),
-        native_rule_realtime_query_limit=int(
-            number_or_none(settings.get("typedbNativeRuleRealtimeQueryLimit"))
-            or DEFAULT_TYPEDB_NATIVE_RULE_REALTIME_QUERY_LIMIT
-        ),
         native_rule_query_timeout_seconds=number_or_none(settings.get("typedbNativeRuleQueryTimeoutSeconds"))
         or DEFAULT_TYPEDB_NATIVE_RULE_QUERY_TIMEOUT_SECONDS,
         native_rule_execution_budget_seconds=number_or_none(settings.get("typedbNativeRuleExecutionBudgetSeconds"))

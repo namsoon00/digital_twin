@@ -7,6 +7,7 @@ import sys
 import time
 import json
 import calendar
+import plistlib
 from pathlib import Path
 from typing import Dict, List
 
@@ -111,6 +112,9 @@ def typedb_worker_spec(settings: Dict[str, object]) -> Dict[str, object]:
     address = str((settings or {}).get("typedbAddress") or "127.0.0.1:1729").strip() or "127.0.0.1:1729"
     data_path = data_dir() / "typedb-data"
     log_dir = data_dir() / "typedb-logs"
+    password = str((settings or {}).get("typedbPassword") or os.environ.get("TYPEDB_PASSWORD") or "").strip()
+    allow_weak_password = truthy(os.environ.get("TYPEDB_ALLOW_DEFAULT_PASSWORD"))
+    weak_password = password.lower() in {"", "admin", "password", "typedb"}
     command = [
         executable,
         "server",
@@ -118,6 +122,14 @@ def typedb_worker_spec(settings: Dict[str, object]) -> Dict[str, object]:
         address,
         "--server.advertise-address",
         address,
+        "--server.http.listen-address",
+        "127.0.0.1:8000",
+        "--diagnostics.monitoring.enabled",
+        "false",
+        "--diagnostics.reporting.metrics",
+        "false",
+        "--diagnostics.reporting.errors",
+        "false",
         "--storage.data-directory",
         str(data_path),
         "--logging.directory",
@@ -137,7 +149,7 @@ def typedb_worker_spec(settings: Dict[str, object]) -> Dict[str, object]:
         "ageResetEnabled": str((settings or {}).get("typedbAgeResetEnabled") or "0"),
         "healthAddress": address,
         "typedbUser": str((settings or {}).get("typedbUser") or os.environ.get("TYPEDB_USER") or "admin"),
-        "typedbPassword": str((settings or {}).get("typedbPassword") or os.environ.get("TYPEDB_PASSWORD") or "password"),
+        "typedbPassword": password,
         "typedbDatabase": str((settings or {}).get("typedbDatabase") or os.environ.get("TYPEDB_DATABASE") or "orbit_alpha_ontology"),
         "typedbTlsEnabled": str((settings or {}).get("typedbTlsEnabled") or os.environ.get("TYPEDB_TLS_ENABLED") or "0"),
         "startupWaitSeconds": str((settings or {}).get("typedbStartupWaitSeconds") or "60"),
@@ -146,7 +158,76 @@ def typedb_worker_spec(settings: Dict[str, object]) -> Dict[str, object]:
         "seedKeepInference": str((settings or {}).get("typedbSeedKeepInference") or os.environ.get("TYPEDB_SEED_KEEP_INFERENCE") or "1"),
         "seedTimeoutSeconds": str((settings or {}).get("typedbSeedTimeoutSeconds") or os.environ.get("TYPEDB_SEED_TIMEOUT_SECONDS") or "360"),
         "seedRetryCount": str((settings or {}).get("typedbSeedRetryCount") or os.environ.get("TYPEDB_SEED_RETRY_COUNT") or "2"),
-        "missingReason": "" if executable else "TypeDB executable was not found. Install TypeDB or set TYPEDB_COMMAND.",
+        "missingReason": (
+            "TypeDB executable was not found. Install TypeDB or set TYPEDB_COMMAND."
+            if not executable
+            else (
+                "TypeDB requires a non-default TYPEDB_PASSWORD in .env.local."
+                if weak_password and not allow_weak_password
+                else ""
+            )
+        ),
+    }
+
+
+def mysql_executable() -> str:
+    explicit = str(os.environ.get("MYSQLD_COMMAND") or "").strip()
+    if explicit:
+        return explicit
+    return shutil.which("mysqld") or "/usr/local/opt/mysql/bin/mysqld"
+
+
+def mysql_worker_spec(settings: Dict[str, object]) -> Dict[str, object]:
+    executable = mysql_executable()
+    data_path = Path(str(os.environ.get("MYSQL_DATA_DIR") or data_dir() / "mysql-runtime"))
+    port = int_value(os.environ.get("MYSQL_PORT") or (settings or {}).get("mysqlPort"), 3306, 1)
+    socket_path = str(os.environ.get("MYSQL_UNIX_SOCKET") or data_path / "mysql.sock")
+    command = [
+        executable,
+        "--no-defaults",
+        "--basedir=/usr/local/opt/mysql",
+        "--datadir=" + str(data_path),
+        "--port=" + str(port),
+        "--bind-address=127.0.0.1",
+        "--socket=" + socket_path,
+        "--pid-file=" + str(data_path / "mysqld.pid"),
+        "--log-error=" + str(data_path / "mysql.err"),
+        "--mysqlx=0",
+        "--skip-log-bin",
+        "--innodb-buffer-pool-size=536870912",
+        "--innodb-redo-log-capacity=1073741824",
+        "--max-connections=100",
+    ] if executable and Path(executable).exists() else []
+    return {
+        "label": "MySQL operational store",
+        "pid": data_dir() / "mysql-service.pid",
+        "log": data_dir() / "mysql-service.log",
+        "command": command,
+        "needle": "mysqld --no-defaults",
+        "role": "mysql",
+        "dataPath": data_path,
+        "healthAddress": "127.0.0.1:" + str(port),
+        "startupWaitSeconds": str((settings or {}).get("mysqlStartupWaitSeconds") or "60"),
+        "missingReason": "" if command else "MySQL executable was not found. Set MYSQLD_COMMAND.",
+    }
+
+
+def web_worker_spec(settings: Dict[str, object]) -> Dict[str, object]:
+    port = int_value(os.environ.get("PORT") or (settings or {}).get("webPort"), 3000, 1)
+    return {
+        "label": "Orbit Alpha web server",
+        "pid": data_dir() / "python-web.pid",
+        "log": data_dir() / "python-web.log",
+        "command": [sys.executable, "-u", "python_service/service.py", "web"],
+        "needle": "python_service/service.py web",
+        "role": "web",
+        "healthAddress": "127.0.0.1:" + str(port),
+        "startupWaitSeconds": str((settings or {}).get("webStartupWaitSeconds") or "30"),
+        "env": {
+            "HOST": "127.0.0.1",
+            "PORT": str(port),
+            "ALLOW_PORT_FALLBACK": "0",
+        },
     }
 
 
@@ -156,9 +237,12 @@ def worker_specs() -> Dict[str, Dict[str, object]]:
     except Exception:  # noqa: BLE001 - service manager should still manage Python workers.
         settings = {}
     workers = {}
+    if truthy((settings or {}).get("mysqlRuntimeManaged", os.environ.get("MYSQL_RUNTIME_MANAGED", "1"))):
+        workers["mysql"] = mysql_worker_spec(settings)
     if typedb_requested(settings):
         workers["typedb"] = typedb_worker_spec(settings)
     workers.update(BASE_WORKERS)
+    workers["web"] = web_worker_spec(settings)
     return workers
 
 
@@ -339,6 +423,8 @@ def status_worker(spec: Dict[str, object]) -> int:
         print("PID: " + str(pid))
     if running:
         print("Command: " + command_for_pid(pid))
+        if spec.get("healthAddress"):
+            print("Health: " + ("ready" if tcp_ready(spec.get("healthAddress")) else "not-ready") + " · " + str(spec.get("healthAddress")))
     if log_path.exists():
         print("Log: " + str(log_path))
         print("Log updated: " + time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(log_path.stat().st_mtime)))
@@ -388,6 +474,48 @@ def tcp_ready(address: object, timeout_seconds: float = 1.0) -> bool:
                 sock.close()
         except OSError:
             pass
+
+
+def prepare_mysql_data_dir(spec: Dict[str, object]) -> bool:
+    data_path = Path(spec.get("dataPath") or "")
+    if not data_path:
+        return False
+    data_path.mkdir(parents=True, exist_ok=True)
+    os.chmod(data_path, 0o700)
+    if (data_path / "mysql").exists():
+        return True
+    executable = str((spec.get("command") or [""])[0] or "")
+    result = subprocess.run(
+        [
+            executable,
+            "--no-defaults",
+            "--initialize-insecure",
+            "--basedir=/usr/local/opt/mysql",
+            "--datadir=" + str(data_path),
+        ],
+        cwd=str(ROOT_DIR),
+        capture_output=True,
+        text=True,
+        timeout=120,
+    )
+    append_log_text(spec["log"], "initialize exit=" + str(result.returncode), (result.stdout or "") + (result.stderr or ""))
+    return result.returncode == 0
+
+
+def wait_for_tcp_service(spec: Dict[str, object]) -> bool:
+    wait_seconds = int_value(spec.get("startupWaitSeconds"), 30, 0)
+    address = str(spec.get("healthAddress") or "")
+    deadline = time.monotonic() + wait_seconds
+    while time.monotonic() <= deadline:
+        pid = read_pid(spec["pid"])
+        if pid and not pid_exists(pid):
+            return False
+        if tcp_ready(address):
+            append_log(spec["log"], "ready " + address)
+            return True
+        time.sleep(0.5)
+    append_log(spec["log"], "not-ready timeout " + address)
+    return False
 
 
 def typedb_driver_ready(spec: Dict[str, object]) -> bool:
@@ -513,7 +641,7 @@ def ensure_typedb_seeded(spec: Dict[str, object]) -> bool:
 def start_worker(spec: Dict[str, object]) -> int:
     if spec.get("missingReason") or not spec.get("command"):
         print(str(spec["label"]) + " not started. " + str(spec.get("missingReason") or "Command is not configured."))
-        return 0
+        return 1 if str(spec.get("role") or "") in {"mysql", "typedb", "web"} else 0
     pid_path = spec["pid"]
     log_path = spec["log"]
     existing = read_pid(pid_path)
@@ -529,6 +657,13 @@ def start_worker(spec: Dict[str, object]) -> int:
         return status_worker(spec)
     if existing:
         remove_pid(pid_path)
+    role = str(spec.get("role") or "")
+    if role in {"mysql", "web"} and tcp_ready(spec.get("healthAddress")):
+        print(str(spec["label"]) + " not started. Canonical address is already owned by an unmanaged process: " + str(spec.get("healthAddress") or ""))
+        return 1
+    if role == "mysql" and not prepare_mysql_data_dir(spec):
+        print(str(spec["label"]) + " data directory initialization failed.")
+        return 1
     if str(spec.get("role") or "") == "typedb":
         retention = run_typedb_data_retention(spec)
         if retention.get("status") == "reset":
@@ -537,10 +672,12 @@ def start_worker(spec: Dict[str, object]) -> int:
     log_path.parent.mkdir(parents=True, exist_ok=True)
     append_log(log_path, "start")
     out = log_path.open("a", encoding="utf-8")
+    process_env = dict(os.environ, PYTHONUNBUFFERED="1")
+    process_env.update({str(key): str(value) for key, value in dict(spec.get("env") or {}).items()})
     process = subprocess.Popen(
         spec["command"],
         cwd=str(ROOT_DIR),
-        env=dict(os.environ, PYTHONUNBUFFERED="1"),
+        env=process_env,
         stdin=subprocess.DEVNULL,
         stdout=out,
         stderr=out,
@@ -554,6 +691,10 @@ def start_worker(spec: Dict[str, object]) -> int:
         if not wait_for_typedb_ready(spec):
             return 1
         if not ensure_typedb_seeded(spec):
+            return 1
+    elif role in {"mysql", "web"}:
+        if not wait_for_tcp_service(spec):
+            print(str(spec["label"]) + " did not become ready at " + str(spec.get("healthAddress") or ""))
             return 1
     return 0
 
@@ -570,7 +711,8 @@ def stop_worker(spec: Dict[str, object]) -> int:
         print(str(spec["label"]) + " was not running. Removed stale pid file.")
         return 0
     os.kill(pid, signal.SIGTERM)
-    for _index in range(25):
+    attempts = 150 if str(spec.get("role") or "") in {"mysql", "typedb"} else 25
+    for _index in range(attempts):
         time.sleep(0.2)
         if not is_running(pid, spec):
             remove_pid(pid_path)
@@ -602,7 +744,9 @@ def start(excluded_roles=None) -> int:
     return 0
 
 
-def stop(excluded_roles=None) -> int:
+def stop(excluded_roles=None, include_supervisor: bool = True) -> int:
+    if include_supervisor:
+        stop_supervisor()
     excluded = {str(role or "").strip() for role in (excluded_roles or set())}
     for spec in reversed(list(worker_specs().values())):
         if str(spec.get("role") or "").strip() in excluded:
@@ -611,7 +755,7 @@ def stop(excluded_roles=None) -> int:
     return 0
 
 
-def restart(restart_typedb: bool = False) -> int:
+def restart(restart_typedb: bool = False, restart_mysql: bool = False) -> int:
     """Restart application workers without disrupting an active graph store.
 
     TypeDB owns durable graph generations and can legitimately be writing an
@@ -625,8 +769,144 @@ def restart(restart_typedb: bool = False) -> int:
         typedb_pid_path = typedb_spec.get("pid") if isinstance(typedb_spec, dict) else None
         if typedb_spec and typedb_pid_path and is_running(read_pid(typedb_pid_path), typedb_spec):
             excluded.add("typedb")
-    stop(excluded_roles=excluded)
+    if not restart_mysql:
+        mysql_spec = worker_specs().get("mysql")
+        mysql_pid_path = mysql_spec.get("pid") if isinstance(mysql_spec, dict) else None
+        if mysql_spec and mysql_pid_path and is_running(read_pid(mysql_pid_path), mysql_spec):
+            excluded.add("mysql")
+    stop(excluded_roles=excluded, include_supervisor=False)
     return start(excluded_roles=excluded)
+
+
+def supervisor_pid_path() -> Path:
+    return data_dir() / "python-supervisor.pid"
+
+
+def supervisor_log_path() -> Path:
+    return data_dir() / "python-supervisor.log"
+
+
+def supervisor_running() -> bool:
+    pid = read_pid(supervisor_pid_path())
+    return bool(pid and pid_exists(pid) and "monitor_service.py supervise" in command_for_pid(pid))
+
+
+def launch_agent_path() -> Path:
+    return Path.home() / "Library" / "LaunchAgents" / "com.orbitalpha.services.plist"
+
+
+def bootout_supervisor_launch_agent() -> None:
+    path = launch_agent_path()
+    launchctl = shutil.which("launchctl")
+    if not launchctl or not path.exists():
+        return
+    domain = "gui/" + str(os.getuid())
+    subprocess.run([launchctl, "bootout", domain, str(path)], capture_output=True, text=True)
+
+
+def stop_supervisor() -> None:
+    # KeepAlive would immediately relaunch the supervisor unless launchd is
+    # detached before honoring an explicit service stop.
+    bootout_supervisor_launch_agent()
+    pid = read_pid(supervisor_pid_path())
+    if not pid or pid == os.getpid():
+        return
+    if "monitor_service.py supervise" not in command_for_pid(pid):
+        remove_pid(supervisor_pid_path())
+        return
+    try:
+        os.kill(pid, signal.SIGTERM)
+    except OSError:
+        remove_pid(supervisor_pid_path())
+        return
+    for _index in range(150):
+        if not pid_exists(pid):
+            remove_pid(supervisor_pid_path())
+            return
+        time.sleep(0.2)
+
+
+def supervise() -> int:
+    if supervisor_running() and read_pid(supervisor_pid_path()) != os.getpid():
+        print("Orbit Alpha supervisor is already running.")
+        return 0
+    supervisor_pid_path().parent.mkdir(parents=True, exist_ok=True)
+    supervisor_pid_path().write_text(str(os.getpid()) + "\n", encoding="utf-8")
+    os.chmod(supervisor_pid_path(), 0o600)
+    append_log(supervisor_log_path(), "start")
+    stopping = {"value": False}
+
+    def request_stop(_signum, _frame):
+        stopping["value"] = True
+
+    signal.signal(signal.SIGTERM, request_stop)
+    signal.signal(signal.SIGINT, request_stop)
+    try:
+        if start() != 0:
+            return 1
+        last_maintenance_at = 0.0
+        while not stopping["value"]:
+            specs = worker_specs()
+            for spec in specs.values():
+                if stopping["value"]:
+                    break
+                pid = read_pid(spec["pid"])
+                if not is_running(pid, spec):
+                    append_log(supervisor_log_path(), "restart " + str(spec.get("label") or "unknown"))
+                    start_worker(spec)
+            if time.monotonic() - last_maintenance_at >= 60:
+                typedb_spec = specs.get("typedb")
+                if typedb_spec and typedb_reset_needed(typedb_spec).get("needed"):
+                    append_log(supervisor_log_path(), "typedb storage limit maintenance")
+                    stop_worker(typedb_spec)
+                    run_typedb_data_retention(typedb_spec)
+                    start_worker(typedb_spec)
+                last_maintenance_at = time.monotonic()
+            time.sleep(5)
+    finally:
+        stop(include_supervisor=False)
+        remove_pid(supervisor_pid_path())
+        append_log(supervisor_log_path(), "stop")
+    return 0
+
+
+def install_supervisor() -> int:
+    path = launch_agent_path()
+    path.parent.mkdir(parents=True, exist_ok=True)
+    payload = {
+        "Label": "com.orbitalpha.services",
+        "ProgramArguments": [sys.executable, str(ROOT_DIR / "python_service" / "monitor_service.py"), "supervise"],
+        "WorkingDirectory": str(ROOT_DIR),
+        "RunAtLoad": True,
+        "KeepAlive": True,
+        "ProcessType": "Background",
+        "EnvironmentVariables": {"PYTHONUNBUFFERED": "1"},
+        "StandardOutPath": str(supervisor_log_path()),
+        "StandardErrorPath": str(supervisor_log_path()),
+    }
+    with path.open("wb") as handle:
+        plistlib.dump(payload, handle, sort_keys=True)
+    os.chmod(path, 0o600)
+    domain = "gui/" + str(os.getuid())
+    subprocess.run(["launchctl", "bootout", domain, str(path)], capture_output=True, text=True)
+    result = subprocess.run(["launchctl", "bootstrap", domain, str(path)], capture_output=True, text=True)
+    if result.returncode != 0:
+        print("LaunchAgent install failed: " + str(result.stderr or result.stdout).strip())
+        return result.returncode
+    subprocess.run(["launchctl", "kickstart", "-k", domain + "/com.orbitalpha.services"], capture_output=True, text=True)
+    print("Orbit Alpha supervisor installed: " + str(path))
+    return 0
+
+
+def uninstall_supervisor() -> int:
+    path = launch_agent_path()
+    stop_supervisor()
+    try:
+        path.unlink()
+    except FileNotFoundError:
+        pass
+    print("Orbit Alpha supervisor uninstalled.")
+    return 0
 
 
 def typedb_maintenance(force: bool = False) -> int:
@@ -652,10 +932,19 @@ def main(argv: List[str] = None) -> int:
     if command == "stop":
         return stop()
     if command == "restart":
-        return restart(restart_typedb="--restart-typedb" in args[1:])
+        return restart(
+            restart_typedb="--restart-typedb" in args[1:],
+            restart_mysql="--restart-mysql" in args[1:],
+        )
     if command == "status":
         return status()
     if command == "typedb-maintenance":
         return typedb_maintenance(force="--force" in args[1:])
-    print("Usage: python3 python_service/monitor_service.py start|stop|restart|status|typedb-maintenance [--force]")
+    if command == "supervise":
+        return supervise()
+    if command == "supervisor-install":
+        return install_supervisor()
+    if command == "supervisor-uninstall":
+        return uninstall_supervisor()
+    print("Usage: python3 python_service/monitor_service.py start|stop|restart|status|supervise|supervisor-install|supervisor-uninstall|typedb-maintenance [--force]")
     return 1

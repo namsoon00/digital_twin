@@ -4,8 +4,8 @@ from .data_freshness import age_minutes
 from .market_data import number
 from .ontology_contracts import OntologyBelief, OntologyEntity, OntologyEvidence, OntologyRelation, PortfolioOntology, entity_id
 from .ontology_decision_state import (
+    ACTION_LEVEL_RANK,
     DATA_STATE_LABELS,
-    DECISION_STAGE_ORDER,
     REVIEW_LEVEL_LABELS,
     conflict_state_from_roles,
     review_level_for,
@@ -142,6 +142,8 @@ def materialize_rule_inference(
             "actionGroup": action_group,
             "actionLevel": action_level,
             "decisionStage": decision_stage,
+            "decisionLabel": derivation.decision_label or rule.label,
+            "decisionTone": derivation.decision_tone,
             "evidenceRole": evidence_role,
             "reviewLevel": derivation_review_level,
             "reviewLevelLabel": REVIEW_LEVEL_LABELS[derivation_review_level],
@@ -160,6 +162,8 @@ def materialize_rule_inference(
             "actionGroup": action_group,
             "actionLevel": action_level,
             "decisionStage": decision_stage,
+            "decisionLabel": derivation.decision_label or rule.label,
+            "decisionTone": derivation.decision_tone,
             "reviewLevel": derivation_review_level,
             "dataState": data_state,
             **action_policy,
@@ -316,15 +320,12 @@ def derivation_evidence_role(derivation) -> str:
 
 def derivation_semantic_sort_key(derivation):
     stage = str(getattr(derivation, "decision_stage", "") or "").strip()
-    try:
-        stage_index = DECISION_STAGE_ORDER.index(stage)
-    except ValueError:
-        stage_index = len(DECISION_STAGE_ORDER)
+    action_level = str(getattr(derivation, "action_level", "") or "reference").strip().lower()
     role_index = {"blocking": 0, "risk": 1, "counter": 2, "support": 3, "context": 4}.get(
         derivation_evidence_role(derivation),
         5,
     )
-    return stage_index, role_index, str(getattr(derivation, "relation_type", "") or "")
+    return -ACTION_LEVEL_RANK.get(action_level, -1), role_index, stage, str(getattr(derivation, "relation_type", "") or "")
 
 
 def unique_non_empty(values: List[object]) -> List[str]:

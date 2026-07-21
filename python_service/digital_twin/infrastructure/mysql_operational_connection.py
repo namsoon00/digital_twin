@@ -10,6 +10,7 @@ from .mysql_retention import (
     operational_history_retention_enabled,
 )
 from .mysql_schema_tuning import ensure_mysql_operational_schema_tuning, mysql_partitioning_mode
+from .mysql_connection_pool import pooled_mysql_connection
 
 
 def mysql_operation_timeout_seconds(settings: Dict[str, str]) -> int:
@@ -21,8 +22,10 @@ def mysql_operation_timeout_seconds(settings: Dict[str, str]) -> int:
 
 
 class MySQLConnectionProxy:
-    def __init__(self, connection):
+    def __init__(self, connection, release=None):
         self.connection = connection
+        self.release = release
+        self.closed = False
 
     def execute(self, sql: str, params=None):
         cursor = self.connection.cursor()
@@ -36,7 +39,13 @@ class MySQLConnectionProxy:
         self.connection.rollback()
 
     def close(self) -> None:
-        self.connection.close()
+        if self.closed:
+            return
+        self.closed = True
+        if self.release:
+            self.release(self.connection)
+        else:
+            self.connection.close()
 
     def __enter__(self):
         return self
@@ -80,12 +89,30 @@ class MySQLOperationalConnection:
             kwargs["unix_socket"] = self.mysql_config["unix_socket"]
         return pymysql.connect(**kwargs)
 
+    def pooled_connection(self, autocommit: bool = True):
+        key = (
+            "orbit-alpha-operational",
+            str(self.mysql_config.get("host") or ""),
+            int(self.mysql_config.get("port") or 3306),
+            str(self.mysql_config.get("user") or ""),
+            str(self.mysql_config.get("database") or ""),
+            str(self.mysql_config.get("unix_socket") or ""),
+        )
+        return pooled_mysql_connection(
+            key,
+            self.raw_connection,
+            autocommit=autocommit,
+            settings=self.runtime_settings,
+        )
+
     def connect(self):
-        return MySQLConnectionProxy(self.raw_connection(autocommit=True))
+        connection, release = self.pooled_connection(autocommit=True)
+        return MySQLConnectionProxy(connection, release=release)
 
     @contextmanager
     def transaction(self):
-        proxy = MySQLConnectionProxy(self.raw_connection(autocommit=False))
+        connection, release = self.pooled_connection(autocommit=False)
+        proxy = MySQLConnectionProxy(connection, release=release)
         try:
             yield proxy
             proxy.commit()

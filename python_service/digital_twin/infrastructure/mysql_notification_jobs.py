@@ -55,8 +55,8 @@ class MySQLNotificationJobStore(MySQLOperationalConnection):
 
     def jobs(self) -> List[NotificationJob]:
         with self.connect() as connection:
-            rows = connection.execute("SELECT payload_json FROM notification_jobs ORDER BY created_at, job_id").fetchall()
-        return [NotificationJob.from_dict(_json_loads(row["payload_json"], {})) for row in rows]
+            rows = connection.execute("SELECT text, payload_json FROM notification_jobs ORDER BY created_at, job_id").fetchall()
+        return [self.job_from_row(row) for row in rows]
 
     def recent(self, limit: int = 40, message_type: str = "", status: str = "") -> List[NotificationJob]:
         jobs, _ = self.recent_page(limit=limit, message_type=message_type, status=status)
@@ -92,10 +92,10 @@ class MySQLNotificationJobStore(MySQLOperationalConnection):
                 params,
             ).fetchone()
             rows = connection.execute(
-                "SELECT payload_json FROM notification_jobs" + where + " ORDER BY created_at DESC, job_id DESC LIMIT %s OFFSET %s",
+                "SELECT text, payload_json FROM notification_jobs" + where + " ORDER BY created_at DESC, job_id DESC LIMIT %s OFFSET %s",
                 params + [page_size, page_offset],
             ).fetchall()
-        return [NotificationJob.from_dict(_json_loads(row["payload_json"], {})) for row in rows], int(total_row["count"] or 0) if total_row else 0
+        return [self.job_from_row(row) for row in rows], int(total_row["count"] or 0) if total_row else 0
 
     def get(self, job_id: str) -> Optional[NotificationJob]:
         target = str(job_id or "").strip()
@@ -103,13 +103,31 @@ class MySQLNotificationJobStore(MySQLOperationalConnection):
             return None
         with self.connect() as connection:
             row = connection.execute(
-                "SELECT payload_json FROM notification_jobs WHERE job_id = %s",
+                "SELECT text, payload_json FROM notification_jobs WHERE job_id = %s",
                 (target,),
             ).fetchone()
-        return NotificationJob.from_dict(_json_loads(row["payload_json"], {})) if row else None
+        return self.job_from_row(row) if row else None
+
+    @staticmethod
+    def compact_job_payload(job: NotificationJob) -> Dict[str, object]:
+        """Keep the message body in its indexed column only.
+
+        Older rows contain ``text`` in both columns. ``job_from_row`` accepts
+        both layouts so rows migrate naturally on their next state update.
+        """
+        payload = job.to_dict()
+        payload.pop("text", None)
+        return payload
+
+    @staticmethod
+    def job_from_row(row) -> NotificationJob:
+        payload = _json_loads(row.get("payload_json"), {})
+        if not payload.get("text"):
+            payload["text"] = str(row.get("text") or "")
+        return NotificationJob.from_dict(payload)
 
     def upsert_job_with_connection(self, connection, job: NotificationJob) -> None:
-        payload = job.to_dict()
+        payload = self.compact_job_payload(job)
         dedupe_value = str(job.dedupe_key or "").strip()[:191] or None
         cursor = connection.execute(
             """
@@ -323,7 +341,7 @@ class MySQLNotificationJobStore(MySQLOperationalConnection):
         cutoff_text = cutoff.isoformat().replace("+00:00", "Z")
         rows = connection.execute(
             """
-            SELECT payload_json, created_at, status FROM notification_jobs
+            SELECT text, payload_json, created_at, status FROM notification_jobs
             WHERE message_type = %s AND created_at >= %s AND status IN ('pending', 'processing', 'done')
             ORDER BY created_at DESC
             LIMIT %s
@@ -335,7 +353,7 @@ class MySQLNotificationJobStore(MySQLOperationalConnection):
         most_recent_at = ""
         state_group_key = notification_state_group_key(job)
         for row in rows:
-            previous = NotificationJob.from_dict(_json_loads(row["payload_json"], {}))
+            previous = self.job_from_row(row)
             if previous.job_id == job.job_id:
                 continue
             previous_context = previous.context or {}
@@ -456,14 +474,14 @@ class MySQLNotificationJobStore(MySQLOperationalConnection):
         with self.connect() as connection:
             rows = connection.execute(
                 """
-                SELECT payload_json FROM notification_jobs
+                SELECT text, payload_json FROM notification_jobs
                 WHERE status IN ('pending', 'failed')
                 ORDER BY created_at, job_id
                 LIMIT %s
                 """,
                 (int(limit or 10),),
             ).fetchall()
-        return [NotificationJob.from_dict(_json_loads(row["payload_json"], {})) for row in rows]
+        return [self.job_from_row(row) for row in rows]
 
     def claim_pending(self, limit: int = 10, stale_after_minutes: int = 30) -> List[NotificationJob]:
         stamp = utc_now()
@@ -474,7 +492,7 @@ class MySQLNotificationJobStore(MySQLOperationalConnection):
             query_specs = [
                 (
                     """
-                    SELECT job_id, payload_json FROM notification_jobs
+                    SELECT job_id, text, payload_json FROM notification_jobs
                     WHERE status = 'pending'
                     ORDER BY created_at, job_id
                     LIMIT %s
@@ -484,7 +502,7 @@ class MySQLNotificationJobStore(MySQLOperationalConnection):
                 ),
                 (
                     """
-                    SELECT job_id, payload_json FROM notification_jobs
+                    SELECT job_id, text, payload_json FROM notification_jobs
                     WHERE status = 'processing'
                       AND COALESCE(NULLIF(processing_started_at, ''), NULLIF(updated_at, ''), created_at) <= %s
                     ORDER BY created_at, job_id
@@ -495,7 +513,7 @@ class MySQLNotificationJobStore(MySQLOperationalConnection):
                 ),
                 (
                     """
-                    SELECT job_id, payload_json FROM notification_jobs
+                    SELECT job_id, text, payload_json FROM notification_jobs
                     WHERE status = 'failed' AND attempts < %s
                     ORDER BY attempts, created_at, job_id
                     LIMIT %s
@@ -510,14 +528,14 @@ class MySQLNotificationJobStore(MySQLOperationalConnection):
                     break
                 rows = connection.execute(sql, tuple(params) + (remaining,)).fetchall()
                 for row in rows:
-                    job = NotificationJob.from_dict(_json_loads(row["payload_json"], {}))
+                    job = self.job_from_row(row)
                     if not job.job_id:
                         continue
                     job.status = "processing"
                     job.attempts += 1
                     job.updated_at = stamp
                     job.last_error = ""
-                    payload = job.to_dict()
+                    payload = self.compact_job_payload(job)
                     cursor = connection.execute(
                         """
                         UPDATE notification_jobs

@@ -112,11 +112,16 @@ class ExternalSignalCoreMixin:
             "fetchedAt": signals.get("fetchedAt") or utc_now_iso(),
             "signals": signals,
         }
+        try:
+            max_entries = int(float(str(self.settings.get("externalSignalCacheMaxEntries") or "6")))
+        except (TypeError, ValueError):
+            max_entries = 6
+        max_entries = max(2, min(20, max_entries))
         ordered = sorted(
             entries.items(),
             key=lambda item: str(item[1].get("fetchedAt") if isinstance(item[1], dict) else ""),
             reverse=True,
-        )[:20]
+        )[:max_entries]
         return {"schemaVersion": 1, "entries": dict(ordered), "providerState": dict(self.provider_state)}
 
     def provider_state_from(self, payload: Dict[str, object]) -> Dict[str, object]:

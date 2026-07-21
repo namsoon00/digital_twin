@@ -1,6 +1,8 @@
 import atexit
+import fcntl
 import hashlib
 import os
+import tempfile
 from pathlib import Path
 
 from digital_twin.infrastructure.mysql_monitoring import (
@@ -31,6 +33,7 @@ from digital_twin.infrastructure.mysql_schema_tuning import mysql_partitioning_m
 
 
 _CREATED_TEST_DATABASES = {}
+_HELD_TEST_DATABASE_LOCKS = {}
 DEFAULT_TEST_DATABASE = "orbit_alpha_test"
 
 
@@ -61,6 +64,33 @@ def register_mysql_test_database(config) -> None:
     database = str((config or {}).get("database") or "")
     if is_managed_test_database(database):
         _CREATED_TEST_DATABASES[database] = dict(config)
+
+
+def acquire_mysql_test_database_lock(config) -> None:
+    """Serialize processes that reuse the bounded default test schema.
+
+    Multiple Codex or CI sessions can run the suite at the same time. Without
+    a process-wide lock they repeatedly drop the same schema underneath each
+    other, causing both false failures and sustained MySQL DDL load. Explicit
+    parallel workers use isolated bounded names and do not need this lock.
+    """
+
+    config = config if isinstance(config, dict) else {}
+    if str(config.get("database") or "") != DEFAULT_TEST_DATABASE:
+        return
+    identity = "|".join([
+        str(config.get("host") or "127.0.0.1"),
+        str(config.get("port") or 3306),
+        str(config.get("unix_socket") or ""),
+        DEFAULT_TEST_DATABASE,
+    ])
+    if identity in _HELD_TEST_DATABASE_LOCKS:
+        return
+    digest = hashlib.sha1(identity.encode("utf-8")).hexdigest()[:12]
+    lock_path = Path(tempfile.gettempdir()) / ("orbit-alpha-mysql-test-" + digest + ".lock")
+    handle = lock_path.open("a+", encoding="utf-8")
+    fcntl.flock(handle.fileno(), fcntl.LOCK_EX)
+    _HELD_TEST_DATABASE_LOCKS[identity] = handle
 
 
 def _test_database_cleanup() -> None:
@@ -164,7 +194,9 @@ def mysql_test_settings(seed=None):
         "mysqlUnixSocket": os.environ.get("MYSQL_UNIX_SOCKET", ""),
         "operationalHistoryRetentionEnabled": "0",
     }
-    register_mysql_test_database(mysql_test_database_config(settings))
+    config = mysql_test_database_config(settings)
+    acquire_mysql_test_database_lock(config)
+    register_mysql_test_database(config)
     return settings
 
 

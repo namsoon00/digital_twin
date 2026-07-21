@@ -47,7 +47,7 @@ from .operational_common import (
 from .settings import read_json, settings_path, utc_now
 from .mysql_notification_jobs import MySQLNotificationJobStore
 from .mysql_operational_connection import MYSQL_SCHEMA, MySQLConnectionProxy, MySQLOperationalConnection
-from .mysql_operational_events import insert_domain_event_with_connection
+from .mysql_operational_events import domain_event_from_row, insert_domain_event_with_connection
 from .mysql_operational_helpers import (
     _is_duplicate_key_error,
     _json_loads,
@@ -329,7 +329,7 @@ class MySQLEventLog(MySQLOperationalConnection):
         if aggregate_id:
             clauses.append("aggregate_id = %s")
             params.append(aggregate_id)
-        sql = "SELECT event_json FROM domain_events"
+        sql = "SELECT event_id, name, aggregate_id, occurred_at, correlation_id, payload_json, event_json FROM domain_events"
         if clauses:
             sql += " WHERE " + " AND ".join(clauses)
         sql += " ORDER BY occurred_at, event_id"
@@ -338,7 +338,7 @@ class MySQLEventLog(MySQLOperationalConnection):
             params.append(int(limit))
         with self.connect() as connection:
             rows = connection.execute(sql, params).fetchall()
-        return [DomainEvent.from_dict(_json_loads(row["event_json"], {})) for row in rows]
+        return [domain_event_from_row(row) for row in rows]
 
     def recent_events(self, name: str = "", aggregate_id: str = "", limit: int = 0) -> List[DomainEvent]:
         clauses = []
@@ -349,7 +349,7 @@ class MySQLEventLog(MySQLOperationalConnection):
         if aggregate_id:
             clauses.append("aggregate_id = %s")
             params.append(aggregate_id)
-        sql = "SELECT event_json FROM domain_events"
+        sql = "SELECT event_id, name, aggregate_id, occurred_at, correlation_id, payload_json, event_json FROM domain_events"
         if clauses:
             sql += " WHERE " + " AND ".join(clauses)
         sql += " ORDER BY occurred_at DESC, event_id DESC"
@@ -358,26 +358,26 @@ class MySQLEventLog(MySQLOperationalConnection):
             params.append(int(limit))
         with self.connect() as connection:
             rows = connection.execute(sql, params).fetchall()
-        return [DomainEvent.from_dict(_json_loads(row["event_json"], {})) for row in reversed(rows)]
+        return [domain_event_from_row(row) for row in reversed(rows)]
 
     def latest_events(self, limit: int = 12) -> List[DomainEvent]:
         with self.connect() as connection:
             rows = connection.execute(
-                "SELECT event_json FROM domain_events ORDER BY occurred_at DESC, event_id DESC LIMIT %s",
+                "SELECT event_id, name, aggregate_id, occurred_at, correlation_id, payload_json, event_json FROM domain_events ORDER BY occurred_at DESC, event_id DESC LIMIT %s",
                 (max(1, min(200, int(limit or 12))),),
             ).fetchall()
-        return [DomainEvent.from_dict(_json_loads(row["event_json"], {})) for row in reversed(rows)]
+        return [domain_event_from_row(row) for row in reversed(rows)]
 
     def latest_events_by_name(self, names: Iterable[str]) -> Dict[str, DomainEvent]:
         result = {}
         with self.connect() as connection:
             for name in [str(item or "").strip() for item in names or [] if str(item or "").strip()]:
                 row = connection.execute(
-                    "SELECT event_json FROM domain_events WHERE name = %s ORDER BY occurred_at DESC, event_id DESC LIMIT 1",
+                    "SELECT event_id, name, aggregate_id, occurred_at, correlation_id, payload_json, event_json FROM domain_events WHERE name = %s ORDER BY occurred_at DESC, event_id DESC LIMIT 1",
                     (name,),
                 ).fetchone()
                 if row:
-                    result[name] = DomainEvent.from_dict(_json_loads(row["event_json"], {}))
+                    result[name] = domain_event_from_row(row)
         return result
 
     def event_counts(self) -> Dict[str, int]:

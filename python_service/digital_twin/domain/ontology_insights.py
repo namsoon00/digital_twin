@@ -134,7 +134,8 @@ def signal_type_label(rule: str) -> str:
     return MESSAGE_TYPE_LABELS.get(rule, str(rule or "신호"))
 
 
-REVIEW_LEVEL_ORDER = ("normal", "observe", "check", "act", "immediate", "blocked")
+REVIEW_LEVEL_ORDER = ("normal", "observe", "check", "act", "immediate")
+KNOWN_REVIEW_LEVELS = REVIEW_LEVEL_ORDER + ("blocked",)
 DATA_STATE_ORDER = ("sufficient", "partial", "insufficient", "unavailable")
 CHANGE_STATE_ORDER = ("unchanged", "new-condition", "new-evidence", "improving", "worsening", "direction-changed")
 
@@ -145,7 +146,7 @@ def event_decision_state(event: AlertEvent) -> Dict[str, str]:
     state = relation_context.get("decisionState") if isinstance(relation_context.get("decisionState"), dict) else {}
     severity = str(event.severity or "").upper()
     review_level = str(state.get("reviewLevel") or decision.get("reviewLevel") or "").strip().lower()
-    if review_level not in REVIEW_LEVEL_ORDER:
+    if review_level not in KNOWN_REVIEW_LEVELS:
         review_level = "immediate" if severity == "ALERT" else "check" if severity == "WATCH" else "observe"
     data_state = str(state.get("dataState") or decision.get("dataState") or "partial").strip().lower()
     if data_state not in DATA_STATE_ORDER:
@@ -173,7 +174,12 @@ def merged_decision_state(events: Iterable[AlertEvent]) -> Dict[str, str]:
     states = [event_decision_state(event) for event in events or []]
     if not states:
         return event_decision_state(AlertEvent("", "", "INFO", "", "", "", []))
-    review_level = max((item["reviewLevel"] for item in states), key=REVIEW_LEVEL_ORDER.index)
+    actionable_review_levels = [item["reviewLevel"] for item in states if item["reviewLevel"] != "blocked"]
+    review_level = (
+        max(actionable_review_levels, key=REVIEW_LEVEL_ORDER.index)
+        if actionable_review_levels
+        else "blocked"
+    )
     data_state = max((item["dataState"] for item in states), key=DATA_STATE_ORDER.index)
     change_state = max((item["changeState"] for item in states), key=CHANGE_STATE_ORDER.index)
     conflict_values = {item["conflictState"] for item in states}
@@ -190,6 +196,7 @@ def merged_decision_state(events: Iterable[AlertEvent]) -> Dict[str, str]:
         "dataState": data_state,
         "changeState": change_state,
         "conflictState": conflict_state,
+        "judgementBlocked": bool(states) and all(item["reviewLevel"] == "blocked" for item in states),
     }
 
 

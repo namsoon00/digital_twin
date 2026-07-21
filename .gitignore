@@ -7,23 +7,7 @@ build/
 dist/
 .env
 .env*.local
-data/store.json
-data/settings.json
-data/accounts.json
-data/service.db
-data/service.db-*
-data/notification-state.json
-data/monitor-state.json
-data/python-monitor-state.json
-data/domain-events.jsonl
-data/model-review-queue.json
-data/ontology-lab.json
-data/python-model-review.log
-data/kakao-token.json
-data/*.pid
-data/python-monitor.log
-data/typedb-data/
-data/typedb-logs/
-data/typedb.log
-data/typedb-retention.json
+# Runtime databases, backups, logs, credentials, and local projections are
+# private machine state. Test fixtures belong under docs/fixtures instead.
+data/
 *.log

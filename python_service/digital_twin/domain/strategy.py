@@ -9,7 +9,6 @@ from typing import Dict, Iterable, List
 from .investment_research import build_active_investment_opinion
 from .market_data import number
 from .ontology_prompting import ONTOLOGY_PROMPT_VERSION
-from .ontology_relation_reasoning import relation_thresholds_from_settings
 from .portfolio import DecisionItem, PortfolioSummary, Position
 from .portfolio_ontology_builder import build_portfolio_ontology
 
@@ -29,7 +28,6 @@ class StrategyModel:
 
     def __init__(self, settings: Dict[str, str]):
         self.settings = dict(settings or {})
-        self.thresholds = relation_thresholds_from_settings(self.settings)
 
 
 def baseline_position_payload(position: Position) -> Dict[str, object]:

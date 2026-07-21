@@ -998,9 +998,6 @@ class RealtimeMonitor(MonitoringSampleDataMixin, MonitoringPositionContextMixin,
     def holding_timing_events(self, snapshot: AccountSnapshot) -> List[AlertEvent]:
         events: List[AlertEvent] = []
         positions = {item.symbol.upper(): item.to_dict() for item in snapshot.positions if not item.is_cash()}
-        loss_threshold = float(self.relation_thresholds.get("lossRateLow", -8.0) or -8.0)
-        loss_buffer = abs(float(self.relation_thresholds.get("lossRateBufferPct", 1.0) or 0.0))
-        forced_loss_threshold = loss_threshold - loss_buffer
         for item in snapshot.decisions:
             position = positions.get(item.symbol.upper()) or item.to_dict()
             decision_state = item.to_dict()
@@ -1013,9 +1010,8 @@ class RealtimeMonitor(MonitoringSampleDataMixin, MonitoringPositionContextMixin,
             change_state = str(relation_context.get("changeState") or relation_decision.get("changeState") or item.change_state or "unchanged")
             if not data_state_is_usable(data_state):
                 continue
-            factual_loss_trigger = item.profit_loss_rate <= forced_loss_threshold
             meaningful_change = change_state in {"new-condition", "improving", "worsening", "direction-changed", "new-evidence"}
-            if not (review_level_at_least(review_level, "check") or factual_loss_trigger or meaningful_change):
+            if not (review_level_at_least(review_level, "check") or meaningful_change):
                 continue
             decision_phrase = self.decision_state_phrase(item.decision, review_level)
             prompt_context = self.prompt_context_from_decision(decision_state)
@@ -1036,11 +1032,7 @@ class RealtimeMonitor(MonitoringSampleDataMixin, MonitoringPositionContextMixin,
                 ["상태 " + decision_phrase, *self.holding_price_lines(position, snapshot.portfolio, positions.values()), self.flow_context_line(position), self.investor_context_line(position), self.trend_context_line(position), self.holding_action_line(item.decision, item.profit_loss_rate)] + relation_lines + ontology_lines + active_lines,
                 item.symbol,
                 criteria=self.criteria(
-                    "관계 규칙이 확인·대응 상태로 바뀌거나 손익률이 손실 기준 "
-                    + compact_number(loss_threshold)
-                    + "%에서 완충 "
-                    + compact_number(loss_buffer)
-                    + "%p 이상 더 악화될 때",
+                    "TypeDB 관계 규칙이 확인·대응 상태가 되거나 손익·뉴스·공시 등 의미 있는 변화가 새로 확인될 때",
                     "상태 " + decision_phrase
                     + ", 자료 " + DATA_STATE_LABELS.get(data_state, DATA_STATE_LABELS["partial"])
                     + ", 변화 " + CHANGE_STATE_LABELS.get(change_state, CHANGE_STATE_LABELS["unchanged"])

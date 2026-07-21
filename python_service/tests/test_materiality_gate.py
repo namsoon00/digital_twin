@@ -870,6 +870,65 @@ class MaterialityGateTests(unittest.TestCase):
         self.assertNotIn("lastReasonedAtBySymbol", cursor.payload)
         self.assertIn("000660", cursor.payload["lastProjectionAttemptAtBySymbol"])
 
+    def test_ontology_reasoning_applies_global_abox_projection_cooldown(self):
+        request = ontology_reasoning_requested_event(
+            DomainEvent(
+                name="market_data.collected",
+                aggregate_id="market:KR",
+                payload={"changedCount": 1, "symbols": ["005930"]},
+            ),
+            "market-data-update",
+            ["005930"],
+            changed_count=1,
+            fact_types=["MarketQuote"],
+        )
+
+        class Reader:
+            def events(self, name="", aggregate_id="", limit=0):
+                return [request] if name == ONTOLOGY_REASONING_REQUESTED else []
+
+        class Cursor:
+            def __init__(self):
+                self.payload = {
+                    "processedEventIds": [],
+                    "lastSuccessfulProjectionAt": "2026-07-21T00:02:50Z",
+                }
+
+            def processed_event_ids(self):
+                return list(self.payload.get("processedEventIds") or [])
+
+            def mark_processed(self, event_ids):
+                self.payload["processedEventIds"] = list(event_ids or [])
+
+            def load(self):
+                return dict(self.payload)
+
+            def save(self, payload):
+                self.payload = dict(payload or {})
+
+        class FakeMonitorRunner:
+            def run_once(self, **_kwargs):
+                raise AssertionError("a whole ABox projection must not run during cooldown")
+
+        runner = OntologyReasoningRunner(
+            Reader(),
+            Cursor(),
+            monitor_runner_factory=FakeMonitorRunner,
+            settings={
+                "ontologyReasoningEnabled": "1",
+                "ontologyReasoningMinIntervalSeconds": "180",
+                "ontologyReasoningUrgentMinIntervalSeconds": "60",
+                "ontologyRuleCandidateAiEnabled": "0",
+            },
+            now_provider=lambda: datetime(2026, 7, 21, 0, 3, 0, tzinfo=timezone.utc),
+        )
+
+        result = runner.run_once()
+
+        self.assertEqual("cooldown", result["status"])
+        self.assertEqual(170, result["retryAfterSeconds"])
+        self.assertEqual([], runner.cursor_store.processed_event_ids())
+
     def test_ontology_reasoning_reads_recent_events_when_supported(self):
         request = ontology_reasoning_requested_event(
             DomainEvent(name="market_data.collected", aggregate_id="market:KR", payload={}),

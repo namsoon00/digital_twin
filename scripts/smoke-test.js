@@ -56,6 +56,64 @@ function waitForServer(child) {
   });
 }
 
+function waitForServerExit(child) {
+  return new Promise(function (resolve) {
+    if (child.exitCode !== null || child.signalCode) {
+      resolve();
+      return;
+    }
+    const timer = setTimeout(function () {
+      try {
+        child.kill("SIGKILL");
+      } catch (_error) {}
+    }, 5000);
+    child.once("exit", function () {
+      clearTimeout(timer);
+      resolve();
+    });
+    try {
+      child.kill("SIGTERM");
+    } catch (_error) {
+      clearTimeout(timer);
+      resolve();
+    }
+  });
+}
+
+function removeSmokePath(targetPath) {
+  fs.rmSync(targetPath, { recursive: true, force: true, maxRetries: 3, retryDelay: 100 });
+  if (fs.existsSync(targetPath)) {
+    throw new Error("스모크 임시 경로 정리에 실패했습니다: " + targetPath);
+  }
+}
+
+function dropSmokeDatabase(database, environment) {
+  if (!/^orbit_alpha_smoke_[A-Za-z0-9_]+$/.test(database)) return;
+  const cleanupCode = [
+    "import os, sys",
+    "import pymysql",
+    "database = sys.argv[1]",
+    "kwargs = {'host': os.environ.get('MYSQL_HOST', '127.0.0.1'), 'port': int(os.environ.get('MYSQL_PORT', '3306') or 3306), 'user': os.environ.get('MYSQL_USER', 'root'), 'password': os.environ.get('MYSQL_PASSWORD', ''), 'charset': 'utf8mb4', 'autocommit': True}",
+    "socket = os.environ.get('MYSQL_UNIX_SOCKET', '')",
+    "if socket: kwargs['unix_socket'] = socket",
+    "connection = pymysql.connect(**kwargs)",
+    "try:",
+    "    with connection.cursor() as cursor:",
+    "        cursor.execute('DROP DATABASE IF EXISTS `' + database.replace('`', '``') + '`')",
+    "finally:",
+    "    connection.close()"
+  ].join("\n");
+  const result = childProcess.spawnSync(process.env.PYTHON_BIN || "python3", ["-c", cleanupCode, database], {
+    cwd: rootDir,
+    env: environment,
+    encoding: "utf8",
+    timeout: 30000
+  });
+  if (result.error || result.status !== 0) {
+    throw new Error("스모크 MySQL 정리에 실패했습니다: " + String((result.error && result.error.message) || result.stderr || result.status));
+  }
+}
+
 function request(port, pathname, options) {
   return new Promise(function (resolve, reject) {
     const method = options && options.method ? options.method : "GET";
@@ -2119,32 +2177,33 @@ async function withServer(extraEnv, callback) {
   const settingsPath = path.join(os.tmpdir(), "digital-twin-smoke-settings-" + runId + ".json");
   const dataDir = path.join(os.tmpdir(), "digital-twin-smoke-data-" + runId);
   const mysqlDatabase = "orbit_alpha_smoke_" + runId.replace(/[^a-zA-Z0-9_]/g, "_");
+  const serverEnvironment = Object.assign({}, process.env, {
+    HOST: "127.0.0.1",
+    PORT: String(randomPort()),
+    LOCAL_CODEX_ENABLED: "0",
+    WATCHLIST_SYMBOLS: "TSLA,AAPL,NVDA,000660",
+    MYSQL_HOST: process.env.MYSQL_HOST || "127.0.0.1",
+    MYSQL_PORT: process.env.MYSQL_PORT || "3306",
+    MYSQL_DATABASE: process.env.MYSQL_SMOKE_DATABASE || mysqlDatabase,
+    MYSQL_USER: process.env.MYSQL_USER || "root",
+    MYSQL_PASSWORD: process.env.MYSQL_PASSWORD || "",
+    MYSQL_UNIX_SOCKET: process.env.MYSQL_UNIX_SOCKET || "",
+    KIS_MARKET_SIGNALS_ENABLED: "0",
+    EXTERNAL_ALPHA_ENABLED: "0",
+    EXTERNAL_COINGECKO_ENABLED: "0",
+    EXTERNAL_FRED_ENABLED: "0",
+    EXTERNAL_DART_ENABLED: "0",
+    EXTERNAL_SEC_ENABLED: "0",
+    EXTERNAL_NEWS_ENABLED: "0",
+    EXTERNAL_YFINANCE_ENABLED: "0",
+    EXTERNAL_CRYPTO_IDS: "",
+    SETTINGS_PATH: settingsPath,
+    DIGITAL_TWIN_DATA_DIR: dataDir
+  }, extraEnv || {});
   const serverProcess = childProcess.spawn(process.env.PYTHON_BIN || "python3", ["python_service/service.py", "web"], {
     cwd: rootDir,
     stdio: ["ignore", "pipe", "pipe"],
-    env: Object.assign({}, process.env, {
-      HOST: "127.0.0.1",
-      PORT: String(randomPort()),
-      LOCAL_CODEX_ENABLED: "0",
-      WATCHLIST_SYMBOLS: "TSLA,AAPL,NVDA,000660",
-      MYSQL_HOST: process.env.MYSQL_HOST || "127.0.0.1",
-      MYSQL_PORT: process.env.MYSQL_PORT || "3306",
-      MYSQL_DATABASE: process.env.MYSQL_SMOKE_DATABASE || mysqlDatabase,
-      MYSQL_USER: process.env.MYSQL_USER || "root",
-      MYSQL_PASSWORD: process.env.MYSQL_PASSWORD || "",
-      MYSQL_UNIX_SOCKET: process.env.MYSQL_UNIX_SOCKET || "",
-      KIS_MARKET_SIGNALS_ENABLED: "0",
-      EXTERNAL_ALPHA_ENABLED: "0",
-      EXTERNAL_COINGECKO_ENABLED: "0",
-      EXTERNAL_FRED_ENABLED: "0",
-      EXTERNAL_DART_ENABLED: "0",
-      EXTERNAL_SEC_ENABLED: "0",
-      EXTERNAL_NEWS_ENABLED: "0",
-      EXTERNAL_YFINANCE_ENABLED: "0",
-      EXTERNAL_CRYPTO_IDS: "",
-      SETTINGS_PATH: settingsPath,
-      DIGITAL_TWIN_DATA_DIR: dataDir
-    }, extraEnv || {})
+    env: serverEnvironment
   });
 
   try {
@@ -2154,7 +2213,10 @@ async function withServer(extraEnv, callback) {
       settingsPath: settingsPath
     });
   } finally {
-    serverProcess.kill("SIGTERM");
+    await waitForServerExit(serverProcess);
+    dropSmokeDatabase(String(serverEnvironment.MYSQL_DATABASE || ""), serverEnvironment);
+    removeSmokePath(dataDir);
+    removeSmokePath(settingsPath);
   }
 }
 

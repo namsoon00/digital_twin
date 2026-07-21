@@ -33,15 +33,44 @@ from digital_twin.infrastructure.mysql_schema_tuning import mysql_partitioning_m
 _CREATED_TEST_DATABASES = {}
 
 
+def mysql_test_database_config(settings):
+    settings = settings if isinstance(settings, dict) else {}
+    return {
+        "host": settings.get("mysqlHost") or "127.0.0.1",
+        "port": int(settings.get("mysqlPort") or 3306),
+        "user": settings.get("mysqlUser") or "root",
+        "password": settings.get("mysqlPassword") or "",
+        "database": settings.get("mysqlDatabase") or "",
+        "unix_socket": settings.get("mysqlUnixSocket") or "",
+    }
+
+
+def register_mysql_test_database(config) -> None:
+    database = str((config or {}).get("database") or "")
+    if database.startswith("orbit_alpha_test_"):
+        _CREATED_TEST_DATABASES[database] = dict(config)
+
+
 def _test_database_cleanup() -> None:
     """Drop temporary test schemas left by a completed Python test process."""
     try:
         import pymysql
     except ImportError:
         return
+    grouped = {}
     for database, config in list(_CREATED_TEST_DATABASES.items()):
         if not str(database).startswith("orbit_alpha_test_"):
             continue
+        key = (
+            str(config.get("host") or ""),
+            int(config.get("port") or 3306),
+            str(config.get("user") or ""),
+            str(config.get("password") or ""),
+            str(config.get("unix_socket") or ""),
+        )
+        grouped.setdefault(key, {"config": config, "databases": []})["databases"].append(database)
+    for group in grouped.values():
+        config = group["config"]
         kwargs = {
             "host": config["host"],
             "port": int(config["port"] or 3306),
@@ -56,7 +85,8 @@ def _test_database_cleanup() -> None:
             connection = pymysql.connect(**kwargs)
             try:
                 with connection.cursor() as cursor:
-                    cursor.execute("DROP DATABASE IF EXISTS `" + database.replace("`", "``") + "`")
+                    for database in group["databases"]:
+                        cursor.execute("DROP DATABASE IF EXISTS `" + database.replace("`", "``") + "`")
             finally:
                 connection.close()
         except Exception:
@@ -98,7 +128,7 @@ def test_database_name(seed=None) -> str:
 
 
 def mysql_test_settings(seed=None):
-    return {
+    settings = {
         "mysqlHost": os.environ.get("MYSQL_HOST", "127.0.0.1"),
         "mysqlPort": os.environ.get("MYSQL_PORT", "3306"),
         "mysqlDatabase": os.environ.get("MYSQL_TEST_DATABASE") or test_database_name(seed),
@@ -107,19 +137,14 @@ def mysql_test_settings(seed=None):
         "mysqlUnixSocket": os.environ.get("MYSQL_UNIX_SOCKET", ""),
         "operationalHistoryRetentionEnabled": "0",
     }
+    register_mysql_test_database(mysql_test_database_config(settings))
+    return settings
 
 
 def reset_mysql_test_database(seed=None):
     settings = mysql_test_settings(seed)
     os.environ["MYSQL_DATABASE"] = settings["mysqlDatabase"]
-    config = {
-        "host": settings["mysqlHost"],
-        "port": int(settings["mysqlPort"] or 3306),
-        "user": settings["mysqlUser"],
-        "password": settings["mysqlPassword"],
-        "database": settings["mysqlDatabase"],
-        "unix_socket": settings["mysqlUnixSocket"],
-    }
+    config = mysql_test_database_config(settings)
     import pymysql
 
     forget_mysql_database(config)
@@ -152,20 +177,14 @@ def reset_mysql_test_database(seed=None):
     MySQLOperationalConnection._retention_last_run.pop(schema_key, None)
     MySQLOperationalConnection._retention_last_warning.pop(schema_key, None)
     ensure_mysql_database_exists(config)
-    _CREATED_TEST_DATABASES[config["database"]] = dict(config)
+    register_mysql_test_database(config)
     return settings
 
 
 def mysql_test_connection(seed=None):
     settings = mysql_test_settings(seed)
-    config = {
-        "host": settings["mysqlHost"],
-        "port": int(settings["mysqlPort"] or 3306),
-        "user": settings["mysqlUser"],
-        "password": settings["mysqlPassword"],
-        "database": settings["mysqlDatabase"],
-        "unix_socket": settings["mysqlUnixSocket"],
-    }
+    config = mysql_test_database_config(settings)
+    register_mysql_test_database(config)
     ensure_mysql_database_exists(config)
     import pymysql
 

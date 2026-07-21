@@ -176,6 +176,18 @@ class PrimaryCoverageRepository(FakeOntologyRepository):
         ]
 
 
+class ScopedCoverageRepository(PrimaryCoverageRepository):
+    def __init__(self):
+        self.source_ids = []
+
+    def read_relation_rows(self, boxes=None):
+        raise AssertionError("coverage should use the scoped ABox relation reader")
+
+    def read_relation_rows_by_source_ids(self, source_ids, boxes=None):
+        self.source_ids = list(source_ids or [])
+        return PrimaryCoverageRepository.read_relation_rows(self, boxes)
+
+
 class OntologyDiagnosticsServiceTests(unittest.TestCase):
     def test_status_reports_native_reasoning_and_outbox_boundary(self):
         alert_event = DomainEvent(
@@ -254,6 +266,15 @@ class OntologyDiagnosticsServiceTests(unittest.TestCase):
         self.assertEqual("primary", coverage["primarySymbols"][0]["diagnosticScope"])
         self.assertEqual("context", coverage["contextSymbols"][0]["diagnosticScope"])
         self.assertIn("do not lower the primary status", coverage["interpretation"])
+
+    def test_abox_coverage_uses_scoped_relations_when_repository_supports_it(self):
+        repository = ScopedCoverageRepository()
+        service = OntologyDiagnosticsService(ontology_repository=repository)
+
+        payload = service.status()
+
+        self.assertEqual("ok", payload["aboxCoverage"]["status"])
+        self.assertEqual(["stock:AAPL", "stock:SPY"], repository.source_ids)
 
     def test_strategy_proposal_boundary_reports_validated_backlog(self):
         service = OntologyDiagnosticsService(

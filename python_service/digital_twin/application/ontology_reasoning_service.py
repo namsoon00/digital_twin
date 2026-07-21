@@ -295,6 +295,10 @@ class OntologyReasoningRunner:
             if str(symbol or "").strip() and str(stamp or "").strip()
         }
 
+    def last_successful_projection_at(self, payload: Dict[str, object] = None) -> str:
+        payload = self.cursor_payload() if payload is None else dict(payload or {})
+        return str(payload.get("lastSuccessfulProjectionAt") or "").strip()
+
     def timestamp_due(self, stamp: str, interval_seconds: int) -> bool:
         if not stamp or interval_seconds <= 0:
             return True
@@ -307,6 +311,19 @@ class OntologyReasoningRunner:
             now = now.replace(tzinfo=timezone.utc)
         return (now.astimezone(timezone.utc) - parsed.astimezone(timezone.utc)).total_seconds() >= interval_seconds
 
+    def timestamp_remaining_seconds(self, stamp: str, interval_seconds: int) -> int:
+        if not stamp or interval_seconds <= 0:
+            return 0
+        try:
+            parsed = datetime.fromisoformat(str(stamp).replace("Z", "+00:00"))
+        except ValueError:
+            return 0
+        now = self.now_provider()
+        if now.tzinfo is None:
+            now = now.replace(tzinfo=timezone.utc)
+        elapsed = (now.astimezone(timezone.utc) - parsed.astimezone(timezone.utc)).total_seconds()
+        return max(0, int(interval_seconds - elapsed))
+
     def event_min_interval_seconds(self, event: object) -> int:
         trigger = str(event_payload(event).get("trigger") or "data-update").strip()
         if trigger in {"research-evidence-update", "investment-calendar-update"}:
@@ -314,6 +331,34 @@ class OntologyReasoningRunner:
         if event_review_level(event) in self.urgent_review_levels():
             return self.urgent_min_interval_seconds()
         return self.min_interval_seconds()
+
+    def projection_min_interval_seconds(self, requests: Iterable[object]) -> int:
+        """Return one safe cadence for a whole ABox projection.
+
+        A TypeDB projection replaces the active portfolio ABox as a single
+        generation, even when the trigger contains only one symbol. Per-symbol
+        cooldowns alone therefore allow a backlog of unrelated symbols to
+        repeatedly rebuild the same graph. The most urgent request determines
+        the cadence while preserving the shorter urgent interval.
+        """
+        intervals = [self.event_min_interval_seconds(event) for event in requests or []]
+        return min(intervals) if intervals else self.min_interval_seconds()
+
+    def projection_due(self, requests: Iterable[object], payload: Dict[str, object] = None) -> bool:
+        return self.timestamp_due(
+            self.last_successful_projection_at(payload),
+            self.projection_min_interval_seconds(requests),
+        )
+
+    def projection_cooldown_remaining_seconds(
+        self,
+        requests: Iterable[object],
+        payload: Dict[str, object] = None,
+    ) -> int:
+        return self.timestamp_remaining_seconds(
+            self.last_successful_projection_at(payload),
+            self.projection_min_interval_seconds(requests),
+        )
 
     def event_symbol_due(self, event: object, symbol: str, cursor_payload: Dict[str, object] = None) -> bool:
         interval = self.event_min_interval_seconds(event)
@@ -698,6 +743,16 @@ class OntologyReasoningRunner:
         payload["lastProjectionAttemptAtBySymbol"] = dict(sorted(attempts.items()))
         self.save_cursor_payload(payload)
 
+    def mark_successful_projection(self) -> None:
+        if not hasattr(self.cursor_store, "load") or not hasattr(self.cursor_store, "save"):
+            return
+        payload = self.cursor_payload()
+        now = self.now_provider()
+        if now.tzinfo is None:
+            now = now.replace(tzinfo=timezone.utc)
+        payload["lastSuccessfulProjectionAt"] = now.astimezone(timezone.utc).isoformat().replace("+00:00", "Z")
+        self.save_cursor_payload(payload)
+
     def run_once(self, limit: int = 0, force: bool = False) -> Dict[str, object]:
         if not self.enabled():
             return {"status": "disabled", "processedCount": 0, "alertCount": 0}
@@ -711,6 +766,20 @@ class OntologyReasoningRunner:
                 "coalescedEventCount": len(work.get("coalescedEventIds") or []),
             }
         symbol_batches, symbols, omitted_symbol_count = self.request_symbol_batches(requests)
+        cursor_payload = self.cursor_payload()
+        if not force and not self.projection_due(requests, cursor_payload):
+            retry_after_seconds = self.projection_cooldown_remaining_seconds(requests, cursor_payload)
+            return {
+                "status": "cooldown",
+                "processedCount": 0,
+                "alertCount": 0,
+                "symbols": symbols,
+                "maxSymbolsPerRun": self.max_symbols_per_run(),
+                "omittedSymbolCount": omitted_symbol_count,
+                "retryAfterSeconds": retry_after_seconds,
+                "projectionCooldownSeconds": self.projection_min_interval_seconds(requests),
+                "coalescedEventCount": len(work.get("coalescedEventIds") or []),
+            }
         runner = self.monitor_runner_factory()
         if "symbol_filter" in inspect.signature(runner.run_once).parameters:
             alerts = runner.run_once(force=force, symbol_filter=symbols)
@@ -731,6 +800,7 @@ class OntologyReasoningRunner:
                 "projectionFailures": list(projection_gate.get("results") or []),
                 "coalescedEventCount": len(work.get("coalescedEventIds") or []),
             }
+        self.mark_successful_projection()
         account_ids = [getattr(account, "account_id", "") for account in getattr(runner, "accounts", [])]
         trigger_event_ids = [event.event_id for event in requests]
         completed = ontology_reasoning_completed_event(

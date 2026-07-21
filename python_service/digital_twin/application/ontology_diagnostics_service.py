@@ -205,13 +205,16 @@ class OntologyDiagnosticsService:
             return {"status": "unavailable", "reason": "repository does not expose ABox row reads"}
         try:
             entities = self.ontology_repository.read_entity_rows(["ABox"])
-            relations = self.ontology_repository.read_relation_rows(["ABox"])
         except Exception as error:  # noqa: BLE001 - diagnostics must stay available.
             return {"status": "error", "reason": str(error)[:220]}
         clean_symbols = sorted(set(str(item or "").upper().strip() for item in (symbols or []) if str(item or "").strip()))
-        stock_symbols = self.abox_symbols(entities, relations)
+        stock_symbols = self.abox_symbols(entities, [])
         if clean_symbols:
             stock_symbols = [item for item in stock_symbols if item in clean_symbols]
+        try:
+            relations = self.abox_coverage_relations(entities, stock_symbols)
+        except Exception as error:  # noqa: BLE001 - diagnostics must stay available.
+            return {"status": "error", "reason": str(error)[:220]}
         relation_types_by_symbol: Dict[str, set] = {symbol: set() for symbol in stock_symbols}
         entity_classes_by_symbol: Dict[str, set] = {symbol: set() for symbol in stock_symbols}
         source_by_symbol: Dict[str, str] = {symbol: "" for symbol in stock_symbols}
@@ -306,6 +309,34 @@ class OntologyDiagnosticsService:
             "primarySymbols": primary_rows[:80],
             "contextSymbols": context_rows[:80],
         }
+
+    def abox_coverage_relations(
+        self,
+        entities: List[Dict[str, object]],
+        stock_symbols: List[str],
+    ) -> List[Dict[str, object]]:
+        """Read only relation edges that can affect per-symbol coverage.
+
+        The full active ABox contains many fact-to-fact relations. Joining every
+        one with both endpoints is expensive on TypeDB and is unnecessary for
+        this diagnostic: required coverage categories are all rooted at a
+        stock/asset node. Repositories that expose the scoped reader retain the
+        same coverage semantics without turning the status endpoint into a full
+        graph export.
+        """
+        scoped_reader = getattr(self.ontology_repository, "read_relation_rows_by_source_ids", None)
+        source_ids = []
+        symbol_set = {str(item or "").upper().strip() for item in stock_symbols or [] if str(item or "").strip()}
+        root_kinds = {"stock", "market-proxy", "etf", "crypto-asset", "crypto-market-signal"}
+        for entity in entities or []:
+            entity_id = str((entity or {}).get("id") or "").strip()
+            kind = str((entity or {}).get("kind") or (entity or {}).get("nodeKind") or "").strip().lower()
+            is_asset_root = entity_id.lower().startswith(("stock:", "crypto:")) or kind in root_kinds
+            if entity_id and is_asset_root and self.row_symbol(entity) in symbol_set:
+                source_ids.append(entity_id)
+        if callable(scoped_reader) and source_ids:
+            return list(scoped_reader(sorted(set(source_ids)), ["ABox"]) or [])
+        return list(self.ontology_repository.read_relation_rows(["ABox"]) or [])
 
     def required_categories_for_symbol(self, classes: set, source: str) -> List[str]:
         class_values = {str(item or "") for item in (classes or set())}

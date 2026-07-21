@@ -427,12 +427,33 @@ TYPEDB_PROMOTED_NUMERIC_ATTRIBUTES = {
     "elapsedHours": "ontology-elapsed-hours",
     "startPrice": "ontology-start-price",
     "priceChangePct": "ontology-price-change-pct",
+    "peakPrice": "ontology-peak-price",
+    "troughPrice": "ontology-trough-price",
+    "peakReturnPct": "ontology-peak-return-pct",
+    "troughReturnPct": "ontology-trough-return-pct",
+    "drawdownFromPeakPct": "ontology-drawdown-from-peak-pct",
+    "reboundFromTroughPct": "ontology-rebound-from-trough-pct",
+    "priorPriceChangePct": "ontology-prior-price-change-pct",
+    "recentPriceChangePct": "ontology-recent-price-change-pct",
+    "priceVelocityChangePct": "ontology-price-velocity-change-pct",
+    "consecutiveDeclineCount": "ontology-consecutive-decline-count",
+    "consecutiveAdvanceCount": "ontology-consecutive-advance-count",
+    "directionChangeCount": "ontology-direction-change-count",
+    "validObservationCount": "ontology-valid-observation-count",
+    "invalidObservationCount": "ontology-invalid-observation-count",
+    "staleObservationCount": "ontology-stale-observation-count",
+    "validObservationRatio": "ontology-valid-observation-ratio",
     "profitLossRateStart": "ontology-profit-loss-rate-start",
     "profitLossRateEnd": "ontology-profit-loss-rate-end",
     "profitLossRateChangePct": "ontology-profit-loss-rate-change-pct",
     "ma20DistanceStart": "ontology-ma20-distance-start",
     "ma20DistanceEnd": "ontology-ma20-distance-end",
     "ma20DistanceChange": "ontology-ma20-distance-change",
+    "ma20DistancePeak": "ontology-ma20-distance-peak",
+    "ma20DistanceTrough": "ontology-ma20-distance-trough",
+    "ma20ReclaimCount": "ontology-ma20-reclaim-count",
+    "ma20BreakCount": "ontology-ma20-break-count",
+    "ma20ObservationCount": "ontology-ma20-observation-count",
     "ma60DistanceStart": "ontology-ma60-distance-start",
     "ma60DistanceEnd": "ontology-ma60-distance-end",
     "volumeRatioEnd": "ontology-volume-ratio-end",
@@ -440,6 +461,8 @@ TYPEDB_PROMOTED_NUMERIC_ATTRIBUTES = {
     "bidAskImbalanceEnd": "ontology-bid-ask-imbalance-end",
     "smartMoneyNetLatest": "ontology-smart-money-net-latest",
     "smartMoneyNetChange": "ontology-smart-money-net-change",
+    "smartMoneyObservationCount": "ontology-smart-money-observation-count",
+    "smartMoneyDistinctObservationCount": "ontology-smart-money-distinct-observation-count",
     "individualNetLatest": "ontology-individual-net-latest",
     "eventCount": "ontology-event-count",
     "riskEventCount": "ontology-risk-event-count",
@@ -495,6 +518,11 @@ TYPEDB_PROMOTED_TEXT_ATTRIBUTES = {
     "fundamentalDataSourcePriority": "ontology-fundamental-data-source-priority",
     "windowKey": "ontology-window-key",
     "hasSufficientHistory": "ontology-has-sufficient-history",
+    "latestObservationQuality": "ontology-latest-observation-quality",
+    "sequenceRole": "ontology-sequence-role",
+    "observationQuality": "ontology-observation-quality",
+    "observedAt": "ontology-observed-at",
+    "provider": "ontology-provider",
     "pricePathPattern": "ontology-price-path-pattern",
     "flowPattern": "ontology-flow-pattern",
     "eventClusterType": "ontology-event-cluster-type",
@@ -3329,12 +3357,33 @@ attribute ontology-coverage-ratio, value double;
 attribute ontology-elapsed-hours, value double;
 attribute ontology-start-price, value double;
 attribute ontology-price-change-pct, value double;
+attribute ontology-peak-price, value double;
+attribute ontology-trough-price, value double;
+attribute ontology-peak-return-pct, value double;
+attribute ontology-trough-return-pct, value double;
+attribute ontology-drawdown-from-peak-pct, value double;
+attribute ontology-rebound-from-trough-pct, value double;
+attribute ontology-prior-price-change-pct, value double;
+attribute ontology-recent-price-change-pct, value double;
+attribute ontology-price-velocity-change-pct, value double;
+attribute ontology-consecutive-decline-count, value double;
+attribute ontology-consecutive-advance-count, value double;
+attribute ontology-direction-change-count, value double;
+attribute ontology-valid-observation-count, value double;
+attribute ontology-invalid-observation-count, value double;
+attribute ontology-stale-observation-count, value double;
+attribute ontology-valid-observation-ratio, value double;
 attribute ontology-profit-loss-rate-start, value double;
 attribute ontology-profit-loss-rate-end, value double;
 attribute ontology-profit-loss-rate-change-pct, value double;
 attribute ontology-ma20-distance-start, value double;
 attribute ontology-ma20-distance-end, value double;
 attribute ontology-ma20-distance-change, value double;
+attribute ontology-ma20-distance-peak, value double;
+attribute ontology-ma20-distance-trough, value double;
+attribute ontology-ma20-reclaim-count, value double;
+attribute ontology-ma20-break-count, value double;
+attribute ontology-ma20-observation-count, value double;
 attribute ontology-ma60-distance-start, value double;
 attribute ontology-ma60-distance-end, value double;
 attribute ontology-volume-ratio-end, value double;
@@ -3342,6 +3391,8 @@ attribute ontology-trade-strength-end, value double;
 attribute ontology-bid-ask-imbalance-end, value double;
 attribute ontology-smart-money-net-latest, value double;
 attribute ontology-smart-money-net-change, value double;
+attribute ontology-smart-money-observation-count, value double;
+attribute ontology-smart-money-distinct-observation-count, value double;
 attribute ontology-individual-net-latest, value double;
 attribute ontology-event-count, value double;
 attribute ontology-risk-event-count, value double;
@@ -3387,6 +3438,11 @@ attribute ontology-preferred-valuation-metric, value string;
 attribute ontology-fundamental-data-source-priority, value string;
 attribute ontology-window-key, value string;
 attribute ontology-has-sufficient-history, value string;
+attribute ontology-latest-observation-quality, value string;
+attribute ontology-sequence-role, value string;
+attribute ontology-observation-quality, value string;
+attribute ontology-observed-at, value string;
+attribute ontology-provider, value string;
 attribute ontology-price-path-pattern, value string;
 attribute ontology-flow-pattern, value string;
 attribute ontology-event-cluster-type, value string;
@@ -3537,12 +3593,33 @@ entity ontology-node @abstract,
     owns ontology-elapsed-hours,
     owns ontology-start-price,
     owns ontology-price-change-pct,
+    owns ontology-peak-price,
+    owns ontology-trough-price,
+    owns ontology-peak-return-pct,
+    owns ontology-trough-return-pct,
+    owns ontology-drawdown-from-peak-pct,
+    owns ontology-rebound-from-trough-pct,
+    owns ontology-prior-price-change-pct,
+    owns ontology-recent-price-change-pct,
+    owns ontology-price-velocity-change-pct,
+    owns ontology-consecutive-decline-count,
+    owns ontology-consecutive-advance-count,
+    owns ontology-direction-change-count,
+    owns ontology-valid-observation-count,
+    owns ontology-invalid-observation-count,
+    owns ontology-stale-observation-count,
+    owns ontology-valid-observation-ratio,
     owns ontology-profit-loss-rate-start,
     owns ontology-profit-loss-rate-end,
     owns ontology-profit-loss-rate-change-pct,
     owns ontology-ma20-distance-start,
     owns ontology-ma20-distance-end,
     owns ontology-ma20-distance-change,
+    owns ontology-ma20-distance-peak,
+    owns ontology-ma20-distance-trough,
+    owns ontology-ma20-reclaim-count,
+    owns ontology-ma20-break-count,
+    owns ontology-ma20-observation-count,
     owns ontology-ma60-distance-start,
     owns ontology-ma60-distance-end,
     owns ontology-volume-ratio-end,
@@ -3550,6 +3627,8 @@ entity ontology-node @abstract,
     owns ontology-bid-ask-imbalance-end,
     owns ontology-smart-money-net-latest,
     owns ontology-smart-money-net-change,
+    owns ontology-smart-money-observation-count,
+    owns ontology-smart-money-distinct-observation-count,
     owns ontology-individual-net-latest,
     owns ontology-event-count,
     owns ontology-risk-event-count,
@@ -3595,6 +3674,11 @@ entity ontology-node @abstract,
     owns ontology-fundamental-data-source-priority,
     owns ontology-window-key,
     owns ontology-has-sufficient-history,
+    owns ontology-latest-observation-quality,
+    owns ontology-sequence-role,
+    owns ontology-observation-quality,
+    owns ontology-observed-at,
+    owns ontology-provider,
     owns ontology-price-path-pattern,
     owns ontology-flow-pattern,
     owns ontology-event-cluster-type,
@@ -6849,6 +6933,31 @@ def typedb_native_rule_required_relation_types(rule: object) -> set:
     return required_types
 
 
+def typedb_native_rule_any_relation_requirement(rule: object) -> tuple:
+    """Return topology-only alternatives when every ``any`` branch is a relation.
+
+    This is only a planner shortcut. Attribute filters and the actual minimum
+    match count are still evaluated by the TypeDB schema function.
+    """
+    any_conditions = [
+        condition
+        for condition in typedb_rule_condition_payloads(rule)
+        if normalized_condition_role(condition) == "any"
+    ]
+    if not any_conditions or any(str(condition.get("kind") or "") != "relation" for condition in any_conditions):
+        return [], 0
+    relation_types = [
+        str(condition.get("relation_type") or condition.get("relationType") or "").upper().strip()
+        for condition in any_conditions
+    ]
+    if any(not relation_type for relation_type in relation_types):
+        return [], 0
+    raw_minimum = getattr(rule, "any_condition_min_count", None)
+    if raw_minimum is None and isinstance(rule, dict):
+        raw_minimum = rule.get("any_condition_min_count") or rule.get("anyConditionMinCount")
+    return relation_types, max(1, int(number_or_none(raw_minimum) or 1))
+
+
 def typedb_native_rule_query_complexity(rule: object) -> int:
     """Estimate query cost from persisted rule shape, never from market data."""
     conditions = typedb_rule_condition_payloads(rule)
@@ -6872,6 +6981,11 @@ def typedb_native_rule_query_complexity(rule: object) -> int:
 
 def typedb_native_rule_execution_priority(rule: object) -> int:
     """Prioritize time-sensitive checks; this never alters rule semantics."""
+    rule_id = str(
+        getattr(rule, "rule_id", "")
+        if not isinstance(rule, dict)
+        else rule.get("rule_id") or rule.get("ruleId") or ""
+    ).strip()
     action_group = str(
         getattr(rule, "action_group", "")
         if not isinstance(rule, dict)
@@ -6905,7 +7019,14 @@ def typedb_native_rule_execution_priority(rule: object) -> int:
         "alertReview": 80,
         "rateRegime": 78,
     }
-    return priorities.get(action_group, 50) + (8 if action_level == "action" else 0)
+    priority = priorities.get(action_group, 50) + (8 if action_level == "action" else 0)
+    if rule_id.startswith("graph.temporal.") or rule_id == "graph.watchlist.temporal.recovery_entry.v1":
+        # Temporal rules consume the multi-observation facts created in the
+        # current ABox. Deferring them behind static one-point rules made an
+        # otherwise valid Stage 2 inference path unreachable under the bounded
+        # realtime query plan.
+        priority = max(priority, 132)
+    return priority
 
 
 def typedb_native_rule_execution_plan(
@@ -6936,6 +7057,7 @@ def typedb_native_rule_execution_plan(
     for rule in rules or []:
         rule_id = str(getattr(rule, "rule_id", "") or (rule.get("rule_id") if isinstance(rule, dict) else "") or "")
         required_relation_types = typedb_native_rule_required_relation_types(rule)
+        any_relation_types, any_relation_minimum = typedb_native_rule_any_relation_requirement(rule)
         candidate_symbols = list(clean_symbols)
         if clean_symbols and required_relation_types:
             candidate_symbols = [
@@ -6943,10 +7065,22 @@ def typedb_native_rule_execution_plan(
                 for symbol in clean_symbols
                 if required_relation_types.issubset(type_index.get(symbol, set()))
             ]
+        if candidate_symbols and any_relation_types and any_relation_minimum:
+            candidate_symbols = [
+                symbol
+                for symbol in candidate_symbols
+                if sum(
+                    1
+                    for relation_type in any_relation_types
+                    if relation_type in type_index.get(symbol, set())
+                ) >= any_relation_minimum
+            ]
         entry = {
             "rule": rule,
             "ruleId": rule_id,
             "requiredRelationTypes": sorted(required_relation_types),
+            "anyRelationTypes": list(any_relation_types),
+            "anyRelationMinimum": any_relation_minimum,
             "candidateSymbols": candidate_symbols,
             "queryComplexity": typedb_native_rule_query_complexity(rule),
             "priority": typedb_native_rule_execution_priority(rule),

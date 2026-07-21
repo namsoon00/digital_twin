@@ -327,7 +327,7 @@ def build_ai_inference_packet(graph: PortfolioOntology) -> Dict[str, object]:
             "BUY, ADD, HOLD, TRIM, SELL, AVOID 중 하나의 투자 의견을 고르되 자동 주문 지시로 표현하지 않습니다.",
             "뉴스·공시·SEC/OpenDART 출처와 반대 근거, 무효화 조건을 함께 제시합니다.",
             "이전 상태와 현재 상태의 SignalTransition을 읽고 새 변화인지 반복 상태인지 구분합니다.",
-            "temporalWindows를 읽고 단일 현재값보다 기간 경로, 수급 패턴, 이벤트 군집, 히스토리 부족 여부를 우선 구분합니다.",
+            "temporalWindows의 원시 기간 수치와 InferenceBox가 도출한 추세 에피소드를 구분하고, 단일 현재값보다 가격 경로·수급 변화·이벤트 집중·히스토리 부족을 우선 설명합니다.",
             "팩터/상관/유동성/슬리피지 제약이 있으면 투자 의견과 실행 계획을 분리해 설명합니다.",
             "coverageGaps, newsQuality, source freshness가 있으면 결론 강도를 낮추고 필요한 수집 과제를 먼저 제시합니다.",
             "macroRegimes와 cryptoExposures는 종목 가격 신호의 상위 환경으로만 사용하고 단독 매수·매도 결론으로 쓰지 않습니다.",
@@ -486,7 +486,7 @@ def prompt_payload(graph: PortfolioOntology) -> Dict[str, object]:
         "coverageGaps": compact_entities_by_kind(graph, ["coverage-gap", "temporal-coverage-gap"], 80),
         "temporalWindows": compact_entities_by_kind(
             graph,
-            ["temporal-window", "price-path-pattern", "flow-pattern", "event-cluster", "trend-episode"],
+            ["temporal-window", "temporal-observation"],
             120,
         ),
         "macroRegimes": compact_entities_by_kind(graph, ["macro-regime", "interest-rate", "yield-curve", "fx-rate"], 60),

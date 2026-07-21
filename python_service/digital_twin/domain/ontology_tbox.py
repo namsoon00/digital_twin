@@ -106,6 +106,7 @@ CLASS_DEFS: List[TBoxClassDef] = [
     TBoxClassDef("Observation", "observation-data", "관측값", description="특정 시점과 출처에서 들어온 사실입니다."),
     TBoxClassDef("FactChange", "observation-data", "사실 변경", parent="Observation"),
     TBoxClassDef("TemporalWindow", "observation-data", "기간 구간", parent="Observation", description="종목별 1D, 3D, 5D, 20D 같은 기간 단위 관측 묶음입니다."),
+    TBoxClassDef("TemporalWindowObservation", "observation-data", "기간 구간 관측점", parent="Observation", description="기간 구간의 시작, 중간, 최신 시점에서 실제로 관측된 가격·수급 값입니다."),
     TBoxClassDef("IntradayWindow", "observation-data", "장중 구간", parent="TemporalWindow"),
     TBoxClassDef("DailyWindow", "observation-data", "일간 구간", parent="TemporalWindow"),
     TBoxClassDef("MultiDayWindow", "observation-data", "다일 구간", parent="TemporalWindow"),

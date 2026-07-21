@@ -23,6 +23,7 @@ from digital_twin.infrastructure.typedb_ontology import (
     NullTypeDBOntologyGraphRepository,
     TypeDBOperationTimeout,
     TypeDBOntologyGraphRepository,
+    TYPEDB_PROMOTED_NUMERIC_ATTRIBUTES,
     TYPEDB_PROMOTED_TEXT_ATTRIBUTES,
     node_boxes,
     ontology_storage_id,
@@ -77,6 +78,14 @@ class TypeDBOntologyRepositoryTests(unittest.TestCase):
 
         for attribute in TYPEDB_PROMOTED_TEXT_ATTRIBUTES.values():
             self.assertIn("attribute " + attribute + ", value string;", schema)
+            self.assertIn("owns " + attribute + ",", schema)
+
+    def test_typedb_schema_declares_every_promoted_numeric_attribute_used_by_nodes(self):
+        repository = TypeDBOntologyGraphRepository("127.0.0.1:1729")
+        schema = repository.schema_query()
+
+        for attribute in TYPEDB_PROMOTED_NUMERIC_ATTRIBUTES.values():
+            self.assertIn("attribute " + attribute + ", value double;", schema)
             self.assertIn("owns " + attribute + ",", schema)
 
     def test_typedb_schema_sync_skips_write_when_base_schema_is_already_current(self):
@@ -316,6 +325,31 @@ class TypeDBOntologyRepositoryTests(unittest.TestCase):
         self.assertIn("graph.holding.trend_transition.risk.v1", selected_ids)
         self.assertEqual("not-applicable", skipped["graph.winner_momentum.add_buy_review.v1"]["status"])
         self.assertEqual("deferred-by-query-budget", skipped["graph.loss_guard.breakdown.v1"]["status"])
+
+    def test_typedb_native_rule_execution_plan_reserves_realtime_budget_for_temporal_rules(self):
+        rules = default_graph_inference_rules()
+        plan = typedb_native_rule_execution_plan(
+            rules,
+            ["000660"],
+            {
+                "000660": [
+                    "HAS_TEMPORAL_WINDOW",
+                    "HAS_COVERAGE_GAP",
+                ],
+            },
+            query_limit=10,
+        )
+
+        selected_ids = [item["ruleId"] for item in plan["selectedEntries"]]
+
+        self.assertEqual(10, len(selected_ids))
+        self.assertTrue(all(
+            rule_id.startswith("graph.temporal.")
+            or rule_id == "graph.watchlist.temporal.recovery_entry.v1"
+            for rule_id in selected_ids
+        ))
+        self.assertIn("graph.temporal.persistent_decline.risk.v1", selected_ids)
+        self.assertIn("graph.temporal.stale_observation.block.v1", selected_ids)
 
     def test_active_abox_rule_context_reads_relation_types_without_evaluating_rule_values(self):
         repository = TypeDBOntologyGraphRepository("127.0.0.1:1729")
@@ -1304,6 +1338,32 @@ class TypeDBOntologyRepositoryTests(unittest.TestCase):
         self.assertEqual(1, persisted.worldview["runtimeProjectionRuleInputRelationTypeCount"])
         self.assertGreater(persisted.worldview["runtimeProjectionSemanticRelationTypeCount"], 1)
 
+    def test_typedb_projection_keeps_temporal_observation_structure(self):
+        graph = PortfolioOntology("temporal-structure")
+        graph.entities.extend([
+            OntologyEntity("stock:000660", "SK hynix", "stock", {"ontologyBox": "ABox"}),
+            OntologyEntity("window:000660:5D", "5-day window", "temporal-window", {"ontologyBox": "ABox"}),
+            OntologyEntity("observation:000660:first", "First observation", "temporal-observation", {"ontologyBox": "ABox"}),
+            OntologyEntity("observation:000660:latest", "Latest observation", "temporal-observation", {"ontologyBox": "ABox"}),
+        ])
+        graph.relations.extend([
+            OntologyRelation("stock:000660", "window:000660:5D", "HAS_TEMPORAL_WINDOW", properties={"ontologyBox": "ABox"}),
+            OntologyRelation("window:000660:5D", "observation:000660:first", "WINDOW_CONTAINS_OBSERVATION", properties={"ontologyBox": "ABox"}),
+            OntologyRelation("window:000660:5D", "observation:000660:latest", "WINDOW_CONTAINS_OBSERVATION", properties={"ontologyBox": "ABox"}),
+            OntologyRelation("observation:000660:first", "observation:000660:latest", "PRECEDES", properties={"ontologyBox": "ABox"}),
+        ])
+
+        persisted = PortfolioOntologyProjectionRecorder(None).graph_for_graph_store_persistence(
+            graph,
+            {"inputRelationTypes": ["HAS_TEMPORAL_WINDOW"]},
+        )
+
+        self.assertEqual(4, len(persisted.entities))
+        self.assertEqual(
+            ["HAS_TEMPORAL_WINDOW", "WINDOW_CONTAINS_OBSERVATION", "WINDOW_CONTAINS_OBSERVATION", "PRECEDES"],
+            [item.relation_type for item in persisted.relations],
+        )
+
     def test_typedb_rule_catalog_migration_removes_shadow_and_fills_known_policy(self):
         bootstrap = rulebox_rules_to_payload(default_graph_inference_rules())
         stored = [dict(item) for item in bootstrap[:2]]
@@ -1511,17 +1571,23 @@ class TypeDBOntologyRepositoryTests(unittest.TestCase):
             "requiredSampleCount": 4,
             "coverageRatio": 1.0,
             "priceChangePct": -8.4,
+            "peakReturnPct": 1.7,
+            "drawdownFromPeakPct": -9.9,
+            "recentPriceChangePct": -3.2,
+            "priceVelocityChangePct": -1.4,
+            "consecutiveDeclineCount": 3,
+            "validObservationRatio": 1.0,
+            "staleObservationCount": 0,
             "profitLossRateChangePct": -5.2,
             "ma20DistanceChange": -7.5,
             "smartMoneyNetChange": -12000,
+            "smartMoneyObservationCount": 4,
+            "smartMoneyDistinctObservationCount": 3,
             "riskEventCount": 2,
-            "eventClusterType": "EventDrivenRiskCluster",
-            "pricePathPattern": "PersistentDecline",
-            "flowPattern": "SmartMoneyOutflow",
-            "trendEpisodeType": "PersistentDecline",
-            "reviewLevel": "act",
+            "latestObservationQuality": "fresh",
+            "reviewLevel": "normal",
             "dataState": "sufficient",
-            "evidenceRole": "risk",
+            "evidenceRole": "context",
             "hasSufficientHistory": True,
         }))
         graph.relations.append(OntologyRelation("stock:005930", "level:005930:ma20", "BREAKS_LEVEL", 0.8, properties={
@@ -1565,9 +1631,13 @@ class TypeDBOntologyRepositoryTests(unittest.TestCase):
         self.assertTrue(any('has ontology-investment-strategy-profile "aggressive"' in query for query in queries))
         self.assertTrue(any('has ontology-window-key "5D"' in query for query in queries))
         self.assertTrue(any("has ontology-price-change-pct -8.4" in query for query in queries))
+        self.assertTrue(any("has ontology-drawdown-from-peak-pct -9.9" in query for query in queries))
+        self.assertTrue(any("has ontology-recent-price-change-pct -3.2" in query for query in queries))
+        self.assertTrue(any("has ontology-consecutive-decline-count 3.0" in query for query in queries))
+        self.assertTrue(any("has ontology-valid-observation-ratio 1.0" in query for query in queries))
+        self.assertTrue(any("has ontology-smart-money-distinct-observation-count 3.0" in query for query in queries))
         self.assertTrue(any("has ontology-risk-event-count 2.0" in query for query in queries))
-        self.assertTrue(any('has ontology-event-cluster-type "EventDrivenRiskCluster"' in query for query in queries))
-        self.assertTrue(any('has ontology-trend-episode-type "PersistentDecline"' in query for query in queries))
+        self.assertTrue(any('has ontology-latest-observation-quality "fresh"' in query for query in queries))
         self.assertFalse(any("ontology-temporal-risk-score" in query for query in queries))
 
     def test_typedb_read_query_metrics_record_row_count_and_hash(self):
@@ -3155,10 +3225,12 @@ class TypeDBOntologyRepositoryTests(unittest.TestCase):
         persistent_body = typedb_native_function_definition(persistent_rule.to_dict())["body"]
         event_body = typedb_native_function_definition(event_rule.to_dict())["body"]
 
-        self.assertIn("ontology-trend-episode-type", persistent_body)
+        self.assertIn("ontology-price-change-pct", persistent_body)
         self.assertIn("ontology-window-key", persistent_body)
-        self.assertIn("ontology-value-number", persistent_body)
-        self.assertIn("ontology-event-cluster-type", event_body)
+        self.assertIn("ontology-recent-price-change-pct", persistent_body)
+        self.assertIn("ontology-consecutive-decline-count", persistent_body)
+        self.assertIn("ontology-valid-observation-ratio", persistent_body)
+        self.assertNotIn("ontology-trend-episode-type", persistent_body)
         self.assertIn("ontology-risk-event-count", event_body)
 
     def test_typedb_schema_function_sync_uses_cache_for_same_rule_fingerprint(self):

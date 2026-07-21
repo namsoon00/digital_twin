@@ -27,6 +27,14 @@ from .graph_store_rulebox import rulebox_rules_to_payload
 
 DEPRECATED_TYPEDB_RULE_IDS = {"shadow.market_psychology.state.v1"}
 
+# These edges preserve the factual shape needed to inspect and extend native
+# TypeDB reasoning even when the active catalog currently reads aggregate
+# window properties only.
+ABOX_STRUCTURAL_RELATION_TYPES = {
+    "WINDOW_CONTAINS_OBSERVATION",
+    "PRECEDES",
+}
+
 
 def rule_id_from_payload(rule: Dict[str, object]) -> str:
     return str((rule or {}).get("rule_id") or (rule or {}).get("ruleId") or "").strip()
@@ -503,7 +511,7 @@ class PortfolioOntologyProjectionRecorder:
         # edges that define that world even when no currently enabled rule
         # consumes one of them. Otherwise a valid Price/Liquidity concept can
         # exist as an orphaned node, producing a misleading coverage gap.
-        semantic_relation_types = {
+        semantic_relation_types = ABOX_STRUCTURAL_RELATION_TYPES | {
             str(relation_type or "").upper().strip()
             for category_types in CATEGORY_RELATIONS.values()
             for relation_type in category_types

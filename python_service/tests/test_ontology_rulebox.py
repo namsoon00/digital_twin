@@ -15,6 +15,12 @@ from digital_twin.domain.portfolio_ontology_builder import build_portfolio_ontol
 from digital_twin.domain.portfolio import Position
 from digital_twin.domain.portfolio_calculations import portfolio_summary
 from digital_twin.domain.portfolio_ontology_market_concepts import missing_market_microstructure_fields
+from digital_twin.domain.portfolio_ontology_temporal_concepts import (
+    TemporalWindowDefinition,
+    add_temporal_observation_anchors,
+    temporal_window_values,
+)
+from digital_twin.domain.ontology_contracts import PortfolioOntology
 from digital_twin.domain.security_lines import related_market_symbols_for_positions, security_lines_for_symbol
 from digital_twin.infrastructure.typedb_ontology import (
     TypeDBOntologyGraphRepository,
@@ -257,24 +263,126 @@ class OntologyRuleBoxTests(unittest.TestCase):
 
         relation_types = {item.relation_type for item in graph.relations}
         temporal_windows = [item for item in graph.entities if item.kind == "temporal-window"]
-        episodes = [item for item in graph.entities if item.kind == "trend-episode"]
-        persistent = [
-            item
-            for item in episodes
-            if (item.properties or {}).get("trendEpisodeType") == "PersistentDecline"
-        ]
+        temporal_observations = [item for item in graph.entities if item.kind == "temporal-observation"]
+        three_day = next(
+            item for item in temporal_windows
+            if (item.properties or {}).get("windowKey") == "3D"
+        )
         payload = prompt_payload(graph)
 
         self.assertIn("HAS_TEMPORAL_WINDOW", relation_types)
-        self.assertIn("HAS_PRICE_PATH_PATTERN", relation_types)
-        self.assertIn("HAS_FLOW_PATTERN", relation_types)
-        self.assertIn("DERIVES_TREND_EPISODE", relation_types)
+        self.assertIn("WINDOW_CONTAINS_OBSERVATION", relation_types)
+        self.assertIn("PRECEDES", relation_types)
         self.assertIn("HAS_COVERAGE_GAP", relation_types)
+        self.assertNotIn("HAS_PRICE_PATH_PATTERN", relation_types)
+        self.assertNotIn("HAS_FLOW_PATTERN", relation_types)
+        self.assertNotIn("DERIVES_TREND_EPISODE", relation_types)
         self.assertGreaterEqual(len(temporal_windows), 4)
-        self.assertTrue(persistent)
-        self.assertTrue(any((item.properties or {}).get("windowKey") == "5D" for item in persistent))
+        self.assertGreaterEqual(len(temporal_observations), 8)
+        self.assertEqual(-10.0, (three_day.properties or {}).get("priceChangePct"))
+        self.assertEqual(3, (three_day.properties or {}).get("consecutiveDeclineCount"))
+        self.assertNotIn("pricePathPattern", three_day.properties or {})
+        self.assertNotIn("trendEpisodeType", three_day.properties or {})
         self.assertIn("temporalWindows", payload)
         self.assertTrue(payload["temporalWindows"])
+
+    def test_temporal_window_keeps_raw_trajectory_and_rejects_stale_flow_as_inference_input(self):
+        rows = [
+            {
+                "generatedAt": "2026-07-20T00:00:00Z",
+                "marketSessionDate": "2026-07-20",
+                "currentPrice": 100,
+                "ma20Distance": -1,
+                "foreignNetVolume": -100,
+                "institutionNetVolume": -200,
+                "individualNetVolume": 300,
+                "sourceAsOf": "2026-07-20T00:00:00Z",
+                "dataQuality": "actual",
+            },
+            {
+                "generatedAt": "2026-07-21T00:00:00Z",
+                "marketSessionDate": "2026-07-21",
+                "currentPrice": 95,
+                "ma20Distance": -4,
+                "foreignNetVolume": -100,
+                "institutionNetVolume": -200,
+                "individualNetVolume": 300,
+                "sourceAsOf": "2026-07-20T00:00:00Z",
+                "dataQuality": "stale",
+            },
+            {
+                "generatedAt": "2026-07-22T00:00:00Z",
+                "marketSessionDate": "2026-07-22",
+                "currentPrice": 92,
+                "ma20Distance": -7,
+                "foreignNetVolume": -100,
+                "institutionNetVolume": -200,
+                "individualNetVolume": 300,
+                "sourceAsOf": "2026-07-20T00:00:00Z",
+                "dataQuality": "stale",
+            },
+        ]
+
+        values = temporal_window_values(rows, TemporalWindowDefinition("3D", 3, 3))
+
+        self.assertEqual(-8.0, values["priceChangePct"])
+        self.assertEqual(2, values["consecutiveDeclineCount"])
+        self.assertEqual(2, values["staleObservationCount"])
+        self.assertEqual(1, values["smartMoneyObservationCount"])
+        self.assertEqual(1, values["smartMoneyDistinctObservationCount"])
+        self.assertEqual("partial", values["smartMoneyDataState"])
+        self.assertEqual(-300.0, values["smartMoneyNetLatest"])
+        self.assertAlmostEqual(1 / 3, values["validObservationRatio"], places=3)
+
+    def test_temporal_window_does_not_turn_missing_flow_into_zero_flow(self):
+        rows = [
+            {
+                "generatedAt": "2026-07-21T00:00:00Z",
+                "marketSessionDate": "2026-07-21",
+                "currentPrice": 100,
+                "dataQuality": "actual",
+            },
+            {
+                "generatedAt": "2026-07-22T00:00:00Z",
+                "marketSessionDate": "2026-07-22",
+                "currentPrice": 101,
+                "dataQuality": "actual",
+            },
+        ]
+
+        values = temporal_window_values(rows, TemporalWindowDefinition("2D", 2, 2))
+        graph = PortfolioOntology("missing-flow-test")
+        add_temporal_observation_anchors(graph, "window:2D", "005930", TemporalWindowDefinition("2D", 2, 2), rows)
+
+        self.assertEqual("unavailable", values["smartMoneyDataState"])
+        self.assertNotIn("smartMoneyNetLatest", values)
+        self.assertNotIn("smartMoneyNetChange", values)
+        self.assertTrue(all(
+            "FlowObservation" not in (item.properties or {}).get("tboxClasses", [])
+            and "smartMoneyNetLatest" not in (item.properties or {})
+            for item in graph.entities
+        ))
+
+    def test_temporal_rules_derive_episodes_from_windows_not_preclassified_abox_labels(self):
+        temporal_rules = [
+            rule for rule in default_graph_inference_rules()
+            if rule.rule_id.startswith("graph.temporal.")
+            or rule.rule_id == "graph.watchlist.temporal.recovery_entry.v1"
+        ]
+        relation_conditions = [
+            condition
+            for rule in temporal_rules
+            for condition in rule.conditions
+            if condition.kind == "relation"
+        ]
+
+        self.assertFalse(any(condition.relation_type == "DERIVES_TREND_EPISODE" for condition in relation_conditions))
+        self.assertTrue(any(condition.relation_type == "HAS_TEMPORAL_WINDOW" for condition in relation_conditions))
+        self.assertTrue(any(
+            derivation.relation_type == "DERIVES_TREND_EPISODE"
+            for rule in temporal_rules
+            for derivation in rule.derivations
+        ))
 
     def strategy_threshold_loss_graph(self, strategy_profile: str, pnl_rate: float):
         current_price = 100000 * (1 + pnl_rate / 100)

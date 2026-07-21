@@ -74,6 +74,14 @@ AI 프롬프트에는 TBox, `boundedContexts`, ABox, operational ontology, reaso
 5. `ontology_inference_context.py`가 최신 generation의 InferenceBox만 읽어 투자 판단 후보, 근거, 반대 근거, 부족 데이터, AI 질문을 만든다.
 6. AI는 이 컨텍스트를 받아 최종 의견을 쓰고, 시스템은 없는 데이터 생성 여부와 규칙 충돌 여부를 검증한 뒤 알림 메시지에 넣는다.
 
+### Temporal Observation And Episode Inference
+
+기간 추론에서도 ABox와 InferenceBox의 경계를 유지한다. Python은 MySQL 시계열에서 산술 관측값만 계산한다. 여기에는 기간 시작·현재·고점·저점 가격, 전체·이전·최근 변화율, 고점 대비 하락폭, 저점 대비 회복폭, 최근 연속 상승·하락 횟수, 이동평균 상향·하향 통과 횟수, 서로 다른 수급 관측 수, 이벤트 수, 유효·오래된 관측 비율이 포함된다.
+
+ABox의 기간 경로에는 `HAS_TEMPORAL_WINDOW`, `WINDOW_CONTAINS_OBSERVATION`, `PRECEDES` 관계를 투영하고, 자료가 부족하면 별도로 `HAS_COVERAGE_GAP`을 남긴다. 시작·중간·최신 관측점은 원시 가격·수급·시각·출처·품질을 보존한다. 실제 수급 관측이 없거나 오래된 경우에는 수급값을 `0`으로 만들지 않고 `smartMoneyDataState`를 `unavailable` 또는 `partial`로 둔다. `PersistentDecline`, `FailedRecovery`, `DeclineDeceleration`, `RecoveryAttempt`, `AccumulationDuringWeakness`, `DistributionDuringBounce` 같은 이름과 위험·지지 방향은 Python이 붙이지 않는다.
+
+TypeDB schema function은 원시 기간 속성을 직접 비교해 `DERIVES_TREND_EPISODE`, `HAS_TREND_TRANSITION`, `HAS_INFERRED_RISK`, `HAS_INFERRED_SUPPORT`, `BLOCKS_VALIDATION_OF`를 InferenceBox에 만든다. 임계값은 TypeDB 규칙 JSON에만 있으며 웹 규칙 관리 화면에서 조회·수정할 수 있다. 오래된 관측이 하나라도 있거나 유효 관측 비율이 부족하면 방향 규칙은 성립하지 않고 별도 신선도 차단 관계가 만들어진다. 수급 변화 규칙은 값이 존재하는 것만으로 성립하지 않으며, 서로 다른 실제 수급 관측이 두 개 이상이어야 한다.
+
 우선적으로 강화한 추론 관계 축은 다음 5개다.
 
 - 종목 성격 관계: `HAS_INSTRUMENT_PROFILE`, `HAS_ARCHETYPE`, `HAS_POSITION_INTENT`로 종목을 성장주, 반도체 업황 민감주, 비트코인 가격에 민감한 주식, 배당 중심 우선주, 대형 우량주 등으로 분류한다. `MATCHES_INVESTOR_PROFILE`, `VIOLATES_STRATEGY_FIT` 추론은 이 성격이 현재 가격 흐름과 계정 성향에 맞는지 분리한다. 내부 TypeDB ID와 사용자 표현의 기준은 [투자 보편언어](investment-ubiquitous-language.md)를 따른다.

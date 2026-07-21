@@ -217,96 +217,75 @@ def window_rows(rows: List[Dict[str, object]], definition: TemporalWindowDefinit
     return rows[-max(definition.min_samples, 2):]
 
 
-def price_path_pattern(values: Dict[str, float], prices: List[float], ma20_distances: List[float]) -> str:
-    change = values.get("priceChangePct", 0.0)
-    end_ma20 = values.get("ma20DistanceEnd", 0.0)
-    recent_change = percentage_change(prices[-2], prices[-1]) if len(prices) >= 2 else 0.0
-    earlier_change = percentage_change(prices[0], prices[1]) if len(prices) >= 2 else 0.0
-    if ma20_distances and max(ma20_distances[:-1] or [ma20_distances[-1]]) > 0 and end_ma20 < 0:
-        return "FailedRecovery"
-    if change <= -5 and end_ma20 < -2:
-        return "PersistentDecline"
-    if change < -1 and (recent_change > earlier_change or recent_change > 0):
-        return "DeclineDeceleration"
-    if change >= 2 and end_ma20 < 0:
-        return "RecoveryAttempt"
-    if abs(change) <= 1:
-        return "Consolidation"
-    if change > 2:
-        return "UpwardContinuation"
-    return "MixedPath"
+STALE_DATA_QUALITY_STATES = {"stale", "poor", "invalid", "missing", "unavailable", "error"}
 
 
-def flow_pattern(values: Dict[str, float]) -> str:
-    price_change = values.get("priceChangePct", 0.0)
-    smart_money_latest = values.get("smartMoneyNetLatest", 0.0)
-    smart_money_change = values.get("smartMoneyNetChange", 0.0)
-    smart_money_signal = smart_money_change if smart_money_change else smart_money_latest
-    if price_change <= 0 and smart_money_signal > 0:
-        return "AccumulationDuringWeakness"
-    if price_change >= 0 and smart_money_signal < 0:
-        return "DistributionDuringBounce"
-    if smart_money_signal > 0:
-        return "SmartMoneySupport"
-    if smart_money_signal < 0:
-        return "SmartMoneyOutflow"
-    return "NeutralFlow"
+def row_timestamp(row: Dict[str, object]) -> str:
+    return str(
+        row.get("bucketAt")
+        or row.get("generatedAt")
+        or row.get("updated_at")
+        or row.get("updatedAt")
+        or ""
+    )
 
 
-def temporal_decision_state(
-    path_pattern: str,
-    flow: str,
-    risk_events: int,
-    support_events: int,
-    *,
-    has_sufficient_history: bool,
-) -> Dict[str, object]:
-    if not has_sufficient_history:
-        return {
-            "temporalEvidenceRole": "blocking",
-            "temporalReviewLevel": "blocked",
-            "temporalDataState": "insufficient",
-            "temporalChangeState": "unchanged",
-            "temporalConflictState": "context-only",
-            "temporalRiskConditions": [],
-            "temporalSupportConditions": [],
-        }
+def normalized_data_quality(row: Dict[str, object]) -> str:
+    quality = str(camel_or_snake(row, "dataQuality", "data_quality") or "").strip().lower()
+    if any(state in quality for state in STALE_DATA_QUALITY_STATES):
+        return "stale"
+    if any(state in quality for state in {"actual", "live", "fresh", "verified"}):
+        return "fresh"
+    if any(state in quality for state in {"cached", "manual", "synthetic", "partial"}):
+        return "partial"
+    return "unknown"
 
-    risk_conditions: List[str] = []
-    support_conditions: List[str] = []
-    if path_pattern in {"PersistentDecline", "FailedRecovery"}:
-        risk_conditions.append(path_pattern)
-    if flow in {"SmartMoneyOutflow", "DistributionDuringBounce"}:
-        risk_conditions.append(flow)
-    if risk_events >= 2:
-        risk_conditions.append("EventDrivenRiskCluster")
-    if path_pattern in {"DeclineDeceleration", "RecoveryAttempt"}:
-        support_conditions.append(path_pattern)
-    if flow in {"AccumulationDuringWeakness", "SmartMoneySupport"}:
-        support_conditions.append(flow)
-    if support_events >= 2:
-        support_conditions.append("SupportiveEventCluster")
 
-    if risk_conditions and support_conditions:
-        conflict_state = "mixed"
-    elif risk_conditions:
-        conflict_state = "risk-only"
-    elif support_conditions:
-        conflict_state = "support-only"
-    else:
-        conflict_state = "context-only"
-    evidence_role = "risk" if risk_conditions else ("support" if support_conditions else "context")
-    review_level = "act" if path_pattern in {"PersistentDecline", "FailedRecovery"} or risk_events >= 2 else ("check" if risk_conditions else ("observe" if support_conditions else "normal"))
-    change_state = "worsening" if risk_conditions else ("improving" if support_conditions else "unchanged")
-    return {
-        "temporalEvidenceRole": evidence_role,
-        "temporalReviewLevel": review_level,
-        "temporalDataState": "sufficient",
-        "temporalChangeState": change_state,
-        "temporalConflictState": conflict_state,
-        "temporalRiskConditions": risk_conditions,
-        "temporalSupportConditions": support_conditions,
-    }
+def has_row_field(row: Dict[str, object], *fields: str) -> bool:
+    return any(field in row and row.get(field) not in (None, "") for field in fields)
+
+
+def has_investor_flow_observation(row: Dict[str, object]) -> bool:
+    if not has_row_field(
+        row,
+        "foreignNetVolume",
+        "foreign_net_volume",
+        "institutionNetVolume",
+        "institution_net_volume",
+        "individualNetVolume",
+        "individual_net_volume",
+    ):
+        return False
+    return any(abs(row_number(row, camel, snake)) > 0 for camel, snake in [
+        ("foreignNetVolume", "foreign_net_volume"),
+        ("institutionNetVolume", "institution_net_volume"),
+        ("individualNetVolume", "individual_net_volume"),
+    ])
+
+
+def trailing_direction_count(prices: List[float], direction: str) -> int:
+    count = 0
+    for previous, current in reversed(list(zip(prices, prices[1:]))):
+        matched = current < previous if direction == "down" else current > previous
+        if not matched:
+            break
+        count += 1
+    return count
+
+
+def direction_change_count(prices: List[float]) -> int:
+    directions = []
+    for previous, current in zip(prices, prices[1:]):
+        direction = 1 if current > previous else -1 if current < previous else 0
+        if direction:
+            directions.append(direction)
+    return sum(1 for previous, current in zip(directions, directions[1:]) if previous != current)
+
+
+def crossing_count(values: List[float], crossing: str) -> int:
+    if crossing == "reclaim":
+        return sum(1 for previous, current in zip(values, values[1:]) if previous < 0 <= current)
+    return sum(1 for previous, current in zip(values, values[1:]) if previous >= 0 > current)
 
 
 def research_events_for_state(symbol: str, state: Dict[str, object]) -> List[Dict[str, object]]:
@@ -314,7 +293,7 @@ def research_events_for_state(symbol: str, state: Dict[str, object]) -> List[Dic
     return [item.to_dict() for item in research_evidence_from_external_signals(symbol, signals)]
 
 
-def event_cluster(symbol: str, rows: List[Dict[str, object]]) -> Dict[str, object]:
+def event_counts(symbol: str, rows: List[Dict[str, object]]) -> Dict[str, object]:
     by_key: Dict[str, Dict[str, object]] = {}
     for row in rows:
         for item in research_events_for_state(symbol, row):
@@ -324,34 +303,45 @@ def event_cluster(symbol: str, rows: List[Dict[str, object]]) -> Dict[str, objec
     events = list(by_key.values())
     risk_count = len([item for item in events if str(item.get("polarity") or "") in {"risk", "contradiction"}])
     support_count = len([item for item in events if str(item.get("polarity") or "") == "support"])
-    if risk_count >= 2:
-        cluster_type = "EventDrivenRiskCluster"
-    elif support_count >= 2:
-        cluster_type = "SupportiveEventCluster"
-    elif not events:
-        cluster_type = "QuietPeriod"
-    else:
-        cluster_type = "MixedEventCluster"
     return {
         "eventCount": len(events),
         "riskEventCount": risk_count,
         "supportEventCount": support_count,
-        "eventClusterType": cluster_type,
     }
 
 
 def temporal_window_values(rows: List[Dict[str, object]], definition: TemporalWindowDefinition) -> Dict[str, object]:
-    first = rows[0] if rows else {}
-    last = rows[-1] if rows else {}
+    priced_rows = [row for row in rows if row_number(row, "currentPrice", "current_price") > 0]
+    first = priced_rows[0] if priced_rows else {}
+    last = priced_rows[-1] if priced_rows else {}
     first_time = parse_timestamp(first.get("generatedAt") or first.get("updated_at") or first.get("updatedAt"))
     last_time = parse_timestamp(last.get("generatedAt") or last.get("updated_at") or last.get("updatedAt"))
-    prices = [row_number(row, "currentPrice", "current_price") for row in rows]
-    prices = [value for value in prices if value > 0]
-    ma20_distances = [row_number(row, "ma20Distance", "ma20_distance") for row in rows]
+    prices = [row_number(row, "currentPrice", "current_price") for row in priced_rows]
+    ma20_distances = [
+        row_number(row, "ma20Distance", "ma20_distance")
+        for row in priced_rows
+        if abs(row_number(row, "ma20Distance", "ma20_distance")) > 0
+        or row_number(row, "ma20", "ma20") > 0
+    ]
     start_price = prices[0] if prices else 0.0
     end_price = prices[-1] if prices else 0.0
-    smart_money_start = row_number(first, "foreignNetVolume", "foreign_net_volume") + row_number(first, "institutionNetVolume", "institution_net_volume")
-    smart_money_end = row_number(last, "foreignNetVolume", "foreign_net_volume") + row_number(last, "institutionNetVolume", "institution_net_volume")
+    smart_money_rows = [
+        row for row in priced_rows
+        if has_investor_flow_observation(row)
+        and normalized_data_quality(row) != "stale"
+    ]
+    smart_money_first = smart_money_rows[0] if smart_money_rows else {}
+    smart_money_last = smart_money_rows[-1] if smart_money_rows else {}
+    smart_money_start = row_number(smart_money_first, "foreignNetVolume", "foreign_net_volume") + row_number(smart_money_first, "institutionNetVolume", "institution_net_volume")
+    smart_money_end = row_number(smart_money_last, "foreignNetVolume", "foreign_net_volume") + row_number(smart_money_last, "institutionNetVolume", "institution_net_volume")
+    distinct_smart_money_observations = {
+        (
+            row_number(row, "foreignNetVolume", "foreign_net_volume"),
+            row_number(row, "institutionNetVolume", "institution_net_volume"),
+            str(row.get("sourceAsOf") or ""),
+        )
+        for row in smart_money_rows
+    }
     elapsed_hours = ((last_time - first_time).total_seconds() / 3600.0) if first_time and last_time and last_time >= first_time else 0.0
     session_dates = {
         str(
@@ -367,9 +357,15 @@ def temporal_window_values(rows: List[Dict[str, object]], definition: TemporalWi
     }
     session_dates.discard("")
     required_sessions = max(1, int(round(definition.lookback_days)))
-    sample_coverage = len(rows) / max(1.0, definition.min_samples)
+    sample_coverage = len(priced_rows) / max(1.0, definition.min_samples)
     session_coverage = len(session_dates) / max(1.0, required_sessions)
-    sufficient = len(rows) >= definition.min_samples and len(session_dates) >= required_sessions
+    sufficient = len(priced_rows) >= definition.min_samples and len(session_dates) >= required_sessions
+    valid_rows = [row for row in priced_rows if normalized_data_quality(row) != "stale"]
+    stale_count = len(priced_rows) - len(valid_rows)
+    midpoint_index = max(1, len(prices) // 2) if len(prices) >= 2 else 0
+    midpoint_price = prices[midpoint_index] if prices else 0.0
+    peak_price = max(prices) if prices else 0.0
+    trough_price = min(prices) if prices else 0.0
     observation_source = next(
         (str(row.get("observationSource") or "") for row in reversed(rows) if row.get("observationSource")),
         "monitor-snapshot-history",
@@ -382,7 +378,12 @@ def temporal_window_values(rows: List[Dict[str, object]], definition: TemporalWi
         "windowKey": definition.key,
         "lookbackDays": definition.lookback_days,
         "requiredSampleCount": definition.min_samples,
-        "sampleCount": len(rows),
+        "sampleCount": len(priced_rows),
+        "validObservationCount": len(valid_rows),
+        "invalidObservationCount": max(0, len(rows) - len(valid_rows)),
+        "staleObservationCount": stale_count,
+        "validObservationRatio": round(len(valid_rows) / max(1, len(rows)), 3),
+        "latestObservationQuality": normalized_data_quality(last),
         "requiredSessionCount": required_sessions,
         "coveredSessionCount": len(session_dates),
         "hasSufficientHistory": sufficient,
@@ -395,37 +396,124 @@ def temporal_window_values(rows: List[Dict[str, object]], definition: TemporalWi
         "startPrice": round(start_price, 4),
         "currentPrice": round(end_price, 4),
         "priceChangePct": round(percentage_change(start_price, end_price), 2),
+        "peakPrice": round(peak_price, 4),
+        "troughPrice": round(trough_price, 4),
+        "peakReturnPct": round(percentage_change(start_price, peak_price), 2),
+        "troughReturnPct": round(percentage_change(start_price, trough_price), 2),
+        "drawdownFromPeakPct": round(percentage_change(peak_price, end_price), 2),
+        "reboundFromTroughPct": round(percentage_change(trough_price, end_price), 2),
+        "priorPriceChangePct": round(percentage_change(start_price, midpoint_price), 2),
+        "recentPriceChangePct": round(percentage_change(midpoint_price, end_price), 2),
+        "priceVelocityChangePct": round(
+            percentage_change(midpoint_price, end_price) - percentage_change(start_price, midpoint_price),
+            2,
+        ),
+        "consecutiveDeclineCount": trailing_direction_count(prices, "down"),
+        "consecutiveAdvanceCount": trailing_direction_count(prices, "up"),
+        "directionChangeCount": direction_change_count(prices),
         "profitLossRateStart": round(row_number(first, "profitLossRate", "profit_loss_rate"), 2),
         "profitLossRateEnd": round(row_number(last, "profitLossRate", "profit_loss_rate"), 2),
         "profitLossRateChangePct": round(row_number(last, "profitLossRate", "profit_loss_rate") - row_number(first, "profitLossRate", "profit_loss_rate"), 2),
         "ma20DistanceStart": round(row_number(first, "ma20Distance", "ma20_distance"), 2),
         "ma20DistanceEnd": round(row_number(last, "ma20Distance", "ma20_distance"), 2),
         "ma20DistanceChange": round(row_number(last, "ma20Distance", "ma20_distance") - row_number(first, "ma20Distance", "ma20_distance"), 2),
+        "ma20DistancePeak": round(max(ma20_distances), 2) if ma20_distances else 0.0,
+        "ma20DistanceTrough": round(min(ma20_distances), 2) if ma20_distances else 0.0,
+        "ma20ReclaimCount": crossing_count(ma20_distances, "reclaim"),
+        "ma20BreakCount": crossing_count(ma20_distances, "break"),
+        "ma20ObservationCount": len(ma20_distances),
         "ma60DistanceStart": round(row_number(first, "ma60Distance", "ma60_distance"), 2),
         "ma60DistanceEnd": round(row_number(last, "ma60Distance", "ma60_distance"), 2),
         "volumeRatioEnd": round(row_number(last, "volumeRatio", "volume_ratio"), 2),
         "tradeStrengthEnd": round(row_number(last, "tradeStrength", "trade_strength"), 2),
         "bidAskImbalanceEnd": round(row_number(last, "bidAskImbalance", "bid_ask_imbalance"), 2),
-        "smartMoneyNetLatest": round(smart_money_end, 2),
-        "smartMoneyNetChange": round(smart_money_end - smart_money_start, 2),
-        "individualNetLatest": round(row_number(last, "individualNetVolume", "individual_net_volume"), 2),
+        "smartMoneyObservationCount": len(smart_money_rows),
+        "smartMoneyDistinctObservationCount": len(distinct_smart_money_observations),
+        "smartMoneyDataState": (
+            "sufficient"
+            if len(smart_money_rows) >= 2 and len(distinct_smart_money_observations) >= 2
+            else "partial" if smart_money_rows else "unavailable"
+        ),
     }
-    path = price_path_pattern(values, prices, ma20_distances)
-    flow = flow_pattern(values)
-    values["pricePathPattern"] = path
-    values["flowPattern"] = flow
+    if smart_money_rows:
+        values.update({
+            "smartMoneyNetLatest": round(smart_money_end, 2),
+            "smartMoneyNetChange": round(smart_money_end - smart_money_start, 2),
+            "individualNetLatest": round(
+                row_number(smart_money_last, "individualNetVolume", "individual_net_volume"),
+                2,
+            ),
+        })
     return values
 
 
-def primary_episodes(values: Dict[str, object], cluster: Dict[str, object]) -> List[str]:
-    episodes = []
-    path = str(values.get("pricePathPattern") or "")
-    flow = str(values.get("flowPattern") or "")
-    if path in {"PersistentDecline", "DeclineDeceleration", "RecoveryAttempt", "FailedRecovery"}:
-        episodes.append(path)
-    if flow in {"AccumulationDuringWeakness", "DistributionDuringBounce"}:
-        episodes.append(flow)
-    return episodes or ["TemporalObservation"]
+def temporal_observation_anchors(rows: List[Dict[str, object]]) -> List[tuple]:
+    priced_rows = [row for row in rows if row_number(row, "currentPrice", "current_price") > 0]
+    if not priced_rows:
+        return []
+    candidates = [("first", 0)]
+    if len(priced_rows) > 2:
+        candidates.append(("middle", len(priced_rows) // 2))
+    if len(priced_rows) > 1:
+        candidates.append(("latest", len(priced_rows) - 1))
+    return [(role, index, priced_rows[index]) for role, index in candidates]
+
+
+def add_temporal_observation_anchors(
+    graph: PortfolioOntology,
+    window_id: str,
+    symbol: str,
+    definition: TemporalWindowDefinition,
+    rows: List[Dict[str, object]],
+) -> None:
+    previous_id = ""
+    for role, index, row in temporal_observation_anchors(rows):
+        observed_at = row_timestamp(row)
+        has_flow = has_investor_flow_observation(row) and normalized_data_quality(row) != "stale"
+        tbox_classes = ["Observation", "PriceObservation", "TemporalWindowObservation"]
+        properties = {
+            "tboxClass": "TemporalWindowObservation",
+            "tboxClasses": tbox_classes,
+            "symbol": symbol,
+            "windowKey": definition.key,
+            "sequenceRole": role,
+            "sequenceIndex": index,
+            "observedAt": observed_at,
+            "currentPrice": round(row_number(row, "currentPrice", "current_price"), 4),
+            "profitLossRateEnd": round(row_number(row, "profitLossRate", "profit_loss_rate"), 2),
+            "ma20DistanceEnd": round(row_number(row, "ma20Distance", "ma20_distance"), 2),
+            "ma60DistanceEnd": round(row_number(row, "ma60Distance", "ma60_distance"), 2),
+            "observationQuality": normalized_data_quality(row),
+            "provider": str(row.get("provider") or ""),
+            "source": str(row.get("observationSource") or "monitor-snapshot-history"),
+        }
+        if has_flow:
+            tbox_classes.append("FlowObservation")
+            properties["smartMoneyNetLatest"] = round(
+                row_number(row, "foreignNetVolume", "foreign_net_volume")
+                + row_number(row, "institutionNetVolume", "institution_net_volume"),
+                2,
+            )
+        observation_id = add_entity(
+            graph,
+            "temporal-observation",
+            symbol + ":" + definition.key + ":" + role,
+            symbol + " " + definition.key + " " + role + " 관측",
+            properties,
+        )
+        relation_properties = {
+            "source": str(row.get("observationSource") or "monitor-snapshot-history"),
+            "windowKey": definition.key,
+            "field": "temporalObservation",
+            "polarity": "context",
+            "evidenceRole": "context",
+            "dataState": "sufficient" if normalized_data_quality(row) != "stale" else "stale",
+            "aiInfluenceLabel": definition.key + " " + role + " 관측",
+        }
+        add_relation(graph, window_id, observation_id, "WINDOW_CONTAINS_OBSERVATION", properties=relation_properties)
+        if previous_id:
+            add_relation(graph, previous_id, observation_id, "PRECEDES", properties=relation_properties)
+        previous_id = observation_id
 
 
 def add_temporal_coverage_gap(
@@ -486,7 +574,6 @@ def add_position_temporal_concepts(
     if rows and isinstance(external_signals, dict):
         rows[-1] = {**rows[-1], "externalSignals": external_signals}
     trend_observation = profile_for_domain(observation_profiles or {}, "trend")
-    flow_observation = profile_for_domain(observation_profiles or {}, "flow")
 
     for definition in definitions:
         stored_rows = stored_temporal_window_rows(runtime_context, symbol, definition.key)
@@ -500,16 +587,7 @@ def add_position_temporal_concepts(
             if isinstance(external_signals, dict) and selected:
                 selected[-1] = {**selected[-1], "externalSignals": external_signals}
         values = temporal_window_values(selected, definition)
-        cluster = event_cluster(symbol, selected)
-        temporal_state = temporal_decision_state(
-            str(values.get("pricePathPattern") or ""),
-            str(values.get("flowPattern") or ""),
-            int(cluster.get("riskEventCount") or 0),
-            int(cluster.get("supportEventCount") or 0),
-            has_sufficient_history=bool(values.get("hasSufficientHistory")),
-        )
-        values.update(cluster)
-        values.update(temporal_state)
+        values.update(event_counts(symbol, selected))
         values["symbol"] = symbol
         values["source"] = str(values.get("observationSource") or "monitor-snapshot-history")
         values["retentionTier"] = str(values.get("observationGranularity") or "snapshot")
@@ -518,100 +596,22 @@ def add_position_temporal_concepts(
             "tboxClass": "MultiDayWindow" if definition.lookback_days > 1 else "DailyWindow",
             "tboxClasses": ["Observation", "TemporalWindow", "MultiDayWindow" if definition.lookback_days > 1 else "DailyWindow", "TemporalMateriality"],
             "field": "temporalWindow",
-            "value": str(values.get("pricePathPattern") or "UnknownPath"),
+            "value": values.get("priceChangePct", 0),
             **values,
             **trend_observation,
         })
+        data_state = "sufficient" if values.get("hasSufficientHistory") else "insufficient"
         add_relation(graph, stock_id, window_id, "HAS_TEMPORAL_WINDOW", properties={
             "source": values["source"],
             "field": "temporalWindow",
             "windowKey": definition.key,
-            "polarity": values.get("temporalEvidenceRole"),
-            "evidenceRole": values.get("temporalEvidenceRole"),
-            "reviewLevel": values.get("temporalReviewLevel"),
-            "dataState": values.get("temporalDataState"),
-            "changeState": values.get("temporalChangeState"),
-            "conflictState": values.get("temporalConflictState"),
+            "polarity": "context",
+            "evidenceRole": "context" if values.get("hasSufficientHistory") else "blocking",
+            "reviewLevel": "normal" if values.get("hasSufficientHistory") else "blocked",
+            "dataState": data_state,
             "aiInfluenceLabel": definition.key + " 기간 흐름",
         })
-
-        path_id = add_entity(graph, "price-path-pattern", symbol + ":" + definition.key + ":" + str(values.get("pricePathPattern")), str(values.get("pricePathPattern")) + " 가격 경로", {
-            "tboxClass": "PricePathPattern",
-            "tboxClasses": ["Observation", "PricePathPattern", "TemporalMateriality"],
-            "field": "pricePathPattern",
-            "value": str(values.get("pricePathPattern") or "UnknownPath"),
-            **values,
-            **trend_observation,
-        })
-        add_relation(graph, window_id, path_id, "HAS_PRICE_PATH_PATTERN", properties={
-            "source": values["source"],
-            "field": "pricePathPattern",
-            "windowKey": definition.key,
-            "polarity": values.get("temporalEvidenceRole"),
-            "evidenceRole": values.get("temporalEvidenceRole"),
-            "reviewLevel": values.get("temporalReviewLevel"),
-            "dataState": values.get("temporalDataState"),
-            "aiInfluenceLabel": definition.key + " " + str(values.get("pricePathPattern")),
-        })
-
-        flow_id = add_entity(graph, "flow-pattern", symbol + ":" + definition.key + ":" + str(values.get("flowPattern")), str(values.get("flowPattern")) + " 수급 패턴", {
-            "tboxClass": "FlowPattern",
-            "tboxClasses": ["Observation", "FlowPattern", "TemporalMateriality"],
-            "field": "flowPattern",
-            "value": str(values.get("flowPattern") or "NeutralFlow"),
-            **values,
-            **flow_observation,
-        })
-        flow_role = "risk" if values.get("flowPattern") in {"SmartMoneyOutflow", "DistributionDuringBounce"} else "support" if values.get("flowPattern") in {"AccumulationDuringWeakness", "SmartMoneySupport"} else "context"
-        add_relation(graph, window_id, flow_id, "HAS_FLOW_PATTERN", properties={
-            "source": values["source"],
-            "field": "flowPattern",
-            "windowKey": definition.key,
-            "polarity": flow_role,
-            "evidenceRole": flow_role,
-            "dataState": values.get("temporalDataState"),
-            "aiInfluenceLabel": definition.key + " " + str(values.get("flowPattern")),
-        })
-
-        event_id = add_entity(graph, "event-cluster", symbol + ":" + definition.key + ":" + str(cluster.get("eventClusterType")), str(cluster.get("eventClusterType")) + " 이벤트 묶음", {
-            "tboxClass": str(cluster.get("eventClusterType") or "EventCluster"),
-            "tboxClasses": ["Observation", "EventCluster", "TemporalMateriality", str(cluster.get("eventClusterType") or "EventCluster")],
-            "field": "eventClusterType",
-            "value": max(cluster.get("riskEventCount", 0), cluster.get("supportEventCount", 0)),
-            **values,
-        })
-        event_role = "risk" if cluster.get("riskEventCount", 0) >= 2 else "support" if cluster.get("supportEventCount", 0) >= 2 else "context"
-        add_relation(graph, window_id, event_id, "HAS_EVENT_CLUSTER", properties={
-            "source": values["source"],
-            "field": "eventClusterType",
-            "windowKey": definition.key,
-            "polarity": event_role,
-            "evidenceRole": event_role,
-            "dataState": values.get("temporalDataState"),
-            "aiInfluenceLabel": definition.key + " 이벤트 묶음",
-        })
-
-        for episode in primary_episodes(values, cluster):
-            episode_id = add_entity(graph, "trend-episode", symbol + ":" + definition.key + ":" + episode, episode + " 기간 에피소드", {
-                "tboxClass": episode if episode != "TemporalObservation" else "TrendEpisode",
-                "tboxClasses": ["Signal", "SignalTransition", "TrendEpisode", "TemporalMateriality", episode],
-                "field": "trendEpisodeType",
-                "value": episode,
-                "trendEpisodeType": episode,
-                **values,
-                **trend_observation,
-            })
-            episode_role = "support" if episode in {"DeclineDeceleration", "RecoveryAttempt", "AccumulationDuringWeakness"} else "risk" if episode in {"PersistentDecline", "FailedRecovery", "DistributionDuringBounce", "EventDrivenRiskCluster"} else "context"
-            add_relation(graph, stock_id, episode_id, "DERIVES_TREND_EPISODE", properties={
-                "source": values["source"],
-                "field": "trendEpisodeType",
-                "windowKey": definition.key,
-                "polarity": episode_role,
-                "evidenceRole": episode_role,
-                "reviewLevel": values.get("temporalReviewLevel"),
-                "dataState": values.get("temporalDataState"),
-                "aiInfluenceLabel": definition.key + " " + episode,
-            })
+        add_temporal_observation_anchors(graph, window_id, symbol, definition, selected)
 
         if not values.get("hasSufficientHistory"):
             add_temporal_coverage_gap(

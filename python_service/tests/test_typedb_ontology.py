@@ -2487,16 +2487,30 @@ class TypeDBOntologyRepositoryTests(unittest.TestCase):
         specs = {}
         with patch.object(service_manager, "worker_specs", return_value=specs), \
                 patch.object(service_manager, "supervisor_running", return_value=True), \
-                patch.object(service_manager, "begin_supervisor_maintenance") as begin, \
+                patch.object(service_manager, "begin_supervisor_maintenance", return_value="restart-token") as begin, \
+                patch.object(service_manager, "wait_for_supervisor_maintenance_ack", return_value=True) as wait, \
                 patch.object(service_manager, "end_supervisor_maintenance") as end, \
                 patch.object(service_manager, "stop", return_value=0) as stop, \
                 patch.object(service_manager, "start", return_value=0) as start:
             self.assertEqual(0, service_manager.restart())
 
         begin.assert_called_once_with("restart")
+        wait.assert_called_once_with("restart-token")
         stop.assert_called_once_with(excluded_roles=set(), include_supervisor=False)
         start.assert_called_once_with(excluded_roles=set())
         end.assert_called_once_with()
+
+    def test_service_manager_supervisor_acknowledges_maintenance_token(self):
+        with tempfile.TemporaryDirectory() as temp:
+            marker = Path(temp) / "python-supervisor-maintenance.json"
+            with patch.object(service_manager, "supervisor_maintenance_path", return_value=marker):
+                token = service_manager.begin_supervisor_maintenance("restart")
+                service_manager.acknowledge_supervisor_maintenance()
+                payload = service_manager.read_supervisor_maintenance_payload()
+
+        self.assertEqual(token, payload["token"])
+        self.assertEqual(service_manager.os.getpid(), payload["acknowledgedByPid"])
+        self.assertTrue(payload["acknowledgedAt"])
 
     def test_service_manager_stop_detaches_launch_agent_before_supervisor_signal(self):
         with tempfile.TemporaryDirectory() as temp:

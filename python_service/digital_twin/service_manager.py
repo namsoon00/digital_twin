@@ -776,7 +776,11 @@ def restart(restart_typedb: bool = False, restart_mysql: bool = False) -> int:
             excluded.add("mysql")
     pause_supervisor = supervisor_running()
     if pause_supervisor:
-        begin_supervisor_maintenance("restart")
+        maintenance_token = begin_supervisor_maintenance("restart")
+        if not wait_for_supervisor_maintenance_ack(maintenance_token):
+            end_supervisor_maintenance()
+            print("Service restart aborted because the supervisor did not acknowledge maintenance mode.")
+            return 1
     try:
         stop(excluded_roles=excluded, include_supervisor=False)
         return start(excluded_roles=excluded)
@@ -797,15 +801,58 @@ def supervisor_maintenance_path() -> Path:
     return data_dir() / "python-supervisor-maintenance.json"
 
 
-def begin_supervisor_maintenance(reason: str) -> None:
+def write_supervisor_maintenance_payload(payload: Dict[str, object]) -> None:
     path = supervisor_maintenance_path()
     path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(json.dumps({
+    temporary = path.with_name(path.name + "." + str(os.getpid()) + ".tmp")
+    temporary.write_text(json.dumps(payload, ensure_ascii=False, sort_keys=True), encoding="utf-8")
+    os.chmod(temporary, 0o600)
+    os.replace(temporary, path)
+
+
+def read_supervisor_maintenance_payload() -> Dict[str, object]:
+    try:
+        payload = json.loads(supervisor_maintenance_path().read_text(encoding="utf-8"))
+    except (OSError, ValueError, json.JSONDecodeError):
+        return {}
+    return dict(payload or {}) if isinstance(payload, dict) else {}
+
+
+def begin_supervisor_maintenance(reason: str) -> str:
+    token = str(os.getpid()) + "-" + str(time.time_ns())
+    write_supervisor_maintenance_payload({
         "pid": os.getpid(),
+        "token": token,
         "reason": str(reason or "maintenance"),
         "startedAt": iso_now(),
-    }, ensure_ascii=False, sort_keys=True), encoding="utf-8")
-    os.chmod(path, 0o600)
+    })
+    return token
+
+
+def acknowledge_supervisor_maintenance() -> None:
+    payload = read_supervisor_maintenance_payload()
+    token = str(payload.get("token") or "")
+    if not token or int(payload.get("acknowledgedByPid") or 0) == os.getpid():
+        return
+    payload["acknowledgedByPid"] = os.getpid()
+    payload["acknowledgedAt"] = iso_now()
+    write_supervisor_maintenance_payload(payload)
+
+
+def wait_for_supervisor_maintenance_ack(token: str, timeout_seconds: float = 10.0) -> bool:
+    deadline = time.monotonic() + max(1.0, float(timeout_seconds or 10.0))
+    supervisor_pid = read_pid(supervisor_pid_path())
+    while time.monotonic() <= deadline:
+        payload = read_supervisor_maintenance_payload()
+        if (
+            str(payload.get("token") or "") == str(token or "")
+            and int(payload.get("acknowledgedByPid") or 0) == supervisor_pid
+        ):
+            return True
+        if supervisor_pid and not pid_exists(supervisor_pid):
+            return True
+        time.sleep(0.1)
+    return False
 
 
 def end_supervisor_maintenance() -> None:
@@ -886,11 +933,15 @@ def supervise() -> int:
         last_maintenance_at = 0.0
         while not stopping["value"]:
             if supervisor_maintenance_active():
+                acknowledge_supervisor_maintenance()
                 time.sleep(1)
                 continue
             specs = worker_specs()
             for spec in specs.values():
                 if stopping["value"]:
+                    break
+                if supervisor_maintenance_active():
+                    acknowledge_supervisor_maintenance()
                     break
                 pid = read_pid(spec["pid"])
                 if not is_running(pid, spec):

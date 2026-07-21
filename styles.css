@@ -248,6 +248,84 @@
   }
 }
 
+/* Desktop density pass: lists carry only the decision needed before opening detail. */
+.oa-surface-head span,
+.oa-table-head,
+.oa-filter-bar label > span,
+.oa-console-page .notification-search-field > span {
+  font-size: 12px;
+}
+
+.oa-row-main em,
+.oa-symbol-cell em,
+.oa-data-row > span > em,
+.oa-news-row em,
+.oa-operation-row em,
+.oa-settings-list em,
+.oa-context-row em,
+.oa-row-action,
+.oa-open-cell {
+  font-size: 12px;
+}
+
+.oa-data-row {
+  min-height: 68px;
+  padding-top: 12px;
+  padding-bottom: 12px;
+}
+
+.oa-market-row {
+  grid-template-columns: minmax(180px, 1.35fr) minmax(130px, 0.9fr) minmax(118px, 0.82fr) minmax(190px, 1.35fr) 34px;
+}
+
+.oa-decision-row {
+  grid-template-columns: minmax(160px, 0.95fr) minmax(150px, 0.9fr) minmax(290px, 2.2fr) minmax(145px, 0.8fr);
+}
+
+.oa-decision-row .oa-reason-cell strong,
+.oa-decision-row .oa-reason-cell em {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.oa-decision-row .oa-open-cell {
+  max-width: none;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.oa-news-row > small,
+.oa-operation-row small,
+.oa-table-head {
+  font-size: 11px;
+}
+
+@media (max-width: 1180px) {
+  .oa-data-table {
+    overflow-x: visible;
+  }
+
+  .oa-table-head,
+  .oa-data-row {
+    min-width: 0;
+  }
+
+  .oa-market-row,
+  .oa-decision-row,
+  .oa-alert-row,
+  .oa-validation-row {
+    grid-template-columns: minmax(150px, 1.1fr) minmax(120px, 0.85fr) minmax(0, 1.45fr) auto;
+  }
+
+  .oa-market-row > :nth-child(3),
+  .oa-alert-row > :nth-child(3),
+  .oa-validation-row > :nth-child(3),
+  .oa-validation-row > :nth-child(4) {
+    display: none;
+  }
+}
+
 html[data-theme="dark"] {
   color-scheme: dark;
   --ds-color-bg: #0c1117;

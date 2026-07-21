@@ -75,6 +75,7 @@ from ..infrastructure.mock_market import mock_market_payload, mock_market_scenar
 from ..infrastructure.ontology_graph_store import ontology_repository_from_settings
 from ..infrastructure.ontology_projection import PortfolioOntologyProjectionRecorder
 from ..infrastructure import operational_store as stores
+from ..infrastructure.operational_error_reporting import operational_error_reporter, report_runtime_error
 from ..infrastructure.service_factory import (
     build_investment_calendar_candidate_service,
     build_investment_calendar_research_service,
@@ -3030,8 +3031,10 @@ class DigitalTwinHandler(BaseHTTPRequestHandler):
         except ValueError as error:
             self.send_payload(400, {"error": str(error) or "잘못된 요청입니다."})
         except (urllib.error.URLError, TimeoutError, ExternalCircuitOpen, ExternalRateLimited) as error:
+            report_runtime_error(operational_error_reporter(), "Python web server", error, "HTTP 502 " + path)
             self.send_payload(502, {"error": str(error) or "외부 데이터 요청 실패"})
         except Exception as error:
+            report_runtime_error(operational_error_reporter(), "Python web server", error, "HTTP 500 " + path)
             self.send_payload(500, {"error": str(error) or "서버 오류"})
 
     def ensure_writable(self, message: str) -> bool:

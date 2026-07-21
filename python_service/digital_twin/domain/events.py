@@ -41,6 +41,7 @@ INVESTMENT_STRATEGY_VALIDATED = "investment_strategy.validated"
 INVESTMENT_STRATEGY_APPROVED = "investment_strategy.approved"
 INVESTMENT_STRATEGY_DEPLOYED = "investment_strategy.deployed"
 INVESTMENT_STRATEGY_PERFORMANCE_RECORDED = "investment_strategy.performance_recorded"
+SYSTEM_ERROR_REPORTED = "system.error_reported"
 
 
 @dataclass(frozen=True)
@@ -65,6 +66,26 @@ class DomainEvent:
             event_id=str(payload.get("event_id") or payload.get("eventId") or uuid.uuid4().hex),
             correlation_id=str(payload.get("correlation_id") or payload.get("correlationId") or ""),
         )
+
+
+def system_error_reported_event(
+    component: str,
+    error_type: str,
+    message: str,
+    fingerprint: str,
+    occurrence_count: int = 1,
+) -> DomainEvent:
+    return DomainEvent(
+        name=SYSTEM_ERROR_REPORTED,
+        aggregate_id="system-error:" + str(fingerprint or "unknown")[:40],
+        payload={
+            "component": str(component or "system"),
+            "errorType": str(error_type or "Exception"),
+            "message": str(message or "알 수 없는 오류"),
+            "fingerprint": str(fingerprint or ""),
+            "occurrenceCount": max(1, int(occurrence_count or 1)),
+        },
+    )
 
 
 def account_saved_event(account: AccountConfig) -> DomainEvent:

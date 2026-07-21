@@ -1,6 +1,8 @@
 import signal
 import time
 
+from .operational_error_reporting import operational_error_reporter, report_runtime_error
+
 
 MIN_REALTIME_INTERVAL_SECONDS = 3 * 60
 
@@ -16,9 +18,10 @@ def wait_until_running(running, end_at: float, sleep_fn=time.sleep) -> None:
 
 
 class RealtimeScheduler:
-    def __init__(self, runner, interval_seconds: int):
+    def __init__(self, runner, interval_seconds: int, error_reporter=None):
         self.runner = runner
         self.interval_seconds = max(MIN_REALTIME_INTERVAL_SECONDS, int(interval_seconds or MIN_REALTIME_INTERVAL_SECONDS))
+        self.error_reporter = error_reporter or operational_error_reporter()
         self.running = True
 
     def stop(self, *_args) -> None:
@@ -33,14 +36,16 @@ class RealtimeScheduler:
                 self.runner.run_once()
             except Exception as error:  # noqa: BLE001 - long-running scheduler must continue after a cycle failure.
                 print("Python realtime monitor error: " + str(error))
+                report_runtime_error(self.error_reporter, "Python realtime monitor", error, "monitor cycle")
             end_at = time.monotonic() + max(1.0, self.interval_seconds - (time.monotonic() - started))
             wait_until_running(lambda: self.running, end_at)
 
 
 class ModelReviewScheduler:
-    def __init__(self, runner, interval_seconds: int):
+    def __init__(self, runner, interval_seconds: int, error_reporter=None):
         self.runner = runner
         self.interval_seconds = max(60, int(interval_seconds or 300))
+        self.error_reporter = error_reporter or operational_error_reporter()
         self.running = True
 
     def stop(self, *_args) -> None:
@@ -55,14 +60,16 @@ class ModelReviewScheduler:
                 self.runner.run_once(limit=limit)
             except Exception as error:  # noqa: BLE001 - worker must continue after a cycle failure.
                 print("Python model review worker error: " + str(error))
+                report_runtime_error(self.error_reporter, "Python model review worker", error, "review cycle")
             end_at = time.monotonic() + max(1.0, self.interval_seconds - (time.monotonic() - started))
             wait_until_running(lambda: self.running, end_at)
 
 
 class NotificationQueueScheduler:
-    def __init__(self, runner, interval_seconds: int):
+    def __init__(self, runner, interval_seconds: int, error_reporter=None):
         self.runner = runner
         self.interval_seconds = max(5, int(interval_seconds or 30))
+        self.error_reporter = error_reporter or operational_error_reporter()
         self.running = True
 
     def stop(self, *_args) -> None:
@@ -83,14 +90,16 @@ class NotificationQueueScheduler:
                     print("Processed notification jobs: " + str(processed) + suffix)
             except Exception as error:  # noqa: BLE001 - worker must continue after a cycle failure.
                 print("Python notification worker error: " + str(error))
+                report_runtime_error(self.error_reporter, "Python notification worker", error, "notification delivery")
             end_at = time.monotonic() + max(1.0, self.interval_seconds - (time.monotonic() - started))
             wait_until_running(lambda: self.running, end_at)
 
 
 class OntologyReasoningScheduler:
-    def __init__(self, runner, interval_seconds: int):
+    def __init__(self, runner, interval_seconds: int, error_reporter=None):
         self.runner = runner
         self.interval_seconds = max(5, int(interval_seconds or 10))
+        self.error_reporter = error_reporter or operational_error_reporter()
         self.running = True
 
     def stop(self, *_args) -> None:
@@ -114,14 +123,16 @@ class OntologyReasoningScheduler:
                     )
             except Exception as error:  # noqa: BLE001 - long-running reasoning worker must continue after a cycle failure.
                 print("Python ontology reasoning worker error: " + str(error))
+                report_runtime_error(self.error_reporter, "Python ontology reasoning worker", error, "inference cycle")
             end_at = time.monotonic() + max(1.0, self.interval_seconds - (time.monotonic() - started))
             wait_until_running(lambda: self.running, end_at)
 
 
 class OntologyLabScheduler:
-    def __init__(self, service, interval_seconds: int):
+    def __init__(self, service, interval_seconds: int, error_reporter=None):
         self.service = service
         self.interval_seconds = max(5, int(interval_seconds or 300))
+        self.error_reporter = error_reporter or operational_error_reporter()
         self.last_auto_suggest_at = 0.0
         self.running = True
 
@@ -165,6 +176,7 @@ class OntologyLabScheduler:
                     )
             except Exception as error:  # noqa: BLE001 - long-running lab worker must continue after a cycle failure.
                 print("Python ontology lab worker error: " + str(error))
+                report_runtime_error(self.error_reporter, "Python ontology lab worker", error, "lab cycle")
             end_at = time.monotonic() + max(1.0, self.interval_seconds - (time.monotonic() - started))
             wait_until_running(lambda: self.running, end_at)
 
@@ -176,9 +188,10 @@ class OntologyLabScheduler:
 
 
 class MarketDataCollectionScheduler:
-    def __init__(self, runner, interval_seconds: int):
+    def __init__(self, runner, interval_seconds: int, error_reporter=None):
         self.runner = runner
         self.interval_seconds = max(3 * 60, int(interval_seconds or 180))
+        self.error_reporter = error_reporter or operational_error_reporter()
         self.running = True
 
     def stop(self, *_args) -> None:
@@ -194,14 +207,16 @@ class MarketDataCollectionScheduler:
                 print("Market data collection " + str(result.get("status")) + " saved=" + str(result.get("savedCount", 0)))
             except Exception as error:  # noqa: BLE001 - long-running collector must continue after provider failures.
                 print("Python market data collector error: " + str(error))
+                report_runtime_error(self.error_reporter, "Python market data collector", error, "collection cycle")
             end_at = time.monotonic() + max(1.0, self.interval_seconds - (time.monotonic() - started))
             wait_until_running(lambda: self.running, end_at)
 
 
 class KISRealtimeWebSocketScheduler:
-    def __init__(self, runner, reconnect_delay_seconds: int = 5):
+    def __init__(self, runner, reconnect_delay_seconds: int = 5, error_reporter=None):
         self.runner = runner
         self.reconnect_delay_seconds = max(1, int(reconnect_delay_seconds or 5))
+        self.error_reporter = error_reporter or operational_error_reporter()
         self.running = True
 
     def stop(self, *_args) -> None:
@@ -224,14 +239,16 @@ class KISRealtimeWebSocketScheduler:
                 )
             except Exception as error:  # noqa: BLE001 - realtime feed should reconnect after vendor/network errors.
                 print("Python KIS realtime WebSocket error: " + str(error), flush=True)
+                report_runtime_error(self.error_reporter, "Python KIS realtime WebSocket worker", error, "websocket cycle")
             end_at = time.monotonic() + self.reconnect_delay_seconds
             wait_until_running(lambda: self.running, end_at, self.runner.sleep_fn)
 
 
 class NewsCollectionScheduler:
-    def __init__(self, runner, interval_seconds: int):
+    def __init__(self, runner, interval_seconds: int, error_reporter=None):
         self.runner = runner
         self.interval_seconds = max(60, int(interval_seconds or 60))
+        self.error_reporter = error_reporter or operational_error_reporter()
         self.running = True
 
     def stop(self, *_args) -> None:
@@ -262,15 +279,17 @@ class NewsCollectionScheduler:
                 )
             except Exception as error:  # noqa: BLE001 - long-running collector must continue after provider failures.
                 print("Python news collector error: " + str(error))
+                report_runtime_error(self.error_reporter, "Python news collector", error, "collection cycle")
             end_at = time.monotonic() + max(1.0, self.interval_seconds - (time.monotonic() - started))
             wait_until_running(lambda: self.running, end_at)
 
 
 class InvestmentResearchScheduler:
-    def __init__(self, runner, interval_seconds: int, batch_size: int = 3):
+    def __init__(self, runner, interval_seconds: int, batch_size: int = 3, error_reporter=None):
         self.runner = runner
         self.interval_seconds = max(5, int(interval_seconds or 15))
         self.batch_size = max(1, min(20, int(batch_size or 3)))
+        self.error_reporter = error_reporter or operational_error_reporter()
         self.running = True
 
     def stop(self, *_args) -> None:
@@ -293,14 +312,16 @@ class InvestmentResearchScheduler:
                     )
             except Exception as error:  # noqa: BLE001 - research queue must continue after one failed task.
                 print("Python investment research worker error: " + str(error), flush=True)
+                report_runtime_error(self.error_reporter, "Python investment research worker", error, "research cycle")
             end_at = time.monotonic() + max(1.0, self.interval_seconds - (time.monotonic() - started))
             wait_until_running(lambda: self.running, end_at)
 
 
 class InvestmentCalendarScheduler:
-    def __init__(self, runner, interval_seconds: int):
+    def __init__(self, runner, interval_seconds: int, error_reporter=None):
         self.runner = runner
         self.interval_seconds = max(30, int(interval_seconds or 60))
+        self.error_reporter = error_reporter or operational_error_reporter()
         self.running = True
 
     def stop(self, *_args) -> None:
@@ -324,5 +345,6 @@ class InvestmentCalendarScheduler:
                     )
             except Exception as error:  # noqa: BLE001 - long-running calendar worker must continue after one cycle failure.
                 print("Python investment calendar worker error: " + str(error))
+                report_runtime_error(self.error_reporter, "Python investment calendar worker", error, "calendar cycle")
             end_at = time.monotonic() + max(1.0, self.interval_seconds - (time.monotonic() - started))
             wait_until_running(lambda: self.running, end_at)

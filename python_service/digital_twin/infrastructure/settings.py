@@ -731,7 +731,7 @@ def runtime_settings() -> Dict[str, str]:
         "typedbABoxNodeBatchSize": value("typedbABoxNodeBatchSize", "TYPEDB_ABOX_NODE_BATCH_SIZE", "100"),
         "typedbABoxRelationBatchSize": value("typedbABoxRelationBatchSize", "TYPEDB_ABOX_RELATION_BATCH_SIZE", "1"),
         "typedbABoxDeleteBatchSize": value("typedbABoxDeleteBatchSize", "TYPEDB_ABOX_DELETE_BATCH_SIZE", "1000"),
-        "typedbABoxInactiveGenerationKeepCount": value("typedbABoxInactiveGenerationKeepCount", "TYPEDB_ABOX_INACTIVE_GENERATION_KEEP_COUNT", "1"),
+        "typedbABoxInactiveGenerationKeepCount": value("typedbABoxInactiveGenerationKeepCount", "TYPEDB_ABOX_INACTIVE_GENERATION_KEEP_COUNT", "0"),
         "typedbABoxInactiveGenerationMaxPrunePerSave": value("typedbABoxInactiveGenerationMaxPrunePerSave", "TYPEDB_ABOX_INACTIVE_GENERATION_MAX_PRUNE_PER_SAVE", "2"),
         "typedbABoxWriteTransactionQueryCount": value("typedbABoxWriteTransactionQueryCount", "TYPEDB_ABOX_WRITE_TRANSACTION_QUERY_COUNT", "8"),
         "typedbGraphWriteTransactionQueryCount": value("typedbGraphWriteTransactionQueryCount", "TYPEDB_GRAPH_WRITE_TRANSACTION_QUERY_COUNT", "8"),

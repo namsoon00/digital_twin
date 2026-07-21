@@ -233,6 +233,85 @@ class OntologyInferenceQualityTests(unittest.TestCase):
         self.assertTrue(third["saved"])
         self.assertNotEqual(first["materialFingerprint"], third["materialFingerprint"])
 
+    def test_material_abox_generation_is_audited_before_graph_activation(self):
+        events = []
+
+        class AuditStore:
+            def __init__(self):
+                self.runs = []
+
+            def begin(self, run):
+                events.append(("begin", run.run_id))
+                self.runs.append(run)
+                return run
+
+            def complete(self, run):
+                events.append(("complete", run.run_id))
+                self.runs[-1] = run
+                return run
+
+        class OrderedRepository(MemoryProjectionRepository):
+            def save_graph(self, graph):
+                events.append(("save", str((graph.worldview or {}).get("projectionRunId") or "")))
+                return super().save_graph(graph)
+
+        position = normalize_position({
+            "symbol": "005930",
+            "name": "삼성전자",
+            "market": "KR",
+            "currency": "KRW",
+            "source": "holding",
+            "quantity": 10,
+            "currentPrice": 70000,
+            "marketValue": 700000,
+        })
+        snapshot = self.snapshot(position, "2026-07-20T00:01:00Z")
+        snapshot.metadata["ontology"] = {"projection": {"old": "derived"}}
+        repository = OrderedRepository()
+        audit_store = AuditStore()
+        recorder = PortfolioOntologyProjectionRecorder(
+            repository,
+            projection_run_store=audit_store,
+        )
+
+        first = recorder.record_snapshot(snapshot)
+        second = recorder.record_snapshot(self.snapshot(position, "2026-07-20T00:04:00Z"))
+
+        self.assertTrue(first["saved"])
+        self.assertEqual("recorded", first["projectionAudit"]["status"])
+        self.assertEqual(["begin", "save", "complete"], [event[0] for event in events])
+        self.assertEqual(events[0][1], events[1][1])
+        self.assertEqual(events[0][1], events[2][1])
+        self.assertNotIn("ontology", audit_store.runs[0].context_payload["sourceSnapshot"]["metadata"])
+        self.assertEqual("unchanged-material-facts", second["status"])
+        self.assertEqual(1, len(audit_store.runs))
+
+    def test_source_audit_failure_preserves_existing_active_abox(self):
+        class FailingAuditStore:
+            def begin(self, _run):
+                raise RuntimeError("mysql unavailable")
+
+        position = normalize_position({
+            "symbol": "000660",
+            "name": "SK하이닉스",
+            "market": "KR",
+            "currency": "KRW",
+            "source": "holding",
+            "quantity": 7,
+            "currentPrice": 1800000,
+            "marketValue": 12600000,
+        })
+        repository = MemoryProjectionRepository()
+
+        result = PortfolioOntologyProjectionRecorder(
+            repository,
+            projection_run_store=FailingAuditStore(),
+        ).record_snapshot(self.snapshot(position, "2026-07-20T00:01:00Z"))
+
+        self.assertEqual("source-audit-failed", result["status"])
+        self.assertTrue(result["preservedActiveGeneration"])
+        self.assertEqual(0, repository.save_count)
+
     def test_runtime_projection_can_skip_static_tbox_and_presentation_payload(self):
         position = normalize_position({
             "symbol": "005930",

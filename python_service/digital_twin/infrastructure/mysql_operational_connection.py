@@ -529,6 +529,41 @@ MYSQL_SCHEMA = [
     ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
     """,
     """
+    CREATE TABLE IF NOT EXISTS ontology_projection_runs (
+        run_id VARCHAR(191) PRIMARY KEY,
+        portfolio_id VARCHAR(191) NOT NULL DEFAULT '',
+        account_id VARCHAR(191) NOT NULL DEFAULT '',
+        source_snapshot_at VARCHAR(40) NOT NULL DEFAULT '',
+        source_snapshot_fingerprint VARCHAR(64) NOT NULL DEFAULT '',
+        first_observed_at VARCHAR(40) NOT NULL DEFAULT '',
+        last_observed_at VARCHAR(40) NOT NULL DEFAULT '',
+        started_at VARCHAR(40) NOT NULL DEFAULT '',
+        completed_at VARCHAR(40) NOT NULL DEFAULT '',
+        activated_at VARCHAR(40) NOT NULL DEFAULT '',
+        status VARCHAR(64) NOT NULL DEFAULT 'projecting',
+        graph_store VARCHAR(64) NOT NULL DEFAULT '',
+        projection_mode VARCHAR(128) NOT NULL DEFAULT '',
+        material_fingerprint VARCHAR(64) NOT NULL DEFAULT '',
+        abox_snapshot_id VARCHAR(191) NOT NULL DEFAULT '',
+        active_abox_snapshot_id VARCHAR(191) NOT NULL DEFAULT '',
+        tbox_version VARCHAR(191) NOT NULL DEFAULT '',
+        tbox_fingerprint VARCHAR(64) NOT NULL DEFAULT '',
+        rulebox_rules_hash VARCHAR(64) NOT NULL DEFAULT '',
+        entity_count INT NOT NULL DEFAULT 0,
+        relation_count INT NOT NULL DEFAULT 0,
+        inference_generation_id VARCHAR(191) NOT NULL DEFAULT '',
+        inference_status VARCHAR(64) NOT NULL DEFAULT '',
+        source_symbols_json LONGTEXT NOT NULL,
+        context_payload_json LONGTEXT NOT NULL,
+        result_payload_json LONGTEXT NOT NULL,
+        created_at VARCHAR(40) NOT NULL,
+        updated_at VARCHAR(40) NOT NULL,
+        KEY idx_ontology_projection_runs_account_updated (account_id, updated_at, run_id),
+        KEY idx_ontology_projection_runs_abox (abox_snapshot_id),
+        KEY idx_ontology_projection_runs_material (account_id, material_fingerprint)
+    ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
+    """,
+    """
     CREATE TABLE IF NOT EXISTS investment_decision_episodes (
         episode_id VARCHAR(191) PRIMARY KEY,
         account_id VARCHAR(191) NOT NULL DEFAULT '',

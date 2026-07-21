@@ -22,6 +22,7 @@ from .mysql_operational import (
     MySQLNotificationJobStore,
     MySQLNotificationRuleStore,
     MySQLNotificationTemplateStore,
+    MySQLOntologyProjectionRunStore,
     MySQLOntologyQualitySampleStore,
     MySQLOntologyReasoningCursorStore,
     MySQLResearchEvidenceStore,
@@ -149,6 +150,11 @@ def investment_calendar_candidate_store(settings: Dict[str, str] = None):
 def ontology_quality_sample_store(settings: Dict[str, str] = None):
     configured = configured_settings(settings)
     return MySQLOntologyQualitySampleStore(configured)
+
+
+def ontology_projection_run_store(settings: Dict[str, str] = None):
+    configured = configured_settings(settings)
+    return MySQLOntologyProjectionRunStore(configured)
 
 
 def ontology_experiment_store(settings: Dict[str, str] = None):

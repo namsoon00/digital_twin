@@ -654,7 +654,7 @@ class NullTypeDBOntologyGraphRepository:
         _driver=None,
         _imported=None,
         active_snapshot_id: str = "",
-        keep_inactive_count: int = 1,
+        keep_inactive_count: int = 0,
         max_generations: int = 1,
     ) -> Dict[str, object]:
         return {
@@ -1037,16 +1037,38 @@ class TypeDBOntologyGraphRepository(GraphStoreOntologyRowMapperMixin):
                                     delete_boxes=["ABoxControl"],
                                 )
                                 # The pointer now protects the complete new
-                                # generation. Prune only a small, marker-backed
-                                # set of older *complete* generations while this
-                                # single writer owns the activation path. This
-                                # prevents unbounded ABox growth without racing an
-                                # in-progress candidate from another cycle.
+                                # generation. The prior active graph is no
+                                # longer a rollback store: its source facts and
+                                # activation audit are durable in MySQL. Remove
+                                # it immediately, then drain any legacy marker
+                                # backlog without retaining inactive ABox facts.
+                                if active_snapshot_id:
+                                    try:
+                                        retired_active_cleanup = self.delete_box_snapshot_rows_in_batches(
+                                            driver,
+                                            imported,
+                                            "ABox",
+                                            active_snapshot_id,
+                                        )
+                                    except Exception as cleanup_error:  # noqa: BLE001 - new active pointer remains valid.
+                                        retired_active_cleanup = {
+                                            "status": "error",
+                                            "aboxSnapshotId": active_snapshot_id,
+                                            "reason": str(cleanup_error)[:180],
+                                        }
+                                else:
+                                    retired_active_cleanup = {
+                                        "status": "skipped",
+                                        "reason": "No previous active ABox generation exists.",
+                                        "aboxSnapshotId": "",
+                                        "deletedBatchCount": 0,
+                                    }
                                 try:
                                     candidate_cleanup = self.prune_inactive_abox_generations(
                                         driver,
                                         imported,
                                         active_snapshot_id=snapshot_id,
+                                        keep_inactive_count=0,
                                     )
                                 except Exception as cleanup_error:  # noqa: BLE001 - active pointer remains valid.
                                     candidate_cleanup = {
@@ -1069,6 +1091,7 @@ class TypeDBOntologyGraphRepository(GraphStoreOntologyRowMapperMixin):
                             }
                             if active_snapshot_id != snapshot_id:
                                 abox_projection_verification["candidateCleanup"] = candidate_cleanup
+                                abox_projection_verification["retiredActiveCleanup"] = retired_active_cleanup
                             if abox_projection_verification.get("status") != "ok":
                                 raise RuntimeError(
                                     "ABox activation verification failed: "
@@ -1675,6 +1698,7 @@ class TypeDBOntologyGraphRepository(GraphStoreOntologyRowMapperMixin):
             "graphStore": "typedb",
             "aboxSnapshotId": snapshot_id,
             "materialFingerprint": str(marker.get("materialFingerprint") or "").strip(),
+            "projectionRunId": str(marker.get("projectionRunId") or "").strip(),
             "asOf": str(marker.get("asOf") or ""),
             "expectedEntityCount": expected["entityCount"],
             "expectedRelationCount": expected["relationCount"],
@@ -2086,9 +2110,9 @@ class TypeDBOntologyGraphRepository(GraphStoreOntologyRowMapperMixin):
         raw = (settings or runtime_settings()).get("typedbABoxInactiveGenerationKeepCount")
         parsed = number_or_none(raw)
         if parsed is None:
-            parsed = 1
-        # Keep one completed predecessor for operational inspection/rollback,
-        # but never turn ABox history into an unbounded time-series store.
+            parsed = 0
+        # MySQL keeps the source snapshot and activation audit. TypeDB retains
+        # only active facts, not a rollback or time-series history.
         return max(0, min(5, int(parsed)))
 
     def abox_inactive_generation_max_prune_per_save(self, settings: Dict[str, object] = None) -> int:
@@ -2213,7 +2237,7 @@ class TypeDBOntologyGraphRepository(GraphStoreOntologyRowMapperMixin):
         box: str,
         snapshot_id: str,
     ) -> Dict[str, object]:
-        """Delete only a failed, inactive candidate generation in short writes."""
+        """Delete one inactive ABox generation in short TypeDB writes."""
         clean_box = str(box or "").strip()
         clean_snapshot_id = str(snapshot_id or "").strip()
         if not clean_box or not clean_snapshot_id:
@@ -2492,6 +2516,7 @@ class TypeDBOntologyGraphRepository(GraphStoreOntologyRowMapperMixin):
                 "snapshotId": snapshot_id,
                 "aboxSnapshotId": snapshot_id,
                 "materialFingerprint": fingerprint,
+                "projectionRunId": str(worldview.get("projectionRunId") or ""),
                 "asOf": str(worldview.get("asOf") or worldview.get("generatedAt") or utc_now()),
             },
         )
@@ -3090,6 +3115,7 @@ relation ontology-assertion,
                 "snapshotId": snapshot_id,
                 "aboxSnapshotId": snapshot_id,
                 "materialFingerprint": fingerprint,
+                "projectionRunId": str(worldview.get("projectionRunId") or ""),
                 "asOf": as_of,
                 "expectedAboxEntityCount": int(expected_entity_count),
                 "expectedAboxRelationCount": int(expected_relation_count),

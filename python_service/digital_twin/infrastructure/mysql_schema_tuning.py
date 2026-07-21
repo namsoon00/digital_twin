@@ -143,6 +143,19 @@ MYSQL_OPERATIONAL_INDEXES: Dict[str, Sequence[MySQLIndexDefinition]] = {
     "ontology_ai_opinion_samples": (
         MySQLIndexDefinition("ontology_ai_opinion_samples", "idx_ontology_quality_created", "`created_at`, `sample_id`"),
     ),
+    "ontology_projection_runs": (
+        MySQLIndexDefinition(
+            "ontology_projection_runs",
+            "idx_ontology_projection_runs_account_updated",
+            "`account_id`, `updated_at`, `run_id`",
+        ),
+        MySQLIndexDefinition("ontology_projection_runs", "idx_ontology_projection_runs_abox", "`abox_snapshot_id`"),
+        MySQLIndexDefinition(
+            "ontology_projection_runs",
+            "idx_ontology_projection_runs_material",
+            "`account_id`, `material_fingerprint`",
+        ),
+    ),
     "investment_strategy_proposals": (
         MySQLIndexDefinition(
             "investment_strategy_proposals",

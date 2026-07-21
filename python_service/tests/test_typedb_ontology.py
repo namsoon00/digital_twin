@@ -6,7 +6,7 @@ import time
 import unittest
 from pathlib import Path
 from types import SimpleNamespace
-from unittest.mock import patch
+from unittest.mock import ANY, patch
 
 from digital_twin import service_manager
 from digital_twin.domain.ontology_rulebox_catalog import default_graph_inference_rules
@@ -392,8 +392,8 @@ class TypeDBOntologyRepositoryTests(unittest.TestCase):
         delete_candidate.assert_called_once_with(driver, imported, "ABox", "failed")
         delete_legacy.assert_called_once_with(driver, imported, ["ABoxStaging"])
 
-    def test_typedb_save_graph_prunes_a_bounded_completed_abox_backlog_after_activation(self):
-        """Activation keeps the new pointer, then reclaims only bounded stale rows."""
+    def test_typedb_save_graph_removes_previous_active_abox_after_activation(self):
+        """Activation keeps only the new pointer and retires the prior ABox facts."""
         repository = TypeDBOntologyGraphRepository("127.0.0.1:1729", retry_count=0)
         graph = PortfolioOntology(
             "typedb-live-abox",
@@ -439,9 +439,23 @@ class TypeDBOntologyRepositoryTests(unittest.TestCase):
         self.assertTrue(result["saved"])
         self.assertEqual("ok", result["aboxPersistenceVerification"]["candidateCleanup"]["status"])
         self.assertEqual("candidate", result["aboxPersistenceVerification"]["candidateCleanup"]["activeAboxSnapshotId"])
-        cleanup.assert_called_once()
-        clear_retry.assert_called_once()
+        self.assertEqual("ok", result["aboxPersistenceVerification"]["retiredActiveCleanup"]["status"])
+        self.assertEqual(2, clear_retry.call_count)
+        self.assertEqual("candidate", clear_retry.call_args_list[0].args[3])
+        self.assertEqual("active", clear_retry.call_args_list[1].args[3])
+        cleanup.assert_called_once_with(
+            ANY,
+            ANY,
+            active_snapshot_id="candidate",
+            keep_inactive_count=0,
+        )
         self.assertEqual(3, write_graph.call_count)
+
+    def test_typedb_abox_default_retention_keeps_no_inactive_generation(self):
+        repository = TypeDBOntologyGraphRepository("127.0.0.1:1729")
+
+        with patch("digital_twin.infrastructure.typedb_ontology.runtime_settings", return_value={}):
+            self.assertEqual(0, repository.abox_inactive_generation_keep_count())
 
     def test_typedb_abox_retention_keeps_recent_completed_generation_and_prunes_oldest_first(self):
         repository = TypeDBOntologyGraphRepository("127.0.0.1:1729")

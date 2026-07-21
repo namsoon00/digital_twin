@@ -159,6 +159,7 @@ def build_monitor_runner(
         ontology_projection_recorder=PortfolioOntologyProjectionRecorder(
             ontology_repository_from_settings(configured_settings),
             quality_store=ontology_quality_store,
+            projection_run_store=stores.ontology_projection_run_store(configured_settings),
             decision_episode_store=stores.investment_decision_episode_store(configured_settings),
             hypothesis_proposal_store=stores.investment_research_store(configured_settings),
             data_pipeline_health_store=stores.data_pipeline_health_store(configured_settings),

@@ -2050,6 +2050,7 @@ def attach_notification_test_ontology_projection(snapshot, settings: Dict[str, s
         recorder = PortfolioOntologyProjectionRecorder(
             ontology_repository_from_settings(settings),
             quality_store=stores.ontology_quality_sample_store(settings),
+            projection_run_store=stores.ontology_projection_run_store(settings),
             decision_episode_store=stores.investment_decision_episode_store(settings),
             hypothesis_proposal_store=stores.investment_research_store(settings),
             settings=settings,

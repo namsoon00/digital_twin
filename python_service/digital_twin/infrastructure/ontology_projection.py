@@ -10,6 +10,12 @@ from ..domain.ontology_projection_fingerprint import (
     apply_material_graph_identity,
     material_graph_fingerprint,
 )
+from ..domain.ontology_projection_audit import (
+    OntologyProjectionRun,
+    apply_projection_run_identity,
+    build_ontology_projection_run,
+    complete_ontology_projection_run,
+)
 from ..domain.ontology_validator import validate_ontology
 from ..domain.portfolio_ontology_builder import build_portfolio_ontology
 from ..domain.portfolio_ontology_temporal_concepts import parse_temporal_windows
@@ -104,6 +110,7 @@ class PortfolioOntologyProjectionRecorder:
         hypothesis_proposal_store=None,
         data_pipeline_health_store=None,
         market_time_series_store=None,
+        projection_run_store=None,
         settings: Dict[str, object] = None,
         source: str = "monitoring",
     ):
@@ -113,6 +120,7 @@ class PortfolioOntologyProjectionRecorder:
         self.hypothesis_proposal_store = hypothesis_proposal_store
         self.data_pipeline_health_store = data_pipeline_health_store
         self.market_time_series_store = market_time_series_store
+        self.projection_run_store = projection_run_store
         self.settings = dict(settings or {})
         self.source = source or "monitoring"
 
@@ -121,6 +129,7 @@ class PortfolioOntologyProjectionRecorder:
         snapshot: AccountSnapshot,
         target_symbols: List[str] = None,
     ) -> Dict[str, object]:
+        projection_run = None
         if not self.repository:
             return {}
         if not self.has_projectable_data(snapshot):
@@ -179,7 +188,7 @@ class PortfolioOntologyProjectionRecorder:
                     "graphStore": self.active_graph_store_key(),
                     "aboxValidation": validation.to_dict(),
                 }
-                self.store_projection_result(snapshot, result)
+                self.store_projection_result(snapshot, result, projection_run)
                 return result
             inference_symbols = self.inference_symbols(snapshot, target_symbols)
             active_abox = self.active_abox_metadata()
@@ -228,6 +237,28 @@ class PortfolioOntologyProjectionRecorder:
                     self.attach_graph_store_inference_result(result, snapshot, inference_symbols)
                 self.store_projection_result(snapshot, result)
                 return result
+            projection_run, audit_error = self.begin_projection_audit_run(
+                snapshot,
+                persistence_graph,
+                material_fingerprint,
+                material_snapshot_id,
+                inference_symbols=inference_symbols,
+                rulebox_metadata=rulebox_bootstrap,
+            )
+            if audit_error:
+                result = {
+                    "saved": False,
+                    "status": "source-audit-failed",
+                    "reason": "MySQL source audit must succeed before the active ABox can change: " + audit_error,
+                    "graphStore": self.active_graph_store_key(),
+                    "materialFingerprint": material_fingerprint,
+                    "aboxSnapshotId": material_snapshot_id,
+                    "materialChangeDetected": True,
+                    "preservedActiveGeneration": True,
+                    "aboxValidation": validation.to_dict(),
+                }
+                self.store_projection_result(snapshot, result)
+                return result
             result = self.repository.save_graph(persistence_graph)
             if not isinstance(result, dict):
                 result = {"saved": False, "status": "error", "reason": "ontology repository returned non-dict result"}
@@ -246,7 +277,7 @@ class PortfolioOntologyProjectionRecorder:
                 result["qualityState"] = sample.overall_state
         except Exception as error:  # noqa: BLE001 - ontology projection must not block realtime monitoring.
             result = {"saved": False, "status": "error", "reason": str(error)[:180]}
-        self.store_projection_result(snapshot, result)
+        self.store_projection_result(snapshot, result, projection_run)
         return result
 
     def active_abox_metadata(self) -> Dict[str, object]:
@@ -617,11 +648,61 @@ class PortfolioOntologyProjectionRecorder:
         key = str(getattr(self.repository, "store_key", "") or "").strip()
         return key or "graph-store"
 
-    def store_projection_result(self, snapshot: AccountSnapshot, result: Dict[str, object]) -> None:
+    def begin_projection_audit_run(
+        self,
+        snapshot: AccountSnapshot,
+        graph: PortfolioOntology,
+        material_fingerprint: str,
+        abox_snapshot_id: str,
+        inference_symbols: List[str],
+        rulebox_metadata: Dict[str, object],
+    ):
+        """Persist source facts before replacing the active TypeDB generation."""
+        if not self.projection_run_store:
+            return None, ""
+        run = build_ontology_projection_run(
+            snapshot,
+            graph,
+            material_fingerprint,
+            abox_snapshot_id,
+            self.active_graph_store_key(),
+            target_symbols=inference_symbols,
+            rulebox_metadata=rulebox_metadata,
+        )
+        try:
+            self.projection_run_store.begin(run)
+        except Exception as error:  # noqa: BLE001 - an un-audited generation must not replace the active ABox.
+            return None, str(error)[:180]
+        apply_projection_run_identity(graph, run.run_id)
+        return run, ""
+
+    def store_projection_result(
+        self,
+        snapshot: AccountSnapshot,
+        result: Dict[str, object],
+        projection_run: OntologyProjectionRun = None,
+    ) -> None:
         ontology = snapshot.metadata.setdefault("ontology", {})
         active_key = self.active_graph_store_key(result)
         result.setdefault("graphStore", active_key)
         result.setdefault("activeGraphStore", active_key)
+        if projection_run and self.projection_run_store:
+            try:
+                completed_run = complete_ontology_projection_run(projection_run, result)
+                self.projection_run_store.complete(completed_run)
+                result["projectionAudit"] = {
+                    "status": "recorded",
+                    "runId": completed_run.run_id,
+                    "sourceSnapshotRecorded": True,
+                    "activeAboxSnapshotId": completed_run.active_abox_snapshot_id,
+                }
+            except Exception as error:  # noqa: BLE001 - TypeDB state stays observable when final audit sync is retried.
+                result["projectionAudit"] = {
+                    "status": "pending-sync",
+                    "runId": projection_run.run_id,
+                    "sourceSnapshotRecorded": True,
+                    "reason": str(error)[:180],
+                }
         ontology[active_key] = result
         ontology["projection"] = result
         ontology["activeGraphStore"] = active_key

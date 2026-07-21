@@ -22,6 +22,7 @@ VOLATILE_LIFECYCLE_KEYS = {
     "marketSessionLocalTime",
     "lastObservedAt",
     "observedAt",
+    "projectionRunId",
     "snapshotId",
     "sourceAsOf",
     "sourceFetchedAt",

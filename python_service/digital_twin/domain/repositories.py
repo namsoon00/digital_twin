@@ -9,6 +9,7 @@ from .investment_brain import DecisionEpisode, LearningProposal, NovelHypothesis
 from .investment_evidence_governance import ResearchRun
 from .investment_calendar import InvestmentCalendarEvent
 from .ontology_contracts import PortfolioOntology
+from .ontology_projection_audit import OntologyProjectionRun
 from .portfolio import AccountSnapshot, AlertEvent, Position
 from .symbol_universe import ListedSymbol
 
@@ -209,6 +210,19 @@ def ensure_ontology_graph_repository_contract(repository: object, label: str = "
 
 class OntologyProjectionRecorder(Protocol):
     def record_snapshot(self, snapshot: AccountSnapshot) -> Dict[str, object]:
+        ...
+
+
+class OntologyProjectionAuditRepository(Protocol):
+    """Durable source/result audit for one material ABox generation."""
+
+    def begin(self, run: OntologyProjectionRun) -> OntologyProjectionRun:
+        ...
+
+    def complete(self, run: OntologyProjectionRun) -> OntologyProjectionRun:
+        ...
+
+    def latest(self, account_id: str = "", limit: int = 50) -> List[Dict[str, object]]:
         ...
 
 

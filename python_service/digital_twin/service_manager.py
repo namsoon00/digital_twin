@@ -774,8 +774,15 @@ def restart(restart_typedb: bool = False, restart_mysql: bool = False) -> int:
         mysql_pid_path = mysql_spec.get("pid") if isinstance(mysql_spec, dict) else None
         if mysql_spec and mysql_pid_path and is_running(read_pid(mysql_pid_path), mysql_spec):
             excluded.add("mysql")
-    stop(excluded_roles=excluded, include_supervisor=False)
-    return start(excluded_roles=excluded)
+    pause_supervisor = supervisor_running()
+    if pause_supervisor:
+        begin_supervisor_maintenance("restart")
+    try:
+        stop(excluded_roles=excluded, include_supervisor=False)
+        return start(excluded_roles=excluded)
+    finally:
+        if pause_supervisor:
+            end_supervisor_maintenance()
 
 
 def supervisor_pid_path() -> Path:
@@ -784,6 +791,38 @@ def supervisor_pid_path() -> Path:
 
 def supervisor_log_path() -> Path:
     return data_dir() / "python-supervisor.log"
+
+
+def supervisor_maintenance_path() -> Path:
+    return data_dir() / "python-supervisor-maintenance.json"
+
+
+def begin_supervisor_maintenance(reason: str) -> None:
+    path = supervisor_maintenance_path()
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps({
+        "pid": os.getpid(),
+        "reason": str(reason or "maintenance"),
+        "startedAt": iso_now(),
+    }, ensure_ascii=False, sort_keys=True), encoding="utf-8")
+    os.chmod(path, 0o600)
+
+
+def end_supervisor_maintenance() -> None:
+    remove_pid(supervisor_maintenance_path())
+
+
+def supervisor_maintenance_active(max_age_seconds: int = 300) -> bool:
+    path = supervisor_maintenance_path()
+    try:
+        age_seconds = max(0.0, time.time() - path.stat().st_mtime)
+    except OSError:
+        return False
+    if age_seconds <= max(30, int(max_age_seconds or 300)):
+        return True
+    remove_pid(path)
+    append_log(supervisor_log_path(), "removed stale maintenance marker")
+    return False
 
 
 def supervisor_running() -> bool:
@@ -846,6 +885,9 @@ def supervise() -> int:
             return 1
         last_maintenance_at = 0.0
         while not stopping["value"]:
+            if supervisor_maintenance_active():
+                time.sleep(1)
+                continue
             specs = worker_specs()
             for spec in specs.values():
                 if stopping["value"]:

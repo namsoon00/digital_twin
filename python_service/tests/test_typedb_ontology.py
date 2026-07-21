@@ -2483,6 +2483,21 @@ class TypeDBOntologyRepositoryTests(unittest.TestCase):
             stop.assert_called_once_with(excluded_roles=set(), include_supervisor=False)
             start.assert_called_once_with(excluded_roles=set())
 
+    def test_service_manager_restart_pauses_active_supervisor(self):
+        specs = {}
+        with patch.object(service_manager, "worker_specs", return_value=specs), \
+                patch.object(service_manager, "supervisor_running", return_value=True), \
+                patch.object(service_manager, "begin_supervisor_maintenance") as begin, \
+                patch.object(service_manager, "end_supervisor_maintenance") as end, \
+                patch.object(service_manager, "stop", return_value=0) as stop, \
+                patch.object(service_manager, "start", return_value=0) as start:
+            self.assertEqual(0, service_manager.restart())
+
+        begin.assert_called_once_with("restart")
+        stop.assert_called_once_with(excluded_roles=set(), include_supervisor=False)
+        start.assert_called_once_with(excluded_roles=set())
+        end.assert_called_once_with()
+
     def test_service_manager_stop_detaches_launch_agent_before_supervisor_signal(self):
         with tempfile.TemporaryDirectory() as temp:
             launch_agent = Path(temp) / "com.orbitalpha.services.plist"

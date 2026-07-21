@@ -6618,7 +6618,10 @@ def typedb_native_function_call_query(rule: Dict[str, object], target_symbols: I
     source_kind = str(rule.get("source_kind") or rule.get("sourceKind") or "stock")
     symbols = clean_symbols_from_payload(list(target_symbols or []))
     clauses = [
-        "$candidate isa ontology-node, has ontology-kind " + typedb_string(source_kind) + ", has ontology-box \"ABox\";",
+        "$activeAboxPointer isa ontology-node, has ontology-kind \"abox-active-pointer\", "
+        "has ontology-box \"ABoxControl\", has ontology-snapshot-id $activeAboxSnapshotId;",
+        "$candidate isa ontology-node, has ontology-kind " + typedb_string(source_kind)
+        + ", has ontology-box \"ABox\", has ontology-snapshot-id $activeAboxSnapshotId;",
         "let $source in " + function_name + "($candidate);",
         "$source has ontology-id $sourceId;",
         "$source has ontology-label $sourceLabel;",

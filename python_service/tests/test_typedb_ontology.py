@@ -30,6 +30,7 @@ from digital_twin.infrastructure.typedb_ontology import (
     typedb_repository_from_settings,
     typedb_inferencebox_graph,
     typedb_native_function_definition,
+    typedb_native_function_call_query,
     typedb_native_match_query,
     typedb_native_rule_execution_plan,
     typedb_native_reasoning_profile,
@@ -891,6 +892,19 @@ class TypeDBOntologyRepositoryTests(unittest.TestCase):
 
         self.assertIn('has ontology-symbol "000660"', query)
         self.assertNotIn("has ontology-symbol 660.0", query)
+
+    def test_typedb_native_function_call_limits_candidates_to_active_abox_snapshot(self):
+        rule = next(item for item in default_graph_inference_rules() if item.rule_id == "graph.loss_guard.breakdown.v1")
+
+        query = typedb_native_function_call_query(rule.to_dict(), ["000660"])["query"]
+
+        self.assertIn('has ontology-kind "abox-active-pointer"', query)
+        self.assertIn('has ontology-box "ABoxControl", has ontology-snapshot-id $activeAboxSnapshotId', query)
+        self.assertIn(
+            'has ontology-box "ABox", has ontology-snapshot-id $activeAboxSnapshotId',
+            query,
+        )
+        self.assertIn('has ontology-symbol "000660"', query)
 
     def test_typedb_native_any_branches_use_distinct_value_variables(self):
         rule = next(

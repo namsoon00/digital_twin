@@ -342,7 +342,10 @@ def ontology_command(args) -> int:
         }
         result = repository.seed_ontology(payload)
         print(json.dumps(result, ensure_ascii=False))
-        return 0 if result.get("status") in {"ok", "disabled"} else 1
+        # A current static ontology is a successful seed no-op. Returning a
+        # non-zero code here prevents the service manager from starting all
+        # dependent collection and reasoning workers after a normal restart.
+        return 0 if result.get("status") in {"ok", "unchanged", "disabled"} else 1
     return 1
 
 

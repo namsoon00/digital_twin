@@ -3996,6 +3996,10 @@
       ontologyRuleCandidateAiIntervalMinutes: settingValue("ontologyRuleCandidateAiIntervalMinutes"),
       ontologyRuleCandidateAiMaxCandidates: settingValue("ontologyRuleCandidateAiMaxCandidates"),
       ontologyTypeDbEnabled: settingValue("ontologyTypeDbEnabled"),
+      ontologyTenantId: settingValue("ontologyTenantId"),
+      ontologySharedMarketTenantId: settingValue("ontologySharedMarketTenantId"),
+      ontologySharedMarketWorldRetentionHours: settingValue("ontologySharedMarketWorldRetentionHours"),
+      ontologySharedMarketWorldMaxSymbols: settingValue("ontologySharedMarketWorldMaxSymbols"),
       typedbAddress: settingValue("typedbAddress"),
       typedbUser: settingValue("typedbUser"),
       typedbDatabase: settingValue("typedbDatabase"),
@@ -4205,7 +4209,7 @@
     state.ontologyDiagnosticsLoading = true;
     state.ontologyDiagnosticsError = "";
     if (state.snapshot) render();
-    return requestJson("/api/ontology/diagnostics")
+    return requestJson(ontologyDiagnosticsPath())
       .then(function (payload) {
         state.ontologyDiagnostics = payload || {};
         state.ontologyDiagnosticsError = "";
@@ -4308,7 +4312,42 @@
     params.set("offset", String(filters.offset || "0"));
     if (String(filters.query || "").trim()) params.set("q", String(filters.query || "").trim());
     if (String(filters.symbol || "").trim()) params.set("symbol", String(filters.symbol || "").trim().toUpperCase());
+    appendOntologyAccountQuery(params);
     return "/api/ontology/audit?" + params.toString();
+  }
+
+  function activeOntologyAccountId() {
+    var account = activeWatchAccount();
+    if (account && accountIdOf(account)) return accountIdOf(account);
+    var snapshot = state.snapshot || {};
+    return String(snapshot.accountId || ((snapshot.toss || {}).accountId || "")).trim();
+  }
+
+  function appendOntologyAccountQuery(params) {
+    var accountId = activeOntologyAccountId();
+    if (accountId) params.set("accountId", accountId);
+    return params;
+  }
+
+  function ontologyAccountPayload(payload) {
+    var accountId = activeOntologyAccountId();
+    return accountId ? Object.assign({}, payload || {}, { accountId: accountId }) : Object.assign({}, payload || {});
+  }
+
+  function ontologyDiagnosticsPath() {
+    var params = new URLSearchParams();
+    appendOntologyAccountQuery(params);
+    var query = params.toString();
+    return "/api/ontology/diagnostics" + (query ? "?" + query : "");
+  }
+
+  function ontologyAccountOptions() {
+    var accounts = state.serviceAccounts || [];
+    var activeId = activeOntologyAccountId();
+    return accounts.map(function (account) {
+      var accountId = accountIdOf(account);
+      return '<option value="' + escapeHtml(accountId) + '"' + (accountId === activeId ? " selected" : "") + '>' + escapeHtml(account.label || accountId) + '</option>';
+    }).join("");
   }
 
   function ontologyAuditClientRow(row, rowType, box, index) {
@@ -4441,6 +4480,7 @@
   function ontologyInferenceLedgerPath() {
     var params = new URLSearchParams();
     params.set("limit", "120");
+    appendOntologyAccountQuery(params);
     return "/api/ontology/inference-ledger?" + params.toString();
   }
 
@@ -4618,7 +4658,7 @@
     state.ontologyRuleboxRunning = true;
     state.ontologyRuleboxError = "";
     render();
-    sendJson("/api/ontology/rulebox/run", "POST", { clearInference: true })
+    sendJson("/api/ontology/rulebox/run", "POST", ontologyAccountPayload({ clearInference: true }))
       .then(function (payload) {
         state.ontologyRuleboxLastRun = payload;
         showSnackbar(payload.status === "ok" ? "TypeDB 네이티브 규칙 추론을 실행했습니다." : "네이티브 규칙 실행 결과: " + (payload.status || "확인 필요"), payload.status === "ok" ? "success" : "caution");
@@ -4640,7 +4680,7 @@
     state.ontologyRuleboxProposing = true;
     state.ontologyRuleboxError = "";
     render();
-    sendJson("/api/ontology/rulebox/candidates", "POST", { trigger: "manual" })
+    sendJson("/api/ontology/rulebox/candidates", "POST", ontologyAccountPayload({ trigger: "manual" }))
       .then(function (payload) {
         state.ontologyRuleboxCandidateResult = payload;
         if (payload && payload.rulebox) applyOntologyRuleboxPayload(payload.rulebox);
@@ -4724,7 +4764,7 @@
     state.ontologyExperimentAction = "suggest";
     state.ontologyExperimentsError = "";
     render();
-    sendJson("/api/ontology/experiments/suggest", "POST", { trigger: "ontology-lab-manual-suggest", activate: true, run: true })
+    sendJson("/api/ontology/experiments/suggest", "POST", ontologyAccountPayload({ trigger: "ontology-lab-manual-suggest", activate: true, run: true }))
       .then(function (payload) {
         showSnackbar(
           payload && payload.createdCount ? "AI 실험 제안 " + payload.createdCount + "건을 등록하고 실행했습니다." : "새로 등록할 AI 실험 제안이 없습니다.",
@@ -4802,7 +4842,7 @@
     }
     state.ontologyExperimentAction = action + ":" + id;
     state.ontologyExperimentsError = "";
-    var requestPayload = payload || {};
+    var requestPayload = action === "apply" ? ontologyAccountPayload(payload || {}) : (payload || {});
     render();
     sendJson("/api/ontology/experiments/" + encodeURIComponent(id) + "/" + action, "POST", requestPayload)
       .then(function (responsePayload) {
@@ -20120,6 +20160,8 @@
     var reasoningBoundary = diagnostics.reasoningBoundary || {};
     var notificationBoundary = diagnostics.notificationBoundary || {};
     var strategyProposalBoundary = diagnostics.strategyProposalBoundary || {};
+    var worldId = String(diagnostics.worldId || "");
+    var worlds = Array.isArray(diagnostics.worlds) ? diagnostics.worlds : [];
     var rawChecks = Array.isArray(diagnostics.checks) ? diagnostics.checks : (Array.isArray(notificationBoundary.checks) ? notificationBoundary.checks : []);
     var checks = [
       { status: tbox.status || (tbox.configured ? "ok" : ""), title: "TBox", message: tbox.reason || tbox.source || tbox.fingerprint || "" },
@@ -20148,6 +20190,7 @@
       renderLabStat("규칙", rulebox.ruleCount || rulebox.ruleboxRuleCount || 0, "개"),
       renderLabStat("검사", checks.length, "개"),
       '</div>',
+      worldId || worlds.length ? '<div class="rulebox-console-strip"><span><strong>world</strong>' + escapeHtml(worldId || "선택 필요") + '</span><span><strong>active worlds</strong>' + escapeHtml(worlds.length) + '</span></div>' : '',
       '<div class="source-stack rulebox-diagnostics-list">',
       checks.length ? checks.slice(0, 8).map(function (check) {
         return [
@@ -20170,6 +20213,7 @@
     var versions = Array.isArray(payload.versions) ? payload.versions : [];
     var candidates = Array.isArray(payload.changeCandidates) ? payload.changeCandidates : [];
     var lastRun = state.ontologyRuleboxLastRun || {};
+    var accountOptions = ontologyAccountOptions();
     var disabled = state.ontologyRuleboxSaving || state.ontologyRuleboxRunning || state.ontologyRuleboxProposing || state.serverSettingsLocked;
     return [
       '<article class="panel model-panel typedb-rulebox-panel">',
@@ -20181,6 +20225,7 @@
       '<span class="tone-chip ' + escapeHtml(payload.status === "ok" ? "watch" : payload.configured ? "caution" : "hold") + '">' + escapeHtml(ruleboxStatusLabel(payload)) + '</span>',
       '</div>',
       '<div class="model-editor typedb-rulebox-editor">',
+      accountOptions ? '<label class="setting-field"><span>추론 계정</span><select data-ontology-account-select>' + accountOptions + '</select></label>' : '',
       '<div class="lab-stats-grid model-stats-grid">',
       renderLabStat("규칙", payload.ruleCount || rules.length || 0, "개"),
       renderLabStat("조건", payload.conditionCount || countRuleboxConditions(rules), "개"),
@@ -22567,6 +22612,10 @@
         ]),
         renderSettingField("typedbTimeoutSeconds", "TypeDB 타임아웃(초)", "number", "20"),
         renderSettingField("typedbRetryCount", "TypeDB 재시도(회)", "number", "2"),
+        renderSettingField("ontologyTenantId", "포트폴리오 테넌트", "text", "local"),
+        renderSettingField("ontologySharedMarketTenantId", "공유 시장 테넌트", "text", "shared"),
+        renderSettingField("ontologySharedMarketWorldRetentionHours", "공유 시장 관측 보관(시간)", "number", "72"),
+        renderSettingField("ontologySharedMarketWorldMaxSymbols", "공유 시장 종목 한도", "number", "1200"),
         renderSettingField("typedbInferenceGenerationKeepCount", "InferenceBox 보관 세대", "number", "1"),
         renderSettingSelect("typedbAutoResetEnabled", "TypeDB 자동 재생성", [
           { value: "1", label: "사용" },
@@ -24689,6 +24738,24 @@
         render();
       });
     });
+
+    var ontologyAccountSelect = app.querySelector("[data-ontology-account-select]");
+    if (ontologyAccountSelect) {
+      ontologyAccountSelect.addEventListener("change", function () {
+        state.activeWatchAccountId = ontologyAccountSelect.value || "";
+        state.ontologyDiagnostics = null;
+        state.ontologyAudit = null;
+        state.ontologyAuditLoaded = false;
+        state.ontologyInferenceLedger = null;
+        state.ontologyInferenceLedgerLoaded = false;
+        render();
+        Promise.all([
+          loadOntologyDiagnostics(true),
+          loadOntologyInferenceLedger(true),
+          loadOntologyAudit(true)
+        ]);
+      });
+    }
 
     Array.prototype.slice.call(app.querySelectorAll("[data-model-setting]")).forEach(function (field) {
       field.addEventListener("input", function () {

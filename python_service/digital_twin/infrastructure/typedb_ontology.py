@@ -1404,10 +1404,6 @@ class ScopedABoxManifestMixin:
         """
         return self.recover_dead_local_scoped_abox_write_lease()
 
-    def recover_scoped_abox_write_lease_after_server_start(self) -> Dict[str, object]:
-        """Compatibility entry point used by the TypeDB startup seed path."""
-        return self.recover_scoped_abox_write_lease_after_managed_shutdown()
-
     def recover_pending_abox_activation(self) -> Dict[str, object]:
         return {
             "configured": False,

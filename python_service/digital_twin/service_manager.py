@@ -660,6 +660,37 @@ def ensure_typedb_seeded(spec: Dict[str, object]) -> bool:
     return False
 
 
+def recover_typedb_scoped_write_lease_after_worker_restart(spec: Dict[str, object]) -> bool:
+    """Clear a lease left by workers that this manager has just stopped."""
+    command = [sys.executable, "-u", "python_service/service.py", "ontology", "recover-scoped-write-lease"]
+    timeout_seconds = min(360, max(30, int_value(spec.get("seedTimeoutSeconds"), 60, 1)))
+    append_log(spec["log"], "scoped write lease recovery start")
+    print(str(spec["label"]) + " recovering stopped worker scoped ABox lease.")
+    try:
+        result = subprocess.run(
+            command,
+            cwd=str(ROOT_DIR),
+            env=dict(os.environ, PYTHONUNBUFFERED="1"),
+            stdin=subprocess.DEVNULL,
+            capture_output=True,
+            text=True,
+            timeout=timeout_seconds,
+        )
+    except subprocess.TimeoutExpired as error:
+        output = (error.stdout or "") + ("\n" if error.stdout and error.stderr else "") + (error.stderr or "")
+        append_log_text(spec["log"], "scoped write lease recovery timeout", output)
+        print(str(spec["label"]) + " scoped ABox lease recovery timed out after " + str(timeout_seconds) + "s.")
+        return False
+    output = (result.stdout or "") + ("\n" if result.stdout and result.stderr else "") + (result.stderr or "")
+    if result.returncode == 0:
+        append_log_text(spec["log"], "scoped write lease recovery ok", output)
+        print(str(spec["label"]) + " scoped ABox lease recovery ok.")
+        return True
+    append_log_text(spec["log"], "scoped write lease recovery failed exit=" + str(result.returncode), output)
+    print(str(spec["label"]) + " scoped ABox lease recovery failed. exit=" + str(result.returncode))
+    return False
+
+
 def start_worker(spec: Dict[str, object]) -> int:
     if spec.get("missingReason") or not spec.get("command"):
         print(str(spec["label"]) + " not started. " + str(spec.get("missingReason") or "Command is not configured."))
@@ -810,6 +841,11 @@ def restart(restart_typedb: bool = False, restart_mysql: bool = False) -> int:
             return 1
     try:
         stop(excluded_roles=excluded, include_supervisor=False)
+        if "typedb" in excluded:
+            typedb_spec = worker_specs().get("typedb")
+            if isinstance(typedb_spec, dict) and not recover_typedb_scoped_write_lease_after_worker_restart(typedb_spec):
+                print("Service restart aborted because the stopped worker scoped ABox lease could not be recovered.")
+                return 1
         return start(excluded_roles=excluded)
     finally:
         if pause_supervisor:

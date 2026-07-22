@@ -2,8 +2,10 @@ import copy
 import hashlib
 import json
 import math
+import os
 import re
 import signal
+import socket
 import threading
 import time
 import uuid
@@ -997,12 +999,16 @@ class ScopedABoxManifestMixin:
         payload = json_object(row.get("json"))
         expires_at = float(number_or_none(payload.get("leaseExpiresAtEpoch")) or 0)
         owner = str(payload.get("leaseOwner") or "")
+        lease_host = str(payload.get("leaseHost") or "")
+        lease_process_id = number_or_none(payload.get("leaseProcessId"))
         status = "held" if expires_at > time.time() else "expired"
         return {
             "status": status,
             "leaseId": SCOPED_ABOX_WRITE_LEASE_ID,
             "leaseBox": SCOPED_ABOX_WRITE_LEASE_BOX,
             "leaseOwner": owner,
+            "leaseHost": lease_host,
+            "leaseProcessId": int(lease_process_id) if lease_process_id is not None else None,
             "leaseExpiresAtEpoch": expires_at,
             "updatedAt": str(row.get("updatedAt") or ""),
             "propertiesJson": str(row.get("json") or "{}"),
@@ -1027,6 +1033,11 @@ class ScopedABoxManifestMixin:
             "leaseVersion": SCOPED_ABOX_WRITE_LEASE_VERSION,
             "leaseOwner": str(owner or ""),
             "leaseManifestId": str(manifest_id or ""),
+            # A durable lease can outlive a force-stopped local worker.  These
+            # fields let the replacement worker reclaim only a proven-dead
+            # local owner; they are not used to steal a live or remote lease.
+            "leaseHost": socket.gethostname(),
+            "leaseProcessId": os.getpid(),
             "leaseAcquiredAtEpoch": acquired_at,
             "leaseExpiresAtEpoch": expires_at,
         }
@@ -1167,16 +1178,151 @@ class ScopedABoxManifestMixin:
 
         return self.with_typedb_retries(operation)
 
+    @staticmethod
+    def local_process_alive(process_id: object) -> bool:
+        """Return whether a locally recorded lease owner still exists."""
+        try:
+            pid = int(process_id or 0)
+        except (TypeError, ValueError):
+            return False
+        if pid <= 0:
+            return False
+        try:
+            os.kill(pid, 0)
+        except ProcessLookupError:
+            return False
+        except PermissionError:
+            # A permission error proves that a process exists, even though the
+            # local user cannot signal it.
+            return True
+        except OSError:
+            # Treat an unknown OS state as live: recovery must be conservative.
+            return True
+        return True
+
+    def recover_dead_local_scoped_abox_write_lease(self) -> Dict[str, object]:
+        """Release a held lease only when its local owner process is gone.
+
+        This covers a project worker restart without requiring a TypeDB server
+        restart.  Legacy rows without owner host/PID and rows owned by another
+        host intentionally remain until normal expiry, so an operator cannot
+        accidentally steal an active cross-process writer.
+        """
+        if not str(getattr(self, "address", "") or "").strip():
+            return {
+                "configured": False,
+                "status": "disabled",
+                "graphStore": "typedb",
+                "reason": "TypeDB ontology storage is not configured.",
+            }
+        try:
+            existing = self.scoped_abox_write_lease_status()
+        except Exception as error:  # noqa: BLE001 - recovery must never block the worker startup.
+            return {
+                "configured": True,
+                "status": "unavailable",
+                "graphStore": "typedb",
+                "reason": str(error)[:180],
+            }
+        if str(existing.get("status") or "") != "held":
+            return {
+                "configured": True,
+                "status": "skipped",
+                "graphStore": "typedb",
+                "reason": "No held scoped ABox write lease requires local recovery.",
+            }
+        payload = json_object(existing.get("propertiesJson"))
+        lease_host = str(existing.get("leaseHost") or payload.get("leaseHost") or "").strip()
+        lease_process_id = existing.get("leaseProcessId")
+        if lease_process_id in (None, ""):
+            lease_process_id = payload.get("leaseProcessId")
+        if not lease_host or lease_process_id in (None, ""):
+            return {
+                "configured": True,
+                "status": "legacy-owner-unknown",
+                "graphStore": "typedb",
+                "leaseOwner": str(existing.get("leaseOwner") or ""),
+                "reason": "Held lease has no local owner metadata and will expire normally.",
+            }
+        try:
+            local_process_id = int(lease_process_id)
+        except (TypeError, ValueError):
+            return {
+                "configured": True,
+                "status": "invalid-owner",
+                "graphStore": "typedb",
+                "leaseOwner": str(existing.get("leaseOwner") or ""),
+                "reason": "Held lease has an invalid local process identifier and will expire normally.",
+            }
+        if local_process_id <= 0:
+            return {
+                "configured": True,
+                "status": "invalid-owner",
+                "graphStore": "typedb",
+                "leaseOwner": str(existing.get("leaseOwner") or ""),
+                "reason": "Held lease has no valid local process identifier and will expire normally.",
+            }
+        if lease_host != socket.gethostname():
+            return {
+                "configured": True,
+                "status": "foreign-owner",
+                "graphStore": "typedb",
+                "leaseOwner": str(existing.get("leaseOwner") or ""),
+                "leaseHost": lease_host,
+                "reason": "Held lease belongs to another host and cannot be reclaimed locally.",
+            }
+        if self.local_process_alive(local_process_id):
+            return {
+                "configured": True,
+                "status": "active-owner",
+                "graphStore": "typedb",
+                "leaseOwner": str(existing.get("leaseOwner") or ""),
+                "leaseHost": lease_host,
+                "leaseProcessId": local_process_id,
+                "reason": "Held lease owner process is still alive.",
+            }
+        owner = str(existing.get("leaseOwner") or "")
+        properties_json = str(existing.get("propertiesJson") or "")
+        if not owner or not properties_json:
+            return {
+                "configured": True,
+                "status": "invalid",
+                "graphStore": "typedb",
+                "reason": "Dead local lease has no exact ownership payload.",
+            }
+        try:
+            release = self.release_scoped_abox_write_lease({
+                "acquired": True,
+                "owner": owner,
+                "leaseOwner": owner,
+                "propertiesJson": properties_json,
+            })
+        except Exception as error:  # noqa: BLE001 - normal expiry remains the final fallback.
+            return {
+                "configured": True,
+                "status": "error",
+                "graphStore": "typedb",
+                "leaseOwner": owner,
+                "reason": str(error)[:180],
+            }
+        return {
+            "configured": True,
+            "status": "cleared" if str((release or {}).get("status") or "") == "released" else "error",
+            "graphStore": "typedb",
+            "previousLeaseOwner": owner,
+            "previousLeaseHost": lease_host,
+            "previousLeaseProcessId": local_process_id,
+            "release": dict(release or {}),
+        }
+
     def recover_scoped_abox_write_lease_after_server_start(self) -> Dict[str, object]:
-        """Clear a stranded lease only while bootstrapping a fresh TypeDB server.
+        """Clear a lease after TypeDB itself has restarted.
 
         A scoped ABox writer holds a durable lease across bounded TypeDB write
-        transactions.  If TypeDB itself is restarted, that writer cannot still
-        be alive on the new server, but its old lease row remains in the data
-        directory.  The service manager calls this method before it starts any
-        dependent worker, avoiding an unnecessary lease timeout after restart.
-        It is intentionally opt-in through the seed payload; a normal live
-        seed must never remove another writer's active lease.
+        transactions. A fresh TypeDB server cannot still have a writer from the
+        previous server process, so the service manager can reclaim this row
+        before any dependent workers start. A normal live seed must never pass
+        this recovery path.
         """
         if not str(getattr(self, "address", "") or "").strip():
             return {
@@ -1248,6 +1394,19 @@ class ScopedABoxManifestMixin:
             "previousLeaseExpiresAtEpoch": float(number_or_none(existing.get("leaseExpiresAtEpoch")) or 0),
             "release": dict(deleted or {}),
         }
+
+    def recover_scoped_abox_write_lease_after_managed_shutdown(self) -> Dict[str, object]:
+        """Recover only a proven-dead local writer after worker restart.
+
+        A project manager restart does not prove that an independently started
+        CLI process is absent. Reuse the local owner identity check instead of
+        treating a worker restart like a TypeDB server restart.
+        """
+        return self.recover_dead_local_scoped_abox_write_lease()
+
+    def recover_scoped_abox_write_lease_after_server_start(self) -> Dict[str, object]:
+        """Compatibility entry point used by the TypeDB startup seed path."""
+        return self.recover_scoped_abox_write_lease_after_managed_shutdown()
 
     def recover_pending_abox_activation(self) -> Dict[str, object]:
         return {

@@ -314,14 +314,28 @@ def notifications_command(args) -> int:
 def ontology_reasoning_command(args) -> int:
     settings = runtime_settings()
     limit = int(args.limit or settings.get("ontologyReasoningBatchSize") or 20) if hasattr(args, "limit") else int(settings.get("ontologyReasoningBatchSize") or 20)
+    local_lease_recovery = {}
+    if args.ontology_reasoning_action in {"once", "watch"}:
+        repository = ontology_repository_from_settings(settings)
+        recover = getattr(repository, "recover_dead_local_scoped_abox_write_lease", None)
+        if callable(recover):
+            try:
+                local_lease_recovery = dict(recover() or {})
+            except Exception as error:  # noqa: BLE001 - recovery is an optimization, never a startup blocker.
+                local_lease_recovery = {"status": "error", "reason": str(error)[:180]}
     runner = build_ontology_reasoning_runner(settings)
     if args.ontology_reasoning_action == "status":
         print(json.dumps(runner.status(), ensure_ascii=False))
         return 0
     if args.ontology_reasoning_action == "once":
-        print(json.dumps(runner.run_once(limit=limit, force=bool(getattr(args, "force", False))), ensure_ascii=False))
+        result = runner.run_once(limit=limit, force=bool(getattr(args, "force", False)))
+        if local_lease_recovery:
+            result["localScopedABoxWriteLeaseRecovery"] = local_lease_recovery
+        print(json.dumps(result, ensure_ascii=False))
         return 0
     if args.ontology_reasoning_action == "watch":
+        if local_lease_recovery:
+            print("Ontology reasoning local scoped ABox write lease recovery=" + json.dumps(local_lease_recovery, ensure_ascii=False))
         interval = int(
             os.environ.get("ONTOLOGY_REASONING_INTERVAL_SECONDS")
             or settings.get("ontologyReasoningIntervalSeconds")
@@ -357,6 +371,20 @@ def ontology_command(args) -> int:
             result.get("status") in {"ok", "unchanged", "disabled"}
             and recovery_status in {"skipped", "disabled", "finalized", "restored", "cleared-stale", "retry-required", "staged"}
         ) else 1
+    if args.ontology_action == "recover-scoped-write-lease":
+        recovery = getattr(repository, "recover_scoped_abox_write_lease_after_managed_shutdown", None)
+        if not callable(recovery):
+            result = {"status": "unsupported", "reason": "Graph store has no scoped ABox write lease recovery."}
+        else:
+            try:
+                result = recovery()
+            except Exception as error:  # noqa: BLE001 - worker startup must not proceed against an unknown lease owner.
+                result = {"status": "error", "reason": str(error)[:180]}
+        print(json.dumps(result, ensure_ascii=False))
+        return 0 if str(result.get("status") or "") in {
+            "cleared", "empty", "disabled", "skipped", "active-owner",
+            "foreign-owner", "legacy-owner-unknown", "invalid-owner",
+        } else 1
     if args.ontology_action == "recover-abox-activation":
         recovery = getattr(repository, "recover_pending_abox_activation", None)
         if not callable(recovery):
@@ -882,6 +910,7 @@ def build_parser() -> argparse.ArgumentParser:
     ontology_seed.add_argument("--replace-rulebox", action="store_true")
     ontology_seed.add_argument("--keep-inference", dest="clear_inference", action="store_false", default=True)
     ontology_seed.add_argument("--recover-scoped-write-lease", action="store_true")
+    ontology_actions.add_parser("recover-scoped-write-lease")
     ontology_actions.add_parser("recover-abox-activation")
     ontology.set_defaults(func=ontology_command)
 

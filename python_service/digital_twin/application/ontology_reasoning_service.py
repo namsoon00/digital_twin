@@ -796,6 +796,14 @@ class OntologyReasoningRunner:
             "unchanged-material-facts",
             "unchanged-material-facts-reasoning-retry",
         }
+        retryable_projection_statuses = {
+            # ABox and native inference writes deliberately share a durable
+            # lease.  Another local worker holding it is back-pressure, not
+            # a failed graph projection, so do not open the error circuit.
+            "deferred-scoped-write-lease",
+            "deferred-inference-write-lease",
+            "deferred-pending-scoped-manifest",
+        }
         transient_failure_statuses = {
             "error",
             "failed",
@@ -813,42 +821,68 @@ class OntologyReasoningRunner:
             "unavailable",
         }
         failures: List[Dict[str, str]] = []
+        retryable: List[Dict[str, str]] = []
+
+        def add_result(account_id: object, stage: str, status: str, reason: object) -> None:
+            item = {
+                "accountId": str(account_id or ""),
+                "stage": stage,
+                "status": status,
+                "reason": str(reason or "TypeDB ABox 투영이 완료되지 않았습니다."),
+            }
+            if status in retryable_projection_statuses:
+                retryable.append(item)
+            else:
+                failures.append(item)
+
         for account_id, raw_result in raw_results.items():
             result = dict(raw_result or {}) if isinstance(raw_result, dict) else {}
             projection_status = str(result.get("status") or "missing").strip().lower()
             if projection_status not in accepted_projection_statuses:
-                failures.append({
-                    "accountId": str(account_id or ""),
-                    "stage": "projection",
-                    "status": projection_status,
-                    "reason": str(result.get("reason") or "TypeDB ABox 투영이 완료되지 않았습니다."),
-                })
+                add_result(
+                    account_id,
+                    "projection",
+                    projection_status,
+                    result.get("reason") or "TypeDB ABox 투영이 완료되지 않았습니다.",
+                )
                 continue
             execution = result.get("ruleboxExecution") if isinstance(result.get("ruleboxExecution"), dict) else {}
             execution_status = str(execution.get("status") or "").strip().lower()
-            if execution_status in transient_failure_statuses:
-                failures.append({
-                    "accountId": str(account_id or ""),
-                    "stage": "native-rule",
-                    "status": execution_status,
-                    "reason": str(execution.get("reason") or "TypeDB native rule 실행이 완료되지 않았습니다."),
-                })
+            if execution_status in transient_failure_statuses or execution_status in retryable_projection_statuses:
+                add_result(
+                    account_id,
+                    "native-rule",
+                    execution_status,
+                    execution.get("reason") or "TypeDB native rule 실행이 완료되지 않았습니다.",
+                )
                 continue
             inference = result.get("inferenceBox") if isinstance(result.get("inferenceBox"), dict) else {}
             inference_status = str(inference.get("status") or "missing").strip().lower()
-            if not inference or inference_status in transient_failure_statuses:
-                failures.append({
-                    "accountId": str(account_id or ""),
-                    "stage": "inferencebox",
-                    "status": inference_status,
-                    "reason": str(inference.get("reason") or result.get("reason") or "TypeDB InferenceBox 응답이 없습니다."),
-                })
+            if (
+                not inference
+                or inference_status in transient_failure_statuses
+                or inference_status in retryable_projection_statuses
+            ):
+                add_result(
+                    account_id,
+                    "inferencebox",
+                    inference_status,
+                    inference.get("reason") or result.get("reason") or "TypeDB InferenceBox 응답이 없습니다.",
+                )
         if failures:
             first = failures[0]
             return {
                 "ready": False,
                 "reason": "TypeDB " + first["stage"] + " 대기: " + first["reason"][:180],
                 "results": failures,
+            }
+        if retryable:
+            first = retryable[0]
+            return {
+                "ready": False,
+                "retryable": True,
+                "reason": "TypeDB " + first["stage"] + " 직렬화 대기: " + first["reason"][:180],
+                "results": retryable,
             }
         return {"ready": True, "results": []}
 
@@ -934,6 +968,22 @@ class OntologyReasoningRunner:
         projection_gate = self.projection_gate(runner)
         if not projection_gate.get("ready"):
             self.mark_projection_attempt(symbols)
+            if projection_gate.get("retryable"):
+                return {
+                    "status": "deferred",
+                    "processedCount": 0,
+                    "alertCount": len(alerts or []),
+                    "symbols": symbols,
+                    "maxSymbolsPerRun": self.effective_max_symbols_per_run(),
+                    "configuredMaxSymbolsPerRun": self.max_symbols_per_run(),
+                    "nativeTypeDbTargetSymbolLimit": self.native_typedb_target_symbol_limit() if self.native_typedb_rule_execution_enabled() else None,
+                    "omittedSymbolCount": omitted_symbol_count,
+                    "retryAfterSeconds": self.projection_retry_seconds(),
+                    "deferredReason": str(projection_gate.get("reason") or "TypeDB graph cycle is serialized by another writer."),
+                    "projectionFailures": list(projection_gate.get("results") or []),
+                    "projectionCircuit": self.projection_circuit_state(),
+                    "coalescedEventCount": len(work.get("coalescedEventIds") or []),
+                }
             circuit = self.record_projection_failure(
                 str(projection_gate.get("reason") or "TypeDB graph cycle is not ready."),
                 projection_gate.get("results") or [],

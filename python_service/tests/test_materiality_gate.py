@@ -947,6 +947,72 @@ class MaterialityGateTests(unittest.TestCase):
         self.assertNotIn("lastReasonedAtBySymbol", cursor.payload)
         self.assertIn("000660", cursor.payload["lastProjectionAttemptAtBySymbol"])
 
+    def test_ontology_reasoning_retries_scoped_write_lease_without_opening_circuit(self):
+        request = ontology_reasoning_requested_event(
+            DomainEvent(
+                name="market_data.collected",
+                aggregate_id="market:KR",
+                payload={"changedCount": 1, "symbols": ["000660"]},
+            ),
+            "market-data-update",
+            ["000660"],
+            changed_count=1,
+            fact_types=["MarketQuote"],
+        )
+
+        class Reader:
+            def events(self, name="", aggregate_id="", limit=0):
+                return [request] if name == ONTOLOGY_REASONING_REQUESTED else []
+
+        class Cursor:
+            def __init__(self):
+                self.payload = {"processedEventIds": []}
+
+            def processed_event_ids(self):
+                return list(self.payload.get("processedEventIds") or [])
+
+            def mark_processed(self, event_ids):
+                self.payload["processedEventIds"] = list(event_ids or [])
+
+            def load(self):
+                return dict(self.payload)
+
+            def save(self, payload):
+                self.payload = dict(payload or {})
+
+        class FakeMonitorRunner:
+            def __init__(self):
+                self.accounts = []
+                self.last_ontology_projection_results = {
+                    "main": {
+                        "status": "deferred-scoped-write-lease",
+                        "reason": "Another scoped ABox projection is still staging.",
+                    },
+                }
+
+            def run_once(self, dry_run=False, force=False, symbol_filter=None):
+                return []
+
+        cursor = Cursor()
+        runner = OntologyReasoningRunner(
+            Reader(),
+            cursor,
+            monitor_runner_factory=FakeMonitorRunner,
+            settings={
+                "ontologyReasoningEnabled": "1",
+                "ontologyReasoningProjectionRetrySeconds": "30",
+                "ontologyRuleCandidateAiEnabled": "0",
+            },
+        )
+
+        result = runner.run_once()
+
+        self.assertEqual("deferred", result["status"])
+        self.assertEqual(30, result["retryAfterSeconds"])
+        self.assertEqual(0, result["projectionCircuit"].get("consecutiveFailures", 0))
+        self.assertEqual([], cursor.processed_event_ids())
+        self.assertIn("000660", cursor.payload["lastProjectionAttemptAtBySymbol"])
+
     def test_ontology_reasoning_applies_global_abox_projection_cooldown(self):
         request = ontology_reasoning_requested_event(
             DomainEvent(

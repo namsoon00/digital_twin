@@ -384,6 +384,67 @@ class TypeDBOntologyRepositoryTests(unittest.TestCase):
             "typedbScopedABoxOrphanCleanupMaxGenerations": "999999",
         }))
 
+    def test_scoped_abox_write_lease_records_local_owner_identity(self):
+        repository = TypeDBOntologyGraphRepository("127.0.0.1:1729")
+
+        with patch("digital_twin.infrastructure.typedb_ontology.socket.gethostname", return_value="unit-host"), \
+                patch("digital_twin.infrastructure.typedb_ontology.os.getpid", return_value=4242):
+            graph, lease = repository.scoped_abox_write_lease_graph("scoped-abox:test", "abox-manifest:test")
+
+        properties = graph.entities[0].properties
+        self.assertEqual("unit-host", properties["leaseHost"])
+        self.assertEqual(4242, properties["leaseProcessId"])
+        self.assertEqual("scoped-abox:test", lease["owner"])
+
+    def test_scoped_abox_write_lease_recovers_only_a_dead_local_owner(self):
+        repository = TypeDBOntologyGraphRepository("127.0.0.1:1729")
+        held = {
+            "status": "held",
+            "leaseOwner": "scoped-abox:dead",
+            "leaseHost": "unit-host",
+            "leaseProcessId": 4242,
+            "propertiesJson": '{"leaseHost":"unit-host","leaseProcessId":4242}',
+        }
+        with patch.object(repository, "scoped_abox_write_lease_status", return_value=held), \
+                patch("digital_twin.infrastructure.typedb_ontology.socket.gethostname", return_value="unit-host"), \
+                patch.object(repository, "local_process_alive", return_value=False), \
+                patch.object(repository, "release_scoped_abox_write_lease", return_value={"status": "released"}) as release:
+            result = repository.recover_dead_local_scoped_abox_write_lease()
+
+        self.assertEqual("cleared", result["status"])
+        self.assertEqual("scoped-abox:dead", result["previousLeaseOwner"])
+        release.assert_called_once()
+
+    def test_scoped_abox_write_lease_local_recovery_does_not_steal_live_or_legacy_owner(self):
+        repository = TypeDBOntologyGraphRepository("127.0.0.1:1729")
+        live = {
+            "status": "held",
+            "leaseOwner": "scoped-abox:live",
+            "leaseHost": "unit-host",
+            "leaseProcessId": 4242,
+            "propertiesJson": '{"leaseHost":"unit-host","leaseProcessId":4242}',
+        }
+        with patch.object(repository, "scoped_abox_write_lease_status", return_value=live), \
+                patch("digital_twin.infrastructure.typedb_ontology.socket.gethostname", return_value="unit-host"), \
+                patch.object(repository, "local_process_alive", return_value=True), \
+                patch.object(repository, "release_scoped_abox_write_lease") as release:
+            result = repository.recover_dead_local_scoped_abox_write_lease()
+
+        self.assertEqual("active-owner", result["status"])
+        release.assert_not_called()
+
+        legacy = {
+            "status": "held",
+            "leaseOwner": "scoped-abox:legacy",
+            "propertiesJson": "{}",
+        }
+        with patch.object(repository, "scoped_abox_write_lease_status", return_value=legacy), \
+                patch.object(repository, "release_scoped_abox_write_lease") as release:
+            result = repository.recover_dead_local_scoped_abox_write_lease()
+
+        self.assertEqual("legacy-owner-unknown", result["status"])
+        release.assert_not_called()
+
     def test_relation_batch_matches_cross_box_endpoints_without_dropping_the_batch(self):
         repository = TypeDBOntologyGraphRepository("127.0.0.1:1729")
         graph = PortfolioOntology(
@@ -2982,10 +3043,12 @@ class TypeDBOntologyRepositoryTests(unittest.TestCase):
                 patch.object(service_manager, "read_pid", return_value=123), \
                 patch.object(service_manager, "is_running", return_value=True), \
                 patch.object(service_manager, "stop", return_value=0) as stop, \
-                patch.object(service_manager, "start", return_value=0) as start:
+                patch.object(service_manager, "start", return_value=0) as start, \
+                patch.object(service_manager, "recover_typedb_scoped_write_lease_after_worker_restart", return_value=True) as recover_lease:
             self.assertEqual(0, service_manager.restart())
             stop.assert_called_once_with(excluded_roles={"typedb"}, include_supervisor=False)
             start.assert_called_once_with(excluded_roles={"typedb"})
+            recover_lease.assert_called_once_with(specs["typedb"])
 
         with patch.object(service_manager, "worker_specs", return_value=specs), \
                 patch.object(service_manager, "stop", return_value=0) as stop, \

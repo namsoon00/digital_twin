@@ -3794,6 +3794,8 @@ class TypeDBOntologyRepositoryTests(unittest.TestCase):
         self.assertEqual("worldview-manifest", result["sourceAboxGenerationMode"])
         self.assertEqual("abox-manifest:live", result["sourceAboxSnapshotId"])
         self.assertEqual("abox-manifest:live", result["sourceAboxManifestId"])
+        self.assertTrue(result["sourceAboxGenerationValid"])
+        self.assertEqual("active-scope-pointer", result["sourceAboxMembershipValidation"])
         self.assertTrue(all(
             (item.properties or {}).get("sourceAboxSnapshotId") == "abox-manifest:live"
             for item in captured["graph"].entities

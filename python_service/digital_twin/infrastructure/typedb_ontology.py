@@ -8771,6 +8771,12 @@ relation ontology-assertion,
             runtime_rulebox_metadata["sourceAboxGenerationMode"] = (
                 "worldview-manifest" if scoped_active_abox else "snapshot"
             )
+            # Keep the proof used by both successful and blocked native
+            # materialization paths in the durable execution metadata. Scoped
+            # facts may retain the manifest that first created them, so the
+            # active scope pointer is the authoritative membership check.
+            runtime_rulebox_metadata["sourceAboxGenerationValid"] = source_generation_valid
+            runtime_rulebox_metadata["sourceAboxSnapshotIds"] = list(source_abox_snapshot_ids)
             materialize_typedb_native_matches(graph, execution_rules, native_match_result)
             inference_graph = typedb_inferencebox_graph(
                 graph,

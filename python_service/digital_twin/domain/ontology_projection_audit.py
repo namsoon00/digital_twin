@@ -115,6 +115,7 @@ def projection_result_summary(result: Dict[str, object]) -> Dict[str, object]:
             "nativeRuleSelectionDeferredCount": int(execution.get("nativeRuleSelectionDeferredCount") or 0),
             "sourceAboxGenerationMode": str(execution.get("sourceAboxGenerationMode") or ""),
             "sourceAboxGenerationValid": bool(execution.get("sourceAboxGenerationValid")),
+            "sourceAboxMembershipValidation": str(execution.get("sourceAboxMembershipValidation") or ""),
         },
     }
 

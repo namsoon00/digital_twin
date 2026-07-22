@@ -8,8 +8,8 @@ from typing import Dict, Iterable, List, Optional
 from .ontology_decision_state import DATA_STATES, REVIEW_LEVELS, VALIDATION_STATES
 
 
-INVESTMENT_BRAIN_VERSION = "ontology-investment-brain-v3"
-HYPOTHESIS_SET_VERSION = "typedb-causal-hypotheses-v3"
+INVESTMENT_BRAIN_VERSION = "ontology-investment-brain-v4"
+HYPOTHESIS_SET_VERSION = "typedb-causal-hypotheses-v4"
 SYSTEM_ABSTENTION_TEMPLATE_ID = "hypothesis-template:system.evidence-sufficiency.v1"
 META_INFERENCE_RELATION_TYPES = {
     "EXPLAINED_BY_TRACE",
@@ -193,6 +193,29 @@ class HypothesisTemplate:
 
 
 @dataclass(frozen=True)
+class HypothesisFamily:
+    """A stable causal family behind one current-generation candidate.
+
+    A family is not a new investment rule or a derived market fact. It is a
+    durable identity for equivalent TypeDB rule paths so AI comparison does
+    not spend its candidate budget on duplicated explanations.
+    """
+
+    family_id: str
+    label: str
+    causal_signature: str
+    stance: str = "context"
+    horizon: str = "multi-horizon"
+    source_rule_ids: List[str] = field(default_factory=list)
+    candidate_hypothesis_ids: List[str] = field(default_factory=list)
+    source: str = "typedb-structural-signature"
+    merged_rule_count: int = 0
+
+    def to_dict(self) -> Dict[str, object]:
+        return camelize(asdict(self))
+
+
+@dataclass(frozen=True)
 class InvestmentHypothesis:
     hypothesis_id: str
     template_id: str
@@ -214,6 +237,10 @@ class InvestmentHypothesis:
     verification_status: str = "unverified-current-generation"
     status: str = "candidate"
     historical_calibration: Dict[str, object] = field(default_factory=dict)
+    family_id: str = ""
+    causal_signature: str = ""
+    family_source: str = "typedb-structural-signature"
+    merged_rule_count: int = 1
 
     def to_dict(self) -> Dict[str, object]:
         return camelize(asdict(self))
@@ -262,12 +289,14 @@ class HypothesisSet:
     comparison_required: bool = True
     minimum_comparison_count: int = 3
     inference_generation_id: str = ""
+    families: List[HypothesisFamily] = field(default_factory=list)
     created_at: str = field(default_factory=utc_now_iso)
     version: str = HYPOTHESIS_SET_VERSION
 
     def to_dict(self) -> Dict[str, object]:
         payload = camelize(asdict(self))
         payload["hypotheses"] = [item.to_dict() for item in self.hypotheses]
+        payload["families"] = [item.to_dict() for item in self.families]
         return payload
 
 
@@ -383,7 +412,49 @@ class DecisionEpisode:
                     item.get("historicalCalibration") or item.get("historical_calibration") or {},
                     dict,
                 ) else {},
+                family_id=str(item.get("familyId") or item.get("family_id") or ""),
+                causal_signature=str(item.get("causalSignature") or item.get("causal_signature") or ""),
+                family_source=str(
+                    item.get("familySource")
+                    or item.get("family_source")
+                    or "typedb-structural-signature"
+                ),
+                merged_rule_count=int_setting(
+                    item.get("mergedRuleCount") or item.get("merged_rule_count"),
+                    max(1, len(item.get("supportingRuleIds") or item.get("supporting_rule_ids") or [])),
+                    0,
+                    1000,
+                ),
             ))
+        families = []
+        for item in hypothesis_payload.get("families") or []:
+            if not isinstance(item, dict):
+                continue
+            family_id = str(item.get("familyId") or item.get("family_id") or "").strip()
+            if not family_id:
+                continue
+            families.append(HypothesisFamily(
+                family_id=family_id,
+                label=str(item.get("label") or family_id),
+                causal_signature=str(item.get("causalSignature") or item.get("causal_signature") or ""),
+                stance=str(item.get("stance") or "context"),
+                horizon=str(item.get("horizon") or "multi-horizon"),
+                source_rule_ids=list(item.get("sourceRuleIds") or item.get("source_rule_ids") or []),
+                candidate_hypothesis_ids=list(
+                    item.get("candidateHypothesisIds")
+                    or item.get("candidate_hypothesis_ids")
+                    or []
+                ),
+                source=str(item.get("source") or "typedb-structural-signature"),
+                merged_rule_count=int_setting(
+                    item.get("mergedRuleCount") or item.get("merged_rule_count"),
+                    len(item.get("sourceRuleIds") or item.get("source_rule_ids") or []),
+                    0,
+                    1000,
+                ),
+            ))
+        if not families:
+            families = hypothesis_families_from_hypotheses(hypotheses)
         hypothesis_set = HypothesisSet(
             hypothesis_set_id=str(hypothesis_payload.get("hypothesisSetId") or hypothesis_payload.get("hypothesis_set_id") or ""),
             subject_symbol=str(hypothesis_payload.get("subjectSymbol") or hypothesis_payload.get("subject_symbol") or ""),
@@ -392,6 +463,7 @@ class DecisionEpisode:
             comparison_required=bool(hypothesis_payload.get("comparisonRequired", True)),
             minimum_comparison_count=int(hypothesis_payload.get("minimumComparisonCount") or 3),
             inference_generation_id=str(hypothesis_payload.get("inferenceGenerationId") or ""),
+            families=families,
             created_at=str(hypothesis_payload.get("createdAt") or utc_now_iso()),
             version=str(hypothesis_payload.get("version") or HYPOTHESIS_SET_VERSION),
         )
@@ -607,6 +679,7 @@ def build_competing_hypotheses(
     hypotheses = [
         hypothesis_from_inference_rule(
             hypothesis_seed,
+            symbol,
             name,
             question,
             rule_id,
@@ -618,6 +691,12 @@ def build_competing_hypotheses(
         for rule_id in rule_keys
     ]
     hypotheses = [item for item in hypotheses if item is not None]
+    hypotheses = compact_hypotheses_by_causal_family(
+        hypotheses,
+        hypothesis_seed,
+        name,
+        question,
+    )
     hypotheses = diverse_hypotheses(hypotheses, maximum_count)
     hypotheses = add_safety_hypotheses(
         hypotheses,
@@ -638,6 +717,7 @@ def build_competing_hypotheses(
         hypotheses=hypotheses,
         minimum_comparison_count=minimum_count,
         inference_generation_id=inference_generation_id,
+        families=hypothesis_families_from_hypotheses(hypotheses),
     ), research_plan
 
 
@@ -744,6 +824,7 @@ def trace_condition_ids(traces: Iterable[Dict[str, object]]) -> List[str]:
 
 def hypothesis_from_inference_rule(
     hypothesis_seed: str,
+    symbol: str,
     name: str,
     question: InvestmentQuestion,
     rule_id: str,
@@ -773,8 +854,21 @@ def hypothesis_from_inference_rule(
     label = causal_label(name, rows, traces, matches)
     template_id = "hypothesis-template:" + rule_id
     evidence_state = hypothesis_evidence_state(rows, traces, matches)
+    causal_signature, family_source = causal_signature_for_rule(
+        rule_id,
+        stance,
+        rows,
+        traces,
+        matches,
+    )
+    family_id = stable_id(
+        "hypothesis-family",
+        str(symbol or question.subject_symbol or name).upper(),
+        question.horizon,
+        causal_signature,
+    )
     return InvestmentHypothesis(
-        hypothesis_id=stable_id("hypothesis", hypothesis_seed, template_id),
+        hypothesis_id=stable_id("hypothesis-instance", hypothesis_seed, family_id, rule_id),
         template_id=template_id,
         template_label=label,
         claim=name + "에서 TypeDB가 확인한 '" + label + "' 인과 경로가 현재 상황을 설명한다.",
@@ -796,7 +890,325 @@ def hypothesis_from_inference_rule(
         required_evidence_types=requirements,
         approval_status="approved-active",
         verification_status="typedb-current-generation",
+        family_id=family_id,
+        causal_signature=causal_signature,
+        family_source=family_source,
+        merged_rule_count=1,
     )
+
+
+def causal_signature_for_rule(
+    rule_id: str,
+    stance: str,
+    rows: Iterable[Dict[str, object]],
+    traces: Iterable[Dict[str, object]],
+    matches: Iterable[Dict[str, object]],
+) -> tuple:
+    """Create a conservative, current-observation-independent causal signature.
+
+    We only compact candidates when TypeDB supplied the same condition shape.
+    A matching action, label, or current price is never enough to merge two
+    mechanisms. If the trace has no condition details, keeping the source rule
+    separate is safer than guessing that two paths mean the same thing.
+    """
+    rows = [dict(item) for item in rows or [] if isinstance(item, dict)]
+    traces = [dict(item) for item in traces or [] if isinstance(item, dict)]
+    matches = [dict(item) for item in matches or [] if isinstance(item, dict)]
+    explicit_keys = sorted({
+        signature_text(item.get("hypothesisFamilyKey") or item.get("hypothesis_family_key"))
+        for item in rows + traces + matches
+        if signature_text(item.get("hypothesisFamilyKey") or item.get("hypothesis_family_key"))
+    })
+    if explicit_keys:
+        return (
+            "rulebox-family:" + "|".join(explicit_keys) + "|stance=" + signature_text(stance),
+            "rulebox-explicit-family-key",
+        )
+
+    condition_shapes = [
+        condition
+        for row in traces + matches
+        for condition in row.get("ruleConditionShapes") or row.get("rule_condition_shapes") or []
+        if isinstance(condition, dict)
+    ]
+    if not condition_shapes:
+        condition_shapes = [
+            condition.get("ruleConditionShape") or condition.get("rule_condition_shape")
+            for row in traces + matches
+            for condition in row.get("matchedConditions") or []
+            if isinstance(condition, dict)
+            and isinstance(condition.get("ruleConditionShape") or condition.get("rule_condition_shape"), dict)
+        ]
+    condition_signatures = sorted({
+        condition_structural_signature(condition)
+        for condition in condition_shapes
+        if condition_structural_signature(condition)
+    })
+    if not condition_signatures:
+        return "typedb-rule:" + signature_text(rule_id), "typedb-rule-id-fallback"
+
+    primary_rows = primary_inference_rows(rows)
+    relation_types = sorted({
+        signature_text(item.get("type") or item.get("relationType"))
+        for item in primary_rows
+        if signature_text(item.get("type") or item.get("relationType"))
+    })
+    target_kinds = sorted({
+        signature_text(
+            item.get("targetKind")
+            or item.get("target_kind")
+            or str(item.get("target") or "").split(":", 1)[0]
+        )
+        for item in primary_rows
+        if signature_text(
+            item.get("targetKind")
+            or item.get("target_kind")
+            or str(item.get("target") or "").split(":", 1)[0]
+        )
+    })
+    decision_stages = sorted({
+        signature_text(item.get("decisionStage") or item.get("decision_stage"))
+        for item in primary_rows
+        if signature_text(item.get("decisionStage") or item.get("decision_stage"))
+    })
+    action_groups = sorted({
+        signature_text(item.get("actionGroup") or item.get("action_group"))
+        for item in primary_rows
+        if signature_text(item.get("actionGroup") or item.get("action_group"))
+    })
+    target_roles = sorted({
+        signature_text(item.get("targetRole") or item.get("target_role"))
+        for item in primary_rows
+        if signature_text(item.get("targetRole") or item.get("target_role"))
+    })
+    action_policies = sorted({
+        signature_text(item.get("actionPolicy") or item.get("action_policy"))
+        for item in primary_rows
+        if signature_text(item.get("actionPolicy") or item.get("action_policy"))
+    })
+    any_condition_counts = sorted({
+        str(int_setting(
+            item.get("anyConditionMinCount") or item.get("any_condition_min_count"),
+            1,
+            1,
+            100,
+        ))
+        for item in traces + matches
+        if item.get("anyConditionMinCount") not in (None, "")
+        or item.get("any_condition_min_count") not in (None, "")
+    })
+    return (
+        "typedb-structural:"
+        + "|".join([
+            "stance=" + signature_text(stance),
+            "relations=" + ",".join(relation_types),
+            "targets=" + ",".join(target_kinds),
+            "stages=" + ",".join(decision_stages),
+            "groups=" + ",".join(action_groups),
+            "roles=" + ",".join(target_roles),
+            "policies=" + ",".join(action_policies),
+            "anyMinimum=" + ",".join(any_condition_counts),
+            "conditions=" + ",".join(condition_signatures),
+        ]),
+        "typedb-structural-signature",
+    )
+
+
+def condition_structural_signature(condition: Dict[str, object]) -> str:
+    if not isinstance(condition, dict):
+        return ""
+    kind = signature_text(condition.get("kind"))
+    role = signature_text(condition.get("role") or condition.get("conditionRole") or "required")
+    field = signature_text(condition.get("field"))
+    relation_type = signature_text(condition.get("relationType") or condition.get("relation_type"))
+    target_kind = signature_text(condition.get("targetKind") or condition.get("target_kind"))
+    direction = signature_text(condition.get("direction") or "out")
+    operator = signature_text(condition.get("operator") or "==")
+    value = canonical_signature_value(condition.get("value"))
+    target_filters = canonical_signature_value(
+        condition.get("targetPropertyFilters") or condition.get("target_property_filters")
+    )
+    relation_filters = canonical_signature_value(
+        condition.get("relationPropertyFilters") or condition.get("relation_property_filters")
+    )
+    if not any([kind, field, relation_type, target_kind, value]):
+        return ""
+    return "~".join([
+        "kind=" + kind,
+        "role=" + role,
+        "field=" + field,
+        "relation=" + relation_type,
+        "target=" + target_kind,
+        "direction=" + direction,
+        "operator=" + operator,
+        "value=" + value,
+        "targetFilters=" + target_filters,
+        "relationFilters=" + relation_filters,
+    ])
+
+
+def signature_text(value: object) -> str:
+    return re.sub(r"\s+", " ", str(value or "").strip()).lower()[:240]
+
+
+def canonical_signature_value(value: object) -> str:
+    if isinstance(value, dict):
+        return json.dumps(
+            {str(key): canonical_signature_value(item) for key, item in sorted(value.items(), key=lambda item: str(item[0]))},
+            ensure_ascii=False,
+            sort_keys=True,
+            separators=(",", ":"),
+        )[:240]
+    if isinstance(value, (list, tuple, set)):
+        return "[" + ",".join(sorted(canonical_signature_value(item) for item in value)) + "]"
+    return signature_text(value)
+
+
+def compact_hypotheses_by_causal_family(
+    hypotheses: Iterable[InvestmentHypothesis],
+    hypothesis_seed: str,
+    name: str,
+    question: InvestmentQuestion,
+) -> List[InvestmentHypothesis]:
+    """Merge only equivalent TypeDB paths before candidate capping.
+
+    The merge is a presentation and comparison optimization. It unions the
+    graph-owned evidence and source rules, while keeping the original TypeDB
+    action semantics untouched. Different causal signatures remain competing
+    hypotheses even when they imply the same user-facing action.
+    """
+    groups: Dict[str, List[InvestmentHypothesis]] = {}
+    for hypothesis in hypotheses or []:
+        signature = str(hypothesis.causal_signature or "").strip()
+        family_id = str(hypothesis.family_id or "").strip()
+        if not signature:
+            signature = "legacy-template:" + str(hypothesis.template_id or "")
+        if not family_id:
+            family_id = stable_id(
+                "hypothesis-family",
+                question.subject_symbol or name,
+                question.horizon,
+                signature,
+            )
+        groups.setdefault(family_id, []).append(hypothesis)
+
+    compacted: List[InvestmentHypothesis] = []
+    for family_id, members in groups.items():
+        ordered = sorted(
+            members,
+            key=lambda item: (
+                str(item.template_id or ""),
+                ",".join(sorted(item.supporting_rule_ids or [])),
+            ),
+        )
+        primary = ordered[0]
+        source_rule_ids = sorted({
+            rule_id
+            for item in ordered
+            for rule_id in item.supporting_rule_ids or []
+            if str(rule_id or "").strip()
+        })
+        count = len(source_rule_ids)
+        evidence_state = merged_hypothesis_evidence_state(ordered)
+        claim = primary.claim
+        if count > 1:
+            claim += " 같은 인과 구조의 TypeDB 규칙 " + str(count) + "개가 이 설명을 함께 뒷받침합니다."
+        compacted.append(InvestmentHypothesis(
+            hypothesis_id=stable_id("hypothesis-instance", hypothesis_seed, family_id),
+            template_id=primary.template_id,
+            template_label=primary.template_label,
+            claim=claim,
+            stance=primary.stance,
+            horizon=primary.horizon,
+            evidence_state=evidence_state,
+            evidence_state_label=HYPOTHESIS_EVIDENCE_STATE_LABELS[evidence_state],
+            supporting_evidence_ids=unique_texts(
+                [value for item in ordered for value in item.supporting_evidence_ids],
+                24,
+            ),
+            counter_evidence_ids=unique_texts(
+                [value for item in ordered for value in item.counter_evidence_ids],
+                24,
+            ),
+            supporting_rule_ids=source_rule_ids,
+            counter_rule_ids=unique_texts(
+                [value for item in ordered for value in item.counter_rule_ids],
+                24,
+            ),
+            assumptions=unique_texts(
+                [value for item in ordered for value in item.assumptions],
+                12,
+            ),
+            invalidation_conditions=unique_texts(
+                [value for item in ordered for value in item.invalidation_conditions],
+                12,
+            ),
+            causal_path_ids=unique_texts(
+                [value for item in ordered for value in item.causal_path_ids],
+                24,
+            ),
+            required_evidence_types=unique_texts(
+                [value for item in ordered for value in item.required_evidence_types],
+                20,
+            ),
+            approval_status=primary.approval_status,
+            verification_status=primary.verification_status,
+            status=primary.status,
+            historical_calibration=dict(primary.historical_calibration or {}),
+            family_id=family_id,
+            causal_signature=primary.causal_signature,
+            family_source=primary.family_source,
+            merged_rule_count=count,
+        ))
+    return compacted
+
+
+def merged_hypothesis_evidence_state(hypotheses: Iterable[InvestmentHypothesis]) -> str:
+    states = {str(item.evidence_state or "unresolved") for item in hypotheses or []}
+    if "contested" in states:
+        return "contested"
+    if "supported" in states:
+        return "supported"
+    if "blocked" in states:
+        return "blocked"
+    return "unresolved"
+
+
+def hypothesis_families_from_hypotheses(
+    hypotheses: Iterable[InvestmentHypothesis],
+) -> List[HypothesisFamily]:
+    grouped: Dict[str, List[InvestmentHypothesis]] = {}
+    for hypothesis in hypotheses or []:
+        family_id = str(hypothesis.family_id or "").strip()
+        if not family_id:
+            family_id = stable_id(
+                "hypothesis-family",
+                hypothesis.template_id,
+                hypothesis.horizon,
+                hypothesis.causal_signature or hypothesis.template_id,
+            )
+        grouped.setdefault(family_id, []).append(hypothesis)
+    families: List[HypothesisFamily] = []
+    for family_id, members in grouped.items():
+        primary = members[0]
+        source_rule_ids = sorted({
+            rule_id
+            for item in members
+            for rule_id in item.supporting_rule_ids or []
+            if str(rule_id or "").strip()
+        })
+        families.append(HypothesisFamily(
+            family_id=family_id,
+            label=primary.template_label,
+            causal_signature=primary.causal_signature or ("legacy-template:" + primary.template_id),
+            stance=primary.stance,
+            horizon=primary.horizon,
+            source_rule_ids=source_rule_ids,
+            candidate_hypothesis_ids=[item.hypothesis_id for item in members if item.hypothesis_id],
+            source=primary.family_source or "typedb-structural-signature",
+            merged_rule_count=len(source_rule_ids),
+        ))
+    return families
 
 
 def diverse_hypotheses(hypotheses: List[InvestmentHypothesis], maximum_count: int) -> List[InvestmentHypothesis]:
@@ -830,8 +1242,9 @@ def add_safety_hypotheses(
     if result and evidence_safety_needed:
         missing = unique_texts(missing_data)
         evidence_state = "contested" if bool((conflicts or {}).get("hasConflict")) else "unresolved"
+        family_id = system_hypothesis_family_id(name, question, SYSTEM_ABSTENTION_TEMPLATE_ID)
         safety = InvestmentHypothesis(
-            hypothesis_id=stable_id("hypothesis", hypothesis_seed, SYSTEM_ABSTENTION_TEMPLATE_ID),
+            hypothesis_id=stable_id("hypothesis-instance", hypothesis_seed, family_id),
             template_id=SYSTEM_ABSTENTION_TEMPLATE_ID,
             template_label="근거 충분성 검증",
             claim=name + "의 현재 근거만으로는 경쟁 인과 경로를 충분히 배제할 수 없어 행동 판단을 유보해야 한다.",
@@ -849,13 +1262,18 @@ def add_safety_hypotheses(
             required_evidence_types=missing,
             approval_status="approved-safety-policy",
             verification_status="requires-research",
+            family_id=family_id,
+            causal_signature="system-safety:" + SYSTEM_ABSTENTION_TEMPLATE_ID,
+            family_source="system-safety-policy",
+            merged_rule_count=0,
         )
         result = with_reserved_safety_slot(result, safety, maximum_count)
     if result and (len(result) < minimum_count or len(directional_stances) < 2):
         leading = result[0]
         null_template = "hypothesis-template:system.null-challenge.v1"
+        family_id = system_hypothesis_family_id(name, question, null_template)
         safety = InvestmentHypothesis(
-            hypothesis_id=stable_id("hypothesis", hypothesis_seed, null_template),
+            hypothesis_id=stable_id("hypothesis-instance", hypothesis_seed, family_id),
             template_id=null_template,
             template_label="추론 경로의 일시적 동행 가능성",
             claim=name + "의 현재 TypeDB 경로가 지속 가능한 인과가 아니라 일시적 동행일 수 있다.",
@@ -873,9 +1291,27 @@ def add_safety_hypotheses(
             required_evidence_types=list(leading.required_evidence_types),
             approval_status="approved-safety-policy",
             verification_status="counterfactual-challenge",
+            family_id=family_id,
+            causal_signature="system-safety:" + null_template,
+            family_source="system-safety-policy",
+            merged_rule_count=0,
         )
         result = with_reserved_safety_slot(result, safety, maximum_count)
     return result[:maximum_count]
+
+
+def system_hypothesis_family_id(
+    name: str,
+    question: InvestmentQuestion,
+    template_id: str,
+) -> str:
+    return stable_id(
+        "hypothesis-family",
+        "system-safety",
+        question.subject_symbol or name,
+        question.horizon,
+        template_id,
+    )
 
 
 def with_reserved_safety_slot(

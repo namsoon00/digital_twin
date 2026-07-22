@@ -48,6 +48,7 @@ def inferencebox_entity_payload(row: Dict[str, object]) -> Dict[str, object]:
         "sourceRuleId": str(row.get("sourceRuleId") or ""),
         "nativeRuleId": str(row.get("nativeRuleId") or ""),
         "semanticRuleId": str(row.get("semanticRuleId") or row.get("nativeRuleId") or ""),
+        "hypothesisFamilyKey": str(row.get("hypothesisFamilyKey") or properties.get("hypothesisFamilyKey") or ""),
         "reasoningLayer": str(row.get("reasoningLayer") or ""),
         "reasoningMode": str(row.get("reasoningMode") or ""),
         "materializationSource": str(row.get("materializationSource") or ""),
@@ -93,6 +94,7 @@ def inferencebox_relation_payload(row: Dict[str, object]) -> Dict[str, object]:
         "sourceRuleId": str(row.get("sourceRuleId") or ""),
         "nativeRuleId": str(row.get("nativeRuleId") or ""),
         "semanticRuleId": str(row.get("semanticRuleId") or row.get("nativeRuleId") or ""),
+        "hypothesisFamilyKey": str(row.get("hypothesisFamilyKey") or properties.get("hypothesisFamilyKey") or ""),
         "reasoningLayer": str(row.get("reasoningLayer") or ""),
         "reasoningMode": str(row.get("reasoningMode") or ""),
         "materializationSource": str(row.get("materializationSource") or ""),
@@ -145,11 +147,22 @@ def inferencebox_trace_payload(row: Dict[str, object]) -> Dict[str, object]:
         "sourceRuleId": str(row.get("sourceRuleId") or ""),
         "nativeRuleId": str(row.get("nativeRuleId") or ""),
         "semanticRuleId": str(row.get("semanticRuleId") or row.get("nativeRuleId") or ""),
+        "hypothesisFamilyKey": str(row.get("hypothesisFamilyKey") or properties.get("hypothesisFamilyKey") or ""),
         "reasoningLayer": str(row.get("reasoningLayer") or ""),
         "reasoningMode": str(row.get("reasoningMode") or ""),
         "materializationSource": str(row.get("materializationSource") or ""),
         "matchedConditionIds": matched_condition_ids,
         "matchedConditions": matched_conditions,
+        "ruleConditionShapes": [
+            dict(item)
+            for item in properties.get("ruleConditionShapes") or row.get("ruleConditionShapes") or []
+            if isinstance(item, dict)
+        ],
+        "anyConditionMinCount": int(number_or_none(
+            properties.get("anyConditionMinCount")
+            if "anyConditionMinCount" in properties
+            else row.get("anyConditionMinCount")
+        ) or 1),
         "evidenceRelationIds": evidence_relation_ids,
         "promptHint": str(properties.get("promptHint") or row.get("promptHint") or ""),
         "conditionDetailSource": str(properties.get("conditionDetailSource") or row.get("conditionDetailSource") or ""),

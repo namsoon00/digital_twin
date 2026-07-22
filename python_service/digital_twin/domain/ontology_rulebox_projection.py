@@ -36,6 +36,7 @@ def add_rulebox_concepts(graph: PortfolioOntology, rules: Iterable[GraphInferenc
             "actionGroup": rule.action_group,
             "actionLevel": rule.action_level,
             "promptHint": rule.prompt_hint,
+            "hypothesisFamilyKey": rule.hypothesis_family_key,
             "anyConditionMinCount": rule.any_condition_min_count,
             "conditionCount": len(rule.conditions),
             "derivationCount": len(rule.derivations),

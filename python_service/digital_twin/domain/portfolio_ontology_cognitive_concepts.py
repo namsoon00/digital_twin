@@ -122,6 +122,12 @@ def add_investment_brain_concepts(
                 add_relation(graph, task_id, need_id, "REQUIRES_EVIDENCE", weight=1.0, properties={"source": "investment-brain-memory"})
         hypothesis_ids = []
         hypothesis_id_by_key = {}
+        family_rows = {
+            str(item.get("familyId") or "").strip(): item
+            for item in hypothesis_set.get("families") or []
+            if isinstance(item, dict) and str(item.get("familyId") or "").strip()
+        }
+        family_node_ids = {}
         for hypothesis in hypothesis_set.get("hypotheses") or []:
             if not isinstance(hypothesis, dict):
                 continue
@@ -140,6 +146,10 @@ def add_investment_brain_concepts(
                 "approvalStatus": hypothesis.get("approvalStatus"),
                 "verificationStatus": hypothesis.get("verificationStatus"),
                 "historicalCalibration": hypothesis.get("historicalCalibration") or {},
+                "familyId": hypothesis.get("familyId") or "",
+                "causalSignature": hypothesis.get("causalSignature") or "",
+                "familySource": hypothesis.get("familySource") or "",
+                "mergedRuleCount": hypothesis.get("mergedRuleCount") or 0,
                 "supportingRuleIds": hypothesis.get("supportingRuleIds") or [],
                 "counterRuleIds": hypothesis.get("counterRuleIds") or [],
                 "invalidationConditions": hypothesis.get("invalidationConditions") or [],
@@ -148,6 +158,35 @@ def add_investment_brain_concepts(
             })
             hypothesis_ids.append(hypothesis_id)
             hypothesis_id_by_key[hypothesis_key] = hypothesis_id
+            family_key = str(hypothesis.get("familyId") or "").strip()
+            if not family_key:
+                family_key = "legacy:" + str(hypothesis.get("templateId") or hypothesis_key)
+            family_id = family_node_ids.get(family_key)
+            if not family_id:
+                family = family_rows.get(family_key) if isinstance(family_rows.get(family_key), dict) else {}
+                family_id = add_entity(graph, "hypothesis-family", family_key, str(
+                    family.get("label")
+                    or hypothesis.get("templateLabel")
+                    or hypothesis.get("claim")
+                    or family_key
+                ), {
+                    "tboxClass": "HypothesisFamily",
+                    "familyId": family_key,
+                    "causalSignature": family.get("causalSignature") or hypothesis.get("causalSignature") or "",
+                    "stance": family.get("stance") or hypothesis.get("stance") or "context",
+                    "horizon": family.get("horizon") or hypothesis.get("horizon") or "",
+                    "sourceRuleIds": family.get("sourceRuleIds") or hypothesis.get("supportingRuleIds") or [],
+                    "candidateHypothesisIds": family.get("candidateHypothesisIds") or [hypothesis_key],
+                    "source": family.get("source") or hypothesis.get("familySource") or "typedb-structural-signature",
+                    "mergedRuleCount": family.get("mergedRuleCount") or hypothesis.get("mergedRuleCount") or 0,
+                })
+                family_node_ids[family_key] = family_id
+            add_relation(graph, hypothesis_id, family_id, "INSTANTIATES_HYPOTHESIS_FAMILY", weight=1.0, properties={
+                "source": "typedb-hypothesis-family-compaction",
+                "familyId": family_key,
+                "causalSignature": hypothesis.get("causalSignature") or "",
+                "mergedRuleCount": hypothesis.get("mergedRuleCount") or 0,
+            })
             review = review_by_hypothesis_id.get(hypothesis_key, {})
             if set_id:
                 add_relation(graph, set_id, hypothesis_id, "CONTAINS_HYPOTHESIS", weight=1.0, properties={

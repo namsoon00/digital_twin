@@ -33,6 +33,12 @@ def materialize_rule_inference(
     subject_key = stock.entity_id.replace(":", "-")
     symbol = str(properties.get("symbol") or subject_key).upper()
     display_name = stock.label or symbol
+    hypothesis_family_key = str(getattr(rule, "hypothesis_family_key", "") or "").strip()
+    family_properties = {"hypothesisFamilyKey": hypothesis_family_key} if hypothesis_family_key else {}
+    rule_condition_shapes = [
+        rule_condition_shape(condition)
+        for condition in getattr(rule, "conditions", []) or []
+    ]
     data_state = str(context.get("dataState") or "partial")
     review_level = review_level_for(rule.action_level, data_state)
     evidence_relation_ids = [str(item) for item in context.get("evidenceRelationIds") or []]
@@ -50,6 +56,8 @@ def materialize_rule_inference(
         "dataState": data_state,
         "dataStateLabel": DATA_STATE_LABELS[data_state],
         "matchedConditions": list(context.get("matchedConditions") or []),
+        "ruleConditionShapes": rule_condition_shapes,
+        "anyConditionMinCount": int(number(getattr(rule, "any_condition_min_count", 1)) or 1),
         "evidenceRelationIds": evidence_relation_ids,
         "conditionDetailSource": str(context.get("conditionDetailSource") or ""),
         "requiredConditionCount": int(number(context.get("requiredConditionCount"))),
@@ -59,6 +67,7 @@ def materialize_rule_inference(
         "temporalEvidenceCount": int(number(context.get("temporalEvidenceCount"))),
         "evidenceUsableForJudgement": bool(context.get("evidenceUsableForJudgement")),
         "promptHint": rule.prompt_hint,
+        **family_properties,
     })))
     explanation_entities = materialize_inference_explanation_entities(
         graph,
@@ -82,6 +91,7 @@ def materialize_rule_inference(
             "ruleId": rule.rule_id,
             "aiInfluenceLabel": rule.label,
             "source": GRAPH_REASONER_VERSION,
+            **family_properties,
         }),
     ))
     graph.relations.append(OntologyRelation(
@@ -95,6 +105,7 @@ def materialize_rule_inference(
             "ruleId": rule.rule_id,
             "aiInfluenceLabel": rule.label,
             "source": GRAPH_REASONER_VERSION,
+            **family_properties,
         }),
     ))
     evidence_id_value = "evidence:inference:" + symbol + ":" + rule.rule_id
@@ -109,6 +120,8 @@ def materialize_rule_inference(
             "ruleId": rule.rule_id,
             "ruleLabel": rule.label,
             "matchedConditions": list(context.get("matchedConditions") or []),
+            "ruleConditionShapes": rule_condition_shapes,
+            "anyConditionMinCount": int(number(getattr(rule, "any_condition_min_count", 1)) or 1),
             "evidenceRelationIds": evidence_relation_ids,
             "conditionDetailSource": str(context.get("conditionDetailSource") or ""),
             "requiredConditionCount": int(number(context.get("requiredConditionCount"))),
@@ -118,6 +131,7 @@ def materialize_rule_inference(
             "temporalEvidenceCount": int(number(context.get("temporalEvidenceCount"))),
             "evidenceUsableForJudgement": bool(context.get("evidenceUsableForJudgement")),
             "promptHint": rule.prompt_hint,
+            **family_properties,
         },
         "context",
         data_state,
@@ -151,6 +165,7 @@ def materialize_rule_inference(
             "dataStateLabel": DATA_STATE_LABELS[data_state],
             **action_policy,
             "inferenceTraceId": trace_id,
+            **family_properties,
         })))
         relation_properties = {
             "symbol": symbol,
@@ -173,6 +188,7 @@ def materialize_rule_inference(
             "freshnessGateReason": str(context.get("freshnessGateReason") or ""),
             "evidenceUsableForJudgement": bool(context.get("evidenceUsableForJudgement")),
             "source": GRAPH_REASONER_VERSION,
+            **family_properties,
         }
         graph.relations.append(OntologyRelation(
             stock.entity_id,
@@ -193,6 +209,7 @@ def materialize_rule_inference(
                 "ruleId": rule.rule_id,
                 "source": GRAPH_REASONER_VERSION,
                 "aiInfluenceLabel": "추론 경로",
+                **family_properties,
             }),
         ))
         if derivation.belief_label:
@@ -220,6 +237,7 @@ def materialize_rule_inference(
                 "source": GRAPH_REASONER_VERSION,
                 "aiInfluenceLabel": label,
                 "inferenceTraceId": trace_id,
+                **family_properties,
             }),
         ))
         graph.relations.append(OntologyRelation(
@@ -233,6 +251,7 @@ def materialize_rule_inference(
                 "ruleId": rule.rule_id,
                 "source": GRAPH_REASONER_VERSION,
                 "aiInfluenceLabel": label,
+                **family_properties,
             }),
         ))
 
@@ -269,6 +288,9 @@ def materialize_inference_explanation_entities(
         "dataState": data_state,
         "dataStateLabel": DATA_STATE_LABELS[data_state],
     }
+    hypothesis_family_key = str(getattr(rule, "hypothesis_family_key", "") or "").strip()
+    if hypothesis_family_key:
+        common["hypothesisFamilyKey"] = hypothesis_family_key
     why_id = entity_id("why-now", symbol + ":" + rule.rule_id)
     conflict_id = entity_id("signal-conflict", symbol + ":" + rule.rule_id)
     timeline_id = entity_id("inference-timeline", symbol + ":" + rule.rule_id)
@@ -404,6 +426,7 @@ def grounded_inference_context(
         item = dict(raw)
         condition = conditions_by_id.get(str(item.get("conditionId") or ""))
         if condition and not item.get("absenceSatisfied"):
+            item["ruleConditionShape"] = rule_condition_shape(condition)
             if str(getattr(condition, "kind", "") or "") == "subject_property":
                 field = str(getattr(condition, "field", "") or item.get("field") or "")
                 observed_value = (stock.properties or {}).get(field)
@@ -480,6 +503,28 @@ def grounded_inference_context(
         "evidenceUsableForJudgement": evidence_usable,
     })
     return payload
+
+
+def rule_condition_shape(condition) -> Dict[str, object]:
+    """Persist the RuleBox condition definition without transient observations.
+
+    InferenceBox evidence also carries observed values.  Hypothesis compaction
+    must instead compare the configured causal mechanism, including relation
+    filters, so two rules that happen to match the same relation type are not
+    treated as equivalent.
+    """
+    return {
+        "kind": str(getattr(condition, "kind", "") or ""),
+        "role": str(getattr(condition, "role", "") or "required"),
+        "field": str(getattr(condition, "field", "") or ""),
+        "operator": str(getattr(condition, "operator", "") or "=="),
+        "value": getattr(condition, "value", None),
+        "relationType": str(getattr(condition, "relation_type", "") or ""),
+        "direction": str(getattr(condition, "direction", "") or "out"),
+        "targetKind": str(getattr(condition, "target_kind", "") or ""),
+        "targetPropertyFilters": dict(getattr(condition, "target_property_filters", {}) or {}),
+        "relationPropertyFilters": dict(getattr(condition, "relation_property_filters", {}) or {}),
+    }
 
 
 def matching_evidence_relation(graph: PortfolioOntology, stock_id: str, condition):

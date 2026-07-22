@@ -143,6 +143,10 @@ class GraphInferenceRule:
     action_group: str
     action_level: str
     prompt_hint: str
+    # Optional governance key for safely grouping equivalent rule variants
+    # into one current-situation hypothesis family. Empty keeps the rule on
+    # the conservative structural-signature path.
+    hypothesis_family_key: str = ""
     any_condition_min_count: int = 1
     enabled: bool = True
 
@@ -191,6 +195,11 @@ class GraphInferenceRule:
             action_group=str(payload.get("action_group") or payload.get("actionGroup") or ""),
             action_level=str(payload.get("action_level") or payload.get("actionLevel") or ""),
             prompt_hint=str(payload.get("prompt_hint") or payload.get("promptHint") or ""),
+            hypothesis_family_key=str(
+                payload.get("hypothesis_family_key")
+                or payload.get("hypothesisFamilyKey")
+                or ""
+            ).strip(),
             any_condition_min_count=max(1, int(payload.get("any_condition_min_count") or payload.get("anyConditionMinCount") or 1)),
             enabled=bool(payload.get("enabled")) if "enabled" in payload else True,
         )

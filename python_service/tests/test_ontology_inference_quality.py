@@ -7,6 +7,7 @@ from digital_twin.domain.ontology_inference_materializer import materialize_rule
 from digital_twin.domain.ontology_observation_quality import position_observation_profiles
 from digital_twin.domain.ontology_projection_fingerprint import material_graph_fingerprint
 from digital_twin.domain.ontology_rulebox_catalog import default_graph_inference_rules
+from digital_twin.domain.ontology_rulebox_contracts import GraphInferenceRule
 from digital_twin.domain.portfolio_ontology_builder import build_portfolio_ontology
 from digital_twin.domain.portfolio import AccountSnapshot, Position
 from digital_twin.domain.portfolio_calculations import portfolio_summary
@@ -43,7 +44,9 @@ class OntologyInferenceQualityTests(unittest.TestCase):
         self.assertEqual("HAS_INFERRED_RISK", matches[0].relation_type)
 
     def test_materialized_trace_contains_observed_values_and_relation_ids(self):
-        rule = default_graph_inference_rules()[0]
+        rule_payload = default_graph_inference_rules()[0].to_dict()
+        rule_payload["hypothesisFamilyKey"] = "loss-guard-breakdown"
+        rule = GraphInferenceRule.from_dict(rule_payload)
         graph = PortfolioOntology("quality-test")
         stock = OntologyEntity("stock:005930", "삼성전자", "stock", {
             "ontologyBox": "ABox",
@@ -107,6 +110,13 @@ class OntologyInferenceQualityTests(unittest.TestCase):
         self.assertEqual("sufficient", trace.properties["dataState"])
         self.assertEqual("typedb-match+abox-grounding", trace.properties["conditionDetailSource"])
         self.assertTrue(trace.properties["evidenceUsableForJudgement"])
+        self.assertEqual("loss-guard-breakdown", trace.properties["hypothesisFamilyKey"])
+        self.assertEqual(
+            {"levelType": ["ma20", "ma60"]},
+            trace.properties["ruleConditionShapes"][3]["targetPropertyFilters"],
+        )
+        primary_relation = next(item for item in graph.relations if item.relation_type == "HAS_INFERRED_RISK")
+        self.assertEqual("loss-guard-breakdown", primary_relation.properties["hypothesisFamilyKey"])
 
     def test_position_observation_profile_requires_provider_clock_and_open_session(self):
         open_at = datetime(2026, 7, 20, 1, 0, tzinfo=timezone.utc)

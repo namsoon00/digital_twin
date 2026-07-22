@@ -215,6 +215,12 @@ def build_rulebox_rules_from_rows(
             "action_group": str(row.get("actionGroup") or props.get("actionGroup") or ""),
             "action_level": str(row.get("actionLevel") or props.get("actionLevel") or ""),
             "prompt_hint": str(row.get("promptHint") or props.get("promptHint") or ""),
+            "hypothesis_family_key": str(
+                row.get("hypothesisFamilyKey")
+                or props.get("hypothesisFamilyKey")
+                or props.get("hypothesis_family_key")
+                or ""
+            ),
             "any_condition_min_count": int(row.get("anyConditionMinCount") or props.get("anyConditionMinCount") or 1),
             "enabled": bool(row.get("enabled")) if row.get("enabled") is not None else bool(props.get("enabled", True)),
         }

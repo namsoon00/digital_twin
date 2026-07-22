@@ -1398,12 +1398,18 @@ class OntologyRuleBoxTests(unittest.TestCase):
     def test_rulebox_admin_payload_roundtrips_to_graph(self):
         rules = default_graph_inference_rules()
         payload = {"rules": rulebox_rules_to_payload(rules)}
+        payload["rules"][0]["hypothesis_family_key"] = "loss-guard-breakdown"
         parsed = rulebox_rules_from_payload(payload)
         graph = rulebox_graph_from_rules(parsed)
 
         self.assertEqual([rule.rule_id for rule in rules], [rule.rule_id for rule in parsed])
+        self.assertEqual("loss-guard-breakdown", parsed[0].hypothesis_family_key)
         self.assertTrue(any(item.entity_id == "ontology-box:RuleBox" for item in graph.entities))
         self.assertTrue(any(item.kind == "rule" and (item.properties or {}).get("ontologyBox") == "RuleBox" for item in graph.entities))
+        self.assertTrue(any(
+            item.kind == "rule" and (item.properties or {}).get("hypothesisFamilyKey") == "loss-guard-breakdown"
+            for item in graph.entities
+        ))
         self.assertTrue(any(item.relation_type == "DERIVES_RELATION" for item in graph.relations))
 
     def test_every_default_derivation_has_explicit_decision_stage(self):
@@ -1700,6 +1706,7 @@ class OntologyRuleBoxTests(unittest.TestCase):
                     "kind": "risk",
                     "symbol": "005930",
                     "ruleId": "graph.loss_guard.breakdown.v1",
+                    "hypothesisFamilyKey": "loss-guard-breakdown",
                     "tboxClass": "MarketRisk",
                     "polarity": "risk",
                     "actionGroup": "lossControl",
@@ -1715,6 +1722,7 @@ class OntologyRuleBoxTests(unittest.TestCase):
                     "target": "risk:005930:loss-guard-breakdown",
                     "targetLabel": "삼성전자 손실 방어 리스크",
                     "ruleId": "graph.loss_guard.breakdown.v1",
+                    "hypothesisFamilyKey": "loss-guard-breakdown",
                     "polarity": "risk",
                     "weight": 0.86,
                     "decisionStage": "LOSS_REDUCE",
@@ -1731,6 +1739,12 @@ class OntologyRuleBoxTests(unittest.TestCase):
                     "label": "삼성전자 · 손실 보유 + 기준선 이탈 -> 손실 방어 추론",
                     "symbol": "005930",
                     "ruleId": "graph.loss_guard.breakdown.v1",
+                    "hypothesisFamilyKey": "loss-guard-breakdown",
+                    "ruleConditionShapes": [
+                        {"kind": "subject_property", "field": "profitLossRate", "operator": "<=", "value": -8},
+                        {"kind": "relation", "relationType": "BREAKS_LEVEL", "targetKind": "key-level", "targetPropertyFilters": {"levelType": ["ma20", "ma60"]}},
+                    ],
+                    "anyConditionMinCount": 1,
                     "confidence": 0.86,
                     "matchedConditionIds": ["holding-loss", "holding-source", "ma-break"],
                     "nativeTypeDbReasoned": True,
@@ -1747,6 +1761,9 @@ class OntologyRuleBoxTests(unittest.TestCase):
         self.assertEqual("LOSS_REDUCE", payload["relations"][0]["decisionStage"])
         self.assertEqual("risk", payload["relations"][0]["evidenceRole"])
         self.assertEqual("check", payload["relations"][0]["reviewLevel"])
+        self.assertEqual("loss-guard-breakdown", payload["relations"][0]["hypothesisFamilyKey"])
+        self.assertEqual("loss-guard-breakdown", payload["traces"][0]["hypothesisFamilyKey"])
+        self.assertEqual("key-level", payload["traces"][0]["ruleConditionShapes"][1]["targetKind"])
         self.assertEqual(["holding-loss", "holding-source", "ma-break"], payload["traces"][0]["matchedConditionIds"])
 
     def test_inference_trace_ledger_reconstructs_rulebox_audit_path(self):

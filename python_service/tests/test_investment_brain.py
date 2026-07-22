@@ -353,6 +353,177 @@ class InvestmentBrainTest(unittest.TestCase):
         self.assertTrue(payload["researchPlan"]["tasks"])
         self.assertTrue(payload["selfQuestions"])
 
+    def test_equivalent_typedb_paths_compact_to_one_stable_hypothesis_family(self):
+        context = relation_context()
+        context["facts"]["missingData"] = []
+        context["missingData"] = []
+        context["signalConflicts"] = {"hasConflict": False}
+        context["activeRules"] = [
+            {"ruleId": "risk-variant-a", "evidenceRole": "risk", "reviewLevel": "act", "dataState": "sufficient"},
+            {"ruleId": "risk-variant-b", "evidenceRole": "risk", "reviewLevel": "act", "dataState": "sufficient"},
+        ]
+        context["graphStoreInference"]["relations"] = [
+            {
+                "id": "relation-risk-a",
+                "source": "stock:005930",
+                "target": "risk:trend-a",
+                "type": "HAS_INFERRED_RISK",
+                "ruleId": "risk-variant-a",
+                "polarity": "risk",
+                "decisionStage": "LOSS_REDUCE",
+                "actionGroup": "lossControl",
+                "targetRole": "holding",
+            },
+            {
+                "id": "relation-risk-b",
+                "source": "stock:005930",
+                "target": "risk:trend-b",
+                "type": "HAS_INFERRED_RISK",
+                "ruleId": "risk-variant-b",
+                "polarity": "risk",
+                "decisionStage": "LOSS_REDUCE",
+                "actionGroup": "lossControl",
+                "targetRole": "holding",
+            },
+        ]
+        context["graphStoreInference"]["traces"] = [
+            {
+                "id": "trace-risk-a",
+                "ruleId": "risk-variant-a",
+                "ruleConditionShapes": [
+                    {"kind": "subject_property", "role": "required", "field": "profitLossRate", "operator": "<=", "value": -8},
+                    {"kind": "relation", "role": "required", "relationType": "BREAKS_LEVEL", "targetKind": "key-level", "targetPropertyFilters": {"levelType": ["ma20", "ma60"]}},
+                ],
+                "matchedConditionIds": ["loss-a", "trend-a"],
+                "matchedConditions": [
+                    {"conditionId": "loss-a", "kind": "subject_property", "field": "profitLossRate", "operator": "<=", "value": -8},
+                    {"conditionId": "trend-a", "kind": "relation", "relationType": "BREAKS_LEVEL", "targetKind": "key-level"},
+                ],
+            },
+            {
+                "id": "trace-risk-b",
+                "ruleId": "risk-variant-b",
+                "ruleConditionShapes": [
+                    {"kind": "subject_property", "role": "required", "field": "profitLossRate", "operator": "<=", "value": -8},
+                    {"kind": "relation", "role": "required", "relationType": "BREAKS_LEVEL", "targetKind": "key-level", "targetPropertyFilters": {"levelType": ["ma20", "ma60"]}},
+                ],
+                "matchedConditionIds": ["loss-b", "trend-b"],
+                "matchedConditions": [
+                    {"conditionId": "loss-b", "kind": "subject_property", "field": "profitLossRate", "operator": "<=", "value": -8},
+                    {"conditionId": "trend-b", "kind": "relation", "relationType": "BREAKS_LEVEL", "targetKind": "key-level"},
+                ],
+            },
+        ]
+
+        first = hypothesis_set_from_relation_context(context)["hypothesisSet"]
+        risk = [item for item in first["hypotheses"] if item["stance"] == "risk"]
+
+        self.assertEqual(1, len(risk))
+        self.assertEqual({"risk-variant-a", "risk-variant-b"}, set(risk[0]["supportingRuleIds"]))
+        self.assertEqual(2, risk[0]["mergedRuleCount"])
+        self.assertEqual("typedb-structural-signature", risk[0]["familySource"])
+        self.assertEqual(3, len(first["families"]))
+
+        context["inferenceGenerationId"] = "generation-2"
+        second = hypothesis_set_from_relation_context(context)["hypothesisSet"]
+        second_risk = next(item for item in second["hypotheses"] if item["stance"] == "risk")
+        self.assertEqual(risk[0]["familyId"], second_risk["familyId"])
+        self.assertNotEqual(risk[0]["hypothesisId"], second_risk["hypothesisId"])
+
+    def test_different_causal_mechanisms_do_not_compact_for_the_same_action(self):
+        context = relation_context()
+        context["facts"]["missingData"] = []
+        context["missingData"] = []
+        context["signalConflicts"] = {"hasConflict": False}
+        context["activeRules"] = [
+            {"ruleId": "trend-risk", "evidenceRole": "risk"},
+            {"ruleId": "flow-risk", "evidenceRole": "risk"},
+        ]
+        context["graphStoreInference"]["relations"] = [
+            {"id": "trend-risk-relation", "source": "stock:005930", "target": "risk:trend", "type": "HAS_INFERRED_RISK", "ruleId": "trend-risk", "polarity": "risk", "decisionStage": "LOSS_REDUCE"},
+            {"id": "flow-risk-relation", "source": "stock:005930", "target": "risk:flow", "type": "HAS_INFERRED_RISK", "ruleId": "flow-risk", "polarity": "risk", "decisionStage": "LOSS_REDUCE"},
+        ]
+        context["graphStoreInference"]["traces"] = [
+            {"id": "trace-trend", "ruleId": "trend-risk", "matchedConditions": [{"conditionId": "trend", "kind": "relation", "relationType": "BREAKS_LEVEL", "targetKind": "key-level"}]},
+            {"id": "trace-flow", "ruleId": "flow-risk", "matchedConditions": [{"conditionId": "flow", "kind": "relation", "relationType": "HAS_TRADE_FLOW", "targetKind": "smart-money-flow"}]},
+        ]
+
+        hypotheses = hypothesis_set_from_relation_context(context)["hypothesisSet"]["hypotheses"]
+        risk = [item for item in hypotheses if item["stance"] == "risk"]
+
+        self.assertEqual(2, len(risk))
+        self.assertEqual({"trend-risk", "flow-risk"}, {item["supportingRuleIds"][0] for item in risk})
+        self.assertTrue(all(item["mergedRuleCount"] == 1 for item in risk))
+
+    def test_legacy_traces_without_a_rule_structure_do_not_compact(self):
+        context = relation_context()
+        context["facts"]["missingData"] = []
+        context["missingData"] = []
+        context["signalConflicts"] = {"hasConflict": False}
+        context["activeRules"] = [
+            {"ruleId": "legacy-risk-a", "evidenceRole": "risk"},
+            {"ruleId": "legacy-risk-b", "evidenceRole": "risk"},
+        ]
+        context["graphStoreInference"]["relations"] = [
+            {"id": "legacy-risk-a-relation", "source": "stock:005930", "target": "risk:legacy-a", "type": "HAS_INFERRED_RISK", "ruleId": "legacy-risk-a", "polarity": "risk", "decisionStage": "LOSS_REDUCE"},
+            {"id": "legacy-risk-b-relation", "source": "stock:005930", "target": "risk:legacy-b", "type": "HAS_INFERRED_RISK", "ruleId": "legacy-risk-b", "polarity": "risk", "decisionStage": "LOSS_REDUCE"},
+        ]
+        context["graphStoreInference"]["traces"] = [
+            {"id": "legacy-trace-a", "ruleId": "legacy-risk-a", "matchedConditions": [{"kind": "relation", "relationType": "BREAKS_LEVEL", "targetKind": "key-level"}]},
+            {"id": "legacy-trace-b", "ruleId": "legacy-risk-b", "matchedConditions": [{"kind": "relation", "relationType": "BREAKS_LEVEL", "targetKind": "key-level"}]},
+        ]
+
+        hypotheses = hypothesis_set_from_relation_context(context)["hypothesisSet"]["hypotheses"]
+        risk = [item for item in hypotheses if item["stance"] == "risk"]
+
+        self.assertEqual(2, len(risk))
+        self.assertTrue(all(item["familySource"] == "typedb-rule-id-fallback" for item in risk))
+
+    def test_rulebox_explicit_family_key_compacts_configured_variants(self):
+        context = relation_context()
+        context["facts"]["missingData"] = []
+        context["missingData"] = []
+        context["signalConflicts"] = {"hasConflict": False}
+        context["activeRules"] = [
+            {"ruleId": "loss-guard-soft", "evidenceRole": "risk", "hypothesisFamilyKey": "loss-guard"},
+            {"ruleId": "loss-guard-strict", "evidenceRole": "risk", "hypothesisFamilyKey": "loss-guard"},
+        ]
+        context["graphStoreInference"]["relations"] = [
+            {"id": "loss-guard-soft-relation", "source": "stock:005930", "target": "risk:soft", "type": "HAS_INFERRED_RISK", "ruleId": "loss-guard-soft", "polarity": "risk", "hypothesisFamilyKey": "loss-guard", "decisionStage": "LOSS_REDUCE"},
+            {"id": "loss-guard-strict-relation", "source": "stock:005930", "target": "risk:strict", "type": "HAS_INFERRED_RISK", "ruleId": "loss-guard-strict", "polarity": "risk", "hypothesisFamilyKey": "loss-guard", "decisionStage": "LOSS_REDUCE"},
+        ]
+
+        hypotheses = hypothesis_set_from_relation_context(context)["hypothesisSet"]
+        risk = [item for item in hypotheses["hypotheses"] if item["stance"] == "risk"]
+
+        self.assertEqual(1, len(risk))
+        self.assertEqual({"loss-guard-soft", "loss-guard-strict"}, set(risk[0]["supportingRuleIds"]))
+        self.assertEqual("rulebox-explicit-family-key", risk[0]["familySource"])
+
+    def test_different_rule_filters_do_not_compact_for_the_same_relation(self):
+        context = relation_context()
+        context["facts"]["missingData"] = []
+        context["missingData"] = []
+        context["signalConflicts"] = {"hasConflict": False}
+        context["activeRules"] = [
+            {"ruleId": "ma20-risk", "evidenceRole": "risk"},
+            {"ruleId": "ma60-risk", "evidenceRole": "risk"},
+        ]
+        context["graphStoreInference"]["relations"] = [
+            {"id": "ma20-risk-relation", "source": "stock:005930", "target": "risk:ma20", "type": "HAS_INFERRED_RISK", "ruleId": "ma20-risk", "polarity": "risk", "decisionStage": "LOSS_REDUCE"},
+            {"id": "ma60-risk-relation", "source": "stock:005930", "target": "risk:ma60", "type": "HAS_INFERRED_RISK", "ruleId": "ma60-risk", "polarity": "risk", "decisionStage": "LOSS_REDUCE"},
+        ]
+        context["graphStoreInference"]["traces"] = [
+            {"id": "trace-ma20", "ruleId": "ma20-risk", "ruleConditionShapes": [{"kind": "relation", "role": "required", "relationType": "BREAKS_LEVEL", "targetKind": "key-level", "targetPropertyFilters": {"levelType": "ma20"}}]},
+            {"id": "trace-ma60", "ruleId": "ma60-risk", "ruleConditionShapes": [{"kind": "relation", "role": "required", "relationType": "BREAKS_LEVEL", "targetKind": "key-level", "targetPropertyFilters": {"levelType": "ma60"}}]},
+        ]
+
+        hypotheses = hypothesis_set_from_relation_context(context)["hypothesisSet"]["hypotheses"]
+        risk = [item for item in hypotheses if item["stance"] == "risk"]
+
+        self.assertEqual(2, len(risk))
+        self.assertEqual({"ma20-risk", "ma60-risk"}, {item["supportingRuleIds"][0] for item in risk})
+
     def test_one_sided_typedb_paths_reserve_counterfactual_safety_hypothesis(self):
         context = relation_context()
         context["activeRules"] = [context["activeRules"][0]]
@@ -415,6 +586,7 @@ class InvestmentBrainTest(unittest.TestCase):
         self.assertIn("공시 본문", response.unresolved_questions[0])
         prompt = build_notification_ai_gate_prompt(context)
         self.assertIn("경쟁 가설", prompt)
+        self.assertIn("familyId", prompt)
         self.assertIn("selectedHypothesisId", prompt)
         context["ontologyRelationContext"]["facts"]["allAvailableData"] = "GRAPH_RAG_DUPLICATE_SENTINEL" * 2000
         compact_prompt = build_notification_ai_gate_prompt(context)
@@ -568,9 +740,11 @@ class InvestmentBrainTest(unittest.TestCase):
         classes = {item.properties.get("tboxClass") for item in graph.entities}
         relation_types = {item.relation_type for item in graph.relations}
         self.assertIn("DecisionEpisode", classes)
+        self.assertIn("HypothesisFamily", classes)
         self.assertIn("CompetingHypothesis", classes)
         self.assertIn("SELECTS_HYPOTHESIS", relation_types)
         self.assertIn("COMPETES_WITH_HYPOTHESIS", relation_types)
+        self.assertIn("INSTANTIATES_HYPOTHESIS_FAMILY", relation_types)
         self.assertIn("VerifiedClaim", classes)
         self.assertIn("EvidenceAssessment", classes)
         self.assertIn("NovelHypothesisProposal", classes)
@@ -598,13 +772,13 @@ class InvestmentBrainTest(unittest.TestCase):
         class_names = {item.name for item in CLASS_DEFS}
         relation_names = {item.name for item in RELATION_DEFS}
         for name in [
-            "InvestmentQuestion", "HypothesisSet", "CompetingHypothesis", "ObservedOutcome", "LearningProposal",
+            "InvestmentQuestion", "HypothesisSet", "HypothesisFamily", "CompetingHypothesis", "ObservedOutcome", "LearningProposal",
             "ResearchSourcePolicy", "VerificationRun", "VerifiedClaim", "NovelHypothesisProposal",
         ]:
             self.assertIn(name, class_names)
         for name in [
             "ASKS_ABOUT", "COMPETES_WITH_HYPOTHESIS", "SELECTS_HYPOTHESIS", "RESULTED_IN_OUTCOME", "LEARNED_FROM",
-            "TESTS_HYPOTHESIS", "INSTANTIATES_HYPOTHESIS_TEMPLATE", "PRODUCES_VERIFICATION_RESULT",
+            "TESTS_HYPOTHESIS", "INSTANTIATES_HYPOTHESIS_FAMILY", "INSTANTIATES_HYPOTHESIS_TEMPLATE", "PRODUCES_VERIFICATION_RESULT",
             "PROPOSES_HYPOTHESIS_FOR",
         ]:
             self.assertIn(name, relation_names)

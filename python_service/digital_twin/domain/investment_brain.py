@@ -5,11 +5,21 @@ import json
 import re
 from typing import Dict, Iterable, List, Optional
 
+from .hypothesis_scoping import (
+    ACCOUNT_ONLY_SCOPE,
+    HYPOTHESIS_SCOPE_VERSION,
+    MARKET_SHARED_SCOPE,
+    MIXED_SCOPE,
+    SYSTEM_SAFETY_SCOPE,
+    UNVERIFIED_SCOPE,
+    inference_scope_assessment,
+)
 from .ontology_decision_state import DATA_STATES, REVIEW_LEVELS, VALIDATION_STATES
+from .ontology_worlds import market_world
 
 
-INVESTMENT_BRAIN_VERSION = "ontology-investment-brain-v4"
-HYPOTHESIS_SET_VERSION = "typedb-causal-hypotheses-v4"
+INVESTMENT_BRAIN_VERSION = "ontology-investment-brain-v5"
+HYPOTHESIS_SET_VERSION = "typedb-causal-hypotheses-v5"
 SYSTEM_ABSTENTION_TEMPLATE_ID = "hypothesis-template:system.evidence-sufficiency.v1"
 META_INFERENCE_RELATION_TYPES = {
     "EXPLAINED_BY_TRACE",
@@ -210,6 +220,68 @@ class HypothesisFamily:
     candidate_hypothesis_ids: List[str] = field(default_factory=list)
     source: str = "typedb-structural-signature"
     merged_rule_count: int = 0
+    scope_state: str = UNVERIFIED_SCOPE
+    market_hypothesis_id: str = ""
+    account_overlay_ids: List[str] = field(default_factory=list)
+
+    def to_dict(self) -> Dict[str, object]:
+        return camelize(asdict(self))
+
+
+@dataclass(frozen=True)
+class MarketHypothesis:
+    """A non-actionable, account-independent causal hypothesis identity.
+
+    These records remain in a PortfolioWorld decision episode as references.
+    They deliberately do not turn a private decision or action into a
+    MarketWorld fact. Identical market paths therefore share one deterministic
+    identity across accounts without leaking account context.
+    """
+
+    market_hypothesis_id: str
+    market_world_id: str
+    market_id: str
+    subject_symbol: str
+    horizon: str
+    causal_signature: str
+    stance: str = "context"
+    source_rule_ids: List[str] = field(default_factory=list)
+    market_condition_ids: List[str] = field(default_factory=list)
+    market_relation_types: List[str] = field(default_factory=list)
+    source: str = "typedb-market-scope-projection"
+    scope_state: str = MARKET_SHARED_SCOPE
+    scope_version: str = HYPOTHESIS_SCOPE_VERSION
+
+    def to_dict(self) -> Dict[str, object]:
+        return camelize(asdict(self))
+
+
+@dataclass(frozen=True)
+class AccountHypothesisOverlay:
+    """Private account context applied to a hypothesis family.
+
+    It records ownership and action constraints only. TypeDB remains the
+    source of the actual inference path and this object never creates a new
+    investment action in Python.
+    """
+
+    account_overlay_id: str
+    account_id: str
+    portfolio_world_id: str
+    family_id: str
+    scope_state: str
+    market_hypothesis_id: str = ""
+    target_roles: List[str] = field(default_factory=list)
+    action_policies: List[str] = field(default_factory=list)
+    allowed_actions: List[str] = field(default_factory=list)
+    blocked_actions: List[str] = field(default_factory=list)
+    account_condition_ids: List[str] = field(default_factory=list)
+    account_fields: List[str] = field(default_factory=list)
+    account_relation_types: List[str] = field(default_factory=list)
+    account_target_kinds: List[str] = field(default_factory=list)
+    source_rule_ids: List[str] = field(default_factory=list)
+    source: str = "typedb-account-context-projection"
+    scope_version: str = HYPOTHESIS_SCOPE_VERSION
 
     def to_dict(self) -> Dict[str, object]:
         return camelize(asdict(self))
@@ -241,6 +313,26 @@ class InvestmentHypothesis:
     causal_signature: str = ""
     family_source: str = "typedb-structural-signature"
     merged_rule_count: int = 1
+    scope_state: str = UNVERIFIED_SCOPE
+    scope_version: str = HYPOTHESIS_SCOPE_VERSION
+    market_hypothesis_id: str = ""
+    market_world_id: str = ""
+    market_id: str = ""
+    subject_symbol: str = ""
+    market_causal_signature: str = ""
+    market_condition_ids: List[str] = field(default_factory=list)
+    market_relation_types: List[str] = field(default_factory=list)
+    account_hypothesis_overlay_id: str = ""
+    account_id: str = ""
+    portfolio_world_id: str = ""
+    account_condition_ids: List[str] = field(default_factory=list)
+    account_fields: List[str] = field(default_factory=list)
+    account_relation_types: List[str] = field(default_factory=list)
+    account_target_kinds: List[str] = field(default_factory=list)
+    target_roles: List[str] = field(default_factory=list)
+    action_policies: List[str] = field(default_factory=list)
+    allowed_actions: List[str] = field(default_factory=list)
+    blocked_actions: List[str] = field(default_factory=list)
 
     def to_dict(self) -> Dict[str, object]:
         return camelize(asdict(self))
@@ -290,6 +382,9 @@ class HypothesisSet:
     minimum_comparison_count: int = 3
     inference_generation_id: str = ""
     families: List[HypothesisFamily] = field(default_factory=list)
+    market_hypotheses: List[MarketHypothesis] = field(default_factory=list)
+    account_overlays: List[AccountHypothesisOverlay] = field(default_factory=list)
+    scope_version: str = HYPOTHESIS_SCOPE_VERSION
     created_at: str = field(default_factory=utc_now_iso)
     version: str = HYPOTHESIS_SET_VERSION
 
@@ -297,6 +392,8 @@ class HypothesisSet:
         payload = camelize(asdict(self))
         payload["hypotheses"] = [item.to_dict() for item in self.hypotheses]
         payload["families"] = [item.to_dict() for item in self.families]
+        payload["marketHypotheses"] = [item.to_dict() for item in self.market_hypotheses]
+        payload["accountOverlays"] = [item.to_dict() for item in self.account_overlays]
         return payload
 
 
@@ -425,6 +522,26 @@ class DecisionEpisode:
                     0,
                     1000,
                 ),
+                scope_state=str(item.get("scopeState") or item.get("scope_state") or UNVERIFIED_SCOPE),
+                scope_version=str(item.get("scopeVersion") or item.get("scope_version") or HYPOTHESIS_SCOPE_VERSION),
+                market_hypothesis_id=str(item.get("marketHypothesisId") or item.get("market_hypothesis_id") or ""),
+                market_world_id=str(item.get("marketWorldId") or item.get("market_world_id") or ""),
+                market_id=str(item.get("marketId") or item.get("market_id") or ""),
+                subject_symbol=str(item.get("subjectSymbol") or item.get("subject_symbol") or ""),
+                market_causal_signature=str(item.get("marketCausalSignature") or item.get("market_causal_signature") or ""),
+                market_condition_ids=list(item.get("marketConditionIds") or item.get("market_condition_ids") or []),
+                market_relation_types=list(item.get("marketRelationTypes") or item.get("market_relation_types") or []),
+                account_hypothesis_overlay_id=str(item.get("accountHypothesisOverlayId") or item.get("account_hypothesis_overlay_id") or ""),
+                account_id=str(item.get("accountId") or item.get("account_id") or ""),
+                portfolio_world_id=str(item.get("portfolioWorldId") or item.get("portfolio_world_id") or ""),
+                account_condition_ids=list(item.get("accountConditionIds") or item.get("account_condition_ids") or []),
+                account_fields=list(item.get("accountFields") or item.get("account_fields") or []),
+                account_relation_types=list(item.get("accountRelationTypes") or item.get("account_relation_types") or []),
+                account_target_kinds=list(item.get("accountTargetKinds") or item.get("account_target_kinds") or []),
+                target_roles=list(item.get("targetRoles") or item.get("target_roles") or []),
+                action_policies=list(item.get("actionPolicies") or item.get("action_policies") or []),
+                allowed_actions=list(item.get("allowedActions") or item.get("allowed_actions") or []),
+                blocked_actions=list(item.get("blockedActions") or item.get("blocked_actions") or []),
             ))
         families = []
         for item in hypothesis_payload.get("families") or []:
@@ -452,9 +569,64 @@ class DecisionEpisode:
                     0,
                     1000,
                 ),
+                scope_state=str(item.get("scopeState") or item.get("scope_state") or UNVERIFIED_SCOPE),
+                market_hypothesis_id=str(item.get("marketHypothesisId") or item.get("market_hypothesis_id") or ""),
+                account_overlay_ids=list(item.get("accountOverlayIds") or item.get("account_overlay_ids") or []),
             ))
         if not families:
             families = hypothesis_families_from_hypotheses(hypotheses)
+        market_hypotheses = []
+        for item in hypothesis_payload.get("marketHypotheses") or hypothesis_payload.get("market_hypotheses") or []:
+            if not isinstance(item, dict):
+                continue
+            market_hypothesis_id = str(item.get("marketHypothesisId") or item.get("market_hypothesis_id") or "").strip()
+            if not market_hypothesis_id:
+                continue
+            market_hypotheses.append(MarketHypothesis(
+                market_hypothesis_id=market_hypothesis_id,
+                market_world_id=str(item.get("marketWorldId") or item.get("market_world_id") or ""),
+                market_id=str(item.get("marketId") or item.get("market_id") or ""),
+                subject_symbol=str(item.get("subjectSymbol") or item.get("subject_symbol") or ""),
+                horizon=str(item.get("horizon") or "multi-horizon"),
+                causal_signature=str(item.get("causalSignature") or item.get("causal_signature") or ""),
+                stance=str(item.get("stance") or "context"),
+                source_rule_ids=list(item.get("sourceRuleIds") or item.get("source_rule_ids") or []),
+                market_condition_ids=list(item.get("marketConditionIds") or item.get("market_condition_ids") or []),
+                market_relation_types=list(item.get("marketRelationTypes") or item.get("market_relation_types") or []),
+                source=str(item.get("source") or "typedb-market-scope-projection"),
+                scope_state=str(item.get("scopeState") or item.get("scope_state") or MARKET_SHARED_SCOPE),
+                scope_version=str(item.get("scopeVersion") or item.get("scope_version") or HYPOTHESIS_SCOPE_VERSION),
+            ))
+        if not market_hypotheses:
+            market_hypotheses = market_hypotheses_from_hypotheses(hypotheses)
+        account_overlays = []
+        for item in hypothesis_payload.get("accountOverlays") or hypothesis_payload.get("account_overlays") or []:
+            if not isinstance(item, dict):
+                continue
+            overlay_id = str(item.get("accountOverlayId") or item.get("account_overlay_id") or "").strip()
+            if not overlay_id:
+                continue
+            account_overlays.append(AccountHypothesisOverlay(
+                account_overlay_id=overlay_id,
+                account_id=str(item.get("accountId") or item.get("account_id") or ""),
+                portfolio_world_id=str(item.get("portfolioWorldId") or item.get("portfolio_world_id") or ""),
+                family_id=str(item.get("familyId") or item.get("family_id") or ""),
+                scope_state=str(item.get("scopeState") or item.get("scope_state") or UNVERIFIED_SCOPE),
+                market_hypothesis_id=str(item.get("marketHypothesisId") or item.get("market_hypothesis_id") or ""),
+                target_roles=list(item.get("targetRoles") or item.get("target_roles") or []),
+                action_policies=list(item.get("actionPolicies") or item.get("action_policies") or []),
+                allowed_actions=list(item.get("allowedActions") or item.get("allowed_actions") or []),
+                blocked_actions=list(item.get("blockedActions") or item.get("blocked_actions") or []),
+                account_condition_ids=list(item.get("accountConditionIds") or item.get("account_condition_ids") or []),
+                account_fields=list(item.get("accountFields") or item.get("account_fields") or []),
+                account_relation_types=list(item.get("accountRelationTypes") or item.get("account_relation_types") or []),
+                account_target_kinds=list(item.get("accountTargetKinds") or item.get("account_target_kinds") or []),
+                source_rule_ids=list(item.get("sourceRuleIds") or item.get("source_rule_ids") or []),
+                source=str(item.get("source") or "typedb-account-context-projection"),
+                scope_version=str(item.get("scopeVersion") or item.get("scope_version") or HYPOTHESIS_SCOPE_VERSION),
+            ))
+        if not account_overlays:
+            account_overlays = account_overlays_from_hypotheses(hypotheses)
         hypothesis_set = HypothesisSet(
             hypothesis_set_id=str(hypothesis_payload.get("hypothesisSetId") or hypothesis_payload.get("hypothesis_set_id") or ""),
             subject_symbol=str(hypothesis_payload.get("subjectSymbol") or hypothesis_payload.get("subject_symbol") or ""),
@@ -464,6 +636,9 @@ class DecisionEpisode:
             minimum_comparison_count=int(hypothesis_payload.get("minimumComparisonCount") or 3),
             inference_generation_id=str(hypothesis_payload.get("inferenceGenerationId") or ""),
             families=families,
+            market_hypotheses=market_hypotheses,
+            account_overlays=account_overlays,
+            scope_version=str(hypothesis_payload.get("scopeVersion") or hypothesis_payload.get("scope_version") or HYPOTHESIS_SCOPE_VERSION),
             created_at=str(hypothesis_payload.get("createdAt") or utc_now_iso()),
             version=str(hypothesis_payload.get("version") or HYPOTHESIS_SET_VERSION),
         )
@@ -611,7 +786,12 @@ def question_horizon(text: str) -> str:
     return "multi-horizon"
 
 
-def default_question(subject: Dict[str, object], facts: Dict[str, object], inference_generation_id: str = "") -> InvestmentQuestion:
+def default_question(
+    subject: Dict[str, object],
+    facts: Dict[str, object],
+    inference_generation_id: str = "",
+    account_id: str = "",
+) -> InvestmentQuestion:
     symbol = str(subject.get("symbol") or facts.get("symbol") or "").upper().strip()
     name = str(subject.get("name") or facts.get("name") or symbol)
     source = "관심종목" if facts.get("isWatchlist") else "보유종목"
@@ -619,9 +799,116 @@ def default_question(subject: Dict[str, object], facts: Dict[str, object], infer
         name + " " + source + "에서 현재 행동을 바꿀 만큼 중요한 변화가 있는가?",
         subject_symbol=symbol,
         subject_name=name,
+        account_id=account_id,
         asked_at=str(facts.get("observedAt") or inference_generation_id or utc_now_iso()),
         source="system-self-question",
     )
+
+
+def hypothesis_scope_context(
+    context: Dict[str, object],
+    subject: Dict[str, object],
+    facts: Dict[str, object],
+    question: InvestmentQuestion,
+) -> Dict[str, str]:
+    """Collect ownership identifiers without turning them into rule inputs."""
+    context = context if isinstance(context, dict) else {}
+    subject = subject if isinstance(subject, dict) else {}
+    facts = facts if isinstance(facts, dict) else {}
+    account_id = str(
+        context.get("accountId")
+        or context.get("account_id")
+        or facts.get("accountId")
+        or facts.get("account_id")
+        or question.account_id
+        or ""
+    ).strip()
+    portfolio_world_id = str(
+        context.get("portfolioWorldId")
+        or context.get("portfolio_world_id")
+        or context.get("worldId")
+        or ""
+    ).strip()
+    if portfolio_world_id and not portfolio_world_id.lower().startswith("portfolio:"):
+        portfolio_world_id = ""
+    market_id = str(
+        context.get("marketId")
+        or context.get("market_id")
+        or subject.get("market")
+        or facts.get("market")
+        or "global"
+    ).strip()
+    market_world_id = str(
+        context.get("marketWorldId")
+        or context.get("market_world_id")
+        or ""
+    ).strip()
+    if not market_world_id:
+        market_world_id = market_world(market_id).world_id
+    return {
+        "accountId": account_id,
+        "portfolioWorldId": portfolio_world_id,
+        "marketId": market_id,
+        "marketWorldId": market_world_id,
+    }
+
+
+def metadata_text_values(rows: Iterable[Dict[str, object]], *keys: str) -> List[str]:
+    values: List[str] = []
+    for row in rows or []:
+        if not isinstance(row, dict):
+            continue
+        for key in keys:
+            value = row.get(key)
+            if isinstance(value, (list, tuple, set)):
+                values.extend(str(item) for item in value if str(item or "").strip())
+            elif value not in (None, ""):
+                values.append(str(value))
+    return unique_texts(values, 24)
+
+
+def account_overlay_metadata(
+    rows: Iterable[Dict[str, object]],
+    traces: Iterable[Dict[str, object]],
+    matches: Iterable[Dict[str, object]],
+) -> Dict[str, List[str]]:
+    metadata_rows = [
+        dict(item)
+        for item in list(rows or []) + list(traces or []) + list(matches or [])
+        if isinstance(item, dict)
+    ]
+    return {
+        "targetRoles": metadata_text_values(metadata_rows, "targetRole", "target_role"),
+        "actionPolicies": metadata_text_values(metadata_rows, "actionPolicy", "action_policy"),
+        "allowedActions": metadata_text_values(metadata_rows, "allowedActions", "allowed_actions"),
+        "blockedActions": metadata_text_values(metadata_rows, "blockedActions", "blocked_actions"),
+    }
+
+
+def account_overlay_id_for_scope(
+    scope_context: Dict[str, str],
+    family_id: str,
+    scope_assessment: Dict[str, object],
+    metadata: Dict[str, List[str]],
+) -> str:
+    account_id = str(scope_context.get("accountId") or "").strip()
+    portfolio_world_id = str(scope_context.get("portfolioWorldId") or "").strip()
+    account_identity = portfolio_world_id or account_id
+    if not account_identity:
+        return ""
+    shape = {
+        "scopeState": scope_assessment.get("scopeState"),
+        "accountConditionIds": sorted(scope_assessment.get("accountConditionIds") or []),
+        "accountFields": sorted(scope_assessment.get("accountFields") or []),
+        "accountRelationTypes": sorted(scope_assessment.get("accountRelationTypes") or []),
+        "accountTargetKinds": sorted(scope_assessment.get("accountTargetKinds") or []),
+        "targetRoles": sorted(metadata.get("targetRoles") or []),
+        "actionPolicies": sorted(metadata.get("actionPolicies") or []),
+        "allowedActions": sorted(metadata.get("allowedActions") or []),
+        "blockedActions": sorted(metadata.get("blockedActions") or []),
+    }
+    signature = json.dumps(shape, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
+    return stable_id("account-hypothesis-overlay", account_identity, family_id, signature)
 
 
 def hypothesis_set_from_relation_context(
@@ -631,7 +918,20 @@ def hypothesis_set_from_relation_context(
     context = relation_context if isinstance(relation_context, dict) else {}
     subject = context.get("subject") if isinstance(context.get("subject"), dict) else {}
     facts = context.get("facts") if isinstance(context.get("facts"), dict) else {}
-    question = question or default_question(subject, facts, str(context.get("inferenceGenerationId") or ""))
+    account_id = str(
+        context.get("accountId")
+        or context.get("account_id")
+        or facts.get("accountId")
+        or facts.get("account_id")
+        or ""
+    ).strip()
+    question = question or default_question(
+        subject,
+        facts,
+        str(context.get("inferenceGenerationId") or ""),
+        account_id=account_id,
+    )
+    scope_context = hypothesis_scope_context(context, subject, facts, question)
     hypothesis_set, research_plan = build_competing_hypotheses(
         subject=subject,
         facts=facts,
@@ -643,6 +943,7 @@ def hypothesis_set_from_relation_context(
         inference_generation_id=str(context.get("inferenceGenerationId") or ""),
         question=question,
         policy=context.get("hypothesisPolicy") if isinstance(context.get("hypothesisPolicy"), dict) else {},
+        scope_context=scope_context,
     )
     return {
         "question": question.to_dict(),
@@ -665,6 +966,7 @@ def build_competing_hypotheses(
     inference_generation_id: str,
     question: InvestmentQuestion,
     policy: Dict[str, object] = None,
+    scope_context: Dict[str, str] = None,
 ) -> tuple:
     symbol = str(subject.get("symbol") or facts.get("symbol") or question.subject_symbol or "").upper().strip()
     name = str(subject.get("name") or facts.get("name") or question.subject_name or symbol)
@@ -672,6 +974,7 @@ def build_competing_hypotheses(
     trace_rows = [dict(item) for item in traces or [] if isinstance(item, dict)]
     match_rows = [dict(item) for item in matches or [] if isinstance(item, dict)]
     policy = policy if isinstance(policy, dict) else {}
+    scope_context = scope_context if isinstance(scope_context, dict) else {}
     minimum_count = int_setting(policy.get("minimumComparisonCount"), 3, 2, 6)
     maximum_count = int_setting(policy.get("maximumComparisonCount"), 8, minimum_count, 12)
     hypothesis_seed = stable_id("hypothesis-set", question.question_id, inference_generation_id, symbol)
@@ -687,6 +990,7 @@ def build_competing_hypotheses(
             traces_for_rule(trace_rows, rule_id),
             matches_for_rule(match_rows, rule_id),
             relation_rows,
+            scope_context,
         )
         for rule_id in rule_keys
     ]
@@ -718,6 +1022,8 @@ def build_competing_hypotheses(
         minimum_comparison_count=minimum_count,
         inference_generation_id=inference_generation_id,
         families=hypothesis_families_from_hypotheses(hypotheses),
+        market_hypotheses=market_hypotheses_from_hypotheses(hypotheses),
+        account_overlays=account_overlays_from_hypotheses(hypotheses),
     ), research_plan
 
 
@@ -832,6 +1138,7 @@ def hypothesis_from_inference_rule(
     traces: List[Dict[str, object]],
     matches: List[Dict[str, object]],
     all_rows: List[Dict[str, object]],
+    scope_context: Dict[str, str] = None,
 ) -> Optional[InvestmentHypothesis]:
     if not rule_id or not (rows or traces or matches):
         return None
@@ -861,11 +1168,34 @@ def hypothesis_from_inference_rule(
         traces,
         matches,
     )
+    scope_context = scope_context if isinstance(scope_context, dict) else {}
+    scope_assessment = inference_scope_assessment(traces, matches, rows, stance)
+    scope_state = str(scope_assessment.get("scopeState") or UNVERIFIED_SCOPE)
     family_id = stable_id(
         "hypothesis-family",
         str(symbol or question.subject_symbol or name).upper(),
         question.horizon,
         causal_signature,
+        scope_state,
+    )
+    market_id = str(scope_context.get("marketId") or "global").upper()
+    market_world_id = str(scope_context.get("marketWorldId") or "")
+    market_causal_signature = str(scope_assessment.get("marketCausalSignature") or "")
+    market_hypothesis_id = ""
+    if scope_state == MARKET_SHARED_SCOPE and market_causal_signature and market_world_id:
+        market_hypothesis_id = stable_id(
+            "market-hypothesis",
+            market_world_id,
+            str(symbol or question.subject_symbol or name).upper(),
+            question.horizon,
+            market_causal_signature,
+        )
+    overlay_metadata = account_overlay_metadata(rows, traces, matches)
+    account_overlay_id = account_overlay_id_for_scope(
+        scope_context,
+        family_id,
+        scope_assessment,
+        overlay_metadata,
     )
     return InvestmentHypothesis(
         hypothesis_id=stable_id("hypothesis-instance", hypothesis_seed, family_id, rule_id),
@@ -894,6 +1224,26 @@ def hypothesis_from_inference_rule(
         causal_signature=causal_signature,
         family_source=family_source,
         merged_rule_count=1,
+        scope_state=scope_state,
+        scope_version=str(scope_assessment.get("scopeVersion") or HYPOTHESIS_SCOPE_VERSION),
+        market_hypothesis_id=market_hypothesis_id,
+        market_world_id=market_world_id if market_hypothesis_id else "",
+        market_id=market_id if market_hypothesis_id else "",
+        subject_symbol=str(symbol or question.subject_symbol or name).upper(),
+        market_causal_signature=market_causal_signature,
+        market_condition_ids=list(scope_assessment.get("marketConditionIds") or []),
+        market_relation_types=list(scope_assessment.get("marketRelationTypes") or []),
+        account_hypothesis_overlay_id=account_overlay_id,
+        account_id=str(scope_context.get("accountId") or ""),
+        portfolio_world_id=str(scope_context.get("portfolioWorldId") or ""),
+        account_condition_ids=list(scope_assessment.get("accountConditionIds") or []),
+        account_fields=list(scope_assessment.get("accountFields") or []),
+        account_relation_types=list(scope_assessment.get("accountRelationTypes") or []),
+        account_target_kinds=list(scope_assessment.get("accountTargetKinds") or []),
+        target_roles=list(overlay_metadata.get("targetRoles") or []),
+        action_policies=list(overlay_metadata.get("actionPolicies") or []),
+        allowed_actions=list(overlay_metadata.get("allowedActions") or []),
+        blocked_actions=list(overlay_metadata.get("blockedActions") or []),
     )
 
 
@@ -1159,8 +1509,83 @@ def compact_hypotheses_by_causal_family(
             causal_signature=primary.causal_signature,
             family_source=primary.family_source,
             merged_rule_count=count,
+            scope_state=merged_hypothesis_scope_state(ordered),
+            scope_version=primary.scope_version or HYPOTHESIS_SCOPE_VERSION,
+            market_hypothesis_id=common_hypothesis_value(ordered, "market_hypothesis_id"),
+            market_world_id=common_hypothesis_value(ordered, "market_world_id"),
+            market_id=common_hypothesis_value(ordered, "market_id"),
+            subject_symbol=common_hypothesis_value(ordered, "subject_symbol"),
+            market_causal_signature=common_hypothesis_value(ordered, "market_causal_signature"),
+            market_condition_ids=unique_texts(
+                [value for item in ordered for value in item.market_condition_ids],
+                24,
+            ),
+            market_relation_types=unique_texts(
+                [value for item in ordered for value in item.market_relation_types],
+                24,
+            ),
+            account_hypothesis_overlay_id=common_hypothesis_value(ordered, "account_hypothesis_overlay_id"),
+            account_id=common_hypothesis_value(ordered, "account_id"),
+            portfolio_world_id=common_hypothesis_value(ordered, "portfolio_world_id"),
+            account_condition_ids=unique_texts(
+                [value for item in ordered for value in item.account_condition_ids],
+                24,
+            ),
+            account_fields=unique_texts(
+                [value for item in ordered for value in item.account_fields],
+                24,
+            ),
+            account_relation_types=unique_texts(
+                [value for item in ordered for value in item.account_relation_types],
+                24,
+            ),
+            account_target_kinds=unique_texts(
+                [value for item in ordered for value in item.account_target_kinds],
+                24,
+            ),
+            target_roles=unique_texts(
+                [value for item in ordered for value in item.target_roles],
+                12,
+            ),
+            action_policies=unique_texts(
+                [value for item in ordered for value in item.action_policies],
+                12,
+            ),
+            allowed_actions=unique_texts(
+                [value for item in ordered for value in item.allowed_actions],
+                12,
+            ),
+            blocked_actions=unique_texts(
+                [value for item in ordered for value in item.blocked_actions],
+                12,
+            ),
         ))
     return compacted
+
+
+def common_hypothesis_value(hypotheses: Iterable[InvestmentHypothesis], field_name: str) -> str:
+    values = {
+        str(getattr(item, field_name, "") or "").strip()
+        for item in hypotheses or []
+        if str(getattr(item, field_name, "") or "").strip()
+    }
+    return next(iter(values)) if len(values) == 1 else ""
+
+
+def merged_hypothesis_scope_state(hypotheses: Iterable[InvestmentHypothesis]) -> str:
+    states = {
+        str(item.scope_state or UNVERIFIED_SCOPE)
+        for item in hypotheses or []
+    }
+    if not states:
+        return UNVERIFIED_SCOPE
+    if len(states) == 1:
+        return next(iter(states))
+    if MIXED_SCOPE in states or {MARKET_SHARED_SCOPE, ACCOUNT_ONLY_SCOPE}.issubset(states):
+        return MIXED_SCOPE
+    if UNVERIFIED_SCOPE in states:
+        return UNVERIFIED_SCOPE
+    return MIXED_SCOPE
 
 
 def merged_hypothesis_evidence_state(hypotheses: Iterable[InvestmentHypothesis]) -> str:
@@ -1207,8 +1632,113 @@ def hypothesis_families_from_hypotheses(
             candidate_hypothesis_ids=[item.hypothesis_id for item in members if item.hypothesis_id],
             source=primary.family_source or "typedb-structural-signature",
             merged_rule_count=len(source_rule_ids),
+            scope_state=merged_hypothesis_scope_state(members),
+            market_hypothesis_id=common_hypothesis_value(members, "market_hypothesis_id"),
+            account_overlay_ids=sorted({
+                item.account_hypothesis_overlay_id
+                for item in members
+                if item.account_hypothesis_overlay_id
+            }),
         ))
     return families
+
+
+def market_hypotheses_from_hypotheses(
+    hypotheses: Iterable[InvestmentHypothesis],
+) -> List[MarketHypothesis]:
+    groups: Dict[str, List[InvestmentHypothesis]] = {}
+    for hypothesis in hypotheses or []:
+        market_hypothesis_id = str(hypothesis.market_hypothesis_id or "").strip()
+        if not market_hypothesis_id or hypothesis.scope_state != MARKET_SHARED_SCOPE:
+            continue
+        groups.setdefault(market_hypothesis_id, []).append(hypothesis)
+    result: List[MarketHypothesis] = []
+    for market_hypothesis_id, members in sorted(groups.items()):
+        primary = members[0]
+        result.append(MarketHypothesis(
+            market_hypothesis_id=market_hypothesis_id,
+            market_world_id=primary.market_world_id,
+            market_id=primary.market_id,
+            subject_symbol=primary.subject_symbol,
+            horizon=primary.horizon,
+            causal_signature=primary.market_causal_signature,
+            stance=primary.stance,
+            source_rule_ids=sorted({
+                rule_id
+                for item in members
+                for rule_id in item.supporting_rule_ids or []
+                if str(rule_id or "").strip()
+            }),
+            market_condition_ids=unique_texts(
+                [value for item in members for value in item.market_condition_ids],
+                24,
+            ),
+            market_relation_types=unique_texts(
+                [value for item in members for value in item.market_relation_types],
+                24,
+            ),
+        ))
+    return result
+
+
+def account_overlays_from_hypotheses(
+    hypotheses: Iterable[InvestmentHypothesis],
+) -> List[AccountHypothesisOverlay]:
+    groups: Dict[str, List[InvestmentHypothesis]] = {}
+    for hypothesis in hypotheses or []:
+        overlay_id = str(hypothesis.account_hypothesis_overlay_id or "").strip()
+        if overlay_id:
+            groups.setdefault(overlay_id, []).append(hypothesis)
+    result: List[AccountHypothesisOverlay] = []
+    for overlay_id, members in sorted(groups.items()):
+        primary = members[0]
+        result.append(AccountHypothesisOverlay(
+            account_overlay_id=overlay_id,
+            account_id=primary.account_id,
+            portfolio_world_id=primary.portfolio_world_id,
+            family_id=primary.family_id,
+            scope_state=merged_hypothesis_scope_state(members),
+            market_hypothesis_id=common_hypothesis_value(members, "market_hypothesis_id"),
+            target_roles=unique_texts(
+                [value for item in members for value in item.target_roles],
+                12,
+            ),
+            action_policies=unique_texts(
+                [value for item in members for value in item.action_policies],
+                12,
+            ),
+            allowed_actions=unique_texts(
+                [value for item in members for value in item.allowed_actions],
+                12,
+            ),
+            blocked_actions=unique_texts(
+                [value for item in members for value in item.blocked_actions],
+                12,
+            ),
+            account_condition_ids=unique_texts(
+                [value for item in members for value in item.account_condition_ids],
+                24,
+            ),
+            account_fields=unique_texts(
+                [value for item in members for value in item.account_fields],
+                24,
+            ),
+            account_relation_types=unique_texts(
+                [value for item in members for value in item.account_relation_types],
+                24,
+            ),
+            account_target_kinds=unique_texts(
+                [value for item in members for value in item.account_target_kinds],
+                24,
+            ),
+            source_rule_ids=sorted({
+                rule_id
+                for item in members
+                for rule_id in item.supporting_rule_ids or []
+                if str(rule_id or "").strip()
+            }),
+        ))
+    return result
 
 
 def diverse_hypotheses(hypotheses: List[InvestmentHypothesis], maximum_count: int) -> List[InvestmentHypothesis]:
@@ -1266,6 +1796,7 @@ def add_safety_hypotheses(
             causal_signature="system-safety:" + SYSTEM_ABSTENTION_TEMPLATE_ID,
             family_source="system-safety-policy",
             merged_rule_count=0,
+            scope_state=SYSTEM_SAFETY_SCOPE,
         )
         result = with_reserved_safety_slot(result, safety, maximum_count)
     if result and (len(result) < minimum_count or len(directional_stances) < 2):
@@ -1295,6 +1826,7 @@ def add_safety_hypotheses(
             causal_signature="system-safety:" + null_template,
             family_source="system-safety-policy",
             merged_rule_count=0,
+            scope_state=SYSTEM_SAFETY_SCOPE,
         )
         result = with_reserved_safety_slot(result, safety, maximum_count)
     return result[:maximum_count]

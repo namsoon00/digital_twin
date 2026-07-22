@@ -20,6 +20,14 @@ from digital_twin.infrastructure.toss_snapshots import TossProvider, currency_ra
 
 
 class TossBaseCurrencyValueTests(unittest.TestCase):
+    def test_volume_pace_requires_source_timestamp_for_time_adjustment(self):
+        pace = volume_pace_snapshot("US", 0.3, volume=8737438, trading_value=1050906655)
+
+        self.assertEqual("unavailable", pace["volumePaceStatus"])
+        self.assertEqual("시간 보정 기준시각 없음", pace["volumePaceLabel"])
+        self.assertEqual(0.3, pace["rawVolumeRatio"])
+        self.assertNotIn("timeAdjustedVolumeRatio", pace)
+
     def test_after_market_volume_pace_includes_completed_regular_session(self):
         pace = volume_pace_snapshot(
             "US",

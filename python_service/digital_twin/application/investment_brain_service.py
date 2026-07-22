@@ -602,6 +602,8 @@ class InvestmentBrainService:
         stored_decision = decision_rows.get(position.symbol) if isinstance(decision_rows.get(position.symbol), dict) else {}
         stored_context = stored_decision.get("relation_rule_context") or stored_decision.get("relationRuleContext")
         world_id = self.portfolio_world_id_for_state(state)
+        account_context = (state.get("metadata") or {}).get("accountContext") if isinstance(state.get("metadata"), dict) else {}
+        account_id = str(state.get("accountId") or (account_context or {}).get("accountId") or "").strip()
         inferencebox = {}
         if self.ontology_repository and hasattr(self.ontology_repository, "inferencebox_snapshot"):
             try:
@@ -633,12 +635,18 @@ class InvestmentBrainService:
                 settings=self.settings,
                 source=source,
                 prompt_id="investmentBrainQuestion",
+                account_id=account_id,
+                portfolio_world_id=world_id,
             )
             context.setdefault("worldId", world_id)
+            context.setdefault("accountId", account_id)
+            context.setdefault("portfolioWorldId", world_id)
             return context
         context = dict(stored_context or {}) if isinstance(stored_context, dict) else {}
         if context:
             context.setdefault("worldId", world_id)
+            context.setdefault("accountId", account_id)
+            context.setdefault("portfolioWorldId", world_id)
         return context
 
     def portfolio_world_id_for_state(self, state: Dict[str, object]) -> str:

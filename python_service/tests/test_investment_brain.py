@@ -1,3 +1,4 @@
+from copy import deepcopy
 import unittest
 
 from digital_twin.application.hypothesis_proposal_service import HypothesisProposalService
@@ -89,6 +90,57 @@ def relation_context():
             "traces": [],
         },
     }
+
+
+def scoped_relation_context(account_id="account-a", mixed=False):
+    context = deepcopy(relation_context())
+    context.update({
+        "accountId": account_id,
+        "portfolioWorldId": "portfolio:tenant:" + account_id,
+        "marketWorldId": "market:shared:kr",
+    })
+    context["facts"]["missingData"] = []
+    context["missingData"] = []
+    context["signalConflicts"] = {"hasConflict": False}
+    rule_id = "mixed-loss-trend-risk" if mixed else "market-trend-risk"
+    condition_shapes = [{
+        "conditionId": "trend-break",
+        "kind": "relation",
+        "role": "required",
+        "relationType": "BREAKS_LEVEL",
+        "targetKind": "key-level",
+    }]
+    if mixed:
+        condition_shapes.insert(0, {
+            "conditionId": "loss-threshold",
+            "kind": "subject_property",
+            "role": "required",
+            "field": "profitLossRate",
+            "operator": "<=",
+            "value": -8,
+        })
+    context["activeRules"] = [{"ruleId": rule_id, "evidenceRole": "risk"}]
+    context["graphStoreInference"] = {
+        **context["graphStoreInference"],
+        "marketWorldId": "market:shared:kr",
+        "relations": [{
+            "id": "relation:" + rule_id,
+            "source": "stock:005930",
+            "target": "risk:" + rule_id,
+            "type": "HAS_INFERRED_RISK",
+            "ruleId": rule_id,
+            "polarity": "risk",
+            "decisionStage": "LOSS_REDUCE",
+        }],
+        "traces": [{
+            "id": "trace:" + rule_id,
+            "ruleId": rule_id,
+            "ruleConditionShapes": condition_shapes,
+            "matchedConditionIds": [item["conditionId"] for item in condition_shapes],
+            "matchedConditions": condition_shapes,
+        }],
+    }
+    return context
 
 
 class FakeMonitorStore:
@@ -352,6 +404,108 @@ class InvestmentBrainTest(unittest.TestCase):
         self.assertEqual("supported", support["evidenceState"])
         self.assertTrue(payload["researchPlan"]["tasks"])
         self.assertTrue(payload["selfQuestions"])
+
+    def test_market_only_hypothesis_reuses_shared_identity_across_accounts(self):
+        first = hypothesis_set_from_relation_context(scoped_relation_context("account-a"))["hypothesisSet"]
+        second = hypothesis_set_from_relation_context(scoped_relation_context("account-b"))["hypothesisSet"]
+        first_risk = next(item for item in first["hypotheses"] if item["supportingRuleIds"] == ["market-trend-risk"])
+        second_risk = next(item for item in second["hypotheses"] if item["supportingRuleIds"] == ["market-trend-risk"])
+
+        self.assertEqual("market-shared", first_risk["scopeState"])
+        self.assertEqual(first_risk["marketHypothesisId"], second_risk["marketHypothesisId"])
+        self.assertNotEqual(first_risk["accountHypothesisOverlayId"], second_risk["accountHypothesisOverlayId"])
+        self.assertEqual(1, len(first["marketHypotheses"]))
+        self.assertEqual(1, len(second["marketHypotheses"]))
+        self.assertNotIn("accountId", first["marketHypotheses"][0])
+        self.assertEqual("account-a", first["accountOverlays"][0]["accountId"])
+        self.assertEqual("account-b", second["accountOverlays"][0]["accountId"])
+
+    def test_mixed_hypothesis_cannot_be_promoted_to_market_scope(self):
+        hypothesis_set = hypothesis_set_from_relation_context(
+            scoped_relation_context("account-a", mixed=True)
+        )["hypothesisSet"]
+        risk = next(
+            item
+            for item in hypothesis_set["hypotheses"]
+            if item["supportingRuleIds"] == ["mixed-loss-trend-risk"]
+        )
+
+        self.assertEqual("mixed", risk["scopeState"])
+        self.assertEqual("", risk["marketHypothesisId"])
+        self.assertEqual([], hypothesis_set["marketHypotheses"])
+        self.assertEqual(["loss-threshold"], risk["accountConditionIds"])
+        self.assertEqual(["profitLossRate"], risk["accountFields"])
+        self.assertEqual(1, len(hypothesis_set["accountOverlays"]))
+        self.assertEqual("mixed", hypothesis_set["accountOverlays"][0]["scopeState"])
+
+    def test_rulebox_market_override_cannot_promote_account_condition(self):
+        context = scoped_relation_context("account-a", mixed=True)
+        context["graphStoreInference"]["traces"][0]["ruleConditionShapes"][0]["hypothesisScope"] = "market"
+        context["graphStoreInference"]["traces"][0]["matchedConditions"][0]["hypothesisScope"] = "market"
+        hypothesis_set = hypothesis_set_from_relation_context(context)["hypothesisSet"]
+        risk = next(
+            item
+            for item in hypothesis_set["hypotheses"]
+            if item["supportingRuleIds"] == ["mixed-loss-trend-risk"]
+        )
+
+        self.assertEqual("unverified", risk["scopeState"])
+        self.assertEqual("", risk["marketHypothesisId"])
+        self.assertEqual([], hypothesis_set["marketHypotheses"])
+
+    def test_scope_projection_keeps_market_hypothesis_free_of_account_data(self):
+        context = scoped_relation_context("account-a")
+        brain = hypothesis_set_from_relation_context(context)
+        question = InvestmentQuestion.create("삼성전자를 계속 보유해야 하나?", "005930", "삼성전자", "account-a")
+        episode = DecisionEpisode.from_dict({
+            "episodeId": "scope-episode-1",
+            "accountId": "account-a",
+            "symbol": "005930",
+            "subjectName": "삼성전자",
+            "question": question.to_dict(),
+            "hypothesisSet": brain["hypothesisSet"],
+            "action": "HOLD",
+            "confidence": 60,
+            "inferenceGenerationId": "generation-1",
+        })
+        restored = DecisionEpisode.from_dict(episode.to_dict())
+        graph = PortfolioOntology("account-a")
+        add_investment_brain_concepts(graph, "account-a", [restored.to_dict()])
+
+        market_entity = next(item for item in graph.entities if item.properties.get("tboxClass") == "MarketHypothesis")
+        overlay_entity = next(item for item in graph.entities if item.properties.get("tboxClass") == "AccountHypothesisOverlay")
+        relation_types = {item.relation_type for item in graph.relations}
+        self.assertNotIn("accountId", market_entity.properties)
+        self.assertEqual("account-a", overlay_entity.properties["accountId"])
+        self.assertIn("USES_MARKET_HYPOTHESIS", relation_types)
+        self.assertIn("HAS_ACCOUNT_HYPOTHESIS_OVERLAY", relation_types)
+        self.assertIn("CONTEXTUALIZES_MARKET_HYPOTHESIS", relation_types)
+        self.assertIn("MarketHypothesis", {item.name for item in CLASS_DEFS})
+        self.assertIn("AccountHypothesisOverlay", {item.name for item in CLASS_DEFS})
+        self.assertTrue({
+            "USES_MARKET_HYPOTHESIS",
+            "HAS_ACCOUNT_HYPOTHESIS_OVERLAY",
+            "CONTEXTUALIZES_MARKET_HYPOTHESIS",
+        }.issubset({item.name for item in RELATION_DEFS}))
+
+    def test_ai_prompt_distinguishes_market_hypothesis_from_account_overlay(self):
+        relation = scoped_relation_context("account-a")
+        brain = hypothesis_set_from_relation_context(relation)
+        context = {
+            "messageType": "investmentInsight",
+            "displayTarget": "삼성전자",
+            "ontologyRelationContext": {
+                **relation,
+                "investmentBrain": brain,
+                "hypothesisSet": brain["hypothesisSet"],
+                "researchPlan": brain["researchPlan"],
+            },
+        }
+
+        prompt = build_notification_ai_gate_prompt(context)
+
+        self.assertIn("시장 공통 설명", prompt)
+        self.assertIn("market-shared", prompt)
 
     def test_equivalent_typedb_paths_compact_to_one_stable_hypothesis_family(self):
         context = relation_context()

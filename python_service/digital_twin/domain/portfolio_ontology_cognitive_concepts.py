@@ -128,6 +128,80 @@ def add_investment_brain_concepts(
             if isinstance(item, dict) and str(item.get("familyId") or "").strip()
         }
         family_node_ids = {}
+        market_hypothesis_node_ids = {}
+        for market_hypothesis in hypothesis_set.get("marketHypotheses") or []:
+            if not isinstance(market_hypothesis, dict):
+                continue
+            market_key = str(market_hypothesis.get("marketHypothesisId") or "").strip()
+            if not market_key:
+                continue
+            market_hypothesis_node_ids[market_key] = add_entity(
+                graph,
+                "market-hypothesis",
+                market_key,
+                str(market_hypothesis.get("subjectSymbol") or symbol) + " 시장 공통 가설",
+                {
+                    "tboxClass": "MarketHypothesis",
+                    "marketHypothesisId": market_key,
+                    "marketWorldId": market_hypothesis.get("marketWorldId"),
+                    "marketId": market_hypothesis.get("marketId"),
+                    "symbol": market_hypothesis.get("subjectSymbol") or symbol,
+                    "horizon": market_hypothesis.get("horizon"),
+                    "causalSignature": market_hypothesis.get("causalSignature"),
+                    "stance": market_hypothesis.get("stance"),
+                    "sourceRuleIds": market_hypothesis.get("sourceRuleIds") or [],
+                    "marketConditionIds": market_hypothesis.get("marketConditionIds") or [],
+                    "marketRelationTypes": market_hypothesis.get("marketRelationTypes") or [],
+                    "scopeState": market_hypothesis.get("scopeState"),
+                    "scopeVersion": market_hypothesis.get("scopeVersion"),
+                    "source": market_hypothesis.get("source") or "typedb-market-scope-projection",
+                },
+            )
+        account_overlay_node_ids = {}
+        for overlay in hypothesis_set.get("accountOverlays") or []:
+            if not isinstance(overlay, dict):
+                continue
+            overlay_key = str(overlay.get("accountOverlayId") or "").strip()
+            if not overlay_key:
+                continue
+            account_overlay_node_ids[overlay_key] = add_entity(
+                graph,
+                "account-hypothesis-overlay",
+                overlay_key,
+                str(episode.get("subjectName") or symbol) + " 계정 판단 맥락",
+                {
+                    "tboxClass": "AccountHypothesisOverlay",
+                    "accountOverlayId": overlay_key,
+                    "accountId": overlay.get("accountId"),
+                    "portfolioWorldId": overlay.get("portfolioWorldId"),
+                    "familyId": overlay.get("familyId"),
+                    "scopeState": overlay.get("scopeState"),
+                    "marketHypothesisId": overlay.get("marketHypothesisId"),
+                    "targetRoles": overlay.get("targetRoles") or [],
+                    "actionPolicies": overlay.get("actionPolicies") or [],
+                    "allowedActions": overlay.get("allowedActions") or [],
+                    "blockedActions": overlay.get("blockedActions") or [],
+                    "accountConditionIds": overlay.get("accountConditionIds") or [],
+                    "accountFields": overlay.get("accountFields") or [],
+                    "accountRelationTypes": overlay.get("accountRelationTypes") or [],
+                    "accountTargetKinds": overlay.get("accountTargetKinds") or [],
+                    "sourceRuleIds": overlay.get("sourceRuleIds") or [],
+                    "scopeVersion": overlay.get("scopeVersion"),
+                    "source": overlay.get("source") or "typedb-account-context-projection",
+                },
+            )
+        for overlay in hypothesis_set.get("accountOverlays") or []:
+            if not isinstance(overlay, dict):
+                continue
+            overlay_key = str(overlay.get("accountOverlayId") or "").strip()
+            market_key = str(overlay.get("marketHypothesisId") or "").strip()
+            overlay_id = account_overlay_node_ids.get(overlay_key)
+            market_id = market_hypothesis_node_ids.get(market_key)
+            if overlay_id and market_id:
+                add_relation(graph, overlay_id, market_id, "CONTEXTUALIZES_MARKET_HYPOTHESIS", weight=1.0, properties={
+                    "source": "typedb-hypothesis-scope-projection",
+                    "scopeState": overlay.get("scopeState") or "",
+                })
         for hypothesis in hypothesis_set.get("hypotheses") or []:
             if not isinstance(hypothesis, dict):
                 continue
@@ -150,6 +224,21 @@ def add_investment_brain_concepts(
                 "causalSignature": hypothesis.get("causalSignature") or "",
                 "familySource": hypothesis.get("familySource") or "",
                 "mergedRuleCount": hypothesis.get("mergedRuleCount") or 0,
+                "scopeState": hypothesis.get("scopeState") or "",
+                "scopeVersion": hypothesis.get("scopeVersion") or "",
+                "marketHypothesisId": hypothesis.get("marketHypothesisId") or "",
+                "marketWorldId": hypothesis.get("marketWorldId") or "",
+                "marketId": hypothesis.get("marketId") or "",
+                "marketCausalSignature": hypothesis.get("marketCausalSignature") or "",
+                "marketConditionIds": hypothesis.get("marketConditionIds") or [],
+                "marketRelationTypes": hypothesis.get("marketRelationTypes") or [],
+                "accountHypothesisOverlayId": hypothesis.get("accountHypothesisOverlayId") or "",
+                "accountConditionIds": hypothesis.get("accountConditionIds") or [],
+                "accountFields": hypothesis.get("accountFields") or [],
+                "accountRelationTypes": hypothesis.get("accountRelationTypes") or [],
+                "accountTargetKinds": hypothesis.get("accountTargetKinds") or [],
+                "targetRoles": hypothesis.get("targetRoles") or [],
+                "actionPolicies": hypothesis.get("actionPolicies") or [],
                 "supportingRuleIds": hypothesis.get("supportingRuleIds") or [],
                 "counterRuleIds": hypothesis.get("counterRuleIds") or [],
                 "invalidationConditions": hypothesis.get("invalidationConditions") or [],
@@ -179,6 +268,9 @@ def add_investment_brain_concepts(
                     "candidateHypothesisIds": family.get("candidateHypothesisIds") or [hypothesis_key],
                     "source": family.get("source") or hypothesis.get("familySource") or "typedb-structural-signature",
                     "mergedRuleCount": family.get("mergedRuleCount") or hypothesis.get("mergedRuleCount") or 0,
+                    "scopeState": family.get("scopeState") or hypothesis.get("scopeState") or "",
+                    "marketHypothesisId": family.get("marketHypothesisId") or hypothesis.get("marketHypothesisId") or "",
+                    "accountOverlayIds": family.get("accountOverlayIds") or [],
                 })
                 family_node_ids[family_key] = family_id
             add_relation(graph, hypothesis_id, family_id, "INSTANTIATES_HYPOTHESIS_FAMILY", weight=1.0, properties={
@@ -187,6 +279,20 @@ def add_investment_brain_concepts(
                 "causalSignature": hypothesis.get("causalSignature") or "",
                 "mergedRuleCount": hypothesis.get("mergedRuleCount") or 0,
             })
+            market_id = market_hypothesis_node_ids.get(str(hypothesis.get("marketHypothesisId") or "").strip())
+            if market_id:
+                add_relation(graph, hypothesis_id, market_id, "USES_MARKET_HYPOTHESIS", weight=1.0, properties={
+                    "source": "typedb-hypothesis-scope-projection",
+                    "scopeState": hypothesis.get("scopeState") or "",
+                    "marketHypothesisId": hypothesis.get("marketHypothesisId") or "",
+                })
+            overlay_id = account_overlay_node_ids.get(str(hypothesis.get("accountHypothesisOverlayId") or "").strip())
+            if overlay_id:
+                add_relation(graph, hypothesis_id, overlay_id, "HAS_ACCOUNT_HYPOTHESIS_OVERLAY", weight=1.0, properties={
+                    "source": "typedb-hypothesis-scope-projection",
+                    "scopeState": hypothesis.get("scopeState") or "",
+                    "accountOverlayId": hypothesis.get("accountHypothesisOverlayId") or "",
+                })
             review = review_by_hypothesis_id.get(hypothesis_key, {})
             if set_id:
                 add_relation(graph, set_id, hypothesis_id, "CONTAINS_HYPOTHESIS", weight=1.0, properties={

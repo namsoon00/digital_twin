@@ -53,9 +53,18 @@ class GraphRuleCondition:
     target_property_filters: Dict[str, object] = dataclass_field(default_factory=dict)
     relation_property_filters: Dict[str, object] = dataclass_field(default_factory=dict)
     role: str = "required"
+    # Ownership metadata for hypothesis projection. TypeDB still evaluates the
+    # condition itself; this only prevents private account inputs from being
+    # promoted into a cross-account market hypothesis.
+    hypothesis_scope: str = ""
 
     def to_dict(self) -> Dict[str, object]:
-        return asdict(self)
+        payload = asdict(self)
+        # Empty scope means the established structural classifier applies.
+        # Leaving it out preserves RuleBox fingerprints for existing rules.
+        if not payload.get("hypothesis_scope"):
+            payload.pop("hypothesis_scope", None)
+        return payload
 
     @staticmethod
     def from_dict(payload: Dict[str, object]):
@@ -73,6 +82,13 @@ class GraphRuleCondition:
             target_property_filters=dict(payload.get("target_property_filters") or payload.get("targetPropertyFilters") or {}),
             relation_property_filters=dict(payload.get("relation_property_filters") or payload.get("relationPropertyFilters") or {}),
             role=str(payload.get("role") or payload.get("conditionRole") or "required"),
+            hypothesis_scope=str(
+                payload.get("hypothesis_scope")
+                or payload.get("hypothesisScope")
+                or payload.get("input_scope")
+                or payload.get("inputScope")
+                or ""
+            ),
         )
 
 

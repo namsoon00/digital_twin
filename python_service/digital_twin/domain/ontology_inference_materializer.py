@@ -513,7 +513,8 @@ def rule_condition_shape(condition) -> Dict[str, object]:
     filters, so two rules that happen to match the same relation type are not
     treated as equivalent.
     """
-    return {
+    payload = {
+        "conditionId": str(getattr(condition, "condition_id", "") or ""),
         "kind": str(getattr(condition, "kind", "") or ""),
         "role": str(getattr(condition, "role", "") or "required"),
         "field": str(getattr(condition, "field", "") or ""),
@@ -525,6 +526,10 @@ def rule_condition_shape(condition) -> Dict[str, object]:
         "targetPropertyFilters": dict(getattr(condition, "target_property_filters", {}) or {}),
         "relationPropertyFilters": dict(getattr(condition, "relation_property_filters", {}) or {}),
     }
+    hypothesis_scope = str(getattr(condition, "hypothesis_scope", "") or "")
+    if hypothesis_scope:
+        payload["hypothesisScope"] = hypothesis_scope
+    return payload
 
 
 def matching_evidence_relation(graph: PortfolioOntology, stock_id: str, condition):

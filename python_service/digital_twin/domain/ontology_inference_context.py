@@ -25,6 +25,7 @@ from .ontology_rulebox_contracts import (
 )
 from .ontology_threshold_policy import ontology_threshold_policy_from_context
 from .ontology_relation_decisions import decision_stage_from_relation
+from .ontology_worlds import market_world
 from .ontology_relation_reasoning import (
     OntologyRuleMatch,
     build_ai_prompt_context,
@@ -144,6 +145,8 @@ def relation_contexts_from_snapshot(
             external_signals=snapshot.external_signals,
             settings=settings,
             source=source,
+            account_id=snapshot.account_id,
+            portfolio_world_id=str(inferencebox.get("worldId") or ""),
         )
         if context:
             result[symbol] = context
@@ -158,6 +161,9 @@ def relation_context_from_inferencebox(
     settings: Optional[Dict[str, object]] = None,
     source: str = "",
     prompt_id: str = "holdingTiming",
+    account_id: str = "",
+    portfolio_world_id: str = "",
+    market_world_id: str = "",
 ) -> Dict[str, object]:
     symbol = str(position.symbol or "").upper().strip()
     if not symbol or not isinstance(inferencebox, dict):
@@ -181,6 +187,13 @@ def relation_context_from_inferencebox(
         external_signals or {},
         settings=settings or {},
     )
+    resolved_account_id = str(account_id or facts.get("accountId") or "").strip()
+    resolved_portfolio_world_id = str(portfolio_world_id or inferencebox.get("worldId") or "").strip()
+    if not resolved_portfolio_world_id.lower().startswith("portfolio:"):
+        resolved_portfolio_world_id = ""
+    resolved_market_world_id = str(market_world_id or "").strip() or market_world(
+        facts.get("market") or position.market or "global"
+    ).world_id
     threshold_policy = ontology_threshold_policy_from_context(settings or {})
     matches = matches_from_inference(relations, traces, facts=facts, source_name=source_name, context_version=context_version)
     if not matches:
@@ -220,6 +233,10 @@ def relation_context_from_inferencebox(
         "missingData": list(facts.get("missingData") or []),
         "signalConflicts": signal_conflicts,
         "inferenceGenerationId": str(inferencebox.get("inferenceGenerationId") or ""),
+        "accountId": resolved_account_id,
+        "portfolioWorldId": resolved_portfolio_world_id,
+        "marketWorldId": resolved_market_world_id,
+        "marketId": facts.get("market") or position.market or "",
         "graphStoreInference": {
             "relations": relations,
             "traces": traces,
@@ -295,6 +312,9 @@ def relation_context_from_inferencebox(
         "activeAboxSnapshotId": str(inferencebox.get("activeAboxSnapshotId") or ""),
         "generationAligned": bool(inferencebox.get("generationAligned")),
         "worldId": str(inferencebox.get("worldId") or ""),
+        "accountId": resolved_account_id,
+        "portfolioWorldId": resolved_portfolio_world_id,
+        "marketWorldId": resolved_market_world_id,
         "ruleboxRulesHash": str(inferencebox.get("ruleboxRulesHash") or ""),
         "ruleboxShortHash": str(inferencebox.get("ruleboxShortHash") or ""),
         "ruleboxRuleCount": inferencebox.get("ruleboxRuleCount"),
@@ -323,6 +343,7 @@ def relation_context_from_inferencebox(
             "activeAboxSnapshotId": inferencebox.get("activeAboxSnapshotId"),
             "generationAligned": bool(inferencebox.get("generationAligned")),
             "worldId": inferencebox.get("worldId"),
+            "marketWorldId": resolved_market_world_id,
             "ruleboxRulesHash": inferencebox.get("ruleboxRulesHash"),
             "ruleboxRuleCount": inferencebox.get("ruleboxRuleCount"),
             "hypothesisCalibration": investment_brain.get("hypothesisCalibration") or {},

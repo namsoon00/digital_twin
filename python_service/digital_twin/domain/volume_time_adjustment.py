@@ -156,7 +156,10 @@ def volume_pace_snapshot(
     now: datetime = None,
 ) -> Dict[str, object]:
     raw_ratio = number(raw_volume_ratio)
-    observed = parse_observed_at(observed_at) or now or datetime.now(timezone.utc)
+    # A volume pace is meaningful only at the source observation time. Falling
+    # back to the server clock would make unchanged provider data produce a
+    # different ABox and an unnecessary new inference cycle on every read.
+    observed = parse_observed_at(observed_at) or now
     market_key = normalize_market_key(market)
     session = DEFAULT_MARKET_HOUR_SESSIONS.get(market_key)
     result: Dict[str, object] = {
@@ -171,6 +174,14 @@ def volume_pace_snapshot(
             "volumePaceStatus": "unknown",
             "volumePaceLabel": "시장 세션 미확인",
             "volumePaceBasis": "시장 시간 정보가 없어 원본 거래량 배율만 사용",
+        })
+        return result
+
+    if not observed:
+        result.update({
+            "volumePaceStatus": "unavailable",
+            "volumePaceLabel": "시간 보정 기준시각 없음",
+            "volumePaceBasis": "원천 기준시각이 없어 원본 거래량 배율만 사용",
         })
         return result
 

@@ -402,6 +402,25 @@ class OntologyDiagnosticsServiceTests(unittest.TestCase):
         self.assertEqual(1, coverage["primarySymbolCount"])
         self.assertEqual(0, coverage["contextSymbolCount"])
 
+    def test_empty_scoped_abox_skips_expensive_graph_coverage_read(self):
+        class EmptyAboxRepository(FakeOntologyRepository):
+            def scoped_abox_storage_diagnostics(self):
+                return {
+                    "configured": True,
+                    "status": "empty",
+                    "graphStore": "typedb",
+                }
+
+            def read_entity_rows(self, boxes=None):
+                raise AssertionError("empty ABox diagnostics must not read the full graph")
+
+        coverage = OntologyDiagnosticsService(ontology_repository=EmptyAboxRepository()).status()["aboxCoverage"]
+
+        self.assertEqual("empty", coverage["status"])
+        self.assertTrue(coverage["coverageReadSkipped"])
+        self.assertEqual("empty", coverage["storageStatus"])
+        self.assertEqual([], coverage["symbols"])
+
     def test_strategy_proposal_boundary_reports_validated_backlog(self):
         service = OntologyDiagnosticsService(
             ontology_repository=FakeOntologyRepository(),

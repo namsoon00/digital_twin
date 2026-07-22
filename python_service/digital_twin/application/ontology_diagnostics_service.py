@@ -51,7 +51,11 @@ class OntologyDiagnosticsService:
             world_id=clean_world_id,
         )
         abox_storage = self.safe_call("scoped_abox_storage_diagnostics", {}, world_id=clean_world_id)
-        abox_coverage = self.abox_coverage(clean_symbols, world_id=clean_world_id)
+        abox_coverage = self.abox_coverage(
+            clean_symbols,
+            world_id=clean_world_id,
+            storage=abox_storage,
+        )
         decision_performance = self.decision_performance_boundary(clean_symbols)
         return {
             "contract": "typedb-ontology-diagnostics-v1",
@@ -390,7 +394,60 @@ class OntologyDiagnosticsService:
         ]
         return summary
 
-    def abox_coverage(self, symbols: List[str] = None, world_id: str = "") -> Dict[str, object]:
+    def abox_coverage(
+        self,
+        symbols: List[str] = None,
+        world_id: str = "",
+        storage: Dict[str, object] = None,
+    ) -> Dict[str, object]:
+        """Summarize current ABox coverage without probing an absent world.
+
+        A scoped manifest is the source of truth for whether a world has an
+        active ABox.  Reading every ABox node when that manifest is empty adds
+        an unnecessary TypeDB query to the diagnostics page and can wait
+        behind a concurrent projection.  Return the durable storage state
+        directly in that case; a world with an active manifest retains the
+        detailed per-symbol graph coverage calculation below.
+        """
+        storage_payload = storage if isinstance(storage, dict) else {}
+        storage_status = str(storage_payload.get("status") or "").strip().lower()
+        unavailable_states = {
+            "empty",
+            "pending",
+            "incomplete",
+            "error",
+            "disabled",
+            "driver-missing",
+            "unavailable",
+        }
+        if storage_payload and storage_status in unavailable_states:
+            active_entities = int(storage_payload.get("logicalActiveEntityCount") or 0)
+            active_relations = int(storage_payload.get("logicalActiveRelationCount") or 0)
+            coverage_status = "empty" if storage_status == "empty" else "unavailable"
+            return {
+                "status": coverage_status,
+                "entityCount": active_entities,
+                "relationCount": active_relations,
+                "symbolCount": 0,
+                "coverageRatio": 0.0,
+                "primarySymbolCount": 0,
+                "primaryCoverageRatio": 0.0,
+                "contextSymbolCount": 0,
+                "contextCoverageRatio": 0.0,
+                "requiredCategories": sorted(CATEGORY_RELATIONS.keys()),
+                "coverageGapCount": 0,
+                "symbols": [],
+                "primarySymbols": [],
+                "contextSymbols": [],
+                "coverageReadSkipped": True,
+                "storageStatus": storage_status,
+                "reason": (
+                    "No active ABox manifest exists for this ontology world."
+                    if storage_status == "empty"
+                    else "ABox coverage read was skipped because storage is " + storage_status + "."
+                ),
+                "interpretation": "Coverage will be calculated after an active PortfolioWorld ABox is projected.",
+            }
         if not hasattr(self.ontology_repository, "read_entity_rows") or not hasattr(self.ontology_repository, "read_relation_rows"):
             return {"status": "unavailable", "reason": "repository does not expose ABox row reads"}
         try:

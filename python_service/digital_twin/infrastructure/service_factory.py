@@ -294,7 +294,7 @@ def build_market_data_collection_runner(settings=None, event_publisher=None) -> 
         symbol_service=build_symbol_universe_service(configured_settings),
         quote_cache=stores.market_quote_cache(configured_settings),
         settings=configured_settings,
-        provider_factory=lambda account, quote_cache: TossProvider(account, quote_cache=quote_cache),
+        provider_factory=lambda account, quote_cache: TossProvider(account, quote_cache=quote_cache, settings=configured_settings),
         event_publisher=event_publisher or data_pipeline_health_event_bus(configured_settings),
         time_series_store=stores.market_time_series_store(configured_settings),
         health_service=DataPipelineHealthService(

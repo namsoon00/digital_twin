@@ -1,9 +1,11 @@
 import json
+import hashlib
 import time
 import urllib.error
 import urllib.parse
 import urllib.request
 from dataclasses import replace
+from threading import Lock
 from typing import Dict, List, Optional, Tuple
 
 from ..domain.accounts import AccountConfig
@@ -28,6 +30,8 @@ from .settings import currency_rates, runtime_settings
 
 
 MARKET_DATA_ACCOUNT_ID = "__market_data__"
+TOSS_TOKEN_CACHE: Dict[str, Dict[str, object]] = {}
+TOSS_TOKEN_CACHE_LOCK = Lock()
 
 
 def market_proxy_quote_context(
@@ -463,13 +467,18 @@ def demo_positions() -> List[Position]:
 
 
 class TossProvider:
-    def __init__(self, account: AccountConfig, quote_cache=None):
+    def __init__(self, account: AccountConfig, quote_cache=None, settings: Dict[str, str] = None, token_cache=None, now_fn=None):
         self.account = account
         self.base_url = account.base_url.rstrip("/")
         self.quote_cache = quote_cache if quote_cache is not None else market_quote_cache(runtime_settings())
+        self.settings = dict(settings or runtime_settings())
+        self.token_cache = token_cache if token_cache is not None else TOSS_TOKEN_CACHE
+        self.now_fn = now_fn or time.time
         self.api_guard_state: Dict[str, object] = {}
         self.stage_failures: Dict[str, Dict[str, object]] = {}
         self.auth_refreshes = 0
+        self.token_cache_hits = 0
+        self.token_expires_at = ""
 
     def diagnostics_payload(self) -> Dict[str, object]:
         return {
@@ -479,8 +488,53 @@ class TossProvider:
                     for stage, payload in self.stage_failures.items()
                 },
                 "authRefreshes": self.auth_refreshes,
+                "tokenCacheHits": self.token_cache_hits,
+                "tokenExpiresAt": self.token_expires_at,
             }
         }
+
+    def token_cache_key(self) -> str:
+        source = self.base_url + "\n" + str(self.account.client_id or "")
+        return hashlib.sha256(source.encode("utf-8")).hexdigest()
+
+    def token_refresh_skew_seconds(self) -> int:
+        return int_setting(self.settings, "tossTokenRefreshSkewSeconds", 60, 5, 600)
+
+    def token_cache_entry(self) -> Dict[str, object]:
+        cached = self.token_cache.get(self.token_cache_key()) if isinstance(self.token_cache, dict) else {}
+        return dict(cached or {}) if isinstance(cached, dict) else {}
+
+    def cached_access_token(self, force_refresh: bool = False, stale_token: str = "") -> str:
+        if force_refresh and not stale_token:
+            return ""
+        cached = self.token_cache_entry()
+        token = str(cached.get("token") or "")
+        refresh_at = number(cached.get("refreshAt"))
+        if not token or not refresh_at or self.now_fn() >= refresh_at:
+            return ""
+        if force_refresh and token == stale_token:
+            return ""
+        self.token_cache_hits += 1
+        self.token_expires_at = str(cached.get("expiresAt") or "")
+        return token
+
+    def token_expiry(self, payload: Dict[str, object], now: float) -> Tuple[float, float]:
+        raw_expiry = ""
+        for key in ["expiresAt", "expires_at", "expiredAt", "expired_at"]:
+            if payload.get(key) not in (None, ""):
+                raw_expiry = str(payload.get(key))
+                break
+        parsed_expiry = parse_datetime(raw_expiry)
+        expires_at = parsed_expiry.timestamp() if parsed_expiry else 0.0
+        if not expires_at:
+            expires_in = number(payload.get("expires_in") or payload.get("expiresIn"))
+            if expires_in > 0:
+                expires_at = now + expires_in
+        if not expires_at or expires_at <= now:
+            return 0.0, 0.0
+        lifetime_seconds = max(1.0, expires_at - now)
+        skew_seconds = min(float(self.token_refresh_skew_seconds()), max(5.0, lifetime_seconds * 0.1))
+        return expires_at, max(now, expires_at - skew_seconds)
 
     def record_stage_failure(self, stage: str, error: Exception, recovered: bool = False) -> None:
         normalized = str(stage or "unknown")
@@ -517,7 +571,7 @@ class TossProvider:
                 self.record_stage_failure(stage, error)
                 raise
             self.record_stage_failure(stage, error)
-            refreshed = self.fetch_access_token()
+            refreshed = self.fetch_access_token(force_refresh=True, stale_token=token)
             self.auth_refreshes += 1
             try:
                 payload = toss_json(stage, method, url, self.auth_headers(refreshed, extra_headers), body=body, guard_state=self.api_guard_state)
@@ -527,29 +581,42 @@ class TossProvider:
                 self.record_stage_failure(stage, retry_error)
                 raise
 
-    def fetch_access_token(self) -> str:
+    def fetch_access_token(self, force_refresh: bool = False, stale_token: str = "") -> str:
         if not self.account.client_id or not self.account.client_secret:
             raise RuntimeError("토스 credentials 미설정")
-        try:
-            token_payload = toss_json(
-                "token",
-                "POST",
-                self.base_url + "/oauth2/token",
-                {"Content-Type": "application/x-www-form-urlencoded"},
-                form_body({
-                    "grant_type": "client_credentials",
-                    "client_id": self.account.client_id,
-                    "client_secret": self.account.client_secret,
-                }),
-                guard_state=self.api_guard_state,
-            )
-        except TossAPIError as error:
-            self.record_stage_failure("token", error)
-            raise
-        token = str(token_payload.get("access_token") or "")
-        if not token:
-            raise RuntimeError("토스 access_token이 없습니다.")
-        return token
+        with TOSS_TOKEN_CACHE_LOCK:
+            cached = self.cached_access_token(force_refresh=force_refresh, stale_token=stale_token)
+            if cached:
+                return cached
+            try:
+                token_payload = toss_json(
+                    "token",
+                    "POST",
+                    self.base_url + "/oauth2/token",
+                    {"Content-Type": "application/x-www-form-urlencoded"},
+                    form_body({
+                        "grant_type": "client_credentials",
+                        "client_id": self.account.client_id,
+                        "client_secret": self.account.client_secret,
+                    }),
+                    guard_state=self.api_guard_state,
+                )
+            except TossAPIError as error:
+                self.record_stage_failure("token", error)
+                raise
+            token = str(token_payload.get("access_token") or "")
+            if not token:
+                raise RuntimeError("토스 access_token이 없습니다.")
+            now = self.now_fn()
+            expires_at, refresh_at = self.token_expiry(token_payload, now)
+            if expires_at and isinstance(self.token_cache, dict):
+                self.token_cache[self.token_cache_key()] = {
+                    "token": token,
+                    "expiresAt": expires_at,
+                    "refreshAt": refresh_at,
+                }
+                self.token_expires_at = str(expires_at)
+            return token
 
     def fetch_positions(self) -> Tuple[str, str, List[Position], float, str, List[Position]]:
         if not self.account.client_id or not self.account.client_secret:

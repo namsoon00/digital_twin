@@ -179,6 +179,7 @@ class OntologyDiagnosticsService:
             "manifestInventoryReason",
             "physicalCountStatus",
             "physicalCountReason",
+            "writeLease",
         ])
         scope_ids = [str(item or "") for item in payload.get("scopeIds") or [] if str(item or "")]
         if scope_ids:

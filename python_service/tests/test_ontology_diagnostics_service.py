@@ -26,6 +26,10 @@ class FakeOntologyRepository:
             "physicalAboxRelationCount": 190,
             "storedManifestCount": 2,
             "inactiveManifestCount": 1,
+            "writeLease": {
+                "status": "available",
+                "leaseKey": "ontology:scoped-abox-write",
+            },
         }
 
     def active_tbox_metadata(self):
@@ -248,6 +252,7 @@ class OntologyDiagnosticsServiceTests(unittest.TestCase):
         self.assertEqual("immutable-scoped-manifest", payload["aboxStorage"]["persistenceMode"])
         self.assertEqual(3, payload["aboxStorage"]["activeScopeCount"])
         self.assertEqual(150, payload["aboxStorage"]["physicalAboxEntityCount"])
+        self.assertEqual("available", payload["aboxStorage"]["writeLease"]["status"])
         self.assertTrue(payload["reasoningBoundary"]["nativeTypeDbReasoningUsed"])
         self.assertFalse(payload["reasoningBoundary"]["typedbBootstrapReasoningUsed"])
         self.assertEqual("ok", payload["reasoningBoundary"]["ruleboxHashStatus"])

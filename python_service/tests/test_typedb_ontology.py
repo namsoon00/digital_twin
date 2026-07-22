@@ -694,7 +694,8 @@ class TypeDBOntologyRepositoryTests(unittest.TestCase):
             },
         ]
 
-        with patch.object(repository, "abox_projection_marker_rows", return_value=markers), \
+        with patch.object(repository, "active_worldview_manifest_pointer_rows", return_value=[], create=True), \
+                patch.object(repository, "abox_projection_marker_rows", return_value=markers), \
                 patch.object(repository, "active_abox_pointer_rows", return_value=[{
                     "id": "abox-active-pointer",
                     "aboxSnapshotId": "old",

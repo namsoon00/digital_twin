@@ -7,6 +7,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from digital_twin.domain.ontology_contracts import OntologyEntity, OntologyRelation, PortfolioOntology
 from digital_twin.domain.ontology_quality import build_ontology_quality_sample
 from digital_twin.domain.ontology_schema import abox_properties, abox_relation_properties
+from digital_twin.domain.ontology_scopes import apply_scoped_abox_identity
 from digital_twin.domain.ontology_prompting import prompt_payload
 from digital_twin.domain.ontology_tbox import tbox_class_def, tbox_relation_def
 from digital_twin.domain.ontology_validator import validate_ontology
@@ -17,6 +18,34 @@ from digital_twin.domain.portfolio_calculations import portfolio_summary
 
 
 class OntologyValidatorTests(unittest.TestCase):
+    def test_scoped_manifest_requires_scope_lifecycle_for_abox_facts(self):
+        graph = PortfolioOntology(
+            "main",
+            entities=[OntologyEntity(
+                "stock:005930",
+                "삼성전자",
+                "stock",
+                {
+                    "ontologyBox": "ABox",
+                    "accountId": "main",
+                    "aboxSnapshotId": "before-scope",
+                    "tboxVersion": "ontology-tbox-v1",
+                    "tboxClass": "Stock",
+                },
+            )],
+        )
+
+        apply_scoped_abox_identity(graph)
+        valid = validate_ontology(graph)
+        graph.entities[0].properties.pop("scopeGenerationId")
+        invalid_scope = validate_ontology(graph)
+
+        self.assertFalse(any(item.code == "missing_abox_lifecycle" for item in valid.issues))
+        self.assertTrue(any(
+            item.code == "missing_abox_lifecycle" and "scopeGenerationId" in item.message
+            for item in invalid_scope.issues
+        ))
+
     def test_portfolio_ontology_validates_against_tbox(self):
         position = Position(
             symbol="NVDA",

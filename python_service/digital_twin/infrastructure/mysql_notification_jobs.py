@@ -97,6 +97,47 @@ class MySQLNotificationJobStore(MySQLOperationalConnection):
             ).fetchall()
         return [self.job_from_row(row) for row in rows], int(total_row["count"] or 0) if total_row else 0
 
+    def recent_page_with_summary(
+        self,
+        limit: int = 40,
+        offset: int = 0,
+        message_type: str = "",
+        status: str = "",
+        query: str = "",
+    ) -> Tuple[List[NotificationJob], int, Dict[str, int]]:
+        """Read the visible ledger page and global status totals from one connection."""
+        clauses = []
+        params = []
+        if str(message_type or "").strip():
+            clauses.append("message_type = %s")
+            params.append(str(message_type or "").strip())
+        if str(status or "").strip():
+            clauses.append("status = %s")
+            params.append(str(status or "").strip())
+        needle = str(query or "").strip()
+        if needle:
+            clauses.append("(text LIKE %s OR payload_json LIKE %s OR message_type LIKE %s)")
+            like = "%" + needle[:120] + "%"
+            params.extend([like, like, like])
+        where = (" WHERE " + " AND ".join(clauses)) if clauses else ""
+        page_size = max(1, min(100, int(limit or 40)))
+        page_offset = max(0, int(offset or 0))
+        with self.connect() as connection:
+            total_row = connection.execute(
+                "SELECT COUNT(*) AS count FROM notification_jobs" + where,
+                params,
+            ).fetchone()
+            rows = connection.execute(
+                "SELECT text, payload_json FROM notification_jobs" + where + " ORDER BY created_at DESC, job_id DESC LIMIT %s OFFSET %s",
+                params + [page_size, page_offset],
+            ).fetchall()
+            summary_rows = connection.execute(
+                "SELECT status, COUNT(*) AS count FROM notification_jobs GROUP BY status"
+            ).fetchall()
+        total = int(total_row["count"] or 0) if total_row else 0
+        summary = {row["status"]: int(row["count"] or 0) for row in summary_rows}
+        return [self.job_from_row(row) for row in rows], total, summary
+
     def get(self, job_id: str) -> Optional[NotificationJob]:
         target = str(job_id or "").strip()
         if not target:

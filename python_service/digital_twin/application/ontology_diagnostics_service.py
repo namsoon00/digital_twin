@@ -35,6 +35,7 @@ class OntologyDiagnosticsService:
         tbox = self.safe_call("active_tbox_metadata", {})
         rulebox = self.safe_call("rulebox_snapshot", {})
         inference = self.safe_call("inferencebox_snapshot", {}, clean_symbols, safe_limit)
+        abox_storage = self.safe_call("scoped_abox_storage_diagnostics", {})
         abox_coverage = self.abox_coverage(clean_symbols)
         return {
             "contract": "typedb-ontology-diagnostics-v1",
@@ -43,6 +44,7 @@ class OntologyDiagnosticsService:
             "typedb": self.typedb_settings(),
             "tbox": self.tbox_summary(tbox),
             "rulebox": self.rulebox_summary(rulebox),
+            "aboxStorage": self.abox_storage_summary(abox_storage),
             "aboxCoverage": abox_coverage,
             "inferenceBox": self.inferencebox_summary(inference),
             "reasoningBoundary": self.reasoning_boundary(rulebox, inference),
@@ -148,6 +150,37 @@ class OntologyDiagnosticsService:
                 "relationTypeCount",
                 "reason",
             ])
+        return summary
+
+    def abox_storage_summary(self, payload: Dict[str, object]) -> Dict[str, object]:
+        summary = self.pick(payload, [
+            "configured",
+            "status",
+            "graphStore",
+            "reason",
+            "persistenceMode",
+            "worldviewManifestId",
+            "activeAboxSnapshotId",
+            "activeScopeCount",
+            "scopeTypeCounts",
+            "logicalActiveEntityCount",
+            "logicalActiveRelationCount",
+            "physicalAboxEntityCount",
+            "physicalAboxRelationCount",
+            "storedManifestCount",
+            "inactiveManifestCount",
+            "storedScopeGenerationCount",
+            "sharedHistoricalScopeGenerationCount",
+            "keepInactiveManifestCount",
+            "maxInactiveManifestsPrunedPerRun",
+            "manifestInventoryStatus",
+            "manifestInventoryReason",
+            "physicalCountStatus",
+            "physicalCountReason",
+        ])
+        scope_ids = [str(item or "") for item in payload.get("scopeIds") or [] if str(item or "")]
+        if scope_ids:
+            summary["scopeIds"] = scope_ids[:60]
         return summary
 
     def inferencebox_summary(self, payload: Dict[str, object]) -> Dict[str, object]:

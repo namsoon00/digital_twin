@@ -11,6 +11,23 @@ from digital_twin.domain.notifications import NotificationJob
 
 
 class FakeOntologyRepository:
+    def scoped_abox_storage_diagnostics(self):
+        return {
+            "configured": True,
+            "status": "ok",
+            "graphStore": "typedb",
+            "persistenceMode": "immutable-scoped-manifest",
+            "worldviewManifestId": "abox-manifest:test",
+            "activeScopeCount": 3,
+            "scopeTypeCounts": {"symbol": 2, "macro": 1},
+            "logicalActiveEntityCount": 120,
+            "logicalActiveRelationCount": 160,
+            "physicalAboxEntityCount": 150,
+            "physicalAboxRelationCount": 190,
+            "storedManifestCount": 2,
+            "inactiveManifestCount": 1,
+        }
+
     def active_tbox_metadata(self):
         return {
             "configured": True,
@@ -228,6 +245,9 @@ class OntologyDiagnosticsServiceTests(unittest.TestCase):
         self.assertEqual(payload["inferenceBox"]["ruleboxRulesHash"], "hash-1")
         self.assertEqual(payload["inferenceBox"]["sourceAboxSnapshotId"], "abox-material:test")
         self.assertTrue(payload["inferenceBox"]["generationAligned"])
+        self.assertEqual("immutable-scoped-manifest", payload["aboxStorage"]["persistenceMode"])
+        self.assertEqual(3, payload["aboxStorage"]["activeScopeCount"])
+        self.assertEqual(150, payload["aboxStorage"]["physicalAboxEntityCount"])
         self.assertTrue(payload["reasoningBoundary"]["nativeTypeDbReasoningUsed"])
         self.assertFalse(payload["reasoningBoundary"]["typedbBootstrapReasoningUsed"])
         self.assertEqual("ok", payload["reasoningBoundary"]["ruleboxHashStatus"])

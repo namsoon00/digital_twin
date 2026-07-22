@@ -354,7 +354,7 @@ def ontology_command(args) -> int:
         recovery_status = str((result.get("pendingAboxActivationRecovery") or {}).get("status") or "skipped")
         return 0 if (
             result.get("status") in {"ok", "unchanged", "disabled"}
-            and recovery_status in {"skipped", "disabled", "finalized", "restored", "cleared-stale", "retry-required"}
+            and recovery_status in {"skipped", "disabled", "finalized", "restored", "cleared-stale", "retry-required", "staged"}
         ) else 1
     if args.ontology_action == "recover-abox-activation":
         recovery = getattr(repository, "recover_pending_abox_activation", None)
@@ -367,7 +367,7 @@ def ontology_command(args) -> int:
                 result = {"status": "error", "reason": str(error)[:180]}
         print(json.dumps(result, ensure_ascii=False))
         return 0 if str(result.get("status") or "") in {
-            "skipped", "disabled", "finalized", "restored", "cleared-stale", "retry-required",
+            "skipped", "disabled", "finalized", "restored", "cleared-stale", "retry-required", "staged",
         } else 1
     return 1
 

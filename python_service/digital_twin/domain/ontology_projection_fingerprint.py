@@ -7,6 +7,8 @@ from .ontology_contracts import PortfolioOntology
 
 VOLATILE_LIFECYCLE_KEYS = {
     "aboxSnapshotId",
+    "aboxScopeId",
+    "aboxScopeType",
     "activeTboxEntityCount",
     "activeTboxRelationCount",
     "asOf",
@@ -23,10 +25,17 @@ VOLATILE_LIFECYCLE_KEYS = {
     "lastObservedAt",
     "observedAt",
     "projectionRunId",
+    "persistenceMode",
+    "scopeFingerprints",
+    "scopeGenerationId",
+    "scopeGenerationIds",
+    "scopePlan",
+    "scopedAboxManifestVersion",
     "snapshotId",
     "sourceAsOf",
     "sourceFetchedAt",
     "updatedAt",
+    "worldviewManifestId",
 }
 
 EXCLUDED_VOLATILE_ENTITY_KINDS = {

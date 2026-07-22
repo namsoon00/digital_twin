@@ -113,7 +113,10 @@ def typedb_worker_spec(settings: Dict[str, object]) -> Dict[str, object]:
     data_path = data_dir() / "typedb-data"
     log_dir = data_dir() / "typedb-logs"
     password = str((settings or {}).get("typedbPassword") or os.environ.get("TYPEDB_PASSWORD") or "").strip()
-    allow_weak_password = truthy(os.environ.get("TYPEDB_ALLOW_DEFAULT_PASSWORD"))
+    allow_weak_password = truthy(
+        os.environ.get("TYPEDB_ALLOW_DEFAULT_PASSWORD")
+        or (settings or {}).get("typedbAllowDefaultPassword")
+    )
     weak_password = password.lower() in {"", "admin", "password", "typedb"}
     command = [
         executable,
@@ -145,7 +148,10 @@ def typedb_worker_spec(settings: Dict[str, object]) -> Dict[str, object]:
         "dataPath": data_path,
         "retentionHours": str((settings or {}).get("typedbDataRetentionHours") or "24"),
         "maxSizeMb": str((settings or {}).get("typedbDataMaxSizeMb") or "2048"),
-        "autoResetEnabled": str((settings or {}).get("typedbAutoResetEnabled") or "1"),
+        # TypeDB is the durable ontology store. Capacity pressure must surface
+        # as maintenance work, never as an automatic data deletion during a
+        # routine worker restart.
+        "autoResetEnabled": str((settings or {}).get("typedbAutoResetEnabled") or "0"),
         "ageResetEnabled": str((settings or {}).get("typedbAgeResetEnabled") or "0"),
         "healthAddress": address,
         "typedbUser": str((settings or {}).get("typedbUser") or os.environ.get("TYPEDB_USER") or "admin"),
@@ -389,8 +395,19 @@ def run_typedb_data_retention(spec: Dict[str, object], force: bool = False) -> D
         return {"status": "skipped", "reason": "not typedb"}
     data_path = Path(spec.get("dataPath") or "")
     decision = typedb_reset_needed(spec)
-    if not force and not decision.get("needed"):
-        return {"status": "skipped", **decision}
+    if not force:
+        if not decision.get("needed"):
+            return {"status": "skipped", **decision}
+        # The graph can always be rebuilt from MySQL, but an automatic reset
+        # still destroys the active ABox, RuleBox history, and inference audit
+        # at the worst possible time.  Only an explicit maintenance command
+        # may remove the TypeDB data directory.
+        return {
+            "status": "maintenance-required",
+            "destructiveResetBlocked": True,
+            **decision,
+            "dataPath": str(data_path),
+        }
     if data_path.exists():
         shutil.rmtree(data_path)
     write_typedb_retention_marker({
@@ -669,6 +686,11 @@ def start_worker(spec: Dict[str, object]) -> int:
         if retention.get("status") == "reset":
             previous_mb = round(float(retention.get("sizeBytes") or 0) / 1024 / 1024, 1)
             print(str(spec["label"]) + " data reset before start. previousSizeMb=" + str(previous_mb) + " reason=" + str(retention.get("reason") or ""))
+        elif retention.get("status") == "maintenance-required":
+            previous_mb = round(float(retention.get("sizeBytes") or 0) / 1024 / 1024, 1)
+            message = "retention maintenance required; destructive reset blocked. sizeMb=" + str(previous_mb) + " reason=" + str(retention.get("reason") or "")
+            append_log(log_path, message)
+            print(str(spec["label"]) + " " + message)
     log_path.parent.mkdir(parents=True, exist_ok=True)
     append_log(log_path, "start")
     out = log_path.open("a", encoding="utf-8")

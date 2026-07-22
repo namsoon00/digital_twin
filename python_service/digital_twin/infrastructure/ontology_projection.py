@@ -12,6 +12,11 @@ from ..domain.ontology_projection_fingerprint import (
     apply_material_graph_identity,
     material_graph_fingerprint,
 )
+from ..domain.ontology_scopes import (
+    SCOPED_ABOX_MANIFEST_VERSION,
+    SCOPED_ABOX_PERSISTENCE_MODE,
+    apply_scoped_abox_identity,
+)
 from ..domain.ontology_projection_audit import (
     OntologyProjectionRun,
     apply_projection_run_identity,
@@ -53,6 +58,31 @@ def rulebox_input_relation_types(rules: List[Dict[str, object]]) -> List[str]:
             if relation_type:
                 relation_types.add(relation_type)
     return sorted(relation_types)
+
+
+def rulebox_relation_subject_patterns(rules: List[Dict[str, object]]) -> Set[tuple]:
+    """Return the exact subject side each native relation condition reads.
+
+    The runtime ABox must not retain a relation merely because its type is
+    used somewhere in RuleBox. For example, a portfolio-to-factor edge is not
+    an input to a stock rule that reads ``stock -> HAS_FACTOR_EXPOSURE``.
+    Keeping that distinction prevents volatile portfolio aggregates from
+    forcing every stock scope into a new generation.
+    """
+    patterns = set()
+    for rule in rules or []:
+        if not isinstance(rule, dict) or rule.get("enabled") is False:
+            continue
+        source_kind = str(rule.get("source_kind") or rule.get("sourceKind") or "stock").strip() or "stock"
+        for condition in rule.get("conditions") or []:
+            if not isinstance(condition, dict) or str(condition.get("kind") or "") != "relation":
+                continue
+            relation_type = str(condition.get("relation_type") or condition.get("relationType") or "").upper().strip()
+            if not relation_type:
+                continue
+            direction = str(condition.get("direction") or "out").strip().lower()
+            patterns.add((source_kind, relation_type, "in" if direction == "in" else "out"))
+    return patterns
 
 
 def rulebox_rules_missing_decision_stage(rules: List[Dict[str, object]]) -> List[str]:
@@ -169,7 +199,7 @@ class PortfolioOntologyProjectionRecorder:
             return result
         pending_activation_recovery = self.recover_pending_abox_activation()
         recovery_status = str(pending_activation_recovery.get("status") or "skipped")
-        if recovery_status not in {"skipped", "disabled", "finalized", "restored", "cleared-stale", "retry-required"}:
+        if recovery_status not in {"skipped", "disabled", "finalized", "restored", "cleared-stale", "retry-required", "staged"}:
             result = {
                 "saved": False,
                 "status": "pending-abox-activation-recovery-failed",
@@ -219,6 +249,15 @@ class PortfolioOntologyProjectionRecorder:
                 snapshot.account_id,
                 material_fingerprint,
             )
+            # The full in-memory graph remains the validation and AI context,
+            # while persistence gets independent immutable generations for
+            # each owning scope.  The manifest id remains the compatibility
+            # ABox generation id used by InferenceBox alignment and audits.
+            scoped_identity = apply_scoped_abox_identity(
+                persistence_graph,
+                snapshot.account_id,
+            )
+            material_snapshot_id = str(scoped_identity.get("manifestId") or material_snapshot_id)
             validation = validate_ontology(persistence_graph)
             if validation.error_count:
                 result = {
@@ -234,15 +273,29 @@ class PortfolioOntologyProjectionRecorder:
             projection_scope = {
                 "triggerMode": "subject-delta-coalesced",
                 "targetSymbols": list(inference_symbols),
-                "persistenceMode": "immutable-complete-generation",
+                "persistenceMode": SCOPED_ABOX_PERSISTENCE_MODE,
                 "atomicActivation": True,
+                "manifestId": material_snapshot_id,
+                "scopeCount": len(scoped_identity.get("scopePlan") or []),
                 "reason": (
-                    "변경 종목은 합쳐서 추론 범위를 제한하고, 활성 ABox는 롤백 가능한 완전 세대로 교체합니다."
+                    "변경 종목은 합쳐서 추론 범위를 제한하고, 변경된 ABox 범위만 새 세대로 기록한 뒤 "
+                    "원자적으로 Worldview Manifest를 교체합니다."
                 ),
             }
             active_abox = self.active_abox_metadata()
             active_abox_complete = str(active_abox.get("status") or "ok") == "ok"
-            if active_abox_complete and active_material_fingerprint(active_abox) == material_fingerprint:
+            active_abox_is_scoped_manifest = (
+                str(active_abox.get("scopedAboxManifestVersion") or "")
+                == SCOPED_ABOX_MANIFEST_VERSION
+            )
+            # Identical facts must still be persisted once when upgrading from
+            # the legacy complete-generation pointer. Otherwise a quiet market
+            # could leave the old full-rewrite ABox active indefinitely.
+            if (
+                active_abox_complete
+                and active_abox_is_scoped_manifest
+                and active_material_fingerprint(active_abox) == material_fingerprint
+            ):
                 inferencebox = self.existing_inference_result(snapshot, inference_symbols)
                 result = {
                     "saved": False,
@@ -329,8 +382,16 @@ class PortfolioOntologyProjectionRecorder:
                 result["ruleboxBootstrap"] = rulebox_bootstrap
             if pending_activation_recovery:
                 result["pendingAboxActivationRecovery"] = pending_activation_recovery
-            if result.get("saved"):
-                self.attach_graph_store_inference_result(result, snapshot, inference_symbols)
+            if result.get("saved") or str(result.get("status") or "") in {
+                "staged-scoped-manifest",
+                "deferred-pending-scoped-manifest",
+            }:
+                pending = result.get("pendingAboxActivation") if isinstance(result.get("pendingAboxActivation"), dict) else {}
+                self.attach_graph_store_inference_result(
+                    result,
+                    snapshot,
+                    pending.get("targetSymbols") or inference_symbols,
+                )
             if self.quality_store:
                 sample = self.quality_store.record_graph(graph, source=self.source)
                 result["qualitySampleId"] = sample.sample_id
@@ -524,6 +585,23 @@ class PortfolioOntologyProjectionRecorder:
             for item in (rule_catalog or {}).get("inputRelationTypes") or []
             if str(item or "").strip()
         }
+        active_rules = [
+            item
+            for item in (rule_catalog or {}).get("rules") or []
+            if isinstance(item, dict)
+        ]
+        subject_patterns = rulebox_relation_subject_patterns(active_rules)
+        if not subject_patterns:
+            # The bootstrap summary may omit full rules. Keep the historic
+            # stock/portfolio surface in that narrow compatibility case.
+            subject_patterns = {
+                (source_kind, relation_type, direction)
+                for source_kind in {"stock", "portfolio"}
+                for relation_type in native_relation_types
+                for direction in {"out", "in"}
+            }
+        source_kinds = {pattern[0] for pattern in subject_patterns}
+        entity_by_id = {item.entity_id: item for item in abox_entities}
         # The active ABox is both TypeDB's native-rule input and the factual
         # investment world shown to diagnostics and AI. Keep the category
         # edges that define that world even when no currently enabled rule
@@ -539,17 +617,66 @@ class PortfolioOntologyProjectionRecorder:
         source_ids = {
             item.entity_id
             for item in abox_entities
-            if str(item.kind or "") in {"stock", "portfolio"}
+            if str(item.kind or "") in source_kinds
         }
+        def matches_native_subject(relation) -> bool:
+            relation_type = str(relation.relation_type or "").upper().strip()
+            for source_kind, expected_type, direction in subject_patterns:
+                if relation_type != expected_type:
+                    continue
+                subject_id = relation.target if direction == "in" else relation.source
+                subject = entity_by_id.get(subject_id)
+                if subject and str(subject.kind or "") == source_kind:
+                    return True
+            return False
+
+        def should_persist_relation(relation) -> bool:
+            if not persisted_relation_types:
+                return relation.source in source_ids or relation.target in source_ids
+            if matches_native_subject(relation):
+                return True
+            relation_type = str(relation.relation_type or "").upper().strip()
+            return (
+                relation_type in (semantic_relation_types - native_relation_types)
+                and (relation.source in source_ids or relation.target in source_ids)
+            )
+
         relations = [
             item
             for item in abox_relations
-            if (
-                str(item.relation_type or "").upper().strip() in persisted_relation_types
-                if persisted_relation_types
-                else item.source in source_ids or item.target in source_ids
-            )
+            if should_persist_relation(item)
         ]
+        # Temporal observations are intentionally structural rather than
+        # direct RuleBox predicates. Once a native subject reaches a window,
+        # retain the small connected observation chain so time-series
+        # reasoning and diagnostics see the same episode.
+        persisted_endpoint_ids = {
+            endpoint
+            for relation in relations
+            for endpoint in (relation.source, relation.target)
+            if str(endpoint or "").strip()
+        } | set(source_ids)
+        structural_relations = [
+            item
+            for item in abox_relations
+            if str(item.relation_type or "").upper().strip() in ABOX_STRUCTURAL_RELATION_TYPES
+        ]
+        while True:
+            additions = [
+                item
+                for item in structural_relations
+                if item not in relations
+                and (item.source in persisted_endpoint_ids or item.target in persisted_endpoint_ids)
+            ]
+            if not additions:
+                break
+            relations.extend(additions)
+            persisted_endpoint_ids.update(
+                endpoint
+                for relation in additions
+                for endpoint in (relation.source, relation.target)
+                if str(endpoint or "").strip()
+            )
         persisted_entity_ids = source_ids | {
             endpoint
             for relation in relations
@@ -563,12 +690,12 @@ class PortfolioOntologyProjectionRecorder:
             if str((item.value or {}).get("ontologyBox") or "ABox") == "ABox"
             and str(item.subject or "") in source_ids
         ]
-        beliefs = [
-            item
-            for item in graph.beliefs
-            if not str(item.belief_id or "").startswith("belief:inference:")
-            and str(item.subject or "") in source_ids
-        ]
+        # Beliefs are reasoning output, not live observations. Persisting them
+        # in the ABox duplicates the InferenceBox and forces unrelated scope
+        # generations to be rewritten. Native rules consume the factual
+        # entities, relations, and evidence above; derived beliefs remain in
+        # their immutable InferenceBox generation.
+        beliefs = []
         return PortfolioOntology(
             graph.portfolio_id,
             entities=entities,
@@ -583,6 +710,7 @@ class PortfolioOntologyProjectionRecorder:
                 "runtimeProjectionScope": "typedb-rule-input-and-semantic-coverage-relations",
                 "runtimeProjectionSourceEntityCount": len(source_ids),
                 "runtimeProjectionRelationTypeCount": len(persisted_relation_types),
+                "runtimeProjectionRelationSubjectPatternCount": len(subject_patterns),
                 "runtimeProjectionRuleInputRelationTypeCount": len(native_relation_types),
                 "runtimeProjectionSemanticRelationTypeCount": len(semantic_relation_types),
             },
@@ -601,6 +729,35 @@ class PortfolioOntologyProjectionRecorder:
         if not hasattr(self.repository, "run_rulebox"):
             return
         inference_symbols = self.inference_symbols(snapshot, target_symbols)
+        if self.active_graph_store_key(result) == "typedb":
+            preparer = getattr(self.repository, "prepare_pending_abox_activation_for_inference", None)
+            if callable(preparer):
+                try:
+                    preparation = preparer()
+                except Exception as error:  # noqa: BLE001 - never run native rules against an uncertain active pointer.
+                    preparation = {"status": "error", "reason": str(error)[:180]}
+                result["aboxActivationPreparation"] = preparation
+                if str(preparation.get("status") or "") not in {"skipped", "ready", "activated"}:
+                    result["ruleboxExecution"] = {
+                        "configured": True,
+                        "status": "blocked-pending-abox-activation",
+                        "graphStore": "typedb",
+                        "source": "typedbNativeRule",
+                        "nativeTypeDbReasoningUsed": False,
+                        "reason": str(
+                            preparation.get("reason")
+                            or "ABox candidate could not be prepared for native inference."
+                        )[:220],
+                    }
+                    result["inferenceBox"] = {
+                        "configured": True,
+                        "status": "pending-abox-activation",
+                        "graphStore": "typedb",
+                        "source": "typedbInferenceBox",
+                        "nativeTypeDbReasoningUsed": False,
+                        "reason": result["ruleboxExecution"]["reason"],
+                    }
+                    return
         try:
             execution = self.repository.run_rulebox({
                 "symbols": inference_symbols,

@@ -233,6 +233,29 @@ class OntologyInferenceQualityTests(unittest.TestCase):
         self.assertTrue(third["saved"])
         self.assertNotEqual(first["materialFingerprint"], third["materialFingerprint"])
 
+    def test_identical_legacy_abox_is_migrated_to_scoped_manifest_once(self):
+        position = normalize_position({
+            "symbol": "005930",
+            "name": "삼성전자",
+            "market": "KR",
+            "currency": "KRW",
+            "source": "holding",
+            "quantity": 10,
+            "currentPrice": 70000,
+            "marketValue": 700000,
+        })
+        repository = MemoryProjectionRepository()
+        recorder = PortfolioOntologyProjectionRecorder(repository)
+
+        first = recorder.record_snapshot(self.snapshot(position, "2026-07-20T00:01:00Z"))
+        repository.active.pop("scopedAboxManifestVersion", None)
+        migrated = recorder.record_snapshot(self.snapshot(position, "2026-07-20T00:04:00Z"))
+
+        self.assertTrue(first["saved"])
+        self.assertTrue(migrated["saved"])
+        self.assertEqual(2, repository.save_count)
+        self.assertTrue(repository.active["scopedAboxManifestVersion"])
+
     def test_material_abox_generation_is_audited_before_graph_activation(self):
         events = []
 
@@ -472,9 +495,19 @@ class MemoryProjectionRepository:
 
     def save_graph(self, graph):
         self.save_count += 1
-        fingerprint = material_graph_fingerprint(graph)
+        # The projection recorder computes the canonical material fingerprint
+        # before it adds persistence-only scope lifecycle fields. Mirror the
+        # real TypeDB marker contract instead of recomputing it from a graph
+        # that may already contain those transport annotations.
+        fingerprint = str((graph.worldview or {}).get("materialFingerprint") or material_graph_fingerprint(graph))
         snapshot_id = str((graph.worldview or {}).get("aboxSnapshotId") or "")
-        self.active = {"materialFingerprint": fingerprint, "aboxSnapshotId": snapshot_id}
+        self.active = {
+            "materialFingerprint": fingerprint,
+            "aboxSnapshotId": snapshot_id,
+            "scopedAboxManifestVersion": str(
+                (graph.worldview or {}).get("scopedAboxManifestVersion") or ""
+            ),
+        }
         return {"saved": True, "status": "ok", "graphStore": "typedb"}
 
     def run_rulebox(self, payload=None):

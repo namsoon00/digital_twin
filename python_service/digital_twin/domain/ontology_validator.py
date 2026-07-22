@@ -50,6 +50,15 @@ def validate_ontology(graph: PortfolioOntology) -> OntologyValidationReport:
     issues: List[OntologyValidationIssue] = []
     entity_ids = {item.entity_id for item in graph.entities or []}
     required_lifecycle_fields = ["accountId", "aboxSnapshotId", "tboxVersion"]
+    worldview = dict(getattr(graph, "worldview", {}) or {})
+    scoped_manifest = str(worldview.get("scopedAboxManifestVersion") or "").strip()
+    if scoped_manifest:
+        required_lifecycle_fields.extend([
+            "aboxScopeId",
+            "aboxScopeType",
+            "scopeGenerationId",
+            "worldviewManifestId",
+        ])
     for entity in graph.entities or []:
         properties = entity.properties or {}
         if properties.get("ontologyBox") == "TBox":
@@ -113,6 +122,18 @@ def validate_ontology(graph: PortfolioOntology) -> OntologyValidationReport:
                 "unknown_relation_type",
                 relation.source + " -" + relation.relation_type + "-> " + relation.target,
                 "Unknown TBox relation type: " + relation.relation_type,
+            ))
+    for evidence in graph.evidence or []:
+        value = evidence.value or {}
+        if value.get("ontologyBox") != "ABox":
+            continue
+        missing_lifecycle = [field for field in required_lifecycle_fields if not value.get(field)]
+        if missing_lifecycle:
+            issues.append(OntologyValidationIssue(
+                "warning",
+                "missing_abox_lifecycle",
+                evidence.evidence_id,
+                "ABox evidence is missing lifecycle fields: " + ", ".join(missing_lifecycle),
             ))
     error_count = len([item for item in issues if item.severity == "error"])
     warning_count = len([item for item in issues if item.severity == "warning"])

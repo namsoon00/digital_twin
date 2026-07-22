@@ -11,6 +11,10 @@ from unittest.mock import ANY, patch
 from digital_twin import service_manager
 from digital_twin.domain.ontology_rulebox_catalog import default_graph_inference_rules
 from digital_twin.domain.ontology_contracts import OntologyEntity, OntologyEvidence, OntologyRelation, PortfolioOntology
+from digital_twin.domain.ontology_scopes import (
+    SCOPED_ABOX_MANIFEST_VERSION,
+    apply_scoped_abox_identity,
+)
 from digital_twin.domain.portfolio import AccountSnapshot, PortfolioSummary, Position, utc_now_iso
 from digital_twin.domain.repositories import (
     ONTOLOGY_GRAPH_REPOSITORY_CONTRACT,
@@ -23,6 +27,8 @@ from digital_twin.infrastructure.typedb_ontology import (
     NullTypeDBOntologyGraphRepository,
     TypeDBOperationTimeout,
     TypeDBOntologyGraphRepository,
+    TYPEDB_NATIVE_REASONING_PROFILE_VERSION,
+    TYPEDB_NATIVE_RULE_ENGINE_VERSION,
     TYPEDB_PROMOTED_NUMERIC_ATTRIBUTES,
     TYPEDB_PROMOTED_TEXT_ATTRIBUTES,
     node_boxes,
@@ -32,6 +38,7 @@ from digital_twin.infrastructure.typedb_ontology import (
     typedb_inferencebox_graph,
     typedb_native_function_definition,
     typedb_native_function_call_query,
+    typedb_native_any_group_check_query,
     typedb_native_match_query,
     typedb_native_rule_execution_plan,
     typedb_native_reasoning_profile,
@@ -47,6 +54,8 @@ class TypeDBOntologyRepositoryTests(unittest.TestCase):
         self.assertIn("entity ontology-node @abstract", schema)
         self.assertIn("relation ontology-assertion", schema)
         self.assertIn("attribute ontology-storage-id, value string", schema)
+        self.assertIn("attribute ontology-scope-id, value string", schema)
+        self.assertIn("attribute ontology-manifest-id, value string", schema)
         self.assertIn("owns ontology-storage-id @unique", schema)
         self.assertNotIn("owns ontology-id @key", schema)
         self.assertIn("plays ontology-assertion:source", schema)
@@ -133,6 +142,215 @@ class TypeDBOntologyRepositoryTests(unittest.TestCase):
             "ontologyBox": "ABox",
             "snapshotId": "abox-material:active",
         }, "stock:005930", "node"))
+
+    def test_scoped_abox_changes_only_the_affected_symbol_generation(self):
+        graph = PortfolioOntology(
+            "main",
+            entities=[
+                OntologyEntity("stock:005930", "삼성전자", "stock", {
+                    "ontologyBox": "ABox", "symbol": "005930",
+                }),
+                OntologyEntity("price-metric:005930:currentPrice", "삼성전자 현재가", "price-metric", {
+                    "ontologyBox": "ABox", "currentPrice": 70000,
+                }),
+                OntologyEntity("stock:MSTR", "Strategy", "stock", {
+                    "ontologyBox": "ABox", "symbol": "MSTR",
+                }),
+                OntologyEntity("fx-rate:USDKRW", "USD/KRW", "fx-rate", {
+                    "ontologyBox": "ABox", "usdKrwRate": 1400,
+                }),
+            ],
+            relations=[
+                OntologyRelation("stock:005930", "price-metric:005930:currentPrice", "HAS_PRICE", properties={
+                    "ontologyBox": "ABox",
+                }),
+                OntologyRelation("stock:MSTR", "fx-rate:USDKRW", "EXPOSED_TO_FX", properties={
+                    "ontologyBox": "ABox",
+                }),
+            ],
+        )
+
+        first = apply_scoped_abox_identity(graph)
+        first_generations = dict(first["scopeGenerationIds"])
+        self.assertIn("symbol:005930", first_generations)
+        self.assertIn("symbol:MSTR", first_generations)
+        self.assertIn("macro:global", first_generations)
+
+        graph.entities[1].properties["currentPrice"] = 71000
+        second = apply_scoped_abox_identity(graph)
+        second_generations = dict(second["scopeGenerationIds"])
+
+        self.assertNotEqual(first_generations["symbol:005930"], second_generations["symbol:005930"])
+        self.assertEqual(first_generations["symbol:MSTR"], second_generations["symbol:MSTR"])
+        self.assertEqual(first_generations["macro:global"], second_generations["macro:global"])
+
+    def test_scoped_abox_rolls_forward_only_macro_dependents_and_resolves_cross_scope_endpoints(self):
+        graph = PortfolioOntology(
+            "main",
+            entities=[
+                OntologyEntity("stock:005930", "삼성전자", "stock", {
+                    "ontologyBox": "ABox", "symbol": "005930",
+                }),
+                OntologyEntity("stock:MSTR", "Strategy", "stock", {
+                    "ontologyBox": "ABox", "symbol": "MSTR",
+                }),
+                OntologyEntity("fx-rate:USDKRW", "USD/KRW", "fx-rate", {
+                    "ontologyBox": "ABox", "usdKrwRate": 1400,
+                }),
+            ],
+            relations=[
+                OntologyRelation("stock:MSTR", "fx-rate:USDKRW", "EXPOSED_TO_FX", properties={
+                    "ontologyBox": "ABox",
+                }),
+            ],
+        )
+        first = apply_scoped_abox_identity(graph)
+        first_generations = dict(first["scopeGenerationIds"])
+
+        graph.entities[2].properties["usdKrwRate"] = 1410
+        second = apply_scoped_abox_identity(graph)
+        second_generations = dict(second["scopeGenerationIds"])
+
+        self.assertNotEqual(first_generations["macro:global"], second_generations["macro:global"])
+        self.assertNotEqual(first_generations["symbol:MSTR"], second_generations["symbol:MSTR"])
+        self.assertEqual(first_generations["symbol:005930"], second_generations["symbol:005930"])
+
+        repository = TypeDBOntologyGraphRepository("127.0.0.1:1729")
+        nodes, relations = repository.scoped_abox_persistence_rows(graph, ["symbol:MSTR"])
+        self.assertEqual(["stock:MSTR"], [row["id"] for row in nodes])
+        self.assertEqual(1, len(relations))
+        macro = next(item for item in graph.entities if item.entity_id == "fx-rate:USDKRW")
+        self.assertEqual(
+            ontology_storage_id(macro.properties, macro.entity_id, "node"),
+            relations[0]["targetStorageId"],
+        )
+
+    def test_scoped_abox_persistence_includes_evidence_and_support_relation_in_the_owner_scope(self):
+        graph = PortfolioOntology(
+            "main",
+            entities=[OntologyEntity("stock:005930", "삼성전자", "stock", {
+                "ontologyBox": "ABox", "symbol": "005930",
+            })],
+            evidence=[OntologyEvidence(
+                "evidence:005930:price",
+                "stock:005930",
+                "price",
+                "KIS",
+                "현재가",
+                {"ontologyBox": "ABox"},
+            )],
+        )
+        apply_scoped_abox_identity(graph)
+        repository = TypeDBOntologyGraphRepository("127.0.0.1:1729")
+
+        nodes, relations = repository.scoped_abox_persistence_rows(graph, ["symbol:005930"])
+
+        self.assertEqual({"stock:005930", "evidence:005930:price"}, {row["id"] for row in nodes})
+        self.assertEqual(["HAS_EVIDENCE"], [row["type"] for row in relations])
+        self.assertTrue(all(row["scopeId"] == "symbol:005930" for row in nodes + relations))
+
+    def test_scoped_abox_finalize_runs_reference_aware_manifest_cleanup(self):
+        repository = TypeDBOntologyGraphRepository("127.0.0.1:1729")
+        with patch.object(repository, "active_abox_metadata", return_value={
+            "status": "ok",
+            "worldviewManifestId": "abox-manifest:next",
+            "scopedAboxManifestVersion": SCOPED_ABOX_MANIFEST_VERSION,
+        }), patch.object(repository, "activate_scoped_abox_manifest", return_value={"status": "ok"}), patch.object(
+            repository,
+            "prune_inactive_scoped_abox_manifests",
+            return_value={"status": "ok", "removedManifestIds": ["abox-manifest:old"]},
+        ) as cleanup:
+            result = repository.finalize_scoped_abox_manifest("abox-manifest:next", "abox-manifest:old")
+
+        self.assertEqual("ok", result["status"])
+        self.assertFalse(result["cleanupDeferred"])
+        cleanup.assert_called_once_with()
+
+    def test_scoped_abox_finalize_removes_legacy_complete_generation_after_inference(self):
+        repository = TypeDBOntologyGraphRepository("127.0.0.1:1729")
+        with patch.object(repository, "active_abox_metadata", return_value={
+            "status": "ok",
+            "worldviewManifestId": "abox-manifest:next",
+            "scopedAboxManifestVersion": SCOPED_ABOX_MANIFEST_VERSION,
+        }), patch.object(repository, "activate_scoped_abox_manifest", return_value={"status": "ok"}), patch.object(
+            repository,
+            "prune_inactive_scoped_abox_manifests",
+            return_value={"status": "ok"},
+        ), patch.object(repository, "discard_abox_generation", return_value={
+            "status": "ok",
+            "deletedBatchCount": 5,
+        }) as discard:
+            result = repository.finalize_scoped_abox_manifest(
+                "abox-manifest:next",
+                "abox-material:legacy",
+            )
+
+        self.assertEqual("ok", result["status"])
+        self.assertFalse(result["cleanupDeferred"])
+        self.assertEqual("ok", result["cleanup"]["legacyPredecessorCleanup"]["status"])
+        discard.assert_called_once_with("abox-material:legacy")
+
+    def test_scoped_abox_save_defers_when_another_writer_holds_the_lease(self):
+        graph = PortfolioOntology(
+            "main",
+            entities=[OntologyEntity("stock:005930", "삼성전자", "stock", {
+                "ontologyBox": "ABox",
+                "symbol": "005930",
+            })],
+        )
+        apply_scoped_abox_identity(graph)
+        repository = TypeDBOntologyGraphRepository("127.0.0.1:1729")
+        with patch.object(repository, "acquire_scoped_abox_write_lease", return_value={
+            "acquired": False,
+            "status": "held",
+            "leaseOwner": "other-worker",
+            "leaseExpiresAtEpoch": 9999999999,
+        }):
+            result = repository.save_scoped_abox_graph(graph)
+
+        self.assertFalse(result["saved"])
+        self.assertEqual("deferred-scoped-write-lease", result["status"])
+        self.assertTrue(result["preservedActiveGeneration"])
+        self.assertEqual("other-worker", result["writeLease"]["leaseOwner"])
+
+    def test_orphan_scoped_candidate_inventory_keeps_manifest_referenced_generations(self):
+        repository = TypeDBOntologyGraphRepository("127.0.0.1:1729")
+        with patch.object(repository, "worldview_manifest_marker_rows", return_value=[{
+            "worldviewManifestId": "abox-manifest:complete",
+            "scopeGenerationIds": {"macro:global": "abox-scope:shared"},
+        }]), patch.object(repository, "active_abox_metadata", return_value={
+            "worldviewManifestId": "abox-manifest:complete",
+            "scopeGenerationIds": {"macro:global": "abox-scope:shared"},
+        }), patch.object(repository, "read_rows", side_effect=[
+            [
+                {"manifestId": "abox-manifest:complete", "snapshotId": "abox-scope:shared"},
+                {"manifestId": "abox-manifest:orphan", "snapshotId": "abox-scope:orphan"},
+            ],
+            [{"manifestId": "abox-manifest:orphan", "snapshotId": "abox-scope:orphan"}],
+        ]):
+            inventory = repository.scoped_abox_orphan_candidate_inventory()
+
+        self.assertEqual(["abox-manifest:orphan"], inventory["candidateManifestIds"])
+        self.assertEqual(["abox-scope:orphan"], inventory["candidateGenerationIds"])
+        self.assertIn("abox-scope:shared", inventory["protectedGenerationIds"])
+
+    def test_scoped_abox_write_lease_duration_is_bounded_and_configurable(self):
+        repository = TypeDBOntologyGraphRepository("127.0.0.1:1729")
+
+        self.assertEqual(900, repository.scoped_abox_write_lease_seconds({}))
+        self.assertEqual(120, repository.scoped_abox_write_lease_seconds({
+            "typedbScopedABoxLeaseSeconds": "1",
+        }))
+        self.assertEqual(3600, repository.scoped_abox_write_lease_seconds({
+            "typedbScopedABoxLeaseSeconds": "999999",
+        }))
+        self.assertEqual(4, repository.scoped_abox_orphan_cleanup_max_generations({}))
+        self.assertEqual(1, repository.scoped_abox_orphan_cleanup_max_generations({
+            "typedbScopedABoxOrphanCleanupMaxGenerations": "0",
+        }))
+        self.assertEqual(20, repository.scoped_abox_orphan_cleanup_max_generations({
+            "typedbScopedABoxOrphanCleanupMaxGenerations": "999999",
+        }))
 
     def test_relation_batch_matches_cross_box_endpoints_without_dropping_the_batch(self):
         repository = TypeDBOntologyGraphRepository("127.0.0.1:1729")
@@ -293,7 +511,7 @@ class TypeDBOntologyRepositoryTests(unittest.TestCase):
         self.assertEqual("typedb-schema-function-filtered-planned", result["nativeExecutionMode"])
         self.assertTrue(result["schemaFunctionUsed"])
         self.assertEqual(1, result["readQueryCount"])
-        self.assertEqual(6000, transaction_options[0].transaction_timeout_millis)
+        self.assertEqual(32000, transaction_options[0].transaction_timeout_millis)
         self.assertIn('has ontology-symbol "005930"', queries[0])
         self.assertIn("let $source in orbit_rule_", queries[0])
         self.assertIn("($candidate)", queries[0])
@@ -302,6 +520,68 @@ class TypeDBOntologyRepositoryTests(unittest.TestCase):
             queries[0].index("let $source in orbit_rule_"),
         )
         self.assertEqual(1, result["executionPlan"]["selectedRuleCount"])
+
+    def test_typedb_any_rule_uses_one_read_snapshot_for_function_and_cardinality_check(self):
+        repository = TypeDBOntologyGraphRepository("127.0.0.1:1729", retry_count=0)
+        rule = next(
+            item for item in default_graph_inference_rules()
+            if item.rule_id == "graph.loss_smart_money.add_buy_review.v1"
+        )
+        queries = []
+        transaction_options = []
+
+        class FakeConcept:
+            def __init__(self, value):
+                self.value = value
+
+            def get_value(self):
+                return self.value
+
+        class FakeRow:
+            def get(self, name):
+                return FakeConcept({
+                    "sourceId": "stock:000660",
+                    "sourceLabel": "SK하이닉스",
+                }.get(name))
+
+        class FakePromise:
+            def resolve(self):
+                return [FakeRow()]
+
+        class FakeTransaction:
+            def __enter__(self):
+                return self
+
+            def __exit__(self, _exc_type, _exc, _traceback):
+                return False
+
+            def query(self, query):
+                queries.append(query)
+                return FakePromise()
+
+        class FakeDriver:
+            def transaction(self, _database, _transaction_type, options=None):
+                transaction_options.append(options)
+                return FakeTransaction()
+
+        driver = FakeDriver()
+        imported = (object, object, object, object, SimpleNamespace(READ="read"))
+        with patch.object(repository, "driver_imports", return_value=(imported, None)), \
+                patch.object(repository, "open_driver", return_value=driver), \
+                patch.object(repository, "ensure_database"), \
+                patch.object(repository, "close_driver"), \
+                patch.object(repository, "active_abox_uses_scoped_manifest", return_value=True):
+            result = repository.match_typedb_native_rules([rule])
+
+        self.assertEqual("ok", result["status"])
+        self.assertEqual("typedb-schema-function-hybrid-any-verified", result["nativeExecutionMode"])
+        self.assertEqual(1, result["readTransactionCount"])
+        self.assertEqual(2, result["readQueryCount"])
+        self.assertEqual(1, len(transaction_options))
+        self.assertEqual(2, len(queries))
+        self.assertIn("let $source in orbit_rule_", queries[0])
+        self.assertIn("reduce $anyConditionCount = count($anyConditionToken) groupby $source", queries[1])
+        self.assertEqual(1, result["matchedCount"])
 
     def test_typedb_native_rule_execution_plan_prunes_impossible_rules_before_function_calls(self):
         rules = default_graph_inference_rules()
@@ -357,6 +637,84 @@ class TypeDBOntologyRepositoryTests(unittest.TestCase):
         self.assertIn("graph.temporal.persistent_decline.risk.v1", selected_ids)
         self.assertIn("graph.temporal.stale_observation.block.v1", selected_ids)
 
+    def test_typedb_native_rule_preflight_prunes_only_a_proven_required_relation_mismatch(self):
+        rule = next(
+            item for item in default_graph_inference_rules()
+            if item.rule_id == "graph.data_quality.action_block.v1"
+        )
+        graph = PortfolioOntology("typedb-preflight")
+        graph.entities.extend([
+            OntologyEntity("stock:005930", "삼성전자", "stock", {
+                "ontologyBox": "ABox",
+                "symbol": "005930",
+            }),
+            OntologyEntity("missing:005930", "수급 결측", "missing-data", {
+                "ontologyBox": "ABox",
+                "dataScope": "fundamentals",
+            }),
+        ])
+        graph.relations.append(OntologyRelation(
+            "stock:005930",
+            "missing:005930",
+            "HAS_DATA_QUALITY",
+            properties={"ontologyBox": "ABox", "evidenceRole": "risk"},
+        ))
+
+        mismatch_plan = typedb_native_rule_execution_plan(
+            [rule],
+            ["005930"],
+            {"005930": ["HAS_DATA_QUALITY"]},
+            preflight_graph=graph,
+        )
+
+        self.assertEqual([], mismatch_plan["selectedEntries"])
+        mismatch = mismatch_plan["skippedEntries"][0]
+        self.assertEqual("not-applicable-preflight", mismatch["status"])
+        self.assertEqual(
+            ["005930"],
+            list(mismatch["preflightPrunedSymbols"]),
+        )
+        self.assertEqual(
+            ["severe-microstructure-gap"],
+            mismatch["preflightPrunedSymbols"]["005930"]["failedConditionIds"],
+        )
+
+        graph.entities[1].properties["dataScope"] = "market-microstructure"
+        matching_plan = typedb_native_rule_execution_plan(
+            [rule],
+            ["005930"],
+            {"005930": ["HAS_DATA_QUALITY"]},
+            preflight_graph=graph,
+        )
+
+        self.assertEqual([rule.rule_id], [item["ruleId"] for item in matching_plan["selectedEntries"]])
+        self.assertEqual([], matching_plan["skippedEntries"])
+
+    def test_typedb_native_rule_preflight_keeps_incoming_relation_rules_when_endpoint_scan_is_deferred(self):
+        rule = next(
+            item for item in default_graph_inference_rules()
+            if item.rule_id == "graph.news.ai_direct_risk.v1"
+        )
+        graph = PortfolioOntology(
+            "typedb-preflight-incoming",
+            entities=[OntologyEntity("stock:005930", "삼성전자", "stock", {
+                "ontologyBox": "ABox",
+                "symbol": "005930",
+                "source": "holding",
+            })],
+        )
+
+        plan = typedb_native_rule_execution_plan(
+            [rule],
+            ["005930"],
+            {"005930": ["AFFECTS"]},
+            preflight_graph=graph,
+            preflight_incoming_relations_complete=False,
+        )
+
+        self.assertEqual([rule.rule_id], [item["ruleId"] for item in plan["selectedEntries"]])
+        self.assertEqual([], plan["skippedEntries"])
+
     def test_active_abox_rule_context_reads_relation_types_without_evaluating_rule_values(self):
         repository = TypeDBOntologyGraphRepository("127.0.0.1:1729")
         with patch.object(
@@ -396,7 +754,8 @@ class TypeDBOntologyRepositoryTests(unittest.TestCase):
                 "relationType": "IN_PORTFOLIO",
             }]
 
-        with patch.object(repository, "read_rows", side_effect=read_rows):
+        with patch.object(repository, "active_abox_uses_scoped_manifest", return_value=True), \
+                patch.object(repository, "read_rows", side_effect=read_rows):
             topology = repository.active_abox_relation_types_by_symbol(["000660"])
 
         self.assertEqual("ok", topology["status"])
@@ -408,6 +767,8 @@ class TypeDBOntologyRepositoryTests(unittest.TestCase):
         self.assertEqual(2, topology["relationCount"])
         self.assertEqual(2, len(queries))
         self.assertTrue(all("ontology-json" not in query for query in queries))
+        self.assertTrue(all(query.count('worldview-manifest-active-pointer') == 1 for query in queries))
+        self.assertTrue(all('has ontology-kind "abox-active-pointer"' not in query for query in queries))
 
     def test_typedb_native_rule_query_timeout_returns_partial_result(self):
         repository = TypeDBOntologyGraphRepository(
@@ -771,6 +1132,80 @@ class TypeDBOntologyRepositoryTests(unittest.TestCase):
         self.assertEqual(["000660", "005930"], pending.properties["targetSymbols"])
         self.assertEqual(1, len(cleared.entities))
         self.assertEqual("abox-active-pointer", cleared.entities[0].kind)
+
+    def test_scoped_manifest_pending_graph_keeps_the_previous_pointer_out_of_the_candidate_stage(self):
+        repository = TypeDBOntologyGraphRepository("127.0.0.1:1729")
+        candidate = PortfolioOntology(
+            "typedb-staged-manifest",
+            worldview={
+                "worldviewManifestId": "abox-manifest:candidate",
+                "aboxSnapshotId": "abox-manifest:candidate",
+                "scopeGenerationIds": {"symbol:000660": "abox-scope:candidate"},
+                "scopeFingerprints": {"symbol:000660": "fingerprint"},
+                "inferenceTargetSymbols": ["000660"],
+            },
+        )
+        scope_plan = [{
+            "scopeId": "symbol:000660",
+            "scopeType": "symbol",
+            "generationId": "abox-scope:candidate",
+            "fingerprint": "fingerprint",
+        }]
+
+        staged = repository.scoped_manifest_pending_graph(
+            candidate,
+            scope_plan,
+            {"worldviewManifestId": "abox-manifest:previous"},
+        )
+
+        self.assertEqual(1, len(staged.entities))
+        self.assertEqual("abox-activation-pending", staged.entities[0].kind)
+        self.assertEqual("staged-native-inference", staged.entities[0].properties["activationStatus"])
+        self.assertEqual("abox-manifest:previous", staged.entities[0].properties["previousAboxSnapshotId"])
+        self.assertFalse(any(item.kind == "worldview-manifest-active-pointer" for item in staged.entities))
+
+    def test_typedb_pending_abox_recovery_leaves_unactivated_staged_manifest_intact(self):
+        repository = TypeDBOntologyGraphRepository("127.0.0.1:1729")
+        pending = {
+            "status": "pending",
+            "activationStatus": "staged-native-inference",
+            "candidateAboxSnapshotId": "abox-manifest:candidate",
+            "previousAboxSnapshotId": "abox-manifest:previous",
+        }
+        with patch.object(repository, "pending_abox_activation", return_value=pending), \
+                patch.object(repository, "active_abox_metadata", return_value={
+                    "status": "ok", "aboxSnapshotId": "abox-manifest:previous",
+                }), \
+                patch.object(repository, "activate_abox_generation") as activate:
+            result = repository.recover_pending_abox_activation()
+
+        self.assertEqual("staged", result["status"])
+        self.assertEqual("abox-manifest:previous", result["activeAboxSnapshotId"])
+        activate.assert_not_called()
+
+    def test_typedb_prepares_staged_manifest_only_when_the_expected_predecessor_is_active(self):
+        repository = TypeDBOntologyGraphRepository("127.0.0.1:1729")
+        staged = {
+            "status": "pending",
+            "activationStatus": "staged-native-inference",
+            "candidateAboxSnapshotId": "abox-manifest:candidate",
+            "previousAboxSnapshotId": "abox-manifest:previous",
+            "targetSymbols": ["000660"],
+        }
+        active_before = {"status": "ok", "worldviewManifestId": "abox-manifest:previous"}
+        active_after = {"status": "ok", "worldviewManifestId": "abox-manifest:candidate"}
+        pending_after = {**staged, "activationStatus": "pending-native-inference"}
+        with patch.object(repository, "pending_abox_activation", side_effect=[staged, pending_after]), \
+                patch.object(repository, "active_abox_metadata", side_effect=[active_before, active_after]), \
+                patch.object(repository, "activate_scoped_abox_manifest", return_value={"status": "ok"}) as activate:
+            result = repository.prepare_pending_abox_activation_for_inference()
+
+        self.assertEqual("activated", result["status"])
+        activate.assert_called_once_with(
+            "abox-manifest:candidate",
+            previous_metadata=active_before,
+            pending_activation=True,
+        )
 
     def test_typedb_pending_abox_recovery_restores_previous_generation_on_stale_inference(self):
         repository = TypeDBOntologyGraphRepository("127.0.0.1:1729")
@@ -1262,17 +1697,17 @@ class TypeDBOntologyRepositoryTests(unittest.TestCase):
         self.assertIn('has ontology-symbol "000660"', query)
         self.assertNotIn("has ontology-symbol 660.0", query)
 
-    def test_typedb_native_function_call_limits_candidates_to_active_abox_snapshot(self):
+    def test_typedb_native_function_call_limits_candidates_to_active_manifest(self):
         rule = next(item for item in default_graph_inference_rules() if item.rule_id == "graph.loss_guard.breakdown.v1")
 
         query = typedb_native_function_call_query(rule.to_dict(), ["000660"])["query"]
 
-        self.assertIn('has ontology-kind "abox-active-pointer"', query)
-        self.assertIn('has ontology-box "ABoxControl", has ontology-snapshot-id $activeAboxSnapshotId', query)
+        self.assertIn('has ontology-kind "worldview-manifest-active-pointer"', query)
         self.assertIn(
-            'has ontology-box "ABox", has ontology-snapshot-id $activeAboxSnapshotId',
+            'has ontology-box "ABox", has ontology-manifest-id $activeManifestId',
             query,
         )
+        self.assertNotIn('has ontology-kind "abox-active-pointer"', query)
         self.assertIn('has ontology-symbol "000660"', query)
 
     def test_typedb_native_any_branches_use_distinct_value_variables(self):
@@ -1735,7 +2170,8 @@ class TypeDBOntologyRepositoryTests(unittest.TestCase):
         repository.read_relation_rows(["InferenceBox"], limit=2)
 
         self.assertIn("has ontology-box \"ABoxControl\"", repository.queries[0])
-        self.assertIn("has ontology-box \"ABox\", has ontology-snapshot-id $activeAboxSnapshotId; limit 1;", repository.queries[0])
+        self.assertIn("has ontology-box \"ABox\", has ontology-scope-id $boxProbeScopedScopeId", repository.queries[0])
+        self.assertIn("has ontology-kind \"abox-active-pointer\"", repository.queries[0])
         self.assertIn("limit 1;", repository.queries[1])
         self.assertIn("limit 2;", repository.queries[2])
 
@@ -2557,7 +2993,7 @@ class TypeDBOntologyRepositoryTests(unittest.TestCase):
             run.call_args_list[-1].args[0],
         )
 
-    def test_typedb_retention_resets_projection_data_when_size_exceeds_limit(self):
+    def test_typedb_retention_requires_maintenance_when_size_exceeds_limit(self):
         with tempfile.TemporaryDirectory() as temp:
             data_path = Path(temp) / "typedb-data"
             data_path.mkdir(parents=True)
@@ -2574,6 +3010,29 @@ class TypeDBOntologyRepositoryTests(unittest.TestCase):
 
             with patch.object(service_manager, "data_dir", return_value=Path(temp)):
                 result = service_manager.run_typedb_data_retention(spec)
+
+            self.assertEqual("maintenance-required", result["status"])
+            self.assertTrue(result["destructiveResetBlocked"])
+            self.assertTrue(data_path.exists())
+            self.assertFalse(marker_path.exists())
+
+    def test_typedb_retention_resets_projection_data_only_when_forced(self):
+        with tempfile.TemporaryDirectory() as temp:
+            data_path = Path(temp) / "typedb-data"
+            data_path.mkdir(parents=True)
+            (data_path / "wal").mkdir()
+            (data_path / "wal" / "wal-1").write_bytes(b"x" * (2 * 1024 * 1024))
+            marker_path = Path(temp) / "typedb-retention.json"
+            spec = {
+                "role": "typedb",
+                "dataPath": data_path,
+                "autoResetEnabled": "1",
+                "retentionHours": "24",
+                "maxSizeMb": "1",
+            }
+
+            with patch.object(service_manager, "data_dir", return_value=Path(temp)):
+                result = service_manager.run_typedb_data_retention(spec, force=True)
 
             self.assertEqual("reset", result["status"])
             self.assertFalse(data_path.exists())
@@ -3059,6 +3518,98 @@ class TypeDBOntologyRepositoryTests(unittest.TestCase):
         self.assertTrue(all((item.properties or {}).get("sourceAboxSnapshotId") == "abox-snapshot:test" for item in captured["graph"].entities))
         self.assertEqual("skipped", result["clearResult"]["status"])
 
+    def test_typedb_rulebox_accepts_scoped_source_generations_through_one_worldview_manifest(self):
+        repository = TypeDBOntologyGraphRepository("127.0.0.1:1729")
+        graph = PortfolioOntology("typedb-scoped-run-rulebox")
+        graph.entities.extend([
+            OntologyEntity("stock:005930", "삼성전자", "stock", {
+                "ontologyBox": "ABox",
+                "symbol": "005930",
+                "scopeId": "symbol:005930",
+                "aboxSnapshotId": "abox-scope:005930",
+                "worldviewManifestId": "abox-manifest:live",
+                "profitLossRate": -12.5,
+            }),
+            OntologyEntity("level:005930:ma20", "20일선", "key-level", {
+                "ontologyBox": "ABox",
+                "symbol": "005930",
+                "scopeId": "symbol:005930",
+                "aboxSnapshotId": "abox-scope:005930",
+                "worldviewManifestId": "abox-manifest:live",
+            }),
+            OntologyEntity("risk-budget:main", "리스크 예산", "risk-budget", {
+                "ontologyBox": "ABox",
+                "scopeId": "policy:main",
+                "aboxSnapshotId": "abox-scope:policy",
+                "worldviewManifestId": "abox-manifest:live",
+            }),
+        ])
+        graph.relations.extend([
+            OntologyRelation("stock:005930", "level:005930:ma20", "BREAKS_LEVEL", 0.8, properties={
+                "ontologyBox": "ABox",
+            }),
+            OntologyRelation("stock:005930", "risk-budget:main", "HAS_RISK_BUDGET", 1.0, properties={
+                "ontologyBox": "ABox",
+            }),
+        ])
+        rule = default_graph_inference_rules()[0]
+        rule_snapshot = {
+            "configured": True,
+            "saved": True,
+            "status": "ok",
+            "graphStore": "typedb",
+            "rules": [rule.to_dict()],
+            "ruleCount": 1,
+        }
+        native_match = {
+            "status": "ok",
+            "graphStore": "typedb",
+            "nativeQueryUsed": True,
+            "schemaFunctionUsed": True,
+            "executedRuleCount": 1,
+            "skippedRuleCount": 0,
+            "matchedCount": 1,
+            "matches": [{
+                "ruleId": rule.rule_id,
+                "nativeRuleId": "typedb.native." + rule.rule_id,
+                "sourceId": "stock:005930",
+                "matchedConditions": [{"conditionId": "holding-source"}],
+                "evidenceRelationIds": ["ontology-assertion:test"],
+                "confidence": 0.86,
+            }],
+        }
+        captured = {}
+
+        def capture_inferencebox(inference_graph):
+            captured["graph"] = inference_graph
+            return {"configured": True, "saved": True, "status": "ok", "graphStore": "typedb"}
+
+        with patch.object(repository, "has_box_rows", return_value=True), \
+                patch.object(repository, "active_abox_metadata", return_value={
+                    "status": "ok",
+                    "aboxSnapshotId": "abox-manifest:live",
+                    "worldviewManifestId": "abox-manifest:live",
+                    "scopedAboxManifestVersion": SCOPED_ABOX_MANIFEST_VERSION,
+                }), \
+                patch.object(repository, "rulebox_snapshot", return_value=rule_snapshot), \
+                patch.object(repository, "sync_typedb_native_rule_functions", return_value={
+                    "status": "ok", "syncedCount": 1, "syncedFunctionCount": 1,
+                    "skippedCount": 0, "failedCount": 0,
+                }), \
+                patch.object(repository, "match_typedb_native_rules", return_value=native_match), \
+                patch.object(repository, "load_graph_for_native_matches", return_value=graph), \
+                patch.object(repository, "write_inferencebox_graph", side_effect=capture_inferencebox):
+            result = repository.run_rulebox({})
+
+        self.assertEqual("ok", result["status"])
+        self.assertEqual("worldview-manifest", result["sourceAboxGenerationMode"])
+        self.assertEqual("abox-manifest:live", result["sourceAboxSnapshotId"])
+        self.assertEqual("abox-manifest:live", result["sourceAboxManifestId"])
+        self.assertTrue(all(
+            (item.properties or {}).get("sourceAboxSnapshotId") == "abox-manifest:live"
+            for item in captured["graph"].entities
+        ))
+
     def test_typedb_rulebox_empty_result_preserves_previous_inference_generation(self):
         repository = TypeDBOntologyGraphRepository("127.0.0.1:1729")
         rule_snapshot = {
@@ -3280,7 +3831,7 @@ class TypeDBOntologyRepositoryTests(unittest.TestCase):
         profile = typedb_native_reasoning_profile([rule.to_dict() for rule in default_graph_inference_rules()])
 
         self.assertEqual("typedb-native-rule-materialization", profile["reasoningModel"])
-        self.assertEqual("typedb-native-rule-profile-v2", profile["version"])
+        self.assertEqual(TYPEDB_NATIVE_REASONING_PROFILE_VERSION, profile["version"])
         self.assertEqual(profile["ruleCount"], profile["nativeRuleCount"])
         self.assertTrue(profile["rules"][0]["nativeRuleId"].startswith("typedb.native."))
         self.assertEqual(profile["ruleCount"], profile["readyRuleCount"])
@@ -3288,14 +3839,39 @@ class TypeDBOntologyRepositoryTests(unittest.TestCase):
         self.assertTrue(profile["rules"][0]["schemaFunctionName"].startswith("orbit_rule_"))
         self.assertTrue(profile["materializationRequired"])
 
-    def test_typedb_function_definition_uses_helper_functions_for_any_condition_groups(self):
+    def test_typedb_function_definition_keeps_any_groups_out_of_schema_compilation(self):
         rule = next(item for item in default_graph_inference_rules() if item.rule_id == "graph.loss_smart_money.add_buy_review.v1")
         definition = typedb_native_function_definition(rule.to_dict())
 
-        self.assertEqual(15, len(definition["helperFunctions"]))
-        self.assertEqual(16, len(definition["functionDefinitions"]))
-        self.assertIn("let $anyHelperSource", definition["body"])
+        self.assertEqual([], definition["helperFunctions"])
+        self.assertEqual(1, len(definition["functionDefinitions"]))
+        self.assertNotIn("anyConditionCount", definition["body"])
+        self.assertNotIn("let $anyHelperSource", definition["body"])
         self.assertIn("($source: ontology-node)", definition["body"])
+
+    def test_typedb_any_group_check_uses_typeql_distinct_condition_aggregation(self):
+        rule = next(item for item in default_graph_inference_rules() if item.rule_id == "graph.loss_smart_money.add_buy_review.v1")
+
+        query = typedb_native_any_group_check_query(
+            rule.to_dict(),
+            "stock:000660",
+            scoped_manifest_only=True,
+        )["query"]
+
+        self.assertIn('has ontology-id "stock:000660"', query)
+        self.assertIn("reduce $anyConditionCount = count($anyConditionToken) groupby $source", query)
+        self.assertIn("$anyConditionCount >= 2", query)
+        self.assertIn('has ontology-kind "worldview-manifest-active-pointer"', query)
+
+    def test_typedb_function_definition_binds_active_manifest_without_legacy_branches(self):
+        rule = next(item for item in default_graph_inference_rules() if item.rule_id == "graph.loss_guard.breakdown.v1")
+
+        definition = typedb_native_function_definition(rule.to_dict())
+
+        self.assertIn('has ontology-kind "worldview-manifest-active-pointer"', definition["body"])
+        self.assertIn('has ontology-manifest-id $activeManifestId', definition["body"])
+        self.assertNotIn('has ontology-kind "abox-active-pointer"', definition["body"])
+        self.assertNotIn('has ontology-kind "abox-scope-active-pointer"', definition["body"])
 
     def test_typedb_function_definition_uses_promoted_subject_attributes(self):
         rule = next(
@@ -3304,18 +3880,20 @@ class TypeDBOntologyRepositoryTests(unittest.TestCase):
             if item.rule_id == "graph.aggressive.loss_recovery.add_buy_review.v1"
         )
         definition = typedb_native_function_definition(rule.to_dict())
-        body = definition["body"] + "\n" + "\n".join(
-            str(item.get("body") or "")
-            for item in definition.get("helperFunctions") or []
-        )
+        body = definition["body"]
+        any_group_query = typedb_native_any_group_check_query(
+            rule.to_dict(),
+            "stock:005930",
+            scoped_manifest_only=True,
+        )["query"]
 
         self.assertIn("ontology-investment-strategy-profile", body)
         self.assertIn("ontology-profit-loss-rate", body)
         self.assertIn("ontology-ma5-distance", body)
         self.assertIn("ontology-ma60-distance", body)
         self.assertIn("ontology-position-account-weight-pct", body)
-        self.assertIn("ontology-smart-money-net-volume", body)
-        self.assertIn("ontology-bid-ask-imbalance", body)
+        self.assertIn("ontology-smart-money-net-volume", any_group_query)
+        self.assertIn("ontology-bid-ask-imbalance", any_group_query)
 
     def test_typedb_function_definition_uses_promoted_temporal_attributes(self):
         persistent_rule = next(
@@ -3352,7 +3930,7 @@ class TypeDBOntologyRepositoryTests(unittest.TestCase):
                 "rootFunctionName": definition.get("functionName"),
             })
         sync_fingerprint = hashlib.sha256(json.dumps({
-            "engineVersion": "typedb-schema-function-rule-engine-v2",
+            "engineVersion": TYPEDB_NATIVE_RULE_ENGINE_VERSION,
             "database": repository.database,
             "functions": [
                 {

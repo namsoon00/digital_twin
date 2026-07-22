@@ -556,6 +556,7 @@ def settings_status_payload() -> Dict[str, object]:
         "marketMaterialityVolumeRatio",
         "typedbAddress",
         "typedbUser",
+        "typedbAllowDefaultPassword",
         "typedbDatabase",
         "typedbTlsEnabled",
         "typedbTimeoutSeconds",
@@ -1570,15 +1571,16 @@ def notification_job_diagnostics(jobs: List[NotificationJob]) -> Dict[str, objec
     }
 
 
-def notification_job_public_payload(job: NotificationJob, detail: bool = False) -> Dict[str, object]:
+def notification_job_public_payload(job: NotificationJob, detail: bool = False, stale_minutes: int = None) -> Dict[str, object]:
     context = job.context or {}
     reasons = context.get("deliveryReasons") if isinstance(context.get("deliveryReasons"), list) else []
     title = str(context.get("title") or context.get("headline") or "").strip()
     processing_age = notification_processing_age_minutes(job)
-    try:
-        stale_minutes = max(1, int(runtime_settings().get("notificationProcessingStaleMinutes") or 30))
-    except (TypeError, ValueError):
-        stale_minutes = 30
+    if stale_minutes is None:
+        try:
+            stale_minutes = max(1, int(runtime_settings().get("notificationProcessingStaleMinutes") or 30))
+        except (TypeError, ValueError):
+            stale_minutes = 30
     payload = {
         "jobId": job.job_id,
         "messageType": job.message_type,
@@ -1644,6 +1646,28 @@ def notification_job_public_payload(job: NotificationJob, detail: bool = False) 
     return payload
 
 
+def notification_job_list_payload(job: NotificationJob, stale_minutes: int) -> Dict[str, object]:
+    """Expose only the fields needed to render an outbox ledger row.
+
+    The message body and policy audit trail remain available from the existing
+    job-detail endpoint. This keeps a 20-row ledger from carrying 20 copies of
+    full notification text and cooldown metadata.
+    """
+    payload = notification_job_public_payload(job, detail=False, stale_minutes=stale_minutes)
+    fields = {
+        "jobId", "messageType", "messageTypeLabel", "messageTypeIcon", "status",
+        "createdAt", "updatedAt", "sourceEventName", "title", "symbol", "rawSymbol",
+        "symbolName", "textPreview", "lastError", "suppressionSummary", "nextEligibleAt",
+        "processingAgeMinutes", "recoverableProcessing", "deliveryDecision", "deliveryGateState",
+        "deliveryGateReason", "deliveryReasons", "deliveryReviewLevel", "deliveryDataState",
+        "deliveryChangeState", "deliveryConflictState", "deliveryValidationState", "repeatRecentCount",
+        "repeatWindowMinutes", "repeatBypassed", "repeatBypassReason", "marketHoursEnabled",
+        "marketHoursStatus", "marketHoursDecision", "marketHoursReason", "quietHoursSuppressed",
+        "quietHoursReason",
+    }
+    return {key: value for key, value in payload.items() if key in fields}
+
+
 def notification_jobs_payload(query: Dict[str, List[str]]) -> Dict[str, object]:
     limit = max(1, min(100, int(first_query(query, "limit") or 20)))
     offset = max(0, int(first_query(query, "offset") or 0))
@@ -1651,20 +1675,36 @@ def notification_jobs_payload(query: Dict[str, List[str]]) -> Dict[str, object]:
     status = first_query(query, "status")
     search = first_query(query, "query") or first_query(query, "q")
     try:
-        jobs, total = notification_queue_store().recent_page(
-            limit=limit,
-            offset=offset,
-            message_type=message_type,
-            status=status,
-            query=search,
-        )
-        summary = notification_queue_store().summary()
+        settings = runtime_settings()
+        try:
+            stale_minutes = max(1, int(settings.get("notificationProcessingStaleMinutes") or 30))
+        except (TypeError, ValueError):
+            stale_minutes = 30
+        store = notification_queue_store()
+        if hasattr(store, "recent_page_with_summary"):
+            jobs, total, summary = store.recent_page_with_summary(
+                limit=limit,
+                offset=offset,
+                message_type=message_type,
+                status=status,
+                query=search,
+            )
+        else:
+            jobs, total = store.recent_page(
+                limit=limit,
+                offset=offset,
+                message_type=message_type,
+                status=status,
+                query=search,
+            )
+            summary = store.summary()
     except Exception:  # noqa: BLE001 - empty queue keeps the console readable without MySQL.
         jobs = []
         total = 0
         summary = {"pending": 0, "processing": 0, "done": 0, "suppressed": 0, "failed": 0}
+        stale_minutes = 30
     return {
-        "jobs": [notification_job_public_payload(job, detail=False) for job in jobs],
+        "jobs": [notification_job_list_payload(job, stale_minutes=stale_minutes) for job in jobs],
         "summary": summary,
         "diagnostics": notification_job_diagnostics(jobs),
         "limit": limit,
@@ -1720,17 +1760,42 @@ def research_evidence_payload(query: Dict[str, List[str]]) -> Dict[str, object]:
 
 
 def research_evidence_list_payload(item) -> Dict[str, object]:
-    payload = item.to_dict()
-    raw = payload.pop("payload", {})
-    if isinstance(raw, dict):
-        compact_raw = {}
-        for key in ["name", "provider", "articleType", "analysisStatus", "relevanceState", "impactLabel", "impactSummary", "koreanSummary", "priceImpact", "sourceTrustState", "materialityState", "dataState", "validationState"]:
-            if raw.get(key) not in (None, "", [], {}):
-                payload[key] = raw.get(key)
-                compact_raw[key] = raw.get(key)
-        payload["payload"] = compact_raw
-    payload["detailPath"] = "/api/research-evidence/" + urllib.parse.quote(str(item.evidence_id or ""))
-    return payload
+    raw = item.raw_payload if isinstance(item.raw_payload, dict) else {}
+    states = item.state_payload()
+    compact_raw = {}
+    for key in ["name", "provider", "articleType", "analysisStatus", "relevanceState", "impactLabel", "impactSummary", "koreanSummary", "priceImpact", "sourceTrustState", "materialityState", "dataState", "validationState"]:
+        if raw.get(key) not in (None, "", [], {}):
+            compact_raw[key] = raw.get(key)
+    return {
+        "evidenceId": item.evidence_id,
+        "symbol": item.symbol,
+        "kind": item.kind,
+        "source": item.source,
+        "title": item.title,
+        "summary": item.summary,
+        "url": item.url,
+        "observedAt": item.observed_at,
+        "publishedAt": item.published_at,
+        "polarity": item.polarity,
+        "evidenceRole": item.polarity,
+        "relationScope": str(raw.get("relationScope") or ""),
+        "eventType": str(raw.get("eventType") or ""),
+        "sourceTrustState": states["sourceTrustState"],
+        "materialityState": states["materialityState"],
+        "dataState": states["dataState"],
+        "validationState": states["validationState"],
+        "analysisSummary": str(raw.get("analysisSummary") or ""),
+        "articleSummaryKo": str(raw.get("articleSummaryKo") or ""),
+        "articleReadStatus": str(raw.get("articleReadStatus") or ""),
+        "stockImpact": str(raw.get("stockImpact") or ""),
+        "stockImpactLabel": str(raw.get("stockImpactLabel") or ""),
+        "stockImpactPolarity": str(raw.get("stockImpactPolarity") or ""),
+        "stockImpactReasonKo": str(raw.get("stockImpactReasonKo") or ""),
+        "sourceKind": str(raw.get("sourceKind") or ""),
+        "sourcePlatform": str(raw.get("sourcePlatform") or ""),
+        "payload": compact_raw,
+        "detailPath": "/api/research-evidence/" + urllib.parse.quote(str(item.evidence_id or "")),
+    }
 
 
 def research_evidence_detail_payload(evidence_id: str) -> Dict[str, object]:

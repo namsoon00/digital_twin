@@ -881,9 +881,32 @@ class OntologyRuleBoxTests(unittest.TestCase):
                 return str(box or "") == "ABox"
 
             def active_abox_metadata(self):
-                return {"status": "ok", "aboxSnapshotId": "abox-snapshot:test"}
+                source_snapshot_id = next(
+                    (
+                        str(
+                            (entity.properties or {}).get("aboxSnapshotId")
+                            or (entity.properties or {}).get("snapshotId")
+                            or ""
+                        )
+                        for entity in self._last_graph.entities
+                        if str(
+                            (entity.properties or {}).get("aboxSnapshotId")
+                            or (entity.properties or {}).get("snapshotId")
+                            or ""
+                        )
+                    ),
+                    "",
+                )
+                return {
+                    "status": "ok",
+                    "aboxSnapshotId": source_snapshot_id or "abox-snapshot:test",
+                }
 
             def load_graph_for_native_matches(self, native_match_result, rules=None):
+                # A real TypeDB ABox read always attaches the active legacy
+                # snapshot ID to its source facts. Keep this test double on
+                # that same persistence contract so generation validation is
+                # exercised rather than bypassed.
                 return self._last_graph
 
             def rulebox_snapshot(self):

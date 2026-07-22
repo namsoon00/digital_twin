@@ -139,6 +139,52 @@ class OntologyProjectionRun:
         return asdict(self)
 
 
+def projection_run_from_payload(payload: Dict[str, object]) -> OntologyProjectionRun:
+    """Rehydrate one durable audit row without making MySQL a domain dependency."""
+    values = dict(payload or {})
+
+    def value(snake_case: str, camel_case: str = "", fallback: object = ""):
+        return values.get(camel_case or snake_case, values.get(snake_case, fallback))
+
+    def integer(snake_case: str, camel_case: str = "") -> int:
+        try:
+            return int(value(snake_case, camel_case, 0) or 0)
+        except (TypeError, ValueError):
+            return 0
+
+    source_symbols = value("source_symbols", "sourceSymbols", [])
+    context_payload = value("context_payload", "context", {})
+    result_payload = value("result_payload", "result", {})
+    return OntologyProjectionRun(
+        run_id=str(value("run_id", "runId") or ""),
+        portfolio_id=str(value("portfolio_id", "portfolioId") or ""),
+        account_id=str(value("account_id", "accountId") or ""),
+        source_snapshot_at=str(value("source_snapshot_at", "sourceSnapshotAt") or ""),
+        source_snapshot_fingerprint=str(value("source_snapshot_fingerprint", "sourceSnapshotFingerprint") or ""),
+        first_observed_at=str(value("first_observed_at", "firstObservedAt") or ""),
+        last_observed_at=str(value("last_observed_at", "lastObservedAt") or ""),
+        started_at=str(value("started_at", "startedAt") or ""),
+        completed_at=str(value("completed_at", "completedAt") or ""),
+        activated_at=str(value("activated_at", "activatedAt") or ""),
+        status=str(value("status") or ""),
+        graph_store=str(value("graph_store", "graphStore") or ""),
+        projection_mode=str(value("projection_mode", "projectionMode") or ""),
+        material_fingerprint=str(value("material_fingerprint", "materialFingerprint") or ""),
+        abox_snapshot_id=str(value("abox_snapshot_id", "aboxSnapshotId") or ""),
+        active_abox_snapshot_id=str(value("active_abox_snapshot_id", "activeAboxSnapshotId") or ""),
+        tbox_version=str(value("tbox_version", "tboxVersion") or ""),
+        tbox_fingerprint=str(value("tbox_fingerprint", "tboxFingerprint") or ""),
+        rulebox_rules_hash=str(value("rulebox_rules_hash", "ruleboxRulesHash") or ""),
+        entity_count=integer("entity_count", "entityCount"),
+        relation_count=integer("relation_count", "relationCount"),
+        inference_generation_id=str(value("inference_generation_id", "inferenceGenerationId") or ""),
+        inference_status=str(value("inference_status", "inferenceStatus") or ""),
+        source_symbols=list(source_symbols) if isinstance(source_symbols, list) else [],
+        context_payload=dict(context_payload) if isinstance(context_payload, dict) else {},
+        result_payload=dict(result_payload) if isinstance(result_payload, dict) else {},
+    )
+
+
 def build_ontology_projection_run(
     snapshot: AccountSnapshot,
     graph: PortfolioOntology,

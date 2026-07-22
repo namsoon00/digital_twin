@@ -1,10 +1,12 @@
 import unittest
+from types import SimpleNamespace
 
 from digital_twin.domain.ontology_contracts import OntologyEntity, OntologyRelation, PortfolioOntology
 from digital_twin.domain.ontology_projection_audit import (
     apply_projection_run_identity,
     build_ontology_projection_run,
     complete_ontology_projection_run,
+    projection_run_from_payload,
     projection_source_snapshot,
 )
 from digital_twin.domain.ontology_projection_fingerprint import (
@@ -13,6 +15,7 @@ from digital_twin.domain.ontology_projection_fingerprint import (
 )
 from digital_twin.domain.portfolio import AccountSnapshot, PortfolioSummary, Position
 from digital_twin.infrastructure.mysql_ontology_projection_runs import MySQLOntologyProjectionRunStore
+from digital_twin.infrastructure.ontology_projection import PortfolioOntologyProjectionRecorder
 
 
 class Cursor:
@@ -213,6 +216,93 @@ class OntologyProjectionAuditTests(unittest.TestCase):
         self.assertEqual(["005930"], latest[0]["sourceSymbols"])
         self.assertEqual("ok", latest[0]["result"]["status"])
         self.assertEqual(500, connection.calls[0][1][-1])
+
+    def test_projection_run_rehydrates_mysql_payload(self):
+        _snapshot, _graph, _fingerprint, run = self.build_run()
+        restored = projection_run_from_payload({
+            "runId": run.run_id,
+            "portfolioId": run.portfolio_id,
+            "accountId": run.account_id,
+            "sourceSnapshotAt": run.source_snapshot_at,
+            "sourceSnapshotFingerprint": run.source_snapshot_fingerprint,
+            "firstObservedAt": run.first_observed_at,
+            "lastObservedAt": run.last_observed_at,
+            "startedAt": run.started_at,
+            "status": "projecting",
+            "graphStore": run.graph_store,
+            "projectionMode": run.projection_mode,
+            "materialFingerprint": run.material_fingerprint,
+            "aboxSnapshotId": run.abox_snapshot_id,
+            "tboxVersion": run.tbox_version,
+            "tboxFingerprint": run.tbox_fingerprint,
+            "ruleboxRulesHash": run.rulebox_rules_hash,
+            "entityCount": run.entity_count,
+            "relationCount": run.relation_count,
+            "sourceSymbols": run.source_symbols,
+            "context": run.context_payload,
+            "result": {},
+        })
+
+        self.assertEqual(run.run_id, restored.run_id)
+        self.assertEqual(run.source_symbols, restored.source_symbols)
+        self.assertEqual("projecting", restored.status)
+
+    def test_recorder_recovers_interrupted_audit_only_from_aligned_typedb_generation(self):
+        _snapshot, _graph, _fingerprint, run = self.build_run()
+        stored_row = {
+            "runId": run.run_id,
+            "portfolioId": run.portfolio_id,
+            "accountId": run.account_id,
+            "sourceSnapshotAt": run.source_snapshot_at,
+            "sourceSnapshotFingerprint": run.source_snapshot_fingerprint,
+            "firstObservedAt": run.first_observed_at,
+            "lastObservedAt": run.last_observed_at,
+            "startedAt": run.started_at,
+            "status": "projecting",
+            "graphStore": "typedb",
+            "projectionMode": run.projection_mode,
+            "materialFingerprint": run.material_fingerprint,
+            "aboxSnapshotId": run.abox_snapshot_id,
+            "tboxVersion": run.tbox_version,
+            "tboxFingerprint": run.tbox_fingerprint,
+            "ruleboxRulesHash": run.rulebox_rules_hash,
+            "entityCount": run.entity_count,
+            "relationCount": run.relation_count,
+            "sourceSymbols": ["005930"],
+            "context": run.context_payload,
+            "result": {},
+        }
+        completed = []
+        store = SimpleNamespace(
+            latest=lambda limit=0: [stored_row],
+            complete=lambda item: completed.append(item),
+        )
+        repository = SimpleNamespace(
+            store_key="typedb",
+            active_abox_metadata=lambda: {
+                "status": "ok",
+                "aboxSnapshotId": run.abox_snapshot_id,
+                "materialFingerprint": run.material_fingerprint,
+                "projectionRunId": run.run_id,
+            },
+            inferencebox_snapshot=lambda symbols, limit: {
+                "status": "ok",
+                "nativeTypeDbReasoningUsed": True,
+                "generationAligned": True,
+                "sourceAboxSnapshotId": run.abox_snapshot_id,
+                "targetSymbols": list(symbols),
+                "inferenceGenerationId": "inference-generation:recovered",
+                "traceCount": 2,
+            },
+        )
+        recorder = PortfolioOntologyProjectionRecorder(repository, projection_run_store=store)
+
+        result = recorder.reconcile_interrupted_projection_audit()
+
+        self.assertEqual("recovered", result["status"])
+        self.assertEqual(1, len(completed))
+        self.assertEqual("ok", completed[0].status)
+        self.assertEqual("inference-generation:recovered", completed[0].inference_generation_id)
 
 
 if __name__ == "__main__":

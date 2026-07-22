@@ -228,6 +228,35 @@ class TypeDBOntologyRepositoryTests(unittest.TestCase):
             relations[0]["targetStorageId"],
         )
 
+    def test_scoped_abox_batch_count_verification_groups_scope_and_generation(self):
+        repository = TypeDBOntologyGraphRepository("127.0.0.1:1729")
+        calls = []
+
+        def read_rows(query, columns, label=""):
+            calls.append((query, columns, label))
+            if "ontology-node" in query:
+                return [
+                    {"scopeId": "symbol:005930:market", "generationId": "abox-scope:market", "count": 4},
+                    {"scopeId": "symbol:005930:state", "generationId": "abox-scope:state", "count": 2},
+                    {"scopeId": "symbol:005930:market", "generationId": "abox-scope:old", "count": 99},
+                ]
+            return [
+                {"scopeId": "symbol:005930:market", "generationId": "abox-scope:market", "count": 5},
+                {"scopeId": "symbol:005930:state", "generationId": "abox-scope:state", "count": 1},
+            ]
+
+        with patch.object(repository, "read_rows", side_effect=read_rows):
+            counts = repository.scoped_abox_scope_row_counts_batch([
+                {"scopeId": "symbol:005930:market", "generationId": "abox-scope:market"},
+                {"scopeId": "symbol:005930:state", "generationId": "abox-scope:state"},
+            ])
+
+        self.assertEqual({"entityCount": 4, "relationCount": 5}, counts["symbol:005930:market"])
+        self.assertEqual({"entityCount": 2, "relationCount": 1}, counts["symbol:005930:state"])
+        self.assertEqual(2, len(calls))
+        self.assertTrue(all("groupby $scopeId, $generationId" in query for query, _columns, _label in calls))
+        self.assertTrue(all(label == "typedb.scoped-abox-count-batch" for _query, _columns, label in calls))
+
     def test_scoped_abox_persistence_includes_evidence_and_support_relation_in_the_owner_scope(self):
         graph = PortfolioOntology(
             "main",
@@ -1681,6 +1710,11 @@ class TypeDBOntologyRepositoryTests(unittest.TestCase):
             "typedbAddress": "127.0.0.1:1729",
             "typedbNativeRuleExecutionEnabled": "0",
         })
+        factory_inference_lease_disabled = typedb_repository_from_settings({
+            "ontologyTypeDbEnabled": "1",
+            "typedbAddress": "127.0.0.1:1729",
+            "typedbInferenceWriteLeaseEnabled": "0",
+        })
 
         self.assertTrue(direct.native_rule_execution_enabled())
         self.assertTrue(factory_default.native_rule_execution_enabled())
@@ -1691,6 +1725,9 @@ class TypeDBOntologyRepositoryTests(unittest.TestCase):
         self.assertEqual(20.0, factory_default.schema_operation_timeout_seconds())
         self.assertEqual(6.0, factory_default.native_rule_query_timeout_seconds())
         self.assertEqual(30.0, factory_default.native_rule_execution_budget_seconds())
+        self.assertFalse(direct._inference_write_lease_enabled)
+        self.assertTrue(factory_default._inference_write_lease_enabled)
+        self.assertFalse(factory_inference_lease_disabled._inference_write_lease_enabled)
 
     def test_typedb_symbol_filters_keep_numeric_stock_codes_as_strings(self):
         rule = next(item for item in default_graph_inference_rules() if item.rule_id == "graph.loss_guard.breakdown.v1")
@@ -2388,7 +2425,7 @@ class TypeDBOntologyRepositoryTests(unittest.TestCase):
         self.assertEqual(1, snapshot["relationCount"])
         self.assertTrue(snapshot["nativeTypeDbReasoningUsed"])
 
-    def test_projection_recorder_reuses_rulebox_inferencebox_payload(self):
+    def test_projection_recorder_uses_durable_inferencebox_readback_after_rulebox_execution(self):
         class FakeRepository:
             store_key = "typedb"
 
@@ -2414,13 +2451,18 @@ class TypeDBOntologyRepositoryTests(unittest.TestCase):
                     "inferenceBox": {
                         "status": "ok",
                         "relationCount": 1,
-                        "typedbReadStatus": "skipped",
+                        "typedbReadStatus": "memory-only",
                     },
                 }
 
             def inferencebox_snapshot(self, *_args, **_kwargs):
                 self.snapshot_read_called = True
-                raise AssertionError("inferencebox_snapshot should not be called when run_rulebox returned inferenceBox")
+                return {
+                    "status": "ok",
+                    "relationCount": 1,
+                    "typedbReadStatus": "ok",
+                    "nativeTypeDbReasoningUsed": True,
+                }
 
         repository = FakeRepository()
         snapshot = AccountSnapshot(
@@ -2436,9 +2478,47 @@ class TypeDBOntologyRepositoryTests(unittest.TestCase):
 
         result = PortfolioOntologyProjectionRecorder(repository).record_snapshot(snapshot)
 
-        self.assertFalse(repository.snapshot_read_called)
+        self.assertTrue(repository.snapshot_read_called)
         self.assertEqual("ok", result["inferenceBox"]["status"])
-        self.assertEqual("skipped", result["inferenceBox"]["typedbReadStatus"])
+        self.assertEqual("ok", result["inferenceBox"]["typedbReadStatus"])
+        self.assertTrue(result["inferenceBox"]["durableReadback"])
+
+    def test_projection_recorder_defers_before_preparing_abox_when_inference_lease_is_held(self):
+        class FakeRepository:
+            store_key = "typedb"
+
+            def acquire_scoped_abox_write_lease(self, _manifest_id):
+                return {"acquired": False, "status": "held", "leaseOwner": "other-worker"}
+
+            def prepare_pending_abox_activation_for_inference(self):
+                raise AssertionError("ABox pointer must not move while another native inference owns the lease")
+
+            def run_rulebox(self, _payload):
+                raise AssertionError("Native inference must not start while another writer owns the lease")
+
+        snapshot = AccountSnapshot(
+            "main",
+            "메인",
+            "toss",
+            "live",
+            "ok",
+            utc_now_iso(),
+            PortfolioSummary(total=1000, invested=1000, cash=0, markets=[], sectors=[], concentration=0),
+            positions=[Position("AAPL", "Apple", market="US", currency="USD", quantity=1, current_price=100, market_value=100, market_value_krw=140000)],
+        )
+        result = {
+            "saved": True,
+            "status": "ok",
+            "graphStore": "typedb",
+            "aboxSnapshotId": "abox-manifest:candidate",
+        }
+
+        PortfolioOntologyProjectionRecorder(FakeRepository()).attach_graph_store_inference_result(result, snapshot)
+
+        self.assertFalse(result["saved"])
+        self.assertTrue(result["aboxStaged"])
+        self.assertEqual("deferred-inference-write-lease", result["status"])
+        self.assertEqual("deferred-inference-write-lease", result["inferenceBox"]["status"])
 
     def test_projection_recorder_rolls_back_new_abox_when_native_inference_is_not_aligned(self):
         class FakeRepository:
@@ -3619,6 +3699,46 @@ class TypeDBOntologyRepositoryTests(unittest.TestCase):
             (item.properties or {}).get("sourceAboxSnapshotId") == "abox-manifest:live"
             for item in captured["graph"].entities
         ))
+
+    def test_typedb_rulebox_defers_when_native_inference_writer_lease_is_held(self):
+        repository = TypeDBOntologyGraphRepository(
+            "127.0.0.1:1729",
+            inference_write_lease_enabled=True,
+        )
+        with patch.object(repository, "acquire_scoped_abox_write_lease", return_value={
+            "acquired": False,
+            "status": "held",
+            "leaseOwner": "other-worker",
+        }), patch.object(repository, "_run_rulebox_unlocked") as run_unlocked:
+            result = repository.run_rulebox({"typedbNativeRuleExecutionEnabled": True})
+
+        run_unlocked.assert_not_called()
+        self.assertEqual("deferred-inference-write-lease", result["status"])
+        self.assertTrue(result["preservedPreviousInference"])
+        self.assertEqual("other-worker", result["inferenceWriteLease"]["leaseOwner"])
+
+    def test_typedb_rulebox_uses_projection_owned_inference_lease_without_reacquiring(self):
+        repository = TypeDBOntologyGraphRepository(
+            "127.0.0.1:1729",
+            inference_write_lease_enabled=True,
+        )
+        with patch.object(repository, "scoped_abox_write_lease_status", return_value={
+            "status": "held",
+            "leaseOwner": "projection-worker",
+        }), patch.object(repository, "acquire_scoped_abox_write_lease") as acquire, patch.object(
+            repository,
+            "_run_rulebox_unlocked",
+            return_value={"status": "ok", "nativeTypeDbReasoningUsed": True},
+        ) as run_unlocked:
+            result = repository.run_rulebox({
+                "typedbNativeRuleExecutionEnabled": True,
+                "_inferenceWriteLeaseOwner": "projection-worker",
+            })
+
+        acquire.assert_not_called()
+        run_unlocked.assert_called_once()
+        self.assertEqual("ok", result["status"])
+        self.assertEqual("adopted", result["inferenceWriteLease"]["status"])
 
     def test_typedb_rulebox_empty_result_preserves_previous_inference_generation(self):
         repository = TypeDBOntologyGraphRepository("127.0.0.1:1729")

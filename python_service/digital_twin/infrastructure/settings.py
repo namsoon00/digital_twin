@@ -819,6 +819,11 @@ def runtime_settings() -> Dict[str, str]:
         "typedbTimeoutSeconds": value("typedbTimeoutSeconds", "TYPEDB_TIMEOUT_SECONDS", "20"),
         "typedbRetryCount": value("typedbRetryCount", "TYPEDB_RETRY_COUNT", "2"),
         "typedbInferenceGenerationKeepCount": value("typedbInferenceGenerationKeepCount", "TYPEDB_INFERENCE_GENERATION_KEEP_COUNT", "1"),
+        "typedbInferenceWriteLeaseEnabled": value(
+            "typedbInferenceWriteLeaseEnabled",
+            "TYPEDB_INFERENCE_WRITE_LEASE_ENABLED",
+            "1",
+        ),
         "typedbQueryTimeoutSeconds": value("typedbQueryTimeoutSeconds", "TYPEDB_QUERY_TIMEOUT_SECONDS", "20"),
         "typedbSchemaOperationTimeoutSeconds": value("typedbSchemaOperationTimeoutSeconds", "TYPEDB_SCHEMA_OPERATION_TIMEOUT_SECONDS", "120"),
         "typedbWriteOperationTimeoutSeconds": value("typedbWriteOperationTimeoutSeconds", "TYPEDB_WRITE_OPERATION_TIMEOUT_SECONDS", "120"),

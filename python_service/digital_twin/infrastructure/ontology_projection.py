@@ -26,6 +26,7 @@ from ..domain.ontology_projection_audit import (
     apply_projection_run_identity,
     build_ontology_projection_run,
     complete_ontology_projection_run,
+    projection_run_from_payload,
 )
 from ..domain.ontology_validator import validate_ontology
 from ..domain.portfolio_ontology_builder import build_portfolio_ontology
@@ -217,6 +218,7 @@ class PortfolioOntologyProjectionRecorder:
             }
             self.store_projection_result(snapshot, result)
             return result
+        self.reconcile_interrupted_projection_audit()
         try:
             rulebox_bootstrap = self.ensure_rulebox_ready()
             if str(rulebox_bootstrap.get("status") or "") not in {"ready", "seeded"}:
@@ -284,6 +286,11 @@ class PortfolioOntologyProjectionRecorder:
             inference_symbols = self.inference_symbols(
                 snapshot,
                 inference_impact_plan.get("inferenceTargetSymbols") or target_symbols,
+            )
+            inference_symbols = self.bounded_native_inference_symbols(
+                snapshot,
+                inference_symbols,
+                target_symbols,
             )
             persistence_graph.worldview["scopeDelta"] = dict(compact_impact_plan.get("scopeDelta") or {})
             persistence_graph.worldview["inferenceImpactPlan"] = compact_impact_plan
@@ -451,6 +458,97 @@ class PortfolioOntologyProjectionRecorder:
         return dict(result or {}) if isinstance(result, dict) else {
             "status": "error",
             "reason": "Graph store returned an invalid ABox activation recovery result.",
+        }
+
+    def reconcile_interrupted_projection_audit(self) -> Dict[str, object]:
+        """Finish one audit row only when TypeDB already proves activation.
+
+        The source row is written before an ABox pointer moves.  A process can
+        stop after TypeDB has activated an aligned InferenceBox but before the
+        final MySQL audit update.  This recovery is deliberately proof-based:
+        it never promotes a row from a timer or a partial graph write.
+        """
+        if self.active_graph_store_key() != "typedb":
+            return {"status": "skipped", "reason": "Active graph store is not TypeDB."}
+        if not self.projection_run_store or not hasattr(self.projection_run_store, "latest"):
+            return {"status": "skipped", "reason": "Projection audit store does not support recovery lookup."}
+        if not hasattr(self.projection_run_store, "complete") or not hasattr(self.repository, "inferencebox_snapshot"):
+            return {"status": "skipped", "reason": "Projection audit recovery dependencies are unavailable."}
+        active_abox = self.active_abox_metadata()
+        if str(active_abox.get("status") or "") != "ok":
+            return {"status": "skipped", "reason": "No complete active ABox is available for audit recovery."}
+        run_id = str(active_abox.get("projectionRunId") or "").strip()
+        active_snapshot_id = str(active_abox.get("aboxSnapshotId") or "").strip()
+        if not run_id or not active_snapshot_id:
+            return {"status": "skipped", "reason": "Active ABox has no recoverable projection audit identity."}
+        try:
+            rows = self.projection_run_store.latest(limit=80)
+        except Exception as error:  # noqa: BLE001 - audit recovery must not block a new graph cycle.
+            return {"status": "error", "reason": str(error)[:180]}
+        row = next((
+            item for item in rows or []
+            if isinstance(item, dict)
+            and str(item.get("runId") or "") == run_id
+            and str(item.get("status") or "").lower() == "projecting"
+        ), None)
+        if not row:
+            return {"status": "skipped", "reason": "No interrupted projection audit matches the active ABox."}
+        run = projection_run_from_payload(row)
+        if not run.run_id or run.abox_snapshot_id != active_snapshot_id:
+            return {"status": "skipped", "reason": "Interrupted audit ABox identity does not match the active ABox."}
+        try:
+            inferencebox = self.repository.inferencebox_snapshot(
+                symbols=list(run.source_symbols or []),
+                limit=self.inference_snapshot_limit(),
+            )
+        except Exception as error:  # noqa: BLE001 - preserve the durable projecting row for the next retry.
+            return {"status": "error", "reason": str(error)[:180]}
+        if not self.inference_result_is_reusable(inferencebox, active_abox, list(run.source_symbols or [])):
+            return {
+                "status": "skipped",
+                "reason": "Active InferenceBox is not aligned with the interrupted ABox audit row.",
+                "runId": run.run_id,
+            }
+        result = {
+            "saved": True,
+            "status": "ok",
+            "reason": "TypeDB ABox와 InferenceBox 정합성을 확인해 중단된 투영 감사를 복구했습니다.",
+            "graphStore": "typedb",
+            "projectionMode": run.projection_mode,
+            "aboxSnapshotId": active_snapshot_id,
+            "materialFingerprint": str(active_abox.get("materialFingerprint") or run.material_fingerprint),
+            "entityCount": run.entity_count,
+            "relationCount": run.relation_count,
+            "inferenceBox": inferencebox,
+            "ruleboxExecution": {
+                "status": "ok",
+                "reason": "Recovered from active TypeDB InferenceBox alignment.",
+                "matchedRuleCount": int(inferencebox.get("traceCount") or 0),
+            },
+            "aboxPersistenceVerification": {
+                "activePointer": {
+                    "status": str(active_abox.get("status") or ""),
+                    "aboxSnapshotId": active_snapshot_id,
+                    "projectionRunId": run.run_id,
+                },
+                "activation": {
+                    "status": "recovered-after-runtime-interruption",
+                    "snapshotId": active_snapshot_id,
+                    "atomic": True,
+                },
+            },
+            "recoveredAfterRuntimeInterruption": True,
+        }
+        try:
+            completed = complete_ontology_projection_run(run, result)
+            self.projection_run_store.complete(completed)
+        except Exception as error:  # noqa: BLE001 - a later cycle can prove and retry the same row.
+            return {"status": "error", "reason": str(error)[:180], "runId": run.run_id}
+        return {
+            "status": "recovered",
+            "runId": run.run_id,
+            "aboxSnapshotId": active_snapshot_id,
+            "inferenceGenerationId": str(inferencebox.get("inferenceGenerationId") or ""),
         }
 
     def ensure_rulebox_ready(self) -> Dict[str, object]:
@@ -771,72 +869,181 @@ class PortfolioOntologyProjectionRecorder:
         compact_impact_plan = compact_inference_impact_plan(inference_impact_plan or {}) if inference_impact_plan else {}
         if compact_impact_plan:
             result.setdefault("inferenceImpactPlan", compact_impact_plan)
-        if self.active_graph_store_key(result) == "typedb":
-            preparer = getattr(self.repository, "prepare_pending_abox_activation_for_inference", None)
-            if callable(preparer):
-                try:
-                    preparation = preparer()
-                except Exception as error:  # noqa: BLE001 - never run native rules against an uncertain active pointer.
-                    preparation = {"status": "error", "reason": str(error)[:180]}
-                result["aboxActivationPreparation"] = preparation
-                if str(preparation.get("status") or "") not in {"skipped", "ready", "activated"}:
-                    result["ruleboxExecution"] = {
-                        "configured": True,
-                        "status": "blocked-pending-abox-activation",
-                        "graphStore": "typedb",
-                        "source": "typedbNativeRule",
-                        "nativeTypeDbReasoningUsed": False,
-                        "reason": str(
-                            preparation.get("reason")
-                            or "ABox candidate could not be prepared for native inference."
-                        )[:220],
-                    }
-                    result["inferenceBox"] = {
-                        "configured": True,
-                        "status": "pending-abox-activation",
-                        "graphStore": "typedb",
-                        "source": "typedbInferenceBox",
-                        "nativeTypeDbReasoningUsed": False,
-                        "reason": result["ruleboxExecution"]["reason"],
-                    }
-                    return
+        active_key = self.active_graph_store_key(result)
+        inference_write_lease: Dict[str, object] = {}
+        if active_key == "typedb":
+            inference_write_lease = self.acquire_inference_write_lease(result)
+            if inference_write_lease.get("acquired") is False:
+                lease_summary = {
+                    key: value
+                    for key, value in dict(inference_write_lease or {}).items()
+                    if key != "propertiesJson"
+                }
+                result["inferenceWriteLease"] = lease_summary
+                reason = "다른 ABox 활성화 또는 TypeDB 네이티브 추론 세대가 실행 중입니다."
+                result["ruleboxExecution"] = {
+                    "configured": True,
+                    "status": "deferred-inference-write-lease",
+                    "graphStore": "typedb",
+                    "source": "typedbNativeRule",
+                    "nativeTypeDbReasoningUsed": False,
+                    "reason": reason,
+                }
+                result["inferenceBox"] = {
+                    "configured": True,
+                    "status": "deferred-inference-write-lease",
+                    "graphStore": "typedb",
+                    "source": "typedbInferenceBox",
+                    "nativeTypeDbReasoningUsed": False,
+                    "reason": reason,
+                }
+                result["aboxStaged"] = bool(result.get("saved"))
+                result["saved"] = False
+                result["status"] = "deferred-inference-write-lease"
+                result["preservedActiveGeneration"] = True
+                result["reason"] = reason
+                return
+            if inference_write_lease:
+                result["inferenceWriteLease"] = {
+                    key: value
+                    for key, value in dict(inference_write_lease or {}).items()
+                    if key != "propertiesJson"
+                }
         try:
-            execution = self.repository.run_rulebox({
+            if active_key == "typedb":
+                preparer = getattr(self.repository, "prepare_pending_abox_activation_for_inference", None)
+                if callable(preparer):
+                    try:
+                        preparation = preparer()
+                    except Exception as error:  # noqa: BLE001 - never run native rules against an uncertain active pointer.
+                        preparation = {"status": "error", "reason": str(error)[:180]}
+                    result["aboxActivationPreparation"] = preparation
+                    if str(preparation.get("status") or "") not in {"skipped", "ready", "activated"}:
+                        result["ruleboxExecution"] = {
+                            "configured": True,
+                            "status": "blocked-pending-abox-activation",
+                            "graphStore": "typedb",
+                            "source": "typedbNativeRule",
+                            "nativeTypeDbReasoningUsed": False,
+                            "reason": str(
+                                preparation.get("reason")
+                                or "ABox candidate could not be prepared for native inference."
+                            )[:220],
+                        }
+                        result["inferenceBox"] = {
+                            "configured": True,
+                            "status": "pending-abox-activation",
+                            "graphStore": "typedb",
+                            "source": "typedbInferenceBox",
+                            "nativeTypeDbReasoningUsed": False,
+                            "reason": result["ruleboxExecution"]["reason"],
+                        }
+                        result["aboxStaged"] = bool(result.get("saved"))
+                        result["saved"] = False
+                        result["status"] = "blocked-pending-abox-activation"
+                        result["preservedActiveGeneration"] = True
+                        result["reason"] = result["ruleboxExecution"]["reason"]
+                        return
+            payload = {
                 "symbols": inference_symbols,
                 "pruneOldGenerations": True,
                 "inferenceSnapshotLimit": self.inference_snapshot_limit(),
                 "inferenceImpactPlan": compact_impact_plan,
-            })
-        except Exception as error:  # noqa: BLE001 - graph inference must not block monitoring.
-            execution = {"status": "error", "reason": str(error)[:180]}
-        active_key = self.active_graph_store_key(result)
-        if isinstance(execution, dict):
-            execution.setdefault("graphStore", active_key)
-            if active_key == "typedb":
-                execution.setdefault("source", "typedbNativeRule")
-        else:
-            execution = {"status": "error", "reason": "non-dict RuleBox result", "graphStore": active_key}
-        result["ruleboxExecution"] = execution
-        if isinstance(execution.get("inferenceBox"), dict):
-            snapshot_payload = dict(execution.get("inferenceBox") or {})
-            snapshot_payload.setdefault("graphStore", active_key)
-            if active_key == "typedb":
-                snapshot_payload.setdefault("source", "typedbInferenceBox")
-            result["inferenceBox"] = snapshot_payload
-        elif hasattr(self.repository, "inferencebox_snapshot"):
+            }
+            if inference_write_lease.get("acquired"):
+                payload["_inferenceWriteLeaseOwner"] = str(inference_write_lease.get("leaseOwner") or "")
             try:
-                snapshot_payload = self.repository.inferencebox_snapshot(
-                    symbols=inference_symbols,
-                    limit=self.inference_snapshot_limit(),
-                )
-            except Exception as error:  # noqa: BLE001 - snapshot read is best effort.
-                snapshot_payload = {"status": "error", "reason": str(error)[:180], "graphStore": active_key}
-            if isinstance(snapshot_payload, dict):
-                snapshot_payload.setdefault("graphStore", active_key)
+                execution = self.repository.run_rulebox(payload)
+            except Exception as error:  # noqa: BLE001 - graph inference must not block monitoring.
+                execution = {"status": "error", "reason": str(error)[:180]}
+            if isinstance(execution, dict):
+                execution.setdefault("graphStore", active_key)
                 if active_key == "typedb":
+                    execution.setdefault("source", "typedbNativeRule")
+            else:
+                execution = {"status": "error", "reason": "non-dict RuleBox result", "graphStore": active_key}
+            result["ruleboxExecution"] = execution
+            if str(execution.get("status") or "") == "deferred-inference-write-lease":
+                # Do not inspect an older generation or roll back a candidate
+                # while the lease owner is still creating its aligned result.
+                reason = str(execution.get("reason") or "Native inference is serialized by another writer.")
+                result["inferenceBox"] = {
+                    "configured": True,
+                    "status": "deferred-inference-write-lease",
+                    "graphStore": active_key,
+                    "source": "typedbInferenceBox" if active_key == "typedb" else "graphInferenceBox",
+                    "nativeTypeDbReasoningUsed": False,
+                    "reason": reason,
+                }
+                result["saved"] = False
+                result["status"] = "deferred-inference-write-lease"
+                result["preservedActiveGeneration"] = True
+                result["reason"] = reason
+                return
+            # A native RuleBox execution first builds an in-memory graph and
+            # then writes it to TypeDB. Only a fresh TypeDB read proves that
+            # the active InferenceBox still exists after publication/pruning.
+            if active_key == "typedb" and hasattr(self.repository, "inferencebox_snapshot"):
+                try:
+                    snapshot_payload = self.repository.inferencebox_snapshot(
+                        symbols=inference_symbols,
+                        limit=self.inference_snapshot_limit(),
+                    )
+                except Exception as error:  # noqa: BLE001 - fail closed when durable inference cannot be read.
+                    snapshot_payload = {
+                        "status": "error",
+                        "reason": "TypeDB InferenceBox 재조회 실패: " + str(error)[:180],
+                        "graphStore": active_key,
+                    }
+                if isinstance(snapshot_payload, dict):
+                    snapshot_payload = dict(snapshot_payload)
+                    snapshot_payload.setdefault("graphStore", active_key)
                     snapshot_payload.setdefault("source", "typedbInferenceBox")
+                    snapshot_payload["durableReadback"] = True
+                    result["inferenceBox"] = snapshot_payload
+            elif isinstance(execution.get("inferenceBox"), dict):
+                snapshot_payload = dict(execution.get("inferenceBox") or {})
+                snapshot_payload.setdefault("graphStore", active_key)
                 result["inferenceBox"] = snapshot_payload
-        self.reconcile_abox_activation_after_inference(result, inference_symbols)
+            elif hasattr(self.repository, "inferencebox_snapshot"):
+                try:
+                    snapshot_payload = self.repository.inferencebox_snapshot(
+                        symbols=inference_symbols,
+                        limit=self.inference_snapshot_limit(),
+                    )
+                except Exception as error:  # noqa: BLE001 - snapshot read is best effort.
+                    snapshot_payload = {"status": "error", "reason": str(error)[:180], "graphStore": active_key}
+                if isinstance(snapshot_payload, dict):
+                    snapshot_payload.setdefault("graphStore", active_key)
+                    if active_key == "typedb":
+                        snapshot_payload.setdefault("source", "typedbInferenceBox")
+                    result["inferenceBox"] = snapshot_payload
+            self.reconcile_abox_activation_after_inference(result, inference_symbols)
+        finally:
+            if inference_write_lease.get("acquired"):
+                releaser = getattr(self.repository, "release_scoped_abox_write_lease", None)
+                if callable(releaser):
+                    try:
+                        result["inferenceWriteLeaseRelease"] = releaser(inference_write_lease)
+                    except Exception as error:  # noqa: BLE001 - expiry/recovery remains available.
+                        result["inferenceWriteLeaseRelease"] = {"status": "error", "reason": str(error)[:180]}
+
+    def acquire_inference_write_lease(self, result: Dict[str, object]) -> Dict[str, object]:
+        """Serialize ABox preparation and native InferenceBox publication."""
+        acquire = getattr(self.repository, "acquire_scoped_abox_write_lease", None)
+        if not callable(acquire):
+            return {"status": "unsupported"}
+        pending = result.get("pendingAboxActivation") if isinstance(result.get("pendingAboxActivation"), dict) else {}
+        candidate_id = str(
+            pending.get("candidateAboxSnapshotId")
+            or result.get("aboxSnapshotId")
+            or result.get("worldviewManifestId")
+            or "native-rule"
+        ).strip()
+        try:
+            return dict(acquire("inference:" + candidate_id) or {})
+        except Exception as error:  # noqa: BLE001 - do not activate without the writer boundary.
+            return {"acquired": False, "status": "error", "reason": str(error)[:180]}
 
     def reconcile_abox_activation_after_inference(
         self,
@@ -1001,6 +1208,43 @@ class PortfolioOntologyProjectionRecorder:
             if clean and clean in available and clean not in selected:
                 selected.append(clean)
         return selected or self.snapshot_symbols(snapshot)
+
+    def native_inference_symbol_limit(self) -> int:
+        """Return the configured TypeDB native-rule work bound, if enabled."""
+        if self.active_graph_store_key() != "typedb":
+            return 0
+        raw = self.settings.get("typedbNativeRuleTargetSymbolLimit")
+        if raw is None or not str(raw).strip():
+            return 0
+        try:
+            return max(1, min(200, int(float(str(raw)))))
+        except (TypeError, ValueError):
+            return 0
+
+    def bounded_native_inference_symbols(
+        self,
+        snapshot: AccountSnapshot,
+        inferred_symbols: List[str],
+        requested_symbols: List[str] = None,
+    ) -> List[str]:
+        """Prioritize triggering subjects without dropping global ABox context.
+
+        A portfolio or macro scope can affect many holdings, but evaluating all
+        of them in one native TypeDB cycle defeats the worker's configured
+        per-cycle symbol bound. The complete ABox remains active for each
+        rule; only the current RuleBox subjects are sequenced across cycles.
+        """
+        limit = self.native_inference_symbol_limit()
+        if not limit:
+            return list(inferred_symbols or [])
+        requested = self.inference_symbols(snapshot, requested_symbols)
+        available = self.snapshot_symbols(snapshot)
+        ordered = []
+        for symbol in list(requested) + list(inferred_symbols or []) + available:
+            clean = str(symbol or "").upper().strip()
+            if clean and clean in available and clean not in ordered:
+                ordered.append(clean)
+        return ordered[:limit]
 
     def inference_impact_plan(
         self,

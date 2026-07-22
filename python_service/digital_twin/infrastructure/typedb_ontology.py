@@ -1519,6 +1519,61 @@ class ScopedABoxManifestMixin:
             "relationCount": count("ontology-assertion"),
         }
 
+    def scoped_abox_scope_row_counts_batch(
+        self,
+        scope_rows: Iterable[Dict[str, object]],
+    ) -> Dict[str, Dict[str, int]]:
+        """Read persisted counts for every staged scope with two TypeQL reductions.
+
+        The initial migration from a broad legacy scope layout can change well
+        over one hundred scopes.  Issuing two independent TypeQL reads for
+        each scope made that correctness check dominate the migration.  The
+        scope generation remains part of the grouping key, so this is still
+        an exact physical-write verification rather than an in-memory proxy.
+        """
+        expected_pairs = {
+            (
+                str(item.get("scopeId") or "").strip(),
+                str(item.get("generationId") or "").strip(),
+            )
+            for item in scope_rows or []
+            if isinstance(item, dict)
+            and str(item.get("scopeId") or "").strip()
+            and str(item.get("generationId") or "").strip()
+        }
+        counts = {
+            scope_id: {"entityCount": 0, "relationCount": 0}
+            for scope_id, _generation_id in expected_pairs
+        }
+        if not expected_pairs:
+            return counts
+
+        def collect(type_label: str, count_key: str) -> None:
+            query = (
+                "match $item isa " + type_label
+                + ', has ontology-box "ABox"'
+                + ", has ontology-scope-id $scopeId"
+                + ", has ontology-snapshot-id $generationId"
+                + "; reduce $count = count groupby $scopeId, $generationId;"
+            )
+            rows = self.read_rows(
+                query,
+                ["scopeId", "generationId", "count"],
+                label="typedb.scoped-abox-count-batch",
+            )
+            for row in rows or []:
+                scope_id = str(row.get("scopeId") or "").strip()
+                generation_id = str(row.get("generationId") or "").strip()
+                if (scope_id, generation_id) not in expected_pairs:
+                    continue
+                counts.setdefault(scope_id, {"entityCount": 0, "relationCount": 0})[count_key] = int(
+                    number_or_none(row.get("count")) or 0
+                )
+
+        collect("ontology-node", "entityCount")
+        collect("ontology-assertion", "relationCount")
+        return counts
+
     def write_persistence_rows(
         self,
         driver,
@@ -1886,11 +1941,18 @@ class ScopedABoxManifestMixin:
                     self.write_persistence_rows(driver, imported, node_rows, relation_rows)
                     timing["changedScopeWriteMs"] = round((time.monotonic() - write_started) * 1000, 1)
                     verification_started = time.monotonic()
+                    actual_counts_by_scope = self.scoped_abox_scope_row_counts_batch([
+                        scope_rows.get(scope_id) or {}
+                        for scope_id in changed_scope_ids
+                    ])
                     for scope_id in changed_scope_ids:
                         scope_plan_row = scope_rows.get(scope_id) or {}
                         expected = expected_rows_by_scope.get(scope_id) or {}
                         generation_id = str(scope_plan_row.get("generationId") or "")
-                        actual = self.scoped_abox_scope_row_counts(scope_id, generation_id)
+                        actual = actual_counts_by_scope.get(scope_id) or {
+                            "entityCount": 0,
+                            "relationCount": 0,
+                        }
                         valid = (
                             actual.get("entityCount") == int(expected.get("entityCount") or 0)
                             and actual.get("relationCount") == int(expected.get("relationCount") or 0)
@@ -2714,6 +2776,7 @@ class TypeDBOntologyGraphRepository(GraphStoreOntologyRowMapperMixin, ScopedABox
         native_rule_execution_enabled: bool = True,
         native_rule_query_timeout_seconds: float = DEFAULT_TYPEDB_NATIVE_RULE_QUERY_TIMEOUT_SECONDS,
         native_rule_execution_budget_seconds: float = DEFAULT_TYPEDB_NATIVE_RULE_EXECUTION_BUDGET_SECONDS,
+        inference_write_lease_enabled: bool = False,
     ):
         self.address = str(address or "").strip()
         self.user = str(user or "admin").strip() or "admin"
@@ -2755,6 +2818,10 @@ class TypeDBOntologyGraphRepository(GraphStoreOntologyRowMapperMixin, ScopedABox
             1.0,
             float(native_rule_execution_budget_seconds or DEFAULT_TYPEDB_NATIVE_RULE_EXECUTION_BUDGET_SECONDS),
         )
+        # The production composition root enables this durable lease. Bare
+        # adapters retain the old unlocked behavior for isolated migrations
+        # and deterministic unit tests that do not open a real TypeDB driver.
+        self._inference_write_lease_enabled = bool(inference_write_lease_enabled)
         self._last_graph = None
         self._last_rules: List[GraphInferenceRule] = []
         self._base_schema_ready_fingerprint = ""
@@ -8005,6 +8072,89 @@ relation ontology-assertion,
         return result
 
     def run_rulebox(self, payload: Dict[str, object] = None) -> Dict[str, object]:
+        """Run native rules under the same durable writer boundary as ABox swaps.
+
+        A native run writes a generation candidate and atomically replaces the
+        active InferenceBox marker.  It must not overlap another ABox
+        activation or direct RuleBox invocation, otherwise two otherwise valid
+        candidates can prune or publish around each other.
+        """
+        if not self.address:
+            return NullTypeDBOntologyGraphRepository().run_rulebox(payload)
+        values = dict(payload or {})
+        native_execution_value = values.get("typedbNativeRuleExecutionEnabled")
+        if native_execution_value is None:
+            native_execution_enabled = self.native_rule_execution_enabled()
+        else:
+            native_execution_enabled = typedb_bool(native_execution_value)
+        if not native_execution_enabled or not self._inference_write_lease_enabled:
+            return self._run_rulebox_unlocked(values)
+
+        supplied_owner = str(values.pop("_inferenceWriteLeaseOwner", "") or "").strip()
+        supplied_lease = bool(supplied_owner)
+        if supplied_lease:
+            current = self.scoped_abox_write_lease_status()
+            if (
+                str(current.get("status") or "") == "held"
+                and str(current.get("leaseOwner") or "") == supplied_owner
+            ):
+                result = self._run_rulebox_unlocked(values)
+                if isinstance(result, dict):
+                    result["inferenceWriteLease"] = {
+                        "status": "adopted",
+                        "leaseOwner": supplied_owner,
+                        "managedBy": "ontology-projection",
+                    }
+                return result
+            return {
+                "configured": True,
+                "status": "invalid-inference-write-lease",
+                "graphStore": "typedb",
+                "source": "typedbNativeRule",
+                "reasoningMode": TYPEDB_NATIVE_BLOCKED_MODE,
+                "reason": "Projection-owned TypeDB inference lease could not be verified.",
+                "nativeTypeDbReasoningUsed": False,
+                "typedbBootstrapReasoningUsed": False,
+                "pythonBootstrapDisabled": True,
+                "inferenceWriteLease": {
+                    "status": str(current.get("status") or "missing"),
+                    "leaseOwner": str(current.get("leaseOwner") or ""),
+                },
+            }
+
+        lease = self.acquire_scoped_abox_write_lease("inferencebox-native-rule")
+        if not lease.get("acquired"):
+            return {
+                "configured": True,
+                "status": "deferred-inference-write-lease",
+                "graphStore": "typedb",
+                "source": "typedbNativeRule",
+                "reasoningMode": TYPEDB_NATIVE_BLOCKED_MODE,
+                "reason": "Another ABox activation or native InferenceBox generation is running.",
+                "nativeTypeDbReasoningUsed": False,
+                "typedbBootstrapReasoningUsed": False,
+                "pythonBootstrapDisabled": True,
+                "preservedPreviousInference": True,
+                "inferenceWriteLease": {
+                    key: value
+                    for key, value in dict(lease or {}).items()
+                    if key != "propertiesJson"
+                },
+            }
+        try:
+            result = self._run_rulebox_unlocked(values)
+        finally:
+            release = self.release_scoped_abox_write_lease(lease)
+        if isinstance(result, dict):
+            result["inferenceWriteLease"] = {
+                key: value
+                for key, value in dict(lease or {}).items()
+                if key != "propertiesJson"
+            }
+            result["inferenceWriteLeaseRelease"] = release
+        return result
+
+    def _run_rulebox_unlocked(self, payload: Dict[str, object] = None) -> Dict[str, object]:
         if not self.address:
             return NullTypeDBOntologyGraphRepository().run_rulebox(payload)
         # A rule run owns its diagnostic window.  Nested reads made while
@@ -11230,4 +11380,7 @@ def typedb_repository_from_settings(settings: Dict[str, str] = None):
         or DEFAULT_TYPEDB_NATIVE_RULE_QUERY_TIMEOUT_SECONDS,
         native_rule_execution_budget_seconds=number_or_none(settings.get("typedbNativeRuleExecutionBudgetSeconds"))
         or DEFAULT_TYPEDB_NATIVE_RULE_EXECUTION_BUDGET_SECONDS,
+        inference_write_lease_enabled=True
+        if settings.get("typedbInferenceWriteLeaseEnabled") in (None, "")
+        else typedb_bool(settings.get("typedbInferenceWriteLeaseEnabled")),
     )

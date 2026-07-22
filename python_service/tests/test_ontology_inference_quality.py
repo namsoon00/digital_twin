@@ -448,6 +448,44 @@ class OntologyInferenceQualityTests(unittest.TestCase):
         self.assertEqual("unchanged-material-facts-reasoning-retry", result["status"])
         self.assertEqual(2, repository.rulebox_count)
 
+    def test_native_inference_symbol_limit_prioritizes_the_triggering_holding(self):
+        first_position = normalize_position({
+            "symbol": "005930",
+            "name": "삼성전자",
+            "market": "KR",
+            "currency": "KRW",
+            "source": "holding",
+            "quantity": 10,
+            "currentPrice": 70000,
+            "marketValue": 700000,
+        })
+        second_position = normalize_position({
+            "symbol": "000660",
+            "name": "SK하이닉스",
+            "market": "KR",
+            "currency": "KRW",
+            "source": "holding",
+            "quantity": 7,
+            "currentPrice": 180000,
+            "marketValue": 1260000,
+        })
+        snapshot = self.snapshot_with_positions(
+            [first_position, second_position],
+            "2026-07-20T00:01:00Z",
+        )
+        recorder = PortfolioOntologyProjectionRecorder(
+            MemoryProjectionRepository(),
+            settings={"typedbNativeRuleTargetSymbolLimit": "1"},
+        )
+
+        symbols = recorder.bounded_native_inference_symbols(
+            snapshot,
+            ["000660", "005930"],
+            ["000660"],
+        )
+
+        self.assertEqual(["000660"], symbols)
+
     @staticmethod
     def snapshot(position, generated_at):
         return OntologyInferenceQualityTests.snapshot_with_positions([position], generated_at)

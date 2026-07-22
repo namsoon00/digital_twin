@@ -22,7 +22,7 @@ from digital_twin.infrastructure.kis_market_signals import KISMarketSignalProvid
 
 
 class ExternalApiSourceTests(unittest.TestCase):
-    def test_repeated_kis_investor_totals_remain_reference_evidence(self):
+    def test_repeated_kis_investor_totals_are_excluded_from_judgement(self):
         provider = KISMarketSignalProvider(
             settings={"kisMarketSignalUnchangedStaleCount": "3"},
             quote_cache=SimpleNamespace(),
@@ -70,17 +70,23 @@ class ExternalApiSourceTests(unittest.TestCase):
         coverage = position.market_signal_coverage["investor"]
         psychology = investor_flow_psychology(position)
 
-        self.assertEqual("available", coverage["status"])
+        self.assertEqual("stale", coverage["status"])
         self.assertEqual(58, coverage["unchangedCount"])
-        self.assertIs(True, coverage["judgementEvidenceUsable"])
+        self.assertEqual("stale-repeat", coverage["freshnessStatus"])
+        self.assertIs(False, coverage["judgementEvidenceUsable"])
         self.assertIs(False, coverage["aiUsableAsStrongEvidence"])
-        self.assertEqual(196075, position.foreign_net_volume)
-        self.assertEqual(202414, position.institution_net_volume)
-        self.assertEqual(-380628, position.individual_net_volume)
-        self.assertTrue(psychology["available"])
-        self.assertEqual("smartMoneyAccumulation", psychology["field"])
+        self.assertEqual(0.0, position.foreign_net_volume)
+        self.assertEqual(0.0, position.institution_net_volume)
+        self.assertEqual(0.0, position.individual_net_volume)
+        self.assertFalse(psychology["available"])
+        investor_line = RealtimeMonitor().investor_context_line(position.to_dict())
+        self.assertIn("투자자 수급:", investor_line)
+        self.assertIn("오래된 반복값", investor_line)
+        self.assertIn("외국인·기관 수치 제외", investor_line)
+        self.assertIn("수치 표시: 최신값 확인 전 제외", investor_line)
+        self.assertNotIn("외국인: ", investor_line)
 
-    def test_current_day_legacy_stale_investor_cache_is_restored_as_reference(self):
+    def test_current_day_repeated_investor_cache_is_excluded_immediately(self):
         provider = KISMarketSignalProvider(
             settings={},
             quote_cache=SimpleNamespace(),
@@ -92,25 +98,25 @@ class ExternalApiSourceTests(unittest.TestCase):
             "individualNetVolume": -380628,
             "marketSignalCoverage": {
                 "investor": {
-                    "status": "stale",
+                    "status": "available",
                     "fields": ["foreignNetVolume", "institutionNetVolume", "individualNetVolume"],
-                    "freshnessStatus": "stale-repeat",
-                    "cadence": "stale-repeat",
+                    "freshnessStatus": "reference-repeat",
+                    "cadence": "rest-reference",
                     "unchangedCount": 60,
                     "sourceAsOf": "2026-07-20T00:00:00+09:00",
-                    "judgementEvidenceUsable": False,
+                    "judgementEvidenceUsable": True,
                 }
             },
         }
 
-        restored = provider.signal_for_current_session(signal)
-        coverage = restored["marketSignalCoverage"]["investor"]
+        retained = provider.signal_for_current_session(signal)
+        coverage = retained["marketSignalCoverage"]["investor"]
 
-        self.assertEqual("available", coverage["status"])
-        self.assertEqual("reference-repeat", coverage["freshnessStatus"])
-        self.assertIs(True, coverage["judgementEvidenceUsable"])
-        self.assertIs(False, coverage["aiUsableAsStrongEvidence"])
-        self.assertNotIn("staleReason", coverage)
+        self.assertEqual("stale", coverage["status"])
+        self.assertEqual("stale-repeat", coverage["freshnessStatus"])
+        self.assertIs(False, coverage["judgementEvidenceUsable"])
+        self.assertNotIn("foreignNetVolume", retained)
+        self.assertNotIn("institutionNetVolume", retained)
 
     def test_external_api_error_redacts_key_disclosed_by_provider(self):
         message = "We have detected your API key as 8YHIHMCZZ3W8L64E and our standard rate limit applies"

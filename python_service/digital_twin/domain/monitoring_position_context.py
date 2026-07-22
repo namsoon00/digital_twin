@@ -570,9 +570,12 @@ class MonitoringPositionContextMixin:
         if not investor:
             return ""
         status = str(investor.get("status") or "").strip()
-        if status == "stale":
+        if status in {"stale", "stale-at-dispatch"}:
             reason = str(investor.get("staleReason") or investor.get("reason") or "").strip()
-            return "신선도 주의" + (" - " + reason if reason else "")
+            source_time_note = " · KIS 제공 기준시각은 영업일자 누적값"
+            if str(investor.get("sourceTimestampState") or "") != "business-date-only":
+                source_time_note = ""
+            return "상태: 오래된 반복값 · 외국인·기관 수치 제외" + (" · " + reason if reason else "") + source_time_note
         if investor.get("unchangedCount") not in (None, "", 0):
             return "KIS 오늘 누적 수급 · 이전 조회 이후 변화 없음 · 새 움직임 확인 전 참고값"
         latency_label = str(investor.get("latencyLabel") or "").strip()
@@ -606,17 +609,20 @@ class MonitoringPositionContextMixin:
             self.investor_summary("개인", individual_buy, individual_sell, individual_net, individual_net_amount, currency),
         ]
         parts = [summary for summary in summaries if summary]
-        if not parts:
-            return ""
         note = self.investor_coverage_note(position)
+        coverage = position.get("market_signal_coverage")
+        if not isinstance(coverage, dict) or not coverage:
+            coverage = position.get("marketSignalCoverage")
+        investor = coverage.get("investor") if isinstance(coverage, dict) and isinstance(coverage.get("investor"), dict) else {}
+        values_usable = investor.get("judgementEvidenceUsable") is not False and str(investor.get("status") or "") == "available"
+        if not parts:
+            if note and not values_usable:
+                return "투자자 수급:\n" + note + "\n수치 표시: 최신값 확인 전 제외"
+            return ""
         if note:
-            coverage = position.get("market_signal_coverage")
-            if not isinstance(coverage, dict) or not coverage:
-                coverage = position.get("marketSignalCoverage")
-            investor = coverage.get("investor") if isinstance(coverage, dict) and isinstance(coverage.get("investor"), dict) else {}
-            if investor.get("judgementEvidenceUsable") is not False and str(investor.get("status") or "") == "available":
+            if values_usable:
                 return "투자자:\n" + note + "\n" + "\n".join(parts)
-            return "투자자:\n" + note + "\n수치 제외: KIS 투자자별 수급이 최신 판단 참고값으로 확인되지 않았습니다."
+            return "투자자 수급:\n" + note + "\n수치 표시: 최신값 확인 전 제외"
         return "투자자:\n" + "\n".join(parts)
 
     def holding_action_text(self, decision_text: str, pnl_rate: float) -> str:

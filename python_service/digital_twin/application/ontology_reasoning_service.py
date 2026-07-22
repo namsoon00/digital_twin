@@ -3,6 +3,11 @@ from datetime import datetime, timezone
 from typing import Callable, Dict, Iterable, List, Tuple
 
 from ..domain.events import ONTOLOGY_REASONING_REQUESTED, ontology_reasoning_completed_event
+from ..domain.investment_evidence_governance import (
+    ReasoningGeneration,
+    ResearchReasoningHandoff,
+    complete_reasoning_handoff,
+)
 
 
 DISABLED_VALUES = {"0", "false", "no", "off", "disabled"}
@@ -1152,6 +1157,15 @@ class OntologyReasoningRunner:
         self.mark_successful_projection(runner)
         account_ids = [getattr(account, "account_id", "") for account in getattr(runner, "accounts", [])]
         trigger_event_ids = [event.event_id for event in requests]
+        research_refresh = self.research_generation_refresh_results(
+            requests,
+            getattr(runner, "last_ontology_projection_results", {}),
+        )
+        blocked_request_ids = set(research_refresh.get("blockedRequestEventIds") or [])
+        cursor_requests = [
+            event for event in requests
+            if str(getattr(event, "event_id", "") or "") not in blocked_request_ids
+        ]
         completed = ontology_reasoning_completed_event(
             trigger_event_ids,
             account_ids,
@@ -1162,18 +1176,24 @@ class OntologyReasoningRunner:
                 "데이터 변경 이벤트가 온톨로지 추론 사이클을 실행했습니다."
                 + (f" 네이티브 추론 대상 상한 {self.effective_max_symbols_per_run()}개가 적용되어 {omitted_symbol_count}개는 다음 사이클로 이월했습니다." if omitted_symbol_count else "")
             ),
+            research_generation_refreshes=research_refresh,
         )
         rule_candidate_result = self.propose_rule_candidates(symbols, requests, alerts, force=False)
-        refreshed_research_runs = self.mark_research_runs_refreshed(requests)
         self.publish(completed)
         progress_result = self.mark_requests_processed(
-            requests,
+            cursor_requests,
             symbol_batches,
             superseded_by_lead=work.get("supersededByLead"),
         )
-        self.mark_symbols_reasoned(symbols)
+        processed_symbols = []
+        for event in cursor_requests:
+            for symbol in symbol_batches.get(str(getattr(event, "event_id", "") or ""), []) or []:
+                if symbol not in processed_symbols:
+                    processed_symbols.append(symbol)
+        self.mark_symbols_reasoned(processed_symbols)
+        status = "partial" if blocked_request_ids else "ok"
         return {
-            "status": "ok",
+            "status": status,
             "processedCount": len(trigger_event_ids),
             "completedEventCount": len(progress_result.get("completedEventIds") or []),
             "partialEventCount": len(progress_result.get("partialEventIds") or []),
@@ -1186,7 +1206,15 @@ class OntologyReasoningRunner:
             "omittedSymbolCount": omitted_symbol_count,
             "accountIds": [item for item in account_ids if item],
             "ruleCandidateResult": rule_candidate_result,
-            "refreshedResearchRunIds": refreshed_research_runs,
+            "refreshedResearchRunIds": research_refresh.get("refreshedRunIds") or [],
+            "blockedResearchRunIds": research_refresh.get("blockedRunIds") or [],
+            "blockedResearchRequestEventIds": sorted(blocked_request_ids),
+            "researchGenerationRefresh": research_refresh,
+            "deferredReason": (
+                "검증 근거가 같은 계정 월드의 새 ABox/InferenceBox 세대에 정렬될 때까지 해당 리서치 요청을 유지합니다."
+                if blocked_request_ids
+                else ""
+            ),
         }
 
     def mark_symbols_reasoned(self, symbols: Iterable[str]) -> None:
@@ -1204,21 +1232,158 @@ class OntologyReasoningRunner:
         payload["lastReasonedAtBySymbol"] = dict(sorted(last_by_symbol.items()))
         self.save_cursor_payload(payload)
 
-    def mark_research_runs_refreshed(self, requests: Iterable[object]) -> List[str]:
+    def research_generation_refresh_results(
+        self,
+        requests: Iterable[object],
+        projection_results: Dict[str, object] = None,
+    ) -> Dict[str, object]:
+        """Apply a research run only after its own account world advanced.
+
+        The monitor may project several accounts in one worker cycle.  A
+        general successful cycle is not proof that a research run's evidence
+        reached the matching portfolio world, so the original generation and
+        the newly aligned generation are compared before the run is promoted.
+        """
+        outcome = {
+            "refreshedRunIds": [],
+            "blockedRunIds": [],
+            "blockedRequestEventIds": [],
+            "transitions": [],
+        }
         if not self.research_store or not hasattr(self.research_store, "mark_reasoning_refreshed"):
-            return []
-        refreshed = []
+            return outcome
+        projections = projection_results if isinstance(projection_results, dict) else {}
+        seen_run_ids = set()
         for event in requests or []:
-            run_id = str(event_payload(event).get("researchRunId") or "").strip()
-            if not run_id or run_id in refreshed:
+            payload = event_payload(event)
+            run_id = str(payload.get("researchRunId") or "").strip()
+            event_id = str(getattr(event, "event_id", "") or "").strip()
+            if not run_id or run_id in seen_run_ids:
                 continue
+            seen_run_ids.add(run_id)
+            handoff_payload = payload.get("reasoningHandoff")
+            if not isinstance(handoff_payload, dict) or not handoff_payload:
+                # Historical events did not contain a generation contract. They
+                # remain readable during the rolling deployment, while all new
+                # research events must pass the strict branch below.
+                if self.persist_research_refresh(run_id, True, None):
+                    outcome["refreshedRunIds"].append(run_id)
+                continue
+            handoff = ResearchReasoningHandoff.from_dict(handoff_payload)
+            applied_generation, generation_reason = self.applied_generation_for_research_request(
+                payload,
+                handoff,
+                projections,
+            )
+            updated_handoff = complete_reasoning_handoff(
+                handoff,
+                applied_generation,
+                generation_reason,
+            )
+            refreshed = updated_handoff.applied()
+            persisted = self.persist_research_refresh(run_id, refreshed, updated_handoff)
+            transition = {
+                "runId": run_id,
+                "requestEventId": event_id,
+                "status": updated_handoff.status,
+                "reason": updated_handoff.reason,
+                "sourceGeneration": updated_handoff.source_generation.to_dict(),
+                "appliedGeneration": updated_handoff.applied_generation.to_dict(),
+                "persisted": bool(persisted),
+            }
+            outcome["transitions"].append(transition)
+            if refreshed and persisted:
+                outcome["refreshedRunIds"].append(run_id)
+                continue
+            outcome["blockedRunIds"].append(run_id)
+            if event_id:
+                outcome["blockedRequestEventIds"].append(event_id)
+        outcome["refreshedRunIds"] = sorted(set(outcome["refreshedRunIds"]))
+        outcome["blockedRunIds"] = sorted(set(outcome["blockedRunIds"]))
+        outcome["blockedRequestEventIds"] = sorted(set(outcome["blockedRequestEventIds"]))
+        return outcome
+
+    def mark_research_runs_refreshed(
+        self,
+        requests: Iterable[object],
+        projection_results: Dict[str, object] = None,
+    ) -> List[str]:
+        return self.research_generation_refresh_results(
+            requests,
+            projection_results,
+        ).get("refreshedRunIds") or []
+
+    def persist_research_refresh(
+        self,
+        run_id: str,
+        refreshed: bool,
+        handoff: ResearchReasoningHandoff = None,
+    ) -> bool:
+        marker = getattr(self.research_store, "mark_reasoning_refreshed", None)
+        if not callable(marker):
+            return False
+        try:
+            if handoff is not None:
+                result = marker(run_id, refreshed, handoff.to_dict())
+            else:
+                result = marker(run_id, refreshed)
+        except TypeError:
             try:
-                result = self.research_store.mark_reasoning_refreshed(run_id, True)
-            except Exception:  # noqa: BLE001 - run audit failure must not invalidate the active graph generation.
-                continue
-            if result:
-                refreshed.append(run_id)
-        return refreshed
+                result = marker(run_id, refreshed)
+            except Exception:  # noqa: BLE001 - a run audit failure never invalidates TypeDB's active generation.
+                return False
+        except Exception:  # noqa: BLE001 - a run audit failure never invalidates TypeDB's active generation.
+            return False
+        return bool(result)
+
+    def applied_generation_for_research_request(
+        self,
+        payload: Dict[str, object],
+        handoff: ResearchReasoningHandoff,
+        projection_results: Dict[str, object],
+    ) -> Tuple[ReasoningGeneration, str]:
+        account_id = str(payload.get("accountId") or "").strip()
+        if not account_id:
+            return ReasoningGeneration(), "리서치 재추론 요청에 계정 식별자가 없어 다른 계정의 세대를 연결하지 않습니다."
+        raw_result = projection_results.get(account_id)
+        if not isinstance(raw_result, dict):
+            for result in projection_results.values():
+                if not isinstance(result, dict):
+                    continue
+                world = result.get("ontologyWorld") if isinstance(result.get("ontologyWorld"), dict) else {}
+                if str(world.get("accountId") or "").strip() == account_id:
+                    raw_result = result
+                    break
+        if not isinstance(raw_result, dict):
+            return ReasoningGeneration(), "이 리서치 계정 월드의 ABox 투영 결과를 찾지 못해 재시도합니다."
+        result = dict(raw_result)
+        projection_status = str(result.get("status") or "").strip().lower()
+        accepted_statuses = {
+            "ok",
+            "partial",
+            "unchanged-material-facts",
+            "unchanged-material-facts-reasoning-retry",
+        }
+        if projection_status not in accepted_statuses:
+            return ReasoningGeneration(), str(result.get("reason") or "이 계정 월드의 ABox 투영이 완료되지 않았습니다.")[:220]
+        inference = result.get("inferenceBox") if isinstance(result.get("inferenceBox"), dict) else {}
+        world = result.get("ontologyWorld") if isinstance(result.get("ontologyWorld"), dict) else {}
+        generation = ReasoningGeneration.from_dict({
+            **inference,
+            "worldId": inference.get("worldId") or world.get("worldId") or "",
+        })
+        if not generation.complete():
+            return generation, str(
+                inference.get("reason")
+                or "새 TypeDB InferenceBox가 활성 ABox Manifest와 정렬되지 않았습니다."
+            )[:220]
+        result_abox_id = str(result.get("aboxSnapshotId") or "").strip()
+        if result_abox_id and result_abox_id != generation.source_abox_snapshot_id:
+            return generation, "ABox 투영 결과와 InferenceBox의 원본 Manifest가 달라 재추론 결과를 연결하지 않습니다."
+        expected_world = str(handoff.source_generation.world_id or "").strip()
+        if expected_world and generation.world_id != expected_world:
+            return generation, "리서치 시작 시점과 다른 계정 월드의 InferenceBox 결과입니다."
+        return generation, ""
 
     def propose_rule_candidates(
         self,

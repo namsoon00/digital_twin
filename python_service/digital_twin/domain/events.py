@@ -331,6 +331,12 @@ def data_pipeline_health_changed_event(payload: Dict[str, object]) -> DomainEven
 
 def hypothesis_research_completed_event(payload: Dict[str, object]) -> DomainEvent:
     symbol = str(payload.get("symbol") or "").upper().strip()
+    handoff = payload.get("reasoningHandoff") if isinstance(payload.get("reasoningHandoff"), dict) else {}
+    changed_evidence_ids = [
+        str(item or "").strip()
+        for item in (payload.get("changedEvidenceIds") or payload.get("verifiedClaims") or [])
+        if str(item or "").strip()
+    ]
     return DomainEvent(
         name=HYPOTHESIS_RESEARCH_COMPLETED,
         aggregate_id="hypothesis-research:" + (symbol or str(payload.get("runId") or "unknown")),
@@ -342,10 +348,12 @@ def hypothesis_research_completed_event(payload: Dict[str, object]) -> DomainEve
             "symbols": [symbol] if symbol else [],
             "status": str(payload.get("status") or ""),
             "changedCount": int(payload.get("changedEvidenceCount") or 0),
+            "changedEvidenceIds": changed_evidence_ids[:200],
             "verifiedClaimCount": len(payload.get("verifiedClaims") or []),
             "rejectedClaimCount": len(payload.get("rejectedClaims") or []),
             "factTypes": ["ResearchEvidence", "VerifiedClaim", "VerificationRun"],
             "source": "investment-brain-on-demand-research",
+            "reasoningHandoff": handoff,
         },
     )
 
@@ -378,6 +386,13 @@ def ontology_reasoning_requested_event(
 ) -> DomainEvent:
     clean_symbols = sorted(set(str(symbol or "").upper().strip() for symbol in (symbols or []) if str(symbol or "").strip()))
     clean_fact_types = sorted(set(str(item or "").strip() for item in (fact_types or []) if str(item or "").strip()))
+    source_payload = source_event.payload or {}
+    handoff = source_payload.get("reasoningHandoff") if isinstance(source_payload.get("reasoningHandoff"), dict) else {}
+    changed_evidence_ids = [
+        str(item or "").strip()
+        for item in (source_payload.get("changedEvidenceIds") or source_payload.get("verifiedClaims") or [])
+        if str(item or "").strip()
+    ]
     return DomainEvent(
         name=ONTOLOGY_REASONING_REQUESTED,
         aggregate_id="ontology:" + (",".join(clean_symbols) or str(trigger or "all"))[:180],
@@ -395,7 +410,10 @@ def ontology_reasoning_requested_event(
             "dispatchMode": "data-update-driven",
             "importanceGate": "materiality-first",
             "materialityAssessments": materiality_assessments if materiality_assessments is not None else [],
-            "researchRunId": str((source_event.payload or {}).get("runId") or ""),
+            "researchRunId": str(source_payload.get("runId") or ""),
+            "accountId": str(source_payload.get("accountId") or ""),
+            "changedEvidenceIds": changed_evidence_ids[:200],
+            "reasoningHandoff": handoff,
         },
     )
 
@@ -407,6 +425,7 @@ def ontology_reasoning_completed_event(
     alert_count: int,
     status: str = "ok",
     reason: str = "",
+    research_generation_refreshes: Dict[str, object] = None,
 ) -> DomainEvent:
     clean_trigger_ids = [str(item or "").strip() for item in (trigger_event_ids or []) if str(item or "").strip()]
     clean_accounts = sorted(set(str(item or "").strip() for item in (account_ids or []) if str(item or "").strip()))
@@ -422,6 +441,7 @@ def ontology_reasoning_completed_event(
             "status": str(status or "ok"),
             "reason": str(reason or ""),
             "dispatchMode": "data-update-driven",
+            "researchGenerationRefreshes": dict(research_generation_refreshes or {}),
         },
     )
 

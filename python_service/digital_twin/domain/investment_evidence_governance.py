@@ -1,4 +1,4 @@
-from dataclasses import asdict, dataclass, field
+from dataclasses import asdict, dataclass, field, replace
 from datetime import datetime, timezone
 from typing import Dict, Iterable, List, Tuple
 
@@ -20,6 +20,260 @@ PRIMARY_SOURCE_MARKERS = (
     "investor relations",
     "company ir",
 )
+
+
+RESEARCH_REASONING_HANDOFF_VERSION = "research-reasoning-generation-v1"
+RESEARCH_REASONING_HANDOFF_STATES = {
+    "not-requested",
+    "pending",
+    "applied",
+    "blocked",
+}
+
+
+def unique_texts(values: Iterable[object], limit: int = 200) -> List[str]:
+    """Keep persisted evidence and generation references deterministic."""
+    result: List[str] = []
+    for value in values or []:
+        text = str(value or "").strip()
+        if text and text not in result:
+            result.append(text)
+        if len(result) >= max(1, int(limit or 1)):
+            break
+    return result
+
+
+@dataclass(frozen=True)
+class ReasoningGeneration:
+    """One active TypeDB inference generation and its ABox source Manifest."""
+
+    inference_generation_id: str = ""
+    source_abox_snapshot_id: str = ""
+    world_id: str = ""
+    generation_aligned: bool = False
+    observed_at: str = ""
+
+    def complete(self) -> bool:
+        return bool(
+            self.inference_generation_id
+            and self.source_abox_snapshot_id
+            and self.world_id
+            and self.generation_aligned
+        )
+
+    def to_dict(self) -> Dict[str, object]:
+        return {
+            "inferenceGenerationId": self.inference_generation_id,
+            "sourceAboxSnapshotId": self.source_abox_snapshot_id,
+            "worldId": self.world_id,
+            "generationAligned": bool(self.generation_aligned),
+            "observedAt": self.observed_at,
+        }
+
+    @classmethod
+    def from_dict(cls, payload: Dict[str, object] = None):
+        payload = dict(payload or {})
+        return cls(
+            inference_generation_id=str(
+                payload.get("inferenceGenerationId")
+                or payload.get("inference_generation_id")
+                or ""
+            ).strip(),
+            source_abox_snapshot_id=str(
+                payload.get("sourceAboxSnapshotId")
+                or payload.get("source_abox_snapshot_id")
+                or payload.get("aboxSnapshotId")
+                or payload.get("abox_snapshot_id")
+                or ""
+            ).strip(),
+            world_id=str(payload.get("worldId") or payload.get("world_id") or "").strip(),
+            generation_aligned=bool(
+                payload.get("generationAligned")
+                if "generationAligned" in payload
+                else payload.get("generation_aligned")
+            ),
+            observed_at=str(
+                payload.get("observedAt")
+                or payload.get("observed_at")
+                or payload.get("inferenceGenerationAt")
+                or payload.get("inference_generation_at")
+                or ""
+            ).strip(),
+        )
+
+
+@dataclass(frozen=True)
+class ResearchReasoningHandoff:
+    """Auditable bridge from verified evidence to a new active TypeDB generation.
+
+    A research result is not an investment input merely because it was stored.
+    It becomes eligible only after the exact account world has materialized a
+    newer, aligned InferenceBox from a newer ABox Manifest.
+    """
+
+    request_id: str = ""
+    source_generation: ReasoningGeneration = field(default_factory=ReasoningGeneration)
+    changed_evidence_ids: List[str] = field(default_factory=list)
+    status: str = "not-requested"
+    applied_generation: ReasoningGeneration = field(default_factory=ReasoningGeneration)
+    reason: str = ""
+    requested_at: str = ""
+    completed_at: str = ""
+
+    def to_dict(self) -> Dict[str, object]:
+        return {
+            "version": RESEARCH_REASONING_HANDOFF_VERSION,
+            "requestId": self.request_id,
+            "sourceGeneration": self.source_generation.to_dict(),
+            "changedEvidenceIds": list(self.changed_evidence_ids),
+            "status": self.status,
+            "appliedGeneration": self.applied_generation.to_dict(),
+            "reason": self.reason,
+            "requestedAt": self.requested_at,
+            "completedAt": self.completed_at,
+        }
+
+    @classmethod
+    def from_dict(cls, payload: Dict[str, object] = None):
+        payload = dict(payload or {})
+        source = payload.get("sourceGeneration") or payload.get("source_generation") or {}
+        applied = payload.get("appliedGeneration") or payload.get("applied_generation") or {}
+        status = str(payload.get("status") or "not-requested").strip().lower()
+        if status not in RESEARCH_REASONING_HANDOFF_STATES:
+            status = "not-requested"
+        return cls(
+            request_id=str(payload.get("requestId") or payload.get("request_id") or "").strip(),
+            source_generation=ReasoningGeneration.from_dict(source if isinstance(source, dict) else {}),
+            changed_evidence_ids=unique_texts(
+                payload.get("changedEvidenceIds") or payload.get("changed_evidence_ids") or []
+            ),
+            status=status,
+            applied_generation=ReasoningGeneration.from_dict(applied if isinstance(applied, dict) else {}),
+            reason=str(payload.get("reason") or "").strip(),
+            requested_at=str(payload.get("requestedAt") or payload.get("requested_at") or "").strip(),
+            completed_at=str(payload.get("completedAt") or payload.get("completed_at") or "").strip(),
+        )
+
+    def requested(self, changed_evidence_ids: Iterable[object]) -> "ResearchReasoningHandoff":
+        evidence_ids = unique_texts(changed_evidence_ids)
+        if not evidence_ids:
+            return replace(
+                self,
+                changed_evidence_ids=[],
+                status="not-requested",
+                reason="검증된 근거의 내용 변경이 없어 기존 추론 세대를 유지합니다.",
+                requested_at="",
+                completed_at="",
+            )
+        if not self.source_generation.complete():
+            return replace(
+                self,
+                changed_evidence_ids=evidence_ids,
+                status="blocked",
+                reason="검증 시작 시점의 활성 TypeDB 세대 참조가 완전하지 않아 새 근거를 투자 판단으로 승격하지 않습니다.",
+                requested_at=utc_now_iso(),
+                completed_at="",
+            )
+        return replace(
+            self,
+            changed_evidence_ids=evidence_ids,
+            status="pending",
+            reason="검증 근거를 새 ABox Manifest에 반영하고 같은 계정 월드의 TypeDB 재추론 완료를 기다립니다.",
+            requested_at=utc_now_iso(),
+            completed_at="",
+        )
+
+    def applied(self) -> bool:
+        return self.status == "applied" and self.applied_generation.complete()
+
+
+def reasoning_handoff_from_context(
+    run_id: str,
+    account_id: str,
+    symbol: str,
+    context: Dict[str, object] = None,
+) -> ResearchReasoningHandoff:
+    payload = dict(context or {})
+    source_payload = payload.get("reasoningGeneration") or payload.get("reasoning_generation") or payload
+    source = ReasoningGeneration.from_dict(source_payload if isinstance(source_payload, dict) else {})
+    request_id = stable_id(
+        "research-reasoning-handoff",
+        run_id,
+        account_id,
+        str(symbol or "").upper().strip(),
+        source.inference_generation_id,
+        source.source_abox_snapshot_id,
+        source.world_id,
+    )
+    return ResearchReasoningHandoff(
+        request_id=request_id,
+        source_generation=source,
+    )
+
+
+def complete_reasoning_handoff(
+    handoff: ResearchReasoningHandoff,
+    applied_generation: ReasoningGeneration,
+    reason: str = "",
+) -> ResearchReasoningHandoff:
+    """Accept only a newer, aligned generation in the original portfolio world."""
+    current = handoff or ResearchReasoningHandoff()
+    applied = applied_generation or ReasoningGeneration()
+    if not current.changed_evidence_ids:
+        return replace(
+            current,
+            status="not-requested",
+            applied_generation=applied,
+            reason=reason or "변경된 검증 근거가 없어 재추론 전환이 필요하지 않습니다.",
+            completed_at=utc_now_iso(),
+        )
+    if not current.source_generation.complete():
+        return replace(
+            current,
+            status="blocked",
+            applied_generation=applied,
+            reason=reason or "기준 InferenceBox/ABox 세대가 완전하지 않아 재추론 결과를 연결하지 않습니다.",
+            completed_at=utc_now_iso(),
+        )
+    if not applied.complete():
+        return replace(
+            current,
+            status="blocked",
+            applied_generation=applied,
+            reason=reason or "새 TypeDB InferenceBox가 활성 ABox와 정렬되었다는 증거가 없습니다.",
+            completed_at=utc_now_iso(),
+        )
+    if current.source_generation.world_id != applied.world_id:
+        return replace(
+            current,
+            status="blocked",
+            applied_generation=applied,
+            reason=reason or "다른 계정 월드의 재추론 결과이므로 검증 근거를 연결하지 않습니다.",
+            completed_at=utc_now_iso(),
+        )
+    if current.source_generation.source_abox_snapshot_id == applied.source_abox_snapshot_id:
+        return replace(
+            current,
+            status="blocked",
+            applied_generation=applied,
+            reason=reason or "새 근거가 이전 ABox Manifest와 같은 세대에 머물러 재추론 완료로 처리하지 않습니다.",
+            completed_at=utc_now_iso(),
+        )
+    if current.source_generation.inference_generation_id == applied.inference_generation_id:
+        return replace(
+            current,
+            status="blocked",
+            applied_generation=applied,
+            reason=reason or "새 ABox에 대응하는 새 InferenceBox 세대가 생성되지 않아 투자 판단을 갱신하지 않습니다.",
+            completed_at=utc_now_iso(),
+        )
+    return replace(
+        current,
+        status="applied",
+        applied_generation=applied,
+        reason=reason or "검증 근거가 새 ABox Manifest와 정렬된 TypeDB InferenceBox 세대에 반영됐습니다.",
+        completed_at=utc_now_iso(),
+    )
 
 
 @dataclass(frozen=True)
@@ -60,6 +314,7 @@ class ResearchRun:
     round_count: int = 0
     changed_evidence_count: int = 0
     reasoning_refreshed: bool = False
+    reasoning_handoff: ResearchReasoningHandoff = field(default_factory=ResearchReasoningHandoff)
     request_context: Dict[str, object] = field(default_factory=dict)
     started_at: str = field(default_factory=utc_now_iso)
     completed_at: str = ""
@@ -68,6 +323,7 @@ class ResearchRun:
         payload = {camel_key(key): value for key, value in asdict(self).items()}
         payload["verifiedClaims"] = [item.to_dict() for item in self.verified_claims]
         payload["rejectedClaims"] = [item.to_dict() for item in self.rejected_claims]
+        payload["reasoningHandoff"] = self.reasoning_handoff.to_dict()
         return payload
 
     @classmethod
@@ -109,6 +365,9 @@ class ResearchRun:
             round_count=int(payload.get("roundCount") or payload.get("round_count") or 0),
             changed_evidence_count=int(payload.get("changedEvidenceCount") or payload.get("changed_evidence_count") or 0),
             reasoning_refreshed=bool(payload.get("reasoningRefreshed") or payload.get("reasoning_refreshed")),
+            reasoning_handoff=ResearchReasoningHandoff.from_dict(
+                payload.get("reasoningHandoff") or payload.get("reasoning_handoff") or {}
+            ),
             request_context=dict(payload.get("requestContext") or payload.get("request_context") or {}),
             started_at=str(payload.get("startedAt") or payload.get("started_at") or utc_now_iso()),
             completed_at=str(payload.get("completedAt") or payload.get("completed_at") or ""),

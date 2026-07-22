@@ -1,13 +1,19 @@
 from dataclasses import replace
 from datetime import datetime, timezone
-from typing import Dict, Iterable, List
+from typing import Dict, Iterable, List, Tuple
 
 from ..domain.events import (
     hypothesis_research_completed_event,
     ontology_reasoning_requested_event,
 )
 from ..domain.investment_brain import InvestmentQuestion, stable_id, utc_now_iso
-from ..domain.investment_evidence_governance import ResearchRun, governed_evidence, normalized_source_trust_state
+from ..domain.investment_evidence_governance import (
+    ResearchReasoningHandoff,
+    ResearchRun,
+    governed_evidence,
+    normalized_source_trust_state,
+    reasoning_handoff_from_context,
+)
 from ..domain.investment_research import NewsCollectionTarget, ResearchEvidence
 from ..domain.data_freshness import parse_datetime
 from ..domain.materiality import evidence_materiality
@@ -100,6 +106,12 @@ class InvestmentResearchOrchestrationService:
             for source in (item.get("sourceTypes") or [])
         )
         run_id = run_id or stable_id("research-run", question.question_id, target.normalized_symbol(), started_at)
+        reasoning_handoff = reasoning_handoff_from_context(
+            run_id,
+            account_id or question.account_id,
+            target.normalized_symbol(),
+            brain,
+        )
         if not self.enabled() or self.max_rounds() <= 0:
             return self.persist_run(ResearchRun(
                 run_id=run_id,
@@ -109,6 +121,7 @@ class InvestmentResearchOrchestrationService:
                 status="disabled",
                 task_ids=task_ids,
                 source_types=source_types,
+                reasoning_handoff=reasoning_handoff,
                 started_at=started_at,
                 completed_at=utc_now_iso(),
             ))
@@ -135,6 +148,7 @@ class InvestmentResearchOrchestrationService:
                 source_types=source_types,
                 reused_evidence_ids=[item.evidence_id for item in cached_accepted],
                 verified_claims=cached_claims,
+                reasoning_handoff=reasoning_handoff,
                 started_at=started_at,
                 completed_at=utc_now_iso(),
             ))
@@ -150,6 +164,7 @@ class InvestmentResearchOrchestrationService:
                 reused_evidence_ids=[item.evidence_id for item in cached_accepted],
                 verified_claims=cached_claims,
                 round_count=0,
+                reasoning_handoff=reasoning_handoff,
                 started_at=started_at,
                 completed_at=utc_now_iso(),
             ))
@@ -170,6 +185,7 @@ class InvestmentResearchOrchestrationService:
                     "status": "cooldown",
                     "remainingMinutes": cooldown_remaining,
                 }],
+                reasoning_handoff=reasoning_handoff,
                 started_at=started_at,
                 completed_at=utc_now_iso(),
             ))
@@ -192,7 +208,13 @@ class InvestmentResearchOrchestrationService:
             max_age,
             self.minimum_source_trust_state(),
         )
-        changed_count = self.persist_evidence(accepted, question, target, run_id)
+        changed_count, reasoning_handoff = self.persist_evidence(
+            accepted,
+            question,
+            target,
+            run_id,
+            reasoning_handoff,
+        )
         status = "evidence-collected" if changed_count else ("verified-no-change" if verified else "evidence-unavailable")
         return self.persist_run(ResearchRun(
             run_id=run_id,
@@ -208,6 +230,7 @@ class InvestmentResearchOrchestrationService:
             provider_statuses=provider_statuses,
             round_count=1,
             changed_evidence_count=changed_count,
+            reasoning_handoff=reasoning_handoff,
             started_at=started_at,
             completed_at=utc_now_iso(),
         ))
@@ -254,13 +277,20 @@ class InvestmentResearchOrchestrationService:
         question: InvestmentQuestion,
         target: NewsCollectionTarget,
         run_id: str,
-    ) -> int:
+        reasoning_handoff: ResearchReasoningHandoff = None,
+    ) -> Tuple[int, ResearchReasoningHandoff]:
+        handoff = reasoning_handoff or ResearchReasoningHandoff()
         if not items or not self.evidence_repository:
-            return 0
+            return 0, handoff
+
+        persisted_handoff = handoff
 
         def events(saved: int, changed_symbols: List[str], changed_items: List[ResearchEvidence]):
+            nonlocal persisted_handoff
             if not saved:
                 return []
+            changed_evidence_ids = [item.evidence_id for item in changed_items if item.evidence_id]
+            persisted_handoff = handoff.requested(changed_evidence_ids)
             materiality = [evidence_materiality(item, self.settings).to_dict() for item in changed_items]
             completed = hypothesis_research_completed_event({
                 "runId": run_id,
@@ -269,7 +299,9 @@ class InvestmentResearchOrchestrationService:
                 "symbol": target.normalized_symbol(),
                 "status": "evidence-collected",
                 "changedEvidenceCount": saved,
-                "verifiedClaims": [item.evidence_id for item in changed_items],
+                "verifiedClaims": changed_evidence_ids,
+                "changedEvidenceIds": changed_evidence_ids,
+                "reasoningHandoff": persisted_handoff.to_dict(),
             })
             reasoning = ontology_reasoning_requested_event(
                 completed,
@@ -291,26 +323,42 @@ class InvestmentResearchOrchestrationService:
             saved, recorded = self.evidence_repository.upsert_many_with_events(items, events)
             for event in recorded:
                 self.event_publisher.dispatch_recorded(event)
-            return int(saved or 0)
+            return int(saved or 0), persisted_handoff
         saved = int(self.evidence_repository.upsert_many(items) or 0)
+        changed_items = list(getattr(self.evidence_repository, "last_changed_items", []) or items)
         if self.event_publisher and saved:
-            for event in events(saved, [target.normalized_symbol()], items):
+            for event in events(saved, [target.normalized_symbol()], changed_items):
                 if hasattr(self.event_publisher, "publish"):
                     self.event_publisher.publish(event)
-        return saved
+        if saved and persisted_handoff is handoff:
+            persisted_handoff = handoff.requested([item.evidence_id for item in changed_items if item.evidence_id])
+        return saved, persisted_handoff
 
     def persist_run(self, run: ResearchRun) -> ResearchRun:
         if self.research_store and hasattr(self.research_store, "save_run"):
             return self.research_store.save_run(run)
         return run
 
-    def mark_reasoning_refreshed(self, run: ResearchRun, refreshed: bool) -> ResearchRun:
+    def mark_reasoning_refreshed(
+        self,
+        run: ResearchRun,
+        refreshed: bool,
+        reasoning_handoff: ResearchReasoningHandoff = None,
+    ) -> ResearchRun:
+        handoff = reasoning_handoff or run.reasoning_handoff
+        confirmed = bool(refreshed) and (not handoff.request_id or handoff.applied())
         status = run.status
-        if refreshed and status not in {"disabled", "not-required"}:
+        if confirmed and status not in {"disabled", "not-required"}:
             status = "reasoning-refreshed"
-        elif not refreshed and run.changed_evidence_count > 0:
+        elif not confirmed and run.changed_evidence_count > 0:
             status = "reasoning-refresh-failed"
-        updated = replace(run, status=status, reasoning_refreshed=bool(refreshed), completed_at=utc_now_iso())
+        updated = replace(
+            run,
+            status=status,
+            reasoning_refreshed=confirmed,
+            reasoning_handoff=handoff,
+            completed_at=utc_now_iso(),
+        )
         return self.persist_run(updated)
 
     def enqueue(
@@ -326,14 +374,21 @@ class InvestmentResearchOrchestrationService:
         task_ids = [str(item.get("taskId") or "") for item in tasks if str(item.get("taskId") or "")]
         source_types = unique_strings(source for item in tasks for source in (item.get("sourceTypes") or []))
         status = "queued" if self.enabled() and self.plan_requires_research(brain, tasks) else "not-required"
+        run_id = stable_id("research-run-queued", question.question_id, target.normalized_symbol())
         run = ResearchRun(
-            run_id=stable_id("research-run-queued", question.question_id, target.normalized_symbol()),
+            run_id=run_id,
             question_id=question.question_id,
             account_id=account_id,
             symbol=target.normalized_symbol(),
             status=status,
             task_ids=task_ids,
             source_types=source_types,
+            reasoning_handoff=reasoning_handoff_from_context(
+                run_id,
+                account_id or question.account_id,
+                target.normalized_symbol(),
+                brain,
+            ),
             request_context={
                 "question": question.to_dict(),
                 "target": {

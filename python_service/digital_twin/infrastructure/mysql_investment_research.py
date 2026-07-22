@@ -3,7 +3,7 @@ from datetime import datetime, timedelta, timezone
 from typing import Dict, List
 
 from ..domain.investment_brain import NovelHypothesisProposal, utc_now_iso
-from ..domain.investment_evidence_governance import ResearchRun
+from ..domain.investment_evidence_governance import ResearchReasoningHandoff, ResearchRun
 from .mysql_operational_connection import MySQLOperationalConnection
 from .mysql_operational_helpers import _json_loads
 from .operational_common import json_dumps
@@ -90,7 +90,12 @@ class MySQLInvestmentResearchStore(MySQLOperationalConnection):
             row = connection.execute("SELECT COUNT(*) AS count FROM investment_research_runs WHERE status = 'queued'").fetchone()
         return int(row.get("count") or 0) if row else 0
 
-    def mark_reasoning_refreshed(self, run_id: str, refreshed: bool = True) -> Dict[str, object]:
+    def mark_reasoning_refreshed(
+        self,
+        run_id: str,
+        refreshed: bool = True,
+        reasoning_handoff=None,
+    ) -> Dict[str, object]:
         normalized = str(run_id or "").strip()
         if not normalized:
             return {}
@@ -102,10 +107,17 @@ class MySQLInvestmentResearchStore(MySQLOperationalConnection):
             if not row:
                 return {}
             run = ResearchRun.from_dict(_json_loads(row.get("payload_json"), {}))
+            handoff = reasoning_handoff if reasoning_handoff is not None else run.reasoning_handoff
+            if isinstance(handoff, dict):
+                handoff = ResearchReasoningHandoff.from_dict(handoff)
+            confirmed = bool(refreshed) and (
+                not getattr(handoff, "request_id", "") or bool(getattr(handoff, "applied", lambda: False)())
+            )
             updated = replace(
                 run,
-                status="reasoning-refreshed" if refreshed else "reasoning-refresh-failed",
-                reasoning_refreshed=bool(refreshed),
+                status="reasoning-refreshed" if confirmed else "reasoning-refresh-failed",
+                reasoning_refreshed=confirmed,
+                reasoning_handoff=handoff,
                 completed_at=utc_now_iso(),
             )
             self.save_run_with_connection(connection, updated)

@@ -8,7 +8,11 @@ from ..domain.investment_brain import (
     hypothesis_templates_from_rulebox_snapshot,
 )
 from ..domain.investment_research import NewsCollectionTarget
-from ..domain.investment_evidence_governance import ResearchRun
+from ..domain.investment_evidence_governance import (
+    ReasoningGeneration,
+    ResearchRun,
+    complete_reasoning_handoff,
+)
 from ..domain.message_types import INVESTMENT_INSIGHT
 from ..domain.ontology_inference_context import relation_context_from_inferencebox
 from ..domain.ontology_worlds import portfolio_world_id
@@ -66,14 +70,22 @@ class InvestmentBrainService:
                 "reply": "TypeDB InferenceBox에서 이 종목과 연결된 추론 관계를 찾지 못해 투자 답변을 만들지 않았습니다.",
                 "missing": ["typedb-inference-relations"],
             }
-        brain = hypothesis_set_from_relation_context(relation_context, question)
+        brain = self.brain_with_reasoning_generation(
+            hypothesis_set_from_relation_context(relation_context, question),
+            relation_context,
+        )
         research_run = self.run_research(question, position, brain, resolved_account_id)
         refresh_result = {}
         if research_run and self.research_requires_reasoning_refresh(research_run):
             refresh_result = self.refresh_reasoning(resolved_account_id, position.symbol)
-            refreshed = str(refresh_result.get("status") or "") in {"ok", "completed"} or bool(refresh_result.get("refreshed"))
+            refreshed_handoff = self.completed_reasoning_handoff(research_run, refresh_result)
+            refreshed = bool(refreshed_handoff and refreshed_handoff.applied())
             if str(refresh_result.get("status") or "") != "queued" and self.research_orchestrator and hasattr(self.research_orchestrator, "mark_reasoning_refreshed"):
-                research_run = self.research_orchestrator.mark_reasoning_refreshed(research_run, refreshed)
+                research_run = self.mark_research_reasoning_refreshed(
+                    research_run,
+                    refreshed,
+                    refreshed_handoff,
+                )
             if refreshed:
                 refreshed_position = refresh_result.get("position") if isinstance(refresh_result.get("position"), dict) else {}
                 if refreshed_position:
@@ -84,7 +96,10 @@ class InvestmentBrainService:
                 refreshed_context = self.load_relation_context(state, position, source)
                 if refreshed_context:
                     relation_context = refreshed_context
-                    brain = hypothesis_set_from_relation_context(relation_context, question)
+                    brain = self.brain_with_reasoning_generation(
+                        hypothesis_set_from_relation_context(relation_context, question),
+                        relation_context,
+                    )
         research_payload = research_run.to_dict() if research_run and hasattr(research_run, "to_dict") else {}
         if research_run and self.research_requires_reasoning_refresh(research_run) and not bool(research_payload.get("reasoningRefreshed")):
             return {
@@ -196,6 +211,65 @@ class InvestmentBrainService:
     def research_requires_reasoning_refresh(self, run) -> bool:
         return int(getattr(run, "changed_evidence_count", 0) or 0) > 0
 
+    def brain_with_reasoning_generation(
+        self,
+        brain: Dict[str, object],
+        relation_context: Dict[str, object],
+    ) -> Dict[str, object]:
+        """Give research a stable reference to the exact active TypeDB world."""
+        enriched = dict(brain or {})
+        context = dict(relation_context or {})
+        typedb = context.get("typedbInference") if isinstance(context.get("typedbInference"), dict) else {}
+        enriched["reasoningGeneration"] = {
+            "inferenceGenerationId": str(
+                context.get("inferenceGenerationId")
+                or typedb.get("inferenceGenerationId")
+                or ""
+            ),
+            "sourceAboxSnapshotId": str(
+                context.get("sourceAboxSnapshotId")
+                or typedb.get("sourceAboxSnapshotId")
+                or ""
+            ),
+            "worldId": str(context.get("worldId") or typedb.get("worldId") or ""),
+            "generationAligned": bool(
+                context.get("generationAligned")
+                if "generationAligned" in context
+                else typedb.get("generationAligned")
+            ),
+            "observedAt": str(
+                context.get("inferenceGenerationAt")
+                or typedb.get("inferenceGenerationAt")
+                or ""
+            ),
+        }
+        return enriched
+
+    def completed_reasoning_handoff(self, run, refresh_result: Dict[str, object]):
+        handoff = getattr(run, "reasoning_handoff", None)
+        if not handoff or not getattr(handoff, "request_id", ""):
+            return handoff
+        result = dict(refresh_result or {})
+        payload = result.get("reasoningGeneration")
+        if not isinstance(payload, dict):
+            payload = result.get("inferenceBox") if isinstance(result.get("inferenceBox"), dict) else result
+        return complete_reasoning_handoff(
+            handoff,
+            ReasoningGeneration.from_dict(payload),
+            str(result.get("reason") or ""),
+        )
+
+    def mark_research_reasoning_refreshed(self, run, refreshed: bool, handoff):
+        marker = getattr(self.research_orchestrator, "mark_reasoning_refreshed", None)
+        if not callable(marker):
+            return run
+        try:
+            return marker(run, refreshed, handoff)
+        except TypeError:
+            # Compatibility adapters cannot persist the generation audit, but
+            # current production orchestration always receives the handoff.
+            return marker(run, refreshed)
+
     def enrich_notification_context(
         self,
         context: Dict[str, object],
@@ -239,14 +313,22 @@ class InvestmentBrainService:
             asked_at=reference_at,
             source="notification",
         )
-        brain = hypothesis_set_from_relation_context(relation_context, question)
+        brain = self.brain_with_reasoning_generation(
+            hypothesis_set_from_relation_context(relation_context, question),
+            relation_context,
+        )
         research_run = self.run_research(question, position, brain, resolved_account_id)
         refresh_result: Dict[str, object] = {}
         if research_run and self.research_requires_reasoning_refresh(research_run):
             refresh_result = self.refresh_reasoning(resolved_account_id, position.symbol)
-            refreshed = str(refresh_result.get("status") or "") in {"ok", "completed"} or bool(refresh_result.get("refreshed"))
+            refreshed_handoff = self.completed_reasoning_handoff(research_run, refresh_result)
+            refreshed = bool(refreshed_handoff and refreshed_handoff.applied())
             if str(refresh_result.get("status") or "") != "queued" and self.research_orchestrator and hasattr(self.research_orchestrator, "mark_reasoning_refreshed"):
-                research_run = self.research_orchestrator.mark_reasoning_refreshed(research_run, refreshed)
+                research_run = self.mark_research_reasoning_refreshed(
+                    research_run,
+                    refreshed,
+                    refreshed_handoff,
+                )
             if refreshed:
                 refreshed_position = refresh_result.get("position") if isinstance(refresh_result.get("position"), dict) else {}
                 refreshed_state = refresh_result.get("state") if isinstance(refresh_result.get("state"), dict) else {}
@@ -257,7 +339,10 @@ class InvestmentBrainService:
                 refreshed_context = self.load_relation_context(state, position, source)
                 if refreshed_context:
                     relation_context = refreshed_context
-                    brain = hypothesis_set_from_relation_context(relation_context, question)
+                    brain = self.brain_with_reasoning_generation(
+                        hypothesis_set_from_relation_context(relation_context, question),
+                        relation_context,
+                    )
         research_payload = research_run.to_dict() if research_run and hasattr(research_run, "to_dict") else {}
         research_cycle = {
             **research_payload,
@@ -325,7 +410,10 @@ class InvestmentBrainService:
             asked_at=reference_at,
             source="notification",
         )
-        brain = hypothesis_set_from_relation_context(relation_context, question)
+        brain = self.brain_with_reasoning_generation(
+            hypothesis_set_from_relation_context(relation_context, question),
+            relation_context,
+        )
         research_run = None
         if self.research_orchestrator and hasattr(self.research_orchestrator, "enqueue"):
             research_run = self.research_orchestrator.enqueue(

@@ -337,7 +337,11 @@ class TypeDBOntologyRepositoryTests(unittest.TestCase):
             repository,
             "prune_inactive_scoped_abox_manifests",
             return_value={"status": "ok", "removedManifestIds": ["abox-manifest:old"]},
-        ), patch.object(repository, "active_abox_metadata", return_value={}), patch.object(
+        ), patch.object(repository, "list_ontology_worlds", return_value=[]), patch.object(
+            repository,
+            "active_abox_metadata",
+            return_value={},
+        ), patch.object(
             repository,
             "read_inference_generation_records",
             return_value=[{"generationId": "inference:active"}],

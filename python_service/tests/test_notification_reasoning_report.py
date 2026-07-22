@@ -3,6 +3,7 @@ import unittest
 from datetime import datetime, timezone
 from pathlib import Path
 from types import SimpleNamespace
+from unittest import mock
 
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
@@ -246,7 +247,8 @@ class AccountRepository:
 
 class NotificationReasoningReportTests(unittest.TestCase):
     def test_notification_ai_can_pin_a_cli_compatible_model(self):
-        command = codex_command("gpt-5.4")
+        with mock.patch("digital_twin.infrastructure.model_reviewer.shutil.which", return_value="/usr/local/bin/codex"):
+            command = codex_command("gpt-5.4")
 
         self.assertIn("--model gpt-5.4", command)
         self.assertIn("exec --skip-git-repo-check", command)

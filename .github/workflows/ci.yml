@@ -49,7 +49,7 @@ jobs:
         run: npm install --ignore-scripts
 
       - name: Install Python dependencies
-        run: python3 -m pip install --user pymysql
+        run: python3 -m pip install --user pymysql typedb-driver==3.12.0
 
       - name: Run checks
         run: npm test

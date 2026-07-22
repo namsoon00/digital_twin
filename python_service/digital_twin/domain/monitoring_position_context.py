@@ -577,12 +577,12 @@ class MonitoringPositionContextMixin:
                 source_time_note = ""
             return "상태: 오래된 반복값 · 외국인·기관 수치 제외" + (" · " + reason if reason else "") + source_time_note
         if investor.get("unchangedCount") not in (None, "", 0):
-            return "KIS 오늘 누적 수급 · 이전 조회 이후 변화 없음 · 새 움직임 확인 전 참고값"
+            return "KIS 당일 누적 수급 · 동일값 " + str(investor.get("unchangedCount")) + "회 · 보유·매매 판단에 반영 · 장중 신규 변화 미확인"
         latency_label = str(investor.get("latencyLabel") or "").strip()
         if investor.get("aiUsableAsStrongEvidence") is False:
             reason = str(investor.get("latencyReason") or investor.get("reason") or "").strip()
-            reference = "판단 참고 근거" if investor.get("judgementEvidenceUsable") is not False else "수치 제외"
-            return (latency_label or "KIS 투자자 수급 참고용") + " · 실시간 강근거 제외 · " + reference + ((" · " + reason) if reason else "")
+            reference = "보유·매매 판단에 반영" if investor.get("judgementEvidenceUsable") is not False else "수치 제외"
+            return (latency_label or "KIS 당일 누적 수급") + " · 체결·호가와 같은 틱 데이터 아님 · " + reference + ((" · " + reason) if reason else "")
         if investor.get("realTime") is True and str(investor.get("cadence") or "") == "live-poll":
             return (latency_label or "KIS 장중 누적 수급 실시간 조회") + " · 매수-매도 차이를 판단 근거로 반영"
         if investor.get("realTime") is False or latency_label:

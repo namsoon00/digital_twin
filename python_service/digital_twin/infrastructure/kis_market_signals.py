@@ -767,21 +767,6 @@ class KISMarketSignalProvider:
         signal["marketSessionLabel"] = str(session.get("label") or "")
         coverage = signal.get("marketSignalCoverage") if isinstance(signal.get("marketSignalCoverage"), dict) else {}
         coverage = dict(coverage or {})
-        investor = coverage.get("investor") if isinstance(coverage.get("investor"), dict) else {}
-        unchanged_count = int(number(investor.get("unchangedCount")) or 0)
-        if str(investor.get("status") or "") == "available" and unchanged_count >= self.unchanged_stale_count():
-            investor = dict(investor)
-            investor["status"] = "stale"
-            investor["cadence"] = "stale-repeat"
-            investor["judgementEvidenceUsable"] = False
-            investor["aiUsableAsStrongEvidence"] = False
-            investor["freshnessStatus"] = "stale-repeat"
-            investor["latencyStatus"] = "unchanged-repeat"
-            investor["latencyLabel"] = INVESTOR_DELAYED_LABEL
-            investor["staleReason"] = "KIS 장중 누적 수급이 " + str(unchanged_count) + "회 연속 같아 최신 외국인·기관 수급으로 확인할 수 없습니다."
-            coverage["investor"] = investor
-            signal["marketSignalCoverage"] = coverage
-            return remove_unreliable_investor_values(signal, strip_values=True)
         if session.get("microstructureAvailable"):
             return signal
         for key in MICROSTRUCTURE_SIGNAL_KEYS:
@@ -829,18 +814,11 @@ class KISMarketSignalProvider:
                 next_item["reason"] = "장중 이전 조회와 같은 값 " + str(unchanged_count) + "회 연속"
                 if stage == "investor":
                     next_item["aiUsableAsStrongEvidence"] = False
+                    next_item["judgementEvidenceUsable"] = True
+                    next_item["freshnessStatus"] = "reference-repeat"
                     next_item["latencyStatus"] = "unchanged-repeat"
                     next_item["latencyLabel"] = INVESTOR_DELAYED_LABEL
-                    next_item["latencyReason"] = "KIS 투자자별 수급은 장중 누적값이므로 이전 조회와 같아도 수치를 유지합니다. 새 매수·매도 변화가 확인되지 않아 강한 실시간 근거로는 사용하지 않습니다."
-                    if unchanged_count >= stale_threshold:
-                        next_item["status"] = "stale"
-                        next_item["cadence"] = "stale-repeat"
-                        next_item["judgementEvidenceUsable"] = False
-                        next_item["freshnessStatus"] = "stale-repeat"
-                        next_item["staleReason"] = "KIS 장중 누적 수급이 " + str(unchanged_count) + "회 연속 같아 최신 외국인·기관 수급으로 확인할 수 없습니다."
-                    else:
-                        next_item["judgementEvidenceUsable"] = True
-                        next_item["freshnessStatus"] = "reference-repeat"
+                    next_item["latencyReason"] = "KIS 투자자별 수급은 중요한 당일 누적 수급 근거입니다. 이전 조회와 같으면 장중 신규 변화 확인에는 쓰지 않지만 보유·매매 판단에는 반영합니다."
                 if stage not in {"price", "investor"} and unchanged_count >= stale_threshold:
                     next_item["status"] = "stale"
                     next_item["staleReason"] = "장중 같은 " + stage + " 값이 " + str(unchanged_count) + "회 연속 반복되어 지연 가능성이 있습니다."
@@ -946,13 +924,13 @@ class KISMarketSignalProvider:
             normalized_investor = normalize_investor(investor)
             merge_if_present(signal, normalized_investor)
             investor_as_of, investor_as_of_state = stage_source_as_of("investor", investor, fetched_at)
-            investor_real_time = self.investor_realtime_enabled() and microstructure_available
+            investor_real_time = False
             coverage["investor"] = stage_coverage("investor", investor, normalized_investor, INVESTOR_SIGNAL_KEYS, fetched_at=fetched_at, source_as_of=investor_as_of, source_timestamp_state=investor_as_of_state, session=session, real_time=investor_real_time, transport="rest", ai_usable_as_strong_evidence=investor_real_time)
         elif isinstance(investor, dict):
             normalized_investor = normalize_investor([investor])
             merge_if_present(signal, normalized_investor)
             investor_as_of, investor_as_of_state = stage_source_as_of("investor", investor, fetched_at)
-            investor_real_time = self.investor_realtime_enabled() and microstructure_available
+            investor_real_time = False
             coverage["investor"] = stage_coverage("investor", investor, normalized_investor, INVESTOR_SIGNAL_KEYS, fetched_at=fetched_at, source_as_of=investor_as_of, source_timestamp_state=investor_as_of_state, session=session, real_time=investor_real_time, transport="rest", ai_usable_as_strong_evidence=investor_real_time)
         else:
             coverage["investor"] = unavailable_stage_coverage("investor", session) if not microstructure_available else stage_coverage("investor", investor, {}, INVESTOR_SIGNAL_KEYS, fetched_at=fetched_at, session=session)

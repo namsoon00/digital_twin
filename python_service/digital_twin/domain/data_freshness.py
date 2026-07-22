@@ -63,7 +63,7 @@ KIS_STAGE_MAX_AGE_SETTINGS = {
     "price": ("dataFreshnessKisPriceMaxAgeMinutes", 3),
     "ccnl": ("dataFreshnessKisMicrostructureMaxAgeMinutes", 2),
     "orderbook": ("dataFreshnessKisMicrostructureMaxAgeMinutes", 2),
-    "investor": ("dataFreshnessKisInvestorMaxAgeMinutes", 5),
+    "investor": ("dataFreshnessKisInvestorMaxAgeMinutes", 30),
 }
 
 KIS_STAGE_EVIDENCE_FIELDS = {
@@ -248,6 +248,11 @@ def kis_stage_freshness_records(position: Dict[str, object], message_type: str, 
         if status == "available" and fields:
             fetched_at = stage_payload.get("fetchedAt") or stage_payload.get("sourceFetchedAt")
             source_as_of = stage_payload.get("sourceAsOf") or ""
+            source_as_of_required = not (
+                str(stage or "") == "investor"
+                and str(stage_payload.get("sourceTimestampState") or "") == "business-date-only"
+            )
+            freshness_source_as_of = source_as_of if source_as_of_required else ""
             if not fetched_at and not source_as_of:
                 records.append({
                     "source": source,
@@ -268,14 +273,17 @@ def kis_stage_freshness_records(position: Dict[str, object], message_type: str, 
                 message_type,
                 settings=settings,
                 source_fetched_at=fetched_at,
-                source_as_of=source_as_of,
+                source_as_of=freshness_source_as_of,
                 data_quality=item.get("dataQuality") or item.get("data_quality") or "",
                 now=now,
                 max_age_minutes=max_age_minutes_for_kis_stage(str(stage), settings),
-                require_source_as_of=True,
+                require_source_as_of=source_as_of_required,
             )
             record["stage"] = str(stage or "")
             record["fields"] = list(fields or [])
+            record["sourceAsOf"] = str(source_as_of or "")
+            record["sourceTimestampPresent"] = bool(source_as_of or fetched_at)
+            record["freshnessTimestamp"] = str(freshness_source_as_of or fetched_at or "")
             if "realTime" in stage_payload:
                 record["realTime"] = bool(stage_payload.get("realTime"))
             for key in [
@@ -420,8 +428,8 @@ def refreshed_freshness_record(record: Dict[str, object], now=None) -> Dict[str,
     original_status = str(item.get("status") or "").strip()
     source_as_of = item.get("sourceAsOf")
     source_fetched_at = item.get("sourceFetchedAt")
-    require_source_as_of = bool(item.get("sourceAsOfRequired")) or bool(item.get("stage"))
-    timestamp = source_as_of or ("" if require_source_as_of else source_fetched_at)
+    require_source_as_of = bool(item.get("sourceAsOfRequired"))
+    timestamp = item.get("freshnessTimestamp") or source_as_of or ("" if require_source_as_of else source_fetched_at)
     age = age_minutes(timestamp, now=now)
     try:
         max_age = max(1, int(float(item.get("maxAgeMinutes") or 0)))

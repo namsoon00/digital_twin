@@ -19,6 +19,7 @@ from digital_twin.domain.notification_rule_evaluator import similarity_bypass_ma
 from digital_twin.domain.notification_rule_models import SimilarityBypassCondition
 from digital_twin.domain.data_freshness import (
     evaluate_notification_data_freshness,
+    freshness_from_position,
     sanitize_notification_context_for_freshness,
 )
 from digital_twin.application.notification_ai_gate_message import (
@@ -176,6 +177,46 @@ class NotificationDataQualityPolicyTests(unittest.TestCase):
         self.assertNotIn("외국인", cleaned["rawLines"])
         self.assertNotIn("체결강도", cleaned["rawLines"])
         self.assertEqual("stale-at-dispatch", facts["marketSignalCoverage"]["investor"]["status"])
+
+    def test_today_kis_investor_reference_uses_fetch_time_for_dispatch_freshness(self):
+        now = datetime(2026, 7, 22, 6, 25, tzinfo=timezone.utc)
+        freshness = freshness_from_position(
+            {
+                "symbol": "000660",
+                "quoteSource": "KIS Open API",
+                "dataQuality": "actual",
+                "updatedAt": "2026-07-22T06:20:00Z",
+                "marketSignalCoverage": {
+                    "investor": {
+                        "status": "available",
+                        "fields": ["foreignNetVolume", "institutionNetVolume"],
+                        "fetchedAt": "2026-07-22T06:00:00Z",
+                        "sourceAsOf": "2026-07-22T00:00:00+09:00",
+                        "sourceTimestampState": "business-date-only",
+                        "transport": "rest",
+                        "realTime": False,
+                        "judgementEvidenceUsable": True,
+                    },
+                },
+            },
+            INVESTMENT_INSIGHT,
+            now=now,
+        )
+        decision = evaluate_notification_data_freshness(
+            {
+                "messageType": INVESTMENT_INSIGHT,
+                "dataFreshness": freshness,
+                "ontologyRelationContext": {
+                    "evidenceState": {"appliedFactFields": ["foreignNetVolume"]},
+                },
+            },
+            now=now,
+        )
+
+        investor = next(item for item in freshness["sources"] if item.get("stage") == "investor")
+        self.assertFalse(investor["sourceAsOfRequired"])
+        self.assertEqual("fresh", investor["status"])
+        self.assertTrue(decision.should_send)
 
     def test_stale_kis_rest_price_does_not_block_fresh_quote_and_moving_average_alert(self):
         now = datetime(2026, 7, 20, 0, 10, tzinfo=timezone.utc)

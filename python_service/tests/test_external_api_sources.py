@@ -22,7 +22,7 @@ from digital_twin.infrastructure.kis_market_signals import KISMarketSignalProvid
 
 
 class ExternalApiSourceTests(unittest.TestCase):
-    def test_repeated_kis_investor_totals_are_excluded_from_judgement(self):
+    def test_repeated_kis_investor_totals_remain_important_reference_evidence(self):
         provider = KISMarketSignalProvider(
             settings={"kisMarketSignalUnchangedStaleCount": "3"},
             quote_cache=SimpleNamespace(),
@@ -53,8 +53,8 @@ class ExternalApiSourceTests(unittest.TestCase):
                 "investor": {
                     "status": "available",
                     "fields": fields,
-                    "realTime": True,
-                    "cadence": "live-poll",
+                    "realTime": False,
+                    "cadence": "rest-reference",
                 }
             },
             "quoteStatus": "KIS 투자자별 수급 반영",
@@ -70,23 +70,21 @@ class ExternalApiSourceTests(unittest.TestCase):
         coverage = position.market_signal_coverage["investor"]
         psychology = investor_flow_psychology(position)
 
-        self.assertEqual("stale", coverage["status"])
+        self.assertEqual("available", coverage["status"])
         self.assertEqual(58, coverage["unchangedCount"])
-        self.assertEqual("stale-repeat", coverage["freshnessStatus"])
-        self.assertIs(False, coverage["judgementEvidenceUsable"])
+        self.assertEqual("reference-repeat", coverage["freshnessStatus"])
+        self.assertIs(True, coverage["judgementEvidenceUsable"])
         self.assertIs(False, coverage["aiUsableAsStrongEvidence"])
-        self.assertEqual(0.0, position.foreign_net_volume)
-        self.assertEqual(0.0, position.institution_net_volume)
-        self.assertEqual(0.0, position.individual_net_volume)
-        self.assertFalse(psychology["available"])
+        self.assertEqual(196075, position.foreign_net_volume)
+        self.assertEqual(202414, position.institution_net_volume)
+        self.assertEqual(-380628, position.individual_net_volume)
+        self.assertTrue(psychology["available"])
         investor_line = RealtimeMonitor().investor_context_line(position.to_dict())
-        self.assertIn("투자자 수급:", investor_line)
-        self.assertIn("오래된 반복값", investor_line)
-        self.assertIn("외국인·기관 수치 제외", investor_line)
-        self.assertIn("수치 표시: 최신값 확인 전 제외", investor_line)
-        self.assertNotIn("외국인: ", investor_line)
+        self.assertIn("투자자:", investor_line)
+        self.assertIn("보유·매매 판단에 반영", investor_line)
+        self.assertIn("외국인: 상태 순매수", investor_line)
 
-    def test_current_day_repeated_investor_cache_is_excluded_immediately(self):
+    def test_current_day_repeated_investor_cache_remains_usable(self):
         provider = KISMarketSignalProvider(
             settings={},
             quote_cache=SimpleNamespace(),
@@ -112,11 +110,11 @@ class ExternalApiSourceTests(unittest.TestCase):
         retained = provider.signal_for_current_session(signal)
         coverage = retained["marketSignalCoverage"]["investor"]
 
-        self.assertEqual("stale", coverage["status"])
-        self.assertEqual("stale-repeat", coverage["freshnessStatus"])
-        self.assertIs(False, coverage["judgementEvidenceUsable"])
-        self.assertNotIn("foreignNetVolume", retained)
-        self.assertNotIn("institutionNetVolume", retained)
+        self.assertEqual("available", coverage["status"])
+        self.assertEqual("reference-repeat", coverage["freshnessStatus"])
+        self.assertIs(True, coverage["judgementEvidenceUsable"])
+        self.assertEqual(196075, retained["foreignNetVolume"])
+        self.assertEqual(202414, retained["institutionNetVolume"])
 
     def test_external_api_error_redacts_key_disclosed_by_provider(self):
         message = "We have detected your API key as 8YHIHMCZZ3W8L64E and our standard rate limit applies"

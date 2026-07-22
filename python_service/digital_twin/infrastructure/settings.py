@@ -898,7 +898,7 @@ def runtime_settings() -> Dict[str, str]:
         "dataFreshnessQuoteMaxAgeMinutes": value("dataFreshnessQuoteMaxAgeMinutes", "DATA_FRESHNESS_QUOTE_MAX_AGE_MINUTES", "10"),
         "dataFreshnessKisPriceMaxAgeMinutes": value("dataFreshnessKisPriceMaxAgeMinutes", "DATA_FRESHNESS_KIS_PRICE_MAX_AGE_MINUTES", "3"),
         "dataFreshnessKisMicrostructureMaxAgeMinutes": value("dataFreshnessKisMicrostructureMaxAgeMinutes", "DATA_FRESHNESS_KIS_MICROSTRUCTURE_MAX_AGE_MINUTES", "2"),
-        "dataFreshnessKisInvestorMaxAgeMinutes": value("dataFreshnessKisInvestorMaxAgeMinutes", "DATA_FRESHNESS_KIS_INVESTOR_MAX_AGE_MINUTES", "5"),
+        "dataFreshnessKisInvestorMaxAgeMinutes": value("dataFreshnessKisInvestorMaxAgeMinutes", "DATA_FRESHNESS_KIS_INVESTOR_MAX_AGE_MINUTES", "30"),
         "dataFreshnessExternalMaxAgeMinutes": value("dataFreshnessExternalMaxAgeMinutes", "DATA_FRESHNESS_EXTERNAL_MAX_AGE_MINUTES", "10"),
         "dataFreshnessExternalEquityMaxAgeMinutes": value("dataFreshnessExternalEquityMaxAgeMinutes", "DATA_FRESHNESS_EXTERNAL_EQUITY_MAX_AGE_MINUTES", "10"),
         "dataFreshnessExternalCryptoMaxAgeMinutes": value("dataFreshnessExternalCryptoMaxAgeMinutes", "DATA_FRESHNESS_EXTERNAL_CRYPTO_MAX_AGE_MINUTES", "10"),

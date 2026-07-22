@@ -126,6 +126,19 @@ Projection은 다음 용도로만 사용한다.
 
 새 투자 사실이 필요하면 projection에 직접 상태를 추가하지 말고, 먼저 소유 context의 aggregate/event/repository에 사실을 남긴 뒤 projection 변환을 확장한다.
 
+### Projection Runtime Stability
+
+실시간 투영은 현재 사실을 정확하게 반영하면서도 이전 세대 전체를 매번 다시 기록하거나 정리하지 않아야 한다. 이 원칙은 투자 판단 규칙이 아니라 `operations-dispatch` bounded context의 운영 계약이다.
+
+1. ABox 변경 영향은 `directChangedScope`와 `dependencyAffectedScope`로 나눈다. 전자는 실제로 새로 들어온 가격, 수급, 뉴스, 공시, 거시 같은 사실이고, 후자는 그 사실을 입력으로 읽는 RuleBox 조건의 범위다.
+2. 국소 변경일 때는 TypeDB가 실행할 RuleBox 후보를 의존 범위로 좁힐 수 있다. 다만 직전 활성 InferenceBox가 같은 ABox 세대와 동일 RuleBox 버전으로 정합한 경우에만, 변경 후보 규칙과 직전에 성립했던 비변경 규칙을 함께 실행한다. 정합 증명이 없거나 전역 영향이면 전체 활성 RuleBox를 실행한다. Python은 이 선택을 계획할 뿐 규칙 성립 여부를 판단하지 않는다.
+3. 활성 ABox의 사실 소속은 `Worldview Manifest -> active scope pointer -> immutable scope generation`으로 판정한다. 재사용한 scope row의 `worldviewManifestId`는 최초 생성 provenance일 뿐 현재 소속 판정에 쓰지 않는다. ABox와 InferenceBox 포인터 전환은 추론 완료 뒤 즉시 끝낸다. 이전 세대, 실패 후보, 오래된 InferenceBox의 삭제는 실시간 경로에서 수행하지 않고, reasoning queue가 비어 있는 유휴 유지보수 작업으로 옮긴다. 유지보수는 동일한 TypeDB writer lease를 획득해야 하므로 활성 추론 세대를 삭제할 수 없다.
+4. 직전 투영 시간이 긴 경우 다음 일반 투영 간격은 `max(기본 간격, 직전 시간 x backpressure factor)`로 늘린다. 연구 근거, 캘린더, 높은 검토 단계 이벤트는 이 동적 지연을 우회한다. 이것은 데이터 손실이 아니라 중복 관측을 합치는 scheduler 정책이다.
+5. 종목 없는 거시/정책 이벤트는 첫 종목에서 완료 처리하지 않는다. 보유 종목, 관심종목 순으로 분할 투영하고 모든 대상이 완료된 후에만 이벤트를 완료 처리한다.
+6. 각 투영 감사에는 ABox 저장, 영향 계획, 직전 InferenceBox 확인, native inference, 포인터 전환, 품질 기록의 단계별 시간과 실제 native 대상 종목 수를 남긴다. 계획 대상 수와 실제 실행 대상 수는 별도로 보관해 운영 지표가 실행 범위를 과장하지 않게 한다.
+
+운영 설정은 `ontologyReasoningBackpressureEnabled`, `ontologyReasoningBackpressureFactor`, `ontologyReasoningBackpressureMaxSeconds`, `ontologyReasoningMaintenanceEnabled`, `ontologyReasoningMaintenanceIntervalSeconds`, `typedbNativeRuleSelectionEnabled`로 관리한다. RuleBox 선택 최적화가 꺼져 있거나 안전 증명이 부족한 경우에도 전체 native RuleBox materialization이 항상 정답 경로다.
+
 ## Data Quality And Coverage
 
 외부 신호는 수집 결과에 `quality`, `freshness`, `provenance` 메타를 붙인다. 이 값은 `domain/external_signal_quality.py`에서 계산한다.

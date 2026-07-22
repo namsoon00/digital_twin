@@ -9,7 +9,10 @@ from digital_twin.domain.ontology_scopes import apply_scoped_abox_identity
 from digital_twin.domain.ontology_tbox import tbox_class_def, tbox_relation_def
 from digital_twin.infrastructure.graph_store_rulebox import rulebox_graph_from_rules
 from digital_twin.domain.ontology_rulebox_catalog import default_graph_inference_rules
-from digital_twin.infrastructure.typedb_ontology import typedb_inferencebox_graph
+from digital_twin.infrastructure.typedb_ontology import (
+    typedb_inferencebox_graph,
+    typedb_native_rule_execution_selection,
+)
 
 
 class OntologyChangeImpactTests(unittest.TestCase):
@@ -112,8 +115,9 @@ class OntologyChangeImpactTests(unittest.TestCase):
         self.assertFalse(flow_plan["globalImpact"])
         self.assertEqual(["005930"], flow_plan["inferenceTargetSymbols"])
         self.assertEqual(["graph.test.flow.v1"], flow_plan["candidateRuleIds"])
+        self.assertTrue(flow_plan["nativeRuleSelectionEligible"])
         self.assertFalse(flow_plan["nativeRuleSelectionApplied"])
-        self.assertEqual("complete-native-evaluation", flow_plan["ruleExecutionScope"])
+        self.assertEqual("dependency-selected-native-evaluation", flow_plan["ruleExecutionScope"])
 
         after[-1]["generationId"] = "rates-b"
         macro_plan = build_inference_impact_plan(before, after, ["005930", "000660"], rules=rules)
@@ -168,10 +172,35 @@ class OntologyChangeImpactTests(unittest.TestCase):
 
         trace = inference.entities[0]
         self.assertEqual("inference:test", trace.properties["inferenceGenerationId"])
-        self.assertEqual("abox-change-impact-v1", trace.properties["impactPlanVersion"])
+        self.assertEqual("abox-change-impact-v2", trace.properties["impactPlanVersion"])
         self.assertEqual(["005930"], trace.properties["inferenceImpactPlan"]["inferenceTargetSymbols"])
-        self.assertEqual("complete-native-evaluation", trace.properties["ruleExecutionScope"])
+        self.assertEqual("dependency-selected-native-evaluation", trace.properties["ruleExecutionScope"])
         self.assertFalse(trace.properties["nativeRuleSelectionApplied"])
+
+    def test_native_rule_selection_rechecks_prior_matches_and_falls_back_without_proof(self):
+        rules = default_graph_inference_rules()[:3]
+        rule_ids = [rule.rule_id for rule in rules]
+
+        selected = typedb_native_rule_execution_selection(
+            rules,
+            candidate_rule_ids=[rule_ids[0]],
+            prior_matched_rule_ids=[rule_ids[1]],
+            eligible=True,
+            prior_inference_reusable=True,
+        )
+        self.assertTrue(selected["selectionApplied"])
+        self.assertEqual([rule_ids[0], rule_ids[1]], selected["selectedRuleIds"])
+        self.assertEqual([rule_ids[2]], selected["deferredRuleIds"])
+
+        fallback = typedb_native_rule_execution_selection(
+            rules,
+            candidate_rule_ids=[rule_ids[0]],
+            eligible=True,
+            prior_inference_reusable=False,
+        )
+        self.assertFalse(fallback["selectionApplied"])
+        self.assertEqual(rule_ids, fallback["selectedRuleIds"])
+        self.assertEqual("prior-aligned-inference-unavailable", fallback["fallbackReason"])
 
 
 if __name__ == "__main__":

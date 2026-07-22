@@ -181,6 +181,7 @@ class OntologyReasoningRunner:
         research_store=None,
         now_provider: Callable = None,
         priority_symbols_provider: Callable = None,
+        maintenance_runner: Callable = None,
     ):
         self.event_reader = event_reader
         self.cursor_store = cursor_store
@@ -191,6 +192,7 @@ class OntologyReasoningRunner:
         self.research_store = research_store
         self.now_provider = now_provider or (lambda: datetime.now(timezone.utc))
         self.priority_symbols_provider = priority_symbols_provider
+        self.maintenance_runner = maintenance_runner
 
     def enabled(self) -> bool:
         return truthy(self.settings.get("ontologyReasoningEnabled"), True)
@@ -250,6 +252,22 @@ class OntologyReasoningRunner:
 
     def projection_circuit_cooldown_seconds(self) -> int:
         return int_setting(self.settings, "ontologyProjectionCircuitCooldownSeconds", 300, 30, 3600)
+
+    def projection_backpressure_enabled(self) -> bool:
+        return truthy(self.settings.get("ontologyReasoningBackpressureEnabled"), True)
+
+    def projection_backpressure_factor(self) -> float:
+        value = float_value(self.settings.get("ontologyReasoningBackpressureFactor"), 1.15)
+        return max(1.0, min(3.0, value))
+
+    def projection_backpressure_max_seconds(self) -> int:
+        return int_setting(self.settings, "ontologyReasoningBackpressureMaxSeconds", 900, 60, 3600)
+
+    def maintenance_enabled(self) -> bool:
+        return truthy(self.settings.get("ontologyReasoningMaintenanceEnabled"), True)
+
+    def maintenance_interval_seconds(self) -> int:
+        return int_setting(self.settings, "ontologyReasoningMaintenanceIntervalSeconds", 900, 60, 86400)
 
     def projection_circuit_state(self, payload: Dict[str, object] = None) -> Dict[str, object]:
         payload = self.cursor_payload() if payload is None else dict(payload or {})
@@ -350,6 +368,22 @@ class OntologyReasoningRunner:
     def ordered_event_symbols(self, event: object, priority_symbols: Dict[str, int] = None) -> List[str]:
         priorities = priority_symbols or {}
         original = event_symbols(event)
+        if not original:
+            payload = event_payload(event)
+            for field in ["targetSymbols", "affectedSymbols", "globalTargetSymbols"]:
+                values = payload.get(field) or []
+                if isinstance(values, str):
+                    values = values.split(",")
+                for value in values if isinstance(values, (list, tuple, set)) else []:
+                    symbol = str(value or "").upper().strip()
+                    if symbol and symbol not in original:
+                        original.append(symbol)
+            # A subject-less macro, portfolio, or policy fact still has to be
+            # reconciled against every live holding. The scheduler derives
+            # that operational subject list from account roles; it does not
+            # alter the TypeDB rule result.
+            if not original and priorities:
+                original = list(priorities)
         order = {symbol: index for index, symbol in enumerate(original)}
         return sorted(
             original,
@@ -413,6 +447,16 @@ class OntologyReasoningRunner:
         payload = self.cursor_payload() if payload is None else dict(payload or {})
         return str(payload.get("lastSuccessfulProjectionAt") or "").strip()
 
+    def last_projection_runtime(self, payload: Dict[str, object] = None) -> Dict[str, object]:
+        payload = self.cursor_payload() if payload is None else dict(payload or {})
+        raw = payload.get("lastProjectionRuntime")
+        return dict(raw or {}) if isinstance(raw, dict) else {}
+
+    def maintenance_state(self, payload: Dict[str, object] = None) -> Dict[str, object]:
+        payload = self.cursor_payload() if payload is None else dict(payload or {})
+        raw = payload.get("ontologyMaintenance")
+        return dict(raw or {}) if isinstance(raw, dict) else {}
+
     def timestamp_due(self, stamp: str, interval_seconds: int) -> bool:
         if not stamp or interval_seconds <= 0:
             return True
@@ -458,10 +502,30 @@ class OntologyReasoningRunner:
         intervals = [self.event_min_interval_seconds(event) for event in requests or []]
         return min(intervals) if intervals else self.min_interval_seconds()
 
+    def effective_projection_min_interval_seconds(
+        self,
+        requests: Iterable[object],
+        payload: Dict[str, object] = None,
+    ) -> int:
+        configured = self.projection_min_interval_seconds(requests)
+        urgent = any(
+            event_review_level(event) in self.urgent_review_levels()
+            or str(event_payload(event).get("trigger") or "") in {"research-evidence-update", "investment-calendar-update"}
+            for event in requests or []
+        )
+        if urgent or not self.projection_backpressure_enabled():
+            return configured
+        runtime = self.last_projection_runtime(payload)
+        duration_ms = int(float_value(runtime.get("durationMs"), 0.0))
+        if duration_ms <= 0:
+            return configured
+        measured = int((duration_ms / 1000.0) * self.projection_backpressure_factor())
+        return max(configured, min(self.projection_backpressure_max_seconds(), measured))
+
     def projection_due(self, requests: Iterable[object], payload: Dict[str, object] = None) -> bool:
         return self.timestamp_due(
             self.last_successful_projection_at(payload),
-            self.projection_min_interval_seconds(requests),
+            self.effective_projection_min_interval_seconds(requests, payload),
         )
 
     def projection_cooldown_remaining_seconds(
@@ -471,7 +535,7 @@ class OntologyReasoningRunner:
     ) -> int:
         return self.timestamp_remaining_seconds(
             self.last_successful_projection_at(payload),
-            self.projection_min_interval_seconds(requests),
+            self.effective_projection_min_interval_seconds(requests, payload),
         )
 
     def event_symbol_due(self, event: object, symbol: str, cursor_payload: Dict[str, object] = None) -> bool:
@@ -602,8 +666,9 @@ class OntologyReasoningRunner:
 
     def request_symbols(self, requests: Iterable[object]) -> List[str]:
         symbols = []
+        priorities = self.priority_symbols()
         for event in requests or []:
-            for symbol in event_symbols(event):
+            for symbol in self.ordered_event_symbols(event, priorities):
                 if symbol and symbol not in symbols:
                     symbols.append(symbol)
         return symbols
@@ -627,7 +692,7 @@ class OntologyReasoningRunner:
             global_events = []
             for event_index, event in enumerate(requested_events):
                 event_id = str(getattr(event, "event_id", "") or "").strip()
-                all_symbols = event_symbols(event)
+                all_symbols = self.ordered_event_symbols(event, priority_symbols)
                 if not all_symbols:
                     if event_id:
                         global_events.append((event_index, event))
@@ -675,7 +740,7 @@ class OntologyReasoningRunner:
         for event_index, event in enumerate(requested_events):
             event_id = str(getattr(event, "event_id", "") or "")
             remaining = self.due_event_symbols(event, progress, cursor_payload, priority_symbols)
-            if not event_symbols(event):
+            if not self.ordered_event_symbols(event, priority_symbols):
                 batches[event_id] = []
                 continue
             for symbol_index, symbol in enumerate(remaining):
@@ -705,7 +770,7 @@ class OntologyReasoningRunner:
 
         for event in requested_events:
             event_id = str(getattr(event, "event_id", "") or "")
-            if not event_symbols(event):
+            if not self.ordered_event_symbols(event, priority_symbols):
                 continue
             selected_for_event = [
                 symbol
@@ -724,13 +789,14 @@ class OntologyReasoningRunner:
     ) -> Dict[str, object]:
         cursor_payload = self.cursor_payload()
         progress = self.event_symbol_progress(cursor_payload)
+        priority_symbols = self.priority_symbols()
         completed_event_ids: List[str] = []
         partial_event_ids: List[str] = []
         for event in requests or []:
             event_id = str(getattr(event, "event_id", "") or "").strip()
             if not event_id:
                 continue
-            all_symbols = event_symbols(event)
+            all_symbols = self.ordered_event_symbols(event, priority_symbols)
             selected_symbols = [symbol for symbol in batches.get(event_id, []) if symbol]
             if not all_symbols:
                 if event_id in batches:
@@ -901,7 +967,46 @@ class OntologyReasoningRunner:
         payload["lastProjectionAttemptAtBySymbol"] = dict(sorted(attempts.items()))
         self.save_cursor_payload(payload)
 
-    def mark_successful_projection(self) -> None:
+    def projection_runtime_summary(self, monitor_runner) -> Dict[str, object]:
+        results = getattr(monitor_runner, "last_ontology_projection_results", {}) or {}
+        rows = list(results.values()) if isinstance(results, dict) else []
+        observations = [
+            item.get("runtimeObservation")
+            for item in rows
+            if isinstance(item, dict) and isinstance(item.get("runtimeObservation"), dict)
+        ]
+        observation = max(
+            observations,
+            key=lambda item: int(float_value(item.get("durationMs"), 0.0)),
+            default={},
+        )
+        if not observation:
+            stages = [
+                dict(item.get("runtimeStages") or {})
+                for item in rows
+                if isinstance(item, dict) and isinstance(item.get("runtimeStages"), dict)
+            ]
+            stage = max(stages, key=lambda item: int(float_value(item.get("totalMs"), 0.0)), default={})
+            observation = {
+                "durationMs": int(float_value(stage.get("totalMs"), 0.0)),
+                "nativeInferenceMs": int(float_value(stage.get("nativeInferenceMs"), 0.0)),
+            }
+        return {
+            "durationMs": int(float_value(observation.get("durationMs"), 0.0)),
+            "nativeInferenceMs": int(float_value(
+                observation.get("nativeInferenceMs")
+                or (observation.get("stages") or {}).get("nativeInferenceMs"),
+                0.0,
+            )),
+            "observedAt": str(observation.get("observedAt") or ""),
+            "status": str(observation.get("status") or ""),
+            "targetSymbolCount": int(float_value(
+                (observation.get("inference") or {}).get("targetSymbolCount"),
+                0.0,
+            )),
+        }
+
+    def mark_successful_projection(self, monitor_runner=None) -> None:
         if not hasattr(self.cursor_store, "load") or not hasattr(self.cursor_store, "save"):
             return
         payload = self.cursor_payload()
@@ -916,7 +1021,44 @@ class OntologyReasoningRunner:
             "lastSuccessAt": payload["lastSuccessfulProjectionAt"],
             "openUntil": "",
         }
+        if monitor_runner is not None:
+            runtime = self.projection_runtime_summary(monitor_runner)
+            if int(runtime.get("durationMs") or 0) > 0:
+                payload["lastProjectionRuntime"] = runtime
         self.save_cursor_payload(payload)
+
+    def run_maintenance_if_due(self, force: bool = False) -> Dict[str, object]:
+        if not self.maintenance_enabled():
+            return {"status": "disabled"}
+        if not self.maintenance_runner:
+            return {"status": "not-configured"}
+        payload = self.cursor_payload()
+        state = self.maintenance_state(payload)
+        if not force and not self.timestamp_due(
+            str(state.get("lastRunAt") or ""),
+            self.maintenance_interval_seconds(),
+        ):
+            return {
+                "status": "cooldown",
+                "retryAfterSeconds": self.timestamp_remaining_seconds(
+                    str(state.get("lastRunAt") or ""),
+                    self.maintenance_interval_seconds(),
+                ),
+                "lastResult": dict(state.get("lastResult") or {}),
+            }
+        try:
+            result = self.maintenance_runner()
+        except Exception as error:  # noqa: BLE001 - maintenance must not stop event processing.
+            result = {"status": "error", "reason": str(error)[:180]}
+        now = self.now_provider()
+        if now.tzinfo is None:
+            now = now.replace(tzinfo=timezone.utc)
+        payload["ontologyMaintenance"] = {
+            "lastRunAt": now.astimezone(timezone.utc).isoformat().replace("+00:00", "Z"),
+            "lastResult": dict(result or {}) if isinstance(result, dict) else {"status": "invalid"},
+        }
+        self.save_cursor_payload(payload)
+        return dict(result or {}) if isinstance(result, dict) else {"status": "invalid"}
 
     def run_once(self, limit: int = 0, force: bool = False) -> Dict[str, object]:
         if not self.enabled():
@@ -924,11 +1066,13 @@ class OntologyReasoningRunner:
         work = self.pending_work(limit)
         requests = list(work.get("requests") or [])
         if not requests:
+            maintenance = self.run_maintenance_if_due(force=force)
             return {
                 "status": "idle",
                 "processedCount": 0,
                 "alertCount": 0,
                 "coalescedEventCount": len(work.get("coalescedEventIds") or []),
+                "maintenance": maintenance,
             }
         symbol_batches, symbols, omitted_symbol_count = self.request_symbol_batches(requests)
         cursor_payload = self.cursor_payload()
@@ -957,7 +1101,9 @@ class OntologyReasoningRunner:
                 "nativeTypeDbTargetSymbolLimit": self.native_typedb_target_symbol_limit() if self.native_typedb_rule_execution_enabled() else None,
                 "omittedSymbolCount": omitted_symbol_count,
                 "retryAfterSeconds": retry_after_seconds,
-                "projectionCooldownSeconds": self.projection_min_interval_seconds(requests),
+                "projectionCooldownSeconds": self.effective_projection_min_interval_seconds(requests, cursor_payload),
+                "configuredProjectionCooldownSeconds": self.projection_min_interval_seconds(requests),
+                "lastProjectionRuntime": self.last_projection_runtime(cursor_payload),
                 "coalescedEventCount": len(work.get("coalescedEventIds") or []),
             }
         runner = self.monitor_runner_factory()
@@ -1003,7 +1149,7 @@ class OntologyReasoningRunner:
                 "projectionCircuit": circuit,
                 "coalescedEventCount": len(work.get("coalescedEventIds") or []),
             }
-        self.mark_successful_projection()
+        self.mark_successful_projection(runner)
         account_ids = [getattr(account, "account_id", "") for account in getattr(runner, "accounts", [])]
         trigger_event_ids = [event.event_id for event in requests]
         completed = ontology_reasoning_completed_event(
@@ -1128,6 +1274,7 @@ class OntologyReasoningRunner:
     def status(self) -> Dict[str, object]:
         work = self.pending_work(self.batch_size())
         pending = list(work.get("requests") or [])
+        cursor_payload = self.cursor_payload()
         progress = self.event_symbol_progress()
         _batches, next_symbols, omitted_count = self.request_symbol_batches(pending)
         return {
@@ -1148,6 +1295,11 @@ class OntologyReasoningRunner:
             "partialEventCount": len(progress),
             "ruleCandidateAiEnabled": self.rule_candidate_ai_enabled(),
             "ruleCandidateAiDue": self.rule_candidate_due(),
+            "projectionBackpressureEnabled": self.projection_backpressure_enabled(),
+            "configuredProjectionCooldownSeconds": self.projection_min_interval_seconds(pending),
+            "effectiveProjectionCooldownSeconds": self.effective_projection_min_interval_seconds(pending, cursor_payload),
+            "lastProjectionRuntime": self.last_projection_runtime(cursor_payload),
+            "ontologyMaintenance": self.maintenance_state(cursor_payload),
             "projectionCircuit": self.projection_circuit_state(),
             "projectionCircuitRetryAfterSeconds": self.projection_circuit_remaining_seconds(),
         }

@@ -469,6 +469,11 @@ def build_ontology_reasoning_runner(settings=None, event_publisher=None) -> Onto
         ),
         research_store=stores.investment_research_store(reasoning_store_settings),
         priority_symbols_provider=lambda: ontology_reasoning_priority_symbols(registry, reasoning_store_settings),
+        maintenance_runner=lambda: (
+            ontology_repository.run_deferred_maintenance()
+            if hasattr(ontology_repository, "run_deferred_maintenance")
+            else {"status": "not-supported", "reason": "Graph store has no deferred maintenance adapter."}
+        ),
     )
 
 

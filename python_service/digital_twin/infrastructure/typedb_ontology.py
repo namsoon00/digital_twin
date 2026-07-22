@@ -307,33 +307,38 @@ def typedb_active_scoped_abox_member_clause(
     clean_prefix = re.sub(r"[^A-Za-z0-9_]", "", str(prefix or "item")) or "item"
     manifest_pointer = "$" + clean_prefix + "ActiveManifestPointer"
     manifest_id = str(manifest_id_variable or "$" + clean_prefix + "ActiveManifestId")
+    return (
+        typedb_active_worldview_manifest_clause(manifest_pointer, manifest_id)
+        + " "
+        + typedb_scoped_manifest_member_clause(variable, clean_prefix, manifest_id)
+    )
+
+
+def typedb_scoped_manifest_member_clause(
+    variable: str,
+    prefix: str,
+    manifest_id_variable: str,
+) -> str:
+    """Constrain one fact through the active Manifest's scope pointer.
+
+    A scope generation can be reused by many immutable Worldview Manifests.
+    Its stored JSON and original `ontology-manifest-id` therefore describe the
+    generation's creation provenance, not its current membership. The scope
+    pointer is the durable source of truth for live ABox reads and native
+    inference.
+    """
+    clean_prefix = re.sub(r"[^A-Za-z0-9_]", "", str(prefix or "item")) or "item"
     scope_pointer = "$" + clean_prefix + "ScopePointer"
     scope_id = "$" + clean_prefix + "ScopeId"
     scope_generation = "$" + clean_prefix + "ScopeGenerationId"
     return (
-        typedb_active_worldview_manifest_clause(manifest_pointer, manifest_id)
-        + " "
-        + scope_pointer + ' isa ontology-node, has ontology-kind "abox-scope-active-pointer", '
+        scope_pointer + ' isa ontology-node, has ontology-kind "abox-scope-active-pointer", '
         + 'has ontology-box "ABoxControl", has ontology-manifest-id '
-        + manifest_id
+        + str(manifest_id_variable or "$activeManifestId")
         + ", has ontology-scope-id " + scope_id
         + ", has ontology-snapshot-id " + scope_generation + "; "
         + str(variable or "$item") + ' has ontology-box "ABox", has ontology-scope-id '
         + scope_id + ", has ontology-snapshot-id " + scope_generation + ";"
-    )
-
-
-def typedb_active_manifest_member_clause(variable: str, manifest_id_variable: str) -> str:
-    """Constrain a persisted ABox item to an already-bound Manifest id.
-
-    Native schema functions bind the active Manifest once, then use this
-    direct membership predicate for every node and relation. Manifest
-    membership is written on each immutable ABox row, so it is both correct
-    and substantially cheaper than joining an active scope pointer per fact.
-    """
-    return (
-        str(variable or "$item") + ' has ontology-box "ABox", has ontology-manifest-id '
-        + str(manifest_id_variable or "$activeManifestId") + ";"
     )
 
 
@@ -433,8 +438,8 @@ def merge_flat_properties(row: Dict[str, object], props: Dict[str, object]) -> D
     return merged
 
 
-TYPEDB_NATIVE_REASONING_PROFILE_VERSION = "typedb-native-rule-profile-v4"
-TYPEDB_NATIVE_RULE_ENGINE_VERSION = "typedb-schema-function-rule-engine-v4"
+TYPEDB_NATIVE_REASONING_PROFILE_VERSION = "typedb-native-rule-profile-v5"
+TYPEDB_NATIVE_RULE_ENGINE_VERSION = "typedb-schema-function-rule-engine-v5"
 TYPEDB_NATIVE_REASONING_MODE = "typedb-native-rule-materialized"
 TYPEDB_NATIVE_BLOCKED_MODE = "typedb-native-rule-materialization-blocked"
 TYPEDB_NATIVE_REQUIRED_MODE = "typedb-native-rule-materialization-required"
@@ -443,11 +448,11 @@ TYPEDB_NATIVE_REASONING_LAYER = "typedb-native-rule"
 # Active ABox generations are selected through a control pointer. A dedicated
 # function namespace makes deployed schema functions refresh when that query
 # contract changes instead of silently reusing an older unscoped definition.
-# Version 4 binds the active Worldview Manifest once per function and then
-# constrains every fact by its manifest id. Earlier definitions expanded a
-# scoped-or-legacy pointer branch for each condition, which made deep rules
-# combinatorially expensive on a real ABox.
-TYPEDB_SCHEMA_FUNCTION_PREFIX = "orbit_rule_active_manifest_subject_v4_"
+# Version 5 binds the active Worldview Manifest once per function and resolves
+# each fact through its active scope pointer. Scope generations are immutable
+# and can be reused by a newer Manifest, so an item's original manifest id is
+# provenance, not proof that it belongs to the current world.
+TYPEDB_SCHEMA_FUNCTION_PREFIX = "orbit_rule_active_manifest_subject_v5_"
 # Scoped ABox writes span many short TypeDB transactions. Keep their lease in
 # a separate control box so pointer replacement cannot delete it mid-write.
 SCOPED_ABOX_WRITE_LEASE_ID = "scoped-abox-write-lease"
@@ -818,9 +823,9 @@ class ScopedABoxManifestMixin:
 
         Runtime reads must not repeat the scoped-or-legacy activation branch
         for every endpoint. Once a scoped Manifest is active, one control
-        lookup plus direct manifest membership predicates is sufficient. The
-        legacy branch remains available only until the first scoped migration
-        has completed.
+        lookup plus active scope-pointer membership predicates is sufficient.
+        The legacy branch remains available only until the first scoped
+        migration has completed.
         """
         normalized = [
             (str(variable or "$item"), str(prefix or "item"))
@@ -833,8 +838,8 @@ class ScopedABoxManifestMixin:
             return " ".join([
                 typedb_active_worldview_manifest_clause("$activeManifestPointer", manifest_id),
                 *[
-                    typedb_active_manifest_member_clause(variable, manifest_id)
-                    for variable, _prefix in normalized
+                    typedb_scoped_manifest_member_clause(variable, prefix, manifest_id)
+                    for variable, prefix in normalized
                 ],
             ])
         return " ".join(
@@ -1652,6 +1657,37 @@ class ScopedABoxManifestMixin:
             "maxGenerationCount": maximum,
         }
 
+    def prune_orphan_scoped_abox_candidates(self) -> Dict[str, object]:
+        """Run orphan candidate reclamation as deferred maintenance only."""
+        imported = self.driver_imports()
+        if imported[0] is None:
+            return {
+                "configured": bool(getattr(self, "address", "")),
+                "status": "driver-missing",
+                "graphStore": "typedb",
+                "reason": str(imported[1])[:180],
+            }
+        try:
+            def operation():
+                driver = self.open_driver(imported)
+                try:
+                    self.ensure_database(driver)
+                    self.ensure_schema(driver, imported)
+                    return self.cleanup_orphan_scoped_abox_candidates(driver, imported)
+                finally:
+                    self.close_driver(driver)
+
+            result = self.with_typedb_retries(operation)
+            return {"configured": True, "graphStore": "typedb", **dict(result or {})}
+        except Exception as error:  # noqa: BLE001 - leave invisible candidates for the next idle pass.
+            return {
+                "configured": True,
+                "status": "error",
+                "graphStore": "typedb",
+                "reasonCode": typedb_error_code(error),
+                "reason": str(error)[:220],
+            }
+
     def scoped_abox_scope_row_counts(self, scope_id: str, generation_id: str) -> Dict[str, int]:
         clean_scope = str(scope_id or "").strip()
         clean_generation = str(generation_id or "").strip()
@@ -2068,17 +2104,17 @@ class ScopedABoxManifestMixin:
         if imported[0] is None:
             release_write_lease()
             return self.driver_missing_result(imported[1], graph)
-        orphan_cleanup: Dict[str, object] = {}
+        orphan_cleanup: Dict[str, object] = {
+            "status": "deferred",
+            "reason": "Orphan scoped ABox candidates are reclaimed by idle maintenance.",
+        }
         try:
             def operation():
-                nonlocal orphan_cleanup
                 driver = self.open_driver(imported)
                 try:
                     self.ensure_database(driver)
                     self.ensure_schema(driver, imported)
-                    orphan_cleanup_started = time.monotonic()
-                    orphan_cleanup = self.cleanup_orphan_scoped_abox_candidates(driver, imported)
-                    timing["orphanCandidateCleanupMs"] = round((time.monotonic() - orphan_cleanup_started) * 1000, 1)
+                    timing["orphanCandidateCleanupMs"] = 0.0
                     timing["orphanCandidateCleanup"] = dict(orphan_cleanup or {})
                     cleanup_started = time.monotonic()
                     active_generation_values = {
@@ -2182,20 +2218,10 @@ class ScopedABoxManifestMixin:
                 },
             }
         except Exception as error:  # noqa: BLE001 - preserve the prior Manifest on candidate failure.
-            failed_candidate_cleanup: Dict[str, object] = {}
-            try:
-                def cleanup_operation():
-                    driver = self.open_driver(imported)
-                    try:
-                        self.ensure_database(driver)
-                        self.ensure_schema(driver, imported)
-                        return self.cleanup_orphan_scoped_abox_candidates(driver, imported)
-                    finally:
-                        self.close_driver(driver)
-
-                failed_candidate_cleanup = self.with_typedb_retries(cleanup_operation)
-            except Exception as cleanup_error:  # noqa: BLE001 - preserve the primary write error.
-                failed_candidate_cleanup = {"status": "error", "reason": str(cleanup_error)[:180]}
+            failed_candidate_cleanup: Dict[str, object] = {
+                "status": "deferred",
+                "reason": "Failed scoped candidate cleanup is deferred to idle maintenance.",
+            }
             release = release_write_lease()
             return {
                 "configured": True,
@@ -2510,34 +2536,25 @@ class ScopedABoxManifestMixin:
             }
         control = self.activate_scoped_abox_manifest(active_id)
         cleared = str(control.get("status") or "") == "ok"
-        cleanup = (
-            self.prune_inactive_scoped_abox_manifests()
-            if cleared and previous_id and previous_id != active_id
-            else {
-                "status": "not-required" if cleared else "blocked",
-                "reason": "No prior scoped Manifest requires cleanup." if cleared else "Activation journal was not cleared.",
-            }
-        )
-        # The first scoped activation can supersede the legacy complete ABox
-        # pointer. It is not represented by a Worldview Manifest marker, so
-        # manifest retention alone would leave the old full world resident
-        # forever. Delete it only after the new active Manifest has produced
-        # aligned native inference and its activation journal is cleared.
-        legacy_predecessor_cleanup = {
-            "status": "not-required",
-            "reason": "The prior generation is already a scoped Worldview Manifest or no predecessor exists.",
+        # Pointer finalization is on the realtime inference path; deleting a
+        # retired immutable generation is deliberately not.  Maintenance
+        # acquires the same writer lease during an idle window and performs a
+        # bounded, reference-aware prune without delaying a valid judgement.
+        cleanup_required = bool(cleared and previous_id and previous_id != active_id)
+        cleanup = {
+            "status": "deferred" if cleanup_required else "not-required" if cleared else "blocked",
+            "previousAboxSnapshotId": previous_id,
+            "reason": (
+                "Inactive scoped ABox cleanup is deferred to an idle maintenance pass."
+                if cleanup_required
+                else "No prior scoped Manifest requires cleanup."
+                if cleared
+                else "Activation journal was not cleared."
+            ),
+            "legacyPredecessorPending": bool(
+                cleanup_required and not previous_id.startswith("abox-manifest:")
+            ),
         }
-        if (
-            cleared
-            and previous_id
-            and previous_id != active_id
-            and not previous_id.startswith("abox-manifest:")
-        ):
-            legacy_predecessor_cleanup = self.discard_abox_generation(previous_id)
-            cleanup = {
-                **dict(cleanup or {}),
-                "legacyPredecessorCleanup": legacy_predecessor_cleanup,
-            }
         return {
             "configured": True,
             "status": "ok" if cleared else "error",
@@ -2545,10 +2562,7 @@ class ScopedABoxManifestMixin:
             "activeAboxSnapshotId": active_id,
             "previousAboxSnapshotId": previous_id,
             "clearedPendingActivation": cleared,
-            "cleanupDeferred": (
-                str(cleanup.get("status") or "") in {"deferred", "partial", "error"}
-                or str(legacy_predecessor_cleanup.get("status") or "") in {"deferred", "partial", "error"}
-            ),
+            "cleanupDeferred": str(cleanup.get("status") or "") == "deferred",
             "cleanup": cleanup,
             "control": control,
             "reason": "" if cleared else str(control.get("reason") or "Scoped ABox activation journal clear failed."),
@@ -2787,6 +2801,117 @@ class ScopedABoxManifestMixin:
                 "reasonCode": typedb_error_code(error),
                 "reason": str(error)[:220],
             }
+
+    def run_deferred_maintenance(self, payload: Dict[str, object] = None) -> Dict[str, object]:
+        """Prune inactive graph generations only while the reasoning queue is idle.
+
+        This is operational retention, never an investment-rule step. It uses
+        the same durable writer lease as ABox activation, so maintenance
+        cannot delete a generation that a live native inference still needs.
+        """
+        if not bool(getattr(self, "address", "")):
+            return {
+                "configured": False,
+                "status": "disabled",
+                "graphStore": "typedb",
+                "reason": "TypeDB ontology storage is not configured.",
+            }
+        options = dict(payload or {})
+        started_at = time.perf_counter()
+        lease = self.acquire_scoped_abox_write_lease("ontology-deferred-maintenance")
+        if not lease.get("acquired"):
+            return {
+                "configured": True,
+                "status": "deferred-write-lease",
+                "graphStore": "typedb",
+                "reason": "A live ABox activation or native inference owns the graph writer lease.",
+                "durationMs": int((time.perf_counter() - started_at) * 1000),
+            }
+        try:
+            orphan_result = self.prune_orphan_scoped_abox_candidates()
+            abox_result = self.prune_inactive_scoped_abox_manifests()
+            legacy_result: Dict[str, object] = {
+                "status": "not-required",
+                "deletedGenerationIds": [],
+            }
+            # Scoped manifests reuse several immutable scope generations, so
+            # generic ABox pruning must not scan every ABox snapshot. Legacy
+            # complete-world snapshots have their own stable prefixes and can
+            # be safely reclaimed once a scoped Manifest is active.
+            active_abox = self.active_abox_metadata()
+            if str(active_abox.get("scopedAboxManifestVersion") or "") == SCOPED_ABOX_MANIFEST_VERSION:
+                pending = self.pending_abox_activation()
+                active_scope_ids = {
+                    str(value or "").strip()
+                    for value in dict(active_abox.get("scopeGenerationIds") or {}).values()
+                    if str(value or "").strip()
+                }
+                legacy_candidates = []
+                if str(pending.get("status") or "") != "pending":
+                    for snapshot_id in self.abox_candidate_snapshot_ids():
+                        clean_snapshot_id = str(snapshot_id or "").strip()
+                        if (
+                            clean_snapshot_id
+                            and clean_snapshot_id not in active_scope_ids
+                            and clean_snapshot_id.startswith(("abox-material:", "abox-snapshot:"))
+                        ):
+                            legacy_candidates.append(clean_snapshot_id)
+                legacy_slices = [self.discard_abox_generation(snapshot_id) for snapshot_id in legacy_candidates[:2]]
+                legacy_result = {
+                    "status": "ok" if not legacy_slices or all(str(item.get("status") or "") == "ok" for item in legacy_slices) else "partial",
+                    "candidateGenerationIds": legacy_candidates,
+                    "deletedGenerationIds": [
+                        str(item.get("aboxSnapshotId") or "")
+                        for item in legacy_slices
+                        if str(item.get("status") or "") == "ok"
+                    ],
+                    "cleanup": legacy_slices,
+                }
+            inference_result: Dict[str, object] = {
+                "status": "not-required",
+                "reason": "No active InferenceBox generation was found.",
+            }
+            reader = getattr(self, "read_inference_generation_records", None)
+            pruner = getattr(self, "prune_inferencebox_generations", None)
+            if callable(reader) and callable(pruner):
+                records = reader(published_only=True)
+                active_generation_id = str((records[0] if records else {}).get("generationId") or "").strip()
+                if active_generation_id:
+                    inference_result = pruner(
+                        active_generation_id,
+                        keep_count=max(1, int(number_or_none(options.get("inferenceKeepCount")) or getattr(self, "inference_generation_keep_count", 1))),
+                    )
+            statuses = {
+                str(orphan_result.get("status") or ""),
+                str(abox_result.get("status") or ""),
+                str(legacy_result.get("status") or ""),
+                str(inference_result.get("status") or ""),
+            }
+            maintenance_partial = bool(statuses.intersection({"error", "partial", "deferred-write-lease"}))
+            return {
+                "configured": True,
+                "status": "partial" if maintenance_partial else "ok",
+                "graphStore": "typedb",
+                "orphanScopedAbox": orphan_result,
+                "abox": abox_result,
+                "legacyAbox": legacy_result,
+                "inference": inference_result,
+                "durationMs": int((time.perf_counter() - started_at) * 1000),
+            }
+        except Exception as error:  # noqa: BLE001 - a later idle window can retry retention.
+            return {
+                "configured": True,
+                "status": "error",
+                "graphStore": "typedb",
+                "reasonCode": typedb_error_code(error),
+                "reason": str(error)[:220],
+                "durationMs": int((time.perf_counter() - started_at) * 1000),
+            }
+        finally:
+            try:
+                self.release_scoped_abox_write_lease(lease)
+            except Exception:
+                pass
 
     def save_graph(self, graph: PortfolioOntology) -> Dict[str, object]:
         return {
@@ -8456,6 +8581,17 @@ relation ontology-assertion,
             }
         try:
             parsed_rules = rulebox_rules_from_payload({"rules": rules})
+            impact_plan = compact_inference_impact_plan(requested_impact_plan or {})
+            selection_requested = typedb_bool(payload.get("typedbNativeRuleSelectionEnabled")) if "typedbNativeRuleSelectionEnabled" in payload else bool(impact_plan.get("nativeRuleSelectionEligible"))
+            rule_selection = typedb_native_rule_execution_selection(
+                parsed_rules,
+                candidate_rule_ids=impact_plan.get("candidateRuleIds") or [],
+                prior_matched_rule_ids=payload.get("priorMatchedRuleIds") or [],
+                eligible=selection_requested and bool(impact_plan.get("nativeRuleSelectionEligible")),
+                prior_inference_reusable=typedb_bool(payload.get("priorInferenceReusable")),
+                global_impact=bool(impact_plan.get("globalImpact")),
+            )
+            execution_rules = list(rule_selection.get("selectedRules") or parsed_rules)
             # TypeDB schema functions are the only runtime investment-rule
             # evaluator. This also repairs a database restarted without its
             # compiled functions before a monitoring cycle can silently lose
@@ -8476,10 +8612,25 @@ relation ontology-assertion,
                 "typedbSchemaFunctionUsed": str(function_sync_result.get("status") or "") == "ok",
                 "typeDbFunctionReasoningUsed": str(function_sync_result.get("status") or "") == "ok",
                 "typedbNativeExecutionMode": (
-                    "typedb-schema-function-filtered"
+                    "typedb-schema-function-dependency-selected"
+                    if bool(rule_selection.get("selectionApplied"))
+                    else "typedb-schema-function-filtered"
                     if target_symbols
                     else "typedb-schema-function"
                 ),
+                "ruleExecutionScope": (
+                    "dependency-selected-native-evaluation"
+                    if bool(rule_selection.get("selectionApplied"))
+                    else "complete-native-evaluation"
+                ),
+                "nativeRuleSelectionApplied": bool(rule_selection.get("selectionApplied")),
+                "nativeRuleSelectionFallbackReason": str(rule_selection.get("fallbackReason") or ""),
+                "nativeRuleSelectionCandidateCount": len(rule_selection.get("candidateRuleIds") or []),
+                "nativeRuleSelectionPriorMatchedCount": len(rule_selection.get("priorMatchedRuleIds") or []),
+                "nativeRuleSelectionExecutedCount": len(rule_selection.get("selectedRuleIds") or []),
+                "nativeRuleSelectionDeferredCount": len(rule_selection.get("deferredRuleIds") or []),
+                "nativeRuleSelectionExecutedRuleIds": list(rule_selection.get("selectedRuleIds") or [])[:80],
+                "nativeRuleSelectionDeferredRuleIds": list(rule_selection.get("deferredRuleIds") or [])[:80],
                 "pythonCompatibilityReasonerUsed": False,
             })
             if str(function_sync_result.get("status") or "") != "ok":
@@ -8507,7 +8658,7 @@ relation ontology-assertion,
                     **runtime_rulebox_metadata,
                 }
             native_match_result = self.match_typedb_native_rules(
-                parsed_rules,
+                execution_rules,
                 target_symbols=target_symbols,
                 use_schema_functions=True,
             )
@@ -8547,7 +8698,7 @@ relation ontology-assertion,
                     "typedbQueryMetrics": self.query_metrics_snapshot(),
                     **runtime_rulebox_metadata,
                 }
-            graph = self.load_graph_for_native_matches(native_match_result, parsed_rules)
+            graph = self.load_graph_for_native_matches(native_match_result, execution_rules)
             before_entities = len(graph.entities)
             before_relations = len(graph.relations)
             matched_source_ids = {
@@ -8565,24 +8716,34 @@ relation ontology-assertion,
             active_abox_generation_id = typedb_abox_inference_generation_id(abox_metadata)
             if scoped_active_abox:
                 # Individual scopes intentionally have different immutable
-                # generation IDs. The single source identity for native
-                # InferenceBox materialization is their active Worldview
-                # Manifest, not a scope's local snapshot ID.
-                source_abox_snapshot_ids = sorted({
+                # generation IDs and may be reused by a later Manifest. The
+                # JSON provenance on a reused fact can therefore contain the
+                # Manifest that first wrote it. Native queries already loaded
+                # these sources through active scope pointers, so completeness
+                # of that active member set, not the historical JSON field,
+                # proves the one live Worldview source identity.
+                source_entity_ids = {
+                    str(item.entity_id or "").strip()
+                    for item in source_entities
+                    if str(item.entity_id or "").strip()
+                }
+                stored_source_manifest_ids = sorted({
                     str((item.properties or {}).get("worldviewManifestId") or "").strip()
                     for item in source_entities
                     if str((item.properties or {}).get("worldviewManifestId") or "").strip()
                 })
                 missing_source_generation = bool(matched_source_ids) and (
-                    len(source_entities) != len(matched_source_ids)
-                    or any(not str((item.properties or {}).get("worldviewManifestId") or "").strip() for item in source_entities)
+                    source_entity_ids != matched_source_ids
+                    or any(bool((item.properties or {}).get("queryFallback")) for item in source_entities)
                 )
                 source_generation_valid = (
                     bool(active_abox_generation_id)
                     and not missing_source_generation
-                    and source_abox_snapshot_ids == [active_abox_generation_id]
                 )
+                source_abox_snapshot_ids = [active_abox_generation_id] if source_generation_valid else []
                 runtime_rulebox_metadata["sourceAboxManifestId"] = active_abox_generation_id
+                runtime_rulebox_metadata["sourceAboxStoredManifestIds"] = stored_source_manifest_ids
+                runtime_rulebox_metadata["sourceAboxMembershipValidation"] = "active-scope-pointer"
             else:
                 source_abox_snapshot_ids = sorted({
                     str((item.properties or {}).get("aboxSnapshotId") or (item.properties or {}).get("snapshotId") or "").strip()
@@ -8610,7 +8771,7 @@ relation ontology-assertion,
             runtime_rulebox_metadata["sourceAboxGenerationMode"] = (
                 "worldview-manifest" if scoped_active_abox else "snapshot"
             )
-            materialize_typedb_native_matches(graph, parsed_rules, native_match_result)
+            materialize_typedb_native_matches(graph, execution_rules, native_match_result)
             inference_graph = typedb_inferencebox_graph(
                 graph,
                 generation_id=generation_id,
@@ -10284,6 +10445,74 @@ def typedb_native_rule_execution_plan(
     }
 
 
+def typedb_native_rule_execution_selection(
+    rules: Iterable[GraphInferenceRule],
+    candidate_rule_ids: Iterable[object] = None,
+    prior_matched_rule_ids: Iterable[object] = None,
+    eligible: bool = False,
+    prior_inference_reusable: bool = False,
+    global_impact: bool = False,
+) -> Dict[str, object]:
+    """Select a complete, reusable native RuleBox slice.
+
+    A RuleBox rule is never evaluated in Python.  For a local immutable scope
+    change, an unchanged rule can only remain matched when it was matched in
+    the previous aligned InferenceBox; known non-matches remain non-matches.
+    We therefore execute changed candidates plus previous matches.  Any
+    incomplete proof falls back to every enabled rule rather than emitting a
+    partial investment judgement.
+    """
+    all_rules = [rule for rule in rules or [] if getattr(rule, "enabled", True)]
+    all_ids = [str(getattr(rule, "rule_id", "") or "").strip() for rule in all_rules]
+    all_ids = [rule_id for rule_id in all_ids if rule_id]
+    available = set(all_ids)
+    candidates = {
+        str(value or "").strip()
+        for value in candidate_rule_ids or []
+        if str(value or "").strip()
+    }
+    prior_matches = {
+        str(value or "").strip()
+        for value in prior_matched_rule_ids or []
+        if str(value or "").strip()
+    }
+    fallback_reason = ""
+    if not eligible:
+        fallback_reason = "impact-plan-not-eligible"
+    elif global_impact:
+        fallback_reason = "global-impact-requires-complete-evaluation"
+    elif not candidates:
+        fallback_reason = "candidate-rules-unavailable"
+    elif not prior_inference_reusable:
+        fallback_reason = "prior-aligned-inference-unavailable"
+    elif (candidates | prior_matches) - available:
+        fallback_reason = "rulebox-version-or-prior-match-mismatch"
+    if fallback_reason:
+        return {
+            "selectedRules": all_rules,
+            "selectedRuleIds": all_ids,
+            "deferredRuleIds": [],
+            "candidateRuleIds": sorted(candidates),
+            "priorMatchedRuleIds": sorted(prior_matches),
+            "selectionApplied": False,
+            "fallbackReason": fallback_reason,
+            "fullRuleCount": len(all_rules),
+        }
+    selected_ids = candidates | prior_matches
+    selected_rules = [rule for rule in all_rules if str(getattr(rule, "rule_id", "") or "") in selected_ids]
+    deferred = [rule_id for rule_id in all_ids if rule_id not in selected_ids]
+    return {
+        "selectedRules": selected_rules,
+        "selectedRuleIds": [str(getattr(rule, "rule_id", "") or "") for rule in selected_rules],
+        "deferredRuleIds": deferred,
+        "candidateRuleIds": sorted(candidates),
+        "priorMatchedRuleIds": sorted(prior_matches),
+        "selectionApplied": len(selected_rules) < len(all_rules),
+        "fallbackReason": "",
+        "fullRuleCount": len(all_rules),
+    }
+
+
 def typedb_native_rule_execution_plan_summary(plan: Dict[str, object]) -> Dict[str, object]:
     """Return bounded operational diagnostics without serialising rule bodies."""
     payload = dict(plan or {})
@@ -10389,8 +10618,16 @@ def typedb_condition_pattern(
                 + "has ontology-id $" + relation_id_var + ", has ontology-relation-type " + typedb_string(rel_type) + ";"
             )
         if manifest_id_variable:
-            clauses.append(typedb_active_manifest_member_clause(target_var, manifest_id_variable))
-            clauses.append(typedb_active_manifest_member_clause(relation_var, manifest_id_variable))
+            clauses.append(typedb_scoped_manifest_member_clause(
+                target_var,
+                target_prefix + str(index),
+                manifest_id_variable,
+            ))
+            clauses.append(typedb_scoped_manifest_member_clause(
+                relation_var,
+                relation_prefix + str(index),
+                manifest_id_variable,
+            ))
         else:
             clauses.append(typedb_active_abox_member_clause(target_var, target_prefix + str(index)))
             clauses.append(typedb_active_abox_member_clause(relation_var, relation_prefix + str(index)))
@@ -10452,7 +10689,7 @@ def typedb_native_match_query(
         clauses = []
         if bind_active_manifest:
             clauses.append(typedb_active_worldview_manifest_clause("$activeManifestPointer", scoped_manifest_variable))
-        clauses.append(typedb_active_manifest_member_clause("$source", scoped_manifest_variable))
+        clauses.append(typedb_scoped_manifest_member_clause("$source", "source", scoped_manifest_variable))
     else:
         clauses = [typedb_active_abox_member_clause("$source", "source")]
     clauses.append(
@@ -10658,7 +10895,7 @@ def typedb_native_function_call_query(
     symbols = clean_symbols_from_payload(list(target_symbols or []))
     clauses = [
         typedb_active_worldview_manifest_clause("$activeManifestPointer", "$activeManifestId"),
-        typedb_active_manifest_member_clause("$candidate", "$activeManifestId"),
+        typedb_scoped_manifest_member_clause("$candidate", "candidate", "$activeManifestId"),
         "$candidate isa ontology-node, has ontology-kind " + typedb_string(source_kind) + ";",
     ]
     if symbols:
@@ -10710,7 +10947,7 @@ def typedb_native_condition_check_query(
     clauses = (
         [
             typedb_active_worldview_manifest_clause("$activeManifestPointer", manifest_id_variable),
-            typedb_active_manifest_member_clause("$source", manifest_id_variable),
+            typedb_scoped_manifest_member_clause("$source", "source", manifest_id_variable),
         ]
         if scoped_manifest_only
         else [typedb_active_abox_member_clause("$source", "source")]
@@ -11153,6 +11390,13 @@ def inference_rulebox_metadata(
         "inferenceImpactPlan",
         "ruleExecutionScope",
         "nativeRuleSelectionApplied",
+        "nativeRuleSelectionFallbackReason",
+        "nativeRuleSelectionCandidateCount",
+        "nativeRuleSelectionPriorMatchedCount",
+        "nativeRuleSelectionExecutedCount",
+        "nativeRuleSelectionDeferredCount",
+        "nativeRuleSelectionExecutedRuleIds",
+        "nativeRuleSelectionDeferredRuleIds",
     ]
     metadata: Dict[str, object] = {}
     for row in list(entity_rows or []) + list(relation_rows or []):
@@ -11182,6 +11426,10 @@ def inference_rulebox_metadata(
         "typedbSchemaFunctionSkippedCount",
         "typedbSchemaFunctionFailedCount",
         "sourceAboxSnapshotCount",
+        "nativeRuleSelectionCandidateCount",
+        "nativeRuleSelectionPriorMatchedCount",
+        "nativeRuleSelectionExecutedCount",
+        "nativeRuleSelectionDeferredCount",
     ]:
         if key in metadata:
             metadata[key] = int(number_or_none(metadata.get(key)) or 0)

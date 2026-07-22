@@ -100,6 +100,20 @@ class OntologyRelationDeliveryTests(unittest.TestCase):
             ontology_relation_delivery_metadata(after)["fingerprint"],
         )
 
+    def test_trace_provenance_drift_is_not_a_material_delivery_change(self):
+        before = self.context()
+        after = self.context()
+        before["ontologyRelationContext"]["graphStoreInference"]["traces"][0]["evidenceRelationIds"] = ["relation:old"]
+        after["ontologyRelationContext"]["graphStoreInference"]["traces"][0]["evidenceRelationIds"] = ["relation:new"]
+
+        self.assertEqual(
+            ontology_relation_delivery_metadata(before)["fingerprint"],
+            ontology_relation_delivery_metadata(after)["fingerprint"],
+        )
+        diff = ontology_relation_delivery_diff(after, before)
+        self.assertFalse(diff["material"])
+        self.assertEqual("unchanged", diff["changeClass"])
+
     def test_legacy_relation_shaped_context_does_not_change_delivery_group(self):
         context = self.context()
         context["ontologyRelationContext"]["decision"].pop("basis")

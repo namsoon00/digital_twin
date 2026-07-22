@@ -119,6 +119,16 @@ def _cleanup_summary(result: Mapping[str, object]) -> Dict[str, object]:
     }
 
 
+def _stage_timings(result: Mapping[str, object]) -> Dict[str, int]:
+    raw = result.get("runtimeStages") if isinstance(result, Mapping) else {}
+    values = dict(raw or {}) if isinstance(raw, Mapping) else {}
+    return {
+        _text(key): max(0, _integer(value))
+        for key, value in values.items()
+        if _text(key)
+    }
+
+
 def _slo_state(
     result: Mapping[str, object],
     duration_ms: int,
@@ -136,7 +146,12 @@ def _slo_state(
             "severity": "warning",
             "message": "Projection duration exceeded the configured SLO.",
         })
-    inference_ms = _integer(execution.get("durationMs") or execution.get("elapsedMs"))
+    stages = _stage_timings(result)
+    inference_ms = _integer(
+        execution.get("durationMs")
+        or execution.get("elapsedMs")
+        or stages.get("nativeInferenceMs")
+    )
     if inference_ms > _integer(policy.get("inferenceSloMs")):
         violations.append({
             "code": "inference_latency",
@@ -183,16 +198,27 @@ def build_projection_runtime_observation(
     inference = dict(inference or {}) if isinstance(inference, Mapping) else {}
     execution = values.get("ruleboxExecution")
     execution = dict(execution or {}) if isinstance(execution, Mapping) else {}
+    stages = _stage_timings(values)
     delta = _scope_delta(plan)
     duration_ms = iso_duration_ms(
         getattr(projection_run, "started_at", ""),
         getattr(projection_run, "completed_at", ""),
-    )
+    ) or _integer(stages.get("totalMs"))
     policy = runtime_slo_policy(settings)
     trace_count = _integer(inference.get("traceCount"))
     if not trace_count:
         trace_count = len(inference.get("traces") or [])
     matched_rule_count = _integer(execution.get("matchedRuleCount")) or trace_count
+    actual_target_symbols = [
+        _text(symbol).upper()
+        for symbol in (
+            inference.get("targetSymbols")
+            or execution.get("targetSymbols")
+            or projection_scope.get("targetSymbols")
+            or []
+        )
+        if _text(symbol)
+    ]
     observation = {
         "version": ONTOLOGY_RUNTIME_OBSERVATION_VERSION,
         "runId": _text(getattr(projection_run, "run_id", "")),
@@ -210,9 +236,11 @@ def build_projection_runtime_observation(
             "addedScopeCount": len(delta.get("addedScopeIds") or []),
             "removedScopeCount": len(delta.get("removedScopeIds") or []),
             "changedScopeCount": len(delta.get("changedScopeIds") or []),
+            "directChangedScopeCount": len(delta.get("directChangedScopeIds") or delta.get("changedScopeIds") or []),
             "affectedScopeCount": len(delta.get("affectedScopeIds") or []),
             "dependencyAffectedScopeCount": len(delta.get("dependencyAffectedScopeIds") or []),
             "families": list(plan.get("changedScopeFamilies") or []),
+            "dependencyAffectedFamilies": list(delta.get("dependencyAffectedScopeFamilies") or []),
             "globalImpact": bool(plan.get("globalImpact")),
         },
         "inference": {
@@ -220,8 +248,17 @@ def build_projection_runtime_observation(
             "generationId": _text(inference.get("inferenceGenerationId")),
             "generationAligned": bool(inference.get("generationAligned")),
             "nativeTypeDbReasoningUsed": bool(inference.get("nativeTypeDbReasoningUsed")),
-            "targetSymbolCount": len(plan.get("inferenceTargetSymbols") or projection_scope.get("targetSymbols") or []),
+            "plannedTargetSymbolCount": len(plan.get("inferenceTargetSymbols") or []),
+            "targetSymbolCount": len(actual_target_symbols),
+            "targetSymbols": actual_target_symbols[:20],
             "candidateRuleCount": _integer(plan.get("candidateRuleCount")),
+            "executedRuleCount": _integer(
+                execution.get("typedbNativeRuleExecutedCount")
+                or execution.get("nativeRuleSelectionExecutedCount")
+            ),
+            "deferredRuleCount": _integer(execution.get("nativeRuleSelectionDeferredCount")),
+            "nativeRuleSelectionApplied": bool(execution.get("nativeRuleSelectionApplied")),
+            "nativeRuleSelectionFallbackReason": _text(execution.get("nativeRuleSelectionFallbackReason")),
             "matchedRuleCount": matched_rule_count,
             "traceCount": trace_count,
             "relationCount": _integer(inference.get("relationCount")),
@@ -234,6 +271,7 @@ def build_projection_runtime_observation(
             "relationCount": _integer(values.get("relationCount") or getattr(projection_run, "relation_count", 0)),
             "cleanup": _cleanup_summary(values),
         },
+        "stages": stages,
     }
     observation["slo"] = _slo_state(values, duration_ms, inference, execution, policy)
     return observation
@@ -259,13 +297,30 @@ def summarize_projection_runtime_observations(
     threshold = _integer(policy.get("consecutiveBreachCount"), 3)
     latest_state = _text((latest.get("slo") or {}).get("state")) if latest else "unavailable"
     state = "unavailable" if not rows else "critical" if latest_state == "critical" else "warning" if consecutive >= threshold else latest_state or "ok"
+    sorted_durations = sorted(durations)
+
+    def percentile(fraction: float) -> float:
+        if not sorted_durations:
+            return 0.0
+        index = max(0, min(len(sorted_durations) - 1, int(round((len(sorted_durations) - 1) * fraction))))
+        return float(sorted_durations[index])
+
+    breach_count = sum(
+        1
+        for item in rows
+        if _text((item.get("slo") or {}).get("state")) in {"warning", "critical"}
+    )
     return {
         "contract": ONTOLOGY_RUNTIME_OBSERVATION_VERSION,
         "status": state,
         "sampleCount": len(rows),
         "latest": latest,
         "averageDurationMs": round(sum(durations) / len(durations), 1) if durations else 0.0,
+        "medianDurationMs": percentile(0.5),
+        "p90DurationMs": percentile(0.9),
+        "p95DurationMs": percentile(0.95),
         "maximumDurationMs": max(durations) if durations else 0,
+        "sloBreachRate": round((breach_count / len(rows)) * 100, 1) if rows else 0.0,
         "consecutiveBreachCount": consecutive,
         "sustainedBreach": bool(consecutive >= threshold),
         "sustainedBreachThreshold": threshold,

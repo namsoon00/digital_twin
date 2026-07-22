@@ -192,16 +192,23 @@ def relation_delivery_components(
         }
     graph = _mapping(relation.get("graphStoreInference"))
     insight = _mapping(context.get("ontologyInsight"))
-    evidence = []
+    source_evidence = []
     for source in [
         context.get("sourceEventKeys"),
         insight.get("sourceEventKeys"),
         relation.get("evidenceSubgraph"),
         _mapping(relation.get("facts")).get("researchEvidence"),
+    ]:
+        source_evidence.extend(_evidence_keys(source))
+    # Inference trace identifiers and relation-local evidence are diagnostic
+    # provenance. They can change when a graph generation is rebuilt without
+    # a new source event, so they must not break a delivery cooldown.
+    inference_evidence = []
+    for source in [
         graph.get("relations"),
         graph.get("traces"),
     ]:
-        evidence.extend(_evidence_keys(source))
+        inference_evidence.extend(_evidence_keys(source))
     return {
         "version": RELATION_DELIVERY_FINGERPRINT_VERSION,
         "decision": {
@@ -218,7 +225,8 @@ def relation_delivery_components(
         "activeRules": _rule_rows(relation.get("activeRules") or relation.get("matchedRules")),
         "relations": _relation_rows(graph.get("relations")),
         "traces": _trace_rows(graph.get("traces")),
-        "evidenceKeys": sorted(set(evidence)),
+        "evidenceKeys": sorted(set(source_evidence)),
+        "inferenceEvidenceKeys": sorted(set(inference_evidence)),
     }
 
 
@@ -235,7 +243,12 @@ def relation_delivery_metadata(
     )
     if not has_graph_state:
         return {}
-    raw = json.dumps(components, ensure_ascii=True, sort_keys=True, separators=(",", ":"))
+    fingerprint_components = {
+        key: value
+        for key, value in components.items()
+        if key not in {"traces", "inferenceEvidenceKeys"}
+    }
+    raw = json.dumps(fingerprint_components, ensure_ascii=True, sort_keys=True, separators=(",", ":"))
     fingerprint = hashlib.sha256(raw.encode("utf-8")).hexdigest()[:24]
     return {
         "version": RELATION_DELIVERY_FINGERPRINT_VERSION,
@@ -256,29 +269,61 @@ def relation_delivery_diff(
     current = relation_delivery_metadata(current_relation_context, current_notification_context)
     previous = relation_delivery_metadata(previous_relation_context, previous_notification_context)
     if not current:
-        return {"changed": False, "reason": "No graph-backed relation context is available."}
+        return {
+            "changed": False,
+            "material": False,
+            "changeClass": "unavailable",
+            "reason": "No graph-backed relation context is available.",
+        }
     if not previous:
         return {
             "changed": True,
+            "material": True,
+            "changeClass": "material",
             "reason": "New graph-backed relation context.",
             "currentFingerprint": current.get("fingerprint"),
             "previousFingerprint": "",
             "changedComponents": ["initial"],
         }
     if current.get("fingerprint") == previous.get("fingerprint"):
+        current_components = current.get("components") or {}
+        previous_components = previous.get("components") or {}
+        context_components = [
+            key
+            for key in ["traces", "inferenceEvidenceKeys"]
+            if current_components.get(key) != previous_components.get(key)
+        ]
+        labels = {
+            "traces": "추론 경로",
+            "inferenceEvidenceKeys": "추론 근거 식별자",
+        }
         return {
-            "changed": False,
-            "reason": "Graph-backed relationship evidence is unchanged.",
+            "changed": bool(context_components),
+            "material": False,
+            "changeClass": "context-drift" if context_components else "unchanged",
+            "reason": (
+                "Graph context drift without a new decision-changing source event: "
+                + ", ".join(labels.get(key, key) for key in context_components)
+                if context_components
+                else "Graph-backed relationship evidence is unchanged."
+            ),
             "currentFingerprint": current.get("fingerprint"),
             "previousFingerprint": previous.get("fingerprint"),
-            "changedComponents": [],
+            "changedComponents": context_components,
+            "materialComponents": [],
+            "contextComponents": context_components,
         }
     changed = []
     current_components = current.get("components") or {}
     previous_components = previous.get("components") or {}
-    for key in ["decision", "state", "activeRules", "relations", "traces", "evidenceKeys"]:
+    material_components = []
+    context_components = []
+    for key in ["decision", "state", "activeRules", "relations", "evidenceKeys"]:
         if current_components.get(key) != previous_components.get(key):
-            changed.append(key)
+            material_components.append(key)
+    for key in ["traces", "inferenceEvidenceKeys"]:
+        if current_components.get(key) != previous_components.get(key):
+            context_components.append(key)
     labels = {
         "decision": "결정 단계",
         "state": "관계 상태",
@@ -286,11 +331,23 @@ def relation_delivery_diff(
         "relations": "추론 관계",
         "traces": "추론 경로",
         "evidenceKeys": "근거 원문",
+        "inferenceEvidenceKeys": "추론 근거 식별자",
     }
+    changed = material_components + context_components
+    material = bool(material_components)
     return {
         "changed": bool(changed),
-        "reason": "Meaningful graph relation change: " + ", ".join(labels.get(key, key) for key in changed),
+        "material": material,
+        "changeClass": "material" if material else "context-drift",
+        "reason": (
+            "Meaningful graph relation change: " + ", ".join(labels.get(key, key) for key in material_components)
+            if material
+            else "Graph context drift without a new decision-changing source event: "
+            + ", ".join(labels.get(key, key) for key in context_components)
+        ),
         "currentFingerprint": current.get("fingerprint"),
         "previousFingerprint": previous.get("fingerprint"),
         "changedComponents": changed,
+        "materialComponents": material_components,
+        "contextComponents": context_components,
     }

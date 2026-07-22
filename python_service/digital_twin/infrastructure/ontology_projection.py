@@ -2,6 +2,7 @@ from copy import deepcopy
 from dataclasses import replace
 from typing import Dict, List, Set
 import hashlib
+import time
 
 from ..application.investment_outcome_observation_service import InvestmentOutcomeObservationService
 from ..domain.ontology_contracts import PortfolioOntology
@@ -179,6 +180,8 @@ class PortfolioOntologyProjectionRecorder:
         snapshot: AccountSnapshot,
         target_symbols: List[str] = None,
     ) -> Dict[str, object]:
+        projection_started = time.perf_counter()
+        runtime_stages: Dict[str, int] = {}
         projection_run = None
         pending_activation_recovery: Dict[str, object] = {}
         if not self.repository:
@@ -233,6 +236,7 @@ class PortfolioOntologyProjectionRecorder:
                 }
                 self.store_projection_result(snapshot, result, projection_run)
                 return result
+            graph_build_started = time.perf_counter()
             graph = build_portfolio_ontology(
                 list(snapshot.positions or []) + list(snapshot.watchlist or []),
                 snapshot.portfolio,
@@ -266,7 +270,10 @@ class PortfolioOntologyProjectionRecorder:
                 snapshot.account_id,
             )
             material_snapshot_id = str(scoped_identity.get("manifestId") or material_snapshot_id)
+            runtime_stages["graphBuildMs"] = int((time.perf_counter() - graph_build_started) * 1000)
+            validation_started = time.perf_counter()
             validation = validate_ontology(persistence_graph)
+            runtime_stages["aboxValidationMs"] = int((time.perf_counter() - validation_started) * 1000)
             if validation.error_count:
                 result = {
                     "saved": False,
@@ -278,6 +285,7 @@ class PortfolioOntologyProjectionRecorder:
                 self.store_projection_result(snapshot, result, projection_run)
                 return result
             active_abox = self.active_abox_metadata()
+            impact_planning_started = time.perf_counter()
             inference_impact_plan = self.inference_impact_plan(
                 snapshot,
                 active_abox,
@@ -294,6 +302,7 @@ class PortfolioOntologyProjectionRecorder:
                 inference_symbols,
                 target_symbols,
             )
+            runtime_stages["impactPlanningMs"] = int((time.perf_counter() - impact_planning_started) * 1000)
             persistence_graph.worldview["scopeDelta"] = dict(compact_impact_plan.get("scopeDelta") or {})
             persistence_graph.worldview["inferenceImpactPlan"] = compact_impact_plan
             projection_scope = {
@@ -354,6 +363,7 @@ class PortfolioOntologyProjectionRecorder:
                     "aboxValidation": validation.to_dict(),
                     "projectionScope": projection_scope,
                     "inferenceImpactPlan": compact_impact_plan,
+                    "runtimeStages": runtime_stages,
                 }
                 if rulebox_bootstrap:
                     result["ruleboxBootstrap"] = rulebox_bootstrap
@@ -404,7 +414,9 @@ class PortfolioOntologyProjectionRecorder:
             # verify that the eventual native InferenceBox covered the exact
             # requested incremental scope before predecessor cleanup.
             persistence_graph.worldview["inferenceTargetSymbols"] = list(inference_symbols)
+            abox_persistence_started = time.perf_counter()
             result = self.repository.save_graph(persistence_graph)
+            runtime_stages["aboxPersistenceMs"] = int((time.perf_counter() - abox_persistence_started) * 1000)
             if not isinstance(result, dict):
                 result = {"saved": False, "status": "error", "reason": "ontology repository returned non-dict result"}
             result["projectionMode"] = "abox-facts-only-typedb-native-rules"
@@ -414,6 +426,7 @@ class PortfolioOntologyProjectionRecorder:
             result["projectionScope"] = projection_scope
             result["inferenceImpactPlan"] = compact_impact_plan
             result["aboxValidation"] = validation.to_dict()
+            result["runtimeStages"] = runtime_stages
             if rulebox_bootstrap:
                 result["ruleboxBootstrap"] = rulebox_bootstrap
             if pending_activation_recovery:
@@ -430,11 +443,15 @@ class PortfolioOntologyProjectionRecorder:
                     compact_impact_plan,
                 )
             if self.quality_store:
+                quality_started = time.perf_counter()
                 sample = self.quality_store.record_graph(graph, source=self.source)
+                runtime_stages["qualityRecordMs"] = int((time.perf_counter() - quality_started) * 1000)
                 result["qualitySampleId"] = sample.sample_id
                 result["qualityState"] = sample.overall_state
         except Exception as error:  # noqa: BLE001 - ontology projection must not block realtime monitoring.
             result = {"saved": False, "status": "error", "reason": str(error)[:180]}
+        runtime_stages["totalMs"] = int((time.perf_counter() - projection_started) * 1000)
+        result.setdefault("runtimeStages", runtime_stages)
         self.store_projection_result(snapshot, result, projection_run)
         return result
 
@@ -872,6 +889,12 @@ class PortfolioOntologyProjectionRecorder:
         if compact_impact_plan:
             result.setdefault("inferenceImpactPlan", compact_impact_plan)
         active_key = self.active_graph_store_key(result)
+        runtime_stages = result.setdefault("runtimeStages", {})
+        selection_context = {
+            "reusable": False,
+            "matchedRuleIds": [],
+            "matchedRuleCount": 0,
+        }
         inference_write_lease: Dict[str, object] = {}
         if active_key == "typedb":
             inference_write_lease = self.acquire_inference_write_lease(result)
@@ -911,14 +934,28 @@ class PortfolioOntologyProjectionRecorder:
                     for key, value in dict(inference_write_lease or {}).items()
                     if key != "propertiesJson"
                 }
+            if bool(compact_impact_plan.get("nativeRuleSelectionEligible")):
+                # Read the old aligned InferenceBox only after owning the
+                # writer lease. This makes the reuse proof and the following
+                # ABox pointer transition one serialized operation.
+                selection_started = time.perf_counter()
+                selection_context = self.prior_rule_selection_context(snapshot, inference_symbols)
+                runtime_stages["priorInferenceReuseReadMs"] = int((time.perf_counter() - selection_started) * 1000)
+                result["priorInferenceReuse"] = {
+                    key: value
+                    for key, value in selection_context.items()
+                    if key != "matchedRuleIds"
+                }
         try:
             if active_key == "typedb":
                 preparer = getattr(self.repository, "prepare_pending_abox_activation_for_inference", None)
                 if callable(preparer):
+                    preparation_started = time.perf_counter()
                     try:
                         preparation = preparer()
                     except Exception as error:  # noqa: BLE001 - never run native rules against an uncertain active pointer.
                         preparation = {"status": "error", "reason": str(error)[:180]}
+                    runtime_stages["aboxActivationPreparationMs"] = int((time.perf_counter() - preparation_started) * 1000)
                     result["aboxActivationPreparation"] = preparation
                     if str(preparation.get("status") or "") not in {"skipped", "ready", "activated"}:
                         result["ruleboxExecution"] = {
@@ -948,16 +985,25 @@ class PortfolioOntologyProjectionRecorder:
                         return
             payload = {
                 "symbols": inference_symbols,
-                "pruneOldGenerations": True,
+                # Generation retention is intentionally outside the realtime
+                # inference boundary. An idle maintenance pass prunes only
+                # generations that are no longer active.
+                "pruneOldGenerations": False,
                 "inferenceSnapshotLimit": self.inference_snapshot_limit(),
                 "inferenceImpactPlan": compact_impact_plan,
+                "typedbNativeRuleSelectionEnabled": self.settings.get("typedbNativeRuleSelectionEnabled", "1"),
+                "priorInferenceReusable": bool(selection_context.get("reusable")),
+                "priorMatchedRuleIds": list(selection_context.get("matchedRuleIds") or []),
             }
             if inference_write_lease.get("acquired"):
                 payload["_inferenceWriteLeaseOwner"] = str(inference_write_lease.get("leaseOwner") or "")
             try:
+                native_inference_started = time.perf_counter()
                 execution = self.repository.run_rulebox(payload)
             except Exception as error:  # noqa: BLE001 - graph inference must not block monitoring.
                 execution = {"status": "error", "reason": str(error)[:180]}
+            finally:
+                runtime_stages["nativeInferenceMs"] = int((time.perf_counter() - native_inference_started) * 1000)
             if isinstance(execution, dict):
                 execution.setdefault("graphStore", active_key)
                 if active_key == "typedb":
@@ -982,10 +1028,27 @@ class PortfolioOntologyProjectionRecorder:
                 result["preservedActiveGeneration"] = True
                 result["reason"] = reason
                 return
+            if str(execution.get("status") or "") == "invalid-abox-generation":
+                # A stale InferenceBox can still be readable while the active
+                # candidate cannot prove one source ABox generation. Never
+                # let that unrelated durable readback finalize this candidate.
+                result["inferenceBox"] = {
+                    "configured": True,
+                    "status": "invalid-abox-generation",
+                    "graphStore": active_key,
+                    "source": "typedbInferenceBox",
+                    "nativeTypeDbReasoningUsed": False,
+                    "reason": str(execution.get("reason") or "Native inference source ABox generation is invalid."),
+                }
+                finalization_started = time.perf_counter()
+                self.reconcile_abox_activation_after_inference(result, inference_symbols)
+                runtime_stages["aboxActivationFinalizationMs"] = int((time.perf_counter() - finalization_started) * 1000)
+                return
             # A native RuleBox execution first builds an in-memory graph and
             # then writes it to TypeDB. Only a fresh TypeDB read proves that
             # the active InferenceBox still exists after publication/pruning.
             if active_key == "typedb" and hasattr(self.repository, "inferencebox_snapshot"):
+                readback_started = time.perf_counter()
                 try:
                     snapshot_payload = self.repository.inferencebox_snapshot(
                         symbols=inference_symbols,
@@ -1003,6 +1066,7 @@ class PortfolioOntologyProjectionRecorder:
                     snapshot_payload.setdefault("source", "typedbInferenceBox")
                     snapshot_payload["durableReadback"] = True
                     result["inferenceBox"] = snapshot_payload
+                runtime_stages["inferenceDurableReadbackMs"] = int((time.perf_counter() - readback_started) * 1000)
             elif isinstance(execution.get("inferenceBox"), dict):
                 snapshot_payload = dict(execution.get("inferenceBox") or {})
                 snapshot_payload.setdefault("graphStore", active_key)
@@ -1020,7 +1084,9 @@ class PortfolioOntologyProjectionRecorder:
                     if active_key == "typedb":
                         snapshot_payload.setdefault("source", "typedbInferenceBox")
                     result["inferenceBox"] = snapshot_payload
+            finalization_started = time.perf_counter()
             self.reconcile_abox_activation_after_inference(result, inference_symbols)
+            runtime_stages["aboxActivationFinalizationMs"] = int((time.perf_counter() - finalization_started) * 1000)
         finally:
             if inference_write_lease.get("acquired"):
                 releaser = getattr(self.repository, "release_scoped_abox_write_lease", None)
@@ -1132,16 +1198,15 @@ class PortfolioOntologyProjectionRecorder:
             verification["activePointer"] = dict(rollback.get("activeAbox") or {})
             result["aboxPersistenceVerification"] = verification
         if result["preservedActiveGeneration"] and active_snapshot_id:
-            discard = getattr(self.repository, "discard_abox_generation", None)
-            if callable(discard):
-                try:
-                    result["failedCandidateCleanup"] = discard(active_snapshot_id)
-                except Exception as error:  # noqa: BLE001 - circuit breaker can retry cleanup later.
-                    result["failedCandidateCleanup"] = {
-                        "status": "error",
-                        "aboxSnapshotId": active_snapshot_id,
-                        "reason": str(error)[:180],
-                    }
+            # The previous active Manifest is restored synchronously because
+            # that preserves judgement correctness. Physical deletion of the
+            # failed immutable candidate can involve thousands of rows and
+            # belongs to the same idle maintenance pass as normal retention.
+            result["failedCandidateCleanup"] = {
+                "status": "deferred",
+                "aboxSnapshotId": active_snapshot_id,
+                "reason": "Failed scoped ABox candidate is retained for idle maintenance cleanup.",
+            }
 
     def existing_inference_result(
         self,
@@ -1187,6 +1252,41 @@ class PortfolioOntologyProjectionRecorder:
             if str(symbol or "").strip()
         }
         return not expected or expected.issubset(actual)
+
+    def prior_rule_selection_context(
+        self,
+        snapshot: AccountSnapshot,
+        inference_symbols: List[str],
+    ) -> Dict[str, object]:
+        """Prove which unaffected native rules must be re-materialized.
+
+        This is a reuse proof, not a Python rule evaluation. The prior
+        InferenceBox must still be aligned to the active immutable ABox. If
+        that proof is unavailable, TypeDB deliberately executes the complete
+        RuleBox slice instead of risking an incomplete decision graph.
+        """
+        active_abox = self.active_abox_metadata()
+        inferencebox = self.existing_inference_result(snapshot, inference_symbols)
+        reusable = self.inference_result_is_reusable(
+            inferencebox,
+            active_abox,
+            inference_symbols,
+        )
+        rule_ids = []
+        if reusable:
+            for trace in inferencebox.get("traces") or []:
+                if not isinstance(trace, dict):
+                    continue
+                rule_id = str(trace.get("ruleId") or trace.get("sourceRuleId") or "").strip()
+                if rule_id and rule_id not in rule_ids:
+                    rule_ids.append(rule_id)
+        return {
+            "reusable": reusable,
+            "matchedRuleIds": rule_ids[:160],
+            "matchedRuleCount": len(rule_ids),
+            "inferenceGenerationId": str(inferencebox.get("inferenceGenerationId") or ""),
+            "sourceAboxSnapshotId": str(inferencebox.get("sourceAboxSnapshotId") or ""),
+        }
 
     def snapshot_symbols(self, snapshot: AccountSnapshot) -> List[str]:
         symbols = []

@@ -496,7 +496,7 @@ class MySQLNotificationJobStore(MySQLOperationalConnection):
             context = dict(job.context or {})
             context["ontologyRelationDiff"] = relation_diff
             job.context = context
-        if relation_diff.get("changed") and relation_diff.get("changedComponents") not in ([], ["initial"]):
+        if relation_diff.get("material") and relation_diff.get("changedComponents") not in ([], ["initial"]):
             reason = "관계 그래프 변화: " + str(relation_diff.get("reason") or "의미 있는 관계 변화")
             if reason not in decision.reasons:
                 decision.reasons.append(reason)

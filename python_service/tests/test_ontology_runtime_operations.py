@@ -86,6 +86,25 @@ class OntologyRuntimeOperationsTests(unittest.TestCase):
         self.assertEqual(1, observation["abox"]["cleanup"]["removedManifestCount"])
         self.assertEqual("warning", observation["slo"]["state"])
 
+    def test_projection_observation_separates_planned_and_actual_native_scope(self):
+        result = self.sample_result()
+        result["inferenceImpactPlan"]["inferenceTargetSymbols"] = ["005930", "000660"]
+        result["inferenceBox"]["targetSymbols"] = ["005930"]
+        result["ruleboxExecution"].update({
+            "typedbNativeRuleExecutedCount": 4,
+            "nativeRuleSelectionApplied": True,
+            "nativeRuleSelectionDeferredCount": 12,
+        })
+        result["runtimeStages"] = {"nativeInferenceMs": 6200, "totalMs": 8000}
+
+        observation = build_projection_runtime_observation(self.sample_run(), result)
+
+        self.assertEqual(2, observation["inference"]["plannedTargetSymbolCount"])
+        self.assertEqual(1, observation["inference"]["targetSymbolCount"])
+        self.assertEqual(4, observation["inference"]["executedRuleCount"])
+        self.assertTrue(observation["inference"]["nativeRuleSelectionApplied"])
+        self.assertEqual(6200, observation["stages"]["nativeInferenceMs"])
+
     def test_slo_summary_requires_sustained_breach_before_escalation(self):
         warning = build_projection_runtime_observation(
             self.sample_run(),

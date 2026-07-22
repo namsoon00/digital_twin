@@ -295,8 +295,9 @@ class TypeDBOntologyRepositoryTests(unittest.TestCase):
             result = repository.finalize_scoped_abox_manifest("abox-manifest:next", "abox-manifest:old")
 
         self.assertEqual("ok", result["status"])
-        self.assertFalse(result["cleanupDeferred"])
-        cleanup.assert_called_once_with()
+        self.assertTrue(result["cleanupDeferred"])
+        self.assertEqual("deferred", result["cleanup"]["status"])
+        cleanup.assert_not_called()
 
     def test_scoped_abox_finalize_removes_legacy_complete_generation_after_inference(self):
         repository = TypeDBOntologyGraphRepository("127.0.0.1:1729")
@@ -318,9 +319,39 @@ class TypeDBOntologyRepositoryTests(unittest.TestCase):
             )
 
         self.assertEqual("ok", result["status"])
-        self.assertFalse(result["cleanupDeferred"])
-        self.assertEqual("ok", result["cleanup"]["legacyPredecessorCleanup"]["status"])
-        discard.assert_called_once_with("abox-material:legacy")
+        self.assertTrue(result["cleanupDeferred"])
+        self.assertTrue(result["cleanup"]["legacyPredecessorPending"])
+        discard.assert_not_called()
+
+    def test_deferred_maintenance_prunes_after_the_realtime_activation_boundary(self):
+        repository = TypeDBOntologyGraphRepository("127.0.0.1:1729")
+        with patch.object(repository, "acquire_scoped_abox_write_lease", return_value={"acquired": True}), patch.object(
+            repository,
+            "release_scoped_abox_write_lease",
+            return_value={"status": "ok"},
+        ), patch.object(
+            repository,
+            "prune_orphan_scoped_abox_candidates",
+            return_value={"status": "ok", "removedGenerationIds": []},
+        ), patch.object(
+            repository,
+            "prune_inactive_scoped_abox_manifests",
+            return_value={"status": "ok", "removedManifestIds": ["abox-manifest:old"]},
+        ), patch.object(repository, "active_abox_metadata", return_value={}), patch.object(
+            repository,
+            "read_inference_generation_records",
+            return_value=[{"generationId": "inference:active"}],
+        ), patch.object(
+            repository,
+            "prune_inferencebox_generations",
+            return_value={"status": "ok", "deletedGenerationCount": 2},
+        ) as prune_inference:
+            result = repository.run_deferred_maintenance()
+
+        self.assertEqual("ok", result["status"])
+        self.assertEqual("ok", result["abox"]["status"])
+        self.assertEqual("ok", result["inference"]["status"])
+        prune_inference.assert_called_once_with("inference:active", keep_count=2)
 
     def test_scoped_abox_save_defers_when_another_writer_holds_the_lease(self):
         graph = PortfolioOntology(
@@ -1804,8 +1835,9 @@ class TypeDBOntologyRepositoryTests(unittest.TestCase):
         query = typedb_native_function_call_query(rule.to_dict(), ["000660"])["query"]
 
         self.assertIn('has ontology-kind "worldview-manifest-active-pointer"', query)
+        self.assertIn('has ontology-kind "abox-scope-active-pointer"', query)
         self.assertIn(
-            'has ontology-box "ABox", has ontology-manifest-id $activeManifestId',
+            '$candidate has ontology-box "ABox", has ontology-scope-id $candidateScopeId, has ontology-snapshot-id $candidateScopeGenerationId',
             query,
         )
         self.assertNotIn('has ontology-kind "abox-active-pointer"', query)
@@ -2620,14 +2652,17 @@ class TypeDBOntologyRepositoryTests(unittest.TestCase):
                 }
 
             def run_rulebox(self, _payload):
-                return {"status": "error", "reason": "TypeDB native rule query timed out"}
+                return {
+                    "status": "invalid-abox-generation",
+                    "reason": "TypeDB native source ABox generation cannot be proven",
+                }
 
             def inferencebox_snapshot(self, *_args, **_kwargs):
                 return {
-                    "status": "stale-generation",
+                    "status": "ok",
                     "nativeTypeDbReasoningUsed": True,
-                    "sourceAboxSnapshotId": "abox:previous",
-                    "generationAligned": False,
+                    "sourceAboxSnapshotId": "abox:new",
+                    "generationAligned": True,
                 }
 
             def activate_abox_generation(self, snapshot_id):
@@ -2660,6 +2695,7 @@ class TypeDBOntologyRepositoryTests(unittest.TestCase):
         self.assertTrue(result["preservedActiveGeneration"])
         self.assertEqual(["abox:previous"], repository.restored_snapshot_ids)
         self.assertEqual([], repository.finalized_snapshot_ids)
+        self.assertEqual("deferred", result["failedCandidateCleanup"]["status"])
 
     def test_projection_recorder_finalizes_abox_after_aligned_native_inference(self):
         class FakeRepository:
@@ -3680,7 +3716,7 @@ class TypeDBOntologyRepositoryTests(unittest.TestCase):
                 "symbol": "005930",
                 "scopeId": "symbol:005930",
                 "aboxSnapshotId": "abox-scope:005930",
-                "worldviewManifestId": "abox-manifest:live",
+                "worldviewManifestId": "abox-manifest:creation",
                 "profitLossRate": -12.5,
             }),
             OntologyEntity("level:005930:ma20", "20일선", "key-level", {
@@ -3688,13 +3724,13 @@ class TypeDBOntologyRepositoryTests(unittest.TestCase):
                 "symbol": "005930",
                 "scopeId": "symbol:005930",
                 "aboxSnapshotId": "abox-scope:005930",
-                "worldviewManifestId": "abox-manifest:live",
+                "worldviewManifestId": "abox-manifest:creation",
             }),
             OntologyEntity("risk-budget:main", "리스크 예산", "risk-budget", {
                 "ontologyBox": "ABox",
                 "scopeId": "policy:main",
                 "aboxSnapshotId": "abox-scope:policy",
-                "worldviewManifestId": "abox-manifest:live",
+                "worldviewManifestId": "abox-manifest:creation",
             }),
         ])
         graph.relations.extend([
@@ -4063,8 +4099,8 @@ class TypeDBOntologyRepositoryTests(unittest.TestCase):
 
         self.assertIn('has ontology-kind "worldview-manifest-active-pointer"', definition["body"])
         self.assertIn('has ontology-manifest-id $activeManifestId', definition["body"])
+        self.assertIn('has ontology-kind "abox-scope-active-pointer"', definition["body"])
         self.assertNotIn('has ontology-kind "abox-active-pointer"', definition["body"])
-        self.assertNotIn('has ontology-kind "abox-scope-active-pointer"', definition["body"])
 
     def test_typedb_function_definition_uses_promoted_subject_attributes(self):
         rule = next(

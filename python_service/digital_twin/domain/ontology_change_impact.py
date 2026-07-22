@@ -12,7 +12,9 @@ from collections import defaultdict
 from typing import Dict, Iterable, List, Mapping, Sequence, Set
 
 
-CHANGE_IMPACT_VERSION = "abox-change-impact-v1"
+# v2 distinguishes facts that changed from scopes that merely depend on a
+# changed fact. The distinction is required for safe native RuleBox reuse.
+CHANGE_IMPACT_VERSION = "abox-change-impact-v2"
 
 SYMBOL_SCOPE_FAMILIES = {
     "state",
@@ -338,6 +340,29 @@ def scope_delta(previous_scope_plan: Iterable[object], next_scope_plan: Iterable
                 affected.add(dependent)
                 pending.append(dependent)
     active_affected = sorted(scope_id for scope_id in affected if scope_id in current)
+    active_direct = sorted(scope_id for scope_id in direct_changed if scope_id in current)
+    direct_families = sorted({
+        token
+        for scope_id in direct_changed
+        for token in scope_family_tokens(scope_id)
+    })
+    affected_families = sorted({
+        token
+        for scope_id in affected
+        for token in scope_family_tokens(scope_id)
+    })
+    direct_symbols = sorted({
+        symbol
+        for scope_id in direct_changed
+        for symbol in [scope_symbol(scope_id)]
+        if symbol
+    })
+    affected_symbols = sorted({
+        symbol
+        for scope_id in affected
+        for symbol in [scope_symbol(scope_id)]
+        if symbol
+    })
     return {
         "version": CHANGE_IMPACT_VERSION,
         "previousScopeCount": len(previous),
@@ -346,10 +371,18 @@ def scope_delta(previous_scope_plan: Iterable[object], next_scope_plan: Iterable
         "removedScopeIds": removed,
         "changedScopeIds": sorted(set(added + changed)),
         "unchangedScopeIds": unchanged,
+        "directChangedScopeIds": active_direct,
         "affectedScopeIds": active_affected,
         "dependencyAffectedScopeIds": sorted(set(active_affected) - set(added + changed)),
-        "changedScopeFamilies": sorted({token for scope_id in affected for token in scope_family_tokens(scope_id)}),
-        "changedSymbols": sorted({symbol for scope_id in affected for symbol in [scope_symbol(scope_id)] if symbol}),
+        # Keep the historical field name, but give it the precise meaning:
+        # factual scopes that actually changed, not their dependents.
+        "changedScopeFamilies": direct_families,
+        "directChangedScopeFamilies": direct_families,
+        "dependencyAffectedScopeFamilies": sorted(set(affected_families) - set(direct_families)),
+        "affectedScopeFamilies": affected_families,
+        "changedSymbols": direct_symbols,
+        "directChangedSymbols": direct_symbols,
+        "dependencyAffectedSymbols": sorted(set(affected_symbols) - set(direct_symbols)),
     }
 
 
@@ -375,22 +408,22 @@ def build_inference_impact_plan(
 ) -> Dict[str, object]:
     """Build a conservative routing plan for a native TypeDB inference run.
 
-    ``candidateRuleIds`` is deliberately observability metadata. A new
-    InferenceBox generation must still contain every matching native rule for
-    an affected subject, so the current runtime continues complete native
-    evaluation after using this plan to choose the subject set.
+    The plan routes operational work only. TypeDB remains the sole evaluator
+    of investment rules. A runtime can execute candidate rules together with
+    previously matched unaffected rules, preserving a complete InferenceBox
+    while avoiding known non-match queries.
     """
     delta = scope_delta(previous_scope_plan, next_scope_plan)
     available_symbols = sorted({_clean(item).upper() for item in snapshot_symbols or [] if _clean(item)})
     explicit_symbols = sorted({_clean(item).upper() for item in explicit_target_symbols or [] if _clean(item)})
-    changed_scope_ids = list(delta.get("affectedScopeIds") or [])
+    changed_scope_ids = list(delta.get("directChangedScopeIds") or delta.get("affectedScopeIds") or [])
     global_scope_ids = sorted({
         scope_id
         for scope_id in changed_scope_ids
         if scope_type(scope_id) in GLOBAL_SCOPE_TYPES and not scope_symbol(scope_id)
     })
     global_impact = bool(global_scope_ids)
-    impacted_symbols = set(delta.get("changedSymbols") or []) | set(explicit_symbols)
+    impacted_symbols = set(delta.get("directChangedSymbols") or delta.get("changedSymbols") or []) | set(explicit_symbols)
     if global_impact:
         impacted_symbols.update(available_symbols)
     target_symbols = [symbol for symbol in available_symbols if symbol in impacted_symbols]
@@ -399,7 +432,7 @@ def build_inference_impact_plan(
     if not target_symbols and not changed_scope_ids:
         target_symbols = list(available_symbols)
     profiles = rule_dependency_profiles(rules or [])
-    changed_families = set(delta.get("changedScopeFamilies") or [])
+    changed_families = set(delta.get("directChangedScopeFamilies") or delta.get("changedScopeFamilies") or [])
     candidate_profiles = [
         profile for profile in profiles
         if profile.get("enabled") and _rule_may_depend_on(profile, changed_families)
@@ -420,12 +453,17 @@ def build_inference_impact_plan(
         "candidateRuleCount": len(candidate_profiles),
         "ruleDependencyCount": len(profiles),
         "changedScopeFamilies": sorted(changed_families),
-        "ruleExecutionScope": "complete-native-evaluation",
+        "ruleExecutionScope": (
+            "global-native-reconciliation"
+            if global_impact
+            else "dependency-selected-native-evaluation"
+        ),
+        "nativeRuleSelectionEligible": bool(candidate_profiles and not global_impact),
         "nativeRuleSelectionApplied": False,
         "reason": (
             "전역 범위 변경이 감지되어 전체 투자 대상을 재검토합니다."
             if global_impact
-            else "변경된 ABox 사실군과 의존 관계로 추론 대상을 계산하고, 대상별 TypeDB 네이티브 규칙은 완전 평가합니다."
+            else "직접 변경된 ABox 사실군으로 후보 RuleBox를 계산하고, 이전에 성립한 비변경 규칙을 함께 TypeDB에서 재확인합니다."
         ),
     }
 
@@ -448,7 +486,8 @@ def compact_inference_impact_plan(plan: Mapping[str, object], limit: int = 80) -
         "candidateRuleCount": int(values.get("candidateRuleCount") or 0),
         "ruleDependencyCount": int(values.get("ruleDependencyCount") or 0),
         "changedScopeFamilies": list(values.get("changedScopeFamilies") or [])[:bounded],
-        "ruleExecutionScope": str(values.get("ruleExecutionScope") or "complete-native-evaluation"),
+        "ruleExecutionScope": str(values.get("ruleExecutionScope") or "dependency-selected-native-evaluation"),
+        "nativeRuleSelectionEligible": bool(values.get("nativeRuleSelectionEligible")),
         "nativeRuleSelectionApplied": bool(values.get("nativeRuleSelectionApplied")),
         "scopeDelta": {
             "previousScopeCount": int(delta.get("previousScopeCount") or 0),
@@ -456,9 +495,15 @@ def compact_inference_impact_plan(plan: Mapping[str, object], limit: int = 80) -
             "addedScopeIds": list(delta.get("addedScopeIds") or [])[:bounded],
             "removedScopeIds": list(delta.get("removedScopeIds") or [])[:bounded],
             "changedScopeIds": list(delta.get("changedScopeIds") or [])[:bounded],
+            "directChangedScopeIds": list(delta.get("directChangedScopeIds") or [])[:bounded],
             "affectedScopeIds": list(delta.get("affectedScopeIds") or [])[:bounded],
             "dependencyAffectedScopeIds": list(delta.get("dependencyAffectedScopeIds") or [])[:bounded],
             "changedScopeFamilies": list(delta.get("changedScopeFamilies") or [])[:bounded],
+            "directChangedScopeFamilies": list(delta.get("directChangedScopeFamilies") or [])[:bounded],
+            "dependencyAffectedScopeFamilies": list(delta.get("dependencyAffectedScopeFamilies") or [])[:bounded],
+            "affectedScopeFamilies": list(delta.get("affectedScopeFamilies") or [])[:bounded],
             "changedSymbols": list(delta.get("changedSymbols") or [])[:bounded],
+            "directChangedSymbols": list(delta.get("directChangedSymbols") or [])[:bounded],
+            "dependencyAffectedSymbols": list(delta.get("dependencyAffectedSymbols") or [])[:bounded],
         },
     }

@@ -13,6 +13,7 @@ from ..domain.investment_evidence_governance import (
     ResearchRun,
     complete_reasoning_handoff,
 )
+from ..domain.hypothesis_calibration import attach_abox_hypothesis_calibrations
 from ..domain.message_types import INVESTMENT_INSIGHT
 from ..domain.ontology_inference_context import relation_context_from_inferencebox
 from ..domain.ontology_worlds import portfolio_world_id
@@ -243,6 +244,20 @@ class InvestmentBrainService:
                 or ""
             ),
         }
+        subject = context.get("subject") if isinstance(context.get("subject"), dict) else {}
+        facts = context.get("facts") if isinstance(context.get("facts"), dict) else {}
+        calibration_snapshot = context.get("hypothesisCalibration") if isinstance(context.get("hypothesisCalibration"), dict) else {}
+        if not calibration_snapshot and isinstance(typedb.get("hypothesisCalibration"), dict):
+            calibration_snapshot = typedb.get("hypothesisCalibration")
+        enriched = attach_abox_hypothesis_calibrations(
+            enriched,
+            calibration_snapshot,
+            subject_symbol=str(subject.get("symbol") or facts.get("symbol") or ""),
+            inference_generation_id=str(enriched["reasoningGeneration"].get("inferenceGenerationId") or ""),
+            inference_generation_at=str(enriched["reasoningGeneration"].get("observedAt") or ""),
+            source_abox_snapshot_id=str(enriched["reasoningGeneration"].get("sourceAboxSnapshotId") or ""),
+            generation_aligned=bool(enriched["reasoningGeneration"].get("generationAligned")),
+        )
         return enriched
 
     def completed_reasoning_handoff(self, run, refresh_result: Dict[str, object]):

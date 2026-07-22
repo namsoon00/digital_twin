@@ -1,5 +1,6 @@
 from typing import Dict, Iterable, List, Optional
 
+from .hypothesis_calibration import attach_abox_hypothesis_calibrations
 from .investment_brain import hypothesis_set_from_relation_context
 from .market_data import number
 from .ontology_decision_state import (
@@ -228,6 +229,15 @@ def relation_context_from_inferencebox(
             "maximumComparisonCount": (settings or {}).get("investmentBrainMaximumHypothesisCount") or 8,
         },
     })
+    investment_brain = attach_abox_hypothesis_calibrations(
+        investment_brain,
+        inferencebox.get("hypothesisCalibration") if isinstance(inferencebox.get("hypothesisCalibration"), dict) else {},
+        subject_symbol=symbol,
+        inference_generation_id=str(inferencebox.get("inferenceGenerationId") or ""),
+        inference_generation_at=str(inferencebox.get("inferenceGenerationAt") or ""),
+        source_abox_snapshot_id=str(inferencebox.get("sourceAboxSnapshotId") or ""),
+        generation_aligned=bool(inferencebox.get("generationAligned")),
+    )
     if isinstance(prompt_context, dict):
         prompt_context["evidenceSubgraph"] = evidence_subgraph
         prompt_context["evidenceState"] = evidence_state
@@ -237,6 +247,7 @@ def relation_context_from_inferencebox(
         prompt_context["inferenceTimeline"] = inference_timeline
         prompt_context["investmentBrain"] = investment_brain
         prompt_context["hypothesisSet"] = investment_brain.get("hypothesisSet") or {}
+        prompt_context["hypothesisCalibration"] = investment_brain.get("hypothesisCalibration") or {}
         prompt_context["researchPlan"] = investment_brain.get("researchPlan") or {}
     return {
         "engineVersion": context_version,
@@ -273,6 +284,7 @@ def relation_context_from_inferencebox(
         "inferenceTimeline": inference_timeline,
         "investmentBrain": investment_brain,
         "hypothesisSet": investment_brain.get("hypothesisSet") or {},
+        "hypothesisCalibration": investment_brain.get("hypothesisCalibration") or {},
         "researchPlan": investment_brain.get("researchPlan") or {},
         "hypothesisTemplates": investment_brain.get("hypothesisTemplates") or [],
         "selfQuestions": investment_brain.get("selfQuestions") or [],
@@ -313,6 +325,7 @@ def relation_context_from_inferencebox(
             "worldId": inferencebox.get("worldId"),
             "ruleboxRulesHash": inferencebox.get("ruleboxRulesHash"),
             "ruleboxRuleCount": inferencebox.get("ruleboxRuleCount"),
+            "hypothesisCalibration": investment_brain.get("hypothesisCalibration") or {},
         },
         "typedbInference": {
             "source": source_name,
@@ -332,6 +345,7 @@ def relation_context_from_inferencebox(
             "worldId": inferencebox.get("worldId"),
             "ruleboxRulesHash": inferencebox.get("ruleboxRulesHash"),
             "ruleboxRuleCount": inferencebox.get("ruleboxRuleCount"),
+            "hypothesisCalibration": investment_brain.get("hypothesisCalibration") or {},
         },
     }
 

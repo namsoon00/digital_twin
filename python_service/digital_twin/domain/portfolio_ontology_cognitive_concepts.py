@@ -1,4 +1,4 @@
-from typing import Dict, Iterable
+from typing import Dict, Iterable, List
 
 from .ontology_contracts import PortfolioOntology, entity_id
 from .ontology_schema import add_entity, add_relation
@@ -139,6 +139,7 @@ def add_investment_brain_concepts(
                 "templateLabel": hypothesis.get("templateLabel"),
                 "approvalStatus": hypothesis.get("approvalStatus"),
                 "verificationStatus": hypothesis.get("verificationStatus"),
+                "historicalCalibration": hypothesis.get("historicalCalibration") or {},
                 "supportingRuleIds": hypothesis.get("supportingRuleIds") or [],
                 "counterRuleIds": hypothesis.get("counterRuleIds") or [],
                 "invalidationConditions": hypothesis.get("invalidationConditions") or [],
@@ -328,6 +329,9 @@ def add_hypothesis_calibration_concepts(
 ) -> None:
     grouped: Dict[str, Dict[str, object]] = {}
     for episode in decision_episodes or []:
+        symbol = str(episode.get("symbol") or "").upper().strip()
+        if not symbol:
+            continue
         hypothesis_set = episode.get("hypothesisSet") if isinstance(episode.get("hypothesisSet"), dict) else {}
         selected_id = str(episode.get("selectedHypothesisId") or "")
         selected = next((
@@ -348,45 +352,80 @@ def add_hypothesis_calibration_concepts(
         episode_id = str(episode.get("episodeId") or "").strip()
         if not episode_id or not template_id or status not in {"directionally-corroborated", "directionally-contradicted", "inconclusive"}:
             continue
-        row = grouped.setdefault(template_id, {
+        scope_key = symbol + "|" + template_id
+        row = grouped.setdefault(scope_key, {
+            "symbol": symbol,
+            "subjectName": str(episode.get("subjectName") or symbol),
             "templateId": template_id,
             "templateLabel": str(selected.get("templateLabel") or template_id),
             "episodeOutcomes": {},
+            "episodeHorizonOutcomes": {},
         })
         previous = row["episodeOutcomes"].get(episode_id) or {}
         if str(latest.get("observedAt") or "") >= str(previous.get("observedAt") or ""):
             row["episodeOutcomes"][episode_id] = {
                 "status": status,
                 "observedAt": str(latest.get("observedAt") or ""),
+                "horizonMinutes": positive_int((latest.get("payload") or {}).get("horizonMinutes")),
             }
+        # Overall calibration uses one latest result per decision episode. For
+        # each horizon, however, retain that horizon's latest result so a
+        # longer observation does not erase the shorter-horizon evidence.
+        for outcome in outcomes:
+            outcome_status = str(outcome.get("selectedHypothesisStatus") or "")
+            if outcome_status not in {
+                "directionally-corroborated",
+                "directionally-contradicted",
+                "inconclusive",
+            }:
+                continue
+            horizon = positive_int((outcome.get("payload") or {}).get("horizonMinutes"))
+            if not horizon:
+                continue
+            per_horizon = row["episodeHorizonOutcomes"].setdefault(horizon, {})
+            previous_horizon = per_horizon.get(episode_id) or {}
+            if str(outcome.get("observedAt") or "") >= str(previous_horizon.get("observedAt") or ""):
+                per_horizon[episode_id] = {
+                    "status": outcome_status,
+                    "observedAt": str(outcome.get("observedAt") or ""),
+                    "horizonMinutes": horizon,
+                }
     portfolio_node_id = entity_id("portfolio", portfolio_id)
-    for template_id, row in sorted(grouped.items()):
+    for _, row in sorted(grouped.items()):
+        template_id = str(row["templateId"])
+        symbol = str(row["symbol"])
         statuses = [str(item.get("status") or "") for item in row["episodeOutcomes"].values()]
         corroborated_count = statuses.count("directionally-corroborated")
         contradicted_count = statuses.count("directionally-contradicted")
         inconclusive_count = statuses.count("inconclusive")
         decisive_count = corroborated_count + contradicted_count
         independent_count = len(row["episodeOutcomes"])
-        if decisive_count < 3:
-            outcome_state = "insufficient-history"
-            review_recommendation = "continue-observation"
-        elif corroborated_count > contradicted_count:
-            outcome_state = "more-corroborated"
-            review_recommendation = "eligible-for-human-review"
-        elif contradicted_count > corroborated_count:
-            outcome_state = "more-contradicted"
-            review_recommendation = "review-for-revision"
-        else:
-            outcome_state = "mixed"
-            review_recommendation = "continue-observation"
-        calibration_id = add_entity(graph, "hypothesis-calibration", template_id, str(row["templateLabel"]) + " 결과 보정", {
+        outcome_state, review_recommendation = hypothesis_calibration_state(
+            corroborated_count,
+            contradicted_count,
+            decisive_count,
+        )
+        outcome_rows = list(row["episodeOutcomes"].values())
+        horizon_outcome_rows = [
+            outcome
+            for per_episode in row["episodeHorizonOutcomes"].values()
+            for outcome in per_episode.values()
+        ]
+        calibration_id = add_entity(graph, "hypothesis-calibration", symbol + "|" + template_id, str(row["subjectName"]) + " " + str(row["templateLabel"]) + " 결과 보정", {
             "tboxClass": "HypothesisCalibration",
+            "calibrationScope": "account-symbol-template",
+            "accountId": portfolio_id,
+            "symbol": symbol,
             "templateId": template_id,
+            "templateLabel": str(row["templateLabel"]),
             "independentEpisodeCount": independent_count,
             "decisiveOutcomeCount": decisive_count,
             "corroboratedCount": corroborated_count,
             "contradictedCount": contradicted_count,
             "inconclusiveCount": inconclusive_count,
+            "latestObservedAt": max((str(item.get("observedAt") or "") for item in outcome_rows), default=""),
+            "outcomeHorizonMinutes": sorted({positive_int(item.get("horizonMinutes")) for item in horizon_outcome_rows if positive_int(item.get("horizonMinutes"))}),
+            "horizonSlices": hypothesis_calibration_horizon_slices(horizon_outcome_rows),
             "outcomeState": outcome_state,
             "reviewRecommendation": review_recommendation,
             "calibrationStatus": "usable" if decisive_count >= 3 else "insufficient-history",
@@ -404,9 +443,61 @@ def add_hypothesis_calibration_concepts(
             "source": "investment-brain-feedback",
             "automaticDeployment": False,
         })
+        stock_id = entity_id("stock", symbol)
+        if not any(item.entity_id == stock_id for item in graph.entities):
+            add_entity(graph, "stock", symbol, str(row["subjectName"]) or symbol, {
+                "tboxClass": "Stock",
+                "symbol": symbol,
+                "source": "investment-brain-feedback",
+            })
+        add_relation(graph, stock_id, calibration_id, "HAS_HYPOTHESIS_CALIBRATION", weight=1.0, properties={
+            "source": "investment-brain-feedback",
+            "calibrationScope": "account-symbol-template",
+        })
         add_relation(graph, portfolio_node_id, calibration_id, "HAS_HYPOTHESIS_CALIBRATION", weight=1.0, properties={
             "source": "investment-brain-feedback",
         })
+
+
+def hypothesis_calibration_state(
+    corroborated_count: int,
+    contradicted_count: int,
+    decisive_count: int,
+):
+    if decisive_count < 3:
+        return "insufficient-history", "continue-observation"
+    if corroborated_count > contradicted_count:
+        return "more-corroborated", "eligible-for-human-review"
+    if contradicted_count > corroborated_count:
+        return "more-contradicted", "review-for-revision"
+    return "mixed", "continue-observation"
+
+
+def hypothesis_calibration_horizon_slices(outcomes: Iterable[Dict[str, object]]):
+    grouped: Dict[int, List[Dict[str, object]]] = {}
+    for outcome in outcomes or []:
+        horizon = positive_int(outcome.get("horizonMinutes"))
+        if not horizon:
+            continue
+        grouped.setdefault(horizon, []).append(outcome)
+    slices = []
+    for horizon, rows in sorted(grouped.items()):
+        statuses = [str(item.get("status") or "") for item in rows]
+        corroborated_count = statuses.count("directionally-corroborated")
+        contradicted_count = statuses.count("directionally-contradicted")
+        decisive_count = corroborated_count + contradicted_count
+        outcome_state, _ = hypothesis_calibration_state(corroborated_count, contradicted_count, decisive_count)
+        slices.append({
+            "horizonMinutes": horizon,
+            "independentEpisodeCount": len(rows),
+            "decisiveOutcomeCount": decisive_count,
+            "corroboratedCount": corroborated_count,
+            "contradictedCount": contradicted_count,
+            "inconclusiveCount": statuses.count("inconclusive"),
+            "outcomeState": outcome_state,
+            "calibrationStatus": "usable" if decisive_count >= 3 else "insufficient-history",
+        })
+    return slices
 
 
 def add_research_source_policy(graph: PortfolioOntology, plan_key: str, research_plan: Dict[str, object]) -> str:

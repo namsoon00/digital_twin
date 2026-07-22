@@ -2506,6 +2506,18 @@ class TypeDBOntologyRepositoryTests(unittest.TestCase):
             "symbol": "AAPL",
             "nativeTypeDbReasoned": True,
             "nativeRuleId": "typedb.native.test",
+            "sourceAboxSnapshotId": "abox:test",
+        }))
+        graph.entities.append(OntologyEntity("hypothesis-calibration:AAPL:risk", "Apple risk calibration", "hypothesis-calibration", {
+            "ontologyBox": "ABox",
+            "symbol": "AAPL",
+            "tboxClass": "HypothesisCalibration",
+            "templateId": "hypothesis-template:risk-rule",
+            "templateLabel": "Risk rule",
+            "calibrationStatus": "usable",
+            "outcomeState": "more-contradicted",
+            "latestObservedAt": "2026-07-15T00:00:00Z",
+            "aboxSnapshotId": "abox:test",
         }))
         graph.relations.append(OntologyRelation("stock:AAPL", "inference:stock:AAPL", "HAS_INFERRED_RISK", 1.0, properties={
             "ontologyBox": "InferenceBox",
@@ -2521,6 +2533,8 @@ class TypeDBOntologyRepositoryTests(unittest.TestCase):
         self.assertEqual("skipped", snapshot["typedbReadStatus"])
         self.assertEqual(1, snapshot["relationCount"])
         self.assertTrue(snapshot["nativeTypeDbReasoningUsed"])
+        self.assertEqual("ok", snapshot["hypothesisCalibration"]["status"])
+        self.assertEqual("hypothesis-template:risk-rule", snapshot["hypothesisCalibration"]["calibrations"][0]["templateId"])
 
     def test_projection_recorder_uses_durable_inferencebox_readback_after_rulebox_execution(self):
         class FakeRepository:

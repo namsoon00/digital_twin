@@ -27,6 +27,7 @@ from ..domain.ontology_rulebox_governance import (
 )
 from ..domain.ontology_change_impact import compact_inference_impact_plan
 from ..domain.ontology_schema import default_tbox_metadata
+from ..domain.hypothesis_calibration import hypothesis_calibration_snapshot_from_abox_rows
 from ..domain.ontology_scopes import SCOPED_ABOX_MANIFEST_VERSION, SCOPED_ABOX_PERSISTENCE_MODE
 from .graph_store_inferencebox import (
     inferencebox_entity_payload,
@@ -3293,6 +3294,16 @@ class ScopedABoxManifestMixin:
             "nativeTraceCount": 0,
             "nativeTypeDbReasoningUsed": False,
             "typedbBootstrapReasoningUsed": False,
+            "hypothesisCalibration": {
+                "status": "unavailable",
+                "source": "typedb-abox-hypothesis-calibration",
+                "reason": "TypeDB ontology storage is not configured.",
+                "calibrations": [],
+                "calibrationCount": 0,
+                "generationAligned": False,
+                "automaticDeployment": False,
+                "decisionEligibility": "historical-review-only",
+            },
         }
 
     def save_rule_change_candidates(self, candidates: List[Dict[str, object]], context: Dict[str, object] = None) -> Dict[str, object]:
@@ -4074,6 +4085,84 @@ class TypeDBOntologyGraphRepository(GraphStoreOntologyRowMapperMixin, ScopedABox
                 break
         rows = sorted(rows, key=lambda item: (str(item.get("updatedAt") or ""), str(item.get("id") or "")), reverse=True)
         return rows[:safe_limit] if safe_limit > 0 else rows
+
+    def read_active_hypothesis_calibration_rows(
+        self,
+        symbols: Iterable[str] = None,
+        limit: int = 40,
+        world_id: str = "",
+    ) -> List[Dict[str, object]]:
+        """Read the active ABox calibration facts without reading all ABox rows."""
+        clean_symbols = sorted({
+            str(item or "").upper().strip()
+            for item in symbols or []
+            if str(item or "").strip()
+        })
+        query = (
+            "match "
+            + self.active_abox_members_clause([("$n", "hypothesisCalibration")], world_id)
+            + " $n isa ontology-node, "
+            + "has ontology-id $id, "
+            + "has ontology-label $label, "
+            + 'has ontology-kind "hypothesis-calibration", '
+            + 'has ontology-box "ABox", '
+            + "has ontology-symbol $symbol, "
+            + "has ontology-updated-at $updatedAt, "
+            + "has ontology-json $json; "
+        )
+        if clean_symbols:
+            query += typedb_value_match("$n", "ontology-symbol", clean_symbols, "==", "hypothesisCalibrationSymbol")
+        query += typeql_limit_clause(max(1, min(100, int(limit or 40))))
+        rows = self.entity_rows_from_typeql(self.read_rows(
+            query,
+            ["id", "label", "kind", "symbol", "updatedAt", "json"],
+        ), "ABox")
+        return sorted(rows, key=lambda item: (str(item.get("symbol") or ""), str(item.get("id") or "")))
+
+    def hypothesis_calibration_snapshot(
+        self,
+        symbols: Iterable[str] = None,
+        limit: int = 40,
+        world_id: str = "",
+        source_abox_snapshot_id: str = "",
+        generation_aligned: bool = False,
+    ) -> Dict[str, object]:
+        source_snapshot_id = str(source_abox_snapshot_id or "").strip()
+        if not generation_aligned or not source_snapshot_id:
+            return hypothesis_calibration_snapshot_from_abox_rows(
+                [],
+                symbols=symbols,
+                source_abox_snapshot_id=source_snapshot_id,
+                generation_aligned=False,
+            )
+        try:
+            rows = self.read_active_hypothesis_calibration_rows(symbols, limit, world_id)
+        except Exception as error:  # noqa: BLE001 - outcome history cannot invalidate a usable current inference generation.
+            return {
+                "version": "hypothesis-calibration-context-v1",
+                "status": "error",
+                "source": "typedb-abox-hypothesis-calibration",
+                "reason": "TypeDB ABox 가설 결과 보정 조회 실패: " + str(error)[:180],
+                "sourceAboxSnapshotId": source_snapshot_id,
+                "generationAligned": True,
+                "scope": "same-account-symbol-template",
+                "decisionEligibility": "historical-review-only",
+                "automaticDeployment": False,
+                "symbols": sorted({str(item or "").upper().strip() for item in symbols or [] if str(item or "").strip()}),
+                "calibrations": [],
+                "calibrationCount": 0,
+            }
+        return hypothesis_calibration_snapshot_from_abox_rows(
+            rows,
+            symbols=symbols,
+            source_abox_snapshot_id=source_snapshot_id,
+            generation_aligned=True,
+            # The TypeQL query is restricted by the current active ABox
+            # membership pointer. Scoped facts can retain their original
+            # manifest ID while still being part of this live worldview.
+            active_membership_verified=True,
+            limit=limit,
+        )
 
     def read_entity_rows_by_ids(self, ids: Iterable[str], boxes: Iterable[str] = None, world_id: str = "") -> List[Dict[str, object]]:
         clean_ids = sorted(set(str(item or "").strip() for item in ids or [] if str(item or "").strip()))
@@ -9438,6 +9527,22 @@ relation ontology-assertion,
             world_id=world_id,
         ) if saved_ok and prune_requested else {}
         inferencebox_payload = self.inferencebox_snapshot_from_graph(inference_graph, target_symbols, inferencebox_limit)
+        # ``inference_graph`` intentionally contains only materialized
+        # InferenceBox facts. The calibration facts remain in the exact ABox
+        # generation used for this run, so reuse that source graph here rather
+        # than treating an empty InferenceBox-only view as missing history.
+        inferencebox_payload["hypothesisCalibration"] = hypothesis_calibration_snapshot_from_abox_rows(
+            [
+                row for row in self.rows_for_entities(graph)
+                if str(row.get("kind") or "") == "hypothesis-calibration"
+                or str(row.get("tboxClass") or "") == "HypothesisCalibration"
+            ],
+            symbols=target_symbols,
+            source_abox_snapshot_id=str(runtime_rulebox_metadata.get("sourceAboxSnapshotId") or ""),
+            generation_aligned=source_generation_valid,
+            active_membership_verified=scoped_active_abox,
+            limit=min(40, inferencebox_limit),
+        )
         return {
             "configured": True,
             "status": ("ok" if has_materialized_relations else "empty") if saved_ok else str(save_result.get("status") or "error"),
@@ -10100,6 +10205,18 @@ relation ontology-assertion,
                 "activeAboxSnapshotId": source_abox_snapshot_id,
                 "generationAligned": True,
             })
+        calibration_rows = [
+            row for row in self.rows_for_entities(graph)
+            if str(row.get("kind") or "") == "hypothesis-calibration"
+            or str(row.get("tboxClass") or "") == "HypothesisCalibration"
+        ]
+        snapshot["hypothesisCalibration"] = hypothesis_calibration_snapshot_from_abox_rows(
+            calibration_rows,
+            symbols=clean_symbols,
+            source_abox_snapshot_id=source_abox_snapshot_id,
+            generation_aligned=bool(snapshot.get("generationAligned")),
+            limit=min(40, safe_limit),
+        )
         return snapshot
 
     def inferencebox_snapshot(
@@ -10143,6 +10260,16 @@ relation ontology-assertion,
                 "nativeTraceCount": 0,
                 "nativeTypeDbReasoningUsed": False,
                 "typedbBootstrapReasoningUsed": False,
+                "hypothesisCalibration": {
+                    "status": "unavailable",
+                    "source": "typedb-abox-hypothesis-calibration",
+                    "reason": "TypeDB InferenceBox 조회가 실패해 ABox 결과 보정도 사용하지 않습니다.",
+                    "calibrations": [],
+                    "calibrationCount": 0,
+                    "generationAligned": False,
+                    "automaticDeployment": False,
+                    "decisionEligibility": "historical-review-only",
+                },
                 "typedbQueryMetrics": self.query_metrics_snapshot(),
             }
     def inferencebox_snapshot_from_typedb(self, clean_symbols: List[str], safe_limit: int, world_id: str = "") -> Dict[str, object]:
@@ -10246,6 +10373,13 @@ relation ontology-assertion,
                     "nativeTypeDbReasoningUsed": False,
                     "typedbNativeRuleReasoningUsed": False,
                 })
+        snapshot["hypothesisCalibration"] = self.hypothesis_calibration_snapshot(
+            clean_symbols,
+            min(40, safe_limit),
+            world_id,
+            source_abox_snapshot_id=source_abox_snapshot_id,
+            generation_aligned=bool(snapshot.get("generationAligned")),
+        )
         return snapshot
 
     def load_graph_from_typedb(self, boxes: Iterable[str] = None, world_id: str = "") -> PortfolioOntology:

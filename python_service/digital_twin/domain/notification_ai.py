@@ -440,6 +440,9 @@ def notification_ai_prompt_context(
             "trendDynamics": sanitized_prompt_data(relation_trend_dynamics(context)),
             "activeInvestmentOpinion": sanitized_prompt_data(active_opinion),
             "executionPlan": sanitized_prompt_data(execution_plan),
+            "hypothesisCalibration": sanitized_prompt_data(
+                relation_context.get("hypothesisCalibration") if isinstance(relation_context, dict) else {}
+            ),
             "messageDeliveryProfile": sanitized_prompt_data(delivery_profile),
             "sourceAlertEvents": sanitized_prompt_data(source_alert_event_items(context)),
             "allAvailableData": all_data,

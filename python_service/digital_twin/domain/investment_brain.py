@@ -8,8 +8,8 @@ from typing import Dict, Iterable, List, Optional
 from .ontology_decision_state import DATA_STATES, REVIEW_LEVELS, VALIDATION_STATES
 
 
-INVESTMENT_BRAIN_VERSION = "ontology-investment-brain-v2"
-HYPOTHESIS_SET_VERSION = "typedb-causal-hypotheses-v2"
+INVESTMENT_BRAIN_VERSION = "ontology-investment-brain-v3"
+HYPOTHESIS_SET_VERSION = "typedb-causal-hypotheses-v3"
 SYSTEM_ABSTENTION_TEMPLATE_ID = "hypothesis-template:system.evidence-sufficiency.v1"
 META_INFERENCE_RELATION_TYPES = {
     "EXPLAINED_BY_TRACE",
@@ -213,6 +213,7 @@ class InvestmentHypothesis:
     approval_status: str = "approved-active"
     verification_status: str = "unverified-current-generation"
     status: str = "candidate"
+    historical_calibration: Dict[str, object] = field(default_factory=dict)
 
     def to_dict(self) -> Dict[str, object]:
         return camelize(asdict(self))
@@ -374,6 +375,14 @@ class DecisionEpisode:
                 approval_status=str(item.get("approvalStatus") or item.get("approval_status") or "approved-active"),
                 verification_status=str(item.get("verificationStatus") or item.get("verification_status") or "unverified-current-generation"),
                 status=str(item.get("status") or "candidate"),
+                historical_calibration=dict(
+                    item.get("historicalCalibration")
+                    or item.get("historical_calibration")
+                    or {}
+                ) if isinstance(
+                    item.get("historicalCalibration") or item.get("historical_calibration") or {},
+                    dict,
+                ) else {},
             ))
         hypothesis_set = HypothesisSet(
             hypothesis_set_id=str(hypothesis_payload.get("hypothesisSetId") or hypothesis_payload.get("hypothesis_set_id") or ""),

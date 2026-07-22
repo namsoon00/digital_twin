@@ -848,7 +848,7 @@ def compact_relation_context_for_ai(context: object) -> Dict[str, object]:
         "decisionState", "evidenceState", "whyNow", "signalConflicts",
         "inferenceTimeline", "inferenceGenerationId", "inferenceGenerationAt", "ruleboxRulesHash",
         "targetRole", "actionPolicy", "allowedActions", "blockedActions", "decision", "executionPlan",
-        "investmentBrain", "hypothesisTemplates", "hypothesisSet", "researchPlan", "selfQuestions", "epistemicState",
+        "investmentBrain", "hypothesisTemplates", "hypothesisSet", "hypothesisCalibration", "researchPlan", "selfQuestions", "epistemicState",
     ]
     compact = {key: context.get(key) for key in keep_keys if context.get(key) not in (None, "", [], {})}
     compact["activeRules"] = compact_rule_rows(context.get("activeRules") or context.get("matchedRules") or [], 16)
@@ -925,6 +925,7 @@ def build_notification_ai_gate_prompt(context: Dict[str, object]) -> str:
         "activeInvestmentOpinion과 executionPlan은 사전 계산 후보일 뿐 최종 답변이 아니다. 근거가 부족하거나 반대 근거가 더 강하면 다른 action을 선택할 수 있다.",
         "relationshipDatabaseInference.hypothesisSet에는 현재 TypeDB RuleBox에서 실제로 성립한 규칙별 경쟁 인과 가설과, 근거 충분성·반사실 검증을 위한 안전 가설이 있다. 고정된 위험/회복 문구로 가설을 만들어내지 말고 입력된 경쟁 가설을 비교한 뒤 action을 고른다.",
         "각 가설의 templateId, approvalStatus, causalPathIds, supportingEvidenceIds, counterEvidenceIds를 확인한다. supportingEvidenceIds와 counterEvidenceIds는 실제 입력 ID에서만 선택하고, 가정·무효화 조건·유효시각·검증 상태를 점검한다.",
+        "relationshipDatabaseInference.hypothesisCalibration은 현재 InferenceBox와 같은 ABox 세대에서 읽은 동일 종목·동일 가설 템플릿의 사후 결과 집계다. status=applied이고 각 가설의 historicalCalibration.calibrationStatus=usable일 때만 과거 검증 이력으로 언급한다. 이는 가격 예측이나 자동 매매 규칙이 아니며, 현재 TypeDB 근거보다 우선하지 않는다. outcomeState가 more-contradicted이면 같은 설명이 과거 결과와 자주 맞지 않았다는 점을 반대 근거와 다음 확인에 반영하되, 그 사실만으로 action을 고르지 않는다. 표본 부족, 세대 불일치, 미래 시각 기록은 근거로 사용하지 않는다.",
         "researchCycle이 있으면 investmentJudgmentEligible=true이고 reasoningRefreshed=true인 verifiedClaims만 새 판단 근거로 사용한다. rejectedClaims와 unappliedVerifiedClaims는 데이터 품질·재추론 실패를 설명하는 데만 사용하고 투자 방향의 근거로 승격하지 않는다. changedEvidenceCount가 0이면 기존 TypeDB 추론 세대를 새로운 사실처럼 해석하지 않는다.",
         "hypotheses 배열에 모든 입력 가설을 빠짐없이 평가하고 selectedHypothesisId에는 최종 action을 가장 잘 설명하는 가설 ID를 쓴다. 결론이 혼합형이면 불확실성 가설을 선택할 수 있다.",
         "unresolvedQuestions에는 결론을 바꿀 수 있지만 아직 답하지 못한 질문만 쓴다. epistemicSummary에는 무엇을 알고, 무엇을 모르며, 어떤 반증이 남았는지 한 문단으로 쓴다.",

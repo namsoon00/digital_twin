@@ -3,6 +3,7 @@ import re
 from typing import Dict, List, Optional, Tuple
 
 from .accounts import message_delivery_profile, normalize_message_delivery_level
+from .investment_brain import hypothesis_comparison_audit
 from .investment_strategy_guidance import merge_strategy_context, strategy_guidance_context
 from .notification_ai import (
     active_investment_opinion_value,
@@ -502,55 +503,45 @@ def hypothesis_context_payload(context: Dict[str, object]) -> Dict[str, object]:
     return hypothesis_set if isinstance(hypothesis_set, dict) else {}
 
 
-def normalized_hypothesis_reviews(
+def normalized_hypothesis_comparison(
     context: Dict[str, object],
     payload: Dict[str, object] = None,
-) -> Tuple[List[Dict[str, object]], str, List[str], str]:
+) -> Dict[str, object]:
     payload = payload if isinstance(payload, dict) else {}
     hypothesis_set = hypothesis_context_payload(context)
     candidates = [item for item in hypothesis_set.get("hypotheses") or [] if isinstance(item, dict)]
-    ai_rows = [item for item in payload.get("hypotheses") or [] if isinstance(item, dict)]
-    ai_by_id = {
-        str(item.get("hypothesisId") or item.get("id") or "").strip(): item
-        for item in ai_rows
-        if str(item.get("hypothesisId") or item.get("id") or "").strip()
-    }
+    audit = hypothesis_comparison_audit(
+        candidates,
+        [item for item in payload.get("hypotheses") or [] if isinstance(item, dict)],
+        payload.get("selectedHypothesisId") or payload.get("selected_hypothesis_id"),
+    )
+    review_by_id = {item.hypothesis_id: item for item in audit.reviews}
     reviews: List[Dict[str, object]] = []
     for candidate in candidates:
         hypothesis_id = str(candidate.get("hypothesisId") or "").strip()
-        ai = ai_by_id.get(hypothesis_id, {})
+        review = review_by_id.get(hypothesis_id)
         reviews.append({
             "hypothesisId": hypothesis_id,
             "templateId": str(candidate.get("templateId") or ""),
             "templateLabel": user_friendly_ai_text(candidate.get("templateLabel") or "", 240),
-            "claim": user_friendly_ai_text(ai.get("claim") or candidate.get("claim") or "", 320),
-            "stance": str(ai.get("stance") or candidate.get("stance") or "uncertain"),
-            "supportingEvidenceIds": user_friendly_ai_list(
-                ai.get("supportingEvidenceIds") or candidate.get("supportingEvidenceIds") or [],
-                12,
-            ),
-            "counterEvidenceIds": user_friendly_ai_list(
-                ai.get("counterEvidenceIds") or candidate.get("counterEvidenceIds") or [],
-                12,
-            ),
+            "claim": user_friendly_ai_text(candidate.get("claim") or "", 320),
+            "stance": str(candidate.get("stance") or "uncertain"),
+            "supportingEvidenceIds": user_friendly_ai_list(candidate.get("supportingEvidenceIds") or [], 12),
+            "counterEvidenceIds": user_friendly_ai_list(candidate.get("counterEvidenceIds") or [], 12),
             "causalPathIds": user_friendly_ai_list(candidate.get("causalPathIds") or [], 12),
             "requiredEvidenceTypes": user_friendly_ai_list(candidate.get("requiredEvidenceTypes") or [], 12),
             "approvalStatus": str(candidate.get("approvalStatus") or ""),
             "verificationStatus": str(candidate.get("verificationStatus") or ""),
-            "verdict": str(ai.get("verdict") or "unreviewed"),
-            "reasoning": user_friendly_ai_text(ai.get("reasoning") or "AI 응답에서 별도 비교 설명이 없어 TypeDB 근거 우선순위만 유지합니다.", 320),
+            "verdict": review.verdict if review else "unreviewed",
+            "reasoning": user_friendly_ai_text(
+                review.reasoning if review and review.reasoning else "AI 응답에서 가설별 비교 설명이 없습니다.",
+                320,
+            ),
+            "reviewedSupportingEvidenceIds": list(review.reviewed_supporting_evidence_ids) if review else [],
+            "reviewedCounterEvidenceIds": list(review.reviewed_counter_evidence_ids) if review else [],
         })
-    candidate_ids = {str(item.get("hypothesisId") or "") for item in reviews}
-    selected_id = str(payload.get("selectedHypothesisId") or payload.get("selected_hypothesis_id") or "").strip()
     relation_context = relation_context_value(context or {})
     brain = relation_context.get("investmentBrain") if isinstance(relation_context.get("investmentBrain"), dict) else {}
-    epistemic_state = brain.get("epistemicState") if isinstance(brain.get("epistemicState"), dict) else relation_context.get("epistemicState")
-    epistemic_state = epistemic_state if isinstance(epistemic_state, dict) else {}
-    if selected_id not in candidate_ids:
-        selected_id = str(epistemic_state.get("leadingHypothesisId") or "")
-    if selected_id not in candidate_ids and reviews:
-        supported = next((item for item in reviews if str(item.get("verdict") or "") == "supported"), None)
-        selected_id = str((supported or reviews[0]).get("hypothesisId") or "")
     unresolved = user_friendly_ai_list(
         payload.get("unresolvedQuestions")
         or payload.get("unresolved_questions")
@@ -565,7 +556,29 @@ def normalized_hypothesis_reviews(
         or "활성 TypeDB 인과 가설과 안전 가설을 함께 비교하고 다음 데이터에서 반증 여부를 다시 확인합니다.",
         320,
     )
-    return reviews, selected_id, unresolved, epistemic_summary
+    return {
+        "hypotheses": reviews,
+        "selectedHypothesisId": audit.selected_hypothesis_id,
+        "hypothesisComparisonState": audit.comparison_state,
+        "hypothesisSelectionSource": audit.selection_source,
+        "invalidHypothesisIds": audit.invalid_hypothesis_ids,
+        "invalidEvidenceIds": audit.invalid_evidence_ids,
+        "unresolvedQuestions": unresolved,
+        "epistemicSummary": epistemic_summary,
+    }
+
+
+def normalized_hypothesis_reviews(
+    context: Dict[str, object],
+    payload: Dict[str, object] = None,
+) -> Tuple[List[Dict[str, object]], str, List[str], str]:
+    comparison = normalized_hypothesis_comparison(context, payload)
+    return (
+        list(comparison.get("hypotheses") or []),
+        str(comparison.get("selectedHypothesisId") or ""),
+        list(comparison.get("unresolvedQuestions") or []),
+        str(comparison.get("epistemicSummary") or ""),
+    )
 
 def local_validated_ai_response(context: Dict[str, object], source: str = "local") -> NotificationAIValidatedResponse:
     context = dict(context or {})
@@ -594,7 +607,11 @@ def local_validated_ai_response(context: Dict[str, object], source: str = "local
             source=source,
         )
     relation_context = relation_context_value(context)
-    hypotheses, selected_hypothesis_id, unresolved_questions, epistemic_summary = normalized_hypothesis_reviews(context)
+    hypothesis_comparison = normalized_hypothesis_comparison(context)
+    hypotheses = list(hypothesis_comparison.get("hypotheses") or [])
+    selected_hypothesis_id = str(hypothesis_comparison.get("selectedHypothesisId") or "")
+    unresolved_questions = list(hypothesis_comparison.get("unresolvedQuestions") or [])
+    epistemic_summary = str(hypothesis_comparison.get("epistemicSummary") or "")
     execution_plan = _execution_plan_from_context(context)
     opinion = active_investment_opinion_value(context)
     lines = build_notification_ai_opinion(context).get("lines") or []
@@ -687,6 +704,8 @@ def local_validated_ai_response(context: Dict[str, object], source: str = "local
         strategy_guide={},
         hypotheses=hypotheses,
         selected_hypothesis_id=selected_hypothesis_id,
+        hypothesis_comparison_state=str(hypothesis_comparison.get("hypothesisComparisonState") or "unavailable"),
+        hypothesis_selection_source=str(hypothesis_comparison.get("hypothesisSelectionSource") or "not-selected"),
         unresolved_questions=unresolved_questions,
         epistemic_summary=epistemic_summary,
         source=source,
@@ -1050,11 +1069,6 @@ def validated_response_from_payload(
         warnings.append("출처 URL 또는 데이터 출처가 부족해 원문 확인이 필요합니다.")
         missing_impact.append("출처 URL 또는 데이터 출처가 부족해 원문 확인이 필요합니다.")
     precomputed_action = precomputed_action_value(context)
-    disagreement = disagreement_reason_text(precomputed_action, action, payload, evidence, counter)
-    if disagreement:
-        append_unique_text(counter, disagreement, 180)
-        if not (payload.get("disagreementReason") or payload.get("disagreement_reason")):
-            warnings.append("AI 판단이 사전 계산 후보와 달라 불일치 사유를 감사 로그에 기록했습니다.")
     validation_state, data_state, review_level, validation_label, validation_reasons = validation_state_for_response(
         context,
         len(raw_evidence),
@@ -1066,11 +1080,40 @@ def validated_response_from_payload(
     )
     if validation_state != "ready":
         warnings.append("AI 의견은 자료와 검증 조건이 모두 충족되지 않아 조건부로 사용합니다.")
-    hypotheses, selected_hypothesis_id, unresolved_questions, epistemic_summary = normalized_hypothesis_reviews(context, payload)
+    hypothesis_comparison = normalized_hypothesis_comparison(context, payload)
+    hypotheses = list(hypothesis_comparison.get("hypotheses") or [])
+    selected_hypothesis_id = str(hypothesis_comparison.get("selectedHypothesisId") or "")
+    unresolved_questions = list(hypothesis_comparison.get("unresolvedQuestions") or [])
+    epistemic_summary = str(hypothesis_comparison.get("epistemicSummary") or "")
     if len(hypotheses) < 3:
         warnings.append("경쟁 가설이 3개 미만이라 최종 판단의 가설 비교 범위가 제한됐습니다.")
-    if hypotheses and not [item for item in payload.get("hypotheses") or [] if isinstance(item, dict)]:
-        warnings.append("AI 응답에 가설별 비교가 없어 TypeDB 관계에서 만든 가설 평가를 보강했습니다.")
+    comparison_state = str(hypothesis_comparison.get("hypothesisComparisonState") or "unavailable")
+    selection_source = str(hypothesis_comparison.get("hypothesisSelectionSource") or "not-selected")
+    if hypotheses and comparison_state != "completed":
+        warnings.append("AI가 모든 경쟁 가설을 비교하지 않아 안전 가설을 잠정 선택했습니다.")
+    invalid_hypothesis_ids = list(hypothesis_comparison.get("invalidHypothesisIds") or [])
+    invalid_evidence_ids = list(hypothesis_comparison.get("invalidEvidenceIds") or [])
+    if invalid_hypothesis_ids:
+        warnings.append("AI 응답에 현재 TypeDB 가설 집합에 없는 가설 ID가 있어 무시했습니다.")
+    if invalid_evidence_ids:
+        warnings.append("AI 응답에 현재 가설이 참조하지 않는 근거 ID가 있어 무시했습니다.")
+    if hypotheses and comparison_state != "completed":
+        if action != "HOLD":
+            warnings.append("가설 비교가 끝나기 전의 실행 의견은 사용하지 않고 보류로 낮췄습니다.")
+        action = normalized_action_for_target(context, "HOLD")
+        summary = "경쟁 가설 비교가 끝나지 않아 지금은 실행 판단을 보류합니다."
+        opinion = "다음 데이터에서 각 가설의 근거와 반대 근거를 모두 비교한 뒤 다시 판단합니다."
+        append_unique_text(next_checks, "모든 경쟁 가설의 근거와 반대 근거 비교 완료", 180)
+        validation_state = "conditional"
+        validation_label = VALIDATION_STATE_LABELS["conditional"]
+        review_level = "check"
+        review_label = REVIEW_LEVEL_LABELS["check"]
+        append_unique_text(validation_reasons, "경쟁 가설 비교가 완료되지 않아 실행 판단을 보류했습니다.", 180)
+    disagreement = disagreement_reason_text(precomputed_action, action, payload, evidence, counter)
+    if disagreement:
+        append_unique_text(counter, disagreement, 180)
+        if not (payload.get("disagreementReason") or payload.get("disagreement_reason")):
+            warnings.append("AI 판단이 사전 계산 후보와 달라 불일치 사유를 감사 로그에 기록했습니다.")
     response = NotificationAIValidatedResponse(
         action=action,
         action_label=action_label_for_target(context, action),
@@ -1096,6 +1139,8 @@ def validated_response_from_payload(
         strategy_guide=normalized_strategy_guide_payload(context, payload),
         hypotheses=hypotheses,
         selected_hypothesis_id=selected_hypothesis_id,
+        hypothesis_comparison_state=comparison_state,
+        hypothesis_selection_source=selection_source,
         unresolved_questions=unresolved_questions,
         epistemic_summary=epistemic_summary,
         source=source,

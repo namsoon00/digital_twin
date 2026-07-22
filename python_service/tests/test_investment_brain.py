@@ -9,6 +9,7 @@ from digital_twin.domain.investment_brain import (
     DecisionEpisode,
     InvestmentQuestion,
     canonical_investment_timestamp,
+    decision_episode_from_context,
     hypothesis_set_from_relation_context,
 )
 from digital_twin.domain.investment_evidence_governance import ResearchRun, governed_evidence
@@ -419,6 +420,102 @@ class InvestmentBrainTest(unittest.TestCase):
         compact_prompt = build_notification_ai_gate_prompt(context)
         self.assertNotIn("GRAPH_RAG_DUPLICATE_SENTINEL", compact_prompt)
         self.assertLess(len(compact_prompt), 250000)
+
+    def test_incomplete_ai_comparison_uses_safety_hypothesis_and_rejects_unknown_evidence(self):
+        context = {
+            "messageType": "investmentInsight",
+            "accountId": "account-1",
+            "displayTarget": "삼성전자",
+            "referenceDate": "2026-07-19T01:00:00Z",
+            "ontologyRelationContext": relation_context(),
+        }
+        brain = hypothesis_set_from_relation_context(context["ontologyRelationContext"])
+        context["ontologyRelationContext"].update({
+            "investmentBrain": brain,
+            "hypothesisSet": brain["hypothesisSet"],
+            "researchPlan": brain["researchPlan"],
+        })
+        hypotheses = brain["hypothesisSet"]["hypotheses"]
+        risk = next(item for item in hypotheses if item["stance"] == "risk")
+        safety = next(item for item in hypotheses if item["approvalStatus"] == "approved-safety-policy")
+        response = validated_response_from_payload(context, {
+            "action": "SELL",
+            "summary": "위험 가설만 우세하다고 봤습니다.",
+            "opinion": "매도를 검토합니다.",
+            "evidence": ["relation-risk"],
+            "counterEvidence": ["relation-support"],
+            "hypotheses": [{
+                "hypothesisId": risk["hypothesisId"],
+                "verdict": "supported",
+                "reasoning": "위험 경로만 확인했습니다.",
+                "supportingEvidenceIds": ["relation-risk", "invented-evidence"],
+            }],
+            "selectedHypothesisId": risk["hypothesisId"],
+        })
+
+        self.assertEqual("partial", response.hypothesis_comparison_state)
+        self.assertTrue(response.hypothesis_selection_source.startswith("safety-fallback"))
+        self.assertEqual(safety["hypothesisId"], response.selected_hypothesis_id)
+        self.assertEqual("HOLD", response.action)
+        self.assertTrue(any("모든 경쟁 가설" in item for item in response.validation_warnings))
+        self.assertTrue(any("근거 ID" in item for item in response.validation_warnings))
+        reviewed_risk = next(item for item in response.hypotheses if item["hypothesisId"] == risk["hypothesisId"])
+        self.assertEqual(["relation-risk"], reviewed_risk["reviewedSupportingEvidenceIds"])
+
+    def test_complete_ai_comparison_is_persisted_with_selection_audit_in_abox(self):
+        context = {
+            "messageType": "investmentInsight",
+            "accountId": "account-1",
+            "displayTarget": "삼성전자",
+            "referenceDate": "2026-07-19T01:00:00Z",
+            "ontologyRelationContext": relation_context(),
+        }
+        brain = hypothesis_set_from_relation_context(context["ontologyRelationContext"])
+        context["ontologyRelationContext"].update({
+            "investmentBrain": brain,
+            "hypothesisSet": brain["hypothesisSet"],
+            "researchPlan": brain["researchPlan"],
+        })
+        hypotheses = brain["hypothesisSet"]["hypotheses"]
+        selected = next(item for item in hypotheses if item["stance"] == "risk")
+        response = validated_response_from_payload(context, {
+            "action": "TRIM",
+            "summary": "위험 근거가 지지 근거보다 더 직접적이라 일부 축소를 검토합니다.",
+            "opinion": "공시 본문 확인 전에는 일부만 줄이는 쪽으로 봅니다.",
+            "evidence": ["손실과 위험 관계가 함께 확인됐습니다."],
+            "counterEvidence": ["지지 관계가 남아 있습니다."],
+            "invalidationCondition": "위험 관계가 다음 추론 세대에서 사라집니다.",
+            "nextChecks": ["공시 본문 확인"],
+            "hypotheses": [{
+                "hypothesisId": item["hypothesisId"],
+                "verdict": "supported" if item["hypothesisId"] == selected["hypothesisId"] else "unresolved",
+                "reasoning": "현재 TypeDB 근거와 반대 근거를 비교했습니다.",
+                "supportingEvidenceIds": item["supportingEvidenceIds"],
+                "counterEvidenceIds": item["counterEvidenceIds"],
+            } for item in hypotheses],
+            "selectedHypothesisId": selected["hypothesisId"],
+            "unresolvedQuestions": ["공시 본문이 결론을 바꾸는가?"],
+            "epistemicSummary": "위험 가설은 현재 우세하지만 공시 본문 확인이 남아 있습니다.",
+        })
+
+        self.assertEqual("completed", response.hypothesis_comparison_state)
+        self.assertEqual("ai-comparison", response.hypothesis_selection_source)
+        episode = decision_episode_from_context(context, response.to_dict(), job_id="job-1")
+        self.assertIsNotNone(episode)
+        self.assertEqual("completed", episode.hypothesis_comparison_state)
+        self.assertEqual("ai-comparison", episode.hypothesis_selection_source)
+        self.assertEqual(selected["hypothesisId"], episode.selected_hypothesis_id)
+        self.assertEqual(len(hypotheses), len(episode.hypothesis_reviews))
+
+        graph = PortfolioOntology("account-1")
+        add_investment_brain_concepts(graph, "account-1", [episode.to_dict()])
+        episode_entity = next(item for item in graph.entities if item.kind == "decision-episode")
+        self.assertEqual("completed", episode_entity.properties["hypothesisComparisonState"])
+        contains = [item for item in graph.relations if item.relation_type == "CONTAINS_HYPOTHESIS"]
+        self.assertEqual(len(hypotheses), len(contains))
+        self.assertTrue(all("reviewVerdict" in item.properties for item in contains))
+        selection = next(item for item in graph.relations if item.relation_type == "SELECTS_HYPOTHESIS")
+        self.assertEqual("ai-comparison", selection.properties["selectionSource"])
 
     def test_decision_episode_round_trip_and_abox_projection(self):
         brain = hypothesis_set_from_relation_context(relation_context())

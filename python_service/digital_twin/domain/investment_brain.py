@@ -91,6 +91,8 @@ HYPOTHESIS_EVIDENCE_STATE_LABELS = {
     "unresolved": "추가 확인 필요",
     "blocked": "자료 문제로 판단 보류",
 }
+HYPOTHESIS_REVIEW_VERDICTS = ("supported", "weakened", "rejected", "unresolved", "unreviewed")
+HYPOTHESIS_COMPARISON_STATES = ("completed", "partial", "fallback", "invalid-selection", "unavailable")
 
 
 def known_state(value: object, allowed: Iterable[str], fallback: str) -> str:
@@ -217,6 +219,40 @@ class InvestmentHypothesis:
 
 
 @dataclass(frozen=True)
+class HypothesisReview:
+    """The AI's bounded assessment of one graph-derived hypothesis.
+
+    The hypothesis and its graph evidence remain immutable inputs.  A review
+    can only reference those inputs; it cannot introduce a new causal path or
+    evidence identifier into the decision record.
+    """
+
+    hypothesis_id: str
+    verdict: str = "unreviewed"
+    reasoning: str = ""
+    reviewed_supporting_evidence_ids: List[str] = field(default_factory=list)
+    reviewed_counter_evidence_ids: List[str] = field(default_factory=list)
+
+    def to_dict(self) -> Dict[str, object]:
+        return camelize(asdict(self))
+
+
+@dataclass(frozen=True)
+class HypothesisComparisonAudit:
+    reviews: List[HypothesisReview] = field(default_factory=list)
+    selected_hypothesis_id: str = ""
+    comparison_state: str = "unavailable"
+    selection_source: str = "not-selected"
+    invalid_hypothesis_ids: List[str] = field(default_factory=list)
+    invalid_evidence_ids: List[str] = field(default_factory=list)
+
+    def to_dict(self) -> Dict[str, object]:
+        payload = camelize(asdict(self))
+        payload["reviews"] = [item.to_dict() for item in self.reviews]
+        return payload
+
+
+@dataclass(frozen=True)
 class HypothesisSet:
     hypothesis_set_id: str
     subject_symbol: str
@@ -263,6 +299,9 @@ class DecisionEpisode:
     data_state: str
     validation_state: str
     selected_hypothesis_id: str = ""
+    hypothesis_reviews: List[HypothesisReview] = field(default_factory=list)
+    hypothesis_comparison_state: str = "unavailable"
+    hypothesis_selection_source: str = "not-selected"
     inference_generation_id: str = ""
     evidence_ids: List[str] = field(default_factory=list)
     counter_evidence_ids: List[str] = field(default_factory=list)
@@ -281,6 +320,7 @@ class DecisionEpisode:
         payload["engineVersion"] = INVESTMENT_BRAIN_VERSION
         payload["question"] = self.question.to_dict()
         payload["hypothesisSet"] = self.hypothesis_set.to_dict()
+        payload["hypothesisReviews"] = [item.to_dict() for item in self.hypothesis_reviews]
         payload["researchPlan"] = dict(self.research_plan or {})
         payload["researchAudit"] = dict(self.research_audit or {})
         payload["outcomes"] = [item.to_dict() for item in self.outcomes]
@@ -346,6 +386,29 @@ class DecisionEpisode:
             created_at=str(hypothesis_payload.get("createdAt") or utc_now_iso()),
             version=str(hypothesis_payload.get("version") or HYPOTHESIS_SET_VERSION),
         )
+        reviews = []
+        for item in payload.get("hypothesisReviews") or payload.get("hypothesis_reviews") or []:
+            if not isinstance(item, dict):
+                continue
+            reviews.append(HypothesisReview(
+                hypothesis_id=str(item.get("hypothesisId") or item.get("hypothesis_id") or ""),
+                verdict=known_state(
+                    item.get("verdict"),
+                    HYPOTHESIS_REVIEW_VERDICTS,
+                    "unreviewed",
+                ),
+                reasoning=str(item.get("reasoning") or ""),
+                reviewed_supporting_evidence_ids=list(
+                    item.get("reviewedSupportingEvidenceIds")
+                    or item.get("reviewed_supporting_evidence_ids")
+                    or []
+                ),
+                reviewed_counter_evidence_ids=list(
+                    item.get("reviewedCounterEvidenceIds")
+                    or item.get("reviewed_counter_evidence_ids")
+                    or []
+                ),
+            ))
         outcomes = []
         for item in payload.get("outcomes") or []:
             if not isinstance(item, dict):
@@ -377,6 +440,17 @@ class DecisionEpisode:
                 "conditional",
             ),
             selected_hypothesis_id=str(payload.get("selectedHypothesisId") or ""),
+            hypothesis_reviews=reviews,
+            hypothesis_comparison_state=known_state(
+                payload.get("hypothesisComparisonState") or payload.get("hypothesis_comparison_state"),
+                HYPOTHESIS_COMPARISON_STATES,
+                "unavailable",
+            ),
+            hypothesis_selection_source=str(
+                payload.get("hypothesisSelectionSource")
+                or payload.get("hypothesis_selection_source")
+                or "not-selected"
+            ),
             inference_generation_id=str(payload.get("inferenceGenerationId") or ""),
             evidence_ids=list(payload.get("evidenceIds") or []),
             counter_evidence_ids=list(payload.get("counterEvidenceIds") or []),
@@ -903,6 +977,137 @@ def relation_ids(rows: Iterable[Dict[str, object]]) -> List[str]:
     return unique_texts(values)
 
 
+def hypothesis_comparison_audit(
+    candidates: Iterable[Dict[str, object]],
+    ai_reviews: Iterable[Dict[str, object]] = None,
+    requested_selected_hypothesis_id: object = "",
+) -> HypothesisComparisonAudit:
+    """Validate a bounded AI comparison against graph-owned candidates.
+
+    An AI response may explain and choose among the current TypeDB hypotheses,
+    but it may not silently add a new hypothesis, causal trace, or evidence ID.
+    Incomplete comparisons fall back to an explicit safety hypothesis instead
+    of treating the first TypeDB rule as an AI decision.
+    """
+
+    candidate_rows = [dict(item) for item in candidates or [] if isinstance(item, dict)]
+    candidate_by_id = {
+        str(item.get("hypothesisId") or item.get("hypothesis_id") or "").strip(): item
+        for item in candidate_rows
+        if str(item.get("hypothesisId") or item.get("hypothesis_id") or "").strip()
+    }
+    review_rows = [dict(item) for item in ai_reviews or [] if isinstance(item, dict)]
+    review_by_id: Dict[str, Dict[str, object]] = {}
+    invalid_hypothesis_ids: List[str] = []
+    for row in review_rows:
+        hypothesis_id = str(row.get("hypothesisId") or row.get("hypothesis_id") or row.get("id") or "").strip()
+        if not hypothesis_id:
+            continue
+        if hypothesis_id not in candidate_by_id:
+            invalid_hypothesis_ids.append(hypothesis_id)
+            continue
+        if hypothesis_id not in review_by_id:
+            review_by_id[hypothesis_id] = row
+
+    invalid_evidence_ids: List[str] = []
+    reviews: List[HypothesisReview] = []
+    for hypothesis_id, candidate in candidate_by_id.items():
+        review = review_by_id.get(hypothesis_id, {})
+        supporting, invalid_supporting = bounded_hypothesis_evidence_ids(
+            review.get("supportingEvidenceIds") or review.get("supporting_evidence_ids") or [],
+            candidate.get("supportingEvidenceIds") or candidate.get("supporting_evidence_ids") or [],
+        )
+        counter, invalid_counter = bounded_hypothesis_evidence_ids(
+            review.get("counterEvidenceIds") or review.get("counter_evidence_ids") or [],
+            candidate.get("counterEvidenceIds") or candidate.get("counter_evidence_ids") or [],
+        )
+        invalid_evidence_ids.extend(invalid_supporting)
+        invalid_evidence_ids.extend(invalid_counter)
+        reviews.append(HypothesisReview(
+            hypothesis_id=hypothesis_id,
+            verdict=known_state(review.get("verdict"), HYPOTHESIS_REVIEW_VERDICTS, "unreviewed"),
+            reasoning=str(review.get("reasoning") or "").strip()[:800],
+            reviewed_supporting_evidence_ids=supporting,
+            reviewed_counter_evidence_ids=counter,
+        ))
+
+    requested_selected = str(requested_selected_hypothesis_id or "").strip()
+    valid_selected = requested_selected if requested_selected in candidate_by_id else ""
+    all_reviews_present = bool(candidate_by_id) and all(
+        item.hypothesis_id in review_by_id and item.verdict != "unreviewed"
+        for item in reviews
+    )
+    if valid_selected and all_reviews_present:
+        return HypothesisComparisonAudit(
+            reviews=reviews,
+            selected_hypothesis_id=valid_selected,
+            comparison_state="completed",
+            selection_source="ai-comparison",
+            invalid_hypothesis_ids=unique_texts(invalid_hypothesis_ids),
+            invalid_evidence_ids=unique_texts(invalid_evidence_ids),
+        )
+
+    if not candidate_by_id:
+        return HypothesisComparisonAudit(
+            reviews=reviews,
+            comparison_state="unavailable",
+            selection_source="not-selected",
+            invalid_hypothesis_ids=unique_texts(invalid_hypothesis_ids),
+            invalid_evidence_ids=unique_texts(invalid_evidence_ids),
+        )
+
+    reviewed_ids = {
+        item.hypothesis_id
+        for item in reviews
+        if item.verdict != "unreviewed"
+    }
+    if requested_selected and not valid_selected:
+        state = "invalid-selection"
+    elif reviewed_ids:
+        state = "partial"
+    else:
+        state = "fallback"
+    safety_id = safety_hypothesis_id(candidate_by_id)
+    return HypothesisComparisonAudit(
+        reviews=reviews,
+        selected_hypothesis_id=safety_id,
+        comparison_state=state,
+        selection_source=("safety-fallback-" + state) if safety_id else "not-selected-" + state,
+        invalid_hypothesis_ids=unique_texts(invalid_hypothesis_ids),
+        invalid_evidence_ids=unique_texts(invalid_evidence_ids),
+    )
+
+
+def bounded_hypothesis_evidence_ids(values: Iterable[object], allowed_values: Iterable[object]) -> tuple:
+    if isinstance(values, (str, bytes)):
+        values = [values]
+    if isinstance(allowed_values, (str, bytes)):
+        allowed_values = [allowed_values]
+    allowed = set(unique_texts(allowed_values, 100))
+    accepted: List[str] = []
+    rejected: List[str] = []
+    for value in unique_texts(values, 100):
+        if value in allowed:
+            accepted.append(value)
+        else:
+            rejected.append(value)
+    return accepted, rejected
+
+
+def safety_hypothesis_id(candidate_by_id: Dict[str, Dict[str, object]]) -> str:
+    for hypothesis_id, candidate in candidate_by_id.items():
+        template_id = str(candidate.get("templateId") or candidate.get("template_id") or "")
+        approval_status = str(candidate.get("approvalStatus") or candidate.get("approval_status") or "")
+        stance = str(candidate.get("stance") or "").lower()
+        if (
+            template_id.startswith("hypothesis-template:system.")
+            or approval_status == "approved-safety-policy"
+            or stance == "uncertain"
+        ):
+            return hypothesis_id
+    return ""
+
+
 def research_plan_for_hypotheses(
     question: InvestmentQuestion,
     hypotheses: List[InvestmentHypothesis],
@@ -1047,10 +1252,12 @@ def decision_episode_from_context(
         job_id or context.get("jobId"),
         validated_response.get("action"),
     )
-    selected_id = str(validated_response.get("selectedHypothesisId") or "")
-    valid_ids = {item.hypothesis_id for item in seed_episode.hypothesis_set.hypotheses}
-    if selected_id not in valid_ids:
-        selected_id = str((brain.get("epistemicState") or {}).get("leadingHypothesisId") or "")
+    comparison = hypothesis_comparison_audit(
+        [item.to_dict() for item in seed_episode.hypothesis_set.hypotheses],
+        validated_response.get("hypotheses") or [],
+        validated_response.get("selectedHypothesisId"),
+    )
+    selected_id = comparison.selected_hypothesis_id
     evidence_ids = unique_texts(
         item
         for hypothesis in seed_episode.hypothesis_set.hypotheses
@@ -1075,6 +1282,9 @@ def decision_episode_from_context(
         data_state=known_state(validated_response.get("dataState"), DATA_STATES, "partial"),
         validation_state=known_state(validated_response.get("validationState"), VALIDATION_STATES, "conditional"),
         selected_hypothesis_id=selected_id,
+        hypothesis_reviews=list(comparison.reviews),
+        hypothesis_comparison_state=comparison.comparison_state,
+        hypothesis_selection_source=comparison.selection_source,
         inference_generation_id=str(relation_context.get("inferenceGenerationId") or ""),
         evidence_ids=evidence_ids,
         counter_evidence_ids=counter_ids,

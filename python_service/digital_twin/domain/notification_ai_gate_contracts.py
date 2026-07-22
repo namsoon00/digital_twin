@@ -86,6 +86,8 @@ class NotificationAIValidatedResponse:
     strategy_guide: Dict[str, object] = field(default_factory=dict)
     hypotheses: List[Dict[str, object]] = field(default_factory=list)
     selected_hypothesis_id: str = ""
+    hypothesis_comparison_state: str = "unavailable"
+    hypothesis_selection_source: str = "not-selected"
     unresolved_questions: List[str] = field(default_factory=list)
     epistemic_summary: str = ""
     source: str = "local"
@@ -113,6 +115,8 @@ class NotificationAIValidatedResponse:
         payload["validationWarnings"] = payload.pop("validation_warnings")
         payload["strategyGuide"] = payload.pop("strategy_guide")
         payload["selectedHypothesisId"] = payload.pop("selected_hypothesis_id")
+        payload["hypothesisComparisonState"] = payload.pop("hypothesis_comparison_state")
+        payload["hypothesisSelectionSource"] = payload.pop("hypothesis_selection_source")
         payload["unresolvedQuestions"] = payload.pop("unresolved_questions")
         payload["epistemicSummary"] = payload.pop("epistemic_summary")
         payload["rawResponse"] = payload.pop("raw_response")

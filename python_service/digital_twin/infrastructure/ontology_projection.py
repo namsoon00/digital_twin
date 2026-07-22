@@ -901,6 +901,10 @@ class PortfolioOntologyProjectionRecorder:
         snapshot_seed = "|".join([str(snapshot.account_id or ""), as_of or "unknown"])
         decision_episodes = self.decision_episode_context(snapshot)
         metadata = dict(snapshot.metadata or {})
+        # Projection output is derived state, not a new market observation.
+        # Feeding the previous ABox result back into the next ABox makes an
+        # otherwise unchanged snapshot look materially different.
+        metadata.pop("ontology", None)
         account_context = metadata.get("accountContext") if isinstance(metadata.get("accountContext"), dict) else {}
         decision_performance = evaluate_decision_performance(
             decision_episodes,

@@ -23,6 +23,14 @@ def add_investment_brain_concepts(
         stock_id = entity_id("stock", symbol)
         question = episode.get("question") if isinstance(episode.get("question"), dict) else {}
         hypothesis_set = episode.get("hypothesisSet") if isinstance(episode.get("hypothesisSet"), dict) else {}
+        hypothesis_reviews = [
+            item for item in episode.get("hypothesisReviews") or []
+            if isinstance(item, dict) and str(item.get("hypothesisId") or "").strip()
+        ]
+        review_by_hypothesis_id = {
+            str(item.get("hypothesisId") or "").strip(): item
+            for item in hypothesis_reviews
+        }
         research_plan = episode.get("researchPlan") if isinstance(episode.get("researchPlan"), dict) else {}
         research_audit = episode.get("researchAudit") if isinstance(episode.get("researchAudit"), dict) else {}
         episode_id = add_entity(graph, "decision-episode", episode_key, str(episode.get("subjectName") or symbol) + " 판단 에피소드", {
@@ -33,6 +41,9 @@ def add_investment_brain_concepts(
             "dataState": episode.get("dataState"),
             "validationState": episode.get("validationState"),
             "selectedHypothesisId": episode.get("selectedHypothesisId"),
+            "hypothesisComparisonState": episode.get("hypothesisComparisonState"),
+            "hypothesisSelectionSource": episode.get("hypothesisSelectionSource"),
+            "hypothesisReviewCount": len(hypothesis_reviews),
             "inferenceGenerationId": episode.get("inferenceGenerationId"),
             "decidedAt": episode.get("decidedAt"),
             "status": episode.get("status"),
@@ -136,8 +147,15 @@ def add_investment_brain_concepts(
             })
             hypothesis_ids.append(hypothesis_id)
             hypothesis_id_by_key[hypothesis_key] = hypothesis_id
+            review = review_by_hypothesis_id.get(hypothesis_key, {})
             if set_id:
-                add_relation(graph, set_id, hypothesis_id, "CONTAINS_HYPOTHESIS", weight=1.0, properties={"source": "investment-brain-memory"})
+                add_relation(graph, set_id, hypothesis_id, "CONTAINS_HYPOTHESIS", weight=1.0, properties={
+                    "source": "investment-brain-memory",
+                    "reviewVerdict": review.get("verdict") or "unreviewed",
+                    "reviewReasoning": review.get("reasoning") or "",
+                    "reviewedSupportingEvidenceIds": review.get("reviewedSupportingEvidenceIds") or [],
+                    "reviewedCounterEvidenceIds": review.get("reviewedCounterEvidenceIds") or [],
+                })
             template_key = str(hypothesis.get("templateId") or "").strip()
             if template_key:
                 template_id = add_entity(graph, "hypothesis-template", template_key, str(hypothesis.get("templateLabel") or template_key), {
@@ -150,7 +168,12 @@ def add_investment_brain_concepts(
                 add_relation(graph, hypothesis_id, template_id, "INSTANTIATES_HYPOTHESIS_TEMPLATE", weight=1.0, properties={"source": "typedb-hypothesis-template"})
                 add_relation(graph, template_id, stock_id, "APPLICABLE_TO", weight=1.0, properties={"source": "typedb-current-generation"})
             if hypothesis_key == str(episode.get("selectedHypothesisId") or ""):
-                add_relation(graph, episode_id, hypothesis_id, "SELECTS_HYPOTHESIS", weight=1.0, properties={"source": "ai-hypothesis-competition"})
+                selection_source = str(episode.get("hypothesisSelectionSource") or "not-selected")
+                add_relation(graph, episode_id, hypothesis_id, "SELECTS_HYPOTHESIS", weight=1.0, properties={
+                    "source": "ai-hypothesis-competition" if selection_source == "ai-comparison" else "hypothesis-comparison-safety-fallback",
+                    "selectionSource": selection_source,
+                    "comparisonState": episode.get("hypothesisComparisonState") or "unavailable",
+                })
             for assumption_index, assumption in enumerate(hypothesis.get("assumptions") or []):
                 assumption_id = add_entity(graph, "assumption", hypothesis_key + ":" + str(assumption_index), str(assumption), {
                     "tboxClass": "Assumption",

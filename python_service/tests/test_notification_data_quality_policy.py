@@ -29,6 +29,7 @@ from digital_twin.application.notification_ai_gate_message import (
     prepend_execution_start_badge,
 )
 from digital_twin.domain.notification_templates import prepend_message_start_badge
+from digital_twin.domain.notification_ai import opinion_lines_for_type
 from digital_twin.domain.accounts import AccountConfig
 from digital_twin.domain.message_types import INVESTMENT_INSIGHT, WORK_HANDOFF, is_operations_delivery_message_type
 from digital_twin.domain.notifications import NotificationJob
@@ -359,6 +360,21 @@ class NotificationDataQualityPolicyTests(unittest.TestCase):
         self.assertFalse(is_operations_delivery_message_type(INVESTMENT_INSIGHT))
         self.assertFalse(is_operations_delivery_message_type("newsDigest"))
         self.assertFalse(is_operations_delivery_message_type("modelReview"))
+
+    def test_external_data_recovery_uses_recovery_ai_opinion(self):
+        lines = opinion_lines_for_type(
+            "externalDataConnection",
+            {
+                "apiSource": "marketSnapshot",
+                "apiStatus": "healthy",
+                "displayTarget": "시장 데이터 수집",
+                "notificationSignals": ["connectionRecovered"],
+                "pipelineHealth": {"state": "healthy", "previousState": "failed"},
+            },
+        )
+
+        self.assertIn("정상화", lines[0])
+        self.assertNotIn("연결 문제가 감지", "\n".join(lines))
 
     def test_notification_runner_routes_operational_jobs_to_operations_notifier(self):
         account = AccountConfig(

@@ -723,6 +723,20 @@ def opinion_lines_for_type(message_type: str, context: Dict[str, object]) -> Lis
             "다음 확인: 공시 원문과 접수번호, 장중 거래량 변화, 보유 수익률 기준 대응선을 함께 보세요.",
         ]
     if message_type == "externalDataConnection":
+        pipeline_health = context.get("pipelineHealth") if isinstance(context.get("pipelineHealth"), dict) else {}
+        state = str(context.get("apiStatus") or pipeline_health.get("state") or "").strip().lower()
+        previous_state = str(pipeline_health.get("previousState") or "").strip().lower()
+        signals = context.get("notificationSignals") if isinstance(context.get("notificationSignals"), list) else []
+        recovered = "connectionRecovered" in signals or (
+            state in {"healthy", "idle"} and previous_state in {"degraded", "failed", "stale"}
+        )
+        if recovered:
+            target = str(context.get("displayTarget") or context.get("apiSource") or "외부 데이터 수집").strip()
+            return [
+                "해석: " + target + "이 정상화됐습니다.",
+                "의견: 현재 수집과 공급자 상태가 정상이라 해당 데이터 기반 알림 신뢰도는 회복됐습니다.",
+                "다음 확인: 다음 수집 주기에도 같은 정상 상태가 유지되는지만 확인하세요.",
+            ]
         return [
             "해석: 외부 데이터 API 연결 문제가 감지됐습니다.",
             "의견: 해당 소스에 의존하는 알림은 일시적으로 신뢰도가 낮아질 수 있습니다.",

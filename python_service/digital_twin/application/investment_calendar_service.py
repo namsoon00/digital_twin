@@ -142,7 +142,10 @@ class InvestmentCalendarService:
         from_at = clean_text(query.get("from") or query.get("fromAt") or "")
         to_at = clean_text(query.get("to") or query.get("toAt") or "")
         if not from_at:
-            from_at = utc_iso(now - timedelta(days=7))
+            # The operational calendar opens on future work.  Historical
+            # events remain reachable through an explicit date range rather
+            # than appearing as active work by default.
+            from_at = utc_iso(now)
         if not to_at:
             to_at = utc_iso(now + timedelta(days=self.default_window_days()))
         limit = int_setting(query, "limit", 200, 1, 500)
@@ -154,10 +157,15 @@ class InvestmentCalendarService:
             event_type=clean_text(query.get("eventType") or query.get("event_type") or ""),
             limit=limit,
         )
+        summary = dict(self.repository.summary() or {})
+        summary["storedTotal"] = int(summary.get("total") or 0)
+        summary["total"] = len(events)
+        summary["upcoming"] = len(events)
+        summary["nextStartsAt"] = events[0].starts_at if events else ""
         return {
             "generatedAt": utc_now_iso(),
             "events": [event.to_dict() for event in events],
-            "summary": self.repository.summary(),
+            "summary": summary,
             "eventTypes": [{"type": key, "label": label} for key, label in EVENT_TYPE_LABELS.items()],
             "from": from_at,
             "to": to_at,

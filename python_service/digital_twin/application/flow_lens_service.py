@@ -203,6 +203,12 @@ def currency_for_item(item: Dict[str, object]) -> str:
 
 
 def base_market_value(item: Dict[str, object], rates: Dict[str, float]) -> float:
+    # Monitor snapshots retain their domain snake_case payload.  Prefer the
+    # KRW value when it is present because it already includes the provider's
+    # exchange rate and is the account's base-currency truth.
+    krw_value = number(item.get("marketValueKrw") or item.get("market_value_krw"))
+    if krw_value:
+        return max(0.0, krw_value)
     return max(0.0, value_in_base(number(item.get("marketValue")), currency_for_item(item), rates))
 
 
@@ -347,6 +353,34 @@ def merge_market_cache_fields(
 ) -> Dict[str, object]:
     """Overlay live cache data without changing the holding/watchlist role."""
     merged = dict(item or {})
+    # ``monitor_state`` is a domain snapshot, while web/API projections use
+    # camelCase.  Normalize once at the boundary so holdings never disappear
+    # from portfolio and decision projections merely because a cache overlay
+    # was not needed for that field.
+    aliases = {
+        "average_price": "averagePrice",
+        "current_price": "currentPrice",
+        "market_value": "marketValue",
+        "market_value_krw": "marketValueKrw",
+        "profit_loss": "profitLoss",
+        "profit_loss_krw": "profitLossKrw",
+        "profit_loss_rate": "profitLossRate",
+        "sellable_quantity": "sellableQuantity",
+        "change_rate": "changeRate",
+        "quote_source": "quoteSource",
+        "quote_status": "quoteStatus",
+        "quote_message": "quoteMessage",
+        "data_quality": "dataQuality",
+        "updated_at": "updatedAt",
+        "source_as_of": "sourceAsOf",
+        "source_fetched_at": "sourceFetchedAt",
+        "source_timestamp_state": "sourceTimestampState",
+        "exchange_rate": "exchangeRate",
+        "market_signal_coverage": "marketSignalCoverage",
+    }
+    for source_key, target_key in aliases.items():
+        if merged.get(target_key) in (None, "") and merged.get(source_key) not in (None, ""):
+            merged[target_key] = merged[source_key]
     symbol = str(merged.get("symbol") or "").strip().upper()
     quote = quote if isinstance(quote, dict) else {}
     signal = signal if isinstance(signal, dict) else {}
@@ -744,6 +778,9 @@ def build_toss_decision(
         "urgentCount": urgent_count,
         "holdingCount": len(holding_items),
         "watchCount": len(watch_items),
+        # Keep the decision projection aligned with the account projection.
+        # Consumers no longer need to infer holdings from a mixed items list.
+        "positions": holding_items,
         "items": items,
         "rules": [
             "투자 판단은 온톨로지 관계 상태와 실제 수치를 함께 사용합니다.",
@@ -806,7 +843,20 @@ def build_toss_lens_snapshot(
     strategy_model: StrategyModel = None,
 ) -> Dict[str, object]:
     positions = list(toss.get("positions") or [])
-    portfolio = dict(toss.get("portfolio") or {}) or build_toss_portfolio(positions, dict(toss.get("account") or {}), fx_rates)
+    computed_portfolio = build_toss_portfolio(positions, dict(toss.get("account") or {}), fx_rates)
+    source_portfolio = dict(toss.get("portfolio") or {})
+    # Monitor snapshots can intentionally carry only totals.  Keep those
+    # values authoritative while supplying missing derived exposure fields so
+    # downstream cards never depend on an optional payload key.
+    portfolio = {**computed_portfolio, **source_portfolio}
+    # A persisted monitor payload may contain the aggregate only.  Preserve a
+    # lightweight canonical holding list so portfolio, raw account and
+    # decision views have the same coverage.
+    portfolio["positions"] = [
+        dict(item)
+        for item in positions
+        if not is_cash_position(item) and number(item.get("marketValue")) > 0
+    ]
     watchlist = merge_watchlist_quotes(
         build_toss_watchlist(positions, watchlist_symbols, fallback_watchlist_symbols, enrich_symbol),
         list(toss.get("watchlistQuotes") or []),

@@ -369,6 +369,48 @@ class InvestmentCalendarServiceTests(unittest.TestCase):
         self.assertEqual("", candidate.starts_at)
         self.assertEqual({}, store.events)
 
+    def test_candidate_list_hides_undated_or_unstructured_automatic_candidates(self):
+        store = MemoryCandidateStore()
+        calendar = self.service(store=MemoryCalendarStore())
+        candidate_service = InvestmentCalendarCandidateService(store, calendar)
+        store.upsert({
+            "candidateId": "undated-auto",
+            "proposedEventId": "event-undated-auto",
+            "title": "제목 키워드 후보",
+            "eventType": "listing",
+            "status": "pending",
+            "payload": {"autoDetected": True, "officialSource": False},
+        })
+        store.upsert({
+            "candidateId": "dated-auto",
+            "proposedEventId": "event-dated-auto",
+            "title": "공식 일정 후보",
+            "eventType": "earnings",
+            "startsAt": "2026-08-20T00:00:00Z",
+            "status": "pending",
+            "payload": {"autoDetected": True, "officialSource": True},
+        })
+
+        result = candidate_service.list_candidates({"status": "pending", "limit": 20})
+
+        self.assertEqual(1, result["total"])
+        self.assertEqual(["dated-auto"], [item["candidateId"] for item in result["candidates"]])
+        self.assertEqual("undated-auto", result["hidden"][0]["candidateId"])
+
+    def test_non_official_keyword_news_does_not_create_automatic_candidate(self):
+        candidate = calendar_candidate_from_research_item({
+            "evidenceId": "research:AAPL:yahoo:keyword-hit",
+            "symbol": "AAPL",
+            "kind": "news",
+            "source": "Yahoo Finance",
+            "title": "Apple is added to a regional stock index after earnings",
+            "summary": "A news article mentions an index move but provides no official schedule.",
+            "url": "https://finance.yahoo.com/example/keyword-hit",
+            "publishedAt": "2026-07-15T00:00:00Z",
+        }, include_review=True)
+
+        self.assertIsNone(candidate)
+
     def test_review_candidate_approval_registers_calendar_event_and_feedback(self):
         calendar_store = MemoryCalendarStore()
         candidate_store = MemoryCandidateStore()

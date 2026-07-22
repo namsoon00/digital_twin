@@ -2384,6 +2384,7 @@
     var params = new URLSearchParams();
     params.set("limit", String(state.notificationJobsPageSize || 20));
     params.set("offset", String(state.notificationJobsOffset || 0));
+    params.set("scope", "investment");
     if (state.notificationJobStatusFilter && state.notificationJobStatusFilter !== "all") params.set("status", state.notificationJobStatusFilter);
     if (state.notificationJobTypeFilter && state.notificationJobTypeFilter !== "all") params.set("messageType", state.notificationJobTypeFilter);
     if (state.notificationJobSearch) params.set("query", state.notificationJobSearch);
@@ -4203,13 +4204,15 @@
     });
   }
 
-  function loadOntologyDiagnostics(force) {
+  function loadOntologyDiagnostics(force, full) {
     if (isStaticPreviewHost()) return Promise.resolve(null);
     if (state.ontologyDiagnosticsLoading && !force) return Promise.resolve(state.ontologyDiagnostics);
     state.ontologyDiagnosticsLoading = true;
     state.ontologyDiagnosticsError = "";
     if (state.snapshot) render();
-    return requestJson(ontologyDiagnosticsPath())
+    var path = ontologyDiagnosticsPath();
+    if (!full) path += (path.indexOf("?") >= 0 ? "&" : "?") + "quick=1";
+    return requestJson(path)
       .then(function (payload) {
         state.ontologyDiagnostics = payload || {};
         state.ontologyDiagnosticsError = "";
@@ -4245,7 +4248,7 @@
         showSnackbar(payload && payload.seeded ? "TypeDB 온톨로지를 시드했습니다." : "TypeDB 시드 결과를 확인하세요.", payload && payload.status === "error" ? "danger" : "success");
         state.ontologyInferenceLedgerLoaded = false;
         state.ontologyInferenceLedger = null;
-        return Promise.all([loadOntologyRulebox(true), loadOntologyDiagnostics(true)])
+        return Promise.all([loadOntologyRulebox(true), loadOntologyDiagnostics(true, true)])
           .then(function () { return payload; });
       })
       .catch(function (error) {
@@ -7881,12 +7884,13 @@
 
   function renderDashboard(snapshot) {
     var toss = snapshot.toss || { mode: "demo" };
-    var modeLabel = snapshot.preview ? "Pages preview" : (toss.mode === "live" ? "Toss live" : "Local server");
+    var freshness = accountFreshness(snapshot);
+    var modeLabel = snapshot.preview ? "Pages preview" : (toss.mode === "live" ? "Toss 연결" : "Local server");
     var modeClass = toss.mode === "live" ? "live" : "demo";
     var tab = activeTabMeta();
     var structure = pageStructureMeta(tab.id);
     var showHomeDeskbar = state.activeTab === "overview";
-    var subtitle = (structure.objective || tab.description || "운영") + " · 마지막 데이터 " + formatClock(snapshot.generatedAt);
+    var subtitle = (structure.objective || tab.description || "운영") + " · 마지막 데이터 " + formatClock(snapshot.generatedAt) + " · " + freshness.label + " (" + freshness.detail + ")";
     return [
       '<main class="shell console-shell ' + escapeHtml(webStyleContract.shellClass) + (showHomeDeskbar ? " shell-home" : " shell-page") + '" data-web-style="' + escapeHtml(webStyleContract.id) + '" data-web-style-version="' + escapeHtml(webStyleContract.version) + '" data-active-group="' + escapeHtml(structure.groupId) + '">',
       renderAppNavigation(tab, modeLabel, modeClass, snapshot),
@@ -7896,7 +7900,7 @@
       '<h1>' + escapeHtml(tab.label || "홈") + '</h1>',
       '<p class="subtle">' + escapeHtml(subtitle) + '</p>',
       '</div>',
-      renderTopbarSyncState(),
+      renderTopbarSyncState(snapshot),
       '</section>',
       showHomeDeskbar ? renderDeskbar(snapshot, modeLabel, modeClass) : '',
       '<section class="workspace-layout web-style-workspace" data-style-region="workspace">',
@@ -8642,7 +8646,7 @@
     ].join("");
   }
 
-  function renderTopbarSyncState() {
+  function renderTopbarSyncState(snapshot) {
     if (state.refreshing) {
       return [
         '<div class="toolbar topbar-actions">',
@@ -8661,6 +8665,14 @@
       return [
         '<div class="toolbar topbar-actions">',
         '<span class="status-pill demo">갱신 확인 필요</span>',
+        '</div>'
+      ].join("");
+    }
+    var freshness = accountFreshness(snapshot || state.snapshot || {});
+    if (freshness.tone === "warn") {
+      return [
+        '<div class="toolbar topbar-actions">',
+        '<span class="status-pill demo">' + escapeHtml(freshness.label + " · " + freshness.detail) + '</span>',
         '</div>'
       ].join("");
     }
@@ -8685,7 +8697,7 @@
     var relationCount = Number(abox.relationCount || strategy.relationCount || 0);
     return [
       '<section class="deskbar deskbar-full web-style-deskbar" data-style-region="deskbar" data-style-rail="full" aria-label="운영 상태 요약">',
-      renderDeskbarCell("Data", modeLabel, "Last " + formatClock(snapshot.generatedAt), modeClass),
+      renderDeskbarCell("Data", modeLabel, accountFreshness(snapshot).label + " · " + accountFreshness(snapshot).detail, accountFreshness(snapshot).tone === "warn" ? "demo" : modeClass),
       renderDeskbarCell("Portfolio", formatMoney(portfolio.total || 0), positions + " positions", "neutral"),
       renderDeskbarCell("Model", settingValue("modelName") || defaultSettings.modelName, "상태 계약 · 조건 기반", "neutral"),
       renderDeskbarCell("Ontology", (tbox.classes || []).length + " TBox / " + relationCount + " rel", (abox.entityCount || 0) + " ABox entities", "neutral"),
@@ -8772,6 +8784,7 @@
     var normalized = normalizeTabId(pageId || state.activeTab);
     var tab = tabById(normalized) || activeTabMeta();
     var activeSnapshot = snapshot || state.snapshot || {};
+    var freshness = accountFreshness(activeSnapshot);
     var profile = pageCommandProfile(normalized, activeSnapshot);
     var action = normalized === "overview" ? ["screen-info", "overview", "오늘의 데이터 기준"] : null;
     return [
@@ -8782,8 +8795,8 @@
       '</div>',
       '<p class="oa-console-command-objective">' + escapeHtml(profile.objective || tab.description || "") + '</p>',
       '<div class="oa-console-command-status">',
-      '<span class="status-pill ' + escapeHtml(state.snapshotFromCache ? "mock" : "live") + '">' + escapeHtml(state.refreshing ? "갱신 중" : (state.snapshotFromCache ? "직전 데이터" : "최신 데이터")) + '</span>',
-      '<em>' + escapeHtml(state.refreshing ? "데이터를 확인하고 있습니다" : (formatClock(activeSnapshot.generatedAt) || "갱신 시각 확인")) + '</em>',
+      '<span class="status-pill ' + escapeHtml(state.snapshotFromCache ? "mock" : (freshness.tone === "warn" ? "demo" : "live")) + '">' + escapeHtml(state.refreshing ? "갱신 중" : (state.snapshotFromCache ? "직전 화면" : freshness.label)) + '</span>',
+      '<em>' + escapeHtml(state.refreshing ? "데이터를 확인하고 있습니다" : freshness.detail) + '</em>',
       '</div>',
       '<div class="oa-console-command-actions">',
       renderInfoIconButton(normalized, "이 화면의 데이터 기준"),
@@ -10509,12 +10522,14 @@
     var audit = ontologyAuditPayload();
     var summary = audit.summary || {};
     var filters = state.ontologyAuditFilters || {};
+    var sampled = audit.summaryMode === "sampled";
+    var sampledValue = "확인 전";
     var cards = [
-      ["TBox", (audit.sections && audit.sections.tbox && audit.sections.tbox.total) || 0, "스키마 행"],
-      ["ABox", (audit.sections && audit.sections.abox && audit.sections.abox.total) || 0, "실체 행"],
-      ["RuleBox", summary.ruleCount || ((audit.sections && audit.sections.rulebox && audit.sections.rulebox.total) || 0), "규칙"],
-      ["Inference", summary.inferenceRelationCount || ((audit.sections && audit.sections.inferencebox && audit.sections.inferencebox.total) || 0), "추론 관계"],
-      ["Trace", (audit.sections && audit.sections.evidence && audit.sections.evidence.total) || 0, "근거 연결"],
+      ["TBox", sampled ? sampledValue : ((audit.sections && audit.sections.tbox && audit.sections.tbox.total) || 0), "스키마 행"],
+      ["ABox", sampled ? sampledValue : ((audit.sections && audit.sections.abox && audit.sections.abox.total) || 0), "실체 행"],
+      ["RuleBox", sampled ? sampledValue : (summary.ruleCount || ((audit.sections && audit.sections.rulebox && audit.sections.rulebox.total) || 0)), "규칙"],
+      ["Inference", sampled ? sampledValue : (summary.inferenceRelationCount || ((audit.sections && audit.sections.inferencebox && audit.sections.inferencebox.total) || 0)), "추론 관계"],
+      ["Trace", sampled ? sampledValue : ((audit.sections && audit.sections.evidence && audit.sections.evidence.total) || 0), "근거 연결"],
       ["Sync", summary.diagnosticsStatus || audit.status || "-", audit.storeLabel || audit.graphStore || "TypeDB"]
     ];
     return [
@@ -10552,6 +10567,7 @@
         ].join("");
       }).join(""),
       '</div>',
+      sampled ? '<p class="subtle">빠른 확인에서는 건수를 계산하지 않습니다. 필요한 영역의 상세 보기를 열어 TypeDB 행을 조회하세요.</p>' : '',
       '<div class="ontology-audit-section-grid">',
       ontologyAuditSectionOrder().map(function (section) {
         return renderOntologyAuditSectionCard(section.id);
@@ -10563,18 +10579,19 @@
 
   function renderOntologyAuditSectionCard(sectionId) {
     var section = ontologyAuditSection(sectionId);
+    var sampled = ontologyAuditPayload().summaryMode === "sampled";
     var rows = Array.isArray(section.rows) ? section.rows : [];
     var visible = rows.slice(0, 5);
     return [
       '<section class="ontology-audit-section-card"' + cardTypeAttrs("ledger-card") + '>',
       '<header>',
-      '<span><em>' + escapeHtml(section.label || ontologyAuditSectionLabel(sectionId)) + '</em><strong>' + escapeHtml(formatInteger(section.total || rows.length || 0)) + '</strong></span>',
+      '<span><em>' + escapeHtml(section.label || ontologyAuditSectionLabel(sectionId)) + '</em><strong>' + escapeHtml(sampled ? "-" : formatInteger(section.total || rows.length || 0)) + '</strong></span>',
       '<p>' + escapeHtml(section.description || "") + '</p>',
       '</header>',
       '<div class="ontology-audit-row-list">',
       visible.length ? visible.map(function (row, index) {
         return renderOntologyAuditRow(sectionId, row, index);
-      }).join("") : '<div class="ontology-empty">조회된 행이 없습니다.</div>',
+      }).join("") : '<div class="ontology-empty">' + escapeHtml(sampled ? "상세 보기에서 이 영역을 조회합니다." : "조회된 행이 없습니다.") + '</div>',
       '</div>',
       '<footer>',
       section.hasMore ? '<span>더 많은 행이 있습니다. 필터를 좁히거나 API offset으로 확인하세요.</span>' : '<span>현재 조회 범위 전체 표시</span>',
@@ -10991,9 +11008,9 @@
         flow: ["실적·거시·공시 일정", "투자 캘린더 원장", "알림 큐·온톨로지 요청"]
       },
       feed: {
-        steps: [["01", "영향", "호재·악재"], ["02", "근거", "본문 요약"], ["03", "소스", "수집 품질"]],
+        steps: [["01", "영향", "호재·악재"], ["02", "근거", "기사 요약"], ["03", "소스", "수집 품질"]],
         metrics: [["피드", (state.feed && state.feed.items ? state.feed.items.length : 0)], ["근거", ((currentResearchEvidence().summary || {}).total || 0)], ["오류", (state.feed && state.feed.errors ? state.feed.errors.length : 0)]],
-        flow: ["관심·보유 종목 뉴스/공시", "본문 요약·영향 판단", "투자 판단 근거"]
+        flow: ["관심·보유 종목 뉴스/공시", "기사 요약·영향 판단", "투자 판단 근거"]
       },
       system: {
         steps: [["01", "지도", "처음 보는 사람"], ["02", "데이터", "수집·저장"], ["03", "이벤트", "알림·추론"]],
@@ -11200,7 +11217,7 @@
         ["룰", "RuleBox·프롬프트", "운영 화면이 아니라 편집 화면으로 분리합니다.", "설정 레이어"]
       ],
       feed: [
-        ["영향", "호재·악재 뉴스", "리스트는 핵심 영향만, 본문 요약과 원문 근거는 상세로 봅니다.", "전체화면"],
+        ["영향", "호재·악재 뉴스", "리스트는 핵심 영향만, 기사 요약과 원문 근거는 상세로 봅니다.", "전체화면"],
         ["소스", "수집 채널·품질", "기본 화면에는 상태만 두고 채널/품질 원장은 상세로 엽니다.", "상세 레이어"]
       ],
       experiments: [
@@ -11323,7 +11340,7 @@
       feed: {
         tone: feedImpact.danger ? "danger" : (feedImpact.watch ? "watch" : "hold"),
         current: "호재 " + feedImpact.watch + " · 악재 " + feedImpact.danger + " · 중립 " + feedImpact.hold,
-        reason: "기사 제목보다 본문 요약과 주가 영향 방향을 먼저 판단합니다.",
+        reason: "기사 제목보다 기사 요약과 주가 영향 방향을 먼저 판단합니다.",
         action: "투자 판단에 반영",
         href: "?tab=modeling&strategy=evidence"
       },
@@ -16547,6 +16564,19 @@
   }
 
   function accountFreshness(snapshot) {
+    var provided = (snapshot || {}).dataFreshness;
+    if (provided && typeof provided === "object" && provided.status) {
+      var providedAge = provided.ageMinutes;
+      var providedMaxAge = provided.maxAgeMinutes;
+      var providedDetail = providedAge == null
+        ? String(provided.reason || "기준시각 없음")
+        : String(providedAge) + "분 전 · 기준 " + String(providedMaxAge || "-") + "분";
+      return {
+        label: provided.label || (provided.status === "fresh" ? "신선" : (provided.status === "stale" ? "데이터 지연" : "기준시각 없음")),
+        detail: providedDetail,
+        tone: provided.status === "fresh" ? "ok" : "warn"
+      };
+    }
     var generatedAt = (snapshot || {}).generatedAt || "";
     var age = timestampAgeMinutes(generatedAt);
     var maxAge = Number(settingValue("marketDataMaxAgeMinutes") || settingValue("dataFreshnessDefaultMaxAgeMinutes") || 30);
@@ -21638,7 +21668,7 @@
     return editorWorkDetailPayload(
       "News Impact",
       "영향 뉴스 전체 보기",
-      "기본 화면은 핵심 뉴스만, 상세 화면은 본문 요약·주가 영향·근거 원장을 함께 봅니다.",
+      "기본 화면은 핵심 뉴스만, 상세 화면은 기사 요약·주가 영향·근거 원장을 함께 봅니다.",
       '<div class="feed-impact-workspace-wide">' + renderFeedImpactInboxPanel(state.snapshot || {}, { limit: 16 }) + renderResearchEvidencePanel() + '</div>'
     );
   }
@@ -22911,35 +22941,42 @@
   function researchEvidenceKoreanSummary(item) {
     item = item || {};
     var payload = item.payload && typeof item.payload === "object" ? item.payload : {};
-    var summary = item.summaryKo || item.bodySummary || item.summary || item.description
-      || payload.summaryKo || payload.bodySummary || payload.summary || payload.description
-      || item.title || payload.title || "본문 요약이 아직 저장되지 않았습니다.";
+    var summary = item.articleSummaryKo || item.analysisSummary || item.summaryKo || item.bodySummary || item.summary || item.description
+      || payload.articleSummaryKo || payload.analysisSummary || payload.summaryKo || payload.bodySummary || payload.summary || payload.description
+      || item.title || payload.title || "기사 분석이 아직 준비되지 않았습니다.";
     var koreanLetters = (String(summary).match(/[가-힣]/g) || []).length;
     var latinLetters = (String(summary).match(/[A-Za-z]/g) || []).length;
-    if (latinLetters > Math.max(24, koreanLetters * 2)) return "본문 분석 요약을 준비 중입니다. 원문과 분석 결과는 상세에서 확인하세요.";
+    if (latinLetters > Math.max(24, koreanLetters * 2)) return "기사 분석을 준비 중입니다. 원문과 분석 결과는 상세에서 확인하세요.";
     return summary;
   }
 
   function researchEvidenceImpactMeta(item) {
-    var polarity = String((item || {}).polarity || (item || {}).sentiment || (item || {}).direction || "").toLowerCase();
+    item = item || {};
+    var payload = item.payload && typeof item.payload === "object" ? item.payload : {};
+    var explicitPolarity = String(item.stockImpactPolarity || payload.stockImpactPolarity || "").toLowerCase();
+    var hasExplicitImpact = ["risk", "support", "context", "mixed", "neutral"].indexOf(explicitPolarity) >= 0;
+    var polarity = String(explicitPolarity || item.polarity || item.sentiment || item.direction || "").toLowerCase();
     var corpus = researchEvidenceTextCorpus(item || {});
     var positive = /호재|개선|상향|수주|계약|성장|흑자|회복|증가|강세|기대|beat|upgrade|growth|record|demand/.test(corpus);
     var negative = /악재|부진|하향|소송|규제|손실|적자|감소|약세|리콜|제재|miss|downgrade|lawsuit|weak|recall/.test(corpus);
     var tone = "hold";
-    if (["risk", "negative", "bearish", "downside"].indexOf(polarity) >= 0 || negative) {
+    if (["risk", "negative", "bearish", "downside"].indexOf(polarity) >= 0 || (!hasExplicitImpact && negative)) {
       tone = "danger";
-    } else if (["support", "positive", "bullish", "upside"].indexOf(polarity) >= 0 || positive) {
+    } else if (["support", "positive", "bullish", "upside"].indexOf(polarity) >= 0 || (!hasExplicitImpact && positive)) {
       tone = "watch";
     }
-    var label = tone === "watch" ? "호재" : (tone === "danger" ? "악재" : "중립");
+    var validationState = researchEvidenceState(item, "validationState", "conditional");
+    var label = item.stockImpactLabel || payload.stockImpactLabel || (tone === "watch" ? "호재" : (tone === "danger" ? "악재" : (hasExplicitImpact ? "중립" : "분석 대기")));
     var relevanceState = researchEvidenceState(item, "relevanceState", "context");
     var materialityState = researchEvidenceState(item, "materialityState", "notable");
     var sourceTrustState = researchEvidenceState(item, "sourceTrustState", "standard");
-    var summary = tone === "watch"
+    var summary = item.stockImpactReasonKo || payload.stockImpactReasonKo || (tone === "watch"
       ? "주가에는 긍정적인 기사입니다. 실적, 업황, 수요, 계약, 정책 기대가 실제 가격과 거래량에 이어지는지 확인합니다."
       : (tone === "danger"
         ? "주가에는 부정적인 기사입니다. 실적 둔화, 비용, 규제, 수요 약화 같은 리스크 점검 요인으로 볼 수 있습니다."
-        : "주가 영향은 아직 중립입니다. 단독 기사만으로 방향을 정하기보다 시세와 수급 변화가 같이 올라오는지 확인해야 합니다.");
+        : (hasExplicitImpact
+          ? "주가 영향은 아직 중립입니다. 단독 기사만으로 방향을 정하기보다 시세와 수급 변화가 같이 올라오는지 확인해야 합니다."
+          : "기사 분석이 아직 완료되지 않았습니다. 영향 방향은 상세 근거가 확인되기 전까지 판단하지 않습니다.")));
     return {
       tone: tone,
       label: label,
@@ -22949,6 +22986,7 @@
       materialityLabel: newsStateSettingLabel("materiality", materialityState),
       sourceTrustState: sourceTrustState,
       sourceTrustLabel: newsStateSettingLabel("trust", sourceTrustState),
+      validationState: validationState,
       summary: summary
     };
   }
@@ -23010,7 +23048,7 @@
       '<div>',
       '<p class="label">Impact Inbox</p>',
       '<h2>' + escapeHtml(options.portfolioOnly ? "내 종목 영향 인박스" : "투자 영향 인박스") + '</h2>',
-      '<span>뉴스·공시 본문 요약을 먼저 읽고 종목별 영향, 출처, 데이터 상태를 함께 구분합니다.</span>',
+      '<span>뉴스·공시 기사 요약을 먼저 읽고 종목별 영향, 출처, 데이터 상태를 함께 구분합니다.</span>',
       '</div>',
       '<div class="feed-impact-metrics" aria-label="주가 영향 요약">',
       renderFeedImpactMetric("호재", good, "watch"),
@@ -23022,10 +23060,10 @@
       items.length ? '<div class="feed-impact-workbench"><div class="feed-impact-grid">' + items.map(renderFeedImpactCard).join("") + '</div>' + renderResearchEvidenceDetailPanel(items, "기사 상세를 선택하세요") + '</div>' : (state.researchEvidenceLoading ? renderEmptyState({
         tone: "watch",
         label: "Evidence",
-        title: "기사 본문 요약을 불러오고 있습니다",
+        title: "기사 요약을 불러오고 있습니다",
         description: "마지막 성공 데이터가 있으면 먼저 표시하고, 새 결과가 도착하면 영향 인박스를 갱신합니다.",
-        meta: ["본문 요약", "주가 영향", "출처"]
-      }) : '<p class="subtle feed-impact-empty">저장된 기사 본문 요약이 아직 없습니다. 피드 설정에서 뉴스 아카이브를 켜거나 근거 새로고침을 실행하면 이곳에 주가 영향 요약이 표시됩니다.</p>'),
+        meta: ["기사 요약", "주가 영향", "출처"]
+      }) : '<p class="subtle feed-impact-empty">저장된 기사 분석이 아직 없습니다. 피드 설정에서 뉴스 아카이브를 켜거나 근거 새로고침을 실행하면 이곳에 주가 영향 요약이 표시됩니다.</p>'),
       '</article>'
     ].join("");
   }
@@ -23073,7 +23111,7 @@
       '<b>' + escapeHtml(impact.materialityLabel) + '</b>',
       '</div>',
       '<div class="feed-impact-body">',
-      '<p><strong>본문 요약</strong> ' + escapeHtml(summary) + '</p>',
+      '<p><strong>기사 요약</strong> ' + escapeHtml(summary) + '</p>',
       '<h3>주가 영향: ' + escapeHtml(impact.label) + ' · ' + escapeHtml(researchEvidenceKindLabel(item.kind)) + '</h3>',
       '<div class="feed-impact-tags">',
       '<span>' + escapeHtml(impact.sourceTrustLabel) + '</span>',
@@ -23106,8 +23144,8 @@
         tone: "muted",
         label: "Detail",
         title: emptyTitle || "상세 항목을 선택하세요",
-        description: "목록은 판단에 필요한 최소 정보만 보여주고, 기사 본문 요약·주가 영향 분석·출처는 상세에서 확인합니다.",
-        meta: ["본문 요약", "주가 영향", "출처"]
+        description: "목록은 판단에 필요한 최소 정보만 보여주고, 기사 요약·주가 영향 분석·출처는 상세에서 확인합니다.",
+        meta: ["기사 요약", "주가 영향", "출처"]
       }),
       '</aside>'
     ].join("");
@@ -23134,7 +23172,7 @@
       renderNotificationDetailMetric("데이터", sourceMeta.dataLabel, sourceMeta.tone),
       '</div>',
       '<section class="inline-detail-block primary">',
-      '<strong>본문 요약</strong>',
+      '<strong>기사 요약</strong>',
       '<p>' + escapeHtml(summary) + '</p>',
       '</section>',
       '<section class="inline-detail-block">',
@@ -23184,7 +23222,7 @@
         '</div>',
         '</section>',
         '<section class="work-detail-section primary">',
-        '<strong>본문 요약</strong>',
+        '<strong>기사 요약</strong>',
         '<p>' + escapeHtml(summary) + '</p>',
         '</section>',
         '<section class="work-detail-section">',
@@ -23338,7 +23376,7 @@
       '<span>' + escapeHtml(displayName) + (symbol && displayName !== symbol ? ' <em>' + escapeHtml(symbol) + '</em>' : '') + '</span>',
       '<span>' + escapeHtml(researchEvidenceKindLabel(item.kind)) + '</span>',
       '</div>',
-      '<p><strong>본문 요약</strong> ' + escapeHtml(summary) + '</p>',
+      '<p><strong>기사 요약</strong> ' + escapeHtml(summary) + '</p>',
       '<h3>주가 영향: ' + escapeHtml(impact.label) + ' · ' + escapeHtml(impact.materialityLabel) + '</h3>',
       '<div class="research-evidence-metrics">',
       '<span>방향 <strong>' + escapeHtml(researchEvidencePolarityLabel(item.polarity)) + '</strong></span>',
@@ -23712,7 +23750,7 @@
       },
       {
         tab: "뉴스·근거",
-        result: "기사 본문 요약, 호재/악재 판단, 수집 품질",
+        result: "기사 요약, 호재/악재 판단, 수집 품질",
         setting: "뉴스 아카이브, 공시·외부 원천, 중요도 게이트",
         href: "?tab=feed&mode=settings&feed=settings",
         action: "피드 설정"
@@ -24750,7 +24788,7 @@
         state.ontologyInferenceLedgerLoaded = false;
         render();
         Promise.all([
-          loadOntologyDiagnostics(true),
+          loadOntologyDiagnostics(true, false),
           loadOntologyInferenceLedger(true),
           loadOntologyAudit(true)
         ]);
@@ -24849,7 +24887,7 @@
     var refreshOntologyDiagnosticsButton = app.querySelector('[data-action="refresh-ontology-diagnostics"]');
     if (refreshOntologyDiagnosticsButton) {
       refreshOntologyDiagnosticsButton.addEventListener("click", function () {
-        loadOntologyDiagnostics(true).then(function () {
+        loadOntologyDiagnostics(true, true).then(function () {
           showSnackbar("TypeDB 진단을 다시 읽었습니다.");
         });
       });

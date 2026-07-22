@@ -770,6 +770,10 @@ def apply_news_ai_analysis(evidence: ResearchEvidence, analysis_payload: Dict[st
         payload.update(conflict_payload)
     payload["aiAnalysis"] = analysis_dict
     payload["articleAiAnalysisVersion"] = NEWS_AI_ANALYSIS_VERSION
+    # Persist the read boundary independently of articleFacts.  Legacy RSS
+    # rows often have no fact packet, but the UI still must distinguish a
+    # body read from a title/RSS interpretation.
+    payload["articleReadStatus"] = "body" if str(analysis_dict.get("readScope") or "") == "body" else "feed-summary"
     payload["articleSummaryKo"] = summary.get("briefKo") or summary.get("oneLineKo") or payload.get("articleSummaryKo") or evidence.summary
     payload["stockImpact"] = STOCK_IMPACT_VALUES.get(impact_polarity, "neutral")
     payload["stockImpactLabel"] = analysis_dict.get("impactLabelKo") or IMPACT_LABELS.get(impact_polarity, "중립")

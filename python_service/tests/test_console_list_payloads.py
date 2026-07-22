@@ -53,3 +53,21 @@ class ConsoleListPayloadTests(unittest.TestCase):
         self.assertNotIn("articleFacts", payload)
         self.assertNotIn("aiAnalysis", payload)
         self.assertNotIn("ontologyRelations", payload)
+
+    def test_research_list_projects_missing_legacy_news_analysis(self):
+        evidence = ResearchEvidence(
+            evidence_id="evidence-legacy-news",
+            symbol="AAPL",
+            kind="news",
+            source="Yahoo Finance",
+            title="Apple demand outlook remains mixed",
+            summary="Apple demand outlook remains mixed after the latest market update.",
+            raw_payload={"relationScope": "direct"},
+        )
+
+        payload = research_evidence_list_payload(evidence)
+
+        self.assertEqual("legacy-projection", payload["analysisSource"])
+        self.assertTrue(payload["articleSummaryKo"])
+        self.assertEqual("feed-summary", payload["articleReadStatus"])
+        self.assertIn(payload["stockImpactPolarity"], {"support", "risk", "context"})

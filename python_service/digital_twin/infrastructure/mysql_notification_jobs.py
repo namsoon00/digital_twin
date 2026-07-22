@@ -2,7 +2,17 @@ from datetime import datetime, timedelta, timezone
 from typing import Dict, List, Optional, Tuple
 
 from ..domain.data_freshness import evaluate_notification_data_freshness, sanitize_notification_context_for_freshness
-from ..domain.message_types import INVESTMENT_INSIGHT, NEWS_DIGEST, OPERATOR_REASONING_REPORT
+from ..domain.message_types import (
+    HOLDING_TIMING,
+    INVESTMENT_CALENDAR_REMINDER,
+    INVESTMENT_INSIGHT,
+    MODEL_BUY,
+    MODEL_SELL,
+    NEWS_DIGEST,
+    OPERATOR_REASONING_REPORT,
+    WATCHLIST_BUY_CANDIDATE,
+    WATCHLIST_ONTOLOGY_SIGNAL,
+)
 from ..domain.notification_rules import (
     DEFAULT_NOTIFICATION_RULES,
     NotificationRuleConfig,
@@ -72,20 +82,9 @@ class MySQLNotificationJobStore(MySQLOperationalConnection):
         message_type: str = "",
         status: str = "",
         query: str = "",
+        scope: str = "all",
     ) -> Tuple[List[NotificationJob], int]:
-        clauses = []
-        params = []
-        if str(message_type or "").strip():
-            clauses.append("message_type = %s")
-            params.append(str(message_type or "").strip())
-        if str(status or "").strip():
-            clauses.append("status = %s")
-            params.append(str(status or "").strip())
-        needle = str(query or "").strip()
-        if needle:
-            clauses.append("(text LIKE %s OR payload_json LIKE %s OR message_type LIKE %s)")
-            like = "%" + needle[:120] + "%"
-            params.extend([like, like, like])
+        clauses, params = self._recent_filters(message_type, status, query, scope)
         where = (" WHERE " + " AND ".join(clauses)) if clauses else ""
         page_size = max(1, min(100, int(limit or 40)))
         page_offset = max(0, int(offset or 0))
@@ -107,21 +106,10 @@ class MySQLNotificationJobStore(MySQLOperationalConnection):
         message_type: str = "",
         status: str = "",
         query: str = "",
+        scope: str = "all",
     ) -> Tuple[List[NotificationJob], int, Dict[str, int]]:
         """Read the visible ledger page and global status totals from one connection."""
-        clauses = []
-        params = []
-        if str(message_type or "").strip():
-            clauses.append("message_type = %s")
-            params.append(str(message_type or "").strip())
-        if str(status or "").strip():
-            clauses.append("status = %s")
-            params.append(str(status or "").strip())
-        needle = str(query or "").strip()
-        if needle:
-            clauses.append("(text LIKE %s OR payload_json LIKE %s OR message_type LIKE %s)")
-            like = "%" + needle[:120] + "%"
-            params.extend([like, like, like])
+        clauses, params = self._recent_filters(message_type, status, query, scope)
         where = (" WHERE " + " AND ".join(clauses)) if clauses else ""
         page_size = max(1, min(100, int(limit or 40)))
         page_offset = max(0, int(offset or 0))
@@ -135,11 +123,50 @@ class MySQLNotificationJobStore(MySQLOperationalConnection):
                 params + [page_size, page_offset],
             ).fetchall()
             summary_rows = connection.execute(
-                "SELECT status, COUNT(*) AS count FROM notification_jobs GROUP BY status"
+                "SELECT status, COUNT(*) AS count FROM notification_jobs" + where + " GROUP BY status",
+                params,
             ).fetchall()
         total = int(total_row["count"] or 0) if total_row else 0
         summary = {row["status"]: int(row["count"] or 0) for row in summary_rows}
         return [self.job_from_row(row) for row in rows], total, summary
+
+    @staticmethod
+    def _recent_filters(
+        message_type: str = "",
+        status: str = "",
+        query: str = "",
+        scope: str = "all",
+    ) -> Tuple[List[str], List[object]]:
+        clauses = []
+        params = []
+        normalized_scope = str(scope or "all").strip().lower()
+        investment_types = (
+            INVESTMENT_INSIGHT,
+            NEWS_DIGEST,
+            INVESTMENT_CALENDAR_REMINDER,
+            MODEL_BUY,
+            MODEL_SELL,
+            WATCHLIST_BUY_CANDIDATE,
+            WATCHLIST_ONTOLOGY_SIGNAL,
+            HOLDING_TIMING,
+        )
+        if normalized_scope in {"investment", "operations"}:
+            operator = "IN" if normalized_scope == "investment" else "NOT IN"
+            placeholders = ",".join(["%s"] * len(investment_types))
+            clauses.append("message_type " + operator + " (" + placeholders + ")")
+            params.extend(investment_types)
+        if str(message_type or "").strip():
+            clauses.append("message_type = %s")
+            params.append(str(message_type or "").strip())
+        if str(status or "").strip():
+            clauses.append("status = %s")
+            params.append(str(status or "").strip())
+        needle = str(query or "").strip()
+        if needle:
+            clauses.append("(text LIKE %s OR payload_json LIKE %s OR message_type LIKE %s)")
+            like = "%" + needle[:120] + "%"
+            params.extend([like, like, like])
+        return clauses, params
 
     def get(self, job_id: str) -> Optional[NotificationJob]:
         target = str(job_id or "").strip()

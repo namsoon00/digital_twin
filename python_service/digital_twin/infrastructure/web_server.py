@@ -49,11 +49,13 @@ from ..domain.events import (
 from ..domain.message_types import (
     DEFAULT_ALERT_RULES,
     DEFAULT_CADENCE,
+    INVESTMENT_INSIGHT,
     MESSAGE_TYPE_EMOJIS,
     public_message_catalog,
     user_managed_notification_types,
     visible_notification_template_types,
 )
+from ..domain.data_freshness import age_minutes
 from ..domain.market_hours import DEFAULT_MARKET_HOUR_SESSIONS
 from ..domain.monitoring import RealtimeMonitor
 from ..domain.notification_rules import CONDITION_TYPE_LABELS, NotificationRuleConfig
@@ -69,6 +71,8 @@ from ..domain.investment_ubiquitous_language import (
     propose_investment_language_changes,
     validate_investment_language_registry,
 )
+from ..domain.investment_research import NewsCollectionTarget
+from ..domain.news_ai_analysis import local_news_ai_analysis, apply_news_ai_analysis, news_ai_analysis_is_current
 from ..domain.parsing import parse_assignments
 from ..domain.portfolio import utc_now_iso
 from ..domain.symbol_universe import symbol_search_symbol_candidates
@@ -119,6 +123,36 @@ NON_CADENCE_MESSAGE_GUIDES = {
 
 def now() -> str:
     return utc_now_iso()
+
+
+def flow_lens_data_freshness(generated_at: object, settings: Dict[str, object] = None) -> Dict[str, object]:
+    """Expose one freshness contract for every Flow Lens consumer.
+
+    ``toss.mode`` describes the provider connection, not the age of the
+    monitor projection.  Keeping this calculation in the API prevents each
+    screen from treating an old live connection as current market data.
+    """
+    settings = settings or {}
+    try:
+        max_age = int(float(settings.get("marketDataMaxAgeMinutes") or settings.get("dataFreshnessDefaultMaxAgeMinutes") or 30))
+    except (TypeError, ValueError):
+        max_age = 30
+    max_age = max(1, min(1440, max_age))
+    age = age_minutes(generated_at)
+    if age is None:
+        status, label, reason = "unknown", "기준시각 없음", "스냅샷 생성 시각이 없습니다."
+    elif age > max_age:
+        status, label, reason = "stale", "데이터 지연", "최근 스냅샷이 신선도 기준을 넘었습니다."
+    else:
+        status, label, reason = "fresh", "데이터 신선", "최근 스냅샷이 신선도 기준 안에 있습니다."
+    return {
+        "status": status,
+        "label": label,
+        "reason": reason,
+        "ageMinutes": age,
+        "maxAgeMinutes": max_age,
+        "generatedAt": str(generated_at or ""),
+    }
 
 
 WEBSOCKET_GUID = "258EAFA5-E914-47DA-95CA-C5AB0DC85B11"
@@ -871,6 +905,15 @@ def run_ontology_rulebox_payload(payload: Dict[str, object]) -> Dict[str, object
 
 def ontology_diagnostics_payload(query: Dict[str, List[str]]) -> Dict[str, object]:
     settings = runtime_settings()
+    if request_bool(first_query(query, "quick"), False):
+        return {
+            "status": "deferred",
+            "mode": "quick",
+            "generatedAt": now(),
+            "graphStore": "typedb",
+            "reason": "초기 화면은 TypeDB 전체 진단을 실행하지 않습니다. 상세 진단 버튼에서 저장소 행과 추론 상태를 확인합니다.",
+            "detailAvailable": True,
+        }
     symbols = [
         item.strip()
         for item in str(first_query(query, "symbols") or first_query(query, "symbol") or "").split(",")
@@ -1387,7 +1430,7 @@ def ontology_audit_payload(query: Dict[str, List[str]], requested_section: str =
         )
 
     totals = {key: value.get("total", 0) for key, value in sections.items()}
-    status = "error" if graph_error else "ok"
+    status = "error" if graph_error else ("sampled" if fast_compact_summary else "ok")
     if not getattr(repo, "address", "") and all((sections.get(key) or {}).get("total", 0) == 0 for key in ["tbox", "abox", "inferencebox"] if key in sections):
         status = "disabled"
     return {
@@ -1406,11 +1449,12 @@ def ontology_audit_payload(query: Dict[str, List[str]], requested_section: str =
             "worldId": world_id,
             "section": section_filter or "all",
         },
+        "summaryMode": "sampled" if fast_compact_summary else "full",
         "summary": {
-            "sectionTotals": totals,
-            "graphRowCount": len(graph_rows),
-            "entityCount": len(graph_entities),
-            "relationCount": len(graph_relations),
+            "sectionTotals": totals if not fast_compact_summary else {},
+            "graphRowCount": len(graph_rows) if not fast_compact_summary else None,
+            "entityCount": len(graph_entities) if not fast_compact_summary else None,
+            "relationCount": len(graph_relations) if not fast_compact_summary else None,
             "ruleCount": rulebox.get("ruleCount") or len(rulebox.get("rules") or []) or (sections.get("rulebox") or {}).get("total", 0),
             "inferenceRelationCount": inferencebox.get("relationCount") or (sections.get("inferencebox") or {}).get("relationCount", 0),
             "inferenceTraceCount": inferencebox.get("traceCount") or 0,
@@ -1812,6 +1856,9 @@ def notification_jobs_payload(query: Dict[str, List[str]]) -> Dict[str, object]:
     message_type = first_query(query, "messageType") or first_query(query, "message_type")
     status = first_query(query, "status")
     search = first_query(query, "query") or first_query(query, "q")
+    scope = (first_query(query, "scope") or "investment").strip().lower()
+    if scope not in {"investment", "operations", "all"}:
+        scope = "investment"
     try:
         settings = runtime_settings()
         try:
@@ -1826,6 +1873,7 @@ def notification_jobs_payload(query: Dict[str, List[str]]) -> Dict[str, object]:
                 message_type=message_type,
                 status=status,
                 query=search,
+                scope=scope,
             )
         else:
             jobs, total = store.recent_page(
@@ -1834,6 +1882,7 @@ def notification_jobs_payload(query: Dict[str, List[str]]) -> Dict[str, object]:
                 message_type=message_type,
                 status=status,
                 query=search,
+                scope=scope,
             )
             summary = store.summary()
     except Exception:  # noqa: BLE001 - empty queue keeps the console readable without MySQL.
@@ -1851,6 +1900,7 @@ def notification_jobs_payload(query: Dict[str, List[str]]) -> Dict[str, object]:
         "query": search,
         "messageType": message_type,
         "status": status,
+        "scope": scope,
     }
 
 
@@ -1898,10 +1948,11 @@ def research_evidence_payload(query: Dict[str, List[str]]) -> Dict[str, object]:
 
 
 def research_evidence_list_payload(item) -> Dict[str, object]:
+    item, analysis_source = projected_research_evidence(item)
     raw = item.raw_payload if isinstance(item.raw_payload, dict) else {}
     states = item.state_payload()
     compact_raw = {}
-    for key in ["name", "provider", "articleType", "analysisStatus", "relevanceState", "impactLabel", "impactSummary", "koreanSummary", "priceImpact", "sourceTrustState", "materialityState", "dataState", "validationState"]:
+    for key in ["name", "provider", "articleType", "analysisStatus", "relevanceState", "impactLabel", "impactSummary", "koreanSummary", "priceImpact", "sourceTrustState", "materialityState", "dataState", "validationState", "articleReadStatus", "stockImpact", "stockImpactLabel", "stockImpactPolarity", "stockImpactReasonKo"]:
         if raw.get(key) not in (None, "", [], {}):
             compact_raw[key] = raw.get(key)
     return {
@@ -1931,14 +1982,47 @@ def research_evidence_list_payload(item) -> Dict[str, object]:
         "stockImpactReasonKo": str(raw.get("stockImpactReasonKo") or ""),
         "sourceKind": str(raw.get("sourceKind") or ""),
         "sourcePlatform": str(raw.get("sourcePlatform") or ""),
+        "analysisSource": analysis_source,
         "payload": compact_raw,
         "detailPath": "/api/research-evidence/" + urllib.parse.quote(str(item.evidence_id or "")),
     }
 
 
+def projected_research_evidence(item):
+    """Fill legacy news analysis fields without making a network call.
+
+    Historical evidence predates the article-analysis contract.  The list and
+    detail APIs project those rows through the same deterministic analyser used
+    by collection, so an empty field never falls back to title-keyword UI
+    classification.  The worker persists this projection for new rows; this
+    adapter keeps old rows truthful until their normal retention cycle ends.
+    """
+    raw = item.raw_payload if isinstance(getattr(item, "raw_payload", None), dict) else {}
+    has_legacy_analysis = bool(raw.get("articleSummaryKo")) and bool(raw.get("stockImpactPolarity"))
+    if getattr(item, "kind", "") != "news" or news_ai_analysis_is_current(item) or has_legacy_analysis:
+        return item, "stored"
+    target = NewsCollectionTarget(
+        symbol=str(getattr(item, "symbol", "") or ""),
+        name=str(raw.get("name") or getattr(item, "symbol", "") or ""),
+        market=str(raw.get("market") or ""),
+        currency=str(raw.get("currency") or ""),
+        sector=str(raw.get("sector") or ""),
+    )
+    try:
+        analysis = local_news_ai_analysis(target, item).to_dict()
+        return apply_news_ai_analysis(item, analysis), "legacy-projection"
+    except Exception:  # noqa: BLE001 - an incomplete legacy article must remain readable.
+        return item, "unavailable"
+
+
 def research_evidence_detail_payload(evidence_id: str) -> Dict[str, object]:
     item = stores.research_evidence_store().get(evidence_id)
-    return {"item": item.to_dict()} if item else {}
+    if not item:
+        return {}
+    projected, analysis_source = projected_research_evidence(item)
+    payload = projected.to_dict()
+    payload["analysisSource"] = analysis_source
+    return {"item": payload}
 
 
 def delete_research_evidence_payload(evidence_id: str, query: Dict[str, List[str]]) -> Dict[str, object]:
@@ -2688,12 +2772,39 @@ def compact_flow_lens_payload(payload: Dict[str, object]) -> Dict[str, object]:
     decision = dict(decision)
     compact["tossDecision"] = decision
 
+    toss = compact.get("toss")
+    if isinstance(toss, dict):
+        toss = dict(toss)
+        external = toss.get("externalSignals")
+        if isinstance(external, dict):
+            external = dict(external)
+            omitted = []
+            for key in ["yfinanceData", "researchEvidence", "companyOverviews", "earningsReports", "secFilings"]:
+                value = external.pop(key, None)
+                if value not in (None, [], {}, ""):
+                    omitted.append(key)
+                    if isinstance(value, (list, dict)):
+                        external[key + "Count"] = len(value)
+            external["detailLevel"] = "summary"
+            external["heavyFieldsOmitted"] = omitted
+            toss["externalSignals"] = external
+        metadata = toss.get("metadata")
+        if isinstance(metadata, dict):
+            metadata = dict(metadata)
+            proxies = metadata.pop("marketProxyQuotes", None)
+            if isinstance(proxies, (list, dict)):
+                metadata["marketProxyQuoteCount"] = len(proxies)
+            toss["metadata"] = metadata
+        compact["toss"] = toss
+
     strategy = decision.get("ontologyStrategy")
     if isinstance(strategy, dict):
         omitted = []
         strategy = dict(strategy)
         for key in [
             "prompt",
+            "tbox",
+            "aiInferencePacket",
             "reasoningCards",
             "entities",
             "relations",
@@ -2728,6 +2839,24 @@ def compact_flow_lens_payload(payload: Dict[str, object]) -> Dict[str, object]:
         analysis["detailLevel"] = "summary"
         analysis["detailAvailable"] = True
         decision["investmentAnalysis"] = analysis
+
+    # The same decision graph is also projected at the root for the compact
+    # dashboard.  Strip only duplicated explanatory packets here; the board,
+    # queue and lineage remain available to the initial screen.
+    root_analysis = compact.get("investmentAnalysis")
+    if isinstance(root_analysis, dict):
+        root_analysis = dict(root_analysis)
+        omitted = []
+        for key in ["reasoningCards", "aiInferencePacket", "entities", "relations", "evidence", "beliefs", "opinions"]:
+            value = root_analysis.pop(key, None)
+            if value not in (None, [], {}, ""):
+                omitted.append(key)
+                if isinstance(value, list):
+                    root_analysis[key + "Count"] = len(value)
+        root_analysis["detailLevel"] = "summary"
+        root_analysis["detailAvailable"] = True
+        root_analysis["heavyFieldsOmitted"] = omitted
+        compact["investmentAnalysis"] = root_analysis
 
     compact["payloadDetail"] = "summary"
     compact["fullDetailPath"] = "/api/flow-lens?detail=full"
@@ -2790,6 +2919,7 @@ def flow_lens_read_payload(query: Dict[str, List[str]]) -> Dict[str, object]:
         }
     payload = dict(result.snapshot)
     payload["readModel"] = result.metadata()
+    payload["dataFreshness"] = flow_lens_data_freshness(payload.get("generatedAt"), runtime_settings())
     if detail not in {"full", "detail", "all"}:
         payload = compact_flow_lens_payload(payload)
         payload["readModel"] = result.metadata()

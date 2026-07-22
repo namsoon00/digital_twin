@@ -1,9 +1,10 @@
-from typing import Dict
+from typing import Dict, List, Tuple
 
 from ..domain.investment_calendar import clean_text
 from ..domain.investment_calendar_candidates import (
     bounded_int,
     CANDIDATE_STATUS_REGISTERED,
+    CANDIDATE_STATUS_PENDING,
     CANDIDATE_STATUS_REJECTED,
     InvestmentCalendarReviewCandidate,
 )
@@ -26,24 +27,27 @@ class InvestmentCalendarCandidateService:
             offset = page * page_size
         if hasattr(self.candidate_repository, "list"):
             try:
-                candidates = self.candidate_repository.list(status=status, limit=page_size, offset=offset)
+                # Review candidates are operationally small.  Read a bounded
+                # window first so invalid automatic detections and duplicates
+                # cannot distort pagination or the count shown to users.
+                candidates = self.candidate_repository.list(status=status, limit=500, offset=0)
             except TypeError:
-                candidates = self.candidate_repository.list(status=status, limit=offset + page_size)[offset:offset + page_size]
+                candidates = self.candidate_repository.list(status=status, limit=500)
         else:
             candidates = []
-        total = None
-        if hasattr(self.candidate_repository, "count"):
-            try:
-                total = int(self.candidate_repository.count(status=status) or 0)
-            except Exception:  # noqa: BLE001 - count is a read-model convenience.
-                total = None
-        if total is None:
-            summary = self.candidate_repository.summary()
-            total = int((summary or {}).get(status) or len(candidates))
+        visible, hidden = self._visible_candidates(candidates)
+        total = len(visible)
+        candidates = visible[offset:offset + page_size]
         page_count = max(1, (total + page_size - 1) // page_size)
+        summary = dict(self.candidate_repository.summary() or {})
+        stored_total = int(summary.get(status) or len(visible) + len(hidden))
+        if status == CANDIDATE_STATUS_PENDING:
+            summary["storedPending"] = stored_total
+            summary["pending"] = total
+        summary["hiddenAutomaticCandidates"] = len(hidden)
         return {
             "candidates": [candidate.to_dict() for candidate in candidates],
-            "summary": self.candidate_repository.summary(),
+            "summary": summary,
             "feedback": self.candidate_repository.feedback_summary(),
             "status": status,
             "limit": page_size,
@@ -51,6 +55,8 @@ class InvestmentCalendarCandidateService:
             "pageSize": page_size,
             "offset": offset,
             "total": total,
+            "storedTotal": stored_total,
+            "hidden": hidden,
             "pageInfo": {
                 "page": page,
                 "pageSize": page_size,
@@ -61,6 +67,63 @@ class InvestmentCalendarCandidateService:
                 "hasNext": page + 1 < page_count,
             },
         }
+
+    @staticmethod
+    def _candidate_visibility(candidate: InvestmentCalendarReviewCandidate) -> Tuple[bool, str]:
+        payload = candidate.payload if isinstance(candidate.payload, dict) else {}
+        if not payload.get("autoDetected"):
+            return True, ""
+        if not str(candidate.starts_at or "").strip():
+            return False, "날짜 없는 자동 후보"
+        structured_type = str(payload.get("structuredEventType") or "").strip()
+        official = bool(payload.get("officialSource"))
+        if not structured_type and not official:
+            return False, "비공식 키워드 자동 후보"
+        return True, ""
+
+    @staticmethod
+    def _candidate_identity(candidate: InvestmentCalendarReviewCandidate) -> str:
+        source = str(candidate.source_url or "").strip().lower()
+        title = " ".join(str(candidate.title or "").lower().split())
+        symbols = ",".join(sorted(str(symbol or "").upper() for symbol in candidate.symbols or []))
+        return "|".join([source or title, symbols, str(candidate.starts_at or "")])
+
+    def _visible_candidates(self, candidates: List[InvestmentCalendarReviewCandidate]):
+        visible = []
+        hidden = []
+        identities = set()
+        for candidate in candidates or []:
+            allowed, reason = self._candidate_visibility(candidate)
+            if not allowed:
+                hidden.append({"candidateId": candidate.candidate_id, "reason": reason})
+                continue
+            identity = self._candidate_identity(candidate)
+            if identity in identities:
+                hidden.append({"candidateId": candidate.candidate_id, "reason": "중복 자동 후보"})
+                continue
+            identities.add(identity)
+            visible.append(candidate)
+        return visible, hidden
+
+    def reconcile_pending_candidates(self, limit: int = 500) -> Dict[str, object]:
+        """Archive invalid automatic candidates without touching user-created rows."""
+        if not hasattr(self.candidate_repository, "list"):
+            return {"reviewed": 0, "rejected": 0}
+        candidates = self.candidate_repository.list(
+            status=CANDIDATE_STATUS_PENDING,
+            limit=bounded_int(limit, 500, lower=1, upper=1000),
+            offset=0,
+        )
+        _, hidden = self._visible_candidates(candidates)
+        rejected = 0
+        for item in hidden:
+            updated = self.candidate_repository.mark_status(
+                item["candidateId"],
+                CANDIDATE_STATUS_REJECTED,
+                "자동 정리: " + item["reason"],
+            )
+            rejected += 1 if updated else 0
+        return {"reviewed": len(candidates), "rejected": rejected, "hidden": hidden}
 
     def approve_candidate(self, candidate_id: str, payload: Dict[str, object] = None) -> Dict[str, object]:
         payload = payload if isinstance(payload, dict) else {}

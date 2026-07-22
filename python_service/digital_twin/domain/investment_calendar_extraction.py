@@ -571,6 +571,12 @@ def calendar_candidate_from_research_item(
         matched_keywords = unique_texts(list(structured_matches or []) + list(matched_keywords or []), 20)
     if not pattern:
         return None
+    official = official_source(item)
+    # A title-keyword hit from a news feed is not enough to create work for an
+    # investor. Keep automatic candidates to structured evidence or an
+    # official calendar/filing source; human-created candidates remain intact.
+    if not structured_type and not official:
+        return None
     reference = parse_reference_datetime(item)
     event_type = str(pattern["eventType"])
     event_date, date_source = event_date_from_item(item, text, reference)
@@ -583,7 +589,6 @@ def calendar_candidate_from_research_item(
         date_source = "reference"
     else:
         event_date_utc = utc_iso(event_date)
-    official = official_source(item)
     readiness_state, readiness_reason = readiness_for(
         item,
         matched_keywords,

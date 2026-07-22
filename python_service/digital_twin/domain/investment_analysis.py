@@ -173,16 +173,23 @@ def _graph_gate(snapshot: Dict[str, object], decisions: List[Dict[str, object]])
     strategy = _dict(decision.get("ontologyStrategy"))
     graph_summary = _dict(_dict(decision.get("investmentAnalysis")).get("graphSummary"))
     blocked = [_graph_context(item) for item in decisions if _graph_context(item).get("blocked")]
+    graph_store_used = any(_graph_context(item).get("graphStoreUsed") for item in decisions)
     relation_count = int(number(strategy.get("relationCount")) or number(graph_summary.get("relationCount")) or 0)
     entity_count = int(number(strategy.get("entityCount")) or number(graph_summary.get("entityCount")) or 0)
+    status = "blocked" if blocked else ("ready" if graph_store_used else "unverified")
+    reason = (
+        blocked[0].get("reason") if blocked
+        else "그래프 추론 기반 판단이 가능합니다." if graph_store_used
+        else "TypeDB InferenceBox 사용 기록이 없어 그래프 기반 판단을 확정할 수 없습니다."
+    )
     return {
-        "status": "blocked" if blocked else "ready",
-        "tone": "caution" if blocked else "watch",
-        "graphStoreUsed": any(_graph_context(item).get("graphStoreUsed") for item in decisions),
+        "status": status,
+        "tone": "caution" if status != "ready" else "watch",
+        "graphStoreUsed": graph_store_used,
         "blockedCount": len(blocked),
         "relationCount": relation_count,
         "entityCount": entity_count,
-        "reason": blocked[0].get("reason") if blocked else "그래프 추론 기반 판단이 가능합니다.",
+        "reason": reason,
         "requiredSource": "typedbInferenceBox",
         "nextChecks": (blocked[0].get("nextChecks") if blocked else []) or ["TypeDB native rule 실행 상태 확인", "InferenceBox 관계 확인", "데이터 신선도 확인"],
     }
@@ -202,7 +209,7 @@ def build_investment_analysis(snapshot: Dict[str, object]) -> Dict[str, object]:
     actual_count = len([item for item in data_sources if not item.get("isMock") and item.get("quality") != "missing"])
     mock_count = len([item for item in data_sources if item.get("isMock")])
     blocked_count = len([item for item in queue if item.get("graph", {}).get("blocked")])
-    ready = str(toss.get("mode") or "").lower() == "live" and not blocked_count
+    ready = str(toss.get("mode") or "").lower() == "live" and not blocked_count and graph_gate["status"] == "ready"
     return {
         "contract": "investment-analysis-read-model-v1",
         "generatedAt": str(snapshot.get("generatedAt") or ""),

@@ -533,6 +533,7 @@ def build_flow_lens_service(settings=None) -> FlowLensService:
         settings_provider=lambda: configured_settings,
         fx_rates_provider=currency_rates,
         symbol_enricher=symbol_service.enrich,
+        market_quote_cache=stores.market_quote_cache(configured_settings),
     )
 
 

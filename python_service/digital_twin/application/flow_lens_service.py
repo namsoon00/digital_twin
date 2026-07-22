@@ -22,6 +22,23 @@ from ..domain.portfolio_calculations import (
 from ..domain.strategy import StrategyModel, inference_required_relation_context
 
 
+MARKET_DATA_ACCOUNT_ID = "__market_data__"
+KIS_MARKET_SIGNAL_ACCOUNT_ID = "__market_signals__"
+MARKET_QUOTE_FIELDS = (
+    "currentPrice", "changeRate", "quoteSource", "quoteStatus", "quoteMessage", "dataQuality", "updatedAt",
+    "sourceAsOf", "sourceFetchedAt", "sourceTimestampState", "indicatorAsOf", "indicatorFetchedAt",
+    "tradingValue", "volume", "volumeRatio", "ma5", "ma20", "ma60", "ma120", "ma200",
+    "ma20Slope", "ma60Slope", "ma20Distance", "ma60Distance",
+)
+MARKET_SIGNAL_FIELDS = (
+    "tradeStrength", "buyVolume", "sellVolume", "orderbookBidVolume", "orderbookAskVolume", "bidAskImbalance",
+    "foreignBuyVolume", "foreignSellVolume", "foreignNetVolume", "foreignNetAmount",
+    "institutionBuyVolume", "institutionSellVolume", "institutionNetVolume", "institutionNetAmount",
+    "individualBuyVolume", "individualSellVolume", "individualNetVolume", "individualNetAmount",
+    "marketSignalCoverage",
+)
+
+
 def position_payload(position: Position) -> Dict[str, object]:
     foreign_net = investor_net_volume(position.foreign_net_volume, position.foreign_buy_volume, position.foreign_sell_volume)
     institution_net = investor_net_volume(position.institution_net_volume, position.institution_buy_volume, position.institution_sell_volume)
@@ -320,6 +337,32 @@ def merge_watchlist_quotes(watchlist: List[Dict[str, object]], quotes: List[Dict
         else:
             next_item["quoteMessage"] = next_item.get("quoteMessage") or "현재가는 토스 prices, 이동평균은 토스 candles 기준입니다."
         merged.append(next_item)
+    return merged
+
+
+def merge_market_cache_fields(
+    item: Dict[str, object],
+    quote: Dict[str, object] = None,
+    signal: Dict[str, object] = None,
+) -> Dict[str, object]:
+    """Overlay live cache data without changing the holding/watchlist role."""
+    merged = dict(item or {})
+    symbol = str(merged.get("symbol") or "").strip().upper()
+    quote = quote if isinstance(quote, dict) else {}
+    signal = signal if isinstance(signal, dict) else {}
+    for key in MARKET_QUOTE_FIELDS:
+        if quote.get(key) not in (None, ""):
+            merged[key] = quote[key]
+    for key in MARKET_SIGNAL_FIELDS:
+        if signal.get(key) not in (None, ""):
+            merged[key] = signal[key]
+    current_name = str(merged.get("name") or "").strip()
+    cached_name = str(quote.get("name") or "").strip()
+    if cached_name and (not current_name or current_name.upper() == symbol):
+        merged["name"] = cached_name
+    for key in ("market", "currency", "sector"):
+        if not str(merged.get(key) or "").strip() and quote.get(key) not in (None, ""):
+            merged[key] = quote[key]
     return merged
 
 
@@ -812,6 +855,7 @@ class FlowLensService:
         settings_provider: Callable[[], Dict[str, str]] = None,
         fx_rates_provider: Callable[[Dict[str, str]], Dict[str, float]] = None,
         symbol_enricher: Callable[[str], Dict[str, object]] = None,
+        market_quote_cache=None,
     ):
         self.account_repository = account_repository
         self.snapshot_builder = snapshot_builder
@@ -819,6 +863,39 @@ class FlowLensService:
         self.settings_provider = settings_provider or (lambda: {})
         self.fx_rates_provider = fx_rates_provider or (lambda settings: {})
         self.symbol_enricher = symbol_enricher
+        self.market_quote_cache = market_quote_cache
+
+    def cached_market_rows(
+        self,
+        provider: str,
+        symbols: List[str],
+        account_id: str = MARKET_DATA_ACCOUNT_ID,
+    ) -> Dict[str, Dict[str, object]]:
+        if not self.market_quote_cache or not symbols:
+            return {}
+        try:
+            if hasattr(self.market_quote_cache, "load_many"):
+                return self.market_quote_cache.load_many(provider, account_id, symbols)
+            return {
+                symbol: self.market_quote_cache.load(provider, account_id, symbol)
+                for symbol in symbols
+                if self.market_quote_cache.load(provider, account_id, symbol)
+            }
+        except Exception:
+            return {}
+
+    def hydrate_monitor_market_rows(self, items: List[Dict[str, object]]) -> List[Dict[str, object]]:
+        symbols = [str(item.get("symbol") or "").upper() for item in items or [] if str(item.get("symbol") or "").strip()]
+        quotes = self.cached_market_rows("toss", symbols)
+        signals = self.cached_market_rows("kis", symbols, KIS_MARKET_SIGNAL_ACCOUNT_ID)
+        return [
+            merge_market_cache_fields(
+                item,
+                quotes.get(str(item.get("symbol") or "").upper()),
+                signals.get(str(item.get("symbol") or "").upper()),
+            )
+            for item in items or []
+        ]
 
     def snapshot(self, mock: bool = False, watchlist_symbols: str = "") -> Dict[str, object]:
         settings = dict(self.settings_provider() or {})
@@ -872,8 +949,8 @@ class FlowLensService:
                 "currency": str(portfolio.get("currency") or "KRW"),
             },
             "portfolio": portfolio,
-            "positions": list(positions.values()),
-            "watchlistQuotes": list(watchlist.values()),
+            "positions": self.hydrate_monitor_market_rows(list(positions.values())),
+            "watchlistQuotes": self.hydrate_monitor_market_rows(list(watchlist.values())),
             "externalSignals": dict(source.get("externalSignals") or {}),
             "metadata": dict(source.get("metadata") or {}),
         }
@@ -883,7 +960,7 @@ class FlowLensService:
             watchlist_symbols=watchlist_symbols,
             fallback_watchlist_symbols=settings.get("watchlistSymbols", ""),
             fx_rates={},
-            enrich_symbol=None,
+            enrich_symbol=self.symbol_enricher,
             strategy_model=StrategyModel(settings),
         )
         payload["generatedAt"] = generated_at

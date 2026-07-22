@@ -385,7 +385,7 @@ class OntologyInferenceQualityTests(unittest.TestCase):
         recorder.record_snapshot(snapshot)
         repository.inference_status = "stale-generation"
 
-        result = recorder.record_snapshot(self.snapshot(position, "2026-07-20T00:04:00Z"))
+        result = recorder.record_snapshot(snapshot)
 
         self.assertEqual("unchanged-material-facts-reasoning-retry", result["status"])
         self.assertTrue(result["reasoningRetryRequired"])

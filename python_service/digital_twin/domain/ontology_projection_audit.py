@@ -55,6 +55,8 @@ def projection_result_summary(result: Dict[str, object]) -> Dict[str, object]:
     retired_cleanup = dict(verification.get("retiredActiveCleanup") or {})
     impact_plan = compact_inference_impact_plan(values.get("inferenceImpactPlan") or {})
     projection_scope = dict(values.get("projectionScope") or {})
+    ontology_world = dict(values.get("ontologyWorld") or {})
+    market_world = dict(values.get("marketWorld") or {})
     return {
         "saved": bool(values.get("saved")),
         "status": str(values.get("status") or ""),
@@ -64,6 +66,12 @@ def projection_result_summary(result: Dict[str, object]) -> Dict[str, object]:
         "materialChangeDetected": bool(values.get("materialChangeDetected")),
         "materialFingerprint": str(values.get("materialFingerprint") or ""),
         "aboxSnapshotId": str(values.get("aboxSnapshotId") or ""),
+        "world": {
+            "tenantId": str(ontology_world.get("tenantId") or ""),
+            "worldId": str(ontology_world.get("worldId") or projection_scope.get("worldId") or ""),
+            "worldType": str(ontology_world.get("worldType") or ""),
+            "marketWorldId": str(market_world.get("worldId") or projection_scope.get("marketWorldId") or ""),
+        },
         "scopeTopologyVersion": str(projection_scope.get("scopeTopologyVersion") or ""),
         "scopeFamilyCounts": dict(projection_scope.get("scopeFamilyCounts") or {}),
         "inferenceImpactPlan": impact_plan,
@@ -125,6 +133,10 @@ class OntologyProjectionRun:
     run_id: str
     portfolio_id: str
     account_id: str
+    tenant_id: str
+    world_id: str
+    world_type: str
+    market_world_id: str
     source_snapshot_at: str
     source_snapshot_fingerprint: str
     first_observed_at: str
@@ -173,6 +185,10 @@ def projection_run_from_payload(payload: Dict[str, object]) -> OntologyProjectio
         run_id=str(value("run_id", "runId") or ""),
         portfolio_id=str(value("portfolio_id", "portfolioId") or ""),
         account_id=str(value("account_id", "accountId") or ""),
+        tenant_id=str(value("tenant_id", "tenantId") or ""),
+        world_id=str(value("world_id", "worldId") or ""),
+        world_type=str(value("world_type", "worldType") or ""),
+        market_world_id=str(value("market_world_id", "marketWorldId") or ""),
         source_snapshot_at=str(value("source_snapshot_at", "sourceSnapshotAt") or ""),
         source_snapshot_fingerprint=str(value("source_snapshot_fingerprint", "sourceSnapshotFingerprint") or ""),
         first_observed_at=str(value("first_observed_at", "firstObservedAt") or ""),
@@ -223,6 +239,7 @@ def build_ontology_projection_run(
     # every activation occurrence for audit, rather than overwriting the old
     # record merely because its facts happen to match again.
     run_seed = "|".join([
+        str(worldview.get("worldId") or ""),
         str(snapshot.account_id or "account"),
         str(material_fingerprint or ""),
         str(abox_snapshot_id or ""),
@@ -242,6 +259,10 @@ def build_ontology_projection_run(
         run_id=run_id,
         portfolio_id=str(graph.portfolio_id or snapshot.account_id or ""),
         account_id=str(snapshot.account_id or ""),
+        tenant_id=str(worldview.get("tenantId") or ""),
+        world_id=str(worldview.get("worldId") or ""),
+        world_type=str(worldview.get("worldType") or ""),
+        market_world_id=str(worldview.get("marketWorldId") or ""),
         source_snapshot_at=str(snapshot.generated_at or ""),
         source_snapshot_fingerprint=source_fingerprint,
         first_observed_at=stamp,
@@ -269,6 +290,12 @@ def build_ontology_projection_run(
                 "accountId": str(snapshot.account_id or ""),
                 "generatedAt": str(snapshot.generated_at or ""),
                 "store": "monitor_snapshot_history",
+            },
+            "world": {
+                "tenantId": str(worldview.get("tenantId") or ""),
+                "worldId": str(worldview.get("worldId") or ""),
+                "worldType": str(worldview.get("worldType") or ""),
+                "marketWorldId": str(worldview.get("marketWorldId") or ""),
             },
             "sourceSnapshotSummary": {
                 "mode": str(snapshot.mode or ""),

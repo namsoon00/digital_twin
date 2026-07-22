@@ -32,19 +32,33 @@ class OntologyDiagnosticsService:
         self.decision_episode_store = decision_episode_store
         self.projection_run_store = projection_run_store
 
-    def status(self, symbols: Iterable[str] = None, limit: int = 80) -> Dict[str, object]:
+    def status(
+        self,
+        symbols: Iterable[str] = None,
+        limit: int = 80,
+        world_id: str = "",
+    ) -> Dict[str, object]:
         clean_symbols = sorted(set(str(item or "").upper().strip() for item in (symbols or []) if str(item or "").strip()))
         safe_limit = max(1, min(500, int(limit or 80)))
+        clean_world_id = str(world_id or "").strip()
         tbox = self.safe_call("active_tbox_metadata", {})
         rulebox = self.safe_call("rulebox_snapshot", {})
-        inference = self.safe_call("inferencebox_snapshot", {}, clean_symbols, safe_limit)
-        abox_storage = self.safe_call("scoped_abox_storage_diagnostics", {})
-        abox_coverage = self.abox_coverage(clean_symbols)
+        inference = self.safe_call(
+            "inferencebox_snapshot",
+            {},
+            clean_symbols,
+            safe_limit,
+            world_id=clean_world_id,
+        )
+        abox_storage = self.safe_call("scoped_abox_storage_diagnostics", {}, world_id=clean_world_id)
+        abox_coverage = self.abox_coverage(clean_symbols, world_id=clean_world_id)
         decision_performance = self.decision_performance_boundary(clean_symbols)
         return {
             "contract": "typedb-ontology-diagnostics-v1",
             "generatedAt": utc_now_iso(),
             "activeGraphStore": "typedb",
+            "worldId": clean_world_id,
+            "worlds": self.safe_list_call("list_ontology_worlds"),
             "typedb": self.typedb_settings(),
             "tbox": self.tbox_summary(tbox),
             "rulebox": self.rulebox_summary(rulebox),
@@ -52,7 +66,7 @@ class OntologyDiagnosticsService:
             "aboxCoverage": abox_coverage,
             "inferenceBox": self.inferencebox_summary(inference),
             "reasoningBoundary": self.reasoning_boundary(rulebox, inference),
-            "runtimeObservability": self.runtime_observation_boundary(),
+            "runtimeObservability": self.runtime_observation_boundary(clean_world_id),
             "ruleboxQuality": self.rulebox_quality_boundary(rulebox, inference, decision_performance),
             "latestEvents": self.latest_events(),
             "notificationBoundary": self.notification_boundary(),
@@ -99,13 +113,21 @@ class OntologyDiagnosticsService:
             "automaticDeployment": False,
         }
 
-    def runtime_observation_boundary(self) -> Dict[str, object]:
+    def runtime_observation_boundary(self, world_id: str = "") -> Dict[str, object]:
         if not self.projection_run_store or not hasattr(self.projection_run_store, "runtime_summary"):
             return {"status": "unavailable", "reason": "Projection runtime audit store is not configured."}
         try:
-            return self.projection_run_store.runtime_summary(
-                limit=int(self.settings.get("ontologyRuntimeAuditWindowRuns") or 40),
-            )
+            kwargs = {"limit": int(self.settings.get("ontologyRuntimeAuditWindowRuns") or 40)}
+            if str(world_id or "").strip():
+                kwargs["world_id"] = str(world_id).strip()
+            try:
+                return self.projection_run_store.runtime_summary(**kwargs)
+            except TypeError as error:
+                if "unexpected keyword" not in str(error) and "world_id" not in str(error):
+                    raise
+                return self.projection_run_store.runtime_summary(
+                    limit=int(self.settings.get("ontologyRuntimeAuditWindowRuns") or 40),
+                )
         except Exception as error:  # noqa: BLE001 - diagnostics must remain available without audit history.
             return {"status": "error", "reason": str(error)[:180]}
 
@@ -166,17 +188,55 @@ class OntologyDiagnosticsService:
             "interpretation": "Rule activation and delayed outcomes are joined for human review; outcome performance never changes RuleBox automatically.",
         }
 
-    def safe_call(self, method_name: str, fallback: Dict[str, object], *args):
+    def safe_call(self, method_name: str, fallback: Dict[str, object], *args, **kwargs):
         target = getattr(self.ontology_repository, method_name, None)
         if not target:
             return dict(fallback)
         try:
-            result = target(*args)
+            result = target(*args, **kwargs)
             return result if isinstance(result, dict) else dict(fallback)
+        except TypeError as error:
+            # Test doubles and legacy graph adapters may not have gained the
+            # optional world boundary yet. Production adapters must receive it;
+            # this narrow fallback keeps diagnostics backward compatible only.
+            if kwargs and ("unexpected keyword" in str(error) or "world_id" in str(error)):
+                try:
+                    result = target(*args)
+                    return result if isinstance(result, dict) else dict(fallback)
+                except Exception as nested_error:  # noqa: BLE001
+                    payload = dict(fallback)
+                    payload.update({"status": "error", "reason": str(nested_error)[:220]})
+                    return payload
+            payload = dict(fallback)
+            payload.update({"status": "error", "reason": str(error)[:220]})
+            return payload
         except Exception as error:  # noqa: BLE001 - diagnostics must be non-fatal.
             payload = dict(fallback)
             payload.update({"status": "error", "reason": str(error)[:220]})
             return payload
+
+    def safe_list_call(self, method_name: str) -> List[Dict[str, object]]:
+        target = getattr(self.ontology_repository, method_name, None)
+        if not target:
+            return []
+        try:
+            result = target()
+            return [dict(item) for item in result or [] if isinstance(item, dict)]
+        except Exception:
+            return []
+
+    def world_aware_read(self, method_name: str, *args, world_id: str = ""):
+        target = getattr(self.ontology_repository, method_name, None)
+        if not callable(target):
+            raise AttributeError(method_name + " is unavailable")
+        if not str(world_id or "").strip():
+            return target(*args)
+        try:
+            return target(*args, world_id=str(world_id))
+        except TypeError as error:
+            if "unexpected keyword" not in str(error) and "world_id" not in str(error):
+                raise
+            return target(*args)
 
     def typedb_settings(self) -> Dict[str, object]:
         return {
@@ -330,11 +390,11 @@ class OntologyDiagnosticsService:
         ]
         return summary
 
-    def abox_coverage(self, symbols: List[str] = None) -> Dict[str, object]:
+    def abox_coverage(self, symbols: List[str] = None, world_id: str = "") -> Dict[str, object]:
         if not hasattr(self.ontology_repository, "read_entity_rows") or not hasattr(self.ontology_repository, "read_relation_rows"):
             return {"status": "unavailable", "reason": "repository does not expose ABox row reads"}
         try:
-            entities = self.ontology_repository.read_entity_rows(["ABox"])
+            entities = self.world_aware_read("read_entity_rows", ["ABox"], world_id=world_id)
         except Exception as error:  # noqa: BLE001 - diagnostics must stay available.
             return {"status": "error", "reason": str(error)[:220]}
         clean_symbols = sorted(set(str(item or "").upper().strip() for item in (symbols or []) if str(item or "").strip()))
@@ -347,7 +407,11 @@ class OntologyDiagnosticsService:
         topology_reader = getattr(self.ontology_repository, "active_abox_relation_types_by_symbol", None)
         if callable(topology_reader):
             try:
-                topology = topology_reader(stock_symbols)
+                topology = self.world_aware_read(
+                    "active_abox_relation_types_by_symbol",
+                    stock_symbols,
+                    world_id=world_id,
+                )
             except Exception as error:  # noqa: BLE001 - diagnostics must stay available.
                 return {"status": "error", "reason": str(error)[:220]}
             if str((topology or {}).get("status") or "") == "ok":
@@ -361,12 +425,12 @@ class OntologyDiagnosticsService:
                     )
             else:
                 try:
-                    relations = self.abox_coverage_relations(entities, stock_symbols)
+                    relations = self.abox_coverage_relations(entities, stock_symbols, world_id=world_id)
                 except Exception as error:  # noqa: BLE001 - diagnostics must stay available.
                     return {"status": "error", "reason": str(error)[:220]}
         else:
             try:
-                relations = self.abox_coverage_relations(entities, stock_symbols)
+                relations = self.abox_coverage_relations(entities, stock_symbols, world_id=world_id)
             except Exception as error:  # noqa: BLE001 - diagnostics must stay available.
                 return {"status": "error", "reason": str(error)[:220]}
         entity_classes_by_symbol: Dict[str, set] = {symbol: set() for symbol in stock_symbols}
@@ -473,6 +537,7 @@ class OntologyDiagnosticsService:
         self,
         entities: List[Dict[str, object]],
         stock_symbols: List[str],
+        world_id: str = "",
     ) -> List[Dict[str, object]]:
         """Read only relation edges that can affect per-symbol coverage.
 
@@ -494,8 +559,13 @@ class OntologyDiagnosticsService:
             if entity_id and is_asset_root and self.row_symbol(entity) in symbol_set:
                 source_ids.append(entity_id)
         if callable(scoped_reader) and source_ids:
-            return list(scoped_reader(sorted(set(source_ids)), ["ABox"]) or [])
-        return list(self.ontology_repository.read_relation_rows(["ABox"]) or [])
+            return list(self.world_aware_read(
+                "read_relation_rows_by_source_ids",
+                sorted(set(source_ids)),
+                ["ABox"],
+                world_id=world_id,
+            ) or [])
+        return list(self.world_aware_read("read_relation_rows", ["ABox"], world_id=world_id) or [])
 
     def required_categories_for_symbol(self, classes: set, source: str) -> List[str]:
         class_values = {str(item or "") for item in (classes or set())}

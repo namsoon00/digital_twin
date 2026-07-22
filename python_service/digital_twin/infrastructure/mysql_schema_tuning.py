@@ -149,6 +149,11 @@ MYSQL_OPERATIONAL_INDEXES: Dict[str, Sequence[MySQLIndexDefinition]] = {
             "idx_ontology_projection_runs_account_updated",
             "`account_id`, `updated_at`, `run_id`",
         ),
+        MySQLIndexDefinition(
+            "ontology_projection_runs",
+            "idx_ontology_projection_runs_world_updated",
+            "`world_id`, `updated_at`, `run_id`",
+        ),
         MySQLIndexDefinition("ontology_projection_runs", "idx_ontology_projection_runs_abox", "`abox_snapshot_id`"),
         MySQLIndexDefinition(
             "ontology_projection_runs",
@@ -194,6 +199,28 @@ MYSQL_OPERATIONAL_COLUMNS: Dict[str, Sequence[MySQLColumnDefinition]] = {
             "investment_calendar_candidates",
             "readiness_state",
             "VARCHAR(32) NOT NULL DEFAULT 'needs-review'",
+        ),
+    ),
+    "ontology_projection_runs": (
+        MySQLColumnDefinition(
+            "ontology_projection_runs",
+            "tenant_id",
+            "VARCHAR(191) NOT NULL DEFAULT ''",
+        ),
+        MySQLColumnDefinition(
+            "ontology_projection_runs",
+            "world_id",
+            "VARCHAR(191) NOT NULL DEFAULT ''",
+        ),
+        MySQLColumnDefinition(
+            "ontology_projection_runs",
+            "world_type",
+            "VARCHAR(64) NOT NULL DEFAULT ''",
+        ),
+        MySQLColumnDefinition(
+            "ontology_projection_runs",
+            "market_world_id",
+            "VARCHAR(191) NOT NULL DEFAULT ''",
         ),
     ),
     "investment_decision_episodes": (

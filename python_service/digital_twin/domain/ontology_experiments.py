@@ -21,6 +21,7 @@ class OntologyExperiment:
     symbols: List[str] = field(default_factory=list)
     candidate_rules: List[Dict[str, object]] = field(default_factory=list)
     baseline_rulebox: Dict[str, object] = field(default_factory=dict)
+    target_world: Dict[str, str] = field(default_factory=dict)
     status: str = "draft"
     created_at: str = ""
     updated_at: str = ""
@@ -36,6 +37,7 @@ class OntologyExperiment:
         payload["id"] = payload.pop("experiment_id")
         payload["candidateRules"] = payload.pop("candidate_rules")
         payload["baselineRulebox"] = payload.pop("baseline_rulebox")
+        payload["targetWorld"] = payload.pop("target_world")
         payload["createdAt"] = payload.pop("created_at")
         payload["updatedAt"] = payload.pop("updated_at")
         payload["lastResult"] = payload.pop("last_result")
@@ -60,6 +62,11 @@ class OntologyExperiment:
                 if isinstance(item, dict)
             ],
             baseline_rulebox=dict(payload.get("baselineRulebox") or payload.get("baseline_rulebox") or {}),
+            target_world={
+                str(key): str(value)
+                for key, value in dict(payload.get("targetWorld") or payload.get("target_world") or {}).items()
+                if str(value or "").strip()
+            },
             status=str(payload.get("status") or "draft"),
             created_at=str(payload.get("createdAt") or payload.get("created_at") or ""),
             updated_at=str(payload.get("updatedAt") or payload.get("updated_at") or ""),

@@ -24,6 +24,7 @@ from .ontology_change_impact import (
 )
 from .ontology_contracts import OntologyEntity, OntologyEvidence, OntologyRelation, PortfolioOntology
 from .ontology_projection_fingerprint import stable_value
+from .ontology_worlds import world_scoped_scope_id
 
 
 SCOPED_ABOX_MANIFEST_VERSION = "scoped-manifest-v1"
@@ -365,15 +366,19 @@ def scoped_generation_id(scope_id: str, fingerprint: str) -> str:
     return "abox-scope:" + digest
 
 
-def scoped_manifest_id(account_id: str, scope_generations: Mapping[str, str]) -> str:
+def scoped_manifest_id(account_id: str, scope_generations: Mapping[str, str], world_id: str = "") -> str:
     payload = json.dumps(dict(sorted(scope_generations.items())), ensure_ascii=False, sort_keys=True, separators=(",", ":"))
-    digest = hashlib.sha256((account_id + "|" + payload).encode("utf-8")).hexdigest()[:20]
+    digest = hashlib.sha256((str(world_id or account_id) + "|" + account_id + "|" + payload).encode("utf-8")).hexdigest()[:20]
     return "abox-manifest:" + digest
 
 
 def apply_scoped_abox_identity(
     graph: PortfolioOntology,
     account_id: str = "",
+    world_id: str = "",
+    tenant_id: str = "",
+    world_type: str = "",
+    world_account_id: str = None,
 ) -> Dict[str, object]:
     """Annotate one complete ABox graph with independent scope generations.
 
@@ -383,8 +388,42 @@ def apply_scoped_abox_identity(
     """
     clone = graph
     account_key = _clean(account_id) or _account_id(clone)
+    metadata_account_id = account_key if world_account_id is None else _clean(world_account_id)
+    clean_world_id = _clean(world_id)
+    clean_tenant_id = _clean(tenant_id)
+    clean_world_type = _clean(world_type)
+    if clean_world_id:
+        for entity in clone.entities:
+            if _clean((entity.properties or {}).get("ontologyBox")) in {"", "ABox"}:
+                entity.properties.update({
+                    "worldId": clean_world_id,
+                    "worldType": clean_world_type or "portfolio",
+                    "tenantId": clean_tenant_id,
+                    "accountId": metadata_account_id,
+                })
+        for relation in clone.relations:
+            if _clean((relation.properties or {}).get("ontologyBox")) in {"", "ABox"}:
+                relation.properties.update({
+                    "worldId": clean_world_id,
+                    "worldType": clean_world_type or "portfolio",
+                    "tenantId": clean_tenant_id,
+                    "accountId": metadata_account_id,
+                })
+        for evidence in clone.evidence:
+            if _clean((evidence.value or {}).get("ontologyBox")) in {"", "ABox"}:
+                evidence.value.update({
+                    "worldId": clean_world_id,
+                    "worldType": clean_world_type or "portfolio",
+                    "tenantId": clean_tenant_id,
+                    "accountId": metadata_account_id,
+                })
     entity_scopes = _seed_entity_scopes(clone)
     _propagate_entity_scopes(clone, entity_scopes)
+    if clean_world_id:
+        entity_scopes = {
+            entity_id: world_scoped_scope_id(scope_id, clean_world_id)
+            for entity_id, scope_id in entity_scopes.items()
+        }
     entities_by_id = {
         _clean(entity.entity_id): entity
         for entity in clone.entities
@@ -403,6 +442,8 @@ def apply_scoped_abox_identity(
         if _clean((relation.properties or {}).get("ontologyBox")) not in {"", "ABox"}:
             continue
         scope_id = scope_id_for_relation(relation, entity_scopes, account_key, entities_by_id)
+        if clean_world_id:
+            scope_id = world_scoped_scope_id(scope_id, clean_world_id)
         relation.properties["aboxScopeId"] = scope_id
         relation.properties["aboxScopeType"] = _scope_type(scope_id)
         relation.properties["aboxScopeFamily"] = scope_family(scope_id)
@@ -411,6 +452,8 @@ def apply_scoped_abox_identity(
         if _clean((evidence.value or {}).get("ontologyBox")) not in {"", "ABox"}:
             continue
         scope_id = scope_id_for_evidence(evidence, entity_scopes, account_key)
+        if clean_world_id:
+            scope_id = world_scoped_scope_id(scope_id, clean_world_id)
         evidence.value["aboxScopeId"] = scope_id
         evidence.value["aboxScopeType"] = _scope_type(scope_id)
         evidence.value["aboxScopeFamily"] = scope_family(scope_id)
@@ -497,7 +540,7 @@ def apply_scoped_abox_identity(
             "evidenceCount": len(payloads[scope_id]["evidence"]),
         })
 
-    manifest_id = scoped_manifest_id(account_key, generations)
+    manifest_id = scoped_manifest_id(account_key, generations, clean_world_id)
     by_scope = {item["scopeId"]: item for item in scope_plan}
     for entity in clone.entities:
         scope_id = _clean((entity.properties or {}).get("aboxScopeId"))
@@ -532,6 +575,10 @@ def apply_scoped_abox_identity(
         family = _clean(item.get("scopeFamily")) or "reference"
         scope_family_counts[family] = scope_family_counts.get(family, 0) + 1
     clone.worldview.update({
+        "worldId": clean_world_id,
+        "worldType": clean_world_type or ("portfolio" if clean_world_id else ""),
+        "tenantId": clean_tenant_id,
+        "accountId": metadata_account_id,
         "aboxSnapshotId": manifest_id,
         "snapshotId": manifest_id,
         "worldviewManifestId": manifest_id,
@@ -544,6 +591,10 @@ def apply_scoped_abox_identity(
         "scopeFamilyCounts": dict(sorted(scope_family_counts.items())),
     })
     return {
+        "worldId": clean_world_id,
+        "worldType": clean_world_type or ("portfolio" if clean_world_id else ""),
+        "tenantId": clean_tenant_id,
+        "accountId": metadata_account_id,
         "manifestId": manifest_id,
         "scopePlan": scope_plan,
         "scopeGenerationIds": generations,

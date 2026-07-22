@@ -162,7 +162,12 @@ class OntologyGraphRepository(Protocol):
     def run_rulebox(self, payload: Dict[str, object] = None) -> Dict[str, object]:
         ...
 
-    def inferencebox_snapshot(self, symbols: List[str] = None, limit: int = 80) -> Dict[str, object]:
+    def inferencebox_snapshot(
+        self,
+        symbols: List[str] = None,
+        limit: int = 80,
+        world_id: str = "",
+    ) -> Dict[str, object]:
         ...
 
     def save_rule_change_candidates(self, candidates: List[Dict[str, object]], context: Dict[str, object] = None) -> Dict[str, object]:

@@ -560,6 +560,10 @@ MYSQL_SCHEMA = [
         run_id VARCHAR(191) PRIMARY KEY,
         portfolio_id VARCHAR(191) NOT NULL DEFAULT '',
         account_id VARCHAR(191) NOT NULL DEFAULT '',
+        tenant_id VARCHAR(191) NOT NULL DEFAULT '',
+        world_id VARCHAR(191) NOT NULL DEFAULT '',
+        world_type VARCHAR(64) NOT NULL DEFAULT '',
+        market_world_id VARCHAR(191) NOT NULL DEFAULT '',
         source_snapshot_at VARCHAR(40) NOT NULL DEFAULT '',
         source_snapshot_fingerprint VARCHAR(64) NOT NULL DEFAULT '',
         first_observed_at VARCHAR(40) NOT NULL DEFAULT '',
@@ -586,6 +590,7 @@ MYSQL_SCHEMA = [
         created_at VARCHAR(40) NOT NULL,
         updated_at VARCHAR(40) NOT NULL,
         KEY idx_ontology_projection_runs_account_updated (account_id, updated_at, run_id),
+        KEY idx_ontology_projection_runs_world_updated (world_id, updated_at, run_id),
         KEY idx_ontology_projection_runs_abox (abox_snapshot_id),
         KEY idx_ontology_projection_runs_material (account_id, material_fingerprint)
     ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci

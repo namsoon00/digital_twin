@@ -36,7 +36,8 @@ class MySQLOntologyProjectionRunStore(MySQLOperationalConnection):
             connection.execute(
                 """
                 INSERT INTO ontology_projection_runs (
-                    run_id, portfolio_id, account_id, source_snapshot_at,
+                    run_id, portfolio_id, account_id, tenant_id, world_id,
+                    world_type, market_world_id, source_snapshot_at,
                     source_snapshot_fingerprint, first_observed_at, last_observed_at,
                     started_at, completed_at, activated_at, status, graph_store,
                     projection_mode, material_fingerprint, abox_snapshot_id,
@@ -44,10 +45,14 @@ class MySQLOntologyProjectionRunStore(MySQLOperationalConnection):
                     rulebox_rules_hash, entity_count, relation_count,
                     inference_generation_id, inference_status, source_symbols_json,
                     context_payload_json, result_payload_json, created_at, updated_at
-                ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
                 ON DUPLICATE KEY UPDATE
                     portfolio_id = VALUES(portfolio_id),
                     account_id = VALUES(account_id),
+                    tenant_id = VALUES(tenant_id),
+                    world_id = VALUES(world_id),
+                    world_type = VALUES(world_type),
+                    market_world_id = VALUES(market_world_id),
                     source_snapshot_at = VALUES(source_snapshot_at),
                     source_snapshot_fingerprint = VALUES(source_snapshot_fingerprint),
                     last_observed_at = VALUES(last_observed_at),
@@ -82,6 +87,10 @@ class MySQLOntologyProjectionRunStore(MySQLOperationalConnection):
                     status = %s,
                     graph_store = %s,
                     projection_mode = %s,
+                    tenant_id = %s,
+                    world_id = %s,
+                    world_type = %s,
+                    market_world_id = %s,
                     material_fingerprint = %s,
                     abox_snapshot_id = %s,
                     active_abox_snapshot_id = %s,
@@ -105,6 +114,10 @@ class MySQLOntologyProjectionRunStore(MySQLOperationalConnection):
                     run.status,
                     run.graph_store,
                     run.projection_mode,
+                    run.tenant_id,
+                    run.world_id,
+                    run.world_type,
+                    run.market_world_id,
                     run.material_fingerprint,
                     run.abox_snapshot_id,
                     run.active_abox_snapshot_id,
@@ -124,12 +137,15 @@ class MySQLOntologyProjectionRunStore(MySQLOperationalConnection):
             )
         return run
 
-    def latest(self, account_id: str = "", limit: int = 50) -> List[Dict[str, object]]:
+    def latest(self, account_id: str = "", limit: int = 50, world_id: str = "") -> List[Dict[str, object]]:
         clauses = []
         params: List[object] = []
         if account_id:
             clauses.append("account_id = %s")
             params.append(str(account_id or ""))
+        if world_id:
+            clauses.append("world_id = %s")
+            params.append(str(world_id or ""))
         sql = "SELECT * FROM ontology_projection_runs"
         if clauses:
             sql += " WHERE " + " AND ".join(clauses)
@@ -139,7 +155,7 @@ class MySQLOntologyProjectionRunStore(MySQLOperationalConnection):
             rows = connection.execute(sql, params).fetchall()
         return [self.row_payload(row) for row in rows or []]
 
-    def runtime_summary(self, account_id: str = "", limit: int = 80) -> Dict[str, object]:
+    def runtime_summary(self, account_id: str = "", limit: int = 80, world_id: str = "") -> Dict[str, object]:
         """Read bounded operational telemetry from the durable projection audit.
 
         The runtime sample is embedded in the same row that already proves
@@ -147,7 +163,13 @@ class MySQLOntologyProjectionRunStore(MySQLOperationalConnection):
         duplicate operational history table.
         """
 
-        rows = self.latest(account_id=account_id, limit=max(5, min(500, int(limit or 80))))
+        query = {
+            "account_id": account_id,
+            "limit": max(5, min(500, int(limit or 80))),
+        }
+        if str(world_id or "").strip():
+            query["world_id"] = str(world_id).strip()
+        rows = self.latest(**query)
         observations = []
         for row in rows:
             result = row.get("result") if isinstance(row.get("result"), dict) else {}
@@ -161,6 +183,10 @@ class MySQLOntologyProjectionRunStore(MySQLOperationalConnection):
             run.run_id,
             run.portfolio_id,
             run.account_id,
+            run.tenant_id,
+            run.world_id,
+            run.world_type,
+            run.market_world_id,
             run.source_snapshot_at,
             run.source_snapshot_fingerprint,
             run.first_observed_at,
@@ -194,6 +220,10 @@ class MySQLOntologyProjectionRunStore(MySQLOperationalConnection):
             "runId": str(row.get("run_id") or ""),
             "portfolioId": str(row.get("portfolio_id") or ""),
             "accountId": str(row.get("account_id") or ""),
+            "tenantId": str(row.get("tenant_id") or ""),
+            "worldId": str(row.get("world_id") or ""),
+            "worldType": str(row.get("world_type") or ""),
+            "marketWorldId": str(row.get("market_world_id") or ""),
             "sourceSnapshotAt": str(row.get("source_snapshot_at") or ""),
             "sourceSnapshotFingerprint": str(row.get("source_snapshot_fingerprint") or ""),
             "firstObservedAt": str(row.get("first_observed_at") or ""),

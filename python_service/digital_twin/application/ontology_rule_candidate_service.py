@@ -1,5 +1,7 @@
 from typing import Dict, Iterable, List
 
+from ..domain.ontology_worlds import portfolio_world_id
+
 
 def int_setting(settings: Dict[str, object], key: str, fallback: int, lower: int = 1, upper: int = 1000) -> int:
     try:
@@ -30,16 +32,20 @@ class RuleChangeCandidateProposalService:
         trigger: str = "manual",
         requests: Iterable[object] = None,
         alerts: Iterable[object] = None,
+        account_id: str = "",
+        tenant_id: str = "",
     ) -> Dict[str, object]:
         if not self.ontology_repository or not self.advisor:
             return {"status": "disabled", "reason": "Rule candidate advisor is not configured.", "candidateCount": 0, "savedCount": 0}
         clean_symbols = sorted(set(str(item or "").upper().strip() for item in (symbols or []) if str(item or "").strip()))
-        context = self.build_context(clean_symbols, trigger, requests, alerts)
+        world_id = portfolio_world_id(account_id, tenant_id) if str(account_id or "").strip() else ""
+        context = self.build_context(clean_symbols, trigger, requests, alerts, world_id=world_id)
         candidates = self.advisor.propose(context)
         candidates = list(candidates or [])[: self.max_candidates()]
         save_result = self.ontology_repository.save_rule_change_candidates(candidates, {
             "trigger": trigger,
             "symbols": clean_symbols,
+            "worldId": world_id,
             "promptContext": context,
         }) if candidates and hasattr(self.ontology_repository, "save_rule_change_candidates") else {
             "status": "skipped",
@@ -50,6 +56,7 @@ class RuleChangeCandidateProposalService:
             "status": "ok" if candidates else "no-candidates",
             "trigger": trigger,
             "symbols": clean_symbols,
+            "worldId": world_id,
             "candidateCount": len(candidates),
             "savedCount": int(save_result.get("savedCount") or 0),
             "candidates": candidates,
@@ -72,14 +79,23 @@ class RuleChangeCandidateProposalService:
         trigger: str,
         requests: Iterable[object] = None,
         alerts: Iterable[object] = None,
+        world_id: str = "",
     ) -> Dict[str, object]:
         rulebox = self.ontology_repository.rulebox_snapshot() if hasattr(self.ontology_repository, "rulebox_snapshot") else {}
-        inferencebox = self.ontology_repository.inferencebox_snapshot(symbols, limit=80) if hasattr(self.ontology_repository, "inferencebox_snapshot") else {}
+        inferencebox = {}
+        if hasattr(self.ontology_repository, "inferencebox_snapshot"):
+            try:
+                inferencebox = self.ontology_repository.inferencebox_snapshot(symbols, limit=80, world_id=world_id)
+            except TypeError as error:
+                if "unexpected keyword" not in str(error) and "world_id" not in str(error):
+                    raise
+                inferencebox = self.ontology_repository.inferencebox_snapshot(symbols, limit=80)
         request_items = [self.event_payload(event) for event in (requests or [])]
         recent_events = request_items or self.recent_events()
         return {
             "trigger": trigger,
             "symbols": symbols,
+            "worldId": world_id,
             "ruleBox": rulebox,
             "inferenceBox": inferencebox,
             "recentEvents": recent_events,

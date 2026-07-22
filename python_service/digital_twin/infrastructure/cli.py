@@ -426,12 +426,17 @@ def ontology_lab_command(args) -> int:
         candidate_result = build_rule_change_candidate_service(settings).propose(
             symbols=symbols,
             trigger=args.trigger or "ontology-lab-suggest",
+            account_id=args.account_id,
+            tenant_id=args.tenant_id,
         )
         result = service.suggest_from_rule_candidates(candidate_result, {
             "symbols": symbols,
             "activate": bool(args.activate),
             "run": bool(args.run),
             "limit": args.limit,
+            "accountId": args.account_id,
+            "tenantId": args.tenant_id,
+            "worldId": args.world_id,
         })
         result["candidateResult"] = {
             "status": candidate_result.get("status"),
@@ -462,6 +467,9 @@ def ontology_lab_command(args) -> int:
                 "reviewedBy": args.reviewed_by,
                 "reviewReason": args.review_reason,
                 "recommendationIds": [item.strip() for item in str(args.recommendation_ids or "").split(",") if item.strip()],
+                "accountId": args.account_id,
+                "tenantId": args.tenant_id,
+                "worldId": args.world_id,
             },
         )
         print(json.dumps(result, ensure_ascii=False))
@@ -929,6 +937,9 @@ def build_parser() -> argparse.ArgumentParser:
     lab_suggest.add_argument("--limit", default="")
     lab_suggest.add_argument("--activate", action="store_true")
     lab_suggest.add_argument("--run", action="store_true")
+    lab_suggest.add_argument("--account-id", default="")
+    lab_suggest.add_argument("--tenant-id", default="")
+    lab_suggest.add_argument("--world-id", default="")
     lab_activate = ontology_lab_actions.add_parser("activate")
     lab_activate.add_argument("--id", required=True)
     lab_pause = ontology_lab_actions.add_parser("pause")
@@ -943,6 +954,9 @@ def build_parser() -> argparse.ArgumentParser:
     lab_apply.add_argument("--reviewed-by", default="cli-user")
     lab_apply.add_argument("--review-reason", default="")
     lab_apply.add_argument("--recommendation-ids", default="")
+    lab_apply.add_argument("--account-id", default="")
+    lab_apply.add_argument("--tenant-id", default="")
+    lab_apply.add_argument("--world-id", default="")
     lab_auto_suggest = ontology_lab_actions.add_parser("auto-suggest")
     lab_auto_suggest.add_argument("--symbols", default="")
     lab_auto_suggest.add_argument("--trigger", default="ontology-lab-cli-auto-suggest")

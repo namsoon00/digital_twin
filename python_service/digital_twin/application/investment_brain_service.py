@@ -11,6 +11,7 @@ from ..domain.investment_research import NewsCollectionTarget
 from ..domain.investment_evidence_governance import ResearchRun
 from ..domain.message_types import INVESTMENT_INSIGHT
 from ..domain.ontology_inference_context import relation_context_from_inferencebox
+from ..domain.ontology_worlds import portfolio_world_id
 from ..domain.portfolio import PortfolioSummary, Position
 
 
@@ -497,17 +498,31 @@ class InvestmentBrainService:
         decision_rows = state.get("decisions") if isinstance(state.get("decisions"), dict) else {}
         stored_decision = decision_rows.get(position.symbol) if isinstance(decision_rows.get(position.symbol), dict) else {}
         stored_context = stored_decision.get("relation_rule_context") or stored_decision.get("relationRuleContext")
+        world_id = self.portfolio_world_id_for_state(state)
         inferencebox = {}
         if self.ontology_repository and hasattr(self.ontology_repository, "inferencebox_snapshot"):
             try:
                 inferencebox = self.ontology_repository.inferencebox_snapshot(
                     symbols=[position.symbol],
                     limit=bounded_int_setting(self.settings, "investmentBrainInferenceBoxLimit", 500, 120, 500),
+                    world_id=world_id,
                 )
+            except TypeError as error:
+                # Narrow compatibility for older in-memory test adapters. The
+                # production TypeDB adapter always receives the account world.
+                if "unexpected keyword" not in str(error) and "world_id" not in str(error):
+                    raise
+                try:
+                    inferencebox = self.ontology_repository.inferencebox_snapshot(
+                        symbols=[position.symbol],
+                        limit=bounded_int_setting(self.settings, "investmentBrainInferenceBoxLimit", 500, 120, 500),
+                    )
+                except Exception:
+                    inferencebox = {}
             except Exception:  # noqa: BLE001 - stored graph context is the read fallback.
                 inferencebox = {}
         if isinstance(inferencebox, dict) and (inferencebox.get("relations") or inferencebox.get("traces")):
-            return relation_context_from_inferencebox(
+            context = relation_context_from_inferencebox(
                 position,
                 portfolio_from_payload(state.get("portfolio") or {}),
                 inferencebox,
@@ -516,7 +531,27 @@ class InvestmentBrainService:
                 source=source,
                 prompt_id="investmentBrainQuestion",
             )
-        return dict(stored_context or {}) if isinstance(stored_context, dict) else {}
+            context.setdefault("worldId", world_id)
+            return context
+        context = dict(stored_context or {}) if isinstance(stored_context, dict) else {}
+        if context:
+            context.setdefault("worldId", world_id)
+        return context
+
+    def portfolio_world_id_for_state(self, state: Dict[str, object]) -> str:
+        metadata = state.get("metadata") if isinstance(state.get("metadata"), dict) else {}
+        account_context = metadata.get("accountContext") if isinstance(metadata.get("accountContext"), dict) else {}
+        account_id = str(state.get("accountId") or account_context.get("accountId") or "").strip()
+        if not account_id:
+            return ""
+        tenant_id = str(
+            metadata.get("tenantId")
+            or account_context.get("tenantId")
+            or self.settings.get("ontologyTenantId")
+            or self.settings.get("tenantId")
+            or ""
+        ).strip()
+        return portfolio_world_id(account_id, tenant_id)
 
 
 def position_from_payload(payload: Dict[str, object], symbol: str, source: str) -> Position:

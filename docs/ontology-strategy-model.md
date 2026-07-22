@@ -26,6 +26,29 @@ AI 프롬프트에는 TBox, `boundedContexts`, ABox, operational ontology, reaso
 
 데이터 수집 주기 자체도 세계관의 일부다. `marketSnapshot`, `watchlistSnapshot`, `externalSignals`는 ABox의 `DataPipeline` 노드이며, 각 파이프라인은 `CollectionSchedule`, `DataFreshness`, `CollectionPolicy`, `ReasoningCycle`에 연결된다. 즉 3분/5분/30분 같은 값은 TBox 클래스가 아니라, `CollectionSchedule` 클래스의 현재 실행 인스턴스다.
 
+### Multi-Account World Ownership
+
+온톨로지의 개념 정의와 실제 사실의 소유권은 분리한다. TBox와 RuleBox는 모든 계정이 함께 쓰는 공통 투자 언어와 추론 정의이며, ABox와 InferenceBox는 반드시 하나의 명시적인 세계에 속한다.
+
+```
+TBox / RuleBox (shared definitions)
+                 |
+                 +--> MarketWorld (shared market facts per market)
+                 |      market:shared:kr
+                 |      market:shared:us
+                 |
+                 +--> PortfolioWorld (private facts and inference per tenant/account)
+                        portfolio:<tenant>:<account>
+                        ABox -> active RuleBox -> InferenceBox -> alert / AI packet
+```
+
+- `MarketWorld`: 종목, 시장, 뉴스, 공시, 거시, 환율처럼 계정에 독립적인 관측 사실을 시장별로 공유한다. 보유 수량, 평균매입가, 위험 한도, 알림 설정, 의사결정, 가설, 실행 계획은 절대 포함하지 않는다. 수집 시각을 기준으로 보존 기간과 종목 수 상한을 적용해 무한히 커지지 않게 관리한다.
+- `PortfolioWorld`: 테넌트와 계정 하나에만 속한다. 보유·관심종목, 포지션, 계정 위험 예산, 전략, 가설, 의사결정, 알림 이력과 그 계정의 ABox/InferenceBox generation을 보관한다. 활성 ABox pointer와 InferenceBox pointer도 `worldId`로 조회하므로 다른 계정의 최신 generation을 선택할 수 없다.
+- `RuleBox`: 규칙 정의는 전역으로 한 번만 배포하지만, TypeDB schema function 실행은 반드시 `PortfolioWorld.worldId`를 인자로 받는다. 계정이나 세계가 지정되지 않은 RuleBox 실행은 차단한다. 공유 `MarketWorld`는 직접 투자 판단을 수행하는 대상이 아니므로 그 세계에서 InferenceBox를 만들 수 없다.
+- 현재 native RuleBox는 포트폴리오 사실과 시장 사실을 한 ABox generation 안에서 결합한다. 따라서 `PortfolioWorld`에는 실행을 위한 시장 사실 read mirror가 존재하고, `MarketWorld`는 공유·보존되는 기준 원본이다. 이는 계정 사실을 공유하지 않는 경계를 유지한다. 두 세계를 하나의 native query에서 직접 조합하는 최적화는 이후 RuleBox schema 계약을 확장할 때 별도 이행한다.
+
+운영 흐름은 `계정별 원본 스냅샷 -> PortfolioWorld ABox 투영 -> 같은 관측의 계정 독립 slice를 MarketWorld에 병합 -> 해당 PortfolioWorld만 TypeDB RuleBox materialization -> 해당 계정 AI/알림`이다. 새 공통 규칙을 배포한 직후에는 대상 계정의 다음 투영이 해당 규칙을 적용한다. 전 계정에 즉시 실행이 필요할 때도 무범위 전역 실행 대신, 계정 목록을 대상으로 한 명시적 world fan-out 작업만 허용한다.
+
 ## Relation Types
 
 - `HOLDS`: 포트폴리오가 종목을 보유한다.

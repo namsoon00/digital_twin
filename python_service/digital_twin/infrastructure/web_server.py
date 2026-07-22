@@ -60,6 +60,7 @@ from ..domain.notification_rules import CONDITION_TYPE_LABELS, NotificationRuleC
 from ..domain.notifications import NotificationJob
 from ..domain.notification_templates import DEFAULT_NOTIFICATION_TEMPLATES, MESSAGE_TYPE_LABELS, TRIGGER_SUMMARIES, NotificationTemplate, alert_context, template_variables
 from ..domain.ontology_inference_ledger import inference_trace_ledger_payload
+from ..domain.ontology_worlds import PORTFOLIO_WORLD_TYPE, portfolio_world_id, world_type_from_id
 from ..domain.investment_ubiquitous_language import (
     LANGUAGE_REGISTRY_SETTING_KEY,
     audit_user_facing_investment_text,
@@ -560,6 +561,10 @@ def settings_status_payload() -> Dict[str, object]:
         "ontologyRuleCandidateAiTimeoutSeconds",
         "ontologyRuleCandidateAiIntervalMinutes",
         "ontologyRuleCandidateAiMaxCandidates",
+        "ontologyTenantId",
+        "ontologySharedMarketTenantId",
+        "ontologySharedMarketWorldRetentionHours",
+        "ontologySharedMarketWorldMaxSymbols",
         "materialityGateEnabled",
         "marketMaterialityPriceChangePct",
         "marketMaterialityTrendDistancePct",
@@ -845,7 +850,23 @@ def suggest_ontology_language_payload(payload: Dict[str, object]) -> Dict[str, o
 
 
 def run_ontology_rulebox_payload(payload: Dict[str, object]) -> Dict[str, object]:
-    return ontology_repository_from_settings(runtime_settings()).run_rulebox(payload)
+    values = dict(payload or {})
+    world_id = ontology_world_id_from_values(values)
+    if not world_id:
+        return {
+            "status": "world-required",
+            "reason": "TypeDB native RuleBox inference requires accountId or an explicit PortfolioWorld worldId.",
+            "preservedActiveGeneration": True,
+        }
+    if world_type_from_id(world_id) != PORTFOLIO_WORLD_TYPE:
+        return {
+            "status": "portfolio-world-required",
+            "reason": "TypeDB native investment inference can run only for a PortfolioWorld, not a shared MarketWorld.",
+            "worldId": world_id,
+            "preservedActiveGeneration": True,
+        }
+    values["worldId"] = world_id
+    return ontology_repository_from_settings(runtime_settings()).run_rulebox(values)
 
 
 def ontology_diagnostics_payload(query: Dict[str, List[str]]) -> Dict[str, object]:
@@ -856,6 +877,7 @@ def ontology_diagnostics_payload(query: Dict[str, List[str]]) -> Dict[str, objec
         if item.strip()
     ]
     limit = max(1, min(500, int(first_query(query, "limit") or 80)))
+    world_id = ontology_world_id_from_query(query)
     return OntologyDiagnosticsService(
         ontology_repository=ontology_repository_from_settings(settings),
         settings=settings,
@@ -864,7 +886,7 @@ def ontology_diagnostics_payload(query: Dict[str, List[str]]) -> Dict[str, objec
         strategy_proposal_service=build_investment_strategy_proposal_service(settings),
         decision_episode_store=stores.investment_decision_episode_store(settings),
         projection_run_store=stores.ontology_projection_run_store(settings),
-    ).status(symbols=symbols, limit=limit)
+    ).status(symbols=symbols, limit=limit, world_id=world_id)
 
 
 def ontology_inference_ledger_api_payload(query: Dict[str, List[str]]) -> Dict[str, object]:
@@ -872,12 +894,19 @@ def ontology_inference_ledger_api_payload(query: Dict[str, List[str]]) -> Dict[s
     repo = ontology_repository_from_settings(settings)
     symbols = ontology_audit_symbols(query)
     limit = safe_int(first_query(query, "limit"), 80, 1, 300)
+    world_id = ontology_world_id_from_query(query)
     try:
         rulebox = repo.rulebox_snapshot() if hasattr(repo, "rulebox_snapshot") else {}
     except Exception as error:  # noqa: BLE001 - ledger can still expose raw InferenceBox rows.
         rulebox = {"status": "error", "reason": str(error)[:220], "rules": []}
     try:
-        inferencebox = repo.inferencebox_snapshot(symbols=symbols, limit=limit) if hasattr(repo, "inferencebox_snapshot") else {}
+        inferencebox = ontology_repository_world_call(
+            repo,
+            "inferencebox_snapshot",
+            symbols=symbols,
+            limit=limit,
+            world_id=world_id,
+        ) if hasattr(repo, "inferencebox_snapshot") else {}
     except Exception as error:  # noqa: BLE001 - return a structured diagnostic payload.
         inferencebox = {
             "status": "error",
@@ -891,6 +920,7 @@ def ontology_inference_ledger_api_payload(query: Dict[str, List[str]]) -> Dict[s
     payload = inference_trace_ledger_payload(inferencebox, rulebox=rulebox, symbols=symbols, limit=limit)
     payload["ruleboxStatus"] = rulebox.get("status")
     payload["ruleboxReason"] = rulebox.get("reason")
+    payload["worldId"] = world_id
     return payload
 
 
@@ -929,6 +959,51 @@ def safe_int(value, default: int, minimum: int, maximum: int) -> int:
     except (TypeError, ValueError):
         parsed = default
     return max(minimum, min(maximum, parsed))
+
+
+def ontology_world_id_from_values(values: Dict[str, object]) -> str:
+    """Resolve an explicit world or an account query to PortfolioWorld.
+
+    API callers can use a stable ``worldId`` once they have it, while existing
+    account-oriented UI calls continue to select the same isolated world by
+    supplying ``accountId`` and an optional ``tenantId``.
+    """
+    payload = values if isinstance(values, dict) else {}
+    explicit = str(
+        payload.get("worldId")
+        or payload.get("ontologyWorldId")
+        or payload.get("world_id")
+        or ""
+    ).strip()
+    if explicit:
+        return explicit
+    account_id = str(payload.get("accountId") or payload.get("account_id") or "").strip()
+    if not account_id:
+        return ""
+    tenant_id = str(payload.get("tenantId") or payload.get("tenant_id") or "").strip()
+    return portfolio_world_id(account_id, tenant_id)
+
+
+def ontology_world_id_from_query(query: Dict[str, List[str]]) -> str:
+    return ontology_world_id_from_values({
+        "worldId": first_query(query, "worldId") or first_query(query, "ontologyWorldId"),
+        "accountId": first_query(query, "accountId") or first_query(query, "account"),
+        "tenantId": first_query(query, "tenantId") or first_query(query, "tenant"),
+    })
+
+
+def ontology_repository_world_call(repo, method_name: str, *args, world_id: str = "", **kwargs):
+    method = getattr(repo, method_name, None)
+    if not callable(method):
+        raise AttributeError(method_name + " is unavailable")
+    if not str(world_id or "").strip():
+        return method(*args, **kwargs)
+    try:
+        return method(*args, world_id=str(world_id), **kwargs)
+    except TypeError as error:
+        if "unexpected keyword" not in str(error) and "world_id" not in str(error):
+            raise
+        return method(*args, **kwargs)
 
 
 def ontology_audit_symbols(query: Dict[str, List[str]]) -> List[str]:
@@ -1042,6 +1117,7 @@ def ontology_audit_sync_rows(
     rulebox: Dict[str, object],
     inferencebox: Dict[str, object],
     diagnostics: Dict[str, object],
+    world_id: str = "",
 ) -> List[Dict[str, object]]:
     rows = [
         ontology_audit_row_payload({
@@ -1087,7 +1163,11 @@ def ontology_audit_sync_rows(
     ]
     if hasattr(repo, "read_inference_generation_records"):
         try:
-            for index, generation in enumerate(repo.read_inference_generation_records()[:20]):
+            for index, generation in enumerate(ontology_repository_world_call(
+                repo,
+                "read_inference_generation_records",
+                world_id=world_id,
+            )[:20]):
                 rows.append(ontology_audit_row_payload({
                     **generation,
                     "id": generation.get("generationId") or generation.get("snapshotId") or ("generation-" + str(index + 1)),
@@ -1116,6 +1196,7 @@ def ontology_audit_payload(query: Dict[str, List[str]], requested_section: str =
     offset = safe_int(first_query(query, "offset"), 0, 0, 100000)
     search = first_query(query, "q") or first_query(query, "query")
     symbols = ontology_audit_symbols(query)
+    world_id = ontology_world_id_from_query(query)
     section_filter = str(requested_section or first_query(query, "section") or "").strip().lower()
     if section_filter == "all":
         section_filter = ""
@@ -1147,15 +1228,43 @@ def ontology_audit_payload(query: Dict[str, List[str]], requested_section: str =
                 for box in read_boxes:
                     graph_entities.extend([
                         ontology_audit_row_payload(row, "entity")
-                        for row in repo.read_entity_rows([box], sample_limit)
+                        for row in ontology_repository_world_call(
+                            repo,
+                            "read_entity_rows",
+                            [box],
+                            sample_limit,
+                            world_id=world_id,
+                        )
                     ])
                     graph_relations.extend([
                         ontology_audit_row_payload(row, "relation")
-                        for row in repo.read_relation_rows([box], sample_limit)
+                        for row in ontology_repository_world_call(
+                            repo,
+                            "read_relation_rows",
+                            [box],
+                            sample_limit,
+                            world_id=world_id,
+                        )
                     ])
             else:
-                graph_entities = [ontology_audit_row_payload(row, "entity") for row in repo.read_entity_rows(read_boxes)]
-                graph_relations = [ontology_audit_row_payload(row, "relation") for row in repo.read_relation_rows(read_boxes)]
+                graph_entities = [
+                    ontology_audit_row_payload(row, "entity")
+                    for row in ontology_repository_world_call(
+                        repo,
+                        "read_entity_rows",
+                        read_boxes,
+                        world_id=world_id,
+                    )
+                ]
+                graph_relations = [
+                    ontology_audit_row_payload(row, "relation")
+                    for row in ontology_repository_world_call(
+                        repo,
+                        "read_relation_rows",
+                        read_boxes,
+                        world_id=world_id,
+                    )
+                ]
         except Exception as error:  # noqa: BLE001 - admin audit must degrade gracefully.
             graph_error = str(error)[:240]
     elif read_boxes:
@@ -1194,7 +1303,13 @@ def ontology_audit_payload(query: Dict[str, List[str]], requested_section: str =
         inferencebox = (
             {"status": "sampled", "source": "audit-sample", "entities": [], "relations": [], "traces": []}
             if compact_all
-            else repo.inferencebox_snapshot(symbols=symbols, limit=min(300, max(80, limit)))
+            else ontology_repository_world_call(
+                repo,
+                "inferencebox_snapshot",
+                symbols=symbols,
+                limit=min(300, max(80, limit)),
+                world_id=world_id,
+            )
             if ("inferencebox" in section_ids or "sync" in section_ids) and hasattr(repo, "inferencebox_snapshot")
             else {}
         )
@@ -1212,7 +1327,11 @@ def ontology_audit_payload(query: Dict[str, List[str]], requested_section: str =
                 strategy_proposal_service=build_investment_strategy_proposal_service(settings),
                 decision_episode_store=stores.investment_decision_episode_store(settings),
                 projection_run_store=stores.ontology_projection_run_store(settings),
-            ).status(symbols=symbols, limit=min(300, max(80, limit))) if "sync" in section_ids else {}
+            ).status(
+                symbols=symbols,
+                limit=min(300, max(80, limit)),
+                world_id=world_id,
+            ) if "sync" in section_ids else {}
         )
     except Exception as error:  # noqa: BLE001
         diagnostics = {"status": "error", "reason": str(error)[:220]}
@@ -1260,7 +1379,7 @@ def ontology_audit_payload(query: Dict[str, List[str]], requested_section: str =
     if "sync" in section_ids:
         sections["sync"] = ontology_audit_section_payload(
             "sync",
-            ontology_audit_sync_rows(repo, tbox_metadata, rulebox, inferencebox, diagnostics),
+            ontology_audit_sync_rows(repo, tbox_metadata, rulebox, inferencebox, diagnostics, world_id=world_id),
             limit,
             offset,
             search,
@@ -1276,6 +1395,7 @@ def ontology_audit_payload(query: Dict[str, List[str]], requested_section: str =
         "status": status,
         "graphStore": getattr(repo, "store_key", "typedb"),
         "storeLabel": getattr(repo, "store_label", "TypeDB"),
+        "worldId": world_id,
         "configured": bool(getattr(repo, "address", "") or rulebox.get("configured") or tbox_metadata.get("configured")),
         "error": graph_error,
         "query": {
@@ -1283,6 +1403,7 @@ def ontology_audit_payload(query: Dict[str, List[str]], requested_section: str =
             "offset": offset,
             "q": search,
             "symbols": symbols,
+            "worldId": world_id,
             "section": section_filter or "all",
         },
         "summary": {
@@ -1326,6 +1447,8 @@ def propose_ontology_rule_candidates_payload(payload: Dict[str, object]) -> Dict
     result = build_rule_change_candidate_service(runtime_settings()).propose(
         symbols=symbols,
         trigger=str(body.get("trigger") or "manual"),
+        account_id=str(body.get("accountId") or body.get("account_id") or ""),
+        tenant_id=str(body.get("tenantId") or body.get("tenant_id") or ""),
     )
     snapshot = ontology_repository_from_settings(runtime_settings()).rulebox_snapshot()
     result["rulebox"] = snapshot
@@ -1362,6 +1485,8 @@ def suggest_ontology_experiments_payload(payload: Dict[str, object]) -> Dict[str
     candidate_result = build_rule_change_candidate_service(runtime_settings()).propose(
         symbols=symbols,
         trigger=str(body.get("trigger") or "ontology-lab-suggest"),
+        account_id=str(body.get("accountId") or body.get("account_id") or ""),
+        tenant_id=str(body.get("tenantId") or body.get("tenant_id") or ""),
     )
     result = ontology_lab_service().suggest_from_rule_candidates(candidate_result, body)
     result["candidateResult"] = {

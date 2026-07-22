@@ -15,6 +15,7 @@ from ..domain.ontology_experiments import (
     summarize_experiment_result,
 )
 from ..domain.ontology_rulebox_contracts import GraphInferenceRule
+from ..domain.ontology_worlds import PORTFOLIO_WORLD_TYPE, portfolio_world, world_type_from_id
 from ..domain.notifications import NotificationJob
 from ..domain.portfolio import AccountSnapshot, DecisionItem, PortfolioSummary, Position, utc_now_iso
 from ..domain.portfolio_ontology_builder import build_portfolio_ontology
@@ -130,6 +131,7 @@ class OntologyLabService:
             "activeSince": experiment.active_since,
             "pausedAt": experiment.paused_at,
             "candidateCount": len(experiment.candidate_rules or []),
+            "targetWorld": dict(experiment.target_world or {}),
             "warningCount": len(experiment.validation_warnings or []),
             "validationWarnings": list(experiment.validation_warnings or [])[:3],
             "lastRun": {
@@ -221,6 +223,7 @@ class OntologyLabService:
         rulebox = self.rulebox_snapshot()
         candidate_rules, warnings = normalize_candidate_rules(body, rulebox)
         stamp = utc_now_iso()
+        world_context = self.ontology_world_context(body)
         experiment = OntologyExperiment(
             experiment_id=str(body.get("id") or body.get("experimentId") or "") or experiment_id_for(body, stamp),
             title=str(body.get("title") or "Ontology Lab Experiment"),
@@ -228,6 +231,7 @@ class OntologyLabService:
             symbols=clean_symbols(body.get("symbols") or []),
             candidate_rules=candidate_rules,
             baseline_rulebox=compact_rulebox_snapshot(rulebox),
+            target_world=world_context,
             status="draft",
             created_at=stamp,
             updated_at=stamp,
@@ -250,6 +254,7 @@ class OntologyLabService:
         symbols = clean_symbols(body.get("symbols") or candidate_result.get("symbols") or [])
         activate = truthy(body.get("activate"), False)
         run_after_create = truthy(body.get("run"), False)
+        world_context = self.ontology_world_context({**candidate_result, **body})
         rulebox = self.rulebox_snapshot()
         existing_rule_ids = experiment_candidate_rule_ids(self.experiment_store.list())
         stamp = utc_now_iso()
@@ -286,13 +291,15 @@ class OntologyLabService:
                 symbols=symbols,
                 candidate_rules=candidate_rules,
                 baseline_rulebox=compact_rulebox_snapshot(rulebox),
+                target_world=world_context,
                 status=ACTIVE_STATUS if activate else "draft",
                 created_at=stamp,
                 updated_at=stamp,
                 last_result={
                     "status": "suggested",
                     "suggestedAt": stamp,
-                    "sourceCandidate": compact_source_candidate(candidate, rule_id),
+                    "ontologyWorld": world_context,
+                    "sourceCandidate": compact_source_candidate(candidate, rule_id, world_context),
                 },
                 active_since=stamp if activate else "",
                 validation_warnings=warnings + [
@@ -332,27 +339,128 @@ class OntologyLabService:
             return {"status": "disabled", "reason": "Ontology rule candidate AI is disabled.", "createdCount": 0}
         if not self.auto_suggest_configured():
             return {"status": "disabled", "reason": "Rule candidate service is not configured.", "createdCount": 0}
-        clean = self.auto_suggest_symbols(symbols)
-        candidate_result = self.rule_candidate_service.propose(symbols=clean, trigger=trigger)
-        candidate_result = dict(candidate_result or {})
-        candidate_status = str(candidate_result.get("status") or "")
-        if candidate_status in {"disabled", "error"}:
+        targets = self.auto_suggest_targets(symbols)
+        if not targets:
             return {
-                "status": candidate_status,
-                "reason": str(candidate_result.get("reason") or ""),
+                "status": "world-required",
+                "reason": "No account-scoped PortfolioWorld has holdings or watchlist symbols for automatic RuleBox suggestions.",
                 "createdCount": 0,
-                "symbols": clean,
-                "candidateResult": compact_candidate_result(candidate_result),
+                "symbols": clean_symbols(symbols or []),
+                "autoSuggest": True,
             }
-        result = self.suggest_from_rule_candidates(candidate_result, {
-            "symbols": clean,
-            "activate": True,
-            "run": True,
-            "limit": self.auto_suggest_limit(),
-        })
-        result["autoSuggest"] = True
-        result["candidateResult"] = compact_candidate_result(candidate_result)
-        return result
+        created = []
+        skipped = []
+        candidate_results = []
+        account_runs = []
+        for target in targets:
+            candidate_result = self.propose_rule_candidates_for_world(target, trigger)
+            candidate_result = dict(candidate_result or {})
+            candidate_status = str(candidate_result.get("status") or "")
+            compact_candidate = compact_candidate_result(candidate_result)
+            candidate_results.append({
+                "worldId": target["worldId"],
+                "accountId": target["accountId"],
+                **compact_candidate,
+            })
+            if candidate_status in {"disabled", "error"}:
+                account_runs.append({
+                    "worldId": target["worldId"],
+                    "accountId": target["accountId"],
+                    "status": candidate_status,
+                    "reason": str(candidate_result.get("reason") or ""),
+                })
+                continue
+            result = self.suggest_from_rule_candidates(candidate_result, {
+                "symbols": target["symbols"],
+                "accountId": target["accountId"],
+                "tenantId": target["tenantId"],
+                "worldId": target["worldId"],
+                "activate": True,
+                "run": True,
+                "limit": self.auto_suggest_limit(),
+            })
+            created.extend(list(result.get("experiments") or []))
+            skipped.extend(list(result.get("skipped") or []))
+            account_runs.append({
+                "worldId": target["worldId"],
+                "accountId": target["accountId"],
+                "status": str(result.get("status") or ""),
+                "createdCount": int(result.get("createdCount") or 0),
+                "skippedCount": int(result.get("skippedCount") or 0),
+            })
+        status = "created" if created else (
+            "error" if account_runs and all(str(item.get("status") or "") in {"disabled", "error"} for item in account_runs)
+            else "no-candidates"
+        )
+        return {
+            "status": status,
+            "autoSuggest": True,
+            "createdCount": len(created),
+            "skippedCount": len(skipped),
+            "symbols": sorted({symbol for target in targets for symbol in target["symbols"]}),
+            "worldCount": len(targets),
+            "experiments": created,
+            "skipped": skipped,
+            "accountRuns": account_runs,
+            "candidateResult": candidate_results[0] if candidate_results else {},
+            "candidateResults": candidate_results,
+        }
+
+    def auto_suggest_targets(self, symbols: Iterable[str] = None) -> List[Dict[str, object]]:
+        """Build one candidate-AI request per PortfolioWorld.
+
+        Candidate proposals use the active InferenceBox as context.  Combining
+        symbols from separate accounts would either select a legacy global
+        pointer or let one account's graph influence another account's rule
+        proposal, so scheduled suggestion deliberately has no global fallback.
+        """
+        requested = clean_symbols(symbols or [])
+        targets = []
+        for snapshot in self.monitor_snapshots():
+            available = clean_symbols([
+                item.symbol
+                for item in list(snapshot.positions or []) + list(snapshot.watchlist or [])
+            ])
+            selected = [item for item in requested if item in set(available)] if requested else available
+            if not selected or not str(snapshot.account_id or "").strip():
+                continue
+            metadata = dict(snapshot.metadata or {})
+            account_context = metadata.get("accountContext") if isinstance(metadata.get("accountContext"), dict) else {}
+            tenant_id = str(
+                metadata.get("tenantId")
+                or metadata.get("tenant_id")
+                or account_context.get("tenantId")
+                or account_context.get("tenant_id")
+                or self.settings.get("ontologyTenantId")
+                or self.settings.get("tenantId")
+                or ""
+            ).strip()
+            world = portfolio_world(snapshot.account_id, tenant_id)
+            targets.append({
+                "accountId": str(snapshot.account_id or ""),
+                "tenantId": world.tenant_id,
+                "worldId": world.world_id,
+                "symbols": selected[:40],
+            })
+        return targets
+
+    def propose_rule_candidates_for_world(self, target: Dict[str, object], trigger: str) -> Dict[str, object]:
+        """Call the world-aware candidate API with compatibility for old fakes."""
+        payload = dict(target or {})
+        try:
+            return self.rule_candidate_service.propose(
+                symbols=payload.get("symbols") or [],
+                trigger=trigger,
+                account_id=str(payload.get("accountId") or ""),
+                tenant_id=str(payload.get("tenantId") or ""),
+            )
+        except TypeError as error:
+            if "unexpected keyword" not in str(error) and "account_id" not in str(error):
+                raise
+            return self.rule_candidate_service.propose(
+                symbols=payload.get("symbols") or [],
+                trigger=trigger,
+            )
 
     def auto_suggest_symbols(self, symbols: Iterable[str] = None) -> List[str]:
         requested = clean_symbols(symbols or [])
@@ -414,6 +522,10 @@ class OntologyLabService:
             return {"status": "not-found", "id": experiment_id}
         payload = dict(payload or {})
         last_result = dict(experiment.last_result or {})
+        world_context = self.ontology_world_context(payload, experiment)
+        world_id = str(world_context.get("worldId") or "").strip()
+        if world_context:
+            experiment.target_world = dict(world_context)
         if not last_result:
             return {"status": "no-result", "id": experiment_id}
         readiness = ontology_apply_readiness(last_result, payload)
@@ -479,12 +591,36 @@ class OntologyLabService:
             )
         inference_result = {"status": "skipped", "reason": "RuleBox run disabled or no new rule."}
         if run_rulebox and added_rules:
-            inference_result = self.run_rulebox({"clearInference": True, "trigger": "ontology-lab-apply", "experimentId": experiment.experiment_id})
+            if not world_id:
+                inference_result = {
+                    "status": "deferred-world-required",
+                    "reason": (
+                        "RuleBox is shared, but InferenceBox must be materialized for an explicit PortfolioWorld. "
+                        "Select an account or provide worldId; the next account projection will also apply the new rule."
+                    ),
+                    "preservedActiveGeneration": True,
+                }
+            elif str(world_context.get("worldType") or "") != PORTFOLIO_WORLD_TYPE:
+                inference_result = {
+                    "status": "invalid-inference-world",
+                    "reason": "RuleBox investment inference can run only for a PortfolioWorld, not a shared MarketWorld.",
+                    "worldId": world_id,
+                    "preservedActiveGeneration": True,
+                }
+            else:
+                inference_result = self.run_rulebox({
+                    "clearInference": True,
+                    "trigger": "ontology-lab-apply",
+                    "experimentId": experiment.experiment_id,
+                    "worldId": world_id,
+                })
         review_approval = ontology_review_approval(last_result, payload, stamp)
         application = {
             "status": ontology_application_status(rulebox_result, tbox_result, added_rules, tbox_graph.entities),
             "appliedAt": stamp,
             "experimentId": experiment.experiment_id,
+            "worldId": world_id,
+            "ontologyWorld": world_context,
             "ruleIds": [rule_id_from_payload(item) for item in added_rules if rule_id_from_payload(item)],
             "skippedRuleIds": skipped_rule_ids,
             "relationTypes": clean_text_list(proposed.get("newRelationTypes") or proposed.get("relationTypes") or []),
@@ -578,6 +714,7 @@ class OntologyLabService:
         run_kind: str = "manual",
     ) -> Dict[str, object]:
         payload = dict(payload or {})
+        world_context = self.ontology_world_context(payload, experiment)
         symbols = clean_symbols(payload.get("symbols") or experiment.symbols or [])
         if symbols and symbols != experiment.symbols:
             experiment.symbols = symbols
@@ -600,6 +737,9 @@ class OntologyLabService:
         result["baselineRulebox"] = compact_rulebox_snapshot(rulebox)
         result["snapshotKey"] = snapshot_key
         result["runKind"] = run_kind
+        if world_context:
+            experiment.target_world = dict(world_context)
+            result["ontologyWorld"] = world_context
         experiment.status = ACTIVE_STATUS if keep_active_status else "completed"
         experiment.updated_at = utc_now_iso()
         experiment.last_result = result
@@ -628,12 +768,15 @@ class OntologyLabService:
         automation = ontology_lab_automation_payload(current, last_result, run_kind, eligibility)
         apply_result = {}
         if eligibility.get("eligible"):
+            world_context = self.ontology_world_context({}, current)
             apply_payload = {
                 "runRulebox": True,
                 "reviewApproved": bool(eligibility.get("reviewApproved")),
                 "reviewedBy": "ontology-lab-auto",
                 "reviewReason": "자동 성장 조건을 충족한 온톨로지 실험 결과입니다.",
             }
+            if str(world_context.get("worldId") or "").strip():
+                apply_payload["worldId"] = str(world_context.get("worldId") or "")
             apply_result = self.apply_recommendations(current.experiment_id, apply_payload)
             automation["applicationStatus"] = str(apply_result.get("status") or "")
             automation["application"] = compact_automation_application(apply_result.get("application") or {})
@@ -830,6 +973,72 @@ class OntologyLabService:
             return {"status": "disabled", "reason": "Ontology repository cannot run RuleBox."}
         result = self.ontology_repository.run_rulebox(payload)
         return result if isinstance(result, dict) else {"status": "unknown"}
+
+    def ontology_world_context(
+        self,
+        payload: Dict[str, object] = None,
+        experiment: OntologyExperiment = None,
+    ) -> Dict[str, str]:
+        """Resolve the PortfolioWorld that owns a RuleBox materialization.
+
+        RuleBox and TBox definitions are intentionally shared.  ABox facts and
+        InferenceBox generations are not: they belong to one account world.
+        Keep the target on an experiment result so scheduled auto-apply cannot
+        accidentally fall back to the legacy unscoped TypeDB pointer.
+        """
+        current = self.world_context_from_values(payload)
+        if current:
+            return current
+        if not experiment:
+            return {}
+        current_target = self.world_context_from_values(experiment.target_world)
+        if current_target:
+            return current_target
+        latest = dict(experiment.last_result or {})
+        candidates = [
+            latest.get("ontologyWorld"),
+            latest,
+            latest.get("sourceCandidate"),
+        ]
+        for history in list(experiment.run_history or [])[:3]:
+            if isinstance(history, dict):
+                candidates.append(history.get("ontologyWorld"))
+                candidates.append(history)
+        for item in candidates:
+            context = self.world_context_from_values(item)
+            if context:
+                return context
+        return {}
+
+    def world_context_from_values(self, values: Dict[str, object] = None) -> Dict[str, str]:
+        values = dict(values or {}) if isinstance(values, dict) else {}
+        explicit_world_id = str(
+            values.get("worldId")
+            or values.get("ontologyWorldId")
+            or values.get("world_id")
+            or ""
+        ).strip()
+        if explicit_world_id:
+            parts = explicit_world_id.split(":", 2)
+            inferred_tenant_id = parts[1] if len(parts) == 3 else ""
+            inferred_account_id = parts[2] if len(parts) == 3 and world_type_from_id(explicit_world_id) == PORTFOLIO_WORLD_TYPE else ""
+            return {
+                "worldId": explicit_world_id,
+                "worldType": world_type_from_id(explicit_world_id),
+                "tenantId": str(values.get("tenantId") or values.get("tenant_id") or inferred_tenant_id).strip(),
+                "accountId": str(values.get("accountId") or values.get("account_id") or inferred_account_id).strip(),
+            }
+        account_id = str(values.get("accountId") or values.get("account_id") or "").strip()
+        if not account_id:
+            return {}
+        tenant_id = str(
+            values.get("tenantId")
+            or values.get("tenant_id")
+            or self.settings.get("ontologyTenantId")
+            or self.settings.get("tenantId")
+            or ""
+        ).strip()
+        return portfolio_world(account_id, tenant_id).to_dict()
 
     def save_tbox_graph(self, graph: PortfolioOntology) -> Dict[str, object]:
         if not self.ontology_repository or not hasattr(self.ontology_repository, "save_graph"):
@@ -1073,8 +1282,12 @@ def compact_candidate_skip(candidate: Dict[str, object], reason: str) -> Dict[st
     }
 
 
-def compact_source_candidate(candidate: Dict[str, object], rule_id: str) -> Dict[str, object]:
-    return {
+def compact_source_candidate(
+    candidate: Dict[str, object],
+    rule_id: str,
+    world_context: Dict[str, object] = None,
+) -> Dict[str, object]:
+    payload = {
         "id": str((candidate or {}).get("id") or ""),
         "title": str((candidate or {}).get("title") or ""),
         "status": str((candidate or {}).get("status") or ""),
@@ -1086,6 +1299,10 @@ def compact_source_candidate(candidate: Dict[str, object], rule_id: str) -> Dict
         "risk": str((candidate or {}).get("risk") or ""),
         "requiresData": clean_text_list((candidate or {}).get("requiresData") or []),
     }
+    if isinstance(world_context, dict) and str(world_context.get("worldId") or "").strip():
+        payload["ontologyWorld"] = dict(world_context)
+        payload["worldId"] = str(world_context.get("worldId") or "")
+    return payload
 
 
 def hypothesis_from_candidate(candidate: Dict[str, object]) -> str:
@@ -1270,6 +1487,8 @@ def compact_automation_application(application: Dict[str, object]) -> Dict[str, 
         "status",
         "appliedAt",
         "experimentId",
+        "worldId",
+        "ontologyWorld",
         "ruleIds",
         "skippedRuleIds",
         "relationTypes",
@@ -1329,6 +1548,7 @@ def ontology_lab_automation_payload(
         "automatedAt": utc_now_iso(),
         "experimentId": experiment.experiment_id,
         "experimentTitle": experiment.title,
+        "ontologyWorld": dict(last_result.get("ontologyWorld") or {}) if isinstance(last_result.get("ontologyWorld"), dict) else {},
         "runId": latest_run_id(experiment),
         "runKind": str(run_kind or ""),
         "readinessStatus": readiness_status,

@@ -93,9 +93,11 @@ def apply_material_graph_identity(
     graph: PortfolioOntology,
     account_id: str,
     fingerprint: str,
+    world_id: str = "",
 ) -> str:
+    identity_owner = str(world_id or account_id or "account")
     snapshot_id = "abox-material:" + hashlib.sha256(
-        (str(account_id or "account") + "|" + str(fingerprint or "")).encode("utf-8")
+        (identity_owner + "|" + str(fingerprint or "")).encode("utf-8")
     ).hexdigest()[:20]
     lifecycle = {
         "aboxSnapshotId": snapshot_id,

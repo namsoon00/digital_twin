@@ -23,6 +23,12 @@ from ..domain.ontology_scopes import (
     SCOPED_ABOX_PERSISTENCE_MODE,
     apply_scoped_abox_identity,
 )
+from ..domain.ontology_worlds import market_world, world_from_snapshot, world_metadata
+from ..domain.market_world_projection import (
+    build_market_world_graph,
+    market_world_coverage,
+    merge_market_world_graph,
+)
 from ..domain.ontology_projection_audit import (
     OntologyProjectionRun,
     apply_projection_run_identity,
@@ -184,6 +190,11 @@ class PortfolioOntologyProjectionRecorder:
         runtime_stages: Dict[str, int] = {}
         projection_run = None
         pending_activation_recovery: Dict[str, object] = {}
+        portfolio_world_context = world_from_snapshot(snapshot, self.settings)
+        market_world_context = market_world(
+            portfolio_world_context.market_id,
+            self.settings.get("ontologySharedMarketTenantId") or "shared",
+        )
         if not self.repository:
             return {}
         if not self.has_projectable_data(snapshot):
@@ -194,6 +205,7 @@ class PortfolioOntologyProjectionRecorder:
                 "snapshotMode": str(snapshot.mode or ""),
                 "snapshotStatus": str(snapshot.status or ""),
                 "preservedActiveGeneration": True,
+                "ontologyWorld": world_metadata(portfolio_world_context),
             }
             self.store_projection_result(snapshot, result)
             return result
@@ -204,10 +216,11 @@ class PortfolioOntologyProjectionRecorder:
                 "reason": "TypeDB ABox와 InferenceBox는 전용 온톨로지 추론 워커가 같은 주기에서 생성합니다.",
                 "preservedActiveGeneration": True,
                 "singleWriter": True,
+                "ontologyWorld": world_metadata(portfolio_world_context),
             }
             self.store_projection_result(snapshot, result)
             return result
-        pending_activation_recovery = self.recover_pending_abox_activation()
+        pending_activation_recovery = self.recover_pending_abox_activation(portfolio_world_context.world_id)
         recovery_status = str(pending_activation_recovery.get("status") or "skipped")
         if recovery_status not in {"skipped", "disabled", "finalized", "restored", "cleared-stale", "retry-required", "staged"}:
             result = {
@@ -223,7 +236,7 @@ class PortfolioOntologyProjectionRecorder:
             }
             self.store_projection_result(snapshot, result)
             return result
-        self.reconcile_interrupted_projection_audit()
+        self.reconcile_interrupted_projection_audit(portfolio_world_context.world_id)
         try:
             rulebox_bootstrap = self.ensure_rulebox_ready()
             if str(rulebox_bootstrap.get("status") or "") not in {"ready", "seeded"}:
@@ -255,11 +268,22 @@ class PortfolioOntologyProjectionRecorder:
                 include_presentation=False,
             )
             persistence_graph = self.graph_for_graph_store_persistence(graph, rulebox_bootstrap)
+            graph.worldview.update({
+                **world_metadata(portfolio_world_context),
+                "marketWorldId": market_world_context.world_id,
+                "marketContextMode": "shared-market-world-with-portfolio-rule-mirror",
+            })
+            persistence_graph.worldview.update({
+                **world_metadata(portfolio_world_context),
+                "marketWorldId": market_world_context.world_id,
+                "marketContextMode": "shared-market-world-with-portfolio-rule-mirror",
+            })
             material_fingerprint = material_graph_fingerprint(persistence_graph)
             material_snapshot_id = apply_material_graph_identity(
                 persistence_graph,
                 snapshot.account_id,
                 material_fingerprint,
+                world_id=portfolio_world_context.world_id,
             )
             # The full in-memory graph remains the validation and AI context,
             # while persistence gets independent immutable generations for
@@ -268,6 +292,9 @@ class PortfolioOntologyProjectionRecorder:
             scoped_identity = apply_scoped_abox_identity(
                 persistence_graph,
                 snapshot.account_id,
+                world_id=portfolio_world_context.world_id,
+                tenant_id=portfolio_world_context.tenant_id,
+                world_type=portfolio_world_context.world_type,
             )
             material_snapshot_id = str(scoped_identity.get("manifestId") or material_snapshot_id)
             runtime_stages["graphBuildMs"] = int((time.perf_counter() - graph_build_started) * 1000)
@@ -284,7 +311,7 @@ class PortfolioOntologyProjectionRecorder:
                 }
                 self.store_projection_result(snapshot, result, projection_run)
                 return result
-            active_abox = self.active_abox_metadata()
+            active_abox = self.active_abox_metadata(portfolio_world_context.world_id)
             impact_planning_started = time.perf_counter()
             inference_impact_plan = self.inference_impact_plan(
                 snapshot,
@@ -312,6 +339,8 @@ class PortfolioOntologyProjectionRecorder:
                 "persistenceMode": SCOPED_ABOX_PERSISTENCE_MODE,
                 "atomicActivation": True,
                 "manifestId": material_snapshot_id,
+                "worldId": portfolio_world_context.world_id,
+                "marketWorldId": market_world_context.world_id,
                 "scopeCount": len(scoped_identity.get("scopePlan") or []),
                 "scopeFamilyCounts": dict(scoped_identity.get("scopeFamilyCounts") or {}),
                 "scopeTopologyVersion": str(persistence_graph.worldview.get("scopeTopologyVersion") or ""),
@@ -334,7 +363,11 @@ class PortfolioOntologyProjectionRecorder:
                 and active_abox_is_scoped_manifest
                 and active_material_fingerprint(active_abox) == material_fingerprint
             ):
-                inferencebox = self.existing_inference_result(snapshot, inference_symbols)
+                inferencebox = self.existing_inference_result(
+                    snapshot,
+                    inference_symbols,
+                    world_id=portfolio_world_context.world_id,
+                )
                 result = {
                     "saved": False,
                     "status": (
@@ -364,6 +397,11 @@ class PortfolioOntologyProjectionRecorder:
                     "projectionScope": projection_scope,
                     "inferenceImpactPlan": compact_impact_plan,
                     "runtimeStages": runtime_stages,
+                    "ontologyWorld": world_metadata(portfolio_world_context),
+                    "marketWorld": {
+                        **world_metadata(market_world_context),
+                        "status": "unchanged-source-not-reprojected",
+                    },
                 }
                 if rulebox_bootstrap:
                     result["ruleboxBootstrap"] = rulebox_bootstrap
@@ -384,6 +422,7 @@ class PortfolioOntologyProjectionRecorder:
                         snapshot,
                         inference_symbols,
                         compact_impact_plan,
+                        world_id=portfolio_world_context.world_id,
                     )
                 self.store_projection_result(snapshot, result)
                 return result
@@ -414,6 +453,12 @@ class PortfolioOntologyProjectionRecorder:
             # verify that the eventual native InferenceBox covered the exact
             # requested incremental scope before predecessor cleanup.
             persistence_graph.worldview["inferenceTargetSymbols"] = list(inference_symbols)
+            market_projection_started = time.perf_counter()
+            market_projection = self.project_market_world(
+                graph,
+                market_world_context,
+            )
+            runtime_stages["marketWorldProjectionMs"] = int((time.perf_counter() - market_projection_started) * 1000)
             abox_persistence_started = time.perf_counter()
             result = self.repository.save_graph(persistence_graph)
             runtime_stages["aboxPersistenceMs"] = int((time.perf_counter() - abox_persistence_started) * 1000)
@@ -427,6 +472,8 @@ class PortfolioOntologyProjectionRecorder:
             result["inferenceImpactPlan"] = compact_impact_plan
             result["aboxValidation"] = validation.to_dict()
             result["runtimeStages"] = runtime_stages
+            result["ontologyWorld"] = world_metadata(portfolio_world_context)
+            result["marketWorld"] = market_projection
             if rulebox_bootstrap:
                 result["ruleboxBootstrap"] = rulebox_bootstrap
             if pending_activation_recovery:
@@ -441,6 +488,7 @@ class PortfolioOntologyProjectionRecorder:
                     snapshot,
                     pending.get("targetSymbols") or inference_symbols,
                     compact_impact_plan,
+                    world_id=portfolio_world_context.world_id,
                 )
             if self.quality_store:
                 quality_started = time.perf_counter()
@@ -455,23 +503,44 @@ class PortfolioOntologyProjectionRecorder:
         self.store_projection_result(snapshot, result, projection_run)
         return result
 
-    def active_abox_metadata(self) -> Dict[str, object]:
+    def repository_world_call(self, method_name: str, *args, world_id: str = "", **kwargs):
+        """Call a world-aware adapter while retaining narrow test adapters.
+
+        Older in-memory fakes deliberately implement only the original
+        repository contract.  Production TypeDB receives an explicit world
+        boundary; a fake without that optional keyword remains usable for
+        projection unit tests.
+        """
+        method = getattr(self.repository, method_name, None)
+        if not callable(method):
+            raise AttributeError(method_name + " is unavailable")
+        if not world_id:
+            return method(*args, **kwargs)
+        try:
+            return method(*args, world_id=world_id, **kwargs)
+        except TypeError as error:
+            message = str(error)
+            if "world_id" not in message and "unexpected keyword" not in message:
+                raise
+            return method(*args, **kwargs)
+
+    def active_abox_metadata(self, world_id: str = "") -> Dict[str, object]:
         if not hasattr(self.repository, "active_abox_metadata"):
             return {}
         try:
-            result = self.repository.active_abox_metadata()
+            result = self.repository_world_call("active_abox_metadata", world_id=world_id)
         except Exception:  # noqa: BLE001 - absence of comparison metadata falls back to persistence.
             return {}
         return dict(result or {}) if isinstance(result, dict) else {}
 
-    def recover_pending_abox_activation(self) -> Dict[str, object]:
+    def recover_pending_abox_activation(self, world_id: str = "") -> Dict[str, object]:
         if self.active_graph_store_key() != "typedb":
             return {"status": "skipped", "reason": "Active graph store is not TypeDB."}
         recovery = getattr(self.repository, "recover_pending_abox_activation", None)
         if not callable(recovery):
             return {"status": "skipped", "reason": "Graph store has no pending ABox activation journal."}
         try:
-            result = recovery()
+            result = self.repository_world_call("recover_pending_abox_activation", world_id=world_id)
         except Exception as error:  # noqa: BLE001 - do not replace a potentially recoverable active generation.
             return {"status": "error", "reason": str(error)[:180]}
         return dict(result or {}) if isinstance(result, dict) else {
@@ -479,7 +548,7 @@ class PortfolioOntologyProjectionRecorder:
             "reason": "Graph store returned an invalid ABox activation recovery result.",
         }
 
-    def reconcile_interrupted_projection_audit(self) -> Dict[str, object]:
+    def reconcile_interrupted_projection_audit(self, world_id: str = "") -> Dict[str, object]:
         """Finish one audit row only when TypeDB already proves activation.
 
         The source row is written before an ABox pointer moves.  A process can
@@ -493,7 +562,7 @@ class PortfolioOntologyProjectionRecorder:
             return {"status": "skipped", "reason": "Projection audit store does not support recovery lookup."}
         if not hasattr(self.projection_run_store, "complete") or not hasattr(self.repository, "inferencebox_snapshot"):
             return {"status": "skipped", "reason": "Projection audit recovery dependencies are unavailable."}
-        active_abox = self.active_abox_metadata()
+        active_abox = self.active_abox_metadata(world_id)
         if str(active_abox.get("status") or "") != "ok":
             return {"status": "skipped", "reason": "No complete active ABox is available for audit recovery."}
         run_id = str(active_abox.get("projectionRunId") or "").strip()
@@ -501,7 +570,12 @@ class PortfolioOntologyProjectionRecorder:
         if not run_id or not active_snapshot_id:
             return {"status": "skipped", "reason": "Active ABox has no recoverable projection audit identity."}
         try:
-            rows = self.projection_run_store.latest(limit=80)
+            try:
+                rows = self.projection_run_store.latest(limit=80, world_id=world_id)
+            except TypeError as error:
+                if "unexpected keyword" not in str(error) and "world_id" not in str(error):
+                    raise
+                rows = self.projection_run_store.latest(limit=80)
         except Exception as error:  # noqa: BLE001 - audit recovery must not block a new graph cycle.
             return {"status": "error", "reason": str(error)[:180]}
         row = next((
@@ -509,6 +583,10 @@ class PortfolioOntologyProjectionRecorder:
             if isinstance(item, dict)
             and str(item.get("runId") or "") == run_id
             and str(item.get("status") or "").lower() == "projecting"
+            and (
+                not str(world_id or "").strip()
+                or str(item.get("worldId") or "").strip() == str(world_id or "").strip()
+            )
         ), None)
         if not row:
             return {"status": "skipped", "reason": "No interrupted projection audit matches the active ABox."}
@@ -516,9 +594,11 @@ class PortfolioOntologyProjectionRecorder:
         if not run.run_id or run.abox_snapshot_id != active_snapshot_id:
             return {"status": "skipped", "reason": "Interrupted audit ABox identity does not match the active ABox."}
         try:
-            inferencebox = self.repository.inferencebox_snapshot(
+            inferencebox = self.repository_world_call(
+                "inferencebox_snapshot",
                 symbols=list(run.source_symbols or []),
                 limit=self.inference_snapshot_limit(),
+                world_id=world_id,
             )
         except Exception as error:  # noqa: BLE001 - preserve the durable projecting row for the next retry.
             return {"status": "error", "reason": str(error)[:180]}
@@ -875,12 +955,187 @@ class PortfolioOntologyProjectionRecorder:
     def graph_for_typedb_persistence(self, graph: PortfolioOntology) -> PortfolioOntology:
         return self.graph_for_graph_store_persistence(graph)
 
+    def shared_market_world_retention_hours(self) -> float:
+        try:
+            value = float(str(self.settings.get("ontologySharedMarketWorldRetentionHours") or "72"))
+        except (TypeError, ValueError):
+            value = 72.0
+        return max(1.0, min(24.0 * 90.0, value))
+
+    def shared_market_world_symbol_limit(self) -> int:
+        try:
+            value = int(float(str(self.settings.get("ontologySharedMarketWorldMaxSymbols") or "1200")))
+        except (TypeError, ValueError):
+            value = 1200
+        return max(50, min(20000, value))
+
+    def project_market_world(self, portfolio_graph: PortfolioOntology, shared_world) -> Dict[str, object]:
+        """Persist the account-independent market slice without blocking a portfolio run.
+
+        Market observations can be supplied by any account cycle.  We merge the
+        changed instrument slice into the current shared world, then use the
+        same immutable scoped-ABox lifecycle as a PortfolioWorld.  MarketWorld
+        has no account-specific RuleBox output, so its verified manifest can be
+        activated directly after persistence.
+        """
+        if self.active_graph_store_key() != "typedb":
+            return {
+                **world_metadata(shared_world),
+                "status": "skipped-non-typedb-store",
+                "reason": "Shared MarketWorld is enabled on the TypeDB ontology adapter.",
+            }
+        loader = getattr(self.repository, "load_graph_from_typedb", None)
+        if not callable(loader):
+            return {
+                **world_metadata(shared_world),
+                "status": "deferred-adapter-not-world-aware",
+                "reason": "The active graph adapter cannot read a world-scoped MarketWorld yet.",
+            }
+        merge_lease: Dict[str, object] = {}
+        acquire_lease = getattr(self.repository, "acquire_scoped_abox_write_lease", None)
+        release_lease = getattr(self.repository, "release_scoped_abox_write_lease", None)
+        scoped_saver = getattr(self.repository, "save_scoped_abox_graph", None)
+        if callable(acquire_lease) and callable(release_lease) and callable(scoped_saver):
+            try:
+                merge_lease = self.repository_world_call(
+                    "acquire_scoped_abox_write_lease",
+                    "market-world-merge",
+                    world_id=shared_world.world_id,
+                )
+            except Exception as error:  # noqa: BLE001 - the portfolio world must remain independently usable.
+                return {
+                    **world_metadata(shared_world),
+                    "status": "deferred-market-world-write-lease",
+                    "reason": "Shared MarketWorld write lease lookup failed: " + str(error)[:180],
+                }
+            if not bool(merge_lease.get("acquired")):
+                return {
+                    **world_metadata(shared_world),
+                    "status": "deferred-market-world-write-lease",
+                    "preservedActiveGeneration": True,
+                    "reason": "Another account is merging or activating the shared MarketWorld.",
+                    "writeLease": {
+                        key: value
+                        for key, value in dict(merge_lease or {}).items()
+                        if key != "propertiesJson"
+                    },
+                }
+        try:
+            observed_at = str((portfolio_graph.worldview or {}).get("asOf") or "")
+            update = build_market_world_graph(portfolio_graph, shared_world, observed_at=observed_at)
+            try:
+                existing = self.repository_world_call(
+                    "load_graph_from_typedb",
+                    ["ABox"],
+                    world_id=shared_world.world_id,
+                )
+            except Exception:
+                existing = None
+            merged = merge_market_world_graph(
+                existing if isinstance(existing, PortfolioOntology) else None,
+                update,
+                retention_hours=self.shared_market_world_retention_hours(),
+                max_symbols=self.shared_market_world_symbol_limit(),
+                observed_at=observed_at,
+            )
+            merged.worldview.update({
+                **world_metadata(shared_world),
+                "marketWorldProjection": True,
+                "marketContextMode": "shared-market-world-with-portfolio-rule-mirror",
+            })
+            fingerprint = material_graph_fingerprint(merged)
+            apply_material_graph_identity(
+                merged,
+                shared_world.world_id,
+                fingerprint,
+                world_id=shared_world.world_id,
+            )
+            scoped = apply_scoped_abox_identity(
+                merged,
+                shared_world.world_id,
+                world_id=shared_world.world_id,
+                tenant_id=shared_world.tenant_id,
+                world_type=shared_world.world_type,
+                world_account_id="",
+            )
+            validation = validate_ontology(merged)
+            coverage = market_world_coverage(merged)
+            if validation.error_count:
+                return {
+                    **world_metadata(shared_world),
+                    "status": "invalid-market-world",
+                    "materialFingerprint": fingerprint,
+                    "coverage": coverage,
+                    "validation": validation.to_dict(),
+                    "reason": "Shared market observations failed ontology validation.",
+                }
+            # The shared lease covers read -> merge -> stage -> activate.  A
+            # plain save lock alone starts too late: two accounts could both
+            # merge against the same old MarketWorld and publish competing
+            # manifests that each omit the other account's instruments.
+            if merge_lease and callable(scoped_saver):
+                save_result = scoped_saver(merged, adopted_write_lease=merge_lease)
+            else:
+                save_result = self.repository.save_graph(merged)
+            save_result = dict(save_result or {}) if isinstance(save_result, dict) else {
+                "saved": False,
+                "status": "invalid-save-result",
+            }
+            activation = {}
+            manifest_id = str(scoped.get("manifestId") or "").strip()
+            if manifest_id and str(save_result.get("status") or "") in {
+                "ok",
+                "staged-scoped-manifest",
+                "deferred-pending-scoped-manifest",
+            }:
+                activation = self.repository_world_call(
+                    "activate_scoped_abox_manifest",
+                    manifest_id,
+                    pending_activation=False,
+                    world_id=shared_world.world_id,
+                )
+            return {
+                **world_metadata(shared_world),
+                "status": (
+                    "ok"
+                    if str((activation or {}).get("status") or "") == "ok"
+                    else str(save_result.get("status") or "error")
+                ),
+                "materialFingerprint": fingerprint,
+                "worldviewManifestId": manifest_id,
+                "coverage": coverage,
+                "validation": validation.to_dict(),
+                "save": save_result,
+                "activation": activation,
+                "writeLease": {
+                    key: value
+                    for key, value in dict(merge_lease or {}).items()
+                    if key != "propertiesJson"
+                },
+            }
+        except Exception as error:  # noqa: BLE001 - market sharing must never suppress account reasoning.
+            return {
+                **world_metadata(shared_world),
+                "status": "error",
+                "reason": str(error)[:220],
+            }
+        finally:
+            if merge_lease and callable(release_lease):
+                try:
+                    release_lease(merge_lease)
+                except Exception:  # noqa: BLE001 - durable expiry protects the next shared update.
+                    # The PortfolioWorld inference remains independent; the
+                    # short-lived shared lease will expire if a runtime stop
+                    # prevents its normal release.
+                    pass
+
     def attach_graph_store_inference_result(
         self,
         result: Dict[str, object],
         snapshot: AccountSnapshot,
         target_symbols: List[str] = None,
         inference_impact_plan: Dict[str, object] = None,
+        world_id: str = "",
     ) -> None:
         if not hasattr(self.repository, "run_rulebox"):
             return
@@ -889,6 +1144,7 @@ class PortfolioOntologyProjectionRecorder:
         if compact_impact_plan:
             result.setdefault("inferenceImpactPlan", compact_impact_plan)
         active_key = self.active_graph_store_key(result)
+        world_id = str(world_id or result.get("worldId") or ((result.get("ontologyWorld") or {}).get("worldId") if isinstance(result.get("ontologyWorld"), dict) else "") or "").strip()
         runtime_stages = result.setdefault("runtimeStages", {})
         selection_context = {
             "reusable": False,
@@ -897,7 +1153,7 @@ class PortfolioOntologyProjectionRecorder:
         }
         inference_write_lease: Dict[str, object] = {}
         if active_key == "typedb":
-            inference_write_lease = self.acquire_inference_write_lease(result)
+            inference_write_lease = self.acquire_inference_write_lease(result, world_id=world_id)
             if inference_write_lease.get("acquired") is False:
                 lease_summary = {
                     key: value
@@ -939,7 +1195,7 @@ class PortfolioOntologyProjectionRecorder:
                 # writer lease. This makes the reuse proof and the following
                 # ABox pointer transition one serialized operation.
                 selection_started = time.perf_counter()
-                selection_context = self.prior_rule_selection_context(snapshot, inference_symbols)
+                selection_context = self.prior_rule_selection_context(snapshot, inference_symbols, world_id=world_id)
                 runtime_stages["priorInferenceReuseReadMs"] = int((time.perf_counter() - selection_started) * 1000)
                 result["priorInferenceReuse"] = {
                     key: value
@@ -952,7 +1208,10 @@ class PortfolioOntologyProjectionRecorder:
                 if callable(preparer):
                     preparation_started = time.perf_counter()
                     try:
-                        preparation = preparer()
+                        preparation = self.repository_world_call(
+                            "prepare_pending_abox_activation_for_inference",
+                            world_id=world_id,
+                        )
                     except Exception as error:  # noqa: BLE001 - never run native rules against an uncertain active pointer.
                         preparation = {"status": "error", "reason": str(error)[:180]}
                     runtime_stages["aboxActivationPreparationMs"] = int((time.perf_counter() - preparation_started) * 1000)
@@ -984,6 +1243,10 @@ class PortfolioOntologyProjectionRecorder:
                         result["reason"] = result["ruleboxExecution"]["reason"]
                         return
             payload = {
+                "worldId": world_id,
+                "worldType": str((result.get("ontologyWorld") or {}).get("worldType") or "") if isinstance(result.get("ontologyWorld"), dict) else "",
+                "tenantId": str((result.get("ontologyWorld") or {}).get("tenantId") or "") if isinstance(result.get("ontologyWorld"), dict) else "",
+                "accountId": str((result.get("ontologyWorld") or {}).get("accountId") or snapshot.account_id or "") if isinstance(result.get("ontologyWorld"), dict) else str(snapshot.account_id or ""),
                 "symbols": inference_symbols,
                 # Generation retention is intentionally outside the realtime
                 # inference boundary. An idle maintenance pass prunes only
@@ -1041,7 +1304,7 @@ class PortfolioOntologyProjectionRecorder:
                     "reason": str(execution.get("reason") or "Native inference source ABox generation is invalid."),
                 }
                 finalization_started = time.perf_counter()
-                self.reconcile_abox_activation_after_inference(result, inference_symbols)
+                self.reconcile_abox_activation_after_inference(result, inference_symbols, world_id=world_id)
                 runtime_stages["aboxActivationFinalizationMs"] = int((time.perf_counter() - finalization_started) * 1000)
                 return
             # A native RuleBox execution first builds an in-memory graph and
@@ -1050,9 +1313,11 @@ class PortfolioOntologyProjectionRecorder:
             if active_key == "typedb" and hasattr(self.repository, "inferencebox_snapshot"):
                 readback_started = time.perf_counter()
                 try:
-                    snapshot_payload = self.repository.inferencebox_snapshot(
+                    snapshot_payload = self.repository_world_call(
+                        "inferencebox_snapshot",
                         symbols=inference_symbols,
                         limit=self.inference_snapshot_limit(),
+                        world_id=world_id,
                     )
                 except Exception as error:  # noqa: BLE001 - fail closed when durable inference cannot be read.
                     snapshot_payload = {
@@ -1073,9 +1338,11 @@ class PortfolioOntologyProjectionRecorder:
                 result["inferenceBox"] = snapshot_payload
             elif hasattr(self.repository, "inferencebox_snapshot"):
                 try:
-                    snapshot_payload = self.repository.inferencebox_snapshot(
+                    snapshot_payload = self.repository_world_call(
+                        "inferencebox_snapshot",
                         symbols=inference_symbols,
                         limit=self.inference_snapshot_limit(),
+                        world_id=world_id,
                     )
                 except Exception as error:  # noqa: BLE001 - snapshot read is best effort.
                     snapshot_payload = {"status": "error", "reason": str(error)[:180], "graphStore": active_key}
@@ -1085,7 +1352,7 @@ class PortfolioOntologyProjectionRecorder:
                         snapshot_payload.setdefault("source", "typedbInferenceBox")
                     result["inferenceBox"] = snapshot_payload
             finalization_started = time.perf_counter()
-            self.reconcile_abox_activation_after_inference(result, inference_symbols)
+            self.reconcile_abox_activation_after_inference(result, inference_symbols, world_id=world_id)
             runtime_stages["aboxActivationFinalizationMs"] = int((time.perf_counter() - finalization_started) * 1000)
         finally:
             if inference_write_lease.get("acquired"):
@@ -1096,7 +1363,7 @@ class PortfolioOntologyProjectionRecorder:
                     except Exception as error:  # noqa: BLE001 - expiry/recovery remains available.
                         result["inferenceWriteLeaseRelease"] = {"status": "error", "reason": str(error)[:180]}
 
-    def acquire_inference_write_lease(self, result: Dict[str, object]) -> Dict[str, object]:
+    def acquire_inference_write_lease(self, result: Dict[str, object], world_id: str = "") -> Dict[str, object]:
         """Serialize ABox preparation and native InferenceBox publication."""
         acquire = getattr(self.repository, "acquire_scoped_abox_write_lease", None)
         if not callable(acquire):
@@ -1109,7 +1376,11 @@ class PortfolioOntologyProjectionRecorder:
             or "native-rule"
         ).strip()
         try:
-            return dict(acquire("inference:" + candidate_id) or {})
+            return dict(self.repository_world_call(
+                "acquire_scoped_abox_write_lease",
+                "inference:" + candidate_id,
+                world_id=world_id,
+            ) or {})
         except Exception as error:  # noqa: BLE001 - do not activate without the writer boundary.
             return {"acquired": False, "status": "error", "reason": str(error)[:180]}
 
@@ -1117,6 +1388,7 @@ class PortfolioOntologyProjectionRecorder:
         self,
         result: Dict[str, object],
         inference_symbols: List[str],
+        world_id: str = "",
     ) -> None:
         """Keep active ABox and InferenceBox on the same verified generation.
 
@@ -1139,7 +1411,7 @@ class PortfolioOntologyProjectionRecorder:
             if not callable(pending_reader):
                 return
             try:
-                pending = pending_reader()
+                pending = self.repository_world_call("pending_abox_activation", world_id=world_id)
             except Exception:  # noqa: BLE001 - the current inference result remains independently observable.
                 return
             if str((pending or {}).get("status") or "") != "pending":
@@ -1159,9 +1431,11 @@ class PortfolioOntologyProjectionRecorder:
             finalizer = getattr(self.repository, "finalize_abox_generation", None)
             if callable(finalizer):
                 try:
-                    result["aboxActivationFinalization"] = finalizer(
+                    result["aboxActivationFinalization"] = self.repository_world_call(
+                        "finalize_abox_generation",
                         active_snapshot_id,
                         previous_snapshot_id,
+                        world_id=world_id,
                     )
                 except Exception as error:  # noqa: BLE001 - cleanup may be retried without invalidating aligned reasoning.
                     result["aboxActivationFinalization"] = {
@@ -1179,7 +1453,11 @@ class PortfolioOntologyProjectionRecorder:
         restore = getattr(self.repository, "activate_abox_generation", None)
         if previous_snapshot_id and callable(restore):
             try:
-                rollback = restore(previous_snapshot_id)
+                rollback = self.repository_world_call(
+                    "activate_abox_generation",
+                    previous_snapshot_id,
+                    world_id=world_id,
+                )
             except Exception as error:  # noqa: BLE001 - preserve the explicit blocked state when restore itself fails.
                 rollback = {"status": "error", "reason": str(error)[:180]}
         result["activationRollback"] = rollback
@@ -1212,14 +1490,17 @@ class PortfolioOntologyProjectionRecorder:
         self,
         snapshot: AccountSnapshot,
         target_symbols: List[str] = None,
+        world_id: str = "",
     ) -> Dict[str, object]:
         if not hasattr(self.repository, "inferencebox_snapshot"):
             return {}
         inference_symbols = self.inference_symbols(snapshot, target_symbols)
         try:
-            inferencebox = self.repository.inferencebox_snapshot(
+            inferencebox = self.repository_world_call(
+                "inferencebox_snapshot",
                 symbols=inference_symbols,
                 limit=self.inference_snapshot_limit(),
+                world_id=world_id,
             )
         except Exception as error:  # noqa: BLE001 - unchanged ABox remains valid even if readback fails.
             inferencebox = {"status": "error", "reason": str(error)[:180]}
@@ -1257,6 +1538,7 @@ class PortfolioOntologyProjectionRecorder:
         self,
         snapshot: AccountSnapshot,
         inference_symbols: List[str],
+        world_id: str = "",
     ) -> Dict[str, object]:
         """Prove which unaffected native rules must be re-materialized.
 
@@ -1265,8 +1547,8 @@ class PortfolioOntologyProjectionRecorder:
         that proof is unavailable, TypeDB deliberately executes the complete
         RuleBox slice instead of risking an incomplete decision graph.
         """
-        active_abox = self.active_abox_metadata()
-        inferencebox = self.existing_inference_result(snapshot, inference_symbols)
+        active_abox = self.active_abox_metadata(world_id)
+        inferencebox = self.existing_inference_result(snapshot, inference_symbols, world_id=world_id)
         reusable = self.inference_result_is_reusable(
             inferencebox,
             active_abox,

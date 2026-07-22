@@ -145,6 +145,24 @@ class OntologyProjectionAuditTests(unittest.TestCase):
         )
         self.assertNotEqual(run.run_id, repeated.run_id)
 
+    def test_run_keeps_tenant_and_world_identity_in_the_audit_contract(self):
+        snapshot = source_snapshot()
+        graph = abox_graph()
+        graph.worldview.update({
+            "tenantId": "tenant-a",
+            "worldId": "portfolio:tenant-a:main",
+            "worldType": "portfolio",
+            "marketWorldId": "market:shared:kr",
+        })
+        fingerprint = material_graph_fingerprint(graph)
+        run = build_ontology_projection_run(snapshot, graph, fingerprint, "abox:world", "typedb")
+
+        self.assertEqual("tenant-a", run.tenant_id)
+        self.assertEqual("portfolio:tenant-a:main", run.world_id)
+        self.assertEqual("portfolio", run.world_type)
+        self.assertEqual("market:shared:kr", run.market_world_id)
+        self.assertEqual("portfolio:tenant-a:main", run.context_payload["world"]["worldId"])
+
     def test_mysql_store_records_source_before_and_result_after_activation(self):
         _snapshot, _graph, _fingerprint, run = self.build_run()
         connection = RecordingConnection()
@@ -216,6 +234,16 @@ class OntologyProjectionAuditTests(unittest.TestCase):
         self.assertEqual(["005930"], latest[0]["sourceSymbols"])
         self.assertEqual("ok", latest[0]["result"]["status"])
         self.assertEqual(500, connection.calls[0][1][-1])
+
+    def test_mysql_store_filters_projection_runs_by_world(self):
+        connection = RecordingConnection(rows=[])
+        store = MySQLOntologyProjectionRunStore.__new__(MySQLOntologyProjectionRunStore)
+        store.connect = lambda: ConnectionContext(connection)
+
+        store.latest(world_id="portfolio:tenant-a:main", limit=10)
+
+        self.assertIn("world_id = %s", connection.calls[0][0])
+        self.assertEqual("portfolio:tenant-a:main", connection.calls[0][1][0])
 
     def test_projection_run_rehydrates_mysql_payload(self):
         _snapshot, _graph, _fingerprint, run = self.build_run()

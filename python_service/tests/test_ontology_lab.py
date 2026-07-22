@@ -155,8 +155,13 @@ class FakeRuleCandidateService:
         self.result = result or ai_candidate_result()
         self.calls = []
 
-    def propose(self, symbols=None, trigger="manual"):
-        self.calls.append({"symbols": list(symbols or []), "trigger": trigger})
+    def propose(self, symbols=None, trigger="manual", account_id="", tenant_id=""):
+        self.calls.append({
+            "symbols": list(symbols or []),
+            "trigger": trigger,
+            "accountId": account_id,
+            "tenantId": tenant_id,
+        })
         return self.result
 
 
@@ -272,6 +277,7 @@ class OntologyLabTests(unittest.TestCase):
             "title": "AAPL apply lab",
             "symbols": ["AAPL"],
             "rules": [candidate_rule()],
+            "accountId": "acct-1",
         })["experiment"]["id"]
         service.run(experiment_id)
         store.save(mark_native_materialization_ready(store.get(experiment_id), "needs-review"))
@@ -285,6 +291,7 @@ class OntologyLabTests(unittest.TestCase):
         self.assertEqual("applied", result["status"])
         self.assertEqual(1, len(repository.saved_rulebox_payloads))
         self.assertEqual(1, len(repository.run_rulebox_payloads))
+        self.assertEqual("portfolio:local:acct-1", repository.run_rulebox_payloads[0]["worldId"])
         self.assertEqual(1, len(repository.saved_tbox_graphs))
         saved_rules = repository.saved_rulebox_payloads[0]["rules"]
         self.assertIn("graph.lab.symbol-review.v1", {item["rule_id"] for item in saved_rules})
@@ -311,6 +318,7 @@ class OntologyLabTests(unittest.TestCase):
             "title": "AAPL selected apply lab",
             "symbols": ["AAPL"],
             "rules": [candidate_rule()],
+            "accountId": "acct-1",
         })["experiment"]["id"]
         service.run(experiment_id)
         store.save(mark_native_materialization_ready(store.get(experiment_id)))
@@ -335,6 +343,7 @@ class OntologyLabTests(unittest.TestCase):
         self.assertEqual([], result["application"]["skippedRecommendationIds"])
         self.assertEqual(1, len(repository.saved_rulebox_payloads))
         self.assertEqual(1, len(repository.run_rulebox_payloads))
+        self.assertEqual("portfolio:local:acct-1", repository.run_rulebox_payloads[0]["worldId"])
         self.assertEqual(1, len(repository.saved_tbox_graphs))
         marked = {
             item["id"]: item.get("applyStatus")
@@ -418,6 +427,7 @@ class OntologyLabTests(unittest.TestCase):
             "reviewedBy": "unit-test",
             "reviewReason": "batch apply",
             "experimentIds": [first_id, second_id],
+            "accountId": "acct-1",
         })
 
         self.assertEqual("applied", result["status"])
@@ -425,6 +435,57 @@ class OntologyLabTests(unittest.TestCase):
         self.assertEqual(2, result["appliedCount"])
         self.assertEqual(0, result["failedCount"])
         self.assertEqual(2, len(result["results"]))
+        self.assertEqual(
+            ["portfolio:local:acct-1", "portfolio:local:acct-1"],
+            [item["worldId"] for item in repository.run_rulebox_payloads],
+        )
+
+    def test_apply_recommendations_defers_inference_without_an_explicit_portfolio_world(self):
+        store = MemoryExperimentStore()
+        repository = FakeOntologyRepository()
+        service = OntologyLabService(repository, store, monitor_store=FakeMonitorStore())
+        experiment_id = service.create({
+            "title": "Unscoped apply lab",
+            "symbols": ["AAPL"],
+            "rules": [candidate_rule()],
+        })["experiment"]["id"]
+        service.run(experiment_id)
+        store.save(mark_native_materialization_ready(store.get(experiment_id)))
+
+        result = service.apply_recommendations(experiment_id, {
+            "reviewApproved": True,
+            "reviewedBy": "unit-test",
+            "reviewReason": "require an account world for live materialization",
+        })
+
+        self.assertEqual("applied", result["status"])
+        self.assertEqual(1, len(repository.saved_rulebox_payloads))
+        self.assertEqual(0, len(repository.run_rulebox_payloads))
+        self.assertEqual("", result["application"]["worldId"])
+        self.assertEqual("deferred-world-required", result["application"]["inferenceRun"]["status"])
+
+    def test_apply_recommendations_rejects_market_world_for_investment_inference(self):
+        store = MemoryExperimentStore()
+        repository = FakeOntologyRepository()
+        service = OntologyLabService(repository, store, monitor_store=FakeMonitorStore())
+        experiment_id = service.create({
+            "title": "Market world apply lab",
+            "symbols": ["AAPL"],
+            "rules": [candidate_rule()],
+        })["experiment"]["id"]
+        service.run(experiment_id)
+        store.save(mark_native_materialization_ready(store.get(experiment_id)))
+
+        result = service.apply_recommendations(experiment_id, {
+            "worldId": "market:shared:us",
+            "reviewApproved": True,
+            "reviewedBy": "unit-test",
+            "reviewReason": "market observations cannot own a portfolio decision",
+        })
+
+        self.assertEqual("applied", result["status"])
+        self.assertEqual(0, len(repository.run_rulebox_payloads))
+        self.assertEqual("invalid-inference-world", result["application"]["inferenceRun"]["status"])
 
     def test_apply_recommendations_normalizes_blank_condition_ids(self):
         store = MemoryExperimentStore()
@@ -564,6 +625,19 @@ class OntologyLabTests(unittest.TestCase):
         self.assertEqual("suggested", experiment.last_result["status"])
         self.assertEqual("graph.lab.symbol-review.v1", experiment.last_result["sourceCandidate"]["ruleId"])
 
+    def test_ai_suggestion_persists_its_portfolio_world_for_scheduled_materialization(self):
+        store = MemoryExperimentStore()
+        service = OntologyLabService(FakeOntologyRepository(), store, monitor_store=FakeMonitorStore())
+
+        created = service.suggest_from_rule_candidates(
+            ai_candidate_result(),
+            {"accountId": "acct-1", "tenantId": "tenant-a"},
+        )
+
+        experiment = store.get(created["experiments"][0]["id"])
+        self.assertEqual("portfolio:tenant-a:acct-1", experiment.target_world["worldId"])
+        self.assertEqual("portfolio", experiment.last_result["ontologyWorld"]["worldType"])
+
     def test_apply_recommendations_rejects_unrun_ai_suggestion(self):
         store = MemoryExperimentStore()
         repository = FakeOntologyRepository()
@@ -623,10 +697,41 @@ class OntologyLabTests(unittest.TestCase):
         self.assertEqual(1, result["createdCount"])
         self.assertEqual("ontology-lab-auto-suggest", candidate_service.calls[0]["trigger"])
         self.assertEqual(["AAPL"], candidate_service.calls[0]["symbols"])
+        self.assertEqual("acct-1", candidate_service.calls[0]["accountId"])
         experiment = store.get(result["experiments"][0]["id"])
         self.assertEqual("active", experiment.status)
         self.assertEqual("completed", experiment.last_result["status"])
         self.assertEqual("ai-suggested", experiment.run_history[0]["runKind"])
+
+    def test_auto_suggest_reads_candidate_context_per_account_world(self):
+        class TwoAccountMonitorStore:
+            @property
+            def previous(self):
+                rows = FakeMonitorStore().previous
+                second = dict(rows["acct-1"])
+                second["accountId"] = "acct-2"
+                second["accountLabel"] = "두 번째 테스트 계좌"
+                rows["acct-2"] = second
+                return rows
+
+        store = MemoryExperimentStore()
+        candidate_service = FakeRuleCandidateService()
+        service = OntologyLabService(
+            FakeOntologyRepository(),
+            store,
+            monitor_store=TwoAccountMonitorStore(),
+            rule_candidate_service=candidate_service,
+        )
+
+        result = service.auto_suggest()
+
+        self.assertEqual("created", result["status"])
+        self.assertEqual(2, result["worldCount"])
+        self.assertEqual(["acct-1", "acct-2"], [item["accountId"] for item in candidate_service.calls])
+        self.assertEqual(
+            ["portfolio:local:acct-1", "portfolio:local:acct-2"],
+            [item["worldId"] for item in result["accountRuns"]],
+        )
 
     def test_rule_candidate_creates_strategy_proposal_and_lab_validation_updates_it(self):
         proposal_store = MemoryStrategyProposalStore()
@@ -778,6 +883,7 @@ class OntologyLabTests(unittest.TestCase):
             "title": "AAPL auto growth lab",
             "symbols": ["AAPL"],
             "rules": [candidate_rule()],
+            "accountId": "acct-1",
         })["experiment"]["id"]
         service.run(experiment_id)
         experiment = mark_native_materialization_ready(store.get(experiment_id))

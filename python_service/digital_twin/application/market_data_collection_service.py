@@ -7,6 +7,7 @@ from ..domain.events import market_data_collected_event, ontology_reasoning_requ
 from ..domain.fact_changes import market_fact_change
 from ..domain.instrument_profiles import market_signal_symbols
 from ..domain.market_data import normalize_position, number, technical_indicators_from_candles
+from ..domain.position_identity import position_with_symbol_identity
 from ..domain.materiality import market_change_materiality
 from ..domain.portfolio import Position, utc_now_iso
 from ..domain.repositories import AccountRepository, MarketDataProvider, MarketDataProviderFactory, MarketQuoteRepository
@@ -246,7 +247,13 @@ class MarketDataCollectionRunner:
             if symbol in seen:
                 continue
             seen.add(symbol)
-            focused.append(position)
+            identity = {}
+            if hasattr(self.symbol_service, "enrich"):
+                try:
+                    identity = self.symbol_service.enrich(symbol) or {}
+                except Exception:
+                    identity = {}
+            focused.append(position_with_symbol_identity(position, identity))
         return mode, status, token, focused
 
     def outcome_observation_targets(

@@ -13,6 +13,7 @@ from ..domain.data_freshness import combine_quality, freshness_record, int_setti
 from ..domain.instrument_profiles import market_signal_symbols
 from ..domain.market_data import known_stock, normalize_position, number, pct_distance, technical_indicators_from_candles
 from ..domain.message_types import INVESTMENT_INSIGHT
+from ..domain.position_identity import position_with_symbol_identity
 from ..domain.portfolio import AccountSnapshot, Position, utc_now_iso
 from ..domain.portfolio_calculations import (
     apply_position_base_currency_values,
@@ -25,7 +26,7 @@ from ..domain.volume_time_adjustment import trading_value_snapshot
 from .external_signals import ExternalSignalProvider
 from .external_signal_utils import guarded_external_call, root_api_error
 from .kis_market_signals import KISMarketSignalProvider
-from .operational_store import market_quote_cache
+from .operational_store import market_quote_cache, symbol_universe_store
 from .settings import currency_rates, runtime_settings
 
 
@@ -1082,6 +1083,7 @@ def build_snapshot(account: AccountConfig, external_settings: Optional[Dict[str,
     settings = external_settings or runtime_settings()
     provider = TossProvider(account)
     mode, status, positions, cash, currency, watchlist = provider.fetch_positions()
+    positions, watchlist = enrich_snapshot_position_identities(positions, watchlist)
     kis_provider = KISMarketSignalProvider()
     positions, watchlist = kis_provider.enrich_collections(positions, watchlist)
     external_signals = ExternalSignalProvider(settings=settings).signals_for_positions(positions + watchlist)
@@ -1122,4 +1124,29 @@ def build_snapshot(account: AccountConfig, external_settings: Optional[Dict[str,
         external_signals=external_signals,
         watchlist=watchlist,
         metadata=metadata,
+    )
+
+
+def enrich_snapshot_position_identities(
+    positions: List[Position],
+    watchlist: List[Position],
+) -> Tuple[List[Position], List[Position]]:
+    """Resolve code-only provider names from the locally refreshed symbol universe."""
+    try:
+        store = symbol_universe_store()
+    except Exception:
+        return positions, watchlist
+    identities: Dict[str, Dict[str, object]] = {}
+    for position in list(positions or []) + list(watchlist or []):
+        symbol = str(getattr(position, "symbol", "") or "").strip().upper()
+        if not symbol or symbol in identities:
+            continue
+        try:
+            item = store.get(symbol)
+            identities[symbol] = item.to_dict(24) if item else {}
+        except Exception:
+            identities[symbol] = {}
+    return (
+        [position_with_symbol_identity(position, identities.get(str(position.symbol or "").upper())) for position in positions or []],
+        [position_with_symbol_identity(position, identities.get(str(position.symbol or "").upper())) for position in watchlist or []],
     )

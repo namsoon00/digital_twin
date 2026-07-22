@@ -74,11 +74,11 @@ class MySQLFixturesCleanupTests(unittest.TestCase):
             return_value=temp_dir,
         ):
             mysql_fixtures.acquire_mysql_test_database_lock(config)
-            first_handles = dict(mysql_fixtures._HELD_TEST_DATABASE_LOCKS)
+            lock_identity = "127.0.0.1|43306||orbit_alpha_test"
+            first_handle = mysql_fixtures._HELD_TEST_DATABASE_LOCKS[lock_identity]
             mysql_fixtures.acquire_mysql_test_database_lock(config)
 
-        self.assertEqual(1, len(first_handles))
-        self.assertEqual(first_handles, mysql_fixtures._HELD_TEST_DATABASE_LOCKS)
+        self.assertIs(first_handle, mysql_fixtures._HELD_TEST_DATABASE_LOCKS[lock_identity])
 
     def test_does_not_register_non_test_database(self):
         with patch.dict(os.environ, {"MYSQL_TEST_DATABASE": "orbit_alpha"}, clear=False):

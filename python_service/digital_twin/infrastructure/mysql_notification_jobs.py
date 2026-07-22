@@ -13,6 +13,9 @@ from ..domain.notification_rules import (
     default_notification_rule,
     evaluate_notification_rule,
     notification_fingerprint,
+    ontology_relation_delivery_diff,
+    ontology_relation_delivery_metadata,
+    notification_subject_group_key,
     notification_state_group_key,
 )
 from ..domain.notifications import NotificationJob
@@ -420,7 +423,65 @@ class MySQLNotificationJobStore(MySQLOperationalConnection):
                 most_recent_at = row["created_at"] or previous.created_at
         return count, most_recent_context, most_recent_at
 
+    def relation_predecessor_with_connection(
+        self,
+        connection,
+        job: NotificationJob,
+        rule: NotificationRuleConfig,
+    ) -> Dict[str, object]:
+        """Find the prior same-subject graph context for an explainable diff.
+
+        The normal cooldown lookup intentionally treats a changed semantic
+        graph fingerprint as a new state. This companion read keeps the most
+        recent comparable context solely to explain *why* that new state is
+        allowed through; it never changes TypeDB judgement or delivery gates.
+        """
+
+        metadata = ontology_relation_delivery_metadata(job.context or {})
+        if not metadata.get("fingerprint"):
+            return {}
+        history_minutes = max(
+            60,
+            int(rule.similarity_window_minutes or 0),
+            int(rule.state_cooldown_minutes or 0) + 60 if rule.state_cooldown_enabled else 0,
+        )
+        cutoff = datetime.now(timezone.utc) - timedelta(minutes=history_minutes)
+        cutoff_text = cutoff.isoformat().replace("+00:00", "Z")
+        current_group = notification_subject_group_key(job)
+        if not current_group:
+            return {}
+        rows = connection.execute(
+            """
+            SELECT text, payload_json, created_at, status FROM notification_jobs
+            WHERE message_type = %s AND created_at >= %s AND status IN ('pending', 'processing', 'done')
+            ORDER BY created_at DESC
+            LIMIT %s
+            """,
+            (job.message_type, cutoff_text, NOTIFICATION_HISTORY_LOOKBACK_LIMIT),
+        ).fetchall()
+        for row in rows:
+            previous = self.job_from_row(row)
+            if previous.job_id == job.job_id:
+                continue
+            if notification_subject_group_key(previous) != current_group:
+                continue
+            status = str(row["status"] or "").strip()
+            if status != "done" and not notification_history_is_recent_in_flight(row):
+                continue
+            return dict(previous.context or {})
+        return {}
+
     def evaluate_job_with_connection(self, connection, job: NotificationJob):
+        relation_delivery = ontology_relation_delivery_metadata(job.context or {})
+        if relation_delivery:
+            context = dict(job.context or {})
+            context["ontologyRelationDelivery"] = {
+                "version": relation_delivery.get("version"),
+                "fingerprint": relation_delivery.get("fingerprint"),
+                "signature": relation_delivery.get("signature"),
+            }
+            context["ontologyRelationFingerprint"] = relation_delivery.get("fingerprint")
+            job.context = context
         rule = self.rule_for_connection(connection, job.message_type)
         decision = evaluate_notification_rule(job, rule)
         recent_count, previous_context, last_sent_at = self.similar_history_with_connection(
@@ -429,6 +490,16 @@ class MySQLNotificationJobStore(MySQLOperationalConnection):
             rule,
             decision.fingerprint,
         )
+        relation_previous_context = self.relation_predecessor_with_connection(connection, job, rule)
+        relation_diff = ontology_relation_delivery_diff(job.context or {}, relation_previous_context)
+        if relation_delivery:
+            context = dict(job.context or {})
+            context["ontologyRelationDiff"] = relation_diff
+            job.context = context
+        if relation_diff.get("changed") and relation_diff.get("changedComponents") not in ([], ["initial"]):
+            reason = "관계 그래프 변화: " + str(relation_diff.get("reason") or "의미 있는 관계 변화")
+            if reason not in decision.reasons:
+                decision.reasons.append(reason)
         decision = apply_state_cooldown_rule(
             decision,
             rule,

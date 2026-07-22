@@ -97,6 +97,10 @@ TEXT_SETTING_KEYS = [
     "ontologyReasoningProjectionRetrySeconds",
     "ontologyProjectionCircuitFailureThreshold",
     "ontologyProjectionCircuitCooldownSeconds",
+    "ontologyRuntimeProjectionSloSeconds",
+    "ontologyRuntimeInferenceSloSeconds",
+    "ontologyRuntimeSloConsecutiveBreachCount",
+    "ontologyRuntimeAuditWindowRuns",
     "ontologyReasoningUrgentReviewLevels",
     "ontologyReasoningProcessedEventLimit",
     "ontologyReasoningTypeDbNativeRuleExecutionEnabled",
@@ -760,6 +764,10 @@ def runtime_settings() -> Dict[str, str]:
         "ontologyReasoningProjectionRetrySeconds": value("ontologyReasoningProjectionRetrySeconds", "ONTOLOGY_REASONING_PROJECTION_RETRY_SECONDS", "30"),
         "ontologyProjectionCircuitFailureThreshold": value("ontologyProjectionCircuitFailureThreshold", "ONTOLOGY_PROJECTION_CIRCUIT_FAILURE_THRESHOLD", "3"),
         "ontologyProjectionCircuitCooldownSeconds": value("ontologyProjectionCircuitCooldownSeconds", "ONTOLOGY_PROJECTION_CIRCUIT_COOLDOWN_SECONDS", "300"),
+        "ontologyRuntimeProjectionSloSeconds": value("ontologyRuntimeProjectionSloSeconds", "ONTOLOGY_RUNTIME_PROJECTION_SLO_SECONDS", "120"),
+        "ontologyRuntimeInferenceSloSeconds": value("ontologyRuntimeInferenceSloSeconds", "ONTOLOGY_RUNTIME_INFERENCE_SLO_SECONDS", "90"),
+        "ontologyRuntimeSloConsecutiveBreachCount": value("ontologyRuntimeSloConsecutiveBreachCount", "ONTOLOGY_RUNTIME_SLO_CONSECUTIVE_BREACH_COUNT", "3"),
+        "ontologyRuntimeAuditWindowRuns": value("ontologyRuntimeAuditWindowRuns", "ONTOLOGY_RUNTIME_AUDIT_WINDOW_RUNS", "40"),
         "ontologyReasoningUrgentReviewLevels": normalized_ontology_reasoning_urgent_review_levels(
             value("ontologyReasoningUrgentReviewLevels", "ONTOLOGY_REASONING_URGENT_REVIEW_LEVELS", "act,immediate")
         ),

@@ -6,6 +6,7 @@ from ..domain.events import (
     ONTOLOGY_REASONING_COMPLETED,
 )
 from ..domain.notifications import NotificationJob, notification_debug_number
+from ..domain.ontology_inference_ledger import inference_trace_ledger_payload
 from ..domain.portfolio import utc_now_iso
 from ..domain.portfolio_ontology_coverage import CATEGORY_LABELS, CATEGORY_RELATIONS
 
@@ -20,6 +21,7 @@ class OntologyDiagnosticsService:
         service_status_provider=None,
         strategy_proposal_service=None,
         decision_episode_store=None,
+        projection_run_store=None,
     ):
         self.ontology_repository = ontology_repository
         self.settings = settings or {}
@@ -28,6 +30,7 @@ class OntologyDiagnosticsService:
         self.service_status_provider = service_status_provider
         self.strategy_proposal_service = strategy_proposal_service
         self.decision_episode_store = decision_episode_store
+        self.projection_run_store = projection_run_store
 
     def status(self, symbols: Iterable[str] = None, limit: int = 80) -> Dict[str, object]:
         clean_symbols = sorted(set(str(item or "").upper().strip() for item in (symbols or []) if str(item or "").strip()))
@@ -37,6 +40,7 @@ class OntologyDiagnosticsService:
         inference = self.safe_call("inferencebox_snapshot", {}, clean_symbols, safe_limit)
         abox_storage = self.safe_call("scoped_abox_storage_diagnostics", {})
         abox_coverage = self.abox_coverage(clean_symbols)
+        decision_performance = self.decision_performance_boundary(clean_symbols)
         return {
             "contract": "typedb-ontology-diagnostics-v1",
             "generatedAt": utc_now_iso(),
@@ -48,10 +52,12 @@ class OntologyDiagnosticsService:
             "aboxCoverage": abox_coverage,
             "inferenceBox": self.inferencebox_summary(inference),
             "reasoningBoundary": self.reasoning_boundary(rulebox, inference),
+            "runtimeObservability": self.runtime_observation_boundary(),
+            "ruleboxQuality": self.rulebox_quality_boundary(rulebox, inference, decision_performance),
             "latestEvents": self.latest_events(),
             "notificationBoundary": self.notification_boundary(),
             "strategyProposalBoundary": self.strategy_proposal_boundary(),
-            "decisionPerformanceBoundary": self.decision_performance_boundary(clean_symbols),
+            "decisionPerformanceBoundary": decision_performance,
             "serviceStatus": self.service_status(),
         }
 
@@ -64,6 +70,19 @@ class OntologyDiagnosticsService:
         except Exception as error:  # noqa: BLE001 - diagnostics must remain available without feedback history.
             return {"status": "error", "reason": str(error)[:180]}
         summary = result.get("summary") if isinstance(result.get("summary"), dict) else {}
+        rule_outcomes = []
+        for row in result.get("byRule") or []:
+            if not isinstance(row, dict):
+                continue
+            rule_outcomes.append({
+                "ruleId": str(row.get("key") or ""),
+                "outcomeCount": int(row.get("outcomeCount") or 0),
+                "decisiveOutcomeCount": int(row.get("decisiveOutcomeCount") or 0),
+                "calibrationEligibleOutcomeCount": int(row.get("calibrationEligibleOutcomeCount") or 0),
+                "corroborationState": str(row.get("corroborationState") or "insufficient-history"),
+                "averageActionAdjustedReturnPct": float(row.get("averageActionAdjustedReturnPct") or 0),
+                "promotionEligible": bool(row.get("promotionEligible")),
+            })
         return {
             "status": str(result.get("status") or "insufficient-data"),
             "episodeCount": int(result.get("episodeCount") or 0),
@@ -76,7 +95,75 @@ class OntologyDiagnosticsService:
             "promotionEligible": bool(summary.get("promotionEligible")),
             "ruleCount": len(result.get("byRule") or []),
             "hypothesisCount": len(result.get("byHypothesis") or []),
+            "ruleOutcomes": rule_outcomes[:80],
             "automaticDeployment": False,
+        }
+
+    def runtime_observation_boundary(self) -> Dict[str, object]:
+        if not self.projection_run_store or not hasattr(self.projection_run_store, "runtime_summary"):
+            return {"status": "unavailable", "reason": "Projection runtime audit store is not configured."}
+        try:
+            return self.projection_run_store.runtime_summary(
+                limit=int(self.settings.get("ontologyRuntimeAuditWindowRuns") or 40),
+            )
+        except Exception as error:  # noqa: BLE001 - diagnostics must remain available without audit history.
+            return {"status": "error", "reason": str(error)[:180]}
+
+    def rulebox_quality_boundary(
+        self,
+        rulebox: Dict[str, object],
+        inference: Dict[str, object],
+        performance: Dict[str, object],
+    ) -> Dict[str, object]:
+        """Join native trace coverage with delayed outcome evidence.
+
+        The output is audit-only: a rule cannot be auto-promoted, disabled,
+        or edited from a performance result.
+        """
+
+        try:
+            ledger = inference_trace_ledger_payload(inference, rulebox=rulebox, limit=300)
+        except Exception as error:  # noqa: BLE001 - a ledger failure must not hide the live inference summary.
+            return {"status": "error", "reason": str(error)[:180], "automaticDeployment": False}
+        outcomes = {
+            str(item.get("ruleId") or ""): item
+            for item in performance.get("ruleOutcomes") or []
+            if isinstance(item, dict) and str(item.get("ruleId") or "")
+        }
+        matched = set(ledger.get("ruleCoverage", {}).get("matchedRuleIds") or [])
+        untraced = set(ledger.get("ruleCoverage", {}).get("untracedRuleIds") or [])
+        active = sorted(matched | untraced | set(outcomes))
+        rows = []
+        for rule_id in active[:160]:
+            outcome = outcomes.get(rule_id) or {}
+            rows.append({
+                "ruleId": rule_id,
+                "activeInCurrentInference": rule_id in matched,
+                "outcomeCount": int(outcome.get("outcomeCount") or 0),
+                "calibrationEligibleOutcomeCount": int(outcome.get("calibrationEligibleOutcomeCount") or 0),
+                "corroborationState": str(outcome.get("corroborationState") or "insufficient-history"),
+                "averageActionAdjustedReturnPct": float(outcome.get("averageActionAdjustedReturnPct") or 0),
+                "promotionEligible": bool(outcome.get("promotionEligible")),
+                "governance": "human-review-required",
+            })
+        coverage = ledger.get("ruleCoverage") if isinstance(ledger.get("ruleCoverage"), dict) else {}
+        summary = ledger.get("summary") if isinstance(ledger.get("summary"), dict) else {}
+        native = bool(inference.get("nativeTypeDbReasoningUsed"))
+        status = "ok" if native else "warning"
+        if str(inference.get("status") or "") in {"error", "failed"}:
+            status = "error"
+        return {
+            "status": status,
+            "nativeTypeDbReasoningUsed": native,
+            "activeRuleCount": int(summary.get("activeRuleCount") or 0),
+            "matchedRuleCount": int(summary.get("matchedRuleCount") or 0),
+            "untracedRuleCount": int(summary.get("untracedRuleCount") or 0),
+            "coverageRatio": float(coverage.get("coverageRatio") or 0),
+            "matchedRuleIds": list(coverage.get("matchedRuleIds") or [])[:80],
+            "untracedRuleIds": list(coverage.get("untracedRuleIds") or [])[:80],
+            "rules": rows,
+            "automaticDeployment": False,
+            "interpretation": "Rule activation and delayed outcomes are joined for human review; outcome performance never changes RuleBox automatically.",
         }
 
     def safe_call(self, method_name: str, fallback: Dict[str, object], *args):

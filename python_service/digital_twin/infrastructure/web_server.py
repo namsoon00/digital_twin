@@ -537,6 +537,10 @@ def settings_status_payload() -> Dict[str, object]:
         "ontologyReasoningMinIntervalSeconds",
         "ontologyReasoningUrgentMinIntervalSeconds",
         "ontologyReasoningProjectionRetrySeconds",
+        "ontologyRuntimeProjectionSloSeconds",
+        "ontologyRuntimeInferenceSloSeconds",
+        "ontologyRuntimeSloConsecutiveBreachCount",
+        "ontologyRuntimeAuditWindowRuns",
         "ontologyReasoningUrgentReviewLevels",
         "temporalWindowPeriods",
         "temporalWindowHistoryLimit",
@@ -853,6 +857,7 @@ def ontology_diagnostics_payload(query: Dict[str, List[str]]) -> Dict[str, objec
         notification_queue=stores.notification_job_store(settings),
         strategy_proposal_service=build_investment_strategy_proposal_service(settings),
         decision_episode_store=stores.investment_decision_episode_store(settings),
+        projection_run_store=stores.ontology_projection_run_store(settings),
     ).status(symbols=symbols, limit=limit)
 
 
@@ -1199,6 +1204,8 @@ def ontology_audit_payload(query: Dict[str, List[str]], requested_section: str =
                 event_log=stores.event_log(settings),
                 notification_queue=stores.notification_job_store(settings),
                 strategy_proposal_service=build_investment_strategy_proposal_service(settings),
+                decision_episode_store=stores.investment_decision_episode_store(settings),
+                projection_run_store=stores.ontology_projection_run_store(settings),
             ).status(symbols=symbols, limit=min(300, max(80, limit))) if "sync" in section_ids else {}
         )
     except Exception as error:  # noqa: BLE001

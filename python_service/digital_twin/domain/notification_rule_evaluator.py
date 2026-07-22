@@ -4,6 +4,10 @@ from typing import Dict, Iterable, List, Optional, Tuple
 from .market_hours import evaluate_market_hours
 from .message_types import INVESTMENT_INSIGHT, NEWS_DIGEST, SYSTEM_MESSAGE_TYPES
 from .notification_ai_context import is_graph_backed_relation_context
+from .ontology_relation_delivery import (
+    relation_delivery_diff,
+    relation_delivery_metadata,
+)
 from .ontology_decision_state import (
     CHANGE_STATES,
     CONFLICT_STATES,
@@ -450,7 +454,15 @@ def notification_fingerprint(job: NotificationJob, config: NotificationRuleConfi
     return "|".join(parts)
 
 
-def notification_state_group_key(job: NotificationJob) -> str:
+def notification_subject_group_key(job: NotificationJob) -> str:
+    """Return the stable delivery subject before graph-state distinctions.
+
+    Cooldown enforcement uses the richer state key below.  Graph-diff audit
+    needs this coarser key so it can compare a new TypeDB rule or evidence
+    path with the immediately preceding graph for the same account, subject,
+    and notification intent.
+    """
+
     if job is None:
         return ""
     message_type = str(job.message_type or "").strip()
@@ -493,9 +505,27 @@ def notification_state_group_key(job: NotificationJob) -> str:
         subject,
         normalize_fingerprint_part(state_group),
     ]
+    return "|".join(parts)
+
+
+def notification_state_group_key(
+    job: NotificationJob,
+    include_relation_delivery: bool = True,
+) -> str:
+    subject_key = notification_subject_group_key(job)
+    if not subject_key:
+        return ""
+    context = job.context or {}
+    parts = [subject_key]
     relation_signature = ontology_relation_state_signature(context)
     if relation_signature:
         parts.append(relation_signature)
+    relation_delivery = ontology_relation_delivery_metadata(context)
+    if include_relation_delivery and relation_delivery.get("fingerprint"):
+        # Price, P&L, timestamps, and generation ids are deliberately absent
+        # from this key. A new group exists only when the graph's decision,
+        # active rule/evidence set, or relation topology materially changes.
+        parts.append("graph=" + str(relation_delivery["fingerprint"]))
     return "|".join(parts)
 
 
@@ -521,6 +551,37 @@ def ontology_relation_state_signature(context: Dict[str, object]) -> str:
     if why_now:
         parts.append("why=" + ("escalate" if bool(why_now.get("shouldEscalate")) else "repeat"))
     return "|".join(parts)
+
+
+def ontology_relation_delivery_metadata(context: Dict[str, object]) -> Dict[str, object]:
+    relation_context = relation_context_from_notification_context(context)
+    return relation_delivery_metadata_for_context(relation_context, context)
+
+
+def relation_delivery_metadata_for_context(
+    relation_context: Dict[str, object],
+    notification_context: Dict[str, object],
+) -> Dict[str, object]:
+    # A partial or legacy relation-shaped payload must retain the existing
+    # cooldown behavior. Only a verified graph-backed inference can introduce
+    # graph semantic novelty into delivery policy.
+    if not is_graph_backed_relation_context(relation_context):
+        return {}
+    return relation_delivery_metadata(relation_context, notification_context)
+
+
+def ontology_relation_delivery_diff(
+    current_context: Dict[str, object],
+    previous_context: Dict[str, object],
+) -> Dict[str, object]:
+    current_relation = relation_context_from_notification_context(current_context)
+    previous_relation = relation_context_from_notification_context(previous_context)
+    return relation_delivery_diff(
+        current_relation,
+        previous_relation,
+        current_context,
+        previous_context,
+    )
 
 
 def relation_context_from_notification_context(context: Dict[str, object]) -> Dict[str, object]:

@@ -2,6 +2,7 @@ from datetime import datetime, timedelta, timezone
 from typing import Dict, List
 
 from ..domain.ontology_projection_audit import OntologyProjectionRun
+from ..domain.ontology_runtime_operations import summarize_projection_runtime_observations
 from .mysql_operational_connection import MySQLOperationalConnection
 from .mysql_operational_helpers import _json_loads
 from .operational_common import json_dumps
@@ -137,6 +138,23 @@ class MySQLOntologyProjectionRunStore(MySQLOperationalConnection):
         with self.connect() as connection:
             rows = connection.execute(sql, params).fetchall()
         return [self.row_payload(row) for row in rows or []]
+
+    def runtime_summary(self, account_id: str = "", limit: int = 80) -> Dict[str, object]:
+        """Read bounded operational telemetry from the durable projection audit.
+
+        The runtime sample is embedded in the same row that already proves
+        source capture and ABox activation, avoiding a second write path or a
+        duplicate operational history table.
+        """
+
+        rows = self.latest(account_id=account_id, limit=max(5, min(500, int(limit or 80))))
+        observations = []
+        for row in rows:
+            result = row.get("result") if isinstance(row.get("result"), dict) else {}
+            observation = result.get("runtimeObservation") if isinstance(result, dict) else {}
+            if isinstance(observation, dict) and observation:
+                observations.append(observation)
+        return summarize_projection_runtime_observations(observations, self.runtime_settings)
 
     def values(self, run: OntologyProjectionRun, stamp: str):
         return (

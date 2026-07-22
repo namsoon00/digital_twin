@@ -307,6 +307,10 @@ class OntologyInferenceQualityTests(unittest.TestCase):
         self.assertEqual(events[0][1], events[2][1])
         self.assertNotIn("sourceSnapshot", audit_store.runs[0].context_payload)
         self.assertEqual(
+            "ontology-runtime-observation-v1",
+            audit_store.runs[0].result_payload["runtimeObservation"]["version"],
+        )
+        self.assertEqual(
             "monitor_snapshot_history",
             audit_store.runs[0].context_payload["sourceSnapshotReference"]["store"],
         )

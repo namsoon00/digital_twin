@@ -163,6 +163,44 @@ class FakeStrategyProposalService:
         }
 
 
+class FakeProjectionRunStore:
+    def runtime_summary(self, account_id="", limit=80):
+        return {
+            "contract": "ontology-runtime-observation-v1",
+            "status": "ok",
+            "sampleCount": min(3, limit),
+            "sustainedBreach": False,
+            "latest": {"runId": "ontology-projection:test", "durationMs": 800},
+        }
+
+
+class FakeDecisionEpisodeStore:
+    def performance(self, symbol="", limit=500):
+        return {
+            "status": "ok",
+            "episodeCount": 8,
+            "outcomeCount": 6,
+            "outcomeCoveragePct": 75.0,
+            "summary": {
+                "corroborationState": "reviewable",
+                "actionReturnState": "available",
+                "averageActionAdjustedReturnPct": 1.2,
+                "sampleStatus": "sufficient-sample",
+                "promotionEligible": True,
+            },
+            "byRule": [{
+                "key": "graph.test.v1",
+                "outcomeCount": 6,
+                "decisiveOutcomeCount": 5,
+                "calibrationEligibleOutcomeCount": 5,
+                "corroborationState": "reviewable",
+                "averageActionAdjustedReturnPct": 1.2,
+                "promotionEligible": True,
+            }],
+            "byHypothesis": [],
+        }
+
+
 class PrimaryCoverageRepository(FakeOntologyRepository):
     def read_entity_rows(self, boxes=None):
         return [
@@ -280,6 +318,22 @@ class OntologyDiagnosticsServiceTests(unittest.TestCase):
 
         self.assertEqual(payload["notificationBoundary"]["status"], "warning")
         self.assertIn("no recent notification job", payload["notificationBoundary"]["reason"])
+
+    def test_status_exposes_runtime_slo_and_rulebox_feedback_without_auto_deploying(self):
+        service = OntologyDiagnosticsService(
+            ontology_repository=FakeOntologyRepository(),
+            settings={"ontologyRuntimeAuditWindowRuns": "12"},
+            projection_run_store=FakeProjectionRunStore(),
+            decision_episode_store=FakeDecisionEpisodeStore(),
+        )
+
+        payload = service.status()
+
+        self.assertEqual("ok", payload["runtimeObservability"]["status"])
+        self.assertEqual(3, payload["runtimeObservability"]["sampleCount"])
+        self.assertEqual("ok", payload["ruleboxQuality"]["status"])
+        self.assertFalse(payload["ruleboxQuality"]["automaticDeployment"])
+        self.assertEqual("graph.test.v1", payload["decisionPerformanceBoundary"]["ruleOutcomes"][0]["ruleId"])
 
     def test_abox_coverage_separates_primary_symbols_from_context_proxies(self):
         service = OntologyDiagnosticsService(ontology_repository=PrimaryCoverageRepository())

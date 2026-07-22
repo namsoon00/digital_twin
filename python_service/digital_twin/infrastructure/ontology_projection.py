@@ -1,4 +1,5 @@
 from copy import deepcopy
+from dataclasses import replace
 from typing import Dict, List, Set
 import hashlib
 
@@ -28,6 +29,7 @@ from ..domain.ontology_projection_audit import (
     complete_ontology_projection_run,
     projection_run_from_payload,
 )
+from ..domain.ontology_runtime_operations import build_projection_runtime_observation
 from ..domain.ontology_validator import validate_ontology
 from ..domain.portfolio_ontology_builder import build_portfolio_ontology
 from ..domain.portfolio_ontology_coverage import CATEGORY_RELATIONS
@@ -1347,6 +1349,19 @@ class PortfolioOntologyProjectionRecorder:
         if projection_run and self.projection_run_store:
             try:
                 completed_run = complete_ontology_projection_run(projection_run, result)
+                # Keep projection cost, scope impact, native trace coverage,
+                # and scoped ABox cleanup in the same durable audit row as
+                # the factual source snapshot. This is operational telemetry;
+                # it never participates in investment rule evaluation.
+                result["runtimeObservation"] = build_projection_runtime_observation(
+                    completed_run,
+                    result,
+                    self.settings,
+                )
+                completed_run = replace(completed_run, result_payload={
+                    **dict(completed_run.result_payload or {}),
+                    "runtimeObservation": dict(result["runtimeObservation"]),
+                })
                 self.projection_run_store.complete(completed_run)
                 result["projectionAudit"] = {
                     "status": "recorded",

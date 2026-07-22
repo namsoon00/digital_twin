@@ -339,6 +339,7 @@ def ontology_command(args) -> int:
         payload = {
             "replaceRuleBox": bool(args.replace_rulebox),
             "clearInference": bool(args.clear_inference),
+            "recoverScopedABoxWriteLease": bool(getattr(args, "recover_scoped_write_lease", False)),
         }
         result = repository.seed_ontology(payload)
         recovery = getattr(repository, "recover_pending_abox_activation", None)
@@ -880,6 +881,7 @@ def build_parser() -> argparse.ArgumentParser:
     ontology_seed = ontology_actions.add_parser("seed")
     ontology_seed.add_argument("--replace-rulebox", action="store_true")
     ontology_seed.add_argument("--keep-inference", dest="clear_inference", action="store_false", default=True)
+    ontology_seed.add_argument("--recover-scoped-write-lease", action="store_true")
     ontology_actions.add_parser("recover-abox-activation")
     ontology.set_defaults(func=ontology_command)
 

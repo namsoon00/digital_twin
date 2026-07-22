@@ -594,6 +594,11 @@ def wait_for_typedb_ready(spec: Dict[str, object]) -> bool:
 
 def typedb_seed_command(spec: Dict[str, object]) -> List[str]:
     command = [sys.executable, "-u", "python_service/service.py", "ontology", "seed"]
+    # This command is only reached after this manager started a fresh TypeDB
+    # server and before dependent workers start. A retained lease belongs to a
+    # writer connected to the previous server process and is therefore safe to
+    # reclaim now; normal live reseeds do not pass this flag.
+    command.append("--recover-scoped-write-lease")
     if truthy(spec.get("seedReplaceRuleBox")):
         command.append("--replace-rulebox")
     if truthy(spec.get("seedKeepInference")):

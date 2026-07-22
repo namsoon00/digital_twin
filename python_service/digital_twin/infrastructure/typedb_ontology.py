@@ -1167,6 +1167,88 @@ class ScopedABoxManifestMixin:
 
         return self.with_typedb_retries(operation)
 
+    def recover_scoped_abox_write_lease_after_server_start(self) -> Dict[str, object]:
+        """Clear a stranded lease only while bootstrapping a fresh TypeDB server.
+
+        A scoped ABox writer holds a durable lease across bounded TypeDB write
+        transactions.  If TypeDB itself is restarted, that writer cannot still
+        be alive on the new server, but its old lease row remains in the data
+        directory.  The service manager calls this method before it starts any
+        dependent worker, avoiding an unnecessary lease timeout after restart.
+        It is intentionally opt-in through the seed payload; a normal live
+        seed must never remove another writer's active lease.
+        """
+        if not str(getattr(self, "address", "") or "").strip():
+            return {
+                "configured": False,
+                "status": "disabled",
+                "graphStore": "typedb",
+                "reason": "TypeDB ontology storage is not configured.",
+            }
+        try:
+            existing = self.scoped_abox_write_lease_status()
+        except Exception as error:  # noqa: BLE001 - a fresh database may not have schema rows yet.
+            return {
+                "configured": True,
+                "status": "unavailable",
+                "graphStore": "typedb",
+                "reason": str(error)[:180],
+            }
+        if str(existing.get("status") or "") == "empty":
+            return {
+                "configured": True,
+                "status": "empty",
+                "graphStore": "typedb",
+            }
+        owner = str(existing.get("leaseOwner") or "")
+        properties_json = str(existing.get("propertiesJson") or "")
+        if not owner or not properties_json:
+            return {
+                "configured": True,
+                "status": "invalid",
+                "graphStore": "typedb",
+                "reason": "Scoped ABox write lease has no exact ownership payload.",
+            }
+        imported = self.driver_imports()
+        if imported[0] is None:
+            return {
+                "configured": True,
+                "status": "driver-missing",
+                "graphStore": "typedb",
+                "reason": str(imported[1])[:180],
+            }
+
+        def operation():
+            driver = self.open_driver(imported)
+            try:
+                self.ensure_database(driver)
+                self.ensure_schema(driver, imported)
+                return self.delete_scoped_abox_write_lease(driver, imported, {
+                    "owner": owner,
+                    "propertiesJson": properties_json,
+                })
+            finally:
+                self.close_driver(driver)
+
+        try:
+            deleted = self.with_typedb_retries(operation)
+        except Exception as error:  # noqa: BLE001 - seed can continue and surface the recovery state.
+            return {
+                "configured": True,
+                "status": "error",
+                "graphStore": "typedb",
+                "previousLeaseOwner": owner,
+                "reason": str(error)[:180],
+            }
+        return {
+            "configured": True,
+            "status": "cleared" if str((deleted or {}).get("status") or "") == "released" else str((deleted or {}).get("status") or "error"),
+            "graphStore": "typedb",
+            "previousLeaseOwner": owner,
+            "previousLeaseExpiresAtEpoch": float(number_or_none(existing.get("leaseExpiresAtEpoch")) or 0),
+            "release": dict(deleted or {}),
+        }
+
     def recover_pending_abox_activation(self) -> Dict[str, object]:
         return {
             "configured": False,
@@ -6548,13 +6630,23 @@ relation ontology-assertion,
         rules = list(rules)
         rules_payload = rulebox_rules_to_payload(rules)
         self._last_rules = rules
+        scoped_write_lease_recovery = {}
+        if typedb_bool(payload.get("recoverScopedABoxWriteLease")):
+            scoped_write_lease_recovery = self.recover_scoped_abox_write_lease_after_server_start()
+
+        def complete_seed(result: Dict[str, object]) -> Dict[str, object]:
+            completed = dict(result or {})
+            if scoped_write_lease_recovery:
+                completed["scopedABoxWriteLeaseRecovery"] = dict(scoped_write_lease_recovery)
+            return self.with_seed_schema_function_sync(completed, rules)
+
         seed_graph = ontology_seed_graph(
             rules,
             language_registry=investment_language_registry(runtime_settings()),
         )
         preflight = self.seed_graph_preflight(seed_graph, rules_payload)
         if preflight.get("ready") and not typedb_bool(payload.get("forceReseed")):
-            return self.with_seed_schema_function_sync({
+            return complete_seed({
                 "configured": True,
                 "saved": True,
                 "seeded": True,
@@ -6571,14 +6663,14 @@ relation ontology-assertion,
                 "expectedRuleBoxRuleCount": len(rules),
                 "activeRuleBoxShortHash": rulebox_runtime_metadata(rules_payload)["ruleboxShortHash"],
                 "expectedRuleBoxShortHash": rulebox_runtime_metadata(rules_payload)["ruleboxShortHash"],
-            }, rules)
+            })
         relation_repair = {}
         if not typedb_bool(payload.get("forceReseed")) and self.seed_relation_repair_eligible(preflight):
             relation_repair = self.repair_seed_relations(seed_graph)
             if relation_repair.get("saved"):
                 repaired_preflight = self.seed_graph_preflight(seed_graph, rules_payload)
                 if repaired_preflight.get("ready"):
-                    return self.with_seed_schema_function_sync({
+                    return complete_seed({
                         "configured": True,
                         "saved": True,
                         "seeded": True,
@@ -6596,7 +6688,7 @@ relation ontology-assertion,
                         "expectedRuleBoxRuleCount": len(rules),
                         "activeRuleBoxShortHash": rulebox_runtime_metadata(rules_payload)["ruleboxShortHash"],
                         "expectedRuleBoxShortHash": rulebox_runtime_metadata(rules_payload)["ruleboxShortHash"],
-                    }, rules)
+                    })
         result = self.save_graph(seed_graph)
         result.update({
             "configured": True,
@@ -6658,7 +6750,7 @@ relation ontology-assertion,
                         + str(rulebox_result.get("reason") or "")
                     ).strip(),
                 })
-        return self.with_seed_schema_function_sync(result, rules)
+        return complete_seed(result)
 
     def with_seed_schema_function_sync(
         self,

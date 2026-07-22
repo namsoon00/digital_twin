@@ -3208,6 +3208,7 @@ class TypeDBOntologyRepositoryTests(unittest.TestCase):
             def __init__(self):
                 super().__init__("127.0.0.1:1729")
                 self.save_calls = 0
+                self.write_lease_recovery_calls = 0
 
             def seed_graph_preflight(self, _graph, _rules_payload):
                 return {"ready": True, "status": "current"}
@@ -3219,9 +3220,13 @@ class TypeDBOntologyRepositoryTests(unittest.TestCase):
             def sync_typedb_native_rule_functions(self, _rules, force=False):
                 return {"status": "ok", "schemaFunctionSyncCached": True}
 
+            def recover_scoped_abox_write_lease_after_server_start(self):
+                self.write_lease_recovery_calls += 1
+                return {"configured": True, "status": "cleared", "graphStore": "typedb"}
+
         repository = CurrentSeedRepository()
 
-        result = repository.seed_ontology({"replaceRuleBox": True})
+        result = repository.seed_ontology({"replaceRuleBox": True, "recoverScopedABoxWriteLease": True})
 
         self.assertEqual("unchanged", result["status"])
         self.assertTrue(result["saved"])
@@ -3229,6 +3234,8 @@ class TypeDBOntologyRepositoryTests(unittest.TestCase):
         self.assertTrue(result["seedSkipped"])
         self.assertTrue(result["ruleBoxAlreadyCurrent"])
         self.assertEqual(0, repository.save_calls)
+        self.assertEqual(1, repository.write_lease_recovery_calls)
+        self.assertEqual("cleared", result["scopedABoxWriteLeaseRecovery"]["status"])
 
     def test_seed_schema_function_sync_blocks_realtime_ready_status_when_deployment_fails(self):
         repository = TypeDBOntologyGraphRepository("127.0.0.1:1729")

@@ -1,5 +1,6 @@
 from typing import Dict, Iterable
 
+from .ontology_change_impact import rule_condition_dependency_profile
 from .ontology_contracts import OntologyEntity, OntologyRelation, PortfolioOntology, entity_id
 from .ontology_rulebox_contracts import GRAPH_REASONER_VERSION, GraphInferenceRule
 from .ontology_relation_reasoning import ONTOLOGY_RULE_ENGINE_VERSION, RelationRuleDefinition
@@ -64,6 +65,33 @@ def add_rulebox_concepts(graph: PortfolioOntology, rules: Iterable[GraphInferenc
                 properties=rulebox_relation_properties("HAS_CONDITION", {
                     "ruleId": rule.rule_id,
                     "conditionId": condition.condition_id,
+                }),
+            ))
+            dependency = rule_condition_dependency_profile(condition)
+            dependency_id = entity_id("rule-dependency", rule.rule_id + ":" + condition.condition_id)
+            graph.entities.append(OntologyEntity(dependency_id, condition.description, "rule-dependency", rulebox_properties({
+                "tboxClass": "RuleDependency",
+                "tboxClasses": ["RuleDependency", "RuleCondition"],
+                "ruleId": rule.rule_id,
+                "conditionId": condition.condition_id,
+                "scopeFamilies": list(dependency.get("scopeFamilies") or []),
+                "conditionKind": dependency.get("conditionKind"),
+                "field": dependency.get("field"),
+                "relationType": dependency.get("relationType"),
+                "targetKind": dependency.get("targetKind"),
+                "role": dependency.get("role"),
+                "conservative": bool(dependency.get("conservative")),
+            })))
+            graph.relations.append(OntologyRelation(
+                rule_id,
+                dependency_id,
+                "HAS_RULE_DEPENDENCY",
+                weight=1.0,
+                properties=rulebox_relation_properties("HAS_RULE_DEPENDENCY", {
+                    "ruleId": rule.rule_id,
+                    "conditionId": condition.condition_id,
+                    "scopeFamilies": list(dependency.get("scopeFamilies") or []),
+                    "conservative": bool(dependency.get("conservative")),
                 }),
             ))
         for index, derivation in enumerate(rule.derivations):
@@ -180,6 +208,39 @@ def add_relation_rulebox_concepts(graph: PortfolioOntology, rules: Iterable[Rela
             "HAS_CONDITION",
             weight=1.0,
             properties=rulebox_relation_properties("HAS_CONDITION", {"ruleId": rule.rule_id, "source": ONTOLOGY_RULE_ENGINE_VERSION}),
+        ))
+        dependency = rule_condition_dependency_profile({
+            "conditionId": rule.rule_id,
+            "kind": "relation",
+            "relationType": rule.relation_type,
+            "relationPropertyFilters": {"field": list(rule.required_fields or [])},
+        })
+        dependency_id = entity_id("relation-rule-dependency", rule.rule_id)
+        graph.entities.append(OntologyEntity(dependency_id, rule.condition_summary or rule.label, "rule-dependency", rulebox_properties({
+            "tboxClass": "RuleDependency",
+            "tboxClasses": ["RuleDependency", "RelationRuleCondition"],
+            "ruleId": rule.rule_id,
+            "conditionId": rule.rule_id,
+            "scopeFamilies": list(dependency.get("scopeFamilies") or []),
+            "conditionKind": dependency.get("conditionKind"),
+            "field": dependency.get("field"),
+            "relationType": dependency.get("relationType"),
+            "targetKind": dependency.get("targetKind"),
+            "role": dependency.get("role"),
+            "conservative": bool(dependency.get("conservative")),
+        })))
+        graph.relations.append(OntologyRelation(
+            rule_id,
+            dependency_id,
+            "HAS_RULE_DEPENDENCY",
+            weight=1.0,
+            properties=rulebox_relation_properties("HAS_RULE_DEPENDENCY", {
+                "ruleId": rule.rule_id,
+                "conditionId": rule.rule_id,
+                "scopeFamilies": list(dependency.get("scopeFamilies") or []),
+                "conservative": bool(dependency.get("conservative")),
+                "source": ONTOLOGY_RULE_ENGINE_VERSION,
+            }),
         ))
         template_id = entity_id("relation-rule-template", rule.rule_id)
         graph.entities.append(OntologyEntity(template_id, rule.relation_type, "relation-rule-template", rulebox_properties({

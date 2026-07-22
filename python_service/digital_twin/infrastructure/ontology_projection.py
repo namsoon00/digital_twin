@@ -7,6 +7,10 @@ from ..domain.ontology_contracts import PortfolioOntology
 from ..domain.decision_performance import evaluate_decision_performance
 from ..domain.ontology_rulebox_catalog import default_graph_inference_rules
 from ..domain.ontology_rulebox_governance import rulebox_rules_hash
+from ..domain.ontology_change_impact import (
+    build_inference_impact_plan,
+    compact_inference_impact_plan,
+)
 from ..domain.ontology_projection_fingerprint import (
     active_material_fingerprint,
     apply_material_graph_identity,
@@ -269,20 +273,36 @@ class PortfolioOntologyProjectionRecorder:
                 }
                 self.store_projection_result(snapshot, result, projection_run)
                 return result
-            inference_symbols = self.inference_symbols(snapshot, target_symbols)
+            active_abox = self.active_abox_metadata()
+            inference_impact_plan = self.inference_impact_plan(
+                snapshot,
+                active_abox,
+                scoped_identity,
+                target_symbols,
+            )
+            compact_impact_plan = compact_inference_impact_plan(inference_impact_plan)
+            inference_symbols = self.inference_symbols(
+                snapshot,
+                inference_impact_plan.get("inferenceTargetSymbols") or target_symbols,
+            )
+            persistence_graph.worldview["scopeDelta"] = dict(compact_impact_plan.get("scopeDelta") or {})
+            persistence_graph.worldview["inferenceImpactPlan"] = compact_impact_plan
             projection_scope = {
-                "triggerMode": "subject-delta-coalesced",
+                "triggerMode": "scope-change-impact-native",
                 "targetSymbols": list(inference_symbols),
+                "explicitTargetSymbols": list(compact_impact_plan.get("explicitTargetSymbols") or []),
                 "persistenceMode": SCOPED_ABOX_PERSISTENCE_MODE,
                 "atomicActivation": True,
                 "manifestId": material_snapshot_id,
                 "scopeCount": len(scoped_identity.get("scopePlan") or []),
+                "scopeFamilyCounts": dict(scoped_identity.get("scopeFamilyCounts") or {}),
+                "scopeTopologyVersion": str(persistence_graph.worldview.get("scopeTopologyVersion") or ""),
+                "inferenceImpactPlan": compact_impact_plan,
                 "reason": (
-                    "변경 종목은 합쳐서 추론 범위를 제한하고, 변경된 ABox 범위만 새 세대로 기록한 뒤 "
-                    "원자적으로 Worldview Manifest를 교체합니다."
+                    "변경된 사실군과 ABox 의존 관계에서 재평가 대상을 계산하고, 변경 범위만 새 세대로 기록한 뒤 "
+                    "대상별 TypeDB 네이티브 규칙을 완전 평가합니다."
                 ),
             }
-            active_abox = self.active_abox_metadata()
             active_abox_complete = str(active_abox.get("status") or "ok") == "ok"
             active_abox_is_scoped_manifest = (
                 str(active_abox.get("scopedAboxManifestVersion") or "")
@@ -324,6 +344,7 @@ class PortfolioOntologyProjectionRecorder:
                     "materialChangeDetected": False,
                     "aboxValidation": validation.to_dict(),
                     "projectionScope": projection_scope,
+                    "inferenceImpactPlan": compact_impact_plan,
                 }
                 if rulebox_bootstrap:
                     result["ruleboxBootstrap"] = rulebox_bootstrap
@@ -339,7 +360,12 @@ class PortfolioOntologyProjectionRecorder:
                 else:
                     result["reasoningRetryRequired"] = True
                     result["previousInferenceStatus"] = str(inferencebox.get("status") or "missing")
-                    self.attach_graph_store_inference_result(result, snapshot, inference_symbols)
+                    self.attach_graph_store_inference_result(
+                        result,
+                        snapshot,
+                        inference_symbols,
+                        compact_impact_plan,
+                    )
                 self.store_projection_result(snapshot, result)
                 return result
             projection_run, audit_error = self.begin_projection_audit_run(
@@ -377,6 +403,7 @@ class PortfolioOntologyProjectionRecorder:
             result["aboxSnapshotId"] = material_snapshot_id
             result["materialChangeDetected"] = True
             result["projectionScope"] = projection_scope
+            result["inferenceImpactPlan"] = compact_impact_plan
             result["aboxValidation"] = validation.to_dict()
             if rulebox_bootstrap:
                 result["ruleboxBootstrap"] = rulebox_bootstrap
@@ -391,6 +418,7 @@ class PortfolioOntologyProjectionRecorder:
                     result,
                     snapshot,
                     pending.get("targetSymbols") or inference_symbols,
+                    compact_impact_plan,
                 )
             if self.quality_store:
                 sample = self.quality_store.record_graph(graph, source=self.source)
@@ -426,6 +454,7 @@ class PortfolioOntologyProjectionRecorder:
         }
 
     def ensure_rulebox_ready(self) -> Dict[str, object]:
+        self._rulebox_impact_rules = None
         if not hasattr(self.repository, "rulebox_snapshot"):
             return {}
         expected_rules = rulebox_rules_to_payload(default_graph_inference_rules())
@@ -437,6 +466,10 @@ class PortfolioOntologyProjectionRecorder:
             return {"status": "error", "reason": str(error)[:180]}
         if not isinstance(snapshot, dict):
             return {"status": "invalid", "reason": "RuleBox snapshot returned non-dict result."}
+        self._rulebox_impact_rules = [
+            dict(item) for item in snapshot.get("rules") or []
+            if isinstance(item, dict)
+        ]
         if not snapshot.get("configured"):
             return {
                 "status": "disabled",
@@ -455,6 +488,10 @@ class PortfolioOntologyProjectionRecorder:
                 snapshot = self.repository.rulebox_snapshot()
             except Exception:  # noqa: BLE001 - successful save metadata still proves the migration ran.
                 snapshot = dict(migration.get("result") or snapshot)
+            self._rulebox_impact_rules = [
+                dict(item) for item in snapshot.get("rules") or []
+                if isinstance(item, dict)
+            ]
         stored_count = int(snapshot.get("ruleboxRuleCount") or snapshot.get("ruleCount") or 0)
         stored_hash = str(snapshot.get("ruleboxRulesHash") or snapshot.get("rulesHash") or "").strip()
         if not stored_hash and isinstance(snapshot.get("rules"), list) and snapshot.get("rules"):
@@ -512,6 +549,7 @@ class PortfolioOntologyProjectionRecorder:
             })
         except Exception as error:  # noqa: BLE001 - projection will report readiness failure instead of crashing.
             return {"status": "error", "reason": str(error)[:180]}
+        self._rulebox_impact_rules = [dict(item) for item in expected_rules]
         return {
             "status": "seeded" if bool((seeded or {}).get("seeded")) else str((seeded or {}).get("status") or "not-seeded"),
             "ruleCount": int((seeded or {}).get("ruleCount") or 0),
@@ -725,10 +763,14 @@ class PortfolioOntologyProjectionRecorder:
         result: Dict[str, object],
         snapshot: AccountSnapshot,
         target_symbols: List[str] = None,
+        inference_impact_plan: Dict[str, object] = None,
     ) -> None:
         if not hasattr(self.repository, "run_rulebox"):
             return
         inference_symbols = self.inference_symbols(snapshot, target_symbols)
+        compact_impact_plan = compact_inference_impact_plan(inference_impact_plan or {}) if inference_impact_plan else {}
+        if compact_impact_plan:
+            result.setdefault("inferenceImpactPlan", compact_impact_plan)
         if self.active_graph_store_key(result) == "typedb":
             preparer = getattr(self.repository, "prepare_pending_abox_activation_for_inference", None)
             if callable(preparer):
@@ -763,6 +805,7 @@ class PortfolioOntologyProjectionRecorder:
                 "symbols": inference_symbols,
                 "pruneOldGenerations": True,
                 "inferenceSnapshotLimit": self.inference_snapshot_limit(),
+                "inferenceImpactPlan": compact_impact_plan,
             })
         except Exception as error:  # noqa: BLE001 - graph inference must not block monitoring.
             execution = {"status": "error", "reason": str(error)[:180]}
@@ -958,6 +1001,37 @@ class PortfolioOntologyProjectionRecorder:
             if clean and clean in available and clean not in selected:
                 selected.append(clean)
         return selected or self.snapshot_symbols(snapshot)
+
+    def inference_impact_plan(
+        self,
+        snapshot: AccountSnapshot,
+        active_abox: Dict[str, object],
+        scoped_identity: Dict[str, object],
+        target_symbols: List[str] = None,
+    ) -> Dict[str, object]:
+        """Route native inference from immutable scope changes, not a timer."""
+        previous_scope_plan = list((active_abox or {}).get("scopePlan") or [])
+        next_scope_plan = list((scoped_identity or {}).get("scopePlan") or [])
+        return build_inference_impact_plan(
+            previous_scope_plan,
+            next_scope_plan,
+            self.snapshot_symbols(snapshot),
+            explicit_target_symbols=target_symbols,
+            rules=self.rulebox_rules_for_impact(),
+        )
+
+    def rulebox_rules_for_impact(self) -> List[Dict[str, object]]:
+        cached = getattr(self, "_rulebox_impact_rules", None)
+        if isinstance(cached, list):
+            return [dict(item) for item in cached if isinstance(item, dict)]
+        if not hasattr(self.repository, "rulebox_snapshot"):
+            return []
+        try:
+            snapshot = self.repository.rulebox_snapshot()
+        except Exception:  # noqa: BLE001 - complete native evaluation remains safe without dependency metadata.
+            return []
+        rules = snapshot.get("rules") if isinstance(snapshot, dict) else []
+        return [dict(item) for item in rules or [] if isinstance(item, dict)]
 
     def inference_snapshot_limit(self) -> int:
         try:

@@ -163,6 +163,8 @@ class OntologyDiagnosticsService:
             "activeAboxSnapshotId",
             "activeScopeCount",
             "scopeTypeCounts",
+            "scopeTopologyVersion",
+            "scopeFamilyCounts",
             "logicalActiveEntityCount",
             "logicalActiveRelationCount",
             "physicalAboxEntityCount",
@@ -223,6 +225,10 @@ class OntologyDiagnosticsService:
             "ruleboxDerivationCount",
             "ruleboxEngineVersion",
             "symbols",
+            "impactPlanVersion",
+            "inferenceImpactPlan",
+            "ruleExecutionScope",
+            "nativeRuleSelectionApplied",
         ])
         summary["relationTypes"] = sorted(set(
             str(item.get("type") or item.get("relationType") or "")

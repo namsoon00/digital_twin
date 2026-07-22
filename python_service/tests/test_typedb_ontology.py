@@ -172,17 +172,19 @@ class TypeDBOntologyRepositoryTests(unittest.TestCase):
 
         first = apply_scoped_abox_identity(graph)
         first_generations = dict(first["scopeGenerationIds"])
-        self.assertIn("symbol:005930", first_generations)
-        self.assertIn("symbol:MSTR", first_generations)
-        self.assertIn("macro:global", first_generations)
+        self.assertIn("symbol:005930:state", first_generations)
+        self.assertIn("symbol:005930:market", first_generations)
+        self.assertIn("symbol:MSTR:state", first_generations)
+        self.assertIn("macro:fx", first_generations)
 
         graph.entities[1].properties["currentPrice"] = 71000
         second = apply_scoped_abox_identity(graph)
         second_generations = dict(second["scopeGenerationIds"])
 
-        self.assertNotEqual(first_generations["symbol:005930"], second_generations["symbol:005930"])
-        self.assertEqual(first_generations["symbol:MSTR"], second_generations["symbol:MSTR"])
-        self.assertEqual(first_generations["macro:global"], second_generations["macro:global"])
+        self.assertNotEqual(first_generations["symbol:005930:market"], second_generations["symbol:005930:market"])
+        self.assertEqual(first_generations["symbol:005930:state"], second_generations["symbol:005930:state"])
+        self.assertEqual(first_generations["symbol:MSTR:state"], second_generations["symbol:MSTR:state"])
+        self.assertEqual(first_generations["macro:fx"], second_generations["macro:fx"])
 
     def test_scoped_abox_rolls_forward_only_macro_dependents_and_resolves_cross_scope_endpoints(self):
         graph = PortfolioOntology(
@@ -211,13 +213,14 @@ class TypeDBOntologyRepositoryTests(unittest.TestCase):
         second = apply_scoped_abox_identity(graph)
         second_generations = dict(second["scopeGenerationIds"])
 
-        self.assertNotEqual(first_generations["macro:global"], second_generations["macro:global"])
-        self.assertNotEqual(first_generations["symbol:MSTR"], second_generations["symbol:MSTR"])
-        self.assertEqual(first_generations["symbol:005930"], second_generations["symbol:005930"])
+        self.assertNotEqual(first_generations["macro:fx"], second_generations["macro:fx"])
+        self.assertNotEqual(first_generations["symbol:MSTR:exposure"], second_generations["symbol:MSTR:exposure"])
+        self.assertEqual(first_generations["symbol:MSTR:state"], second_generations["symbol:MSTR:state"])
+        self.assertEqual(first_generations["symbol:005930:state"], second_generations["symbol:005930:state"])
 
         repository = TypeDBOntologyGraphRepository("127.0.0.1:1729")
-        nodes, relations = repository.scoped_abox_persistence_rows(graph, ["symbol:MSTR"])
-        self.assertEqual(["stock:MSTR"], [row["id"] for row in nodes])
+        nodes, relations = repository.scoped_abox_persistence_rows(graph, ["symbol:MSTR:exposure"])
+        self.assertEqual([], [row["id"] for row in nodes])
         self.assertEqual(1, len(relations))
         macro = next(item for item in graph.entities if item.entity_id == "fx-rate:USDKRW")
         self.assertEqual(
@@ -243,11 +246,11 @@ class TypeDBOntologyRepositoryTests(unittest.TestCase):
         apply_scoped_abox_identity(graph)
         repository = TypeDBOntologyGraphRepository("127.0.0.1:1729")
 
-        nodes, relations = repository.scoped_abox_persistence_rows(graph, ["symbol:005930"])
+        nodes, relations = repository.scoped_abox_persistence_rows(graph, ["symbol:005930:evidence"])
 
-        self.assertEqual({"stock:005930", "evidence:005930:price"}, {row["id"] for row in nodes})
+        self.assertEqual({"evidence:005930:price"}, {row["id"] for row in nodes})
         self.assertEqual(["HAS_EVIDENCE"], [row["type"] for row in relations])
-        self.assertTrue(all(row["scopeId"] == "symbol:005930" for row in nodes + relations))
+        self.assertTrue(all(row["scopeId"] == "symbol:005930:evidence" for row in nodes + relations))
 
     def test_scoped_abox_finalize_runs_reference_aware_manifest_cleanup(self):
         repository = TypeDBOntologyGraphRepository("127.0.0.1:1729")

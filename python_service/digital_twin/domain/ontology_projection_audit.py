@@ -3,6 +3,7 @@ import json
 from dataclasses import asdict, dataclass, replace
 from typing import Dict, Iterable, List
 
+from .ontology_change_impact import compact_inference_impact_plan
 from .ontology_contracts import PortfolioOntology
 from .portfolio import AccountSnapshot, utc_now_iso
 
@@ -52,6 +53,8 @@ def projection_result_summary(result: Dict[str, object]) -> Dict[str, object]:
     activation = dict(verification.get("activation") or {})
     cleanup = dict(verification.get("candidateCleanup") or {})
     retired_cleanup = dict(verification.get("retiredActiveCleanup") or {})
+    impact_plan = compact_inference_impact_plan(values.get("inferenceImpactPlan") or {})
+    projection_scope = dict(values.get("projectionScope") or {})
     return {
         "saved": bool(values.get("saved")),
         "status": str(values.get("status") or ""),
@@ -61,6 +64,9 @@ def projection_result_summary(result: Dict[str, object]) -> Dict[str, object]:
         "materialChangeDetected": bool(values.get("materialChangeDetected")),
         "materialFingerprint": str(values.get("materialFingerprint") or ""),
         "aboxSnapshotId": str(values.get("aboxSnapshotId") or ""),
+        "scopeTopologyVersion": str(projection_scope.get("scopeTopologyVersion") or ""),
+        "scopeFamilyCounts": dict(projection_scope.get("scopeFamilyCounts") or {}),
+        "inferenceImpactPlan": impact_plan,
         "entityCount": int(values.get("entityCount") or 0),
         "relationCount": int(values.get("relationCount") or 0),
         "activeAbox": {
@@ -212,6 +218,13 @@ def build_ontology_projection_run(
                 "externalSignalKeys": sorted(list((snapshot.external_signals or {}).keys()))[:80],
             },
             "targetSymbols": symbols,
+            "scopeTopology": {
+                "version": str(worldview.get("scopeTopologyVersion") or ""),
+                "scopeCount": len(worldview.get("scopePlan") or []),
+                "scopeFamilyCounts": dict(worldview.get("scopeFamilyCounts") or {}),
+                "scopeDelta": dict(worldview.get("scopeDelta") or {}),
+                "inferenceImpactPlan": compact_inference_impact_plan(worldview.get("inferenceImpactPlan") or {}),
+            },
             "tbox": {
                 "version": str(active_tbox.get("version") or active_tbox.get("tboxVersion") or ""),
                 "fingerprint": str(active_tbox.get("fingerprint") or active_tbox.get("tboxFingerprint") or ""),

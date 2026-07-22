@@ -23,6 +23,7 @@ from ..domain.ontology_rulebox_governance import (
     rulebox_governance_candidates,
     rulebox_rules_hash,
 )
+from ..domain.ontology_change_impact import compact_inference_impact_plan
 from ..domain.ontology_schema import default_tbox_metadata
 from ..domain.ontology_scopes import SCOPED_ABOX_MANIFEST_VERSION, SCOPED_ABOX_PERSISTENCE_MODE
 from .graph_store_inferencebox import (
@@ -870,11 +871,17 @@ class ScopedABoxManifestMixin:
         logical_entities = sum(int(number_or_none(item.get("entityCount")) or 0) for item in scope_plan if isinstance(item, dict))
         logical_relations = sum(int(number_or_none(item.get("relationCount")) or 0) for item in scope_plan if isinstance(item, dict))
         scope_type_counts: Dict[str, int] = {}
+        scope_family_counts: Dict[str, int] = {}
         for item in scope_plan:
             if not isinstance(item, dict):
                 continue
             scope_type = str(item.get("scopeType") or str(item.get("scopeId") or "").split(":", 1)[0] or "reference")
             scope_type_counts[scope_type] = scope_type_counts.get(scope_type, 0) + 1
+            scope_family = str(item.get("scopeFamily") or "").strip()
+            if not scope_family:
+                parts = [part for part in str(item.get("scopeId") or "").split(":") if part]
+                scope_family = parts[2] if len(parts) >= 3 and parts[0] == "symbol" else (parts[0] if parts else "reference")
+            scope_family_counts[scope_family] = scope_family_counts.get(scope_family, 0) + 1
         result = {
             "configured": bool(getattr(self, "address", "")),
             "status": str(active.get("status") or "ok"),
@@ -883,6 +890,8 @@ class ScopedABoxManifestMixin:
             "worldviewManifestId": str(active.get("worldviewManifestId") or active.get("aboxSnapshotId") or ""),
             "activeScopeCount": len(scope_plan),
             "scopeTypeCounts": dict(sorted(scope_type_counts.items())),
+            "scopeTopologyVersion": str(active.get("scopeTopologyVersion") or ""),
+            "scopeFamilyCounts": dict(sorted(scope_family_counts.items())),
             "logicalActiveEntityCount": logical_entities,
             "logicalActiveRelationCount": logical_relations,
             "scopeIds": [str(item.get("scopeId") or "") for item in scope_plan if isinstance(item, dict)][:120],
@@ -1216,6 +1225,7 @@ class ScopedABoxManifestMixin:
             rows.append({
                 "scopeId": scope_id,
                 "scopeType": str(item.get("scopeType") or scope_id.split(":", 1)[0] or "reference"),
+                "scopeFamily": str(item.get("scopeFamily") or ""),
                 "fingerprint": str(item.get("fingerprint") or ""),
                 "baseFingerprint": str(item.get("baseFingerprint") or ""),
                 "dependencyScopeIds": [
@@ -1500,6 +1510,10 @@ class ScopedABoxManifestMixin:
                 "scopePlan": list(scope_plan),
                 "scopeGenerationIds": dict(worldview.get("scopeGenerationIds") or {}),
                 "scopeFingerprints": dict(worldview.get("scopeFingerprints") or {}),
+                "scopeTopologyVersion": str(worldview.get("scopeTopologyVersion") or ""),
+                "scopeFamilyCounts": dict(worldview.get("scopeFamilyCounts") or {}),
+                "scopeDelta": dict(worldview.get("scopeDelta") or {}),
+                "inferenceImpactPlan": dict(worldview.get("inferenceImpactPlan") or {}),
                 "changedScopeIds": sorted({str(item or "") for item in changed_scope_ids if str(item or "")}),
                 "projectionStatus": "complete",
                 "scopedAboxManifestVersion": SCOPED_ABOX_MANIFEST_VERSION,
@@ -1529,6 +1543,10 @@ class ScopedABoxManifestMixin:
             "scopePlan": list(scope_plan),
             "scopeGenerationIds": dict(worldview.get("scopeGenerationIds") or {}),
             "scopeFingerprints": dict(worldview.get("scopeFingerprints") or {}),
+            "scopeTopologyVersion": str(worldview.get("scopeTopologyVersion") or ""),
+            "scopeFamilyCounts": dict(worldview.get("scopeFamilyCounts") or {}),
+            "scopeDelta": dict(worldview.get("scopeDelta") or {}),
+            "inferenceImpactPlan": dict(worldview.get("inferenceImpactPlan") or {}),
             "scopedAboxManifestVersion": SCOPED_ABOX_MANIFEST_VERSION,
         }
         entities = [OntologyEntity(
@@ -3640,6 +3658,10 @@ class TypeDBOntologyGraphRepository(GraphStoreOntologyRowMapperMixin, ScopedABox
             "scopePlan": list(scope_plan),
             "scopeGenerationIds": dict(generations),
             "scopeFingerprints": dict(fingerprints),
+            "scopeTopologyVersion": str(payload.get("scopeTopologyVersion") or ""),
+            "scopeFamilyCounts": dict(payload.get("scopeFamilyCounts") or {}),
+            "scopeDelta": dict(payload.get("scopeDelta") or {}),
+            "inferenceImpactPlan": dict(payload.get("inferenceImpactPlan") or {}),
             "activeScopeCount": len(generations),
             "manifestMarkerId": str(payload.get("id") or ""),
         }
@@ -8005,6 +8027,15 @@ relation ontology-assertion,
         snapshot = self.rulebox_snapshot()
         rules = snapshot.get("rules") if isinstance(snapshot.get("rules"), list) else []
         rulebox_metadata = rulebox_runtime_metadata(rules)
+        requested_impact_plan = payload.get("inferenceImpactPlan")
+        if isinstance(requested_impact_plan, dict) and requested_impact_plan:
+            compact_impact_plan = compact_inference_impact_plan(requested_impact_plan)
+            rulebox_metadata.update({
+                "inferenceImpactPlan": compact_impact_plan,
+                "impactPlanVersion": str(compact_impact_plan.get("version") or ""),
+                "ruleExecutionScope": str(compact_impact_plan.get("ruleExecutionScope") or "complete-native-evaluation"),
+                "nativeRuleSelectionApplied": bool(compact_impact_plan.get("nativeRuleSelectionApplied")),
+            })
         native_profile = typedb_native_reasoning_profile(rules)
         rulebox_metadata.update(typedb_native_profile_metadata(native_profile))
         if str(snapshot.get("status") or "") != "ok" or not rules:
@@ -10721,6 +10752,10 @@ def inference_rulebox_metadata(
         "sourceAboxSnapshotCount",
         "targetSymbols",
         "incrementalScope",
+        "impactPlanVersion",
+        "inferenceImpactPlan",
+        "ruleExecutionScope",
+        "nativeRuleSelectionApplied",
     ]
     metadata: Dict[str, object] = {}
     for row in list(entity_rows or []) + list(relation_rows or []):

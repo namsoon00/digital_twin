@@ -14,12 +14,21 @@ from collections import defaultdict
 from copy import deepcopy
 from typing import Dict, Iterable, List, Mapping, MutableMapping, Set, Tuple
 
+from .ontology_change_impact import (
+    family_for_entity,
+    family_for_relation,
+    macro_scope_id,
+    scope_family,
+    scope_symbol,
+    symbol_scope_id,
+)
 from .ontology_contracts import OntologyEntity, OntologyEvidence, OntologyRelation, PortfolioOntology
 from .ontology_projection_fingerprint import stable_value
 
 
 SCOPED_ABOX_MANIFEST_VERSION = "scoped-manifest-v1"
 SCOPED_ABOX_PERSISTENCE_MODE = "immutable-scoped-manifest"
+SCOPED_ABOX_SCOPE_TOPOLOGY_VERSION = "granular-v2"
 
 REFERENCE_SCOPE_ID = "reference:global"
 MACRO_SCOPE_ID = "macro:global"
@@ -52,6 +61,9 @@ _MACRO_KINDS = {
     "crypto-asset",
     "market-proxy",
     "market-index",
+    "market-proxy-instrument",
+    "market-proxy-observation",
+    "market-proxy-theme",
 }
 
 _POLICY_KINDS = {
@@ -114,7 +126,9 @@ def _scope_id(scope_type: str, value: str = "") -> str:
     if scope_type == "reference":
         return REFERENCE_SCOPE_ID
     if scope_type == "macro":
-        return MACRO_SCOPE_ID
+        return macro_scope_id(value)
+    if scope_type == "symbol":
+        return symbol_scope_id(value, "state")
     clean_value = _clean(value) or "global"
     return scope_type + ":" + clean_value
 
@@ -147,18 +161,19 @@ def _explicit_entity_scope(entity: OntologyEntity, account_id: str) -> str:
     if explicit:
         return explicit
     kind = _clean(entity.kind).lower()
+    family = family_for_entity(kind, properties, entity.entity_id)
     # Market-wide instruments can carry a ticker-like identifier (BTC, an FX
     # pair, an index). Their world ownership is still macro, not a portfolio
     # stock scope.
-    if kind in _MACRO_KINDS:
-        return MACRO_SCOPE_ID
+    if kind in _MACRO_KINDS or family.startswith("macro-"):
+        return macro_scope_id(family)
     if kind in _POLICY_KINDS:
         return _scope_id("policy", account_id)
     if kind in {"portfolio", "account", "watchlist", "cash"}:
         return _scope_id("portfolio", account_id)
     symbol = _symbol(properties.get("symbol"))
     if symbol:
-        return _scope_id("symbol", symbol)
+        return symbol_scope_id(symbol, family)
     if any(token in kind for token in _EPISODE_TOKENS):
         return _scope_id("episode", account_id)
     if any(token in kind for token in _EVIDENCE_TOKENS):
@@ -167,7 +182,7 @@ def _explicit_entity_scope(entity: OntologyEntity, account_id: str) -> str:
     if entity_id.startswith(_SYMBOL_PREFIXES):
         candidate = _id_symbol(entity.entity_id)
         if candidate:
-            return _scope_id("symbol", candidate)
+            return symbol_scope_id(candidate, family)
     return ""
 
 
@@ -215,12 +230,15 @@ def _propagate_entity_scopes(graph: PortfolioOntology, scopes: MutableMapping[st
             if not entity_id or entity_id in scopes:
                 continue
             candidates = {
-                scopes[neighbour]
+                scope_symbol(scopes[neighbour])
                 for neighbour in neighbours.get(entity_id, set())
-                if neighbour in scopes and _scope_type(scopes[neighbour]) == "symbol"
+                if neighbour in scopes and scope_symbol(scopes[neighbour])
             }
             if len(candidates) == 1:
-                scopes[entity_id] = next(iter(candidates))
+                scopes[entity_id] = symbol_scope_id(
+                    next(iter(candidates)),
+                    family_for_entity(entity.kind, entity.properties, entity.entity_id),
+                )
                 changed = True
         if not changed:
             break
@@ -234,17 +252,49 @@ def scope_id_for_relation(
     relation: OntologyRelation,
     entity_scopes: Mapping[str, str],
     account_id: str,
+    entities_by_id: Mapping[str, OntologyEntity] = None,
 ) -> str:
     properties = dict(relation.properties or {})
     explicit = _clean(properties.get("aboxScopeId"))
     if explicit:
         return explicit
+    source_id = _clean(relation.source)
+    target_id = _clean(relation.target)
+    source_scope = entity_scopes.get(source_id, "")
+    target_scope = entity_scopes.get(target_id, "")
+    source_entity = (entities_by_id or {}).get(source_id)
+    target_entity = (entities_by_id or {}).get(target_id)
+    relation_family = family_for_relation(
+        relation.relation_type,
+        properties,
+        scope_family(source_scope),
+        scope_family(target_scope),
+        getattr(source_entity, "kind", ""),
+        getattr(target_entity, "kind", ""),
+    )
+    source_symbol = scope_symbol(source_scope)
+    target_symbol = scope_symbol(target_scope)
     symbol = _symbol(properties.get("symbol"))
+    macro_scopes = [
+        scope_id
+        for scope_id in [source_scope, target_scope]
+        if _scope_type(scope_id) == "macro"
+    ]
+    # Market-proxy relationships carry their observed ticker for provenance.
+    # That ticker must not turn a global market sensor into a pseudo holding.
+    if symbol and macro_scopes and not source_symbol and not target_symbol:
+        return sorted(macro_scopes, key=_scope_rank)[0]
     if symbol:
-        return _scope_id("symbol", symbol)
+        return symbol_scope_id(symbol, relation_family)
+    if source_symbol and source_symbol == target_symbol:
+        return symbol_scope_id(source_symbol, relation_family)
+    if source_symbol:
+        return symbol_scope_id(source_symbol, relation_family)
+    if target_symbol:
+        return symbol_scope_id(target_symbol, relation_family)
     candidates = [
-        entity_scopes.get(_clean(relation.source), ""),
-        entity_scopes.get(_clean(relation.target), ""),
+        source_scope,
+        target_scope,
     ]
     candidates = [item for item in candidates if item]
     if candidates:
@@ -258,11 +308,13 @@ def scope_id_for_evidence(evidence: OntologyEvidence, entity_scopes: Mapping[str
     if explicit:
         return explicit
     subject_scope = entity_scopes.get(_clean(evidence.subject), "")
+    symbol = _symbol(properties.get("symbol"))
+    if not symbol:
+        symbol = scope_symbol(subject_scope)
+    if symbol:
+        return symbol_scope_id(symbol, "evidence")
     if subject_scope:
         return subject_scope
-    symbol = _symbol(properties.get("symbol"))
-    if symbol:
-        return _scope_id("symbol", symbol)
     return _scope_id("evidence", account_id)
 
 
@@ -333,6 +385,11 @@ def apply_scoped_abox_identity(
     account_key = _clean(account_id) or _account_id(clone)
     entity_scopes = _seed_entity_scopes(clone)
     _propagate_entity_scopes(clone, entity_scopes)
+    entities_by_id = {
+        _clean(entity.entity_id): entity
+        for entity in clone.entities
+        if _clean(entity.entity_id)
+    }
 
     for entity in clone.entities:
         if _clean((entity.properties or {}).get("ontologyBox")) not in {"", "ABox"}:
@@ -340,13 +397,15 @@ def apply_scoped_abox_identity(
         scope_id = entity_scopes.get(_clean(entity.entity_id), REFERENCE_SCOPE_ID)
         entity.properties["aboxScopeId"] = scope_id
         entity.properties["aboxScopeType"] = _scope_type(scope_id)
+        entity.properties["aboxScopeFamily"] = scope_family(scope_id)
 
     for relation in clone.relations:
         if _clean((relation.properties or {}).get("ontologyBox")) not in {"", "ABox"}:
             continue
-        scope_id = scope_id_for_relation(relation, entity_scopes, account_key)
+        scope_id = scope_id_for_relation(relation, entity_scopes, account_key, entities_by_id)
         relation.properties["aboxScopeId"] = scope_id
         relation.properties["aboxScopeType"] = _scope_type(scope_id)
+        relation.properties["aboxScopeFamily"] = scope_family(scope_id)
 
     for evidence in clone.evidence:
         if _clean((evidence.value or {}).get("ontologyBox")) not in {"", "ABox"}:
@@ -354,6 +413,7 @@ def apply_scoped_abox_identity(
         scope_id = scope_id_for_evidence(evidence, entity_scopes, account_key)
         evidence.value["aboxScopeId"] = scope_id
         evidence.value["aboxScopeType"] = _scope_type(scope_id)
+        evidence.value["aboxScopeFamily"] = scope_family(scope_id)
 
     scope_ids = sorted({
         _clean((entity.properties or {}).get("aboxScopeId"))
@@ -427,6 +487,7 @@ def apply_scoped_abox_identity(
         scope_plan.append({
             "scopeId": scope_id,
             "scopeType": _scope_type(scope_id),
+            "scopeFamily": scope_family(scope_id),
             "fingerprint": fingerprint,
             "baseFingerprint": base_fingerprints[scope_id],
             "dependencyScopeIds": dependencies,
@@ -466,21 +527,28 @@ def apply_scoped_abox_identity(
                 "aboxSnapshotId": by_scope[scope_id]["generationId"],
             })
 
+    scope_family_counts: Dict[str, int] = {}
+    for item in scope_plan:
+        family = _clean(item.get("scopeFamily")) or "reference"
+        scope_family_counts[family] = scope_family_counts.get(family, 0) + 1
     clone.worldview.update({
         "aboxSnapshotId": manifest_id,
         "snapshotId": manifest_id,
         "worldviewManifestId": manifest_id,
         "scopedAboxManifestVersion": SCOPED_ABOX_MANIFEST_VERSION,
+        "scopeTopologyVersion": SCOPED_ABOX_SCOPE_TOPOLOGY_VERSION,
         "persistenceMode": SCOPED_ABOX_PERSISTENCE_MODE,
         "scopePlan": scope_plan,
         "scopeGenerationIds": generations,
         "scopeFingerprints": {item["scopeId"]: item["fingerprint"] for item in scope_plan},
+        "scopeFamilyCounts": dict(sorted(scope_family_counts.items())),
     })
     return {
         "manifestId": manifest_id,
         "scopePlan": scope_plan,
         "scopeGenerationIds": generations,
         "scopeFingerprints": {item["scopeId"]: item["fingerprint"] for item in scope_plan},
+        "scopeFamilyCounts": dict(sorted(scope_family_counts.items())),
     }
 
 

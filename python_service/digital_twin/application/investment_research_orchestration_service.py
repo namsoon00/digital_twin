@@ -8,9 +8,11 @@ from ..domain.events import (
 )
 from ..domain.investment_brain import InvestmentQuestion, stable_id, utc_now_iso
 from ..domain.investment_evidence_governance import (
+    HypothesisResearchBrief,
     ResearchReasoningHandoff,
     ResearchRun,
     governed_evidence,
+    hypothesis_research_brief_from_brain,
     normalized_source_trust_state,
     reasoning_handoff_from_context,
 )
@@ -53,6 +55,7 @@ class InvestmentResearchOrchestrationService:
         research_store=None,
         event_publisher=None,
         article_analysis_service=None,
+        hypothesis_research_planner=None,
         settings: Dict[str, object] = None,
     ):
         self.evidence_repository = evidence_repository
@@ -60,6 +63,7 @@ class InvestmentResearchOrchestrationService:
         self.research_store = research_store
         self.event_publisher = event_publisher
         self.article_analysis_service = article_analysis_service
+        self.hypothesis_research_planner = hypothesis_research_planner
         self.settings = dict(settings or {})
 
     def enabled(self) -> bool:
@@ -112,6 +116,7 @@ class InvestmentResearchOrchestrationService:
             target.normalized_symbol(),
             brain,
         )
+        hypothesis_brief = hypothesis_research_brief_from_brain(brain)
         if not self.enabled() or self.max_rounds() <= 0:
             return self.persist_run(ResearchRun(
                 run_id=run_id,
@@ -122,6 +127,7 @@ class InvestmentResearchOrchestrationService:
                 task_ids=task_ids,
                 source_types=source_types,
                 reasoning_handoff=reasoning_handoff,
+                hypothesis_research_brief=hypothesis_brief,
                 started_at=started_at,
                 completed_at=utc_now_iso(),
             ))
@@ -149,6 +155,7 @@ class InvestmentResearchOrchestrationService:
                 reused_evidence_ids=[item.evidence_id for item in cached_accepted],
                 verified_claims=cached_claims,
                 reasoning_handoff=reasoning_handoff,
+                hypothesis_research_brief=hypothesis_brief,
                 started_at=started_at,
                 completed_at=utc_now_iso(),
             ))
@@ -165,6 +172,7 @@ class InvestmentResearchOrchestrationService:
                 verified_claims=cached_claims,
                 round_count=0,
                 reasoning_handoff=reasoning_handoff,
+                hypothesis_research_brief=hypothesis_brief,
                 started_at=started_at,
                 completed_at=utc_now_iso(),
             ))
@@ -186,10 +194,28 @@ class InvestmentResearchOrchestrationService:
                     "remainingMinutes": cooldown_remaining,
                 }],
                 reasoning_handoff=reasoning_handoff,
+                hypothesis_research_brief=hypothesis_brief,
                 started_at=started_at,
                 completed_at=utc_now_iso(),
             ))
 
+        plan, hypothesis_brief = self.plan_collection_work(
+            brain,
+            question,
+            target,
+            account_id,
+            hypothesis_brief,
+        )
+        tasks = [item for item in plan.get("tasks") or [] if isinstance(item, dict)]
+        task_ids = [str(item.get("taskId") or "") for item in tasks if str(item.get("taskId") or "")]
+        source_types = unique_strings(
+            source
+            for item in tasks
+            for source in (item.get("sourceTypes") or [])
+        )
+        max_age = min(
+            [int(item.get("maxAgeMinutes") or 360) for item in tasks] or [360]
+        )
         collected: List[ResearchEvidence] = []
         provider_statuses: List[Dict[str, object]] = []
         if self.research_gateway and hasattr(self.research_gateway, "collect_for_target"):
@@ -214,6 +240,7 @@ class InvestmentResearchOrchestrationService:
             target,
             run_id,
             reasoning_handoff,
+            hypothesis_brief,
         )
         status = "evidence-collected" if changed_count else ("verified-no-change" if verified else "evidence-unavailable")
         return self.persist_run(ResearchRun(
@@ -231,6 +258,7 @@ class InvestmentResearchOrchestrationService:
             round_count=1,
             changed_evidence_count=changed_count,
             reasoning_handoff=reasoning_handoff,
+            hypothesis_research_brief=hypothesis_brief,
             started_at=started_at,
             completed_at=utc_now_iso(),
         ))
@@ -243,6 +271,54 @@ class InvestmentResearchOrchestrationService:
         if any(str(item.get("verificationStatus") or "") in {"requires-research", "counterfactual-challenge"} for item in hypotheses if isinstance(item, dict)):
             return True
         return any(str(item.get("status") or "") == "blocked-by-data" for item in tasks or [])
+
+    def plan_collection_work(
+        self,
+        brain: Dict[str, object],
+        question: InvestmentQuestion,
+        target: NewsCollectionTarget,
+        account_id: str,
+        fallback_brief: HypothesisResearchBrief = None,
+    ) -> Tuple[Dict[str, object], HypothesisResearchBrief]:
+        baseline = brain.get("researchPlan") if isinstance(brain.get("researchPlan"), dict) else {}
+        brief = fallback_brief or hypothesis_research_brief_from_brain(brain)
+        if not self.hypothesis_research_planner or not hasattr(self.hypothesis_research_planner, "plan"):
+            audit = {
+                "status": "planner-unavailable",
+                "reason": "AI 조사 계획 서비스가 구성되지 않아 TypeDB 기본 계획을 사용합니다.",
+                "preservesBaselineTasks": True,
+                "decisionEligibility": "research-only",
+            }
+            return {
+                **dict(baseline or {}),
+                "planningAudit": audit,
+            }, brief.with_planning("planner-unavailable", "typedb-hypothesis-set", audit)
+        try:
+            result = self.hypothesis_research_planner.plan(
+                brain,
+                question.to_dict(),
+                account_id or question.account_id,
+                target.normalized_symbol(),
+            )
+        except Exception as error:  # noqa: BLE001 - a planning failure cannot widen collection beyond the base plan.
+            audit = {
+                "status": "planner-failed",
+                "reason": str(error)[:180],
+                "preservesBaselineTasks": True,
+                "decisionEligibility": "research-only",
+            }
+            return {
+                **dict(baseline or {}),
+                "planningAudit": audit,
+            }, brief.with_planning("planner-failed", "typedb-hypothesis-set", audit)
+        result = dict(result or {})
+        planned = result.get("researchPlan") if isinstance(result.get("researchPlan"), dict) else dict(baseline or {})
+        planned_brief = result.get("hypothesisResearchBrief")
+        if isinstance(planned_brief, HypothesisResearchBrief):
+            brief = planned_brief
+        elif isinstance(planned_brief, dict):
+            brief = HypothesisResearchBrief.from_dict(planned_brief)
+        return planned, brief
 
     def latest_evidence(self, symbol: str) -> List[ResearchEvidence]:
         if not self.evidence_repository or not hasattr(self.evidence_repository, "latest"):
@@ -278,6 +354,7 @@ class InvestmentResearchOrchestrationService:
         target: NewsCollectionTarget,
         run_id: str,
         reasoning_handoff: ResearchReasoningHandoff = None,
+        hypothesis_research_brief: HypothesisResearchBrief = None,
     ) -> Tuple[int, ResearchReasoningHandoff]:
         handoff = reasoning_handoff or ResearchReasoningHandoff()
         if not items or not self.evidence_repository:
@@ -302,6 +379,7 @@ class InvestmentResearchOrchestrationService:
                 "verifiedClaims": changed_evidence_ids,
                 "changedEvidenceIds": changed_evidence_ids,
                 "reasoningHandoff": persisted_handoff.to_dict(),
+                "hypothesisResearchBrief": (hypothesis_research_brief or HypothesisResearchBrief()).to_dict(),
             })
             reasoning = ontology_reasoning_requested_event(
                 completed,
@@ -389,6 +467,7 @@ class InvestmentResearchOrchestrationService:
                 target.normalized_symbol(),
                 brain,
             ),
+            hypothesis_research_brief=hypothesis_research_brief_from_brain(brain),
             request_context={
                 "question": question.to_dict(),
                 "target": {

@@ -30,6 +30,16 @@ RESEARCH_REASONING_HANDOFF_STATES = {
     "blocked",
 }
 
+HYPOTHESIS_RESEARCH_PLANNING_STATES = {
+    "rule-derived",
+    "ai-augmented",
+    "planner-disabled",
+    "planner-unavailable",
+    "planner-failed",
+    "no-valid-guidance",
+    "not-required",
+}
+
 
 def unique_texts(values: Iterable[object], limit: int = 200) -> List[str]:
     """Keep persisted evidence and generation references deterministic."""
@@ -277,6 +287,135 @@ def complete_reasoning_handoff(
 
 
 @dataclass(frozen=True)
+class HypothesisResearchBrief:
+    """The bounded, graph-derived research surface for one ResearchRun.
+
+    It is intentionally not a new investment opinion.  The brief preserves
+    the active TypeDB hypothesis candidates, their counter-candidates and
+    evidence gaps so an AI may plan collection without inventing a fact or
+    bypassing the active ABox/InferenceBox generation.
+    """
+
+    hypothesis_set_id: str = ""
+    reasoning_generation: ReasoningGeneration = field(default_factory=ReasoningGeneration)
+    candidate_hypotheses: List[Dict[str, object]] = field(default_factory=list)
+    evidence_gaps: List[str] = field(default_factory=list)
+    baseline_plan_id: str = ""
+    planning_status: str = "rule-derived"
+    planning_source: str = "typedb-hypothesis-set"
+    planning_audit: Dict[str, object] = field(default_factory=dict)
+
+    def to_dict(self) -> Dict[str, object]:
+        return {
+            "hypothesisSetId": self.hypothesis_set_id,
+            "reasoningGeneration": self.reasoning_generation.to_dict(),
+            "candidateHypotheses": [dict(item) for item in self.candidate_hypotheses],
+            "evidenceGaps": list(self.evidence_gaps),
+            "baselinePlanId": self.baseline_plan_id,
+            "planningStatus": self.planning_status,
+            "planningSource": self.planning_source,
+            "planningAudit": dict(self.planning_audit),
+            "decisionEligibility": "research-only",
+        }
+
+    @classmethod
+    def from_dict(cls, payload: Dict[str, object] = None):
+        payload = dict(payload or {})
+        status = str(payload.get("planningStatus") or payload.get("planning_status") or "rule-derived").strip()
+        if status not in HYPOTHESIS_RESEARCH_PLANNING_STATES:
+            status = "rule-derived"
+        candidates = [
+            dict(item) for item in payload.get("candidateHypotheses") or payload.get("candidate_hypotheses") or []
+            if isinstance(item, dict)
+        ]
+        generation = payload.get("reasoningGeneration") or payload.get("reasoning_generation") or {}
+        return cls(
+            hypothesis_set_id=str(payload.get("hypothesisSetId") or payload.get("hypothesis_set_id") or "").strip(),
+            reasoning_generation=ReasoningGeneration.from_dict(generation if isinstance(generation, dict) else {}),
+            candidate_hypotheses=candidates,
+            evidence_gaps=unique_texts(payload.get("evidenceGaps") or payload.get("evidence_gaps") or [], 40),
+            baseline_plan_id=str(payload.get("baselinePlanId") or payload.get("baseline_plan_id") or "").strip(),
+            planning_status=status,
+            planning_source=str(payload.get("planningSource") or payload.get("planning_source") or "typedb-hypothesis-set").strip(),
+            planning_audit=dict(payload.get("planningAudit") or payload.get("planning_audit") or {}),
+        )
+
+    def with_planning(
+        self,
+        status: str,
+        source: str,
+        audit: Dict[str, object] = None,
+    ) -> "HypothesisResearchBrief":
+        normalized = str(status or "").strip()
+        if normalized not in HYPOTHESIS_RESEARCH_PLANNING_STATES:
+            normalized = "no-valid-guidance"
+        return replace(
+            self,
+            planning_status=normalized,
+            planning_source=str(source or self.planning_source or "typedb-hypothesis-set").strip(),
+            planning_audit=dict(audit or {}),
+        )
+
+
+def hypothesis_research_brief_from_brain(brain: Dict[str, object] = None) -> HypothesisResearchBrief:
+    """Build a small research-only view from TypeDB-derived hypotheses."""
+
+    context = dict(brain or {})
+    hypothesis_set = context.get("hypothesisSet") if isinstance(context.get("hypothesisSet"), dict) else {}
+    plan = context.get("researchPlan") if isinstance(context.get("researchPlan"), dict) else {}
+    generation = ReasoningGeneration.from_dict(
+        context.get("reasoningGeneration") if isinstance(context.get("reasoningGeneration"), dict) else {}
+    )
+    raw_hypotheses = [item for item in hypothesis_set.get("hypotheses") or [] if isinstance(item, dict)]
+    candidate_hypotheses: List[Dict[str, object]] = []
+    for item in raw_hypotheses[:8]:
+        hypothesis_id = str(item.get("hypothesisId") or item.get("hypothesis_id") or "").strip()
+        if not hypothesis_id:
+            continue
+        stance = str(item.get("stance") or "context").strip().lower()
+        counter_ids = []
+        for peer in raw_hypotheses:
+            peer_id = str(peer.get("hypothesisId") or peer.get("hypothesis_id") or "").strip()
+            peer_stance = str(peer.get("stance") or "context").strip().lower()
+            if peer_id and peer_id != hypothesis_id and peer_stance != stance:
+                counter_ids.append(peer_id)
+        candidate_hypotheses.append({
+            "hypothesisId": hypothesis_id,
+            "templateId": str(item.get("templateId") or item.get("template_id") or "").strip(),
+            "templateLabel": str(item.get("templateLabel") or item.get("template_label") or "").strip(),
+            "claim": str(item.get("claim") or "").strip(),
+            "stance": stance,
+            "evidenceState": str(item.get("evidenceState") or item.get("evidence_state") or "unresolved").strip(),
+            "verificationStatus": str(item.get("verificationStatus") or item.get("verification_status") or "").strip(),
+            "supportingEvidenceIds": unique_texts(item.get("supportingEvidenceIds") or item.get("supporting_evidence_ids") or [], 20),
+            "counterEvidenceIds": unique_texts(item.get("counterEvidenceIds") or item.get("counter_evidence_ids") or [], 20),
+            "requiredEvidenceTypes": unique_texts(item.get("requiredEvidenceTypes") or item.get("required_evidence_types") or [], 12),
+            "invalidationConditions": unique_texts(item.get("invalidationConditions") or item.get("invalidation_conditions") or [], 12),
+            "counterHypothesisIds": unique_texts(counter_ids, 8),
+        })
+    missing = list(context.get("missingData") or [])
+    missing.extend(plan.get("unresolvedQuestions") or [])
+    for item in candidate_hypotheses:
+        if item.get("verificationStatus") in {"requires-research", "counterfactual-challenge"}:
+            missing.extend(item.get("requiredEvidenceTypes") or [])
+    audit = {
+        "status": "rule-derived",
+        "candidateCount": len(candidate_hypotheses),
+        "counterHypothesisPairCount": sum(len(item.get("counterHypothesisIds") or []) for item in candidate_hypotheses),
+        "preservesTypeDbHypotheses": True,
+        "decisionEligibility": "research-only",
+    }
+    return HypothesisResearchBrief(
+        hypothesis_set_id=str(hypothesis_set.get("hypothesisSetId") or hypothesis_set.get("hypothesis_set_id") or "").strip(),
+        reasoning_generation=generation,
+        candidate_hypotheses=candidate_hypotheses,
+        evidence_gaps=unique_texts(missing, 40),
+        baseline_plan_id=str(plan.get("planId") or plan.get("plan_id") or "").strip(),
+        planning_audit=audit,
+    )
+
+
+@dataclass(frozen=True)
 class EvidenceClaim:
     claim_id: str
     evidence_id: str
@@ -315,6 +454,7 @@ class ResearchRun:
     changed_evidence_count: int = 0
     reasoning_refreshed: bool = False
     reasoning_handoff: ResearchReasoningHandoff = field(default_factory=ResearchReasoningHandoff)
+    hypothesis_research_brief: HypothesisResearchBrief = field(default_factory=HypothesisResearchBrief)
     request_context: Dict[str, object] = field(default_factory=dict)
     started_at: str = field(default_factory=utc_now_iso)
     completed_at: str = ""
@@ -324,6 +464,7 @@ class ResearchRun:
         payload["verifiedClaims"] = [item.to_dict() for item in self.verified_claims]
         payload["rejectedClaims"] = [item.to_dict() for item in self.rejected_claims]
         payload["reasoningHandoff"] = self.reasoning_handoff.to_dict()
+        payload["hypothesisResearchBrief"] = self.hypothesis_research_brief.to_dict()
         return payload
 
     @classmethod
@@ -367,6 +508,9 @@ class ResearchRun:
             reasoning_refreshed=bool(payload.get("reasoningRefreshed") or payload.get("reasoning_refreshed")),
             reasoning_handoff=ResearchReasoningHandoff.from_dict(
                 payload.get("reasoningHandoff") or payload.get("reasoning_handoff") or {}
+            ),
+            hypothesis_research_brief=HypothesisResearchBrief.from_dict(
+                payload.get("hypothesisResearchBrief") or payload.get("hypothesis_research_brief") or {}
             ),
             request_context=dict(payload.get("requestContext") or payload.get("request_context") or {}),
             started_at=str(payload.get("startedAt") or payload.get("started_at") or utc_now_iso()),

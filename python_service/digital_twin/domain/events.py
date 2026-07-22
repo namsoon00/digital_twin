@@ -332,6 +332,7 @@ def data_pipeline_health_changed_event(payload: Dict[str, object]) -> DomainEven
 def hypothesis_research_completed_event(payload: Dict[str, object]) -> DomainEvent:
     symbol = str(payload.get("symbol") or "").upper().strip()
     handoff = payload.get("reasoningHandoff") if isinstance(payload.get("reasoningHandoff"), dict) else {}
+    research_brief = payload.get("hypothesisResearchBrief") if isinstance(payload.get("hypothesisResearchBrief"), dict) else {}
     changed_evidence_ids = [
         str(item or "").strip()
         for item in (payload.get("changedEvidenceIds") or payload.get("verifiedClaims") or [])
@@ -354,6 +355,7 @@ def hypothesis_research_completed_event(payload: Dict[str, object]) -> DomainEve
             "factTypes": ["ResearchEvidence", "VerifiedClaim", "VerificationRun"],
             "source": "investment-brain-on-demand-research",
             "reasoningHandoff": handoff,
+            "hypothesisResearchBrief": research_brief,
         },
     )
 
@@ -388,6 +390,7 @@ def ontology_reasoning_requested_event(
     clean_fact_types = sorted(set(str(item or "").strip() for item in (fact_types or []) if str(item or "").strip()))
     source_payload = source_event.payload or {}
     handoff = source_payload.get("reasoningHandoff") if isinstance(source_payload.get("reasoningHandoff"), dict) else {}
+    research_brief = source_payload.get("hypothesisResearchBrief") if isinstance(source_payload.get("hypothesisResearchBrief"), dict) else {}
     changed_evidence_ids = [
         str(item or "").strip()
         for item in (source_payload.get("changedEvidenceIds") or source_payload.get("verifiedClaims") or [])
@@ -414,6 +417,7 @@ def ontology_reasoning_requested_event(
             "accountId": str(source_payload.get("accountId") or ""),
             "changedEvidenceIds": changed_evidence_ids[:200],
             "reasoningHandoff": handoff,
+            "hypothesisResearchBrief": research_brief,
         },
     )
 

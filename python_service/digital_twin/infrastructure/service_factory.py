@@ -8,6 +8,7 @@ from ..application.investment_analysis_service import InvestmentAnalysisService
 from ..application.investment_brain_service import InvestmentBrainService
 from ..application.investment_research_orchestration_service import InvestmentResearchOrchestrationService, InvestmentResearchQueueRunner
 from ..application.hypothesis_proposal_service import HypothesisProposalService
+from ..application.hypothesis_research_planner_service import HypothesisResearchPlanningService
 from ..application.investment_strategy_proposal_service import InvestmentStrategyProposalService
 from ..application.investment_calendar_candidate_service import InvestmentCalendarCandidateService
 from ..application.investment_calendar_extraction_service import InvestmentCalendarExtractionService
@@ -45,6 +46,7 @@ from .model_review_queue import ModelReviewEnqueuer
 from .model_reviewer import reviewer_from_settings
 from .notification_ai_reviewer import notification_ai_reviewer_from_settings
 from .hypothesis_proposal_ai import hypothesis_proposal_advisor_from_settings
+from .hypothesis_research_planner_ai import hypothesis_research_planning_advisor_from_settings
 from .investment_research_gateway import CompositeInvestmentResearchGateway, ExistingApiResearchGateway
 from .ontology_graph_store import ontology_repository_from_settings
 from . import operational_store as stores
@@ -254,6 +256,7 @@ def build_investment_research_orchestrator(settings=None, research_store=None) -
             news_ai_analyzer_from_settings(configured_settings),
             configured_settings,
         ),
+        hypothesis_research_planner=build_hypothesis_research_planning_service(configured_settings),
         settings=configured_settings,
     )
 
@@ -273,6 +276,14 @@ def build_hypothesis_proposal_service(settings=None, research_store=None) -> Hyp
         store=research_store or stores.investment_research_store(configured_settings),
         advisor=hypothesis_proposal_advisor_from_settings(configured_settings),
         event_publisher=default_event_bus(),
+        settings=configured_settings,
+    )
+
+
+def build_hypothesis_research_planning_service(settings=None) -> HypothesisResearchPlanningService:
+    configured_settings = settings or runtime_settings()
+    return HypothesisResearchPlanningService(
+        advisor=hypothesis_research_planning_advisor_from_settings(configured_settings),
         settings=configured_settings,
     )
 

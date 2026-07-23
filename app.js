@@ -4017,6 +4017,7 @@
       ontologySharedMarketTenantId: settingValue("ontologySharedMarketTenantId"),
       ontologySharedMarketWorldRetentionHours: settingValue("ontologySharedMarketWorldRetentionHours"),
       ontologySharedMarketWorldMaxSymbols: settingValue("ontologySharedMarketWorldMaxSymbols"),
+      ontologySharedMarketWorldAsyncProjectionEnabled: settingValue("ontologySharedMarketWorldAsyncProjectionEnabled"),
       typedbAddress: settingValue("typedbAddress"),
       typedbUser: settingValue("typedbUser"),
       typedbDatabase: settingValue("typedbDatabase"),
@@ -23681,6 +23682,10 @@
         renderSettingField("ontologySharedMarketTenantId", "공유 시장 테넌트", "text", "shared"),
         renderSettingField("ontologySharedMarketWorldRetentionHours", "공유 시장 관측 보관(시간)", "number", "72"),
         renderSettingField("ontologySharedMarketWorldMaxSymbols", "공유 시장 종목 한도", "number", "1200"),
+        renderSettingSelect("ontologySharedMarketWorldAsyncProjectionEnabled", "공유 시장 비동기 갱신", [
+          { value: "1", label: "사용" },
+          { value: "0", label: "사용 안 함" }
+        ]),
         renderSettingField("typedbInferenceGenerationKeepCount", "InferenceBox 보관 세대", "number", "1"),
         renderSettingSelect("typedbAutoResetEnabled", "TypeDB 자동 재생성", [
           { value: "1", label: "사용" },

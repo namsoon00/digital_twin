@@ -3961,9 +3961,14 @@ class TypeDBOntologyGraphRepository(GraphStoreOntologyRowMapperMixin, ScopedABox
         except Exception as error:  # noqa: BLE001 - optional dependency.
             return None, error
 
-    def open_driver(self, imported):
+    def open_driver(self, imported, request_timeout_seconds: float = None):
         TypeDB, Credentials, DriverOptions, DriverTlsConfig, _TransactionType = imported[0]
         tls_config = DriverTlsConfig.enabled() if self.tls_enabled else DriverTlsConfig.disabled()
+        request_timeout = (
+            self.driver_request_timeout_seconds()
+            if request_timeout_seconds is None
+            else max(1.0, float(request_timeout_seconds))
+        )
         return TypeDB.driver(
             self.address,
             Credentials(self.user, self.password),
@@ -3974,7 +3979,7 @@ class TypeDBOntologyGraphRepository(GraphStoreOntologyRowMapperMixin, ScopedABox
                 # deadline while replacing a large ABox. Do not let the driver's
                 # channel deadline invalidate that transaction before its explicit
                 # write-operation timeout is reached.
-                request_timeout_millis=max(1000, int(self.driver_request_timeout_seconds() * 1000)),
+                request_timeout_millis=max(1000, int(request_timeout * 1000)),
             ),
         )
 
@@ -8483,7 +8488,19 @@ relation ontology-assertion,
                 nonlocal read_call_count, read_transaction_count, execution_budget_exhausted, execution_incomplete, execution_mode
                 if not selected_entries:
                     return
-                driver = self.open_driver(imported)
+                # The durable projection may need a long write timeout, but a
+                # native read must be bounded independently. Reusing the
+                # write-oriented driver deadline here made a 30-second
+                # native-rule budget wait for up to five minutes in the
+                # synchronous TypeDB driver.
+                transaction_timeout = max(
+                    self.native_rule_query_timeout_seconds(),
+                    min(120.0, self.native_rule_execution_budget_seconds() + 2.0),
+                )
+                driver = self.open_driver(
+                    imported,
+                    request_timeout_seconds=transaction_timeout,
+                )
                 try:
                     self.ensure_database(driver)
                     deadline = time.monotonic() + self.native_rule_execution_budget_seconds()
@@ -8494,10 +8511,6 @@ relation ontology-assertion,
                     # between rules. Per-query alarm limits still bound an
                     # expensive function; a failed query aborts this shared
                     # transaction and yields a fail-closed partial result.
-                    transaction_timeout = max(
-                        self.native_rule_query_timeout_seconds(),
-                        min(120.0, self.native_rule_execution_budget_seconds() + 2.0),
-                    )
                     read_transaction_count += 1
                     with driver.transaction(
                         self.database,

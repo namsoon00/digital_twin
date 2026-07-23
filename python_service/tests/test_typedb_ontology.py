@@ -618,6 +618,49 @@ class TypeDBOntologyRepositoryTests(unittest.TestCase):
 
         self.assertEqual(180, repository.driver_request_timeout_seconds())
 
+    def test_typedb_open_driver_allows_a_short_native_read_request_deadline(self):
+        repository = TypeDBOntologyGraphRepository(
+            "127.0.0.1:1729",
+            write_operation_timeout_seconds=300,
+        )
+        captured = {}
+
+        class FakeTypeDB:
+            @staticmethod
+            def driver(address, credentials, options):
+                captured.update({
+                    "address": address,
+                    "credentials": credentials,
+                    "options": options,
+                })
+                return object()
+
+        class FakeCredentials:
+            def __init__(self, user, password):
+                self.user = user
+                self.password = password
+
+        class FakeDriverOptions:
+            def __init__(self, tls_config, **kwargs):
+                self.tls_config = tls_config
+                self.request_timeout_millis = kwargs["request_timeout_millis"]
+
+        class FakeDriverTlsConfig:
+            @staticmethod
+            def enabled():
+                return "enabled"
+
+            @staticmethod
+            def disabled():
+                return "disabled"
+
+        imported = ((FakeTypeDB, FakeCredentials, FakeDriverOptions, FakeDriverTlsConfig, object), None)
+
+        repository.open_driver(imported, request_timeout_seconds=32)
+
+        self.assertEqual("127.0.0.1:1729", captured["address"])
+        self.assertEqual(32000, captured["options"].request_timeout_millis)
+
     def test_typedb_write_transaction_options_cover_write_operation_timeout(self):
         repository = TypeDBOntologyGraphRepository(
             "127.0.0.1:1729",

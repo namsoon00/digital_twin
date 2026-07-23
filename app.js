@@ -115,6 +115,7 @@
     { id: "rules", label: "전략 룰", description: "조건·알림" },
     { id: "graphs", label: "온톨로지", description: "TBox·ABox" },
     { id: "proposals", label: "전략 제안", description: "승인·성과" },
+    { id: "hypotheses", label: "가설 검증", description: "변화·반증·결과" },
     { id: "trace", label: "검증·리뷰", description: "성과·품질" }
   ];
   var ontologySections = [
@@ -145,7 +146,7 @@
       settings: ["policy", "templates", "diagnostics"]
     },
     modeling: {
-      results: ["overview", "evidence", "charts", "graphs", "proposals", "trace"],
+      results: ["overview", "evidence", "charts", "graphs", "proposals", "hypotheses", "trace"],
       settings: ["rules"]
     },
     feed: {
@@ -501,6 +502,12 @@
     strategyProposalAction: "",
     activeStrategyProposalId: "",
     activeStrategyProposalSection: initialStrategyProposalSection(),
+    hypothesisWorkspace: null,
+    hypothesisWorkspaceLoading: false,
+    hypothesisWorkspaceLoaded: false,
+    hypothesisWorkspaceError: "",
+    activeHypothesisLifecycleKey: "",
+    hypothesisPolicySaving: "",
     messageSchedules: [],
     messageSchedulesLoading: false,
     messageSchedulesError: "",
@@ -1267,6 +1274,7 @@
     if (requested === "policy" || requested === "rule" || requested === "rules" || requested === "registry" || requested === "prompts") return "rules";
     if (requested === "structure" || requested === "graph" || requested === "ontology" || requested === "relation-graph") return "graphs";
     if (requested === "proposal" || requested === "proposals" || requested === "strategy-proposals" || requested === "approval" || requested === "approvals") return "proposals";
+    if (requested === "hypothesis" || requested === "hypotheses" || requested === "lifecycle" || requested === "lifecycles" || requested === "hypothesis-review") return "hypotheses";
     if (requested === "relations" || requested === "rules-trace" || requested === "review" || requested === "reviews") return "trace";
     return strategySections.some(function (section) { return section.id === requested; }) ? requested : "overview";
   }
@@ -4282,6 +4290,11 @@
     return section === "overview" || section === "graphs" || section === "proposals";
   }
 
+  function shouldLoadHypothesisWorkspace() {
+    if (state.activeTab !== "modeling") return false;
+    return activeSectionForPageMode("modeling", strategySections, normalizeStrategySection(state.activeStrategySection)) === "hypotheses";
+  }
+
   function loadOntologyStrategyDetail(force) {
     if (isStaticPreviewHost()) return Promise.resolve(state.snapshot);
     if (state.ontologyStrategyDetailLoading && !force) return Promise.resolve(state.snapshot);
@@ -4920,6 +4933,441 @@
       .finally(function () {
         state.strategyProposalsLoading = false;
         if (state.snapshot) render();
+      });
+  }
+
+  function hypothesisWorkspacePayload() {
+    return state.hypothesisWorkspace && typeof state.hypothesisWorkspace === "object"
+      ? state.hypothesisWorkspace
+      : { status: "loading", count: 0, summary: {}, items: [], events: [] };
+  }
+
+  function hypothesisWorkspaceItems() {
+    var payload = hypothesisWorkspacePayload();
+    return Array.isArray(payload.items) ? payload.items : [];
+  }
+
+  function hypothesisWorkspaceItemByKey(lifecycleKey) {
+    var target = String(lifecycleKey || "");
+    return hypothesisWorkspaceItems().filter(function (item) {
+      return String(item && item.lifecycleKey || "") === target;
+    })[0] || null;
+  }
+
+  function syncActiveHypothesisLifecycleKey() {
+    var items = hypothesisWorkspaceItems();
+    if (!items.length) {
+      state.activeHypothesisLifecycleKey = "";
+      return null;
+    }
+    var active = hypothesisWorkspaceItemByKey(state.activeHypothesisLifecycleKey);
+    if (!active) {
+      state.activeHypothesisLifecycleKey = String(items[0].lifecycleKey || "");
+      active = items[0];
+    }
+    return active;
+  }
+
+  function activeHypothesisWorkspaceItem() {
+    return syncActiveHypothesisLifecycleKey();
+  }
+
+  function loadHypothesisWorkspace(force) {
+    if (isStaticPreviewHost()) {
+      state.hypothesisWorkspace = {
+        status: "preview",
+        count: 0,
+        eventCount: 0,
+        summary: { stateCounts: {}, outcomeStateCounts: {}, materialChangeCount: 0, activeCount: 0 },
+        items: [],
+        events: []
+      };
+      state.hypothesisWorkspaceLoaded = true;
+      state.hypothesisWorkspaceError = "";
+      return Promise.resolve(state.hypothesisWorkspace);
+    }
+    if (state.hypothesisWorkspaceLoading && !force) return Promise.resolve(state.hypothesisWorkspace);
+    state.hypothesisWorkspaceLoading = true;
+    state.hypothesisWorkspaceError = "";
+    return requestJson("/api/investment-brain/hypotheses?limit=100&eventLimit=100", {
+      key: "hypothesis-workspace",
+      force: Boolean(force)
+    })
+      .then(function (payload) {
+        state.hypothesisWorkspace = payload && typeof payload === "object" ? payload : {};
+        state.hypothesisWorkspaceLoaded = true;
+        syncActiveHypothesisLifecycleKey();
+        return state.hypothesisWorkspace;
+      })
+      .catch(function (error) {
+        state.hypothesisWorkspaceError = error.message || "가설 검증 정보를 읽지 못했습니다.";
+        return null;
+      })
+      .finally(function () {
+        state.hypothesisWorkspaceLoading = false;
+        if (state.snapshot) render();
+      });
+  }
+
+  function hypothesisLifecycleTone(stateValue) {
+    var value = String(stateValue || "").toLowerCase();
+    if (value === "invalidated" || value === "expired") return "danger";
+    if (value === "weakened") return "caution";
+    if (value === "strengthened") return "watch";
+    return "hold";
+  }
+
+  function hypothesisOutcomeTone(stateValue) {
+    var value = String(stateValue || "").toLowerCase();
+    if (value === "contradicted") return "danger";
+    if (value === "supported") return "watch";
+    if (value === "inconclusive") return "caution";
+    return "hold";
+  }
+
+  function hypothesisFreshnessLabel(status) {
+    var value = String(status || "").toLowerCase();
+    if (value === "fresh") return "최신";
+    if (value === "aging") return "확인 필요";
+    if (value === "stale") return "오래됨";
+    if (value === "unavailable") return "없음";
+    return value || "확인 대기";
+  }
+
+  function hypothesisHorizonLabel(minutes) {
+    var value = Number(minutes || 0);
+    if (!Number.isFinite(value) || value <= 0) return "기준 시점";
+    if (value % 1440 === 0) return Math.round(value / 1440) + "일 뒤";
+    if (value % 60 === 0) return Math.round(value / 60) + "시간 뒤";
+    return Math.round(value) + "분 뒤";
+  }
+
+  function hypothesisStringList(value, limit) {
+    var source = Array.isArray(value) ? value : (value ? [value] : []);
+    var rows = [];
+    source.forEach(function (item) {
+      var text = String(item == null ? "" : item).trim();
+      if (text && rows.indexOf(text) < 0) rows.push(text);
+    });
+    return rows.slice(0, limit || rows.length);
+  }
+
+  function hypothesisDeltaLabel(key) {
+    return {
+      addedSupportingEvidenceIds: "새 지지 근거",
+      removedSupportingEvidenceIds: "사라진 지지 근거",
+      addedCounterEvidenceIds: "새 반대 근거",
+      removedCounterEvidenceIds: "사라진 반대 근거",
+      addedCausalPathIds: "새 인과 경로",
+      removedCausalPathIds: "사라진 인과 경로",
+      addedFormationConditionIds: "새 성립 조건",
+      removedFormationConditionIds: "사라진 성립 조건",
+      addedRuleIds: "새 연결 룰",
+      removedRuleIds: "사라진 연결 룰",
+      removedActivePath: "사라진 활성 경로"
+    }[key] || String(key || "변화");
+  }
+
+  function renderHypothesisMetric(label, value, caption, tone) {
+    return [
+      '<section class="investment-today-status-cell ' + escapeHtml(tone || "hold") + '">',
+      '<span>' + escapeHtml(label) + '</span>',
+      '<strong>' + escapeHtml(value == null || value === "" ? "-" : value) + '</strong>',
+      '<em>' + escapeHtml(caption || "") + '</em>',
+      '</section>'
+    ].join("");
+  }
+
+  function renderHypothesisWorkspacePanel() {
+    var payload = hypothesisWorkspacePayload();
+    var summary = payload.summary && typeof payload.summary === "object" ? payload.summary : {};
+    var items = hypothesisWorkspaceItems();
+    var active = activeHypothesisWorkspaceItem();
+    var outcomeCounts = summary.outcomeStateCounts && typeof summary.outcomeStateCounts === "object" ? summary.outcomeStateCounts : {};
+    return [
+      '<article class="panel hypothesis-workspace-panel">',
+      '<div class="panel-head">',
+      '<div>',
+      '<p class="label">Hypothesis Review</p>',
+      '<h2>가설 검증</h2>',
+      '<p class="subtle">현재 추론에서 무엇이 바뀌었는지와 이후 관측이 가설을 지지하거나 반증하는지를 확인합니다. 사후 결과는 자동 주문이나 행동 결정을 바꾸지 않습니다.</p>',
+      '</div>',
+      '<div class="settings-actions">',
+      '<span class="tone-chip ' + escapeHtml(Number(summary.materialChangeCount || 0) ? "caution" : "hold") + '">' + escapeHtml(Number(summary.materialChangeCount || 0) ? summary.materialChangeCount + "건 변화" : "변화 없음") + '</span>',
+      '<button class="text-button" type="button" data-action="refresh-hypothesis-workspace"' + (state.hypothesisWorkspaceLoading ? ' disabled' : '') + '>' + escapeHtml(state.hypothesisWorkspaceLoading ? "조회 중" : "새로고침") + '</button>',
+      '</div>',
+      '</div>',
+      '<div class="investment-today-status-grid hypothesis-workspace-metrics">',
+      renderHypothesisMetric("가설", payload.count == null ? items.length : payload.count, "현재 TypeDB 세대", items.length ? "watch" : "hold"),
+      renderHypothesisMetric("유효", summary.activeCount || 0, "유지·강화·약화", Number(summary.activeCount || 0) ? "watch" : "hold"),
+      renderHypothesisMetric("지지됨", outcomeCounts.supported || 0, "사후 관측", Number(outcomeCounts.supported || 0) ? "watch" : "hold"),
+      renderHypothesisMetric("반증됨", outcomeCounts.contradicted || 0, "사후 관측", Number(outcomeCounts.contradicted || 0) ? "danger" : "hold"),
+      '</div>',
+      state.hypothesisWorkspaceError ? '<p class="form-error">' + escapeHtml(state.hypothesisWorkspaceError) + '</p>' : '',
+      state.hypothesisWorkspaceLoading && !state.hypothesisWorkspaceLoaded ? '<div class="rule-strip"><span>TypeDB 가설 수명주기와 사후 관측을 읽는 중입니다.</span></div>' : '',
+      '<div class="hypothesis-workspace-layout">',
+      renderHypothesisWorkspaceList(items, active),
+      renderHypothesisWorkspaceDetail(active),
+      '</div>',
+      '</article>'
+    ].join("");
+  }
+
+  function renderHypothesisWorkspaceList(items, active) {
+    if (!items.length) {
+      return [
+        '<section class="hypothesis-workspace-list">',
+        '<div class="hypothesis-workspace-empty">',
+        '<strong>확인할 가설이 아직 없습니다.</strong>',
+        '<span>정상·정렬된 TypeDB 추론 세대가 저장되면 가설 상태와 이후 결과가 여기에 표시됩니다.</span>',
+        '</div>',
+        '</section>'
+      ].join("");
+    }
+    return [
+      '<section class="hypothesis-workspace-list" aria-label="가설 목록">',
+      items.map(function (item) {
+        var lifecycleKey = String(item.lifecycleKey || "");
+        var selected = active && String(active.lifecycleKey || "") === lifecycleKey;
+        var outcome = item.outcomeAssessment && typeof item.outcomeAssessment === "object" ? item.outcomeAssessment : {};
+        var meta = [
+          item.scopeLabel || "가설",
+          item.materialChange ? "새 변화" : "변화 없음",
+          item.lastTransitionAt ? formatClock(item.lastTransitionAt) : ""
+        ].filter(Boolean).join(" · ");
+        return [
+          '<button class="hypothesis-workspace-card' + (selected ? " active" : "") + '" type="button" data-hypothesis-lifecycle-select="' + escapeHtml(lifecycleKey) + '">',
+          '<div class="hypothesis-workspace-card-top">',
+          '<span class="tone-chip ' + escapeHtml(hypothesisLifecycleTone(item.state)) + '">' + escapeHtml(item.stateLabel || item.state || "관찰됨") + '</span>',
+          '<span class="tone-chip ' + escapeHtml(hypothesisOutcomeTone(outcome.outcomeState)) + '">' + escapeHtml(outcome.outcomeStateLabel || "표본 부족") + '</span>',
+          '</div>',
+          '<strong>' + escapeHtml(item.symbol || "종목") + '</strong>',
+          '<em>' + escapeHtml(meta || "현재 세대") + '</em>',
+          '</button>'
+        ].join("");
+      }).join(""),
+      '</section>'
+    ].join("");
+  }
+
+  function renderHypothesisDetailList(title, rows, emptyText) {
+    var values = hypothesisStringList(rows, 12);
+    return [
+      '<section class="hypothesis-detail-section">',
+      '<strong>' + escapeHtml(title) + '</strong>',
+      values.length ? '<div class="hypothesis-detail-chip-list">' + values.map(function (item) { return '<span>' + escapeHtml(item) + '</span>'; }).join("") + '</div>' : '<p>' + escapeHtml(emptyText || "기록된 항목이 없습니다.") + '</p>',
+      '</section>'
+    ].join("");
+  }
+
+  function renderHypothesisDelta(item) {
+    var delta = item && item.evidenceDelta && typeof item.evidenceDelta === "object" ? item.evidenceDelta : {};
+    var rows = Object.keys(delta).map(function (key) {
+      var values = hypothesisStringList(delta[key], 5);
+      return values.length ? { key: key, values: values } : null;
+    }).filter(Boolean);
+    return [
+      '<section class="hypothesis-detail-section">',
+      '<strong>이전 세대 대비 변화</strong>',
+      rows.length ? '<div class="hypothesis-delta-list">' + rows.map(function (row) {
+        return '<div><b>' + escapeHtml(hypothesisDeltaLabel(row.key)) + '</b><span>' + escapeHtml(row.values.join(", ")) + '</span></div>';
+      }).join("") + '</div>' : '<p>이전 정상 추론 세대와 비교해 기록된 근거 변화가 없습니다.</p>',
+      '</section>'
+    ].join("");
+  }
+
+  function renderHypothesisFreshness(item) {
+    var rows = Array.isArray(item && item.freshness) ? item.freshness : [];
+    return [
+      '<section class="hypothesis-detail-section">',
+      '<strong>데이터 신선도</strong>',
+      rows.length ? '<div class="hypothesis-freshness-list">' + rows.map(function (row) {
+        var status = String(row && row.status || "").toLowerCase();
+        return [
+          '<div>',
+          '<span class="tone-chip ' + escapeHtml(status === "fresh" ? "watch" : (status === "stale" || status === "unavailable" ? "danger" : "caution")) + '">' + escapeHtml(hypothesisFreshnessLabel(status)) + '</span>',
+          '<strong>' + escapeHtml(row.domain || "데이터") + '</strong>',
+          '<p>' + escapeHtml((row.required ? "판단에 필요한 데이터. " : "참고 데이터. ") + (row.reason || "현재 세대의 신선도 상태")) + '</p>',
+          '</div>'
+        ].join("");
+      }).join("") + '</div>' : '<p>이 가설에는 별도 신선도 도메인이 등록되지 않았습니다.</p>',
+      '</section>'
+    ].join("");
+  }
+
+  function renderHypothesisOutcome(item) {
+    var outcome = item && item.outcomeAssessment && typeof item.outcomeAssessment === "object" ? item.outcomeAssessment : {};
+    var horizons = Array.isArray(outcome.horizonAssessments) ? outcome.horizonAssessments : [];
+    if (!Object.keys(outcome).length) {
+      return '<section class="hypothesis-detail-section"><strong>사후 결과</strong><p>아직 연결된 사후 관측이 없습니다.</p></section>';
+    }
+    return [
+      '<section class="hypothesis-detail-section hypothesis-outcome-section">',
+      '<div class="hypothesis-detail-section-head">',
+      '<strong>사후 결과</strong>',
+      '<span class="tone-chip ' + escapeHtml(hypothesisOutcomeTone(outcome.outcomeState)) + '">' + escapeHtml(outcome.outcomeStateLabel || "표본 부족") + '</span>',
+      '</div>',
+      '<p>' + escapeHtml(outcome.summary || "사후 결과를 집계 중입니다.") + '</p>',
+      '<div class="hypothesis-outcome-metrics">',
+      '<span>표본 ' + escapeHtml(outcome.sampleCount == null ? 0 : outcome.sampleCount) + '/' + escapeHtml(outcome.minimumSampleCount == null ? "-" : outcome.minimumSampleCount) + '</span>',
+      '<span>지지 ' + escapeHtml(outcome.supportedCount == null ? 0 : outcome.supportedCount) + '</span>',
+      '<span>반증 ' + escapeHtml(outcome.contradictedCount == null ? 0 : outcome.contradictedCount) + '</span>',
+      '<span>판단 불가 ' + escapeHtml(outcome.inconclusiveCount == null ? 0 : outcome.inconclusiveCount) + '</span>',
+      '</div>',
+      horizons.length ? '<div class="hypothesis-horizon-list">' + horizons.map(function (row) {
+        return '<div><b>' + escapeHtml(hypothesisHorizonLabel(row.horizonMinutes)) + '</b><span>' + escapeHtml(row.outcomeStateLabel || "표본 부족") + ' · 표본 ' + escapeHtml(row.sampleCount == null ? 0 : row.sampleCount) + '</span></div>';
+      }).join("") + '</div>' : '',
+      outcome.excludedOutcomeCount ? '<p class="subtle">시점·품질 기준을 통과하지 못한 관측 ' + escapeHtml(outcome.excludedOutcomeCount) + '건은 결과 집계에서 제외했습니다.</p>' : '',
+      '<p class="subtle">이 결과는 과거 검토용 기록이며 현재 투자 행동을 자동으로 바꾸지 않습니다.</p>',
+      '</section>'
+    ].join("");
+  }
+
+  function renderHypothesisTransitions(item) {
+    var rows = Array.isArray(item && item.transitions) ? item.transitions : [];
+    return [
+      '<section class="hypothesis-detail-section">',
+      '<strong>최근 상태 이력</strong>',
+      rows.length ? '<div class="hypothesis-transition-list">' + rows.map(function (row) {
+        return '<div><b>' + escapeHtml(row.currentState || "상태 변경") + '</b><span>' + escapeHtml(row.reason || row.transitionReason || "변경 사유 없음") + '</span><em>' + escapeHtml(row.occurredAt ? formatClock(row.occurredAt) : "") + '</em></div>';
+      }).join("") + '</div>' : '<p>현재 상태를 만든 이전 전이 기록이 없습니다.</p>',
+      '</section>'
+    ].join("");
+  }
+
+  function hypothesisPolicyValue(policy, key) {
+    var value = policy && policy[key];
+    return Array.isArray(value) ? value.join("\n") : String(value == null ? "" : value);
+  }
+
+  function renderHypothesisPolicyEditor(item) {
+    var policies = Array.isArray(item && item.editablePolicies) ? item.editablePolicies : [];
+    var fallbackPolicy = item && item.policy && typeof item.policy === "object" ? item.policy : {};
+    if (!policies.length) {
+      return [
+        '<section class="hypothesis-detail-section hypothesis-policy-section">',
+        '<strong>RuleBox 수명주기 정책</strong>',
+        '<p>이 가설은 TypeDB에 저장된 현재 정책을 따릅니다. 연결된 편집 가능 RuleBox 규칙을 읽지 못했으므로 이 화면에서는 상태만 확인할 수 있습니다.</p>',
+        renderHypothesisDetailList("현재 다음 확인 데이터", fallbackPolicy.nextDataRequirements, "등록된 다음 확인 데이터가 없습니다."),
+        '</section>'
+      ].join("");
+    }
+    return policies.slice(0, 4).map(function (entry) {
+      var policy = entry && entry.policy && typeof entry.policy === "object" ? entry.policy : {};
+      var ruleId = String(entry && entry.ruleId || "");
+      var disabled = !entry.editable || isStaticPreviewHost() || state.serverSettingsLocked || state.hypothesisPolicySaving === ruleId;
+      return [
+        '<section class="hypothesis-detail-section hypothesis-policy-section">',
+        '<div class="hypothesis-detail-section-head">',
+        '<div><strong>RuleBox 수명주기 정책</strong><p>' + escapeHtml(entry.label || ruleId || "연결 규칙") + '</p></div>',
+        '<span class="tone-chip ' + escapeHtml(entry.editable ? "watch" : "hold") + '">' + escapeHtml(entry.editable ? "편집 가능" : "읽기 전용") + '</span>',
+        '</div>',
+        '<p>가설 상태는 직접 바꾸지 않습니다. 다음 정상 TypeDB 추론 세대에서 이 정책과 실제 근거를 비교해 갱신됩니다.</p>',
+        '<form class="hypothesis-policy-form" data-hypothesis-policy-form="' + escapeHtml(ruleId) + '">',
+        '<label class="setting-field wide"><span>성립 조건 ID</span><textarea name="formationConditionIds" rows="2"' + (disabled ? " disabled" : "") + '>' + escapeHtml(hypothesisPolicyValue(policy, "formationConditionIds")) + '</textarea></label>',
+        '<label class="setting-field wide"><span>반증 조건 ID</span><textarea name="invalidationConditionIds" rows="2"' + (disabled ? " disabled" : "") + '>' + escapeHtml(hypothesisPolicyValue(policy, "invalidationConditionIds")) + '</textarea></label>',
+        '<label class="setting-field"><span>유효 시간(분)</span><input name="validityMinutes" type="number" min="0" value="' + escapeHtml(hypothesisPolicyValue(policy, "validityMinutes")) + '"' + (disabled ? " disabled" : "") + '></label>',
+        '<label class="setting-field"><span>반증 처리 방식</span><input name="invalidationMode" type="text" value="' + escapeHtml(hypothesisPolicyValue(policy, "invalidationMode")) + '"' + (disabled ? " disabled" : "") + '></label>',
+        '<label class="setting-field wide"><span>필수 신선도 데이터</span><textarea name="requiredFreshnessDomains" rows="2"' + (disabled ? " disabled" : "") + '>' + escapeHtml(hypothesisPolicyValue(policy, "requiredFreshnessDomains")) + '</textarea></label>',
+        '<label class="setting-field wide"><span>다음 확인 데이터</span><textarea name="nextDataRequirements" rows="2"' + (disabled ? " disabled" : "") + '>' + escapeHtml(hypothesisPolicyValue(policy, "nextDataRequirements")) + '</textarea></label>',
+        '<label class="setting-field wide"><span>변경 사유</span><textarea name="changeReason" rows="2" placeholder="변경 이유를 남기세요."' + (disabled ? " disabled" : "") + '></textarea></label>',
+        '<div class="settings-actions"><button class="text-button primary" type="submit"' + (disabled ? " disabled" : "") + '>' + escapeHtml(state.hypothesisPolicySaving === ruleId ? "저장 중" : "정책 저장") + '</button></div>',
+        '</form>',
+        '</section>'
+      ].join("");
+    }).join("");
+  }
+
+  function renderHypothesisWorkspaceDetail(item) {
+    if (!item) {
+      return [
+        '<section class="hypothesis-workspace-detail">',
+        '<div class="hypothesis-workspace-empty">',
+        '<strong>선택된 가설이 없습니다.</strong>',
+        '<span>정상 TypeDB 추론 세대가 저장되면 상태와 사후 결과를 확인할 수 있습니다.</span>',
+        '</div>',
+        '</section>'
+      ].join("");
+    }
+    var outcome = item.outcomeAssessment && typeof item.outcomeAssessment === "object" ? item.outcomeAssessment : {};
+    var expires = item.expiresAt ? formatClock(item.expiresAt) : "유효 기간 없음";
+    return [
+      '<section class="hypothesis-workspace-detail">',
+      '<div class="hypothesis-detail-head">',
+      '<div>',
+      '<div class="hypothesis-detail-head-chips">',
+      '<span class="tone-chip ' + escapeHtml(hypothesisLifecycleTone(item.state)) + '">' + escapeHtml(item.stateLabel || item.state || "관찰됨") + '</span>',
+      '<span class="tone-chip ' + escapeHtml(hypothesisOutcomeTone(outcome.outcomeState)) + '">' + escapeHtml(outcome.outcomeStateLabel || "표본 부족") + '</span>',
+      '</div>',
+      '<h3>' + escapeHtml((item.symbol || "종목") + " · " + (item.scopeLabel || "가설")) + '</h3>',
+      '<p>' + escapeHtml(item.transitionReason || "현재 TypeDB 세대의 가설 상태를 확인합니다.") + '</p>',
+      '</div>',
+      '</div>',
+      '<div class="hypothesis-detail-metrics">',
+      renderHypothesisMetric("마지막 전이", item.lastTransitionAt ? formatClock(item.lastTransitionAt) : "-", "상태 갱신", hypothesisLifecycleTone(item.state)),
+      renderHypothesisMetric("만료 예정", expires, "RuleBox 유효 기간", item.expiresAt ? "caution" : "hold"),
+      renderHypothesisMetric("범위", item.scopeLabel || "가설", item.scope === "account" ? "계정 맥락 포함" : "계정과 분리", "hold"),
+      '</div>',
+      renderHypothesisDelta(item),
+      renderHypothesisDetailList("현재 지지 근거", item.supportingEvidenceIds, "현재 세대에 기록된 지지 근거 ID가 없습니다."),
+      renderHypothesisDetailList("현재 반대 근거", item.counterEvidenceIds, "현재 세대에 기록된 반대 근거 ID가 없습니다."),
+      renderHypothesisDetailList("TypeDB 추적 경로", item.causalPathIds, "현재 세대에 기록된 인과 경로 ID가 없습니다."),
+      renderHypothesisFreshness(item),
+      renderHypothesisOutcome(item),
+      renderHypothesisTransitions(item),
+      renderHypothesisPolicyEditor(item),
+      '</section>'
+    ].join("");
+  }
+
+  function hypothesisFormValue(form, name) {
+    var field = form && form.querySelector('[name="' + name + '"]');
+    return field ? String(field.value || "").trim() : "";
+  }
+
+  function hypothesisFormList(form, name) {
+    return hypothesisStringList(hypothesisFormValue(form, name).split(/[\n,]+/), 100);
+  }
+
+  function saveHypothesisLifecyclePolicy(form) {
+    var ruleId = String(form && form.getAttribute("data-hypothesis-policy-form") || "").trim();
+    if (!ruleId || state.hypothesisPolicySaving) return;
+    if (isStaticPreviewHost() || state.serverSettingsLocked) {
+      showSnackbar("로컬 서버에서만 RuleBox 정책을 변경할 수 있습니다.", "danger");
+      return;
+    }
+    var rawMinutes = hypothesisFormValue(form, "validityMinutes");
+    var validityMinutes = rawMinutes === "" ? 0 : Number(rawMinutes);
+    if (!Number.isFinite(validityMinutes) || validityMinutes < 0) {
+      showSnackbar("유효 시간은 0 이상의 분 단위 숫자로 입력하세요.", "caution");
+      return;
+    }
+    var policy = {
+      formationConditionIds: hypothesisFormList(form, "formationConditionIds"),
+      invalidationConditionIds: hypothesisFormList(form, "invalidationConditionIds"),
+      validityMinutes: Math.round(validityMinutes),
+      requiredFreshnessDomains: hypothesisFormList(form, "requiredFreshnessDomains"),
+      nextDataRequirements: hypothesisFormList(form, "nextDataRequirements"),
+      invalidationMode: hypothesisFormValue(form, "invalidationMode")
+    };
+    state.hypothesisPolicySaving = ruleId;
+    state.hypothesisWorkspaceError = "";
+    render();
+    sendJson("/api/investment-brain/hypothesis-policies/" + encodeURIComponent(ruleId), "PATCH", {
+      policy: policy,
+      changeReason: hypothesisFormValue(form, "changeReason")
+    })
+      .then(function () {
+        showSnackbar("RuleBox 가설 수명주기 정책을 저장했습니다. 다음 정상 추론 세대부터 반영됩니다.");
+        return loadHypothesisWorkspace(true);
+      })
+      .catch(function (error) {
+        state.hypothesisWorkspaceError = error.message || "RuleBox 정책을 저장하지 못했습니다.";
+        showSnackbar(state.hypothesisWorkspaceError, "danger");
+      })
+      .finally(function () {
+        state.hypothesisPolicySaving = "";
+        render();
       });
   }
 
@@ -7826,6 +8274,9 @@
     }
     if (shouldLoadStrategyProposals() && !state.strategyProposalsLoaded && !state.strategyProposalsLoading) {
       loadStrategyProposals(false);
+    }
+    if (shouldLoadHypothesisWorkspace() && !state.hypothesisWorkspaceLoaded && !state.hypothesisWorkspaceLoading) {
+      loadHypothesisWorkspace(false);
     }
     if (state.activeTab === "experiments" && !state.ontologyAuditLoaded && !state.ontologyAuditLoading) {
       loadOntologyAudit(false);
@@ -12536,6 +12987,7 @@
         renderWorkDetailButton("strategy-charts-board", "", "통합 차트", "text-button compact"),
         renderWorkDetailButton("strategy-graphs-board", "", "온톨로지", "text-button compact"),
         renderWorkDetailButton("strategy-proposals-board", "", "전략 제안", "text-button compact"),
+        '<button class="text-button compact" type="button" data-strategy-section="hypotheses">가설 검증</button>',
         renderWorkDetailButton("strategy-trace-board", "", "검증·리뷰", "text-button compact"),
         renderInfoIconButton("modeling", "투자 판단 탭의 단일 화면 운영 방식"),
         '</div>',
@@ -15097,6 +15549,11 @@
   function renderStrategySectionContent(snapshot) {
     var section = activeSectionForPageMode("modeling", strategySections, normalizeStrategySection(state.activeStrategySection));
     var parts = ontologyStrategyParts(snapshot);
+    if (section === "hypotheses") {
+      return renderInvestmentTabWorkspace("hypotheses", [
+        { role: "full", html: renderHypothesisWorkspacePanel() }
+      ]);
+    }
     if (activePageMode("modeling") !== "settings") {
       return renderStrategyUnifiedConsole(snapshot, parts);
     }
@@ -25150,6 +25607,31 @@
         });
       });
     }
+
+    var refreshHypothesisWorkspaceButton = app.querySelector('[data-action="refresh-hypothesis-workspace"]');
+    if (refreshHypothesisWorkspaceButton) {
+      refreshHypothesisWorkspaceButton.addEventListener("click", function () {
+        loadHypothesisWorkspace(true).then(function () {
+          if (!state.hypothesisWorkspaceError) showSnackbar("가설 검증 정보를 다시 읽었습니다.");
+        });
+      });
+    }
+
+    Array.prototype.slice.call(app.querySelectorAll("[data-hypothesis-lifecycle-select]")).forEach(function (button) {
+      button.addEventListener("click", function () {
+        var key = String(button.getAttribute("data-hypothesis-lifecycle-select") || "");
+        if (!key || key === state.activeHypothesisLifecycleKey) return;
+        state.activeHypothesisLifecycleKey = key;
+        render();
+      });
+    });
+
+    Array.prototype.slice.call(app.querySelectorAll("[data-hypothesis-policy-form]")).forEach(function (form) {
+      form.addEventListener("submit", function (event) {
+        event.preventDefault();
+        saveHypothesisLifecyclePolicy(form);
+      });
+    });
 
     Array.prototype.slice.call(app.querySelectorAll("[data-strategy-proposal-select]")).forEach(function (button) {
       button.addEventListener("click", function () {

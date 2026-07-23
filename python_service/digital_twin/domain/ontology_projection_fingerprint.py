@@ -21,6 +21,7 @@ VOLATILE_LIFECYCLE_KEYS = {
     "inferenceGenerationId",
     "isCurrent",
     "materialFingerprint",
+    "marketObservedAt",
     "marketSessionLocalTime",
     "lastObservedAt",
     "lastFailureAt",

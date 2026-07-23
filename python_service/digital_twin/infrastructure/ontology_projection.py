@@ -27,6 +27,7 @@ from ..domain.ontology_scopes import (
 from ..domain.ontology_worlds import market_world, world_from_snapshot, world_metadata
 from ..domain.market_world_projection import (
     build_market_world_graph,
+    market_scope_plan_with_observation_times,
     market_world_coverage,
     merge_market_world_scope_manifest,
 )
@@ -539,7 +540,12 @@ class PortfolioOntologyProjectionRecorder:
             persistence_graph.worldview["inferenceTargetSymbols"] = list(inference_symbols)
             market_projection_started = time.perf_counter()
             market_projection = self.project_market_world(
-                graph,
+                # The shared world stores the same bounded factual surface
+                # consumed by TypeDB native rules. The full in-memory graph
+                # additionally contains account-local explanation topology
+                # and cross-ticker taxonomy links; sharing that graph made a
+                # one-symbol quote change roll unrelated MarketWorld scopes.
+                persistence_graph,
                 market_world_context,
             )
             runtime_stages["marketWorldProjectionMs"] = int((time.perf_counter() - market_projection_started) * 1000)
@@ -1164,9 +1170,18 @@ class PortfolioOntologyProjectionRecorder:
                 world_type=shared_world.world_type,
                 world_account_id="",
             )
+            incoming_scope_plan = market_scope_plan_with_observation_times(
+                update,
+                scoped.get("scopePlan") or [],
+            )
+            # Source observation clocks are manifest metadata, not material
+            # facts. They preserve retention/freshness without creating a new
+            # generation for every successful polling cycle.
+            scoped["scopePlan"] = incoming_scope_plan
+            update.worldview["scopePlan"] = incoming_scope_plan
             manifest_state = merge_market_world_scope_manifest(
                 active_market,
-                scoped.get("scopePlan") or [],
+                incoming_scope_plan,
                 observed_at=observed_at,
                 retention_hours=self.shared_market_world_retention_hours(),
                 max_symbols=self.shared_market_world_symbol_limit(),
@@ -1188,6 +1203,39 @@ class PortfolioOntologyProjectionRecorder:
                 active_status == "ok"
                 and active_material_fingerprint(active_market) == fingerprint
             ):
+                observation_refresh = {}
+                refreshed_scope_ids = list(manifest_state.get("observationRefreshedScopeIds") or [])
+                refresher = getattr(self.repository, "refresh_market_world_observation_metadata", None)
+                if refreshed_scope_ids and callable(refresher):
+                    try:
+                        observation_refresh = self.repository_world_call(
+                            "refresh_market_world_observation_metadata",
+                            manifest_id,
+                            list(manifest_state.get("scopePlan") or []),
+                            dict(manifest_state.get("marketScopeObservedAt") or {}),
+                            adopted_write_lease=merge_lease,
+                            world_id=shared_world.world_id,
+                        )
+                    except Exception as error:  # noqa: BLE001 - retain the active facts when the metadata heartbeat fails.
+                        observation_refresh = {
+                            "status": "error",
+                            "reason": str(error)[:180],
+                        }
+                    if str(observation_refresh.get("status") or "") != "ok":
+                        return {
+                            **world_metadata(shared_world),
+                            "status": "deferred-market-world-observation-metadata",
+                            "saved": False,
+                            "preservedActiveGeneration": True,
+                            "materialFingerprint": fingerprint,
+                            "worldviewManifestId": str(active_market.get("aboxSnapshotId") or manifest_id),
+                            "projectionMode": "incremental-scoped-manifest-reuse",
+                            "activeScopeCount": int(manifest_state.get("activeScopeCount") or 0),
+                            "activeSymbolCount": int(manifest_state.get("activeSymbolCount") or 0),
+                            "observationRefreshedScopeIds": refreshed_scope_ids,
+                            "observationMetadata": observation_refresh,
+                            "reason": "공용 시장 사실은 같지만 소스 관측 시각을 안전하게 갱신하지 못했습니다.",
+                        }
                 # A portfolio inference retry must not rewrite the shared
                 # market generation when this account contributed no new
                 # market facts. The portfolio ABox has a separate lifecycle,
@@ -1204,6 +1252,10 @@ class PortfolioOntologyProjectionRecorder:
                     "activeScopeCount": int(manifest_state.get("activeScopeCount") or 0),
                     "activeSymbolCount": int(manifest_state.get("activeSymbolCount") or 0),
                     "retiredScopeIds": list(manifest_state.get("retiredScopeIds") or []),
+                    "changedIncomingScopeIds": list(manifest_state.get("changedIncomingScopeIds") or []),
+                    "reusedIncomingScopeIds": list(manifest_state.get("reusedIncomingScopeIds") or []),
+                    "observationRefreshedScopeIds": refreshed_scope_ids,
+                    "observationMetadata": observation_refresh,
                     "reason": "공용 시장 사실이 현재 활성 MarketWorld와 같아 저장과 활성화를 생략했습니다.",
                 }
             update.worldview.update({
@@ -1216,6 +1268,7 @@ class PortfolioOntologyProjectionRecorder:
                 "scopeFingerprints": dict(manifest_state.get("scopeFingerprints") or {}),
                 "scopeFamilyCounts": dict(manifest_state.get("scopeFamilyCounts") or {}),
                 "marketScopeObservedAt": dict(manifest_state.get("marketScopeObservedAt") or {}),
+                "marketScopeObservedAtVersion": str(manifest_state.get("marketScopeObservedAtVersion") or ""),
                 "marketWorldProjectionMode": "incremental-scoped-manifest-patch",
                 "marketWorldActiveScopeCount": int(manifest_state.get("activeScopeCount") or 0),
                 "marketWorldActiveSymbolCount": int(manifest_state.get("activeSymbolCount") or 0),
@@ -1240,6 +1293,9 @@ class PortfolioOntologyProjectionRecorder:
                 "activeScopeCount": int(manifest_state.get("activeScopeCount") or 0),
                 "activeSymbolCount": int(manifest_state.get("activeSymbolCount") or 0),
                 "retiredScopeCount": len(manifest_state.get("retiredScopeIds") or []),
+                "changedIncomingScopeCount": len(manifest_state.get("changedIncomingScopeIds") or []),
+                "reusedIncomingScopeCount": len(manifest_state.get("reusedIncomingScopeIds") or []),
+                "observationRefreshedScopeCount": len(manifest_state.get("observationRefreshedScopeIds") or []),
             })
             if validation.error_count:
                 return {
@@ -1283,6 +1339,9 @@ class PortfolioOntologyProjectionRecorder:
                 "activeScopeCount": int(manifest_state.get("activeScopeCount") or 0),
                 "activeSymbolCount": int(manifest_state.get("activeSymbolCount") or 0),
                 "retiredScopeIds": list(manifest_state.get("retiredScopeIds") or []),
+                "changedIncomingScopeIds": list(manifest_state.get("changedIncomingScopeIds") or []),
+                "reusedIncomingScopeIds": list(manifest_state.get("reusedIncomingScopeIds") or []),
+                "observationRefreshedScopeIds": list(manifest_state.get("observationRefreshedScopeIds") or []),
                 "coverage": coverage,
                 "validation": validation.to_dict(),
                 "save": save_result,

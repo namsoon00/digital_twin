@@ -93,6 +93,34 @@ ACCOUNT_PROPERTY_KEYS = {
     "decisionStage",
 }
 
+# A portfolio projection can already carry an immutable local ABox manifest
+# when it is handed to the shared-world projector. Those identifiers describe
+# the source PortfolioWorld, not the shared market fact, and must never become
+# an explicit MarketWorld scope on the next projection.
+MARKET_PROJECTION_LIFECYCLE_KEYS = {
+    "aboxScopeId",
+    "aboxScopeType",
+    "aboxScopeFamily",
+    "aboxSnapshotId",
+    "scopeGenerationId",
+    "scopeGenerationIds",
+    "scopeFingerprints",
+    "scopePlan",
+    "scopedAboxManifestVersion",
+    "snapshotId",
+    "worldviewManifestId",
+    "materialFingerprint",
+    "projectionRunId",
+    "persistenceMode",
+    "scopeTopologyVersion",
+    "scopeDelta",
+    "inferenceImpactPlan",
+    "inferenceTargetSymbols",
+    "worldId",
+    "worldType",
+    "tenantId",
+}
+
 
 def _clean(value: object) -> str:
     return str(value or "").strip()
@@ -107,7 +135,10 @@ def _observation_epoch(value: object) -> Optional[float]:
     if not stamp:
         return None
     try:
-        return datetime.fromisoformat(stamp.replace("Z", "+00:00")).timestamp()
+        parsed = datetime.fromisoformat(stamp.replace("Z", "+00:00"))
+        if parsed.tzinfo is None:
+            parsed = parsed.replace(tzinfo=timezone.utc)
+        return parsed.timestamp()
     except ValueError:
         return None
 
@@ -116,12 +147,18 @@ def _market_observed_at(properties: Dict[str, object]) -> str:
     values = dict(properties or {})
     for key in [
         "marketObservedAt",
-        "observedAt",
         "sourceObservedAt",
         "sourceAsOf",
+        "observedAt",
+        "publishedAt",
+        "publishedDate",
+        "filingDate",
+        "latestTradingDay",
+        "lastUpdated",
         "updatedAt",
-        "asOf",
+        "sourceFetchedAt",
         "fetchedAt",
+        "asOf",
     ]:
         value = _observed_at(values.get(key))
         if value:
@@ -155,13 +192,21 @@ def market_properties(
         key: deepcopy(value)
         for key, value in dict(properties or {}).items()
         if key not in ACCOUNT_PROPERTY_KEYS
+        and key not in MARKET_PROJECTION_LIFECYCLE_KEYS
     }
     values.update(world_metadata(world))
     values["marketObservationShared"] = True
     values["marketOwnership"] = "shared"
-    stamp = _observed_at(observed_at) or _market_observed_at(values)
+    # ``observed_at`` is the portfolio projection clock. It proves that this
+    # worker ran, but it does not prove every independent market fact changed.
+    # Copying it into every fact made an unchanged snapshot advance every
+    # MarketWorld scope generation. Only a source clock belongs to the fact;
+    # the projection clock remains on the MarketWorld worldview.
+    stamp = _market_observed_at(values)
     if stamp:
         values["marketObservedAt"] = stamp
+    else:
+        values.pop("marketObservedAt", None)
     return values
 
 
@@ -429,6 +474,53 @@ def merge_market_world_graph(
     )
 
 
+def market_scope_plan_with_observation_times(
+    graph: PortfolioOntology,
+    scope_plan: Iterable[object],
+) -> List[Dict[str, object]]:
+    """Attach the newest source observation time to each MarketWorld scope.
+
+    Scope generations intentionally depend on market facts, not on collection
+    time. The manifest still needs a source clock for retention and freshness,
+    so keep that clock as non-material scope metadata. A scope without an
+    explicit source clock remains untracked rather than being marked fresh
+    merely because a worker replayed it.
+    """
+    latest: Dict[str, Tuple[float, str]] = {}
+
+    def record(properties: Mapping[str, object]) -> None:
+        values = dict(properties or {})
+        scope_id = _clean(values.get("aboxScopeId"))
+        stamp = _market_observed_at(values)
+        epoch = _observation_epoch(stamp)
+        if not scope_id or not stamp or epoch is None:
+            return
+        previous = latest.get(scope_id)
+        if previous is None or epoch > previous[0]:
+            latest[scope_id] = (epoch, stamp)
+
+    for entity in list(graph.entities or []):
+        record(entity.properties or {})
+    for relation in list(graph.relations or []):
+        record(relation.properties or {})
+    for evidence in list(graph.evidence or []):
+        record(evidence.value or {})
+
+    enriched: List[Dict[str, object]] = []
+    for item in scope_plan or []:
+        if not isinstance(item, Mapping):
+            continue
+        row = dict(item)
+        scope_id = _clean(row.get("scopeId"))
+        observed = latest.get(scope_id)
+        if observed:
+            row["observedAt"] = observed[1]
+        else:
+            row.pop("observedAt", None)
+        enriched.append(row)
+    return enriched
+
+
 def merge_market_world_scope_manifest(
     active_metadata: Mapping[str, object],
     incoming_scope_plan: Iterable[object],
@@ -470,10 +562,32 @@ def merge_market_world_scope_manifest(
         for scope_id, stamp in dict(raw_observed or {}).items()
         if _clean(scope_id) and _observed_at(stamp)
     }
+    changed_incoming_scope_ids: List[str] = []
+    reused_incoming_scope_ids: List[str] = []
+    observation_refreshed_scope_ids: List[str] = []
+    for scope_id, item in incoming.items():
+        previous = previous_plan.get(scope_id) or {}
+        changed = (
+            not previous
+            or _clean(previous.get("fingerprint")) != _clean(item.get("fingerprint"))
+            or _clean(previous.get("generationId")) != _clean(item.get("generationId"))
+        )
+        if changed:
+            changed_incoming_scope_ids.append(scope_id)
+        else:
+            reused_incoming_scope_ids.append(scope_id)
+
+        source_stamp = _observed_at(item.get("observedAt"))
+        source_epoch = _observation_epoch(source_stamp)
+        if source_epoch is None:
+            continue
+        previous_stamp = scope_observed_at.get(scope_id, "")
+        previous_epoch = _observation_epoch(previous_stamp)
+        if previous_epoch is None or source_epoch > previous_epoch:
+            scope_observed_at[scope_id] = source_stamp
+            observation_refreshed_scope_ids.append(scope_id)
+
     stamp = _observed_at(observed_at)
-    if stamp:
-        for scope_id in incoming:
-            scope_observed_at[scope_id] = stamp
 
     try:
         retention = max(0.0, float(retention_hours or 0))
@@ -556,8 +670,12 @@ def merge_market_world_scope_manifest(
         "scopeFingerprints": scope_fingerprints,
         "scopeFamilyCounts": dict(sorted(family_counts.items())),
         "marketScopeObservedAt": dict(sorted(scope_observed_at.items())),
+        "marketScopeObservedAtVersion": "source-item-v1",
         "materialFingerprint": material_fingerprint,
         "incomingScopeIds": sorted(incoming),
+        "changedIncomingScopeIds": sorted(changed_incoming_scope_ids),
+        "reusedIncomingScopeIds": sorted(reused_incoming_scope_ids),
+        "observationRefreshedScopeIds": sorted(observation_refreshed_scope_ids),
         "retiredScopeIds": retired_scope_ids,
         "retiredSymbols": sorted(retired_symbols),
         "activeScopeCount": len(scope_plan),

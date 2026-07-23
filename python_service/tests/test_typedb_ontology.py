@@ -1899,6 +1899,7 @@ class TypeDBOntologyRepositoryTests(unittest.TestCase):
             "scopeGenerationIds": {"symbol:005930:market:world:test": "abox-scope:005930"},
             "scopeFingerprints": {"symbol:005930:market:world:test": "fingerprint-005930"},
             "marketScopeObservedAt": {"symbol:005930:market:world:test": "2026-07-23T00:00:00Z"},
+            "marketScopeObservedAtVersion": "source-item-v1",
         }
 
         with patch.object(repository, "active_worldview_manifest_pointer_rows", return_value=[pointer]) as pointers, \
@@ -1913,6 +1914,104 @@ class TypeDBOntologyRepositoryTests(unittest.TestCase):
         )
         self.assertEqual("ok", metadata["status"])
         self.assertEqual("2026-07-23T00:00:00Z", metadata["marketScopeObservedAt"]["symbol:005930:market:world:test"])
+        self.assertEqual("source-item-v1", metadata["marketScopeObservedAtVersion"])
+
+    def test_scoped_manifest_marker_persists_market_scope_observation_metadata(self):
+        repository = TypeDBOntologyGraphRepository("127.0.0.1:1729")
+        scope_id = "symbol:005930:market:world:test"
+        graph = PortfolioOntology("market:shared:kr", worldview={
+            "worldId": "market:shared:kr",
+            "worldType": "market",
+            "tenantId": "tenant-a",
+            "accountId": "",
+            "worldviewManifestId": "abox-manifest:active",
+            "aboxSnapshotId": "abox-manifest:active",
+            "materialFingerprint": "market-fingerprint",
+            "scopeGenerationIds": {scope_id: "abox-scope:005930"},
+            "scopeFingerprints": {scope_id: "fingerprint-005930"},
+            "marketScopeObservedAt": {scope_id: "2026-07-23T00:00:00Z"},
+            "marketScopeObservedAtVersion": "source-item-v1",
+            "marketWorldProjectionMode": "incremental-scoped-manifest-patch",
+        })
+        marker_graph = repository.scoped_manifest_marker_graph(
+            graph,
+            [{
+                "scopeId": scope_id,
+                "scopeFamily": "market",
+                "generationId": "abox-scope:005930",
+                "fingerprint": "fingerprint-005930",
+                "observedAt": "2026-07-23T00:00:00Z",
+            }],
+            [],
+        )
+        properties = marker_graph.entities[0].properties
+
+        self.assertEqual({scope_id: "2026-07-23T00:00:00Z"}, properties["marketScopeObservedAt"])
+        self.assertEqual("source-item-v1", properties["marketScopeObservedAtVersion"])
+        self.assertEqual("2026-07-23T00:00:00Z", properties["scopePlan"][0]["observedAt"])
+
+    def test_market_scope_observation_refresh_preserves_manifest_generations(self):
+        repository = TypeDBOntologyGraphRepository("127.0.0.1:1729")
+        scope_id = "symbol:005930:market:world:test"
+        scope_plan = [{
+            "scopeId": scope_id,
+            "scopeFamily": "market",
+            "generationId": "abox-scope:005930",
+            "fingerprint": "fingerprint-005930",
+            "observedAt": "2026-07-23T00:10:00Z",
+        }]
+        active = {
+            "status": "ok",
+            "worldId": "market:shared:kr",
+            "worldType": "market",
+            "tenantId": "tenant-a",
+            "worldviewManifestId": "abox-manifest:active",
+            "aboxSnapshotId": "abox-manifest:active",
+            "materialFingerprint": "market-fingerprint",
+            "scopeGenerationIds": {scope_id: "abox-scope:005930"},
+            "scopeFingerprints": {scope_id: "fingerprint-005930"},
+            "scopeFamilyCounts": {"market": 1},
+        }
+        marker = {
+            "id": "worldview-manifest-marker:active",
+            "label": "Worldview Manifest abox-manifest:active",
+            "worldviewManifestId": "abox-manifest:active",
+            "propertiesJson": json.dumps({
+                "ontologyBox": "ABox",
+                "worldId": "market:shared:kr",
+                "tboxClass": "WorldviewManifest",
+                "snapshotId": "abox-manifest:active",
+                "aboxSnapshotId": "abox-manifest:active",
+                "worldviewManifestId": "abox-manifest:active",
+                "aboxScopeId": "manifest:abox-manifest:active",
+                "aboxScopeType": "manifest",
+                "scopeGenerationId": "abox-manifest:active",
+                "nativeRuleEvidenceReadIndex": {"status": "ok", "fingerprint": "native-index"},
+            }),
+        }
+        refreshed_active = {
+            **active,
+            "marketScopeObservedAt": {scope_id: "2026-07-23T00:10:00Z"},
+        }
+
+        with patch.object(repository, "acquire_scoped_abox_write_lease", return_value={"acquired": True, "leaseOwner": "refresh"}), \
+                patch.object(repository, "release_scoped_abox_write_lease", return_value={"status": "released"}), \
+                patch.object(repository, "active_abox_metadata", side_effect=[active, refreshed_active]), \
+                patch.object(repository, "worldview_manifest_marker_rows", return_value=[marker]), \
+                patch.object(repository, "replace_scoped_manifest_marker_graph", return_value={"saved": True, "status": "ok"}) as replace:
+            result = repository.refresh_market_world_observation_metadata(
+                "abox-manifest:active",
+                scope_plan,
+                {scope_id: "2026-07-23T00:10:00Z"},
+                world_id="market:shared:kr",
+            )
+
+        self.assertEqual("ok", result["status"])
+        replacement_graph = replace.call_args.args[0]
+        properties = replacement_graph.entities[0].properties
+        self.assertEqual({scope_id: "abox-scope:005930"}, properties["scopeGenerationIds"])
+        self.assertEqual({scope_id: "2026-07-23T00:10:00Z"}, properties["marketScopeObservedAt"])
+        self.assertEqual("native-index", properties["nativeRuleEvidenceReadIndex"]["fingerprint"])
 
     def test_typedb_manifest_marker_query_can_target_one_manifest(self):
         repository = TypeDBOntologyGraphRepository("127.0.0.1:1729")

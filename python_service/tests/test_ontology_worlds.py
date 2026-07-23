@@ -7,6 +7,7 @@ from digital_twin.domain.ontology_worlds import (
     market_world,
     portfolio_world,
     portfolio_world_id,
+    world_scope_suffix,
     world_from_snapshot,
 )
 from digital_twin.domain.market_world_projection import (
@@ -31,8 +32,9 @@ from digital_twin.infrastructure.typedb_ontology import (
 from digital_twin.infrastructure.web_server import run_ontology_rulebox_payload
 
 
-def sample_graph(symbol="005930"):
+def sample_graph(symbol="005930", source_observed_at=""):
     graph = PortfolioOntology("account-a")
+    source_clock = {"sourceAsOf": source_observed_at} if source_observed_at else {}
     graph.entities.extend([
         OntologyEntity("account:account-a", "Account A", "account", {"ontologyBox": "ABox", "accountId": "account-a"}),
         OntologyEntity("portfolio:account-a", "Portfolio A", "portfolio", {"ontologyBox": "ABox", "accountId": "account-a"}),
@@ -49,11 +51,13 @@ def sample_graph(symbol="005930"):
             "currentPrice": 71000,
             "averagePrice": 70000,
             "quantity": 10,
+            **source_clock,
         }),
         OntologyEntity("price:" + symbol, "Current price", "price-metric", {
             "ontologyBox": "ABox",
             "symbol": symbol,
             "value": 71000,
+            **source_clock,
         }),
     ])
     graph.relations.extend([
@@ -67,7 +71,7 @@ def sample_graph(symbol="005930"):
         "quote",
         "KIS",
         "Current quote",
-        {"ontologyBox": "ABox", "symbol": symbol},
+        {"ontologyBox": "ABox", "symbol": symbol, **source_clock},
     ))
     return graph
 
@@ -143,12 +147,12 @@ class OntologyWorldContractTests(unittest.TestCase):
     def test_market_world_prunes_stale_observations_without_erasing_fresh_account_slice(self):
         world = market_world("kr")
         old = build_market_world_graph(
-            sample_graph("005930"),
+            sample_graph("005930", source_observed_at="2026-07-01T00:00:00Z"),
             world,
             observed_at="2026-07-01T00:00:00Z",
         )
         fresh = build_market_world_graph(
-            sample_graph("000660"),
+            sample_graph("000660", source_observed_at="2026-07-05T00:00:00Z"),
             world,
             observed_at="2026-07-05T00:00:00Z",
         )
@@ -222,6 +226,100 @@ class OntologyWorldContractTests(unittest.TestCase):
         self.assertTrue(any("000660" in item for item in pruned_scope_ids))
         self.assertTrue(pruned["retiredScopeIds"])
 
+    def test_market_world_scope_generation_ignores_projection_clock(self):
+        world = market_world("kr")
+        source_graph = sample_graph("005930", source_observed_at="2026-07-01T00:00:00Z")
+        first = build_market_world_graph(
+            source_graph,
+            world,
+            observed_at="2026-07-01T00:00:00Z",
+        )
+        second = build_market_world_graph(
+            source_graph,
+            world,
+            observed_at="2026-07-01T00:10:00Z",
+        )
+        first_scoped = apply_scoped_abox_identity(
+            first,
+            world.world_id,
+            world_id=world.world_id,
+            tenant_id=world.tenant_id,
+            world_type=world.world_type,
+            world_account_id="",
+        )
+        second_scoped = apply_scoped_abox_identity(
+            second,
+            world.world_id,
+            world_id=world.world_id,
+            tenant_id=world.tenant_id,
+            world_type=world.world_type,
+            world_account_id="",
+        )
+
+        self.assertEqual(
+            {item["scopeId"]: item["fingerprint"] for item in first_scoped["scopePlan"]},
+            {item["scopeId"]: item["fingerprint"] for item in second_scoped["scopePlan"]},
+        )
+        stock = next(item for item in first.entities if item.entity_id == "stock:005930")
+        self.assertEqual("2026-07-01T00:00:00Z", stock.properties["marketObservedAt"])
+
+    def test_market_world_rebuilds_scope_identity_from_a_portfolio_projection(self):
+        source = sample_graph("005930", source_observed_at="2026-07-01T00:00:00Z")
+        portfolio = portfolio_world("account-a", "tenant-a", "kr")
+        apply_scoped_abox_identity(
+            source,
+            "account-a",
+            world_id=portfolio.world_id,
+            tenant_id=portfolio.tenant_id,
+            world_type=portfolio.world_type,
+        )
+        shared = market_world("kr", "tenant-a")
+        market = build_market_world_graph(source, shared, observed_at="2026-07-01T00:00:00Z")
+
+        self.assertTrue(all("aboxScopeId" not in item.properties for item in market.entities))
+        self.assertTrue(all("scopeGenerationId" not in item.properties for item in market.entities))
+        market_scoped = apply_scoped_abox_identity(
+            market,
+            shared.world_id,
+            world_id=shared.world_id,
+            tenant_id=shared.tenant_id,
+            world_type=shared.world_type,
+            world_account_id="",
+        )
+        expected_suffix = ":world:" + world_scope_suffix(shared.world_id)
+        self.assertTrue(all(item["scopeId"].endswith(expected_suffix) for item in market_scoped["scopePlan"]))
+
+    def test_market_world_manifest_refreshes_source_clock_without_new_generation(self):
+        scope_id = "symbol:005930:market"
+        first = merge_market_world_scope_manifest(
+            {},
+            [{
+                "scopeId": scope_id,
+                "scopeFamily": "market",
+                "fingerprint": "same-facts",
+                "generationId": "same-generation",
+                "observedAt": "2026-07-01T00:00:00Z",
+            }],
+            observed_at="2026-07-01T00:00:00Z",
+        )
+        second = merge_market_world_scope_manifest(
+            first,
+            [{
+                "scopeId": scope_id,
+                "scopeFamily": "market",
+                "fingerprint": "same-facts",
+                "generationId": "same-generation",
+                "observedAt": "2026-07-01T00:10:00Z",
+            }],
+            observed_at="2026-07-01T00:10:00Z",
+        )
+
+        self.assertEqual(first["materialFingerprint"], second["materialFingerprint"])
+        self.assertEqual([], second["changedIncomingScopeIds"])
+        self.assertEqual([scope_id], second["reusedIncomingScopeIds"])
+        self.assertEqual([scope_id], second["observationRefreshedScopeIds"])
+        self.assertEqual("2026-07-01T00:10:00Z", second["marketScopeObservedAt"][scope_id])
+
     def test_typedb_world_identity_isolates_storage_and_reuses_parameterized_rule_namespace(self):
         first_world = "portfolio:tenant-a:account-a"
         second_world = "portfolio:tenant-a:account-b"
@@ -268,6 +366,7 @@ class MultiAccountProjectionTests(unittest.TestCase):
             self.saved_portfolios = []
             self.saved_markets = {}
             self.activations = []
+            self.observation_metadata_refreshes = []
             self.rulebox_payloads = []
             self.leases = []
             self.market_load_calls = 0
@@ -288,8 +387,10 @@ class MultiAccountProjectionTests(unittest.TestCase):
                     "scopeGenerationIds": dict(worldview.get("scopeGenerationIds") or {}),
                     "scopeFingerprints": dict(worldview.get("scopeFingerprints") or {}),
                     "marketScopeObservedAt": dict(worldview.get("marketScopeObservedAt") or {}),
+                    "marketScopeObservedAtVersion": worldview.get("marketScopeObservedAtVersion"),
                     "materialFingerprint": worldview.get("materialFingerprint"),
                     "aboxSnapshotId": worldview.get("aboxSnapshotId"),
+                    "worldviewManifestId": worldview.get("worldviewManifestId"),
                 }
             return {"status": "empty", "worldId": world_id}
 
@@ -320,6 +421,30 @@ class MultiAccountProjectionTests(unittest.TestCase):
         def activate_scoped_abox_manifest(self, manifest_id, pending_activation=False, world_id=""):
             self.activations.append((world_id, manifest_id, pending_activation))
             return {"status": "ok", "worldId": world_id}
+
+        def refresh_market_world_observation_metadata(
+            self,
+            manifest_id,
+            scope_plan,
+            market_scope_observed_at,
+            adopted_write_lease=None,
+            world_id="",
+        ):
+            graph = self.saved_markets.get(world_id)
+            if not graph or graph.worldview.get("worldviewManifestId") != manifest_id:
+                return {"saved": False, "status": "stale-manifest", "worldId": world_id}
+            graph.worldview.update({
+                "scopePlan": list(scope_plan),
+                "marketScopeObservedAt": dict(market_scope_observed_at),
+                "marketScopeObservedAtVersion": "source-item-v1",
+            })
+            self.observation_metadata_refreshes.append({
+                "worldId": world_id,
+                "manifestId": manifest_id,
+                "scopePlan": list(scope_plan),
+                "marketScopeObservedAt": dict(market_scope_observed_at),
+            })
+            return {"saved": True, "status": "ok", "worldId": world_id}
 
         def save_graph(self, graph):
             self.saved_portfolios.append(copy.deepcopy(graph))
@@ -406,6 +531,32 @@ class MultiAccountProjectionTests(unittest.TestCase):
         self.assertTrue(all(world_id == "market:shared:kr" for world_id, _manifest, _pending in repository.activations))
         self.assertEqual(0, repository.market_load_calls)
 
+    def test_record_snapshot_projects_shared_market_from_native_fact_surface(self):
+        repository = self.FakeRepository()
+        recorder = PortfolioOntologyProjectionRecorder(
+            repository,
+            settings={"ontologyTenantId": "tenant-a", "ontologyMarketWorldId": "kr"},
+        )
+        captured_market_inputs = []
+        original_project_market_world = recorder.project_market_world
+
+        def capture_market_input(portfolio_graph, shared_world):
+            captured_market_inputs.append(copy.deepcopy(portfolio_graph))
+            return original_project_market_world(portfolio_graph, shared_world)
+
+        recorder.project_market_world = capture_market_input
+        recorder.record_snapshot(self.snapshot("account-a", "005930", "Samsung"))
+
+        self.assertEqual(1, len(captured_market_inputs))
+        market_input = captured_market_inputs[0]
+        self.assertEqual(
+            "abox-facts-only-typedb-native-rules",
+            market_input.worldview["runtimeProjectionMode"],
+        )
+        self.assertFalse(market_input.beliefs)
+        self.assertFalse(market_input.opinions)
+        self.assertFalse(market_input.reasoning_cards)
+
     def test_market_world_reuses_an_identical_material_generation(self):
         repository = self.FakeRepository()
         recorder = PortfolioOntologyProjectionRecorder(
@@ -429,6 +580,32 @@ class MultiAccountProjectionTests(unittest.TestCase):
         self.assertEqual("unchanged-material-facts", second["status"])
         self.assertFalse(second["saved"])
         self.assertEqual(1, len(repository.activations))
+
+    def test_market_world_reuses_scopes_when_only_source_clock_advances(self):
+        repository = self.FakeRepository()
+        recorder = PortfolioOntologyProjectionRecorder(
+            repository,
+            settings={"ontologyTenantId": "tenant-a", "ontologyMarketWorldId": "kr"},
+        )
+        shared_world = market_world("kr", "tenant-a")
+        first_graph = sample_graph("005930", source_observed_at="2026-07-01T00:00:00Z")
+        first_graph.worldview["asOf"] = "2026-07-01T00:00:00Z"
+        second_graph = sample_graph("005930", source_observed_at="2026-07-01T00:10:00Z")
+        second_graph.worldview["asOf"] = "2026-07-01T00:10:00Z"
+
+        first = recorder.project_market_world(first_graph, shared_world)
+        second = recorder.project_market_world(second_graph, shared_world)
+
+        self.assertEqual("ok", first["status"])
+        self.assertEqual("unchanged-material-facts", second["status"])
+        self.assertFalse(second["saved"])
+        self.assertEqual(1, len(repository.activations))
+        self.assertTrue(second["reusedIncomingScopeIds"])
+        self.assertEqual([], second["changedIncomingScopeIds"])
+        self.assertEqual(1, len(repository.observation_metadata_refreshes))
+        refreshed = repository.observation_metadata_refreshes[0]["marketScopeObservedAt"]
+        self.assertTrue(refreshed)
+        self.assertTrue(all(value == "2026-07-01T00:10:00Z" for value in refreshed.values()))
 
 
 if __name__ == "__main__":

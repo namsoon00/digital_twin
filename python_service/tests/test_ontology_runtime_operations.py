@@ -1,15 +1,91 @@
 import unittest
 from concurrent.futures import ThreadPoolExecutor
+from datetime import datetime, timezone
 from types import SimpleNamespace
 
 from digital_twin.domain.ontology_runtime_operations import (
     build_projection_runtime_observation,
     summarize_projection_runtime_observations,
 )
+from digital_twin.application.ontology_reasoning_service import OntologyReasoningRunner
 from digital_twin.infrastructure.mysql_ontology_projection_runs import MySQLOntologyProjectionRunStore
 
 
 class OntologyRuntimeOperationsTests(unittest.TestCase):
+    def test_projection_gate_accepts_only_verified_current_generation_no_match(self):
+        service = OntologyReasoningRunner.__new__(OntologyReasoningRunner)
+        verified = SimpleNamespace(last_ontology_projection_results={
+            "main": {
+                "status": "ok",
+                "ruleboxExecution": {"status": "empty"},
+                "inferenceBox": {
+                    "status": "empty",
+                    "nativeTypeDbReasoningCompleted": True,
+                    "nativeInferenceOutcome": "no-match",
+                    "generationAligned": True,
+                    "sourceAboxSnapshotId": "abox-manifest:current",
+                },
+            },
+        })
+        unverified = SimpleNamespace(last_ontology_projection_results={
+            "main": {
+                "status": "ok",
+                "ruleboxExecution": {"status": "empty"},
+                "inferenceBox": {
+                    "status": "empty",
+                    "nativeTypeDbReasoningCompleted": False,
+                    "generationAligned": True,
+                    "sourceAboxSnapshotId": "abox-manifest:current",
+                },
+            },
+        })
+
+        self.assertTrue(service.projection_gate(verified)["ready"])
+        blocked = service.projection_gate(unverified)
+        self.assertFalse(blocked["ready"])
+        self.assertEqual("empty-unverified", blocked["results"][0]["status"])
+
+    def test_verified_recovery_clears_only_the_projection_circuit_latch(self):
+        class Cursor:
+            def __init__(self):
+                self.payload = {
+                    "projectionCircuit": {
+                        "status": "open",
+                        "consecutiveFailures": 3,
+                        "lastFailureReason": "stale generation",
+                    },
+                    "lastSuccessfulProjectionAt": "2026-07-23T00:00:00Z",
+                }
+
+            def load(self):
+                return dict(self.payload)
+
+            def save(self, payload):
+                self.payload = dict(payload)
+
+        cursor = Cursor()
+        runner = OntologyReasoningRunner(
+            event_reader=None,
+            cursor_store=cursor,
+            monitor_runner_factory=lambda: None,
+            settings={"ontologyProjectionCircuitFailureThreshold": "3"},
+            now_provider=lambda: datetime(2026, 7, 23, tzinfo=timezone.utc),
+            projection_recovery_probe=lambda account_ids, symbols: {
+                "ready": True,
+                "accounts": [{"accountId": "main", "ready": True}],
+            },
+        )
+
+        recovery = runner.recover_open_projection_circuit([], ["000660"])
+        runner.clear_projection_circuit_after_verified_recovery(recovery)
+
+        circuit = cursor.payload["projectionCircuit"]
+        self.assertTrue(recovery["ready"])
+        self.assertEqual("closed", circuit["status"])
+        self.assertEqual(0, circuit["consecutiveFailures"])
+        self.assertEqual(3, circuit["recoveredFailureCount"])
+        self.assertEqual("2026-07-23T00:00:00Z", cursor.payload["lastSuccessfulProjectionAt"])
+
     def sample_run(self):
         return SimpleNamespace(
             run_id="ontology-projection:test",

@@ -207,9 +207,6 @@ class MonitorRunner:
         self.progress("ontology_projection.start", accountId=account.account_id)
         self.record_ontology_projection(snapshot, target_symbols=allowed_symbols)
         projection = snapshot.metadata.get("ontology", {}).get("projection") if isinstance(snapshot.metadata.get("ontology"), dict) else {}
-        self.last_ontology_projection_results[account.account_id] = (
-            dict(projection) if isinstance(projection, dict) and projection else {"status": "missing"}
-        )
         self.progress(
             "ontology_projection.done",
             accountId=account.account_id,
@@ -224,9 +221,92 @@ class MonitorRunner:
         if allowed_symbols:
             events = self.filter_events_by_symbol(events, allowed_symbols)
             self.progress("events.filtered", accountId=account.account_id, eventCount=len(events), symbolCount=len(allowed_symbols))
+        detected_events = list(events)
         events = self.monitor.apply_cadence(events, self.store, force=force)
+        self.record_investment_alert_pipeline(
+            snapshot,
+            projection if isinstance(projection, dict) else {},
+            detected_events,
+            events,
+            allowed_symbols=allowed_symbols,
+        )
+        self.last_ontology_projection_results[account.account_id] = (
+            dict(projection) if isinstance(projection, dict) and projection else {"status": "missing"}
+        )
         self.progress("events.ready", accountId=account.account_id, eventCount=len(events), force=bool(force))
         return snapshot, events
+
+    def record_investment_alert_pipeline(
+        self,
+        snapshot: AccountSnapshot,
+        projection: dict,
+        detected_events: List[AlertEvent],
+        ready_events: List[AlertEvent],
+        allowed_symbols: set = None,
+    ) -> None:
+        """Keep the no-alert path observable without changing delivery policy.
+
+        This is an operational read model. It never promotes, suppresses, or
+        changes an alert; the existing cadence and notification workers retain
+        ownership of delivery decisions.
+        """
+        inference = projection.get("inferenceBox") if isinstance(projection.get("inferenceBox"), dict) else {}
+        inference_status = str(inference.get("status") or "").strip().lower()
+        native_completed = bool(
+            inference.get("nativeTypeDbReasoningCompleted")
+            or inference.get("typedbNativeRuleEvaluationCompleted")
+        )
+        generation_aligned = bool(inference.get("generationAligned"))
+        no_match = (
+            inference_status == "empty"
+            and native_completed
+            and generation_aligned
+            and bool(str(inference.get("sourceAboxSnapshotId") or ""))
+        )
+        investment_types = {"investmentInsight", "holdingTiming", "watchlistOntologySignal"}
+        detected = [event for event in detected_events or [] if str(getattr(event, "message_type", "") or "") in investment_types]
+        ready = [event for event in ready_events or [] if str(getattr(event, "message_type", "") or "") in investment_types]
+        selected_symbols = sorted({
+            str(symbol or "").upper().strip()
+            for symbol in allowed_symbols or set()
+            if str(symbol or "").strip()
+        })
+        if no_match:
+            status = "no-signal"
+            reason = "TypeDB native rules evaluated the current ABox successfully, but no investment relation matched."
+        elif str(projection.get("status") or "").lower() not in {
+            "ok", "partial", "unchanged-material-facts", "unchanged-material-facts-reasoning-retry",
+        }:
+            status = "blocked"
+            reason = str(projection.get("reason") or "The ontology projection is not ready for investment alert generation.")
+        elif detected and not ready:
+            status = "cadence-suppressed"
+            reason = "Investment alert candidates were detected but the local cadence policy held them back."
+        elif ready:
+            status = "delivery-ready"
+            reason = "Investment alert candidates passed the local cadence policy and will enter the delivery path."
+        else:
+            status = "no-material-alert"
+            reason = "The current inference did not create a material investment alert candidate."
+        payload = {
+            "status": status,
+            "reason": reason,
+            "inferenceStatus": inference_status,
+            "nativeInferenceOutcome": str(inference.get("nativeInferenceOutcome") or ""),
+            "nativeTypeDbReasoningCompleted": native_completed,
+            "generationAligned": generation_aligned,
+            "sourceAboxSnapshotId": str(inference.get("sourceAboxSnapshotId") or ""),
+            "inferenceGenerationId": str(inference.get("inferenceGenerationId") or ""),
+            "targetSymbols": list(inference.get("targetSymbols") or [])[:80],
+            "requestedSymbols": selected_symbols,
+            "detectedCandidateCount": len(detected),
+            "cadenceReadyCount": len(ready),
+            "detectedMessageTypes": sorted({str(getattr(event, "message_type", "") or "") for event in detected}),
+            "cadenceReadyMessageTypes": sorted({str(getattr(event, "message_type", "") or "") for event in ready}),
+        }
+        snapshot.metadata.setdefault("ontology", {})["alertPipeline"] = payload
+        if isinstance(projection, dict):
+            projection["alertPipeline"] = payload
 
     def next_account_run_at(self, seconds: int) -> str:
         return (datetime.now(timezone.utc) + timedelta(seconds=max(1, int(seconds or 1)))).isoformat().replace("+00:00", "Z")

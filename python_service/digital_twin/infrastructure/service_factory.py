@@ -41,6 +41,7 @@ from ..domain.accounts import AccountConfig
 from ..domain.events import DATA_PIPELINE_HEALTH_CHANGED, RESEARCH_EVIDENCE_COLLECTED
 from ..domain.market_data import number
 from ..domain.monitoring import RealtimeMonitor
+from ..domain.ontology_worlds import portfolio_world_id
 from .event_bus import EventBus, default_event_bus
 from .bok_calendar_source import BokPolicyDecisionCalendarSource
 from .disclosure_analyzer import disclosure_analyzer_from_settings
@@ -489,6 +490,84 @@ def build_ontology_reasoning_runner(settings=None, event_publisher=None) -> Onto
     registry = stores.account_registry(reasoning_store_settings)
     event_log = stores.event_log(reasoning_store_settings)
     ontology_repository = ontology_repository_from_settings(configured_settings)
+
+    def projection_recovery_probe(account_ids, symbols):
+        requested_accounts = {
+            str(account_id or "").strip()
+            for account_id in account_ids or []
+            if str(account_id or "").strip()
+        }
+        accounts = list(registry.load() or [])
+        selected_accounts = [
+            account for account in accounts
+            if not requested_accounts or str(getattr(account, "account_id", "") or "") in requested_accounts
+        ]
+        if requested_accounts and len(selected_accounts) != len(requested_accounts):
+            return {
+                "ready": False,
+                "status": "account-not-found",
+                "reason": "The interrupted projection account is no longer registered.",
+                "accounts": [{"accountId": account_id, "ready": False} for account_id in sorted(requested_accounts)],
+            }
+        requested_symbols = {
+            str(symbol or "").upper().strip()
+            for symbol in symbols or []
+            if str(symbol or "").strip()
+        }
+        rows = []
+        tenant_id = str(configured_settings.get("ontologyTenantId") or configured_settings.get("tenantId") or "")
+        for account in selected_accounts:
+            account_id = str(getattr(account, "account_id", "") or "").strip()
+            world_id = portfolio_world_id(account_id, tenant_id)
+            try:
+                active = ontology_repository.active_abox_metadata(world_id=world_id)
+                inference = ontology_repository.inferencebox_snapshot(
+                    symbols=sorted(requested_symbols),
+                    limit=80,
+                    world_id=world_id,
+                )
+            except Exception as error:  # noqa: BLE001 - keep the circuit open until the normal retry can read TypeDB.
+                rows.append({"accountId": account_id, "worldId": world_id, "ready": False, "reason": str(error)[:180]})
+                continue
+            active_abox = str((active or {}).get("aboxSnapshotId") or "").strip()
+            source_abox = str((inference or {}).get("sourceAboxSnapshotId") or "").strip()
+            status = str((inference or {}).get("status") or "").strip().lower()
+            native_completed = bool(
+                (inference or {}).get("nativeTypeDbReasoningCompleted")
+                or (inference or {}).get("typedbNativeRuleEvaluationCompleted")
+            )
+            native_used = bool((inference or {}).get("nativeTypeDbReasoningUsed"))
+            actual_symbols = {
+                str(symbol or "").upper().strip()
+                for symbol in (inference or {}).get("targetSymbols") or []
+                if str(symbol or "").strip()
+            }
+            no_match = status == "empty" and native_completed
+            matched = status == "ok" and native_used
+            ready = bool(
+                active_abox
+                and source_abox == active_abox
+                and bool((inference or {}).get("generationAligned"))
+                and (matched or no_match)
+                and (not requested_symbols or requested_symbols.issubset(actual_symbols))
+            )
+            rows.append({
+                "accountId": account_id,
+                "worldId": world_id,
+                "ready": ready,
+                "activeAboxSnapshotId": active_abox,
+                "sourceAboxSnapshotId": source_abox,
+                "inferenceStatus": status,
+                "nativeInferenceOutcome": str((inference or {}).get("nativeInferenceOutcome") or ""),
+                "targetSymbols": sorted(actual_symbols),
+                "reason": str((inference or {}).get("reason") or "")[:180],
+            })
+        return {
+            "ready": bool(rows) and all(bool(row.get("ready")) for row in rows),
+            "status": "ready" if rows and all(bool(row.get("ready")) for row in rows) else "not-ready",
+            "accounts": rows,
+        }
+
     return OntologyReasoningRunner(
         event_reader=event_log,
         cursor_store=stores.ontology_reasoning_cursor_store(reasoning_store_settings),
@@ -508,6 +587,7 @@ def build_ontology_reasoning_runner(settings=None, event_publisher=None) -> Onto
         ),
         research_store=stores.investment_research_store(reasoning_store_settings),
         priority_symbols_provider=lambda: ontology_reasoning_priority_symbols(registry, reasoning_store_settings),
+        projection_recovery_probe=projection_recovery_probe,
         maintenance_runner=lambda: (
             ontology_repository.run_deferred_maintenance()
             if hasattr(ontology_repository, "run_deferred_maintenance")

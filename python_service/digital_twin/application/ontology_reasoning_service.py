@@ -187,6 +187,7 @@ class OntologyReasoningRunner:
         now_provider: Callable = None,
         priority_symbols_provider: Callable = None,
         maintenance_runner: Callable = None,
+        projection_recovery_probe: Callable = None,
     ):
         self.event_reader = event_reader
         self.cursor_store = cursor_store
@@ -198,6 +199,7 @@ class OntologyReasoningRunner:
         self.now_provider = now_provider or (lambda: datetime.now(timezone.utc))
         self.priority_symbols_provider = priority_symbols_provider
         self.maintenance_runner = maintenance_runner
+        self.projection_recovery_probe = projection_recovery_probe
 
     def enabled(self) -> bool:
         return truthy(self.settings.get("ontologyReasoningEnabled"), True)
@@ -940,6 +942,23 @@ class OntologyReasoningRunner:
                     inference_status,
                     inference.get("reason") or result.get("reason") or "TypeDB InferenceBox 응답이 없습니다.",
                 )
+                continue
+            if inference_status == "empty":
+                verified_no_match = (
+                    bool(
+                        inference.get("nativeTypeDbReasoningCompleted")
+                        or inference.get("typedbNativeRuleEvaluationCompleted")
+                    )
+                    and bool(inference.get("generationAligned"))
+                    and bool(str(inference.get("sourceAboxSnapshotId") or "").strip())
+                )
+                if not verified_no_match:
+                    add_result(
+                        account_id,
+                        "inferencebox",
+                        "empty-unverified",
+                        "TypeDB native rule no-match 결과에 현재 ABox 세대 완료 증거가 없습니다.",
+                    )
         if failures:
             first = failures[0]
             return {
@@ -1011,6 +1030,43 @@ class OntologyReasoningRunner:
             )),
         }
 
+    def projection_alert_outcomes(self, monitor_runner) -> List[Dict[str, object]]:
+        """Return bounded, non-decision telemetry for the alert handoff.
+
+        The monitor owns candidate creation and cadence. This summary makes a
+        completed reasoning run explainable when it produces no notification,
+        without feeding delivery data back into RuleBox evaluation.
+        """
+        results = getattr(monitor_runner, "last_ontology_projection_results", {}) or {}
+        outcomes = []
+        result_items = results.items() if isinstance(results, dict) else []
+        for account_id, raw_result in result_items:
+            result = dict(raw_result or {}) if isinstance(raw_result, dict) else {}
+            inference = result.get("inferenceBox") if isinstance(result.get("inferenceBox"), dict) else {}
+            pipeline = result.get("alertPipeline") if isinstance(result.get("alertPipeline"), dict) else {}
+            outcomes.append({
+                "accountId": str(account_id or ""),
+                "projectionStatus": str(result.get("status") or ""),
+                "inferenceStatus": str(inference.get("status") or ""),
+                "inferenceGenerationId": str(inference.get("inferenceGenerationId") or ""),
+                "sourceAboxSnapshotId": str(inference.get("sourceAboxSnapshotId") or ""),
+                "generationAligned": bool(inference.get("generationAligned")),
+                "nativeTypeDbReasoningCompleted": bool(
+                    inference.get("nativeTypeDbReasoningCompleted")
+                    or inference.get("typedbNativeRuleEvaluationCompleted")
+                ),
+                "nativeInferenceOutcome": str(inference.get("nativeInferenceOutcome") or ""),
+                "alertPipeline": {
+                    key: pipeline.get(key)
+                    for key in [
+                        "status", "reason", "detectedCandidateCount", "cadenceReadyCount",
+                        "targetSymbols", "requestedSymbols", "nativeInferenceOutcome",
+                    ]
+                    if key in pipeline
+                },
+            })
+        return outcomes[:100]
+
     def mark_successful_projection(self, monitor_runner=None) -> None:
         if not hasattr(self.cursor_store, "load") or not hasattr(self.cursor_store, "save"):
             return
@@ -1030,6 +1086,68 @@ class OntologyReasoningRunner:
             runtime = self.projection_runtime_summary(monitor_runner)
             if int(runtime.get("durationMs") or 0) > 0:
                 payload["lastProjectionRuntime"] = runtime
+        self.save_cursor_payload(payload)
+
+    def recover_open_projection_circuit(
+        self,
+        requests: Iterable[object],
+        symbols: Iterable[str],
+    ) -> Dict[str, object]:
+        """Read only durable TypeDB state before reopening a failed queue."""
+        if not callable(self.projection_recovery_probe):
+            return {"ready": False, "status": "not-configured"}
+        account_ids = []
+        for request in requests or []:
+            payload = event_payload(request)
+            values = [payload.get("accountId")]
+            if isinstance(payload.get("accountIds"), list):
+                values.extend(payload.get("accountIds") or [])
+            for value in values:
+                clean = str(value or "").strip()
+                if clean and clean not in account_ids:
+                    account_ids.append(clean)
+        clean_symbols = []
+        for symbol in symbols or []:
+            clean = str(symbol or "").upper().strip()
+            if clean and clean not in clean_symbols:
+                clean_symbols.append(clean)
+        try:
+            payload = self.projection_recovery_probe(account_ids, clean_symbols)
+        except Exception as error:  # noqa: BLE001 - preserve the fail-closed circuit when the read fails.
+            return {"ready": False, "status": "error", "reason": str(error)[:180]}
+        result = dict(payload or {}) if isinstance(payload, dict) else {}
+        result["ready"] = bool(result.get("ready"))
+        result.setdefault("status", "ready" if result["ready"] else "not-ready")
+        result["accountIds"] = account_ids
+        result["symbols"] = clean_symbols
+        return result
+
+    def clear_projection_circuit_after_verified_recovery(self, recovery: Dict[str, object]) -> None:
+        """Clear only the failure latch; pending events still run normally."""
+        if not hasattr(self.cursor_store, "load") or not hasattr(self.cursor_store, "save"):
+            return
+        payload = self.cursor_payload()
+        now = self.now_provider()
+        if now.tzinfo is None:
+            now = now.replace(tzinfo=timezone.utc)
+        prior = self.projection_circuit_state(payload)
+        payload["projectionCircuit"] = {
+            "status": "closed",
+            "consecutiveFailures": 0,
+            "failureThreshold": self.projection_circuit_failure_threshold(),
+            "lastFailureAt": "",
+            "lastFailureReason": "",
+            "recentFailures": [],
+            "openUntil": "",
+            "recoveredAt": now.astimezone(timezone.utc).isoformat().replace("+00:00", "Z"),
+            "recoveryReason": "A current ABox/InferenceBox generation was verified after an interrupted projection.",
+            "recoveredFailureCount": int(prior.get("consecutiveFailures") or 0),
+            "recovery": {
+                key: recovery.get(key)
+                for key in ["status", "accountIds", "symbols", "accounts"]
+                if key in recovery
+            },
+        }
         self.save_cursor_payload(payload)
 
     def run_maintenance_if_due(self, force: bool = False) -> Dict[str, object]:
@@ -1083,17 +1201,24 @@ class OntologyReasoningRunner:
         cursor_payload = self.cursor_payload()
         circuit_remaining = self.projection_circuit_remaining_seconds(cursor_payload)
         if circuit_remaining > 0 and not force:
-            circuit = self.projection_circuit_state(cursor_payload)
-            return {
-                "status": "circuit-open",
-                "processedCount": 0,
-                "alertCount": 0,
-                "symbols": symbols,
-                "retryAfterSeconds": circuit_remaining,
-                "deferredReason": str(circuit.get("lastFailureReason") or "TypeDB projection circuit is open."),
-                "projectionCircuit": circuit,
-                "coalescedEventCount": len(work.get("coalescedEventIds") or []),
-            }
+            recovery = self.recover_open_projection_circuit(requests, symbols)
+            if recovery.get("ready"):
+                self.clear_projection_circuit_after_verified_recovery(recovery)
+                cursor_payload = self.cursor_payload()
+                circuit_remaining = 0
+            else:
+                circuit = self.projection_circuit_state(cursor_payload)
+                return {
+                    "status": "circuit-open",
+                    "processedCount": 0,
+                    "alertCount": 0,
+                    "symbols": symbols,
+                    "retryAfterSeconds": circuit_remaining,
+                    "deferredReason": str(circuit.get("lastFailureReason") or "TypeDB projection circuit is open."),
+                    "projectionCircuit": circuit,
+                    "projectionRecovery": recovery,
+                    "coalescedEventCount": len(work.get("coalescedEventIds") or []),
+                }
         if not force and not self.projection_due(requests, cursor_payload):
             retry_after_seconds = self.projection_cooldown_remaining_seconds(requests, cursor_payload)
             return {
@@ -1161,6 +1286,7 @@ class OntologyReasoningRunner:
             requests,
             getattr(runner, "last_ontology_projection_results", {}),
         )
+        projection_outcomes = self.projection_alert_outcomes(runner)
         blocked_request_ids = set(research_refresh.get("blockedRequestEventIds") or [])
         cursor_requests = [
             event for event in requests
@@ -1177,6 +1303,7 @@ class OntologyReasoningRunner:
                 + (f" 네이티브 추론 대상 상한 {self.effective_max_symbols_per_run()}개가 적용되어 {omitted_symbol_count}개는 다음 사이클로 이월했습니다." if omitted_symbol_count else "")
             ),
             research_generation_refreshes=research_refresh,
+            projection_outcomes=projection_outcomes,
         )
         rule_candidate_result = self.propose_rule_candidates(symbols, requests, alerts, force=False)
         self.publish(completed)
@@ -1210,6 +1337,7 @@ class OntologyReasoningRunner:
             "blockedResearchRunIds": research_refresh.get("blockedRunIds") or [],
             "blockedResearchRequestEventIds": sorted(blocked_request_ids),
             "researchGenerationRefresh": research_refresh,
+            "projectionOutcomes": projection_outcomes,
             "deferredReason": (
                 "검증 근거가 같은 계정 월드의 새 ABox/InferenceBox 세대에 정렬될 때까지 해당 리서치 요청을 유지합니다."
                 if blocked_request_ids

@@ -57,6 +57,7 @@ class OntologyDiagnosticsService:
             storage=abox_storage,
         )
         decision_performance = self.decision_performance_boundary(clean_symbols)
+        notification_boundary = self.notification_boundary()
         return {
             "contract": "typedb-ontology-diagnostics-v1",
             "generatedAt": utc_now_iso(),
@@ -73,7 +74,8 @@ class OntologyDiagnosticsService:
             "runtimeObservability": self.runtime_observation_boundary(clean_world_id),
             "ruleboxQuality": self.rulebox_quality_boundary(rulebox, inference, decision_performance),
             "latestEvents": self.latest_events(),
-            "notificationBoundary": self.notification_boundary(),
+            "notificationBoundary": notification_boundary,
+            "alertPipeline": self.alert_pipeline_boundary(inference, notification_boundary),
             "strategyProposalBoundary": self.strategy_proposal_boundary(),
             "decisionPerformanceBoundary": decision_performance,
             "serviceStatus": self.service_status(),
@@ -357,6 +359,10 @@ class OntologyDiagnosticsService:
             "nativeRelationCount",
             "nativeTraceCount",
             "nativeTypeDbReasoningUsed",
+            "nativeTypeDbReasoningCompleted",
+            "typedbNativeRuleEvaluationCompleted",
+            "nativeInferenceOutcome",
+            "nativeInferenceNoMatch",
             "typedbBootstrapReasoningUsed",
             "pythonBootstrapDisabled",
             "inferenceGenerationId",
@@ -377,6 +383,7 @@ class OntologyDiagnosticsService:
             "ruleboxDerivationCount",
             "ruleboxEngineVersion",
             "symbols",
+            "targetSymbols",
             "impactPlanVersion",
             "inferenceImpactPlan",
             "ruleExecutionScope",
@@ -393,6 +400,47 @@ class OntologyDiagnosticsService:
             if isinstance(item, dict)
         ]
         return summary
+
+    def alert_pipeline_boundary(
+        self,
+        inference: Dict[str, object],
+        notification_boundary: Dict[str, object] = None,
+    ) -> Dict[str, object]:
+        """Explain a quiet investment-alert path without inventing a signal."""
+        payload = dict(inference or {})
+        status = str(payload.get("status") or "").strip().lower()
+        native_completed = bool(
+            payload.get("nativeTypeDbReasoningCompleted")
+            or payload.get("typedbNativeRuleEvaluationCompleted")
+            or payload.get("nativeTypeDbReasoningUsed")
+        )
+        aligned = bool(payload.get("generationAligned"))
+        source_abox = str(payload.get("sourceAboxSnapshotId") or "")
+        if status == "empty" and native_completed and aligned and source_abox:
+            pipeline_status = "no-signal"
+            reason = "현재 ABox를 TypeDB 규칙으로 모두 확인했지만 투자 알림 후보가 될 관계는 성립하지 않았습니다."
+        elif status in {"error", "failed", "stale-generation", "incomplete-abox", "missing"}:
+            pipeline_status = "blocked"
+            reason = str(payload.get("reason") or "InferenceBox is not ready for investment alert generation.")
+        elif status == "ok" and bool(payload.get("nativeTypeDbReasoningUsed")):
+            pipeline_status = "candidate-evaluation"
+            reason = "관계 추론 결과가 생성되었습니다. 다음 단계에서 의미 변화, 쿨다운, 장 시간 정책을 확인합니다."
+        else:
+            pipeline_status = "waiting-for-inference"
+            reason = str(payload.get("reason") or "현재 투자 알림 후보를 판정할 수 있는 완전한 추론 결과가 없습니다.")
+        notification = dict(notification_boundary or {})
+        return {
+            "status": pipeline_status,
+            "reason": reason,
+            "inferenceStatus": status,
+            "nativeTypeDbReasoningCompleted": native_completed,
+            "generationAligned": aligned,
+            "nativeInferenceOutcome": str(payload.get("nativeInferenceOutcome") or ""),
+            "inferenceGenerationId": str(payload.get("inferenceGenerationId") or ""),
+            "sourceAboxSnapshotId": source_abox,
+            "targetSymbols": list(payload.get("targetSymbols") or [])[:80],
+            "recentNotificationJobCount": int(notification.get("recentJobCount") or 0),
+        }
 
     def abox_coverage(
         self,

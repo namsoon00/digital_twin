@@ -6030,11 +6030,19 @@ class TypeDBOntologyGraphRepository(GraphStoreOntologyRowMapperMixin, ScopedABox
         candidate_snapshot_id: str,
         target_symbols: Iterable[str] = None,
     ) -> bool:
-        if str((inferencebox or {}).get("status") or "") != "ok":
+        status = str((inferencebox or {}).get("status") or "").strip().lower()
+        native_used = bool((inferencebox or {}).get("nativeTypeDbReasoningUsed"))
+        native_completed = bool(
+            (inferencebox or {}).get("nativeTypeDbReasoningCompleted")
+            or (inferencebox or {}).get("typedbNativeRuleEvaluationCompleted")
+        )
+        if status == "ok" and not native_used:
             return False
-        if not bool((inferencebox or {}).get("nativeTypeDbReasoningUsed")):
+        if status == "empty" and not native_completed:
             return False
-        if (inferencebox or {}).get("generationAligned") is False:
+        if status not in {"ok", "empty"}:
+            return False
+        if not bool((inferencebox or {}).get("generationAligned")):
             return False
         if str((inferencebox or {}).get("sourceAboxSnapshotId") or "").strip() != str(candidate_snapshot_id or "").strip():
             return False
@@ -9414,6 +9422,15 @@ relation ontology-assertion,
                         or source_abox_snapshot_ids[0] == active_abox_generation_id
                     )
                 )
+            # A successful native evaluation can legitimately match no
+            # source subject. In that case the active ABox pointer itself is
+            # the provenance proof: there is no matched row whose historical
+            # generation needs validating. Treating this as an invalid source
+            # forces an unnecessary rollback and leaves the entire reasoning
+            # worker stuck on an older InferenceBox generation.
+            if not matched_source_ids and active_abox_generation_id:
+                source_abox_snapshot_ids = [active_abox_generation_id]
+                source_generation_valid = True
             if source_generation_valid:
                 runtime_rulebox_metadata["sourceAboxSnapshotId"] = active_abox_generation_id or source_abox_snapshot_ids[0]
             runtime_rulebox_metadata["sourceAboxSnapshotCount"] = len(source_abox_snapshot_ids)
@@ -9427,6 +9444,14 @@ relation ontology-assertion,
             runtime_rulebox_metadata["sourceAboxGenerationValid"] = source_generation_valid
             runtime_rulebox_metadata["sourceAboxSnapshotIds"] = list(source_abox_snapshot_ids)
             materialize_typedb_native_matches(graph, execution_rules, native_match_result)
+            native_match_found = bool(graph.relations)
+            # A no-match result is still a complete TypeDB evaluation. Persist
+            # an empty generation marker with the active ABox provenance so a
+            # new factual generation can be finalized without reusing stale
+            # relations from an older market snapshot.
+            runtime_rulebox_metadata["nativeInferenceEvaluationComplete"] = True
+            runtime_rulebox_metadata["nativeInferenceOutcome"] = "matched" if native_match_found else "no-match"
+            runtime_rulebox_metadata["nativeInferenceNoMatch"] = not native_match_found
             inference_graph = typedb_inferencebox_graph(
                 graph,
                 generation_id=generation_id,
@@ -9435,7 +9460,7 @@ relation ontology-assertion,
             )
             inferencebox_limit = max(80, min(500, int(number_or_none(payload.get("inferenceSnapshotLimit")) or 500)))
             invalid_abox_generation = bool(inference_graph.relations) and not source_generation_valid
-            if invalid_abox_generation or not inference_graph.relations:
+            if invalid_abox_generation:
                 previous_inferencebox = self.inferencebox_snapshot(
                     symbols=target_symbols,
                     limit=inferencebox_limit,
@@ -9444,14 +9469,14 @@ relation ontology-assertion,
                 )
                 return {
                     "configured": True,
-                    "status": "invalid-abox-generation" if invalid_abox_generation else "empty",
+                    "status": "invalid-abox-generation",
                     "graphStore": "typedb",
                     "source": "typedbNativeRule",
                     "reasoningMode": TYPEDB_NATIVE_BLOCKED_MODE,
                     "reason": (
                         "원본 ABox 세대를 하나로 확인할 수 없어 새 InferenceBox를 활성화하지 않았습니다."
                         if invalid_abox_generation
-                        else "TypeDB native rules matched no ABox facts; the previous InferenceBox remains active."
+                        else "TypeDB native rules could not verify the source ABox generation."
                     ),
                     "statementCount": 0,
                     "entityCount": 0,
@@ -9489,7 +9514,7 @@ relation ontology-assertion,
                     "typedbQueryMetrics": self.query_metrics_snapshot(),
                     **runtime_rulebox_metadata,
                 }
-            if clear_requested:
+            if clear_requested and native_match_found:
                 clear_result = self.clear_inferencebox(world_id=world_id)
                 if str(clear_result.get("status") or "") != "ok":
                     return {
@@ -9513,6 +9538,14 @@ relation ontology-assertion,
                         "ruleboxMetadata": runtime_rulebox_metadata,
                         **runtime_rulebox_metadata,
                     }
+            elif clear_requested:
+                clear_result = {
+                    "configured": True,
+                    "status": "skipped",
+                    "graphStore": "typedb",
+                    "reason": "A complete no-match generation is activated by pointer swap; destructive InferenceBox clear is skipped.",
+                    "preservedPreviousInference": True,
+                }
             save_result = self.write_inferencebox_graph(inference_graph)
         except Exception as error:  # noqa: BLE001 - expose materialization failures to monitoring diagnostics.
             return {
@@ -9544,6 +9577,8 @@ relation ontology-assertion,
         materialized_relation_count = len(inference_graph.relations)
         has_materialized_relations = materialized_relation_count > 0
         saved_ok = bool(save_result.get("saved"))
+        native_evaluation_completed = bool(saved_ok)
+        native_inference_outcome = "matched" if has_materialized_relations else "no-match"
         prune_result = typedb_call_for_world(
             self.prune_inferencebox_generations,
             generation_id,
@@ -9573,7 +9608,11 @@ relation ontology-assertion,
             "graphStore": "typedb",
             "source": "typedbNativeRule",
             "reasoningMode": TYPEDB_NATIVE_REASONING_MODE,
-            "reason": ("" if has_materialized_relations else "TypeDB native rules matched no ABox facts.") if saved_ok else str(save_result.get("reason") or ""),
+            "reason": (
+                ""
+                if has_materialized_relations
+                else "TypeDB native rules completed successfully, but no current ABox fact matched an enabled RuleBox rule."
+            ) if saved_ok else str(save_result.get("reason") or ""),
             "statementCount": materialized_entity_count + materialized_relation_count,
             "entityCount": materialized_entity_count,
             "relationCount": materialized_relation_count,
@@ -9581,6 +9620,10 @@ relation ontology-assertion,
             "relationTypes": relation_types,
             "nativeTypeDbReasoningUsed": saved_ok and has_materialized_relations,
             "typedbNativeRuleReasoningUsed": saved_ok and has_materialized_relations,
+            "nativeTypeDbReasoningCompleted": native_evaluation_completed,
+            "typedbNativeRuleEvaluationCompleted": native_evaluation_completed,
+            "nativeInferenceOutcome": native_inference_outcome if saved_ok else "failed",
+            "nativeInferenceNoMatch": bool(saved_ok and not has_materialized_relations),
             "typedbNativeRuleQueryUsed": bool(native_match_result.get("nativeQueryUsed")),
             "typedbSchemaFunctionQueryUsed": bool(native_match_result.get("schemaFunctionUsed")),
             "typedbNativeRuleQueryStatus": str(native_match_result.get("status") or ""),
@@ -9991,9 +10034,19 @@ relation ontology-assertion,
         actual_relations = len(relation_rows)
         actual_traces = len([row for row in entity_rows if str(row.get("kind") or "") == "inference-trace"])
         expected_traces = len([item for item in graph.entities if item.kind == "inference-trace"])
+        native_evaluation_completed = typedb_bool(metadata.get("nativeInferenceEvaluationComplete"))
+        candidate_marker_present = any(
+            str(row.get("kind") or "") == "inference-generation-candidate"
+            and row_inference_generation_id(row) == str(generation_id or "")
+            for row in entity_rows
+        )
         reasons = []
-        if expected_relation_count <= 0 or actual_relations < expected_relation_count:
+        if expected_relation_count > 0 and actual_relations < expected_relation_count:
             reasons.append("candidate-relation-count-mismatch")
+        if expected_relation_count <= 0 and not native_evaluation_completed:
+            reasons.append("candidate-empty-evaluation-not-complete")
+        if expected_relation_count <= 0 and not candidate_marker_present:
+            reasons.append("candidate-generation-marker-missing")
         if expected_traces > 0 and actual_traces < expected_traces:
             reasons.append("candidate-trace-count-mismatch")
         if not expected_source_abox:
@@ -10014,6 +10067,9 @@ relation ontology-assertion,
             "sourceAboxSnapshotId": expected_source_abox,
             "activeAboxSnapshotId": active_abox,
             "generationAligned": bool(expected_source_abox and expected_source_abox == active_abox),
+            "nativeInferenceEvaluationComplete": native_evaluation_completed,
+            "nativeInferenceOutcome": str(metadata.get("nativeInferenceOutcome") or ""),
+            "candidateMarkerPresent": candidate_marker_present,
         }
 
     def activate_inference_generation(
@@ -10180,7 +10236,15 @@ relation ontology-assertion,
         native_entity_rows = [row for row in entity_rows if bool(row.get("nativeTypeDbReasoned"))]
         native_relation_rows = [row for row in relation_rows if bool(row.get("nativeTypeDbReasoned"))]
         native_trace_rows = [row for row in native_entity_rows if str(row.get("kind") or "") == "inference-trace"]
-        generation_rulebox_metadata = inference_rulebox_metadata(all_entity_rows, all_relation_rows)
+        worldview = dict(graph.worldview or {})
+        # An intentionally empty native generation has no materialized rows
+        # before its durable marker is written. Seed metadata from the graph
+        # worldview so the in-memory result carries the same provenance and
+        # completion proof as the marker that will be read back from TypeDB.
+        generation_rulebox_metadata = inference_rulebox_metadata(
+            [{"propertiesJson": json.dumps(worldview, ensure_ascii=False)}] + all_entity_rows,
+            all_relation_rows,
+        )
         rowsets = {
             "entityCounts": [{"entityCount": len(native_entity_rows), "nativeEntityCount": len(native_entity_rows)}],
             "relationCounts": [{"relationCount": len(native_relation_rows), "nativeRelationCount": len(native_relation_rows)}],
@@ -10191,9 +10255,16 @@ relation ontology-assertion,
         }
         snapshot = inferencebox_snapshot_from_rows(rowsets, "typedbNativeRuleResult", clean_symbols)
         has_native_output = bool(native_relation_rows or native_trace_rows)
+        native_evaluation_completed = (
+            typedb_bool(generation_rulebox_metadata.get("nativeInferenceEvaluationComplete"))
+            or has_native_output
+        )
+        native_inference_outcome = str(
+            generation_rulebox_metadata.get("nativeInferenceOutcome")
+            or ("matched" if has_native_output else "")
+        )
         generation_id = str((graph.worldview or {}).get("inferenceGenerationId") or "")
         generation_at = str((graph.worldview or {}).get("inferenceGenerationAt") or "")
-        worldview = dict(graph.worldview or {})
         snapshot.update({
             "graphStore": "typedb",
             "source": "typedbInferenceBox",
@@ -10203,9 +10274,19 @@ relation ontology-assertion,
             "querySource": "typedb-native-rule-result",
             "typedbReadStatus": "skipped",
             "typedbReadReason": "run_rulebox materialization result reused without opening a second TypeDB read driver.",
-            "reason": "" if has_native_output else "TypeDB native rules matched no ABox facts.",
+            "reason": (
+                ""
+                if has_native_output
+                else "TypeDB native rules completed successfully, but no current ABox fact matched an enabled RuleBox rule."
+                if native_evaluation_completed
+                else "TypeDB native rules matched no ABox facts."
+            ),
             "nativeTypeDbReasoningUsed": has_native_output,
             "typedbNativeRuleReasoningUsed": has_native_output,
+            "nativeTypeDbReasoningCompleted": native_evaluation_completed,
+            "typedbNativeRuleEvaluationCompleted": native_evaluation_completed,
+            "nativeInferenceOutcome": native_inference_outcome,
+            "nativeInferenceNoMatch": bool(native_evaluation_completed and not has_native_output),
             "typedbBootstrapReasoningUsed": False,
             "pythonBootstrapDisabled": True,
             "inferenceGenerationId": generation_id,
@@ -10378,6 +10459,14 @@ relation ontology-assertion,
         }
         snapshot = inferencebox_snapshot_from_rows(rowsets, "typedb-typeql", clean_symbols)
         has_native_output = bool(native_relation_rows or native_trace_rows)
+        native_evaluation_completed = (
+            typedb_bool(generation_rulebox_metadata.get("nativeInferenceEvaluationComplete"))
+            or has_native_output
+        )
+        native_inference_outcome = str(
+            generation_rulebox_metadata.get("nativeInferenceOutcome")
+            or ("matched" if has_native_output else "")
+        )
         reasoning_mode = str(generation_rulebox_metadata.get("reasoningMode") or (TYPEDB_NATIVE_REASONING_MODE if has_native_output else TYPEDB_NATIVE_REQUIRED_MODE))
         materialization_source = str(generation_rulebox_metadata.get("materializationSource") or TYPEDB_NATIVE_MATERIALIZATION_SOURCE)
         snapshot.update({
@@ -10388,9 +10477,19 @@ relation ontology-assertion,
             "materializationSource": materialization_source,
             "querySource": "typedb-typeql",
             "typedbReadStatus": "ok",
-            "reason": "" if has_native_output else "TypeDB InferenceBox 관계가 아직 없습니다. TypeDB native rule materialization 결과를 확인해야 합니다.",
+            "reason": (
+                ""
+                if has_native_output
+                else "TypeDB native rules completed successfully, but no current ABox fact matched an enabled RuleBox rule."
+                if native_evaluation_completed
+                else "TypeDB InferenceBox 관계가 아직 없습니다. TypeDB native rule materialization 결과를 확인해야 합니다."
+            ),
             "nativeTypeDbReasoningUsed": has_native_output,
             "typedbNativeRuleReasoningUsed": has_native_output,
+            "nativeTypeDbReasoningCompleted": native_evaluation_completed,
+            "typedbNativeRuleEvaluationCompleted": native_evaluation_completed,
+            "nativeInferenceOutcome": native_inference_outcome,
+            "nativeInferenceNoMatch": bool(native_evaluation_completed and not has_native_output),
             "typedbBootstrapReasoningUsed": False,
             "pythonBootstrapDisabled": True,
             "inferenceGenerationId": generation_id,
@@ -12280,6 +12379,9 @@ def inference_rulebox_metadata(
         "typedbNativeRuleMatchedCount",
         "typedbNativeRuleExecutedCount",
         "typedbNativeRuleSkippedCount",
+        "nativeInferenceEvaluationComplete",
+        "nativeInferenceOutcome",
+        "nativeInferenceNoMatch",
         "pythonCompatibilityReasonerUsed",
         "typeDbNativeRulesPrimary",
         "ruleStore",

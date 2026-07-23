@@ -319,6 +319,30 @@ class OntologyDiagnosticsServiceTests(unittest.TestCase):
         self.assertEqual(payload["notificationBoundary"]["status"], "warning")
         self.assertIn("no recent notification job", payload["notificationBoundary"]["reason"])
 
+    def test_alert_pipeline_reports_a_verified_native_no_match_as_no_signal(self):
+        class NoMatchRepository(FakeOntologyRepository):
+            def inferencebox_snapshot(self, symbols=None, limit=80):
+                return {
+                    "configured": True,
+                    "saved": True,
+                    "status": "empty",
+                    "source": "typedbInferenceBox",
+                    "graphStore": "typedb",
+                    "nativeTypeDbReasoningUsed": False,
+                    "nativeTypeDbReasoningCompleted": True,
+                    "nativeInferenceOutcome": "no-match",
+                    "generationAligned": True,
+                    "sourceAboxSnapshotId": "abox-material:test",
+                    "inferenceGenerationId": "inference-generation:no-match",
+                    "targetSymbols": list(symbols or []),
+                }
+
+        payload = OntologyDiagnosticsService(ontology_repository=NoMatchRepository()).status(symbols=["TSLA"])
+
+        self.assertEqual("no-signal", payload["alertPipeline"]["status"])
+        self.assertEqual("no-match", payload["alertPipeline"]["nativeInferenceOutcome"])
+        self.assertIn("성립하지 않았습니다", payload["alertPipeline"]["reason"])
+
     def test_status_exposes_runtime_slo_and_rulebox_feedback_without_auto_deploying(self):
         service = OntologyDiagnosticsService(
             ontology_repository=FakeOntologyRepository(),

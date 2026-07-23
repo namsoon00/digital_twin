@@ -670,6 +670,15 @@ class RealtimeMonitor(MonitoringSampleDataMixin, MonitoringPositionContextMixin,
             }
 
         reason_code, reason, inference_status = self.ontology_inference_missing_reason(snapshot)
+        if not reason_code:
+            return {
+                "missing": False,
+                "positionCount": len(positions),
+                "noMatch": bool(inference_status.get("noMatch")),
+                "status": str(inference_status.get("status") or ""),
+                "reason": str(inference_status.get("reason") or ""),
+                "inferenceStatus": dict(inference_status or {}),
+            }
         relation_count = int(number(inference_status.get("relationCount")) or 0)
         trace_count = int(number(inference_status.get("traceCount")) or 0)
         entity_count = int(number(inference_status.get("entityCount")) or 0)
@@ -935,6 +944,14 @@ class RealtimeMonitor(MonitoringSampleDataMixin, MonitoringPositionContextMixin,
             "clearInferenceStatus": str(clear_result.get("status") or ""),
             "clearInferenceReason": str(clear_result.get("reason") or ""),
             "nativeTypeDbReasoningUsed": bool((inference or {}).get("nativeTypeDbReasoningUsed")) if isinstance(inference, dict) else False,
+            "nativeTypeDbReasoningCompleted": bool(
+                (inference or {}).get("nativeTypeDbReasoningCompleted")
+                or (inference or {}).get("typedbNativeRuleEvaluationCompleted")
+            ) if isinstance(inference, dict) else False,
+            "nativeInferenceOutcome": str((inference or {}).get("nativeInferenceOutcome") or "") if isinstance(inference, dict) else "",
+            "generationAligned": bool((inference or {}).get("generationAligned")) if isinstance(inference, dict) else False,
+            "sourceAboxSnapshotId": str((inference or {}).get("sourceAboxSnapshotId") or "") if isinstance(inference, dict) else "",
+            "targetSymbols": list((inference or {}).get("targetSymbols") or [])[:80] if isinstance(inference, dict) else [],
             "typedbBootstrapReasoningUsed": bool((inference or {}).get("typedbBootstrapReasoningUsed")) if isinstance(inference, dict) else False,
             "entityCount": int(number((inference or {}).get("entityCount")) or 0) if isinstance(inference, dict) else 0,
             "relationCount": int(number((inference or {}).get("relationCount")) or 0) if isinstance(inference, dict) else 0,
@@ -973,6 +990,18 @@ class RealtimeMonitor(MonitoringSampleDataMixin, MonitoringPositionContextMixin,
             if detail:
                 reason += ": " + detail
             return "missingInferenceBox", reason, common
+        verified_no_match = (
+            str(status or "").lower() == "empty"
+            and bool(common.get("nativeTypeDbReasoningCompleted"))
+            and bool(common.get("generationAligned"))
+            and bool(common.get("sourceAboxSnapshotId"))
+        )
+        if verified_no_match:
+            common.update({
+                "noMatch": True,
+                "reason": "현재 ABox에서 TypeDB 네이티브 규칙을 모두 평가했지만 투자 판단 관계가 성립하지 않았습니다.",
+            })
+            return "", "", common
         if common["ruleboxExecutionStatus"] and common["ruleboxExecutionStatus"].lower() not in {"ok", "partial"}:
             reason = "TypeDB native rule 실행 실패"
             if common["ruleboxExecutionReason"]:

@@ -42,6 +42,29 @@ class MemoryMonitorStore:
 
 
 class MonitoringForceSnapshotTests(unittest.TestCase):
+    def test_verified_native_no_match_is_not_reported_as_an_inference_failure(self):
+        reason_code, reason, detail = RealtimeMonitor().ontology_inference_missing_reason_from_metadata({
+            "ontology": {
+                "projection": {
+                    "status": "ok",
+                    "graphStore": "typedb",
+                    "ruleboxExecution": {"status": "empty"},
+                    "inferenceBox": {
+                        "status": "empty",
+                        "graphStore": "typedb",
+                        "nativeTypeDbReasoningCompleted": True,
+                        "nativeInferenceOutcome": "no-match",
+                        "generationAligned": True,
+                        "sourceAboxSnapshotId": "abox-manifest:current",
+                    },
+                },
+            },
+        })
+
+        self.assertEqual("", reason_code)
+        self.assertEqual("", reason)
+        self.assertTrue(detail["noMatch"])
+
     def test_force_run_adds_all_holdings_snapshot_event_with_freshness(self):
         account = AccountConfig("main", "메인", "toss", "https://example.test", "", "", "", ["AAPL"])
         sent = []

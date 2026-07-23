@@ -457,6 +457,7 @@ def ontology_reasoning_completed_event(
     status: str = "ok",
     reason: str = "",
     research_generation_refreshes: Dict[str, object] = None,
+    projection_outcomes: Iterable[Dict[str, object]] = None,
 ) -> DomainEvent:
     clean_trigger_ids = [str(item or "").strip() for item in (trigger_event_ids or []) if str(item or "").strip()]
     clean_accounts = sorted(set(str(item or "").strip() for item in (account_ids or []) if str(item or "").strip()))
@@ -473,6 +474,11 @@ def ontology_reasoning_completed_event(
             "reason": str(reason or ""),
             "dispatchMode": "data-update-driven",
             "researchGenerationRefreshes": dict(research_generation_refreshes or {}),
+            "projectionOutcomes": [
+                dict(item)
+                for item in (projection_outcomes or [])
+                if isinstance(item, dict)
+            ][:100],
         },
     )
 

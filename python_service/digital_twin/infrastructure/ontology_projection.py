@@ -1514,9 +1514,23 @@ class PortfolioOntologyProjectionRecorder:
         active_abox: Dict[str, object],
         required_symbols: List[str] = None,
     ) -> bool:
-        if str((inferencebox or {}).get("status") or "") != "ok":
+        inference_status = str((inferencebox or {}).get("status") or "").strip().lower()
+        if inference_status not in {"ok", "empty"}:
             return False
-        if not bool((inferencebox or {}).get("nativeTypeDbReasoningUsed")):
+        native_output_used = bool((inferencebox or {}).get("nativeTypeDbReasoningUsed"))
+        native_evaluation_completed = bool(
+            (inferencebox or {}).get("nativeTypeDbReasoningCompleted")
+            or (inferencebox or {}).get("typedbNativeRuleEvaluationCompleted")
+            or native_output_used
+        )
+        # A verified no-match is a complete current-generation result, not a
+        # missing InferenceBox. It must be allowed to finalize the matching
+        # ABox so the worker can continue to the next subject.
+        if not native_evaluation_completed:
+            return False
+        if inference_status == "empty" and native_output_used:
+            return False
+        if inference_status == "ok" and not native_output_used:
             return False
         if (inferencebox or {}).get("generationAligned") is False:
             return False

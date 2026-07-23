@@ -106,6 +106,11 @@ def projection_result_summary(result: Dict[str, object]) -> Dict[str, object]:
             "traceCount": len(inference.get("traces") or []),
             "generationAligned": bool(inference.get("generationAligned")),
             "nativeTypeDbReasoningUsed": bool(inference.get("nativeTypeDbReasoningUsed")),
+            "nativeTypeDbReasoningCompleted": bool(
+                inference.get("nativeTypeDbReasoningCompleted")
+                or inference.get("typedbNativeRuleEvaluationCompleted")
+            ),
+            "nativeInferenceOutcome": str(inference.get("nativeInferenceOutcome") or ""),
             "reasoningMode": str(inference.get("reasoningMode") or ""),
         },
         "ruleboxExecution": {
@@ -115,6 +120,8 @@ def projection_result_summary(result: Dict[str, object]) -> Dict[str, object]:
             "matchedRuleCount": int(execution.get("matchedRuleCount") or 0),
             "typedbNativeRuleExecutedCount": int(execution.get("typedbNativeRuleExecutedCount") or 0),
             "typedbNativeRuleMatchedCount": int(execution.get("typedbNativeRuleMatchedCount") or 0),
+            "nativeInferenceEvaluationComplete": bool(execution.get("nativeInferenceEvaluationComplete")),
+            "nativeInferenceOutcome": str(execution.get("nativeInferenceOutcome") or ""),
             "nativeRuleSelectionApplied": bool(execution.get("nativeRuleSelectionApplied")),
             "nativeRuleSelectionFallbackReason": str(execution.get("nativeRuleSelectionFallbackReason") or ""),
             "nativeRuleSelectionCandidateCount": int(execution.get("nativeRuleSelectionCandidateCount") or 0),

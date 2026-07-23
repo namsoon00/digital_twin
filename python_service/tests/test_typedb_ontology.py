@@ -1386,6 +1386,34 @@ class TypeDBOntologyRepositoryTests(unittest.TestCase):
         self.assertEqual("finalized", result["status"])
         finalize.assert_called_once_with("abox-material:candidate", "abox-material:previous")
 
+    def test_typedb_pending_abox_recovery_finalizes_aligned_native_no_match(self):
+        repository = TypeDBOntologyGraphRepository("127.0.0.1:1729")
+        pending = {
+            "status": "pending",
+            "candidateAboxSnapshotId": "abox-material:candidate",
+            "previousAboxSnapshotId": "abox-material:previous",
+            "targetSymbols": ["000660"],
+        }
+        with patch.object(repository, "pending_abox_activation", return_value=pending), \
+                patch.object(repository, "active_abox_metadata", return_value={
+                    "status": "ok", "aboxSnapshotId": "abox-material:candidate",
+                }), \
+                patch.object(repository, "inferencebox_snapshot", return_value={
+                    "status": "empty",
+                    "nativeTypeDbReasoningUsed": False,
+                    "nativeTypeDbReasoningCompleted": True,
+                    "nativeInferenceOutcome": "no-match",
+                    "generationAligned": True,
+                    "sourceAboxSnapshotId": "abox-material:candidate",
+                    "targetSymbols": ["000660"],
+                }), \
+                patch.object(repository, "finalize_abox_generation", return_value={"status": "ok"}) as finalize:
+            result = repository.recover_pending_abox_activation()
+
+        self.assertEqual("finalized", result["status"])
+        self.assertEqual("no-match", result["inferenceBox"]["nativeInferenceOutcome"])
+        finalize.assert_called_once_with("abox-material:candidate", "abox-material:previous")
+
     def test_typedb_abox_finalization_clears_journal_without_blocking_on_predecessor_cleanup(self):
         repository = TypeDBOntologyGraphRepository("127.0.0.1:1729")
         with patch.object(repository, "active_abox_metadata", return_value={
@@ -2464,6 +2492,33 @@ class TypeDBOntologyRepositoryTests(unittest.TestCase):
         self.assertFalse(invalid["valid"])
         self.assertIn("candidate-source-abox-not-active", invalid["reason"])
 
+    def test_typedb_empty_candidate_generation_requires_completed_native_evaluation(self):
+        repository = TypeDBOntologyGraphRepository("127.0.0.1:1729")
+        graph = PortfolioOntology("candidate-empty-validation")
+        graph.worldview = {
+            "inferenceGenerationId": "generation:empty",
+            "sourceAboxSnapshotId": "abox:active",
+            "nativeInferenceEvaluationComplete": True,
+            "nativeInferenceOutcome": "no-match",
+        }
+        marker = {
+            "kind": "inference-generation-candidate",
+            "snapshotId": "generation:empty",
+            "propertiesJson": json.dumps({
+                "nativeInferenceEvaluationComplete": True,
+                "nativeInferenceOutcome": "no-match",
+                "sourceAboxSnapshotId": "abox:active",
+            }),
+        }
+        with patch.object(repository, "read_inferencebox_entity_rows", return_value=[marker]), \
+                patch.object(repository, "read_inferencebox_relation_rows", return_value=[]), \
+                patch.object(repository, "active_abox_snapshot_id", return_value="abox:active"):
+            result = repository.validate_inference_generation_candidate(graph, "generation:empty", 0, 0)
+
+        self.assertTrue(result["valid"])
+        self.assertTrue(result["nativeInferenceEvaluationComplete"])
+        self.assertTrue(result["candidateMarkerPresent"])
+
     def test_typedb_inferencebox_insert_queries_batch_rows(self):
         repository = TypeDBOntologyGraphRepository("127.0.0.1:1729")
         node_rows = [
@@ -2800,6 +2855,81 @@ class TypeDBOntologyRepositoryTests(unittest.TestCase):
 
         self.assertTrue(result["saved"])
         self.assertEqual("ok", result["status"])
+        self.assertEqual([("abox:new", "abox:previous")], repository.finalized_snapshot_ids)
+
+    def test_projection_recorder_finalizes_abox_after_aligned_native_no_match(self):
+        class FakeRepository:
+            store_key = "typedb"
+
+            def __init__(self):
+                self.finalized_snapshot_ids = []
+
+            def active_abox_metadata(self):
+                return {
+                    "status": "ok",
+                    "aboxSnapshotId": "abox:previous",
+                    "materialFingerprint": "previous-material",
+                }
+
+            def save_graph(self, _graph):
+                return {
+                    "saved": True,
+                    "status": "ok",
+                    "graphStore": "typedb",
+                    "aboxPersistenceVerification": {
+                        "activation": {
+                            "status": "activated",
+                            "snapshotId": "abox:new",
+                            "previousSnapshotId": "abox:previous",
+                        },
+                    },
+                }
+
+            def rulebox_snapshot(self):
+                rules = rulebox_rules_to_payload(default_graph_inference_rules())
+                return {
+                    "configured": True,
+                    "status": "ok",
+                    "rules": rules,
+                    "ruleCount": len(rules),
+                }
+
+            def run_rulebox(self, _payload):
+                return {
+                    "status": "empty",
+                    "inferenceBox": {
+                        "status": "empty",
+                        "nativeTypeDbReasoningUsed": False,
+                        "nativeTypeDbReasoningCompleted": True,
+                        "nativeInferenceOutcome": "no-match",
+                        "generationAligned": True,
+                        "sourceAboxSnapshotId": "abox:new",
+                        "targetSymbols": ["AAPL"],
+                    },
+                }
+
+            def finalize_abox_generation(self, active_snapshot_id, previous_snapshot_id):
+                self.finalized_snapshot_ids.append((active_snapshot_id, previous_snapshot_id))
+                return {"status": "ok"}
+
+        repository = FakeRepository()
+        snapshot = AccountSnapshot(
+            "main",
+            "메인",
+            "toss",
+            "live",
+            "ok",
+            utc_now_iso(),
+            PortfolioSummary(total=1000, invested=1000, cash=0, markets=[], sectors=[], concentration=0),
+            positions=[Position("AAPL", "Apple", market="US", currency="USD", quantity=1, current_price=100, market_value=100, market_value_krw=140000)],
+        )
+
+        result = PortfolioOntologyProjectionRecorder(repository).record_snapshot(snapshot)
+
+        self.assertTrue(result["saved"])
+        self.assertEqual("ok", result["status"])
+        self.assertEqual("empty", result["inferenceBox"]["status"])
+        self.assertEqual("no-match", result["inferenceBox"]["nativeInferenceOutcome"])
         self.assertEqual([("abox:new", "abox:previous")], repository.finalized_snapshot_ids)
 
     def test_projection_recorder_rejects_demo_snapshot_and_defers_regular_typedb_writer(self):
@@ -3976,7 +4106,7 @@ class TypeDBOntologyRepositoryTests(unittest.TestCase):
         self.assertEqual("ok", result["status"])
         self.assertEqual("adopted", result["inferenceWriteLease"]["status"])
 
-    def test_typedb_rulebox_empty_result_preserves_previous_inference_generation(self):
+    def test_typedb_rulebox_empty_result_materializes_aligned_no_match_generation(self):
         repository = TypeDBOntologyGraphRepository("127.0.0.1:1729")
         rule_snapshot = {
             "configured": True,
@@ -3995,21 +4125,23 @@ class TypeDBOntologyRepositoryTests(unittest.TestCase):
             "matchedCount": 0,
             "matches": [],
         }
-        previous = {
-            "status": "ok",
-            "inferenceGenerationId": "inference-generation:previous",
-            "relations": [{"type": "HAS_INFERRED_RISK"}],
-            "traces": [],
-        }
-        with patch.object(repository, "has_box_rows", return_value=True), patch.object(repository, "active_abox_metadata", return_value={"status": "ok", "aboxSnapshotId": "abox-snapshot:test"}), patch.object(repository, "rulebox_snapshot", return_value=rule_snapshot), patch.object(repository, "sync_typedb_native_rule_functions", return_value={"status": "ok", "syncedCount": 1, "skippedCount": 0, "failedCount": 0}), patch.object(repository, "match_typedb_native_rules", return_value=native_match), patch.object(repository, "load_graph_for_native_matches", return_value=PortfolioOntology("empty")), patch.object(repository, "inferencebox_snapshot", return_value=previous), patch.object(repository, "write_inferencebox_graph") as write_mock, patch.object(repository, "clear_inferencebox") as clear_mock:
+        captured = {}
+
+        def save_empty_generation(graph):
+            captured["graph"] = graph
+            return {"configured": True, "saved": True, "status": "ok", "graphStore": "typedb"}
+
+        with patch.object(repository, "has_box_rows", return_value=True), patch.object(repository, "active_abox_metadata", return_value={"status": "ok", "aboxSnapshotId": "abox-snapshot:test"}), patch.object(repository, "rulebox_snapshot", return_value=rule_snapshot), patch.object(repository, "sync_typedb_native_rule_functions", return_value={"status": "ok", "syncedCount": 1, "skippedCount": 0, "failedCount": 0}), patch.object(repository, "match_typedb_native_rules", return_value=native_match), patch.object(repository, "load_graph_for_native_matches", return_value=PortfolioOntology("empty")), patch.object(repository, "write_inferencebox_graph", side_effect=save_empty_generation) as write_mock, patch.object(repository, "clear_inferencebox") as clear_mock:
             result = repository.run_rulebox({"forceClearInference": True, "allowDestructiveInferenceClear": True})
 
-        write_mock.assert_not_called()
+        write_mock.assert_called_once()
         clear_mock.assert_not_called()
         self.assertEqual("empty", result["status"])
-        self.assertTrue(result["preservedPreviousInference"])
-        self.assertFalse(result["activatedGeneration"])
-        self.assertEqual("inference-generation:previous", result["inferenceBox"]["inferenceGenerationId"])
+        self.assertTrue(result["nativeTypeDbReasoningCompleted"])
+        self.assertEqual("no-match", result["nativeInferenceOutcome"])
+        self.assertEqual("abox-snapshot:test", result["sourceAboxSnapshotId"])
+        self.assertEqual("no-match", captured["graph"].worldview["nativeInferenceOutcome"])
+        self.assertEqual("skipped", result["clearResult"]["status"])
 
     def test_typedb_rulebox_execution_preserves_inferencebox_when_preflight_fails(self):
         repository = TypeDBOntologyGraphRepository("127.0.0.1:1729")

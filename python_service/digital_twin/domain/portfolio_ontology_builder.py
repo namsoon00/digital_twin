@@ -88,6 +88,7 @@ def build_portfolio_ontology(
     runtime_context: Dict[str, object] = None,
     include_tbox: bool = True,
     include_presentation: bool = True,
+    include_derived_decision_items: bool = True,
 ) -> PortfolioOntology:
     """Build an ontology graph for a portfolio snapshot.
 
@@ -336,7 +337,11 @@ def build_portfolio_ontology(
             {},
             external_signals,
         )
-    add_decision_item_concepts(graph, runtime_context)
+    # A current DecisionItem is presentation/decision output from a prior
+    # inference pass.  Read models may include it, but the live TypeDB ABox
+    # must not feed that output back into the next RuleBox evaluation.
+    if include_derived_decision_items:
+        add_decision_item_concepts(graph, runtime_context)
     runtime_settings = runtime_context.get("settings") if isinstance(runtime_context, dict) and isinstance(runtime_context.get("settings"), dict) else {}
     try:
         hypothesis_outcome_minimum_samples = int(float(str(

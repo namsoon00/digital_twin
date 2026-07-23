@@ -6,7 +6,9 @@ from digital_twin.domain.market_data import normalize_position
 from digital_twin.domain.ontology_projection_fingerprint import material_graph_fingerprint
 from digital_twin.domain.ontology_schema import add_entity
 from digital_twin.domain.portfolio_ontology_state import position_market_state_payload
-from digital_twin.domain.portfolio import AccountSnapshot, PortfolioSummary
+from digital_twin.domain.portfolio import AccountSnapshot, DecisionItem, PortfolioSummary
+from digital_twin.domain.ontology_scopes import apply_scoped_abox_identity
+from digital_twin.domain.portfolio_ontology_builder import build_portfolio_ontology
 from digital_twin.domain.portfolio_ontology_runtime_concepts import (
     add_operational_world_concepts,
     add_runtime_setting_concepts,
@@ -27,6 +29,99 @@ class CurrentPipelineHealthStore:
 
 
 class OntologyProjectionFingerprintContractTests(unittest.TestCase):
+
+    def test_projection_runtime_context_removes_derived_decision_history(self):
+        position = normalize_position({
+            "symbol": "005930",
+            "name": "삼성전자",
+            "market": "KR",
+            "currency": "KRW",
+            "source": "holding",
+            "currentPrice": 100,
+            "quantity": 1,
+        })
+        decision = DecisionItem(
+            symbol="005930",
+            name="삼성전자",
+            sector="반도체",
+            market="KR",
+            currency="KRW",
+            market_value=100,
+            profit_loss=0,
+            profit_loss_rate=0,
+            decision="매도",
+            tone="caution",
+            relation_rule_context={"activeRules": [{"ruleId": "graph.derived"}]},
+        )
+        snapshot = AccountSnapshot(
+            "main", "Main", "toss", "live", "ok", "2026-07-23T10:00:00Z",
+            PortfolioSummary(100, 100, 0, [], [], 1),
+            positions=[position],
+            decisions=[decision],
+            metadata={
+                "previousMonitorState": {
+                    "positions": {"005930": {"currentPrice": 99}},
+                    "decisions": {"005930": decision.to_dict()},
+                    "metadata": {"ontology": {"derived": True}},
+                },
+                "monitorStateHistory": [{
+                    "positions": {"005930": {"currentPrice": 98}},
+                    "decisions": {"005930": decision.to_dict()},
+                }],
+            },
+        )
+
+        context = PortfolioOntologyProjectionRecorder(None).runtime_context(snapshot, active_tbox={})
+
+        self.assertEqual([], context["decisionItems"])
+        self.assertEqual({"005930": {"currentPrice": 99}}, context["metadata"]["previousMonitorState"]["positions"])
+        self.assertNotIn("decisions", context["metadata"]["previousMonitorState"])
+        self.assertNotIn("ontology", context["metadata"]["previousMonitorState"]["metadata"])
+        self.assertNotIn("decisions", context["metadata"]["monitorStateHistory"][0])
+
+    def test_typedb_projection_excludes_derived_decisions_from_abox_identity(self):
+        position = normalize_position({
+            "symbol": "005930",
+            "name": "삼성전자",
+            "market": "KR",
+            "currency": "KRW",
+            "source": "holding",
+            "currentPrice": 100,
+            "quantity": 1,
+            "sourceAsOf": "2026-07-23T10:00:00Z",
+        })
+        portfolio = PortfolioSummary(100, 100, 0, [], [], 1)
+        first_context = {
+            "settings": {},
+            "decisionItems": [{"symbol": "005930", "decision": "매도", "reviewLevel": "act"}],
+        }
+        second_context = {
+            "settings": {},
+            "decisionItems": [{
+                "symbol": "005930",
+                "decision": "보유",
+                "reviewLevel": "observe",
+                "relationRuleContext": {"activeRules": [{"ruleId": "graph.derived"}]},
+            }],
+        }
+
+        first = build_portfolio_ontology(
+            [position], portfolio, portfolio_id="projection-derived-decision",
+            runtime_context=first_context, include_tbox=False, include_presentation=False,
+            include_derived_decision_items=False,
+        )
+        second = build_portfolio_ontology(
+            [position], portfolio, portfolio_id="projection-derived-decision",
+            runtime_context=second_context, include_tbox=False, include_presentation=False,
+            include_derived_decision_items=False,
+        )
+        first_identity = apply_scoped_abox_identity(first)
+        second_identity = apply_scoped_abox_identity(second)
+
+        self.assertEqual(material_graph_fingerprint(first), material_graph_fingerprint(second))
+        self.assertEqual(first_identity["scopeGenerationIds"], second_identity["scopeGenerationIds"])
+        self.assertFalse(any(item.kind == "strategy-signal" for item in first.entities))
+
     def test_global_external_signal_omits_duplicated_raw_provider_payload(self):
         def graph_for(price: int) -> PortfolioOntology:
             graph = PortfolioOntology("external-signal-contract")

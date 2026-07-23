@@ -142,6 +142,11 @@ def projection_source_snapshot(snapshot: AccountSnapshot) -> Dict[str, object]:
     collection and must not become a recursive source-of-truth payload.
     """
     payload = snapshot.to_monitor_state()
+    # Decisions are generated from the preceding InferenceBox/AI pass. They
+    # are useful to the delivery read model but are not causal ABox input.
+    # Keeping them here made a completed inference look like a fresh market
+    # change and reopened the same RuleBox slice on the next worker cycle.
+    payload.pop("decisions", None)
     metadata = dict(payload.get("metadata") or {})
     for key in ["previousMonitorState", "monitorStateHistory", "ontology"]:
         metadata.pop(key, None)

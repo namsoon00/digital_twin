@@ -1587,10 +1587,10 @@ class PortfolioOntologyProjectionRecorder:
         graph = build_portfolio_ontology(
             list(snapshot.positions or []) + list(snapshot.watchlist or []),
             snapshot.portfolio,
-            legacy_by_symbol={
-                item.symbol.upper(): item.to_dict()
-                for item in snapshot.decisions
-            },
+            # Current decisions are derived from a preceding TypeDB/AI
+            # pass. Native rules must start from observed portfolio and
+            # market facts, not use their own previous output as evidence.
+            legacy_by_symbol={},
             external_signals=snapshot.external_signals,
             portfolio_id=snapshot.account_id,
             runtime_context=runtime_context,
@@ -1599,6 +1599,7 @@ class PortfolioOntologyProjectionRecorder:
             # rebuilt later from the active InferenceBox for an alert or UI.
             include_tbox=False,
             include_presentation=False,
+            include_derived_decision_items=False,
         )
         persistence_graph = self.graph_for_graph_store_persistence(graph, rule_catalog)
         stage_timings["ontologyGraphAssemblyMs"] = int((time.perf_counter() - assembly_started) * 1000)
@@ -3038,7 +3039,7 @@ class PortfolioOntologyProjectionRecorder:
         as_of = str(snapshot.generated_at or "").strip()
         snapshot_seed = "|".join([str(snapshot.account_id or ""), as_of or "unknown"])
         decision_episodes = self.decision_episode_context(snapshot)
-        metadata = dict(snapshot.metadata or {})
+        metadata = self.factual_runtime_metadata(snapshot.metadata)
         # Projection output is derived state, not a new market observation.
         # Feeding the previous ABox result back into the next ABox makes an
         # otherwise unchanged snapshot look materially different.
@@ -3062,7 +3063,10 @@ class PortfolioOntologyProjectionRecorder:
                 "status": snapshot.status,
             },
             "metadata": metadata,
-            "decisionItems": [item.to_dict() for item in snapshot.decisions],
+            # DecisionItem is an output projection, not a new observation.
+            # The native ABox uses the aligned InferenceBox for prior
+            # reasoning context and keeps this input empty to avoid feedback.
+            "decisionItems": [],
             "decisionEpisodes": decision_episodes,
             "decisionPerformance": decision_performance,
             "hypothesisProposals": self.hypothesis_proposal_context(snapshot),
@@ -3074,6 +3078,44 @@ class PortfolioOntologyProjectionRecorder:
             "dataPipelineHealth": self.data_pipeline_health_context(snapshot),
             "temporalObservationWindows": self.temporal_observation_windows(snapshot),
         }
+
+    @staticmethod
+    def factual_runtime_metadata(metadata: Dict[str, object] = None) -> Dict[str, object]:
+        """Keep historical market facts while removing derived decision output.
+
+        Trend and change concepts still need the prior positions/watchlist
+        snapshots. Their embedded decisions, AI context, and prior ontology
+        output are rendered results, however, so carrying them into the next
+        ABox would create a self-triggering inference loop.
+        """
+        values = deepcopy(dict(metadata or {}))
+        values.pop("ontology", None)
+
+        def factual_state(state: object) -> object:
+            if not isinstance(state, dict):
+                return state
+            result = dict(state)
+            result.pop("decisions", None)
+            nested = result.get("metadata")
+            if isinstance(nested, dict):
+                nested = dict(nested)
+                nested.pop("ontology", None)
+                nested.pop("previousMonitorState", None)
+                nested.pop("monitorStateHistory", None)
+                result["metadata"] = nested
+            return result
+
+        if "previousMonitorState" in values:
+            values["previousMonitorState"] = factual_state(values.get("previousMonitorState"))
+        if isinstance(values.get("previousState"), dict):
+            values["previousState"] = factual_state(values.get("previousState"))
+        if isinstance(values.get("monitorStateHistory"), list):
+            values["monitorStateHistory"] = [
+                factual_state(item)
+                for item in values.get("monitorStateHistory") or []
+                if isinstance(item, dict)
+            ]
+        return values
 
     def temporal_observation_windows(self, snapshot: AccountSnapshot) -> Dict[str, object]:
         if not self.market_time_series_store or not hasattr(self.market_time_series_store, "load_temporal_windows"):

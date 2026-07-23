@@ -15,7 +15,7 @@ from digital_twin.domain.ontology_projection_fingerprint import (
     apply_material_graph_identity,
     material_graph_fingerprint,
 )
-from digital_twin.domain.portfolio import AccountSnapshot, PortfolioSummary, Position
+from digital_twin.domain.portfolio import AccountSnapshot, DecisionItem, PortfolioSummary, Position
 from digital_twin.infrastructure.mysql_ontology_projection_runs import MySQLOntologyProjectionRunStore
 from digital_twin.infrastructure.ontology_projection import PortfolioOntologyProjectionRecorder
 
@@ -126,6 +126,7 @@ class OntologyProjectionAuditTests(unittest.TestCase):
         self.assertNotIn("previousMonitorState", source["metadata"])
         self.assertNotIn("monitorStateHistory", source["metadata"])
         self.assertNotIn("ontology", source["metadata"])
+        self.assertNotIn("decisions", source)
         self.assertEqual("KIS", source["metadata"]["collectionSource"])
         self.assertEqual("tbox-v1", run.tbox_version)
         self.assertEqual("rulebox-hash", run.rulebox_rules_hash)
@@ -146,6 +147,28 @@ class OntologyProjectionAuditTests(unittest.TestCase):
             started_at="2026-07-20T00:04:05Z",
         )
         self.assertNotEqual(run.run_id, repeated.run_id)
+
+    def test_projection_source_excludes_derived_decision_output(self):
+        snapshot = source_snapshot()
+        snapshot.decisions = [DecisionItem(
+            symbol="005930",
+            name="삼성전자",
+            sector="반도체",
+            market="KR",
+            currency="KRW",
+            market_value=700000,
+            profit_loss=0,
+            profit_loss_rate=0,
+            decision="보유",
+            tone="neutral",
+            relation_rule_context={"activeRules": [{"ruleId": "graph.test"}]},
+            active_investment_opinion={"thesis": "derived output"},
+            ai_context={"prompt": "derived output"},
+        )]
+
+        source = projection_source_snapshot(snapshot)
+
+        self.assertNotIn("decisions", source)
 
     def test_projection_run_keeps_a_bounded_scope_identity_for_later_native_reuse(self):
         snapshot = source_snapshot()

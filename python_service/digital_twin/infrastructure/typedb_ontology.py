@@ -11715,6 +11715,11 @@ relation ontology-assertion,
                 "typedbNativeRuleQueryUsed": bool(native_match_result.get("nativeQueryUsed")),
                 "typedbSchemaFunctionQueryUsed": bool(native_match_result.get("schemaFunctionUsed")),
                 "typedbNativeRuleMatchedCount": int(number_or_none(native_match_result.get("matchedCount")) or 0),
+                "typedbNativeRuleMatchedRuleIds": sorted({
+                    str(item.get("ruleId") or "").strip()
+                    for item in native_match_result.get("matches") or []
+                    if isinstance(item, dict) and str(item.get("ruleId") or "").strip()
+                })[:160],
                 "typedbNativeRuleExecutedCount": int(number_or_none(native_match_result.get("executedRuleCount")) or 0),
                 "typedbNativeRuleSkippedCount": int(number_or_none(native_match_result.get("skippedRuleCount")) or 0),
                 "pythonCompatibilityReasonerUsed": False,
@@ -15135,6 +15140,7 @@ def inference_rulebox_metadata(
         "typedbSchemaFunctionSkippedCount",
         "typedbSchemaFunctionFailedCount",
         "typedbNativeRuleMatchedCount",
+        "typedbNativeRuleMatchedRuleIds",
         "typedbNativeRuleExecutedCount",
         "typedbNativeRuleSkippedCount",
         "nativeInferenceEvaluationComplete",

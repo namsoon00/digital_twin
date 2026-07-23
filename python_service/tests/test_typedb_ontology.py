@@ -5245,6 +5245,10 @@ class TypeDBOntologyRepositoryTests(unittest.TestCase):
         self.assertTrue(result["typedbNativeFunctionReasoningUsed"])
         self.assertTrue(result["typedbNativeRuleQueryUsed"])
         self.assertEqual("ok", result["typedbNativeRuleQueryStatus"])
+        self.assertEqual(
+            [default_graph_inference_rules()[0].rule_id],
+            result["typedbNativeRuleMatchedRuleIds"],
+        )
         self.assertTrue(result["nativeTypeDbReasoningUsed"])
         self.assertIn("HAS_INFERRED_RISK", result["relationTypes"])
         self.assertTrue(result["inferenceGenerationId"].startswith("inference-generation:"))
@@ -5267,6 +5271,10 @@ class TypeDBOntologyRepositoryTests(unittest.TestCase):
         self.assertTrue(result["ruleboxRulesHash"])
         self.assertEqual(1, result["ruleboxRuleCount"])
         self.assertTrue(all((item.properties or {}).get("ruleboxRulesHash") == result["ruleboxRulesHash"] for item in captured["graph"].entities))
+        self.assertTrue(all(
+            (item.properties or {}).get("typedbNativeRuleMatchedRuleIds") == [default_graph_inference_rules()[0].rule_id]
+            for item in captured["graph"].entities
+        ))
         self.assertEqual("abox-snapshot:test", result["sourceAboxSnapshotId"])
         self.assertTrue(all((item.properties or {}).get("sourceAboxSnapshotId") == "abox-snapshot:test" for item in captured["graph"].entities))
         self.assertEqual("skipped", result["clearResult"]["status"])

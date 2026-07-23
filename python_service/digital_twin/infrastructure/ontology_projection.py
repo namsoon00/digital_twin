@@ -36,10 +36,13 @@ from ..domain.market_world_projection import (
     merge_market_world_scope_manifest,
 )
 from ..domain.ontology_projection_audit import (
+    INFERENCE_REUSE_PROOF_VERSION,
     OntologyProjectionRun,
     apply_projection_run_identity,
     build_ontology_projection_run,
     complete_ontology_projection_run,
+    inference_reuse_scope_plan,
+    inference_reuse_scope_plan_fingerprint,
     projection_run_from_payload,
 )
 from ..domain.ontology_runtime_operations import build_projection_runtime_observation
@@ -584,6 +587,12 @@ class PortfolioOntologyProjectionRecorder:
                         inference_symbols,
                         compact_impact_plan,
                         world_id=portfolio_world_context.world_id,
+                        candidate_scope_plan=active_abox.get("scopePlan") or scoped_identity.get("scopePlan") or [],
+                        rulebox_rules_hash=str(rulebox_bootstrap.get("ruleboxRulesHash") or ""),
+                        tbox_fingerprint=str(
+                            ((persistence_graph.worldview or {}).get("activeTBox") or {}).get("fingerprint")
+                            or ""
+                        ),
                     )
                 self.store_projection_result(snapshot, result)
                 return result
@@ -658,6 +667,12 @@ class PortfolioOntologyProjectionRecorder:
                     pending.get("targetSymbols") or inference_symbols,
                     compact_impact_plan,
                     world_id=portfolio_world_context.world_id,
+                    candidate_scope_plan=scoped_identity.get("scopePlan") or [],
+                    rulebox_rules_hash=str(rulebox_bootstrap.get("ruleboxRulesHash") or ""),
+                    tbox_fingerprint=str(
+                        ((persistence_graph.worldview or {}).get("activeTBox") or {}).get("fingerprint")
+                        or ""
+                    ),
                 )
             if self.quality_store:
                 quality_started = time.perf_counter()
@@ -1489,6 +1504,9 @@ class PortfolioOntologyProjectionRecorder:
         target_symbols: List[str] = None,
         inference_impact_plan: Dict[str, object] = None,
         world_id: str = "",
+        candidate_scope_plan: List[Dict[str, object]] = None,
+        rulebox_rules_hash: str = "",
+        tbox_fingerprint: str = "",
     ) -> None:
         if not hasattr(self.repository, "run_rulebox"):
             return
@@ -1548,12 +1566,26 @@ class PortfolioOntologyProjectionRecorder:
                 # writer lease. This makes the reuse proof and the following
                 # ABox pointer transition one serialized operation.
                 selection_started = time.perf_counter()
-                selection_context = self.prior_rule_selection_context(snapshot, inference_symbols, world_id=world_id)
+                selection_context = self.prior_rule_selection_context(
+                    snapshot,
+                    inference_symbols,
+                    world_id=world_id,
+                    candidate_scope_plan=candidate_scope_plan,
+                    rulebox_rules_hash=rulebox_rules_hash,
+                    tbox_fingerprint=tbox_fingerprint,
+                )
                 runtime_stages["priorInferenceReuseReadMs"] = int((time.perf_counter() - selection_started) * 1000)
+                recomputed_impact_plan = selection_context.get("inferenceImpactPlan")
+                if isinstance(recomputed_impact_plan, dict) and recomputed_impact_plan:
+                    compact_impact_plan = compact_inference_impact_plan(recomputed_impact_plan)
+                    result["inferenceImpactPlan"] = compact_impact_plan
+                    projection_scope = result.get("projectionScope")
+                    if isinstance(projection_scope, dict):
+                        projection_scope["inferenceImpactPlan"] = compact_impact_plan
                 result["priorInferenceReuse"] = {
                     key: value
                     for key, value in selection_context.items()
-                    if key != "matchedRuleIds"
+                    if key not in {"matchedRuleIds", "inferenceImpactPlan"}
                 }
         try:
             if active_key == "typedb":
@@ -1615,6 +1647,8 @@ class PortfolioOntologyProjectionRecorder:
                 "typedbNativeRuleSelectionEnabled": self.settings.get("typedbNativeRuleSelectionEnabled", "1"),
                 "priorInferenceReusable": bool(selection_context.get("reusable")),
                 "priorMatchedRuleIds": list(selection_context.get("matchedRuleIds") or []),
+                "priorInferenceProofSource": str(selection_context.get("proofSource") or ""),
+                "priorInferenceProofRunId": str(selection_context.get("proofRunId") or ""),
             }
             if inference_write_lease.get("acquired"):
                 payload["_inferenceWriteLeaseOwner"] = str(inference_write_lease.get("leaseOwner") or "")
@@ -1911,13 +1945,22 @@ class PortfolioOntologyProjectionRecorder:
         snapshot: AccountSnapshot,
         inference_symbols: List[str],
         world_id: str = "",
+        candidate_scope_plan: List[Dict[str, object]] = None,
+        rulebox_rules_hash: str = "",
+        tbox_fingerprint: str = "",
     ) -> Dict[str, object]:
         """Prove which unaffected native rules must be re-materialized.
 
-        This is a reuse proof, not a Python rule evaluation. The prior
-        InferenceBox must still be aligned to the active immutable ABox. If
-        that proof is unavailable, TypeDB deliberately executes the complete
-        RuleBox slice instead of risking an incomplete decision graph.
+        This is a reuse proof, not a Python rule evaluation. The fast path
+        reads an InferenceBox aligned to the active immutable ABox. When
+        another symbol has moved the active Manifest meanwhile, a verified
+        projection audit can still prove the prior target's complete native
+        outcome. In that case we compare its saved scope identities with the
+        candidate Manifest and ask TypeDB to re-run every rule affected since
+        that target was last evaluated, plus every prior match.
+
+        Missing provenance, a RuleBox/TBox change, or an opaque old scope
+        deliberately falls back to a complete RuleBox slice.
         """
         active_abox = self.active_abox_metadata(world_id)
         inferencebox = self.existing_inference_result(snapshot, inference_symbols, world_id=world_id)
@@ -1928,19 +1971,168 @@ class PortfolioOntologyProjectionRecorder:
         )
         rule_ids = []
         if reusable:
-            for trace in inferencebox.get("traces") or []:
-                if not isinstance(trace, dict):
-                    continue
-                rule_id = str(trace.get("ruleId") or trace.get("sourceRuleId") or "").strip()
-                if rule_id and rule_id not in rule_ids:
-                    rule_ids.append(rule_id)
+            rule_ids = self.matched_rule_ids_from_inference_payload(inferencebox)
+            return {
+                "reusable": True,
+                "proofSource": "active-aligned-inference",
+                "matchedRuleIds": rule_ids[:160],
+                "matchedRuleCount": len(rule_ids),
+                "inferenceGenerationId": str(inferencebox.get("inferenceGenerationId") or ""),
+                "sourceAboxSnapshotId": str(inferencebox.get("sourceAboxSnapshotId") or ""),
+                "fallbackReason": "",
+            }
+        audited = self.audited_prior_rule_selection_context(
+            snapshot,
+            inference_symbols,
+            candidate_scope_plan=candidate_scope_plan,
+            rulebox_rules_hash=rulebox_rules_hash,
+            tbox_fingerprint=tbox_fingerprint,
+            world_id=world_id,
+        )
+        if audited:
+            return audited
         return {
-            "reusable": reusable,
-            "matchedRuleIds": rule_ids[:160],
-            "matchedRuleCount": len(rule_ids),
+            "reusable": False,
+            "proofSource": "",
+            "matchedRuleIds": [],
+            "matchedRuleCount": 0,
             "inferenceGenerationId": str(inferencebox.get("inferenceGenerationId") or ""),
             "sourceAboxSnapshotId": str(inferencebox.get("sourceAboxSnapshotId") or ""),
+            "fallbackReason": "prior-aligned-inference-unavailable",
         }
+
+    @staticmethod
+    def matched_rule_ids_from_inference_payload(payload: Dict[str, object]) -> List[str]:
+        """Read TypeDB-reported rule ids without treating them as a decision."""
+        values = dict(payload or {}) if isinstance(payload, dict) else {}
+        collected = []
+        for key in ["typedbNativeRuleMatchedRuleIds", "matchedRuleIds"]:
+            for value in values.get(key) or []:
+                rule_id = str(value or "").strip()
+                if rule_id and rule_id not in collected:
+                    collected.append(rule_id)
+        for trace in values.get("traces") or []:
+            if not isinstance(trace, dict):
+                continue
+            rule_id = str(trace.get("ruleId") or trace.get("sourceRuleId") or "").strip()
+            if rule_id and rule_id not in collected:
+                collected.append(rule_id)
+        return collected[:160]
+
+    def audited_prior_rule_selection_context(
+        self,
+        snapshot: AccountSnapshot,
+        inference_symbols: List[str],
+        candidate_scope_plan: List[Dict[str, object]] = None,
+        rulebox_rules_hash: str = "",
+        tbox_fingerprint: str = "",
+        world_id: str = "",
+    ) -> Dict[str, object]:
+        """Recover a target-specific native-rule proof from projection audit.
+
+        MySQL stores only the immutable scope fingerprints and TypeDB's
+        completed match set. It never asserts a new match or decides an
+        investment action; the next TypeDB schema-function query remains the
+        evaluator.
+        """
+        if not self.projection_run_store or not hasattr(self.projection_run_store, "latest"):
+            return {}
+        targets = [
+            str(symbol or "").upper().strip()
+            for symbol in inference_symbols or []
+            if str(symbol or "").strip()
+        ]
+        if len(targets) != 1:
+            return {}
+        current_scope_plan = inference_reuse_scope_plan(candidate_scope_plan or [])
+        if not current_scope_plan or not str(rulebox_rules_hash or "").strip():
+            return {}
+        try:
+            try:
+                rows = self.projection_run_store.latest(
+                    account_id=str(snapshot.account_id or ""),
+                    limit=160,
+                    world_id=world_id,
+                )
+            except TypeError as error:
+                if "unexpected keyword" not in str(error) and "world_id" not in str(error):
+                    raise
+                rows = self.projection_run_store.latest(account_id=str(snapshot.account_id or ""), limit=160)
+        except Exception:
+            return {}
+        current_rules = self.rulebox_rules_for_impact()
+        for row in rows or []:
+            if not isinstance(row, dict):
+                continue
+            if str(row.get("status") or "").lower() != "ok":
+                continue
+            if str(row.get("graphStore") or "").strip() != "typedb":
+                continue
+            source_symbols = {
+                str(symbol or "").upper().strip()
+                for symbol in row.get("sourceSymbols") or []
+                if str(symbol or "").strip()
+            }
+            if targets[0] not in source_symbols:
+                continue
+            result = row.get("result") if isinstance(row.get("result"), dict) else {}
+            proof = result.get("inferenceReuseProof") if isinstance(result.get("inferenceReuseProof"), dict) else {}
+            if str(proof.get("status") or "") != "verified" or not bool(proof.get("coverageComplete")):
+                continue
+            proof_targets = {
+                str(symbol or "").upper().strip()
+                for symbol in proof.get("targetSymbols") or []
+                if str(symbol or "").strip()
+            }
+            if targets[0] not in proof_targets:
+                continue
+            if str(proof.get("ruleboxRulesHash") or "") != str(rulebox_rules_hash or ""):
+                continue
+            if tbox_fingerprint and str(proof.get("tboxFingerprint") or "") != str(tbox_fingerprint):
+                continue
+            context = row.get("context") if isinstance(row.get("context"), dict) else {}
+            topology = context.get("scopeTopology") if isinstance(context.get("scopeTopology"), dict) else {}
+            prior_scope_plan = inference_reuse_scope_plan(topology.get("inferenceReuseScopePlan") or [])
+            if not prior_scope_plan:
+                continue
+            prior_scope_fingerprint = inference_reuse_scope_plan_fingerprint(prior_scope_plan)
+            if (
+                str(topology.get("inferenceReuseScopePlanFingerprint") or "") != prior_scope_fingerprint
+                or str(proof.get("scopePlanFingerprint") or "") != prior_scope_fingerprint
+            ):
+                continue
+            source_abox_snapshot_id = str(proof.get("sourceAboxSnapshotId") or "").strip()
+            audited_abox_snapshot_id = str(
+                row.get("activeAboxSnapshotId") or row.get("aboxSnapshotId") or ""
+            ).strip()
+            if not source_abox_snapshot_id or source_abox_snapshot_id != audited_abox_snapshot_id:
+                continue
+            historical_plan = build_inference_impact_plan(
+                prior_scope_plan,
+                current_scope_plan,
+                self.snapshot_symbols(snapshot),
+                explicit_target_symbols=targets,
+                rules=current_rules,
+            )
+            if not bool(historical_plan.get("nativeRuleSelectionEligible")):
+                continue
+            matched_rule_ids = self.matched_rule_ids_from_inference_payload(proof)
+            return {
+                "reusable": True,
+                "proofSource": "audited-target-scope-proof",
+                "proofRunId": str(row.get("runId") or ""),
+                "matchedRuleIds": matched_rule_ids,
+                "matchedRuleCount": len(matched_rule_ids),
+                "inferenceGenerationId": str(proof.get("inferenceGenerationId") or ""),
+                "sourceAboxSnapshotId": source_abox_snapshot_id,
+                "inferenceImpactPlan": historical_plan,
+                "recomputedCandidateRuleCount": int(historical_plan.get("candidateRuleCount") or 0),
+                "recomputedChangedScopeCount": len(
+                    list((historical_plan.get("scopeDelta") or {}).get("changedScopeIds") or [])
+                ),
+                "fallbackReason": "",
+            }
+        return {}
 
     def snapshot_symbols(self, snapshot: AccountSnapshot) -> List[str]:
         symbols = []
@@ -2184,6 +2376,7 @@ class PortfolioOntologyProjectionRecorder:
         result.setdefault("activeGraphStore", active_key)
         if projection_run and self.projection_run_store:
             try:
+                self.attach_inference_reuse_proof(projection_run, result)
                 completed_run = complete_ontology_projection_run(projection_run, result)
                 # Keep projection cost, scope impact, native trace coverage,
                 # and scoped ABox cleanup in the same durable audit row as
@@ -2215,6 +2408,87 @@ class PortfolioOntologyProjectionRecorder:
         ontology[active_key] = result
         ontology["projection"] = result
         ontology["activeGraphStore"] = active_key
+
+    def attach_inference_reuse_proof(
+        self,
+        projection_run: OntologyProjectionRun,
+        result: Dict[str, object],
+    ) -> None:
+        """Record a TypeDB-complete target result for later rule scheduling.
+
+        The proof retains only scope fingerprints and TypeDB-reported rule
+        identities. It does not carry ABox values or derive an investment
+        outcome outside TypeDB.
+        """
+        context = dict(projection_run.context_payload or {})
+        topology = context.get("scopeTopology") if isinstance(context.get("scopeTopology"), dict) else {}
+        scope_plan = inference_reuse_scope_plan(topology.get("inferenceReuseScopePlan") or [])
+        scope_plan_fingerprint = inference_reuse_scope_plan_fingerprint(scope_plan) if scope_plan else ""
+        inference = result.get("inferenceBox") if isinstance(result.get("inferenceBox"), dict) else {}
+        execution = result.get("ruleboxExecution") if isinstance(result.get("ruleboxExecution"), dict) else {}
+        matched_rule_ids = self.matched_rule_ids_from_inference_payload(execution)
+        for rule_id in self.matched_rule_ids_from_inference_payload(inference):
+            if rule_id not in matched_rule_ids:
+                matched_rule_ids.append(rule_id)
+        native_evaluation_complete = bool(
+            inference.get("nativeTypeDbReasoningCompleted")
+            or inference.get("typedbNativeRuleEvaluationCompleted")
+            or execution.get("nativeInferenceEvaluationComplete")
+        )
+        target_symbols = [
+            str(symbol or "").upper().strip()
+            for symbol in list(inference.get("targetSymbols") or projection_run.source_symbols or [])
+            if str(symbol or "").strip()
+        ]
+        source_abox_snapshot_id = str(inference.get("sourceAboxSnapshotId") or "").strip()
+        expected_abox_snapshot_id = str(projection_run.abox_snapshot_id or "").strip()
+        selection_applied = bool(execution.get("nativeRuleSelectionApplied"))
+        inherited_coverage = bool(
+            selection_applied
+            and isinstance(result.get("priorInferenceReuse"), dict)
+            and result["priorInferenceReuse"].get("reusable")
+        )
+        coverage_complete = bool(not selection_applied or inherited_coverage)
+        matched_count = int(execution.get("typedbNativeRuleMatchedCount") or 0)
+        match_ids_complete = not matched_count or bool(matched_rule_ids)
+        verified = bool(
+            str(result.get("status") or "") == "ok"
+            and native_evaluation_complete
+            and bool(inference.get("generationAligned"))
+            and bool(scope_plan)
+            and scope_plan_fingerprint == str(topology.get("inferenceReuseScopePlanFingerprint") or "")
+            and bool(projection_run.rulebox_rules_hash)
+            and bool(projection_run.tbox_fingerprint)
+            and bool(target_symbols)
+            and source_abox_snapshot_id == expected_abox_snapshot_id
+            and coverage_complete
+            and match_ids_complete
+        )
+        if verified:
+            reason = ""
+        elif not coverage_complete:
+            reason = "Previous native coverage was unavailable for a dependency-selected inference result."
+        elif matched_count and not matched_rule_ids:
+            reason = "TypeDB reported matches without persisted matched rule identities."
+        else:
+            reason = "Current TypeDB inference did not produce a complete reusable target proof."
+        result["inferenceReuseProof"] = {
+            "version": INFERENCE_REUSE_PROOF_VERSION,
+            "status": "verified" if verified else "incomplete",
+            "reason": reason,
+            "coverageComplete": coverage_complete,
+            "sourceAboxSnapshotId": source_abox_snapshot_id,
+            "inferenceGenerationId": str(inference.get("inferenceGenerationId") or ""),
+            "targetSymbols": target_symbols,
+            "matchedRuleIds": matched_rule_ids[:160],
+            "matchedRuleCount": len(matched_rule_ids),
+            "ruleboxRulesHash": str(projection_run.rulebox_rules_hash or ""),
+            "tboxFingerprint": str(projection_run.tbox_fingerprint or ""),
+            "scopePlanFingerprint": scope_plan_fingerprint,
+            "scopePlanCount": len(scope_plan),
+            "selectionApplied": selection_applied,
+            "inheritedCoverage": inherited_coverage,
+        }
 
     def runtime_context(self, snapshot: AccountSnapshot) -> Dict[str, object]:
         active_tbox = {}

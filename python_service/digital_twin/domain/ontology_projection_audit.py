@@ -24,6 +24,82 @@ def _clean_symbols(symbols: Iterable[object]) -> List[str]:
     })
 
 
+INFERENCE_REUSE_PROOF_VERSION = "target-inference-reuse-proof-v1"
+
+
+def inference_reuse_scope_plan(scope_plan: Iterable[object], limit: int = 260) -> List[Dict[str, object]]:
+    """Keep the immutable facts needed to prove a later target-rule reuse.
+
+    This is operational provenance, not a second rule engine.  A later
+    projection compares these TypeDB ABox scope identities with its candidate
+    Manifest and still asks TypeDB to evaluate every selected RuleBox rule.
+    """
+    rows: List[Dict[str, object]] = []
+    for item in scope_plan or []:
+        if not isinstance(item, dict):
+            continue
+        scope_id = str(item.get("scopeId") or "").strip()
+        if not scope_id:
+            continue
+        semantic_fingerprints = item.get("semanticFingerprints")
+        dependencies = item.get("dependencyScopeIds")
+        rows.append({
+            "scopeId": scope_id,
+            "scopeType": str(item.get("scopeType") or "").strip(),
+            "scopeFamily": str(item.get("scopeFamily") or "").strip(),
+            "impactScopeFamilies": sorted({
+                str(value or "").strip()
+                for value in (item.get("impactScopeFamilies") or [])
+                if str(value or "").strip()
+            }),
+            "semanticFingerprints": {
+                str(key or "").strip(): str(value or "").strip()
+                for key, value in dict(semantic_fingerprints or {}).items()
+                if str(key or "").strip() and str(value or "").strip()
+            },
+            "generationId": str(item.get("generationId") or "").strip(),
+            "fingerprint": str(item.get("fingerprint") or "").strip(),
+            "baseFingerprint": str(item.get("baseFingerprint") or "").strip(),
+            "dependencyScopeIds": sorted({
+                str(value or "").strip()
+                for value in (dependencies or [])
+                if str(value or "").strip()
+            }),
+        })
+    return sorted(rows, key=lambda item: item["scopeId"])[:max(1, int(limit or 260))]
+
+
+def inference_reuse_scope_plan_fingerprint(scope_plan: Iterable[object]) -> str:
+    """Fingerprint only the persisted proof surface, not the full ABox."""
+    return _hash_payload(inference_reuse_scope_plan(scope_plan))
+
+
+def inference_reuse_proof_summary(proof: Dict[str, object]) -> Dict[str, object]:
+    """Persist bounded native-reuse evidence alongside a projection audit."""
+    values = dict(proof or {})
+    return {
+        "version": str(values.get("version") or INFERENCE_REUSE_PROOF_VERSION),
+        "status": str(values.get("status") or ""),
+        "reason": str(values.get("reason") or "")[:300],
+        "coverageComplete": bool(values.get("coverageComplete")),
+        "sourceAboxSnapshotId": str(values.get("sourceAboxSnapshotId") or ""),
+        "inferenceGenerationId": str(values.get("inferenceGenerationId") or ""),
+        "targetSymbols": _clean_symbols(values.get("targetSymbols") or []),
+        "matchedRuleIds": sorted({
+            str(value or "").strip()
+            for value in (values.get("matchedRuleIds") or [])
+            if str(value or "").strip()
+        })[:160],
+        "matchedRuleCount": int(values.get("matchedRuleCount") or 0),
+        "ruleboxRulesHash": str(values.get("ruleboxRulesHash") or ""),
+        "tboxFingerprint": str(values.get("tboxFingerprint") or ""),
+        "scopePlanFingerprint": str(values.get("scopePlanFingerprint") or ""),
+        "scopePlanCount": int(values.get("scopePlanCount") or 0),
+        "selectionApplied": bool(values.get("selectionApplied")),
+        "inheritedCoverage": bool(values.get("inheritedCoverage")),
+    }
+
+
 def projection_source_snapshot(snapshot: AccountSnapshot) -> Dict[str, object]:
     """Return the source payload needed to reproduce a material ABox generation.
 
@@ -57,6 +133,10 @@ def projection_result_summary(result: Dict[str, object]) -> Dict[str, object]:
     projection_scope = dict(values.get("projectionScope") or {})
     ontology_world = dict(values.get("ontologyWorld") or {})
     market_world = dict(values.get("marketWorld") or {})
+    inference_reuse_proof = inference_reuse_proof_summary(
+        values.get("inferenceReuseProof") if isinstance(values.get("inferenceReuseProof"), dict) else {}
+    )
+    prior_inference_reuse = dict(values.get("priorInferenceReuse") or {})
     return {
         "saved": bool(values.get("saved")),
         "status": str(values.get("status") or ""),
@@ -75,6 +155,16 @@ def projection_result_summary(result: Dict[str, object]) -> Dict[str, object]:
         "scopeTopologyVersion": str(projection_scope.get("scopeTopologyVersion") or ""),
         "scopeFamilyCounts": dict(projection_scope.get("scopeFamilyCounts") or {}),
         "inferenceImpactPlan": impact_plan,
+        "priorInferenceReuse": {
+            "reusable": bool(prior_inference_reuse.get("reusable")),
+            "proofSource": str(prior_inference_reuse.get("proofSource") or ""),
+            "proofRunId": str(prior_inference_reuse.get("proofRunId") or ""),
+            "matchedRuleCount": int(prior_inference_reuse.get("matchedRuleCount") or 0),
+            "fallbackReason": str(prior_inference_reuse.get("fallbackReason") or "")[:220],
+            "recomputedCandidateRuleCount": int(prior_inference_reuse.get("recomputedCandidateRuleCount") or 0),
+            "recomputedChangedScopeCount": int(prior_inference_reuse.get("recomputedChangedScopeCount") or 0),
+        },
+        "inferenceReuseProof": inference_reuse_proof,
         "entityCount": int(values.get("entityCount") or 0),
         "relationCount": int(values.get("relationCount") or 0),
         "activeAbox": {
@@ -318,6 +408,13 @@ def build_ontology_projection_run(
                 "scopeFamilyCounts": dict(worldview.get("scopeFamilyCounts") or {}),
                 "scopeDelta": dict(worldview.get("scopeDelta") or {}),
                 "inferenceImpactPlan": compact_inference_impact_plan(worldview.get("inferenceImpactPlan") or {}),
+                # Scope identifiers and semantic fingerprints are enough to
+                # prove a later target-scoped native-rule selection. Raw ABox
+                # facts remain in TypeDB and are never copied into MySQL.
+                "inferenceReuseScopePlan": inference_reuse_scope_plan(worldview.get("scopePlan") or []),
+                "inferenceReuseScopePlanFingerprint": inference_reuse_scope_plan_fingerprint(
+                    worldview.get("scopePlan") or []
+                ),
             },
             "tbox": {
                 "version": str(active_tbox.get("version") or active_tbox.get("tboxVersion") or ""),

@@ -6,6 +6,7 @@ from digital_twin.domain.ontology_projection_audit import (
     apply_projection_run_identity,
     build_ontology_projection_run,
     complete_ontology_projection_run,
+    inference_reuse_scope_plan_fingerprint,
     projection_run_from_payload,
     projection_source_snapshot,
 )
@@ -144,6 +145,260 @@ class OntologyProjectionAuditTests(unittest.TestCase):
             started_at="2026-07-20T00:04:05Z",
         )
         self.assertNotEqual(run.run_id, repeated.run_id)
+
+    def test_projection_run_keeps_a_bounded_scope_identity_for_later_native_reuse(self):
+        snapshot = source_snapshot()
+        graph = abox_graph()
+        graph.worldview["scopePlan"] = [{
+            "scopeId": "symbol:005930:market",
+            "scopeType": "symbol",
+            "scopeFamily": "market",
+            "impactScopeFamilies": ["market"],
+            "semanticFingerprints": {"market": "price-a"},
+            "generationId": "market-a",
+            "fingerprint": "fingerprint-a",
+            "baseFingerprint": "base-a",
+            "dependencyScopeIds": [],
+            # This source-only field must not be copied into the proof.
+            "entityCount": 999,
+        }]
+        fingerprint = material_graph_fingerprint(graph)
+        run = build_ontology_projection_run(snapshot, graph, fingerprint, "abox:proof", "typedb")
+        topology = run.context_payload["scopeTopology"]
+
+        self.assertEqual(1, len(topology["inferenceReuseScopePlan"]))
+        self.assertNotIn("entityCount", topology["inferenceReuseScopePlan"][0])
+        self.assertEqual(
+            inference_reuse_scope_plan_fingerprint(topology["inferenceReuseScopePlan"]),
+            topology["inferenceReuseScopePlanFingerprint"],
+        )
+
+    def test_recorder_uses_audited_target_scope_proof_when_active_inference_is_stale(self):
+        class ReuseRepository:
+            store_key = "typedb"
+
+            def active_abox_metadata(self):
+                return {"status": "ok", "aboxSnapshotId": "abox:current"}
+
+            def inferencebox_snapshot(self, _symbols=None, _limit=0):
+                return {"status": "stale-generation"}
+
+        prior_scope_plan = [
+            {
+                "scopeId": "symbol:005930:market",
+                "scopeType": "symbol",
+                "scopeFamily": "market",
+                "impactScopeFamilies": ["market"],
+                "semanticFingerprints": {"market": "price-a"},
+                "generationId": "market-a",
+                "fingerprint": "market-a",
+                "baseFingerprint": "market-a",
+                "dependencyScopeIds": [],
+            },
+            {
+                "scopeId": "symbol:005930:flow",
+                "scopeType": "symbol",
+                "scopeFamily": "flow",
+                "impactScopeFamilies": ["flow"],
+                "semanticFingerprints": {"flow": "flow-a"},
+                "generationId": "flow-a",
+                "fingerprint": "flow-a",
+                "baseFingerprint": "flow-a",
+                "dependencyScopeIds": [],
+            },
+            {
+                "scopeId": "symbol:005930:quality",
+                "scopeType": "symbol",
+                "scopeFamily": "quality",
+                "impactScopeFamilies": ["quality"],
+                "semanticFingerprints": {"quality": "quality-a"},
+                "generationId": "quality-a",
+                "fingerprint": "quality-a",
+                "baseFingerprint": "quality-a",
+                "dependencyScopeIds": [],
+            },
+        ]
+        candidate_scope_plan = [
+            {**prior_scope_plan[0], "generationId": "market-b", "fingerprint": "market-b", "semanticFingerprints": {"market": "price-b"}},
+            *prior_scope_plan[1:],
+        ]
+        scope_fingerprint = inference_reuse_scope_plan_fingerprint(prior_scope_plan)
+        audit_store = SimpleNamespace(latest=lambda **_kwargs: [{
+            "runId": "projection:prior",
+            "status": "ok",
+            "graphStore": "typedb",
+            "sourceSymbols": ["005930"],
+            "aboxSnapshotId": "abox:prior",
+            "activeAboxSnapshotId": "abox:prior",
+            "context": {
+                "scopeTopology": {
+                    "inferenceReuseScopePlan": prior_scope_plan,
+                    "inferenceReuseScopePlanFingerprint": scope_fingerprint,
+                },
+            },
+            "result": {
+                "inferenceReuseProof": {
+                    "status": "verified",
+                    "coverageComplete": True,
+                    "sourceAboxSnapshotId": "abox:prior",
+                    "inferenceGenerationId": "inference:prior",
+                    "targetSymbols": ["005930"],
+                    "matchedRuleIds": ["flow-rule"],
+                    "ruleboxRulesHash": "rulebox-current",
+                    "tboxFingerprint": "tbox-current",
+                    "scopePlanFingerprint": scope_fingerprint,
+                },
+            },
+        }])
+        recorder = PortfolioOntologyProjectionRecorder(ReuseRepository(), projection_run_store=audit_store)
+        recorder._rulebox_impact_rules = [
+            {
+                "ruleId": "market-rule",
+                "enabled": True,
+                "conditions": [{"conditionId": "price", "kind": "subject_property", "field": "currentPrice"}],
+            },
+            {
+                "ruleId": "flow-rule",
+                "enabled": True,
+                "conditions": [{"conditionId": "flow", "kind": "subject_property", "field": "volumeRatio"}],
+            },
+            {
+                "ruleId": "quality-rule",
+                "enabled": True,
+                "conditions": [{"conditionId": "quality", "kind": "subject_property", "field": "freshnessStatus"}],
+            },
+        ]
+
+        context = recorder.prior_rule_selection_context(
+            source_snapshot(),
+            ["005930"],
+            candidate_scope_plan=candidate_scope_plan,
+            rulebox_rules_hash="rulebox-current",
+            tbox_fingerprint="tbox-current",
+        )
+
+        self.assertTrue(context["reusable"])
+        self.assertEqual("audited-target-scope-proof", context["proofSource"])
+        self.assertEqual("projection:prior", context["proofRunId"])
+        self.assertEqual(["flow-rule"], context["matchedRuleIds"])
+        self.assertEqual(["market-rule"], context["inferenceImpactPlan"]["candidateRuleIds"])
+        self.assertEqual(1, context["recomputedChangedScopeCount"])
+
+    def test_recorder_rejects_audited_proof_when_rulebox_version_changed(self):
+        class ReuseRepository:
+            store_key = "typedb"
+
+            def active_abox_metadata(self):
+                return {"status": "ok", "aboxSnapshotId": "abox:current"}
+
+            def inferencebox_snapshot(self, _symbols=None, _limit=0):
+                return {"status": "stale-generation"}
+
+        scope_plan = [{
+            "scopeId": "symbol:005930:market",
+            "scopeType": "symbol",
+            "scopeFamily": "market",
+            "impactScopeFamilies": ["market"],
+            "semanticFingerprints": {"market": "price-a"},
+            "generationId": "market-a",
+            "fingerprint": "market-a",
+            "baseFingerprint": "market-a",
+            "dependencyScopeIds": [],
+        }]
+        fingerprint = inference_reuse_scope_plan_fingerprint(scope_plan)
+        audit_store = SimpleNamespace(latest=lambda **_kwargs: [{
+            "runId": "projection:prior",
+            "status": "ok",
+            "graphStore": "typedb",
+            "sourceSymbols": ["005930"],
+            "activeAboxSnapshotId": "abox:prior",
+            "context": {"scopeTopology": {
+                "inferenceReuseScopePlan": scope_plan,
+                "inferenceReuseScopePlanFingerprint": fingerprint,
+            }},
+            "result": {"inferenceReuseProof": {
+                "status": "verified",
+                "coverageComplete": True,
+                "sourceAboxSnapshotId": "abox:prior",
+                "targetSymbols": ["005930"],
+                "matchedRuleIds": [],
+                "ruleboxRulesHash": "rulebox-old",
+                "tboxFingerprint": "tbox-current",
+                "scopePlanFingerprint": fingerprint,
+            }},
+        }])
+        recorder = PortfolioOntologyProjectionRecorder(ReuseRepository(), projection_run_store=audit_store)
+        recorder._rulebox_impact_rules = [{
+            "ruleId": "market-rule",
+            "enabled": True,
+            "conditions": [{"conditionId": "price", "kind": "subject_property", "field": "currentPrice"}],
+        }]
+
+        context = recorder.prior_rule_selection_context(
+            source_snapshot(),
+            ["005930"],
+            candidate_scope_plan=[{**scope_plan[0], "generationId": "market-b", "fingerprint": "market-b", "semanticFingerprints": {"market": "price-b"}}],
+            rulebox_rules_hash="rulebox-current",
+            tbox_fingerprint="tbox-current",
+        )
+
+        self.assertFalse(context["reusable"])
+        self.assertEqual("prior-aligned-inference-unavailable", context["fallbackReason"])
+
+    def test_recorder_persists_a_complete_typedb_target_reuse_proof(self):
+        snapshot = source_snapshot()
+        graph = abox_graph()
+        graph.worldview["scopePlan"] = [{
+            "scopeId": "symbol:005930:market",
+            "scopeType": "symbol",
+            "scopeFamily": "market",
+            "impactScopeFamilies": ["market"],
+            "semanticFingerprints": {"market": "price-a"},
+            "generationId": "market-a",
+            "fingerprint": "market-a",
+            "baseFingerprint": "market-a",
+            "dependencyScopeIds": [],
+        }]
+        fingerprint = material_graph_fingerprint(graph)
+        run = build_ontology_projection_run(
+            snapshot,
+            graph,
+            fingerprint,
+            "abox:proof",
+            "typedb",
+            target_symbols=["005930"],
+            rulebox_metadata={"ruleboxRulesHash": "rulebox-current"},
+        )
+        result = {
+            "saved": True,
+            "status": "ok",
+            "graphStore": "typedb",
+            "inferenceBox": {
+                "status": "ok",
+                "inferenceGenerationId": "inference:proof",
+                "sourceAboxSnapshotId": "abox:proof",
+                "generationAligned": True,
+                "nativeTypeDbReasoningCompleted": True,
+                "targetSymbols": ["005930"],
+            },
+            "ruleboxExecution": {
+                "nativeInferenceEvaluationComplete": True,
+                "typedbNativeRuleMatchedCount": 1,
+                "typedbNativeRuleMatchedRuleIds": ["market-rule"],
+                "nativeRuleSelectionApplied": False,
+            },
+        }
+
+        PortfolioOntologyProjectionRecorder(SimpleNamespace(store_key="typedb")).attach_inference_reuse_proof(run, result)
+        completed = complete_ontology_projection_run(run, result)
+
+        self.assertEqual("verified", result["inferenceReuseProof"]["status"])
+        self.assertTrue(result["inferenceReuseProof"]["coverageComplete"])
+        self.assertEqual(["market-rule"], result["inferenceReuseProof"]["matchedRuleIds"])
+        self.assertEqual(
+            "verified",
+            completed.result_payload["inferenceReuseProof"]["status"],
+        )
 
     def test_run_keeps_tenant_and_world_identity_in_the_audit_contract(self):
         snapshot = source_snapshot()

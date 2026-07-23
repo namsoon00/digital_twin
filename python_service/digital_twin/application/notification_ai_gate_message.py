@@ -555,6 +555,14 @@ def hypothesis_decision_brief_text_rows(
     freshness = brief.get("freshnessWarnings") if isinstance(brief.get("freshnessWarnings"), list) else []
     if freshness:
         append_unique_text(rows, "가설 판단 제한: " + _compact_text_segments(freshness, 2, 160), 240)
+    quality = brief.get("qualityReview") if isinstance(brief.get("qualityReview"), dict) else {}
+    required = quality.get("reviewRequired") if isinstance(quality.get("reviewRequired"), list) else []
+    if required:
+        item = required[0] if isinstance(required[0], dict) else {}
+        label = str(item.get("qualityStateLabel") or "가설 품질 점검")
+        reason = _text(item.get("reason"), 180)
+        if reason:
+            append_unique_text(rows, "가설 검토 제한: " + label + ". " + reason, 260)
     return rows[:4]
 
 

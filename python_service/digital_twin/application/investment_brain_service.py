@@ -35,6 +35,9 @@ class InvestmentBrainService:
         hypothesis_lifecycle_store=None,
         hypothesis_review_service=None,
         hypothesis_lifecycle_policy_service=None,
+        hypothesis_quality_review_service=None,
+        hypothesis_policy_governance_service=None,
+        hypothesis_outcome_replay_service=None,
     ):
         self.monitor_store = monitor_store
         self.ontology_repository = ontology_repository
@@ -48,6 +51,9 @@ class InvestmentBrainService:
         self.hypothesis_lifecycle_store = hypothesis_lifecycle_store
         self.hypothesis_review_service = hypothesis_review_service
         self.hypothesis_lifecycle_policy_service = hypothesis_lifecycle_policy_service
+        self.hypothesis_quality_review_service = hypothesis_quality_review_service
+        self.hypothesis_policy_governance_service = hypothesis_policy_governance_service
+        self.hypothesis_outcome_replay_service = hypothesis_outcome_replay_service
 
     def ask(self, message: str, account_id: str = "", symbol: str = "") -> Dict[str, object]:
         message = " ".join(str(message or "").split())
@@ -532,6 +538,17 @@ class InvestmentBrainService:
                 "reason": str(error)[:180],
                 "items": [],
             }
+        if self.hypothesis_quality_review_service:
+            try:
+                brief["qualityReview"] = self.hypothesis_quality_review_service.assess(brief)
+            except Exception as error:  # noqa: BLE001 - review-only quality context must stay non-blocking.
+                brief["qualityReview"] = {
+                    "status": "unavailable",
+                    "decisionEligibility": "quality-review-only",
+                    "automaticDeployment": False,
+                    "reason": str(error)[:180],
+                    "items": [],
+                }
         relation_context["hypothesisDecisionBrief"] = brief
         prompt_context = relation_context.get("promptContext") if isinstance(relation_context.get("promptContext"), dict) else {}
         if prompt_context:
@@ -688,7 +705,7 @@ class InvestmentBrainService:
                 "events": [],
                 "reason": "가설 검토 읽기 모델이 구성되지 않았습니다.",
             }
-        return {
+        workspace = {
             "engine": "ontology-investment-brain",
             **self.hypothesis_review_service.workspace(
                 account_id=account_id,
@@ -699,6 +716,18 @@ class InvestmentBrainService:
                 event_limit=event_limit,
             ),
         }
+        if self.hypothesis_quality_review_service:
+            try:
+                workspace["qualityReview"] = self.hypothesis_quality_review_service.assess(workspace)
+            except Exception as error:  # noqa: BLE001 - the read model remains usable when review storage is unavailable.
+                workspace["qualityReview"] = {
+                    "status": "unavailable",
+                    "decisionEligibility": "quality-review-only",
+                    "automaticDeployment": False,
+                    "reason": str(error)[:180],
+                    "items": [],
+                }
+        return workspace
 
     def update_hypothesis_lifecycle_policy(
         self,
@@ -711,6 +740,133 @@ class InvestmentBrainService:
         return {
             "engine": "ontology-investment-brain",
             **self.hypothesis_lifecycle_policy_service.update(rule_id, policy, change_reason),
+        }
+
+    def preview_hypothesis_lifecycle_policy(
+        self,
+        rule_id: str,
+        policy: Dict[str, object],
+        change_reason: str = "",
+        symbols=None,
+        world_id: str = "",
+    ) -> Dict[str, object]:
+        if not self.hypothesis_policy_governance_service:
+            raise RuntimeError("가설 RuleBox 거버넌스 서비스가 구성되지 않았습니다.")
+        return {
+            "engine": "ontology-investment-brain",
+            **self.hypothesis_policy_governance_service.preview(
+                rule_id,
+                policy,
+                change_reason,
+                symbols=symbols,
+                world_id=world_id,
+            ),
+        }
+
+    def approve_hypothesis_lifecycle_policy(
+        self,
+        rule_id: str,
+        policy: Dict[str, object],
+        change_reason: str = "",
+        author: str = "web-main",
+        symbols=None,
+        world_id: str = "",
+    ) -> Dict[str, object]:
+        if not self.hypothesis_policy_governance_service:
+            raise RuntimeError("가설 RuleBox 거버넌스 서비스가 구성되지 않았습니다.")
+        return {
+            "engine": "ontology-investment-brain",
+            **self.hypothesis_policy_governance_service.approve(
+                rule_id,
+                policy,
+                change_reason,
+                author=author,
+                symbols=symbols,
+                world_id=world_id,
+            ),
+        }
+
+    def hypothesis_policy_versions(self, limit: int = 40) -> Dict[str, object]:
+        if not self.hypothesis_policy_governance_service:
+            return {
+                "engine": "ontology-investment-brain",
+                "status": "unavailable",
+                "versions": [],
+                "reason": "가설 RuleBox 거버넌스 서비스가 구성되지 않았습니다.",
+            }
+        return {
+            "engine": "ontology-investment-brain",
+            **self.hypothesis_policy_governance_service.versions(limit),
+        }
+
+    def record_hypothesis_policy_baseline(self, author: str = "web-main") -> Dict[str, object]:
+        if not self.hypothesis_policy_governance_service:
+            raise RuntimeError("가설 RuleBox 거버넌스 서비스가 구성되지 않았습니다.")
+        return {
+            "engine": "ontology-investment-brain",
+            **self.hypothesis_policy_governance_service.record_baseline(author=author),
+        }
+
+    def restore_hypothesis_policy_version(
+        self,
+        version_id: str,
+        change_reason: str = "",
+        author: str = "web-main",
+        symbols=None,
+        world_id: str = "",
+    ) -> Dict[str, object]:
+        if not self.hypothesis_policy_governance_service:
+            raise RuntimeError("가설 RuleBox 거버넌스 서비스가 구성되지 않았습니다.")
+        return {
+            "engine": "ontology-investment-brain",
+            **self.hypothesis_policy_governance_service.restore(
+                version_id,
+                change_reason,
+                author=author,
+                symbols=symbols,
+                world_id=world_id,
+            ),
+        }
+
+    def review_hypothesis_quality(
+        self,
+        account_id: str = "",
+        symbol: str = "",
+        market_id: str = "",
+        scope: str = "",
+        reviewed_by: str = "web-main",
+    ) -> Dict[str, object]:
+        if not self.hypothesis_quality_review_service:
+            raise RuntimeError("가설 품질 검토 서비스가 구성되지 않았습니다.")
+        workspace = self.hypothesis_workspace(
+            account_id=account_id,
+            symbol=symbol,
+            market_id=market_id,
+            scope=scope,
+            limit=300,
+            event_limit=100,
+        )
+        return {
+            "engine": "ontology-investment-brain",
+            **self.hypothesis_quality_review_service.propose(workspace, reviewed_by=reviewed_by),
+        }
+
+    def replay_hypothesis_outcomes(
+        self,
+        account_id: str = "",
+        symbol: str = "",
+        limit: int = 500,
+    ) -> Dict[str, object]:
+        if not self.hypothesis_outcome_replay_service:
+            return {
+                "engine": "ontology-investment-brain",
+                "status": "unavailable",
+                "reason": "가설 사후 결과 재생 서비스가 구성되지 않았습니다.",
+                "mutated": False,
+            }
+        return {
+            "engine": "ontology-investment-brain",
+            **self.hypothesis_outcome_replay_service.run(account_id=account_id, symbol=symbol, limit=limit),
         }
 
     def research_runs(self, account_id: str = "", symbol: str = "", limit: int = 50) -> Dict[str, object]:

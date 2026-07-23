@@ -352,11 +352,16 @@ class MySQLMarketTimeSeriesStore(MySQLOperationalConnection):
             parsed_target = parse_timestamp(target_at)
             if not request_id or not symbol or not parsed_target:
                 continue
+            try:
+                target_delay_minutes = int(float(target.get("maximumObservationDelayMinutes") or delay_minutes))
+            except (TypeError, ValueError):
+                target_delay_minutes = delay_minutes
+            target_delay_minutes = max(1, min(60 * 24 * 14, target_delay_minutes))
             clean_targets.append({
                 "requestId": request_id,
                 "symbol": symbol,
                 "targetAt": target_at,
-                "deadlineAt": (parsed_target + timedelta(minutes=delay_minutes)).isoformat().replace("+00:00", "Z"),
+                "deadlineAt": (parsed_target + timedelta(minutes=target_delay_minutes)).isoformat().replace("+00:00", "Z"),
             })
             if len(clean_targets) >= 1000:
                 break

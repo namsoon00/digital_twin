@@ -25,6 +25,7 @@ from ..domain.ontology_rulebox_governance import (
     normalize_rule_change_candidate,
     rulebox_governance_candidates,
     rulebox_rules_hash,
+    rulebox_version_payload,
 )
 from ..domain.ontology_change_impact import compact_inference_impact_plan
 from ..domain.ontology_schema import default_tbox_metadata
@@ -50,6 +51,7 @@ from .graph_store_payloads import (
     number_or_none,
 )
 from .graph_store_rulebox import (
+    add_rulebox_version_concept,
     rulebox_graph_from_rules,
     rulebox_rules_from_payload,
     rulebox_snapshot_from_rows,
@@ -3266,6 +3268,30 @@ class ScopedABoxManifestMixin:
     def save_rulebox(self, payload: Dict[str, object] = None) -> Dict[str, object]:
         snapshot = self.rulebox_snapshot()
         snapshot.update({"saved": False, "status": "disabled"})
+        return snapshot
+
+    def restore_rulebox_version(
+        self,
+        version_id: str,
+        change_reason: str = "",
+        author: str = "",
+    ) -> Dict[str, object]:
+        snapshot = self.rulebox_snapshot()
+        snapshot.update({
+            "saved": False,
+            "status": "disabled",
+            "reason": "TypeDB ontology storage is not configured.",
+            "restoredVersionId": str(version_id or ""),
+        })
+        return snapshot
+
+    def ensure_rulebox_version_baseline(self, author: str = "") -> Dict[str, object]:
+        snapshot = self.rulebox_snapshot()
+        snapshot.update({
+            "saved": False,
+            "status": "disabled",
+            "reason": "TypeDB ontology storage is not configured.",
+        })
         return snapshot
 
     def run_rulebox(self, payload: Dict[str, object] = None) -> Dict[str, object]:
@@ -7807,6 +7833,37 @@ relation ontology-assertion,
             rules = rulebox_rules_from_payload(payload or {})
         except ValueError as error:
             return {"configured": True, "saved": False, "status": "invalid-rulebox", "graphStore": "typedb", "reason": str(error)}
+        source = dict(payload or {}) if isinstance(payload, dict) else {}
+        version = rulebox_version_payload(
+            rules,
+            utc_now(),
+            str(source.get("changeReason") or ""),
+            str(source.get("author") or "local-admin"),
+            str(source.get("status") or "saved"),
+        )
+        baseline_result = {}
+        # The first governed save must retain the previous active RuleBox as a
+        # restoration point.  Later writes already have immutable versions.
+        try:
+            previous_snapshot = self.rulebox_snapshot()
+            previous_rows = previous_snapshot.get("rules") if isinstance(previous_snapshot.get("rules"), list) else []
+            previous_versions = previous_snapshot.get("versions") if isinstance(previous_snapshot.get("versions"), list) else []
+            if previous_rows and not previous_versions:
+                previous_rules = rulebox_rules_from_payload({"rules": previous_rows})
+                baseline = rulebox_version_payload(
+                    previous_rules,
+                    utc_now(),
+                    "정책 변경 전 자동 기준선",
+                    "system-baseline",
+                    "baseline",
+                )
+                baseline_result = self.append_rulebox_version(baseline)
+        except Exception as error:  # noqa: BLE001 - a failed audit append must not hide a valid active RuleBox.
+            baseline_result = {
+                "saved": False,
+                "status": "error",
+                "reason": str(error)[:220],
+            }
         self._last_rules = list(rules)
         self.clear_rulebox_snapshot_cache()
         save_result = self.save_graph(rulebox_graph_from_rules(
@@ -7814,6 +7871,9 @@ relation ontology-assertion,
             include_tbox=False,
             language_registry=investment_language_registry(runtime_settings()),
         ))
+        version_result = {}
+        if bool(save_result.get("saved")):
+            version_result = self.append_rulebox_version(version)
         self.clear_rulebox_snapshot_cache()
         snapshot = self.rulebox_snapshot()
         snapshot.update({
@@ -7821,8 +7881,171 @@ relation ontology-assertion,
             "status": save_result.get("status") or snapshot.get("status"),
             "reason": save_result.get("reason") or snapshot.get("reason") or "",
             "saveResult": save_result,
+            "savedVersion": {
+                key: version.get(key)
+                for key in [
+                    "id", "versionLabel", "rulesHash", "shortHash", "ruleCount", "conditionCount",
+                    "derivationCount", "createdAt", "changeReason", "author", "status",
+                ]
+            } if bool(version_result.get("saved")) else {},
+            "versionAudit": version_result or {
+                "saved": False,
+                "status": "skipped",
+                "reason": "RuleBox 저장이 완료되지 않아 버전 기록을 만들지 않았습니다.",
+            },
+            "preSaveBaselineAudit": baseline_result,
         })
         return snapshot
+
+    def append_rulebox_version(self, version: Dict[str, object]) -> Dict[str, object]:
+        """Append immutable RuleBox governance history without replacing it.
+
+        A normal static graph save replaces every row in the boxes contained
+        in the graph.  Version history must survive a later RuleBox edit, so
+        this write deliberately has no delete phase.
+        """
+        if not self.address:
+            return {
+                "configured": False,
+                "saved": False,
+                "status": "disabled",
+                "graphStore": "typedb",
+                "reason": "TypeDB ontology storage is not configured.",
+            }
+        imported = self.driver_imports()
+        if imported[0] is None:
+            return self.driver_missing_result(imported[1], PortfolioOntology("typedb-rulebox-governance"))
+        graph = PortfolioOntology("typedb-rulebox-governance")
+        add_rulebox_version_concept(graph, version)
+        if not graph.entities:
+            return {
+                "configured": True,
+                "saved": False,
+                "status": "invalid-version",
+                "graphStore": "typedb",
+                "reason": "RuleBox version payload is missing its ID.",
+            }
+        try:
+            def operation():
+                driver = self.open_driver(imported)
+                try:
+                    self.ensure_database(driver)
+                    self.ensure_schema(driver, imported)
+                    self.write_graph(driver, imported, graph, delete_boxes=[])
+                finally:
+                    self.close_driver(driver)
+            self.with_typedb_retries(operation)
+        except Exception as error:  # noqa: BLE001 - preserve a saved RuleBox even if its audit append failed.
+            return {
+                "configured": True,
+                "saved": False,
+                "status": "error",
+                "graphStore": "typedb",
+                "reasonCode": typedb_error_code(error),
+                "reason": str(error)[:220],
+                "versionId": str(version.get("id") or ""),
+            }
+        return {
+            "configured": True,
+            "saved": True,
+            "status": "ok",
+            "graphStore": "typedb",
+            "versionId": str(version.get("id") or ""),
+        }
+
+    def restore_rulebox_version(
+        self,
+        version_id: str,
+        change_reason: str = "",
+        author: str = "",
+    ) -> Dict[str, object]:
+        target = str(version_id or "").strip()
+        if not target:
+            return {
+                "configured": bool(self.address),
+                "saved": False,
+                "status": "invalid-version",
+                "graphStore": "typedb",
+                "reason": "RuleBox version ID is required.",
+            }
+        snapshot = self.rulebox_snapshot()
+        version = next(
+            (item for item in snapshot.get("versions") or [] if str(item.get("id") or "").strip() == target),
+            None,
+        )
+        if not isinstance(version, dict):
+            return {
+                "configured": bool(self.address),
+                "saved": False,
+                "status": "version-not-found",
+                "graphStore": "typedb",
+                "reason": "RuleBox version was not found: " + target,
+            }
+        try:
+            rules = json.loads(str(version.get("rulesJson") or "[]"))
+        except json.JSONDecodeError as error:
+            return {
+                "configured": bool(self.address),
+                "saved": False,
+                "status": "invalid-version",
+                "graphStore": "typedb",
+                "reason": "Stored RuleBox version is not valid JSON: " + str(error),
+            }
+        result = self.save_rulebox({
+            "rules": rules,
+            "changeReason": str(change_reason or "").strip() or ("RuleBox 버전 복원: " + target),
+            "author": str(author or "local-admin").strip() or "local-admin",
+            "status": "restored",
+            "source": "rulebox-version-restore",
+        })
+        result["restoredVersionId"] = target
+        return result
+
+    def ensure_rulebox_version_baseline(self, author: str = "") -> Dict[str, object]:
+        """Record the active RuleBox once without changing its executable rows."""
+        snapshot = self.rulebox_snapshot()
+        if str(snapshot.get("status") or "") != "ok":
+            return {
+                "configured": bool(self.address),
+                "saved": False,
+                "status": str(snapshot.get("status") or "unavailable"),
+                "graphStore": "typedb",
+                "reason": str(snapshot.get("reason") or "현재 RuleBox를 읽지 못했습니다."),
+            }
+        existing = snapshot.get("versions") if isinstance(snapshot.get("versions"), list) else []
+        if existing:
+            return {
+                "configured": True,
+                "saved": False,
+                "status": "unchanged",
+                "graphStore": "typedb",
+                "versionCount": len(existing),
+                "reason": "기존 RuleBox 버전이 이미 있습니다.",
+            }
+        try:
+            rules = rulebox_rules_from_payload({"rules": snapshot.get("rules") or []})
+        except ValueError as error:
+            return {
+                "configured": True,
+                "saved": False,
+                "status": "invalid-rulebox",
+                "graphStore": "typedb",
+                "reason": str(error),
+            }
+        version = rulebox_version_payload(
+            rules,
+            utc_now(),
+            "기존 활성 RuleBox 기준선 기록",
+            str(author or "system-baseline").strip() or "system-baseline",
+            "baseline",
+        )
+        result = self.append_rulebox_version(version)
+        self.clear_rulebox_snapshot_cache()
+        result["baselineVersion"] = {
+            key: version.get(key)
+            for key in ["id", "versionLabel", "shortHash", "rulesHash", "createdAt", "changeReason", "author", "status"]
+        }
+        return result
 
     def verify_typedb_native_any_conditions(
         self,
@@ -9769,6 +9992,36 @@ relation ontology-assertion,
                 "reason": "TypeDB InferenceBox 기준선 조회 실패: " + str(error)[:180],
                 "relationCount": 0,
                 "traceCount": 0,
+            }
+        if typedb_bool(payload.get("policyOnly")):
+            # Hypothesis lifecycle and outcome contracts are read by the
+            # lifecycle audit after native relation materialization.  Their
+            # preview must not replace a deployed schema function merely to
+            # validate a non-predicate policy edit.
+            return {
+                "configured": True,
+                "status": "ok",
+                "graphStore": "typedb",
+                "source": "typedbPolicyContractPreview",
+                "reasoningMode": "typedb-read-only-policy-contract-preview",
+                "reason": "현재 ABox·InferenceBox 기준선과 RuleBox 계약 형식을 읽기 전용으로 확인했습니다.",
+                "validationOnly": True,
+                "mutatedOperationalRuleBox": False,
+                "wroteInferenceBox": False,
+                "candidateRuleCount": len(enabled_rules),
+                "candidateRuleIds": [rule.rule_id for rule in enabled_rules],
+                "targetSymbols": target_symbols,
+                "worldId": world_id,
+                "baselineInferenceBox": baseline_inferencebox,
+                "diff": materialization_preview_diff_payload(
+                    baseline_inferencebox,
+                    0,
+                    len(enabled_rules),
+                    False,
+                ),
+                "nativeCandidateExecutionSkipped": True,
+                "nativeReasoningProfile": native_profile,
+                "typedbQueryMetrics": self.query_metrics_snapshot(),
             }
         try:
             force_sync = typedb_bool(payload.get("forceSchemaFunctionSync")) or typedb_bool(payload.get("forceRuleFunctionSync"))

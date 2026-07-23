@@ -28907,6 +28907,97 @@ body.oa-overlay-open {
   min-height: 58px;
 }
 
+.hypothesis-governance-panel {
+  display: grid;
+  gap: 10px;
+  min-width: 0;
+  padding: var(--ds-panel-pad-y) var(--ds-panel-pad-x);
+  border-top: 1px solid var(--line);
+  border-bottom: 1px solid var(--line);
+  background: var(--panel-soft);
+}
+
+.hypothesis-governance-metrics,
+.hypothesis-outcome-contract {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 7px;
+  min-width: 0;
+}
+
+.hypothesis-governance-result {
+  margin: 0;
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 720;
+  line-height: 1.5;
+}
+
+.hypothesis-policy-version-list {
+  display: grid;
+  gap: 7px;
+  min-width: 0;
+}
+
+.hypothesis-policy-version-list > div,
+.hypothesis-policy-preview,
+.hypothesis-policy-contract,
+.hypothesis-outcome-contract {
+  display: grid;
+  gap: 5px;
+  min-width: 0;
+  padding: 10px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--panel);
+}
+
+.hypothesis-policy-version-list strong,
+.hypothesis-policy-preview strong,
+.hypothesis-policy-contract strong,
+.hypothesis-outcome-contract b {
+  color: var(--ink);
+  font-size: 12px;
+  font-weight: 900;
+}
+
+.hypothesis-policy-version-list span,
+.hypothesis-policy-version-list p,
+.hypothesis-policy-preview span,
+.hypothesis-outcome-contract span {
+  margin: 0;
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 710;
+  line-height: 1.45;
+  overflow-wrap: anywhere;
+}
+
+.hypothesis-policy-version-list .icon-text-button {
+  justify-self: start;
+  margin-top: 3px;
+}
+
+.hypothesis-policy-preview.watch {
+  border-color: color-mix(in srgb, var(--green) 55%, var(--line));
+}
+
+.hypothesis-policy-preview.caution {
+  border-color: color-mix(in srgb, var(--amber) 55%, var(--line));
+}
+
+.hypothesis-policy-contract {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
+.hypothesis-policy-contract > strong {
+  grid-column: 1 / -1;
+}
+
+.hypothesis-policy-contract .wide {
+  grid-column: 1 / -1;
+}
+
 .hypothesis-workspace-empty {
   display: grid;
   gap: 7px;
@@ -28941,5 +29032,9 @@ body.oa-overlay-open {
 
   .hypothesis-freshness-list > div p {
     grid-column: auto;
+  }
+
+  .hypothesis-policy-contract {
+    grid-template-columns: minmax(0, 1fr);
   }
 }

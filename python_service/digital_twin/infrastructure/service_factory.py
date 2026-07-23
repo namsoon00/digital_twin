@@ -10,8 +10,11 @@ from ..application.investment_research_orchestration_service import InvestmentRe
 from ..application.hypothesis_proposal_service import HypothesisProposalService
 from ..application.hypothesis_lifecycle_service import HypothesisLifecycleService
 from ..application.hypothesis_lifecycle_policy_service import HypothesisLifecyclePolicyService
+from ..application.hypothesis_policy_governance_service import HypothesisPolicyGovernanceService
 from ..application.hypothesis_research_planner_service import HypothesisResearchPlanningService
 from ..application.hypothesis_review_service import HypothesisReviewService
+from ..application.hypothesis_quality_review_service import HypothesisQualityReviewService
+from ..application.hypothesis_outcome_replay_service import HypothesisOutcomeReplayService
 from ..application.investment_strategy_proposal_service import InvestmentStrategyProposalService
 from ..application.investment_calendar_candidate_service import InvestmentCalendarCandidateService
 from ..application.investment_calendar_discovery_service import InvestmentCalendarDiscoveryService
@@ -249,6 +252,14 @@ def build_investment_brain_service(settings=None) -> InvestmentBrainService:
     ontology_repository = ontology_repository_from_settings(configured_settings)
     decision_episode_store = stores.investment_decision_episode_store(configured_settings)
     lifecycle_store = stores.hypothesis_lifecycle_store(configured_settings)
+    hypothesis_review_service = HypothesisReviewService(
+        hypothesis_lifecycle_store=lifecycle_store,
+        decision_episode_store=decision_episode_store,
+        ontology_repository=ontology_repository,
+        settings=configured_settings,
+    )
+    hypothesis_lifecycle_policy_service = HypothesisLifecyclePolicyService(ontology_repository)
+    hypothesis_quality_review_service = HypothesisQualityReviewService(decision_episode_store=decision_episode_store)
     return InvestmentBrainService(
         monitor_store=stores.monitor_store(configured_settings),
         ontology_repository=ontology_repository,
@@ -259,13 +270,18 @@ def build_investment_brain_service(settings=None) -> InvestmentBrainService:
         research_store=research_store,
         settings=configured_settings,
         hypothesis_lifecycle_store=lifecycle_store,
-        hypothesis_review_service=HypothesisReviewService(
-            hypothesis_lifecycle_store=lifecycle_store,
-            decision_episode_store=decision_episode_store,
+        hypothesis_review_service=hypothesis_review_service,
+        hypothesis_lifecycle_policy_service=hypothesis_lifecycle_policy_service,
+        hypothesis_quality_review_service=hypothesis_quality_review_service,
+        hypothesis_policy_governance_service=HypothesisPolicyGovernanceService(
             ontology_repository=ontology_repository,
-            settings=configured_settings,
+            lifecycle_policy_service=hypothesis_lifecycle_policy_service,
         ),
-        hypothesis_lifecycle_policy_service=HypothesisLifecyclePolicyService(ontology_repository),
+        hypothesis_outcome_replay_service=HypothesisOutcomeReplayService(
+            decision_episode_store=decision_episode_store,
+            hypothesis_review_service=hypothesis_review_service,
+            quality_review_service=hypothesis_quality_review_service,
+        ),
     )
 
 

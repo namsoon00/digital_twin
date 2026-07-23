@@ -15,10 +15,11 @@ from ..domain.hypothesis_review import (
     upper,
     values,
 )
+from ..domain.hypothesis_outcome_contract import merge_outcome_contracts
 from ..domain.ontology_rulebox_contracts import GraphInferenceRule
 
 
-HYPOTHESIS_DECISION_BRIEF_VERSION = "hypothesis-decision-brief-v1"
+HYPOTHESIS_DECISION_BRIEF_VERSION = "hypothesis-decision-brief-v2"
 
 
 def bounded_int(settings: Mapping[str, object], key: str, fallback: int, lower: int, upper_bound: int) -> int:
@@ -123,6 +124,38 @@ class HypothesisReviewService:
         rows = store.list(account_id=account_id, symbol=symbol, limit=limit or self.episode_limit())
         return unique_rows(rows, "episodeId")
 
+    def episodes_for_symbols(
+        self,
+        symbols: Iterable[str],
+        account_id: str = "",
+        limit_per_symbol: int = 20,
+    ) -> Dict[str, List[Dict[str, object]]]:
+        """Return bounded histories grouped by symbol with a bulk-store path."""
+        clean_symbols = []
+        for raw in symbols or []:
+            symbol = upper(raw)
+            if symbol and symbol not in clean_symbols:
+                clean_symbols.append(symbol)
+        if not clean_symbols:
+            return {}
+        store = self.decision_episode_store
+        rows = []
+        if store and hasattr(store, "list_for_symbols"):
+            rows = store.list_for_symbols(
+                clean_symbols,
+                account_id=account_id,
+                limit_per_symbol=limit_per_symbol,
+            )
+        else:
+            for symbol in clean_symbols:
+                rows.extend(self.episodes(account_id=account_id, symbol=symbol, limit=limit_per_symbol))
+        grouped: Dict[str, List[Dict[str, object]]] = {symbol: [] for symbol in clean_symbols}
+        for row in unique_rows(rows, "episodeId"):
+            symbol = upper(row.get("symbol"))
+            if symbol in grouped and len(grouped[symbol]) < limit_per_symbol:
+                grouped[symbol].append(row)
+        return grouped
+
     def active_lifecycle_ids(self, relation_context: Mapping[str, object]) -> set:
         hypothesis_set = relation_context.get("hypothesisSet") if isinstance(relation_context.get("hypothesisSet"), Mapping) else {}
         if not hypothesis_set and isinstance(relation_context.get("investmentBrain"), Mapping):
@@ -145,6 +178,20 @@ class HypothesisReviewService:
             if not text(item.get("marketHypothesisId")) and not text(item.get("accountHypothesisOverlayId")) and text(item.get("hypothesisId")):
                 ids.add("hypothesis:" + text(item.get("hypothesisId")))
         return ids
+
+    def active_rule_ids(self, relation_context: Mapping[str, object]) -> List[str]:
+        hypothesis_set = relation_context.get("hypothesisSet") if isinstance(relation_context.get("hypothesisSet"), Mapping) else {}
+        if not hypothesis_set and isinstance(relation_context.get("investmentBrain"), Mapping):
+            brain = relation_context.get("investmentBrain") or {}
+            hypothesis_set = brain.get("hypothesisSet") if isinstance(brain.get("hypothesisSet"), Mapping) else {}
+        rule_ids: List[str] = []
+        for item in hypothesis_set.get("hypotheses") or []:
+            if not isinstance(item, Mapping):
+                continue
+            for rule_id in values(item.get("supportingRuleIds")):
+                if rule_id not in rule_ids:
+                    rule_ids.append(rule_id)
+        return rule_ids[:80]
 
     def assessment_for_record(
         self,
@@ -189,6 +236,20 @@ class HypothesisReviewService:
             for record in records
         ]
         items.sort(key=lambda item: (str(item.get("scope") or ""), str(item.get("lifecycleKey") or "")))
+        policy_by_rule = self.rule_policy_map()
+        active_rule_ids = self.active_rule_ids(context)
+        outcome_contracts_by_rule = {
+            rule_id: {
+                "ruleId": rule_id,
+                "label": str((policy_by_rule.get(rule_id) or {}).get("label") or rule_id),
+                "outcomeContract": dict(((policy_by_rule.get(rule_id) or {}).get("policy") or {}).get("outcomeContract") or {}),
+            }
+            for rule_id in active_rule_ids
+            if rule_id in policy_by_rule
+        }
+        merged_contract = merge_outcome_contracts(
+            [item.get("outcomeContract") for item in outcome_contracts_by_rule.values()]
+        ) if outcome_contracts_by_rule else {}
         material = [item for item in items if item.get("materialChange") or item.get("state") in {"invalidated", "expired"}]
         next_data = []
         freshness_warnings = []
@@ -228,6 +289,8 @@ class HypothesisReviewService:
             "materialChanges": material[:8],
             "nextDataRequirements": next_data[:12],
             "freshnessWarnings": freshness_warnings[:8],
+            "outcomeContractsByRule": outcome_contracts_by_rule,
+            "selectedOutcomeContractCandidate": merged_contract,
             "research": research,
         }
 
@@ -271,6 +334,7 @@ class HypothesisReviewService:
                 "ruleId": rule.rule_id,
                 "label": rule.label,
                 "policy": rule.resolved_hypothesis_lifecycle().to_dict(),
+                "outcomeContract": rule.resolved_hypothesis_lifecycle().outcome_contract.to_dict(),
                 "editable": editable,
             }
         return result
@@ -287,21 +351,34 @@ class HypothesisReviewService:
         records = self.current_records(account_id, symbol, market_id, scope, limit)
         events = self.lifecycle_events(account_id, symbol, market_id, scope, event_limit)
         policy_by_rule = self.rule_policy_map()
-        market_cache: Dict[str, List[Dict[str, object]]] = {}
-        account_cache: Dict[str, List[Dict[str, object]]] = {}
+        symbols = []
+        for record in records:
+            item_symbol = upper(record.get("symbol"))
+            if item_symbol and item_symbol not in symbols:
+                symbols.append(item_symbol)
+        per_symbol_limit = max(3, min(60, self.episode_limit() // max(1, len(symbols))))
+        market_cache = self.episodes_for_symbols(symbols, limit_per_symbol=per_symbol_limit)
+        account_cache: Dict[str, Dict[str, List[Dict[str, object]]]] = {}
+        account_ids = []
+        for record in records:
+            record_account_id = text(record.get("accountId") or account_id)
+            if record_account_id and record_account_id not in account_ids:
+                account_ids.append(record_account_id)
+        for record_account_id in account_ids[:20]:
+            account_cache[record_account_id] = self.episodes_for_symbols(
+                symbols,
+                account_id=record_account_id,
+                limit_per_symbol=per_symbol_limit,
+            )
         items = []
         for record in records:
             item_symbol = upper(record.get("symbol"))
-            if item_symbol not in market_cache:
-                market_cache[item_symbol] = self.episodes(symbol=item_symbol)
-            account_key = text(record.get("accountId") or account_id) + "|" + item_symbol
-            if account_key not in account_cache:
-                account_cache[account_key] = self.episodes(text(record.get("accountId") or account_id), item_symbol)
+            record_account_id = text(record.get("accountId") or account_id)
             assessment = self.assessment_for_record(
                 record,
-                text(record.get("accountId") or account_id),
-                market_cache[item_symbol],
-                account_cache[account_key],
+                record_account_id,
+                market_cache.get(item_symbol) or [],
+                (account_cache.get(record_account_id) or {}).get(item_symbol) or [],
             )
             item = lifecycle_review_item(record, assessment)
             item["transitions"] = [
@@ -339,6 +416,16 @@ class HypothesisReviewService:
                 "outcomeStateCounts": outcome_counts,
                 "materialChangeCount": sum(1 for item in items if item.get("materialChange")),
                 "activeCount": sum(1 for item in items if item.get("state") not in {"invalidated", "expired"}),
+            },
+            "operational": {
+                "episodeFetchMode": "bulk-by-symbol" if hasattr(self.decision_episode_store, "list_for_symbols") else "bounded-fallback",
+                "symbolCount": len(symbols),
+                "accountScopeCount": len(account_ids),
+                "episodeLimitPerSymbol": per_symbol_limit,
+                "recordLimit": max(1, min(1000, int(limit or 100))),
+                "eventLimit": max(1, min(1000, int(event_limit or 100))),
+                "bounded": True,
+                "note": "가설 검토는 종목별 제한된 사후 관측을 읽으며, 현재 투자 판단을 변경하지 않습니다.",
             },
             "items": items,
             "events": events,

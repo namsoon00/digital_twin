@@ -2,6 +2,8 @@ import re
 from dataclasses import asdict, dataclass, field as dataclass_field
 from typing import Dict, Iterable, List
 
+from .hypothesis_outcome_contract import HypothesisOutcomeContract
+
 
 GRAPH_REASONER_VERSION = "typedb-rulebox-graph-reasoner-v1"
 WATCHLIST_TARGET_ROLE = "watchlist"
@@ -47,6 +49,7 @@ class HypothesisLifecyclePolicy:
     required_freshness_domains: List[str] = dataclass_field(default_factory=list)
     next_data_requirements: List[str] = dataclass_field(default_factory=list)
     invalidation_mode: str = "typedb-rule-not-materialized"
+    outcome_contract: HypothesisOutcomeContract = dataclass_field(default_factory=HypothesisOutcomeContract)
 
     def to_dict(self) -> Dict[str, object]:
         return {
@@ -56,6 +59,7 @@ class HypothesisLifecyclePolicy:
             "requiredFreshnessDomains": list(self.required_freshness_domains or []),
             "nextDataRequirements": list(self.next_data_requirements or []),
             "invalidationMode": str(self.invalidation_mode or "typedb-rule-not-materialized"),
+            "outcomeContract": self.outcome_contract.to_dict(),
         }
 
     @staticmethod
@@ -97,6 +101,11 @@ class HypothesisLifecyclePolicy:
                 or payload.get("invalidationMode")
                 or "typedb-rule-not-materialized"
             ).strip() or "typedb-rule-not-materialized",
+            outcome_contract=HypothesisOutcomeContract.from_dict(
+                payload.get("outcome_contract")
+                or payload.get("outcomeContract")
+                or {}
+            ),
         )
 
 
@@ -278,6 +287,7 @@ class GraphInferenceRule:
             next_data_requirements=_unique_strings(configured.next_data_requirements),
             invalidation_mode=str(configured.invalidation_mode or "typedb-rule-not-materialized").strip()
             or "typedb-rule-not-materialized",
+            outcome_contract=configured.outcome_contract,
         )
 
     def to_dict(self) -> Dict[str, object]:

@@ -3895,16 +3895,102 @@ class DigitalTwinHandler(BaseHTTPRequestHandler):
                 event_limit=event_limit,
             ))
 
+        if path == "/api/investment-brain/hypothesis-policy-versions" and self.command == "GET":
+            try:
+                limit = int(first_query(query, "limit") or 40)
+            except ValueError:
+                limit = 40
+            return self.send_payload(200, build_investment_brain_service().hypothesis_policy_versions(limit=limit))
+
+        if path == "/api/investment-brain/hypothesis-policy-versions/baseline" and self.command == "POST":
+            if not self.ensure_writable("공유 모드에서는 RuleBox 기준선 버전을 기록할 수 없습니다."):
+                return
+            body = self.read_json_body()
+            return self.send_payload(200, build_investment_brain_service().record_hypothesis_policy_baseline(
+                author=configured(body.get("author")) or "web-main",
+            ))
+
+        if path == "/api/investment-brain/hypothesis-replay" and self.command in {"GET", "POST"}:
+            body = self.read_json_body() if self.command == "POST" else {}
+            try:
+                limit = int(body.get("limit") or first_query(query, "limit") or 500)
+            except (TypeError, ValueError):
+                limit = 500
+            return self.send_payload(200, build_investment_brain_service().replay_hypothesis_outcomes(
+                account_id=configured(body.get("accountId")) or first_query(query, "accountId"),
+                symbol=configured(body.get("symbol")) or first_query(query, "symbol"),
+                limit=limit,
+            ))
+
+        if path == "/api/investment-brain/hypothesis-quality-review" and self.command == "POST":
+            if not self.ensure_writable("공유 모드에서는 가설 품질 검토 제안을 저장할 수 없습니다."):
+                return
+            body = self.read_json_body()
+            return self.send_payload(200, build_investment_brain_service().review_hypothesis_quality(
+                account_id=configured(body.get("accountId")),
+                symbol=configured(body.get("symbol")),
+                market_id=configured(body.get("marketId")),
+                scope=configured(body.get("scope")),
+                reviewed_by=configured(body.get("reviewedBy")) or "web-main",
+            ))
+
+        lifecycle_policy_preview_match = re.match(r"^/api/investment-brain/hypothesis-policies/([^/]+)/preview$", path)
+        if lifecycle_policy_preview_match and self.command == "POST":
+            if not self.ensure_writable("공유 모드에서는 가설 수명주기 정책을 미리보기할 수 없습니다."):
+                return
+            body = self.read_json_body()
+            policy = body.get("policy") if isinstance(body.get("policy"), dict) else body
+            return self.send_payload(200, build_investment_brain_service().preview_hypothesis_lifecycle_policy(
+                urllib.parse.unquote(lifecycle_policy_preview_match.group(1)),
+                policy,
+                configured(body.get("changeReason")),
+                symbols=body.get("symbols") or body.get("symbol"),
+                world_id=configured(body.get("worldId")),
+            ))
+
+        lifecycle_policy_approve_match = re.match(r"^/api/investment-brain/hypothesis-policies/([^/]+)/approve$", path)
+        if lifecycle_policy_approve_match and self.command == "POST":
+            if not self.ensure_writable("공유 모드에서는 가설 수명주기 정책을 승인할 수 없습니다."):
+                return
+            body = self.read_json_body()
+            policy = body.get("policy") if isinstance(body.get("policy"), dict) else body
+            return self.send_payload(200, build_investment_brain_service().approve_hypothesis_lifecycle_policy(
+                urllib.parse.unquote(lifecycle_policy_approve_match.group(1)),
+                policy,
+                configured(body.get("changeReason")),
+                author=configured(body.get("author")) or "web-main",
+                symbols=body.get("symbols") or body.get("symbol"),
+                world_id=configured(body.get("worldId")),
+            ))
+
+        policy_version_restore_match = re.match(r"^/api/investment-brain/hypothesis-policy-versions/([^/]+)/restore$", path)
+        if policy_version_restore_match and self.command == "POST":
+            if not self.ensure_writable("공유 모드에서는 RuleBox 버전을 복원할 수 없습니다."):
+                return
+            body = self.read_json_body()
+            return self.send_payload(200, build_investment_brain_service().restore_hypothesis_policy_version(
+                urllib.parse.unquote(policy_version_restore_match.group(1)),
+                configured(body.get("changeReason")),
+                author=configured(body.get("author")) or "web-main",
+                symbols=body.get("symbols") or body.get("symbol"),
+                world_id=configured(body.get("worldId")),
+            ))
+
         lifecycle_policy_match = re.match(r"^/api/investment-brain/hypothesis-policies/([^/]+)$", path)
         if lifecycle_policy_match and self.command == "PATCH":
             if not self.ensure_writable("공유 모드에서는 가설 수명주기 정책을 변경할 수 없습니다."):
                 return
             body = self.read_json_body()
             policy = body.get("policy") if isinstance(body.get("policy"), dict) else body
-            return self.send_payload(200, build_investment_brain_service().update_hypothesis_lifecycle_policy(
+            # Backward-compatible route: retain the endpoint but remove the
+            # old direct-write bypass from the web surface.
+            return self.send_payload(200, build_investment_brain_service().approve_hypothesis_lifecycle_policy(
                 urllib.parse.unquote(lifecycle_policy_match.group(1)),
                 policy,
                 configured(body.get("changeReason")),
+                author=configured(body.get("author")) or "web-main",
+                symbols=body.get("symbols") or body.get("symbol"),
+                world_id=configured(body.get("worldId")),
             ))
 
         if path == "/api/investment-brain/research-runs" and self.command == "GET":

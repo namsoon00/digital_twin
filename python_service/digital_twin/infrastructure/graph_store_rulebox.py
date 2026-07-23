@@ -2,7 +2,7 @@ import json
 import re
 from typing import Dict, Iterable, List
 
-from ..domain.ontology_contracts import PortfolioOntology
+from ..domain.ontology_contracts import OntologyEntity, OntologyRelation, PortfolioOntology, entity_id
 from ..domain.investment_ubiquitous_language import add_investment_language_governance_concepts
 from ..domain.ontology_rulebox_catalog import default_graph_inference_rules
 from ..domain.ontology_rulebox_contracts import GRAPH_REASONER_VERSION, GraphInferenceRule
@@ -58,12 +58,15 @@ def rulebox_graph_from_rules(
     rules: Iterable[GraphInferenceRule],
     include_tbox: bool = True,
     language_registry: Dict[str, object] = None,
+    rulebox_version: Dict[str, object] = None,
 ) -> PortfolioOntology:
     graph = PortfolioOntology("typedb-rulebox-admin")
     if include_tbox:
         graph.entities.extend(tbox_entities())
         graph.relations.extend(tbox_relations())
     add_rulebox_concepts(graph, rules)
+    if isinstance(rulebox_version, dict) and str(rulebox_version.get("id") or "").strip():
+        add_rulebox_version_concept(graph, rulebox_version)
     if language_registry is not None:
         add_investment_language_governance_concepts(graph, language_registry)
     tbox = default_tbox_metadata()
@@ -85,6 +88,51 @@ def rulebox_graph_from_rules(
         "languageRegistryVersion": str((language_registry or {}).get("version") or ""),
     }
     return graph
+
+
+def add_rulebox_version_concept(graph: PortfolioOntology, version: Dict[str, object]) -> None:
+    """Persist an immutable RuleBox payload for audit and restoration."""
+
+    version_key = str(version.get("id") or "").strip()
+    if not version_key:
+        return
+    registry_id = entity_id("rule-registry", GRAPH_REASONER_VERSION)
+    version_id = entity_id("rulebox-version", version_key)
+    graph.entities.append(OntologyEntity(
+        version_id,
+        str(version.get("label") or version_key),
+        "rulebox-version",
+        {
+            "ontologyBox": "RuleBoxGovernance",
+            "boundedContext": "reasoning-insight",
+            "tboxClass": "RuleBoxVersion",
+            "versionId": version_key,
+            "versionLabel": version.get("versionLabel"),
+            "rulesHash": version.get("rulesHash"),
+            "shortHash": version.get("shortHash"),
+            "ruleCount": version.get("ruleCount"),
+            "conditionCount": version.get("conditionCount"),
+            "derivationCount": version.get("derivationCount"),
+            "createdAt": version.get("createdAt"),
+            "changeReason": version.get("changeReason"),
+            "author": version.get("author"),
+            "status": version.get("status") or "saved",
+            "engineVersion": version.get("engineVersion") or GRAPH_REASONER_VERSION,
+            "rulesJson": version.get("rulesJson") or "[]",
+        },
+    ))
+    graph.relations.append(OntologyRelation(
+        registry_id,
+        version_id,
+        "HAS_RULEBOX_VERSION",
+        weight=1.0,
+        properties={
+            "ontologyBox": "RuleBoxGovernance",
+            "boundedContext": "reasoning-insight",
+            "versionId": version_key,
+            "source": "rulebox-governance",
+        },
+    ))
 
 def rulebox_store_snapshot_unavailable(status: str, reason: str = "", source: str = "typedb") -> Dict[str, object]:
     bootstrap_rules = rulebox_rules_to_payload(default_graph_inference_rules())
@@ -127,7 +175,11 @@ def rulebox_snapshot_from_rows(rowsets: Dict[str, List[Dict[str, object]]], sour
         if row.get("relationType")
     ))
     payload = rulebox_rules_to_payload(rules)
-    versions = [rulebox_version_from_row(row) for row in (rowsets.get("versions") or [])]
+    versions = sorted(
+        [rulebox_version_from_row(row) for row in (rowsets.get("versions") or [])],
+        key=lambda item: str(item.get("createdAt") or ""),
+        reverse=True,
+    )
     candidates = [rule_change_candidate_from_row(row) for row in (rowsets.get("candidates") or [])]
     return {
         "configured": True,
@@ -148,7 +200,7 @@ def rulebox_snapshot_from_rows(rowsets: Dict[str, List[Dict[str, object]]], sour
 
 def rulebox_version_from_row(row: Dict[str, object]) -> Dict[str, object]:
     return {
-        "id": str(row.get("id") or ""),
+        "id": str(row.get("versionId") or row.get("id") or ""),
         "label": str(row.get("label") or ""),
         "versionLabel": str(row.get("versionLabel") or row.get("shortHash") or ""),
         "rulesHash": str(row.get("rulesHash") or ""),
@@ -161,6 +213,7 @@ def rulebox_version_from_row(row: Dict[str, object]) -> Dict[str, object]:
         "author": str(row.get("author") or ""),
         "engineVersion": str(row.get("engineVersion") or ""),
         "createdAt": str(row.get("createdAt") or ""),
+        "rulesJson": str(row.get("rulesJson") or ""),
     }
 
 def rule_change_candidate_from_row(row: Dict[str, object]) -> Dict[str, object]:

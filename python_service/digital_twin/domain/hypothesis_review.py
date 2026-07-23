@@ -13,10 +13,11 @@ from datetime import timedelta
 from typing import Dict, Iterable, List, Mapping, Sequence
 
 from .hypothesis_lifecycle import HYPOTHESIS_LIFECYCLE_STATE_LABELS, parse_timestamp
+from .hypothesis_outcome_contract import resolved_outcome_contract
 from .ontology_rulebox_contracts import HypothesisLifecyclePolicy
 
 
-HYPOTHESIS_OUTCOME_REVIEW_VERSION = "hypothesis-outcome-review-v1"
+HYPOTHESIS_OUTCOME_REVIEW_VERSION = "hypothesis-outcome-review-v2"
 OUTCOME_STATES = (
     "supported",
     "contradicted",
@@ -166,6 +167,9 @@ def eligible_outcome_rows(
     rows: List[Dict[str, object]] = []
     excluded_count = 0
     matched_episode_count = 0
+    excluded_by_reason: Dict[str, int] = {}
+    missing_domains: List[str] = []
+    matched_episode_ids: List[str] = []
     seen = set()
     for value in episodes or []:
         episode = as_dict(value)
@@ -173,12 +177,22 @@ def eligible_outcome_rows(
             continue
         matched_episode_count += 1
         episode_id = text(episode.get("episodeId"))
+        if episode_id and episode_id not in matched_episode_ids:
+            matched_episode_ids.append(episode_id)
         for raw_outcome in episode.get("outcomes") or []:
             outcome = as_dict(raw_outcome)
             payload = outcome.get("payload") if isinstance(outcome.get("payload"), Mapping) else {}
             eligibility = text(payload.get("calibrationEligibility"))
             if eligibility != "eligible":
                 excluded_count += 1
+                # Older decision episodes predate the outcome contract. They
+                # are intentionally excluded, but must remain distinguishable
+                # from a new data-quality or timing failure.
+                reason = eligibility or "legacy-eligibility-not-recorded"
+                excluded_by_reason[reason] = int(excluded_by_reason.get(reason) or 0) + 1
+                for domain in values(payload.get("missingObservationDomains")):
+                    if domain not in missing_domains:
+                        missing_domains.append(domain)
                 continue
             horizon = max(0, integer(payload.get("horizonMinutes")))
             key = "|".join([episode_id, str(horizon), text(outcome.get("outcomeId"))])
@@ -197,7 +211,10 @@ def eligible_outcome_rows(
     return {
         "rows": rows,
         "matchedEpisodeCount": matched_episode_count,
+        "matchedEpisodeIds": matched_episode_ids[:100],
         "excludedOutcomeCount": excluded_count,
+        "excludedOutcomeReasons": excluded_by_reason,
+        "missingObservationDomains": missing_domains,
     }
 
 
@@ -252,7 +269,12 @@ def outcome_assessment_for_lifecycle(
     """Summarise later observations without turning them into a decision score."""
 
     lifecycle = dict(lifecycle or {})
-    minimum = max(1, min(100, integer(minimum_samples, 3)))
+    policy = lifecycle_policy_payload(lifecycle)
+    contract = resolved_outcome_contract(
+        policy.get("outcomeContract") if isinstance(policy.get("outcomeContract"), Mapping) else {},
+        fallback_minimum_samples=max(1, min(100, integer(minimum_samples, 3))),
+    )
+    minimum = max(1, min(1000, integer(contract.get("minimumIndependentEpisodes"), minimum_samples)))
     gathered = eligible_outcome_rows(lifecycle, episodes)
     rows = list(gathered["rows"])
     overall_rows = select_latest_outcome_per_episode(rows)
@@ -284,8 +306,12 @@ def outcome_assessment_for_lifecycle(
         "symbol": upper(lifecycle.get("symbol")),
         "familyId": text(lifecycle.get("familyId")),
         "minimumSampleCount": minimum,
+        "outcomeContract": contract,
         "matchedEpisodeCount": gathered["matchedEpisodeCount"],
+        "matchedEpisodeIds": gathered["matchedEpisodeIds"],
         "excludedOutcomeCount": gathered["excludedOutcomeCount"],
+        "excludedOutcomeReasons": gathered["excludedOutcomeReasons"],
+        "missingObservationDomains": gathered["missingObservationDomains"],
         "horizonAssessments": horizon_assessments,
         "decisionEligibility": "historical-review-only",
         "automaticDeployment": False,

@@ -54,6 +54,28 @@ def add_investment_brain_concepts(
         })
         add_relation(graph, stock_id, episode_id, "HAS_DECISION_EPISODE", weight=1.0, properties={"source": "investment-brain-memory"})
         add_relation(graph, portfolio_node_id, episode_id, "HAS_DECISION_EPISODE", weight=1.0, properties={"source": "investment-brain-memory"})
+        facts_at_decision = episode.get("factsAtDecision") if isinstance(episode.get("factsAtDecision"), dict) else {}
+        outcome_contract = facts_at_decision.get("hypothesisOutcomeContract") if isinstance(facts_at_decision.get("hypothesisOutcomeContract"), dict) else {}
+        if outcome_contract:
+            contract_key = str(episode.get("episodeId") or episode_key) + ":outcome-contract"
+            contract_id = add_entity(graph, "hypothesis-outcome-contract", contract_key, symbol + " 사후 관측 계약", {
+                "tboxClass": "HypothesisOutcomeContract",
+                **dict(outcome_contract),
+                "symbol": symbol,
+                "accountId": portfolio_id,
+                "decisionEligibility": "review-only-not-action-selector",
+                "automaticDeployment": False,
+                "source": "RuleBox-hypothesis-outcome-contract-snapshot",
+            })
+            add_relation(graph, episode_id, contract_id, "USES_HYPOTHESIS_OUTCOME_CONTRACT", weight=1.0, properties={
+                "source": "RuleBox-hypothesis-outcome-contract-snapshot",
+            })
+            add_relation(graph, stock_id, contract_id, "HAS_HYPOTHESIS_OUTCOME_CONTRACT", weight=1.0, properties={
+                "source": "RuleBox-hypothesis-outcome-contract-snapshot",
+            })
+            add_relation(graph, portfolio_node_id, contract_id, "HAS_HYPOTHESIS_OUTCOME_CONTRACT", weight=1.0, properties={
+                "source": "RuleBox-hypothesis-outcome-contract-snapshot",
+            })
         question_key = str(question.get("questionId") or "").strip()
         if question_key:
             question_id = add_entity(graph, "investment-question", question_key, str(question.get("text") or "투자 질문"), {
@@ -544,6 +566,9 @@ def add_hypothesis_outcome_assessment_concepts(
             "contradictedCount": assessment.get("contradictedCount"),
             "inconclusiveCount": assessment.get("inconclusiveCount"),
             "excludedOutcomeCount": assessment.get("excludedOutcomeCount"),
+            "excludedOutcomeReasons": assessment.get("excludedOutcomeReasons") or {},
+            "missingObservationDomains": assessment.get("missingObservationDomains") or [],
+            "outcomeContract": assessment.get("outcomeContract") or {},
             "horizonAssessments": assessment.get("horizonAssessments") or [],
             "latestObservedAt": assessment.get("latestObservedAt"),
             "observationCohort": "portfolio-local",

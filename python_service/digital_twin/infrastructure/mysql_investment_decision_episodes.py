@@ -10,6 +10,10 @@ from ..domain.investment_brain import (
     stable_id,
     utc_now_iso,
 )
+from ..domain.hypothesis_outcome_contract import (
+    observation_domain_status,
+    resolved_outcome_contract,
+)
 from ..domain.decision_performance import evaluate_decision_performance
 from .mysql_operational_connection import MySQLOperationalConnection
 from .mysql_operational_helpers import _json_loads
@@ -65,6 +69,33 @@ class MySQLInvestmentDecisionEpisodeStore(MySQLOperationalConnection):
         return outcome_horizon_minutes(
             self.runtime_settings.get("investmentBrainOutcomeObservationMinutes") or "60,1440,10080",
         )
+
+    def outcome_minimum_samples(self) -> int:
+        try:
+            value = int(float(str(
+                self.runtime_settings.get("hypothesisOutcomeReviewMinimumSamples")
+                or self.runtime_settings.get("investmentBrainOutcomeReviewMinimumSamples")
+                or "3"
+            )))
+        except (TypeError, ValueError):
+            value = 3
+        return max(1, min(1000, value))
+
+    def episode_outcome_contract(self, episode: DecisionEpisode) -> Dict[str, object]:
+        facts = episode.facts_at_decision if isinstance(episode.facts_at_decision, dict) else {}
+        raw = facts.get("hypothesisOutcomeContract") if isinstance(facts.get("hypothesisOutcomeContract"), dict) else {}
+        return resolved_outcome_contract(
+            raw,
+            fallback_horizons=self.outcome_horizons(),
+            fallback_minimum_samples=self.outcome_minimum_samples(),
+            fallback_maximum_delay_minutes=self.outcome_max_delay_minutes(),
+        )
+
+    def episode_outcome_horizons(self, episode: DecisionEpisode) -> List[int]:
+        return outcome_horizon_minutes(self.episode_outcome_contract(episode).get("outcomeHorizonMinutes"))
+
+    def episode_outcome_max_delay_minutes(self, episode: DecisionEpisode) -> int:
+        return int(self.episode_outcome_contract(episode).get("maximumObservationDelayMinutes") or self.outcome_max_delay_minutes())
 
     def outcome_batch_size(self) -> int:
         try:
@@ -166,6 +197,49 @@ class MySQLInvestmentDecisionEpisodeStore(MySQLOperationalConnection):
             rows = connection.execute(sql, tuple(params)).fetchall()
         return self.hydrate_outcomes(self.episode_from_row(row) for row in rows or [])
 
+    def list_for_symbols(
+        self,
+        symbols: Iterable[str],
+        account_id: str = "",
+        limit_per_symbol: int = 20,
+    ) -> List[DecisionEpisode]:
+        """Fetch bounded episode history for many symbols without N+1 reads.
+
+        A workspace can include many holdings and market hypotheses.  A union
+        keeps the latest bounded history per symbol in a small number of
+        database round trips instead of issuing one query for every card.
+        """
+        clean_symbols = list(dict.fromkeys(
+            str(item or "").upper().strip()
+            for item in symbols or []
+            if str(item or "").strip()
+        ))[:120]
+        if not clean_symbols:
+            return []
+        per_symbol = max(1, min(80, int(limit_per_symbol or 20)))
+        rows: List[Dict[str, object]] = []
+        # Keep a generated query below operational limits for large accounts.
+        for offset in range(0, len(clean_symbols), 24):
+            chunk = clean_symbols[offset:offset + 24]
+            statements = []
+            params: List[object] = []
+            for symbol in chunk:
+                where = "symbol = %s"
+                statement_params: List[object] = [symbol]
+                if account_id:
+                    where += " AND account_id = %s"
+                    statement_params.append(str(account_id))
+                statements.append(
+                    "(SELECT payload_json, status, decided_at FROM investment_decision_episodes "
+                    "WHERE " + where + " ORDER BY decided_at DESC, episode_id DESC LIMIT %s)"
+                )
+                params.extend(statement_params)
+                params.append(per_symbol)
+            sql = " UNION ALL ".join(statements)
+            with self.connect() as connection:
+                rows.extend(connection.execute(sql, tuple(params)).fetchall() or [])
+        return self.hydrate_outcomes(self.episode_from_row(row) for row in rows)
+
     def performance(self, account_id: str = "", symbol: str = "", limit: int = 500) -> Dict[str, object]:
         try:
             minimum_samples = int(float(str(self.runtime_settings.get("investmentBrainPerformanceMinimumSamples") or "5")))
@@ -213,7 +287,8 @@ class MySQLInvestmentDecisionEpisodeStore(MySQLOperationalConnection):
         episodes = self.hydrate_outcomes(self.episode_from_row(row) for row in rows or [])
         targets: List[Dict[str, object]] = []
         for episode in episodes:
-            for horizon_minutes in due_outcome_horizon_minutes_all(episode, observed_stamp, self.outcome_horizons()):
+            contract = self.episode_outcome_contract(episode)
+            for horizon_minutes in due_outcome_horizon_minutes_all(episode, observed_stamp, self.episode_outcome_horizons(episode)):
                 target_at = outcome_target_at(episode, horizon_minutes)
                 if not target_at:
                     continue
@@ -227,6 +302,9 @@ class MySQLInvestmentDecisionEpisodeStore(MySQLOperationalConnection):
                     "horizonMinutes": horizon_minutes,
                     "decidedAt": episode.decided_at,
                     "targetAt": target_at,
+                    "maximumObservationDelayMinutes": contract.get("maximumObservationDelayMinutes"),
+                    "requiredObservationDomains": contract.get("requiredObservationDomains") or [],
+                    "hypothesisOutcomeContract": contract,
                 })
                 if len(targets) >= target_limit:
                     return targets
@@ -251,7 +329,7 @@ class MySQLInvestmentDecisionEpisodeStore(MySQLOperationalConnection):
             outcome_horizon_minutes = due_outcome_horizon_minutes(
                 episode,
                 observed_at,
-                self.outcome_horizons(),
+                self.episode_outcome_horizons(episode),
             )
             if not outcome_horizon_minutes:
                 continue
@@ -296,7 +374,8 @@ class MySQLInvestmentDecisionEpisodeStore(MySQLOperationalConnection):
             if not episode or str(episode.account_id or "") != str(account_id or ""):
                 continue
             horizon_minutes = int(item["horizonMinutes"])
-            if horizon_minutes not in self.outcome_horizons() or outcome_horizon_recorded(episode, horizon_minutes):
+            contract = self.episode_outcome_contract(episode)
+            if horizon_minutes not in self.episode_outcome_horizons(episode) or outcome_horizon_recorded(episode, horizon_minutes):
                 continue
             target_at = outcome_target_at(episode, horizon_minutes)
             observed_at = str(item["observedAt"])
@@ -310,7 +389,16 @@ class MySQLInvestmentDecisionEpisodeStore(MySQLOperationalConnection):
             change_pct = round(((current_price / decision_price) - 1) * 100, 4) if current_price and decision_price else 0.0
             stance = selected_hypothesis_stance(episode)
             delay_minutes = max(0.0, (observed_time - target_time).total_seconds() / 60.0)
-            calibration_eligible = delay_minutes <= self.outcome_max_delay_minutes()
+            contract_observation = observation_domain_status(facts, contract)
+            calibration_eligible = (
+                delay_minutes <= self.episode_outcome_max_delay_minutes(episode)
+                and not list(contract_observation.get("missingObservationDomains") or [])
+            )
+            eligibility = (
+                "eligible" if calibration_eligible
+                else "excluded-contract-data-gap" if contract_observation.get("missingObservationDomains")
+                else "excluded-delayed-observation"
+            )
             outcome = ObservedOutcome(
                 outcome_id=stable_id("decision-outcome", episode.episode_id, horizon_minutes),
                 episode_id=episode.episode_id,
@@ -327,12 +415,14 @@ class MySQLInvestmentDecisionEpisodeStore(MySQLOperationalConnection):
                     "observationSource": str(facts.get("observationSource") or facts.get("provider") or ""),
                     "sourceAsOf": canonical_investment_timestamp(facts.get("sourceAsOf")) or observed_at,
                     "dataQuality": str(facts.get("dataQuality") or "unknown"),
+                    "hypothesisOutcomeContract": contract,
+                    **contract_observation,
                     "horizonMinutes": horizon_minutes,
                     "targetAt": target_at,
                     "actualElapsedMinutes": round((observed_time - parse_datetime(episode.decided_at)).total_seconds() / 60.0, 2),
                     "observationDelayMinutes": round(delay_minutes, 2),
-                    "observationTiming": "on-time" if calibration_eligible else "delayed",
-                    "calibrationEligibility": "eligible" if calibration_eligible else "excluded-delayed-observation",
+                    "observationTiming": "on-time" if delay_minutes <= self.episode_outcome_max_delay_minutes(episode) else "delayed",
+                    "calibrationEligibility": eligibility,
                 },
             )
             self.save_outcome(episode, outcome)

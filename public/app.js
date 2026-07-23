@@ -508,6 +508,12 @@
     hypothesisWorkspaceError: "",
     activeHypothesisLifecycleKey: "",
     hypothesisPolicySaving: "",
+    hypothesisPolicyPreview: {},
+    hypothesisPolicyVersions: null,
+    hypothesisPolicyVersionsError: "",
+    hypothesisReplay: null,
+    hypothesisReplayLoading: false,
+    hypothesisQualityReviewAction: false,
     messageSchedules: [],
     messageSchedulesLoading: false,
     messageSchedulesError: "",
@@ -4982,6 +4988,7 @@
         items: [],
         events: []
       };
+      state.hypothesisPolicyVersions = { status: "preview", versions: [] };
       state.hypothesisWorkspaceLoaded = true;
       state.hypothesisWorkspaceError = "";
       return Promise.resolve(state.hypothesisWorkspace);
@@ -4989,12 +4996,24 @@
     if (state.hypothesisWorkspaceLoading && !force) return Promise.resolve(state.hypothesisWorkspace);
     state.hypothesisWorkspaceLoading = true;
     state.hypothesisWorkspaceError = "";
-    return requestJson("/api/investment-brain/hypotheses?limit=100&eventLimit=100", {
-      key: "hypothesis-workspace",
-      force: Boolean(force)
-    })
-      .then(function (payload) {
+    state.hypothesisPolicyVersionsError = "";
+    return Promise.all([
+      requestJson("/api/investment-brain/hypotheses?limit=100&eventLimit=100", {
+        key: "hypothesis-workspace",
+        force: Boolean(force)
+      }),
+      requestJson("/api/investment-brain/hypothesis-policy-versions?limit=20", {
+        key: "hypothesis-policy-versions",
+        force: Boolean(force)
+      }).catch(function (error) {
+        state.hypothesisPolicyVersionsError = error.message || "RuleBox 버전 이력을 읽지 못했습니다.";
+        return { status: "unavailable", versions: [] };
+      })
+    ])
+      .then(function (responses) {
+        var payload = responses[0];
         state.hypothesisWorkspace = payload && typeof payload === "object" ? payload : {};
+        state.hypothesisPolicyVersions = responses[1] && typeof responses[1] === "object" ? responses[1] : { versions: [] };
         state.hypothesisWorkspaceLoaded = true;
         syncActiveHypothesisLifecycleKey();
         return state.hypothesisWorkspace;
@@ -5042,6 +5061,17 @@
     return Math.round(value) + "분 뒤";
   }
 
+  function hypothesisObservationDomainLabel(value) {
+    return {
+      quote: "현재가",
+      trend: "가격 흐름",
+      flow: "거래 흐름",
+      research: "뉴스·공시",
+      portfolio: "보유 상태",
+      static: "기본 정보"
+    }[String(value || "").toLowerCase()] || String(value || "");
+  }
+
   function hypothesisStringList(value, limit) {
     var source = Array.isArray(value) ? value : (value ? [value] : []);
     var rows = [];
@@ -5078,6 +5108,82 @@
     ].join("");
   }
 
+  function hypothesisQualityTone(value) {
+    var stateValue = String(value || "").toLowerCase();
+    if (stateValue === "revision-required" || stateValue === "freshness-blocked") return "danger";
+    if (stateValue === "coverage-gap" || stateValue === "lifecycle-review") return "caution";
+    if (stateValue === "stable") return "watch";
+    return "hold";
+  }
+
+  function hypothesisQualityForItem(item) {
+    var payload = hypothesisWorkspacePayload();
+    var review = payload.qualityReview && typeof payload.qualityReview === "object" ? payload.qualityReview : {};
+    var key = String(item && item.lifecycleKey || "");
+    return (Array.isArray(review.items) ? review.items : []).filter(function (entry) {
+      return String(entry && entry.lifecycleKey || "") === key;
+    })[0] || null;
+  }
+
+  function renderHypothesisGovernancePanel(payload) {
+    var quality = payload && payload.qualityReview && typeof payload.qualityReview === "object" ? payload.qualityReview : {};
+    var qualitySummary = quality.summary && typeof quality.summary === "object" ? quality.summary : {};
+    var replay = state.hypothesisReplay && typeof state.hypothesisReplay === "object" ? state.hypothesisReplay : {};
+    var integrity = replay.integrity && typeof replay.integrity === "object" ? replay.integrity : {};
+    var versions = state.hypothesisPolicyVersions && typeof state.hypothesisPolicyVersions === "object" ? state.hypothesisPolicyVersions : {};
+    var operational = payload && payload.operational && typeof payload.operational === "object" ? payload.operational : {};
+    var versionRows = Array.isArray(versions.versions) ? versions.versions : [];
+    var readOnly = isStaticPreviewHost() || state.serverSettingsLocked;
+    var reviewRequired = Number(qualitySummary.reviewRequiredCount || 0);
+    return [
+      '<section class="hypothesis-governance-panel">',
+      '<div class="hypothesis-detail-section-head">',
+      '<div><strong>검증 운영</strong><p>사후 결과와 정책 변경은 분리해 기록합니다. 이 화면의 검토는 투자 행동을 자동으로 바꾸지 않습니다.</p></div>',
+      '<div class="settings-actions">',
+      '<button class="text-button" type="button" data-action="run-hypothesis-replay"' + (state.hypothesisReplayLoading ? ' disabled' : '') + '>' + escapeHtml(state.hypothesisReplayLoading ? "재생 중" : "사후 결과 재생") + '</button>',
+      '<button class="text-button" type="button" data-action="propose-hypothesis-quality-review"' + (readOnly || state.hypothesisQualityReviewAction ? ' disabled' : '') + '>' + escapeHtml(state.hypothesisQualityReviewAction ? "제안 저장 중" : "품질 검토 제안") + '</button>',
+      '</div>',
+      '</div>',
+      '<div class="hypothesis-governance-metrics">',
+      '<span class="tone-chip ' + escapeHtml(reviewRequired ? "caution" : "hold") + '">품질 검토 ' + escapeHtml(reviewRequired + "건") + '</span>',
+      '<span class="tone-chip ' + escapeHtml(integrity.passed === false ? "danger" : "hold") + '">' + escapeHtml(replay.status ? (integrity.passed === false ? "재생 점검 필요" : "재생 기록 있음") : "재생 전") + '</span>',
+      '<span class="tone-chip hold">RuleBox 버전 ' + escapeHtml(versionRows.length + "개") + '</span>',
+      operational.symbolCount != null ? '<span class="tone-chip hold">검토 범위 ' + escapeHtml(operational.symbolCount + "종목 · 종목당 " + (operational.episodeLimitPerSymbol || "-") + "건") + '</span>' : '',
+      '</div>',
+      replay.summary ? '<p class="hypothesis-governance-result">' + escapeHtml(replay.summary) + '</p>' : '',
+      operational.note ? '<p class="hypothesis-governance-result">' + escapeHtml(operational.note) + '</p>' : '',
+      state.hypothesisPolicyVersionsError ? '<p class="form-error">' + escapeHtml(state.hypothesisPolicyVersionsError) + '</p>' : '',
+      renderHypothesisPolicyVersions(versionRows, readOnly),
+      '</section>'
+    ].join("");
+  }
+
+  function renderHypothesisPolicyVersions(rows, readOnly) {
+    if (!rows.length) {
+      return [
+        '<p class="subtle hypothesis-governance-result">저장된 RuleBox 버전이 없습니다. 현재 활성 규칙을 기준선으로 한 번 기록하면 이후 변경을 복원할 수 있습니다.</p>',
+        readOnly ? '' : '<button class="text-button" type="button" data-action="record-hypothesis-policy-baseline">현재 규칙 기준선 기록</button>'
+      ].join("");
+    }
+    return [
+      '<div class="hypothesis-policy-version-list">',
+      rows.slice(0, 6).map(function (version) {
+        var id = String(version && version.id || "");
+        var label = version.versionLabel || version.shortHash || id;
+        var meta = [version.createdAt ? formatClock(version.createdAt) : "", version.author || "", version.status || ""].filter(Boolean).join(" · ");
+        return [
+          '<div>',
+          '<strong>' + escapeHtml(label) + '</strong>',
+          '<span>' + escapeHtml(meta || "RuleBox 버전") + '</span>',
+          version.changeReason ? '<p>' + escapeHtml(version.changeReason) + '</p>' : '',
+          '<button class="icon-text-button" type="button" data-hypothesis-policy-restore="' + escapeHtml(id) + '"' + (readOnly || !id ? ' disabled' : '') + '>복원 검토</button>',
+          '</div>'
+        ].join("");
+      }).join(""),
+      '</div>'
+    ].join("");
+  }
+
   function renderHypothesisWorkspacePanel() {
     var payload = hypothesisWorkspacePayload();
     var summary = payload.summary && typeof payload.summary === "object" ? payload.summary : {};
@@ -5103,6 +5209,7 @@
       renderHypothesisMetric("지지됨", outcomeCounts.supported || 0, "사후 관측", Number(outcomeCounts.supported || 0) ? "watch" : "hold"),
       renderHypothesisMetric("반증됨", outcomeCounts.contradicted || 0, "사후 관측", Number(outcomeCounts.contradicted || 0) ? "danger" : "hold"),
       '</div>',
+      renderHypothesisGovernancePanel(payload),
       state.hypothesisWorkspaceError ? '<p class="form-error">' + escapeHtml(state.hypothesisWorkspaceError) + '</p>' : '',
       state.hypothesisWorkspaceLoading && !state.hypothesisWorkspaceLoaded ? '<div class="rule-strip"><span>TypeDB 가설 수명주기와 사후 관측을 읽는 중입니다.</span></div>' : '',
       '<div class="hypothesis-workspace-layout">',
@@ -5198,6 +5305,7 @@
   function renderHypothesisOutcome(item) {
     var outcome = item && item.outcomeAssessment && typeof item.outcomeAssessment === "object" ? item.outcomeAssessment : {};
     var horizons = Array.isArray(outcome.horizonAssessments) ? outcome.horizonAssessments : [];
+    var contract = outcome.outcomeContract && typeof outcome.outcomeContract === "object" ? outcome.outcomeContract : {};
     if (!Object.keys(outcome).length) {
       return '<section class="hypothesis-detail-section"><strong>사후 결과</strong><p>아직 연결된 사후 관측이 없습니다.</p></section>';
     }
@@ -5217,8 +5325,32 @@
       horizons.length ? '<div class="hypothesis-horizon-list">' + horizons.map(function (row) {
         return '<div><b>' + escapeHtml(hypothesisHorizonLabel(row.horizonMinutes)) + '</b><span>' + escapeHtml(row.outcomeStateLabel || "표본 부족") + ' · 표본 ' + escapeHtml(row.sampleCount == null ? 0 : row.sampleCount) + '</span></div>';
       }).join("") + '</div>' : '',
+      Object.keys(contract).length ? [
+        '<div class="hypothesis-outcome-contract">',
+        '<b>관측 계약</b>',
+        '<span>확인 시점 ' + escapeHtml(hypothesisStringList(contract.outcomeHorizonMinutes, 6).map(hypothesisHorizonLabel).join(", ") || "기본") + '</span>',
+        '<span>필수 데이터 ' + escapeHtml(hypothesisStringList(contract.requiredObservationDomains, 6).map(hypothesisObservationDomainLabel).join(", ") || "현재가") + '</span>',
+        '<span>최소 표본 ' + escapeHtml(contract.minimumIndependentEpisodes == null ? "-" : contract.minimumIndependentEpisodes) + '건 · 최대 지연 ' + escapeHtml(contract.maximumObservationDelayMinutes == null ? "-" : contract.maximumObservationDelayMinutes) + '분</span>',
+        '</div>'
+      ].join("") : '',
+      outcome.missingObservationDomains && outcome.missingObservationDomains.length ? '<p class="subtle">필수 데이터가 비어 제외된 항목: ' + escapeHtml(hypothesisStringList(outcome.missingObservationDomains, 6).join(", ")) + '</p>' : '',
       outcome.excludedOutcomeCount ? '<p class="subtle">시점·품질 기준을 통과하지 못한 관측 ' + escapeHtml(outcome.excludedOutcomeCount) + '건은 결과 집계에서 제외했습니다.</p>' : '',
       '<p class="subtle">이 결과는 과거 검토용 기록이며 현재 투자 행동을 자동으로 바꾸지 않습니다.</p>',
+      '</section>'
+    ].join("");
+  }
+
+  function renderHypothesisQualityReview(item) {
+    var review = hypothesisQualityForItem(item);
+    if (!review) return "";
+    return [
+      '<section class="hypothesis-detail-section hypothesis-quality-review">',
+      '<div class="hypothesis-detail-section-head">',
+      '<div><strong>가설 품질 점검</strong><p>' + escapeHtml(review.reason || "사후 관측을 기준으로 가설의 검토 필요 여부를 확인합니다.") + '</p></div>',
+      '<span class="tone-chip ' + escapeHtml(hypothesisQualityTone(review.qualityState)) + '">' + escapeHtml(review.qualityStateLabel || "관찰 유지") + '</span>',
+      '</div>',
+      '<p>다음 확인: ' + escapeHtml(review.nextCheck || "새 관측과 다음 TypeDB 추론 세대를 확인합니다.") + '</p>',
+      '<p class="subtle">이 점검은 규칙을 자동 수정하거나 현재 투자 판단을 바꾸지 않습니다.</p>',
       '</section>'
     ].join("");
   }
@@ -5254,8 +5386,12 @@
     }
     return policies.slice(0, 4).map(function (entry) {
       var policy = entry && entry.policy && typeof entry.policy === "object" ? entry.policy : {};
+      var contract = policy.outcomeContract && typeof policy.outcomeContract === "object" ? policy.outcomeContract : {};
       var ruleId = String(entry && entry.ruleId || "");
+      var preview = state.hypothesisPolicyPreview && state.hypothesisPolicyPreview[ruleId] && typeof state.hypothesisPolicyPreview[ruleId] === "object" ? state.hypothesisPolicyPreview[ruleId] : {};
       var disabled = !entry.editable || isStaticPreviewHost() || state.serverSettingsLocked || state.hypothesisPolicySaving === ruleId;
+      var previewReady = preview.status === "ready-for-approval";
+      var approveDisabled = disabled || !previewReady;
       return [
         '<section class="hypothesis-detail-section hypothesis-policy-section">',
         '<div class="hypothesis-detail-section-head">',
@@ -5270,8 +5406,17 @@
         '<label class="setting-field"><span>반증 처리 방식</span><input name="invalidationMode" type="text" value="' + escapeHtml(hypothesisPolicyValue(policy, "invalidationMode")) + '"' + (disabled ? " disabled" : "") + '></label>',
         '<label class="setting-field wide"><span>필수 신선도 데이터</span><textarea name="requiredFreshnessDomains" rows="2"' + (disabled ? " disabled" : "") + '>' + escapeHtml(hypothesisPolicyValue(policy, "requiredFreshnessDomains")) + '</textarea></label>',
         '<label class="setting-field wide"><span>다음 확인 데이터</span><textarea name="nextDataRequirements" rows="2"' + (disabled ? " disabled" : "") + '>' + escapeHtml(hypothesisPolicyValue(policy, "nextDataRequirements")) + '</textarea></label>',
+        '<div class="hypothesis-policy-contract">',
+        '<strong>사후 관측 계약</strong>',
+        '<label class="setting-field wide"><span>확인 시점(분)</span><textarea name="outcomeHorizonMinutes" rows="2"' + (disabled ? " disabled" : "") + '>' + escapeHtml(hypothesisPolicyValue(contract, "outcomeHorizonMinutes")) + '</textarea></label>',
+        '<label class="setting-field wide"><span>사후 결과에 꼭 필요한 데이터</span><textarea name="requiredObservationDomains" rows="2" placeholder="quote, trend, flow, research, portfolio"' + (disabled ? " disabled" : "") + '>' + escapeHtml(hypothesisPolicyValue(contract, "requiredObservationDomains")) + '</textarea></label>',
+        '<label class="setting-field"><span>최소 독립 표본</span><input name="minimumIndependentEpisodes" type="number" min="1" max="1000" value="' + escapeHtml(hypothesisPolicyValue(contract, "minimumIndependentEpisodes")) + '"' + (disabled ? " disabled" : "") + '></label>',
+        '<label class="setting-field"><span>관측 최대 지연(분)</span><input name="maximumObservationDelayMinutes" type="number" min="1" max="10080" value="' + escapeHtml(hypothesisPolicyValue(contract, "maximumObservationDelayMinutes")) + '"' + (disabled ? " disabled" : "") + '></label>',
+        '<label class="setting-field wide"><span>검증에서 볼 점</span><textarea name="verificationFocus" rows="2"' + (disabled ? " disabled" : "") + '>' + escapeHtml(hypothesisPolicyValue(contract, "verificationFocus")) + '</textarea></label>',
+        '</div>',
         '<label class="setting-field wide"><span>변경 사유</span><textarea name="changeReason" rows="2" placeholder="변경 이유를 남기세요."' + (disabled ? " disabled" : "") + '></textarea></label>',
-        '<div class="settings-actions"><button class="text-button primary" type="submit"' + (disabled ? " disabled" : "") + '>' + escapeHtml(state.hypothesisPolicySaving === ruleId ? "저장 중" : "정책 저장") + '</button></div>',
+        '<div class="settings-actions"><button class="text-button" type="submit"' + (disabled ? " disabled" : "") + '>' + escapeHtml(state.hypothesisPolicySaving === ruleId ? "검증 중" : "TypeDB 미리보기") + '</button><button class="text-button primary" type="button" data-hypothesis-policy-approve="' + escapeHtml(ruleId) + '"' + (approveDisabled ? " disabled" : "") + '>승인 후 반영</button></div>',
+        preview.status ? '<div class="hypothesis-policy-preview ' + escapeHtml(preview.status === "ready-for-approval" ? "watch" : "caution") + '"><strong>' + escapeHtml(preview.status === "ready-for-approval" ? "미리보기 통과" : "미리보기 보류") + '</strong><span>' + escapeHtml((preview.validation && preview.validation.reason) || (preview.validation && preview.validation.matchedCount != null ? "후보 규칙 검증 완료 · 일치 관계 " + preview.validation.matchedCount + "건" : "검증 결과를 확인하세요.")) + '</span></div>' : '',
         '</form>',
         '</section>'
       ].join("");
@@ -5314,6 +5459,7 @@
       renderHypothesisDetailList("TypeDB 추적 경로", item.causalPathIds, "현재 세대에 기록된 인과 경로 ID가 없습니다."),
       renderHypothesisFreshness(item),
       renderHypothesisOutcome(item),
+      renderHypothesisQualityReview(item),
       renderHypothesisTransitions(item),
       renderHypothesisPolicyEditor(item),
       '</section>'
@@ -5329,44 +5475,231 @@
     return hypothesisStringList(hypothesisFormValue(form, name).split(/[\n,]+/), 100);
   }
 
-  function saveHypothesisLifecyclePolicy(form) {
+  function hypothesisFormBoundedInteger(form, name, fallback, minimum, maximum) {
+    var raw = hypothesisFormValue(form, name);
+    if (!raw) return fallback;
+    var value = Number(raw);
+    if (!Number.isFinite(value)) return null;
+    return Math.max(minimum, Math.min(maximum, Math.round(value)));
+  }
+
+  function hypothesisPolicyFromForm(form) {
+    var rawMinutes = hypothesisFormValue(form, "validityMinutes");
+    var validityMinutes = rawMinutes === "" ? 0 : Number(rawMinutes);
+    if (!Number.isFinite(validityMinutes) || validityMinutes < 0) {
+      throw new Error("유효 시간은 0 이상의 분 단위 숫자로 입력하세요.");
+    }
+    var horizons = hypothesisFormList(form, "outcomeHorizonMinutes").map(function (value) {
+      return Number(value);
+    }).filter(function (value) {
+      return Number.isFinite(value) && value > 0;
+    }).map(function (value) {
+      return Math.round(value);
+    });
+    if (hypothesisFormValue(form, "outcomeHorizonMinutes") && !horizons.length) {
+      throw new Error("확인 시점은 0보다 큰 분 단위 숫자로 입력하세요.");
+    }
+    var minimumIndependentEpisodes = hypothesisFormBoundedInteger(form, "minimumIndependentEpisodes", 0, 1, 1000);
+    var maximumObservationDelayMinutes = hypothesisFormBoundedInteger(form, "maximumObservationDelayMinutes", 0, 1, 10080);
+    if (minimumIndependentEpisodes == null || maximumObservationDelayMinutes == null) {
+      throw new Error("사후 관측 계약의 숫자 항목을 확인하세요.");
+    }
+    return {
+      formationConditionIds: hypothesisFormList(form, "formationConditionIds"),
+      invalidationConditionIds: hypothesisFormList(form, "invalidationConditionIds"),
+      validityMinutes: Math.round(validityMinutes),
+      requiredFreshnessDomains: hypothesisFormList(form, "requiredFreshnessDomains"),
+      nextDataRequirements: hypothesisFormList(form, "nextDataRequirements"),
+      invalidationMode: hypothesisFormValue(form, "invalidationMode"),
+      outcomeContract: {
+        outcomeHorizonMinutes: horizons,
+        requiredObservationDomains: hypothesisFormList(form, "requiredObservationDomains"),
+        minimumIndependentEpisodes: minimumIndependentEpisodes,
+        maximumObservationDelayMinutes: maximumObservationDelayMinutes,
+        verificationFocus: hypothesisFormList(form, "verificationFocus")
+      }
+    };
+  }
+
+  function hypothesisPolicyFormForRule(ruleId) {
+    return app.querySelector('[data-hypothesis-policy-form="' + String(ruleId || "").replace(/"/g, "\\\"") + '"]');
+  }
+
+  function previewHypothesisLifecyclePolicy(form) {
     var ruleId = String(form && form.getAttribute("data-hypothesis-policy-form") || "").trim();
     if (!ruleId || state.hypothesisPolicySaving) return;
     if (isStaticPreviewHost() || state.serverSettingsLocked) {
       showSnackbar("로컬 서버에서만 RuleBox 정책을 변경할 수 있습니다.", "danger");
       return;
     }
-    var rawMinutes = hypothesisFormValue(form, "validityMinutes");
-    var validityMinutes = rawMinutes === "" ? 0 : Number(rawMinutes);
-    if (!Number.isFinite(validityMinutes) || validityMinutes < 0) {
-      showSnackbar("유효 시간은 0 이상의 분 단위 숫자로 입력하세요.", "caution");
+    var policy;
+    try {
+      policy = hypothesisPolicyFromForm(form);
+    } catch (error) {
+      showSnackbar(error.message || "정책 입력값을 확인하세요.", "caution");
       return;
     }
-    var policy = {
-      formationConditionIds: hypothesisFormList(form, "formationConditionIds"),
-      invalidationConditionIds: hypothesisFormList(form, "invalidationConditionIds"),
-      validityMinutes: Math.round(validityMinutes),
-      requiredFreshnessDomains: hypothesisFormList(form, "requiredFreshnessDomains"),
-      nextDataRequirements: hypothesisFormList(form, "nextDataRequirements"),
-      invalidationMode: hypothesisFormValue(form, "invalidationMode")
-    };
     state.hypothesisPolicySaving = ruleId;
     state.hypothesisWorkspaceError = "";
     render();
-    sendJson("/api/investment-brain/hypothesis-policies/" + encodeURIComponent(ruleId), "PATCH", {
+    sendJson("/api/investment-brain/hypothesis-policies/" + encodeURIComponent(ruleId) + "/preview", "POST", {
       policy: policy,
-      changeReason: hypothesisFormValue(form, "changeReason")
+      changeReason: hypothesisFormValue(form, "changeReason"),
+      symbol: activeHypothesisWorkspaceItem() && activeHypothesisWorkspaceItem().symbol || ""
     })
-      .then(function () {
-        showSnackbar("RuleBox 가설 수명주기 정책을 저장했습니다. 다음 정상 추론 세대부터 반영됩니다.");
-        return loadHypothesisWorkspace(true);
+      .then(function (result) {
+        state.hypothesisPolicyPreview = state.hypothesisPolicyPreview || {};
+        state.hypothesisPolicyPreview[ruleId] = result && typeof result === "object" ? result : {};
+        if (result && result.status === "ready-for-approval") {
+          showSnackbar("TypeDB 후보 규칙 검증을 통과했습니다. 승인 후 반영을 눌러 저장하세요.");
+        } else {
+          showSnackbar("정책 미리보기가 보류되었습니다. 검증 결과를 확인하세요.", "caution");
+        }
       })
       .catch(function (error) {
-        state.hypothesisWorkspaceError = error.message || "RuleBox 정책을 저장하지 못했습니다.";
+        state.hypothesisWorkspaceError = error.message || "RuleBox 정책 미리보기를 실행하지 못했습니다.";
         showSnackbar(state.hypothesisWorkspaceError, "danger");
       })
       .finally(function () {
         state.hypothesisPolicySaving = "";
+        render();
+      });
+  }
+
+  function approveHypothesisLifecyclePolicy(ruleId) {
+    var form = hypothesisPolicyFormForRule(ruleId);
+    if (!form || state.hypothesisPolicySaving) return;
+    if (isStaticPreviewHost() || state.serverSettingsLocked) {
+      showSnackbar("로컬 서버에서만 RuleBox 정책을 승인할 수 있습니다.", "danger");
+      return;
+    }
+    var policy;
+    try {
+      policy = hypothesisPolicyFromForm(form);
+    } catch (error) {
+      showSnackbar(error.message || "정책 입력값을 확인하세요.", "caution");
+      return;
+    }
+    state.hypothesisPolicySaving = String(ruleId || "");
+    state.hypothesisWorkspaceError = "";
+    render();
+    sendJson("/api/investment-brain/hypothesis-policies/" + encodeURIComponent(ruleId) + "/approve", "POST", {
+      policy: policy,
+      changeReason: hypothesisFormValue(form, "changeReason"),
+      author: "web-main",
+      symbol: activeHypothesisWorkspaceItem() && activeHypothesisWorkspaceItem().symbol || ""
+    })
+      .then(function () {
+        state.hypothesisPolicyPreview = {};
+        showSnackbar("RuleBox 정책을 승인해 저장했습니다. 새 추론 세대에서만 정책을 읽습니다.");
+        return loadHypothesisWorkspace(true);
+      })
+      .catch(function (error) {
+        state.hypothesisWorkspaceError = error.message || "RuleBox 정책을 승인하지 못했습니다.";
+        showSnackbar(state.hypothesisWorkspaceError, "danger");
+      })
+      .finally(function () {
+        state.hypothesisPolicySaving = "";
+        render();
+      });
+  }
+
+  function restoreHypothesisPolicyVersion(versionId) {
+    var target = String(versionId || "").trim();
+    if (!target || isStaticPreviewHost() || state.serverSettingsLocked || state.hypothesisPolicySaving) return;
+    if (!window.confirm("이 RuleBox 버전으로 복원하기 전에 현재 규칙을 TypeDB에서 다시 검증합니다. 계속할까요?")) return;
+    state.hypothesisPolicySaving = "restore:" + target;
+    state.hypothesisWorkspaceError = "";
+    render();
+    sendJson("/api/investment-brain/hypothesis-policy-versions/" + encodeURIComponent(target) + "/restore", "POST", {
+      author: "web-main",
+      changeReason: "웹에서 이전 RuleBox 버전 복원",
+      symbol: activeHypothesisWorkspaceItem() && activeHypothesisWorkspaceItem().symbol || ""
+    })
+      .then(function () {
+        state.hypothesisPolicyPreview = {};
+        showSnackbar("RuleBox 이전 버전을 검증 후 복원했습니다.");
+        return loadHypothesisWorkspace(true);
+      })
+      .catch(function (error) {
+        state.hypothesisWorkspaceError = error.message || "RuleBox 버전을 복원하지 못했습니다.";
+        showSnackbar(state.hypothesisWorkspaceError, "danger");
+      })
+      .finally(function () {
+        state.hypothesisPolicySaving = "";
+        render();
+      });
+  }
+
+  function recordHypothesisPolicyBaseline() {
+    if (isStaticPreviewHost() || state.serverSettingsLocked || state.hypothesisPolicySaving) return;
+    state.hypothesisPolicySaving = "baseline";
+    state.hypothesisWorkspaceError = "";
+    render();
+    sendJson("/api/investment-brain/hypothesis-policy-versions/baseline", "POST", { author: "web-main" })
+      .then(function (result) {
+        showSnackbar(result && result.status === "unchanged" ? "이미 RuleBox 기준선 버전이 있습니다." : "현재 RuleBox 기준선 버전을 기록했습니다.");
+        return loadHypothesisWorkspace(true);
+      })
+      .catch(function (error) {
+        state.hypothesisWorkspaceError = error.message || "RuleBox 기준선 버전을 기록하지 못했습니다.";
+        showSnackbar(state.hypothesisWorkspaceError, "danger");
+      })
+      .finally(function () {
+        state.hypothesisPolicySaving = "";
+        render();
+      });
+  }
+
+  function runHypothesisReplay() {
+    if (state.hypothesisReplayLoading || isStaticPreviewHost()) return;
+    var payload = hypothesisWorkspacePayload();
+    state.hypothesisReplayLoading = true;
+    state.hypothesisWorkspaceError = "";
+    render();
+    sendJson("/api/investment-brain/hypothesis-replay", "POST", {
+      accountId: payload.accountId || "",
+      symbol: payload.symbol || "",
+      limit: 500
+    })
+      .then(function (result) {
+        state.hypothesisReplay = result && typeof result === "object" ? result : {};
+        showSnackbar("저장된 사후 관측을 다시 점검했습니다.");
+      })
+      .catch(function (error) {
+        state.hypothesisWorkspaceError = error.message || "사후 결과 재생을 실행하지 못했습니다.";
+        showSnackbar(state.hypothesisWorkspaceError, "danger");
+      })
+      .finally(function () {
+        state.hypothesisReplayLoading = false;
+        render();
+      });
+  }
+
+  function proposeHypothesisQualityReview() {
+    if (state.hypothesisQualityReviewAction || isStaticPreviewHost() || state.serverSettingsLocked) return;
+    var payload = hypothesisWorkspacePayload();
+    state.hypothesisQualityReviewAction = true;
+    state.hypothesisWorkspaceError = "";
+    render();
+    sendJson("/api/investment-brain/hypothesis-quality-review", "POST", {
+      accountId: payload.accountId || "",
+      symbol: payload.symbol || "",
+      marketId: payload.marketId || "",
+      scope: payload.scope || "",
+      reviewedBy: "web-main"
+    })
+      .then(function (result) {
+        var count = Number(result && result.proposalCount || 0);
+        showSnackbar(count ? "가설 품질 검토 제안 " + count + "건을 저장했습니다." : "새로 저장할 가설 품질 검토 제안이 없습니다.");
+        return loadHypothesisWorkspace(true);
+      })
+      .catch(function (error) {
+        state.hypothesisWorkspaceError = error.message || "가설 품질 검토 제안을 저장하지 못했습니다.";
+        showSnackbar(state.hypothesisWorkspaceError, "danger");
+      })
+      .finally(function () {
+        state.hypothesisQualityReviewAction = false;
         render();
       });
   }
@@ -25617,6 +25950,21 @@
       });
     }
 
+    var runHypothesisReplayButton = app.querySelector('[data-action="run-hypothesis-replay"]');
+    if (runHypothesisReplayButton) {
+      runHypothesisReplayButton.addEventListener("click", runHypothesisReplay);
+    }
+
+    var proposeHypothesisQualityReviewButton = app.querySelector('[data-action="propose-hypothesis-quality-review"]');
+    if (proposeHypothesisQualityReviewButton) {
+      proposeHypothesisQualityReviewButton.addEventListener("click", proposeHypothesisQualityReview);
+    }
+
+    var recordHypothesisPolicyBaselineButton = app.querySelector('[data-action="record-hypothesis-policy-baseline"]');
+    if (recordHypothesisPolicyBaselineButton) {
+      recordHypothesisPolicyBaselineButton.addEventListener("click", recordHypothesisPolicyBaseline);
+    }
+
     Array.prototype.slice.call(app.querySelectorAll("[data-hypothesis-lifecycle-select]")).forEach(function (button) {
       button.addEventListener("click", function () {
         var key = String(button.getAttribute("data-hypothesis-lifecycle-select") || "");
@@ -25629,7 +25977,28 @@
     Array.prototype.slice.call(app.querySelectorAll("[data-hypothesis-policy-form]")).forEach(function (form) {
       form.addEventListener("submit", function (event) {
         event.preventDefault();
-        saveHypothesisLifecyclePolicy(form);
+        previewHypothesisLifecyclePolicy(form);
+      });
+      form.addEventListener("input", function () {
+        var ruleId = String(form.getAttribute("data-hypothesis-policy-form") || "").trim();
+        if (!ruleId || !state.hypothesisPolicyPreview || !state.hypothesisPolicyPreview[ruleId]) return;
+        delete state.hypothesisPolicyPreview[ruleId];
+        var approveButton = form.querySelector("[data-hypothesis-policy-approve]");
+        if (approveButton) approveButton.disabled = true;
+        var previewNotice = form.querySelector(".hypothesis-policy-preview");
+        if (previewNotice) previewNotice.remove();
+      });
+    });
+
+    Array.prototype.slice.call(app.querySelectorAll("[data-hypothesis-policy-approve]")).forEach(function (button) {
+      button.addEventListener("click", function () {
+        approveHypothesisLifecyclePolicy(button.getAttribute("data-hypothesis-policy-approve"));
+      });
+    });
+
+    Array.prototype.slice.call(app.querySelectorAll("[data-hypothesis-policy-restore]")).forEach(function (button) {
+      button.addEventListener("click", function () {
+        restoreHypothesisPolicyVersion(button.getAttribute("data-hypothesis-policy-restore"));
       });
     });
 

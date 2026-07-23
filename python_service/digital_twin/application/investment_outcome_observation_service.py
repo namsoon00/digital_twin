@@ -91,6 +91,11 @@ class InvestmentOutcomeObservationService:
                 "facts": facts,
             })
         outcomes = self.decision_episode_store.record_outcome_observations(snapshot.account_id, records)
+        contract_data_gap_count = sum(
+            1
+            for item in outcomes
+            if str((getattr(item, "payload", {}) or {}).get("calibrationEligibility") or "") == "excluded-contract-data-gap"
+        )
         return {
             "status": "observed" if outcomes else ("waiting-market-observation" if missing_count else "no-new-outcomes"),
             "observedAt": observed_at,
@@ -99,6 +104,7 @@ class InvestmentOutcomeObservationService:
             "snapshotFallbackCount": snapshot_fallback_count,
             "missingObservationCount": missing_count,
             "savedOutcomeCount": len(outcomes),
+            "contractDataGapCount": contract_data_gap_count,
             "outcomeIds": [item.outcome_id for item in outcomes],
             "symbols": sorted({str(item.get("symbol") or "").upper() for item in targets if str(item.get("symbol") or "").strip()}),
             "maximumDelayMinutes": self.max_delay_minutes(),

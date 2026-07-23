@@ -14,6 +14,7 @@ from .hypothesis_scoping import (
     UNVERIFIED_SCOPE,
     inference_scope_assessment,
 )
+from .hypothesis_outcome_contract import merge_outcome_contracts
 from .ontology_decision_state import DATA_STATES, REVIEW_LEVELS, VALIDATION_STATES
 from .ontology_worlds import market_world
 
@@ -2247,6 +2248,15 @@ def decision_episode_from_context(
         if hypothesis.hypothesis_id == selected_id
         for item in hypothesis.counter_evidence_ids
     )
+    selected_hypothesis = next((
+        item for item in seed_episode.hypothesis_set.hypotheses
+        if item.hypothesis_id == selected_id
+    ), None)
+    outcome_contract = selected_hypothesis_outcome_contract(
+        relation_context,
+        selected_hypothesis,
+        selected_id,
+    )
     return DecisionEpisode(
         episode_id=episode_id,
         account_id=str(context.get("accountId") or ""),
@@ -2271,11 +2281,45 @@ def decision_episode_from_context(
         source="notification-ai-hypothesis-competition",
         facts_at_decision={
             **dict(relation_context.get("facts") or {}),
+            **({"hypothesisOutcomeContract": outcome_contract} if outcome_contract else {}),
             **({"decisionReferenceDateRaw": raw_decided_at} if raw_decided_at != decided_at else {}),
         },
         research_plan=dict(brain.get("researchPlan") or relation_context.get("researchPlan") or {}),
         research_audit=dict(relation_context.get("researchCycle") or {}),
     )
+
+
+def selected_hypothesis_outcome_contract(
+    relation_context: Dict[str, object],
+    hypothesis: Optional[InvestmentHypothesis],
+    selected_hypothesis_id: str = "",
+) -> Dict[str, object]:
+    """Freeze RuleBox outcome requirements with the exact decision episode."""
+
+    if not hypothesis:
+        return {}
+    brief = relation_context.get("hypothesisDecisionBrief") if isinstance(relation_context.get("hypothesisDecisionBrief"), dict) else {}
+    contracts_by_rule = brief.get("outcomeContractsByRule") if isinstance(brief.get("outcomeContractsByRule"), dict) else {}
+    rule_ids = unique_texts(hypothesis.supporting_rule_ids)
+    contracts = []
+    for rule_id in rule_ids:
+        item = contracts_by_rule.get(rule_id)
+        contract = item.get("outcomeContract") if isinstance(item, dict) and isinstance(item.get("outcomeContract"), dict) else {}
+        if contract:
+            contracts.append(contract)
+    if not contracts and isinstance(brief.get("selectedOutcomeContractCandidate"), dict):
+        contracts.append(dict(brief.get("selectedOutcomeContractCandidate") or {}))
+    if not contracts:
+        return {}
+    return {
+        **merge_outcome_contracts(contracts),
+        "contractVersion": "rulebox-hypothesis-outcome-contract-v1",
+        "selectedHypothesisId": selected_hypothesis_id or hypothesis.hypothesis_id,
+        "sourceRuleIds": rule_ids,
+        "marketHypothesisId": hypothesis.market_hypothesis_id,
+        "accountHypothesisOverlayId": hypothesis.account_hypothesis_overlay_id,
+        "inferenceGenerationId": str(relation_context.get("inferenceGenerationId") or ""),
+    }
 
 
 def float_or_zero(value: object) -> float:

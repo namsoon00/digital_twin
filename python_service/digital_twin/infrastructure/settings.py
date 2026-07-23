@@ -173,6 +173,7 @@ TEXT_SETTING_KEYS = [
     "typedbNativeRuleExecutionEnabled",
     "typedbNativeRuleQueryTimeoutSeconds",
     "typedbNativeRuleExecutionBudgetSeconds",
+    "typedbNativeRuleParallelism",
     "typedbProcessSchemaFunctionCacheEnabled",
     "typedbSchemaFunctionProbeIntervalSeconds",
     "typedbAutoResetEnabled",
@@ -935,6 +936,11 @@ def runtime_settings() -> Dict[str, str]:
             "typedbNativeRuleExecutionBudgetSeconds",
             "TYPEDB_NATIVE_RULE_EXECUTION_BUDGET_SECONDS",
             "105",
+        ),
+        "typedbNativeRuleParallelism": value(
+            "typedbNativeRuleParallelism",
+            "TYPEDB_NATIVE_RULE_PARALLELISM",
+            "4",
         ),
         "typedbProcessSchemaFunctionCacheEnabled": value(
             "typedbProcessSchemaFunctionCacheEnabled",

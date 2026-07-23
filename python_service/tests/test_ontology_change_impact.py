@@ -354,10 +354,15 @@ class OntologyChangeImpactTests(unittest.TestCase):
     def test_observation_clock_does_not_roll_a_scope_or_reopen_rules(self):
         graph = self.scope_graph()
         market = next(item for item in graph.entities if item.entity_id == "price-metric:005930:currentPrice")
+        temporal = next(item for item in graph.entities if item.entity_id == "temporal-window:005930:5d")
         market.properties.update({
             "marketSessionLocalTime": "14:00:00",
             "freshnessAgeMinutes": 1,
             "freshnessStatus": "near-live",
+        })
+        temporal.properties.update({
+            "elapsedHours": 1.25,
+            "dataState": "sufficient",
         })
 
         first = apply_scoped_abox_identity(graph)
@@ -365,12 +370,17 @@ class OntologyChangeImpactTests(unittest.TestCase):
             "marketSessionLocalTime": "14:05:00",
             "freshnessAgeMinutes": 6,
         })
+        temporal.properties["elapsedHours"] = 1.5
         second = apply_scoped_abox_identity(graph)
         delta = scope_delta(first["scopePlan"], second["scopePlan"])
 
         self.assertEqual(
             first["scopeGenerationIds"]["symbol:005930:market"],
             second["scopeGenerationIds"]["symbol:005930:market"],
+        )
+        self.assertEqual(
+            first["scopeGenerationIds"]["symbol:005930:temporal"],
+            second["scopeGenerationIds"]["symbol:005930:temporal"],
         )
         self.assertEqual([], delta["changedScopeIds"])
 

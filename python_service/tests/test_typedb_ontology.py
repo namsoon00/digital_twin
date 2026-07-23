@@ -5,12 +5,17 @@ import tempfile
 import time
 import unittest
 from pathlib import Path
-from threading import Event
+from threading import Event, Lock
 from types import SimpleNamespace
 from unittest.mock import ANY, call, patch
 
 from digital_twin import service_manager
 from digital_twin.domain.ontology_rulebox_catalog import default_graph_inference_rules
+from digital_twin.domain.ontology_rulebox_contracts import (
+    GraphInferenceRule,
+    GraphRuleCondition,
+    GraphRuleDerivation,
+)
 from digital_twin.domain.ontology_contracts import OntologyEntity, OntologyEvidence, OntologyRelation, PortfolioOntology
 from digital_twin.domain.ontology_scopes import (
     SCOPED_ABOX_MANIFEST_VERSION,
@@ -1466,6 +1471,99 @@ class TypeDBOntologyRepositoryTests(unittest.TestCase):
         self.assertEqual(topology["fingerprint"], result["ruleContext"]["plannerTopologyFingerprint"])
         self.assertEqual(1, result["executionPlan"]["selectedRuleCount"])
         self.assertIn("let $source in orbit_rule_", queries[0])
+
+    def test_typedb_native_rule_match_runs_independent_functions_in_parallel_under_abox_lease(self):
+        repository = TypeDBOntologyGraphRepository(
+            "127.0.0.1:1729",
+            retry_count=0,
+            native_rule_parallelism=2,
+        )
+
+        def rule(rule_id):
+            return GraphInferenceRule(
+                rule_id=rule_id,
+                label=rule_id,
+                version="v1",
+                source_kind="stock",
+                conditions=[
+                    GraphRuleCondition(
+                        "holding-source",
+                        "subject_property",
+                        "보유 종목입니다.",
+                        field="source",
+                        value="holding",
+                    ),
+                ],
+                derivations=[
+                    GraphRuleDerivation(
+                        relation_type="REQUIRES_NEXT_CHECK",
+                        target_kind="next-check",
+                        target_key="{symbol}:check",
+                        target_label="다음 확인",
+                        tbox_class="NextCheck",
+                    ),
+                ],
+                action_group="watch",
+                action_level="review",
+                prompt_hint="병렬 실행 검증",
+            )
+
+        active = {"value": 0, "maximum": 0}
+        active_lock = Lock()
+        transactions = []
+
+        class FakePromise:
+            def resolve(self):
+                with active_lock:
+                    active["value"] += 1
+                    active["maximum"] = max(active["maximum"], active["value"])
+                try:
+                    time.sleep(0.03)
+                    return []
+                finally:
+                    with active_lock:
+                        active["value"] -= 1
+
+        class FakeTransaction:
+            def __enter__(self):
+                return self
+
+            def __exit__(self, _exc_type, _exc, _traceback):
+                return False
+
+            def query(self, query):
+                transactions.append(query)
+                return FakePromise()
+
+        class FakeDriver:
+            def transaction(self, *_args, **_kwargs):
+                return FakeTransaction()
+
+        imported = (object, object, object, object, SimpleNamespace(READ="read"))
+        with patch.object(repository, "driver_imports", return_value=(imported, None)), \
+                patch.object(repository, "open_driver", side_effect=lambda *_args, **_kwargs: FakeDriver()), \
+                patch.object(repository, "ensure_database"), \
+                patch.object(repository, "close_driver"), \
+                patch.object(repository, "read_transaction_options", return_value=None), \
+                patch.object(repository, "active_abox_rule_context", return_value={
+                    "status": "ok",
+                    "relationTypesBySymbol": {"005930": []},
+                    "sourceIdsBySymbol": {"005930": ["stock:005930"]},
+                }):
+            result = repository.match_typedb_native_rules(
+                [rule("graph.parallel.a.v1"), rule("graph.parallel.b.v1")],
+                target_symbols=["005930"],
+                native_rule_parallelism=2,
+                stable_abox_write_lease_held=True,
+            )
+
+        self.assertEqual("ok", result["status"])
+        self.assertTrue(result["parallelRuleExecution"])
+        self.assertEqual(2, result["nativeRuleParallelism"])
+        self.assertEqual(2, result["readTransactionCount"])
+        self.assertEqual(2, result["readQueryCount"])
+        self.assertEqual(2, len(transactions))
+        self.assertGreaterEqual(active["maximum"], 2)
 
     def test_native_rule_planner_uses_only_a_topology_verified_on_the_active_manifest(self):
         graph = PortfolioOntology("planner-topology")
@@ -3221,6 +3319,7 @@ class TypeDBOntologyRepositoryTests(unittest.TestCase):
         self.assertEqual(20.0, factory_default.schema_operation_timeout_seconds())
         self.assertEqual(10.0, factory_default.native_rule_query_timeout_seconds())
         self.assertEqual(105.0, factory_default.native_rule_execution_budget_seconds())
+        self.assertEqual(4, factory_default.native_rule_parallelism())
         self.assertFalse(direct._inference_write_lease_enabled)
         self.assertTrue(factory_default._inference_write_lease_enabled)
         self.assertFalse(factory_inference_lease_disabled._inference_write_lease_enabled)

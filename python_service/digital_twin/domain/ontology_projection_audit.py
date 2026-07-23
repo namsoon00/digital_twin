@@ -245,6 +245,8 @@ def projection_result_summary(result: Dict[str, object]) -> Dict[str, object]:
             "matchedRuleCount": int(execution.get("matchedRuleCount") or 0),
             "typedbNativeRuleExecutedCount": int(execution.get("typedbNativeRuleExecutedCount") or 0),
             "typedbNativeRuleMatchedCount": int(execution.get("typedbNativeRuleMatchedCount") or 0),
+            "typedbNativeRuleParallelism": int(execution.get("typedbNativeRuleParallelism") or 1),
+            "typedbNativeRuleParallelUsed": bool(execution.get("typedbNativeRuleParallelUsed")),
             "nativeInferenceEvaluationComplete": bool(execution.get("nativeInferenceEvaluationComplete")),
             "nativeInferenceOutcome": str(execution.get("nativeInferenceOutcome") or ""),
             "nativeRuleSelectionApplied": bool(execution.get("nativeRuleSelectionApplied")),

@@ -9,6 +9,7 @@ import socket
 import threading
 import time
 import uuid
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from contextlib import contextmanager
 from decimal import Decimal, InvalidOperation
 from typing import Dict, Iterable, List, Tuple
@@ -1037,6 +1038,10 @@ DEFAULT_TYPEDB_NATIVE_RULE_QUERY_TIMEOUT_SECONDS = 10.0
 # local TypeDB dataset. Leave headroom for the final applicable rule instead
 # of failing a whole candidate when its last bounded read starts with <1s.
 DEFAULT_TYPEDB_NATIVE_RULE_EXECUTION_BUDGET_SECONDS = 105.0
+# Schema functions are independent read-only evaluations while the scoped ABox
+# write lease is held. Four workers keep local TypeDB planner pressure bounded
+# while removing the serial wait across the small applicable-rule set.
+DEFAULT_TYPEDB_NATIVE_RULE_PARALLELISM = 4
 TYPEDB_PROMOTED_NUMERIC_ATTRIBUTES = {
     "currentPrice": "ontology-current-price",
     "averagePrice": "ontology-average-price",
@@ -4971,6 +4976,7 @@ class TypeDBOntologyGraphRepository(GraphStoreOntologyRowMapperMixin, ScopedABox
         native_rule_execution_enabled: bool = True,
         native_rule_query_timeout_seconds: float = DEFAULT_TYPEDB_NATIVE_RULE_QUERY_TIMEOUT_SECONDS,
         native_rule_execution_budget_seconds: float = DEFAULT_TYPEDB_NATIVE_RULE_EXECUTION_BUDGET_SECONDS,
+        native_rule_parallelism: int = DEFAULT_TYPEDB_NATIVE_RULE_PARALLELISM,
         inference_write_lease_enabled: bool = False,
         process_schema_function_cache_enabled: bool = False,
         schema_function_probe_interval_seconds: float = 300.0,
@@ -5015,6 +5021,10 @@ class TypeDBOntologyGraphRepository(GraphStoreOntologyRowMapperMixin, ScopedABox
             1.0,
             float(native_rule_execution_budget_seconds or DEFAULT_TYPEDB_NATIVE_RULE_EXECUTION_BUDGET_SECONDS),
         )
+        self._native_rule_parallelism = max(
+            1,
+            min(8, int(number_or_none(native_rule_parallelism) or DEFAULT_TYPEDB_NATIVE_RULE_PARALLELISM)),
+        )
         # The production composition root enables this durable lease. Bare
         # adapters retain the old unlocked behavior for isolated migrations
         # and deterministic unit tests that do not open a real TypeDB driver.
@@ -5033,6 +5043,7 @@ class TypeDBOntologyGraphRepository(GraphStoreOntologyRowMapperMixin, ScopedABox
         self._rulebox_snapshot_cache_at = 0.0
         self._rulebox_snapshot_cache_result: Dict[str, object] = {}
         self._query_metrics: List[Dict[str, object]] = []
+        self._query_metrics_lock = threading.Lock()
 
     def with_typedb_retries(self, operation):
         attempts = max(1, self.retry_count + 1)
@@ -5072,25 +5083,28 @@ class TypeDBOntologyGraphRepository(GraphStoreOntologyRowMapperMixin, ScopedABox
         return self._query_metrics_enabled
 
     def reset_query_metrics(self) -> None:
-        self._query_metrics = []
+        with self._query_metrics_lock:
+            self._query_metrics = []
 
     def record_query_metric(self, label: str, query: str, row_count: int, duration_ms: float, status: str = "ok") -> None:
         if not self.query_metrics_enabled():
             return
         normalized_query = re.sub(r"\s+", " ", str(query or "")).strip()
-        self._query_metrics.append({
-            "label": str(label or "typedb.read")[:80],
-            "status": str(status or "ok"),
-            "rowCount": int(row_count or 0),
-            "durationMs": round(float(duration_ms or 0.0), 2),
-            "queryHash": hashlib.sha256(normalized_query.encode("utf-8")).hexdigest()[:12] if normalized_query else "",
-            "queryPreview": normalized_query[:180],
-        })
-        if len(self._query_metrics) > 120:
-            self._query_metrics = self._query_metrics[-120:]
+        with self._query_metrics_lock:
+            self._query_metrics.append({
+                "label": str(label or "typedb.read")[:80],
+                "status": str(status or "ok"),
+                "rowCount": int(row_count or 0),
+                "durationMs": round(float(duration_ms or 0.0), 2),
+                "queryHash": hashlib.sha256(normalized_query.encode("utf-8")).hexdigest()[:12] if normalized_query else "",
+                "queryPreview": normalized_query[:180],
+            })
+            if len(self._query_metrics) > 120:
+                self._query_metrics = self._query_metrics[-120:]
 
     def query_metrics_snapshot(self) -> Dict[str, object]:
-        rows = list(self._query_metrics or [])
+        with self._query_metrics_lock:
+            rows = list(self._query_metrics or [])
         total_ms = sum(float(item.get("durationMs") or 0) for item in rows)
         slow = sorted(rows, key=lambda item: float(item.get("durationMs") or 0), reverse=True)[:8]
         return {
@@ -5111,6 +5125,9 @@ class TypeDBOntologyGraphRepository(GraphStoreOntologyRowMapperMixin, ScopedABox
 
     def native_rule_execution_budget_seconds(self) -> float:
         return self._native_rule_execution_budget_seconds
+
+    def native_rule_parallelism(self) -> int:
+        return self._native_rule_parallelism
 
     def clear_rulebox_snapshot_cache(self) -> None:
         self._rulebox_snapshot_cache_at = 0.0
@@ -10393,6 +10410,191 @@ relation ontology-assertion,
             "typeDbCardinalityVerified": bool(rows),
         }
 
+    def execute_typedb_native_rule_entry(
+        self,
+        planned: Dict[str, object],
+        clean_symbols: Iterable[str],
+        schema_function_query: bool,
+        world_id: str,
+        scoped_manifest_only: bool,
+        imported,
+        transaction_type,
+        deadline: float,
+        execution_mode: str,
+    ) -> Dict[str, object]:
+        """Run one independent native rule under the caller's ABox write lease.
+
+        Parallel execution deliberately opens a short-lived read transaction per
+        rule. The enclosing scoped ABox write lease prevents an ABox pointer
+        transition while the functions run, while the per-rule transaction
+        timeout remains effective in worker threads where SIGALRM is not.
+        """
+        rule = planned.get("rule")
+        if not rule:
+            return {
+                "status": "partial",
+                "readTransactionCount": 0,
+                "readQueryCount": 0,
+                "failure": {
+                    "ruleId": "",
+                    "status": "blocked",
+                    "reason": "TypeDB native rule plan is missing its rule definition.",
+                },
+            }
+        rule_payload = rule.to_dict() if hasattr(rule, "to_dict") else dict(rule or {})
+        candidate_symbols = clean_symbols_from_payload(planned.get("candidateSymbols") or clean_symbols)
+        function_name = typedb_native_rule_function_name(rule.rule_id, world_id)
+        has_any_conditions = any(
+            normalized_condition_role(
+                condition.to_dict() if hasattr(condition, "to_dict") else dict(condition or {})
+            ) in {"any", "optional"}
+            for condition in (rule.conditions or [])
+        )
+        uses_schema_function = bool(schema_function_query)
+        query_plan = (
+            typedb_native_function_call_query(rule_payload, candidate_symbols, world_id)
+            if uses_schema_function
+            else typedb_native_match_query(
+                rule_payload,
+                candidate_symbols,
+                scoped_manifest_only=scoped_manifest_only,
+                include_any_conditions=False,
+                world_id=world_id,
+            )
+        )
+        if not query_plan.get("query"):
+            return {
+                "status": "partial",
+                "readTransactionCount": 0,
+                "readQueryCount": 0,
+                "failure": {
+                    "ruleId": str(rule.rule_id or ""),
+                    "status": "blocked",
+                    "reason": "TypeDB schema function call could not be built.",
+                    "candidateSymbols": candidate_symbols,
+                },
+            }
+
+        def budget_failure(
+            reason: str = "TypeDB native-rule realtime execution budget is exhausted.",
+            read_transaction_count: int = 0,
+            read_query_count: int = 0,
+        ):
+            return {
+                "status": "partial",
+                "readTransactionCount": read_transaction_count,
+                "readQueryCount": read_query_count,
+                "failure": {
+                    "ruleId": str(rule.rule_id or ""),
+                    "status": "deferred-by-runtime-budget",
+                    "reason": reason,
+                    "candidateSymbols": candidate_symbols,
+                },
+            }
+
+        def operation():
+            remaining_seconds = deadline - time.monotonic()
+            if remaining_seconds <= 0.5:
+                return budget_failure()
+            query_timeout = min(self.native_rule_query_timeout_seconds(), remaining_seconds)
+            driver = self.open_driver(imported, request_timeout_seconds=query_timeout)
+            read_transaction_count = 0
+            read_call_count = 0
+            try:
+                self.ensure_database(driver)
+                with driver.transaction(
+                    self.database,
+                    transaction_type.READ,
+                    self.read_transaction_options(query_timeout),
+                ) as tx:
+                    rows = self.read_rows_in_transaction(
+                        tx,
+                        str(query_plan.get("query")),
+                        query_plan.get("columns") or ["sourceId"],
+                        label="nativeRule:" + str(rule.rule_id or ""),
+                        timeout_seconds=query_timeout,
+                    )
+                read_transaction_count += 1
+                read_call_count += 1
+                any_condition_query_count = 0
+                if rows and has_any_conditions:
+                    verified_rows = []
+                    for row in rows:
+                        remaining_seconds = deadline - time.monotonic()
+                        if remaining_seconds <= 0.5:
+                            return budget_failure(
+                                "TypeDB native-rule runtime budget was exhausted while verifying any conditions.",
+                                read_transaction_count,
+                                read_call_count,
+                            )
+                        verification = self.verify_typedb_native_any_conditions(
+                            driver,
+                            transaction_type,
+                            rule,
+                            str(row.get("sourceId") or ""),
+                            min(self.native_rule_query_timeout_seconds(), remaining_seconds),
+                            scoped_manifest_only,
+                            world_id=world_id,
+                        )
+                        read_transaction_count += int(verification.get("readTransactionCount") or 0)
+                        read_call_count += int(verification.get("readQueryCount") or 0)
+                        any_condition_query_count += int(verification.get("readQueryCount") or 0)
+                        verification_status = str(verification.get("status") or "error")
+                        if verification_status == "matched":
+                            row["_matchedAnyConditionIds"] = list(verification.get("matchedConditionIds") or [])
+                            row["_anyConditionsVerified"] = bool(verification.get("typeDbCardinalityVerified"))
+                            verified_rows.append(row)
+                            continue
+                        if verification_status == "not-matched":
+                            continue
+                        return {
+                            "status": "partial",
+                            "readTransactionCount": read_transaction_count,
+                            "readQueryCount": read_call_count,
+                            "failure": {
+                                "ruleId": str(rule.rule_id or ""),
+                                "status": "any-condition-" + verification_status,
+                                "reason": str(verification.get("reason") or "TypeDB any-condition verification did not complete.")[:220],
+                                "candidateSymbols": candidate_symbols,
+                            },
+                        }
+                    rows = verified_rows
+                return {
+                    "status": "ok",
+                    "rule": rule,
+                    "queryPlan": query_plan,
+                    "rows": rows,
+                    "readTransactionCount": read_transaction_count,
+                    "readQueryCount": read_call_count,
+                    "executed": {
+                        "ruleId": rule.rule_id,
+                        "nativeRuleId": typedb_native_rule_id(rule.rule_id),
+                        "schemaFunctionName": function_name if uses_schema_function else "",
+                        "queryMode": execution_mode if uses_schema_function else "typedb-scoped-typeql-any-verified-parallel",
+                        "rowCount": len(rows),
+                        "candidateSymbols": candidate_symbols,
+                        "queryComplexity": int(planned.get("queryComplexity") or 0),
+                        "anyConditionQueryCount": any_condition_query_count,
+                    },
+                }
+            finally:
+                self.close_driver(driver)
+
+        try:
+            return self.with_typedb_retries(operation)
+        except Exception as error:  # noqa: BLE001 - a failed independent read blocks the complete generation.
+            return {
+                "status": "partial",
+                "readTransactionCount": 0,
+                "readQueryCount": 0,
+                "failure": {
+                    "ruleId": str(rule.rule_id or ""),
+                    "status": "query-timeout" if typedb_error_code(error) == "typedbTimeout" else "query-error",
+                    "reason": str(error)[:220],
+                    "candidateSymbols": candidate_symbols,
+                },
+            }
+
     def match_typedb_native_rules(
         self,
         rules: Iterable[GraphInferenceRule],
@@ -10402,6 +10604,8 @@ relation ontology-assertion,
         planner_topology: Dict[str, object] = None,
         preflight_graph: PortfolioOntology = None,
         preflight_incoming_relations_complete: bool = False,
+        native_rule_parallelism: int = 1,
+        stable_abox_write_lease_held: bool = False,
     ) -> Dict[str, object]:
         rules = list(rules or [])
         clean_symbols = clean_symbols_from_payload(list(target_symbols or []))
@@ -10429,6 +10633,8 @@ relation ontology-assertion,
         query_failures = []
         execution_budget_exhausted = False
         execution_incomplete = False
+        parallel_rule_execution = False
+        effective_parallelism = 1
         try:
             relation_types_by_symbol: Dict[str, Iterable[str]] = {}
             rule_context: Dict[str, object] = {}
@@ -10551,6 +10757,30 @@ relation ontology-assertion,
                     scoped_manifest_only = self.active_abox_uses_scoped_manifest(world_id)
                 except Exception:
                     scoped_manifest_only = False
+            requested_parallelism = max(
+                1,
+                min(8, int(number_or_none(native_rule_parallelism) or 1)),
+            )
+            parallel_rule_execution = bool(
+                stable_abox_write_lease_held
+                and requested_parallelism > 1
+                and len(selected_entries) > 1
+            )
+            effective_parallelism = (
+                min(requested_parallelism, len(selected_entries))
+                if parallel_rule_execution
+                else 1
+            )
+            if parallel_rule_execution:
+                # ABox writes are serialized by the durable lease passed by the
+                # projection recorder. Independent schema functions may now use
+                # separate bounded read transactions without observing a world
+                # pointer transition between rule evaluations.
+                execution_mode = (
+                    "typedb-schema-function-hybrid-any-verified-parallel"
+                    if schema_function_query and requires_direct_any_probe
+                    else execution_mode + "-parallel"
+                )
 
             def operation():
                 nonlocal read_call_count, read_transaction_count, execution_budget_exhausted, execution_incomplete, execution_mode
@@ -10734,7 +10964,80 @@ relation ontology-assertion,
                 finally:
                     self.close_driver(driver)
 
-            self.with_typedb_retries(operation)
+            if parallel_rule_execution:
+                deadline = time.monotonic() + self.native_rule_execution_budget_seconds()
+                completed_entries: Dict[int, Dict[str, object]] = {}
+                with ThreadPoolExecutor(max_workers=effective_parallelism) as executor:
+                    futures = {
+                        executor.submit(
+                            self.execute_typedb_native_rule_entry,
+                            planned,
+                            clean_symbols,
+                            schema_function_query,
+                            world_id,
+                            scoped_manifest_only,
+                            imported,
+                            TransactionType,
+                            deadline,
+                            execution_mode,
+                        ): index
+                        for index, planned in enumerate(selected_entries)
+                    }
+                    for future in as_completed(futures):
+                        index = futures[future]
+                        planned = selected_entries[index]
+                        rule = planned.get("rule")
+                        try:
+                            completed_entries[index] = future.result()
+                        except Exception as error:  # noqa: BLE001 - executor failures must block the complete generation.
+                            completed_entries[index] = {
+                                "status": "partial",
+                                "readTransactionCount": 0,
+                                "readQueryCount": 0,
+                                "failure": {
+                                    "ruleId": str(getattr(rule, "rule_id", "") or ""),
+                                    "status": "query-error",
+                                    "reason": str(error)[:220],
+                                    "candidateSymbols": clean_symbols_from_payload(
+                                        planned.get("candidateSymbols") or clean_symbols
+                                    ),
+                                },
+                            }
+                for index, planned in enumerate(selected_entries):
+                    completed = dict(completed_entries.get(index) or {})
+                    read_transaction_count += int(completed.get("readTransactionCount") or 0)
+                    read_call_count += int(completed.get("readQueryCount") or 0)
+                    if str(completed.get("status") or "partial") != "ok":
+                        failure = dict(completed.get("failure") or {})
+                        failure.setdefault("ruleId", str(getattr(planned.get("rule"), "rule_id", "") or ""))
+                        failure.setdefault("status", "query-error")
+                        failure.setdefault("reason", "TypeDB native rule did not complete.")
+                        skipped_rules.append(failure)
+                        query_failures.append(failure)
+                        execution_incomplete = True
+                        if str(failure.get("status") or "") == "deferred-by-runtime-budget":
+                            execution_budget_exhausted = True
+                        continue
+                    rule = completed.get("rule")
+                    query_plan = completed.get("queryPlan") or {}
+                    rows = list(completed.get("rows") or [])
+                    executed = dict(completed.get("executed") or {})
+                    if not rule or not executed:
+                        failure = {
+                            "ruleId": str(getattr(planned.get("rule"), "rule_id", "") or ""),
+                            "status": "query-error",
+                            "reason": "TypeDB native rule returned an incomplete parallel result.",
+                        }
+                        skipped_rules.append(failure)
+                        query_failures.append(failure)
+                        execution_incomplete = True
+                        continue
+                    executed_rules.append(executed)
+                    # Merge on the coordinator thread to retain deterministic
+                    # ordering and keep condition-detail reads out of workers.
+                    self.merge_native_match_rows(rule, query_plan, rows, match_index, matches, world_id)
+            else:
+                self.with_typedb_retries(operation)
             if query_failures or execution_budget_exhausted or execution_incomplete:
                 incomplete_diagnostic = typedb_native_rule_execution_incomplete_diagnostic(
                     query_failures,
@@ -10748,6 +11051,8 @@ relation ontology-assertion,
                     "nativeQueryUsed": False,
                     "schemaFunctionUsed": schema_function_query,
                     "nativeExecutionMode": execution_mode,
+                    "nativeRuleParallelism": effective_parallelism,
+                    "parallelRuleExecution": parallel_rule_execution,
                     "matchedCount": len(matches),
                     "executedRuleCount": len(executed_rules),
                     "skippedRuleCount": len(skipped_rules),
@@ -10770,6 +11075,8 @@ relation ontology-assertion,
                 "nativeQueryUsed": True,
                 "schemaFunctionUsed": schema_function_query,
                 "nativeExecutionMode": execution_mode,
+                "nativeRuleParallelism": effective_parallelism,
+                "parallelRuleExecution": parallel_rule_execution,
                 "executedRuleCount": len(executed_rules),
                 "skippedRuleCount": len(skipped_rules),
                 "matchedCount": len(matches),
@@ -10792,6 +11099,8 @@ relation ontology-assertion,
                 "nativeQueryUsed": False,
                 "schemaFunctionUsed": False,
                 "nativeExecutionMode": execution_mode,
+                "nativeRuleParallelism": effective_parallelism,
+                "parallelRuleExecution": parallel_rule_execution,
                 "matchedCount": 0,
                 "matches": [],
                 "reasonCode": typedb_error_code(error),
@@ -11502,6 +11811,7 @@ relation ontology-assertion,
                 str(current.get("status") or "") == "held"
                 and str(current.get("leaseOwner") or "") == supplied_owner
             ):
+                values["_nativeInferenceWriteLeaseHeld"] = True
                 result = self._run_rulebox_unlocked(values)
                 if isinstance(result, dict):
                     result["inferenceWriteLease"] = {
@@ -11546,6 +11856,7 @@ relation ontology-assertion,
                 },
             }
         try:
+            values["_nativeInferenceWriteLeaseHeld"] = True
             result = self._run_rulebox_unlocked(values)
         finally:
             release = self.release_scoped_abox_write_lease(lease)
@@ -11566,6 +11877,7 @@ relation ontology-assertion,
         # ``reset_metrics=False`` to their own snapshot method.
         self.reset_query_metrics()
         payload = dict(payload) if isinstance(payload, dict) else {}
+        stable_abox_write_lease_held = typedb_bool(payload.pop("_nativeInferenceWriteLeaseHeld", False))
         projection_preflight_graph = payload.pop("_nativePreflightProjectionGraph", None)
         projection_preflight_manifest_id = str(
             payload.pop("_nativePreflightProjectionManifestId", "") or ""
@@ -11960,6 +12272,8 @@ relation ontology-assertion,
                 ),
                 preflight_graph=preflight_graph,
                 preflight_incoming_relations_complete=preflight_incoming_relations_complete,
+                native_rule_parallelism=self.native_rule_parallelism() if stable_abox_write_lease_held else 1,
+                stable_abox_write_lease_held=stable_abox_write_lease_held,
             )
             native_stage_timings["nativeRuleQueriesMs"] = int(
                 (time.perf_counter() - native_query_started) * 1000
@@ -11977,6 +12291,8 @@ relation ontology-assertion,
                 })[:160],
                 "typedbNativeRuleExecutedCount": int(number_or_none(native_match_result.get("executedRuleCount")) or 0),
                 "typedbNativeRuleSkippedCount": int(number_or_none(native_match_result.get("skippedRuleCount")) or 0),
+                "typedbNativeRuleParallelism": int(number_or_none(native_match_result.get("nativeRuleParallelism")) or 1),
+                "typedbNativeRuleParallelUsed": bool(native_match_result.get("parallelRuleExecution")),
                 "pythonCompatibilityReasonerUsed": False,
                 "typedbNativeStageTimings": dict(native_stage_timings),
             })
@@ -15899,6 +16215,8 @@ def typedb_repository_from_settings(settings: Dict[str, str] = None):
         or DEFAULT_TYPEDB_NATIVE_RULE_QUERY_TIMEOUT_SECONDS,
         native_rule_execution_budget_seconds=number_or_none(settings.get("typedbNativeRuleExecutionBudgetSeconds"))
         or DEFAULT_TYPEDB_NATIVE_RULE_EXECUTION_BUDGET_SECONDS,
+        native_rule_parallelism=int(number_or_none(settings.get("typedbNativeRuleParallelism"))
+        or DEFAULT_TYPEDB_NATIVE_RULE_PARALLELISM),
         inference_write_lease_enabled=True
         if settings.get("typedbInferenceWriteLeaseEnabled") in (None, "")
         else typedb_bool(settings.get("typedbInferenceWriteLeaseEnabled")),

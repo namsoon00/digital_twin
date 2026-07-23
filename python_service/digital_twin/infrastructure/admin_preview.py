@@ -455,6 +455,7 @@ def admin_preview_config() -> Dict[str, object]:
                     {"key": "ontologyReasoningMaxSymbolsPerRun", "label": "한 번에 추론할 종목 수", "type": "number", "default": "3"},
                     {"key": "typedbNativeRuleTargetSymbolLimit", "label": "TypeDB 네이티브 추론 대상 종목 상한", "type": "number", "default": "1"},
                     {"key": "typedbNativeRuleSelectionEnabled", "label": "변경 범위 기반 RuleBox 선택", "type": "toggle", "default": "1"},
+                    {"key": "typedbNativeRuleParallelism", "label": "TypeDB 규칙 병렬 실행 수", "type": "number", "default": "4"},
                     {"key": "ontologyReasoningMinIntervalSeconds", "label": "종목별 추론 병합 간격", "type": "number", "default": "180", "unit": "seconds"},
                     {"key": "ontologyReasoningUrgentMinIntervalSeconds", "label": "긴급 추론 최소 간격", "type": "number", "default": "60", "unit": "seconds"},
                     {"key": "ontologyReasoningFairnessMaxWaitSeconds", "label": "추론 대기 종목 우선 처리 시간", "type": "number", "default": "900", "unit": "seconds"},

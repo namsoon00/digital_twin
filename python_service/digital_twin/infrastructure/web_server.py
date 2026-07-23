@@ -572,6 +572,7 @@ def settings_status_payload() -> Dict[str, object]:
         "ontologyReasoningMaxSymbolsPerRun",
         "typedbNativeRuleTargetSymbolLimit",
         "typedbNativeRuleSelectionEnabled",
+        "typedbNativeRuleParallelism",
         "ontologyReasoningMinIntervalSeconds",
         "ontologyReasoningUrgentMinIntervalSeconds",
         "ontologyReasoningProjectionRetrySeconds",

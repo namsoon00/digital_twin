@@ -16,6 +16,12 @@ VOLATILE_LIFECYCLE_KEYS = {
     "fetchedAt",
     "firstObservedAt",
     "generatedAt",
+    # Durations derived from the polling clock change continuously even when
+    # the observed market fact has not changed. The corresponding discrete
+    # freshness/data-state remains material and is what TypeDB rules consume.
+    "elapsedHours",
+    "elapsedMinutes",
+    "elapsedSeconds",
     "freshnessAgeMinutes",
     "freshnessGateReason",
     "freshnessReason",

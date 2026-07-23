@@ -433,6 +433,8 @@ class OntologyProjectionAuditTests(unittest.TestCase):
                 "nativeInferenceEvaluationComplete": True,
                 "typedbNativeRuleMatchedCount": 1,
                 "typedbNativeRuleMatchedRuleIds": ["market-rule"],
+                "typedbNativeRuleParallelism": 4,
+                "typedbNativeRuleParallelUsed": True,
                 "nativeRuleSelectionApplied": False,
             },
         }
@@ -443,6 +445,8 @@ class OntologyProjectionAuditTests(unittest.TestCase):
         self.assertEqual("verified", result["inferenceReuseProof"]["status"])
         self.assertTrue(result["inferenceReuseProof"]["coverageComplete"])
         self.assertEqual(["market-rule"], result["inferenceReuseProof"]["matchedRuleIds"])
+        self.assertEqual(4, completed.result_payload["ruleboxExecution"]["typedbNativeRuleParallelism"])
+        self.assertTrue(completed.result_payload["ruleboxExecution"]["typedbNativeRuleParallelUsed"])
         self.assertEqual(
             "verified",
             completed.result_payload["inferenceReuseProof"]["status"],

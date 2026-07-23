@@ -55,6 +55,25 @@ def elapsed_minutes(timestamp: object, now: datetime) -> float:
     return max(0.0, (now - parsed.astimezone(timezone.utc)).total_seconds() / 60.0)
 
 
+def market_collection_unavailable_reason(result: Dict[str, object]) -> str:
+    """Keep the account-side failure visible in the operational health event."""
+    message = str(result.get("message") or "시장 데이터 수집이 계좌 또는 공급자 상태 때문에 완료되지 않았습니다.").strip()
+    unavailable = result.get("unavailableAccounts")
+    if not isinstance(unavailable, list):
+        return message
+    details = []
+    for item in unavailable[:3]:
+        if not isinstance(item, dict):
+            continue
+        account_id = str(item.get("accountId") or "미상").strip() or "미상"
+        status = " ".join(str(item.get("status") or "").split())[:240]
+        if status:
+            details.append(account_id + " · " + status)
+    if not details:
+        return message
+    return message + " · 실패 상세: " + " / ".join(details)
+
+
 @dataclass(frozen=True)
 class DataPipelineHealth:
     pipeline: str
@@ -207,7 +226,7 @@ def evaluate_market_data_collection_health(
         state, reason_code, reason = "disabled", "collection-disabled", "시장 데이터 수집 기능이 비활성화되어 있습니다."
     elif status in failed_statuses:
         state, reason_code, reason = "failed", "market-collection-unavailable", (
-            str(result.get("message") or "시장 데이터 수집이 계좌 또는 공급자 상태 때문에 완료되지 않았습니다.")
+            market_collection_unavailable_reason(result)
         )
     elif not target_count:
         state, reason_code, reason = "idle", "no-observation-targets", "현재 수집할 보유·관심·시장 프록시 종목이 없습니다."

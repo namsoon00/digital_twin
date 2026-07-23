@@ -138,6 +138,33 @@ class DataPipelineHealthTests(unittest.TestCase):
         self.assertEqual("time-series-write-failed", health.reason_code)
         self.assertTrue(health.alert_required)
 
+    def test_market_collection_account_failure_keeps_toss_stage_in_health_event(self):
+        health = evaluate_market_data_collection_health({
+            "status": "accountDataUnavailable",
+            "message": "실데이터를 읽은 계정이 없습니다.",
+            "unavailableAccounts": [{
+                "accountId": "default",
+                "mode": "demo",
+                "status": "토스 조회 실패 · Toss accounts 단계 실패 · HTTP 401 Unauthorized",
+            }],
+        }, previous={"state": "healthy"}, now=datetime(2026, 7, 23, 4, 40, tzinfo=timezone.utc))
+
+        self.assertEqual("failed", health.state)
+        self.assertEqual("market-collection-unavailable", health.reason_code)
+        self.assertIn("default · 토스 조회 실패", health.reason)
+        self.assertIn("HTTP 401 Unauthorized", health.to_dict()["reason"])
+
+        store = MemoryStore()
+        _health, event = DataPipelineHealthService(store).record_market_data_collection({
+            "status": "accountDataUnavailable",
+            "message": "실데이터를 읽은 계정이 없습니다.",
+            "unavailableAccounts": [{
+                "accountId": "default",
+                "status": "토스 조회 실패 · Toss holdings 단계 실패 · HTTP 403 Forbidden",
+            }],
+        })
+        self.assertIn("HTTP 403 Forbidden", event.payload["reason"])
+
     def test_service_persists_market_snapshot_health(self):
         store = MemoryStore()
         service = DataPipelineHealthService(store)

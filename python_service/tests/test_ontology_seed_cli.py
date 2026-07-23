@@ -88,3 +88,29 @@ class OntologySeedCliTests(unittest.TestCase):
 
         self.assertEqual(0, result)
         self.assertIn('"localScopedABoxWriteLeaseRecovery": {"status": "cleared"}', output.getvalue())
+
+    def test_ontology_reasoning_prefers_all_world_local_write_lease_recovery(self):
+        repository = SimpleNamespace(
+            recover_all_dead_local_scoped_abox_write_leases=lambda: {
+                "status": "cleared",
+                "clearedWorldIds": ["portfolio:local:default"],
+            },
+            recover_dead_local_scoped_abox_write_lease=lambda: (_ for _ in ()).throw(
+                AssertionError("legacy single-world recovery must not be used")
+            ),
+        )
+        runner = SimpleNamespace(run_once=lambda **_kwargs: {"status": "idle"})
+        args = SimpleNamespace(
+            ontology_reasoning_action="once",
+            limit=20,
+            force=False,
+        )
+
+        with patch("digital_twin.infrastructure.cli.runtime_settings", return_value={}), \
+                patch("digital_twin.infrastructure.cli.ontology_repository_from_settings", return_value=repository), \
+                patch("digital_twin.infrastructure.cli.build_ontology_reasoning_runner", return_value=runner), \
+                patch("sys.stdout", new_callable=io.StringIO) as output:
+            result = ontology_reasoning_command(args)
+
+        self.assertEqual(0, result)
+        self.assertIn("portfolio:local:default", output.getvalue())

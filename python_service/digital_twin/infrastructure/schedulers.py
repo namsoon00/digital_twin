@@ -100,6 +100,8 @@ class OntologyReasoningScheduler:
         self.runner = runner
         self.interval_seconds = max(5, int(interval_seconds or 10))
         self.error_reporter = error_reporter or operational_error_reporter()
+        self.last_deferred_signature = ""
+        self.last_deferred_report_at = 0.0
         self.running = True
 
     def stop(self, *_args) -> None:
@@ -121,6 +123,28 @@ class OntologyReasoningScheduler:
                         + " alerts="
                         + str(result.get("alertCount", 0))
                     )
+                    self.last_deferred_signature = ""
+                    self.last_deferred_report_at = 0.0
+                elif str(result.get("status") or "") in {"deferred", "circuit-open"}:
+                    reason = str(result.get("deferredReason") or "TypeDB projection is not ready.")
+                    signature = str(result.get("status") or "") + "|" + reason
+                    # A worker can retry every few seconds. Log the first
+                    # distinct block immediately, then retain one heartbeat
+                    # per minute so a persistent block stays observable.
+                    if (
+                        signature != self.last_deferred_signature
+                        or started - self.last_deferred_report_at >= 60.0
+                    ):
+                        print(
+                            "Ontology reasoning "
+                            + str(result.get("status"))
+                            + " retryAfter="
+                            + str(result.get("retryAfterSeconds", 0))
+                            + "s reason="
+                            + reason[:280]
+                        )
+                        self.last_deferred_signature = signature
+                        self.last_deferred_report_at = started
             except Exception as error:  # noqa: BLE001 - long-running reasoning worker must continue after a cycle failure.
                 print("Python ontology reasoning worker error: " + str(error))
                 report_runtime_error(self.error_reporter, "Python ontology reasoning worker", error, "inference cycle")

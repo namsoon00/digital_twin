@@ -1146,6 +1146,47 @@ class ScopedABoxManifestMixin:
             label="typedb.scoped-abox-write-lease",
         )
 
+    def scoped_abox_write_lease_world_ids(self) -> List[str]:
+        """List worlds with a durable scoped ABox lease.
+
+        Leases are stored outside the world generations, so a worker restart
+        cannot infer their worlds from the active ABox alone. Only accept rows
+        whose deterministic id and storage id agree with the embedded world
+        id; recovery must never inspect or delete another control record.
+        """
+        query = (
+            "match $n isa ontology-node, "
+            "has ontology-id $id, "
+            "has ontology-box " + typedb_string(SCOPED_ABOX_WRITE_LEASE_BOX) + ", "
+            "has ontology-storage-id $storageId, "
+            "has ontology-updated-at $updatedAt, has ontology-json $json;"
+        )
+        rows = self.read_rows(
+            query,
+            ["id", "storageId", "updatedAt", "json"],
+            label="typedb.scoped-abox-write-lease-worlds",
+        )
+        worlds = set()
+        prefix = SCOPED_ABOX_WRITE_LEASE_ID + ":world:"
+        for row in rows:
+            lease_id = str(row.get("id") or "")
+            if lease_id != SCOPED_ABOX_WRITE_LEASE_ID and not lease_id.startswith(prefix):
+                continue
+            payload = json_object(row.get("json"))
+            world_id = str(payload.get("worldId") or "")
+            expected_id = SCOPED_ABOX_WRITE_LEASE_ID + (
+                ":world:" + hashlib.sha256(world_id.encode("utf-8")).hexdigest()[:16]
+                if world_id.strip()
+                else ""
+            )
+            if lease_id != expected_id:
+                continue
+            expected_storage_id = self.scoped_abox_write_lease_storage_id(world_id)
+            if str(row.get("storageId") or "") != expected_storage_id:
+                continue
+            worlds.add(world_id)
+        return sorted(worlds)
+
     def scoped_abox_write_lease_status(self, world_id: str = "") -> Dict[str, object]:
         rows = list(self.scoped_abox_write_lease_rows(world_id) or [])
         if not rows:
@@ -1373,7 +1414,7 @@ class ScopedABoxManifestMixin:
             return True
         return True
 
-    def recover_dead_local_scoped_abox_write_lease(self) -> Dict[str, object]:
+    def recover_dead_local_scoped_abox_write_lease(self, world_id: str = "") -> Dict[str, object]:
         """Release a held lease only when its local owner process is gone.
 
         This covers a project worker restart without requiring a TypeDB server
@@ -1386,15 +1427,17 @@ class ScopedABoxManifestMixin:
                 "configured": False,
                 "status": "disabled",
                 "graphStore": "typedb",
+                "worldId": str(world_id or ""),
                 "reason": "TypeDB ontology storage is not configured.",
             }
         try:
-            existing = self.scoped_abox_write_lease_status()
+            existing = self.scoped_abox_write_lease_status(world_id)
         except Exception as error:  # noqa: BLE001 - recovery must never block the worker startup.
             return {
                 "configured": True,
                 "status": "unavailable",
                 "graphStore": "typedb",
+                "worldId": str(world_id or ""),
                 "reason": str(error)[:180],
             }
         if str(existing.get("status") or "") != "held":
@@ -1402,6 +1445,7 @@ class ScopedABoxManifestMixin:
                 "configured": True,
                 "status": "skipped",
                 "graphStore": "typedb",
+                "worldId": str(world_id or ""),
                 "reason": "No held scoped ABox write lease requires local recovery.",
             }
         payload = json_object(existing.get("propertiesJson"))
@@ -1414,6 +1458,7 @@ class ScopedABoxManifestMixin:
                 "configured": True,
                 "status": "legacy-owner-unknown",
                 "graphStore": "typedb",
+                "worldId": str(world_id or ""),
                 "leaseOwner": str(existing.get("leaseOwner") or ""),
                 "reason": "Held lease has no local owner metadata and will expire normally.",
             }
@@ -1424,6 +1469,7 @@ class ScopedABoxManifestMixin:
                 "configured": True,
                 "status": "invalid-owner",
                 "graphStore": "typedb",
+                "worldId": str(world_id or ""),
                 "leaseOwner": str(existing.get("leaseOwner") or ""),
                 "reason": "Held lease has an invalid local process identifier and will expire normally.",
             }
@@ -1432,6 +1478,7 @@ class ScopedABoxManifestMixin:
                 "configured": True,
                 "status": "invalid-owner",
                 "graphStore": "typedb",
+                "worldId": str(world_id or ""),
                 "leaseOwner": str(existing.get("leaseOwner") or ""),
                 "reason": "Held lease has no valid local process identifier and will expire normally.",
             }
@@ -1440,6 +1487,7 @@ class ScopedABoxManifestMixin:
                 "configured": True,
                 "status": "foreign-owner",
                 "graphStore": "typedb",
+                "worldId": str(world_id or ""),
                 "leaseOwner": str(existing.get("leaseOwner") or ""),
                 "leaseHost": lease_host,
                 "reason": "Held lease belongs to another host and cannot be reclaimed locally.",
@@ -1449,6 +1497,7 @@ class ScopedABoxManifestMixin:
                 "configured": True,
                 "status": "active-owner",
                 "graphStore": "typedb",
+                "worldId": str(world_id or ""),
                 "leaseOwner": str(existing.get("leaseOwner") or ""),
                 "leaseHost": lease_host,
                 "leaseProcessId": local_process_id,
@@ -1461,6 +1510,7 @@ class ScopedABoxManifestMixin:
                 "configured": True,
                 "status": "invalid",
                 "graphStore": "typedb",
+                "worldId": str(world_id or ""),
                 "reason": "Dead local lease has no exact ownership payload.",
             }
         try:
@@ -1469,12 +1519,15 @@ class ScopedABoxManifestMixin:
                 "owner": owner,
                 "leaseOwner": owner,
                 "propertiesJson": properties_json,
+                "worldId": str(world_id or ""),
+                "storageId": self.scoped_abox_write_lease_storage_id(world_id),
             })
         except Exception as error:  # noqa: BLE001 - normal expiry remains the final fallback.
             return {
                 "configured": True,
                 "status": "error",
                 "graphStore": "typedb",
+                "worldId": str(world_id or ""),
                 "leaseOwner": owner,
                 "reason": str(error)[:180],
             }
@@ -1482,13 +1535,60 @@ class ScopedABoxManifestMixin:
             "configured": True,
             "status": "cleared" if str((release or {}).get("status") or "") == "released" else "error",
             "graphStore": "typedb",
+            "worldId": str(world_id or ""),
             "previousLeaseOwner": owner,
             "previousLeaseHost": lease_host,
             "previousLeaseProcessId": local_process_id,
             "release": dict(release or {}),
         }
 
-    def recover_scoped_abox_write_lease_after_server_start(self) -> Dict[str, object]:
+    def recover_all_dead_local_scoped_abox_write_leases(self) -> Dict[str, object]:
+        """Recover every proven-dead local writer, including account worlds."""
+        if not str(getattr(self, "address", "") or "").strip():
+            return {
+                "configured": False,
+                "status": "disabled",
+                "graphStore": "typedb",
+                "reason": "TypeDB ontology storage is not configured.",
+                "worlds": [],
+            }
+        try:
+            world_ids = self.scoped_abox_write_lease_world_ids()
+        except Exception as error:  # noqa: BLE001 - startup must not fail only because the inventory is unavailable.
+            return {
+                "configured": True,
+                "status": "unavailable",
+                "graphStore": "typedb",
+                "reason": str(error)[:180],
+                "worlds": [],
+            }
+        # Preserve recovery for the legacy unscoped lease even when there are
+        # no rows to inventory, then handle every validated account world.
+        world_ids = list(dict.fromkeys(["", *world_ids]))
+        worlds = [self.recover_dead_local_scoped_abox_write_lease(item) for item in world_ids]
+        statuses = [str(item.get("status") or "") for item in worlds]
+        cleared_worlds = [str(item.get("worldId") or "") for item in worlds if str(item.get("status") or "") == "cleared"]
+        errors = [item for item in worlds if str(item.get("status") or "") in {"error", "unavailable"}]
+        if errors and cleared_worlds:
+            status = "partial"
+        elif errors:
+            status = "error"
+        elif cleared_worlds:
+            status = "cleared"
+        else:
+            status = "skipped"
+        return {
+            "configured": True,
+            "status": status,
+            "graphStore": "typedb",
+            "worldCount": len(worlds),
+            "clearedCount": len(cleared_worlds),
+            "clearedWorldIds": cleared_worlds,
+            "worlds": worlds,
+            "statuses": statuses,
+        }
+
+    def recover_scoped_abox_write_lease_after_server_start_for_world(self, world_id: str = "") -> Dict[str, object]:
         """Clear a lease after TypeDB itself has restarted.
 
         A scoped ABox writer holds a durable lease across bounded TypeDB write
@@ -1502,15 +1602,17 @@ class ScopedABoxManifestMixin:
                 "configured": False,
                 "status": "disabled",
                 "graphStore": "typedb",
+                "worldId": str(world_id or ""),
                 "reason": "TypeDB ontology storage is not configured.",
             }
         try:
-            existing = self.scoped_abox_write_lease_status()
+            existing = self.scoped_abox_write_lease_status(world_id)
         except Exception as error:  # noqa: BLE001 - a fresh database may not have schema rows yet.
             return {
                 "configured": True,
                 "status": "unavailable",
                 "graphStore": "typedb",
+                "worldId": str(world_id or ""),
                 "reason": str(error)[:180],
             }
         if str(existing.get("status") or "") == "empty":
@@ -1518,6 +1620,7 @@ class ScopedABoxManifestMixin:
                 "configured": True,
                 "status": "empty",
                 "graphStore": "typedb",
+                "worldId": str(world_id or ""),
             }
         owner = str(existing.get("leaseOwner") or "")
         properties_json = str(existing.get("propertiesJson") or "")
@@ -1526,6 +1629,7 @@ class ScopedABoxManifestMixin:
                 "configured": True,
                 "status": "invalid",
                 "graphStore": "typedb",
+                "worldId": str(world_id or ""),
                 "reason": "Scoped ABox write lease has no exact ownership payload.",
             }
         imported = self.driver_imports()
@@ -1534,6 +1638,7 @@ class ScopedABoxManifestMixin:
                 "configured": True,
                 "status": "driver-missing",
                 "graphStore": "typedb",
+                "worldId": str(world_id or ""),
                 "reason": str(imported[1])[:180],
             }
 
@@ -1545,6 +1650,8 @@ class ScopedABoxManifestMixin:
                 return self.delete_scoped_abox_write_lease(driver, imported, {
                     "owner": owner,
                     "propertiesJson": properties_json,
+                    "worldId": str(world_id or ""),
+                    "storageId": self.scoped_abox_write_lease_storage_id(world_id),
                 })
             finally:
                 self.close_driver(driver)
@@ -1556,6 +1663,7 @@ class ScopedABoxManifestMixin:
                 "configured": True,
                 "status": "error",
                 "graphStore": "typedb",
+                "worldId": str(world_id or ""),
                 "previousLeaseOwner": owner,
                 "reason": str(error)[:180],
             }
@@ -1563,10 +1671,61 @@ class ScopedABoxManifestMixin:
             "configured": True,
             "status": "cleared" if str((deleted or {}).get("status") or "") == "released" else str((deleted or {}).get("status") or "error"),
             "graphStore": "typedb",
+            "worldId": str(world_id or ""),
             "previousLeaseOwner": owner,
             "previousLeaseExpiresAtEpoch": float(number_or_none(existing.get("leaseExpiresAtEpoch")) or 0),
             "release": dict(deleted or {}),
         }
+
+    def recover_all_scoped_abox_write_leases_after_server_start(self) -> Dict[str, object]:
+        """Clear every validated lease after a fresh TypeDB server startup."""
+        if not str(getattr(self, "address", "") or "").strip():
+            return {
+                "configured": False,
+                "status": "disabled",
+                "graphStore": "typedb",
+                "reason": "TypeDB ontology storage is not configured.",
+                "worlds": [],
+            }
+        try:
+            world_ids = self.scoped_abox_write_lease_world_ids()
+        except Exception as error:  # noqa: BLE001 - seed must surface the unavailable inventory without hiding it.
+            return {
+                "configured": True,
+                "status": "unavailable",
+                "graphStore": "typedb",
+                "reason": str(error)[:180],
+                "worlds": [],
+            }
+        world_ids = list(dict.fromkeys(["", *world_ids]))
+        worlds = [self.recover_scoped_abox_write_lease_after_server_start_for_world(item) for item in world_ids]
+        statuses = [str(item.get("status") or "") for item in worlds]
+        cleared_worlds = [str(item.get("worldId") or "") for item in worlds if str(item.get("status") or "") == "cleared"]
+        errors = [item for item in worlds if str(item.get("status") or "") in {"error", "unavailable", "driver-missing", "invalid"}]
+        if errors and cleared_worlds:
+            status = "partial"
+        elif errors:
+            status = "error"
+        elif cleared_worlds:
+            status = "cleared"
+        elif all(item == "empty" for item in statuses):
+            status = "empty"
+        else:
+            status = "skipped"
+        return {
+            "configured": True,
+            "status": status,
+            "graphStore": "typedb",
+            "worldCount": len(worlds),
+            "clearedCount": len(cleared_worlds),
+            "clearedWorldIds": cleared_worlds,
+            "worlds": worlds,
+            "statuses": statuses,
+        }
+
+    def recover_scoped_abox_write_lease_after_server_start(self) -> Dict[str, object]:
+        """Clear all leases after TypeDB itself has restarted."""
+        return self.recover_all_scoped_abox_write_leases_after_server_start()
 
     def recover_scoped_abox_write_lease_after_managed_shutdown(self) -> Dict[str, object]:
         """Recover only a proven-dead local writer after worker restart.
@@ -1575,7 +1734,7 @@ class ScopedABoxManifestMixin:
         CLI process is absent. Reuse the local owner identity check instead of
         treating a worker restart like a TypeDB server restart.
         """
-        return self.recover_dead_local_scoped_abox_write_lease()
+        return self.recover_all_dead_local_scoped_abox_write_leases()
 
     def recover_pending_abox_activation(self) -> Dict[str, object]:
         return {

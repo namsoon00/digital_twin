@@ -318,7 +318,9 @@ def ontology_reasoning_command(args) -> int:
     local_lease_recovery = {}
     if args.ontology_reasoning_action in {"once", "watch"}:
         repository = ontology_repository_from_settings(settings)
-        recover = getattr(repository, "recover_dead_local_scoped_abox_write_lease", None)
+        recover = getattr(repository, "recover_all_dead_local_scoped_abox_write_leases", None)
+        if not callable(recover):
+            recover = getattr(repository, "recover_dead_local_scoped_abox_write_lease", None)
         if callable(recover):
             try:
                 local_lease_recovery = dict(recover() or {})

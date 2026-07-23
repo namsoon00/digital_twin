@@ -6,7 +6,7 @@ import time
 import unittest
 from pathlib import Path
 from types import SimpleNamespace
-from unittest.mock import ANY, patch
+from unittest.mock import ANY, call, patch
 
 from digital_twin import service_manager
 from digital_twin.domain.ontology_rulebox_catalog import default_graph_inference_rules
@@ -452,6 +452,47 @@ class TypeDBOntologyRepositoryTests(unittest.TestCase):
         self.assertEqual("cleared", result["status"])
         self.assertEqual("scoped-abox:dead", result["previousLeaseOwner"])
         release.assert_called_once()
+
+    def test_scoped_abox_write_lease_recovers_a_dead_account_world_owner_by_exact_storage_id(self):
+        repository = TypeDBOntologyGraphRepository("127.0.0.1:1729")
+        world_id = "portfolio:local:default"
+        held = {
+            "status": "held",
+            "worldId": world_id,
+            "leaseOwner": "scoped-abox:dead",
+            "leaseHost": "unit-host",
+            "leaseProcessId": 4242,
+            "propertiesJson": '{"leaseHost":"unit-host","leaseProcessId":4242}',
+        }
+        with patch.object(repository, "scoped_abox_write_lease_status", return_value=held) as status, \
+                patch("digital_twin.infrastructure.typedb_ontology.socket.gethostname", return_value="unit-host"), \
+                patch.object(repository, "local_process_alive", return_value=False), \
+                patch.object(repository, "release_scoped_abox_write_lease", return_value={"status": "released"}) as release:
+            result = repository.recover_dead_local_scoped_abox_write_lease(world_id)
+
+        self.assertEqual("cleared", result["status"])
+        self.assertEqual(world_id, result["worldId"])
+        status.assert_called_once_with(world_id)
+        self.assertEqual(world_id, release.call_args.args[0]["worldId"])
+        self.assertEqual(
+            repository.scoped_abox_write_lease_storage_id(world_id),
+            release.call_args.args[0]["storageId"],
+        )
+
+    def test_scoped_abox_write_lease_recovery_inventories_each_validated_world(self):
+        repository = TypeDBOntologyGraphRepository("127.0.0.1:1729")
+        world_id = "portfolio:local:default"
+        with patch.object(repository, "scoped_abox_write_lease_world_ids", return_value=[world_id]), \
+                patch.object(repository, "recover_dead_local_scoped_abox_write_lease", side_effect=[
+                    {"status": "skipped", "worldId": ""},
+                    {"status": "cleared", "worldId": world_id},
+                ]) as recover:
+            result = repository.recover_all_dead_local_scoped_abox_write_leases()
+
+        self.assertEqual("cleared", result["status"])
+        self.assertEqual([world_id], result["clearedWorldIds"])
+        self.assertEqual([call("")], recover.call_args_list[:1])
+        self.assertEqual([call(world_id)], recover.call_args_list[1:])
 
     def test_scoped_abox_write_lease_local_recovery_does_not_steal_live_or_legacy_owner(self):
         repository = TypeDBOntologyGraphRepository("127.0.0.1:1729")

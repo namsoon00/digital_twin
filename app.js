@@ -5,6 +5,7 @@
 
   var tabs = [
     { id: "overview", label: "오늘", description: "판단·일정·위험", groupId: "workspace" },
+    { id: "calendar", label: "캘린더", description: "일정·리서치·알림", groupId: "workspace" },
     { id: "feed", label: "시장", description: "종목·뉴스·수급", groupId: "workspace" },
     { id: "modeling", label: "판단", description: "액션·근거", groupId: "workspace" },
     { id: "notifications", label: "알림", description: "상태·발송", groupId: "workspace" },
@@ -20,7 +21,7 @@
     pageClass: "web-style-page",
     commandClass: "web-style-command-strip"
   };
-  var bottomTabIds = ["overview", "feed", "modeling", "notifications", "experiments", "settings"];
+  var bottomTabIds = ["overview", "calendar", "feed", "modeling", "notifications", "experiments", "settings"];
   var managementTabIds = [];
   var navigationGroups = [
     { id: "workspace", label: "투자 콘솔", description: "오늘부터 운영까지 한 흐름", tabIds: bottomTabIds }
@@ -385,6 +386,8 @@
     investmentCalendarDeleting: "",
     investmentCalendarRunning: false,
     investmentCalendarSyncing: false,
+    investmentCalendarDiscovering: false,
+    investmentCalendarDiscoveryResult: null,
     investmentCalendarResearching: false,
     investmentCalendarResearchResult: null,
     investmentCalendarCandidates: null,
@@ -1220,7 +1223,6 @@
     var aliases = {
       more: "overview",
       today: "overview",
-      calendar: "overview",
       market: "feed",
       watchlist: "feed",
       symbols: "feed",
@@ -6113,6 +6115,44 @@
       });
   }
 
+  function discoverInvestmentCalendarEvents() {
+    if (state.investmentCalendarDiscovering) return Promise.resolve();
+    var filters = state.investmentCalendarFilters || {};
+    var payload = {
+      symbol: String(filters.symbol || "").trim().toUpperCase(),
+      limit: 12,
+      force: true
+    };
+    state.investmentCalendarDiscovering = true;
+    state.investmentCalendarError = "";
+    render();
+    var promise = isStaticPreviewHost()
+      ? Promise.resolve({
+          status: "preview",
+          targetCount: 0,
+          evidenceCount: 0,
+          tentativeCount: 0,
+          reviewCandidateCount: 0,
+          sources: []
+        })
+      : sendJson("/api/investment-calendar/discovery", "POST", payload);
+    return promise
+      .then(function (result) {
+        state.investmentCalendarDiscoveryResult = result || {};
+        state.investmentCalendarCandidatePage = 0;
+        showSnackbar("일정 탐색 완료 · 임시 일정 " + Number((result || {}).tentativeCount || 0) + "건 · 검토 후보 " + Number((result || {}).reviewCandidateCount || 0) + "건", "success");
+        return Promise.all([loadInvestmentCalendar(true), loadInvestmentCalendarCandidates(true)]);
+      })
+      .catch(function (error) {
+        state.investmentCalendarError = error.message || "투자 일정 탐색을 실행하지 못했습니다.";
+        showSnackbar(state.investmentCalendarError, "danger");
+      })
+      .finally(function () {
+        state.investmentCalendarDiscovering = false;
+        render();
+      });
+  }
+
   function approveInvestmentCalendarCandidate(candidateId) {
     var id = String(candidateId || "").trim();
     if (!id || state.investmentCalendarCandidateReviewing) return Promise.resolve();
@@ -6156,7 +6196,7 @@
     })
       .then(function () {
         showSnackbar("캘린더 후보를 거절했습니다.", "success");
-        return loadInvestmentCalendarCandidates(true);
+        return Promise.all([loadInvestmentCalendar(true), loadInvestmentCalendarCandidates(true)]);
       })
       .catch(function (error) {
         state.investmentCalendarError = error.message || "캘린더 후보를 거절하지 못했습니다.";
@@ -7760,10 +7800,10 @@
     if ((state.activeTab === "feed" || state.activeTab === "notifications" || notificationDetailNeedsEvidence) && !state.researchEvidence && !state.researchEvidenceLoading) {
       loadResearchEvidence(false);
     }
-    if (state.activeTab === "overview" && !state.investmentCalendar && !state.investmentCalendarLoading) {
+    if ((state.activeTab === "overview" || state.activeTab === "calendar") && !state.investmentCalendar && !state.investmentCalendarLoading) {
       loadInvestmentCalendar(false);
     }
-    if (state.activeTab === "overview" && !state.investmentCalendarCandidates && !state.investmentCalendarCandidatesLoading) {
+    if (state.activeTab === "calendar" && !state.investmentCalendarCandidates && !state.investmentCalendarCandidatesLoading) {
       loadInvestmentCalendarCandidates(false);
     }
     if (state.activeTab === "notifications" && !state.notificationJobsLoaded && !state.notificationJobsLoading) {
@@ -9678,6 +9718,7 @@
 
   function renderActiveTab(snapshot) {
     if (state.activeTab === "overview") return renderTodayConsole(snapshot);
+    if (state.activeTab === "calendar") return renderInvestmentCalendarPage(snapshot);
     if (state.activeTab === "feed") return renderMarketConsole(snapshot);
     if (state.activeTab === "modeling") return renderDecisionConsole(snapshot);
     if (state.activeTab === "notifications") return renderAlertsConsole();
@@ -9786,6 +9827,12 @@
     return targets.slice(0, 3).join(" · ") || "전체 포트폴리오";
   }
 
+  function investmentCalendarReminderLabel(event) {
+    if (String((event || {}).status || "").toLowerCase() === "tentative") return "검증 전 알림 대기";
+    var offsets = Array.isArray((event || {}).reminderOffsetsMinutes) ? event.reminderOffsetsMinutes : [];
+    return offsets.length ? "알림 " + offsets.join(", ") + "분 전" : "알림 없음";
+  }
+
   function investmentCalendarPayload(event) {
     var payload = (event || {}).payload;
     return payload && typeof payload === "object" ? payload : {};
@@ -9885,7 +9932,8 @@
       '<div class="toolbar">',
       '<button class="text-button" type="button" data-action="refresh-investment-calendar"' + (state.investmentCalendarLoading ? ' disabled' : '') + '>' + (state.investmentCalendarLoading ? "조회 중" : "새로고침") + '</button>',
       '<button class="text-button" type="button" data-action="sync-official-investment-calendar"' + (state.investmentCalendarSyncing ? ' disabled' : '') + '>' + (state.investmentCalendarSyncing ? "동기화 중" : "공식일정 동기화") + '</button>',
-      '<button class="text-button" type="button" data-action="research-investment-calendar"' + (state.investmentCalendarResearching ? ' disabled' : '') + '>' + (state.investmentCalendarResearching ? "리서치 중" : "AI 일정 추천") + '</button>',
+      '<button class="text-button" type="button" data-action="discover-investment-calendar"' + (state.investmentCalendarDiscovering ? ' disabled' : '') + '>' + (state.investmentCalendarDiscovering ? "탐색 중" : "일정 탐색") + '</button>',
+      '<button class="text-button" type="button" data-action="research-investment-calendar"' + (state.investmentCalendarResearching ? ' disabled' : '') + '>' + (state.investmentCalendarResearching ? "분석 중" : "뉴스 후보 분석") + '</button>',
       '<button class="text-button primary" type="button" data-action="run-investment-calendar-reminders"' + (state.investmentCalendarRunning ? ' disabled' : '') + '>' + (state.investmentCalendarRunning ? "확인 중" : "리마인더 확인") + '</button>',
       renderCalendarEntryButton("이벤트 등록", "text-button primary"),
       '</div>',
@@ -9893,7 +9941,7 @@
       state.investmentCalendarError ? '<p class="form-error">' + escapeHtml(state.investmentCalendarError) + '</p>' : '',
       '<div class="investment-calendar-kpis">',
       renderCalendarKpi("전체", summary.total || 0, "등록 이벤트", "metric-cell", "hold"),
-      renderCalendarKpi("예정", summary.upcoming || upcoming.length || 0, "활성 일정", "metric-cell", upcoming.length ? "watch" : "hold"),
+      renderCalendarKpi("예정", summary.upcoming || upcoming.length || 0, "표시 일정", "metric-cell", upcoming.length ? "watch" : "hold"),
       renderCalendarKpi("중요", important, "중요도 80+", "metric-cell", important ? "caution" : "hold"),
       renderCalendarKpi("다음", next.startsAt ? formatClock(next.startsAt) : "대기", next.startsAt ? investmentCalendarEventTypeLabel(next.eventType) + " · " + investmentCalendarTargetLabel(next) : "등록 필요", "metric-cell", next.startsAt ? "watch" : "hold"),
       '</div>',
@@ -10081,7 +10129,8 @@
       '<div class="notification-detail-tags">',
       '<span>중요도 ' + escapeHtml(event.importance || 0) + '</span>',
       '<span>' + escapeHtml(targets.join(" · ") || "전체 포트폴리오") + '</span>',
-      '<span>알림 ' + escapeHtml((event.reminderOffsetsMinutes || []).join(", ") || "없음") + '분 전</span>',
+      String(event.status || "").toLowerCase() === "tentative" ? '<span>검토 전 일정</span>' : '',
+      '<span>' + escapeHtml(investmentCalendarReminderLabel(event)) + '</span>',
       '</div>',
       event.notes ? '<p class="subtle">' + escapeHtml(event.notes) + '</p>' : '',
       renderInvestmentCalendarImpactPreview(event),
@@ -10146,9 +10195,10 @@
     return [
       '<article class="panel investment-calendar-list-panel investment-calendar-candidate-panel"' + cardTypeAttrs("process-card", candidates.length ? "watch" : "hold") + '>',
       '<div class="panel-head">',
-      '<div><p class="label">AI RESEARCH QUEUE</p><h2>AI 추천/자동 감지 후보</h2><span>뉴스·공시 리서치에서 날짜 후보를 추천하고, 승인 전 단계로 보관합니다.</span></div>',
+      '<div><p class="label">CALENDAR REVIEW QUEUE</p><h2>리서치 추천/자동 감지 후보</h2><span>공식·시장 데이터와 뉴스·공시 리서치에서 날짜 후보를 모아 승인 전 단계로 보관합니다.</span></div>',
       '<span class="metric">' + escapeHtml(pending) + '</span>',
       '</div>',
+      renderInvestmentCalendarDiscoveryStatus(),
       renderInvestmentCalendarResearchStatus(),
       candidates.length ? renderInvestmentCalendarCandidatePager(pageInfo) : '',
       '<div class="investment-calendar-list">',
@@ -10162,8 +10212,8 @@
         tone: "hold",
         label: "Review",
         title: "검토할 자동 후보가 없습니다",
-        description: "뉴스 수집 중 날짜가 불명확하거나 신뢰도가 낮은 이벤트가 발견되면 여기에 쌓입니다.",
-        meta: ["ADR/GDR", "지수 편입", "상장", "증자"]
+        description: "시장 데이터·공식 출처·뉴스에서 확인이 필요한 일정이 발견되면 여기에 쌓입니다.",
+        meta: ["실적", "배당", "ADR/GDR", "지수 편입"]
       }) : pageInfo.visible.map(renderInvestmentCalendarCandidate).join("")),
       '</div>',
       '</article>'
@@ -10180,7 +10230,25 @@
       '<strong>' + escapeHtml(state.investmentCalendarResearching ? "AI 리서치 실행 중" : (hasResult ? "최근 AI 추천 결과" : "AI 리서치 대기")) + '</strong>',
       '<span>' + escapeHtml(hasResult ? ("근거 " + Number(result.evidenceCount || 0) + "개 · 후보 " + Number(result.storedCandidateCount || 0) + "개 · 수집 " + (collection.status || "unknown")) : "추천 실행 시 최신 뉴스 수집 후 후보 큐에만 저장합니다.") + '</span>',
       '</div>',
-      '<button class="mini-button primary" type="button" data-action="research-investment-calendar"' + (state.investmentCalendarResearching ? ' disabled' : '') + '>' + escapeHtml(state.investmentCalendarResearching ? "실행 중" : "AI 추천 실행") + '</button>',
+      '<button class="mini-button" type="button" data-action="research-investment-calendar"' + (state.investmentCalendarResearching ? ' disabled' : '') + '>' + escapeHtml(state.investmentCalendarResearching ? "실행 중" : "뉴스 후보 분석") + '</button>',
+      '</div>'
+    ].join("");
+  }
+
+  function renderInvestmentCalendarDiscoveryStatus() {
+    var result = state.investmentCalendarDiscoveryResult || {};
+    var hasResult = Object.keys(result).length > 0;
+    var sourceCount = Array.isArray(result.sources) ? result.sources.length : 0;
+    var sourceErrorCount = Array.isArray(result.sources) ? result.sources.filter(function (source) {
+      return source && source.ok === false;
+    }).length : 0;
+    return [
+      '<div class="investment-calendar-research-strip">',
+      '<div>',
+      '<strong>' + escapeHtml(state.investmentCalendarDiscovering ? "일정 탐색 실행 중" : (hasResult ? (result.status === "partial" ? "최근 일정 탐색 결과 · 일부 출처 확인 필요" : "최근 일정 탐색 결과") : "정기 일정 탐색 대기")) + '</strong>',
+      '<span>' + escapeHtml(hasResult ? ("대상 " + Number(result.targetCount || 0) + "개 · 근거 " + Number(result.evidenceCount || 0) + "개 · 임시 일정 " + Number(result.tentativeCount || 0) + "개 · 후보 " + Number(result.reviewCandidateCount || 0) + "개" + (sourceCount ? " · 출처 " + sourceCount + "개" : "") + (sourceErrorCount ? " · 오류 " + sourceErrorCount + "개" : "")) : "보유·관심 종목의 실적·배당·공시 관련 날짜를 다시 확인해 캘린더에는 임시 일정, 후보함에는 승인 대상을 추가합니다.") + '</span>',
+      '</div>',
+      '<button class="mini-button primary" type="button" data-action="discover-investment-calendar"' + (state.investmentCalendarDiscovering ? ' disabled' : '') + '>' + escapeHtml(state.investmentCalendarDiscovering ? "탐색 중" : "일정 탐색") + '</button>',
       '</div>'
     ].join("");
   }
@@ -10272,16 +10340,19 @@
     var summary = payload.summary || {};
     var upcoming = investmentCalendarUpcomingEvents();
     var next = upcoming[0] || {};
+    var reminderCandidates = upcoming.filter(function (event) {
+      return String((event || {}).status || "").toLowerCase() === "active" && Array.isArray(event.reminderOffsetsMinutes) && event.reminderOffsetsMinutes.length;
+    });
     var byType = (summary.byType || []).length ? summary.byType : [{ eventType: "custom", count: 0 }];
     var nextType = next.eventType ? investmentCalendarEventTypeLabel(next.eventType) : "캘린더 준비";
     var nextTarget = next.startsAt ? investmentCalendarTargetLabel(next) : "예정 이벤트 없음";
     return [
       '<aside class="investment-calendar-rail">',
       '<section class="panel investment-calendar-next-card"' + cardTypeAttrs("action-queue-card", next.startsAt ? "watch" : "hold") + '>',
-      '<div class="panel-head"><div><p class="label">NEXT ACTION</p><h2>다음 알림</h2></div></div>',
+      '<div class="panel-head"><div><p class="label">NEXT SCHEDULE</p><h2>다음 일정</h2></div></div>',
       '<div class="investment-calendar-next-body">',
       '<strong class="investment-calendar-next-time">' + escapeHtml(next.startsAt ? formatClock(next.startsAt) : "등록 대기") + '</strong>',
-      '<em>' + escapeHtml(nextType + " · " + nextTarget) + '</em>',
+      '<em>' + escapeHtml((String(next.status || "").toLowerCase() === "tentative" ? "검토 전 · " : "") + nextType + " · " + nextTarget) + '</em>',
       '<span class="investment-calendar-next-title">' + escapeHtml(next.title || "예정 이벤트를 등록하면 알림 후보가 생성됩니다.") + '</span>',
       '</div>',
       renderCalendarEntryButton("이벤트 등록", "text-button primary"),
@@ -10298,7 +10369,7 @@
       '<div class="panel-head"><div><p class="label">DATA QUALITY</p><h2>운영 연결</h2></div></div>',
       '<div class="investment-calendar-quality-list">',
       renderCalendarRailCheck("이벤트 저장소", summary.total ? "저장됨" : "대기", summary.total ? "watch" : "hold"),
-      renderCalendarRailCheck("리마인더 큐", upcoming.length ? upcoming.length + "건 후보" : "후보 없음", upcoming.length ? "watch" : "hold"),
+      renderCalendarRailCheck("리마인더 대상", reminderCandidates.length ? reminderCandidates.length + "건 활성" : "승인 일정 없음", reminderCandidates.length ? "watch" : "hold"),
       renderCalendarRailCheck("판단 연결", "온톨로지 요청", "hold"),
       '</div>',
       '</section>',
@@ -10361,7 +10432,7 @@
         '<div class="work-detail-metric-row">',
         renderNotificationDetailMetric("중요도", event.importance || 0, tone),
         renderNotificationDetailMetric("시간대", event.timezone || "UTC", "muted"),
-        renderNotificationDetailMetric("알림", (event.reminderOffsetsMinutes || []).join(", ") || "없음", "muted"),
+        renderNotificationDetailMetric("알림", investmentCalendarReminderLabel(event), "muted"),
         '</div>',
         '<section class="work-detail-section">',
         '<strong>대상</strong>',
@@ -24582,6 +24653,12 @@
     Array.prototype.slice.call(app.querySelectorAll('[data-action="sync-official-investment-calendar"]')).forEach(function (button) {
       button.addEventListener("click", function () {
         syncOfficialInvestmentCalendar();
+      });
+    });
+
+    Array.prototype.slice.call(app.querySelectorAll('[data-action="discover-investment-calendar"]')).forEach(function (button) {
+      button.addEventListener("click", function () {
+        discoverInvestmentCalendarEvents();
       });
     });
 

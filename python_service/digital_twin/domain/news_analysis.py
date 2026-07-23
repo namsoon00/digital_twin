@@ -102,6 +102,8 @@ KNOWN_COMPANY_ALIASES = {
     "000660": ["SK하이닉스", "SK Hynix", "Hynix"],
     "035420": ["NAVER", "네이버"],
     "005380": ["현대차", "현대자동차", "Hyundai Motor"],
+    "035720": ["카카오", "Kakao"],
+    "066570": ["LG전자", "LG Electronics"],
     "000020": ["동화약품"],
     "AAPL": ["Apple", "Apple Inc."],
     "NVDA": ["NVIDIA", "Nvidia"],

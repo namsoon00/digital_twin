@@ -371,6 +371,7 @@ def add_operational_world_concepts(
         "newsReviewLevel": "check",
         "priceChangePct": number(settings.get("marketMaterialityPriceChangePct")) or 0.6,
         "trendDistancePct": number(settings.get("marketMaterialityTrendDistancePct")) or 2.0,
+        "trendDistanceChangePct": number(settings.get("marketMaterialityTrendDistanceChangePct")) or 1.0,
         "volumeRatio": number(settings.get("marketMaterialityVolumeRatio")) or 1.5,
         "description": "데이터 변경이 투자 판단에 충분히 중요한 경우에만 추론과 알림 의도로 승격합니다.",
     })

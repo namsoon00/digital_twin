@@ -176,11 +176,25 @@ class KISRealtimeWebSocketRunner:
         symbols = self.symbol_selector.symbols()
         if not symbols:
             return {"status": "noSymbols", "provider": "kis-websocket", "savedCount": 0}
-        result = self.client.collect(
-            symbols,
-            duration_seconds or self.collect_duration_seconds(),
-            on_update=self.record_updates,
-        )
+        try:
+            result = self.client.collect(
+                symbols,
+                duration_seconds or self.collect_duration_seconds(),
+                on_update=self.record_updates,
+            )
+        except Exception as error:  # noqa: BLE001 - preserve any tick already received before a transport failure.
+            result = {
+                "status": "connection-error",
+                "provider": "kis-websocket",
+                "symbols": symbols,
+                "selectedCount": len(symbols),
+                "savedCount": 0,
+                "dataQuality": "unavailable",
+                "transport": "websocket",
+                "errorStage": "collect",
+                "reason": ("KIS WebSocket 수집 단계 연결이 끊겼습니다: " + str(error))[:360],
+                "reconnectRecommended": True,
+            }
         flush_result = self.flush_events(force=True)
         result["eventFlush"] = flush_result
         return result

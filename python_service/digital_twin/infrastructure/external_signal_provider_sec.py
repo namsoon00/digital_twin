@@ -5,6 +5,18 @@ from ..domain.portfolio import Position
 from .external_signal_utils import symbol_assignments
 
 
+DEFAULT_SEC_COMPANY_CIKS = {
+    "AAPL": "0000320193",
+    "AMD": "0000002488",
+    "CPNG": "0001834584",
+    "MSTR": "0001050446",
+    "MSFT": "0000789019",
+    "NVDA": "0001045810",
+    "STRC": "0001050446",
+    "TSLA": "0001318605",
+}
+
+
 class ExternalSignalSecMixin:
     def sec_enabled(self) -> bool:
         return self.external_api_enabled("externalSecEnabled")
@@ -14,6 +26,11 @@ class ExternalSignalSecMixin:
 
     def sec_headers(self) -> Dict[str, str]:
         return {"Accept": "application/json", "User-Agent": self.sec_user_agent()}
+
+    def sec_ticker_lookup_configured(self) -> bool:
+        """SEC rejects anonymous generic agents; known CIKs remain usable."""
+        agent = self.sec_user_agent().lower()
+        return "@" in agent and "local-contact" not in agent
 
     def sec_symbol_key(self, symbol: str) -> str:
         return str(symbol or "").upper().replace(".", "-").strip()
@@ -45,11 +62,27 @@ class ExternalSignalSecMixin:
             return
         mappings = {
             self.sec_symbol_key(symbol): self.normalize_cik(cik)
-            for symbol, cik in symbol_assignments(self.settings.get("externalSecCompanyCiks") or "").items()
+            for symbol, cik in DEFAULT_SEC_COMPANY_CIKS.items()
             if self.normalize_cik(cik)
         }
+        mappings.update({
+            self.sec_symbol_key(symbol): self.normalize_cik(cik)
+            for symbol, cik in symbol_assignments(self.settings.get("externalSecCompanyCiks") or "").items()
+            if self.normalize_cik(cik)
+        })
         ticker_map: Dict[str, str] = {}
-        if any(symbol not in mappings for symbol in symbols):
+        missing_symbols = [symbol for symbol in symbols if symbol not in mappings]
+        if missing_symbols and not self.sec_ticker_lookup_configured():
+            self.status(
+                signals,
+                "SEC EDGAR",
+                True,
+                "CIK 자동 조회 보류 · externalSecUserAgent에 연락처 이메일을 포함해 설정 필요",
+                dataUsable=False,
+                deferred=True,
+                operationalAlert=False,
+            )
+        elif missing_symbols:
             try:
                 def fetch_tickers():
                     return self.sec_ticker_lookup_payload(self.fetch_json("https://www.sec.gov/files/company_tickers.json", self.sec_headers()))

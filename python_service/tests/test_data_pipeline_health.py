@@ -58,6 +58,43 @@ class DataPipelineHealthTests(unittest.TestCase):
         self.assertEqual(health.provider_candidate_count, 5)
         self.assertTrue(health.alert_required)
 
+    def test_repeated_google_original_url_resolution_failure_is_visible(self):
+        health = evaluate_news_collection_health({
+            "status": "ok",
+            "targetCount": 1,
+            "fetchedCount": 0,
+            "savedCount": 0,
+            "statuses": [{
+                "source": "google_rss_kr",
+                "ok": True,
+                "count": 0,
+                "candidateCount": 4,
+                "googleOriginalUrlResolveFailedCount": 3,
+            }],
+        }, previous={"state": "idle", "consecutiveZeroRuns": 2}, blocked_warning_streak=3, now=datetime(2026, 7, 20, 1, 0, tzinfo=timezone.utc))
+
+        self.assertEqual("degraded", health.state)
+        self.assertEqual("article-original-url-unavailable", health.reason_code)
+        self.assertEqual(3, health.provider_rows[0]["googleOriginalUrlResolveFailedCount"])
+
+    def test_google_original_url_resolution_budget_has_a_distinct_health_reason(self):
+        health = evaluate_news_collection_health({
+            "status": "ok",
+            "targetCount": 1,
+            "fetchedCount": 0,
+            "savedCount": 0,
+            "statuses": [{
+                "source": "google_rss_kr",
+                "ok": True,
+                "count": 0,
+                "candidateCount": 4,
+                "googleOriginalUrlBudgetRejectedCount": 3,
+            }],
+        }, previous={"state": "idle", "consecutiveZeroRuns": 2}, blocked_warning_streak=3, now=datetime(2026, 7, 20, 1, 0, tzinfo=timezone.utc))
+
+        self.assertEqual("degraded", health.state)
+        self.assertEqual("article-original-url-budget-exhausted", health.reason_code)
+
     def test_recovery_from_failed_state_requires_alert(self):
         health = evaluate_news_collection_health({
             "status": "ok",

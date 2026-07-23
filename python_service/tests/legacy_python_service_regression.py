@@ -7851,8 +7851,9 @@ class PythonServiceTests(unittest.TestCase):
         self.assertEqual("body", items[0].raw_payload["articleReadStatus"])
         self.assertTrue(items[0].raw_payload["articleFacts"]["bodyAvailable"])
         self.assertEqual({"google_rss_us": 0, "yahoo_finance": 1}, {item["source"]: item["count"] for item in statuses})
-        self.assertEqual("article-body-unavailable", statuses[0]["status"])
-        self.assertEqual(1, statuses[0]["bodyMissingCount"])
+        self.assertEqual("article-original-url-unavailable", statuses[0]["status"])
+        self.assertEqual(0, statuses[0]["bodyMissingCount"])
+        self.assertEqual(1, statuses[0]["googleOriginalUrlResolveFailedCount"])
         self.assertEqual(1, statuses[1]["acceptedCount"])
 
     def test_news_source_gateway_skips_gdelt_when_primary_provider_fills_limit(self):

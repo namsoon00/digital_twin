@@ -18,6 +18,9 @@ class LocalNewsAiAnalyzer(NewsAiAnalyzer):
     def analyze(self, target: NewsCollectionTarget, evidence: ResearchEvidence) -> Dict[str, object]:
         return local_news_ai_analysis(target, evidence).to_dict()
 
+    def analyze_with_timeout(self, target: NewsCollectionTarget, evidence: ResearchEvidence, _timeout_seconds: int) -> Dict[str, object]:
+        return self.analyze(target, evidence)
+
 
 def first_json_object(text: object) -> Dict[str, object]:
     source = str(text or "").strip()
@@ -39,10 +42,13 @@ def first_json_object(text: object) -> Dict[str, object]:
 class CommandNewsAiAnalyzer(NewsAiAnalyzer):
     def __init__(self, command: str, timeout_seconds: int = 90, model_name: str = "External article AI"):
         self.command = str(command or "").strip()
-        self.timeout_seconds = max(15, int(timeout_seconds or 90))
+        self.timeout_seconds = max(1, int(timeout_seconds or 90))
         self.model_name = str(model_name or "External article AI").strip()
 
     def analyze(self, target: NewsCollectionTarget, evidence: ResearchEvidence) -> Dict[str, object]:
+        return self.analyze_with_timeout(target, evidence, self.timeout_seconds)
+
+    def analyze_with_timeout(self, target: NewsCollectionTarget, evidence: ResearchEvidence, timeout_seconds: int) -> Dict[str, object]:
         prompt = build_news_ai_analysis_prompt(target, evidence)
         completed = subprocess.run(
             self.command,
@@ -52,7 +58,7 @@ class CommandNewsAiAnalyzer(NewsAiAnalyzer):
             cwd=str(ROOT_DIR),
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
-            timeout=self.timeout_seconds,
+            timeout=max(1, min(self.timeout_seconds, int(timeout_seconds or self.timeout_seconds))),
             env=dict(os.environ),
         )
         output = completed.stdout.strip()
@@ -72,7 +78,12 @@ class FallbackNewsAiAnalyzer(NewsAiAnalyzer):
         self.fallback = fallback or LocalNewsAiAnalyzer()
 
     def analyze(self, target: NewsCollectionTarget, evidence: ResearchEvidence) -> Dict[str, object]:
+        return self.analyze_with_timeout(target, evidence, 0)
+
+    def analyze_with_timeout(self, target: NewsCollectionTarget, evidence: ResearchEvidence, timeout_seconds: int) -> Dict[str, object]:
         try:
+            if timeout_seconds and hasattr(self.primary, "analyze_with_timeout"):
+                return self.primary.analyze_with_timeout(target, evidence, timeout_seconds)
             return self.primary.analyze(target, evidence)
         except Exception as error:  # noqa: BLE001 - collection must continue with local analysis.
             result = self.fallback.analyze(target, evidence)

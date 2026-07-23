@@ -1,12 +1,13 @@
+import inspect
 import time
 from datetime import datetime, timedelta, timezone
-from typing import Dict, Iterable, List, Tuple
+from typing import Callable, Dict, Iterable, List, Tuple
 
 from ..domain.accounts import AccountConfig
 from ..domain.data_freshness import age_minutes, parse_datetime, utc_iso
 from ..domain.events import DomainEvent, ontology_reasoning_requested_event, research_evidence_collected_event
 from ..domain.investment_research import NewsCollectionTarget, ResearchEvidence
-from ..domain.market_data import number
+from ..domain.market_data import known_stock, number
 from ..domain.materiality import evidence_materiality
 from ..domain.repositories import AccountRepository, MonitorSnapshotReader, ResearchEvidenceGateway, ResearchEvidenceRepository, SymbolUniverseRepository
 from ..domain.symbol_universe import ListedSymbol, normalize_market
@@ -124,6 +125,8 @@ class NewsCollectionRunner:
         article_analysis_service=None,
         health_service=None,
         sleep_fn=time.sleep,
+        now_provider: Callable = None,
+        monotonic_fn: Callable = time.monotonic,
     ):
         self.account_repository = account_repository
         self.monitor_store = monitor_store
@@ -135,6 +138,8 @@ class NewsCollectionRunner:
         self.article_analysis_service = article_analysis_service
         self.health_service = health_service
         self.sleep_fn = sleep_fn
+        self.now_provider = now_provider or (lambda: datetime.now(timezone.utc))
+        self.monotonic_fn = monotonic_fn
 
     def with_health(self, result: Dict[str, object]) -> Dict[str, object]:
         if not self.health_service or not hasattr(self.health_service, "record_news_collection"):
@@ -156,6 +161,12 @@ class NewsCollectionRunner:
 
     def max_symbols(self) -> int:
         return int_setting(self.settings, "newsCollectionMaxSymbols", 3, 1, 500)
+
+    def collection_interval_seconds(self) -> int:
+        return int_setting(self.settings, "newsCollectionIntervalSeconds", 60, 1, 86400)
+
+    def run_budget_seconds(self) -> int:
+        return int_setting(self.settings, "newsCollectionRunBudgetSeconds", 45, 5, 600)
 
     def rate_limit_seconds(self) -> float:
         return max(0.0, number(self.settings.get("newsCollectionRateLimitSeconds")) or 0.25)
@@ -302,6 +313,13 @@ class NewsCollectionRunner:
             market = stored.market or market
             currency = currency or stored.currency
             sector = sector or stored.sector
+        if name.upper() == symbol:
+            name = ""
+        known = known_stock(symbol)
+        name = name or str(known.get("name") or "").strip()
+        market = normalize_market(str(known.get("market") or market))
+        currency = currency or str(known.get("currency") or "").upper().strip()
+        sector = sector or str(known.get("sector") or "").strip()
         targets[symbol] = NewsCollectionTarget(
             symbol=symbol,
             name=name or symbol,
@@ -310,7 +328,7 @@ class NewsCollectionRunner:
             sector=sector,
         )
 
-    def targets(self) -> List[NewsCollectionTarget]:
+    def all_targets(self) -> List[NewsCollectionTarget]:
         targets: Dict[str, NewsCollectionTarget] = {}
         if self.include_holdings():
             for item in snapshot_items(getattr(self.monitor_store, "previous", {}) or {}):
@@ -321,29 +339,107 @@ class NewsCollectionRunner:
                     continue
                 for symbol in account.watchlist_symbols or []:
                     self.add_target(targets, {"symbol": symbol})
-        return list(targets.values())[: self.max_symbols()]
+        return sorted(
+            targets.values(),
+            key=lambda target: (target.normalized_symbol(), target.normalized_market(), str(target.name or "").casefold()),
+        )
+
+    def target_plan(self) -> Dict[str, object]:
+        candidates = self.all_targets()
+        limit = self.max_symbols()
+        now = self.now_provider()
+        if not isinstance(now, datetime):
+            now = datetime.now(timezone.utc)
+        if now.tzinfo is None:
+            now = now.replace(tzinfo=timezone.utc)
+        now = now.astimezone(timezone.utc)
+        interval = self.collection_interval_seconds()
+        slot = max(0, int(now.timestamp()) // interval)
+        start_index = 0
+        if len(candidates) <= limit:
+            selected = list(candidates)
+        elif candidates:
+            start_index = (slot * limit) % len(candidates)
+            selected = [candidates[(start_index + index) % len(candidates)] for index in range(limit)]
+        else:
+            selected = []
+        next_rotation = datetime.fromtimestamp((slot + 1) * interval, timezone.utc).isoformat().replace("+00:00", "Z")
+        return {
+            "mode": "round-robin-window",
+            "targets": selected,
+            "candidateCount": len(candidates),
+            "selectedCount": len(selected),
+            "maxSymbols": limit,
+            "rotationSlot": slot,
+            "rotationStartIndex": start_index,
+            "nextRotationAt": next_rotation,
+            "selectedSymbols": [target.symbol for target in selected],
+            "omittedSymbolCount": max(0, len(candidates) - len(selected)),
+        }
+
+    def targets(self) -> List[NewsCollectionTarget]:
+        return list(self.target_plan().get("targets") or [])
 
     def run_once(self, force: bool = False) -> Dict[str, object]:
         if not self.enabled() and not force:
             return self.with_health({"status": "disabled", "targetCount": 0, "fetchedCount": 0, "savedCount": 0})
         cleanup = self.delete_stale_news()
         feed_only_cleanup = self.delete_feed_only_rss_news()
-        targets = self.targets()
+        target_plan = self.target_plan()
+        targets = list(target_plan.get("targets") or [])
+        selection_metadata = {key: value for key, value in target_plan.items() if key != "targets"}
         if not targets:
-            return self.with_health({"status": "noTargets", "targetCount": 0, "fetchedCount": 0, "savedCount": 0, "staleDeletedCount": cleanup.get("deleted", 0), "staleCleanup": cleanup, "feedOnlyRssCleanup": feed_only_cleanup})
+            return self.with_health({"status": "noTargets", "targetCount": 0, "fetchedCount": 0, "savedCount": 0, "staleDeletedCount": cleanup.get("deleted", 0), "staleCleanup": cleanup, "feedOnlyRssCleanup": feed_only_cleanup, "targetSelection": selection_metadata})
         collected: List[ResearchEvidence] = []
         stale_items: List[ResearchEvidence] = []
         statuses: List[Dict[str, object]] = []
+        target_failures: List[Dict[str, object]] = []
+        processed_symbols: List[str] = []
+        deferred_symbols: List[str] = []
+        budget_seconds = self.run_budget_seconds()
+        started = self.monotonic_fn()
+        budget_exhausted = False
         for index, target in enumerate(targets):
+            if self.monotonic_fn() - started >= budget_seconds:
+                budget_exhausted = True
+                deferred_symbols = [item.symbol for item in targets[index:]]
+                break
             if index and self.rate_limit_seconds():
                 self.sleep_fn(self.rate_limit_seconds())
-            items, target_statuses = self.gateway.collect_for_target(target)
-            if self.article_analysis_service and hasattr(self.article_analysis_service, "analyze_many"):
-                items = self.article_analysis_service.analyze_many(target, items)
-            items, target_stale = self.fresh_news_items(items)
-            collected.extend(items)
-            stale_items.extend(target_stale)
-            statuses.extend(target_statuses)
+            if self.monotonic_fn() - started >= budget_seconds:
+                budget_exhausted = True
+                deferred_symbols = [item.symbol for item in targets[index:]]
+                break
+            processed_symbols.append(target.symbol)
+            try:
+                items, target_statuses = self.gateway.collect_for_target(target)
+                if self.article_analysis_service and hasattr(self.article_analysis_service, "analyze_many"):
+                    analyze_many = self.article_analysis_service.analyze_many
+                    try:
+                        parameters = inspect.signature(analyze_many).parameters.values()
+                        accepts_kwargs = any(parameter.kind == inspect.Parameter.VAR_KEYWORD for parameter in parameters)
+                        parameter_names = {parameter.name for parameter in parameters}
+                    except (TypeError, ValueError):
+                        accepts_kwargs = False
+                        parameter_names = set()
+                    analysis_kwargs = {}
+                    if accepts_kwargs or "deadline_monotonic" in parameter_names:
+                        analysis_kwargs["deadline_monotonic"] = started + budget_seconds
+                    if accepts_kwargs or "monotonic_fn" in parameter_names:
+                        analysis_kwargs["monotonic_fn"] = self.monotonic_fn
+                    items = analyze_many(target, items, **analysis_kwargs)
+                items, target_stale = self.fresh_news_items(items)
+                collected.extend(items)
+                stale_items.extend(target_stale)
+                statuses.extend(target_statuses)
+            except Exception as error:  # noqa: BLE001 - one target must not stall the complete collection rotation.
+                failure = {
+                    "symbol": target.symbol,
+                    "stage": "collect-or-analyze",
+                    "reason": str(error)[:240],
+                }
+                target_failures.append(failure)
+                statuses.append({"source": "news-collection-runner", "symbol": target.symbol, "ok": False, "message": failure["reason"]})
         def build_collection_result(saved: int, changed_symbols: List[str], changed_items: List[ResearchEvidence]) -> Dict[str, object]:
             symbols = list(changed_symbols or [])
             if saved and not symbols:
@@ -362,6 +458,14 @@ class NewsCollectionRunner:
             return {
                 "status": "ok",
                 "targetCount": len(targets),
+                "processedTargetCount": len(processed_symbols),
+                "targetSelection": selection_metadata,
+                "runBudget": {
+                    "seconds": budget_seconds,
+                    "elapsedSeconds": round(self.monotonic_fn() - started, 3),
+                    "exhausted": budget_exhausted,
+                    "deferredSymbols": deferred_symbols,
+                },
                 "fetchedCount": len(collected),
                 "savedCount": saved,
                 "changedCount": saved,
@@ -378,6 +482,7 @@ class NewsCollectionRunner:
                 "symbols": [target.symbol for target in targets],
                 "providers": self.gateway.providers(),
                 "statuses": statuses[-50:],
+                "targetFailures": target_failures,
                 "articleAnalysisHealth": self.article_analysis_health(collected, len(stale_items), cleanup),
                 "dataQuality": "actual",
             }
@@ -442,13 +547,18 @@ class NewsCollectionRunner:
         return self.with_health(result)
 
     def status(self) -> Dict[str, object]:
-        targets = self.targets()
+        target_plan = self.target_plan()
+        targets = list(target_plan.get("targets") or [])
+        selection_metadata = {key: value for key, value in target_plan.items() if key != "targets"}
         summary = self.evidence_store.summary() if hasattr(self.evidence_store, "summary") else {}
         return {
             "enabled": self.enabled(),
             "targetCount": len(targets),
             "maxSymbols": self.max_symbols(),
+            "runBudgetSeconds": self.run_budget_seconds(),
+            "targetSelection": selection_metadata,
             "providers": self.gateway.providers(),
+            "koreanProviders": self.gateway.korean_providers() if hasattr(self.gateway, "korean_providers") else [],
             "symbols": [target.symbol for target in targets[:50]],
             "evidence": summary,
             "staleCleanup": {

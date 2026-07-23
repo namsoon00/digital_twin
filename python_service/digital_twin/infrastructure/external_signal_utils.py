@@ -106,6 +106,27 @@ def retryable_api_error(error: Exception) -> bool:
     return isinstance(error, (urllib.error.URLError, TimeoutError, OSError))
 
 
+def provider_quota_error(error: Exception) -> bool:
+    """Recognize vendor-wide limits so one rejected request stops a fan-out."""
+    text = api_error_text(error).lower()
+    markers = [
+        "rate limit",
+        "rate-limited",
+        "requests per day",
+        "calls per day",
+        "api call frequency",
+        "premium endpoint",
+        "quota exceeded",
+        "too many requests",
+    ]
+    return any(marker in text for marker in markers)
+
+
+def next_utc_day(value: datetime) -> datetime:
+    current = value.astimezone(timezone.utc)
+    return (current.replace(hour=0, minute=0, second=0, microsecond=0) + timedelta(days=1))
+
+
 class ExternalCircuitOpen(RuntimeError):
     pass
 
@@ -146,6 +167,8 @@ class ExternalApiGuard:
         shared_rate_limit_key: str = "",
         shared_rate_limit_seconds: int = 0,
         shared_rate_limit_label: str = "",
+        shared_daily_request_budget: int = 0,
+        shared_quota_cooldown_minutes: int = 0,
     ):
         entry = self.entry(key)
         shared_entry = self.entry(shared_rate_limit_key) if shared_rate_limit_key else None
@@ -157,6 +180,23 @@ class ExternalApiGuard:
         if rate_limit_seconds and last_request_at and now - last_request_at < timedelta(seconds=rate_limit_seconds):
             raise ExternalRateLimited("local rate limit active")
         if shared_entry is not None:
+            shared_opened_until = parse_iso(str(shared_entry.get("openedUntil") or ""))
+            if shared_opened_until and shared_opened_until > now:
+                raise ExternalRateLimited("provider quota cooldown until " + shared_opened_until.isoformat().replace("+00:00", "Z"))
+            if shared_opened_until and shared_opened_until <= now:
+                shared_entry["openedUntil"] = ""
+                shared_entry["quotaState"] = ""
+            today = now.astimezone(timezone.utc).date().isoformat()
+            if str(shared_entry.get("dailyRequestDate") or "") != today:
+                shared_entry["dailyRequestDate"] = today
+                shared_entry["dailyRequestCount"] = 0
+            daily_budget = max(0, int(shared_daily_request_budget or 0))
+            if daily_budget and int(number(shared_entry.get("dailyRequestCount")) or 0) >= daily_budget:
+                until = next_utc_day(now)
+                shared_entry["openedUntil"] = until.isoformat().replace("+00:00", "Z")
+                shared_entry["quotaState"] = "daily-budget"
+                shared_entry["quotaBudget"] = daily_budget
+                raise ExternalRateLimited("provider daily request budget exhausted until " + shared_entry["openedUntil"])
             shared_last_request_at = parse_iso(str(shared_entry.get("lastRequestAt") or ""))
             if (
                 shared_rate_limit_seconds
@@ -167,9 +207,12 @@ class ExternalApiGuard:
                 raise ExternalRateLimited("local rate limit active" + label_suffix)
 
         last_error: Exception = RuntimeError("unknown error")
+        quota_exhausted = False
         max_attempts = max(1, int(attempts or 1))
         for attempt in range(max_attempts):
             try:
+                if shared_entry is not None:
+                    shared_entry["dailyRequestCount"] = int(number(shared_entry.get("dailyRequestCount")) or 0) + 1
                 result = fetch()
                 entry["lastRequestAt"] = now.isoformat().replace("+00:00", "Z")
                 entry["failures"] = 0
@@ -181,6 +224,13 @@ class ExternalApiGuard:
                 return result
             except Exception as error:  # noqa: BLE001 - external adapters normalize vendor failures.
                 last_error = error
+                if shared_entry is not None and shared_quota_cooldown_minutes and provider_quota_error(error):
+                    until = now + timedelta(minutes=max(1, int(shared_quota_cooldown_minutes)))
+                    shared_entry["openedUntil"] = until.isoformat().replace("+00:00", "Z")
+                    shared_entry["quotaState"] = "provider-rate-limit"
+                    shared_entry["lastError"] = api_error_text(error)
+                    quota_exhausted = True
+                    break
                 if attempt + 1 >= max_attempts or not retryable_api_error(error):
                     break
                 self.sleep(retry_delay_seconds * (attempt + 1))
@@ -193,6 +243,10 @@ class ExternalApiGuard:
             shared_entry["lastRequestAt"] = now.isoformat().replace("+00:00", "Z")
             shared_entry["lastLabel"] = label
             shared_entry["lastError"] = api_error_text(last_error)
+        if quota_exhausted:
+            raise ExternalRateLimited(
+                "provider reported a rate limit; deferred until " + str(shared_entry.get("openedUntil") or "")
+            ) from last_error
         if failures >= max(1, int(failure_threshold or 1)):
             entry["openedUntil"] = (now + timedelta(minutes=max(1, int(cooldown_minutes or 1)))).isoformat().replace("+00:00", "Z")
         raise RuntimeError(label + " 실패 · " + api_error_text(last_error)) from last_error

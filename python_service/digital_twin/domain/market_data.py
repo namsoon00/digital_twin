@@ -233,8 +233,10 @@ def known_stock(symbol: str) -> Dict[str, str]:
     known = {
         "005930": {"name": "삼성전자", "market": "KR", "currency": "KRW", "sector": "반도체"},
         "000660": {"name": "SK하이닉스", "market": "KR", "currency": "KRW", "sector": "반도체"},
+        "005380": {"name": "현대차", "market": "KR", "currency": "KRW", "sector": "모빌리티"},
         "035420": {"name": "NAVER", "market": "KR", "currency": "KRW", "sector": "AI/플랫폼"},
         "035720": {"name": "카카오", "market": "KR", "currency": "KRW", "sector": "AI/플랫폼"},
+        "066570": {"name": "LG전자", "market": "KR", "currency": "KRW", "sector": "가전/전자"},
         "069500": {"name": "KODEX 200", "market": "KR", "currency": "KRW", "sector": "한국시장", "assetType": "ETF"},
         "229200": {"name": "KODEX 코스닥150", "market": "KR", "currency": "KRW", "sector": "한국시장", "assetType": "ETF"},
         "091160": {"name": "KODEX 반도체", "market": "KR", "currency": "KRW", "sector": "반도체", "assetType": "ETF"},

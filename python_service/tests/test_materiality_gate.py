@@ -1,12 +1,14 @@
 import sys
 import unittest
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from types import SimpleNamespace
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from digital_twin.application.news_collection_service import NewsCollectionRunner
+from digital_twin.application.kis_realtime_service import KISRealtimeWebSocketRunner
+from digital_twin.application.news_ai_analysis_service import NewsAiAnalysisService
 from digital_twin.application.ontology_reasoning_service import (
     OntologyReasoningRunner,
     event_order_key,
@@ -16,9 +18,11 @@ from digital_twin.domain.accounts import AccountConfig
 from digital_twin.domain.events import DomainEvent, ONTOLOGY_REASONING_REQUESTED, RESEARCH_EVIDENCE_COLLECTED, ontology_reasoning_requested_event
 from digital_twin.domain.investment_research import NewsCollectionTarget, ResearchEvidence
 from digital_twin.domain.materiality import evidence_materiality, market_change_materiality
+from digital_twin.domain.news_ai_analysis import local_news_ai_analysis
 from digital_twin.domain.portfolio import AlertEvent
 from digital_twin.infrastructure.event_bus import EventBus
-from digital_twin.infrastructure.kis_realtime_ws import KISRealtimeSymbolSelector
+from digital_twin.infrastructure.kis_realtime_ws import KISRealtimeSymbolSelector, KISRealtimeWebSocketClient
+from digital_twin.infrastructure.news_sources import NewsSourceGateway
 
 
 class MaterialityGateTests(unittest.TestCase):
@@ -351,6 +355,44 @@ class MaterialityGateTests(unittest.TestCase):
         self.assertTrue(material.passed)
         self.assertIn("ma20-cross", material.matched_conditions)
         self.assertIn("volume-confirmation", material.matched_conditions)
+
+    def test_market_materiality_does_not_requeue_a_stable_trend_for_a_volume_refresh(self):
+        assessment = market_change_materiality(
+            "MSTR",
+            {
+                "currentPrice": 100,
+                "ma20Distance": 5.1,
+                "ma60Distance": -24.4,
+                "volume": 1000,
+                "volumeRatio": 0.003,
+            },
+            {
+                "currentPrice": 100,
+                "ma20Distance": 5.1,
+                "ma60Distance": -24.4,
+                "volume": 1100,
+                "volumeRatio": 0.003,
+            },
+            {"fields": ["volume"]},
+            {},
+        )
+
+        self.assertFalse(assessment.passed)
+        self.assertEqual([], assessment.matched_conditions)
+        self.assertIn("기존 상태가 유지", assessment.reason)
+
+    def test_market_materiality_requeues_when_a_previous_trend_threshold_is_cleared(self):
+        assessment = market_change_materiality(
+            "AAPL",
+            {"currentPrice": 100, "ma20Distance": -3.2},
+            {"currentPrice": 100, "ma20Distance": -0.8},
+            {"fields": ["ma20Distance"]},
+            {},
+        )
+
+        self.assertTrue(assessment.passed)
+        self.assertEqual("check", assessment.grade)
+        self.assertIn("ma20-distance-cleared", assessment.matched_conditions)
 
     def test_evidence_materiality_requires_direct_reliable_material_news(self):
         weak = ResearchEvidence(
@@ -1147,6 +1189,285 @@ class MaterialityGateTests(unittest.TestCase):
         )
 
         self.assertEqual([request.event_id], [event.event_id for event in runner.pending_requests()])
+
+    def test_news_collection_rotates_targets_without_starving_watchlist_symbols(self):
+        now = {"value": datetime(2026, 7, 23, 0, 0, tzinfo=timezone.utc)}
+
+        class Store:
+            last_changed_items = []
+            last_changed_symbols = []
+
+            def upsert_many(self, _items):
+                return 0
+
+        class Gateway:
+            def __init__(self):
+                self.targets = []
+
+            def collect_for_target(self, target):
+                self.targets.append(target.symbol)
+                return [], []
+
+            def providers(self):
+                return ["unit"]
+
+        gateway = Gateway()
+        symbols = ["AAPL", "MSFT", "NVDA", "PLTR", "TSLA"]
+        runner = NewsCollectionRunner(
+            account_repository=SimpleNamespace(load=lambda: [AccountConfig("main", "메인", "toss", "https://example.test", "", "", "", symbols)]),
+            monitor_store=SimpleNamespace(previous={}),
+            symbol_store=SimpleNamespace(get=lambda *_args: None),
+            evidence_store=Store(),
+            gateway=gateway,
+            settings={
+                "newsCollectionMaxSymbols": "2",
+                "newsCollectionIntervalSeconds": "60",
+                "newsCollectionRunBudgetSeconds": "45",
+                "newsCollectionRateLimitSeconds": "0",
+                "newsEvidenceCleanupEnabled": "0",
+            },
+            sleep_fn=lambda _seconds: None,
+            now_provider=lambda: now["value"],
+            monotonic_fn=lambda: 0,
+        )
+
+        first = runner.run_once()
+        now["value"] += timedelta(seconds=60)
+        runner.run_once()
+        now["value"] += timedelta(seconds=60)
+        runner.run_once()
+
+        self.assertEqual("round-robin-window", first["targetSelection"]["mode"])
+        self.assertEqual(5, first["targetSelection"]["candidateCount"])
+        self.assertEqual(set(symbols), set(gateway.targets))
+
+    def test_news_collection_stops_cleanly_when_run_budget_is_used(self):
+        clock = {"value": 0.0}
+
+        class Store:
+            last_changed_items = []
+            last_changed_symbols = []
+
+            def upsert_many(self, _items):
+                return 0
+
+        class Gateway:
+            def collect_for_target(self, _target):
+                clock["value"] += 50
+                return [], []
+
+            def providers(self):
+                return ["unit"]
+
+        runner = NewsCollectionRunner(
+            account_repository=SimpleNamespace(load=lambda: [AccountConfig("main", "메인", "toss", "https://example.test", "", "", "", ["AAPL", "MSFT", "NVDA"])]),
+            monitor_store=SimpleNamespace(previous={}),
+            symbol_store=SimpleNamespace(get=lambda *_args: None),
+            evidence_store=Store(),
+            gateway=Gateway(),
+            settings={
+                "newsCollectionMaxSymbols": "3",
+                "newsCollectionRunBudgetSeconds": "45",
+                "newsCollectionRateLimitSeconds": "0",
+                "newsEvidenceCleanupEnabled": "0",
+            },
+            sleep_fn=lambda _seconds: None,
+            monotonic_fn=lambda: clock["value"],
+        )
+
+        result = runner.run_once()
+
+        self.assertEqual(1, result["processedTargetCount"])
+        self.assertTrue(result["runBudget"]["exhausted"])
+        self.assertEqual(2, len(result["runBudget"]["deferredSymbols"]))
+
+    def test_korean_news_collection_uses_company_aliases_and_google_rss_first(self):
+        gateway = NewsSourceGateway({"newsCollectionProviders": "yahoo_search,yahoo_finance"})
+        target = NewsCollectionTarget("066570", "066570", "KOSPI", "KRW", "가전/전자")
+
+        self.assertEqual(
+            ["google_rss_kr", "yahoo_search", "yahoo_finance"],
+            gateway.providers_for_target(target),
+        )
+        self.assertIn("LG전자", gateway.search_query_for_target(target))
+
+    def test_news_collection_fills_a_symbol_only_watchlist_entry_from_known_instrument_data(self):
+        runner = NewsCollectionRunner(
+            account_repository=SimpleNamespace(load=lambda: [AccountConfig("main", "메인", "toss", "https://example.test", "", "", "", ["005380"])]),
+            monitor_store=SimpleNamespace(previous={}),
+            symbol_store=SimpleNamespace(get=lambda *_args: None),
+            evidence_store=SimpleNamespace(),
+            gateway=SimpleNamespace(),
+            settings={},
+        )
+
+        target = runner.all_targets()[0]
+
+        self.assertEqual("현대차", target.name)
+        self.assertEqual("모빌리티", target.sector)
+
+    def test_inline_news_ai_analysis_uses_the_remaining_collection_budget(self):
+        evidence = ResearchEvidence(
+            "article",
+            "AAPL",
+            "news",
+            "Reuters",
+            "Apple services update",
+            "Services revenue improved",
+            "https://example.test/apple",
+            "2026-07-23T00:00:00Z",
+            "support",
+            1.0,
+            0.8,
+            raw_payload={"articleFacts": {"bodyAvailable": True, "readStatus": "body"}},
+        )
+        calls = []
+
+        class Analyzer:
+            def analyze_with_timeout(self, target, item, timeout_seconds):
+                calls.append(timeout_seconds)
+                return local_news_ai_analysis(target, item).to_dict()
+
+            def analyze(self, target, item):
+                return local_news_ai_analysis(target, item).to_dict()
+
+        service = NewsAiAnalysisService(
+            Analyzer(),
+            {
+                "newsAiAnalysisMaxPerTarget": "1",
+                "newsAiAnalysisMaxPerRun": "1",
+                "newsAiAnalysisInlineTimeoutSeconds": "8",
+            },
+        )
+
+        analyzed = service.analyze_many(
+            NewsCollectionTarget("AAPL", "Apple", "NASDAQ", "USD", "Technology"),
+            [evidence],
+            deadline_monotonic=105,
+            monotonic_fn=lambda: 100,
+        )
+
+        self.assertEqual([5], calls)
+        self.assertTrue(analyzed[0].raw_payload.get("aiAnalysis"))
+
+    def test_kis_websocket_disconnect_is_returned_without_terminating_collection(self):
+        closed = []
+
+        class QuoteCache:
+            def load(self, *_args):
+                return {}
+
+            def save(self, *_args):
+                return None
+
+        class BrokenWebSocket:
+            def __init__(self, *_args):
+                self.closed = False
+
+            def connect(self):
+                return None
+
+            def send_text(self, _text):
+                raise BrokenPipeError("peer closed")
+
+            def close(self):
+                self.closed = True
+                closed.append(True)
+
+        client = KISRealtimeWebSocketClient(
+            {
+                "kisBaseUrl": "https://kis.example.test",
+                "kisWebSocketUrl": "ws://kis.example.test:21000",
+                "kisAppKey": "app",
+                "kisAppSecret": "secret",
+            },
+            quote_cache=QuoteCache(),
+            http_json=lambda *_args: {"approval_key": "approval"},
+            websocket_factory=BrokenWebSocket,
+        )
+
+        result = client.collect(["005930"], 1)
+
+        self.assertEqual("connection-error", result["status"])
+        self.assertEqual("subscribe", result["errorStage"])
+        self.assertTrue(result["reconnectRecommended"])
+        self.assertEqual([True], closed)
+
+    def test_kis_runner_flushes_received_ticks_after_an_unexpected_client_error(self):
+        events = EventBus()
+
+        class FailingClient:
+            def enabled(self):
+                return True
+
+            def collect(self, _symbols, _duration, on_update):
+                on_update([{
+                    "symbol": "005930",
+                    "previous": {"symbol": "005930", "currentPrice": 70000},
+                    "payload": {"symbol": "005930", "currentPrice": 71000, "market": "KR", "dataQuality": "actual"},
+                }])
+                raise BrokenPipeError("peer closed")
+
+        runner = KISRealtimeWebSocketRunner(
+            client=FailingClient(),
+            symbol_selector=SimpleNamespace(symbols=lambda: ["005930"], reasoning_symbols=lambda: ["005930"]),
+            quote_cache=SimpleNamespace(load=lambda *_args: {}),
+            settings={"materialityGateEnabled": "0"},
+            event_publisher=events,
+        )
+
+        result = runner.run_once(duration_seconds=3)
+
+        self.assertEqual("connection-error", result["status"])
+        self.assertEqual("ok", result["eventFlush"]["status"])
+        self.assertEqual(1, result["eventFlush"]["changedCount"])
+        self.assertTrue(events.published)
+
+    def test_ontology_reasoning_prioritizes_an_overdue_symbol_over_a_fresh_higher_priority_symbol(self):
+        higher_priority = ontology_reasoning_requested_event(
+            DomainEvent(name="market_data.collected", aggregate_id="market:AAPL", payload={}),
+            "market-data-update",
+            ["AAPL"],
+            changed_count=1,
+            fact_types=["MarketQuote"],
+        )
+        overdue = ontology_reasoning_requested_event(
+            DomainEvent(name="market_data.collected", aggregate_id="market:MSFT", payload={}),
+            "market-data-update",
+            ["MSFT"],
+            changed_count=1,
+            fact_types=["MarketQuote"],
+        )
+
+        class Cursor:
+            def __init__(self):
+                self.payload = {
+                    "lastReasonedAtBySymbol": {
+                        "AAPL": "2026-07-23T00:15:00Z",
+                        "MSFT": "2026-07-23T00:00:00Z",
+                    },
+                }
+
+            def load(self):
+                return dict(self.payload)
+
+        runner = OntologyReasoningRunner(
+            event_reader=None,
+            cursor_store=Cursor(),
+            monitor_runner_factory=lambda: None,
+            settings={
+                "ontologyReasoningMaxSymbolsPerRun": "1",
+                "ontologyReasoningFairnessMaxWaitSeconds": "900",
+            },
+            priority_symbols_provider=lambda: {"holdingSymbols": ["AAPL"], "watchlistSymbols": ["MSFT"]},
+            now_provider=lambda: datetime(2026, 7, 23, 0, 20, tzinfo=timezone.utc),
+        )
+
+        batches, symbols, omitted = runner.request_symbol_batches([higher_priority, overdue])
+
+        self.assertEqual(["MSFT"], symbols)
+        self.assertEqual(["MSFT"], batches[overdue.event_id])
+        self.assertEqual(1, omitted)
 
 
 if __name__ == "__main__":

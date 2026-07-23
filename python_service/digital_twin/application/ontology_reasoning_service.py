@@ -358,6 +358,85 @@ class OntologyReasoningRunner:
         levels = {item.strip().lower() for item in raw.split(",") if item.strip().lower() in allowed}
         return levels or {"act", "immediate"}
 
+    def fairness_max_wait_seconds(self) -> int:
+        """Prevent a slow native TypeDB worker from starving one symbol forever."""
+        return int_setting(self.settings, "ontologyReasoningFairnessMaxWaitSeconds", 900, 60, 86400)
+
+    def symbol_wait_seconds(self, symbol: str, cursor_payload: Dict[str, object] = None):
+        stamp = self.last_reasoned_at_by_symbol(cursor_payload).get(str(symbol or "").upper().strip(), "")
+        if not stamp:
+            return None
+        try:
+            parsed = datetime.fromisoformat(str(stamp).replace("Z", "+00:00"))
+        except ValueError:
+            return None
+        now = self.now_provider()
+        if now.tzinfo is None:
+            now = now.replace(tzinfo=timezone.utc)
+        return max(0, int((now.astimezone(timezone.utc) - parsed.astimezone(timezone.utc)).total_seconds()))
+
+    def symbol_fairness_rank(self, symbol: str, cursor_payload: Dict[str, object] = None) -> Tuple[int, int]:
+        wait_seconds = self.symbol_wait_seconds(symbol, cursor_payload)
+        if wait_seconds is None:
+            # A subject that has never reached native inference should receive
+            # one turn before repeated high-priority updates take over again.
+            return 2, self.fairness_max_wait_seconds()
+        if wait_seconds >= self.fairness_max_wait_seconds():
+            return 1, wait_seconds
+        return 0, wait_seconds
+
+    def symbol_fairness_state(self, symbol: str, cursor_payload: Dict[str, object] = None) -> str:
+        rank, _wait_seconds = self.symbol_fairness_rank(symbol, cursor_payload)
+        return "unseen" if rank == 2 else "overdue" if rank == 1 else "normal"
+
+    def order_symbols_by_fairness(
+        self,
+        symbols: Iterable[str],
+        priority_symbols: Dict[str, int] = None,
+        cursor_payload: Dict[str, object] = None,
+    ) -> List[str]:
+        priorities = priority_symbols or {}
+        unique: List[str] = []
+        for value in symbols or []:
+            symbol = str(value or "").upper().strip()
+            if symbol and symbol not in unique:
+                unique.append(symbol)
+        original_order = {symbol: index for index, symbol in enumerate(unique)}
+        return sorted(
+            unique,
+            key=lambda symbol: (
+                *self.symbol_fairness_rank(symbol, cursor_payload),
+                int(priorities.get(symbol, 0) or 0),
+                -original_order.get(symbol, 0),
+            ),
+            reverse=True,
+        )
+
+    def event_fairness_rank(
+        self,
+        event: object,
+        progress: Dict[str, List[str]] = None,
+        cursor_payload: Dict[str, object] = None,
+        priority_symbols: Dict[str, int] = None,
+    ) -> Tuple[int, int]:
+        due_symbols = self.due_event_symbols(event, progress, cursor_payload, priority_symbols)
+        return max([self.symbol_fairness_rank(symbol, cursor_payload) for symbol in due_symbols] or [(0, 0)])
+
+    def fairness_queue(self, symbols: Iterable[str], cursor_payload: Dict[str, object] = None) -> List[Dict[str, object]]:
+        payload = self.cursor_payload() if cursor_payload is None else dict(cursor_payload or {})
+        last_by_symbol = self.last_reasoned_at_by_symbol(payload)
+        rows = []
+        for symbol in self.order_symbols_by_fairness(symbols, cursor_payload=payload):
+            state = self.symbol_fairness_state(symbol, payload)
+            wait_seconds = self.symbol_wait_seconds(symbol, payload)
+            rows.append({
+                "symbol": symbol,
+                "state": state,
+                "waitSeconds": wait_seconds,
+                "lastReasonedAt": last_by_symbol.get(symbol, ""),
+            })
+        return rows
+
     def rule_candidate_ai_enabled(self) -> bool:
         return truthy(self.settings.get("ontologyRuleCandidateAiEnabled"), True)
 
@@ -598,23 +677,27 @@ class OntologyReasoningRunner:
                 name=ONTOLOGY_REASONING_REQUESTED,
                 limit=self.event_scan_limit(limit),
             )
-        events = [
-            event
-            for event in source_events
-            if event.event_id not in processed
-            and event_changed_count(event) > 0
-            and (not event_symbols(event) or self.due_event_symbols(event, progress, cursor_payload, priority_symbols))
-        ]
-        events.sort(
-            key=lambda event: (
-                *event_order_key(event, priority_symbols),
-                1 if str(getattr(event, "event_id", "") or "") in progress else 0,
-                getattr(event, "occurred_at", ""),
-                getattr(event, "event_id", ""),
+        ranked_events = []
+        for event in source_events:
+            if event.event_id in processed or event_changed_count(event) <= 0:
+                continue
+            if event_symbols(event) and not self.due_event_symbols(event, progress, cursor_payload, priority_symbols):
+                continue
+            ranked_events.append((
+                self.event_fairness_rank(event, progress, cursor_payload, priority_symbols),
+                event,
+            ))
+        ranked_events.sort(
+            key=lambda item: (
+                *item[0],
+                *event_order_key(item[1], priority_symbols),
+                1 if str(getattr(item[1], "event_id", "") or "") in progress else 0,
+                getattr(item[1], "occurred_at", ""),
+                getattr(item[1], "event_id", ""),
             ),
             reverse=True,
         )
-        return events[: max(1, int(limit or self.batch_size()))]
+        return [item[1] for item in ranked_events[: max(1, int(limit or self.batch_size()))]]
 
     def pending_work(self, limit: int = 0) -> Dict[str, object]:
         """Collapse redundant, lower-materiality realtime snapshot requests.
@@ -690,7 +773,7 @@ class OntologyReasoningRunner:
         progress = self.event_symbol_progress(cursor_payload)
         priority_symbols = self.priority_symbols()
         batches: Dict[str, List[str]] = {}
-        candidates: Dict[str, Tuple[Tuple[int, int, int, int, int, int], str]] = {}
+        candidates: Dict[str, Tuple[tuple, str]] = {}
         requested_events = list(requests or [])
 
         if self.coherent_snapshot_enabled():
@@ -704,14 +787,20 @@ class OntologyReasoningRunner:
                     if event_id:
                         global_events.append((event_index, event))
                     continue
-                due_symbols = self.due_event_symbols(event, progress, cursor_payload, priority_symbols)
+                due_symbols = self.order_symbols_by_fairness(
+                    self.due_event_symbols(event, progress, cursor_payload, priority_symbols),
+                    priority_symbols,
+                    cursor_payload,
+                )
                 if not due_symbols:
                     continue
                 for symbol in due_symbols:
                     if symbol not in all_due_symbols:
                         all_due_symbols.append(symbol)
                 fact_types = {str(item or "").strip() for item in event_payload(event).get("factTypes") or []}
+                fairness_rank = max([self.symbol_fairness_rank(symbol, cursor_payload) for symbol in due_symbols] or [(0, 0)])
                 rank = (
+                    *fairness_rank,
                     max([int(priority_symbols.get(symbol, 0) or 0) for symbol in due_symbols] or [0]),
                     REVIEW_LEVEL_ORDER.get(event_review_level(event), 0),
                     TRIGGER_ORDER.get(str(event_payload(event).get("trigger") or "data-update").strip(), 0),
@@ -746,12 +835,17 @@ class OntologyReasoningRunner:
         # when a newer holding event was already waiting in the same queue.
         for event_index, event in enumerate(requested_events):
             event_id = str(getattr(event, "event_id", "") or "")
-            remaining = self.due_event_symbols(event, progress, cursor_payload, priority_symbols)
+            remaining = self.order_symbols_by_fairness(
+                self.due_event_symbols(event, progress, cursor_payload, priority_symbols),
+                priority_symbols,
+                cursor_payload,
+            )
             if not self.ordered_event_symbols(event, priority_symbols):
                 batches[event_id] = []
                 continue
             for symbol_index, symbol in enumerate(remaining):
                 rank = (
+                    *self.symbol_fairness_rank(symbol, cursor_payload),
                     int(priority_symbols.get(symbol, 0) or 0),
                     REVIEW_LEVEL_ORDER.get(event_review_level(event), 0),
                     TRIGGER_ORDER.get(str(event_payload(event).get("trigger") or "data-update").strip(), 0),
@@ -781,7 +875,11 @@ class OntologyReasoningRunner:
                 continue
             selected_for_event = [
                 symbol
-                for symbol in self.due_event_symbols(event, progress, cursor_payload, priority_symbols)
+                for symbol in self.order_symbols_by_fairness(
+                    self.due_event_symbols(event, progress, cursor_payload, priority_symbols),
+                    priority_symbols,
+                    cursor_payload,
+                )
                 if symbol in selected_set
             ]
             if selected_for_event:
@@ -1570,6 +1668,8 @@ class OntologyReasoningRunner:
         cursor_payload = self.cursor_payload()
         progress = self.event_symbol_progress()
         _batches, next_symbols, omitted_count = self.request_symbol_batches(pending)
+        pending_symbols = self.request_symbols(pending)
+        fairness_queue = self.fairness_queue(pending_symbols, cursor_payload)
         return {
             "enabled": self.enabled(),
             "pendingCount": len(pending),
@@ -1582,9 +1682,13 @@ class OntologyReasoningRunner:
             "processedCount": len(self.cursor_store.processed_event_ids()),
             "rawPendingCount": int(work.get("rawRequestCount") or len(pending)),
             "coalescedPendingEventCount": len(work.get("coalescedEventIds") or []),
-            "pendingSymbols": self.request_symbols(pending),
+            "pendingSymbols": pending_symbols,
             "nextSymbols": next_symbols,
             "nextOmittedSymbolCount": omitted_count,
+            "fairnessMaxWaitSeconds": self.fairness_max_wait_seconds(),
+            "unseenPendingSymbolCount": len([item for item in fairness_queue if item.get("state") == "unseen"]),
+            "overduePendingSymbolCount": len([item for item in fairness_queue if item.get("state") == "overdue"]),
+            "fairnessQueue": fairness_queue[:20],
             "partialEventCount": len(progress),
             "ruleCandidateAiEnabled": self.rule_candidate_ai_enabled(),
             "ruleCandidateAiDue": self.rule_candidate_due(),

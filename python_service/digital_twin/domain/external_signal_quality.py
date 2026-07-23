@@ -79,10 +79,13 @@ def status_rows(signals: Dict[str, object]) -> List[Dict[str, object]]:
 def source_status(signals: Dict[str, object], source_label: str) -> Dict[str, object]:
     rows = [item for item in status_rows(signals) if str(item.get("source") or "") == source_label]
     if not rows:
-        return {"ok": True, "messages": []}
+        return {"ok": True, "messages": [], "deferred": False}
+    request_ok = all(bool(item.get("ok")) for item in rows)
+    data_usable = all(bool(item.get("dataUsable", True)) for item in rows)
     return {
-        "ok": all(bool(item.get("ok")) for item in rows),
+        "ok": request_ok and data_usable,
         "messages": [str(item.get("message") or "") for item in rows if str(item.get("message") or "")],
+        "deferred": any(bool(item.get("deferred")) for item in rows),
     }
 
 
@@ -172,6 +175,7 @@ def evaluate_external_signal_quality(
             "configured": configured,
             "itemCount": count,
             "ok": ok and (configured or count > 0),
+            "deferred": bool(status.get("deferred")),
             "messages": messages[:5],
         })
     configured_rows = [row for row in source_rows if row["configured"]]

@@ -454,16 +454,22 @@ class KISRealtimeWebSocketClient:
             return {"status": "missingCredentials", "symbols": clean_symbols, "savedCount": 0}
         if not clean_symbols:
             return {"status": "noSymbols", "symbols": [], "savedCount": 0}
-        ws = self.websocket_factory(self.ws_url, self.timeout_seconds())
-        ws.connect()
         saved_count = 0
         stage_counts: Dict[str, int] = {}
+        subscribed_symbols: List[str] = []
+        ws = None
+        stage = "connect"
         started = time.monotonic()
         try:
+            ws = self.websocket_factory(self.ws_url, self.timeout_seconds())
+            ws.connect()
+            stage = "subscribe"
             for symbol in clean_symbols:
                 ws.send_text(self.subscribe_message(KIS_TR_CCN_PRICE, symbol))
                 ws.send_text(self.subscribe_message(KIS_TR_ORDERBOOK, symbol))
+                subscribed_symbols.append(symbol)
                 time.sleep(0.03)
+            stage = "receive"
             while time.monotonic() - started < max(1, int(duration_seconds or 1)):
                 try:
                     text = ws.recv_text(timeout=1.0)
@@ -474,21 +480,46 @@ class KISRealtimeWebSocketClient:
                     continue
                 saved_count += len(updates)
                 for update in updates:
-                    stage = str(update.get("stage") or "")
-                    stage_counts[stage] = stage_counts.get(stage, 0) + 1
+                    update_stage = str(update.get("stage") or "")
+                    stage_counts[update_stage] = stage_counts.get(update_stage, 0) + 1
                 if on_update:
                     on_update(updates)
+        except Exception as error:  # noqa: BLE001 - a disconnected feed must not terminate the realtime worker.
+            status = "partial" if saved_count else "connection-error"
+            return {
+                "status": status,
+                "provider": "kis-websocket",
+                "symbols": clean_symbols,
+                "selectedCount": len(clean_symbols),
+                "subscribedSymbols": subscribed_symbols,
+                "subscribedCount": len(subscribed_symbols),
+                "savedCount": saved_count,
+                "stageCounts": stage_counts,
+                "dataQuality": "partial" if saved_count else "unavailable",
+                "transport": "websocket",
+                "errorStage": stage,
+                "reason": ("KIS WebSocket " + stage + " 단계 연결이 끊겼습니다: " + str(error))[:360],
+                "reconnectRecommended": True,
+                "elapsedSeconds": round(time.monotonic() - started, 3),
+            }
         finally:
-            ws.close()
+            if ws is not None:
+                try:
+                    ws.close()
+                except Exception:
+                    pass
         return {
             "status": "ok",
             "provider": "kis-websocket",
             "symbols": clean_symbols,
             "selectedCount": len(clean_symbols),
+            "subscribedSymbols": subscribed_symbols,
+            "subscribedCount": len(subscribed_symbols),
             "savedCount": saved_count,
             "stageCounts": stage_counts,
             "dataQuality": "actual",
             "transport": "websocket",
+            "elapsedSeconds": round(time.monotonic() - started, 3),
         }
 
 

@@ -27,6 +27,9 @@ def provider_health_rows(statuses: Iterable[Dict[str, object]]) -> List[Dict[str
             "itemCount": 0,
             "candidateCount": 0,
             "bodyMissingCount": 0,
+            "googleOriginalUrlResolveFailedCount": 0,
+            "googleOriginalUrlBudgetRejectedCount": 0,
+            "googleOriginalUrlResolvedCount": 0,
             "sourceBlockedCount": 0,
             "relevanceRejectedCount": 0,
             "messages": [],
@@ -42,6 +45,9 @@ def provider_health_rows(statuses: Iterable[Dict[str, object]]) -> List[Dict[str
         row["itemCount"] += integer(status.get("count"))
         row["candidateCount"] += integer(status.get("candidateCount"))
         row["bodyMissingCount"] += integer(status.get("bodyMissingCount"))
+        row["googleOriginalUrlResolveFailedCount"] += integer(status.get("googleOriginalUrlResolveFailedCount"))
+        row["googleOriginalUrlBudgetRejectedCount"] += integer(status.get("googleOriginalUrlBudgetRejectedCount"))
+        row["googleOriginalUrlResolvedCount"] += integer(status.get("googleOriginalUrlResolvedCount"))
         row["sourceBlockedCount"] += integer(status.get("sourceBlockedCount"))
         row["relevanceRejectedCount"] += integer(status.get("preliminaryRejectedCount"))
         row["relevanceRejectedCount"] += integer(status.get("finalRelevanceRejectedCount"))
@@ -143,9 +149,13 @@ def evaluate_news_collection_health(
     provider_successes = sum(integer(row.get("successCount")) for row in providers)
     provider_candidates = sum(integer(row.get("candidateCount")) for row in providers)
     body_missing_count = sum(integer(row.get("bodyMissingCount")) for row in providers)
+    original_url_failure_count = sum(integer(row.get("googleOriginalUrlResolveFailedCount")) for row in providers)
+    original_url_budget_count = sum(integer(row.get("googleOriginalUrlBudgetRejectedCount")) for row in providers)
     source_blocked_count = sum(integer(row.get("sourceBlockedCount")) for row in providers)
     body_failure_count = max(body_missing_count, source_blocked_count)
     body_failure_ratio = (body_failure_count / provider_candidates) if provider_candidates else 0.0
+    original_url_failure_ratio = (original_url_failure_count / provider_candidates) if provider_candidates else 0.0
+    original_url_budget_ratio = (original_url_budget_count / provider_candidates) if provider_candidates else 0.0
     baseline_at = last_non_zero_at or first_observed_at
     zero_age_minutes = elapsed_minutes(baseline_at, current)
 
@@ -161,11 +171,25 @@ def evaluate_news_collection_health(
         state, reason_code, reason = "healthy", "fresh-evidence-collected", "신선도와 품질 기준을 통과한 뉴스 근거를 수집했습니다."
     elif (
         provider_candidates
+        and original_url_failure_count
+        and original_url_failure_ratio >= 0.5
+        and zero_runs >= max(1, int(blocked_warning_streak or 1))
+    ):
+        state, reason_code, reason = "degraded", "article-original-url-unavailable", "Google News RSS 후보의 원문 주소를 발행사 URL로 해석하지 못하는 상태가 반복되고 있습니다."
+    elif (
+        provider_candidates
         and body_failure_count
         and body_failure_ratio >= 0.5
         and zero_runs >= max(1, int(blocked_warning_streak or 1))
     ):
         state, reason_code, reason = "degraded", "article-body-unavailable", "뉴스 후보의 절반 이상에서 원문 본문을 확보하지 못하는 상태가 반복되고 있습니다."
+    elif (
+        provider_candidates
+        and original_url_budget_count
+        and original_url_budget_ratio >= 0.5
+        and zero_runs >= max(1, int(blocked_warning_streak or 1))
+    ):
+        state, reason_code, reason = "degraded", "article-original-url-budget-exhausted", "Google RSS 원문 주소 해석 호출 상한 때문에 후보 본문 확인이 반복적으로 보류되고 있습니다."
     elif zero_age_minutes >= max(1, int(stale_after_minutes or 1)):
         state, reason_code, reason = "stale", "coverage-stale", "품질 기준을 통과한 최신 뉴스가 허용된 공백 시간 동안 수집되지 않았습니다."
     elif provider_candidates:

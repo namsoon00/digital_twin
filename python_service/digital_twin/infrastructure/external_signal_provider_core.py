@@ -167,6 +167,8 @@ class ExternalSignalCoreMixin:
             "fxRateSourceVersion": "broker-account-alpha-daily-v1",
             "fxRateFetchIntervalHours": str(self.settings.get("externalFxRateFetchIntervalHours") or "24"),
             "alphaRateLimitSeconds": str(self.settings.get("externalAlphaRateLimitSeconds") or "15"),
+            "alphaDailyRequestBudget": str(self.settings.get("externalAlphaDailyRequestBudget") or "20"),
+            "alphaQuotaCooldownMinutes": str(self.settings.get("externalAlphaQuotaCooldownMinutes") or "1440"),
             "secMappings": symbol_assignments(self.settings.get("externalSecCompanyCiks") or ""),
             "dartLookbackDays": str(self.settings.get("externalDartLookbackDays") or "14"),
             "dartMappings": symbol_assignments(self.settings.get("externalDartCorpCodes") or ""),
@@ -269,6 +271,8 @@ class ExternalSignalCoreMixin:
             shared_rate_limit_key=shared_key,
             shared_rate_limit_seconds=self.int_setting("externalAlphaRateLimitSeconds", 15, 0) if shared_key else 0,
             shared_rate_limit_label="Alpha Vantage provider" if shared_key else "",
+            shared_daily_request_budget=self.int_setting("externalAlphaDailyRequestBudget", 20, 0) if shared_key else 0,
+            shared_quota_cooldown_minutes=self.int_setting("externalAlphaQuotaCooldownMinutes", 1440, 1) if shared_key else 0,
         )
 
     def is_alpha_vantage_source(self, source: str) -> bool:
@@ -281,15 +285,28 @@ class ExternalSignalCoreMixin:
             self.status(signals, source, True, "bulk cap " + str(limit) + "/" + str(len(values)))
         return values[:limit]
 
-    def status(self, signals: Dict[str, object], source: str, ok: bool, message: str) -> None:
-        signals.setdefault("statuses", []).append({
+    def status(self, signals: Dict[str, object], source: str, ok: bool, message: str, **metadata) -> None:
+        row = {
             "source": source,
             "ok": bool(ok),
             "message": str(message or ""),
-        })
+        }
+        row.update({key: value for key, value in metadata.items() if value is not None})
+        signals.setdefault("statuses", []).append(row)
 
     def status_for_error(self, signals: Dict[str, object], source: str, message: str, error: Exception) -> None:
-        self.status(signals, source, isinstance(error, ExternalRateLimited), message + self.safe_error_message(error))
+        if isinstance(error, ExternalRateLimited):
+            self.status(
+                signals,
+                source,
+                True,
+                message + self.safe_error_message(error),
+                dataUsable=False,
+                deferred=True,
+                operationalAlert=False,
+            )
+            return
+        self.status(signals, source, False, message + self.safe_error_message(error))
 
     def safe_error_message(self, error: Exception) -> str:
         return sanitize_sensitive_text(error)[:120]

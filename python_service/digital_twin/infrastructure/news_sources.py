@@ -24,6 +24,7 @@ from .external_signal_utils import external_call_target, guarded_external_call
 
 JsonFetcher = Callable[[str, Dict[str, str]], object]
 TextFetcher = Callable[[str, Dict[str, str]], str]
+PostTextFetcher = Callable[[str, bytes, Dict[str, str]], str]
 TAG_RE = re.compile(r"<[^>]+>")
 DISABLED_VALUES = {"0", "false", "no", "off", "disabled"}
 ARTICLE_TEXT_LIMIT = 5000
@@ -56,10 +57,14 @@ class NewsProviderTimeout(TimeoutError):
 def provider_empty_status(diagnostics: Dict[str, int]) -> str:
     if int(diagnostics.get("candidateCount") or 0) <= 0:
         return "no-candidates"
-    if int(diagnostics.get("bodyBudgetRejectedCount") or 0) > 0:
-        return "article-body-budget-exhausted"
+    if int(diagnostics.get("googleOriginalUrlResolveFailedCount") or 0) > 0:
+        return "article-original-url-unavailable"
     if int(diagnostics.get("bodyMissingCount") or 0) > 0:
         return "article-body-unavailable"
+    if int(diagnostics.get("googleOriginalUrlBudgetRejectedCount") or 0) > 0:
+        return "article-original-url-budget-exhausted"
+    if int(diagnostics.get("bodyBudgetRejectedCount") or 0) > 0:
+        return "article-body-budget-exhausted"
     if int(diagnostics.get("preliminaryRejectedCount") or 0) > 0 or int(diagnostics.get("finalRelevanceRejectedCount") or 0) > 0:
         return "relevance-filtered"
     return "empty"
@@ -108,7 +113,10 @@ def socket_default_timeout(seconds: float):
 def default_json_fetcher(url: str, headers: Dict[str, str] = None, timeout: float = 8.0) -> object:
     request = urllib.request.Request(url, headers=headers or {})
     request_timeout = max(0.5, float(timeout or 8.0))
-    raw_bytes = curl_fetch_bytes(url, headers, request_timeout)
+    try:
+        raw_bytes = curl_fetch_bytes(url, headers, request_timeout)
+    except urllib.error.URLError:
+        raw_bytes = None
     if raw_bytes is not None:
         raw = raw_bytes.decode("utf-8", errors="replace")
         return json.loads(raw) if raw else {}
@@ -121,9 +129,22 @@ def default_json_fetcher(url: str, headers: Dict[str, str] = None, timeout: floa
 def default_text_fetcher(url: str, headers: Dict[str, str] = None, timeout: float = 8.0) -> str:
     request = urllib.request.Request(url, headers=headers or {})
     request_timeout = max(0.5, float(timeout or 8.0))
-    raw_bytes = curl_fetch_bytes(url, headers, request_timeout)
+    try:
+        raw_bytes = curl_fetch_bytes(url, headers, request_timeout)
+    except urllib.error.URLError:
+        raw_bytes = None
     if raw_bytes is not None:
         return raw_bytes.decode("utf-8", errors="replace")
+    with socket_default_timeout(request_timeout):
+        with urllib.request.urlopen(request, timeout=request_timeout) as response:
+            charset = response.headers.get_content_charset() or "utf-8"
+            return response.read().decode(charset, errors="replace")
+
+
+def default_post_text_fetcher(url: str, data: bytes, headers: Dict[str, str] = None, timeout: float = 8.0) -> str:
+    """POST a small protocol payload when a news source exposes no direct article URL."""
+    request_timeout = max(0.5, float(timeout or 8.0))
+    request = urllib.request.Request(url, data=data, headers=headers or {})
     with socket_default_timeout(request_timeout):
         with urllib.request.urlopen(request, timeout=request_timeout) as response:
             charset = response.headers.get_content_charset() or "utf-8"
@@ -329,13 +350,17 @@ class NewsSourceGateway:
         settings: Dict[str, str] = None,
         fetch_json: JsonFetcher = None,
         fetch_text: TextFetcher = None,
+        fetch_post_text: PostTextFetcher = None,
     ):
         self.settings = dict(settings or {})
         timeout = number(self.settings.get("newsCollectionTimeoutSeconds") or self.settings.get("externalApiTimeoutSeconds")) or 8.0
         self.fetch_json = fetch_json or self.guarded_json_fetcher(timeout)
         self.fetch_text = fetch_text or self.guarded_text_fetcher(timeout)
+        self.fetch_post_text = fetch_post_text or self.guarded_post_text_fetcher(timeout)
         self._article_body_fetches_used = 0
         self._article_body_fetches_for_target = 0
+        self._google_original_url_fetches_used = 0
+        self._google_original_url_fetches_for_target = 0
         self._current_provider_diagnostics: Dict[str, int] = {}
 
     def reset_provider_diagnostics(self) -> None:
@@ -345,6 +370,10 @@ class NewsSourceGateway:
             "bodyFetchAttemptCount": 0,
             "bodyMissingCount": 0,
             "bodyBudgetRejectedCount": 0,
+            "googleOriginalUrlResolveAttemptCount": 0,
+            "googleOriginalUrlResolvedCount": 0,
+            "googleOriginalUrlResolveFailedCount": 0,
+            "googleOriginalUrlBudgetRejectedCount": 0,
             "sourceBlockedCount": 0,
             "finalRelevanceRejectedCount": 0,
             "acceptedCount": 0,
@@ -386,6 +415,20 @@ class NewsSourceGateway:
 
         return fetch
 
+    def guarded_post_text_fetcher(self, timeout: float) -> PostTextFetcher:
+        def fetch(url: str, data: bytes, headers: Dict[str, str] = None) -> str:
+            return guarded_external_call(
+                self.settings,
+                "Google News URL resolver",
+                external_call_target(url),
+                lambda: default_post_text_fetcher(url, data, headers, timeout=timeout),
+                state=NEWS_API_GUARD_STATE,
+                attempts=1,
+                rate_limit_seconds=0,
+            )
+
+        return fetch
+
     def providers(self) -> List[str]:
         providers = [
             item.lower().replace("-", "_")
@@ -397,6 +440,42 @@ class NewsSourceGateway:
         if not truthy(self.settings.get("newsCollectionGdeltSyncEnabled"), False):
             providers = [item for item in providers if item != "gdelt"]
         return providers
+
+    def korean_providers(self) -> List[str]:
+        return [
+            item.lower().replace("-", "_")
+            for item in split_csv(self.settings.get("newsCollectionKoreanProviders"), ["google_rss_kr"])
+        ]
+
+    def providers_for_target(self, target: NewsCollectionTarget) -> List[str]:
+        configured = self.providers()
+        korean = self.korean_providers()
+        if target.is_korean_market():
+            ordered = korean + configured
+        else:
+            ordered = [provider for provider in configured if provider not in korean]
+        providers: List[str] = []
+        for provider in ordered:
+            if provider and provider not in providers:
+                providers.append(provider)
+        return providers or configured
+
+    def search_query_for_target(self, target: NewsCollectionTarget) -> str:
+        symbol = target.normalized_symbol()
+        aliases = [
+            str(alias or "").strip()
+            for alias in news_domain.target_aliases(target)
+            if str(alias or "").strip() and str(alias or "").strip().upper() != symbol
+        ]
+        unique: List[str] = []
+        for alias in aliases:
+            if alias.casefold() not in {item.casefold() for item in unique}:
+                unique.append(alias)
+        if not unique:
+            return target.search_query()
+        if len(unique) == 1:
+            return unique[0]
+        return "(" + " OR ".join('"' + item.replace('"', " ") + '"' for item in unique[:2]) + ")"
 
     def per_symbol_limit(self) -> int:
         return int_setting(self.settings, "newsCollectionPerSymbolLimit", 8, 1, 50)
@@ -478,10 +557,25 @@ class NewsSourceGateway:
         )
 
     def article_body_max_per_target(self) -> int:
-        return int_setting(self.settings, "newsCollectionArticleBodyMaxPerTarget", 10000, 0, 10000)
+        return int_setting(self.settings, "newsCollectionArticleBodyMaxPerTarget", 4, 0, 10000)
 
     def article_body_max_per_run(self) -> int:
-        return int_setting(self.settings, "newsCollectionArticleBodyMaxPerRun", 10000, 0, 10000)
+        return int_setting(self.settings, "newsCollectionArticleBodyMaxPerRun", 12, 0, 10000)
+
+    def google_original_url_resolution_enabled(self) -> bool:
+        return truthy(self.settings.get("newsCollectionGoogleOriginalUrlResolveEnabled"), True)
+
+    def google_original_url_max_per_target(self) -> int:
+        return int_setting(self.settings, "newsCollectionGoogleOriginalUrlMaxPerTarget", 2, 0, 1000)
+
+    def google_original_url_max_per_run(self) -> int:
+        return int_setting(self.settings, "newsCollectionGoogleOriginalUrlMaxPerRun", 6, 0, 10000)
+
+    def google_original_url_budget_available(self) -> bool:
+        return (
+            self._google_original_url_fetches_for_target < self.google_original_url_max_per_target()
+            and self._google_original_url_fetches_used < self.google_original_url_max_per_run()
+        )
 
     def article_body_budget_available(self) -> bool:
         return (
@@ -508,6 +602,108 @@ class NewsSourceGateway:
             return ""
         return extract_article_text(raw_html)
 
+    @staticmethod
+    def google_news_article_link(url: object) -> bool:
+        parsed = urllib.parse.urlparse(str(url or "").strip())
+        return parsed.netloc.lower() == "news.google.com" and "/rss/articles/" in parsed.path
+
+    @staticmethod
+    def google_news_garturl_payload(raw_html: object) -> bytes:
+        """Build the limited garturl request from Google's article interstitial payload."""
+        match = re.search(
+            r"<c-wiz\b[^>]*\bdata-p=(['\"])(.*?)\1",
+            str(raw_html or ""),
+            flags=re.IGNORECASE | re.DOTALL,
+        )
+        if not match:
+            return b""
+        try:
+            request_context = json.loads(html.unescape(match.group(2)).replace("%.@.", '["garturlreq",'))
+        except (TypeError, ValueError, json.JSONDecodeError):
+            return b""
+        if not isinstance(request_context, list) or len(request_context) < 8:
+            return b""
+        compact_context = request_context[:-6] + request_context[-2:]
+        rpc_payload = [[[
+            "Fbv4je",
+            json.dumps(compact_context, ensure_ascii=False, separators=(",", ":")),
+            "null",
+            "generic",
+        ]]]
+        return urllib.parse.urlencode({
+            "f.req": json.dumps(rpc_payload, ensure_ascii=False, separators=(",", ":")),
+        }).encode("utf-8")
+
+    @staticmethod
+    def google_news_garturl_result(raw_response: object) -> str:
+        text = str(raw_response or "").lstrip()
+        if text.startswith(")]}'"):
+            _header, separator, text = text.partition("\n")
+            if not separator:
+                return ""
+        try:
+            payload = json.loads(text)
+        except (TypeError, ValueError, json.JSONDecodeError):
+            return ""
+
+        def find_url(value: object) -> str:
+            if isinstance(value, str):
+                if "garturlres" not in value:
+                    return ""
+                try:
+                    return find_url(json.loads(value))
+                except (TypeError, ValueError, json.JSONDecodeError):
+                    return ""
+            if not isinstance(value, list):
+                return ""
+            if len(value) >= 2 and value[0] == "garturlres" and isinstance(value[1], str):
+                return value[1]
+            for child in value:
+                found = find_url(child)
+                if found:
+                    return found
+            return ""
+
+        resolved = find_url(payload).strip()
+        parsed = urllib.parse.urlparse(resolved)
+        return resolved if parsed.scheme in {"http", "https"} and parsed.netloc else ""
+
+    def resolve_google_news_article_url(self, url: str) -> str:
+        """Resolve a Google RSS interstitial before requesting the publisher body."""
+        if not self.google_news_article_link(url):
+            return str(url or "").strip()
+        if not self.google_original_url_resolution_enabled() or not self.google_original_url_budget_available():
+            self.record_provider_diagnostic("googleOriginalUrlBudgetRejectedCount")
+            return ""
+        self._google_original_url_fetches_for_target += 1
+        self._google_original_url_fetches_used += 1
+        self.record_provider_diagnostic("googleOriginalUrlResolveAttemptCount")
+        try:
+            interstitial = self.fetch_text(str(url), {
+                "Accept": "text/html,application/xhtml+xml",
+                "User-Agent": "Mozilla/5.0 (compatible; DigitalTwin/1.0)",
+            })
+            request_payload = self.google_news_garturl_payload(interstitial)
+            if not request_payload:
+                raise ValueError("Google News article resolver payload is unavailable")
+            response = self.fetch_post_text(
+                "https://news.google.com/_/DotsSplashUi/data/batchexecute?rpcids=Fbv4je",
+                request_payload,
+                {
+                    "Content-Type": "application/x-www-form-urlencoded;charset=UTF-8",
+                    "Referer": "https://news.google.com/",
+                    "User-Agent": "Mozilla/5.0 (compatible; DigitalTwin/1.0)",
+                },
+            )
+            resolved = self.google_news_garturl_result(response)
+            if not resolved or self.google_news_article_link(resolved):
+                raise ValueError("Google News article resolver did not return a publisher URL")
+        except Exception:  # noqa: BLE001 - unresolved RSS links never become headline-only evidence.
+            self.record_provider_diagnostic("googleOriginalUrlResolveFailedCount")
+            return ""
+        self.record_provider_diagnostic("googleOriginalUrlResolvedCount")
+        return resolved
+
     def news_evidence_from_article(
         self,
         target: NewsCollectionTarget,
@@ -530,17 +726,22 @@ class NewsSourceGateway:
         if search_target_unconfirmed or not self.relevance_state_passes(preliminary) or not news_domain.relation_scope_is_investable(preliminary.get("relationScope")):
             self.record_provider_diagnostic("preliminaryRejectedCount")
             return None
+        original_link = str(link or "").strip()
+        article_link = self.resolve_google_news_article_url(original_link)
+        if self.google_news_article_link(original_link) and not article_link:
+            return None
         article_source_allowed = article_body_allowed_for_source(source, provider)
         body_budget_available = self.article_body_budget_available()
         if article_source_allowed and body_budget_available:
             self.record_provider_diagnostic("bodyFetchAttemptCount")
         elif not article_source_allowed:
             self.record_provider_diagnostic("sourceBlockedCount")
-        article_text = self.article_text_for_url(link) if article_source_allowed else ""
+        article_text = self.article_text_for_url(article_link) if article_source_allowed else ""
         if not article_text and self.provider_requires_article_body(provider):
-            self.record_provider_diagnostic("bodyMissingCount")
             if article_source_allowed and not body_budget_available:
                 self.record_provider_diagnostic("bodyBudgetRejectedCount")
+            else:
+                self.record_provider_diagnostic("bodyMissingCount")
             return None
         analysis_text = article_text or feed_summary or title
         relevance = classify_news_relevance(target, title, analysis_text, source, provider)
@@ -575,7 +776,7 @@ class NewsSourceGateway:
             stock_impact,
             source,
             provider,
-            link,
+            article_link,
             published,
             read_status,
             analysis_source,
@@ -593,15 +794,17 @@ class NewsSourceGateway:
             "articleAnalysisQuality": analysis_quality,
             "articleFacts": article_facts,
             "articleTextPreview": compact_text(article_text, 700) if article_text else "",
+            "googleNewsFeedUrl": original_link if original_link != article_link else "",
+            "articleSourceUrl": article_link,
         }
         evidence = ResearchEvidence(
-            evidence_id="research:" + symbol + ":news:" + stable_evidence_token(provider, title, link),
+            evidence_id="research:" + symbol + ":news:" + stable_evidence_token(provider, title, article_link),
             symbol=symbol,
             kind="news",
             source=source,
             title=title,
             summary=summary_ko or compact_text(feed_summary or title, 360),
-            url=link,
+            url=article_link,
             observed_at=utc_now_iso(),
             polarity=polarity,
             published_at=iso_or_empty(published),
@@ -629,7 +832,8 @@ class NewsSourceGateway:
         seen = set()
         limit = self.per_symbol_limit()
         self._article_body_fetches_for_target = 0
-        for provider in self.providers():
+        self._google_original_url_fetches_for_target = 0
+        for provider in self.providers_for_target(target):
             remaining = max(0, limit - len(items))
             if remaining <= 0:
                 break
@@ -736,7 +940,7 @@ class NewsSourceGateway:
 
     def fetch_yahoo_finance_search(self, target: NewsCollectionTarget) -> List[ResearchEvidence]:
         symbol = self.yahoo_finance_symbol(target)
-        query = symbol if not symbol.endswith((".KS", ".KQ")) else target.search_query()
+        query = symbol if not symbol.endswith((".KS", ".KQ")) else self.search_query_for_target(target)
         params = {
             "q": query,
             "quotesCount": "1",
@@ -781,7 +985,7 @@ class NewsSourceGateway:
     def fetch_google_news_rss(self, target: NewsCollectionTarget, locale: str = "KR") -> List[ResearchEvidence]:
         symbol = target.normalized_symbol()
         locale = "US" if str(locale or "").upper() == "US" else "KR"
-        query = target.search_query()
+        query = self.search_query_for_target(target)
         params = {
             "q": query,
             "hl": "en-US" if locale == "US" else "ko",

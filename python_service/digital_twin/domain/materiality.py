@@ -37,6 +37,42 @@ def crossed_zero(previous: object, current: object) -> bool:
     return (before < 0 <= after) or (before > 0 >= after)
 
 
+def field_changed(changed_fields: Iterable[str], *fields: str) -> bool:
+    changed = {str(field or "") for field in changed_fields or []}
+    return any(field in changed for field in fields)
+
+
+def threshold_transition(previous: object, current: object, threshold: float) -> str:
+    """Describe a threshold entry or exit without treating a stable state as new."""
+    before = abs(number(previous))
+    after = abs(number(current))
+    if before < threshold <= after:
+        return "entered"
+    if before >= threshold > after:
+        return "cleared"
+    return ""
+
+
+def widening_distance(previous: object, current: object, minimum_change: float) -> bool:
+    before = number(previous)
+    after = number(current)
+    if before == 0 or after == 0 or before * after < 0:
+        return False
+    return abs(after) - abs(before) >= minimum_change
+
+
+def pressure_transition(previous: object, current: object, lower: float, upper: float) -> str:
+    before = number(previous)
+    after = number(current)
+    before_active = bool(before) and (before <= lower or before >= upper)
+    after_active = bool(after) and (after <= lower or after >= upper)
+    if not before_active and after_active:
+        return "entered"
+    if before_active and not after_active:
+        return "cleared"
+    return ""
+
+
 @dataclass
 class MaterialityAssessment:
     subject: str
@@ -119,37 +155,82 @@ def market_change_materiality(
     price_change = percent_delta(previous.get("currentPrice"), current.get("currentPrice"))
     price_threshold = float_setting(settings, "marketMaterialityPriceChangePct", 0.6, 0.0, 20.0)
     trend_threshold = float_setting(settings, "marketMaterialityTrendDistancePct", 2.0, 0.0, 30.0)
+    trend_change_threshold = float_setting(settings, "marketMaterialityTrendDistanceChangePct", 1.0, 0.0, 30.0)
     volume_threshold = float_setting(settings, "marketMaterialityVolumeRatio", 1.5, 0.0, 20.0)
     current_ma20 = number(current.get("ma20Distance"))
     previous_ma20 = number(previous.get("ma20Distance"))
     current_ma60 = number(current.get("ma60Distance"))
     previous_ma60 = number(previous.get("ma60Distance"))
+    previous_volume_ratio = number(previous.get("volumeRatio"))
     volume_ratio = number(current.get("volumeRatio"))
+    previous_trade_strength = number(previous.get("tradeStrength"))
     trade_strength = number(current.get("tradeStrength"))
+    previous_imbalance = abs(number(previous.get("orderbookImbalance") or previous.get("bidAskImbalance")))
     imbalance = abs(number(current.get("orderbookImbalance") or current.get("bidAskImbalance")))
     matched: List[str] = []
 
-    if abs(price_change) >= price_threshold:
+    if field_changed(changed_fields, "currentPrice", "changeRate") and abs(price_change) >= price_threshold:
         matched.append("price-move")
-    if crossed_zero(previous_ma20, current_ma20):
-        matched.append("ma20-cross")
-    elif abs(current_ma20) >= trend_threshold:
-        matched.append("ma20-distance")
-    if crossed_zero(previous_ma60, current_ma60):
-        matched.append("ma60-cross")
-    elif abs(current_ma60) >= trend_threshold:
-        matched.append("ma60-distance")
-    if volume_ratio >= volume_threshold:
-        matched.append("volume-confirmation")
-    if trade_strength >= 120 or (trade_strength and trade_strength <= 80):
-        matched.append("trade-pressure")
-    if imbalance >= 20:
-        matched.append("orderbook-imbalance")
+    if field_changed(changed_fields, "ma20Distance"):
+        ma20_transition = threshold_transition(previous_ma20, current_ma20, trend_threshold)
+        if crossed_zero(previous_ma20, current_ma20):
+            matched.append("ma20-cross")
+        elif ma20_transition == "entered":
+            matched.append("ma20-distance")
+        elif ma20_transition == "cleared":
+            matched.append("ma20-distance-cleared")
+        elif widening_distance(previous_ma20, current_ma20, trend_change_threshold):
+            matched.append("ma20-distance-widened")
+    if field_changed(changed_fields, "ma60Distance"):
+        ma60_transition = threshold_transition(previous_ma60, current_ma60, trend_threshold)
+        if crossed_zero(previous_ma60, current_ma60):
+            matched.append("ma60-cross")
+        elif ma60_transition == "entered":
+            matched.append("ma60-distance")
+        elif ma60_transition == "cleared":
+            matched.append("ma60-distance-cleared")
+        elif widening_distance(previous_ma60, current_ma60, trend_change_threshold):
+            matched.append("ma60-distance-widened")
+    if field_changed(changed_fields, "volumeRatio"):
+        volume_transition = threshold_transition(previous_volume_ratio, volume_ratio, volume_threshold)
+        if volume_transition == "entered":
+            matched.append("volume-confirmation")
+        elif volume_transition == "cleared":
+            matched.append("volume-confirmation-cleared")
+    if field_changed(changed_fields, "tradeStrength"):
+        trade_transition = pressure_transition(previous_trade_strength, trade_strength, 80, 120)
+        if trade_transition == "entered":
+            matched.append("trade-pressure")
+        elif trade_transition == "cleared":
+            matched.append("trade-pressure-cleared")
+    if field_changed(changed_fields, "orderbookImbalance", "bidAskImbalance"):
+        imbalance_transition = threshold_transition(previous_imbalance, imbalance, 20)
+        if imbalance_transition == "entered":
+            matched.append("orderbook-imbalance")
+        elif imbalance_transition == "cleared":
+            matched.append("orderbook-imbalance-cleared")
     if current.get("dataQuality") and previous.get("dataQuality") and current.get("dataQuality") != previous.get("dataQuality"):
         matched.append("data-state-change")
 
-    directional = {"price-move", "ma20-cross", "ma60-cross", "ma20-distance", "ma60-distance"} & set(matched)
-    confirmation = {"volume-confirmation", "trade-pressure", "orderbook-imbalance"} & set(matched)
+    directional = {
+        "price-move",
+        "ma20-cross",
+        "ma60-cross",
+        "ma20-distance",
+        "ma60-distance",
+        "ma20-distance-cleared",
+        "ma60-distance-cleared",
+        "ma20-distance-widened",
+        "ma60-distance-widened",
+    } & set(matched)
+    confirmation = {
+        "volume-confirmation",
+        "trade-pressure",
+        "orderbook-imbalance",
+        "volume-confirmation-cleared",
+        "trade-pressure-cleared",
+        "orderbook-imbalance-cleared",
+    } & set(matched)
     if "ma60-cross" in matched or (directional and confirmation):
         review_level = "act"
     elif directional or "data-state-change" in matched:
@@ -167,7 +248,11 @@ def market_change_materiality(
         change_state = "new-condition" if matched else "unchanged"
         evidence_role = "context"
     data_state = "partial" if str(current.get("dataQuality") or "").lower() in {"poor", "stale", "partial"} else "sufficient"
-    reason = "가격·추세 변화 조건이 성립했습니다." if passed else "값은 바뀌었지만 대응 조건은 성립하지 않았습니다."
+    reason = (
+        "가격·추세 또는 수급 상태가 새 기준을 넘거나 해제되어 다시 확인합니다."
+        if passed
+        else "값은 갱신됐지만 기존 상태가 유지되어 TypeDB 재추론 요청은 만들지 않습니다."
+    )
     return MaterialityAssessment(
         symbol,
         "market-data-update",
@@ -181,6 +266,8 @@ def market_change_materiality(
             "volumeRatio": round(volume_ratio, 3),
             "ma20Distance": round(current_ma20, 3),
             "ma60Distance": round(current_ma60, 3),
+            "ma20DistanceChange": round(current_ma20 - previous_ma20, 3),
+            "ma60DistanceChange": round(current_ma60 - previous_ma60, 3),
         },
         data_state=data_state,
         change_state=change_state,

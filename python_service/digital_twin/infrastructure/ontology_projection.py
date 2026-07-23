@@ -22,12 +22,13 @@ from ..domain.ontology_scopes import (
     SCOPED_ABOX_MANIFEST_VERSION,
     SCOPED_ABOX_PERSISTENCE_MODE,
     apply_scoped_abox_identity,
+    scoped_manifest_id,
 )
 from ..domain.ontology_worlds import market_world, world_from_snapshot, world_metadata
 from ..domain.market_world_projection import (
     build_market_world_graph,
     market_world_coverage,
-    merge_market_world_graph,
+    merge_market_world_scope_manifest,
 )
 from ..domain.ontology_projection_audit import (
     OntologyProjectionRun,
@@ -40,6 +41,10 @@ from ..domain.ontology_runtime_operations import build_projection_runtime_observ
 from ..domain.ontology_validator import validate_ontology
 from ..domain.portfolio_ontology_builder import build_portfolio_ontology
 from ..domain.portfolio_ontology_coverage import CATEGORY_RELATIONS
+from ..domain.ontology_native_rule_planning import (
+    native_rule_planner_manifest_fingerprint,
+    native_rule_planner_topology,
+)
 from ..domain.portfolio_ontology_temporal_concepts import parse_temporal_windows
 from ..domain.portfolio import AccountSnapshot
 from .graph_store_rulebox import rulebox_rules_to_payload
@@ -224,7 +229,16 @@ class PortfolioOntologyProjectionRecorder:
             return result
         pending_activation_recovery = self.recover_pending_abox_activation(portfolio_world_context.world_id)
         recovery_status = str(pending_activation_recovery.get("status") or "skipped")
-        if recovery_status not in {"skipped", "disabled", "finalized", "restored", "cleared-stale", "retry-required", "staged"}:
+        if recovery_status not in {
+            "skipped",
+            "disabled",
+            "finalized",
+            "finalized-empty-target",
+            "restored",
+            "cleared-stale",
+            "retry-required",
+            "staged",
+        }:
             result = {
                 "saved": False,
                 "status": "pending-abox-activation-recovery-failed",
@@ -238,7 +252,12 @@ class PortfolioOntologyProjectionRecorder:
             }
             self.store_projection_result(snapshot, result)
             return result
-        self.reconcile_interrupted_projection_audit(portfolio_world_context.world_id)
+        # A staged or targetless legacy activation has no bounded InferenceBox
+        # proof to reconcile yet. The latter is finalized as control-only
+        # repair, then this cycle stages the current manifest. Avoid reading
+        # historical InferenceBox rows before that bounded retry begins.
+        if recovery_status not in {"retry-required", "staged", "finalized-empty-target"}:
+            self.reconcile_interrupted_projection_audit(portfolio_world_context.world_id)
         try:
             rulebox_bootstrap = self.ensure_rulebox_ready()
             if str(rulebox_bootstrap.get("status") or "") not in {"ready", "seeded"}:
@@ -270,6 +289,11 @@ class PortfolioOntologyProjectionRecorder:
                 include_presentation=False,
             )
             persistence_graph = self.graph_for_graph_store_persistence(graph, rulebox_bootstrap)
+            # This is a structural index from the exact graph being persisted.
+            # It only bounds TypeDB function scheduling; TypeDB still evaluates
+            # all selected rule conditions and materializes the result.
+            planner_topology = native_rule_planner_topology(persistence_graph)
+            persistence_graph.worldview["nativeRulePlannerTopology"] = planner_topology
             graph.worldview.update({
                 **world_metadata(portfolio_world_context),
                 "marketWorldId": market_world_context.world_id,
@@ -280,7 +304,10 @@ class PortfolioOntologyProjectionRecorder:
                 "marketWorldId": market_world_context.world_id,
                 "marketContextMode": "shared-market-world-with-portfolio-rule-mirror",
             })
-            material_fingerprint = material_graph_fingerprint(persistence_graph)
+            material_fingerprint = native_rule_planner_manifest_fingerprint(
+                material_graph_fingerprint(persistence_graph),
+                planner_topology,
+            )
             material_snapshot_id = apply_material_graph_identity(
                 persistence_graph,
                 snapshot.account_id,
@@ -314,6 +341,64 @@ class PortfolioOntologyProjectionRecorder:
                 self.store_projection_result(snapshot, result, projection_run)
                 return result
             active_abox = self.active_abox_metadata(portfolio_world_context.world_id)
+            evidence_index_upgrade = {}
+            active_abox_complete = str(active_abox.get("status") or "ok") == "ok"
+            active_abox_is_scoped_manifest = (
+                str(active_abox.get("scopedAboxManifestVersion") or "")
+                == SCOPED_ABOX_MANIFEST_VERSION
+            )
+            # A rolling deployment can encounter an already active immutable
+            # ABox that predates the exact physical evidence-read index. The
+            # index is marker metadata derived from this same verified graph;
+            # it does not alter market facts or native rule semantics.
+            if (
+                active_abox_complete
+                and active_abox_is_scoped_manifest
+                and active_material_fingerprint(active_abox) == material_fingerprint
+            ):
+                upgrader = getattr(self.repository, "ensure_scoped_manifest_evidence_read_index", None)
+                if callable(upgrader):
+                    index_upgrade_started = time.perf_counter()
+                    try:
+                        evidence_index_upgrade = self.repository_world_call(
+                            "ensure_scoped_manifest_evidence_read_index",
+                            persistence_graph,
+                            active_metadata=active_abox,
+                            world_id=portfolio_world_context.world_id,
+                        )
+                    except Exception as error:  # noqa: BLE001 - do not run a new judgement without exact current evidence.
+                        evidence_index_upgrade = {
+                            "configured": True,
+                            "saved": False,
+                            "status": "error",
+                            "reason": str(error)[:180],
+                        }
+                    runtime_stages["manifestEvidenceIndexUpgradeMs"] = int(
+                        (time.perf_counter() - index_upgrade_started) * 1000
+                    )
+                    upgrade_status = str(evidence_index_upgrade.get("status") or "")
+                    if upgrade_status in {"ok", "unchanged"}:
+                        active_abox = self.active_abox_metadata(portfolio_world_context.world_id)
+                    else:
+                        result = {
+                            "saved": False,
+                            "status": "manifest-evidence-index-upgrade-pending",
+                            "reason": (
+                                "현재 ABox의 근거 조회 인덱스를 안전하게 보강하지 못해 새 투자 판단을 보류했습니다. "
+                                + str(evidence_index_upgrade.get("reason") or upgrade_status)[:180]
+                            ),
+                            "graphStore": self.active_graph_store_key(),
+                            "materialFingerprint": material_fingerprint,
+                            "aboxSnapshotId": str(active_abox.get("aboxSnapshotId") or material_snapshot_id),
+                            "preservedActiveGeneration": True,
+                            "materialChangeDetected": False,
+                            "aboxValidation": validation.to_dict(),
+                            "manifestEvidenceIndexUpgrade": evidence_index_upgrade,
+                            "runtimeStages": runtime_stages,
+                            "ontologyWorld": world_metadata(portfolio_world_context),
+                        }
+                        self.store_projection_result(snapshot, result)
+                        return result
             impact_planning_started = time.perf_counter()
             inference_impact_plan = self.inference_impact_plan(
                 snapshot,
@@ -352,11 +437,6 @@ class PortfolioOntologyProjectionRecorder:
                     "대상별 TypeDB 네이티브 규칙을 완전 평가합니다."
                 ),
             }
-            active_abox_complete = str(active_abox.get("status") or "ok") == "ok"
-            active_abox_is_scoped_manifest = (
-                str(active_abox.get("scopedAboxManifestVersion") or "")
-                == SCOPED_ABOX_MANIFEST_VERSION
-            )
             # Identical facts must still be persisted once when upgrading from
             # the legacy complete-generation pointer. Otherwise a quiet market
             # could leave the old full-rewrite ABox active indefinitely.
@@ -407,6 +487,8 @@ class PortfolioOntologyProjectionRecorder:
                 }
                 if rulebox_bootstrap:
                     result["ruleboxBootstrap"] = rulebox_bootstrap
+                if evidence_index_upgrade:
+                    result["manifestEvidenceIndexUpgrade"] = evidence_index_upgrade
                 if pending_activation_recovery:
                     result["pendingAboxActivationRecovery"] = pending_activation_recovery
                 if self.inference_result_is_reusable(
@@ -469,6 +551,9 @@ class PortfolioOntologyProjectionRecorder:
             result["projectionMode"] = "abox-facts-only-typedb-native-rules"
             result["materialFingerprint"] = material_fingerprint
             result["aboxSnapshotId"] = material_snapshot_id
+            result["nativeRulePlannerTopology"] = dict(
+                persistence_graph.worldview.get("nativeRulePlannerTopology") or {}
+            )
             result["materialChangeDetected"] = True
             result["projectionScope"] = projection_scope
             result["inferenceImpactPlan"] = compact_impact_plan
@@ -986,17 +1071,17 @@ class PortfolioOntologyProjectionRecorder:
                 "status": "skipped-non-typedb-store",
                 "reason": "Shared MarketWorld is enabled on the TypeDB ontology adapter.",
             }
-        loader = getattr(self.repository, "load_graph_from_typedb", None)
-        if not callable(loader):
+        metadata_reader = getattr(self.repository, "active_abox_metadata", None)
+        scoped_saver = getattr(self.repository, "save_scoped_abox_graph", None)
+        if not callable(metadata_reader) or not callable(scoped_saver):
             return {
                 **world_metadata(shared_world),
-                "status": "deferred-adapter-not-world-aware",
-                "reason": "The active graph adapter cannot read a world-scoped MarketWorld yet.",
+                "status": "deferred-adapter-not-scoped-market-world",
+                "reason": "The active graph adapter cannot update a shared MarketWorld through scoped Manifests yet.",
             }
         merge_lease: Dict[str, object] = {}
         acquire_lease = getattr(self.repository, "acquire_scoped_abox_write_lease", None)
         release_lease = getattr(self.repository, "release_scoped_abox_write_lease", None)
-        scoped_saver = getattr(self.repository, "save_scoped_abox_graph", None)
         if callable(acquire_lease) and callable(release_lease) and callable(scoped_saver):
             try:
                 merge_lease = self.repository_world_call(
@@ -1026,42 +1111,136 @@ class PortfolioOntologyProjectionRecorder:
             observed_at = str((portfolio_graph.worldview or {}).get("asOf") or "")
             update = build_market_world_graph(portfolio_graph, shared_world, observed_at=observed_at)
             try:
-                existing = self.repository_world_call(
-                    "load_graph_from_typedb",
-                    ["ABox"],
+                active_market = self.repository_world_call(
+                    "active_abox_metadata",
                     world_id=shared_world.world_id,
                 )
-            except Exception:
-                existing = None
-            merged = merge_market_world_graph(
-                existing if isinstance(existing, PortfolioOntology) else None,
-                update,
-                retention_hours=self.shared_market_world_retention_hours(),
-                max_symbols=self.shared_market_world_symbol_limit(),
-                observed_at=observed_at,
-            )
-            merged.worldview.update({
+            except Exception as error:  # noqa: BLE001 - a shared read must never hold a portfolio projection.
+                return {
+                    **world_metadata(shared_world),
+                    "status": "deferred-market-world-metadata",
+                    "preservedActiveGeneration": True,
+                    "reason": "Shared MarketWorld Manifest could not be read: " + str(error)[:180],
+                }
+            active_market = dict(active_market or {}) if isinstance(active_market, dict) else {}
+            active_status = str(active_market.get("status") or "empty").strip().lower()
+            if active_status not in {"ok", "empty"}:
+                return {
+                    **world_metadata(shared_world),
+                    "status": "deferred-market-world-metadata",
+                    "preservedActiveGeneration": True,
+                    "reason": str(
+                        active_market.get("reason")
+                        or "Shared MarketWorld Manifest is not complete."
+                    )[:220],
+                }
+            if (
+                active_status == "ok"
+                and str(active_market.get("scopedAboxManifestVersion") or "") != SCOPED_ABOX_MANIFEST_VERSION
+            ):
+                return {
+                    **world_metadata(shared_world),
+                    "status": "deferred-market-world-legacy-manifest",
+                    "preservedActiveGeneration": True,
+                    "reason": "Shared MarketWorld must be migrated to a scoped Manifest before incremental updates can preserve every active symbol.",
+                }
+            update.worldview.update({
                 **world_metadata(shared_world),
                 "marketWorldProjection": True,
                 "marketContextMode": "shared-market-world-with-portfolio-rule-mirror",
             })
-            fingerprint = material_graph_fingerprint(merged)
+            incoming_fingerprint = material_graph_fingerprint(update)
             apply_material_graph_identity(
-                merged,
+                update,
                 shared_world.world_id,
-                fingerprint,
+                incoming_fingerprint,
                 world_id=shared_world.world_id,
             )
             scoped = apply_scoped_abox_identity(
-                merged,
+                update,
                 shared_world.world_id,
                 world_id=shared_world.world_id,
                 tenant_id=shared_world.tenant_id,
                 world_type=shared_world.world_type,
                 world_account_id="",
             )
-            validation = validate_ontology(merged)
-            coverage = market_world_coverage(merged)
+            manifest_state = merge_market_world_scope_manifest(
+                active_market,
+                scoped.get("scopePlan") or [],
+                observed_at=observed_at,
+                retention_hours=self.shared_market_world_retention_hours(),
+                max_symbols=self.shared_market_world_symbol_limit(),
+            )
+            scope_generations = dict(manifest_state.get("scopeGenerationIds") or {})
+            if not scope_generations:
+                return {
+                    **world_metadata(shared_world),
+                    "status": "skipped-empty-market-world-patch",
+                    "reason": "No shareable market fact scope was produced by this portfolio observation.",
+                }
+            manifest_id = scoped_manifest_id(
+                shared_world.world_id,
+                scope_generations,
+                world_id=shared_world.world_id,
+            )
+            fingerprint = str(manifest_state.get("materialFingerprint") or incoming_fingerprint)
+            if (
+                active_status == "ok"
+                and active_material_fingerprint(active_market) == fingerprint
+            ):
+                # A portfolio inference retry must not rewrite the shared
+                # market generation when this account contributed no new
+                # market facts. The portfolio ABox has a separate lifecycle,
+                # so preserving this already active MarketWorld cannot hide a
+                # candidate portfolio failure or a data freshness change.
+                return {
+                    **world_metadata(shared_world),
+                    "status": "unchanged-material-facts",
+                    "saved": False,
+                    "preservedActiveGeneration": True,
+                    "materialFingerprint": fingerprint,
+                    "worldviewManifestId": str(active_market.get("aboxSnapshotId") or manifest_id),
+                    "projectionMode": "incremental-scoped-manifest-reuse",
+                    "activeScopeCount": int(manifest_state.get("activeScopeCount") or 0),
+                    "activeSymbolCount": int(manifest_state.get("activeSymbolCount") or 0),
+                    "retiredScopeIds": list(manifest_state.get("retiredScopeIds") or []),
+                    "reason": "공용 시장 사실이 현재 활성 MarketWorld와 같아 저장과 활성화를 생략했습니다.",
+                }
+            update.worldview.update({
+                "materialFingerprint": fingerprint,
+                "aboxSnapshotId": manifest_id,
+                "snapshotId": manifest_id,
+                "worldviewManifestId": manifest_id,
+                "scopePlan": list(manifest_state.get("scopePlan") or []),
+                "scopeGenerationIds": scope_generations,
+                "scopeFingerprints": dict(manifest_state.get("scopeFingerprints") or {}),
+                "scopeFamilyCounts": dict(manifest_state.get("scopeFamilyCounts") or {}),
+                "marketScopeObservedAt": dict(manifest_state.get("marketScopeObservedAt") or {}),
+                "marketWorldProjectionMode": "incremental-scoped-manifest-patch",
+                "marketWorldActiveScopeCount": int(manifest_state.get("activeScopeCount") or 0),
+                "marketWorldActiveSymbolCount": int(manifest_state.get("activeSymbolCount") or 0),
+                "marketWorldRetiredScopeIds": list(manifest_state.get("retiredScopeIds") or []),
+            })
+            for entity in update.entities:
+                if str((entity.properties or {}).get("ontologyBox") or "ABox") == "ABox":
+                    entity.properties["worldviewManifestId"] = manifest_id
+                    entity.properties["materialFingerprint"] = fingerprint
+            for relation in update.relations:
+                if str((relation.properties or {}).get("ontologyBox") or "ABox") == "ABox":
+                    relation.properties["worldviewManifestId"] = manifest_id
+                    relation.properties["materialFingerprint"] = fingerprint
+            for evidence in update.evidence:
+                if str((evidence.value or {}).get("ontologyBox") or "ABox") == "ABox":
+                    evidence.value["worldviewManifestId"] = manifest_id
+                    evidence.value["materialFingerprint"] = fingerprint
+            validation = validate_ontology(update)
+            coverage = market_world_coverage(update)
+            coverage.update({
+                "coverageScope": "incoming-market-patch",
+                "activeScopeCount": int(manifest_state.get("activeScopeCount") or 0),
+                "activeSymbolCount": int(manifest_state.get("activeSymbolCount") or 0),
+                "retiredScopeCount": len(manifest_state.get("retiredScopeIds") or []),
+            })
             if validation.error_count:
                 return {
                     **world_metadata(shared_world),
@@ -1071,20 +1250,15 @@ class PortfolioOntologyProjectionRecorder:
                     "validation": validation.to_dict(),
                     "reason": "Shared market observations failed ontology validation.",
                 }
-            # The shared lease covers read -> merge -> stage -> activate.  A
-            # plain save lock alone starts too late: two accounts could both
-            # merge against the same old MarketWorld and publish competing
-            # manifests that each omit the other account's instruments.
-            if merge_lease and callable(scoped_saver):
-                save_result = scoped_saver(merged, adopted_write_lease=merge_lease)
-            else:
-                save_result = self.repository.save_graph(merged)
+            # The shared lease covers Manifest metadata read -> scope patch ->
+            # stage -> activate. Existing scopes stay in the active Manifest,
+            # so no account can erase another account's market observation.
+            save_result = scoped_saver(update, adopted_write_lease=merge_lease) if merge_lease else scoped_saver(update)
             save_result = dict(save_result or {}) if isinstance(save_result, dict) else {
                 "saved": False,
                 "status": "invalid-save-result",
             }
             activation = {}
-            manifest_id = str(scoped.get("manifestId") or "").strip()
             if manifest_id and str(save_result.get("status") or "") in {
                 "ok",
                 "staged-scoped-manifest",
@@ -1105,6 +1279,10 @@ class PortfolioOntologyProjectionRecorder:
                 ),
                 "materialFingerprint": fingerprint,
                 "worldviewManifestId": manifest_id,
+                "projectionMode": "incremental-scoped-manifest-patch",
+                "activeScopeCount": int(manifest_state.get("activeScopeCount") or 0),
+                "activeSymbolCount": int(manifest_state.get("activeSymbolCount") or 0),
+                "retiredScopeIds": list(manifest_state.get("retiredScopeIds") or []),
                 "coverage": coverage,
                 "validation": validation.to_dict(),
                 "save": save_result,
@@ -1256,6 +1434,11 @@ class PortfolioOntologyProjectionRecorder:
                 "pruneOldGenerations": False,
                 "inferenceSnapshotLimit": self.inference_snapshot_limit(),
                 "inferenceImpactPlan": compact_impact_plan,
+                "nativeRulePlannerTopology": dict(
+                    (result.get("nativeRulePlannerTopology") or {})
+                    if isinstance(result.get("nativeRulePlannerTopology"), dict)
+                    else {}
+                ),
                 "typedbNativeRuleSelectionEnabled": self.settings.get("typedbNativeRuleSelectionEnabled", "1"),
                 "priorInferenceReusable": bool(selection_context.get("reusable")),
                 "priorMatchedRuleIds": list(selection_context.get("matchedRuleIds") or []),
@@ -1817,7 +2000,11 @@ class PortfolioOntologyProjectionRecorder:
             "decisionPerformance": decision_performance,
             "hypothesisProposals": self.hypothesis_proposal_context(snapshot),
             "hypothesisLifecycles": self.hypothesis_lifecycle_context(snapshot),
-            "dataPipelineHealth": self.data_pipeline_health_context(),
+            # A live pipeline health row may change while a delayed retry is
+            # rebuilding the same account snapshot. Only health captured with
+            # the snapshot is causal ABox input; current worker telemetry is
+            # exposed through operational monitoring instead.
+            "dataPipelineHealth": self.data_pipeline_health_context(snapshot),
             "temporalObservationWindows": self.temporal_observation_windows(snapshot),
         }
 
@@ -1837,6 +2024,7 @@ class PortfolioOntologyProjectionRecorder:
                 snapshot.account_id,
                 symbols,
                 definitions,
+                as_of=str(snapshot.generated_at or ""),
             )
         except Exception:  # noqa: BLE001 - short snapshot history remains a valid compatibility fallback.
             return {}
@@ -1847,14 +2035,19 @@ class PortfolioOntologyProjectionRecorder:
         except (TypeError, ValueError):
             return float(fallback)
 
-    def data_pipeline_health_context(self) -> Dict[str, object]:
-        if not self.data_pipeline_health_store or not hasattr(self.data_pipeline_health_store, "load"):
-            return {}
-        try:
-            payload = self.data_pipeline_health_store.load()
-            return dict(payload or {}) if isinstance(payload, dict) else {}
-        except Exception:  # noqa: BLE001 - operational health is confidence context, not a projection blocker.
-            return {}
+    def data_pipeline_health_context(self, snapshot: AccountSnapshot = None) -> Dict[str, object]:
+        """Return only health that belongs to the snapshot being reasoned.
+
+        The current pipeline read model is operational telemetry, not a market
+        fact observed at an older snapshot. Feeding it into a retry made one
+        frozen account snapshot alternately gain and lose missing-data facts.
+        A future collector can persist ``dataPipelineHealth`` in snapshot
+        metadata; until then, per-position source timestamps remain the
+        investment freshness contract.
+        """
+        metadata = dict(getattr(snapshot, "metadata", {}) or {}) if snapshot else {}
+        payload = metadata.get("dataPipelineHealth")
+        return dict(payload or {}) if isinstance(payload, dict) else {}
 
     def decision_episode_context(self, snapshot: AccountSnapshot) -> List[Dict[str, object]]:
         if not self.decision_episode_store:

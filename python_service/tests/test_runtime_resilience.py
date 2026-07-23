@@ -9,7 +9,9 @@ from urllib.error import URLError
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from digital_twin.domain.external_signal_quality import evaluate_external_signal_quality
+from digital_twin.domain.external_signal_quality import attach_external_signal_quality, evaluate_external_signal_quality
+from digital_twin.domain.ontology_external_abox import external_quality_data_state
+from digital_twin.domain.ontology_relation_facts import _external_quality_facts
 from digital_twin.domain.portfolio import Position
 from digital_twin.infrastructure.external_signal_utils import ExternalApiGuard, ExternalRateLimited
 from digital_twin.infrastructure.external_signals import ExternalSignalProvider
@@ -176,6 +178,44 @@ class RuntimeResilienceTests(unittest.TestCase):
         self.assertFalse(alpha["ok"])
         self.assertTrue(alpha["deferred"])
         self.assertEqual(0, quality["errorCount"])
+
+    def test_recent_but_partial_external_data_is_not_marked_fresh_for_judgement(self):
+        now = datetime(2026, 7, 23, 7, 0, tzinfo=timezone.utc)
+        signals = {
+            "fetchedAt": "2026-07-23T07:00:00Z",
+            "equityQuotes": {"AAPL": {"price": 100}},
+            "cryptoMarkets": {"bitcoin": {"price": 1}},
+            "macro": {"series": {"DGS10": {"value": 4.5}}},
+            "secFilings": {"AAPL": {"facts": {}}},
+            "dartDisclosures": {"AAPL": {"items": []}},
+            "newsHeadlines": {},
+            "yfinanceData": {"AAPL": {"price": 100}},
+            "statuses": [{
+                "source": "Alpha Vantage",
+                "ok": True,
+                "deferred": True,
+                "dataUsable": False,
+                "message": "provider quota cooldown",
+            }],
+        }
+
+        attached = attach_external_signal_quality(
+            signals,
+            positions=[Position(symbol="AAPL", name="Apple", market="US", currency="USD")],
+            settings={"alphaVantageApiKey": "configured", "externalApiFetchIntervalMinutes": "30"},
+            now=now,
+        )
+
+        self.assertEqual("partial", attached["quality"]["dataState"])
+        self.assertEqual("fresh", attached["freshness"]["transportStatus"])
+        self.assertEqual("partial", attached["freshness"]["status"])
+        self.assertEqual(
+            "partial",
+            external_quality_data_state(
+                attached["quality"], attached["freshness"], attached["provenance"]
+            ),
+        )
+        self.assertEqual("partial", _external_quality_facts(attached)["externalSignalDataState"])
 
     def test_sec_known_ciks_skip_global_ticker_lookup_without_contact_agent(self):
         calls = []

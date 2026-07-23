@@ -121,6 +121,13 @@ MYSQL_OPERATIONAL_INDEXES: Dict[str, Sequence[MySQLIndexDefinition]] = {
             "`status`, `attempts`, `created_at`, `job_id`",
         ),
     ),
+    "market_time_series_observations": (
+        MySQLIndexDefinition(
+            "market_time_series_observations",
+            "idx_market_time_series_snapshot_cutoff",
+            "`account_id`, `symbol`, `granularity`, `observed_at`, `bucket_at`",
+        ),
+    ),
     "symbol_universe": (
         MySQLIndexDefinition("symbol_universe", "idx_symbol_universe_active_market_seen", "`active`, `market`, `last_seen_at`"),
         MySQLIndexDefinition("symbol_universe", "idx_symbol_universe_active_symbol_market", "`active`, `symbol`, `market`"),

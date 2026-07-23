@@ -14,6 +14,19 @@ from .portfolio_ontology_catalog import (
 )
 
 
+# Healthy and idle collection telemetry is operational observability. It is
+# available from the data-pipeline health read model, but it must not create a
+# new investment ABox generation on every successful polling cycle. Only a
+# state that limits data use belongs in the factual reasoning world.
+INFERENCE_RELEVANT_PIPELINE_HEALTH_STATES = {
+    "degraded",
+    "disabled",
+    "failed",
+    "stale",
+    "unknown",
+}
+
+
 def position_source(position: Position) -> str:
     return str(getattr(position, "source", "") or "holding").strip().lower() or "holding"
 
@@ -102,11 +115,19 @@ def add_runtime_setting_concepts(graph: PortfolioOntology, portfolio_node_id: st
     settings = runtime_context.get("settings") if isinstance(runtime_context, dict) else {}
     if not isinstance(settings, dict):
         return
+    # Runtime settings include credentials, database addresses, worker
+    # intervals and TypeDB transport limits. They are operational wiring, not
+    # investment facts. Projecting every setting made an otherwise unchanged
+    # market snapshot produce a new ABox generation after an infrastructure
+    # change. Only settings explicitly modelled as investment/notification
+    # policy concepts belong in the factual ontology. Other settings remain
+    # available through the runtime settings API and operational diagnostics.
     for key, value in sorted(settings.items()):
+        if str(key) not in SETTING_CONCEPT_TYPES:
+            continue
         if value in (None, "", False):
             continue
-        concept = SETTING_CONCEPT_TYPES.get(str(key))
-        tbox_class, relation_type = concept if concept else ("RuntimeSetting", "HAS_RUNTIME_SETTING")
+        tbox_class, relation_type = SETTING_CONCEPT_TYPES[str(key)]
         setting_id = add_entity(graph, "runtime-setting", key, str(key), {
             "tboxClass": tbox_class,
             "key": str(key),
@@ -448,20 +469,17 @@ def add_operational_world_concepts(
         add_relation(graph, pipeline_id, reasoning_id, "TRIGGERS_REASONING", properties={"source": "operational-ontology"})
         health_key = "newsCollection" if key == "externalSignals" else key
         observed_health = health_pipelines.get(health_key) if isinstance(health_pipelines.get(health_key), dict) else {}
-        if observed_health:
+        health_state = str(observed_health.get("state") or "").strip().lower()
+        if observed_health and health_state in INFERENCE_RELEVANT_PIPELINE_HEALTH_STATES:
             health_id = add_entity(graph, "data-pipeline-health", health_key, str(pipeline["label"]) + " 상태", {
                 "tboxClass": "DataPipelineHealth",
                 "pipeline": health_key,
-                "state": str(observed_health.get("state") or "unknown"),
+                "state": health_state,
                 "reasonCode": str(observed_health.get("reasonCode") or ""),
                 "reason": str(observed_health.get("reason") or ""),
-                "checkedAt": str(observed_health.get("checkedAt") or ""),
-                "stateSince": str(observed_health.get("stateSince") or ""),
-                "lastNonZeroAt": str(observed_health.get("lastNonZeroAt") or ""),
                 "consecutiveZeroRuns": int(observed_health.get("consecutiveZeroRuns") or 0),
                 "providerFailureCount": int(observed_health.get("providerFailureCount") or 0),
                 "providerCandidateCount": int(observed_health.get("providerCandidateCount") or 0),
-                "providers": list(observed_health.get("providers") or [])[:20],
             })
             add_relation(graph, pipeline_id, health_id, "HAS_PIPELINE_HEALTH", properties={"source": "operational-observation"})
 

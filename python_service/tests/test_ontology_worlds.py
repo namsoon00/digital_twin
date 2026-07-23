@@ -11,9 +11,11 @@ from digital_twin.domain.ontology_worlds import (
 )
 from digital_twin.domain.market_world_projection import (
     build_market_world_graph,
+    merge_market_world_scope_manifest,
     merge_market_world_graph,
 )
 from digital_twin.domain.portfolio import AccountSnapshot, PortfolioSummary, Position, utc_now_iso
+from digital_twin.domain.portfolio_ontology_builder import build_portfolio_ontology
 from digital_twin.domain.ontology_rulebox_catalog import default_graph_inference_rules
 from digital_twin.infrastructure.graph_store_rulebox import rulebox_rules_to_payload
 from digital_twin.infrastructure.ontology_projection import PortfolioOntologyProjectionRecorder
@@ -166,6 +168,60 @@ class OntologyWorldContractTests(unittest.TestCase):
         self.assertGreater(retention["removedStaleEntityCount"], 0)
         self.assertEqual(48.0, retention["retentionHours"])
 
+    def test_market_world_scope_manifest_keeps_prior_scopes_and_retires_tracked_stale_symbols(self):
+        world = market_world("kr")
+        old = build_market_world_graph(sample_graph("005930"), world, observed_at="2026-07-01T00:00:00Z")
+        old_scoped = apply_scoped_abox_identity(
+            old,
+            world.world_id,
+            world_id=world.world_id,
+            tenant_id=world.tenant_id,
+            world_type=world.world_type,
+            world_account_id="",
+        )
+        fresh = build_market_world_graph(sample_graph("000660"), world, observed_at="2026-07-05T00:00:00Z")
+        fresh_scoped = apply_scoped_abox_identity(
+            fresh,
+            world.world_id,
+            world_id=world.world_id,
+            tenant_id=world.tenant_id,
+            world_type=world.world_type,
+            world_account_id="",
+        )
+
+        retained = merge_market_world_scope_manifest(
+            {
+                "scopePlan": old_scoped["scopePlan"],
+                "marketScopeObservedAt": {
+                    item["scopeId"]: "2026-07-01T00:00:00Z"
+                    for item in old_scoped["scopePlan"]
+                },
+            },
+            fresh_scoped["scopePlan"],
+            observed_at="2026-07-05T00:00:00Z",
+            retention_hours=0,
+        )
+        retained_scope_ids = {item["scopeId"] for item in retained["scopePlan"]}
+        self.assertTrue(any("005930" in item for item in retained_scope_ids))
+        self.assertTrue(any("000660" in item for item in retained_scope_ids))
+
+        pruned = merge_market_world_scope_manifest(
+            {
+                "scopePlan": old_scoped["scopePlan"],
+                "marketScopeObservedAt": {
+                    item["scopeId"]: "2026-07-01T00:00:00Z"
+                    for item in old_scoped["scopePlan"]
+                },
+            },
+            fresh_scoped["scopePlan"],
+            observed_at="2026-07-05T00:00:00Z",
+            retention_hours=48,
+        )
+        pruned_scope_ids = {item["scopeId"] for item in pruned["scopePlan"]}
+        self.assertFalse(any("005930" in item for item in pruned_scope_ids))
+        self.assertTrue(any("000660" in item for item in pruned_scope_ids))
+        self.assertTrue(pruned["retiredScopeIds"])
+
     def test_typedb_world_identity_isolates_storage_and_reuses_parameterized_rule_namespace(self):
         first_world = "portfolio:tenant-a:account-a"
         second_world = "portfolio:tenant-a:account-b"
@@ -194,7 +250,7 @@ class OntologyWorldContractTests(unittest.TestCase):
         self.assertIn("== $ruleWorldId", definition["body"])
         self.assertNotIn(world, definition["body"])
         self.assertIn('let $ruleWorldId = "portfolio:tenant-a:account-a";', call["query"])
-        self.assertIn("($candidate, $ruleWorldId)", call["query"])
+        self.assertIn("($candidate, $activeManifestPointer, $ruleWorldId)", call["query"])
 
     def test_native_rulebox_api_requires_a_portfolio_world(self):
         missing = run_ontology_rulebox_payload({"clearInference": True})
@@ -214,12 +270,27 @@ class MultiAccountProjectionTests(unittest.TestCase):
             self.activations = []
             self.rulebox_payloads = []
             self.leases = []
+            self.market_load_calls = 0
 
         def rulebox_snapshot(self):
             rules = rulebox_rules_to_payload(default_graph_inference_rules())
             return {"configured": True, "status": "ok", "ruleCount": len(rules), "rules": rules}
 
         def active_abox_metadata(self, world_id=""):
+            graph = self.saved_markets.get(world_id)
+            if graph:
+                worldview = dict(graph.worldview or {})
+                return {
+                    "status": "ok",
+                    "worldId": world_id,
+                    "scopedAboxManifestVersion": worldview.get("scopedAboxManifestVersion"),
+                    "scopePlan": list(worldview.get("scopePlan") or []),
+                    "scopeGenerationIds": dict(worldview.get("scopeGenerationIds") or {}),
+                    "scopeFingerprints": dict(worldview.get("scopeFingerprints") or {}),
+                    "marketScopeObservedAt": dict(worldview.get("marketScopeObservedAt") or {}),
+                    "materialFingerprint": worldview.get("materialFingerprint"),
+                    "aboxSnapshotId": worldview.get("aboxSnapshotId"),
+                }
             return {"status": "empty", "worldId": world_id}
 
         def acquire_scoped_abox_write_lease(self, owner, world_id=""):
@@ -235,10 +306,15 @@ class MultiAccountProjectionTests(unittest.TestCase):
             return {"status": "released"}
 
         def load_graph_from_typedb(self, _boxes=None, world_id=""):
+            self.market_load_calls += 1
             return copy.deepcopy(self.saved_markets.get(world_id, PortfolioOntology(world_id)))
 
         def save_scoped_abox_graph(self, graph, adopted_write_lease=None):
-            self.saved_markets[graph.worldview["worldId"]] = copy.deepcopy(graph)
+            world_id = graph.worldview["worldId"]
+            existing = self.saved_markets.get(world_id)
+            merged = merge_market_world_graph(existing, graph) if existing else copy.deepcopy(graph)
+            merged.worldview.update(dict(graph.worldview or {}))
+            self.saved_markets[world_id] = merged
             return {"saved": True, "status": "ok", "worldId": graph.worldview["worldId"]}
 
         def activate_scoped_abox_manifest(self, manifest_id, pending_activation=False, world_id=""):
@@ -328,6 +404,31 @@ class MultiAccountProjectionTests(unittest.TestCase):
         self.assertIn("stock:000660", shared_ids)
         self.assertFalse(any(item.kind in {"account", "portfolio", "position"} for item in shared.entities))
         self.assertTrue(all(world_id == "market:shared:kr" for world_id, _manifest, _pending in repository.activations))
+        self.assertEqual(0, repository.market_load_calls)
+
+    def test_market_world_reuses_an_identical_material_generation(self):
+        repository = self.FakeRepository()
+        recorder = PortfolioOntologyProjectionRecorder(
+            repository,
+            settings={"ontologyTenantId": "tenant-a", "ontologyMarketWorldId": "kr"},
+        )
+        snapshot = self.snapshot("account-a", "005930", "Samsung")
+        graph = build_portfolio_ontology(
+            snapshot.positions,
+            snapshot.portfolio,
+            portfolio_id=snapshot.account_id,
+            include_tbox=False,
+            include_presentation=False,
+        )
+        shared_world = market_world("kr", "tenant-a")
+
+        first = recorder.project_market_world(graph, shared_world)
+        second = recorder.project_market_world(graph, shared_world)
+
+        self.assertEqual("ok", first["status"])
+        self.assertEqual("unchanged-material-facts", second["status"])
+        self.assertFalse(second["saved"])
+        self.assertEqual(1, len(repository.activations))
 
 
 if __name__ == "__main__":

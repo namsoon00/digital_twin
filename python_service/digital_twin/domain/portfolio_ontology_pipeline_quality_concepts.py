@@ -6,7 +6,7 @@ from .portfolio import Position
 from .portfolio_ontology_market_concepts import symbol_key
 
 
-PIPELINE_QUALITY_STATES = {"degraded", "failed", "stale"}
+PIPELINE_QUALITY_STATES = {"degraded", "disabled", "failed", "stale"}
 
 
 def market_snapshot_health(runtime_context: Dict[str, object]) -> Dict[str, object]:
@@ -29,7 +29,7 @@ def add_position_pipeline_quality_concepts(
     symbol = symbol_key(position)
     if not symbol:
         return
-    failed = state == "failed"
+    failed = state in {"disabled", "failed"}
     stale = state == "stale"
     data_state = "unavailable" if failed else ("insufficient" if stale else "partial")
     evidence_role = "blocking" if failed else "risk"
@@ -43,8 +43,6 @@ def add_position_pipeline_quality_concepts(
         "pipelineState": state,
         "reasonCode": str(health.get("reasonCode") or ""),
         "reason": str(health.get("reason") or ""),
-        "checkedAt": str(health.get("checkedAt") or ""),
-        "lastNonZeroAt": str(health.get("lastNonZeroAt") or ""),
         "targetCount": int(health.get("targetCount") or 0),
         "fetchedCount": int(health.get("fetchedCount") or 0),
         "savedCount": int(health.get("savedCount") or 0),
@@ -52,8 +50,6 @@ def add_position_pipeline_quality_concepts(
         "freshnessRequired": True,
         "freshnessStatus": "stale" if stale else ("unknown" if failed else "aging"),
         "freshnessGateReason": str(health.get("reason") or "시장 데이터 수집 상태를 확인해야 합니다."),
-        "sourceAsOf": str(health.get("checkedAt") or ""),
-        "sourceTimestampPresent": bool(health.get("checkedAt")),
         "judgementEvidenceUsable": not failed,
         "dataState": data_state,
         "dataScope": "market-snapshot",

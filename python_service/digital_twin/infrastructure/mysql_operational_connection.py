@@ -393,7 +393,8 @@ MYSQL_SCHEMA = [
         PRIMARY KEY (account_id, symbol, granularity, bucket_at),
         KEY idx_market_time_series_interval_time (granularity, bucket_at),
         KEY idx_market_time_series_symbol_time (symbol, granularity, bucket_at),
-        KEY idx_market_time_series_account_time (account_id, granularity, bucket_at)
+        KEY idx_market_time_series_account_time (account_id, granularity, bucket_at),
+        KEY idx_market_time_series_snapshot_cutoff (account_id, symbol, granularity, observed_at, bucket_at)
     ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
     """,
     """

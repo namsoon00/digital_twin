@@ -16,10 +16,13 @@ become the direct rule input without changing account ownership semantics.
 from __future__ import annotations
 
 from copy import deepcopy
+import hashlib
+import json
 from datetime import datetime, timezone
-from typing import Dict, Iterable, List, Optional, Set, Tuple
+from typing import Dict, Iterable, List, Mapping, Optional, Set, Tuple
 
 from .ontology_contracts import OntologyEntity, OntologyEvidence, OntologyRelation, PortfolioOntology
+from .ontology_change_impact import scope_symbol
 from .ontology_worlds import OntologyWorld, world_metadata
 
 
@@ -424,6 +427,145 @@ def merge_market_world_graph(
         max_symbols=max_symbols,
         observed_at=observed_at or _graph_observed_at(update),
     )
+
+
+def merge_market_world_scope_manifest(
+    active_metadata: Mapping[str, object],
+    incoming_scope_plan: Iterable[object],
+    observed_at: object = "",
+    retention_hours: float = 0,
+    max_symbols: int = 0,
+) -> Dict[str, object]:
+    """Merge a MarketWorld's manifest metadata without loading every live fact.
+
+    MarketWorld is a shared, append-and-refresh observation surface.  Its
+    scoped Manifest already records the active generation for each symbol
+    family, so a new account observation only needs to replace the scopes it
+    owns.  Re-reading all active nodes and relations for that merge makes
+    every portfolio projection scale with historical MarketWorld size and can
+    starve portfolio-native inference.
+
+    This helper keeps previous scopes from the active Manifest, replaces the
+    incoming scopes, and retires only observations with an explicit source
+    timestamp.  Untimestamped legacy scopes are deliberately retained rather
+    than guessed stale; they can be reconciled safely when their source sends
+    a later observation.
+    """
+    active = dict(active_metadata or {})
+    previous_plan = {
+        _clean(item.get("scopeId")): dict(item)
+        for item in active.get("scopePlan") or []
+        if isinstance(item, Mapping) and _clean(item.get("scopeId"))
+    }
+    incoming = {
+        _clean(item.get("scopeId")): dict(item)
+        for item in incoming_scope_plan or []
+        if isinstance(item, Mapping) and _clean(item.get("scopeId"))
+    }
+    merged = {**previous_plan, **incoming}
+
+    raw_observed = active.get("marketScopeObservedAt")
+    scope_observed_at = {
+        _clean(scope_id): _observed_at(stamp)
+        for scope_id, stamp in dict(raw_observed or {}).items()
+        if _clean(scope_id) and _observed_at(stamp)
+    }
+    stamp = _observed_at(observed_at)
+    if stamp:
+        for scope_id in incoming:
+            scope_observed_at[scope_id] = stamp
+
+    try:
+        retention = max(0.0, float(retention_hours or 0))
+    except (TypeError, ValueError):
+        retention = 0.0
+    try:
+        symbol_limit = max(0, int(max_symbols or 0))
+    except (TypeError, ValueError):
+        symbol_limit = 0
+
+    reference_epoch = _observation_epoch(stamp) or max(
+        (epoch for epoch in (_observation_epoch(value) for value in scope_observed_at.values()) if epoch is not None),
+        default=None,
+    )
+    cutoff = reference_epoch - retention * 3600 if reference_epoch is not None and retention > 0 else None
+    scope_ids_by_symbol: Dict[str, Set[str]] = {}
+    symbol_epochs: Dict[str, Optional[float]] = {}
+    for scope_id in merged:
+        symbol = scope_symbol(scope_id)
+        if not symbol:
+            continue
+        scope_ids_by_symbol.setdefault(symbol, set()).add(scope_id)
+        epoch = _observation_epoch(scope_observed_at.get(scope_id))
+        if symbol not in symbol_epochs or (epoch is not None and (symbol_epochs[symbol] is None or epoch > symbol_epochs[symbol])):
+            symbol_epochs[symbol] = epoch
+
+    retired_symbols: Set[str] = set()
+    if cutoff is not None:
+        retired_symbols.update(
+            symbol
+            for symbol, epoch in symbol_epochs.items()
+            if epoch is not None and epoch < cutoff
+        )
+    retained_symbols = [symbol for symbol in scope_ids_by_symbol if symbol not in retired_symbols]
+    if symbol_limit and len(retained_symbols) > symbol_limit:
+        # Only timestamped symbols are eligible for capacity retirement. An
+        # untracked legacy fact is safer to retain than silently discard.
+        capacity_candidates = sorted(
+            [symbol for symbol in retained_symbols if symbol_epochs.get(symbol) is not None],
+            key=lambda symbol: (symbol_epochs.get(symbol) or float("-inf"), symbol),
+        )
+        overflow = len(retained_symbols) - symbol_limit
+        retired_symbols.update(capacity_candidates[:overflow])
+
+    retired_scope_ids = sorted({
+        scope_id
+        for symbol in retired_symbols
+        for scope_id in scope_ids_by_symbol.get(symbol, set())
+        if scope_id not in incoming
+    })
+    for scope_id in retired_scope_ids:
+        merged.pop(scope_id, None)
+        scope_observed_at.pop(scope_id, None)
+
+    scope_plan = [merged[scope_id] for scope_id in sorted(merged)]
+    scope_generations = {
+        scope_id: _clean(item.get("generationId"))
+        for scope_id, item in merged.items()
+        if _clean(item.get("generationId"))
+    }
+    scope_fingerprints = {
+        scope_id: _clean(item.get("fingerprint"))
+        for scope_id, item in merged.items()
+        if _clean(item.get("fingerprint"))
+    }
+    family_counts: Dict[str, int] = {}
+    for item in scope_plan:
+        family = _clean(item.get("scopeFamily")) or "reference"
+        family_counts[family] = family_counts.get(family, 0) + 1
+    material_payload = {
+        "scopeGenerations": dict(sorted(scope_generations.items())),
+        "scopeFingerprints": dict(sorted(scope_fingerprints.items())),
+    }
+    material_fingerprint = hashlib.sha256(
+        json.dumps(material_payload, ensure_ascii=False, sort_keys=True, separators=(",", ":")).encode("utf-8")
+    ).hexdigest()
+    return {
+        "scopePlan": scope_plan,
+        "scopeGenerationIds": scope_generations,
+        "scopeFingerprints": scope_fingerprints,
+        "scopeFamilyCounts": dict(sorted(family_counts.items())),
+        "marketScopeObservedAt": dict(sorted(scope_observed_at.items())),
+        "materialFingerprint": material_fingerprint,
+        "incomingScopeIds": sorted(incoming),
+        "retiredScopeIds": retired_scope_ids,
+        "retiredSymbols": sorted(retired_symbols),
+        "activeScopeCount": len(scope_plan),
+        "activeSymbolCount": len({scope_symbol(scope_id) for scope_id in merged if scope_symbol(scope_id)}),
+        "retentionHours": retention,
+        "maxSymbols": symbol_limit,
+        "incremental": True,
+    }
 
 
 def market_world_coverage(graph: PortfolioOntology) -> Dict[str, object]:

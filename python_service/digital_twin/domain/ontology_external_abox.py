@@ -46,16 +46,28 @@ def external_quality_data_state(
     freshness: Dict[str, object],
     provenance: Dict[str, object],
 ) -> str:
-    status = str(quality.get("status") or freshness.get("status") or "").strip().lower()
-    if status in {"error", "failed", "unavailable", "missing"}:
+    freshness_status = str(freshness.get("status") or "").strip().lower()
+    declared_state = str(quality.get("dataState") or quality.get("data_state") or "").strip().lower()
+    if freshness_status in {"error", "failed", "unavailable", "missing"}:
         return "unavailable"
     error_count = int(number(quality.get("errorCount")))
     unavailable_sources = list(provenance.get("unavailableSources") or [])
     symbol_coverage = quality.get("symbolCoverage") if isinstance(quality.get("symbolCoverage"), dict) else {}
-    incomplete_coverage = bool(symbol_coverage) and any(value in (False, None, "", 0) for value in symbol_coverage.values())
+    requested = int(number(symbol_coverage.get("requested")))
+    covered = int(number(symbol_coverage.get("covered")))
+    ratio = number(symbol_coverage.get("ratio"))
+    incomplete_coverage = bool(symbol_coverage) and requested > 0 and (covered < requested or ratio < 1.0)
+    if freshness_status == "stale":
+        return "partial"
+    if declared_state in {"unavailable", "insufficient", "partial"}:
+        return declared_state
+    if error_count or unavailable_sources or incomplete_coverage:
+        return "partial"
+    if declared_state == "sufficient":
+        return "sufficient"
     return data_state_from_evidence(
         usable=True,
-        freshness_status=status,
+        freshness_status=freshness_status,
         missing=[error_count if error_count else None, unavailable_sources, incomplete_coverage or None],
         has_evidence=bool(quality or freshness or provenance),
     )

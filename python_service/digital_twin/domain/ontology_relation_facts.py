@@ -276,8 +276,11 @@ def _external_quality_facts(external_signals: Dict[str, object]) -> Dict[str, ob
     statuses = external_signals.get("statuses") if isinstance(external_signals.get("statuses"), list) else []
     error_count = len([item for item in statuses if isinstance(item, dict) and not item.get("ok")])
     freshness_status = str(freshness.get("status") or "").strip().lower()
+    declared_state = str(quality.get("dataState") or quality.get("data_state") or "").strip().lower()
     if error_count or freshness_status in {"error", "unavailable", "missing"}:
         data_state = "unavailable"
+    elif declared_state in {"insufficient", "partial", "unavailable"}:
+        data_state = declared_state
     elif not quality or freshness_status in {"stale", "partial", "unknown", ""}:
         data_state = "partial"
     else:

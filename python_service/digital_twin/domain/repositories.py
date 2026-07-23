@@ -454,6 +454,7 @@ class MarketTimeSeriesRepository(Protocol):
         account_id: str,
         symbols: Iterable[str],
         definitions: Iterable[object],
+        as_of: str = "",
     ) -> Dict[str, Dict[str, List[Dict[str, object]]]]:
         ...
 

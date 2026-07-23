@@ -217,11 +217,34 @@ def attach_external_signal_quality(
 ) -> Dict[str, object]:
     payload = dict(signals or {})
     quality = evaluate_external_signal_quality(payload, positions=positions, settings=settings, now=now)
+    max_age_minutes = int(number((settings or {}).get("externalApiFetchIntervalMinutes")) or 30)
+    transport_status = "fresh" if int(quality["ageMinutes"] or 0) <= max_age_minutes else "stale"
+    data_state = str(quality.get("dataState") or "partial").strip().lower()
+    if data_state == "unavailable":
+        freshness_status = "unavailable"
+        freshness_reason = "외부 신호 출처를 현재 투자 판단에 사용할 수 없습니다."
+    elif transport_status == "stale":
+        freshness_status = "stale"
+        freshness_reason = "외부 신호 수집 시각이 허용 범위를 넘었습니다."
+    elif data_state in {"partial", "insufficient"}:
+        # A newly fetched response can still be incomplete when a provider is
+        # rate-limited or symbol coverage is missing. Do not let collection
+        # recency make that incomplete evidence look judgement-ready.
+        freshness_status = "partial"
+        freshness_reason = "외부 신호는 최근 수집됐지만 일부 출처 또는 종목 커버리지가 부족합니다."
+    else:
+        freshness_status = "fresh"
+        freshness_reason = "외부 신호 수집 시각과 출처 커버리지가 판단 기준을 충족합니다."
     payload["quality"] = quality
     payload["freshness"] = {
         "fetchedAt": quality["fetchedAt"],
         "ageMinutes": quality["ageMinutes"],
-        "status": "fresh" if int(quality["ageMinutes"] or 0) <= int(number((settings or {}).get("externalApiFetchIntervalMinutes")) or 30) else "stale",
+        "status": freshness_status,
+        "transportStatus": transport_status,
+        "dataState": data_state,
+        "coverageState": str(quality.get("coverageState") or ""),
+        "sourceHealthState": str(quality.get("sourceHealthState") or ""),
+        "reason": freshness_reason,
     }
     payload["provenance"] = {
         "sources": [row["source"] for row in quality.get("sourceCoverage", []) if row.get("configured")],

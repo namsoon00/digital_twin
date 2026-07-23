@@ -28,6 +28,7 @@ from ..domain.ontology_rulebox_governance import (
     rulebox_version_payload,
 )
 from ..domain.ontology_change_impact import compact_inference_impact_plan
+from ..domain.ontology_native_rule_planning import normalize_native_rule_planner_topology
 from ..domain.ontology_schema import default_tbox_metadata
 from ..domain.hypothesis_calibration import hypothesis_calibration_snapshot_from_abox_rows
 from ..domain.ontology_scopes import SCOPED_ABOX_MANIFEST_VERSION, SCOPED_ABOX_PERSISTENCE_MODE
@@ -147,6 +148,264 @@ def typedb_call_for_world(callback, *args, world_id: str = "", **kwargs):
     return callback(*args, **kwargs, **typedb_world_kwargs(world_id))
 
 
+def typedb_native_rule_planner_topology_for_execution(
+    active_abox_metadata: Dict[str, object] = None,
+    supplied_topology: Dict[str, object] = None,
+    target_symbols: Iterable[str] = None,
+) -> Dict[str, object]:
+    """Use only the active manifest's structural index for rule scheduling.
+
+    A caller-provided topology is accepted only when it has the exact same
+    fingerprint as the topology persisted on the active ABox manifest. This
+    preserves TypeDB as the rule evaluator while avoiding a costly TypeQL
+    topology scan before every schema-function call.
+    """
+    active = dict(active_abox_metadata or {})
+    # Keep the immutable, full topology payload intact for the schema-function
+    # matcher.  ``normalize_native_rule_planner_topology(..., target_symbols)``
+    # returns a selected view whose fingerprint still refers to the full
+    # payload; passing that selected view back into the matcher makes its
+    # integrity check fail and forces an expensive TypeQL fallback scan.
+    stored_full = normalize_native_rule_planner_topology(active.get("nativeRulePlannerTopology"))
+    if str(stored_full.get("status") or "") != "ok":
+        return {
+            "status": "fallback",
+            "source": "typedb-active-abox-read",
+            "reason": str(stored_full.get("reason") or "Active ABox manifest has no verified planner topology."),
+            "topology": {},
+            "relationTypesBySymbol": {},
+            "sourceIdsBySymbol": {},
+        }
+    stored = normalize_native_rule_planner_topology(
+        active.get("nativeRulePlannerTopology"),
+        target_symbols=target_symbols,
+    )
+    supplied = normalize_native_rule_planner_topology(
+        supplied_topology,
+    ) if supplied_topology else {}
+    supplied_status = str(supplied.get("status") or "")
+    supplied_matches = (
+        supplied_status == "ok"
+        and str(supplied.get("fingerprint") or "") == str(stored_full.get("fingerprint") or "")
+    )
+    return {
+        "status": "verified",
+        "source": "projection-payload-verified" if supplied_matches else "active-manifest",
+        "reason": (
+            ""
+            if not supplied_topology or supplied_matches
+            else "Caller planner topology did not match the active ABox manifest; active manifest topology was used."
+        ),
+        "fingerprint": str(stored_full.get("fingerprint") or ""),
+        "topology": {
+            key: stored_full.get(key)
+            for key in [
+                "version", "complete", "source", "fingerprint",
+                "sourceIdsBySymbol", "relationTypesBySymbol",
+            ]
+        },
+        "relationTypesBySymbol": dict(stored.get("relationTypesBySymbol") or {}),
+        "sourceIdsBySymbol": dict(stored.get("sourceIdsBySymbol") or {}),
+        "symbols": list(stored.get("symbols") or []),
+    }
+
+
+NATIVE_RULE_EVIDENCE_READ_INDEX_VERSION = "native-rule-evidence-read-index-v1"
+NATIVE_RULE_EVIDENCE_READ_INDEX_BATCH_SIZE = 48
+
+
+def native_rule_evidence_read_index_from_rows(
+    node_rows: Iterable[Dict[str, object]],
+    relation_rows: Iterable[Dict[str, object]],
+) -> Dict[str, object]:
+    """Build an exact physical-read index for active stock evidence.
+
+    Scoped ABox facts are immutable and can be shared by several historical
+    Manifests.  The index records the physical storage identities selected by
+    the candidate Manifest; it does not evaluate a condition or derive an
+    investment judgement.  Native TypeDB functions remain the only rule
+    evaluator.  The index exists solely so post-function materialization can
+    retrieve the same evidence without a costly active-scope pointer join.
+    """
+    stocks_by_id: Dict[str, str] = {}
+    source_storage_ids_by_source_id: Dict[str, str] = {}
+    source_ids_by_symbol: Dict[str, List[str]] = {}
+    for row in node_rows or []:
+        if str(row.get("ontologyBox") or "ABox") != "ABox":
+            continue
+        if str(row.get("kind") or "") != "stock":
+            continue
+        source_id = str(row.get("id") or "").strip()
+        symbol = str(row.get("symbol") or "").upper().strip()
+        if not source_id or not symbol:
+            continue
+        stocks_by_id[source_id] = symbol
+        source_storage_ids_by_source_id[source_id] = ontology_storage_id(row, source_id, "node")
+        source_ids_by_symbol.setdefault(symbol, []).append(source_id)
+
+    relation_storage_ids_by_symbol: Dict[str, set] = {
+        symbol: set()
+        for symbol in source_ids_by_symbol
+    }
+    for row in relation_rows or []:
+        if str(row.get("ontologyBox") or "ABox") != "ABox":
+            continue
+        source_id = str(row.get("source") or "").strip()
+        target_id = str(row.get("target") or "").strip()
+        candidates = {
+            stocks_by_id.get(source_id, ""),
+            stocks_by_id.get(target_id, ""),
+            str(row.get("symbol") or "").upper().strip(),
+        }
+        relation_storage_id = ontology_storage_id(row, relation_row_id(row), "relation")
+        for symbol in candidates:
+            if symbol and symbol in relation_storage_ids_by_symbol:
+                relation_storage_ids_by_symbol[symbol].add(relation_storage_id)
+
+    payload = {
+        "version": NATIVE_RULE_EVIDENCE_READ_INDEX_VERSION,
+        "complete": True,
+        "source": "projection-persistence-rows",
+        "sourceIdsBySymbol": {
+            symbol: sorted(set(source_ids_by_symbol.get(symbol) or []))
+            for symbol in sorted(source_ids_by_symbol)
+        },
+        "sourceStorageIdsBySourceId": {
+            source_id: source_storage_ids_by_source_id[source_id]
+            for source_id in sorted(source_storage_ids_by_source_id)
+        },
+        "relationStorageIdsBySymbol": {
+            symbol: sorted(relation_storage_ids_by_symbol.get(symbol) or set())
+            for symbol in sorted(source_ids_by_symbol)
+        },
+    }
+    canonical = json.dumps(payload, ensure_ascii=True, sort_keys=True, separators=(",", ":"))
+    return {
+        **payload,
+        "fingerprint": "native-rule-evidence-index:" + hashlib.sha256(canonical.encode("utf-8")).hexdigest()[:24],
+    }
+
+
+def normalize_native_rule_evidence_read_index(
+    value: Dict[str, object] = None,
+    planner_topology: Dict[str, object] = None,
+    target_symbols: Iterable[str] = None,
+) -> Dict[str, object]:
+    """Validate a Manifest's exact evidence-read index before using it.
+
+    The index is accepted only when its fingerprint is self-consistent and its
+    stock subjects exactly match the verified structural planner topology on
+    the same active Manifest.  A stale or tampered index therefore fails
+    closed instead of reading a historical ABox relation as current evidence.
+    """
+    raw = dict(value or {}) if isinstance(value, dict) else {}
+    if str(raw.get("version") or "") != NATIVE_RULE_EVIDENCE_READ_INDEX_VERSION:
+        return {"status": "invalid", "reason": "Native rule evidence read index version is unsupported."}
+    if raw.get("complete") is not True or str(raw.get("source") or "") != "projection-persistence-rows":
+        return {"status": "invalid", "reason": "Native rule evidence read index is not a complete projection persistence index."}
+    raw_sources = raw.get("sourceIdsBySymbol") if isinstance(raw.get("sourceIdsBySymbol"), dict) else {}
+    raw_storage_ids = raw.get("sourceStorageIdsBySourceId") if isinstance(raw.get("sourceStorageIdsBySourceId"), dict) else {}
+    raw_relation_ids = raw.get("relationStorageIdsBySymbol") if isinstance(raw.get("relationStorageIdsBySymbol"), dict) else {}
+    source_ids_by_symbol: Dict[str, List[str]] = {}
+    source_storage_ids_by_source_id: Dict[str, str] = {}
+    relation_storage_ids_by_symbol: Dict[str, List[str]] = {}
+    for raw_symbol, raw_ids in raw_sources.items():
+        symbol = str(raw_symbol or "").upper().strip()
+        ids = sorted({str(item or "").strip() for item in raw_ids or [] if str(item or "").strip()})
+        if symbol and ids:
+            source_ids_by_symbol[symbol] = ids
+    for source_id in sorted({item for values in source_ids_by_symbol.values() for item in values}):
+        storage_id = str(raw_storage_ids.get(source_id) or "").strip()
+        if not storage_id:
+            return {"status": "invalid", "reason": "Native rule evidence read index is missing a stock storage identity."}
+        source_storage_ids_by_source_id[source_id] = storage_id
+    for symbol in source_ids_by_symbol:
+        relation_storage_ids_by_symbol[symbol] = sorted({
+            str(item or "").strip()
+            for item in raw_relation_ids.get(symbol, []) or []
+            if str(item or "").strip()
+        })
+    payload = {
+        "version": NATIVE_RULE_EVIDENCE_READ_INDEX_VERSION,
+        "complete": True,
+        "source": "projection-persistence-rows",
+        "sourceIdsBySymbol": {
+            symbol: source_ids_by_symbol[symbol]
+            for symbol in sorted(source_ids_by_symbol)
+        },
+        "sourceStorageIdsBySourceId": {
+            source_id: source_storage_ids_by_source_id[source_id]
+            for source_id in sorted(source_storage_ids_by_source_id)
+        },
+        "relationStorageIdsBySymbol": {
+            symbol: relation_storage_ids_by_symbol[symbol]
+            for symbol in sorted(source_ids_by_symbol)
+        },
+    }
+    canonical = json.dumps(payload, ensure_ascii=True, sort_keys=True, separators=(",", ":"))
+    fingerprint = "native-rule-evidence-index:" + hashlib.sha256(canonical.encode("utf-8")).hexdigest()[:24]
+    if str(raw.get("fingerprint") or "") != fingerprint:
+        return {"status": "invalid", "reason": "Native rule evidence read index fingerprint does not match its contents."}
+    topology = normalize_native_rule_planner_topology(planner_topology)
+    if str(topology.get("status") or "") != "ok":
+        return {"status": "invalid", "reason": "Native rule evidence read index has no verified planner topology."}
+    expected_sources = {
+        symbol: sorted({str(item or "").strip() for item in values or [] if str(item or "").strip()})
+        for symbol, values in dict(topology.get("sourceIdsBySymbol") or {}).items()
+    }
+    if expected_sources != payload["sourceIdsBySymbol"]:
+        return {"status": "invalid", "reason": "Native rule evidence read index stock subjects do not match the active planner topology."}
+    requested_symbols = clean_symbols_from_payload(target_symbols or [])
+    selected_symbols = requested_symbols or sorted(source_ids_by_symbol)
+    selected_source_ids = {
+        source_id
+        for symbol in selected_symbols
+        for source_id in source_ids_by_symbol.get(symbol, [])
+    }
+    return {
+        "status": "ok",
+        **payload,
+        "fingerprint": fingerprint,
+        "symbols": selected_symbols,
+        "sourceStorageIdsBySourceId": {
+            source_id: source_storage_ids_by_source_id[source_id]
+            for source_id in sorted(selected_source_ids)
+        },
+        "relationStorageIdsBySymbol": {
+            symbol: list(relation_storage_ids_by_symbol.get(symbol, []))
+            for symbol in selected_symbols
+        },
+    }
+
+
+def typedb_native_rule_evidence_read_index_for_execution(
+    active_abox_metadata: Dict[str, object] = None,
+    target_symbols: Iterable[str] = None,
+) -> Dict[str, object]:
+    """Return only an active-Manifest verified evidence-read index."""
+    active = dict(active_abox_metadata or {})
+    topology = normalize_native_rule_planner_topology(active.get("nativeRulePlannerTopology"))
+    normalized = normalize_native_rule_evidence_read_index(
+        active.get("nativeRuleEvidenceReadIndex"),
+        planner_topology=topology,
+        target_symbols=target_symbols,
+    )
+    if str(normalized.get("status") or "") != "ok":
+        return {
+            "status": "fallback",
+            "source": "typedb-active-abox-manifest",
+            "reason": str(normalized.get("reason") or "Active ABox Manifest has no verified evidence read index."),
+            "index": {},
+        }
+    return {
+        "status": "verified",
+        "source": "active-manifest",
+        "reason": "",
+        "fingerprint": str(normalized.get("fingerprint") or ""),
+        "index": normalized,
+    }
+
+
 def typedb_error_code(error: object) -> str:
     text = str(error or "").lower()
     if any(term in text for term in ["unable to connect", "connection refused", "connect failed", "unavailable"]):
@@ -156,6 +415,58 @@ def typedb_error_code(error: object) -> str:
     if any(term in text for term in ["schema"]):
         return "typedbSchemaError"
     return "typedbReadError"
+
+
+def typedb_native_rule_execution_incomplete_diagnostic(
+    query_failures: Iterable[Dict[str, object]] = None,
+    skipped_rules: Iterable[Dict[str, object]] = None,
+    execution_budget_exhausted: bool = False,
+) -> Dict[str, object]:
+    """Describe the first blocking native-rule failure without hiding it.
+
+    ``skipped_rules`` also contains normal not-applicable planner results, so
+    only an explicit execution failure is surfaced as the blocker. This is
+    operational diagnostics, not a secondary rule evaluator: TypeDB remains
+    the source of the actual match result.
+    """
+    failures = [
+        dict(item)
+        for item in query_failures or []
+        if isinstance(item, dict) and str(item.get("status") or "").strip()
+    ]
+    if not failures:
+        normal_statuses = {"not-applicable", "not-applicable-preflight", "planned"}
+        failures = [
+            dict(item)
+            for item in skipped_rules or []
+            if isinstance(item, dict)
+            and str(item.get("status") or "").strip()
+            and str(item.get("status") or "").strip() not in normal_statuses
+        ]
+    blocking = dict(failures[0] or {}) if failures else {}
+    status = str(blocking.get("status") or "").strip()
+    rule_id = str(blocking.get("ruleId") or "").strip()
+    detail = str(blocking.get("reason") or "").strip()
+    reason = "TypeDB native rule execution did not complete for every applicable rule."
+    reason_code = "typedbNativeRuleExecutionPartial"
+    if status == "query-timeout":
+        reason_code = "typedbNativeRuleQueryTimeout"
+    elif status == "deferred-by-runtime-budget" or execution_budget_exhausted:
+        reason_code = "typedbNativeRuleExecutionBudgetExceeded"
+    elif status:
+        reason_code = "typedbNativeRuleQueryFailure"
+    if rule_id or status or detail:
+        context = " / ".join(item for item in [rule_id, status, detail] if item)
+        reason += " Blocking rule: " + context[:360] + "."
+    return {
+        "reasonCode": reason_code,
+        "reason": reason,
+        "blockingRule": {
+            key: blocking.get(key)
+            for key in ["ruleId", "status", "reason", "candidateSymbols"]
+            if blocking.get(key) not in (None, "", [])
+        },
+    }
 
 
 def clean_symbols_from_payload(value: object) -> List[str]:
@@ -580,8 +891,8 @@ def merge_flat_properties(row: Dict[str, object], props: Dict[str, object]) -> D
     return merged
 
 
-TYPEDB_NATIVE_REASONING_PROFILE_VERSION = "typedb-native-rule-profile-v6"
-TYPEDB_NATIVE_RULE_ENGINE_VERSION = "typedb-schema-function-rule-engine-v6"
+TYPEDB_NATIVE_REASONING_PROFILE_VERSION = "typedb-native-rule-profile-v8"
+TYPEDB_NATIVE_RULE_ENGINE_VERSION = "typedb-schema-function-rule-engine-v8"
 TYPEDB_NATIVE_REASONING_MODE = "typedb-native-rule-materialized"
 TYPEDB_NATIVE_BLOCKED_MODE = "typedb-native-rule-materialization-blocked"
 TYPEDB_NATIVE_REQUIRED_MODE = "typedb-native-rule-materialization-required"
@@ -590,23 +901,32 @@ TYPEDB_NATIVE_REASONING_LAYER = "typedb-native-rule"
 # Active ABox generations are selected through a control pointer. A dedicated
 # function namespace makes deployed schema functions refresh when that query
 # contract changes instead of silently reusing an older unscoped definition.
-# Version 6 passes the active world as a typed function argument. Scope
-# generations remain immutable and can be reused by a newer Manifest, while a
-# single function set serves every portfolio world without cross-world reads.
-TYPEDB_SCHEMA_FUNCTION_PREFIX = "orbit_rule_active_manifest_subject_v6_"
+# Version 8 passes the active Manifest pointer and world as typed function
+# arguments. The call site already proves that the candidate belongs to that
+# Manifest, so the function only scopes its evidence relations. This removes
+# the duplicate active-pointer/source-scope join from every rule invocation
+# while keeping all target and relation facts isolated to the exact Manifest
+# generation.
+TYPEDB_SCHEMA_FUNCTION_PREFIX = "orbit_rule_active_manifest_subject_v8_"
 TYPEDB_LEGACY_SCHEMA_FUNCTION_PREFIX = "orbit_rule_active_manifest_subject_v5_"
 # Scoped ABox writes span many short TypeDB transactions. Keep their lease in
 # a separate control box so pointer replacement cannot delete it mid-write.
 SCOPED_ABOX_WRITE_LEASE_ID = "scoped-abox-write-lease"
 SCOPED_ABOX_WRITE_LEASE_BOX = "ABoxLease"
 SCOPED_ABOX_WRITE_LEASE_VERSION = "scoped-abox-write-lease-v1"
-# The production RuleBox currently plans up to 57 native functions for one
-# material symbol.  Measured local execution completes in roughly 16 seconds,
-# while the most complex combination rule can take just over four seconds.
-# Keep enough headroom for a complete generation; the reasoning scheduler's
-# projection cadence and circuit breaker bound aggregate CPU separately.
-DEFAULT_TYPEDB_NATIVE_RULE_QUERY_TIMEOUT_SECONDS = 6.0
-DEFAULT_TYPEDB_NATIVE_RULE_EXECUTION_BUDGET_SECONDS = 30.0
+# The production RuleBox currently plans up to 75 native functions for one
+# material symbol. A verified live ABox replay prunes most of them, but an
+# applicable Manifest-scoped function can still take several seconds on the
+# local TypeDB planner. A one-symbol complete replay with exact preflight
+# takes about a minute for the current RuleBox, so keep bounded headroom for a
+# complete generation rather than turning a slow, otherwise valid function
+# into a partial judgement.
+# The reasoning scheduler and circuit breaker continue to bound aggregate CPU.
+DEFAULT_TYPEDB_NATIVE_RULE_QUERY_TIMEOUT_SECONDS = 10.0
+# A complete one-symbol production replay needs roughly 84 seconds on the
+# local TypeDB dataset. Leave headroom for the final applicable rule instead
+# of failing a whole candidate when its last bounded read starts with <1s.
+DEFAULT_TYPEDB_NATIVE_RULE_EXECUTION_BUDGET_SECONDS = 105.0
 TYPEDB_PROMOTED_NUMERIC_ATTRIBUTES = {
     "currentPrice": "ontology-current-price",
     "averagePrice": "ontology-average-price",
@@ -2042,6 +2362,8 @@ class ScopedABoxManifestMixin:
     def scoped_abox_scope_row_counts_batch(
         self,
         scope_rows: Iterable[Dict[str, object]],
+        manifest_id: str = "",
+        world_id: str = "",
     ) -> Dict[str, Dict[str, int]]:
         """Read persisted counts for every staged scope with two TypeQL reductions.
 
@@ -2050,6 +2372,8 @@ class ScopedABoxManifestMixin:
         each scope made that correctness check dominate the migration.  The
         scope generation remains part of the grouping key, so this is still
         an exact physical-write verification rather than an in-memory proxy.
+        The active ABox can contain many historical scope generations; a
+        staged Manifest must only count its own physical rows.
         """
         expected_pairs = {
             (
@@ -2067,11 +2391,21 @@ class ScopedABoxManifestMixin:
         }
         if not expected_pairs:
             return counts
+        clean_manifest_id = str(manifest_id or "").strip()
+        clean_world_id = str(world_id or "").strip()
 
         def collect(type_label: str, count_key: str) -> None:
             query = (
                 "match $item isa " + type_label
                 + ', has ontology-box "ABox"'
+                + (
+                    ", has ontology-manifest-id " + typedb_string(clean_manifest_id)
+                    if clean_manifest_id else ""
+                )
+                + (
+                    ", has ontology-world-id " + typedb_string(clean_world_id)
+                    if clean_world_id else ""
+                )
                 + ", has ontology-scope-id $scopeId"
                 + ", has ontology-snapshot-id $generationId"
                 + "; reduce $count = count groupby $scopeId, $generationId;"
@@ -2094,31 +2428,260 @@ class ScopedABoxManifestMixin:
         collect("ontology-assertion", "relationCount")
         return counts
 
+    @staticmethod
+    def scoped_abox_storage_identity(row: Dict[str, object], owner_kind: str) -> Dict[str, str]:
+        """Return the immutable TypeDB identity expected for one scoped row.
+
+        A scoped generation can be referenced by more than one Worldview
+        Manifest.  The manifest itself is intentionally not part of the
+        physical storage identity, so a failed candidate and a later retry can
+        safely share the same immutable fact instead of attempting a duplicate
+        insert.
+        """
+        values = dict(row or {})
+        kind = str(owner_kind or "node").strip() or "node"
+        canonical_id = (
+            relation_row_id(values)
+            if kind == "relation"
+            else str(values.get("id") or "").strip()
+        )
+        return {
+            "storageId": ontology_storage_id(values, canonical_id, kind),
+            "id": canonical_id,
+            "ontologyBox": str(values.get("ontologyBox") or "ABox").strip() or "ABox",
+            "snapshotId": str(values.get("snapshotId") or values.get("aboxSnapshotId") or "").strip(),
+        }
+
+    def scoped_abox_storage_rows_by_id(
+        self,
+        node_storage_ids: Iterable[str],
+        relation_storage_ids: Iterable[str],
+    ) -> Dict[str, Dict[str, Dict[str, object]]]:
+        """Read immutable scoped rows by physical storage ID.
+
+        This deliberately avoids Manifest provenance in the query. A reused
+        scope generation retains the Manifest that first staged it, while the
+        active Manifest proves present membership through its scope plan.
+        """
+        def storage_ids(values: Iterable[str]) -> List[str]:
+            return sorted({
+                str(value or "").strip()
+                for value in values or []
+                if str(value or "").strip()
+            })
+
+        def collect(type_label: str, values: Iterable[str], label: str) -> Dict[str, Dict[str, object]]:
+            rows_by_storage_id: Dict[str, Dict[str, object]] = {}
+            ids = storage_ids(values)
+            for offset in range(0, len(ids), NATIVE_RULE_EVIDENCE_READ_INDEX_BATCH_SIZE):
+                batch = ids[offset: offset + NATIVE_RULE_EVIDENCE_READ_INDEX_BATCH_SIZE]
+                query = (
+                    "match $item isa " + type_label + ", "
+                    "has ontology-storage-id $storageId, "
+                    "has ontology-id $id, "
+                    "has ontology-box $ontologyBox, "
+                    "has ontology-snapshot-id $snapshotId; "
+                    + typedb_value_match("$item", "ontology-storage-id", batch, "==", "storageIdFilter")
+                )
+                rows = self.read_rows(
+                    query,
+                    ["storageId", "id", "ontologyBox", "snapshotId"],
+                    label=label,
+                )
+                for item in rows or []:
+                    storage_id = str(item.get("storageId") or "").strip()
+                    if storage_id:
+                        rows_by_storage_id[storage_id] = dict(item)
+            return rows_by_storage_id
+
+        return {
+            "nodes": collect(
+                "ontology-node",
+                node_storage_ids,
+                "typedb.scoped-abox.node-storage-identity",
+            ),
+            "relations": collect(
+                "ontology-assertion",
+                relation_storage_ids,
+                "typedb.scoped-abox.relation-storage-identity",
+            ),
+        }
+
+    @staticmethod
+    def scoped_abox_storage_rows_unique(
+        rows: Iterable[Dict[str, object]],
+        owner_kind: str,
+    ) -> Tuple[List[Dict[str, object]], List[Dict[str, object]]]:
+        """Deduplicate equal physical writes and reject incompatible aliases."""
+        unique_rows: List[Dict[str, object]] = []
+        identities: Dict[str, Dict[str, str]] = {}
+        conflicts: List[Dict[str, object]] = []
+        for raw in rows or []:
+            row = dict(raw or {})
+            identity = TypeDBOntologyGraphRepository.scoped_abox_storage_identity(row, owner_kind)
+            storage_id = str(identity.get("storageId") or "")
+            previous = identities.get(storage_id)
+            if previous is None:
+                identities[storage_id] = identity
+                unique_rows.append(row)
+                continue
+            if previous != identity:
+                conflicts.append({
+                    "ownerKind": owner_kind,
+                    "storageId": storage_id,
+                    "expected": previous,
+                    "actual": identity,
+                })
+        return unique_rows, conflicts
+
+    def scoped_abox_storage_reuse_plan(
+        self,
+        node_rows: Iterable[Dict[str, object]],
+        relation_rows: Iterable[Dict[str, object]],
+    ) -> Dict[str, object]:
+        """Split a candidate into missing writes and reusable immutable rows."""
+        unique_nodes, node_conflicts = self.scoped_abox_storage_rows_unique(node_rows, "node")
+        unique_relations, relation_conflicts = self.scoped_abox_storage_rows_unique(relation_rows, "relation")
+        node_identities = [self.scoped_abox_storage_identity(row, "node") for row in unique_nodes]
+        relation_identities = [self.scoped_abox_storage_identity(row, "relation") for row in unique_relations]
+        existing = self.scoped_abox_storage_rows_by_id(
+            [item["storageId"] for item in node_identities],
+            [item["storageId"] for item in relation_identities],
+        )
+        existing_nodes = dict(existing.get("nodes") or {})
+        existing_relations = dict(existing.get("relations") or {})
+
+        def partition(rows, identities, actual_by_storage_id, owner_kind):
+            missing = []
+            reused = []
+            conflicts = []
+            for row, identity in zip(rows, identities):
+                storage_id = str(identity.get("storageId") or "")
+                actual = dict(actual_by_storage_id.get(storage_id) or {})
+                if not actual:
+                    missing.append(row)
+                    continue
+                comparable = {
+                    key: str(actual.get(key) or "").strip()
+                    for key in ["id", "ontologyBox", "snapshotId"]
+                }
+                expected = {
+                    key: str(identity.get(key) or "").strip()
+                    for key in ["id", "ontologyBox", "snapshotId"]
+                }
+                if comparable != expected:
+                    conflicts.append({
+                        "ownerKind": owner_kind,
+                        "storageId": storage_id,
+                        "expected": expected,
+                        "actual": comparable,
+                    })
+                    continue
+                reused.append(row)
+            return missing, reused, conflicts
+
+        missing_nodes, reused_nodes, existing_node_conflicts = partition(
+            unique_nodes,
+            node_identities,
+            existing_nodes,
+            "node",
+        )
+        missing_relations, reused_relations, existing_relation_conflicts = partition(
+            unique_relations,
+            relation_identities,
+            existing_relations,
+            "relation",
+        )
+        conflicts = [
+            *node_conflicts,
+            *relation_conflicts,
+            *existing_node_conflicts,
+            *existing_relation_conflicts,
+        ]
+        return {
+            "status": "conflict" if conflicts else "ok",
+            "nodeRows": unique_nodes,
+            "relationRows": unique_relations,
+            "nodeRowsToInsert": missing_nodes,
+            "relationRowsToInsert": missing_relations,
+            "reusedNodeRows": reused_nodes,
+            "reusedRelationRows": reused_relations,
+            "conflicts": conflicts,
+        }
+
+    def scoped_abox_storage_identity_counts(
+        self,
+        node_rows: Iterable[Dict[str, object]],
+        relation_rows: Iterable[Dict[str, object]],
+    ) -> Dict[str, object]:
+        """Verify a staged candidate from its exact physical row identities."""
+        plan = self.scoped_abox_storage_reuse_plan(node_rows, relation_rows)
+        expected_counts: Dict[str, Dict[str, int]] = {}
+        actual_counts: Dict[str, Dict[str, int]] = {}
+        for key, rows in [("entityCount", plan.get("nodeRows") or []), ("relationCount", plan.get("relationRows") or [])]:
+            for row in rows:
+                scope_id = str((row or {}).get("scopeId") or "").strip()
+                if not scope_id:
+                    continue
+                expected_counts.setdefault(scope_id, {"entityCount": 0, "relationCount": 0})[key] += 1
+        for key, rows in [("entityCount", plan.get("reusedNodeRows") or []), ("relationCount", plan.get("reusedRelationRows") or [])]:
+            for row in rows:
+                scope_id = str((row or {}).get("scopeId") or "").strip()
+                if not scope_id:
+                    continue
+                actual_counts.setdefault(scope_id, {"entityCount": 0, "relationCount": 0})[key] += 1
+        missing = [
+            *[
+                self.scoped_abox_storage_identity(row, "node").get("storageId")
+                for row in plan.get("nodeRowsToInsert") or []
+            ],
+            *[
+                self.scoped_abox_storage_identity(row, "relation").get("storageId")
+                for row in plan.get("relationRowsToInsert") or []
+            ],
+        ]
+        return {
+            "status": "ok" if not plan.get("conflicts") and not missing else "incomplete",
+            "expectedCountsByScope": expected_counts,
+            "actualCountsByScope": actual_counts,
+            "missingStorageIds": [str(value or "") for value in missing if str(value or "")],
+            "conflicts": list(plan.get("conflicts") or []),
+        }
+
     def write_persistence_rows(
         self,
         driver,
         imported,
         node_rows: Iterable[Dict[str, object]],
         relation_rows: Iterable[Dict[str, object]],
-    ) -> None:
+    ) -> Dict[str, object]:
         """Write pre-resolved rows without requiring every endpoint in a slice."""
         _TypeDB, _Credentials, _DriverOptions, _DriverTlsConfig, TransactionType = imported[0]
         settings = runtime_settings()
-        queries = [
-            *self.batched_node_insert_queries(
-                node_rows,
-                utc_now(),
-                int(number_or_none(settings.get("typedbABoxNodeBatchSize")) or 100),
-                self.write_query_max_bytes(settings),
-            ),
-            *self.batched_relation_insert_queries(
-                relation_rows,
-                utc_now(),
-                self.abox_relation_batch_size(settings),
-                self.write_query_max_bytes(settings),
-            ),
-        ]
+        reuse_plan = self.scoped_abox_storage_reuse_plan(node_rows, relation_rows)
+        if str(reuse_plan.get("status") or "") != "ok":
+            raise RuntimeError(
+                "Scoped ABox storage identity conflict: "
+                + json.dumps(list(reuse_plan.get("conflicts") or [])[:3], ensure_ascii=False, sort_keys=True)
+            )
+        node_rows_to_insert = list(reuse_plan.get("nodeRowsToInsert") or [])
+        relation_rows_to_insert = list(reuse_plan.get("relationRowsToInsert") or [])
+        node_queries = self.batched_node_insert_queries(
+            node_rows_to_insert,
+            utc_now(),
+            int(number_or_none(settings.get("typedbABoxNodeBatchSize")) or 100),
+            self.write_query_max_bytes(settings),
+        )
+        relation_batch_size = self.abox_relation_batch_size(settings)
+        relation_queries = self.batched_relation_insert_queries(
+            relation_rows_to_insert,
+            utc_now(),
+            relation_batch_size,
+            self.write_query_max_bytes(settings),
+        )
+        queries = [*node_queries, *relation_queries]
         batch_size = self.abox_write_transaction_query_count()
+        query_durations_ms: List[float] = []
         for offset in range(0, len(queries), batch_size):
             query_batch = queries[offset: offset + batch_size]
             if not query_batch:
@@ -2132,10 +2695,27 @@ class ScopedABoxManifestMixin:
                         options=self.write_transaction_options(),
                     ) as tx:
                         for query in query_batch:
+                            query_started = time.monotonic()
                             tx.query(query).resolve()
+                            query_durations_ms.append(round((time.monotonic() - query_started) * 1000, 1))
                         tx.commit()
 
             self.with_typedb_retries(write_batch)
+        return {
+            "queryCount": len(queries),
+            "nodeQueryCount": len(node_queries),
+            "relationQueryCount": len(relation_queries),
+            "requestedNodeCount": len(reuse_plan.get("nodeRows") or []),
+            "requestedRelationCount": len(reuse_plan.get("relationRows") or []),
+            "insertedNodeCount": len(node_rows_to_insert),
+            "insertedRelationCount": len(relation_rows_to_insert),
+            "reusedNodeCount": len(reuse_plan.get("reusedNodeRows") or []),
+            "reusedRelationCount": len(reuse_plan.get("reusedRelationRows") or []),
+            "relationBatchSize": relation_batch_size,
+            "transactionCount": (len(queries) + batch_size - 1) // batch_size if queries else 0,
+            "slowestQueryMs": max(query_durations_ms) if query_durations_ms else 0.0,
+            "totalQueryMs": round(sum(query_durations_ms), 1),
+        }
 
     def scoped_manifest_marker_graph(
         self,
@@ -2153,6 +2733,16 @@ class ScopedABoxManifestMixin:
             "tenantId": str(worldview.get("tenantId") or ""),
             "accountId": str(worldview.get("accountId") or graph.portfolio_id or ""),
         }
+        # This derives only physical persistence identities from the same
+        # complete graph that is being staged.  It is stored with the
+        # immutable Manifest marker so native-rule materialization can later
+        # read exactly the active evidence rows without joining every retained
+        # scope pointer and historic ABox generation.
+        all_node_rows, all_relation_rows = self.graph_persistence_rows(graph)
+        evidence_read_index = native_rule_evidence_read_index_from_rows(
+            all_node_rows,
+            all_relation_rows,
+        )
         marker_scope_id = "manifest:" + manifest_id
         marker = OntologyEntity(
             entity_id="worldview-manifest-marker:" + manifest_id,
@@ -2178,6 +2768,8 @@ class ScopedABoxManifestMixin:
                 "scopeFamilyCounts": dict(worldview.get("scopeFamilyCounts") or {}),
                 "scopeDelta": dict(worldview.get("scopeDelta") or {}),
                 "inferenceImpactPlan": dict(worldview.get("inferenceImpactPlan") or {}),
+                "nativeRulePlannerTopology": dict(worldview.get("nativeRulePlannerTopology") or {}),
+                "nativeRuleEvidenceReadIndex": evidence_read_index,
                 "changedScopeIds": sorted({str(item or "") for item in changed_scope_ids if str(item or "")}),
                 "projectionStatus": "complete",
                 "scopedAboxManifestVersion": SCOPED_ABOX_MANIFEST_VERSION,
@@ -2185,12 +2777,260 @@ class ScopedABoxManifestMixin:
         )
         return PortfolioOntology(str(graph.portfolio_id or "typedb-scoped-manifest"), entities=[marker])
 
+    def replace_scoped_manifest_marker_graph(
+        self,
+        marker_graph: PortfolioOntology,
+    ) -> Dict[str, object]:
+        """Replace one immutable Manifest marker without touching ABox facts.
+
+        A marker can gain a new operational read index during a rolling
+        deployment. The index is derived from already staged ABox rows and is
+        not an investment fact, so replacing only this control record is safe
+        when the Manifest id and every scope generation still match.
+        """
+        if not getattr(self, "address", ""):
+            return {
+                "configured": False,
+                "saved": False,
+                "status": "disabled",
+                "graphStore": "typedb",
+                "reason": "TypeDB ontology storage is not configured.",
+            }
+        node_rows = self.node_rows(marker_graph)
+        if len(node_rows) != 1:
+            return {
+                "configured": True,
+                "saved": False,
+                "status": "invalid-marker",
+                "graphStore": "typedb",
+                "reason": "Scoped Manifest marker replacement requires exactly one marker node.",
+            }
+        row = node_rows[0]
+        marker_id = str(row.get("id") or "").strip()
+        storage_id = ontology_storage_id(row, marker_id, "node")
+        if not marker_id or not storage_id:
+            return {
+                "configured": True,
+                "saved": False,
+                "status": "invalid-marker",
+                "graphStore": "typedb",
+                "reason": "Scoped Manifest marker identity is incomplete.",
+            }
+        imported = self.driver_imports()
+        if imported[0] is None:
+            return {
+                "configured": True,
+                "saved": False,
+                "status": "driver-missing",
+                "graphStore": "typedb",
+                "reason": str(imported[1])[:180],
+            }
+        _TypeDB, _Credentials, _DriverOptions, _DriverTlsConfig, TransactionType = imported[0]
+        delete_query = (
+            "match $n isa ontology-node, has ontology-storage-id "
+            + typedb_string(storage_id)
+            + "; delete $n;"
+        )
+        insert_query = self.node_insert_query(row, utc_now())
+
+        def operation():
+            driver = self.open_driver(imported)
+            try:
+                self.ensure_database(driver)
+                self.ensure_schema(driver, imported)
+                with typedb_operation_timeout(self.write_operation_timeout_seconds(), "TypeDB scoped Manifest marker upgrade"):
+                    with driver.transaction(
+                        self.database,
+                        TransactionType.WRITE,
+                        options=self.write_transaction_options(),
+                    ) as tx:
+                        tx.query(delete_query).resolve()
+                        tx.query(insert_query).resolve()
+                        tx.commit()
+            finally:
+                self.close_driver(driver)
+
+        try:
+            self.with_typedb_retries(operation)
+        except Exception as error:  # noqa: BLE001 - keep the prior active ABox and retry on the next projection.
+            return {
+                "configured": True,
+                "saved": False,
+                "status": "error",
+                "graphStore": "typedb",
+                "reasonCode": typedb_error_code(error),
+                "reason": str(error)[:220],
+            }
+        return {
+            "configured": True,
+            "saved": True,
+            "status": "ok",
+            "graphStore": "typedb",
+            "markerId": marker_id,
+            "markerStorageId": storage_id,
+        }
+
+    def ensure_scoped_manifest_evidence_read_index(
+        self,
+        graph: PortfolioOntology,
+        active_metadata: Dict[str, object] = None,
+        world_id: str = "",
+    ) -> Dict[str, object]:
+        """Backfill a verified evidence-read index for one unchanged Manifest.
+
+        The ABox generation and its TypeDB native rule semantics stay exactly
+        the same. Only the marker metadata changes, allowing an upgraded
+        runtime to read the already active physical evidence rows without a
+        legacy Manifest-wide join.
+        """
+        if not getattr(self, "address", ""):
+            return {
+                "configured": False,
+                "saved": False,
+                "status": "disabled",
+                "graphStore": "typedb",
+            }
+        worldview = dict(getattr(graph, "worldview", {}) or {})
+        manifest_id = str(
+            worldview.get("worldviewManifestId") or worldview.get("aboxSnapshotId") or ""
+        ).strip()
+        scope_plan = self.scoped_abox_plan(graph)
+        if not manifest_id or not scope_plan:
+            return {
+                "configured": True,
+                "saved": False,
+                "status": "invalid-scoped-manifest",
+                "graphStore": "typedb",
+                "reason": "Scoped Manifest metadata is unavailable for evidence-index upgrade.",
+            }
+        requested_world_id = str(world_id or worldview.get("worldId") or "").strip()
+        active = dict(active_metadata or {})
+        if not active:
+            try:
+                active = dict(self.active_abox_metadata(requested_world_id) or {})
+            except Exception as error:  # noqa: BLE001 - do not write against an uncertain active pointer.
+                return {
+                    "configured": True,
+                    "saved": False,
+                    "status": "active-manifest-unreadable",
+                    "graphStore": "typedb",
+                    "reason": str(error)[:220],
+                }
+        active_manifest_id = str(
+            active.get("worldviewManifestId") or active.get("aboxSnapshotId") or ""
+        ).strip()
+        expected_generations = {
+            str(item.get("scopeId") or ""): str(item.get("generationId") or "")
+            for item in scope_plan
+            if str(item.get("scopeId") or "").strip() and str(item.get("generationId") or "").strip()
+        }
+        active_generations = {
+            str(scope_id or ""): str(generation_id or "")
+            for scope_id, generation_id in dict(active.get("scopeGenerationIds") or {}).items()
+            if str(scope_id or "").strip() and str(generation_id or "").strip()
+        }
+        if active_manifest_id != manifest_id or active_generations != expected_generations:
+            return {
+                "configured": True,
+                "saved": False,
+                "status": "stale-manifest",
+                "graphStore": "typedb",
+                "manifestId": manifest_id,
+                "activeManifestId": active_manifest_id,
+                "reason": "The active Manifest changed while the evidence index was being prepared.",
+            }
+        existing_index = normalize_native_rule_evidence_read_index(
+            active.get("nativeRuleEvidenceReadIndex"),
+            planner_topology=active.get("nativeRulePlannerTopology"),
+        )
+        if str(existing_index.get("status") or "") == "ok":
+            return {
+                "configured": True,
+                "saved": False,
+                "status": "unchanged",
+                "graphStore": "typedb",
+                "manifestId": manifest_id,
+                "fingerprint": str(existing_index.get("fingerprint") or ""),
+            }
+        lease = self.acquire_scoped_abox_write_lease("manifest-index:" + manifest_id, world_id=requested_world_id)
+        if not lease.get("acquired"):
+            return {
+                "configured": True,
+                "saved": False,
+                "status": "deferred-scoped-write-lease",
+                "graphStore": "typedb",
+                "manifestId": manifest_id,
+                "reason": "A scoped ABox writer is active; the evidence index will be retried after it releases the lease.",
+                "writeLease": {
+                    key: value
+                    for key, value in dict(lease or {}).items()
+                    if key != "propertiesJson"
+                },
+            }
+        try:
+            current = dict(self.active_abox_metadata(requested_world_id) or {})
+            current_manifest_id = str(
+                current.get("worldviewManifestId") or current.get("aboxSnapshotId") or ""
+            ).strip()
+            current_generations = {
+                str(scope_id or ""): str(generation_id or "")
+                for scope_id, generation_id in dict(current.get("scopeGenerationIds") or {}).items()
+                if str(scope_id or "").strip() and str(generation_id or "").strip()
+            }
+            if current_manifest_id != manifest_id or current_generations != expected_generations:
+                return {
+                    "configured": True,
+                    "saved": False,
+                    "status": "stale-manifest",
+                    "graphStore": "typedb",
+                    "manifestId": manifest_id,
+                    "activeManifestId": current_manifest_id,
+                    "reason": "The active Manifest changed before the evidence index upgrade could be committed.",
+                }
+            marker_graph = self.scoped_manifest_marker_graph(graph, scope_plan, [])
+            replacement = self.replace_scoped_manifest_marker_graph(marker_graph)
+            if not replacement.get("saved"):
+                return {
+                    **replacement,
+                    "manifestId": manifest_id,
+                    "reason": str(replacement.get("reason") or "Manifest evidence index replacement failed."),
+                }
+            verified = dict(self.active_abox_metadata(requested_world_id) or {})
+            verified_index = normalize_native_rule_evidence_read_index(
+                verified.get("nativeRuleEvidenceReadIndex"),
+                planner_topology=verified.get("nativeRulePlannerTopology"),
+            )
+            if str(verified_index.get("status") or "") != "ok":
+                return {
+                    "configured": True,
+                    "saved": False,
+                    "status": "verification-failed",
+                    "graphStore": "typedb",
+                    "manifestId": manifest_id,
+                    "reason": str(verified_index.get("reason") or "Manifest evidence index could not be verified after replacement."),
+                }
+            return {
+                "configured": True,
+                "saved": True,
+                "status": "ok",
+                "graphStore": "typedb",
+                "manifestId": manifest_id,
+                "fingerprint": str(verified_index.get("fingerprint") or ""),
+                "replacement": replacement,
+            }
+        finally:
+            try:
+                self.release_scoped_abox_write_lease(lease)
+            except Exception:
+                pass
+
     def scoped_manifest_pointer_graph(
         self,
         graph: PortfolioOntology,
         scope_plan: List[Dict[str, object]],
         previous_metadata: Dict[str, object] = None,
         pending_activation: bool = True,
+        inference_target_symbols: Iterable[str] = None,
     ) -> PortfolioOntology:
         worldview = dict(getattr(graph, "worldview", {}) or {})
         manifest_id = str(worldview.get("worldviewManifestId") or worldview.get("aboxSnapshotId") or "").strip()
@@ -2206,6 +3046,18 @@ class ScopedABoxManifestMixin:
         }
         world_id = str(world_context.get("worldId") or "")
         world_suffix = (":world:" + hashlib.sha256(world_id.encode("utf-8")).hexdigest()[:16]) if world_id else ""
+        # A Manifest marker intentionally excludes execution targets because
+        # they do not affect its material identity. The activation journal is
+        # the durable hand-off for those targets, so a pointer rebuild must
+        # carry the already-verified values explicitly instead of trying to
+        # recover them from the immutable marker later.
+        target_symbols = (
+            clean_symbols_from_payload(inference_target_symbols)
+            if inference_target_symbols is not None
+            else clean_symbols_from_payload(
+                worldview.get("inferenceTargetSymbols") or worldview.get("targetSymbols") or []
+            )
+        )
         common = {
             "ontologyBox": "ABoxControl",
             **world_context,
@@ -2271,9 +3123,7 @@ class ScopedABoxManifestMixin:
                     "previousAboxSnapshotId": previous_manifest_id,
                     "previousWorldviewManifestId": previous_manifest_id,
                     "previousScopeGenerationIds": dict(previous.get("scopeGenerationIds") or {}),
-                    "targetSymbols": clean_symbols_from_payload(
-                        worldview.get("inferenceTargetSymbols") or worldview.get("targetSymbols") or []
-                    ),
+                    "targetSymbols": target_symbols,
                     "activationStatus": "pending-native-inference",
                 },
             ))
@@ -2284,6 +3134,7 @@ class ScopedABoxManifestMixin:
         graph: PortfolioOntology,
         scope_plan: List[Dict[str, object]],
         previous_metadata: Dict[str, object] = None,
+        inference_target_symbols: Iterable[str] = None,
     ) -> PortfolioOntology:
         """Persist a verified candidate journal without moving the live world.
 
@@ -2298,6 +3149,7 @@ class ScopedABoxManifestMixin:
             scope_plan,
             previous_metadata=previous_metadata,
             pending_activation=True,
+            inference_target_symbols=inference_target_symbols,
         )
         pending_entities = [
             entity
@@ -2322,6 +3174,9 @@ class ScopedABoxManifestMixin:
         worldview = dict(getattr(graph, "worldview", {}) or {})
         world_id = str(worldview.get("worldId") or "").strip()
         manifest_id = str(worldview.get("worldviewManifestId") or worldview.get("aboxSnapshotId") or "").strip()
+        inference_target_symbols = clean_symbols_from_payload(
+            worldview.get("inferenceTargetSymbols") or worldview.get("targetSymbols") or []
+        )
         if not scope_plan or not manifest_id:
             return {
                 "configured": True,
@@ -2465,23 +3320,23 @@ class ScopedABoxManifestMixin:
                 "scopePlan": scope_plan,
                 "activeAbox": active_before,
             }
+        if scoped_active and previous_manifest_id == manifest_id:
+            release = release_write_lease()
+            return {
+                "configured": True,
+                "saved": False,
+                "status": "invalid-scoped-manifest-reuse",
+                "graphStore": "typedb",
+                "aboxSnapshotId": manifest_id,
+                "worldviewManifestId": manifest_id,
+                "worldId": world_id,
+                "changedScopeIds": changed_scope_ids,
+                "preservedActiveGeneration": True,
+                "reason": "A scoped ABox Manifest must change whenever its scope generation changes.",
+                "writeLeaseRelease": release,
+            }
         node_rows, relation_rows = self.scoped_abox_persistence_rows(graph, changed_scope_ids)
         scope_rows = {str(item.get("scopeId") or ""): item for item in scope_plan}
-        # The logical scope plan counts domain entities/relations.  Physical
-        # persistence can additionally contain evidence/support nodes, so the
-        # write verification must use the exact rows being written.
-        expected_rows_by_scope: Dict[str, Dict[str, int]] = {
-            scope_id: {"entityCount": 0, "relationCount": 0}
-            for scope_id in changed_scope_ids
-        }
-        for row in node_rows:
-            scope_id = str(row.get("scopeId") or "")
-            if scope_id in expected_rows_by_scope:
-                expected_rows_by_scope[scope_id]["entityCount"] += 1
-        for row in relation_rows:
-            scope_id = str(row.get("scopeId") or "")
-            if scope_id in expected_rows_by_scope:
-                expected_rows_by_scope[scope_id]["relationCount"] += 1
         verification: Dict[str, object] = {}
         timing: Dict[str, object] = {"startedAt": utc_now()}
         save_started_at = time.monotonic()
@@ -2502,34 +3357,57 @@ class ScopedABoxManifestMixin:
                     timing["orphanCandidateCleanupMs"] = 0.0
                     timing["orphanCandidateCleanup"] = dict(orphan_cleanup or {})
                     cleanup_started = time.monotonic()
-                    active_generation_values = {
-                        str(value or "") for value in active_generations.values() if str(value or "")
+                    candidate_generation_ids = {
+                        str((scope_rows.get(scope_id) or {}).get("generationId") or "")
+                        for scope_id in changed_scope_ids
+                        if str((scope_rows.get(scope_id) or {}).get("generationId") or "")
                     }
-                    for scope_id in changed_scope_ids:
-                        generation_id = str((scope_rows.get(scope_id) or {}).get("generationId") or "")
-                        if generation_id and generation_id not in active_generation_values:
-                            self.delete_box_snapshot_rows_in_batches(driver, imported, "ABox", generation_id)
-                    # A retry for the exact Manifest must not collide with a
-                    # stale marker. The marker is outside every active scope.
-                    self.delete_box_snapshot_rows_in_batches(driver, imported, "ABox", manifest_id)
+                    # Only retry rows created for this exact Manifest. A broad
+                    # snapshot inventory made a first projection scan all
+                    # historical ABox generations before it wrote any data.
+                    # Incomplete candidates from older manifests are handled
+                    # by the idle orphan-maintenance pass under the same lease.
+                    candidate_cleanup = self.delete_box_manifest_rows_in_batches(
+                        driver,
+                        imported,
+                        "ABox",
+                        manifest_id,
+                        world_id=world_id,
+                    )
+                    timing["candidateScopeGenerationCount"] = len(candidate_generation_ids)
+                    timing["candidateManifestCleanup"] = candidate_cleanup
                     timing["candidateCleanupMs"] = round((time.monotonic() - cleanup_started) * 1000, 1)
                     write_started = time.monotonic()
-                    self.write_persistence_rows(driver, imported, node_rows, relation_rows)
+                    timing["changedScopeWritePlan"] = self.write_persistence_rows(
+                        driver,
+                        imported,
+                        node_rows,
+                        relation_rows,
+                    )
                     timing["changedScopeWriteMs"] = round((time.monotonic() - write_started) * 1000, 1)
                     verification_started = time.monotonic()
-                    actual_counts_by_scope = self.scoped_abox_scope_row_counts_batch([
-                        scope_rows.get(scope_id) or {}
-                        for scope_id in changed_scope_ids
-                    ])
+                    identity_verification = self.scoped_abox_storage_identity_counts(
+                        node_rows,
+                        relation_rows,
+                    )
+                    timing["changedScopeStorageIdentityVerification"] = {
+                        "status": str(identity_verification.get("status") or ""),
+                        "missingStorageIdCount": len(identity_verification.get("missingStorageIds") or []),
+                        "conflictCount": len(identity_verification.get("conflicts") or []),
+                    }
+                    expected_counts_by_scope = dict(identity_verification.get("expectedCountsByScope") or {})
+                    actual_counts_by_scope = dict(identity_verification.get("actualCountsByScope") or {})
                     for scope_id in changed_scope_ids:
                         scope_plan_row = scope_rows.get(scope_id) or {}
-                        expected = expected_rows_by_scope.get(scope_id) or {}
+                        expected = expected_counts_by_scope.get(scope_id) or {}
                         generation_id = str(scope_plan_row.get("generationId") or "")
                         actual = actual_counts_by_scope.get(scope_id) or {
                             "entityCount": 0,
                             "relationCount": 0,
                         }
                         valid = (
+                            str(identity_verification.get("status") or "") == "ok"
+                            and
                             actual.get("entityCount") == int(expected.get("entityCount") or 0)
                             and actual.get("relationCount") == int(expected.get("relationCount") or 0)
                         )
@@ -2550,9 +3428,21 @@ class ScopedABoxManifestMixin:
                     self.write_graph(driver, imported, marker_graph, delete_boxes=[])
                     timing["manifestMarkerWriteMs"] = round((time.monotonic() - marker_started) * 1000, 1)
                     stage_started = time.monotonic()
-                    pending_graph = self.scoped_manifest_pending_graph(graph, scope_plan, active_before)
+                    pending_graph = self.scoped_manifest_pending_graph(
+                        graph,
+                        scope_plan,
+                        active_before,
+                        inference_target_symbols=inference_target_symbols,
+                    )
                     if not pending_graph.entities:
                         raise RuntimeError("Scoped ABox candidate has no activation journal.")
+                    staged_targets = clean_symbols_from_payload(
+                        pending_graph.entities[0].properties.get("targetSymbols") or []
+                    )
+                    if staged_targets != inference_target_symbols:
+                        raise RuntimeError(
+                            "Scoped ABox activation journal target symbols do not match the requested inference scope."
+                        )
                     # Do not replace ABoxControl here. The currently active
                     # Manifest remains the only live read world until the
                     # reasoning worker prepares this verified candidate.
@@ -2563,6 +3453,15 @@ class ScopedABoxManifestMixin:
 
             self.with_typedb_retries(operation)
             active_after = self.active_abox_metadata(world_id)
+            pending_after = self.pending_abox_activation(world_id)
+            if (
+                str(pending_after.get("status") or "") != "pending"
+                or str(pending_after.get("candidateAboxSnapshotId") or "") != manifest_id
+                or clean_symbols_from_payload(pending_after.get("targetSymbols") or []) != inference_target_symbols
+            ):
+                raise RuntimeError(
+                    "Scoped ABox activation journal verification failed after candidate staging."
+                )
             timing["totalMs"] = round((time.monotonic() - save_started_at) * 1000, 1)
             activation_status = "staged" if previous_manifest_id != manifest_id else "unchanged"
             release = release_write_lease()
@@ -2581,6 +3480,7 @@ class ScopedABoxManifestMixin:
                 "accountId": str(worldview.get("accountId") or graph.portfolio_id or ""),
                 "scopePlan": scope_plan,
                 "changedScopeIds": changed_scope_ids,
+                "pendingAboxActivation": pending_after,
                 "changedScopeEntityCount": len(node_rows),
                 "changedScopeRelationCount": len(relation_rows),
                 "orphanCandidateCleanup": orphan_cleanup,
@@ -2673,6 +3573,7 @@ class ScopedABoxManifestMixin:
         metadata: Dict[str, object],
         previous_metadata: Dict[str, object] = None,
         pending_activation: bool = False,
+        inference_target_symbols: Iterable[str] = None,
     ) -> PortfolioOntology:
         """Rebuild the small pointer set for a verified historical Manifest."""
         payload = dict(metadata or {})
@@ -2702,6 +3603,7 @@ class ScopedABoxManifestMixin:
             list(worldview["scopePlan"]),
             previous_metadata=previous_metadata,
             pending_activation=pending_activation,
+            inference_target_symbols=inference_target_symbols,
         )
 
     def activate_scoped_abox_manifest(
@@ -2709,6 +3611,7 @@ class ScopedABoxManifestMixin:
         manifest_id: str,
         previous_metadata: Dict[str, object] = None,
         pending_activation: bool = False,
+        inference_target_symbols: Iterable[str] = None,
         world_id: str = "",
     ) -> Dict[str, object]:
         """Activate a complete historical Manifest and optionally retain its journal."""
@@ -2736,6 +3639,7 @@ class ScopedABoxManifestMixin:
             metadata,
             previous_metadata=previous,
             pending_activation=pending_activation,
+            inference_target_symbols=inference_target_symbols,
         )
         try:
             def operation():
@@ -2819,7 +3723,21 @@ class ScopedABoxManifestMixin:
             }
         candidate_id = str(pending.get("candidateAboxSnapshotId") or "").strip()
         previous_id = str(pending.get("previousAboxSnapshotId") or "").strip()
+        target_symbols = clean_symbols_from_payload(pending.get("targetSymbols") or [])
         activation_status = str(pending.get("activationStatus") or "pending-native-inference")
+        if not target_symbols:
+            return {
+                "configured": True,
+                "status": "invalid-empty-target",
+                "graphStore": "typedb",
+                "candidateAboxSnapshotId": candidate_id,
+                "previousAboxSnapshotId": previous_id,
+                "pendingActivation": pending,
+                "reason": (
+                    "Pending ABox activation has no target symbols. Native inference is blocked rather than "
+                    "running an unbounded query or finalizing an unverifiable generation."
+                ),
+            }
         try:
             active = self.active_abox_metadata(world_id)
         except Exception as error:  # noqa: BLE001 - do not activate when the live pointer cannot be verified.
@@ -2867,6 +3785,7 @@ class ScopedABoxManifestMixin:
             candidate_id,
             previous_metadata=active,
             pending_activation=True,
+            inference_target_symbols=target_symbols,
             world_id=world_id,
         )
         if str(activation.get("status") or "") != "ok":
@@ -2895,6 +3814,7 @@ class ScopedABoxManifestMixin:
             or active_after_id != candidate_id
             or str(pending_after.get("status") or "") != "pending"
             or str(pending_after.get("candidateAboxSnapshotId") or "") != candidate_id
+            or clean_symbols_from_payload(pending_after.get("targetSymbols") or []) != target_symbols
         ):
             return {
                 "configured": True,
@@ -3533,6 +4453,14 @@ class NullTypeDBOntologyGraphRepository(ScopedABoxManifestMixin):
 class TypeDBOntologyGraphRepository(GraphStoreOntologyRowMapperMixin, ScopedABoxManifestMixin):
     store_key = "typedb"
     store_label = "TypeDB"
+    # ``build_monitor_runner`` is intentionally short-lived so account changes
+    # are picked up by the reasoning worker.  A fresh repository instance must
+    # not therefore read the same immutable base schema every cycle.  Keep the
+    # cache process-local: a service restart still verifies the schema before
+    # accepting live ABox writes.
+    _process_base_schema_ready: Dict[Tuple[str, str, bool, str], float] = {}
+    _process_base_schema_ready_lock = threading.Lock()
+    _process_base_schema_cache_seconds = 300.0
 
     def __init__(
         self,
@@ -4034,9 +4962,52 @@ class TypeDBOntologyGraphRepository(GraphStoreOntologyRowMapperMixin, ScopedABox
             pass
         try:
             databases.create(self.database)
+            self.invalidate_process_base_schema_readiness()
         except Exception as error:
             if "already" not in str(error).lower() and "exist" not in str(error).lower():
                 raise
+
+    def process_base_schema_cache_key(self, schema_fingerprint: str) -> Tuple[str, str, bool, str]:
+        return (
+            str(self.address or "").strip(),
+            str(self.database or "").strip(),
+            bool(self.tls_enabled),
+            str(schema_fingerprint or ""),
+        )
+
+    def process_base_schema_is_ready(self, schema_fingerprint: str) -> bool:
+        key = self.process_base_schema_cache_key(schema_fingerprint)
+        if not key[0] or not key[1] or not key[3]:
+            return False
+        now = time.monotonic()
+        with TypeDBOntologyGraphRepository._process_base_schema_ready_lock:
+            ready_at = TypeDBOntologyGraphRepository._process_base_schema_ready.get(key)
+            if ready_at is None:
+                return False
+            if now - ready_at > TypeDBOntologyGraphRepository._process_base_schema_cache_seconds:
+                TypeDBOntologyGraphRepository._process_base_schema_ready.pop(key, None)
+                return False
+            return True
+
+    def mark_process_base_schema_ready(self, schema_fingerprint: str) -> None:
+        key = self.process_base_schema_cache_key(schema_fingerprint)
+        if not key[0] or not key[1] or not key[3]:
+            return
+        with TypeDBOntologyGraphRepository._process_base_schema_ready_lock:
+            TypeDBOntologyGraphRepository._process_base_schema_ready[key] = time.monotonic()
+
+    def invalidate_process_base_schema_readiness(self) -> None:
+        address = str(self.address or "").strip()
+        database = str(self.database or "").strip()
+        tls_enabled = bool(self.tls_enabled)
+        with TypeDBOntologyGraphRepository._process_base_schema_ready_lock:
+            stale_keys = [
+                key
+                for key in TypeDBOntologyGraphRepository._process_base_schema_ready
+                if key[:3] == (address, database, tls_enabled)
+            ]
+            for key in stale_keys:
+                TypeDBOntologyGraphRepository._process_base_schema_ready.pop(key, None)
 
     def base_schema_type_names(self) -> set:
         if self._base_schema_type_names:
@@ -4163,6 +5134,9 @@ class TypeDBOntologyGraphRepository(GraphStoreOntologyRowMapperMixin, ScopedABox
         schema_fingerprint = hashlib.sha256(schema.encode("utf-8")).hexdigest()
         if self._base_schema_ready_fingerprint == schema_fingerprint:
             return
+        if self.process_base_schema_is_ready(schema_fingerprint):
+            self._base_schema_ready_fingerprint = schema_fingerprint
+            return
         try:
             schema_text = self.typedb_schema_text(driver)
             if self.ontology_storage_identity_migration_required(schema_text):
@@ -4181,6 +5155,7 @@ class TypeDBOntologyGraphRepository(GraphStoreOntologyRowMapperMixin, ScopedABox
             ))
             if self.base_schema_type_names().issubset(schema_type_names):
                 self._base_schema_ready_fingerprint = schema_fingerprint
+                self.mark_process_base_schema_ready(schema_fingerprint)
                 return
         except Exception:
             # On a new database or an older driver without schema inspection,
@@ -4192,6 +5167,7 @@ class TypeDBOntologyGraphRepository(GraphStoreOntologyRowMapperMixin, ScopedABox
                 tx.query(schema).resolve()
                 tx.commit()
         self._base_schema_ready_fingerprint = schema_fingerprint
+        self.mark_process_base_schema_ready(schema_fingerprint)
 
     def read_rows(
         self,
@@ -4206,8 +5182,13 @@ class TypeDBOntologyGraphRepository(GraphStoreOntologyRowMapperMixin, ScopedABox
         if imported[0] is None:
             raise RuntimeError("typedb-driver Python package is not installed: " + str(imported[1])[:160])
         _TypeDB, _Credentials, _DriverOptions, _DriverTlsConfig, TransactionType = imported[0]
+        request_timeout = (
+            self.query_timeout_seconds()
+            if timeout_seconds is None
+            else max(0.5, float(timeout_seconds))
+        )
         def operation():
-            driver = self.open_driver(imported)
+            driver = self.open_driver(imported, request_timeout_seconds=request_timeout)
             try:
                 self.ensure_database(driver)
                 with driver.transaction(
@@ -4406,6 +5387,104 @@ class TypeDBOntologyGraphRepository(GraphStoreOntologyRowMapperMixin, ScopedABox
                 ["id", "label", "kind", "updatedAt", "json"],
             ), box))
         return rows
+
+    def read_abox_entity_rows_by_storage_ids(
+        self,
+        storage_ids: Iterable[str],
+        world_id: str = "",
+    ) -> List[Dict[str, object]]:
+        """Read exact active ABox entities without expanding scoped pointers.
+
+        ``ontology-storage-id`` includes the immutable scope generation.  A
+        verified Manifest index can therefore name one physical stock row
+        directly and avoid the high-cardinality Manifest/scope join used by
+        general-purpose ABox readers.
+        """
+        clean_storage_ids = sorted({
+            str(item or "").strip()
+            for item in storage_ids or []
+            if str(item or "").strip()
+        })
+        if not clean_storage_ids:
+            return []
+        rows: List[Dict[str, object]] = []
+        for offset in range(0, len(clean_storage_ids), NATIVE_RULE_EVIDENCE_READ_INDEX_BATCH_SIZE):
+            batch = clean_storage_ids[offset: offset + NATIVE_RULE_EVIDENCE_READ_INDEX_BATCH_SIZE]
+            query = (
+                "match $n isa ontology-node, "
+                "has ontology-id $id, "
+                "has ontology-label $label, "
+                "has ontology-kind $kind, "
+                'has ontology-box "ABox", '
+                + ("has ontology-world-id " + typedb_string(world_id) + ", " if str(world_id or "").strip() else "")
+                + "has ontology-updated-at $updatedAt, "
+                "has ontology-json $json; "
+                + typedb_value_match("$n", "ontology-storage-id", batch, "==", "storageIdFilter")
+            )
+            rows.extend(self.entity_rows_from_typeql(
+                self.read_rows(
+                    query,
+                    ["id", "label", "kind", "updatedAt", "json"],
+                    label="typedb.native-evidence.entity-by-storage-id",
+                ),
+                "ABox",
+            ))
+        return list({str(row.get("id") or ""): row for row in rows if str(row.get("id") or "").strip()}.values())
+
+    def read_abox_relation_rows_by_storage_ids(
+        self,
+        storage_ids: Iterable[str],
+        relation_types: Iterable[str] = None,
+        world_id: str = "",
+    ) -> List[Dict[str, object]]:
+        """Read exact active ABox evidence edges from Manifest storage IDs."""
+        clean_storage_ids = sorted({
+            str(item or "").strip()
+            for item in storage_ids or []
+            if str(item or "").strip()
+        })
+        if not clean_storage_ids:
+            return []
+        clean_relation_types = sorted({
+            str(item or "").upper().strip()
+            for item in relation_types or []
+            if str(item or "").strip()
+        })
+        rows: List[Dict[str, object]] = []
+        for offset in range(0, len(clean_storage_ids), NATIVE_RULE_EVIDENCE_READ_INDEX_BATCH_SIZE):
+            batch = clean_storage_ids[offset: offset + NATIVE_RULE_EVIDENCE_READ_INDEX_BATCH_SIZE]
+            query = (
+                "match "
+                "$source isa ontology-node, has ontology-id $sourceId, has ontology-label $sourceLabel, "
+                "has ontology-kind $sourceKind, has ontology-updated-at $sourceUpdatedAt, has ontology-json $sourceJson; "
+                "$target isa ontology-node, has ontology-id $targetId, has ontology-label $targetLabel, "
+                "has ontology-kind $targetKind, has ontology-updated-at $targetUpdatedAt, has ontology-json $targetJson; "
+                "$r isa ontology-assertion, links (source: $source, target: $target), "
+                "has ontology-id $id, "
+                "has ontology-relation-type $type, "
+                'has ontology-box "ABox", '
+                + ("has ontology-world-id " + typedb_string(world_id) + ", " if str(world_id or "").strip() else "")
+                + "has ontology-updated-at $updatedAt, "
+                "has ontology-json $json, "
+                "has ontology-weight $weight; "
+                + typedb_value_match("$r", "ontology-storage-id", batch, "==", "relationStorageIdFilter")
+                + typedb_value_match("$r", "ontology-relation-type", clean_relation_types, "==", "relationTypeFilter")
+            )
+            raw_rows = self.read_rows(
+                query,
+                [
+                    "id", "sourceId", "sourceLabel", "sourceKind", "sourceUpdatedAt", "sourceJson",
+                    "targetId", "targetLabel", "targetKind", "targetUpdatedAt", "targetJson",
+                    "type", "updatedAt", "json", "weight",
+                ],
+                label="typedb.native-evidence.relation-by-storage-id",
+            )
+            mapped_rows = self.relation_rows_from_typeql(raw_rows, "ABox")
+            for mapped, raw in zip(mapped_rows, raw_rows):
+                mapped["sourceNode"] = endpoint_node_row(raw, "source", "ABox")
+                mapped["targetNode"] = endpoint_node_row(raw, "target", "ABox")
+            rows.extend(mapped_rows)
+        return list({str(row.get("id") or ""): row for row in rows if str(row.get("id") or "").strip()}.values())
 
     def read_relation_rows_by_source_ids(
         self,
@@ -4626,7 +5705,17 @@ class TypeDBOntologyGraphRepository(GraphStoreOntologyRowMapperMixin, ScopedABox
             "relationCount": count("ontology-assertion"),
         }
 
-    def abox_projection_marker_rows(self, world_id: str = "") -> List[Dict[str, object]]:
+    def abox_projection_marker_rows(
+        self,
+        world_id: str = "",
+        snapshot_id: str = "",
+        limit: int = 0,
+    ) -> List[Dict[str, object]]:
+        snapshot_clause = (
+            "has ontology-snapshot-id " + typedb_string(snapshot_id) + ", "
+            if str(snapshot_id or "").strip()
+            else ""
+        )
         query = (
             "match $n isa ontology-node, "
             "has ontology-id $id, "
@@ -4634,15 +5723,17 @@ class TypeDBOntologyGraphRepository(GraphStoreOntologyRowMapperMixin, ScopedABox
             "has ontology-kind \"abox-projection-marker\", "
             "has ontology-box \"ABox\", "
             + ("has ontology-world-id " + typedb_string(world_id) + ", " if str(world_id or "").strip() else "")
+            + snapshot_clause
             + "has ontology-updated-at $updatedAt, "
             "has ontology-json $json;"
+            + typeql_limit_clause(limit)
         )
         return self.entity_rows_from_typeql(
             self.read_rows(query, ["id", "label", "kind", "updatedAt", "json"], label="typedb.abox-marker"),
             "ABox",
         )
 
-    def active_worldview_manifest_pointer_rows(self, world_id: str = "") -> List[Dict[str, object]]:
+    def active_worldview_manifest_pointer_rows(self, world_id: str = "", limit: int = 0) -> List[Dict[str, object]]:
         query = (
             "match $n isa ontology-node, "
             "has ontology-id $id, "
@@ -4653,6 +5744,7 @@ class TypeDBOntologyGraphRepository(GraphStoreOntologyRowMapperMixin, ScopedABox
             + "has ontology-snapshot-id $snapshotId, "
             "has ontology-updated-at $updatedAt, "
             "has ontology-json $json;"
+            + typeql_limit_clause(limit)
         )
         return self.entity_rows_from_typeql(
             self.read_rows(
@@ -4663,7 +5755,17 @@ class TypeDBOntologyGraphRepository(GraphStoreOntologyRowMapperMixin, ScopedABox
             "ABoxControl",
         )
 
-    def worldview_manifest_marker_rows(self, world_id: str = "") -> List[Dict[str, object]]:
+    def worldview_manifest_marker_rows(
+        self,
+        world_id: str = "",
+        manifest_id: str = "",
+        limit: int = 0,
+    ) -> List[Dict[str, object]]:
+        manifest_clause = (
+            "has ontology-snapshot-id " + typedb_string(manifest_id) + ", "
+            if str(manifest_id or "").strip()
+            else ""
+        )
         query = (
             "match $n isa ontology-node, "
             "has ontology-id $id, "
@@ -4671,9 +5773,11 @@ class TypeDBOntologyGraphRepository(GraphStoreOntologyRowMapperMixin, ScopedABox
             "has ontology-kind \"worldview-manifest-marker\", "
             "has ontology-box \"ABox\", "
             + ("has ontology-world-id " + typedb_string(world_id) + ", " if str(world_id or "").strip() else "")
+            + manifest_clause
             + "has ontology-snapshot-id $snapshotId, "
             "has ontology-updated-at $updatedAt, "
             "has ontology-json $json;"
+            + typeql_limit_clause(limit)
         )
         return self.entity_rows_from_typeql(
             self.read_rows(
@@ -4720,11 +5824,15 @@ class TypeDBOntologyGraphRepository(GraphStoreOntologyRowMapperMixin, ScopedABox
             "scopeFamilyCounts": dict(payload.get("scopeFamilyCounts") or {}),
             "scopeDelta": dict(payload.get("scopeDelta") or {}),
             "inferenceImpactPlan": dict(payload.get("inferenceImpactPlan") or {}),
+            "nativeRulePlannerTopology": dict(payload.get("nativeRulePlannerTopology") or {}),
+            "nativeRuleEvidenceReadIndex": dict(payload.get("nativeRuleEvidenceReadIndex") or {}),
             "activeScopeCount": len(generations),
             "manifestMarkerId": str(payload.get("id") or ""),
+            "marketScopeObservedAt": dict(payload.get("marketScopeObservedAt") or {}),
+            "marketWorldProjectionMode": str(payload.get("marketWorldProjectionMode") or ""),
         }
 
-    def active_abox_pointer_rows(self, world_id: str = "") -> List[Dict[str, object]]:
+    def active_abox_pointer_rows(self, world_id: str = "", limit: int = 0) -> List[Dict[str, object]]:
         query = (
             "match $n isa ontology-node, "
             "has ontology-id $id, "
@@ -4735,6 +5843,7 @@ class TypeDBOntologyGraphRepository(GraphStoreOntologyRowMapperMixin, ScopedABox
             + "has ontology-snapshot-id $snapshotId, "
             "has ontology-updated-at $updatedAt, "
             "has ontology-json $json;"
+            + typeql_limit_clause(limit)
         )
         return self.entity_rows_from_typeql(
             self.read_rows(
@@ -4793,7 +5902,7 @@ class TypeDBOntologyGraphRepository(GraphStoreOntologyRowMapperMixin, ScopedABox
     def active_abox_metadata(self, world_id: str = "") -> Dict[str, object]:
         try:
             manifests = sorted(
-                self.active_worldview_manifest_pointer_rows(world_id),
+                self.active_worldview_manifest_pointer_rows(world_id, limit=1),
                 key=lambda row: (str(row.get("updatedAt") or ""), str(row.get("id") or "")),
                 reverse=True,
             )
@@ -4810,13 +5919,26 @@ class TypeDBOntologyGraphRepository(GraphStoreOntologyRowMapperMixin, ScopedABox
                 or ""
             ).strip()
             try:
-                markers = {
-                    str(item.get("worldviewManifestId") or item.get("aboxSnapshotId") or item.get("snapshotId") or "").strip(): item
-                    for item in self.worldview_manifest_marker_rows(world_id)
-                }
+                markers = self.worldview_manifest_marker_rows(
+                    world_id,
+                    manifest_id=manifest_id,
+                    limit=1,
+                )
             except Exception:
-                markers = {}
-            metadata = self.scoped_abox_metadata_from_manifest_marker(markers.get(manifest_id) or {})
+                markers = []
+            marker = next(
+                (
+                    item for item in markers
+                    if str(
+                        item.get("worldviewManifestId")
+                        or item.get("aboxSnapshotId")
+                        or item.get("snapshotId")
+                        or ""
+                    ).strip() == manifest_id
+                ),
+                markers[0] if markers else {},
+            )
+            metadata = self.scoped_abox_metadata_from_manifest_marker(marker)
             if metadata:
                 metadata["activePointerId"] = str(pointer.get("id") or "")
                 metadata.setdefault("worldId", str(world_id or pointer.get("worldId") or ""))
@@ -4830,25 +5952,25 @@ class TypeDBOntologyGraphRepository(GraphStoreOntologyRowMapperMixin, ScopedABox
                 "activePointerId": str(pointer.get("id") or ""),
                 "reason": "Active Worldview Manifest pointer has no complete manifest marker.",
             }
-        markers = sorted(
-            self.abox_projection_marker_rows(world_id),
-            key=lambda row: (str(row.get("updatedAt") or ""), str(row.get("id") or "")),
-            reverse=True,
-        )
-        markers_by_snapshot = {
-            str(item.get("aboxSnapshotId") or item.get("snapshotId") or "").strip(): item
-            for item in markers
-            if str(item.get("aboxSnapshotId") or item.get("snapshotId") or "").strip()
-        }
         pointers = sorted(
-            self.active_abox_pointer_rows(world_id),
+            self.active_abox_pointer_rows(world_id, limit=1),
             key=lambda row: (str(row.get("updatedAt") or ""), str(row.get("id") or "")),
             reverse=True,
         )
         if pointers:
             pointer = pointers[0]
             snapshot_id = str(pointer.get("aboxSnapshotId") or pointer.get("snapshotId") or "").strip()
-            marker = markers_by_snapshot.get(snapshot_id)
+            try:
+                markers = self.abox_projection_marker_rows(world_id, snapshot_id=snapshot_id, limit=1)
+            except Exception:
+                markers = []
+            marker = next(
+                (
+                    item for item in markers
+                    if str(item.get("aboxSnapshotId") or item.get("snapshotId") or "").strip() == snapshot_id
+                ),
+                markers[0] if markers else None,
+            )
             if marker:
                 metadata = self.abox_metadata_from_marker(marker)
                 if metadata:
@@ -4863,6 +5985,11 @@ class TypeDBOntologyGraphRepository(GraphStoreOntologyRowMapperMixin, ScopedABox
                 "activePointerId": str(pointer.get("id") or ""),
                 "reason": "Active ABox pointer has no complete candidate marker.",
             }
+        markers = sorted(
+            self.abox_projection_marker_rows(world_id, limit=1),
+            key=lambda row: (str(row.get("updatedAt") or ""), str(row.get("id") or "")),
+            reverse=True,
+        )
         if markers:
             newest = self.abox_metadata_from_marker(markers[0])
             return {
@@ -5037,33 +6164,45 @@ class TypeDBOntologyGraphRepository(GraphStoreOntologyRowMapperMixin, ScopedABox
                 'has ontology-kind "inference-generation-candidate", '
                 + world_clause
                 + "has ontology-snapshot-id $snapshotId, "
-                + "has ontology-updated-at $updatedAt;"
+                + "has ontology-updated-at $updatedAt, "
+                + "has ontology-json $json;"
             ),
-            ["snapshotId", "updatedAt"],
+            ["snapshotId", "updatedAt", "json"],
         )
         node_rows = self.read_rows(
             (
                 'match $n isa ontology-node, has ontology-box "InferenceBox", '
                 + world_clause
                 + "has ontology-snapshot-id $snapshotId, "
-                + "has ontology-updated-at $updatedAt;"
+                + "has ontology-updated-at $updatedAt, "
+                + "has ontology-json $json;"
             ),
-            ["snapshotId", "updatedAt"],
+            ["snapshotId", "updatedAt", "json"],
         )
         relation_rows = self.read_rows(
             (
                 'match $r isa ontology-assertion, has ontology-box "InferenceBox", '
                 + world_clause
                 + "has ontology-snapshot-id $snapshotId, "
-                + "has ontology-updated-at $updatedAt;"
+                + "has ontology-updated-at $updatedAt, "
+                + "has ontology-json $json;"
             ),
-            ["snapshotId", "updatedAt"],
+            ["snapshotId", "updatedAt", "json"],
         )
         indexed_rows = [
-            {"snapshotId": row.get("snapshotId"), "updatedAt": row.get("updatedAt")}
+            {
+                "snapshotId": row.get("snapshotId"),
+                "updatedAt": row.get("updatedAt"),
+                "propertiesJson": row.get("json"),
+            }
             for row in node_rows
         ] + [
-            {"snapshotId": row.get("snapshotId"), "updatedAt": row.get("updatedAt"), "relationType": "ontology-assertion"}
+            {
+                "snapshotId": row.get("snapshotId"),
+                "updatedAt": row.get("updatedAt"),
+                "propertiesJson": row.get("json"),
+                "relationType": "ontology-assertion",
+            }
             for row in relation_rows
         ]
         records = inference_generation_records(indexed_rows, [])
@@ -5397,13 +6536,13 @@ class TypeDBOntologyGraphRepository(GraphStoreOntologyRowMapperMixin, ScopedABox
         raw = dict(configured_settings or {}).get("typedbABoxRelationBatchSize")
         parsed = number_or_none(raw)
         if parsed is None:
-            parsed = 4
-        # Every active ABox endpoint is now matched through its generation-
-        # scoped, @unique storage identity. Small independent batches therefore
-        # have a bounded one-row lookup per endpoint rather than the legacy
-        # public-ID cross product. Eight edges keeps one TypeQL statement below
-        # the planner cliff while avoiding thousands of single-edge writes.
-        return max(1, min(8, int(parsed)))
+            parsed = 1
+        # A live replay on TypeDB 3.12 showed the planner spending minutes in
+        # a beam-search plan for even a small group of independent endpoint
+        # matches. A relation write is therefore one edge per TypeQL query.
+        # Queries remain grouped into short write transactions, so this avoids
+        # the planner cross product without one commit per edge.
+        return max(1, min(1, int(parsed)))
 
     def graph_write_transaction_query_count(self, settings: Dict[str, object] = None) -> int:
         raw = (settings or runtime_settings()).get("typedbGraphWriteTransactionQueryCount")
@@ -5431,13 +6570,11 @@ class TypeDBOntologyGraphRepository(GraphStoreOntologyRowMapperMixin, ScopedABox
         raw = (settings or runtime_settings()).get("typedbInferenceBoxRelationBatchSize")
         parsed = number_or_none(raw)
         if parsed is None:
-            parsed = 4
-        # InferenceBox relations are more connected than ABox facts: one stock
-        # can point to several traces, decisions, and explanation nodes. A
-        # large multi-relation TypeQL insert lets the planner expand repeated
-        # endpoint matches together. Four relations keeps queries below that
-        # cross-product cliff while still avoiding one transaction per edge.
-        return max(1, min(4, int(parsed)))
+            parsed = 1
+        # Inference traces are denser than ABox facts, so grouped endpoint
+        # matches are particularly costly to compile. Keep the same safe
+        # single-edge plan used by the live ABox writer.
+        return max(1, min(1, int(parsed)))
 
     def box_instance_exists(self, driver, imported, box: str, type_label: str) -> bool:
         _TypeDB, _Credentials, _DriverOptions, _DriverTlsConfig, TransactionType = imported[0]
@@ -5471,6 +6608,129 @@ class TypeDBOntologyGraphRepository(GraphStoreOntologyRowMapperMixin, ScopedABox
         )
         with driver.transaction(self.database, TransactionType.READ) as tx:
             return bool(self.read_rows_in_transaction(tx, query, [], label="typedb.abox-candidate-exists"))
+
+    def box_manifest_instance_exists(
+        self,
+        driver,
+        imported,
+        box: str,
+        manifest_id: str,
+        type_label: str,
+        world_id: str = "",
+    ) -> bool:
+        _TypeDB, _Credentials, _DriverOptions, _DriverTlsConfig, TransactionType = imported[0]
+        clean_world_id = str(world_id or "").strip()
+        query = (
+            "match $item isa " + str(type_label)
+            + ", has ontology-box " + typedb_string(box)
+            + ", has ontology-manifest-id " + typedb_string(manifest_id)
+            + (", has ontology-world-id " + typedb_string(clean_world_id) if clean_world_id else "")
+            + "; limit 1;"
+        )
+        with driver.transaction(self.database, TransactionType.READ) as tx:
+            return bool(self.read_rows_in_transaction(tx, query, [], label="typedb.abox-manifest-candidate-exists"))
+
+    def box_manifest_delete_batch_query(
+        self,
+        box: str,
+        manifest_id: str,
+        type_label: str,
+        batch_size: int,
+        world_id: str = "",
+    ) -> str:
+        variable = "$r" if str(type_label) == "ontology-assertion" else "$n"
+        clean_world_id = str(world_id or "").strip()
+        return (
+            "match " + variable + " isa " + str(type_label)
+            + ", has ontology-box " + typedb_string(box)
+            + ", has ontology-manifest-id " + typedb_string(manifest_id)
+            + (", has ontology-world-id " + typedb_string(clean_world_id) if clean_world_id else "")
+            + "; limit " + str(max(1, int(batch_size or 1))) + "; delete " + variable + ";"
+        )
+
+    def delete_box_manifest_rows_in_batches(
+        self,
+        driver,
+        imported,
+        box: str,
+        manifest_id: str,
+        batch_size: int = None,
+        max_batches: int = None,
+        world_id: str = "",
+    ) -> Dict[str, object]:
+        """Clear a retry candidate by its exact Manifest provenance.
+
+        Scoped generations can be shared by retained Manifests, so a realtime
+        retry must not enumerate or delete every generation that happens to
+        have the same scope fingerprint. ``ontology-manifest-id`` identifies
+        only the incomplete candidate being retried, including its marker.
+        """
+        clean_box = str(box or "").strip()
+        clean_manifest_id = str(manifest_id or "").strip()
+        clean_world_id = str(world_id or "").strip()
+        if not clean_box or not clean_manifest_id:
+            return {"status": "skipped", "deletedBatchCount": 0}
+        _TypeDB, _Credentials, _DriverOptions, _DriverTlsConfig, TransactionType = imported[0]
+        configured_batch_size = self.abox_delete_batch_size() if batch_size is None else int(batch_size or 0)
+        safe_batch_size = max(1, min(5000, configured_batch_size))
+        safe_max_batches = None if max_batches is None else max(0, int(max_batches or 0))
+        deleted_batches = 0
+        remaining_types: List[str] = []
+        for type_label in ["ontology-assertion", "ontology-node"]:
+            while self.box_manifest_instance_exists(
+                driver,
+                imported,
+                clean_box,
+                clean_manifest_id,
+                type_label,
+                world_id=clean_world_id,
+            ):
+                if safe_max_batches is not None and deleted_batches >= safe_max_batches:
+                    remaining_types.append(type_label)
+                    break
+                query = self.box_manifest_delete_batch_query(
+                    clean_box,
+                    clean_manifest_id,
+                    type_label,
+                    safe_batch_size,
+                    world_id=clean_world_id,
+                )
+
+                def delete_batch():
+                    with typedb_operation_timeout(self.write_operation_timeout_seconds(), "TypeDB ABox manifest candidate delete batch"):
+                        with driver.transaction(
+                            self.database,
+                            TransactionType.WRITE,
+                            options=self.write_transaction_options(),
+                        ) as tx:
+                            tx.query(query).resolve()
+                            tx.commit()
+
+                self.with_typedb_retries(delete_batch)
+                deleted_batches += 1
+            if remaining_types:
+                break
+        if safe_max_batches is not None and deleted_batches >= safe_max_batches:
+            for type_label in ["ontology-assertion", "ontology-node"]:
+                if self.box_manifest_instance_exists(
+                    driver,
+                    imported,
+                    clean_box,
+                    clean_manifest_id,
+                    type_label,
+                    world_id=clean_world_id,
+                ) and type_label not in remaining_types:
+                    remaining_types.append(type_label)
+        return {
+            "status": "partial" if remaining_types else "ok",
+            "ontologyBox": clean_box,
+            "worldviewManifestId": clean_manifest_id,
+            "worldId": clean_world_id,
+            "batchSize": safe_batch_size,
+            "maxBatches": safe_max_batches,
+            "deletedBatchCount": deleted_batches,
+            "remainingRowTypes": remaining_types,
+        }
 
     def box_snapshot_delete_batch_query(
         self,
@@ -6269,6 +7529,7 @@ class TypeDBOntologyGraphRepository(GraphStoreOntologyRowMapperMixin, ScopedABox
             }
         candidate_id = str(pending.get("candidateAboxSnapshotId") or "").strip()
         previous_id = str(pending.get("previousAboxSnapshotId") or "").strip()
+        target_symbols = clean_symbols_from_payload(pending.get("targetSymbols") or [])
         active = self.active_abox_metadata(world_id)
         active_id = str(active.get("aboxSnapshotId") or "").strip()
         activation_status = str(pending.get("activationStatus") or "pending-native-inference")
@@ -6321,10 +7582,52 @@ class TypeDBOntologyGraphRepository(GraphStoreOntologyRowMapperMixin, ScopedABox
                 "control": control,
                 "reason": "" if str(control.get("status") or "") == "ok" else str(control.get("reason") or "ABox control clear failed."),
             }
+        if not target_symbols and not previous_id:
+            # A journal with no target subject cannot ever prove that a
+            # native InferenceBox covered a requested investment decision.
+            # Keeping it pending instead blocks every successor Manifest and
+            # used to tempt recovery into an unbounded historical read. The
+            # candidate is already the verified active Manifest, so replacing
+            # its control pointer without a pending journal is safe: no ABox
+            # fact, scope generation, or prior decision is removed.
+            finalization = typedb_call_for_world(
+                self.finalize_abox_generation,
+                candidate_id,
+                previous_id,
+                world_id=world_id,
+            )
+            finalized = str(finalization.get("status") or "") == "ok"
+            return {
+                "configured": True,
+                "status": "finalized-empty-target" if finalized else "error",
+                "graphStore": "typedb",
+                "candidateAboxSnapshotId": candidate_id,
+                "previousAboxSnapshotId": previous_id,
+                "pendingActivation": pending,
+                "finalization": finalization,
+                "reason": (
+                    "Cleared an active ABox activation journal with no requested target symbols; the next bounded cycle may stage a successor Manifest."
+                    if finalized
+                    else str(finalization.get("reason") or "ABox activation journal clear failed.")
+                ),
+            }
+        if not target_symbols:
+            return {
+                "configured": True,
+                "status": "invalid-empty-target",
+                "graphStore": "typedb",
+                "candidateAboxSnapshotId": candidate_id,
+                "previousAboxSnapshotId": previous_id,
+                "pendingActivation": pending,
+                "reason": (
+                    "Pending ABox activation lost its target symbols after a predecessor existed. "
+                    "Recovery is blocked to avoid an unbounded InferenceBox read or an unsafe rollback."
+                ),
+            }
         try:
             inferencebox = typedb_call_for_world(
                 self.inferencebox_snapshot,
-                symbols=list(pending.get("targetSymbols") or []),
+                symbols=target_symbols,
                 limit=80,
                 world_id=world_id,
             )
@@ -6340,7 +7643,7 @@ class TypeDBOntologyGraphRepository(GraphStoreOntologyRowMapperMixin, ScopedABox
         if self.inferencebox_matches_pending_abox_activation(
             inferencebox,
             candidate_id,
-            pending.get("targetSymbols") or [],
+            target_symbols,
         ):
             finalization = typedb_call_for_world(
                 self.finalize_abox_generation,
@@ -8322,6 +9625,9 @@ relation ontology-assertion,
         target_symbols: Iterable[str] = None,
         use_schema_functions: bool = True,
         world_id: str = "",
+        planner_topology: Dict[str, object] = None,
+        preflight_graph: PortfolioOntology = None,
+        preflight_incoming_relations_complete: bool = False,
     ) -> Dict[str, object]:
         rules = list(rules or [])
         clean_symbols = clean_symbols_from_payload(list(target_symbols or []))
@@ -8352,74 +9658,58 @@ relation ontology-assertion,
         try:
             relation_types_by_symbol: Dict[str, Iterable[str]] = {}
             rule_context: Dict[str, object] = {}
-            preflight_graph = None
             if clean_symbols:
-                preflight_sources = []
-                try:
-                    rule_context = self.active_abox_rule_context(clean_symbols, world_id)
-                    if str(rule_context.get("status") or "") != "ok":
-                        raise RuntimeError("TypeDB active ABox rule context is unavailable.")
-                    relation_types_by_symbol = dict(rule_context.get("relationTypesBySymbol") or {})
-                    source_ids_by_symbol = dict(rule_context.get("sourceIdsBySymbol") or {})
-                    preflight_sources = [
-                        {
-                            "sourceId": str(source_id or "").strip(),
-                            "sourceLabel": str(symbol or "").upper().strip(),
-                        }
+                topology = normalize_native_rule_planner_topology(
+                    planner_topology,
+                    target_symbols=clean_symbols,
+                ) if planner_topology else {}
+                if str(topology.get("status") or "") == "ok":
+                    relation_types_by_symbol = dict(topology.get("relationTypesBySymbol") or {})
+                    source_ids_by_symbol = dict(topology.get("sourceIdsBySymbol") or {})
+                    source_count = sum(
+                        1
                         for symbol in clean_symbols
                         for source_id in source_ids_by_symbol.get(symbol, []) or []
                         if str(source_id or "").strip()
-                    ]
-                except Exception as error:  # noqa: BLE001 - planner topology is an optimization, never a reason to stall all rule functions.
+                    )
                     rule_context = {
-                        "status": "degraded",
+                        "status": "ok",
                         "symbols": clean_symbols,
-                        "reason": str(error)[:220],
-                        "relationTypesBySymbol": {},
-                        "preflightStatus": "degraded",
+                        "source": "persisted-projection-graph-topology",
+                        "plannerTopologyFingerprint": str(topology.get("fingerprint") or ""),
+                        "relationTypesBySymbol": relation_types_by_symbol,
+                        "sourceIdsBySymbol": source_ids_by_symbol,
+                        "preflightStatus": "persisted-projection-topology",
+                        "preflightSourceCount": source_count,
                     }
-                if preflight_sources:
+                else:
                     try:
-                        # This graph is a read-only execution index. It can
-                        # prove that a required RuleBox clause is impossible,
-                        # but it never establishes an inference; every
-                        # surviving rule is still evaluated by its TypeDB
-                        # schema function against the active Manifest.
-                        preflight_graph = self.load_graph_for_native_matches(
-                            {"matches": preflight_sources},
-                            rules,
-                            include_all_rule_relation_types=True,
-                            # Only two current RuleBox rules need inbound
-                            # edges. Keep those candidates for TypeDB rather
-                            # than loading a second, expensive endpoint scan
-                            # just to preflight them.
-                            include_incoming_relations=False,
-                            world_id=world_id,
+                        rule_context = self.active_abox_rule_context(clean_symbols, world_id)
+                        if str(rule_context.get("status") or "") != "ok":
+                            raise RuntimeError("TypeDB active ABox rule context is unavailable.")
+                        relation_types_by_symbol = dict(rule_context.get("relationTypesBySymbol") or {})
+                        source_ids_by_symbol = dict(rule_context.get("sourceIdsBySymbol") or {})
+                        source_count = sum(
+                            1
+                            for symbol in clean_symbols
+                            for source_id in source_ids_by_symbol.get(symbol, []) or []
+                            if str(source_id or "").strip()
                         )
-                        preflight_manifest_ids = sorted({
-                            str((item.properties or {}).get("worldviewManifestId") or "").strip()
-                            for item in preflight_graph.entities
-                            if str(item.kind or "") == "stock"
-                            and str((item.properties or {}).get("worldviewManifestId") or "").strip()
-                        })
+                        # The fallback preserves compatibility for a manifest
+                        # written before structural planner topology existed.
+                        # TypeDB functions remain the sole rule evaluator.
                         rule_context.update({
-                            "preflightStatus": "ok",
-                            "preflightSourceCount": len(preflight_sources),
-                            "preflightEntityCount": len(preflight_graph.entities),
-                            "preflightRelationCount": len(preflight_graph.relations),
-                            "preflightWorldviewManifestIds": preflight_manifest_ids,
+                            "preflightStatus": "typedb-active-abox-topology-fallback",
+                            "preflightSourceCount": source_count,
                         })
-                    except Exception as error:  # noqa: BLE001 - preflight is optional; retain the verified topology.
-                        rule_context.update({
+                    except Exception as error:  # noqa: BLE001 - planner topology is an optimization, never a reason to stall all rule functions.
+                        rule_context = {
+                            "status": "degraded",
+                            "symbols": clean_symbols,
+                            "reason": str(error)[:220],
+                            "relationTypesBySymbol": {},
                             "preflightStatus": "degraded",
-                            "preflightReason": str(error)[:220],
-                        })
-                        preflight_graph = None
-                elif str(rule_context.get("preflightStatus") or "") != "degraded":
-                    rule_context.update({
-                        "preflightStatus": "skipped-no-source",
-                        "preflightSourceCount": 0,
-                    })
+                        }
             execution_plan = typedb_native_rule_execution_plan(
                 rules,
                 clean_symbols,
@@ -8430,8 +9720,12 @@ relation ontology-assertion,
                 # judgement.  Symbol scheduling happens before this method;
                 # TypeDB must evaluate every applicable rule for that symbol.
                 0,
+                # A preflight graph is accepted only when the caller read it
+                # through the active Manifest's exact storage index. It can
+                # prove an impossible required condition and skip that TypeDB
+                # function, but it never accepts a match or makes a decision.
                 preflight_graph=preflight_graph,
-                preflight_incoming_relations_complete=False,
+                preflight_incoming_relations_complete=preflight_incoming_relations_complete,
             )
             for item in execution_plan.get("skippedEntries") or []:
                 skipped_rules.append({
@@ -8668,6 +9962,11 @@ relation ontology-assertion,
 
             self.with_typedb_retries(operation)
             if query_failures or execution_budget_exhausted or execution_incomplete:
+                incomplete_diagnostic = typedb_native_rule_execution_incomplete_diagnostic(
+                    query_failures,
+                    skipped_rules,
+                    execution_budget_exhausted=execution_budget_exhausted,
+                )
                 return {
                     "status": "partial",
                     "graphStore": "typedb",
@@ -8679,8 +9978,9 @@ relation ontology-assertion,
                     "executedRuleCount": len(executed_rules),
                     "skippedRuleCount": len(skipped_rules),
                     "matches": matches,
-                    "reasonCode": "typedbNativeRuleExecutionPartial",
-                    "reason": "TypeDB native rule execution did not complete for every applicable rule.",
+                    "reasonCode": str(incomplete_diagnostic.get("reasonCode") or "typedbNativeRuleExecutionPartial"),
+                    "reason": str(incomplete_diagnostic.get("reason") or "TypeDB native rule execution did not complete for every applicable rule."),
+                    "blockingRule": dict(incomplete_diagnostic.get("blockingRule") or {}),
                     "readTransactionCount": read_transaction_count,
                     "readQueryCount": read_call_count,
                     "executedRules": executed_rules[:40],
@@ -9233,8 +10533,21 @@ relation ontology-assertion,
                         )
                         with typedb_operation_timeout(timeout, "TypeDB initial schema function sync"):
                             with driver.transaction(self.database, TransactionType.SCHEMA) as tx:
-                                for definition in definitions_batch:
-                                    tx.query(str(definition.get("define") or "")).resolve()
+                                # A schema transaction alone is not enough to
+                                # avoid repeated TypeDB compilation: issuing
+                                # one ``define`` query per function still
+                                # rebuilds the growing function graph for
+                                # every item. New content-addressed functions
+                                # have no duplicate race, so compile the full
+                                # batch as one TypeQL definition statement.
+                                bodies = [
+                                    str(definition.get("body") or "").strip()
+                                    for definition in definitions_batch
+                                    if str(definition.get("body") or "").strip()
+                                ]
+                                if len(bodies) != len(definitions_batch):
+                                    raise ValueError("TypeDB native-rule batch contains an empty schema function body.")
+                                tx.query("define\n" + "\n".join(bodies)).resolve()
                                 tx.commit()
                         return [
                             {
@@ -9579,6 +10892,27 @@ relation ontology-assertion,
                 "aboxMetadata": abox_metadata,
                 "typedbQueryMetrics": self.query_metrics_snapshot(),
             }
+        planner_topology = typedb_native_rule_planner_topology_for_execution(
+            abox_metadata,
+            payload.get("nativeRulePlannerTopology") if isinstance(payload.get("nativeRulePlannerTopology"), dict) else {},
+            target_symbols=target_symbols,
+        )
+        scoped_active_abox = (
+            str(abox_metadata.get("scopedAboxManifestVersion") or "") == SCOPED_ABOX_MANIFEST_VERSION
+        )
+        evidence_read_index = (
+            typedb_native_rule_evidence_read_index_for_execution(
+                abox_metadata,
+                target_symbols=target_symbols,
+            )
+            if scoped_active_abox
+            else {
+                "status": "legacy",
+                "source": "legacy-active-membership",
+                "reason": "Active ABox has not yet migrated to a scoped Manifest evidence index.",
+                "index": {},
+            }
+        )
         snapshot = self.rulebox_snapshot()
         rules = snapshot.get("rules") if isinstance(snapshot.get("rules"), list) else []
         rulebox_metadata = rulebox_runtime_metadata(rules)
@@ -9670,6 +11004,14 @@ relation ontology-assertion,
                 "nativeRuleSelectionDeferredCount": len(rule_selection.get("deferredRuleIds") or []),
                 "nativeRuleSelectionExecutedRuleIds": list(rule_selection.get("selectedRuleIds") or [])[:80],
                 "nativeRuleSelectionDeferredRuleIds": list(rule_selection.get("deferredRuleIds") or [])[:80],
+                "nativeRulePlannerTopologyStatus": str(planner_topology.get("status") or ""),
+                "nativeRulePlannerTopologySource": str(planner_topology.get("source") or ""),
+                "nativeRulePlannerTopologyFingerprint": str(planner_topology.get("fingerprint") or ""),
+                "nativeRulePlannerTopologyReason": str(planner_topology.get("reason") or "")[:220],
+                "nativeRuleEvidenceReadIndexStatus": str(evidence_read_index.get("status") or ""),
+                "nativeRuleEvidenceReadIndexSource": str(evidence_read_index.get("source") or ""),
+                "nativeRuleEvidenceReadIndexFingerprint": str(evidence_read_index.get("fingerprint") or ""),
+                "nativeRuleEvidenceReadIndexReason": str(evidence_read_index.get("reason") or "")[:220],
                 "pythonCompatibilityReasonerUsed": False,
             })
             if str(function_sync_result.get("status") or "") != "ok":
@@ -9696,12 +11038,109 @@ relation ontology-assertion,
                     "typedbQueryMetrics": self.query_metrics_snapshot(),
                     **runtime_rulebox_metadata,
                 }
+            # Read a bounded, exact ABox slice before invoking schema
+            # functions when the active Manifest can prove the physical rows
+            # involved. This is only a negative preflight: it removes a rule
+            # when one of its required facts is provably impossible. TypeDB
+            # still evaluates every surviving rule and remains the sole
+            # investment-rule evaluator.
+            native_preflight = {
+                "status": "not-available",
+                "mode": "none",
+                "reason": "Active Manifest has no verified exact evidence index.",
+                "sourceCount": 0,
+                "entityCount": 0,
+                "relationCount": 0,
+            }
+            preflight_graph = None
+            preflight_incoming_relations_complete = False
+            if (
+                target_symbols
+                and str(evidence_read_index.get("status") or "") == "verified"
+                and str(planner_topology.get("status") or "") == "verified"
+            ):
+                source_ids_by_symbol = dict(planner_topology.get("sourceIdsBySymbol") or {})
+                preflight_source_ids = sorted({
+                    str(source_id or "").strip()
+                    for symbol in target_symbols
+                    for source_id in source_ids_by_symbol.get(str(symbol or "").upper().strip(), []) or []
+                    if str(source_id or "").strip()
+                })
+                native_preflight["sourceCount"] = len(preflight_source_ids)
+                if preflight_source_ids:
+                    try:
+                        preflight_graph_candidate = typedb_call_for_world(
+                            self.load_graph_for_native_matches,
+                            {"matches": [
+                                {"sourceId": source_id, "sourceLabel": symbol_from_subject(source_id)}
+                                for source_id in preflight_source_ids
+                            ]},
+                            execution_rules,
+                            include_all_rule_relation_types=True,
+                            include_incoming_relations=True,
+                            evidence_read_index=evidence_read_index,
+                            world_id=world_id,
+                        )
+                        preflight_read = dict(
+                            getattr(preflight_graph_candidate, "worldview", {}).get("nativeEvidenceRead") or {}
+                        )
+                        loaded_source_ids = {
+                            str(entity.entity_id or "").strip()
+                            for entity in getattr(preflight_graph_candidate, "entities", []) or []
+                            if str(entity.entity_id or "").strip() in preflight_source_ids
+                        }
+                        native_preflight.update({
+                            "status": str(preflight_read.get("status") or "incomplete"),
+                            "mode": str(preflight_read.get("mode") or "manifest-storage-index"),
+                            "reason": str(preflight_read.get("reason") or "")[:220],
+                            "entityCount": len(getattr(preflight_graph_candidate, "entities", []) or []),
+                            "relationCount": len(getattr(preflight_graph_candidate, "relations", []) or []),
+                            "loadedSourceCount": len(loaded_source_ids),
+                        })
+                        if (
+                            native_preflight["status"] == "ok"
+                            and set(preflight_source_ids).issubset(loaded_source_ids)
+                        ):
+                            preflight_graph = preflight_graph_candidate
+                            preflight_incoming_relations_complete = True
+                        elif native_preflight["status"] == "ok":
+                            native_preflight.update({
+                                "status": "incomplete",
+                                "reason": "Manifest-indexed preflight did not return every target stock.",
+                            })
+                    except Exception as error:  # noqa: BLE001 - an optimization must never weaken native correctness.
+                        native_preflight.update({
+                            "status": "error",
+                            "mode": "manifest-storage-index",
+                            "reason": "Manifest-indexed preflight lookup failed: " + str(error)[:180],
+                        })
+                else:
+                    native_preflight.update({
+                        "status": "incomplete",
+                        "mode": "manifest-storage-index",
+                        "reason": "Manifest planner topology has no target stock source IDs.",
+                    })
+            runtime_rulebox_metadata.update({
+                "nativeRulePreflightStatus": str(native_preflight.get("status") or ""),
+                "nativeRulePreflightMode": str(native_preflight.get("mode") or ""),
+                "nativeRulePreflightReason": str(native_preflight.get("reason") or "")[:220],
+                "nativeRulePreflightSourceCount": int(number_or_none(native_preflight.get("sourceCount")) or 0),
+                "nativeRulePreflightEntityCount": int(number_or_none(native_preflight.get("entityCount")) or 0),
+                "nativeRulePreflightRelationCount": int(number_or_none(native_preflight.get("relationCount")) or 0),
+            })
             native_match_result = typedb_call_for_world(
                 self.match_typedb_native_rules,
                 execution_rules,
                 target_symbols=target_symbols,
                 use_schema_functions=True,
                 world_id=world_id,
+                planner_topology=(
+                    dict(planner_topology.get("topology") or {})
+                    if str(planner_topology.get("status") or "") == "verified"
+                    else None
+                ),
+                preflight_graph=preflight_graph,
+                preflight_incoming_relations_complete=preflight_incoming_relations_complete,
             )
             native_query_used = str(native_match_result.get("status") or "") == "ok"
             runtime_rulebox_metadata.update({
@@ -9739,11 +11178,51 @@ relation ontology-assertion,
                     "typedbQueryMetrics": self.query_metrics_snapshot(),
                     **runtime_rulebox_metadata,
                 }
+            native_matches = [
+                item for item in native_match_result.get("matches") or []
+                if isinstance(item, dict) and str(item.get("sourceId") or "").strip()
+            ]
+            if scoped_active_abox and native_matches and str(evidence_read_index.get("status") or "") != "verified":
+                return {
+                    "configured": True,
+                    "status": "evidence-read-index-unavailable",
+                    "graphStore": "typedb",
+                    "source": "typedbNativeRule",
+                    "reasoningMode": TYPEDB_NATIVE_BLOCKED_MODE,
+                    "reasonCode": "typedbEvidenceReadIndexUnavailable",
+                    "reason": (
+                        "활성 ABox Manifest에 현재 근거 조회용 인덱스가 없어 TypeDB 규칙 결과를 안전하게 "
+                        "설명 그래프로 만들지 않았습니다. 다음 ABox 재투영에서 인덱스를 생성한 뒤 다시 실행합니다. "
+                        + str(evidence_read_index.get("reason") or "")[:120]
+                    ),
+                    "statementCount": 0,
+                    "relationTypes": [],
+                    "nativeTypeDbReasoningUsed": False,
+                    "typedbNativeFunctionReasoningUsed": False,
+                    "typedbSchemaFunctionUsed": bool(function_sync_result.get("status") == "ok"),
+                    "typedbBootstrapReasoningUsed": False,
+                    "pythonBootstrapDisabled": True,
+                    "preservedPreviousInference": True,
+                    "requiresAboxReprojection": True,
+                    "clearResult": clear_result,
+                    "nativeReasoningProfile": native_profile,
+                    "functionSyncResult": function_sync_result,
+                    "nativeMatchResult": native_match_result,
+                    "ruleboxMetadata": runtime_rulebox_metadata,
+                    "typedbQueryMetrics": self.query_metrics_snapshot(),
+                    **runtime_rulebox_metadata,
+                }
+            graph_load_kwargs = (
+                {"evidence_read_index": evidence_read_index}
+                if scoped_active_abox
+                else {}
+            )
             graph = typedb_call_for_world(
                 self.load_graph_for_native_matches,
                 native_match_result,
                 execution_rules,
                 world_id=world_id,
+                **graph_load_kwargs,
             )
             graph.worldview.update({
                 "worldId": world_id,
@@ -9762,18 +11241,60 @@ relation ontology-assertion,
                 item for item in graph.entities
                 if str(item.entity_id or "").strip() in matched_source_ids
             ]
-            scoped_active_abox = (
-                str(abox_metadata.get("scopedAboxManifestVersion") or "") == SCOPED_ABOX_MANIFEST_VERSION
-            )
+            native_evidence_read = dict(graph.worldview.get("nativeEvidenceRead") or {})
+            if not native_evidence_read and not scoped_active_abox:
+                # Compatibility graph-store doubles and the pre-scoped ABox
+                # reader have no Manifest index contract. Production legacy
+                # reads still use ``load_graph_for_native_matches`` above,
+                # which records its own diagnostics.
+                native_evidence_read = {
+                    "status": "ok",
+                    "mode": "legacy-compatibility",
+                    "reason": "",
+                    "loadedSourceCount": len(source_entities),
+                    "loadedRelationCount": len(graph.relations),
+                }
+            runtime_rulebox_metadata.update({
+                "nativeEvidenceReadStatus": str(native_evidence_read.get("status") or ""),
+                "nativeEvidenceReadMode": str(native_evidence_read.get("mode") or ""),
+                "nativeEvidenceReadLoadedSourceCount": int(number_or_none(native_evidence_read.get("loadedSourceCount")) or 0),
+                "nativeEvidenceReadLoadedRelationCount": int(number_or_none(native_evidence_read.get("loadedRelationCount")) or 0),
+                "nativeEvidenceReadReason": str(native_evidence_read.get("reason") or "")[:220],
+            })
+            if native_matches and str(native_evidence_read.get("status") or "") != "ok":
+                return {
+                    "configured": True,
+                    "status": "evidence-read-failed",
+                    "graphStore": "typedb",
+                    "source": "typedbNativeRule",
+                    "reasoningMode": TYPEDB_NATIVE_BLOCKED_MODE,
+                    "reasonCode": "typedbEvidenceReadFailed",
+                    "reason": "TypeDB 규칙 결과의 근거 사실을 완전하게 읽지 못해 새 투자 판단을 차단했습니다. " + str(native_evidence_read.get("reason") or "")[:180],
+                    "statementCount": 0,
+                    "relationTypes": [],
+                    "nativeTypeDbReasoningUsed": False,
+                    "typedbNativeFunctionReasoningUsed": False,
+                    "typedbSchemaFunctionUsed": bool(function_sync_result.get("status") == "ok"),
+                    "typedbBootstrapReasoningUsed": False,
+                    "pythonBootstrapDisabled": True,
+                    "preservedPreviousInference": True,
+                    "clearResult": clear_result,
+                    "nativeReasoningProfile": native_profile,
+                    "functionSyncResult": function_sync_result,
+                    "nativeMatchResult": native_match_result,
+                    "ruleboxMetadata": runtime_rulebox_metadata,
+                    "typedbQueryMetrics": self.query_metrics_snapshot(),
+                    **runtime_rulebox_metadata,
+                }
             active_abox_generation_id = typedb_abox_inference_generation_id(abox_metadata)
             if scoped_active_abox:
                 # Individual scopes intentionally have different immutable
                 # generation IDs and may be reused by a later Manifest. The
                 # JSON provenance on a reused fact can therefore contain the
-                # Manifest that first wrote it. Native queries already loaded
-                # these sources through active scope pointers, so completeness
-                # of that active member set, not the historical JSON field,
-                # proves the one live Worldview source identity.
+                # Manifest that first wrote it. The exact storage identities
+                # in the verified active Manifest evidence index, not the
+                # historical JSON field, prove the one live Worldview source
+                # identity used by this materialization.
                 source_entity_ids = {
                     str(item.entity_id or "").strip()
                     for item in source_entities
@@ -9795,7 +11316,11 @@ relation ontology-assertion,
                 source_abox_snapshot_ids = [active_abox_generation_id] if source_generation_valid else []
                 runtime_rulebox_metadata["sourceAboxManifestId"] = active_abox_generation_id
                 runtime_rulebox_metadata["sourceAboxStoredManifestIds"] = stored_source_manifest_ids
-                runtime_rulebox_metadata["sourceAboxMembershipValidation"] = "active-scope-pointer"
+                runtime_rulebox_metadata["sourceAboxMembershipValidation"] = (
+                    "manifest-storage-index"
+                    if str(evidence_read_index.get("status") or "") == "verified"
+                    else "active-scope-pointer"
+                )
             else:
                 source_abox_snapshot_ids = sorted({
                     str((item.properties or {}).get("aboxSnapshotId") or (item.properties or {}).get("snapshotId") or "").strip()
@@ -9901,7 +11426,7 @@ relation ontology-assertion,
                             "status", "reason", "reasonCode", "nativeQueryUsed", "schemaFunctionUsed",
                             "executedRuleCount", "skippedRuleCount", "matchedCount", "executedRules",
                             "skippedRules", "nativeExecutionMode", "readTransactionCount",
-                            "readQueryCount", "executionPlan", "typedbQueryMetrics",
+                            "readQueryCount", "executionPlan", "blockingRule", "typedbQueryMetrics",
                         ]
                         if key in native_match_result
                     },
@@ -10058,7 +11583,7 @@ relation ontology-assertion,
                     "status", "reason", "reasonCode", "nativeQueryUsed", "schemaFunctionUsed",
                     "executedRuleCount", "skippedRuleCount", "matchedCount", "executedRules",
                     "skippedRules", "nativeExecutionMode", "readTransactionCount", "readQueryCount",
-                    "executionPlan", "typedbQueryMetrics",
+                    "executionPlan", "blockingRule", "typedbQueryMetrics",
                 ]
                 if key in native_match_result
             },
@@ -10266,7 +11791,7 @@ relation ontology-assertion,
                         "status", "reason", "reasonCode", "nativeQueryUsed", "schemaFunctionUsed",
                         "executedRuleCount", "skippedRuleCount", "matchedCount", "executedRules",
                         "skippedRules", "nativeExecutionMode", "readTransactionCount", "readQueryCount",
-                        "executionPlan", "typedbQueryMetrics",
+                        "executionPlan", "blockingRule", "typedbQueryMetrics",
                     ]
                     if key in native_match_result
                 },
@@ -10324,6 +11849,12 @@ relation ontology-assertion,
         ]
         updated_at = utc_now()
         queries = self.inferencebox_insert_queries(node_rows, relation_rows, updated_at)
+        write_timing: Dict[str, object] = {
+            "queryCount": len(queries),
+            "nodeQueryCount": sum(1 for query in queries if str(query).lstrip().startswith("insert ")),
+            "relationQueryCount": sum(1 for query in queries if str(query).lstrip().startswith("match ")),
+            "relationBatchSize": self.inferencebox_relation_batch_size(),
+        }
         generation_id = str((graph.worldview or {}).get("inferenceGenerationId") or "").strip()
         world_id = str((graph.worldview or {}).get("worldId") or "").strip()
         marker_query = self.node_insert_query(
@@ -10334,13 +11865,17 @@ relation ontology-assertion,
         try:
             def operation():
                 with typedb_operation_timeout(self.write_operation_timeout_seconds(), "TypeDB InferenceBox graph save"):
+                    write_started = time.monotonic()
+                    query_durations_ms: List[float] = []
                     driver = self.open_driver(imported)
                     try:
                         self.ensure_database(driver)
                         transaction_query_count = self.inferencebox_write_transaction_query_count()
+                        write_timing["transactionQueryCount"] = transaction_query_count
 
-                        def write_query_chunks(query_rows: Iterable[str]) -> None:
+                        def write_query_chunks(query_rows: Iterable[str], stage: str) -> None:
                             query_list = [str(query) for query in query_rows or [] if str(query or "").strip()]
+                            stage_started = time.monotonic()
                             for offset in range(0, len(query_list), transaction_query_count):
                                 query_batch = query_list[offset: offset + transaction_query_count]
 
@@ -10351,18 +11886,28 @@ relation ontology-assertion,
                                         options=self.write_transaction_options(),
                                     ) as tx:
                                         for query in query_batch:
+                                            query_started = time.monotonic()
                                             tx.query(query).resolve()
+                                            query_durations_ms.append(round((time.monotonic() - query_started) * 1000, 1))
                                         tx.commit()
 
                                 self.with_typedb_retries(write_batch)
+                            write_timing[stage + "Ms"] = round((time.monotonic() - stage_started) * 1000, 1)
 
                         if generation_id:
-                            write_query_chunks(inference_generation_delete_queries(generation_id, world_id=world_id))
-                        write_query_chunks(queries)
-                        write_query_chunks([marker_query])
+                            write_query_chunks(
+                                inference_generation_delete_queries(generation_id, world_id=world_id),
+                                "candidateDelete",
+                            )
+                        write_query_chunks(queries, "candidateWrite")
+                        write_query_chunks([marker_query], "candidateMarker")
                     finally:
                         self.close_driver(driver)
+                        write_timing["slowestQueryMs"] = max(query_durations_ms) if query_durations_ms else 0.0
+                        write_timing["totalQueryMs"] = round(sum(query_durations_ms), 1)
+                        write_timing["totalWriteMs"] = round((time.monotonic() - write_started) * 1000, 1)
             self.with_typedb_retries(operation)
+            validation_started = time.monotonic()
             candidate_validation = self.validate_inference_generation_candidate(
                 graph,
                 generation_id,
@@ -10370,6 +11915,7 @@ relation ontology-assertion,
                 len(relation_rows),
                 world_id=world_id,
             ) if generation_id else {"status": "legacy", "valid": True}
+            write_timing["candidateValidationMs"] = round((time.monotonic() - validation_started) * 1000, 1)
             if not candidate_validation.get("valid"):
                 return {
                     "configured": True,
@@ -10386,8 +11932,11 @@ relation ontology-assertion,
                     "preservedPreviousInference": True,
                     "inferenceGenerationId": generation_id,
                     "candidateValidation": candidate_validation,
+                    "writeTiming": write_timing,
                 }
+            activation_started = time.monotonic()
             activation = self.activate_inference_generation(graph, node_rows, relation_rows, world_id=world_id) if generation_id else {"status": "legacy", "activated": True}
+            write_timing["activationMs"] = round((time.monotonic() - activation_started) * 1000, 1)
             if not activation.get("activated"):
                 return {
                     "configured": True,
@@ -10405,6 +11954,7 @@ relation ontology-assertion,
                     "inferenceGenerationId": generation_id,
                     "candidateValidation": candidate_validation,
                     "activation": activation,
+                    "writeTiming": write_timing,
                 }
             return {
                 "configured": True,
@@ -10425,6 +11975,7 @@ relation ontology-assertion,
                 "accountId": str((graph.worldview or {}).get("accountId") or ""),
                 "candidateValidation": candidate_validation,
                 "activation": activation,
+                "writeTiming": write_timing,
             }
         except Exception as error:  # noqa: BLE001 - materialization failure must be visible to diagnostics.
             return {
@@ -10441,6 +11992,7 @@ relation ontology-assertion,
                 "insertMode": "batched",
                 "publicationStatus": "not-published",
                 "inferenceGenerationId": generation_id,
+                "writeTiming": write_timing,
             }
 
     def validate_inference_generation_candidate(
@@ -11030,6 +12582,7 @@ relation ontology-assertion,
         rules: Iterable[GraphInferenceRule] = None,
         include_all_rule_relation_types: bool = False,
         include_incoming_relations: bool = True,
+        evidence_read_index: Dict[str, object] = None,
         world_id: str = "",
     ) -> PortfolioOntology:
         matches = [item for item in (native_match_result or {}).get("matches") or [] if isinstance(item, dict)]
@@ -11048,8 +12601,79 @@ relation ontology-assertion,
             for condition in rule.conditions or []
             if str(condition.kind or "") == "relation" and str(condition.relation_type or "").strip()
         ))
+        evidence_index = dict(evidence_read_index or {}) if isinstance(evidence_read_index, dict) else {}
+        indexed_read = str(evidence_index.get("status") or "") == "verified"
+        index_payload = dict(evidence_index.get("index") or {}) if indexed_read else {}
+        source_storage_ids_by_source_id = {
+            str(source_id or "").strip(): str(storage_id or "").strip()
+            for source_id, storage_id in dict(index_payload.get("sourceStorageIdsBySourceId") or {}).items()
+            if str(source_id or "").strip() and str(storage_id or "").strip()
+        }
+        source_symbols_by_source_id = {
+            str(source_id or "").strip(): str(symbol or "").upper().strip()
+            for symbol, values in dict(index_payload.get("sourceIdsBySymbol") or {}).items()
+            for source_id in values or []
+            if str(source_id or "").strip() and str(symbol or "").strip()
+        }
         rows: List[Dict[str, object]] = []
-        if source_ids:
+        relation_rows: List[Dict[str, object]] = []
+        evidence_read = {
+            "status": "ok",
+            "mode": "manifest-storage-index" if indexed_read else "legacy-active-membership",
+            "source": str(evidence_index.get("source") or "") if indexed_read else "legacy-query",
+            "expectedSourceCount": len(source_ids),
+            "indexedRelationStorageCount": 0,
+            "reason": "",
+        }
+        if indexed_read:
+            missing_source_storage_ids = [
+                source_id for source_id in source_ids
+                if source_id not in source_storage_ids_by_source_id
+            ]
+            if missing_source_storage_ids:
+                evidence_read.update({
+                    "status": "incomplete",
+                    "reason": "Active Manifest evidence index is missing matched stock storage identities.",
+                    "missingSourceIds": missing_source_storage_ids,
+                })
+            elif source_ids:
+                try:
+                    rows = typedb_call_for_world(
+                        self.read_abox_entity_rows_by_storage_ids,
+                        [source_storage_ids_by_source_id[source_id] for source_id in source_ids],
+                        world_id=world_id,
+                    )
+                except Exception as error:  # noqa: BLE001 - no partial evidence may drive materialization.
+                    evidence_read.update({
+                        "status": "error",
+                        "reason": "Manifest-indexed source evidence lookup failed: " + str(error)[:180],
+                    })
+            selected_symbols = {
+                source_symbols_by_source_id.get(source_id) or symbol_from_subject(source_id)
+                for source_id in source_ids
+            }
+            relation_storage_ids = sorted({
+                str(storage_id or "").strip()
+                for symbol in selected_symbols
+                if str(symbol or "").strip()
+                for storage_id in list((index_payload.get("relationStorageIdsBySymbol") or {}).get(symbol, []) or [])
+                if str(storage_id or "").strip()
+            })
+            evidence_read["indexedRelationStorageCount"] = len(relation_storage_ids)
+            if str(evidence_read.get("status") or "") == "ok" and relation_storage_ids:
+                try:
+                    relation_rows = typedb_call_for_world(
+                        self.read_abox_relation_rows_by_storage_ids,
+                        relation_storage_ids,
+                        evidence_relation_types,
+                        world_id=world_id,
+                    )
+                except Exception as error:  # noqa: BLE001 - preserve prior inference rather than omit evidence silently.
+                    evidence_read.update({
+                        "status": "error",
+                        "reason": "Manifest-indexed relation evidence lookup failed: " + str(error)[:180],
+                    })
+        elif source_ids:
             try:
                 rows = typedb_call_for_world(
                     self.read_entity_rows_by_ids,
@@ -11057,11 +12681,16 @@ relation ontology-assertion,
                     ["ABox"],
                     world_id=world_id,
                 )
-            except Exception:
+            except Exception as error:  # noqa: BLE001 - preserve legacy behavior but retain diagnostics.
+                evidence_read.update({
+                    "status": "error",
+                    "reason": "Legacy active-membership source lookup failed: " + str(error)[:180],
+                })
                 rows = []
         rows_by_id = {str(row.get("id") or ""): row for row in rows}
         graph = PortfolioOntology("typedb-native-match-model")
         graph.worldview["worldId"] = str(world_id or "")
+        graph.worldview["nativeEvidenceRead"] = evidence_read
         for match in matches:
             source_id = str(match.get("sourceId") or "").strip()
             if not source_id or any(item.entity_id == source_id for item in graph.entities):
@@ -11090,14 +12719,35 @@ relation ontology-assertion,
                     "queryFallback": True,
                 },
             ))
-        relation_rows = typedb_call_for_world(
-            self.read_relation_rows_by_source_ids,
-            source_ids,
-            ["ABox"],
-            evidence_relation_types,
-            include_incoming=include_incoming_relations,
-            world_id=world_id,
-        ) if source_ids else []
+        if not indexed_read and source_ids:
+            try:
+                relation_rows = typedb_call_for_world(
+                    self.read_relation_rows_by_source_ids,
+                    source_ids,
+                    ["ABox"],
+                    evidence_relation_types,
+                    include_incoming=include_incoming_relations,
+                    world_id=world_id,
+                )
+            except Exception as error:  # noqa: BLE001 - do not silently materialize a partial legacy evidence graph.
+                graph.worldview["nativeEvidenceRead"] = {
+                    **dict(graph.worldview.get("nativeEvidenceRead") or {}),
+                    "status": "error",
+                    "reason": "Legacy active-membership relation lookup failed: " + str(error)[:180],
+                }
+                relation_rows = []
+        if indexed_read:
+            source_entity_ids = {str(row.get("id") or "") for row in rows}
+            missing_loaded_sources = [source_id for source_id in source_ids if source_id not in source_entity_ids]
+            if missing_loaded_sources:
+                graph.worldview["nativeEvidenceRead"] = {
+                    **dict(graph.worldview.get("nativeEvidenceRead") or {}),
+                    "status": "incomplete",
+                    "reason": "Manifest-indexed source evidence did not return every matched stock.",
+                    "missingSourceIds": missing_loaded_sources,
+                }
+        graph.worldview["nativeEvidenceRead"]["loadedSourceCount"] = len(rows_by_id)
+        graph.worldview["nativeEvidenceRead"]["loadedRelationCount"] = len(relation_rows)
         related_node_rows = {
             str(node.get("id") or ""): node
             for item in relation_rows
@@ -11525,6 +13175,13 @@ def typedb_preflight_filters_match(properties: Dict[str, object], filters: Dict[
     return None if unknown else True
 
 
+def typedb_rule_condition_value(condition: object, field: str, default=None):
+    """Read one persisted RuleBox condition field from object or payload form."""
+    if isinstance(condition, dict):
+        return condition.get(field, default)
+    return getattr(condition, field, default)
+
+
 def typedb_preflight_relation_condition_matches(
     graph: PortfolioOntology,
     subject: OntologyEntity,
@@ -11536,11 +13193,11 @@ def typedb_preflight_relation_condition_matches(
     not have enough endpoint data.  A ``False`` result is therefore a strict
     proof that no persisted direct relation can satisfy this required clause.
     """
-    relation_type = str(getattr(condition, "relation_type", "") or "").upper().strip()
+    relation_type = str(typedb_rule_condition_value(condition, "relation_type", "") or "").upper().strip()
     if not relation_type:
         return None
-    direction = str(getattr(condition, "direction", "") or "out").lower()
-    target_kind = str(getattr(condition, "target_kind", "") or "")
+    direction = str(typedb_rule_condition_value(condition, "direction", "") or "out").lower()
+    target_kind = str(typedb_rule_condition_value(condition, "target_kind", "") or "")
     targets = {item.entity_id: item for item in graph.entities}
     unknown = False
     for relation in graph.relations:
@@ -11562,11 +13219,11 @@ def typedb_preflight_relation_condition_matches(
             continue
         target_verdict = typedb_preflight_filters_match(
             target.properties or {},
-            getattr(condition, "target_property_filters", {}) or {},
+            typedb_rule_condition_value(condition, "target_property_filters", {}) or {},
         )
         relation_verdict = typedb_preflight_filters_match(
             relation.properties or {},
-            getattr(condition, "relation_property_filters", {}) or {},
+            typedb_rule_condition_value(condition, "relation_property_filters", {}) or {},
         )
         if target_verdict is False or relation_verdict is False:
             continue
@@ -11587,7 +13244,14 @@ def typedb_native_rule_required_conditions_preflight(
     symbol: str,
     incoming_relations_complete: bool = True,
 ) -> Dict[str, object]:
-    """Prove only impossible required RuleBox clauses for one stock symbol."""
+    """Prove only impossible RuleBox clauses for one stock symbol.
+
+    This is a negative planner, not a second decision engine. Besides a
+    failed required condition, it can reject an N-of-M group only when the
+    exact active ABox proves that fewer than N alternatives can possibly
+    match. Unknown values and incomplete incoming relation reads always leave
+    the rule to TypeDB.
+    """
     clean_symbol = str(symbol or "").upper().strip()
     candidates = [
         item for item in graph.entities
@@ -11603,26 +13267,40 @@ def typedb_native_rule_required_conditions_preflight(
     properties.setdefault("ontologyBox", (subject.properties or {}).get("ontologyBox") or "ABox")
     failed_condition_ids: List[str] = []
     unknown = False
-    for condition in getattr(rule, "conditions", []) or []:
-        if normalized_condition_role(condition.to_dict() if hasattr(condition, "to_dict") else dict(condition or {})) != "required":
-            continue
-        condition_id = str(getattr(condition, "condition_id", "") or "")
-        kind = str(getattr(condition, "kind", "") or "")
+    any_conditions = []
+    negative_conditions = []
+    rule_conditions = getattr(rule, "conditions", None)
+    if rule_conditions is None and isinstance(rule, dict):
+        rule_conditions = rule.get("conditions") or []
+
+    def condition_verdict(condition: object):
+        kind = str(typedb_rule_condition_value(condition, "kind", "") or "")
         if kind == "subject_property":
-            verdict = typedb_preflight_value_matches(
-                properties.get(str(getattr(condition, "field", "") or "")),
-                getattr(condition, "operator", "=="),
-                getattr(condition, "value", None),
+            return typedb_preflight_value_matches(
+                properties.get(str(typedb_rule_condition_value(condition, "field", "") or "")),
+                typedb_rule_condition_value(condition, "operator", "=="),
+                typedb_rule_condition_value(condition, "value", None),
             )
-        elif kind == "relation":
-            direction = str(getattr(condition, "direction", "") or "out").lower()
-            verdict = (
-                None
-                if direction == "in" and not incoming_relations_complete
-                else typedb_preflight_relation_condition_matches(graph, subject, condition)
-            )
-        else:
-            verdict = None
+        if kind == "relation":
+            direction = str(typedb_rule_condition_value(condition, "direction", "") or "out").lower()
+            if direction == "in" and not incoming_relations_complete:
+                return None
+            return typedb_preflight_relation_condition_matches(graph, subject, condition)
+        return None
+
+    for condition in rule_conditions or []:
+        condition_payload = condition.to_dict() if hasattr(condition, "to_dict") else dict(condition or {})
+        role = normalized_condition_role(condition_payload)
+        if role in {"any", "optional"}:
+            any_conditions.append(condition)
+            continue
+        if role == "not":
+            negative_conditions.append(condition)
+            continue
+        if role != "required":
+            continue
+        condition_id = str(typedb_rule_condition_value(condition, "condition_id", "") or "")
+        verdict = condition_verdict(condition)
         if verdict is False:
             failed_condition_ids.append(condition_id)
         elif verdict is None:
@@ -11633,6 +13311,48 @@ def typedb_native_rule_required_conditions_preflight(
             "reason": "Active ABox cannot satisfy required RuleBox conditions: " + ", ".join(failed_condition_ids[:4]),
             "failedConditionIds": failed_condition_ids,
         }
+    negative_matches = []
+    for condition in negative_conditions:
+        # A negative condition means the rule requires this fact to be
+        # absent. When the exact active ABox proves it is present, TypeDB
+        # cannot materialize the rule. Unknown remains executable so the
+        # planner never substitutes its own judgement for TypeDB.
+        if condition_verdict(condition) is True:
+            negative_matches.append(
+                str(typedb_rule_condition_value(condition, "condition_id", "") or "negative-condition")
+            )
+    if negative_matches:
+        return {
+            "status": "impossible",
+            "reason": "Active ABox satisfies a RuleBox negative condition that must be absent.",
+            "failedConditionIds": ["not:" + item for item in negative_matches],
+        }
+    if any_conditions:
+        raw_minimum = getattr(rule, "any_condition_min_count", None)
+        if raw_minimum is None and isinstance(rule, dict):
+            raw_minimum = rule.get("any_condition_min_count") or rule.get("anyConditionMinCount")
+        minimum = max(1, int(number_or_none(raw_minimum) or 1))
+        possible_count = 0
+        unknown_count = 0
+        for condition in any_conditions:
+            verdict = condition_verdict(condition)
+            if verdict is True:
+                possible_count += 1
+            elif verdict is None:
+                unknown_count += 1
+        if possible_count + unknown_count < minimum:
+            rule_id = str(getattr(rule, "rule_id", "") or (rule.get("rule_id") if isinstance(rule, dict) else "") or "")
+            return {
+                "status": "impossible",
+                "reason": (
+                    "Active ABox cannot satisfy the RuleBox any-condition minimum "
+                    + str(minimum) + "."
+                ),
+                "failedConditionIds": ["any-group:" + rule_id] if rule_id else ["any-group"],
+                "anyConditionMinimum": minimum,
+                "anyConditionPossibleCount": possible_count,
+                "anyConditionUnknownCount": unknown_count,
+            }
     return {
         "status": "unknown" if unknown else "possible",
         "reason": "" if not unknown else "Some required ABox values were unavailable to the preflight planner.",
@@ -11756,11 +13476,26 @@ def typedb_native_rule_execution_plan(
             entry.update({"selected": True, "status": "planned", "reason": ""})
         entries.append(entry)
     selected_entries = [item for item in entries if item.get("selected")]
-    selected_entries.sort(
-        key=lambda item: (
+
+    def execution_priority(item: Dict[str, object]):
+        rule = item.get("rule")
+        conditions = typedb_rule_condition_payloads(rule)
+        has_any_group = any(
+            normalized_condition_role(condition) in {"any", "optional"}
+            for condition in conditions
+        )
+        # A schema-function base match for an N-of-M rule is followed by a
+        # second TypeDB cardinality query. Run those bounded checks first so a
+        # long series of ordinary matches cannot leave the only cardinality
+        # proof until the shared read budget is nearly exhausted.
+        return (
+            0 if has_any_group else 1,
             int(item.get("queryComplexity") or 0),
             str(item.get("ruleId") or ""),
         )
+
+    selected_entries.sort(
+        key=execution_priority,
     )
     skipped_entries = [item for item in entries if not item.get("selected")]
     return {
@@ -12028,6 +13763,9 @@ def typedb_native_match_query(
     scoped_manifest_only: bool = False,
     manifest_id_variable: str = "",
     bind_active_manifest: bool = True,
+    include_source_manifest_membership: bool = True,
+    include_required_conditions: bool = True,
+    include_negative_conditions: bool = True,
     include_any_conditions: bool = True,
     world_id: str = "",
     world_id_variable: str = "",
@@ -12056,13 +13794,14 @@ def typedb_native_match_query(
                 world_id,
                 world_id_variable,
             ))
-        clauses.append(typedb_scoped_manifest_member_clause(
-            "$source",
-            "source",
-            scoped_manifest_variable,
-            world_id,
-            world_id_variable,
-        ))
+        if include_source_manifest_membership:
+            clauses.append(typedb_scoped_manifest_member_clause(
+                "$source",
+                "source",
+                scoped_manifest_variable,
+                world_id,
+                world_id_variable,
+            ))
     else:
         clauses = [typedb_active_abox_member_clause(
             "$source",
@@ -12102,7 +13841,10 @@ def typedb_native_match_query(
             any_conditions.append((index, condition))
             continue
         if role == "not":
-            clauses.append("not { " + " ".join(pattern_clauses) + " };")
+            if include_negative_conditions:
+                clauses.append("not { " + " ".join(pattern_clauses) + " };")
+            continue
+        if not include_required_conditions:
             continue
         clauses.extend(pattern_clauses)
         for column in pattern.get("columns") or []:
@@ -12189,6 +13931,11 @@ def typedb_native_any_group_check_query(
         rule,
         [],
         scoped_manifest_only=scoped_manifest_only,
+        # The schema function already proved required and negative clauses for
+        # this exact source in the same read transaction. Repeating its joins
+        # here turns a bounded N-of-M check into a full second rule query.
+        include_required_conditions=False,
+        include_negative_conditions=False,
         include_any_conditions=True,
         world_id=world_id,
     )
@@ -12212,7 +13959,7 @@ def typedb_native_rule_function_name(rule_id: object, world_id: str = "") -> str
         # Explicit worlds all share this parameterized function. The caller
         # passes the concrete world id as a TypeQL string argument, so the
         # function body cannot match another account's active manifest.
-        digest = hashlib.sha256((raw + "|world-parameter-v6").encode("utf-8")).hexdigest()[:10]
+        digest = hashlib.sha256((raw + "|world-parameter-v8").encode("utf-8")).hexdigest()[:10]
         return (TYPEDB_SCHEMA_FUNCTION_PREFIX + normalized + "_" + digest)[:120]
     # Existing no-world ABox rows remain readable during the rolling migration
     # and keep their deployed v5 signature until they are reprojected.
@@ -12242,6 +13989,12 @@ def typedb_native_function_definition(rule: Dict[str, object], world_id: str = "
         rule,
         [],
         scoped_manifest_only=True,
+        manifest_id_variable="$ruleManifestId" if parameterized_world else "",
+        bind_active_manifest=not parameterized_world,
+        # The function call receives a candidate whose active Manifest
+        # membership was checked by the outer query. Repeating that proof in
+        # every schema function expands the TypeDB search plan substantially.
+        include_source_manifest_membership=not parameterized_world,
         # N-of-M `any` clauses are verified as bounded TypeDB reads only when
         # this base function returns a source. Embedding their combinations or
         # an aggregation pipeline in a schema function makes TypeDB compile
@@ -12251,6 +14004,18 @@ def typedb_native_function_definition(rule: Dict[str, object], world_id: str = "
         world_id_variable=world_id_variable,
     )
     match_query = str(plan.get("query") or "").strip()
+    if parameterized_world and match_query.startswith("match "):
+        # A function argument has a TypeQL type, whereas ontology-manifest-id
+        # is an attribute concept. Bind the Manifest id from the already
+        # verified pointer instead of passing an untyped string value and
+        # accidentally declaring one variable as both concepts at compile
+        # time.
+        match_query = (
+            "match $ruleManifestPointer has ontology-manifest-id $ruleManifestId, "
+            "has ontology-world-id $ruleManifestPointerWorldId; "
+            "$ruleManifestPointerWorldId == $ruleWorldId; "
+            + match_query[len("match "):]
+        )
     if not match_query:
         return {
             "ruleId": rule_id,
@@ -12262,7 +14027,7 @@ def typedb_native_function_definition(rule: Dict[str, object], world_id: str = "
         }
     body = (
         "fun " + function_name + "($source: ontology-node"
-        + (", $ruleWorldId: string" if parameterized_world else "")
+        + (", $ruleManifestPointer: ontology-node, $ruleWorldId: string" if parameterized_world else "")
         + ") -> { ontology-node }:\n"
         + match_query + "\n"
         + "return { $source };"
@@ -12308,7 +14073,7 @@ def typedb_native_function_call_query(
         clauses.append("let $ruleWorldId = " + typedb_string(str(world_id).strip()) + ";")
     clauses.extend([
         "let $source in " + function_name + "($candidate"
-        + (", $ruleWorldId" if parameterized_world else "")
+        + (", $activeManifestPointer, $ruleWorldId" if parameterized_world else "")
         + ");",
         "$source has ontology-id $sourceId;",
         "$source has ontology-label $sourceLabel;",
@@ -12931,6 +14696,14 @@ def inference_generation_marker_row(
         "kind": "inference-generation" if publication_status == "active" else "inference-generation-candidate",
         "nodeType": "ontology-entity",
         "ontologyBox": "InferenceBox",
+        # These fields must be promoted to TypeDB attributes, not merely left
+        # in ``propertiesJson``. Candidate validation and active-generation
+        # lookup are scoped by world id, and an unscoped marker becomes
+        # invisible immediately after it is written.
+        "worldId": str(worldview.get("worldId") or ""),
+        "worldType": str(worldview.get("worldType") or ""),
+        "tenantId": str(worldview.get("tenantId") or ""),
+        "accountId": str(worldview.get("accountId") or ""),
         "snapshotId": generation_id,
         "aboxSnapshotId": generation_id,
         "tboxClass": "ActiveGeneration" if publication_status == "active" else "CandidateGeneration",

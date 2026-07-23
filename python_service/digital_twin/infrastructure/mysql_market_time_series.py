@@ -45,6 +45,24 @@ def positive_int(value: object, fallback: int, lower: int = 1, upper: int = 1000
     return max(lower, min(upper, parsed))
 
 
+def snapshot_safe_granularity_preferences(definition: object) -> List[str]:
+    """Choose immutable history sources when reproducing one snapshot.
+
+    The 15-minute and hourly rows are rolling aggregates and may be updated
+    in-place while the market is open.  Account 3-minute observations are
+    append-only, while global daily candles are the durable source for longer
+    history.  A replay must not mix either mutable aggregate into an earlier
+    snapshot.
+    """
+    preferences = list(granularity_preferences(getattr(definition, "key", "")))
+    try:
+        lookback_days = float(getattr(definition, "lookback_days", 1) or 1)
+    except (TypeError, ValueError):
+        lookback_days = 1.0
+    preferred = ["1d", "3m"] if lookback_days > 5 else ["3m", "1d"]
+    return [granularity for granularity in preferred if granularity in preferences]
+
+
 class MySQLMarketTimeSeriesStore(MySQLOperationalConnection):
     def enabled(self) -> bool:
         return str(self.runtime_settings.get("marketTimeSeriesEnabled", "1")).strip().lower() not in {
@@ -257,21 +275,45 @@ class MySQLMarketTimeSeriesStore(MySQLOperationalConnection):
         account_id: str,
         symbols: Iterable[str],
         definitions: Iterable[object],
+        as_of: str = "",
     ) -> Dict[str, Dict[str, List[Dict[str, object]]]]:
+        """Load only observations that were available at one snapshot time.
+
+        ABox projection can be retried after newer monitor cycles have already
+        written price history.  Reading those later rows for an older account
+        snapshot would make the same source snapshot produce a different
+        investment world and, worse, introduce look-ahead data into a replay.
+        ``observed_at`` is the availability boundary for stored observations,
+        so use it when the caller provides a valid snapshot timestamp.
+        """
         clean_symbols = sorted({str(symbol or "").upper().strip() for symbol in symbols or [] if str(symbol or "").strip()})
         definition_rows = list(definitions or [])
         if not self.enabled() or not clean_symbols or not definition_rows:
             return {}
+        observation_cutoff = iso_utc(as_of)
+        preference_by_window = {
+            str(getattr(definition, "key", "") or "").upper(): (
+                snapshot_safe_granularity_preferences(definition)
+                if observation_cutoff
+                else list(granularity_preferences(getattr(definition, "key", "")))
+            )
+            for definition in definition_rows
+        }
         granularities = sorted({
             granularity
-            for definition in definition_rows
-            for granularity in granularity_preferences(getattr(definition, "key", ""))
+            for values in preference_by_window.values()
+            for granularity in values
         })
         grouped: Dict[tuple, List[Dict[str, object]]] = defaultdict(list)
         per_group = self.max_points_per_window()
         placeholders = ",".join(["%s"] * len(clean_symbols))
         with self.connect() as connection:
             for granularity in granularities:
+                cutoff_clause = " AND observations.observed_at <= %s" if observation_cutoff else ""
+                query_params = [str(account_id or ""), GLOBAL_MARKET_ACCOUNT_ID, granularity, *clean_symbols]
+                if observation_cutoff:
+                    query_params.append(observation_cutoff)
+                query_params.append(per_group)
                 rows = connection.execute(
                     """
                     SELECT * FROM (
@@ -283,12 +325,12 @@ class MySQLMarketTimeSeriesStore(MySQLOperationalConnection):
                         FROM market_time_series_observations observations
                         WHERE account_id IN (%s, %s)
                           AND granularity = %s
-                          AND symbol IN (""" + placeholders + """)
+                          AND symbol IN (""" + placeholders + ")" + cutoff_clause + """
                     ) ranked
                     WHERE ranked.row_number_value <= %s
                     ORDER BY bucket_at DESC
                     """,
-                    [str(account_id or ""), GLOBAL_MARKET_ACCOUNT_ID, granularity, *clean_symbols, per_group],
+                    query_params,
                 ).fetchall()
                 for row in rows:
                     key = (str(row.get("account_id") or ""), str(row.get("symbol") or "").upper(), granularity)
@@ -302,10 +344,19 @@ class MySQLMarketTimeSeriesStore(MySQLOperationalConnection):
                 required_sessions = required_session_count(getattr(definition, "lookback_days", 1))
                 selected: List[Dict[str, object]] = []
                 best: List[Dict[str, object]] = []
-                for granularity in granularity_preferences(window_key):
+                for granularity in preference_by_window.get(window_key) or []:
                     account_rows = list(grouped.get((str(account_id or ""), symbol, granularity), []))
                     global_rows = list(grouped.get((GLOBAL_MARKET_ACCOUNT_ID, symbol, granularity), []))
-                    candidate = self.preferred_rows(account_rows, global_rows)
+                    if observation_cutoff:
+                        # Account 3m rows are insert-only. Aggregates may have
+                        # been recalculated after the snapshot and global raw
+                        # rows can be overwritten by a provider refresh.
+                        if granularity == "3m":
+                            candidate = account_rows
+                        else:
+                            candidate = self.completed_global_daily_rows(global_rows, observation_cutoff)
+                    else:
+                        candidate = self.preferred_rows(account_rows, global_rows)
                     candidate = self.limit_for_window(candidate, granularity, required_sessions, per_group)
                     if self.session_count(candidate) > self.session_count(best) or (
                         self.session_count(candidate) == self.session_count(best) and len(candidate) > len(best)
@@ -317,6 +368,32 @@ class MySQLMarketTimeSeriesStore(MySQLOperationalConnection):
                 windows[window_key] = list(reversed(selected or best))
             result[symbol] = windows
         return result
+
+    @staticmethod
+    def completed_global_daily_rows(rows: Iterable[Dict[str, object]], snapshot_at: str) -> List[Dict[str, object]]:
+        """Exclude the still-open market session from historical daily candles.
+
+        Daily providers can revise the current session in place.  The account
+        snapshot itself supplies the current observation, so only prior,
+        completed sessions may provide replay history.
+        """
+        cutoff = parse_timestamp(snapshot_at)
+        if not cutoff:
+            return []
+        completed = []
+        for raw in rows or []:
+            row = dict(raw or {})
+            market = row.get("market") or ""
+            currency = row.get("currency") or ""
+            cutoff_session = market_session_date(cutoff, market, currency)
+            row_session = market_session_date(
+                row.get("bucketAt") or row.get("generatedAt") or row.get("observedAt"),
+                market,
+                currency,
+            )
+            if cutoff_session and row_session and row_session < cutoff_session:
+                completed.append(row)
+        return completed
 
     def preferred_rows(self, account_rows: List[Dict[str, object]], global_rows: List[Dict[str, object]]) -> List[Dict[str, object]]:
         account_sessions = self.session_count(account_rows)

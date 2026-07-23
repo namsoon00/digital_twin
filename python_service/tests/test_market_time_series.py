@@ -1,5 +1,6 @@
 import unittest
 from datetime import datetime, timedelta, timezone
+from types import SimpleNamespace
 
 from digital_twin.domain.market_data import normalize_position
 from digital_twin.domain.market_time_series import MarketTimeSeriesObservation, market_session_date
@@ -113,6 +114,53 @@ class MarketTimeSeriesTests(unittest.TestCase):
         self.assertEqual(3, result["aggregateCount"])
         self.assertEqual(4, len(connection.calls))
         self.assertIn("ON DUPLICATE KEY UPDATE", connection.calls[0][0])
+
+    def test_temporal_window_read_is_bounded_by_snapshot_time(self):
+        store = MySQLMarketTimeSeriesStore.__new__(MySQLMarketTimeSeriesStore)
+        store.runtime_settings = {"marketTimeSeriesEnabled": "1"}
+        connection = RecordingConnection()
+        store.connect = lambda: TransactionContext(connection)
+
+        store.load_temporal_windows(
+            "main",
+            ["005930"],
+            [SimpleNamespace(key="20D", lookback_days=20)],
+            as_of="2026-07-20T06:00:00Z",
+        )
+
+        self.assertGreaterEqual(len(connection.calls), 1)
+        for sql, params in connection.calls:
+            self.assertIn("observations.observed_at <= %s", sql)
+            self.assertIn("2026-07-20T06:00:00Z", params)
+
+    def test_snapshot_time_uses_immutable_temporal_sources(self):
+        store = MySQLMarketTimeSeriesStore.__new__(MySQLMarketTimeSeriesStore)
+        store.runtime_settings = {"marketTimeSeriesEnabled": "1"}
+        connection = RecordingConnection()
+        store.connect = lambda: TransactionContext(connection)
+
+        store.load_temporal_windows(
+            "main",
+            ["005930"],
+            [SimpleNamespace(key="3D", lookback_days=3)],
+            as_of="2026-07-20T06:00:00Z",
+        )
+
+        requested_granularities = {params[2] for _sql, params in connection.calls}
+        self.assertEqual({"3m", "1d"}, requested_granularities)
+
+    def test_snapshot_time_excludes_unclosed_daily_session(self):
+        rows = [
+            {"market": "KR", "currency": "KRW", "bucketAt": "2026-07-21T15:00:00Z"},
+            {"market": "KR", "currency": "KRW", "bucketAt": "2026-07-22T15:00:00Z"},
+        ]
+
+        completed = MySQLMarketTimeSeriesStore.completed_global_daily_rows(
+            rows,
+            "2026-07-23T11:00:00Z",
+        )
+
+        self.assertEqual(["2026-07-21T15:00:00Z"], [row["bucketAt"] for row in completed])
 
     def test_tiered_retention_is_configurable(self):
         settings = {

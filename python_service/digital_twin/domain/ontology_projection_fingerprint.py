@@ -23,6 +23,10 @@ VOLATILE_LIFECYCLE_KEYS = {
     "materialFingerprint",
     "marketSessionLocalTime",
     "lastObservedAt",
+    "lastFailureAt",
+    "lastHealthyAt",
+    "lastNonZeroAt",
+    "lastSuccessAt",
     "observedAt",
     "projectionRunId",
     "persistenceMode",
@@ -34,6 +38,7 @@ VOLATILE_LIFECYCLE_KEYS = {
     "snapshotId",
     "sourceAsOf",
     "sourceFetchedAt",
+    "stateSince",
     "updatedAt",
     "worldviewManifestId",
 }

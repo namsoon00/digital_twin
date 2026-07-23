@@ -214,10 +214,15 @@ class OntologyRuntimeOperationsTests(unittest.TestCase):
                 "status": "query-timeout",
                 "elapsedMs": 300,
                 "queryDurationMs": 280,
+            }, {
+                "ruleId": "graph.not-applicable",
+                "status": "not-applicable",
             }],
         })
 
         self.assertEqual(8100, profile["wallClockMs"])
+        self.assertEqual(1, profile["incompleteRuleCount"])
+        self.assertEqual(1, profile["notApplicableRuleCount"])
         self.assertEqual(2, profile["executedRuleCount"])
         self.assertEqual(1, profile["incompleteRuleCount"])
         self.assertEqual("graph.slow", profile["slowestRules"][0]["ruleId"])

@@ -151,6 +151,7 @@ def native_rule_timing_profile(
             "wallClockMs": max(0, _integer(existing.get("wallClockMs"))),
             "executedRuleCount": max(0, _integer(existing.get("executedRuleCount"))),
             "incompleteRuleCount": max(0, _integer(existing.get("incompleteRuleCount"))),
+            "notApplicableRuleCount": max(0, _integer(existing.get("notApplicableRuleCount"))),
             "aggregateRuleElapsedMs": max(0, _integer(existing.get("aggregateRuleElapsedMs"))),
             "aggregateQueryDurationMs": max(0, _integer(existing.get("aggregateQueryDurationMs"))),
             "slowestRules": rows[:max(1, min(20, int(limit or 8)))],
@@ -166,6 +167,19 @@ def native_rule_timing_profile(
         for item in values.get("skippedRules") or []
         if isinstance(item, Mapping) and _text(item.get("ruleId"))
     ]
+    incomplete_statuses = {
+        "blocked",
+        "error",
+        "partial",
+        "query-error",
+        "query-timeout",
+        "deferred-by-runtime-budget",
+    }
+    incomplete = [
+        item for item in skipped
+        if _text(item.get("status")).lower() in incomplete_statuses
+    ]
+    not_applicable = [item for item in skipped if item not in incomplete]
 
     def timing_row(item: Mapping[str, object], status: str) -> Dict[str, object]:
         symbols = item.get("candidateSymbols") if isinstance(item.get("candidateSymbols"), list) else []
@@ -184,7 +198,7 @@ def native_rule_timing_profile(
         }
 
     rows = [timing_row(item, "ok") for item in executed]
-    rows.extend(timing_row(item, _text(item.get("status")) or "blocked") for item in skipped)
+    rows.extend(timing_row(item, _text(item.get("status")) or "blocked") for item in incomplete)
     rows.sort(
         key=lambda item: (item["elapsedMs"], item["queryDurationMs"], item["ruleId"]),
         reverse=True,
@@ -194,7 +208,8 @@ def native_rule_timing_profile(
         "version": NATIVE_RULE_TIMING_PROFILE_VERSION,
         "wallClockMs": max(0, _integer(values.get("wallClockMs"))),
         "executedRuleCount": len(executed),
-        "incompleteRuleCount": len(skipped),
+        "incompleteRuleCount": len(incomplete),
+        "notApplicableRuleCount": len(not_applicable),
         # Parallel rule durations overlap; this is a diagnostic total only.
         "aggregateRuleElapsedMs": sum(item["elapsedMs"] for item in rows),
         "aggregateQueryDurationMs": sum(item["queryDurationMs"] for item in rows),

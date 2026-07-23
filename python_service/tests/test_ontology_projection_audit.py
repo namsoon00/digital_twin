@@ -191,6 +191,24 @@ class OntologyProjectionAuditTests(unittest.TestCase):
         self.assertEqual("ok", completed.status)
         self.assertEqual("generation:1", completed.inference_generation_id)
 
+    def test_projection_audit_prefers_aligned_native_inference_source_when_pointer_is_absent(self):
+        _snapshot, _graph, _fingerprint, run = self.build_run()
+        completed = complete_ontology_projection_run(run, {
+            "saved": True,
+            "status": "ok",
+            "graphStore": "typedb",
+            "aboxSnapshotId": "abox:stale-fallback",
+            "inferenceBox": {
+                "status": "ok",
+                "inferenceGenerationId": "generation:active",
+                "sourceAboxSnapshotId": "abox:verified-active",
+                "generationAligned": True,
+                "nativeTypeDbReasoningUsed": True,
+            },
+        }, completed_at="2026-07-20T00:01:10Z")
+
+        self.assertEqual("abox:verified-active", completed.active_abox_snapshot_id)
+
     def test_mysql_store_reads_bounded_latest_projection_runs(self):
         _snapshot, _graph, _fingerprint, run = self.build_run()
         row = {

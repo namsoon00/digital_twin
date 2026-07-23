@@ -331,9 +331,19 @@ def complete_ontology_projection_run(
     inference = dict(values.get("inferenceBox") or {})
     verification = dict(values.get("aboxPersistenceVerification") or {})
     active_pointer = dict(verification.get("activePointer") or {})
+    activation = dict(verification.get("activation") or {})
     stamp = str(completed_at or utc_now_iso())
     resolved_status = str(values.get("status") or ("ok" if values.get("saved") else run.status))
     activated = bool(values.get("saved")) and resolved_status == "ok"
+    inference_source_abox = str(inference.get("sourceAboxSnapshotId") or "").strip()
+    inference_is_aligned = bool(inference.get("generationAligned")) and bool(inference.get("nativeTypeDbReasoningUsed"))
+    verified_active_abox_snapshot_id = str(active_pointer.get("aboxSnapshotId") or "").strip()
+    if not verified_active_abox_snapshot_id:
+        activation_status = str(activation.get("status") or "").strip().lower()
+        if activation_status in {"activated", "recovered-after-runtime-interruption"}:
+            verified_active_abox_snapshot_id = str(activation.get("snapshotId") or "").strip()
+    if not verified_active_abox_snapshot_id and inference_is_aligned:
+        verified_active_abox_snapshot_id = inference_source_abox
     return replace(
         run,
         last_observed_at=stamp,
@@ -343,7 +353,7 @@ def complete_ontology_projection_run(
         graph_store=str(values.get("graphStore") or run.graph_store),
         projection_mode=str(values.get("projectionMode") or run.projection_mode),
         active_abox_snapshot_id=str(
-            active_pointer.get("aboxSnapshotId")
+            verified_active_abox_snapshot_id
             or values.get("aboxSnapshotId")
             or run.active_abox_snapshot_id
             or ""

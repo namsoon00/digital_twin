@@ -3596,6 +3596,107 @@ class TypeDBOntologyRepositoryTests(unittest.TestCase):
         self.assertEqual("conditional", snapshot["traces"][0]["validationState"])
         self.assertEqual("fresh", snapshot["traces"][0]["freshnessStatus"])
 
+    def test_typedb_inferencebox_recovers_one_aligned_generation_when_marker_is_missing(self):
+        repository = TypeDBOntologyGraphRepository("127.0.0.1:1729")
+
+        def entity(generation_id, source_abox, updated_at):
+            return {
+                "id": "inference-trace:CPNG:" + generation_id,
+                "kind": "inference-trace",
+                "symbol": "CPNG",
+                "ontologyBox": "InferenceBox",
+                "nativeTypeDbReasoned": True,
+                "updatedAt": updated_at,
+                "propertiesJson": json.dumps({
+                    "ontologyBox": "InferenceBox",
+                    "symbol": "CPNG",
+                    "nativeTypeDbReasoned": True,
+                    "inferenceGenerationId": generation_id,
+                    "inferenceGenerationAt": updated_at,
+                    "sourceAboxSnapshotId": source_abox,
+                }),
+            }
+
+        def relation(generation_id, source_abox, updated_at):
+            return {
+                "source": "stock:CPNG",
+                "target": "inference-trace:CPNG:" + generation_id,
+                "type": "HAS_INFERENCE_TRACE",
+                "symbol": "CPNG",
+                "ontologyBox": "InferenceBox",
+                "nativeTypeDbReasoned": True,
+                "updatedAt": updated_at,
+                "propertiesJson": json.dumps({
+                    "ontologyBox": "InferenceBox",
+                    "symbol": "CPNG",
+                    "nativeTypeDbReasoned": True,
+                    "inferenceGenerationId": generation_id,
+                    "inferenceGenerationAt": updated_at,
+                    "sourceAboxSnapshotId": source_abox,
+                }),
+            }
+
+        old_entity = entity("inference-generation:old", "abox-manifest:old", "2026-07-23T00:00:00Z")
+        old_relation = relation("inference-generation:old", "abox-manifest:old", "2026-07-23T00:00:00Z")
+        active_entity = entity("inference-generation:active", "abox-manifest:active", "2026-07-23T00:01:00Z")
+        active_relation = relation("inference-generation:active", "abox-manifest:active", "2026-07-23T00:01:00Z")
+
+        with patch.object(repository, "read_inference_generation_records", return_value=[]), patch.object(repository, "read_entity_rows", return_value=[old_entity, active_entity]), patch.object(repository, "read_relation_rows", return_value=[old_relation, active_relation]), patch.object(repository, "active_abox_metadata", return_value={"status": "ok", "aboxSnapshotId": "abox-manifest:active"}):
+            snapshot = repository.inferencebox_snapshot(symbols=["CPNG"])
+
+        self.assertEqual("ok", snapshot["status"])
+        self.assertEqual("inference-generation:active", snapshot["inferenceGenerationId"])
+        self.assertEqual("materialized-row-provenance", snapshot["inferenceGenerationIdentitySource"])
+        self.assertEqual("abox-manifest:active", snapshot["sourceAboxSnapshotId"])
+        self.assertTrue(snapshot["generationAligned"])
+        self.assertEqual(1, snapshot["entityCount"])
+        self.assertEqual(1, snapshot["relationCount"])
+        self.assertEqual(2, snapshot["generationCount"])
+        self.assertEqual(["inference-trace:CPNG:inference-generation:active"], [item["id"] for item in snapshot["entities"]])
+
+    def test_typedb_inferencebox_fails_closed_when_unmarked_generations_do_not_match_active_abox(self):
+        repository = TypeDBOntologyGraphRepository("127.0.0.1:1729")
+        entity_rows = [{
+            "id": "inference-trace:CPNG:old",
+            "kind": "inference-trace",
+            "symbol": "CPNG",
+            "ontologyBox": "InferenceBox",
+            "nativeTypeDbReasoned": True,
+            "updatedAt": "2026-07-23T00:00:00Z",
+            "propertiesJson": json.dumps({
+                "ontologyBox": "InferenceBox",
+                "symbol": "CPNG",
+                "nativeTypeDbReasoned": True,
+                "inferenceGenerationId": "inference-generation:old",
+                "sourceAboxSnapshotId": "abox-manifest:old",
+            }),
+        }]
+        relation_rows = [{
+            "source": "stock:CPNG",
+            "target": "inference-trace:CPNG:old",
+            "type": "HAS_INFERENCE_TRACE",
+            "symbol": "CPNG",
+            "ontologyBox": "InferenceBox",
+            "nativeTypeDbReasoned": True,
+            "updatedAt": "2026-07-23T00:00:00Z",
+            "propertiesJson": json.dumps({
+                "ontologyBox": "InferenceBox",
+                "symbol": "CPNG",
+                "nativeTypeDbReasoned": True,
+                "inferenceGenerationId": "inference-generation:old",
+                "sourceAboxSnapshotId": "abox-manifest:old",
+            }),
+        }]
+
+        with patch.object(repository, "read_inference_generation_records", return_value=[]), patch.object(repository, "read_entity_rows", return_value=entity_rows), patch.object(repository, "read_relation_rows", return_value=relation_rows), patch.object(repository, "active_abox_metadata", return_value={"status": "ok", "aboxSnapshotId": "abox-manifest:active"}):
+            snapshot = repository.inferencebox_snapshot(symbols=["CPNG"])
+
+        self.assertEqual("stale-generation", snapshot["status"])
+        self.assertEqual("materialized-row-provenance-unresolved", snapshot["inferenceGenerationIdentitySource"])
+        self.assertFalse(snapshot["generationAligned"])
+        self.assertFalse(snapshot["nativeTypeDbReasoningUsed"])
+        self.assertEqual([], snapshot["relations"])
+
     def test_typedb_inferencebox_snapshot_exposes_typeql_read_errors(self):
         repository = TypeDBOntologyGraphRepository("127.0.0.1:1729")
 

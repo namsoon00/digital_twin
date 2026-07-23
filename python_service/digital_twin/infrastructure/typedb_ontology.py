@@ -10301,6 +10301,9 @@ relation ontology-assertion,
         active_generation = generation_records[0] if generation_records else {}
         generation_id = str((active_generation or {}).get("generationId") or "")
         generation_scoped = bool(generation_id)
+        generation_identity_source = "active-generation-marker" if generation_scoped else ""
+        unresolved_materialized_generation = False
+        fallback_active_abox_metadata: Dict[str, object] = {}
         if generation_scoped:
             entity_rows = self.read_inferencebox_entity_rows(generation_id, clean_symbols, safe_limit, world_id=world_id)
             relation_rows = self.read_inferencebox_relation_rows(generation_id, clean_symbols, safe_limit, world_id=world_id)
@@ -10309,6 +10312,45 @@ relation ontology-assertion,
         else:
             all_entity_rows = self.read_entity_rows(["InferenceBox"], world_id=world_id)
             all_relation_rows = self.read_relation_rows(["InferenceBox"], world_id=world_id)
+            # Older TypeDB runs can contain fully materialized native facts
+            # without an active-generation marker. Do not blend those rows
+            # across generations: select only the materialized generation
+            # whose declared source ABox is the currently active world.
+            materialized_records = inference_generation_records(all_entity_rows, all_relation_rows)
+            active_abox = self.active_abox_metadata(world_id)
+            fallback_active_abox_metadata = dict(active_abox or {})
+            active_abox_snapshot_id = (
+                str(active_abox.get("aboxSnapshotId") or "").strip()
+                if str(active_abox.get("status") or "") == "ok"
+                else ""
+            )
+            recovered_generation = select_inference_generation_record(
+                materialized_records,
+                active_abox_snapshot_id=active_abox_snapshot_id,
+            )
+            if recovered_generation:
+                active_generation = recovered_generation
+                generation_id = str(recovered_generation.get("generationId") or "")
+                generation_scoped = bool(generation_id)
+                generation_identity_source = "materialized-row-provenance"
+                generation_records = materialized_records
+                all_entity_rows = [
+                    row for row in all_entity_rows
+                    if row_inference_generation_id(row) == generation_id
+                ]
+                all_relation_rows = [
+                    row for row in all_relation_rows
+                    if row_inference_generation_id(row) == generation_id
+                ]
+            elif materialized_records and active_abox_snapshot_id:
+                # The graph has native facts, but none proves that it belongs
+                # to the currently active factual world. Failing closed is
+                # safer than joining rows from several historical runs.
+                unresolved_materialized_generation = True
+                generation_records = materialized_records
+                generation_identity_source = "materialized-row-provenance-unresolved"
+                all_entity_rows = []
+                all_relation_rows = []
             entity_rows = [
                 row for row in all_entity_rows
                 if not clean_symbols or str(row.get("symbol") or "").upper() in clean_symbols
@@ -10355,6 +10397,7 @@ relation ontology-assertion,
             "inferenceGenerationAt": str((active_generation or {}).get("latestAt") or ""),
             "worldId": world_id,
             "generationScoped": generation_scoped,
+            "inferenceGenerationIdentitySource": generation_identity_source,
             "generationCount": len(generation_records),
             "inactiveGenerationEntityCount": max(0, sum(int(item.get("entityCount") or 0) for item in generation_records if str(item.get("generationId") or "") != generation_id)) if generation_scoped else 0,
             "inactiveGenerationRelationCount": max(0, sum(int(item.get("relationCount") or 0) for item in generation_records if str(item.get("generationId") or "") != generation_id)) if generation_scoped else 0,
@@ -10397,6 +10440,26 @@ relation ontology-assertion,
                     "nativeTypeDbReasoningUsed": False,
                     "typedbNativeRuleReasoningUsed": False,
                 })
+        if unresolved_materialized_generation:
+            snapshot.update({
+                "status": "stale-generation",
+                "reason": "활성 ABox와 일치하는 TypeDB InferenceBox 세대를 찾지 못해 이전 추론 결과를 제외했습니다.",
+                "sourceAboxSnapshotId": "",
+                "activeAboxSnapshotId": str(fallback_active_abox_metadata.get("aboxSnapshotId") or ""),
+                "activeAboxStatus": str(fallback_active_abox_metadata.get("status") or ""),
+                "generationAligned": False,
+                "entities": [],
+                "relations": [],
+                "traces": [],
+                "entityCount": 0,
+                "relationCount": 0,
+                "traceCount": 0,
+                "nativeEntityCount": 0,
+                "nativeRelationCount": 0,
+                "nativeTraceCount": 0,
+                "nativeTypeDbReasoningUsed": False,
+                "typedbNativeRuleReasoningUsed": False,
+            })
         snapshot["hypothesisCalibration"] = self.hypothesis_calibration_snapshot(
             clean_symbols,
             min(40, safe_limit),
@@ -12300,6 +12363,20 @@ def row_inference_generation_at(row: Dict[str, object]) -> str:
     return str((props or {}).get("inferenceGenerationAt") or (props or {}).get("asOf") or "").strip()
 
 
+def row_source_abox_snapshot_id(row: Dict[str, object]) -> str:
+    """Read source ABox provenance from a mapped TypeDB InferenceBox row."""
+    if not isinstance(row, dict):
+        return ""
+    direct = str(row.get("sourceAboxSnapshotId") or "").strip()
+    if direct:
+        return direct
+    try:
+        properties = json.loads(str(row.get("propertiesJson") or "{}"))
+    except (TypeError, ValueError, json.JSONDecodeError):
+        properties = {}
+    return str((properties or {}).get("sourceAboxSnapshotId") or "").strip()
+
+
 def inference_generation_marker_row(
     graph: PortfolioOntology,
     node_rows: Iterable[Dict[str, object]],
@@ -12376,7 +12453,11 @@ def inference_generation_records(
             "latestAt": "",
             "entityCount": 0,
             "relationCount": 0,
+            "sourceAboxSnapshotIds": [],
         })
+        source_abox_snapshot_id = row_source_abox_snapshot_id(row)
+        if source_abox_snapshot_id and source_abox_snapshot_id not in record["sourceAboxSnapshotIds"]:
+            record["sourceAboxSnapshotIds"].append(source_abox_snapshot_id)
         latest_at = row_inference_generation_at(row)
         if latest_at > str(record.get("latestAt") or ""):
             record["latestAt"] = latest_at
@@ -12384,7 +12465,48 @@ def inference_generation_records(
             record["relationCount"] = int(record.get("relationCount") or 0) + 1
         else:
             record["entityCount"] = int(record.get("entityCount") or 0) + 1
+    for record in records.values():
+        source_ids = sorted(str(value or "") for value in record.get("sourceAboxSnapshotIds") or [] if str(value or ""))
+        record["sourceAboxSnapshotIds"] = source_ids
+        record["sourceAboxSnapshotId"] = source_ids[0] if len(source_ids) == 1 else ""
     return sorted(records.values(), key=lambda item: str(item.get("latestAt") or ""), reverse=True)
+
+
+def select_inference_generation_record(
+    records: Iterable[Dict[str, object]],
+    active_abox_snapshot_id: str = "",
+) -> Dict[str, object]:
+    """Select a single generation, preferring verified active-ABox provenance.
+
+    This is only used as a compatibility read path when an old TypeDB runtime
+    omitted its active-generation marker. A source ABox match is stronger
+    evidence than timestamp ordering and prevents old/new inference rows from
+    being interpreted as one result.
+    """
+    candidates = [dict(record or {}) for record in records or [] if str((record or {}).get("generationId") or "").strip()]
+    active = str(active_abox_snapshot_id or "").strip()
+    if active:
+        aligned = [
+            record for record in candidates
+            if active in {
+                str(value or "").strip()
+                for value in record.get("sourceAboxSnapshotIds") or []
+            }
+            or str(record.get("sourceAboxSnapshotId") or "").strip() == active
+        ]
+        if not aligned:
+            return {}
+        candidates = aligned
+    if not candidates:
+        return {}
+    return sorted(
+        candidates,
+        key=lambda record: (
+            str(record.get("latestAt") or ""),
+            str(record.get("generationId") or ""),
+        ),
+        reverse=True,
+    )[0]
 
 
 def active_inference_generation(

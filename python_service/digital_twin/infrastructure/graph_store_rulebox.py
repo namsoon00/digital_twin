@@ -221,6 +221,11 @@ def build_rulebox_rules_from_rows(
                 or props.get("hypothesis_family_key")
                 or ""
             ),
+            "hypothesis_lifecycle": (
+                props.get("hypothesisLifecycle")
+                or props.get("hypothesis_lifecycle")
+                or {}
+            ),
             "any_condition_min_count": int(row.get("anyConditionMinCount") or props.get("anyConditionMinCount") or 1),
             "enabled": bool(row.get("enabled")) if row.get("enabled") is not None else bool(props.get("enabled", True)),
         }

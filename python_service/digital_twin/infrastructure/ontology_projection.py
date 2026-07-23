@@ -159,6 +159,7 @@ class PortfolioOntologyProjectionRecorder:
         quality_store=None,
         decision_episode_store=None,
         hypothesis_proposal_store=None,
+        hypothesis_lifecycle_store=None,
         data_pipeline_health_store=None,
         market_time_series_store=None,
         projection_run_store=None,
@@ -170,6 +171,7 @@ class PortfolioOntologyProjectionRecorder:
         self.quality_store = quality_store
         self.decision_episode_store = decision_episode_store
         self.hypothesis_proposal_store = hypothesis_proposal_store
+        self.hypothesis_lifecycle_store = hypothesis_lifecycle_store
         self.data_pipeline_health_store = data_pipeline_health_store
         self.market_time_series_store = market_time_series_store
         self.projection_run_store = projection_run_store
@@ -1800,6 +1802,7 @@ class PortfolioOntologyProjectionRecorder:
             "decisionEpisodes": decision_episodes,
             "decisionPerformance": decision_performance,
             "hypothesisProposals": self.hypothesis_proposal_context(snapshot),
+            "hypothesisLifecycles": self.hypothesis_lifecycle_context(snapshot),
             "dataPipelineHealth": self.data_pipeline_health_context(),
             "temporalObservationWindows": self.temporal_observation_windows(snapshot),
         }
@@ -1879,4 +1882,24 @@ class PortfolioOntologyProjectionRecorder:
             if isinstance(item, dict)
             and str(item.get("accountId") or "") == str(snapshot.account_id or "")
             and str(item.get("symbol") or "").upper().strip() in symbols
+        ]
+
+    def hypothesis_lifecycle_context(self, snapshot: AccountSnapshot) -> List[Dict[str, object]]:
+        if not self.hypothesis_lifecycle_store or not hasattr(self.hypothesis_lifecycle_store, "current_for_subjects"):
+            return []
+        symbols = {
+            str(getattr(position, "symbol", "") or "").upper().strip()
+            for position in list(snapshot.positions or []) + list(snapshot.watchlist or [])
+            if str(getattr(position, "symbol", "") or "").strip() and not position.is_cash()
+        }
+        if not symbols:
+            return []
+        try:
+            records = self.hypothesis_lifecycle_store.current_for_subjects(snapshot.account_id, symbols)
+        except Exception:  # noqa: BLE001 - lifecycle audit must not block a factual ABox projection.
+            return []
+        return [
+            item.to_dict()
+            for item in (records or {}).values()
+            if hasattr(item, "to_dict")
         ]

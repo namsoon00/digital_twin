@@ -32,6 +32,7 @@ class InvestmentBrainService:
         hypothesis_proposal_service=None,
         research_store=None,
         settings: Dict[str, object] = None,
+        hypothesis_lifecycle_store=None,
     ):
         self.monitor_store = monitor_store
         self.ontology_repository = ontology_repository
@@ -42,6 +43,7 @@ class InvestmentBrainService:
         self.hypothesis_proposal_service = hypothesis_proposal_service
         self.research_store = research_store
         self.settings = dict(settings or {})
+        self.hypothesis_lifecycle_store = hypothesis_lifecycle_store
 
     def ask(self, message: str, account_id: str = "", symbol: str = "") -> Dict[str, object]:
         message = " ".join(str(message or "").split())
@@ -560,6 +562,52 @@ class InvestmentBrainService:
             "source": "typedb-active-rulebox",
             "count": len(rows),
             "templates": rows,
+        }
+
+    def hypothesis_lifecycles(
+        self,
+        account_id: str = "",
+        symbol: str = "",
+        market_id: str = "",
+        scope: str = "",
+        limit: int = 100,
+        event_limit: int = 100,
+    ) -> Dict[str, object]:
+        """Read lifecycle audit records; this does not run or alter inference."""
+
+        if not self.hypothesis_lifecycle_store:
+            return {
+                "status": "unavailable",
+                "engine": "ontology-investment-brain",
+                "records": [],
+                "events": [],
+            }
+        records = self.hypothesis_lifecycle_store.list_current(
+            account_id=account_id,
+            symbol=symbol,
+            market_id=market_id,
+            scope=scope,
+            limit=limit,
+        ) if hasattr(self.hypothesis_lifecycle_store, "list_current") else []
+        events = self.hypothesis_lifecycle_store.list_events(
+            account_id=account_id,
+            symbol=symbol,
+            market_id=market_id,
+            scope=scope,
+            limit=event_limit,
+        ) if hasattr(self.hypothesis_lifecycle_store, "list_events") else []
+        return {
+            "status": "ok",
+            "engine": "ontology-investment-brain",
+            "source": "typedb-hypothesis-lifecycle-audit",
+            "accountId": account_id,
+            "symbol": str(symbol or "").upper(),
+            "marketId": market_id,
+            "scope": scope,
+            "count": len(records),
+            "eventCount": len(events),
+            "records": [item.to_dict() for item in records if hasattr(item, "to_dict")],
+            "events": [item.to_dict() for item in events if hasattr(item, "to_dict")],
         }
 
     def research_runs(self, account_id: str = "", symbol: str = "", limit: int = 50) -> Dict[str, object]:

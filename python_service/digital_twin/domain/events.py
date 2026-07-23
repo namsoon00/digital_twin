@@ -30,6 +30,7 @@ DATA_PIPELINE_HEALTH_CHANGED = "data_pipeline.health_changed"
 HYPOTHESIS_RESEARCH_COMPLETED = "investment_hypothesis.research_completed"
 HYPOTHESIS_PROPOSED = "investment_hypothesis.proposed"
 HYPOTHESIS_REVIEWED = "investment_hypothesis.reviewed"
+HYPOTHESIS_LIFECYCLE_TRANSITIONED = "investment_hypothesis.lifecycle_transitioned"
 ONTOLOGY_REASONING_REQUESTED = "ontology.reasoning_requested"
 ONTOLOGY_REASONING_COMPLETED = "ontology.reasoning_completed"
 INVESTMENT_CALENDAR_EVENT_SAVED = "investment_calendar.event_saved"
@@ -373,6 +374,32 @@ def hypothesis_reviewed_event(payload: Dict[str, object]) -> DomainEvent:
         name=HYPOTHESIS_REVIEWED,
         aggregate_id=str(payload.get("proposalId") or "hypothesis-proposal"),
         payload=dict(payload or {}),
+    )
+
+
+def hypothesis_lifecycle_transitioned_event(payload: Dict[str, object]) -> DomainEvent:
+    """Publish audit-only lifecycle changes without creating an alert signal."""
+
+    lifecycle_key = str(payload.get("lifecycleKey") or payload.get("lifecycle_key") or "unknown")
+    return DomainEvent(
+        name=HYPOTHESIS_LIFECYCLE_TRANSITIONED,
+        aggregate_id="hypothesis-lifecycle:" + lifecycle_key[:160],
+        payload={
+            "lifecycleKey": lifecycle_key,
+            "lifecycleId": str(payload.get("lifecycleId") or payload.get("lifecycle_id") or ""),
+            "scope": str(payload.get("scope") or ""),
+            "symbol": str(payload.get("symbol") or "").upper(),
+            "accountId": str(payload.get("accountId") or payload.get("account_id") or ""),
+            "previousState": str(payload.get("previousState") or payload.get("previous_state") or ""),
+            "currentState": str(payload.get("currentState") or payload.get("current_state") or ""),
+            "inferenceGenerationId": str(payload.get("inferenceGenerationId") or payload.get("inference_generation_id") or ""),
+            "previousGenerationId": str(payload.get("previousGenerationId") or payload.get("previous_generation_id") or ""),
+            "occurredAt": str(payload.get("occurredAt") or payload.get("occurred_at") or ""),
+            "reason": str(payload.get("reason") or ""),
+            "materialChange": bool(payload.get("materialChange") if "materialChange" in payload else payload.get("material_change")),
+            "evidenceDelta": dict(payload.get("evidenceDelta") or payload.get("evidence_delta") or {}),
+            "source": "typedb-hypothesis-lifecycle",
+        },
     )
 
 

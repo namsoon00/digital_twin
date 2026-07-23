@@ -24,6 +24,7 @@ from .ontology_rulebox_contracts import (
     WATCHLIST_TARGET_ROLE,
 )
 from .ontology_threshold_policy import ontology_threshold_policy_from_context
+from .ontology_observation_quality import position_observation_profiles
 from .ontology_relation_decisions import decision_stage_from_relation
 from .ontology_worlds import market_world
 from .ontology_relation_reasoning import (
@@ -132,6 +133,12 @@ def relation_contexts_from_snapshot(
         if getattr(item, "symbol", "") and not item.is_cash()
     ]
     result: Dict[str, Dict[str, object]] = {}
+    lifecycle_by_symbol = (
+        snapshot.metadata.get("hypothesisLifecycle", {}).get("bySymbol", {})
+        if isinstance(snapshot.metadata, dict)
+        and isinstance(snapshot.metadata.get("hypothesisLifecycle"), dict)
+        else {}
+    )
     holding_symbols = {str(item.symbol or "").upper() for item in snapshot.positions or [] if getattr(item, "symbol", "") and not item.is_cash()}
     for position in positions:
         symbol = str(position.symbol or "").upper().strip()
@@ -147,6 +154,11 @@ def relation_contexts_from_snapshot(
             source=source,
             account_id=snapshot.account_id,
             portfolio_world_id=str(inferencebox.get("worldId") or ""),
+            hypothesis_lifecycle=(
+                lifecycle_by_symbol.get(symbol)
+                if isinstance(lifecycle_by_symbol.get(symbol), dict)
+                else {}
+            ),
         )
         if context:
             result[symbol] = context
@@ -164,6 +176,7 @@ def relation_context_from_inferencebox(
     account_id: str = "",
     portfolio_world_id: str = "",
     market_world_id: str = "",
+    hypothesis_lifecycle: Optional[Dict[str, object]] = None,
 ) -> Dict[str, object]:
     symbol = str(position.symbol or "").upper().strip()
     if not symbol or not isinstance(inferencebox, dict):
@@ -186,6 +199,13 @@ def relation_context_from_inferencebox(
         portfolio,
         external_signals or {},
         settings=settings or {},
+    )
+    observation_profiles = position_observation_profiles(
+        position,
+        {
+            "settings": settings or {},
+            "asOf": str(inferencebox.get("inferenceGenerationAt") or ""),
+        },
     )
     resolved_account_id = str(account_id or facts.get("accountId") or "").strip()
     resolved_portfolio_world_id = str(portfolio_world_id or inferencebox.get("worldId") or "").strip()
@@ -266,6 +286,8 @@ def relation_context_from_inferencebox(
         prompt_context["hypothesisSet"] = investment_brain.get("hypothesisSet") or {}
         prompt_context["hypothesisCalibration"] = investment_brain.get("hypothesisCalibration") or {}
         prompt_context["researchPlan"] = investment_brain.get("researchPlan") or {}
+        if hypothesis_lifecycle:
+            prompt_context["hypothesisLifecycle"] = dict(hypothesis_lifecycle)
     return {
         "engineVersion": context_version,
         "source": source_name,
@@ -274,6 +296,7 @@ def relation_context_from_inferencebox(
         "fallbackUsed": False,
         "nativeTypeDbReasoningUsed": bool(inferencebox.get("nativeTypeDbReasoningUsed")),
         "typedbBootstrapReasoningUsed": bool(inferencebox.get("typedbBootstrapReasoningUsed")),
+        "inferenceStatus": str(inferencebox.get("status") or ""),
         "subject": {
             "symbol": facts.get("symbol"),
             "name": facts.get("name"),
@@ -281,6 +304,7 @@ def relation_context_from_inferencebox(
             "sector": facts.get("sector"),
         },
         "facts": facts,
+        "observationProfiles": observation_profiles,
         "matchedRules": [item.to_dict() for item in matches if item.matched],
         "activeRules": [item.to_dict() for item in active_matches],
         "referenceRules": [item.to_dict() for item in matches if item.reference_only],
@@ -303,6 +327,7 @@ def relation_context_from_inferencebox(
         "hypothesisSet": investment_brain.get("hypothesisSet") or {},
         "hypothesisCalibration": investment_brain.get("hypothesisCalibration") or {},
         "researchPlan": investment_brain.get("researchPlan") or {},
+        "hypothesisLifecycle": dict(hypothesis_lifecycle or {}),
         "hypothesisTemplates": investment_brain.get("hypothesisTemplates") or [],
         "selfQuestions": investment_brain.get("selfQuestions") or [],
         "epistemicState": investment_brain.get("epistemicState") or {},

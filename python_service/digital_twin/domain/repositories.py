@@ -6,6 +6,7 @@ from .accounts import AccountConfig
 from .events import DomainEvent
 from .investment_research import NewsCollectionTarget, ResearchEvidence
 from .investment_brain import DecisionEpisode, LearningProposal, NovelHypothesisProposal, ObservedOutcome
+from .hypothesis_lifecycle import HypothesisLifecycleRecord, HypothesisLifecycleTransition
 from .investment_evidence_governance import ResearchRun
 from .investment_calendar import InvestmentCalendarEvent
 from .ontology_contracts import PortfolioOntology
@@ -272,6 +273,48 @@ class DecisionEpisodeRepository(Protocol):
         ...
 
     def review_learning_proposal(self, proposal_id: str, status: str, note: str = "") -> Dict[str, object]:
+        ...
+
+
+class HypothesisLifecycleRepository(Protocol):
+    """Durable audit state for generation-to-generation TypeDB hypotheses."""
+
+    def current_for_keys(self, lifecycle_keys: Iterable[str]) -> Dict[str, HypothesisLifecycleRecord]:
+        ...
+
+    def list_current(
+        self,
+        account_id: str = "",
+        symbol: str = "",
+        market_id: str = "",
+        scope: str = "",
+        limit: int = 100,
+    ) -> List[HypothesisLifecycleRecord]:
+        ...
+
+    def current_for_subjects(
+        self,
+        account_id: str,
+        symbols: Iterable[str],
+    ) -> Dict[str, HypothesisLifecycleRecord]:
+        ...
+
+    def list_events(
+        self,
+        account_id: str = "",
+        symbol: str = "",
+        lifecycle_key: str = "",
+        market_id: str = "",
+        scope: str = "",
+        limit: int = 100,
+    ) -> List[HypothesisLifecycleTransition]:
+        ...
+
+    def save(
+        self,
+        record: HypothesisLifecycleRecord,
+        transition: HypothesisLifecycleTransition = None,
+    ) -> HypothesisLifecycleRecord:
         ...
 
 

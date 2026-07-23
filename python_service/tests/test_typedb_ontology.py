@@ -34,6 +34,9 @@ from digital_twin.infrastructure.typedb_ontology import (
     node_boxes,
     ontology_storage_id,
     relation_row_id,
+    typedb_literal,
+    typedb_literal_for_attribute,
+    typeql_has,
     typedb_repository_from_settings,
     typedb_inferencebox_graph,
     typedb_native_function_definition,
@@ -2051,6 +2054,19 @@ class TypeDBOntologyRepositoryTests(unittest.TestCase):
         relation_queries = [query for query in queries if query.startswith("match $source0 isa ontology-node")]
         self.assertEqual(6, len(relation_queries))
         self.assertTrue(all(query.count(" isa ontology-assertion") == 5 for query in relation_queries))
+
+    def test_typedb_numeric_literals_use_fixed_point_not_scientific_notation(self):
+        small_ratio = 0.00006
+
+        self.assertEqual(
+            ", has ontology-value-number 0.00006",
+            typeql_has("ontology-value-number", small_ratio, numeric=True),
+        )
+        self.assertEqual(
+            "0.00006",
+            typedb_literal_for_attribute("ontology-value-number", small_ratio),
+        )
+        self.assertEqual("0.00006", typedb_literal(small_ratio))
 
     def test_typedb_graph_insert_queries_split_large_payloads_by_byte_size(self):
         graph = PortfolioOntology("portfolio:large-payload-batches")

@@ -183,6 +183,45 @@ MYSQL_OPERATIONAL_INDEXES: Dict[str, Sequence[MySQLIndexDefinition]] = {
             "`updated_at`, `proposal_id`",
         ),
     ),
+    "investment_hypothesis_lifecycle_states": (
+        MySQLIndexDefinition(
+            "investment_hypothesis_lifecycle_states",
+            "idx_hypothesis_lifecycle_account_symbol",
+            "`account_id`, `symbol`, `updated_at`",
+        ),
+        MySQLIndexDefinition(
+            "investment_hypothesis_lifecycle_states",
+            "idx_hypothesis_lifecycle_market_symbol",
+            "`market_id`, `symbol`, `updated_at`",
+        ),
+        MySQLIndexDefinition(
+            "investment_hypothesis_lifecycle_states",
+            "idx_hypothesis_lifecycle_state_updated",
+            "`state`, `updated_at`",
+        ),
+        MySQLIndexDefinition(
+            "investment_hypothesis_lifecycle_states",
+            "idx_hypothesis_lifecycle_generation",
+            "`inference_generation_id`",
+        ),
+    ),
+    "investment_hypothesis_lifecycle_events": (
+        MySQLIndexDefinition(
+            "investment_hypothesis_lifecycle_events",
+            "idx_hypothesis_lifecycle_events_key_time",
+            "`lifecycle_key`, `occurred_at`",
+        ),
+        MySQLIndexDefinition(
+            "investment_hypothesis_lifecycle_events",
+            "idx_hypothesis_lifecycle_events_account_symbol",
+            "`account_id`, `symbol`, `occurred_at`",
+        ),
+        MySQLIndexDefinition(
+            "investment_hypothesis_lifecycle_events",
+            "idx_hypothesis_lifecycle_events_state_time",
+            "`current_state`, `occurred_at`",
+        ),
+    ),
 }
 
 

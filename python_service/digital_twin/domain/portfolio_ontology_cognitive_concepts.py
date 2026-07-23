@@ -10,6 +10,7 @@ def add_investment_brain_concepts(
     decision_episodes: Iterable[Dict[str, object]],
     hypothesis_proposals: Iterable[Dict[str, object]] = None,
     decision_performance: Dict[str, object] = None,
+    hypothesis_lifecycles: Iterable[Dict[str, object]] = None,
 ) -> None:
     portfolio_node_id = entity_id("portfolio", portfolio_id)
     episode_rows = [item for item in decision_episodes or [] if isinstance(item, dict)]
@@ -414,6 +415,82 @@ def add_investment_brain_concepts(
     add_hypothesis_calibration_concepts(graph, portfolio_id, episode_rows)
     add_decision_performance_concepts(graph, portfolio_id, decision_performance or {})
     add_novel_hypothesis_proposal_concepts(graph, portfolio_id, hypothesis_proposals or [])
+    add_hypothesis_lifecycle_concepts(graph, portfolio_id, hypothesis_lifecycles or [])
+
+
+def add_hypothesis_lifecycle_concepts(
+    graph: PortfolioOntology,
+    portfolio_id: str,
+    lifecycles: Iterable[Dict[str, object]],
+) -> None:
+    """Project lifecycle audit facts without using them as investment rules."""
+
+    portfolio_node_id = entity_id("portfolio", portfolio_id)
+    for row in lifecycles or []:
+        if not isinstance(row, dict):
+            continue
+        lifecycle_key = str(row.get("lifecycleKey") or "").strip()
+        symbol = str(row.get("symbol") or "").upper().strip()
+        if not lifecycle_key or not symbol:
+            continue
+        lifecycle_id = add_entity(graph, "hypothesis-lifecycle", lifecycle_key, symbol + " 가설 수명주기", {
+            "tboxClass": "HypothesisLifecycle",
+            "lifecycleKey": lifecycle_key,
+            "lifecycleId": row.get("lifecycleId"),
+            "scope": row.get("scope"),
+            "state": row.get("state"),
+            "stateLabel": row.get("stateLabel"),
+            "familyId": row.get("familyId"),
+            "marketWorldId": row.get("marketWorldId"),
+            "portfolioWorldId": row.get("portfolioWorldId"),
+            "inferenceGenerationId": row.get("inferenceGenerationId"),
+            "previousGenerationId": row.get("previousGenerationId"),
+            "firstObservedAt": row.get("firstObservedAt"),
+            "lastObservedAt": row.get("lastObservedAt"),
+            "lastTransitionAt": row.get("lastTransitionAt"),
+            "transitionReason": row.get("transitionReason"),
+            "materialChange": bool(row.get("materialChange")),
+            "source": "typedb-hypothesis-lifecycle-audit",
+        })
+        stock_id = entity_id("stock", symbol)
+        add_relation(graph, stock_id, lifecycle_id, "HAS_HYPOTHESIS_LIFECYCLE", weight=1.0, properties={
+            "source": "typedb-hypothesis-lifecycle-audit",
+            "scope": row.get("scope"),
+            "state": row.get("state"),
+        })
+        add_relation(graph, portfolio_node_id, lifecycle_id, "HAS_HYPOTHESIS_LIFECYCLE", weight=1.0, properties={
+            "source": "typedb-hypothesis-lifecycle-audit",
+            "scope": row.get("scope"),
+        })
+        policy = row.get("snapshot", {}).get("policy") if isinstance(row.get("snapshot"), dict) else {}
+        if isinstance(policy, dict):
+            policy_id = add_entity(graph, "hypothesis-lifecycle-policy", lifecycle_key, "가설 수명주기 정책", {
+                "tboxClass": "HypothesisLifecyclePolicy",
+                **dict(policy),
+                "source": "typedb-rulebox-lifecycle-policy",
+            })
+            add_relation(graph, lifecycle_id, policy_id, "GOVERNED_BY_LIFECYCLE_POLICY", weight=1.0, properties={
+                "source": "typedb-rulebox-lifecycle-policy",
+            })
+            for index, requirement in enumerate(policy.get("nextDataRequirements") or []):
+                requirement_id = add_entity(graph, "information-need", lifecycle_key + ":" + str(index), str(requirement), {
+                    "tboxClass": "InformationNeed",
+                    "status": "next-generation-check",
+                    "source": "typedb-rulebox-lifecycle-policy",
+                })
+                add_relation(graph, lifecycle_id, requirement_id, "REQUIRES_NEXT_DATA", weight=1.0, properties={
+                    "source": "typedb-rulebox-lifecycle-policy",
+                })
+        delta = row.get("evidenceDelta") if isinstance(row.get("evidenceDelta"), dict) else {}
+        if delta:
+            delta_id = add_entity(graph, "hypothesis-evidence-delta", lifecycle_key + ":" + str(row.get("inferenceGenerationId") or "current"), "가설 근거 변화", {
+                "tboxClass": "HypothesisEvidenceDelta",
+                "delta": dict(delta),
+                "source": "typedb-hypothesis-lifecycle-audit",
+            })
+            add_relation(graph, lifecycle_id, delta_id, "HAS_EVIDENCE_DELTA", weight=1.0, properties={
+                "source": "typedb-hypothesis-lifecycle-audit",
+            })
 
 
 def add_decision_performance_concepts(

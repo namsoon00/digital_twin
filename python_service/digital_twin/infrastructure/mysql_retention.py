@@ -14,6 +14,7 @@ DEFAULT_SNAPSHOT_HISTORY_KEEP_COUNT = 6
 DEFAULT_SUPPRESSED_NOTIFICATION_RETENTION_MINUTES = 120
 DEFAULT_LARGE_DOMAIN_EVENT_KEEP_COUNT = 100
 DEFAULT_LARGE_DOMAIN_EVENT_NAMES = ("monitoring.alerts_detected",)
+DEFAULT_HYPOTHESIS_LIFECYCLE_EVENT_RETENTION_DAYS = 180
 DEFAULT_MARKET_TIME_SERIES_RETENTION_DAYS = {
     "3m": 7,
     "15m": 120,
@@ -146,6 +147,16 @@ def market_time_series_retention_days(settings: Mapping[str, object] = None) -> 
     }
 
 
+def hypothesis_lifecycle_event_retention_days(settings: Mapping[str, object] = None) -> int:
+    return _int_setting(
+        settings or {},
+        "hypothesisLifecycleEventRetentionDays",
+        DEFAULT_HYPOTHESIS_LIFECYCLE_EVENT_RETENTION_DAYS,
+        7,
+        3650,
+    )
+
+
 def operational_history_retention_cutoff(
     settings: Mapping[str, object] = None,
     now: Optional[datetime] = None,
@@ -182,6 +193,18 @@ def market_time_series_retention_cutoffs(
         granularity: (current - timedelta(days=days)).replace(microsecond=0).isoformat().replace("+00:00", "Z")
         for granularity, days in market_time_series_retention_days(settings).items()
     }
+
+
+def hypothesis_lifecycle_event_retention_cutoff(
+    settings: Mapping[str, object] = None,
+    now: Optional[datetime] = None,
+) -> str:
+    current = now or datetime.now(timezone.utc)
+    if current.tzinfo is None:
+        current = current.replace(tzinfo=timezone.utc)
+    current = current.astimezone(timezone.utc)
+    cutoff = current - timedelta(days=hypothesis_lifecycle_event_retention_days(settings))
+    return cutoff.replace(microsecond=0).isoformat().replace("+00:00", "Z")
 
 
 def _fetch_scalar(cursor):
@@ -361,6 +384,7 @@ def apply_mysql_operational_history_retention(
     cutoff_iso = operational_history_retention_cutoff(configured, now=now)
     suppressed_cutoff_iso = operational_suppressed_notification_cutoff(configured, now=now)
     time_series_cutoffs = market_time_series_retention_cutoffs(configured, now=now)
+    lifecycle_event_cutoff_iso = hypothesis_lifecycle_event_retention_cutoff(configured, now=now)
     batch_size = operational_history_retention_batch_size(configured)
     locked = False
     if use_lock:
@@ -408,6 +432,15 @@ def apply_mysql_operational_history_retention(
             time_series_deleted += deleted
             deleted_by_policy["tier:market_time_series_observations:" + granularity] = deleted
         deleted_by_table["market_time_series_observations"] = time_series_deleted
+
+        lifecycle_event_deleted = _delete_stale_rows(
+            connection,
+            MySQLRetentionTarget("investment_hypothesis_lifecycle_events", "occurred_at"),
+            lifecycle_event_cutoff_iso,
+            batch_size,
+        )
+        deleted_by_table["investment_hypothesis_lifecycle_events"] = lifecycle_event_deleted
+        deleted_by_policy["time:investment_hypothesis_lifecycle_events"] = lifecycle_event_deleted
     finally:
         if locked:
             try:
@@ -426,6 +459,8 @@ def apply_mysql_operational_history_retention(
         "largeDomainEventNames": operational_large_domain_event_names(configured),
         "marketTimeSeriesRetentionDays": market_time_series_retention_days(configured),
         "marketTimeSeriesCutoffs": time_series_cutoffs,
+        "hypothesisLifecycleEventRetentionDays": hypothesis_lifecycle_event_retention_days(configured),
+        "hypothesisLifecycleEventCutoffIso": lifecycle_event_cutoff_iso,
         "deleted": sum(deleted_by_table.values()),
         "tables": deleted_by_table,
         "policies": deleted_by_policy,

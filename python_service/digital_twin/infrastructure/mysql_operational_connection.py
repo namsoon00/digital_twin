@@ -621,6 +621,51 @@ MYSQL_SCHEMA = [
     ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
     """,
     """
+    CREATE TABLE IF NOT EXISTS investment_hypothesis_lifecycle_states (
+        lifecycle_key VARCHAR(255) PRIMARY KEY,
+        lifecycle_id VARCHAR(191) NOT NULL DEFAULT '',
+        scope VARCHAR(32) NOT NULL DEFAULT '',
+        account_id VARCHAR(191) NOT NULL DEFAULT '',
+        portfolio_world_id VARCHAR(191) NOT NULL DEFAULT '',
+        market_world_id VARCHAR(191) NOT NULL DEFAULT '',
+        market_id VARCHAR(64) NOT NULL DEFAULT '',
+        symbol VARCHAR(64) NOT NULL DEFAULT '',
+        family_id VARCHAR(191) NOT NULL DEFAULT '',
+        state VARCHAR(32) NOT NULL DEFAULT 'observed',
+        first_observed_at VARCHAR(40) NOT NULL DEFAULT '',
+        last_observed_at VARCHAR(40) NOT NULL DEFAULT '',
+        last_transition_at VARCHAR(40) NOT NULL DEFAULT '',
+        inference_generation_id VARCHAR(191) NOT NULL DEFAULT '',
+        inference_generation_at VARCHAR(40) NOT NULL DEFAULT '',
+        previous_generation_id VARCHAR(191) NOT NULL DEFAULT '',
+        semantic_fingerprint VARCHAR(64) NOT NULL DEFAULT '',
+        transition_reason TEXT NOT NULL,
+        material_change TINYINT(1) NOT NULL DEFAULT 0,
+        payload_json LONGTEXT NOT NULL,
+        created_at VARCHAR(40) NOT NULL,
+        updated_at VARCHAR(40) NOT NULL
+    ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
+    """,
+    """
+    CREATE TABLE IF NOT EXISTS investment_hypothesis_lifecycle_events (
+        transition_id VARCHAR(191) PRIMARY KEY,
+        lifecycle_key VARCHAR(255) NOT NULL,
+        lifecycle_id VARCHAR(191) NOT NULL DEFAULT '',
+        scope VARCHAR(32) NOT NULL DEFAULT '',
+        account_id VARCHAR(191) NOT NULL DEFAULT '',
+        market_id VARCHAR(64) NOT NULL DEFAULT '',
+        symbol VARCHAR(64) NOT NULL DEFAULT '',
+        previous_state VARCHAR(32) NOT NULL DEFAULT '',
+        current_state VARCHAR(32) NOT NULL DEFAULT '',
+        inference_generation_id VARCHAR(191) NOT NULL DEFAULT '',
+        previous_generation_id VARCHAR(191) NOT NULL DEFAULT '',
+        occurred_at VARCHAR(40) NOT NULL,
+        material_change TINYINT(1) NOT NULL DEFAULT 0,
+        payload_json LONGTEXT NOT NULL,
+        created_at VARCHAR(40) NOT NULL
+    ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
+    """,
+    """
     CREATE TABLE IF NOT EXISTS investment_decision_outcomes (
         outcome_id VARCHAR(191) PRIMARY KEY,
         episode_id VARCHAR(191) NOT NULL,

@@ -10,6 +10,7 @@ import threading
 import time
 import uuid
 from contextlib import contextmanager
+from decimal import Decimal, InvalidOperation
 from typing import Dict, Iterable, List, Tuple
 
 from ..domain.ontology_contracts import OntologyEntity, OntologyEvidence, OntologyRelation, PortfolioOntology, entity_id
@@ -94,6 +95,29 @@ def typedb_number(value: object):
         return None
     numeric = float(parsed)
     return numeric if math.isfinite(numeric) else None
+
+
+def typedb_number_literal(value: object) -> str:
+    """Return a TypeQL-compatible finite double literal.
+
+    Python renders small floats using scientific notation (for example
+    ``6e-05``), but TypeQL accepts fixed-point numeric literals only. Keeping
+    this conversion at the TypeDB boundary prevents one small market metric
+    from invalidating an entire ABox generation.
+    """
+
+    numeric = typedb_number(value)
+    if numeric is None:
+        return ""
+    try:
+        literal = format(Decimal(str(numeric)), "f")
+    except (InvalidOperation, ValueError):
+        literal = format(numeric, ".17f")
+    if "." not in literal:
+        literal += ".0"
+    if literal in {"-0", "-0.0"}:
+        return "0.0"
+    return literal
 
 
 def typedb_bool(value: object) -> bool:
@@ -232,10 +256,10 @@ def typeql_has(attribute: str, value: object, numeric: bool = False) -> str:
     if value in (None, "", [], {}):
         return ""
     if numeric:
-        parsed = typedb_number(value)
-        if parsed is None:
+        literal = typedb_number_literal(value)
+        if not literal:
             return ""
-        return ", has " + attribute + " " + str(parsed)
+        return ", has " + attribute + " " + literal
     return ", has " + attribute + " " + typedb_string(value)
 
 
@@ -11859,17 +11883,17 @@ def typedb_literal_for_attribute(attribute: str, value: object) -> str:
     if attribute in TYPEDB_STRING_ATTRIBUTES:
         return typedb_string("true" if value is True else "false" if value is False else value)
     if attribute in TYPEDB_NUMERIC_ATTRIBUTES:
-        numeric = typedb_number(value)
-        if numeric is not None and not isinstance(value, bool):
-            return str(numeric)
+        literal = typedb_number_literal(value)
+        if literal and not isinstance(value, bool):
+            return literal
     return typedb_literal(value)
 
 
 def typedb_literal(value: object) -> str:
     value = typedb_expected_value(value)
-    numeric = typedb_number(value)
-    if numeric is not None and not isinstance(value, bool):
-        return str(numeric)
+    literal = typedb_number_literal(value)
+    if literal and not isinstance(value, bool):
+        return literal
     return typedb_string("true" if value is True else "false" if value is False else value)
 
 

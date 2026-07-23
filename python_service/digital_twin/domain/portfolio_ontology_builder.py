@@ -343,6 +343,7 @@ def build_portfolio_ontology(
         runtime_context.get("decisionEpisodes") if isinstance(runtime_context, dict) else [],
         runtime_context.get("hypothesisProposals") if isinstance(runtime_context, dict) else [],
         runtime_context.get("decisionPerformance") if isinstance(runtime_context, dict) else {},
+        runtime_context.get("hypothesisLifecycles") if isinstance(runtime_context, dict) else [],
     )
     add_coverage_gap_concepts(graph, observed_positions, portfolio_id)
     graph.entities = dedupe_entities(graph.entities)

@@ -1,6 +1,6 @@
 import re
 from dataclasses import asdict, dataclass, field as dataclass_field
-from typing import Dict, List
+from typing import Dict, Iterable, List
 
 
 GRAPH_REASONER_VERSION = "typedb-rulebox-graph-reasoner-v1"
@@ -11,14 +11,93 @@ WATCHLIST_BLOCKED_ACTIONS = ["ADD", "TRIM", "SELL"]
 HOLDING_TARGET_ROLE = "holding"
 
 
+def _unique_strings(values: Iterable[object], limit: int = 64) -> List[str]:
+    result: List[str] = []
+    for value in values or []:
+        text = str(value or "").strip()
+        if text and text not in result:
+            result.append(text)
+        if len(result) >= limit:
+            break
+    return result
+
+
 def string_list(value: object) -> List[str]:
-    if isinstance(value, list):
+    if isinstance(value, (list, tuple, set)):
         return [str(item) for item in value if str(item or "").strip()]
     if value is None or value == "":
         return []
-    if isinstance(value, tuple):
-        return [str(item) for item in value if str(item or "").strip()]
     return [item.strip() for item in str(value).replace("\n", ",").split(",") if item.strip()]
+
+
+@dataclass(frozen=True)
+class HypothesisLifecyclePolicy:
+    """RuleBox-owned lifecycle semantics for a TypeDB hypothesis path.
+
+    These fields describe how an already materialized TypeDB path should be
+    audited across generations. They never choose an investment action in
+    Python. Empty values deliberately keep the conservative default: the
+    current TypeDB path remains valid until it is no longer materialized by a
+    healthy, aligned generation.
+    """
+
+    formation_condition_ids: List[str] = dataclass_field(default_factory=list)
+    invalidation_condition_ids: List[str] = dataclass_field(default_factory=list)
+    validity_minutes: int = 0
+    required_freshness_domains: List[str] = dataclass_field(default_factory=list)
+    next_data_requirements: List[str] = dataclass_field(default_factory=list)
+    invalidation_mode: str = "typedb-rule-not-materialized"
+
+    def to_dict(self) -> Dict[str, object]:
+        return {
+            "formationConditionIds": list(self.formation_condition_ids or []),
+            "invalidationConditionIds": list(self.invalidation_condition_ids or []),
+            "validityMinutes": int(self.validity_minutes or 0),
+            "requiredFreshnessDomains": list(self.required_freshness_domains or []),
+            "nextDataRequirements": list(self.next_data_requirements or []),
+            "invalidationMode": str(self.invalidation_mode or "typedb-rule-not-materialized"),
+        }
+
+    @staticmethod
+    def from_dict(
+        payload: Dict[str, object],
+        default_formation_condition_ids: Iterable[object] = None,
+    ):
+        payload = dict(payload or {})
+        raw_formation = (
+            payload.get("formation_condition_ids")
+            or payload.get("formationConditionIds")
+            or default_formation_condition_ids
+            or []
+        )
+        raw_validity = payload.get("validity_minutes")
+        if raw_validity is None:
+            raw_validity = payload.get("validityMinutes")
+        try:
+            validity_minutes = int(float(str(raw_validity or 0)))
+        except (TypeError, ValueError):
+            validity_minutes = 0
+        return HypothesisLifecyclePolicy(
+            formation_condition_ids=_unique_strings(string_list(raw_formation)),
+            invalidation_condition_ids=_unique_strings(string_list(
+                payload.get("invalidation_condition_ids")
+                or payload.get("invalidationConditionIds")
+            )),
+            validity_minutes=max(0, min(60 * 24 * 365, validity_minutes)),
+            required_freshness_domains=_unique_strings(string_list(
+                payload.get("required_freshness_domains")
+                or payload.get("requiredFreshnessDomains")
+            )),
+            next_data_requirements=_unique_strings(string_list(
+                payload.get("next_data_requirements")
+                or payload.get("nextDataRequirements")
+            )),
+            invalidation_mode=str(
+                payload.get("invalidation_mode")
+                or payload.get("invalidationMode")
+                or "typedb-rule-not-materialized"
+            ).strip() or "typedb-rule-not-materialized",
+        )
 
 
 def stable_rulebox_component_id(value: object, prefix: str, index: int) -> str:
@@ -163,11 +242,47 @@ class GraphInferenceRule:
     # into one current-situation hypothesis family. Empty keeps the rule on
     # the conservative structural-signature path.
     hypothesis_family_key: str = ""
+    # Lifecycle configuration is part of the editable RuleBox contract. The
+    # TypeDB native rule still decides whether a condition is active; this
+    # policy only records how a materialized path changes over generations.
+    hypothesis_lifecycle: HypothesisLifecyclePolicy = dataclass_field(default_factory=HypothesisLifecyclePolicy)
     any_condition_min_count: int = 1
     enabled: bool = True
 
+    def resolved_hypothesis_lifecycle(self) -> HypothesisLifecyclePolicy:
+        """Return the RuleBox lifecycle policy with safe formation defaults.
+
+        Bootstrap rules are constructed as Python objects, while edited rules
+        are reconstructed from TypeDB rows.  Both paths need the same visible
+        lifecycle contract, so an omitted formation list resolves to the
+        rule's non-optional conditions without mutating the source rule.
+        """
+
+        configured = self.hypothesis_lifecycle
+        formation = list(configured.formation_condition_ids or [])
+        if not formation:
+            formation = [
+                condition.condition_id
+                for condition in self.conditions
+                if str(condition.role or "required").lower() not in {"optional", "negative", "exclude"}
+            ]
+        try:
+            validity_minutes = int(float(str(configured.validity_minutes or 0)))
+        except (TypeError, ValueError):
+            validity_minutes = 0
+        return HypothesisLifecyclePolicy(
+            formation_condition_ids=_unique_strings(formation),
+            invalidation_condition_ids=_unique_strings(configured.invalidation_condition_ids),
+            validity_minutes=max(0, min(60 * 24 * 365, validity_minutes)),
+            required_freshness_domains=_unique_strings(configured.required_freshness_domains),
+            next_data_requirements=_unique_strings(configured.next_data_requirements),
+            invalidation_mode=str(configured.invalidation_mode or "typedb-rule-not-materialized").strip()
+            or "typedb-rule-not-materialized",
+        )
+
     def to_dict(self) -> Dict[str, object]:
         payload = asdict(self)
+        payload["hypothesis_lifecycle"] = self.resolved_hypothesis_lifecycle().to_dict()
         payload["conditionCount"] = len(self.conditions)
         payload["derivationCount"] = len(self.derivations)
         return payload
@@ -201,6 +316,11 @@ class GraphInferenceRule:
             raise ValueError("RuleBox rule must contain at least one condition.")
         if not derivations:
             raise ValueError("RuleBox rule must contain at least one derivation.")
+        default_formation_condition_ids = [
+            condition.condition_id
+            for condition in conditions
+            if str(condition.role or "required").lower() not in {"optional", "negative", "exclude"}
+        ]
         return GraphInferenceRule(
             rule_id=rule_id,
             label=str(payload.get("label") or rule_id),
@@ -216,6 +336,12 @@ class GraphInferenceRule:
                 or payload.get("hypothesisFamilyKey")
                 or ""
             ).strip(),
+            hypothesis_lifecycle=HypothesisLifecyclePolicy.from_dict(
+                payload.get("hypothesis_lifecycle")
+                or payload.get("hypothesisLifecycle")
+                or {},
+                default_formation_condition_ids=default_formation_condition_ids,
+            ),
             any_condition_min_count=max(1, int(payload.get("any_condition_min_count") or payload.get("anyConditionMinCount") or 1)),
             enabled=bool(payload.get("enabled")) if "enabled" in payload else True,
         )

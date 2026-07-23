@@ -85,6 +85,7 @@ from ..infrastructure import operational_store as stores
 from ..infrastructure.operational_error_reporting import operational_error_reporter, report_runtime_error
 from ..infrastructure.service_factory import (
     build_investment_calendar_candidate_service,
+    build_investment_calendar_discovery_service,
     build_investment_calendar_research_service,
     build_investment_calendar_runner,
     build_investment_calendar_service,
@@ -685,6 +686,14 @@ def settings_status_payload() -> Dict[str, object]:
         "investmentCalendarAutoExtractEnabled",
         "investmentCalendarAutoExtractRegisterUndated",
         "investmentCalendarAutoExtractReviewEnabled",
+        "investmentCalendarAiResearchEnabled",
+        "investmentCalendarAiResearchRunCollection",
+        "investmentCalendarAiResearchEvidenceLimit",
+        "investmentCalendarAiResearchCandidateLimit",
+        "investmentCalendarDiscoveryEnabled",
+        "investmentCalendarDiscoveryIntervalHours",
+        "investmentCalendarDiscoveryMaxSymbols",
+        "investmentCalendarDiscoveryHorizonDays",
         "investmentCalendarOfficialMacroSyncEnabled",
         "investmentCalendarOfficialMacroSyncIntervalHours",
         "investmentCalendarOfficialMacroSyncRateLimitSeconds",
@@ -2055,6 +2064,10 @@ def investment_calendar_research_service():
     return build_investment_calendar_research_service(runtime_settings())
 
 
+def investment_calendar_discovery_service():
+    return build_investment_calendar_discovery_service(runtime_settings(), event_publisher=RealtimeEventBridge())
+
+
 def investment_calendar_query_payload(query: Dict[str, List[str]]) -> Dict[str, object]:
     return {
         "from": first_query(query, "from") or first_query(query, "fromAt"),
@@ -2079,7 +2092,9 @@ def delete_investment_calendar_event_payload(event_id: str) -> Dict[str, object]
 
 
 def investment_calendar_reminders_once_payload() -> Dict[str, object]:
-    return build_investment_calendar_runner(runtime_settings(), event_publisher=RealtimeEventBridge()).run_once()
+    # The manual UI control is a reminder check only. Official sync and external
+    # date discovery run on the calendar worker or their explicit controls.
+    return investment_calendar_service().enqueue_due_reminders()
 
 
 def investment_calendar_sync_official_payload() -> Dict[str, object]:
@@ -2102,6 +2117,10 @@ def investment_calendar_candidates_payload(query: Dict[str, List[str]]) -> Dict[
 
 def research_investment_calendar_candidates_payload(payload: Dict[str, object]) -> Dict[str, object]:
     return investment_calendar_research_service().recommend(payload if isinstance(payload, dict) else {})
+
+
+def discover_investment_calendar_payload(payload: Dict[str, object]) -> Dict[str, object]:
+    return investment_calendar_discovery_service().run_once(payload if isinstance(payload, dict) else {}, force=True)
 
 
 def approve_investment_calendar_candidate_payload(candidate_id: str, payload: Dict[str, object]) -> Dict[str, object]:
@@ -3692,6 +3711,11 @@ class DigitalTwinHandler(BaseHTTPRequestHandler):
                 return
             return self.send_payload(200, research_investment_calendar_candidates_payload(self.read_json_body()))
 
+        if path == "/api/investment-calendar/discovery" and self.command == "POST":
+            if not self.ensure_writable("공유 모드에서는 투자 일정 탐색을 실행할 수 없습니다."):
+                return
+            return self.send_payload(200, discover_investment_calendar_payload(self.read_json_body()))
+
         calendar_candidate_match = re.match(r"^/api/investment-calendar/candidates/([^/]+)/(approve|reject)$", path)
         if calendar_candidate_match and self.command == "POST":
             if not self.ensure_writable("공유 모드에서는 투자 캘린더 후보를 검토할 수 없습니다."):
@@ -3834,6 +3858,24 @@ class DigitalTwinHandler(BaseHTTPRequestHandler):
 
         if path == "/api/investment-brain/hypothesis-templates" and self.command == "GET":
             return self.send_payload(200, build_investment_brain_service().hypothesis_templates())
+
+        if path == "/api/investment-brain/hypothesis-lifecycles" and self.command == "GET":
+            try:
+                limit = int(first_query(query, "limit") or 100)
+            except ValueError:
+                limit = 100
+            try:
+                event_limit = int(first_query(query, "eventLimit") or 100)
+            except ValueError:
+                event_limit = 100
+            return self.send_payload(200, build_investment_brain_service().hypothesis_lifecycles(
+                account_id=first_query(query, "accountId"),
+                symbol=first_query(query, "symbol"),
+                market_id=first_query(query, "marketId"),
+                scope=first_query(query, "scope"),
+                limit=limit,
+                event_limit=event_limit,
+            ))
 
         if path == "/api/investment-brain/research-runs" and self.command == "GET":
             try:

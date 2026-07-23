@@ -8,9 +8,11 @@ from ..application.investment_analysis_service import InvestmentAnalysisService
 from ..application.investment_brain_service import InvestmentBrainService
 from ..application.investment_research_orchestration_service import InvestmentResearchOrchestrationService, InvestmentResearchQueueRunner
 from ..application.hypothesis_proposal_service import HypothesisProposalService
+from ..application.hypothesis_lifecycle_service import HypothesisLifecycleService
 from ..application.hypothesis_research_planner_service import HypothesisResearchPlanningService
 from ..application.investment_strategy_proposal_service import InvestmentStrategyProposalService
 from ..application.investment_calendar_candidate_service import InvestmentCalendarCandidateService
+from ..application.investment_calendar_discovery_service import InvestmentCalendarDiscoveryService
 from ..application.investment_calendar_extraction_service import InvestmentCalendarExtractionService
 from ..application.investment_calendar_research_service import InvestmentCalendarResearchRecommendationService
 from ..application.investment_calendar_service import InvestmentCalendarRunner, InvestmentCalendarService
@@ -132,6 +134,15 @@ def monitor_account_job_store_from_settings(settings):
     return stores.monitor_account_job_store(settings)
 
 
+def build_hypothesis_lifecycle_service(settings=None, event_publisher=None) -> HypothesisLifecycleService:
+    configured_settings = settings or runtime_settings()
+    return HypothesisLifecycleService(
+        store=stores.hypothesis_lifecycle_store(configured_settings),
+        event_publisher=event_publisher,
+        settings=configured_settings,
+    )
+
+
 def build_monitor_runner(
     accounts: Iterable[AccountConfig],
     event_publisher=None,
@@ -145,13 +156,14 @@ def build_monitor_runner(
     market_time_series_store = stores.market_time_series_store(configured_settings)
     ontology_quality_store = stores.ontology_quality_sample_store(configured_settings)
     interval_seconds = int(os.environ.get("PYTHON_REALTIME_INTERVAL_SECONDS") or os.environ.get("REALTIME_NOTIFY_INTERVAL_SECONDS") or configured_settings.get("monitorAccountIntervalSeconds") or 180)
+    publisher = event_publisher or monitor_event_bus()
     return MonitorRunner(
         accounts,
         store=store,
         monitor=RealtimeMonitor(configured_settings),
         snapshot_builder=build_snapshot,
         event_sender=send_events,
-        event_publisher=event_publisher or monitor_event_bus(),
+        event_publisher=publisher,
         cycle_recorder=stores.monitoring_cycle_recorder(
             configured_settings,
             store,
@@ -163,10 +175,12 @@ def build_monitor_runner(
             projection_run_store=stores.ontology_projection_run_store(configured_settings),
             decision_episode_store=stores.investment_decision_episode_store(configured_settings),
             hypothesis_proposal_store=stores.investment_research_store(configured_settings),
+            hypothesis_lifecycle_store=stores.hypothesis_lifecycle_store(configured_settings),
             data_pipeline_health_store=stores.data_pipeline_health_store(configured_settings),
             market_time_series_store=market_time_series_store,
             settings=configured_settings,
         ),
+        hypothesis_lifecycle_service=build_hypothesis_lifecycle_service(configured_settings, publisher),
         account_job_store=monitor_account_job_store_from_settings(configured_settings),
         account_job_batch_size=int(configured_settings.get("monitorAccountBatchSize") or os.environ.get("MONITOR_ACCOUNT_BATCH_SIZE") or 10),
         account_job_interval_seconds=interval_seconds,
@@ -238,6 +252,7 @@ def build_investment_brain_service(settings=None) -> InvestmentBrainService:
         hypothesis_proposal_service=build_hypothesis_proposal_service(configured_settings, research_store),
         research_store=research_store,
         settings=configured_settings,
+        hypothesis_lifecycle_store=stores.hypothesis_lifecycle_store(configured_settings),
     )
 
 
@@ -399,11 +414,24 @@ def build_investment_calendar_research_service(settings=None) -> InvestmentCalen
     )
 
 
+def build_investment_calendar_discovery_service(settings=None, event_publisher=None) -> InvestmentCalendarDiscoveryService:
+    configured_settings = settings or runtime_settings()
+    return InvestmentCalendarDiscoveryService(
+        calendar_service=build_investment_calendar_service(configured_settings, event_publisher),
+        candidate_repository=stores.investment_calendar_candidate_store(configured_settings),
+        evidence_repository=stores.research_evidence_store(configured_settings),
+        account_repository=stores.account_registry(configured_settings),
+        research_gateway=ExistingApiResearchGateway(configured_settings),
+        settings=configured_settings,
+    )
+
+
 def build_investment_calendar_runner(settings=None, event_publisher=None) -> InvestmentCalendarRunner:
     configured_settings = settings or runtime_settings()
     return InvestmentCalendarRunner(
         build_investment_calendar_service(configured_settings, event_publisher),
         official_sync_service=build_official_calendar_sync_service(configured_settings, event_publisher),
+        discovery_service=build_investment_calendar_discovery_service(configured_settings, event_publisher),
     )
 
 

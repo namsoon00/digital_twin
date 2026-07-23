@@ -5,6 +5,11 @@ from ..domain.ontology_rulebox_contracts import GRAPH_REASONER_VERSION
 from .graph_store_payloads import list_of_strings, number_or_none
 
 
+def hypothesis_lifecycle_payload(properties: Dict[str, object]) -> Dict[str, object]:
+    raw = properties.get("hypothesisLifecycle") or properties.get("hypothesis_lifecycle") or {}
+    return dict(raw) if isinstance(raw, dict) else {}
+
+
 def inferencebox_snapshot_from_rows(rowsets: Dict[str, List[Dict[str, object]]], source: str, symbols: List[str] = None) -> Dict[str, object]:
     entity_count_row = first_row(rowsets.get("entityCounts"))
     relation_count_row = first_row(rowsets.get("relationCounts"))
@@ -49,6 +54,7 @@ def inferencebox_entity_payload(row: Dict[str, object]) -> Dict[str, object]:
         "nativeRuleId": str(row.get("nativeRuleId") or ""),
         "semanticRuleId": str(row.get("semanticRuleId") or row.get("nativeRuleId") or ""),
         "hypothesisFamilyKey": str(row.get("hypothesisFamilyKey") or properties.get("hypothesisFamilyKey") or ""),
+        "hypothesisLifecycle": hypothesis_lifecycle_payload(properties),
         "reasoningLayer": str(row.get("reasoningLayer") or ""),
         "reasoningMode": str(row.get("reasoningMode") or ""),
         "materializationSource": str(row.get("materializationSource") or ""),
@@ -95,6 +101,7 @@ def inferencebox_relation_payload(row: Dict[str, object]) -> Dict[str, object]:
         "nativeRuleId": str(row.get("nativeRuleId") or ""),
         "semanticRuleId": str(row.get("semanticRuleId") or row.get("nativeRuleId") or ""),
         "hypothesisFamilyKey": str(row.get("hypothesisFamilyKey") or properties.get("hypothesisFamilyKey") or ""),
+        "hypothesisLifecycle": hypothesis_lifecycle_payload(properties),
         "reasoningLayer": str(row.get("reasoningLayer") or ""),
         "reasoningMode": str(row.get("reasoningMode") or ""),
         "materializationSource": str(row.get("materializationSource") or ""),
@@ -148,6 +155,7 @@ def inferencebox_trace_payload(row: Dict[str, object]) -> Dict[str, object]:
         "nativeRuleId": str(row.get("nativeRuleId") or ""),
         "semanticRuleId": str(row.get("semanticRuleId") or row.get("nativeRuleId") or ""),
         "hypothesisFamilyKey": str(row.get("hypothesisFamilyKey") or properties.get("hypothesisFamilyKey") or ""),
+        "hypothesisLifecycle": hypothesis_lifecycle_payload(properties),
         "reasoningLayer": str(row.get("reasoningLayer") or ""),
         "reasoningMode": str(row.get("reasoningMode") or ""),
         "materializationSource": str(row.get("materializationSource") or ""),

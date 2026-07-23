@@ -20,6 +20,7 @@ class MonitorRunner:
         event_publisher=None,
         cycle_recorder: MonitoringCycleRecorder = None,
         ontology_projection_recorder: OntologyProjectionRecorder = None,
+        hypothesis_lifecycle_service=None,
         account_job_store: MonitorAccountJobRepository = None,
         account_job_batch_size: int = 10,
         account_job_interval_seconds: int = 180,
@@ -36,6 +37,7 @@ class MonitorRunner:
         self.event_publisher = event_publisher
         self.cycle_recorder = cycle_recorder
         self.ontology_projection_recorder = ontology_projection_recorder
+        self.hypothesis_lifecycle_service = hypothesis_lifecycle_service
         self.account_job_store = account_job_store
         self.account_job_batch_size = max(1, int(account_job_batch_size or 10))
         self.account_job_interval_seconds = max(30, int(account_job_interval_seconds or 180))
@@ -214,6 +216,7 @@ class MonitorRunner:
             status=projection.get("status") if isinstance(projection, dict) else "",
             graphStore=projection.get("graphStore") if isinstance(projection, dict) else "",
         )
+        self.record_hypothesis_lifecycle(snapshot)
         events = self.monitor.events_for_snapshot(snapshot, previous)
         if force and hasattr(self.monitor, "forced_holdings_snapshot_events"):
             events.extend(self.monitor.forced_holdings_snapshot_events(snapshot))
@@ -277,6 +280,25 @@ class MonitorRunner:
 
     def persist_ontology(self, snapshot: AccountSnapshot) -> None:
         self.record_ontology_projection(snapshot)
+
+    def record_hypothesis_lifecycle(self, snapshot: AccountSnapshot) -> None:
+        if not self.hypothesis_lifecycle_service:
+            return
+        try:
+            result = self.hypothesis_lifecycle_service.observe_snapshot(snapshot)
+            self.progress(
+                "hypothesis_lifecycle.done",
+                accountId=snapshot.account_id,
+                status=result.get("status") if isinstance(result, dict) else "",
+                transitionCount=result.get("transitionCount") if isinstance(result, dict) else 0,
+            )
+        except Exception as error:  # noqa: BLE001 - audit persistence must not block graph-backed judgement.
+            snapshot.metadata["hypothesisLifecycle"] = {
+                "status": "error",
+                "reason": str(error)[:180],
+                "bySymbol": {},
+            }
+            self.progress("hypothesis_lifecycle.error", accountId=snapshot.account_id)
 
     def has_ontology_projection_data(self, snapshot: AccountSnapshot) -> bool:
         # A failed account request can still contain stale watchlist or market

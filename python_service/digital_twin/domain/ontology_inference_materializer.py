@@ -35,6 +35,16 @@ def materialize_rule_inference(
     display_name = stock.label or symbol
     hypothesis_family_key = str(getattr(rule, "hypothesis_family_key", "") or "").strip()
     family_properties = {"hypothesisFamilyKey": hypothesis_family_key} if hypothesis_family_key else {}
+    lifecycle_policy = (
+        rule.resolved_hypothesis_lifecycle()
+        if hasattr(rule, "resolved_hypothesis_lifecycle")
+        else getattr(rule, "hypothesis_lifecycle", None)
+    )
+    lifecycle_properties = {
+        "hypothesisLifecycle": lifecycle_policy.to_dict()
+        if lifecycle_policy and hasattr(lifecycle_policy, "to_dict")
+        else {}
+    }
     rule_condition_shapes = [
         rule_condition_shape(condition)
         for condition in getattr(rule, "conditions", []) or []
@@ -68,6 +78,7 @@ def materialize_rule_inference(
         "evidenceUsableForJudgement": bool(context.get("evidenceUsableForJudgement")),
         "promptHint": rule.prompt_hint,
         **family_properties,
+        **lifecycle_properties,
     })))
     explanation_entities = materialize_inference_explanation_entities(
         graph,
@@ -92,6 +103,7 @@ def materialize_rule_inference(
             "aiInfluenceLabel": rule.label,
             "source": GRAPH_REASONER_VERSION,
             **family_properties,
+            **lifecycle_properties,
         }),
     ))
     graph.relations.append(OntologyRelation(
@@ -106,6 +118,7 @@ def materialize_rule_inference(
             "aiInfluenceLabel": rule.label,
             "source": GRAPH_REASONER_VERSION,
             **family_properties,
+            **lifecycle_properties,
         }),
     ))
     evidence_id_value = "evidence:inference:" + symbol + ":" + rule.rule_id
@@ -132,6 +145,7 @@ def materialize_rule_inference(
             "evidenceUsableForJudgement": bool(context.get("evidenceUsableForJudgement")),
             "promptHint": rule.prompt_hint,
             **family_properties,
+            **lifecycle_properties,
         },
         "context",
         data_state,
@@ -166,6 +180,7 @@ def materialize_rule_inference(
             **action_policy,
             "inferenceTraceId": trace_id,
             **family_properties,
+            **lifecycle_properties,
         })))
         relation_properties = {
             "symbol": symbol,
@@ -189,6 +204,7 @@ def materialize_rule_inference(
             "evidenceUsableForJudgement": bool(context.get("evidenceUsableForJudgement")),
             "source": GRAPH_REASONER_VERSION,
             **family_properties,
+            **lifecycle_properties,
         }
         graph.relations.append(OntologyRelation(
             stock.entity_id,
@@ -210,6 +226,7 @@ def materialize_rule_inference(
                 "source": GRAPH_REASONER_VERSION,
                 "aiInfluenceLabel": "추론 경로",
                 **family_properties,
+                **lifecycle_properties,
             }),
         ))
         if derivation.belief_label:
@@ -238,6 +255,7 @@ def materialize_rule_inference(
                 "aiInfluenceLabel": label,
                 "inferenceTraceId": trace_id,
                 **family_properties,
+                **lifecycle_properties,
             }),
         ))
         graph.relations.append(OntologyRelation(
@@ -252,6 +270,7 @@ def materialize_rule_inference(
                 "source": GRAPH_REASONER_VERSION,
                 "aiInfluenceLabel": label,
                 **family_properties,
+                **lifecycle_properties,
             }),
         ))
 

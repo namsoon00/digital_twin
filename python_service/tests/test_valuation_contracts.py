@@ -63,6 +63,27 @@ class ValuationContractTests(unittest.TestCase):
             )
         )
 
+    def test_unreviewed_ai_proposal_hides_fair_value_from_notification(self):
+        message_rows = compact_valuation_detail_rows(
+            {"ontologyRelationContext": {"facts": {
+                "valuationIsAiGenerated": True,
+                "valuationSourceType": "ai",
+                "valuationRequiresUserApproval": True,
+                "valuationDecisionEligible": False,
+                "valuationFairValue": 61724,
+                "valuationFairValueLow": 34962,
+                "valuationFairValueHigh": 106473,
+                "valuationMarginOfSafetyPct": -67.1,
+                "valuationMissingInputs": ["매출 성장률", "영업이익률 전망", "피어 또는 과거 PER 범위"],
+            }}},
+            "absolute_beginner",
+        )
+        message = "\n".join(message_rows)
+
+        self.assertIn("사용자 검토 전 AI 초안", message)
+        self.assertIn("적정가·안전마진 숫자를 표시하지 않습니다", message)
+        self.assertNotIn("61,724", message)
+
     def test_semiconductor_ai_valuation_uses_eps_not_moving_average(self):
         position = Position(
             symbol="000660",

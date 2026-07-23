@@ -154,6 +154,55 @@ class NewsAnalysisDomainTests(unittest.TestCase):
         self.assertFalse(relation_scope_is_investable(analysis["relationScope"]))
         self.assertEqual([], analysis["ontologyRelations"])
 
+    def test_news_analysis_excludes_broadcast_preview_from_direct_company_evidence(self):
+        target = NewsCollectionTarget("066570", "LG전자", "KOSPI", "KRW", "가전/전자")
+
+        analysis = classify_news_relevance(
+            target,
+            "연금부터 HUG 사회주택·LG전자까지…머니카운터 1회 방송 예고",
+            "방송에서 LG전자 AI 재평가 가능성을 분석할 예정입니다.",
+            "경인방송 뉴스",
+            "Google News KR",
+        )
+
+        self.assertEqual("editorial_context", analysis["relationScope"])
+        self.assertEqual("unrelated", analysis["relevanceState"])
+        self.assertFalse(analysis["directMention"])
+        self.assertFalse(relation_scope_is_investable(analysis["relationScope"]))
+        self.assertIn("실제 기업 사건", analysis["excludedReason"])
+        self.assertEqual([], analysis["ontologyRelations"])
+
+    def test_article_analysis_cannot_promote_broadcast_preview_to_support_signal(self):
+        evidence = ResearchEvidence(
+            "research:066570:news:broadcast-preview",
+            "066570",
+            "news",
+            "경인방송 뉴스",
+            "연금부터 HUG 사회주택·LG전자까지…머니카운터 1회 방송 예고",
+            "방송에서 LG전자 AI 재평가 가능성을 분석할 예정입니다.",
+            "https://example.test/broadcast-preview",
+            "2026-07-24T00:00:00Z",
+            "context",
+            0,
+            0,
+            "2026-07-24T00:00:00Z",
+            raw_payload={
+                "relationScope": "direct",
+                "articleFacts": {"bodyAvailable": True, "bodyPreview": "LG전자 AI 재평가 분석을 방송에서 다룹니다."},
+            },
+        )
+
+        updated = apply_news_ai_analysis(evidence, {
+            "relationScope": "direct",
+            "impactPolarity": "support",
+            "impactLabelKo": "호재",
+        })
+
+        self.assertEqual("context", updated.polarity)
+        self.assertEqual("editorial_context", updated.raw_payload["relationScope"])
+        self.assertEqual("blocked", updated.raw_payload["validationState"])
+        self.assertEqual("exclude", updated.raw_payload["qualityGate"]["decision"])
+
     def test_news_analysis_does_not_treat_naver_blog_source_as_naver_company_news(self):
         target = NewsCollectionTarget("035420", "NAVER", "KOSPI", "KRW", "플랫폼")
 

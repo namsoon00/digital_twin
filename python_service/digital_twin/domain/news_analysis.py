@@ -5,7 +5,7 @@ from typing import Dict, Iterable, List, Tuple
 from .market_data import clamp, number
 
 
-NEWS_ANALYSIS_VERSION = "news-analysis-v3-entity-linking"
+NEWS_ANALYSIS_VERSION = "news-analysis-v4-editorial-boundary"
 ARTICLE_DIGEST_VERSION = "article-digest-ko-v3"
 ARTICLE_FACTS_VERSION = "article-facts-v1"
 
@@ -306,6 +306,7 @@ RELATION_SCOPE_LABELS = {
     "publisher_noise": "출처명 매칭 제외",
     "entity_mismatch": "다른 회사 뉴스",
     "low_confidence_context": "낮은 신뢰도 참고",
+    "editorial_context": "방송·칼럼 해설",
     "syndicated_duplicate": "중복 기사",
 }
 
@@ -1594,6 +1595,21 @@ def classify_news_event_type(title: object, summary: object = "") -> str:
     return best[0]
 
 
+def editorial_preview_context(title: object, summary: object = "") -> bool:
+    """Identify program previews that mention a company without reporting a company event."""
+    title_text = _lower_text(title)
+    if any(marker in title_text for marker in (
+        "방송 예고",
+        "방송 예정",
+        "프로그램 예고",
+        "인터뷰 예고",
+        "특집 예고",
+    )):
+        return True
+    summary_text = _lower_text(summary)
+    return "방송" in title_text and any(marker in summary_text for marker in ("라디오", "유튜브", "프로그램"))
+
+
 def ontology_relations_for_news(scope: str, polarity: str, event_type: str) -> List[Dict[str, object]]:
     if not relation_scope_is_investable(scope):
         return []
@@ -1711,6 +1727,7 @@ def analyze_news_item(
     alias_noise = ambiguous_company_alias_noise(target, title_text, summary_text, [*direct_title, *direct_body], topic_hits, event_type)
     low_confidence_platform = low_confidence_platform_context(source, provider, [*direct_title, *direct_body])
     related_product_focus = bool(related_product_title_hits) and not direct_title
+    editorial_context = editorial_preview_context(title_text, summary_text)
 
     scope = "noise"
     if platform_only:
@@ -1719,6 +1736,8 @@ def analyze_news_item(
         scope = "noise"
     elif low_confidence_platform:
         scope = "low_confidence_context"
+    elif editorial_context:
+        scope = "editorial_context"
     elif other_subject_hits and not direct_title:
         scope = "entity_mismatch"
     elif direct_title:
@@ -1742,6 +1761,8 @@ def analyze_news_item(
         excluded_reason = "회사 뉴스가 아니라 일반 명사 별칭이 종목명처럼 잡힌 항목"
     elif low_confidence_platform:
         excluded_reason = "블로그/플랫폼 출처의 낮은 신뢰도 직접 언급은 투자 판단 근거에서 제외"
+    elif editorial_context:
+        excluded_reason = "방송·프로그램의 해설·예고 기사로 실제 기업 사건을 확인하지 못해 투자 판단 근거에서 제외"
     elif scope == "entity_mismatch":
         excluded_reason = "기사 제목의 핵심 주어가 대상 종목이 아니라 " + ", ".join(other_subject_hits[:3]) + "로 보임"
     elif not relation_scope_is_investable(scope):
@@ -1775,7 +1796,7 @@ def analyze_news_item(
         "relationScope": scope,
         "sourceKind": str(identity.get("sourceKind") or "publisher"),
         "sourcePlatform": str(identity.get("sourcePlatform") or ""),
-        "targetSubjectConfirmed": bool(direct_title),
+        "targetSubjectConfirmed": bool(direct_title) and not editorial_context,
         "relatedProductContext": bool(related_product_focus),
     }
     return NewsAnalysis(
@@ -1791,7 +1812,7 @@ def analyze_news_item(
         mentioned_peers=peer_hits,
         topic_tags=topic_hits[:8],
         market_topics=market_hits[:8],
-        direct_mention=bool(direct_title or (direct_body and not related_product_focus)),
+        direct_mention=bool(direct_title or (direct_body and not related_product_focus)) and not editorial_context,
         excluded_reason=excluded_reason,
         normalized_title=normalized_title,
         normalized_summary=normalized_summary,

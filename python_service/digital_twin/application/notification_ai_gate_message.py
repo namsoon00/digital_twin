@@ -2111,6 +2111,26 @@ def compact_valuation_detail_rows(context: Dict[str, object], level: str) -> Lis
     if not rows_data and not missing_inputs and not any(str(key).startswith("valuation") for key in facts):
         return []
     currency = facts.get("currency") or "KRW"
+    is_unreviewed_ai_proposal = (
+        (bool(facts.get("valuationIsAiGenerated")) or str(facts.get("valuationSourceType") or "").strip().lower() == "ai")
+        and (bool(facts.get("valuationRequiresUserApproval")) or not bool(facts.get("valuationDecisionEligible")))
+    )
+    if is_unreviewed_ai_proposal:
+        missing_text = " · ".join(str(item) for item in missing_inputs[:4] if str(item or "").strip())
+        per_inputs = _valuation_per_inputs(facts, currency)
+        valuation_basis = str(
+            facts.get("valuationFormula")
+            or facts.get("valuationPreferredMetric")
+            or facts.get("valuationPerReason")
+            or ""
+        ).strip()
+        return [
+            _html_row("평가 상태", "사용자 검토 전 AI 초안 · 투자 판단에서 제외", level=level, max_len=240),
+            _html_row("알림 처리", "적정가·안전마진 숫자를 표시하지 않습니다.", level=level, max_len=240),
+            _html_row("평가 기준", valuation_basis, level=level, max_len=240),
+            _html_row("검증 입력", per_inputs, level=level, max_len=220),
+            _html_row("확인할 데이터", missing_text or "공식 실적, 성장률 전망, 피어 또는 과거 PER 범위", level=level, max_len=260),
+        ]
     method = str(facts.get("valuationMethod") or facts.get("valuationFormula") or "").strip()
     fair_value = _valuation_price_display(facts.get("valuationFairValue") or facts.get("valuationFairValuePrice"), currency)
     fair_value_low = _valuation_price_display(facts.get("valuationFairValueLow"), currency)
@@ -2131,7 +2151,7 @@ def compact_valuation_detail_rows(context: Dict[str, object], level: str) -> Lis
     review_status = str(facts.get("valuationReviewStatus") or facts.get("valuationApprovalStatus") or "").strip()
     review_labels = {
         "suggested": "사용자 검토 전",
-        "ai_applied_pending_review": "자동 적용 · 사용자 검토 전",
+        "ai_applied_pending_review": "AI 초안 · 사용자 검토 전",
         "user_approved": "사용자 승인",
         "user_modified": "사용자 수정 승인",
         "user_rejected": "사용자 거절",

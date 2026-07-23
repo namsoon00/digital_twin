@@ -744,6 +744,43 @@ def apply_news_ai_analysis(evidence: ResearchEvidence, analysis_payload: Dict[st
     summary = analysis_dict.get("summary") if isinstance(analysis_dict.get("summary"), dict) else {}
     impact_polarity = str(analysis_dict.get("impactPolarity") or "neutral")
     article_facts_payload = article_facts(payload)
+    editorial_context = (
+        str(payload.get("relationScope") or article_facts_payload.get("relationScope") or "").strip() == "editorial_context"
+        or news_domain.editorial_preview_context(evidence.title, article_facts_payload.get("bodyPreview") or evidence.summary)
+    )
+    if editorial_context:
+        exclusion_reason = "방송·프로그램의 해설·예고 기사로 실제 기업 사건을 확인하지 못해 투자 판단 근거에서 제외"
+        summary = {
+            **summary,
+            "oneLineKo": "방송 예고·해설 기사로 투자 판단 근거에서 제외했습니다.",
+            "briefKo": "방송에서 다룰 예정인 해설 내용이며, 실제 공시·실적·계약 같은 기업 사건은 아닙니다.",
+        }
+        analysis_dict.update({
+            "relationScope": "editorial_context",
+            "eventType": "general",
+            "impactPolarity": "context",
+            "impactLabelKo": "중립",
+            "relevanceState": "unrelated",
+            "materialityState": "context",
+            "dataState": "insufficient",
+            "validationState": "blocked",
+            "summary": summary,
+            "needsReview": True,
+            "reasoningLimitations": unique_texts([
+                *(analysis_dict.get("reasoningLimitations") or []),
+                exclusion_reason,
+            ], 5),
+        })
+        impact_polarity = "context"
+        payload["relationScope"] = "editorial_context"
+        payload["eventType"] = "general"
+        payload["qualityGate"] = {
+            "stage": "editorial-boundary",
+            "decision": "exclude",
+            "reason": exclusion_reason,
+            "relationScope": "editorial_context",
+            "targetSubjectConfirmed": False,
+        }
     if article_facts_payload and not article_facts_payload.get("bodyAvailable") and payload.get("articleReadStatus") == "body":
         payload["articleReadStatus"] = "feed-summary"
         article_facts_payload["readStatus"] = "feed-summary"
@@ -793,6 +830,12 @@ def apply_news_ai_analysis(evidence: ResearchEvidence, analysis_payload: Dict[st
         article_facts_payload.setdefault("preAiStockImpactPolarity", article_facts_payload.get("stockImpactPolarity") or article_facts_payload.get("impactPolarity"))
         article_facts_payload.setdefault("preAiStockImpactLabel", article_facts_payload.get("stockImpactLabel"))
         article_facts_payload.update({
+            "relationScope": str(payload.get("relationScope") or article_facts_payload.get("relationScope") or ""),
+            "relationScopeLabel": news_domain.relation_scope_label(payload.get("relationScope")),
+            "relevanceState": payload.get("relevanceState"),
+            "materialityState": payload.get("materialityState"),
+            "dataState": payload.get("dataState"),
+            "validationState": payload.get("validationState"),
             "summaryKo": payload["articleSummaryKo"],
             "eventTakeaway": summary.get("oneLineKo") or article_facts_payload.get("eventTakeaway") or "",
             "impactReasonKo": payload["stockImpactReasonKo"],

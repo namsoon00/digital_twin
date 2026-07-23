@@ -1,9 +1,11 @@
 import unittest
 
-from digital_twin.domain.ontology_contracts import OntologyEvidence, PortfolioOntology
+from digital_twin.domain.ontology_contracts import OntologyEntity, OntologyEvidence, PortfolioOntology
+from digital_twin.domain.ontology_external_abox import add_external_signal_concepts, safe_signal_value
 from digital_twin.domain.market_data import normalize_position
 from digital_twin.domain.ontology_projection_fingerprint import material_graph_fingerprint
 from digital_twin.domain.ontology_schema import add_entity
+from digital_twin.domain.portfolio_ontology_state import position_market_state_payload
 from digital_twin.domain.portfolio import AccountSnapshot, PortfolioSummary
 from digital_twin.domain.portfolio_ontology_runtime_concepts import (
     add_operational_world_concepts,
@@ -25,6 +27,29 @@ class CurrentPipelineHealthStore:
 
 
 class OntologyProjectionFingerprintContractTests(unittest.TestCase):
+    def test_global_external_signal_omits_duplicated_raw_provider_payload(self):
+        def graph_for(price: int) -> PortfolioOntology:
+            graph = PortfolioOntology("external-signal-contract")
+            add_external_signal_concepts(
+                graph,
+                "portfolio:external-signal-contract",
+                {
+                    "fetchedAt": "2026-07-23T10:00:00Z",
+                    "equityQuotes": {"AAPL": {"currentPrice": price}},
+                },
+            )
+            return graph
+
+        first = graph_for(100)
+        second = graph_for(101)
+        signal = next(item for item in first.entities if item.entity_id == "external-signal:equityQuotes")
+
+        self.assertNotIn("value", signal.properties)
+        self.assertTrue(signal.properties["payloadPresent"])
+        self.assertEqual("mapping", signal.properties["payloadKind"])
+        self.assertFalse(any(item.entity_id == "external-signal:fetchedAt" for item in first.entities))
+        self.assertEqual(material_graph_fingerprint(first), material_graph_fingerprint(second))
+
     def test_projection_uses_only_snapshot_captured_pipeline_health(self):
         position = normalize_position({
             "symbol": "005930",
@@ -213,6 +238,81 @@ class OntologyProjectionFingerprintContractTests(unittest.TestCase):
         recovered = graph_for("2026-07-23T10:05:00Z", "2026-07-23T10:05:00Z", "healthy")
         self.assertEqual(material_graph_fingerprint(first), material_graph_fingerprint(second))
         self.assertNotEqual(material_graph_fingerprint(first), material_graph_fingerprint(recovered))
+
+    def test_market_session_clock_and_provider_message_do_not_change_material_facts(self):
+        def graph_for(session_time: str, message: str) -> PortfolioOntology:
+            return PortfolioOntology(
+                "market-clock-contract",
+                entities=[OntologyEntity("stock:005930", "삼성전자", "stock", {
+                    "ontologyBox": "ABox",
+                    "symbol": "005930",
+                    "currentPrice": 70000,
+                    "marketSessionLocalTime": session_time,
+                    "quoteMessage": message,
+                    "freshnessStatus": "near-live",
+                })],
+            )
+
+        first = graph_for("14:00:00", "provider poll 1")
+        second = graph_for("14:05:00", "provider poll 2")
+        stale = graph_for("14:05:00", "provider poll 2")
+        stale.entities[0].properties["freshnessStatus"] = "stale"
+
+        self.assertEqual(material_graph_fingerprint(first), material_graph_fingerprint(second))
+        self.assertNotEqual(material_graph_fingerprint(first), material_graph_fingerprint(stale))
+
+    def test_provider_poll_timestamps_are_removed_before_large_signal_values_are_compacted(self):
+        def payload(fetched_at: str, updated_at: str, price: float):
+            return {
+                "fetchedAt": fetched_at,
+                "company": {
+                    "last_updated": updated_at,
+                    "currentPrice": price,
+                },
+                "payload": "x" * 1600,
+            }
+
+        first = safe_signal_value(
+            "companyOverviews",
+            payload("2026-07-23T10:00:00Z", "2026-07-23T10:00:00Z", 100),
+        )
+        polled_again = safe_signal_value(
+            "companyOverviews",
+            payload("2026-07-23T10:05:00Z", "2026-07-23T10:05:00Z", 100),
+        )
+        changed_price = safe_signal_value(
+            "companyOverviews",
+            payload("2026-07-23T10:05:00Z", "2026-07-23T10:05:00Z", 101),
+        )
+
+        self.assertEqual(first, polled_again)
+        self.assertNotEqual(first, changed_price)
+
+    def test_position_poll_timestamp_does_not_enter_market_change_payload(self):
+        first = normalize_position({
+            "symbol": "005930",
+            "name": "삼성전자",
+            "market": "KR",
+            "currency": "KRW",
+            "source": "holding",
+            "currentPrice": 70000,
+            "updatedAt": "2026-07-23T10:00:00Z",
+        })
+        polled_again = normalize_position({
+            "symbol": "005930",
+            "name": "삼성전자",
+            "market": "KR",
+            "currency": "KRW",
+            "source": "holding",
+            "currentPrice": 70000,
+            "updatedAt": "2026-07-23T10:05:00Z",
+        })
+
+        first_payload = position_market_state_payload(first)
+        second_payload = position_market_state_payload(polled_again)
+
+        self.assertEqual(first_payload, second_payload)
+        self.assertNotIn("updatedAt", first_payload)
 
 
 if __name__ == "__main__":

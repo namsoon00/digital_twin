@@ -147,6 +147,7 @@ class OntologyChangeImpactTests(unittest.TestCase):
         self.assertTrue(bounded_macro_plan["globalImpact"])
         self.assertTrue(bounded_macro_plan["boundedGlobalContext"])
         self.assertTrue(bounded_macro_plan["nativeRuleSelectionEligible"])
+        self.assertEqual(["005930"], bounded_macro_plan["inferenceTargetSymbols"])
         self.assertEqual(
             "target-scoped-global-context-native-evaluation",
             bounded_macro_plan["ruleExecutionScope"],
@@ -349,6 +350,78 @@ class OntologyChangeImpactTests(unittest.TestCase):
 
         self.assertEqual(["flow"], delta["changedScopeFamilies"])
         self.assertNotIn("state", delta["changedScopeFamilies"])
+
+    def test_observation_clock_does_not_roll_a_scope_or_reopen_rules(self):
+        graph = self.scope_graph()
+        market = next(item for item in graph.entities if item.entity_id == "price-metric:005930:currentPrice")
+        market.properties.update({
+            "marketSessionLocalTime": "14:00:00",
+            "freshnessAgeMinutes": 1,
+            "freshnessStatus": "near-live",
+        })
+
+        first = apply_scoped_abox_identity(graph)
+        market.properties.update({
+            "marketSessionLocalTime": "14:05:00",
+            "freshnessAgeMinutes": 6,
+        })
+        second = apply_scoped_abox_identity(graph)
+        delta = scope_delta(first["scopePlan"], second["scopePlan"])
+
+        self.assertEqual(
+            first["scopeGenerationIds"]["symbol:005930:market"],
+            second["scopeGenerationIds"]["symbol:005930:market"],
+        )
+        self.assertEqual([], delta["changedScopeIds"])
+
+    def test_sector_exposure_is_owned_by_the_portfolio_not_global_state(self):
+        graph = PortfolioOntology(
+            "main",
+            entities=[OntologyEntity("sector:semiconductor", "반도체", "sector", {
+                "ontologyBox": "ABox",
+                "ratio": 35,
+            })],
+        )
+
+        scoped = apply_scoped_abox_identity(graph)
+        sector_scope = graph.entities[0].properties["aboxScopeId"]
+        sector_plan = next(item for item in scoped["scopePlan"] if item["scopeId"] == sector_scope)
+
+        self.assertEqual("portfolio:main", sector_scope)
+        self.assertIn("exposure", sector_plan["semanticFingerprints"])
+        self.assertNotIn("state", sector_plan["semanticFingerprints"])
+
+    def test_dynamic_supporting_facts_stay_with_their_symbol_or_portfolio(self):
+        graph = PortfolioOntology(
+            "main",
+            entities=[
+                OntologyEntity("slippage-estimate:005930", "삼성전자 슬리피지", "slippage-estimate", {
+                    "ontologyBox": "ABox",
+                    "volumeRatio": 0.4,
+                }),
+                OntologyEntity("data-source:KIS:005930", "KIS", "data-source", {
+                    "ontologyBox": "ABox",
+                    "symbol": "005930",
+                    "quoteStatus": "ok",
+                }),
+                OntologyEntity("market-exposure:main:US", "미국 시장 노출", "market-exposure", {
+                    "ontologyBox": "ABox",
+                    "invested": 100,
+                }),
+                OntologyEntity("risk:semiconductors-correlation", "반도체 상관 리스크", "risk", {
+                    "ontologyBox": "ABox",
+                    "sectorRatio": 42,
+                }),
+            ],
+        )
+
+        apply_scoped_abox_identity(graph)
+        scopes = {item.entity_id: item.properties["aboxScopeId"] for item in graph.entities}
+
+        self.assertEqual("symbol:005930:flow", scopes["slippage-estimate:005930"])
+        self.assertEqual("symbol:005930:quality", scopes["data-source:KIS:005930"])
+        self.assertEqual("portfolio:main", scopes["market-exposure:main:US"])
+        self.assertEqual("portfolio:main", scopes["risk:semiconductors-correlation"])
 
     def test_affects_relation_uses_the_source_fact_family(self):
         self.assertEqual(

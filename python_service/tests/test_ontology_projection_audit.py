@@ -6,6 +6,7 @@ from digital_twin.domain.ontology_projection_audit import (
     apply_projection_run_identity,
     build_ontology_projection_run,
     complete_ontology_projection_run,
+    inference_reuse_scope_plan_for_targets,
     inference_reuse_scope_plan_fingerprint,
     projection_run_from_payload,
     projection_source_snapshot,
@@ -173,6 +174,41 @@ class OntologyProjectionAuditTests(unittest.TestCase):
             topology["inferenceReuseScopePlanFingerprint"],
         )
 
+    def test_target_reuse_scope_plan_keeps_only_target_dependencies(self):
+        plan = [
+            {
+                "scopeId": "symbol:005930:market",
+                "scopeType": "symbol",
+                "scopeFamily": "market",
+                "semanticFingerprints": {"market": "target-price"},
+                "generationId": "target-market",
+                "dependencyScopeIds": ["reference:global"],
+            },
+            {
+                "scopeId": "reference:global",
+                "scopeType": "reference",
+                "scopeFamily": "reference",
+                "semanticFingerprints": {"quality": "source-state"},
+                "generationId": "reference",
+                "dependencyScopeIds": [],
+            },
+            {
+                "scopeId": "symbol:000660:state",
+                "scopeType": "symbol",
+                "scopeFamily": "state",
+                "semanticFingerprints": {"state": "other-holding"},
+                "generationId": "other-state",
+                "dependencyScopeIds": [],
+            },
+        ]
+
+        selected = inference_reuse_scope_plan_for_targets(plan, ["005930"])
+
+        self.assertEqual(
+            ["reference:global", "symbol:005930:market"],
+            [item["scopeId"] for item in selected],
+        )
+
     def test_recorder_uses_audited_target_scope_proof_when_active_inference_is_stale(self):
         class ReuseRepository:
             store_key = "typedb"
@@ -217,10 +253,22 @@ class OntologyProjectionAuditTests(unittest.TestCase):
                 "baseFingerprint": "quality-a",
                 "dependencyScopeIds": [],
             },
+            {
+                "scopeId": "symbol:000660:state",
+                "scopeType": "symbol",
+                "scopeFamily": "state",
+                "impactScopeFamilies": ["state"],
+                "semanticFingerprints": {"state": "other-a"},
+                "generationId": "other-a",
+                "fingerprint": "other-a",
+                "baseFingerprint": "other-a",
+                "dependencyScopeIds": [],
+            },
         ]
         candidate_scope_plan = [
             {**prior_scope_plan[0], "generationId": "market-b", "fingerprint": "market-b", "semanticFingerprints": {"market": "price-b"}},
-            *prior_scope_plan[1:],
+            *prior_scope_plan[1:-1],
+            {**prior_scope_plan[-1], "generationId": "other-b", "fingerprint": "other-b", "semanticFingerprints": {"state": "other-b"}},
         ]
         scope_fingerprint = inference_reuse_scope_plan_fingerprint(prior_scope_plan)
         audit_store = SimpleNamespace(latest=lambda **_kwargs: [{
@@ -463,6 +511,28 @@ class OntologyProjectionAuditTests(unittest.TestCase):
         }, completed_at="2026-07-20T00:01:10Z")
 
         self.assertEqual("abox:verified-active", completed.active_abox_snapshot_id)
+
+    def test_projection_audit_replaces_a_stale_save_pointer_with_this_run_aligned_inference(self):
+        _snapshot, _graph, _fingerprint, run = self.build_run()
+        completed = complete_ontology_projection_run(run, {
+            "saved": True,
+            "status": "ok",
+            "graphStore": "typedb",
+            "aboxSnapshotId": run.abox_snapshot_id,
+            "aboxPersistenceVerification": {
+                "activePointer": {"aboxSnapshotId": "abox:predecessor"},
+                "activation": {"status": "activated", "snapshotId": run.abox_snapshot_id},
+            },
+            "inferenceBox": {
+                "status": "ok",
+                "inferenceGenerationId": "generation:current",
+                "sourceAboxSnapshotId": run.abox_snapshot_id,
+                "generationAligned": True,
+                "nativeTypeDbReasoningUsed": True,
+            },
+        }, completed_at="2026-07-20T00:01:10Z")
+
+        self.assertEqual(run.abox_snapshot_id, completed.active_abox_snapshot_id)
 
     def test_mysql_store_reads_bounded_latest_projection_runs(self):
         _snapshot, _graph, _fingerprint, run = self.build_run()

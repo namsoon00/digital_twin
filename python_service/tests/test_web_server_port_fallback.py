@@ -4,11 +4,32 @@ import unittest
 from time import sleep
 from unittest import mock
 
-from digital_twin.infrastructure.web_server import bind_web_server, port_fallback_enabled
+from digital_twin.infrastructure.web_server import (
+    bind_web_server,
+    ontology_audit_sync_rows,
+    port_fallback_enabled,
+)
 from digital_twin.infrastructure.flow_lens_read_model import FlowLensReadModel
 
 
 class WebServerPortFallbackTests(unittest.TestCase):
+    def test_compact_audit_sync_rows_do_not_read_full_inference_generation_history(self):
+        class Repository:
+            def read_inference_generation_records(self, **_kwargs):
+                raise AssertionError("compact audit must not read every historical InferenceBox generation")
+
+        rows = ontology_audit_sync_rows(
+            Repository(),
+            {"status": "sampled"},
+            {"status": "sampled"},
+            {"status": "sampled"},
+            {"status": "sampled"},
+            include_generation_records=False,
+        )
+
+        self.assertEqual(4, len(rows))
+        self.assertEqual("typedb.tbox", rows[0]["id"])
+
     def test_bind_web_server_uses_next_port_when_requested_port_is_occupied(self):
         attempts = []
         expected_server = object()

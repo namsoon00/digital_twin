@@ -1,6 +1,7 @@
 from copy import deepcopy
 from dataclasses import replace
 from datetime import datetime, timezone
+from threading import Lock, Thread
 from typing import Dict, List, Set
 import hashlib
 import time
@@ -42,6 +43,7 @@ from ..domain.ontology_projection_audit import (
     build_ontology_projection_run,
     complete_ontology_projection_run,
     inference_reuse_scope_plan,
+    inference_reuse_scope_plan_for_targets,
     inference_reuse_scope_plan_fingerprint,
     projection_run_from_payload,
 )
@@ -67,6 +69,155 @@ ABOX_STRUCTURAL_RELATION_TYPES = {
     "WINDOW_CONTAINS_OBSERVATION",
     "PRECEDES",
 }
+
+
+def utc_now_iso() -> str:
+    return datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
+
+
+class SharedMarketWorldProjectionCoordinator:
+    """Coalesce recoverable MarketWorld writes outside portfolio inference.
+
+    A MarketWorld is an account-independent, derived read model.  Portfolio
+    ABox persistence and its TypeDB InferenceBox are the decision-critical
+    path; the shared mirror is intentionally not an input to that same
+    projection's investment judgement.  A daemon worker therefore keeps a
+    slow shared-world merge from delaying a verified account inference.
+
+    Only one task per shared world runs in this process.  While it runs, a
+    newer observation replaces the pending task, so a burst of quote updates
+    results in the latest market state rather than an unbounded backlog.  A
+    process stop can drop the in-memory task safely: the next live snapshot
+    rebuilds the same derived MarketWorld from its source facts.
+    """
+
+    def __init__(self):
+        self.lock = Lock()
+        self.pending_by_world: Dict[str, Dict[str, object]] = {}
+        self.running_world_ids: Set[str] = set()
+        self.last_result_by_world: Dict[str, Dict[str, object]] = {}
+
+    @staticmethod
+    def result_summary(result: Dict[str, object]) -> Dict[str, object]:
+        """Keep queue state observable without copying a full manifest into audits."""
+        allowed = {
+            "status",
+            "reason",
+            "materialFingerprint",
+            "worldviewManifestId",
+            "projectionMode",
+            "activeScopeCount",
+            "activeSymbolCount",
+            "eventuallyConsistent",
+            "queuedAt",
+            "sourceObservedAt",
+            "completedAt",
+            "runtimeMs",
+        }
+        return {
+            key: value
+            for key, value in dict(result or {}).items()
+            if key in allowed and value not in (None, "", [], {})
+        }
+
+    def enqueue(self, recorder, portfolio_graph: PortfolioOntology, shared_world) -> Dict[str, object]:
+        world_id = str(getattr(shared_world, "world_id", "") or "").strip()
+        if not world_id:
+            return {
+                "status": "deferred-market-world-invalid-world",
+                "reason": "Shared MarketWorld has no stable world id.",
+            }
+        queued_at = utc_now_iso()
+        # The projection continues to mutate its PortfolioWorld graph after a
+        # task is queued.  Freeze the independent market input before handing
+        # it to the daemon worker.
+        job = {
+            "recorder": recorder,
+            "portfolioGraph": deepcopy(portfolio_graph),
+            "sharedWorld": shared_world,
+            "queuedAt": queued_at,
+            "sourceObservedAt": str((portfolio_graph.worldview or {}).get("asOf") or ""),
+        }
+        with self.lock:
+            replaced_pending = world_id in self.pending_by_world
+            self.pending_by_world[world_id] = job
+            last_result = dict(self.last_result_by_world.get(world_id) or {})
+            already_running = world_id in self.running_world_ids
+            if not already_running:
+                self.running_world_ids.add(world_id)
+                try:
+                    Thread(
+                        target=self.drain,
+                        args=(world_id,),
+                        name="market-world-projection-" + world_id.replace(":", "-")[-40:],
+                        daemon=True,
+                    ).start()
+                except Exception as error:  # noqa: BLE001 - a derived mirror must not block account judgement.
+                    self.running_world_ids.discard(world_id)
+                    self.pending_by_world.pop(world_id, None)
+                    return {
+                        "status": "deferred-market-world-worker-start-failed",
+                        "reason": str(error)[:180],
+                    }
+        return {
+            **world_metadata(shared_world),
+            "status": "queued-coalesced-market-world-projection",
+            "projectionMode": "deferred-coalesced-market-world",
+            "eventuallyConsistent": True,
+            "queuedAt": queued_at,
+            "sourceObservedAt": job["sourceObservedAt"],
+            "coalescedPendingUpdate": bool(replaced_pending),
+            "workerAlreadyRunning": bool(already_running),
+            "lastCompleted": last_result,
+            "reason": "공용 시장 읽기 모델은 계좌 추론 완료 뒤 최신 관측값으로 별도 갱신합니다.",
+        }
+
+    def drain(self, world_id: str) -> None:
+        while True:
+            with self.lock:
+                job = self.pending_by_world.pop(world_id, None)
+                if not isinstance(job, dict):
+                    self.running_world_ids.discard(world_id)
+                    return
+            started = time.perf_counter()
+            try:
+                recorder = job["recorder"]
+                completed = dict(recorder.project_market_world(
+                    job["portfolioGraph"],
+                    job["sharedWorld"],
+                ) or {})
+                completed["status"] = str(completed.get("status") or "ok")
+            except Exception as error:  # noqa: BLE001 - retain the next queued source observation.
+                completed = {
+                    "status": "error",
+                    "reason": str(error)[:220],
+                }
+            completed.update({
+                "projectionMode": "deferred-coalesced-market-world",
+                "eventuallyConsistent": True,
+                "queuedAt": str(job.get("queuedAt") or ""),
+                "sourceObservedAt": str(job.get("sourceObservedAt") or ""),
+                "completedAt": utc_now_iso(),
+                "runtimeMs": int((time.perf_counter() - started) * 1000),
+            })
+            with self.lock:
+                self.last_result_by_world[world_id] = self.result_summary(completed)
+
+    def status(self, shared_world) -> Dict[str, object]:
+        world_id = str(getattr(shared_world, "world_id", "") or "").strip()
+        with self.lock:
+            pending = world_id in self.pending_by_world
+            running = world_id in self.running_world_ids
+            last_result = dict(self.last_result_by_world.get(world_id) or {})
+        return {
+            **world_metadata(shared_world),
+            "pending": pending,
+            "running": running,
+            "lastCompleted": last_result,
+        }
+
+
+SHARED_MARKET_WORLD_PROJECTION_COORDINATOR = SharedMarketWorldProjectionCoordinator()
 
 
 def rule_id_from_payload(rule: Dict[str, object]) -> str:
@@ -623,17 +774,6 @@ class PortfolioOntologyProjectionRecorder:
             # verify that the eventual native InferenceBox covered the exact
             # requested incremental scope before predecessor cleanup.
             persistence_graph.worldview["inferenceTargetSymbols"] = list(inference_symbols)
-            market_projection_started = time.perf_counter()
-            market_projection = self.project_market_world(
-                # The shared world stores the same bounded factual surface
-                # consumed by TypeDB native rules. The full in-memory graph
-                # additionally contains account-local explanation topology
-                # and cross-ticker taxonomy links; sharing that graph made a
-                # one-symbol quote change roll unrelated MarketWorld scopes.
-                persistence_graph,
-                market_world_context,
-            )
-            runtime_stages["marketWorldProjectionMs"] = int((time.perf_counter() - market_projection_started) * 1000)
             abox_persistence_started = time.perf_counter()
             result = self.repository.save_graph(persistence_graph)
             runtime_stages["aboxPersistenceMs"] = int((time.perf_counter() - abox_persistence_started) * 1000)
@@ -651,7 +791,6 @@ class PortfolioOntologyProjectionRecorder:
             result["aboxValidation"] = validation.to_dict()
             result["runtimeStages"] = runtime_stages
             result["ontologyWorld"] = world_metadata(portfolio_world_context)
-            result["marketWorld"] = market_projection
             if rulebox_bootstrap:
                 result["ruleboxBootstrap"] = rulebox_bootstrap
             if pending_activation_recovery:
@@ -674,6 +813,26 @@ class PortfolioOntologyProjectionRecorder:
                         or ""
                     ),
                 )
+            market_projection_started = time.perf_counter()
+            if bool(result.get("saved")):
+                # MarketWorld is an account-independent derived mirror.  It
+                # is intentionally scheduled only after the portfolio ABox
+                # and its decision-critical TypeDB inference are verified.
+                # This keeps a slow shared write out of the alert path while
+                # never letting an unverified account projection publish
+                # facts to the shared world.
+                result["marketWorld"] = self.schedule_market_world_projection(
+                    persistence_graph,
+                    market_world_context,
+                )
+            else:
+                result["marketWorld"] = {
+                    **world_metadata(market_world_context),
+                    "status": "deferred-portfolio-inference-not-verified",
+                    "preservedActiveGeneration": True,
+                    "reason": "계좌 ABox 또는 TypeDB 추론이 확정되지 않아 공용 시장 읽기 모델 갱신을 건너뛰었습니다.",
+                }
+            runtime_stages["marketWorldQueueMs"] = int((time.perf_counter() - market_projection_started) * 1000)
             if self.quality_store:
                 quality_started = time.perf_counter()
                 sample = self.quality_store.record_graph(graph, source=self.source)
@@ -1152,6 +1311,24 @@ class PortfolioOntologyProjectionRecorder:
         except (TypeError, ValueError):
             value = 1200
         return max(50, min(20000, value))
+
+    def shared_market_world_async_projection_enabled(self) -> bool:
+        value = self.settings.get("ontologySharedMarketWorldAsyncProjectionEnabled")
+        if value is None:
+            # Keep direct recorder/unit-test construction deterministic.  The
+            # production runtime explicitly enables this setting.
+            return False
+        return str(value).strip().lower() not in {"0", "false", "no", "off", "disabled"}
+
+    def schedule_market_world_projection(self, portfolio_graph: PortfolioOntology, shared_world) -> Dict[str, object]:
+        """Project the shared market mirror without delaying a verified alert path."""
+        if self.active_graph_store_key() != "typedb" or not self.shared_market_world_async_projection_enabled():
+            return self.project_market_world(portfolio_graph, shared_world)
+        return SHARED_MARKET_WORLD_PROJECTION_COORDINATOR.enqueue(
+            self,
+            portfolio_graph,
+            shared_world,
+        )
 
     def project_market_world(self, portfolio_graph: PortfolioOntology, shared_world) -> Dict[str, object]:
         """Persist the account-independent market slice without blocking a portfolio run.
@@ -2102,15 +2279,35 @@ class PortfolioOntologyProjectionRecorder:
             ):
                 continue
             source_abox_snapshot_id = str(proof.get("sourceAboxSnapshotId") or "").strip()
-            audited_abox_snapshot_id = str(
-                row.get("activeAboxSnapshotId") or row.get("aboxSnapshotId") or ""
-            ).strip()
-            if not source_abox_snapshot_id or source_abox_snapshot_id != audited_abox_snapshot_id:
+            # Older audit rows can retain the predecessor in
+            # ``activeAboxSnapshotId`` even though their own immutable ABox
+            # and aligned InferenceBox are complete. The run's ABox identity
+            # is equally authoritative here; the verified proof and matching
+            # scope/rule/TBox contracts above still remain mandatory.
+            audited_abox_snapshot_ids = {
+                str(row.get("activeAboxSnapshotId") or "").strip(),
+                str(row.get("aboxSnapshotId") or "").strip(),
+            }
+            audited_abox_snapshot_ids.discard("")
+            if not source_abox_snapshot_id or source_abox_snapshot_id not in audited_abox_snapshot_ids:
                 continue
-            historical_plan = build_inference_impact_plan(
+            # Validate the whole immutable plan above, then calculate this
+            # worker's candidate slice from its own scopes and dependencies.
+            # Other holdings can change while a one-symbol worker waits for
+            # the TypeDB lease; they must not reopen every rule for this
+            # target.
+            prior_target_scope_plan = inference_reuse_scope_plan_for_targets(
                 prior_scope_plan,
+                targets,
+            )
+            current_target_scope_plan = inference_reuse_scope_plan_for_targets(
                 current_scope_plan,
-                self.snapshot_symbols(snapshot),
+                targets,
+            )
+            historical_plan = build_inference_impact_plan(
+                prior_target_scope_plan,
+                current_target_scope_plan,
+                targets,
                 explicit_target_symbols=targets,
                 rules=current_rules,
             )

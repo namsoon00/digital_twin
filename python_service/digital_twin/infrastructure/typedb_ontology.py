@@ -4837,6 +4837,14 @@ class TypeDBOntologyGraphRepository(GraphStoreOntologyRowMapperMixin, ScopedABox
     _process_base_schema_ready: Dict[Tuple[str, str, bool, str], float] = {}
     _process_base_schema_ready_lock = threading.Lock()
     _process_base_schema_cache_seconds = 300.0
+    # The realtime reasoning service intentionally builds a fresh repository
+    # for each coalesced work item. Keep successful schema-function probes at
+    # process scope so that lifecycle choice does not turn into a full schema
+    # scan for every one-symbol inference. The actual function query remains
+    # authoritative; an execution failure invalidates this optimization and
+    # blocks the current judgement.
+    _process_schema_function_sync: Dict[Tuple[str, str, str, bool, str], Dict[str, object]] = {}
+    _process_schema_function_sync_lock = threading.Lock()
 
     def __init__(
         self,
@@ -4858,6 +4866,8 @@ class TypeDBOntologyGraphRepository(GraphStoreOntologyRowMapperMixin, ScopedABox
         native_rule_query_timeout_seconds: float = DEFAULT_TYPEDB_NATIVE_RULE_QUERY_TIMEOUT_SECONDS,
         native_rule_execution_budget_seconds: float = DEFAULT_TYPEDB_NATIVE_RULE_EXECUTION_BUDGET_SECONDS,
         inference_write_lease_enabled: bool = False,
+        process_schema_function_cache_enabled: bool = False,
+        schema_function_probe_interval_seconds: float = 300.0,
     ):
         self.address = str(address or "").strip()
         self.user = str(user or "admin").strip() or "admin"
@@ -4903,6 +4913,11 @@ class TypeDBOntologyGraphRepository(GraphStoreOntologyRowMapperMixin, ScopedABox
         # adapters retain the old unlocked behavior for isolated migrations
         # and deterministic unit tests that do not open a real TypeDB driver.
         self._inference_write_lease_enabled = bool(inference_write_lease_enabled)
+        self._process_schema_function_cache_enabled = bool(process_schema_function_cache_enabled)
+        self._schema_function_probe_interval_seconds = max(
+            0.0,
+            float(schema_function_probe_interval_seconds or 0.0),
+        )
         self._last_graph = None
         self._last_rules: List[GraphInferenceRule] = []
         self._base_schema_ready_fingerprint = ""
@@ -4994,6 +5009,77 @@ class TypeDBOntologyGraphRepository(GraphStoreOntologyRowMapperMixin, ScopedABox
     def clear_rulebox_snapshot_cache(self) -> None:
         self._rulebox_snapshot_cache_at = 0.0
         self._rulebox_snapshot_cache_result = {}
+
+    def schema_function_process_cache_key(self, sync_fingerprint: str) -> Tuple[str, str, str, bool, str]:
+        return (
+            self.address,
+            self.user,
+            self.database,
+            bool(self.tls_enabled),
+            str(sync_fingerprint or ""),
+        )
+
+    def cached_schema_function_sync_result(self, sync_fingerprint: str) -> Dict[str, object]:
+        """Return a recent cross-instance function verification, if safe.
+
+        The current native query is still run against TypeDB after this lookup.
+        A cached verification only avoids a redundant schema catalog scan when
+        the short-lived monitor runner creates a new repository object.
+        """
+        if not self._process_schema_function_cache_enabled:
+            return {}
+        interval = self._schema_function_probe_interval_seconds
+        if interval <= 0:
+            return {}
+        key = self.schema_function_process_cache_key(sync_fingerprint)
+        with self._process_schema_function_sync_lock:
+            entry = dict(self._process_schema_function_sync.get(key) or {})
+        verified_at = float(entry.get("verifiedAtMonotonic") or 0.0)
+        result = entry.get("result") if isinstance(entry.get("result"), dict) else {}
+        age_seconds = max(0.0, time.monotonic() - verified_at) if verified_at else interval
+        if not result or age_seconds >= interval:
+            return {}
+        cached = dict(result)
+        cached.update({
+            "cached": True,
+            "schemaFunctionSyncCached": True,
+            "schemaFunctionProbeUsed": False,
+            "schemaFunctionProcessCached": True,
+            "schemaFunctionProbeAgeSeconds": round(age_seconds, 3),
+            "syncFingerprint": sync_fingerprint,
+        })
+        return cached
+
+    def cache_schema_function_sync_result(self, sync_fingerprint: str, result: Dict[str, object]) -> None:
+        if (
+            not self._process_schema_function_cache_enabled
+            or str((result or {}).get("status") or "") != "ok"
+            or not sync_fingerprint
+        ):
+            return
+        key = self.schema_function_process_cache_key(sync_fingerprint)
+        with self._process_schema_function_sync_lock:
+            self._process_schema_function_sync[key] = {
+                "verifiedAtMonotonic": time.monotonic(),
+                "result": dict(result or {}),
+            }
+
+    def invalidate_schema_function_sync_cache(self, sync_fingerprint: str = "") -> None:
+        self._schema_function_sync_cache_key = ""
+        self._schema_function_sync_cache_result = {}
+        if not self._process_schema_function_cache_enabled:
+            return
+        with self._process_schema_function_sync_lock:
+            if sync_fingerprint:
+                self._process_schema_function_sync.pop(
+                    self.schema_function_process_cache_key(sync_fingerprint),
+                    None,
+                )
+                return
+            prefix = (self.address, self.user, self.database, bool(self.tls_enabled))
+            for key in list(self._process_schema_function_sync):
+                if key[:4] == prefix:
+                    self._process_schema_function_sync.pop(key, None)
 
     def active_tbox_metadata(self) -> Dict[str, object]:
         if not self.address:
@@ -10933,6 +11019,14 @@ relation ontology-assertion,
             sort_keys=True,
             ensure_ascii=False,
         ).encode("utf-8")).hexdigest()
+        if force:
+            self.invalidate_schema_function_sync_cache(sync_fingerprint)
+        else:
+            process_cached = self.cached_schema_function_sync_result(sync_fingerprint)
+            if process_cached:
+                self._schema_function_sync_cache_key = sync_fingerprint
+                self._schema_function_sync_cache_result = dict(process_cached)
+                return process_cached
         probe_result = self.probe_typedb_native_rule_functions(rules, world_id)
         if (
             not force
@@ -10950,6 +11044,7 @@ relation ontology-assertion,
                 "syncFingerprint": sync_fingerprint,
                 "functionProbe": probe_result,
             })
+            self.cache_schema_function_sync_result(sync_fingerprint, cached_result)
             return cached_result
         if probe_result.get("available"):
             synced_rule_ids = sorted(set(
@@ -10986,7 +11081,9 @@ relation ontology-assertion,
             }
             self._schema_function_sync_cache_key = sync_fingerprint
             self._schema_function_sync_cache_result = dict(result)
+            self.cache_schema_function_sync_result(sync_fingerprint, result)
             return result
+        self.invalidate_schema_function_sync_cache(sync_fingerprint)
         missing_rule_ids = {
             str(item or "").strip()
             for item in (probe_result.get("missingRuleIds") or [])
@@ -11266,6 +11363,7 @@ relation ontology-assertion,
         }
         self._schema_function_sync_cache_key = sync_fingerprint
         self._schema_function_sync_cache_result = dict(result)
+        self.cache_schema_function_sync_result(sync_fingerprint, result)
         return result
 
     def run_rulebox(self, payload: Dict[str, object] = None) -> Dict[str, object]:
@@ -11528,6 +11626,7 @@ relation ontology-assertion,
                 "ruleboxMetadata": rulebox_metadata,
                 **rulebox_metadata,
             }
+        native_stage_timings: Dict[str, int] = {}
         try:
             parsed_rules = rulebox_rules_from_payload({"rules": rules})
             impact_plan = compact_inference_impact_plan(requested_impact_plan or {})
@@ -11546,11 +11645,15 @@ relation ontology-assertion,
             # evaluator. This also repairs a database restarted without its
             # compiled functions before a monitoring cycle can silently lose
             # every changed holding.
+            function_sync_started = time.perf_counter()
             function_sync_result = typedb_call_for_world(
                 self.sync_typedb_native_rule_functions,
                 parsed_rules,
                 force=force_schema_function_sync,
                 world_id=world_id,
+            )
+            native_stage_timings["schemaFunctionSyncMs"] = int(
+                (time.perf_counter() - function_sync_started) * 1000
             )
             runtime_rulebox_metadata = dict(rulebox_metadata)
             runtime_rulebox_metadata.update({
@@ -11596,6 +11699,7 @@ relation ontology-assertion,
                 "nativeRuleEvidenceReadIndexFingerprint": str(evidence_read_index.get("fingerprint") or ""),
                 "nativeRuleEvidenceReadIndexReason": str(evidence_read_index.get("reason") or "")[:220],
                 "pythonCompatibilityReasonerUsed": False,
+                "typedbNativeStageTimings": dict(native_stage_timings),
             })
             if str(function_sync_result.get("status") or "") != "ok":
                 return {
@@ -11637,6 +11741,7 @@ relation ontology-assertion,
             }
             preflight_graph = None
             preflight_incoming_relations_complete = False
+            preflight_started = time.perf_counter()
             if (
                 target_symbols
                 and str(evidence_read_index.get("status") or "") == "verified"
@@ -11703,6 +11808,9 @@ relation ontology-assertion,
                         "mode": "manifest-storage-index",
                         "reason": "Manifest planner topology has no target stock source IDs.",
                     })
+            native_stage_timings["preflightReadMs"] = int(
+                (time.perf_counter() - preflight_started) * 1000
+            )
             runtime_rulebox_metadata.update({
                 "nativeRulePreflightStatus": str(native_preflight.get("status") or ""),
                 "nativeRulePreflightMode": str(native_preflight.get("mode") or ""),
@@ -11710,7 +11818,9 @@ relation ontology-assertion,
                 "nativeRulePreflightSourceCount": int(number_or_none(native_preflight.get("sourceCount")) or 0),
                 "nativeRulePreflightEntityCount": int(number_or_none(native_preflight.get("entityCount")) or 0),
                 "nativeRulePreflightRelationCount": int(number_or_none(native_preflight.get("relationCount")) or 0),
+                "typedbNativeStageTimings": dict(native_stage_timings),
             })
+            native_query_started = time.perf_counter()
             native_match_result = typedb_call_for_world(
                 self.match_typedb_native_rules,
                 execution_rules,
@@ -11724,6 +11834,9 @@ relation ontology-assertion,
                 ),
                 preflight_graph=preflight_graph,
                 preflight_incoming_relations_complete=preflight_incoming_relations_complete,
+            )
+            native_stage_timings["nativeRuleQueriesMs"] = int(
+                (time.perf_counter() - native_query_started) * 1000
             )
             native_query_used = str(native_match_result.get("status") or "") == "ok"
             runtime_rulebox_metadata.update({
@@ -11739,8 +11852,15 @@ relation ontology-assertion,
                 "typedbNativeRuleExecutedCount": int(number_or_none(native_match_result.get("executedRuleCount")) or 0),
                 "typedbNativeRuleSkippedCount": int(number_or_none(native_match_result.get("skippedRuleCount")) or 0),
                 "pythonCompatibilityReasonerUsed": False,
+                "typedbNativeStageTimings": dict(native_stage_timings),
             })
             if not native_query_used:
+                # A process-scoped schema verification is only an optimization.
+                # Any native-function failure invalidates it so the next cycle
+                # performs a fresh TypeDB catalog probe before evaluating.
+                self.invalidate_schema_function_sync_cache(
+                    str(function_sync_result.get("syncFingerprint") or "")
+                )
                 runtime_rulebox_metadata["typedbNativeRuleQueryReason"] = str(native_match_result.get("reason") or "")
                 return {
                     "configured": True,
@@ -11805,12 +11925,16 @@ relation ontology-assertion,
                 if scoped_active_abox
                 else {}
             )
+            matched_graph_read_started = time.perf_counter()
             graph = typedb_call_for_world(
                 self.load_graph_for_native_matches,
                 native_match_result,
                 execution_rules,
                 world_id=world_id,
                 **graph_load_kwargs,
+            )
+            native_stage_timings["matchedGraphReadMs"] = int(
+                (time.perf_counter() - matched_graph_read_started) * 1000
             )
             graph.worldview.update({
                 "worldId": world_id,
@@ -11951,6 +12075,7 @@ relation ontology-assertion,
             # active scope pointer is the authoritative membership check.
             runtime_rulebox_metadata["sourceAboxGenerationValid"] = source_generation_valid
             runtime_rulebox_metadata["sourceAboxSnapshotIds"] = list(source_abox_snapshot_ids)
+            inference_graph_started = time.perf_counter()
             materialize_typedb_native_matches(graph, execution_rules, native_match_result)
             native_match_found = bool(graph.relations)
             # A no-match result is still a complete TypeDB evaluation. Persist
@@ -11965,6 +12090,9 @@ relation ontology-assertion,
                 generation_id=generation_id,
                 generation_at=generation_at,
                 rulebox_metadata=runtime_rulebox_metadata,
+            )
+            native_stage_timings["inferenceGraphBuildMs"] = int(
+                (time.perf_counter() - inference_graph_started) * 1000
             )
             inferencebox_limit = max(80, min(500, int(number_or_none(payload.get("inferenceSnapshotLimit")) or 500)))
             invalid_abox_generation = bool(inference_graph.relations) and not source_generation_valid
@@ -12054,7 +12182,12 @@ relation ontology-assertion,
                     "reason": "A complete no-match generation is activated by pointer swap; destructive InferenceBox clear is skipped.",
                     "preservedPreviousInference": True,
                 }
+            inference_write_started = time.perf_counter()
             save_result = self.write_inferencebox_graph(inference_graph)
+            native_stage_timings["inferenceBoxWriteMs"] = int(
+                (time.perf_counter() - inference_write_started) * 1000
+            )
+            runtime_rulebox_metadata["typedbNativeStageTimings"] = dict(native_stage_timings)
         except Exception as error:  # noqa: BLE001 - expose materialization failures to monitoring diagnostics.
             return {
                 "configured": True,
@@ -15643,4 +15776,11 @@ def typedb_repository_from_settings(settings: Dict[str, str] = None):
         inference_write_lease_enabled=True
         if settings.get("typedbInferenceWriteLeaseEnabled") in (None, "")
         else typedb_bool(settings.get("typedbInferenceWriteLeaseEnabled")),
+        process_schema_function_cache_enabled=True
+        if settings.get("typedbProcessSchemaFunctionCacheEnabled") in (None, "")
+        else typedb_bool(settings.get("typedbProcessSchemaFunctionCacheEnabled")),
+        schema_function_probe_interval_seconds=number_or_none(
+            settings.get("typedbSchemaFunctionProbeIntervalSeconds")
+        )
+        or 300.0,
     )

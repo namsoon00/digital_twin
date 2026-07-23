@@ -53,7 +53,6 @@ def position_market_state_payload(position: Position) -> Dict[str, object]:
         "tradingValue": number(position.trading_value),
         "orderbookImbalance": number(position.bid_ask_imbalance),
         "dataQuality": str(position.data_quality or ""),
-        "updatedAt": str(position.updated_at or ""),
     }
 
 def previous_market_state_payload(previous: Dict[str, object]) -> Dict[str, object]:
@@ -72,7 +71,6 @@ def previous_market_state_payload(previous: Dict[str, object]) -> Dict[str, obje
         "tradingValue": ("tradingValue", "trading_value"),
         "orderbookImbalance": ("orderbookImbalance", "bidAskImbalance", "bid_ask_imbalance"),
         "dataQuality": ("dataQuality", "data_quality"),
-        "updatedAt": ("updatedAt", "updated_at"),
     }
     normalized: Dict[str, object] = {}
     for target_key, keys in pairs.items():

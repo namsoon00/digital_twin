@@ -3,7 +3,7 @@ import json
 from dataclasses import asdict, dataclass, replace
 from typing import Dict, Iterable, List
 
-from .ontology_change_impact import compact_inference_impact_plan
+from .ontology_change_impact import compact_inference_impact_plan, scope_symbol
 from .ontology_contracts import PortfolioOntology
 from .portfolio import AccountSnapshot, utc_now_iso
 
@@ -67,6 +67,40 @@ def inference_reuse_scope_plan(scope_plan: Iterable[object], limit: int = 260) -
             }),
         })
     return sorted(rows, key=lambda item: item["scopeId"])[:max(1, int(limit or 260))]
+
+
+def inference_reuse_scope_plan_for_targets(
+    scope_plan: Iterable[object],
+    target_symbols: Iterable[object],
+) -> List[Dict[str, object]]:
+    """Return one target's scopes plus the facts it directly depends on.
+
+    The full plan is still fingerprinted and validated for audit integrity.
+    This smaller view only prevents an unrelated symbol's changed generation
+    from broadening the current target's native RuleBox candidate list.
+    """
+    rows = inference_reuse_scope_plan(scope_plan)
+    targets = set(_clean_symbols(target_symbols))
+    if not rows or not targets:
+        return rows
+    by_scope = {str(row.get("scopeId") or "").strip(): row for row in rows}
+    selected = {
+        scope_id
+        for scope_id in by_scope
+        if scope_symbol(scope_id) in targets
+    }
+    if not selected:
+        return rows
+    pending = list(selected)
+    while pending:
+        scope_id = pending.pop()
+        row = by_scope.get(scope_id) or {}
+        for dependency in row.get("dependencyScopeIds") or []:
+            dependency_id = str(dependency or "").strip()
+            if dependency_id and dependency_id in by_scope and dependency_id not in selected:
+                selected.add(dependency_id)
+                pending.append(dependency_id)
+    return [row for row in rows if str(row.get("scopeId") or "") in selected]
 
 
 def inference_reuse_scope_plan_fingerprint(scope_plan: Iterable[object]) -> str:
@@ -137,6 +171,7 @@ def projection_result_summary(result: Dict[str, object]) -> Dict[str, object]:
         values.get("inferenceReuseProof") if isinstance(values.get("inferenceReuseProof"), dict) else {}
     )
     prior_inference_reuse = dict(values.get("priorInferenceReuse") or {})
+    native_stage_timings = dict(execution.get("typedbNativeStageTimings") or {})
     return {
         "saved": bool(values.get("saved")),
         "status": str(values.get("status") or ""),
@@ -221,6 +256,11 @@ def projection_result_summary(result: Dict[str, object]) -> Dict[str, object]:
             "sourceAboxGenerationMode": str(execution.get("sourceAboxGenerationMode") or ""),
             "sourceAboxGenerationValid": bool(execution.get("sourceAboxGenerationValid")),
             "sourceAboxMembershipValidation": str(execution.get("sourceAboxMembershipValidation") or ""),
+            "nativeStageTimings": {
+                str(key): int(value or 0)
+                for key, value in native_stage_timings.items()
+                if str(key or "") and isinstance(value, (int, float))
+            },
         },
     }
 
@@ -442,7 +482,18 @@ def complete_ontology_projection_run(
     inference_source_abox = str(inference.get("sourceAboxSnapshotId") or "").strip()
     inference_is_aligned = bool(inference.get("generationAligned")) and bool(inference.get("nativeTypeDbReasoningUsed"))
     verified_active_abox_snapshot_id = str(active_pointer.get("aboxSnapshotId") or "").strip()
-    if not verified_active_abox_snapshot_id:
+    # ``save_graph`` reports the predecessor pointer while a candidate ABox
+    # waits for native inference. Once TypeDB returns an aligned InferenceBox
+    # for *this* audit run, that proof is stronger than the stale save-time
+    # pointer. Keeping the predecessor here made every later target reuse
+    # proof fail and forced a complete RuleBox pass.
+    if (
+        inference_is_aligned
+        and inference_source_abox
+        and inference_source_abox == str(run.abox_snapshot_id or "").strip()
+    ):
+        verified_active_abox_snapshot_id = inference_source_abox
+    elif not verified_active_abox_snapshot_id:
         activation_status = str(activation.get("status") or "").strip().lower()
         if activation_status in {"activated", "recovered-after-runtime-interruption"}:
             verified_active_abox_snapshot_id = str(activation.get("snapshotId") or "").strip()

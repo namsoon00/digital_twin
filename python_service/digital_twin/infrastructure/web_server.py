@@ -602,6 +602,7 @@ def settings_status_payload() -> Dict[str, object]:
         "ontologySharedMarketTenantId",
         "ontologySharedMarketWorldRetentionHours",
         "ontologySharedMarketWorldMaxSymbols",
+        "ontologySharedMarketWorldAsyncProjectionEnabled",
         "materialityGateEnabled",
         "marketMaterialityPriceChangePct",
         "marketMaterialityTrendDistancePct",
@@ -614,6 +615,8 @@ def settings_status_payload() -> Dict[str, object]:
         "typedbTlsEnabled",
         "typedbTimeoutSeconds",
         "typedbRetryCount",
+        "typedbProcessSchemaFunctionCacheEnabled",
+        "typedbSchemaFunctionProbeIntervalSeconds",
         "symbolUniverseMaxAgeHours",
         "typedbInferenceGenerationKeepCount",
         "typedbAutoResetEnabled",
@@ -1181,6 +1184,7 @@ def ontology_audit_sync_rows(
     inferencebox: Dict[str, object],
     diagnostics: Dict[str, object],
     world_id: str = "",
+    include_generation_records: bool = True,
 ) -> List[Dict[str, object]]:
     rows = [
         ontology_audit_row_payload({
@@ -1224,7 +1228,11 @@ def ontology_audit_sync_rows(
             "raw": diagnostics,
         }, "status"),
     ]
-    if hasattr(repo, "read_inference_generation_records"):
+    # The default audit page is deliberately a bounded summary.  Reading every
+    # historical InferenceBox node and relation just to show the latest 20
+    # generation labels can dominate page load as the graph grows.  The
+    # detailed sync section still opts in to this durable history read.
+    if include_generation_records and hasattr(repo, "read_inference_generation_records"):
         try:
             for index, generation in enumerate(ontology_repository_world_call(
                 repo,
@@ -1442,7 +1450,15 @@ def ontology_audit_payload(query: Dict[str, List[str]], requested_section: str =
     if "sync" in section_ids:
         sections["sync"] = ontology_audit_section_payload(
             "sync",
-            ontology_audit_sync_rows(repo, tbox_metadata, rulebox, inferencebox, diagnostics, world_id=world_id),
+            ontology_audit_sync_rows(
+                repo,
+                tbox_metadata,
+                rulebox,
+                inferencebox,
+                diagnostics,
+                world_id=world_id,
+                include_generation_records=not fast_compact_summary,
+            ),
             limit,
             offset,
             search,

@@ -5,6 +5,7 @@ import tempfile
 import time
 import unittest
 from pathlib import Path
+from threading import Event
 from types import SimpleNamespace
 from unittest.mock import ANY, call, patch
 
@@ -19,12 +20,17 @@ from digital_twin.domain.ontology_scopes import (
 )
 from digital_twin.domain.ontology_native_rule_planning import native_rule_planner_topology
 from digital_twin.domain.portfolio import AccountSnapshot, PortfolioSummary, Position, utc_now_iso
+from digital_twin.domain.ontology_worlds import market_world
 from digital_twin.domain.repositories import (
     ONTOLOGY_GRAPH_REPOSITORY_CONTRACT,
     ontology_graph_repository_contract_errors,
 )
 from digital_twin.infrastructure.ontology_graph_store import ontology_repository_from_settings
-from digital_twin.infrastructure.ontology_projection import PortfolioOntologyProjectionRecorder, migrate_typedb_rule_catalog
+from digital_twin.infrastructure.ontology_projection import (
+    PortfolioOntologyProjectionRecorder,
+    SharedMarketWorldProjectionCoordinator,
+    migrate_typedb_rule_catalog,
+)
 from digital_twin.infrastructure.graph_store_rulebox import rulebox_graph_from_rules, rulebox_rules_to_payload
 from digital_twin.infrastructure.typedb_ontology import (
     NullTypeDBOntologyGraphRepository,
@@ -398,6 +404,13 @@ class TypeDBOntologyRepositoryTests(unittest.TestCase):
             mstr_market_scope,
             patch["reusedActiveScopeIds"],
         )
+        samsung_state_scope = next(
+            item.properties["aboxScopeId"]
+            for item in graph.entities
+            if item.entity_id == "stock:005930"
+        )
+        self.assertNotIn(samsung_state_scope, patch["selectedIncomingScopeIds"])
+        self.assertIn(samsung_state_scope, patch["reusedActiveScopeIds"])
 
     def test_explicit_target_can_patch_shared_context_without_rewriting_every_symbol(self):
         graph = PortfolioOntology(
@@ -3104,6 +3117,8 @@ class TypeDBOntologyRepositoryTests(unittest.TestCase):
         self.assertFalse(direct._inference_write_lease_enabled)
         self.assertTrue(factory_default._inference_write_lease_enabled)
         self.assertFalse(factory_inference_lease_disabled._inference_write_lease_enabled)
+        self.assertTrue(factory_default._process_schema_function_cache_enabled)
+        self.assertEqual(300.0, factory_default._schema_function_probe_interval_seconds)
 
     def test_typedb_symbol_filters_keep_numeric_stock_codes_as_strings(self):
         rule = next(item for item in default_graph_inference_rules() if item.rule_id == "graph.loss_guard.breakdown.v1")
@@ -3919,6 +3934,122 @@ class TypeDBOntologyRepositoryTests(unittest.TestCase):
         self.assertTrue(snapshot["nativeTypeDbReasoningUsed"])
         self.assertEqual("ok", snapshot["hypothesisCalibration"]["status"])
         self.assertEqual("hypothesis-template:risk-rule", snapshot["hypothesisCalibration"]["calibrations"][0]["templateId"])
+
+    def test_shared_market_world_projection_coalesces_latest_pending_snapshot(self):
+        started = Event()
+        release_first = Event()
+
+        class Recorder:
+            def __init__(self):
+                self.executed = []
+
+            def project_market_world(self, graph, _shared_world):
+                self.executed.append(graph.portfolio_id)
+                if graph.portfolio_id == "first":
+                    started.set()
+                    if not release_first.wait(2):
+                        raise AssertionError("first shared market projection did not release")
+                return {
+                    "status": "ok",
+                    "materialFingerprint": "market-" + graph.portfolio_id,
+                }
+
+        coordinator = SharedMarketWorldProjectionCoordinator()
+        recorder = Recorder()
+        shared_world = market_world("US")
+        first = PortfolioOntology("first", worldview={"asOf": "2026-07-23T00:00:00Z"})
+        second = PortfolioOntology("second", worldview={"asOf": "2026-07-23T00:01:00Z"})
+        latest = PortfolioOntology("latest", worldview={"asOf": "2026-07-23T00:02:00Z"})
+
+        queued = coordinator.enqueue(recorder, first, shared_world)
+        self.assertEqual("queued-coalesced-market-world-projection", queued["status"])
+        self.assertTrue(started.wait(1))
+        coordinator.enqueue(recorder, second, shared_world)
+        replacement = coordinator.enqueue(recorder, latest, shared_world)
+        self.assertTrue(replacement["coalescedPendingUpdate"])
+        self.assertTrue(replacement["workerAlreadyRunning"])
+
+        release_first.set()
+        deadline = time.monotonic() + 2
+        while time.monotonic() < deadline:
+            state = coordinator.status(shared_world)
+            if not state["pending"] and not state["running"]:
+                break
+            time.sleep(0.01)
+
+        state = coordinator.status(shared_world)
+        self.assertFalse(state["pending"])
+        self.assertFalse(state["running"])
+        self.assertEqual(["first", "latest"], recorder.executed)
+        self.assertEqual("ok", state["lastCompleted"]["status"])
+        self.assertEqual("2026-07-23T00:02:00Z", state["lastCompleted"]["sourceObservedAt"])
+
+    def test_projection_recorder_returns_after_native_inference_before_slow_market_world_merge(self):
+        market_world_started = Event()
+        release_market_world = Event()
+
+        class FakeRepository:
+            store_key = "typedb"
+
+            def save_graph(self, _graph):
+                return {"saved": True, "status": "ok", "graphStore": "typedb"}
+
+            def rulebox_snapshot(self):
+                rules = rulebox_rules_to_payload(default_graph_inference_rules())
+                return {
+                    "configured": True,
+                    "status": "ok",
+                    "rules": rules,
+                    "ruleCount": len(rules),
+                }
+
+            def run_rulebox(self, _payload):
+                return {
+                    "status": "ok",
+                    "graphStore": "typedb",
+                    "inferenceBox": {"status": "ok", "relationCount": 1},
+                }
+
+            def inferencebox_snapshot(self, *_args, **_kwargs):
+                return {
+                    "status": "ok",
+                    "relationCount": 1,
+                    "typedbReadStatus": "ok",
+                    "nativeTypeDbReasoningUsed": True,
+                }
+
+        class SlowMarketWorldRecorder(PortfolioOntologyProjectionRecorder):
+            def project_market_world(self, _graph, _shared_world):
+                market_world_started.set()
+                if not release_market_world.wait(2):
+                    raise AssertionError("slow market world test did not release")
+                return {"status": "ok", "materialFingerprint": "market-world-test"}
+
+        snapshot = AccountSnapshot(
+            "main",
+            "메인",
+            "toss",
+            "live",
+            "ok",
+            utc_now_iso(),
+            PortfolioSummary(total=1000, invested=1000, cash=0, markets=[], sectors=[], concentration=0),
+            positions=[Position("AAPL", "Apple", market="US", currency="USD", quantity=1, current_price=100, market_value=100, market_value_krw=140000)],
+        )
+        recorder = SlowMarketWorldRecorder(
+            FakeRepository(),
+            settings={"ontologySharedMarketWorldAsyncProjectionEnabled": "1"},
+        )
+
+        started = time.monotonic()
+        try:
+            result = recorder.record_snapshot(snapshot)
+            elapsed = time.monotonic() - started
+            self.assertLess(elapsed, 1.5)
+            self.assertEqual("queued-coalesced-market-world-projection", result["marketWorld"]["status"])
+            self.assertTrue(result["marketWorld"]["eventuallyConsistent"])
+            self.assertTrue(market_world_started.wait(1))
+        finally:
+            release_market_world.set()
 
     def test_projection_recorder_uses_durable_inferencebox_readback_after_rulebox_execution(self):
         class FakeRepository:
@@ -5864,6 +5995,42 @@ class TypeDBOntologyRepositoryTests(unittest.TestCase):
         self.assertTrue(result["schemaFunctionSyncCached"])
         self.assertGreater(result["syncedFunctionCount"], 0)
         self.assertTrue(all(item["schemaFunctionSyncStatus"] == "verified-existing" for item in result["syncedFunctions"]))
+
+    def test_typedb_schema_function_sync_reuses_recent_process_probe_across_repositories(self):
+        rule = default_graph_inference_rules()[0]
+        first = TypeDBOntologyGraphRepository(
+            "127.0.0.1:1729",
+            process_schema_function_cache_enabled=True,
+            schema_function_probe_interval_seconds=300,
+        )
+        second = TypeDBOntologyGraphRepository(
+            "127.0.0.1:1729",
+            process_schema_function_cache_enabled=True,
+            schema_function_probe_interval_seconds=300,
+        )
+        with TypeDBOntologyGraphRepository._process_schema_function_sync_lock:
+            TypeDBOntologyGraphRepository._process_schema_function_sync.clear()
+        try:
+            with patch.object(first, "probe_typedb_native_rule_functions", return_value={
+                "status": "ok",
+                "available": True,
+                "probedCount": 1,
+            }) as first_probe, patch.object(first, "driver_imports") as first_driver:
+                first_result = first.sync_typedb_native_rule_functions([rule])
+            with patch.object(second, "probe_typedb_native_rule_functions") as second_probe, patch.object(second, "driver_imports") as second_driver:
+                second_result = second.sync_typedb_native_rule_functions([rule])
+
+            first_probe.assert_called_once()
+            first_driver.assert_not_called()
+            second_probe.assert_not_called()
+            second_driver.assert_not_called()
+            self.assertEqual("ok", first_result["status"])
+            self.assertTrue(second_result["schemaFunctionSyncCached"])
+            self.assertTrue(second_result["schemaFunctionProcessCached"])
+            self.assertFalse(second_result["schemaFunctionProbeUsed"])
+        finally:
+            with TypeDBOntologyGraphRepository._process_schema_function_sync_lock:
+                TypeDBOntologyGraphRepository._process_schema_function_sync.clear()
 
     def test_typedb_schema_function_probe_verifies_every_root_function(self):
         rules = default_graph_inference_rules()[:4]

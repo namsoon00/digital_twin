@@ -1,8 +1,10 @@
+import json
 from typing import Dict, Iterable, List
 
 from .market_data import number
 from .ontology_contracts import PortfolioOntology, entity_id
 from .ontology_decision_state import data_state_from_evidence
+from .ontology_projection_fingerprint import is_volatile_lifecycle_key, stable_value
 from .ontology_schema import add_entity, add_relation
 from .parsing import parse_assignments
 from .portfolio import PortfolioSummary, Position
@@ -167,15 +169,31 @@ def safe_signal_value(key: str, value: object) -> object:
                 "errorCount": len(payload.get("errors") or []),
             }
         if value.get("provider") == "yfinance":
-            return yfinance_summary(value)
-        summary: Dict[str, object] = {}
-        for symbol, payload in value.items():
-            if not isinstance(payload, dict):
-                continue
-            summary[str(symbol)] = yfinance_summary(payload)
-        return summary
-    text = str(value or "")
-    return text[:1200] if len(text) > 1200 else value
+            value = yfinance_summary(value)
+        else:
+            summary: Dict[str, object] = {}
+            for symbol, payload in value.items():
+                if not isinstance(payload, dict):
+                    continue
+                summary[str(symbol)] = yfinance_summary(payload)
+            value = summary
+
+    # This generic value is retained for diagnostics, while the dedicated
+    # concepts below hold the actual rule inputs. Never stringify provider
+    # polling timestamps into it: a nested ``fetchedAt`` previously changed
+    # the whole scope on every poll even when the investment facts matched.
+    normalized = stable_value(value)
+    if isinstance(normalized, (dict, list, tuple, set)):
+        text = json.dumps(
+            normalized,
+            ensure_ascii=False,
+            sort_keys=True,
+            default=str,
+            separators=(",", ":"),
+        )
+        return text[:1200] if len(text) > 1200 else normalized
+    text = str(normalized or "")
+    return text[:1200] if len(text) > 1200 else normalized
 
 
 def external_signal_classes(group: str) -> List[str]:
@@ -467,13 +485,25 @@ def add_external_signal_concepts(
     add_external_signal_quality_concepts(graph, portfolio_node_id, external_signals)
     add_portfolio_macro_and_cross_asset_concepts(graph, portfolio_node_id, external_signals, runtime_context)
     for key, value in sorted(external_signals.items()):
-        if key in {"quality", "freshness", "provenance"}:
+        if key in {"quality", "freshness", "provenance"} or is_volatile_lifecycle_key(key):
             continue
+        # Global source nodes express availability and freshness only. Their
+        # raw payload is already represented by symbol-specific evidence and
+        # macro facts below. Keeping a multi-symbol payload here made every
+        # quote update look like a global ABox change and forced unrelated
+        # TypeDB rules to run.
+        payload_kind = (
+            "mapping" if isinstance(value, dict)
+            else "collection" if isinstance(value, (list, tuple, set))
+            else "scalar" if value not in (None, "")
+            else "empty"
+        )
         signal_id = add_entity(graph, "external-signal", key, str(key), {
             "tboxClass": "ExternalSignal",
             "tboxClasses": external_signal_classes(str(key)),
             "key": str(key),
-            "value": safe_signal_value(str(key), value),
+            "payloadPresent": value not in (None, ""),
+            "payloadKind": payload_kind,
             **external_observation_profile(external_signals, value),
         })
         properties = external_evidence_properties(

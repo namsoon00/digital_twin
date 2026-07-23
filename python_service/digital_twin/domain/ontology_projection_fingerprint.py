@@ -17,17 +17,26 @@ VOLATILE_LIFECYCLE_KEYS = {
     "firstObservedAt",
     "generatedAt",
     "freshnessAgeMinutes",
+    "freshnessGateReason",
+    "freshnessReason",
+    "indicatorAsOf",
+    "indicatorFetchedAt",
     "inferenceGenerationAt",
     "inferenceGenerationId",
     "isCurrent",
+    "latencyReason",
     "materialFingerprint",
     "marketObservedAt",
+    "marketSession",
+    "marketSessionElapsedPct",
+    "marketSessionLabel",
     "marketSessionLocalTime",
     "lastObservedAt",
     "lastFailureAt",
     "lastHealthyAt",
     "lastNonZeroAt",
     "lastSuccessAt",
+    "lastUpdated",
     "observedAt",
     "projectionRunId",
     "persistenceMode",
@@ -39,9 +48,18 @@ VOLATILE_LIFECYCLE_KEYS = {
     "snapshotId",
     "sourceAsOf",
     "sourceFetchedAt",
+    "quoteMessage",
+    "staleReason",
     "stateSince",
     "updatedAt",
+    "validFrom",
+    "validUntil",
     "worldviewManifestId",
+}
+
+_NORMALIZED_VOLATILE_LIFECYCLE_KEYS = {
+    "".join(character for character in str(key).lower() if character.isalnum())
+    for key in VOLATILE_LIFECYCLE_KEYS
 }
 
 EXCLUDED_VOLATILE_ENTITY_KINDS = {
@@ -128,7 +146,7 @@ def stable_value(value: object):
         return {
             str(key): stable_value(item)
             for key, item in sorted(value.items(), key=lambda row: str(row[0]))
-            if str(key) not in VOLATILE_LIFECYCLE_KEYS
+            if not is_volatile_lifecycle_key(key)
         }
     if isinstance(value, (list, tuple, set)):
         rows = [stable_value(item) for item in value]
@@ -136,6 +154,22 @@ def stable_value(value: object):
     if isinstance(value, float):
         return round(value, 8)
     return value
+
+
+def is_volatile_lifecycle_key(key: object) -> bool:
+    """Return whether a provider/runtime field is observation provenance.
+
+    Providers mix camelCase and snake_case for the same timestamps. Treating
+    both forms consistently keeps a polling clock from changing the material
+    ABox fingerprint while retaining the timestamp for display and freshness
+    checks outside the material payload.
+    """
+
+    text = str(key or "").strip()
+    if text in VOLATILE_LIFECYCLE_KEYS:
+        return True
+    normalized = "".join(character for character in text.lower() if character.isalnum())
+    return normalized in _NORMALIZED_VOLATILE_LIFECYCLE_KEYS
 
 
 def active_material_fingerprint(metadata: Dict[str, object]) -> str:

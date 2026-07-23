@@ -24,7 +24,7 @@ from .ontology_change_impact import (
     symbol_scope_id,
 )
 from .ontology_contracts import OntologyEntity, OntologyEvidence, OntologyRelation, PortfolioOntology
-from .ontology_projection_fingerprint import stable_value
+from .ontology_projection_fingerprint import VOLATILE_LIFECYCLE_KEYS, stable_value
 from .ontology_worlds import world_scoped_scope_id
 
 
@@ -45,6 +45,7 @@ _SYMBOL_PREFIXES = (
     "trend-",
     "temporal-",
     "liquidity-",
+    "slippage-estimate:",
     "smart-money-",
     "investor-",
     "valuation-",
@@ -149,6 +150,29 @@ _SEMANTIC_METADATA_FIELDS = {
     "activetboxfingerprint",
 }
 
+# Observation clocks and explanatory provider text are valuable for display
+# and freshness diagnostics, but do not describe a new investment fact. If
+# they participate in scope identity, an unchanged quote is re-materialized
+# on every poll and reopens native RuleBox execution. Freshness *state* and
+# data-state fields are intentionally not included here: a usable-to-stale
+# transition remains material.
+_IMMATERIAL_OBSERVATION_PROPERTY_FIELDS = {
+    "freshnessgatereason",
+    "freshnessreason",
+    "latencyreason",
+    "marketsession",
+    "marketsessionelapsedpct",
+    "marketsessionlabel",
+    "marketsessionlocaltime",
+    "quotemessage",
+    "stalereason",
+}
+
+_IMMATERIAL_OBSERVATION_PROPERTY_KEYS = {
+    re.sub(r"[^a-z0-9]", "", str(value or "").lower())
+    for value in VOLATILE_LIFECYCLE_KEYS | _IMMATERIAL_OBSERVATION_PROPERTY_FIELDS
+}
+
 
 def _clean(value: object) -> str:
     return str(value or "").strip()
@@ -236,7 +260,12 @@ def _explicit_entity_scope(entity: OntologyEntity, account_id: str) -> str:
         return macro_scope_id(family)
     if kind in _POLICY_KINDS:
         return _scope_id("policy", account_id)
-    if kind in {"portfolio", "account", "watchlist", "cash"}:
+    if kind in {"portfolio", "account", "watchlist", "cash", "sector", "market-exposure"}:
+        return _scope_id("portfolio", account_id)
+    # A risk without an instrument subject is an account-level exposure
+    # aggregate (for example, sector correlation risk). Instrument risks carry
+    # ``symbol`` and are routed by the symbol branch below.
+    if kind == "risk" and not _symbol(properties.get("symbol")):
         return _scope_id("portfolio", account_id)
     symbol = _symbol(properties.get("symbol"))
     if symbol:
@@ -535,6 +564,7 @@ def _semantic_properties(values: Mapping[str, object]) -> Dict[str, object]:
         str(key): stable_value(value)
         for key, value in dict(values or {}).items()
         if re.sub(r"[^a-z0-9]", "", str(key or "").lower()) not in _GENERATED_SCOPE_PROPERTY_KEYS
+        and re.sub(r"[^a-z0-9]", "", str(key or "").lower()) not in _IMMATERIAL_OBSERVATION_PROPERTY_KEYS
     }
 
 
@@ -1095,11 +1125,41 @@ def select_target_scoped_manifest_patch(
     if str(active.get("scopeTopologyVersion") or "") != SCOPED_ABOX_SCOPE_TOPOLOGY_VERSION:
         return {**base, "status": "skipped-active-topology-migration", "applied": False}
 
+    def is_requested_or_shared(scope_id: str) -> bool:
+        symbol = scope_symbol(scope_id)
+        return symbol in requested_symbols or not symbol
+
+    def changed_from_active(scope_id: str, item: Mapping[str, object]) -> bool:
+        active_item = active_by_scope.get(scope_id)
+        if not active_item:
+            return True
+        return (
+            _clean(active_item.get("generationId")) != _clean(item.get("generationId"))
+            or _clean(active_item.get("fingerprint")) != _clean(item.get("fingerprint"))
+        )
+
+    # A target symbol can have many independently versioned fact families.
+    # Rewriting all of them for one changed quote defeats scoped persistence;
+    # select only changed target/shared scopes and let stable active endpoint
+    # generations satisfy the remaining links.
     selected: Set[str] = {
         scope_id
-        for scope_id in incoming
-        if scope_symbol(scope_id) in requested_symbols or not scope_symbol(scope_id)
+        for scope_id, item in incoming.items()
+        if is_requested_or_shared(scope_id) and changed_from_active(scope_id, item)
     }
+
+    removed_relevant_scopes = sorted(
+        scope_id
+        for scope_id in active_by_scope
+        if scope_id not in incoming and is_requested_or_shared(scope_id)
+    )
+    if removed_relevant_scopes:
+        return {
+            **base,
+            "status": "skipped-removed-scope-requires-full-refresh",
+            "applied": False,
+            "removedRelevantScopeIds": removed_relevant_scopes,
+        }
 
     # A relation can point to a brand new endpoint that has never been active.
     # Include that endpoint locally; otherwise retain an active endpoint

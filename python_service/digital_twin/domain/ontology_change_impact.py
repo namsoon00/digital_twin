@@ -207,15 +207,15 @@ def family_for_entity(kind: object, properties: Mapping[str, object] = None, ent
         field = props.get("field") or props.get("changedField") or ""
         family = family_for_field(field)
         return family if family not in {"unknown", "state"} else "temporal"
-    if _matches_any(text, ["flow", "volume", "execution", "liquidity", "smart-money", "investor", "orderbook", "rebalancing"]):
+    if _matches_any(text, ["flow", "volume", "execution", "liquidity", "slippage", "smart-money", "investor", "orderbook", "rebalancing"]):
         return "flow"
-    if _matches_any(text, ["data-quality", "missing-data", "coverage-gap", "freshness", "latency", "staleness", "source-reliability"]):
+    if _matches_any(text, ["data-quality", "missing-data", "coverage-gap", "freshness", "latency", "staleness", "source-reliability", "data-source"]):
         return "quality"
     if _matches_any(text, ["position", "holding-timing", "exit-exposure"]):
         return "position"
     if _matches_any(text, ["security-line", "instrument-profile", "instrument-identity", "company", "adr", "depositary", "leveraged-etf", "single-stock-etf", "risk-budget", "profit-policy", "risk-management", "strategy-profile", "investment-strategy", "investment-archetype", "account-delivery-profile"]):
         return "profile"
-    if _matches_any(text, ["factor", "exposure", "peer", "correlation", "sensitivity"]):
+    if _matches_any(text, ["factor", "exposure", "peer", "correlation", "sensitivity", "sector"]):
         return "exposure"
     if _matches_any(text, ["price", "technical", "key-level", "market-microstructure", "trend-scenario", "scenario"]):
         return "market"
@@ -588,7 +588,11 @@ def build_inference_impact_plan(
     global_impact = bool(global_scope_ids)
     bounded_global_context = bool(global_impact and explicit_symbols)
     impacted_symbols = set(delta.get("directChangedSymbols") or delta.get("changedSymbols") or []) | set(explicit_symbols)
-    if global_impact:
+    # A worker can intentionally schedule one target while a shared macro or
+    # portfolio fact changes. The TypeDB query still sees the complete ABox,
+    # but it must not expand the requested subject back to every holding.
+    # Whole-world callers keep the conservative expansion below.
+    if global_impact and not explicit_symbols:
         impacted_symbols.update(available_symbols)
     target_symbols = [symbol for symbol in available_symbols if symbol in impacted_symbols]
     if not target_symbols and explicit_symbols:

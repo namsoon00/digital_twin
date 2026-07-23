@@ -541,11 +541,13 @@ def add_data_source_concept(
     source: str,
     observation_profiles: Dict[str, Dict[str, object]] = None,
 ) -> None:
+    symbol = symbol_key(position)
     label = str(position.quote_source or position.data_quality or source or "runtime-data")
     quality = data_quality_state(position)
-    source_id = add_entity(graph, "data-source", label, label, {
+    source_id = add_entity(graph, "data-source", label + ":" + symbol, label, {
         "tboxClass": "DataSource",
         "tboxClasses": ["DataSource", "Provenance"],
+        "symbol": symbol,
         "quoteStatus": position.quote_status,
         "quoteMessage": position.quote_message,
         "dataQuality": position.data_quality,
@@ -555,9 +557,10 @@ def add_data_source_concept(
     })
     add_relation(graph, stock_id, source_id, "OBSERVED_FROM", weight=1.0, properties={"source": source, "basis": "quote-source"})
     add_relation(graph, stock_id, source_id, "HAS_PROVENANCE", weight=1.0, properties={"source": source, "basis": "quote-source"})
-    reliability_id = add_entity(graph, "source-reliability", label, label + " 신뢰도", {
+    reliability_id = add_entity(graph, "source-reliability", label + ":" + symbol, label + " 신뢰도", {
         "tboxClass": "SourceReliability",
         "tboxClasses": ["Provenance", "SourceReliability", "DataQuality"],
+        "symbol": symbol,
         **quality,
         "quoteStatus": position.quote_status,
         "quoteMessage": position.quote_message,
@@ -838,6 +841,7 @@ def add_price_level_and_liquidity_concepts(
     slippage_id = add_entity(graph, "slippage-estimate", symbol, (position.name or symbol) + " 슬리피지 추정", {
         "tboxClass": "SlippageEstimate",
         "tboxClasses": ["Risk", "ExecutionRisk", "SlippageEstimate"],
+        "symbol": symbol,
         "slippageState": slippage_state,
         "reviewLevel": "act" if slippage_state == "high" else "normal",
         "dataState": str(liquidity.get("dataState") or "partial"),

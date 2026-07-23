@@ -63,8 +63,8 @@ class OntologyChangeImpactTests(unittest.TestCase):
         self.assertEqual("symbol:005930:temporal", entity_scopes["temporal-window:005930:5d"])
         self.assertEqual("symbol:005930:evidence", entity_scopes["news-article:005930:1"])
         self.assertEqual("macro:market", entity_scopes["market-proxy-instrument:QQQ"])
-        self.assertEqual("macro:market", relation_scopes["OBSERVES_MARKET_PROXY"])
-        self.assertEqual("symbol:005930:flow", relation_scopes["HAS_TRADE_FLOW"])
+        self.assertEqual("link:main", relation_scopes["OBSERVES_MARKET_PROXY"])
+        self.assertEqual("symbol:005930:link", relation_scopes["HAS_TRADE_FLOW"])
 
         first_generations = dict(first["scopeGenerationIds"])
         flow = next(item for item in graph.entities if item.entity_id == "flow-metric:005930:volume")
@@ -124,6 +124,58 @@ class OntologyChangeImpactTests(unittest.TestCase):
         self.assertTrue(macro_plan["globalImpact"])
         self.assertEqual(["000660", "005930"], macro_plan["inferenceTargetSymbols"])
         self.assertIn("macro-rates", macro_plan["changedScopeFamilies"])
+
+    def test_change_impact_uses_semantic_family_from_a_relation_only_link_scope(self):
+        before = [
+            {
+                "scopeId": "symbol:005930:market",
+                "generationId": "market-a",
+                "impactScopeFamilies": ["market"],
+            },
+            {
+                "scopeId": "symbol:005930:link",
+                "generationId": "link-a",
+                "impactScopeFamilies": ["link", "flow"],
+            },
+        ]
+        after = [
+            {
+                "scopeId": "symbol:005930:market",
+                "generationId": "market-a",
+                "impactScopeFamilies": ["market"],
+            },
+            {
+                "scopeId": "symbol:005930:link",
+                "generationId": "link-b",
+                "impactScopeFamilies": ["link", "flow"],
+            },
+        ]
+        rules = [
+            {
+                "ruleId": "graph.test.flow.v1",
+                "conditions": [{
+                    "conditionId": "flow",
+                    "kind": "relation",
+                    "relationType": "HAS_TRADE_FLOW",
+                    "targetKind": "flow-metric",
+                }],
+            },
+            {
+                "ruleId": "graph.test.market.v1",
+                "conditions": [{
+                    "conditionId": "price",
+                    "kind": "relation",
+                    "relationType": "HAS_PRICE",
+                    "targetKind": "price-metric",
+                }],
+            },
+        ]
+
+        plan = build_inference_impact_plan(before, after, ["005930"], rules=rules)
+
+        self.assertEqual(["005930"], plan["inferenceTargetSymbols"])
+        self.assertIn("flow", plan["changedScopeFamilies"])
+        self.assertEqual(["graph.test.flow.v1"], plan["candidateRuleIds"])
 
     def test_unknown_condition_is_conservative_and_dependency_is_rulebox_graph_data(self):
         profile = rule_condition_dependency_profile({

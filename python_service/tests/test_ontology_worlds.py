@@ -386,6 +386,7 @@ class MultiAccountProjectionTests(unittest.TestCase):
                     "scopePlan": list(worldview.get("scopePlan") or []),
                     "scopeGenerationIds": dict(worldview.get("scopeGenerationIds") or {}),
                     "scopeFingerprints": dict(worldview.get("scopeFingerprints") or {}),
+                    "scopeTopologyVersion": worldview.get("scopeTopologyVersion"),
                     "marketScopeObservedAt": dict(worldview.get("marketScopeObservedAt") or {}),
                     "marketScopeObservedAtVersion": worldview.get("marketScopeObservedAtVersion"),
                     "materialFingerprint": worldview.get("materialFingerprint"),
@@ -606,6 +607,59 @@ class MultiAccountProjectionTests(unittest.TestCase):
         refreshed = repository.observation_metadata_refreshes[0]["marketScopeObservedAt"]
         self.assertTrue(refreshed)
         self.assertTrue(all(value == "2026-07-01T00:10:00Z" for value in refreshed.values()))
+
+    def test_market_world_target_patch_keeps_untargeted_symbol_generation(self):
+        repository = self.FakeRepository()
+        recorder = PortfolioOntologyProjectionRecorder(
+            repository,
+            settings={"ontologyTenantId": "tenant-a", "ontologyMarketWorldId": "kr"},
+        )
+        shared_world = market_world("kr", "tenant-a")
+
+        def graph_with_symbols():
+            graph = sample_graph("005930", source_observed_at="2026-07-01T00:00:00Z")
+            other = sample_graph("MSTR", source_observed_at="2026-07-01T00:00:00Z")
+            graph.entities.extend([
+                item for item in other.entities
+                if item.entity_id not in {"account:account-a", "portfolio:account-a"}
+            ])
+            graph.relations.extend(other.relations)
+            graph.evidence.extend(other.evidence)
+            graph.worldview["asOf"] = "2026-07-01T00:00:00Z"
+            return graph
+
+        first_graph = graph_with_symbols()
+        first = recorder.project_market_world(first_graph, shared_world)
+        self.assertEqual("ok", first["status"])
+        first_generations = dict(
+            repository.saved_markets[shared_world.world_id].worldview["scopeGenerationIds"]
+        )
+        samsung_scope = next(
+            scope_id for scope_id in first_generations
+            if scope_id.startswith("symbol:005930:market:")
+        )
+        mstr_scope = next(
+            scope_id for scope_id in first_generations
+            if scope_id.startswith("symbol:MSTR:market:")
+        )
+
+        second_graph = graph_with_symbols()
+        quote = next(item for item in second_graph.entities if item.entity_id == "price:005930")
+        quote.properties["value"] = 72000
+        second_graph.worldview["targetScopedManifestPatch"] = {
+            "status": "applied",
+            "targetSymbols": ["005930"],
+        }
+        second = recorder.project_market_world(second_graph, shared_world)
+        second_generations = dict(
+            repository.saved_markets[shared_world.world_id].worldview["scopeGenerationIds"]
+        )
+
+        self.assertEqual("ok", second["status"])
+        self.assertEqual("applied", second["targetScopedManifestPatch"]["status"])
+        self.assertNotEqual(first_generations[samsung_scope], second_generations[samsung_scope])
+        self.assertEqual(first_generations[mstr_scope], second_generations[mstr_scope])
+        self.assertNotIn(mstr_scope, second["changedIncomingScopeIds"])
 
 
 if __name__ == "__main__":

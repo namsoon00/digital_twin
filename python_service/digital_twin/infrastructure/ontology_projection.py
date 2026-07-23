@@ -1,5 +1,6 @@
 from copy import deepcopy
 from dataclasses import replace
+from datetime import datetime, timezone
 from typing import Dict, List, Set
 import hashlib
 import time
@@ -21,7 +22,10 @@ from ..domain.ontology_projection_fingerprint import (
 from ..domain.ontology_scopes import (
     SCOPED_ABOX_MANIFEST_VERSION,
     SCOPED_ABOX_PERSISTENCE_MODE,
+    apply_scoped_manifest_plan,
     apply_scoped_abox_identity,
+    merge_target_scoped_abox_manifest,
+    select_target_scoped_manifest_patch,
     scoped_manifest_id,
 )
 from ..domain.ontology_worlds import market_world, world_from_snapshot, world_metadata
@@ -348,6 +352,77 @@ class PortfolioOntologyProjectionRecorder:
                 str(active_abox.get("scopedAboxManifestVersion") or "")
                 == SCOPED_ABOX_MANIFEST_VERSION
             )
+            target_scoped_patch = self.target_scoped_patch_targets(
+                snapshot,
+                active_abox,
+                scoped_identity,
+                target_symbols,
+            )
+            if target_scoped_patch.get("eligible"):
+                target_patch_started = time.perf_counter()
+                applied_target_patch = merge_target_scoped_abox_manifest(
+                    persistence_graph,
+                    active_abox,
+                    target_scoped_patch.get("targetSymbols") or [],
+                )
+                runtime_stages["targetScopedManifestPatchMs"] = int(
+                    (time.perf_counter() - target_patch_started) * 1000
+                )
+                if applied_target_patch.get("applied"):
+                    # The source graph can contain newer observations for
+                    # deferred symbols. The persisted identity must describe
+                    # the merged active manifest, not facts intentionally held
+                    # for their own target cycle or the periodic reconciliation.
+                    material_fingerprint = native_rule_planner_manifest_fingerprint(
+                        applied_target_patch.get("scopeManifestFingerprint"),
+                        planner_topology,
+                    )
+                    scoped_identity = apply_scoped_manifest_plan(
+                        persistence_graph,
+                        applied_target_patch.get("scopePlan") or [],
+                        account_id=snapshot.account_id,
+                        world_id=portfolio_world_context.world_id,
+                        material_fingerprint=material_fingerprint,
+                    )
+                    material_snapshot_id = str(
+                        scoped_identity.get("manifestId") or material_snapshot_id
+                    )
+                    target_scoped_patch = {
+                        "status": "applied",
+                        "mode": "incremental-target-scoped-manifest-patch",
+                        "targetSymbols": list(applied_target_patch.get("targetSymbols") or []),
+                        "selectedIncomingScopeCount": len(
+                            applied_target_patch.get("selectedIncomingScopeIds") or []
+                        ),
+                        "reusedActiveScopeCount": len(
+                            applied_target_patch.get("reusedActiveScopeIds") or []
+                        ),
+                        "deferredScopeCount": len(
+                            applied_target_patch.get("deferredScopeIds") or []
+                        ),
+                        "fullReconcileMinutes": self.scoped_full_reconcile_minutes(),
+                    }
+                    persistence_graph.worldview["targetScopedManifestPatch"] = dict(target_scoped_patch)
+                else:
+                    target_scoped_patch = {
+                        "status": str(applied_target_patch.get("status") or "skipped"),
+                        "mode": "full-manifest-fallback",
+                        "targetSymbols": list(target_scoped_patch.get("targetSymbols") or []),
+                    }
+            if str(target_scoped_patch.get("status") or "") == "applied":
+                full_reconcile_at = str(
+                    active_abox.get("lastFullScopeReconcileAt")
+                    or active_abox.get("asOf")
+                    or ""
+                ).strip()
+            else:
+                full_reconcile_at = str(
+                    getattr(snapshot, "generated_at", "")
+                    or persistence_graph.worldview.get("asOf")
+                    or ""
+                ).strip()
+            if full_reconcile_at:
+                persistence_graph.worldview["lastFullScopeReconcileAt"] = full_reconcile_at
             # A rolling deployment can encounter an already active immutable
             # ABox that predates the exact physical evidence-read index. The
             # index is marker metadata derived from this same verified graph;
@@ -432,6 +507,7 @@ class PortfolioOntologyProjectionRecorder:
                 "scopeCount": len(scoped_identity.get("scopePlan") or []),
                 "scopeFamilyCounts": dict(scoped_identity.get("scopeFamilyCounts") or {}),
                 "scopeTopologyVersion": str(persistence_graph.worldview.get("scopeTopologyVersion") or ""),
+                "targetScopedManifestPatch": dict(target_scoped_patch or {}),
                 "inferenceImpactPlan": compact_impact_plan,
                 "reason": (
                     "변경된 사실군과 ABox 의존 관계에서 재평가 대상을 계산하고, 변경 범위만 새 세대로 기록한 뒤 "
@@ -1179,6 +1255,39 @@ class PortfolioOntologyProjectionRecorder:
             # generation for every successful polling cycle.
             scoped["scopePlan"] = incoming_scope_plan
             update.worldview["scopePlan"] = incoming_scope_plan
+            market_target_patch = {
+                "status": "full-manifest",
+                "selectedIncomingScopeCount": len(incoming_scope_plan),
+            }
+            source_patch = dict((portfolio_graph.worldview or {}).get("targetScopedManifestPatch") or {})
+            target_symbols = list(source_patch.get("targetSymbols") or [])
+            if str(source_patch.get("status") or "") == "applied" and target_symbols:
+                selection = select_target_scoped_manifest_patch(
+                    update,
+                    active_market,
+                    target_symbols,
+                )
+                if selection.get("applied"):
+                    incoming_scope_plan = list(selection.get("selectedIncomingScopePlan") or [])
+                    market_target_patch = {
+                        "status": "applied",
+                        "mode": "incremental-target-scoped-manifest-patch",
+                        "targetSymbols": list(selection.get("targetSymbols") or []),
+                        "selectedIncomingScopeCount": len(
+                            selection.get("selectedIncomingScopeIds") or []
+                        ),
+                        "reusedActiveScopeCount": len(
+                            selection.get("reusedActiveScopeIds") or []
+                        ),
+                        "deferredScopeCount": len(selection.get("deferredScopeIds") or []),
+                    }
+                else:
+                    market_target_patch = {
+                        "status": str(selection.get("status") or "full-manifest-fallback"),
+                        "mode": "full-manifest-fallback",
+                        "targetSymbols": target_symbols,
+                        "selectedIncomingScopeCount": len(incoming_scope_plan),
+                    }
             manifest_state = merge_market_world_scope_manifest(
                 active_market,
                 incoming_scope_plan,
@@ -1199,6 +1308,18 @@ class PortfolioOntologyProjectionRecorder:
                 world_id=shared_world.world_id,
             )
             fingerprint = str(manifest_state.get("materialFingerprint") or incoming_fingerprint)
+            # A selected link can still point to an untouched active market
+            # fact. Rebind every in-memory endpoint to the merged manifest so
+            # TypeDB writes the link against that active generation rather than
+            # an intentionally deferred source generation.
+            bound_manifest = apply_scoped_manifest_plan(
+                update,
+                manifest_state.get("scopePlan") or [],
+                account_id=shared_world.world_id,
+                world_id=shared_world.world_id,
+                material_fingerprint=fingerprint,
+            )
+            manifest_id = str(bound_manifest.get("manifestId") or manifest_id)
             if (
                 active_status == "ok"
                 and active_material_fingerprint(active_market) == fingerprint
@@ -1234,6 +1355,7 @@ class PortfolioOntologyProjectionRecorder:
                             "activeSymbolCount": int(manifest_state.get("activeSymbolCount") or 0),
                             "observationRefreshedScopeIds": refreshed_scope_ids,
                             "observationMetadata": observation_refresh,
+                            "targetScopedManifestPatch": market_target_patch,
                             "reason": "공용 시장 사실은 같지만 소스 관측 시각을 안전하게 갱신하지 못했습니다.",
                         }
                 # A portfolio inference retry must not rewrite the shared
@@ -1256,6 +1378,7 @@ class PortfolioOntologyProjectionRecorder:
                     "reusedIncomingScopeIds": list(manifest_state.get("reusedIncomingScopeIds") or []),
                     "observationRefreshedScopeIds": refreshed_scope_ids,
                     "observationMetadata": observation_refresh,
+                    "targetScopedManifestPatch": market_target_patch,
                     "reason": "공용 시장 사실이 현재 활성 MarketWorld와 같아 저장과 활성화를 생략했습니다.",
                 }
             update.worldview.update({
@@ -1273,19 +1396,8 @@ class PortfolioOntologyProjectionRecorder:
                 "marketWorldActiveScopeCount": int(manifest_state.get("activeScopeCount") or 0),
                 "marketWorldActiveSymbolCount": int(manifest_state.get("activeSymbolCount") or 0),
                 "marketWorldRetiredScopeIds": list(manifest_state.get("retiredScopeIds") or []),
+                "targetScopedManifestPatch": market_target_patch,
             })
-            for entity in update.entities:
-                if str((entity.properties or {}).get("ontologyBox") or "ABox") == "ABox":
-                    entity.properties["worldviewManifestId"] = manifest_id
-                    entity.properties["materialFingerprint"] = fingerprint
-            for relation in update.relations:
-                if str((relation.properties or {}).get("ontologyBox") or "ABox") == "ABox":
-                    relation.properties["worldviewManifestId"] = manifest_id
-                    relation.properties["materialFingerprint"] = fingerprint
-            for evidence in update.evidence:
-                if str((evidence.value or {}).get("ontologyBox") or "ABox") == "ABox":
-                    evidence.value["worldviewManifestId"] = manifest_id
-                    evidence.value["materialFingerprint"] = fingerprint
             validation = validate_ontology(update)
             coverage = market_world_coverage(update)
             coverage.update({
@@ -1296,6 +1408,7 @@ class PortfolioOntologyProjectionRecorder:
                 "changedIncomingScopeCount": len(manifest_state.get("changedIncomingScopeIds") or []),
                 "reusedIncomingScopeCount": len(manifest_state.get("reusedIncomingScopeIds") or []),
                 "observationRefreshedScopeCount": len(manifest_state.get("observationRefreshedScopeIds") or []),
+                "targetScopedManifestPatch": market_target_patch,
             })
             if validation.error_count:
                 return {
@@ -1342,6 +1455,7 @@ class PortfolioOntologyProjectionRecorder:
                 "changedIncomingScopeIds": list(manifest_state.get("changedIncomingScopeIds") or []),
                 "reusedIncomingScopeIds": list(manifest_state.get("reusedIncomingScopeIds") or []),
                 "observationRefreshedScopeIds": list(manifest_state.get("observationRefreshedScopeIds") or []),
+                "targetScopedManifestPatch": market_target_patch,
                 "coverage": coverage,
                 "validation": validation.to_dict(),
                 "save": save_result,
@@ -1887,6 +2001,88 @@ class PortfolioOntologyProjectionRecorder:
             if clean and clean in available and clean not in ordered:
                 ordered.append(clean)
         return ordered[:limit]
+
+    def scoped_full_reconcile_minutes(self) -> float:
+        """Bound deferred-symbol freshness during target-scoped projection."""
+        try:
+            value = float(str(self.settings.get("ontologyScopedFullReconcileMinutes") or "30"))
+        except (TypeError, ValueError):
+            value = 30.0
+        return max(5.0, min(24.0 * 60.0, value))
+
+    def scoped_full_reconcile_due(self, active_metadata: Dict[str, object]) -> bool:
+        """Require a periodic whole-world pass instead of hiding deferred facts."""
+        stamp = str(
+            (active_metadata or {}).get("lastFullScopeReconcileAt")
+            or (active_metadata or {}).get("asOf")
+            or ""
+        ).strip()
+        if not stamp:
+            return True
+        try:
+            parsed = datetime.fromisoformat(stamp.replace("Z", "+00:00"))
+            if parsed.tzinfo is None:
+                parsed = parsed.replace(tzinfo=timezone.utc)
+        except ValueError:
+            return True
+        age_minutes = (datetime.now(timezone.utc) - parsed.astimezone(timezone.utc)).total_seconds() / 60.0
+        return age_minutes >= self.scoped_full_reconcile_minutes()
+
+    def target_scoped_patch_targets(
+        self,
+        snapshot: AccountSnapshot,
+        active_metadata: Dict[str, object],
+        scoped_identity: Dict[str, object],
+        requested_symbols: List[str] = None,
+    ) -> Dict[str, object]:
+        """Choose a safe incremental write set before replacing a manifest.
+
+        TypeDB still receives the full active world through the manifest. This
+        only prevents a one-symbol observation from rewriting unchanged
+        symbols. A global change or an overdue reconciliation always keeps the
+        existing full projection path.
+        """
+        preliminary = self.inference_impact_plan(
+            snapshot,
+            active_metadata,
+            scoped_identity,
+            requested_symbols,
+        )
+        available = self.snapshot_symbols(snapshot)
+        inferred = self.inference_symbols(
+            snapshot,
+            preliminary.get("inferenceTargetSymbols") or requested_symbols,
+        )
+        inferred = self.bounded_native_inference_symbols(snapshot, inferred, requested_symbols)
+        explicit = self.inference_symbols(snapshot, requested_symbols)
+        base = {
+            "preliminaryImpactPlan": compact_inference_impact_plan(preliminary),
+            "targetSymbols": list(inferred),
+            "explicitTargetSymbols": list(explicit),
+            "availableSymbolCount": len(available),
+            "fullReconcileMinutes": self.scoped_full_reconcile_minutes(),
+        }
+        # A reasoning worker can intentionally schedule one subject even when
+        # a shared macro or portfolio fact also changed. Persist that subject
+        # and the shared scopes now; the untouched subjects retain their last
+        # coherent context until their own queued turn or the periodic full
+        # reconciliation. Without an explicit worker target, preserve the
+        # conservative whole-portfolio path for a global change.
+        if preliminary.get("globalImpact") and not explicit:
+            return {**base, "status": "full-global-impact", "eligible": False}
+        if self.scoped_full_reconcile_due(active_metadata):
+            return {**base, "status": "full-reconciliation-due", "eligible": False}
+        if not inferred or len(inferred) >= len(available):
+            return {**base, "status": "full-target-set", "eligible": False}
+        return {
+            **base,
+            "status": (
+                "target-scoped-explicit-global-context"
+                if preliminary.get("globalImpact")
+                else "target-scoped"
+            ),
+            "eligible": True,
+        }
 
     def inference_impact_plan(
         self,

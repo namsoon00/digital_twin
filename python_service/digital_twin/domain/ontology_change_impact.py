@@ -27,9 +27,13 @@ SYMBOL_SCOPE_FAMILIES = {
     "quality",
     "valuation",
     "exposure",
+    # Cross-scope TypeDB assertions live in a relation-only scope. Keeping
+    # edges out of their endpoint fact scopes prevents one fresh quote from
+    # rolling unrelated entity generations through endpoint storage IDs.
+    "link",
 }
 
-GLOBAL_SCOPE_TYPES = {"macro", "portfolio", "policy", "reference", "episode", "evidence"}
+GLOBAL_SCOPE_TYPES = {"macro", "portfolio", "policy", "reference", "episode", "evidence", "link"}
 
 
 def _clean(value: object) -> str:
@@ -70,6 +74,8 @@ def scope_family(scope_id: object) -> str:
         return "macro-" + family if not family.startswith("macro-") else family
     if parts[0] in {"portfolio", "policy", "episode", "evidence", "reference"}:
         return parts[0]
+    if parts[0] == "link":
+        return "link"
     return parts[0]
 
 
@@ -307,6 +313,30 @@ def _scope_plan_index(scope_plan: Iterable[object]) -> Dict[str, Dict[str, objec
     return result
 
 
+def _scope_plan_family_tokens(scope_id: str, item: Mapping[str, object]) -> Set[str]:
+    """Return semantic families carried by one scope-plan row.
+
+    Relation-only ``link`` scopes can carry market, flow, evidence, or macro
+    assertions. Their physical owner is deliberately separate from endpoint
+    entity scopes, so routing must use the relation's semantic family rather
+    than treat every changed link as an opaque state change.
+    """
+
+    raw_families = item.get("impactScopeFamilies") if isinstance(item, Mapping) else []
+    values = {
+        _clean(value)
+        for value in raw_families or []
+        if _clean(value)
+    }
+    if not values:
+        values = scope_family_tokens(scope_id)
+    expanded = set(values)
+    for family in list(values):
+        if family.startswith("macro-"):
+            expanded.add("macro")
+    return expanded
+
+
 def scope_delta(previous_scope_plan: Iterable[object], next_scope_plan: Iterable[object]) -> Dict[str, object]:
     """Compare immutable scope generations and retain dependency impact."""
     previous = _scope_plan_index(previous_scope_plan)
@@ -344,12 +374,14 @@ def scope_delta(previous_scope_plan: Iterable[object], next_scope_plan: Iterable
     direct_families = sorted({
         token
         for scope_id in direct_changed
-        for token in scope_family_tokens(scope_id)
+        for item in [current.get(scope_id) or previous.get(scope_id) or {}]
+        for token in _scope_plan_family_tokens(scope_id, item)
     })
     affected_families = sorted({
         token
         for scope_id in affected
-        for token in scope_family_tokens(scope_id)
+        for item in [current.get(scope_id) or previous.get(scope_id) or {}]
+        for token in _scope_plan_family_tokens(scope_id, item)
     })
     direct_symbols = sorted({
         symbol

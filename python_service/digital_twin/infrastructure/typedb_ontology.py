@@ -31,7 +31,11 @@ from ..domain.ontology_change_impact import compact_inference_impact_plan
 from ..domain.ontology_native_rule_planning import normalize_native_rule_planner_topology
 from ..domain.ontology_schema import default_tbox_metadata
 from ..domain.hypothesis_calibration import hypothesis_calibration_snapshot_from_abox_rows
-from ..domain.ontology_scopes import SCOPED_ABOX_MANIFEST_VERSION, SCOPED_ABOX_PERSISTENCE_MODE
+from ..domain.ontology_scopes import (
+    SCOPED_ABOX_MANIFEST_VERSION,
+    SCOPED_ABOX_PERSISTENCE_MODE,
+    support_relation_key,
+)
 from .graph_store_inferencebox import (
     inferencebox_entity_payload,
     inferencebox_relation_payload,
@@ -2115,6 +2119,11 @@ class ScopedABoxManifestMixin:
                 "scopeId": scope_id,
                 "scopeType": str(item.get("scopeType") or scope_id.split(":", 1)[0] or "reference"),
                 "scopeFamily": str(item.get("scopeFamily") or ""),
+                "impactScopeFamilies": [
+                    str(value or "")
+                    for value in item.get("impactScopeFamilies") or []
+                    if str(value or "").strip()
+                ],
                 "fingerprint": str(item.get("fingerprint") or ""),
                 "baseFingerprint": str(item.get("baseFingerprint") or ""),
                 "dependencyScopeIds": [
@@ -2762,6 +2771,7 @@ class ScopedABoxManifestMixin:
                 "materialFingerprint": str(worldview.get("materialFingerprint") or ""),
                 "projectionRunId": str(worldview.get("projectionRunId") or ""),
                 "asOf": str(worldview.get("asOf") or worldview.get("generatedAt") or utc_now()),
+                "lastFullScopeReconcileAt": str(worldview.get("lastFullScopeReconcileAt") or ""),
                 "scopePlan": list(scope_plan),
                 "scopeGenerationIds": dict(worldview.get("scopeGenerationIds") or {}),
                 "scopeFingerprints": dict(worldview.get("scopeFingerprints") or {}),
@@ -6078,6 +6088,7 @@ class TypeDBOntologyGraphRepository(GraphStoreOntologyRowMapperMixin, ScopedABox
             "materialFingerprint": str(payload.get("materialFingerprint") or ""),
             "projectionRunId": str(payload.get("projectionRunId") or ""),
             "asOf": str(payload.get("asOf") or ""),
+            "lastFullScopeReconcileAt": str(payload.get("lastFullScopeReconcileAt") or ""),
             "scopedAboxManifestVersion": str(payload.get("scopedAboxManifestVersion") or SCOPED_ABOX_MANIFEST_VERSION),
             "persistenceMode": SCOPED_ABOX_PERSISTENCE_MODE,
             "scopePlan": list(scope_plan),
@@ -8789,11 +8800,37 @@ relation ontology-assertion,
         ]
 
     def support_relation_rows(self, graph: PortfolioOntology) -> List[Dict[str, object]]:
+        support_scope_plan = dict((getattr(graph, "worldview", {}) or {}).get("supportRelationScopes") or {})
+
+        def scoped_owner(relation_type: str, source: object, target: object) -> Dict[str, object]:
+            metadata = support_scope_plan.get(support_relation_key(relation_type, source, target))
+            if not isinstance(metadata, dict):
+                return {}
+            scope_id = str(metadata.get("scopeId") or "").strip()
+            generation_id = str(
+                metadata.get("scopeGenerationId")
+                or metadata.get("snapshotId")
+                or metadata.get("aboxSnapshotId")
+                or ""
+            ).strip()
+            if not scope_id or not generation_id:
+                return {}
+            return {
+                "scopeId": scope_id,
+                "scopeType": str(metadata.get("scopeType") or scope_id.split(":", 1)[0] or "link"),
+                "manifestId": str(metadata.get("manifestId") or ""),
+                "scopeGenerationId": generation_id,
+                "snapshotId": generation_id,
+                "aboxSnapshotId": generation_id,
+            }
+
         rows: List[Dict[str, object]] = []
         for row in self.rows_for_evidence(graph):
+            source = row.get("subject")
+            target = row.get("id")
             rows.append({
-                "source": row.get("subject"),
-                "target": row.get("id"),
+                "source": source,
+                "target": target,
                 "type": "HAS_EVIDENCE",
                 "weight": 1.0,
                 "ontologyBox": row.get("ontologyBox") or "ABox",
@@ -8808,6 +8845,7 @@ relation ontology-assertion,
                 "scopeGenerationId": row.get("scopeGenerationId") or row.get("snapshotId") or row.get("aboxSnapshotId") or "",
                 "ruleId": "",
                 "propertiesJson": json.dumps(row, ensure_ascii=False, sort_keys=True),
+                **scoped_owner("HAS_EVIDENCE", source, target),
             })
         for row in self.rows_for_beliefs(graph):
             rows.append({

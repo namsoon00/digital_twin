@@ -13,7 +13,9 @@ from digital_twin.domain.ontology_rulebox_catalog import default_graph_inference
 from digital_twin.domain.ontology_contracts import OntologyEntity, OntologyEvidence, OntologyRelation, PortfolioOntology
 from digital_twin.domain.ontology_scopes import (
     SCOPED_ABOX_MANIFEST_VERSION,
+    SCOPED_ABOX_SCOPE_TOPOLOGY_VERSION,
     apply_scoped_abox_identity,
+    merge_target_scoped_abox_manifest,
 )
 from digital_twin.domain.ontology_native_rule_planning import native_rule_planner_topology
 from digital_twin.domain.portfolio import AccountSnapshot, PortfolioSummary, Position, utc_now_iso
@@ -259,12 +261,12 @@ class TypeDBOntologyRepositoryTests(unittest.TestCase):
         second_generations = dict(second["scopeGenerationIds"])
 
         self.assertNotEqual(first_generations["macro:fx"], second_generations["macro:fx"])
-        self.assertNotEqual(first_generations["symbol:MSTR:exposure"], second_generations["symbol:MSTR:exposure"])
+        self.assertNotEqual(first_generations["symbol:MSTR:link"], second_generations["symbol:MSTR:link"])
         self.assertEqual(first_generations["symbol:MSTR:state"], second_generations["symbol:MSTR:state"])
         self.assertEqual(first_generations["symbol:005930:state"], second_generations["symbol:005930:state"])
 
         repository = TypeDBOntologyGraphRepository("127.0.0.1:1729")
-        nodes, relations = repository.scoped_abox_persistence_rows(graph, ["symbol:MSTR:exposure"])
+        nodes, relations = repository.scoped_abox_persistence_rows(graph, ["symbol:MSTR:link"])
         self.assertEqual([], [row["id"] for row in nodes])
         self.assertEqual(1, len(relations))
         macro = next(item for item in graph.entities if item.entity_id == "fx-rate:USDKRW")
@@ -272,6 +274,186 @@ class TypeDBOntologyRepositoryTests(unittest.TestCase):
             ontology_storage_id(macro.properties, macro.entity_id, "node"),
             relations[0]["targetStorageId"],
         )
+
+    def test_scoped_abox_rebinds_cross_scope_edges_without_rolling_endpoint_fact_scopes(self):
+        graph = PortfolioOntology(
+            "main",
+            entities=[
+                OntologyEntity("stock:005930", "삼성전자", "stock", {
+                    "ontologyBox": "ABox", "symbol": "005930",
+                }),
+                OntologyEntity("price-metric:005930:current", "현재가", "price-metric", {
+                    "ontologyBox": "ABox", "symbol": "005930", "currentPrice": 70000,
+                }),
+                OntologyEntity("fx-rate:USDKRW", "USD/KRW", "fx-rate", {
+                    "ontologyBox": "ABox", "usdKrwRate": 1400,
+                }),
+            ],
+            relations=[
+                OntologyRelation("stock:005930", "price-metric:005930:current", "HAS_PRICE", properties={
+                    "ontologyBox": "ABox",
+                }),
+                OntologyRelation("stock:005930", "fx-rate:USDKRW", "HAS_FX_EXPOSURE", properties={
+                    "ontologyBox": "ABox",
+                }),
+            ],
+        )
+
+        first = apply_scoped_abox_identity(graph)
+        first_generations = dict(first["scopeGenerationIds"])
+        link = next(item for item in first["scopePlan"] if item["scopeId"] == "symbol:005930:link")
+        self.assertEqual(0, link["entityCount"])
+        self.assertEqual(2, link["relationCount"])
+        self.assertEqual(
+            {"macro:fx", "symbol:005930:market", "symbol:005930:state"},
+            set(link["dependencyScopeIds"]),
+        )
+
+        graph.entities[1].properties["currentPrice"] = 71000
+        second = apply_scoped_abox_identity(graph)
+        second_generations = dict(second["scopeGenerationIds"])
+
+        self.assertNotEqual(first_generations["symbol:005930:market"], second_generations["symbol:005930:market"])
+        self.assertNotEqual(first_generations["symbol:005930:link"], second_generations["symbol:005930:link"])
+        self.assertEqual(first_generations["symbol:005930:state"], second_generations["symbol:005930:state"])
+        self.assertEqual(first_generations["macro:fx"], second_generations["macro:fx"])
+
+    def test_target_scoped_manifest_patch_retains_untargeted_generations(self):
+        graph = PortfolioOntology(
+            "main",
+            entities=[
+                OntologyEntity("stock:005930", "삼성전자", "stock", {
+                    "ontologyBox": "ABox", "symbol": "005930",
+                }),
+                OntologyEntity("price:005930", "삼성전자 현재가", "price-metric", {
+                    "ontologyBox": "ABox", "symbol": "005930", "currentPrice": 70000,
+                }),
+                OntologyEntity("stock:MSTR", "Strategy", "stock", {
+                    "ontologyBox": "ABox", "symbol": "MSTR",
+                }),
+                OntologyEntity("price:MSTR", "Strategy 현재가", "price-metric", {
+                    "ontologyBox": "ABox", "symbol": "MSTR", "currentPrice": 100,
+                }),
+                OntologyEntity("fx-rate:USDKRW", "USD/KRW", "fx-rate", {
+                    "ontologyBox": "ABox", "usdKrwRate": 1400,
+                }),
+            ],
+            relations=[
+                OntologyRelation("stock:005930", "price:005930", "HAS_PRICE", properties={
+                    "ontologyBox": "ABox",
+                }),
+                OntologyRelation("stock:MSTR", "price:MSTR", "HAS_PRICE", properties={
+                    "ontologyBox": "ABox",
+                }),
+                OntologyRelation("stock:005930", "fx-rate:USDKRW", "EXPOSED_TO_FX", properties={
+                    "ontologyBox": "ABox",
+                }),
+                OntologyRelation("stock:MSTR", "fx-rate:USDKRW", "EXPOSED_TO_FX", properties={
+                    "ontologyBox": "ABox",
+                }),
+            ],
+        )
+        first = apply_scoped_abox_identity(graph, world_id="portfolio:local:main")
+        active = {
+            "status": "ok",
+            "scopedAboxManifestVersion": SCOPED_ABOX_MANIFEST_VERSION,
+            "scopeTopologyVersion": SCOPED_ABOX_SCOPE_TOPOLOGY_VERSION,
+            "scopePlan": [dict(item) for item in first["scopePlan"]],
+            "scopeGenerationIds": dict(first["scopeGenerationIds"]),
+            "scopeFingerprints": dict(first["scopeFingerprints"]),
+        }
+        first_generations = dict(first["scopeGenerationIds"])
+
+        price = next(item for item in graph.entities if item.entity_id == "price:005930")
+        price.properties["currentPrice"] = 71000
+        apply_scoped_abox_identity(graph, world_id="portfolio:local:main")
+        patch = merge_target_scoped_abox_manifest(graph, active, ["005930"])
+        generations = dict(patch["scopeGenerationIds"])
+        samsung_market_scope = next(
+            scope_id for scope_id in first_generations
+            if scope_id.startswith("symbol:005930:market:")
+        )
+        mstr_market_scope = next(
+            scope_id for scope_id in first_generations
+            if scope_id.startswith("symbol:MSTR:market:")
+        )
+
+        self.assertTrue(patch["applied"])
+        self.assertIn("005930", patch["targetSymbols"])
+        self.assertNotEqual(
+            first_generations[samsung_market_scope],
+            generations[samsung_market_scope],
+        )
+        self.assertEqual(
+            first_generations[mstr_market_scope],
+            generations[mstr_market_scope],
+        )
+        mstr_price = next(item for item in graph.entities if item.entity_id == "price:MSTR")
+        self.assertEqual(
+            first_generations[mstr_market_scope],
+            mstr_price.properties["scopeGenerationId"],
+        )
+        self.assertIn(
+            mstr_market_scope,
+            patch["reusedActiveScopeIds"],
+        )
+
+    def test_explicit_target_can_patch_shared_context_without_rewriting_every_symbol(self):
+        graph = PortfolioOntology(
+            "main",
+            entities=[
+                OntologyEntity("stock:005930", "삼성전자", "stock", {
+                    "ontologyBox": "ABox", "symbol": "005930",
+                }),
+                OntologyEntity("stock:MSTR", "Strategy", "stock", {
+                    "ontologyBox": "ABox", "symbol": "MSTR",
+                }),
+                OntologyEntity("fx-rate:USDKRW", "USD/KRW", "fx-rate", {
+                    "ontologyBox": "ABox", "usdKrwRate": 1400,
+                }),
+            ],
+            relations=[
+                OntologyRelation("stock:005930", "fx-rate:USDKRW", "EXPOSED_TO_FX", properties={
+                    "ontologyBox": "ABox",
+                }),
+                OntologyRelation("stock:MSTR", "fx-rate:USDKRW", "EXPOSED_TO_FX", properties={
+                    "ontologyBox": "ABox",
+                }),
+            ],
+        )
+        first = apply_scoped_abox_identity(graph)
+        active = {
+            "status": "ok",
+            "asOf": utc_now_iso(),
+            "scopedAboxManifestVersion": SCOPED_ABOX_MANIFEST_VERSION,
+            "scopeTopologyVersion": SCOPED_ABOX_SCOPE_TOPOLOGY_VERSION,
+            "scopePlan": [dict(item) for item in first["scopePlan"]],
+            "scopeGenerationIds": dict(first["scopeGenerationIds"]),
+            "scopeFingerprints": dict(first["scopeFingerprints"]),
+        }
+        fx = next(item for item in graph.entities if item.entity_id == "fx-rate:USDKRW")
+        fx.properties["usdKrwRate"] = 1410
+        second = apply_scoped_abox_identity(graph)
+        snapshot = SimpleNamespace(
+            positions=[SimpleNamespace(symbol="005930"), SimpleNamespace(symbol="MSTR")],
+            watchlist=[],
+        )
+        recorder = PortfolioOntologyProjectionRecorder(
+            SimpleNamespace(store_key="typedb"),
+            settings={"typedbNativeRuleTargetSymbolLimit": "1"},
+        )
+
+        target = recorder.target_scoped_patch_targets(
+            snapshot,
+            active,
+            second,
+            ["005930"],
+        )
+
+        self.assertTrue(target["preliminaryImpactPlan"]["globalImpact"])
+        self.assertTrue(target["eligible"])
+        self.assertEqual("target-scoped-explicit-global-context", target["status"])
+        self.assertEqual(["005930"], target["targetSymbols"])
 
     def test_scoped_abox_batch_count_verification_groups_scope_and_generation(self):
         repository = TypeDBOntologyGraphRepository("127.0.0.1:1729")
@@ -430,14 +612,30 @@ class TypeDBOntologyRepositoryTests(unittest.TestCase):
                 {"ontologyBox": "ABox"},
             )],
         )
-        apply_scoped_abox_identity(graph)
+        first = apply_scoped_abox_identity(graph)
         repository = TypeDBOntologyGraphRepository("127.0.0.1:1729")
 
-        nodes, relations = repository.scoped_abox_persistence_rows(graph, ["symbol:005930:evidence"])
+        nodes, relations = repository.scoped_abox_persistence_rows(graph, ["symbol:005930:link"])
 
-        self.assertEqual({"evidence:005930:price"}, {row["id"] for row in nodes})
+        self.assertEqual(set(), {row["id"] for row in nodes})
         self.assertEqual(["HAS_EVIDENCE"], [row["type"] for row in relations])
-        self.assertTrue(all(row["scopeId"] == "symbol:005930:evidence" for row in nodes + relations))
+        self.assertTrue(all(row["scopeId"] == "symbol:005930:link" for row in nodes + relations))
+
+        graph.entities[0].properties["currentPrice"] = 71000
+        second = apply_scoped_abox_identity(graph)
+        first_generations = dict(first["scopeGenerationIds"])
+        second_generations = dict(second["scopeGenerationIds"])
+        self.assertNotEqual(first_generations["symbol:005930:state"], second_generations["symbol:005930:state"])
+        self.assertNotEqual(first_generations["symbol:005930:link"], second_generations["symbol:005930:link"])
+        self.assertEqual(first_generations["symbol:005930:evidence"], second_generations["symbol:005930:evidence"])
+
+        _nodes, rebound_relations = repository.scoped_abox_persistence_rows(graph, ["symbol:005930:link"])
+        self.assertEqual(1, len(rebound_relations))
+        stock = next(item for item in graph.entities if item.entity_id == "stock:005930")
+        self.assertEqual(
+            ontology_storage_id(stock.properties, stock.entity_id, "node"),
+            rebound_relations[0]["sourceStorageId"],
+        )
 
     def test_scoped_abox_finalize_runs_reference_aware_manifest_cleanup(self):
         repository = TypeDBOntologyGraphRepository("127.0.0.1:1729")
@@ -1898,6 +2096,7 @@ class TypeDBOntologyRepositoryTests(unittest.TestCase):
             }],
             "scopeGenerationIds": {"symbol:005930:market:world:test": "abox-scope:005930"},
             "scopeFingerprints": {"symbol:005930:market:world:test": "fingerprint-005930"},
+            "lastFullScopeReconcileAt": "2026-07-23T00:00:00Z",
             "marketScopeObservedAt": {"symbol:005930:market:world:test": "2026-07-23T00:00:00Z"},
             "marketScopeObservedAtVersion": "source-item-v1",
         }
@@ -1913,6 +2112,7 @@ class TypeDBOntologyRepositoryTests(unittest.TestCase):
             limit=1,
         )
         self.assertEqual("ok", metadata["status"])
+        self.assertEqual("2026-07-23T00:00:00Z", metadata["lastFullScopeReconcileAt"])
         self.assertEqual("2026-07-23T00:00:00Z", metadata["marketScopeObservedAt"]["symbol:005930:market:world:test"])
         self.assertEqual("source-item-v1", metadata["marketScopeObservedAtVersion"])
 
@@ -1929,6 +2129,7 @@ class TypeDBOntologyRepositoryTests(unittest.TestCase):
             "materialFingerprint": "market-fingerprint",
             "scopeGenerationIds": {scope_id: "abox-scope:005930"},
             "scopeFingerprints": {scope_id: "fingerprint-005930"},
+            "lastFullScopeReconcileAt": "2026-07-23T00:00:00Z",
             "marketScopeObservedAt": {scope_id: "2026-07-23T00:00:00Z"},
             "marketScopeObservedAtVersion": "source-item-v1",
             "marketWorldProjectionMode": "incremental-scoped-manifest-patch",
@@ -1946,6 +2147,7 @@ class TypeDBOntologyRepositoryTests(unittest.TestCase):
         )
         properties = marker_graph.entities[0].properties
 
+        self.assertEqual("2026-07-23T00:00:00Z", properties["lastFullScopeReconcileAt"])
         self.assertEqual({scope_id: "2026-07-23T00:00:00Z"}, properties["marketScopeObservedAt"])
         self.assertEqual("source-item-v1", properties["marketScopeObservedAtVersion"])
         self.assertEqual("2026-07-23T00:00:00Z", properties["scopePlan"][0]["observedAt"])

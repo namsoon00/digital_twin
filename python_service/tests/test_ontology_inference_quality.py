@@ -1,3 +1,4 @@
+import copy
 import unittest
 from datetime import datetime, timezone
 
@@ -9,7 +10,7 @@ from digital_twin.domain.ontology_projection_fingerprint import material_graph_f
 from digital_twin.domain.ontology_rulebox_catalog import default_graph_inference_rules
 from digital_twin.domain.ontology_rulebox_contracts import GraphInferenceRule
 from digital_twin.domain.portfolio_ontology_builder import build_portfolio_ontology
-from digital_twin.domain.portfolio import AccountSnapshot, Position
+from digital_twin.domain.portfolio import AccountSnapshot, Position, utc_now_iso
 from digital_twin.domain.portfolio_calculations import portfolio_summary
 from digital_twin.domain.market_data import normalize_position
 from digital_twin.infrastructure.ontology_projection import PortfolioOntologyProjectionRecorder
@@ -499,6 +500,91 @@ class OntologyInferenceQualityTests(unittest.TestCase):
         )
 
         self.assertEqual(["000660"], symbols)
+
+    def test_explicit_symbol_projection_reuses_other_active_scopes_under_global_context_change(self):
+        class ScopeAwareRepository(MemoryProjectionRepository):
+            def __init__(self):
+                super().__init__()
+                self.saved_graphs = []
+
+            def active_abox_metadata(self, world_id=""):
+                return dict(self.active)
+
+            def save_graph(self, graph):
+                self.save_count += 1
+                worldview = dict(graph.worldview or {})
+                self.saved_graphs.append(copy.deepcopy(graph))
+                self.active = {
+                    "status": "ok",
+                    "materialFingerprint": str(worldview.get("materialFingerprint") or ""),
+                    "aboxSnapshotId": str(worldview.get("aboxSnapshotId") or ""),
+                    "scopedAboxManifestVersion": str(worldview.get("scopedAboxManifestVersion") or ""),
+                    "scopeTopologyVersion": str(worldview.get("scopeTopologyVersion") or ""),
+                    "scopePlan": [dict(item) for item in worldview.get("scopePlan") or []],
+                    "scopeGenerationIds": dict(worldview.get("scopeGenerationIds") or {}),
+                    "scopeFingerprints": dict(worldview.get("scopeFingerprints") or {}),
+                    "asOf": str(worldview.get("asOf") or ""),
+                    "lastFullScopeReconcileAt": str(worldview.get("lastFullScopeReconcileAt") or ""),
+                }
+                return {"saved": True, "status": "ok", "graphStore": "typedb"}
+
+        samsung = normalize_position({
+            "symbol": "005930",
+            "name": "삼성전자",
+            "market": "KR",
+            "currency": "KRW",
+            "source": "holding",
+            "quantity": 10,
+            "currentPrice": 70000,
+            "marketValue": 700000,
+        })
+        hynix = normalize_position({
+            "symbol": "000660",
+            "name": "SK하이닉스",
+            "market": "KR",
+            "currency": "KRW",
+            "source": "holding",
+            "quantity": 5,
+            "currentPrice": 180000,
+            "marketValue": 900000,
+        })
+        repository = ScopeAwareRepository()
+        recorder = PortfolioOntologyProjectionRecorder(
+            repository,
+            settings={"typedbNativeRuleTargetSymbolLimit": "1"},
+        )
+        first = recorder.record_snapshot(
+            self.snapshot_with_positions([samsung, hynix], utc_now_iso())
+        )
+        first_generations = dict(repository.active["scopeGenerationIds"])
+        changed_samsung = normalize_position({
+            **samsung.to_dict(),
+            "currentPrice": 71000,
+            "marketValue": 710000,
+        })
+
+        second = recorder.record_snapshot(
+            self.snapshot_with_positions([changed_samsung, hynix], utc_now_iso()),
+            target_symbols=["005930"],
+        )
+
+        patch = second["projectionScope"]["targetScopedManifestPatch"]
+        hynix_market_scope = next(
+            scope_id for scope_id in first_generations
+            if scope_id.startswith("symbol:000660:market:")
+        )
+        samsung_market_scope = next(
+            scope_id for scope_id in first_generations
+            if scope_id.startswith("symbol:005930:market:")
+        )
+        final_generations = dict(repository.active["scopeGenerationIds"])
+
+        self.assertTrue(first["saved"])
+        self.assertTrue(second["saved"])
+        self.assertEqual("applied", patch["status"])
+        self.assertEqual(["005930"], patch["targetSymbols"])
+        self.assertNotEqual(first_generations[samsung_market_scope], final_generations[samsung_market_scope])
+        self.assertEqual(first_generations[hynix_market_scope], final_generations[hynix_market_scope])
 
     @staticmethod
     def snapshot(position, generated_at):

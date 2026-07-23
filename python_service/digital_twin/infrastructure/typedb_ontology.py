@@ -410,6 +410,112 @@ def typedb_native_rule_evidence_read_index_for_execution(
     }
 
 
+def typedb_projection_preflight_graph_for_execution(
+    projection_graph: object,
+    projection_manifest_id: object,
+    active_abox_metadata: Dict[str, object] = None,
+    planner_topology: Dict[str, object] = None,
+    target_symbols: Iterable[str] = None,
+    world_id: str = "",
+) -> Dict[str, object]:
+    """Accept a just-persisted graph only for negative native-rule preflight.
+
+    ``load_graph_for_native_matches`` remains the durable evidence source for
+    materialized matches. This helper merely avoids rereading the exact ABox
+    that the projection worker has already validated, staged, and activated
+    under the same write lease. Any identity or coverage mismatch returns no
+    graph so the caller falls back to the manifest-indexed TypeDB read.
+    """
+    if not isinstance(projection_graph, PortfolioOntology):
+        return {
+            "status": "unavailable",
+            "mode": "projection-verified-in-memory",
+            "reason": "No projection graph was supplied by the active ABox writer.",
+        }
+    active = dict(active_abox_metadata or {})
+    active_manifest_id = str(
+        active.get("worldviewManifestId") or active.get("aboxSnapshotId") or ""
+    ).strip()
+    supplied_manifest_id = str(projection_manifest_id or "").strip()
+    graph_worldview = dict(getattr(projection_graph, "worldview", {}) or {})
+    graph_manifest_id = str(
+        graph_worldview.get("worldviewManifestId")
+        or graph_worldview.get("aboxSnapshotId")
+        or ""
+    ).strip()
+    if (
+        not active_manifest_id
+        or not supplied_manifest_id
+        or supplied_manifest_id != active_manifest_id
+        or graph_manifest_id != active_manifest_id
+    ):
+        return {
+            "status": "incomplete",
+            "mode": "projection-verified-in-memory",
+            "reason": "Projection graph manifest does not exactly match the active TypeDB ABox.",
+        }
+    requested_world_id = str(world_id or "").strip()
+    active_world_id = str(active.get("worldId") or requested_world_id or "").strip()
+    graph_world_id = str(graph_worldview.get("worldId") or "").strip()
+    if requested_world_id and (graph_world_id != requested_world_id or active_world_id != requested_world_id):
+        return {
+            "status": "incomplete",
+            "mode": "projection-verified-in-memory",
+            "reason": "Projection graph world does not match the active TypeDB inference world.",
+        }
+    if str(graph_worldview.get("runtimeProjectionMode") or "") != "abox-facts-only-typedb-native-rules":
+        return {
+            "status": "incomplete",
+            "mode": "projection-verified-in-memory",
+            "reason": "Projection graph is not the verified ABox-native-rule input surface.",
+        }
+    supplied_topology = normalize_native_rule_planner_topology(
+        graph_worldview.get("nativeRulePlannerTopology")
+    )
+    expected_topology = dict(planner_topology or {})
+    if (
+        str(expected_topology.get("status") or "") != "verified"
+        or str(supplied_topology.get("status") or "") != "ok"
+        or str(supplied_topology.get("fingerprint") or "")
+        != str(expected_topology.get("fingerprint") or "")
+    ):
+        return {
+            "status": "incomplete",
+            "mode": "projection-verified-in-memory",
+            "reason": "Projection graph planner topology does not match the active ABox Manifest.",
+        }
+    clean_symbols = clean_symbols_from_payload(target_symbols)
+    expected_source_ids = {
+        str(source_id or "").strip()
+        for symbol in clean_symbols
+        for source_id in dict(expected_topology.get("sourceIdsBySymbol") or {}).get(symbol, []) or []
+        if str(source_id or "").strip()
+    }
+    graph_source_ids = {
+        str(entity.entity_id or "").strip()
+        for entity in list(getattr(projection_graph, "entities", []) or [])
+        if str(entity.entity_id or "").strip()
+    }
+    if not expected_source_ids or not expected_source_ids.issubset(graph_source_ids):
+        return {
+            "status": "incomplete",
+            "mode": "projection-verified-in-memory",
+            "reason": "Projection graph does not contain every active target stock source.",
+            "sourceCount": len(expected_source_ids),
+            "loadedSourceCount": len(expected_source_ids & graph_source_ids),
+        }
+    return {
+        "status": "ok",
+        "mode": "projection-verified-in-memory",
+        "reason": "",
+        "sourceCount": len(expected_source_ids),
+        "loadedSourceCount": len(expected_source_ids),
+        "entityCount": len(list(getattr(projection_graph, "entities", []) or [])),
+        "relationCount": len(list(getattr(projection_graph, "relations", []) or [])),
+        "graph": projection_graph,
+    }
+
+
 def typedb_error_code(error: object) -> str:
     text = str(error or "").lower()
     if any(term in text for term in ["unable to connect", "connection refused", "connect failed", "unavailable"]):
@@ -11459,7 +11565,11 @@ relation ontology-assertion,
         # preserving a previous InferenceBox deliberately pass
         # ``reset_metrics=False`` to their own snapshot method.
         self.reset_query_metrics()
-        payload = payload if isinstance(payload, dict) else {}
+        payload = dict(payload) if isinstance(payload, dict) else {}
+        projection_preflight_graph = payload.pop("_nativePreflightProjectionGraph", None)
+        projection_preflight_manifest_id = str(
+            payload.pop("_nativePreflightProjectionManifestId", "") or ""
+        ).strip()
         world_id = str(payload.get("worldId") or payload.get("ontologyWorldId") or "").strip()
         if "typedbNativeRuleExecutionEnabled" in payload:
             native_execution_enabled = typedb_bool(payload.get("typedbNativeRuleExecutionEnabled"))
@@ -11755,7 +11865,23 @@ relation ontology-assertion,
                     if str(source_id or "").strip()
                 })
                 native_preflight["sourceCount"] = len(preflight_source_ids)
-                if preflight_source_ids:
+                projection_preflight = typedb_projection_preflight_graph_for_execution(
+                    projection_preflight_graph,
+                    projection_preflight_manifest_id,
+                    abox_metadata,
+                    planner_topology,
+                    target_symbols=target_symbols,
+                    world_id=world_id,
+                )
+                if str(projection_preflight.get("status") or "") == "ok":
+                    preflight_graph = projection_preflight.get("graph")
+                    preflight_incoming_relations_complete = True
+                    native_preflight.update({
+                        key: value
+                        for key, value in projection_preflight.items()
+                        if key != "graph"
+                    })
+                elif preflight_source_ids:
                     try:
                         preflight_graph_candidate = typedb_call_for_world(
                             self.load_graph_for_native_matches,

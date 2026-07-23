@@ -28,6 +28,7 @@ from digital_twin.domain.repositories import (
 from digital_twin.infrastructure.ontology_graph_store import ontology_repository_from_settings
 from digital_twin.infrastructure.ontology_projection import (
     PortfolioOntologyProjectionRecorder,
+    SHARED_PORTFOLIO_GRAPH_ASSEMBLY_CACHE,
     SharedMarketWorldProjectionCoordinator,
     migrate_typedb_rule_catalog,
 )
@@ -57,6 +58,7 @@ from digital_twin.infrastructure.typedb_ontology import (
     typedb_native_rule_execution_plan,
     typedb_native_rule_evidence_read_index_for_execution,
     typedb_native_rule_planner_topology_for_execution,
+    typedb_projection_preflight_graph_for_execution,
     typedb_native_reasoning_profile,
     typedb_scoped_manifest_member_clause,
     inference_generation_marker_row,
@@ -64,6 +66,111 @@ from digital_twin.infrastructure.typedb_ontology import (
 
 
 class TypeDBOntologyRepositoryTests(unittest.TestCase):
+    def test_projection_preflight_graph_requires_exact_active_manifest_and_topology(self):
+        graph = PortfolioOntology(
+            "main",
+            entities=[OntologyEntity("stock:AAPL", "Apple", "stock", {
+                "ontologyBox": "ABox",
+                "symbol": "AAPL",
+            })],
+            worldview={
+                "worldId": "portfolio:local:main",
+                "worldviewManifestId": "abox-manifest:active",
+                "runtimeProjectionMode": "abox-facts-only-typedb-native-rules",
+            },
+        )
+        topology = native_rule_planner_topology(graph)
+        graph.worldview["nativeRulePlannerTopology"] = topology
+        active = {
+            "status": "ok",
+            "worldId": "portfolio:local:main",
+            "worldviewManifestId": "abox-manifest:active",
+            "nativeRulePlannerTopology": topology,
+        }
+        execution_topology = typedb_native_rule_planner_topology_for_execution(
+            active,
+            topology,
+            ["AAPL"],
+        )
+
+        accepted = typedb_projection_preflight_graph_for_execution(
+            graph,
+            "abox-manifest:active",
+            active,
+            execution_topology,
+            ["AAPL"],
+            "portfolio:local:main",
+        )
+        rejected = typedb_projection_preflight_graph_for_execution(
+            graph,
+            "abox-manifest:stale",
+            active,
+            execution_topology,
+            ["AAPL"],
+            "portfolio:local:main",
+        )
+
+        self.assertEqual("ok", accepted["status"])
+        self.assertIs(graph, accepted["graph"])
+        self.assertEqual("projection-verified-in-memory", accepted["mode"])
+        self.assertEqual("incomplete", rejected["status"])
+        self.assertNotIn("graph", rejected)
+
+    def test_projection_graph_assembly_cache_reuses_identical_source_without_shared_mutation(self):
+        class Repository:
+            store_key = "typedb"
+            address = "cache-unit-test"
+            database = "cache-unit-test"
+
+            def active_tbox_metadata(self):
+                return {"status": "ok", "fingerprint": "tbox-cache-unit-test"}
+
+        snapshot = AccountSnapshot(
+            "main",
+            "메인",
+            "toss",
+            "live",
+            "ok",
+            "2026-07-23T00:00:00Z",
+            PortfolioSummary(total=1000, invested=1000, cash=0, markets=[], sectors=[], concentration=0),
+            positions=[Position(
+                "AAPL",
+                "Apple",
+                market="US",
+                currency="USD",
+                quantity=1,
+                current_price=100,
+                market_value=100,
+                market_value_krw=140000,
+            )],
+        )
+        catalog = {
+            "ruleboxRulesHash": "cache-unit-rule-catalog",
+            "rules": rulebox_rules_to_payload(default_graph_inference_rules()),
+        }
+        recorder = PortfolioOntologyProjectionRecorder(
+            Repository(),
+            settings={
+                "ontologyProjectionGraphCacheEnabled": "1",
+                "ontologyProjectionGraphCacheTtlSeconds": "60",
+                "ontologyProjectionGraphCacheMaxEntries": "4",
+            },
+        )
+        with SHARED_PORTFOLIO_GRAPH_ASSEMBLY_CACHE.lock:
+            SHARED_PORTFOLIO_GRAPH_ASSEMBLY_CACHE.entries.clear()
+
+        first_graph, first_persistence, first = recorder.build_graph_assembly(snapshot, catalog)
+        first_graph.worldview["callerMutation"] = True
+        first_persistence.worldview["callerMutation"] = True
+        # A polling timestamp is provenance, not a changed market fact.
+        snapshot.generated_at = "2026-07-23T00:01:00Z"
+        second_graph, second_persistence, second = recorder.build_graph_assembly(snapshot, catalog)
+
+        self.assertEqual("miss", first["status"])
+        self.assertEqual("hit", second["status"])
+        self.assertNotIn("callerMutation", second_graph.worldview)
+        self.assertNotIn("callerMutation", second_persistence.worldview)
+
     def test_typedb_schema_defines_nodes_assertions_and_storage_keys(self):
         repository = TypeDBOntologyGraphRepository("127.0.0.1:1729")
 
@@ -3987,6 +4094,8 @@ class TypeDBOntologyRepositoryTests(unittest.TestCase):
     def test_projection_recorder_returns_after_native_inference_before_slow_market_world_merge(self):
         market_world_started = Event()
         release_market_world = Event()
+        quality_started = Event()
+        release_quality = Event()
 
         class FakeRepository:
             store_key = "typedb"
@@ -4025,6 +4134,13 @@ class TypeDBOntologyRepositoryTests(unittest.TestCase):
                     raise AssertionError("slow market world test did not release")
                 return {"status": "ok", "materialFingerprint": "market-world-test"}
 
+        class SlowQualityStore:
+            def record_graph(self, _graph, source="monitoring", created_at=""):
+                quality_started.set()
+                if not release_quality.wait(2):
+                    raise AssertionError("slow quality record test did not release")
+                return SimpleNamespace(sample_id="quality-test", overall_state="ready")
+
         snapshot = AccountSnapshot(
             "main",
             "메인",
@@ -4037,7 +4153,12 @@ class TypeDBOntologyRepositoryTests(unittest.TestCase):
         )
         recorder = SlowMarketWorldRecorder(
             FakeRepository(),
-            settings={"ontologySharedMarketWorldAsyncProjectionEnabled": "1"},
+            quality_store=SlowQualityStore(),
+            settings={
+                "ontologySharedMarketWorldAsyncProjectionEnabled": "1",
+                "ontologyAsyncQualityRecordEnabled": "1",
+            },
+            source="slow-quality-test",
         )
 
         started = time.monotonic()
@@ -4047,9 +4168,13 @@ class TypeDBOntologyRepositoryTests(unittest.TestCase):
             self.assertLess(elapsed, 1.5)
             self.assertEqual("queued-coalesced-market-world-projection", result["marketWorld"]["status"])
             self.assertTrue(result["marketWorld"]["eventuallyConsistent"])
+            self.assertEqual("queued-coalesced-quality-record", result["qualityRecord"]["status"])
+            self.assertTrue(result["qualityRecord"]["eventuallyConsistent"])
             self.assertTrue(market_world_started.wait(1))
+            self.assertTrue(quality_started.wait(1))
         finally:
             release_market_world.set()
+            release_quality.set()
 
     def test_projection_recorder_uses_durable_inferencebox_readback_after_rulebox_execution(self):
         class FakeRepository:

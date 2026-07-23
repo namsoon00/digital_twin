@@ -1,9 +1,11 @@
+from collections import OrderedDict
 from copy import deepcopy
 from dataclasses import replace
 from datetime import datetime, timezone
 from threading import Lock, Thread
 from typing import Dict, List, Set
 import hashlib
+import json
 import time
 
 from ..application.investment_outcome_observation_service import InvestmentOutcomeObservationService
@@ -19,6 +21,7 @@ from ..domain.ontology_projection_fingerprint import (
     active_material_fingerprint,
     apply_material_graph_identity,
     material_graph_fingerprint,
+    stable_value,
 )
 from ..domain.ontology_scopes import (
     SCOPED_ABOX_MANIFEST_VERSION,
@@ -45,6 +48,7 @@ from ..domain.ontology_projection_audit import (
     inference_reuse_scope_plan,
     inference_reuse_scope_plan_for_targets,
     inference_reuse_scope_plan_fingerprint,
+    projection_source_snapshot,
     projection_run_from_payload,
 )
 from ..domain.ontology_runtime_operations import build_projection_runtime_observation
@@ -218,6 +222,171 @@ class SharedMarketWorldProjectionCoordinator:
 
 
 SHARED_MARKET_WORLD_PROJECTION_COORDINATOR = SharedMarketWorldProjectionCoordinator()
+
+
+class SharedPortfolioGraphAssemblyCache:
+    """Reuse one immutable source snapshot's pure ABox assembly briefly.
+
+    Target-scoped TypeDB inference runs can arrive one after another for the
+    exact same account snapshot.  Rebuilding the complete ABox for every
+    target adds several seconds without changing the facts TypeDB receives.
+    The cache keeps only the pre-identity graph pair in process memory; every
+    caller gets a deep copy before manifest/scoped-generation fields are
+    applied.  A cache key includes the complete source snapshot, runtime
+    settings, rule catalog hash, and graph-store namespace, so a fresh source
+    observation or configuration change cannot reuse an old graph.
+    """
+
+    def __init__(self):
+        self.lock = Lock()
+        self.entries: "OrderedDict[str, Dict[str, object]]" = OrderedDict()
+
+    def get(self, key: str, ttl_seconds: float) -> Dict[str, object]:
+        if not key or ttl_seconds <= 0:
+            return {"status": "disabled"}
+        now = time.monotonic()
+        with self.lock:
+            expired = [
+                entry_key
+                for entry_key, entry in self.entries.items()
+                if now - float(entry.get("createdMonotonic") or 0) > ttl_seconds
+            ]
+            for entry_key in expired:
+                self.entries.pop(entry_key, None)
+            entry = self.entries.pop(key, None)
+            if not isinstance(entry, dict):
+                return {"status": "miss"}
+            self.entries[key] = entry
+            return {
+                "status": "hit",
+                "ageMs": int((now - float(entry.get("createdMonotonic") or now)) * 1000),
+                "graph": deepcopy(entry["graph"]),
+                "persistenceGraph": deepcopy(entry["persistenceGraph"]),
+            }
+
+    def put(
+        self,
+        key: str,
+        graph: PortfolioOntology,
+        persistence_graph: PortfolioOntology,
+        max_entries: int,
+    ) -> None:
+        if not key or max_entries <= 0:
+            return
+        with self.lock:
+            self.entries.pop(key, None)
+            self.entries[key] = {
+                "createdMonotonic": time.monotonic(),
+                "graph": deepcopy(graph),
+                "persistenceGraph": deepcopy(persistence_graph),
+            }
+            while len(self.entries) > max_entries:
+                self.entries.popitem(last=False)
+
+
+class SharedOntologyQualityRecordCoordinator:
+    """Coalesce diagnostic quality samples after decision-critical inference.
+
+    Quality samples are observability records. They must reflect a verified
+    graph, but writing every intermediate sample must not delay the same
+    snapshot's notification path. The latest complete graph per account and
+    source is retained while a single daemon writer is active.
+    """
+
+    def __init__(self):
+        self.lock = Lock()
+        self.pending_by_key: Dict[str, Dict[str, object]] = {}
+        self.running_keys: Set[str] = set()
+        self.last_result_by_key: Dict[str, Dict[str, object]] = {}
+
+    @staticmethod
+    def result_summary(result: Dict[str, object]) -> Dict[str, object]:
+        allowed = {
+            "status",
+            "reason",
+            "sampleId",
+            "qualityState",
+            "queuedAt",
+            "completedAt",
+            "runtimeMs",
+        }
+        return {
+            key: value
+            for key, value in dict(result or {}).items()
+            if key in allowed and value not in (None, "", [], {})
+        }
+
+    def enqueue(self, quality_store, graph: PortfolioOntology, source: str) -> Dict[str, object]:
+        key = str(graph.portfolio_id or "portfolio") + ":" + str(source or "monitoring")
+        queued_at = utc_now_iso()
+        job = {
+            "qualityStore": quality_store,
+            "graph": deepcopy(graph),
+            "source": source or "monitoring",
+            "queuedAt": queued_at,
+        }
+        with self.lock:
+            replaced_pending = key in self.pending_by_key
+            self.pending_by_key[key] = job
+            already_running = key in self.running_keys
+            last_result = dict(self.last_result_by_key.get(key) or {})
+            if not already_running:
+                self.running_keys.add(key)
+                try:
+                    Thread(
+                        target=self.drain,
+                        args=(key,),
+                        name="ontology-quality-record-" + key.replace(":", "-")[-40:],
+                        daemon=True,
+                    ).start()
+                except Exception as error:  # noqa: BLE001 - diagnostics must not block investment inference.
+                    self.running_keys.discard(key)
+                    self.pending_by_key.pop(key, None)
+                    return {
+                        "status": "deferred-quality-record-worker-start-failed",
+                        "reason": str(error)[:180],
+                    }
+        return {
+            "status": "queued-coalesced-quality-record",
+            "eventuallyConsistent": True,
+            "queuedAt": queued_at,
+            "coalescedPendingUpdate": bool(replaced_pending),
+            "workerAlreadyRunning": bool(already_running),
+            "lastCompleted": last_result,
+        }
+
+    def drain(self, key: str) -> None:
+        while True:
+            with self.lock:
+                job = self.pending_by_key.pop(key, None)
+                if not isinstance(job, dict):
+                    self.running_keys.discard(key)
+                    return
+            started = time.perf_counter()
+            try:
+                sample = job["qualityStore"].record_graph(job["graph"], source=job["source"])
+                completed = {
+                    "status": "ok",
+                    "sampleId": str(getattr(sample, "sample_id", "") or ""),
+                    "qualityState": str(
+                        getattr(sample, "overall_state", "")
+                        or getattr(sample, "overall_score", "")
+                        or ""
+                    ),
+                }
+            except Exception as error:  # noqa: BLE001 - preserve the next queued sample.
+                completed = {"status": "error", "reason": str(error)[:220]}
+            completed.update({
+                "queuedAt": str(job.get("queuedAt") or ""),
+                "completedAt": utc_now_iso(),
+                "runtimeMs": int((time.perf_counter() - started) * 1000),
+            })
+            with self.lock:
+                self.last_result_by_key[key] = self.result_summary(completed)
+
+
+SHARED_PORTFOLIO_GRAPH_ASSEMBLY_CACHE = SharedPortfolioGraphAssemblyCache()
+SHARED_ONTOLOGY_QUALITY_RECORD_COORDINATOR = SharedOntologyQualityRecordCoordinator()
 
 
 def rule_id_from_payload(rule: Dict[str, object]) -> str:
@@ -430,24 +599,16 @@ class PortfolioOntologyProjectionRecorder:
                 self.store_projection_result(snapshot, result, projection_run)
                 return result
             graph_build_started = time.perf_counter()
-            graph = build_portfolio_ontology(
-                list(snapshot.positions or []) + list(snapshot.watchlist or []),
-                snapshot.portfolio,
-                legacy_by_symbol={
-                    item.symbol.upper(): item.to_dict()
-                    for item in snapshot.decisions
-                },
-                external_signals=snapshot.external_signals,
-                portfolio_id=snapshot.account_id,
-                runtime_context=self.runtime_context(snapshot),
-                # The realtime path persists only ABox facts.  Static TBox
-                # vocabulary is seeded independently and presentation output
-                # is rebuilt later from the active InferenceBox for an alert
-                # or UI request.
-                include_tbox=False,
-                include_presentation=False,
+            graph, persistence_graph, graph_assembly = self.build_graph_assembly(
+                snapshot,
+                rulebox_bootstrap,
             )
-            persistence_graph = self.graph_for_graph_store_persistence(graph, rulebox_bootstrap)
+            runtime_stages.update(dict(graph_assembly.get("runtimeStages") or {}))
+            runtime_stages["graphAssemblyCacheHit"] = (
+                1 if str(graph_assembly.get("status") or "") == "hit" else 0
+            )
+            if graph_assembly.get("ageMs") is not None:
+                runtime_stages["graphAssemblyCacheAgeMs"] = int(graph_assembly.get("ageMs") or 0)
             # This is a structural index from the exact graph being persisted.
             # It only bounds TypeDB function scheduling; TypeDB still evaluates
             # all selected rule conditions and materializes the result.
@@ -744,6 +905,11 @@ class PortfolioOntologyProjectionRecorder:
                             ((persistence_graph.worldview or {}).get("activeTBox") or {}).get("fingerprint")
                             or ""
                         ),
+                        preflight_graph=persistence_graph,
+                        preflight_manifest_id=str(
+                            (persistence_graph.worldview or {}).get("worldviewManifestId")
+                            or material_snapshot_id
+                        ),
                     )
                 self.store_projection_result(snapshot, result)
                 return result
@@ -812,6 +978,11 @@ class PortfolioOntologyProjectionRecorder:
                         ((persistence_graph.worldview or {}).get("activeTBox") or {}).get("fingerprint")
                         or ""
                     ),
+                    preflight_graph=persistence_graph,
+                    preflight_manifest_id=str(
+                        (persistence_graph.worldview or {}).get("worldviewManifestId")
+                        or material_snapshot_id
+                    ),
                 )
             market_projection_started = time.perf_counter()
             if bool(result.get("saved")):
@@ -835,10 +1006,23 @@ class PortfolioOntologyProjectionRecorder:
             runtime_stages["marketWorldQueueMs"] = int((time.perf_counter() - market_projection_started) * 1000)
             if self.quality_store:
                 quality_started = time.perf_counter()
-                sample = self.quality_store.record_graph(graph, source=self.source)
-                runtime_stages["qualityRecordMs"] = int((time.perf_counter() - quality_started) * 1000)
-                result["qualitySampleId"] = sample.sample_id
-                result["qualityState"] = sample.overall_state
+                if self.async_quality_record_enabled():
+                    result["qualityRecord"] = SHARED_ONTOLOGY_QUALITY_RECORD_COORDINATOR.enqueue(
+                        self.quality_store,
+                        graph,
+                        self.source,
+                    )
+                    runtime_stages["qualityRecordQueueMs"] = int(
+                        (time.perf_counter() - quality_started) * 1000
+                    )
+                else:
+                    sample = self.quality_store.record_graph(graph, source=self.source)
+                    runtime_stages["qualityRecordMs"] = int((time.perf_counter() - quality_started) * 1000)
+                    result["qualitySampleId"] = getattr(sample, "sample_id", "")
+                    result["qualityState"] = (
+                        getattr(sample, "overall_state", "")
+                        or getattr(sample, "overall_score", "")
+                    )
         except Exception as error:  # noqa: BLE001 - ontology projection must not block realtime monitoring.
             result = {"saved": False, "status": "error", "reason": str(error)[:180]}
         runtime_stages["totalMs"] = int((time.perf_counter() - projection_started) * 1000)
@@ -1295,6 +1479,149 @@ class PortfolioOntologyProjectionRecorder:
             prompt=graph.prompt,
         )
 
+    def graph_assembly_cache_enabled(self) -> bool:
+        value = self.settings.get("ontologyProjectionGraphCacheEnabled")
+        if value is None:
+            # Direct recorder construction in focused unit tests remains
+            # deterministic. The managed runtime explicitly enables the
+            # cache through runtime_settings().
+            return False
+        return str(value).strip().lower() not in {"0", "false", "no", "off", "disabled"}
+
+    def graph_assembly_cache_ttl_seconds(self) -> float:
+        try:
+            value = float(str(self.settings.get("ontologyProjectionGraphCacheTtlSeconds") or "45"))
+        except (TypeError, ValueError):
+            value = 45.0
+        return max(1.0, min(300.0, value))
+
+    def graph_assembly_cache_max_entries(self) -> int:
+        try:
+            value = int(float(str(self.settings.get("ontologyProjectionGraphCacheMaxEntries") or "16")))
+        except (TypeError, ValueError):
+            value = 16
+        return max(1, min(128, value))
+
+    def graph_assembly_cache_namespace(self) -> str:
+        """Keep test doubles isolated while sharing a real TypeDB runtime."""
+        store_key = str(getattr(self.repository, "store_key", "") or "repository")
+        address = str(getattr(self.repository, "address", "") or "").strip()
+        database = str(getattr(self.repository, "database", "") or "").strip()
+        if address or database:
+            return "|".join([store_key, address, database])
+        return store_key + "|instance:" + str(id(self.repository))
+
+    def active_tbox_context(self) -> Dict[str, object]:
+        if not hasattr(self.repository, "active_tbox_metadata"):
+            return {}
+        try:
+            return dict(self.repository.active_tbox_metadata() or {})
+        except Exception as error:  # noqa: BLE001 - builder retains the code fallback contract.
+            return {"status": "error", "reason": str(error)[:180], "source": "code-fallback"}
+
+    def graph_assembly_cache_key(
+        self,
+        snapshot: AccountSnapshot,
+        rule_catalog: Dict[str, object],
+        active_tbox: Dict[str, object],
+    ) -> str:
+        """Hash only source inputs; no graph result or credentials are persisted."""
+        source_snapshot = projection_source_snapshot(snapshot)
+        metadata = dict(source_snapshot.get("metadata") or {})
+        investment_brain = dict(metadata.get("investmentBrain") or {})
+        # Outcome observation is attached by this projection's runtime-context
+        # reader. It is derived state, not a new source observation, and must
+        # not turn an otherwise identical retry into a cache miss.
+        investment_brain.pop("outcomeObservation", None)
+        if investment_brain:
+            metadata["investmentBrain"] = investment_brain
+        else:
+            metadata.pop("investmentBrain", None)
+        source_snapshot["metadata"] = metadata
+        payload = {
+            "version": "portfolio-graph-assembly-cache-v1",
+            "namespace": self.graph_assembly_cache_namespace(),
+            "sourceSnapshot": stable_value(source_snapshot),
+            "settings": stable_value(self.settings),
+            "activeTBox": stable_value(active_tbox),
+            "ruleboxRulesHash": str((rule_catalog or {}).get("ruleboxRulesHash") or ""),
+        }
+        encoded = json.dumps(payload, ensure_ascii=False, sort_keys=True, separators=(",", ":"), default=str)
+        return hashlib.sha256(encoded.encode("utf-8")).hexdigest()
+
+    def build_graph_assembly(
+        self,
+        snapshot: AccountSnapshot,
+        rule_catalog: Dict[str, object],
+    ) -> tuple:
+        """Build or safely clone the immutable pre-identity ABox graph pair."""
+        stage_timings: Dict[str, int] = {}
+        active_tbox_started = time.perf_counter()
+        active_tbox = self.active_tbox_context()
+        stage_timings["activeTBoxReadMs"] = int((time.perf_counter() - active_tbox_started) * 1000)
+        cache_enabled = self.graph_assembly_cache_enabled()
+        cache_key = self.graph_assembly_cache_key(snapshot, rule_catalog, active_tbox) if cache_enabled else ""
+        cache_read_started = time.perf_counter()
+        cache_result = SHARED_PORTFOLIO_GRAPH_ASSEMBLY_CACHE.get(
+            cache_key,
+            self.graph_assembly_cache_ttl_seconds(),
+        ) if cache_enabled else {"status": "disabled"}
+        stage_timings["graphAssemblyCacheReadMs"] = int(
+            (time.perf_counter() - cache_read_started) * 1000
+        )
+        if str(cache_result.get("status") or "") == "hit":
+            return (
+                cache_result["graph"],
+                cache_result["persistenceGraph"],
+                {
+                    "status": "hit",
+                    "ageMs": int(cache_result.get("ageMs") or 0),
+                    "runtimeStages": stage_timings,
+                },
+            )
+
+        runtime_context_started = time.perf_counter()
+        runtime_context = self.runtime_context(snapshot, active_tbox=active_tbox)
+        stage_timings["runtimeContextMs"] = int((time.perf_counter() - runtime_context_started) * 1000)
+        assembly_started = time.perf_counter()
+        graph = build_portfolio_ontology(
+            list(snapshot.positions or []) + list(snapshot.watchlist or []),
+            snapshot.portfolio,
+            legacy_by_symbol={
+                item.symbol.upper(): item.to_dict()
+                for item in snapshot.decisions
+            },
+            external_signals=snapshot.external_signals,
+            portfolio_id=snapshot.account_id,
+            runtime_context=runtime_context,
+            # The realtime path persists only ABox facts. Static TBox
+            # vocabulary is seeded independently and presentation output is
+            # rebuilt later from the active InferenceBox for an alert or UI.
+            include_tbox=False,
+            include_presentation=False,
+        )
+        persistence_graph = self.graph_for_graph_store_persistence(graph, rule_catalog)
+        stage_timings["ontologyGraphAssemblyMs"] = int((time.perf_counter() - assembly_started) * 1000)
+        if cache_enabled:
+            SHARED_PORTFOLIO_GRAPH_ASSEMBLY_CACHE.put(
+                cache_key,
+                graph,
+                persistence_graph,
+                self.graph_assembly_cache_max_entries(),
+            )
+        return graph, persistence_graph, {
+            "status": "miss" if cache_enabled else "disabled",
+            "runtimeStages": stage_timings,
+        }
+
+    def async_quality_record_enabled(self) -> bool:
+        value = self.settings.get("ontologyAsyncQualityRecordEnabled")
+        if value is None:
+            # Existing focused tests rely on a synchronously visible sample;
+            # runtime_settings() explicitly opts into the non-blocking path.
+            return False
+        return str(value).strip().lower() not in {"0", "false", "no", "off", "disabled"}
+
     def graph_for_typedb_persistence(self, graph: PortfolioOntology) -> PortfolioOntology:
         return self.graph_for_graph_store_persistence(graph)
 
@@ -1684,6 +2011,8 @@ class PortfolioOntologyProjectionRecorder:
         candidate_scope_plan: List[Dict[str, object]] = None,
         rulebox_rules_hash: str = "",
         tbox_fingerprint: str = "",
+        preflight_graph: PortfolioOntology = None,
+        preflight_manifest_id: str = "",
     ) -> None:
         if not hasattr(self.repository, "run_rulebox"):
             return
@@ -1829,6 +2158,18 @@ class PortfolioOntologyProjectionRecorder:
             }
             if inference_write_lease.get("acquired"):
                 payload["_inferenceWriteLeaseOwner"] = str(inference_write_lease.get("leaseOwner") or "")
+            if isinstance(preflight_graph, PortfolioOntology):
+                # The graph was just validated and staged by this same writer
+                # lease. TypeDB still evaluates every schema function; this
+                # object can only prove an impossible condition and avoids a
+                # second exact ABox read before that evaluation.
+                payload["_nativePreflightProjectionGraph"] = preflight_graph
+                payload["_nativePreflightProjectionManifestId"] = str(
+                    preflight_manifest_id
+                    or (preflight_graph.worldview or {}).get("worldviewManifestId")
+                    or (preflight_graph.worldview or {}).get("aboxSnapshotId")
+                    or ""
+                )
             try:
                 native_inference_started = time.perf_counter()
                 execution = self.repository.run_rulebox(payload)
@@ -2687,13 +3028,13 @@ class PortfolioOntologyProjectionRecorder:
             "inheritedCoverage": inherited_coverage,
         }
 
-    def runtime_context(self, snapshot: AccountSnapshot) -> Dict[str, object]:
-        active_tbox = {}
-        if hasattr(self.repository, "active_tbox_metadata"):
-            try:
-                active_tbox = self.repository.active_tbox_metadata()
-            except Exception as error:  # noqa: BLE001 - projection can still use code fallback in builder.
-                active_tbox = {"status": "error", "reason": str(error)[:180], "source": "code-fallback"}
+    def runtime_context(
+        self,
+        snapshot: AccountSnapshot,
+        active_tbox: Dict[str, object] = None,
+    ) -> Dict[str, object]:
+        if active_tbox is None:
+            active_tbox = self.active_tbox_context()
         as_of = str(snapshot.generated_at or "").strip()
         snapshot_seed = "|".join([str(snapshot.account_id or ""), as_of or "unknown"])
         decision_episodes = self.decision_episode_context(snapshot)

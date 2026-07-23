@@ -91,6 +91,10 @@ TEXT_SETTING_KEYS = [
     "ontologySharedMarketWorldRetentionHours",
     "ontologySharedMarketWorldMaxSymbols",
     "ontologySharedMarketWorldAsyncProjectionEnabled",
+    "ontologyProjectionGraphCacheEnabled",
+    "ontologyProjectionGraphCacheTtlSeconds",
+    "ontologyProjectionGraphCacheMaxEntries",
+    "ontologyAsyncQualityRecordEnabled",
     "ontologyReasoningEnabled",
     "ontologyReasoningIntervalSeconds",
     "ontologyReasoningBatchSize",
@@ -870,6 +874,26 @@ def runtime_settings() -> Dict[str, str]:
         "ontologySharedMarketWorldAsyncProjectionEnabled": value(
             "ontologySharedMarketWorldAsyncProjectionEnabled",
             "ONTOLOGY_SHARED_MARKET_WORLD_ASYNC_PROJECTION_ENABLED",
+            "1",
+        ),
+        "ontologyProjectionGraphCacheEnabled": value(
+            "ontologyProjectionGraphCacheEnabled",
+            "ONTOLOGY_PROJECTION_GRAPH_CACHE_ENABLED",
+            "1",
+        ),
+        "ontologyProjectionGraphCacheTtlSeconds": value(
+            "ontologyProjectionGraphCacheTtlSeconds",
+            "ONTOLOGY_PROJECTION_GRAPH_CACHE_TTL_SECONDS",
+            "45",
+        ),
+        "ontologyProjectionGraphCacheMaxEntries": value(
+            "ontologyProjectionGraphCacheMaxEntries",
+            "ONTOLOGY_PROJECTION_GRAPH_CACHE_MAX_ENTRIES",
+            "16",
+        ),
+        "ontologyAsyncQualityRecordEnabled": value(
+            "ontologyAsyncQualityRecordEnabled",
+            "ONTOLOGY_ASYNC_QUALITY_RECORD_ENABLED",
             "1",
         ),
         "typedbAddress": value("typedbAddress", "TYPEDB_ADDRESS", "127.0.0.1:1729"),

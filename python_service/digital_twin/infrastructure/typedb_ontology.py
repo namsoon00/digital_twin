@@ -5615,6 +5615,22 @@ class TypeDBOntologyGraphRepository(GraphStoreOntologyRowMapperMixin, ScopedABox
     def has_box_rows(self, box: str, world_id: str = "") -> bool:
         clean_box = str(box or "").strip()
         if clean_box == "ABox":
+            # A scoped Worldview Manifest is published only after its ABox
+            # generations have been validated.  Expanding every active scope
+            # pointer merely to answer this existence probe can become the
+            # most expensive query in the native-rule path.  Reuse the
+            # durable completion marker instead; incomplete or legacy worlds
+            # continue through the stricter membership query below.
+            try:
+                active = self.active_abox_metadata(world_id)
+            except Exception:
+                active = {}
+            if (
+                str(active.get("status") or "") == "ok"
+                and str(active.get("scopedAboxManifestVersion") or "") == SCOPED_ABOX_MANIFEST_VERSION
+                and bool(active.get("scopePlan") or active.get("scopeGenerationIds"))
+            ):
+                return True
             query = (
                 "match " + self.active_abox_members_clause([("$n", "boxProbe")], world_id) + " "
                 + "$n isa ontology-node; limit 1;"

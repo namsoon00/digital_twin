@@ -3605,6 +3605,20 @@ class TypeDBOntologyRepositoryTests(unittest.TestCase):
         self.assertIn("limit 1;", repository.queries[1])
         self.assertIn("limit 2;", repository.queries[2])
 
+    def test_typedb_scoped_abox_existence_uses_verified_manifest_without_member_join(self):
+        repository = TypeDBOntologyGraphRepository("127.0.0.1:1729")
+        active = {
+            "status": "ok",
+            "scopedAboxManifestVersion": SCOPED_ABOX_MANIFEST_VERSION,
+            "scopePlan": [{"scopeId": "symbol:005930:market", "generationId": "abox-scope:price"}],
+        }
+
+        with patch.object(repository, "active_abox_metadata", return_value=active) as metadata, \
+                patch.object(repository, "read_rows", side_effect=AssertionError("scoped manifest existence must not expand member joins")):
+            self.assertTrue(repository.has_box_rows("ABox", world_id="portfolio:local:default"))
+
+        metadata.assert_called_once_with("portfolio:local:default")
+
     def test_typedb_native_rule_matching_skips_condition_detail_queries_by_default(self):
         repository = TypeDBOntologyGraphRepository("127.0.0.1:1729")
         rule = default_graph_inference_rules()[0]

@@ -52,6 +52,7 @@ from digital_twin.infrastructure.typedb_ontology import (
     typedb_native_rule_evidence_read_index_for_execution,
     typedb_native_rule_planner_topology_for_execution,
     typedb_native_reasoning_profile,
+    typedb_scoped_manifest_member_clause,
     inference_generation_marker_row,
 )
 
@@ -643,7 +644,7 @@ class TypeDBOntologyRepositoryTests(unittest.TestCase):
             "status": "ok",
             "worldviewManifestId": "abox-manifest:next",
             "scopedAboxManifestVersion": SCOPED_ABOX_MANIFEST_VERSION,
-        }), patch.object(repository, "activate_scoped_abox_manifest", return_value={"status": "ok"}), patch.object(
+        }), patch.object(repository, "clear_scoped_abox_pending_activation", return_value={"status": "ok"}), patch.object(
             repository,
             "prune_inactive_scoped_abox_manifests",
             return_value={"status": "ok", "removedManifestIds": ["abox-manifest:old"]},
@@ -661,7 +662,7 @@ class TypeDBOntologyRepositoryTests(unittest.TestCase):
             "status": "ok",
             "worldviewManifestId": "abox-manifest:next",
             "scopedAboxManifestVersion": SCOPED_ABOX_MANIFEST_VERSION,
-        }), patch.object(repository, "activate_scoped_abox_manifest", return_value={"status": "ok"}), patch.object(
+        }), patch.object(repository, "clear_scoped_abox_pending_activation", return_value={"status": "ok"}), patch.object(
             repository,
             "prune_inactive_scoped_abox_manifests",
             return_value={"status": "ok"},
@@ -678,6 +679,202 @@ class TypeDBOntologyRepositoryTests(unittest.TestCase):
         self.assertTrue(result["cleanupDeferred"])
         self.assertTrue(result["cleanup"]["legacyPredecessorPending"])
         discard.assert_not_called()
+
+    def test_scoped_manifest_control_delta_reuses_unchanged_scope_pointers(self):
+        previous = {
+            "status": "ok",
+            "scopedAboxManifestVersion": SCOPED_ABOX_MANIFEST_VERSION,
+            "scopeTopologyVersion": SCOPED_ABOX_SCOPE_TOPOLOGY_VERSION,
+            "scopeGenerationIds": {
+                "symbol:005930:market": "market-a",
+                "symbol:005930:flow": "flow-a",
+                "symbol:000660:state": "state-a",
+            },
+        }
+        candidate = {
+            "status": "ok",
+            "scopedAboxManifestVersion": SCOPED_ABOX_MANIFEST_VERSION,
+            "scopeTopologyVersion": SCOPED_ABOX_SCOPE_TOPOLOGY_VERSION,
+            "scopeGenerationIds": {
+                "symbol:005930:market": "market-a",
+                "symbol:005930:flow": "flow-b",
+                "symbol:005930:evidence": "evidence-a",
+            },
+        }
+
+        delta = TypeDBOntologyGraphRepository.scoped_manifest_control_delta(candidate, previous)
+
+        self.assertEqual("incremental-scoped-control-patch", delta["mode"])
+        self.assertFalse(delta["replaceAllScopePointers"])
+        self.assertEqual(
+            ["symbol:005930:evidence", "symbol:005930:flow"],
+            delta["changedScopeIds"],
+        )
+        self.assertEqual(["symbol:000660:state"], delta["removedScopeIds"])
+        self.assertEqual(["symbol:005930:market"], delta["reusedScopeIds"])
+
+    def test_scoped_manifest_control_graph_can_emit_a_scope_pointer_delta(self):
+        repository = TypeDBOntologyGraphRepository("127.0.0.1:1729")
+        metadata = {
+            "status": "ok",
+            "worldviewManifestId": "abox-manifest:candidate",
+            "scopeGenerationIds": {
+                "symbol:005930:market": "scope:market",
+                "symbol:005930:flow": "scope:flow",
+            },
+            "scopePlan": [
+                {
+                    "scopeId": "symbol:005930:market",
+                    "scopeType": "symbol",
+                    "generationId": "scope:market",
+                    "fingerprint": "market",
+                },
+                {
+                    "scopeId": "symbol:005930:flow",
+                    "scopeType": "symbol",
+                    "generationId": "scope:flow",
+                    "fingerprint": "flow",
+                },
+            ],
+            "worldId": "portfolio:local:default",
+        }
+
+        graph = repository.scoped_manifest_control_graph(
+            metadata,
+            scope_ids=["symbol:005930:flow"],
+        )
+
+        scope_pointers = [
+            entity for entity in graph.entities
+            if entity.kind == "abox-scope-active-pointer"
+        ]
+        self.assertEqual(1, len(scope_pointers))
+        self.assertEqual("symbol:005930:flow", scope_pointers[0].properties["aboxScopeId"])
+        self.assertTrue(any(
+            entity.kind == "worldview-manifest-active-pointer"
+            for entity in graph.entities
+        ))
+
+    def test_scoped_control_patch_deletes_only_changed_scope_pointers(self):
+        repository = TypeDBOntologyGraphRepository("127.0.0.1:1729")
+        metadata = {
+            "status": "ok",
+            "worldviewManifestId": "abox-manifest:candidate",
+            "scopeGenerationIds": {"symbol:005930:flow": "scope:flow"},
+            "scopePlan": [{
+                "scopeId": "symbol:005930:flow",
+                "scopeType": "symbol",
+                "generationId": "scope:flow",
+                "fingerprint": "flow",
+            }],
+            "worldId": "portfolio:local:default",
+        }
+        graph = repository.scoped_manifest_control_graph(
+            metadata,
+            scope_ids=["symbol:005930:flow"],
+        )
+        queries = []
+
+        class FakeTransaction:
+            def __enter__(self):
+                return self
+
+            def __exit__(self, _exc_type, _exc, _traceback):
+                return False
+
+            def query(self, query):
+                queries.append(query)
+                return SimpleNamespace(resolve=lambda: None)
+
+            def commit(self):
+                return None
+
+        class FakeDriver:
+            def transaction(self, *_args, **_kwargs):
+                return FakeTransaction()
+
+        imported = ((object, object, object, object, SimpleNamespace(WRITE="write")), None)
+        result = repository.replace_scoped_abox_control_graph(
+            FakeDriver(),
+            imported,
+            graph,
+            world_id="portfolio:local:default",
+            scope_ids=["symbol:005930:flow"],
+        )
+
+        scope_deletes = [
+            query for query in queries
+            if 'has ontology-kind "abox-scope-active-pointer"' in query
+            and query.startswith("match")
+        ]
+        self.assertEqual(1, len(scope_deletes))
+        self.assertIn('has ontology-scope-id "symbol:005930:flow"', scope_deletes[0])
+        self.assertEqual(1, result["scopePointerWriteCount"])
+        self.assertTrue(result["atomic"])
+
+    def test_scoped_manifest_activation_writes_only_changed_control_scopes(self):
+        repository = TypeDBOntologyGraphRepository("127.0.0.1:1729")
+        previous = {
+            "status": "ok",
+            "scopedAboxManifestVersion": SCOPED_ABOX_MANIFEST_VERSION,
+            "scopeTopologyVersion": SCOPED_ABOX_SCOPE_TOPOLOGY_VERSION,
+            "scopeGenerationIds": {
+                "symbol:005930:market": "scope:market-a",
+                "symbol:005930:flow": "scope:flow-a",
+            },
+            "worldId": "portfolio:local:default",
+        }
+        candidate = {
+            "status": "ok",
+            "worldviewManifestId": "abox-manifest:candidate",
+            "scopeTopologyVersion": SCOPED_ABOX_SCOPE_TOPOLOGY_VERSION,
+            "scopeGenerationIds": {
+                "symbol:005930:market": "scope:market-a",
+                "symbol:005930:flow": "scope:flow-b",
+            },
+            "scopePlan": [
+                {
+                    "scopeId": "symbol:005930:market",
+                    "scopeType": "symbol",
+                    "generationId": "scope:market-a",
+                    "fingerprint": "market",
+                },
+                {
+                    "scopeId": "symbol:005930:flow",
+                    "scopeType": "symbol",
+                    "generationId": "scope:flow-b",
+                    "fingerprint": "flow",
+                },
+            ],
+            "worldId": "portfolio:local:default",
+        }
+        imported = (object, object, object, object, SimpleNamespace(WRITE="write"))
+        with patch.object(repository, "scoped_manifest_metadata", return_value=candidate), \
+                patch.object(repository, "driver_imports", return_value=(imported, None)), \
+                patch.object(repository, "open_driver", return_value=object()), \
+                patch.object(repository, "close_driver"), \
+                patch.object(repository, "ensure_database"), \
+                patch.object(repository, "ensure_schema"), \
+                patch.object(repository, "replace_scoped_abox_control_graph", return_value={"status": "ok"}) as replace, \
+                patch.object(repository, "active_abox_metadata", return_value={
+                    "status": "ok", "worldviewManifestId": "abox-manifest:candidate",
+                }):
+            result = repository.activate_scoped_abox_manifest(
+                "abox-manifest:candidate",
+                previous_metadata=previous,
+                world_id="portfolio:local:default",
+            )
+
+        self.assertEqual("ok", result["status"])
+        pointer_graph = replace.call_args.args[2]
+        scope_pointers = [
+            entity for entity in pointer_graph.entities
+            if entity.kind == "abox-scope-active-pointer"
+        ]
+        self.assertEqual(1, len(scope_pointers))
+        self.assertEqual("symbol:005930:flow", scope_pointers[0].properties["aboxScopeId"])
+        self.assertEqual(["symbol:005930:flow"], replace.call_args.kwargs["scope_ids"])
+        self.assertFalse(replace.call_args.kwargs["replace_all_scope_pointers"])
 
     def test_deferred_maintenance_prunes_after_the_realtime_activation_boundary(self):
         repository = TypeDBOntologyGraphRepository("127.0.0.1:1729")
@@ -5504,6 +5701,18 @@ class TypeDBOntologyRepositoryTests(unittest.TestCase):
         self.assertIn('has ontology-manifest-id $activeManifestId', definition["body"])
         self.assertIn('has ontology-kind "abox-scope-active-pointer"', definition["body"])
         self.assertNotIn('has ontology-kind "abox-active-pointer"', definition["body"])
+
+    def test_scoped_member_clause_keeps_scope_pointer_generation_independent_of_manifest_id(self):
+        clause = typedb_scoped_manifest_member_clause(
+            "$item",
+            "candidate",
+            "$activeManifestId",
+            world_id="portfolio:local:default",
+        )
+
+        self.assertIn('has ontology-kind "abox-scope-active-pointer"', clause)
+        self.assertIn('has ontology-scope-id $candidateScopeId', clause)
+        self.assertNotIn("ontology-manifest-id", clause)
 
     def test_world_parameterized_function_reuses_outer_candidate_manifest_proof(self):
         rule = next(item for item in default_graph_inference_rules() if item.rule_id == "graph.loss_guard.breakdown.v1")

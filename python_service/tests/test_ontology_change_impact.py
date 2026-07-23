@@ -3,6 +3,7 @@ import unittest
 from digital_twin.domain.ontology_change_impact import (
     build_inference_impact_plan,
     rule_condition_dependency_profile,
+    scope_delta,
 )
 from digital_twin.domain.ontology_contracts import OntologyEntity, OntologyRelation, PortfolioOntology
 from digital_twin.domain.ontology_scopes import apply_scoped_abox_identity
@@ -109,6 +110,15 @@ class OntologyChangeImpactTests(unittest.TestCase):
                     "targetKind": "price-metric",
                 }],
             },
+            {
+                "ruleId": "graph.test.macro-rate.v1",
+                "conditions": [{
+                    "conditionId": "rate",
+                    "kind": "relation",
+                    "relationType": "HAS_INTEREST_RATE",
+                    "targetKind": "interest-rate",
+                }],
+            },
         ]
         flow_plan = build_inference_impact_plan(before, after, ["005930", "000660"], rules=rules)
 
@@ -124,6 +134,90 @@ class OntologyChangeImpactTests(unittest.TestCase):
         self.assertTrue(macro_plan["globalImpact"])
         self.assertEqual(["000660", "005930"], macro_plan["inferenceTargetSymbols"])
         self.assertIn("macro-rates", macro_plan["changedScopeFamilies"])
+
+        bounded_macro_plan = build_inference_impact_plan(
+            before,
+            after,
+            ["005930", "000660"],
+            explicit_target_symbols=["005930"],
+            rules=rules,
+        )
+        self.assertTrue(bounded_macro_plan["globalImpact"])
+        self.assertTrue(bounded_macro_plan["boundedGlobalContext"])
+        self.assertTrue(bounded_macro_plan["nativeRuleSelectionEligible"])
+        self.assertEqual(
+            "target-scoped-global-context-native-evaluation",
+            bounded_macro_plan["ruleExecutionScope"],
+        )
+
+    def test_semantic_scope_delta_routes_stock_anchor_price_change_to_market_rules_only(self):
+        before = [{
+            "scopeId": "symbol:005930:state",
+            "generationId": "state-a",
+            "impactScopeFamilies": ["state"],
+            "semanticFingerprints": {
+                "state": "identity-stable",
+                "market": "price-a",
+                "position": "position-stable",
+            },
+        }]
+        after = [{
+            **before[0],
+            "generationId": "state-b",
+            "semanticFingerprints": {
+                "state": "identity-stable",
+                "market": "price-b",
+                "position": "position-stable",
+            },
+        }]
+        rules = [
+            {
+                "ruleId": "graph.test.market.v1",
+                "conditions": [{
+                    "conditionId": "price",
+                    "kind": "relation",
+                    "relationType": "HAS_PRICE",
+                    "targetKind": "price-metric",
+                }],
+            },
+            {
+                "ruleId": "graph.test.flow.v1",
+                "conditions": [{
+                    "conditionId": "flow",
+                    "kind": "relation",
+                    "relationType": "HAS_TRADE_FLOW",
+                    "targetKind": "flow-metric",
+                }],
+            },
+        ]
+
+        delta = scope_delta(before, after)
+        plan = build_inference_impact_plan(before, after, ["005930"], rules=rules)
+
+        self.assertEqual(["symbol:005930:state"], delta["changedScopeIds"])
+        self.assertEqual({"symbol:005930:state": ["market"]}, delta["semanticChangedFamiliesByScope"])
+        self.assertEqual(["market"], delta["changedScopeFamilies"])
+        self.assertEqual(["graph.test.market.v1"], plan["candidateRuleIds"])
+        self.assertEqual(["graph.test.flow.v1"], plan["deferredRuleIds"])
+
+    def test_semantic_scope_delta_marks_storage_rebinding_without_a_factual_change(self):
+        before = [{
+            "scopeId": "symbol:005930:link",
+            "generationId": "link-a",
+            "impactScopeFamilies": ["link", "market"],
+            "semanticFingerprints": {"market": "same-fact"},
+        }]
+        after = [{
+            **before[0],
+            "generationId": "link-b",
+        }]
+
+        delta = scope_delta(before, after)
+
+        self.assertEqual([], delta["changedScopeIds"])
+        self.assertEqual(["symbol:005930:link"], delta["generationChangedScopeIds"])
+        self.assertEqual(["symbol:005930:link"], delta["reboundScopeIds"])
+        self.assertEqual([], delta["changedScopeFamilies"])
 
     def test_change_impact_uses_semantic_family_from_a_relation_only_link_scope(self):
         before = [
@@ -224,7 +318,7 @@ class OntologyChangeImpactTests(unittest.TestCase):
 
         trace = inference.entities[0]
         self.assertEqual("inference:test", trace.properties["inferenceGenerationId"])
-        self.assertEqual("abox-change-impact-v2", trace.properties["impactPlanVersion"])
+        self.assertEqual("abox-change-impact-v3", trace.properties["impactPlanVersion"])
         self.assertEqual(["005930"], trace.properties["inferenceImpactPlan"]["inferenceTargetSymbols"])
         self.assertEqual("dependency-selected-native-evaluation", trace.properties["ruleExecutionScope"])
         self.assertFalse(trace.properties["nativeRuleSelectionApplied"])
@@ -253,6 +347,29 @@ class OntologyChangeImpactTests(unittest.TestCase):
         self.assertFalse(fallback["selectionApplied"])
         self.assertEqual(rule_ids, fallback["selectedRuleIds"])
         self.assertEqual("prior-aligned-inference-unavailable", fallback["fallbackReason"])
+
+        bounded_global = typedb_native_rule_execution_selection(
+            rules,
+            candidate_rule_ids=[rule_ids[0]],
+            prior_matched_rule_ids=[rule_ids[1]],
+            eligible=True,
+            prior_inference_reusable=True,
+            global_impact=True,
+            bounded_global_context=True,
+        )
+        self.assertTrue(bounded_global["selectionApplied"])
+        self.assertEqual([rule_ids[0], rule_ids[1]], bounded_global["selectedRuleIds"])
+
+        full_global = typedb_native_rule_execution_selection(
+            rules,
+            candidate_rule_ids=[rule_ids[0]],
+            prior_matched_rule_ids=[rule_ids[1]],
+            eligible=True,
+            prior_inference_reusable=True,
+            global_impact=True,
+        )
+        self.assertFalse(full_global["selectionApplied"])
+        self.assertEqual("global-impact-requires-complete-evaluation", full_global["fallbackReason"])
 
 
 if __name__ == "__main__":

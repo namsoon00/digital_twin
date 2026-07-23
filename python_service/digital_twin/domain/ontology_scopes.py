@@ -15,6 +15,7 @@ from copy import deepcopy
 from typing import Dict, Iterable, List, Mapping, MutableMapping, Set, Tuple
 
 from .ontology_change_impact import (
+    family_for_field,
     family_for_entity,
     family_for_relation,
     macro_scope_id,
@@ -105,6 +106,32 @@ _EVIDENCE_TOKENS = (
     "article",
     "document",
 )
+
+_GENERATED_SCOPE_PROPERTY_KEYS = {
+    "ontologybox",
+    "worldid",
+    "worldtype",
+    "tenantid",
+    "accountid",
+    "aboxscopeid",
+    "aboxscopetype",
+    "aboxscopefamily",
+    "scopegenerationid",
+    "worldviewmanifestid",
+    "snapshotid",
+    "aboxsnapshotid",
+    "materialfingerprint",
+    "manifestid",
+}
+
+_QUALITY_TIMESTAMP_FIELDS = {
+    "asof",
+    "observedat",
+    "updatedat",
+    "fetchedat",
+    "sourceasof",
+    "sourcefetchedat",
+}
 
 
 def _clean(value: object) -> str:
@@ -464,6 +491,123 @@ def _scope_fragment_payload(
     }
 
 
+def _semantic_property_family(field: object, fallback_family: object) -> str:
+    normalized = re.sub(r"[^a-z0-9]", "", _clean(field).lower())
+    if normalized in _QUALITY_TIMESTAMP_FIELDS:
+        return "quality"
+    family = family_for_field(field)
+    if family != "unknown":
+        return family
+    fallback = _clean(fallback_family)
+    return fallback if fallback else "state"
+
+
+def _semantic_properties(values: Mapping[str, object]) -> Dict[str, object]:
+    return {
+        str(key): stable_value(value)
+        for key, value in dict(values or {}).items()
+        if re.sub(r"[^a-z0-9]", "", str(key or "").lower()) not in _GENERATED_SCOPE_PROPERTY_KEYS
+    }
+
+
+def _scope_semantic_fingerprints(
+    graph: PortfolioOntology,
+    scope_id: str,
+    support_relations: Iterable[Mapping[str, object]] = (),
+) -> Dict[str, str]:
+    """Fingerprint factual meanings independently from endpoint rebinding.
+
+    A relation-only scope may roll because an endpoint's immutable storage id
+    changed. That is a persistence concern, not a new market fact. These
+    per-family fingerprints let native rule routing react to the fact that
+    changed rather than every relation that had to be rebound.
+    """
+    groups: Dict[str, List[Dict[str, object]]] = defaultdict(list)
+    entities_by_id = {
+        _clean(entity.entity_id): entity
+        for entity in graph.entities
+        if _clean(entity.entity_id)
+    }
+
+    for entity in graph.entities:
+        properties = dict(entity.properties or {})
+        if _clean(properties.get("aboxScopeId")) != scope_id:
+            continue
+        fallback = family_for_entity(entity.kind, properties, entity.entity_id)
+        groups[fallback].append({
+            "entity": _clean(entity.entity_id),
+            "kind": _clean(entity.kind),
+            "label": _clean(entity.label),
+        })
+        for field, value in _semantic_properties(properties).items():
+            groups[_semantic_property_family(field, fallback)].append({
+                "entity": _clean(entity.entity_id),
+                "field": field,
+                "value": value,
+            })
+
+    for relation in graph.relations:
+        properties = dict(relation.properties or {})
+        if _clean(properties.get("aboxScopeId")) != scope_id:
+            continue
+        source = entities_by_id.get(_clean(relation.source))
+        target = entities_by_id.get(_clean(relation.target))
+        family = family_for_relation(
+            relation.relation_type,
+            properties,
+            source_kind=getattr(source, "kind", ""),
+            target_kind=getattr(target, "kind", ""),
+        )
+        groups[family].append({
+            "source": _clean(relation.source),
+            "target": _clean(relation.target),
+            "type": _clean(relation.relation_type),
+            "properties": _semantic_properties(properties),
+        })
+
+    for evidence in graph.evidence:
+        values = dict(evidence.value or {})
+        if _clean(values.get("aboxScopeId")) != scope_id:
+            continue
+        groups["evidence"].append({
+            "id": _clean(evidence.evidence_id),
+            "subject": _clean(evidence.subject),
+            "kind": _clean(evidence.kind),
+            "source": _clean(evidence.source),
+            "summary": _clean(evidence.summary),
+            "value": _semantic_properties(values),
+        })
+
+    for relation in support_relations:
+        if _clean(relation.get("scopeId")) != scope_id:
+            continue
+        families = [
+            _clean(value)
+            for value in relation.get("impactFamilies") or []
+            if _clean(value)
+        ]
+        family = families[0] if families else "evidence"
+        groups[family].append({
+            "source": _clean(relation.get("source")),
+            "target": _clean(relation.get("target")),
+            "type": _clean(relation.get("type")),
+            "properties": _semantic_properties(dict(relation.get("properties") or {})),
+        })
+
+    return {
+        family: hashlib.sha256(
+            json.dumps(
+                sorted(items, key=lambda item: json.dumps(item, ensure_ascii=False, sort_keys=True)),
+                ensure_ascii=False,
+                sort_keys=True,
+                separators=(",", ":"),
+            ).encode("utf-8")
+        ).hexdigest()
+        for family, items in groups.items()
+        if family and items
+    }
+
+
 def scoped_generation_id(scope_id: str, fingerprint: str) -> str:
     digest = hashlib.sha256((scope_id + "|" + fingerprint).encode("utf-8")).hexdigest()[:20]
     return "abox-scope:" + digest
@@ -605,6 +749,10 @@ def apply_scoped_abox_identity(
         scope_id: _scope_fragment_payload(clone, scope_id, support_relations)
         for scope_id in scope_ids
     }
+    semantic_fingerprints = {
+        scope_id: _scope_semantic_fingerprints(clone, scope_id, support_relations)
+        for scope_id in scope_ids
+    }
     base_fingerprints = {
         scope_id: hashlib.sha256(
             json.dumps(payload, ensure_ascii=False, sort_keys=True, separators=(",", ":")).encode("utf-8")
@@ -695,6 +843,7 @@ def apply_scoped_abox_identity(
             "scopeType": _scope_type(scope_id),
             "scopeFamily": scope_family(scope_id),
             "impactScopeFamilies": sorted(scope_impact_families.get(scope_id) or {scope_family(scope_id)}),
+            "semanticFingerprints": dict(sorted(semantic_fingerprints.get(scope_id, {}).items())),
             "fingerprint": fingerprint,
             "baseFingerprint": base_fingerprints[scope_id],
             "dependencyScopeIds": dependencies,

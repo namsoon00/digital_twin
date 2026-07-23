@@ -746,9 +746,11 @@ def typedb_scoped_manifest_member_clause(
 
     A scope generation can be reused by many immutable Worldview Manifests.
     Its stored JSON and original `ontology-manifest-id` therefore describe the
-    generation's creation provenance, not its current membership. The scope
-    pointer is the durable source of truth for live ABox reads and native
-    inference.
+    generation's creation provenance, not its current membership. The active
+    Manifest pointer gates the world as a whole, while each durable scope
+    pointer selects its independently versioned generation. This deliberately
+    avoids rewriting every unchanged scope pointer whenever a Manifest id
+    changes for one symbol.
     """
     clean_prefix = re.sub(r"[^A-Za-z0-9_]", "", str(prefix or "item")) or "item"
     scope_pointer = "$" + clean_prefix + "ScopePointer"
@@ -760,8 +762,6 @@ def typedb_scoped_manifest_member_clause(
         scope_pointer + ' isa ontology-node, has ontology-kind "abox-scope-active-pointer", '
         + 'has ontology-box "ABoxControl"'
         + typedb_world_id_constraint(world_id, world_id_variable, scope_world_attribute)
-        + ", has ontology-manifest-id "
-        + str(manifest_id_variable or "$activeManifestId")
         + ", has ontology-scope-id " + scope_id
         + ", has ontology-snapshot-id " + scope_generation + "; "
         + typedb_world_id_value_match(world_id_variable, scope_world_attribute)
@@ -2124,6 +2124,11 @@ class ScopedABoxManifestMixin:
                     for value in item.get("impactScopeFamilies") or []
                     if str(value or "").strip()
                 ],
+                "semanticFingerprints": {
+                    str(family or "").strip(): str(fingerprint or "").strip()
+                    for family, fingerprint in dict(item.get("semanticFingerprints") or {}).items()
+                    if str(family or "").strip() and str(fingerprint or "").strip()
+                },
                 "fingerprint": str(item.get("fingerprint") or ""),
                 "baseFingerprint": str(item.get("baseFingerprint") or ""),
                 "dependencyScopeIds": [
@@ -3304,6 +3309,7 @@ class ScopedABoxManifestMixin:
         previous_metadata: Dict[str, object] = None,
         pending_activation: bool = True,
         inference_target_symbols: Iterable[str] = None,
+        scope_ids: Iterable[str] = None,
     ) -> PortfolioOntology:
         worldview = dict(getattr(graph, "worldview", {}) or {})
         manifest_id = str(worldview.get("worldviewManifestId") or worldview.get("aboxSnapshotId") or "").strip()
@@ -3358,10 +3364,20 @@ class ScopedABoxManifestMixin:
                 "aboxSnapshotId": manifest_id,
             },
         )]
+        selected_scope_ids = {
+            str(value or "").strip()
+            for value in scope_ids or []
+            if str(value or "").strip()
+        }
+        include_all_scope_pointers = scope_ids is None
         for item in scope_plan:
             scope_id = str(item.get("scopeId") or "").strip()
             generation_id = str(item.get("generationId") or "").strip()
-            if not scope_id or not generation_id:
+            if (
+                not scope_id
+                or not generation_id
+                or (not include_all_scope_pointers and scope_id not in selected_scope_ids)
+            ):
                 continue
             digest = hashlib.sha256((world_id + "|" + scope_id).encode("utf-8")).hexdigest()[:16]
             entities.append(OntologyEntity(
@@ -3847,8 +3863,14 @@ class ScopedABoxManifestMixin:
         previous_metadata: Dict[str, object] = None,
         pending_activation: bool = False,
         inference_target_symbols: Iterable[str] = None,
+        scope_ids: Iterable[str] = None,
     ) -> PortfolioOntology:
-        """Rebuild the small pointer set for a verified historical Manifest."""
+        """Build the active Manifest pointer and an optional scope-pointer delta.
+
+        The main Manifest pointer is always replaced. ``scope_ids`` lets an
+        activation replace only generations that changed from the already
+        verified active Manifest; all other scope pointers remain valid.
+        """
         payload = dict(metadata or {})
         manifest_id = str(payload.get("worldviewManifestId") or payload.get("aboxSnapshotId") or "").strip()
         if not manifest_id:
@@ -3877,7 +3899,71 @@ class ScopedABoxManifestMixin:
             previous_metadata=previous_metadata,
             pending_activation=pending_activation,
             inference_target_symbols=inference_target_symbols,
+            scope_ids=scope_ids,
         )
+
+    @staticmethod
+    def scoped_manifest_control_delta(
+        metadata: Dict[str, object],
+        previous_metadata: Dict[str, object] = None,
+    ) -> Dict[str, object]:
+        """Return the pointer rows an activation must replace.
+
+        A Worldview Manifest changes whenever any scope generation changes,
+        but the per-scope controls are independently addressable. Replacing
+        only changed generations keeps the native read contract intact without
+        turning a one-symbol observation into a full control-plane rewrite.
+        """
+        next_payload = dict(metadata or {})
+        previous_payload = dict(previous_metadata or {})
+        next_generations = {
+            str(scope_id or "").strip(): str(generation_id or "").strip()
+            for scope_id, generation_id in dict(next_payload.get("scopeGenerationIds") or {}).items()
+            if str(scope_id or "").strip() and str(generation_id or "").strip()
+        }
+        previous_generations = {
+            str(scope_id or "").strip(): str(generation_id or "").strip()
+            for scope_id, generation_id in dict(previous_payload.get("scopeGenerationIds") or {}).items()
+            if str(scope_id or "").strip() and str(generation_id or "").strip()
+        }
+        previous_scoped = (
+            str(previous_payload.get("status") or "") == "ok"
+            and str(previous_payload.get("scopedAboxManifestVersion") or "") == SCOPED_ABOX_MANIFEST_VERSION
+            and bool(previous_generations)
+        )
+        same_topology = (
+            str(previous_payload.get("scopeTopologyVersion") or "")
+            == str(next_payload.get("scopeTopologyVersion") or "")
+        )
+        replace_all = not previous_scoped or not same_topology
+        changed_scope_ids = sorted(
+            next_generations
+            if replace_all
+            else {
+                scope_id
+                for scope_id, generation_id in next_generations.items()
+                if previous_generations.get(scope_id) != generation_id
+            }
+        )
+        removed_scope_ids = sorted(
+            set(previous_generations) - set(next_generations)
+        )
+        return {
+            "mode": (
+                "full-scoped-control-rebuild"
+                if replace_all
+                else "incremental-scoped-control-patch"
+            ),
+            "replaceAllScopePointers": replace_all,
+            "changedScopeIds": changed_scope_ids,
+            "removedScopeIds": removed_scope_ids,
+            "replacedScopeIds": sorted(set(changed_scope_ids) | set(removed_scope_ids)),
+            "reusedScopeIds": sorted(
+                set(next_generations) - set(changed_scope_ids)
+            ),
+            "previousScopeCount": len(previous_generations),
+            "nextScopeCount": len(next_generations),
+        }
 
     def activate_scoped_abox_manifest(
         self,
@@ -3908,25 +3994,35 @@ class ScopedABoxManifestMixin:
                 previous = self.active_abox_metadata(world_id)
             except Exception:
                 previous = {}
+        control_world_id = str(world_id or metadata.get("worldId") or previous.get("worldId") or "").strip()
+        control_delta = self.scoped_manifest_control_delta(metadata, previous)
         pointer_graph = self.scoped_manifest_control_graph(
             metadata,
             previous_metadata=previous,
             pending_activation=pending_activation,
             inference_target_symbols=inference_target_symbols,
+            scope_ids=control_delta.get("changedScopeIds") or [],
         )
+        control_update: Dict[str, object] = {}
         try:
             def operation():
                 driver = self.open_driver(imported)
                 try:
                     self.ensure_database(driver)
                     self.ensure_schema(driver, imported)
-                    self.delete_world_abox_control_rows(driver, imported, world_id)
-                    self.write_graph(driver, imported, pointer_graph, delete_boxes=[])
+                    control_update.update(self.replace_scoped_abox_control_graph(
+                        driver,
+                        imported,
+                        pointer_graph,
+                        world_id=control_world_id,
+                        scope_ids=control_delta.get("replacedScopeIds") or [],
+                        replace_all_scope_pointers=bool(control_delta.get("replaceAllScopePointers")),
+                    ))
                 finally:
                     self.close_driver(driver)
 
             self.with_typedb_retries(operation)
-            active = self.active_abox_metadata(world_id)
+            active = self.active_abox_metadata(control_world_id)
             if (
                 str(active.get("status") or "") != "ok"
                 or str(active.get("worldviewManifestId") or active.get("aboxSnapshotId") or "") != clean_manifest_id
@@ -3946,8 +4042,12 @@ class ScopedABoxManifestMixin:
                 "graphStore": "typedb",
                 "aboxSnapshotId": clean_manifest_id,
                 "worldviewManifestId": clean_manifest_id,
-                "worldId": str(world_id or metadata.get("worldId") or ""),
+                "worldId": control_world_id,
                 "activeAbox": active,
+                "controlUpdate": {
+                    **control_delta,
+                    **control_update,
+                },
             }
         except Exception as error:  # noqa: BLE001 - preserve the current pointer on an activation failure.
             return {
@@ -3956,7 +4056,11 @@ class ScopedABoxManifestMixin:
                 "graphStore": "typedb",
                 "aboxSnapshotId": clean_manifest_id,
                 "worldviewManifestId": clean_manifest_id,
-                "worldId": str(world_id or metadata.get("worldId") or ""),
+                "worldId": control_world_id,
+                "controlUpdate": {
+                    **control_delta,
+                    **control_update,
+                },
                 "reasonCode": typedb_error_code(error),
                 "reason": str(error)[:220],
             }
@@ -4132,8 +4236,7 @@ class ScopedABoxManifestMixin:
                 "reason": "Active Worldview Manifest changed before finalization.",
             }
         control = typedb_call_for_world(
-            self.activate_scoped_abox_manifest,
-            active_id,
+            self.clear_scoped_abox_pending_activation,
             world_id=world_id,
         )
         cleared = str(control.get("status") or "") == "ok"
@@ -7215,6 +7318,167 @@ class TypeDBOntologyGraphRepository(GraphStoreOntologyRowMapperMixin, ScopedABox
 
         self.with_typedb_retries(operation)
         return {"status": "ok", "worldId": str(world_id or "")}
+
+    @staticmethod
+    def scoped_abox_control_delete_query(
+        kind: str,
+        world_id: str = "",
+        scope_id: str = "",
+    ) -> str:
+        """Delete one control-plane node class, optionally for one scope."""
+        return (
+            'match $n isa ontology-node, has ontology-box "ABoxControl", has ontology-kind '
+            + typedb_string(kind)
+            + (
+                ", has ontology-world-id " + typedb_string(world_id)
+                if str(world_id or "").strip()
+                else ""
+            )
+            + (
+                ", has ontology-scope-id " + typedb_string(scope_id)
+                if str(scope_id or "").strip()
+                else ""
+            )
+            + "; delete $n;"
+        )
+
+    def replace_scoped_abox_control_graph(
+        self,
+        driver,
+        imported,
+        graph: PortfolioOntology,
+        world_id: str = "",
+        scope_ids: Iterable[str] = None,
+        replace_all_scope_pointers: bool = False,
+    ) -> Dict[str, object]:
+        """Atomically swap the active Manifest and only changed scope controls.
+
+        Scope pointers deliberately outlive individual Manifest ids. The active
+        Manifest row and activation journal are always replaced, while stable
+        scope pointers remain untouched. This turns the normal live path into
+        a small control-plane patch rather than a rewrite of every holding.
+        """
+        _TypeDB, _Credentials, _DriverOptions, _DriverTlsConfig, TransactionType = imported[0]
+        clean_scope_ids = sorted({
+            str(scope_id or "").strip()
+            for scope_id in scope_ids or []
+            if str(scope_id or "").strip()
+        })
+        delete_queries = [
+            self.scoped_abox_control_delete_query("worldview-manifest-active-pointer", world_id),
+            self.scoped_abox_control_delete_query("abox-activation-pending", world_id),
+        ]
+        if replace_all_scope_pointers:
+            delete_queries.append(
+                self.scoped_abox_control_delete_query("abox-scope-active-pointer", world_id)
+            )
+        else:
+            delete_queries.extend(
+                self.scoped_abox_control_delete_query(
+                    "abox-scope-active-pointer",
+                    world_id,
+                    scope_id,
+                )
+                for scope_id in clean_scope_ids
+            )
+        insert_queries = self.graph_insert_queries(graph)
+        queries = delete_queries + insert_queries
+        if not queries:
+            return {
+                "status": "skipped",
+                "worldId": str(world_id or ""),
+                "queryCount": 0,
+                "transactionCount": 0,
+            }
+        # Control rows are tiny and must change together. Keep a bounded but
+        # substantially larger transaction than the ABox row writer, whose
+        # one-edge batches protect a very different high-volume path.
+        raw_limit = number_or_none(runtime_settings().get("typedbScopedControlWriteTransactionQueryCount"))
+        transaction_limit = int(raw_limit) if raw_limit is not None else 256
+        transaction_limit = max(8, min(512, transaction_limit))
+        transaction_count = 0
+        for offset in range(0, len(queries), transaction_limit):
+            query_batch = queries[offset: offset + transaction_limit]
+
+            def write_batch():
+                with typedb_operation_timeout(
+                    self.write_operation_timeout_seconds(),
+                    "TypeDB scoped ABox control patch",
+                ):
+                    with driver.transaction(
+                        self.database,
+                        TransactionType.WRITE,
+                        options=self.write_transaction_options(),
+                    ) as tx:
+                        for query in query_batch:
+                            tx.query(query).resolve()
+                        tx.commit()
+
+            self.with_typedb_retries(write_batch)
+            transaction_count += 1
+        return {
+            "status": "ok",
+            "worldId": str(world_id or ""),
+            "mode": (
+                "full-scoped-control-rebuild"
+                if replace_all_scope_pointers
+                else "incremental-scoped-control-patch"
+            ),
+            "replacedScopeIds": clean_scope_ids,
+            "scopePointerWriteCount": len([
+                entity
+                for entity in graph.entities
+                if str(entity.kind or "") == "abox-scope-active-pointer"
+            ]),
+            "queryCount": len(queries),
+            "transactionCount": transaction_count,
+            "atomic": transaction_count == 1,
+        }
+
+    def clear_scoped_abox_pending_activation(self, world_id: str = "") -> Dict[str, object]:
+        """Clear only the activation journal after aligned native inference."""
+        imported = self.driver_imports()
+        if imported[0] is None:
+            return self.driver_missing_result(imported[1], PortfolioOntology("typedb-scoped-control"))
+        _TypeDB, _Credentials, _DriverOptions, _DriverTlsConfig, TransactionType = imported[0]
+        query = self.scoped_abox_control_delete_query("abox-activation-pending", world_id)
+        try:
+            def operation():
+                driver = self.open_driver(imported)
+                try:
+                    self.ensure_database(driver)
+                    self.ensure_schema(driver, imported)
+                    with typedb_operation_timeout(
+                        self.write_operation_timeout_seconds(),
+                        "TypeDB scoped ABox activation journal clear",
+                    ):
+                        with driver.transaction(
+                            self.database,
+                            TransactionType.WRITE,
+                            options=self.write_transaction_options(),
+                        ) as tx:
+                            tx.query(query).resolve()
+                            tx.commit()
+                finally:
+                    self.close_driver(driver)
+
+            self.with_typedb_retries(operation)
+            return {
+                "configured": True,
+                "status": "ok",
+                "graphStore": "typedb",
+                "worldId": str(world_id or ""),
+                "mode": "pending-journal-clear",
+            }
+        except Exception as error:  # noqa: BLE001 - retain the journal when its clear cannot commit.
+            return {
+                "configured": True,
+                "status": "error",
+                "graphStore": "typedb",
+                "worldId": str(world_id or ""),
+                "reasonCode": typedb_error_code(error),
+                "reason": str(error)[:220],
+            }
 
     def abox_candidate_snapshot_ids(self) -> List[str]:
         rows = self.read_rows(
@@ -11259,6 +11523,7 @@ relation ontology-assertion,
                 eligible=selection_requested and bool(impact_plan.get("nativeRuleSelectionEligible")),
                 prior_inference_reusable=typedb_bool(payload.get("priorInferenceReusable")),
                 global_impact=bool(impact_plan.get("globalImpact")),
+                bounded_global_context=bool(impact_plan.get("boundedGlobalContext")),
             )
             execution_rules = list(rule_selection.get("selectedRules") or parsed_rules)
             # TypeDB schema functions are the only runtime investment-rule
@@ -13833,6 +14098,7 @@ def typedb_native_rule_execution_selection(
     eligible: bool = False,
     prior_inference_reusable: bool = False,
     global_impact: bool = False,
+    bounded_global_context: bool = False,
 ) -> Dict[str, object]:
     """Select a complete, reusable native RuleBox slice.
 
@@ -13860,7 +14126,7 @@ def typedb_native_rule_execution_selection(
     fallback_reason = ""
     if not eligible:
         fallback_reason = "impact-plan-not-eligible"
-    elif global_impact:
+    elif global_impact and not bounded_global_context:
         fallback_reason = "global-impact-requires-complete-evaluation"
     elif not candidates:
         fallback_reason = "candidate-rules-unavailable"

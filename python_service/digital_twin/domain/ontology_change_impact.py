@@ -9,12 +9,13 @@ investment conclusion in Python.
 from __future__ import annotations
 
 from collections import defaultdict
-from typing import Dict, Iterable, List, Mapping, Sequence, Set
+from typing import Dict, Iterable, List, Mapping, Optional, Sequence, Set
 
 
-# v2 distinguishes facts that changed from scopes that merely depend on a
-# changed fact. The distinction is required for safe native RuleBox reuse.
-CHANGE_IMPACT_VERSION = "abox-change-impact-v2"
+# v3 also distinguishes factual changes from immutable storage rebinding.
+# The distinction is required for safe native RuleBox reuse when one endpoint
+# generation changes but the relation's meaning did not.
+CHANGE_IMPACT_VERSION = "abox-change-impact-v3"
 
 SYMBOL_SCOPE_FAMILIES = {
     "state",
@@ -337,6 +338,31 @@ def _scope_plan_family_tokens(scope_id: str, item: Mapping[str, object]) -> Set[
     return expanded
 
 
+def _semantic_fingerprints(item: Mapping[str, object]) -> Dict[str, str]:
+    raw = dict(item.get("semanticFingerprints") or {}) if isinstance(item, Mapping) else {}
+    return {
+        _clean(family): _clean(fingerprint)
+        for family, fingerprint in raw.items()
+        if _clean(family) and _clean(fingerprint)
+    }
+
+
+def _semantic_scope_changes(
+    before: Mapping[str, object],
+    after: Mapping[str, object],
+) -> Optional[Set[str]]:
+    """Return changed factual families or ``None`` for an older opaque scope."""
+    before_fingerprints = _semantic_fingerprints(before)
+    after_fingerprints = _semantic_fingerprints(after)
+    if not before_fingerprints or not after_fingerprints:
+        return None
+    return {
+        family
+        for family in set(before_fingerprints) | set(after_fingerprints)
+        if before_fingerprints.get(family) != after_fingerprints.get(family)
+    }
+
+
 def scope_delta(previous_scope_plan: Iterable[object], next_scope_plan: Iterable[object]) -> Dict[str, object]:
     """Compare immutable scope generations and retain dependency impact."""
     previous = _scope_plan_index(previous_scope_plan)
@@ -346,13 +372,26 @@ def scope_delta(previous_scope_plan: Iterable[object], next_scope_plan: Iterable
     added = sorted(current_ids - previous_ids)
     removed = sorted(previous_ids - current_ids)
     changed = []
+    rebound = []
+    generation_changed = []
     unchanged = []
+    semantic_changes_by_scope: Dict[str, List[str]] = {}
     for scope_id in sorted(current_ids & previous_ids):
         before = previous[scope_id]
         after = current[scope_id]
         before_identity = _clean(before.get("generationId") or before.get("fingerprint") or before.get("baseFingerprint"))
         after_identity = _clean(after.get("generationId") or after.get("fingerprint") or after.get("baseFingerprint"))
-        (unchanged if before_identity and before_identity == after_identity else changed).append(scope_id)
+        if before_identity and before_identity == after_identity:
+            unchanged.append(scope_id)
+            continue
+        generation_changed.append(scope_id)
+        semantic_changes = _semantic_scope_changes(before, after)
+        if semantic_changes is not None and not semantic_changes:
+            rebound.append(scope_id)
+            continue
+        changed.append(scope_id)
+        if semantic_changes:
+            semantic_changes_by_scope[scope_id] = sorted(semantic_changes)
     direct_changed = sorted(set(added + removed + changed))
     dependency_graph: Dict[str, Set[str]] = defaultdict(set)
     for source in [previous, current]:
@@ -374,8 +413,10 @@ def scope_delta(previous_scope_plan: Iterable[object], next_scope_plan: Iterable
     direct_families = sorted({
         token
         for scope_id in direct_changed
-        for item in [current.get(scope_id) or previous.get(scope_id) or {}]
-        for token in _scope_plan_family_tokens(scope_id, item)
+        for token in (
+            set(semantic_changes_by_scope.get(scope_id) or [])
+            or _scope_plan_family_tokens(scope_id, current.get(scope_id) or previous.get(scope_id) or {})
+        )
     })
     affected_families = sorted({
         token
@@ -402,6 +443,8 @@ def scope_delta(previous_scope_plan: Iterable[object], next_scope_plan: Iterable
         "addedScopeIds": added,
         "removedScopeIds": removed,
         "changedScopeIds": sorted(set(added + changed)),
+        "generationChangedScopeIds": sorted(set(added + changed + rebound)),
+        "reboundScopeIds": rebound,
         "unchangedScopeIds": unchanged,
         "directChangedScopeIds": active_direct,
         "affectedScopeIds": active_affected,
@@ -410,6 +453,7 @@ def scope_delta(previous_scope_plan: Iterable[object], next_scope_plan: Iterable
         # factual scopes that actually changed, not their dependents.
         "changedScopeFamilies": direct_families,
         "directChangedScopeFamilies": direct_families,
+        "semanticChangedFamiliesByScope": semantic_changes_by_scope,
         "dependencyAffectedScopeFamilies": sorted(set(affected_families) - set(direct_families)),
         "affectedScopeFamilies": affected_families,
         "changedSymbols": direct_symbols,
@@ -455,6 +499,7 @@ def build_inference_impact_plan(
         if scope_type(scope_id) in GLOBAL_SCOPE_TYPES and not scope_symbol(scope_id)
     })
     global_impact = bool(global_scope_ids)
+    bounded_global_context = bool(global_impact and explicit_symbols)
     impacted_symbols = set(delta.get("directChangedSymbols") or delta.get("changedSymbols") or []) | set(explicit_symbols)
     if global_impact:
         impacted_symbols.update(available_symbols)
@@ -477,6 +522,7 @@ def build_inference_impact_plan(
         "version": CHANGE_IMPACT_VERSION,
         "scopeDelta": delta,
         "globalImpact": global_impact,
+        "boundedGlobalContext": bounded_global_context,
         "globalImpactScopeIds": global_scope_ids,
         "explicitTargetSymbols": explicit_symbols,
         "inferenceTargetSymbols": target_symbols,
@@ -486,14 +532,20 @@ def build_inference_impact_plan(
         "ruleDependencyCount": len(profiles),
         "changedScopeFamilies": sorted(changed_families),
         "ruleExecutionScope": (
-            "global-native-reconciliation"
+            "target-scoped-global-context-native-evaluation"
+            if bounded_global_context
+            else "global-native-reconciliation"
             if global_impact
             else "dependency-selected-native-evaluation"
         ),
-        "nativeRuleSelectionEligible": bool(candidate_profiles and not global_impact),
+        "nativeRuleSelectionEligible": bool(
+            candidate_profiles and (not global_impact or bounded_global_context)
+        ),
         "nativeRuleSelectionApplied": False,
         "reason": (
-            "전역 범위 변경이 감지되어 전체 투자 대상을 재검토합니다."
+            "전역 사실은 바뀌었지만 요청된 종목 범위에서 관련 규칙과 기존 성립 규칙만 다시 확인합니다."
+            if bounded_global_context
+            else "전역 범위 변경이 감지되어 전체 투자 대상을 재검토합니다."
             if global_impact
             else "직접 변경된 ABox 사실군으로 후보 RuleBox를 계산하고, 이전에 성립한 비변경 규칙을 함께 TypeDB에서 재확인합니다."
         ),
@@ -510,6 +562,7 @@ def compact_inference_impact_plan(plan: Mapping[str, object], limit: int = 80) -
     return {
         "version": str(values.get("version") or CHANGE_IMPACT_VERSION),
         "globalImpact": bool(values.get("globalImpact")),
+        "boundedGlobalContext": bool(values.get("boundedGlobalContext")),
         "globalImpactScopeIds": list(values.get("globalImpactScopeIds") or [])[:bounded],
         "explicitTargetSymbols": list(values.get("explicitTargetSymbols") or [])[:bounded],
         "inferenceTargetSymbols": list(values.get("inferenceTargetSymbols") or [])[:bounded],
@@ -527,11 +580,18 @@ def compact_inference_impact_plan(plan: Mapping[str, object], limit: int = 80) -
             "addedScopeIds": list(delta.get("addedScopeIds") or [])[:bounded],
             "removedScopeIds": list(delta.get("removedScopeIds") or [])[:bounded],
             "changedScopeIds": list(delta.get("changedScopeIds") or [])[:bounded],
+            "generationChangedScopeIds": list(delta.get("generationChangedScopeIds") or [])[:bounded],
+            "reboundScopeIds": list(delta.get("reboundScopeIds") or [])[:bounded],
             "directChangedScopeIds": list(delta.get("directChangedScopeIds") or [])[:bounded],
             "affectedScopeIds": list(delta.get("affectedScopeIds") or [])[:bounded],
             "dependencyAffectedScopeIds": list(delta.get("dependencyAffectedScopeIds") or [])[:bounded],
             "changedScopeFamilies": list(delta.get("changedScopeFamilies") or [])[:bounded],
             "directChangedScopeFamilies": list(delta.get("directChangedScopeFamilies") or [])[:bounded],
+            "semanticChangedFamiliesByScope": {
+                str(scope_id or ""): list(families or [])[:bounded]
+                for scope_id, families in dict(delta.get("semanticChangedFamiliesByScope") or {}).items()
+                if str(scope_id or "").strip()
+            },
             "dependencyAffectedScopeFamilies": list(delta.get("dependencyAffectedScopeFamilies") or [])[:bounded],
             "affectedScopeFamilies": list(delta.get("affectedScopeFamilies") or [])[:bounded],
             "changedSymbols": list(delta.get("changedSymbols") or [])[:bounded],

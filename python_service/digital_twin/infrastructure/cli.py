@@ -17,6 +17,7 @@ from .notifications import queued_notifier_for_account, send_events
 from .ontology_graph_store import ontology_repository_from_settings
 from .service_factory import (
     build_investment_calendar_candidate_service,
+    build_investment_calendar_discovery_service,
     build_investment_calendar_research_service,
     build_investment_calendar_runner,
     build_investment_calendar_service,
@@ -735,10 +736,10 @@ def investment_research_command(args) -> int:
 
 def investment_calendar_command(args) -> int:
     settings = runtime_settings()
-    service = build_investment_calendar_service(settings)
     if args.investment_calendar_action == "status":
-        print(json.dumps(service.status(), ensure_ascii=False))
+        print(json.dumps(build_investment_calendar_runner(settings).status(), ensure_ascii=False))
         return 0
+    service = build_investment_calendar_service(settings)
     if args.investment_calendar_action == "list":
         print(json.dumps(service.list_events({"limit": args.limit}), ensure_ascii=False))
         return 0
@@ -766,6 +767,14 @@ def investment_calendar_command(args) -> int:
             "runCollection": args.run_collection,
             "force": args.force,
         }), ensure_ascii=False))
+        return 0
+    if args.investment_calendar_action == "discover":
+        discovery_service = build_investment_calendar_discovery_service(settings)
+        print(json.dumps(discovery_service.run_once({
+            "symbol": args.symbol,
+            "limit": args.limit,
+            "force": args.force,
+        }, force=args.force), ensure_ascii=False))
         return 0
     if args.investment_calendar_action == "approve-candidate":
         candidate_service = build_investment_calendar_candidate_service(settings)
@@ -1086,6 +1095,10 @@ def build_parser() -> argparse.ArgumentParser:
     calendar_research.add_argument("--limit", default="120")
     calendar_research.add_argument("--run-collection", action=argparse.BooleanOptionalAction, default=True)
     calendar_research.add_argument("--force", action="store_true")
+    calendar_discover = investment_calendar_actions.add_parser("discover")
+    calendar_discover.add_argument("--symbol", default="")
+    calendar_discover.add_argument("--limit", default="12")
+    calendar_discover.add_argument("--force", action="store_true")
     calendar_candidate_approve = investment_calendar_actions.add_parser("approve-candidate")
     calendar_candidate_approve.add_argument("--candidate-id", required=True)
     calendar_candidate_approve.add_argument("--starts-at", default="")

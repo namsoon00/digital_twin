@@ -160,8 +160,13 @@ class InvestmentCalendarService:
         summary = dict(self.repository.summary() or {})
         summary["storedTotal"] = int(summary.get("total") or 0)
         summary["total"] = len(events)
-        summary["upcoming"] = len(events)
-        summary["nextStartsAt"] = events[0].starts_at if events else ""
+        upcoming_events = [
+            event
+            for event in events
+            if event.starts_datetime() and event.starts_datetime() >= now
+        ]
+        summary["upcoming"] = len(upcoming_events)
+        summary["nextStartsAt"] = upcoming_events[0].starts_at if upcoming_events else ""
         return {
             "generatedAt": utc_now_iso(),
             "events": [event.to_dict() for event in events],
@@ -337,17 +342,23 @@ class InvestmentCalendarService:
 
 
 class InvestmentCalendarRunner:
-    def __init__(self, service: InvestmentCalendarService, official_sync_service=None):
+    def __init__(self, service: InvestmentCalendarService, official_sync_service=None, discovery_service=None):
         self.service = service
         self.official_sync_service = official_sync_service
+        self.discovery_service = discovery_service
 
     def run_once(self) -> Dict[str, object]:
         sync_result = {}
         if self.official_sync_service:
             sync_result = self.official_sync_service.run_due()
+        discovery_result = {}
+        if self.discovery_service:
+            discovery_result = self.discovery_service.run_due()
         result = self.service.enqueue_due_reminders()
         if sync_result and sync_result.get("status") != "not-due":
             result["officialCalendarSync"] = sync_result
+        if discovery_result and discovery_result.get("status") != "not-due":
+            result["calendarDiscovery"] = discovery_result
         return result
 
     def status(self) -> Dict[str, object]:
@@ -358,4 +369,6 @@ class InvestmentCalendarRunner:
                 "due": self.official_sync_service.due(),
                 "intervalSeconds": self.official_sync_service.interval_seconds(),
             }
+        if self.discovery_service:
+            result["calendarDiscovery"] = self.discovery_service.status()
         return result

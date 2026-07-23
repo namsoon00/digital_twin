@@ -334,7 +334,8 @@ class InvestmentCalendarScheduler:
             started = time.monotonic()
             try:
                 result = self.runner.run_once()
-                if result.get("dueCount") or result.get("queuedCount"):
+                discovery = result.get("calendarDiscovery") if isinstance(result.get("calendarDiscovery"), dict) else {}
+                if result.get("dueCount") or result.get("queuedCount") or discovery:
                     print(
                         "Investment calendar "
                         + str(result.get("status"))
@@ -342,6 +343,7 @@ class InvestmentCalendarScheduler:
                         + str(result.get("dueCount", 0))
                         + " queued="
                         + str(result.get("queuedCount", 0))
+                        + (" discovery=" + str(discovery.get("status")) + " tentative=" + str(discovery.get("tentativeCount", 0)) if discovery else "")
                     )
             except Exception as error:  # noqa: BLE001 - long-running calendar worker must continue after one cycle failure.
                 print("Python investment calendar worker error: " + str(error))

@@ -55,6 +55,7 @@ class ExistingApiResearchGateway:
         )
         signals = self.provider_for(requested).signals_for_positions([position])
         items = research_evidence_from_external_signals(target.normalized_symbol(), signals)
+        self.attach_target_market(items, target)
         items = self.filter_items(items, requested)
         statuses = [dict(item) for item in signals.get("statuses") or [] if isinstance(item, dict)]
         statuses.append({
@@ -66,6 +67,18 @@ class ExistingApiResearchGateway:
             "fetchedAt": signals.get("fetchedAt"),
         })
         return items, statuses
+
+    @staticmethod
+    def attach_target_market(items: Iterable[ResearchEvidence], target: NewsCollectionTarget) -> None:
+        market = target.normalized_market()
+        if not market:
+            return
+        for item in items or []:
+            if not isinstance(item, ResearchEvidence):
+                continue
+            payload = dict(item.raw_payload or {})
+            payload.setdefault("market", market)
+            item.raw_payload = payload
 
     def provider_for(self, requested: set):
         if self.provider:

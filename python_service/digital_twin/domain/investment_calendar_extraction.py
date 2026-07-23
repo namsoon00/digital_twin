@@ -152,6 +152,29 @@ STRUCTURED_DATE_KEYS = [
     "subscriptionDate",
 ]
 STRUCTURED_EVENT_TYPE_KEYS = ["calendarEventType", "investmentCalendarEventType", "eventType", "event_type"]
+STRUCTURED_CALENDAR_FIELDS = [
+    {
+        "eventType": "earnings",
+        "label": "실적 발표 예정",
+        "dateKeys": ["Earnings Date", "earningsDate", "earnings_date", "earningsDates"],
+        "importance": 78,
+        "schedulePhase": "earnings",
+    },
+    {
+        "eventType": "dividend",
+        "label": "배당락 예정",
+        "dateKeys": ["Ex-Dividend Date", "exDividendDate", "ex_date", "exDate"],
+        "importance": 62,
+        "schedulePhase": "exDividend",
+    },
+    {
+        "eventType": "dividend",
+        "label": "배당 지급 예정",
+        "dateKeys": ["Dividend Date", "dividendDate", "paymentDate", "payableDate"],
+        "importance": 58,
+        "schedulePhase": "payment",
+    },
+]
 
 
 def clean_text(value: object, limit: int = 1000) -> str:
@@ -185,6 +208,19 @@ def nested_dicts(item: Dict[str, object]) -> List[Dict[str, object]]:
         value = payload.get(key)
         if isinstance(value, dict):
             values.append(value)
+    return values
+
+
+def structured_calendar_payloads(item: Dict[str, object]) -> List[Dict[str, object]]:
+    payload = evidence_payload(item)
+    values = []
+    for container in [item, payload]:
+        if not isinstance(container, dict):
+            continue
+        for key in ["calendar", "calendarData", "calendar_data", "schedule", "scheduleData"]:
+            value = container.get(key)
+            if isinstance(value, dict):
+                values.append(value)
     return values
 
 
@@ -368,6 +404,22 @@ def event_date_from_item(item: Dict[str, object], text: str, reference: datetime
     return parsed, "text" if parsed else ""
 
 
+def structured_calendar_dates(value: object, reference: datetime = None) -> List[datetime]:
+    values = value if isinstance(value, (list, tuple, set)) else [value]
+    dates = []
+    seen = set()
+    for raw in values:
+        parsed = parse_structured_date(raw, reference)
+        if not parsed:
+            continue
+        key = utc_iso(parsed)
+        if key in seen:
+            continue
+        seen.add(key)
+        dates.append(parsed)
+    return dates
+
+
 def parse_reference_datetime(item: Dict[str, object]):
     for key in ["publishedAt", "observedAt"]:
         text = clean_text(item.get(key), 80)
@@ -533,6 +585,7 @@ def readiness_for(
 
 def markets_for_candidate(item: Dict[str, object], pattern: Dict[str, object], text: str) -> List[str]:
     markets = list(pattern.get("markets") or [])
+    payload = evidence_payload(item)
     lowered = lower_text(text)
     for token, market in [
         ("nasdaq", "NASDAQ"),
@@ -547,7 +600,7 @@ def markets_for_candidate(item: Dict[str, object], pattern: Dict[str, object], t
     ]:
         if token in lowered and market not in markets:
             markets.append(market)
-    market = clean_text(item.get("market"), 32).upper()
+    market = clean_text(item.get("market") or payload.get("market") or payload.get("targetMarket"), 32).upper()
     if market and market not in markets:
         markets.append(market)
     return markets[:8]
@@ -663,6 +716,111 @@ def calendar_candidate_from_research_item(
     )
 
 
+def structured_calendar_candidates_from_research_item(
+    item: Dict[str, object],
+    force_review: bool = False,
+    feedback: Dict[str, object] = None,
+) -> List[CalendarEventCandidate]:
+    """Create review-first candidates from structured provider calendar fields.
+
+    Provider calendar data is useful for a working agenda, but it is not treated
+    as an issuer-confirmed event. The caller can expose the dated item as a
+    tentative calendar entry while the candidate remains reviewable.
+    """
+    if not isinstance(item, dict):
+        return []
+    calendars = structured_calendar_payloads(item)
+    if not calendars:
+        return []
+    reference = parse_reference_datetime(item)
+    source = clean_text(item.get("source") or "research-evidence", 120)
+    source_url = clean_text(item.get("url"), 1000)
+    evidence_id = clean_text(item.get("evidenceId") or item.get("id"), 191)
+    symbol = clean_text(item.get("symbol"), 24).upper()
+    markets = markets_for_candidate(item, {"markets": []}, source)
+    if source.casefold() == "yfinance" and not markets:
+        markets.append("US")
+    official = official_source(item)
+    candidates = []
+    seen = set()
+    for definition in STRUCTURED_CALENDAR_FIELDS:
+        for calendar in calendars:
+            for field in definition["dateKeys"]:
+                if field not in calendar:
+                    continue
+                for event_date in structured_calendar_dates(calendar.get(field), reference):
+                    if event_date < reference - timedelta(days=2):
+                        continue
+                    starts_at = utc_iso(event_date)
+                    identity = "|".join([definition["eventType"], definition["schedulePhase"], starts_at, symbol])
+                    if identity in seen:
+                        continue
+                    seen.add(identity)
+                    matched = ["calendar." + field]
+                    readiness_state, readiness_reason = readiness_for(
+                        item,
+                        matched,
+                        event_date,
+                        official,
+                        event_type=definition["eventType"],
+                        parser=source_parser(item),
+                        date_source="calendar." + field,
+                        structured_match=True,
+                        feedback=feedback,
+                    )
+                    if force_review and readiness_state == "ready":
+                        readiness_state, readiness_reason = "needs-review", "aiResearchReview"
+                    review_reason = readiness_reason if readiness_state != "ready" else ""
+                    title_target = symbol or clean_text(item.get("title"), 120) or source
+                    title = title_target + " " + definition["label"]
+                    notes = (
+                        source
+                        + "의 "
+                        + field
+                        + " 기반 일정입니다. 공식 IR·공시·거래소 일정으로 날짜와 발표 시각을 확인한 뒤 알림을 활성화하세요."
+                    )
+                    payload = {
+                        "autoDetected": True,
+                        "detector": "structured-calendar-source-v1",
+                        "readinessState": readiness_state,
+                        "matchedKeywords": matched,
+                        "sourceEvidenceId": evidence_id,
+                        "sourcePublishedAt": clean_text(item.get("publishedAt"), 80),
+                        "sourceObservedAt": clean_text(item.get("observedAt"), 80),
+                        "sourceTitle": clean_text(item.get("title"), 180),
+                        "sourceKind": clean_text(item.get("kind"), 80),
+                        "officialSource": official,
+                        "sourceParser": source_parser(item),
+                        "dateSource": "calendar." + field,
+                        "structuredEventType": definition["eventType"],
+                        "schedulePhase": definition["schedulePhase"],
+                        "scheduleState": "confirmed" if official else "estimated",
+                        "reviewRequired": bool(review_reason),
+                        "reviewReason": review_reason,
+                        "needsSourceRefresh": not official,
+                    }
+                    candidates.append(CalendarEventCandidate(
+                        event_id=candidate_id({**item, "title": title}, definition["eventType"], starts_at),
+                        review_candidate_id=review_candidate_id({**item, "title": title}, definition["eventType"], starts_at),
+                        title=title,
+                        event_type=definition["eventType"],
+                        starts_at=starts_at,
+                        status="active" if readiness_state == "ready" else "needsReview",
+                        importance=int(definition["importance"]),
+                        symbols=[symbol] if symbol else [],
+                        markets=markets[:8],
+                        source=source,
+                        source_url=source_url,
+                        notes=notes,
+                        readiness_state=readiness_state,
+                        matched_keywords=matched,
+                        source_evidence_id=evidence_id,
+                        review_reason=review_reason,
+                        payload=payload,
+                    ))
+    return candidates
+
+
 def calendar_candidates_from_research_items(
     items: Iterable[Dict[str, object]],
     register_undated: bool = False,
@@ -671,15 +829,17 @@ def calendar_candidates_from_research_items(
     candidates = []
     seen = set()
     for item in items or []:
-        candidate = calendar_candidate_from_research_item(
+        detected = [calendar_candidate_from_research_item(
             item,
             register_undated,
             feedback=feedback,
-        )
-        if not candidate or candidate.review_required() or candidate.event_id in seen:
-            continue
-        seen.add(candidate.event_id)
-        candidates.append(candidate)
+        )]
+        detected.extend(structured_calendar_candidates_from_research_item(item, feedback=feedback))
+        for candidate in detected:
+            if not candidate or candidate.review_required() or candidate.event_id in seen:
+                continue
+            seen.add(candidate.event_id)
+            candidates.append(candidate)
     return candidates
 
 
@@ -694,23 +854,25 @@ def calendar_candidate_sets_from_research_items(
     seen_ready = set()
     seen_review = set()
     for item in items or []:
-        candidate = calendar_candidate_from_research_item(
+        detected = [calendar_candidate_from_research_item(
             item,
             register_undated=register_undated,
             include_review=True,
             force_review=force_review,
             feedback=feedback,
-        )
-        if not candidate:
-            continue
-        if candidate.review_required():
-            if candidate.review_candidate_id in seen_review:
+        )]
+        detected.extend(structured_calendar_candidates_from_research_item(item, force_review=force_review, feedback=feedback))
+        for candidate in detected:
+            if not candidate:
                 continue
-            seen_review.add(candidate.review_candidate_id)
-            review.append(candidate)
-            continue
-        if candidate.event_id in seen_ready:
-            continue
-        seen_ready.add(candidate.event_id)
-        ready.append(candidate)
+            if candidate.review_required():
+                if candidate.review_candidate_id in seen_review:
+                    continue
+                seen_review.add(candidate.review_candidate_id)
+                review.append(candidate)
+                continue
+            if candidate.event_id in seen_ready:
+                continue
+            seen_ready.add(candidate.event_id)
+            ready.append(candidate)
     return {"ready": ready, "review": review}

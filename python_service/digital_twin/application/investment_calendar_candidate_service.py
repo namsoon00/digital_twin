@@ -151,4 +151,16 @@ class InvestmentCalendarCandidateService:
         )
         if not candidate:
             raise ValueError("검토 후보를 찾지 못했습니다.")
-        return {"candidate": candidate.to_dict()}
+        removed_tentative_event = False
+        repository = getattr(self.calendar_service, "repository", None)
+        if repository and hasattr(repository, "get"):
+            event = repository.get(candidate.proposed_event_id)
+            event_payload = getattr(event, "payload", {}) if event else {}
+            if (
+                event
+                and getattr(event, "status", "") == "tentative"
+                and isinstance(event_payload, dict)
+                and event_payload.get("reviewCandidateId") == candidate.candidate_id
+            ):
+                removed_tentative_event = bool(self.calendar_service.delete_event(candidate.proposed_event_id).get("removed"))
+        return {"candidate": candidate.to_dict(), "removedTentativeEvent": removed_tentative_event}

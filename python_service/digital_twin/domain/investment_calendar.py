@@ -11,7 +11,9 @@ from .portfolio import utc_now_iso
 
 DEFAULT_EVENT_TIMEZONE = "Asia/Seoul"
 DEFAULT_REMINDER_OFFSETS_MINUTES = [1440, 60, 0]
-ACTIVE_EVENT_STATUSES = {"active", "tentative"}
+# Tentative schedules are visible for review but must never become actionable
+# reminders before a reviewer confirms the underlying date.
+ACTIVE_EVENT_STATUSES = {"active"}
 
 EVENT_TYPE_LABELS = {
     "earnings": "실적발표",
@@ -126,7 +128,9 @@ def parse_utc(value: object):
 
 
 def reminder_offsets_from_payload(value: object) -> List[int]:
-    if isinstance(value, str):
+    if value is None:
+        raw_values = DEFAULT_REMINDER_OFFSETS_MINUTES
+    elif isinstance(value, str):
         raw_values = value.split(",")
     elif isinstance(value, Iterable):
         raw_values = list(value)
@@ -137,7 +141,9 @@ def reminder_offsets_from_payload(value: object) -> List[int]:
         offset = clamp_int(raw, 0, 43200, -1)
         if offset >= 0 and offset not in offsets:
             offsets.append(offset)
-    return sorted(offsets, reverse=True) or list(DEFAULT_REMINDER_OFFSETS_MINUTES)
+    if offsets:
+        return sorted(offsets, reverse=True)
+    return [] if value is not None else list(DEFAULT_REMINDER_OFFSETS_MINUTES)
 
 
 def event_type_label(event_type: str) -> str:

@@ -8,6 +8,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from digital_twin.application.investment_calendar_extraction_service import InvestmentCalendarExtractionService
 from digital_twin.application.investment_calendar_candidate_service import InvestmentCalendarCandidateService
+from digital_twin.application.investment_calendar_discovery_service import InvestmentCalendarDiscoveryService
 from digital_twin.application.investment_calendar_research_service import InvestmentCalendarResearchRecommendationService
 from digital_twin.application.investment_calendar_service import InvestmentCalendarService
 from digital_twin.application.official_calendar_sync_service import OfficialCalendarSyncService
@@ -18,9 +19,9 @@ from digital_twin.domain.events import (
     ONTOLOGY_REASONING_REQUESTED,
     RESEARCH_EVIDENCE_COLLECTED,
 )
-from digital_twin.domain.investment_calendar import InvestmentCalendarEvent, event_type_label, utc_iso
+from digital_twin.domain.investment_calendar import InvestmentCalendarEvent, due_reminders_for_event, event_type_label, utc_iso
 from digital_twin.domain.investment_calendar_candidates import InvestmentCalendarReviewCandidate
-from digital_twin.domain.investment_calendar_extraction import calendar_candidate_from_research_item
+from digital_twin.domain.investment_calendar_extraction import calendar_candidate_from_research_item, calendar_candidate_sets_from_research_items
 from digital_twin.domain.investment_research import ResearchEvidence
 from digital_twin.infrastructure.bok_calendar_source import BokPolicyDecisionCalendarSource, parse_bok_policy_decision_events
 from digital_twin.domain.message_types import INVESTMENT_CALENDAR_REMINDER
@@ -141,6 +142,17 @@ class MemoryResearchEvidenceStore:
             rows = [item for item in rows if item.kind == kind]
         return rows[: int(limit or 50)]
 
+    def upsert_many(self, items):
+        by_id = {item.evidence_id: item for item in self.items}
+        saved = 0
+        for item in items or []:
+            if not isinstance(item, ResearchEvidence):
+                continue
+            by_id[item.evidence_id] = item
+            saved += 1
+        self.items = list(by_id.values())
+        return saved
+
 
 class MemoryNewsCollectionRunner:
     def __init__(self):
@@ -158,6 +170,27 @@ class MemoryNewsCollectionRunner:
             "symbols": ["AAPL"],
             "providers": ["memory"],
         }
+
+
+class MemoryCalendarDiscoveryGateway:
+    def __init__(self, items=None, statuses=None):
+        self.items = list(items or [])
+        self.statuses = list(statuses or [])
+        self.calls = []
+
+    def collect_for_target(self, target, source_types=None):
+        self.calls.append({
+            "symbol": target.normalized_symbol(),
+            "sourceTypes": list(source_types or []),
+        })
+        rows = [item for item in self.items if item.symbol == target.normalized_symbol()]
+        statuses = self.statuses or [{
+            "source": "memory-calendar-data",
+            "symbol": target.normalized_symbol(),
+            "ok": True,
+            "count": len(rows),
+        }]
+        return rows, statuses
 
 
 class InvestmentCalendarServiceTests(unittest.TestCase):
@@ -180,6 +213,31 @@ class InvestmentCalendarServiceTests(unittest.TestCase):
             notification_queue=queue or MemoryQueue(),
             settings={"investmentCalendarReminderLookbackMinutes": "180"},
             event_publisher=publisher or MemoryPublisher(),
+        )
+
+    def scheduled_yfinance_evidence(self):
+        return ResearchEvidence(
+            evidence_id="research:AAPL:yfinance-calendar",
+            symbol="AAPL",
+            kind="financial-fact",
+            source="yfinance",
+            title="yfinance 종합 데이터",
+            summary="캘린더 데이터",
+            published_at="2026-07-20T00:00:00Z",
+            observed_at="2026-07-20T00:00:00Z",
+            raw_payload={
+                "provider": "yfinance",
+                "sourceKind": "unofficial-yahoo-finance-wrapper",
+                "calendar": {
+                    "Earnings Date": ["2026-08-05"],
+                    "Ex-Dividend Date": "2026-08-10",
+                    "Dividend Date": "2026-08-14",
+                },
+                "sourceTrustState": "standard",
+                "materialityState": "context",
+                "dataState": "sufficient",
+                "validationState": "conditional",
+            },
         )
 
     def test_save_event_normalizes_time_and_requests_ontology_for_symbol_event(self):
@@ -244,6 +302,49 @@ class InvestmentCalendarServiceTests(unittest.TestCase):
         self.assertTrue(job.context["watchItems"])
         prompt = build_notification_ai_gate_prompt(job.context)
         self.assertIn("계정의 투자 성향은 균형형", prompt)
+
+    def test_tentative_event_preserves_disabled_reminders_and_is_not_actionable(self):
+        now_at = datetime(2026, 8, 5, 0, 0, tzinfo=timezone.utc)
+        event = InvestmentCalendarEvent.from_payload({
+            "eventId": "tentative-earnings-1",
+            "title": "AAPL 실적 발표 예정",
+            "eventType": "earnings",
+            "startsAt": utc_iso(now_at + timedelta(hours=1)),
+            "timezone": "UTC",
+            "status": "tentative",
+            "symbols": ["AAPL"],
+            "reminderOffsetsMinutes": [],
+        })
+
+        self.assertEqual([], event.reminder_offsets_minutes)
+        self.assertFalse(event.active())
+        self.assertEqual([], due_reminders_for_event(event, now_at=now_at))
+
+    def test_list_events_reports_the_next_future_schedule_only(self):
+        now_at = datetime.now(timezone.utc)
+        store = MemoryCalendarStore()
+        store.upsert(InvestmentCalendarEvent.from_payload({
+            "eventId": "calendar-past",
+            "title": "지난 일정",
+            "eventType": "macro",
+            "startsAt": utc_iso(now_at - timedelta(days=1)),
+            "timezone": "UTC",
+        }))
+        store.upsert(InvestmentCalendarEvent.from_payload({
+            "eventId": "calendar-future",
+            "title": "다음 일정",
+            "eventType": "earnings",
+            "startsAt": utc_iso(now_at + timedelta(days=1)),
+            "timezone": "UTC",
+        }))
+
+        result = self.service(store=store).list_events({
+            "from": utc_iso(now_at - timedelta(days=2)),
+            "to": utc_iso(now_at + timedelta(days=2)),
+        })
+
+        self.assertEqual(1, result["summary"]["upcoming"])
+        self.assertEqual(utc_iso(now_at + timedelta(days=1)), result["summary"]["nextStartsAt"])
 
     def test_research_evidence_adr_listing_auto_registers_calendar_event(self):
         store = MemoryCalendarStore()
@@ -521,6 +622,92 @@ class InvestmentCalendarServiceTests(unittest.TestCase):
         self.assertIn("watchItems", candidate.payload)
         self.assertIn("positiveScenario", candidate.payload)
         self.assertEqual(["main"], candidate.account_ids)
+
+    def test_structured_provider_calendar_creates_dated_review_candidates(self):
+        evidence = self.scheduled_yfinance_evidence().to_dict()
+
+        candidates = calendar_candidate_sets_from_research_items([evidence])
+
+        self.assertEqual(0, len(candidates["ready"]))
+        self.assertEqual(3, len(candidates["review"]))
+        self.assertEqual({"earnings", "dividend"}, {item.event_type for item in candidates["review"]})
+        self.assertTrue(all(item.starts_at for item in candidates["review"]))
+        self.assertTrue(all(item.review_reason == "sourceNeedsVerification" for item in candidates["review"]))
+        self.assertTrue(all(item.payload["scheduleState"] == "estimated" for item in candidates["review"]))
+
+    def test_structured_provider_calendar_preserves_target_market(self):
+        evidence = self.scheduled_yfinance_evidence().to_dict()
+        evidence["symbol"] = "000660"
+        evidence["payload"]["market"] = "KOSPI"
+
+        candidates = calendar_candidate_sets_from_research_items([evidence])
+
+        self.assertEqual(3, len(candidates["review"]))
+        self.assertTrue(all(item.markets == ["KOSPI"] for item in candidates["review"]))
+
+    def test_calendar_discovery_saves_tentative_events_and_removes_rejected_candidate(self):
+        calendar_store = MemoryCalendarStore()
+        candidate_store = MemoryCandidateStore()
+        evidence_store = MemoryResearchEvidenceStore()
+        gateway = MemoryCalendarDiscoveryGateway([self.scheduled_yfinance_evidence()])
+        calendar = self.service(store=calendar_store)
+        discovery = InvestmentCalendarDiscoveryService(
+            calendar_service=calendar,
+            candidate_repository=candidate_store,
+            evidence_repository=evidence_store,
+            account_repository=SimpleNamespace(load_all=lambda: [self.account()]),
+            research_gateway=gateway,
+            settings={"watchlistSymbols": "AAPL", "investmentCalendarDiscoveryMaxSymbols": "3"},
+            now=lambda: datetime(2026, 7, 20, tzinfo=timezone.utc),
+        )
+
+        result = discovery.run_once(force=True)
+
+        self.assertEqual("ok", result["status"])
+        self.assertEqual(1, result["targetCount"])
+        self.assertEqual(1, result["evidenceCount"])
+        self.assertEqual(3, result["tentativeCount"])
+        self.assertEqual(3, result["reviewCandidateCount"])
+        self.assertEqual(3, result["storedReviewCandidateCount"])
+        self.assertEqual(3, len(calendar_store.events))
+        self.assertTrue(all(event.status == "tentative" for event in calendar_store.events.values()))
+        self.assertEqual(3, len(candidate_store.candidates))
+        self.assertEqual(1, len(gateway.calls))
+        self.assertIn("financial-data", gateway.calls[0]["sourceTypes"])
+        self.assertEqual(1, len(evidence_store.items))
+        self.assertEqual(0, calendar.enqueue_due_reminders(now_at=datetime(2026, 8, 5, tzinfo=timezone.utc))["queuedCount"])
+
+        candidate = next(item for item in candidate_store.candidates.values() if item.event_type == "earnings")
+        approval = InvestmentCalendarCandidateService(candidate_store, calendar).approve_candidate(candidate.candidate_id, {"reviewNote": "IR 확인"})
+        self.assertEqual("registered", approval["candidate"]["status"])
+        self.assertEqual("active", calendar_store.get(candidate.proposed_event_id).status)
+
+        discovery.run_once(force=True)
+        self.assertEqual("active", calendar_store.get(candidate.proposed_event_id).status)
+
+        rejected = next(item for item in candidate_store.candidates.values() if item.status == "pending")
+        rejection = InvestmentCalendarCandidateService(candidate_store, calendar).reject_candidate(rejected.candidate_id, {"reviewNote": "날짜 불확실"})
+        self.assertTrue(rejection["removedTentativeEvent"])
+        self.assertIsNone(calendar_store.get(rejected.proposed_event_id))
+
+    def test_calendar_discovery_marks_failed_sources_as_partial(self):
+        gateway = MemoryCalendarDiscoveryGateway(
+            [self.scheduled_yfinance_evidence()],
+            statuses=[{"source": "market-provider", "ok": False, "message": "rate limited"}],
+        )
+        discovery = InvestmentCalendarDiscoveryService(
+            calendar_service=self.service(store=MemoryCalendarStore()),
+            candidate_repository=MemoryCandidateStore(),
+            account_repository=SimpleNamespace(load_all=lambda: [self.account()]),
+            research_gateway=gateway,
+            settings={"watchlistSymbols": "AAPL"},
+            now=lambda: datetime(2026, 7, 20, tzinfo=timezone.utc),
+        )
+
+        result = discovery.run_once(force=True)
+
+        self.assertEqual("partial", result["status"])
+        self.assertIn("market-provider: rate limited", result["errors"])
 
     def test_structured_sec_f6_payload_uses_official_parser_and_date_field(self):
         store = MemoryCalendarStore()

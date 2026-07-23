@@ -15,7 +15,7 @@ The PC console presents one operational question per workspace without copying f
 | Delivery state and dispatch reason | `NotificationJob` | Alerts | gates, full message and linked article detail |
 | Ontology graph and inference | TypeDB TBox, ABox, schema functions and InferenceBox | Validation | graph, rule and trace detail |
 | Experiment lifecycle | `OntologyExperiment` | Validation | replay, comparison and promotion detail |
-| Calendar event | investment calendar event repository | Today | event rationale and reminder detail |
+| Calendar event | investment calendar event repository | Calendar | month board, event rationale and reminder detail |
 | Runtime settings | MySQL operational settings | Operations | full-screen category editor |
 
 ## Canonical Identity

@@ -242,15 +242,14 @@ function checkWorkflowConsoleContract() {
   const dataContract = fs.readFileSync(path.join(rootDir, "docs", "pc-console-data-contract.md"), "utf8");
 
   const tabBlock = code.slice(code.indexOf("var tabs = ["), code.indexOf("var bottomTabIds"));
-  const activeTabs = ["overview", "feed", "modeling", "notifications", "experiments", "settings"];
-  const tabLabels = ["오늘", "시장", "판단", "알림", "검증", "운영"];
-  assertOk(activeTabs.every(function (id) { return tabBlock.indexOf('id: "' + id + '"') >= 0; }), "6개 업무 탭 ID가 모두 정의되지 않았습니다.");
-  assertOk(tabLabels.every(function (label) { return tabBlock.indexOf('label: "' + label + '"') >= 0; }), "6개 업무 탭명이 모두 정의되지 않았습니다.");
-  assertOk((tabBlock.match(/\{ id:/g) || []).length === 6, "상위 업무 탭은 정확히 6개여야 합니다.");
+  const activeTabs = ["overview", "calendar", "feed", "modeling", "notifications", "experiments", "settings"];
+  const tabLabels = ["오늘", "캘린더", "시장", "판단", "알림", "검증", "운영"];
+  assertOk(activeTabs.every(function (id) { return tabBlock.indexOf('id: "' + id + '"') >= 0; }), "7개 업무 탭 ID가 모두 정의되지 않았습니다.");
+  assertOk(tabLabels.every(function (label) { return tabBlock.indexOf('label: "' + label + '"') >= 0; }), "7개 업무 탭명이 모두 정의되지 않았습니다.");
+  assertOk((tabBlock.match(/\{ id:/g) || []).length === 7, "상위 업무 탭은 정확히 7개여야 합니다.");
   assertOk(code.indexOf('var managementTabIds = [];') >= 0 && code.indexOf("var pageModeEnabledTabs = [];") >= 0, "이전 운영 메뉴나 결과/설정 하위 탭이 활성 상태로 남아 있습니다.");
 
   [
-    'calendar: "overview"',
     'watchlist: "feed"',
     'symbols: "feed"',
     'ontology: "modeling"',
@@ -332,8 +331,8 @@ function checkWorkflowConsoleContract() {
   assertOk(styles.indexOf("Workflow console continuity and detail navigation pass") >= 0 && styles.indexOf(".oa-detail-queue") >= 0, "전체 목록 상세와 포커스 스타일이 없습니다.");
   assertOk(
     /styles\.css\?v=20260722-performance-ux-v\d+/.test(indexHtml) &&
-      /app\.js\?v=20260722-performance-ux-v\d+/.test(indexHtml),
-    "성능 개선 정적 자산 cache key가 반영되지 않았습니다."
+      /app\.js\?v=20260723-calendar-discovery-v\d+/.test(indexHtml),
+    "캘린더 탐색 정적 자산 cache key가 반영되지 않았습니다."
   );
 }
 
@@ -549,6 +548,10 @@ function checkFrontendAdminRender() {
       code.indexOf("data-calendar-candidate-page") >= 0 &&
       code.indexOf("recommendInvestmentCalendarCandidates") >= 0 &&
       code.indexOf("/api/investment-calendar/candidates/research") >= 0 &&
+      code.indexOf("discoverInvestmentCalendarEvents") >= 0 &&
+      code.indexOf("/api/investment-calendar/discovery") >= 0 &&
+      code.indexOf("renderInvestmentCalendarPage(snapshot)") >= 0 &&
+      code.indexOf("investmentCalendarReminderLabel") >= 0 &&
       code.indexOf("investmentCalendarCandidateQueryString") >= 0 &&
       styles.indexOf("Calendar month board: date-first investment event view.") >= 0 &&
       styles.indexOf("Calendar review queue and primary layout") >= 0 &&

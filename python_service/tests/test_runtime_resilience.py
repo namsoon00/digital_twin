@@ -17,6 +17,71 @@ from digital_twin.infrastructure.news_sources import NewsSourceGateway, default_
 
 
 class RuntimeResilienceTests(unittest.TestCase):
+    def test_cache_only_reasoning_path_reuses_stale_external_signals_without_fetching(self):
+        class MemoryCache:
+            def __init__(self):
+                self.payload = {}
+
+            def load(self):
+                return self.payload
+
+            def replace(self, payload):
+                self.payload = payload
+
+        cache = MemoryCache()
+        position = Position(symbol="AAPL", name="Apple", market="US", currency="USD")
+        provider = ExternalSignalProvider(
+            settings={"_externalSignalsCacheOnly": "1", "externalApiFetchIntervalMinutes": "10"},
+            cache=cache,
+        )
+        cache_key = provider.cache_key_for_positions([position])
+        cached_signals = {
+            "fetchedAt": "2026-07-20T00:00:00Z",
+            "equityQuotes": {"AAPL": {"price": 100}},
+            "cryptoMarkets": {},
+            "macro": {},
+            "fxRates": {},
+            "secFilings": {},
+            "dartDisclosures": {},
+            "newsHeadlines": {},
+            "companyOverviews": {},
+            "earningsReports": {},
+            "yfinanceData": {},
+            "researchEvidence": {},
+            "statuses": [],
+        }
+        cache.replace(provider.next_cache_payload({}, cache_key, cached_signals))
+
+        with patch.object(provider, "fetch_signals", side_effect=AssertionError("cache-only must not fetch")):
+            result = provider.signals_for_positions([position])
+
+        self.assertEqual("2026-07-20T00:00:00Z", result["fetchedAt"])
+        self.assertEqual(100, result["equityQuotes"]["AAPL"]["price"])
+        status = next(row for row in result["statuses"] if row["source"] == "External signal cache")
+        self.assertTrue(status["cacheOnly"])
+        self.assertTrue(status["deferred"])
+        self.assertFalse(status["dataUsable"])
+
+    def test_cache_only_reasoning_path_reports_missing_cache_without_fetching(self):
+        class MemoryCache:
+            @staticmethod
+            def load():
+                return {}
+
+        position = Position(symbol="AAPL", name="Apple", market="US", currency="USD")
+        provider = ExternalSignalProvider(
+            settings={"_externalSignalsCacheOnly": "1"},
+            cache=MemoryCache(),
+        )
+
+        with patch.object(provider, "fetch_signals", side_effect=AssertionError("cache-only must not fetch")):
+            result = provider.signals_for_positions([position])
+
+        status = next(row for row in result["statuses"] if row["source"] == "External signal cache")
+        self.assertTrue(status["cacheOnly"])
+        self.assertTrue(status["deferred"])
+        self.assertFalse(status["dataUsable"])
+
     def test_alpha_provider_quota_stops_remaining_fanout_requests(self):
         now = datetime(2026, 7, 23, 7, 0, tzinfo=timezone.utc)
         state = {}

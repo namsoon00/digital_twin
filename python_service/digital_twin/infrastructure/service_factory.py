@@ -167,7 +167,7 @@ def build_monitor_runner(
         accounts,
         store=store,
         monitor=RealtimeMonitor(configured_settings),
-        snapshot_builder=build_snapshot,
+        snapshot_builder=lambda account: build_snapshot(account, external_settings=configured_settings),
         event_sender=send_events,
         event_publisher=publisher,
         cycle_recorder=stores.monitoring_cycle_recorder(
@@ -510,6 +510,9 @@ def build_ontology_reasoning_runner(settings=None, event_publisher=None) -> Onto
     reasoning_store_settings["_skipOperationalHistoryRetention"] = "1"
     reasoning_monitor_settings = dict(configured_settings)
     reasoning_monitor_settings["_skipOperationalHistoryRetention"] = "1"
+    # External collection is owned by dedicated workers. Re-running it while
+    # materializing an ABox can block TypeDB reasoning on a vendor response.
+    reasoning_monitor_settings["_externalSignalsCacheOnly"] = "1"
     reasoning_native_rule_execution_enabled = setting_truthy(
         configured_settings.get("ontologyReasoningTypeDbNativeRuleExecutionEnabled"),
         True,

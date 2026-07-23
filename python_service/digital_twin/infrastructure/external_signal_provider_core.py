@@ -1,5 +1,6 @@
 import hashlib
 import json
+from copy import deepcopy
 from datetime import datetime, timedelta, timezone
 from typing import Callable, Dict, Iterable, List
 
@@ -30,20 +31,75 @@ class ExternalSignalCoreMixin:
         cached = self.cache.load()
         self.provider_state = self.provider_state_from(cached)
         entry = self.cache_entry(cached, cache_key)
-        if self.is_cache_fresh(entry):
-            signals = entry.get("signals")
+        cache_fresh = self.is_cache_fresh(entry)
+        cache_only = self.external_signal_cache_only()
+        if cache_fresh or cache_only:
+            signals = entry.get("signals") if isinstance(entry, dict) else None
             if isinstance(signals, dict):
+                # Cache-only callers are the reasoning path. They must never
+                # mutate a persisted cached payload or refresh a vendor inline.
+                signals = deepcopy(signals)
+                if cache_only:
+                    self.status(
+                        signals,
+                        "External signal cache",
+                        True,
+                        (
+                            "fresh cache reused by reasoning worker"
+                            if cache_fresh
+                            else "stale cache reused; collection worker refresh is pending"
+                        ),
+                        deferred=not cache_fresh,
+                        dataUsable=cache_fresh,
+                        cacheOnly=True,
+                    )
                 self.refresh_broker_fx_rates(signals, position_list)
                 signals = attach_external_signal_quality(signals, positions=position_list, settings=self.settings)
                 self.attach_stored_research_evidence(position_list, signals)
-                self.record_research_evidence(position_list, signals)
+                if not cache_only:
+                    self.record_research_evidence(position_list, signals)
                 return signals
+            if cache_only:
+                signals = self.empty_cache_only_signals()
+                self.attach_stored_research_evidence(position_list, signals)
+                return attach_external_signal_quality(signals, positions=position_list, settings=self.settings)
 
         signals = self.fetch_signals(position_list)
         self.refresh_broker_fx_rates(signals, position_list)
         self.record_research_evidence(position_list, signals)
         self.attach_stored_research_evidence(position_list, signals)
         self.cache.replace(self.next_cache_payload(cached, cache_key, signals))
+        return signals
+
+    def external_signal_cache_only(self) -> bool:
+        value = str(self.settings.get("_externalSignalsCacheOnly") or "").strip().lower()
+        return value in {"1", "true", "yes", "on"}
+
+    def empty_cache_only_signals(self) -> Dict[str, object]:
+        signals = {
+            "fetchedAt": "",
+            "equityQuotes": {},
+            "cryptoMarkets": {},
+            "macro": {},
+            "fxRates": {},
+            "secFilings": {},
+            "dartDisclosures": {},
+            "newsHeadlines": {},
+            "companyOverviews": {},
+            "earningsReports": {},
+            "yfinanceData": {},
+            "researchEvidence": {},
+            "statuses": [],
+        }
+        self.status(
+            signals,
+            "External signal cache",
+            True,
+            "no cached external signals; collection worker has not supplied a usable snapshot",
+            deferred=True,
+            dataUsable=False,
+            cacheOnly=True,
+        )
         return signals
 
     def attach_stored_research_evidence(self, positions: Iterable[Position], signals: Dict[str, object]) -> None:

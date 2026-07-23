@@ -133,6 +133,22 @@ _QUALITY_TIMESTAMP_FIELDS = {
     "sourcefetchedat",
 }
 
+_SEMANTIC_METADATA_FIELDS = {
+    "tboxclass",
+    "tboxclasses",
+    "box",
+    "boundedcontext",
+    "sourcecontext",
+    "targetcontext",
+    "iscurrent",
+    "tboxversion",
+    "activetboxversion",
+    "activetboxsource",
+    "activetboxentitycount",
+    "activetboxrelationcount",
+    "activetboxfingerprint",
+}
+
 
 def _clean(value: object) -> str:
     return str(value or "").strip()
@@ -495,10 +511,22 @@ def _semantic_property_family(field: object, fallback_family: object) -> str:
     normalized = re.sub(r"[^a-z0-9]", "", _clean(field).lower())
     if normalized in _QUALITY_TIMESTAMP_FIELDS:
         return "quality"
+    fallback = _clean(fallback_family)
+    # TBox/lifecycle decorations are structural metadata. Keep them with the
+    # entity's fact family rather than turning every observation into a
+    # generic state update when a deployment changes metadata formatting.
+    if normalized in _SEMANTIC_METADATA_FIELDS:
+        return fallback or "state"
     family = family_for_field(field)
+    # ``family_for_field`` deliberately falls back to state for unknown
+    # RuleBox condition fields. For an ABox property, however, the owning
+    # entity already supplies a precise type (flow, valuation, evidence,
+    # etc.). Use that type so unknown presentation/provenance properties do
+    # not make a quote refresh look like a global state mutation.
+    if family == "state" and fallback and fallback != "state":
+        return fallback
     if family != "unknown":
         return family
-    fallback = _clean(fallback_family)
     return fallback if fallback else "state"
 
 
@@ -555,6 +583,8 @@ def _scope_semantic_fingerprints(
         family = family_for_relation(
             relation.relation_type,
             properties,
+            source_family=scope_family((getattr(source, "properties", {}) or {}).get("aboxScopeId")),
+            target_family=scope_family((getattr(target, "properties", {}) or {}).get("aboxScopeId")),
             source_kind=getattr(source, "kind", ""),
             target_kind=getattr(target, "kind", ""),
         )

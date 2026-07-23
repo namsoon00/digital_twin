@@ -12,10 +12,10 @@ from collections import defaultdict
 from typing import Dict, Iterable, List, Mapping, Optional, Sequence, Set
 
 
-# v3 also distinguishes factual changes from immutable storage rebinding.
-# The distinction is required for safe native RuleBox reuse when one endpoint
-# generation changes but the relation's meaning did not.
-CHANGE_IMPACT_VERSION = "abox-change-impact-v3"
+# v4 also distinguishes typed fact-family changes from generic storage
+# metadata. The distinction is required for safe native RuleBox reuse when a
+# refreshed quote changes one observation without reopening unrelated rules.
+CHANGE_IMPACT_VERSION = "abox-change-impact-v4"
 
 SYMBOL_SCOPE_FAMILIES = {
     "state",
@@ -109,6 +109,59 @@ def family_for_field(field: object) -> str:
     value = _lower(field).replace("_", "").replace("-", "")
     if not value:
         return "unknown"
+    # These fields describe an account/instrument policy or identity. They are
+    # carried by the compact stock anchor, but do not change with each quote.
+    # Keep them out of the generic state family so a price refresh does not
+    # requeue every rule that merely limits itself to holdings or watchlists.
+    if value in {
+        "source",
+        "symbol",
+        "market",
+        "currency",
+        "sector",
+        "label",
+        "provider",
+        "positionrole",
+        "targetpositionrole",
+        "defaultholdingrole",
+        "investmentstrategyprofile",
+        "investmentstrategyprofilelabel",
+        "holdingactionpolicy",
+        "addbuypolicy",
+        "archetype",
+        "archetypelabel",
+        "instrumentarchetype",
+        "profile",
+        "riskbudget",
+        "profitpolicy",
+    }:
+        return "profile"
+    if _matches_any(value, ["tboxclass", "tboxclasses", "boundedcontext", "sourcecontext", "targetcontext", "activetbox", "tboxversion", "box"]):
+        return "profile"
+    if value in {
+        "cash",
+        "cashratio",
+        "total",
+        "invested",
+        "concentration",
+        "candidatecount",
+        "positionaccountweight",
+        "positionweight",
+    }:
+        return "position"
+    if value in {
+        "positiontotradingvaluepct",
+        "positiontobiddepthpct",
+        "exitdaysattenpctadv",
+        "retaildipbuyingrisk",
+    }:
+        return "flow"
+    if _matches_any(value, ["tradingvalue", "tradevalue", "adv", "turnover"]):
+        return "flow"
+    if _matches_any(value, ["quote", "sourcetimestamp", "sourcetrust", "observationsource", "judgementevidence", "dataquality", "datastate", "validationstate"]):
+        return "quality"
+    if value in {"adrpremiumpct", "marginofsafety", "premium", "discount"}:
+        return "valuation"
     if _matches_any(value, ["profitloss", "averageprice", "quantity", "marketvalue", "positionweight", "sellable", "holding"]):
         return "position"
     if _matches_any(value, ["foreign", "institution", "individual", "volume", "tradestrength", "bidask", "orderbook", "liquidity", "slippage", "execution"]):
@@ -144,9 +197,11 @@ def family_for_entity(kind: object, properties: Mapping[str, object] = None, ent
         return "macro-crypto"
     if _matches_any(text, ["macro-indicator", "macro-regime", "market-regime"]):
         return "macro-market"
-    if _matches_any(text, ["valuation", "fair-value", "fairvalue", "fundamental"]):
+    if _matches_any(text, ["benchmark-index", "benchmark-proxy"]):
+        return "macro-market"
+    if _matches_any(text, ["valuation", "fair-value", "fairvalue", "fundamental", "margin-of-safety", "cross-market-premium", "adr-premium"]):
         return "valuation"
-    if _matches_any(text, ["news", "disclosure", "filing", "research", "article", "document", "claim", "evidence"]):
+    if _matches_any(text, ["news", "disclosure", "filing", "research", "article", "document", "claim", "evidence", "external-signal", "corporate-action"]):
         return "evidence"
     if _matches_any(text, ["temporal", "trend-transition", "trend-phase", "price-path", "fact-change", "threshold-crossing", "event-cluster"]):
         field = props.get("field") or props.get("changedField") or ""
@@ -158,7 +213,7 @@ def family_for_entity(kind: object, properties: Mapping[str, object] = None, ent
         return "quality"
     if _matches_any(text, ["position", "holding-timing", "exit-exposure"]):
         return "position"
-    if _matches_any(text, ["security-line", "instrument-profile", "instrument-identity", "company", "adr", "depositary", "leveraged-etf", "single-stock-etf"]):
+    if _matches_any(text, ["security-line", "instrument-profile", "instrument-identity", "company", "adr", "depositary", "leveraged-etf", "single-stock-etf", "risk-budget", "profit-policy", "risk-management", "strategy-profile", "investment-strategy", "investment-archetype", "account-delivery-profile"]):
         return "profile"
     if _matches_any(text, ["factor", "exposure", "peer", "correlation", "sensitivity"]):
         return "exposure"
@@ -187,6 +242,26 @@ def family_for_relation(
         " ".join(_lower(item) for item in _list(props.get("fields"))),
         _lower(props.get("field")),
     ])
+    # AFFECTS is written from a fact/event to the affected stock. Its factual
+    # family is therefore owned by the source rather than the stock anchor.
+    # Without this exception macro, FX, and evidence updates fall back to the
+    # target's generic state scope and reopen the entire rule catalog.
+    if _matches_any(text, ["affects"]):
+        source_value = _lower(source_family)
+        if source_value in SYMBOL_SCOPE_FAMILIES or source_value.startswith("macro-"):
+            return source_value
+        inferred_source = family_for_entity(source_kind)
+        if inferred_source != "state":
+            return inferred_source
+    # Explicit relation vocabulary is more reliable than the generic endpoint
+    # fallback below. These relationships can be stored in a link scope even
+    # when their subject is the stock state anchor.
+    if _matches_any(text, ["has_risk_budget", "has_profit_policy", "has_instrument_profile", "has_archetype", "has_position_role", "evaluated_under_strategy", "account_delivery_profile"]):
+        return "profile"
+    if _matches_any(text, ["has_margin_of_safety", "has_adr_premium", "cross_market_premium", "adr_premium"]):
+        return "valuation"
+    if _matches_any(text, ["has_beta_to", "has_crypto_exposure", "has_factor_exposure", "exposed_to"]):
+        return "exposure"
     if _matches_any(text, ["exposed_to_fx", "has_fx", "fx_rate"]):
         return "exposure"
     if _matches_any(text, ["interest", "yield", "macro_regime", "market_proxy", "factor_exposure", "correlation", "sensitivity"]):
@@ -205,12 +280,16 @@ def family_for_relation(
         return "valuation"
     if _matches_any(text, ["position", "holds", "watches", "sellable"]):
         return "position"
-    if _matches_any(text, ["price", "key_level", "technical", "breaks_level", "above", "below"]):
+    if _matches_any(text, ["price", "key_level", "key-level", "technical", "breaks_level", "reclaims_level", "retests_level", "above", "below"]):
         return "market"
     for candidate in [target_family, source_family]:
         value = _lower(candidate)
-        if value in SYMBOL_SCOPE_FAMILIES:
+        if value in SYMBOL_SCOPE_FAMILIES or value.startswith("macro-"):
             return value
+    for kind in [target_kind, source_kind]:
+        inferred = family_for_entity(kind)
+        if inferred != "state":
+            return inferred
     return "state"
 
 
@@ -251,7 +330,15 @@ def rule_condition_dependency_profile(condition: object) -> Dict[str, object]:
             families.add(relation_family)
     if target_kind:
         target_family = family_for_entity(target_kind, target_filters)
-        if target_family:
+        # A concrete relation (for example HAS_EXECUTION_METRIC) already
+        # defines the fact family. Do not add the generic state fallback from
+        # an intentionally broad target type such as ``risk``; doing so would
+        # make every quote update select the rule again.
+        if target_family and not (
+            target_family == "state"
+            and relation_type
+            and relation_family not in {"", "state"}
+        ):
             families.add(target_family)
     if kind in {"subject_property", "property", "field"} and not field:
         families.add("state")

@@ -2,7 +2,9 @@ import unittest
 
 from digital_twin.domain.ontology_change_impact import (
     build_inference_impact_plan,
+    family_for_relation,
     rule_condition_dependency_profile,
+    rule_dependency_profile,
     scope_delta,
 )
 from digital_twin.domain.ontology_contracts import OntologyEntity, OntologyRelation, PortfolioOntology
@@ -288,6 +290,88 @@ class OntologyChangeImpactTests(unittest.TestCase):
         self.assertIsNotNone(tbox_class_def("RuleDependency"))
         self.assertIsNotNone(tbox_relation_def("HAS_RULE_DEPENDENCY"))
 
+    def test_dependency_profiles_keep_typed_static_conditions_out_of_state(self):
+        rules = {
+            rule.rule_id: rule
+            for rule in default_graph_inference_rules()
+        }
+
+        winner = rule_dependency_profile(rules["graph.winner_momentum.add_buy_review.v1"])
+        liquidity = rule_dependency_profile(rules["graph.liquidity.execution_guard.v1"])
+        valuation = rule_dependency_profile(rules["graph.valuation.negative_margin.risk.v1"])
+
+        self.assertNotIn("state", winner["scopeFamilies"])
+        self.assertIn("profile", winner["scopeFamilies"])
+        self.assertNotIn("state", liquidity["scopeFamilies"])
+        self.assertIn("flow", liquidity["scopeFamilies"])
+        self.assertEqual(["valuation"], valuation["scopeFamilies"])
+
+    def test_market_only_change_selects_a_strict_catalog_subset(self):
+        before = [{
+            "scopeId": "symbol:005930:state",
+            "generationId": "state-a",
+            "impactScopeFamilies": ["state"],
+            "semanticFingerprints": {
+                "state": "same",
+                "market": "price-before",
+                "position": "same",
+                "profile": "same",
+            },
+        }]
+        after = [{
+            **before[0],
+            "generationId": "state-b",
+            "semanticFingerprints": {
+                "state": "same",
+                "market": "price-after",
+                "position": "same",
+                "profile": "same",
+            },
+        }]
+        catalog = default_graph_inference_rules()
+
+        plan = build_inference_impact_plan(before, after, ["005930"], rules=catalog)
+
+        self.assertEqual(["market"], plan["changedScopeFamilies"])
+        self.assertLess(plan["candidateRuleCount"], len(catalog))
+        self.assertIn("graph.price.reclaim.thesis_support.v1", plan["candidateRuleIds"])
+        self.assertNotIn("graph.liquidity.execution_guard.v1", plan["candidateRuleIds"])
+
+    def test_unknown_abox_property_keeps_its_entity_fact_family(self):
+        graph = self.scope_graph()
+        flow = next(item for item in graph.entities if item.entity_id == "flow-metric:005930:volume")
+        flow.properties["providerDisplayHint"] = "first"
+
+        first = apply_scoped_abox_identity(graph)
+        flow.properties["providerDisplayHint"] = "second"
+        second = apply_scoped_abox_identity(graph)
+        delta = scope_delta(first["scopePlan"], second["scopePlan"])
+
+        self.assertEqual(["flow"], delta["changedScopeFamilies"])
+        self.assertNotIn("state", delta["changedScopeFamilies"])
+
+    def test_affects_relation_uses_the_source_fact_family(self):
+        self.assertEqual(
+            "macro-fx",
+            family_for_relation(
+                "AFFECTS",
+                source_family="macro-fx",
+                target_family="state",
+                source_kind="fx-rate",
+                target_kind="stock",
+            ),
+        )
+        self.assertEqual(
+            "evidence",
+            family_for_relation(
+                "AFFECTS",
+                source_family="evidence",
+                target_family="state",
+                source_kind="article-ai-analysis",
+                target_kind="stock",
+            ),
+        )
+
     def test_impact_plan_is_preserved_with_the_inference_generation(self):
         source = PortfolioOntology(
             "main",
@@ -318,7 +402,7 @@ class OntologyChangeImpactTests(unittest.TestCase):
 
         trace = inference.entities[0]
         self.assertEqual("inference:test", trace.properties["inferenceGenerationId"])
-        self.assertEqual("abox-change-impact-v3", trace.properties["impactPlanVersion"])
+        self.assertEqual("abox-change-impact-v4", trace.properties["impactPlanVersion"])
         self.assertEqual(["005930"], trace.properties["inferenceImpactPlan"]["inferenceTargetSymbols"])
         self.assertEqual("dependency-selected-native-evaluation", trace.properties["ruleExecutionScope"])
         self.assertFalse(trace.properties["nativeRuleSelectionApplied"])

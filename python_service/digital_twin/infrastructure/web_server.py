@@ -59,6 +59,7 @@ from ..domain.data_freshness import age_minutes
 from ..domain.market_hours import DEFAULT_MARKET_HOUR_SESSIONS
 from ..domain.monitoring import RealtimeMonitor
 from ..domain.notification_rules import CONDITION_TYPE_LABELS, NotificationRuleConfig
+from ..domain.notification_reverse_reasoning import build_notification_reverse_reasoning_trace
 from ..domain.notifications import NotificationJob
 from ..domain.notification_templates import DEFAULT_NOTIFICATION_TEMPLATES, MESSAGE_TYPE_LABELS, TRIGGER_SUMMARIES, NotificationTemplate, alert_context, template_variables
 from ..domain.ontology_inference_ledger import inference_trace_ledger_payload
@@ -1844,6 +1845,13 @@ def notification_job_public_payload(job: NotificationJob, detail: bool = False, 
     }
     if detail:
         payload["fullText"] = full_notification_text(job.text)
+        # The trace is rebuilt from the immutable context captured with this
+        # job, never from the currently active graph generation.
+        payload["reasoningTrace"] = build_notification_reverse_reasoning_trace(
+            context,
+            job_id=job.job_id,
+            job_status=job.status,
+        )
     return payload
 
 

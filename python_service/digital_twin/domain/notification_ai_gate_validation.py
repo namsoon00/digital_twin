@@ -491,6 +491,8 @@ def normalized_strategy_guide_payload(context: Dict[str, object], payload: Dict[
         "dataLimitations": rows("dataLimitations", "validationLimiters", "confidenceLimiters", "limitations", limit=5),
         "aiHypothesis": text("aiHypothesis", "backgroundHypothesis", "hypothesis", limit=360),
         "hypothesisBoundary": text("hypothesisBoundary", "hypothesisDisclaimer", limit=260),
+        "hypothesisUpdate": text("hypothesisUpdate", "hypothesisChange", "lifecycleUpdate", limit=300),
+        "hypothesisNextCheck": text("hypothesisNextCheck", "hypothesisCheck", limit=220),
         "invalidationCondition": text("invalidationCondition", "weakenCondition", limit=260),
     }
     return {key: value for key, value in normalized.items() if value not in ("", [], None)}
@@ -781,6 +783,7 @@ def ai_decision_input_packet(
             "inferenceTimeline": relation_context.get("inferenceTimeline") if isinstance(relation_context.get("inferenceTimeline"), dict) else {},
             "investmentQuestion": (relation_context.get("investmentBrain") or {}).get("question") if isinstance(relation_context.get("investmentBrain"), dict) else {},
             "hypothesisSet": hypothesis_context_payload(context),
+            "hypothesisDecisionBrief": relation_context.get("hypothesisDecisionBrief") if isinstance(relation_context.get("hypothesisDecisionBrief"), dict) else {},
             "researchPlan": (relation_context.get("investmentBrain") or {}).get("researchPlan") if isinstance(relation_context.get("investmentBrain"), dict) else relation_context.get("researchPlan") or {},
             "selfQuestions": (relation_context.get("investmentBrain") or {}).get("selfQuestions") if isinstance(relation_context.get("investmentBrain"), dict) else relation_context.get("selfQuestions") or [],
             "epistemicState": (relation_context.get("investmentBrain") or {}).get("epistemicState") if isinstance(relation_context.get("investmentBrain"), dict) else relation_context.get("epistemicState") or {},
@@ -855,7 +858,7 @@ def compact_relation_context_for_ai(context: object) -> Dict[str, object]:
         "decisionState", "evidenceState", "whyNow", "signalConflicts",
         "inferenceTimeline", "inferenceGenerationId", "inferenceGenerationAt", "ruleboxRulesHash",
         "targetRole", "actionPolicy", "allowedActions", "blockedActions", "decision", "executionPlan",
-        "investmentBrain", "hypothesisTemplates", "hypothesisSet", "hypothesisCalibration", "researchPlan", "selfQuestions", "epistemicState",
+        "investmentBrain", "hypothesisTemplates", "hypothesisSet", "hypothesisCalibration", "hypothesisDecisionBrief", "researchPlan", "selfQuestions", "epistemicState",
     ]
     compact = {key: context.get(key) for key in keep_keys if context.get(key) not in (None, "", [], {})}
     compact["activeRules"] = compact_rule_rows(context.get("activeRules") or context.get("matchedRules") or [], 16)
@@ -935,6 +938,8 @@ def build_notification_ai_gate_prompt(context: Dict[str, object]) -> str:
         "각 가설의 familyId, causalSignature, templateId, approvalStatus, causalPathIds, supportingEvidenceIds, counterEvidenceIds를 확인한다. supportingEvidenceIds와 counterEvidenceIds는 실제 입력 ID에서만 선택하고, 가정·무효화 조건·유효시각·검증 상태를 점검한다.",
         "relationshipDatabaseInference.hypothesisCalibration은 현재 InferenceBox와 같은 ABox 세대에서 읽은 동일 종목·동일 가설 템플릿의 사후 결과 집계다. status=applied이고 각 가설의 historicalCalibration.calibrationStatus=usable일 때만 과거 검증 이력으로 언급한다. 이는 가격 예측이나 자동 매매 규칙이 아니며, 현재 TypeDB 근거보다 우선하지 않는다. outcomeState가 more-contradicted이면 같은 설명이 과거 결과와 자주 맞지 않았다는 점을 반대 근거와 다음 확인에 반영하되, 그 사실만으로 action을 고르지 않는다. 표본 부족, 세대 불일치, 미래 시각 기록은 근거로 사용하지 않는다.",
         "promptContext.hypothesisLifecycle이 있으면, 이는 이전 정상 TypeDB 세대와 비교한 가설 감사 기록이다. observed·maintained·strengthened·weakened·invalidated·expired 상태는 새로움과 근거의 유지 여부를 설명하는 데만 사용하고, 상태 이름만으로 매수·매도 action을 고르지 않는다. transitionReason, evidenceDelta, requiredFreshnessDomains, nextDataRequirements를 읽어 이전 알림과 무엇이 달라졌는지와 다음 확인을 구체적으로 설명한다.",
+        "relationshipDatabaseInference.hypothesisDecisionBrief는 현재 TypeDB 가설의 상태 변화, 반증 조건, 필수 신선도, 사후 관측 이력을 묶은 감사용 문맥이다. market scope와 account scope를 섞지 말고, outcomeState가 지지됨·반증됨·판단 불가·표본 부족인지와 표본 수를 정확히 읽는다. 이 이력은 현재 행동을 자동으로 고르는 근거가 아니므로, 현재 세대의 가격·수급·뉴스·공시 증거와 분리해 설명한다. strategyGuide.hypothesisUpdate에는 이전 세대 대비 실제로 바뀐 점만 한두 문장으로 쓰고, strategyGuide.hypothesisNextCheck에는 그 가설을 지지하거나 반증할 다음 확인 하나를 쓴다.",
+        "입력된 TypeDB 사실, 검증 완료된 조사 주장, 제공된 출처 외의 시장 사건·실적·수치·업계 상식은 판단 근거로 새로 만들지 않는다. 입력에 없는 정보가 유용해 보이면 부족 데이터 또는 다음 조사 항목으로만 적고, 실제 사실처럼 단정하지 않는다.",
         "researchCycle이 있으면 investmentJudgmentEligible=true이고 reasoningRefreshed=true인 verifiedClaims만 새 판단 근거로 사용한다. rejectedClaims와 unappliedVerifiedClaims는 데이터 품질·재추론 실패를 설명하는 데만 사용하고 투자 방향의 근거로 승격하지 않는다. changedEvidenceCount가 0이면 기존 TypeDB 추론 세대를 새로운 사실처럼 해석하지 않는다.",
         "hypotheses 배열에 모든 입력 가설을 빠짐없이 평가하고 selectedHypothesisId에는 최종 action을 가장 잘 설명하는 가설 ID를 쓴다. 결론이 혼합형이면 불확실성 가설을 선택할 수 있다.",
         "unresolvedQuestions에는 결론을 바꿀 수 있지만 아직 답하지 못한 질문만 쓴다. epistemicSummary에는 무엇을 알고, 무엇을 모르며, 어떤 반증이 남았는지 한 문단으로 쓴다.",
@@ -1003,6 +1008,8 @@ def build_notification_ai_gate_prompt(context: Dict[str, object]) -> str:
                 "dataLimitations": ["string"],
                 "aiHypothesis": "string",
                 "hypothesisBoundary": "string",
+                "hypothesisUpdate": "string - current TypeDB hypothesis change only",
+                "hypothesisNextCheck": "string - next falsification or confirmation check",
                 "invalidationCondition": "string"
             },
             "sourceUrls": ["string"],

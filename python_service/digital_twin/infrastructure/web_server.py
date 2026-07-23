@@ -3877,6 +3877,36 @@ class DigitalTwinHandler(BaseHTTPRequestHandler):
                 event_limit=event_limit,
             ))
 
+        if path == "/api/investment-brain/hypotheses" and self.command == "GET":
+            try:
+                limit = int(first_query(query, "limit") or 100)
+            except ValueError:
+                limit = 100
+            try:
+                event_limit = int(first_query(query, "eventLimit") or 100)
+            except ValueError:
+                event_limit = 100
+            return self.send_payload(200, build_investment_brain_service().hypothesis_workspace(
+                account_id=first_query(query, "accountId"),
+                symbol=first_query(query, "symbol"),
+                market_id=first_query(query, "marketId"),
+                scope=first_query(query, "scope"),
+                limit=limit,
+                event_limit=event_limit,
+            ))
+
+        lifecycle_policy_match = re.match(r"^/api/investment-brain/hypothesis-policies/([^/]+)$", path)
+        if lifecycle_policy_match and self.command == "PATCH":
+            if not self.ensure_writable("공유 모드에서는 가설 수명주기 정책을 변경할 수 없습니다."):
+                return
+            body = self.read_json_body()
+            policy = body.get("policy") if isinstance(body.get("policy"), dict) else body
+            return self.send_payload(200, build_investment_brain_service().update_hypothesis_lifecycle_policy(
+                urllib.parse.unquote(lifecycle_policy_match.group(1)),
+                policy,
+                configured(body.get("changeReason")),
+            ))
+
         if path == "/api/investment-brain/research-runs" and self.command == "GET":
             try:
                 limit = int(first_query(query, "limit") or 50)

@@ -2,6 +2,7 @@ from typing import Dict, Iterable, List
 
 from .ontology_contracts import PortfolioOntology, entity_id
 from .ontology_schema import add_entity, add_relation
+from .hypothesis_review import outcome_assessments_from_episodes
 
 
 def add_investment_brain_concepts(
@@ -11,6 +12,7 @@ def add_investment_brain_concepts(
     hypothesis_proposals: Iterable[Dict[str, object]] = None,
     decision_performance: Dict[str, object] = None,
     hypothesis_lifecycles: Iterable[Dict[str, object]] = None,
+    hypothesis_outcome_minimum_samples: int = 3,
 ) -> None:
     portfolio_node_id = entity_id("portfolio", portfolio_id)
     episode_rows = [item for item in decision_episodes or [] if isinstance(item, dict)]
@@ -413,6 +415,12 @@ def add_investment_brain_concepts(
             add_relation(graph, episode_id, outcome_id, "RESULTED_IN_OUTCOME", weight=1.0, properties={"source": "investment-brain-feedback"})
             add_relation(graph, stock_id, outcome_id, "OBSERVES_OUTCOME", weight=1.0, properties={"source": "investment-brain-feedback"})
     add_hypothesis_calibration_concepts(graph, portfolio_id, episode_rows)
+    add_hypothesis_outcome_assessment_concepts(
+        graph,
+        portfolio_id,
+        episode_rows,
+        hypothesis_outcome_minimum_samples,
+    )
     add_decision_performance_concepts(graph, portfolio_id, decision_performance or {})
     add_novel_hypothesis_proposal_concepts(graph, portfolio_id, hypothesis_proposals or [])
     add_hypothesis_lifecycle_concepts(graph, portfolio_id, hypothesis_lifecycles or [])
@@ -491,6 +499,69 @@ def add_hypothesis_lifecycle_concepts(
             add_relation(graph, lifecycle_id, delta_id, "HAS_EVIDENCE_DELTA", weight=1.0, properties={
                 "source": "typedb-hypothesis-lifecycle-audit",
             })
+
+
+def add_hypothesis_outcome_assessment_concepts(
+    graph: PortfolioOntology,
+    portfolio_id: str,
+    decision_episodes: Iterable[Dict[str, object]],
+    minimum_samples: int = 3,
+) -> None:
+    """Project post-decision observations without feeding them back into action selection.
+
+    A portfolio projection only has that portfolio's decision episodes.  A
+    market-scoped row is therefore explicitly marked portfolio-local rather
+    than being presented as a cross-account market conclusion.  Account
+    overlays retain their account id and cannot be merged into the market row.
+    """
+
+    portfolio_node_id = entity_id("portfolio", portfolio_id)
+    for assessment in outcome_assessments_from_episodes(decision_episodes or [], minimum_samples=minimum_samples):
+        scope = str(assessment.get("scope") or "account")
+        lifecycle_id = str(assessment.get("lifecycleId") or "").strip()
+        symbol = str(assessment.get("symbol") or "").upper().strip()
+        account_id = str(assessment.get("accountId") or "").strip() if scope == "account" else ""
+        if not lifecycle_id or not symbol:
+            continue
+        assessment_key = "|".join([scope, account_id, symbol, lifecycle_id])
+        label = symbol + " " + str(assessment.get("scopeLabel") or "가설") + " 사후 결과"
+        assessment_id = add_entity(graph, "hypothesis-outcome-assessment", assessment_key, label, {
+            "tboxClass": "HypothesisOutcomeAssessment",
+            "lifecycleId": lifecycle_id,
+            "lifecycleKey": assessment.get("lifecycleKey"),
+            "scope": scope,
+            "scopeLabel": assessment.get("scopeLabel"),
+            "accountId": account_id,
+            "symbol": symbol,
+            "familyId": assessment.get("familyId"),
+            "outcomeState": assessment.get("outcomeState"),
+            "outcomeStateLabel": assessment.get("outcomeStateLabel"),
+            "summary": assessment.get("summary"),
+            "minimumSampleCount": assessment.get("minimumSampleCount"),
+            "matchedEpisodeCount": assessment.get("matchedEpisodeCount"),
+            "sampleCount": assessment.get("sampleCount"),
+            "supportedCount": assessment.get("supportedCount"),
+            "contradictedCount": assessment.get("contradictedCount"),
+            "inconclusiveCount": assessment.get("inconclusiveCount"),
+            "excludedOutcomeCount": assessment.get("excludedOutcomeCount"),
+            "horizonAssessments": assessment.get("horizonAssessments") or [],
+            "latestObservedAt": assessment.get("latestObservedAt"),
+            "observationCohort": "portfolio-local",
+            "decisionEligibility": "historical-review-only",
+            "automaticDeployment": False,
+            "source": "DecisionEpisode+ObservedOutcome",
+        })
+        stock_id = entity_id("stock", symbol)
+        add_relation(graph, stock_id, assessment_id, "HAS_HYPOTHESIS_OUTCOME_ASSESSMENT", weight=1.0, properties={
+            "source": "investment-brain-hypothesis-review",
+            "scope": scope,
+            "observationCohort": "portfolio-local",
+        })
+        add_relation(graph, portfolio_node_id, assessment_id, "HAS_HYPOTHESIS_OUTCOME_ASSESSMENT", weight=1.0, properties={
+            "source": "investment-brain-hypothesis-review",
+            "scope": scope,
+            "observationCohort": "portfolio-local",
+        })
 
 
 def add_decision_performance_concepts(

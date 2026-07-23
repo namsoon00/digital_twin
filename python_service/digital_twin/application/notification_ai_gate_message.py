@@ -509,6 +509,62 @@ def hypothesis_comparison_rows(response: NotificationAIValidatedResponse, level:
         rows.append(_html_row("남은 질문", response.unresolved_questions[0], level=level, max_len=300))
     return [row for row in rows if row]
 
+
+def hypothesis_decision_brief_text_rows(
+    context: Dict[str, object],
+    response: NotificationAIValidatedResponse,
+) -> List[str]:
+    """Present lifecycle audit facts without exposing TypeDB internals."""
+
+    relation_context = relation_context_value(context or {})
+    brief = relation_context.get("hypothesisDecisionBrief") if isinstance(relation_context.get("hypothesisDecisionBrief"), dict) else {}
+    if not brief:
+        return []
+    rows: List[str] = []
+    explicit_update = _strategy_guide_value(response, "hypothesisUpdate")
+    if explicit_update:
+        append_unique_text(rows, "AI가 본 가설 변화: " + explicit_update, 300)
+    changes = brief.get("materialChanges") if isinstance(brief.get("materialChanges"), list) else []
+    if not explicit_update and changes:
+        item = changes[0] if isinstance(changes[0], dict) else {}
+        scope = str(item.get("scopeLabel") or "가설")
+        state = str(item.get("stateLabel") or "상태 변화")
+        reason = _text(item.get("transitionReason"), 220)
+        if reason:
+            append_unique_text(rows, "가설 변화: " + scope + "이 " + state + " 상태입니다. " + reason, 300)
+        else:
+            append_unique_text(rows, "가설 변화: " + scope + "이 " + state + " 상태입니다.", 220)
+    visible_items = [item for item in brief.get("items") or [] if isinstance(item, dict)]
+    assessment = next((
+        item.get("outcomeAssessment")
+        for item in visible_items
+        if isinstance(item.get("outcomeAssessment"), dict)
+        and str(item.get("outcomeAssessment", {}).get("outcomeState") or "") not in {"", "insufficient-sample"}
+    ), {})
+    if isinstance(assessment, dict) and assessment:
+        label = str(assessment.get("outcomeStateLabel") or "사후 검토")
+        summary = _text(assessment.get("summary"), 220)
+        if summary:
+            append_unique_text(rows, "사후 검토: " + label + ". " + summary, 300)
+    next_check = _strategy_guide_value(response, "hypothesisNextCheck")
+    if not next_check:
+        requirements = brief.get("nextDataRequirements") if isinstance(brief.get("nextDataRequirements"), list) else []
+        next_check = _compact_text_segments(requirements, 2, 170)
+    if next_check:
+        append_unique_text(rows, "가설 다음 확인: " + next_check, 260)
+    freshness = brief.get("freshnessWarnings") if isinstance(brief.get("freshnessWarnings"), list) else []
+    if freshness:
+        append_unique_text(rows, "가설 판단 제한: " + _compact_text_segments(freshness, 2, 160), 240)
+    return rows[:4]
+
+
+def hypothesis_decision_brief_rows(
+    context: Dict[str, object],
+    response: NotificationAIValidatedResponse,
+    level: str,
+) -> List[str]:
+    return [_html_bullet(_ai_marked_value(row) if row.startswith("AI가") else row, level) for row in hypothesis_decision_brief_text_rows(context, response)]
+
 def target_name_for_headline(target: object) -> str:
     text = str(target or "").strip()
     if not text:
@@ -2165,6 +2221,10 @@ def compact_beginner_next_rows(
         text = watchlist_friendly_text(context, str(item or "").strip())
         if text and all(text not in row and row not in text for row in rows):
             rows.append("다음 확인: " + text)
+    for item in hypothesis_decision_brief_text_rows(context, response)[:1]:
+        text = watchlist_friendly_text(context, str(item or "").strip())
+        if text and all(text not in row and row not in text for row in rows):
+            rows.append(text)
     missing = customer_data_note_rows(list(response.missing_data_impact))
     if missing:
         rows.append("부족한 데이터: " + " / ".join(missing[:2]))
@@ -2224,6 +2284,9 @@ def execution_telegram_message(context: Dict[str, object], response: Notificatio
     hypothesis_rows = hypothesis_comparison_rows(response, level)
     if hypothesis_rows:
         parts.extend(["", "<b>AI 경쟁 가설</b>", *hypothesis_rows])
+    lifecycle_rows = hypothesis_decision_brief_rows(context, response, level)
+    if lifecycle_rows:
+        parts.extend(["", "<b>가설 변화와 검증</b>", *lifecycle_rows])
     reason_rows = customer_reason_rows(context, level)
     if reason_rows:
         parts.extend(["", "<b>왜 알림이 왔나요?</b>", *reason_rows])

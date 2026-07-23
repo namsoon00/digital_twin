@@ -33,6 +33,8 @@ class InvestmentBrainService:
         research_store=None,
         settings: Dict[str, object] = None,
         hypothesis_lifecycle_store=None,
+        hypothesis_review_service=None,
+        hypothesis_lifecycle_policy_service=None,
     ):
         self.monitor_store = monitor_store
         self.ontology_repository = ontology_repository
@@ -44,6 +46,8 @@ class InvestmentBrainService:
         self.research_store = research_store
         self.settings = dict(settings or {})
         self.hypothesis_lifecycle_store = hypothesis_lifecycle_store
+        self.hypothesis_review_service = hypothesis_review_service
+        self.hypothesis_lifecycle_policy_service = hypothesis_lifecycle_policy_service
 
     def ask(self, message: str, account_id: str = "", symbol: str = "") -> Dict[str, object]:
         message = " ".join(str(message or "").split())
@@ -128,6 +132,12 @@ class InvestmentBrainService:
                 "reasoningRefresh": refresh_result,
             } if research_payload else {},
         })
+        self.attach_hypothesis_decision_brief(
+            relation_context,
+            resolved_account_id,
+            position.symbol,
+            relation_context.get("researchCycle") if isinstance(relation_context.get("researchCycle"), dict) else {},
+        )
         context = {
             "messageType": INVESTMENT_INSIGHT,
             "accountId": resolved_account_id,
@@ -176,6 +186,7 @@ class InvestmentBrainService:
             "decisionEpisodeId": episode.episode_id if episode else "",
             "inferenceGenerationId": relation_context.get("inferenceGenerationId") or "",
             "graphStore": relation_context.get("graphStore") or "",
+            "hypothesisDecisionBrief": relation_context.get("hypothesisDecisionBrief") or {},
         }
 
     def run_research(
@@ -388,6 +399,12 @@ class InvestmentBrainService:
             "epistemicState": brain.get("epistemicState") or {},
             "researchCycle": research_cycle,
         })
+        self.attach_hypothesis_decision_brief(
+            relation_context,
+            resolved_account_id,
+            position.symbol,
+            research_cycle,
+        )
         enriched["ontologyRelationContext"] = relation_context
         enriched["investmentBrainQuestion"] = question.to_dict()
         enriched["researchCycle"] = research_cycle
@@ -466,6 +483,12 @@ class InvestmentBrainService:
             "epistemicState": brain.get("epistemicState") or {},
             "researchCycle": research_cycle,
         })
+        self.attach_hypothesis_decision_brief(
+            relation_context,
+            resolved_account_id,
+            position.symbol,
+            research_cycle,
+        )
         enriched["ontologyRelationContext"] = relation_context
         enriched["investmentBrainQuestion"] = question.to_dict()
         enriched["researchCycle"] = research_cycle
@@ -481,6 +504,44 @@ class InvestmentBrainService:
         if isinstance(result, dict):
             return result
         return {"status": "completed" if result else "error", "refreshed": bool(result)}
+
+    def attach_hypothesis_decision_brief(
+        self,
+        relation_context: Dict[str, object],
+        account_id: str = "",
+        symbol: str = "",
+        research_cycle: Dict[str, object] = None,
+    ) -> Dict[str, object]:
+        """Attach audit context for AI explanation, never an action selector."""
+
+        if not self.hypothesis_review_service:
+            return {}
+        try:
+            brief = self.hypothesis_review_service.brief(
+                relation_context,
+                account_id=account_id,
+                symbol=symbol,
+                research_cycle=research_cycle,
+            )
+        except Exception as error:  # noqa: BLE001 - review history must not block a live TypeDB judgement.
+            brief = {
+                "status": "unavailable",
+                "source": "typedb-hypothesis-lifecycle+decision-episode-outcome",
+                "decisionEligibility": "context-only-not-action-selector",
+                "automaticDeployment": False,
+                "reason": str(error)[:180],
+                "items": [],
+            }
+        relation_context["hypothesisDecisionBrief"] = brief
+        prompt_context = relation_context.get("promptContext") if isinstance(relation_context.get("promptContext"), dict) else {}
+        if prompt_context:
+            prompt_context["hypothesisDecisionBrief"] = brief
+            relation_context["promptContext"] = prompt_context
+        brain = relation_context.get("investmentBrain") if isinstance(relation_context.get("investmentBrain"), dict) else {}
+        if brain:
+            brain["hypothesisDecisionBrief"] = brief
+            relation_context["investmentBrain"] = brain
+        return brief
 
     def propose_novel_hypotheses(
         self,
@@ -608,6 +669,48 @@ class InvestmentBrainService:
             "eventCount": len(events),
             "records": [item.to_dict() for item in records if hasattr(item, "to_dict")],
             "events": [item.to_dict() for item in events if hasattr(item, "to_dict")],
+        }
+
+    def hypothesis_workspace(
+        self,
+        account_id: str = "",
+        symbol: str = "",
+        market_id: str = "",
+        scope: str = "",
+        limit: int = 100,
+        event_limit: int = 100,
+    ) -> Dict[str, object]:
+        if not self.hypothesis_review_service:
+            return {
+                "status": "unavailable",
+                "engine": "ontology-investment-brain",
+                "items": [],
+                "events": [],
+                "reason": "가설 검토 읽기 모델이 구성되지 않았습니다.",
+            }
+        return {
+            "engine": "ontology-investment-brain",
+            **self.hypothesis_review_service.workspace(
+                account_id=account_id,
+                symbol=symbol,
+                market_id=market_id,
+                scope=scope,
+                limit=limit,
+                event_limit=event_limit,
+            ),
+        }
+
+    def update_hypothesis_lifecycle_policy(
+        self,
+        rule_id: str,
+        policy: Dict[str, object],
+        change_reason: str = "",
+    ) -> Dict[str, object]:
+        if not self.hypothesis_lifecycle_policy_service:
+            raise RuntimeError("가설 수명주기 정책 서비스가 구성되지 않았습니다.")
+        return {
+            "engine": "ontology-investment-brain",
+            **self.hypothesis_lifecycle_policy_service.update(rule_id, policy, change_reason),
         }
 
     def research_runs(self, account_id: str = "", symbol: str = "", limit: int = 50) -> Dict[str, object]:

@@ -337,6 +337,15 @@ def build_portfolio_ontology(
             external_signals,
         )
     add_decision_item_concepts(graph, runtime_context)
+    runtime_settings = runtime_context.get("settings") if isinstance(runtime_context, dict) and isinstance(runtime_context.get("settings"), dict) else {}
+    try:
+        hypothesis_outcome_minimum_samples = int(float(str(
+            runtime_settings.get("hypothesisOutcomeReviewMinimumSamples")
+            or runtime_settings.get("investmentBrainOutcomeReviewMinimumSamples")
+            or 3
+        )))
+    except (TypeError, ValueError):
+        hypothesis_outcome_minimum_samples = 3
     add_investment_brain_concepts(
         graph,
         portfolio_id,
@@ -344,6 +353,7 @@ def build_portfolio_ontology(
         runtime_context.get("hypothesisProposals") if isinstance(runtime_context, dict) else [],
         runtime_context.get("decisionPerformance") if isinstance(runtime_context, dict) else {},
         runtime_context.get("hypothesisLifecycles") if isinstance(runtime_context, dict) else [],
+        max(1, min(100, hypothesis_outcome_minimum_samples)),
     )
     add_coverage_gap_concepts(graph, observed_positions, portfolio_id)
     graph.entities = dedupe_entities(graph.entities)

@@ -9,7 +9,9 @@ from ..application.investment_brain_service import InvestmentBrainService
 from ..application.investment_research_orchestration_service import InvestmentResearchOrchestrationService, InvestmentResearchQueueRunner
 from ..application.hypothesis_proposal_service import HypothesisProposalService
 from ..application.hypothesis_lifecycle_service import HypothesisLifecycleService
+from ..application.hypothesis_lifecycle_policy_service import HypothesisLifecyclePolicyService
 from ..application.hypothesis_research_planner_service import HypothesisResearchPlanningService
+from ..application.hypothesis_review_service import HypothesisReviewService
 from ..application.investment_strategy_proposal_service import InvestmentStrategyProposalService
 from ..application.investment_calendar_candidate_service import InvestmentCalendarCandidateService
 from ..application.investment_calendar_discovery_service import InvestmentCalendarDiscoveryService
@@ -244,16 +246,26 @@ def build_notification_queue_runner(dry_run: bool = False) -> NotificationQueueR
 def build_investment_brain_service(settings=None) -> InvestmentBrainService:
     configured_settings = settings or runtime_settings()
     research_store = stores.investment_research_store(configured_settings)
+    ontology_repository = ontology_repository_from_settings(configured_settings)
+    decision_episode_store = stores.investment_decision_episode_store(configured_settings)
+    lifecycle_store = stores.hypothesis_lifecycle_store(configured_settings)
     return InvestmentBrainService(
         monitor_store=stores.monitor_store(configured_settings),
-        ontology_repository=ontology_repository_from_settings(configured_settings),
+        ontology_repository=ontology_repository,
         reviewer=notification_ai_reviewer_from_settings(configured_settings),
-        decision_episode_store=stores.investment_decision_episode_store(configured_settings),
+        decision_episode_store=decision_episode_store,
         research_orchestrator=build_investment_research_orchestrator(configured_settings, research_store),
         hypothesis_proposal_service=build_hypothesis_proposal_service(configured_settings, research_store),
         research_store=research_store,
         settings=configured_settings,
-        hypothesis_lifecycle_store=stores.hypothesis_lifecycle_store(configured_settings),
+        hypothesis_lifecycle_store=lifecycle_store,
+        hypothesis_review_service=HypothesisReviewService(
+            hypothesis_lifecycle_store=lifecycle_store,
+            decision_episode_store=decision_episode_store,
+            ontology_repository=ontology_repository,
+            settings=configured_settings,
+        ),
+        hypothesis_lifecycle_policy_service=HypothesisLifecyclePolicyService(ontology_repository),
     )
 
 

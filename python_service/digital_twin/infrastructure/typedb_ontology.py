@@ -30,6 +30,7 @@ from ..domain.ontology_rulebox_governance import (
 )
 from ..domain.ontology_change_impact import compact_inference_impact_plan
 from ..domain.ontology_native_rule_planning import normalize_native_rule_planner_topology
+from ..domain.ontology_runtime_operations import native_rule_timing_profile
 from ..domain.ontology_schema import default_tbox_metadata
 from ..domain.hypothesis_calibration import hypothesis_calibration_snapshot_from_abox_rows
 from ..domain.ontology_scopes import (
@@ -10429,9 +10430,25 @@ relation ontology-assertion,
         transition while the functions run, while the per-rule transaction
         timeout remains effective in worker threads where SIGALRM is not.
         """
+        entry_started = time.perf_counter()
+
+        def with_elapsed(result: Dict[str, object]) -> Dict[str, object]:
+            elapsed_ms = int((time.perf_counter() - entry_started) * 1000)
+            executed = result.get("executed") if isinstance(result.get("executed"), dict) else {}
+            failure = result.get("failure") if isinstance(result.get("failure"), dict) else {}
+            if executed:
+                executed.setdefault("elapsedMs", elapsed_ms)
+                result["executed"] = executed
+            if failure:
+                failure.setdefault("elapsedMs", elapsed_ms)
+                failure.setdefault("queryDurationMs", 0)
+                failure.setdefault("queryCount", int(result.get("readQueryCount") or 0))
+                result["failure"] = failure
+            return result
+
         rule = planned.get("rule")
         if not rule:
-            return {
+            return with_elapsed({
                 "status": "partial",
                 "readTransactionCount": 0,
                 "readQueryCount": 0,
@@ -10440,7 +10457,7 @@ relation ontology-assertion,
                     "status": "blocked",
                     "reason": "TypeDB native rule plan is missing its rule definition.",
                 },
-            }
+            })
         rule_payload = rule.to_dict() if hasattr(rule, "to_dict") else dict(rule or {})
         candidate_symbols = clean_symbols_from_payload(planned.get("candidateSymbols") or clean_symbols)
         function_name = typedb_native_rule_function_name(rule.rule_id, world_id)
@@ -10463,7 +10480,7 @@ relation ontology-assertion,
             )
         )
         if not query_plan.get("query"):
-            return {
+            return with_elapsed({
                 "status": "partial",
                 "readTransactionCount": 0,
                 "readQueryCount": 0,
@@ -10473,7 +10490,7 @@ relation ontology-assertion,
                     "reason": "TypeDB schema function call could not be built.",
                     "candidateSymbols": candidate_symbols,
                 },
-            }
+            })
 
         def budget_failure(
             reason: str = "TypeDB native-rule realtime execution budget is exhausted.",
@@ -10500,6 +10517,7 @@ relation ontology-assertion,
             driver = self.open_driver(imported, request_timeout_seconds=query_timeout)
             read_transaction_count = 0
             read_call_count = 0
+            query_duration_ms = 0.0
             try:
                 self.ensure_database(driver)
                 with driver.transaction(
@@ -10507,13 +10525,17 @@ relation ontology-assertion,
                     transaction_type.READ,
                     self.read_transaction_options(query_timeout),
                 ) as tx:
-                    rows = self.read_rows_in_transaction(
-                        tx,
-                        str(query_plan.get("query")),
-                        query_plan.get("columns") or ["sourceId"],
-                        label="nativeRule:" + str(rule.rule_id or ""),
-                        timeout_seconds=query_timeout,
-                    )
+                    query_started = time.perf_counter()
+                    try:
+                        rows = self.read_rows_in_transaction(
+                            tx,
+                            str(query_plan.get("query")),
+                            query_plan.get("columns") or ["sourceId"],
+                            label="nativeRule:" + str(rule.rule_id or ""),
+                            timeout_seconds=query_timeout,
+                        )
+                    finally:
+                        query_duration_ms += (time.perf_counter() - query_started) * 1000
                 read_transaction_count += 1
                 read_call_count += 1
                 any_condition_query_count = 0
@@ -10527,15 +10549,19 @@ relation ontology-assertion,
                                 read_transaction_count,
                                 read_call_count,
                             )
-                        verification = self.verify_typedb_native_any_conditions(
-                            driver,
-                            transaction_type,
-                            rule,
-                            str(row.get("sourceId") or ""),
-                            min(self.native_rule_query_timeout_seconds(), remaining_seconds),
-                            scoped_manifest_only,
-                            world_id=world_id,
-                        )
+                        verification_started = time.perf_counter()
+                        try:
+                            verification = self.verify_typedb_native_any_conditions(
+                                driver,
+                                transaction_type,
+                                rule,
+                                str(row.get("sourceId") or ""),
+                                min(self.native_rule_query_timeout_seconds(), remaining_seconds),
+                                scoped_manifest_only,
+                                world_id=world_id,
+                            )
+                        finally:
+                            query_duration_ms += (time.perf_counter() - verification_started) * 1000
                         read_transaction_count += int(verification.get("readTransactionCount") or 0)
                         read_call_count += int(verification.get("readQueryCount") or 0)
                         any_condition_query_count += int(verification.get("readQueryCount") or 0)
@@ -10574,16 +10600,18 @@ relation ontology-assertion,
                         "rowCount": len(rows),
                         "candidateSymbols": candidate_symbols,
                         "queryComplexity": int(planned.get("queryComplexity") or 0),
+                        "queryCount": read_call_count,
                         "anyConditionQueryCount": any_condition_query_count,
+                        "queryDurationMs": int(query_duration_ms),
                     },
                 }
             finally:
                 self.close_driver(driver)
 
         try:
-            return self.with_typedb_retries(operation)
+            result = self.with_typedb_retries(operation)
         except Exception as error:  # noqa: BLE001 - a failed independent read blocks the complete generation.
-            return {
+            result = {
                 "status": "partial",
                 "readTransactionCount": 0,
                 "readQueryCount": 0,
@@ -10594,6 +10622,7 @@ relation ontology-assertion,
                     "candidateSymbols": candidate_symbols,
                 },
             }
+        return with_elapsed(result)
 
     def match_typedb_native_rules(
         self,
@@ -10819,6 +10848,9 @@ relation ontology-assertion,
                             rule = planned.get("rule")
                             if not rule:
                                 continue
+                            rule_started = time.perf_counter()
+                            rule_query_count_started = read_call_count
+                            rule_query_duration_ms = 0.0
                             remaining_seconds = deadline - time.monotonic()
                             if remaining_seconds <= 0:
                                 execution_budget_exhausted = True
@@ -10827,6 +10859,7 @@ relation ontology-assertion,
                                     "ruleId": str(rule.rule_id or ""),
                                     "status": "deferred-by-runtime-budget",
                                     "reason": "TypeDB native-rule realtime execution budget is exhausted.",
+                                    "elapsedMs": int((time.perf_counter() - rule_started) * 1000),
                                 })
                                 continue
                             rule_payload = rule.to_dict() if hasattr(rule, "to_dict") else dict(rule or {})
@@ -10865,17 +10898,22 @@ relation ontology-assertion,
                                     "ruleId": str(rule.rule_id or ""),
                                     "status": "blocked",
                                     "reason": "TypeDB schema function call could not be built.",
+                                    "elapsedMs": int((time.perf_counter() - rule_started) * 1000),
                                 })
                                 continue
                             query_timeout = min(self.native_rule_query_timeout_seconds(), remaining_seconds)
                             try:
-                                rows = self.read_rows_in_transaction(
-                                    tx,
-                                    str(query_plan.get("query")),
-                                    query_plan.get("columns") or ["sourceId"],
-                                    label="nativeRule:" + str(rule.rule_id or ""),
-                                    timeout_seconds=query_timeout,
-                                )
+                                query_started = time.perf_counter()
+                                try:
+                                    rows = self.read_rows_in_transaction(
+                                        tx,
+                                        str(query_plan.get("query")),
+                                        query_plan.get("columns") or ["sourceId"],
+                                        label="nativeRule:" + str(rule.rule_id or ""),
+                                        timeout_seconds=query_timeout,
+                                    )
+                                finally:
+                                    rule_query_duration_ms += (time.perf_counter() - query_started) * 1000
                                 read_call_count += 1
                             except Exception as error:  # noqa: BLE001 - a timed-out shared read cannot safely continue.
                                 failure = {
@@ -10883,6 +10921,8 @@ relation ontology-assertion,
                                     "status": "query-timeout" if typedb_error_code(error) == "typedbTimeout" else "query-error",
                                     "reason": str(error)[:220],
                                     "candidateSymbols": candidate_symbols,
+                                    "elapsedMs": int((time.perf_counter() - rule_started) * 1000),
+                                    "queryDurationMs": int(rule_query_duration_ms),
                                 }
                                 skipped_rules.append(failure)
                                 query_failures.append(failure)
@@ -10900,6 +10940,8 @@ relation ontology-assertion,
                                             "status": "deferred-by-runtime-budget",
                                             "reason": "TypeDB native-rule runtime budget was exhausted while verifying any conditions.",
                                             "candidateSymbols": candidate_symbols,
+                                            "elapsedMs": int((time.perf_counter() - rule_started) * 1000),
+                                            "queryDurationMs": int(rule_query_duration_ms),
                                         }
                                         skipped_rules.append(failure)
                                         query_failures.append(failure)
@@ -10907,16 +10949,20 @@ relation ontology-assertion,
                                         execution_incomplete = True
                                         any_condition_failure = True
                                         break
-                                    verification = self.verify_typedb_native_any_conditions(
-                                        driver,
-                                        TransactionType,
-                                        rule,
-                                        str(row.get("sourceId") or ""),
-                                        min(self.native_rule_query_timeout_seconds(), remaining_seconds),
-                                        scoped_manifest_only,
-                                        tx=tx,
-                                        world_id=world_id,
-                                    )
+                                    verification_started = time.perf_counter()
+                                    try:
+                                        verification = self.verify_typedb_native_any_conditions(
+                                            driver,
+                                            TransactionType,
+                                            rule,
+                                            str(row.get("sourceId") or ""),
+                                            min(self.native_rule_query_timeout_seconds(), remaining_seconds),
+                                            scoped_manifest_only,
+                                            tx=tx,
+                                            world_id=world_id,
+                                        )
+                                    finally:
+                                        rule_query_duration_ms += (time.perf_counter() - verification_started) * 1000
                                     read_transaction_count += int(verification.get("readTransactionCount") or 0)
                                     read_call_count += int(verification.get("readQueryCount") or 0)
                                     any_condition_query_count += int(verification.get("readQueryCount") or 0)
@@ -10933,6 +10979,8 @@ relation ontology-assertion,
                                         "status": "any-condition-" + verification_status,
                                         "reason": str(verification.get("reason") or "TypeDB any-condition verification did not complete.")[:220],
                                         "candidateSymbols": candidate_symbols,
+                                        "elapsedMs": int((time.perf_counter() - rule_started) * 1000),
+                                        "queryDurationMs": int(rule_query_duration_ms),
                                     }
                                     skipped_rules.append(failure)
                                     query_failures.append(failure)
@@ -10958,7 +11006,10 @@ relation ontology-assertion,
                                 "rowCount": len(rows),
                                 "candidateSymbols": candidate_symbols,
                                 "queryComplexity": int(planned.get("queryComplexity") or 0),
+                                "queryCount": read_call_count - rule_query_count_started,
                                 "anyConditionQueryCount": any_condition_query_count,
+                                "elapsedMs": int((time.perf_counter() - rule_started) * 1000),
+                                "queryDurationMs": int(rule_query_duration_ms),
                             })
                             self.merge_native_match_rows(rule, query_plan, rows, match_index, matches, world_id)
                 finally:
@@ -12279,6 +12330,8 @@ relation ontology-assertion,
                 (time.perf_counter() - native_query_started) * 1000
             )
             native_query_used = str(native_match_result.get("status") or "") == "ok"
+            native_rule_timing = native_rule_timing_profile(native_match_result)
+            native_rule_timing["wallClockMs"] = native_stage_timings["nativeRuleQueriesMs"]
             runtime_rulebox_metadata.update({
                 "typedbNativeRuleQueryStatus": str(native_match_result.get("status") or ""),
                 "typedbNativeRuleQueryUsed": bool(native_match_result.get("nativeQueryUsed")),
@@ -12293,6 +12346,7 @@ relation ontology-assertion,
                 "typedbNativeRuleSkippedCount": int(number_or_none(native_match_result.get("skippedRuleCount")) or 0),
                 "typedbNativeRuleParallelism": int(number_or_none(native_match_result.get("nativeRuleParallelism")) or 1),
                 "typedbNativeRuleParallelUsed": bool(native_match_result.get("parallelRuleExecution")),
+                "typedbNativeRuleTimingProfile": native_rule_timing,
                 "pythonCompatibilityReasonerUsed": False,
                 "typedbNativeStageTimings": dict(native_stage_timings),
             })

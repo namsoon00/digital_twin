@@ -1564,6 +1564,9 @@ class TypeDBOntologyRepositoryTests(unittest.TestCase):
         self.assertEqual(2, result["readQueryCount"])
         self.assertEqual(2, len(transactions))
         self.assertGreaterEqual(active["maximum"], 2)
+        self.assertEqual(2, len(result["executedRules"]))
+        self.assertTrue(all(int(item["elapsedMs"]) > 0 for item in result["executedRules"]))
+        self.assertTrue(all(int(item["queryDurationMs"]) > 0 for item in result["executedRules"]))
 
     def test_native_rule_planner_uses_only_a_topology_verified_on_the_active_manifest(self):
         graph = PortfolioOntology("planner-topology")

@@ -13,6 +13,7 @@ from typing import Dict, Iterable, List, Mapping
 
 
 ONTOLOGY_RUNTIME_OBSERVATION_VERSION = "ontology-runtime-observation-v1"
+NATIVE_RULE_TIMING_PROFILE_VERSION = "typedb-native-rule-timing-v1"
 
 
 def _text(value: object) -> str:
@@ -129,6 +130,78 @@ def _stage_timings(result: Mapping[str, object]) -> Dict[str, int]:
     }
 
 
+def native_rule_timing_profile(
+    payload: Mapping[str, object] = None,
+    limit: int = 8,
+) -> Dict[str, object]:
+    """Return bounded operational timing for TypeDB schema functions only."""
+
+    values = dict(payload or {}) if isinstance(payload, Mapping) else {}
+    existing = values.get("typedbNativeRuleTimingProfile")
+    if not isinstance(existing, Mapping):
+        existing = values.get("nativeRuleTimingProfile")
+    if isinstance(existing, Mapping) and isinstance(existing.get("slowestRules"), list):
+        rows = [
+            dict(item)
+            for item in existing.get("slowestRules") or []
+            if isinstance(item, Mapping)
+        ]
+        return {
+            "version": _text(existing.get("version")) or NATIVE_RULE_TIMING_PROFILE_VERSION,
+            "wallClockMs": max(0, _integer(existing.get("wallClockMs"))),
+            "executedRuleCount": max(0, _integer(existing.get("executedRuleCount"))),
+            "incompleteRuleCount": max(0, _integer(existing.get("incompleteRuleCount"))),
+            "aggregateRuleElapsedMs": max(0, _integer(existing.get("aggregateRuleElapsedMs"))),
+            "aggregateQueryDurationMs": max(0, _integer(existing.get("aggregateQueryDurationMs"))),
+            "slowestRules": rows[:max(1, min(20, int(limit or 8)))],
+        }
+
+    executed = [
+        dict(item)
+        for item in values.get("executedRules") or []
+        if isinstance(item, Mapping) and _text(item.get("ruleId"))
+    ]
+    skipped = [
+        dict(item)
+        for item in values.get("skippedRules") or []
+        if isinstance(item, Mapping) and _text(item.get("ruleId"))
+    ]
+
+    def timing_row(item: Mapping[str, object], status: str) -> Dict[str, object]:
+        symbols = item.get("candidateSymbols") if isinstance(item.get("candidateSymbols"), list) else []
+        return {
+            "ruleId": _text(item.get("ruleId")),
+            "nativeRuleId": _text(item.get("nativeRuleId")),
+            "schemaFunctionName": _text(item.get("schemaFunctionName")),
+            "status": status,
+            "rowCount": max(0, _integer(item.get("rowCount"))),
+            "candidateSymbolCount": len([symbol for symbol in symbols if _text(symbol)]),
+            "queryComplexity": max(0, _integer(item.get("queryComplexity"))),
+            "queryCount": max(0, _integer(item.get("queryCount"))),
+            "anyConditionQueryCount": max(0, _integer(item.get("anyConditionQueryCount"))),
+            "elapsedMs": max(0, _integer(item.get("elapsedMs"))),
+            "queryDurationMs": max(0, _integer(item.get("queryDurationMs"))),
+        }
+
+    rows = [timing_row(item, "ok") for item in executed]
+    rows.extend(timing_row(item, _text(item.get("status")) or "blocked") for item in skipped)
+    rows.sort(
+        key=lambda item: (item["elapsedMs"], item["queryDurationMs"], item["ruleId"]),
+        reverse=True,
+    )
+    bounded = rows[:max(1, min(20, int(limit or 8)))]
+    return {
+        "version": NATIVE_RULE_TIMING_PROFILE_VERSION,
+        "wallClockMs": max(0, _integer(values.get("wallClockMs"))),
+        "executedRuleCount": len(executed),
+        "incompleteRuleCount": len(skipped),
+        # Parallel rule durations overlap; this is a diagnostic total only.
+        "aggregateRuleElapsedMs": sum(item["elapsedMs"] for item in rows),
+        "aggregateQueryDurationMs": sum(item["queryDurationMs"] for item in rows),
+        "slowestRules": bounded,
+    }
+
+
 def _slo_state(
     result: Mapping[str, object],
     duration_ms: int,
@@ -199,6 +272,7 @@ def build_projection_runtime_observation(
     execution = values.get("ruleboxExecution")
     execution = dict(execution or {}) if isinstance(execution, Mapping) else {}
     stages = _stage_timings(values)
+    native_rule_timing = native_rule_timing_profile(execution)
     delta = _scope_delta(plan)
     duration_ms = iso_duration_ms(
         getattr(projection_run, "started_at", ""),
@@ -264,6 +338,7 @@ def build_projection_runtime_observation(
             "relationCount": _integer(inference.get("relationCount")),
             "entityCount": _integer(inference.get("entityCount")),
             "executionStatus": _text(execution.get("status")),
+            "nativeRuleTiming": native_rule_timing,
         },
         "abox": {
             "snapshotId": _text(values.get("aboxSnapshotId") or getattr(projection_run, "abox_snapshot_id", "")),

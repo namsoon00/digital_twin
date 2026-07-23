@@ -459,6 +459,18 @@ class OntologyProjectionAuditTests(unittest.TestCase):
                 "typedbNativeRuleParallelism": 4,
                 "typedbNativeRuleParallelUsed": True,
                 "nativeRuleSelectionApplied": False,
+                "typedbNativeRuleTimingProfile": {
+                    "wallClockMs": 8200,
+                    "executedRuleCount": 1,
+                    "incompleteRuleCount": 0,
+                    "aggregateRuleElapsedMs": 8100,
+                    "aggregateQueryDurationMs": 7900,
+                    "slowestRules": [{
+                        "ruleId": "market-rule",
+                        "elapsedMs": 8100,
+                        "queryDurationMs": 7900,
+                    }],
+                },
             },
         }
 
@@ -470,6 +482,10 @@ class OntologyProjectionAuditTests(unittest.TestCase):
         self.assertEqual(["market-rule"], result["inferenceReuseProof"]["matchedRuleIds"])
         self.assertEqual(4, completed.result_payload["ruleboxExecution"]["typedbNativeRuleParallelism"])
         self.assertTrue(completed.result_payload["ruleboxExecution"]["typedbNativeRuleParallelUsed"])
+        self.assertEqual(
+            "market-rule",
+            completed.result_payload["ruleboxExecution"]["nativeRuleTiming"]["slowestRules"][0]["ruleId"],
+        )
         self.assertEqual(
             "verified",
             completed.result_payload["inferenceReuseProof"]["status"],

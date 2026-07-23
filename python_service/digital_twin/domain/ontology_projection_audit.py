@@ -5,6 +5,7 @@ from typing import Dict, Iterable, List
 
 from .ontology_change_impact import compact_inference_impact_plan, scope_symbol
 from .ontology_contracts import PortfolioOntology
+from .ontology_runtime_operations import native_rule_timing_profile
 from .portfolio import AccountSnapshot, utc_now_iso
 
 
@@ -263,6 +264,7 @@ def projection_result_summary(result: Dict[str, object]) -> Dict[str, object]:
             "sourceAboxGenerationMode": str(execution.get("sourceAboxGenerationMode") or ""),
             "sourceAboxGenerationValid": bool(execution.get("sourceAboxGenerationValid")),
             "sourceAboxMembershipValidation": str(execution.get("sourceAboxMembershipValidation") or ""),
+            "nativeRuleTiming": native_rule_timing_profile(execution),
             "nativeStageTimings": {
                 str(key): int(value or 0)
                 for key, value in native_stage_timings.items()

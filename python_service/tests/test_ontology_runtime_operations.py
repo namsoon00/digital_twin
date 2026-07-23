@@ -5,6 +5,7 @@ from types import SimpleNamespace
 
 from digital_twin.domain.ontology_runtime_operations import (
     build_projection_runtime_observation,
+    native_rule_timing_profile,
     summarize_projection_runtime_observations,
 )
 from digital_twin.application.ontology_reasoning_service import OntologyReasoningRunner
@@ -180,6 +181,47 @@ class OntologyRuntimeOperationsTests(unittest.TestCase):
         self.assertEqual(4, observation["inference"]["executedRuleCount"])
         self.assertTrue(observation["inference"]["nativeRuleSelectionApplied"])
         self.assertEqual(6200, observation["stages"]["nativeInferenceMs"])
+
+    def test_native_rule_timing_profile_keeps_only_bounded_slowest_rule_details(self):
+        profile = native_rule_timing_profile({
+            "wallClockMs": 8100,
+            "executedRules": [
+                {
+                    "ruleId": "graph.fast",
+                    "nativeRuleId": "typedb.native.graph.fast",
+                    "schemaFunctionName": "orbit_fast",
+                    "rowCount": 1,
+                    "candidateSymbols": ["005930"],
+                    "queryComplexity": 2,
+                    "queryCount": 1,
+                    "elapsedMs": 120,
+                    "queryDurationMs": 100,
+                },
+                {
+                    "ruleId": "graph.slow",
+                    "nativeRuleId": "typedb.native.graph.slow",
+                    "schemaFunctionName": "orbit_slow",
+                    "rowCount": 0,
+                    "candidateSymbols": ["005930"],
+                    "queryComplexity": 6,
+                    "queryCount": 2,
+                    "elapsedMs": 7900,
+                    "queryDurationMs": 7600,
+                },
+            ],
+            "skippedRules": [{
+                "ruleId": "graph.blocked",
+                "status": "query-timeout",
+                "elapsedMs": 300,
+                "queryDurationMs": 280,
+            }],
+        })
+
+        self.assertEqual(8100, profile["wallClockMs"])
+        self.assertEqual(2, profile["executedRuleCount"])
+        self.assertEqual(1, profile["incompleteRuleCount"])
+        self.assertEqual("graph.slow", profile["slowestRules"][0]["ruleId"])
+        self.assertEqual(7600, profile["slowestRules"][0]["queryDurationMs"])
 
     def test_slo_summary_requires_sustained_breach_before_escalation(self):
         warning = build_projection_runtime_observation(

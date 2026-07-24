@@ -216,7 +216,8 @@ def typedb_native_rule_planner_topology_for_execution(
     }
 
 
-NATIVE_RULE_EVIDENCE_READ_INDEX_VERSION = "native-rule-evidence-read-index-v1"
+NATIVE_RULE_EVIDENCE_READ_INDEX_VERSION = "native-rule-evidence-read-index-v2"
+NATIVE_RULE_EVIDENCE_READ_INDEX_LEGACY_VERSION = "native-rule-evidence-read-index-v1"
 NATIVE_RULE_EVIDENCE_READ_INDEX_BATCH_SIZE = 48
 
 
@@ -253,6 +254,10 @@ def native_rule_evidence_read_index_from_rows(
         symbol: set()
         for symbol in source_ids_by_symbol
     }
+    relation_storage_ids_by_symbol_and_type: Dict[str, Dict[str, set]] = {
+        symbol: {}
+        for symbol in source_ids_by_symbol
+    }
     for row in relation_rows or []:
         if str(row.get("ontologyBox") or "ABox") != "ABox":
             continue
@@ -264,9 +269,14 @@ def native_rule_evidence_read_index_from_rows(
             str(row.get("symbol") or "").upper().strip(),
         }
         relation_storage_id = ontology_storage_id(row, relation_row_id(row), "relation")
+        relation_type = str(row.get("relationType") or "").upper().strip()
         for symbol in candidates:
             if symbol and symbol in relation_storage_ids_by_symbol:
                 relation_storage_ids_by_symbol[symbol].add(relation_storage_id)
+                if relation_type:
+                    relation_storage_ids_by_symbol_and_type[symbol].setdefault(relation_type, set()).add(
+                        relation_storage_id
+                    )
 
     payload = {
         "version": NATIVE_RULE_EVIDENCE_READ_INDEX_VERSION,
@@ -282,6 +292,15 @@ def native_rule_evidence_read_index_from_rows(
         },
         "relationStorageIdsBySymbol": {
             symbol: sorted(relation_storage_ids_by_symbol.get(symbol) or set())
+            for symbol in sorted(source_ids_by_symbol)
+        },
+        "relationStorageIdsBySymbolAndType": {
+            symbol: {
+                relation_type: sorted(storage_ids)
+                for relation_type, storage_ids in sorted(
+                    relation_storage_ids_by_symbol_and_type.get(symbol, {}).items()
+                )
+            }
             for symbol in sorted(source_ids_by_symbol)
         },
     }
@@ -305,16 +324,26 @@ def normalize_native_rule_evidence_read_index(
     closed instead of reading a historical ABox relation as current evidence.
     """
     raw = dict(value or {}) if isinstance(value, dict) else {}
-    if str(raw.get("version") or "") != NATIVE_RULE_EVIDENCE_READ_INDEX_VERSION:
+    index_version = str(raw.get("version") or "")
+    if index_version not in {
+        NATIVE_RULE_EVIDENCE_READ_INDEX_VERSION,
+        NATIVE_RULE_EVIDENCE_READ_INDEX_LEGACY_VERSION,
+    }:
         return {"status": "invalid", "reason": "Native rule evidence read index version is unsupported."}
     if raw.get("complete") is not True or str(raw.get("source") or "") != "projection-persistence-rows":
         return {"status": "invalid", "reason": "Native rule evidence read index is not a complete projection persistence index."}
     raw_sources = raw.get("sourceIdsBySymbol") if isinstance(raw.get("sourceIdsBySymbol"), dict) else {}
     raw_storage_ids = raw.get("sourceStorageIdsBySourceId") if isinstance(raw.get("sourceStorageIdsBySourceId"), dict) else {}
     raw_relation_ids = raw.get("relationStorageIdsBySymbol") if isinstance(raw.get("relationStorageIdsBySymbol"), dict) else {}
+    raw_relation_ids_by_type = (
+        raw.get("relationStorageIdsBySymbolAndType")
+        if isinstance(raw.get("relationStorageIdsBySymbolAndType"), dict)
+        else {}
+    )
     source_ids_by_symbol: Dict[str, List[str]] = {}
     source_storage_ids_by_source_id: Dict[str, str] = {}
     relation_storage_ids_by_symbol: Dict[str, List[str]] = {}
+    relation_storage_ids_by_symbol_and_type: Dict[str, Dict[str, List[str]]] = {}
     for raw_symbol, raw_ids in raw_sources.items():
         symbol = str(raw_symbol or "").upper().strip()
         ids = sorted({str(item or "").strip() for item in raw_ids or [] if str(item or "").strip()})
@@ -331,8 +360,19 @@ def normalize_native_rule_evidence_read_index(
             for item in raw_relation_ids.get(symbol, []) or []
             if str(item or "").strip()
         })
+        typed_relation_ids: Dict[str, List[str]] = {}
+        for raw_relation_type, raw_storage_ids in dict(raw_relation_ids_by_type.get(symbol) or {}).items():
+            relation_type = str(raw_relation_type or "").upper().strip()
+            storage_ids = sorted({
+                str(item or "").strip()
+                for item in raw_storage_ids or []
+                if str(item or "").strip()
+            })
+            if relation_type and storage_ids:
+                typed_relation_ids[relation_type] = storage_ids
+        relation_storage_ids_by_symbol_and_type[symbol] = typed_relation_ids
     payload = {
-        "version": NATIVE_RULE_EVIDENCE_READ_INDEX_VERSION,
+        "version": index_version,
         "complete": True,
         "source": "projection-persistence-rows",
         "sourceIdsBySymbol": {
@@ -348,6 +388,11 @@ def normalize_native_rule_evidence_read_index(
             for symbol in sorted(source_ids_by_symbol)
         },
     }
+    if index_version == NATIVE_RULE_EVIDENCE_READ_INDEX_VERSION:
+        payload["relationStorageIdsBySymbolAndType"] = {
+            symbol: relation_storage_ids_by_symbol_and_type[symbol]
+            for symbol in sorted(source_ids_by_symbol)
+        }
     canonical = json.dumps(payload, ensure_ascii=True, sort_keys=True, separators=(",", ":"))
     fingerprint = "native-rule-evidence-index:" + hashlib.sha256(canonical.encode("utf-8")).hexdigest()[:24]
     if str(raw.get("fingerprint") or "") != fingerprint:
@@ -381,6 +426,10 @@ def normalize_native_rule_evidence_read_index(
             symbol: list(relation_storage_ids_by_symbol.get(symbol, []))
             for symbol in selected_symbols
         },
+        "relationStorageIdsBySymbolAndType": {
+            symbol: dict(relation_storage_ids_by_symbol_and_type.get(symbol, {}))
+            for symbol in selected_symbols
+        } if index_version == NATIVE_RULE_EVIDENCE_READ_INDEX_VERSION else {},
     }
 
 
@@ -10433,9 +10482,27 @@ relation ontology-assertion,
             dict(index_payload.get("sourceStorageIdsBySourceId") or {}).get(str(source_id or "")) or ""
         ).strip()
         source_symbol = symbol_from_subject(str(source_id or ""))
-        relation_storage_ids = list(
-            dict(index_payload.get("relationStorageIdsBySymbol") or {}).get(source_symbol, []) or []
+        relation_storage_ids_by_type = dict(
+            dict(index_payload.get("relationStorageIdsBySymbolAndType") or {}).get(source_symbol, {}) or {}
         )
+        any_relation_types = {
+            str(getattr(condition, "relation_type", "") or "").upper().strip()
+            for condition in conditions
+            if str(getattr(condition, "kind", "") or "") == "relation"
+            and str(getattr(condition, "relation_type", "") or "").strip()
+        }
+        relation_storage_ids = sorted({
+            str(storage_id or "").strip()
+            for relation_type in any_relation_types
+            for storage_id in relation_storage_ids_by_type.get(relation_type, []) or []
+            if str(storage_id or "").strip()
+        })
+        # A v1 Manifest records the stock's exact physical source row but not
+        # relation ids by type.  The relation endpoints are generation-scoped
+        # physical nodes, so binding that source is already an exact active
+        # ABox boundary.  Do not expand every relation id from the v1 index
+        # into a large `or` solely to recreate a boundary the source link
+        # already proves.  v2 narrows further to the rule's relation types.
         query_plan = typedb_native_any_group_check_query(
             rule.to_dict() if hasattr(rule, "to_dict") else dict(rule or {}),
             source_id,
@@ -15381,7 +15448,6 @@ def typedb_native_any_group_check_query(
         )
         if (
             clean_source_storage_id
-            and clean_relation_storage_ids
             and shared_relation_conditions
         ):
             first_condition = dict(conditions[0][1])
@@ -15412,14 +15478,15 @@ def typedb_native_any_group_check_query(
                     source_var + " isa ontology-node, has ontology-id " + typedb_string(clean_source_id)
                     + ", has ontology-storage-id " + typedb_string(clean_source_storage_id) + ";",
                     link_clause,
-                    typedb_value_match(
+                ]
+                if clean_relation_storage_ids:
+                    structural_clauses.append(typedb_value_match(
                         relation_var,
                         "ontology-storage-id",
                         clean_relation_storage_ids,
                         "==",
                         "anyIndexedRelationStorage",
-                    ),
-                ]
+                    ))
                 if target_kind:
                     structural_clauses.append(
                         target_var + " has ontology-kind " + typedb_string(target_kind) + ";"
@@ -15475,7 +15542,96 @@ def typedb_native_any_group_check_query(
                         + " " + source_var + " has ontology-id $sourceId, has ontology-label $sourceLabel;"
                     ),
                     "columns": ["sourceId", "sourceLabel"],
-                    "anyConditionCheckMode": "exists-any-manifest-indexed-relation",
+                    "anyConditionCheckMode": (
+                        "exists-any-manifest-indexed-relation"
+                        if clean_relation_storage_ids
+                        else "exists-any-manifest-indexed-source"
+                    ),
+                }
+            # Some N=1 groups use the same active evidence set but different
+            # relation shapes.  Valuation checks are a representative case:
+            # one branch tests PE and another tests beta.  Constraining every
+            # branch to the verified physical rows in the active Manifest
+            # avoids repeating the historical scope-pointer traversal while
+            # preserving the complete alternative decision inside TypeDB.
+            indexed_branches: List[str] = []
+            for branch_index, (_condition_index, condition) in enumerate(conditions):
+                relation_type, direction, target_kind = relation_shape(condition)
+                if not relation_type:
+                    indexed_branches = []
+                    break
+                target_var = "$anyIndexedBranchTarget" + str(branch_index)
+                relation_var = "$anyIndexedBranchRelation" + str(branch_index)
+                if direction == "in":
+                    link_clause = (
+                        target_var + " isa ontology-node; "
+                        + relation_var + " isa ontology-assertion, links (source: " + target_var
+                        + ", target: $source), has ontology-relation-type "
+                        + typedb_string(relation_type) + ";"
+                    )
+                else:
+                    link_clause = (
+                        target_var + " isa ontology-node; "
+                        + relation_var + " isa ontology-assertion, links (source: $source, target: "
+                        + target_var + "), has ontology-relation-type "
+                        + typedb_string(relation_type) + ";"
+                    )
+                branch_clauses = [
+                    link_clause,
+                ]
+                if clean_relation_storage_ids:
+                    branch_clauses.append(typedb_value_match(
+                        relation_var,
+                        "ontology-storage-id",
+                        clean_relation_storage_ids,
+                        "==",
+                        "anyIndexedBranchRelationStorage" + str(branch_index),
+                    ))
+                if target_kind:
+                    branch_clauses.append(
+                        target_var + " has ontology-kind " + typedb_string(target_kind) + ";"
+                    )
+                for filter_index, (filter_key, expected) in enumerate(dict(
+                    condition.get("target_property_filters") or condition.get("targetPropertyFilters") or {}
+                ).items()):
+                    attribute = typedb_target_attribute(str(filter_key))
+                    if attribute:
+                        clause = typedb_value_match(
+                            target_var,
+                            attribute,
+                            expected,
+                            typedb_filter_operator(str(filter_key), expected),
+                            "anyIndexedBranchTargetValue" + str(branch_index) + "_" + str(filter_index),
+                        )
+                        if clause:
+                            branch_clauses.append(clause)
+                for filter_index, (filter_key, expected) in enumerate(dict(
+                    condition.get("relation_property_filters") or condition.get("relationPropertyFilters") or {}
+                ).items()):
+                    attribute = typedb_relation_attribute(str(filter_key))
+                    if attribute:
+                        clause = typedb_value_match(
+                            relation_var,
+                            attribute,
+                            expected,
+                            typedb_filter_operator(str(filter_key), expected),
+                            "anyIndexedBranchRelationValue" + str(branch_index) + "_" + str(filter_index),
+                        )
+                        if clause:
+                            branch_clauses.append(clause)
+                indexed_branches.append("{ " + " ".join(branch_clauses) + " }")
+            if indexed_branches:
+                return {
+                    "ruleId": str(rule.get("rule_id") or rule.get("ruleId") or ""),
+                    "nativeRuleId": typedb_native_rule_id(str(rule.get("rule_id") or rule.get("ruleId") or "")),
+                    "query": (
+                        "match $source isa ontology-node, has ontology-id " + typedb_string(clean_source_id)
+                        + ", has ontology-storage-id " + typedb_string(clean_source_storage_id) + ";"
+                        + " match " + " or ".join(indexed_branches) + ";"
+                        + " $source has ontology-id $sourceId, has ontology-label $sourceLabel;"
+                    ),
+                    "columns": ["sourceId", "sourceLabel"],
+                    "anyConditionCheckMode": "exists-any-manifest-indexed-relation-branches",
                 }
         scoped_manifest_variable = "$activeManifestId" if scoped_manifest_only else ""
         clauses: List[str] = []

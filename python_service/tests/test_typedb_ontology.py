@@ -6172,6 +6172,73 @@ class TypeDBOntologyRepositoryTests(unittest.TestCase):
         self.assertIn("ontology-pe-ratio", query)
         self.assertIn("ontology-beta", query)
 
+    def test_typedb_any_group_check_indexes_different_relation_branches_to_active_manifest(self):
+        rule = next(
+            item
+            for item in default_graph_inference_rules()
+            if item.rule_id == "graph.valuation.high_beta_or_expensive.review.v1"
+        )
+
+        plan = typedb_native_any_group_check_query(
+            rule.to_dict(),
+            "stock:MSTR",
+            scoped_manifest_only=True,
+            world_id="portfolio:local:default",
+            active_source_storage_id="ontology-storage:active-mstr",
+            active_relation_storage_ids=["ontology-storage:active-valuation"],
+        )
+        query = plan["query"]
+
+        self.assertEqual("exists-any-manifest-indexed-relation", plan["anyConditionCheckMode"])
+        self.assertIn('has ontology-storage-id "ontology-storage:active-mstr"', query)
+        self.assertEqual(1, query.count('has ontology-relation-type "HAS_VALUATION"'))
+        self.assertIn("ontology-pe-ratio", query)
+        self.assertIn("ontology-beta", query)
+        self.assertNotIn('has ontology-kind "abox-scope-active-pointer"', query)
+
+    def test_typedb_any_group_check_indexes_mixed_relation_shapes_to_active_manifest(self):
+        rule = {
+            "rule_id": "test.mixed-relation-any.v1",
+            "source_kind": "stock",
+            "any_condition_min_count": 1,
+            "conditions": [
+                {
+                    "condition_id": "valuation",
+                    "kind": "relation",
+                    "relation_type": "HAS_VALUATION",
+                    "direction": "out",
+                    "target_kind": "valuation-assumption",
+                    "target_property_filters": {"peRatio": {"operator": ">=", "value": 45}},
+                    "role": "any",
+                },
+                {
+                    "condition_id": "macro",
+                    "kind": "relation",
+                    "relation_type": "HAS_MACRO_REGIME",
+                    "direction": "out",
+                    "target_kind": "macro-regime",
+                    "target_property_filters": {"value": {"operator": ">=", "value": 4.5}},
+                    "role": "any",
+                },
+            ],
+        }
+
+        plan = typedb_native_any_group_check_query(
+            rule,
+            "stock:MSTR",
+            scoped_manifest_only=True,
+            world_id="portfolio:local:default",
+            active_source_storage_id="ontology-storage:active-mstr",
+            active_relation_storage_ids=["ontology-storage:active-valuation", "ontology-storage:active-macro"],
+        )
+        query = plan["query"]
+
+        self.assertEqual("exists-any-manifest-indexed-relation-branches", plan["anyConditionCheckMode"])
+        self.assertIn('has ontology-relation-type "HAS_VALUATION"', query)
+        self.assertIn('has ontology-relation-type "HAS_MACRO_REGIME"', query)
+        self.assertIn('has ontology-storage-id "ontology-storage:active-mstr"', query)
+        self.assertNotIn('has ontology-kind "abox-scope-active-pointer"', query)
+
     def test_typedb_any_group_check_shares_relation_join_for_alternative_thresholds(self):
         rule = next(
             item

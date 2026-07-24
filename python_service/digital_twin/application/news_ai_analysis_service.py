@@ -7,6 +7,7 @@ from ..domain.news_ai_analysis import (
     apply_news_ai_analysis,
     local_news_ai_analysis,
     news_ai_analysis_is_current,
+    news_ai_analysis_retryable,
 )
 from ..domain.news_analysis import news_state_rank, news_state_payload
 
@@ -54,11 +55,21 @@ class NewsAiAnalysisService:
         self.settings = dict(settings or {})
         self._external_analysis_used = 0
 
+    def begin_run(self) -> Dict[str, int]:
+        """Reset the budget named ``MaxPerRun`` before each collection cycle."""
+        self._external_analysis_used = 0
+        return {"externalAnalysisUsed": self._external_analysis_used}
+
     def enabled(self) -> bool:
         return truthy(self.settings.get("newsAiAnalysisEnabled"), True)
 
     def inline_timeout_seconds(self) -> int:
         return int_setting(self.settings, "newsAiAnalysisInlineTimeoutSeconds", 8, 1, 120)
+
+    def analysis_needs_work(self, evidence: ResearchEvidence) -> bool:
+        if evidence.kind != "news":
+            return False
+        return not news_ai_analysis_is_current(evidence) or news_ai_analysis_retryable(evidence)
 
     def analyze_evidence(
         self,
@@ -66,9 +77,7 @@ class NewsAiAnalysisService:
         evidence: ResearchEvidence,
         external_timeout_seconds: int = 0,
     ) -> ResearchEvidence:
-        if not self.enabled() or evidence.kind != "news":
-            return evidence
-        if news_ai_analysis_is_current(evidence):
+        if not self.enabled() or not self.analysis_needs_work(evidence):
             return evidence
         try:
             if self.analyzer and hasattr(self.analyzer, "analyze"):
@@ -93,7 +102,7 @@ class NewsAiAnalysisService:
         return apply_news_ai_analysis(evidence, analysis_payload)
 
     def local_analyze_evidence(self, target: NewsCollectionTarget, evidence: ResearchEvidence, reason: str = "") -> ResearchEvidence:
-        if not self.enabled() or evidence.kind != "news" or news_ai_analysis_is_current(evidence):
+        if not self.enabled() or not self.analysis_needs_work(evidence):
             return evidence
         analysis_payload = local_news_ai_analysis(target, evidence).to_dict()
         if reason:
@@ -115,14 +124,17 @@ class NewsAiAnalysisService:
         max_per_run = int_setting(self.settings, "newsAiAnalysisMaxPerRun", 10000, 0, 10000)
         remaining_run_budget = max(0, max_per_run - self._external_analysis_used)
         max_external = min(max_per_target, remaining_run_budget)
+        candidates = [item for item in rows if self.analysis_needs_work(item)]
         selected_ids = {
             id(item)
-            for item in sorted(rows, key=analysis_priority, reverse=True)[:max_external]
-            if getattr(item, "kind", "") == "news"
+            for item in sorted(candidates, key=analysis_priority, reverse=True)[:max_external]
         }
         skipped_reason = "외부 AI 기사 분석 우선순위 제한으로 로컬 기사 분석 사용"
         analyzed: List[ResearchEvidence] = []
         for item in rows:
+            if not self.analysis_needs_work(item):
+                analyzed.append(item)
+                continue
             if id(item) in selected_ids:
                 remaining_seconds = self.inline_timeout_seconds()
                 if deadline_monotonic:

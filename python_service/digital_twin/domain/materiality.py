@@ -302,7 +302,9 @@ def evidence_materiality(evidence, settings: Dict[str, object] = None) -> Materi
         eligible = bool(payload.get("materialityPassed"))
     polarity = str(getattr(evidence, "polarity", "") or "context").lower()
     read_scope = str(payload.get("readScope") or (payload.get("aiAnalysis") or {}).get("readScope") or "").lower()
-    body_read = read_scope in {"full", "full-body", "article-body", "body"} or bool(payload.get("articleSummaryKo"))
+    article_facts = payload.get("articleFacts") if isinstance(payload.get("articleFacts"), dict) else {}
+    body_read = read_scope in {"full", "full-body", "article-body", "body"} or str(payload.get("articleReadStatus") or "").lower() == "body"
+    body_read = body_read and article_facts.get("bodyQualityPassed") is not False and payload.get("bodyQualityPassed") is not False
     blocked = quality_gate.get("passed") is False or governance.get("dataState") in {"insufficient", "unavailable"}
     matched = ["direct-scope" if scope == "direct" else "investable-context"]
     if body_read:

@@ -7,7 +7,7 @@ from .market_data import clamp, number
 
 NEWS_ANALYSIS_VERSION = "news-analysis-v4-editorial-boundary"
 ARTICLE_DIGEST_VERSION = "article-digest-ko-v3"
-ARTICLE_FACTS_VERSION = "article-facts-v1"
+ARTICLE_FACTS_VERSION = "article-facts-v2"
 
 SUPPORT_KEYWORDS = (
     "beat",
@@ -499,6 +499,8 @@ def news_state_payload(payload: Dict[str, object]) -> Dict[str, str]:
     body_read = str(payload.get("articleReadStatus") or payload.get("readScope") or "").strip().lower() in {
         "body", "full", "full-body", "article-body"
     }
+    body_quality_passed = payload.get("bodyQualityPassed")
+    body_read = body_read and body_quality_passed is not False
     data_state = "insufficient" if excluded else "sufficient" if body_read and relevance_state == "direct" else "partial"
     validation_state = "blocked" if excluded else "ready" if data_state == "sufficient" and source_trust_state in {"trusted", "standard"} else "conditional"
     data_state = str(payload.get("dataState") or data_state).strip().lower()
@@ -917,13 +919,67 @@ def is_news_boilerplate_sentence(value: object) -> bool:
     return False
 
 
-def clean_article_summary_noise(value: object) -> str:
-    text = compact_text(value, 1200)
+def clean_article_summary_noise(value: object, limit: int = 1200) -> str:
+    text = compact_text(value, max(1, int(limit or 1200)))
     if not text:
         return ""
     parts = re.split(r"(?<=입니다[.。])\s+|(?<=다[.。])\s+|(?<=[.!?。！？])\s+", text)
     cleaned = [part.strip() for part in parts if part.strip() and not is_news_boilerplate_sentence(part)]
     return " ".join(cleaned).strip() if cleaned else ("" if is_news_boilerplate_sentence(text) else text)
+
+
+def article_body_quality(article_text: object, minimum_chars: int = 280) -> Dict[str, object]:
+    """Classify extraction adequacy before the text becomes investment evidence."""
+    text = compact_text(article_text, 5000)
+    if not text:
+        return {
+            "state": "unavailable",
+            "passed": False,
+            "reason": "원문 본문이 수집되지 않았습니다.",
+            "charCount": 0,
+        }
+    char_count = len(text)
+    minimum = max(80, min(5000, int(minimum_chars or 280)))
+    if char_count < minimum:
+        return {
+            "state": "limited",
+            "passed": False,
+            "reason": "정제된 본문이 너무 짧아 문맥 검증에 부족합니다.",
+            "charCount": char_count,
+        }
+    sentences = [
+        compact_text(part, 360)
+        for part in re.split(r"(?<=[.!?。！？])\\s+|\\n+", text)
+        if len(compact_text(part, 360)) >= 24
+    ]
+    if len(sentences) >= 3:
+        unique_ratio = len({item.casefold() for item in sentences}) / len(sentences)
+        if unique_ratio < 0.65:
+            return {
+                "state": "limited",
+                "passed": False,
+                "reason": "본문에 반복 문장이 많아 기사 문맥으로 신뢰하기 어렵습니다.",
+                "charCount": char_count,
+            }
+    return {
+        "state": "usable",
+        "passed": True,
+        "reason": "정제된 원문 본문을 확보했습니다.",
+        "charCount": char_count,
+    }
+
+
+def article_quality_gate(article_facts: Dict[str, object]) -> Dict[str, object]:
+    facts = article_facts if isinstance(article_facts, dict) else {}
+    passed = facts.get("bodyQualityPassed") is True
+    return {
+        "stage": "article-body-quality",
+        "decision": "accept" if passed else "hold",
+        "passed": passed,
+        "reason": str(facts.get("bodyQualityReason") or "원문 본문 품질을 확인하지 못했습니다."),
+        "bodyQualityState": str(facts.get("bodyQualityState") or "unavailable"),
+        "bodyCharCount": int(number(facts.get("bodyCharCount")) or 0),
+    }
 
 
 def strip_feed_summary_prefix(value: object) -> str:
@@ -1498,14 +1554,16 @@ def article_analysis_facts(
     analysis_source: object = "",
     analysis_quality: object = "",
     summary_ko: object = "",
+    body_minimum_chars: int = 280,
 ) -> Dict[str, object]:
     analysis = analysis if isinstance(analysis, dict) else {}
     stock_impact = stock_impact if isinstance(stock_impact, dict) else {}
     title_text = clean_article_title(title)
-    body_text = clean_article_summary_noise(compact_text(article_text, 5000))
+    body_text = clean_article_summary_noise(compact_text(article_text, 5000), 5000)
     feed_text = clean_article_summary_noise(compact_text(feed_summary, 1600))
     source_text = body_text or feed_text or title_text
     status = str(read_status or ("body" if body_text else "feed-summary")).strip()
+    body_quality = article_body_quality(body_text, body_minimum_chars)
     event_type = str(analysis.get("eventType") or classify_news_event_type(title_text, source_text))
     summary_text = str(summary_ko or "").strip() or korean_article_summary(
         target,
@@ -1518,6 +1576,7 @@ def article_analysis_facts(
     states = news_state_payload({
         **analysis,
         "articleReadStatus": status,
+        "bodyQualityPassed": body_quality["passed"],
     })
     facts = {
         "version": ARTICLE_FACTS_VERSION,
@@ -1532,6 +1591,9 @@ def article_analysis_facts(
         "publishedAt": str(published or "").strip(),
         "bodyAvailable": bool(body_text),
         "bodyCharCount": len(body_text),
+        "bodyQualityState": body_quality["state"],
+        "bodyQualityPassed": body_quality["passed"],
+        "bodyQualityReason": body_quality["reason"],
         "feedSummaryAvailable": bool(feed_text),
         "eventType": event_type,
         "eventTypeLabel": event_type_label(event_type),

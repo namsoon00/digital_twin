@@ -26,6 +26,10 @@ JsonFetcher = Callable[[str, Dict[str, str]], object]
 TextFetcher = Callable[[str, Dict[str, str]], str]
 PostTextFetcher = Callable[[str, bytes, Dict[str, str]], str]
 TAG_RE = re.compile(r"<[^>]+>")
+JSON_LD_SCRIPT_RE = re.compile(
+    r"<script\b[^>]*\btype\s*=\s*(['\"])application/ld\+json(?:;[^'\"]*)?\1[^>]*>(.*?)</script\s*>",
+    flags=re.IGNORECASE | re.DOTALL,
+)
 DISABLED_VALUES = {"0", "false", "no", "off", "disabled"}
 ARTICLE_TEXT_LIMIT = 5000
 DEFAULT_NEWS_COLLECTION_PROVIDERS = ["yahoo_search", "yahoo_finance"]
@@ -211,14 +215,14 @@ def article_block_is_useful(text: object) -> bool:
         "광고",
         "저작권",
         "무단전재",
-        "기자",
     ]):
         return False
     return True
 
 
-def clean_article_block(text: object) -> str:
-    value = compact_text(text, 500)
+def clean_article_block(text: object, limit: int = 500) -> str:
+    limit = max(80, min(ARTICLE_TEXT_LIMIT, int(limit or 500)))
+    value = compact_text(text, limit)
     if not value:
         return ""
     for marker in ["Sign in to access your portfolio", "Are you ahead, or behind on retirement?"]:
@@ -238,7 +242,7 @@ def clean_article_block(text: object) -> str:
     numeric_count = len(re.findall(r"[+-]?\d[\d,]*(?:\.\d+)?%?", value))
     if price_change_count >= 2 or (ticker_count >= 4 and numeric_count >= 6):
         return ""
-    return compact_text(value, 500)
+    return compact_text(value, limit)
 
 
 def article_body_allowed_for_source(source: object, provider: object = "") -> bool:
@@ -288,6 +292,49 @@ class ArticleTextParser(HTMLParser):
             self.buffer.append(text)
 
 
+def json_ld_nodes(value: object) -> Iterable[Dict[str, object]]:
+    """Yield JSON-LD objects without assuming one publisher-specific shape."""
+    stack = [value]
+    while stack:
+        current = stack.pop()
+        if isinstance(current, list):
+            stack.extend(reversed(current))
+            continue
+        if not isinstance(current, dict):
+            continue
+        yield current
+        graph = current.get("@graph")
+        if isinstance(graph, (dict, list)):
+            stack.append(graph)
+
+
+def json_ld_article_blocks(raw_html: object) -> List[str]:
+    blocks: List[str] = []
+    seen = set()
+    for match in JSON_LD_SCRIPT_RE.finditer(str(raw_html or "")):
+        raw_json = html.unescape(match.group(2) or "").strip()
+        if raw_json.startswith("<!--") and raw_json.endswith("-->"):
+            raw_json = raw_json[4:-3].strip()
+        try:
+            payload = json.loads(raw_json)
+        except (TypeError, ValueError, json.JSONDecodeError):
+            continue
+        for node in json_ld_nodes(payload):
+            type_value = node.get("@type")
+            types = type_value if isinstance(type_value, list) else [type_value]
+            is_article = any(str(item or "").strip().lower().endswith("article") for item in types)
+            if not is_article:
+                continue
+            text = clean_article_block(node.get("articleBody") or "", ARTICLE_TEXT_LIMIT)
+            if not article_block_is_useful(text):
+                continue
+            key = text.casefold()
+            if key not in seen:
+                seen.add(key)
+                blocks.append(text)
+    return blocks
+
+
 def extract_article_text(raw_html: object) -> str:
     text = str(raw_html or "")
     if not text.strip():
@@ -300,11 +347,12 @@ def extract_article_text(raw_html: object) -> str:
         parser.feed(text)
     except Exception:  # noqa: BLE001 - malformed news HTML should fall back to feed summaries.
         return ""
-    blocks: List[str] = []
-    if article_block_is_useful(parser.meta_description):
+    blocks = json_ld_article_blocks(text)
+    if not blocks and article_block_is_useful(parser.meta_description):
         blocks.append(compact_text(parser.meta_description, 420))
     seen = {item.casefold() for item in blocks}
-    for block in parser.blocks:
+    html_blocks = parser.blocks if len(" ".join(blocks)) < 1200 else []
+    for block in html_blocks:
         key = block.casefold()
         if key in seen:
             continue
@@ -362,6 +410,18 @@ class NewsSourceGateway:
         self._google_original_url_fetches_used = 0
         self._google_original_url_fetches_for_target = 0
         self._current_provider_diagnostics: Dict[str, int] = {}
+
+    def begin_run(self) -> Dict[str, int]:
+        """Reset counters whose configured limit is explicitly per collection run."""
+        self._article_body_fetches_used = 0
+        self._article_body_fetches_for_target = 0
+        self._google_original_url_fetches_used = 0
+        self._google_original_url_fetches_for_target = 0
+        self.reset_provider_diagnostics()
+        return {
+            "articleBodyFetchesUsed": self._article_body_fetches_used,
+            "googleOriginalUrlFetchesUsed": self._google_original_url_fetches_used,
+        }
 
     def reset_provider_diagnostics(self) -> None:
         self._current_provider_diagnostics = {
@@ -561,6 +621,9 @@ class NewsSourceGateway:
 
     def article_body_max_per_run(self) -> int:
         return int_setting(self.settings, "newsCollectionArticleBodyMaxPerRun", 12, 0, 10000)
+
+    def article_body_minimum_chars(self) -> int:
+        return int_setting(self.settings, "newsCollectionArticleBodyMinimumChars", 280, 80, ARTICLE_TEXT_LIMIT)
 
     def google_original_url_resolution_enabled(self) -> bool:
         return truthy(self.settings.get("newsCollectionGoogleOriginalUrlResolveEnabled"), True)
@@ -782,6 +845,7 @@ class NewsSourceGateway:
             analysis_source,
             analysis_quality,
             summary_ko,
+            self.article_body_minimum_chars(),
         )
         symbol = target.normalized_symbol()
         payload = {
@@ -793,7 +857,11 @@ class NewsSourceGateway:
             "articleAnalysisSource": analysis_source,
             "articleAnalysisQuality": analysis_quality,
             "articleFacts": article_facts,
+            "articleText": compact_text(article_text, ARTICLE_TEXT_LIMIT) if article_text else "",
             "articleTextPreview": compact_text(article_text, 700) if article_text else "",
+            "bodyQualityState": article_facts.get("bodyQualityState"),
+            "bodyQualityPassed": article_facts.get("bodyQualityPassed"),
+            "qualityGate": news_domain.article_quality_gate(article_facts),
             "googleNewsFeedUrl": original_link if original_link != article_link else "",
             "articleSourceUrl": article_link,
         }

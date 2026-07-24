@@ -91,6 +91,8 @@ def research_evidence_state(item: object, raw_payload: Dict[str, object]) -> Dic
         or ""
     ).strip().lower()
     body_read = read_scope in {"body", "full-body", "full", "article-body"}
+    article_facts = raw_payload.get("articleFacts") if isinstance(raw_payload.get("articleFacts"), dict) else {}
+    body_read = body_read and article_facts.get("bodyQualityPassed") is not False and raw_payload.get("bodyQualityPassed") is not False
     polarity = str(getattr(item, "polarity", "") or "context").strip().lower()
     evidence_role = "risk" if polarity in {"risk", "negative", "bearish"} else "support" if polarity in {"support", "positive", "bullish"} else "context"
     if not eligible:

@@ -249,6 +249,8 @@ class NewsCollectionRunner:
         source_blocked = 0
         feed_only = 0
         body_missing = 0
+        body_quality_limited = 0
+        body_quality_usable = 0
         ai_analyzed = 0
         ai_fallback = 0
         for item in news_items:
@@ -264,13 +266,18 @@ class NewsCollectionRunner:
                 feed_only += 1
             if not body_available:
                 body_missing += 1
+            elif facts.get("bodyQualityPassed") is False:
+                body_quality_limited += 1
+            else:
+                body_quality_usable += 1
             analysis = payload.get("aiAnalysis") if isinstance(payload.get("aiAnalysis"), dict) else {}
             if analysis:
                 ai_analyzed += 1
                 if str(analysis.get("status") or "") == "fallback":
                     ai_fallback += 1
         total = len(news_items)
-        body_failure_rate = (body_missing / total) if total else 0.0
+        body_quality_failure_count = body_missing + body_quality_limited
+        body_failure_rate = (body_quality_failure_count / total) if total else 0.0
         warn_rate = float_setting(self.settings, "newsArticleBodyFailureWarnRate", 0.4, 0.0, 1.0)
         warn_min = int_setting(self.settings, "newsArticleBodyFailureMinimumCount", 5, 1, 1000)
         status = "empty" if not total else ("degraded" if total >= warn_min and body_failure_rate >= warn_rate else "ok")
@@ -281,6 +288,9 @@ class NewsCollectionRunner:
             "feedOnlyCount": feed_only,
             "sourceBlockedCount": source_blocked,
             "bodyMissingCount": body_missing,
+            "bodyQualityUsableCount": body_quality_usable,
+            "bodyQualityLimitedCount": body_quality_limited,
+            "bodyQualityFailureCount": body_quality_failure_count,
             "bodyFailureRate": round(body_failure_rate, 3),
             "bodyFailureWarnRate": warn_rate,
             "aiAnalyzedCount": ai_analyzed,
@@ -380,16 +390,35 @@ class NewsCollectionRunner:
     def targets(self) -> List[NewsCollectionTarget]:
         return list(self.target_plan().get("targets") or [])
 
+    def begin_collection_run(self) -> Dict[str, object]:
+        """Start a fresh budget window on long-lived collection collaborators."""
+        contexts: Dict[str, object] = {}
+        for name, component in [
+            ("gateway", self.gateway),
+            ("articleAnalysis", self.article_analysis_service),
+        ]:
+            begin = getattr(component, "begin_run", None)
+            if not callable(begin):
+                contexts[name] = {"status": "not-supported"}
+                continue
+            try:
+                result = begin()
+                contexts[name] = dict(result or {}) if isinstance(result, dict) else {"status": "ok"}
+            except Exception as error:  # noqa: BLE001 - a reset failure must be observable, not stop collection.
+                contexts[name] = {"status": "error", "message": str(error)[:180]}
+        return contexts
+
     def run_once(self, force: bool = False) -> Dict[str, object]:
         if not self.enabled() and not force:
             return self.with_health({"status": "disabled", "targetCount": 0, "fetchedCount": 0, "savedCount": 0})
+        collection_run = self.begin_collection_run()
         cleanup = self.delete_stale_news()
         feed_only_cleanup = self.delete_feed_only_rss_news()
         target_plan = self.target_plan()
         targets = list(target_plan.get("targets") or [])
         selection_metadata = {key: value for key, value in target_plan.items() if key != "targets"}
         if not targets:
-            return self.with_health({"status": "noTargets", "targetCount": 0, "fetchedCount": 0, "savedCount": 0, "staleDeletedCount": cleanup.get("deleted", 0), "staleCleanup": cleanup, "feedOnlyRssCleanup": feed_only_cleanup, "targetSelection": selection_metadata})
+            return self.with_health({"status": "noTargets", "targetCount": 0, "fetchedCount": 0, "savedCount": 0, "staleDeletedCount": cleanup.get("deleted", 0), "staleCleanup": cleanup, "feedOnlyRssCleanup": feed_only_cleanup, "targetSelection": selection_metadata, "collectionRun": collection_run})
         collected: List[ResearchEvidence] = []
         stale_items: List[ResearchEvidence] = []
         statuses: List[Dict[str, object]] = []
@@ -460,6 +489,7 @@ class NewsCollectionRunner:
                 "targetCount": len(targets),
                 "processedTargetCount": len(processed_symbols),
                 "targetSelection": selection_metadata,
+                "collectionRun": collection_run,
                 "runBudget": {
                     "seconds": budget_seconds,
                     "elapsedSeconds": round(self.monotonic_fn() - started, 3),

@@ -676,6 +676,7 @@ def settings_status_payload() -> Dict[str, object]:
         "newsCollectionGoogleOriginalUrlResolveEnabled",
         "newsCollectionGoogleOriginalUrlMaxPerTarget",
         "newsCollectionGoogleOriginalUrlMaxPerRun",
+        "newsCollectionArticleBodyMinimumChars",
         "newsCollectionMinimumRelevanceState",
         "newsDigestMinimumRelevanceState",
         "newsDigestMinimumMaterialityState",

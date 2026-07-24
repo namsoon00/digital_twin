@@ -420,6 +420,7 @@ def admin_preview_config() -> Dict[str, object]:
                     {"key": "newsCollectionGoogleOriginalUrlResolveEnabled", "label": "Google RSS 원문 주소 해석", "type": "toggle", "default": "1"},
                     {"key": "newsCollectionGoogleOriginalUrlMaxPerTarget", "label": "종목별 Google 원문 주소 해석 상한", "type": "number", "default": "2"},
                     {"key": "newsCollectionGoogleOriginalUrlMaxPerRun", "label": "실행당 Google 원문 주소 해석 상한", "type": "number", "default": "6"},
+                    {"key": "newsCollectionArticleBodyMinimumChars", "label": "투자 근거 최소 본문 길이", "type": "number", "default": "280", "unit": "characters"},
                     {"key": "newsCollectionMinimumRelevanceState", "label": "뉴스 수집 최소 관련성", "type": "text", "default": "context"},
                     {"key": "newsDigestMinimumRelevanceState", "label": "뉴스 알림 최소 관련성", "type": "text", "default": "direct"},
                     {"key": "newsDigestMinimumMaterialityState", "label": "뉴스 알림 최소 중요 상태", "type": "text", "default": "notable"},

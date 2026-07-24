@@ -152,6 +152,9 @@ def evaluate_news_collection_health(
     original_url_failure_count = sum(integer(row.get("googleOriginalUrlResolveFailedCount")) for row in providers)
     original_url_budget_count = sum(integer(row.get("googleOriginalUrlBudgetRejectedCount")) for row in providers)
     source_blocked_count = sum(integer(row.get("sourceBlockedCount")) for row in providers)
+    article_health = result.get("articleAnalysisHealth") if isinstance(result.get("articleAnalysisHealth"), dict) else {}
+    body_quality_limited_count = integer(article_health.get("bodyQualityLimitedCount"))
+    body_quality_failure_count = integer(article_health.get("bodyQualityFailureCount"))
     body_failure_count = max(body_missing_count, source_blocked_count)
     body_failure_ratio = (body_failure_count / provider_candidates) if provider_candidates else 0.0
     original_url_failure_ratio = (original_url_failure_count / provider_candidates) if provider_candidates else 0.0
@@ -167,6 +170,18 @@ def evaluate_news_collection_health(
         state, reason_code, reason = "failed", "all-providers-failed", "구성된 뉴스 공급자 요청이 모두 실패했습니다."
     elif provider_failures:
         state, reason_code, reason = "degraded", "partial-provider-failure", "일부 뉴스 공급자 요청이 실패해 나머지 공급자 데이터만 사용합니다."
+    elif (
+        provider_candidates
+        and original_url_budget_count
+        and original_url_budget_ratio >= 0.5
+    ):
+        state, reason_code, reason = "degraded", "article-original-url-budget-exhausted", "Google RSS 원문 주소 해석 호출 상한 때문에 후보 본문 확인이 대량으로 보류되었습니다."
+    elif (
+        fetched_count
+        and body_quality_limited_count
+        and body_quality_failure_count >= max(1, fetched_count // 2)
+    ):
+        state, reason_code, reason = "degraded", "article-extraction-quality-limited", "수집된 뉴스 본문의 상당수가 너무 짧거나 반복돼 투자 근거로 보류했습니다."
     elif fetched_count:
         state, reason_code, reason = "healthy", "fresh-evidence-collected", "신선도와 품질 기준을 통과한 뉴스 근거를 수집했습니다."
     elif (
@@ -183,13 +198,6 @@ def evaluate_news_collection_health(
         and zero_runs >= max(1, int(blocked_warning_streak or 1))
     ):
         state, reason_code, reason = "degraded", "article-body-unavailable", "뉴스 후보의 절반 이상에서 원문 본문을 확보하지 못하는 상태가 반복되고 있습니다."
-    elif (
-        provider_candidates
-        and original_url_budget_count
-        and original_url_budget_ratio >= 0.5
-        and zero_runs >= max(1, int(blocked_warning_streak or 1))
-    ):
-        state, reason_code, reason = "degraded", "article-original-url-budget-exhausted", "Google RSS 원문 주소 해석 호출 상한 때문에 후보 본문 확인이 반복적으로 보류되고 있습니다."
     elif zero_age_minutes >= max(1, int(stale_after_minutes or 1)):
         state, reason_code, reason = "stale", "coverage-stale", "품질 기준을 통과한 최신 뉴스가 허용된 공백 시간 동안 수집되지 않았습니다."
     elif provider_candidates:

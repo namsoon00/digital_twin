@@ -8,8 +8,8 @@ from .investment_research import NewsCollectionTarget, ResearchEvidence
 from . import news_analysis as news_domain
 
 
-NEWS_AI_ANALYSIS_VERSION = "news-ai-analysis-v4"
-NEWS_AI_PROMPT_VERSION = "news-ai-prompt-v4"
+NEWS_AI_ANALYSIS_VERSION = "news-ai-analysis-v5-full-body"
+NEWS_AI_PROMPT_VERSION = "news-ai-prompt-v5-full-body"
 
 IMPACT_LABELS = {
     "support": "호재",
@@ -374,7 +374,13 @@ def article_text_parts(evidence: ResearchEvidence) -> Tuple[str, str, str, str]:
     payload = analysis_payload_from_evidence(evidence)
     facts = article_facts(payload)
     title = compact_text(evidence.title, 360)
-    body = compact_text(payload.get("articleTextPreview") or facts.get("bodyPreview") or "", 5000)
+    body = compact_text(
+        payload.get("articleText")
+        or payload.get("articleTextPreview")
+        or facts.get("bodyPreview")
+        or "",
+        5000,
+    )
     feed_summary = compact_text(
         facts.get("feedSummaryPreview")
         or payload.get("normalizedSummary")
@@ -731,6 +737,15 @@ def news_ai_analysis_is_current(evidence: ResearchEvidence) -> bool:
         str(analysis.get("version") or "") == NEWS_AI_ANALYSIS_VERSION
         and str(analysis.get("sourceTextHash") or "") == source_text_hash(title, body, feed_summary)
     )
+
+
+def news_ai_analysis_retryable(evidence: ResearchEvidence) -> bool:
+    """A local fallback is useful for display but must not consume the final analysis state."""
+    payload = analysis_payload_from_evidence(evidence)
+    analysis = payload.get("aiAnalysis") if isinstance(payload, dict) else {}
+    if not isinstance(analysis, dict):
+        return False
+    return str(analysis.get("status") or "").strip().lower() in {"fallback", "deferred", "error"}
 
 
 def apply_news_ai_analysis(evidence: ResearchEvidence, analysis_payload: Dict[str, object]) -> ResearchEvidence:

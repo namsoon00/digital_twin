@@ -6115,13 +6115,64 @@ class TypeDBOntologyRepositoryTests(unittest.TestCase):
         )
         query = plan["query"]
 
-        self.assertEqual("exists-any", plan["anyConditionCheckMode"])
+        self.assertIn(
+            plan["anyConditionCheckMode"],
+            {"exists-any", "exists-any-shared-relation"},
+        )
         self.assertIn('has ontology-id "stock:MSTR"', query)
         self.assertIn(" or ", query)
         self.assertNotIn("reduce $anyConditionCount", query)
         self.assertNotIn('has ontology-box "RuleBox"', query)
         self.assertIn("ontology-pe-ratio", query)
         self.assertIn("ontology-beta", query)
+
+    def test_typedb_any_group_check_shares_relation_join_for_alternative_thresholds(self):
+        rule = next(
+            item
+            for item in default_graph_inference_rules()
+            if item.rule_id == "graph.liquidity.execution_guard.v1"
+        )
+
+        plan = typedb_native_any_group_check_query(
+            rule.to_dict(),
+            "stock:MSTR",
+            scoped_manifest_only=True,
+            world_id="portfolio:local:default",
+        )
+        query = plan["query"]
+
+        self.assertEqual("exists-any-shared-relation", plan["anyConditionCheckMode"])
+        self.assertNotIn("reduce $anyConditionCount", query)
+        self.assertEqual(1, query.count('has ontology-relation-type "HAS_EXECUTION_METRIC"'))
+        self.assertIn('has ontology-field "positionToTradingValuePct"', query)
+        self.assertIn('has ontology-field "exitDaysAtTenPctADV"', query)
+        self.assertIn('has ontology-field "positionToBidDepthPct"', query)
+
+    def test_typedb_any_group_check_uses_verified_manifest_storage_ids(self):
+        rule = next(
+            item
+            for item in default_graph_inference_rules()
+            if item.rule_id == "graph.liquidity.execution_guard.v1"
+        )
+
+        plan = typedb_native_any_group_check_query(
+            rule.to_dict(),
+            "stock:MSTR",
+            scoped_manifest_only=True,
+            world_id="portfolio:local:default",
+            active_source_storage_id="ontology-storage:active-mstr",
+            active_relation_storage_ids=[
+                "ontology-storage:active-relation-one",
+                "ontology-storage:active-relation-two",
+            ],
+        )
+        query = plan["query"]
+
+        self.assertEqual("exists-any-manifest-indexed-relation", plan["anyConditionCheckMode"])
+        self.assertIn('has ontology-storage-id "ontology-storage:active-mstr"', query)
+        self.assertIn('has ontology-storage-id "ontology-storage:active-relation-one"', query)
+        self.assertIn('has ontology-storage-id "ontology-storage:active-relation-two"', query)
+        self.assertNotIn('has ontology-kind "abox-scope-active-pointer"', query)
 
     def test_typedb_any_group_check_does_not_repeat_schema_function_base_conditions(self):
         rule = next(

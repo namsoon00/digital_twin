@@ -10336,6 +10336,7 @@ relation ontology-assertion,
         scoped_manifest_only: bool,
         tx=None,
         world_id: str = "",
+        evidence_read_index: Dict[str, object] = None,
     ) -> Dict[str, object]:
         """Verify an N-of-M RuleBox group in one bounded TypeQL query.
 
@@ -10372,11 +10373,26 @@ relation ontology-assertion,
                 "readQueryCount": 0,
                 "reason": "RuleBox any condition minimum exceeds available conditions.",
             }
+        verified_index = dict(evidence_read_index or {})
+        index_payload = (
+            dict(verified_index.get("index") or {})
+            if str(verified_index.get("status") or "") == "verified"
+            else {}
+        )
+        source_storage_id = str(
+            dict(index_payload.get("sourceStorageIdsBySourceId") or {}).get(str(source_id or "")) or ""
+        ).strip()
+        source_symbol = symbol_from_subject(str(source_id or ""))
+        relation_storage_ids = list(
+            dict(index_payload.get("relationStorageIdsBySymbol") or {}).get(source_symbol, []) or []
+        )
         query_plan = typedb_native_any_group_check_query(
             rule.to_dict() if hasattr(rule, "to_dict") else dict(rule or {}),
             source_id,
             scoped_manifest_only=scoped_manifest_only,
             world_id=world_id,
+            active_source_storage_id=source_storage_id,
+            active_relation_storage_ids=relation_storage_ids,
         )
         if not query_plan.get("query"):
             return {
@@ -10442,6 +10458,7 @@ relation ontology-assertion,
         transaction_type,
         deadline: float,
         execution_mode: str,
+        evidence_read_index: Dict[str, object] = None,
     ) -> Dict[str, object]:
         """Run one independent native rule under the caller's ABox write lease.
 
@@ -10579,6 +10596,7 @@ relation ontology-assertion,
                                 min(self.native_rule_query_timeout_seconds(), remaining_seconds),
                                 scoped_manifest_only,
                                 world_id=world_id,
+                                evidence_read_index=evidence_read_index,
                             )
                         finally:
                             query_duration_ms += (time.perf_counter() - verification_started) * 1000
@@ -10655,6 +10673,7 @@ relation ontology-assertion,
         preflight_incoming_relations_complete: bool = False,
         native_rule_parallelism: int = 1,
         stable_abox_write_lease_held: bool = False,
+        evidence_read_index: Dict[str, object] = None,
     ) -> Dict[str, object]:
         rules = list(rules or [])
         clean_symbols = clean_symbols_from_payload(list(target_symbols or []))
@@ -11040,6 +11059,7 @@ relation ontology-assertion,
                                             scoped_manifest_only,
                                             tx=tx,
                                             world_id=world_id,
+                                            evidence_read_index=evidence_read_index,
                                         )
                                     finally:
                                         rule_query_duration_ms += (time.perf_counter() - verification_started) * 1000
@@ -11137,6 +11157,7 @@ relation ontology-assertion,
                                         TransactionType,
                                         deadline,
                                         execution_mode,
+                                        evidence_read_index,
                                     ),
                                 )
                             except Exception as error:  # noqa: BLE001 - one failed read blocks the generation.
@@ -11155,6 +11176,7 @@ relation ontology-assertion,
                                 TransactionType,
                                 deadline,
                                 execution_mode,
+                                evidence_read_index,
                             ): (index, planned)
                             for index, planned in batch_entries
                         }
@@ -12444,6 +12466,7 @@ relation ontology-assertion,
                 preflight_incoming_relations_complete=preflight_incoming_relations_complete,
                 native_rule_parallelism=self.native_rule_parallelism() if stable_abox_write_lease_held else 1,
                 stable_abox_write_lease_held=stable_abox_write_lease_held,
+                evidence_read_index=evidence_read_index,
             )
             native_stage_timings["nativeRuleQueriesMs"] = int(
                 (time.perf_counter() - native_query_started) * 1000
@@ -15248,6 +15271,8 @@ def typedb_native_any_group_check_query(
     source_id: str,
     scoped_manifest_only: bool = False,
     world_id: str = "",
+    active_source_storage_id: str = "",
+    active_relation_storage_ids: Iterable[str] = None,
 ) -> Dict[str, object]:
     """Build a source-bounded TypeDB N-of-M condition check.
 
@@ -15282,11 +15307,126 @@ def typedb_native_any_group_check_query(
             "reason": "any condition minimum exceeds available any conditions",
         }
 
+    def relation_shape(condition: Dict[str, object]) -> Tuple[str, str, str]:
+        return (
+            str(condition.get("relation_type") or condition.get("relationType") or "").upper(),
+            str(condition.get("direction") or "out"),
+            str(condition.get("target_kind") or condition.get("targetKind") or ""),
+        )
+
     # An N-of-M group with N=1 is a pure existence test. The former generic
     # path joined RuleBox condition-token entities and ran a `reduce count`
     # even though there is no cardinality to calculate. Keep the decision in
     # TypeDB, but ask it for one bounded matching branch instead.
     if any_min_count == 1:
+        clean_source_storage_id = str(active_source_storage_id or "").strip()
+        clean_relation_storage_ids = sorted({
+            str(item or "").strip()
+            for item in active_relation_storage_ids or []
+            if str(item or "").strip()
+        })
+        shared_relation_conditions = all(
+            str(condition.get("kind") or "") == "relation"
+            for _condition_index, condition in conditions
+        )
+        if (
+            clean_source_storage_id
+            and clean_relation_storage_ids
+            and shared_relation_conditions
+        ):
+            first_condition = dict(conditions[0][1])
+            common_shape = relation_shape(first_condition)
+            if common_shape[0] and all(
+                relation_shape(condition) == common_shape
+                for _condition_index, condition in conditions
+            ):
+                relation_type, direction, target_kind = common_shape
+                source_var = "$source"
+                target_var = "$anyIndexedTarget"
+                relation_var = "$anyIndexedRelation"
+                if direction == "in":
+                    link_clause = (
+                        target_var + " isa ontology-node; "
+                        + relation_var + " isa ontology-assertion, links (source: " + target_var
+                        + ", target: " + source_var + "), has ontology-relation-type "
+                        + typedb_string(relation_type) + ";"
+                    )
+                else:
+                    link_clause = (
+                        target_var + " isa ontology-node; "
+                        + relation_var + " isa ontology-assertion, links (source: " + source_var
+                        + ", target: " + target_var + "), has ontology-relation-type "
+                        + typedb_string(relation_type) + ";"
+                    )
+                structural_clauses = [
+                    source_var + " isa ontology-node, has ontology-id " + typedb_string(clean_source_id)
+                    + ", has ontology-storage-id " + typedb_string(clean_source_storage_id) + ";",
+                    link_clause,
+                    typedb_value_match(
+                        relation_var,
+                        "ontology-storage-id",
+                        clean_relation_storage_ids,
+                        "==",
+                        "anyIndexedRelationStorage",
+                    ),
+                ]
+                if target_kind:
+                    structural_clauses.append(
+                        target_var + " has ontology-kind " + typedb_string(target_kind) + ";"
+                    )
+                filter_branches: List[List[str]] = []
+                for condition_index, condition in conditions:
+                    filters: List[str] = []
+                    for filter_index, (filter_key, expected) in enumerate(dict(
+                        condition.get("target_property_filters") or condition.get("targetPropertyFilters") or {}
+                    ).items()):
+                        attribute = typedb_target_attribute(str(filter_key))
+                        if attribute:
+                            clause = typedb_value_match(
+                                target_var,
+                                attribute,
+                                expected,
+                                typedb_filter_operator(str(filter_key), expected),
+                                "anyIndexedTargetValue" + str(condition_index) + "_" + str(filter_index),
+                            )
+                            if clause:
+                                filters.append(clause)
+                    for filter_index, (filter_key, expected) in enumerate(dict(
+                        condition.get("relation_property_filters") or condition.get("relationPropertyFilters") or {}
+                    ).items()):
+                        attribute = typedb_relation_attribute(str(filter_key))
+                        if attribute:
+                            clause = typedb_value_match(
+                                relation_var,
+                                attribute,
+                                expected,
+                                typedb_filter_operator(str(filter_key), expected),
+                                "anyIndexedRelationValue" + str(condition_index) + "_" + str(filter_index),
+                            )
+                            if clause:
+                                filters.append(clause)
+                    filter_branches.append(filters)
+                filter_query = ""
+                if not any(not branch for branch in filter_branches):
+                    filter_query = " match " + " or ".join(
+                        "{ " + " ".join(branch) + " }"
+                        for branch in filter_branches
+                    ) + ";"
+                # The Manifest index is verified from the active TypeDB ABox
+                # before this query is built. Physical storage IDs therefore
+                # constrain both source and relation to the one active world,
+                # avoiding an expensive historical scope-pointer join.
+                return {
+                    "ruleId": str(rule.get("rule_id") or rule.get("ruleId") or ""),
+                    "nativeRuleId": typedb_native_rule_id(str(rule.get("rule_id") or rule.get("ruleId") or "")),
+                    "query": (
+                        "match " + " ".join(structural_clauses)
+                        + filter_query
+                        + " " + source_var + " has ontology-id $sourceId, has ontology-label $sourceLabel;"
+                    ),
+                    "columns": ["sourceId", "sourceLabel"],
+                    "anyConditionCheckMode": "exists-any-manifest-indexed-relation",
+                }
         scoped_manifest_variable = "$activeManifestId" if scoped_manifest_only else ""
         clauses: List[str] = []
         if scoped_manifest_only:
@@ -15306,6 +15446,82 @@ def typedb_native_any_group_check_query(
         clauses.append(
             "$source isa ontology-node, has ontology-id " + typedb_string(clean_source_id) + ";"
         )
+        # A common RuleBox shape is one relation type with several alternative
+        # target thresholds, such as execution metrics.  Repeating the same
+        # source-to-target link and active-scope membership join in every `or`
+        # branch gives TypeDB a much larger search plan than the rule needs.
+        # Keep the complete truth test in TypeDB, but share that structural
+        # join once and leave only the threshold predicates in the branches.
+        if shared_relation_conditions:
+            first_condition = dict(conditions[0][1])
+            common_shape = relation_shape(first_condition)
+            if common_shape[0] and all(
+                relation_shape(condition) == common_shape
+                for _condition_index, condition in conditions
+            ):
+                shared_base_condition = dict(first_condition)
+                shared_base_condition.pop("target_property_filters", None)
+                shared_base_condition.pop("targetPropertyFilters", None)
+                shared_base_condition.pop("relation_property_filters", None)
+                shared_base_condition.pop("relationPropertyFilters", None)
+                shared_base_pattern = typedb_condition_pattern(
+                    shared_base_condition,
+                    0,
+                    relation_prefix="anyExistsSharedRel_",
+                    target_prefix="anyExistsSharedTarget_",
+                    variable_scope="anyExistsShared_",
+                    manifest_id_variable=scoped_manifest_variable,
+                    world_id=world_id,
+                )
+                shared_base_clauses = [
+                    str(item)
+                    for item in shared_base_pattern.get("clauses") or []
+                    if str(item or "").strip()
+                ]
+                shared_filter_branches: List[List[str]] = []
+                if shared_base_clauses and not shared_base_pattern.get("reason"):
+                    for _condition_index, condition in conditions:
+                        full_pattern = typedb_condition_pattern(
+                            condition,
+                            0,
+                            relation_prefix="anyExistsSharedRel_",
+                            target_prefix="anyExistsSharedTarget_",
+                            variable_scope="anyExistsShared_",
+                            manifest_id_variable=scoped_manifest_variable,
+                            world_id=world_id,
+                        )
+                        full_clauses = [
+                            str(item)
+                            for item in full_pattern.get("clauses") or []
+                            if str(item or "").strip()
+                        ]
+                        if (
+                            full_pattern.get("reason")
+                            or full_clauses[:len(shared_base_clauses)] != shared_base_clauses
+                        ):
+                            shared_filter_branches = []
+                            break
+                        shared_filter_branches.append(full_clauses[len(shared_base_clauses):])
+                if shared_filter_branches:
+                    # An unfiltered branch is already proved by the shared
+                    # relation join, so no disjunction is needed.
+                    filter_query = ""
+                    if not any(not branch for branch in shared_filter_branches):
+                        filter_query = " match " + " or ".join(
+                            "{ " + " ".join(branch) + " }"
+                            for branch in shared_filter_branches
+                        ) + ";"
+                    return {
+                        "ruleId": str(rule.get("rule_id") or rule.get("ruleId") or ""),
+                        "nativeRuleId": typedb_native_rule_id(str(rule.get("rule_id") or rule.get("ruleId") or "")),
+                        "query": (
+                            "match " + " ".join(clauses + shared_base_clauses)
+                            + filter_query
+                            + " $source has ontology-id $sourceId, has ontology-label $sourceLabel;"
+                        ),
+                        "columns": ["sourceId", "sourceLabel"],
+                        "anyConditionCheckMode": "exists-any-shared-relation",
+                    }
         branches: List[str] = []
         for branch_index, (condition_index, condition) in enumerate(conditions):
             pattern = typedb_condition_pattern(

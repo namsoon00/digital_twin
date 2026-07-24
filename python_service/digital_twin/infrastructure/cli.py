@@ -45,6 +45,7 @@ from .schedulers import (
     ModelReviewScheduler,
     NewsCollectionScheduler,
     NotificationQueueScheduler,
+    IsolatedOntologyReasoningCycle,
     OntologyLabScheduler,
     OntologyReasoningScheduler,
     RealtimeScheduler,
@@ -345,7 +346,24 @@ def ontology_reasoning_command(args) -> int:
             or settings.get("ontologyReasoningIntervalSeconds")
             or 10
         )
-        OntologyReasoningScheduler(runner, interval).run_forever(limit=limit)
+        isolated_cycle = None
+        if runner.process_isolation_enabled():
+            project_root = Path(__file__).resolve().parents[3]
+            isolated_cycle = IsolatedOntologyReasoningCycle(
+                [
+                    sys.executable,
+                    "-u",
+                    str(project_root / "python_service" / "service.py"),
+                    "ontology-reasoning",
+                    "once",
+                ],
+                working_directory=str(project_root),
+            )
+        OntologyReasoningScheduler(
+            runner,
+            interval,
+            isolated_cycle=isolated_cycle,
+        ).run_forever(limit=limit)
         return 0
     return 1
 

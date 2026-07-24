@@ -1,0 +1,105 @@
+import subprocess
+import unittest
+
+from digital_twin.infrastructure.schedulers import (
+    IsolatedOntologyReasoningCycle,
+    OntologyReasoningScheduler,
+)
+
+
+class FakeTimeoutProcess:
+    pid = 999999
+    returncode = None
+
+    def __init__(self):
+        self.signals = []
+        self.calls = 0
+
+    def poll(self):
+        return self.returncode
+
+    def send_signal(self, value):
+        self.signals.append(value)
+        self.returncode = -int(value)
+
+    def communicate(self, timeout=None):
+        self.calls += 1
+        if self.calls == 1:
+            raise subprocess.TimeoutExpired("ontology-reasoning", timeout, output="partial output")
+        return "terminated", ""
+
+
+class FakeSuccessProcess:
+    pid = 999998
+    returncode = 0
+
+    def poll(self):
+        return self.returncode
+
+    def communicate(self, timeout=None):
+        return '{"status":"ok","processedCount":1,"alertCount":0}\n', ""
+
+
+class FakeRunner:
+    def __init__(self):
+        self.timeouts = []
+
+    def process_isolation_enabled(self):
+        return True
+
+    def execution_timeout_seconds(self):
+        return 12
+
+    def execution_timeout_grace_seconds(self):
+        return 1
+
+    def record_execution_timeout(self, timeout_seconds, started_at="", output=""):
+        self.timeouts.append({"timeoutSeconds": timeout_seconds, "output": output})
+        return {
+            "status": "timeout",
+            "processedCount": 0,
+            "alertCount": 0,
+            "retryAfterSeconds": 60,
+        }
+
+
+class OntologyReasoningSchedulerTests(unittest.TestCase):
+    def test_isolated_cycle_parses_the_one_shot_json_result(self):
+        cycle = IsolatedOntologyReasoningCycle(
+            ["python", "service.py", "ontology-reasoning", "once"],
+            process_factory=lambda *_args, **_kwargs: FakeSuccessProcess(),
+        )
+
+        result = cycle.run_once(limit=3, timeout_seconds=12, grace_seconds=1)
+
+        self.assertEqual("ok", result["status"])
+        self.assertEqual(1, result["processedCount"])
+        self.assertTrue(result["isolatedExecution"])
+
+    def test_timeout_is_recorded_by_the_parent_and_keeps_work_unacknowledged(self):
+        process = FakeTimeoutProcess()
+        cycle = IsolatedOntologyReasoningCycle(
+            ["python", "service.py", "ontology-reasoning", "once"],
+            process_factory=lambda *_args, **_kwargs: process,
+        )
+        runner = FakeRunner()
+        scheduler = OntologyReasoningScheduler(runner, 10, isolated_cycle=cycle)
+
+        result = scheduler.run_once(limit=1)
+
+        self.assertEqual("timeout", result["status"])
+        self.assertEqual(60, result["retryAfterSeconds"])
+        self.assertEqual(1, len(runner.timeouts))
+        self.assertEqual(12, runner.timeouts[0]["timeoutSeconds"])
+        self.assertIn(signal_value("SIGTERM"), process.signals)
+
+
+def signal_value(name):
+    # Keep the assertion portable across Unix and Windows signal values.
+    import signal
+
+    return int(getattr(signal, name))
+
+
+if __name__ == "__main__":
+    unittest.main()

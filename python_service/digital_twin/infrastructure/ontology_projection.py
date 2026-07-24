@@ -2448,6 +2448,14 @@ class PortfolioOntologyProjectionRecorder:
                 "reusedRelationCount": "aboxReusedRelationCount",
             }.items():
                 record(source_key, target_key, write_plan)
+        physical_verification = timing.get("changedScopeStorageIdentityVerification")
+        if isinstance(physical_verification, dict):
+            for source_key, target_key in {
+                "manifestScopedReadCount": "aboxManifestVerificationReadCount",
+                "reusedStorageIdentityCount": "aboxReusedPhysicalRowCount",
+                "conflictCount": "aboxStorageIdentityConflictCount",
+            }.items():
+                record(source_key, target_key, physical_verification)
 
     @staticmethod
     def inference_alignment_diagnostics(

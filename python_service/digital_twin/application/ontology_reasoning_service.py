@@ -317,6 +317,53 @@ class OntologyReasoningRunner:
     def projection_backpressure_max_seconds(self) -> int:
         return int_setting(self.settings, "ontologyReasoningBackpressureMaxSeconds", 900, 60, 3600)
 
+    def fairness_drain_min_interval_seconds(self) -> int:
+        """Keep overdue work moving without immediately starting another heavy projection."""
+        return int_setting(
+            self.settings,
+            "ontologyReasoningFairnessDrainMinIntervalSeconds",
+            60,
+            5,
+            900,
+        )
+
+    def process_isolation_enabled(self) -> bool:
+        """Run the long-lived watch worker through bounded one-shot children.
+
+        TypeDB driver calls can outlive a Python signal or a per-query timeout.
+        The watch process therefore stays lightweight while each actual cycle
+        has a process boundary that can be terminated without taking down the
+        scheduler or unrelated collection workers.
+        """
+        return truthy(self.settings.get("ontologyReasoningProcessIsolationEnabled"), True)
+
+    def execution_timeout_seconds(self) -> int:
+        return int_setting(
+            self.settings,
+            "ontologyReasoningExecutionTimeoutSeconds",
+            240,
+            60,
+            1800,
+        )
+
+    def execution_timeout_grace_seconds(self) -> int:
+        return int_setting(
+            self.settings,
+            "ontologyReasoningExecutionTimeoutGraceSeconds",
+            10,
+            1,
+            60,
+        )
+
+    def execution_timeout_backoff_seconds(self) -> int:
+        return int_setting(
+            self.settings,
+            "ontologyReasoningExecutionTimeoutBackoffSeconds",
+            300,
+            30,
+            3600,
+        )
+
     def maintenance_enabled(self) -> bool:
         return truthy(self.settings.get("ontologyReasoningMaintenanceEnabled"), True)
 
@@ -327,6 +374,17 @@ class OntologyReasoningRunner:
         payload = self.cursor_payload() if payload is None else dict(payload or {})
         raw = payload.get("projectionCircuit") if isinstance(payload.get("projectionCircuit"), dict) else {}
         return dict(raw or {})
+
+    def execution_timeout_guard_state(self, payload: Dict[str, object] = None) -> Dict[str, object]:
+        payload = self.cursor_payload() if payload is None else dict(payload or {})
+        raw = payload.get("executionTimeoutGuard")
+        return dict(raw or {}) if isinstance(raw, dict) else {}
+
+    def execution_timeout_guard_remaining_seconds(self, payload: Dict[str, object] = None) -> int:
+        guard = self.execution_timeout_guard_state(payload)
+        if str(guard.get("status") or "") != "open":
+            return 0
+        return self.seconds_until(str(guard.get("retryAfterAt") or ""))
 
     def projection_circuit_remaining_seconds(self, payload: Dict[str, object] = None) -> int:
         state = self.projection_circuit_state(payload)
@@ -463,7 +521,7 @@ class OntologyReasoningRunner:
             "active": bool(self.fairness_drain_enabled() and overdue_symbols),
             "symbols": list(dict.fromkeys(overdue_symbols)),
             "reason": (
-                "대기 한도를 넘긴 종목을 순서대로 따라잡기 위해 다음 추론 대기를 건너뜁니다."
+                "대기 한도를 넘긴 종목을 순서대로 따라잡되, TypeDB를 연속 점유하지 않도록 최소 보호 대기를 적용합니다."
                 if self.fairness_drain_enabled() and overdue_symbols
                 else ""
             ),
@@ -674,8 +732,6 @@ class OntologyReasoningRunner:
         payload: Dict[str, object] = None,
         selected_symbols: Iterable[str] = None,
     ) -> int:
-        if self.fairness_drain_state(selected_symbols or [], payload).get("active"):
-            return 0
         configured = self.projection_min_interval_seconds(requests)
         urgent = any(
             event_review_level(event) in self.urgent_review_levels()
@@ -687,9 +743,20 @@ class OntologyReasoningRunner:
         runtime = self.last_projection_runtime(payload)
         duration_ms = int(float_value(runtime.get("durationMs"), 0.0))
         if duration_ms <= 0:
+            if self.fairness_drain_state(selected_symbols or [], payload).get("active"):
+                return min(configured, self.fairness_drain_min_interval_seconds())
             return configured
         measured = int((duration_ms / 1000.0) * self.projection_backpressure_factor())
-        return max(configured, min(self.projection_backpressure_max_seconds(), measured))
+        protected_delay = min(self.projection_backpressure_max_seconds(), measured)
+        if self.fairness_drain_state(selected_symbols or [], payload).get("active"):
+            # Fairness must not turn a multi-minute projection into a tight
+            # loop. It may shorten the ordinary cadence, but it still waits
+            # for the observed runtime-derived recovery window.
+            return max(
+                self.fairness_drain_min_interval_seconds(),
+                min(configured, protected_delay),
+            )
+        return max(configured, protected_delay)
 
     def projection_due(
         self,
@@ -1585,6 +1652,20 @@ class OntologyReasoningRunner:
                 stages.get("aboxPersistenceMs") or stages.get("persistenceMs"),
                 0.0,
             )),
+            "aboxChangedScopeQueryCount": int(float_value(stages.get("aboxChangedScopeQueryCount"), 0.0)),
+            "aboxManifestVerificationReadCount": int(float_value(
+                stages.get("aboxManifestVerificationReadCount"),
+                0.0,
+            )),
+            "aboxReusedPhysicalRowCount": int(float_value(
+                stages.get("aboxReusedPhysicalRowCount"),
+                0.0,
+            )),
+            "aboxInsertedNodeCount": int(float_value(stages.get("aboxInsertedNodeCount"), 0.0)),
+            "aboxInsertedRelationCount": int(float_value(
+                stages.get("aboxInsertedRelationCount"),
+                0.0,
+            )),
             "observedAt": str(observation.get("observedAt") or ""),
             "status": str(observation.get("status") or ""),
             "targetSymbolCount": int(float_value(
@@ -1651,11 +1732,85 @@ class OntologyReasoningRunner:
             "lastSuccessAt": payload["lastSuccessfulProjectionAt"],
             "openUntil": "",
         }
+        prior_timeout_guard = self.execution_timeout_guard_state(payload)
+        if prior_timeout_guard:
+            payload["executionTimeoutGuard"] = {
+                "status": "closed",
+                "consecutiveTimeouts": 0,
+                "lastTimeoutAt": str(prior_timeout_guard.get("lastTimeoutAt") or ""),
+                "lastTimeoutSeconds": int(prior_timeout_guard.get("lastTimeoutSeconds") or 0),
+                "lastRecoveredAt": payload["lastSuccessfulProjectionAt"],
+                "retryAfterAt": "",
+            }
         if monitor_runner is not None:
             runtime = self.projection_runtime_summary(monitor_runner)
             if int(runtime.get("durationMs") or 0) > 0:
                 payload["lastProjectionRuntime"] = runtime
         self.save_cursor_payload(payload)
+
+    def record_execution_timeout(
+        self,
+        timeout_seconds: int,
+        started_at: str = "",
+        output: str = "",
+    ) -> Dict[str, object]:
+        """Persist a durable cooldown after the isolated worker is terminated.
+
+        A killed child may have already staged an ABox candidate.  It must not
+        be acknowledged as processed, and the next worker has to resume that
+        candidate through the normal activation journal.  The parent records
+        only operational state here; it never fabricates an investment result.
+        """
+        payload = self.cursor_payload()
+        prior = self.execution_timeout_guard_state(payload)
+        now = self.now_provider()
+        if now.tzinfo is None:
+            now = now.replace(tzinfo=timezone.utc)
+        now = now.astimezone(timezone.utc)
+        consecutive = int(prior.get("consecutiveTimeouts") or 0) + 1
+        backoff_seconds = self.execution_timeout_backoff_seconds()
+        retry_at = datetime.fromtimestamp(
+            now.timestamp() + backoff_seconds,
+            timezone.utc,
+        ).isoformat().replace("+00:00", "Z")
+        guard = {
+            "status": "open",
+            "consecutiveTimeouts": consecutive,
+            "lastTimeoutAt": now.isoformat().replace("+00:00", "Z"),
+            "lastTimeoutSeconds": int(timeout_seconds or self.execution_timeout_seconds()),
+            "retryAfterAt": retry_at,
+            "retryAfterSeconds": backoff_seconds,
+            "reason": "격리된 TypeDB 추론 실행이 시간 상한을 넘어 중지되었습니다. 보류된 ABox 후보는 다음 안전 재시도에서 복구합니다.",
+        }
+        payload["executionTimeoutGuard"] = guard
+        summary = {
+            "startedAt": str(started_at or ""),
+            "finishedAt": guard["lastTimeoutAt"],
+            "durationMs": int(timeout_seconds or self.execution_timeout_seconds()) * 1000,
+            "status": "timeout",
+            "processedCount": 0,
+            "alertCount": 0,
+            "deferredReason": guard["reason"],
+            "timeoutOutput": str(output or "")[-240:],
+        }
+        history = [
+            dict(item)
+            for item in payload.get("reasoningExecutionHistory") or []
+            if isinstance(item, dict)
+        ]
+        history.append(summary)
+        payload["lastReasoningExecution"] = summary
+        payload["reasoningExecutionHistory"] = history[-self.telemetry_history_limit():]
+        self.save_cursor_payload(payload)
+        return {
+            "status": "timeout",
+            "processedCount": 0,
+            "alertCount": 0,
+            "retryAfterSeconds": backoff_seconds,
+            "deferredReason": guard["reason"],
+            "executionTimeoutGuard": guard,
+            "executionTelemetry": summary,
+        }
 
     def recover_open_projection_circuit(
         self,
@@ -1817,6 +1972,8 @@ class OntologyReasoningRunner:
                 key: projection_runtime.get(key)
                 for key in [
                     "durationMs", "impactPlanningMs", "aboxPersistenceMs", "nativeInferenceMs",
+                    "aboxChangedScopeQueryCount", "aboxManifestVerificationReadCount",
+                    "aboxReusedPhysicalRowCount", "aboxInsertedNodeCount", "aboxInsertedRelationCount",
                     "status", "targetSymbolCount", "candidateRuleCount", "executedRuleCount",
                     "affectedScopeCount", "directChangedScopeCount", "globalImpact",
                 ]
@@ -1890,6 +2047,22 @@ class OntologyReasoningRunner:
                 "alertCount": 0,
                 "coalescedEventCount": len(durable_superseded_ids),
                 "maintenance": maintenance,
+                **queue_metadata,
+            }
+        execution_timeout_remaining = self.execution_timeout_guard_remaining_seconds()
+        if execution_timeout_remaining > 0 and not force:
+            timeout_guard = self.execution_timeout_guard_state()
+            return {
+                "status": "deferred",
+                "processedCount": 0,
+                "alertCount": 0,
+                "retryAfterSeconds": execution_timeout_remaining,
+                "deferredReason": str(
+                    timeout_guard.get("reason")
+                    or "이전 TypeDB 추론 실행이 시간 상한을 넘어 안전 재시도 대기 중입니다."
+                ),
+                "executionTimeoutGuard": timeout_guard,
+                "coalescedEventCount": len(durable_superseded_ids),
                 **queue_metadata,
             }
         storage_guard = self.storage_guard_state()
@@ -2338,6 +2511,8 @@ class OntologyReasoningRunner:
         fairness_drain = self.fairness_drain_state(next_symbols, cursor_payload)
         storage_guard = self.storage_guard_state()
         projection_circuit = self.projection_circuit_state()
+        execution_timeout_guard = self.execution_timeout_guard_state(cursor_payload)
+        execution_timeout_remaining = self.execution_timeout_guard_remaining_seconds(cursor_payload)
         mailbox = self.mailbox_summary()
         queue_status = "healthy"
         queue_reason = ""
@@ -2347,6 +2522,12 @@ class OntologyReasoningRunner:
         elif str(projection_circuit.get("status") or "") == "open":
             queue_status = "blocked"
             queue_reason = str(projection_circuit.get("lastFailureReason") or "TypeDB 추론 회로가 복구 대기 중입니다.")
+        elif execution_timeout_remaining > 0:
+            queue_status = "blocked"
+            queue_reason = str(
+                execution_timeout_guard.get("reason")
+                or "이전 TypeDB 추론 실행이 시간 상한을 넘어 안전 재시도 대기 중입니다."
+            )
         elif mailbox.get("status") == "error":
             queue_status = "degraded"
             queue_reason = str(mailbox.get("reason") or "영속 추론 메일박스 상태를 읽지 못했습니다.")
@@ -2377,6 +2558,7 @@ class OntologyReasoningRunner:
             "nextOmittedSymbolCount": omitted_count,
             "fairnessMaxWaitSeconds": self.fairness_max_wait_seconds(),
             "fairnessDrainEnabled": self.fairness_drain_enabled(),
+            "fairnessDrainMinIntervalSeconds": self.fairness_drain_min_interval_seconds(),
             "fairnessDrainActive": bool(fairness_drain.get("active")),
             "fairnessDrainSymbols": list(fairness_drain.get("symbols") or []),
             "fairnessDrainReason": str(fairness_drain.get("reason") or ""),
@@ -2393,6 +2575,12 @@ class OntologyReasoningRunner:
             "ontologyMaintenance": self.maintenance_state(cursor_payload),
             "projectionCircuit": projection_circuit,
             "projectionCircuitRetryAfterSeconds": self.projection_circuit_remaining_seconds(),
+            "executionProcessIsolationEnabled": self.process_isolation_enabled(),
+            "executionTimeoutSeconds": self.execution_timeout_seconds(),
+            "executionTimeoutGraceSeconds": self.execution_timeout_grace_seconds(),
+            "executionTimeoutBackoffSeconds": self.execution_timeout_backoff_seconds(),
+            "executionTimeoutGuard": execution_timeout_guard,
+            "executionTimeoutRetryAfterSeconds": execution_timeout_remaining,
             "storageGuard": storage_guard,
             "queueHealth": {"status": queue_status, "reason": queue_reason},
             "executionTelemetry": self.execution_telemetry(cursor_payload),

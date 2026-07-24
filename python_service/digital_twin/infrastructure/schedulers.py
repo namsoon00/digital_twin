@@ -1,4 +1,7 @@
+import json
+import os
 import signal
+import subprocess
 import time
 
 from .operational_error_reporting import operational_error_reporter, report_runtime_error
@@ -15,6 +18,136 @@ def install_stop_handlers(stop_callback) -> None:
 def wait_until_running(running, end_at: float, sleep_fn=time.sleep) -> None:
     while running() and time.monotonic() < end_at:
         sleep_fn(min(1.0, end_at - time.monotonic()))
+
+
+def _output_text(value) -> str:
+    if isinstance(value, bytes):
+        return value.decode("utf-8", errors="replace")
+    return str(value or "")
+
+
+def _last_json_object(output: str):
+    for line in reversed(str(output or "").splitlines()):
+        text = line.strip()
+        if not text.startswith("{") or not text.endswith("}"):
+            continue
+        try:
+            parsed = json.loads(text)
+        except (TypeError, ValueError):
+            continue
+        if isinstance(parsed, dict):
+            return parsed
+    return None
+
+
+class IsolatedOntologyReasoningCycle:
+    """Execute one TypeDB reasoning cycle in a killable child process.
+
+    TypeDB client calls can remain inside native code after the Python worker
+    receives a signal. The parent scheduler therefore owns only cadence and
+    can terminate its dedicated child process group at a hard wall-clock
+    limit. The child still owns normal cursor and mailbox transactions.
+    """
+
+    def __init__(self, command, working_directory="", process_factory=None):
+        self.command = list(command or [])
+        self.working_directory = str(working_directory or "")
+        self.process_factory = process_factory or subprocess.Popen
+        self.process = None
+
+    def command_for_limit(self, limit: int):
+        command = list(self.command)
+        if int(limit or 0) > 0:
+            command.extend(["--limit", str(int(limit))])
+        return command
+
+    def stop(self, grace_seconds: int = 5) -> None:
+        process = self.process
+        if process is None or process.poll() is not None:
+            return
+        self._terminate(process, grace_seconds)
+
+    @staticmethod
+    def _signal_group(process, sig) -> None:
+        if os.name != "nt":
+            try:
+                os.killpg(process.pid, sig)
+                return
+            except (AttributeError, OSError, ProcessLookupError):
+                pass
+        try:
+            process.send_signal(sig)
+        except (AttributeError, OSError, ProcessLookupError):
+            return
+
+    def _terminate(self, process, grace_seconds: int) -> str:
+        self._signal_group(process, signal.SIGTERM)
+        try:
+            output, _ = process.communicate(timeout=max(1, int(grace_seconds or 1)))
+            return _output_text(output)
+        except subprocess.TimeoutExpired as error:
+            partial = _output_text(getattr(error, "output", ""))
+            self._signal_group(process, signal.SIGKILL)
+            try:
+                output, _ = process.communicate(timeout=max(1, int(grace_seconds or 1)))
+                return partial + _output_text(output)
+            except subprocess.TimeoutExpired as final_error:
+                return partial + _output_text(getattr(final_error, "output", ""))
+
+    def run_once(self, limit: int, timeout_seconds: int, grace_seconds: int) -> dict:
+        if not self.command:
+            return {
+                "status": "error",
+                "processedCount": 0,
+                "alertCount": 0,
+                "deferredReason": "추론 격리 실행 명령이 구성되지 않았습니다.",
+            }
+        started = time.monotonic()
+        kwargs = {
+            "stdin": subprocess.DEVNULL,
+            "stdout": subprocess.PIPE,
+            "stderr": subprocess.STDOUT,
+            "text": True,
+        }
+        if self.working_directory:
+            kwargs["cwd"] = self.working_directory
+        if os.name != "nt":
+            kwargs["start_new_session"] = True
+        process = self.process_factory(self.command_for_limit(limit), **kwargs)
+        self.process = process
+        try:
+            output, _ = process.communicate(timeout=max(1, int(timeout_seconds or 1)))
+        except subprocess.TimeoutExpired as error:
+            output = _output_text(getattr(error, "output", "")) + self._terminate(process, grace_seconds)
+            return {
+                "status": "timeout",
+                "processedCount": 0,
+                "alertCount": 0,
+                "timeout": True,
+                "timeoutSeconds": int(timeout_seconds or 0),
+                "durationMs": int((time.monotonic() - started) * 1000),
+                "workerOutput": output[-1200:],
+            }
+        finally:
+            self.process = None
+
+        output = _output_text(output)
+        result = _last_json_object(output)
+        if result is None:
+            return {
+                "status": "error",
+                "processedCount": 0,
+                "alertCount": 0,
+                "durationMs": int((time.monotonic() - started) * 1000),
+                "childExitCode": int(process.returncode or 0),
+                "deferredReason": "격리된 추론 워커가 읽을 수 있는 결과를 반환하지 않았습니다.",
+                "workerOutput": output[-1200:],
+            }
+        result = dict(result)
+        result["isolatedExecution"] = True
+        result["childExitCode"] = int(process.returncode or 0)
+        result["isolatedDurationMs"] = int((time.monotonic() - started) * 1000)
+        return result
 
 
 class RealtimeScheduler:
@@ -96,24 +229,71 @@ class NotificationQueueScheduler:
 
 
 class OntologyReasoningScheduler:
-    def __init__(self, runner, interval_seconds: int, error_reporter=None):
+    def __init__(self, runner, interval_seconds: int, error_reporter=None, isolated_cycle=None):
         self.runner = runner
         self.interval_seconds = max(5, int(interval_seconds or 10))
         self.error_reporter = error_reporter or operational_error_reporter()
+        self.isolated_cycle = isolated_cycle
         self.last_deferred_signature = ""
         self.last_deferred_report_at = 0.0
         self.running = True
 
     def stop(self, *_args) -> None:
         self.running = False
+        if self.isolated_cycle:
+            grace = self.execution_timeout_grace_seconds()
+            self.isolated_cycle.stop(grace)
+
+    def process_isolation_enabled(self) -> bool:
+        configured = getattr(self.runner, "process_isolation_enabled", None)
+        return bool(self.isolated_cycle) and (not callable(configured) or bool(configured()))
+
+    def execution_timeout_seconds(self) -> int:
+        configured = getattr(self.runner, "execution_timeout_seconds", None)
+        return max(5, int(configured() if callable(configured) else 240))
+
+    def execution_timeout_grace_seconds(self) -> int:
+        configured = getattr(self.runner, "execution_timeout_grace_seconds", None)
+        return max(1, int(configured() if callable(configured) else 10))
+
+    def run_once(self, limit: int = 0):
+        if not self.process_isolation_enabled():
+            return self.runner.run_once(limit=limit)
+        result = self.isolated_cycle.run_once(
+            limit,
+            self.execution_timeout_seconds(),
+            self.execution_timeout_grace_seconds(),
+        )
+        if not result.get("timeout"):
+            return result
+        recorder = getattr(self.runner, "record_execution_timeout", None)
+        if not callable(recorder):
+            return result
+        recorded = recorder(
+            int(result.get("timeoutSeconds") or self.execution_timeout_seconds()),
+            output=str(result.get("workerOutput") or ""),
+        )
+        return {
+            **recorded,
+            "isolatedExecution": True,
+            "isolatedDurationMs": int(result.get("durationMs") or 0),
+            "workerOutput": str(result.get("workerOutput") or "")[-1200:],
+        }
 
     def run_forever(self, limit: int = 0) -> None:
         install_stop_handlers(self.stop)
-        print("Python ontology reasoning worker started. interval=" + str(self.interval_seconds) + "s")
+        mode = "isolated" if self.process_isolation_enabled() else "in-process"
+        print(
+            "Python ontology reasoning worker started. interval="
+            + str(self.interval_seconds)
+            + "s mode="
+            + mode
+            + (" timeout=" + str(self.execution_timeout_seconds()) + "s" if mode == "isolated" else "")
+        )
         while self.running:
             started = time.monotonic()
             try:
-                result = self.runner.run_once(limit=limit)
+                result = self.run_once(limit=limit)
                 if result.get("processedCount"):
                     print(
                         "Ontology reasoning "
@@ -148,7 +328,18 @@ class OntologyReasoningScheduler:
             except Exception as error:  # noqa: BLE001 - long-running reasoning worker must continue after a cycle failure.
                 print("Python ontology reasoning worker error: " + str(error))
                 report_runtime_error(self.error_reporter, "Python ontology reasoning worker", error, "inference cycle")
-            end_at = time.monotonic() + max(1.0, self.interval_seconds - (time.monotonic() - started))
+                result = {}
+            retry_after = 0
+            try:
+                retry_after = max(0, int(float((result or {}).get("retryAfterSeconds") or 0)))
+            except (TypeError, ValueError):
+                retry_after = 0
+            wait_seconds = max(
+                1.0,
+                self.interval_seconds - (time.monotonic() - started),
+                float(retry_after),
+            )
+            end_at = time.monotonic() + wait_seconds
             wait_until_running(lambda: self.running, end_at)
 
 

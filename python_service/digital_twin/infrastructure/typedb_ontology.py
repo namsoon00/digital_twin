@@ -2836,6 +2836,40 @@ class ScopedABoxManifestMixin:
                 })
         return unique_rows, conflicts
 
+    @staticmethod
+    def scoped_abox_counts_by_scope(
+        node_rows: Iterable[Dict[str, object]],
+        relation_rows: Iterable[Dict[str, object]],
+    ) -> Dict[str, Dict[str, int]]:
+        """Count already-deduplicated physical rows by owning scope."""
+        counts: Dict[str, Dict[str, int]] = {}
+        for count_key, rows in (
+            ("entityCount", node_rows or []),
+            ("relationCount", relation_rows or []),
+        ):
+            for row in rows:
+                scope_id = str((row or {}).get("scopeId") or "").strip()
+                if not scope_id:
+                    continue
+                counts.setdefault(scope_id, {"entityCount": 0, "relationCount": 0})[count_key] += 1
+        return counts
+
+    @staticmethod
+    def merged_scoped_abox_counts(
+        *count_sets: Dict[str, Dict[str, int]],
+    ) -> Dict[str, Dict[str, int]]:
+        """Combine physical and reused rows without changing their ownership."""
+        merged: Dict[str, Dict[str, int]] = {}
+        for count_set in count_sets:
+            for scope_id, raw in dict(count_set or {}).items():
+                clean_scope_id = str(scope_id or "").strip()
+                if not clean_scope_id:
+                    continue
+                target = merged.setdefault(clean_scope_id, {"entityCount": 0, "relationCount": 0})
+                target["entityCount"] += int(number_or_none((raw or {}).get("entityCount")) or 0)
+                target["relationCount"] += int(number_or_none((raw or {}).get("relationCount")) or 0)
+        return merged
+
     def scoped_abox_storage_reuse_plan(
         self,
         node_rows: Iterable[Dict[str, object]],
@@ -2968,6 +3002,18 @@ class ScopedABoxManifestMixin:
             )
         node_rows_to_insert = list(reuse_plan.get("nodeRowsToInsert") or [])
         relation_rows_to_insert = list(reuse_plan.get("relationRowsToInsert") or [])
+        expected_counts_by_scope = self.scoped_abox_counts_by_scope(
+            reuse_plan.get("nodeRows") or [],
+            reuse_plan.get("relationRows") or [],
+        )
+        inserted_counts_by_scope = self.scoped_abox_counts_by_scope(
+            node_rows_to_insert,
+            relation_rows_to_insert,
+        )
+        reused_counts_by_scope = self.scoped_abox_counts_by_scope(
+            reuse_plan.get("reusedNodeRows") or [],
+            reuse_plan.get("reusedRelationRows") or [],
+        )
         node_queries = self.batched_node_insert_queries(
             node_rows_to_insert,
             utc_now(),
@@ -3013,6 +3059,9 @@ class ScopedABoxManifestMixin:
             "insertedRelationCount": len(relation_rows_to_insert),
             "reusedNodeCount": len(reuse_plan.get("reusedNodeRows") or []),
             "reusedRelationCount": len(reuse_plan.get("reusedRelationRows") or []),
+            "expectedCountsByScope": expected_counts_by_scope,
+            "insertedCountsByScope": inserted_counts_by_scope,
+            "reusedCountsByScope": reused_counts_by_scope,
             "relationBatchSize": relation_batch_size,
             "transactionCount": (len(queries) + batch_size - 1) // batch_size if queries else 0,
             "slowestQueryMs": max(query_durations_ms) if query_durations_ms else 0.0,
@@ -3954,25 +4003,45 @@ class ScopedABoxManifestMixin:
                     timing["candidateManifestCleanup"] = candidate_cleanup
                     timing["candidateCleanupMs"] = round((time.monotonic() - cleanup_started) * 1000, 1)
                     write_started = time.monotonic()
-                    timing["changedScopeWritePlan"] = self.write_persistence_rows(
+                    write_plan = self.write_persistence_rows(
                         driver,
                         imported,
                         node_rows,
                         relation_rows,
                     )
+                    timing["changedScopeWritePlan"] = write_plan
                     timing["changedScopeWriteMs"] = round((time.monotonic() - write_started) * 1000, 1)
                     verification_started = time.monotonic()
-                    identity_verification = self.scoped_abox_storage_identity_counts(
-                        node_rows,
-                        relation_rows,
+                    # The write plan has already verified every reused physical
+                    # row by storage identity. Re-reading every one after a
+                    # successful commit doubled the largest live projection
+                    # read. Two grouped counts verify newly inserted rows by
+                    # exact manifest/scope/generation instead.
+                    changed_scope_rows = [
+                        scope_rows.get(scope_id) or {}
+                        for scope_id in changed_scope_ids
+                    ]
+                    inserted_counts_by_scope = self.scoped_abox_scope_row_counts_batch(
+                        changed_scope_rows,
+                        manifest_id=manifest_id,
+                        world_id=world_id,
+                    )
+                    expected_counts_by_scope = dict(write_plan.get("expectedCountsByScope") or {})
+                    reused_counts_by_scope = dict(write_plan.get("reusedCountsByScope") or {})
+                    actual_counts_by_scope = self.merged_scoped_abox_counts(
+                        inserted_counts_by_scope,
+                        reused_counts_by_scope,
                     )
                     timing["changedScopeStorageIdentityVerification"] = {
-                        "status": str(identity_verification.get("status") or ""),
-                        "missingStorageIdCount": len(identity_verification.get("missingStorageIds") or []),
-                        "conflictCount": len(identity_verification.get("conflicts") or []),
+                        "status": "ok",
+                        "mode": "manifest-scope-count",
+                        "manifestScopedReadCount": 2,
+                        "reusedStorageIdentityCount": (
+                            int(write_plan.get("reusedNodeCount") or 0)
+                            + int(write_plan.get("reusedRelationCount") or 0)
+                        ),
+                        "conflictCount": 0,
                     }
-                    expected_counts_by_scope = dict(identity_verification.get("expectedCountsByScope") or {})
-                    actual_counts_by_scope = dict(identity_verification.get("actualCountsByScope") or {})
                     for scope_id in changed_scope_ids:
                         scope_plan_row = scope_rows.get(scope_id) or {}
                         expected = expected_counts_by_scope.get(scope_id) or {}
@@ -3982,8 +4051,6 @@ class ScopedABoxManifestMixin:
                             "relationCount": 0,
                         }
                         valid = (
-                            str(identity_verification.get("status") or "") == "ok"
-                            and
                             actual.get("entityCount") == int(expected.get("entityCount") or 0)
                             and actual.get("relationCount") == int(expected.get("relationCount") or 0)
                         )

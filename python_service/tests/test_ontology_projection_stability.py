@@ -53,9 +53,9 @@ class OntologyProjectionStabilityTests(unittest.TestCase):
 
         self.assertEqual(345, runner.effective_projection_min_interval_seconds([], cursor.load()))
 
-    def test_overdue_target_drains_without_waiting_for_global_projection_cooldown(self):
+    def test_overdue_target_shortens_but_does_not_remove_projection_recovery_wait(self):
         cursor = CursorStore({
-            "lastSuccessfulProjectionAt": "2026-07-21T23:59:00Z",
+            "lastSuccessfulProjectionAt": "2026-07-21T23:59:30Z",
             "lastReasonedAtBySymbol": {"MSFT": "2026-07-21T23:30:00Z"},
         })
         runner = self.runner(cursor)
@@ -70,8 +70,8 @@ class OntologyProjectionStabilityTests(unittest.TestCase):
 
         self.assertTrue(drain["active"])
         self.assertEqual(["MSFT"], drain["symbols"])
-        self.assertEqual(0, runner.effective_projection_min_interval_seconds([event], cursor.load(), ["MSFT"]))
-        self.assertTrue(runner.projection_due([event], cursor.load(), ["MSFT"]))
+        self.assertEqual(60, runner.effective_projection_min_interval_seconds([event], cursor.load(), ["MSFT"]))
+        self.assertFalse(runner.projection_due([event], cursor.load(), ["MSFT"]))
 
     def test_normal_target_keeps_global_projection_cooldown(self):
         cursor = CursorStore({
@@ -99,6 +99,17 @@ class OntologyProjectionStabilityTests(unittest.TestCase):
         self.assertEqual("idle", result["status"])
         self.assertEqual("ok", result["maintenance"]["status"])
         self.assertEqual(["maintenance"], calls)
+
+    def test_execution_timeout_guard_blocks_a_new_projection_until_backoff_expires(self):
+        cursor = CursorStore()
+        runner = self.runner(cursor)
+
+        recorded = runner.record_execution_timeout(240, started_at="2026-07-22T00:00:00Z")
+
+        self.assertEqual("timeout", recorded["status"])
+        self.assertEqual(300, recorded["retryAfterSeconds"])
+        self.assertEqual(300, runner.execution_timeout_guard_remaining_seconds(cursor.load()))
+        self.assertEqual("open", runner.execution_timeout_guard_state(cursor.load())["status"])
 
     def test_subjectless_global_event_is_reconciled_one_live_symbol_at_a_time(self):
         cursor = CursorStore()

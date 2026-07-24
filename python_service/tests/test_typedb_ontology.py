@@ -92,6 +92,11 @@ class TypeDBOntologyRepositoryTests(unittest.TestCase):
                         "changedScopeWriteMs": 45.6,
                         "changedScopeVerificationMs": 7.8,
                         "manifestControlWriteMs": 3.2,
+                        "changedScopeStorageIdentityVerification": {
+                            "manifestScopedReadCount": 2,
+                            "reusedStorageIdentityCount": 11,
+                            "conflictCount": 0,
+                        },
                         "totalMs": 71.1,
                         "changedScopeWritePlan": {
                             "totalQueryMs": 35.4,
@@ -113,6 +118,8 @@ class TypeDBOntologyRepositoryTests(unittest.TestCase):
         self.assertEqual(3, stages["aboxManifestControlWriteMs"])
         self.assertEqual(35, stages["aboxChangedScopeQueryMs"])
         self.assertEqual(7, stages["aboxReusedRelationCount"])
+        self.assertEqual(2, stages["aboxManifestVerificationReadCount"])
+        self.assertEqual(11, stages["aboxReusedPhysicalRowCount"])
 
     def test_projection_preflight_graph_requires_exact_active_manifest_and_topology(self):
         graph = PortfolioOntology(
@@ -724,6 +731,39 @@ class TypeDBOntologyRepositoryTests(unittest.TestCase):
         self.assertEqual(0, result["queryCount"])
         self.assertEqual(0, result["insertedNodeCount"])
         self.assertEqual(1, result["reusedNodeCount"])
+        self.assertEqual(
+            {"symbol:005930:state": {"entityCount": 1, "relationCount": 0}},
+            result["expectedCountsByScope"],
+        )
+        self.assertEqual(
+            {"symbol:005930:state": {"entityCount": 1, "relationCount": 0}},
+            result["reusedCountsByScope"],
+        )
+
+    def test_scoped_abox_manifest_count_verification_combines_inserted_and_reused_rows(self):
+        repository = TypeDBOntologyGraphRepository("127.0.0.1:1729")
+
+        expected = repository.scoped_abox_counts_by_scope(
+            [
+                {"scopeId": "symbol:005930:market"},
+                {"scopeId": "symbol:005930:market"},
+            ],
+            [
+                {"scopeId": "symbol:005930:market"},
+                {"scopeId": "symbol:005930:link"},
+            ],
+        )
+        actual = repository.merged_scoped_abox_counts(
+            {
+                "symbol:005930:market": {"entityCount": 1, "relationCount": 1},
+                "symbol:005930:link": {"entityCount": 0, "relationCount": 1},
+            },
+            {"symbol:005930:market": {"entityCount": 1, "relationCount": 0}},
+        )
+
+        self.assertEqual({"entityCount": 2, "relationCount": 1}, expected["symbol:005930:market"])
+        self.assertEqual({"entityCount": 2, "relationCount": 1}, actual["symbol:005930:market"])
+        self.assertEqual({"entityCount": 0, "relationCount": 1}, actual["symbol:005930:link"])
 
     def test_scoped_abox_manifest_cleanup_uses_only_current_manifest_and_world(self):
         repository = TypeDBOntologyGraphRepository("127.0.0.1:1729")

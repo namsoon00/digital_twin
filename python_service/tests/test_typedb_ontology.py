@@ -1742,6 +1742,10 @@ class TypeDBOntologyRepositoryTests(unittest.TestCase):
             execution_index["index"]["sourceIdsBySymbol"]["005930"],
         )
         self.assertEqual(1, len(execution_index["index"]["relationStorageIdsBySymbol"]["005930"]))
+        self.assertEqual(
+            1,
+            len(execution_index["index"]["relationStorageIdsBySymbolAndType"]["005930"]["BREAKS_LEVEL"]),
+        )
 
         invalid = dict(index)
         invalid["sourceStorageIdsBySourceId"] = {"stock:005930": "ontology-storage:wrong"}

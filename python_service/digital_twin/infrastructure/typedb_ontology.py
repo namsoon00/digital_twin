@@ -269,7 +269,7 @@ def native_rule_evidence_read_index_from_rows(
             str(row.get("symbol") or "").upper().strip(),
         }
         relation_storage_id = ontology_storage_id(row, relation_row_id(row), "relation")
-        relation_type = str(row.get("relationType") or "").upper().strip()
+        relation_type = str(row.get("type") or row.get("relationType") or "").upper().strip()
         for symbol in candidates:
             if symbol and symbol in relation_storage_ids_by_symbol:
                 relation_storage_ids_by_symbol[symbol].add(relation_storage_id)

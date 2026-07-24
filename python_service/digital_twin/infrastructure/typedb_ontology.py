@@ -1900,6 +1900,27 @@ class ScopedABoxManifestMixin:
         """
         owner = "scoped-abox:" + uuid.uuid4().hex
         existing = self.scoped_abox_write_lease_status(world_id)
+        recovery: Dict[str, object] = {}
+        if str(existing.get("status") or "") == "held":
+            # Normal startup deliberately does not inventory every account
+            # world.  Recover a durable lease only when this exact world needs
+            # to write, and only if its recorded local process is proven dead.
+            # This preserves live and remote ownership while avoiding a global
+            # TypeDB control-plane scan on every worker restart.
+            recovery = self.recover_dead_local_scoped_abox_write_lease(world_id)
+            if str(recovery.get("status") or "") == "cleared":
+                existing = self.scoped_abox_write_lease_status(world_id)
+            else:
+                return {
+                    "acquired": False,
+                    "status": "held",
+                    "leaseOwner": str(existing.get("leaseOwner") or ""),
+                    "leaseExpiresAtEpoch": float(number_or_none(existing.get("leaseExpiresAtEpoch")) or 0),
+                    "recovery": {
+                        key: value for key, value in recovery.items()
+                        if key != "propertiesJson"
+                    },
+                }
         if str(existing.get("status") or "") == "held":
             return {
                 "acquired": False,

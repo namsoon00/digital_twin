@@ -1243,6 +1243,45 @@ class TypeDBOntologyRepositoryTests(unittest.TestCase):
             release.call_args.args[0]["storageId"],
         )
 
+    def test_scoped_abox_write_lease_recovers_dead_owner_when_that_world_acquires(self):
+        repository = TypeDBOntologyGraphRepository("127.0.0.1:1729")
+        world_id = "portfolio:local:default"
+        held = {
+            "status": "held",
+            "leaseOwner": "scoped-abox:dead",
+            "leaseExpiresAtEpoch": 9999999999,
+        }
+        acquired = {
+            "acquired": True,
+            "status": "acquired",
+            "leaseOwner": "scoped-abox:replacement",
+        }
+        with patch.object(repository, "scoped_abox_write_lease_status", side_effect=[
+            held,
+            {"status": "empty"},
+        ]) as status, patch.object(
+            repository,
+            "recover_dead_local_scoped_abox_write_lease",
+            return_value={"status": "cleared", "worldId": world_id},
+        ) as recover, patch.object(
+            repository,
+            "driver_imports",
+            return_value=(object(), None),
+        ), patch.object(
+            repository,
+            "scoped_abox_write_lease_graph",
+            return_value=(None, {}),
+        ), patch.object(
+            repository,
+            "with_typedb_retries",
+            return_value=acquired,
+        ):
+            result = repository.acquire_scoped_abox_write_lease("abox-manifest:test", world_id=world_id)
+
+        self.assertEqual(acquired, result)
+        self.assertEqual([call(world_id), call(world_id)], status.call_args_list)
+        recover.assert_called_once_with(world_id)
+
     def test_scoped_abox_write_lease_recovery_inventories_each_validated_world(self):
         repository = TypeDBOntologyGraphRepository("127.0.0.1:1729")
         world_id = "portfolio:local:default"
@@ -5136,7 +5175,7 @@ class TypeDBOntologyRepositoryTests(unittest.TestCase):
                 patch.object(service_manager, "is_running", return_value=True), \
                 patch.object(service_manager, "stop", return_value=0) as stop, \
                 patch.object(service_manager, "start", return_value=0) as start, \
-                patch.object(service_manager, "recover_typedb_scoped_write_lease_after_worker_restart", return_value=True) as recover_lease:
+                patch.object(service_manager, "recover_typedb_scoped_write_lease_after_worker_restart", return_value=False) as recover_lease:
             self.assertEqual(0, service_manager.restart())
             stop.assert_called_once_with(excluded_roles={"typedb"}, include_supervisor=False)
             start.assert_called_once_with(excluded_roles={"typedb"})
@@ -5148,6 +5187,17 @@ class TypeDBOntologyRepositoryTests(unittest.TestCase):
             self.assertEqual(0, service_manager.restart(restart_typedb=True))
             stop.assert_called_once_with(excluded_roles=set(), include_supervisor=False)
             start.assert_called_once_with(excluded_roles=set())
+
+    def test_service_manager_defers_type_db_lease_inventory_without_subprocess(self):
+        with tempfile.TemporaryDirectory() as temp:
+            spec = {
+                "label": "TypeDB ontology graph store",
+                "log": Path(temp) / "typedb.log",
+            }
+            with patch.object(service_manager.subprocess, "run") as run:
+                self.assertTrue(service_manager.recover_typedb_scoped_write_lease_after_worker_restart(spec))
+
+        run.assert_not_called()
 
     def test_service_manager_restart_starts_typedb_when_it_is_down(self):
         specs = {"typedb": {"role": "typedb", "pid": Path("/tmp/typedb.pid")}}

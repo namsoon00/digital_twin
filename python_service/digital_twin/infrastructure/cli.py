@@ -317,15 +317,16 @@ def ontology_reasoning_command(args) -> int:
     limit = int(args.limit or settings.get("ontologyReasoningBatchSize") or 20) if hasattr(args, "limit") else int(settings.get("ontologyReasoningBatchSize") or 20)
     local_lease_recovery = {}
     if args.ontology_reasoning_action in {"once", "watch"}:
-        repository = ontology_repository_from_settings(settings)
-        recover = getattr(repository, "recover_all_dead_local_scoped_abox_write_leases", None)
-        if not callable(recover):
-            recover = getattr(repository, "recover_dead_local_scoped_abox_write_lease", None)
-        if callable(recover):
-            try:
-                local_lease_recovery = dict(recover() or {})
-            except Exception as error:  # noqa: BLE001 - recovery is an optimization, never a startup blocker.
-                local_lease_recovery = {"status": "error", "reason": str(error)[:180]}
+        # Do not enumerate all durable TypeDB leases before the worker starts.
+        # A large or temporarily stalled control-plane read used to leave every
+        # application worker stopped during a routine restart.  The repository
+        # now reclaims only an exact, proven-dead local lease when that world
+        # attempts to acquire its write lease.
+        local_lease_recovery = {
+            "status": "deferred",
+            "scope": "per-world-acquisition",
+            "reason": "Dead local scoped ABox leases are recovered when their world next writes.",
+        }
     runner = build_ontology_reasoning_runner(settings)
     if args.ontology_reasoning_action == "status":
         print(json.dumps(runner.status(), ensure_ascii=False))

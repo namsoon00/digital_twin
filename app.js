@@ -21226,6 +21226,13 @@
     var reasoningBoundary = diagnostics.reasoningBoundary || {};
     var notificationBoundary = diagnostics.notificationBoundary || {};
     var strategyProposalBoundary = diagnostics.strategyProposalBoundary || {};
+    var runtimeObservability = diagnostics.runtimeObservability || {};
+    var runtimeLatest = runtimeObservability.latest || {};
+    var runtimeInference = runtimeLatest.inference || {};
+    var nativeTiming = runtimeInference.nativeRuleTiming || {};
+    var inferencePlan = inferenceBox.executionPlan || {};
+    var runtimeExecution = inferenceBox.runtimeExecution || runtimeInference;
+    var inferenceQueryMetrics = inferenceBox.queryMetrics || {};
     var worldId = String(diagnostics.worldId || "");
     var worlds = Array.isArray(diagnostics.worlds) ? diagnostics.worlds : [];
     var rawChecks = Array.isArray(diagnostics.checks) ? diagnostics.checks : (Array.isArray(notificationBoundary.checks) ? notificationBoundary.checks : []);
@@ -21234,6 +21241,9 @@
       { status: rulebox.status || (rulebox.configured ? "ok" : ""), title: "RuleBox", message: rulebox.reason || rulebox.source || rulebox.ruleboxShortHash || rulebox.engineVersion || "" },
       { status: aboxCoverage.status || "", title: "ABox Coverage", message: [aboxCoverage.primarySymbolCount != null ? aboxCoverage.primarySymbolCount + " primary" : aboxCoverage.symbolCount != null ? aboxCoverage.symbolCount + " symbols" : "", aboxCoverage.primaryCoverageRatio != null ? "primary " + Math.round(Number(aboxCoverage.primaryCoverageRatio || 0) * 100) + "%" : aboxCoverage.coverageRatio != null ? "coverage " + Math.round(Number(aboxCoverage.coverageRatio || 0) * 100) + "%" : "", aboxCoverage.contextSymbolCount != null ? aboxCoverage.contextSymbolCount + " context" : ""].filter(Boolean).join(" · ") },
       { status: inferenceBox.status || inferenceBox.typedbReadStatus || "", title: "InferenceBox", message: inferenceBox.reason || inferenceBox.typedbReadReason || inferenceBox.reasoningMode || inferenceBox.inferenceGenerationId || "" },
+      { status: inferenceBox.targetCoverageStatus || "unknown", title: "Inference Coverage", message: [inferenceBox.targetCoverageStatus === "partial" && inferenceBox.notEvaluatedSymbols && inferenceBox.notEvaluatedSymbols.length ? "미실행 " + inferenceBox.notEvaluatedSymbols.join(", ") : "", inferenceBox.requestedSymbols && inferenceBox.requestedSymbols.length ? "요청 " + inferenceBox.requestedSymbols.join(", ") : "", inferenceBox.evaluatedSymbols && inferenceBox.evaluatedSymbols.length ? "계산 " + inferenceBox.evaluatedSymbols.join(", ") : "", inferenceBox.targetCoverageReason || ""].filter(Boolean).join(" · ") },
+      { status: inferencePlan.status || runtimeExecution.executionStatus || (inferencePlan.selectedRuleCount != null || runtimeExecution.executedRuleCount != null ? "ok" : "unknown"), title: "Native Execution Plan", message: [inferencePlan.candidateRuleCount != null || runtimeExecution.candidateRuleCount != null ? "후보 " + (inferencePlan.candidateRuleCount != null ? inferencePlan.candidateRuleCount : runtimeExecution.candidateRuleCount) + "개" : "", inferencePlan.selectedRuleCount != null || runtimeExecution.executedRuleCount != null ? "실행 " + (inferencePlan.selectedRuleCount != null ? inferencePlan.selectedRuleCount : runtimeExecution.executedRuleCount) + "개" : "", inferencePlan.preflightPrunedRuleCount ? "사전 제외 " + inferencePlan.preflightPrunedRuleCount + "개" : "", runtimeExecution.deferredRuleCount ? "보류 " + runtimeExecution.deferredRuleCount + "개" : "", inferenceQueryMetrics.queryCount != null ? "쿼리 " + inferenceQueryMetrics.queryCount + "회 / " + Number(inferenceQueryMetrics.totalDurationMs || 0).toFixed(1) + "ms" : ""].filter(Boolean).join(" · ") },
+      { status: runtimeObservability.status || "unavailable", title: "Runtime SLO", message: [runtimeObservability.sampleCount != null ? "표본 " + runtimeObservability.sampleCount + "회" : "", runtimeLatest.durationMs != null ? "최근 " + runtimeLatest.durationMs + "ms" : "", nativeTiming.executedRuleCount != null ? "규칙 " + nativeTiming.executedRuleCount + "개" : "", nativeTiming.aggregateQueryDurationMs != null ? "네이티브 쿼리 " + nativeTiming.aggregateQueryDurationMs + "ms" : "", runtimeObservability.interpretation || ""].filter(Boolean).join(" · ") },
       { status: reasoningBoundary.status || "", title: "Reasoning Boundary", message: reasoningBoundary.interpretation || reasoningBoundary.ruleboxHashStatus || "" },
       { status: notificationBoundary.status || "", title: "Notification Boundary", message: notificationBoundary.reason || (notificationBoundary.recentJobCount != null ? notificationBoundary.recentJobCount + " recent jobs" : "") },
       { status: strategyProposalBoundary.status || "", title: "Strategy Proposal Boundary", message: strategyProposalBoundary.nextAction || (strategyProposalBoundary.count != null ? strategyProposalBoundary.count + " proposals" : "") }
@@ -21258,7 +21268,7 @@
       '</div>',
       worldId || worlds.length ? '<div class="rulebox-console-strip"><span><strong>world</strong>' + escapeHtml(worldId || "선택 필요") + '</span><span><strong>active worlds</strong>' + escapeHtml(worlds.length) + '</span></div>' : '',
       '<div class="source-stack rulebox-diagnostics-list">',
-      checks.length ? checks.slice(0, 8).map(function (check) {
+      checks.length ? checks.slice(0, 11).map(function (check) {
         return [
           '<div class="source-row">',
           '<span>' + escapeHtml(check.status || check.severity || "check") + '</span>',

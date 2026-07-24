@@ -59,6 +59,7 @@ from .investment_research_gateway import CompositeInvestmentResearchGateway, Exi
 from .ontology_graph_store import ontology_repository_from_settings
 from . import operational_store as stores
 from .ontology_projection import PortfolioOntologyProjectionRecorder
+from .typedb_storage_guard import typedb_storage_health
 from .kis_realtime_ws import KISRealtimeSymbolSelector, KISRealtimeWebSocketClient
 from .rule_change_candidate_ai import rule_change_candidate_advisor_from_settings
 from .notifications import queued_notifier_for_account
@@ -624,6 +625,7 @@ def build_ontology_reasoning_runner(settings=None, event_publisher=None) -> Onto
             if hasattr(ontology_repository, "run_deferred_maintenance")
             else {"status": "not-supported", "reason": "Graph store has no deferred maintenance adapter."}
         ),
+        storage_guard=lambda: typedb_storage_health(configured_settings),
     )
 
 

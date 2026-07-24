@@ -158,7 +158,7 @@ def event_time_key(event: object) -> Tuple[str, str]:
     )
 
 
-def realtime_coalescing_key(event: object) -> Tuple[str, Tuple[str, ...]]:
+def realtime_coalescing_key(event: object) -> Tuple[str, str, Tuple[str, ...]]:
     """Return a conservative replacement key for redundant live observations."""
     payload = event_payload(event)
     trigger = str(payload.get("trigger") or "").strip()
@@ -171,7 +171,21 @@ def realtime_coalescing_key(event: object) -> Tuple[str, Tuple[str, ...]]:
     if not symbols:
         return ()
     fact_types = tuple(sorted({str(item or "").strip() for item in payload.get("factTypes") or [] if str(item or "").strip()}))
-    return trigger, fact_types
+    account_ids = []
+    raw_account_ids = payload.get("accountIds") or []
+    if isinstance(raw_account_ids, str):
+        raw_account_ids = [raw_account_ids]
+    elif not isinstance(raw_account_ids, (list, tuple, set)):
+        raw_account_ids = []
+    for value in [payload.get("accountId")] + list(raw_account_ids):
+        clean = str(value or "").strip()
+        if clean and clean not in account_ids:
+            account_ids.append(clean)
+    # Empty account scope represents market-wide source observations. It must
+    # remain separate from account-scoped snapshots even when both carry the
+    # same symbols and fact family.
+    account_scope = ",".join(sorted(account_ids)) or "market"
+    return account_scope, trigger, fact_types
 
 
 class OntologyReasoningRunner:
@@ -188,6 +202,7 @@ class OntologyReasoningRunner:
         priority_symbols_provider: Callable = None,
         maintenance_runner: Callable = None,
         projection_recovery_probe: Callable = None,
+        storage_guard: Callable = None,
     ):
         self.event_reader = event_reader
         self.cursor_store = cursor_store
@@ -200,6 +215,7 @@ class OntologyReasoningRunner:
         self.priority_symbols_provider = priority_symbols_provider
         self.maintenance_runner = maintenance_runner
         self.projection_recovery_probe = projection_recovery_probe
+        self.storage_guard = storage_guard
 
     def enabled(self) -> bool:
         return truthy(self.settings.get("ontologyReasoningEnabled"), True)
@@ -788,6 +804,52 @@ class OntologyReasoningRunner:
             },
         }
 
+    def persist_superseded_events(self, event_ids: Iterable[str]) -> List[str]:
+        """Durably retire older realtime triggers once a newer snapshot exists.
+
+        Source snapshots are committed before an ontology request is
+        published. Retaining every prior trigger adds no recovery value and
+        lets a high-frequency stream keep the newest state waiting behind
+        obsolete work. Research and urgent requests never enter this path.
+        """
+        clean_ids = []
+        for event_id in event_ids or []:
+            clean = str(event_id or "").strip()
+            if clean and clean not in clean_ids:
+                clean_ids.append(clean)
+        if not clean_ids or not self.cursor_store:
+            return []
+        marker = getattr(self.cursor_store, "mark_superseded", None)
+        if callable(marker):
+            marker(clean_ids)
+            return clean_ids
+        payload = self.cursor_payload()
+        progress = self.event_symbol_progress(payload)
+        for event_id in clean_ids:
+            progress.pop(event_id, None)
+        if hasattr(self.cursor_store, "save"):
+            payload["eventSymbolProgress"] = progress
+            self.save_cursor_payload(payload)
+        if hasattr(self.cursor_store, "mark_processed"):
+            self.cursor_store.mark_processed(clean_ids)
+        return clean_ids
+
+    def storage_guard_state(self) -> Dict[str, object]:
+        if not callable(self.storage_guard):
+            return {"ready": True, "status": "not-configured"}
+        try:
+            result = self.storage_guard()
+        except Exception as error:  # noqa: BLE001 - fail closed when capacity cannot be checked.
+            return {
+                "ready": False,
+                "status": "error",
+                "reason": "TypeDB 저장소 여유 공간 확인 실패: " + str(error)[:180],
+            }
+        state = dict(result or {}) if isinstance(result, dict) else {}
+        state["ready"] = bool(state.get("ready"))
+        state.setdefault("status", "ready" if state["ready"] else "blocked")
+        return state
+
     def publish(self, event) -> None:
         if not self.event_publisher:
             return
@@ -1336,6 +1398,7 @@ class OntologyReasoningRunner:
         if not self.enabled():
             return {"status": "disabled", "processedCount": 0, "alertCount": 0}
         work = self.pending_work(limit)
+        durable_superseded_ids = self.persist_superseded_events(work.get("coalescedEventIds") or [])
         requests = list(work.get("requests") or [])
         if not requests:
             maintenance = self.run_maintenance_if_due(force=force)
@@ -1343,8 +1406,19 @@ class OntologyReasoningRunner:
                 "status": "idle",
                 "processedCount": 0,
                 "alertCount": 0,
-                "coalescedEventCount": len(work.get("coalescedEventIds") or []),
+                "coalescedEventCount": len(durable_superseded_ids),
                 "maintenance": maintenance,
+            }
+        storage_guard = self.storage_guard_state()
+        if not storage_guard.get("ready"):
+            return {
+                "status": "deferred",
+                "processedCount": 0,
+                "alertCount": 0,
+                "retryAfterSeconds": 60,
+                "deferredReason": str(storage_guard.get("reason") or "TypeDB 저장소 여유 공간이 부족해 추론을 보류합니다."),
+                "storageGuard": storage_guard,
+                "coalescedEventCount": len(durable_superseded_ids),
             }
         symbol_batches, symbols, omitted_symbol_count = self.request_symbol_batches(requests)
         cursor_payload = self.cursor_payload()
@@ -1366,7 +1440,7 @@ class OntologyReasoningRunner:
                     "deferredReason": str(circuit.get("lastFailureReason") or "TypeDB projection circuit is open."),
                     "projectionCircuit": circuit,
                     "projectionRecovery": recovery,
-                    "coalescedEventCount": len(work.get("coalescedEventIds") or []),
+                    "coalescedEventCount": len(durable_superseded_ids),
                 }
         fairness_drain = self.fairness_drain_state(symbols, cursor_payload)
         if not force and not self.projection_due(requests, cursor_payload, symbols):
@@ -1385,7 +1459,7 @@ class OntologyReasoningRunner:
                 "configuredProjectionCooldownSeconds": self.projection_min_interval_seconds(requests),
                 "fairnessDrain": fairness_drain,
                 "lastProjectionRuntime": self.last_projection_runtime(cursor_payload),
-                "coalescedEventCount": len(work.get("coalescedEventIds") or []),
+                "coalescedEventCount": len(durable_superseded_ids),
             }
         runner = self.monitor_runner_factory()
         if "symbol_filter" in inspect.signature(runner.run_once).parameters:
@@ -1409,7 +1483,7 @@ class OntologyReasoningRunner:
                     "deferredReason": str(projection_gate.get("reason") or "TypeDB graph cycle is serialized by another writer."),
                     "projectionFailures": list(projection_gate.get("results") or []),
                     "projectionCircuit": self.projection_circuit_state(),
-                    "coalescedEventCount": len(work.get("coalescedEventIds") or []),
+                    "coalescedEventCount": len(durable_superseded_ids),
                 }
             circuit = self.record_projection_failure(
                 str(projection_gate.get("reason") or "TypeDB graph cycle is not ready."),
@@ -1428,7 +1502,7 @@ class OntologyReasoningRunner:
                 "deferredReason": str(projection_gate.get("reason") or "TypeDB graph cycle is not ready."),
                 "projectionFailures": list(projection_gate.get("results") or []),
                 "projectionCircuit": circuit,
-                "coalescedEventCount": len(work.get("coalescedEventIds") or []),
+                "coalescedEventCount": len(durable_superseded_ids),
             }
         self.mark_successful_projection(runner)
         account_ids = [getattr(account, "account_id", "") for account in getattr(runner, "accounts", [])]
@@ -1475,7 +1549,7 @@ class OntologyReasoningRunner:
             "processedCount": len(trigger_event_ids),
             "completedEventCount": len(progress_result.get("completedEventIds") or []),
             "partialEventCount": len(progress_result.get("partialEventIds") or []),
-            "coalescedEventCount": len(progress_result.get("supersededEventIds") or []),
+            "coalescedEventCount": len(set(durable_superseded_ids) | set(progress_result.get("supersededEventIds") or [])),
             "alertCount": len(alerts or []),
             "symbols": symbols,
             "maxSymbolsPerRun": self.effective_max_symbols_per_run(),
@@ -1757,4 +1831,5 @@ class OntologyReasoningRunner:
             "ontologyMaintenance": self.maintenance_state(cursor_payload),
             "projectionCircuit": self.projection_circuit_state(),
             "projectionCircuitRetryAfterSeconds": self.projection_circuit_remaining_seconds(),
+            "storageGuard": self.storage_guard_state(),
         }

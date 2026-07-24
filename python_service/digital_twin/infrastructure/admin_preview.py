@@ -497,6 +497,7 @@ def admin_preview_config() -> Dict[str, object]:
                     {"key": "typedbAgeResetEnabled", "label": "TypeDB 보관 시간 점검", "type": "toggle", "default": "0"},
                     {"key": "typedbDataRetentionHours", "label": "TypeDB 보관 시간", "type": "number", "default": "24", "unit": "hours"},
                     {"key": "typedbDataMaxSizeMb", "label": "TypeDB 최대 용량", "type": "number", "default": "2048", "unit": "MB"},
+                    {"key": "typedbMinimumFreeSpaceMb", "label": "TypeDB 최소 디스크 여유", "type": "number", "default": "4096", "unit": "MB"},
                 ],
             },
             {

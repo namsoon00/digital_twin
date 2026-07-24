@@ -222,6 +222,38 @@ class OntologyChangeImpactTests(unittest.TestCase):
         self.assertEqual(["symbol:005930:link"], delta["reboundScopeIds"])
         self.assertEqual([], delta["changedScopeFamilies"])
 
+    def test_changed_relation_scope_uses_its_symbol_context_without_global_impact(self):
+        before = [
+            {
+                "scopeId": "symbol:005930:market",
+                "generationId": "market-a",
+                "fingerprint": "market-a",
+                "semanticFingerprints": {"market": "price-a"},
+            },
+            {
+                "scopeId": "link:apple-news",
+                "generationId": "link-a",
+                "fingerprint": "link-a",
+                "semanticFingerprints": {"evidence": "article-a"},
+                "dependencyScopeIds": ["symbol:005930:market"],
+            },
+        ]
+        after = [
+            before[0],
+            {
+                **before[1],
+                "generationId": "link-b",
+                "fingerprint": "link-b",
+                "semanticFingerprints": {"evidence": "article-b"},
+            },
+        ]
+
+        plan = build_inference_impact_plan(before, after, ["005930", "000660"], rules=[])
+
+        self.assertFalse(plan["globalImpact"])
+        self.assertEqual(["005930"], plan["inferenceTargetSymbols"])
+        self.assertEqual(["005930"], plan["relationContextSymbols"])
+
     def test_change_impact_uses_semantic_family_from_a_relation_only_link_scope(self):
         before = [
             {

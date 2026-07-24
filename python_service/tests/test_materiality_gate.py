@@ -919,6 +919,78 @@ class MaterialityGateTests(unittest.TestCase):
         self.assertEqual({"old-realtime-event", "new-realtime-event"}, set(cursor.processed_event_ids()))
         self.assertNotIn("old-realtime-event", cursor.payload.get("eventSymbolProgress") or {})
 
+    def test_ontology_reasoning_durably_supersedes_stale_ticks_before_storage_deferral(self):
+        source = DomainEvent(name="market_data.collected", aggregate_id="market:KR", payload={})
+        old_request = ontology_reasoning_requested_event(
+            source,
+            "market-data-update",
+            ["005930"],
+            changed_count=1,
+            fact_types=["MarketQuote"],
+        )
+        new_request = ontology_reasoning_requested_event(
+            source,
+            "market-data-update",
+            ["005930"],
+            changed_count=1,
+            fact_types=["MarketQuote"],
+        )
+        old_request = DomainEvent(
+            name=old_request.name,
+            aggregate_id=old_request.aggregate_id,
+            payload=old_request.payload,
+            correlation_id=old_request.correlation_id,
+            occurred_at="2026-07-21T00:00:00Z",
+            event_id="old-realtime-event",
+        )
+        new_request = DomainEvent(
+            name=new_request.name,
+            aggregate_id=new_request.aggregate_id,
+            payload=new_request.payload,
+            correlation_id=new_request.correlation_id,
+            occurred_at="2026-07-21T00:00:15Z",
+            event_id="new-realtime-event",
+        )
+
+        class Reader:
+            def recent_events(self, **_kwargs):
+                return [old_request, new_request]
+
+        class Cursor:
+            def __init__(self):
+                self.payload = {"processedEventIds": [], "eventSymbolProgress": {}}
+                self.superseded = []
+
+            def processed_event_ids(self):
+                return list(self.payload["processedEventIds"])
+
+            def mark_superseded(self, event_ids):
+                self.superseded.extend(event_ids)
+                self.payload["processedEventIds"].extend(event_ids)
+                for event_id in event_ids:
+                    self.payload["eventSymbolProgress"].pop(event_id, None)
+
+            def load(self):
+                return dict(self.payload)
+
+            def save(self, payload):
+                self.payload = dict(payload or {})
+
+        cursor = Cursor()
+        runner = OntologyReasoningRunner(
+            Reader(),
+            cursor,
+            monitor_runner_factory=lambda: self.fail("monitor must not start while TypeDB storage is blocked"),
+            settings={"ontologyReasoningEnabled": "1"},
+            storage_guard=lambda: {"ready": False, "reason": "disk reserve"},
+        )
+
+        result = runner.run_once()
+
+        self.assertEqual("deferred", result["status"])
+        self.assertEqual(["old-realtime-event"], cursor.superseded)
+        self.assertNotIn("new-realtime-event", cursor.processed_event_ids())
+
     def test_ontology_reasoning_retries_type_db_projection_without_advancing_event_cursor(self):
         request = ontology_reasoning_requested_event(
             DomainEvent(

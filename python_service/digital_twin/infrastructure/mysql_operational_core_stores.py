@@ -292,6 +292,7 @@ class MySQLOntologyReasoningCursorStore(MySQLAppStore):
     def load(self) -> Dict[str, object]:
         payload = super().load()
         payload.setdefault("processedEventIds", [])
+        payload.setdefault("supersededEventIds", [])
         return payload
 
     def processed_event_ids(self) -> List[str]:
@@ -321,4 +322,37 @@ class MySQLOntologyReasoningCursorStore(MySQLAppStore):
             retention_limit = 10000
         retention_limit = max(1000, min(50000, retention_limit))
         payload["processedEventIds"] = merged[-retention_limit:]
+        self.save(payload)
+
+    def mark_superseded(self, event_ids: Iterable[str]) -> None:
+        """Persist stale realtime triggers without leaving partial cursor work."""
+        payload = self.load()
+        clean_ids = []
+        for event_id in event_ids or []:
+            clean = str(event_id or "").strip()
+            if clean and clean not in clean_ids:
+                clean_ids.append(clean)
+        if not clean_ids:
+            return
+        try:
+            retention_limit = int(float(str(
+                self.runtime_settings.get("ontologyReasoningProcessedEventLimit") or "10000"
+            )))
+        except (TypeError, ValueError):
+            retention_limit = 10000
+        retention_limit = max(1000, min(50000, retention_limit))
+        processed = [str(item or "").strip() for item in payload.get("processedEventIds") or [] if str(item or "").strip()]
+        superseded = [str(item or "").strip() for item in payload.get("supersededEventIds") or [] if str(item or "").strip()]
+        for event_id in clean_ids:
+            if event_id not in processed:
+                processed.append(event_id)
+            if event_id not in superseded:
+                superseded.append(event_id)
+        progress = dict(payload.get("eventSymbolProgress") or {})
+        for event_id in clean_ids:
+            progress.pop(event_id, None)
+        payload["processedEventIds"] = processed[-retention_limit:]
+        payload["supersededEventIds"] = superseded[-retention_limit:]
+        payload["eventSymbolProgress"] = progress
+        payload["lastSupersededAt"] = utc_now()
         self.save(payload)

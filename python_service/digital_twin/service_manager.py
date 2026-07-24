@@ -12,6 +12,7 @@ from pathlib import Path
 from typing import Dict, List
 
 from .infrastructure.settings import ROOT_DIR, data_dir, runtime_settings
+from .infrastructure.typedb_storage_guard import typedb_storage_health
 
 
 BASE_WORKERS = {
@@ -148,6 +149,7 @@ def typedb_worker_spec(settings: Dict[str, object]) -> Dict[str, object]:
         "dataPath": data_path,
         "retentionHours": str((settings or {}).get("typedbDataRetentionHours") or "24"),
         "maxSizeMb": str((settings or {}).get("typedbDataMaxSizeMb") or "2048"),
+        "minimumFreeSpaceMb": str((settings or {}).get("typedbMinimumFreeSpaceMb") or "4096"),
         # TypeDB is the durable ontology store. Capacity pressure must surface
         # as maintenance work, never as an automatic data deletion during a
         # routine worker restart.
@@ -390,6 +392,16 @@ def typedb_reset_needed(spec: Dict[str, object]) -> Dict[str, object]:
     }
 
 
+def typedb_storage_preflight(spec: Dict[str, object]) -> Dict[str, object]:
+    return typedb_storage_health(
+        {
+            "ontologyTypeDbEnabled": "1",
+            "typedbMinimumFreeSpaceMb": spec.get("minimumFreeSpaceMb") or "4096",
+        },
+        data_path=Path(spec.get("dataPath") or data_dir() / "typedb-data"),
+    )
+
+
 def run_typedb_data_retention(spec: Dict[str, object], force: bool = False) -> Dict[str, object]:
     if str(spec.get("role") or "") != "typedb":
         return {"status": "skipped", "reason": "not typedb"}
@@ -442,6 +454,13 @@ def status_worker(spec: Dict[str, object]) -> int:
         print("Command: " + command_for_pid(pid))
         if spec.get("healthAddress"):
             print("Health: " + ("ready" if tcp_ready(spec.get("healthAddress")) else "not-ready") + " · " + str(spec.get("healthAddress")))
+    if str(spec.get("role") or "") == "typedb":
+        storage = typedb_storage_preflight(spec)
+        print(
+            "Storage: " + str(storage.get("status") or "unknown")
+            + " · free=" + str(storage.get("freeMb") or "-") + "MB"
+            + " · minimum=" + str(storage.get("minimumFreeMb") or "-") + "MB"
+        )
     if log_path.exists():
         print("Log: " + str(log_path))
         print("Log updated: " + time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(log_path.stat().st_mtime)))
@@ -718,6 +737,12 @@ def start_worker(spec: Dict[str, object]) -> int:
         print(str(spec["label"]) + " data directory initialization failed.")
         return 1
     if str(spec.get("role") or "") == "typedb":
+        storage = typedb_storage_preflight(spec)
+        if not storage.get("ready"):
+            message = "storage preflight blocked. " + str(storage.get("reason") or "TypeDB storage is not ready.")
+            append_log(log_path, message)
+            print(str(spec["label"]) + " not started. " + message)
+            return 1
         retention = run_typedb_data_retention(spec)
         if retention.get("status") == "reset":
             previous_mb = round(float(retention.get("sizeBytes") or 0) / 1024 / 1024, 1)

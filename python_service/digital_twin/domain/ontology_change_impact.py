@@ -34,7 +34,11 @@ SYMBOL_SCOPE_FAMILIES = {
     "link",
 }
 
-GLOBAL_SCOPE_TYPES = {"macro", "portfolio", "policy", "reference", "episode", "evidence", "link"}
+# Evidence and link scopes are relation-local when their dependency scopes
+# identify a symbol. Treating every article edge or support relation as a
+# global change caused unrelated holdings to be recomputed.
+GLOBAL_SCOPE_TYPES = {"macro", "portfolio", "policy", "reference", "episode"}
+RELATION_LOCAL_SCOPE_TYPES = {"evidence", "link"}
 
 
 def _clean(value: object) -> str:
@@ -497,6 +501,26 @@ def scope_delta(previous_scope_plan: Iterable[object], next_scope_plan: Iterable
                 pending.append(dependent)
     active_affected = sorted(scope_id for scope_id in affected if scope_id in current)
     active_direct = sorted(scope_id for scope_id in direct_changed if scope_id in current)
+    relation_context_scope_ids: Set[str] = set()
+    unresolved_relation_scope_ids: List[str] = []
+    for scope_id in direct_changed:
+        if scope_type(scope_id) not in RELATION_LOCAL_SCOPE_TYPES:
+            continue
+        item = current.get(scope_id) or previous.get(scope_id) or {}
+        dependencies = {
+            _clean(dependency)
+            for dependency in item.get("dependencyScopeIds") or []
+            if _clean(dependency)
+        }
+        symbol_dependencies = {dependency for dependency in dependencies if scope_symbol(dependency)}
+        if symbol_dependencies:
+            relation_context_scope_ids.update(symbol_dependencies)
+        else:
+            unresolved_relation_scope_ids.append(scope_id)
+    active_relation_context_scope_ids = sorted(
+        scope_id for scope_id in relation_context_scope_ids if scope_id in current
+    )
+    active_affected = sorted(set(active_affected) | set(active_relation_context_scope_ids))
     direct_families = sorted({
         token
         for scope_id in direct_changed
@@ -523,6 +547,12 @@ def scope_delta(previous_scope_plan: Iterable[object], next_scope_plan: Iterable
         for symbol in [scope_symbol(scope_id)]
         if symbol
     })
+    relation_context_symbols = sorted({
+        symbol
+        for scope_id in active_relation_context_scope_ids
+        for symbol in [scope_symbol(scope_id)]
+        if symbol
+    })
     return {
         "version": CHANGE_IMPACT_VERSION,
         "previousScopeCount": len(previous),
@@ -546,6 +576,9 @@ def scope_delta(previous_scope_plan: Iterable[object], next_scope_plan: Iterable
         "changedSymbols": direct_symbols,
         "directChangedSymbols": direct_symbols,
         "dependencyAffectedSymbols": sorted(set(affected_symbols) - set(direct_symbols)),
+        "relationContextScopeIds": active_relation_context_scope_ids,
+        "relationContextSymbols": relation_context_symbols,
+        "unresolvedRelationScopeIds": sorted(unresolved_relation_scope_ids),
     }
 
 
@@ -584,10 +617,15 @@ def build_inference_impact_plan(
         scope_id
         for scope_id in changed_scope_ids
         if scope_type(scope_id) in GLOBAL_SCOPE_TYPES and not scope_symbol(scope_id)
-    })
+    } | set(delta.get("unresolvedRelationScopeIds") or []))
     global_impact = bool(global_scope_ids)
     bounded_global_context = bool(global_impact and explicit_symbols)
-    impacted_symbols = set(delta.get("directChangedSymbols") or delta.get("changedSymbols") or []) | set(explicit_symbols)
+    impacted_symbols = (
+        set(delta.get("directChangedSymbols") or delta.get("changedSymbols") or [])
+        | set(delta.get("dependencyAffectedSymbols") or [])
+        | set(delta.get("relationContextSymbols") or [])
+        | set(explicit_symbols)
+    )
     # A worker can intentionally schedule one target while a shared macro or
     # portfolio fact changes. The TypeDB query still sees the complete ABox,
     # but it must not expand the requested subject back to every holding.
@@ -622,6 +660,8 @@ def build_inference_impact_plan(
         "candidateRuleCount": len(candidate_profiles),
         "ruleDependencyCount": len(profiles),
         "changedScopeFamilies": sorted(changed_families),
+        "relationContextSymbols": list(delta.get("relationContextSymbols") or []),
+        "unresolvedRelationScopeIds": list(delta.get("unresolvedRelationScopeIds") or []),
         "ruleExecutionScope": (
             "target-scoped-global-context-native-evaluation"
             if bounded_global_context
@@ -662,6 +702,8 @@ def compact_inference_impact_plan(plan: Mapping[str, object], limit: int = 80) -
         "candidateRuleCount": int(values.get("candidateRuleCount") or 0),
         "ruleDependencyCount": int(values.get("ruleDependencyCount") or 0),
         "changedScopeFamilies": list(values.get("changedScopeFamilies") or [])[:bounded],
+        "relationContextSymbols": list(values.get("relationContextSymbols") or [])[:bounded],
+        "unresolvedRelationScopeIds": list(values.get("unresolvedRelationScopeIds") or [])[:bounded],
         "ruleExecutionScope": str(values.get("ruleExecutionScope") or "dependency-selected-native-evaluation"),
         "nativeRuleSelectionEligible": bool(values.get("nativeRuleSelectionEligible")),
         "nativeRuleSelectionApplied": bool(values.get("nativeRuleSelectionApplied")),

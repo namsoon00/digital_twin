@@ -194,7 +194,10 @@ class OntologyRuntimeOperationsTests(unittest.TestCase):
         observation = build_projection_runtime_observation(self.sample_run(), result)
 
         self.assertEqual(2, observation["inference"]["plannedTargetSymbolCount"])
+        self.assertEqual(2, observation["inference"]["requestedTargetSymbolCount"])
         self.assertEqual(1, observation["inference"]["targetSymbolCount"])
+        self.assertEqual("partial", observation["inference"]["targetCoverageStatus"])
+        self.assertEqual(["000660"], observation["inference"]["notEvaluatedSymbols"])
         self.assertEqual(4, observation["inference"]["executedRuleCount"])
         self.assertTrue(observation["inference"]["nativeRuleSelectionApplied"])
         self.assertEqual(6200, observation["stages"]["nativeInferenceMs"])

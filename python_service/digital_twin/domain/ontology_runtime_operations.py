@@ -308,6 +308,26 @@ def build_projection_runtime_observation(
         )
         if _text(symbol)
     ]
+    requested_target_symbols = [
+        _text(symbol).upper()
+        for symbol in (
+            inference.get("requestedSymbols")
+            or inference.get("symbols")
+            or plan.get("inferenceTargetSymbols")
+            or actual_target_symbols
+        )
+        if _text(symbol)
+    ]
+    not_evaluated_symbols = sorted(set(requested_target_symbols) - set(actual_target_symbols))
+    target_coverage_status = _text(inference.get("targetCoverageStatus"))
+    if not target_coverage_status:
+        target_coverage_status = (
+            "not-requested"
+            if not requested_target_symbols
+            else "partial"
+            if not_evaluated_symbols
+            else "complete"
+        )
     observation = {
         "version": ONTOLOGY_RUNTIME_OBSERVATION_VERSION,
         "runId": _text(getattr(projection_run, "run_id", "")),
@@ -338,8 +358,12 @@ def build_projection_runtime_observation(
             "generationAligned": bool(inference.get("generationAligned")),
             "nativeTypeDbReasoningUsed": bool(inference.get("nativeTypeDbReasoningUsed")),
             "plannedTargetSymbolCount": len(plan.get("inferenceTargetSymbols") or []),
+            "requestedTargetSymbolCount": len(requested_target_symbols),
             "targetSymbolCount": len(actual_target_symbols),
             "targetSymbols": actual_target_symbols[:20],
+            "notEvaluatedSymbolCount": len(not_evaluated_symbols),
+            "notEvaluatedSymbols": not_evaluated_symbols[:20],
+            "targetCoverageStatus": target_coverage_status,
             "candidateRuleCount": _integer(plan.get("candidateRuleCount")),
             "executedRuleCount": _integer(
                 execution.get("typedbNativeRuleExecutedCount")

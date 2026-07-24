@@ -170,7 +170,20 @@ class FakeProjectionRunStore:
             "status": "ok",
             "sampleCount": min(3, limit),
             "sustainedBreach": False,
-            "latest": {"runId": "ontology-projection:test", "durationMs": 800},
+            "latest": {
+                "runId": "ontology-projection:test",
+                "durationMs": 800,
+                "inference": {
+                    "status": "ok",
+                    "candidateRuleCount": 4,
+                    "executedRuleCount": 2,
+                    "deferredRuleCount": 1,
+                    "nativeRuleTiming": {
+                        "aggregateQueryDurationMs": 120,
+                        "slowestRules": [{"ruleId": "graph.test", "elapsedMs": 80}],
+                    },
+                },
+            },
         }
 
 
@@ -358,6 +371,38 @@ class OntologyDiagnosticsServiceTests(unittest.TestCase):
         self.assertEqual("ok", payload["ruleboxQuality"]["status"])
         self.assertFalse(payload["ruleboxQuality"]["automaticDeployment"])
         self.assertEqual("graph.test.v1", payload["decisionPerformanceBoundary"]["ruleOutcomes"][0]["ruleId"])
+        self.assertEqual(4, payload["inferenceBox"]["runtimeExecution"]["candidateRuleCount"])
+        self.assertEqual("graph.test", payload["inferenceBox"]["runtimeExecution"]["nativeRuleTiming"]["slowestRules"][0]["ruleId"])
+
+    def test_status_marks_partial_target_coverage_as_waiting_not_no_signal(self):
+        class PartialCoverageRepository(FakeOntologyRepository):
+            def inferencebox_snapshot(self, symbols=None, limit=80):
+                return {
+                    "configured": True,
+                    "saved": True,
+                    "status": "not-evaluated",
+                    "source": "typedbInferenceBox",
+                    "graphStore": "typedb",
+                    "reason": "MSTR has not been evaluated in the active generation.",
+                    "generationAligned": True,
+                    "sourceAboxSnapshotId": "abox-manifest:test",
+                    "nativeTypeDbReasoningCompleted": True,
+                    "symbols": list(symbols or []),
+                    "targetSymbols": ["CPNG"],
+                    "requestedSymbols": ["MSTR"],
+                    "evaluatedSymbols": ["CPNG"],
+                    "notEvaluatedSymbols": ["MSTR"],
+                    "targetCoverageStatus": "partial",
+                    "targetCoverageComplete": False,
+                    "targetCoverageReason": "The active generation is scoped to CPNG.",
+                }
+
+        payload = OntologyDiagnosticsService(ontology_repository=PartialCoverageRepository()).status(symbols=["MSTR"])
+
+        self.assertEqual("waiting-for-inference", payload["alertPipeline"]["status"])
+        self.assertEqual("partial", payload["alertPipeline"]["targetCoverageStatus"])
+        self.assertEqual(["MSTR"], payload["inferenceBox"]["notEvaluatedSymbols"])
+        self.assertEqual("partial", payload["inferenceBox"]["targetCoverageStatus"])
 
     def test_abox_coverage_separates_primary_symbols_from_context_proxies(self):
         service = OntologyDiagnosticsService(ontology_repository=PrimaryCoverageRepository())
@@ -382,6 +427,52 @@ class OntologyDiagnosticsServiceTests(unittest.TestCase):
 
         self.assertEqual("ok", payload["aboxCoverage"]["status"])
         self.assertEqual(["stock:AAPL", "stock:SPY"], repository.source_ids)
+
+    def test_abox_coverage_uses_manifest_topology_before_full_abox_rows(self):
+        class IndexedCoverageRepository(PrimaryCoverageRepository):
+            def __init__(self):
+                self.storage_ids = []
+
+            def read_entity_rows(self, boxes=None):
+                raise AssertionError("full ABox entity read should be skipped")
+
+            def active_abox_relation_types_by_symbol(self, symbols=None, world_id=""):
+                return {
+                    "status": "ok",
+                    "source": "active-manifest-evidence-index",
+                    "symbols": ["AAPL"],
+                    "sourceIdsBySymbol": {"AAPL": ["stock:AAPL"]},
+                    "sourceStorageIdsBySourceId": {"stock:AAPL": "storage:stock:AAPL"},
+                    "relationTypesBySymbol": {"AAPL": ["HAS_PRICE", "HAS_PRICE_PATH", "HAS_TRADE_FLOW"]},
+                    "relationCount": 3,
+                }
+
+            def read_entity_rows_by_ids(self, ids, boxes=None, world_id=""):
+                raise AssertionError("source-id fallback should not be used when storage IDs exist")
+
+            def read_abox_entity_rows_by_storage_ids(self, storage_ids, world_id=""):
+                self.storage_ids = list(storage_ids or [])
+                return [{
+                    "id": "stock:AAPL",
+                    "label": "Apple",
+                    "kind": "stock",
+                    "ontologyBox": "ABox",
+                    "symbol": "AAPL",
+                    "source": "watchlist",
+                    "tboxClass": "Stock",
+                    "tboxClasses": ["ActionPolicy", "WatchlistCandidate"],
+                }]
+
+        repository = IndexedCoverageRepository()
+        coverage = OntologyDiagnosticsService(ontology_repository=repository).abox_coverage(
+            ["AAPL"],
+            world_id="portfolio:local:default",
+        )
+
+        self.assertEqual("active-manifest-evidence-index", coverage["coverageReadMode"])
+        self.assertEqual(["storage:stock:AAPL"], repository.storage_ids)
+        self.assertEqual(1, coverage["entityCount"])
+        self.assertEqual(3, coverage["relationCount"])
 
     def test_abox_coverage_prefers_root_holding_source_over_later_context_evidence(self):
         class RootHoldingRepository(PrimaryCoverageRepository):

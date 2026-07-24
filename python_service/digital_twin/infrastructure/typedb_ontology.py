@@ -631,13 +631,97 @@ def typedb_native_rule_execution_incomplete_diagnostic(
 
 
 def clean_symbols_from_payload(value: object) -> List[str]:
-    if isinstance(value, list):
-        raw_values = value
+    if isinstance(value, (list, tuple, set)):
+        raw_values = list(value)
     elif value in (None, ""):
         raw_values = []
     else:
         raw_values = [value]
     return sorted(set(str(item or "").upper().strip() for item in raw_values if str(item or "").strip()))
+
+
+def inference_target_coverage_payload(
+    requested_symbols: Iterable[str] = None,
+    evaluated_symbols: Iterable[str] = None,
+) -> Dict[str, object]:
+    """Describe whether an InferenceBox generation covers a requested read.
+
+    A generation may be intentionally scoped to one changed symbol.  An empty
+    result for another requested symbol is therefore not a verified no-match.
+    This is an operational completeness contract, not a Python investment
+    rule: TypeDB still owns the actual rule result for every evaluated symbol.
+    """
+    requested = clean_symbols_from_payload(requested_symbols)
+    evaluated = clean_symbols_from_payload(evaluated_symbols)
+    missing = sorted(set(requested) - set(evaluated))
+    if not requested:
+        status = "not-requested"
+        complete = True
+        reason = "No target symbols were requested for this InferenceBox read."
+    elif not evaluated:
+        status = "unknown"
+        complete = None
+        reason = "The active InferenceBox generation does not expose evaluated target symbols."
+    elif missing:
+        status = "partial"
+        complete = False
+        reason = "The active InferenceBox generation has not evaluated every requested symbol."
+    else:
+        status = "complete"
+        complete = True
+        reason = "The active InferenceBox generation covers every requested symbol."
+    return {
+        "targetCoverageStatus": status,
+        "targetCoverageComplete": complete,
+        "requestedSymbols": requested,
+        "evaluatedSymbols": evaluated,
+        "notEvaluatedSymbols": missing,
+        "targetCoverageReason": reason,
+    }
+
+
+def apply_inference_target_coverage(
+    snapshot: Dict[str, object],
+    requested_symbols: Iterable[str] = None,
+) -> Dict[str, object]:
+    """Fail closed when a scoped generation omits a requested symbol."""
+    payload = snapshot
+    coverage = inference_target_coverage_payload(
+        requested_symbols=requested_symbols,
+        evaluated_symbols=payload.get("targetSymbols"),
+    )
+    payload.update(coverage)
+    if (
+        coverage["targetCoverageStatus"] != "partial"
+        or str(payload.get("status") or "").strip().lower() not in {"ok", "empty"}
+    ):
+        return payload
+
+    requested = ", ".join(coverage["requestedSymbols"])
+    evaluated = ", ".join(coverage["evaluatedSymbols"])
+    missing = ", ".join(coverage["notEvaluatedSymbols"])
+    payload.update({
+        "status": "not-evaluated",
+        "reason": (
+            "현재 활성 InferenceBox 세대는 " + evaluated
+            + "만 TypeDB 네이티브 규칙으로 계산했습니다. 요청한 " + missing
+            + "는 아직 이 세대에서 계산되지 않아 '결과 없음'으로 해석하지 않습니다."
+        ),
+        "nativeInferenceNoMatch": False,
+        "entities": [],
+        "relations": [],
+        "traces": [],
+        "entityCount": 0,
+        "relationCount": 0,
+        "traceCount": 0,
+        "nativeEntityCount": 0,
+        "nativeRelationCount": 0,
+        "nativeTraceCount": 0,
+        "nativeTypeDbReasoningUsed": False,
+        "typedbNativeRuleReasoningUsed": False,
+        "targetCoverageRequestedLabel": requested,
+    })
+    return payload
 
 
 def materialization_preview_diff_payload(
@@ -1537,6 +1621,11 @@ class ScopedABoxManifestMixin:
             "scopeIds": [str(item.get("scopeId") or "") for item in scope_plan if isinstance(item, dict)][:120],
             "keepInactiveManifestCount": self.abox_inactive_generation_keep_count(),
             "maxInactiveManifestsPrunedPerRun": self.abox_inactive_generation_max_prune_per_save(),
+            # Internal hand-off for the diagnostics service. Its public
+            # summary deliberately omits this manifest payload, while the
+            # coverage calculation can reuse the verified index without a
+            # second control-plane read.
+            "_activeAboxMetadata": active,
         }
         try:
             markers = list(self.worldview_manifest_marker_rows(world_id))
@@ -6280,6 +6369,7 @@ class TypeDBOntologyGraphRepository(GraphStoreOntologyRowMapperMixin, ScopedABox
         symbols: Iterable[str] = None,
         timeout_seconds: float = None,
         world_id: str = "",
+        active_abox_metadata: Dict[str, object] = None,
     ) -> Dict[str, object]:
         """Read a compact active-ABox topology index for stock subjects.
 
@@ -6290,6 +6380,61 @@ class TypeDBOntologyGraphRepository(GraphStoreOntologyRowMapperMixin, ScopedABox
         only stock id, symbol, and relation type.
         """
         clean_symbols = clean_symbols_from_payload(list(symbols or []))
+        # The active scoped Manifest already contains an integrity-checked
+        # index of each stock source and its relation storage rows.  Reading
+        # that index avoids repeating a high-cardinality active-scope join for
+        # every diagnostic or native-rule planning cycle.  TypeDB remains the
+        # source: this is persisted ABox topology, not Python inference.
+        active_metadata = dict(active_abox_metadata or {})
+        if active_metadata:
+            indexed = normalize_native_rule_evidence_read_index(
+                active_metadata.get("nativeRuleEvidenceReadIndex"),
+                planner_topology=active_metadata.get("nativeRulePlannerTopology"),
+                target_symbols=clean_symbols,
+            )
+        else:
+            indexed = {}
+        indexed_payload = dict(indexed or {})
+        typed_relation_ids = indexed_payload.get("relationStorageIdsBySymbolAndType")
+        if (
+            str(indexed_payload.get("status") or "") == "ok"
+            and isinstance(typed_relation_ids, dict)
+            and typed_relation_ids
+        ):
+            source_ids_by_symbol = {
+                str(symbol or "").upper(): sorted({
+                    str(source_id or "").strip()
+                    for source_id in values or []
+                    if str(source_id or "").strip()
+                })
+                for symbol, values in dict(indexed_payload.get("sourceIdsBySymbol") or {}).items()
+                if str(symbol or "").strip()
+            }
+            relation_types_by_symbol = {
+                symbol: sorted({
+                    str(relation_type or "").upper().strip()
+                    for relation_type in dict(typed_relation_ids.get(symbol) or {})
+                    if str(relation_type or "").strip()
+                })
+                for symbol in source_ids_by_symbol
+            }
+            relation_ids = {
+                str(storage_id or "").strip()
+                for relation_types in typed_relation_ids.values()
+                if isinstance(relation_types, dict)
+                for storage_ids in relation_types.values()
+                for storage_id in storage_ids or []
+                if str(storage_id or "").strip()
+            }
+            return {
+                "status": "ok",
+                "source": "active-manifest-evidence-index",
+                "symbols": clean_symbols or sorted(source_ids_by_symbol),
+                "sourceIdsBySymbol": source_ids_by_symbol,
+                "sourceStorageIdsBySourceId": dict(indexed_payload.get("sourceStorageIdsBySourceId") or {}),
+                "relationTypesBySymbol": relation_types_by_symbol,
+                "relationCount": len(relation_ids),
+            }
         source_ids_by_symbol: Dict[str, set] = {symbol: set() for symbol in clean_symbols}
         relation_types_by_symbol: Dict[str, set] = {symbol: set() for symbol in clean_symbols}
         relation_ids = set()
@@ -13763,6 +13908,7 @@ relation ontology-assertion,
                 "activeAboxSnapshotId": source_abox_snapshot_id,
                 "generationAligned": True,
             })
+        apply_inference_target_coverage(snapshot, clean_symbols)
         calibration_rows = [
             row for row in self.rows_for_entities(graph)
             if str(row.get("kind") or "") == "hypothesis-calibration"
@@ -14012,6 +14158,7 @@ relation ontology-assertion,
                 "nativeTypeDbReasoningUsed": False,
                 "typedbNativeRuleReasoningUsed": False,
             })
+        apply_inference_target_coverage(snapshot, clean_symbols)
         snapshot["hypothesisCalibration"] = self.hypothesis_calibration_snapshot(
             clean_symbols,
             min(40, safe_limit),
@@ -14128,13 +14275,38 @@ relation ontology-assertion,
                 source_symbols_by_source_id.get(source_id) or symbol_from_subject(source_id)
                 for source_id in source_ids
             }
-            relation_storage_ids = sorted({
-                str(storage_id or "").strip()
-                for symbol in selected_symbols
-                if str(symbol or "").strip()
-                for storage_id in list((index_payload.get("relationStorageIdsBySymbol") or {}).get(symbol, []) or [])
-                if str(storage_id or "").strip()
-            })
+            relation_storage_ids_by_symbol_type = dict(
+                index_payload.get("relationStorageIdsBySymbolAndType") or {}
+            )
+            has_type_index = bool(relation_storage_ids_by_symbol_type)
+            if has_type_index and evidence_relation_types:
+                # The v2 manifest index records exactly which physical ABox
+                # rows belong to each relation type.  Read only the relation
+                # evidence the matched TypeDB rules can consume; the legacy
+                # index retains the broader per-symbol fallback below.
+                relation_storage_ids = sorted({
+                    str(storage_id or "").strip()
+                    for symbol in selected_symbols
+                    if str(symbol or "").strip()
+                    for relation_type in evidence_relation_types
+                    for storage_id in list(
+                        (relation_storage_ids_by_symbol_type.get(symbol) or {}).get(relation_type, []) or []
+                    )
+                    if str(storage_id or "").strip()
+                })
+                evidence_read["relationReadScope"] = "matched-rule-types"
+            elif has_type_index:
+                relation_storage_ids = []
+                evidence_read["relationReadScope"] = "no-relation-conditions"
+            else:
+                relation_storage_ids = sorted({
+                    str(storage_id or "").strip()
+                    for symbol in selected_symbols
+                    if str(symbol or "").strip()
+                    for storage_id in list((index_payload.get("relationStorageIdsBySymbol") or {}).get(symbol, []) or [])
+                    if str(storage_id or "").strip()
+                })
+                evidence_read["relationReadScope"] = "legacy-symbol-relations"
             evidence_read["indexedRelationStorageCount"] = len(relation_storage_ids)
             if str(evidence_read.get("status") or "") == "ok" and relation_storage_ids:
                 try:

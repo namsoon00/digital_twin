@@ -979,6 +979,10 @@ class OntologyReasoningRunner:
             # Keep events pending and retry with back-pressure instead of
             # opening the failure circuit against an already verified ABox.
             "inference-failed-rolled-back",
+            # A scoped generation may be valid for one symbol while a caller
+            # asks for another. Keep the event pending for that target rather
+            # than misclassifying the read as a verified no-signal.
+            "not-evaluated",
         }
         transient_failure_statuses = {
             "error",

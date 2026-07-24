@@ -58,6 +58,45 @@ class OntologyDiagnosticsService:
         )
         decision_performance = self.decision_performance_boundary(clean_symbols)
         notification_boundary = self.notification_boundary()
+        runtime_observability = self.runtime_observation_boundary(clean_world_id)
+        inference_summary = self.inferencebox_summary(inference)
+        latest_runtime_inference = (
+            (runtime_observability.get("latest") or {}).get("inference")
+            if isinstance((runtime_observability.get("latest") or {}), dict)
+            else {}
+        )
+        if isinstance(latest_runtime_inference, dict):
+            runtime_execution = self.pick(latest_runtime_inference, [
+                "status",
+                "plannedTargetSymbolCount",
+                "requestedTargetSymbolCount",
+                "targetSymbolCount",
+                "notEvaluatedSymbolCount",
+                "targetCoverageStatus",
+                "candidateRuleCount",
+                "executedRuleCount",
+                "deferredRuleCount",
+                "nativeRuleSelectionApplied",
+                "nativeRuleSelectionFallbackReason",
+                "executionStatus",
+            ])
+            timing = latest_runtime_inference.get("nativeRuleTiming")
+            if isinstance(timing, dict):
+                runtime_execution["nativeRuleTiming"] = self.pick(timing, [
+                    "wallClockMs",
+                    "executedRuleCount",
+                    "incompleteRuleCount",
+                    "notApplicableRuleCount",
+                    "aggregateRuleElapsedMs",
+                    "aggregateQueryDurationMs",
+                ])
+                runtime_execution["nativeRuleTiming"]["slowestRules"] = [
+                    self.pick(item, ["ruleId", "status", "queryComplexity", "queryCount", "elapsedMs", "queryDurationMs"])
+                    for item in (timing.get("slowestRules") or [])[:3]
+                    if isinstance(item, dict)
+                ]
+            if runtime_execution:
+                inference_summary["runtimeExecution"] = runtime_execution
         return {
             "contract": "typedb-ontology-diagnostics-v1",
             "generatedAt": utc_now_iso(),
@@ -69,9 +108,9 @@ class OntologyDiagnosticsService:
             "rulebox": self.rulebox_summary(rulebox),
             "aboxStorage": self.abox_storage_summary(abox_storage),
             "aboxCoverage": abox_coverage,
-            "inferenceBox": self.inferencebox_summary(inference),
+            "inferenceBox": inference_summary,
             "reasoningBoundary": self.reasoning_boundary(rulebox, inference),
-            "runtimeObservability": self.runtime_observation_boundary(clean_world_id),
+            "runtimeObservability": runtime_observability,
             "ruleboxQuality": self.rulebox_quality_boundary(rulebox, inference, decision_performance),
             "latestEvents": self.latest_events(),
             "notificationBoundary": notification_boundary,
@@ -231,18 +270,23 @@ class OntologyDiagnosticsService:
         except Exception:
             return []
 
-    def world_aware_read(self, method_name: str, *args, world_id: str = ""):
+    def world_aware_read(self, method_name: str, *args, world_id: str = "", **kwargs):
         target = getattr(self.ontology_repository, method_name, None)
         if not callable(target):
             raise AttributeError(method_name + " is unavailable")
         if not str(world_id or "").strip():
-            return target(*args)
+            return target(*args, **kwargs)
         try:
-            return target(*args, world_id=str(world_id))
+            return target(*args, world_id=str(world_id), **kwargs)
         except TypeError as error:
             if "unexpected keyword" not in str(error) and "world_id" not in str(error):
                 raise
-            return target(*args)
+            try:
+                return target(*args, **kwargs)
+            except TypeError as nested_error:
+                if "unexpected keyword" not in str(nested_error):
+                    raise
+                return target(*args)
 
     def typedb_settings(self) -> Dict[str, object]:
         return {
@@ -384,6 +428,12 @@ class OntologyDiagnosticsService:
             "ruleboxEngineVersion",
             "symbols",
             "targetSymbols",
+            "requestedSymbols",
+            "evaluatedSymbols",
+            "notEvaluatedSymbols",
+            "targetCoverageStatus",
+            "targetCoverageComplete",
+            "targetCoverageReason",
             "impactPlanVersion",
             "inferenceImpactPlan",
             "ruleExecutionScope",
@@ -399,6 +449,38 @@ class OntologyDiagnosticsService:
             for item in (payload.get("traces") or [])[:5]
             if isinstance(item, dict)
         ]
+        query_metrics = payload.get("typedbQueryMetrics")
+        if isinstance(query_metrics, dict):
+            summary["queryMetrics"] = self.pick(query_metrics, [
+                "enabled",
+                "queryCount",
+                "totalDurationMs",
+            ])
+            summary["queryMetrics"]["slowQueries"] = [
+                self.pick(item, ["label", "status", "rowCount", "durationMs"])
+                for item in (query_metrics.get("slowQueries") or [])[:3]
+                if isinstance(item, dict)
+            ]
+        execution_plan = payload.get("executionPlan")
+        if isinstance(execution_plan, dict):
+            summary["executionPlan"] = self.pick(execution_plan, [
+                "status",
+                "targetSymbols",
+                "queryLimit",
+                "candidateRuleCount",
+                "selectedRuleCount",
+                "skippedRuleCount",
+                "preflightEnabled",
+                "preflightIncomingRelationsComplete",
+                "preflightPrunedRuleCount",
+                "preflightPrunedSymbolCount",
+                "skippedByStatus",
+            ])
+            summary["executionPlan"]["selectedRules"] = [
+                self.pick(item, ["ruleId", "candidateSymbols", "queryComplexity"])
+                for item in (execution_plan.get("selectedRules") or [])[:8]
+                if isinstance(item, dict)
+            ]
         return summary
 
     def alert_pipeline_boundary(
@@ -416,7 +498,10 @@ class OntologyDiagnosticsService:
         )
         aligned = bool(payload.get("generationAligned"))
         source_abox = str(payload.get("sourceAboxSnapshotId") or "")
-        if status == "empty" and native_completed and aligned and source_abox:
+        if status == "not-evaluated" or str(payload.get("targetCoverageStatus") or "") == "partial":
+            pipeline_status = "waiting-for-inference"
+            reason = str(payload.get("reason") or "요청한 종목에 대한 TypeDB 추론이 아직 완료되지 않았습니다.")
+        elif status == "empty" and native_completed and aligned and source_abox:
             pipeline_status = "no-signal"
             reason = "현재 ABox를 TypeDB 규칙으로 모두 확인했지만 투자 알림 후보가 될 관계는 성립하지 않았습니다."
         elif status in {"error", "failed", "stale-generation", "incomplete-abox", "missing"}:
@@ -439,6 +524,10 @@ class OntologyDiagnosticsService:
             "inferenceGenerationId": str(payload.get("inferenceGenerationId") or ""),
             "sourceAboxSnapshotId": source_abox,
             "targetSymbols": list(payload.get("targetSymbols") or [])[:80],
+            "requestedSymbols": list(payload.get("requestedSymbols") or payload.get("symbols") or [])[:80],
+            "evaluatedSymbols": list(payload.get("evaluatedSymbols") or payload.get("targetSymbols") or [])[:80],
+            "notEvaluatedSymbols": list(payload.get("notEvaluatedSymbols") or [])[:80],
+            "targetCoverageStatus": str(payload.get("targetCoverageStatus") or ""),
             "recentNotificationJobCount": int(notification.get("recentJobCount") or 0),
         }
 
@@ -498,30 +587,80 @@ class OntologyDiagnosticsService:
             }
         if not hasattr(self.ontology_repository, "read_entity_rows") or not hasattr(self.ontology_repository, "read_relation_rows"):
             return {"status": "unavailable", "reason": "repository does not expose ABox row reads"}
-        try:
-            entities = self.world_aware_read("read_entity_rows", ["ABox"], world_id=world_id)
-        except Exception as error:  # noqa: BLE001 - diagnostics must stay available.
-            return {"status": "error", "reason": str(error)[:220]}
         clean_symbols = sorted(set(str(item or "").upper().strip() for item in (symbols or []) if str(item or "").strip()))
-        stock_symbols = self.abox_symbols(entities, [])
-        if clean_symbols:
-            stock_symbols = [item for item in stock_symbols if item in clean_symbols]
-        relation_types_by_symbol: Dict[str, set] = {symbol: set() for symbol in stock_symbols}
+        coverage_read_mode = "full-abox-rows"
+        entities = []
+        stock_symbols = []
+        relation_types_by_symbol: Dict[str, set] = {}
         relations = []
         relation_count = 0
         topology_reader = getattr(self.ontology_repository, "active_abox_relation_types_by_symbol", None)
-        if callable(topology_reader):
+        source_entity_reader = getattr(self.ontology_repository, "read_entity_rows_by_ids", None)
+        storage_entity_reader = getattr(self.ontology_repository, "read_abox_entity_rows_by_storage_ids", None)
+        if callable(topology_reader) and callable(source_entity_reader):
+            active_abox_metadata = storage_payload.get("_activeAboxMetadata")
+            active_abox_metadata = dict(active_abox_metadata or {}) if isinstance(active_abox_metadata, dict) else {}
             try:
                 topology = self.world_aware_read(
                     "active_abox_relation_types_by_symbol",
-                    stock_symbols,
+                    clean_symbols,
                     world_id=world_id,
+                    active_abox_metadata=active_abox_metadata,
                 )
             except Exception as error:  # noqa: BLE001 - diagnostics must stay available.
                 return {"status": "error", "reason": str(error)[:220]}
             if str((topology or {}).get("status") or "") == "ok":
                 relation_count = int((topology or {}).get("relationCount") or 0)
                 direct_types = (topology or {}).get("relationTypesBySymbol") or {}
+                source_ids_by_symbol = (topology or {}).get("sourceIdsBySymbol") or {}
+                stock_symbols = clean_symbols or sorted(
+                    str(symbol or "").upper().strip()
+                    for symbol in source_ids_by_symbol
+                    if str(symbol or "").strip()
+                )
+                source_ids = sorted({
+                    str(source_id or "").strip()
+                    for symbol in stock_symbols
+                    for source_id in source_ids_by_symbol.get(symbol, []) or []
+                    if str(source_id or "").strip()
+                })
+                source_storage_ids = (topology or {}).get("sourceStorageIdsBySourceId") or {}
+                storage_ids = [
+                    str(source_storage_ids.get(source_id) or "").strip()
+                    for source_id in source_ids
+                    if str(source_storage_ids.get(source_id) or "").strip()
+                ]
+                try:
+                    if storage_ids and callable(storage_entity_reader):
+                        entities = self.world_aware_read(
+                            "read_abox_entity_rows_by_storage_ids",
+                            storage_ids,
+                            world_id=world_id,
+                        )
+                        coverage_read_mode = "active-manifest-evidence-index"
+                    elif source_ids:
+                        entities = self.world_aware_read(
+                            "read_entity_rows_by_ids",
+                            source_ids,
+                            ["ABox"],
+                            world_id=world_id,
+                        )
+                        coverage_read_mode = "active-topology-source-ids"
+                except Exception as error:  # noqa: BLE001 - coverage cannot invent missing root facts.
+                    return {"status": "error", "reason": str(error)[:220]}
+                loaded_source_ids = {
+                    str(item.get("id") or "").strip()
+                    for item in entities
+                    if isinstance(item, dict) and str(item.get("id") or "").strip()
+                }
+                missing_source_ids = [source_id for source_id in source_ids if source_id not in loaded_source_ids]
+                if missing_source_ids:
+                    return {
+                        "status": "error",
+                        "reason": "Active ABox coverage topology did not return every requested stock source.",
+                        "missingSourceIds": missing_source_ids[:20],
+                    }
+                relation_types_by_symbol = {symbol: set() for symbol in stock_symbols}
                 for symbol in stock_symbols:
                     relation_types_by_symbol[symbol].update(
                         str(item or "").upper().strip()
@@ -529,12 +668,14 @@ class OntologyDiagnosticsService:
                         if str(item or "").strip()
                     )
             else:
-                try:
-                    relations = self.abox_coverage_relations(entities, stock_symbols, world_id=world_id)
-                except Exception as error:  # noqa: BLE001 - diagnostics must stay available.
-                    return {"status": "error", "reason": str(error)[:220]}
+                return {"status": "error", "reason": str((topology or {}).get("reason") or "Active ABox topology is unavailable.")[:220]}
         else:
             try:
+                entities = self.world_aware_read("read_entity_rows", ["ABox"], world_id=world_id)
+                stock_symbols = self.abox_symbols(entities, [])
+                if clean_symbols:
+                    stock_symbols = [item for item in stock_symbols if item in clean_symbols]
+                relation_types_by_symbol = {symbol: set() for symbol in stock_symbols}
                 relations = self.abox_coverage_relations(entities, stock_symbols, world_id=world_id)
             except Exception as error:  # noqa: BLE001 - diagnostics must stay available.
                 return {"status": "error", "reason": str(error)[:220]}
@@ -632,6 +773,7 @@ class OntologyDiagnosticsService:
             "contextCoverageRatio": context_coverage_ratio,
             "requiredCategories": all_required_categories,
             "coverageGapCount": coverage_gap_count,
+            "coverageReadMode": coverage_read_mode,
             "interpretation": self.coverage_interpretation(status, primary_coverage_ratio, len(primary_rows), len(context_rows)),
             "symbols": rows[:80],
             "primarySymbols": primary_rows[:80],
@@ -778,6 +920,8 @@ class OntologyDiagnosticsService:
         status = "ok"
         if str(inference.get("status") or "") == "error":
             status = "error"
+        elif str(inference.get("targetCoverageStatus") or "") == "partial":
+            status = "warning"
         elif bootstrap_used and not native_used:
             status = "error"
         elif rulebox_hash and inference_hash and not hash_match:

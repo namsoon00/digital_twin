@@ -946,7 +946,7 @@ def runtime_settings() -> Dict[str, str]:
         "typedbNativeRuleAnyConditionParallelism": value(
             "typedbNativeRuleAnyConditionParallelism",
             "TYPEDB_NATIVE_RULE_ANY_CONDITION_PARALLELISM",
-            "2",
+            "1",
         ),
         "typedbProcessSchemaFunctionCacheEnabled": value(
             "typedbProcessSchemaFunctionCacheEnabled",

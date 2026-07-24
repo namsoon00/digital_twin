@@ -4987,7 +4987,7 @@ class TypeDBOntologyGraphRepository(GraphStoreOntologyRowMapperMixin, ScopedABox
         native_rule_query_timeout_seconds: float = DEFAULT_TYPEDB_NATIVE_RULE_QUERY_TIMEOUT_SECONDS,
         native_rule_execution_budget_seconds: float = DEFAULT_TYPEDB_NATIVE_RULE_EXECUTION_BUDGET_SECONDS,
         native_rule_parallelism: int = DEFAULT_TYPEDB_NATIVE_RULE_PARALLELISM,
-        native_rule_any_condition_parallelism: int = 2,
+        native_rule_any_condition_parallelism: int = 1,
         inference_write_lease_enabled: bool = False,
         process_schema_function_cache_enabled: bool = False,
         schema_function_probe_interval_seconds: float = 300.0,
@@ -5040,7 +5040,7 @@ class TypeDBOntologyGraphRepository(GraphStoreOntologyRowMapperMixin, ScopedABox
             1,
             min(
                 self._native_rule_parallelism,
-                int(number_or_none(native_rule_any_condition_parallelism) or 2),
+                int(number_or_none(native_rule_any_condition_parallelism) or 1),
             ),
         )
         # The production composition root enables this durable lease. Bare
@@ -10686,6 +10686,7 @@ relation ontology-assertion,
         effective_parallelism = 1
         any_condition_parallelism_cap = 1
         any_condition_rule_count = 0
+        native_rule_execution_phases: Dict[str, object] = {}
         try:
             relation_types_by_symbol: Dict[str, Iterable[str]] = {}
             rule_context: Dict[str, object] = {}
@@ -10826,13 +10827,56 @@ relation ontology-assertion,
                 requested_parallelism,
                 self.native_rule_any_condition_parallelism(),
             ) if requires_direct_any_probe else requested_parallelism
+            entry_has_any_conditions = {
+                index: any(
+                    normalized_condition_role(
+                        condition.to_dict() if hasattr(condition, "to_dict") else dict(condition or {})
+                    ) in {"any", "optional"}
+                    for condition in (getattr(planned.get("rule"), "conditions", []) or [])
+                )
+                for index, planned in enumerate(selected_entries)
+            }
+            function_only_entries = [
+                (index, planned)
+                for index, planned in enumerate(selected_entries)
+                if not entry_has_any_conditions.get(index)
+            ]
+            any_condition_entries = [
+                (index, planned)
+                for index, planned in enumerate(selected_entries)
+                if entry_has_any_conditions.get(index)
+            ]
+            execution_batches = []
+            if function_only_entries:
+                execution_batches.append({
+                    "name": "function-only",
+                    "entries": function_only_entries,
+                    "parallelism": min(requested_parallelism, len(function_only_entries)),
+                })
+            if any_condition_entries:
+                # Each source-bounded any-condition verification opens a
+                # second TypeDB read. Run this smaller, contention-sensitive
+                # group after function-only rules and default it to one worker.
+                # The setting permits controlled increases after a deployment
+                # has demonstrated server headroom.
+                execution_batches.append({
+                    "name": "any-condition",
+                    "entries": any_condition_entries,
+                    "parallelism": min(any_condition_parallelism_cap, len(any_condition_entries)),
+                })
+            native_rule_execution_phases = {
+                "functionOnlyRuleCount": len(function_only_entries),
+                "functionOnlyParallelism": min(requested_parallelism, len(function_only_entries)) if function_only_entries else 0,
+                "anyConditionRuleCount": len(any_condition_entries),
+                "anyConditionParallelism": min(any_condition_parallelism_cap, len(any_condition_entries)) if any_condition_entries else 0,
+            }
             parallel_rule_execution = bool(
                 stable_abox_write_lease_held
-                and any_condition_parallelism_cap > 1
+                and execution_batches
                 and len(selected_entries) > 1
             )
             effective_parallelism = (
-                min(any_condition_parallelism_cap, len(selected_entries))
+                max(int(batch.get("parallelism") or 1) for batch in execution_batches)
                 if parallel_rule_execution
                 else 1
             )
@@ -10842,7 +10886,7 @@ relation ontology-assertion,
                 # separate bounded read transactions without observing a world
                 # pointer transition between rule evaluations.
                 execution_mode = (
-                    "typedb-schema-function-hybrid-any-verified-parallel"
+                    "typedb-schema-function-hybrid-any-verified-phased"
                     if schema_function_query and requires_direct_any_probe
                     else execution_mode + "-parallel"
                 )
@@ -11054,42 +11098,72 @@ relation ontology-assertion,
             if parallel_rule_execution:
                 deadline = time.monotonic() + self.native_rule_execution_budget_seconds()
                 completed_entries: Dict[int, Dict[str, object]] = {}
-                with ThreadPoolExecutor(max_workers=effective_parallelism) as executor:
-                    futures = {
-                        executor.submit(
-                            self.execute_typedb_native_rule_entry,
-                            planned,
-                            clean_symbols,
-                            schema_function_query,
-                            world_id,
-                            scoped_manifest_only,
-                            imported,
-                            TransactionType,
-                            deadline,
-                            execution_mode,
-                        ): index
-                        for index, planned in enumerate(selected_entries)
-                    }
-                    for future in as_completed(futures):
-                        index = futures[future]
-                        planned = selected_entries[index]
+                for batch in execution_batches:
+                    batch_entries = list(batch.get("entries") or [])
+                    batch_parallelism = max(1, int(batch.get("parallelism") or 1))
+
+                    def capture(index: int, planned: Dict[str, object], future_result=None, error=None) -> None:
                         rule = planned.get("rule")
-                        try:
-                            completed_entries[index] = future.result()
-                        except Exception as error:  # noqa: BLE001 - executor failures must block the complete generation.
-                            completed_entries[index] = {
-                                "status": "partial",
-                                "readTransactionCount": 0,
-                                "readQueryCount": 0,
-                                "failure": {
-                                    "ruleId": str(getattr(rule, "rule_id", "") or ""),
-                                    "status": "query-error",
-                                    "reason": str(error)[:220],
-                                    "candidateSymbols": clean_symbols_from_payload(
-                                        planned.get("candidateSymbols") or clean_symbols
+                        if error is None:
+                            completed_entries[index] = future_result
+                            return
+                        completed_entries[index] = {
+                            "status": "partial",
+                            "readTransactionCount": 0,
+                            "readQueryCount": 0,
+                            "failure": {
+                                "ruleId": str(getattr(rule, "rule_id", "") or ""),
+                                "status": "query-error",
+                                "reason": str(error)[:220],
+                                "candidateSymbols": clean_symbols_from_payload(
+                                    planned.get("candidateSymbols") or clean_symbols
+                                ),
+                            },
+                        }
+
+                    if batch_parallelism == 1:
+                        for index, planned in batch_entries:
+                            try:
+                                capture(
+                                    index,
+                                    planned,
+                                    future_result=self.execute_typedb_native_rule_entry(
+                                        planned,
+                                        clean_symbols,
+                                        schema_function_query,
+                                        world_id,
+                                        scoped_manifest_only,
+                                        imported,
+                                        TransactionType,
+                                        deadline,
+                                        execution_mode,
                                     ),
-                                },
-                            }
+                                )
+                            except Exception as error:  # noqa: BLE001 - one failed read blocks the generation.
+                                capture(index, planned, error=error)
+                        continue
+                    with ThreadPoolExecutor(max_workers=batch_parallelism) as executor:
+                        futures = {
+                            executor.submit(
+                                self.execute_typedb_native_rule_entry,
+                                planned,
+                                clean_symbols,
+                                schema_function_query,
+                                world_id,
+                                scoped_manifest_only,
+                                imported,
+                                TransactionType,
+                                deadline,
+                                execution_mode,
+                            ): (index, planned)
+                            for index, planned in batch_entries
+                        }
+                        for future in as_completed(futures):
+                            index, planned = futures[future]
+                            try:
+                                capture(index, planned, future_result=future.result())
+                            except Exception as error:  # noqa: BLE001 - executor failures must block the complete generation.
+                                capture(index, planned, error=error)
                 for index, planned in enumerate(selected_entries):
                     completed = dict(completed_entries.get(index) or {})
                     read_transaction_count += int(completed.get("readTransactionCount") or 0)
@@ -11141,6 +11215,7 @@ relation ontology-assertion,
                     "nativeRuleParallelism": effective_parallelism,
                     "nativeRuleAnyConditionParallelismCap": any_condition_parallelism_cap,
                     "nativeRuleAnyConditionRuleCount": any_condition_rule_count,
+                    "nativeRuleExecutionPhases": native_rule_execution_phases,
                     "parallelRuleExecution": parallel_rule_execution,
                     "matchedCount": len(matches),
                     "executedRuleCount": len(executed_rules),
@@ -11167,6 +11242,7 @@ relation ontology-assertion,
                 "nativeRuleParallelism": effective_parallelism,
                 "nativeRuleAnyConditionParallelismCap": any_condition_parallelism_cap,
                 "nativeRuleAnyConditionRuleCount": any_condition_rule_count,
+                "nativeRuleExecutionPhases": native_rule_execution_phases,
                 "parallelRuleExecution": parallel_rule_execution,
                 "executedRuleCount": len(executed_rules),
                 "skippedRuleCount": len(skipped_rules),
@@ -11193,6 +11269,7 @@ relation ontology-assertion,
                 "nativeRuleParallelism": effective_parallelism,
                 "nativeRuleAnyConditionParallelismCap": any_condition_parallelism_cap,
                 "nativeRuleAnyConditionRuleCount": any_condition_rule_count,
+                "nativeRuleExecutionPhases": native_rule_execution_phases,
                 "parallelRuleExecution": parallel_rule_execution,
                 "matchedCount": 0,
                 "matches": [],
@@ -16402,7 +16479,7 @@ def typedb_repository_from_settings(settings: Dict[str, str] = None):
         or DEFAULT_TYPEDB_NATIVE_RULE_PARALLELISM),
         native_rule_any_condition_parallelism=int(number_or_none(
             settings.get("typedbNativeRuleAnyConditionParallelism")
-        ) or 2),
+        ) or 1),
         inference_write_lease_enabled=True
         if settings.get("typedbInferenceWriteLeaseEnabled") in (None, "")
         else typedb_bool(settings.get("typedbInferenceWriteLeaseEnabled")),

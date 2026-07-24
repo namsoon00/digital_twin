@@ -812,6 +812,17 @@ class TypeDBOntologyRepositoryTests(unittest.TestCase):
             "status": "ok",
             "worldviewManifestId": "abox-manifest:next",
             "scopedAboxManifestVersion": SCOPED_ABOX_MANIFEST_VERSION,
+        }), patch.object(repository, "pending_abox_activation", return_value={
+            "status": "pending",
+            "candidateAboxSnapshotId": "abox-manifest:next",
+            "previousAboxSnapshotId": "abox-manifest:old",
+            "targetSymbols": ["MSTR"],
+        }), patch.object(repository, "inferencebox_snapshot", return_value={
+            "status": "ok",
+            "nativeTypeDbReasoningUsed": True,
+            "generationAligned": True,
+            "sourceAboxSnapshotId": "abox-manifest:next",
+            "targetSymbols": ["MSTR"],
         }), patch.object(repository, "clear_scoped_abox_pending_activation", return_value={"status": "ok"}), patch.object(
             repository,
             "prune_inactive_scoped_abox_manifests",
@@ -830,6 +841,17 @@ class TypeDBOntologyRepositoryTests(unittest.TestCase):
             "status": "ok",
             "worldviewManifestId": "abox-manifest:next",
             "scopedAboxManifestVersion": SCOPED_ABOX_MANIFEST_VERSION,
+        }), patch.object(repository, "pending_abox_activation", return_value={
+            "status": "pending",
+            "candidateAboxSnapshotId": "abox-manifest:next",
+            "previousAboxSnapshotId": "abox-material:legacy",
+            "targetSymbols": ["MSTR"],
+        }), patch.object(repository, "inferencebox_snapshot", return_value={
+            "status": "ok",
+            "nativeTypeDbReasoningUsed": True,
+            "generationAligned": True,
+            "sourceAboxSnapshotId": "abox-manifest:next",
+            "targetSymbols": ["MSTR"],
         }), patch.object(repository, "clear_scoped_abox_pending_activation", return_value={"status": "ok"}), patch.object(
             repository,
             "prune_inactive_scoped_abox_manifests",
@@ -847,6 +869,30 @@ class TypeDBOntologyRepositoryTests(unittest.TestCase):
         self.assertTrue(result["cleanupDeferred"])
         self.assertTrue(result["cleanup"]["legacyPredecessorPending"])
         discard.assert_not_called()
+
+    def test_scoped_abox_finalize_keeps_journal_when_inference_proof_is_stale(self):
+        repository = TypeDBOntologyGraphRepository("127.0.0.1:1729")
+        with patch.object(repository, "active_abox_metadata", return_value={
+            "status": "ok",
+            "worldviewManifestId": "abox-manifest:next",
+            "scopedAboxManifestVersion": SCOPED_ABOX_MANIFEST_VERSION,
+        }), patch.object(repository, "pending_abox_activation", return_value={
+            "status": "pending",
+            "candidateAboxSnapshotId": "abox-manifest:next",
+            "previousAboxSnapshotId": "abox-manifest:old",
+            "targetSymbols": ["MSTR"],
+        }), patch.object(repository, "inferencebox_snapshot", return_value={
+            "status": "stale-generation",
+            "nativeTypeDbReasoningUsed": False,
+            "generationAligned": False,
+            "sourceAboxSnapshotId": "abox-manifest:old",
+            "targetSymbols": ["MSTR"],
+        }), patch.object(repository, "clear_scoped_abox_pending_activation") as clear:
+            result = repository.finalize_scoped_abox_manifest("abox-manifest:next", "abox-manifest:old")
+
+        self.assertEqual("error", result["status"])
+        self.assertIn("no longer proves", result["reason"])
+        clear.assert_not_called()
 
     def test_scoped_manifest_control_delta_reuses_unchanged_scope_pointers(self):
         previous = {

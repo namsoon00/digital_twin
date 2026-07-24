@@ -4356,6 +4356,56 @@ class ScopedABoxManifestMixin:
                 "previousAboxSnapshotId": previous_id,
                 "reason": "Active Worldview Manifest changed before finalization.",
             }
+        # The caller has already read an aligned InferenceBox, but a separate
+        # projection can finish between that read and this control write.
+        # Re-read the durable candidate contract while the scoped writer lease
+        # is still held. Clearing the journal without this proof would make a
+        # later stale InferenceBox look final after an ABox pointer transition.
+        pending = self.pending_abox_activation(world_id)
+        if str(pending.get("status") or "") == "pending":
+            candidate_id = str(pending.get("candidateAboxSnapshotId") or "").strip()
+            target_symbols = clean_symbols_from_payload(pending.get("targetSymbols") or [])
+            if candidate_id != active_id:
+                return {
+                    "configured": True,
+                    "status": "error",
+                    "graphStore": "typedb",
+                    "activeAboxSnapshotId": active_id,
+                    "previousAboxSnapshotId": previous_id,
+                    "pendingActivation": pending,
+                    "reason": "Pending ABox candidate changed before finalization.",
+                }
+            try:
+                inferencebox = self.inferencebox_snapshot(
+                    symbols=target_symbols,
+                    limit=80,
+                    world_id=world_id,
+                )
+            except Exception as error:  # noqa: BLE001 - do not clear a recoverable journal on an unreadable proof.
+                return {
+                    "configured": True,
+                    "status": "error",
+                    "graphStore": "typedb",
+                    "activeAboxSnapshotId": active_id,
+                    "previousAboxSnapshotId": previous_id,
+                    "pendingActivation": pending,
+                    "reason": "InferenceBox verification failed before ABox finalization: " + str(error)[:180],
+                }
+            if not self.inferencebox_matches_pending_abox_activation(
+                inferencebox,
+                candidate_id,
+                target_symbols,
+            ):
+                return {
+                    "configured": True,
+                    "status": "error",
+                    "graphStore": "typedb",
+                    "activeAboxSnapshotId": active_id,
+                    "previousAboxSnapshotId": previous_id,
+                    "pendingActivation": pending,
+                    "inferenceBox": inferencebox,
+                    "reason": "Current TypeDB InferenceBox no longer proves the active ABox candidate.",
+                }
         control = typedb_call_for_world(
             self.clear_scoped_abox_pending_activation,
             world_id=world_id,

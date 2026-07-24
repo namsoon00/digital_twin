@@ -46,6 +46,23 @@ class OntologyRuntimeOperationsTests(unittest.TestCase):
         self.assertFalse(blocked["ready"])
         self.assertEqual("empty-unverified", blocked["results"][0]["status"])
 
+    def test_projection_gate_retries_a_safe_generation_rollback_without_opening_circuit(self):
+        service = OntologyReasoningRunner.__new__(OntologyReasoningRunner)
+        rolled_back = SimpleNamespace(last_ontology_projection_results={
+            "main": {
+                "status": "inference-failed-rolled-back",
+                "reason": "candidate generation did not align",
+                "retryable": True,
+                "inferenceAlignment": {"status": "misaligned"},
+            },
+        })
+
+        result = service.projection_gate(rolled_back)
+
+        self.assertFalse(result["ready"])
+        self.assertTrue(result["retryable"])
+        self.assertEqual("inference-failed-rolled-back", result["results"][0]["status"])
+
     def test_verified_recovery_clears_only_the_projection_circuit_latch(self):
         class Cursor:
             def __init__(self):

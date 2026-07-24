@@ -71,6 +71,49 @@ from digital_twin.infrastructure.typedb_ontology import (
 
 
 class TypeDBOntologyRepositoryTests(unittest.TestCase):
+    def test_any_condition_parallelism_is_bounded_by_native_rule_parallelism(self):
+        repository = TypeDBOntologyGraphRepository(
+            "127.0.0.1:1729",
+            native_rule_parallelism=4,
+            native_rule_any_condition_parallelism=9,
+        )
+
+        self.assertEqual(4, repository.native_rule_parallelism())
+        self.assertEqual(4, repository.native_rule_any_condition_parallelism())
+
+    def test_projection_recorder_exposes_scoped_abox_write_substage_timings(self):
+        stages = {}
+        PortfolioOntologyProjectionRecorder.attach_abox_persistence_runtime_stages(
+            stages,
+            {
+                "aboxPersistenceVerification": {
+                    "timing": {
+                        "candidateCleanupMs": 12.3,
+                        "changedScopeWriteMs": 45.6,
+                        "changedScopeVerificationMs": 7.8,
+                        "manifestControlWriteMs": 3.2,
+                        "totalMs": 71.1,
+                        "changedScopeWritePlan": {
+                            "totalQueryMs": 35.4,
+                            "slowestQueryMs": 22.6,
+                            "queryCount": 3,
+                            "transactionCount": 1,
+                            "insertedNodeCount": 4,
+                            "insertedRelationCount": 5,
+                            "reusedNodeCount": 6,
+                            "reusedRelationCount": 7,
+                        },
+                    },
+                },
+            },
+        )
+
+        self.assertEqual(12, stages["aboxCandidateCleanupMs"])
+        self.assertEqual(46, stages["aboxChangedScopeWriteMs"])
+        self.assertEqual(3, stages["aboxManifestControlWriteMs"])
+        self.assertEqual(35, stages["aboxChangedScopeQueryMs"])
+        self.assertEqual(7, stages["aboxReusedRelationCount"])
+
     def test_projection_preflight_graph_requires_exact_active_manifest_and_topology(self):
         graph = PortfolioOntology(
             "main",
@@ -4456,6 +4499,9 @@ class TypeDBOntologyRepositoryTests(unittest.TestCase):
         self.assertEqual(["abox:previous"], repository.restored_snapshot_ids)
         self.assertEqual([], repository.finalized_snapshot_ids)
         self.assertEqual("deferred", result["failedCandidateCleanup"]["status"])
+        self.assertTrue(result["retryable"])
+        self.assertEqual("misaligned", result["inferenceAlignment"]["status"])
+        self.assertIn("native-evaluation-not-complete", result["inferenceAlignment"]["issues"])
 
     def test_projection_recorder_finalizes_abox_after_aligned_native_inference(self):
         class FakeRepository:
@@ -6053,6 +6099,29 @@ class TypeDBOntologyRepositoryTests(unittest.TestCase):
         self.assertIn("reduce $anyConditionCount = count($anyConditionToken) groupby $source", query)
         self.assertIn("$anyConditionCount >= 2", query)
         self.assertIn('has ontology-kind "worldview-manifest-active-pointer"', query)
+
+    def test_typedb_any_group_check_uses_direct_existence_for_one_of_many(self):
+        rule = next(
+            item
+            for item in default_graph_inference_rules()
+            if item.rule_id == "graph.valuation.high_beta_or_expensive.review.v1"
+        )
+
+        plan = typedb_native_any_group_check_query(
+            rule.to_dict(),
+            "stock:MSTR",
+            scoped_manifest_only=True,
+            world_id="portfolio:local:default",
+        )
+        query = plan["query"]
+
+        self.assertEqual("exists-any", plan["anyConditionCheckMode"])
+        self.assertIn('has ontology-id "stock:MSTR"', query)
+        self.assertIn(" or ", query)
+        self.assertNotIn("reduce $anyConditionCount", query)
+        self.assertNotIn('has ontology-box "RuleBox"', query)
+        self.assertIn("ontology-pe-ratio", query)
+        self.assertIn("ontology-beta", query)
 
     def test_typedb_any_group_check_does_not_repeat_schema_function_base_conditions(self):
         rule = next(

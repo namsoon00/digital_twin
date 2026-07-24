@@ -945,6 +945,7 @@ class PortfolioOntologyProjectionRecorder:
             runtime_stages["aboxPersistenceMs"] = int((time.perf_counter() - abox_persistence_started) * 1000)
             if not isinstance(result, dict):
                 result = {"saved": False, "status": "error", "reason": "ontology repository returned non-dict result"}
+            self.attach_abox_persistence_runtime_stages(runtime_stages, result)
             result["projectionMode"] = "abox-facts-only-typedb-native-rules"
             result["materialFingerprint"] = material_fingerprint
             result["aboxSnapshotId"] = material_snapshot_id
@@ -2334,6 +2335,12 @@ class PortfolioOntologyProjectionRecorder:
             if not active_snapshot_id:
                 return
         inferencebox = result.get("inferenceBox") if isinstance(result.get("inferenceBox"), dict) else {}
+        alignment = self.inference_alignment_diagnostics(
+            inferencebox,
+            active_snapshot_id,
+            inference_symbols,
+        )
+        result["inferenceAlignment"] = alignment
         if self.inference_result_is_reusable(
             inferencebox,
             {"aboxSnapshotId": active_snapshot_id},
@@ -2382,7 +2389,14 @@ class PortfolioOntologyProjectionRecorder:
         result["reason"] = (
             "TypeDB native InferenceBox가 새 ABox 세대와 정렬되지 않아 "
             + ("이전 검증 세대로 복원했습니다." if result["preservedActiveGeneration"] else "투자 추론을 차단했습니다.")
+            + " " + str(alignment.get("summary") or "")
         )
+        if result["preservedActiveGeneration"]:
+            # The prior verified generation is still active. Keep the source
+            # event pending and retry with back-pressure instead of opening a
+            # failure circuit against a safe rollback.
+            result["retryable"] = True
+            result["recommendedRetryAfterSeconds"] = 30
         if isinstance(rollback.get("activeAbox"), dict):
             verification["activePointer"] = dict(rollback.get("activeAbox") or {})
             result["aboxPersistenceVerification"] = verification
@@ -2396,6 +2410,102 @@ class PortfolioOntologyProjectionRecorder:
                 "aboxSnapshotId": active_snapshot_id,
                 "reason": "Failed scoped ABox candidate is retained for idle maintenance cleanup.",
             }
+
+    @staticmethod
+    def attach_abox_persistence_runtime_stages(
+        runtime_stages: Dict[str, int],
+        result: Dict[str, object],
+    ) -> None:
+        """Expose scoped ABox sub-stage cost without changing persistence behavior."""
+        verification = result.get("aboxPersistenceVerification")
+        timing = dict(verification.get("timing") or {}) if isinstance(verification, dict) else {}
+
+        def record(source_key: str, target_key: str, source: Dict[str, object]) -> None:
+            try:
+                value = float(source.get(source_key))
+            except (TypeError, ValueError):
+                return
+            runtime_stages[target_key] = int(round(value))
+
+        for source_key, target_key in {
+            "candidateCleanupMs": "aboxCandidateCleanupMs",
+            "changedScopeWriteMs": "aboxChangedScopeWriteMs",
+            "changedScopeVerificationMs": "aboxChangedScopeVerificationMs",
+            "manifestControlWriteMs": "aboxManifestControlWriteMs",
+            "totalMs": "aboxScopedPersistenceTotalMs",
+        }.items():
+            record(source_key, target_key, timing)
+        write_plan = timing.get("changedScopeWritePlan")
+        if isinstance(write_plan, dict):
+            for source_key, target_key in {
+                "totalQueryMs": "aboxChangedScopeQueryMs",
+                "slowestQueryMs": "aboxChangedScopeSlowestQueryMs",
+                "queryCount": "aboxChangedScopeQueryCount",
+                "transactionCount": "aboxChangedScopeTransactionCount",
+                "insertedNodeCount": "aboxInsertedNodeCount",
+                "insertedRelationCount": "aboxInsertedRelationCount",
+                "reusedNodeCount": "aboxReusedNodeCount",
+                "reusedRelationCount": "aboxReusedRelationCount",
+            }.items():
+                record(source_key, target_key, write_plan)
+
+    @staticmethod
+    def inference_alignment_diagnostics(
+        inferencebox: Dict[str, object],
+        expected_snapshot_id: str,
+        required_symbols: List[str],
+    ) -> Dict[str, object]:
+        """Describe native generation alignment for retries and audit, not judgement."""
+        payload = dict(inferencebox or {})
+        expected_id = str(expected_snapshot_id or "").strip()
+        actual_id = str(payload.get("sourceAboxSnapshotId") or "").strip()
+        expected = sorted({
+            str(value or "").upper().strip()
+            for value in required_symbols or []
+            if str(value or "").strip()
+        })
+        actual = sorted({
+            str(value or "").upper().strip()
+            for value in payload.get("targetSymbols") or []
+            if str(value or "").strip()
+        })
+        native_completed = bool(
+            payload.get("nativeTypeDbReasoningCompleted")
+            or payload.get("typedbNativeRuleEvaluationCompleted")
+            or payload.get("nativeTypeDbReasoningUsed")
+        )
+        issues: List[str] = []
+        if not native_completed:
+            issues.append("native-evaluation-not-complete")
+        if not actual_id:
+            issues.append("source-generation-missing")
+        elif expected_id and actual_id != expected_id:
+            issues.append("source-generation-mismatch")
+        if payload.get("generationAligned") is False:
+            issues.append("generation-alignment-flag-false")
+        missing_symbols = sorted(set(expected).difference(actual))
+        if missing_symbols:
+            issues.append("target-symbol-coverage-missing")
+        summary_by_issue = {
+            "native-evaluation-not-complete": "네이티브 규칙 실행 완료 증거가 없습니다.",
+            "source-generation-missing": "InferenceBox에 원본 ABox 세대가 없습니다.",
+            "source-generation-mismatch": "InferenceBox 원본 ABox 세대가 후보 세대와 다릅니다.",
+            "generation-alignment-flag-false": "InferenceBox가 세대 정렬 실패로 표시됐습니다.",
+            "target-symbol-coverage-missing": "요청 종목 전체를 포함한 InferenceBox 결과가 아닙니다.",
+        }
+        return {
+            "status": "aligned" if not issues else "misaligned",
+            "retryable": bool(issues),
+            "expectedAboxSnapshotId": expected_id,
+            "actualSourceAboxSnapshotId": actual_id,
+            "expectedTargetSymbols": expected,
+            "actualTargetSymbols": actual,
+            "missingTargetSymbols": missing_symbols,
+            "nativeEvaluationCompleted": native_completed,
+            "generationAligned": payload.get("generationAligned"),
+            "issues": issues,
+            "summary": " ".join(summary_by_issue[item] for item in issues),
+        }
 
     def existing_inference_result(
         self,

@@ -974,6 +974,11 @@ class OntologyReasoningRunner:
             "deferred-scoped-write-lease",
             "deferred-inference-write-lease",
             "deferred-pending-scoped-manifest",
+            # The candidate was safely rolled back to its predecessor because
+            # durable InferenceBox readback did not prove the same generation.
+            # Keep events pending and retry with back-pressure instead of
+            # opening the failure circuit against an already verified ABox.
+            "inference-failed-rolled-back",
         }
         transient_failure_statuses = {
             "error",

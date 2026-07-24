@@ -3824,11 +3824,9 @@ class ScopedABoxManifestMixin:
                     failed = [scope_id for scope_id, item in verification.items() if str(item.get("status") or "") != "ok"]
                     if failed:
                         raise RuntimeError("Scoped ABox candidate verification failed for " + ", ".join(failed))
-                    marker_started = time.monotonic()
                     marker_graph = self.scoped_manifest_marker_graph(graph, scope_plan, changed_scope_ids)
-                    self.write_graph(driver, imported, marker_graph, delete_boxes=[])
-                    timing["manifestMarkerWriteMs"] = round((time.monotonic() - marker_started) * 1000, 1)
-                    stage_started = time.monotonic()
+                    if not marker_graph.entities:
+                        raise RuntimeError("Scoped ABox candidate has no Manifest marker.")
                     pending_graph = self.scoped_manifest_pending_graph(
                         graph,
                         scope_plan,
@@ -3844,11 +3842,22 @@ class ScopedABoxManifestMixin:
                         raise RuntimeError(
                             "Scoped ABox activation journal target symbols do not match the requested inference scope."
                         )
-                    # Do not replace ABoxControl here. The currently active
-                    # Manifest remains the only live read world until the
-                    # reasoning worker prepares this verified candidate.
-                    self.write_graph(driver, imported, pending_graph, delete_boxes=[])
-                    timing["manifestStageMs"] = round((time.monotonic() - stage_started) * 1000, 1)
+                    # The immutable candidate marker and its activation
+                    # journal are both control facts for this exact staged
+                    # generation. Persist them in one transaction after the
+                    # physical scope rows verify. This removes one TypeDB
+                    # round trip without moving the active pointer.
+                    control_write_started = time.monotonic()
+                    control_graph = PortfolioOntology(
+                        str(graph.portfolio_id or "typedb-scoped-control"),
+                        entities=[*marker_graph.entities, *pending_graph.entities],
+                    )
+                    self.write_graph(driver, imported, control_graph, delete_boxes=[])
+                    timing["manifestControlWriteMs"] = round(
+                        (time.monotonic() - control_write_started) * 1000,
+                        1,
+                    )
+                    timing["manifestControlEntityCount"] = len(control_graph.entities)
                 finally:
                     self.close_driver(driver)
 
@@ -4978,6 +4987,7 @@ class TypeDBOntologyGraphRepository(GraphStoreOntologyRowMapperMixin, ScopedABox
         native_rule_query_timeout_seconds: float = DEFAULT_TYPEDB_NATIVE_RULE_QUERY_TIMEOUT_SECONDS,
         native_rule_execution_budget_seconds: float = DEFAULT_TYPEDB_NATIVE_RULE_EXECUTION_BUDGET_SECONDS,
         native_rule_parallelism: int = DEFAULT_TYPEDB_NATIVE_RULE_PARALLELISM,
+        native_rule_any_condition_parallelism: int = 2,
         inference_write_lease_enabled: bool = False,
         process_schema_function_cache_enabled: bool = False,
         schema_function_probe_interval_seconds: float = 300.0,
@@ -5025,6 +5035,13 @@ class TypeDBOntologyGraphRepository(GraphStoreOntologyRowMapperMixin, ScopedABox
         self._native_rule_parallelism = max(
             1,
             min(8, int(number_or_none(native_rule_parallelism) or DEFAULT_TYPEDB_NATIVE_RULE_PARALLELISM)),
+        )
+        self._native_rule_any_condition_parallelism = max(
+            1,
+            min(
+                self._native_rule_parallelism,
+                int(number_or_none(native_rule_any_condition_parallelism) or 2),
+            ),
         )
         # The production composition root enables this durable lease. Bare
         # adapters retain the old unlocked behavior for isolated migrations
@@ -5129,6 +5146,9 @@ class TypeDBOntologyGraphRepository(GraphStoreOntologyRowMapperMixin, ScopedABox
 
     def native_rule_parallelism(self) -> int:
         return self._native_rule_parallelism
+
+    def native_rule_any_condition_parallelism(self) -> int:
+        return self._native_rule_any_condition_parallelism
 
     def clear_rulebox_snapshot_cache(self) -> None:
         self._rulebox_snapshot_cache_at = 0.0
@@ -10664,6 +10684,8 @@ relation ontology-assertion,
         execution_incomplete = False
         parallel_rule_execution = False
         effective_parallelism = 1
+        any_condition_parallelism_cap = 1
+        any_condition_rule_count = 0
         try:
             relation_types_by_symbol: Dict[str, Iterable[str]] = {}
             rule_context: Dict[str, object] = {}
@@ -10790,13 +10812,27 @@ relation ontology-assertion,
                 1,
                 min(8, int(number_or_none(native_rule_parallelism) or 1)),
             )
+            any_condition_rule_count = sum(
+                1
+                for item in selected_entries
+                if any(
+                    normalized_condition_role(
+                        condition.to_dict() if hasattr(condition, "to_dict") else dict(condition or {})
+                    ) in {"any", "optional"}
+                    for condition in (getattr(item.get("rule"), "conditions", []) or [])
+                )
+            )
+            any_condition_parallelism_cap = min(
+                requested_parallelism,
+                self.native_rule_any_condition_parallelism(),
+            ) if requires_direct_any_probe else requested_parallelism
             parallel_rule_execution = bool(
                 stable_abox_write_lease_held
-                and requested_parallelism > 1
+                and any_condition_parallelism_cap > 1
                 and len(selected_entries) > 1
             )
             effective_parallelism = (
-                min(requested_parallelism, len(selected_entries))
+                min(any_condition_parallelism_cap, len(selected_entries))
                 if parallel_rule_execution
                 else 1
             )
@@ -11103,6 +11139,8 @@ relation ontology-assertion,
                     "schemaFunctionUsed": schema_function_query,
                     "nativeExecutionMode": execution_mode,
                     "nativeRuleParallelism": effective_parallelism,
+                    "nativeRuleAnyConditionParallelismCap": any_condition_parallelism_cap,
+                    "nativeRuleAnyConditionRuleCount": any_condition_rule_count,
                     "parallelRuleExecution": parallel_rule_execution,
                     "matchedCount": len(matches),
                     "executedRuleCount": len(executed_rules),
@@ -11127,6 +11165,8 @@ relation ontology-assertion,
                 "schemaFunctionUsed": schema_function_query,
                 "nativeExecutionMode": execution_mode,
                 "nativeRuleParallelism": effective_parallelism,
+                "nativeRuleAnyConditionParallelismCap": any_condition_parallelism_cap,
+                "nativeRuleAnyConditionRuleCount": any_condition_rule_count,
                 "parallelRuleExecution": parallel_rule_execution,
                 "executedRuleCount": len(executed_rules),
                 "skippedRuleCount": len(skipped_rules),
@@ -11151,6 +11191,8 @@ relation ontology-assertion,
                 "schemaFunctionUsed": False,
                 "nativeExecutionMode": execution_mode,
                 "nativeRuleParallelism": effective_parallelism,
+                "nativeRuleAnyConditionParallelismCap": any_condition_parallelism_cap,
+                "nativeRuleAnyConditionRuleCount": any_condition_rule_count,
                 "parallelRuleExecution": parallel_rule_execution,
                 "matchedCount": 0,
                 "matches": [],
@@ -15145,6 +15187,92 @@ def typedb_native_any_group_check_query(
             "columns": [],
             "reason": "Native any-condition check needs a source id.",
         }
+    conditions = [
+        (index, condition)
+        for index, condition in enumerate(rule.get("conditions") or [])
+        if isinstance(condition, dict)
+        and normalized_condition_role(condition) in {"any", "optional"}
+    ]
+    any_min_count = max(
+        1,
+        int(number_or_none(rule.get("any_condition_min_count") or rule.get("anyConditionMinCount")) or 1),
+    )
+    if any_min_count > len(conditions):
+        return {
+            "ruleId": str(rule.get("rule_id") or rule.get("ruleId") or ""),
+            "query": "",
+            "columns": [],
+            "reason": "any condition minimum exceeds available any conditions",
+        }
+
+    # An N-of-M group with N=1 is a pure existence test. The former generic
+    # path joined RuleBox condition-token entities and ran a `reduce count`
+    # even though there is no cardinality to calculate. Keep the decision in
+    # TypeDB, but ask it for one bounded matching branch instead.
+    if any_min_count == 1:
+        scoped_manifest_variable = "$activeManifestId" if scoped_manifest_only else ""
+        clauses: List[str] = []
+        if scoped_manifest_only:
+            clauses.append(typedb_active_worldview_manifest_clause(
+                "$activeManifestPointer",
+                scoped_manifest_variable,
+                world_id,
+            ))
+            clauses.append(typedb_scoped_manifest_member_clause(
+                "$source",
+                "source",
+                scoped_manifest_variable,
+                world_id,
+            ))
+        else:
+            clauses.append(typedb_active_abox_member_clause("$source", "source", world_id))
+        clauses.append(
+            "$source isa ontology-node, has ontology-id " + typedb_string(clean_source_id) + ";"
+        )
+        branches: List[str] = []
+        for branch_index, (condition_index, condition) in enumerate(conditions):
+            pattern = typedb_condition_pattern(
+                condition,
+                condition_index,
+                relation_prefix="anyExistsRel" + str(branch_index) + "_",
+                target_prefix="anyExistsTarget" + str(branch_index) + "_",
+                variable_scope="anyExists" + str(branch_index) + "_",
+                manifest_id_variable=scoped_manifest_variable,
+                world_id=world_id,
+            )
+            if pattern.get("reason"):
+                return {
+                    "ruleId": str(rule.get("rule_id") or rule.get("ruleId") or ""),
+                    "query": "",
+                    "columns": [],
+                    "reason": str(pattern.get("reason") or ""),
+                }
+            branch_clauses = [
+                str(item)
+                for item in pattern.get("clauses") or []
+                if str(item or "").strip()
+            ]
+            if branch_clauses:
+                branches.append("{ " + " ".join(branch_clauses) + " }")
+        if not branches:
+            return {
+                "ruleId": str(rule.get("rule_id") or rule.get("ruleId") or ""),
+                "query": "",
+                "columns": [],
+                "reason": "any conditions produced no TypeQL branches",
+            }
+        return {
+            "ruleId": str(rule.get("rule_id") or rule.get("ruleId") or ""),
+            "nativeRuleId": typedb_native_rule_id(str(rule.get("rule_id") or rule.get("ruleId") or "")),
+            "query": (
+                "match " + " ".join(clauses)
+                + " match " + " or ".join(branches) + ";"
+                + " $source has ontology-id $sourceId, has ontology-label $sourceLabel;"
+            ),
+            "columns": ["sourceId", "sourceLabel"],
+            "anyConditionCheckMode": "exists-any",
+        }
+
     plan = typedb_native_match_query(
         rule,
         [],
@@ -15165,6 +15293,7 @@ def typedb_native_any_group_check_query(
         **plan,
         "query": "match " + source_clause + query[len("match "):],
         "columns": ["sourceId", "sourceLabel"],
+        "anyConditionCheckMode": "distinct-condition-count",
     }
 
 
@@ -16271,6 +16400,9 @@ def typedb_repository_from_settings(settings: Dict[str, str] = None):
         or DEFAULT_TYPEDB_NATIVE_RULE_EXECUTION_BUDGET_SECONDS,
         native_rule_parallelism=int(number_or_none(settings.get("typedbNativeRuleParallelism"))
         or DEFAULT_TYPEDB_NATIVE_RULE_PARALLELISM),
+        native_rule_any_condition_parallelism=int(number_or_none(
+            settings.get("typedbNativeRuleAnyConditionParallelism")
+        ) or 2),
         inference_write_lease_enabled=True
         if settings.get("typedbInferenceWriteLeaseEnabled") in (None, "")
         else typedb_bool(settings.get("typedbInferenceWriteLeaseEnabled")),

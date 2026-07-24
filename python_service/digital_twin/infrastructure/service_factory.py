@@ -626,6 +626,7 @@ def build_ontology_reasoning_runner(settings=None, event_publisher=None) -> Onto
             else {"status": "not-supported", "reason": "Graph store has no deferred maintenance adapter."}
         ),
         storage_guard=lambda: typedb_storage_health(configured_settings),
+        mailbox_store=stores.ontology_reasoning_mailbox_store(reasoning_store_settings),
     )
 
 

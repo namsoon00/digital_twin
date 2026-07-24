@@ -550,6 +550,10 @@
     ontologyDiagnostics: null,
     ontologyDiagnosticsLoading: false,
     ontologyDiagnosticsError: "",
+    ontologyReasoningStatus: null,
+    ontologyReasoningStatusLoading: false,
+    ontologyReasoningStatusLoaded: false,
+    ontologyReasoningStatusError: "",
     ontologySeedRunning: false,
     ontologyStrategyDetailLoading: false,
     ontologyStrategyDetailLoaded: false,
@@ -4001,6 +4005,13 @@
       ontologyReasoningEnabled: settingValue("ontologyReasoningEnabled"),
       ontologyReasoningIntervalSeconds: settingValue("ontologyReasoningIntervalSeconds"),
       ontologyReasoningBatchSize: settingValue("ontologyReasoningBatchSize"),
+      ontologyReasoningMailboxEnabled: settingValue("ontologyReasoningMailboxEnabled"),
+      ontologyReasoningMailboxBatchSize: settingValue("ontologyReasoningMailboxBatchSize"),
+      ontologyReasoningMailboxRetentionHours: settingValue("ontologyReasoningMailboxRetentionHours"),
+      ontologyReasoningSourceFreshnessEnabled: settingValue("ontologyReasoningSourceFreshnessEnabled"),
+      ontologyReasoningRealtimeEventMaxAgeMinutes: settingValue("ontologyReasoningRealtimeEventMaxAgeMinutes"),
+      ontologyReasoningResearchEventMaxAgeMinutes: settingValue("ontologyReasoningResearchEventMaxAgeMinutes"),
+      ontologyReasoningTelemetryHistoryLimit: settingValue("ontologyReasoningTelemetryHistoryLimit"),
       temporalWindowPeriods: settingValue("temporalWindowPeriods"),
       temporalWindowHistoryLimit: settingValue("temporalWindowHistoryLimit"),
       ontologyLabAutoApplyEnabled: settingValue("ontologyLabAutoApplyEnabled"),
@@ -4241,6 +4252,27 @@
       })
       .finally(function () {
         state.ontologyDiagnosticsLoading = false;
+        if (state.snapshot) render();
+      });
+  }
+
+  function loadOntologyReasoningStatus(force) {
+    if (isStaticPreviewHost()) return Promise.resolve(null);
+    if (state.ontologyReasoningStatusLoading && !force) return Promise.resolve(state.ontologyReasoningStatus);
+    state.ontologyReasoningStatusLoading = true;
+    state.ontologyReasoningStatusError = "";
+    return requestJson("/api/ontology/reasoning/status")
+      .then(function (payload) {
+        state.ontologyReasoningStatus = payload || {};
+        state.ontologyReasoningStatusLoaded = true;
+        return state.ontologyReasoningStatus;
+      })
+      .catch(function (error) {
+        state.ontologyReasoningStatusError = error.message || "추론 대기열 상태를 읽지 못했습니다.";
+        return null;
+      })
+      .finally(function () {
+        state.ontologyReasoningStatusLoading = false;
         if (state.snapshot) render();
       });
   }
@@ -8602,6 +8634,9 @@
     }
     if (state.activeTab === "settings" && !state.serviceAccountsLoaded && !state.serviceAccountsLoading) {
       loadServiceAccounts();
+    }
+    if (state.activeTab === "settings" && !state.ontologyReasoningStatusLoaded && !state.ontologyReasoningStatusLoading) {
+      loadOntologyReasoningStatus(false);
     }
     if (state.activeTab === "experiments" && !state.ontologyExperimentsLoaded && !state.ontologyExperimentsLoading) {
       loadOntologyExperiments(false);
@@ -23705,6 +23740,19 @@
         renderSettingField("typedbDataMaxSizeMb", "TypeDB 최대 용량(MB)", "number", "2048"),
         renderSettingField("ontologyReasoningIntervalSeconds", "추론 요청 확인 주기(초)", "number", "10"),
         renderSettingField("ontologyReasoningBatchSize", "추론 요청 배치", "number", "20"),
+        renderSettingSelect("ontologyReasoningMailboxEnabled", "실시간 최신 상태만 유지", [
+          { value: "1", label: "사용" },
+          { value: "0", label: "사용 안 함" }
+        ]),
+        renderSettingField("ontologyReasoningMailboxBatchSize", "최신 상태 대기열 처리 수", "number", "200"),
+        renderSettingField("ontologyReasoningMailboxRetentionHours", "완료 대기열 이력(시간)", "number", "72"),
+        renderSettingSelect("ontologyReasoningSourceFreshnessEnabled", "추론 입력 원천 시각 검증", [
+          { value: "1", label: "사용" },
+          { value: "0", label: "사용 안 함" }
+        ]),
+        renderSettingField("ontologyReasoningRealtimeEventMaxAgeMinutes", "실시간 입력 최대 경과(분)", "number", "15"),
+        renderSettingField("ontologyReasoningResearchEventMaxAgeMinutes", "리서치 입력 최대 경과(분)", "number", "360"),
+        renderSettingField("ontologyReasoningTelemetryHistoryLimit", "추론 실행 이력 수", "number", "80"),
         renderSettingField("temporalWindowHistoryLimit", "기간 판단 히스토리 수", "number", "96"),
         '<label><span>기간 판단 구간</span><div class="form-control-shell"><textarea data-setting="temporalWindowPeriods" rows="4" autocomplete="off" placeholder="1D=1:2">' + escapeHtml(settingValue("temporalWindowPeriods") || defaultSettings.temporalWindowPeriods) + '</textarea></div></label>'
       ].join(""), "gate feed-wide"),
@@ -25204,6 +25252,16 @@
         renderSettingField("marketDataMaxAgeMinutes", "추천 시세 신선도(분)", "number", "240"),
         renderSettingField("ontologyReasoningIntervalSeconds", "추론 요청 확인 주기(초)", "number", "10"),
         renderSettingField("ontologyReasoningBatchSize", "추론 요청 배치", "number", "20"),
+        renderSettingSelect("ontologyReasoningMailboxEnabled", "실시간 최신 상태만 유지", [
+          { value: "1", label: "사용" },
+          { value: "0", label: "사용 안 함" }
+        ]),
+        renderSettingSelect("ontologyReasoningSourceFreshnessEnabled", "추론 입력 원천 시각 검증", [
+          { value: "1", label: "사용" },
+          { value: "0", label: "사용 안 함" }
+        ]),
+        renderSettingField("ontologyReasoningRealtimeEventMaxAgeMinutes", "실시간 입력 최대 경과(분)", "number", "15"),
+        renderSettingField("ontologyReasoningResearchEventMaxAgeMinutes", "리서치 입력 최대 경과(분)", "number", "360"),
         renderSettingField("marketMaterialityPriceChangePct", "가격 중요 변화율(%)", "number", "0.6"),
         renderSettingField("marketMaterialityTrendDistancePct", "추세 중요 이격(%)", "number", "2"),
         renderSettingField("marketMaterialityVolumeRatio", "거래량 중요 배율", "number", "1.5")
@@ -25245,6 +25303,16 @@
   }
 
   function renderSettingsDiagnosticsPanel() {
+    var reasoning = state.ontologyReasoningStatus || {};
+    var queue = reasoning.queueHealth && typeof reasoning.queueHealth === "object" ? reasoning.queueHealth : {};
+    var mailbox = reasoning.mailbox && typeof reasoning.mailbox === "object" ? reasoning.mailbox : {};
+    var reasoningStatus = String(queue.status || (state.ontologyReasoningStatusError ? "error" : "unknown")).toLowerCase();
+    var reasoningTone = reasoningStatus === "healthy" ? "watch" : (reasoningStatus === "degraded" || reasoningStatus === "unknown" ? "caution" : "danger");
+    var reasoningLabel = reasoningStatus === "healthy" ? "정상" : (reasoningStatus === "degraded" ? "대기 처리 중" : (reasoningStatus === "blocked" ? "차단됨" : "확인 필요"));
+    var mailboxCount = Number(mailbox.pendingEntryCount || reasoning.mailboxPendingEntryCount || 0);
+    var staleWindow = reasoning.sourceFreshness && typeof reasoning.sourceFreshness === "object"
+      ? reasoning.sourceFreshness.realtimeEventMaxAgeMinutes
+      : "-";
     var diagnostics = [
       {
         label: "저장 상태",
@@ -25269,6 +25337,13 @@
         value: state.serverSettingsError ? "확인 필요" : "없음",
         tone: state.serverSettingsError ? "danger" : "watch",
         detail: state.serverSettingsError || "설정 API 오류가 없습니다."
+      },
+      {
+        label: "추론 대기열",
+        value: state.ontologyReasoningStatusLoading ? "조회 중" : reasoningLabel,
+        tone: state.ontologyReasoningStatusLoading ? "caution" : reasoningTone,
+        detail: state.ontologyReasoningStatusError
+          || (mailboxCount + "개 최신 상태 대기 · 실시간 원천 " + staleWindow + "분 이내만 사용")
       }
     ];
     return [
@@ -25279,6 +25354,7 @@
       '<h2>진단</h2>',
       '<span>저장 가능 여부, 외부 API 준비도, 설정 오류를 따로 확인합니다.</span>',
       '</div>',
+      '<button class="text-button compact" type="button" data-action="refresh-ontology-reasoning-status"' + (state.ontologyReasoningStatusLoading ? ' disabled' : '') + '>추론 상태 새로고침</button>',
       '</div>',
       '<div class="settings-diagnostic-grid">',
       diagnostics.map(function (item) {
@@ -25988,6 +26064,15 @@
       refreshOntologyDiagnosticsButton.addEventListener("click", function () {
         loadOntologyDiagnostics(true, true).then(function () {
           showSnackbar("TypeDB 진단을 다시 읽었습니다.");
+        });
+      });
+    }
+
+    var refreshOntologyReasoningStatusButton = app.querySelector('[data-action="refresh-ontology-reasoning-status"]');
+    if (refreshOntologyReasoningStatusButton) {
+      refreshOntologyReasoningStatusButton.addEventListener("click", function () {
+        loadOntologyReasoningStatus(true).then(function () {
+          if (!state.ontologyReasoningStatusError) showSnackbar("추론 대기열 상태를 다시 읽었습니다.");
         });
       });
     }

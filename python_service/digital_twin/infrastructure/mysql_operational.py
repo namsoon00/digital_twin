@@ -32,3 +32,4 @@ from .mysql_investment_decision_episodes import MySQLInvestmentDecisionEpisodeSt
 from .mysql_hypothesis_lifecycle import MySQLHypothesisLifecycleStore
 from .mysql_investment_research import MySQLInvestmentResearchStore
 from .mysql_ontology_projection_runs import MySQLOntologyProjectionRunStore
+from .mysql_reasoning_mailbox import MySQLOntologyReasoningMailboxStore

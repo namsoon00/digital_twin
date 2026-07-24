@@ -96,6 +96,7 @@ from ..infrastructure.service_factory import (
     build_notification_queue_runner,
     build_official_calendar_sync_service,
     build_ontology_lab_service,
+    build_ontology_reasoning_runner,
     build_rule_change_candidate_service,
     build_symbol_universe_service,
     build_flow_lens_service,
@@ -577,6 +578,13 @@ def settings_status_payload() -> Dict[str, object]:
         "ontologyReasoningIntervalSeconds",
         "ontologyReasoningBatchSize",
         "ontologyReasoningMaxSymbolsPerRun",
+        "ontologyReasoningMailboxEnabled",
+        "ontologyReasoningMailboxBatchSize",
+        "ontologyReasoningMailboxRetentionHours",
+        "ontologyReasoningSourceFreshnessEnabled",
+        "ontologyReasoningRealtimeEventMaxAgeMinutes",
+        "ontologyReasoningResearchEventMaxAgeMinutes",
+        "ontologyReasoningTelemetryHistoryLimit",
         "typedbNativeRuleTargetSymbolLimit",
         "typedbNativeRuleSelectionEnabled",
         "typedbNativeRuleParallelism",
@@ -1564,6 +1572,14 @@ def list_ontology_experiments_payload(query: Dict[str, List[str]]) -> Dict[str, 
 
 def ontology_experiments_status_payload() -> Dict[str, object]:
     return ontology_lab_service().status()
+
+
+def ontology_reasoning_status_payload() -> Dict[str, object]:
+    """Expose scheduler-only queue health without running a TypeDB cycle."""
+    try:
+        return build_ontology_reasoning_runner(runtime_settings()).status()
+    except Exception as error:  # noqa: BLE001 - diagnostics must remain readable during store recovery.
+        return {"enabled": False, "queueHealth": {"status": "error", "reason": str(error)[:240]}}
 
 
 def create_ontology_experiment_payload(payload: Dict[str, object]) -> Dict[str, object]:
@@ -3624,6 +3640,9 @@ class DigitalTwinHandler(BaseHTTPRequestHandler):
 
         if path == "/api/ontology/experiments/status" and self.command == "GET":
             return self.send_payload(200, ontology_experiments_status_payload())
+
+        if path == "/api/ontology/reasoning/status" and self.command == "GET":
+            return self.send_payload(200, ontology_reasoning_status_payload())
 
         if path == "/api/ontology/experiments/once" and self.command == "POST":
             if not self.ensure_writable("공유 모드에서는 온톨로지 실험을 실행할 수 없습니다."):

@@ -132,6 +132,13 @@
     ontologyReasoningEnabled: "1",
     ontologyReasoningIntervalSeconds: "10",
     ontologyReasoningBatchSize: "20",
+    ontologyReasoningMailboxEnabled: "1",
+    ontologyReasoningMailboxBatchSize: "200",
+    ontologyReasoningMailboxRetentionHours: "72",
+    ontologyReasoningSourceFreshnessEnabled: "1",
+    ontologyReasoningRealtimeEventMaxAgeMinutes: "15",
+    ontologyReasoningResearchEventMaxAgeMinutes: "360",
+    ontologyReasoningTelemetryHistoryLimit: "80",
     temporalWindowPeriods: [
       "1D=1:2",
       "3D=3:3",

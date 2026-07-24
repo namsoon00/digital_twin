@@ -736,4 +736,34 @@ MYSQL_SCHEMA = [
         KEY idx_hypothesis_proposals_status_time (status, updated_at)
     ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
     """,
+    """
+    CREATE TABLE IF NOT EXISTS ontology_reasoning_mailbox_events (
+        event_id VARCHAR(191) PRIMARY KEY,
+        occurred_at VARCHAR(40) NOT NULL DEFAULT '',
+        state VARCHAR(32) NOT NULL DEFAULT 'pending',
+        unresolved_entry_count INT NOT NULL DEFAULT 0,
+        terminal_reason VARCHAR(255) NOT NULL DEFAULT '',
+        event_json LONGTEXT NOT NULL,
+        created_at VARCHAR(40) NOT NULL,
+        updated_at VARCHAR(40) NOT NULL,
+        KEY idx_reasoning_mailbox_events_state_time (state, updated_at, event_id)
+    ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
+    """,
+    """
+    CREATE TABLE IF NOT EXISTS ontology_reasoning_mailbox (
+        mailbox_key VARCHAR(191) PRIMARY KEY,
+        source_event_id VARCHAR(191) NOT NULL,
+        account_scope VARCHAR(255) NOT NULL DEFAULT 'market',
+        symbol VARCHAR(64) NOT NULL DEFAULT '',
+        fact_family VARCHAR(255) NOT NULL DEFAULT '',
+        trigger_name VARCHAR(96) NOT NULL DEFAULT '',
+        review_level VARCHAR(32) NOT NULL DEFAULT 'normal',
+        priority_hint INT NOT NULL DEFAULT 0,
+        occurred_at VARCHAR(40) NOT NULL DEFAULT '',
+        created_at VARCHAR(40) NOT NULL,
+        updated_at VARCHAR(40) NOT NULL,
+        KEY idx_reasoning_mailbox_pending (priority_hint, occurred_at, mailbox_key),
+        KEY idx_reasoning_mailbox_source_event (source_event_id)
+    ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
+    """,
 ]

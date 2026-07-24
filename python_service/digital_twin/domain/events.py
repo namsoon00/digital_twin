@@ -418,6 +418,11 @@ def ontology_reasoning_requested_event(
     source_payload = source_event.payload or {}
     handoff = source_payload.get("reasoningHandoff") if isinstance(source_payload.get("reasoningHandoff"), dict) else {}
     research_brief = source_payload.get("hypothesisResearchBrief") if isinstance(source_payload.get("hypothesisResearchBrief"), dict) else {}
+    source_observed_at = next((
+        str(source_payload.get(key) or "").strip()
+        for key in ["sourceObservedAt", "sourceAsOf", "observedAt", "generatedAt", "collectedAt"]
+        if str(source_payload.get(key) or "").strip()
+    ), str(source_event.occurred_at or ""))
     changed_evidence_ids = [
         str(item or "").strip()
         for item in (source_payload.get("changedEvidenceIds") or source_payload.get("verifiedClaims") or [])
@@ -437,6 +442,10 @@ def ontology_reasoning_requested_event(
             "observedCount": int(observed_count or 0),
             "factTypes": clean_fact_types[:20],
             "reason": str(reason or ""),
+            # Scheduling uses the original vendor/collection observation time,
+            # never the delayed worker publish time, to reject stale data
+            # before an expensive TypeDB cycle.
+            "sourceObservedAt": source_observed_at,
             "dispatchMode": "data-update-driven",
             "importanceGate": "materiality-first",
             "materialityAssessments": materiality_assessments if materiality_assessments is not None else [],

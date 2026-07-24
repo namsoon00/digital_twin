@@ -1,8 +1,10 @@
+import hashlib
 import inspect
+import time
 from datetime import datetime, timezone
 from typing import Callable, Dict, Iterable, List, Tuple
 
-from ..domain.events import ONTOLOGY_REASONING_REQUESTED, ontology_reasoning_completed_event
+from ..domain.events import DomainEvent, ONTOLOGY_REASONING_REQUESTED, ontology_reasoning_completed_event
 from ..domain.investment_evidence_governance import (
     ReasoningGeneration,
     ResearchReasoningHandoff,
@@ -76,9 +78,11 @@ TRIGGER_ORDER = {
 }
 
 # A KIS or market-data event represents a new observation of a complete live
-# portfolio snapshot. It is safe to replace an older event only when the newer
-# event covers every older subject and fact family. Research/calendar events
-# deliberately never enter this path because their evidence is not fungible.
+# portfolio snapshot. Its materiality level changes scheduling priority, but
+# never makes an older price snapshot more trustworthy than the newest one.
+# Research/calendar events deliberately never enter this path because their
+# evidence is not fungible. ``immediate`` remains outside the mailbox for a
+# separately modelled emergency event, rather than a normal quote update.
 COALESCIBLE_REALTIME_TRIGGERS = {
     "market-data-update",
     "kis-realtime-update",
@@ -165,7 +169,7 @@ def realtime_coalescing_key(event: object) -> Tuple[str, str, Tuple[str, ...]]:
     review_level = event_review_level(event)
     if trigger not in COALESCIBLE_REALTIME_TRIGGERS:
         return ()
-    if REVIEW_LEVEL_ORDER.get(review_level, 0) > REVIEW_LEVEL_ORDER["check"]:
+    if review_level == "immediate":
         return ()
     symbols = event_symbols(event)
     if not symbols:
@@ -203,6 +207,7 @@ class OntologyReasoningRunner:
         maintenance_runner: Callable = None,
         projection_recovery_probe: Callable = None,
         storage_guard: Callable = None,
+        mailbox_store=None,
     ):
         self.event_reader = event_reader
         self.cursor_store = cursor_store
@@ -216,6 +221,7 @@ class OntologyReasoningRunner:
         self.maintenance_runner = maintenance_runner
         self.projection_recovery_probe = projection_recovery_probe
         self.storage_guard = storage_guard
+        self.mailbox_store = mailbox_store
 
     def enabled(self) -> bool:
         return truthy(self.settings.get("ontologyReasoningEnabled"), True)
@@ -256,6 +262,31 @@ class OntologyReasoningRunner:
 
     def coherent_snapshot_max_symbols(self) -> int:
         return int_setting(self.settings, "ontologyReasoningCoherentSnapshotMaxSymbols", 20, 1, 50)
+
+    def mailbox_enabled(self) -> bool:
+        """Use a durable latest-state queue only for fungible realtime observations."""
+        return bool(self.mailbox_store) and truthy(self.settings.get("ontologyReasoningMailboxEnabled"), True)
+
+    def mailbox_batch_size(self) -> int:
+        return int_setting(self.settings, "ontologyReasoningMailboxBatchSize", self.batch_size(), 1, 1000)
+
+    def mailbox_retention_hours(self) -> int:
+        return int_setting(self.settings, "ontologyReasoningMailboxRetentionHours", 72, 1, 24 * 90)
+
+    def source_freshness_enabled(self) -> bool:
+        # Runtime settings explicitly enable this. Keeping compatibility
+        # callers opt-in avoids treating synthetic unit-test timestamps as
+        # live source clocks.
+        return truthy(self.settings.get("ontologyReasoningSourceFreshnessEnabled"), False)
+
+    def realtime_event_max_age_minutes(self) -> int:
+        return int_setting(self.settings, "ontologyReasoningRealtimeEventMaxAgeMinutes", 15, 1, 24 * 60)
+
+    def research_event_max_age_minutes(self) -> int:
+        return int_setting(self.settings, "ontologyReasoningResearchEventMaxAgeMinutes", 360, 1, 24 * 30)
+
+    def telemetry_history_limit(self) -> int:
+        return int_setting(self.settings, "ontologyReasoningTelemetryHistoryLimit", 80, 10, 500)
 
     def event_scan_limit(self, requested_limit: int = 0) -> int:
         fallback = max(1500, int(requested_limit or self.batch_size()) * 40)
@@ -757,15 +788,197 @@ class OntologyReasoningRunner:
         )
         return [item[1] for item in ranked_events[: max(1, int(limit or self.batch_size()))]]
 
-    def pending_work(self, limit: int = 0) -> Dict[str, object]:
-        """Collapse redundant, lower-materiality realtime snapshot requests.
+    def mailbox_source_requests(self, limit: int = 0) -> List[object]:
+        """Read unprocessed realtime events before cadence filtering.
 
-        A newer market observation may supersede an older one only when it
-        includes all of the older event's symbols and exactly the same fact
-        family. The older cursor is advanced only after the newer snapshot has
-        completed TypeDB projection and inference.
+        A symbol may be inside its projection cooldown while a newer quote is
+        already available.  The durable mailbox must still receive that newer
+        observation so the eventual TypeDB cycle uses current state rather
+        than the first tick that happened to become due.
         """
-        requests = self.pending_requests(limit)
+        if not self.mailbox_enabled():
+            return []
+        processed = set(self.cursor_store.processed_event_ids())
+        reader = getattr(self.event_reader, "recent_events", None)
+        if callable(reader):
+            source_events = reader(
+                name=ONTOLOGY_REASONING_REQUESTED,
+                limit=self.event_scan_limit(limit),
+            )
+        else:
+            source_events = self.event_reader.events(
+                name=ONTOLOGY_REASONING_REQUESTED,
+                limit=self.event_scan_limit(limit),
+            )
+        candidates = []
+        for event in source_events or []:
+            event_id = str(getattr(event, "event_id", "") or "").strip()
+            if not event_id or event_id in processed or event_changed_count(event) <= 0:
+                continue
+            if self.mailbox_entries_for_event(event):
+                candidates.append(event)
+        return sorted(candidates, key=event_time_key)
+
+    def event_as_dict(self, event: object) -> Dict[str, object]:
+        if hasattr(event, "to_dict"):
+            try:
+                payload = event.to_dict()
+                if isinstance(payload, dict):
+                    return dict(payload)
+            except Exception:  # noqa: BLE001 - scheduler metadata must not stop a live event.
+                pass
+        return {
+            "name": str(getattr(event, "name", "") or ""),
+            "aggregate_id": str(getattr(event, "aggregate_id", "") or ""),
+            "payload": event_payload(event),
+            "occurred_at": str(getattr(event, "occurred_at", "") or ""),
+            "event_id": str(getattr(event, "event_id", "") or ""),
+            "correlation_id": str(getattr(event, "correlation_id", "") or ""),
+        }
+
+    def mailbox_entries_for_event(self, event: object) -> List[Dict[str, object]]:
+        """Expand a fungible realtime event into account/symbol mailbox slots."""
+        coalescing_key = realtime_coalescing_key(event)
+        if not coalescing_key:
+            return []
+        account_scope, trigger, fact_types = coalescing_key
+        event_id = str(getattr(event, "event_id", "") or "").strip()
+        if not event_id:
+            return []
+        source_event = self.event_as_dict(event)
+        source_event["event_id"] = event_id
+        source_event.setdefault("occurred_at", str(getattr(event, "occurred_at", "") or ""))
+        family = ",".join(fact_types) or "MarketQuote"
+        priority = (
+            event_subject_priority(event, self.priority_symbols()) * 10000
+            + REVIEW_LEVEL_ORDER.get(event_review_level(event), 0) * 1000
+            + TRIGGER_ORDER.get(trigger, 0) * 100
+            + (1 if "MarketQuote" in fact_types else 0)
+        )
+        entries = []
+        for symbol in event_symbols(event):
+            seed = "|".join([account_scope, symbol, family])
+            mailbox_key = hashlib.sha256(seed.encode("utf-8")).hexdigest()
+            entries.append({
+                "mailboxKey": mailbox_key,
+                "sourceEventId": event_id,
+                "sourceEvent": source_event,
+                "accountScope": account_scope,
+                "symbol": symbol,
+                "factFamily": family,
+                "trigger": trigger,
+                "reviewLevel": event_review_level(event),
+                "priorityHint": priority,
+                "occurredAt": str(getattr(event, "occurred_at", "") or ""),
+            })
+        return entries
+
+    def mailbox_virtual_event(self, entry: Dict[str, object]) -> DomainEvent:
+        source = DomainEvent.from_dict(dict(entry.get("sourceEvent") or {}))
+        payload = dict(source.payload or {})
+        source_event_id = str(entry.get("sourceEventId") or source.event_id or "").strip()
+        mailbox_key = str(entry.get("mailboxKey") or "").strip()
+        payload["symbols"] = [str(entry.get("symbol") or "").upper().strip()]
+        payload["_reasoningMailbox"] = {
+            "mailboxKey": mailbox_key,
+            "sourceEventId": source_event_id,
+            "accountScope": str(entry.get("accountScope") or "market"),
+            "factFamily": str(entry.get("factFamily") or ""),
+            "enqueuedAt": str(entry.get("occurredAt") or source.occurred_at or ""),
+        }
+        return DomainEvent(
+            name=source.name,
+            aggregate_id=source.aggregate_id,
+            payload=payload,
+            occurred_at=str(entry.get("occurredAt") or source.occurred_at or ""),
+            event_id="mailbox:" + mailbox_key,
+            correlation_id=source.correlation_id or source_event_id,
+        )
+
+    @staticmethod
+    def mailbox_metadata(event: object) -> Dict[str, object]:
+        payload = event_payload(event)
+        raw = payload.get("_reasoningMailbox")
+        return dict(raw or {}) if isinstance(raw, dict) else {}
+
+    def mailbox_source_event_id(self, event: object) -> str:
+        metadata = self.mailbox_metadata(event)
+        return str(metadata.get("sourceEventId") or getattr(event, "event_id", "") or "").strip()
+
+    def synchronize_mailbox(
+        self,
+        source_requests: Iterable[object],
+        enqueue_new: bool = True,
+    ) -> Dict[str, object]:
+        """Persist newest realtime slots before a TypeDB cycle can be deferred."""
+        summary = {
+            "enabled": self.mailbox_enabled(),
+            "acceptedEventIds": [],
+            "knownEventIds": [],
+            "handledEventIds": [],
+            "candidateEventIds": [],
+            "terminalEventStates": {},
+            "entryCount": 0,
+        }
+        if not self.mailbox_enabled():
+            return summary
+        requests = list(source_requests or [])
+        entries_by_event = {}
+        for event in requests:
+            event_id = str(getattr(event, "event_id", "") or "").strip()
+            entries = self.mailbox_entries_for_event(event)
+            if event_id and entries:
+                entries_by_event[event_id] = entries
+        event_ids = list(entries_by_event)
+        summary["candidateEventIds"] = list(event_ids)
+        if not event_ids:
+            return summary
+        try:
+            known = set(self.mailbox_store.known_event_ids(event_ids))
+            terminal = dict(self.mailbox_store.terminal_event_states(event_ids) or {})
+            entries = [
+                entry
+                for event_id, event_entries in entries_by_event.items()
+                if event_id not in known
+                for entry in event_entries
+            ]
+            result = self.mailbox_store.enqueue(entries) if enqueue_new and entries else {}
+            accepted = list(result.get("enqueuedEventIds") or [])
+            handled = set(known) | set(accepted)
+            summary.update({
+                "acceptedEventIds": accepted,
+                "knownEventIds": sorted(known | set(result.get("knownEventIds") or [])),
+                "handledEventIds": sorted(handled),
+                "terminalEventStates": {**terminal, **dict(result.get("terminalEventStates") or {})},
+                "entryCount": len(entries),
+            })
+        except Exception as error:  # noqa: BLE001 - event-log scheduling remains a safe fallback.
+            summary.update({
+                "enabled": False,
+                "reason": "영속 추론 메일박스 동기화 실패: " + str(error)[:180],
+            })
+        return summary
+
+    def mailbox_pending_requests(self) -> List[object]:
+        if not self.mailbox_enabled():
+            return []
+        try:
+            entries = self.mailbox_store.pending(self.mailbox_batch_size())
+        except Exception:  # noqa: BLE001 - source-event fallback remains available.
+            return []
+        return [self.mailbox_virtual_event(entry) for entry in entries if isinstance(entry, dict)]
+
+    def recent_terminal_mailbox_events(self) -> Dict[str, str]:
+        """Recover source cursors after a process stops between ack and save."""
+        if not self.mailbox_enabled():
+            return {}
+        try:
+            return dict(self.mailbox_store.terminal_event_states() or {})
+        except Exception:  # noqa: BLE001 - normal source scans remain a safe recovery path.
+            return {}
+
+    def coalesced_work(self, requests: Iterable[object]) -> Dict[str, object]:
+        requests = list(requests or [])
         superseded_by_lead: Dict[str, List[str]] = {}
         superseded_ids = set()
         for older in requests:
@@ -796,12 +1009,142 @@ class OntologyReasoningRunner:
         ]
         return {
             "requests": active_requests,
-            "rawRequestCount": len(requests),
             "coalescedEventIds": sorted(superseded_ids),
             "supersededByLead": {
                 lead_id: sorted(set(event_ids))
                 for lead_id, event_ids in superseded_by_lead.items()
             },
+        }
+
+    def event_source_observed_at(self, event: object) -> str:
+        payload = event_payload(event)
+        for key in ["sourceObservedAt", "sourceAsOf", "observedAt", "generatedAt", "collectedAt"]:
+            value = str(payload.get(key) or "").strip()
+            if value:
+                return value
+        return str(getattr(event, "occurred_at", "") or "").strip()
+
+    def event_freshness(self, event: object) -> Dict[str, object]:
+        if not self.source_freshness_enabled():
+            return {"status": "bypass", "reason": "추론 입력 신선도 정책이 꺼져 있습니다.", "shouldProcess": True}
+        trigger = str(event_payload(event).get("trigger") or "").strip()
+        if trigger in COALESCIBLE_REALTIME_TRIGGERS:
+            maximum = self.realtime_event_max_age_minutes()
+        elif "research" in trigger or trigger == "investment-calendar-update":
+            maximum = self.research_event_max_age_minutes()
+        else:
+            return {"status": "not-required", "reason": "이 요청은 원본 시각 만료 대상이 아닙니다.", "shouldProcess": True}
+        stamp = self.event_source_observed_at(event)
+        try:
+            observed = datetime.fromisoformat(stamp.replace("Z", "+00:00"))
+        except ValueError:
+            return {"status": "unknown", "reason": "원본 관측 시각을 해석하지 못해 최신 스냅샷으로 재검증합니다.", "shouldProcess": True}
+        if observed.tzinfo is None:
+            observed = observed.replace(tzinfo=timezone.utc)
+        now = self.now_provider()
+        if now.tzinfo is None:
+            now = now.replace(tzinfo=timezone.utc)
+        age_minutes = max(0, int((now.astimezone(timezone.utc) - observed.astimezone(timezone.utc)).total_seconds() // 60))
+        fresh = age_minutes <= maximum
+        return {
+            "status": "fresh" if fresh else "stale",
+            "reason": "원본 관측 시각 기준 통과" if fresh else "원본 관측 시각이 " + str(maximum) + "분을 넘었습니다.",
+            "shouldProcess": fresh,
+            "ageMinutes": age_minutes,
+            "maxAgeMinutes": maximum,
+            "sourceObservedAt": stamp,
+        }
+
+    def split_stale_requests(self, requests: Iterable[object]) -> Tuple[List[object], List[Tuple[object, Dict[str, object]]]]:
+        active, stale = [], []
+        for event in requests or []:
+            freshness = self.event_freshness(event)
+            if freshness.get("shouldProcess"):
+                active.append(event)
+            else:
+                stale.append((event, freshness))
+        return active, stale
+
+    def discard_stale_requests(self, stale_requests: Iterable[Tuple[object, Dict[str, object]]]) -> Dict[str, str]:
+        terminal: Dict[str, str] = {}
+        mailbox_entries = []
+        direct_ids = []
+        for event, _freshness in stale_requests or []:
+            metadata = self.mailbox_metadata(event)
+            key = str(metadata.get("mailboxKey") or "").strip()
+            if key:
+                mailbox_entries.append({
+                    "mailboxKey": key,
+                    "sourceEventId": str(metadata.get("sourceEventId") or "").strip(),
+                })
+            else:
+                event_id = str(getattr(event, "event_id", "") or "").strip()
+                if event_id:
+                    direct_ids.append(event_id)
+        if mailbox_entries and self.mailbox_enabled():
+            try:
+                terminal.update(self.mailbox_store.acknowledge(
+                    mailbox_entries,
+                    state="expired",
+                    reason="stale source observation before TypeDB projection",
+                ) or {})
+            except Exception:
+                pass
+        if direct_ids:
+            terminal.update({event_id: "expired" for event_id in direct_ids})
+        return terminal
+
+    def persist_terminal_mailbox_events(self, states: Dict[str, object]) -> Dict[str, List[str]]:
+        values = {str(event_id or "").strip(): str(state or "").strip() for event_id, state in dict(states or {}).items()}
+        existing = set()
+        processed_ids = getattr(self.cursor_store, "processed_event_ids", None)
+        if callable(processed_ids):
+            try:
+                existing = {str(event_id or "").strip() for event_id in processed_ids() or []}
+            except Exception:  # noqa: BLE001 - terminal replay is idempotent when cursor inspection fails.
+                existing = set()
+        completed = [
+            event_id for event_id, state in values.items()
+            if event_id and event_id not in existing and state == "completed"
+        ]
+        discarded = [
+            event_id for event_id, state in values.items()
+            if event_id and event_id not in existing and state in {"superseded", "expired"}
+        ]
+        if completed and hasattr(self.cursor_store, "mark_processed"):
+            self.cursor_store.mark_processed(completed)
+        if discarded:
+            self.persist_superseded_events(discarded)
+        return {"completed": completed, "discarded": discarded}
+
+    def pending_work(self, limit: int = 0, hydrate_mailbox: bool = True) -> Dict[str, object]:
+        """Collapse redundant, lower-materiality realtime snapshot requests.
+
+        A newer market observation may supersede an older one only when it
+        includes all of the older event's symbols and exactly the same fact
+        family. The older cursor is advanced only after the newer snapshot has
+        completed TypeDB projection and inference.
+        """
+        source_requests = self.pending_requests(limit)
+        mailbox_sources = self.mailbox_source_requests(limit) if hydrate_mailbox else source_requests
+        mailbox = self.synchronize_mailbox(mailbox_sources, enqueue_new=hydrate_mailbox)
+        handled_ids = set(mailbox.get("handledEventIds") or []) if mailbox.get("enabled") else set()
+        direct_source_requests = [
+            event for event in source_requests
+            if str(getattr(event, "event_id", "") or "").strip() not in handled_ids
+        ]
+        direct_work = self.coalesced_work(direct_source_requests)
+        mailbox_requests = self.mailbox_pending_requests() if mailbox.get("enabled") else []
+        active_requests = list(mailbox_requests) + list(direct_work.get("requests") or [])
+        return {
+            "requests": active_requests,
+            "rawRequestCount": len(source_requests),
+            "sourceRequestCount": len(source_requests),
+            "mailboxPendingEntryCount": len(mailbox_requests),
+            "mailbox": mailbox,
+            "terminalMailboxEventStates": dict(mailbox.get("terminalEventStates") or {}),
+            "coalescedEventIds": list(direct_work.get("coalescedEventIds") or []),
+            "supersededByLead": dict(direct_work.get("supersededByLead") or {}),
         }
 
     def persist_superseded_events(self, event_ids: Iterable[str]) -> List[str]:
@@ -1225,20 +1568,35 @@ class OntologyReasoningRunner:
             observation = {
                 "durationMs": int(float_value(stage.get("totalMs"), 0.0)),
                 "nativeInferenceMs": int(float_value(stage.get("nativeInferenceMs"), 0.0)),
+                "stages": stage,
             }
+        stages = observation.get("stages") if isinstance(observation.get("stages"), dict) else {}
+        inference = observation.get("inference") if isinstance(observation.get("inference"), dict) else {}
+        scope = observation.get("scope") if isinstance(observation.get("scope"), dict) else {}
         return {
             "durationMs": int(float_value(observation.get("durationMs"), 0.0)),
             "nativeInferenceMs": int(float_value(
                 observation.get("nativeInferenceMs")
-                or (observation.get("stages") or {}).get("nativeInferenceMs"),
+                or stages.get("nativeInferenceMs"),
+                0.0,
+            )),
+            "impactPlanningMs": int(float_value(stages.get("impactPlanningMs"), 0.0)),
+            "aboxPersistenceMs": int(float_value(
+                stages.get("aboxPersistenceMs") or stages.get("persistenceMs"),
                 0.0,
             )),
             "observedAt": str(observation.get("observedAt") or ""),
             "status": str(observation.get("status") or ""),
             "targetSymbolCount": int(float_value(
-                (observation.get("inference") or {}).get("targetSymbolCount"),
+                inference.get("targetSymbolCount"),
                 0.0,
             )),
+            "targetCoverageStatus": str(inference.get("targetCoverageStatus") or ""),
+            "candidateRuleCount": int(float_value(inference.get("candidateRuleCount"), 0.0)),
+            "executedRuleCount": int(float_value(inference.get("executedRuleCount"), 0.0)),
+            "affectedScopeCount": int(float_value(scope.get("affectedScopeCount"), 0.0)),
+            "directChangedScopeCount": int(float_value(scope.get("directChangedScopeCount"), 0.0)),
+            "globalImpact": bool(scope.get("globalImpact")),
         }
 
     def projection_alert_outcomes(self, monitor_runner) -> List[Dict[str, object]]:
@@ -1384,6 +1742,17 @@ class OntologyReasoningRunner:
             result = self.maintenance_runner()
         except Exception as error:  # noqa: BLE001 - maintenance must not stop event processing.
             result = {"status": "error", "reason": str(error)[:180]}
+        if self.mailbox_enabled():
+            prune = getattr(self.mailbox_store, "prune_terminal", None)
+            if callable(prune):
+                try:
+                    result = dict(result or {}) if isinstance(result, dict) else {"status": "invalid"}
+                    result["mailboxPrunedTerminalEventCount"] = int(
+                        prune(self.mailbox_retention_hours()) or 0
+                    )
+                except Exception as error:  # noqa: BLE001 - retention cleanup is best effort.
+                    result = dict(result or {}) if isinstance(result, dict) else {"status": "invalid"}
+                    result["mailboxPruneReason"] = str(error)[:180]
         now = self.now_provider()
         if now.tzinfo is None:
             now = now.replace(tzinfo=timezone.utc)
@@ -1394,12 +1763,125 @@ class OntologyReasoningRunner:
         self.save_cursor_payload(payload)
         return dict(result or {}) if isinstance(result, dict) else {"status": "invalid"}
 
+    def mailbox_summary(self) -> Dict[str, object]:
+        if not self.mailbox_enabled():
+            return {"enabled": False}
+        summary = getattr(self.mailbox_store, "summary", None)
+        if not callable(summary):
+            return {"enabled": True, "status": "not-supported"}
+        try:
+            payload = summary()
+        except Exception as error:  # noqa: BLE001 - visibility must not block TypeDB work.
+            return {"enabled": True, "status": "error", "reason": str(error)[:180]}
+        result = dict(payload or {}) if isinstance(payload, dict) else {}
+        result["enabled"] = True
+        return result
+
+    def execution_telemetry(self, payload: Dict[str, object] = None) -> Dict[str, object]:
+        source = self.cursor_payload() if payload is None else dict(payload or {})
+        last = source.get("lastReasoningExecution")
+        history = source.get("reasoningExecutionHistory")
+        return {
+            "last": dict(last or {}) if isinstance(last, dict) else {},
+            "history": [dict(item) for item in history or [] if isinstance(item, dict)][-10:],
+        }
+
+    def record_execution_telemetry(
+        self,
+        result: Dict[str, object],
+        started_at: str,
+        started_monotonic: float,
+        error: Exception = None,
+    ) -> Dict[str, object]:
+        finished = self.now_provider()
+        if finished.tzinfo is None:
+            finished = finished.replace(tzinfo=timezone.utc)
+        summary = {
+            "startedAt": started_at,
+            "finishedAt": finished.astimezone(timezone.utc).isoformat().replace("+00:00", "Z"),
+            "durationMs": max(0, int((time.perf_counter() - started_monotonic) * 1000)),
+            "status": str(result.get("status") or ("error" if error else "unknown")),
+            "processedCount": int(result.get("processedCount") or 0),
+            "alertCount": int(result.get("alertCount") or 0),
+            "rawRequestCount": int(result.get("rawRequestCount") or 0),
+            "mailboxPendingEntryCount": int(result.get("mailboxPendingEntryCount") or 0),
+            "coalescedEventCount": int(result.get("coalescedEventCount") or 0),
+            "staleRequestCount": int(result.get("staleRequestCount") or 0),
+            "deferredReason": str(result.get("deferredReason") or "")[:240],
+        }
+        if error is not None:
+            summary["error"] = str(error)[:240]
+        projection_runtime = result.get("lastProjectionRuntime")
+        if isinstance(projection_runtime, dict):
+            summary["projectionRuntime"] = {
+                key: projection_runtime.get(key)
+                for key in [
+                    "durationMs", "impactPlanningMs", "aboxPersistenceMs", "nativeInferenceMs",
+                    "status", "targetSymbolCount", "candidateRuleCount", "executedRuleCount",
+                    "affectedScopeCount", "directChangedScopeCount", "globalImpact",
+                ]
+                if key in projection_runtime
+            }
+        mailbox = result.get("mailbox")
+        if isinstance(mailbox, dict):
+            summary["mailbox"] = {
+                key: mailbox.get(key)
+                for key in ["enabled", "entryCount", "mailboxPendingEntryCount", "pendingEntryCount", "reason"]
+                if key in mailbox
+            }
+        payload = self.cursor_payload()
+        history = [dict(item) for item in payload.get("reasoningExecutionHistory") or [] if isinstance(item, dict)]
+        history.append(summary)
+        payload["lastReasoningExecution"] = summary
+        payload["reasoningExecutionHistory"] = history[-self.telemetry_history_limit():]
+        self.save_cursor_payload(payload)
+        response = dict(result or {})
+        response["executionTelemetry"] = summary
+        return response
+
     def run_once(self, limit: int = 0, force: bool = False) -> Dict[str, object]:
+        started = self.now_provider()
+        if started.tzinfo is None:
+            started = started.replace(tzinfo=timezone.utc)
+        started_at = started.astimezone(timezone.utc).isoformat().replace("+00:00", "Z")
+        started_monotonic = time.perf_counter()
+        try:
+            result = self._run_once(limit=limit, force=force)
+        except Exception as error:
+            self.record_execution_telemetry(
+                {"status": "error", "processedCount": 0, "alertCount": 0},
+                started_at,
+                started_monotonic,
+                error=error,
+            )
+            raise
+        return self.record_execution_telemetry(result, started_at, started_monotonic)
+
+    def _run_once(self, limit: int = 0, force: bool = False) -> Dict[str, object]:
         if not self.enabled():
             return {"status": "disabled", "processedCount": 0, "alertCount": 0}
         work = self.pending_work(limit)
+        terminal_mailbox = self.persist_terminal_mailbox_events(
+            {
+                **self.recent_terminal_mailbox_events(),
+                **dict(work.get("terminalMailboxEventStates") or {}),
+            },
+        )
         durable_superseded_ids = self.persist_superseded_events(work.get("coalescedEventIds") or [])
-        requests = list(work.get("requests") or [])
+        requests, stale_requests = self.split_stale_requests(work.get("requests") or [])
+        stale_terminal = self.persist_terminal_mailbox_events(
+            self.discard_stale_requests(stale_requests),
+        )
+        queue_metadata = {
+            "rawRequestCount": int(work.get("rawRequestCount") or 0),
+            "mailboxPendingEntryCount": int(work.get("mailboxPendingEntryCount") or 0),
+            "staleRequestCount": len(stale_requests),
+            "mailbox": self.mailbox_summary(),
+            "mailboxTerminalEvents": {
+                "completed": list(terminal_mailbox.get("completed") or []) + list(stale_terminal.get("completed") or []),
+                "discarded": list(terminal_mailbox.get("discarded") or []) + list(stale_terminal.get("discarded") or []),
+            },
+        }
         if not requests:
             maintenance = self.run_maintenance_if_due(force=force)
             return {
@@ -1408,6 +1890,7 @@ class OntologyReasoningRunner:
                 "alertCount": 0,
                 "coalescedEventCount": len(durable_superseded_ids),
                 "maintenance": maintenance,
+                **queue_metadata,
             }
         storage_guard = self.storage_guard_state()
         if not storage_guard.get("ready"):
@@ -1419,6 +1902,7 @@ class OntologyReasoningRunner:
                 "deferredReason": str(storage_guard.get("reason") or "TypeDB 저장소 여유 공간이 부족해 추론을 보류합니다."),
                 "storageGuard": storage_guard,
                 "coalescedEventCount": len(durable_superseded_ids),
+                **queue_metadata,
             }
         symbol_batches, symbols, omitted_symbol_count = self.request_symbol_batches(requests)
         cursor_payload = self.cursor_payload()
@@ -1441,6 +1925,7 @@ class OntologyReasoningRunner:
                     "projectionCircuit": circuit,
                     "projectionRecovery": recovery,
                     "coalescedEventCount": len(durable_superseded_ids),
+                    **queue_metadata,
                 }
         fairness_drain = self.fairness_drain_state(symbols, cursor_payload)
         if not force and not self.projection_due(requests, cursor_payload, symbols):
@@ -1460,6 +1945,7 @@ class OntologyReasoningRunner:
                 "fairnessDrain": fairness_drain,
                 "lastProjectionRuntime": self.last_projection_runtime(cursor_payload),
                 "coalescedEventCount": len(durable_superseded_ids),
+                **queue_metadata,
             }
         runner = self.monitor_runner_factory()
         if "symbol_filter" in inspect.signature(runner.run_once).parameters:
@@ -1484,6 +1970,7 @@ class OntologyReasoningRunner:
                     "projectionFailures": list(projection_gate.get("results") or []),
                     "projectionCircuit": self.projection_circuit_state(),
                     "coalescedEventCount": len(durable_superseded_ids),
+                    **queue_metadata,
                 }
             circuit = self.record_projection_failure(
                 str(projection_gate.get("reason") or "TypeDB graph cycle is not ready."),
@@ -1503,10 +1990,15 @@ class OntologyReasoningRunner:
                 "projectionFailures": list(projection_gate.get("results") or []),
                 "projectionCircuit": circuit,
                 "coalescedEventCount": len(durable_superseded_ids),
+                **queue_metadata,
             }
         self.mark_successful_projection(runner)
         account_ids = [getattr(account, "account_id", "") for account in getattr(runner, "accounts", [])]
-        trigger_event_ids = [event.event_id for event in requests]
+        trigger_event_ids = []
+        for event in requests:
+            source_event_id = self.mailbox_source_event_id(event)
+            if source_event_id and source_event_id not in trigger_event_ids:
+                trigger_event_ids.append(source_event_id)
         research_refresh = self.research_generation_refresh_results(
             requests,
             getattr(runner, "last_ontology_projection_results", {}),
@@ -1516,6 +2008,14 @@ class OntologyReasoningRunner:
         cursor_requests = [
             event for event in requests
             if str(getattr(event, "event_id", "") or "") not in blocked_request_ids
+        ]
+        direct_cursor_requests = [
+            event for event in cursor_requests
+            if not self.mailbox_metadata(event).get("mailboxKey")
+        ]
+        mailbox_cursor_requests = [
+            event for event in cursor_requests
+            if self.mailbox_metadata(event).get("mailboxKey")
         ]
         completed = ontology_reasoning_completed_event(
             trigger_event_ids,
@@ -1533,23 +2033,58 @@ class OntologyReasoningRunner:
         rule_candidate_result = self.propose_rule_candidates(symbols, requests, alerts, force=False)
         self.publish(completed)
         progress_result = self.mark_requests_processed(
-            cursor_requests,
+            direct_cursor_requests,
             symbol_batches,
             superseded_by_lead=work.get("supersededByLead"),
         )
+        mailbox_entries = []
+        for event in mailbox_cursor_requests:
+            event_id = str(getattr(event, "event_id", "") or "").strip()
+            if not symbol_batches.get(event_id):
+                continue
+            metadata = self.mailbox_metadata(event)
+            mailbox_key = str(metadata.get("mailboxKey") or "").strip()
+            source_event_id = str(metadata.get("sourceEventId") or "").strip()
+            if mailbox_key and source_event_id:
+                mailbox_entries.append({
+                    "mailboxKey": mailbox_key,
+                    "sourceEventId": source_event_id,
+                })
+        mailbox_completion = {"completed": [], "discarded": []}
+        mailbox_ack_error = ""
+        if mailbox_entries and self.mailbox_enabled():
+            try:
+                terminal_states = self.mailbox_store.acknowledge(
+                    mailbox_entries,
+                    state="completed",
+                    reason="TypeDB projection and native inference completed",
+                ) or {}
+                mailbox_completion = self.persist_terminal_mailbox_events(terminal_states)
+            except Exception as error:  # noqa: BLE001 - retain the mailbox entry for a safe retry.
+                mailbox_ack_error = str(error)[:180]
         processed_symbols = []
         for event in cursor_requests:
             for symbol in symbol_batches.get(str(getattr(event, "event_id", "") or ""), []) or []:
                 if symbol not in processed_symbols:
                     processed_symbols.append(symbol)
         self.mark_symbols_reasoned(processed_symbols)
-        status = "partial" if blocked_request_ids else "ok"
+        status = "partial" if blocked_request_ids or mailbox_ack_error else "ok"
+        queue_metadata["mailbox"] = self.mailbox_summary()
+        queue_metadata["mailboxPendingEntryCount"] = int(
+            queue_metadata["mailbox"].get("pendingEntryCount") or 0
+        )
         return {
             "status": status,
             "processedCount": len(trigger_event_ids),
-            "completedEventCount": len(progress_result.get("completedEventIds") or []),
-            "partialEventCount": len(progress_result.get("partialEventIds") or []),
-            "coalescedEventCount": len(set(durable_superseded_ids) | set(progress_result.get("supersededEventIds") or [])),
+            "completedEventCount": len(progress_result.get("completedEventIds") or []) + len(mailbox_completion.get("completed") or []),
+            "partialEventCount": len(progress_result.get("partialEventIds") or []) + max(0, len(mailbox_entries) - len(mailbox_completion.get("completed") or [])),
+            "coalescedEventCount": len(
+                set(durable_superseded_ids)
+                | set(progress_result.get("supersededEventIds") or [])
+                | set(terminal_mailbox.get("discarded") or [])
+                | set(stale_terminal.get("discarded") or [])
+                | set(mailbox_completion.get("discarded") or [])
+            ),
             "alertCount": len(alerts or []),
             "symbols": symbols,
             "maxSymbolsPerRun": self.effective_max_symbols_per_run(),
@@ -1563,11 +2098,14 @@ class OntologyReasoningRunner:
             "blockedResearchRequestEventIds": sorted(blocked_request_ids),
             "researchGenerationRefresh": research_refresh,
             "projectionOutcomes": projection_outcomes,
+            "lastProjectionRuntime": self.last_projection_runtime(),
+            "mailboxAcknowledgeError": mailbox_ack_error,
             "deferredReason": (
                 "검증 근거가 같은 계정 월드의 새 ABox/InferenceBox 세대에 정렬될 때까지 해당 리서치 요청을 유지합니다."
                 if blocked_request_ids
-                else ""
+                else ("영속 추론 메일박스 완료 기록 실패로 최신 원본을 보존한 채 재시도합니다: " + mailbox_ack_error if mailbox_ack_error else "")
             ),
+            **queue_metadata,
         }
 
     def mark_symbols_reasoned(self, symbols: Iterable[str]) -> None:
@@ -1790,7 +2328,7 @@ class OntologyReasoningRunner:
         self.cursor_store.save(payload)
 
     def status(self) -> Dict[str, object]:
-        work = self.pending_work(self.batch_size())
+        work = self.pending_work(self.batch_size(), hydrate_mailbox=False)
         pending = list(work.get("requests") or [])
         cursor_payload = self.cursor_payload()
         progress = self.event_symbol_progress()
@@ -1798,6 +2336,23 @@ class OntologyReasoningRunner:
         pending_symbols = self.request_symbols(pending)
         fairness_queue = self.fairness_queue(pending_symbols, cursor_payload)
         fairness_drain = self.fairness_drain_state(next_symbols, cursor_payload)
+        storage_guard = self.storage_guard_state()
+        projection_circuit = self.projection_circuit_state()
+        mailbox = self.mailbox_summary()
+        queue_status = "healthy"
+        queue_reason = ""
+        if not storage_guard.get("ready"):
+            queue_status = "blocked"
+            queue_reason = str(storage_guard.get("reason") or "TypeDB 저장소 여유 공간을 확인하지 못했습니다.")
+        elif str(projection_circuit.get("status") or "") == "open":
+            queue_status = "blocked"
+            queue_reason = str(projection_circuit.get("lastFailureReason") or "TypeDB 추론 회로가 복구 대기 중입니다.")
+        elif mailbox.get("status") == "error":
+            queue_status = "degraded"
+            queue_reason = str(mailbox.get("reason") or "영속 추론 메일박스 상태를 읽지 못했습니다.")
+        elif any(item.get("state") == "overdue" for item in fairness_queue):
+            queue_status = "degraded"
+            queue_reason = "대기 한도를 넘긴 종목이 있어 우선 처리 대기열을 비우고 있습니다."
         return {
             "enabled": self.enabled(),
             "pendingCount": len(pending),
@@ -1810,6 +2365,13 @@ class OntologyReasoningRunner:
             "processedCount": len(self.cursor_store.processed_event_ids()),
             "rawPendingCount": int(work.get("rawRequestCount") or len(pending)),
             "coalescedPendingEventCount": len(work.get("coalescedEventIds") or []),
+            "mailboxPendingEntryCount": int(work.get("mailboxPendingEntryCount") or 0),
+            "mailbox": mailbox,
+            "sourceFreshness": {
+                "enabled": self.source_freshness_enabled(),
+                "realtimeEventMaxAgeMinutes": self.realtime_event_max_age_minutes(),
+                "researchEventMaxAgeMinutes": self.research_event_max_age_minutes(),
+            },
             "pendingSymbols": pending_symbols,
             "nextSymbols": next_symbols,
             "nextOmittedSymbolCount": omitted_count,
@@ -1829,7 +2391,9 @@ class OntologyReasoningRunner:
             "effectiveProjectionCooldownSeconds": self.effective_projection_min_interval_seconds(pending, cursor_payload, next_symbols),
             "lastProjectionRuntime": self.last_projection_runtime(cursor_payload),
             "ontologyMaintenance": self.maintenance_state(cursor_payload),
-            "projectionCircuit": self.projection_circuit_state(),
+            "projectionCircuit": projection_circuit,
             "projectionCircuitRetryAfterSeconds": self.projection_circuit_remaining_seconds(),
-            "storageGuard": self.storage_guard_state(),
+            "storageGuard": storage_guard,
+            "queueHealth": {"status": queue_status, "reason": queue_reason},
+            "executionTelemetry": self.execution_telemetry(cursor_payload),
         }

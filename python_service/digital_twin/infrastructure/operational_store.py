@@ -25,6 +25,7 @@ from .mysql_operational import (
     MySQLOntologyProjectionRunStore,
     MySQLOntologyQualitySampleStore,
     MySQLOntologyReasoningCursorStore,
+    MySQLOntologyReasoningMailboxStore,
     MySQLResearchEvidenceStore,
     MySQLRuntimeSettingsStore,
     MySQLSymbolUniverseStore,
@@ -67,6 +68,11 @@ def data_pipeline_health_store(settings: Dict[str, str] = None):
 def ontology_reasoning_cursor_store(settings: Dict[str, str] = None):
     configured = configured_settings(settings)
     return MySQLOntologyReasoningCursorStore(configured)
+
+
+def ontology_reasoning_mailbox_store(settings: Dict[str, str] = None):
+    configured = configured_settings(settings)
+    return MySQLOntologyReasoningMailboxStore(configured)
 
 
 def monitor_store(settings: Dict[str, str] = None):

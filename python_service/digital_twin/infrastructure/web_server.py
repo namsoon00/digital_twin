@@ -73,6 +73,7 @@ from ..domain.investment_ubiquitous_language import (
     validate_investment_language_registry,
 )
 from ..domain.investment_research import NewsCollectionTarget
+from ..domain.investment_evidence_governance import claim_quality_summary
 from ..domain.news_ai_analysis import local_news_ai_analysis, apply_news_ai_analysis, news_ai_analysis_is_current
 from ..domain.parsing import parse_assignments
 from ..domain.portfolio import utc_now_iso
@@ -549,6 +550,12 @@ def settings_status_payload() -> Dict[str, object]:
         "investmentBrainResearchEvidenceLimit",
         "investmentBrainResearchMinimumVerifiedCount",
         "investmentBrainResearchMinimumSourceTrustState",
+        "researchClaimRequireVerifiedForInvestment",
+        "researchClaimOfficialVerificationEnabled",
+        "researchClaimMinimumIndependentSources",
+        "researchClaimCrossSourceWindowHours",
+        "researchClaimSimilarityThreshold",
+        "researchClaimSourceRegistry",
         "investmentBrainResearchCooldownMinutes",
         "investmentBrainOutcomeObservationMinutes",
         "investmentBrainOutcomeEpisodeBatchSize",
@@ -1985,6 +1992,7 @@ def research_evidence_payload(query: Dict[str, List[str]]) -> Dict[str, object]:
     return {
         "items": [research_evidence_list_payload(item) for item in items],
         "summary": store.summary(),
+        "claimQuality": claim_quality_summary(items),
         "symbol": symbol,
         "kind": kind,
         "limit": limit,
@@ -1998,6 +2006,9 @@ def research_evidence_list_payload(item) -> Dict[str, object]:
     item, analysis_source = projected_research_evidence(item)
     raw = item.raw_payload if isinstance(item.raw_payload, dict) else {}
     states = item.state_payload()
+    governance = raw.get("evidenceGovernance") if isinstance(raw.get("evidenceGovernance"), dict) else {}
+    claim_ledger = raw.get("claimLedger") if isinstance(raw.get("claimLedger"), dict) else {}
+    claim_summary = claim_ledger.get("summary") if isinstance(claim_ledger.get("summary"), dict) else {}
     compact_raw = {}
     for key in ["name", "provider", "articleType", "analysisStatus", "relevanceState", "impactLabel", "impactSummary", "koreanSummary", "priceImpact", "sourceTrustState", "materialityState", "dataState", "validationState", "articleReadStatus", "stockImpact", "stockImpactLabel", "stockImpactPolarity", "stockImpactReasonKo"]:
         if raw.get(key) not in (None, "", [], {}):
@@ -2029,6 +2040,20 @@ def research_evidence_list_payload(item) -> Dict[str, object]:
         "stockImpactReasonKo": str(raw.get("stockImpactReasonKo") or ""),
         "sourceKind": str(raw.get("sourceKind") or ""),
         "sourcePlatform": str(raw.get("sourcePlatform") or ""),
+        "claimVerification": {
+            "claimState": str(governance.get("claimState") or ""),
+            "verificationStatus": str(governance.get("verificationStatus") or ""),
+            "investmentJudgmentEligible": bool(governance.get("investmentJudgmentEligible")),
+            "sourcePublisher": str(governance.get("sourcePublisher") or raw.get("sourcePublisher") or item.source),
+            "sourceOrigin": str(governance.get("sourceOrigin") or raw.get("sourceOrigin") or ""),
+            "independentSourceCount": int(governance.get("independentSourceCount") or 0),
+            "officialEvidenceIds": list(governance.get("officialEvidenceIds") or []),
+            "corroboratingEvidenceIds": list(governance.get("corroboratingEvidenceIds") or []),
+            "conflictingEvidenceIds": list(governance.get("conflictingEvidenceIds") or []),
+            "supersededByEvidenceId": str(governance.get("supersededByEvidenceId") or ""),
+            "claimCount": int(claim_summary.get("claimCount") or 0),
+            "eligibleClaimCount": int(claim_summary.get("eligibleClaimCount") or 0),
+        },
         "analysisSource": analysis_source,
         "payload": compact_raw,
         "detailPath": "/api/research-evidence/" + urllib.parse.quote(str(item.evidence_id or "")),

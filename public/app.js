@@ -23969,6 +23969,40 @@
     return String(item[key] || payload[key] || fallback || "").trim().toLowerCase();
   }
 
+  function researchClaimVerificationMeta(item) {
+    item = item || {};
+    var payload = item.payload && typeof item.payload === "object" ? item.payload : {};
+    var governance = item.claimVerification && typeof item.claimVerification === "object"
+      ? item.claimVerification
+      : (payload.evidenceGovernance && typeof payload.evidenceGovernance === "object" ? payload.evidenceGovernance : {});
+    var state = String(governance.claimState || governance.verificationStatus || "reported").toLowerCase();
+    var labels = {
+      "reported": "보도됨",
+      "verified-primary": "공식 확인",
+      "corroborated": "교차 확인",
+      "conflicted": "출처 상충",
+      "superseded": "정정됨",
+      "expired": "기한 지남",
+      "rejected": "근거 제외",
+      "verified-secondary": "출처 확인"
+    };
+    var tone = state === "corroborated" || state === "verified-primary" ? "watch"
+      : (state === "conflicted" || state === "superseded" || state === "rejected" ? "danger" : "hold");
+    return {
+      state: state,
+      label: labels[state] || "검증 대기",
+      tone: tone,
+      eligible: Boolean(governance.investmentJudgmentEligible),
+      publisher: governance.sourcePublisher || item.source || "",
+      origin: governance.sourceOrigin || "",
+      independentSources: Number(governance.independentSourceCount || 0),
+      officialCount: Array.isArray(governance.officialEvidenceIds) ? governance.officialEvidenceIds.length : 0,
+      corroboratingCount: Array.isArray(governance.corroboratingEvidenceIds) ? governance.corroboratingEvidenceIds.length : 0,
+      conflictCount: Array.isArray(governance.conflictingEvidenceIds) ? governance.conflictingEvidenceIds.length : 0,
+      claimCount: Number(governance.claimCount || 0)
+    };
+  }
+
   function researchEvidenceTextCorpus(item) {
     item = item || {};
     var payload = item.payload && typeof item.payload === "object" ? item.payload : {};
@@ -24148,6 +24182,7 @@
     var impact = researchEvidenceImpactMeta(item);
     var sourceMeta = feedEvidenceDataMeta(item);
     var summary = researchEvidenceKoreanSummary(item);
+    var claimMeta = researchClaimVerificationMeta(item);
     var key = feedEvidenceKey(item, index);
     var expanded = state.expandedResearchEvidenceKey === key;
     return [
@@ -24166,6 +24201,7 @@
       '<div class="feed-impact-tags">',
       '<span>' + escapeHtml(impact.sourceTrustLabel) + '</span>',
       '<span>' + escapeHtml(impact.relevanceLabel) + '</span>',
+      '<span class="' + escapeHtml(claimMeta.tone) + '">' + escapeHtml(claimMeta.label) + '</span>',
       '<span>' + escapeHtml(sourceMeta.source || "-") + '</span>',
       '<span class="' + escapeHtml(sourceMeta.tone || "hold") + '">' + escapeHtml(sourceMeta.dataLabel) + '</span>',
       '<span>' + escapeHtml(formatFeedTime(time) || "-") + '</span>',
@@ -24209,6 +24245,7 @@
     var impact = researchEvidenceImpactMeta(item);
     var sourceMeta = feedEvidenceDataMeta(item);
     var summary = researchEvidenceKoreanSummary(item);
+    var claimMeta = researchClaimVerificationMeta(item);
     var canDelete = Boolean(item.evidenceId) && item.evidenceId !== "preview:005930:news";
     var deleting = state.researchEvidenceDeleting === item.evidenceId;
     return [
@@ -24220,6 +24257,7 @@
       renderNotificationDetailMetric("근거 종류", researchEvidenceKindLabel(item.kind), "muted"),
       renderNotificationDetailMetric("출처 신뢰", impact.sourceTrustLabel, "muted"),
       renderNotificationDetailMetric("데이터", sourceMeta.dataLabel, sourceMeta.tone),
+      renderNotificationDetailMetric("주장 검증", claimMeta.label, claimMeta.tone),
       '</div>',
       '<section class="inline-detail-block primary">',
       '<strong>기사 요약</strong>',
@@ -24237,6 +24275,8 @@
       '<span>출처 ' + escapeHtml(sourceMeta.source || "-") + '</span>',
       '<span>시간 ' + escapeHtml(formatFeedTime(time) || "-") + '</span>',
       '<span>방향 ' + escapeHtml(researchEvidencePolarityLabel(item.polarity)) + '</span>',
+      '<span>독립 출처 ' + escapeHtml(String(claimMeta.independentSources || 1)) + '곳</span>',
+      '<span>공식 근거 ' + escapeHtml(String(claimMeta.officialCount)) + '건</span>',
       '</div>',
       '</section>',
       '<div class="settings-actions">',
@@ -24256,6 +24296,7 @@
     var impact = researchEvidenceImpactMeta(item);
     var sourceMeta = feedEvidenceDataMeta(item);
     var summary = researchEvidenceKoreanSummary(item);
+    var claimMeta = researchClaimVerificationMeta(item);
     return {
       kicker: "Research Evidence",
       title: item.title || displayName || symbol || "뉴스·근거 상세",
@@ -24416,6 +24457,7 @@
     var impact = researchEvidenceImpactMeta(item);
     var sourceMeta = feedEvidenceDataMeta(item);
     var summary = researchEvidenceKoreanSummary(item);
+    var claimMeta = researchClaimVerificationMeta(item);
     var key = feedEvidenceKey(item, index);
     var expanded = state.expandedResearchEvidenceKey === key;
     return [
@@ -24433,6 +24475,7 @@
       '<span>중요성 <strong>' + escapeHtml(impact.materialityLabel) + '</strong></span>',
       '<span>관련성 <strong>' + escapeHtml(impact.relevanceLabel) + '</strong></span>',
       '<span>출처 <strong>' + escapeHtml(impact.sourceTrustLabel) + '</strong></span>',
+      '<span>검증 <strong>' + escapeHtml(claimMeta.label) + '</strong></span>',
       '</div>',
       '<footer class="research-evidence-article">',
       '<span>기사</span>',

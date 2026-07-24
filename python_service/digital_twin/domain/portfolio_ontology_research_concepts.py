@@ -127,53 +127,104 @@ def add_governed_claim_concepts(
     raw_payload: Dict[str, object],
 ) -> None:
     governance = raw_payload.get("evidenceGovernance") if isinstance(raw_payload.get("evidenceGovernance"), dict) else {}
-    if not governance.get("investmentJudgmentEligible"):
-        return
-    claim_key = str(governance.get("claimId") or "").strip()
     evidence_key = str(getattr(item, "evidence_id", "") or "").strip()
-    if not claim_key or not evidence_key:
+    if not evidence_key:
         return
-    statement = str(getattr(item, "summary", "") or getattr(item, "title", "") or evidence_key)
     source = str(getattr(item, "source", "") or "unknown")
-    document_id = add_entity(graph, "retrieved-document", evidence_key, statement, {
+    document_label = str(getattr(item, "title", "") or getattr(item, "summary", "") or evidence_key)
+    document_id = add_entity(graph, "retrieved-document", evidence_key, document_label, {
         "tboxClass": "RetrievedDocument",
         "source": source,
         "sourceUrl": getattr(item, "url", ""),
         "publishedAt": getattr(item, "published_at", ""),
         "observedAt": getattr(item, "observed_at", ""),
     })
-    claim_id = add_entity(graph, "verified-claim", claim_key, statement, {
-        "tboxClass": "VerifiedClaim",
-        "verificationStatus": governance.get("verificationStatus"),
-        "entityResolutionStatus": governance.get("entityResolutionStatus"),
-        "validationState": "ready",
-        "dataState": "sufficient",
-        "evidenceId": evidence_key,
-        "checkedAt": governance.get("checkedAt"),
-        "investmentJudgmentEligible": True,
-    })
-    assessment_id = add_entity(graph, "evidence-assessment", claim_key, "근거 품질 검증", {
-        "tboxClass": "EvidenceAssessment",
-        "verificationStatus": governance.get("verificationStatus"),
-        "entityResolutionStatus": governance.get("entityResolutionStatus"),
-        "validationState": "ready",
-        "dataState": "sufficient",
-        "reasons": governance.get("reasons") or [],
-        "sourcePolicy": governance.get("sourcePolicy"),
-    })
     source_id = add_entity(graph, "research-source", source, source, {
         "tboxClass": "DataSource",
         "sourceUrl": getattr(item, "url", ""),
     })
-    relation_props = {
+    ledger = raw_payload.get("claimLedger") if isinstance(raw_payload.get("claimLedger"), dict) else {}
+    claims = [dict(row) for row in ledger.get("claims") or [] if isinstance(row, dict)]
+    if not claims and governance.get("claimId"):
+        claims = [{
+            "claimId": governance.get("claimId"),
+            "statement": str(getattr(item, "summary", "") or getattr(item, "title", "") or evidence_key),
+            "state": governance.get("claimState") or governance.get("verificationStatus") or "reported",
+            "verificationStatus": governance.get("verificationStatus"),
+            "entityResolutionStatus": governance.get("entityResolutionStatus"),
+            "investmentJudgmentEligible": governance.get("investmentJudgmentEligible"),
+            "reasons": governance.get("reasons") or [],
+            "sourceOrigin": governance.get("sourceOrigin"),
+        }]
+    base_props = {
         "source": "evidence-governance",
-        "verificationStatus": governance.get("verificationStatus"),
-        "investmentJudgmentEligible": True,
+        "sourceEvidenceId": evidence_key,
+        "sourcePolicy": governance.get("sourcePolicy"),
     }
-    add_relation(graph, document_id, source_id, "RETRIEVED_FROM", weight=1.0, evidence_ids=[evidence_key], properties=relation_props)
-    add_relation(graph, document_id, claim_id, "ASSERTS", weight=1.0, evidence_ids=[evidence_key], properties=relation_props)
-    add_relation(graph, claim_id, stock_id, "RESOLVES_TO", weight=1.0, evidence_ids=[evidence_key], properties=relation_props)
-    add_relation(graph, claim_id, assessment_id, "VERIFIED_BY", weight=1.0, evidence_ids=[evidence_key], properties=relation_props)
+    add_relation(graph, document_id, source_id, "RETRIEVED_FROM", weight=1.0, evidence_ids=[evidence_key], properties=base_props)
+    for claim in claims:
+        claim_key = str(claim.get("claimId") or "").strip()
+        if not claim_key:
+            continue
+        statement = str(claim.get("statement") or getattr(item, "summary", "") or getattr(item, "title", "") or evidence_key)
+        state = str(claim.get("state") or "reported")
+        eligible = bool(claim.get("investmentJudgmentEligible"))
+        tbox_class = "VerifiedClaim" if eligible else "DisputedClaim" if state == "conflicted" else "RejectedClaim" if state in {"rejected", "expired", "superseded"} else "ExtractedClaim"
+        claim_id = add_entity(graph, "verified-claim", claim_key, statement, {
+            "tboxClass": tbox_class,
+            "verificationStatus": claim.get("verificationStatus"),
+            "claimState": state,
+            "entityResolutionStatus": claim.get("entityResolutionStatus"),
+            "sourceTrustState": claim.get("sourceTrustState") or governance.get("sourceTrustState"),
+            "sourceOrigin": claim.get("sourceOrigin") or governance.get("sourceOrigin"),
+            "independentSourceCount": claim.get("independentSourceCount") or 0,
+            "officialEvidenceIds": claim.get("officialEvidenceIds") or [],
+            "corroboratingEvidenceIds": claim.get("corroboratingEvidenceIds") or [],
+            "conflictingEvidenceIds": claim.get("conflictingEvidenceIds") or [],
+            "supersededByEvidenceId": claim.get("supersededByEvidenceId") or "",
+            "validationState": "ready" if eligible else "blocked" if state in {"conflicted", "superseded", "rejected", "expired"} else "conditional",
+            "dataState": "sufficient" if eligible else "partial",
+            "evidenceId": evidence_key,
+            "excerpt": claim.get("excerpt") or statement,
+            "excerptIndex": claim.get("excerptIndex"),
+            "excerptStart": claim.get("excerptStart"),
+            "excerptEnd": claim.get("excerptEnd"),
+            "checkedAt": governance.get("checkedAt"),
+            "investmentJudgmentEligible": eligible,
+        })
+        assessment_id = add_entity(graph, "evidence-assessment", claim_key, "근거 품질 검증", {
+            "tboxClass": "EvidenceAssessment",
+            "verificationStatus": claim.get("verificationStatus"),
+            "claimState": state,
+            "entityResolutionStatus": claim.get("entityResolutionStatus"),
+            "sourceTrustState": claim.get("sourceTrustState") or governance.get("sourceTrustState"),
+            "independentSourceCount": claim.get("independentSourceCount") or 0,
+            "validationState": "ready" if eligible else "conditional",
+            "dataState": "sufficient" if eligible else "partial",
+            "reasons": claim.get("reasons") or [],
+            "sourcePolicy": governance.get("sourcePolicy"),
+        })
+        relation_props = {
+            **base_props,
+            "verificationStatus": claim.get("verificationStatus"),
+            "claimState": state,
+            "investmentJudgmentEligible": eligible,
+        }
+        add_relation(graph, document_id, claim_id, "ASSERTS", weight=1.0, evidence_ids=[evidence_key], properties=relation_props)
+        add_relation(graph, claim_id, stock_id, "RESOLVES_TO", weight=1.0, evidence_ids=[evidence_key], properties=relation_props)
+        add_relation(graph, claim_id, assessment_id, "VERIFIED_BY", weight=1.0, evidence_ids=[evidence_key], properties=relation_props)
+        for corroborating_id in claim.get("corroboratingEvidenceIds") or []:
+            peer_id = add_entity(graph, "retrieved-document", str(corroborating_id), str(corroborating_id), {
+                "tboxClass": "RetrievedDocument",
+                "sourceEvidenceId": str(corroborating_id),
+            })
+            add_relation(graph, claim_id, peer_id, "CORROBORATED_BY", weight=1.0, evidence_ids=[evidence_key, str(corroborating_id)], properties=relation_props)
+        for superseded_claim_id in claim.get("supersedesClaimIds") or []:
+            previous_id = add_entity(graph, "verified-claim", str(superseded_claim_id), str(superseded_claim_id), {
+                "tboxClass": "ExtractedClaim",
+                "claimState": "superseded",
+            })
+            add_relation(graph, claim_id, previous_id, "SUPERSEDES", weight=1.0, evidence_ids=[evidence_key], properties=relation_props)
 
 
 def evidence_document_shape(item: object) -> Dict[str, object]:

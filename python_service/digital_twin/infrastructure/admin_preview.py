@@ -20,6 +20,8 @@ DISPLAY_KEY_LABELS = {
     "lossGuardConfirmationCount": "손실 관리 확인 신호 수",
     "ontologyTypeDbEnabled": "관계 분석 TypeDB 저장",
     "investmentBrainResearchMinimumSourceTrustState": "리서치 최소 출처 상태",
+    "researchClaimRequireVerifiedForInvestment": "검증된 주장만 투자 판단에 사용",
+    "researchClaimOfficialVerificationEnabled": "뉴스-공식문서 자동 대조",
 }
 
 BEGINNER_REPLACEMENTS = [
@@ -427,6 +429,12 @@ def admin_preview_config() -> Dict[str, object]:
                     {"key": "newsDigestMinimumNeutralMaterialityState", "label": "중립 뉴스 최소 중요 상태", "type": "text", "default": "material"},
                     {"key": "newsDigestMinimumSourceTrustState", "label": "뉴스 알림 최소 출처 상태", "type": "text", "default": "standard"},
                     {"key": "investmentBrainResearchMinimumSourceTrustState", "label": "리서치 최소 출처 상태", "type": "select", "options": ["standard", "trusted"], "default": "standard"},
+                    {"key": "researchClaimRequireVerifiedForInvestment", "label": "검증된 주장만 투자 판단에 사용", "type": "toggle", "default": "1"},
+                    {"key": "researchClaimOfficialVerificationEnabled", "label": "뉴스-공식문서 자동 대조", "type": "toggle", "default": "1"},
+                    {"key": "researchClaimMinimumIndependentSources", "label": "교차검증 최소 독립 출처 수", "type": "number", "default": "2"},
+                    {"key": "researchClaimCrossSourceWindowHours", "label": "교차검증 시간 범위", "type": "number", "default": "72", "unit": "hours"},
+                    {"key": "researchClaimSimilarityThreshold", "label": "주장 일치 기준", "type": "number", "default": "0.48"},
+                    {"key": "researchClaimSourceRegistry", "label": "출처 정책 레지스트리", "type": "assignmentText", "placeholder": "reuters=trusted,origin=reuters\nopendart=trusted,primary"},
                     {"key": "investmentBrainOutcomeObservationMinutes", "label": "판단 결과 관측 시점", "type": "text", "default": "60,1440,10080", "unit": "minutes"},
                     {"key": "investmentBrainOutcomeEpisodeBatchSize", "label": "결과 관측 배치", "type": "number", "default": "200"},
                     {"key": "investmentBrainOutcomeMaxDelayMinutes", "label": "결과 관측 허용 지연", "type": "number", "default": "180", "unit": "minutes"},

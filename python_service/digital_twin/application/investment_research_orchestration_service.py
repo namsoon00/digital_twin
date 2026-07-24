@@ -11,6 +11,8 @@ from ..domain.investment_evidence_governance import (
     HypothesisResearchBrief,
     ResearchReasoningHandoff,
     ResearchRun,
+    claim_policy,
+    claim_quality_summary,
     governed_evidence,
     hypothesis_research_brief_from_brain,
     normalized_source_trust_state,
@@ -90,6 +92,18 @@ class InvestmentResearchOrchestrationService:
     def cooldown_minutes(self) -> int:
         return int_setting(self.settings, "investmentBrainResearchCooldownMinutes", 30, 0, 1440)
 
+    def research_claim_policy(self) -> Dict[str, object]:
+        return claim_policy(self.settings)
+
+    def source_types_with_verification(self, source_types: Iterable[str]) -> List[str]:
+        """Request official evidence in the same bounded run as news claims."""
+        normalized = unique_strings(source_types)
+        policy = self.research_claim_policy()
+        news_requested = any(item in {"news", "news-full-text", "article"} for item in normalized)
+        if policy.get("officialVerificationEnabled") and news_requested:
+            normalized = unique_strings([*normalized, "official-filing"])
+        return normalized
+
     def run(
         self,
         question: InvestmentQuestion,
@@ -104,11 +118,11 @@ class InvestmentResearchOrchestrationService:
         plan = brain.get("researchPlan") if isinstance(brain.get("researchPlan"), dict) else {}
         tasks = [item for item in plan.get("tasks") or [] if isinstance(item, dict)]
         task_ids = [str(item.get("taskId") or "") for item in tasks if str(item.get("taskId") or "")]
-        source_types = unique_strings(
+        source_types = self.source_types_with_verification(unique_strings(
             source
             for item in tasks
             for source in (item.get("sourceTypes") or [])
-        )
+        ))
         run_id = run_id or stable_id("research-run", question.question_id, target.normalized_symbol(), started_at)
         reasoning_handoff = reasoning_handoff_from_context(
             run_id,
@@ -141,6 +155,7 @@ class InvestmentResearchOrchestrationService:
             target,
             max_age,
             self.minimum_source_trust_state(),
+            policy=self.research_claim_policy(),
         )
         needs_research = force or self.plan_requires_research(brain, tasks)
         if not needs_research:
@@ -208,11 +223,11 @@ class InvestmentResearchOrchestrationService:
         )
         tasks = [item for item in plan.get("tasks") or [] if isinstance(item, dict)]
         task_ids = [str(item.get("taskId") or "") for item in tasks if str(item.get("taskId") or "")]
-        source_types = unique_strings(
+        source_types = self.source_types_with_verification(unique_strings(
             source
             for item in tasks
             for source in (item.get("sourceTypes") or [])
-        )
+        ))
         max_age = min(
             [int(item.get("maxAgeMinutes") or 360) for item in tasks] or [360]
         )
@@ -228,14 +243,33 @@ class InvestmentResearchOrchestrationService:
                 collected, provider_statuses = self.research_gateway.collect_for_target(target)
         if self.article_analysis_service and hasattr(self.article_analysis_service, "analyze_many"):
             collected = self.article_analysis_service.analyze_many(target, collected)
+        collection_ids = {str(item.evidence_id or "") for item in collected if isinstance(item, ResearchEvidence)}
+        corpus_by_id: Dict[str, ResearchEvidence] = {}
+        for item in list(collected or []) + list(cached_items or []):
+            if isinstance(item, ResearchEvidence) and str(item.evidence_id or "").strip():
+                corpus_by_id[str(item.evidence_id)] = item
+        governance_corpus = list(corpus_by_id.values())
         accepted, verified, rejected = governed_evidence(
-            collected,
+            governance_corpus,
             target,
             max_age,
             self.minimum_source_trust_state(),
+            policy=self.research_claim_policy(),
         )
+        policy = self.research_claim_policy()
+        lifecycle_updates = [
+            item for item in governance_corpus
+            if str(item.evidence_id or "") not in collection_ids
+            and any(
+                str(claim.get("state") or "") in {"superseded", "conflicted"}
+                for claim in (((item.raw_payload or {}).get("claimLedger") or {}).get("claims") or [])
+                if isinstance(claim, dict)
+            )
+        ]
+        persistable = accepted if not policy.get("strictInvestmentEligibility") else governance_corpus
+        persistable_by_id = {str(item.evidence_id or ""): item for item in persistable + lifecycle_updates if str(item.evidence_id or "")}
         changed_count, reasoning_handoff = self.persist_evidence(
-            accepted,
+            list(persistable_by_id.values()),
             question,
             target,
             run_id,
@@ -254,6 +288,7 @@ class InvestmentResearchOrchestrationService:
             reused_evidence_ids=[item.evidence_id for item in cached_accepted],
             verified_claims=verified,
             rejected_claims=rejected,
+            claim_quality=claim_quality_summary(governance_corpus),
             provider_statuses=provider_statuses,
             round_count=1,
             changed_evidence_count=changed_count,

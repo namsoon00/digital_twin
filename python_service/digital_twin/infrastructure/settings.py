@@ -1147,3 +1147,15 @@ def currency_rates(settings: Dict[str, str] = None) -> Dict[str, float]:
     raw = str(settings.get("fxRates") or "").replace(";", "\n")
     rates = parse_assignments(raw, {"KRW": 1.0, "USD": 1400.0})
     return {str(key).upper(): float(value or 0) for key, value in rates.items()}
+    "researchClaimRequireVerifiedForInvestment",
+    "researchClaimOfficialVerificationEnabled",
+    "researchClaimMinimumIndependentSources",
+    "researchClaimCrossSourceWindowHours",
+    "researchClaimSimilarityThreshold",
+    "researchClaimSourceRegistry",
+        "researchClaimRequireVerifiedForInvestment": value("researchClaimRequireVerifiedForInvestment", "RESEARCH_CLAIM_REQUIRE_VERIFIED_FOR_INVESTMENT", "1"),
+        "researchClaimOfficialVerificationEnabled": value("researchClaimOfficialVerificationEnabled", "RESEARCH_CLAIM_OFFICIAL_VERIFICATION_ENABLED", "1"),
+        "researchClaimMinimumIndependentSources": value("researchClaimMinimumIndependentSources", "RESEARCH_CLAIM_MINIMUM_INDEPENDENT_SOURCES", "2"),
+        "researchClaimCrossSourceWindowHours": value("researchClaimCrossSourceWindowHours", "RESEARCH_CLAIM_CROSS_SOURCE_WINDOW_HOURS", "72"),
+        "researchClaimSimilarityThreshold": value("researchClaimSimilarityThreshold", "RESEARCH_CLAIM_SIMILARITY_THRESHOLD", "0.48"),
+        "researchClaimSourceRegistry": value("researchClaimSourceRegistry", "RESEARCH_CLAIM_SOURCE_REGISTRY", ""),

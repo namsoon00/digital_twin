@@ -7,6 +7,7 @@ from ..domain.accounts import AccountConfig
 from ..domain.data_freshness import age_minutes, parse_datetime, utc_iso
 from ..domain.events import DomainEvent, ontology_reasoning_requested_event, research_evidence_collected_event
 from ..domain.investment_research import NewsCollectionTarget, ResearchEvidence
+from ..domain.investment_evidence_governance import claim_policy, claim_quality_summary, governed_evidence
 from ..domain.market_data import known_stock, number
 from ..domain.materiality import evidence_materiality
 from ..domain.repositories import AccountRepository, MonitorSnapshotReader, ResearchEvidenceGateway, ResearchEvidenceRepository, SymbolUniverseRepository
@@ -457,6 +458,16 @@ class NewsCollectionRunner:
                     if accepts_kwargs or "monotonic_fn" in parameter_names:
                         analysis_kwargs["monotonic_fn"] = self.monotonic_fn
                     items = analyze_many(target, items, **analysis_kwargs)
+                # Persist unverified claims for audit and web review, but the
+                # strict governance policy keeps them out of investment input.
+                if items:
+                    governed_evidence(
+                        items,
+                        target,
+                        self.max_news_age_minutes(),
+                        str(self.settings.get("investmentBrainResearchMinimumSourceTrustState") or "standard"),
+                        policy=claim_policy(self.settings),
+                    )
                 items, target_stale = self.fresh_news_items(items)
                 collected.extend(items)
                 stale_items.extend(target_stale)
@@ -514,6 +525,7 @@ class NewsCollectionRunner:
                 "statuses": statuses[-50:],
                 "targetFailures": target_failures,
                 "articleAnalysisHealth": self.article_analysis_health(collected, len(stale_items), cleanup),
+                "claimQuality": claim_quality_summary(collected),
                 "dataQuality": "actual",
             }
 

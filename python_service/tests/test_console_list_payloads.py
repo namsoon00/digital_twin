@@ -71,3 +71,35 @@ class ConsoleListPayloadTests(unittest.TestCase):
         self.assertTrue(payload["articleSummaryKo"])
         self.assertEqual("feed-summary", payload["articleReadStatus"])
         self.assertIn(payload["stockImpactPolarity"], {"support", "risk", "context"})
+
+    def test_research_list_exposes_claim_verification_without_full_claim_text(self):
+        evidence = ResearchEvidence(
+            evidence_id="evidence-claim-state",
+            symbol="005930",
+            kind="news",
+            source="Reuters",
+            title="삼성전자 자사주 매입",
+            summary="기사 요약",
+            raw_payload={
+                "evidenceGovernance": {
+                    "claimState": "corroborated",
+                    "verificationStatus": "verified-secondary",
+                    "investmentJudgmentEligible": True,
+                    "sourcePublisher": "Reuters",
+                    "sourceOrigin": "reuters",
+                    "independentSourceCount": 2,
+                    "officialEvidenceIds": ["research:005930:dart:1"],
+                },
+                "claimLedger": {
+                    "claims": [{"statement": "원문 근거 문장"}],
+                    "summary": {"claimCount": 1, "eligibleClaimCount": 1},
+                },
+            },
+        )
+
+        payload = research_evidence_list_payload(evidence)
+
+        self.assertEqual("corroborated", payload["claimVerification"]["claimState"])
+        self.assertEqual(2, payload["claimVerification"]["independentSourceCount"])
+        self.assertEqual(1, len(payload["claimVerification"]["officialEvidenceIds"]))
+        self.assertNotIn("claimLedger", payload)

@@ -290,6 +290,10 @@ class ResearchEvidence:
             "sourcePlatform": str(payload.get("sourcePlatform") or ""),
             "entityLinks": list(payload.get("entityLinks") or []),
             "qualityGate": dict(payload.get("qualityGate") or {}),
+            "evidenceGovernance": dict(payload.get("evidenceGovernance") or {}),
+            "claimLedger": dict(payload.get("claimLedger") or {}),
+            "sourcePublisher": str(payload.get("sourcePublisher") or ""),
+            "sourceOrigin": str(payload.get("sourceOrigin") or ""),
             "payload": payload,
         }
 

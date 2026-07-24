@@ -1,3 +1,6 @@
+import json
+import re
+import urllib.parse
 from dataclasses import asdict, dataclass, field, replace
 from datetime import datetime, timezone
 from typing import Dict, Iterable, List, Tuple
@@ -20,6 +23,38 @@ PRIMARY_SOURCE_MARKERS = (
     "investor relations",
     "company ir",
 )
+
+CLAIM_LEDGER_VERSION = "research-claim-ledger-v1"
+CLAIM_STATES = (
+    "reported",
+    "verified-primary",
+    "corroborated",
+    "conflicted",
+    "superseded",
+    "expired",
+    "rejected",
+)
+
+OFFICIAL_EVIDENCE_KINDS = {"disclosure", "filing"}
+CORRECTION_MARKERS = (
+    "correction",
+    "corrected",
+    "clarification",
+    "retraction",
+    "withdrawn",
+    "정정",
+    "정정공시",
+    "정정 보도",
+    "오보",
+    "철회",
+    "바로잡",
+)
+CLAIM_STOP_WORDS = {
+    "about", "after", "ahead", "amid", "and", "article", "before", "company",
+    "for", "from", "has", "into", "its", "latest", "news", "over", "said",
+    "that", "the", "this", "with", "will", "있다", "관련", "기사", "뉴스",
+    "대한", "대해", "이번", "통해", "한다", "했다", "하는", "에서", "으로",
+}
 
 
 RESEARCH_REASONING_HANDOFF_VERSION = "research-reasoning-generation-v1"
@@ -431,6 +466,13 @@ class EvidenceClaim:
     data_state: str
     validation_state: str
     reasons: List[str] = field(default_factory=list)
+    claim_state: str = "reported"
+    source_origin: str = ""
+    independent_source_count: int = 0
+    official_evidence_ids: List[str] = field(default_factory=list)
+    corroborating_evidence_ids: List[str] = field(default_factory=list)
+    conflicting_evidence_ids: List[str] = field(default_factory=list)
+    superseded_by_evidence_id: str = ""
 
     def to_dict(self) -> Dict[str, object]:
         payload = asdict(self)
@@ -455,6 +497,7 @@ class ResearchRun:
     reasoning_refreshed: bool = False
     reasoning_handoff: ResearchReasoningHandoff = field(default_factory=ResearchReasoningHandoff)
     hypothesis_research_brief: HypothesisResearchBrief = field(default_factory=HypothesisResearchBrief)
+    claim_quality: Dict[str, object] = field(default_factory=dict)
     request_context: Dict[str, object] = field(default_factory=dict)
     started_at: str = field(default_factory=utc_now_iso)
     completed_at: str = ""
@@ -489,6 +532,13 @@ class ResearchRun:
                 data_state=normalized_data_state(item.get("dataState") or item.get("data_state")),
                 validation_state=normalized_validation_state(item.get("validationState") or item.get("validation_state")),
                 reasons=list(item.get("reasons") or []),
+                claim_state=str(item.get("claimState") or item.get("claim_state") or "reported"),
+                source_origin=str(item.get("sourceOrigin") or item.get("source_origin") or ""),
+                independent_source_count=int(item.get("independentSourceCount") or item.get("independent_source_count") or 0),
+                official_evidence_ids=list(item.get("officialEvidenceIds") or item.get("official_evidence_ids") or []),
+                corroborating_evidence_ids=list(item.get("corroboratingEvidenceIds") or item.get("corroborating_evidence_ids") or []),
+                conflicting_evidence_ids=list(item.get("conflictingEvidenceIds") or item.get("conflicting_evidence_ids") or []),
+                superseded_by_evidence_id=str(item.get("supersededByEvidenceId") or item.get("superseded_by_evidence_id") or ""),
             )
 
         return cls(
@@ -512,6 +562,7 @@ class ResearchRun:
             hypothesis_research_brief=HypothesisResearchBrief.from_dict(
                 payload.get("hypothesisResearchBrief") or payload.get("hypothesis_research_brief") or {}
             ),
+            claim_quality=dict(payload.get("claimQuality") or payload.get("claim_quality") or {}),
             request_context=dict(payload.get("requestContext") or payload.get("request_context") or {}),
             started_at=str(payload.get("startedAt") or payload.get("started_at") or utc_now_iso()),
             completed_at=str(payload.get("completedAt") or payload.get("completed_at") or ""),
@@ -595,6 +646,325 @@ def entity_resolution(item: ResearchEvidence, target: NewsCollectionTarget) -> T
     return "unresolved", ["direct-subject-unconfirmed"]
 
 
+def claim_bool(value: object, fallback: bool = False) -> bool:
+    text = str(value if value is not None else "").strip().lower()
+    if not text:
+        return fallback
+    return text not in {"0", "false", "no", "off", "disabled"}
+
+
+def claim_number(value: object, fallback: float) -> float:
+    try:
+        return float(str(value if value not in (None, "") else fallback))
+    except (TypeError, ValueError):
+        return fallback
+
+
+def claim_policy(settings: Dict[str, object] = None) -> Dict[str, object]:
+    """Normalize runtime settings without leaking provider-specific logic into callers."""
+    raw = dict(settings or {})
+    if "strictInvestmentEligibility" in raw:
+        registry_value = raw.get("sourceRegistry")
+        return {
+            "strictInvestmentEligibility": claim_bool(raw.get("strictInvestmentEligibility"), False),
+            "officialVerificationEnabled": claim_bool(raw.get("officialVerificationEnabled"), True),
+            "minimumIndependentSources": max(2, min(5, int(claim_number(raw.get("minimumIndependentSources"), 2)))),
+            "crossSourceWindowHours": max(1, min(24 * 30, int(claim_number(raw.get("crossSourceWindowHours"), 72)))),
+            "similarityThreshold": max(0.2, min(0.95, claim_number(raw.get("similarityThreshold"), 0.48))),
+            "sourceRegistry": registry_value if isinstance(registry_value, dict) else source_registry(registry_value),
+        }
+    return {
+        "strictInvestmentEligibility": claim_bool(raw.get("researchClaimRequireVerifiedForInvestment"), False),
+        "officialVerificationEnabled": claim_bool(raw.get("researchClaimOfficialVerificationEnabled"), True),
+        "minimumIndependentSources": max(2, min(5, int(claim_number(raw.get("researchClaimMinimumIndependentSources"), 2)))),
+        "crossSourceWindowHours": max(1, min(24 * 30, int(claim_number(raw.get("researchClaimCrossSourceWindowHours"), 72)))),
+        "similarityThreshold": max(0.2, min(0.95, claim_number(raw.get("researchClaimSimilarityThreshold"), 0.48))),
+        "sourceRegistry": source_registry(raw.get("researchClaimSourceRegistry")),
+    }
+
+
+def source_registry(value: object) -> Dict[str, Dict[str, object]]:
+    """Parse a small local source-policy registry.
+
+    The setting accepts either JSON (``{"reuters": {"tier": "trusted"}}``)
+    or one line per source (``reuters=trusted,origin=reuters``).  The source
+    name stays local configuration rather than a hard-coded judgement rule.
+    """
+    registry: Dict[str, Dict[str, object]] = {}
+    raw = str(value or "").strip()
+    if not raw:
+        return registry
+    decoded = None
+    if raw.startswith("{"):
+        try:
+            decoded = json.loads(raw)
+        except (TypeError, ValueError):
+            decoded = None
+    if isinstance(decoded, dict):
+        for key, profile in decoded.items():
+            matcher = str(key or "").strip().casefold()
+            if not matcher:
+                continue
+            values = dict(profile) if isinstance(profile, dict) else {"tier": profile}
+            registry[matcher] = {
+                "tier": str(values.get("tier") or values.get("sourceTrustState") or "").strip().lower(),
+                "origin": str(values.get("origin") or "").strip(),
+                "primary": claim_bool(values.get("primary"), False),
+            }
+        return registry
+    for raw_line in raw.splitlines():
+        line = raw_line.strip()
+        if not line or line.startswith("#") or "=" not in line:
+            continue
+        matcher, encoded = line.split("=", 1)
+        matcher = matcher.strip().casefold()
+        if not matcher:
+            continue
+        pieces = [part.strip() for part in encoded.split(",") if part.strip()]
+        profile: Dict[str, object] = {"tier": pieces[0].lower() if pieces else ""}
+        for part in pieces[1:]:
+            if "=" in part:
+                key, item = part.split("=", 1)
+                profile[key.strip().lower()] = item.strip()
+            elif part.casefold() == "primary":
+                profile["primary"] = True
+        registry[matcher] = {
+            "tier": str(profile.get("tier") or "").strip().lower(),
+            "origin": str(profile.get("origin") or "").strip(),
+            "primary": claim_bool(profile.get("primary"), False),
+        }
+    return registry
+
+
+def source_origin_for_evidence(item: ResearchEvidence, registry: Dict[str, Dict[str, object]] = None) -> Dict[str, object]:
+    """Separate the publisher identity from the delivery channel and URL variant."""
+    payload = item.raw_payload if isinstance(item.raw_payload, dict) else {}
+    source = str(payload.get("sourcePublisher") or payload.get("publisher") or item.source or "").strip()
+    provider = str(payload.get("provider") or "").strip()
+    url = str(item.url or payload.get("articleSourceUrl") or "").strip()
+    source_key = re.sub(r"\s+", " ", source.casefold())
+    registry = registry if isinstance(registry, dict) else {}
+    matched = {}
+    for matcher, profile in registry.items():
+        if matcher and (matcher in source_key or matcher in provider.casefold() or matcher in url.casefold()):
+            matched = dict(profile or {})
+            break
+    host = ""
+    try:
+        host = urllib.parse.urlparse(url).netloc.casefold().split(":")[0]
+    except (TypeError, ValueError):
+        host = ""
+    host = re.sub(r"^(?:www|m)\.", "", host)
+    generic_channels = {"google news", "google news kr", "google_rss", "yahoo finance", "yahoo search", "gdelt"}
+    origin_seed = source_key if source_key and source_key not in generic_channels else host
+    origin = str(matched.get("origin") or origin_seed or source_key or host or "unknown").strip().casefold()
+    origin = re.sub(r"[^0-9a-z가-힣.]+", "-", origin).strip("-") or "unknown"
+    tier = str(matched.get("tier") or payload.get("sourceTrustState") or item.source_trust_state or "unknown").strip().lower()
+    if tier not in SOURCE_TRUST_ORDER:
+        tier = news_domain.source_trust_state_for_source(source, provider)
+    primary = bool(matched.get("primary")) or primary_source(item) or str(item.kind or "").lower() in OFFICIAL_EVIDENCE_KINDS
+    return {
+        "publisher": source or host or "unknown",
+        "origin": origin,
+        "tier": tier,
+        "primary": primary,
+        "host": host,
+        "provider": provider,
+    }
+
+
+def article_claim_sentences(item: ResearchEvidence) -> List[str]:
+    """Return short source-backed sentences, never an AI-only paraphrase."""
+    payload = item.raw_payload if isinstance(item.raw_payload, dict) else {}
+    facts = payload.get("articleFacts") if isinstance(payload.get("articleFacts"), dict) else {}
+    values: List[object] = []
+    body = payload.get("articleText") or facts.get("bodyText") or facts.get("bodyPreview")
+    if body:
+        values.append(body)
+    key_sentences = facts.get("keySentences") if isinstance(facts.get("keySentences"), list) else []
+    values.extend(key_sentences)
+    if not body:
+        values.extend([facts.get("feedSummaryPreview"), item.summary, item.title])
+    rows: List[str] = []
+    for value in values:
+        for part in re.split(r"(?<=[.!?。！？])\s+|[\r\n]+", str(value or "")):
+            text = re.sub(r"\s+", " ", part).strip(" -•·\t")
+            if len(text) < 24 or news_domain.is_news_boilerplate_sentence(text):
+                continue
+            if text not in rows:
+                rows.append(text[:600])
+            if len(rows) >= 5:
+                return rows
+    fallback = str(item.summary or item.title or "").strip()
+    return [fallback[:600]] if fallback else []
+
+
+def claim_tokens(value: object) -> List[str]:
+    tokens = re.findall(r"[가-힣]{2,}|[a-z][a-z0-9'-]{2,}|\d[\d,.]*(?:%|bp|억|만|원|달러|million|billion)?", str(value or "").casefold())
+    return [token for token in tokens if token not in CLAIM_STOP_WORDS]
+
+
+def claim_numbers(value: object) -> List[str]:
+    return re.findall(r"\d[\d,.]*(?:%|bp|억|만|원|달러|million|billion)?", str(value or "").casefold())[:8]
+
+
+def claim_is_correction(item: ResearchEvidence, statement: object) -> bool:
+    payload = item.raw_payload if isinstance(item.raw_payload, dict) else {}
+    text = " ".join([
+        str(item.title or ""),
+        str(statement or ""),
+        str(payload.get("articleSummaryKo") or ""),
+    ]).casefold()
+    return any(marker.casefold() in text for marker in CORRECTION_MARKERS)
+
+
+def claim_excerpt_location(item: ResearchEvidence, statement: object) -> Tuple[int, int]:
+    payload = item.raw_payload if isinstance(item.raw_payload, dict) else {}
+    facts = payload.get("articleFacts") if isinstance(payload.get("articleFacts"), dict) else {}
+    excerpt = str(statement or "").strip()
+    for source in [payload.get("articleText"), facts.get("bodyPreview"), facts.get("feedSummaryPreview"), item.summary, item.title]:
+        text = str(source or "")
+        if not text or not excerpt:
+            continue
+        start = text.find(excerpt)
+        if start >= 0:
+            return start, start + len(excerpt)
+    return -1, -1
+
+
+def extracted_claims_for_evidence(
+    item: ResearchEvidence,
+    target: NewsCollectionTarget,
+    policy: Dict[str, object] = None,
+) -> List[Dict[str, object]]:
+    """Build a bounded claim ledger with source excerpts and stable provenance."""
+    policy = policy if isinstance(policy, dict) else claim_policy()
+    payload = item.raw_payload if isinstance(item.raw_payload, dict) else {}
+    profile = source_origin_for_evidence(item, policy.get("sourceRegistry"))
+    event_type = str(payload.get("eventType") or "general").strip().lower() or "general"
+    rows: List[Dict[str, object]] = []
+    for index, statement in enumerate(article_claim_sentences(item)):
+        tokens = claim_tokens(statement)
+        if not tokens:
+            continue
+        fingerprint = stable_id(
+            "research-claim-fingerprint",
+            target.normalized_symbol(),
+            event_type,
+            "|".join(sorted(set(tokens))[:14]),
+        )
+        rows.append({
+            "claimId": stable_id("research-claim", item.evidence_id, str(index), statement),
+            "fingerprint": fingerprint,
+            "statement": statement,
+            "claimKind": "quantified-event" if claim_numbers(statement) else "event",
+            "eventType": event_type,
+            "symbol": target.normalized_symbol(),
+            "numbers": claim_numbers(statement),
+            "tokens": tokens[:24],
+            "sourceEvidenceId": str(item.evidence_id or ""),
+            "source": profile["publisher"],
+            "sourceOrigin": profile["origin"],
+            "sourceUrl": str(item.url or ""),
+            "publishedAt": str(item.published_at or ""),
+            "observedAt": str(item.observed_at or ""),
+            "excerpt": statement,
+            "excerptIndex": index,
+            "excerptStart": claim_excerpt_location(item, statement)[0],
+            "excerptEnd": claim_excerpt_location(item, statement)[1],
+            "subjectSymbol": target.normalized_symbol(),
+            "action": event_type,
+            "isPrimarySource": bool(profile["primary"]),
+            "isCorrection": claim_is_correction(item, statement),
+            "state": "reported",
+            "verificationStatus": "",
+            "investmentJudgmentEligible": False,
+            "reasons": [],
+        })
+    return rows or [{
+        "claimId": stable_id("research-claim", item.evidence_id, "fallback"),
+        "fingerprint": stable_id("research-claim-fingerprint", target.normalized_symbol(), event_type, item.title),
+        "statement": str(item.title or item.summary or "")[:600],
+        "claimKind": "event",
+        "eventType": event_type,
+        "symbol": target.normalized_symbol(),
+        "numbers": [],
+        "tokens": claim_tokens(item.title or item.summary),
+        "sourceEvidenceId": str(item.evidence_id or ""),
+        "source": profile["publisher"],
+        "sourceOrigin": profile["origin"],
+        "sourceUrl": str(item.url or ""),
+        "publishedAt": str(item.published_at or ""),
+        "observedAt": str(item.observed_at or ""),
+        "excerpt": str(item.title or item.summary or "")[:600],
+        "excerptIndex": 0,
+        "excerptStart": 0,
+        "excerptEnd": len(str(item.title or item.summary or "")[:600]),
+        "subjectSymbol": target.normalized_symbol(),
+        "action": event_type,
+        "isPrimarySource": bool(profile["primary"]),
+        "isCorrection": claim_is_correction(item, item.title),
+        "state": "reported",
+        "verificationStatus": "",
+        "investmentJudgmentEligible": False,
+        "reasons": ["claim-fallback-title"],
+    }]
+
+
+def claim_similarity(left: Dict[str, object], right: Dict[str, object]) -> float:
+    if str(left.get("symbol") or "") != str(right.get("symbol") or ""):
+        return 0.0
+    left_event = str(left.get("eventType") or "general")
+    right_event = str(right.get("eventType") or "general")
+    if left_event != right_event and "general" not in {left_event, right_event}:
+        return 0.0
+    left_tokens = set(left.get("tokens") or claim_tokens(left.get("statement")))
+    right_tokens = set(right.get("tokens") or claim_tokens(right.get("statement")))
+    if not left_tokens or not right_tokens:
+        return 0.0
+    overlap = len(left_tokens.intersection(right_tokens)) / max(1, len(left_tokens.union(right_tokens)))
+    score = overlap + (0.18 if left_event == right_event and left_event != "general" else 0.0)
+    left_numbers = set(left.get("numbers") or [])
+    right_numbers = set(right.get("numbers") or [])
+    if left_numbers and right_numbers:
+        score += 0.18 if left_numbers.intersection(right_numbers) else -0.12
+    return max(0.0, min(1.0, score))
+
+
+def claim_timestamp(claim: Dict[str, object]):
+    return parse_datetime(str(claim.get("publishedAt") or claim.get("observedAt") or ""))
+
+
+def claims_within_window(left: Dict[str, object], right: Dict[str, object], window_hours: int) -> bool:
+    left_time = claim_timestamp(left)
+    right_time = claim_timestamp(right)
+    if not left_time or not right_time:
+        return True
+    return abs((left_time - right_time).total_seconds()) <= max(1, int(window_hours or 1)) * 3600
+
+
+def directional_polarity(item: ResearchEvidence) -> str:
+    value = str(item.polarity or "context").strip().lower()
+    if value in {"support", "positive", "bullish"}:
+        return "support"
+    if value in {"risk", "negative", "bearish"}:
+        return "risk"
+    return "context"
+
+
+def claim_state_rank(value: object) -> int:
+    order = {
+        "rejected": 0,
+        "expired": 1,
+        "reported": 2,
+        "verified-primary": 3,
+        "corroborated": 4,
+        "superseded": 0,
+        "conflicted": 0,
+    }
+    return order.get(str(value or ""), 0)
+
+
 def verification_for_evidence(
     item: ResearchEvidence,
     target: NewsCollectionTarget,
@@ -629,7 +999,7 @@ def verification_for_evidence(
     if not str(item.title or "").strip():
         reasons.append("claim-text-missing")
     accepted = resolution.startswith("resolved") and not reasons
-    if accepted and primary_source(item):
+    if accepted and (primary_source(item) or str(item.kind or "").lower() in OFFICIAL_EVIDENCE_KINDS):
         status = "verified-primary"
     elif accepted:
         status = "verified-secondary"
@@ -655,42 +1025,284 @@ def verification_for_evidence(
     return claim, accepted
 
 
+def claim_matches_official(
+    claim: Dict[str, object],
+    peer: Dict[str, object],
+    similarity: float,
+    threshold: float,
+) -> bool:
+    if not peer.get("isPrimarySource"):
+        return False
+    if similarity >= threshold:
+        return True
+    same_event = str(claim.get("eventType") or "") == str(peer.get("eventType") or "")
+    shared_numbers = set(claim.get("numbers") or []).intersection(peer.get("numbers") or [])
+    shared_terms = set(claim.get("tokens") or []).intersection(peer.get("tokens") or [])
+    return bool(same_event and (shared_numbers or len(shared_terms) >= 2))
+
+
+def claim_ledger_summary(claims: Iterable[Dict[str, object]]) -> Dict[str, object]:
+    rows = [dict(item) for item in claims or [] if isinstance(item, dict)]
+    states = [str(item.get("state") or "reported") for item in rows]
+    eligible = [item for item in rows if item.get("investmentJudgmentEligible")]
+    return {
+        "version": CLAIM_LEDGER_VERSION,
+        "claimCount": len(rows),
+        "eligibleClaimCount": len(eligible),
+        "stateCounts": {state: states.count(state) for state in CLAIM_STATES if states.count(state)},
+        "officialVerifiedCount": len([item for item in rows if item.get("officialEvidenceIds")]),
+        "corroboratedCount": len([item for item in rows if item.get("state") == "corroborated"]),
+        "conflictedCount": len([item for item in rows if item.get("state") == "conflicted"]),
+        "supersededCount": len([item for item in rows if item.get("state") == "superseded"]),
+        "independentOrigins": unique_texts([item.get("sourceOrigin") for item in rows], 20),
+    }
+
+
+def claim_quality_summary(items: Iterable[ResearchEvidence]) -> Dict[str, object]:
+    """Expose bounded, explainable quality metrics for the web read model."""
+    claims: List[Dict[str, object]] = []
+    for item in items or []:
+        payload = item.raw_payload if isinstance(getattr(item, "raw_payload", None), dict) else {}
+        ledger = payload.get("claimLedger") if isinstance(payload.get("claimLedger"), dict) else {}
+        claims.extend(dict(row) for row in ledger.get("claims") or [] if isinstance(row, dict))
+    return claim_ledger_summary(claims)
+
+
 def governed_evidence(
     items: Iterable[ResearchEvidence],
     target: NewsCollectionTarget,
     max_age_minutes: int,
     minimum_source_trust_state: str = "standard",
+    policy: Dict[str, object] = None,
+    related_items: Iterable[ResearchEvidence] = None,
     **legacy_policy: object,
 ) -> Tuple[List[ResearchEvidence], List[EvidenceClaim], List[EvidenceClaim]]:
+    """Apply source, claim, official-document and lifecycle governance.
+
+    ``verificationStatus`` remains backward compatible at the evidence level.
+    The claim ledger adds the stricter lifecycle state and is the only input
+    used by the new investment-eligibility gate when that policy is enabled.
+    """
     if "minimum_source_reliability" in legacy_policy:
         minimum_source_trust_state = normalized_source_trust_state(legacy_policy["minimum_source_reliability"])
-    accepted_items: List[ResearchEvidence] = []
-    verified: List[EvidenceClaim] = []
-    rejected: List[EvidenceClaim] = []
-    for item in items or []:
-        claim, accepted = verification_for_evidence(
+    normalized_policy = claim_policy(policy)
+    deduped: List[ResearchEvidence] = []
+    seen_ids = set()
+    for item in list(items or []) + list(related_items or []):
+        if not isinstance(item, ResearchEvidence):
+            continue
+        identity = str(item.evidence_id or "").strip() or str(id(item))
+        if identity in seen_ids:
+            continue
+        seen_ids.add(identity)
+        deduped.append(item)
+
+    baseline_by_evidence: Dict[str, Tuple[EvidenceClaim, bool]] = {}
+    records: List[Dict[str, object]] = []
+    for item in deduped:
+        payload = dict(item.raw_payload or {})
+        profile = source_origin_for_evidence(item, normalized_policy.get("sourceRegistry"))
+        payload.update({
+            "sourcePublisher": profile["publisher"],
+            "sourceOrigin": profile["origin"],
+            "sourceTrustState": profile["tier"],
+        })
+        item.raw_payload = payload
+        # ResearchEvidence retains categorical states for compatibility. Keep
+        # that projection aligned with the configurable publisher registry.
+        item.source_trust_state = profile["tier"]
+        baseline, base_accepted = verification_for_evidence(
             item,
             target,
             max_age_minutes,
             minimum_source_trust_state,
         )
+        baseline_by_evidence[str(item.evidence_id or "")] = (baseline, base_accepted)
+        for claim in extracted_claims_for_evidence(item, target, normalized_policy):
+            records.append({"item": item, "claim": claim, "baseline": baseline, "baseAccepted": base_accepted})
+
+    threshold = float(normalized_policy["similarityThreshold"])
+    window_hours = int(normalized_policy["crossSourceWindowHours"])
+    minimum_sources = int(normalized_policy["minimumIndependentSources"])
+    for record in records:
+        item = record["item"]
+        claim = record["claim"]
+        baseline = record["baseline"]
+        base_accepted = bool(record["baseAccepted"])
+        peers: List[Tuple[Dict[str, object], Dict[str, object], float]] = []
+        for other in records:
+            other_claim = other["claim"]
+            if other_claim.get("claimId") == claim.get("claimId"):
+                continue
+            if not claims_within_window(claim, other_claim, window_hours):
+                continue
+            similarity = claim_similarity(claim, other_claim)
+            if similarity >= threshold:
+                peers.append((other, other_claim, similarity))
+        official_ids = unique_texts([
+            str(other_claim.get("sourceEvidenceId") or "")
+            for other, other_claim, similarity in peers
+            if normalized_policy["officialVerificationEnabled"] and claim_matches_official(claim, other_claim, similarity, threshold)
+        ])
+        independent_origins = unique_texts([
+            str(claim.get("sourceOrigin") or "")
+        ] + [str(other_claim.get("sourceOrigin") or "") for _other, other_claim, _similarity in peers])
+        corroborating_ids = unique_texts([
+            str(other_claim.get("sourceEvidenceId") or "")
+            for _other, other_claim, _similarity in peers
+            if str(other_claim.get("sourceOrigin") or "") != str(claim.get("sourceOrigin") or "")
+        ])
+        same_origin_matches = [
+            other_claim for _other, other_claim, _similarity in peers
+            if str(other_claim.get("sourceOrigin") or "") == str(claim.get("sourceOrigin") or "")
+        ]
+        polarity = directional_polarity(item)
+        conflict_ids = unique_texts([
+            str(other_claim.get("sourceEvidenceId") or "")
+            for other, other_claim, _similarity in peers
+            if directional_polarity(other["item"]) in {"support", "risk"}
+            and polarity in {"support", "risk"}
+            and directional_polarity(other["item"]) != polarity
+        ])
+        reasons = list(baseline.reasons)
+        state = "reported"
+        if not base_accepted:
+            state = "expired" if "evidence-stale" in reasons else "rejected"
+        elif claim.get("isPrimarySource") or official_ids:
+            state = "verified-primary"
+            if official_ids and not claim.get("isPrimarySource"):
+                reasons.append("official-document-match")
+        if base_accepted and len(independent_origins) >= minimum_sources:
+            state = "corroborated"
+            reasons.append("independent-source-corroborated:" + str(len(independent_origins)))
+        if conflict_ids:
+            state = "conflicted"
+            reasons.append("independent-source-conflict")
+        claim.update({
+            "state": state,
+            "verificationStatus": baseline.verification_status,
+            "entityResolutionStatus": baseline.entity_resolution_status,
+            "sourceTrustState": baseline.source_trust_state,
+            "dataState": baseline.data_state,
+            "validationState": baseline.validation_state,
+            "officialEvidenceIds": official_ids,
+            "corroboratingEvidenceIds": corroborating_ids,
+            "conflictingEvidenceIds": conflict_ids,
+            "independentSourceCount": len(independent_origins),
+            "duplicateOfClaimId": str(same_origin_matches[0].get("claimId") or "") if same_origin_matches else "",
+            "reasons": unique_texts(reasons, 20),
+            "investmentJudgmentEligible": bool(
+                base_accepted
+                and state not in {"conflicted", "superseded", "expired", "rejected"}
+                and (not normalized_policy["strictInvestmentEligibility"] or state in {"verified-primary", "corroborated"})
+            ),
+        })
+        if same_origin_matches:
+            claim["reasons"] = unique_texts(list(claim.get("reasons") or []) + ["syndicated-duplicate"], 20)
+
+    # A correction is source evidence about the prior report, not a second
+    # independent confirmation.  It withdraws only a similar, older claim.
+    for record in records:
+        item = record["item"]
+        correction = record["claim"]
+        if not correction.get("isCorrection"):
+            continue
+        correction_time = claim_timestamp(correction)
+        for previous_record in records:
+            previous = previous_record["claim"]
+            if previous.get("claimId") == correction.get("claimId") or previous.get("isCorrection"):
+                continue
+            if str(previous.get("sourceOrigin") or "") != str(correction.get("sourceOrigin") or ""):
+                continue
+            previous_time = claim_timestamp(previous)
+            if correction_time and previous_time and previous_time > correction_time:
+                continue
+            if claim_similarity(previous, correction) < max(0.2, threshold * 0.55):
+                continue
+            previous.update({
+                "state": "superseded",
+                "investmentJudgmentEligible": False,
+                "supersededByEvidenceId": str(item.evidence_id or ""),
+                "supersededByClaimId": str(correction.get("claimId") or ""),
+                "reasons": unique_texts(list(previous.get("reasons") or []) + ["superseded-by-correction"], 20),
+            })
+            correction["supersedesClaimIds"] = unique_texts(
+                list(correction.get("supersedesClaimIds") or []) + [str(previous.get("claimId") or "")],
+                20,
+            )
+
+    claims_by_evidence: Dict[str, List[Dict[str, object]]] = {}
+    for record in records:
+        item = record["item"]
+        claims_by_evidence.setdefault(str(item.evidence_id or ""), []).append(record["claim"])
+
+    accepted_items: List[ResearchEvidence] = []
+    verified: List[EvidenceClaim] = []
+    rejected: List[EvidenceClaim] = []
+    item_ids = {str(item.evidence_id or "") for item in items or [] if isinstance(item, ResearchEvidence)}
+    for item in deduped:
+        evidence_id = str(item.evidence_id or "")
+        baseline, base_accepted = baseline_by_evidence[evidence_id]
+        claims = claims_by_evidence.get(evidence_id, [])
+        best_claim = max(claims, key=lambda row: (bool(row.get("investmentJudgmentEligible")), claim_state_rank(row.get("state"))), default={})
+        eligible = any(bool(row.get("investmentJudgmentEligible")) for row in claims)
         payload = dict(item.raw_payload or {})
+        payload["claimLedger"] = {
+            "version": CLAIM_LEDGER_VERSION,
+            "claims": claims,
+            "summary": claim_ledger_summary(claims),
+        }
         payload["evidenceGovernance"] = {
-            "claimId": claim.claim_id,
-            "verificationStatus": claim.verification_status,
-            "entityResolutionStatus": claim.entity_resolution_status,
+            "claimId": str(best_claim.get("claimId") or baseline.claim_id),
+            "verificationStatus": str(best_claim.get("verificationStatus") or baseline.verification_status),
+            "claimState": str(best_claim.get("state") or ("verified-secondary" if base_accepted else "rejected")),
+            "entityResolutionStatus": str(best_claim.get("entityResolutionStatus") or baseline.entity_resolution_status),
             "checkedAt": utc_now_iso(),
-            "reasons": list(claim.reasons),
-            "investmentJudgmentEligible": bool(accepted),
-            "sourcePolicy": "official-first-cache-first-v1",
-            "sourceTrustState": claim.source_trust_state,
-            "dataState": claim.data_state,
-            "validationState": claim.validation_state,
+            "reasons": list(best_claim.get("reasons") or baseline.reasons),
+            "investmentJudgmentEligible": bool(eligible),
+            "sourcePolicy": "official-first-claim-ledger-v1",
+            "sourceTrustState": baseline.source_trust_state,
+            "dataState": baseline.data_state,
+            "validationState": baseline.validation_state,
+            "sourcePublisher": payload.get("sourcePublisher"),
+            "sourceOrigin": payload.get("sourceOrigin"),
+            "independentSourceCount": int(best_claim.get("independentSourceCount") or 0),
+            "officialEvidenceIds": list(best_claim.get("officialEvidenceIds") or []),
+            "corroboratingEvidenceIds": list(best_claim.get("corroboratingEvidenceIds") or []),
+            "conflictingEvidenceIds": list(best_claim.get("conflictingEvidenceIds") or []),
+            "supersededByEvidenceId": str(best_claim.get("supersededByEvidenceId") or ""),
         }
         item.raw_payload = payload
-        if accepted:
+        aggregate = EvidenceClaim(
+            claim_id=str(best_claim.get("claimId") or baseline.claim_id),
+            evidence_id=evidence_id,
+            symbol=target.normalized_symbol(),
+            statement=str(best_claim.get("statement") or baseline.statement),
+            source=str(best_claim.get("source") or baseline.source),
+            source_url=str(best_claim.get("sourceUrl") or baseline.source_url),
+            published_at=str(best_claim.get("publishedAt") or baseline.published_at),
+            observed_at=str(best_claim.get("observedAt") or baseline.observed_at),
+            verification_status=str(best_claim.get("verificationStatus") or baseline.verification_status),
+            entity_resolution_status=str(best_claim.get("entityResolutionStatus") or baseline.entity_resolution_status),
+            source_trust_state=baseline.source_trust_state,
+            data_state=baseline.data_state,
+            validation_state=baseline.validation_state,
+            reasons=list(best_claim.get("reasons") or baseline.reasons),
+            claim_state=str(best_claim.get("state") or "reported"),
+            source_origin=str(best_claim.get("sourceOrigin") or payload.get("sourceOrigin") or ""),
+            independent_source_count=int(best_claim.get("independentSourceCount") or 0),
+            official_evidence_ids=list(best_claim.get("officialEvidenceIds") or []),
+            corroborating_evidence_ids=list(best_claim.get("corroboratingEvidenceIds") or []),
+            conflicting_evidence_ids=list(best_claim.get("conflictingEvidenceIds") or []),
+            superseded_by_evidence_id=str(best_claim.get("supersededByEvidenceId") or ""),
+        )
+        # Related cached rows are mutated for correction/corroboration but are
+        # returned only when the caller explicitly included them in ``items``.
+        if evidence_id not in item_ids:
+            continue
+        if eligible:
             accepted_items.append(item)
-            verified.append(claim)
+            verified.append(aggregate)
         else:
-            rejected.append(claim)
+            rejected.append(aggregate)
     return accepted_items, verified, rejected

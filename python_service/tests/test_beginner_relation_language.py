@@ -281,6 +281,52 @@ class BeginnerRelationLanguageTests(unittest.TestCase):
         self.assertNotIn("관계 강도", message)
         self.assertIn("RuleBox(관계 분석 규칙)", message)
 
+    def test_beginner_message_shows_available_investor_flow_when_raw_lines_omit_it(self):
+        response = NotificationAIValidatedResponse(
+            action="HOLD",
+            action_label="관심 유지",
+            validation_state="conditional",
+            data_state="partial",
+            review_level="check",
+            summary="가격 흐름과 수급을 함께 확인합니다.",
+        )
+
+        message = execution_telegram_message(
+            {
+                "messageDeliveryLevel": "beginner",
+                "title": "NAVER 알림",
+                "target": "NAVER / 035420",
+                "rawLines": "현재가: 207,500원\n수급: 체결강도 59.5",
+                "ontologyRelationContext": {
+                    "facts": {
+                        "foreignBuyVolume": 449185,
+                        "foreignSellVolume": 652417,
+                        "foreignNetVolume": -203232,
+                        "institutionBuyVolume": 831845,
+                        "institutionSellVolume": 156667,
+                        "institutionNetVolume": 675178,
+                        "individualBuyVolume": 592017,
+                        "individualSellVolume": 1084010,
+                        "individualNetVolume": -491993,
+                        "marketSignalCoverage": {
+                            "investor": {
+                                "status": "available",
+                                "judgementEvidenceUsable": True,
+                                "unchangedCount": 23,
+                            },
+                        },
+                    },
+                },
+            },
+            response,
+        )
+
+        self.assertIn("<b>투자자</b>", message)
+        self.assertIn("KIS 당일 누적 수급 · 이전 조회와 같은 값 23회", message)
+        self.assertIn("외국인: 순매도 203,232주 (매수 449,185주 / 매도 652,417주)", message)
+        self.assertIn("기관: 순매수 675,178주 (매수 831,845주 / 매도 156,667주)", message)
+        self.assertIn("개인: 순매도 491,993주 (매수 592,017주 / 매도 1,084,010주)", message)
+
     def test_execution_message_includes_relation_axis_summary(self):
         response = NotificationAIValidatedResponse(
             action="TRIM",

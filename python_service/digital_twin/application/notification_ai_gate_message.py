@@ -8,7 +8,7 @@ except ImportError:  # pragma: no cover - Python 3.8 compatibility guard.
     ZoneInfo = None
 
 from ..domain.accounts import investment_strategy_profile, message_delivery_profile
-from ..domain.alert_formatting import price_money, signed_pct
+from ..domain.alert_formatting import compact_number, price_money, signed_pct
 from ..domain.notification_ai import criterion_lines, notification_ai_prompt_context, relation_context_value
 from ..domain.notification_ai_context import relation_facts
 from ..domain.notification_ai_context import is_watchlist_context
@@ -656,6 +656,44 @@ def _investor_text_from_lines(lines: List[str]) -> str:
             break
         return "\n".join(rows)
     return ""
+
+
+def _investor_text_from_relation_facts(context: Dict[str, object]) -> str:
+    facts = relation_facts(context)
+    coverage = facts.get("marketSignalCoverage") if isinstance(facts.get("marketSignalCoverage"), dict) else {}
+    investor = coverage.get("investor") if isinstance(coverage.get("investor"), dict) else {}
+    if str(investor.get("status") or "").strip() != "available" or investor.get("judgementEvidenceUsable") is False:
+        return ""
+
+    rows = []
+    for label, prefix in [("외국인", "foreign"), ("기관", "institution"), ("개인", "individual")]:
+        buy = _number(facts.get(prefix + "BuyVolume"))
+        sell = _number(facts.get(prefix + "SellVolume"))
+        reported_net = _number(facts.get(prefix + "NetVolume"))
+        net = buy - sell if buy or sell else reported_net
+        if not any([buy, sell, net]):
+            continue
+        direction = "순매수" if net > 0 else "순매도" if net < 0 else "매수·매도 균형"
+        detail = label + ": " + direction
+        if net:
+            detail += " " + compact_number(abs(net)) + "주"
+        if buy or sell:
+            detail += " (매수 " + compact_number(buy) + "주 / 매도 " + compact_number(sell) + "주)"
+        rows.append(detail)
+    if not rows:
+        return ""
+
+    note = "KIS 당일 누적 수급"
+    unchanged_count = _number(investor.get("unchangedCount"))
+    if unchanged_count:
+        note += " · 이전 조회와 같은 값 " + compact_number(unchanged_count) + "회"
+    note += " · 보유·매매 판단에 반영 · 장중 신규 변화 확인 전 참고값"
+    return note + "\n" + "\n".join(rows)
+
+
+def _investor_text(context: Dict[str, object]) -> str:
+    return _investor_text_from_lines(_raw_lines(context)) or _investor_text_from_relation_facts(context)
+
 
 def _html_multiline_rows(title: str, value: object) -> List[str]:
     rows = [line.strip() for line in str(value or "").splitlines() if line.strip()]
@@ -2285,7 +2323,7 @@ def execution_telegram_message(context: Dict[str, object], response: Notificatio
     legacy_balance = _plain_value(context, "보유") if not any([quantity, sellable, position_value]) else ""
     trend = _plain_value(context, "추세")
     flow = _plain_value(context, "수급")
-    investor = _plain_value(context, "투자자")
+    investor = _investor_text(context)
     sent = str(context.get("sentTime") or "").strip()
     reference = response.reference_date or reference_date(context)
     current_state_rows = [
@@ -2394,7 +2432,7 @@ def beginner_current_state_rows(context: Dict[str, object]) -> List[str]:
         ("거래량·매수매도", _plain_value(context, "수급")),
     ]
     rows = [row for row in [_html_row(label, value, True) for label, value in values] if row]
-    rows.extend(_html_multiline_rows("투자자", _plain_value(context, "투자자")))
+    rows.extend(_html_multiline_rows("투자자", _investor_text(context)))
     return rows
 
 def relation_rule_summary(context: Dict[str, object], limit: int = 4) -> List[str]:

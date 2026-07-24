@@ -362,6 +362,15 @@ class OntologyReasoningRunner:
         """Prevent a slow native TypeDB worker from starving one symbol forever."""
         return int_setting(self.settings, "ontologyReasoningFairnessMaxWaitSeconds", 900, 60, 86400)
 
+    def fairness_drain_enabled(self) -> bool:
+        """Drain an overdue target without adding another idle scheduler wait.
+
+        TypeDB materialization remains serialised at one target per
+        projection. This only removes the cooldown between successful runs
+        after the configured fairness deadline has already been exceeded.
+        """
+        return truthy(self.settings.get("ontologyReasoningFairnessDrainEnabled"), True)
+
     def symbol_wait_seconds(self, symbol: str, cursor_payload: Dict[str, object] = None):
         stamp = self.last_reasoned_at_by_symbol(cursor_payload).get(str(symbol or "").upper().strip(), "")
         if not stamp:
@@ -388,6 +397,30 @@ class OntologyReasoningRunner:
     def symbol_fairness_state(self, symbol: str, cursor_payload: Dict[str, object] = None) -> str:
         rank, _wait_seconds = self.symbol_fairness_rank(symbol, cursor_payload)
         return "unseen" if rank == 2 else "overdue" if rank == 1 else "normal"
+
+    def fairness_drain_state(
+        self,
+        selected_symbols: Iterable[str],
+        cursor_payload: Dict[str, object] = None,
+    ) -> Dict[str, object]:
+        """Return a scheduling-only drain decision for already overdue work."""
+        payload = self.cursor_payload() if cursor_payload is None else dict(cursor_payload or {})
+        overdue_symbols = [
+            str(symbol or "").upper().strip()
+            for symbol in selected_symbols or []
+            if str(symbol or "").strip()
+            and self.symbol_fairness_state(str(symbol or "").upper().strip(), payload) == "overdue"
+        ]
+        return {
+            "enabled": self.fairness_drain_enabled(),
+            "active": bool(self.fairness_drain_enabled() and overdue_symbols),
+            "symbols": list(dict.fromkeys(overdue_symbols)),
+            "reason": (
+                "대기 한도를 넘긴 종목을 순서대로 따라잡기 위해 다음 추론 대기를 건너뜁니다."
+                if self.fairness_drain_enabled() and overdue_symbols
+                else ""
+            ),
+        }
 
     def order_symbols_by_fairness(
         self,
@@ -592,7 +625,10 @@ class OntologyReasoningRunner:
         self,
         requests: Iterable[object],
         payload: Dict[str, object] = None,
+        selected_symbols: Iterable[str] = None,
     ) -> int:
+        if self.fairness_drain_state(selected_symbols or [], payload).get("active"):
+            return 0
         configured = self.projection_min_interval_seconds(requests)
         urgent = any(
             event_review_level(event) in self.urgent_review_levels()
@@ -608,20 +644,26 @@ class OntologyReasoningRunner:
         measured = int((duration_ms / 1000.0) * self.projection_backpressure_factor())
         return max(configured, min(self.projection_backpressure_max_seconds(), measured))
 
-    def projection_due(self, requests: Iterable[object], payload: Dict[str, object] = None) -> bool:
+    def projection_due(
+        self,
+        requests: Iterable[object],
+        payload: Dict[str, object] = None,
+        selected_symbols: Iterable[str] = None,
+    ) -> bool:
         return self.timestamp_due(
             self.last_successful_projection_at(payload),
-            self.effective_projection_min_interval_seconds(requests, payload),
+            self.effective_projection_min_interval_seconds(requests, payload, selected_symbols),
         )
 
     def projection_cooldown_remaining_seconds(
         self,
         requests: Iterable[object],
         payload: Dict[str, object] = None,
+        selected_symbols: Iterable[str] = None,
     ) -> int:
         return self.timestamp_remaining_seconds(
             self.last_successful_projection_at(payload),
-            self.effective_projection_min_interval_seconds(requests, payload),
+            self.effective_projection_min_interval_seconds(requests, payload, selected_symbols),
         )
 
     def event_symbol_due(self, event: object, symbol: str, cursor_payload: Dict[str, object] = None) -> bool:
@@ -1326,8 +1368,9 @@ class OntologyReasoningRunner:
                     "projectionRecovery": recovery,
                     "coalescedEventCount": len(work.get("coalescedEventIds") or []),
                 }
-        if not force and not self.projection_due(requests, cursor_payload):
-            retry_after_seconds = self.projection_cooldown_remaining_seconds(requests, cursor_payload)
+        fairness_drain = self.fairness_drain_state(symbols, cursor_payload)
+        if not force and not self.projection_due(requests, cursor_payload, symbols):
+            retry_after_seconds = self.projection_cooldown_remaining_seconds(requests, cursor_payload, symbols)
             return {
                 "status": "cooldown",
                 "processedCount": 0,
@@ -1338,8 +1381,9 @@ class OntologyReasoningRunner:
                 "nativeTypeDbTargetSymbolLimit": self.native_typedb_target_symbol_limit() if self.native_typedb_rule_execution_enabled() else None,
                 "omittedSymbolCount": omitted_symbol_count,
                 "retryAfterSeconds": retry_after_seconds,
-                "projectionCooldownSeconds": self.effective_projection_min_interval_seconds(requests, cursor_payload),
+                "projectionCooldownSeconds": self.effective_projection_min_interval_seconds(requests, cursor_payload, symbols),
                 "configuredProjectionCooldownSeconds": self.projection_min_interval_seconds(requests),
+                "fairnessDrain": fairness_drain,
                 "lastProjectionRuntime": self.last_projection_runtime(cursor_payload),
                 "coalescedEventCount": len(work.get("coalescedEventIds") or []),
             }
@@ -1679,6 +1723,7 @@ class OntologyReasoningRunner:
         _batches, next_symbols, omitted_count = self.request_symbol_batches(pending)
         pending_symbols = self.request_symbols(pending)
         fairness_queue = self.fairness_queue(pending_symbols, cursor_payload)
+        fairness_drain = self.fairness_drain_state(next_symbols, cursor_payload)
         return {
             "enabled": self.enabled(),
             "pendingCount": len(pending),
@@ -1695,6 +1740,10 @@ class OntologyReasoningRunner:
             "nextSymbols": next_symbols,
             "nextOmittedSymbolCount": omitted_count,
             "fairnessMaxWaitSeconds": self.fairness_max_wait_seconds(),
+            "fairnessDrainEnabled": self.fairness_drain_enabled(),
+            "fairnessDrainActive": bool(fairness_drain.get("active")),
+            "fairnessDrainSymbols": list(fairness_drain.get("symbols") or []),
+            "fairnessDrainReason": str(fairness_drain.get("reason") or ""),
             "unseenPendingSymbolCount": len([item for item in fairness_queue if item.get("state") == "unseen"]),
             "overduePendingSymbolCount": len([item for item in fairness_queue if item.get("state") == "overdue"]),
             "fairnessQueue": fairness_queue[:20],
@@ -1703,7 +1752,7 @@ class OntologyReasoningRunner:
             "ruleCandidateAiDue": self.rule_candidate_due(),
             "projectionBackpressureEnabled": self.projection_backpressure_enabled(),
             "configuredProjectionCooldownSeconds": self.projection_min_interval_seconds(pending),
-            "effectiveProjectionCooldownSeconds": self.effective_projection_min_interval_seconds(pending, cursor_payload),
+            "effectiveProjectionCooldownSeconds": self.effective_projection_min_interval_seconds(pending, cursor_payload, next_symbols),
             "lastProjectionRuntime": self.last_projection_runtime(cursor_payload),
             "ontologyMaintenance": self.maintenance_state(cursor_payload),
             "projectionCircuit": self.projection_circuit_state(),

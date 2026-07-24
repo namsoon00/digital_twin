@@ -53,6 +53,43 @@ class OntologyProjectionStabilityTests(unittest.TestCase):
 
         self.assertEqual(345, runner.effective_projection_min_interval_seconds([], cursor.load()))
 
+    def test_overdue_target_drains_without_waiting_for_global_projection_cooldown(self):
+        cursor = CursorStore({
+            "lastSuccessfulProjectionAt": "2026-07-21T23:59:00Z",
+            "lastReasonedAtBySymbol": {"MSFT": "2026-07-21T23:30:00Z"},
+        })
+        runner = self.runner(cursor)
+        runner.settings["ontologyReasoningFairnessMaxWaitSeconds"] = "900"
+        event = SimpleNamespace(
+            event_id="overdue-msft",
+            occurred_at="2026-07-21T23:59:00Z",
+            payload={"changedCount": 1, "trigger": "market-data-update", "symbols": ["MSFT"]},
+        )
+
+        drain = runner.fairness_drain_state(["MSFT"], cursor.load())
+
+        self.assertTrue(drain["active"])
+        self.assertEqual(["MSFT"], drain["symbols"])
+        self.assertEqual(0, runner.effective_projection_min_interval_seconds([event], cursor.load(), ["MSFT"]))
+        self.assertTrue(runner.projection_due([event], cursor.load(), ["MSFT"]))
+
+    def test_normal_target_keeps_global_projection_cooldown(self):
+        cursor = CursorStore({
+            "lastSuccessfulProjectionAt": "2026-07-21T23:59:00Z",
+            "lastReasonedAtBySymbol": {"MSFT": "2026-07-21T23:58:00Z"},
+        })
+        runner = self.runner(cursor)
+        runner.settings["ontologyReasoningFairnessMaxWaitSeconds"] = "900"
+        event = SimpleNamespace(
+            event_id="fresh-msft",
+            occurred_at="2026-07-21T23:59:00Z",
+            payload={"changedCount": 1, "trigger": "market-data-update", "symbols": ["MSFT"]},
+        )
+
+        self.assertFalse(runner.fairness_drain_state(["MSFT"], cursor.load())["active"])
+        self.assertEqual(180, runner.effective_projection_min_interval_seconds([event], cursor.load(), ["MSFT"]))
+        self.assertFalse(runner.projection_due([event], cursor.load(), ["MSFT"]))
+
     def test_idle_runner_executes_deferred_maintenance_outside_live_projection(self):
         calls = []
         runner = self.runner(maintenance_runner=lambda: calls.append("maintenance") or {"status": "ok"})

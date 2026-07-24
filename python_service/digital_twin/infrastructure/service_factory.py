@@ -505,6 +505,57 @@ def ontology_reasoning_priority_symbols(account_repository, settings=None) -> Di
     return roles
 
 
+def typedb_projection_recovery_health(ontology_repository, world_id: str) -> Dict[str, object]:
+    """Check durable TypeDB availability before retrying a failed projection.
+
+    The circuit guards the worker after an infrastructure failure. It must not
+    require the pending event's future InferenceBox generation to already
+    exist, because the normal projection path is responsible for producing it
+    once this health probe succeeds.
+    """
+    clean_world_id = str(world_id or "").strip()
+    active = ontology_repository.active_abox_metadata(world_id=clean_world_id)
+    active_status = str((active or {}).get("status") or "").strip().lower()
+    active_abox = str((active or {}).get("aboxSnapshotId") or "").strip()
+    marker_reader = getattr(ontology_repository, "inferencebox_recovery_metadata", None)
+    if callable(marker_reader):
+        try:
+            inference = marker_reader(world_id=clean_world_id)
+        except Exception as error:  # noqa: BLE001 - active ABox availability is the recovery gate.
+            inference = {
+                "status": "error",
+                "reason": "TypeDB active InferenceBox marker 조회 실패: " + str(error)[:180],
+            }
+    else:
+        inference = {
+            "status": "not-supported",
+            "reason": "현재 저장소는 경량 InferenceBox 복구 표식을 제공하지 않습니다.",
+        }
+    inference = dict(inference or {}) if isinstance(inference, dict) else {"status": "invalid"}
+    source_abox = str(inference.get("sourceAboxSnapshotId") or "").strip()
+    aligned = bool(source_abox and source_abox == active_abox)
+    ready = bool(active_status == "ok" and active_abox)
+    return {
+        "ready": ready,
+        "recoveryMode": "active-abox-health-probe",
+        "worldId": clean_world_id,
+        "activeAboxSnapshotId": active_abox,
+        "activeAboxStatus": active_status,
+        "inferenceStatus": str(inference.get("status") or ""),
+        "inferenceGenerationId": str(inference.get("inferenceGenerationId") or ""),
+        "sourceAboxSnapshotId": source_abox,
+        "inferenceGenerationAligned": aligned,
+        "inferenceTargetSymbols": list(inference.get("targetSymbols") or []),
+        "inferenceDiagnostic": str(inference.get("reason") or "")[:180],
+        "requiresFreshProjection": not aligned,
+        "reason": (
+            "현재 활성 ABox를 읽을 수 있어 보류된 이벤트의 새 TypeDB 추론을 다시 시도합니다."
+            if ready
+            else str((active or {}).get("reason") or "현재 활성 ABox를 검증하지 못했습니다.")[:180]
+        ),
+    }
+
+
 def build_ontology_reasoning_runner(settings=None, event_publisher=None) -> OntologyReasoningRunner:
     configured_settings = settings or runtime_settings()
     reasoning_store_settings = dict(configured_settings)
@@ -552,51 +603,19 @@ def build_ontology_reasoning_runner(settings=None, event_publisher=None) -> Onto
             account_id = str(getattr(account, "account_id", "") or "").strip()
             world_id = portfolio_world_id(account_id, tenant_id)
             try:
-                active = ontology_repository.active_abox_metadata(world_id=world_id)
-                inference = ontology_repository.inferencebox_snapshot(
-                    symbols=sorted(requested_symbols),
-                    limit=80,
-                    world_id=world_id,
-                )
+                health = typedb_projection_recovery_health(ontology_repository, world_id)
             except Exception as error:  # noqa: BLE001 - keep the circuit open until the normal retry can read TypeDB.
                 rows.append({"accountId": account_id, "worldId": world_id, "ready": False, "reason": str(error)[:180]})
                 continue
-            active_abox = str((active or {}).get("aboxSnapshotId") or "").strip()
-            source_abox = str((inference or {}).get("sourceAboxSnapshotId") or "").strip()
-            status = str((inference or {}).get("status") or "").strip().lower()
-            native_completed = bool(
-                (inference or {}).get("nativeTypeDbReasoningCompleted")
-                or (inference or {}).get("typedbNativeRuleEvaluationCompleted")
-            )
-            native_used = bool((inference or {}).get("nativeTypeDbReasoningUsed"))
-            actual_symbols = {
-                str(symbol or "").upper().strip()
-                for symbol in (inference or {}).get("targetSymbols") or []
-                if str(symbol or "").strip()
-            }
-            no_match = status == "empty" and native_completed
-            matched = status == "ok" and native_used
-            ready = bool(
-                active_abox
-                and source_abox == active_abox
-                and bool((inference or {}).get("generationAligned"))
-                and (matched or no_match)
-                and (not requested_symbols or requested_symbols.issubset(actual_symbols))
-            )
             rows.append({
                 "accountId": account_id,
-                "worldId": world_id,
-                "ready": ready,
-                "activeAboxSnapshotId": active_abox,
-                "sourceAboxSnapshotId": source_abox,
-                "inferenceStatus": status,
-                "nativeInferenceOutcome": str((inference or {}).get("nativeInferenceOutcome") or ""),
-                "targetSymbols": sorted(actual_symbols),
-                "reason": str((inference or {}).get("reason") or "")[:180],
+                "requestedSymbols": sorted(requested_symbols),
+                **health,
             })
         return {
             "ready": bool(rows) and all(bool(row.get("ready")) for row in rows),
             "status": "ready" if rows and all(bool(row.get("ready")) for row in rows) else "not-ready",
+            "recoveryMode": "active-abox-health-probe",
             "accounts": rows,
         }
 

@@ -1516,6 +1516,22 @@ class ScopedABoxManifestMixin:
             "materialFingerprint": "",
         }
 
+    def inferencebox_recovery_metadata(self, world_id: str = "") -> Dict[str, object]:
+        """Return the small durable marker used by operational recovery.
+
+        A projection-circuit health probe must not read every historical
+        InferenceBox row merely to decide whether a new projection may start.
+        The full snapshot remains the query contract for investment features;
+        this lightweight marker is only a diagnostic for retry scheduling.
+        """
+        return {
+            "configured": False,
+            "status": "disabled",
+            "graphStore": "typedb",
+            "worldId": str(world_id or ""),
+            "reason": "TypeDB ontology storage is not configured.",
+        }
+
     def list_ontology_worlds(self) -> List[Dict[str, object]]:
         return []
 
@@ -6875,6 +6891,86 @@ class TypeDBOntologyGraphRepository(GraphStoreOntologyRowMapperMixin, ScopedABox
             "graphStore": "typedb",
             "aboxSnapshotId": "",
             "materialFingerprint": "",
+        }
+
+    def active_inference_generation_marker_rows(
+        self,
+        world_id: str = "",
+        limit: int = 1,
+    ) -> List[Dict[str, object]]:
+        """Read the active InferenceBox marker without scanning its facts."""
+        query = (
+            "match $n isa ontology-node, "
+            "has ontology-id $id, "
+            "has ontology-label $label, "
+            "has ontology-kind \"inference-generation\", "
+            "has ontology-box \"InferenceBox\", "
+            + ("has ontology-world-id " + typedb_string(world_id) + ", " if str(world_id or "").strip() else "")
+            + "has ontology-snapshot-id $snapshotId, "
+            "has ontology-updated-at $updatedAt, "
+            "has ontology-json $json;"
+            + typeql_limit_clause(limit)
+        )
+        return self.entity_rows_from_typeql(
+            self.read_rows(
+                query,
+                ["id", "label", "kind", "snapshotId", "updatedAt", "json"],
+                label="typedb.inference-active-generation-marker",
+            ),
+            "InferenceBox",
+        )
+
+    def inferencebox_recovery_metadata(self, world_id: str = "") -> Dict[str, object]:
+        """Read only active InferenceBox generation provenance for recovery.
+
+        This intentionally does not expand entities, relations, traces, or
+        historical generations. A pending event is supposed to materialize a
+        new generation after recovery, so old target coverage cannot be a
+        precondition for reopening the projection circuit.
+        """
+        try:
+            markers = sorted(
+                self.active_inference_generation_marker_rows(world_id, limit=1),
+                key=lambda row: (str(row.get("updatedAt") or ""), str(row.get("id") or "")),
+                reverse=True,
+            )
+        except Exception as error:  # noqa: BLE001 - recovery diagnostics must not scan a full InferenceBox.
+            return {
+                "configured": True,
+                "status": "error",
+                "graphStore": "typedb",
+                "worldId": str(world_id or ""),
+                "reasonCode": typedb_error_code(error),
+                "reason": "TypeDB active InferenceBox marker 조회 실패: " + str(error)[:180],
+            }
+        if not markers:
+            return {
+                "configured": True,
+                "status": "missing",
+                "graphStore": "typedb",
+                "worldId": str(world_id or ""),
+                "reason": "현재 활성 InferenceBox 세대 표식이 없습니다. 다음 추론에서 새 세대를 만듭니다.",
+            }
+        marker = markers[0]
+        metadata = inference_rulebox_metadata([marker], [])
+        target_symbols = clean_symbols_from_payload(metadata.get("targetSymbols") or marker.get("targetSymbols") or [])
+        return {
+            "configured": True,
+            "status": "ok",
+            "graphStore": "typedb",
+            "worldId": str(marker.get("worldId") or world_id or ""),
+            "inferenceGenerationId": str(
+                marker.get("inferenceGenerationId")
+                or marker.get("snapshotId")
+                or marker.get("aboxSnapshotId")
+                or ""
+            ).strip(),
+            "sourceAboxSnapshotId": str(metadata.get("sourceAboxSnapshotId") or marker.get("sourceAboxSnapshotId") or "").strip(),
+            "targetSymbols": target_symbols,
+            "nativeTypeDbReasoningCompleted": typedb_bool(metadata.get("nativeInferenceEvaluationComplete")),
+            "nativeInferenceOutcome": str(metadata.get("nativeInferenceOutcome") or ""),
+            "reasoningMode": str(metadata.get("reasoningMode") or ""),
+            "querySource": "typedb-active-inference-generation-marker",
         }
 
     def list_ontology_worlds(self) -> List[Dict[str, object]]:

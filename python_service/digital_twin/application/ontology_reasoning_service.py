@@ -1662,7 +1662,7 @@ class OntologyReasoningRunner:
         requests: Iterable[object],
         symbols: Iterable[str],
     ) -> Dict[str, object]:
-        """Read only durable TypeDB state before reopening a failed queue."""
+        """Probe durable TypeDB health before retrying a failed queue."""
         if not callable(self.projection_recovery_probe):
             return {"ready": False, "status": "not-configured"}
         account_ids = []
@@ -1709,11 +1709,11 @@ class OntologyReasoningRunner:
             "recentFailures": [],
             "openUntil": "",
             "recoveredAt": now.astimezone(timezone.utc).isoformat().replace("+00:00", "Z"),
-            "recoveryReason": "A current ABox/InferenceBox generation was verified after an interrupted projection.",
+            "recoveryReason": "A current TypeDB ABox was read successfully; pending events will materialize a fresh InferenceBox generation.",
             "recoveredFailureCount": int(prior.get("consecutiveFailures") or 0),
             "recovery": {
                 key: recovery.get(key)
-                for key in ["status", "accountIds", "symbols", "accounts"]
+                for key in ["status", "recoveryMode", "accountIds", "symbols", "accounts"]
                 if key in recovery
             },
         }

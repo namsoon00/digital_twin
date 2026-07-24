@@ -4134,6 +4134,42 @@ class TypeDBOntologyRepositoryTests(unittest.TestCase):
         self.assertIn('has ontology-world-id "portfolio:local:default"', query)
         self.assertIn('has ontology-account-id "default"', query)
 
+    def test_inferencebox_recovery_metadata_reads_only_the_active_generation_marker(self):
+        class MarkerRepository(TypeDBOntologyGraphRepository):
+            def __init__(self):
+                super().__init__("127.0.0.1:1729")
+                self.queries = []
+
+            def read_rows(self, query, columns, **_kwargs):
+                self.queries.append(str(query))
+                return [{
+                    "id": "inference-generation:active",
+                    "label": "Active InferenceBox",
+                    "kind": "inference-generation",
+                    "snapshotId": "inference-generation:active",
+                    "updatedAt": "2026-07-24T00:00:00Z",
+                    "json": json.dumps({
+                        "inferenceGenerationId": "inference-generation:active",
+                        "sourceAboxSnapshotId": "abox-manifest:active",
+                        "targetSymbols": ["005930"],
+                        "nativeInferenceEvaluationComplete": True,
+                        "nativeInferenceOutcome": "no-match",
+                    }),
+                }]
+
+        repository = MarkerRepository()
+
+        metadata = repository.inferencebox_recovery_metadata("portfolio:local:default")
+
+        self.assertEqual("ok", metadata["status"])
+        self.assertEqual("inference-generation:active", metadata["inferenceGenerationId"])
+        self.assertEqual("abox-manifest:active", metadata["sourceAboxSnapshotId"])
+        self.assertEqual(["005930"], metadata["targetSymbols"])
+        self.assertTrue(metadata["nativeTypeDbReasoningCompleted"])
+        self.assertEqual(1, len(repository.queries))
+        self.assertIn('has ontology-kind "inference-generation"', repository.queries[0])
+        self.assertIn('has ontology-world-id "portfolio:local:default"', repository.queries[0])
+
     def test_inference_generation_records_keep_source_abox_provenance(self):
         class ProvenanceRepository(TypeDBOntologyGraphRepository):
             def read_rows(self, query, columns, **_kwargs):

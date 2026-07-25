@@ -67,10 +67,7 @@ from .portfolio_ontology_outputs import (
     dedupe_evidence,
     dedupe_relations,
 )
-from .portfolio_ontology_state import (
-    add_fact_change_concepts,
-    add_trend_transition_concepts,
-)
+from .portfolio_ontology_state import add_fact_change_concepts
 from .portfolio_ontology_structure import (
     add_instrument_identity_concepts,
     instrument_tbox_classes,
@@ -318,16 +315,6 @@ def build_portfolio_ontology(
         add_instrument_profile_concepts(graph, stock_id, portfolio_node_id, position, runtime_context)
         add_position_macro_context_concepts(graph, stock_id, position, portfolio, external_signals, runtime_context)
         add_fact_change_concepts(graph, stock_id, symbol, position, source, runtime_context)
-        add_trend_transition_concepts(
-            graph,
-            stock_id,
-            "",
-            symbol,
-            position,
-            source,
-            runtime_context,
-            observation_profiles,
-        )
         add_research_evidence_concepts(
             graph,
             stock_id,

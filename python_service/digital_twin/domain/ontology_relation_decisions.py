@@ -40,11 +40,8 @@ def decision_stage_from_relation(relation: Dict[str, object]) -> Optional[Decisi
     ).strip()
     tone = str(relation.get("decisionTone") or relation.get("decision_tone") or "").strip().lower()
     if tone not in {"hold", "watch", "caution", "danger"}:
-        tone = {
-            "urgent": "danger",
-            "action": "caution",
-            "review": "caution",
-            "watch": "watch",
-            "reference": "hold",
-        }[action_level]
+        # Tone is authored with the RuleBox derivation and materialized by
+        # TypeDB. A missing value is a schema/data migration issue, not a
+        # reason to rebuild a second action-level policy in Python.
+        return None
     return DecisionStageDefinition(stage_key, action_group, action_level, label, tone)

@@ -10,11 +10,12 @@ from .ontology_decision_state import (
     VALIDATION_STATE_LABELS,
     conflict_state_from_roles,
 )
+from .ontology_rulebox_contracts import WATCHLIST_ALLOWED_ACTIONS, WATCHLIST_TARGET_ROLE
 from .portfolio import Position
 from .symbol_universe import normalize_market
 
 
-ACTIVE_INVESTMENT_OPINION_VERSION = "active-investment-opinion-v1"
+ACTIVE_INVESTMENT_OPINION_VERSION = "active-investment-opinion-v2"
 
 ACTION_LABELS = {
     "BUY": "매수",
@@ -806,28 +807,31 @@ def research_evidence_from_external_signals(symbol: str, external_signals: Dict[
             evidence.append(parsed)
     quote = (external_signals.get("equityQuotes") or {}).get(normalized_symbol) if isinstance(external_signals.get("equityQuotes"), dict) else {}
     if isinstance(quote, dict) and quote:
+        # Keep the complete quote in the research context.  Whether its move
+        # is material or directional is evaluated from ABox facts by RuleBox,
+        # rather than hidden behind this former 2% Python threshold.
         change = number(quote.get("changePercent"))
-        if abs(change) >= 2.0:
-            polarity = "support" if change > 0 else "risk"
-            evidence.append(ResearchEvidence(
-                evidence_id="research:" + normalized_symbol + ":quote",
-                symbol=normalized_symbol,
-                kind="market-move",
-                source=str(quote.get("provider") or "market-data"),
-                title="가격 변동 " + signed_pct(change),
-                summary="현재가 " + str(quote.get("price") or "-") + ", 거래량 " + str(quote.get("volume") or "-"),
-                observed_at=str(quote.get("latestTradingDay") or ""),
-                polarity=polarity,
-                published_at=str(quote.get("latestTradingDay") or ""),
-                raw_payload={
-                    "relationScope": "direct",
-                    "eventType": "price_commentary",
-                    "sourceTrustState": "standard",
-                    "materialityState": "notable",
-                    "dataState": "partial",
-                    "validationState": "conditional",
-                },
-            ))
+        evidence.append(ResearchEvidence(
+            evidence_id="research:" + normalized_symbol + ":quote",
+            symbol=normalized_symbol,
+            kind="market-move",
+            source=str(quote.get("provider") or "market-data"),
+            title="시장 가격 관측 " + signed_pct(change),
+            summary="현재가 " + str(quote.get("price") or "-") + ", 거래량 " + str(quote.get("volume") or "-"),
+            observed_at=str(quote.get("latestTradingDay") or ""),
+            polarity="context",
+            published_at=str(quote.get("latestTradingDay") or ""),
+            raw_payload={
+                "relationScope": "direct",
+                "eventType": "price_observation",
+                "sourceTrustState": "standard",
+                "materialityState": "context",
+                "dataState": "partial",
+                "validationState": "conditional",
+                "priceChangeRate": change,
+                "marketQuote": dict(quote),
+            },
+        ))
     yfinance_group = external_signals.get("yfinanceData") if isinstance(external_signals.get("yfinanceData"), dict) else {}
     yfinance_data = yfinance_group.get(normalized_symbol) if isinstance(yfinance_group.get(normalized_symbol), dict) else {}
     if yfinance_data:
@@ -946,106 +950,89 @@ def evidence_roles(evidence: List[ResearchEvidence], relation_context: Dict[str,
     return roles or ["context"]
 
 
-def has_add_buy_candidate(relation_context: Dict[str, object]) -> bool:
+def _string_rows(value: object) -> List[str]:
+    if isinstance(value, (list, tuple, set)):
+        return [str(item).strip() for item in value if str(item or "").strip()]
+    if value in (None, ""):
+        return []
+    return [str(value).strip()]
+
+
+def candidate_action_from_relation_context(position: Position, relation_context: Dict[str, object]) -> str:
+    """Read the RuleBox-authored candidate action without re-evaluating facts.
+
+    ``candidateAction`` is materialized with the TypeDB InferenceBox relation.
+    Python only checks that the value belongs to the UI contract and obeys an
+    explicit target action policy; it never derives an action from stages,
+    scores, prices, or conflicting signals.
+    """
+    relation_context = relation_context or {}
     decision = relation_context.get("decision") if isinstance(relation_context.get("decision"), dict) else {}
-    if str(decision.get("actionGroup") or "") == "addBuy" or str(decision.get("decisionStage") or "") == "ADD_BUY_REVIEW":
-        return True
-    for item in relation_rule_items(relation_context):
-        if not isinstance(item, dict):
-            continue
-        rule_id = str(item.get("ruleId") or item.get("rule_id") or "")
-        relation_type = str(item.get("relationType") or item.get("relation_type") or "").upper()
-        tbox_class = str(item.get("tboxClass") or item.get("tbox_class") or "")
-        tbox_classes = [
-            str(value or "")
-            for value in (
-                item.get("tboxClasses")
-                or item.get("tbox_classes")
-                or item.get("classes")
-                or []
-            )
-        ]
-        if relation_type == "ALLOWS_ACTION" or tbox_class == "AddBuyEligibility" or "AddBuyEligibility" in tbox_classes or "add_buy" in rule_id or "add-buy" in rule_id:
-            return True
-    return False
+    execution_plan = relation_context.get("executionPlan") if isinstance(relation_context.get("executionPlan"), dict) else {}
+    action = str(
+        execution_plan.get("candidateAction")
+        or decision.get("candidateAction")
+        or ""
+    ).strip().upper()
+    if action not in ACTION_LABELS:
+        return "HOLD"
+    target_role = str(
+        execution_plan.get("targetRole")
+        or decision.get("targetRole")
+        or ""
+    ).strip()
+    allowed_actions = _string_rows(execution_plan.get("allowedActions") or decision.get("allowedActions"))
+    if target_role == WATCHLIST_TARGET_ROLE or str(position.source or "").strip().lower() == "watchlist":
+        allowed_actions = allowed_actions or list(WATCHLIST_ALLOWED_ACTIONS)
+    if allowed_actions and action not in set(allowed_actions):
+        return "HOLD"
+    return action
+
+
+def has_add_buy_candidate(relation_context: Dict[str, object]) -> bool:
+    """Compatibility helper backed only by persisted RuleBox metadata."""
+    decision = relation_context.get("decision") if isinstance(relation_context, dict) and isinstance(relation_context.get("decision"), dict) else {}
+    plan = relation_context.get("executionPlan") if isinstance(relation_context, dict) and isinstance(relation_context.get("executionPlan"), dict) else {}
+    return str(plan.get("candidateAction") or decision.get("candidateAction") or "").strip().upper() == "ADD"
 
 
 def choose_action(position: Position, relation_context: Dict[str, object], conflict_state: str = "context-only") -> str:
+    """Compatibility entry point for the TypeDB-authored candidate action."""
+    del conflict_state
+    return candidate_action_from_relation_context(position, relation_context)
+
+
+def thesis_from_inference(position: Position, relation_context: Dict[str, object], labels: List[str]) -> str:
     decision = relation_context.get("decision") if isinstance(relation_context.get("decision"), dict) else {}
-    action_group = str(decision.get("actionGroup") or "")
-    action_level = str(decision.get("actionLevel") or "")
-    decision_stage = str(decision.get("decisionStage") or "")
-    decision_state = relation_context.get("decisionState") if isinstance(relation_context.get("decisionState"), dict) else {}
-    data_state = str(decision_state.get("dataState") or decision.get("dataState") or relation_context.get("dataState") or "partial")
-    is_watchlist = str(position.source or "") == "watchlist"
-    if data_state in {"unavailable", "insufficient"}:
-        return "AVOID" if is_watchlist else "HOLD"
-    if is_watchlist:
-        if action_group in {"entryRisk", "entryWait", "lossControl", "dataQuality", "rateRegime", "fxRegime", "macroRegime"}:
-            return "AVOID"
-        if action_group == "entry" and decision_stage in {"ENTRY_READY", "ENTRY_SPLIT_BUY"} and conflict_state == "support-only":
-            return "BUY"
-        return "AVOID"
-    if action_group == "addBuy" or decision_stage == "ADD_BUY_REVIEW" or has_add_buy_candidate(relation_context):
-        execution_plan = relation_context.get("executionPlan") if isinstance(relation_context.get("executionPlan"), dict) else {}
-        add_buy_assessment = execution_plan.get("addBuyAssessment") if isinstance(execution_plan.get("addBuyAssessment"), dict) else {}
-        blocked_reasons = list(add_buy_assessment.get("blockedReasons") or [])
-        if not blocked_reasons and conflict_state == "support-only" and data_state == "sufficient":
-            return "ADD"
-        return "HOLD"
-    if decision_stage == "LOSS_CUT":
-        return "SELL"
-    if action_group == "lossControl" or decision_stage in {"BREAKDOWN_ACCELERATION", "SUPPORT_RETEST_FAILED"}:
-        return "SELL" if action_level == "urgent" and conflict_state == "risk-only" else "TRIM"
-    if action_group in {"profitTake", "rebalance"}:
-        return "TRIM"
-    if action_group in {"eventRisk", "disclosure"}:
-        return "HOLD"
-    if action_group in {"executionRisk", "dataQuality", "factorRisk", "rateRegime", "fxRegime", "macroRegime"}:
-        return "HOLD"
-    if action_level == "urgent" and conflict_state == "risk-only":
-        return "TRIM"
-    if action_group == "entryRisk" or conflict_state in {"risk-only", "mixed"}:
-        return "HOLD"
-    return "HOLD"
-
-
-def thesis_for_action(action: str, position: Position, labels: List[str]) -> str:
-    rule_text = " · ".join(labels[:3]) if labels else "가격·수급·외부 리서치"
+    execution_plan = relation_context.get("executionPlan") if isinstance(relation_context.get("executionPlan"), dict) else {}
     name = str(position.name or position.symbol or "대상")
-    if action == "BUY":
-        return name + "는 " + rule_text + " 근거가 진입 쪽으로 우세해 매수 의견입니다."
-    if action == "ADD":
-        return name + "는 지지 근거가 리스크보다 커 추가매수 의견입니다."
-    if action == "TRIM":
-        return name + "는 " + rule_text + " 기준에서 리스크 관리가 우선이라 분할매도 의견입니다."
-    if action == "SELL":
-        return name + "는 손실 방어 조건이 성립했고 즉시 확인 단계라 매도 의견입니다."
-    if action == "AVOID":
-        return name + "는 진입 전 확인할 리스크가 커 매수보류 의견입니다."
-    return name + "는 바로 사고팔기보다 보유 이유와 반대 신호를 한 번 더 확인하는 단계입니다."
+    relation_label = str(
+        execution_plan.get("primaryActionLabel")
+        or decision.get("primaryActionLabel")
+        or decision.get("label")
+        or (labels[0] if labels else "관계 추론 결과")
+    ).strip()
+    rule_text = " · ".join(labels[:2])
+    result = name + "에서 TypeDB RuleBox가 '" + relation_label + "' 관계를 생성했습니다."
+    if rule_text:
+        result += " 근거 관계: " + rule_text + "."
+    return result
 
 
-def invalidation_for_action(action: str) -> str:
-    if action in {"BUY", "ADD"}:
-        return "가격·수급 지지 신호가 꺾이거나 부정 뉴스/공시가 추가되면 매수 의견을 무효화합니다."
-    if action in {"TRIM", "SELL"}:
-        return "20일선 회복, 거래량 동반 반등, 부정 공시 해소가 확인되면 매도 강도를 낮춥니다."
-    if action == "AVOID":
-        return "뉴스·공시 반대 근거가 해소되고 진입 관계 규칙이 재성립하면 재검토합니다."
-    return "새 뉴스·공시가 들어오거나 확인 단계가 바뀌면 보유 의견을 재검토합니다."
+def inference_invalidation(relation_context: Dict[str, object]) -> str:
+    execution_plan = relation_context.get("executionPlan") if isinstance(relation_context.get("executionPlan"), dict) else {}
+    weaken = _string_rows(execution_plan.get("weakenConditions"))
+    if weaken:
+        return " / ".join(weaken[:2])
+    return "다음 TypeDB 추론 세대에서 현재 관계가 더 이상 성립하지 않거나 반대 관계가 새로 성립하면 다시 검토합니다."
 
 
-def next_check_for_action(action: str, evidence: List[ResearchEvidence]) -> str:
-    if any(item.kind == "disclosure" for item in evidence):
-        return "공시 원문, 접수번호, 장중 거래량 반응을 먼저 확인하세요."
-    if any(item.kind == "news" for item in evidence):
-        return "뉴스 출처와 후속 보도, 가격·수급 동조 여부를 확인하세요."
-    if action in {"TRIM", "SELL"}:
-        return "매도 가능 수량, 손실 기준, 다음 조회에서도 같은 위험 조건이 유지되는지 확인하세요."
-    if action in {"BUY", "ADD"}:
-        return "진입 가격, 손절 기준, 20일선·거래량 확인 조건을 함께 정하세요."
-    return "다음 데이터 업데이트에서 같은 관계 규칙과 반대 근거를 다시 확인하세요."
+def inference_next_check(relation_context: Dict[str, object]) -> str:
+    execution_plan = relation_context.get("executionPlan") if isinstance(relation_context.get("executionPlan"), dict) else {}
+    next_checks = _string_rows(execution_plan.get("nextChecks"))
+    if next_checks:
+        return " / ".join(next_checks[:2])
+    return "다음 데이터 업데이트에서 같은 TypeDB 관계와 반대 근거가 유지되는지 확인합니다."
 
 
 def missing_data_rows(relation_context: Dict[str, object]) -> List[Dict[str, object]]:
@@ -1061,8 +1048,7 @@ def build_active_investment_opinion(
     external_signals: Dict[str, object] = None,
 ) -> ActiveInvestmentOpinion:
     relation_context = relation_context or {}
-    ontology_opinion = ontology_opinion or {}
-    legacy_model = legacy_model or {}
+    del ontology_opinion, legacy_model
     external_signals = external_signals or {}
     symbol = str(position.symbol or "").upper()
     facts = relation_context.get("facts") if isinstance(relation_context.get("facts"), dict) else {}
@@ -1073,29 +1059,36 @@ def build_active_investment_opinion(
     execution_plan = relation_context.get("executionPlan") if isinstance(relation_context.get("executionPlan"), dict) else {}
     roles = evidence_roles(evidence, relation_context)
     conflict_state = str((relation_context.get("decisionState") or {}).get("conflictState") or conflict_state_from_roles(roles))
-    action = choose_action(position, relation_context, conflict_state)
+    action = candidate_action_from_relation_context(position, relation_context)
     support_evidence = [item for item in evidence if item.polarity == "support"]
     risk_evidence = [item for item in evidence if item.polarity in {"risk", "contradiction"}]
     context_evidence = [item for item in evidence if item.polarity == "context"]
-    primary = support_evidence if action in {"BUY", "ADD"} else risk_evidence if action in {"TRIM", "SELL", "AVOID"} else context_evidence + support_evidence
-    counter = risk_evidence if action in {"BUY", "ADD", "HOLD"} else support_evidence
     decision = relation_context.get("decision") if isinstance(relation_context.get("decision"), dict) else {}
+    evidence_role = str(decision.get("evidenceRole") or "context").strip().lower()
+    if evidence_role in {"risk", "blocking"}:
+        primary = risk_evidence + context_evidence
+        counter = support_evidence
+    elif evidence_role == "support":
+        primary = support_evidence + context_evidence
+        counter = risk_evidence
+    elif evidence_role == "counter":
+        primary = context_evidence + support_evidence
+        counter = risk_evidence
+    else:
+        primary = context_evidence + support_evidence + risk_evidence
+        counter = support_evidence + risk_evidence
     decision_state = relation_context.get("decisionState") if isinstance(relation_context.get("decisionState"), dict) else {}
     review_level = str(decision_state.get("reviewLevel") or decision.get("reviewLevel") or "check")
     data_state = str(decision_state.get("dataState") or decision.get("dataState") or "partial")
     graph_backed = bool(relation_context.get("graphStoreUsed") or relation_context.get("inferenceGenerationId"))
     validation_state = "blocked" if not graph_backed or data_state in {"unavailable", "insufficient"} else "conditional" if data_state == "partial" or conflict_state == "mixed" else "ready"
     labels = active_rule_labels(relation_context)
-    invalidation = invalidation_for_action(action)
-    if execution_plan.get("weakenConditions"):
-        invalidation = " / ".join(str(item) for item in list(execution_plan.get("weakenConditions") or [])[:2])
-    next_check = next_check_for_action(action, evidence)
-    if execution_plan.get("nextChecks"):
-        next_check = " / ".join(str(item) for item in list(execution_plan.get("nextChecks") or [])[:2])
+    invalidation = inference_invalidation(relation_context)
+    next_check = inference_next_check(relation_context)
     return ActiveInvestmentOpinion(
         symbol=symbol,
         action=action,
-        thesis=thesis_for_action(action, position, labels),
+        thesis=thesis_from_inference(position, relation_context, labels),
         review_level=review_level,
         data_state=data_state,
         validation_state=validation_state,

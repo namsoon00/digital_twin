@@ -26,7 +26,14 @@ def investor_flow_values_reliable(position: Position) -> bool:
     return True
 
 
-def investor_flow_psychology(position: Position) -> Dict[str, object]:
+def investor_flow_observation(position: Position) -> Dict[str, object]:
+    """Return raw investor-flow facts without assigning investment meaning.
+
+    Whether joint buying or selling supports, blocks, or changes an action is
+    authored by a TypeDB RuleBox rule.  Keeping this helper observational
+    prevents a future caller from accidentally recreating a Python-side
+    sentiment or risk classifier.
+    """
     if not investor_flow_values_reliable(position):
         return {
             "available": False,
@@ -37,6 +44,18 @@ def investor_flow_psychology(position: Position) -> Dict[str, object]:
             "reviewLevel": "blocked",
             "dataState": "unavailable",
             "sentimentLabel": "투자자별 수급 신뢰도 낮음",
+            "tboxClass": "InvestorFlowObservation",
+            "tboxClasses": ["Observation", "FlowObservation", "InvestorFlowObservation"],
+            "foreignNetVolume": 0.0,
+            "institutionNetVolume": 0.0,
+            "individualNetVolume": 0.0,
+            "foreignNetAmount": 0.0,
+            "institutionNetAmount": 0.0,
+            "individualNetAmount": 0.0,
+            "smartMoneyNetVolume": 0.0,
+            "investorFlowBase": 0.0,
+            "jointSmartMoneyInflow": False,
+            "jointSmartMoneyOutflow": False,
         }
 
     foreign_volume = investor_net_volume(position.foreign_net_volume, position.foreign_buy_volume, position.foreign_sell_volume)
@@ -49,81 +68,18 @@ def investor_flow_psychology(position: Position) -> Dict[str, object]:
     smart_money = foreign + institution
     joint_inflow = foreign > 0 and institution > 0
     joint_outflow = foreign < 0 and institution < 0
-    price_change = number(position.change_rate)
-    pnl = number(position.profit_loss_rate)
-    ma20_distance = number(position.ma20_distance)
-    ma60_distance = number(position.ma60_distance)
-    price_weak = price_change <= -1.0 or pnl < 0 or ma20_distance < 0 or ma60_distance < 0
-    price_strong = price_change >= 1.0 and ma20_distance >= 0 and ma60_distance >= 0
-
-    field = "mixedInvestorPsychology"
-    polarity = "context"
-    sentiment = "투자자별 수급 혼조"
-    tbox_class = "InvestorFlowSentiment"
-    tbox_classes = ["Observation", "FlowObservation", "InvestorFlowSentiment"]
-    review_level = "observe"
-    evidence_role = "context"
-
-    if joint_inflow and individual < 0:
-        field = "smartMoneyDipAbsorption" if price_weak else "smartMoneyAccumulation"
-        polarity = "support"
-        sentiment = "외국인·기관이 사고 개인이 파는 큰 자금 매집"
-        tbox_class = "SmartMoneyAccumulation"
-        tbox_classes.extend(["SmartMoneyFlow", "SmartMoneyAccumulation"])
-        review_level = "check"
-        evidence_role = "support"
-    elif joint_inflow:
-        field = "broadInflowConfirmation"
-        polarity = "support"
-        sentiment = "외국인·기관 동반 순매수"
-        tbox_class = "SmartMoneyJointInflow"
-        tbox_classes.extend(["SmartMoneyFlow", "SmartMoneyJointInflow"])
-        review_level = "check"
-        evidence_role = "support"
-    elif joint_outflow and individual > 0:
-        field = "retailDipBuyingRisk"
-        polarity = "risk"
-        sentiment = "외국인·기관 매도 물량을 개인이 받아내는 흐름"
-        tbox_class = "RetailDipBuyingRisk"
-        tbox_classes.extend(["SmartMoneyFlow", "RetailFlowPsychology", "AveragingDownRisk"])
-        review_level = "act" if price_weak else "check"
-        evidence_role = "risk"
-    elif joint_outflow:
-        field = "broadOutflowRisk"
-        polarity = "risk"
-        sentiment = "외국인·기관 동반 순매도"
-        tbox_class = "SmartMoneyJointOutflow"
-        tbox_classes.extend(["SmartMoneyFlow", "SmartMoneyJointOutflow"])
-        review_level = "act" if price_weak else "check"
-        evidence_role = "risk"
-    elif smart_money > 0:
-        field = "partialSmartMoneySupport"
-        polarity = "support"
-        sentiment = "외국인·기관 합산 순매수"
-        tbox_class = "PartialSmartMoneySupport"
-        tbox_classes.extend(["SmartMoneyFlow", "PartialSmartMoneySupport"])
-        review_level = "observe"
-        evidence_role = "support"
-    elif smart_money < 0:
-        field = "partialSmartMoneyRisk"
-        polarity = "risk"
-        sentiment = "외국인·기관 합산 순매도"
-        tbox_class = "PartialSmartMoneyRisk"
-        tbox_classes.extend(["SmartMoneyFlow", "PartialSmartMoneyRisk"])
-        review_level = "observe"
-        evidence_role = "risk"
 
     return {
         "available": bool(base),
-        "field": field,
-        "value": field,
-        "polarity": polarity,
-        "evidenceRole": evidence_role,
-        "reviewLevel": review_level,
+        "field": "investorFlow",
+        "value": "raw",
+        "polarity": "context",
+        "evidenceRole": "context",
+        "reviewLevel": "observe",
         "dataState": "sufficient" if base else "insufficient",
-        "sentimentLabel": sentiment,
-        "tboxClass": tbox_class,
-        "tboxClasses": tbox_classes,
+        "sentimentLabel": "투자자별 원시 수급 관측",
+        "tboxClass": "InvestorFlowObservation",
+        "tboxClasses": ["Observation", "FlowObservation", "InvestorFlowObservation"],
         "foreignNetVolume": round(foreign_volume, 2),
         "institutionNetVolume": round(institution_volume, 2),
         "individualNetVolume": round(individual_volume, 2),
@@ -134,6 +90,14 @@ def investor_flow_psychology(position: Position) -> Dict[str, object]:
         "investorFlowBase": round(base, 2),
         "jointSmartMoneyInflow": joint_inflow,
         "jointSmartMoneyOutflow": joint_outflow,
-        "smartMoneyDirection": "joint_inflow" if joint_inflow else "joint_outflow" if joint_outflow else "mixed",
-        "priceContext": "weakness" if price_weak else "strength" if price_strong else "neutral",
     }
+
+
+def investor_flow_psychology(position: Position) -> Dict[str, object]:
+    """Compatibility name for the raw observation projection.
+
+    The former implementation classified market psychology in Python.  The
+    name remains temporarily for callers outside this repository, while the
+    returned payload is deliberately non-directional.
+    """
+    return investor_flow_observation(position)

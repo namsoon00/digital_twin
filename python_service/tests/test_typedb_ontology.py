@@ -1561,7 +1561,7 @@ class TypeDBOntologyRepositoryTests(unittest.TestCase):
                 patch.object(repository, "close_driver"), \
                 patch.object(repository, "active_abox_rule_context", return_value={
                     "status": "ok",
-                    "relationTypesBySymbol": {"005930": ["HAS_RISK_BUDGET", "BREAKS_LEVEL"]},
+                    "relationTypesBySymbol": {"005930": ["HAS_RISK_BUDGET", "HAS_TECHNICAL_INDICATOR"]},
                     "sourceIdsBySymbol": {"005930": ["stock:005930"]},
                 }), \
                 patch.object(repository, "load_graph_for_native_matches") as preflight_graph_load:
@@ -1592,11 +1592,11 @@ class TypeDBOntologyRepositoryTests(unittest.TestCase):
         graph = PortfolioOntology("planner-topology")
         graph.entities.extend([
             OntologyEntity("stock:005930", "Samsung", "stock", {"symbol": "005930"}),
-            OntologyEntity("level:005930", "Level", "key-level", {}),
+            OntologyEntity("level:005930", "Level", "key-level", {"levelType": "ma20", "value": -8}),
             OntologyEntity("risk:main", "Risk", "risk-budget", {}),
         ])
         graph.relations.extend([
-            OntologyRelation("stock:005930", "level:005930", "BREAKS_LEVEL"),
+            OntologyRelation("stock:005930", "level:005930", "HAS_TECHNICAL_INDICATOR"),
             OntologyRelation("stock:005930", "risk:main", "HAS_RISK_BUDGET"),
         ])
         topology = native_rule_planner_topology(graph)
@@ -1801,7 +1801,7 @@ class TypeDBOntologyRepositoryTests(unittest.TestCase):
         graph.relations.append(OntologyRelation(
             "stock:005930",
             "level:005930",
-            "BREAKS_LEVEL",
+            "HAS_TECHNICAL_INDICATOR",
             properties={"ontologyBox": "ABox", "symbol": "005930", "snapshotId": "abox-scope:stock"},
         ))
         topology = native_rule_planner_topology(graph)
@@ -1823,7 +1823,7 @@ class TypeDBOntologyRepositoryTests(unittest.TestCase):
         self.assertEqual(1, len(execution_index["index"]["relationStorageIdsBySymbol"]["005930"]))
         self.assertEqual(
             1,
-            len(execution_index["index"]["relationStorageIdsBySymbolAndType"]["005930"]["BREAKS_LEVEL"]),
+            len(execution_index["index"]["relationStorageIdsBySymbolAndType"]["005930"]["HAS_TECHNICAL_INDICATOR"]),
         )
 
         invalid = dict(index)
@@ -1847,7 +1847,7 @@ class TypeDBOntologyRepositoryTests(unittest.TestCase):
         )
         repository.read_abox_relation_rows_by_storage_ids(
             ["ontology-storage:relation-a"],
-            ["BREAKS_LEVEL"],
+            ["HAS_TECHNICAL_INDICATOR"],
             world_id="portfolio:local:default",
         )
 
@@ -1872,7 +1872,7 @@ class TypeDBOntologyRepositoryTests(unittest.TestCase):
         graph.relations.append(OntologyRelation(
             "stock:005930",
             "level:005930",
-            "BREAKS_LEVEL",
+            "HAS_TECHNICAL_INDICATOR",
             properties={"ontologyBox": "ABox", "symbol": "005930"},
         ))
         topology = native_rule_planner_topology(graph)
@@ -1893,7 +1893,7 @@ class TypeDBOntologyRepositoryTests(unittest.TestCase):
 
         self.assertEqual("ok", result["status"])
         self.assertEqual("active-manifest-evidence-index", result["source"])
-        self.assertEqual(["BREAKS_LEVEL"], result["relationTypesBySymbol"]["005930"])
+        self.assertEqual(["HAS_TECHNICAL_INDICATOR"], result["relationTypesBySymbol"]["005930"])
         self.assertEqual(["stock:005930"], result["sourceIdsBySymbol"]["005930"])
 
     def test_native_match_graph_uses_verified_storage_index_instead_of_active_scope_readers(self):
@@ -1962,7 +1962,7 @@ class TypeDBOntologyRepositoryTests(unittest.TestCase):
                 ]},
                 "relationStorageIdsBySymbolAndType": {"005930": {
                     "HAS_RISK_BUDGET": ["ontology-storage:risk-budget"],
-                    "BREAKS_LEVEL": ["ontology-storage:breaks-level"],
+                    "HAS_TECHNICAL_INDICATOR": ["ontology-storage:breaks-level"],
                     "HAS_PRICE": ["ontology-storage:unrelated"],
                 }},
             },
@@ -2161,8 +2161,8 @@ class TypeDBOntologyRepositoryTests(unittest.TestCase):
             {
                 "000660": [
                     "HAS_RISK_BUDGET",
-                    "HAS_TREND_TRANSITION",
-                    "BREAKS_LEVEL",
+                    "HAS_TEMPORAL_WINDOW",
+                    "HAS_TECHNICAL_INDICATOR",
                 ],
             },
             query_limit=1,
@@ -2341,14 +2341,18 @@ class TypeDBOntologyRepositoryTests(unittest.TestCase):
                 "ontologyBox": "ABox",
                 "symbol": "005930",
             }),
-            OntologyEntity("level:005930", "20일 평균", "key-level", {"ontologyBox": "ABox"}),
+            OntologyEntity("level:005930", "20일 평균", "key-level", {
+                "ontologyBox": "ABox",
+                "levelType": "ma20",
+                "value": 1,
+            }),
             OntologyEntity("missing:005930", "호가 결측", "missing-data", {
                 "ontologyBox": "ABox",
                 "dataScope": "market-microstructure",
             }),
         ])
         graph.relations.extend([
-            OntologyRelation("stock:005930", "level:005930", "RECLAIMS_LEVEL", properties={"ontologyBox": "ABox"}),
+            OntologyRelation("stock:005930", "level:005930", "HAS_TECHNICAL_INDICATOR", properties={"ontologyBox": "ABox"}),
             OntologyRelation("stock:005930", "missing:005930", "HAS_DATA_QUALITY", properties={
                 "ontologyBox": "ABox",
                 "evidenceRole": "risk",
@@ -2358,7 +2362,7 @@ class TypeDBOntologyRepositoryTests(unittest.TestCase):
         plan = typedb_native_rule_execution_plan(
             [rule],
             ["005930"],
-            {"005930": ["RECLAIMS_LEVEL", "HAS_DATA_QUALITY"]},
+            {"005930": ["HAS_TECHNICAL_INDICATOR", "HAS_DATA_QUALITY"]},
             preflight_graph=graph,
         )
 
@@ -2484,7 +2488,7 @@ class TypeDBOntologyRepositoryTests(unittest.TestCase):
                 patch.object(repository, "close_driver"), \
                 patch.object(repository, "active_abox_rule_context", return_value={
                     "status": "ok",
-                    "relationTypesBySymbol": {"005930": ["HAS_RISK_BUDGET", "BREAKS_LEVEL"]},
+                    "relationTypesBySymbol": {"005930": ["HAS_RISK_BUDGET", "HAS_TECHNICAL_INDICATOR"]},
                 }):
             result = repository.match_typedb_native_rules([rule], target_symbols=["005930"])
 
@@ -2512,7 +2516,7 @@ class TypeDBOntologyRepositoryTests(unittest.TestCase):
                 patch.object(repository, "close_driver"), \
                 patch.object(repository, "active_abox_rule_context", return_value={
                     "status": "ok",
-                    "relationTypesBySymbol": {"005930": ["HAS_RISK_BUDGET", "BREAKS_LEVEL"]},
+                    "relationTypesBySymbol": {"005930": ["HAS_RISK_BUDGET", "HAS_TECHNICAL_INDICATOR"]},
                 }), \
                 patch("digital_twin.infrastructure.typedb_ontology.typedb_native_rule_profile", return_value={"status": "partial"}):
             result = repository.match_typedb_native_rules([rule], target_symbols=["005930"])
@@ -3751,6 +3755,30 @@ class TypeDBOntologyRepositoryTests(unittest.TestCase):
         self.assertTrue(migration["changed"])
         self.assertEqual(["shadow.market_psychology.state.v1"], migration["removedRuleIds"])
         self.assertEqual("LOSS_REDUCE", migration["rules"][0]["derivations"][0]["decision_stage"])
+
+    def test_typedb_rule_catalog_migration_adds_platform_native_rules_without_overwriting_edits(self):
+        bootstrap = rulebox_rules_to_payload(default_graph_inference_rules())
+        stored = [dict(bootstrap[0])]
+        stored[0]["label"] = "운영자가 편집한 손실 규칙"
+        stored[0]["enabled"] = False
+
+        migration = migrate_typedb_rule_catalog(stored, bootstrap)
+        migrated_by_id = {item["rule_id"]: item for item in migration["rules"]}
+
+        self.assertTrue(migration["changed"])
+        self.assertEqual("운영자가 편집한 손실 규칙", migrated_by_id[stored[0]["rule_id"]]["label"])
+        self.assertFalse(migrated_by_id[stored[0]["rule_id"]]["enabled"])
+        self.assertEqual(
+            {
+                "graph.macro.regime.risk.v1",
+                "graph.fx.usdkrw.exposure.regime.v1",
+                "graph.crypto.exposure.volatility_risk.v1",
+                "graph.earnings.surprise.risk.v1",
+                "graph.earnings.surprise.support.v1",
+                "graph.regulatory.event.risk.v1",
+            },
+            set(migration["addedRuleIds"]),
+        )
 
     def test_typedb_insert_queries_project_same_ontology_graph_shape(self):
         graph = PortfolioOntology("portfolio:test")
@@ -6557,8 +6585,8 @@ class TypeDBOntologyRepositoryTests(unittest.TestCase):
 
         self.assertIn("ontology-price-change-rate", query)
         self.assertIn("ontology-time-adjusted-volume-ratio", query)
-        self.assertIn("HAS_INVESTOR_FLOW_SENTIMENT", query)
-        self.assertNotIn('has ontology-relation-type "RECLAIMS_LEVEL"', query)
+        self.assertIn("ontology-smart-money-net-volume", query)
+        self.assertNotIn('has ontology-relation-type "HAS_TECHNICAL_INDICATOR"', query)
 
     def test_typedb_function_definition_binds_active_manifest_without_legacy_branches(self):
         rule = next(item for item in default_graph_inference_rules() if item.rule_id == "graph.loss_guard.breakdown.v1")

@@ -181,14 +181,8 @@ def evidence_role_from_relation(relation: Dict[str, object]) -> str:
     polarity = str(relation.get("polarity") or "").strip().lower()
     if polarity in {"risk", "support", "counter", "context", "blocking"}:
         return polarity
-    group = str(relation.get("actionGroup") or "").strip()
-    if group in {
-        "lossControl", "entryRisk", "eventRisk", "distributionRisk",
-        "factorRisk", "executionRisk", "dataQuality", "temporalRisk",
-    }:
-        return "risk"
-    if group in {"recovery", "eventConfirmation", "flowTrend", "entry", "addBuy"}:
-        return "support"
+    # A missing polarity is an incomplete RuleBox payload, not a reason to
+    # recreate a hidden Python action-group policy. Keep it non-directional.
     return "context"
 
 

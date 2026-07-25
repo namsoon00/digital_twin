@@ -200,7 +200,7 @@ def external_signal_classes(group: str) -> List[str]:
     text = str(group or "").lower()
     classes = ["Observation", "ExternalObservation", "ExternalSignal", "Signal"]
     if "dart" in text or "disclosure" in text or "filing" in text:
-        classes.extend(["DisclosureEvent", "DisclosureSignal", "EventRisk"])
+        classes.extend(["DisclosureEvent", "DisclosureSignal"])
     if "overview" in text or "fundamental" in text:
         classes.extend(["FundamentalObservation", "ValuationSignal"])
     if "yfinance" in text:
@@ -210,19 +210,19 @@ def external_signal_classes(group: str) -> List[str]:
     if "analyst" in text:
         classes.extend(["AnalystRevision", "ValuationSignal"])
     if "news" in text or "headline" in text:
-        classes.extend(["NewsEvent", "EventRisk"])
+        classes.extend(["NewsEvent"])
     if "macro" in text or "rate" in text or "yield" in text:
-        classes.extend(["MacroIndicator", "MacroSignal", "RateSignal", "RegimeRisk"])
+        classes.extend(["MacroIndicator", "MacroSignal", "RateSignal"])
     if "fx" in text or "currency" in text or "exchange" in text:
-        classes.extend(["FXRateSignal", "CurrencyRisk", "MacroSignal"])
+        classes.extend(["FXRateSignal", "MacroSignal"])
     if "credit" in text or "spread" in text:
-        classes.extend(["CreditSpreadSignal", "MacroSignal", "RegimeRisk"])
+        classes.extend(["CreditSpreadSignal", "MacroSignal"])
     if "crypto" in text or "coin" in text or "btc" in text:
         classes.extend(["CryptoMarketSignal", "CryptoSignal"])
     if "earning" in text or "result" in text:
         classes.extend(["EarningsEvent", "ValuationSignal"])
     if "regulat" in text or "policy" in text:
-        classes.extend(["RegulatoryEvent", "EventRisk"])
+        classes.extend(["RegulatoryEvent"])
     return unique_list(classes)
 
 
@@ -294,7 +294,7 @@ def rate_series_classes(series_id: str) -> List[str]:
     normalized = str(series_id or "").upper().strip()
     classes = ["Observation", "ExternalObservation", "ExternalSignal", "MacroIndicator", "MacroSignal"]
     if rate_series_kind(normalized) == "interest-rate":
-        classes.extend(["RateSignal", "InterestRate", "RegimeRisk"])
+        classes.extend(["RateSignal", "InterestRate"])
     else:
         classes.append("MacroPrint")
     return unique_list(classes)
@@ -398,82 +398,6 @@ def crypto_sensitive_position(position: Position) -> bool:
     )
 
 
-def macro_series_value(macro: Dict[str, object], series_id: str) -> float:
-    series = macro.get("series") if isinstance(macro.get("series"), dict) else {}
-    item = series.get(series_id) if isinstance(series.get(series_id), dict) else {}
-    return number(item.get("value"))
-
-
-def macro_delta_bp(macro: Dict[str, object], key: str) -> float:
-    candidates = [
-        key + "DeltaBp",
-        key[0].lower() + key[1:] + "DeltaBp" if key else "",
-    ]
-    for candidate in candidates:
-        if candidate and macro.get(candidate) not in (None, ""):
-            return number(macro.get(candidate))
-    return 0.0
-
-
-def macro_regime_profile(macro: Dict[str, object]) -> Dict[str, object]:
-    if not isinstance(macro, dict):
-        return {}
-    dgs10 = macro_series_value(macro, "DGS10")
-    dgs2 = macro_series_value(macro, "DGS2")
-    dff = macro_series_value(macro, "DFF")
-    spread = number(macro.get("yieldSpread10y2y")) if macro.get("yieldSpread10y2y") not in (None, "") else dgs10 - dgs2
-    if not any([dgs10, dgs2, dff, spread]):
-        return {}
-    dgs10_delta = macro_delta_bp(macro, "dgs10")
-    spread_delta = macro_delta_bp(macro, "yieldSpread10y2y")
-    high_rate = bool(dgs10 and dgs10 >= 4.5)
-    inverted_curve = bool(spread < 0)
-    rate_shock = bool(max(abs(dgs10_delta), abs(spread_delta)) >= 15)
-    if high_rate and inverted_curve:
-        regime = "high-rate-inverted-curve"
-        label = "고금리·역전 수익률곡선"
-        polarity = "risk"
-        review_level = "act"
-    elif high_rate:
-        regime = "high-rate"
-        label = "고금리 레짐"
-        polarity = "risk"
-        review_level = "check"
-    elif inverted_curve:
-        regime = "inverted-curve"
-        label = "역전 수익률곡선"
-        polarity = "risk"
-        review_level = "check"
-    elif rate_shock:
-        regime = "rate-shock"
-        label = "금리 변화 확대"
-        polarity = "risk"
-        review_level = "check"
-    else:
-        regime = "rate-context"
-        label = "금리 맥락"
-        polarity = "context"
-        review_level = "normal"
-    return {
-        "regime": regime,
-        "label": label,
-        "polarity": polarity,
-        "evidenceRole": polarity,
-        "reviewLevel": review_level,
-        "dataState": "sufficient",
-        "changeState": "new-condition" if polarity == "risk" else "unchanged",
-        "dgs10": round(dgs10, 4),
-        "dgs2": round(dgs2, 4),
-        "dff": round(dff, 4),
-        "yieldSpread10y2y": round(spread, 4),
-        "dgs10DeltaBp": round(dgs10_delta, 2),
-        "yieldSpreadDeltaBp": round(spread_delta, 2),
-        "highRate": high_rate,
-        "invertedCurve": inverted_curve,
-        "rateShock": rate_shock,
-    }
-
-
 def add_external_signal_concepts(
     graph: PortfolioOntology,
     portfolio_node_id: str,
@@ -522,25 +446,6 @@ def add_portfolio_macro_and_cross_asset_concepts(
 ) -> None:
     macro = external_signals.get("macro") if isinstance(external_signals.get("macro"), dict) else {}
     series = macro.get("series") if isinstance(macro.get("series"), dict) else {}
-    regime = macro_regime_profile(macro)
-    if regime:
-        regime_id = add_entity(graph, "macro-regime", "rates", str(regime.get("label") or "거시 레짐"), {
-            "tboxClass": "MacroRegime",
-            "tboxClasses": ["Observation", "ExternalObservation", "ExternalSignal", "MacroIndicator", "MacroRegime", "MacroSignal", "RegimeRisk"],
-            "source": "macro",
-            **regime,
-        })
-        regime_props = external_evidence_properties(
-            source="macro",
-            label=str(regime.get("label") or "거시 레짐"),
-            role=str(regime.get("evidenceRole") or regime.get("polarity") or "context"),
-            review_level=str(regime.get("reviewLevel") or "normal"),
-            data_state=str(regime.get("dataState") or "sufficient"),
-            change_state=str(regime.get("changeState") or "unchanged"),
-            dataScope="macro",
-        )
-        add_relation(graph, portfolio_node_id, regime_id, "HAS_MACRO_REGIME", weight=0.78, properties=regime_props)
-        add_relation(graph, regime_id, portfolio_node_id, "AFFECTS", weight=0.70, properties=regime_props)
     for series_id, item in sorted(series.items()):
         if not isinstance(item, dict):
             continue
@@ -552,15 +457,14 @@ def add_portfolio_macro_and_cross_asset_concepts(
             "provider": str(item.get("provider") or "FRED"),
             "date": str(item.get("date") or ""),
             "value": round(value, 4),
+            "deltaBp": round(number(item.get("deltaBp")), 2),
             **external_observation_profile(external_signals, item, "macro", 4320),
         })
-        is_high_rate = str(series_id).upper() in {"DGS10", "DGS2", "DFF"} and value >= 4.5
         props = external_evidence_properties(
             source="macro",
             label=rate_series_label(str(series_id)),
-            role="risk" if is_high_rate else "context",
-            review_level="check" if is_high_rate else "normal",
-            change_state="new-condition" if is_high_rate else "unchanged",
+            dataScope="macro",
+            seriesId=str(series_id),
         )
         add_relation(graph, portfolio_node_id, macro_id, "HAS_EXTERNAL_SIGNAL", weight=1.0, properties=props)
         if rate_series_kind(str(series_id)) == "interest-rate":
@@ -570,15 +474,15 @@ def add_portfolio_macro_and_cross_asset_concepts(
         spread = number(macro.get("yieldSpread10y2y"))
         spread_id = add_entity(graph, "yield-curve", "yieldSpread10y2y", "10Y-2Y 금리 스프레드", {
             "tboxClass": "YieldCurve",
-            "tboxClasses": ["Observation", "ExternalObservation", "ExternalSignal", "MacroIndicator", "RateSignal", "YieldCurve", "CreditSpreadSignal", "RegimeRisk"],
+            "tboxClasses": ["Observation", "ExternalObservation", "ExternalSignal", "MacroIndicator", "RateSignal", "YieldCurve", "CreditSpreadSignal"],
             "value": round(spread, 4),
+            "deltaBp": round(number(macro.get("yieldSpread10y2yDeltaBp")), 2),
+            **external_observation_profile(external_signals, macro, "macro", 4320),
         })
         props = external_evidence_properties(
             source="macro",
-            label="금리 스프레드 레짐",
-            role="risk" if spread < 0 else "context",
-            review_level="check" if spread < 0 else "normal",
-            change_state="new-condition" if spread < 0 else "unchanged",
+            label="10Y-2Y 금리 스프레드",
+            dataScope="macro",
         )
         add_relation(graph, portfolio_node_id, spread_id, "HAS_EXTERNAL_SIGNAL", weight=1.0, properties=props)
         add_relation(graph, portfolio_node_id, spread_id, "HAS_RATE_SENSITIVITY", weight=0.74, properties=props)
@@ -595,27 +499,27 @@ def add_portfolio_macro_and_cross_asset_concepts(
         })
         rate_id = add_entity(graph, "fx-rate", pair, pair_label + " 환율", {
             "tboxClass": "FXRateSignal",
-            "tboxClasses": ["Observation", "ExternalObservation", "ExternalSignal", "FXRateSignal", "MacroSignal", "CurrencyRisk"],
+            "tboxClasses": ["Observation", "ExternalObservation", "ExternalSignal", "FXRateSignal", "MacroSignal"],
             "pair": pair,
             "baseCurrency": base,
             "quoteCurrency": quote,
             "rate": round(rate, 6),
+            "value": round(rate, 6),
+            "deltaPct": round(number(item.get("deltaPct")), 4),
             "provider": str(item.get("provider") or ""),
             "fetchedAt": str(item.get("fetchedAt") or ""),
             "sourceType": str(item.get("sourceType") or ""),
             "evidenceStrength": str(item.get("evidenceStrength") or ""),
             "marketRate": round(number(item.get("marketRate")), 6) if number(item.get("marketRate")) else 0.0,
             "valuationRate": round(number(item.get("valuationRate")), 6) if number(item.get("valuationRate")) else 0.0,
+            **external_observation_profile(external_signals, item, "fx", 4320),
         })
-        unusual_fx = base == "USD" and quote == "KRW" and (rate >= 1450 or (rate and rate <= 1300))
         props = external_evidence_properties(
             source="fxRates",
             label=pair_label + " 환율",
-            role="risk" if unusual_fx else "context",
-            review_level="check" if unusual_fx else "normal",
-            change_state="new-condition" if unusual_fx else "unchanged",
             sourceType=str(item.get("sourceType") or ""),
             evidenceStrength=str(item.get("evidenceStrength") or ""),
+            dataScope="fx",
         )
         add_relation(graph, pair_id, rate_id, "HAS_OBSERVATION", weight=1.0, properties=props)
         add_relation(graph, portfolio_node_id, rate_id, "HAS_EXTERNAL_SIGNAL", weight=1.0, properties=props)
@@ -650,13 +554,9 @@ def add_portfolio_macro_and_cross_asset_concepts(
             "marketCap": round(number(item.get("marketCap")), 2),
             "lastUpdated": str(item.get("lastUpdated") or ""),
         })
-        magnitude = max(abs(change24h), abs(change7d))
         props = external_evidence_properties(
             source="cryptoMarkets",
             label=name + " 변동성",
-            role="risk" if magnitude >= 4 else "context",
-            review_level="check" if magnitude >= 4 else "observe",
-            change_state="new-condition" if magnitude >= 4 else "unchanged",
             symbol=symbol,
             dataScope="crypto",
         )
@@ -679,7 +579,6 @@ def add_portfolio_macro_and_cross_asset_concepts(
             "change1h": round(number(item.get("change1h")), 2),
             "change24h": round(change24h, 2),
             "change7d": round(change7d, 2),
-            "pathState": crypto_path_state(change24h, change7d),
             "provider": str(item.get("provider") or "CoinGecko"),
         })
         volume_id = add_entity(graph, "volume-profile", symbol + ":crypto", name + " 거래량 프로파일", {
@@ -694,12 +593,11 @@ def add_portfolio_macro_and_cross_asset_concepts(
         })
         liquidity_id = add_entity(graph, "liquidity-profile", symbol + ":crypto", name + " 크립토 유동성", {
             "tboxClass": "LiquidityProfile",
-            "tboxClasses": ["Risk", "LiquidityRisk", "LiquidityProfile"],
+            "tboxClasses": ["Observation", "LiquidityProfile"],
             "symbol": symbol,
             "coinId": str(coin_id),
             "volume24h": round(volume24h, 2),
             "marketCap": round(number(item.get("marketCap")), 2),
-            "liquidityState": "deep" if volume24h >= 1000000000 else ("available" if volume24h > 0 else "unavailable"),
             "provider": str(item.get("provider") or "CoinGecko"),
         })
         quality_id = add_entity(graph, "data-quality", symbol + ":crypto", name + " 크립토 데이터 품질", {
@@ -718,24 +616,11 @@ def add_portfolio_macro_and_cross_asset_concepts(
         add_relation(graph, asset_id, crypto_id, "HAS_EXTERNAL_SIGNAL", weight=1.0, properties=props)
         add_relation(graph, asset_id, price_id, "HAS_PRICE", weight=1.0, properties=props)
         add_relation(graph, asset_id, path_id, "HAS_PRICE_PATH", weight=1.0, properties=props)
-        add_relation(graph, asset_id, volume_id, "HAS_TRADE_FLOW", weight=1.0, properties={**props, "polarity": "context"})
-        add_relation(graph, asset_id, liquidity_id, "HAS_LIQUIDITY_PROFILE", weight=0.72, properties={**props, "polarity": "context"})
-        add_relation(graph, asset_id, quality_id, "HAS_DATA_QUALITY", weight=1.0, properties={**props, "polarity": "context", "evidenceRole": "context"})
+        add_relation(graph, asset_id, volume_id, "HAS_TRADE_FLOW", weight=1.0, properties=props)
+        add_relation(graph, asset_id, liquidity_id, "HAS_LIQUIDITY_PROFILE", weight=0.72, properties=props)
+        add_relation(graph, asset_id, quality_id, "HAS_DATA_QUALITY", weight=1.0, properties=props)
         add_relation(graph, crypto_id, portfolio_node_id, "AFFECTS", weight=1.0, properties=props)
         add_relation(graph, path_id, crypto_id, "CONFIRMS_SIGNAL", weight=0.76, properties=props)
-
-
-def crypto_path_state(change24h: float, change7d: float) -> str:
-    if change24h <= -4 and change7d <= -8:
-        return "selloff-continues"
-    if change24h >= 4 and change7d >= 8:
-        return "rally-continues"
-    if change24h >= 3 and change7d < 0:
-        return "rebound-after-weakness"
-    if change24h <= -3 and change7d > 0:
-        return "pullback-after-strength"
-    return "mixed"
-
 
 def add_external_signal_quality_concepts(graph: PortfolioOntology, portfolio_node_id: str, external_signals: Dict[str, object]) -> None:
     quality = external_signals.get("quality") if isinstance(external_signals.get("quality"), dict) else {}
@@ -821,22 +706,6 @@ def add_position_macro_context_concepts(
     if not rate_sensitive_position(position):
         add_position_crypto_exposure_concepts(graph, stock_id, position, external_signals, holding_weight_pct)
         return
-    macro = external_signals.get("macro") if isinstance(external_signals, dict) and isinstance(external_signals.get("macro"), dict) else {}
-    regime = macro_regime_profile(macro)
-    if regime:
-        regime_id = entity_id("macro-regime", "rates")
-        props = external_evidence_properties(
-            source="macro",
-            label=str(regime.get("label") or "거시 레짐") + " 민감도",
-            role=str(regime.get("evidenceRole") or regime.get("polarity") or "context"),
-            review_level=str(regime.get("reviewLevel") or "normal"),
-            data_state=str(regime.get("dataState") or "sufficient"),
-            change_state=str(regime.get("changeState") or "unchanged"),
-            dataScope="macro",
-            positionWeightPct=holding_weight_pct,
-        )
-        add_relation(graph, stock_id, regime_id, "HAS_MACRO_REGIME", weight=1.0, properties=props)
-        add_relation(graph, regime_id, stock_id, "AFFECTS", weight=1.0, properties=props)
     for series_id, rate_id in sorted(interest_rate_signal_ids(external_signals).items()):
         is_curve = series_id == "YIELDSPREAD10Y2Y"
         props = external_evidence_properties(
@@ -872,24 +741,19 @@ def add_position_crypto_exposure_concepts(
             continue
         change24h = number(item.get("change24h"))
         change7d = number(item.get("change7d"))
-        magnitude = max(abs(change24h), abs(change7d))
         exposure_id = add_entity(graph, "crypto-exposure", symbol + ":" + coin_symbol, (position.name or symbol) + " " + coin_symbol + " 노출", {
             "tboxClass": "CryptoExposure",
-            "tboxClasses": ["Risk", "VolatilityRisk", "CryptoExposure"],
+            "tboxClasses": ["Observation", "CryptoExposure"],
             "symbol": symbol,
             "cryptoSymbol": coin_symbol,
             "coinId": str(coin_id),
             "change24h": round(change24h, 2),
             "change7d": round(change7d, 2),
-            "pathState": crypto_path_state(change24h, change7d),
             "exposureBasis": "business-model-or-sector",
         })
         props = external_evidence_properties(
             source="cryptoMarkets",
             label=coin_symbol + " 가격 경로 노출",
-            role="risk" if magnitude >= 4 else "context",
-            review_level="check" if magnitude >= 4 else "observe",
-            change_state="new-condition" if magnitude >= 4 else "unchanged",
             symbol=symbol,
             cryptoSymbol=coin_symbol,
             dataScope="crypto",
@@ -1000,7 +864,7 @@ def add_symbol_fundamental_event_concepts(graph: PortfolioOntology, stock_id: st
     add_relation(graph, stock_id, event_id, "HAS_VALUATION", weight=0.7, properties={"source": group, "polarity": "context", "aiInfluenceLabel": label})
     filing_id = add_entity(graph, "disclosure-filing", symbol + ":" + group, label, {
         "tboxClass": "DisclosureFiling",
-        "tboxClasses": ["Observation", "ExternalObservation", "ExternalSignal", "DisclosureEvent", "DisclosureFiling", "EventRisk"],
+        "tboxClasses": ["Observation", "ExternalObservation", "ExternalSignal", "DisclosureEvent", "DisclosureFiling"],
         "symbol": symbol,
         "group": group,
         "provider": str(value.get("provider") or ""),
@@ -1046,7 +910,7 @@ def add_symbol_corporate_action_concept(
     latest = value.get("latestFiling") if isinstance(value.get("latestFiling"), dict) else {}
     action_id = add_entity(graph, "corporate-action", symbol + ":" + group + ":" + action_type, label, {
         "tboxClass": "CorporateAction",
-        "tboxClasses": ["Observation", "ExternalObservation", "ExternalSignal", "CorporateAction", "EventRisk"],
+        "tboxClasses": ["Observation", "ExternalObservation", "ExternalSignal", "CorporateAction"],
         "symbol": symbol,
         "group": group,
         "actionType": action_type,
@@ -1077,7 +941,7 @@ def add_symbol_regulatory_event_concept(
     latest = value.get("latestFiling") if isinstance(value.get("latestFiling"), dict) else {}
     regulatory_id = add_entity(graph, "regulatory-event", symbol + ":" + group + ":" + event_type, label, {
         "tboxClass": "RegulatoryEvent",
-        "tboxClasses": ["Observation", "ExternalObservation", "ExternalSignal", "RegulatoryEvent", "EventRisk"],
+        "tboxClasses": ["Observation", "ExternalObservation", "ExternalSignal", "RegulatoryEvent"],
         "symbol": symbol,
         "group": group,
         "eventType": event_type,
@@ -1089,9 +953,6 @@ def add_symbol_regulatory_event_concept(
     props = external_evidence_properties(
         source=group,
         label="규제 이벤트: " + label,
-        role="risk",
-        review_level="act",
-        change_state="new-evidence",
         eventType=event_type,
     )
     add_relation(graph, stock_id, regulatory_id, "HAS_OBSERVATION", weight=1.0, properties=props)
@@ -1253,15 +1114,9 @@ def add_symbol_earnings_report_concepts(graph: PortfolioOntology, stock_id: str,
         "surprise": number(latest.get("surprise")),
         "surprisePercentage": number(latest.get("surprisePercentage")),
     })
-    surprise_pct = number(latest.get("surprisePercentage"))
-    meaningful_surprise = abs(surprise_pct) >= 5
-    role = "support" if meaningful_surprise and surprise_pct > 0 else ("risk" if meaningful_surprise else "context")
     props = external_evidence_properties(
         source=group,
         label=label,
-        role=role,
-        review_level="check" if meaningful_surprise else "normal",
-        change_state="new-evidence" if meaningful_surprise else "unchanged",
     )
     add_relation(graph, stock_id, earnings_id, "HAS_OBSERVATION", weight=1.0, properties=props)
     add_relation(graph, stock_id, earnings_id, "HAS_EXTERNAL_SIGNAL", weight=1.0, properties=props)

@@ -72,7 +72,8 @@ class OntologyInferenceQualityTests(unittest.TestCase):
         level = OntologyEntity("key-level:005930:ma20", "20일선", "key-level", {
             "ontologyBox": "ABox",
             "levelType": "ma20",
-            "value": 300000,
+            "value": -10.0,
+            "price": 300000,
             "observedAt": "2026-07-20T00:00:00Z",
             "freshnessStatus": "fresh",
             "source": "Toss",
@@ -80,7 +81,8 @@ class OntologyInferenceQualityTests(unittest.TestCase):
         wrong_level = OntologyEntity("key-level:005930:ma5", "5일선", "key-level", {
             "ontologyBox": "ABox",
             "levelType": "ma5",
-            "value": 320000,
+            "value": -12.0,
+            "price": 320000,
             "observedAt": "2026-07-20T00:00:00Z",
             "freshnessStatus": "fresh",
             "source": "Toss",
@@ -88,8 +90,8 @@ class OntologyInferenceQualityTests(unittest.TestCase):
         graph.entities.extend([stock, risk_budget, level, wrong_level])
         graph.relations.extend([
             OntologyRelation("stock:005930", "risk-budget:main", "HAS_RISK_BUDGET", 1.0, properties={"_relationId": "relation:risk-budget"}),
-            OntologyRelation("stock:005930", "key-level:005930:ma20", "BREAKS_LEVEL", 0.8, properties={"_relationId": "relation:ma20"}),
-            OntologyRelation("stock:005930", "key-level:005930:ma5", "BREAKS_LEVEL", 0.99, properties={"_relationId": "relation:wrong-ma5"}),
+            OntologyRelation("stock:005930", "key-level:005930:ma20", "HAS_TECHNICAL_INDICATOR", 0.8, properties={"_relationId": "relation:ma20"}),
+            OntologyRelation("stock:005930", "key-level:005930:ma5", "HAS_TECHNICAL_INDICATOR", 0.99, properties={"_relationId": "relation:wrong-ma5"}),
         ])
 
         materialize_rule_inference(graph, rule, stock, {
@@ -113,7 +115,7 @@ class OntologyInferenceQualityTests(unittest.TestCase):
         self.assertTrue(trace.properties["evidenceUsableForJudgement"])
         self.assertEqual("loss-guard-breakdown", trace.properties["hypothesisFamilyKey"])
         self.assertEqual(
-            {"levelType": ["ma20", "ma60"]},
+            {"levelType": ["ma20", "ma60"], "maxValue": -5.0},
             trace.properties["ruleConditionShapes"][3]["targetPropertyFilters"],
         )
         primary_relation = next(item for item in graph.relations if item.relation_type == "HAS_INFERRED_RISK")

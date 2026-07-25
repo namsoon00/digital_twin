@@ -70,6 +70,51 @@ from .graph_store_rulebox import rulebox_rules_to_payload
 
 DEPRECATED_TYPEDB_RULE_IDS = {"shadow.market_psychology.state.v1"}
 
+# These rules previously consumed Python-classified ABox relations such as
+# ``BREAKS_LEVEL`` or ``HAS_INVESTOR_FLOW_SENTIMENT``.  Their v2 definitions
+# consume raw measurements and must replace the v1 persisted shape once.
+RULEBOX_RAW_ABOX_V2_RULE_IDS = {
+    "graph.loss_guard.breakdown.v1",
+    "graph.loss_smart_money.defense.v1",
+    "graph.investor_flow.smart_money_accumulation.v1",
+    "graph.investor_flow.retail_dip_buying_risk.v1",
+    "graph.investor_flow.smart_money_outflow_risk.v1",
+    "graph.loss_smart_money.add_buy_review.v1",
+    "graph.averaging_down.risk_guard.v1",
+    "graph.profit_protect.trend_break.v1",
+    "graph.winner_momentum.add_buy_review.v1",
+    "graph.watchlist.pullback.entry.v1",
+    "graph.price.recovery.confirmed_by_flow.v1",
+    "graph.price.rebound.failure.v1",
+    "graph.flow.recovery_confirmed_by_smart_money.v1",
+    "graph.flow.price_up_smart_money_outflow.divergence.v1",
+    "graph.news.price_reaction.risk_confirmed.v1",
+    "graph.materiality.alert_candidate.v1",
+    "graph.holding.trend_transition.risk.v1",
+    "graph.watchlist.trend_transition.support.v1",
+    "graph.market_proxy.observation.risk_context.v1",
+    "graph.market_proxy.observation.support_context.v1",
+    "graph.portfolio.concentration.review.v1",
+    "graph.price.reclaim.thesis_support.v1",
+    "graph.macro.regime.risk.v1",
+    "graph.crypto.exposure.volatility_risk.v1",
+}
+
+# These native-rule templates were added after RuleBox had already become the
+# persisted source of truth.  A controlled release migration appends only
+# these missing platform rules; it never replaces an existing edited rule or
+# re-enables a disabled one.  Platform rules should be disabled rather than
+# deleted when an operator wants to suppress them, so their governance history
+# remains intact.
+RULEBOX_PLATFORM_RELEASE_ADDITION_IDS = {
+    "graph.macro.regime.risk.v1",
+    "graph.fx.usdkrw.exposure.regime.v1",
+    "graph.crypto.exposure.volatility_risk.v1",
+    "graph.earnings.surprise.risk.v1",
+    "graph.earnings.surprise.support.v1",
+    "graph.regulatory.event.risk.v1",
+}
+
 # These edges preserve the factual shape needed to inspect and extend native
 # TypeDB reasoning even when the active catalog currently reads aggregate
 # window properties only.
@@ -450,42 +495,110 @@ def rulebox_rules_missing_decision_stage(rules: List[Dict[str, object]]) -> List
     return sorted(set(item for item in missing if item))
 
 
+RULEBOX_DERIVATION_GUIDANCE_FIELDS = (
+    "decision_label",
+    "decision_tone",
+    "primary_action",
+    "primary_action_label",
+    "candidate_action",
+    "candidate_action_label",
+    "blocked_action_labels",
+    "strengthen_conditions",
+    "weaken_conditions",
+    "next_checks",
+    "notification_category",
+    "notification_severity",
+)
+
+
 def migrate_typedb_rule_catalog(
     stored_rules: List[Dict[str, object]],
     bootstrap_rules: List[Dict[str, object]],
 ) -> Dict[str, object]:
-    """Remove retired rules and add explicit policy only to known bootstrap rules."""
+    """Migrate the persisted TypeDB RuleBox without reviving Python logic.
+
+    Existing administrator edits remain authoritative.  Bootstrap data fills
+    only missing derivation metadata or replaces a known incompatible ABox
+    input shape.  The explicit platform-release allowlist is the narrow
+    exception: it appends native rules introduced by this release so existing
+    stores receive the new TypeDB reasoning path without a manual reseed.
+    """
     defaults_by_id = {rule_id_from_payload(item): item for item in bootstrap_rules or [] if isinstance(item, dict)}
     migrated = []
     removed = []
     updated = []
+    added = []
+    runtime_shape_updated = []
+    stored_rule_ids = set()
     for raw_rule in stored_rules or []:
         if not isinstance(raw_rule, dict):
             continue
         rule_id = rule_id_from_payload(raw_rule)
+        if rule_id:
+            stored_rule_ids.add(rule_id)
         if rule_id in DEPRECATED_TYPEDB_RULE_IDS:
             removed.append(rule_id)
             continue
         rule = deepcopy(raw_rule)
         default_rule = defaults_by_id.get(rule_id) or {}
+        default_version = str(default_rule.get("version") or "").strip()
+        stored_version = str(rule.get("version") or "").strip()
+        if (
+            rule_id in RULEBOX_RAW_ABOX_V2_RULE_IDS
+            and default_version == "v2"
+            and stored_version != default_version
+        ):
+            # The input predicates changed from semantic Python ABox edges to
+            # raw facts. Preserve only the administrative enable/disable flag;
+            # keeping old conditions would make native TypeDB inference read
+            # relations that the new ABox deliberately no longer creates.
+            replacement = deepcopy(default_rule)
+            if "enabled" in rule:
+                replacement["enabled"] = bool(rule.get("enabled"))
+            migrated.append(replacement)
+            updated.append(rule_id)
+            runtime_shape_updated.append(rule_id)
+            continue
         default_derivations = default_rule.get("derivations") or []
         changed = False
         for index, derivation in enumerate(rule.get("derivations") or []):
-            if not isinstance(derivation, dict) or derivation.get("decision_stage") or derivation.get("decisionStage"):
+            if not isinstance(derivation, dict):
                 continue
             default_derivation = default_derivations[index] if index < len(default_derivations) else {}
             stage = str((default_derivation or {}).get("decision_stage") or (default_derivation or {}).get("decisionStage") or "").strip()
-            if stage:
+            if stage and not (derivation.get("decision_stage") or derivation.get("decisionStage")):
                 derivation["decision_stage"] = stage
                 changed = True
+            for field in RULEBOX_DERIVATION_GUIDANCE_FIELDS:
+                camel_field = "".join(
+                    [part if position == 0 else part.capitalize() for position, part in enumerate(field.split("_"))]
+                )
+                if derivation.get(field) not in (None, "", []) or derivation.get(camel_field) not in (None, "", []):
+                    continue
+                default_value = (default_derivation or {}).get(field)
+                if default_value in (None, "", []):
+                    default_value = (default_derivation or {}).get(camel_field)
+                if default_value not in (None, "", []):
+                    derivation[field] = deepcopy(default_value)
+                    changed = True
         if changed:
             updated.append(rule_id)
         migrated.append(rule)
+    for rule_id in sorted(RULEBOX_PLATFORM_RELEASE_ADDITION_IDS):
+        if rule_id in stored_rule_ids:
+            continue
+        default_rule = defaults_by_id.get(rule_id)
+        if not default_rule:
+            continue
+        migrated.append(deepcopy(default_rule))
+        added.append(rule_id)
     return {
-        "changed": bool(removed or updated),
+        "changed": bool(removed or updated or added),
         "rules": migrated,
         "removedRuleIds": sorted(set(removed)),
+        "addedRuleIds": sorted(set(added)),
         "decisionPolicyUpdatedRuleIds": sorted(set(updated)),
+        "rawAboxRuntimeUpdatedRuleIds": sorted(set(runtime_shape_updated)),
     }
 
 
@@ -1317,7 +1430,7 @@ class PortfolioOntologyProjectionRecorder:
         try:
             result = self.repository.save_rulebox({
                 "rules": migration.get("rules") or [],
-                "changeReason": "TypeDB 단일 추론 경로 전환: 폐기 규칙 제거 및 판단 단계 명시",
+                "changeReason": "TypeDB 단일 추론 경로 전환: 원시 ABox 조건·RuleBox 실행 지침으로 마이그레이션",
             })
         except Exception as error:  # noqa: BLE001 - failed migration must stop new inference generations.
             return {**migration, "status": "error", "required": True, "saved": False, "reason": str(error)[:180]}

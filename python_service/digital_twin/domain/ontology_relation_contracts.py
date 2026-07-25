@@ -55,6 +55,20 @@ class OntologyRuleMatch:
     action_level: str = ""
     decision_label: str = ""
     decision_tone: str = ""
+    target_role: str = ""
+    action_policy: str = ""
+    allowed_actions: List[str] = field(default_factory=list)
+    blocked_actions: List[str] = field(default_factory=list)
+    primary_action: str = ""
+    primary_action_label: str = ""
+    candidate_action: str = ""
+    candidate_action_label: str = ""
+    blocked_action_labels: List[str] = field(default_factory=list)
+    strengthen_conditions: List[str] = field(default_factory=list)
+    weaken_conditions: List[str] = field(default_factory=list)
+    next_checks: List[str] = field(default_factory=list)
+    notification_category: str = ""
+    notification_severity: str = ""
 
     def to_dict(self) -> Dict[str, object]:
         payload = asdict(self)
@@ -68,6 +82,20 @@ class OntologyRuleMatch:
         payload["actionLevel"] = payload.pop("action_level")
         payload["decisionLabel"] = payload.pop("decision_label")
         payload["decisionTone"] = payload.pop("decision_tone")
+        payload["targetRole"] = payload.pop("target_role")
+        payload["actionPolicy"] = payload.pop("action_policy")
+        payload["allowedActions"] = payload.pop("allowed_actions")
+        payload["blockedActions"] = payload.pop("blocked_actions")
+        payload["primaryAction"] = payload.pop("primary_action")
+        payload["primaryActionLabel"] = payload.pop("primary_action_label")
+        payload["candidateAction"] = payload.pop("candidate_action")
+        payload["candidateActionLabel"] = payload.pop("candidate_action_label")
+        payload["blockedActionLabels"] = payload.pop("blocked_action_labels")
+        payload["strengthenConditions"] = payload.pop("strengthen_conditions")
+        payload["weakenConditions"] = payload.pop("weaken_conditions")
+        payload["nextChecks"] = payload.pop("next_checks")
+        payload["notificationCategory"] = payload.pop("notification_category")
+        payload["notificationSeverity"] = payload.pop("notification_severity")
         return payload
 
 

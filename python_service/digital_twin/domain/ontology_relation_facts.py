@@ -4,9 +4,9 @@ from typing import Dict, Iterable, List, Optional
 
 from .alert_formatting import compact_number, price_money
 from .investment_research import research_evidence_from_external_signals, research_evidence_from_facts
-from .investor_flow_psychology import investor_flow_psychology, investor_flow_values_reliable
+from .investor_flow_psychology import investor_flow_values_reliable
 from .macro_context import macro_context_facts
-from .market_data import number
+from .market_data import investor_net_volume, number
 from . import news_analysis as news_domain
 from .accounts import investment_strategy_profile
 from .instrument_profiles import instrument_profile_for_position
@@ -43,8 +43,11 @@ def _position_account_weight(position: Position, portfolio: PortfolioSummary) ->
 
 
 def _investor_flow(position: Position) -> Dict[str, object]:
-    psychology = investor_flow_psychology(position)
-    if not investor_flow_values_reliable(position):
+    reliable = investor_flow_values_reliable(position)
+    if not reliable:
+        # Do not emit stale investor values as neutral or directional facts.
+        # The data-state is an ABox quality observation; RuleBox rules decide
+        # what a missing or stale source means for an investment hypothesis.
         return {
             "foreignNetVolume": 0.0,
             "institutionNetVolume": 0.0,
@@ -53,35 +56,34 @@ def _investor_flow(position: Position) -> Dict[str, object]:
             "institutionNetAmount": 0.0,
             "individualNetAmount": 0.0,
             "smartMoneyNetVolume": 0.0,
-            "investorFlowBase": 0.0,
+            # These are direct conjunctions of the raw foreign/institution
+            # observations. RuleBox decides whether either fact supports an
+            # investment hypothesis.
             "jointSmartMoneyInflow": False,
             "jointSmartMoneyOutflow": False,
-            "smartMoneyDirection": "unknown",
-            "investorFlowPsychology": "investorFlowUnavailable",
-            "investorFlowPsychologyLabel": str(psychology.get("sentimentLabel") or "투자자별 수급 신뢰도 낮음"),
-            "investorFlowPsychologyPolarity": "context",
-            "investorFlowEvidenceRole": "blocking",
+            "investorFlowBase": 0.0,
+            "investorFlowAvailable": False,
             "investorFlowDataState": "unavailable",
-            "investorFlowReviewLevel": "blocked",
         }
+    foreign_volume = investor_net_volume(position.foreign_net_volume, position.foreign_buy_volume, position.foreign_sell_volume)
+    institution_volume = investor_net_volume(position.institution_net_volume, position.institution_buy_volume, position.institution_sell_volume)
+    individual_volume = investor_net_volume(position.individual_net_volume, position.individual_buy_volume, position.individual_sell_volume)
+    base = abs(foreign_volume) + abs(institution_volume) + abs(individual_volume)
+    joint_inflow = foreign_volume > 0 and institution_volume > 0
+    joint_outflow = foreign_volume < 0 and institution_volume < 0
     return {
-        "foreignNetVolume": number(psychology.get("foreignNetVolume")),
-        "institutionNetVolume": number(psychology.get("institutionNetVolume")),
-        "individualNetVolume": number(psychology.get("individualNetVolume")),
-        "foreignNetAmount": number(psychology.get("foreignNetAmount")),
-        "institutionNetAmount": number(psychology.get("institutionNetAmount")),
-        "individualNetAmount": number(psychology.get("individualNetAmount")),
-        "smartMoneyNetVolume": number(psychology.get("smartMoneyNetVolume")),
-        "investorFlowBase": number(psychology.get("investorFlowBase")),
-        "jointSmartMoneyInflow": bool(psychology.get("jointSmartMoneyInflow")),
-        "jointSmartMoneyOutflow": bool(psychology.get("jointSmartMoneyOutflow")),
-        "smartMoneyDirection": str(psychology.get("smartMoneyDirection") or "mixed"),
-        "investorFlowPsychology": str(psychology.get("field") or "mixedInvestorPsychology"),
-        "investorFlowPsychologyLabel": str(psychology.get("sentimentLabel") or "투자자별 수급 혼조"),
-        "investorFlowPsychologyPolarity": str(psychology.get("polarity") or "context"),
-        "investorFlowEvidenceRole": str(psychology.get("evidenceRole") or "context"),
-        "investorFlowDataState": str(psychology.get("dataState") or "partial"),
-        "investorFlowReviewLevel": str(psychology.get("reviewLevel") or "observe"),
+        "foreignNetVolume": round(foreign_volume, 2),
+        "institutionNetVolume": round(institution_volume, 2),
+        "individualNetVolume": round(individual_volume, 2),
+        "foreignNetAmount": round(number(position.foreign_net_amount), 2),
+        "institutionNetAmount": round(number(position.institution_net_amount), 2),
+        "individualNetAmount": round(number(position.individual_net_amount), 2),
+        "smartMoneyNetVolume": round(foreign_volume + institution_volume, 2),
+        "jointSmartMoneyInflow": joint_inflow,
+        "jointSmartMoneyOutflow": joint_outflow,
+        "investorFlowBase": round(base, 2),
+        "investorFlowAvailable": bool(base),
+        "investorFlowDataState": "sufficient" if base else "insufficient",
     }
 
 
@@ -97,53 +99,6 @@ def _trend_facts(position: Position) -> Dict[str, object]:
     ma60_slope = number(position.ma60_slope)
     price_change = number(position.change_rate)
     trend_curve = ma20_slope - ma60_slope
-    short_term_breakdown = bool(ma20) and ma20_distance <= -5.0
-    medium_term_support = bool(ma60) and ma60_distance >= 0.0
-    support_retest = short_term_breakdown and bool(ma60) and ma60_distance >= -1.0
-    recovery_attempt = (
-        bool(current)
-        and (ma20_distance < 0 or number(position.profit_loss_rate) < 0)
-        and bool(ma60)
-        and ma60_distance >= -1.0
-        and (price_change >= 1.0 or ma20_slope >= 0.3 or trend_curve >= 0.5)
-    )
-    breakdown_acceleration = (
-        short_term_breakdown
-        and (
-            price_change <= -2.0
-            or ma20_slope <= -1.0
-            or trend_curve <= -1.0
-            or (ma60_distance <= -5.0 and ma20_slope < 0 and ma60_slope < 0)
-        )
-    )
-    state = trend_state_label(ma20_distance, ma60_distance, support_retest, recovery_attempt, breakdown_acceleration)
-    curve_label = trend_curve_label(trend_curve)
-    slope_label = trend_slope_label(ma20_slope, ma60_slope)
-    price_momentum_label = direction_label(price_change, "상승", "하락")
-    if breakdown_acceleration:
-        risk_state = "accelerating-decline"
-        review_level = "act"
-        evidence_role = "risk"
-    elif short_term_breakdown and not medium_term_support:
-        risk_state = "broad-weakness"
-        review_level = "check"
-        evidence_role = "risk"
-    elif recovery_attempt:
-        risk_state = "recovery-attempt"
-        review_level = "observe"
-        evidence_role = "support"
-    elif support_retest:
-        risk_state = "support-retest"
-        review_level = "check"
-        evidence_role = "counter"
-    elif ma20_distance > 0 and ma60_distance > 0:
-        risk_state = "supportive-trend"
-        review_level = "normal"
-        evidence_role = "support"
-    else:
-        risk_state = "mixed-trend"
-        review_level = "observe"
-        evidence_role = "context"
     return {
         "currentPrice": current,
         "ma5": ma5,
@@ -155,40 +110,19 @@ def _trend_facts(position: Position) -> Dict[str, object]:
         "ma20Slope": ma20_slope,
         "ma60Slope": ma60_slope,
         "priceChangeRate": price_change,
-        "priceMomentumLabel": price_momentum_label,
-        "trendSlopeLabel": slope_label,
         "trendCurve": trend_curve,
-        "trendCurveLabel": curve_label,
-        "trendState": state,
-        "shortTermBreakdown": short_term_breakdown,
-        "mediumTermSupport": medium_term_support,
-        "supportRetest": support_retest,
-        "recoveryAttempt": recovery_attempt,
-        "breakdownAcceleration": breakdown_acceleration,
-        "trendRiskState": risk_state,
-        "trendReviewLevel": review_level,
-        "trendEvidenceRole": evidence_role,
         "trendDataState": "sufficient" if current and (ma20 or ma60) else "partial",
         "trendDynamics": {
-            "state": state,
-            "priceMomentum": price_momentum_label,
             "priceChangeRate": round(price_change, 2),
-            "slope": slope_label,
             "ma20Slope": round(ma20_slope, 2),
             "ma60Slope": round(ma60_slope, 2),
-            "curve": curve_label,
             "trendCurve": round(trend_curve, 2),
             "ma5Distance": round(ma5_distance, 2),
             "ma20Distance": round(ma20_distance, 2),
             "ma60Distance": round(ma60_distance, 2),
-            "shortTermBreakdown": short_term_breakdown,
-            "mediumTermSupport": medium_term_support,
-            "supportRetest": support_retest,
-            "recoveryAttempt": recovery_attempt,
-            "breakdownAcceleration": breakdown_acceleration,
-            "riskState": risk_state,
-            "reviewLevel": review_level,
-            "evidenceRole": evidence_role,
+            "hasMa5": bool(ma5),
+            "hasMa20": bool(ma20),
+            "hasMa60": bool(ma60),
         },
     }
 
@@ -225,16 +159,12 @@ def _temporal_facts(position: Position, previous_state: Dict[str, object] = None
         "previousProfitLossRate": previous_pnl,
         "previousMa20Distance": previous_ma20_distance,
         "previousMa60Distance": previous_ma60_distance,
-        "previousReviewLevel": str(previous_decision.get("reviewLevel") or previous_decision.get("review_level") or ""),
-        "previousChangeState": str(previous_decision.get("changeState") or previous_decision.get("change_state") or ""),
         "previousSelectedRuleId": previous_rule,
         "previousDecisionLabel": previous_label,
         "priceDeltaFromPreviousPct": price_delta,
         "profitLossRateDeltaPct": pnl_delta,
         "ma20DistanceDeltaPct": ma20_distance_delta,
         "ma60DistanceDeltaPct": ma60_distance_delta,
-        "reclaimedMa20Previously": previous_ma20_distance >= 0 and current_ma20_distance < 0,
-        "lostMa60SincePrevious": previous_ma60_distance >= -1.0 and current_ma60_distance < -1.0,
     }
 
 
@@ -248,24 +178,12 @@ def _liquidity_facts(position: Position) -> Dict[str, object]:
     position_to_trading_value = (market_value / trading_value) * 100 if market_value and trading_value else 0.0
     exit_days = market_value / max(1.0, trading_value * 0.1) if market_value and trading_value else 0.0
     sellable_blocked = bool(quantity and sellable_quantity <= 0)
-    if sellable_blocked:
-        liquidity_state = "sell-blocked"
-        review_level = "immediate"
-    elif position_to_trading_value >= 3.0 or exit_days >= 1.0:
-        liquidity_state = "difficult-exit"
-        review_level = "act"
-    elif (volume_ratio and volume_ratio < 0.5) or bid_ask_imbalance <= -35.0:
-        liquidity_state = "thin-market"
-        review_level = "check"
-    else:
-        liquidity_state = "normal"
-        review_level = "normal"
     return {
         "positionToTradingValuePct": position_to_trading_value,
         "exitDaysAtTenPctADV": exit_days,
         "sellableBlocked": sellable_blocked,
-        "liquidityState": liquidity_state,
-        "liquidityReviewLevel": review_level,
+        "liquidityVolumeRatio": volume_ratio,
+        "liquidityBidAskImbalance": bid_ask_imbalance,
         "liquidityDataState": "sufficient" if trading_value else "partial",
     }
 
@@ -945,64 +863,6 @@ def moving_average_distance_text(label: str, distance: float) -> str:
     if distance < 0:
         return label + "보다 " + value_text + "% 낮음"
     return label + "과 같음"
-
-
-def direction_label(value: float, positive: str, negative: str, flat: str = "보합", threshold: float = 0.2) -> str:
-    parsed = float(value or 0)
-    if parsed >= threshold:
-        return positive
-    if parsed <= -threshold:
-        return negative
-    return flat
-
-
-def trend_slope_label(ma20_slope: float, ma60_slope: float) -> str:
-    short = float(ma20_slope or 0)
-    medium = float(ma60_slope or 0)
-    if short <= -0.3 and medium <= -0.2:
-        return "단기·중기 하락"
-    if short >= 0.3 and medium >= 0.2:
-        return "단기·중기 상승"
-    if short <= -0.3 and medium > 0:
-        return "단기 둔화·중기 지지"
-    if short >= 0.3 and medium <= 0:
-        return "단기 회복·중기 둔화"
-    return "혼조·완만"
-
-
-def trend_curve_label(curve: float) -> str:
-    value = float(curve or 0)
-    if value <= -1.0:
-        return "하락 커브 확대"
-    if value <= -0.4:
-        return "단기 둔화 커브"
-    if value >= 1.0:
-        return "회복 커브 확대"
-    if value >= 0.4:
-        return "단기 회복 커브"
-    return "커브 완만"
-
-
-def trend_state_label(
-    ma20_distance: float,
-    ma60_distance: float,
-    support_retest: bool,
-    recovery_attempt: bool,
-    breakdown_acceleration: bool,
-) -> str:
-    if breakdown_acceleration:
-        return "하락 가속"
-    if support_retest and recovery_attempt:
-        return "60일선 지지 반등 시도"
-    if support_retest:
-        return "60일선 지지 재확인"
-    if recovery_attempt:
-        return "회복 시도"
-    if ma20_distance < 0 and ma60_distance < 0:
-        return "추세 하방"
-    if ma20_distance > 0 and ma60_distance > 0:
-        return "추세 상방"
-    return "추세 혼조"
 
 
 def position_signal_facts(

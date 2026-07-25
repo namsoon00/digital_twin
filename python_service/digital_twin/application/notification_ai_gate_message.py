@@ -40,7 +40,6 @@ from ..domain.notification_ai_gate_validation import (
     _driver_rows,
     action_label_for_target,
     delivery_level_from_context,
-    signed_percent_from_text,
     watchlist_friendly_text,
 )
 from ..domain.notification_start_badge import labeled_message_start_badge
@@ -1188,159 +1187,24 @@ def _source_event_titles(context: Dict[str, object], limit: int = 3) -> List[str
     return rows[:limit]
 
 
-def _source_alert_events(context: Dict[str, object]) -> List[Dict[str, object]]:
-    context = context or {}
-    metadata = context.get("metadata") if isinstance(context.get("metadata"), dict) else {}
-    raw = context.get("sourceAlertEvents") or metadata.get("sourceAlertEvents") or []
-    return [item for item in raw if isinstance(item, dict)] if isinstance(raw, list) else []
-
-
-def _first_crypto_source_event(context: Dict[str, object]) -> Dict[str, object]:
-    for item in _source_alert_events(context):
-        metadata = item.get("metadata") if isinstance(item.get("metadata"), dict) else {}
-        text = " ".join([
-            str(item.get("rule") or ""),
-            str(item.get("key") or ""),
-            str(item.get("title") or ""),
-            str(item.get("symbol") or ""),
-            str(metadata.get("cryptoId") or ""),
-            str(metadata.get("market") or ""),
-        ]).casefold()
-        if "externalcryptomove" in text or "crypto" in text or metadata.get("cryptoMoveModel"):
-            return item
-    if str((context or {}).get("messageType") or (context or {}).get("rule") or "") == "externalCryptoMove":
-        context_metadata = context.get("metadata") if isinstance(context.get("metadata"), dict) else {}
-        merged_metadata = {**context_metadata, **context}
-        if isinstance(context_metadata.get("cryptoMoveModel"), dict) and not isinstance(merged_metadata.get("cryptoMoveModel"), dict):
-            merged_metadata["cryptoMoveModel"] = context_metadata.get("cryptoMoveModel")
-        return {
-            "rule": "externalCryptoMove",
-            "symbol": context.get("symbol") or context.get("rawSymbol"),
-            "lines": _raw_lines(context),
-            "criteria": criterion_lines(context),
-            "metadata": merged_metadata,
-        }
-    return {}
-
-
-def _crypto_line_value(lines: List[str], label: str) -> str:
-    prefix = str(label or "").strip()
-    for line in lines or []:
-        text = str(line or "").strip().lstrip("-• ").strip()
-        if text.startswith(prefix):
-            return text[len(prefix):].strip(" :")
-    return ""
-
-
-def _crypto_signed_pct(value: object) -> str:
-    if value in (None, ""):
-        return ""
-    return signed_pct(_number(value))
-
-
-def _crypto_trigger_summary_lines(context: Dict[str, object], limit: int = 3) -> List[str]:
-    source = _first_crypto_source_event(context)
-    metadata = source.get("metadata") if isinstance(source.get("metadata"), dict) else {}
-    model = metadata.get("cryptoMoveModel") if isinstance(metadata.get("cryptoMoveModel"), dict) else {}
-    lines = [str(item or "").strip() for item in (source.get("lines") if isinstance(source.get("lines"), list) else []) if str(item or "").strip()]
-    criteria = [str(item or "").strip() for item in (source.get("criteria") if isinstance(source.get("criteria"), list) else []) if str(item or "").strip()]
-    if not source and not model and not lines:
-        return []
-
-    symbol = str(source.get("symbol") or metadata.get("symbol") or context.get("symbol") or context.get("rawSymbol") or "").upper().strip()
-    asset = str(model.get("assetLabel") or metadata.get("cryptoMoveAssetLabel") or "").strip()
-    for line in lines:
-        match = re.search(r"^(.+?)\s+변동\s+24h", line)
-        if match:
-            asset = asset or match.group(1).strip()
-            break
-    if not asset:
-        target = str(context.get("displayTarget") or context.get("target") or "").strip()
-        parts = [part.strip() for part in target.split("/") if part.strip()]
-        asset = parts[-2] if len(parts) >= 2 and parts[-1].upper() in {"BTC", "ETH"} else (symbol or "크립토")
-
-    change24h = metadata.get("change24h")
-    change7d = metadata.get("change7d")
-    for line in lines:
-        match = re.search(r"24h\s*([+-]?\d+(?:\.\d+)?)%\s*[·,]\s*7d\s*([+-]?\d+(?:\.\d+)?)%", line)
-        if match:
-            change24h = change24h if change24h not in (None, "") else match.group(1)
-            change7d = change7d if change7d not in (None, "") else match.group(2)
-            break
-
-    dominant_period = str(model.get("dominantPeriodLabel") or metadata.get("cryptoMoveDominantPeriod") or "").strip()
-    dominant_change = model.get("dominantChange", metadata.get("cryptoMoveDominantChange"))
-    if dominant_change in (None, ""):
-        dominant_change = change7d if dominant_period == "7일" else change24h if dominant_period in {"24시간", "24h"} else None
-    def clean_criterion_value(value: str) -> str:
-        text = str(value or "").strip()
-        text = re.sub(r"^(발송\s*기준\s*)?(설정|감지)\s*:\s*", "", text).strip()
-        return text
-
-    setting = ""
-    detected = ""
-    for line in criteria:
-        text = str(line or "").strip()
-        if not setting and ("설정:" in text or "설정：" in text):
-            setting = clean_criterion_value(text.split(":", 1)[1] if ":" in text else text.split("：", 1)[1])
-        if not detected and ("감지:" in text or "감지：" in text):
-            detected = clean_criterion_value(text.split(":", 1)[1] if ":" in text else text.split("：", 1)[1])
-
-    rows: List[str] = []
-    if dominant_period or dominant_change not in (None, ""):
-        dominant_text = " ".join(part for part in [dominant_period, _crypto_signed_pct(dominant_change)] if part)
-        threshold_text = (" 기준(" + setting + ")" if setting else "")
-        rows.append("알림 발생 이유: " + asset + " " + dominant_text + " 변동이" + threshold_text + "을 넘었습니다.")
-    elif detected:
-        rows.append("알림 발생 이유: " + detected + ("이 기준(" + setting + ")을 넘었습니다." if setting else " 때문에 감지됐습니다."))
-    if change24h not in (None, "") or change7d not in (None, ""):
-        rows.append("크립토 변동: 24시간 " + (_crypto_signed_pct(change24h) or "-") + ", 7일 " + (_crypto_signed_pct(change7d) or "-"))
-
-    price = metadata.get("price")
-    volume = metadata.get("volume24h")
-    price_text = _crypto_line_value(lines, "크립토 가격") or (price_money(_number(price), "USD") if price not in (None, "") else "")
-    volume_text = _crypto_line_value(lines, "크립토 거래액") or (price_money(_number(volume), "USD") if volume not in (None, "") else "")
-    provider = metadata.get("provider") or _crypto_line_value(lines, "출처")
-    detail_parts = []
-    if price_text:
-        detail_parts.append("가격 " + price_text)
-    if volume_text:
-        detail_parts.append("24시간 거래액 " + volume_text)
-    if provider:
-        detail_parts.append("출처 " + str(provider))
-    if detail_parts:
-        rows.append("확인 데이터: " + ", ".join(detail_parts))
-    return rows[:limit]
-
-
 def _price_position_summary(context: Dict[str, object], response: NotificationAIValidatedResponse) -> str:
+    del response
     current = _plain_value(context, "현재가")
     average = _plain_value(context, "평균매입가") or _plain_value(context, "평단가")
     pnl = _plain_value(context, "수익률") or _plain_value(context, "손익")
     trend = _plain_value(context, "추세")
     if not any([current, average, pnl, trend]):
         return ""
-    if is_watchlist_context(context):
-        if response.action in {"BUY", "ADD"}:
-            base = "관심종목의 진입 조건이 일부 잡혔지만 작게 확인하는 단계입니다."
-        elif response.action in {"TRIM", "SELL", "AVOID"}:
-            base = "관심종목은 보유 물량이 아니므로 팔기보다 새로 들어갈지 말지를 판단합니다."
-        else:
-            base = "관심종목은 보유 판단이 아니라 진입 조건을 계속 지켜보는 단계입니다."
-    elif response.action in {"TRIM", "SELL"} and signed_percent_from_text(pnl) > 0:
-        base = "아직 수익 구간이지만 가격 흐름이 약해져 수익 보호 쪽으로 봅니다."
-    elif response.action in {"TRIM", "SELL"}:
-        base = "손실 또는 가격 약화가 커져 비중 관리 쪽으로 봅니다."
-    elif response.action in {"BUY", "ADD"}:
-        base = "가격 회복 조건이 일부 잡혀 진입 조건을 봅니다."
-    else:
-        base = "바로 실행보다 다음 조건 확인이 먼저입니다."
     details = []
+    if current:
+        details.append("현재가 " + current)
+    if average:
+        details.append("평균매입가 " + average)
     if pnl:
         details.append("수익률 " + pnl)
     if trend:
         details.append(trend)
-    return _text(base + (" " + " / ".join(details[:2]) if details else ""), 210)
+    return _text("현재 관측값: " + " / ".join(details[:4]), 210)
 
 def _relation_feature_summary(context: Dict[str, object]) -> str:
     facts = relation_facts(context or {})
@@ -1372,17 +1236,10 @@ def _news_event_summary(context: Dict[str, object]) -> str:
     titles = _source_event_titles(context, 3)
     if not titles:
         return ""
-    joined = " / ".join(titles)
-    if _contains_any(joined, ["sell", "sells", "sold", "매도", "처분", "disposal"]):
-        return "뉴스·공시에서 보유자산 매각/처분 성격의 이벤트가 보여 원문 확인 우선입니다: " + joined
-    if _contains_any(joined, ["rise", "rises", "상승", "defend", "호재", "beat"]):
-        return "뉴스에는 반대 방향 신호도 있어 가격 반응 확인이 필요합니다: " + joined
-    return "뉴스·공시 확인 대상: " + joined
+    return "뉴스·공시 원문 확인 대상: " + " / ".join(titles)
 
 def context_specific_insight_rows(context: Dict[str, object], response: NotificationAIValidatedResponse, limit: int = MESSAGE_CONTEXT_ROW_LIMIT) -> List[str]:
     rows: List[str] = []
-    for item in _crypto_trigger_summary_lines(context, 2):
-        append_unique_text(rows, item, 230)
     for item in _driver_rows(context, ["risk", "support", "counter", "neutral"], limit):
         append_unique_text(rows, item, 230)
     append_unique_text(rows, _price_position_summary(context, response), 230)
@@ -1535,338 +1392,160 @@ def _strategy_guide_list(response: NotificationAIValidatedResponse, key: str) ->
         return [str(value).strip()]
     return []
 
-def _context_blob(context: Dict[str, object]) -> str:
-    values = [
-        str(context.get("displayTarget") or context.get("target") or context.get("title") or ""),
-        "\n".join(_raw_lines(context)),
-        str(relation_facts(context or {})),
-    ]
-    return "\n".join(values)
+def _execution_plan(context: Dict[str, object]) -> Dict[str, object]:
+    relation_context = relation_context_value(context or {})
+    plan = relation_context.get("executionPlan") if isinstance(relation_context.get("executionPlan"), dict) else {}
+    if plan:
+        return plan
+    opinion = context.get("activeInvestmentOpinion") if isinstance(context.get("activeInvestmentOpinion"), dict) else {}
+    return opinion.get("executionPlan") if isinstance(opinion.get("executionPlan"), dict) else {}
 
-def _is_outside_regular_session(context: Dict[str, object]) -> bool:
-    blob = _context_blob(context).lower()
-    return any(term in blob for term in ["장외", "프리장", "프리마켓", "애프터", "after-hours", "premarket", "pre-market", "정규 거래시간 밖"])
 
-def _volume_ratio_from_context(context: Dict[str, object]) -> float:
-    candidates = []
-    for match in re.finditer(r"(\d+(?:\.\d+)?)\s*x", _context_blob(context), flags=re.IGNORECASE):
-        candidates.append(_number(match.group(1)))
-    return min(candidates) if candidates else 0.0
-
-def _has_low_volume_context(context: Dict[str, object]) -> bool:
-    ratio = _volume_ratio_from_context(context)
-    if ratio and ratio < 0.3:
-        return True
-    return bool(re.search(r"\b0x\b|0\.0+\s*x", _context_blob(context), flags=re.IGNORECASE))
-
-def _quantity_number(text: object) -> float:
-    cleaned = str(text or "").replace(",", "")
-    match = re.search(r"(\d+(?:\.\d+)?)", cleaned)
-    return _number(match.group(1)) if match else 0.0
-
-def _quantity_display(value: float) -> str:
-    if not value:
-        return ""
-    if float(value).is_integer():
-        return str(int(value))
-    return ("%.2f" % value).rstrip("0").rstrip(".")
-
-def _quantity_range_text(quantity: float, low_ratio: float, high_ratio: float) -> str:
-    if quantity <= 0:
-        return ""
-    if quantity <= 1:
-        return _quantity_display(quantity) + "주라 분할 여지가 작아 정규장 확인 후 보유 또는 정리 중 하나를 다시 판단"
-    low = max(1, int(round(quantity * low_ratio)))
-    high = max(low, int(round(quantity * high_ratio)))
-    high = min(int(round(quantity)), high)
-    return _quantity_display(quantity) + "주 중 " + str(low) + "~" + str(high) + "주"
-
-def _price_text_from_current(value: object) -> str:
-    text = str(value or "").strip()
-    if not text:
-        return ""
-    match = re.search(r"([$₩]?\s*\d[\d,]*(?:\.\d+)?)", text)
-    return re.sub(r"\s+", "", match.group(1)) if match else text
-
-def _profit_loss_rate_from_context(context: Dict[str, object]) -> float:
-    for label in ["수익률", "손익률", "손익"]:
-        value = _plain_value(context, label)
-        if value:
-            rate = signed_percent_from_text(value)
-            if rate:
-                return rate
-    for key in ["profitLossRate", "profit_loss_rate", "pnlRate", "pnlPct", "profitLossPct"]:
-        if key in (context or {}):
-            return _number(context.get(key))
-    return 0.0
-
-def _moving_average_price(context: Dict[str, object], days: int) -> str:
-    blob = _plain_value(context, "추세") or _context_blob(context)
-    patterns = [
-        r"" + str(days) + r"일선\s*([$₩]?\s*\d[\d,]*(?:\.\d+)?)",
-        r"" + str(days) + r"일\s*평균(?:\s*가격|가)?\s*([$₩]?\s*\d[\d,]*(?:\.\d+)?)",
-    ]
-    for pattern in patterns:
-        match = re.search(pattern, blob)
-        if match:
-            return re.sub(r"\s+", "", match.group(1))
+def _execution_plan_value(context: Dict[str, object], *keys: str) -> str:
+    plan = _execution_plan(context)
+    for key in keys:
+        value = plan.get(key)
+        if isinstance(value, list):
+            text = " / ".join(str(item).strip() for item in value if str(item or "").strip())
+        else:
+            text = str(value or "").strip()
+        if text:
+            return text
     return ""
 
-def _strategy_price_levels(context: Dict[str, object], response: NotificationAIValidatedResponse) -> Dict[str, str]:
-    current = _price_text_from_current(_plain_value(context, "현재가"))
-    ma5 = _moving_average_price(context, 5)
-    ma20 = _moving_average_price(context, 20)
-    ma60 = _moving_average_price(context, 60)
-    risk = _strategy_guide_value(response, "riskPrice") or current
-    recovery = _strategy_guide_value(response, "recoveryPrice") or ma20 or ma5 or ma60
-    return {"current": current, "ma5": ma5, "ma20": ma20, "ma60": ma60, "risk": risk, "recovery": recovery}
 
-def _loss_zone(context: Dict[str, object]) -> str:
-    rate = _profit_loss_rate_from_context(context)
-    if rate <= -20:
-        return "large_loss"
-    if rate <= -8:
-        return "loss_management"
-    if rate < 0:
-        return "small_loss"
-    if rate >= 8:
-        return "profit_protection"
-    if rate > 0:
-        return "small_profit"
-    return "flat"
+def _execution_plan_list(context: Dict[str, object], *keys: str) -> List[str]:
+    plan = _execution_plan(context)
+    rows: List[str] = []
+    for key in keys:
+        value = plan.get(key)
+        if isinstance(value, list):
+            for item in value:
+                append_unique_text(rows, str(item or "").strip(), 0)
+        elif value not in (None, ""):
+            append_unique_text(rows, str(value).strip(), 0)
+    return rows
 
-def _holding_action_mode(context: Dict[str, object]) -> str:
-    if _is_outside_regular_session(context):
-        return "정규장 재확인"
-    zone = _loss_zone(context)
-    if zone in {"large_loss", "loss_management"}:
-        return "보유 유지·손실 방어선 확인"
-    if zone == "small_loss":
-        return "보유 유지·추가매수 보류"
-    if zone == "profit_protection":
-        return "보유 유지·이익 보호선 확인"
-    return "보유 유지·조건 확인"
 
 def _derived_action_mode(context: Dict[str, object], response: NotificationAIValidatedResponse) -> str:
-    explicit = _strategy_guide_value(response, "actionMode")
-    if explicit:
-        return explicit
-    if is_watchlist_context(context):
-        if response.action in {"BUY", "ADD"}:
-            return "소액 진입 검토"
-        if response.action == "AVOID":
-            return "신규 진입 회피"
-        return "대기"
-    if response.action == "HOLD":
-        return _holding_action_mode(context)
-    if _is_outside_regular_session(context):
-        return "정규장 확인"
-    if response.action in {"SELL", "TRIM"}:
-        return "분할 준비"
-    if response.action in {"BUY", "ADD"}:
-        return "소액 진입 검토"
-    return "대기"
+    return (
+        _strategy_guide_value(response, "actionMode")
+        or _execution_plan_value(context, "actionMode", "executionMode", "primaryActionLabel")
+        or "TypeDB 실행 계획의 조건 확인"
+    )
 
-def _holding_position_sizing(context: Dict[str, object]) -> str:
-    quantity = _quantity_number(_plain_value(context, "매도가능 수량") or _plain_value(context, "보유 수량"))
-    keep = (_quantity_display(quantity) + "주 유지") if quantity else "현재 수량 유지"
-    zone = _loss_zone(context)
-    if zone in {"large_loss", "loss_management"}:
-        sized = _quantity_range_text(quantity, 0.20, 0.30)
-        if sized:
-            return keep + ". 추가매수는 보류하고, 약한 조건이 다음 조회에서도 이어지면 " + sized + " 축소 기준을 준비"
-        return keep + ". 추가매수는 보류하고, 약한 조건이 이어지면 일부 축소 기준을 먼저 준비"
-    if zone == "small_loss":
-        return keep + ". 손실이 더 커지기 전까지 새로 늘리지 않고 회복 조건부터 확인"
-    if zone == "profit_protection":
-        sized = _quantity_range_text(quantity, 0.20, 0.30)
-        if sized:
-            return keep + ". 평균선 아래로 밀리면 수익 보호용 " + sized + " 축소 기준을 준비"
-        return keep + ". 평균선 아래로 밀리면 수익 보호용 일부 축소 기준을 준비"
-    return keep + ". 새로 늘리기보다 다음 조회에서도 가격과 거래가 버티는지 확인"
 
 def _derived_position_sizing(context: Dict[str, object], response: NotificationAIValidatedResponse) -> str:
-    explicit = _strategy_guide_value(response, "positionSizing")
+    explicit = _strategy_guide_value(response, "positionSizing") or _execution_plan_value(
+        context,
+        "positionSizing",
+        "sizing",
+        "positionSizeGuidance",
+    )
     if explicit:
         return explicit
     if is_watchlist_context(context):
-        if response.action in {"BUY", "ADD"}:
-            return "처음 진입이면 계획 금액의 일부만 사용하고, 다음 조회에서도 조건이 유지될 때 나머지를 검토"
-        return "보유 수량이 없으므로 수량 변경이 아니라 신규 진입 여부만 판단"
-    quantity = _quantity_number(_plain_value(context, "매도가능 수량") or _plain_value(context, "보유 수량"))
-    if response.action == "SELL":
-        sized = _quantity_range_text(quantity, 0.30, 0.50)
-        return (sized + " 축소 검토") if sized else "전량 판단보다 일부 축소 기준부터 확인"
-    if response.action == "TRIM":
-        sized = _quantity_range_text(quantity, 0.20, 0.30)
-        return (sized + " 축소 검토") if sized else "줄일 수량 정보가 없어 비중 기준부터 확인"
-    if response.action in {"BUY", "ADD"}:
-        return "추가 진입은 한 번에 늘리기보다 계획 수량의 일부만 검토"
-    if response.action == "HOLD":
-        return _holding_position_sizing(context)
-    return "수량 변경보다 보유 이유와 회복 조건 확인"
+        return "진입 금액·비중 기준은 TypeDB 실행 계획에 없어 계정 한도 확인이 필요합니다."
+    return "수량·비중 기준은 TypeDB 실행 계획에 없어 사용자 손실 허용선과 매도 가능 수량 확인이 필요합니다."
+
 
 def _derived_interpretation(context: Dict[str, object], response: NotificationAIValidatedResponse) -> str:
     explicit = _strategy_guide_value(response, "interpretation")
     if explicit:
         return explicit
-    opinion = str(response.opinion or "").strip()
-    action_label = action_label_for_action(response.action, context) or response.action_label or response.action
-    if _is_outside_regular_session(context) and response.action in {"SELL", "TRIM"}:
-        return "지금은 바로 전량 " + action_label + "보다 정규장 확인 후 분할 대응을 준비하는 쪽이 맞습니다. " + " ".join(part for part in [response.summary, opinion] if part)
-    if response.action in {"SELL", "TRIM"}:
-        return "바로 결론을 고정하기보다 손실 관리 기준과 줄일 수량을 같이 확인하는 " + action_label + " 검토 단계입니다. " + " ".join(part for part in [response.summary, opinion] if part)
-    if is_watchlist_context(context):
-        return "보유 종목 판단이 아니라 새로 들어갈 조건을 확인하는 단계입니다. " + " ".join(part for part in [response.summary, opinion] if part)
-    if response.action == "HOLD":
-        zone = _loss_zone(context)
-        base = " ".join(part for part in [response.summary, opinion] if part)
-        if zone in {"large_loss", "loss_management"}:
-            return "보유 의견은 낙관이 아니라, 지금 바로 전량 정리할 만큼의 추가 근거가 부족하다는 뜻입니다. 추가매수는 막고 손실 방어 기준을 확인합니다. " + base
-        if zone == "profit_protection":
-            return "보유 의견은 수익을 계속 방치하라는 뜻이 아니라, 수익을 지키는 기준을 정해 둔 채 더 이어지는지 확인하는 단계입니다. " + base
-        if _is_outside_regular_session(context):
-            return "장외나 거래가 적은 시간대라 지금 가격만으로 수량을 바꾸기보다 정규장 거래를 다시 확인하는 단계입니다. " + base
-        return "보유 의견은 새로 늘리라는 뜻이 아니라, 조건이 유지되는지 보면서 다음 행동 기준을 정하는 단계입니다. " + base
-    return " ".join(part for part in [response.summary, opinion] if part) or "현재 조건을 다음 조회에서도 확인하는 단계입니다."
+    return " ".join(part for part in [str(response.summary or "").strip(), str(response.opinion or "").strip()] if part)
 
-def _price_clause(label: str, price: str) -> str:
-    return (price + "(" + label + ")") if price else ""
-
-def _derived_holding_execution_criteria(context: Dict[str, object], response: NotificationAIValidatedResponse) -> str:
-    prices = _strategy_price_levels(context, response)
-    sizing = _derived_position_sizing(context, response)
-    current = prices.get("current") or prices.get("risk") or ""
-    ma5 = prices.get("ma5") or ""
-    ma20 = prices.get("ma20") or prices.get("recovery") or ""
-    recovery = ma20 or ma5 or prices.get("ma60") or ""
-    zone = _loss_zone(context)
-    session = "정규장 기준으로 " if _is_outside_regular_session(context) else "다음 조회에서도 "
-    if zone in {"large_loss", "loss_management"}:
-        weak_parts = []
-        if current:
-            weak_parts.append(current + " 아래로 더 밀림")
-        if ma5:
-            weak_parts.append(_price_clause("5일 평균", ma5) + " 회복 실패")
-        if not weak_parts and ma20:
-            weak_parts.append(_price_clause("20일 평균", ma20) + " 회복 실패")
-        first = session + " / ".join(weak_parts or ["약한 가격 흐름"]) + "이면 분할축소 판단으로 바꿉니다"
-        if recovery:
-            first += ". " + _price_clause("20일 평균", recovery) + " 위로 회복하고 거래량이 붙으면 보유 유지 근거가 강해집니다"
-        first += ". " + sizing
-        return first
-    if zone == "profit_protection":
-        guard = ma20 or ma5 or current
-        first = "수익은 유지하되 " + (_price_clause("20일 평균", guard) + " 아래로 내려가면 이익 보호용 일부 축소를 검토합니다" if guard else "주요 평균선 아래로 내려가면 이익 보호용 일부 축소를 검토합니다")
-        if recovery:
-            first += ". " + _price_clause("회복 기준", recovery) + " 위에서 거래가 붙으면 보유를 유지합니다"
-        first += ". " + sizing
-        return first
-    first = "새로 늘리지는 않습니다"
-    if recovery:
-        first += ". " + _price_clause("확인 기준", recovery) + " 위에서 거래가 붙으면 보유를 유지하고, 아래로 내려가면 추가매수는 계속 보류합니다"
-    elif current:
-        first += ". 다음 조회에서도 " + current + " 근처를 지키는지 먼저 봅니다"
-    first += ". " + sizing
-    return first
 
 def _derived_execution_criteria(context: Dict[str, object], response: NotificationAIValidatedResponse) -> str:
-    explicit = _strategy_guide_value(response, "executionCriteria")
+    explicit = _strategy_guide_value(response, "executionCriteria") or _execution_plan_value(
+        context,
+        "executionCriteria",
+        "actionCriteria",
+    )
     if explicit:
         return explicit
-    prices = _strategy_price_levels(context, response)
-    sizing = _derived_position_sizing(context, response)
-    action_label = action_label_for_action(response.action, context) or response.action_label or response.action
-    if _is_outside_regular_session(context) and response.action in {"SELL", "TRIM"}:
-        first = "정규장 시작 후에도 " + (prices["risk"] + " 아래이고 " if prices["risk"] else "") + "거래량이 붙으면 " + sizing + "합니다"
-    elif response.action in {"SELL", "TRIM"}:
-        first = "다음 조회에서도 약한 조건이 유지되면 " + sizing + "합니다"
-    elif response.action in {"BUY", "ADD"}:
-        first = "다음 조회에서도 가격과 거래가 같이 버티면 " + sizing + "합니다"
-    elif response.action == "AVOID":
-        first = "위험 조건이 해소되기 전까지 신규 진입을 피합니다"
-    elif response.action == "HOLD":
-        return _derived_holding_execution_criteria(context, response)
-    else:
-        first = "지금은 수량을 바꾸기보다 확인 조건을 기다립니다"
-    if prices["recovery"] and response.action in {"SELL", "TRIM", "AVOID"}:
-        first += ". " + prices["recovery"] + " 위로 회복하면 " + action_label + " 강도를 낮춥니다"
-    elif response.invalidation_condition:
-        first += ". " + response.invalidation_condition
-    return first
+    rows: List[str] = []
+    weaken = _execution_plan_list(context, "weakenConditions")
+    strengthen = _execution_plan_list(context, "strengthenConditions")
+    next_checks = _execution_plan_list(context, "nextChecks")
+    if weaken:
+        rows.append("의견 완화 조건: " + " / ".join(weaken[:2]))
+    if strengthen:
+        rows.append("의견 보강 조건: " + " / ".join(strengthen[:2]))
+    if next_checks:
+        rows.append("다음 확인: " + " / ".join(next_checks[:2]))
+    if rows:
+        return ". ".join(rows)
+    return "다음 TypeDB 추론 세대에서 현재 관계와 반대 관계를 다시 확인합니다."
+
 
 def _derived_invalidation_condition(context: Dict[str, object], response: NotificationAIValidatedResponse) -> str:
     explicit = _strategy_guide_value(response, "invalidationCondition") or response.invalidation_condition
-    explicit = watchlist_friendly_text(context, explicit)
-    if explicit and not (response.action == "HOLD" and "확인 단계 급변" in explicit):
-        return explicit
-    if response.action != "HOLD":
-        return ""
-    prices = _strategy_price_levels(context, response)
-    current = prices.get("current") or ""
-    ma5 = prices.get("ma5") or ""
-    ma20 = prices.get("ma20") or prices.get("recovery") or ""
-    zone = _loss_zone(context)
-    if zone in {"large_loss", "loss_management"}:
-        parts = []
-        if current:
-            parts.append(current + " 아래로 더 내려감")
-        if ma5:
-            parts.append(_price_clause("5일 평균", ma5) + " 회복 실패")
-        if ma20:
-            parts.append(_price_clause("20일 평균", ma20) + " 회복 실패")
-        return watchlist_friendly_text(context, "다음 조회에서도 " + " + ".join(parts or ["약한 조건"]) + "가 이어지면 보유 의견이 약해지고 분할축소를 다시 봅니다.")
-    if zone == "profit_protection":
-        guard = ma20 or ma5 or current
-        condition = (_price_clause("20일 평균", guard) + " 아래로 내려가거나 직접 악재가 추가되면 보유 의견이 약해집니다.") if guard else "가격 흐름이 약해지거나 직접 악재가 추가되면 보유 의견이 약해집니다."
-        return watchlist_friendly_text(context, condition)
-    guard = ma20 or ma5 or current
-    condition = (_price_clause("확인 기준", guard) + " 아래로 내려가고 거래가 늘지 않으면 보유 의견이 약해집니다.") if guard else "가격과 거래가 같이 약해지면 보유 의견이 약해집니다."
-    return watchlist_friendly_text(context, condition)
+    if explicit:
+        return watchlist_friendly_text(context, explicit)
+    weaken = _execution_plan_list(context, "weakenConditions")
+    if weaken:
+        return watchlist_friendly_text(context, " / ".join(weaken[:2]))
+    return "다음 TypeDB 추론 세대에서 현재 관계가 사라지거나 반대 관계가 새로 성립하면 의견을 재검토합니다."
+
 
 def _strategy_validation_limiters(context: Dict[str, object], response: NotificationAIValidatedResponse) -> List[str]:
     rows = list(_strategy_guide_list(response, "dataLimitations"))
-    if _is_outside_regular_session(context):
-        append_unique_text(rows, "정규 거래시간 밖이라 거래가 적고 현재가 정보가 불안정할 수 있습니다.", 0)
-    if _has_low_volume_context(context):
-        append_unique_text(rows, "거래량이 평균보다 크게 낮아 강한 매수세나 투매로 단정하지 않습니다.", 0)
+    rows.extend(_execution_plan_list(context, "dataLimitations", "missingDataImpact"))
     for item in customer_data_note_rows(list(response.missing_data_impact)):
         append_unique_text(rows, item, 0)
     return rows
+
 
 def _derived_ai_hypothesis(context: Dict[str, object], response: NotificationAIValidatedResponse) -> str:
     explicit = _strategy_guide_value(response, "aiHypothesis")
     if explicit:
         return explicit
-    blob = _context_blob(context).lower()
-    target = str(context.get("displayTarget") or context.get("target") or context.get("title") or "")
-    if "adr" in blob or "crosslisted" in blob or "skhy" in blob:
-        return target_name_for_headline(target) + " 같은 ADR은 한국 본주, 환율, 미국 반도체 투자심리에 같이 흔들릴 수 있습니다."
-    if "mstr" in blob or "strc" in blob or "bitcoin" in blob or "비트코인" in blob:
-        return target_name_for_headline(target) + "은 비트코인 가격과 시장 심리에 민감하게 반응할 수 있습니다."
-    if "semiconductor" in blob or "반도체" in blob or "hynix" in blob or "하이닉스" in blob or "삼성전자" in blob:
-        return "반도체 종목은 AI 수요, 메모리 가격, 미국 반도체 업종 심리에 같이 영향을 받을 수 있습니다."
-    if "금리" in blob or "10년" in blob or "growth" in blob or "성장" in blob:
-        return "성장주는 금리가 높을수록 미래 이익의 현재 가치가 낮게 평가될 수 있어 금리 변화에 민감할 수 있습니다."
+    selected_id = str(response.selected_hypothesis_id or "")
+    for item in response.hypotheses or []:
+        if not isinstance(item, dict) or str(item.get("hypothesisId") or "") != selected_id:
+            continue
+        return str(item.get("claim") or item.get("templateLabel") or "").strip()
     return ""
 
+
 def _ai_hypothesis_boundary(response: NotificationAIValidatedResponse) -> str:
-    return _strategy_guide_value(response, "hypothesisBoundary") or "이 내용은 수집 데이터 밖의 일반 배경지식이므로 매매 근거가 아니라 다음에 확인할 가설입니다."
+    return _strategy_guide_value(response, "hypothesisBoundary") or "현재 TypeDB 가설과 검증된 근거를 벗어난 내용은 다음 확인 가설로만 다룹니다."
 
 def strategy_guide_quality(context: Dict[str, object], response: NotificationAIValidatedResponse) -> Dict[str, object]:
-    prices = _strategy_price_levels(context, response)
+    plan = _execution_plan(context)
+    explicit_execution = _strategy_guide_value(response, "executionCriteria") or _execution_plan_value(
+        context,
+        "executionCriteria",
+        "actionCriteria",
+    )
+    inferred_execution = bool(
+        _execution_plan_list(context, "weakenConditions", "strengthenConditions", "nextChecks")
+    )
+    explicit_invalidation = bool(
+        _strategy_guide_value(response, "invalidationCondition")
+        or response.invalidation_condition
+        or _execution_plan_list(context, "weakenConditions")
+    )
     checks = [
-        ("actionMode", bool(_derived_action_mode(context, response))),
-        ("positionSizing", bool(_derived_position_sizing(context, response))),
-        ("priceCriteria", bool(prices.get("risk") or prices.get("recovery"))),
+        ("typedbExecutionPlan", bool(plan)),
+        ("actionMode", bool(_strategy_guide_value(response, "actionMode") or _execution_plan_value(context, "actionMode", "executionMode", "primaryActionLabel"))),
+        ("positionSizing", bool(_strategy_guide_value(response, "positionSizing") or _execution_plan_value(context, "positionSizing", "sizing", "positionSizeGuidance"))),
+        ("ruleboxExecutionCriteria", bool(explicit_execution or inferred_execution)),
         ("dataLimitations", bool(_strategy_validation_limiters(context, response))),
         ("aiHypothesisSeparated", bool(_derived_ai_hypothesis(context, response))),
-        ("invalidationCondition", bool(_derived_invalidation_condition(context, response))),
+        ("invalidationCondition", explicit_invalidation),
     ]
     passed = [key for key, ok in checks if ok]
     missing = [key for key, ok in checks if not ok]
     state = "complete" if not missing else "partial" if passed else "missing"
-    return {"state": state, "passed": passed, "missing": missing}
+    return {
+        "state": state,
+        "passed": passed,
+        "missing": missing,
+        "score": round((len(passed) / len(checks)) * 100) if checks else 0,
+        "source": "typedb-execution-plan-and-ai-response",
+    }
 
 def strategy_guide_rows(context: Dict[str, object], response: NotificationAIValidatedResponse, level: str) -> List[str]:
     rows: List[str] = []
@@ -1944,8 +1623,6 @@ def compact_ai_opinion_rows(context: Dict[str, object], response: NotificationAI
 
 def relation_axis_summary_rows(context: Dict[str, object], level: str, limit: int = 5) -> List[str]:
     rows: List[str] = []
-    for item in _crypto_trigger_summary_lines(context, 3):
-        append_unique_text(rows, item, 230)
     for item in relation_axis_summary_lines(context, limit):
         append_unique_text(rows, item, 230)
         if len(rows) >= limit:

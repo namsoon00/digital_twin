@@ -408,6 +408,16 @@ def derivation_payload_from_row(row: Dict[str, object]) -> Dict[str, object]:
         "action_policy": str(row.get("actionPolicy") or row.get("derivationActionPolicy") or derivation.get("action_policy") or derivation.get("actionPolicy") or ""),
         "allowed_actions": list_of_strings(row.get("allowedActions") or row.get("derivationAllowedActions") or derivation.get("allowed_actions") or derivation.get("allowedActions")),
         "blocked_actions": list_of_strings(row.get("blockedActions") or row.get("derivationBlockedActions") or derivation.get("blocked_actions") or derivation.get("blockedActions")),
+        "primary_action": str(row.get("primaryAction") or row.get("derivationPrimaryAction") or derivation.get("primary_action") or derivation.get("primaryAction") or ""),
+        "primary_action_label": str(row.get("primaryActionLabel") or row.get("derivationPrimaryActionLabel") or derivation.get("primary_action_label") or derivation.get("primaryActionLabel") or ""),
+        "candidate_action": str(row.get("candidateAction") or row.get("derivationCandidateAction") or derivation.get("candidate_action") or derivation.get("candidateAction") or ""),
+        "candidate_action_label": str(row.get("candidateActionLabel") or row.get("derivationCandidateActionLabel") or derivation.get("candidate_action_label") or derivation.get("candidateActionLabel") or ""),
+        "blocked_action_labels": list_of_strings(row.get("blockedActionLabels") or row.get("derivationBlockedActionLabels") or derivation.get("blocked_action_labels") or derivation.get("blockedActionLabels")),
+        "strengthen_conditions": list_of_strings(row.get("strengthenConditions") or row.get("derivationStrengthenConditions") or derivation.get("strengthen_conditions") or derivation.get("strengthenConditions")),
+        "weaken_conditions": list_of_strings(row.get("weakenConditions") or row.get("derivationWeakenConditions") or derivation.get("weaken_conditions") or derivation.get("weakenConditions")),
+        "next_checks": list_of_strings(row.get("nextChecks") or row.get("derivationNextChecks") or derivation.get("next_checks") or derivation.get("nextChecks")),
+        "notification_category": str(row.get("notificationCategory") or row.get("derivationNotificationCategory") or derivation.get("notification_category") or derivation.get("notificationCategory") or ""),
+        "notification_severity": str(row.get("notificationSeverity") or row.get("derivationNotificationSeverity") or derivation.get("notification_severity") or derivation.get("notificationSeverity") or ""),
     }
     return payload
 

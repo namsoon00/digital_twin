@@ -1184,6 +1184,8 @@ TYPEDB_PROMOTED_NUMERIC_ATTRIBUTES = {
     "sellableQuantity": "ontology-sellable-quantity",
     "positionWeight": "ontology-position-weight-pct",
     "positionAccountWeight": "ontology-position-account-weight-pct",
+    "exposureRatio": "ontology-exposure-ratio",
+    "positionCount": "ontology-position-count",
     "changeRate": "ontology-change-rate",
     "priceChangeRate": "ontology-price-change-rate",
     "ma5": "ontology-ma5",
@@ -1291,6 +1293,14 @@ TYPEDB_PROMOTED_NUMERIC_ATTRIBUTES = {
     "eventCount": "ontology-event-count",
     "riskEventCount": "ontology-risk-event-count",
     "supportEventCount": "ontology-support-event-count",
+    # Raw ABox delta fields. These are deliberately promoted so RuleBox native
+    # functions, rather than Python materiality code, can evaluate changes.
+    "delta": "ontology-delta",
+    "deltaPct": "ontology-delta-pct",
+    "deltaBp": "ontology-delta-bp",
+    "change24h": "ontology-change-24h",
+    "change7d": "ontology-change-7d",
+    "surprisePercentage": "ontology-surprise-percentage",
 }
 TYPEDB_PROMOTED_TEXT_ATTRIBUTES = {
     "investmentStrategyProfile": "ontology-investment-strategy-profile",
@@ -1308,6 +1318,7 @@ TYPEDB_PROMOTED_TEXT_ATTRIBUTES = {
     "factor": "ontology-factor",
     "sensitivityLevel": "ontology-sensitivity-level",
     "cryptoSymbol": "ontology-crypto-symbol",
+    "pair": "ontology-fx-pair",
     "actionPolicy": "ontology-action-policy",
     "tradingValueQuality": "ontology-trading-value-quality",
     "tradingValueBasis": "ontology-trading-value-basis",
@@ -7443,6 +7454,16 @@ class TypeDBOntologyGraphRepository(GraphStoreOntologyRowMapperMixin, ScopedABox
             "derivationActionPolicy": str(derivation.get("action_policy") or derivation.get("actionPolicy") or merged.get("derivationActionPolicy") or ""),
             "derivationAllowedActions": list_of_strings(derivation.get("allowed_actions") or derivation.get("allowedActions") or merged.get("derivationAllowedActions")),
             "derivationBlockedActions": list_of_strings(derivation.get("blocked_actions") or derivation.get("blockedActions") or merged.get("derivationBlockedActions")),
+            "derivationPrimaryAction": str(derivation.get("primary_action") or derivation.get("primaryAction") or merged.get("derivationPrimaryAction") or ""),
+            "derivationPrimaryActionLabel": str(derivation.get("primary_action_label") or derivation.get("primaryActionLabel") or merged.get("derivationPrimaryActionLabel") or ""),
+            "derivationCandidateAction": str(derivation.get("candidate_action") or derivation.get("candidateAction") or merged.get("derivationCandidateAction") or ""),
+            "derivationCandidateActionLabel": str(derivation.get("candidate_action_label") or derivation.get("candidateActionLabel") or merged.get("derivationCandidateActionLabel") or ""),
+            "derivationBlockedActionLabels": list_of_strings(derivation.get("blocked_action_labels") or derivation.get("blockedActionLabels") or merged.get("derivationBlockedActionLabels")),
+            "derivationStrengthenConditions": list_of_strings(derivation.get("strengthen_conditions") or derivation.get("strengthenConditions") or merged.get("derivationStrengthenConditions")),
+            "derivationWeakenConditions": list_of_strings(derivation.get("weaken_conditions") or derivation.get("weakenConditions") or merged.get("derivationWeakenConditions")),
+            "derivationNextChecks": list_of_strings(derivation.get("next_checks") or derivation.get("nextChecks") or merged.get("derivationNextChecks")),
+            "derivationNotificationCategory": str(derivation.get("notification_category") or derivation.get("notificationCategory") or merged.get("derivationNotificationCategory") or ""),
+            "derivationNotificationSeverity": str(derivation.get("notification_severity") or derivation.get("notificationSeverity") or merged.get("derivationNotificationSeverity") or ""),
             "polarity": str(merged.get("polarity") or ""),
             "evidenceRole": str(merged.get("evidenceRole") or "context"),
             "decisionStage": str(merged.get("decisionStage") or ""),
@@ -9058,6 +9079,12 @@ attribute ontology-needs-review, value string;
 attribute ontology-read-scope, value string;
 attribute ontology-pe-ratio, value double;
 attribute ontology-beta, value double;
+attribute ontology-delta, value double;
+attribute ontology-delta-pct, value double;
+attribute ontology-delta-bp, value double;
+attribute ontology-change-24h, value double;
+attribute ontology-change-7d, value double;
+attribute ontology-surprise-percentage, value double;
 attribute ontology-current-price, value double;
 attribute ontology-average-price, value double;
 attribute ontology-market-value, value double;
@@ -9065,6 +9092,8 @@ attribute ontology-quantity, value double;
 attribute ontology-sellable-quantity, value double;
 attribute ontology-position-weight-pct, value double;
 attribute ontology-position-account-weight-pct, value double;
+attribute ontology-exposure-ratio, value double;
+attribute ontology-position-count, value double;
 attribute ontology-change-rate, value double;
 attribute ontology-price-change-rate, value double;
 attribute ontology-ma5, value double;
@@ -9186,6 +9215,7 @@ attribute ontology-instrument-archetype-label, value string;
 attribute ontology-factor, value string;
 attribute ontology-sensitivity-level, value string;
 attribute ontology-crypto-symbol, value string;
+attribute ontology-fx-pair, value string;
 attribute ontology-action-policy, value string;
 attribute ontology-security-line-role, value string;
 attribute ontology-local-symbol, value string;
@@ -9300,6 +9330,12 @@ entity ontology-node @abstract,
     owns ontology-read-scope,
     owns ontology-pe-ratio,
     owns ontology-beta,
+    owns ontology-delta,
+    owns ontology-delta-pct,
+    owns ontology-delta-bp,
+    owns ontology-change-24h,
+    owns ontology-change-7d,
+    owns ontology-surprise-percentage,
     owns ontology-current-price,
     owns ontology-average-price,
     owns ontology-market-value,
@@ -9307,6 +9343,8 @@ entity ontology-node @abstract,
     owns ontology-sellable-quantity,
     owns ontology-position-weight-pct,
     owns ontology-position-account-weight-pct,
+    owns ontology-exposure-ratio,
+    owns ontology-position-count,
     owns ontology-change-rate,
     owns ontology-price-change-rate,
     owns ontology-ma5,
@@ -9428,6 +9466,7 @@ entity ontology-node @abstract,
     owns ontology-factor,
     owns ontology-sensitivity-level,
     owns ontology-crypto-symbol,
+    owns ontology-fx-pair,
     owns ontology-action-policy,
     owns ontology-security-line-role,
     owns ontology-local-symbol,
@@ -9535,7 +9574,11 @@ relation ontology-assertion,
     owns ontology-materiality-passed,
     owns ontology-materiality-state,
     owns ontology-relevance-state,
-    owns ontology-source-trust-state;
+    owns ontology-source-trust-state,
+    owns ontology-delta,
+    owns ontology-delta-pct,
+    owns ontology-exposure-ratio,
+    owns ontology-position-count;
 """.strip()
 
     def delete_queries(self, boxes: Iterable[str]) -> List[str]:

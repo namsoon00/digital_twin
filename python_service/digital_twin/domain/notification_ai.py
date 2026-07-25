@@ -170,21 +170,16 @@ def compact_trend_dynamics_summary(context: Dict[str, object]) -> str:
     if not dynamics:
         return ""
     rows: List[str] = []
-    state = str(dynamics.get("state") or "").strip()
-    if state:
-        rows.append(user_facing_investment_text(state, 36))
-    scenario_parts = []
-    if dynamics.get("supportRetest"):
-        scenario_parts.append("지지 재확인")
-    if dynamics.get("recoveryAttempt"):
-        scenario_parts.append("회복 시도")
-    if dynamics.get("breakdownAcceleration"):
-        scenario_parts.append("하락 가속")
-    if scenario_parts:
-        rows.append("/".join(scenario_parts[:2]))
-    review_label = str(dynamics.get("reviewLabel") or dynamics.get("reviewLevelLabel") or "").strip()
-    if review_label:
-        rows.append(review_label)
+    price_change = dynamics.get("priceChangeRate")
+    if price_change not in (None, "", 0, 0.0):
+        rows.append("당일 " + ("+" if float(price_change) > 0 else "") + str(round(float(price_change), 2)).rstrip("0").rstrip(".") + "%")
+    ma20_slope = dynamics.get("ma20Slope")
+    ma60_slope = dynamics.get("ma60Slope")
+    if ma20_slope not in (None, "", 0, 0.0) or ma60_slope not in (None, "", 0, 0.0):
+        rows.append("20일/60일 기울기 " + str(round(float(ma20_slope or 0), 2)) + "/" + str(round(float(ma60_slope or 0), 2)))
+    curve = dynamics.get("trendCurve")
+    if curve not in (None, "", 0, 0.0):
+        rows.append("기울기 차이 " + ("+" if float(curve) > 0 else "") + str(round(float(curve), 2)))
     return ", ".join(rows[:3])
 
 
@@ -252,30 +247,24 @@ def trend_dynamics_summary(context: Dict[str, object]) -> str:
     if not dynamics:
         return ""
     parts: List[str] = []
-    state = str(dynamics.get("state") or "").strip()
-    momentum = str(dynamics.get("priceMomentum") or "").strip()
-    slope = str(dynamics.get("slope") or "").strip()
-    curve = str(dynamics.get("curve") or "").strip()
-    if state:
-        parts.append("상태 " + state)
-    if momentum:
-        parts.append("가격 " + momentum + " " + str(dynamics.get("priceChangeRate") or 0) + "%")
-    if slope:
-        parts.append("기울기 " + slope)
-    if curve:
-        parts.append("커브 " + curve + " " + str(dynamics.get("trendCurve") or 0))
-    scenario_parts = []
-    if dynamics.get("supportRetest"):
-        scenario_parts.append("60일선 지지 재확인")
-    if dynamics.get("recoveryAttempt"):
-        scenario_parts.append("회복 시도")
-    if dynamics.get("breakdownAcceleration"):
-        scenario_parts.append("하락 가속")
-    if scenario_parts:
-        parts.append("시나리오 " + ", ".join(scenario_parts))
-    review_label = str(dynamics.get("reviewLabel") or dynamics.get("reviewLevelLabel") or "").strip()
-    if review_label:
-        parts.append("확인 단계 " + review_label)
+    for key, label, suffix in [
+        ("priceChangeRate", "당일 가격 변화", "%"),
+        ("ma20Slope", "20일선 기울기", ""),
+        ("ma60Slope", "60일선 기울기", ""),
+        ("trendCurve", "20일-60일 기울기 차이", ""),
+        ("ma5Distance", "5일선 대비", "%"),
+        ("ma20Distance", "20일선 대비", "%"),
+        ("ma60Distance", "60일선 대비", "%"),
+    ]:
+        value = dynamics.get(key)
+        if value in (None, ""):
+            continue
+        try:
+            amount = float(value)
+        except (TypeError, ValueError):
+            continue
+        text = ("+" if amount > 0 else "") + str(round(amount, 2)).rstrip("0").rstrip(".")
+        parts.append(label + " " + text + suffix)
     return " / ".join(parts[:6])
 
 

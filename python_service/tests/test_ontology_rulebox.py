@@ -31,12 +31,48 @@ from digital_twin.infrastructure.typedb_ontology import (
     rulebox_rules_from_payload,
     rulebox_rules_to_payload,
     rulebox_snapshot_from_rows,
+    typedb_native_match_query,
+    typedb_native_rule_profile,
 )
 from digital_twin.infrastructure.graph_store_rulebox import derivation_payload_from_row
 from digital_twin.domain.ontology_rulebox_governance import rulebox_governance_candidates, rulebox_rules_hash, rulebox_version_payload
 
 
 class OntologyRuleBoxTests(unittest.TestCase):
+    def test_external_raw_fact_rules_compile_to_native_typedb_queries(self):
+        rules_by_id = {item.rule_id: item for item in default_graph_inference_rules()}
+        expected_rule_ids = {
+            "graph.macro.regime.risk.v1",
+            "graph.fx.usdkrw.exposure.regime.v1",
+            "graph.crypto.exposure.volatility_risk.v1",
+            "graph.earnings.surprise.risk.v1",
+            "graph.earnings.surprise.support.v1",
+            "graph.regulatory.event.risk.v1",
+        }
+
+        for rule_id in expected_rule_ids:
+            profile = typedb_native_rule_profile(rules_by_id[rule_id].to_dict())
+            self.assertEqual("ready", profile["status"], rule_id)
+            self.assertEqual([], profile["blockers"], rule_id)
+
+        crypto_query = typedb_native_match_query(
+            rules_by_id["graph.crypto.exposure.volatility_risk.v1"].to_dict(),
+            target_symbols=["MSTR"],
+        )["query"]
+        fx_query = typedb_native_match_query(
+            rules_by_id["graph.fx.usdkrw.exposure.regime.v1"].to_dict(),
+            target_symbols=["MSTR"],
+        )["query"]
+        earnings_query = typedb_native_match_query(
+            rules_by_id["graph.earnings.surprise.risk.v1"].to_dict(),
+            target_symbols=["MSTR"],
+        )["query"]
+
+        self.assertIn("ontology-change-24h", crypto_query)
+        self.assertIn("ontology-fx-pair", fx_query)
+        self.assertIn("ontology-value-number", fx_query)
+        self.assertIn("ontology-surprise-percentage", earnings_query)
+
     def test_rulebox_derivation_keeps_its_evidence_role_over_template_default(self):
         payload = derivation_payload_from_row({
             "evidenceRole": "context",
@@ -155,6 +191,8 @@ class OntologyRuleBoxTests(unittest.TestCase):
         for item in graph.entities:
             entity_by_kind.setdefault(item.kind, []).append(item)
         premium = next(item for item in graph.entities if item.kind == "cross-market-premium")
+        friction = next(item for item in graph.entities if item.kind == "arbitrage-friction")
+        leveraged_flow = next(item for item in graph.entities if item.kind == "leveraged-flow-signal")
         inverse_line = next(
             item
             for item in graph.entities
@@ -169,6 +207,18 @@ class OntologyRuleBoxTests(unittest.TestCase):
         self.assertEqual(40.0, (premium.properties or {}).get("value"))
         self.assertEqual("InverseETF", (inverse_line.properties or {}).get("tboxClass"))
         self.assertTrue(entity_by_kind.get("leveraged-flow-signal"))
+        self.assertNotIn("Risk", friction.properties["tboxClasses"])
+        self.assertNotIn("FlowAmplificationRisk", leveraged_flow.properties["tboxClasses"])
+        self.assertEqual("context", next(
+            item.properties["polarity"]
+            for item in graph.relations
+            if item.relation_type == "HAS_ADR_PREMIUM"
+        ))
+        self.assertEqual("context", next(
+            item.properties["polarity"]
+            for item in graph.relations
+            if item.relation_type == "HAS_LEVERAGED_FLOW_SIGNAL"
+        ))
 
     def test_sk_hynix_related_market_symbols_include_adr_and_single_stock_etfs(self):
         position = Position(symbol="000660", name="SK하이닉스", market="KR", currency="KRW")
@@ -803,7 +853,7 @@ class OntologyRuleBoxTests(unittest.TestCase):
         self.assertTrue(rule_row["tboxVersion"])
         self.assertEqual("graph.loss_guard.breakdown.v1", rule_row["ruleId"])
         self.assertEqual("relation", condition_row["conditionKind"])
-        self.assertEqual("BREAKS_LEVEL", condition_row["conditionRelationType"])
+        self.assertEqual("HAS_TECHNICAL_INDICATOR", condition_row["conditionRelationType"])
         self.assertEqual(["ma20", "ma60"], condition_row["conditionTargetLevelTypes"])
         self.assertEqual([], condition_row["conditionTargetFields"])
         self.assertEqual("HAS_INFERRED_RISK", template_row["derivationRelationType"])
@@ -1013,7 +1063,7 @@ class OntologyRuleBoxTests(unittest.TestCase):
         fact_change_gate = next(
             item
             for item in condition_rows
-            if item["id"] == "rule-condition:graph.materiality.alert_candidate.v1:material-fact-change"
+            if item["id"] == "rule-condition:graph.materiality.alert_candidate.v1:price-downside-delta"
         )
         microstructure_gap = next(
             item
@@ -1038,7 +1088,7 @@ class OntologyRuleBoxTests(unittest.TestCase):
         portfolio_concentration = next(
             item
             for item in condition_rows
-            if item["id"] == "rule-condition:graph.portfolio.concentration.review.v1:sector-concentration-risk"
+            if item["id"] == "rule-condition:graph.portfolio.concentration.review.v1:sector-concentration-ratio"
         )
         strategy_risk_budget = next(
             item
@@ -1058,7 +1108,7 @@ class OntologyRuleBoxTests(unittest.TestCase):
         loss_smart_money = next(
             item
             for item in condition_rows
-            if item["id"] == "rule-condition:graph.loss_smart_money.defense.v1:joint-smart-money-inflow"
+            if item["id"] == "rule-condition:graph.loss_smart_money.defense.v1:foreign-net-buy"
         )
         investor_flow_accumulation = next(
             item
@@ -1170,15 +1220,30 @@ class OntologyRuleBoxTests(unittest.TestCase):
             for item in condition_rows
             if item["id"] == "rule-condition:graph.instrument_profile.cyclical_growth.recovery_add_review.v1:growth-cyclical-archetype"
         )
-        macro_regime = next(
+        macro_sensitivity = next(
             item
             for item in condition_rows
-            if item["id"] == "rule-condition:graph.macro.regime.risk.v1:macro-regime-risk"
+            if item["id"] == "rule-condition:graph.macro.regime.risk.v1:macro-sensitivity-source"
+        )
+        macro_high_rate = next(
+            item
+            for item in condition_rows
+            if item["id"] == "rule-condition:graph.macro.regime.risk.v1:high-rate-level"
         )
         crypto_exposure = next(
             item
             for item in condition_rows
-            if item["id"] == "rule-condition:graph.crypto.exposure.volatility_risk.v1:crypto-exposure-risk"
+            if item["id"] == "rule-condition:graph.crypto.exposure.volatility_risk.v1:crypto-exposure-source"
+        )
+        crypto_downside = next(
+            item
+            for item in condition_rows
+            if item["id"] == "rule-condition:graph.crypto.exposure.volatility_risk.v1:crypto-24h-downside"
+        )
+        fx_exposure = next(
+            item
+            for item in condition_rows
+            if item["id"] == "rule-condition:graph.fx.usdkrw.exposure.regime.v1:usdkrw-high-exposure"
         )
         news_quality = next(
             item
@@ -1218,12 +1283,18 @@ class OntologyRuleBoxTests(unittest.TestCase):
         self.assertIn("graph.price.reclaim.thesis_support.v1", rule_ids)
         self.assertIn("graph.coverage.gap.validation_state.v1", rule_ids)
         self.assertIn("graph.macro.regime.risk.v1", rule_ids)
+        self.assertIn("graph.fx.usdkrw.exposure.regime.v1", rule_ids)
         self.assertIn("graph.crypto.exposure.volatility_risk.v1", rule_ids)
+        self.assertIn("graph.earnings.surprise.risk.v1", rule_ids)
+        self.assertIn("graph.earnings.surprise.support.v1", rule_ids)
+        self.assertIn("graph.regulatory.event.risk.v1", rule_ids)
         self.assertIn("graph.news.quality.validation_state.v1", rule_ids)
         self.assertIn("graph.valuation.high_beta_or_expensive.review.v1", rule_ids)
         self.assertIn("graph.portfolio.concentration.review.v1", rule_ids)
-        self.assertEqual(["support"], support_transition["conditionRelationPolarities"])
-        self.assertEqual(["risk"], risk_transition["conditionRelationPolarities"])
+        self.assertEqual("HAS_TEMPORAL_WINDOW", support_transition["conditionRelationType"])
+        self.assertEqual("temporal-window", support_transition["conditionTargetKind"])
+        self.assertEqual("HAS_TEMPORAL_WINDOW", risk_transition["conditionRelationType"])
+        self.assertEqual("temporal-window", risk_transition["conditionTargetKind"])
         self.assertEqual(["bidAskImbalance"], sell_pressure["conditionTargetFields"])
         self.assertEqual(-15.0, sell_pressure["conditionTargetMaxValue"])
         self.assertEqual(["volumeRatio"], sell_volume["conditionTargetFields"])
@@ -1235,7 +1306,9 @@ class OntologyRuleBoxTests(unittest.TestCase):
         self.assertEqual(["direct"], direct_news_context["conditionTargetRelationScopes"])
         self.assertEqual(["context"], direct_news_context["conditionTargetPolarities"])
         self.assertEqual(["material", "notable"], direct_news_context["conditionTargetMaterialityStates"])
-        self.assertTrue(fact_change_gate["conditionTargetMaterialityPassed"])
+        self.assertEqual("HAS_OBSERVATION", fact_change_gate["conditionRelationType"])
+        self.assertEqual("fact-change", fact_change_gate["conditionTargetKind"])
+        self.assertEqual(["currentPrice"], fact_change_gate["conditionTargetFields"])
         self.assertEqual(["market-microstructure"], microstructure_gap["conditionTargetDataScopes"])
         self.assertEqual(["news-analysis-conflict"], news_analysis_conflict["conditionTargetDataScopes"])
         self.assertEqual(["risk"], news_analysis_conflict["conditionRelationEvidenceRoles"])
@@ -1244,31 +1317,26 @@ class OntologyRuleBoxTests(unittest.TestCase):
         self.assertEqual(30.0, execution_slippage["conditionTargetMinValue"])
         self.assertEqual("not", price_reclaim_not["conditionRole"])
         self.assertEqual("any", portfolio_concentration["conditionRole"])
-        self.assertEqual(["ConcentrationRisk"], portfolio_concentration["conditionTargetTboxClasses"])
+        self.assertEqual("HAS_MARKET_EXPOSURE", portfolio_concentration["conditionRelationType"])
+        self.assertEqual("sector-exposure", portfolio_concentration["conditionTargetKind"])
         self.assertEqual("HAS_RISK_BUDGET", strategy_risk_budget["conditionRelationType"])
         self.assertEqual("risk-budget", strategy_risk_budget["conditionTargetKind"])
         self.assertEqual("HAS_PROFIT_POLICY", strategy_profit_policy["conditionRelationType"])
         self.assertEqual("profit-policy", strategy_profit_policy["conditionTargetKind"])
         self.assertEqual("HAS_POSITION_ROLE", watchlist_strategy_role["conditionRelationType"])
         self.assertEqual("position-role", watchlist_strategy_role["conditionTargetKind"])
-        self.assertEqual("HAS_TRADE_FLOW", loss_smart_money["conditionRelationType"])
-        self.assertEqual("smart-money-flow", loss_smart_money["conditionTargetKind"])
-        self.assertEqual(["jointSmartMoneyInflow"], loss_smart_money["conditionTargetFields"])
-        self.assertEqual(["smartMoney"], loss_smart_money["conditionRelationSignalGroups"])
-        self.assertEqual(["support"], loss_smart_money["conditionRelationPolarities"])
-        self.assertEqual("HAS_INVESTOR_FLOW_SENTIMENT", investor_flow_accumulation["conditionRelationType"])
-        self.assertEqual("investor-flow-sentiment", investor_flow_accumulation["conditionTargetKind"])
-        self.assertEqual(["smartMoneyAccumulation", "smartMoneyDipAbsorption", "broadInflowConfirmation"], investor_flow_accumulation["conditionTargetFields"])
-        self.assertEqual(["investorPsychology"], investor_flow_accumulation["conditionRelationSignalGroups"])
-        self.assertEqual(["support"], investor_flow_accumulation["conditionRelationPolarities"])
-        self.assertEqual("HAS_INVESTOR_FLOW_SENTIMENT", retail_dip_buying["conditionRelationType"])
-        self.assertEqual(["retailDipBuyingRisk"], retail_dip_buying["conditionTargetFields"])
-        self.assertEqual(["risk"], retail_dip_buying["conditionRelationPolarities"])
+        self.assertEqual("foreignNetVolume", loss_smart_money["conditionField"])
+        self.assertEqual(">", loss_smart_money["conditionOperator"])
+        self.assertEqual(0.0, loss_smart_money["conditionValueNumber"])
+        self.assertEqual("foreignNetVolume", investor_flow_accumulation["conditionField"])
+        self.assertEqual(">", investor_flow_accumulation["conditionOperator"])
+        self.assertEqual("foreignNetVolume", retail_dip_buying["conditionField"])
+        self.assertEqual("<", retail_dip_buying["conditionOperator"])
         self.assertEqual("any", add_buy_volume["conditionRole"])
         self.assertEqual(["volumeRatio"], add_buy_volume["conditionTargetFields"])
         self.assertEqual(1.0, add_buy_volume["conditionTargetMinValue"])
         self.assertEqual("not", add_buy_gap_guard["conditionRole"])
-        self.assertEqual("RECLAIMS_LEVEL", winner_add_ma5["conditionRelationType"])
+        self.assertEqual("HAS_TECHNICAL_INDICATOR", winner_add_ma5["conditionRelationType"])
         self.assertEqual(["ma5"], winner_add_ma5["conditionTargetLevelTypes"])
         self.assertEqual("HAS_INSTRUMENT_PROFILE", winner_add_profile["conditionRelationType"])
         self.assertEqual("instrument-profile", winner_add_profile["conditionTargetKind"])
@@ -1307,10 +1375,19 @@ class OntologyRuleBoxTests(unittest.TestCase):
         self.assertEqual("HAS_RATE_SENSITIVITY", preferred_rate_signal["conditionRelationType"])
         self.assertEqual(4.0, preferred_rate_signal["conditionTargetMinValue"])
         self.assertEqual(["SemiconductorHBM", "CyclicalGrowth", "SemiconductorCyclical", "AIGrowth"], cyclical_growth_profile["conditionTargetInstrumentArchetypes"])
-        self.assertEqual("HAS_MACRO_REGIME", macro_regime["conditionRelationType"])
-        self.assertEqual(["risk"], macro_regime["conditionRelationPolarities"])
+        self.assertEqual("HAS_RATE_SENSITIVITY", macro_sensitivity["conditionRelationType"])
+        self.assertEqual("HAS_RATE_SENSITIVITY", macro_high_rate["conditionRelationType"])
+        self.assertEqual("interest-rate", macro_high_rate["conditionTargetKind"])
+        self.assertEqual(4.5, macro_high_rate["conditionTargetMinValue"])
+        self.assertEqual("any", macro_high_rate["conditionRole"])
         self.assertEqual("HAS_CRYPTO_EXPOSURE", crypto_exposure["conditionRelationType"])
         self.assertEqual("crypto-exposure", crypto_exposure["conditionTargetKind"])
+        self.assertEqual("HAS_CRYPTO_EXPOSURE", crypto_downside["conditionRelationType"])
+        self.assertEqual(["change24h"], crypto_downside["conditionTargetFields"])
+        self.assertEqual("any", crypto_downside["conditionRole"])
+        self.assertEqual("HAS_FX_EXPOSURE", fx_exposure["conditionRelationType"])
+        self.assertEqual("fx-rate", fx_exposure["conditionTargetKind"])
+        self.assertEqual(1450.0, fx_exposure["conditionTargetMinValue"])
         self.assertEqual("HAS_DATA_QUALITY", news_quality["conditionRelationType"])
         self.assertEqual(["news-quality"], news_quality["conditionTargetDataScopes"])
 
@@ -1373,10 +1450,10 @@ class OntologyRuleBoxTests(unittest.TestCase):
         self.assertEqual("HAS_INSTRUMENT_PROFILE", strategy_fit_profile["conditionRelationType"])
         self.assertEqual("instrument-profile", strategy_fit_profile["conditionTargetKind"])
         self.assertEqual("HAS_RISK_BUDGET", strategy_loss_budget["conditionRelationType"])
-        self.assertEqual("RECLAIMS_LEVEL", price_recovery["conditionRelationType"])
+        self.assertEqual("HAS_TECHNICAL_INDICATOR", price_recovery["conditionRelationType"])
         self.assertEqual(["ma5", "ma20"], price_recovery["conditionTargetLevelTypes"])
-        self.assertEqual("HAS_INVESTOR_FLOW_SENTIMENT", flow_divergence["conditionRelationType"])
-        self.assertEqual(["risk"], flow_divergence["conditionRelationPolarities"])
+        self.assertEqual("smartMoneyNetVolume", flow_divergence["conditionField"])
+        self.assertEqual("<", flow_divergence["conditionOperator"])
         self.assertEqual("HAS_EXTERNAL_SIGNAL", news_reaction["conditionRelationType"])
         self.assertEqual(["risk"], news_reaction["conditionTargetPolarities"])
         self.assertEqual("HAS_EXTERNAL_SIGNAL", disclosure_action["conditionRelationType"])
@@ -1542,10 +1619,107 @@ class OntologyRuleBoxTests(unittest.TestCase):
             if item.source == "stock:MSTR" and item.target == observation.entity_id and item.relation_type == "HAS_OBSERVATION"
         )
 
-        self.assertEqual("risk", observation.properties["polarity"])
-        self.assertEqual("risk", observation.properties["evidenceRole"])
-        self.assertEqual("risk", stock_relation.properties["polarity"])
+        self.assertEqual("context", observation.properties["polarity"])
+        self.assertEqual("context", observation.properties["evidenceRole"])
+        self.assertEqual(-3.2, observation.properties["changeRate"])
+        self.assertEqual(-5.5, observation.properties["ma20Distance"])
+        self.assertEqual("context", stock_relation.properties["polarity"])
         self.assertIn("btc", stock_relation.properties["overlapFactors"])
+
+    def test_portfolio_exposure_abox_keeps_raw_currency_and_sector_facts(self):
+        position = Position(
+            symbol="MSTR",
+            name="Strategy",
+            market="US",
+            currency="USD",
+            quantity=10,
+            current_price=100,
+            market_value=1000,
+            sector="크립토",
+            source="holding",
+        )
+        portfolio = portfolio_summary([position], account_cash=100)
+
+        graph = build_portfolio_ontology([position], portfolio, portfolio_id="raw-exposure-test")
+        currency_exposure = next(item for item in graph.entities if item.kind == "currency-exposure")
+        sector_exposure = next(item for item in graph.entities if item.kind == "sector-exposure")
+
+        self.assertEqual("CurrencyExposure", currency_exposure.properties["tboxClass"])
+        self.assertGreater(currency_exposure.properties["exposureRatio"], 0)
+        self.assertEqual("SectorExposure", sector_exposure.properties["tboxClass"])
+        self.assertEqual(1, sector_exposure.properties["positionCount"])
+        self.assertTrue(any(
+            item.relation_type == "HAS_MARKET_EXPOSURE" and item.target == currency_exposure.entity_id
+            for item in graph.relations
+        ))
+        self.assertIsNotNone(tbox_class_def("CurrencyExposure"))
+        self.assertIsNotNone(tbox_class_def("SectorExposure"))
+
+    def test_external_macro_crypto_and_earnings_abox_keeps_raw_rule_inputs(self):
+        position = Position(
+            symbol="MSTR",
+            name="Strategy",
+            market="US",
+            currency="USD",
+            quantity=10,
+            current_price=100,
+            market_value=1000,
+            sector="디지털자산",
+            source="holding",
+        )
+        graph = build_portfolio_ontology(
+            [position],
+            portfolio_summary([position], account_cash=100, fx_rates={"USD": 1502, "KRW": 1}),
+            external_signals={
+                "macro": {
+                    "series": {"DGS10": {"provider": "FRED", "value": 4.75, "deltaBp": 21}},
+                    "yieldSpread10y2y": -0.18,
+                    "yieldSpread10y2yDeltaBp": -18,
+                },
+                "fxRates": {
+                    "USDKRW": {"base": "USD", "quote": "KRW", "rate": 1502},
+                },
+                "cryptoMarkets": {
+                    "bitcoin": {"symbol": "BTC", "price": 64000, "change24h": -5.2, "change7d": -9.4},
+                },
+                "earningsReports": {
+                    "MSTR": {
+                        "latestQuarter": {
+                            "reportedEPS": 1.1,
+                            "estimatedEPS": 1.4,
+                            "surprisePercentage": -21.4,
+                        },
+                    },
+                },
+            },
+            portfolio_id="raw-external-rule-inputs",
+        )
+
+        dgs10 = next(item for item in graph.entities if item.kind == "interest-rate")
+        fx_rate = next(item for item in graph.entities if item.kind == "fx-rate")
+        crypto_exposure = next(item for item in graph.entities if item.kind == "crypto-exposure")
+        earnings = next(item for item in graph.entities if item.kind == "earnings-calendar-event")
+        crypto_relation = next(
+            item for item in graph.relations
+            if item.source == "stock:MSTR" and item.target == crypto_exposure.entity_id and item.relation_type == "HAS_CRYPTO_EXPOSURE"
+        )
+
+        self.assertEqual(4.75, dgs10.properties["value"])
+        self.assertEqual(21, dgs10.properties["deltaBp"])
+        self.assertNotIn("RegimeRisk", dgs10.properties["tboxClasses"])
+        self.assertEqual("USDKRW", fx_rate.properties["pair"])
+        self.assertEqual(1502, fx_rate.properties["value"])
+        self.assertEqual(-5.2, crypto_exposure.properties["change24h"])
+        self.assertEqual(-9.4, crypto_exposure.properties["change7d"])
+        self.assertNotIn("pathState", crypto_exposure.properties)
+        self.assertEqual("context", crypto_relation.properties["polarity"])
+        self.assertEqual("MarketExposure", tbox_class_def("CryptoExposure").parent)
+        self.assertEqual("ExecutionMetric", tbox_class_def("LiquidityProfile").parent)
+        self.assertEqual("ExecutionMetric", tbox_class_def("ExitCapacity").parent)
+        self.assertEqual("ExecutionMetric", tbox_class_def("ExecutionCapacity").parent)
+        self.assertEqual(-21.4, earnings.properties["surprisePercentage"])
+        self.assertFalse(any(item.kind == "macro-regime" for item in graph.entities))
+        self.assertFalse(any(item.relation_type == "HAS_MACRO_REGIME" for item in graph.relations))
 
     def test_stock_abox_carries_direct_typedb_rule_subject_fields(self):
         graph = self.profitable_momentum_graph(

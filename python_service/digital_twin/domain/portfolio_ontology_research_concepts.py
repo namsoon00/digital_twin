@@ -22,9 +22,9 @@ def event_tbox_classes(item: object) -> List[str]:
     kind = str(getattr(item, "kind", "") or "").lower()
     classes = ["Observation", "ExternalObservation", "ResearchEvidence", "ExternalSignal", "Evidence"]
     if "news" in kind:
-        classes.extend(["NewsEvent", "NewsArticle", "EventRisk"])
+        classes.extend(["NewsEvent", "NewsArticle"])
     elif "disclosure" in kind or "filing" in kind:
-        classes.extend(["DisclosureEvent", "DisclosureFiling", "EventRisk"])
+        classes.extend(["DisclosureEvent", "DisclosureFiling"])
     elif "financial" in kind or "earning" in kind:
         classes.extend(["FundamentalObservation", "EarningsEvent", "ValuationSignal"])
     elif "market" in kind:
@@ -244,14 +244,14 @@ def evidence_document_shape(item: object) -> Dict[str, object]:
         return {
             "kind": "disclosure-filing",
             "tboxClass": "DisclosureFiling",
-            "tboxClasses": ["Observation", "ExternalObservation", "ExternalSignal", "DisclosureEvent", "DisclosureFiling", "EventRisk"],
+            "tboxClasses": ["Observation", "ExternalObservation", "ExternalSignal", "DisclosureEvent", "DisclosureFiling"],
             "documentType": "disclosure",
         }
     if "news" in kind or str(getattr(item, "url", "") or "").strip():
         return {
             "kind": "news-article",
             "tboxClass": "NewsArticle",
-            "tboxClasses": ["Observation", "ExternalObservation", "ExternalSignal", "NewsEvent", "NewsArticle", "EventRisk"],
+            "tboxClasses": ["Observation", "ExternalObservation", "ExternalSignal", "NewsEvent", "NewsArticle"],
             "documentType": "news",
         }
     return {}

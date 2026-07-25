@@ -52,6 +52,8 @@ class OntologyInferenceContextTests(unittest.TestCase):
                 action_group="addBuy",
                 action_level="review",
                 decision_label="조건부 추가매수 검토",
+                candidate_action="ADD",
+                allowed_actions=["ADD", "HOLD"],
             ),
         ]
 
@@ -120,18 +122,25 @@ class OntologyInferenceContextTests(unittest.TestCase):
             text,
         )
 
-    def test_watchlist_entry_requires_sufficient_support_state(self):
+    def test_watchlist_entry_action_comes_from_materialized_rulebox_candidate(self):
         position = Position(symbol="AAPL", name="Apple", source="watchlist")
         context = {
-            "decision": {"actionGroup": "entry", "decisionStage": "ENTRY_READY"},
+            "decision": {
+                "candidateAction": "BUY",
+                "targetRole": "watchlist",
+                "allowedActions": ["BUY", "HOLD", "AVOID"],
+                "blockedActions": ["ADD", "TRIM", "SELL"],
+            },
             "decisionState": {"dataState": "insufficient"},
         }
 
-        self.assertEqual("AVOID", choose_action(position, context, conflict_state="support-only"))
+        self.assertEqual("BUY", choose_action(position, context, conflict_state="risk-only"))
 
-        context["decisionState"]["dataState"] = "sufficient"
+        # A stage, raw data state, or caller-supplied conflict label may not
+        # recreate the old Python investment action mapping.
+        context["decision"]["candidateAction"] = "SELL"
 
-        self.assertEqual("BUY", choose_action(position, context, conflict_state="support-only"))
+        self.assertEqual("HOLD", choose_action(position, context, conflict_state="support-only"))
 
     def test_missing_data_driver_preserves_stale_value_reason(self):
         drivers = decision_drivers_from_relation_context(
@@ -463,8 +472,14 @@ class OntologyInferenceContextTests(unittest.TestCase):
                                     "aiInfluenceLabel": "손실 방어 추론",
                                     "inferenceTraceId": "inference-trace:005930:graph.loss_guard.breakdown.v1",
                                     "decisionStage": "LOSS_REDUCE",
+                                    "decisionTone": "caution",
                                     "actionGroup": "lossControl",
                                     "actionLevel": "review",
+                                    "primaryAction": "TRIM_REVIEW",
+                                    "primaryActionLabel": "손실 축소 기준 점검",
+                                    "candidateAction": "TRIM",
+                                    "allowedActions": ["BUY", "HOLD", "AVOID"],
+                                    "blockedActions": ["ADD", "TRIM", "SELL"],
                                     "nativeTypeDbReasoned": True,
                                 }
                             ],
@@ -846,6 +861,10 @@ class OntologyInferenceContextTests(unittest.TestCase):
                                     "riskImpact": 12,
                                     "weight": 0.84,
                                     "decisionStage": "LOSS_REDUCE",
+                                    "decisionLabel": "손실 축소 기준 점검",
+                                    "decisionTone": "caution",
+                                    "primaryAction": "TRIM_REVIEW",
+                                    "candidateAction": "TRIM",
                                     "stagePriority": 44,
                                     "actionGroup": "lossControl",
                                     "actionLevel": "review",
@@ -908,6 +927,7 @@ class OntologyInferenceContextTests(unittest.TestCase):
                                         "supportImpact": 0,
                                         "weight": 0.86,
                                         "decisionStage": "LOSS_REDUCE",
+                                        "decisionTone": "caution",
                                         "stagePriority": 40,
                                         "actionGroup": "lossControl",
                                         "actionLevel": "review",
@@ -1027,6 +1047,7 @@ class OntologyInferenceContextTests(unittest.TestCase):
                                     "riskImpact": 13,
                                     "weight": 0.86,
                                     "decisionStage": "LOSS_REDUCE",
+                                    "decisionTone": "caution",
                                     "stagePriority": 40,
                                     "actionGroup": "lossControl",
                                     "actionLevel": "review",

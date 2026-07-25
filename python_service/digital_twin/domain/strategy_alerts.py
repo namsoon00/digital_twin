@@ -8,55 +8,34 @@ from .ontology_decision_state import (
     DATA_STATE_LABELS,
     REVIEW_LEVEL_LABELS,
     data_state_is_usable,
-    review_level_at_least,
 )
-from .ontology_threshold_policy import ontology_threshold_policy_from_context
 from .portfolio import AccountSnapshot, AlertEvent
 
 
 class StrategyAlertMixin:
     def watchlist_ontology_signal_type(self, relation_context: Dict[str, object]) -> str:
         decision = relation_context.get("decision") if isinstance(relation_context, dict) else {}
+        plan = relation_context.get("executionPlan") if isinstance(relation_context, dict) else {}
         active_rules = relation_context.get("activeRules") if isinstance(relation_context, dict) else []
-        action_group = str(decision.get("actionGroup") or "") if isinstance(decision, dict) else ""
-        rule_ids = {
-            str(item.get("ruleId") or item.get("rule_id") or "")
-            for item in active_rules or []
-            if isinstance(item, dict)
-        }
-        if "entry.pullback.supported.v1" in rule_ids or action_group == "entry":
-            return "entryCandidate"
-        if any(rule_id in rule_ids for rule_id in [
-            "trend.breakdown_acceleration.v1",
-            "entry.add_buy.blocked.v1",
-            "disclosure.material_event.v1",
-            "news.direct_risk.new_material.v1",
-            "news.direct_risk.price_confirmed.v1",
-        ]) or action_group in {"lossControl", "entryRisk", "disclosure", "cryptoSensitivity"}:
-            return "riskWatch"
-        if any(rule_id in rule_ids for rule_id in [
-            "trend.support_retest.v1",
-            "trend.recovery_attempt.v1",
-            "holding.trend_flow.confirmation.v1",
-            "news.direct_support.new_material.v1",
-            "news.direct_support.price_confirmed.v1",
-            "news.direct_material.new.v1",
-        ]) or action_group in {"trendReview", "recovery", "flowTrend"}:
-            return "trendReview"
-        if "data.conflict.v1" in rule_ids or relation_context.get("missingData"):
-            return "dataQuality"
+        category_sources = [
+            plan if isinstance(plan, dict) else {},
+            decision if isinstance(decision, dict) else {},
+            *[item for item in active_rules or [] if isinstance(item, dict)],
+        ]
+        allowed = {"entryCandidate", "riskWatch", "trendReview", "dataQuality", "relationshipChange"}
+        for source in category_sources:
+            category = str(
+                source.get("notificationCategory")
+                or source.get("notification_category")
+                or ""
+            ).strip()
+            if category in allowed:
+                return category
         return "relationshipChange"
 
     def watchlist_ontology_action_line(self, signal_type: str, decision_label: str) -> str:
-        if signal_type == "entryCandidate":
-            return "권장 액션: 첫 진입은 작게 검토하고 손절 기준, 거래량, 20일선 유지 여부를 먼저 확인"
-        if signal_type == "riskWatch":
-            return "권장 액션: 신규 진입 보류, 하락 가속·공시·외부 리스크가 완화되는지 우선 확인"
-        if signal_type == "trendReview":
-            return "권장 액션: 추격 진입보다 다음 조회에서도 회복·지지 관계가 유지되는지 확인"
-        if signal_type == "dataQuality":
-            return "권장 액션: 투자 판단 전 현재가, 이동평균, 수급 데이터 연결 상태를 먼저 복구"
-        return "권장 액션: 새 관계가 다음 데이터 업데이트에서도 유지되는지 확인"
+        del signal_type
+        return "권장 액션: " + (str(decision_label or "TypeDB 관계 결과") + "의 다음 확인 기준을 검토")
 
     def watchlist_ontology_event(
         self,
@@ -74,14 +53,11 @@ class StrategyAlertMixin:
         decision = relation_context.get("decision") if isinstance(relation_context, dict) else {}
         if not isinstance(decision, dict):
             decision = {}
-        threshold_policy = ontology_threshold_policy_from_context(relation_context).watchlist_dispatch
         review_level = str(relation_context.get("reviewLevel") or decision.get("reviewLevel") or "normal")
         data_state = str(relation_context.get("dataState") or decision.get("dataState") or "partial")
         change_state = str(relation_context.get("changeState") or decision.get("changeState") or "unchanged")
         conflict_state = str(relation_context.get("conflictState") or decision.get("conflictState") or "context-only")
-        if not data_state_is_usable(data_state) or data_state not in set(threshold_policy.usable_data_states):
-            return None
-        if not review_level_at_least(review_level, threshold_policy.minimum_review_level):
+        if not data_state_is_usable(data_state):
             return None
         signal_type = self.watchlist_ontology_signal_type(relation_context)
         decision_label = str(decision.get("label") or "관심종목 관계 신호")
@@ -99,7 +75,17 @@ class StrategyAlertMixin:
         news_event_suffix = relation_news_event_key_suffix(relation_context)
         if news_event_suffix:
             rule_signature = rule_signature + "+" + news_event_suffix
-        severity = "ALERT" if signal_type == "riskWatch" and review_level in set(threshold_policy.risk_alert_review_levels) else "WATCH"
+        plan = relation_context.get("executionPlan") if isinstance(relation_context.get("executionPlan"), dict) else {}
+        requested_severity = str(
+            plan.get("notificationSeverity")
+            or decision.get("notificationSeverity")
+            or ""
+        ).upper()
+        # Delivery eligibility and urgency are authored RuleBox facts.  A
+        # relation without this materialized instruction is not actionable.
+        if requested_severity not in {"ALERT", "WATCH"}:
+            return None
+        severity = requested_severity
         symbol = position.symbol.upper()
         lines = [
             "관심종목 온톨로지 관계 신호",

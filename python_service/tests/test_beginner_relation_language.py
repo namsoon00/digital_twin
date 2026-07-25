@@ -2,7 +2,7 @@ import unittest
 
 from digital_twin.domain.investment_research import build_active_investment_opinion
 from digital_twin.domain.notification_ai_gate_contracts import NotificationAIValidatedResponse
-from digital_twin.application.notification_ai_gate_message import execution_telegram_message
+from digital_twin.application.notification_ai_gate_message import execution_telegram_message, strategy_guide_rows
 from digital_twin.domain.notification_ontology_sections import ontology_rule_lines, relation_axis_summary_lines
 from digital_twin.domain.notification_templates import NotificationTemplate, alert_context, compact_investment_notification, render_notification
 from digital_twin.domain.portfolio import AlertEvent, Position
@@ -55,6 +55,7 @@ class BeginnerRelationLanguageTests(unittest.TestCase):
                     "dataState": "sufficient",
                     "changeState": "new-condition",
                     "conflictState": "context-only",
+                    "candidateAction": "HOLD",
                 },
                 "activeRules": [
                     {
@@ -68,7 +69,28 @@ class BeginnerRelationLanguageTests(unittest.TestCase):
         )
 
         self.assertEqual("HOLD", opinion.action)
-        self.assertIn("바로 사고팔기보다", opinion.thesis)
+        self.assertIn("TypeDB RuleBox", opinion.thesis)
+
+    def test_strategy_guide_never_invents_price_or_quantity_rules_from_raw_lines(self):
+        response = NotificationAIValidatedResponse(
+            action="HOLD",
+            action_label="보유",
+            validation_state="conditional",
+            data_state="partial",
+            review_level="check",
+            summary="TypeDB 관계를 다시 확인합니다.",
+            opinion="원시 관측값만으로 추가 실행 기준을 만들지 않습니다.",
+        )
+
+        rows = strategy_guide_rows({
+            "rawLines": "현재가: 254,000원\n수익률: -22.5%\n추세: 20일선 314,950원보다 19.4% 낮음",
+        }, response, "intermediate")
+        rendered = "\n".join(rows)
+
+        self.assertIn("TypeDB 실행 계획", rendered)
+        self.assertNotIn("20일 평균", rendered)
+        self.assertNotIn("20%", rendered)
+        self.assertNotIn("3~5주", rendered)
 
     def test_typedb_add_buy_candidate_can_create_add_opinion(self):
         position = self.holding_position()
@@ -78,9 +100,10 @@ class BeginnerRelationLanguageTests(unittest.TestCase):
                 "actionGroup": "addBuy",
                 "decisionStage": "ADD_BUY_REVIEW",
                 "reviewLevel": "act",
-                "dataState": "sufficient",
-                "changeState": "new-condition",
-                "conflictState": "support-only",
+                    "dataState": "sufficient",
+                    "changeState": "new-condition",
+                    "conflictState": "support-only",
+                    "candidateAction": "ADD",
             },
             "executionPlan": {
                 "addBuyAssessment": {

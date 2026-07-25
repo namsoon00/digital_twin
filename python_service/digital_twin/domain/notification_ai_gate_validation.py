@@ -1,6 +1,6 @@
 import json
 import re
-from typing import Dict, List, Optional, Tuple
+from typing import Dict, List, Tuple
 
 from .accounts import message_delivery_profile, normalize_message_delivery_level
 from .investment_brain import hypothesis_comparison_audit
@@ -48,13 +48,6 @@ from .ontology_decision_state import (
     validation_state_for,
 )
 from .ontology_rulebox_contracts import WATCHLIST_ACTION_POLICY
-
-
-def prepend_unique_text(items: List[str], value: str, limit: int = 220) -> None:
-    text = _text(value, limit)
-    if text and text not in items:
-        items.insert(0, text)
-
 
 def _execution_plan_from_context(context: Dict[str, object]) -> Dict[str, object]:
     relation_context = relation_context_value(context or {})
@@ -133,22 +126,12 @@ def fallback_counter_rows(context: Dict[str, object], limit: int = 4) -> List[st
     return rows[:limit]
 
 def default_invalidation_for_action(action: str) -> str:
-    if action in {"BUY", "ADD"}:
-        return "가격·수급 지지와 뉴스·공시 근거가 약해지면 매수 의견을 낮춥니다."
-    if action in {"TRIM", "SELL"}:
-        return "주요 평균선 회복, 거래량 동반 반등, 부정 뉴스·공시 해소가 확인되면 매도 강도를 낮춥니다."
-    if action == "AVOID":
-        return "부정 근거가 해소되고 가격·수급 회복이 확인되면 신규 진입 회피 의견을 재검토합니다."
-    return "새 뉴스·공시, 가격 방향 변경, 핵심 자료 상태 변화가 나오면 보유 의견을 재검토합니다."
+    del action
+    return "다음 TypeDB 추론 세대에서 현재 관계가 사라지거나 반대 관계가 새로 성립하면 의견을 재검토합니다."
 
 def default_next_checks_for_action(action: str) -> List[str]:
-    if action in {"BUY", "ADD"}:
-        return ["진입 가격, 손절 기준, 뉴스·공시 반대 근거를 함께 확인"]
-    if action in {"TRIM", "SELL"}:
-        return ["매도 가능 수량, 손실 기준, 공시·뉴스 원문을 확인"]
-    if action == "AVOID":
-        return ["부정 뉴스·공시 해소 여부와 다음 가격·수급 반응 확인"]
-    return ["다음 데이터 업데이트에서 같은 관계 규칙과 반대 근거를 다시 확인"]
+    del action
+    return ["다음 데이터 업데이트에서 같은 TypeDB 관계와 반대 근거를 다시 확인"]
 
 def normalized_action_for_target(context: Dict[str, object], action: str) -> str:
     clean = str(action or "").strip().upper()
@@ -161,6 +144,33 @@ def normalized_action_for_target(context: Dict[str, object], action: str) -> str
     if clean in {"TRIM", "SELL"}:
         return "AVOID"
     return clean
+
+
+def _action_policy_codes(context: Dict[str, object], key: str) -> List[str]:
+    relation_context = relation_context_value(context or {})
+    decision = relation_context.get("decision") if isinstance(relation_context.get("decision"), dict) else {}
+    plan = relation_context.get("executionPlan") if isinstance(relation_context.get("executionPlan"), dict) else {}
+    values: List[str] = []
+    for container in [plan, decision, relation_context]:
+        raw = container.get(key) if isinstance(container, dict) else []
+        if isinstance(raw, (list, tuple, set)):
+            values.extend(str(item).strip().upper() for item in raw if str(item or "").strip())
+        elif raw not in (None, ""):
+            values.extend(item.strip().upper() for item in str(raw).split(",") if item.strip())
+    return list(dict.fromkeys(values))
+
+
+def normalized_action_for_rulebox_policy(context: Dict[str, object], action: str) -> str:
+    """Apply explicit TypeDB allowed/blocked action constraints only."""
+    clean = str(action or "").strip().upper()
+    if clean not in VALID_ACTIONS:
+        return clean
+    allowed = _action_policy_codes(context, "allowedActions")
+    blocked = _action_policy_codes(context, "blockedActions") + _action_policy_codes(context, "blockedActionCodes")
+    if clean in set(blocked) or (allowed and clean not in set(allowed)):
+        return "HOLD"
+    return clean
+
 
 def action_label_for_target(context: Dict[str, object], action: str) -> str:
     clean = str(action or "").strip().upper()
@@ -215,6 +225,16 @@ def append_watchlist_action_warning(context: Dict[str, object], original: str, n
         + " 기준으로 보정했습니다."
     )
 
+
+def append_rulebox_action_policy_warning(context: Dict[str, object], original: str, normalized: str, warnings: List[str]) -> None:
+    if original == normalized:
+        return
+    allowed = _action_policy_codes(context, "allowedActions")
+    blocked = _action_policy_codes(context, "blockedActions") + _action_policy_codes(context, "blockedActionCodes")
+    if not allowed and not blocked:
+        return
+    warnings.append("TypeDB RuleBox의 허용/차단 액션 정책에 맞지 않아 실행 후보를 보유로 제한했습니다.")
+
 def is_entry_only_action_context(context: Dict[str, object]) -> bool:
     relation_context = relation_context_value(context or {})
     decision = relation_context.get("decision") if isinstance(relation_context.get("decision"), dict) else {}
@@ -223,118 +243,6 @@ def is_entry_only_action_context(context: Dict[str, object]) -> bool:
         if str((container or {}).get("actionPolicy") or "").strip() == WATCHLIST_ACTION_POLICY:
             return True
     return is_watchlist_context(context or {})
-
-def signed_percent_from_text(value: object) -> float:
-    match = re.search(r"[-+]?\d+(?:\.\d+)?\s*%", str(value or ""))
-    if not match:
-        return 0.0
-    try:
-        return float(match.group(0).replace("%", "").strip())
-    except ValueError:
-        return 0.0
-
-def _optional_number(value: object) -> Optional[float]:
-    try:
-        return float(str(value).replace(",", "").strip())
-    except (TypeError, ValueError):
-        return None
-
-def relation_facts_value(context: Dict[str, object]) -> Dict[str, object]:
-    relation_context = relation_context_value(context or {})
-    facts = relation_context.get("facts") if isinstance(relation_context.get("facts"), dict) else {}
-    if facts:
-        return facts
-    opinion = active_investment_opinion_value(context or {})
-    if isinstance(opinion, dict) and isinstance(opinion.get("facts"), dict):
-        return opinion.get("facts") or {}
-    return {}
-
-def relation_fact_number(context: Dict[str, object], key: str) -> Optional[float]:
-    return _optional_number(relation_facts_value(context).get(key))
-
-def profit_loss_rate_for_context(context: Dict[str, object]) -> float:
-    for key in ("profitLossRate", "profit_loss_rate"):
-        value = relation_fact_number(context, key)
-        if value is not None:
-            return value
-    return signed_percent_from_text(_line_after_colon(_raw_lines(context or {}), "수익률") or _line_after_colon(_raw_lines(context or {}), "손익"))
-
-def volume_ratio_for_context(context: Dict[str, object]) -> Optional[float]:
-    for key in ("timeAdjustedVolumeRatio", "rawVolumeRatio", "volumeRatio"):
-        value = relation_fact_number(context, key)
-        if value is not None:
-            return value
-    return None
-
-def short_term_trend_text(ma5_distance: float) -> str:
-    amount = abs(round(float(ma5_distance or 0), 1))
-    if ma5_distance >= 0:
-        return "현재가가 5일 평균보다 " + str(amount).rstrip("0").rstrip(".") + "% 높아 아주 짧은 가격 흐름은 살아 있습니다."
-    return "현재가가 5일 평균보다 " + str(amount).rstrip("0").rstrip(".") + "% 낮아 아주 짧은 가격 흐름은 약합니다."
-
-def add_short_term_trend_evidence(context: Dict[str, object], action: str, evidence: List[str], counter: List[str]) -> None:
-    ma5_distance = relation_fact_number(context, "ma5Distance")
-    if ma5_distance is None:
-        return
-    text = short_term_trend_text(ma5_distance)
-    if action in {"SELL", "TRIM"} and ma5_distance >= 0:
-        prepend_unique_text(counter, text, 180)
-    elif action in {"BUY", "ADD", "HOLD"} and ma5_distance < 0:
-        prepend_unique_text(counter, text, 180)
-    else:
-        prepend_unique_text(evidence, text, 180)
-
-def soften_profitable_short_term_recovery_sell(context: Dict[str, object], response: NotificationAIValidatedResponse) -> NotificationAIValidatedResponse:
-    if response.action != "SELL":
-        return response
-    pnl = profit_loss_rate_for_context(context)
-    ma5_distance = relation_fact_number(context, "ma5Distance")
-    if pnl <= 0 or ma5_distance is None or ma5_distance < 0.8:
-        return response
-    ma20_distance = relation_fact_number(context, "ma20Distance")
-    volume_ratio = volume_ratio_for_context(context)
-    if ma20_distance is not None and ma20_distance <= -8 and volume_ratio is not None and volume_ratio >= 1.3:
-        return response
-    response.action = "TRIM"
-    response.action_label = ACTION_LABELS["TRIM"]
-    reason = (
-        "수익 구간이고 현재가가 5일 평균보다 "
-        + str(abs(round(ma5_distance, 1))).rstrip("0").rstrip(".")
-        + "% 높아 단기 반등 신호가 있습니다. 전량 매도보다 분할축소로 완화했습니다."
-    )
-    if ma20_distance is not None and ma20_distance < 0:
-        reason += " 다만 20일 평균 아래라 보유만으로 낮추지는 않습니다."
-    append_unique_text(response.counter_evidence, short_term_trend_text(ma5_distance), 180)
-    append_unique_text(response.counter_evidence, reason, 180)
-    append_unique_text(response.validation_warnings, reason, 180)
-    if response.summary:
-        response.summary = response.summary.replace("매도", "분할축소")
-    if response.opinion and "매도" in response.opinion:
-        response.opinion = response.opinion.replace("매도", "분할축소")
-    elif response.opinion:
-        response.opinion = response.opinion + " 다만 5일 평균 위 반등이 있어 전량 매도보다 분할축소로 봅니다."
-    else:
-        response.opinion = "5일 평균 위 반등이 있어 전량 매도보다 분할축소로 봅니다."
-    return response
-
-def soften_conditional_profitable_sell(context: Dict[str, object], response: NotificationAIValidatedResponse) -> NotificationAIValidatedResponse:
-    if response.action != "SELL":
-        return response
-    pnl = profit_loss_rate_for_context(context)
-    if pnl <= 0 or response.validation_state == "ready":
-        return response
-    response.action = "TRIM"
-    response.action_label = ACTION_LABELS["TRIM"]
-    reason = "수익 구간이고 검증 결과가 조건부라 전량 매도보다 일부 축소로 완화했습니다."
-    append_unique_text(response.counter_evidence, reason, 180)
-    append_unique_text(response.validation_warnings, reason, 180)
-    if response.opinion and "매도" in response.opinion:
-        response.opinion = response.opinion.replace("매도", "분할축소")
-    elif response.opinion:
-        response.opinion = response.opinion + " 다만 한 번에 모두 줄이기보다 일부 축소부터 보는 판단입니다."
-    else:
-        response.opinion = "한 번에 모두 줄이기보다 일부 축소부터 보는 판단입니다."
-    return response
 
 def _clean_placeholder_missing_impact(rows: List[str]) -> List[str]:
     placeholders = {"없음", "부족 데이터 없음", "명시적 부족 데이터 없음"}
@@ -634,6 +542,8 @@ def local_validated_ai_response(context: Dict[str, object], source: str = "local
         )
     original_action = action
     action = normalized_action_for_target(context, action)
+    target_normalized_action = action
+    action = normalized_action_for_rulebox_policy(context, action)
     evidence = []
     for item in _driver_rows(context, ["risk", "support", "neutral"], 5):
         evidence.append(item)
@@ -679,6 +589,7 @@ def local_validated_ai_response(context: Dict[str, object], source: str = "local
     missing_impact = _normalize_missing_data_impact(context, missing_impact, missing, 4)
     warnings: List[str] = []
     append_watchlist_action_warning(context, original_action, action, warnings)
+    append_rulebox_action_policy_warning(context, target_normalized_action, action, warnings)
     source_urls = source_urls_from_context(context)
     validation_state, data_state, review_level, validation_label, validation_reasons = validation_state_for_response(
         context,
@@ -719,7 +630,7 @@ def local_validated_ai_response(context: Dict[str, object], source: str = "local
         epistemic_summary=epistemic_summary,
         source=source,
     )
-    return soften_conditional_profitable_sell(context, response)
+    return response
 
 def delivery_profile_from_context(context: Dict[str, object]) -> Dict[str, object]:
     profile = context.get("messageDeliveryProfile") if isinstance(context, dict) else {}
@@ -947,10 +858,9 @@ def build_notification_ai_gate_prompt(context: Dict[str, object]) -> str:
         "관계 규칙명, 확인 단계, 자료 상태, 사전 계산 후보는 판단 재료다. 사용자에게 보이는 문장에서는 가격·수급·뉴스·공시·반대 근거를 비교한 결론을 먼저 말한다.",
         "relationshipDatabaseInference.decisionDrivers는 온톨로지 실행계획이 고른 핵심 판단 축이다. 이 항목을 입력 순서대로 읽고, 방향(risk/support/counter/context), evidenceRole, dataKeys를 근거·반대근거·다음 확인에 반영한다.",
         "relationshipDatabaseInference.whyNow는 새로 달라진 이유이고, signalConflicts는 위험과 지지 근거의 충돌이며, inferenceTimeline은 이전 관측→현재 사실→현재 추론 세대 흐름이다. 반복 상태인지 새 의미 변화인지 먼저 구분한다.",
-        "executionPlan.addBuyAssessment는 손실 구간 추가매수 판단이고, 수익 구간 추가매수는 activeRules/decisionDrivers의 상승 보유 추가매수 근거로 판단한다. ADD는 손실 구간에서는 addBuyAssessment.stage가 ADD_BUY_REVIEW일 때만, 수익 구간에서는 5일선·20일선·60일선 회복, 거래 확인, 비중 한도, 뉴스 리스크가 함께 설명될 때만 고른다.",
-        "5일선은 아주 짧은 가격 타이밍 근거다. 20일선·60일선과 방향이 다르면 반드시 반대 근거에 넣는다. 보유 종목이 수익 구간이고 5일선 위에 있으면 SELL을 고르기 전에 추가매수, 보유, 분할축소 중 무엇이 더 맞는지 비교한다. 다만 20일선이나 60일선이 아직 아래라면 5일선 회복만으로 ADD를 고르지 않는다.",
-        "evidence에는 가능한 한 숫자나 원문 제목을 넣는다. '가격 흐름이 약하다'처럼 뻔한 말만 쓰지 말고 현재가/평단가/수익률/5일선/20일선/60일선/거래량/BTC/금리/환율/뉴스 제목 중 제공된 값을 구체적으로 연결한다.",
-        "MSTR, STRC 등 비트코인 민감 종목이면 BTC 24시간·7일 변동과 보유 종목 가격 반응을 비교한다. 뉴스·공시 제목에 매각, 처분, 실적, 자금조달, 소송, 규제 같은 사건이 있으면 그 사건을 evidence 또는 counterEvidence에 반드시 반영한다.",
+        "action은 executionPlan의 allowedActions·blockedActions와 TypeDB 관계의 실행 제약을 위반하지 않는 범위에서만 고른다. 코드에 적힌 고정 평균선, 손익률, 거래량, BTC, 금리, 환율 규칙으로 action을 새로 만들지 않는다.",
+        "가격·수급·뉴스·공시·크립토·금리·환율 원시값은 TypeDB decisionDrivers와 activeRules가 연결한 근거일 때만 행동 판단에 사용한다. 숫자는 구체적으로 인용할 수 있지만, 입력에 없는 임계값이나 패턴을 스스로 추가하지 않는다.",
+        "실행계획의 strengthenConditions, weakenConditions, nextChecks, counterSignals와 경쟁 가설을 비교해 어떤 조건이 현재 의견을 지지하거나 약화하는지 설명한다. TypeDB 관계가 없는 단일 사실은 다음 확인 또는 부족 데이터로만 다룬다.",
         "BUY, ADD, HOLD, TRIM, SELL, AVOID 중 하나를 반드시 고르되 자동 주문 지시처럼 쓰지 않는다.",
         "대상이 관심종목이면 targetPositionRole=watchlist이고 actionPolicy=ENTRY_ONLY다. 이 정책은 온톨로지 RuleBox/InferenceBox에서 온 제약이다. 관심종목은 보유 수량이 아니므로 HOLD는 '관심 유지', BUY는 '소액 진입 검토', AVOID는 '신규 진입 회피/대기'로 판단한다. 관심종목에 대해 보유 유지, 추가매수, 분할축소, 매도처럼 보유종목용 표현을 쓰지 않는다.",
         "사전 계산 후보와 다른 action을 고르면 disagreementReason에 왜 달라졌는지 반드시 쓴다. 같은 action이어도 단순 추종이 아니라 어떤 증거가 그 판단을 지지했는지 summary에 쓴다.",
@@ -964,14 +874,12 @@ def build_notification_ai_gate_prompt(context: Dict[str, object]) -> str:
         "투자 성향은 행동의 경계 조건이다. 성향이 공격형이어도 자동 주문 지시처럼 쓰지 말고, 안정형이면 손실 제한·현금 여력·비중 한도를 먼저 확인한다.",
         "반대 근거, 부족 데이터 영향, 무효화 조건, 다음 확인 조건을 반드시 포함한다.",
         "strategyGuide에는 실제 대응 기준을 구조화한다. actionMode는 즉시 실행/정규장 확인/대기/분할 준비/소액 진입 검토 중 가장 가까운 표현으로 쓴다.",
-        "strategyGuide.positionSizing에는 보유 수량이 있으면 '10주 중 3~5주 축소 검토'처럼 수량 또는 비중 범위를 쓴다. 수량 정보가 없으면 수량 기준을 만들지 말고 '수량 정보 없음'이라고 쓴다.",
-        "strategyGuide.riskPrice와 recoveryPrice에는 제공된 현재가, 5일선, 20일선, 60일선 중 실제 입력값만 사용한다. 가격을 새로 추정하지 않는다.",
+        "strategyGuide.positionSizing에는 TypeDB 실행 계획이나 사용자가 제공한 비중·수량 기준이 있을 때만 그 값을 쓴다. 근거 없이 임의의 분할 수량·비율을 만들지 않는다.",
+        "strategyGuide.riskPrice와 recoveryPrice에는 TypeDB 실행 계획 또는 제공된 관측값에 명시된 가격만 쓴다. 가격을 새로 추정하거나 고정 이동평균 규칙을 적용하지 않는다.",
         "strategyGuide.dataLimitations에는 장외, 거래량 부족, 뉴스 원문 없음, 수급 지연, 데이터 신선도 문제처럼 실행 강도를 낮추는 제한을 쓴다.",
         "strategyGuide.aiHypothesis에는 AI의 일반 배경지식으로 볼 수 있는 참고 가설만 쓴다. 예: ADR은 본주·환율·미국 업종 심리에 같이 흔들릴 수 있음. 이 가설은 매매 근거가 아니라 다음 확인 항목이라고 분리한다.",
         "strategyGuide.executionCriteria는 현재 조건 → 실행 강도 → 가격 기준 → 수량 기준 → 판단이 약해지는 조건 순서로 쓴다.",
-        "HOLD를 고르면 '그냥 보유'라고 쓰지 않는다. 보유 유지 조건, 추가매수 보류 조건, 분할축소/매도 판단으로 바뀌는 가격·수급 조건을 반드시 쓴다.",
-        "손실 구간 HOLD는 낙관 표현이 아니라 손실 방어 대기 상태로 설명한다. 예: 현재 수량 유지, 추가매수 보류, 5일선 또는 20일선 회복 실패 시 일부 축소 검토.",
-        "수익 구간 HOLD는 수익 보호 기준을 포함한다. 예: 20일선 아래로 내려가면 일부 이익 보호, 20일선 위에서 거래량이 붙으면 보유 유지.",
+        "HOLD를 고르면 '그냥 보유'라고 쓰지 않는다. TypeDB executionPlan의 유지·약화 조건과 다음 확인을 설명한다. 해당 조건이 없으면 실행 판단이 아니라 자료 보완 대기라고 명확히 쓴다.",
         "확률, 확신도, 관계 점수, 종합 점수는 만들거나 출력하지 않는다. 판단 품질은 시스템이 자료 상태와 검증 상태로 따로 확인한다.",
         "응답 JSON이 최종 메시지의 원천이다. 설명 문장 없이 JSON 객체 하나만 출력한다.",
         "스키마:",
@@ -1039,7 +947,10 @@ def validated_response_from_payload(
         action = fallback.action
     original_action = action
     action = normalized_action_for_target(context, action)
+    target_normalized_action = action
+    action = normalized_action_for_rulebox_policy(context, action)
     append_watchlist_action_warning(context, original_action, action, warnings)
+    append_rulebox_action_policy_warning(context, target_normalized_action, action, warnings)
     summary = watchlist_friendly_text(context, user_friendly_ai_text(payload.get("summary") or fallback.summary))
     opinion = soften_order_language(watchlist_friendly_text(context, user_friendly_ai_text(payload.get("opinion") or fallback.opinion)))
     raw_evidence = watchlist_friendly_rows(context, user_friendly_ai_list(payload.get("evidence") or [], 5))
@@ -1060,7 +971,6 @@ def validated_response_from_payload(
         warnings.append("AI 응답에 반대 근거가 없어 관계 분석 데이터에서 반대 근거를 보강했습니다.")
     if not counter:
         counter.append("제공 데이터 안에서 뚜렷한 반대 근거가 부족해 판단 강도를 보수적으로 봅니다.")
-    add_short_term_trend_evidence(context, action, evidence, counter)
     raw_invalidation = str(payload.get("invalidationCondition") or payload.get("invalidation_condition") or "").strip()
     invalidation = soften_order_language(watchlist_friendly_text(context, user_friendly_ai_text(raw_invalidation or fallback.invalidation_condition or default_invalidation_for_action(action))))
     raw_next_checks = payload.get("nextChecks") or payload.get("next_checks") or []
@@ -1117,7 +1027,7 @@ def validated_response_from_payload(
     if hypotheses and comparison_state != "completed":
         if action != "HOLD":
             warnings.append("가설 비교가 끝나기 전의 실행 의견은 사용하지 않고 보류로 낮췄습니다.")
-        action = normalized_action_for_target(context, "HOLD")
+        action = normalized_action_for_rulebox_policy(context, normalized_action_for_target(context, "HOLD"))
         summary = "경쟁 가설 비교가 끝나지 않아 지금은 실행 판단을 보류합니다."
         opinion = "다음 데이터에서 각 가설의 근거와 반대 근거를 모두 비교한 뒤 다시 판단합니다."
         append_unique_text(next_checks, "모든 경쟁 가설의 근거와 반대 근거 비교 완료", 180)
@@ -1163,8 +1073,7 @@ def validated_response_from_payload(
         source=source,
         raw_response=raw_response,
     )
-    response = soften_profitable_short_term_recovery_sell(context, response)
-    return soften_conditional_profitable_sell(context, response)
+    return response
 
 def validated_response_from_text(context: Dict[str, object], text: str, source: str = "ai") -> NotificationAIValidatedResponse:
     return validated_response_from_payload(context, parse_ai_response_json(text), raw_response=str(text or ""), source=source)

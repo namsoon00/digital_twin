@@ -590,7 +590,7 @@ class NotificationDataQualityPolicyTests(unittest.TestCase):
         mixin = StrategyAlertMixin()
         signal_type = mixin.watchlist_ontology_signal_type({
             "decision": {"actionGroup": "review"},
-            "activeRules": [{"ruleId": "data.conflict.v1"}],
+            "activeRules": [{"ruleId": "data.conflict.v1", "notificationCategory": "dataQuality"}],
         })
 
         self.assertEqual("dataQuality", signal_type)

@@ -172,6 +172,16 @@ def materialize_rule_inference(
             "decisionStage": decision_stage,
             "decisionLabel": derivation.decision_label or rule.label,
             "decisionTone": derivation.decision_tone,
+            "primaryAction": derivation.primary_action,
+            "primaryActionLabel": derivation.primary_action_label or derivation.decision_label or rule.label,
+            "candidateAction": derivation.candidate_action,
+            "candidateActionLabel": derivation.candidate_action_label,
+            "blockedActionLabels": list(derivation.blocked_action_labels or []),
+            "strengthenConditions": list(derivation.strengthen_conditions or []),
+            "weakenConditions": list(derivation.weaken_conditions or []),
+            "nextChecks": list(derivation.next_checks or []),
+            "notificationCategory": derivation.notification_category,
+            "notificationSeverity": derivation.notification_severity,
             "evidenceRole": evidence_role,
             "reviewLevel": derivation_review_level,
             "reviewLevelLabel": REVIEW_LEVEL_LABELS[derivation_review_level],
@@ -194,6 +204,16 @@ def materialize_rule_inference(
             "decisionStage": decision_stage,
             "decisionLabel": derivation.decision_label or rule.label,
             "decisionTone": derivation.decision_tone,
+            "primaryAction": derivation.primary_action,
+            "primaryActionLabel": derivation.primary_action_label or derivation.decision_label or rule.label,
+            "candidateAction": derivation.candidate_action,
+            "candidateActionLabel": derivation.candidate_action_label,
+            "blockedActionLabels": list(derivation.blocked_action_labels or []),
+            "strengthenConditions": list(derivation.strengthen_conditions or []),
+            "weakenConditions": list(derivation.weaken_conditions or []),
+            "nextChecks": list(derivation.next_checks or []),
+            "notificationCategory": derivation.notification_category,
+            "notificationSeverity": derivation.notification_severity,
             "reviewLevel": derivation_review_level,
             "dataState": data_state,
             **action_policy,
@@ -411,8 +431,14 @@ def action_policy_properties(derivation, stock_properties: Dict[str, object]) ->
     blocked_actions = [str(item) for item in (getattr(derivation, "blocked_actions", []) or []) if str(item or "").strip()]
     if target_role == WATCHLIST_TARGET_ROLE:
         action_policy = action_policy or WATCHLIST_ACTION_POLICY
-        allowed_actions = allowed_actions or list(WATCHLIST_ALLOWED_ACTIONS)
-        blocked_actions = blocked_actions or list(WATCHLIST_BLOCKED_ACTIONS)
+        # Target-role safety is a declarative policy boundary. A RuleBox
+        # derivation may narrow entry choices, but it can never re-enable a
+        # holding-only action for a watchlist target.
+        allowed_actions = (
+            [item for item in allowed_actions if item in WATCHLIST_ALLOWED_ACTIONS]
+            if allowed_actions else list(WATCHLIST_ALLOWED_ACTIONS)
+        )
+        blocked_actions = list(dict.fromkeys(list(WATCHLIST_BLOCKED_ACTIONS) + blocked_actions))
     return {
         "targetRole": target_role,
         "actionPolicy": action_policy,

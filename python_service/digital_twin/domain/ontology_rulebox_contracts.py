@@ -206,6 +206,24 @@ class GraphRuleDerivation:
     action_policy: str = ""
     allowed_actions: List[str] = dataclass_field(default_factory=list)
     blocked_actions: List[str] = dataclass_field(default_factory=list)
+    # Execution wording is authored with the RuleBox derivation and persisted
+    # to TypeDB.  Runtime readers may render it but must never rebuild an
+    # investment recommendation from actionGroup/stage tables in Python.
+    primary_action: str = ""
+    primary_action_label: str = ""
+    # A valid UI action is separate from ``primary_action``.  The latter is a
+    # richer RuleBox workflow key (for example ``TRIM_REVIEW``), while this
+    # field is the TypeDB-authored candidate supplied to the AI for review.
+    candidate_action: str = ""
+    candidate_action_label: str = ""
+    blocked_action_labels: List[str] = dataclass_field(default_factory=list)
+    strengthen_conditions: List[str] = dataclass_field(default_factory=list)
+    weaken_conditions: List[str] = dataclass_field(default_factory=list)
+    next_checks: List[str] = dataclass_field(default_factory=list)
+    # Delivery routing is also RuleBox metadata.  It prevents notification
+    # code from reclassifying rule IDs or action groups in Python.
+    notification_category: str = ""
+    notification_severity: str = ""
 
     def to_dict(self) -> Dict[str, object]:
         return asdict(self)
@@ -233,6 +251,16 @@ class GraphRuleDerivation:
             action_policy=str(payload.get("action_policy") or payload.get("actionPolicy") or ""),
             allowed_actions=string_list(payload.get("allowed_actions") or payload.get("allowedActions")),
             blocked_actions=string_list(payload.get("blocked_actions") or payload.get("blockedActions")),
+            primary_action=str(payload.get("primary_action") or payload.get("primaryAction") or ""),
+            primary_action_label=str(payload.get("primary_action_label") or payload.get("primaryActionLabel") or ""),
+            candidate_action=str(payload.get("candidate_action") or payload.get("candidateAction") or ""),
+            candidate_action_label=str(payload.get("candidate_action_label") or payload.get("candidateActionLabel") or ""),
+            blocked_action_labels=string_list(payload.get("blocked_action_labels") or payload.get("blockedActionLabels")),
+            strengthen_conditions=string_list(payload.get("strengthen_conditions") or payload.get("strengthenConditions")),
+            weaken_conditions=string_list(payload.get("weaken_conditions") or payload.get("weakenConditions")),
+            next_checks=string_list(payload.get("next_checks") or payload.get("nextChecks")),
+            notification_category=str(payload.get("notification_category") or payload.get("notificationCategory") or ""),
+            notification_severity=str(payload.get("notification_severity") or payload.get("notificationSeverity") or ""),
         )
 
 

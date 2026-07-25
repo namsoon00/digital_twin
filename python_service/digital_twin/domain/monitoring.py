@@ -20,7 +20,7 @@ from .message_types import (
 )
 from .ontology_inference_context import inferencebox_source_name, ontology_projection_from_metadata, relation_contexts_from_snapshot
 from .ontology_insights import build_investment_insight_events, relation_news_event_key_suffix, split_operational_and_investment_events
-from .ontology_relation_reasoning import relation_rule_context_summary_lines, relation_thresholds_from_settings
+from .ontology_relation_reasoning import relation_rule_context_summary_lines
 from .ontology_decision_state import (
     CHANGE_STATE_LABELS,
     DATA_STATE_LABELS,
@@ -246,7 +246,6 @@ class RealtimeMonitor(MonitoringSampleDataMixin, MonitoringPositionContextMixin,
         self.settings = dict(settings)
         self.rules = parse_assignments(settings.get("alertRules", ""), DEFAULT_ALERT_RULES)
         self.thresholds = parse_assignments(settings.get("alertThresholds", ""), DEFAULT_THRESHOLDS)
-        self.relation_thresholds = relation_thresholds_from_settings(settings)
         self.cadence = parse_assignments(settings.get("alertCadenceMinutes", ""), DEFAULT_CADENCE)
         self.fx_rates = {
             str(key).upper(): float(value or 0)

@@ -210,7 +210,7 @@ def add_security_line_concepts(
             })
             friction_id = add_entity(graph, "arbitrage-friction", local_symbol + ":" + line.symbol, line.symbol + " ADR 차익거래 제약", {
                 "tboxClass": "ArbitrageFriction",
-                "tboxClasses": ["Risk", "MarketStructureRisk", "ArbitrageFriction"],
+                "tboxClasses": ["Observation", "MarketStructureSignal", "ArbitrageFriction"],
                 "symbol": local_symbol,
                 "adrSymbol": line.symbol,
                 "conversionStartDate": line.conversion_start_date,
@@ -221,7 +221,8 @@ def add_security_line_concepts(
             })
             add_relation(graph, stock_id, friction_id, "HAS_ARBITRAGE_FRICTION", weight=0.74, properties={
                 "source": "security-line-catalog",
-                "polarity": "risk",
+                "polarity": "context",
+                "evidenceRole": "context",
                 "aiInfluenceLabel": line.symbol + " 전환·차익거래 제약",
             })
 
@@ -301,7 +302,8 @@ def add_security_line_concepts(
         add_relation(graph, stock_id, premium_id, "HAS_ADR_PREMIUM", weight=min(1.0, max(0.3, abs(premium_pct) / 50)), properties={
             "source": "security-line-ontology",
             "field": "adrPremiumPct",
-            "polarity": "risk" if abs(premium_pct) >= 10 else "context",
+            "polarity": "context",
+            "evidenceRole": "context",
             "aiInfluenceLabel": line.symbol + " ADR 프리미엄 " + str(round(premium_pct, 1)) + "%",
         })
 
@@ -312,7 +314,8 @@ def add_security_line_concepts(
             "source": "security-line-catalog",
             "field": "leverageFactor",
             "value": abs(line.leverage_factor),
-            "polarity": "risk" if abs(line.leverage_factor) >= 2 else "context",
+            "polarity": "context",
+            "evidenceRole": "context",
             "aiInfluenceLabel": line.symbol + " -> " + (line.underlying_symbol or "underlying") + " 일일 추종",
         })
         add_relation(graph, stock_id, etf_id, "HAS_LEVERAGED_PRODUCT", weight=min(1.0, abs(line.leverage_factor) / 2.0), properties={
@@ -320,7 +323,8 @@ def add_security_line_concepts(
             "field": "leverageFactor",
             "value": abs(line.leverage_factor),
             "signalGroup": "leveragedProduct",
-            "polarity": "risk",
+            "polarity": "context",
+            "evidenceRole": "context",
             "aiInfluenceLabel": line.symbol + " 레버리지 상품",
         })
         quote_price = quote_price_for_line(line, positions_by_symbol, external_signals)
@@ -328,7 +332,7 @@ def add_security_line_concepts(
         if quote_price or quote_volume:
             flow_id = add_entity(graph, "leveraged-flow-signal", local_symbol + ":" + line.symbol, line.symbol + " 레버리지 수급 신호", {
                 "tboxClass": "RebalancingFlow",
-                "tboxClasses": ["Observation", "FlowObservation", "LeveragedETF", "DailyResetLeverage", "RebalancingFlow", "FlowAmplificationRisk"],
+                "tboxClasses": ["Observation", "FlowObservation", "LeveragedETF", "DailyResetLeverage", "RebalancingFlow"],
                 "symbol": local_symbol,
                 "etfSymbol": line.symbol,
                 "underlyingSymbol": line.underlying_symbol,
@@ -344,7 +348,8 @@ def add_security_line_concepts(
                 "source": "security-line-ontology",
                 "field": "leverageFactor",
                 "signalGroup": "leveragedProduct",
-                "polarity": "risk",
+                "polarity": "context",
+                "evidenceRole": "context",
                 "aiInfluenceLabel": line.symbol + " 일일 리셋 레버리지 수급",
             })
         else:

@@ -17,7 +17,6 @@ from .instrument_profiles import (
 )
 from .ontology_contracts import PortfolioOntology, entity_id
 from .ontology_schema import add_entity, add_relation
-from .ontology_threshold_policy import default_ontology_threshold_policy
 from .portfolio import PortfolioSummary, Position
 from .portfolio_ontology_catalog import FACTOR_BENCHMARKS, SECTOR_FACTORS
 from .portfolio_ontology_market_concepts import symbol_key
@@ -113,44 +112,20 @@ def market_proxy_observation_id(profile: InstrumentProfile) -> str:
     return entity_id("market-proxy-observation", profile.symbol)
 
 
-def market_proxy_observation_pressure(quote: Dict[str, object]) -> Dict[str, object]:
-    policy = default_ontology_threshold_policy().market_proxy
-    change_rate = number(quote.get("changeRate"))
-    ma20_distance = number(quote.get("ma20Distance"))
-    ma60_distance = number(quote.get("ma60Distance"))
-    volume_ratio = number(quote.get("volumeRatio"))
-    risk_conditions = [
-        key for key, matched in [
-            ("price-down", change_rate < 0),
-            ("below-ma20", ma20_distance < 0),
-            ("below-ma60", ma60_distance < 0),
-        ] if matched
-    ]
-    support_conditions = [
-        key for key, matched in [
-            ("price-up", change_rate > 0),
-            ("above-ma20", ma20_distance >= 0),
-            ("above-ma60", ma60_distance >= 0),
-        ] if matched
-    ]
-    volume_confirmed = volume_ratio >= policy.volume_confirmation_ratio
-    if len(risk_conditions) >= 2 and len(support_conditions) >= 2:
-        conflict_state, evidence_role, polarity = "mixed", "counter", "context"
-    elif len(risk_conditions) >= 2:
-        conflict_state, evidence_role, polarity = "risk-only", "risk", "risk"
-    elif len(support_conditions) >= 2:
-        conflict_state, evidence_role, polarity = "support-only", "support", "support"
-    else:
-        conflict_state, evidence_role, polarity = "context-only", "context", "context"
+def market_proxy_observation_metadata(quote: Dict[str, object]) -> Dict[str, object]:
+    """Describe an ABox market sensor without pre-judging its direction.
+
+    Price, moving-average and volume values are persisted on the observation
+    itself.  RuleBox native rules decide whether a particular combination is
+    risk, support or only context.
+    """
+    data_state = "sufficient" if number(quote.get("currentPrice")) else "partial"
     return {
-        "polarity": polarity,
-        "evidenceRole": evidence_role,
-        "conflictState": conflict_state,
-        "reviewLevel": "check" if evidence_role in {"risk", "support", "counter"} and volume_confirmed else "observe",
-        "dataState": "sufficient",
-        "volumeConfirmed": volume_confirmed,
-        "riskConditions": risk_conditions,
-        "supportConditions": support_conditions,
+        "polarity": "context",
+        "evidenceRole": "context",
+        "conflictState": "context-only",
+        "reviewLevel": "observe",
+        "dataState": data_state,
     }
 
 
@@ -163,7 +138,7 @@ def add_market_proxy_observation_concepts(
 ) -> str:
     if not isinstance(quote, dict) or not quote:
         return ""
-    pressure = market_proxy_observation_pressure(quote)
+    observation_metadata = market_proxy_observation_metadata(quote)
     source_as_of = str(quote.get("sourceAsOf") or quote.get("updatedAt") or "")
     source_fetched_at = str(quote.get("sourceFetchedAt") or quote.get("updatedAt") or "")
     observation_id = add_entity(graph, "market-proxy-observation", profile.symbol, profile.label + " 시장 센서 관측", {
@@ -195,24 +170,16 @@ def add_market_proxy_observation_concepts(
         "judgementEvidenceUsable": bool(quote.get("judgementEvidenceUsable")),
         "collectionPurpose": quote.get("collectionPurpose") or "",
         "collectionTarget": quote.get("collectionTarget") or "",
-        **pressure,
+        **observation_metadata,
     })
     add_relation(graph, proxy_id, observation_id, "HAS_OBSERVATION", weight=0.72, properties={
         "source": source,
-        "polarity": pressure["polarity"],
-        "evidenceRole": pressure["evidenceRole"],
-        "reviewLevel": pressure["reviewLevel"],
-        "dataState": pressure["dataState"],
-        "conflictState": pressure["conflictState"],
+        **observation_metadata,
         "aiInfluenceLabel": profile.label + " 시장 센서 관측",
     })
     add_relation(graph, proxy_id, observation_id, "HAS_PRICE", weight=0.65, properties={
         "source": source,
-        "polarity": pressure["polarity"],
-        "evidenceRole": pressure["evidenceRole"],
-        "reviewLevel": pressure["reviewLevel"],
-        "dataState": pressure["dataState"],
-        "conflictState": pressure["conflictState"],
+        **observation_metadata,
         "aiInfluenceLabel": profile.label + " 가격 맥락",
     })
     return observation_id
@@ -336,7 +303,6 @@ def add_stock_market_proxy_context_concepts(
             quote=quote,
         )
         observation_id = market_proxy_observation_id(proxy_profile)
-        pressure = market_proxy_observation_pressure(quote)
         add_relation(graph, stock_id, proxy_id, "OBSERVES_MARKET_PROXY", weight=0.35, properties={
             "source": "market-proxy-context",
             "overlapFactors": overlap,
@@ -346,11 +312,7 @@ def add_stock_market_proxy_context_concepts(
         add_relation(graph, stock_id, observation_id, "HAS_OBSERVATION", weight=0.32, properties={
             "source": "market-proxy-context",
             "overlapFactors": overlap,
-            "polarity": pressure["polarity"],
-            "evidenceRole": pressure["evidenceRole"],
-            "reviewLevel": pressure["reviewLevel"],
-            "dataState": pressure["dataState"],
-            "conflictState": pressure["conflictState"],
+            **market_proxy_observation_metadata(quote),
             "aiInfluenceLabel": profile.label + " 시장 프록시 관측",
         })
 
@@ -497,7 +459,6 @@ def add_portfolio_factor_exposure_concepts(
     observed_positions: List[Position],
     runtime_context: Dict[str, object] = None,
 ) -> None:
-    policy = default_ontology_threshold_policy().market_proxy
     add_market_proxy_universe_concepts(graph, portfolio_node_id, runtime_context)
     total = number(portfolio.total) or number(portfolio.invested)
     if not total:
@@ -515,7 +476,7 @@ def add_portfolio_factor_exposure_concepts(
         sector_positions[sector] = sector_positions.get(sector, 0) + 1
     for currency, value in sorted(currency_exposure.items()):
         ratio = (value / raw_position_total) * 100 if raw_position_total else 0.0
-        if currency in {"KRW", ""} or ratio < policy.currency_exposure_min_pct:
+        if currency in {"KRW", ""} or ratio <= 0:
             continue
         fx_id = add_entity(graph, "fx-pair", "KRW:" + currency, "KRW/" + currency + " 환율 노출", {
             "tboxClass": "FXPair",
@@ -523,28 +484,30 @@ def add_portfolio_factor_exposure_concepts(
             "exposureValue": round(value, 2),
             "exposureRatio": round(ratio, 2),
         })
-        risk_id = add_entity(graph, "risk", currency + "-currency-risk", currency + " 통화 리스크", {
-            "tboxClass": "Risk",
-            "tboxClasses": ["Risk", "CurrencyRisk"],
+        exposure_id = add_entity(graph, "currency-exposure", graph.portfolio_id + ":" + currency, currency + " 통화 노출", {
+            "tboxClass": "CurrencyExposure",
+            "tboxClasses": ["MarketExposure", "CurrencyExposure"],
             "currency": currency,
             "exposureRatio": round(ratio, 2),
+            "exposureValue": round(value, 2),
         })
         add_relation(graph, portfolio_node_id, fx_id, "HAS_MARKET_EXPOSURE", weight=round(ratio / 100, 4), properties={"source": "currency-exposure", "aiInfluenceLabel": currency + " 환율 노출"})
-        add_relation(graph, portfolio_node_id, risk_id, "EXPOSED_TO", weight=round(ratio / 100, 4), properties={"source": "currency-exposure", "polarity": "context", "aiInfluenceLabel": currency + " 통화 리스크"})
-        add_relation(graph, fx_id, risk_id, "AMPLIFIES_RISK", weight=round(ratio / 100, 4), properties={"source": "currency-exposure", "polarity": "context", "aiInfluenceLabel": currency + " 환율 민감도"})
+        add_relation(graph, portfolio_node_id, exposure_id, "HAS_MARKET_EXPOSURE", weight=round(ratio / 100, 4), properties={"source": "currency-exposure", "polarity": "context", "aiInfluenceLabel": currency + " 통화 노출"})
+        add_relation(graph, fx_id, exposure_id, "HAS_MARKET_EXPOSURE", weight=round(ratio / 100, 4), properties={"source": "currency-exposure", "polarity": "context", "aiInfluenceLabel": currency + " 환율 민감도"})
     for sector in portfolio.sectors:
         label = str(sector.get("sector") or "기타")
         ratio = number(sector.get("ratio"))
-        if ratio < policy.sector_exposure_min_pct and sector_positions.get(label, 0) < policy.sector_position_min_count:
+        position_count = sector_positions.get(label, 0)
+        if ratio <= 0 and position_count <= 0:
             continue
-        risk_id = add_entity(graph, "risk", label + "-correlation-risk", label + " 상관 리스크", {
-            "tboxClass": "Risk",
-            "tboxClasses": ["Risk", "ConcentrationRisk", "CorrelationRisk"],
+        exposure_id = add_entity(graph, "sector-exposure", graph.portfolio_id + ":" + label, label + " 섹터 노출", {
+            "tboxClass": "SectorExposure",
+            "tboxClasses": ["MarketExposure", "SectorExposure", "FactorExposure"],
             "sector": label,
-            "sectorRatio": round(ratio, 2),
-            "positionCount": sector_positions.get(label, 0),
+            "exposureRatio": round(ratio, 2),
+            "positionCount": position_count,
         })
-        add_relation(graph, portfolio_node_id, risk_id, "EXPOSED_TO", weight=round(ratio / 100, 4), properties={"source": "sector-correlation", "polarity": "context", "aiInfluenceLabel": label + " 섹터 상관 리스크"})
+        add_relation(graph, portfolio_node_id, exposure_id, "HAS_MARKET_EXPOSURE", weight=round(ratio / 100, 4), properties={"source": "sector-exposure", "polarity": "context", "aiInfluenceLabel": label + " 섹터 노출"})
 
 
 

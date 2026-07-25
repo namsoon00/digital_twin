@@ -5,6 +5,7 @@ import sys
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
+from digital_twin.domain.investor_flow_psychology import investor_flow_psychology
 from digital_twin.domain.ontology_relation_facts import position_signal_facts
 from digital_twin.domain.portfolio import Position
 from digital_twin.domain.portfolio_calculations import portfolio_summary
@@ -116,6 +117,26 @@ class OntologyEntryGovernanceTests(unittest.TestCase):
         self.assertGreater(facts["positionAccountWeight"], 0)
         self.assertNotIn("decision", facts)
         self.assertNotIn("addBuyEligibilityStage", facts)
+
+    def test_investor_flow_helper_keeps_joint_flow_as_raw_abox_observation(self):
+        position = Position(
+            symbol="000660",
+            name="SK하이닉스",
+            market="KR",
+            currency="KRW",
+            foreign_net_volume=100,
+            institution_net_volume=200,
+            individual_net_volume=-300,
+        )
+
+        observation = investor_flow_psychology(position)
+
+        self.assertEqual("InvestorFlowObservation", observation["tboxClass"])
+        self.assertEqual("context", observation["polarity"])
+        self.assertEqual("context", observation["evidenceRole"])
+        self.assertTrue(observation["jointSmartMoneyInflow"])
+        self.assertNotIn("SmartMoneyAccumulation", observation["tboxClasses"])
+        self.assertNotIn("RetailDipBuyingRisk", observation["tboxClasses"])
 
     def test_profitable_holding_add_buy_inputs_are_facts_not_python_judgement(self):
         position = Position(

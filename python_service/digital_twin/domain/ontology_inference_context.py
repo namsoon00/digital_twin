@@ -8,7 +8,6 @@ from .ontology_decision_state import (
     CONFLICT_STATE_LABELS,
     DATA_STATE_LABELS,
     REVIEW_LEVEL_LABELS,
-    change_state_from_facts,
     conflict_state_from_roles,
     data_state_from_evidence,
     evidence_role_from_relation,
@@ -23,7 +22,6 @@ from .ontology_rulebox_contracts import (
     WATCHLIST_BLOCKED_ACTIONS,
     WATCHLIST_TARGET_ROLE,
 )
-from .ontology_threshold_policy import ontology_threshold_policy_from_context
 from .ontology_observation_quality import position_observation_profiles
 from .ontology_relation_decisions import decision_stage_from_relation
 from .ontology_worlds import market_world
@@ -214,7 +212,6 @@ def relation_context_from_inferencebox(
     resolved_market_world_id = str(market_world_id or "").strip() or market_world(
         facts.get("market") or position.market or "global"
     ).world_id
-    threshold_policy = ontology_threshold_policy_from_context(settings or {})
     matches = matches_from_inference(relations, traces, facts=facts, source_name=source_name, context_version=context_version)
     if not matches:
         return {}
@@ -224,8 +221,8 @@ def relation_context_from_inferencebox(
     active_matches = [item for item in matches if item.matched and not item.reference_only]
     evidence_state = aggregate_evidence_state(active_matches or matches)
     evidence_subgraph = evidence_subgraph_packet(position, facts, matches, relations, traces)
-    why_now = why_now_packet(facts, active_matches, decision, relations, traces, inferencebox, threshold_policy)
-    signal_conflicts = signal_conflict_packet(facts, active_matches, relations, threshold_policy)
+    why_now = why_now_packet(facts, active_matches, decision, relations, traces, inferencebox)
+    signal_conflicts = signal_conflict_packet(facts, active_matches, relations)
     data_state = str(evidence_state.get("dataState") or "partial")
     review_level = (
         "blocked"
@@ -529,6 +526,20 @@ def matches_from_inference(
             action_level=stage.action_level if stage else "",
             decision_label=stage.label if stage else "",
             decision_tone=stage.tone if stage else "",
+            target_role=str(relation.get("targetRole") or relation.get("target_role") or ""),
+            action_policy=str(relation.get("actionPolicy") or relation.get("action_policy") or ""),
+            allowed_actions=string_list(relation.get("allowedActions") or relation.get("allowed_actions")),
+            blocked_actions=string_list(relation.get("blockedActions") or relation.get("blocked_actions")),
+            primary_action=str(relation.get("primaryAction") or relation.get("primary_action") or ""),
+            primary_action_label=str(relation.get("primaryActionLabel") or relation.get("primary_action_label") or ""),
+            candidate_action=str(relation.get("candidateAction") or relation.get("candidate_action") or ""),
+            candidate_action_label=str(relation.get("candidateActionLabel") or relation.get("candidate_action_label") or ""),
+            blocked_action_labels=string_list(relation.get("blockedActionLabels") or relation.get("blocked_action_labels")),
+            strengthen_conditions=string_list(relation.get("strengthenConditions") or relation.get("strengthen_conditions")),
+            weaken_conditions=string_list(relation.get("weakenConditions") or relation.get("weaken_conditions")),
+            next_checks=string_list(relation.get("nextChecks") or relation.get("next_checks")),
+            notification_category=str(relation.get("notificationCategory") or relation.get("notification_category") or ""),
+            notification_severity=str(relation.get("notificationSeverity") or relation.get("notification_severity") or ""),
         ))
     if matches:
         return sorted(matches, key=lambda item: semantic_relation_sort_key(relation_for_match(item, primary_relations)))
@@ -754,10 +765,12 @@ def why_now_packet(
     relations: List[Dict[str, object]],
     traces: List[Dict[str, object]],
     inferencebox: Dict[str, object],
-    threshold_policy=None,
 ) -> Dict[str, object]:
-    policy = (threshold_policy or ontology_threshold_policy_from_context({})).why_now
-    facts = facts or {}
+    """Explain an InferenceBox generation without recreating numeric gates.
+
+    A RuleBox relation becoming active is the change event.  Raw deltas are
+    shown only when the TypeDB trace says they grounded a rule.
+    """
     decision = decision or {}
     drivers: List[str] = []
     changed_facts: List[Dict[str, object]] = []
@@ -767,64 +780,40 @@ def why_now_packet(
         if text and text not in drivers:
             drivers.append(text)
 
-    def add_change(key: str, label: str, current: object, previous: object = None, delta: object = None, threshold: float = 0.0) -> None:
-        delta_value = number(delta)
-        if threshold and abs(delta_value) < threshold:
-            return
-        if current in (None, "") and previous in (None, "") and delta in (None, ""):
-            return
-        changed_facts.append({
-            "key": key,
-            "label": label,
-            "current": current,
-            "previous": previous,
-            "delta": round(delta_value, 3) if delta not in (None, "") else "",
-        })
-
-    pnl_delta = number(facts.get("profitLossRateDeltaPct"))
-    if pnl_delta:
-        add_change(
-            "profitLossRate",
-            "손익률 변화",
-            facts.get("profitLossRate"),
-            facts.get("previousProfitLossRate"),
-            pnl_delta,
-            threshold=policy.profit_loss_delta_change_pct,
-        )
-        add_driver("손익률이 이전 관측 대비 " + signed_number_text(pnl_delta) + "%p 변했습니다.")
-    price_change = number(facts.get("priceChangeRate"))
-    if abs(price_change) >= policy.price_change_driver_pct:
-        add_change("priceChangeRate", "현재 가격 변화", facts.get("priceChangeRate"), delta=price_change, threshold=policy.price_change_driver_pct)
-        add_driver("현재 가격 변화율이 " + signed_number_text(price_change) + "%입니다.")
-    direct_news_count = number(facts.get("directNewsCount"))
-    if direct_news_count:
-        add_driver("직접 뉴스/리서치 근거 " + str(int(direct_news_count)) + "건이 추론에 포함됐습니다.")
     stage = str(decision.get("decisionStage") or "").strip()
     if stage:
         add_driver("현재 판단 단계는 " + stage + "입니다.")
     relation_rule_ids = unique_texts([item.rule_id for item in active_matches or []])
     trace_ids = unique_texts([str(item.get("id") or "") for item in traces or [] if isinstance(item, dict)])
-    if relation_rule_ids:
-        add_driver("이번 세대에서 성립한 핵심 룰: " + ", ".join(relation_rule_ids[:3]))
-    has_new_evidence = bool(direct_news_count or facts.get("disclosure") or facts.get("sourceAlertEvents"))
-    change_state = change_state_from_facts(facts, has_new_evidence=has_new_evidence)
-    review_level = review_level_for(decision.get("actionLevel"))
-    should_escalate = bool(
-        change_state != "unchanged"
-        or abs(pnl_delta) >= policy.escalate_profit_loss_delta_pct
-        or abs(price_change) >= policy.escalate_price_change_pct
-        or review_level in {"act", "immediate", "blocked"}
-    )
+    for match in active_matches or []:
+        add_driver("TypeDB RuleBox 관계 성립: " + str(match.label or match.rule_id))
+    for trace in traces or []:
+        if not isinstance(trace, dict):
+            continue
+        if str(trace.get("ruleId") or "") not in relation_rule_ids:
+            continue
+        for condition in trace.get("matchedConditions") or []:
+            if not isinstance(condition, dict):
+                continue
+            field = str(condition.get("field") or condition.get("conditionId") or "").strip()
+            observed = condition.get("observedValue")
+            if not field or observed in (None, ""):
+                continue
+            item = {"key": field, "label": field, "current": observed, "previous": "", "delta": ""}
+            if item not in changed_facts:
+                changed_facts.append(item)
+    change_state = "new-condition" if relation_rule_ids else "unchanged"
+    should_escalate = bool(relation_rule_ids and str(decision.get("actionLevel") or "").lower() in {"action", "urgent"})
     return {
         "tboxClass": "WhyNow",
         "reasoningQuestion": "왜 지금 다시 봐야 하는가",
         "changeState": change_state,
         "changeStateLabel": CHANGE_STATE_LABELS[change_state],
         "shouldEscalate": should_escalate,
-        "changeDrivers": drivers[:policy.max_change_drivers],
-        "changedFacts": changed_facts[:policy.max_changed_facts],
-        "activeRuleIds": relation_rule_ids[:policy.max_rule_ids],
-        "traceIds": trace_ids[:policy.max_rule_ids],
+        "changeDrivers": drivers[:6],
+        "changedFacts": changed_facts[:6],
+        "activeRuleIds": relation_rule_ids[:8],
+        "traceIds": trace_ids[:8],
         "decisionStage": stage,
         "inferenceGenerationId": str(inferencebox.get("inferenceGenerationId") or ""),
         "inferenceGenerationAt": str(inferencebox.get("inferenceGenerationAt") or ""),
@@ -835,16 +824,8 @@ def signal_conflict_packet(
     facts: Dict[str, object],
     active_matches: List[OntologyRuleMatch],
     relations: List[Dict[str, object]],
-    threshold_policy=None,
 ) -> Dict[str, object]:
-    policy = (threshold_policy or ontology_threshold_policy_from_context({})).signal_conflict
-    facts = facts or {}
-    applied_fields = {
-        str(field)
-        for match in active_matches or []
-        for field in (match.evidence_state or {}).get("appliedFactFields") or []
-        if str(field or "").strip()
-    }
+    """Use only TypeDB relation polarity for an inference conflict state."""
     risk_drivers: List[str] = []
     support_drivers: List[str] = []
 
@@ -853,33 +834,10 @@ def signal_conflict_packet(
         if text and text not in target:
             target.append(text)
 
-    if "profitLossRate" in applied_fields and number(facts.get("profitLossRate")) <= policy.loss_risk_profit_loss_rate:
-        add(risk_drivers, "손실 구간")
-    if "ma20Distance" in applied_fields and number(facts.get("ma20Distance")) < 0:
-        add(risk_drivers, "20일 평균 아래")
-    if "ma60Distance" in applied_fields and number(facts.get("ma60Distance")) < 0:
-        add(risk_drivers, "60일 평균 아래")
-    if "tradeStrength" in applied_fields and number(facts.get("tradeStrength")) and number(facts.get("tradeStrength")) < policy.weak_trade_strength:
-        add(risk_drivers, "체결강도 약화")
-    smart_money = number(facts.get("foreignNetVolume")) + number(facts.get("institutionNetVolume"))
-    if smart_money < 0:
-        add(risk_drivers, "외국인·기관 수급 부담")
-    if "tradeStrength" in applied_fields and number(facts.get("tradeStrength")) >= policy.support_trade_strength:
-        add(support_drivers, "체결강도 우위")
-    if "bidAskImbalance" in applied_fields and number(facts.get("bidAskImbalance")) >= policy.support_bid_ask_imbalance:
-        add(support_drivers, "매수 호가 우위")
-    if smart_money > 0:
-        add(support_drivers, "외국인·기관 수급 지지")
-    if "ma5Distance" in applied_fields and number(facts.get("ma5Distance")) > 0:
-        add(support_drivers, "5일 평균 위")
-    if "priceChangeRate" in applied_fields and number(facts.get("priceChangeRate")) > 0:
-        add(support_drivers, "현재 가격 반등")
-    for relation in relations or []:
-        if not is_primary_inference_relation(relation):
-            continue
-        polarity = evidence_role_from_relation(relation)
-        label = str((relation or {}).get("aiInfluenceLabel") or (relation or {}).get("targetLabel") or "").strip()
-        if polarity == "risk":
+    for match in active_matches or []:
+        polarity = str(match.evidence_role or "context")
+        label = str(match.label or match.decision_label or match.rule_id).strip()
+        if polarity in {"risk", "blocking"}:
             add(risk_drivers, label)
         elif polarity in {"support", "counter"}:
             add(support_drivers, label)
@@ -1014,6 +972,16 @@ def decision_from_inference(
             "judgementBlocked": True,
             "actionPolicyApplied": False,
             "nativeTypeDbReasoned": False,
+            "primaryAction": "",
+            "primaryActionLabel": "",
+            "candidateAction": "",
+            "candidateActionLabel": "",
+            "blockedActionLabels": [],
+            "strengthenConditions": [],
+            "weakenConditions": [],
+            "nextChecks": [],
+            "notificationCategory": "",
+            "notificationSeverity": "",
         }
     selected = min(candidates, key=lambda item: semantic_relation_sort_key(relation_for_match(item, relations)))
     relation = relation_for_match(selected, relations)
@@ -1045,13 +1013,49 @@ def decision_from_inference(
             "judgementBlocked": True,
             "actionPolicyApplied": False,
             "nativeTypeDbReasoned": False,
+            "primaryAction": "",
+            "primaryActionLabel": "",
+            "candidateAction": "",
+            "candidateActionLabel": "",
+            "blockedActionLabels": [],
+            "strengthenConditions": [],
+            "weakenConditions": [],
+            "nextChecks": [],
+            "notificationCategory": "",
+            "notificationSeverity": "",
         }
-    action_policy_applied = False
-    if action_policy.get("targetRole") == WATCHLIST_TARGET_ROLE:
-        if stage.action_group in {"lossControl", "profitTake", "rebalance", "distributionRisk"}:
-            action_policy_applied = True
+    candidate_action = str(
+        relation.get("candidateAction")
+        or relation.get("candidate_action")
+        or selected.candidate_action
+        or ""
+    ).strip().upper()
+    allowed_actions = {
+        value.strip().upper()
+        for value in action_policy.get("allowedActions") or []
+        if str(value or "").strip()
+    }
+    blocked_actions = {
+        value.strip().upper()
+        for value in action_policy.get("blockedActions") or []
+        if str(value or "").strip()
+    }
+    # This is a target-role safety boundary.  It consumes the action authored
+    # by the materialized RuleBox relation and never derives an action from a
+    # stage name or an action group in Python.
+    action_policy_applied = bool(
+        action_policy.get("targetRole") == WATCHLIST_TARGET_ROLE
+        and candidate_action
+        and (candidate_action in blocked_actions or (allowed_actions and candidate_action not in allowed_actions))
+    )
     trace = next((item for item in traces if str(item.get("ruleId") or "") == selected.rule_id), {})
-    label = "신규 진입 보류" if action_policy_applied and action_policy.get("targetRole") == WATCHLIST_TARGET_ROLE else stage.label
+    materialized_label = str(
+        relation.get("decisionLabel")
+        or relation.get("decision_label")
+        or selected.decision_label
+        or stage.label
+    ).strip()
+    label = "신규 진입 보류" if action_policy_applied and action_policy.get("targetRole") == WATCHLIST_TARGET_ROLE else materialized_label
     review_level = review_level_for(stage.action_level, selected.data_state)
     candidate_stages = []
     for item in matches:
@@ -1081,6 +1085,16 @@ def decision_from_inference(
         "sourceRelationType": str(relation.get("type") or ""),
         "stagePolicySource": inference_relation_policy_source(source_name),
         "judgementBlocked": False,
+        "primaryAction": str(relation.get("primaryAction") or relation.get("primary_action") or selected.primary_action or ""),
+        "primaryActionLabel": str(relation.get("primaryActionLabel") or relation.get("primary_action_label") or selected.primary_action_label or materialized_label),
+        "candidateAction": candidate_action,
+        "candidateActionLabel": str(relation.get("candidateActionLabel") or relation.get("candidate_action_label") or selected.candidate_action_label or ""),
+        "blockedActionLabels": string_list(relation.get("blockedActionLabels") or relation.get("blocked_action_labels") or selected.blocked_action_labels),
+        "strengthenConditions": string_list(relation.get("strengthenConditions") or relation.get("strengthen_conditions") or selected.strengthen_conditions),
+        "weakenConditions": string_list(relation.get("weakenConditions") or relation.get("weaken_conditions") or selected.weaken_conditions),
+        "nextChecks": string_list(relation.get("nextChecks") or relation.get("next_checks") or selected.next_checks),
+        "notificationCategory": str(relation.get("notificationCategory") or relation.get("notification_category") or selected.notification_category or ""),
+        "notificationSeverity": str(relation.get("notificationSeverity") or relation.get("notification_severity") or selected.notification_severity or ""),
         **action_policy,
         "actionPolicyApplied": action_policy_applied,
         "nativeTypeDbReasoned": bool(relation.get("nativeTypeDbReasoned") or trace.get("nativeTypeDbReasoned")),

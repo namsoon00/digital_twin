@@ -219,6 +219,13 @@ def add_governed_claim_concepts(
                 "sourceEvidenceId": str(corroborating_id),
             })
             add_relation(graph, claim_id, peer_id, "CORROBORATED_BY", weight=1.0, evidence_ids=[evidence_key, str(corroborating_id)], properties=relation_props)
+        for official_id in claim.get("officialEvidenceIds") or []:
+            official_document_id = add_entity(graph, "retrieved-document", str(official_id), str(official_id), {
+                "tboxClass": "RetrievedDocument",
+                "sourceEvidenceId": str(official_id),
+                "documentRole": "official-verification",
+            })
+            add_relation(graph, claim_id, official_document_id, "OFFICIALLY_VERIFIED_BY", weight=1.0, evidence_ids=[evidence_key, str(official_id)], properties=relation_props)
         for superseded_claim_id in claim.get("supersedesClaimIds") or []:
             previous_id = add_entity(graph, "verified-claim", str(superseded_claim_id), str(superseded_claim_id), {
                 "tboxClass": "ExtractedClaim",

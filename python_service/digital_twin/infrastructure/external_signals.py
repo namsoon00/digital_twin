@@ -12,7 +12,9 @@ from .external_signal_utils import (
     ExternalApiGuard,
     ExternalCircuitOpen,
     ExternalRateLimited,
+    BytesFetcher,
     JsonFetcher,
+    TextFetcher,
     api_error_text,
     default_json_fetcher,
     parse_iso,
@@ -39,11 +41,15 @@ class ExternalSignalProvider(
         cache=None,
         evidence_store=None,
         fetch_json: JsonFetcher = None,
+        fetch_text: TextFetcher = None,
+        fetch_bytes: BytesFetcher = None,
         sleep: Callable[[float], None] = None,
     ):
         self.settings = settings or runtime_settings()
         self.cache = cache or external_signal_cache(self.settings)
         self.evidence_store = evidence_store or research_evidence_store(self.settings)
         self.fetch_json = fetch_json or self.default_fetch_json
+        self.fetch_text = fetch_text or self.default_fetch_text
+        self.fetch_bytes = fetch_bytes or self.default_fetch_bytes
         self.sleep = sleep or time.sleep
         self.provider_state: Dict[str, object] = {}

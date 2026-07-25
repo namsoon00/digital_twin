@@ -26,6 +26,7 @@ from typing import Dict, List
 from ..application.account_service import AccountApplicationService
 from ..application.notification_replay_service import NotificationReplayService
 from ..application.ontology_diagnostics_service import OntologyDiagnosticsService
+from ..application.research_evidence_governance_service import ResearchEvidenceGovernanceService
 from ..application.symbol_universe_service import DEFAULT_SYMBOL_SEEDS, seed_symbol
 from ..domain.events import (
     APP_ITEM_REMOVED,
@@ -677,9 +678,13 @@ def settings_status_payload() -> Dict[str, object]:
         "externalSecMaxSymbols",
         "externalSecCompanyCiks",
         "externalSecUserAgent",
+        "externalSecDocumentTextEnabled",
+        "externalSecDocumentTextMaxChars",
         "externalDartEnabled",
         "externalDartLookbackDays",
         "externalDartCorpCodes",
+        "externalDartDocumentTextEnabled",
+        "externalDartDocumentTextMaxChars",
         "externalNewsEnabled",
         "externalNewsProvider",
         "externalNewsMaxSymbols",
@@ -2021,6 +2026,23 @@ def research_evidence_payload(query: Dict[str, List[str]]) -> Dict[str, object]:
         "total": total,
         "query": search,
     }
+
+
+def revalidate_research_evidence_payload(payload: Dict[str, object]) -> Dict[str, object]:
+    body = payload if isinstance(payload, dict) else {}
+    result = ResearchEvidenceGovernanceService(
+        stores.research_evidence_store(),
+        runtime_settings(),
+    ).revalidate(
+        symbol=configured(body.get("symbol")).upper(),
+        limit=max(1, min(5000, int(body.get("limit") or 500))),
+    )
+    new_domain_event(
+        APP_ITEM_UPDATED,
+        "research-evidence-governance",
+        {"type": "researchEvidenceGovernance", "result": result},
+    )
+    return result
 
 
 def research_evidence_list_payload(item) -> Dict[str, object]:
@@ -3776,6 +3798,11 @@ class DigitalTwinHandler(BaseHTTPRequestHandler):
 
         if path == "/api/research-evidence" and self.command == "GET":
             return self.send_payload(200, research_evidence_payload(query))
+
+        if path == "/api/research-evidence/revalidate" and self.command == "POST":
+            if not self.ensure_writable("공유 모드에서는 근거 검증 상태를 갱신할 수 없습니다."):
+                return
+            return self.send_payload(200, revalidate_research_evidence_payload(self.read_json_body()))
 
         research_evidence_match = re.match(r"^/api/research-evidence/([^/]+)$", path)
         if research_evidence_match and self.command == "GET":

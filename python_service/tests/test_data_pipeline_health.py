@@ -106,6 +106,20 @@ class DataPipelineHealthTests(unittest.TestCase):
         self.assertEqual(health.state, "healthy")
         self.assertTrue(health.alert_required)
 
+    def test_official_metadata_without_body_is_a_visible_quality_alert(self):
+        health = evaluate_news_collection_health({
+            "status": "ok",
+            "targetCount": 1,
+            "fetchedCount": 1,
+            "savedCount": 1,
+            "statuses": [{"source": "opendart", "ok": True, "count": 1, "candidateCount": 1}],
+            "claimQuality": {"officialMetadataOnlyCount": 1, "ungovernedEvidenceCount": 0},
+        }, previous={"state": "healthy"})
+
+        self.assertEqual("degraded", health.state)
+        self.assertEqual("official-document-content-missing", health.reason_code)
+        self.assertTrue(health.alert_required)
+
     def test_service_persists_zero_streak(self):
         store = MemoryStore()
         service = DataPipelineHealthService(store, {"newsCollectionQualityBlockedWarningStreak": "2"})

@@ -615,6 +615,8 @@ def sec_research_evidence(symbol: str, sec: Dict[str, object]) -> List[ResearchE
         form = str(latest.get("form") or "SEC filing").strip()
         filing_date = str(latest.get("filingDate") or latest.get("filed") or "").strip()
         url = str(latest.get("url") or "").strip() or sec_filing_url(sec.get("cik"), latest.get("accessionNumber"), latest.get("primaryDocument"))
+        document_text = compact_text(latest.get("documentText") or "", 20000)
+        document_quality = str(latest.get("documentTextQuality") or "metadata-only").strip()
         polarity = keyword_polarity(form + " " + company_name)
         evidence.append(ResearchEvidence(
             evidence_id="research:" + normalized_symbol + ":sec:" + (str(latest.get("accessionNumber") or form)),
@@ -632,8 +634,13 @@ def sec_research_evidence(symbol: str, sec: Dict[str, object]) -> List[ResearchE
                 "eventType": "capital_policy",
                 "sourceTrustState": "trusted",
                 "materialityState": "material",
-                "dataState": "sufficient",
+                "dataState": "sufficient" if len(document_text) >= 120 else "partial",
                 "validationState": "ready",
+                "officialDocumentText": document_text,
+                "officialDocumentPreview": compact_text(latest.get("documentTextPreview") or document_text, 700),
+                "officialDocumentQuality": document_quality,
+                "officialDocumentType": form,
+                "sourcePublisher": str(sec.get("provider") or "SEC EDGAR"),
             },
         ))
     facts = sec.get("facts") if isinstance(sec.get("facts"), dict) else {}
@@ -692,6 +699,8 @@ def research_evidence_from_facts(symbol: str, facts: Dict[str, object]) -> List[
         report = str(disclosure.get("reportName") or disclosure.get("report_name") or "OpenDART 공시").strip()
         polarity = keyword_polarity(report)
         receipt_no = str(disclosure.get("receiptNo") or disclosure.get("receipt_no") or "")
+        document_text = compact_text(disclosure.get("documentText") or "", 20000)
+        document_quality = str(disclosure.get("documentTextQuality") or "metadata-only").strip()
         evidence.append(ResearchEvidence(
             evidence_id="research:" + normalized_symbol + ":dart:" + (receipt_no or report),
             symbol=normalized_symbol,
@@ -708,8 +717,13 @@ def research_evidence_from_facts(symbol: str, facts: Dict[str, object]) -> List[
                 "eventType": "capital_policy",
                 "sourceTrustState": "trusted",
                 "materialityState": "material",
-                "dataState": "sufficient",
+                "dataState": "sufficient" if len(document_text) >= 120 else "partial",
                 "validationState": "ready",
+                "officialDocumentText": document_text,
+                "officialDocumentPreview": compact_text(disclosure.get("documentTextPreview") or document_text, 700),
+                "officialDocumentQuality": document_quality,
+                "officialDocumentType": report,
+                "sourcePublisher": str(disclosure.get("provider") or "OpenDART"),
             },
         ))
     news = facts.get("newsHeadlines") if isinstance(facts.get("newsHeadlines"), dict) else {}

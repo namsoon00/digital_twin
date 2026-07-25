@@ -11205,6 +11205,11 @@ h3 {
   padding-bottom: 1px;
 }
 
+.research-evidence-quality {
+  padding: 12px 16px;
+  border-bottom: 1px solid var(--line);
+}
+
 .research-evidence-list {
   display: grid;
   gap: 10px;

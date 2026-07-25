@@ -1,3 +1,6 @@
+import html
+import re
+from html.parser import HTMLParser
 from typing import Dict, List
 
 from ..domain.market_data import number
@@ -17,6 +20,37 @@ DEFAULT_SEC_COMPANY_CIKS = {
 }
 
 
+class SecDocumentTextParser(HTMLParser):
+    def __init__(self):
+        super().__init__(convert_charrefs=True)
+        self.skip_depth = 0
+        self.parts: List[str] = []
+
+    def handle_starttag(self, tag, attrs):
+        if str(tag or "").lower() in {"script", "style", "noscript", "svg", "iframe"}:
+            self.skip_depth += 1
+
+    def handle_endtag(self, tag):
+        if str(tag or "").lower() in {"script", "style", "noscript", "svg", "iframe"}:
+            self.skip_depth = max(0, self.skip_depth - 1)
+
+    def handle_data(self, data):
+        if not self.skip_depth:
+            text = str(data or "").strip()
+            if text:
+                self.parts.append(text)
+
+
+def sec_document_text(raw_html: object, limit: int) -> str:
+    parser = SecDocumentTextParser()
+    try:
+        parser.feed(str(raw_html or ""))
+    except Exception:  # noqa: BLE001 - malformed SEC HTML falls back to the readable fragments.
+        pass
+    text = re.sub(r"\s+", " ", html.unescape(" ".join(parser.parts))).strip()
+    return text[:max(500, min(20000, int(limit or 6000)))]
+
+
 class ExternalSignalSecMixin:
     def sec_enabled(self) -> bool:
         return self.external_api_enabled("externalSecEnabled")
@@ -26,6 +60,15 @@ class ExternalSignalSecMixin:
 
     def sec_headers(self) -> Dict[str, str]:
         return {"Accept": "application/json", "User-Agent": self.sec_user_agent()}
+
+    def sec_document_headers(self) -> Dict[str, str]:
+        return {"Accept": "text/html,application/xhtml+xml", "User-Agent": self.sec_user_agent()}
+
+    def sec_document_text_enabled(self) -> bool:
+        return str(self.settings.get("externalSecDocumentTextEnabled") or "0").strip().lower() not in {"0", "false", "no", "off", "disabled"}
+
+    def sec_document_text_max_chars(self) -> int:
+        return max(500, min(20000, int(number(self.settings.get("externalSecDocumentTextMaxChars")) or 6000)))
 
     def sec_ticker_lookup_configured(self) -> bool:
         """SEC rejects anonymous generic agents; known CIKs remain usable."""
@@ -102,6 +145,21 @@ class ExternalSignalSecMixin:
 
                 submissions = self.guarded_call("SEC EDGAR", "submissions:" + symbol, fetch_submissions)
                 filing = self.latest_sec_filing(submissions, cik)
+                if filing and self.sec_document_text_enabled() and filing.get("url"):
+                    try:
+                        def fetch_filing_document():
+                            return self.fetch_text(str(filing["url"]), self.sec_document_headers())
+
+                        raw_document = self.guarded_call("SEC EDGAR", "filing-document:" + symbol, fetch_filing_document)
+                        document_text = sec_document_text(raw_document, self.sec_document_text_max_chars())
+                        filing.update({
+                            "documentText": document_text,
+                            "documentTextPreview": document_text[:700],
+                            "documentTextQuality": "body" if len(document_text) >= 120 else "insufficient",
+                        })
+                    except Exception as error:  # noqa: BLE001 - retain filing metadata and surface document fallback.
+                        filing.update({"documentText": "", "documentTextPreview": "", "documentTextQuality": "unavailable"})
+                        self.status_for_error(signals, "SEC EDGAR", symbol + " filing document ", error)
 
                 def fetch_facts():
                     return self.fetch_json("https://data.sec.gov/api/xbrl/companyfacts/CIK" + cik + ".json", self.sec_headers())

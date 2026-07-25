@@ -1,4 +1,8 @@
+import html
+import io
+import re
 import urllib.parse
+import zipfile
 from datetime import datetime, timedelta, timezone
 from typing import Dict, List
 
@@ -14,7 +18,46 @@ from ..domain.portfolio import Position, utc_now_iso
 from .external_signal_utils import parse_iso, symbol_assignments, symbol_list
 
 
+def dart_document_text(raw: object, limit: int) -> str:
+    """Read the textual portion of OpenDART's ZIP/XML document response."""
+    data = bytes(raw or b"")
+    if not data:
+        return ""
+    members = []
+    try:
+        with zipfile.ZipFile(io.BytesIO(data)) as archive:
+            members = [
+                archive.read(name)
+                for name in archive.namelist()
+                if name.lower().endswith((".xml", ".txt", ".xhtml", ".html"))
+            ]
+    except (OSError, zipfile.BadZipFile):
+        members = [data]
+    fragments = []
+    for member in members[:12]:
+        decoded = ""
+        for encoding in ("utf-8", "cp949", "euc-kr"):
+            try:
+                decoded = member.decode(encoding)
+                break
+            except UnicodeDecodeError:
+                continue
+        plain = html.unescape(re.sub(r"<[^>]+>", " ", decoded))
+        plain = re.sub(r"\s+", " ", plain).strip()
+        if plain:
+            fragments.append(plain)
+        if len(" ".join(fragments)) >= limit:
+            break
+    return " ".join(fragments)[:max(500, min(20000, int(limit or 6000)))]
+
+
 class ExternalSignalMarketMixin:
+    def dart_document_text_enabled(self) -> bool:
+        return str(self.settings.get("externalDartDocumentTextEnabled") or "0").strip().lower() not in {"0", "false", "no", "off", "disabled"}
+
+    def dart_document_text_max_chars(self) -> int:
+        return max(500, min(20000, int(number(self.settings.get("externalDartDocumentTextMaxChars")) or 6000)))
+
     def add_coingecko(self, signals: Dict[str, object]) -> None:
         if not self.external_api_enabled("externalCoinGeckoEnabled"):
             return
@@ -406,6 +449,26 @@ class ExternalSignalMarketMixin:
 
                 disclosure = self.guarded_call("OpenDART", "list:" + symbol, fetch_disclosure)
                 if disclosure:
+                    receipt_no = str(disclosure.get("receiptNo") or "").strip()
+                    if receipt_no and self.dart_document_text_enabled():
+                        try:
+                            def fetch_document():
+                                url = "https://opendart.fss.or.kr/api/document.xml?" + urllib.parse.urlencode({
+                                    "crtfc_key": api_key,
+                                    "rcept_no": receipt_no,
+                                })
+                                return self.fetch_bytes(url, {"Accept": "application/zip,application/xml"})
+
+                            raw_document = self.guarded_call("OpenDART", "document:" + symbol, fetch_document)
+                            document_text = dart_document_text(raw_document, self.dart_document_text_max_chars())
+                            disclosure.update({
+                                "documentText": document_text,
+                                "documentTextPreview": document_text[:700],
+                                "documentTextQuality": "body" if len(document_text) >= 120 else "insufficient",
+                            })
+                        except Exception as error:  # noqa: BLE001 - list metadata remains available with an explicit fallback status.
+                            disclosure.update({"documentText": "", "documentTextPreview": "", "documentTextQuality": "unavailable"})
+                            self.status_for_error(signals, "OpenDART", symbol + " document ", error)
                     signals["dartDisclosures"][symbol] = disclosure
             except Exception as error:  # noqa: BLE001
                 self.status_for_error(signals, "OpenDART", symbol + " ", error)

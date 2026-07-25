@@ -13,7 +13,7 @@ from digital_twin.domain.investment_research import NewsCollectionTarget, Resear
 from digital_twin.domain.materiality import evidence_materiality
 from digital_twin.domain.news_ai_analysis import article_text_parts, local_news_ai_analysis
 from digital_twin.domain.news_analysis import article_analysis_facts, article_quality_gate
-from digital_twin.infrastructure.news_sources import NewsSourceGateway, extract_article_text
+from digital_twin.infrastructure.news_sources import NewsSourceGateway, article_metadata_from_html, extract_article_text
 
 
 class NewsCollectionQualityTests(unittest.TestCase):
@@ -138,6 +138,19 @@ class NewsCollectionQualityTests(unittest.TestCase):
         self.assertIn("홍길동 기자", extracted)
         self.assertIn("customer retention", extracted)
         self.assertGreaterEqual(len(extracted), 1200)
+
+    def test_article_metadata_prefers_canonical_url_and_json_ld_publisher(self):
+        html = (
+            '<html><head><link rel="canonical" href="/markets/apple-update?utm_source=rss">'
+            '<script type="application/ld+json">'
+            '{"@context":"https://schema.org","@type":"NewsArticle","publisher":{"name":"Example Journal"}}'
+            '</script></head><body></body></html>'
+        )
+
+        metadata = article_metadata_from_html(html, "https://www.example.test/feed/article")
+
+        self.assertEqual("https://www.example.test/markets/apple-update?utm_source=rss", metadata["canonicalUrl"])
+        self.assertEqual("Example Journal", metadata["publisher"])
 
     def test_full_article_text_is_used_and_short_body_is_blocked_from_materiality(self):
         full_body = "Apple described services revenue, customer retention, operating margins, and its outlook for the coming quarter. " * 24

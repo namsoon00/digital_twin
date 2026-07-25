@@ -153,6 +153,10 @@ def evaluate_news_collection_health(
     original_url_budget_count = sum(integer(row.get("googleOriginalUrlBudgetRejectedCount")) for row in providers)
     source_blocked_count = sum(integer(row.get("sourceBlockedCount")) for row in providers)
     article_health = result.get("articleAnalysisHealth") if isinstance(result.get("articleAnalysisHealth"), dict) else {}
+    claim_quality = result.get("claimQuality") if isinstance(result.get("claimQuality"), dict) else {}
+    ungoverned_evidence_count = integer(claim_quality.get("ungovernedEvidenceCount"))
+    unsafe_syndicated_count = integer(claim_quality.get("eligibleSyndicatedCount"))
+    official_metadata_only_count = integer(claim_quality.get("officialMetadataOnlyCount"))
     body_quality_limited_count = integer(article_health.get("bodyQualityLimitedCount"))
     body_quality_failure_count = integer(article_health.get("bodyQualityFailureCount"))
     body_failure_count = max(body_missing_count, source_blocked_count)
@@ -170,6 +174,10 @@ def evaluate_news_collection_health(
         state, reason_code, reason = "failed", "all-providers-failed", "구성된 뉴스 공급자 요청이 모두 실패했습니다."
     elif provider_failures:
         state, reason_code, reason = "degraded", "partial-provider-failure", "일부 뉴스 공급자 요청이 실패해 나머지 공급자 데이터만 사용합니다."
+    elif ungoverned_evidence_count or unsafe_syndicated_count:
+        state, reason_code, reason = "degraded", "claim-governance-anomaly", "수집 근거 중 일부가 주장 검증 게이트를 통과하지 못했거나 재게시 중복이 독립 출처로 판정되었습니다."
+    elif official_metadata_only_count:
+        state, reason_code, reason = "degraded", "official-document-content-missing", "공식 공시 목록은 수집됐지만 원문 본문을 확보하지 못해 투자 검증 근거로 보류했습니다."
     elif (
         provider_candidates
         and original_url_budget_count

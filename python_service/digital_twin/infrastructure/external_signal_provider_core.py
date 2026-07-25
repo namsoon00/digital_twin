@@ -5,14 +5,17 @@ from datetime import datetime, timedelta, timezone
 from typing import Callable, Dict, Iterable, List
 
 from ..domain.external_signal_quality import attach_external_signal_quality
-from ..domain.investment_research import research_evidence_from_external_signals
+from ..domain.investment_evidence_governance import claim_policy, governed_evidence
+from ..domain.investment_research import NewsCollectionTarget, research_evidence_from_external_signals
 from ..domain.market_data import number
 from ..domain.portfolio import Position, utc_now_iso
 from .external_signal_utils import (
     DISABLED_SETTING_VALUES,
     ExternalApiGuard,
     ExternalRateLimited,
+    default_bytes_fetcher,
     default_json_fetcher,
+    default_text_fetcher,
     parse_iso,
     sanitize_sensitive_text,
     symbol_assignments,
@@ -24,6 +27,14 @@ class ExternalSignalCoreMixin:
     def default_fetch_json(self, url: str, headers: Dict[str, str] = None) -> Dict[str, object]:
         timeout = number(self.settings.get("externalApiTimeoutSeconds")) or 3.0
         return default_json_fetcher(url, headers, timeout=timeout)
+
+    def default_fetch_text(self, url: str, headers: Dict[str, str] = None) -> str:
+        timeout = number(self.settings.get("externalApiTimeoutSeconds")) or 3.0
+        return default_text_fetcher(url, headers, timeout=timeout)
+
+    def default_fetch_bytes(self, url: str, headers: Dict[str, str] = None) -> bytes:
+        timeout = number(self.settings.get("externalApiTimeoutSeconds")) or 3.0
+        return default_bytes_fetcher(url, headers, timeout=timeout)
 
     def signals_for_positions(self, positions: Iterable[Position]) -> Dict[str, object]:
         position_list = list(positions)
@@ -135,16 +146,42 @@ class ExternalSignalCoreMixin:
         if not self.evidence_store or not isinstance(signals, dict):
             return
         evidence_by_id = {}
+        targets: Dict[str, NewsCollectionTarget] = {}
         for position in positions or []:
             symbol = str(getattr(position, "symbol", "") or "").upper().strip()
             if not symbol:
                 continue
+            targets[symbol] = NewsCollectionTarget(
+                symbol=symbol,
+                name=str(getattr(position, "name", "") or symbol),
+                market=str(getattr(position, "market", "") or ""),
+                currency=str(getattr(position, "currency", "") or ""),
+            )
             for item in research_evidence_from_external_signals(symbol, signals):
                 evidence_by_id[item.evidence_id] = item
         if not evidence_by_id:
             return
         try:
-            self.evidence_store.upsert_many(evidence_by_id.values())
+            governed_by_id = {}
+            max_age = self.int_setting("newsEvidenceMaxAgeMinutes", 360, 5)
+            for symbol, target in targets.items():
+                fresh = [item for item in evidence_by_id.values() if str(item.symbol or "").upper() == symbol]
+                if not fresh:
+                    continue
+                try:
+                    cached = self.evidence_store.latest(symbol=symbol, limit=100)
+                except Exception:  # noqa: BLE001 - new evidence remains conservatively governed without history.
+                    cached = []
+                corpus = list(fresh) + list(cached)
+                governed_evidence(
+                    corpus,
+                    target,
+                    max_age,
+                    str(self.settings.get("investmentBrainResearchMinimumSourceTrustState") or "standard"),
+                    policy=claim_policy(self.settings),
+                )
+                governed_by_id.update({str(item.evidence_id or ""): item for item in corpus if str(item.evidence_id or "")})
+            self.evidence_store.upsert_many(governed_by_id.values() or evidence_by_id.values())
         except Exception as error:  # noqa: BLE001 - evidence history must not break market monitoring.
             signals.setdefault("statuses", []).append({
                 "source": "ResearchEvidence",
@@ -206,6 +243,8 @@ class ExternalSignalCoreMixin:
             "newsSymbols": self.news_symbols(positions),
             "alphaMax": str(self.settings.get("externalAlphaMaxSymbols") or "3"),
             "secMax": str(self.settings.get("externalSecMaxSymbols") or "3"),
+            "secDocumentText": str(self.settings.get("externalSecDocumentTextEnabled") or "1"),
+            "secDocumentTextMaxChars": str(self.settings.get("externalSecDocumentTextMaxChars") or "6000"),
             "newsProvider": self.news_provider(),
             "newsMax": str(self.settings.get("externalNewsMaxSymbols") or "3"),
             "newsLookbackHours": str(self.settings.get("externalNewsLookbackHours") or "48"),
@@ -227,6 +266,8 @@ class ExternalSignalCoreMixin:
             "alphaQuotaCooldownMinutes": str(self.settings.get("externalAlphaQuotaCooldownMinutes") or "1440"),
             "secMappings": symbol_assignments(self.settings.get("externalSecCompanyCiks") or ""),
             "dartLookbackDays": str(self.settings.get("externalDartLookbackDays") or "14"),
+            "dartDocumentText": str(self.settings.get("externalDartDocumentTextEnabled") or "1"),
+            "dartDocumentTextMaxChars": str(self.settings.get("externalDartDocumentTextMaxChars") or "6000"),
             "dartMappings": symbol_assignments(self.settings.get("externalDartCorpCodes") or ""),
             "alphaFundamentals": self.alpha_fundamentals_enabled(),
             "alphaFundamentalsMax": str(self.settings.get("externalAlphaFundamentalsMaxSymbols") or "1"),

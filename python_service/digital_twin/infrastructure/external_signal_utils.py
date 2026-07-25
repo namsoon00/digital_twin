@@ -12,6 +12,8 @@ from ..domain.market_data import number
 
 
 JsonFetcher = Callable[[str, Dict[str, str]], object]
+TextFetcher = Callable[[str, Dict[str, str]], str]
+BytesFetcher = Callable[[str, Dict[str, str]], bytes]
 DISABLED_SETTING_VALUES = {"0", "false", "no", "off", "disabled"}
 SENSITIVE_QUERY_KEYS = {
     "access_token",
@@ -36,6 +38,19 @@ def default_json_fetcher(url: str, headers: Dict[str, str] = None, timeout: floa
     with urllib.request.urlopen(request, timeout=max(0.5, float(timeout or 12.0))) as response:
         raw = response.read().decode("utf-8")
         return json.loads(raw) if raw else {}
+
+
+def default_bytes_fetcher(url: str, headers: Dict[str, str] = None, timeout: float = 12.0) -> bytes:
+    request = urllib.request.Request(url, headers=headers or {})
+    with urllib.request.urlopen(request, timeout=max(0.5, float(timeout or 12.0))) as response:
+        return response.read()
+
+
+def default_text_fetcher(url: str, headers: Dict[str, str] = None, timeout: float = 12.0) -> str:
+    request = urllib.request.Request(url, headers=headers or {})
+    with urllib.request.urlopen(request, timeout=max(0.5, float(timeout or 12.0))) as response:
+        charset = response.headers.get_content_charset() or "utf-8"
+        return response.read().decode(charset, errors="replace")
 
 
 def parse_iso(value: str):

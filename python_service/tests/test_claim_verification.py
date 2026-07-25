@@ -30,7 +30,14 @@ def evidence(
     polarity="support",
     published_at="2026-07-20T10:00:00Z",
     event_type="capital_policy",
+    canonical_url="",
+    article_publisher="",
+    official_document_text=None,
 ):
+    official_text = official_document_text if official_document_text is not None else (
+        statement + " This official filing records the board decision and the disclosed transaction terms."
+        if kind in {"disclosure", "filing"} else ""
+    )
     return ResearchEvidence(
         evidence_id=evidence_id,
         symbol="005930",
@@ -38,7 +45,7 @@ def evidence(
         source=source,
         title=title,
         summary=statement,
-        url="https://" + source.lower().replace(" ", "-") + ".example.test/" + evidence_id,
+        url=canonical_url or "https://" + source.lower().replace(" ", "-") + ".example.test/" + evidence_id,
         observed_at=published_at,
         polarity=polarity,
         published_at=published_at,
@@ -48,6 +55,9 @@ def evidence(
             "articleReadStatus": "body",
             "bodyQualityPassed": True,
             "articleText": statement,
+            "articleCanonicalUrl": canonical_url,
+            "articlePublisher": article_publisher,
+            "officialDocumentText": official_text,
         },
     )
 
@@ -82,12 +92,12 @@ class ClaimVerificationTests(unittest.TestCase):
         self.assertEqual([], rejected)
         self.assertEqual({"news-buyback", "dart-buyback"}, {item.evidence_id for item in accepted})
         news_claim = news.raw_payload["claimLedger"]["claims"][0]
-        self.assertEqual("corroborated", news_claim["state"])
+        self.assertEqual("verified-primary", news_claim["state"])
         self.assertIn("dart-buyback", news_claim["officialEvidenceIds"])
         self.assertGreaterEqual(news_claim["excerptStart"], 0)
         self.assertGreater(news_claim["excerptEnd"], news_claim["excerptStart"])
         self.assertTrue(news.raw_payload["evidenceGovernance"]["investmentJudgmentEligible"])
-        self.assertTrue(any(item.claim_state == "corroborated" for item in verified))
+        self.assertTrue(any(item.claim_state == "verified-primary" for item in verified))
 
     def test_strict_policy_keeps_single_secondary_report_out_of_judgment(self):
         news = evidence(
@@ -125,6 +135,69 @@ class ClaimVerificationTests(unittest.TestCase):
         self.assertEqual(1, first_claim["independentSourceCount"])
         self.assertNotEqual("corroborated", first_claim["state"])
         self.assertTrue(first_claim["duplicateOfClaimId"])
+
+    def test_same_canonical_url_from_different_feed_labels_is_not_independent(self):
+        canonical_url = "https://finance.yahoo.com/news/samsung-buyback-123.html?utm_source=feed"
+        wrapped = evidence(
+            "yahoo-wrapper",
+            "Yahoo Finance",
+            "Samsung announces share buyback",
+            "Samsung Electronics announced a 1 trillion won share buyback plan on Tuesday.",
+            canonical_url=canonical_url,
+        )
+        relabeled = evidence(
+            "partner-label",
+            "Insider Monkey",
+            "Samsung announces share buyback",
+            "Samsung Electronics announced a 1 trillion won share buyback plan on Tuesday.",
+            canonical_url="https://finance.yahoo.com/news/samsung-buyback-123.html",
+        )
+
+        self.govern([wrapped, relabeled])
+
+        claim = wrapped.raw_payload["claimLedger"]["claims"][0]
+        self.assertEqual(1, claim["independentSourceCount"])
+        self.assertNotEqual("corroborated", claim["state"])
+        self.assertIn("syndicated-duplicate", claim["reasons"])
+
+    def test_official_metadata_only_cannot_be_used_as_claim_evidence(self):
+        filing = evidence(
+            "dart-metadata-only",
+            "OpenDART",
+            "Samsung share buyback decision",
+            "접수일 20260720",
+            kind="disclosure",
+            official_document_text="",
+        )
+        filing.raw_payload["articleText"] = ""
+
+        accepted, _verified, rejected = self.govern([filing])
+
+        self.assertEqual([], accepted)
+        self.assertEqual(1, len(rejected))
+        self.assertFalse(filing.raw_payload["evidenceGovernance"]["investmentJudgmentEligible"])
+        self.assertIn("official-document-content-missing", filing.raw_payload["evidenceGovernance"]["reasons"])
+
+    def test_two_official_documents_do_not_verify_each_other(self):
+        dart = evidence(
+            "dart-official",
+            "OpenDART",
+            "Samsung share buyback decision",
+            "Samsung Electronics announced a 1 trillion won share buyback plan on Tuesday.",
+            kind="disclosure",
+        )
+        sec = evidence(
+            "sec-official",
+            "SEC EDGAR",
+            "Samsung share buyback decision",
+            "Samsung Electronics announced a 1 trillion won share buyback plan on Tuesday.",
+            kind="filing",
+        )
+
+        self.govern([dart, sec])
+
+        self.assertEqual([], dart.raw_payload["claimLedger"]["claims"][0]["officialEvidenceIds"])
+        self.assertEqual([], sec.raw_payload["claimLedger"]["claims"][0]["officialEvidenceIds"])
 
     def test_conflicting_independent_reports_are_blocked(self):
         positive = evidence(
@@ -216,7 +289,7 @@ class ClaimVerificationTests(unittest.TestCase):
 
         claim_entities = [item for item in graph.entities if item.kind == "verified-claim"]
         self.assertTrue(any(item.properties.get("tboxClass") == "VerifiedClaim" for item in claim_entities))
-        self.assertTrue(any(item.relation_type == "CORROBORATED_BY" for item in graph.relations))
+        self.assertTrue(any(item.relation_type == "OFFICIALLY_VERIFIED_BY" for item in graph.relations))
 
 
 if __name__ == "__main__":

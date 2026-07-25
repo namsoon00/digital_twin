@@ -80,8 +80,12 @@
       "MSTR=0001050446"
     ].join("\n"),
     externalSecUserAgent: "DigitalTwin/1.0 local-contact",
+    externalSecDocumentTextEnabled: "1",
+    externalSecDocumentTextMaxChars: "6000",
     externalDartEnabled: "1",
     externalDartLookbackDays: "14",
+    externalDartDocumentTextEnabled: "1",
+    externalDartDocumentTextMaxChars: "6000",
     externalNewsEnabled: "0",
     externalNewsProvider: "auto",
     externalNewsMaxSymbols: "3",

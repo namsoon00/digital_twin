@@ -335,6 +335,59 @@ def json_ld_article_blocks(raw_html: object) -> List[str]:
     return blocks
 
 
+def article_metadata_from_html(raw_html: object, source_url: object = "") -> Dict[str, str]:
+    """Extract publisher and canonical URL without coupling to one news site."""
+    text = str(raw_html or "")
+    canonical_url = ""
+    publisher = ""
+    canonical_match = re.search(
+        r"<link\b[^>]*\brel\s*=\s*(['\"])[^'\"]*\bcanonical\b[^'\"]*\1[^>]*\bhref\s*=\s*(['\"])(.*?)\2",
+        text,
+        flags=re.IGNORECASE | re.DOTALL,
+    )
+    if not canonical_match:
+        canonical_match = re.search(
+            r"<link\b[^>]*\bhref\s*=\s*(['\"])(.*?)\1[^>]*\brel\s*=\s*(['\"])[^'\"]*\bcanonical\b[^'\"]*\3",
+            text,
+            flags=re.IGNORECASE | re.DOTALL,
+        )
+        canonical_url = canonical_match.group(2) if canonical_match else ""
+    else:
+        canonical_url = canonical_match.group(3)
+    meta_patterns = (
+        (r"<meta\b[^>]*\b(?:property|name)\s*=\s*(['\"])(?:article:publisher|og:site_name|publisher)\1[^>]*\bcontent\s*=\s*(['\"])(.*?)\2", 3),
+        (r"<meta\b[^>]*\bcontent\s*=\s*(['\"])(.*?)\1[^>]*\b(?:property|name)\s*=\s*(['\"])(?:article:publisher|og:site_name|publisher)\3", 2),
+    )
+    for pattern, value_group in meta_patterns:
+        match = re.search(pattern, text, flags=re.IGNORECASE | re.DOTALL)
+        if match:
+            publisher = match.group(value_group).strip()
+            break
+    for match in JSON_LD_SCRIPT_RE.finditer(text):
+        try:
+            payload = json.loads(html.unescape(match.group(2) or "").strip())
+        except (TypeError, ValueError, json.JSONDecodeError):
+            continue
+        for node in json_ld_nodes(payload):
+            type_value = node.get("@type")
+            types = type_value if isinstance(type_value, list) else [type_value]
+            if not any(str(item or "").strip().lower().endswith("article") for item in types):
+                continue
+            node_publisher = node.get("publisher")
+            if isinstance(node_publisher, dict):
+                publisher = publisher or str(node_publisher.get("name") or "").strip()
+            elif node_publisher:
+                publisher = publisher or str(node_publisher).strip()
+            node_url = node.get("url") or node.get("mainEntityOfPage")
+            if isinstance(node_url, dict):
+                node_url = node_url.get("@id") or node_url.get("url")
+            canonical_url = canonical_url or str(node_url or "").strip()
+    return {
+        "canonicalUrl": urllib.parse.urljoin(str(source_url or ""), html.unescape(canonical_url).strip()) if canonical_url else "",
+        "publisher": html.unescape(publisher).strip(),
+    }
+
+
 def extract_article_text(raw_html: object) -> str:
     text = str(raw_html or "")
     if not text.strip():
@@ -646,14 +699,14 @@ class NewsSourceGateway:
             and self._article_body_fetches_used < self.article_body_max_per_run()
         )
 
-    def article_text_for_url(self, url: str) -> str:
+    def article_content_for_url(self, url: str) -> Dict[str, str]:
         if not self.article_body_enabled():
-            return ""
+            return {"text": "", "canonicalUrl": "", "publisher": ""}
         normalized = str(url or "").strip()
         if not normalized.startswith(("http://", "https://")):
-            return ""
+            return {"text": "", "canonicalUrl": "", "publisher": ""}
         if not self.article_body_budget_available():
-            return ""
+            return {"text": "", "canonicalUrl": "", "publisher": ""}
         self._article_body_fetches_for_target += 1
         self._article_body_fetches_used += 1
         try:
@@ -662,8 +715,16 @@ class NewsSourceGateway:
                 "User-Agent": "DigitalTwin/1.0",
             })
         except Exception:  # noqa: BLE001 - article-body fetch must not block headline collection.
-            return ""
-        return extract_article_text(raw_html)
+            return {"text": "", "canonicalUrl": "", "publisher": ""}
+        metadata = article_metadata_from_html(raw_html, normalized)
+        return {
+            "text": extract_article_text(raw_html),
+            "canonicalUrl": metadata["canonicalUrl"],
+            "publisher": metadata["publisher"],
+        }
+
+    def article_text_for_url(self, url: str) -> str:
+        return self.article_content_for_url(url)["text"]
 
     @staticmethod
     def google_news_article_link(url: object) -> bool:
@@ -799,7 +860,10 @@ class NewsSourceGateway:
             self.record_provider_diagnostic("bodyFetchAttemptCount")
         elif not article_source_allowed:
             self.record_provider_diagnostic("sourceBlockedCount")
-        article_text = self.article_text_for_url(article_link) if article_source_allowed else ""
+        article_content = self.article_content_for_url(article_link) if article_source_allowed else {}
+        article_text = str(article_content.get("text") or "")
+        article_canonical_url = str(article_content.get("canonicalUrl") or article_link)
+        article_publisher = str(article_content.get("publisher") or "")
         if not article_text and self.provider_requires_article_body(provider):
             if article_source_allowed and not body_budget_available:
                 self.record_provider_diagnostic("bodyBudgetRejectedCount")
@@ -839,7 +903,7 @@ class NewsSourceGateway:
             stock_impact,
             source,
             provider,
-            article_link,
+            article_canonical_url,
             published,
             read_status,
             analysis_source,
@@ -864,15 +928,17 @@ class NewsSourceGateway:
             "qualityGate": news_domain.article_quality_gate(article_facts),
             "googleNewsFeedUrl": original_link if original_link != article_link else "",
             "articleSourceUrl": article_link,
+            "articleCanonicalUrl": article_canonical_url,
+            "articlePublisher": article_publisher,
         }
         evidence = ResearchEvidence(
-            evidence_id="research:" + symbol + ":news:" + stable_evidence_token(provider, title, article_link),
+            evidence_id="research:" + symbol + ":news:" + stable_evidence_token(provider, title, article_canonical_url),
             symbol=symbol,
             kind="news",
             source=source,
             title=title,
             summary=summary_ko or compact_text(feed_summary or title, 360),
-            url=article_link,
+            url=article_canonical_url,
             observed_at=utc_now_iso(),
             polarity=polarity,
             published_at=iso_or_empty(published),

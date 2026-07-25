@@ -203,6 +203,37 @@ class OntologyReasoningQueueHealthTests(unittest.TestCase):
         self.assertEqual(320, health.raw_pending_count)
         self.assertEqual(9, health.effective_pending_count)
 
+    def test_fairness_drain_overdue_symbols_do_not_page_before_request_slo_is_breached(self):
+        health = evaluate_ontology_reasoning_queue_health(
+            queue_snapshot(
+                "2026-07-25T00:00:00Z",
+                rawRequestCount=7,
+                effectivePendingCount=9,
+                mailboxPendingEntryCount=9,
+                queueDispatch={
+                    "oldestRequestAt": "2026-07-25T00:00:00Z",
+                    "pendingSymbolCount": 9,
+                    "overduePendingSymbolCount": 6,
+                    "mode": "fairness-drain",
+                    "fairnessDrainActive": True,
+                    "effectiveIntervalSeconds": 60,
+                },
+            ),
+            previous={"state": "healthy"},
+            warning_age_minutes=30,
+            critical_age_minutes=90,
+            warning_pending_count=100,
+            critical_pending_count=200,
+            warning_overdue_symbols=3,
+            critical_overdue_symbols=8,
+            now=datetime(2026, 7, 25, 0, 4, tzinfo=UTC),
+        )
+
+        self.assertEqual("healthy", health.state)
+        self.assertEqual("healthy", health.candidate_state)
+        self.assertEqual("fairness-drain-progress", health.reason_code)
+        self.assertFalse(health.alert_required)
+
     def test_recovery_from_delayed_queue_is_alerted(self):
         previous = {
             "state": "delayed",

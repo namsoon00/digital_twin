@@ -175,7 +175,13 @@ def evaluate_ontology_reasoning_queue_health(
         candidate_state = "critical"
         reason_code = "oldest-request-critical"
         reason = "가장 오래된 추론 요청이 심각 지연 기준을 넘었습니다."
-    elif overdue_pending_symbol_count >= critical_overdue_symbols:
+    # ``overduePendingSymbolCount`` is a fairness-scheduler input: it means
+    # that a symbol has not had a recent native inference turn.  During an
+    # active fairness drain, several such symbols are expected while the
+    # one-target TypeDB worker works through a fresh, bounded mailbox.  Do
+    # not page operations for that normal catch-up path; request age, effective
+    # queue size, and blocked execution remain the operational SLO signals.
+    elif not fairness_drain_active and overdue_pending_symbol_count >= critical_overdue_symbols:
         candidate_state = "critical"
         reason_code = "overdue-symbols-critical"
         reason = "대기 한도를 넘긴 종목 수가 심각 기준을 넘었습니다."
@@ -187,7 +193,7 @@ def evaluate_ontology_reasoning_queue_health(
         candidate_state = "delayed"
         reason_code = "oldest-request-delayed"
         reason = "가장 오래된 추론 요청이 지연 기준을 넘었습니다."
-    elif overdue_pending_symbol_count >= warning_overdue_symbols:
+    elif not fairness_drain_active and overdue_pending_symbol_count >= warning_overdue_symbols:
         candidate_state = "delayed"
         reason_code = "overdue-symbols-delayed"
         reason = "대기 한도를 넘긴 종목이 누적되고 있습니다."
@@ -195,6 +201,10 @@ def evaluate_ontology_reasoning_queue_health(
         candidate_state = "delayed"
         reason_code = "request-count-delayed"
         reason = "처리 대기 요청과 대상 종목 수가 지연 기준을 넘었습니다."
+    elif fairness_drain_active and overdue_pending_symbol_count:
+        candidate_state = "healthy"
+        reason_code = "fairness-drain-progress"
+        reason = "공정 배출이 진행 중이며, 최신 추론 요청은 설정한 지연 기준 안에 있습니다."
     else:
         candidate_state = "healthy"
         reason_code = "queue-healthy"

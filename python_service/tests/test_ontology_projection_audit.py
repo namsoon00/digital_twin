@@ -232,6 +232,58 @@ class OntologyProjectionAuditTests(unittest.TestCase):
             [item["scopeId"] for item in selected],
         )
 
+    def test_target_reuse_scope_plan_excludes_non_target_storage_dependencies(self):
+        plan = [
+            {
+                "scopeId": "symbol:005930:link",
+                "scopeType": "symbol",
+                "scopeFamily": "link",
+                "impactScopeFamilies": ["evidence", "link"],
+                "semanticFingerprints": {"evidence": "same-relation"},
+                "generationId": "target-link",
+                "dependencyScopeIds": [
+                    "reference:global",
+                    "symbol:005930:market",
+                    "symbol:000660:state",
+                ],
+            },
+            {
+                "scopeId": "symbol:005930:market",
+                "scopeType": "symbol",
+                "scopeFamily": "market",
+                "semanticFingerprints": {"market": "target-price"},
+                "generationId": "target-market",
+                "dependencyScopeIds": [],
+            },
+            {
+                "scopeId": "reference:global",
+                "scopeType": "reference",
+                "scopeFamily": "reference",
+                "semanticFingerprints": {"quality": "source-state"},
+                "generationId": "reference",
+                "dependencyScopeIds": [],
+            },
+            {
+                "scopeId": "symbol:000660:state",
+                "scopeType": "symbol",
+                "scopeFamily": "state",
+                "semanticFingerprints": {"state": "other-holding"},
+                "generationId": "other-state",
+                "dependencyScopeIds": [],
+            },
+        ]
+
+        selected = inference_reuse_scope_plan_for_targets(plan, ["005930"])
+
+        self.assertEqual(
+            [
+                "reference:global",
+                "symbol:005930:link",
+                "symbol:005930:market",
+            ],
+            [item["scopeId"] for item in selected],
+        )
+
     def test_recorder_uses_audited_target_scope_proof_when_active_inference_is_stale(self):
         class ReuseRepository:
             store_key = "typedb"

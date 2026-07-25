@@ -257,6 +257,25 @@ def family_for_relation(
         inferred_source = family_for_entity(source_kind)
         if inferred_source != "state":
             return inferred_source
+    source_value = _lower(source_family)
+    target_value = _lower(target_family)
+    # Rule dependency profiles do not have concrete ABox scope ids yet. A
+    # typed target such as ``market-proxy-observation`` is still enough to
+    # keep ``HAS_PRICE`` in its macro family instead of treating it as a
+    # generic stock-price dependency.
+    if not source_value and not target_value:
+        declared_target_family = family_for_entity(target_kind)
+        if declared_target_family.startswith("macro-") or declared_target_family == "evidence":
+            if _matches_any(text, ["data_quality", "freshness", "coverage", "missing", "source_data_state"]):
+                return "quality"
+            return declared_target_family
+    # Price/volume relations inside one macro sensor must remain macro facts.
+    # Otherwise a fresh index or FX observation is incorrectly routed as a
+    # generic stock market/flow change and reopens unrelated TypeDB rules.
+    if source_value.startswith("macro-") and target_value.startswith("macro-"):
+        if _matches_any(text, ["data_quality", "freshness", "coverage", "missing", "source_data_state"]):
+            return "quality"
+        return source_value
     # Explicit relation vocabulary is more reliable than the generic endpoint
     # fallback below. These relationships can be stored in a link scope even
     # when their subject is the stock state anchor.

@@ -98,9 +98,21 @@ def inference_reuse_scope_plan_for_targets(
         row = by_scope.get(scope_id) or {}
         for dependency in row.get("dependencyScopeIds") or []:
             dependency_id = str(dependency or "").strip()
-            if dependency_id and dependency_id in by_scope and dependency_id not in selected:
-                selected.add(dependency_id)
-                pending.append(dependency_id)
+            if not dependency_id or dependency_id not in by_scope or dependency_id in selected:
+                continue
+            dependency_symbol = scope_symbol(dependency_id)
+            if dependency_symbol and dependency_symbol not in targets:
+                # A relation-only scope records every endpoint generation so
+                # TypeDB can safely rebind immutable storage rows. That is a
+                # persistence dependency, not evidence that another symbol's
+                # market fact is part of this target's inference input. The
+                # relation scope's own semantic fingerprint still captures a
+                # real cross-symbol relation change; its endpoint generation
+                # rebinding must not turn a PLTR run into a whole-portfolio
+                # candidate-rule evaluation.
+                continue
+            selected.add(dependency_id)
+            pending.append(dependency_id)
     return [row for row in rows if str(row.get("scopeId") or "") in selected]
 
 

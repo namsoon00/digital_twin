@@ -170,7 +170,11 @@ _IMMATERIAL_OBSERVATION_PROPERTY_FIELDS = {
 
 _IMMATERIAL_OBSERVATION_PROPERTY_KEYS = {
     re.sub(r"[^a-z0-9]", "", str(value or "").lower())
-    for value in VOLATILE_LIFECYCLE_KEYS | _IMMATERIAL_OBSERVATION_PROPERTY_FIELDS
+    for value in (
+        VOLATILE_LIFECYCLE_KEYS
+        | _IMMATERIAL_OBSERVATION_PROPERTY_FIELDS
+        | _QUALITY_TIMESTAMP_FIELDS
+    )
 }
 
 
@@ -539,7 +543,11 @@ def _scope_fragment_payload(
 def _semantic_property_family(field: object, fallback_family: object) -> str:
     normalized = re.sub(r"[^a-z0-9]", "", _clean(field).lower())
     if normalized in _QUALITY_TIMESTAMP_FIELDS:
-        return "quality"
+        # Raw observation clocks are intentionally excluded from a scope
+        # fingerprint. Freshness/data-state transitions remain material via
+        # their own fields, but a newer fetch time with the same usable fact
+        # must not re-open native investment rules.
+        return ""
     fallback = _clean(fallback_family)
     # TBox/lifecycle decorations are structural metadata. Keep them with the
     # entity's fact family rather than turning every observation into a
@@ -547,6 +555,16 @@ def _semantic_property_family(field: object, fallback_family: object) -> str:
     if normalized in _SEMANTIC_METADATA_FIELDS:
         return fallback or "state"
     family = family_for_field(field)
+    # A macro observation can contain quote-shaped properties such as
+    # ``currentPrice`` and ``volume``. They describe the macro sensor itself,
+    # not an individual-stock price/flow fact. Likewise, article metadata can
+    # mention a ticker or price without becoming a market-data observation.
+    # Keep these factual owners narrow so a macro refresh or a new article
+    # schedules only the corresponding TypeDB rule families.
+    if fallback.startswith("macro-"):
+        return "quality" if family == "quality" else fallback
+    if fallback == "evidence":
+        return "quality" if family == "quality" else "evidence"
     # ``family_for_field`` deliberately falls back to state for unknown
     # RuleBox condition fields. For an ABox property, however, the owning
     # entity already supplies a precise type (flow, valuation, evidence,

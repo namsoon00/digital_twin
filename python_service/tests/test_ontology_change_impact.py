@@ -401,6 +401,8 @@ class OntologyChangeImpactTests(unittest.TestCase):
         market.properties.update({
             "marketSessionLocalTime": "14:05:00",
             "freshnessAgeMinutes": 6,
+            "sourceAsOf": "2026-07-25T05:00:00Z",
+            "sourceFetchedAt": "2026-07-25T05:00:10Z",
         })
         temporal.properties["elapsedHours"] = 1.5
         second = apply_scoped_abox_identity(graph)
@@ -415,6 +417,110 @@ class OntologyChangeImpactTests(unittest.TestCase):
             second["scopeGenerationIds"]["symbol:005930:temporal"],
         )
         self.assertEqual([], delta["changedScopeIds"])
+
+    def test_macro_quote_change_stays_in_its_macro_family(self):
+        graph = PortfolioOntology(
+            "main",
+            entities=[
+                OntologyEntity("market-proxy-instrument:QQQ", "나스닥 시장 센서", "market-proxy-instrument", {
+                    "ontologyBox": "ABox",
+                    "symbol": "QQQ",
+                }),
+                OntologyEntity("market-proxy-observation:QQQ", "나스닥 시장 관측", "market-proxy-observation", {
+                    "ontologyBox": "ABox",
+                    "symbol": "QQQ",
+                    "currentPrice": 500,
+                    "volume": 1000,
+                    "sourceAsOf": "2026-07-25T04:00:00Z",
+                    "sourceFetchedAt": "2026-07-25T04:00:05Z",
+                    "freshnessStatus": "near-live",
+                }),
+            ],
+            relations=[OntologyRelation(
+                "market-proxy-instrument:QQQ",
+                "market-proxy-observation:QQQ",
+                "HAS_PRICE",
+                properties={"ontologyBox": "ABox"},
+            )],
+        )
+
+        first = apply_scoped_abox_identity(graph)
+        observation = next(item for item in graph.entities if item.entity_id == "market-proxy-observation:QQQ")
+        observation.properties.update({
+            "currentPrice": 501,
+            "volume": 1100,
+            "sourceAsOf": "2026-07-25T04:05:00Z",
+            "sourceFetchedAt": "2026-07-25T04:05:05Z",
+        })
+        second = apply_scoped_abox_identity(graph)
+        delta = scope_delta(first["scopePlan"], second["scopePlan"])
+
+        self.assertEqual(["macro-market"], delta["changedScopeFamilies"])
+        self.assertNotIn("market", delta["changedScopeFamilies"])
+        self.assertNotIn("flow", delta["changedScopeFamilies"])
+        self.assertNotIn("profile", delta["changedScopeFamilies"])
+        self.assertNotIn("quality", delta["changedScopeFamilies"])
+
+        plan = build_inference_impact_plan(
+            first["scopePlan"],
+            second["scopePlan"],
+            ["QQQ"],
+            rules=[
+                {
+                    "ruleId": "graph.test.macro-price.v1",
+                    "conditions": [{
+                        "conditionId": "macro-price",
+                        "kind": "relation",
+                        "relationType": "HAS_PRICE",
+                        "targetKind": "market-proxy-observation",
+                    }],
+                },
+                {
+                    "ruleId": "graph.test.stock-price.v1",
+                    "conditions": [{
+                        "conditionId": "stock-price",
+                        "kind": "relation",
+                        "relationType": "HAS_PRICE",
+                        "targetKind": "price-metric",
+                    }],
+                },
+            ],
+        )
+        self.assertEqual(["graph.test.macro-price.v1"], plan["candidateRuleIds"])
+        self.assertEqual(["graph.test.stock-price.v1"], plan["deferredRuleIds"])
+
+        observation.properties["freshnessStatus"] = "stale"
+        third = apply_scoped_abox_identity(graph)
+        freshness_delta = scope_delta(second["scopePlan"], third["scopePlan"])
+
+        self.assertEqual(["quality"], freshness_delta["changedScopeFamilies"])
+
+    def test_evidence_quote_metadata_does_not_become_stock_market_change(self):
+        graph = PortfolioOntology(
+            "main",
+            entities=[OntologyEntity("news-article:005930:1", "삼성전자 기사", "news-article", {
+                "ontologyBox": "ABox",
+                "symbol": "005930",
+                "summary": "초기 기사",
+                "currentPrice": 70000,
+                "sourceAsOf": "2026-07-25T04:00:00Z",
+                "freshnessStatus": "near-live",
+            })],
+        )
+
+        first = apply_scoped_abox_identity(graph)
+        article = graph.entities[0]
+        article.properties.update({
+            "summary": "갱신 기사",
+            "currentPrice": 71000,
+            "sourceAsOf": "2026-07-25T04:05:00Z",
+        })
+        second = apply_scoped_abox_identity(graph)
+        delta = scope_delta(first["scopePlan"], second["scopePlan"])
+
+        self.assertEqual(["evidence"], delta["changedScopeFamilies"])
+        self.assertNotIn("market", delta["changedScopeFamilies"])
+        self.assertNotIn("profile", delta["changedScopeFamilies"])
 
     def test_sector_exposure_is_owned_by_the_portfolio_not_global_state(self):
         graph = PortfolioOntology(

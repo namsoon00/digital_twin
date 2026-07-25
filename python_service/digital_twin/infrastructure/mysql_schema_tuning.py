@@ -161,6 +161,11 @@ MYSQL_OPERATIONAL_INDEXES: Dict[str, Sequence[MySQLIndexDefinition]] = {
             "idx_ontology_projection_runs_world_updated",
             "`world_id`, `updated_at`, `run_id`",
         ),
+        MySQLIndexDefinition(
+            "ontology_projection_runs",
+            "idx_ontology_projection_runs_status_updated",
+            "`status`, `updated_at`, `run_id`",
+        ),
         MySQLIndexDefinition("ontology_projection_runs", "idx_ontology_projection_runs_abox", "`abox_snapshot_id`"),
         MySQLIndexDefinition(
             "ontology_projection_runs",

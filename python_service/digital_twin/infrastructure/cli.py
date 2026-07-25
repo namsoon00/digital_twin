@@ -13,6 +13,14 @@ from ..domain.portfolio import AlertEvent
 from .admin_preview import write_admin_preview
 from .event_bus import default_event_bus
 from . import operational_store as stores
+from .mysql_operational_connection import MySQLOperationalConnection
+from .mysql_retention import (
+    MYSQL_OPERATIONAL_COMPACTION_TABLES,
+    apply_mysql_operational_history_retention,
+    drop_ephemeral_mysql_databases,
+    mysql_operational_compaction_tables,
+    optimize_mysql_operational_tables,
+)
 from .notifications import queued_notifier_for_account, send_events
 from .ontology_graph_store import ontology_repository_from_settings
 from .service_factory import (
@@ -645,6 +653,37 @@ def app_store_command(args) -> int:
     return 1
 
 
+def maintenance_command(args) -> int:
+    """Run explicit storage maintenance outside the realtime worker path."""
+    settings = dict(runtime_settings())
+    settings["_skipOperationalHistoryRetention"] = True
+    store = MySQLOperationalConnection(settings)
+    if args.maintenance_action != "mysql-cleanup":
+        return 1
+    with store.connect() as connection:
+        result = apply_mysql_operational_history_retention(
+            connection,
+            settings,
+            use_lock=True,
+        )
+        result["compactionCandidates"] = mysql_operational_compaction_tables(result)
+        if bool(args.optimize):
+            # Explicit maintenance runs while workers are paused; include the
+            # small current-state tables too because they can retain old pages
+            # after large payloads were replaced in place.
+            result["compaction"] = optimize_mysql_operational_tables(
+                connection,
+                sorted(MYSQL_OPERATIONAL_COMPACTION_TABLES),
+            )
+        if bool(args.drop_ephemeral_databases):
+            result["ephemeralDatabaseCleanup"] = drop_ephemeral_mysql_databases(
+                connection,
+                protected_databases=[str(settings.get("mysqlDatabase") or "")],
+            )
+    print(json.dumps(result, ensure_ascii=False))
+    return 0 if str(result.get("status") or "ok") != "error" else 1
+
+
 def templates_command(args) -> int:
     store = stores.notification_template_store()
     if args.templates_action == "list":
@@ -1041,6 +1080,13 @@ def build_parser() -> argparse.ArgumentParser:
     app_store_actions.add_parser("raw-json")
     app_store_actions.add_parser("replace-json")
     app_store.set_defaults(func=app_store_command)
+
+    maintenance = subparsers.add_parser("maintenance", help="Run explicit local storage maintenance")
+    maintenance_actions = maintenance.add_subparsers(dest="maintenance_action", required=True)
+    mysql_cleanup = maintenance_actions.add_parser("mysql-cleanup")
+    mysql_cleanup.add_argument("--optimize", action="store_true")
+    mysql_cleanup.add_argument("--drop-ephemeral-databases", action="store_true")
+    maintenance.set_defaults(func=maintenance_command)
 
     templates = subparsers.add_parser("templates", help="Manage notification message templates")
     templates_actions = templates.add_subparsers(dest="templates_action", required=True)

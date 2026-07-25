@@ -489,7 +489,11 @@ class OntologyReasoningRunner:
         return truthy(self.settings.get("ontologyReasoningMaintenanceEnabled"), True)
 
     def maintenance_interval_seconds(self) -> int:
-        return int_setting(self.settings, "ontologyReasoningMaintenanceIntervalSeconds", 900, 60, 86400)
+        # Active market sessions may never become queue-idle. Keep the
+        # interval short enough to drain immutable ABox/InferenceBox
+        # generations after a verified projection, while preserving a
+        # bounded maintenance cadence under frequent market updates.
+        return int_setting(self.settings, "ontologyReasoningMaintenanceIntervalSeconds", 60, 60, 86400)
 
     def projection_circuit_state(self, payload: Dict[str, object] = None) -> Dict[str, object]:
         payload = self.cursor_payload() if payload is None else dict(payload or {})
@@ -2583,6 +2587,13 @@ class OntologyReasoningRunner:
                 if symbol not in processed_symbols:
                     processed_symbols.append(symbol)
         self.mark_symbols_reasoned(processed_symbols)
+        # A busy realtime queue may never reach the idle-only maintenance
+        # branch. The TypeDB projection gate above has already verified that
+        # this cycle activated its ABox and finished native inference, so a
+        # separately leased, bounded retention pass is now safe. Failure or
+        # writer contention is operational metadata and never changes the
+        # completed investment inference.
+        maintenance = self.run_maintenance_if_due()
         status = "partial" if blocked_request_ids or mailbox_ack_error else "ok"
         queue_metadata["mailbox"] = self.mailbox_summary()
         queue_metadata["mailboxPendingEntryCount"] = int(
@@ -2617,6 +2628,7 @@ class OntologyReasoningRunner:
             "lastProjectionRuntime": self.last_projection_runtime(),
             "reasoningContext": reasoning_context,
             "mailboxAcknowledgeError": mailbox_ack_error,
+            "maintenance": maintenance,
             "deferredReason": (
                 "검증 근거가 같은 계정 월드의 새 ABox/InferenceBox 세대에 정렬될 때까지 해당 리서치 요청을 유지합니다."
                 if blocked_request_ids

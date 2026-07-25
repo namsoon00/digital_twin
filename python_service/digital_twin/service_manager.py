@@ -11,6 +11,7 @@ import plistlib
 from pathlib import Path
 from typing import Dict, List
 
+from .infrastructure.mysql_monitoring import mysql_settings
 from .infrastructure.settings import ROOT_DIR, data_dir, runtime_settings
 from .infrastructure.typedb_storage_guard import typedb_storage_health
 
@@ -187,8 +188,16 @@ def mysql_executable() -> str:
 
 def mysql_worker_spec(settings: Dict[str, object]) -> Dict[str, object]:
     executable = mysql_executable()
+    connection_settings = mysql_settings(settings)
     data_path = Path(str(os.environ.get("MYSQL_DATA_DIR") or data_dir() / "mysql-runtime"))
     port = int_value(os.environ.get("MYSQL_PORT") or (settings or {}).get("mysqlPort"), 3306, 1)
+    redo_log_capacity_mb = int_value(
+        os.environ.get("MYSQL_INNODB_REDO_LOG_CAPACITY_MB")
+        or (settings or {}).get("mysqlInnoDbRedoLogCapacityMb"),
+        256,
+        64,
+    )
+    redo_log_capacity_mb = min(4096, redo_log_capacity_mb)
     socket_path = str(os.environ.get("MYSQL_UNIX_SOCKET") or data_path / "mysql.sock")
     command = [
         executable,
@@ -203,7 +212,7 @@ def mysql_worker_spec(settings: Dict[str, object]) -> Dict[str, object]:
         "--mysqlx=0",
         "--skip-log-bin",
         "--innodb-buffer-pool-size=536870912",
-        "--innodb-redo-log-capacity=1073741824",
+        "--innodb-redo-log-capacity=" + str(redo_log_capacity_mb * 1024 * 1024),
         "--max-connections=100",
     ] if executable and Path(executable).exists() else []
     return {
@@ -216,6 +225,11 @@ def mysql_worker_spec(settings: Dict[str, object]) -> Dict[str, object]:
         "dataPath": data_path,
         "healthAddress": "127.0.0.1:" + str(port),
         "startupWaitSeconds": str((settings or {}).get("mysqlStartupWaitSeconds") or "60"),
+        # Used only after this manager initializes a brand-new local data
+        # directory. Never log these values or apply them to an existing DB.
+        "mysqlUser": str(connection_settings.get("user") or ""),
+        "mysqlPassword": str(connection_settings.get("password") or ""),
+        "mysqlDatabase": str(connection_settings.get("database") or "orbit_alpha"),
         "missingReason": "" if command else "MySQL executable was not found. Set MYSQLD_COMMAND.",
     }
 
@@ -428,6 +442,10 @@ def run_typedb_data_retention(spec: Dict[str, object], force: bool = False) -> D
         "previousSizeBytes": int(decision.get("sizeBytes") or 0),
         "retentionHours": int(decision.get("retentionHours") or int_value(spec.get("retentionHours"), 24, 1)),
         "maxSizeMb": int(decision.get("maxSizeMb") or int_value(spec.get("maxSizeMb"), 2048, 1)),
+        # A local CE data reset recreates the built-in admin user with the
+        # documented initial password. Reapply the configured local password
+        # before dependent workers are allowed to connect.
+        "credentialsBootstrapPending": True,
     })
     return {"status": "reset", **decision, "dataPath": str(data_path)}
 
@@ -538,6 +556,72 @@ def prepare_mysql_data_dir(spec: Dict[str, object]) -> bool:
     return result.returncode == 0
 
 
+def mysql_sql_literal(value: object) -> str:
+    return "'" + str(value or "").replace("\\", "\\\\").replace("'", "\\'") + "'"
+
+
+def ensure_mysql_runtime_application_user(spec: Dict[str, object]) -> bool:
+    """Provision only a freshly initialized local MySQL runtime.
+
+    The managed server is initialized with an empty local root password. A
+    reset must restore the configured application account before workers and
+    isolated test schemas can connect. Existing data directories are never
+    changed by this helper.
+    """
+    application_user = str(spec.get("mysqlUser") or "").strip()
+    application_password = str(spec.get("mysqlPassword") or "")
+    database = str(spec.get("mysqlDatabase") or "orbit_alpha").strip() or "orbit_alpha"
+    if not application_user or application_user == "root":
+        return True
+    try:
+        import pymysql
+    except ImportError:
+        append_log(spec["log"], "MySQL application user provisioning unavailable: pymysql is missing")
+        return False
+    socket_path = Path(spec.get("dataPath") or "") / "mysql.sock"
+    database_identifier = "`" + database.replace("`", "``") + "`"
+    test_database_identifier = "`" + (database + "_test%").replace("`", "``") + "`"
+    account_identifier = mysql_sql_literal(application_user) + "@'%'"
+    connection = None
+    try:
+        connection = pymysql.connect(
+            unix_socket=str(socket_path),
+            user="root",
+            password="",
+            charset="utf8mb4",
+            autocommit=True,
+        )
+        with connection.cursor() as cursor:
+            cursor.execute(
+                "CREATE DATABASE IF NOT EXISTS " + database_identifier
+                + " CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci"
+            )
+            cursor.execute(
+                "CREATE USER IF NOT EXISTS " + account_identifier
+                + " IDENTIFIED BY " + mysql_sql_literal(application_password)
+            )
+            cursor.execute(
+                "ALTER USER " + account_identifier
+                + " IDENTIFIED BY " + mysql_sql_literal(application_password)
+            )
+            cursor.execute("GRANT ALL PRIVILEGES ON " + database_identifier + ".* TO " + account_identifier)
+            # Test workers use isolated names such as orbit_alpha_test_*.
+            # They are dropped by the fixture cleanup and the retention CLI.
+            cursor.execute("GRANT ALL PRIVILEGES ON " + test_database_identifier + ".* TO " + account_identifier)
+            cursor.execute("FLUSH PRIVILEGES")
+        append_log(spec["log"], "provisioned local MySQL application and test-schema grants")
+        return True
+    except Exception:
+        append_log(spec["log"], "MySQL application user provisioning failed")
+        return False
+    finally:
+        try:
+            if connection:
+                connection.close()
+        except Exception:
+            pass
+
+
 def wait_for_tcp_service(spec: Dict[str, object]) -> bool:
     wait_seconds = int_value(spec.get("startupWaitSeconds"), 30, 0)
     address = str(spec.get("healthAddress") or "")
@@ -554,14 +638,22 @@ def wait_for_tcp_service(spec: Dict[str, object]) -> bool:
     return False
 
 
-def typedb_driver_ready(spec: Dict[str, object]) -> bool:
-    """Verify TypeDB accepts authenticated driver requests, not only TCP."""
+def typedb_driver_components():
     try:
         from typedb.driver import Credentials, DriverOptions, DriverTlsConfig, TypeDB
     except Exception:
+        return None
+    return TypeDB, Credentials, DriverOptions, DriverTlsConfig
+
+
+def typedb_driver_ready(spec: Dict[str, object]) -> bool:
+    """Verify TypeDB accepts authenticated driver requests, not only TCP."""
+    components = typedb_driver_components()
+    if components is None:
         # The seed process performs the definitive driver check. Retain the
         # socket check when the optional driver is not importable here.
         return True
+    TypeDB, Credentials, DriverOptions, DriverTlsConfig = components
     address = str(spec.get("healthAddress") or spec.get("typedbAddress") or "127.0.0.1:1729")
     tls_enabled = truthy(spec.get("typedbTlsEnabled"))
     tls_config = DriverTlsConfig.enabled() if tls_enabled else DriverTlsConfig.disabled()
@@ -589,22 +681,92 @@ def typedb_driver_ready(spec: Dict[str, object]) -> bool:
             pass
 
 
+def typedb_credentials_bootstrap_pending() -> bool:
+    return bool(read_typedb_retention_marker().get("credentialsBootstrapPending"))
+
+
+def clear_typedb_credentials_bootstrap_pending() -> None:
+    marker = read_typedb_retention_marker()
+    if not marker.get("credentialsBootstrapPending"):
+        return
+    marker["credentialsBootstrapPending"] = False
+    marker["credentialsBootstrapCompletedAt"] = iso_now()
+    write_typedb_retention_marker(marker)
+
+
+def bootstrap_typedb_credentials_after_reset(spec: Dict[str, object]) -> bool:
+    """Restore local TypeDB credentials after an intentional empty-store boot.
+
+    TypeDB CE recreates only ``admin/password`` after its data directory is
+    removed. The configured password remains in the local settings store, so
+    no secret needs to be regenerated or logged. This path is gated by the
+    reset marker and is disabled as soon as the configured credentials work.
+    """
+    if not typedb_credentials_bootstrap_pending():
+        return False
+    components = typedb_driver_components()
+    if components is None:
+        return False
+    TypeDB, Credentials, DriverOptions, DriverTlsConfig = components
+    configured_user = str(spec.get("typedbUser") or "admin").strip() or "admin"
+    configured_password = str(spec.get("typedbPassword") or "").strip()
+    if not configured_password:
+        return False
+    address = str(spec.get("healthAddress") or spec.get("typedbAddress") or "127.0.0.1:1729")
+    tls_enabled = truthy(spec.get("typedbTlsEnabled"))
+    tls_config = DriverTlsConfig.enabled() if tls_enabled else DriverTlsConfig.disabled()
+    options = DriverOptions(tls_config, request_timeout_millis=1000)
+    default_driver = None
+    try:
+        default_driver = TypeDB.driver(address, Credentials("admin", "password"), options)
+        # A simple authenticated request proves this is a fresh CE server,
+        # rather than trying to modify a running server with unrelated auth.
+        default_driver.databases.contains(str(spec.get("typedbDatabase") or "orbit_alpha_ontology"))
+        if configured_user != "admin":
+            default_driver.users.create(configured_user, configured_password)
+        if configured_password != "password":
+            default_driver.users.get_current().update_password(configured_password)
+    except Exception:
+        append_log(spec["log"], "credential bootstrap unavailable after fresh TypeDB reset")
+        return False
+    finally:
+        try:
+            if default_driver:
+                default_driver.close()
+        except Exception:
+            pass
+    if not typedb_driver_ready(spec):
+        append_log(spec["log"], "credential bootstrap verification failed")
+        return False
+    clear_typedb_credentials_bootstrap_pending()
+    append_log(spec["log"], "configured TypeDB credentials restored after reset")
+    print(str(spec["label"]) + " restored configured TypeDB credentials after reset.")
+    return True
+
+
 def wait_for_typedb_ready(spec: Dict[str, object]) -> bool:
     wait_seconds = int_value(spec.get("startupWaitSeconds"), 60, 0)
     address = spec.get("healthAddress") or spec.get("typedbAddress") or "127.0.0.1:1729"
     if wait_seconds <= 0:
         return True
     deadline = time.monotonic() + wait_seconds
+    bootstrap_attempted = False
     while time.monotonic() <= deadline:
         pid = read_pid(spec["pid"])
         if pid and not pid_exists(pid):
             append_log(spec["log"], "not-ready process-exited")
             print(str(spec["label"]) + " did not become ready because the process exited.")
             return False
-        if tcp_ready(address) and typedb_driver_ready(spec):
-            append_log(spec["log"], "ready " + str(address))
-            print(str(spec["label"]) + " ready. address=" + str(address))
-            return True
+        if tcp_ready(address):
+            if typedb_driver_ready(spec):
+                clear_typedb_credentials_bootstrap_pending()
+                append_log(spec["log"], "ready " + str(address))
+                print(str(spec["label"]) + " ready. address=" + str(address))
+                return True
+            if not bootstrap_attempted and typedb_credentials_bootstrap_pending():
+                bootstrap_attempted = True
+                if bootstrap_typedb_credentials_after_reset(spec):
+                    continue
         time.sleep(0.5)
     append_log(spec["log"], "not-ready timeout " + str(address))
     print(str(spec["label"]) + " not ready after " + str(wait_seconds) + "s. address=" + str(address))
@@ -717,9 +879,13 @@ def start_worker(spec: Dict[str, object]) -> int:
     if role in {"mysql", "web"} and tcp_ready(spec.get("healthAddress")):
         print(str(spec["label"]) + " not started. Canonical address is already owned by an unmanaged process: " + str(spec.get("healthAddress") or ""))
         return 1
-    if role == "mysql" and not prepare_mysql_data_dir(spec):
-        print(str(spec["label"]) + " data directory initialization failed.")
-        return 1
+    fresh_mysql_data_path = False
+    if role == "mysql":
+        mysql_data_path = Path(spec.get("dataPath") or "")
+        fresh_mysql_data_path = not (mysql_data_path / "mysql").exists()
+        if not prepare_mysql_data_dir(spec):
+            print(str(spec["label"]) + " data directory initialization failed.")
+            return 1
     if str(spec.get("role") or "") == "typedb":
         storage = typedb_storage_preflight(spec)
         if not storage.get("ready"):
@@ -727,6 +893,8 @@ def start_worker(spec: Dict[str, object]) -> int:
             append_log(log_path, message)
             print(str(spec["label"]) + " not started. " + message)
             return 1
+        data_path = Path(spec.get("dataPath") or "")
+        fresh_data_path = not data_path.exists()
         retention = run_typedb_data_retention(spec)
         if retention.get("status") == "reset":
             previous_mb = round(float(retention.get("sizeBytes") or 0) / 1024 / 1024, 1)
@@ -736,6 +904,13 @@ def start_worker(spec: Dict[str, object]) -> int:
             message = "retention maintenance required; destructive reset blocked. sizeMb=" + str(previous_mb) + " reason=" + str(retention.get("reason") or "")
             append_log(log_path, message)
             print(str(spec["label"]) + " " + message)
+        elif fresh_data_path:
+            # The first local boot has the same CE credential lifecycle as a
+            # retention reset. Mark it before the server creates its files.
+            marker = read_typedb_retention_marker()
+            marker["credentialsBootstrapPending"] = True
+            marker["credentialsBootstrapReason"] = "fresh-data-directory"
+            write_typedb_retention_marker(marker)
     log_path.parent.mkdir(parents=True, exist_ok=True)
     append_log(log_path, "start")
     out = log_path.open("a", encoding="utf-8")
@@ -762,6 +937,9 @@ def start_worker(spec: Dict[str, object]) -> int:
     elif role in {"mysql", "web"}:
         if not wait_for_tcp_service(spec):
             print(str(spec["label"]) + " did not become ready at " + str(spec.get("healthAddress") or ""))
+            return 1
+        if role == "mysql" and fresh_mysql_data_path and not ensure_mysql_runtime_application_user(spec):
+            print(str(spec["label"]) + " application user provisioning failed after fresh initialization.")
             return 1
     return 0
 

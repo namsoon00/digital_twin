@@ -165,7 +165,7 @@ Projection은 다음 용도로만 사용한다.
 5. 종목 없는 거시/정책 이벤트는 첫 종목에서 완료 처리하지 않는다. 보유 종목, 관심종목 순으로 분할 투영하고 모든 대상이 완료된 후에만 이벤트를 완료 처리한다.
 6. 각 투영 감사에는 ABox 저장, 영향 계획, 직전 InferenceBox 확인, native inference, 포인터 전환, 품질 기록의 단계별 시간과 실제 native 대상 종목 수를 남긴다. 계획 대상 수와 실제 실행 대상 수는 별도로 보관해 운영 지표가 실행 범위를 과장하지 않게 한다.
 
-운영 설정은 `ontologyReasoningBackpressureEnabled`, `ontologyReasoningBackpressureFactor`, `ontologyReasoningBackpressureMaxSeconds`, `ontologyReasoningFairnessMaxWaitSeconds`, `ontologyReasoningFairnessDrainEnabled`, `ontologyReasoningMaintenanceEnabled`, `ontologyReasoningMaintenanceIntervalSeconds`, `typedbNativeRuleSelectionEnabled`로 관리한다. RuleBox 선택 최적화가 꺼져 있거나 안전 증명이 부족한 경우에도 전체 native RuleBox materialization이 항상 정답 경로다.
+운영 설정은 `ontologyReasoningBackpressureEnabled`, `ontologyReasoningBackpressureFactor`, `ontologyReasoningBackpressureMaxSeconds`, `ontologyReasoningFairnessMaxWaitSeconds`, `ontologyReasoningFairnessDrainEnabled`, `ontologyReasoningMaintenanceEnabled`, `ontologyReasoningMaintenanceIntervalSeconds`, `typedbNativeRuleSelectionEnabled`로 관리한다. 그래프 정리는 유휴 상태뿐 아니라 검증된 ABox/InferenceBox 투영 직후에도 쿨다운 범위 안에서 실행되어, 지속적인 실시간 업데이트가 비활성 세대를 누적시키지 않는다. RuleBox 선택 최적화가 꺼져 있거나 안전 증명이 부족한 경우에도 전체 native RuleBox materialization이 항상 정답 경로다.
 
 ## Data Quality And Coverage
 

@@ -4924,7 +4924,12 @@ class ScopedABoxManifestMixin:
             "cleanup": cleanup_rows,
         }
 
-    def prune_inactive_scoped_abox_manifests(self, world_id: str = "") -> Dict[str, object]:
+    def prune_inactive_scoped_abox_manifests(
+        self,
+        world_id: str = "",
+        keep_inactive_count: int = None,
+        max_manifests: int = None,
+    ) -> Dict[str, object]:
         """Run one bounded, reference-aware scoped ABox maintenance pass."""
         imported = self.driver_imports()
         if imported[0] is None:
@@ -4947,6 +4952,8 @@ class ScopedABoxManifestMixin:
                         active_manifest_id=str(
                             active.get("worldviewManifestId") or active.get("aboxSnapshotId") or ""
                         ),
+                        keep_inactive_count=keep_inactive_count,
+                        max_manifests=max_manifests,
                         world_id=world_id,
                     )
                 finally:
@@ -4964,7 +4971,7 @@ class ScopedABoxManifestMixin:
             }
 
     def run_deferred_maintenance(self, payload: Dict[str, object] = None) -> Dict[str, object]:
-        """Prune inactive graph generations only while the reasoning queue is idle.
+        """Prune inactive graph generations after a verified cycle or while idle.
 
         This is operational retention, never an investment-rule step. It uses
         the same durable writer lease as ABox activation, so maintenance
@@ -4979,6 +4986,16 @@ class ScopedABoxManifestMixin:
             }
         options = dict(payload or {})
         requested_world_id = str(options.get("worldId") or options.get("ontologyWorldId") or "").strip()
+        requested_manifest_limit = number_or_none(
+            options.get("maxInactiveManifests")
+            if options.get("maxInactiveManifests") is not None
+            else options.get("maxManifests")
+        )
+        maintenance_manifest_limit = (
+            self.deferred_maintenance_abox_max_manifests()
+            if requested_manifest_limit is None
+            else max(1, min(10, int(requested_manifest_limit)))
+        )
         started_at = time.perf_counter()
 
         # A single global maintenance pass used to inspect the last account's
@@ -5030,7 +5047,10 @@ class ScopedABoxManifestMixin:
             }
         try:
             orphan_result = self.prune_orphan_scoped_abox_candidates(requested_world_id)
-            abox_result = self.prune_inactive_scoped_abox_manifests(requested_world_id)
+            abox_result = self.prune_inactive_scoped_abox_manifests(
+                requested_world_id,
+                max_manifests=maintenance_manifest_limit,
+            )
             legacy_result: Dict[str, object] = {
                 "status": "not-required",
                 "deletedGenerationIds": [],
@@ -5101,6 +5121,7 @@ class ScopedABoxManifestMixin:
                 "graphStore": "typedb",
                 "worldId": requested_world_id,
                 "maintenanceMode": "legacy-global" if not requested_world_id else "world-scoped",
+                "maxInactiveManifests": maintenance_manifest_limit,
                 "orphanScopedAbox": orphan_result,
                 "abox": abox_result,
                 "legacyAbox": legacy_result,
@@ -7869,6 +7890,20 @@ class TypeDBOntologyGraphRepository(GraphStoreOntologyRowMapperMixin, ScopedABox
         # Deletes are deliberately bounded so a live activation cannot spend
         # minutes reclaiming a historic backlog under TypeDB's writer lock.
         return max(0, min(10, int(parsed)))
+
+    def deferred_maintenance_abox_max_manifests(self, settings: Dict[str, object] = None) -> int:
+        """Allow idle maintenance to drain faster than a live ABox save.
+
+        The realtime activation path intentionally removes at most a couple of
+        manifests. Once the queue is idle, a larger bounded slice prevents a
+        sustained market session from leaving hundreds of immutable manifests
+        behind indefinitely.
+        """
+        raw = (settings or runtime_settings()).get("typedbDeferredMaintenanceMaxManifests")
+        parsed = number_or_none(raw)
+        if parsed is None:
+            parsed = 10
+        return max(1, min(10, int(parsed)))
 
     def abox_write_transaction_query_count(self, settings: Dict[str, object] = None) -> int:
         raw = (settings or runtime_settings()).get("typedbABoxWriteTransactionQueryCount")

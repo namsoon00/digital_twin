@@ -109,7 +109,7 @@ class OntologyWorldProjectionRunnerTests(unittest.TestCase):
         self.assertEqual("market:shared:us", world.world_id)
         self.assertEqual("market", kind)
 
-    def test_saved_shared_projection_prunes_the_replaced_manifest(self):
+    def test_saved_shared_projection_defers_routine_maintenance(self):
         outbox = FakeOutbox([projection_job()])
         repository = FakeMaintenanceRepository()
         recorder = FakeRecorder({"status": "ok", "save": {"saved": True}}, repository=repository)
@@ -118,14 +118,29 @@ class OntologyWorldProjectionRunnerTests(unittest.TestCase):
         result = runner.run_once(limit=1)
 
         self.assertEqual(1, result["completedCount"])
+        self.assertEqual([], repository.calls)
+        stored = outbox.completed[0][2]
+        self.assertNotIn("postRebuildMaintenance", stored)
+
+    def test_contract_rebuild_prunes_legacy_shared_manifest(self):
+        outbox = FakeOutbox([projection_job()])
+        repository = FakeMaintenanceRepository()
+        recorder = FakeRecorder({
+            "status": "ok",
+            "save": {"saved": True},
+            "fullRebuild": True,
+        }, repository=repository)
+        runner = OntologyWorldProjectionRunner(outbox, recorder)
+
+        runner.run_once(limit=1)
+
         self.assertEqual([{
             "worldId": "market:shared:us",
             "keepInactiveManifests": 0,
             "maxInactiveManifests": 10,
         }], repository.calls)
         stored = outbox.completed[0][2]
-        self.assertEqual("ok", stored["postProjectionMaintenance"]["status"])
-        self.assertEqual(3, stored["postProjectionMaintenance"]["deletedBatchCount"])
+        self.assertEqual("ok", stored["postRebuildMaintenance"]["status"])
 
     def test_deferred_shared_projection_is_retried_and_not_acknowledged(self):
         outbox = FakeOutbox([projection_job()])

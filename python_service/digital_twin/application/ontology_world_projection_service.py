@@ -89,8 +89,8 @@ class OntologyWorldProjectionRunner:
         reason = str((result or {}).get("reason") or "").strip()
         return (status + (": " + reason if reason else ""))[:1000]
 
-    def shared_world_maintenance(self, world_id: str) -> Dict[str, object]:
-        """Prune inactive shared-world generations after a verified write."""
+    def full_rebuild_maintenance(self, world_id: str) -> Dict[str, object]:
+        """Prune legacy generations after an explicit projection-contract rebuild."""
         repository = getattr(self.projection_recorder, "repository", None)
         maintenance = getattr(repository, "run_deferred_maintenance", None)
         if not callable(maintenance):
@@ -139,17 +139,14 @@ class OntologyWorldProjectionRunner:
                 )
                 result = dict(result or {})
                 if self.successful(result):
-                    saved_manifest = bool(result.get("saved")) or bool(
-                        dict(result.get("save") or {}).get("saved")
-                    )
-                    if bool(result.get("fullRebuild")) or saved_manifest:
-                        maintenance = self.shared_world_maintenance(world.world_id)
-                        result["postProjectionMaintenance"] = maintenance
-                        if bool(result.get("fullRebuild")):
-                            # Keep the explicit migration field for audit
-                            # readers while using the same bounded cleanup
-                            # contract for every later shared-world update.
-                            result["postRebuildMaintenance"] = maintenance
+                    if bool(result.get("fullRebuild")):
+                        # Normal updates must return the shared-world writer
+                        # lease promptly. Routine generation retention runs
+                        # through the existing bounded deferred-maintenance
+                        # cadence; only a contract migration needs immediate
+                        # legacy cleanup before it can accumulate again.
+                        maintenance = self.full_rebuild_maintenance(world.world_id)
+                        result["postRebuildMaintenance"] = maintenance
                     self.outbox.complete(job_id, self.worker_id, result)
                     completed.append(job_id)
                     details.append(kind + ":" + job_id[-10:] + "=" + str(result.get("status") or "ok"))

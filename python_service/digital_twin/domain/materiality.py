@@ -145,7 +145,7 @@ def market_change_materiality(
             "market-data-update",
             "normal",
             False,
-            "첫 관측값은 비교 대상이 없어 저장만 합니다.",
+            "첫 관측값은 비교 대상이 없어 기준선으로 저장하며 초기 ABox 기준선 생성에만 사용합니다.",
             changed_fields,
             ["initial-observation"],
             data_state="partial",

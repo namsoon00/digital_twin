@@ -1,3 +1,4 @@
+import hashlib
 import json
 from typing import Dict, Iterable, List
 
@@ -67,6 +68,27 @@ def fact_signature(payload: Dict[str, object], ignore_keys: Iterable[str] = None
     return json.dumps(canonical_fact_payload(payload, ignore_keys), ensure_ascii=False, sort_keys=True, separators=(",", ":"))
 
 
+def fact_revision_id(
+    fact_type: str,
+    subject: str,
+    payload: Dict[str, object],
+    ignore_keys: Iterable[str] = None,
+) -> str:
+    """Return a durable identity for one normalized fact revision.
+
+    A collection timestamp is intentionally excluded.  The ID represents the
+    actual fact content for one subject, so scheduler code can suppress a
+    duplicate observation without deciding anything about the investment.
+    """
+    identity = "|".join([
+        str(fact_type or "Fact").strip(),
+        str(subject or "").upper().strip(),
+        fact_signature(payload or {}, ignore_keys),
+    ])
+    digest = hashlib.sha256(identity.encode("utf-8")).hexdigest()[:24]
+    return "fact-revision:" + digest
+
+
 def _values_equal(previous: object, current: object, numeric_tolerance: float = 0.0001) -> bool:
     previous_number = number(previous)
     current_number = number(current)
@@ -92,6 +114,7 @@ def changed_fields(previous: Dict[str, object], current: Dict[str, object], fiel
 
 def market_fact_change(previous: Dict[str, object], current: Dict[str, object]) -> Dict[str, object]:
     fields = changed_fields(previous or {}, current or {}, MARKET_FACT_FIELDS)
+    payload = {key: (current or {}).get(key) for key in MARKET_FACT_FIELDS}
     if not previous:
         reason = "new-market-fact"
     elif fields:
@@ -102,7 +125,8 @@ def market_fact_change(previous: Dict[str, object], current: Dict[str, object]) 
         "changed": bool(fields),
         "reason": reason,
         "fields": fields,
-        "signature": fact_signature({key: (current or {}).get(key) for key in MARKET_FACT_FIELDS}),
+        "signature": fact_signature(payload),
+        "revisionId": fact_revision_id("MarketQuote", str((current or {}).get("symbol") or ""), payload),
     }
 
 

@@ -96,7 +96,9 @@ class KISRealtimeWebSocketRunner:
         self.last_event_flush = time.monotonic()
         changed_symbols = []
         changed_fields_by_symbol: Dict[str, List[str]] = {}
+        fact_revisions_by_symbol: Dict[str, str] = {}
         material_symbols = []
+        bootstrap_symbols = []
         materiality_assessments: Dict[str, Dict[str, object]] = {}
         for symbol, entry in pending.items():
             change = dict(entry.get("change") or {})
@@ -106,12 +108,17 @@ class KISRealtimeWebSocketRunner:
                 continue
             changed_symbols.append(symbol)
             changed_fields_by_symbol[symbol] = list(change.get("fields") or [])
+            fact_revisions_by_symbol[symbol] = str(change.get("revisionId") or "")
+            if str(change.get("reason") or "") == "new-market-fact":
+                bootstrap_symbols.append(symbol)
             assessment = market_change_materiality(symbol, previous, current, change, self.settings)
             materiality_assessments[symbol] = assessment.to_dict()
             if assessment.passed:
                 material_symbols.append(symbol)
         if not changed_symbols:
             return {"status": "refresh-only", "published": False}
+        material_symbol_set = set(material_symbols)
+        bootstrap_symbol_set = set(bootstrap_symbols)
         result = {
             "status": "ok",
             "provider": "kis-websocket",
@@ -125,8 +132,11 @@ class KISRealtimeWebSocketRunner:
             "changedCount": len(changed_symbols),
             "changedSymbols": changed_symbols,
             "changedFieldsBySymbol": changed_fields_by_symbol,
+            "factRevisionsBySymbol": fact_revisions_by_symbol,
             "materialChangedCount": len(material_symbols),
             "materialChangedSymbols": material_symbols,
+            "bootstrapReasoningSymbols": bootstrap_symbols,
+            "immaterialChangedSymbolCount": len([symbol for symbol in changed_symbols if symbol not in material_symbol_set and symbol not in bootstrap_symbol_set]),
             "materialityAssessments": materiality_assessments,
             "dataQuality": "actual",
             "transport": "websocket",
@@ -146,9 +156,11 @@ class KISRealtimeWebSocketRunner:
                 if callable(fallback_symbols):
                     focus_symbols = [str(item or "").upper().strip() for item in fallback_symbols() if str(item or "").strip()]
             focus_set = set(focus_symbols)
-            investment_material_symbols = [symbol for symbol in material_symbols if symbol in focus_set]
+            reasoning_candidates = material_symbol_set | bootstrap_symbol_set
+            investment_material_symbols = [symbol for symbol in changed_symbols if symbol in focus_set and symbol in reasoning_candidates]
             result["investmentReasoningSymbols"] = investment_material_symbols
             result["backgroundMaterialSymbolCount"] = len([symbol for symbol in material_symbols if symbol not in focus_set])
+            result["backgroundBootstrapSymbolCount"] = len([symbol for symbol in bootstrap_symbols if symbol not in focus_set])
             if investment_material_symbols:
                 reasoning = ontology_reasoning_requested_event(
                     event,
@@ -157,8 +169,10 @@ class KISRealtimeWebSocketRunner:
                     changed_count=len(investment_material_symbols),
                     observed_count=len(changed_symbols),
                     fact_types=["MarketQuote", "ExecutionFlow", "OrderBook"],
-                    reason="보유·관심 종목에서 중요도가 확인된 KIS WebSocket 체결·호가 변경만 TypeDB ABox와 네이티브 규칙 추론에 반영합니다.",
+                    reason="보유·관심 종목의 첫 기준선 또는 중요도가 확인된 KIS WebSocket 체결·호가 변경만 TypeDB ABox와 네이티브 규칙 추론에 반영합니다.",
                     materiality_assessments=[materiality_assessments[symbol] for symbol in investment_material_symbols],
+                    fact_revisions_by_symbol={symbol: fact_revisions_by_symbol[symbol] for symbol in investment_material_symbols if fact_revisions_by_symbol.get(symbol)},
+                    changed_fields_by_symbol={symbol: changed_fields_by_symbol[symbol] for symbol in investment_material_symbols if symbol in changed_fields_by_symbol},
                 )
             if hasattr(self.event_publisher, "publish"):
                 self.event_publisher.publish(event)

@@ -550,7 +550,9 @@ class MarketDataCollectionRunner:
         changed = 0
         changed_symbols: List[str] = []
         changed_fields_by_symbol: Dict[str, List[str]] = {}
+        fact_revisions_by_symbol: Dict[str, str] = {}
         material_symbols: List[str] = []
+        bootstrap_symbols: List[str] = []
         materiality_assessments: Dict[str, Dict[str, object]] = {}
         global_saved_symbols = set()
         account_symbol_counts: Dict[str, int] = {}
@@ -580,6 +582,9 @@ class MarketDataCollectionRunner:
                     changed += 1
                     changed_symbols.append(symbol)
                     changed_fields_by_symbol[symbol] = list(change.get("fields") or [])
+                    fact_revisions_by_symbol[symbol] = str(change.get("revisionId") or "")
+                    if str(change.get("reason") or "") == "new-market-fact":
+                        bootstrap_symbols.append(symbol)
                     assessment = market_change_materiality(symbol, cached, payload, change, self.settings)
                     materiality_assessments[symbol] = assessment.to_dict()
                     if assessment.passed:
@@ -611,10 +616,15 @@ class MarketDataCollectionRunner:
                 changed += 1
                 changed_symbols.append(symbol)
                 changed_fields_by_symbol[symbol] = list(change.get("fields") or [])
+                fact_revisions_by_symbol[symbol] = str(change.get("revisionId") or "")
+                if str(change.get("reason") or "") == "new-market-fact":
+                    bootstrap_symbols.append(symbol)
                 assessment = market_change_materiality(symbol, cached, payload, change, self.settings)
                 materiality_assessments[symbol] = assessment.to_dict()
                 if assessment.passed:
                     material_symbols.append(symbol)
+        material_symbol_set = set(material_symbols)
+        bootstrap_symbol_set = set(bootstrap_symbols)
         result = {
             "status": "ok",
             "provider": "toss",
@@ -647,8 +657,11 @@ class MarketDataCollectionRunner:
             "changedCount": changed,
             "changedSymbols": changed_symbols,
             "changedFieldsBySymbol": changed_fields_by_symbol,
+            "factRevisionsBySymbol": fact_revisions_by_symbol,
             "materialChangedCount": len(material_symbols),
             "materialChangedSymbols": material_symbols,
+            "bootstrapReasoningSymbols": bootstrap_symbols,
+            "immaterialChangedSymbolCount": len([symbol for symbol in changed_symbols if symbol not in material_symbol_set and symbol not in bootstrap_symbol_set]),
             "materialityAssessments": materiality_assessments,
             "dataQuality": "actual",
             "universeRefresh": universe_refresh,
@@ -660,9 +673,11 @@ class MarketDataCollectionRunner:
         # watchlist names may enqueue an investment-reasoning cycle; otherwise
         # proxy refreshes can make a live holding wait behind background ticks.
         focus_symbols = {str(symbol or "").upper().strip() for symbol in focused_symbols if str(symbol or "").strip()}
-        ontology_symbols = [symbol for symbol in changed_symbols if symbol in focus_symbols]
+        reasoning_candidates = material_symbol_set | bootstrap_symbol_set
+        ontology_symbols = [symbol for symbol in changed_symbols if symbol in focus_symbols and symbol in reasoning_candidates]
         result["investmentReasoningSymbols"] = ontology_symbols
         result["backgroundMaterialSymbolCount"] = len([symbol for symbol in material_symbols if symbol not in focus_symbols])
+        result["backgroundBootstrapSymbolCount"] = len([symbol for symbol in bootstrap_symbols if symbol not in focus_symbols])
         if self.event_publisher and saved:
             event = market_data_collected_event(result)
             if hasattr(self.event_publisher, "publish"):
@@ -675,8 +690,10 @@ class MarketDataCollectionRunner:
                         changed_count=len(ontology_symbols),
                         observed_count=saved,
                         fact_types=["MarketQuote", "TechnicalIndicator"],
-                        reason="시장 데이터 변경을 TypeDB ABox에 반영하고 네이티브 규칙 추론을 갱신합니다. 알림은 중요 변경 게이트를 별도로 통과해야 합니다.",
-                        materiality_assessments=[materiality_assessments[symbol] for symbol in changed_symbols if symbol in materiality_assessments],
+                        reason="보유·관심 종목의 첫 기준선 또는 중요 변경만 TypeDB ABox와 네이티브 규칙 추론에 반영합니다.",
+                        materiality_assessments=[materiality_assessments[symbol] for symbol in ontology_symbols if symbol in materiality_assessments],
+                        fact_revisions_by_symbol={symbol: fact_revisions_by_symbol[symbol] for symbol in ontology_symbols if fact_revisions_by_symbol.get(symbol)},
+                        changed_fields_by_symbol={symbol: changed_fields_by_symbol[symbol] for symbol in ontology_symbols if symbol in changed_fields_by_symbol},
                     ))
             else:
                 self.event_publisher.handle(event)
@@ -688,8 +705,10 @@ class MarketDataCollectionRunner:
                         changed_count=len(ontology_symbols),
                         observed_count=saved,
                         fact_types=["MarketQuote", "TechnicalIndicator"],
-                        reason="시장 데이터 변경을 TypeDB ABox에 반영하고 네이티브 규칙 추론을 갱신합니다. 알림은 중요 변경 게이트를 별도로 통과해야 합니다.",
-                        materiality_assessments=[materiality_assessments[symbol] for symbol in changed_symbols if symbol in materiality_assessments],
+                        reason="보유·관심 종목의 첫 기준선 또는 중요 변경만 TypeDB ABox와 네이티브 규칙 추론에 반영합니다.",
+                        materiality_assessments=[materiality_assessments[symbol] for symbol in ontology_symbols if symbol in materiality_assessments],
+                        fact_revisions_by_symbol={symbol: fact_revisions_by_symbol[symbol] for symbol in ontology_symbols if fact_revisions_by_symbol.get(symbol)},
+                        changed_fields_by_symbol={symbol: changed_fields_by_symbol[symbol] for symbol in ontology_symbols if symbol in changed_fields_by_symbol},
                     ))
         return result
 

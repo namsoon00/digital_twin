@@ -16,6 +16,7 @@ from digital_twin.application.ontology_reasoning_service import (
 )
 from digital_twin.domain.accounts import AccountConfig
 from digital_twin.domain.events import DomainEvent, ONTOLOGY_REASONING_REQUESTED, RESEARCH_EVIDENCE_COLLECTED, ontology_reasoning_requested_event
+from digital_twin.domain.fact_changes import market_fact_change
 from digital_twin.domain.investment_research import NewsCollectionTarget, ResearchEvidence
 from digital_twin.domain.materiality import evidence_materiality, market_change_materiality
 from digital_twin.domain.news_ai_analysis import local_news_ai_analysis
@@ -26,6 +27,24 @@ from digital_twin.infrastructure.news_sources import NewsSourceGateway
 
 
 class MaterialityGateTests(unittest.TestCase):
+    def test_market_fact_revision_ignores_refresh_timestamp_but_tracks_market_value(self):
+        first = {
+            "symbol": "AAPL",
+            "currentPrice": 100,
+            "volume": 1000,
+            "ma20": 98,
+            "updatedAt": "2026-07-24T00:00:00Z",
+        }
+        refresh = {**first, "updatedAt": "2026-07-24T00:01:00Z"}
+        changed = {**refresh, "currentPrice": 101}
+
+        first_revision = market_fact_change({}, first)["revisionId"]
+        refresh_revision = market_fact_change(first, refresh)["revisionId"]
+        changed_revision = market_fact_change(refresh, changed)["revisionId"]
+
+        self.assertEqual(first_revision, refresh_revision)
+        self.assertNotEqual(first_revision, changed_revision)
+
     def test_blocked_materiality_is_not_scheduled_as_urgent_investment_work(self):
         source = DomainEvent(name="market_data.collected", aggregate_id="market:KR", payload={})
         blocked = ontology_reasoning_requested_event(

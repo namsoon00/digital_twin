@@ -6747,6 +6747,7 @@ class PythonServiceTests(unittest.TestCase):
         target_calls = []
         price_calls = []
         candle_calls = []
+        price_round = {"count": 0}
 
         class StaticSymbolService:
             def summary(self):
@@ -6814,10 +6815,12 @@ class PythonServiceTests(unittest.TestCase):
 
             def fetch_prices(self, token, symbols):
                 price_calls.append(list(symbols))
+                price_round["count"] += 1
+                small_refresh_delta = 0.1 if price_round["count"] > 1 else 0
                 return {
                     symbol: {
                         "symbol": symbol,
-                        "currentPrice": 100 + index,
+                        "currentPrice": 100 + index + small_refresh_delta,
                         "currency": "USD",
                         "quoteSource": "Toss /api/v1/prices",
                         "quoteStatus": "토스 prices 반영",
@@ -6898,16 +6901,21 @@ class PythonServiceTests(unittest.TestCase):
         self.assertEqual(101, second_tsla["currentPrice"])
         self.assertEqual(102, second_msft["currentPrice"])
         self.assertEqual(0, result["materialChangedCount"])
+        self.assertEqual(["AAPL", "TSLA", "MSFT"], result["bootstrapReasoningSymbols"])
         self.assertEqual([MARKET_DATA_COLLECTED, ONTOLOGY_REASONING_REQUESTED], [event.name for event in events.published])
         self.assertEqual(["AAPL", "MSFT", "TSLA"], events.published[-1].payload["symbols"])
         self.assertEqual(3, events.published[-1].payload["changedCount"])
+        self.assertEqual({"AAPL", "MSFT", "TSLA"}, set(events.published[-1].payload["factRevisionsBySymbol"]))
 
         events.published.clear()
         repeat = runner.run_once(force=True)
 
         self.assertEqual(3, repeat["savedCount"])
         self.assertEqual(5, repeat["accountSavedCount"])
-        self.assertEqual(0, repeat["changedCount"])
+        self.assertEqual(3, repeat["changedCount"])
+        self.assertEqual(0, repeat["materialChangedCount"])
+        self.assertEqual([], repeat["investmentReasoningSymbols"])
+        self.assertEqual(3, repeat["immaterialChangedSymbolCount"])
         self.assertEqual([MARKET_DATA_COLLECTED], [event.name for event in events.published])
 
     def test_market_data_collection_runner_collects_market_signal_proxies(self):

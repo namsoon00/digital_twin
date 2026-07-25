@@ -50,6 +50,21 @@ def event_symbols(event: object) -> List[str]:
     return symbols
 
 
+def event_fact_revision(event: object, symbol: str) -> str:
+    """Read one fact-revision ID from a reasoning request's provenance."""
+    clean_symbol = str(symbol or "").upper().strip()
+    raw = event_payload(event).get("factRevisionsBySymbol")
+    if not clean_symbol or not isinstance(raw, dict):
+        return ""
+    value = raw.get(clean_symbol)
+    if value is None:
+        for key, candidate in raw.items():
+            if str(key or "").upper().strip() == clean_symbol:
+                value = candidate
+                break
+    return str(value or "").strip()[:160]
+
+
 def event_changed_count(event: object) -> int:
     payload = event_payload(event)
     return int(float_value(payload.get("changedCount"), 0.0) or 0)
@@ -937,6 +952,7 @@ class OntologyReasoningRunner:
                 "reviewLevel": event_review_level(event),
                 "priorityHint": priority,
                 "occurredAt": str(getattr(event, "occurred_at", "") or ""),
+                "factRevision": event_fact_revision(event, symbol),
             })
         return entries
 
@@ -951,6 +967,7 @@ class OntologyReasoningRunner:
             "sourceEventId": source_event_id,
             "accountScope": str(entry.get("accountScope") or "market"),
             "factFamily": str(entry.get("factFamily") or ""),
+            "factRevision": str(entry.get("factRevision") or "")[:160],
             "enqueuedAt": str(entry.get("occurredAt") or source.occurred_at or ""),
         }
         return DomainEvent(
@@ -985,6 +1002,7 @@ class OntologyReasoningRunner:
             "handledEventIds": [],
             "candidateEventIds": [],
             "terminalEventStates": {},
+            "sameRevisionEntryKeys": [],
             "entryCount": 0,
         }
         if not self.mailbox_enabled():
@@ -1017,6 +1035,7 @@ class OntologyReasoningRunner:
                 "knownEventIds": sorted(known | set(result.get("knownEventIds") or [])),
                 "handledEventIds": sorted(handled),
                 "terminalEventStates": {**terminal, **dict(result.get("terminalEventStates") or {})},
+                "sameRevisionEntryKeys": list(result.get("sameRevisionEntryKeys") or []),
                 "entryCount": len(entries),
             })
         except Exception as error:  # noqa: BLE001 - event-log scheduling remains a safe fallback.
@@ -1960,6 +1979,7 @@ class OntologyReasoningRunner:
             "alertCount": int(result.get("alertCount") or 0),
             "rawRequestCount": int(result.get("rawRequestCount") or 0),
             "mailboxPendingEntryCount": int(result.get("mailboxPendingEntryCount") or 0),
+            "sameRevisionEntryCount": int(result.get("sameRevisionEntryCount") or 0),
             "coalescedEventCount": int(result.get("coalescedEventCount") or 0),
             "staleRequestCount": int(result.get("staleRequestCount") or 0),
             "deferredReason": str(result.get("deferredReason") or "")[:240],
@@ -2032,6 +2052,7 @@ class OntologyReasoningRunner:
         queue_metadata = {
             "rawRequestCount": int(work.get("rawRequestCount") or 0),
             "mailboxPendingEntryCount": int(work.get("mailboxPendingEntryCount") or 0),
+            "sameRevisionEntryCount": len((work.get("mailbox") or {}).get("sameRevisionEntryKeys") or []),
             "staleRequestCount": len(stale_requests),
             "mailbox": self.mailbox_summary(),
             "mailboxTerminalEvents": {

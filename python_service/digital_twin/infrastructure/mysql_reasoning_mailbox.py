@@ -45,6 +45,29 @@ def _newer(incoming_at: object, incoming_id: object, current_at: object, current
     return incoming > current
 
 
+def _event_fact_revision(event: Mapping[str, object], symbol: object) -> str:
+    payload = dict(event.get("payload") or {}) if isinstance(event, Mapping) else {}
+    revisions = payload.get("factRevisionsBySymbol")
+    clean_symbol = _text(symbol).upper()
+    if not clean_symbol or not isinstance(revisions, Mapping):
+        return ""
+    value = revisions.get(clean_symbol)
+    if value is None:
+        for key, candidate in revisions.items():
+            if _text(key).upper() == clean_symbol:
+                value = candidate
+                break
+    return _text(value)[:160]
+
+
+def _entry_fact_revision(entry: Mapping[str, object]) -> str:
+    explicit = _text(entry.get("factRevision"))
+    if explicit:
+        return explicit[:160]
+    event = entry.get("sourceEvent")
+    return _event_fact_revision(event if isinstance(event, Mapping) else {}, entry.get("symbol"))
+
+
 class MySQLOntologyReasoningMailboxStore(MySQLOperationalConnection):
     """A leased-worker-ready mailbox with source-event completion accounting."""
 
@@ -93,6 +116,7 @@ class MySQLOntologyReasoningMailboxStore(MySQLOperationalConnection):
         grouped = _entries_by_event(entries)
         result = {
             "acceptedEntryKeys": [],
+            "sameRevisionEntryKeys": [],
             "knownEventIds": [],
             "terminalEventStates": {},
             "enqueuedEventIds": [],
@@ -114,14 +138,24 @@ class MySQLOntologyReasoningMailboxStore(MySQLOperationalConnection):
                     continue
 
                 accepted = 0
+                same_revision_skips = 0
                 first = event_entries[0]
                 for entry in event_entries:
                     mailbox_key = _text(entry.get("mailboxKey"))
                     current = connection.execute(
-                        "SELECT source_event_id, occurred_at FROM ontology_reasoning_mailbox "
-                        "WHERE mailbox_key = %s FOR UPDATE",
+                        "SELECT mailbox.source_event_id, mailbox.occurred_at, events.event_json "
+                        "FROM ontology_reasoning_mailbox mailbox "
+                        "LEFT JOIN ontology_reasoning_mailbox_events events ON events.event_id = mailbox.source_event_id "
+                        "WHERE mailbox.mailbox_key = %s FOR UPDATE",
                         (mailbox_key,),
                     ).fetchone()
+                    incoming_revision = _entry_fact_revision(entry)
+                    current_event = _json_loads(current.get("event_json"), {}) if current else {}
+                    current_revision = _event_fact_revision(current_event, entry.get("symbol"))
+                    if current and incoming_revision and incoming_revision == current_revision:
+                        same_revision_skips += 1
+                        result["sameRevisionEntryKeys"].append(mailbox_key)
+                        continue
                     if current and not _newer(
                         entry.get("occurredAt"), event_id, current.get("occurred_at"), current.get("source_event_id"),
                     ):
@@ -155,7 +189,11 @@ class MySQLOntologyReasoningMailboxStore(MySQLOperationalConnection):
                     result["acceptedEntryKeys"].append(mailbox_key)
 
                 state = "pending" if accepted else "superseded"
-                terminal_reason = "" if accepted else "newer observation already owns every mailbox slot"
+                terminal_reason = "" if accepted else (
+                    "same fact revision already owns every mailbox slot"
+                    if same_revision_skips == len(event_entries)
+                    else "newer observation already owns every mailbox slot"
+                )
                 connection.execute(
                     """
                     INSERT INTO ontology_reasoning_mailbox_events (
@@ -178,6 +216,7 @@ class MySQLOntologyReasoningMailboxStore(MySQLOperationalConnection):
                 if state in TERMINAL_STATES:
                     result["terminalEventStates"][event_id] = state
         result["acceptedEntryKeys"] = list(dict.fromkeys(result["acceptedEntryKeys"]))
+        result["sameRevisionEntryKeys"] = list(dict.fromkeys(result["sameRevisionEntryKeys"]))
         result["knownEventIds"] = list(dict.fromkeys(result["knownEventIds"]))
         result["enqueuedEventIds"] = list(dict.fromkeys(result["enqueuedEventIds"]))
         return result

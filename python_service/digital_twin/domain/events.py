@@ -254,8 +254,21 @@ def monitoring_cycle_completed_event(
 def market_data_collected_event(payload: Dict[str, object]) -> DomainEvent:
     provider = str(payload.get("provider") or "market-data")
     markets = ",".join(str(market) for market in payload.get("markets") or []) or "all"
-    symbols = list(payload.get("changedSymbols") or payload.get("symbols") or [])
-    material_symbols = list(payload.get("materialChangedSymbols") or [])
+    symbols = [str(symbol or "").upper().strip() for symbol in (payload.get("changedSymbols") or payload.get("symbols") or []) if str(symbol or "").strip()]
+    material_symbols = [str(symbol or "").upper().strip() for symbol in (payload.get("materialChangedSymbols") or []) if str(symbol or "").strip()]
+    raw_changed_fields = payload.get("changedFieldsBySymbol") if isinstance(payload.get("changedFieldsBySymbol"), dict) else {}
+    raw_revisions = payload.get("factRevisionsBySymbol") if isinstance(payload.get("factRevisionsBySymbol"), dict) else {}
+    changed_fields = {}
+    revisions = {}
+    for symbol in symbols[:200]:
+        fields = raw_changed_fields.get(symbol)
+        if fields is None:
+            fields = raw_changed_fields.get(symbol.upper())
+        if isinstance(fields, (list, tuple, set)):
+            changed_fields[symbol] = [str(field or "").strip() for field in fields if str(field or "").strip()][:30]
+        revision = str(raw_revisions.get(symbol) or raw_revisions.get(symbol.upper()) or "").strip()
+        if revision:
+            revisions[symbol] = revision[:160]
     return DomainEvent(
         name=MARKET_DATA_COLLECTED,
         aggregate_id=provider + ":" + markets,
@@ -269,6 +282,8 @@ def market_data_collected_event(payload: Dict[str, object]) -> DomainEvent:
             "savedCount": int(payload.get("savedCount") or 0),
             "changedCount": int(payload.get("changedCount") or 0),
             "changedSymbols": symbols[:200],
+            "changedFieldsBySymbol": changed_fields,
+            "factRevisionsBySymbol": revisions,
             "materialChangedCount": int(payload.get("materialChangedCount") or len(material_symbols) or 0),
             "materialChangedSymbols": material_symbols[:200],
             "materialityAssessments": dict(payload.get("materialityAssessments") or {}),
@@ -412,12 +427,29 @@ def ontology_reasoning_requested_event(
     fact_types: Iterable[str] = None,
     reason: str = "",
     materiality_assessments=None,
+    fact_revisions_by_symbol: Dict[str, object] = None,
+    changed_fields_by_symbol: Dict[str, Iterable[str]] = None,
 ) -> DomainEvent:
     clean_symbols = sorted(set(str(symbol or "").upper().strip() for symbol in (symbols or []) if str(symbol or "").strip()))
     clean_fact_types = sorted(set(str(item or "").strip() for item in (fact_types or []) if str(item or "").strip()))
     source_payload = source_event.payload or {}
     handoff = source_payload.get("reasoningHandoff") if isinstance(source_payload.get("reasoningHandoff"), dict) else {}
     research_brief = source_payload.get("hypothesisResearchBrief") if isinstance(source_payload.get("hypothesisResearchBrief"), dict) else {}
+    raw_revisions = fact_revisions_by_symbol if isinstance(fact_revisions_by_symbol, dict) else source_payload.get("factRevisionsBySymbol")
+    raw_revisions = raw_revisions if isinstance(raw_revisions, dict) else {}
+    raw_changed_fields = changed_fields_by_symbol if isinstance(changed_fields_by_symbol, dict) else source_payload.get("changedFieldsBySymbol")
+    raw_changed_fields = raw_changed_fields if isinstance(raw_changed_fields, dict) else {}
+    revisions = {}
+    changed_fields = {}
+    for symbol in clean_symbols:
+        revision = str(raw_revisions.get(symbol) or raw_revisions.get(symbol.upper()) or "").strip()
+        if revision:
+            revisions[symbol] = revision[:160]
+        fields = raw_changed_fields.get(symbol)
+        if fields is None:
+            fields = raw_changed_fields.get(symbol.upper())
+        if isinstance(fields, (list, tuple, set)):
+            changed_fields[symbol] = [str(field or "").strip() for field in fields if str(field or "").strip()][:30]
     source_observed_at = next((
         str(source_payload.get(key) or "").strip()
         for key in ["sourceObservedAt", "sourceAsOf", "observedAt", "generatedAt", "collectedAt"]
@@ -449,6 +481,11 @@ def ontology_reasoning_requested_event(
             "dispatchMode": "data-update-driven",
             "importanceGate": "materiality-first",
             "materialityAssessments": materiality_assessments if materiality_assessments is not None else [],
+            # Fact revisions are scheduling provenance only. They let the
+            # durable mailbox keep the existing pending slot when a provider
+            # emits the exact same market fact again.
+            "factRevisionsBySymbol": revisions,
+            "changedFieldsBySymbol": changed_fields,
             "researchRunId": str(source_payload.get("runId") or ""),
             "accountId": str(source_payload.get("accountId") or ""),
             "changedEvidenceIds": changed_evidence_ids[:200],

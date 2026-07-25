@@ -7,6 +7,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from digital_twin.application.ontology_reasoning_service import OntologyReasoningRunner
 from digital_twin.domain.events import DomainEvent, ONTOLOGY_REASONING_REQUESTED, ontology_reasoning_requested_event
+from digital_twin.infrastructure.mysql_reasoning_mailbox import MySQLOntologyReasoningMailboxStore
 
 
 class MemoryCursor:
@@ -67,6 +68,12 @@ class MemoryMailbox:
             str(current.get("sourceEventId") or ""),
         )
 
+    @staticmethod
+    def same_revision(incoming, current):
+        incoming_revision = str(incoming.get("factRevision") or "").strip()
+        current_revision = str(current.get("factRevision") or "").strip()
+        return bool(incoming_revision and incoming_revision == current_revision)
+
     def decrement(self, event_id, state):
         event = self.events.get(event_id)
         if not event:
@@ -80,6 +87,7 @@ class MemoryMailbox:
     def enqueue(self, entries):
         result = {
             "acceptedEntryKeys": [],
+            "sameRevisionEntryKeys": [],
             "knownEventIds": [],
             "terminalEventStates": {},
             "enqueuedEventIds": [],
@@ -95,9 +103,14 @@ class MemoryMailbox:
                     result["terminalEventStates"][event_id] = state
                 continue
             accepted = 0
+            same_revision_skips = 0
             for entry in rows:
                 key = str(entry.get("mailboxKey") or "")
                 current = self.slots.get(key)
+                if current and self.same_revision(entry, current):
+                    same_revision_skips += 1
+                    result["sameRevisionEntryKeys"].append(key)
+                    continue
                 if current and not self.newer(entry, current):
                     continue
                 if current:
@@ -116,6 +129,11 @@ class MemoryMailbox:
             result["enqueuedEventIds"].append(event_id)
             if not accepted:
                 result["terminalEventStates"][event_id] = "superseded"
+                self.events[event_id]["reason"] = (
+                    "same fact revision already owns every mailbox slot"
+                    if same_revision_skips == len(rows)
+                    else "newer observation already owns every mailbox slot"
+                )
         return result
 
     def pending(self, limit):
@@ -157,6 +175,61 @@ class MemoryMailbox:
         return 0
 
 
+class MySQLCursor:
+    def __init__(self, row=None):
+        self.row = dict(row or {}) if row else None
+
+    def fetchone(self):
+        return dict(self.row) if self.row else None
+
+
+class MySQLTransaction:
+    def __init__(self, connection):
+        self.connection = connection
+
+    def __enter__(self):
+        return self.connection
+
+    def __exit__(self, *_args):
+        return False
+
+
+class MySQLMailboxConnection:
+    """Minimal SQL contract double for the same-revision mailbox path."""
+
+    def __init__(self):
+        self.events = {}
+        self.slots = {}
+
+    def execute(self, sql, params=()):
+        query = " ".join(str(sql).split())
+        values = tuple(params or ())
+        if query.startswith("SELECT state FROM ontology_reasoning_mailbox_events"):
+            event = self.events.get(str(values[0]))
+            return MySQLCursor({"state": event["state"]} if event else None)
+        if "FROM ontology_reasoning_mailbox mailbox LEFT JOIN ontology_reasoning_mailbox_events" in query:
+            slot = self.slots.get(str(values[0]))
+            if not slot:
+                return MySQLCursor()
+            event = self.events.get(slot["source_event_id"], {})
+            return MySQLCursor({**slot, "event_json": event.get("event_json", "")})
+        if query.startswith("INSERT INTO ontology_reasoning_mailbox_events"):
+            self.events[str(values[0])] = {
+                "state": str(values[2]),
+                "unresolved": int(values[3]),
+                "reason": str(values[4]),
+                "event_json": str(values[5]),
+            }
+            return MySQLCursor()
+        if query.startswith("INSERT INTO ontology_reasoning_mailbox ("):
+            self.slots[str(values[0])] = {
+                "source_event_id": str(values[1]),
+                "occurred_at": str(values[8]),
+            }
+            return MySQLCursor()
+        raise AssertionError("unexpected SQL: " + query)
+
+
 class Reader:
     def __init__(self, events):
         self.events = list(events)
@@ -175,7 +248,7 @@ class Monitor:
         return []
 
 
-def realtime_request(event_id, symbols, occurred_at, review_level="normal"):
+def realtime_request(event_id, symbols, occurred_at, review_level="normal", fact_revision=""):
     source = DomainEvent(
         name="market_data.collected",
         aggregate_id="market:KR",
@@ -188,6 +261,7 @@ def realtime_request(event_id, symbols, occurred_at, review_level="normal"):
         symbols,
         changed_count=len(symbols),
         fact_types=["MarketQuote"],
+        fact_revisions_by_symbol={symbol: fact_revision for symbol in symbols} if fact_revision else None,
     )
     payload = dict(request.payload or {})
     if review_level != "normal":
@@ -239,6 +313,44 @@ class OntologyReasoningMailboxTests(unittest.TestCase):
         self.assertEqual("superseded", self.mailbox.events["old"]["state"])
         self.assertEqual(0, result["mailbox"]["pendingEntryCount"])
         self.assertEqual("ok", result["executionTelemetry"]["status"])
+
+    def test_same_fact_revision_keeps_existing_pending_mailbox_slot(self):
+        old = realtime_request("old-revision", ["AAPL"], "2026-07-24T00:00:00Z", fact_revision="fact-revision:aapl-v1")
+        duplicate = realtime_request("duplicate-revision", ["AAPL"], "2026-07-24T00:01:00Z", fact_revision="fact-revision:aapl-v1")
+        runner = self.build_runner([old, duplicate])
+
+        result = runner.run_once(force=True)
+
+        self.assertEqual([["AAPL"]], self.monitor.calls)
+        self.assertIn("old-revision", self.cursor.ids)
+        self.assertIn("duplicate-revision", self.cursor.superseded)
+        self.assertEqual("completed", self.mailbox.events["old-revision"]["state"])
+        self.assertEqual("superseded", self.mailbox.events["duplicate-revision"]["state"])
+        self.assertEqual(
+            "same fact revision already owns every mailbox slot",
+            self.mailbox.events["duplicate-revision"]["reason"],
+        )
+        self.assertEqual(1, result["sameRevisionEntryCount"])
+        self.assertEqual(0, result["mailbox"]["pendingEntryCount"])
+
+    def test_mysql_mailbox_does_not_replace_a_pending_slot_with_same_revision(self):
+        old = realtime_request("mysql-old", ["AAPL"], "2026-07-24T00:00:00Z", fact_revision="fact-revision:aapl-v1")
+        duplicate = realtime_request("mysql-duplicate", ["AAPL"], "2026-07-24T00:01:00Z", fact_revision="fact-revision:aapl-v1")
+        runner = self.build_runner([])
+        connection = MySQLMailboxConnection()
+        store = MySQLOntologyReasoningMailboxStore.__new__(MySQLOntologyReasoningMailboxStore)
+        store.transaction = lambda: MySQLTransaction(connection)
+
+        old_entry = runner.mailbox_entries_for_event(old)[0]
+        duplicate_entry = runner.mailbox_entries_for_event(duplicate)[0]
+        first = store.enqueue([old_entry])
+        second = store.enqueue([duplicate_entry])
+
+        self.assertEqual([old_entry["mailboxKey"]], first["acceptedEntryKeys"])
+        self.assertEqual([duplicate_entry["mailboxKey"]], second["sameRevisionEntryKeys"])
+        self.assertEqual({"mysql-duplicate": "superseded"}, second["terminalEventStates"])
+        self.assertEqual("mysql-old", connection.slots[old_entry["mailboxKey"]]["source_event_id"])
+        self.assertEqual("same fact revision already owns every mailbox slot", connection.events["mysql-duplicate"]["reason"])
 
     def test_actionable_quote_snapshots_still_keep_only_the_latest_state(self):
         old = realtime_request("old-act", ["AAPL"], "2026-07-24T00:00:00Z", review_level="act")

@@ -6573,6 +6573,31 @@
       });
   }
 
+  function revalidateResearchEvidence() {
+    if (state.researchEvidenceRevalidating || isStaticPreviewHost()) return Promise.resolve();
+    state.researchEvidenceRevalidating = true;
+    state.researchEvidenceError = "";
+    render();
+    return sendJson("/api/research-evidence/revalidate", "POST", {
+      symbol: String((state.researchEvidenceFilters || {}).symbol || "").trim(),
+      limit: 500
+    })
+      .then(function (payload) {
+        var quality = payload && payload.claimQuality || {};
+        showSnackbar("근거 검증 상태를 갱신했습니다. " + Number(quality.ungovernedEvidenceCount || 0) + "건 미검증", quality.alertState === "degraded" ? "danger" : "success");
+        state.researchEvidence = null;
+        return loadResearchEvidence(true);
+      })
+      .catch(function (error) {
+        state.researchEvidenceError = error.message || "리서치 근거 검증 상태를 갱신하지 못했습니다.";
+        showSnackbar(state.researchEvidenceError, "danger");
+      })
+      .finally(function () {
+        state.researchEvidenceRevalidating = false;
+        render();
+      });
+  }
+
   function localDateTimeInput(date) {
     var value = date instanceof Date ? date : new Date();
     var pad = function (number) { return String(number).padStart(2, "0"); };
@@ -24051,6 +24076,21 @@
     };
   }
 
+  function renderResearchEvidenceQuality(quality) {
+    quality = quality && typeof quality === "object" ? quality : {};
+    var state = String(quality.alertState || "healthy").toLowerCase();
+    var label = state === "degraded" ? "검증 경고" : (state === "attention" ? "확인 필요" : "정상");
+    return [
+      '<div class="research-evidence-metrics research-evidence-quality">',
+      '<span>검증 상태 <strong>' + escapeHtml(label) + '</strong></span>',
+      '<span>투자 사용 가능 <strong>' + escapeHtml(Number(quality.eligibleClaimCount || 0)) + '건</strong></span>',
+      '<span>재게시 중복 <strong>' + escapeHtml(Number(quality.syndicatedDuplicateCount || 0)) + '건</strong></span>',
+      '<span>미검증 <strong>' + escapeHtml(Number(quality.ungovernedEvidenceCount || 0)) + '건</strong></span>',
+      '<span>원문 공시 <strong>' + escapeHtml(Number(quality.officialDocumentContentCount || 0)) + '건</strong></span>',
+      '</div>'
+    ].join("");
+  }
+
   function researchEvidenceTextCorpus(item) {
     item = item || {};
     var payload = item.payload && typeof item.payload === "object" ? item.payload : {};
@@ -24446,6 +24486,7 @@
       '</div>',
       '<span class="metric">' + escapeHtml(Number(summary.total || 0)) + '</span>',
       '</div>',
+      renderResearchEvidenceQuality(evidence.claimQuality),
       renderResearchEvidenceFilters(),
       '<div class="research-evidence-workbench">',
       '<div class="research-evidence-list">',
@@ -24493,6 +24534,7 @@
       '</label>',
       '<div class="settings-actions feed-filter-actions">',
       '<button class="text-button primary" type="submit">' + (state.researchEvidenceLoading ? "조회 중" : "조회") + '</button>',
+      '<button class="text-button" type="button" data-action="revalidate-research-evidence"' + (state.researchEvidenceRevalidating ? " disabled" : "") + '>' + (state.researchEvidenceRevalidating ? "검증 중" : "검증 갱신") + '</button>',
       '</div>',
       '</form>'
     ].join("");
@@ -25709,6 +25751,12 @@
     Array.prototype.slice.call(app.querySelectorAll('[data-action="refresh-research-evidence"]')).forEach(function (refreshEvidence) {
       refreshEvidence.addEventListener("click", function () {
         loadResearchEvidence(true);
+      });
+    });
+
+    Array.prototype.slice.call(app.querySelectorAll('[data-action="revalidate-research-evidence"]')).forEach(function (button) {
+      button.addEventListener("click", function () {
+        revalidateResearchEvidence();
       });
     });
 

@@ -102,6 +102,24 @@ class OntologyReasoningQueueHealthService:
         alert_kind = ""
         if should_alert:
             alert_kind = "recovered" if payload.get("state") == "healthy" else "state-changed"
+        if alert_kind == "recovered":
+            incident_started_at = str(
+                previous.get("stateSince")
+                or previous.get("firstObservedAt")
+                or ""
+            ).strip()
+            incident_started = parse_datetime(incident_started_at)
+            duration_minutes = 0
+            if incident_started:
+                duration_minutes = max(
+                    0,
+                    int((current.astimezone(timezone.utc) - incident_started.astimezone(timezone.utc)).total_seconds() // 60),
+                )
+            payload.update({
+                "recoveredFromState": str(previous.get("state") or "").strip(),
+                "incidentStartedAt": incident_started_at,
+                "incidentDurationMinutes": duration_minutes,
+            })
         elif (
             payload.get("state") in ACTIVE_QUEUE_STATES
             and self.reminder_due(previous, current.astimezone(timezone.utc))
@@ -176,6 +194,15 @@ class OntologyReasoningQueueHealthNotificationEnqueuer:
             "• 이유: " + str(payload.get("reason") or ""),
             "• 확인시각: " + str(payload.get("checkedAt") or event.occurred_at),
         ]
+        if recovered:
+            duration = int(payload.get("incidentDurationMinutes") or 0)
+            started_at = str(payload.get("incidentStartedAt") or "").strip()
+            recovery_line = "• 해소: " + (str(payload.get("recoveredFromState") or previous) or "지연") + " 상태가 정상 처리로 복구되었습니다."
+            if duration:
+                recovery_line += " 감지 후 " + str(duration) + "분 지속됐습니다."
+            if started_at:
+                recovery_line += " 시작: " + started_at
+            lines.insert(2, recovery_line)
         if payload.get("fairnessDrainActive"):
             lines.insert(5, "• 우선 처리: 대기 한도 초과 종목을 먼저 비우는 중")
         if payload.get("backpressureActive"):
@@ -187,6 +214,8 @@ class OntologyReasoningQueueHealthNotificationEnqueuer:
             "messageType": ONTOLOGY_REASONING_QUEUE,
             "accountId": "",
             "accountLabel": "운영",
+            "deliveryAudience": "operations",
+            "deliveryChannel": "operationsTelegram",
             "displayTarget": "온톨로지 추론 대기열",
             "title": title,
             "rawTitle": title,

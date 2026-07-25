@@ -6,7 +6,12 @@ from zoneinfo import ZoneInfo
 from ..domain.disclosure_analysis import local_disclosure_analysis
 from ..domain.data_freshness import evaluate_notification_data_freshness, sanitize_notification_context_for_freshness
 from ..domain.investment_brain import decision_episode_from_context
-from ..domain.message_types import INVESTMENT_INSIGHT, OPERATOR_REASONING_REPORT, is_operations_delivery_message_type
+from ..domain.message_types import (
+    INVESTMENT_INSIGHT,
+    ONTOLOGY_REASONING_QUEUE,
+    OPERATOR_REASONING_REPORT,
+    is_operations_delivery_message_type,
+)
 from ..domain.monitoring import RealtimeMonitor
 from ..domain.notification_ai import enrich_notification_ai_context
 from ..domain.notification_ai_gate_contracts import ai_gate_enabled_for_message_type
@@ -505,7 +510,12 @@ class NotificationQueueRunner:
 
     def deliver(self, job: NotificationJob, accounts: Dict[str, object], message: str) -> None:
         operations_delivery = is_operations_delivery_message_type(job.message_type)
-        factory = self.operations_notifier_factory if operations_delivery and self.operations_notifier_factory else self.notifier_factory
+        if operations_delivery:
+            if str(job.message_type or "") == ONTOLOGY_REASONING_QUEUE and not self.operations_notifier_factory:
+                raise RuntimeError("운영 알림 전송기가 구성되지 않아 계정 채널로 대체 발송하지 않았습니다.")
+            factory = self.operations_notifier_factory or self.notifier_factory
+        else:
+            factory = self.notifier_factory
         context = dict(job.context or {})
         context["deliveryAudience"] = "operations" if operations_delivery else "account"
         context["deliveryChannel"] = "operationsTelegram" if operations_delivery else "accountNotification"

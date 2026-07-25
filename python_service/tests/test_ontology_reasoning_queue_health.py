@@ -9,10 +9,13 @@ from digital_twin.application.ontology_reasoning_queue_health_service import (  
     OntologyReasoningQueueHealthNotificationEnqueuer,
     OntologyReasoningQueueHealthService,
 )
+from digital_twin.application.notification_service import NotificationQueueRunner  # noqa: E402
 from digital_twin.application.ontology_reasoning_service import OntologyReasoningRunner  # noqa: E402
 from digital_twin.domain.events import ONTOLOGY_REASONING_QUEUE_HEALTH_CHANGED, ontology_reasoning_queue_health_changed_event  # noqa: E402
 from digital_twin.domain.message_types import ONTOLOGY_REASONING_QUEUE, is_operations_delivery_message_type  # noqa: E402
 from digital_twin.domain.ontology_reasoning_queue_health import evaluate_ontology_reasoning_queue_health  # noqa: E402
+from digital_twin.infrastructure.notifications import NotificationResult  # noqa: E402
+from digital_twin.domain.notifications import NotificationJob  # noqa: E402
 from digital_twin.domain.notification_templates import NotificationTemplate, render_notification  # noqa: E402
 
 
@@ -190,6 +193,69 @@ class OntologyReasoningQueueHealthTests(unittest.TestCase):
         self.assertEqual("healthy", health.state)
         self.assertTrue(health.state_changed)
         self.assertTrue(health.alert_required)
+
+    def test_recovery_is_an_operations_alert_with_incident_duration(self):
+        now = datetime(2026, 7, 25, 1, 0, tzinfo=UTC)
+        store = MemoryStore({
+            "queueDelayHealth": {
+                "state": "critical",
+                "candidateState": "critical",
+                "stateSince": "2026-07-25T00:10:00Z",
+                "firstObservedAt": "2026-07-25T00:00:00Z",
+                "consecutiveDelayedObservations": 3,
+            },
+        })
+        service = OntologyReasoningQueueHealthService(store, now_provider=lambda: now)
+        health, event = service.record(
+            queue_snapshot("", rawRequestCount=0, mailboxPendingEntryCount=0, queueDispatch={"mode": "waiting"})
+        )
+        queue = MemoryQueue()
+        OntologyReasoningQueueHealthNotificationEnqueuer(queue).handle(event)
+
+        self.assertTrue(health["alertRequired"])
+        self.assertEqual("recovered", health["alertKind"])
+        self.assertEqual("critical", health["recoveredFromState"])
+        self.assertEqual(50, health["incidentDurationMinutes"])
+        self.assertEqual(1, len(queue.jobs))
+        job = queue.jobs[0]
+        self.assertEqual(ONTOLOGY_REASONING_QUEUE, job.message_type)
+        self.assertEqual("", job.account_id)
+        self.assertEqual("operations", job.context["deliveryAudience"])
+        self.assertIn("[운영] 온톨로지 추론 요청 대기 정상 복구", job.text)
+        self.assertIn("해소: critical 상태가 정상 처리로 복구되었습니다. 감지 후 50분 지속됐습니다.", job.text)
+
+        account_messages = []
+        operations_messages = []
+        runner = NotificationQueueRunner(
+            queue=None,
+            account_repository=None,
+            notifier_factory=lambda _account: type("Notifier", (), {
+                "send": lambda _self, message: account_messages.append(message) or NotificationResult(True, "Account"),
+            })(),
+            operations_notifier_factory=lambda _account: type("Notifier", (), {
+                "send": lambda _self, message: operations_messages.append(message) or NotificationResult(True, "Operations"),
+            })(),
+        )
+        runner.deliver(job, {}, job.text)
+        self.assertEqual([], account_messages)
+        self.assertEqual([job.text], operations_messages)
+        self.assertEqual("operations", job.context["deliveryAudience"])
+
+    def test_operations_alert_never_falls_back_to_an_account_notifier(self):
+        job = NotificationJob.create(
+            "[운영] 테스트",
+            message_type=ONTOLOGY_REASONING_QUEUE,
+        )
+        runner = NotificationQueueRunner(
+            queue=None,
+            account_repository=None,
+            notifier_factory=lambda _account: type("Notifier", (), {
+                "send": lambda _self, _message: NotificationResult(True, "Account"),
+            })(),
+        )
+
+        with self.assertRaisesRegex(RuntimeError, "계정 채널로 대체 발송하지 않았습니다"):
+            runner.deliver(job, {}, job.text)
 
     def test_service_reminds_only_after_the_configured_interval(self):
         now = datetime(2026, 7, 25, 2, 0, tzinfo=UTC)

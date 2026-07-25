@@ -71,9 +71,11 @@ from .graph_store_rulebox import rulebox_rules_to_payload
 DEPRECATED_TYPEDB_RULE_IDS = {"shadow.market_psychology.state.v1"}
 
 # These rules previously consumed Python-classified ABox relations such as
-# ``BREAKS_LEVEL`` or ``HAS_INVESTOR_FLOW_SENTIMENT``.  Their v2 definitions
-# consume raw measurements and must replace the v1 persisted shape once.
-RULEBOX_RAW_ABOX_V2_RULE_IDS = {
+# ``BREAKS_LEVEL`` or ``HAS_INVESTOR_FLOW_SENTIMENT``. Their current versions
+# consume raw ABox measurements and must replace an incompatible persisted
+# shape once. Execution capacity intentionally uses normalized metric facts
+# instead of adding physical TypeDB attributes to an already live database.
+RULEBOX_RAW_ABOX_RUNTIME_RULE_IDS = {
     "graph.loss_guard.breakdown.v1",
     "graph.loss_smart_money.defense.v1",
     "graph.investor_flow.smart_money_accumulation.v1",
@@ -98,9 +100,9 @@ RULEBOX_RAW_ABOX_V2_RULE_IDS = {
     "graph.price.reclaim.thesis_support.v1",
     "graph.macro.regime.risk.v1",
     "graph.crypto.exposure.volatility_risk.v1",
-    # Execution rules now read one raw exit-capacity profile instead of
-    # fan-out execution-metric observations. Existing v1 definitions must be
-    # replaced so TypeDB functions use the bounded profile predicate.
+    # Execution rules use normalized execution-metric observations. Existing
+    # consolidated capacity-profile definitions must be replaced because their
+    # promoted attributes are not part of the deployed base TypeDB schema.
     "graph.liquidity.execution_guard.v1",
     "graph.execution.liquidity_or_slippage_block.v1",
     "graph.execution.capacity_safe.v1",
@@ -550,8 +552,8 @@ def migrate_typedb_rule_catalog(
         default_version = str(default_rule.get("version") or "").strip()
         stored_version = str(rule.get("version") or "").strip()
         if (
-            rule_id in RULEBOX_RAW_ABOX_V2_RULE_IDS
-            and default_version == "v2"
+            rule_id in RULEBOX_RAW_ABOX_RUNTIME_RULE_IDS
+            and bool(default_version)
             and stored_version != default_version
         ):
             # The input predicates changed from semantic Python ABox edges to

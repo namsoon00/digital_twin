@@ -38,6 +38,7 @@ from digital_twin.infrastructure.ontology_projection import (
     migrate_typedb_rule_catalog,
 )
 from digital_twin.infrastructure.graph_store_rulebox import rulebox_graph_from_rules, rulebox_rules_to_payload
+from digital_twin.infrastructure.graph_store_lifecycle import ontology_seed_graph
 from digital_twin.infrastructure.typedb_ontology import (
     NullTypeDBOntologyGraphRepository,
     TypeDBOperationTimeout,
@@ -59,11 +60,15 @@ from digital_twin.infrastructure.typedb_ontology import (
     typedb_native_function_definition,
     typedb_native_function_call_query,
     typedb_native_any_group_check_query,
+    typedb_native_indexed_evidence_match_query,
     typedb_native_match_query,
+    typedb_native_rule_function_sync_plan,
+    typedb_native_rule_runtime_query_plan,
     typedb_native_rule_execution_plan,
     typedb_native_rule_evidence_read_index_for_execution,
     typedb_native_rule_planner_topology_for_execution,
     typedb_projection_preflight_graph_for_execution,
+    typedb_native_rule_profile,
     typedb_native_reasoning_profile,
     typedb_scoped_manifest_member_clause,
     inference_generation_marker_row,
@@ -3264,15 +3269,21 @@ class TypeDBOntologyRepositoryTests(unittest.TestCase):
             {"ontologyBox": "RuleBox"},
         )])
 
-        repository.write_graph(
-            driver,
-            ((object, object, object, object, SimpleNamespace(WRITE="write")), None),
-            graph,
-            delete_boxes=["RuleBox"],
-        )
+        def record_static_delete(*_args, **_kwargs):
+            driver.calls.extend(["STATIC_DELETE", "COMMIT"])
+            return {"status": "ok"}
+
+        with patch.object(repository, "delete_box_rows_in_batches", side_effect=record_static_delete) as delete_batches:
+            repository.write_graph(
+                driver,
+                ((object, object, object, object, SimpleNamespace(WRITE="write")), None),
+                graph,
+                delete_boxes=["RuleBox"],
+            )
 
         self.assertEqual(2, driver.calls.count("COMMIT"))
-        delete_index = next(index for index, item in enumerate(driver.calls) if "delete $n" in item)
+        delete_batches.assert_called_once()
+        delete_index = next(index for index, item in enumerate(driver.calls) if item == "STATIC_DELETE")
         insert_index = next(index for index, item in enumerate(driver.calls) if "insert $n0" in item)
         self.assertIn("COMMIT", driver.calls[delete_index + 1:insert_index])
 
@@ -3393,8 +3404,8 @@ class TypeDBOntologyRepositoryTests(unittest.TestCase):
         repository = TypeDBOntologyGraphRepository("127.0.0.1:1729", retry_count=0)
         driver = FakeDriver()
 
-        with patch.object(repository, "graph_insert_queries", return_value=["seed one", "seed two", "seed three"]), \
-                patch.object(repository, "graph_write_transaction_query_count", return_value=2):
+        with patch.object(repository, "static_graph_insert_queries", return_value=["seed one", "seed two", "seed three"]), \
+                patch.object(repository, "static_write_transaction_query_count", return_value=2):
             repository.write_graph(
                 driver,
                 ((object, object, object, object, SimpleNamespace(WRITE="write")), None),
@@ -3780,7 +3791,7 @@ class TypeDBOntologyRepositoryTests(unittest.TestCase):
             set(migration["addedRuleIds"]),
         )
 
-    def test_typedb_rule_catalog_migration_replaces_execution_metric_fanout(self):
+    def test_typedb_rule_catalog_migration_restores_normalized_execution_metrics(self):
         bootstrap = rulebox_rules_to_payload(default_graph_inference_rules())
         target_ids = {
             "graph.liquidity.execution_guard.v1",
@@ -3801,7 +3812,8 @@ class TypeDBOntologyRepositoryTests(unittest.TestCase):
 
         self.assertEqual(target_ids, set(migration["rawAboxRuntimeUpdatedRuleIds"]))
         for rule_id in target_ids:
-            self.assertEqual("v2", migrated[rule_id]["version"])
+            expected_version = "v3" if rule_id == "graph.execution.capacity_safe.v1" else "v2"
+            self.assertEqual(expected_version, migrated[rule_id]["version"])
             self.assertFalse(migrated[rule_id]["enabled"])
             relation_conditions = [
                 condition
@@ -3810,8 +3822,8 @@ class TypeDBOntologyRepositoryTests(unittest.TestCase):
             ]
             self.assertTrue(relation_conditions)
             self.assertTrue(all(
-                condition.get("relation_type") == "HAS_EXECUTION_CAPACITY"
-                and condition.get("target_kind") == "exit-capacity"
+                condition.get("relation_type") == "HAS_EXECUTION_METRIC"
+                and condition.get("target_kind") == "execution-metric"
                 for condition in relation_conditions
             ))
 
@@ -5140,6 +5152,14 @@ class TypeDBOntologyRepositoryTests(unittest.TestCase):
                 "available": False,
                 "missingFunctionNames": [item.get("functionName") for item in definitions],
             },
+        ), patch.object(
+            repository,
+            "save_schema_function_deployment_markers",
+            return_value={"status": "ok", "saved": True, "markerCount": 1},
+        ), patch.object(
+            repository,
+            "recover_pending_schema_function_deployment_receipts",
+            return_value={"status": "empty", "pendingFunctionNames": [], "recoveredRuleIds": []},
         ):
             result = repository.sync_typedb_native_rule_functions([rule])
 
@@ -5235,6 +5255,14 @@ class TypeDBOntologyRepositoryTests(unittest.TestCase):
                 "available": False,
                 "missingFunctionNames": [item.get("functionName") for item in definitions],
             },
+        ), patch.object(
+            repository,
+            "save_schema_function_deployment_markers",
+            return_value={"status": "ok", "saved": True, "markerCount": 2},
+        ), patch.object(
+            repository,
+            "recover_pending_schema_function_deployment_receipts",
+            return_value={"status": "empty", "pendingFunctionNames": [], "recoveredRuleIds": []},
         ):
             result = repository.sync_typedb_native_rule_functions(rules)
 
@@ -5690,22 +5718,60 @@ class TypeDBOntologyRepositoryTests(unittest.TestCase):
         class CapturingSeedRepository(TypeDBOntologyGraphRepository):
             def __init__(self):
                 super().__init__("127.0.0.1:1729")
-                self.saved_graphs = []
+                self.static_box_writes = []
                 self.inference_clear_count = 0
+                self.preflight_calls = 0
 
-            def save_graph(self, graph):
-                self.saved_graphs.append(graph)
+            def save_static_seed_boxes(self, graph, boxes, rules_payload=None, schema_prepared=False):
+                del schema_prepared
+                self.static_box_writes.append((graph, list(boxes)))
                 return {
                     "configured": True,
                     "saved": True,
                     "status": "ok",
                     "graphStore": "typedb",
-                    "entityCount": len(graph.entities),
-                    "relationCount": len(graph.relations),
+                    "refreshedBoxes": list(boxes),
+                }
+
+            def save_seed_static_manifest(self, _graph, _rules_payload, schema_prepared=False):
+                del schema_prepared
+                return {
+                    "configured": True,
+                    "saved": True,
+                    "status": "ok",
+                    "graphStore": "typedb",
                 }
 
             def seed_graph_preflight(self, _graph, _rules_payload):
-                return {"ready": False, "status": "stale"}
+                self.preflight_calls += 1
+                expected = {
+                    "TBox": {"entityCount": 2, "relationCount": 2},
+                    "RuleBox": {"entityCount": 2, "relationCount": 2},
+                    "LanguageGovernance": {"entityCount": 2, "relationCount": 2},
+                }
+                if self.preflight_calls == 1:
+                    return {
+                        "ready": False,
+                        "status": "stale",
+                        "expectedBoxCounts": expected,
+                        "actualBoxCounts": {
+                            "TBox": {"entityCount": 2, "relationCount": 2},
+                            "RuleBox": {"entityCount": 0, "relationCount": 0},
+                            "LanguageGovernance": {"entityCount": 2, "relationCount": 2},
+                        },
+                        "tboxMatches": True,
+                        "ruleboxMatches": False,
+                        "languageRegistryMatches": True,
+                    }
+                return {
+                    "ready": True,
+                    "status": "current",
+                    "expectedBoxCounts": expected,
+                    "actualBoxCounts": expected,
+                    "tboxMatches": True,
+                    "ruleboxMatches": True,
+                    "languageRegistryMatches": True,
+                }
 
             def rulebox_snapshot(self):
                 rules = [item.to_dict() for item in default_graph_inference_rules()]
@@ -5739,13 +5805,483 @@ class TypeDBOntologyRepositoryTests(unittest.TestCase):
         self.assertEqual("ok", result["status"])
         self.assertTrue(result["saved"])
         self.assertTrue(result["ruleBoxReplaced"])
-        self.assertEqual(1, len(repository.saved_graphs))
+        self.assertEqual(1, len(repository.static_box_writes))
+        self.assertEqual(["RuleBox"], repository.static_box_writes[0][1])
+        self.assertTrue(result["staticBoxRefresh"]["verified"])
         self.assertEqual(result["expectedRuleBoxRuleCount"], result["activeRuleBoxRuleCount"])
         self.assertEqual(result["expectedRuleBoxShortHash"], result["activeRuleBoxShortHash"])
         self.assertEqual(1, repository.inference_clear_count)
-        saved_boxes = {box for graph in repository.saved_graphs for box in node_boxes(graph)}
+        saved_boxes = {box for graph, _boxes in repository.static_box_writes for box in node_boxes(graph)}
         self.assertNotIn("ABox", saved_boxes)
         self.assertNotIn("InferenceBox", saved_boxes)
+
+    def test_seed_refresh_selects_only_rulebox_when_tbox_and_language_are_current(self):
+        repository = TypeDBOntologyGraphRepository("127.0.0.1:1729")
+        expected = {
+            "TBox": {"entityCount": 2, "relationCount": 3},
+            "RuleBox": {"entityCount": 4, "relationCount": 5},
+            "LanguageGovernance": {"entityCount": 6, "relationCount": 7},
+        }
+        preflight = {
+            "ready": False,
+            "status": "stale",
+            "expectedBoxCounts": expected,
+            "actualBoxCounts": {
+                "TBox": {"entityCount": 2, "relationCount": 3},
+                "RuleBox": {"entityCount": 4, "relationCount": 4},
+                "LanguageGovernance": {"entityCount": 6, "relationCount": 7},
+            },
+            "tboxMatches": True,
+            "ruleboxMatches": False,
+            "languageRegistryMatches": True,
+        }
+
+        self.assertEqual(["RuleBox"], repository.seed_static_boxes_requiring_refresh(preflight))
+
+    def test_seed_refresh_promotes_tbox_change_to_complete_static_replacement(self):
+        repository = TypeDBOntologyGraphRepository("127.0.0.1:1729")
+        expected = {
+            "TBox": {"entityCount": 2, "relationCount": 3},
+            "RuleBox": {"entityCount": 4, "relationCount": 5},
+            "LanguageGovernance": {"entityCount": 6, "relationCount": 7},
+        }
+        preflight = {
+            "ready": False,
+            "status": "stale",
+            "expectedBoxCounts": expected,
+            "actualBoxCounts": expected,
+            "tboxMatches": False,
+            "ruleboxMatches": True,
+            "languageRegistryMatches": True,
+        }
+
+        self.assertEqual(
+            ["TBox", "RuleBox", "LanguageGovernance"],
+            repository.seed_static_boxes_requiring_refresh(preflight),
+        )
+
+    def test_static_seed_preflight_uses_manifest_without_box_count_reductions(self):
+        repository = TypeDBOntologyGraphRepository("127.0.0.1:1729")
+        rules = default_graph_inference_rules()
+        rules_payload = rulebox_rules_to_payload(rules)
+        graph = rulebox_graph_from_rules(rules)
+        metadata = repository.seed_static_manifest_metadata(graph, rules_payload)
+
+        with patch.object(repository, "read_seed_static_manifest", return_value={
+            "status": "ok",
+            "metadata": metadata,
+        }), patch.object(repository, "seed_static_sentinels_present", return_value={
+            "status": "ok",
+            "missing": [],
+        }), patch.object(repository, "box_row_counts", side_effect=AssertionError("full ABox count reduction must not run")):
+            result = repository.seed_graph_preflight(graph, rules_payload)
+
+        self.assertTrue(result["ready"])
+        self.assertEqual("current", result["status"])
+        self.assertEqual("static-seed-manifest", result["preflightMode"])
+        self.assertTrue(result["staticSeedManifest"]["fingerprintMatches"])
+
+    def test_seed_bootstraps_manifest_for_verified_legacy_static_seed(self):
+        class LegacyManifestRepository(TypeDBOntologyGraphRepository):
+            def __init__(self):
+                super().__init__("127.0.0.1:1729")
+                self.manifest_writes = 0
+
+            def seed_graph_preflight(self, _graph, _rules_payload):
+                return {
+                    "ready": True,
+                    "status": "legacy-static-current",
+                    "manifestBootstrapRequired": True,
+                }
+
+            def save_seed_static_manifest(self, _graph, _rules_payload, schema_prepared=False):
+                del schema_prepared
+                self.manifest_writes += 1
+                return {"configured": True, "saved": True, "status": "ok", "graphStore": "typedb"}
+
+        repository = LegacyManifestRepository()
+
+        result = repository.seed_ontology({"replaceRuleBox": True})
+
+        self.assertEqual("unchanged", result["status"])
+        self.assertTrue(result["saved"])
+        self.assertTrue(result["manifestBootstrapped"])
+        self.assertEqual(1, repository.manifest_writes)
+
+    def test_legacy_static_seed_replaces_rulebox_without_reading_entire_rulebox(self):
+        repository = TypeDBOntologyGraphRepository("127.0.0.1:1729")
+        rules = default_graph_inference_rules()
+        rules_payload = rulebox_rules_to_payload(rules)
+        graph = rulebox_graph_from_rules(rules)
+        expected = repository.seed_static_manifest_metadata(graph, rules_payload)
+        tbox = {
+            "tboxVersion": expected["tboxVersion"],
+            "tboxFingerprint": expected["tboxFingerprint"],
+        }
+        language = {"registryVersion": expected["languageRegistryVersion"]}
+
+        with patch.object(repository, "seed_static_node_properties", side_effect=[tbox, language]), \
+                patch.object(repository, "rulebox_snapshot", side_effect=AssertionError("legacy bootstrap must not scan RuleBox")):
+            preflight = repository.legacy_static_seed_preflight(graph, rules_payload, expected)
+
+        self.assertFalse(preflight["ready"])
+        self.assertEqual("legacy-static-seed-anchor", preflight["preflightMode"])
+        self.assertTrue(preflight["tboxMatches"])
+        self.assertFalse(preflight["ruleboxMatches"])
+        self.assertTrue(preflight["languageRegistryMatches"])
+        self.assertEqual(["RuleBox"], repository.seed_static_boxes_requiring_refresh(preflight))
+
+    def test_static_seed_skips_full_schema_sync_only_for_matching_contract(self):
+        self.assertTrue(TypeDBOntologyGraphRepository.static_seed_schema_prepared({
+            "preflightMode": "static-seed-manifest",
+            "status": "current",
+            "schemaContractMatches": True,
+        }))
+        self.assertFalse(TypeDBOntologyGraphRepository.static_seed_schema_prepared({
+            "preflightMode": "static-seed-manifest",
+            "status": "current",
+            "schemaContractMatches": False,
+        }))
+        self.assertFalse(TypeDBOntologyGraphRepository.static_seed_schema_prepared({
+            "preflightMode": "legacy-static-seed-anchor",
+            "status": "legacy-manifest-bootstrap-repair",
+            "schemaContractMatches": False,
+        }))
+        self.assertFalse(TypeDBOntologyGraphRepository.static_seed_schema_prepared({
+            "preflightMode": "legacy-static-seed-probe",
+            "status": "legacy-probe-error",
+        }))
+        self.assertFalse(TypeDBOntologyGraphRepository.static_seed_schema_prepared({
+            "preflightMode": "static-seed-manifest",
+            "status": "manifest-error",
+        }))
+
+    def test_static_seed_manifest_contract_drift_does_not_change_static_graph_fingerprint(self):
+        repository = TypeDBOntologyGraphRepository("127.0.0.1:1729")
+        rules = default_graph_inference_rules()
+        graph = ontology_seed_graph(rules)
+        rules_payload = rulebox_rules_to_payload(rules)
+
+        with patch.object(repository, "base_schema_contract_metadata", side_effect=[
+            {
+                "schemaContractVersion": "typedb-base-schema-contract-v1",
+                "schemaContractFingerprint": "typedb-base-schema:old",
+            },
+            {
+                "schemaContractVersion": "typedb-base-schema-contract-v1",
+                "schemaContractFingerprint": "typedb-base-schema:new",
+            },
+        ]):
+            previous = repository.seed_static_manifest_metadata(graph, rules_payload)
+            current = repository.seed_static_manifest_metadata(graph, rules_payload)
+
+        self.assertEqual(previous["staticSeedFingerprint"], current["staticSeedFingerprint"])
+        self.assertNotEqual(previous["schemaContractFingerprint"], current["schemaContractFingerprint"])
+
+    def test_static_seed_preflight_reports_schema_contract_drift_without_static_row_drift(self):
+        repository = TypeDBOntologyGraphRepository("127.0.0.1:1729")
+        rules = default_graph_inference_rules()
+        graph = ontology_seed_graph(rules)
+        rules_payload = rulebox_rules_to_payload(rules)
+        current = repository.seed_static_manifest_metadata(graph, rules_payload)
+        stored = dict(current)
+        stored.pop("schemaContractVersion")
+        stored.pop("schemaContractFingerprint")
+
+        with patch.object(repository, "read_seed_static_manifest", return_value={
+            "status": "ok",
+            "metadata": stored,
+        }), patch.object(repository, "seed_static_sentinels_present", return_value={
+            "status": "ok",
+            "missing": [],
+        }):
+            result = repository.seed_graph_preflight(graph, rules_payload)
+
+        self.assertTrue(result["ready"])
+        self.assertFalse(result["schemaContractMatches"])
+        self.assertFalse(result["staticSeedManifest"]["schemaContractMatches"])
+
+    def test_current_static_seed_syncs_only_stale_schema_contract(self):
+        class SchemaContractRepository(TypeDBOntologyGraphRepository):
+            def __init__(self):
+                super().__init__("127.0.0.1:1729")
+                self.preflight_calls = 0
+                self.schema_sync_calls = 0
+                self.manifest_writes = 0
+
+            def seed_graph_preflight(self, _graph, _rules_payload):
+                self.preflight_calls += 1
+                return {
+                    "ready": True,
+                    "status": "current",
+                    "preflightMode": "static-seed-manifest",
+                    "schemaContractMatches": self.preflight_calls > 1,
+                }
+
+            def sync_base_schema_contract(self):
+                self.schema_sync_calls += 1
+                return {"configured": True, "saved": True, "status": "ok", "graphStore": "typedb"}
+
+            def save_seed_static_manifest(self, _graph, _rules_payload, schema_prepared=False):
+                if not schema_prepared:
+                    raise AssertionError("schema contract must be synchronised before its manifest is published")
+                self.manifest_writes += 1
+                return {"configured": True, "saved": True, "status": "ok", "graphStore": "typedb"}
+
+            def save_static_seed_boxes(self, *_args, **_kwargs):
+                raise AssertionError("schema-only drift must not rewrite immutable static rows")
+
+        repository = SchemaContractRepository()
+
+        result = repository.seed_ontology()
+
+        self.assertEqual("unchanged", result["status"])
+        self.assertTrue(result["saved"])
+        self.assertEqual(1, repository.schema_sync_calls)
+        self.assertEqual(1, repository.manifest_writes)
+        self.assertEqual("ok", result["schemaContractSync"]["status"])
+
+    def test_server_start_lease_recovery_skips_full_schema_read_after_exact_lease_probe(self):
+        class LeaseRecoveryRepository(TypeDBOntologyGraphRepository):
+            def __init__(self):
+                super().__init__("127.0.0.1:1729", retry_count=0)
+
+            def driver_imports(self):
+                return ((object, object, object, object, object), None)
+
+            def open_driver(self, _imported, request_timeout_seconds=None):
+                del request_timeout_seconds
+                return object()
+
+            def ensure_database(self, _driver):
+                return None
+
+            def ensure_schema(self, _driver, _imported):
+                raise AssertionError("exact lease recovery must not read the complete schema")
+
+            def close_driver(self, _driver):
+                return None
+
+            def scoped_abox_write_lease_status(self, _world_id):
+                return {
+                    "status": "held",
+                    "leaseOwner": "dead-worker",
+                    "propertiesJson": "{}",
+                    "leaseExpiresAtEpoch": 0,
+                }
+
+            def delete_scoped_abox_write_lease(self, _driver, _imported, payload):
+                self.deleted = payload
+                return {"status": "released"}
+
+        repository = LeaseRecoveryRepository()
+        result = repository.recover_scoped_abox_write_lease_after_server_start_for_world(
+            "portfolio:local:default"
+        )
+
+        self.assertEqual("cleared", result["status"])
+        self.assertEqual("portfolio:local:default", repository.deleted["worldId"])
+
+    def test_rulebox_static_slice_retains_cross_box_declaration_without_reinserting_tbox_node(self):
+        repository = TypeDBOntologyGraphRepository("127.0.0.1:1729")
+        graph = rulebox_graph_from_rules(default_graph_inference_rules())
+
+        slice_graph = repository.graph_for_boxes(
+            graph,
+            ["RuleBox"],
+            retain_cross_box_relations=True,
+        )
+        node_rows, relation_rows = repository.graph_persistence_rows(slice_graph)
+        external_id = "ontology-box:RuleBox"
+        declaration = next(item for item in relation_rows if item["type"] == "DEFINES_RULE")
+
+        self.assertIn(external_id, repository.external_relation_endpoint_ids(slice_graph))
+        self.assertNotIn(external_id, {item["id"] for item in node_rows})
+        self.assertEqual(external_id, declaration["source"])
+        self.assertTrue(declaration["sourceStorageId"])
+        self.assertTrue(declaration["targetStorageId"])
+
+    def test_static_rulebox_generation_tags_cross_box_tbox_endpoint_without_reinserting_it(self):
+        repository = TypeDBOntologyGraphRepository("127.0.0.1:1729")
+        graph = rulebox_graph_from_rules(default_graph_inference_rules())
+        generation = "static-rulebox:test-generation"
+        tbox_generation = "static-tbox:test-generation"
+
+        slice_graph = repository.graph_for_boxes(
+            graph,
+            ["RuleBox"],
+            retain_cross_box_relations=True,
+        )
+        generated = repository.graph_with_static_seed_generation(
+            slice_graph,
+            ["RuleBox"],
+            {"RuleBox": generation, "TBox": tbox_generation},
+        )
+        original_node_rows, original_relation_rows = repository.graph_persistence_rows(slice_graph)
+        node_rows, relation_rows = repository.graph_persistence_rows(generated)
+
+        rulebox_nodes = [
+            item for item in generated.entities
+            if item.properties.get("ontologyBox") == "RuleBox"
+        ]
+        tbox_endpoints = [
+            item for item in generated.entities
+            if item.properties.get("_typedbExternalEndpointRef")
+        ]
+        self.assertTrue(rulebox_nodes)
+        self.assertTrue(tbox_endpoints)
+        self.assertTrue(all(item.properties.get("snapshotId") == generation for item in rulebox_nodes))
+        self.assertTrue(all(item.properties.get("snapshotId") == tbox_generation for item in tbox_endpoints))
+        self.assertTrue(all(
+            item.properties.get("snapshotId") == generation
+            for item in generated.relations
+            if item.properties.get("ontologyBox") == "RuleBox"
+        ))
+        self.assertNotIn("ontology-box:RuleBox", {item["id"] for item in node_rows})
+        declaration = next(item for item in relation_rows if item["type"] == "DEFINES_RULE")
+        original_declaration = next(item for item in original_relation_rows if item["type"] == "DEFINES_RULE")
+        self.assertNotEqual(original_declaration["targetStorageId"], declaration["targetStorageId"])
+        self.assertNotEqual(original_declaration["sourceStorageId"], declaration["sourceStorageId"])
+
+    def test_complete_static_refresh_keeps_rulebox_generation_filterable(self):
+        class CapturingRepository(TypeDBOntologyGraphRepository):
+            def __init__(self):
+                super().__init__("127.0.0.1:1729", retry_count=0)
+                self.writes = []
+
+            def driver_imports(self):
+                return ((object, object, object, object, SimpleNamespace(WRITE="write")), None)
+
+            def open_driver(self, _imported, request_timeout_seconds=None):
+                del request_timeout_seconds
+                return object()
+
+            def ensure_database(self, _driver):
+                return None
+
+            def ensure_schema(self, _driver, _imported):
+                return None
+
+            def close_driver(self, _driver):
+                return None
+
+            def write_graph(self, _driver, _imported, graph, delete_boxes=None):
+                self.writes.append((graph, list(delete_boxes or [])))
+
+            def with_typedb_retries(self, operation):
+                return operation()
+
+        repository = CapturingRepository()
+        rules = default_graph_inference_rules()
+        graph = ontology_seed_graph(rules)
+        result = repository.save_static_seed_boxes(
+            graph,
+            ["TBox", "RuleBox", "LanguageGovernance"],
+            rules_payload=rulebox_rules_to_payload(rules),
+        )
+
+        self.assertTrue(result["saved"])
+        self.assertEqual("append-only-static-generation", result["staticWriteMode"])
+        self.assertTrue(result["ruleboxSnapshotId"])
+        written, delete_boxes = repository.writes[0]
+        self.assertEqual([], delete_boxes)
+        self.assertEqual(result["ruleboxSnapshotId"], result["staticGenerationIds"]["RuleBox"])
+        self.assertTrue(all(
+            item.properties.get("snapshotId") == result["ruleboxSnapshotId"]
+            for item in written.entities
+            if item.properties.get("ontologyBox") == "RuleBox"
+        ))
+        self.assertTrue(all(
+            item.properties.get("snapshotId") == result["ruleboxSnapshotId"]
+            for item in written.relations
+            if item.properties.get("ontologyBox") == "RuleBox"
+        ))
+        self.assertTrue(all(
+            item.properties.get("snapshotId") == result["staticGenerationIds"]["TBox"]
+            for item in written.entities
+            if item.properties.get("ontologyBox") == "TBox"
+        ))
+        self.assertTrue(all(
+            item.properties.get("snapshotId") == result["staticGenerationIds"]["LanguageGovernance"]
+            for item in written.entities
+            if item.properties.get("ontologyBox") == "LanguageGovernance"
+        ))
+
+    def test_rulebox_snapshot_reads_only_manifest_selected_generation(self):
+        repository = TypeDBOntologyGraphRepository("127.0.0.1:1729")
+        rules = default_graph_inference_rules()[:1]
+        graph = rulebox_graph_from_rules(rules)
+        entity_rows = repository.entity_rows_from_typeql([
+            {
+                "id": row["id"],
+                "label": row["label"],
+                "kind": row["kind"],
+                "updatedAt": "2026-07-10T00:00:00Z",
+                "json": row["propertiesJson"],
+            }
+            for row in repository.rows_for_entities(graph)
+            if row["ontologyBox"] == "RuleBox"
+        ], "RuleBox")
+        relation_rows = repository.rows_for_relations(graph)
+        generation = "static-rulebox:active"
+
+        with patch.object(repository, "read_seed_static_manifest", return_value={
+            "status": "ok",
+            "metadata": {"ruleboxSnapshotId": generation},
+        }), patch.object(repository, "read_entity_rows", side_effect=[entity_rows, []]) as entities, \
+                patch.object(repository, "read_relation_rows", side_effect=[relation_rows, []]) as relations:
+            snapshot = repository.rulebox_snapshot()
+
+        self.assertEqual("ok", snapshot["status"])
+        self.assertEqual(generation, snapshot["ruleboxSnapshotId"])
+        self.assertEqual(["RuleBox"], entities.call_args_list[0].args[0])
+        self.assertEqual(generation, entities.call_args_list[0].kwargs["snapshot_id"])
+        self.assertEqual(["RuleBoxGovernance"], entities.call_args_list[1].args[0])
+        self.assertEqual(["RuleBox"], relations.call_args_list[0].args[0])
+        self.assertEqual(generation, relations.call_args_list[0].kwargs["snapshot_id"])
+        self.assertEqual(["RuleBoxGovernance"], relations.call_args_list[1].args[0])
+
+    def test_static_graph_write_uses_bounded_box_deletion(self):
+        repository = TypeDBOntologyGraphRepository("127.0.0.1:1729")
+        graph = PortfolioOntology(
+            "static-delete",
+            entities=[OntologyEntity(
+                "rule:test",
+                "Test rule",
+                "rule",
+                {"ontologyBox": "RuleBox"},
+            )],
+        )
+
+        with patch.object(repository, "delete_box_rows_in_batches") as delete_batches, \
+                patch.object(repository, "static_graph_insert_queries", return_value=[]):
+            repository.write_graph(
+                object(),
+                ((None, None, None, None, None), None),
+                graph,
+                delete_boxes=["RuleBox"],
+            )
+
+        delete_batches.assert_called_once()
+        self.assertEqual(["RuleBox"], delete_batches.call_args.args[2])
+
+    def test_static_graph_insert_uses_single_node_queries_by_default(self):
+        repository = TypeDBOntologyGraphRepository("127.0.0.1:1729")
+        graph = rulebox_graph_from_rules(default_graph_inference_rules()[:1])
+        node_rows, _relation_rows = repository.graph_persistence_rows(graph)
+
+        with patch("digital_twin.infrastructure.typedb_ontology.runtime_settings", return_value={
+            "typedbStaticNodeBatchSize": "1",
+            "typedbWriteMaxQueryBytes": "192000",
+        }):
+            queries = repository.static_graph_insert_queries(graph)
+
+        node_queries = [item for item in queries if item.lstrip().startswith("insert ")]
+        self.assertEqual(len(node_rows), len(node_queries))
+        self.assertTrue(node_queries)
+        self.assertTrue(all("$n1" not in item for item in node_queries))
+        self.assertEqual(1, repository.static_node_insert_batch_size({}))
+        self.assertEqual(16, repository.static_write_transaction_query_count({}))
 
     def test_typedb_seed_ontology_skips_current_seed_generation(self):
         class CurrentSeedRepository(TypeDBOntologyGraphRepository):
@@ -6770,13 +7306,14 @@ class TypeDBOntologyRepositoryTests(unittest.TestCase):
 
         self.assertEqual("exists-any-shared-relation", plan["anyConditionCheckMode"])
         self.assertNotIn("reduce $anyConditionCount", query)
-        self.assertEqual(1, query.count('has ontology-relation-type "HAS_EXECUTION_CAPACITY"'))
-        self.assertNotIn('has ontology-relation-type "HAS_EXECUTION_METRIC"', query)
-        self.assertIn("ontology-position-to-trading-value-pct", query)
-        self.assertIn("ontology-exit-days-at-ten-pct-adv", query)
-        self.assertIn("ontology-position-to-bid-depth-pct", query)
+        self.assertEqual(1, query.count('has ontology-relation-type "HAS_EXECUTION_METRIC"'))
+        self.assertNotIn('has ontology-relation-type "HAS_EXECUTION_CAPACITY"', query)
+        self.assertIn('has ontology-field "positionToTradingValuePct"', query)
+        self.assertIn('has ontology-field "exitDaysAtTenPctADV"', query)
+        self.assertIn('has ontology-field "positionToBidDepthPct"', query)
+        self.assertIn("ontology-value-number", query)
 
-    def test_typedb_execution_capacity_safe_uses_one_raw_profile_join(self):
+    def test_typedb_execution_capacity_safe_uses_normalized_metric_joins(self):
         rule = next(
             item
             for item in default_graph_inference_rules()
@@ -6785,15 +7322,174 @@ class TypeDBOntologyRepositoryTests(unittest.TestCase):
 
         definition = typedb_native_function_definition(rule.to_dict())
         query = definition["matchQuery"]
+        profile = typedb_native_rule_profile(rule.to_dict())
 
-        self.assertEqual("v2", rule.version)
-        self.assertEqual(1, query.count('has ontology-relation-type "HAS_EXECUTION_CAPACITY"'))
-        self.assertNotIn('has ontology-relation-type "HAS_EXECUTION_METRIC"', query)
-        self.assertIn("ontology-has-market-value", query)
-        self.assertIn("ontology-has-trading-value", query)
-        self.assertIn("ontology-has-quantity", query)
-        self.assertIn("ontology-position-to-trading-value-pct", query)
-        self.assertIn("ontology-sellable-ratio-pct", query)
+        self.assertEqual("v3", rule.version)
+        self.assertEqual("ready", profile["status"])
+        self.assertEqual(2, query.count('has ontology-relation-type "HAS_EXECUTION_METRIC"'))
+        self.assertNotIn('has ontology-relation-type "HAS_EXECUTION_CAPACITY"', query)
+        self.assertIn('has ontology-field "positionToTradingValuePct"', query)
+        self.assertIn('has ontology-field "sellableRatioPct"', query)
+        self.assertIn("ontology-value-number", query)
+        self.assertNotIn("ontology-has-market-value", query)
+
+    def test_typedb_execution_capacity_safe_uses_verified_manifest_evidence_index(self):
+        rule = next(
+            item
+            for item in default_graph_inference_rules()
+            if item.rule_id == "graph.execution.capacity_safe.v1"
+        )
+        evidence_index = {
+            "status": "verified",
+            "index": {
+                "sourceIdsBySymbol": {"MSTR": ["stock:MSTR"]},
+                "sourceStorageIdsBySourceId": {
+                    "stock:MSTR": "ontology-storage:active-mstr",
+                },
+                "relationStorageIdsBySymbolAndType": {
+                    "MSTR": {
+                        "HAS_EXECUTION_METRIC": [
+                            "ontology-storage:active-execution-metric-one",
+                            "ontology-storage:active-execution-metric-two",
+                        ],
+                    },
+                },
+            },
+        }
+
+        plan = typedb_native_indexed_evidence_match_query(
+            rule.to_dict(),
+            ["MSTR"],
+            evidence_index,
+            "portfolio:local:default",
+        )
+        runtime_plan = typedb_native_rule_runtime_query_plan(
+            rule.to_dict(),
+            ["MSTR"],
+            schema_function_query=True,
+            world_id="portfolio:local:default",
+            evidence_read_index=evidence_index,
+        )
+
+        self.assertEqual("ok", plan["status"])
+        self.assertTrue(plan["indexedEvidenceQuery"])
+        self.assertFalse(plan["schemaFunctionQuery"])
+        self.assertIn('has ontology-storage-id "ontology-storage:active-mstr"', plan["query"])
+        self.assertIn('has ontology-storage-id "ontology-storage:active-execution-metric-one"', plan["query"])
+        self.assertIn('has ontology-storage-id "ontology-storage:active-execution-metric-two"', plan["query"])
+        self.assertNotIn('has ontology-kind "abox-scope-active-pointer"', plan["query"])
+        self.assertTrue(runtime_plan["indexedEvidenceQuery"])
+
+    def test_schema_function_sync_plan_skips_preflight_selected_indexed_rules(self):
+        capacity_rule = next(
+            item
+            for item in default_graph_inference_rules()
+            if item.rule_id == "graph.execution.capacity_safe.v1"
+        )
+        source_only_rule = next(
+            item
+            for item in default_graph_inference_rules()
+            if item.rule_id == "graph.valuation.high_beta_or_expensive.review.v1"
+        )
+        evidence_index = {
+            "status": "verified",
+            "index": {
+                "sourceIdsBySymbol": {"MSTR": ["stock:MSTR"]},
+                "sourceStorageIdsBySourceId": {
+                    "stock:MSTR": "ontology-storage:active-mstr",
+                },
+                "relationStorageIdsBySymbolAndType": {
+                    "MSTR": {
+                        "HAS_EXECUTION_METRIC": [
+                            "ontology-storage:active-execution-metric-one",
+                            "ontology-storage:active-execution-metric-two",
+                        ],
+                    },
+                },
+            },
+        }
+        execution_plan = {
+            "selectedEntries": [
+                {"rule": capacity_rule},
+                {"rule": source_only_rule},
+            ],
+            "skippedEntries": [{"ruleId": "graph.not-applicable"}],
+        }
+
+        plan = typedb_native_rule_function_sync_plan(
+            [capacity_rule, source_only_rule],
+            target_symbols=["MSTR"],
+            evidence_read_index=evidence_index,
+            world_id="portfolio:local:default",
+            execution_plan=execution_plan,
+        )
+        forced = typedb_native_rule_function_sync_plan(
+            [capacity_rule, source_only_rule],
+            target_symbols=["MSTR"],
+            evidence_read_index=evidence_index,
+            world_id="portfolio:local:default",
+            execution_plan=execution_plan,
+            force_schema_function_sync=True,
+        )
+
+        self.assertEqual("native-preflight-selected", plan["candidateSource"])
+        self.assertEqual(2, plan["candidateRuleCount"])
+        self.assertEqual([capacity_rule.rule_id], plan["indexedEvidenceRuleIds"])
+        self.assertEqual([source_only_rule.rule_id], plan["schemaFunctionRuleIds"])
+        self.assertEqual(1, plan["preflightSkippedRuleCount"])
+        self.assertEqual("forced-complete-execution", forced["candidateSource"])
+        self.assertEqual(
+            {capacity_rule.rule_id, source_only_rule.rule_id},
+            set(forced["schemaFunctionRuleIds"]),
+        )
+        self.assertEqual([], forced["indexedEvidenceRuleIds"])
+
+    def test_native_rule_field_index_hydrates_large_manifest_evidence_in_bounded_chunks(self):
+        repository = TypeDBOntologyGraphRepository("127.0.0.1:1729")
+        storage_ids = ["ontology-storage:metric-" + str(index) for index in range(49)]
+        evidence_index = {
+            "status": "verified",
+            "index": {
+                "symbols": ["MSTR"],
+                "relationStorageIdsBySymbolAndType": {
+                    "MSTR": {"HAS_EXECUTION_METRIC": storage_ids},
+                },
+            },
+        }
+        responses = [
+            [
+                {"storageId": storage_id, "field": "positionToTradingValuePct"}
+                for storage_id in storage_ids[:48]
+            ],
+            [{"storageId": storage_ids[-1], "field": "exitDaysAtTenPctADV"}],
+        ]
+        queries = []
+
+        def read_rows(query, _columns, **_kwargs):
+            queries.append(query)
+            return responses.pop(0)
+
+        with patch.object(repository, "read_rows", side_effect=read_rows):
+            result = repository.hydrate_native_rule_evidence_field_index(
+                evidence_index,
+                target_symbols=["MSTR"],
+                relation_types=["HAS_EXECUTION_METRIC"],
+            )
+
+        fields = result["evidence"]["index"]["relationStorageIdsBySymbolAndTypeAndField"]
+        self.assertEqual("verified", result["status"])
+        self.assertEqual(2, result["readQueryCount"])
+        self.assertEqual(2, result["chunkCount"])
+        self.assertEqual(49, result["storageIdentityCount"])
+        self.assertEqual(2, len(queries))
+        self.assertEqual(
+            set(storage_ids[:48]),
+            set(fields["MSTR"]["HAS_EXECUTION_METRIC"]["positionToTradingValuePct"]),
+        )
+        self.assertEqual(
+            [storage_ids[-1]],
+            fields["MSTR"]["HAS_EXECUTION_METRIC"]["exitDaysAtTenPctADV"],
+        )
 
     def test_typedb_any_group_check_uses_verified_manifest_storage_ids(self):
         rule = next(
@@ -7028,35 +7724,88 @@ class TypeDBOntologyRepositoryTests(unittest.TestCase):
 
     def test_typedb_schema_function_probe_verifies_every_root_function(self):
         rules = default_graph_inference_rules()[:4]
-        function_names = [
-            str(typedb_native_function_definition(rule.to_dict()).get("functionName") or "")
-            for rule in rules
-        ]
-
-        class FakeDatabase:
-            def schema(self):
-                return "define\n" + "\n".join(
-                    "fun " + function_name + "($source: ontology-node) -> { ontology-node }:"
-                    for function_name in function_names
-                )
-
-        class FakeDriver:
-            def __init__(self):
-                self.databases = SimpleNamespace(get=lambda _name: FakeDatabase())
-
         repository = TypeDBOntologyGraphRepository("127.0.0.1:1729", retry_count=0)
+        definitions = [typedb_native_function_definition(rule.to_dict()) for rule in rules]
+        receipts = {
+            str(definition.get("functionName") or ""): repository.schema_function_deployment_marker(definition)["properties"]
+            for definition in definitions
+        }
 
         with patch.object(repository, "driver_imports", return_value=((object, object, object, object, SimpleNamespace()), None)), \
-                patch.object(repository, "open_driver", return_value=FakeDriver()), \
-                patch.object(repository, "ensure_database"), \
-                patch.object(repository, "close_driver"):
+                patch.object(repository, "read_schema_function_deployment_markers", return_value=receipts) as read_receipts:
             result = repository.probe_typedb_native_rule_functions(rules)
 
+        read_receipts.assert_called_once()
         self.assertEqual("ok", result["status"])
         self.assertEqual(result["verifiedRuleCount"], result["probedCount"])
-        self.assertEqual("all-root-functions", result["probeMode"])
+        self.assertEqual("deployment-receipt-index", result["probeMode"])
         self.assertEqual([rule.rule_id for rule in rules], result["verifiedRuleIds"])
         self.assertGreaterEqual(result["verifiedRuleCount"], 1)
+
+    def test_typedb_schema_function_receipt_fails_closed_when_definition_changes(self):
+        rule = default_graph_inference_rules()[0]
+        repository = TypeDBOntologyGraphRepository("127.0.0.1:1729", retry_count=0)
+        definition = typedb_native_function_definition(rule.to_dict())
+        stale_receipt = dict(repository.schema_function_deployment_marker(definition)["properties"])
+        stale_receipt["definitionHash"] = "typedb-function:stale"
+
+        with patch.object(repository, "driver_imports", return_value=((object, object, object, object, SimpleNamespace()), None)), \
+                patch.object(
+                    repository,
+                    "read_schema_function_deployment_markers",
+                    return_value={str(definition.get("functionName") or ""): stale_receipt},
+                ):
+            result = repository.probe_typedb_native_rule_functions([rule])
+
+        self.assertEqual("missing", result["status"])
+        self.assertFalse(result["available"])
+        self.assertEqual([rule.rule_id], result["missingRuleIds"])
+
+    def test_typedb_pending_schema_function_receipt_promotes_after_bounded_call_probe(self):
+        rule = default_graph_inference_rules()[0]
+        repository = TypeDBOntologyGraphRepository("127.0.0.1:1729", retry_count=0)
+        definition = typedb_native_function_definition(rule.to_dict(), "portfolio:local:default")
+        deployment_definition = {
+            **(definition.get("functionDefinitions") or [definition])[0],
+            "ruleId": rule.rule_id,
+            "nativeRuleId": definition.get("nativeRuleId"),
+            "rootFunctionName": definition.get("functionName"),
+        }
+        pending_receipt = repository.schema_function_deployment_marker(
+            deployment_definition,
+            deployment_state="provisioning",
+        )["properties"]
+
+        with patch.object(
+            repository,
+            "read_schema_function_deployment_markers",
+            return_value={str(deployment_definition.get("functionName") or ""): pending_receipt},
+        ), patch.object(
+            repository,
+            "probe_typedb_schema_function_calls",
+            return_value={
+                "status": "ok",
+                "available": True,
+                "verifiedRuleIds": [rule.rule_id],
+                "missingRuleIds": [],
+                "erroredRuleIds": [],
+            },
+        ) as call_probe, patch.object(
+            repository,
+            "save_schema_function_deployment_markers",
+            return_value={"status": "ok", "saved": True, "markerCount": 1},
+        ) as save_receipt:
+            result = repository.recover_pending_schema_function_deployment_receipts(
+                [rule],
+                [deployment_definition],
+                "portfolio:local:default",
+            )
+
+        call_probe.assert_called_once_with([rule], "portfolio:local:default")
+        save_receipt.assert_called_once()
+        self.assertEqual("recovered", result["status"])
+        self.assertEqual([rule.rule_id], result["recoveredRuleIds"])
+        self.assertTrue(result["deploymentReceipt"]["saved"])
 
 
 if __name__ == "__main__":

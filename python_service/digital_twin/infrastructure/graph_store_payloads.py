@@ -290,7 +290,13 @@ PROMOTED_TEXT_ENTITY_FIELDS = [
 
 def condition_target_filter_values(condition: Dict[str, object], key: str) -> List[str]:
     filters = condition.get("target_property_filters") if isinstance(condition.get("target_property_filters"), dict) else {}
-    values = list_of_strings(filters.get(key))
+    raw_value = filters.get(key)
+    # RuleBox comparisons carry an explicit TypeQL operator/value pair. The
+    # admin graph still needs the underlying field name for a readable rule
+    # card, not the serialized comparison object.
+    if isinstance(raw_value, dict):
+        raw_value = raw_value.get("value", raw_value.get("default"))
+    values = list_of_strings(raw_value)
     if values or key != "field":
         return values
     return [

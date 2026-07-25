@@ -21289,10 +21289,30 @@
     var runtimeObservability = diagnostics.runtimeObservability || {};
     var runtimeLatest = runtimeObservability.latest || {};
     var runtimeInference = runtimeLatest.inference || {};
+    var runtimeScope = runtimeLatest.scope || {};
     var nativeTiming = runtimeInference.nativeRuleTiming || {};
+    var impactDiagnostics = runtimeScope.impactDiagnostics || {};
+    var replayValidation = runtimeInference.replayValidation || {};
+    var auditHealth = runtimeObservability.auditHealth || {};
     var inferencePlan = inferenceBox.executionPlan || {};
     var runtimeExecution = inferenceBox.runtimeExecution || runtimeInference;
     var inferenceQueryMetrics = inferenceBox.queryMetrics || {};
+    var reasoning = state.ontologyReasoningStatus || {};
+    var queueHealth = reasoning.queueHealth || {};
+    var queueDispatch = reasoning.queueDispatch || {};
+    var globalScopeTypes = (impactDiagnostics.globalScopeTypes || []).map(function (item) {
+      if (typeof item === "string") return item;
+      return item && (item.label || item.type)
+        ? String(item.label || item.type) + (item.count != null ? " " + item.count + "개" : "")
+        : "";
+    }).filter(Boolean);
+    var selectionApplied = Boolean(replayValidation.selectionApplied || runtimeExecution.nativeRuleSelectionApplied);
+    var replayStatus = String(replayValidation.status || "unknown");
+    var replayCheckStatus = selectionApplied && !replayValidation.verified
+      ? "error"
+      : (replayValidation.verified ? "ok" : "unknown");
+    var auditRecovery = auditHealth.lastRecovery || {};
+    var queueStatus = String(queueHealth.status || "unknown");
     var worldId = String(diagnostics.worldId || "");
     var worlds = Array.isArray(diagnostics.worlds) ? diagnostics.worlds : [];
     var rawChecks = Array.isArray(diagnostics.checks) ? diagnostics.checks : (Array.isArray(notificationBoundary.checks) ? notificationBoundary.checks : []);
@@ -21302,8 +21322,12 @@
       { status: aboxCoverage.status || "", title: "ABox Coverage", message: [aboxCoverage.primarySymbolCount != null ? aboxCoverage.primarySymbolCount + " primary" : aboxCoverage.symbolCount != null ? aboxCoverage.symbolCount + " symbols" : "", aboxCoverage.primaryCoverageRatio != null ? "primary " + Math.round(Number(aboxCoverage.primaryCoverageRatio || 0) * 100) + "%" : aboxCoverage.coverageRatio != null ? "coverage " + Math.round(Number(aboxCoverage.coverageRatio || 0) * 100) + "%" : "", aboxCoverage.contextSymbolCount != null ? aboxCoverage.contextSymbolCount + " context" : ""].filter(Boolean).join(" · ") },
       { status: inferenceBox.status || inferenceBox.typedbReadStatus || "", title: "InferenceBox", message: inferenceBox.reason || inferenceBox.typedbReadReason || inferenceBox.reasoningMode || inferenceBox.inferenceGenerationId || "" },
       { status: inferenceBox.targetCoverageStatus || "unknown", title: "Inference Coverage", message: [inferenceBox.targetCoverageStatus === "partial" && inferenceBox.notEvaluatedSymbols && inferenceBox.notEvaluatedSymbols.length ? "미실행 " + inferenceBox.notEvaluatedSymbols.join(", ") : "", inferenceBox.requestedSymbols && inferenceBox.requestedSymbols.length ? "요청 " + inferenceBox.requestedSymbols.join(", ") : "", inferenceBox.evaluatedSymbols && inferenceBox.evaluatedSymbols.length ? "계산 " + inferenceBox.evaluatedSymbols.join(", ") : "", inferenceBox.targetCoverageReason || ""].filter(Boolean).join(" · ") },
-      { status: inferencePlan.status || runtimeExecution.executionStatus || (inferencePlan.selectedRuleCount != null || runtimeExecution.executedRuleCount != null ? "ok" : "unknown"), title: "Native Execution Plan", message: [inferencePlan.candidateRuleCount != null || runtimeExecution.candidateRuleCount != null ? "후보 " + (inferencePlan.candidateRuleCount != null ? inferencePlan.candidateRuleCount : runtimeExecution.candidateRuleCount) + "개" : "", inferencePlan.selectedRuleCount != null || runtimeExecution.executedRuleCount != null ? "실행 " + (inferencePlan.selectedRuleCount != null ? inferencePlan.selectedRuleCount : runtimeExecution.executedRuleCount) + "개" : "", inferencePlan.preflightPrunedRuleCount ? "사전 제외 " + inferencePlan.preflightPrunedRuleCount + "개" : "", runtimeExecution.deferredRuleCount ? "보류 " + runtimeExecution.deferredRuleCount + "개" : "", inferenceQueryMetrics.queryCount != null ? "쿼리 " + inferenceQueryMetrics.queryCount + "회 / " + Number(inferenceQueryMetrics.totalDurationMs || 0).toFixed(1) + "ms" : ""].filter(Boolean).join(" · ") },
+      { status: inferencePlan.status || runtimeExecution.executionStatus || (inferencePlan.selectedRuleCount != null || runtimeExecution.executedRuleCount != null ? "ok" : "unknown"), title: "Native Execution Plan", message: [inferencePlan.candidateRuleCount != null || runtimeExecution.candidateRuleCount != null ? "후보 " + (inferencePlan.candidateRuleCount != null ? inferencePlan.candidateRuleCount : runtimeExecution.candidateRuleCount) + "개" : "", runtimeExecution.enabledRuleCount != null ? "전체 " + runtimeExecution.enabledRuleCount + "개" : "", runtimeExecution.candidateRuleRatioPct != null ? "후보 비율 " + Math.round(Number(runtimeExecution.candidateRuleRatioPct || 0)) + "%" : "", inferencePlan.selectedRuleCount != null || runtimeExecution.executedRuleCount != null ? "실행 " + (inferencePlan.selectedRuleCount != null ? inferencePlan.selectedRuleCount : runtimeExecution.executedRuleCount) + "개" : "", inferencePlan.preflightPrunedRuleCount ? "사전 제외 " + inferencePlan.preflightPrunedRuleCount + "개" : "", runtimeExecution.deferredRuleCount ? "보류 " + runtimeExecution.deferredRuleCount + "개" : "", runtimeExecution.nativeRuleSelectionEligibilityReason || "", inferenceQueryMetrics.queryCount != null ? "쿼리 " + inferenceQueryMetrics.queryCount + "회 / " + Number(inferenceQueryMetrics.totalDurationMs || 0).toFixed(1) + "ms" : ""].filter(Boolean).join(" · ") },
+      { status: impactDiagnostics.classification || (runtimeScope.globalImpact ? "global" : "unknown"), title: "변경 영향 범위", message: [runtimeScope.directChangedScopeCount != null ? "직접 변경 " + runtimeScope.directChangedScopeCount + "개" : "", runtimeScope.affectedScopeCount != null ? "영향 " + runtimeScope.affectedScopeCount + "개" : "", runtimeScope.globalImpact ? "공유 문맥 포함" : "", globalScopeTypes.length ? globalScopeTypes.join(", ") : "", impactDiagnostics.eventScopeAgreement ? "이벤트 범위 " + impactDiagnostics.eventScopeAgreement : "", impactDiagnostics.unexpectedChangedFamilies && impactDiagnostics.unexpectedChangedFamilies.length ? "예상 밖 " + impactDiagnostics.unexpectedChangedFamilies.join(", ") : ""].filter(Boolean).join(" · ") },
+      { status: replayCheckStatus, title: "TypeDB 완전성 검증", message: [replayStatus, replayValidation.selectionApplied ? "선택 실행" : "완전 실행", replayValidation.coverageComplete ? "대상 범위 확인" : "대상 범위 미확인", replayValidation.generationAligned ? "세대 정렬" : "세대 불일치", replayValidation.reason || ""].filter(Boolean).join(" · ") },
+      { status: Number(auditHealth.windowProjectingCount || 0) > 0 ? "caution" : "ok", title: "투영 감사 복구", message: [auditHealth.staleAfterSeconds != null ? auditHealth.staleAfterSeconds + "초 후 중단 기록 정리" : "", auditHealth.windowProjectingCount ? "진행 중 " + auditHealth.windowProjectingCount + "개" : "", auditHealth.windowAbortedStaleCount ? "중단 복구 기록 " + auditHealth.windowAbortedStaleCount + "개" : "", auditRecovery.abortedCount ? "최근 정리 " + auditRecovery.abortedCount + "개" : ""].filter(Boolean).join(" · ") },
       { status: runtimeObservability.status || "unavailable", title: "Runtime SLO", message: [runtimeObservability.sampleCount != null ? "표본 " + runtimeObservability.sampleCount + "회" : "", runtimeLatest.durationMs != null ? "최근 " + runtimeLatest.durationMs + "ms" : "", nativeTiming.executedRuleCount != null ? "규칙 " + nativeTiming.executedRuleCount + "개" : "", nativeTiming.aggregateQueryDurationMs != null ? "네이티브 쿼리 " + nativeTiming.aggregateQueryDurationMs + "ms" : "", runtimeObservability.interpretation || ""].filter(Boolean).join(" · ") },
+      { status: queueStatus, title: "추론 대기열", message: [queueDispatch.mode || "대기열 정보 없음", queueDispatch.selectedWorkClasses && queueDispatch.selectedWorkClasses.length ? "선택 " + queueDispatch.selectedWorkClasses.join(", ") : "", queueDispatch.selectedSymbols && queueDispatch.selectedSymbols.length ? "대상 " + queueDispatch.selectedSymbols.join(", ") : "", queueDispatch.fairnessDrainActive ? "공정성 처리" : "", queueDispatch.backpressureActive ? "백프레셔" : "", queueDispatch.effectiveIntervalSeconds != null ? "다음 간격 " + queueDispatch.effectiveIntervalSeconds + "초" : "", queueHealth.reason || ""].filter(Boolean).join(" · ") },
       { status: reasoningBoundary.status || "", title: "Reasoning Boundary", message: reasoningBoundary.interpretation || reasoningBoundary.ruleboxHashStatus || "" },
       { status: notificationBoundary.status || "", title: "Notification Boundary", message: notificationBoundary.reason || (notificationBoundary.recentJobCount != null ? notificationBoundary.recentJobCount + " recent jobs" : "") },
       { status: strategyProposalBoundary.status || "", title: "Strategy Proposal Boundary", message: strategyProposalBoundary.nextAction || (strategyProposalBoundary.count != null ? strategyProposalBoundary.count + " proposals" : "") }
@@ -21328,7 +21352,7 @@
       '</div>',
       worldId || worlds.length ? '<div class="rulebox-console-strip"><span><strong>world</strong>' + escapeHtml(worldId || "선택 필요") + '</span><span><strong>active worlds</strong>' + escapeHtml(worlds.length) + '</span></div>' : '',
       '<div class="source-stack rulebox-diagnostics-list">',
-      checks.length ? checks.slice(0, 11).map(function (check) {
+      checks.length ? checks.slice(0, 15).map(function (check) {
         return [
           '<div class="source-row">',
           '<span>' + escapeHtml(check.status || check.severity || "check") + '</span>',
@@ -25294,6 +25318,7 @@
         renderSettingField("marketDataMaxAgeMinutes", "추천 시세 신선도(분)", "number", "240"),
         renderSettingField("ontologyReasoningIntervalSeconds", "추론 요청 확인 주기(초)", "number", "10"),
         renderSettingField("ontologyReasoningBatchSize", "추론 요청 배치", "number", "20"),
+        renderSettingField("ontologyProjectionAuditStaleAfterSeconds", "중단 투영 감사 정리 기준(초, 0=자동)", "number", "0"),
         renderSettingSelect("ontologyReasoningMailboxEnabled", "실시간 최신 상태만 유지", [
           { value: "1", label: "사용" },
           { value: "0", label: "사용 안 함" }

@@ -986,6 +986,7 @@ def ontology_diagnostics_payload(query: Dict[str, List[str]]) -> Dict[str, objec
         strategy_proposal_service=build_investment_strategy_proposal_service(settings),
         decision_episode_store=stores.investment_decision_episode_store(settings),
         projection_run_store=stores.ontology_projection_run_store(settings),
+        world_projection_outbox=stores.ontology_world_projection_outbox_store(settings),
     ).status(symbols=symbols, limit=limit, world_id=world_id)
 
 
@@ -1432,6 +1433,7 @@ def ontology_audit_payload(query: Dict[str, List[str]], requested_section: str =
                 strategy_proposal_service=build_investment_strategy_proposal_service(settings),
                 decision_episode_store=stores.investment_decision_episode_store(settings),
                 projection_run_store=stores.ontology_projection_run_store(settings),
+                world_projection_outbox=stores.ontology_world_projection_outbox_store(settings),
             ).status(
                 symbols=symbols,
                 limit=min(300, max(80, limit)),

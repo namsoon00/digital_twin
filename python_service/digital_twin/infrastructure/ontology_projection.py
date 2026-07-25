@@ -32,7 +32,8 @@ from ..domain.ontology_scopes import (
     select_target_scoped_manifest_patch,
     scoped_manifest_id,
 )
-from ..domain.ontology_worlds import market_world, world_from_snapshot, world_metadata
+from ..domain.ontology_worlds import knowledge_world, market_world, world_from_snapshot, world_metadata
+from ..domain.knowledge_world_projection import build_knowledge_world_graph, knowledge_world_coverage
 from ..domain.market_world_projection import (
     build_market_world_graph,
     market_scope_plan_with_observation_times,
@@ -621,6 +622,7 @@ class PortfolioOntologyProjectionRecorder:
         data_pipeline_health_store=None,
         market_time_series_store=None,
         projection_run_store=None,
+        world_projection_outbox=None,
         outcome_observation_service=None,
         settings: Dict[str, object] = None,
         source: str = "monitoring",
@@ -633,6 +635,7 @@ class PortfolioOntologyProjectionRecorder:
         self.data_pipeline_health_store = data_pipeline_health_store
         self.market_time_series_store = market_time_series_store
         self.projection_run_store = projection_run_store
+        self.world_projection_outbox = world_projection_outbox
         self.settings = dict(settings or {})
         self.outcome_observation_service = outcome_observation_service or InvestmentOutcomeObservationService(
             decision_episode_store=decision_episode_store,
@@ -657,6 +660,10 @@ class PortfolioOntologyProjectionRecorder:
         )
         portfolio_world_context = world_from_snapshot(snapshot, self.settings)
         market_world_context = market_world(
+            portfolio_world_context.market_id,
+            self.settings.get("ontologySharedMarketTenantId") or "shared",
+        )
+        knowledge_world_context = knowledge_world(
             portfolio_world_context.market_id,
             self.settings.get("ontologySharedMarketTenantId") or "shared",
         )
@@ -1130,8 +1137,14 @@ class PortfolioOntologyProjectionRecorder:
                 # never letting an unverified account projection publish
                 # facts to the shared world.
                 result["marketWorld"] = self.schedule_market_world_projection(
-                    persistence_graph,
+                    graph,
                     market_world_context,
+                    source_world=portfolio_world_context,
+                )
+                result["knowledgeWorld"] = self.schedule_knowledge_world_projection(
+                    graph,
+                    knowledge_world_context,
+                    source_world=portfolio_world_context,
                 )
             else:
                 result["marketWorld"] = {
@@ -1139,6 +1152,12 @@ class PortfolioOntologyProjectionRecorder:
                     "status": "deferred-portfolio-inference-not-verified",
                     "preservedActiveGeneration": True,
                     "reason": "계좌 ABox 또는 TypeDB 추론이 확정되지 않아 공용 시장 읽기 모델 갱신을 건너뛰었습니다.",
+                }
+                result["knowledgeWorld"] = {
+                    **world_metadata(knowledge_world_context),
+                    "status": "deferred-portfolio-inference-not-verified",
+                    "preservedActiveGeneration": True,
+                    "reason": "계좌 ABox 또는 TypeDB 추론이 확정되지 않아 공용 지식 세계 갱신을 건너뛰었습니다.",
                 }
             runtime_stages["marketWorldQueueMs"] = int((time.perf_counter() - market_projection_started) * 1000)
             if self.quality_store:
@@ -1770,6 +1789,19 @@ class PortfolioOntologyProjectionRecorder:
             value = 72.0
         return max(1.0, min(24.0 * 90.0, value))
 
+    def shared_knowledge_world_retention_hours(self) -> float:
+        """Keep durable real-world topology longer than quote observations."""
+        try:
+            value = float(str(self.settings.get("ontologySharedKnowledgeWorldRetentionHours") or str(24.0 * 365.0)))
+        except (TypeError, ValueError):
+            value = 24.0 * 365.0
+        return max(24.0, min(24.0 * 3650.0, value))
+
+    def shared_world_retention_hours(self, projection_kind: str) -> float:
+        if str(projection_kind or "").strip().lower() == "knowledge":
+            return self.shared_knowledge_world_retention_hours()
+        return self.shared_market_world_retention_hours()
+
     def shared_market_world_symbol_limit(self) -> int:
         try:
             value = int(float(str(self.settings.get("ontologySharedMarketWorldMaxSymbols") or "1200")))
@@ -1785,8 +1817,87 @@ class PortfolioOntologyProjectionRecorder:
             return False
         return str(value).strip().lower() not in {"0", "false", "no", "off", "disabled"}
 
-    def schedule_market_world_projection(self, portfolio_graph: PortfolioOntology, shared_world) -> Dict[str, object]:
-        """Project the shared market mirror without delaying a verified alert path."""
+    def schedule_market_world_projection(
+        self,
+        portfolio_graph: PortfolioOntology,
+        shared_world,
+        source_world=None,
+    ) -> Dict[str, object]:
+        """Queue the latest account-independent market observation safely."""
+        return self.schedule_shared_world_projection(
+            "market",
+            portfolio_graph,
+            shared_world,
+            source_world=source_world,
+        )
+
+    def schedule_knowledge_world_projection(
+        self,
+        portfolio_graph: PortfolioOntology,
+        shared_world,
+        source_world=None,
+    ) -> Dict[str, object]:
+        """Queue durable real-world relationship topology after verification."""
+        # KnowledgeWorld has no legacy in-process writer. It is deliberately
+        # durable-only so a process exit cannot quietly lose issuer/security
+        # topology while a unit-test or a legacy adapter is exercising the
+        # PortfolioWorld path.
+        if not self.world_projection_outbox:
+            return {
+                **world_metadata(shared_world),
+                "projectionKind": "knowledge",
+                "status": "deferred-durable-world-projection-outbox-unavailable",
+                "preservedActiveGeneration": True,
+                "reason": "KnowledgeWorld requires the durable MySQL projection outbox.",
+            }
+        return self.schedule_shared_world_projection(
+            "knowledge",
+            portfolio_graph,
+            shared_world,
+            source_world=source_world,
+        )
+
+    def schedule_shared_world_projection(
+        self,
+        projection_kind: str,
+        portfolio_graph: PortfolioOntology,
+        shared_world,
+        source_world=None,
+    ) -> Dict[str, object]:
+        """Use the durable outbox whenever production storage is available.
+
+        The in-process coordinator remains only as a compatibility fallback
+        for direct unit-test construction and legacy local adapters.  A
+        verified PortfolioWorld must never rely on a daemon thread to retain
+        the corresponding shared-world projection request.
+        """
+        kind = str(projection_kind or "market").strip().lower()
+        if self.active_graph_store_key() == "typedb" and self.world_projection_outbox:
+            # Never place a complete account ABox into the durable queue. The
+            # source graph can contain hypothesis history and raw research
+            # documents; each shared world receives only its bounded semantic
+            # projection before the message is serialized to MySQL.
+            projection_input = self.shared_world_projection_input(
+                kind,
+                portfolio_graph,
+                shared_world,
+            )
+            return self.world_projection_outbox.enqueue(
+                kind,
+                shared_world,
+                projection_input,
+                source_world_id=str(getattr(source_world, "world_id", "") or (portfolio_graph.worldview or {}).get("worldId") or ""),
+                source_account_id=str(getattr(source_world, "account_id", "") or ""),
+                source_observed_at=str(
+                    (projection_input.worldview or {}).get("sourceObservedAt")
+                    or (projection_input.worldview or {}).get("marketObservedAt")
+                    or (projection_input.worldview or {}).get("asOf")
+                    or (portfolio_graph.worldview or {}).get("asOf")
+                    or ""
+                ),
+            )
+        if kind == "knowledge":
+            return self.project_knowledge_world(portfolio_graph, shared_world)
         if self.active_graph_store_key() != "typedb" or not self.shared_market_world_async_projection_enabled():
             return self.project_market_world(portfolio_graph, shared_world)
         return SHARED_MARKET_WORLD_PROJECTION_COORDINATOR.enqueue(
@@ -1795,28 +1906,78 @@ class PortfolioOntologyProjectionRecorder:
             shared_world,
         )
 
-    def project_market_world(self, portfolio_graph: PortfolioOntology, shared_world) -> Dict[str, object]:
-        """Persist the account-independent market slice without blocking a portfolio run.
+    def shared_world_projection_input(
+        self,
+        projection_kind: str,
+        portfolio_graph: PortfolioOntology,
+        shared_world,
+    ) -> PortfolioOntology:
+        """Build the small, shareable ABox payload stored in the outbox."""
+        kind = str(projection_kind or "market").strip().lower()
+        observed_at = str((portfolio_graph.worldview or {}).get("asOf") or "")
+        if kind == "knowledge":
+            update = build_knowledge_world_graph(portfolio_graph, shared_world, observed_at=observed_at)
+        else:
+            update = build_market_world_graph(portfolio_graph, shared_world, observed_at=observed_at)
+        update.worldview["targetScopedManifestPatch"] = deepcopy(
+            dict((portfolio_graph.worldview or {}).get("targetScopedManifestPatch") or {})
+        )
+        update.worldview["sharedWorldProjection"] = kind
+        update.worldview["sourcePortfolioWorldId"] = str(
+            (portfolio_graph.worldview or {}).get("worldId") or ""
+        )
+        return update
 
-        Market observations can be supplied by any account cycle.  We merge the
-        changed instrument slice into the current shared world, then use the
-        same immutable scoped-ABox lifecycle as a PortfolioWorld.  MarketWorld
-        has no account-specific RuleBox output, so its verified manifest can be
-        activated directly after persistence.
+    def project_market_world(self, portfolio_graph: PortfolioOntology, shared_world) -> Dict[str, object]:
+        observed_at = str((portfolio_graph.worldview or {}).get("asOf") or "")
+        update = build_market_world_graph(portfolio_graph, shared_world, observed_at=observed_at)
+        update.worldview["targetScopedManifestPatch"] = deepcopy(
+            dict((portfolio_graph.worldview or {}).get("targetScopedManifestPatch") or {})
+        )
+        return self.project_shared_world_update(update, shared_world, projection_kind="market")
+
+    def project_knowledge_world(self, portfolio_graph: PortfolioOntology, shared_world) -> Dict[str, object]:
+        observed_at = str((portfolio_graph.worldview or {}).get("asOf") or "")
+        update = build_knowledge_world_graph(portfolio_graph, shared_world, observed_at=observed_at)
+        return self.project_shared_world_update(update, shared_world, projection_kind="knowledge")
+
+    def project_shared_world_update(
+        self,
+        update: PortfolioOntology,
+        shared_world,
+        projection_kind: str = "market",
+    ) -> Dict[str, object]:
+        """Persist one account-independent shared-world update.
+
+        Market observations and durable knowledge facts can arrive from any
+        account cycle.  The active scoped Manifest merges only the changed
+        shareable slice, preserving facts contributed by other accounts.  The
+        shared worlds have no account-specific RuleBox output and can be
+        activated directly after ontology validation.
         """
+        kind = str(projection_kind or "market").strip().lower()
+        if kind not in {"market", "knowledge"}:
+            kind = "market"
+        world_label = "KnowledgeWorld" if kind == "knowledge" else "MarketWorld"
+        status_prefix = kind + "-world"
+        shared_contract_version = str(
+            (update.worldview or {}).get("sharedWorldProjectionContractVersion") or ""
+        ).strip()
         if self.active_graph_store_key() != "typedb":
             return {
                 **world_metadata(shared_world),
                 "status": "skipped-non-typedb-store",
-                "reason": "Shared MarketWorld is enabled on the TypeDB ontology adapter.",
+                "projectionKind": kind,
+                "reason": "Shared " + world_label + " is enabled on the TypeDB ontology adapter.",
             }
         metadata_reader = getattr(self.repository, "active_abox_metadata", None)
         scoped_saver = getattr(self.repository, "save_scoped_abox_graph", None)
         if not callable(metadata_reader) or not callable(scoped_saver):
             return {
                 **world_metadata(shared_world),
-                "status": "deferred-adapter-not-scoped-market-world",
-                "reason": "The active graph adapter cannot update a shared MarketWorld through scoped Manifests yet.",
+                "status": "deferred-adapter-not-scoped-" + status_prefix,
+                "projectionKind": kind,
+                "reason": "The active graph adapter cannot update a shared " + world_label + " through scoped Manifests yet.",
             }
         merge_lease: Dict[str, object] = {}
         acquire_lease = getattr(self.repository, "acquire_scoped_abox_write_lease", None)
@@ -1825,21 +1986,23 @@ class PortfolioOntologyProjectionRecorder:
             try:
                 merge_lease = self.repository_world_call(
                     "acquire_scoped_abox_write_lease",
-                    "market-world-merge",
+                    kind + "-world-merge",
                     world_id=shared_world.world_id,
                 )
             except Exception as error:  # noqa: BLE001 - the portfolio world must remain independently usable.
                 return {
                     **world_metadata(shared_world),
-                    "status": "deferred-market-world-write-lease",
-                    "reason": "Shared MarketWorld write lease lookup failed: " + str(error)[:180],
+                    "status": "deferred-" + status_prefix + "-write-lease",
+                    "projectionKind": kind,
+                    "reason": "Shared " + world_label + " write lease lookup failed: " + str(error)[:180],
                 }
             if not bool(merge_lease.get("acquired")):
                 return {
                     **world_metadata(shared_world),
-                    "status": "deferred-market-world-write-lease",
+                    "status": "deferred-" + status_prefix + "-write-lease",
                     "preservedActiveGeneration": True,
-                    "reason": "Another account is merging or activating the shared MarketWorld.",
+                    "projectionKind": kind,
+                    "reason": "Another account is merging or activating the shared " + world_label + ".",
                     "writeLease": {
                         key: value
                         for key, value in dict(merge_lease or {}).items()
@@ -1847,8 +2010,12 @@ class PortfolioOntologyProjectionRecorder:
                     },
                 }
         try:
-            observed_at = str((portfolio_graph.worldview or {}).get("asOf") or "")
-            update = build_market_world_graph(portfolio_graph, shared_world, observed_at=observed_at)
+            observed_at = str(
+                (update.worldview or {}).get("sourceObservedAt")
+                or (update.worldview or {}).get("marketObservedAt")
+                or (update.worldview or {}).get("asOf")
+                or ""
+            )
             try:
                 active_market = self.repository_world_call(
                     "active_abox_metadata",
@@ -1857,20 +2024,22 @@ class PortfolioOntologyProjectionRecorder:
             except Exception as error:  # noqa: BLE001 - a shared read must never hold a portfolio projection.
                 return {
                     **world_metadata(shared_world),
-                    "status": "deferred-market-world-metadata",
+                    "status": "deferred-" + status_prefix + "-metadata",
                     "preservedActiveGeneration": True,
-                    "reason": "Shared MarketWorld Manifest could not be read: " + str(error)[:180],
+                    "projectionKind": kind,
+                    "reason": "Shared " + world_label + " Manifest could not be read: " + str(error)[:180],
                 }
             active_market = dict(active_market or {}) if isinstance(active_market, dict) else {}
             active_status = str(active_market.get("status") or "empty").strip().lower()
             if active_status not in {"ok", "empty"}:
                 return {
                     **world_metadata(shared_world),
-                    "status": "deferred-market-world-metadata",
+                    "status": "deferred-" + status_prefix + "-metadata",
                     "preservedActiveGeneration": True,
+                    "projectionKind": kind,
                     "reason": str(
                         active_market.get("reason")
-                        or "Shared MarketWorld Manifest is not complete."
+                        or "Shared " + world_label + " Manifest is not complete."
                     )[:220],
                 }
             if (
@@ -1879,14 +2048,28 @@ class PortfolioOntologyProjectionRecorder:
             ):
                 return {
                     **world_metadata(shared_world),
-                    "status": "deferred-market-world-legacy-manifest",
+                    "status": "deferred-" + status_prefix + "-legacy-manifest",
                     "preservedActiveGeneration": True,
-                    "reason": "Shared MarketWorld must be migrated to a scoped Manifest before incremental updates can preserve every active symbol.",
+                    "projectionKind": kind,
+                    "reason": "Shared " + world_label + " must be migrated to a scoped Manifest before incremental updates can preserve every active scope.",
                 }
+            active_contract_version = str(
+                active_market.get("sharedWorldProjectionContractVersion") or ""
+            ).strip()
+            full_contract_rebuild = bool(
+                active_status == "ok"
+                and shared_contract_version
+                and active_contract_version != shared_contract_version
+            )
             update.worldview.update({
                 **world_metadata(shared_world),
-                "marketWorldProjection": True,
-                "marketContextMode": "shared-market-world-with-portfolio-rule-mirror",
+                "sharedWorldProjection": kind,
+                "marketWorldProjection": kind == "market",
+                "knowledgeWorldProjection": kind == "knowledge",
+                "marketContextMode": "shared-" + kind + "-world-with-portfolio-rule-mirror",
+                "sharedWorldProjection": kind,
+                "sharedWorldProjectionContractVersion": shared_contract_version,
+                "sharedWorldFullRebuild": full_contract_rebuild,
             })
             incoming_fingerprint = material_graph_fingerprint(update)
             apply_material_graph_identity(
@@ -1913,10 +2096,10 @@ class PortfolioOntologyProjectionRecorder:
             scoped["scopePlan"] = incoming_scope_plan
             update.worldview["scopePlan"] = incoming_scope_plan
             market_target_patch = {
-                "status": "full-manifest",
+                "status": "full-contract-rebuild" if full_contract_rebuild else "full-manifest",
                 "selectedIncomingScopeCount": len(incoming_scope_plan),
             }
-            source_patch = dict((portfolio_graph.worldview or {}).get("targetScopedManifestPatch") or {})
+            source_patch = dict((update.worldview or {}).get("targetScopedManifestPatch") or {})
             target_symbols = list(source_patch.get("targetSymbols") or [])
             if str(source_patch.get("status") or "") == "applied" and target_symbols:
                 selection = select_target_scoped_manifest_patch(
@@ -1946,18 +2129,19 @@ class PortfolioOntologyProjectionRecorder:
                         "selectedIncomingScopeCount": len(incoming_scope_plan),
                     }
             manifest_state = merge_market_world_scope_manifest(
-                active_market,
+                {} if full_contract_rebuild else active_market,
                 incoming_scope_plan,
                 observed_at=observed_at,
-                retention_hours=self.shared_market_world_retention_hours(),
+                retention_hours=self.shared_world_retention_hours(kind),
                 max_symbols=self.shared_market_world_symbol_limit(),
             )
             scope_generations = dict(manifest_state.get("scopeGenerationIds") or {})
             if not scope_generations:
                 return {
                     **world_metadata(shared_world),
-                    "status": "skipped-empty-market-world-patch",
-                    "reason": "No shareable market fact scope was produced by this portfolio observation.",
+                    "status": "skipped-empty-" + status_prefix + "-patch",
+                    "projectionKind": kind,
+                    "reason": "No shareable " + kind + " fact scope was produced by this portfolio observation.",
                 }
             manifest_id = scoped_manifest_id(
                 shared_world.world_id,
@@ -1979,11 +2163,12 @@ class PortfolioOntologyProjectionRecorder:
             manifest_id = str(bound_manifest.get("manifestId") or manifest_id)
             if (
                 active_status == "ok"
+                and not full_contract_rebuild
                 and active_material_fingerprint(active_market) == fingerprint
             ):
                 observation_refresh = {}
                 refreshed_scope_ids = list(manifest_state.get("observationRefreshedScopeIds") or [])
-                refresher = getattr(self.repository, "refresh_market_world_observation_metadata", None)
+                refresher = getattr(self.repository, "refresh_market_world_observation_metadata", None) if kind == "market" else None
                 if refreshed_scope_ids and callable(refresher):
                     try:
                         observation_refresh = self.repository_world_call(
@@ -2002,9 +2187,10 @@ class PortfolioOntologyProjectionRecorder:
                     if str(observation_refresh.get("status") or "") != "ok":
                         return {
                             **world_metadata(shared_world),
-                            "status": "deferred-market-world-observation-metadata",
+                            "status": "deferred-" + status_prefix + "-observation-metadata",
                             "saved": False,
                             "preservedActiveGeneration": True,
+                            "projectionKind": kind,
                             "materialFingerprint": fingerprint,
                             "worldviewManifestId": str(active_market.get("aboxSnapshotId") or manifest_id),
                             "projectionMode": "incremental-scoped-manifest-reuse",
@@ -2013,7 +2199,7 @@ class PortfolioOntologyProjectionRecorder:
                             "observationRefreshedScopeIds": refreshed_scope_ids,
                             "observationMetadata": observation_refresh,
                             "targetScopedManifestPatch": market_target_patch,
-                            "reason": "공용 시장 사실은 같지만 소스 관측 시각을 안전하게 갱신하지 못했습니다.",
+                            "reason": "공용 " + ("시장" if kind == "market" else "지식") + " 사실은 같지만 소스 관측 시각을 안전하게 갱신하지 못했습니다.",
                         }
                 # A portfolio inference retry must not rewrite the shared
                 # market generation when this account contributed no new
@@ -2025,6 +2211,7 @@ class PortfolioOntologyProjectionRecorder:
                     "status": "unchanged-material-facts",
                     "saved": False,
                     "preservedActiveGeneration": True,
+                    "projectionKind": kind,
                     "materialFingerprint": fingerprint,
                     "worldviewManifestId": str(active_market.get("aboxSnapshotId") or manifest_id),
                     "projectionMode": "incremental-scoped-manifest-reuse",
@@ -2036,7 +2223,7 @@ class PortfolioOntologyProjectionRecorder:
                     "observationRefreshedScopeIds": refreshed_scope_ids,
                     "observationMetadata": observation_refresh,
                     "targetScopedManifestPatch": market_target_patch,
-                    "reason": "공용 시장 사실이 현재 활성 MarketWorld와 같아 저장과 활성화를 생략했습니다.",
+                    "reason": "공용 " + ("시장" if kind == "market" else "지식") + " 사실이 현재 활성 " + world_label + "와 같아 저장과 활성화를 생략했습니다.",
                 }
             update.worldview.update({
                 "materialFingerprint": fingerprint,
@@ -2049,16 +2236,18 @@ class PortfolioOntologyProjectionRecorder:
                 "scopeFamilyCounts": dict(manifest_state.get("scopeFamilyCounts") or {}),
                 "marketScopeObservedAt": dict(manifest_state.get("marketScopeObservedAt") or {}),
                 "marketScopeObservedAtVersion": str(manifest_state.get("marketScopeObservedAtVersion") or ""),
-                "marketWorldProjectionMode": "incremental-scoped-manifest-patch",
-                "marketWorldActiveScopeCount": int(manifest_state.get("activeScopeCount") or 0),
-                "marketWorldActiveSymbolCount": int(manifest_state.get("activeSymbolCount") or 0),
-                "marketWorldRetiredScopeIds": list(manifest_state.get("retiredScopeIds") or []),
+                "sharedWorldProjectionMode": "incremental-scoped-manifest-patch",
+                "sharedWorldActiveScopeCount": int(manifest_state.get("activeScopeCount") or 0),
+                "sharedWorldActiveSymbolCount": int(manifest_state.get("activeSymbolCount") or 0),
+                "sharedWorldRetiredScopeIds": list(manifest_state.get("retiredScopeIds") or []),
                 "targetScopedManifestPatch": market_target_patch,
+                "sharedWorldFullRebuild": full_contract_rebuild,
             })
             validation = validate_ontology(update)
-            coverage = market_world_coverage(update)
+            coverage = knowledge_world_coverage(update) if kind == "knowledge" else market_world_coverage(update)
             coverage.update({
-                "coverageScope": "incoming-market-patch",
+                "coverageScope": "incoming-" + kind + "-patch",
+                "projectionKind": kind,
                 "activeScopeCount": int(manifest_state.get("activeScopeCount") or 0),
                 "activeSymbolCount": int(manifest_state.get("activeSymbolCount") or 0),
                 "retiredScopeCount": len(manifest_state.get("retiredScopeIds") or []),
@@ -2070,15 +2259,17 @@ class PortfolioOntologyProjectionRecorder:
             if validation.error_count:
                 return {
                     **world_metadata(shared_world),
-                    "status": "invalid-market-world",
+                    "status": "invalid-" + status_prefix,
+                    "projectionKind": kind,
                     "materialFingerprint": fingerprint,
                     "coverage": coverage,
                     "validation": validation.to_dict(),
-                    "reason": "Shared market observations failed ontology validation.",
+                    "reason": "Shared " + kind + " observations failed ontology validation.",
                 }
             # The shared lease covers Manifest metadata read -> scope patch ->
-            # stage -> activate. Existing scopes stay in the active Manifest,
-            # so no account can erase another account's market observation.
+            # stage -> activate. Existing scopes stay in the active Manifest
+            # except for an explicit projection-contract migration, which
+            # intentionally rebuilds a pre-launch shared world from scratch.
             save_result = scoped_saver(update, adopted_write_lease=merge_lease) if merge_lease else scoped_saver(update)
             save_result = dict(save_result or {}) if isinstance(save_result, dict) else {
                 "saved": False,
@@ -2098,6 +2289,7 @@ class PortfolioOntologyProjectionRecorder:
                 )
             return {
                 **world_metadata(shared_world),
+                "projectionKind": kind,
                 "status": (
                     "ok"
                     if str((activation or {}).get("status") or "") == "ok"
@@ -2113,6 +2305,7 @@ class PortfolioOntologyProjectionRecorder:
                 "reusedIncomingScopeIds": list(manifest_state.get("reusedIncomingScopeIds") or []),
                 "observationRefreshedScopeIds": list(manifest_state.get("observationRefreshedScopeIds") or []),
                 "targetScopedManifestPatch": market_target_patch,
+                "fullRebuild": full_contract_rebuild,
                 "coverage": coverage,
                 "validation": validation.to_dict(),
                 "save": save_result,
@@ -2126,6 +2319,7 @@ class PortfolioOntologyProjectionRecorder:
         except Exception as error:  # noqa: BLE001 - market sharing must never suppress account reasoning.
             return {
                 **world_metadata(shared_world),
+                "projectionKind": kind,
                 "status": "error",
                 "reason": str(error)[:220],
             }

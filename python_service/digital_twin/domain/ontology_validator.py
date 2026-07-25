@@ -2,6 +2,12 @@ from dataclasses import asdict, dataclass
 from typing import Dict, List
 
 from .ontology_contracts import PortfolioOntology
+from .ontology_semantics import (
+    endpoint_matches_family,
+    entity_class_family,
+    relation_endpoint_contract,
+    semantic_contract_summary,
+)
 from .ontology_tbox import tbox_class_def, tbox_relation_def
 
 
@@ -22,6 +28,7 @@ class OntologyValidationReport:
     error_count: int
     warning_count: int
     issues: List[OntologyValidationIssue]
+    semantic_contract: Dict[str, object]
 
     def to_dict(self) -> Dict[str, object]:
         return {
@@ -29,6 +36,7 @@ class OntologyValidationReport:
             "errorCount": self.error_count,
             "warningCount": self.warning_count,
             "issues": [item.to_dict() for item in self.issues],
+            "semanticContract": dict(self.semantic_contract or {}),
         }
 
 
@@ -123,6 +131,31 @@ def validate_ontology(graph: PortfolioOntology) -> OntologyValidationReport:
                 relation.source + " -" + relation.relation_type + "-> " + relation.target,
                 "Unknown TBox relation type: " + relation.relation_type,
             ))
+            continue
+        expected_source, expected_target = relation_endpoint_contract(relation.relation_type)
+        source_entity = next((item for item in graph.entities or [] if item.entity_id == relation.source), None)
+        target_entity = next((item for item in graph.entities or [] if item.entity_id == relation.target), None)
+        # Only enforce a contract when both endpoints carry enough semantic
+        # information. Legacy/imported rows can still be loaded and receive a
+        # missing-class warning above, while a typed ABox cannot connect a
+        # company, position, or observation to the wrong relation endpoint.
+        if expected_source and expected_target and source_entity and target_entity:
+            source_classes = entity_class_family(source_entity.properties, source_entity.kind)
+            target_classes = entity_class_family(target_entity.properties, target_entity.kind)
+            if source_classes and target_classes and (
+                not endpoint_matches_family(source_classes, expected_source)
+                or not endpoint_matches_family(target_classes, expected_target)
+            ):
+                issues.append(OntologyValidationIssue(
+                    "error",
+                    "relation_endpoint_contract_violation",
+                    relation.source + " -" + relation.relation_type + "-> " + relation.target,
+                    (
+                        "Relation endpoint classes do not satisfy the semantic contract. "
+                        "Expected source one of [" + ", ".join(expected_source) + "] and target one of ["
+                        + ", ".join(expected_target) + "]."
+                    ),
+                ))
     for evidence in graph.evidence or []:
         value = evidence.value or {}
         if value.get("ontologyBox") != "ABox":
@@ -142,4 +175,5 @@ def validate_ontology(graph: PortfolioOntology) -> OntologyValidationReport:
         error_count=error_count,
         warning_count=warning_count,
         issues=issues,
+        semantic_contract=semantic_contract_summary(graph),
     )

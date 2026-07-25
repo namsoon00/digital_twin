@@ -69,6 +69,10 @@ BOUNDED_CONTEXTS: List[TBoxBoundedContext] = [
 
 
 CLASS_DEFS: List[TBoxClassDef] = [
+    TBoxClassDef("OntologyWorld", "operations-dispatch", "온톨로지 세계", description="동일한 투자 실세계 사실을 소유 경계와 목적에 따라 분리해 투영하는 논리 세계입니다."),
+    TBoxClassDef("PortfolioWorld", "operations-dispatch", "포트폴리오 세계", parent="OntologyWorld", description="계정의 보유, 손익, 위험 한도, 의사결정과 실행 제약을 담는 비공유 세계입니다."),
+    TBoxClassDef("MarketWorld", "operations-dispatch", "시장 세계", parent="OntologyWorld", description="계정과 독립적인 시세, 수급, 거시, 외부 사건의 최신 관측을 공유하는 세계입니다."),
+    TBoxClassDef("KnowledgeWorld", "operations-dispatch", "지식 세계", parent="OntologyWorld", description="회사, 증권, ADR, 레버리지 상품, 공급망, 출처와 사건의 지속 관계를 보존하는 공유 세계입니다."),
     TBoxClassDef("Portfolio", "investment-core", "포트폴리오", description="투자 계좌의 전체 자산과 노출 집합입니다."),
     TBoxClassDef("Account", "investment-core", "계좌", description="데이터와 주문 권한이 연결되는 투자 계좌입니다."),
     TBoxClassDef("Instrument", "investment-core", "투자 대상", description="주식, ETF, 크립토, 현금성 자산 등 투자 가능한 대상입니다."),
@@ -475,6 +479,9 @@ CLASS_DEFS: List[TBoxClassDef] = [
     TBoxClassDef("SourceTrustState", "reasoning-insight", "출처 확인 상태"),
     TBoxClassDef("AIReview", "reasoning-insight", "AI 리뷰"),
     TBoxClassDef("DataPipeline", "operations-dispatch", "데이터 파이프라인"),
+    TBoxClassDef("WorldProjectionJob", "operations-dispatch", "세계 투영 작업", parent="DataPipeline", description="검증된 계정 ABox에서 MarketWorld 또는 KnowledgeWorld로 전달되는 영속 투영 작업입니다."),
+    TBoxClassDef("SemanticStorageContract", "operations-dispatch", "의미 저장 계약", description="논리 TBox 클래스와 TypeDB의 실제 물리 타입 계층을 연결하는 배포 계약입니다."),
+    TBoxClassDef("RulePolicySnapshot", "operations-dispatch", "규칙 정책 스냅샷", description="특정 ABox와 InferenceBox 판단에 적용된 RuleBox 정책과 임계값의 불변 스냅샷입니다."),
     TBoxClassDef("DataPipelineHealth", "operations-dispatch", "데이터 파이프라인 건강 상태"),
     TBoxClassDef("CollectionSchedule", "operations-dispatch", "수집 주기"),
     TBoxClassDef("CollectionPolicy", "operations-dispatch", "수집 정책"),
@@ -503,6 +510,11 @@ RELATION_DEFS: List[TBoxRelationDef] = [
     TBoxRelationDef("CONSTRAINS_ASSERTIONS", "operations-dispatch", "operations-dispatch", "operations-dispatch"),
     TBoxRelationDef("CONSTRAINS_RULES", "reasoning-insight", "operations-dispatch", "reasoning-insight"),
     TBoxRelationDef("DERIVES_ASSERTIONS", "reasoning-insight", "reasoning-insight", "reasoning-insight"),
+    TBoxRelationDef("PROJECTS_TO_WORLD", "operations-dispatch", "operations-dispatch", "operations-dispatch", "검증된 계정 사실을 대상 OntologyWorld로 비동기 투영합니다."),
+    TBoxRelationDef("USES_MARKET_WORLD", "operations-dispatch", "operations-dispatch", "operations-dispatch", "포트폴리오 세계가 판단 당시 참조한 공유 MarketWorld 세대를 나타냅니다."),
+    TBoxRelationDef("USES_KNOWLEDGE_WORLD", "operations-dispatch", "operations-dispatch", "operations-dispatch", "포트폴리오 세계가 판단 당시 참조한 공유 KnowledgeWorld 세대를 나타냅니다."),
+    TBoxRelationDef("USES_RULE_POLICY_SNAPSHOT", "operations-dispatch", "reasoning-insight", "operations-dispatch", "추론 또는 판단이 적용된 RuleBox 정책 스냅샷을 참조합니다."),
+    TBoxRelationDef("GOVERNS_DATA_FRESHNESS", "operations-dispatch", "operations-dispatch", "observation-data", "수집·판단 경로의 데이터 신선도 기준을 명시합니다."),
     TBoxRelationDef("IS_A", "investment-core", "investment-core", "investment-core"),
     TBoxRelationDef("HOLDS", "investment-core", "investment-core", "investment-core"),
     TBoxRelationDef("WATCHES", "investment-core", "investment-core", "investment-core"),

@@ -988,6 +988,56 @@ def runtime_settings() -> Dict[str, str]:
             "ONTOLOGY_ASYNC_QUALITY_RECORD_ENABLED",
             "1",
         ),
+        "ontologySharedKnowledgeWorldRetentionHours": value(
+            "ontologySharedKnowledgeWorldRetentionHours",
+            "ONTOLOGY_SHARED_KNOWLEDGE_WORLD_RETENTION_HOURS",
+            "8760",
+        ),
+        "ontologyWorldProjectionIntervalSeconds": value(
+            "ontologyWorldProjectionIntervalSeconds",
+            "ONTOLOGY_WORLD_PROJECTION_INTERVAL_SECONDS",
+            "10",
+        ),
+        "ontologyWorldProjectionBatchSize": value(
+            "ontologyWorldProjectionBatchSize",
+            "ONTOLOGY_WORLD_PROJECTION_BATCH_SIZE",
+            "4",
+        ),
+        "ontologyWorldProjectionLeaseSeconds": value(
+            "ontologyWorldProjectionLeaseSeconds",
+            "ONTOLOGY_WORLD_PROJECTION_LEASE_SECONDS",
+            "180",
+        ),
+        "ontologyWorldProjectionMaxAttempts": value(
+            "ontologyWorldProjectionMaxAttempts",
+            "ONTOLOGY_WORLD_PROJECTION_MAX_ATTEMPTS",
+            "12",
+        ),
+        "ontologyWorldProjectionExecutionTimeoutSeconds": value(
+            "ontologyWorldProjectionExecutionTimeoutSeconds",
+            "ONTOLOGY_WORLD_PROJECTION_EXECUTION_TIMEOUT_SECONDS",
+            "150",
+        ),
+        "ontologyWorldProjectionExecutionTimeoutGraceSeconds": value(
+            "ontologyWorldProjectionExecutionTimeoutGraceSeconds",
+            "ONTOLOGY_WORLD_PROJECTION_EXECUTION_TIMEOUT_GRACE_SECONDS",
+            "10",
+        ),
+        "ontologyWorldProjectionProcessIsolationEnabled": value(
+            "ontologyWorldProjectionProcessIsolationEnabled",
+            "ONTOLOGY_WORLD_PROJECTION_PROCESS_ISOLATION_ENABLED",
+            "1",
+        ),
+        "ontologyWorldProjectionCompletedRetentionHours": value(
+            "ontologyWorldProjectionCompletedRetentionHours",
+            "ONTOLOGY_WORLD_PROJECTION_COMPLETED_RETENTION_HOURS",
+            "168",
+        ),
+        "ontologyWorldProjectionMaxPayloadBytes": value(
+            "ontologyWorldProjectionMaxPayloadBytes",
+            "ONTOLOGY_WORLD_PROJECTION_MAX_PAYLOAD_BYTES",
+            str(5 * 1024 * 1024),
+        ),
         "typedbAddress": value("typedbAddress", "TYPEDB_ADDRESS", "127.0.0.1:1729"),
         "typedbUser": value("typedbUser", "TYPEDB_USER", "admin"),
         "typedbAllowDefaultPassword": value(

@@ -343,6 +343,69 @@ class OntologyReasoningScheduler:
             wait_until_running(lambda: self.running, end_at)
 
 
+class OntologyWorldProjectionScheduler:
+    """Drive durable MarketWorld/KnowledgeWorld projection independently."""
+
+    def __init__(self, runner, interval_seconds: int, error_reporter=None, isolated_cycle=None):
+        self.runner = runner
+        self.interval_seconds = max(5, int(interval_seconds or 10))
+        self.error_reporter = error_reporter or operational_error_reporter()
+        self.isolated_cycle = isolated_cycle
+        self.running = True
+
+    def stop(self, *_args) -> None:
+        self.running = False
+        if self.isolated_cycle:
+            grace = self.execution_timeout_grace_seconds()
+            self.isolated_cycle.stop(grace)
+
+    def process_isolation_enabled(self) -> bool:
+        return bool(self.isolated_cycle)
+
+    def execution_timeout_seconds(self) -> int:
+        configured = getattr(self.runner, "execution_timeout_seconds", None)
+        return max(15, int(configured() if callable(configured) else 150))
+
+    def execution_timeout_grace_seconds(self) -> int:
+        configured = getattr(self.runner, "execution_timeout_grace_seconds", None)
+        return max(1, int(configured() if callable(configured) else 10))
+
+    def run_once(self, limit: int = 0):
+        if not self.process_isolation_enabled():
+            return self.runner.run_once(limit=limit)
+        return self.isolated_cycle.run_once(
+            limit,
+            self.execution_timeout_seconds(),
+            self.execution_timeout_grace_seconds(),
+        )
+
+    def run_forever(self, limit: int = 0) -> None:
+        install_stop_handlers(self.stop)
+        print(
+            "Python ontology world projection worker started. interval="
+            + str(self.interval_seconds)
+            + "s mode="
+            + ("isolated" if self.process_isolation_enabled() else "in-process")
+        )
+        while self.running:
+            started = time.monotonic()
+            try:
+                result = self.run_once(limit=limit)
+                if result.get("claimedCount"):
+                    print(
+                        "Ontology world projection completed="
+                        + str(result.get("completedCount", 0))
+                        + " retried="
+                        + str(result.get("retryCount", 0)),
+                        flush=True,
+                    )
+            except Exception as error:  # noqa: BLE001 - a shared-world failure must not stop the worker.
+                print("Python ontology world projection worker error: " + str(error), flush=True)
+                report_runtime_error(self.error_reporter, "Python ontology world projection worker", error, "shared world projection")
+            end_at = time.monotonic() + max(1.0, self.interval_seconds - (time.monotonic() - started))
+            wait_until_running(lambda: self.running, end_at)
+
+
 class OntologyLabScheduler:
     def __init__(self, service, interval_seconds: int, error_reporter=None):
         self.service = service

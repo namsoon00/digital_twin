@@ -40,6 +40,7 @@ from .service_factory import (
     build_official_calendar_sync_service,
     build_ontology_lab_service,
     build_ontology_reasoning_runner,
+    build_ontology_world_projection_runner,
     build_rule_change_candidate_service,
     build_symbol_universe_service,
     monitor_account_job_store_from_settings,
@@ -56,6 +57,7 @@ from .schedulers import (
     IsolatedOntologyReasoningCycle,
     OntologyLabScheduler,
     OntologyReasoningScheduler,
+    OntologyWorldProjectionScheduler,
     RealtimeScheduler,
 )
 from .settings import (
@@ -372,6 +374,49 @@ def ontology_reasoning_command(args) -> int:
             interval,
             isolated_cycle=isolated_cycle,
         ).run_forever(limit=limit)
+        return 0
+    return 1
+
+
+def ontology_world_projection_command(args) -> int:
+    settings = runtime_settings()
+    runner = build_ontology_world_projection_runner(settings)
+    limit = int(getattr(args, "limit", "") or settings.get("ontologyWorldProjectionBatchSize") or 6)
+    if args.ontology_world_projection_action == "status":
+        print(json.dumps(runner.status(), ensure_ascii=False))
+        return 0
+    if args.ontology_world_projection_action == "retry-failed":
+        requeued = runner.outbox.requeue_failed(limit=limit)
+        print(json.dumps({"status": "ok", "requeuedFailedCount": requeued, "outbox": runner.outbox.summary()}, ensure_ascii=False))
+        return 0
+    if args.ontology_world_projection_action == "once":
+        print(json.dumps(runner.run_once(limit=limit), ensure_ascii=False))
+        return 0
+    if args.ontology_world_projection_action == "watch":
+        interval = int(
+            os.environ.get("ONTOLOGY_WORLD_PROJECTION_INTERVAL_SECONDS")
+            or settings.get("ontologyWorldProjectionIntervalSeconds")
+            or 10
+        )
+        isolated_cycle = None
+        isolation_value = str(
+            os.environ.get("ONTOLOGY_WORLD_PROJECTION_PROCESS_ISOLATION_ENABLED")
+            or settings.get("ontologyWorldProjectionProcessIsolationEnabled")
+            or "1"
+        ).strip().lower()
+        if isolation_value not in {"0", "false", "no", "off", "disabled"}:
+            project_root = Path(__file__).resolve().parents[3]
+            isolated_cycle = IsolatedOntologyReasoningCycle(
+                [
+                    sys.executable,
+                    "-u",
+                    str(project_root / "python_service" / "service.py"),
+                    "ontology-world-projection",
+                    "once",
+                ],
+                working_directory=str(project_root),
+            )
+        OntologyWorldProjectionScheduler(runner, interval, isolated_cycle=isolated_cycle).run_forever(limit=limit)
         return 0
     return 1
 
@@ -980,6 +1025,23 @@ def build_parser() -> argparse.ArgumentParser:
     ontology_watch.add_argument("--limit", default="")
     ontology_reasoning_actions.add_parser("status")
     ontology_reasoning.set_defaults(func=ontology_reasoning_command)
+
+    ontology_world_projection = subparsers.add_parser(
+        "ontology-world-projection",
+        help="Project verified PortfolioWorld facts into durable shared ontology worlds",
+    )
+    ontology_world_projection_actions = ontology_world_projection.add_subparsers(
+        dest="ontology_world_projection_action",
+        required=True,
+    )
+    ontology_world_projection_once = ontology_world_projection_actions.add_parser("once")
+    ontology_world_projection_once.add_argument("--limit", default="")
+    ontology_world_projection_watch = ontology_world_projection_actions.add_parser("watch")
+    ontology_world_projection_watch.add_argument("--limit", default="")
+    ontology_world_projection_retry = ontology_world_projection_actions.add_parser("retry-failed")
+    ontology_world_projection_retry.add_argument("--limit", default="")
+    ontology_world_projection_actions.add_parser("status")
+    ontology_world_projection.set_defaults(func=ontology_world_projection_command)
 
     ontology = subparsers.add_parser("ontology", help="Manage ontology graph projection")
     ontology_actions = ontology.add_subparsers(dest="ontology_action", required=True)

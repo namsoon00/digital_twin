@@ -18,6 +18,7 @@ from __future__ import annotations
 from copy import deepcopy
 import hashlib
 import json
+import re
 from datetime import datetime, timezone
 from typing import Dict, Iterable, List, Mapping, Optional, Set, Tuple
 
@@ -91,6 +92,238 @@ ACCOUNT_PROPERTY_KEYS = {
     "activeInvestmentOpinion",
     "executionPlan",
     "decisionStage",
+}
+
+# A shared world is a reusable real-world graph, never an account policy or
+# cognitive workspace. Bump this value whenever the projection contract
+# becomes stricter so existing shared Manifests are rebuilt rather than
+# preserving a legacy property slice indefinitely.
+SHARED_WORLD_PROJECTION_CONTRACT_VERSION = "shared-world-projection-v3"
+
+
+def _property_key(value: object) -> str:
+    return re.sub(r"[^a-z0-9]", "", str(value or "").lower())
+
+
+_SHARED_WORLD_PRIVATE_PROPERTY_KEYS = {
+    _property_key(value)
+    for value in ACCOUNT_PROPERTY_KEYS
+} | {
+    "activerelationcontext",
+    "activeinvestmentopinion",
+    "actioncandidate",
+    "blockedaction",
+    "decisionbasis",
+    "decisionstage",
+    "deliveryprofile",
+    "fairvalue",
+    "holdingactionpolicy",
+    "judgementevidenceusable",
+    "marginofsafety",
+    "notificationpreference",
+    "positionintent",
+    "positionrole",
+    "relationrules",
+    "relationrulescore",
+    "targetpositionrole",
+}
+
+_SHARED_WORLD_PRIVATE_PROPERTY_PREFIXES = (
+    "activetbox",
+    "addbuy",
+    "ai",
+    "alert",
+    "cooldown",
+    "decision",
+    "defaultholding",
+    "executionplan",
+    "hypothesis",
+    "investmentstrategy",
+    "model",
+    "notification",
+    "novelty",
+    "profitpolicy",
+    "prompt",
+    "riskbudget",
+    "strategy",
+    "suppression",
+    "targetposition",
+)
+
+
+def shared_world_property_allowed(key: object, relation: bool = False) -> bool:
+    """Reject account policy and AI working state before a graph is shared."""
+    raw = str(key or "")
+    compact = _property_key(raw)
+    if raw in ACCOUNT_PROPERTY_KEYS:
+        return False
+    if raw in MARKET_PROJECTION_LIFECYCLE_KEYS:
+        return False
+    if raw in SHARED_WORLD_HEAVY_PROPERTY_KEYS:
+        return False
+    if relation and raw in SHARED_WORLD_RELATION_EXCLUDED_PROPERTY_KEYS:
+        return False
+    if compact in _SHARED_WORLD_PRIVATE_PROPERTY_KEYS:
+        return False
+    return not any(compact.startswith(prefix) for prefix in _SHARED_WORLD_PRIVATE_PROPERTY_PREFIXES)
+
+# MarketWorld is a current shared observation surface, not a copy of an
+# account's complete cognitive history.  Keep market identity, observable
+# state, external evidence metadata and data-quality facts only.  Decisions,
+# hypothesis lifecycles, research workflows and valuation workpapers remain in
+# their owning PortfolioWorld/MySQL history and may contribute a compact,
+# verified relationship to KnowledgeWorld instead.
+MARKET_WORLD_ENTITY_KINDS = {
+    "company",
+    "security",
+    "security-line",
+    "instrument",
+    "stock",
+    "etf",
+    "adr",
+    "depositary-receipt",
+    "leveraged-etf",
+    "inverse-etf",
+    "single-stock-etf",
+    "market",
+    "market-index",
+    "market-proxy",
+    "market-proxy-instrument",
+    "market-proxy-observation",
+    "market-proxy-theme",
+    "sector",
+    "industry",
+    "currency",
+    "price-metric",
+    "technical-metric",
+    "technical-indicator",
+    "price-path",
+    "trend-scenario",
+    "key-level",
+    "flow-metric",
+    "flow-observation",
+    "investor-flow",
+    "orderbook",
+    "liquidity-metric",
+    "liquidity-observation",
+    "slippage-estimate",
+    "execution-metric",
+    "volume-metric",
+    "temporal-window",
+    "temporal-observation",
+    "fact-change",
+    "data-latency",
+    "external-signal",
+    "macro-indicator",
+    "interest-rate",
+    "yield-curve",
+    "fx-rate",
+    "crypto-asset",
+    "crypto-market-signal",
+    "crypto-exposure",
+    "data-source",
+    "data-quality",
+    "data-freshness",
+    "coverage-gap",
+    "news-article",
+    "disclosure-filing",
+    "news-topic",
+    "event-cluster",
+}
+
+# Keep current market observations in MarketWorld. Durable issuer, ADR,
+# leverage and exposure topology belongs to KnowledgeWorld, which prevents a
+# quote refresh from rewriting research/fundamental relationships.
+MARKET_WORLD_RELATION_TYPES = {
+    "AFFECTS",
+    "BELONGS_TO",
+    "CHANGES_FACT",
+    "CONFIRMS_SIGNAL",
+    "DENOMINATED_IN",
+    "HAS_COVERAGE_GAP",
+    "HAS_CRYPTO_EXPOSURE",
+    "HAS_DATA_FRESHNESS",
+    "HAS_DATA_QUALITY",
+    "HAS_EVIDENCE",
+    "HAS_EXECUTION_METRIC",
+    "HAS_EXTERNAL_SIGNAL",
+    "HAS_FX_EXPOSURE",
+    "HAS_MARKET_PROXY_PROFILE",
+    "HAS_OBSERVATION",
+    "HAS_PRICE",
+    "HAS_PRICE_PATH",
+    "HAS_PROVENANCE",
+    "HAS_RATE_SENSITIVITY",
+    "HAS_SECURITY_LINE",
+    "HAS_TECHNICAL_INDICATOR",
+    "HAS_TEMPORAL_WINDOW",
+    "HAS_TRADE_FLOW",
+    "ISSUES",
+    "ISSUES_SECURITY_LINE",
+    "MENTIONS_INSTRUMENT",
+    "OBSERVED_FROM",
+    "OBSERVES_MARKET_PROXY",
+    "PRECEDES",
+    "PROXIES_THEME",
+    "REPRESENTS_ECONOMIC_CLAIM",
+    "REPRESENTS_INSTRUMENT",
+    "REPRESENTS_STOCK",
+    "TRACKS_UNDERLYING",
+    "TRADED_IN",
+    "WEIGHTED_BY_DATA_STATE",
+    "WINDOW_CONTAINS_OBSERVATION",
+}
+
+# Long article bodies, raw vendor payloads and AI working packets belong in
+# their source repositories.  A shared graph needs stable provenance and a
+# bounded summary, not a second multi-megabyte document store.
+SHARED_WORLD_HEAVY_PROPERTY_KEYS = {
+    "rawPayload",
+    "sourcePayload",
+    "payload",
+    "content",
+    "body",
+    "html",
+    "fullText",
+    "articleText",
+    "documentText",
+    "rawContent",
+    "aiPrompt",
+    "aiResponse",
+    "reasoningCards",
+    "researchPlan",
+    "hypothesisPacket",
+    "sourceRows",
+}
+
+# Article/entity analysis is attached to the evidence node. Repeating its
+# complete link map and quality packet on every edge multiplies both MySQL
+# outbox size and TypeDB relation storage without adding a new graph fact.
+SHARED_WORLD_RELATION_EXCLUDED_PROPERTY_KEYS = {
+    "activeTboxEntityCount",
+    "activeTboxRelationCount",
+    "activeTboxSource",
+    "activeTboxVersion",
+    "aiAnalysisModel",
+    "aiAnalysisVersion",
+    "aiImpactLabelKo",
+    "aiImpactPolarity",
+    "aiInfluenceLabel",
+    "aiNeedsReview",
+    "analysisConflict",
+    "analysisConflictAiPolarity",
+    "analysisConflictExistingPolarity",
+    "analysisConflictReasonKo",
+    "analysisConflictSource",
+    "analysisSummary",
+    "analysisVersion",
+    "entityLinks",
+    "matchedAliases",
+    "marketTopics",
+    "mentionedPeers",
+    "ontologyRelations",
+    "qualityGate",
+    "topicTags",
 }
 
 # A portfolio projection can already carry an immutable local ABox manifest
@@ -168,12 +401,28 @@ def _market_observed_at(properties: Dict[str, object]) -> str:
 
 def _graph_observed_at(graph: PortfolioOntology, fallback: object = "") -> str:
     worldview = dict(getattr(graph, "worldview", {}) or {})
-    return _observed_at(
+    declared = _observed_at(
         fallback
         or worldview.get("marketObservedAt")
         or worldview.get("asOf")
         or worldview.get("generatedAt")
     )
+    if declared:
+        return declared
+    # A monitoring snapshot can be reconstructed from cached source facts
+    # without a single top-level clock. Use the newest provider observation,
+    # never the worker's projection time, so downstream freshness and
+    # retention remain honest after a delayed queue retry.
+    newest = (None, "")
+    for item in list(getattr(graph, "entities", []) or []) + list(getattr(graph, "relations", []) or []) + list(getattr(graph, "evidence", []) or []):
+        properties = getattr(item, "properties", None)
+        if properties is None:
+            properties = getattr(item, "value", None)
+        stamp = _market_observed_at(properties or {})
+        epoch = _observation_epoch(stamp)
+        if epoch is not None and (newest[0] is None or epoch > newest[0]):
+            newest = (epoch, stamp)
+    return newest[1]
 
 
 def is_account_entity(entity: OntologyEntity) -> bool:
@@ -183,16 +432,37 @@ def is_account_entity(entity: OntologyEntity) -> bool:
     return any(token in kind for token in ("position", "portfolio", "decision", "hypothesis", "execution", "learning"))
 
 
+def is_market_entity(entity: OntologyEntity) -> bool:
+    """Return whether one ABox node belongs in the latest shared market view."""
+    if is_account_entity(entity):
+        return False
+    kind = _clean(entity.kind).lower()
+    if kind in MARKET_WORLD_ENTITY_KINDS:
+        return True
+    values = dict(entity.properties or {})
+    # New market concepts may arrive before this whitelist is extended. Only
+    # an explicit source-side opt-in is allowed. ``marketObservationShared``
+    # is deliberately not used here because it is stamped by this projection;
+    # accepting it would feed a prior MarketWorld back into a PortfolioWorld
+    # projection and gradually reintroduce unrelated facts.
+    return values.get("shareToMarketWorld") is True
+
+
+def is_market_relation(relation: OntologyRelation) -> bool:
+    """Only explicit latest-observation relationships enter MarketWorld."""
+    return _clean(relation.relation_type).upper() in MARKET_WORLD_RELATION_TYPES
+
+
 def market_properties(
     properties: Dict[str, object],
     world: OntologyWorld,
     observed_at: object = "",
+    relation: bool = False,
 ) -> Dict[str, object]:
     values = {
         key: deepcopy(value)
         for key, value in dict(properties or {}).items()
-        if key not in ACCOUNT_PROPERTY_KEYS
-        and key not in MARKET_PROJECTION_LIFECYCLE_KEYS
+        if shared_world_property_allowed(key, relation=relation)
     }
     values.update(world_metadata(world))
     values["marketObservationShared"] = True
@@ -226,7 +496,7 @@ def market_relation(relation: OntologyRelation, world: OntologyWorld, observed_a
         relation.relation_type,
         relation.weight,
         list(relation.evidence_ids or []),
-        market_properties(relation.properties, world, observed_at),
+        market_properties(relation.properties, world, observed_at, relation=True),
     )
 
 
@@ -255,10 +525,11 @@ def build_market_world_graph(
     while its account position and investor-specific decision context cannot.
     """
     observation_time = _graph_observed_at(source_graph, observed_at)
+    source_entities = list(source_graph.entities or [])
     kept_entities = [
         market_entity(entity, world, observation_time)
-        for entity in list(source_graph.entities or [])
-        if not is_account_entity(entity)
+        for entity in source_entities
+        if is_market_entity(entity)
         and _clean((entity.properties or {}).get("ontologyBox") or "ABox") == "ABox"
     ]
     kept_ids = {item.entity_id for item in kept_entities}
@@ -267,6 +538,7 @@ def build_market_world_graph(
         for relation in list(source_graph.relations or [])
         if relation.source in kept_ids
         and relation.target in kept_ids
+        and is_market_relation(relation)
         and _clean(relation.relation_type).upper() not in ACCOUNT_RELATION_TYPES
         and _clean((relation.properties or {}).get("ontologyBox") or "ABox") == "ABox"
     ]
@@ -285,9 +557,16 @@ def build_market_world_graph(
             **world_metadata(world),
             "marketWorldProjection": True,
             "marketWorldProjectionMode": "shared-market-observations",
+            "sharedWorldProjectionContractVersion": SHARED_WORLD_PROJECTION_CONTRACT_VERSION,
             "marketContextMode": "shared-market-world-with-portfolio-rule-mirror",
             "sourcePortfolioWorldId": str((source_graph.worldview or {}).get("worldId") or ""),
             "marketObservedAt": observation_time,
+            "marketProjectionFilter": {
+                "version": "latest-observation-v2",
+                "sourceEntityCount": len(source_entities),
+                "includedEntityCount": len(kept_entities),
+                "excludedEntityCount": len(source_entities) - len(kept_entities),
+            },
         },
         prompt=source_graph.prompt,
     )

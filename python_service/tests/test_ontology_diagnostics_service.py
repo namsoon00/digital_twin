@@ -40,6 +40,14 @@ class FakeOntologyRepository:
             "graphStore": "typedb",
             "entityCount": 7,
             "relationCount": 3,
+            "semanticStorage": {
+                "contractVersion": "typedb-semantic-storage-v2",
+                "physicalStorage": "typedb-logical-tbox-subtypes",
+                "physicalClassTypeCount": 431,
+                "physicalRelationTypeCount": 323,
+                "schemaContractStatus": "current",
+                "schemaContractFingerprint": "typedb-base-schema:test",
+            },
         }
 
     def rulebox_snapshot(self):
@@ -133,6 +141,23 @@ class FakeNotificationQueue:
 
     def recent(self, limit=80):
         return self.jobs[:limit]
+
+
+class FakeWorldProjectionOutbox:
+    def summary(self):
+        return {
+            "enabled": True,
+            "pendingCount": 2,
+            "processingCount": 0,
+            "failedCount": 0,
+            "states": {
+                "pending": {"count": 2, "oldestAt": "2026-07-26T00:00:00Z"},
+                "completed": {"count": 5, "oldestAt": "2026-07-25T00:00:00Z"},
+            },
+        }
+
+    def max_payload_bytes(self):
+        return 5 * 1024 * 1024
 
 
 class FakeStrategyProposalService:
@@ -328,11 +353,28 @@ class OntologyDiagnosticsServiceTests(unittest.TestCase):
         self.assertTrue(payload["reasoningBoundary"]["nativeTypeDbReasoningUsed"])
         self.assertFalse(payload["reasoningBoundary"]["typedbBootstrapReasoningUsed"])
         self.assertEqual("ok", payload["reasoningBoundary"]["ruleboxHashStatus"])
+        self.assertEqual("typedb-semantic-storage-v2", payload["tbox"]["semanticStorage"]["contractVersion"])
+        self.assertEqual("current", payload["tbox"]["semanticStorage"]["schemaContractStatus"])
         self.assertEqual("warning", payload["aboxCoverage"]["status"])
         self.assertEqual("TSLA", payload["aboxCoverage"]["symbols"][0]["symbol"])
         self.assertIn("price", payload["aboxCoverage"]["symbols"][0]["present"])
         self.assertEqual(payload["notificationBoundary"]["status"], "ok")
         self.assertEqual(payload["notificationBoundary"]["jobsForLatestAlert"][0]["jobId"], job.job_id)
+
+    def test_status_reports_durable_shared_world_projection_backlog(self):
+        service = OntologyDiagnosticsService(
+            ontology_repository=FakeOntologyRepository(),
+            world_projection_outbox=FakeWorldProjectionOutbox(),
+        )
+
+        payload = service.status()
+
+        projection = payload["sharedWorldProjection"]
+        self.assertEqual("warning", projection["status"])
+        self.assertEqual(2, projection["pendingCount"])
+        self.assertEqual(0, projection["failedCount"])
+        self.assertEqual(5 * 1024 * 1024, projection["maxPayloadBytes"])
+        self.assertIn("durable-outbox", projection["deliveryModel"])
 
     def test_notification_boundary_warns_when_latest_alert_has_no_outbox_job(self):
         alert_event = DomainEvent(

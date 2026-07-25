@@ -15,6 +15,15 @@ from decimal import Decimal, InvalidOperation
 from typing import Dict, Iterable, List, Tuple
 
 from ..domain.ontology_contracts import OntologyEntity, OntologyEvidence, OntologyRelation, PortfolioOntology, entity_id
+from ..domain.ontology_semantics import (
+    SEMANTIC_STORAGE_CONTRACT_VERSION,
+    entity_semantic_type,
+    relation_semantic_type,
+    semantic_class_types,
+    semantic_relation_types,
+    semantic_storage_type_names,
+    semantic_typeql_schema,
+)
 from ..domain.investment_ubiquitous_language import investment_language_registry
 from ..domain.ontology_inference_materializer import (
     materialize_rule_inference,
@@ -2647,7 +2656,11 @@ class ScopedABoxManifestMixin:
             "maxGenerationCount": maximum,
         }
 
-    def prune_orphan_scoped_abox_candidates(self, world_id: str = "") -> Dict[str, object]:
+    def prune_orphan_scoped_abox_candidates(
+        self,
+        world_id: str = "",
+        max_generation_count: int = 0,
+    ) -> Dict[str, object]:
         """Run orphan candidate reclamation as deferred maintenance only."""
         imported = self.driver_imports()
         if imported[0] is None:
@@ -2663,7 +2676,12 @@ class ScopedABoxManifestMixin:
                 try:
                     self.ensure_database(driver)
                     self.ensure_schema(driver, imported)
-                    return self.cleanup_orphan_scoped_abox_candidates(driver, imported, world_id=world_id)
+                    return self.cleanup_orphan_scoped_abox_candidates(
+                        driver,
+                        imported,
+                        max_generation_count=max_generation_count,
+                        world_id=world_id,
+                    )
                 finally:
                     self.close_driver(driver)
 
@@ -3160,6 +3178,9 @@ class ScopedABoxManifestMixin:
                 "marketScopeObservedAt": dict(worldview.get("marketScopeObservedAt") or {}),
                 "marketScopeObservedAtVersion": str(worldview.get("marketScopeObservedAtVersion") or ""),
                 "marketWorldProjectionMode": str(worldview.get("marketWorldProjectionMode") or ""),
+                "sharedWorldProjection": str(worldview.get("sharedWorldProjection") or ""),
+                "sharedWorldProjectionContractVersion": str(worldview.get("sharedWorldProjectionContractVersion") or ""),
+                "sharedWorldFullRebuild": bool(worldview.get("sharedWorldFullRebuild")),
                 "scopeDelta": dict(worldview.get("scopeDelta") or {}),
                 "inferenceImpactPlan": dict(worldview.get("inferenceImpactPlan") or {}),
                 "nativeRulePlannerTopology": dict(worldview.get("nativeRulePlannerTopology") or {}),
@@ -3436,6 +3457,9 @@ class ScopedABoxManifestMixin:
                 "projectionStatus",
                 "scopedAboxManifestVersion",
                 "marketWorldProjectionMode",
+                "sharedWorldProjection",
+                "sharedWorldProjectionContractVersion",
+                "sharedWorldFullRebuild",
             ]:
                 if key in marker and key not in properties:
                     properties[key] = marker.get(key)
@@ -3467,6 +3491,11 @@ class ScopedABoxManifestMixin:
                 "marketWorldProjectionMode": str(
                     properties.get("marketWorldProjectionMode") or "incremental-scoped-manifest-patch"
                 ),
+                "sharedWorldProjection": str(properties.get("sharedWorldProjection") or "market"),
+                "sharedWorldProjectionContractVersion": str(
+                    properties.get("sharedWorldProjectionContractVersion") or ""
+                ),
+                "sharedWorldFullRebuild": bool(properties.get("sharedWorldFullRebuild")),
                 "scopedAboxManifestVersion": SCOPED_ABOX_MANIFEST_VERSION,
             })
             marker_graph = PortfolioOntology(
@@ -4996,6 +5025,29 @@ class ScopedABoxManifestMixin:
             if requested_manifest_limit is None
             else max(1, min(10, int(requested_manifest_limit)))
         )
+        requested_keep_inactive = number_or_none(
+            options.get("keepInactiveManifests")
+            if options.get("keepInactiveManifests") is not None
+            else options.get("keep_inactive_manifests")
+        )
+        maintenance_keep_inactive = (
+            None
+            if requested_keep_inactive is None
+            else max(0, min(5, int(requested_keep_inactive)))
+        )
+        requested_orphan_limit = number_or_none(
+            options.get("maxOrphanGenerations")
+            if options.get("maxOrphanGenerations") is not None
+            else options.get("orphanMaxGenerations")
+        )
+        # Normal workers retain the small runtime default. An explicit
+        # migration/repair can safely drain more invisible generations while
+        # holding the same per-world writer lease.
+        maintenance_orphan_limit = (
+            0
+            if requested_orphan_limit is None
+            else max(1, min(256, int(requested_orphan_limit)))
+        )
         started_at = time.perf_counter()
 
         # A single global maintenance pass used to inspect the last account's
@@ -5046,9 +5098,13 @@ class ScopedABoxManifestMixin:
                 "durationMs": int((time.perf_counter() - started_at) * 1000),
             }
         try:
-            orphan_result = self.prune_orphan_scoped_abox_candidates(requested_world_id)
+            orphan_result = self.prune_orphan_scoped_abox_candidates(
+                requested_world_id,
+                max_generation_count=maintenance_orphan_limit,
+            )
             abox_result = self.prune_inactive_scoped_abox_manifests(
                 requested_world_id,
+                keep_inactive_count=maintenance_keep_inactive,
                 max_manifests=maintenance_manifest_limit,
             )
             legacy_result: Dict[str, object] = {
@@ -5122,6 +5178,7 @@ class ScopedABoxManifestMixin:
                 "worldId": requested_world_id,
                 "maintenanceMode": "legacy-global" if not requested_world_id else "world-scoped",
                 "maxInactiveManifests": maintenance_manifest_limit,
+                "maxOrphanGenerations": maintenance_orphan_limit or self.scoped_abox_orphan_cleanup_max_generations(),
                 "orphanScopedAbox": orphan_result,
                 "abox": abox_result,
                 "legacyAbox": legacy_result,
@@ -5635,7 +5692,26 @@ class TypeDBOntologyGraphRepository(GraphStoreOntologyRowMapperMixin, ScopedABox
             },
             "typedb-typeql",
         )
-        metadata.update({"graphStore": "typedb", "source": "typedb-typeql", "storeSource": "typedb-typeql"})
+        try:
+            schema_contract = self.base_schema_contract_state()
+        except Exception as error:  # noqa: BLE001 - TBox metadata remains useful when the seed marker is temporarily unavailable.
+            schema_contract = {
+                "status": "unavailable",
+                "reason": str(error)[:180],
+            }
+        metadata.update({
+            "graphStore": "typedb",
+            "source": "typedb-typeql",
+            "storeSource": "typedb-typeql",
+            "semanticStorage": {
+                "contractVersion": SEMANTIC_STORAGE_CONTRACT_VERSION,
+                "physicalStorage": "typedb-logical-tbox-subtypes",
+                "physicalClassTypeCount": len(semantic_class_types()),
+                "physicalRelationTypeCount": len(semantic_relation_types()),
+                "schemaContractStatus": str(schema_contract.get("status") or "unavailable"),
+                "schemaContractFingerprint": str(schema_contract.get("schemaContractFingerprint") or ""),
+            },
+        })
         return metadata
 
     def save_graph(self, graph: PortfolioOntology) -> Dict[str, object]:
@@ -6151,6 +6227,49 @@ class TypeDBOntologyGraphRepository(GraphStoreOntologyRowMapperMixin, ScopedABox
                 tx.query(query).resolve()
                 tx.commit()
 
+    @staticmethod
+    def ontology_semantic_schema_migration_required(schema_text: str) -> bool:
+        """Whether the physical TypeDB hierarchy still flattens logical types.
+
+        The logical TBox is versioned independently from the TypeDB schema.
+        This check keeps the migration additive: existing generic instances
+        remain readable while every new write receives a class/relation
+        subtype derived from the active TBox.
+        """
+        type_names = set(re.findall(
+            r"^\s*(?:attribute|entity|relation)\s+([A-Za-z_][A-Za-z0-9_-]*)\b",
+            str(schema_text or ""),
+            flags=re.MULTILINE,
+        ))
+        return not semantic_storage_type_names().issubset(type_names)
+
+    def migrate_ontology_semantic_schema(self, driver, imported, schema_text: str) -> None:
+        _TypeDB, _Credentials, _DriverOptions, _DriverTlsConfig, TransactionType = imported[0]
+        existing = set(re.findall(
+            r"^\s*(?:attribute|entity|relation)\s+([A-Za-z_][A-Za-z0-9_-]*)\b",
+            str(schema_text or ""),
+            flags=re.MULTILINE,
+        ))
+        missing = semantic_storage_type_names() - existing
+        definitions = []
+        if "ontology-semantic-type" in missing:
+            definitions.extend([
+                "attribute ontology-semantic-type, value string;",
+                "ontology-node owns ontology-semantic-type;",
+                "ontology-assertion owns ontology-semantic-type;",
+            ])
+            missing.discard("ontology-semantic-type")
+        semantic_definitions = semantic_typeql_schema(missing)
+        if semantic_definitions:
+            definitions.append(semantic_definitions.replace("define\n", "", 1))
+        if not definitions:
+            return
+        query = "define\n" + "\n".join(definitions)
+        with typedb_operation_timeout(self.schema_operation_timeout_seconds(), "TypeDB semantic schema migration"):
+            with driver.transaction(self.database, TransactionType.SCHEMA) as tx:
+                tx.query(query).resolve()
+                tx.commit()
+
     def ensure_schema(self, driver, imported) -> None:
         schema = self.schema_query()
         schema_fingerprint = hashlib.sha256(schema.encode("utf-8")).hexdigest()
@@ -6164,17 +6283,6 @@ class TypeDBOntologyGraphRepository(GraphStoreOntologyRowMapperMixin, ScopedABox
             self._base_schema_ready_fingerprint = schema_fingerprint
             self.mark_process_base_schema_ready(schema_fingerprint)
             return
-        if str(contract_state.get("status") or "") == "stale":
-            # The durable manifest proves the baseline graph schema is already
-            # usable.  RuleBox execution-capacity facts are deliberately
-            # represented as normalized ``ExecutionMetric`` relations using
-            # long-lived ``ontology-field``/``ontology-value-number`` types,
-            # so this build has no additive schema migration to run.  Keep
-            # future physical schema migrations explicit and versioned instead
-            # of silently redefining a TypeDB function catalogue here.
-            self._base_schema_ready_fingerprint = schema_fingerprint
-            self.mark_process_base_schema_ready(schema_fingerprint)
-            return
         try:
             schema_text = self.typedb_schema_text(driver)
             if self.ontology_storage_identity_migration_required(schema_text):
@@ -6185,6 +6293,9 @@ class TypeDBOntologyGraphRepository(GraphStoreOntologyRowMapperMixin, ScopedABox
                 schema_text = self.typedb_schema_text(driver)
             if self.ontology_world_schema_migration_required(schema_text):
                 self.migrate_ontology_world_schema(driver, imported)
+                schema_text = self.typedb_schema_text(driver)
+            if self.ontology_semantic_schema_migration_required(schema_text):
+                self.migrate_ontology_semantic_schema(driver, imported, schema_text)
                 schema_text = self.typedb_schema_text(driver)
             schema_type_names = set(re.findall(
                 r"^\s*(?:attribute|entity|relation)\s+([A-Za-z_][A-Za-z0-9_-]*)\b",
@@ -7096,6 +7207,9 @@ class TypeDBOntologyGraphRepository(GraphStoreOntologyRowMapperMixin, ScopedABox
             "marketScopeObservedAt": dict(payload.get("marketScopeObservedAt") or {}),
             "marketScopeObservedAtVersion": str(payload.get("marketScopeObservedAtVersion") or ""),
             "marketWorldProjectionMode": str(payload.get("marketWorldProjectionMode") or ""),
+            "sharedWorldProjection": str(payload.get("sharedWorldProjection") or ""),
+            "sharedWorldProjectionContractVersion": str(payload.get("sharedWorldProjectionContractVersion") or ""),
+            "sharedWorldFullRebuild": bool(payload.get("sharedWorldFullRebuild")),
         }
 
     def active_abox_pointer_rows(self, world_id: str = "", limit: int = 0) -> List[Dict[str, object]]:
@@ -9490,6 +9604,7 @@ attribute ontology-scope-id, value string;
 attribute ontology-scope-type, value string;
 attribute ontology-manifest-id, value string;
 attribute ontology-tbox-class, value string;
+attribute ontology-semantic-type, value string;
 attribute ontology-relation-type, value string;
 attribute ontology-updated-at, value string;
 attribute ontology-json, value string;
@@ -9744,6 +9859,7 @@ entity ontology-node @abstract,
     owns ontology-scope-type,
     owns ontology-manifest-id,
     owns ontology-tbox-class,
+    owns ontology-semantic-type,
     owns ontology-updated-at,
     owns ontology-json,
     owns ontology-source-value,
@@ -10004,6 +10120,7 @@ relation ontology-assertion,
     owns ontology-scope-type,
     owns ontology-manifest-id,
     owns ontology-tbox-class,
+    owns ontology-semantic-type,
     owns ontology-updated-at,
     owns ontology-json,
     owns ontology-weight,
@@ -10025,7 +10142,7 @@ relation ontology-assertion,
     owns ontology-delta-pct,
     owns ontology-exposure-ratio,
     owns ontology-position-count;
-""".strip()
+""".strip() + "\n\n" + semantic_typeql_schema().strip()
 
     def delete_queries(self, boxes: Iterable[str]) -> List[str]:
         queries = []
@@ -10377,7 +10494,15 @@ relation ontology-assertion,
         return "insert " + self.node_insert_clause(row, updated_at, "$n") + ";"
 
     def node_insert_clause(self, row: Dict[str, object], updated_at: str, variable: str) -> str:
-        node_type = str(row.get("nodeType") or "ontology-entity")
+        semantic_properties = {
+            "tboxClass": row.get("tboxClass"),
+            "tboxClasses": row.get("tboxClasses") or [],
+        }
+        node_type = entity_semantic_type(
+            semantic_properties,
+            row.get("kind"),
+            fallback=str(row.get("nodeType") or "ontology-entity"),
+        )
         node_id = str(row.get("id") or "")
         return (
             str(variable or "$n") + " isa " + node_type
@@ -10397,6 +10522,7 @@ relation ontology-assertion,
             + typeql_has("ontology-scope-type", row.get("scopeType"))
             + typeql_has("ontology-manifest-id", row.get("manifestId"))
             + typeql_has("ontology-tbox-class", row.get("tboxClass"))
+            + typeql_has("ontology-semantic-type", node_type)
             + typeql_has("ontology-relation-type", row.get("relationTypeName"))
             + typeql_has("ontology-updated-at", updated_at)
             + typeql_has("ontology-json", row.get("propertiesJson"))
@@ -10487,9 +10613,10 @@ relation ontology-assertion,
         target_variable: str,
     ) -> str:
         relation_id = relation_row_id(row)
+        relation_type = relation_semantic_type(row.get("type"))
         return (
             str(relation_variable or "$r")
-            + " isa ontology-assertion, links (source: "
+            + " isa " + relation_type + ", links (source: "
             + str(source_variable or "$source")
             + ", target: "
             + str(target_variable or "$target")
@@ -10509,6 +10636,7 @@ relation ontology-assertion,
             + typeql_has("ontology-scope-type", row.get("scopeType"))
             + typeql_has("ontology-manifest-id", row.get("manifestId"))
             + typeql_has("ontology-tbox-class", row.get("tboxClass"))
+            + typeql_has("ontology-semantic-type", relation_type)
             + typeql_has("ontology-updated-at", updated_at)
             + typeql_has("ontology-json", row.get("propertiesJson"))
             + typeql_has("ontology-weight", row.get("weight"), numeric=True)
@@ -10647,7 +10775,7 @@ relation ontology-assertion,
         """
         schema = self.schema_query()
         return {
-            "schemaContractVersion": "typedb-base-schema-contract-v1",
+            "schemaContractVersion": "typedb-base-schema-contract-v2:" + SEMANTIC_STORAGE_CONTRACT_VERSION,
             "schemaContractFingerprint": "typedb-base-schema:"
             + hashlib.sha256(schema.encode("utf-8")).hexdigest()[:24],
         }

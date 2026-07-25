@@ -22,6 +22,7 @@ class OntologyDiagnosticsService:
         strategy_proposal_service=None,
         decision_episode_store=None,
         projection_run_store=None,
+        world_projection_outbox=None,
     ):
         self.ontology_repository = ontology_repository
         self.settings = settings or {}
@@ -31,6 +32,7 @@ class OntologyDiagnosticsService:
         self.strategy_proposal_service = strategy_proposal_service
         self.decision_episode_store = decision_episode_store
         self.projection_run_store = projection_run_store
+        self.world_projection_outbox = world_projection_outbox
 
     def status(
         self,
@@ -59,6 +61,7 @@ class OntologyDiagnosticsService:
         decision_performance = self.decision_performance_boundary(clean_symbols)
         notification_boundary = self.notification_boundary()
         runtime_observability = self.runtime_observation_boundary(clean_world_id)
+        shared_world_projection = self.shared_world_projection_boundary()
         inference_summary = self.inferencebox_summary(inference)
         latest_runtime_inference = (
             (runtime_observability.get("latest") or {}).get("inference")
@@ -159,6 +162,7 @@ class OntologyDiagnosticsService:
             "inferenceBox": inference_summary,
             "reasoningBoundary": self.reasoning_boundary(rulebox, inference),
             "runtimeObservability": runtime_observability,
+            "sharedWorldProjection": shared_world_projection,
             "ruleboxQuality": self.rulebox_quality_boundary(rulebox, inference, decision_performance),
             "latestEvents": self.latest_events(),
             "notificationBoundary": notification_boundary,
@@ -222,6 +226,27 @@ class OntologyDiagnosticsService:
                     limit=int(self.settings.get("ontologyRuntimeAuditWindowRuns") or 40),
                 )
         except Exception as error:  # noqa: BLE001 - diagnostics must remain available without audit history.
+            return {"status": "error", "reason": str(error)[:180]}
+
+    def shared_world_projection_boundary(self) -> Dict[str, object]:
+        store = self.world_projection_outbox
+        if not store or not hasattr(store, "summary"):
+            return {"status": "unavailable", "reason": "Durable shared-world projection outbox is not configured."}
+        try:
+            summary = dict(store.summary() or {})
+            pending = int(summary.get("pendingCount") or 0)
+            processing = int(summary.get("processingCount") or 0)
+            failed = int(summary.get("failedCount") or 0)
+            return {
+                "status": "error" if failed else ("warning" if pending or processing else "ok"),
+                "pendingCount": pending,
+                "processingCount": processing,
+                "failedCount": failed,
+                "states": dict(summary.get("states") or {}),
+                "maxPayloadBytes": int(getattr(store, "max_payload_bytes", lambda: 0)() or 0),
+                "deliveryModel": "verified-portfolio-abox -> durable-outbox -> shared-market-or-knowledge-world",
+            }
+        except Exception as error:  # noqa: BLE001 - diagnostics must not block the application.
             return {"status": "error", "reason": str(error)[:180]}
 
     def rulebox_quality_boundary(
@@ -345,7 +370,7 @@ class OntologyDiagnosticsService:
         }
 
     def tbox_summary(self, payload: Dict[str, object]) -> Dict[str, object]:
-        return self.pick(payload, [
+        summary = self.pick(payload, [
             "configured",
             "status",
             "source",
@@ -359,6 +384,17 @@ class OntologyDiagnosticsService:
             "fingerprint",
             "updatedAt",
         ])
+        semantic_storage = payload.get("semanticStorage")
+        if isinstance(semantic_storage, dict):
+            summary["semanticStorage"] = self.pick(semantic_storage, [
+                "contractVersion",
+                "physicalStorage",
+                "physicalClassTypeCount",
+                "physicalRelationTypeCount",
+                "schemaContractStatus",
+                "schemaContractFingerprint",
+            ])
+        return summary
 
     def rulebox_summary(self, payload: Dict[str, object]) -> Dict[str, object]:
         summary = self.pick(payload, [

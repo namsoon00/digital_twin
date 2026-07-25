@@ -4,6 +4,8 @@ An investment ontology has two different ownership boundaries:
 
 * ``MarketWorld`` contains shareable observations about instruments and the
   market environment.
+* ``KnowledgeWorld`` contains durable issuer, security-line, exposure and
+  provenance relationships that outlive one quote observation.
 * ``PortfolioWorld`` contains one tenant/account's positions, policy and
   decision context.
 
@@ -25,6 +27,7 @@ ONTOLOGY_WORLD_VERSION = "ontology-world-v1"
 DEFAULT_TENANT_ID = "local"
 SHARED_MARKET_TENANT_ID = "shared"
 MARKET_WORLD_TYPE = "market"
+KNOWLEDGE_WORLD_TYPE = "knowledge"
 PORTFOLIO_WORLD_TYPE = "portfolio"
 
 
@@ -53,10 +56,16 @@ def market_world_id(market_id: object = "global", tenant_id: object = SHARED_MAR
     return "market:" + normalize_tenant_id(tenant_id or SHARED_MARKET_TENANT_ID) + ":" + normalize_market_id(market_id)
 
 
+def knowledge_world_id(market_id: object = "global", tenant_id: object = SHARED_MARKET_TENANT_ID) -> str:
+    return "knowledge:" + normalize_tenant_id(tenant_id or SHARED_MARKET_TENANT_ID) + ":" + normalize_market_id(market_id)
+
+
 def world_type_from_id(world_id: object) -> str:
     value = str(world_id or "").strip().lower()
     if value.startswith("market:"):
         return MARKET_WORLD_TYPE
+    if value.startswith("knowledge:"):
+        return KNOWLEDGE_WORLD_TYPE
     return PORTFOLIO_WORLD_TYPE
 
 
@@ -123,6 +132,48 @@ def market_world(market_id: object = "global", tenant_id: object = SHARED_MARKET
         tenant_id=tenant,
         account_id="",
         market_id=market,
+    )
+
+
+def knowledge_world(market_id: object = "global", tenant_id: object = SHARED_MARKET_TENANT_ID) -> OntologyWorld:
+    tenant = normalize_tenant_id(tenant_id or SHARED_MARKET_TENANT_ID)
+    market = normalize_market_id(market_id)
+    return OntologyWorld(
+        world_id=knowledge_world_id(market, tenant),
+        world_type=KNOWLEDGE_WORLD_TYPE,
+        tenant_id=tenant,
+        account_id="",
+        market_id=market,
+    )
+
+
+def world_from_metadata(payload: Mapping[str, object] = None) -> OntologyWorld:
+    """Rebuild a world boundary from durable projection/outbox metadata."""
+    values = dict(payload or {})
+    world_id = str(values.get("worldId") or values.get("world_id") or "").strip()
+    world_type = str(values.get("worldType") or values.get("world_type") or world_type_from_id(world_id)).strip().lower()
+    tenant_id = normalize_tenant_id(values.get("tenantId") or values.get("tenant_id") or (
+        SHARED_MARKET_TENANT_ID if world_type in {MARKET_WORLD_TYPE, KNOWLEDGE_WORLD_TYPE} else DEFAULT_TENANT_ID
+    ))
+    account_id = normalize_account_id(values.get("accountId") or values.get("account_id")) if world_type == PORTFOLIO_WORLD_TYPE else ""
+    market_value = values.get("marketId") or values.get("market_id") or ""
+    if not market_value and world_id:
+        parts = world_id.split(":", 2)
+        if len(parts) == 3:
+            market_value = parts[2]
+    market_id = normalize_market_id(market_value or "global")
+    if not world_id:
+        if world_type == MARKET_WORLD_TYPE:
+            return market_world(market_id, tenant_id)
+        if world_type == KNOWLEDGE_WORLD_TYPE:
+            return knowledge_world(market_id, tenant_id)
+        return portfolio_world(account_id, tenant_id, market_id)
+    return OntologyWorld(
+        world_id=world_id,
+        world_type=world_type if world_type in {MARKET_WORLD_TYPE, KNOWLEDGE_WORLD_TYPE, PORTFOLIO_WORLD_TYPE} else world_type_from_id(world_id),
+        tenant_id=tenant_id,
+        account_id=account_id,
+        market_id=market_id,
     )
 
 

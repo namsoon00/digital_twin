@@ -4,12 +4,14 @@ import unittest
 from digital_twin.domain.ontology_contracts import OntologyEntity, OntologyEvidence, OntologyRelation, PortfolioOntology
 from digital_twin.domain.ontology_scopes import apply_scoped_abox_identity
 from digital_twin.domain.ontology_worlds import (
+    knowledge_world,
     market_world,
     portfolio_world,
     portfolio_world_id,
     world_scope_suffix,
     world_from_snapshot,
 )
+from digital_twin.domain.knowledge_world_projection import build_knowledge_world_graph
 from digital_twin.domain.market_world_projection import (
     build_market_world_graph,
     merge_market_world_scope_manifest,
@@ -143,6 +145,95 @@ class OntologyWorldContractTests(unittest.TestCase):
         self.assertNotIn("quantity", samsung.properties)
         self.assertEqual(world.world_id, samsung.properties["worldId"])
         self.assertTrue(all("position:" not in relation.source and "position:" not in relation.target for relation in merged.relations))
+
+    def test_shared_worlds_strip_account_strategy_and_ai_working_properties(self):
+        graph = sample_graph("005930")
+        stock = next(item for item in graph.entities if item.entity_id == "stock:005930")
+        stock.properties.update({
+            "strategyMaxPositionWeightPct": 45,
+            "strategyLossTolerancePct": -8,
+            "targetPositionRole": "core",
+            "aiPrompt": "private prompt",
+            "rawPayload": {"account": "private"},
+        })
+        graph.entities.extend([
+            OntologyEntity("company:Samsung", "Samsung", "company", {"ontologyBox": "ABox", "tboxClass": "Company"}),
+            OntologyEntity("security:005930", "Samsung common", "security", {"ontologyBox": "ABox", "tboxClass": "Security"}),
+        ])
+        graph.relations.extend([
+            OntologyRelation("company:Samsung", "security:005930", "ISSUES", properties={"ontologyBox": "ABox"}),
+            OntologyRelation("security:005930", "stock:005930", "REPRESENTS_INSTRUMENT", properties={"ontologyBox": "ABox"}),
+        ])
+
+        market_stock = next(
+            item for item in build_market_world_graph(graph, market_world("kr")).entities
+            if item.entity_id == "stock:005930"
+        )
+        knowledge_stock = next(
+            item for item in build_knowledge_world_graph(graph, knowledge_world("kr")).entities
+            if item.entity_id == "stock:005930"
+        )
+
+        for properties in [market_stock.properties, knowledge_stock.properties]:
+            self.assertNotIn("strategyMaxPositionWeightPct", properties)
+            self.assertNotIn("strategyLossTolerancePct", properties)
+            self.assertNotIn("targetPositionRole", properties)
+            self.assertNotIn("aiPrompt", properties)
+            self.assertNotIn("rawPayload", properties)
+            self.assertEqual("005930", properties["symbol"])
+        self.assertEqual(71000, market_stock.properties["currentPrice"])
+        self.assertNotIn("currentPrice", knowledge_stock.properties)
+
+    def test_market_world_does_not_feed_prior_projection_markers_back_into_the_market_slice(self):
+        graph = sample_graph("005930")
+        graph.entities.append(OntologyEntity(
+            "hypothesis:legacy",
+            "Old hypothesis",
+            "hypothesis",
+            {"ontologyBox": "ABox", "marketObservationShared": True},
+        ))
+
+        projected = build_market_world_graph(graph, market_world("kr"))
+
+        self.assertNotIn("hypothesis:legacy", {item.entity_id for item in projected.entities})
+
+    def test_market_world_derives_source_clock_when_snapshot_has_no_top_level_as_of(self):
+        projected = build_market_world_graph(
+            sample_graph("005930", source_observed_at="2026-07-20T01:02:03Z"),
+            market_world("kr"),
+        )
+
+        self.assertEqual("2026-07-20T01:02:03Z", projected.worldview["marketObservedAt"])
+
+    def test_knowledge_world_keeps_issuer_security_topology_without_account_or_quote_values(self):
+        graph = PortfolioOntology("account-a")
+        graph.entities.extend([
+            OntologyEntity("account:account-a", "Account", "account", {"ontologyBox": "ABox", "tboxClass": "Account"}),
+            OntologyEntity("position:account-a:005930", "Position", "position", {"ontologyBox": "ABox", "tboxClass": "Position", "quantity": 10}),
+            OntologyEntity("company:Samsung", "Samsung", "company", {"ontologyBox": "ABox", "tboxClass": "Company"}),
+            OntologyEntity("security:005930", "Samsung common", "security", {"ontologyBox": "ABox", "tboxClass": "Security"}),
+            OntologyEntity("stock:005930", "Samsung", "stock", {
+                "ontologyBox": "ABox", "tboxClass": "Stock", "currentPrice": 70000, "symbol": "005930",
+            }),
+        ])
+        graph.relations.extend([
+            OntologyRelation("account:account-a", "position:account-a:005930", "HAS_POSITION", properties={"ontologyBox": "ABox"}),
+            OntologyRelation("company:Samsung", "security:005930", "ISSUES", properties={"ontologyBox": "ABox"}),
+            OntologyRelation("security:005930", "stock:005930", "REPRESENTS_INSTRUMENT", properties={"ontologyBox": "ABox"}),
+        ])
+
+        projected = build_knowledge_world_graph(graph, knowledge_world("kr"))
+
+        ids = {item.entity_id for item in projected.entities}
+        self.assertIn("company:Samsung", ids)
+        self.assertIn("security:005930", ids)
+        self.assertIn("stock:005930", ids)
+        self.assertNotIn("account:account-a", ids)
+        self.assertNotIn("position:account-a:005930", ids)
+        stock = next(item for item in projected.entities if item.entity_id == "stock:005930")
+        self.assertNotIn("currentPrice", stock.properties)
+        self.assertTrue(any(item.relation_type == "ISSUES" for item in projected.relations))
+        self.assertEqual("KnowledgeWorld", projected.entities[0].properties["tboxClass"])
 
     def test_market_world_prunes_stale_observations_without_erasing_fresh_account_slice(self):
         world = market_world("kr")
@@ -389,6 +480,7 @@ class MultiAccountProjectionTests(unittest.TestCase):
                     "scopeTopologyVersion": worldview.get("scopeTopologyVersion"),
                     "marketScopeObservedAt": dict(worldview.get("marketScopeObservedAt") or {}),
                     "marketScopeObservedAtVersion": worldview.get("marketScopeObservedAtVersion"),
+                    "sharedWorldProjectionContractVersion": worldview.get("sharedWorldProjectionContractVersion"),
                     "materialFingerprint": worldview.get("materialFingerprint"),
                     "aboxSnapshotId": worldview.get("aboxSnapshotId"),
                     "worldviewManifestId": worldview.get("worldviewManifestId"),
@@ -414,7 +506,14 @@ class MultiAccountProjectionTests(unittest.TestCase):
         def save_scoped_abox_graph(self, graph, adopted_write_lease=None):
             world_id = graph.worldview["worldId"]
             existing = self.saved_markets.get(world_id)
-            merged = merge_market_world_graph(existing, graph) if existing else copy.deepcopy(graph)
+            # A shared-world projection contract bump intentionally replaces
+            # every legacy scope.  This mirrors TypeDB's new Manifest pointer
+            # rather than retaining a privacy-unsafe prior generation.
+            merged = (
+                merge_market_world_graph(existing, graph)
+                if existing and not graph.worldview.get("sharedWorldFullRebuild")
+                else copy.deepcopy(graph)
+            )
             merged.worldview.update(dict(graph.worldview or {}))
             self.saved_markets[world_id] = merged
             return {"saved": True, "status": "ok", "worldId": graph.worldview["worldId"]}
@@ -581,6 +680,32 @@ class MultiAccountProjectionTests(unittest.TestCase):
         self.assertEqual("unchanged-material-facts", second["status"])
         self.assertFalse(second["saved"])
         self.assertEqual(1, len(repository.activations))
+
+    def test_market_world_contract_bump_replaces_legacy_shared_manifest(self):
+        repository = self.FakeRepository()
+        recorder = PortfolioOntologyProjectionRecorder(
+            repository,
+            settings={"ontologyTenantId": "tenant-a", "ontologyMarketWorldId": "kr"},
+        )
+        shared_world = market_world("kr", "tenant-a")
+
+        first = recorder.project_market_world(sample_graph("005930"), shared_world)
+        self.assertEqual("ok", first["status"])
+        legacy = repository.saved_markets[shared_world.world_id]
+        legacy.worldview["sharedWorldProjectionContractVersion"] = "shared-world-projection-v2"
+        legacy_stock = next(item for item in legacy.entities if item.entity_id == "stock:005930")
+        legacy_stock.properties["strategyMaxPositionWeightPct"] = 45
+
+        rebuilt = recorder.project_market_world(sample_graph("000660"), shared_world)
+        rebuilt_graph = repository.saved_markets[shared_world.world_id]
+        rebuilt_ids = {item.entity_id for item in rebuilt_graph.entities}
+
+        self.assertEqual("ok", rebuilt["status"])
+        self.assertTrue(rebuilt["fullRebuild"])
+        self.assertNotIn("stock:005930", rebuilt_ids)
+        self.assertIn("stock:000660", rebuilt_ids)
+        current_stock = next(item for item in rebuilt_graph.entities if item.entity_id == "stock:000660")
+        self.assertNotIn("strategyMaxPositionWeightPct", current_stock.properties)
 
     def test_market_world_reuses_scopes_when_only_source_clock_advances(self):
         repository = self.FakeRepository()

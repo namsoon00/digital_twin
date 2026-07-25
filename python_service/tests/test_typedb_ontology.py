@@ -1169,6 +1169,38 @@ class TypeDBOntologyRepositoryTests(unittest.TestCase):
         self.assertEqual("ok", result["inference"]["status"])
         prune_inference.assert_called_once_with("inference:active", keep_count=2)
 
+    def test_deferred_maintenance_allows_an_explicit_bounded_orphan_drain(self):
+        repository = TypeDBOntologyGraphRepository("127.0.0.1:1729")
+        with patch.object(repository, "acquire_scoped_abox_write_lease", return_value={"acquired": True}), patch.object(
+            repository,
+            "release_scoped_abox_write_lease",
+            return_value={"status": "ok"},
+        ), patch.object(
+            repository,
+            "prune_orphan_scoped_abox_candidates",
+            return_value={"status": "ok", "removedGenerationIds": []},
+        ) as prune_orphans, patch.object(
+            repository,
+            "prune_inactive_scoped_abox_manifests",
+            return_value={"status": "ok", "removedManifestIds": []},
+        ), patch.object(repository, "active_abox_metadata", return_value={}), patch.object(
+            repository,
+            "read_inference_generation_records",
+            return_value=[],
+        ):
+            result = repository.run_deferred_maintenance({
+                "worldId": "market:shared:global",
+                "keepInactiveManifests": 0,
+                "maxOrphanGenerations": 64,
+            })
+
+        self.assertEqual("ok", result["status"])
+        self.assertEqual(64, result["maxOrphanGenerations"])
+        prune_orphans.assert_called_once_with(
+            "market:shared:global",
+            max_generation_count=64,
+        )
+
     def test_scoped_abox_save_defers_when_another_writer_holds_the_lease(self):
         graph = PortfolioOntology(
             "main",
@@ -3887,9 +3919,11 @@ class TypeDBOntologyRepositoryTests(unittest.TestCase):
             queries = repository.graph_insert_queries(graph)
 
         self.assertEqual(34, len(queries))
-        self.assertTrue(queries[0].startswith("insert $n0 isa ontology-entity"))
+        self.assertTrue(queries[0].startswith("insert $n0 isa ontology-class-stock"))
         relation_queries = [query for query in queries if query.startswith("match $source0 isa ontology-node")]
         self.assertEqual(30, len(relation_queries))
+        # RELATED_TO is a compatibility relation without a current TBox
+        # declaration, so legacy imports continue through the generic parent.
         self.assertTrue(all(query.count(" isa ontology-assertion") == 1 for query in relation_queries))
 
     def test_typedb_numeric_literals_use_fixed_point_not_scientific_notation(self):
@@ -3944,7 +3978,7 @@ class TypeDBOntologyRepositoryTests(unittest.TestCase):
 
         self.assertGreater(len(queries), 2)
         self.assertTrue(all(repository.query_byte_size(query) <= 4096 for query in queries))
-        self.assertEqual(3, sum(query.count(" isa ontology-entity") for query in queries if query.startswith("insert ")))
+        self.assertEqual(3, sum(query.count(" isa ontology-class-stock") for query in queries if query.startswith("insert ")))
         self.assertEqual(2, sum(query.count(" isa ontology-assertion") for query in queries if query.startswith("match ")))
 
     def test_typedb_write_query_max_bytes_is_bounded(self):
@@ -4460,10 +4494,10 @@ class TypeDBOntologyRepositoryTests(unittest.TestCase):
         self.assertIn("$n1 isa ontology-entity", queries[0])
         self.assertIn("$n2 isa ontology-entity", queries[0])
         self.assertIn("match $source0 isa ontology-node", queries[1])
-        self.assertIn("$r0 isa ontology-assertion", queries[1])
-        self.assertNotIn("$r1 isa ontology-assertion", queries[1])
+        self.assertIn("$r0 isa ontology-relation-has-inference-trace", queries[1])
+        self.assertNotIn("$r1 isa ontology-relation-has-inference-trace", queries[1])
         self.assertIn("match $source0 isa ontology-node", queries[2])
-        self.assertIn("$r0 isa ontology-assertion", queries[2])
+        self.assertIn("$r0 isa ontology-relation-has-inferred-risk", queries[2])
 
     def test_typedb_inferencebox_relation_batch_size_uses_a_single_edge_write_plan(self):
         repository = TypeDBOntologyGraphRepository("127.0.0.1:1729")

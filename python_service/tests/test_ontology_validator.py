@@ -18,6 +18,31 @@ from digital_twin.domain.portfolio_calculations import portfolio_summary
 
 
 class OntologyValidatorTests(unittest.TestCase):
+    def test_core_relation_endpoint_contract_blocks_miswired_semantic_fact(self):
+        graph = PortfolioOntology(
+            "main",
+            entities=[
+                OntologyEntity("stock:005930", "삼성전자", "stock", {
+                    "ontologyBox": "ABox", "tboxClass": "Stock",
+                }),
+                OntologyEntity("company:Samsung", "삼성전자", "company", {
+                    "ontologyBox": "ABox", "tboxClass": "Company",
+                }),
+            ],
+            relations=[OntologyRelation(
+                "stock:005930",
+                "company:Samsung",
+                "ISSUES",
+                properties={"ontologyBox": "ABox"},
+            )],
+        )
+
+        report = validate_ontology(graph)
+
+        self.assertEqual("invalid", report.status)
+        self.assertTrue(any(item.code == "relation_endpoint_contract_violation" for item in report.issues))
+        self.assertEqual("typedb-semantic-storage-v2", report.semantic_contract["version"])
+
     def test_scoped_manifest_requires_scope_lifecycle_for_abox_facts(self):
         graph = PortfolioOntology(
             "main",

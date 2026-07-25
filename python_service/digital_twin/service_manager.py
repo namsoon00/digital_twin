@@ -73,6 +73,13 @@ BASE_WORKERS = {
         "command": [sys.executable, "-u", "python_service/service.py", "ontology-reasoning", "watch"],
         "needle": "python_service/service.py ontology-reasoning watch",
     },
+    "ontology-world-projection": {
+        "label": "Python shared ontology world projection worker",
+        "pid": data_dir() / "python-ontology-world-projection.pid",
+        "log": data_dir() / "python-ontology-world-projection.log",
+        "command": [sys.executable, "-u", "python_service/service.py", "ontology-world-projection", "watch"],
+        "needle": "python_service/service.py ontology-world-projection watch",
+    },
     "ontology-lab": {
         "label": "Python ontology lab worker",
         "pid": data_dir() / "python-ontology-lab.pid",

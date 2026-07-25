@@ -43,6 +43,7 @@ from ..application.notification_service import (
 )
 from ..application.official_calendar_sync_service import OfficialCalendarSyncService
 from ..application.ontology_reasoning_service import OntologyReasoningRunner
+from ..application.ontology_world_projection_service import OntologyWorldProjectionRunner
 from ..application.ontology_lab_service import OntologyLabService
 from ..application.ontology_rule_candidate_service import RuleChangeCandidateProposalService
 from ..application.symbol_universe_service import SymbolUniverseService
@@ -206,6 +207,7 @@ def build_monitor_runner(
             hypothesis_lifecycle_store=stores.hypothesis_lifecycle_store(configured_settings),
             data_pipeline_health_store=stores.data_pipeline_health_store(configured_settings),
             market_time_series_store=market_time_series_store,
+            world_projection_outbox=stores.ontology_world_projection_outbox_store(configured_settings),
             settings=configured_settings,
         ),
         hypothesis_lifecycle_service=build_hypothesis_lifecycle_service(configured_settings, publisher),
@@ -575,6 +577,21 @@ def typedb_projection_recovery_health(ontology_repository, world_id: str) -> Dic
             else str((active or {}).get("reason") or "현재 활성 ABox를 검증하지 못했습니다.")[:180]
         ),
     }
+
+
+def build_ontology_world_projection_runner(settings=None) -> OntologyWorldProjectionRunner:
+    """Build the independent durable shared-world projection worker."""
+    configured_settings = settings or runtime_settings()
+    return OntologyWorldProjectionRunner(
+        outbox=stores.ontology_world_projection_outbox_store(configured_settings),
+        projection_recorder=PortfolioOntologyProjectionRecorder(
+            ontology_repository_from_settings(configured_settings),
+            settings=configured_settings,
+            source="ontology-world-projection",
+        ),
+        settings=configured_settings,
+        worker_id=os.environ.get("ONTOLOGY_WORLD_PROJECTION_WORKER_ID") or "",
+    )
 
 
 def build_ontology_reasoning_runner(settings=None, event_publisher=None) -> OntologyReasoningRunner:

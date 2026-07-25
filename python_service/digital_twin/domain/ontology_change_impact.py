@@ -12,10 +12,10 @@ from collections import defaultdict
 from typing import Dict, Iterable, List, Mapping, Optional, Sequence, Set
 
 
-# v4 also distinguishes typed fact-family changes from generic storage
-# metadata. The distinction is required for safe native RuleBox reuse when a
-# refreshed quote changes one observation without reopening unrelated rules.
-CHANGE_IMPACT_VERSION = "abox-change-impact-v4"
+# v5 retains the typed fact-family change contract and adds an operational
+# explanation of broad/global impact. The explanation is routing telemetry;
+# it never evaluates a RuleBox condition or derives an investment result.
+CHANGE_IMPACT_VERSION = "abox-change-impact-v5"
 
 SYMBOL_SCOPE_FAMILIES = {
     "state",
@@ -40,6 +40,35 @@ SYMBOL_SCOPE_FAMILIES = {
 GLOBAL_SCOPE_TYPES = {"macro", "portfolio", "policy", "reference", "episode"}
 RELATION_LOCAL_SCOPE_TYPES = {"evidence", "link"}
 
+_GLOBAL_SCOPE_TYPE_LABELS = {
+    "macro": "shared-market-context",
+    "portfolio": "portfolio-context",
+    "policy": "runtime-policy-context",
+    "reference": "reference-context",
+    "episode": "history-context",
+}
+
+# Event fact types describe the collection/change source. They are not
+# RuleBox conditions, but translating them to the matching ABox family makes
+# it possible to compare the requested work with the immutable scope delta.
+# Unknown types deliberately remain absent so they cannot narrow native
+# evaluation.
+_EVENT_FACT_TYPE_SCOPE_FAMILIES = {
+    "marketquote": {"market"},
+    "technicalindicator": {"temporal"},
+    "executionflow": {"flow"},
+    "orderbook": {"flow"},
+    "researchevidence": {"evidence"},
+    "newsevent": {"evidence"},
+    "verifiedclaim": {"evidence"},
+    "verificationrun": {"evidence"},
+    "investmentcalendarevent": {"temporal", "evidence"},
+    "portfoliosnapshot": {"position", "portfolio"},
+    "dataquality": {"quality"},
+    "fxrate": {"macro-fx"},
+    "interestrate": {"macro-rates"},
+}
+
 
 def _clean(value: object) -> str:
     return str(value or "").strip()
@@ -54,6 +83,33 @@ def _list(value: object) -> List[str]:
         return [_clean(item) for item in value if _clean(item)]
     text = _clean(value)
     return [text] if text else []
+
+
+def requested_scope_families_for_event_fact_types(fact_types: Iterable[object]) -> List[str]:
+    """Map collection provenance to ABox families for diagnostics only.
+
+    This is intentionally conservative: unknown event types do not alter the
+    candidate RuleBox list, and TypeDB remains the only evaluator.
+    """
+    values: Set[str] = set()
+    known_families = set(SYMBOL_SCOPE_FAMILIES) | {
+        "macro",
+        "macro-market",
+        "macro-fx",
+        "macro-rates",
+        "macro-crypto",
+        "portfolio",
+        "policy",
+        "reference",
+        "episode",
+    }
+    for item in fact_types or []:
+        text = _lower(item)
+        compact = "".join(character for character in text if character.isalnum())
+        if text in known_families:
+            values.add(text)
+        values.update(_EVENT_FACT_TYPE_SCOPE_FAMILIES.get(compact, set()))
+    return sorted(values)
 
 
 def scope_type(scope_id: object) -> str:
@@ -614,12 +670,142 @@ def _rule_may_depend_on(profile: Mapping[str, object], changed_families: Set[str
     return False
 
 
+def _clean_family_values(values: Iterable[object]) -> List[str]:
+    """Normalize event provenance without treating it as a decision input."""
+    known = set(SYMBOL_SCOPE_FAMILIES) | {
+        "macro",
+        "macro-market",
+        "macro-fx",
+        "macro-rates",
+        "macro-crypto",
+        "portfolio",
+        "policy",
+        "reference",
+        "episode",
+        "unknown",
+    }
+    cleaned = {
+        _lower(value)
+        for value in values or []
+        if _lower(value) in known
+    }
+    return sorted(cleaned)
+
+
+def _expanded_family_values(values: Iterable[object]) -> Set[str]:
+    expanded = set(_clean_family_values(values))
+    specific_macro_families = {
+        value for value in expanded
+        if value.startswith("macro-")
+    }
+    if specific_macro_families:
+        # Scope deltas retain the generic ``macro`` token alongside the
+        # concrete macro family for dependency routing.  For provenance
+        # comparison the concrete value is more precise, so avoid treating a
+        # single rate update as every macro family changing.
+        expanded.discard("macro")
+    elif "macro" in expanded:
+        expanded.update({"macro-market", "macro-fx", "macro-rates", "macro-crypto"})
+    return expanded
+
+
+def inference_impact_diagnostics(
+    *,
+    delta: Mapping[str, object],
+    global_scope_ids: Iterable[object],
+    global_impact: bool,
+    bounded_global_context: bool,
+    target_symbols: Iterable[object],
+    changed_families: Iterable[object],
+    requested_fact_families: Iterable[object],
+    candidate_rule_count: int,
+    enabled_rule_count: int,
+    selection_eligibility_reason: str,
+) -> Dict[str, object]:
+    """Explain why a native cycle is broad without deciding what it means.
+
+    This provides a stable diagnostic contract for the scheduler and mobile
+    status screen. TypeDB remains responsible for all RuleBox evaluation.
+    """
+    scope_ids = [
+        _clean(scope_id)
+        for scope_id in global_scope_ids or []
+        if _clean(scope_id)
+    ]
+    scope_type_counts: Dict[str, int] = {}
+    for scope_id in scope_ids:
+        value = scope_type(scope_id)
+        scope_type_counts[value] = int(scope_type_counts.get(value, 0) or 0) + 1
+    requested = _clean_family_values(requested_fact_families)
+    changed = _clean_family_values(changed_families)
+    requested_expanded = _expanded_family_values(requested)
+    changed_expanded = _expanded_family_values(changed)
+    unexpected = sorted(changed_expanded - requested_expanded) if requested else []
+    candidate_ratio = round((max(0, int(candidate_rule_count or 0)) / max(1, int(enabled_rule_count or 0))) * 100, 1)
+    reason_codes: List[str] = []
+    if global_impact:
+        reason_codes.append("global-context-changed")
+    if bounded_global_context:
+        reason_codes.append("target-scoped-global-context")
+    if len(changed) >= 8:
+        reason_codes.append("broad-fact-family-delta")
+    if enabled_rule_count and candidate_ratio >= 95:
+        reason_codes.append("candidate-catalog-is-complete")
+    if requested and unexpected:
+        reason_codes.append("snapshot-change-broader-than-event")
+    if not reason_codes:
+        reason_codes.append("local-fact-change")
+    if not requested:
+        event_agreement = "not-provided"
+    elif unexpected:
+        event_agreement = "snapshot-broader-than-event"
+    else:
+        event_agreement = "aligned"
+    classification = (
+        "target-scoped-global-context"
+        if bounded_global_context
+        else "global-reconciliation"
+        if global_impact
+        else "dependency-selected"
+    )
+    return {
+        "classification": classification,
+        "reasonCodes": reason_codes,
+        "globalScopeCount": len(scope_ids),
+        "globalScopeTypes": [
+            {
+                "type": value,
+                "label": _GLOBAL_SCOPE_TYPE_LABELS.get(value, value),
+                "count": count,
+            }
+            for value, count in sorted(scope_type_counts.items())
+        ],
+        "directChangedScopeCount": len(delta.get("directChangedScopeIds") or []),
+        "affectedScopeCount": len(delta.get("affectedScopeIds") or []),
+        "changedFamilyCount": len(changed),
+        "targetSymbolCount": len([symbol for symbol in target_symbols or [] if _clean(symbol)]),
+        "candidateRuleCount": max(0, int(candidate_rule_count or 0)),
+        "enabledRuleCount": max(0, int(enabled_rule_count or 0)),
+        "candidateRuleRatioPct": candidate_ratio,
+        "candidateSubsetAvailable": bool(
+            candidate_rule_count
+            and enabled_rule_count
+            and int(candidate_rule_count) < int(enabled_rule_count)
+        ),
+        "selectionEligibilityReason": _clean(selection_eligibility_reason),
+        "eventFactFamilies": requested,
+        "eventScopeAgreement": event_agreement,
+        "unexpectedChangedFamilies": unexpected,
+    }
+
+
 def build_inference_impact_plan(
     previous_scope_plan: Iterable[object],
     next_scope_plan: Iterable[object],
     snapshot_symbols: Iterable[object],
     explicit_target_symbols: Iterable[object] = None,
     rules: Iterable[object] = None,
+    requested_fact_families: Iterable[object] = None,
 ) -> Dict[str, object]:
     """Build a conservative routing plan for a native TypeDB inference run.
 
@@ -662,15 +848,38 @@ def build_inference_impact_plan(
     if not target_symbols and not changed_scope_ids:
         target_symbols = list(available_symbols)
     profiles = rule_dependency_profiles(rules or [])
+    enabled_profiles = [profile for profile in profiles if profile.get("enabled")]
     changed_families = set(delta.get("directChangedScopeFamilies") or delta.get("changedScopeFamilies") or [])
     candidate_profiles = [
-        profile for profile in profiles
-        if profile.get("enabled") and _rule_may_depend_on(profile, changed_families)
+        profile for profile in enabled_profiles
+        if _rule_may_depend_on(profile, changed_families)
     ]
     deferred_profiles = [
-        profile for profile in profiles
-        if profile.get("enabled") and profile not in candidate_profiles
+        profile for profile in enabled_profiles
+        if profile not in candidate_profiles
     ]
+    selection_eligibility_reason = ""
+    if not candidate_profiles:
+        selection_eligibility_reason = "candidate-rules-unavailable"
+    elif len(candidate_profiles) >= len(enabled_profiles):
+        # A prior-proof read cannot improve a complete native catalog run.
+        # Skip it rather than paying the extra TypeDB read on every broad
+        # market/portfolio generation.
+        selection_eligibility_reason = "candidate-rules-cover-complete-catalog"
+    elif global_impact and not bounded_global_context:
+        selection_eligibility_reason = "global-impact-requires-complete-evaluation"
+    diagnostics = inference_impact_diagnostics(
+        delta=delta,
+        global_scope_ids=global_scope_ids,
+        global_impact=global_impact,
+        bounded_global_context=bounded_global_context,
+        target_symbols=target_symbols,
+        changed_families=changed_families,
+        requested_fact_families=requested_fact_families,
+        candidate_rule_count=len(candidate_profiles),
+        enabled_rule_count=len(enabled_profiles),
+        selection_eligibility_reason=selection_eligibility_reason,
+    )
     return {
         "version": CHANGE_IMPACT_VERSION,
         "scopeDelta": delta,
@@ -683,7 +892,9 @@ def build_inference_impact_plan(
         "deferredRuleIds": [str(profile.get("ruleId") or "") for profile in deferred_profiles],
         "candidateRuleCount": len(candidate_profiles),
         "ruleDependencyCount": len(profiles),
+        "enabledRuleCount": len(enabled_profiles),
         "changedScopeFamilies": sorted(changed_families),
+        "requestedFactFamilies": _clean_family_values(requested_fact_families),
         "relationContextSymbols": list(delta.get("relationContextSymbols") or []),
         "unresolvedRelationScopeIds": list(delta.get("unresolvedRelationScopeIds") or []),
         "ruleExecutionScope": (
@@ -694,9 +905,13 @@ def build_inference_impact_plan(
             else "dependency-selected-native-evaluation"
         ),
         "nativeRuleSelectionEligible": bool(
-            candidate_profiles and (not global_impact or bounded_global_context)
+            candidate_profiles
+            and len(candidate_profiles) < len(enabled_profiles)
+            and (not global_impact or bounded_global_context)
         ),
+        "nativeRuleSelectionEligibilityReason": selection_eligibility_reason or "candidate-subset-within-safe-context",
         "nativeRuleSelectionApplied": False,
+        "diagnostics": diagnostics,
         "reason": (
             "전역 사실은 바뀌었지만 요청된 종목 범위에서 관련 규칙과 기존 성립 규칙만 다시 확인합니다."
             if bounded_global_context
@@ -713,6 +928,8 @@ def compact_inference_impact_plan(plan: Mapping[str, object], limit: int = 80) -
     if not values:
         return {}
     delta = dict(values.get("scopeDelta") or {})
+    diagnostics = values.get("diagnostics")
+    diagnostics = dict(diagnostics or {}) if isinstance(diagnostics, Mapping) else {}
     bounded = max(1, int(limit or 80))
     return {
         "version": str(values.get("version") or CHANGE_IMPACT_VERSION),
@@ -725,12 +942,41 @@ def compact_inference_impact_plan(plan: Mapping[str, object], limit: int = 80) -
         "deferredRuleIds": list(values.get("deferredRuleIds") or [])[:bounded],
         "candidateRuleCount": int(values.get("candidateRuleCount") or 0),
         "ruleDependencyCount": int(values.get("ruleDependencyCount") or 0),
+        "enabledRuleCount": int(values.get("enabledRuleCount") or 0),
         "changedScopeFamilies": list(values.get("changedScopeFamilies") or [])[:bounded],
+        "requestedFactFamilies": list(values.get("requestedFactFamilies") or [])[:bounded],
         "relationContextSymbols": list(values.get("relationContextSymbols") or [])[:bounded],
         "unresolvedRelationScopeIds": list(values.get("unresolvedRelationScopeIds") or [])[:bounded],
         "ruleExecutionScope": str(values.get("ruleExecutionScope") or "dependency-selected-native-evaluation"),
         "nativeRuleSelectionEligible": bool(values.get("nativeRuleSelectionEligible")),
+        "nativeRuleSelectionEligibilityReason": str(values.get("nativeRuleSelectionEligibilityReason") or ""),
         "nativeRuleSelectionApplied": bool(values.get("nativeRuleSelectionApplied")),
+        "diagnostics": {
+            "classification": str(diagnostics.get("classification") or ""),
+            "reasonCodes": list(diagnostics.get("reasonCodes") or [])[:bounded],
+            "globalScopeCount": int(diagnostics.get("globalScopeCount") or 0),
+            "globalScopeTypes": [
+                {
+                    "type": str(item.get("type") or ""),
+                    "label": str(item.get("label") or ""),
+                    "count": int(item.get("count") or 0),
+                }
+                for item in diagnostics.get("globalScopeTypes") or []
+                if isinstance(item, Mapping)
+            ][:bounded],
+            "directChangedScopeCount": int(diagnostics.get("directChangedScopeCount") or 0),
+            "affectedScopeCount": int(diagnostics.get("affectedScopeCount") or 0),
+            "changedFamilyCount": int(diagnostics.get("changedFamilyCount") or 0),
+            "targetSymbolCount": int(diagnostics.get("targetSymbolCount") or 0),
+            "candidateRuleCount": int(diagnostics.get("candidateRuleCount") or 0),
+            "enabledRuleCount": int(diagnostics.get("enabledRuleCount") or 0),
+            "candidateRuleRatioPct": float(diagnostics.get("candidateRuleRatioPct") or 0.0),
+            "candidateSubsetAvailable": bool(diagnostics.get("candidateSubsetAvailable")),
+            "selectionEligibilityReason": str(diagnostics.get("selectionEligibilityReason") or ""),
+            "eventFactFamilies": list(diagnostics.get("eventFactFamilies") or [])[:bounded],
+            "eventScopeAgreement": str(diagnostics.get("eventScopeAgreement") or ""),
+            "unexpectedChangedFamilies": list(diagnostics.get("unexpectedChangedFamilies") or [])[:bounded],
+        },
         "scopeDelta": {
             "previousScopeCount": int(delta.get("previousScopeCount") or 0),
             "nextScopeCount": int(delta.get("nextScopeCount") or 0),

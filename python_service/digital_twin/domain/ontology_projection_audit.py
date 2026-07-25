@@ -1,11 +1,11 @@
 import hashlib
 import json
 from dataclasses import asdict, dataclass, replace
-from typing import Dict, Iterable, List
+from typing import Dict, Iterable, List, Mapping
 
 from .ontology_change_impact import compact_inference_impact_plan, scope_symbol
 from .ontology_contracts import PortfolioOntology
-from .ontology_runtime_operations import native_rule_timing_profile
+from .ontology_runtime_operations import native_replay_validation, native_rule_timing_profile
 from .portfolio import AccountSnapshot, utc_now_iso
 
 
@@ -26,6 +26,58 @@ def _clean_symbols(symbols: Iterable[object]) -> List[str]:
 
 
 INFERENCE_REUSE_PROOF_VERSION = "target-inference-reuse-proof-v1"
+REASONING_REQUEST_CONTEXT_VERSION = "reasoning-request-context-v1"
+
+
+def compact_reasoning_request_context(
+    context: Mapping[str, object] = None,
+    target_symbols: Iterable[object] = None,
+) -> Dict[str, object]:
+    """Keep trigger provenance without copying source facts into the audit.
+
+    The context explains why a scheduled projection ran. It is never used to
+    evaluate a RuleBox condition or to synthesize an investment conclusion.
+    """
+    values = dict(context or {}) if isinstance(context, Mapping) else {}
+    targets = set(_clean_symbols(target_symbols or values.get("targetSymbols") or []))
+
+    def clean_list(value: object, limit: int = 80) -> List[str]:
+        items = value if isinstance(value, (list, tuple, set)) else [value]
+        return sorted({
+            str(item or "").strip()
+            for item in items
+            if str(item or "").strip()
+        })[:max(1, int(limit or 80))]
+
+    def symbol_map(value: object, list_values: bool) -> Dict[str, object]:
+        source = value if isinstance(value, Mapping) else {}
+        result: Dict[str, object] = {}
+        for raw_symbol, raw_value in source.items():
+            symbol = str(raw_symbol or "").upper().strip()
+            if not symbol or (targets and symbol not in targets):
+                continue
+            if list_values:
+                cleaned = clean_list(raw_value, limit=30)
+                if cleaned:
+                    result[symbol] = cleaned
+            else:
+                cleaned = str(raw_value or "").strip()
+                if cleaned:
+                    result[symbol] = cleaned[:160]
+        return dict(sorted(result.items()))
+
+    return {
+        "version": str(values.get("version") or REASONING_REQUEST_CONTEXT_VERSION),
+        "requestEventIds": clean_list(values.get("requestEventIds"), limit=80),
+        "sourceEventIds": clean_list(values.get("sourceEventIds"), limit=80),
+        "triggers": clean_list(values.get("triggers"), limit=20),
+        "factTypes": clean_list(values.get("factTypes"), limit=30),
+        "requestedScopeFamilies": clean_list(values.get("requestedScopeFamilies"), limit=30),
+        "targetSymbols": sorted(targets)[:80],
+        "sourceObservedAt": str(values.get("sourceObservedAt") or "").strip()[:80],
+        "changedFieldsBySymbol": symbol_map(values.get("changedFieldsBySymbol"), list_values=True),
+        "factRevisionsBySymbol": symbol_map(values.get("factRevisionsBySymbol"), list_values=False),
+    }
 
 
 def inference_reuse_scope_plan(scope_plan: Iterable[object], limit: int = 260) -> List[Dict[str, object]]:
@@ -190,6 +242,8 @@ def projection_result_summary(result: Dict[str, object]) -> Dict[str, object]:
     )
     prior_inference_reuse = dict(values.get("priorInferenceReuse") or {})
     native_stage_timings = dict(execution.get("typedbNativeStageTimings") or {})
+    replay_validation = dict(values.get("nativeReplayValidation") or {})
+    reasoning_context = compact_reasoning_request_context(values.get("reasoningContext"))
     return {
         "saved": bool(values.get("saved")),
         "status": str(values.get("status") or ""),
@@ -218,6 +272,16 @@ def projection_result_summary(result: Dict[str, object]) -> Dict[str, object]:
             "recomputedChangedScopeCount": int(prior_inference_reuse.get("recomputedChangedScopeCount") or 0),
         },
         "inferenceReuseProof": inference_reuse_proof,
+        "nativeReplayValidation": {
+            "version": str(replay_validation.get("version") or ""),
+            "status": str(replay_validation.get("status") or ""),
+            "reason": str(replay_validation.get("reason") or "")[:300],
+            "selectionApplied": bool(replay_validation.get("selectionApplied")),
+            "coverageComplete": bool(replay_validation.get("coverageComplete")),
+            "nativeEvaluationComplete": bool(replay_validation.get("nativeEvaluationComplete")),
+            "generationAligned": bool(replay_validation.get("generationAligned")),
+        },
+        "reasoningContext": reasoning_context,
         "entityCount": int(values.get("entityCount") or 0),
         "relationCount": int(values.get("relationCount") or 0),
         "activeAbox": {
@@ -381,6 +445,7 @@ def build_ontology_projection_run(
     graph_store: str,
     target_symbols: Iterable[object] = None,
     rulebox_metadata: Dict[str, object] = None,
+    reasoning_context: Mapping[str, object] = None,
     started_at: str = "",
 ) -> OntologyProjectionRun:
     worldview = dict(getattr(graph, "worldview", {}) or {})
@@ -413,6 +478,10 @@ def build_ontology_projection_run(
         if str((item.properties or {}).get("ontologyBox") or "ABox") == "ABox"
     ])
     rulebox = dict(rulebox_metadata or {})
+    compact_reasoning_context = compact_reasoning_request_context(
+        reasoning_context,
+        target_symbols=symbols,
+    )
     return OntologyProjectionRun(
         run_id=run_id,
         portfolio_id=str(graph.portfolio_id or snapshot.account_id or ""),
@@ -463,6 +532,7 @@ def build_ontology_projection_run(
                 "externalSignalKeys": sorted(list((snapshot.external_signals or {}).keys()))[:80],
             },
             "targetSymbols": symbols,
+            "reasoningRequest": compact_reasoning_context,
             "scopeTopology": {
                 "version": str(worldview.get("scopeTopologyVersion") or ""),
                 "scopeCount": len(worldview.get("scopePlan") or []),

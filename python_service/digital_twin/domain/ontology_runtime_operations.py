@@ -14,6 +14,7 @@ from typing import Dict, Iterable, List, Mapping
 
 ONTOLOGY_RUNTIME_OBSERVATION_VERSION = "ontology-runtime-observation-v1"
 NATIVE_RULE_TIMING_PROFILE_VERSION = "typedb-native-rule-timing-v1"
+NATIVE_REPLAY_VALIDATION_VERSION = "typedb-native-replay-validation-v1"
 
 
 def _text(value: object) -> str:
@@ -127,6 +128,126 @@ def _stage_timings(result: Mapping[str, object]) -> Dict[str, int]:
         _text(key): max(0, _integer(value))
         for key, value in values.items()
         if _text(key)
+    }
+
+
+def native_replay_validation(result: Mapping[str, object] = None) -> Dict[str, object]:
+    """Validate native-rule coverage without running a second rule engine.
+
+    A full TypeDB execution is complete by itself. A dependency-selected
+    execution can only be reused when the preceding complete native proof is
+    present and aligned. The function merely classifies persisted TypeDB
+    evidence; it never evaluates a RuleBox condition in Python.
+    """
+    values = dict(result or {}) if isinstance(result, Mapping) else {}
+    inference = values.get("inferenceBox")
+    inference = dict(inference or {}) if isinstance(inference, Mapping) else {}
+    execution = values.get("ruleboxExecution")
+    execution = dict(execution or {}) if isinstance(execution, Mapping) else {}
+    proof = values.get("inferenceReuseProof")
+    proof = dict(proof or {}) if isinstance(proof, Mapping) else {}
+    plan = values.get("inferenceImpactPlan")
+    plan = dict(plan or {}) if isinstance(plan, Mapping) else {}
+    projection_scope = values.get("projectionScope")
+    projection_scope = dict(projection_scope or {}) if isinstance(projection_scope, Mapping) else {}
+
+    selection_applied = bool(execution.get("nativeRuleSelectionApplied"))
+    native_evaluation_complete = bool(
+        inference.get("nativeTypeDbReasoningCompleted")
+        or inference.get("typedbNativeRuleEvaluationCompleted")
+        or execution.get("nativeInferenceEvaluationComplete")
+    )
+    generation_aligned = bool(inference.get("generationAligned"))
+    requested_symbols = {
+        _text(symbol).upper()
+        for symbol in (
+            inference.get("requestedSymbols")
+            or plan.get("inferenceTargetSymbols")
+            or projection_scope.get("targetSymbols")
+            or []
+        )
+        if _text(symbol)
+    }
+    actual_symbols = {
+        _text(symbol).upper()
+        for symbol in (inference.get("targetSymbols") or [])
+        if _text(symbol)
+    }
+    coverage_complete = not requested_symbols or requested_symbols.issubset(actual_symbols)
+    proof_verified = (
+        _text(proof.get("status")) == "verified"
+        and bool(proof.get("coverageComplete"))
+        and bool(proof.get("selectionApplied")) == selection_applied
+    )
+    if selection_applied:
+        verified = bool(
+            native_evaluation_complete
+            and generation_aligned
+            and coverage_complete
+            and proof_verified
+        )
+        status = "verified-prior-coverage" if verified else "incomplete-coverage"
+        if verified:
+            reason = "Dependency-selected native execution is backed by an aligned prior complete TypeDB proof."
+        elif not proof_verified:
+            reason = "Dependency-selected execution is missing an aligned prior complete TypeDB proof."
+        elif not coverage_complete:
+            reason = "Dependency-selected execution did not cover every requested target symbol."
+        elif not native_evaluation_complete:
+            reason = "TypeDB did not confirm native rule evaluation completion."
+        else:
+            reason = "TypeDB InferenceBox is not aligned with the active ABox generation."
+    else:
+        verified = bool(native_evaluation_complete and generation_aligned and coverage_complete)
+        status = "complete-native-evaluation" if verified else "incomplete-native-evaluation"
+        if verified:
+            reason = "Current ABox received a complete native TypeDB evaluation."
+        elif not coverage_complete:
+            reason = "Native execution did not cover every requested target symbol."
+        elif not native_evaluation_complete:
+            reason = "TypeDB did not confirm native rule evaluation completion."
+        else:
+            reason = "TypeDB InferenceBox is not aligned with the active ABox generation."
+    return {
+        "version": NATIVE_REPLAY_VALIDATION_VERSION,
+        "status": status,
+        "reason": reason,
+        "verified": verified,
+        "selectionApplied": selection_applied,
+        "coverageComplete": coverage_complete,
+        "nativeEvaluationComplete": native_evaluation_complete,
+        "generationAligned": generation_aligned,
+        "requestedTargetSymbolCount": len(requested_symbols),
+        "actualTargetSymbolCount": len(actual_symbols),
+        "priorProofStatus": _text(proof.get("status")),
+    }
+
+
+def _impact_diagnostics(plan: Mapping[str, object]) -> Dict[str, object]:
+    diagnostics = plan.get("diagnostics") if isinstance(plan, Mapping) else {}
+    diagnostics = dict(diagnostics or {}) if isinstance(diagnostics, Mapping) else {}
+    scope_types = [
+        {
+            "type": _text(item.get("type")),
+            "label": _text(item.get("label")),
+            "count": max(0, _integer(item.get("count"))),
+        }
+        for item in diagnostics.get("globalScopeTypes") or []
+        if isinstance(item, Mapping)
+    ]
+    return {
+        "classification": _text(diagnostics.get("classification")),
+        "reasonCodes": [_text(item) for item in diagnostics.get("reasonCodes") or [] if _text(item)][:20],
+        "globalScopeCount": max(0, _integer(diagnostics.get("globalScopeCount"))),
+        "globalScopeTypes": scope_types[:12],
+        "candidateRuleRatioPct": max(0.0, _number(diagnostics.get("candidateRuleRatioPct"))),
+        "candidateSubsetAvailable": bool(diagnostics.get("candidateSubsetAvailable")),
+        "selectionEligibilityReason": _text(diagnostics.get("selectionEligibilityReason")),
+        "eventScopeAgreement": _text(diagnostics.get("eventScopeAgreement")),
+        "eventFactFamilies": [_text(item) for item in diagnostics.get("eventFactFamilies") or [] if _text(item)][:20],
+        "unexpectedChangedFamilies": [
+            _text(item) for item in diagnostics.get("unexpectedChangedFamilies") or [] if _text(item)
+        ][:20],
     }
 
 
@@ -289,6 +410,13 @@ def build_projection_runtime_observation(
     stages = _stage_timings(values)
     native_rule_timing = native_rule_timing_profile(execution)
     delta = _scope_delta(plan)
+    impact_diagnostics = _impact_diagnostics(plan)
+    replay_validation = values.get("nativeReplayValidation")
+    replay_validation = (
+        dict(replay_validation)
+        if isinstance(replay_validation, Mapping)
+        else native_replay_validation(values)
+    )
     duration_ms = iso_duration_ms(
         getattr(projection_run, "started_at", ""),
         getattr(projection_run, "completed_at", ""),
@@ -351,6 +479,7 @@ def build_projection_runtime_observation(
             "families": list(plan.get("changedScopeFamilies") or []),
             "dependencyAffectedFamilies": list(delta.get("dependencyAffectedScopeFamilies") or []),
             "globalImpact": bool(plan.get("globalImpact")),
+            "impactDiagnostics": impact_diagnostics,
         },
         "inference": {
             "status": _text(inference.get("status")),
@@ -365,6 +494,12 @@ def build_projection_runtime_observation(
             "notEvaluatedSymbols": not_evaluated_symbols[:20],
             "targetCoverageStatus": target_coverage_status,
             "candidateRuleCount": _integer(plan.get("candidateRuleCount")),
+            "enabledRuleCount": _integer(plan.get("enabledRuleCount")),
+            "candidateRuleRatioPct": _number(impact_diagnostics.get("candidateRuleRatioPct")),
+            "nativeRuleSelectionEligibilityReason": _text(
+                plan.get("nativeRuleSelectionEligibilityReason")
+                or impact_diagnostics.get("selectionEligibilityReason")
+            ),
             "executedRuleCount": _integer(
                 execution.get("typedbNativeRuleExecutedCount")
                 or execution.get("nativeRuleSelectionExecutedCount")
@@ -378,6 +513,16 @@ def build_projection_runtime_observation(
             "entityCount": _integer(inference.get("entityCount")),
             "executionStatus": _text(execution.get("status")),
             "nativeRuleTiming": native_rule_timing,
+            "replayValidation": {
+                "version": _text(replay_validation.get("version")),
+                "status": _text(replay_validation.get("status")),
+                "reason": _text(replay_validation.get("reason"))[:300],
+                "verified": bool(replay_validation.get("verified")),
+                "selectionApplied": bool(replay_validation.get("selectionApplied")),
+                "coverageComplete": bool(replay_validation.get("coverageComplete")),
+                "nativeEvaluationComplete": bool(replay_validation.get("nativeEvaluationComplete")),
+                "generationAligned": bool(replay_validation.get("generationAligned")),
+            },
         },
         "abox": {
             "snapshotId": _text(values.get("aboxSnapshotId") or getattr(projection_run, "abox_snapshot_id", "")),

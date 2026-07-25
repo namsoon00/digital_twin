@@ -2,6 +2,7 @@ import unittest
 
 from digital_twin.domain.ontology_change_impact import (
     build_inference_impact_plan,
+    compact_inference_impact_plan,
     family_for_relation,
     rule_condition_dependency_profile,
     rule_dependency_profile,
@@ -405,6 +406,82 @@ class OntologyChangeImpactTests(unittest.TestCase):
         self.assertIn("graph.price.reclaim.thesis_support.v1", plan["candidateRuleIds"])
         self.assertNotIn("graph.liquidity.execution_guard.v1", plan["candidateRuleIds"])
 
+    def test_complete_candidate_catalog_skips_unnecessary_reuse_read_and_explains_global_context(self):
+        before = [
+            {"scopeId": "macro:rates", "generationId": "rates-a"},
+            {"scopeId": "portfolio:main", "generationId": "portfolio-a"},
+        ]
+        after = [
+            {"scopeId": "macro:rates", "generationId": "rates-b"},
+            {"scopeId": "portfolio:main", "generationId": "portfolio-b"},
+        ]
+        rules = [{
+            "ruleId": "graph.test.broad.v1",
+            "conditions": [{
+                "conditionId": "macro-rate",
+                "kind": "relation",
+                "relationType": "HAS_INTEREST_RATE",
+                "targetKind": "interest-rate",
+            }],
+        }]
+
+        plan = build_inference_impact_plan(
+            before,
+            after,
+            ["005930"],
+            explicit_target_symbols=["005930"],
+            rules=rules,
+            requested_fact_families=["macro-rates", "portfolio"],
+        )
+
+        self.assertTrue(plan["globalImpact"])
+        self.assertTrue(plan["boundedGlobalContext"])
+        self.assertEqual(1, plan["candidateRuleCount"])
+        self.assertEqual(1, plan["enabledRuleCount"])
+        self.assertFalse(plan["nativeRuleSelectionEligible"])
+        self.assertEqual(
+            "candidate-rules-cover-complete-catalog",
+            plan["nativeRuleSelectionEligibilityReason"],
+        )
+        diagnostics = plan["diagnostics"]
+        self.assertEqual("target-scoped-global-context", diagnostics["classification"])
+        self.assertEqual(100.0, diagnostics["candidateRuleRatioPct"])
+        self.assertIn("candidate-catalog-is-complete", diagnostics["reasonCodes"])
+        self.assertEqual("aligned", diagnostics["eventScopeAgreement"])
+        self.assertEqual(
+            ["macro", "portfolio"],
+            [item["type"] for item in diagnostics["globalScopeTypes"]],
+        )
+
+        compact = compact_inference_impact_plan(plan)
+        self.assertEqual("target-scoped-global-context", compact["diagnostics"]["classification"])
+        self.assertEqual(1, compact["diagnostics"]["enabledRuleCount"])
+        self.assertEqual("aligned", compact["diagnostics"]["eventScopeAgreement"])
+
+    def test_impact_diagnostics_marks_snapshot_families_broader_than_event(self):
+        before = [{"scopeId": "symbol:005930:market", "generationId": "market-a"}]
+        after = [{"scopeId": "symbol:005930:market", "generationId": "market-b"}]
+        plan = build_inference_impact_plan(
+            before,
+            after,
+            ["005930"],
+            rules=[],
+            requested_fact_families=["flow"],
+        )
+
+        self.assertEqual("snapshot-broader-than-event", plan["diagnostics"]["eventScopeAgreement"])
+        self.assertEqual(["market"], plan["diagnostics"]["unexpectedChangedFamilies"])
+
+    def test_compact_impact_plan_ignores_malformed_diagnostics(self):
+        compact = compact_inference_impact_plan({
+            "version": "test",
+            "diagnostics": "not-a-mapping",
+        })
+
+        self.assertEqual("", compact["diagnostics"]["classification"])
+        self.assertEqual([], compact["diagnostics"]["reasonCodes"])
+        self.assertEqual(0, compact["diagnostics"]["globalScopeCount"])
+
     def test_unknown_abox_property_keeps_its_entity_fact_family(self):
         graph = self.scope_graph()
         flow = next(item for item in graph.entities if item.entity_id == "flow-metric:005930:volume")
@@ -658,7 +735,7 @@ class OntologyChangeImpactTests(unittest.TestCase):
 
         trace = inference.entities[0]
         self.assertEqual("inference:test", trace.properties["inferenceGenerationId"])
-        self.assertEqual("abox-change-impact-v4", trace.properties["impactPlanVersion"])
+        self.assertEqual("abox-change-impact-v5", trace.properties["impactPlanVersion"])
         self.assertEqual(["005930"], trace.properties["inferenceImpactPlan"]["inferenceTargetSymbols"])
         self.assertEqual("dependency-selected-native-evaluation", trace.properties["ruleExecutionScope"])
         self.assertFalse(trace.properties["nativeRuleSelectionApplied"])

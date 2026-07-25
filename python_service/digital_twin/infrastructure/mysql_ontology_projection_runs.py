@@ -12,26 +12,104 @@ from .settings import utc_now
 class MySQLOntologyProjectionRunStore(MySQLOperationalConnection):
     """Durable MySQL audit for the source data behind an active ABox generation."""
 
+    def projection_audit_stale_after_seconds(self) -> int:
+        """Return the recovery boundary for an interrupted projection audit.
+
+        A fixed thirty-minute cutoff can leave a stopped local worker blocking
+        recovery long after its own TypeDB timeout has elapsed. By default the
+        boundary follows that execution contract plus a small handoff buffer.
+        An explicit runtime value overrides it for an operator-managed host.
+        """
+        settings = getattr(self, "runtime_settings", {}) or {}
+
+        def seconds(key: str, fallback: int) -> int:
+            try:
+                value = int(float(str(settings.get(key) or "").strip()))
+            except (TypeError, ValueError):
+                value = fallback
+            return max(0, min(24 * 60 * 60, value))
+
+        configured = seconds("ontologyProjectionAuditStaleAfterSeconds", 0)
+        if configured:
+            return max(120, min(3600, configured))
+        execution_timeout = seconds("ontologyReasoningExecutionTimeoutSeconds", 240) or 240
+        execution_grace = seconds("ontologyReasoningExecutionTimeoutGraceSeconds", 10)
+        return max(120, min(3600, execution_timeout + execution_grace + 60))
+
+    def _recover_stale_runs(
+        self,
+        connection,
+        stamp: str,
+        world_id: str = "",
+        stale_after_seconds: int = 0,
+    ) -> Dict[str, object]:
+        stale_after = int(stale_after_seconds or self.projection_audit_stale_after_seconds())
+        stale_after = max(120, min(3600, stale_after))
+        cutoff = (datetime.now(timezone.utc) - timedelta(seconds=stale_after)).isoformat().replace("+00:00", "Z")
+        clauses = ["status = 'projecting'", "started_at < %s"]
+        params: List[object] = [cutoff]
+        clean_world_id = str(world_id or "").strip()
+        if clean_world_id:
+            clauses.append("world_id = %s")
+            params.append(clean_world_id)
+        cursor = connection.execute(
+            """
+            UPDATE ontology_projection_runs
+            SET status = 'aborted-stale', completed_at = %s, updated_at = %s,
+                result_payload_json = %s
+            WHERE """ + " AND ".join(clauses),
+            (
+                stamp,
+                stamp,
+                json_dumps({
+                    "status": "aborted-stale",
+                    "reason": "Projection worker ended before activation was audited.",
+                    "staleAfterSeconds": stale_after,
+                }),
+                *params,
+            ),
+        )
+        try:
+            aborted_count = max(0, int(getattr(cursor, "rowcount", 0) or 0))
+        except (TypeError, ValueError):
+            aborted_count = 0
+        return {
+            "status": "ok",
+            "worldId": clean_world_id,
+            "staleAfterSeconds": stale_after,
+            "cutoff": cutoff,
+            "abortedCount": aborted_count,
+        }
+
+    def recover_stale_runs(
+        self,
+        world_id: str = "",
+        stale_after_seconds: int = 0,
+    ) -> Dict[str, object]:
+        """Mark only elapsed in-progress audit rows as recoverable.
+
+        This never mutates TypeDB. The recorder still requires an aligned
+        active ABox/InferenceBox before it treats an interrupted run as
+        recovered.
+        """
+        stamp = utc_now()
+        with self.transaction() as connection:
+            recovery = self._recover_stale_runs(
+                connection,
+                stamp,
+                world_id=world_id,
+                stale_after_seconds=stale_after_seconds,
+            )
+        self.last_stale_recovery = dict(recovery)
+        return recovery
+
     def begin(self, run: OntologyProjectionRun) -> OntologyProjectionRun:
         stamp = utc_now()
         with self.transaction() as connection:
-            cutoff = (datetime.now(timezone.utc) - timedelta(minutes=30)).isoformat().replace("+00:00", "Z")
-            connection.execute(
-                """
-                UPDATE ontology_projection_runs
-                SET status = 'aborted-stale', completed_at = %s, updated_at = %s,
-                    result_payload_json = %s
-                WHERE status = 'projecting' AND started_at < %s
-                """,
-                (
-                    stamp,
-                    stamp,
-                    json_dumps({
-                        "status": "aborted-stale",
-                        "reason": "Projection worker ended before activation was audited.",
-                    }),
-                    cutoff,
-                ),
+            self.last_stale_recovery = self._recover_stale_runs(
+                connection,
+                stamp,
+                world_id=str(run.world_id or ""),
             )
             connection.execute(
                 """
@@ -176,7 +254,18 @@ class MySQLOntologyProjectionRunStore(MySQLOperationalConnection):
             observation = result.get("runtimeObservation") if isinstance(result, dict) else {}
             if isinstance(observation, dict) and observation:
                 observations.append(observation)
-        return summarize_projection_runtime_observations(observations, self.runtime_settings)
+        summary = summarize_projection_runtime_observations(
+            observations,
+            getattr(self, "runtime_settings", {}) or {},
+        )
+        statuses = [str(row.get("status") or "") for row in rows]
+        summary["auditHealth"] = {
+            "staleAfterSeconds": self.projection_audit_stale_after_seconds(),
+            "windowProjectingCount": sum(1 for status in statuses if status == "projecting"),
+            "windowAbortedStaleCount": sum(1 for status in statuses if status == "aborted-stale"),
+            "lastRecovery": dict(getattr(self, "last_stale_recovery", {}) or {}),
+        }
+        return summary
 
     def values(self, run: OntologyProjectionRun, stamp: str):
         return (

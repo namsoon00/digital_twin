@@ -213,6 +213,13 @@ class HypothesisResearchPlanningTests(unittest.TestCase):
                 "sourceTrustState": "trusted",
                 "dataState": "sufficient",
                 "validationState": "ready",
+                "officialDocumentText": (
+                    "이 공시는 삼성전자의 주요사항을 설명하는 공식 원문입니다. "
+                    "투자자가 확인해야 할 계약 조건, 일정, 재무 영향과 위험 요인을 "
+                    "공식 문서 기준으로 충분히 제공합니다. 회사는 이번 사항의 적용 "
+                    "범위와 예상되는 변동 요인을 함께 설명했으며, 원문 확인을 위한 "
+                    "필수 사실을 빠짐없이 기재했습니다."
+                ),
             },
         )
         store = MemoryEvidenceStore()
@@ -253,6 +260,13 @@ class HypothesisResearchPlanningTests(unittest.TestCase):
                 "sourceTrustState": "trusted",
                 "dataState": "sufficient",
                 "validationState": "ready",
+                "officialDocumentText": (
+                    "기존 공시 원문에는 회사의 주요 변경사항과 투자자 확인 항목이 "
+                    "기재되어 있습니다. 제목이나 메타데이터가 아닌 공식 본문을 "
+                    "수집한 검증 가능한 공시 사례입니다. 본문에는 적용 일정과 주요 "
+                    "계약 조건, 회사가 밝힌 위험 요인 및 후속 확인 항목이 포함되어 "
+                    "있어 연구 근거로 사용할 수 있습니다."
+                ),
             },
         )
         advisor = FixedPlanner(self.valid_guidance())

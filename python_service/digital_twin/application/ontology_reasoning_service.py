@@ -5,6 +5,8 @@ from datetime import datetime, timezone
 from typing import Callable, Dict, Iterable, List, Tuple
 
 from ..domain.events import DomainEvent, ONTOLOGY_REASONING_REQUESTED, ontology_reasoning_completed_event
+from ..domain.ontology_change_impact import requested_scope_families_for_event_fact_types
+from ..domain.ontology_runtime_operations import native_replay_validation
 from ..domain.investment_evidence_governance import (
     ReasoningGeneration,
     ResearchReasoningHandoff,
@@ -68,6 +70,86 @@ def event_fact_revision(event: object, symbol: str) -> str:
 def event_changed_count(event: object) -> int:
     payload = event_payload(event)
     return int(float_value(payload.get("changedCount"), 0.0) or 0)
+
+
+def reasoning_request_provenance(
+    events: Iterable[object],
+    target_symbols: Iterable[object] = None,
+) -> Dict[str, object]:
+    """Create bounded scheduler provenance for a TypeDB projection audit.
+
+    This records which source updates asked for a cycle. It is operational
+    context only: native TypeDB rules still evaluate the current ABox without
+    using this payload as a rule condition.
+    """
+    targets = {
+        str(symbol or "").upper().strip()
+        for symbol in target_symbols or []
+        if str(symbol or "").strip()
+    }
+    request_event_ids, source_event_ids, triggers, fact_types, observed_at = set(), set(), set(), set(), []
+    changed_fields: Dict[str, set] = {}
+    revisions: Dict[str, str] = {}
+    for event in events or []:
+        payload = event_payload(event)
+        event_id = str(getattr(event, "event_id", "") or "").strip()
+        if event_id:
+            request_event_ids.add(event_id)
+        source_event_id = str(payload.get("sourceEventId") or "").strip()
+        if source_event_id:
+            source_event_ids.add(source_event_id)
+        trigger = str(payload.get("trigger") or "").strip()
+        if trigger:
+            triggers.add(trigger)
+        for fact_type in payload.get("factTypes") or []:
+            clean_fact_type = str(fact_type or "").strip()
+            if clean_fact_type:
+                fact_types.add(clean_fact_type)
+        for key in ["sourceObservedAt", "sourceAsOf", "observedAt", "generatedAt", "collectedAt"]:
+            stamp = str(payload.get(key) or "").strip()
+            if stamp:
+                observed_at.append(stamp)
+                break
+        raw_fields = payload.get("changedFieldsBySymbol")
+        raw_fields = raw_fields if isinstance(raw_fields, dict) else {}
+        raw_revisions = payload.get("factRevisionsBySymbol")
+        raw_revisions = raw_revisions if isinstance(raw_revisions, dict) else {}
+        event_targets = targets or set(event_symbols(event))
+        for raw_symbol, fields in raw_fields.items():
+            symbol = str(raw_symbol or "").upper().strip()
+            if not symbol or (event_targets and symbol not in event_targets):
+                continue
+            if not isinstance(fields, (list, tuple, set)):
+                continue
+            changed_fields.setdefault(symbol, set()).update(
+                str(field or "").strip()
+                for field in fields
+                if str(field or "").strip()
+            )
+        for raw_symbol, revision in raw_revisions.items():
+            symbol = str(raw_symbol or "").upper().strip()
+            if not symbol or (event_targets and symbol not in event_targets):
+                continue
+            clean_revision = str(revision or "").strip()
+            if clean_revision:
+                revisions[symbol] = clean_revision[:160]
+    ordered_fact_types = sorted(fact_types)
+    return {
+        "version": "reasoning-request-context-v1",
+        "requestEventIds": sorted(request_event_ids)[:80],
+        "sourceEventIds": sorted(source_event_ids)[:80],
+        "triggers": sorted(triggers)[:20],
+        "factTypes": ordered_fact_types[:30],
+        "requestedScopeFamilies": requested_scope_families_for_event_fact_types(ordered_fact_types),
+        "targetSymbols": sorted(targets)[:80],
+        "sourceObservedAt": max(observed_at) if observed_at else "",
+        "changedFieldsBySymbol": {
+            symbol: sorted(values)[:30]
+            for symbol, values in sorted(changed_fields.items())
+            if values
+        },
+        "factRevisionsBySymbol": dict(sorted(revisions.items())),
+    }
 
 
 REVIEW_LEVEL_ORDER = {
@@ -205,6 +287,28 @@ def realtime_coalescing_key(event: object) -> Tuple[str, str, Tuple[str, ...]]:
     # same symbols and fact family.
     account_scope = ",".join(sorted(account_ids)) or "market"
     return account_scope, trigger, fact_types
+
+
+def event_work_class(event: object) -> str:
+    """Classify scheduler work for operational visibility only."""
+    payload = event_payload(event)
+    trigger = str(payload.get("trigger") or "").strip().lower()
+    fact_types = {
+        str(item or "").strip().lower()
+        for item in payload.get("factTypes") or []
+        if str(item or "").strip()
+    }
+    if not event_symbols(event):
+        return "global"
+    if "research" in trigger or fact_types & {"researchevidence", "verifiedclaim", "verificationrun", "newsevent"}:
+        return "research"
+    if trigger in COALESCIBLE_REALTIME_TRIGGERS or fact_types & {
+        "marketquote", "technicalindicator", "executionflow", "orderbook",
+    }:
+        return "realtime-market"
+    if "portfolio" in trigger or fact_types & {"portfoliosnapshot"}:
+        return "portfolio"
+    return "other"
 
 
 class OntologyReasoningRunner:
@@ -1516,6 +1620,11 @@ class OntologyReasoningRunner:
             # asks for another. Keep the event pending for that target rather
             # than misclassifying the read as a verified no-signal.
             "not-evaluated",
+            # A dependency-selected TypeDB pass may only be delivered after
+            # its prior complete native coverage was persisted and verified.
+            # Hold the source request for a safe retry instead of treating it
+            # as an investment-engine failure.
+            "incomplete-native-coverage",
         }
         transient_failure_statuses = {
             "error",
@@ -1599,6 +1708,22 @@ class OntologyReasoningRunner:
                         "empty-unverified",
                         "TypeDB native rule no-match 결과에 현재 ABox 세대 완료 증거가 없습니다.",
                     )
+                    continue
+            if bool(execution.get("nativeRuleSelectionApplied")):
+                replay_validation = result.get("nativeReplayValidation")
+                replay_validation = (
+                    dict(replay_validation)
+                    if isinstance(replay_validation, dict)
+                    else native_replay_validation(result)
+                )
+                if str(replay_validation.get("status") or "") != "verified-prior-coverage":
+                    add_result(
+                        account_id,
+                        "native-rule-coverage",
+                        "incomplete-native-coverage",
+                        replay_validation.get("reason")
+                        or "Dependency-selected TypeDB execution lacks a verified complete coverage proof.",
+                    )
         if failures:
             first = failures[0]
             return {
@@ -1659,6 +1784,8 @@ class OntologyReasoningRunner:
         stages = observation.get("stages") if isinstance(observation.get("stages"), dict) else {}
         inference = observation.get("inference") if isinstance(observation.get("inference"), dict) else {}
         scope = observation.get("scope") if isinstance(observation.get("scope"), dict) else {}
+        impact = scope.get("impactDiagnostics") if isinstance(scope.get("impactDiagnostics"), dict) else {}
+        replay = inference.get("replayValidation") if isinstance(inference.get("replayValidation"), dict) else {}
         return {
             "durationMs": int(float_value(observation.get("durationMs"), 0.0)),
             "nativeInferenceMs": int(float_value(
@@ -1693,10 +1820,97 @@ class OntologyReasoningRunner:
             )),
             "targetCoverageStatus": str(inference.get("targetCoverageStatus") or ""),
             "candidateRuleCount": int(float_value(inference.get("candidateRuleCount"), 0.0)),
+            "enabledRuleCount": int(float_value(inference.get("enabledRuleCount"), 0.0)),
+            "candidateRuleRatioPct": float(float_value(inference.get("candidateRuleRatioPct"), 0.0)),
             "executedRuleCount": int(float_value(inference.get("executedRuleCount"), 0.0)),
             "affectedScopeCount": int(float_value(scope.get("affectedScopeCount"), 0.0)),
             "directChangedScopeCount": int(float_value(scope.get("directChangedScopeCount"), 0.0)),
             "globalImpact": bool(scope.get("globalImpact")),
+            "globalImpactDiagnostics": {
+                "classification": str(impact.get("classification") or ""),
+                "reasonCodes": list(impact.get("reasonCodes") or [])[:12],
+                "globalScopeCount": int(float_value(impact.get("globalScopeCount"), 0.0)),
+                "globalScopeTypes": list(impact.get("globalScopeTypes") or [])[:8],
+                "eventScopeAgreement": str(impact.get("eventScopeAgreement") or ""),
+            },
+            "replayValidation": {
+                "status": str(replay.get("status") or ""),
+                "verified": bool(replay.get("verified")),
+                "selectionApplied": bool(replay.get("selectionApplied")),
+                "coverageComplete": bool(replay.get("coverageComplete")),
+            },
+        }
+
+    def queue_dispatch_summary(
+        self,
+        requests: Iterable[object],
+        selected_requests: Iterable[object] = None,
+        selected_symbols: Iterable[str] = None,
+        cursor_payload: Dict[str, object] = None,
+        fairness_drain: Dict[str, object] = None,
+        omitted_symbol_count: int = 0,
+    ) -> Dict[str, object]:
+        """Expose the existing adaptive scheduler without changing priority.
+
+        The queue already applies coalescing, materiality, per-symbol cadence,
+        runtime backpressure, and fairness draining. This summary tells an
+        operator which of those controls selected the next bounded turn.
+        """
+        pending = list(requests or [])
+        selected = list(selected_requests or [])
+        payload = self.cursor_payload() if cursor_payload is None else dict(cursor_payload or {})
+        selected_symbols = [
+            str(symbol or "").upper().strip()
+            for symbol in selected_symbols or []
+            if str(symbol or "").strip()
+        ]
+        classes = ["research", "realtime-market", "portfolio", "global", "other"]
+        pending_counts = {work_class: 0 for work_class in classes}
+        selected_counts = {work_class: 0 for work_class in classes}
+        observed_at = []
+        for event in pending:
+            pending_counts[event_work_class(event)] += 1
+            stamp = self.event_source_observed_at(event)
+            if stamp:
+                observed_at.append(stamp)
+        for event in selected:
+            selected_counts[event_work_class(event)] += 1
+        fairness = fairness_drain or self.fairness_drain_state(selected_symbols, payload)
+        configured_interval = self.projection_min_interval_seconds(pending)
+        effective_interval = self.effective_projection_min_interval_seconds(
+            pending,
+            payload,
+            selected_symbols,
+        )
+        backpressure_active = bool(
+            self.projection_backpressure_enabled()
+            and effective_interval > configured_interval
+        )
+        selected_classes = [
+            work_class for work_class in classes
+            if selected_counts[work_class]
+        ]
+        if bool(fairness.get("active")):
+            mode = "fairness-drain"
+        elif backpressure_active:
+            mode = "runtime-backpressure"
+        elif selected_classes:
+            mode = "priority-selected"
+        else:
+            mode = "waiting"
+        return {
+            "mode": mode,
+            "pendingByClass": pending_counts,
+            "selectedByClass": selected_counts,
+            "selectedWorkClasses": selected_classes,
+            "selectedSymbols": selected_symbols[:20],
+            "omittedSymbolCount": max(0, int(omitted_symbol_count or 0)),
+            "fairnessDrainActive": bool(fairness.get("active")),
+            "fairnessDrainReason": str(fairness.get("reason") or ""),
+            "backpressureActive": backpressure_active,
+            "configuredIntervalSeconds": configured_interval,
+            "effectiveIntervalSeconds": effective_interval,
+            "oldestSourceObservedAt": min(observed_at) if observed_at else "",
         }
 
     def projection_alert_outcomes(self, monitor_runner) -> List[Dict[str, object]]:
@@ -1994,10 +2208,24 @@ class OntologyReasoningRunner:
                     "durationMs", "impactPlanningMs", "aboxPersistenceMs", "nativeInferenceMs",
                     "aboxChangedScopeQueryCount", "aboxManifestVerificationReadCount",
                     "aboxReusedPhysicalRowCount", "aboxInsertedNodeCount", "aboxInsertedRelationCount",
-                    "status", "targetSymbolCount", "candidateRuleCount", "executedRuleCount",
-                    "affectedScopeCount", "directChangedScopeCount", "globalImpact",
+                    "status", "targetSymbolCount", "candidateRuleCount", "enabledRuleCount",
+                    "candidateRuleRatioPct", "executedRuleCount", "affectedScopeCount",
+                    "directChangedScopeCount", "globalImpact", "globalImpactDiagnostics",
+                    "replayValidation",
                 ]
                 if key in projection_runtime
+            }
+        queue_dispatch = result.get("queueDispatch")
+        if isinstance(queue_dispatch, dict):
+            summary["queueDispatch"] = {
+                key: queue_dispatch.get(key)
+                for key in [
+                    "mode", "selectedWorkClasses", "selectedSymbols", "omittedSymbolCount",
+                    "fairnessDrainActive", "fairnessDrainReason", "backpressureActive",
+                    "configuredIntervalSeconds", "effectiveIntervalSeconds",
+                    "oldestSourceObservedAt",
+                ]
+                if key in queue_dispatch
             }
         mailbox = result.get("mailbox")
         if isinstance(mailbox, dict):
@@ -2060,6 +2288,7 @@ class OntologyReasoningRunner:
                 "discarded": list(terminal_mailbox.get("discarded") or []) + list(stale_terminal.get("discarded") or []),
             },
         }
+        queue_metadata["queueDispatch"] = self.queue_dispatch_summary(requests)
         if not requests:
             maintenance = self.run_maintenance_if_due(force=force)
             return {
@@ -2108,6 +2337,13 @@ class OntologyReasoningRunner:
             event for event in requests
             if str(getattr(event, "event_id", "") or "").strip() in selected_request_ids
         ]
+        queue_metadata["queueDispatch"] = self.queue_dispatch_summary(
+            requests,
+            selected_requests,
+            symbols,
+            omitted_symbol_count=omitted_symbol_count,
+        )
+        reasoning_context = reasoning_request_provenance(selected_requests, symbols)
         # A pending mailbox slot can be temporarily ineligible because its
         # symbol-level interval or retry protection has not elapsed.  Never
         # invoke the monitor with an empty subject filter in that case: older
@@ -2151,6 +2387,14 @@ class OntologyReasoningRunner:
                     **queue_metadata,
                 }
         fairness_drain = self.fairness_drain_state(symbols, cursor_payload)
+        queue_metadata["queueDispatch"] = self.queue_dispatch_summary(
+            requests,
+            selected_requests,
+            symbols,
+            cursor_payload=cursor_payload,
+            fairness_drain=fairness_drain,
+            omitted_symbol_count=omitted_symbol_count,
+        )
         if not force and not self.projection_due(requests, cursor_payload, symbols):
             retry_after_seconds = self.projection_cooldown_remaining_seconds(requests, cursor_payload, symbols)
             return {
@@ -2171,10 +2415,17 @@ class OntologyReasoningRunner:
                 **queue_metadata,
             }
         runner = self.monitor_runner_factory()
-        if "symbol_filter" in inspect.signature(runner.run_once).parameters:
-            alerts = runner.run_once(force=force, symbol_filter=symbols)
-        else:
-            alerts = runner.run_once(force=force)
+        runner_parameters = inspect.signature(runner.run_once).parameters
+        runner_accepts_kwargs = any(
+            parameter.kind == inspect.Parameter.VAR_KEYWORD
+            for parameter in runner_parameters.values()
+        )
+        runner_kwargs = {"force": force}
+        if "symbol_filter" in runner_parameters or runner_accepts_kwargs:
+            runner_kwargs["symbol_filter"] = symbols
+        if "reasoning_context" in runner_parameters or runner_accepts_kwargs:
+            runner_kwargs["reasoning_context"] = reasoning_context
+        alerts = runner.run_once(**runner_kwargs)
         projection_gate = self.projection_gate(runner)
         if not projection_gate.get("ready"):
             self.mark_projection_attempt(symbols)
@@ -2192,6 +2443,7 @@ class OntologyReasoningRunner:
                     "deferredReason": str(projection_gate.get("reason") or "TypeDB graph cycle is serialized by another writer."),
                     "projectionFailures": list(projection_gate.get("results") or []),
                     "projectionCircuit": self.projection_circuit_state(),
+                    "reasoningContext": reasoning_context,
                     "coalescedEventCount": len(durable_superseded_ids),
                     **queue_metadata,
                 }
@@ -2212,6 +2464,7 @@ class OntologyReasoningRunner:
                 "deferredReason": str(projection_gate.get("reason") or "TypeDB graph cycle is not ready."),
                 "projectionFailures": list(projection_gate.get("results") or []),
                 "projectionCircuit": circuit,
+                "reasoningContext": reasoning_context,
                 "coalescedEventCount": len(durable_superseded_ids),
                 **queue_metadata,
             }
@@ -2323,6 +2576,7 @@ class OntologyReasoningRunner:
             "researchGenerationRefresh": research_refresh,
             "projectionOutcomes": projection_outcomes,
             "lastProjectionRuntime": self.last_projection_runtime(),
+            "reasoningContext": reasoning_context,
             "mailboxAcknowledgeError": mailbox_ack_error,
             "deferredReason": (
                 "검증 근거가 같은 계정 월드의 새 ABox/InferenceBox 세대에 정렬될 때까지 해당 리서치 요청을 유지합니다."
@@ -2556,10 +2810,27 @@ class OntologyReasoningRunner:
         pending = list(work.get("requests") or [])
         cursor_payload = self.cursor_payload()
         progress = self.event_symbol_progress()
-        _batches, next_symbols, omitted_count = self.request_symbol_batches(pending)
+        batches, next_symbols, omitted_count = self.request_symbol_batches(pending)
+        selected_request_ids = {
+            str(event_id or "").strip()
+            for event_id in batches
+            if str(event_id or "").strip()
+        }
+        selected_requests = [
+            event for event in pending
+            if str(getattr(event, "event_id", "") or "").strip() in selected_request_ids
+        ]
         pending_symbols = self.request_symbols(pending)
         fairness_queue = self.fairness_queue(pending_symbols, cursor_payload)
         fairness_drain = self.fairness_drain_state(next_symbols, cursor_payload)
+        queue_dispatch = self.queue_dispatch_summary(
+            pending,
+            selected_requests,
+            next_symbols,
+            cursor_payload=cursor_payload,
+            fairness_drain=fairness_drain,
+            omitted_symbol_count=omitted_count,
+        )
         storage_guard = self.storage_guard_state()
         projection_circuit = self.projection_circuit_state()
         execution_timeout_guard = self.execution_timeout_guard_state(cursor_payload)
@@ -2634,5 +2905,6 @@ class OntologyReasoningRunner:
             "executionTimeoutRetryAfterSeconds": execution_timeout_remaining,
             "storageGuard": storage_guard,
             "queueHealth": {"status": queue_status, "reason": queue_reason},
+            "queueDispatch": queue_dispatch,
             "executionTelemetry": self.execution_telemetry(cursor_payload),
         }

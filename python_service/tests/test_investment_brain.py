@@ -285,6 +285,14 @@ class FakeExternalSignalProvider:
                     "reportName": "주요사항보고서",
                     "receiptNo": "202607190001",
                     "receiptDate": "20260719",
+                    "documentText": (
+                        "삼성전자 주요사항보고서 원문입니다. 회사가 공시한 계약과 "
+                        "재무 영향, 투자자 유의사항을 포함하며 제목만으로 판단하지 "
+                        "않도록 충분한 본문 내용을 제공합니다. 공시 적용 일정과 "
+                        "핵심 조건, 회사가 밝힌 위험 요인 및 후속 확인 항목도 "
+                        "공식 문서에서 확인할 수 있습니다."
+                    ),
+                    "documentTextQuality": "body",
                 }
             },
             "statuses": [{"source": "OpenDART", "ok": True}],

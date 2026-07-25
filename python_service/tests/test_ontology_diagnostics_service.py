@@ -173,17 +173,38 @@ class FakeProjectionRunStore:
             "latest": {
                 "runId": "ontology-projection:test",
                 "durationMs": 800,
+                "scope": {
+                    "directChangedScopeCount": 1,
+                    "affectedScopeCount": 3,
+                    "globalImpact": True,
+                    "impactDiagnostics": {
+                        "classification": "shared-context-impact",
+                        "eventScopeAgreement": "aligned",
+                        "globalScopeTypes": [{"type": "macro", "label": "거시", "count": 2}],
+                    },
+                },
                 "inference": {
                     "status": "ok",
                     "candidateRuleCount": 4,
+                    "enabledRuleCount": 8,
+                    "candidateRuleRatioPct": 50,
                     "executedRuleCount": 2,
                     "deferredRuleCount": 1,
+                    "nativeRuleSelectionEligibilityReason": "candidate-subset-available",
+                    "replayValidation": {
+                        "status": "complete-native-evaluation",
+                        "verified": True,
+                        "coverageComplete": True,
+                        "nativeEvaluationComplete": True,
+                        "generationAligned": True,
+                    },
                     "nativeRuleTiming": {
                         "aggregateQueryDurationMs": 120,
                         "slowestRules": [{"ruleId": "graph.test", "elapsedMs": 80}],
                     },
                 },
             },
+            "auditHealth": {"staleAfterSeconds": 310, "windowProjectingCount": 0},
         }
 
 
@@ -372,6 +393,15 @@ class OntologyDiagnosticsServiceTests(unittest.TestCase):
         self.assertFalse(payload["ruleboxQuality"]["automaticDeployment"])
         self.assertEqual("graph.test.v1", payload["decisionPerformanceBoundary"]["ruleOutcomes"][0]["ruleId"])
         self.assertEqual(4, payload["inferenceBox"]["runtimeExecution"]["candidateRuleCount"])
+        self.assertEqual(8, payload["inferenceBox"]["runtimeExecution"]["enabledRuleCount"])
+        self.assertEqual(
+            "complete-native-evaluation",
+            payload["inferenceBox"]["runtimeExecution"]["replayValidation"]["status"],
+        )
+        self.assertEqual(
+            "shared-context-impact",
+            payload["inferenceBox"]["runtimeScope"]["impactDiagnostics"]["classification"],
+        )
         self.assertEqual("graph.test", payload["inferenceBox"]["runtimeExecution"]["nativeRuleTiming"]["slowestRules"][0]["ruleId"])
 
     def test_status_marks_partial_target_coverage_as_waiting_not_no_signal(self):

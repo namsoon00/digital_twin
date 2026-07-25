@@ -464,6 +464,38 @@ class OntologyReasoningMailboxTests(unittest.TestCase):
         self.assertIn("sourceFreshness", status)
         self.assertTrue(status["executionTelemetry"]["last"])
 
+    def test_queue_dispatch_explains_selected_work_without_changing_priority(self):
+        market = realtime_request("market", ["AAPL"], "2026-07-24T00:00:00Z")
+        source = DomainEvent(
+            name="research.evidence.collected",
+            aggregate_id="research:MSFT",
+            occurred_at="2026-07-24T00:01:00Z",
+            payload={"sourceObservedAt": "2026-07-24T00:01:00Z", "symbols": ["MSFT"]},
+        )
+        requested = ontology_reasoning_requested_event(
+            source,
+            "research-evidence-update",
+            ["MSFT"],
+            changed_count=1,
+            fact_types=["ResearchEvidence"],
+        )
+        research = DomainEvent(
+            name=ONTOLOGY_REASONING_REQUESTED,
+            aggregate_id=requested.aggregate_id,
+            payload=dict(requested.payload or {}),
+            occurred_at="2026-07-24T00:01:00Z",
+            event_id="research",
+        )
+        runner = self.build_runner([market, research])
+
+        status = runner.status()
+        dispatch = status["queueDispatch"]
+
+        self.assertEqual(1, dispatch["pendingByClass"]["realtime-market"])
+        self.assertEqual(1, dispatch["pendingByClass"]["research"])
+        self.assertEqual(["research"], dispatch["selectedWorkClasses"])
+        self.assertEqual(["MSFT"], dispatch["selectedSymbols"])
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -65,6 +65,11 @@ class OntologyDiagnosticsService:
             if isinstance((runtime_observability.get("latest") or {}), dict)
             else {}
         )
+        latest_runtime_scope = (
+            (runtime_observability.get("latest") or {}).get("scope")
+            if isinstance((runtime_observability.get("latest") or {}), dict)
+            else {}
+        )
         if isinstance(latest_runtime_inference, dict):
             runtime_execution = self.pick(latest_runtime_inference, [
                 "status",
@@ -74,12 +79,26 @@ class OntologyDiagnosticsService:
                 "notEvaluatedSymbolCount",
                 "targetCoverageStatus",
                 "candidateRuleCount",
+                "enabledRuleCount",
+                "candidateRuleRatioPct",
                 "executedRuleCount",
                 "deferredRuleCount",
                 "nativeRuleSelectionApplied",
+                "nativeRuleSelectionEligibilityReason",
                 "nativeRuleSelectionFallbackReason",
                 "executionStatus",
             ])
+            replay_validation = latest_runtime_inference.get("replayValidation")
+            if isinstance(replay_validation, dict):
+                runtime_execution["replayValidation"] = self.pick(replay_validation, [
+                    "status",
+                    "verified",
+                    "selectionApplied",
+                    "coverageComplete",
+                    "nativeEvaluationComplete",
+                    "generationAligned",
+                    "reason",
+                ])
             timing = latest_runtime_inference.get("nativeRuleTiming")
             if isinstance(timing, dict):
                 runtime_execution["nativeRuleTiming"] = self.pick(timing, [
@@ -97,6 +116,35 @@ class OntologyDiagnosticsService:
                 ]
             if runtime_execution:
                 inference_summary["runtimeExecution"] = runtime_execution
+        if isinstance(latest_runtime_scope, dict):
+            runtime_scope = self.pick(latest_runtime_scope, [
+                "scopeCount",
+                "previousScopeCount",
+                "nextScopeCount",
+                "changedScopeCount",
+                "directChangedScopeCount",
+                "affectedScopeCount",
+                "dependencyAffectedScopeCount",
+                "globalImpact",
+                "families",
+                "dependencyAffectedFamilies",
+            ])
+            impact_diagnostics = latest_runtime_scope.get("impactDiagnostics")
+            if isinstance(impact_diagnostics, dict):
+                runtime_scope["impactDiagnostics"] = self.pick(impact_diagnostics, [
+                    "classification",
+                    "reasonCodes",
+                    "globalScopeCount",
+                    "globalScopeTypes",
+                    "candidateRuleRatioPct",
+                    "candidateSubsetAvailable",
+                    "selectionEligibilityReason",
+                    "eventScopeAgreement",
+                    "eventFactFamilies",
+                    "unexpectedChangedFamilies",
+                ])
+            if runtime_scope:
+                inference_summary["runtimeScope"] = runtime_scope
         return {
             "contract": "typedb-ontology-diagnostics-v1",
             "generatedAt": utc_now_iso(),

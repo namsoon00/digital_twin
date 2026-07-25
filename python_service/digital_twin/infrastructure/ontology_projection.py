@@ -44,6 +44,7 @@ from ..domain.ontology_projection_audit import (
     OntologyProjectionRun,
     apply_projection_run_identity,
     build_ontology_projection_run,
+    compact_reasoning_request_context,
     complete_ontology_projection_run,
     inference_reuse_scope_plan,
     inference_reuse_scope_plan_for_targets,
@@ -51,7 +52,10 @@ from ..domain.ontology_projection_audit import (
     projection_source_snapshot,
     projection_run_from_payload,
 )
-from ..domain.ontology_runtime_operations import build_projection_runtime_observation
+from ..domain.ontology_runtime_operations import (
+    build_projection_runtime_observation,
+    native_replay_validation,
+)
 from ..domain.ontology_validator import validate_ontology
 from ..domain.portfolio_ontology_builder import build_portfolio_ontology
 from ..domain.portfolio_ontology_coverage import CATEGORY_RELATIONS
@@ -520,11 +524,16 @@ class PortfolioOntologyProjectionRecorder:
         self,
         snapshot: AccountSnapshot,
         target_symbols: List[str] = None,
+        reasoning_context: Dict[str, object] = None,
     ) -> Dict[str, object]:
         projection_started = time.perf_counter()
         runtime_stages: Dict[str, int] = {}
         projection_run = None
         pending_activation_recovery: Dict[str, object] = {}
+        compact_reasoning_context = compact_reasoning_request_context(
+            reasoning_context,
+            target_symbols=target_symbols,
+        )
         portfolio_world_context = world_from_snapshot(snapshot, self.settings)
         market_world_context = market_world(
             portfolio_world_context.market_id,
@@ -672,6 +681,7 @@ class PortfolioOntologyProjectionRecorder:
                 active_abox,
                 scoped_identity,
                 target_symbols,
+                reasoning_context=compact_reasoning_context,
             )
             if target_scoped_patch.get("eligible"):
                 target_patch_started = time.perf_counter()
@@ -796,6 +806,7 @@ class PortfolioOntologyProjectionRecorder:
                 active_abox,
                 scoped_identity,
                 target_symbols,
+                reasoning_context=compact_reasoning_context,
             )
             compact_impact_plan = compact_inference_impact_plan(inference_impact_plan)
             inference_symbols = self.inference_symbols(
@@ -824,6 +835,7 @@ class PortfolioOntologyProjectionRecorder:
                 "scopeTopologyVersion": str(persistence_graph.worldview.get("scopeTopologyVersion") or ""),
                 "targetScopedManifestPatch": dict(target_scoped_patch or {}),
                 "inferenceImpactPlan": compact_impact_plan,
+                "reasoningContext": compact_reasoning_context,
                 "reason": (
                     "변경된 사실군과 ABox 의존 관계에서 재평가 대상을 계산하고, 변경 범위만 새 세대로 기록한 뒤 "
                     "대상별 TypeDB 네이티브 규칙을 완전 평가합니다."
@@ -870,6 +882,7 @@ class PortfolioOntologyProjectionRecorder:
                     "aboxValidation": validation.to_dict(),
                     "projectionScope": projection_scope,
                     "inferenceImpactPlan": compact_impact_plan,
+                    "reasoningContext": compact_reasoning_context,
                     "runtimeStages": runtime_stages,
                     "ontologyWorld": world_metadata(portfolio_world_context),
                     "marketWorld": {
@@ -920,6 +933,7 @@ class PortfolioOntologyProjectionRecorder:
                 material_snapshot_id,
                 inference_symbols=inference_symbols,
                 rulebox_metadata=rulebox_bootstrap,
+                reasoning_context=compact_reasoning_context,
             )
             if audit_error:
                 result = {
@@ -955,6 +969,7 @@ class PortfolioOntologyProjectionRecorder:
             result["materialChangeDetected"] = True
             result["projectionScope"] = projection_scope
             result["inferenceImpactPlan"] = compact_impact_plan
+            result["reasoningContext"] = compact_reasoning_context
             result["aboxValidation"] = validation.to_dict()
             result["runtimeStages"] = runtime_stages
             result["ontologyWorld"] = world_metadata(portfolio_world_context)
@@ -2883,6 +2898,7 @@ class PortfolioOntologyProjectionRecorder:
         active_metadata: Dict[str, object],
         scoped_identity: Dict[str, object],
         requested_symbols: List[str] = None,
+        reasoning_context: Dict[str, object] = None,
     ) -> Dict[str, object]:
         """Choose a safe incremental write set before replacing a manifest.
 
@@ -2896,6 +2912,7 @@ class PortfolioOntologyProjectionRecorder:
             active_metadata,
             scoped_identity,
             requested_symbols,
+            reasoning_context=reasoning_context,
         )
         available = self.snapshot_symbols(snapshot)
         inferred = self.inference_symbols(
@@ -2939,6 +2956,7 @@ class PortfolioOntologyProjectionRecorder:
         active_abox: Dict[str, object],
         scoped_identity: Dict[str, object],
         target_symbols: List[str] = None,
+        reasoning_context: Dict[str, object] = None,
     ) -> Dict[str, object]:
         """Route native inference from immutable scope changes, not a timer."""
         previous_scope_plan = list((active_abox or {}).get("scopePlan") or [])
@@ -2949,6 +2967,7 @@ class PortfolioOntologyProjectionRecorder:
             self.snapshot_symbols(snapshot),
             explicit_target_symbols=target_symbols,
             rules=self.rulebox_rules_for_impact(),
+            requested_fact_families=(reasoning_context or {}).get("requestedScopeFamilies") or [],
         )
 
     def rulebox_rules_for_impact(self) -> List[Dict[str, object]]:
@@ -3001,6 +3020,7 @@ class PortfolioOntologyProjectionRecorder:
         abox_snapshot_id: str,
         inference_symbols: List[str],
         rulebox_metadata: Dict[str, object],
+        reasoning_context: Dict[str, object] = None,
     ):
         """Persist source facts before replacing the active TypeDB generation."""
         if not self.projection_run_store:
@@ -3013,6 +3033,7 @@ class PortfolioOntologyProjectionRecorder:
             self.active_graph_store_key(),
             target_symbols=inference_symbols,
             rulebox_metadata=rulebox_metadata,
+            reasoning_context=reasoning_context,
         )
         try:
             self.projection_run_store.begin(run)
@@ -3146,6 +3167,7 @@ class PortfolioOntologyProjectionRecorder:
             "selectionApplied": selection_applied,
             "inheritedCoverage": inherited_coverage,
         }
+        result["nativeReplayValidation"] = native_replay_validation(result)
 
     def runtime_context(
         self,

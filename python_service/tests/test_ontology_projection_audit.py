@@ -5,6 +5,7 @@ from digital_twin.domain.ontology_contracts import OntologyEntity, OntologyRelat
 from digital_twin.domain.ontology_projection_audit import (
     apply_projection_run_identity,
     build_ontology_projection_run,
+    compact_reasoning_request_context,
     complete_ontology_projection_run,
     inference_reuse_scope_plan_for_targets,
     inference_reuse_scope_plan_fingerprint,
@@ -196,6 +197,31 @@ class OntologyProjectionAuditTests(unittest.TestCase):
             inference_reuse_scope_plan_fingerprint(topology["inferenceReuseScopePlan"]),
             topology["inferenceReuseScopePlanFingerprint"],
         )
+
+    def test_reasoning_request_context_keeps_only_selected_symbol_provenance(self):
+        context = compact_reasoning_request_context({
+            "requestEventIds": ["request-b", "request-a"],
+            "sourceEventIds": ["source-a"],
+            "triggers": ["market-data-update"],
+            "factTypes": ["MarketQuote", "TechnicalIndicator"],
+            "requestedScopeFamilies": ["market", "temporal"],
+            "targetSymbols": ["005930", "000660"],
+            "sourceObservedAt": "2026-07-24T01:00:00Z",
+            "changedFieldsBySymbol": {
+                "005930": ["price", "volume"],
+                "000660": ["price"],
+            },
+            "factRevisionsBySymbol": {
+                "005930": "revision-1",
+                "000660": "revision-2",
+            },
+            "rawFacts": {"must": "not be copied"},
+        }, target_symbols=["005930"])
+
+        self.assertEqual(["005930"], context["targetSymbols"])
+        self.assertEqual({"005930": ["price", "volume"]}, context["changedFieldsBySymbol"])
+        self.assertEqual({"005930": "revision-1"}, context["factRevisionsBySymbol"])
+        self.assertNotIn("rawFacts", context)
 
     def test_target_reuse_scope_plan_keeps_only_target_dependencies(self):
         plan = [
@@ -682,6 +708,29 @@ class OntologyProjectionAuditTests(unittest.TestCase):
 
         self.assertIn("world_id = %s", connection.calls[0][0])
         self.assertEqual("portfolio:tenant-a:main", connection.calls[0][1][0])
+
+    def test_mysql_store_recovers_only_stale_audit_rows_for_the_current_world(self):
+        connection = RecordingConnection(rows=[])
+        store = MySQLOntologyProjectionRunStore.__new__(MySQLOntologyProjectionRunStore)
+        store.runtime_settings = {
+            "ontologyReasoningExecutionTimeoutSeconds": "240",
+            "ontologyReasoningExecutionTimeoutGraceSeconds": "10",
+        }
+        store.transaction = lambda: ConnectionContext(connection)
+
+        recovery = store.recover_stale_runs("portfolio:tenant-a:main")
+
+        self.assertEqual(310, recovery["staleAfterSeconds"])
+        self.assertEqual("portfolio:tenant-a:main", recovery["worldId"])
+        self.assertIn("status = 'projecting'", connection.calls[0][0])
+        self.assertIn("world_id = %s", connection.calls[0][0])
+        self.assertEqual("portfolio:tenant-a:main", connection.calls[0][1][-1])
+
+    def test_mysql_store_allows_an_explicit_stale_audit_boundary(self):
+        store = MySQLOntologyProjectionRunStore.__new__(MySQLOntologyProjectionRunStore)
+        store.runtime_settings = {"ontologyProjectionAuditStaleAfterSeconds": "175"}
+
+        self.assertEqual(175, store.projection_audit_stale_after_seconds())
 
     def test_projection_run_rehydrates_mysql_payload(self):
         _snapshot, _graph, _fingerprint, run = self.build_run()

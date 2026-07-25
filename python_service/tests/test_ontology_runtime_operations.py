@@ -5,6 +5,7 @@ from types import SimpleNamespace
 
 from digital_twin.domain.ontology_runtime_operations import (
     build_projection_runtime_observation,
+    native_replay_validation,
     native_rule_timing_profile,
     summarize_projection_runtime_observations,
 )
@@ -201,6 +202,57 @@ class OntologyRuntimeOperationsTests(unittest.TestCase):
         self.assertEqual(4, observation["inference"]["executedRuleCount"])
         self.assertTrue(observation["inference"]["nativeRuleSelectionApplied"])
         self.assertEqual(6200, observation["stages"]["nativeInferenceMs"])
+
+    def test_dependency_selected_execution_requires_a_verified_prior_native_proof(self):
+        result = self.sample_result()
+        result["inferenceBox"].update({
+            "nativeTypeDbReasoningCompleted": True,
+            "targetSymbols": ["005930"],
+        })
+        result["ruleboxExecution"].update({"nativeRuleSelectionApplied": True})
+
+        missing_proof = native_replay_validation(result)
+
+        self.assertEqual("incomplete-coverage", missing_proof["status"])
+        self.assertFalse(missing_proof["verified"])
+
+        result["inferenceReuseProof"] = {
+            "status": "verified",
+            "coverageComplete": True,
+            "selectionApplied": True,
+        }
+        verified = native_replay_validation(result)
+
+        self.assertEqual("verified-prior-coverage", verified["status"])
+        self.assertTrue(verified["verified"])
+
+    def test_runtime_observation_preserves_impact_and_replay_diagnostics(self):
+        result = self.sample_result()
+        result["inferenceImpactPlan"].update({
+            "enabledRuleCount": 9,
+            "diagnostics": {
+                "classification": "shared-context-impact",
+                "reasonCodes": ["shared-macro-context"],
+                "globalScopeCount": 2,
+                "globalScopeTypes": [{"type": "macro", "label": "거시", "count": 2}],
+                "candidateRuleRatioPct": 100,
+                "eventScopeAgreement": "aligned",
+            },
+        })
+        result["inferenceBox"].update({
+            "nativeTypeDbReasoningCompleted": True,
+            "targetSymbols": ["005930"],
+        })
+
+        observation = build_projection_runtime_observation(self.sample_run(), result)
+
+        self.assertEqual(9, observation["inference"]["enabledRuleCount"])
+        self.assertEqual(100, observation["inference"]["candidateRuleRatioPct"])
+        self.assertEqual(
+            "shared-context-impact",
+            observation["scope"]["impactDiagnostics"]["classification"],
+        )
+        self.assertEqual("complete-native-evaluation", observation["inference"]["replayValidation"]["status"])
 
     def test_native_rule_timing_profile_keeps_only_bounded_slowest_rule_details(self):
         profile = native_rule_timing_profile({

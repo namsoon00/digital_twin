@@ -48,10 +48,21 @@ class MonitorRunner:
         # projection has a usable TypeDB result.
         self.last_ontology_projection_results: Dict[str, Dict[str, object]] = {}
 
-    def run_once(self, dry_run: bool = False, force: bool = False, symbol_filter: Iterable[str] = None) -> List[AlertEvent]:
+    def run_once(
+        self,
+        dry_run: bool = False,
+        force: bool = False,
+        symbol_filter: Iterable[str] = None,
+        reasoning_context: Dict[str, object] = None,
+    ) -> List[AlertEvent]:
         if self.use_account_job_queue(dry_run, force, symbol_filter):
             return self.run_due_account_jobs()
-        return self.run_all_accounts_once(dry_run=dry_run, force=force, symbol_filter=symbol_filter)
+        return self.run_all_accounts_once(
+            dry_run=dry_run,
+            force=force,
+            symbol_filter=symbol_filter,
+            reasoning_context=reasoning_context,
+        )
 
     def progress(self, stage: str, **payload) -> None:
         if not self.progress_callback:
@@ -64,7 +75,13 @@ class MonitorRunner:
     def use_account_job_queue(self, dry_run: bool, force: bool, symbol_filter: Iterable[str] = None) -> bool:
         return bool(self.account_job_store) and not dry_run and not force and not list(symbol_filter or [])
 
-    def run_all_accounts_once(self, dry_run: bool = False, force: bool = False, symbol_filter: Iterable[str] = None) -> List[AlertEvent]:
+    def run_all_accounts_once(
+        self,
+        dry_run: bool = False,
+        force: bool = False,
+        symbol_filter: Iterable[str] = None,
+        reasoning_context: Dict[str, object] = None,
+    ) -> List[AlertEvent]:
         self.last_ontology_projection_results = {}
         self.progress("monitor.start", accountCount=len(self.accounts), dryRun=bool(dry_run), force=bool(force))
         all_events: List[AlertEvent] = []
@@ -72,7 +89,13 @@ class MonitorRunner:
         allowed_symbols = set(str(symbol or "").upper().strip() for symbol in (symbol_filter or []) if str(symbol or "").strip())
         for account in self.accounts:
             self.progress("account.start", accountId=account.account_id, label=account.label)
-            snapshot, events = self.collect_account_events(account, allowed_symbols=allowed_symbols, dry_run=dry_run, force=force)
+            snapshot, events = self.collect_account_events(
+                account,
+                allowed_symbols=allowed_symbols,
+                dry_run=dry_run,
+                force=force,
+                reasoning_context=reasoning_context,
+            )
             self.progress("account.done", accountId=account.account_id, eventCount=len(events), mode=snapshot.mode, status=snapshot.status)
             snapshots.append(snapshot)
             if not self.use_cycle_recorder(dry_run) and snapshot.has_live_account_data():
@@ -184,6 +207,7 @@ class MonitorRunner:
         allowed_symbols: set = None,
         dry_run: bool = False,
         force: bool = False,
+        reasoning_context: Dict[str, object] = None,
     ):
         self.progress("snapshot.start", accountId=account.account_id)
         snapshot = self.snapshot_builder(account)
@@ -205,7 +229,11 @@ class MonitorRunner:
         # judgement path as live monitoring; delivery and monitor persistence
         # remain gated by dry_run below.
         self.progress("ontology_projection.start", accountId=account.account_id)
-        self.record_ontology_projection(snapshot, target_symbols=allowed_symbols)
+        self.record_ontology_projection(
+            snapshot,
+            target_symbols=allowed_symbols,
+            reasoning_context=reasoning_context,
+        )
         projection = snapshot.metadata.get("ontology", {}).get("projection") if isinstance(snapshot.metadata.get("ontology"), dict) else {}
         self.progress(
             "ontology_projection.done",
@@ -338,7 +366,12 @@ class MonitorRunner:
         if self.event_publisher:
             self.event_publisher.publish(event)
 
-    def record_ontology_projection(self, snapshot: AccountSnapshot, target_symbols: set = None) -> None:
+    def record_ontology_projection(
+        self,
+        snapshot: AccountSnapshot,
+        target_symbols: set = None,
+        reasoning_context: Dict[str, object] = None,
+    ) -> None:
         if not self.ontology_projection_recorder or not self.has_ontology_projection_data(snapshot):
             return
         try:
@@ -347,13 +380,18 @@ class MonitorRunner:
                 for symbol in target_symbols or set()
                 if str(symbol or "").strip()
             }
-            if selected_symbols:
-                self.ontology_projection_recorder.record_snapshot(
-                    snapshot,
-                    target_symbols=sorted(selected_symbols),
-                )
-            else:
-                self.ontology_projection_recorder.record_snapshot(snapshot)
+            recorder = self.ontology_projection_recorder.record_snapshot
+            parameters = inspect.signature(recorder).parameters
+            accepts_kwargs = any(
+                parameter.kind == inspect.Parameter.VAR_KEYWORD
+                for parameter in parameters.values()
+            )
+            kwargs = {}
+            if selected_symbols and ("target_symbols" in parameters or accepts_kwargs):
+                kwargs["target_symbols"] = sorted(selected_symbols)
+            if reasoning_context and ("reasoning_context" in parameters or accepts_kwargs):
+                kwargs["reasoning_context"] = dict(reasoning_context)
+            recorder(snapshot, **kwargs)
         except Exception as error:  # noqa: BLE001 - graph persistence must not block monitoring.
             result = {"saved": False, "status": "error", "reason": str(error)[:180]}
             snapshot.metadata.setdefault("ontology", {})["projection"] = result

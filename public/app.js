@@ -4012,6 +4012,15 @@
       ontologyReasoningRealtimeEventMaxAgeMinutes: settingValue("ontologyReasoningRealtimeEventMaxAgeMinutes"),
       ontologyReasoningResearchEventMaxAgeMinutes: settingValue("ontologyReasoningResearchEventMaxAgeMinutes"),
       ontologyReasoningTelemetryHistoryLimit: settingValue("ontologyReasoningTelemetryHistoryLimit"),
+      ontologyReasoningQueueAlertEnabled: settingValue("ontologyReasoningQueueAlertEnabled"),
+      ontologyReasoningQueueWarningAgeMinutes: settingValue("ontologyReasoningQueueWarningAgeMinutes"),
+      ontologyReasoningQueueCriticalAgeMinutes: settingValue("ontologyReasoningQueueCriticalAgeMinutes"),
+      ontologyReasoningQueueWarningPendingCount: settingValue("ontologyReasoningQueueWarningPendingCount"),
+      ontologyReasoningQueueCriticalPendingCount: settingValue("ontologyReasoningQueueCriticalPendingCount"),
+      ontologyReasoningQueueWarningOverdueSymbols: settingValue("ontologyReasoningQueueWarningOverdueSymbols"),
+      ontologyReasoningQueueCriticalOverdueSymbols: settingValue("ontologyReasoningQueueCriticalOverdueSymbols"),
+      ontologyReasoningQueueConsecutiveObservations: settingValue("ontologyReasoningQueueConsecutiveObservations"),
+      ontologyReasoningQueueAlertReminderMinutes: settingValue("ontologyReasoningQueueAlertReminderMinutes"),
       temporalWindowPeriods: settingValue("temporalWindowPeriods"),
       temporalWindowHistoryLimit: settingValue("temporalWindowHistoryLimit"),
       ontologyLabAutoApplyEnabled: settingValue("ontologyLabAutoApplyEnabled"),
@@ -23802,6 +23811,18 @@
         renderSettingField("ontologyReasoningRealtimeEventMaxAgeMinutes", "실시간 입력 최대 경과(분)", "number", "15"),
         renderSettingField("ontologyReasoningResearchEventMaxAgeMinutes", "리서치 입력 최대 경과(분)", "number", "360"),
         renderSettingField("ontologyReasoningTelemetryHistoryLimit", "추론 실행 이력 수", "number", "80"),
+        renderSettingSelect("ontologyReasoningQueueAlertEnabled", "추론 대기 지연 운영 알림", [
+          { value: "1", label: "사용" },
+          { value: "0", label: "사용 안 함" }
+        ]),
+        renderSettingField("ontologyReasoningQueueWarningAgeMinutes", "대기 지연 경고 시간(분)", "number", "30"),
+        renderSettingField("ontologyReasoningQueueCriticalAgeMinutes", "대기 심각 시간(분)", "number", "90"),
+        renderSettingField("ontologyReasoningQueueWarningPendingCount", "대기 요청 경고 수", "number", "100"),
+        renderSettingField("ontologyReasoningQueueCriticalPendingCount", "대기 요청 심각 수", "number", "200"),
+        renderSettingField("ontologyReasoningQueueWarningOverdueSymbols", "대기 한도 초과 종목 경고 수", "number", "3"),
+        renderSettingField("ontologyReasoningQueueCriticalOverdueSymbols", "대기 한도 초과 종목 심각 수", "number", "8"),
+        renderSettingField("ontologyReasoningQueueConsecutiveObservations", "지연 연속 확인 횟수", "number", "3"),
+        renderSettingField("ontologyReasoningQueueAlertReminderMinutes", "지연 운영 알림 재전송(분)", "number", "60"),
         renderSettingField("temporalWindowHistoryLimit", "기간 판단 히스토리 수", "number", "96"),
         '<label><span>기간 판단 구간</span><div class="form-control-shell"><textarea data-setting="temporalWindowPeriods" rows="4" autocomplete="off" placeholder="1D=1:2">' + escapeHtml(settingValue("temporalWindowPeriods") || defaultSettings.temporalWindowPeriods) + '</textarea></div></label>'
       ].join(""), "gate feed-wide"),
@@ -25329,6 +25350,16 @@
         ]),
         renderSettingField("ontologyReasoningRealtimeEventMaxAgeMinutes", "실시간 입력 최대 경과(분)", "number", "15"),
         renderSettingField("ontologyReasoningResearchEventMaxAgeMinutes", "리서치 입력 최대 경과(분)", "number", "360"),
+        renderSettingSelect("ontologyReasoningQueueAlertEnabled", "추론 대기 지연 운영 알림", [
+          { value: "1", label: "사용" },
+          { value: "0", label: "사용 안 함" }
+        ]),
+        renderSettingField("ontologyReasoningQueueWarningAgeMinutes", "대기 지연 경고 시간(분)", "number", "30"),
+        renderSettingField("ontologyReasoningQueueCriticalAgeMinutes", "대기 심각 시간(분)", "number", "90"),
+        renderSettingField("ontologyReasoningQueueWarningPendingCount", "대기 요청 경고 수", "number", "100"),
+        renderSettingField("ontologyReasoningQueueCriticalPendingCount", "대기 요청 심각 수", "number", "200"),
+        renderSettingField("ontologyReasoningQueueConsecutiveObservations", "지연 연속 확인 횟수", "number", "3"),
+        renderSettingField("ontologyReasoningQueueAlertReminderMinutes", "지연 운영 알림 재전송(분)", "number", "60"),
         renderSettingField("marketMaterialityPriceChangePct", "가격 중요 변화율(%)", "number", "0.6"),
         renderSettingField("marketMaterialityTrendDistancePct", "추세 중요 이격(%)", "number", "2"),
         renderSettingField("marketMaterialityVolumeRatio", "거래량 중요 배율", "number", "1.5")
@@ -25372,14 +25403,29 @@
   function renderSettingsDiagnosticsPanel() {
     var reasoning = state.ontologyReasoningStatus || {};
     var queue = reasoning.queueHealth && typeof reasoning.queueHealth === "object" ? reasoning.queueHealth : {};
+    var queueDelay = reasoning.queueDelayHealth && typeof reasoning.queueDelayHealth === "object" ? reasoning.queueDelayHealth : {};
+    var queueDispatch = reasoning.queueDispatch && typeof reasoning.queueDispatch === "object" ? reasoning.queueDispatch : {};
     var mailbox = reasoning.mailbox && typeof reasoning.mailbox === "object" ? reasoning.mailbox : {};
     var reasoningStatus = String(queue.status || (state.ontologyReasoningStatusError ? "error" : "unknown")).toLowerCase();
     var reasoningTone = reasoningStatus === "healthy" ? "watch" : (reasoningStatus === "degraded" || reasoningStatus === "unknown" ? "caution" : "danger");
     var reasoningLabel = reasoningStatus === "healthy" ? "정상" : (reasoningStatus === "degraded" ? "대기 처리 중" : (reasoningStatus === "blocked" ? "차단됨" : "확인 필요"));
     var mailboxCount = Number(mailbox.pendingEntryCount || reasoning.mailboxPendingEntryCount || 0);
-    var staleWindow = reasoning.sourceFreshness && typeof reasoning.sourceFreshness === "object"
-      ? reasoning.sourceFreshness.realtimeEventMaxAgeMinutes
-      : "-";
+    var queueDelayState = String(queueDelay.state || "").toLowerCase();
+    var queueDelayCandidate = String(queueDelay.candidateState || "").toLowerCase();
+    var queueDelayOldest = String(queueDelay.oldestRequestAt || queueDispatch.oldestRequestAt || "");
+    var queueDelayAge = Number(queueDelay.oldestRequestAgeMinutes || 0);
+    if (!queueDelayAge && queueDelayOldest) {
+      var queueDelayOldestMs = new Date(queueDelayOldest).getTime();
+      if (!Number.isNaN(queueDelayOldestMs)) queueDelayAge = Math.max(0, Math.floor((Date.now() - queueDelayOldestMs) / 60000));
+    }
+    var queueDelayRequests = Number(queueDelay.rawPendingCount || reasoning.rawPendingCount || 0);
+    var queueDelaySymbols = Number(queueDelay.pendingSymbolCount || (Array.isArray(reasoning.pendingSymbols) ? reasoning.pendingSymbols.length : 0));
+    var queueDelayOverdue = Number(queueDelay.overduePendingSymbolCount || reasoning.overduePendingSymbolCount || 0);
+    var queueDelayLabel = queueDelayState === "critical" ? "심각 지연" : (queueDelayState === "delayed" ? "지연" : (queueDelayCandidate === "critical" || queueDelayCandidate === "delayed" ? "확인 중" : reasoningLabel));
+    var queueDelayTone = queueDelayState === "critical" ? "danger" : (queueDelayState === "delayed" ? "caution" : (queueDelayCandidate === "critical" || queueDelayCandidate === "delayed" ? "caution" : reasoningTone));
+    var queueDelayDetail = queueDelayOldest
+      ? "최장 " + queueDelayAge + "분 · 요청 " + queueDelayRequests + "건 · 종목 " + queueDelaySymbols + "개 · 한도 초과 " + queueDelayOverdue + "개"
+      : (mailboxCount + "개 최신 상태 대기 · 실시간 원천 " + (reasoning.sourceFreshness && reasoning.sourceFreshness.realtimeEventMaxAgeMinutes || "-") + "분 이내만 사용");
     var diagnostics = [
       {
         label: "저장 상태",
@@ -25407,10 +25453,10 @@
       },
       {
         label: "추론 대기열",
-        value: state.ontologyReasoningStatusLoading ? "조회 중" : reasoningLabel,
-        tone: state.ontologyReasoningStatusLoading ? "caution" : reasoningTone,
+        value: state.ontologyReasoningStatusLoading ? "조회 중" : queueDelayLabel,
+        tone: state.ontologyReasoningStatusLoading ? "caution" : queueDelayTone,
         detail: state.ontologyReasoningStatusError
-          || (mailboxCount + "개 최신 상태 대기 · 실시간 원천 " + staleWindow + "분 이내만 사용")
+          || queueDelayDetail
       }
     ];
     return [

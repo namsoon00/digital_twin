@@ -33,6 +33,7 @@ HYPOTHESIS_REVIEWED = "investment_hypothesis.reviewed"
 HYPOTHESIS_LIFECYCLE_TRANSITIONED = "investment_hypothesis.lifecycle_transitioned"
 ONTOLOGY_REASONING_REQUESTED = "ontology.reasoning_requested"
 ONTOLOGY_REASONING_COMPLETED = "ontology.reasoning_completed"
+ONTOLOGY_REASONING_QUEUE_HEALTH_CHANGED = "ontology.reasoning_queue_health_changed"
 INVESTMENT_CALENDAR_EVENT_SAVED = "investment_calendar.event_saved"
 INVESTMENT_CALENDAR_EVENT_REMOVED = "investment_calendar.event_removed"
 INVESTMENT_CALENDAR_REMINDER_DUE = "investment_calendar.reminder_due"
@@ -526,6 +527,15 @@ def ontology_reasoning_completed_event(
                 if isinstance(item, dict)
             ][:100],
         },
+    )
+
+
+def ontology_reasoning_queue_health_changed_event(health: Dict[str, object]) -> DomainEvent:
+    payload = dict(health or {})
+    return DomainEvent(
+        name=ONTOLOGY_REASONING_QUEUE_HEALTH_CHANGED,
+        aggregate_id="ontology-reasoning-queue",
+        payload=payload,
     )
 
 

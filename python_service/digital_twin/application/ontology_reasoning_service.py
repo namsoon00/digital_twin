@@ -327,6 +327,7 @@ class OntologyReasoningRunner:
         projection_recovery_probe: Callable = None,
         storage_guard: Callable = None,
         mailbox_store=None,
+        queue_health_service=None,
     ):
         self.event_reader = event_reader
         self.cursor_store = cursor_store
@@ -341,6 +342,7 @@ class OntologyReasoningRunner:
         self.projection_recovery_probe = projection_recovery_probe
         self.storage_guard = storage_guard
         self.mailbox_store = mailbox_store
+        self.queue_health_service = queue_health_service
 
     def enabled(self) -> bool:
         return truthy(self.settings.get("ontologyReasoningEnabled"), True)
@@ -1859,6 +1861,7 @@ class OntologyReasoningRunner:
         pending = list(requests or [])
         selected = list(selected_requests or [])
         payload = self.cursor_payload() if cursor_payload is None else dict(cursor_payload or {})
+        pending_symbols = self.request_symbols(pending)
         selected_symbols = [
             str(symbol or "").upper().strip()
             for symbol in selected_symbols or []
@@ -1868,11 +1871,15 @@ class OntologyReasoningRunner:
         pending_counts = {work_class: 0 for work_class in classes}
         selected_counts = {work_class: 0 for work_class in classes}
         observed_at = []
+        requested_at = []
         for event in pending:
             pending_counts[event_work_class(event)] += 1
             stamp = self.event_source_observed_at(event)
             if stamp:
                 observed_at.append(stamp)
+            request_stamp = str(getattr(event, "occurred_at", "") or "").strip()
+            if request_stamp:
+                requested_at.append(request_stamp)
         for event in selected:
             selected_counts[event_work_class(event)] += 1
         fairness = fairness_drain or self.fairness_drain_state(selected_symbols, payload)
@@ -1898,11 +1905,15 @@ class OntologyReasoningRunner:
             mode = "priority-selected"
         else:
             mode = "waiting"
+        fairness_queue = self.fairness_queue(pending_symbols, payload)
         return {
             "mode": mode,
             "pendingByClass": pending_counts,
             "selectedByClass": selected_counts,
             "selectedWorkClasses": selected_classes,
+            "pendingSymbolCount": len(pending_symbols),
+            "overduePendingSymbolCount": len([item for item in fairness_queue if item.get("state") == "overdue"]),
+            "unseenPendingSymbolCount": len([item for item in fairness_queue if item.get("state") == "unseen"]),
             "selectedSymbols": selected_symbols[:20],
             "omittedSymbolCount": max(0, int(omitted_symbol_count or 0)),
             "fairnessDrainActive": bool(fairness.get("active")),
@@ -1910,6 +1921,7 @@ class OntologyReasoningRunner:
             "backpressureActive": backpressure_active,
             "configuredIntervalSeconds": configured_interval,
             "effectiveIntervalSeconds": effective_interval,
+            "oldestRequestAt": min(requested_at) if requested_at else "",
             "oldestSourceObservedAt": min(observed_at) if observed_at else "",
         }
 
@@ -2223,7 +2235,8 @@ class OntologyReasoningRunner:
                     "mode", "selectedWorkClasses", "selectedSymbols", "omittedSymbolCount",
                     "fairnessDrainActive", "fairnessDrainReason", "backpressureActive",
                     "configuredIntervalSeconds", "effectiveIntervalSeconds",
-                    "oldestSourceObservedAt",
+                    "oldestRequestAt", "oldestSourceObservedAt", "pendingSymbolCount",
+                    "overduePendingSymbolCount", "unseenPendingSymbolCount",
                 ]
                 if key in queue_dispatch
             }
@@ -2244,6 +2257,26 @@ class OntologyReasoningRunner:
         response["executionTelemetry"] = summary
         return response
 
+    def record_queue_health(self, result: Dict[str, object]) -> Dict[str, object]:
+        """Persist queue pressure after each scheduler turn without changing it.
+
+        Queue health is an operational observation. It neither changes TypeDB
+        rule execution nor feeds investment conclusions back into the queue.
+        """
+        response = dict(result or {})
+        service = self.queue_health_service
+        if not service or not hasattr(service, "record"):
+            return response
+        try:
+            health, event = service.record(response)
+            if isinstance(health, dict):
+                response["queueDelayHealth"] = health
+            if event is not None:
+                self.publish(event)
+        except Exception:  # noqa: BLE001 - telemetry must never block graph reasoning.
+            return response
+        return response
+
     def run_once(self, limit: int = 0, force: bool = False) -> Dict[str, object]:
         started = self.now_provider()
         if started.tzinfo is None:
@@ -2260,7 +2293,8 @@ class OntologyReasoningRunner:
                 error=error,
             )
             raise
-        return self.record_execution_telemetry(result, started_at, started_monotonic)
+        recorded = self.record_execution_telemetry(result, started_at, started_monotonic)
+        return self.record_queue_health(recorded)
 
     def _run_once(self, limit: int = 0, force: bool = False) -> Dict[str, object]:
         if not self.enabled():
@@ -2906,5 +2940,10 @@ class OntologyReasoningRunner:
             "storageGuard": storage_guard,
             "queueHealth": {"status": queue_status, "reason": queue_reason},
             "queueDispatch": queue_dispatch,
+            "queueDelayHealth": (
+                dict(cursor_payload.get("queueDelayHealth") or {})
+                if isinstance(cursor_payload.get("queueDelayHealth"), dict)
+                else {}
+            ),
             "executionTelemetry": self.execution_telemetry(cursor_payload),
         }

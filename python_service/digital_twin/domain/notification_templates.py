@@ -124,6 +124,7 @@ REASONING_EXPLANATION_SKIP_TYPES = {
     "newsDigest",
     "workHandoff",
     OPERATOR_REASONING_REPORT,
+    "ontologyReasoningQueue",
 }
 
 CUSTOMER_FACING_MESSAGE_TYPES = {
@@ -182,6 +183,10 @@ DEFAULT_NOTIFICATION_TEMPLATES = {
     "ontologyInferenceMissing": {
         "template": DEFAULT_TEMPLATE,
         "description": "온톨로지 추론 결과 누락 상태 알림",
+    },
+    "ontologyReasoningQueue": {
+        "template": DEFAULT_TEMPLATE,
+        "description": "온톨로지 추론 요청 대기 지연 운영 알림",
     },
     "monitorHeartbeat": {
         "template": DEFAULT_TEMPLATE,

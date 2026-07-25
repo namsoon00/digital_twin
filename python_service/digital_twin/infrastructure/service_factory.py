@@ -4,6 +4,10 @@ from typing import Callable, Dict, Iterable
 
 from ..application.flow_lens_service import FlowLensService
 from ..application.data_pipeline_health_service import DataPipelineHealthNotificationEnqueuer, DataPipelineHealthService
+from ..application.ontology_reasoning_queue_health_service import (
+    OntologyReasoningQueueHealthNotificationEnqueuer,
+    OntologyReasoningQueueHealthService,
+)
 from ..application.investment_analysis_service import InvestmentAnalysisService
 from ..application.investment_brain_service import InvestmentBrainService
 from ..application.investment_research_orchestration_service import InvestmentResearchOrchestrationService, InvestmentResearchQueueRunner
@@ -43,7 +47,11 @@ from ..application.ontology_lab_service import OntologyLabService
 from ..application.ontology_rule_candidate_service import RuleChangeCandidateProposalService
 from ..application.symbol_universe_service import SymbolUniverseService
 from ..domain.accounts import AccountConfig
-from ..domain.events import DATA_PIPELINE_HEALTH_CHANGED, RESEARCH_EVIDENCE_COLLECTED
+from ..domain.events import (
+    DATA_PIPELINE_HEALTH_CHANGED,
+    ONTOLOGY_REASONING_QUEUE_HEALTH_CHANGED,
+    RESEARCH_EVIDENCE_COLLECTED,
+)
 from ..domain.market_data import number
 from ..domain.monitoring import RealtimeMonitor
 from ..domain.ontology_worlds import portfolio_world_id
@@ -130,6 +138,19 @@ def data_pipeline_health_event_bus(settings=None) -> EventBus:
         DATA_PIPELINE_HEALTH_CHANGED,
         DataPipelineHealthNotificationEnqueuer(
             account_repository=stores.account_registry(configured_settings),
+            queue=stores.notification_job_store(configured_settings),
+            settings=configured_settings,
+        ).handle,
+    )
+    return bus
+
+
+def ontology_reasoning_event_bus(settings=None) -> EventBus:
+    configured_settings = settings or runtime_settings()
+    bus = default_event_bus()
+    bus.subscribe(
+        ONTOLOGY_REASONING_QUEUE_HEALTH_CHANGED,
+        OntologyReasoningQueueHealthNotificationEnqueuer(
             queue=stores.notification_job_store(configured_settings),
             settings=configured_settings,
         ).handle,
@@ -573,6 +594,7 @@ def build_ontology_reasoning_runner(settings=None, event_publisher=None) -> Onto
     registry = stores.account_registry(reasoning_store_settings)
     event_log = stores.event_log(reasoning_store_settings)
     ontology_repository = ontology_repository_from_settings(configured_settings)
+    cursor_store = stores.ontology_reasoning_cursor_store(reasoning_store_settings)
 
     def projection_recovery_probe(account_ids, symbols):
         requested_accounts = {
@@ -621,13 +643,13 @@ def build_ontology_reasoning_runner(settings=None, event_publisher=None) -> Onto
 
     return OntologyReasoningRunner(
         event_reader=event_log,
-        cursor_store=stores.ontology_reasoning_cursor_store(reasoning_store_settings),
+        cursor_store=cursor_store,
         monitor_runner_factory=lambda: build_monitor_runner(
             registry.load(),
             settings=reasoning_monitor_settings,
             typedb_native_rule_execution_enabled=reasoning_native_rule_execution_enabled,
         ),
-        event_publisher=event_publisher or default_event_bus(),
+        event_publisher=event_publisher or ontology_reasoning_event_bus(configured_settings),
         settings=configured_settings,
         rule_candidate_service=RuleChangeCandidateProposalService(
             ontology_repository=ontology_repository,
@@ -646,6 +668,10 @@ def build_ontology_reasoning_runner(settings=None, event_publisher=None) -> Onto
         ),
         storage_guard=lambda: typedb_storage_health(configured_settings),
         mailbox_store=stores.ontology_reasoning_mailbox_store(reasoning_store_settings),
+        queue_health_service=OntologyReasoningQueueHealthService(
+            store=cursor_store,
+            settings=configured_settings,
+        ),
     )
 
 

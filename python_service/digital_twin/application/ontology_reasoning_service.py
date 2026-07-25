@@ -177,14 +177,21 @@ TRIGGER_ORDER = {
 # A KIS or market-data event represents a new observation of a complete live
 # portfolio snapshot. Its materiality level changes scheduling priority, but
 # never makes an older price snapshot more trustworthy than the newest one.
-# Research/calendar events deliberately never enter this path because their
-# evidence is not fungible. ``immediate`` remains outside the mailbox for a
+# Generic research-evidence collection is also a fungible observation: the
+# source repository retains every evidence item and a later ABox projection
+# reads the complete latest evidence set. Hypothesis research handoffs remain
+# non-fungible because their individual run-to-generation contract must be
+# acknowledged explicitly. ``immediate`` remains outside the mailbox for a
 # separately modelled emergency event, rather than a normal quote update.
 COALESCIBLE_REALTIME_TRIGGERS = {
     "market-data-update",
     "kis-realtime-update",
     "kis-realtime-websocket",
     "portfolio-snapshot-update",
+}
+
+COALESCIBLE_RESEARCH_TRIGGERS = {
+    "research-evidence-update",
 }
 
 
@@ -260,11 +267,17 @@ def event_time_key(event: object) -> Tuple[str, str]:
 
 
 def realtime_coalescing_key(event: object) -> Tuple[str, str, Tuple[str, ...]]:
-    """Return a conservative replacement key for redundant live observations."""
+    """Return a conservative replacement key for fungible source observations."""
     payload = event_payload(event)
     trigger = str(payload.get("trigger") or "").strip()
     review_level = event_review_level(event)
-    if trigger not in COALESCIBLE_REALTIME_TRIGGERS:
+    handoff = payload.get("reasoningHandoff")
+    is_generic_research_update = (
+        trigger in COALESCIBLE_RESEARCH_TRIGGERS
+        and not str(payload.get("researchRunId") or "").strip()
+        and not bool(handoff)
+    )
+    if trigger not in COALESCIBLE_REALTIME_TRIGGERS and not is_generic_research_update:
         return ()
     if review_level == "immediate":
         return ()
@@ -273,7 +286,7 @@ def realtime_coalescing_key(event: object) -> Tuple[str, str, Tuple[str, ...]]:
         return ()
     fact_types = tuple(sorted({str(item or "").strip() for item in payload.get("factTypes") or [] if str(item or "").strip()}))
     account_ids = []
-    raw_account_ids = payload.get("accountIds") or []
+    raw_account_ids = payload.get("accountIds") or payload.get("accountId") or []
     if isinstance(raw_account_ids, str):
         raw_account_ids = [raw_account_ids]
     elif not isinstance(raw_account_ids, (list, tuple, set)):
@@ -385,7 +398,7 @@ class OntologyReasoningRunner:
         return int_setting(self.settings, "ontologyReasoningCoherentSnapshotMaxSymbols", 20, 1, 50)
 
     def mailbox_enabled(self) -> bool:
-        """Use a durable latest-state queue only for fungible realtime observations."""
+        """Use a durable latest-state queue for fungible source observations."""
         return bool(self.mailbox_store) and truthy(self.settings.get("ontologyReasoningMailboxEnabled"), True)
 
     def mailbox_batch_size(self) -> int:
@@ -981,12 +994,13 @@ class OntologyReasoningRunner:
         return [item[1] for item in ranked_events[: max(1, int(limit or self.batch_size()))]]
 
     def mailbox_source_requests(self, limit: int = 0) -> List[object]:
-        """Read unprocessed realtime events before cadence filtering.
+        """Read unprocessed fungible events before cadence filtering.
 
         A symbol may be inside its projection cooldown while a newer quote is
-        already available.  The durable mailbox must still receive that newer
-        observation so the eventual TypeDB cycle uses current state rather
-        than the first tick that happened to become due.
+        or generic evidence observation already available. The durable mailbox
+        must still receive that newer observation so the eventual TypeDB cycle
+        uses current state rather than the first update that happened to become
+        due.
         """
         if not self.mailbox_enabled():
             return []
@@ -1104,7 +1118,7 @@ class OntologyReasoningRunner:
         source_requests: Iterable[object],
         enqueue_new: bool = True,
     ) -> Dict[str, object]:
-        """Persist newest realtime slots before a TypeDB cycle can be deferred."""
+        """Persist newest fungible slots before a TypeDB cycle can be deferred."""
         summary = {
             "enabled": self.mailbox_enabled(),
             "acceptedEventIds": [],

@@ -1,8 +1,9 @@
 """Durable latest-state mailbox for TypeDB reasoning requests.
 
 The event log remains the audit source of truth. This store only keeps the
-newest pending realtime observation for each account/symbol/fact family so a
-slow native TypeDB cycle does not replay stale ticks before current data.
+newest pending fungible observation for each account/symbol/fact family so a
+slow native TypeDB cycle does not replay stale source updates before current
+data.
 """
 
 from __future__ import annotations
@@ -172,7 +173,7 @@ class MySQLOntologyReasoningMailboxStore(MySQLOperationalConnection):
                             self._entry_values(entry, stamp) + (mailbox_key,),
                         )
                         if displaced and displaced != event_id:
-                            terminal = self._decrement_source_event(connection, displaced, "superseded", "newer realtime observation")
+                            terminal = self._decrement_source_event(connection, displaced, "superseded", "newer fungible observation")
                             if terminal:
                                 result["terminalEventStates"][displaced] = terminal
                     else:

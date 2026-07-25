@@ -275,6 +275,41 @@ def realtime_request(event_id, symbols, occurred_at, review_level="normal", fact
     )
 
 
+def research_evidence_request(
+    event_id,
+    symbols,
+    occurred_at,
+    trigger="research-evidence-update",
+    research_run_id="",
+    reasoning_handoff=None,
+):
+    source = DomainEvent(
+        name="research.evidence.collected",
+        aggregate_id="research:" + ",".join(symbols),
+        occurred_at=occurred_at,
+        payload={"sourceObservedAt": occurred_at, "symbols": list(symbols)},
+    )
+    request = ontology_reasoning_requested_event(
+        source,
+        trigger,
+        symbols,
+        changed_count=len(symbols),
+        fact_types=["NewsEvent", "ResearchEvidence"],
+    )
+    payload = dict(request.payload or {})
+    if research_run_id:
+        payload["researchRunId"] = research_run_id
+    if reasoning_handoff:
+        payload["reasoningHandoff"] = dict(reasoning_handoff)
+    return DomainEvent(
+        name=ONTOLOGY_REASONING_REQUESTED,
+        aggregate_id=request.aggregate_id,
+        payload=payload,
+        occurred_at=occurred_at,
+        event_id=event_id,
+    )
+
+
 class OntologyReasoningMailboxTests(unittest.TestCase):
     def build_runner(self, events, now=None, settings=None, event_publisher=None):
         self.cursor = MemoryCursor()
@@ -314,6 +349,39 @@ class OntologyReasoningMailboxTests(unittest.TestCase):
         self.assertEqual("superseded", self.mailbox.events["old"]["state"])
         self.assertEqual(0, result["mailbox"]["pendingEntryCount"])
         self.assertEqual("ok", result["executionTelemetry"]["status"])
+
+    def test_generic_research_evidence_updates_coalesce_per_symbol_before_typedb(self):
+        old = research_evidence_request("research-old", ["AAPL", "MSFT"], "2026-07-24T00:00:00Z")
+        newest_aapl = research_evidence_request("research-aapl", ["AAPL"], "2026-07-24T00:01:00Z")
+        newest_msft = research_evidence_request("research-msft", ["MSFT"], "2026-07-24T00:02:00Z")
+        runner = self.build_runner([old, newest_aapl, newest_msft])
+
+        first = runner.run_once(force=True)
+
+        self.assertIn("research-old", self.cursor.superseded)
+        self.assertEqual("superseded", self.mailbox.events["research-old"]["state"])
+        self.assertEqual(1, first["mailbox"]["pendingEntryCount"])
+        self.assertEqual(1, len(self.monitor.calls))
+
+        second = runner.run_once(force=True)
+
+        self.assertEqual(2, len(self.monitor.calls))
+        self.assertEqual(0, second["mailbox"]["pendingEntryCount"])
+        self.assertIn("research-aapl", self.cursor.ids)
+        self.assertIn("research-msft", self.cursor.ids)
+
+    def test_hypothesis_research_handoff_does_not_enter_latest_state_mailbox(self):
+        event = research_evidence_request(
+            "hypothesis-research",
+            ["AAPL"],
+            "2026-07-24T00:00:00Z",
+            trigger="hypothesis-research-update",
+            research_run_id="research-run-1",
+            reasoning_handoff={"status": "requested", "requestId": "handoff-1"},
+        )
+        runner = self.build_runner([event])
+
+        self.assertEqual([], runner.mailbox_entries_for_event(event))
 
     def test_same_fact_revision_keeps_existing_pending_mailbox_slot(self):
         old = realtime_request("old-revision", ["AAPL"], "2026-07-24T00:00:00Z", fact_revision="fact-revision:aapl-v1")

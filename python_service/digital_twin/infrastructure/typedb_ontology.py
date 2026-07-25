@@ -5015,6 +5015,16 @@ class ScopedABoxManifestMixin:
             }
         options = dict(payload or {})
         requested_world_id = str(options.get("worldId") or options.get("ontologyWorldId") or "").strip()
+        requested_world_type_values = options.get("worldTypes")
+        if not isinstance(requested_world_type_values, (list, tuple, set)):
+            requested_world_type_values = str(
+                requested_world_type_values or options.get("worldType") or ""
+            ).split(",")
+        requested_world_types = {
+            str(item or "").strip().lower()
+            for item in requested_world_type_values
+            if str(item or "").strip()
+        }
         requested_manifest_limit = number_or_none(
             options.get("maxInactiveManifests")
             if options.get("maxInactiveManifests") is not None
@@ -5059,6 +5069,15 @@ class ScopedABoxManifestMixin:
                 item for item in self.list_ontology_worlds()
                 if isinstance(item, dict) and str(item.get("worldId") or "").strip()
             ]
+            if requested_world_types:
+                worlds = [
+                    item for item in worlds
+                    if (
+                        str(item.get("worldType") or "").strip().lower() in requested_world_types
+                        or str(item.get("worldId") or "").split(":", 1)[0].strip().lower()
+                        in requested_world_types
+                    )
+                ]
             if worlds:
                 results = []
                 for world in worlds:
@@ -5079,8 +5098,20 @@ class ScopedABoxManifestMixin:
                     "status": "partial" if statuses.intersection({"error", "partial", "deferred-write-lease"}) else "ok",
                     "graphStore": "typedb",
                     "maintenanceMode": "per-active-world",
+                    "worldTypes": sorted(requested_world_types),
                     "worldCount": len(results),
                     "worlds": results,
+                    "durationMs": int((time.perf_counter() - started_at) * 1000),
+                }
+            if requested_world_types:
+                return {
+                    "configured": True,
+                    "status": "ok",
+                    "graphStore": "typedb",
+                    "maintenanceMode": "per-active-world",
+                    "worldTypes": sorted(requested_world_types),
+                    "worldCount": 0,
+                    "worlds": [],
                     "durationMs": int((time.perf_counter() - started_at) * 1000),
                 }
 

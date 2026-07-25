@@ -1169,6 +1169,21 @@ class TypeDBOntologyRepositoryTests(unittest.TestCase):
         self.assertEqual("ok", result["inference"]["status"])
         prune_inference.assert_called_once_with("inference:active", keep_count=2)
 
+    def test_deferred_maintenance_can_be_scoped_to_portfolio_worlds(self):
+        repository = TypeDBOntologyGraphRepository("127.0.0.1:1729")
+        worlds = [
+            {"worldId": "market:shared:global", "worldType": "market"},
+            {"worldId": "knowledge:shared:global", "worldType": "knowledge"},
+        ]
+
+        with patch.object(repository, "list_ontology_worlds", return_value=worlds):
+            result = repository.run_deferred_maintenance({"worldTypes": ["portfolio"]})
+
+        self.assertEqual("ok", result["status"])
+        self.assertEqual(["portfolio"], result["worldTypes"])
+        self.assertEqual(0, result["worldCount"])
+        self.assertEqual([], result["worlds"])
+
     def test_deferred_maintenance_allows_an_explicit_bounded_orphan_drain(self):
         repository = TypeDBOntologyGraphRepository("127.0.0.1:1729")
         with patch.object(repository, "acquire_scoped_abox_write_lease", return_value={"acquired": True}), patch.object(

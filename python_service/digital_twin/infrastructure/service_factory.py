@@ -658,6 +658,18 @@ def build_ontology_reasoning_runner(settings=None, event_publisher=None) -> Onto
             "accounts": rows,
         }
 
+    def portfolio_world_maintenance():
+        maintenance = getattr(ontology_repository, "run_deferred_maintenance", None)
+        if not callable(maintenance):
+            return {
+                "status": "not-supported",
+                "reason": "Graph store has no deferred maintenance adapter.",
+            }
+        # Shared worlds have a dedicated projection worker and writer lease.
+        # The reasoning worker only owns PortfolioWorld retention so an idle
+        # account scan cannot block a MarketWorld or KnowledgeWorld update.
+        return maintenance({"worldTypes": ["portfolio"]})
+
     return OntologyReasoningRunner(
         event_reader=event_log,
         cursor_store=cursor_store,
@@ -678,11 +690,7 @@ def build_ontology_reasoning_runner(settings=None, event_publisher=None) -> Onto
         research_store=stores.investment_research_store(reasoning_store_settings),
         priority_symbols_provider=lambda: ontology_reasoning_priority_symbols(registry, reasoning_store_settings),
         projection_recovery_probe=projection_recovery_probe,
-        maintenance_runner=lambda: (
-            ontology_repository.run_deferred_maintenance()
-            if hasattr(ontology_repository, "run_deferred_maintenance")
-            else {"status": "not-supported", "reason": "Graph store has no deferred maintenance adapter."}
-        ),
+        maintenance_runner=portfolio_world_maintenance,
         storage_guard=lambda: typedb_storage_health(configured_settings),
         mailbox_store=stores.ontology_reasoning_mailbox_store(reasoning_store_settings),
         queue_health_service=OntologyReasoningQueueHealthService(

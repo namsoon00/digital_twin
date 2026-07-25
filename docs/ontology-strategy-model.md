@@ -56,7 +56,7 @@ TBox / RuleBox (shared definitions)
 
 운영 흐름은 `계정별 원본 스냅샷 -> PortfolioWorld ABox 검증/RuleBox materialization -> 시장·지식 slice 생성 -> MySQL durable projection outbox -> 독립 worker -> MarketWorld/KnowledgeWorld scoped Manifest 활성화 -> 해당 PortfolioWorld AI/알림`이다. 공유 세계 투영은 알림 지연 경로가 아니며, 계정 ABox 전체를 큐에 넣지 않고 대상 세계별 축약 패킷만 넣는다. TypeDB는 쓰기를 직렬화하므로 worker는 기본적으로 한 실행에 한 shared world만 처리한다. 패킷은 크기 상한, source observation clock, lease, 재시도, 최신 스냅샷 coalescing, 완료 이력 retention을 가진다. 새 공통 규칙을 배포한 직후에는 대상 계정의 다음 투영이 해당 규칙을 적용한다. 전 계정에 즉시 실행이 필요할 때도 무범위 전역 실행 대신, 계정 목록을 대상으로 한 명시적 world fan-out 작업만 허용한다.
 
-공유 투영 계약은 `shared-world-projection-v3`으로 버전 관리한다. 계약이 바뀌면 기존 shared Manifest를 병합하지 않고 새 계약의 slice로 완전 재구축한다. `accountId`는 공유 세계 자체의 기술적 소유자 값만 허용하며, 계정·전략·손익·알림·의사결정·가설·AI 프롬프트·raw payload 필드는 투영 전에 제거한다. 계약 재구축 뒤에는 비활성 Manifest와 참조되지 않는 scope generation을 같은 세계의 lease 아래에서 즉시 정리한다. 일반 갱신의 정리는 별도 deferred maintenance 주기로 수행해 실시간 projection lease를 오래 잡지 않는다.
+공유 투영 계약은 `shared-world-projection-v3`으로 버전 관리한다. 계약이 바뀌면 기존 shared Manifest를 병합하지 않고 새 계약의 slice로 완전 재구축한다. `accountId`는 공유 세계 자체의 기술적 소유자 값만 허용하며, 계정·전략·손익·알림·의사결정·가설·AI 프롬프트·raw payload 필드는 투영 전에 제거한다. 계약 재구축 뒤에는 비활성 Manifest와 참조되지 않는 scope generation을 같은 세계의 lease 아래에서 즉시 정리한다. PortfolioWorld의 deferred maintenance와 shared-world projection maintenance는 서로의 writer lease를 잡지 않도록 분리하며, 일반 갱신은 live projection lease를 오래 점유하지 않는 bounded cleanup만 수행한다.
 
 TypeDB의 물리 저장도 TBox를 따른다. 새 ABox 노드와 관계는 범용 `ontology-node`/`ontology-assertion`만으로 쓰지 않고 각각의 TBox class/relation subtype으로 저장하며, 범용 타입은 이전 세대 호환 조회에만 남긴다. MySQL은 원천 시계열, raw payload, outbox와 audit을 보존하고 TypeDB는 현재 활성 사실과 관계 추론에 필요한 그래프만 보존한다.
 

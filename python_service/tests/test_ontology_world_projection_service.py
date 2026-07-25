@@ -88,6 +88,11 @@ def projection_job(kind="market"):
 
 
 class OntologyWorldProjectionRunnerTests(unittest.TestCase):
+    def test_default_worker_claims_one_shared_world_per_isolated_run(self):
+        runner = OntologyWorldProjectionRunner(FakeOutbox([]), FakeRecorder({"status": "ok"}))
+
+        self.assertEqual(1, runner.batch_size())
+
     def test_completed_shared_projection_acknowledges_the_durable_job(self):
         outbox = FakeOutbox([projection_job()])
         recorder = FakeRecorder({"status": "ok", "saved": True})

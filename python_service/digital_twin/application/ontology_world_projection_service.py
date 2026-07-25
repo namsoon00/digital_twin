@@ -44,7 +44,13 @@ class OntologyWorldProjectionRunner:
         self.last_run_details = []
 
     def batch_size(self) -> int:
-        return _integer_setting(self.settings, "ontologyWorldProjectionBatchSize", 6, 1, 50)
+        # TypeDB serializes writes at the database boundary. A MarketWorld
+        # and KnowledgeWorld can each require a substantial scoped Manifest
+        # update, so combining them in one isolated process can exceed the
+        # worker budget and delay the next account inference. The outbox
+        # coalesces each world independently; one job per run is therefore
+        # the stable default rather than a throughput loss.
+        return _integer_setting(self.settings, "ontologyWorldProjectionBatchSize", 1, 1, 50)
 
     def lease_seconds(self) -> int:
         return _integer_setting(self.settings, "ontologyWorldProjectionLeaseSeconds", 300, 30, 3600)

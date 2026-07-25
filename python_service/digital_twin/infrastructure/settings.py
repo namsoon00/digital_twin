@@ -1001,7 +1001,7 @@ def runtime_settings() -> Dict[str, str]:
         "ontologyWorldProjectionBatchSize": value(
             "ontologyWorldProjectionBatchSize",
             "ONTOLOGY_WORLD_PROJECTION_BATCH_SIZE",
-            "4",
+            "1",
         ),
         "ontologyWorldProjectionLeaseSeconds": value(
             "ontologyWorldProjectionLeaseSeconds",

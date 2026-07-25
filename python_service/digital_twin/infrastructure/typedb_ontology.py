@@ -1207,6 +1207,21 @@ TYPEDB_PROMOTED_NUMERIC_ATTRIBUTES = {
     "reportedTradingValue": "ontology-reported-trading-value",
     "estimatedTradingValue": "ontology-estimated-trading-value",
     "tradingValueMismatchPct": "ontology-trading-value-mismatch-pct",
+    # A single raw exit-capacity profile carries the related execution facts.
+    # Keeping these fields promoted lets one native RuleBox relation predicate
+    # evaluate the profile without joining a fan-out of metric observations.
+    "hasMarketValue": "ontology-has-market-value",
+    "hasTradingValue": "ontology-has-trading-value",
+    "hasQuantity": "ontology-has-quantity",
+    "positionToTradingValuePct": "ontology-position-to-trading-value-pct",
+    "positionToDailyVolumePct": "ontology-position-to-daily-volume-pct",
+    "positionToBidDepthPct": "ontology-position-to-bid-depth-pct",
+    "positionToBidDepthValuePct": "ontology-position-to-bid-depth-value-pct",
+    "bidDepthCoveragePct": "ontology-bid-depth-coverage-pct",
+    "bidDepthValue": "ontology-bid-depth-value",
+    "sellableRatioPct": "ontology-sellable-ratio-pct",
+    "sellableBlocked": "ontology-sellable-blocked",
+    "exitDaysAtTenPctADV": "ontology-exit-days-at-ten-pct-adv",
     "bidAskImbalance": "ontology-bid-ask-imbalance",
     "foreignNetVolume": "ontology-foreign-net-volume",
     "foreignNetAmount": "ontology-foreign-net-amount",
@@ -9115,6 +9130,18 @@ attribute ontology-trading-value, value double;
 attribute ontology-reported-trading-value, value double;
 attribute ontology-estimated-trading-value, value double;
 attribute ontology-trading-value-mismatch-pct, value double;
+attribute ontology-has-market-value, value double;
+attribute ontology-has-trading-value, value double;
+attribute ontology-has-quantity, value double;
+attribute ontology-position-to-trading-value-pct, value double;
+attribute ontology-position-to-daily-volume-pct, value double;
+attribute ontology-position-to-bid-depth-pct, value double;
+attribute ontology-position-to-bid-depth-value-pct, value double;
+attribute ontology-bid-depth-coverage-pct, value double;
+attribute ontology-bid-depth-value, value double;
+attribute ontology-sellable-ratio-pct, value double;
+attribute ontology-sellable-blocked, value double;
+attribute ontology-exit-days-at-ten-pct-adv, value double;
 attribute ontology-trading-value-quality, value string;
 attribute ontology-trading-value-basis, value string;
 attribute ontology-bid-ask-imbalance, value double;
@@ -9366,6 +9393,18 @@ entity ontology-node @abstract,
     owns ontology-reported-trading-value,
     owns ontology-estimated-trading-value,
     owns ontology-trading-value-mismatch-pct,
+    owns ontology-has-market-value,
+    owns ontology-has-trading-value,
+    owns ontology-has-quantity,
+    owns ontology-position-to-trading-value-pct,
+    owns ontology-position-to-daily-volume-pct,
+    owns ontology-position-to-bid-depth-pct,
+    owns ontology-position-to-bid-depth-value-pct,
+    owns ontology-bid-depth-coverage-pct,
+    owns ontology-bid-depth-value,
+    owns ontology-sellable-ratio-pct,
+    owns ontology-sellable-blocked,
+    owns ontology-exit-days-at-ten-pct-adv,
     owns ontology-trading-value-quality,
     owns ontology-trading-value-basis,
     owns ontology-bid-ask-imbalance,

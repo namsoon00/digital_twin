@@ -3780,6 +3780,41 @@ class TypeDBOntologyRepositoryTests(unittest.TestCase):
             set(migration["addedRuleIds"]),
         )
 
+    def test_typedb_rule_catalog_migration_replaces_execution_metric_fanout(self):
+        bootstrap = rulebox_rules_to_payload(default_graph_inference_rules())
+        target_ids = {
+            "graph.liquidity.execution_guard.v1",
+            "graph.execution.liquidity_or_slippage_block.v1",
+            "graph.execution.capacity_safe.v1",
+        }
+        stored = []
+        for raw_rule in bootstrap:
+            if raw_rule["rule_id"] not in target_ids:
+                continue
+            legacy_rule = dict(raw_rule)
+            legacy_rule["version"] = "v1"
+            legacy_rule["enabled"] = False
+            stored.append(legacy_rule)
+
+        migration = migrate_typedb_rule_catalog(stored, bootstrap)
+        migrated = {item["rule_id"]: item for item in migration["rules"]}
+
+        self.assertEqual(target_ids, set(migration["rawAboxRuntimeUpdatedRuleIds"]))
+        for rule_id in target_ids:
+            self.assertEqual("v2", migrated[rule_id]["version"])
+            self.assertFalse(migrated[rule_id]["enabled"])
+            relation_conditions = [
+                condition
+                for condition in migrated[rule_id]["conditions"]
+                if condition.get("kind") == "relation"
+            ]
+            self.assertTrue(relation_conditions)
+            self.assertTrue(all(
+                condition.get("relation_type") == "HAS_EXECUTION_CAPACITY"
+                and condition.get("target_kind") == "exit-capacity"
+                for condition in relation_conditions
+            ))
+
     def test_typedb_insert_queries_project_same_ontology_graph_shape(self):
         graph = PortfolioOntology("portfolio:test")
         graph.entities.append(OntologyEntity("stock:005930", "삼성전자", "stock", {
@@ -6539,10 +6574,30 @@ class TypeDBOntologyRepositoryTests(unittest.TestCase):
 
         self.assertEqual("exists-any-shared-relation", plan["anyConditionCheckMode"])
         self.assertNotIn("reduce $anyConditionCount", query)
-        self.assertEqual(1, query.count('has ontology-relation-type "HAS_EXECUTION_METRIC"'))
-        self.assertIn('has ontology-field "positionToTradingValuePct"', query)
-        self.assertIn('has ontology-field "exitDaysAtTenPctADV"', query)
-        self.assertIn('has ontology-field "positionToBidDepthPct"', query)
+        self.assertEqual(1, query.count('has ontology-relation-type "HAS_EXECUTION_CAPACITY"'))
+        self.assertNotIn('has ontology-relation-type "HAS_EXECUTION_METRIC"', query)
+        self.assertIn("ontology-position-to-trading-value-pct", query)
+        self.assertIn("ontology-exit-days-at-ten-pct-adv", query)
+        self.assertIn("ontology-position-to-bid-depth-pct", query)
+
+    def test_typedb_execution_capacity_safe_uses_one_raw_profile_join(self):
+        rule = next(
+            item
+            for item in default_graph_inference_rules()
+            if item.rule_id == "graph.execution.capacity_safe.v1"
+        )
+
+        definition = typedb_native_function_definition(rule.to_dict())
+        query = definition["matchQuery"]
+
+        self.assertEqual("v2", rule.version)
+        self.assertEqual(1, query.count('has ontology-relation-type "HAS_EXECUTION_CAPACITY"'))
+        self.assertNotIn('has ontology-relation-type "HAS_EXECUTION_METRIC"', query)
+        self.assertIn("ontology-has-market-value", query)
+        self.assertIn("ontology-has-trading-value", query)
+        self.assertIn("ontology-has-quantity", query)
+        self.assertIn("ontology-position-to-trading-value-pct", query)
+        self.assertIn("ontology-sellable-ratio-pct", query)
 
     def test_typedb_any_group_check_uses_verified_manifest_storage_ids(self):
         rule = next(

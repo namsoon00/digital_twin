@@ -98,6 +98,12 @@ RULEBOX_RAW_ABOX_V2_RULE_IDS = {
     "graph.price.reclaim.thesis_support.v1",
     "graph.macro.regime.risk.v1",
     "graph.crypto.exposure.volatility_risk.v1",
+    # Execution rules now read one raw exit-capacity profile instead of
+    # fan-out execution-metric observations. Existing v1 definitions must be
+    # replaced so TypeDB functions use the bounded profile predicate.
+    "graph.liquidity.execution_guard.v1",
+    "graph.execution.liquidity_or_slippage_block.v1",
+    "graph.execution.capacity_safe.v1",
 }
 
 # These native-rule templates were added after RuleBox had already become the

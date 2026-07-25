@@ -305,7 +305,30 @@ def condition_target_filter_bool(condition: Dict[str, object], key: str):
 
 def condition_target_filter_number(condition: Dict[str, object], key: str):
     filters = condition.get("target_property_filters") if isinstance(condition.get("target_property_filters"), dict) else {}
-    return number_or_none(filters.get(key))
+    direct = number_or_none(filters.get(key))
+    if direct is not None:
+        return direct
+    expected_operators = (
+        {">=", ">", "gte", "gt"}
+        if key == "minValue"
+        else {"<=", "<", "lte", "lt"}
+        if key == "maxValue"
+        else set()
+    )
+    matches = []
+    for value in filters.values():
+        if not isinstance(value, dict):
+            continue
+        operator = str(value.get("operator") or "").strip().lower()
+        if operator not in expected_operators:
+            continue
+        numeric = number_or_none(value.get("value", value.get("default")))
+        if numeric is not None:
+            matches.append(numeric)
+    # Legacy fields carry one numeric threshold. Keep that compact projection
+    # only when an explicit predicate is equally unambiguous; conditions with
+    # several profile predicates remain available in propertiesJson.
+    return matches[0] if len(matches) == 1 else None
 
 def condition_relation_filter_values(condition: Dict[str, object], key: str) -> List[str]:
     filters = condition.get("relation_property_filters") if isinstance(condition.get("relation_property_filters"), dict) else {}

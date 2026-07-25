@@ -38,6 +38,7 @@ class OntologyReasoningQueueHealth:
     oldest_request_at: str
     oldest_request_age_minutes: int
     raw_pending_count: int
+    effective_pending_count: int
     mailbox_pending_entry_count: int
     pending_symbol_count: int
     overdue_pending_symbol_count: int
@@ -65,6 +66,7 @@ class OntologyReasoningQueueHealth:
             "oldestRequestAt": payload["oldest_request_at"],
             "oldestRequestAgeMinutes": payload["oldest_request_age_minutes"],
             "rawPendingCount": payload["raw_pending_count"],
+            "effectivePendingCount": payload["effective_pending_count"],
             "mailboxPendingEntryCount": payload["mailbox_pending_entry_count"],
             "pendingSymbolCount": payload["pending_symbol_count"],
             "overduePendingSymbolCount": payload["overdue_pending_symbol_count"],
@@ -123,6 +125,16 @@ def evaluate_ontology_reasoning_queue_health(
         source.get("mailboxPendingEntryCount")
         or mailbox.get("pendingEntryCount")
     )
+    # ``rawPendingCount`` is the audit/event-log scan size. A durable mailbox
+    # can collapse hundreds of source updates to a handful of latest-state
+    # slots, so operational pressure must be evaluated from the post-collapse
+    # work count whenever the scheduler provides it.
+    has_effective_pending_count = source.get("effectivePendingCount") is not None
+    effective_pending_count = (
+        integer(source.get("effectivePendingCount"))
+        if has_effective_pending_count
+        else max(raw_pending_count, mailbox_pending_entry_count)
+    )
     pending_symbols = source.get("pendingSymbols")
     pending_symbol_count = integer(dispatch.get("pendingSymbolCount") or source.get("pendingSymbolCount"))
     if not pending_symbol_count and isinstance(pending_symbols, (list, tuple, set)):
@@ -167,7 +179,7 @@ def evaluate_ontology_reasoning_queue_health(
         candidate_state = "critical"
         reason_code = "overdue-symbols-critical"
         reason = "대기 한도를 넘긴 종목 수가 심각 기준을 넘었습니다."
-    elif raw_pending_count >= critical_pending_count and pending_symbol_count >= 2:
+    elif effective_pending_count >= critical_pending_count and pending_symbol_count >= 2:
         candidate_state = "critical"
         reason_code = "request-count-critical"
         reason = "처리 대기 요청과 대상 종목 수가 심각 기준을 넘었습니다."
@@ -179,7 +191,7 @@ def evaluate_ontology_reasoning_queue_health(
         candidate_state = "delayed"
         reason_code = "overdue-symbols-delayed"
         reason = "대기 한도를 넘긴 종목이 누적되고 있습니다."
-    elif raw_pending_count >= warning_pending_count and pending_symbol_count >= 2:
+    elif effective_pending_count >= warning_pending_count and pending_symbol_count >= 2:
         candidate_state = "delayed"
         reason_code = "request-count-delayed"
         reason = "처리 대기 요청과 대상 종목 수가 지연 기준을 넘었습니다."
@@ -229,6 +241,7 @@ def evaluate_ontology_reasoning_queue_health(
         oldest_request_at=oldest_request_at,
         oldest_request_age_minutes=oldest_request_age_minutes,
         raw_pending_count=raw_pending_count,
+        effective_pending_count=effective_pending_count,
         mailbox_pending_entry_count=mailbox_pending_entry_count,
         pending_symbol_count=pending_symbol_count,
         overdue_pending_symbol_count=overdue_pending_symbol_count,

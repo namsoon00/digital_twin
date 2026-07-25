@@ -176,6 +176,33 @@ class OntologyReasoningQueueHealthTests(unittest.TestCase):
         self.assertEqual("critical", third.state)
         self.assertTrue(third.alert_required)
 
+    def test_latest_state_mailbox_pressure_uses_effective_pending_count(self):
+        health = evaluate_ontology_reasoning_queue_health(
+            queue_snapshot(
+                "2026-07-25T00:00:00Z",
+                rawRequestCount=320,
+                effectivePendingCount=9,
+                mailboxPendingEntryCount=9,
+                queueDispatch={
+                    "oldestRequestAt": "2026-07-25T00:00:00Z",
+                    "pendingSymbolCount": 6,
+                    "overduePendingSymbolCount": 0,
+                    "mode": "fairness-drain",
+                },
+            ),
+            previous={"state": "healthy"},
+            warning_age_minutes=30,
+            critical_age_minutes=90,
+            warning_pending_count=100,
+            critical_pending_count=200,
+            now=datetime(2026, 7, 25, 0, 1, tzinfo=UTC),
+        )
+
+        self.assertEqual("healthy", health.state)
+        self.assertEqual("queue-healthy", health.reason_code)
+        self.assertEqual(320, health.raw_pending_count)
+        self.assertEqual(9, health.effective_pending_count)
+
     def test_recovery_from_delayed_queue_is_alerted(self):
         previous = {
             "state": "delayed",

@@ -185,11 +185,20 @@ class OntologyReasoningQueueHealthNotificationEnqueuer:
         title = "온톨로지 추론 요청 대기 " + labels.get(state, "상태 변경")
         oldest = str(payload.get("oldestRequestAt") or "없음")
         age = int(payload.get("oldestRequestAgeMinutes") or 0)
+        raw_pending = int(payload.get("rawPendingCount") or 0)
+        effective_pending = int(payload.get("effectivePendingCount") or raw_pending)
+        pending_line = (
+            "• 유효 대기: " + str(effective_pending) + "건"
+            + " · 대상 종목: " + str(int(payload.get("pendingSymbolCount") or 0)) + "개"
+            + " · 대기 한도 초과: " + str(int(payload.get("overduePendingSymbolCount") or 0)) + "개"
+        )
+        if raw_pending > effective_pending:
+            pending_line += " · 원천 이벤트: " + str(raw_pending) + "건(최신 상태로 압축됨)"
         lines = [
             "[운영] " + title,
             "• 상태: " + state + " (이전 " + previous + ")",
             "• 가장 오래된 요청: " + oldest + (" · " + str(age) + "분 대기" if oldest != "없음" else ""),
-            "• 대기 요청: " + str(int(payload.get("rawPendingCount") or 0)) + "건 · 대상 종목: " + str(int(payload.get("pendingSymbolCount") or 0)) + "개 · 대기 한도 초과: " + str(int(payload.get("overduePendingSymbolCount") or 0)) + "개",
+            pending_line,
             "• 처리 모드: " + str(payload.get("queueMode") or "waiting"),
             "• 이유: " + str(payload.get("reason") or ""),
             "• 확인시각: " + str(payload.get("checkedAt") or event.occurred_at),

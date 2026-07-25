@@ -2336,6 +2336,7 @@ class OntologyReasoningRunner:
         )
         queue_metadata = {
             "rawRequestCount": int(work.get("rawRequestCount") or 0),
+            "effectivePendingCount": len(requests),
             "mailboxPendingEntryCount": int(work.get("mailboxPendingEntryCount") or 0),
             "sameRevisionEntryCount": len((work.get("mailbox") or {}).get("sameRevisionEntryKeys") or []),
             "staleRequestCount": len(stale_requests),
@@ -2932,6 +2933,7 @@ class OntologyReasoningRunner:
             "coherentSnapshotMaxSymbols": self.coherent_snapshot_max_symbols(),
             "processedCount": len(self.cursor_store.processed_event_ids()),
             "rawPendingCount": int(work.get("rawRequestCount") or len(pending)),
+            "effectivePendingCount": len(pending),
             "coalescedPendingEventCount": len(work.get("coalescedEventIds") or []),
             "mailboxPendingEntryCount": int(work.get("mailboxPendingEntryCount") or 0),
             "mailbox": mailbox,

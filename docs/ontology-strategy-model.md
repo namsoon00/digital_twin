@@ -134,6 +134,7 @@ TypeDB는 먼저 규칙 성립 여부와 InferenceBox 관계를 만들고, `onto
 - `materializationSource=typedb-abox-native-rule`: 정상. TypeDB ABox 기반 materialization 결과다.
 - `pythonCompatibilityReasonerUsed=false`: 정상 운영 경로다.
 - `typedbSchemaFunctionUsed=true`: 정상. RuleBox profile이 TypeDB schema function으로 동기화되고 해당 function query가 실행됐다.
+- `deferred-schema-function-provisioning`: 재시작 뒤 TypeDB schema function을 작은 후보 규칙 배치로 배포 중이다. 이전 정렬 세대를 유지하고 재시도하므로 부분 RuleBox 결과를 투자 판단이나 알림으로 사용하면 안 된다.
 - `typedbNativeRuleSkippedCount=0`: 정상. 지원되지 않아 건너뛴 active rule이 없다.
 - `pythonCompatibilityReasonerUsed=true`: 비정상. 운영 투자 판단 경로에서는 사용하면 안 된다. TypeDB schema function sync/query 실패는 투자 판단을 차단하고 진단 알림으로 다뤄야 한다.
 - `relations=0`, `traces=0`: 보유/관심 데이터가 있는데도 이 값이면 TypeDB 저장, native rule profile, 조건 매칭, worker 실행 상태를 순서대로 확인한다.

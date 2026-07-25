@@ -1176,6 +1176,16 @@ DEFAULT_TYPEDB_NATIVE_RULE_EXECUTION_BUDGET_SECONDS = 105.0
 # write lease is held. Four workers keep local TypeDB planner pressure bounded
 # while removing the serial wait across the small applicable-rule set.
 DEFAULT_TYPEDB_NATIVE_RULE_PARALLELISM = 4
+# TypeDB recompiles the schema function graph at each deployment transaction.
+# A full RuleBox has dozens of generated functions, so a restart must never
+# submit that entire catalogue as one uninterruptible schema operation.  Three
+# functions keep the deployment transaction below the normal schema timeout on
+# the local runtime while still making deterministic progress on every retry.
+DEFAULT_TYPEDB_SCHEMA_FUNCTION_PROVISION_BATCH_SIZE = 3
+# Large ABox migrations may need a long schema timeout. Generated functions do
+# not: their driver deadline stays short so a stalled compiler cannot retain
+# local TypeDB CPU after the deployment caller has stopped waiting.
+DEFAULT_TYPEDB_SCHEMA_FUNCTION_PROVISION_TIMEOUT_SECONDS = 30.0
 TYPEDB_PROMOTED_NUMERIC_ATTRIBUTES = {
     "currentPrice": "ontology-current-price",
     "averagePrice": "ontology-average-price",
@@ -5309,6 +5319,8 @@ class TypeDBOntologyGraphRepository(GraphStoreOntologyRowMapperMixin, ScopedABox
         inference_write_lease_enabled: bool = False,
         process_schema_function_cache_enabled: bool = False,
         schema_function_probe_interval_seconds: float = 300.0,
+        schema_function_provision_batch_size: int = DEFAULT_TYPEDB_SCHEMA_FUNCTION_PROVISION_BATCH_SIZE,
+        schema_function_provision_timeout_seconds: float = DEFAULT_TYPEDB_SCHEMA_FUNCTION_PROVISION_TIMEOUT_SECONDS,
     ):
         self.address = str(address or "").strip()
         self.user = str(user or "admin").strip() or "admin"
@@ -5369,6 +5381,26 @@ class TypeDBOntologyGraphRepository(GraphStoreOntologyRowMapperMixin, ScopedABox
         self._schema_function_probe_interval_seconds = max(
             0.0,
             float(schema_function_probe_interval_seconds or 0.0),
+        )
+        self._schema_function_provision_batch_size = max(
+            1,
+            min(
+                12,
+                int(
+                    number_or_none(schema_function_provision_batch_size)
+                    or DEFAULT_TYPEDB_SCHEMA_FUNCTION_PROVISION_BATCH_SIZE
+                ),
+            ),
+        )
+        self._schema_function_provision_timeout_seconds = max(
+            5.0,
+            min(
+                60.0,
+                float(
+                    number_or_none(schema_function_provision_timeout_seconds)
+                    or DEFAULT_TYPEDB_SCHEMA_FUNCTION_PROVISION_TIMEOUT_SECONDS
+                ),
+            ),
         )
         self._last_graph = None
         self._last_rules: List[GraphInferenceRule] = []
@@ -5467,6 +5499,12 @@ class TypeDBOntologyGraphRepository(GraphStoreOntologyRowMapperMixin, ScopedABox
 
     def native_rule_any_condition_parallelism(self) -> int:
         return self._native_rule_any_condition_parallelism
+
+    def schema_function_provision_batch_size(self) -> int:
+        return self._schema_function_provision_batch_size
+
+    def schema_function_provision_timeout_seconds(self) -> float:
+        return self._schema_function_provision_timeout_seconds
 
     def clear_rulebox_snapshot_cache(self) -> None:
         self._rulebox_snapshot_cache_at = 0.0
@@ -10530,33 +10568,38 @@ relation ontology-assertion,
         result: Dict[str, object],
         rules: Iterable[GraphInferenceRule],
     ) -> Dict[str, object]:
-        """Make a successful ontology seed usable by realtime rule execution.
+        """Record native-function deployment as a deferred runtime concern.
 
-        RuleBox rows and TypeDB schema functions are deployed artifacts. Keeping
-        the former while silently missing the latter meant a server restart
-        could leave every market-open cycle without investment inference.
+        RuleBox rows are the durable investment-policy contract. Generated
+        TypeDB functions are a compiled view of that contract and can be much
+        more expensive to install than the static TBox/RuleBox seed itself.
+        Keeping a fresh server restart behind a whole-catalogue compilation
+        caused worker startup to time out and left TypeDB busy after the client
+        had already given up. Runtime execution now provisions only its exact
+        candidate rules in small, verified batches; the seed must remain a
+        successful static deployment while that work is pending.
         """
         completed = dict(result or {})
         if not completed.get("saved"):
             return completed
-        try:
-            schema_sync = self.sync_typedb_native_rule_functions(rules)
-        except Exception as error:  # noqa: BLE001 - surface a failed startup repair explicitly.
-            schema_sync = {
-                "status": "error",
-                "reasonCode": typedb_error_code(error),
-                "reason": str(error)[:220],
-            }
-        completed["schemaFunctionSync"] = schema_sync
-        if str(schema_sync.get("status") or "") == "ok":
-            return completed
-        completed.update({
-            "saved": False,
-            "seeded": False,
-            "status": "schema-function-sync-failed",
-            "reason": "TypeDB schema function 동기화 실패: "
-            + str(schema_sync.get("reason") or schema_sync.get("status") or "")[:180],
+        rule_ids = sorted({
+            str(getattr(rule, "rule_id", "") or "").strip()
+            for rule in rules or []
+            if str(getattr(rule, "rule_id", "") or "").strip()
         })
+        completed["schemaFunctionSync"] = {
+            "status": "deferred",
+            "configured": True,
+            "graphStore": "typedb",
+            "engineVersion": TYPEDB_NATIVE_RULE_ENGINE_VERSION,
+            "deploymentMode": "candidate-scoped-staged",
+            "ruleCount": len(rule_ids),
+            "provisionBatchSize": self.schema_function_provision_batch_size(),
+            "reason": (
+                "TypeDB schema functions are provisioned by the first eligible "
+                "native RuleBox execution in bounded candidate batches."
+            ),
+        }
         return completed
 
     def rulebox_snapshot(self) -> Dict[str, object]:
@@ -12308,6 +12351,29 @@ relation ontology-assertion,
                 "reasonCode": "typedbSchemaFunctionVerificationMismatch",
                 "reason": "TypeDB root function is unavailable although its generated definitions are present.",
             }
+        # Keep all definitions for one rule together, then bound a deployment
+        # attempt by rule count. A function compiler restart used to receive
+        # the whole RuleBox here (80 functions / roughly 150KB TypeQL), which
+        # can monopolise the local TypeDB planner even after the caller times
+        # out. The remaining missing functions stay explicitly pending and a
+        # later native-rule retry continues from the TypeDB schema catalogue.
+        provision_batch_size = self.schema_function_provision_batch_size()
+        deployment_rule_ids: List[str] = []
+        deployment_definitions: List[Dict[str, object]] = []
+        pending_definitions: List[Dict[str, object]] = []
+        for definition in definitions_to_sync:
+            rule_id = str(definition.get("ruleId") or "").strip()
+            if rule_id not in deployment_rule_ids and len(deployment_rule_ids) >= provision_batch_size:
+                pending_definitions.append(definition)
+                continue
+            if rule_id and rule_id not in deployment_rule_ids:
+                deployment_rule_ids.append(rule_id)
+            deployment_definitions.append(definition)
+        pending_rule_ids = sorted({
+            str(item.get("ruleId") or "").strip()
+            for item in pending_definitions
+            if str(item.get("ruleId") or "").strip()
+        })
         imported = self.driver_imports()
         if imported[0] is None:
             return {
@@ -12327,33 +12393,28 @@ relation ontology-assertion,
         failed: List[Dict[str, object]] = []
         try:
             def sync_definitions_batch(definitions_batch: List[Dict[str, object]]) -> List[Dict[str, object]]:
-                """Install an entirely new function set in one schema commit.
+                """Install one bounded, deterministic function group.
 
-                A clean TypeDB database has no generated functions, so opening
-                one schema transaction per rule repeatedly recompiles a growing
-                schema.  The all-missing case is deterministic and has no
-                duplicate race to recover from; committing it as one batch
-                makes initial provisioning bounded. Mixed/retry cases retain
-                the safer one-definition transaction below.
+                A schema transaction per function makes a cold deployment
+                unnecessarily slow, but a whole RuleBox definition can keep
+                TypeDB's compiler busy long after a service restart timed out.
+                The caller limits this batch to a small set of complete rules.
                 """
                 def operation():
-                    driver = self.open_driver(imported)
+                    timeout = self.schema_function_provision_timeout_seconds()
+                    driver = self.open_driver(imported, request_timeout_seconds=timeout)
                     try:
                         self.ensure_database(driver)
                         self.ensure_schema(driver, imported)
-                        timeout = max(
-                            self.schema_operation_timeout_seconds(),
-                            min(180.0, float(len(definitions_batch)) * 2.0),
-                        )
-                        with typedb_operation_timeout(timeout, "TypeDB initial schema function sync"):
+                        with typedb_operation_timeout(timeout, "TypeDB schema function provisioning"):
                             with driver.transaction(self.database, TransactionType.SCHEMA) as tx:
                                 # A schema transaction alone is not enough to
                                 # avoid repeated TypeDB compilation: issuing
                                 # one ``define`` query per function still
                                 # rebuilds the growing function graph for
-                                # every item. New content-addressed functions
-                                # have no duplicate race, so compile the full
-                                # batch as one TypeQL definition statement.
+                                # every item. These are content-addressed and
+                                # bounded, so compile this small group as one
+                                # TypeQL definition statement.
                                 bodies = [
                                     str(definition.get("body") or "").strip()
                                     for definition in definitions_batch
@@ -12376,7 +12437,12 @@ relation ontology-assertion,
                     finally:
                         self.close_driver(driver)
 
-                return self.with_typedb_retries(operation)
+                # A schema compiler timeout can leave the server shedding the
+                # original request for a short period. Retrying the same
+                # expensive definition immediately compounds that pressure;
+                # the persisted RuleBox retry will resume this small batch on
+                # the next inference cycle instead.
+                return operation()
 
             def sync_definition(definition: Dict[str, object]) -> Dict[str, object]:
                 """Define one content-addressed function in its own schema transaction.
@@ -12389,12 +12455,13 @@ relation ontology-assertion,
                 function name as the deployment key.
                 """
                 def operation():
-                    driver = self.open_driver(imported)
+                    timeout = self.schema_function_provision_timeout_seconds()
+                    driver = self.open_driver(imported, request_timeout_seconds=timeout)
                     try:
                         self.ensure_database(driver)
                         self.ensure_schema(driver, imported)
                         try:
-                            with typedb_operation_timeout(self.schema_operation_timeout_seconds(), "TypeDB schema function sync"):
+                            with typedb_operation_timeout(timeout, "TypeDB schema function provisioning"):
                                 with driver.transaction(self.database, TransactionType.SCHEMA) as tx:
                                     tx.query(str(definition.get("define") or "")).resolve()
                                     tx.commit()
@@ -12411,23 +12478,26 @@ relation ontology-assertion,
                     "nativeRuleId": definition.get("nativeRuleId"),
                     "schemaFunctionName": definition.get("functionName"),
                     "rootSchemaFunctionName": definition.get("rootFunctionName") or definition.get("functionName"),
-                    "schemaFunctionSyncStatus": self.with_typedb_retries(operation),
+                    # Do not retry a costly schema definition in the same
+                    # request. A later staged cycle observes its durable
+                    # result or safely attempts it again.
+                    "schemaFunctionSyncStatus": operation(),
                 }
 
             synced.clear()
-            if len(definitions_to_sync) > 1 and len(definitions_to_sync) == len(missing_function_names):
+            if len(deployment_definitions) > 1:
                 try:
-                    synced.extend(sync_definitions_batch(definitions_to_sync))
+                    synced.extend(sync_definitions_batch(deployment_definitions))
                 except Exception:
                     # A batch can be invalidated by a concurrent schema writer
                     # or one unexpected legacy definition. Re-open independent
                     # transactions so already-installed functions are treated
                     # as idempotent rather than failing the whole RuleBox.
                     synced.clear()
-                    for definition in definitions_to_sync:
+                    for definition in deployment_definitions:
                         synced.append(sync_definition(definition))
             else:
-                for definition in definitions_to_sync:
+                for definition in deployment_definitions:
                     synced.append(sync_definition(definition))
         except Exception as error:  # noqa: BLE001 - caller must block investment inference.
             failed.append({
@@ -12454,7 +12524,14 @@ relation ontology-assertion,
                 "reasonCode": typedb_error_code(error),
                 "reason": str(error)[:220],
             }
-        verification_result = self.probe_typedb_native_rule_functions(rules, world_id)
+        deployed_rules = [
+            rule for rule in rules
+            if str(getattr(rule, "rule_id", "") or "").strip() in set(deployment_rule_ids)
+        ]
+        verification_result = self.probe_typedb_native_rule_functions(
+            deployed_rules or rules,
+            world_id,
+        )
         if not verification_result.get("available"):
             return {
                 "configured": True,
@@ -12477,6 +12554,66 @@ relation ontology-assertion,
                 "reason": "TypeDB schema function sync did not verify every executable rule.",
             }
         synced_rule_ids = sorted(set(str(item.get("ruleId") or "") for item in synced if str(item.get("ruleId") or "")))
+        if pending_definitions:
+            return {
+                "configured": True,
+                "status": "provisioning",
+                "graphStore": "typedb",
+                "engineVersion": TYPEDB_NATIVE_RULE_ENGINE_VERSION,
+                "schemaFunctionSyncUsed": True,
+                "schemaFunctionSyncCached": False,
+                "schemaFunctionProvisioning": True,
+                "schemaFunctionProvisionBatchSize": provision_batch_size,
+                "syncFingerprint": sync_fingerprint,
+                "syncedCount": len(synced_rule_ids),
+                "syncedFunctionCount": len(synced),
+                "skippedCount": len(skipped),
+                "failedCount": 0,
+                "syncedRules": [{"ruleId": item} for item in synced_rule_ids[:40]],
+                "syncedFunctions": synced[:60],
+                "skippedRules": skipped[:40],
+                "pendingRuleCount": len(pending_rule_ids),
+                "pendingFunctionCount": len(pending_definitions),
+                "pendingRuleIds": pending_rule_ids[:80],
+                "functionProbe": probe_result,
+                "functionDefinitionProbe": definition_probe,
+                "verificationProbe": verification_result,
+                "reasonCode": "typedbSchemaFunctionProvisioning",
+                "reason": (
+                    "TypeDB schema function deployment is staged: "
+                    + str(len(synced_rule_ids))
+                    + " rule(s) were verified and "
+                    + str(len(pending_rule_ids))
+                    + " remain."
+                ),
+                "retryable": True,
+            }
+        # The final batch must verify the complete selected RuleBox. Earlier
+        # batches only verified their own functions so a partial deployment can
+        # never be mistaken for a complete investment evaluation.
+        if deployed_rules and len(deployed_rules) != len(rules):
+            verification_result = self.probe_typedb_native_rule_functions(rules, world_id)
+            if not verification_result.get("available"):
+                return {
+                    "configured": True,
+                    "status": "error",
+                    "graphStore": "typedb",
+                    "engineVersion": TYPEDB_NATIVE_RULE_ENGINE_VERSION,
+                    "schemaFunctionSyncUsed": True,
+                    "schemaFunctionProbeUsed": True,
+                    "syncedCount": len(synced_rule_ids),
+                    "syncedFunctionCount": len(synced),
+                    "skippedCount": len(skipped),
+                    "failedCount": 1,
+                    "syncedRules": [{"ruleId": item} for item in synced_rule_ids[:40]],
+                    "syncedFunctions": synced[:60],
+                    "skippedRules": skipped[:40],
+                    "functionProbe": probe_result,
+                    "functionDefinitionProbe": definition_probe,
+                    "verificationProbe": verification_result,
+                    "reasonCode": str(verification_result.get("reasonCode") or "typedbSchemaFunctionVerificationError"),
+                    "reason": "TypeDB schema function sync did not verify every executable rule.",
+                }
         result = {
             "configured": True,
             "status": "ok",
@@ -12784,13 +12921,14 @@ relation ontology-assertion,
             )
             execution_rules = list(rule_selection.get("selectedRules") or parsed_rules)
             # TypeDB schema functions are the only runtime investment-rule
-            # evaluator. This also repairs a database restarted without its
-            # compiled functions before a monitoring cycle can silently lose
-            # every changed holding.
+            # evaluator. Provision only the rules that this complete execution
+            # needs; the static RuleBox can contain many unrelated rules and
+            # must not force a cold server to compile every function before a
+            # single changed holding can be evaluated.
             function_sync_started = time.perf_counter()
             function_sync_result = typedb_call_for_world(
                 self.sync_typedb_native_rule_functions,
-                parsed_rules,
+                execution_rules,
                 force=force_schema_function_sync,
                 world_id=world_id,
             )
@@ -12810,6 +12948,8 @@ relation ontology-assertion,
                 "typedbSchemaFunctionSyncedCount": int(number_or_none(function_sync_result.get("syncedCount")) or 0),
                 "typedbSchemaFunctionSkippedCount": int(number_or_none(function_sync_result.get("skippedCount")) or 0),
                 "typedbSchemaFunctionFailedCount": int(number_or_none(function_sync_result.get("failedCount")) or 0),
+                "typedbSchemaFunctionPendingCount": int(number_or_none(function_sync_result.get("pendingRuleCount")) or 0),
+                "typedbSchemaFunctionPendingRuleIds": list(function_sync_result.get("pendingRuleIds") or [])[:80],
                 "typedbSchemaFunctionUsed": str(function_sync_result.get("status") or "") == "ok",
                 "typeDbFunctionReasoningUsed": str(function_sync_result.get("status") or "") == "ok",
                 "typedbNativeExecutionMode": (
@@ -12843,6 +12983,37 @@ relation ontology-assertion,
                 "pythonCompatibilityReasonerUsed": False,
                 "typedbNativeStageTimings": dict(native_stage_timings),
             })
+            if str(function_sync_result.get("status") or "") == "provisioning":
+                return {
+                    "configured": True,
+                    "status": "deferred-schema-function-provisioning",
+                    "graphStore": "typedb",
+                    "source": "typedbNativeRule",
+                    "reasoningMode": TYPEDB_NATIVE_BLOCKED_MODE,
+                    "reasonCode": str(function_sync_result.get("reasonCode") or "typedbSchemaFunctionProvisioning"),
+                    "reason": (
+                        "TypeDB schema function deployment is still being staged; "
+                        "the previous verified InferenceBox is retained. "
+                        + str(function_sync_result.get("reason") or "")[:180]
+                    ),
+                    "statementCount": 0,
+                    "relationTypes": [],
+                    "nativeTypeDbReasoningUsed": False,
+                    "typedbNativeFunctionReasoningUsed": False,
+                    "typedbSchemaFunctionUsed": False,
+                    "typedbBootstrapReasoningUsed": False,
+                    "pythonBootstrapDisabled": True,
+                    "pythonCompatibilityReasonerUsed": False,
+                    "preservedPreviousInference": True,
+                    "retryable": True,
+                    "recommendedRetryAfterSeconds": 30,
+                    "clearResult": clear_result,
+                    "nativeReasoningProfile": native_profile,
+                    "functionSyncResult": function_sync_result,
+                    "ruleboxMetadata": runtime_rulebox_metadata,
+                    "typedbQueryMetrics": self.query_metrics_snapshot(),
+                    **runtime_rulebox_metadata,
+                }
             if str(function_sync_result.get("status") or "") != "ok":
                 return {
                     "configured": True,
@@ -13614,6 +13785,30 @@ relation ontology-assertion,
                 force=force_sync,
                 world_id=world_id,
             )
+            if str(function_sync_result.get("status") or "") == "provisioning":
+                return {
+                    "configured": True,
+                    "status": "provisioning",
+                    "graphStore": "typedb",
+                    "source": "typedbCandidateRulePreview",
+                    "reasoningMode": TYPEDB_NATIVE_BLOCKED_MODE,
+                    "reasonCode": str(function_sync_result.get("reasonCode") or "typedbSchemaFunctionProvisioning"),
+                    "reason": "TypeDB schema function deployment is staged before this RuleBox preview. "
+                    + str(function_sync_result.get("reason") or "")[:180],
+                    "validationOnly": True,
+                    "mutatedOperationalRuleBox": False,
+                    "wroteInferenceBox": False,
+                    "candidateRuleCount": len(enabled_rules),
+                    "targetSymbols": target_symbols,
+                    "worldId": world_id,
+                    "nativeTypeDbReasoningUsed": False,
+                    "typedbNativeFunctionReasoningUsed": False,
+                    "baselineInferenceBox": baseline_inferencebox,
+                    "diff": materialization_preview_diff_payload(baseline_inferencebox, 0, len(enabled_rules), False),
+                    "functionSyncResult": function_sync_result,
+                    "retryable": True,
+                    "typedbQueryMetrics": self.query_metrics_snapshot(),
+                }
             if str(function_sync_result.get("status") or "") != "ok":
                 return {
                     "configured": True,
@@ -17350,4 +17545,10 @@ def typedb_repository_from_settings(settings: Dict[str, str] = None):
             settings.get("typedbSchemaFunctionProbeIntervalSeconds")
         )
         or 300.0,
+        schema_function_provision_batch_size=int(number_or_none(
+            settings.get("typedbSchemaFunctionProvisionBatchSize")
+        ) or DEFAULT_TYPEDB_SCHEMA_FUNCTION_PROVISION_BATCH_SIZE),
+        schema_function_provision_timeout_seconds=number_or_none(
+            settings.get("typedbSchemaFunctionProvisionTimeoutSeconds")
+        ) or DEFAULT_TYPEDB_SCHEMA_FUNCTION_PROVISION_TIMEOUT_SECONDS,
     )

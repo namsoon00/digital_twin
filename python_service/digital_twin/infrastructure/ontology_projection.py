@@ -2337,6 +2337,39 @@ class PortfolioOntologyProjectionRecorder:
                 result["preservedActiveGeneration"] = True
                 result["reason"] = reason
                 return
+            if str(execution.get("status") or "") == "deferred-schema-function-provisioning":
+                # Native functions are compiled from the durable RuleBox, but
+                # only a fully deployed candidate set may produce investment
+                # inference. Restore the prior aligned ABox/InferenceBox while
+                # a bounded deployment batch makes progress, rather than
+                # exposing a new ABox against stale deductions.
+                reason = str(
+                    execution.get("reason")
+                    or "TypeDB schema function deployment is still in progress."
+                )
+                result["inferenceBox"] = {
+                    "configured": True,
+                    "status": "deferred-schema-function-provisioning",
+                    "graphStore": active_key,
+                    "source": "typedbInferenceBox",
+                    "nativeTypeDbReasoningUsed": False,
+                    "reason": reason,
+                }
+                finalization_started = time.perf_counter()
+                self.reconcile_abox_activation_after_inference(result, inference_symbols, world_id=world_id)
+                runtime_stages["aboxActivationFinalizationMs"] = int((time.perf_counter() - finalization_started) * 1000)
+                # Even a first-ever deployment has no predecessor to restore.
+                # It is still controlled provisioning back-pressure, not a
+                # RuleBox failure, so keep the request retryable until the
+                # remaining functions can produce a complete generation.
+                result["status"] = "deferred-schema-function-provisioning"
+                result["retryable"] = True
+                result["recommendedRetryAfterSeconds"] = int(
+                    execution.get("recommendedRetryAfterSeconds") or 30
+                )
+                result["reason"] = reason
+                result["saved"] = False
+                return
             if str(execution.get("status") or "") == "invalid-abox-generation":
                 # A stale InferenceBox can still be readable while the active
                 # candidate cannot prove one source ABox generation. Never

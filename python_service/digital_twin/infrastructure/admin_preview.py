@@ -547,6 +547,8 @@ def admin_preview_config() -> Dict[str, object]:
                     {"key": "typedbRetryCount", "label": "TypeDB 재시도", "type": "number", "default": "2"},
                     {"key": "typedbProcessSchemaFunctionCacheEnabled", "label": "TypeDB 함수 검증 프로세스 캐시", "type": "toggle", "default": "1"},
                     {"key": "typedbSchemaFunctionProbeIntervalSeconds", "label": "TypeDB 함수 전수 검증 간격", "type": "number", "default": "300", "unit": "seconds"},
+                    {"key": "typedbSchemaFunctionProvisionBatchSize", "label": "TypeDB 함수 배포 배치 규칙 수", "type": "number", "default": "3"},
+                    {"key": "typedbSchemaFunctionProvisionTimeoutSeconds", "label": "TypeDB 함수 배포 제한", "type": "number", "default": "30", "unit": "seconds"},
                     {"key": "typedbInferenceGenerationKeepCount", "label": "InferenceBox 보관 세대", "type": "number", "default": "1"},
                     {"key": "typedbAutoResetEnabled", "label": "TypeDB 용량 점검", "type": "toggle", "default": "0"},
                     {"key": "typedbAgeResetEnabled", "label": "TypeDB 보관 시간 점검", "type": "toggle", "default": "0"},

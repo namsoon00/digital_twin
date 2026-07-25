@@ -1613,6 +1613,11 @@ class OntologyReasoningRunner:
             "deferred-scoped-write-lease",
             "deferred-inference-write-lease",
             "deferred-pending-scoped-manifest",
+            # A cold TypeDB server compiles the RuleBox in bounded candidate
+            # batches. Keep source events pending while the prior aligned
+            # generation remains active; this is controlled back-pressure, not
+            # an investment inference failure.
+            "deferred-schema-function-provisioning",
             # The candidate was safely rolled back to its predecessor because
             # durable InferenceBox readback did not prove the same generation.
             # Keep events pending and retry with back-pressure instead of

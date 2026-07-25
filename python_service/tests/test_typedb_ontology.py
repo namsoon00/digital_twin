@@ -4733,6 +4733,61 @@ class TypeDBOntologyRepositoryTests(unittest.TestCase):
         self.assertEqual("deferred-inference-write-lease", result["status"])
         self.assertEqual("deferred-inference-write-lease", result["inferenceBox"]["status"])
 
+    def test_projection_recorder_restores_prior_generation_while_functions_provision(self):
+        class FakeRepository:
+            store_key = "typedb"
+
+            def __init__(self):
+                self.restored_snapshot_ids = []
+
+            def run_rulebox(self, _payload):
+                return {
+                    "status": "deferred-schema-function-provisioning",
+                    "reason": "TypeDB schema function deployment is staged.",
+                    "recommendedRetryAfterSeconds": 30,
+                }
+
+            def activate_abox_generation(self, snapshot_id):
+                self.restored_snapshot_ids.append(snapshot_id)
+                return {
+                    "status": "ok",
+                    "activeAbox": {"status": "ok", "aboxSnapshotId": snapshot_id},
+                }
+
+        snapshot = AccountSnapshot(
+            "main",
+            "메인",
+            "toss",
+            "live",
+            "ok",
+            utc_now_iso(),
+            PortfolioSummary(total=1000, invested=1000, cash=0, markets=[], sectors=[], concentration=0),
+            positions=[Position("AAPL", "Apple", market="US", currency="USD", quantity=1, current_price=100, market_value=100, market_value_krw=140000)],
+        )
+        result = {
+            "saved": True,
+            "status": "ok",
+            "graphStore": "typedb",
+            "aboxSnapshotId": "abox:new",
+            "aboxPersistenceVerification": {
+                "activation": {
+                    "status": "activated",
+                    "snapshotId": "abox:new",
+                    "previousSnapshotId": "abox:previous",
+                },
+            },
+        }
+        repository = FakeRepository()
+
+        PortfolioOntologyProjectionRecorder(repository).attach_graph_store_inference_result(result, snapshot)
+
+        self.assertFalse(result["saved"])
+        self.assertEqual("deferred-schema-function-provisioning", result["status"])
+        self.assertTrue(result["preservedActiveGeneration"])
+        self.assertTrue(result["retryable"])
+        self.assertEqual(["abox:previous"], repository.restored_snapshot_ids)
+        self.assertEqual("deferred-schema-function-provisioning", result["inferenceBox"]["status"])
+
     def test_projection_recorder_rolls_back_new_abox_when_native_inference_is_not_aligned(self):
         class FakeRepository:
             store_key = "typedb"
@@ -5048,7 +5103,8 @@ class TypeDBOntologyRepositoryTests(unittest.TestCase):
             def driver_imports(self):
                 return (object, object, object, object, SimpleNamespace(SCHEMA="schema")), None
 
-            def open_driver(self, _imported):
+            def open_driver(self, _imported, request_timeout_seconds=None):
+                del request_timeout_seconds
                 return self.fake_driver
 
             def ensure_database(self, _driver):
@@ -5091,6 +5147,106 @@ class TypeDBOntologyRepositoryTests(unittest.TestCase):
         self.assertGreater(repository.fake_driver.define_attempts, 0)
         self.assertFalse(repository.fake_driver.redefine_called)
         self.assertTrue(all(item["schemaFunctionSyncStatus"] == "already-exists" for item in result["syncedFunctions"]))
+
+    def test_typedb_schema_function_sync_stages_large_missing_catalogue(self):
+        class FakeQuery:
+            def __init__(self, driver, query):
+                self.driver = driver
+                self.query_text = str(query or "")
+
+            def resolve(self):
+                self.driver.queries.append(self.query_text)
+                return []
+
+        class FakeTransaction:
+            def __init__(self, driver):
+                self.driver = driver
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, _exc_type, _exc, _traceback):
+                return False
+
+            def query(self, query):
+                return FakeQuery(self.driver, query)
+
+            def commit(self):
+                self.driver.commits += 1
+
+        class FakeDriver:
+            def __init__(self):
+                self.queries = []
+                self.commits = 0
+
+            def transaction(self, *_args, **_kwargs):
+                return FakeTransaction(self)
+
+        class FakeRepository(TypeDBOntologyGraphRepository):
+            def __init__(self):
+                super().__init__(
+                    "127.0.0.1:1729",
+                    retry_count=0,
+                    schema_function_provision_batch_size=2,
+                )
+                self.fake_driver = FakeDriver()
+
+            def driver_imports(self):
+                return (object, object, object, object, SimpleNamespace(SCHEMA="schema")), None
+
+            def open_driver(self, _imported, request_timeout_seconds=None):
+                del request_timeout_seconds
+                return self.fake_driver
+
+            def ensure_database(self, _driver):
+                return None
+
+            def ensure_schema(self, _driver, _imported):
+                return None
+
+            def close_driver(self, _driver):
+                return None
+
+        repository = FakeRepository()
+        rules = default_graph_inference_rules()[:4]
+        rule_ids = [rule.rule_id for rule in rules]
+
+        with patch.object(repository, "probe_typedb_native_rule_functions", side_effect=[
+            {
+                "status": "missing",
+                "available": False,
+                "missingRuleIds": rule_ids,
+                "missingFunctionNames": [
+                    typedb_native_function_definition(rule.to_dict()).get("functionName")
+                    for rule in rules
+                ],
+            },
+            {
+                "status": "ok",
+                "available": True,
+                "probedCount": 2,
+                "verifiedRuleCount": 2,
+            },
+        ]), patch.object(
+            repository,
+            "probe_typedb_schema_function_definitions",
+            side_effect=lambda definitions: {
+                "status": "missing",
+                "available": False,
+                "missingFunctionNames": [item.get("functionName") for item in definitions],
+            },
+        ):
+            result = repository.sync_typedb_native_rule_functions(rules)
+
+        self.assertEqual("provisioning", result["status"])
+        self.assertTrue(result["schemaFunctionProvisioning"])
+        self.assertEqual(2, result["schemaFunctionProvisionBatchSize"])
+        self.assertEqual(2, result["syncedCount"])
+        self.assertEqual(2, result["pendingRuleCount"])
+        self.assertEqual(set(rule_ids[2:]), set(result["pendingRuleIds"]))
+        self.assertEqual(1, repository.fake_driver.commits)
+        self.assertEqual(1, len(repository.fake_driver.queries))
+        self.assertTrue(repository.fake_driver.queries[0].lstrip().startswith("define"))
 
     def test_typedb_null_repository_is_explicitly_disabled(self):
         result = NullTypeDBOntologyGraphRepository().save_graph(PortfolioOntology("empty"))
@@ -5625,22 +5781,22 @@ class TypeDBOntologyRepositoryTests(unittest.TestCase):
         self.assertEqual(1, repository.write_lease_recovery_calls)
         self.assertEqual("cleared", result["scopedABoxWriteLeaseRecovery"]["status"])
 
-    def test_seed_schema_function_sync_blocks_realtime_ready_status_when_deployment_fails(self):
+    def test_seed_defers_schema_function_deployment_without_blocking_static_ontology(self):
         repository = TypeDBOntologyGraphRepository("127.0.0.1:1729")
 
-        with patch.object(repository, "sync_typedb_native_rule_functions", return_value={
-            "status": "error",
-            "reason": "schema connection failed",
-        }):
+        with patch.object(repository, "sync_typedb_native_rule_functions") as sync:
             result = repository.with_seed_schema_function_sync(
                 {"configured": True, "saved": True, "seeded": True, "status": "ok"},
                 default_graph_inference_rules()[:1],
             )
 
-        self.assertFalse(result["saved"])
-        self.assertFalse(result["seeded"])
-        self.assertEqual("schema-function-sync-failed", result["status"])
-        self.assertIn("schema connection failed", result["reason"])
+        sync.assert_not_called()
+        self.assertTrue(result["saved"])
+        self.assertTrue(result["seeded"])
+        self.assertEqual("ok", result["status"])
+        self.assertEqual("deferred", result["schemaFunctionSync"]["status"])
+        self.assertEqual("candidate-scoped-staged", result["schemaFunctionSync"]["deploymentMode"])
+        self.assertEqual(1, result["schemaFunctionSync"]["ruleCount"])
 
     def test_typedb_rule_condition_rows_keep_node_kind_separate_from_condition_kind(self):
         repository = TypeDBOntologyGraphRepository("127.0.0.1:1729")
@@ -6060,6 +6216,46 @@ class TypeDBOntologyRepositoryTests(unittest.TestCase):
         self.assertEqual("abox-snapshot:test", result["sourceAboxSnapshotId"])
         self.assertTrue(all((item.properties or {}).get("sourceAboxSnapshotId") == "abox-snapshot:test" for item in captured["graph"].entities))
         self.assertEqual("skipped", result["clearResult"]["status"])
+
+    def test_typedb_rulebox_defers_without_running_partial_rules_while_functions_provision(self):
+        repository = TypeDBOntologyGraphRepository("127.0.0.1:1729")
+        rule = default_graph_inference_rules()[0]
+        rule_snapshot = {
+            "configured": True,
+            "saved": True,
+            "status": "ok",
+            "graphStore": "typedb",
+            "rules": [rule.to_dict()],
+            "ruleCount": 1,
+        }
+        function_sync = {
+            "status": "provisioning",
+            "reasonCode": "typedbSchemaFunctionProvisioning",
+            "reason": "1 rule was verified and 3 remain.",
+            "syncedCount": 1,
+            "syncedFunctionCount": 1,
+            "skippedCount": 0,
+            "failedCount": 0,
+            "pendingRuleCount": 3,
+            "pendingRuleIds": ["graph.next-a", "graph.next-b", "graph.next-c"],
+        }
+        with patch.object(repository, "has_box_rows", return_value=True), \
+                patch.object(repository, "active_abox_metadata", return_value={
+                    "status": "ok",
+                    "aboxSnapshotId": "abox-snapshot:test",
+                }), \
+                patch.object(repository, "rulebox_snapshot", return_value=rule_snapshot), \
+                patch.object(repository, "sync_typedb_native_rule_functions", return_value=function_sync) as sync, \
+                patch.object(repository, "match_typedb_native_rules") as match:
+            result = repository.run_rulebox({"symbols": ["005930"]})
+
+        self.assertEqual("deferred-schema-function-provisioning", result["status"])
+        self.assertTrue(result["preservedPreviousInference"])
+        self.assertTrue(result["retryable"])
+        self.assertEqual(3, result["typedbSchemaFunctionPendingCount"])
+        self.assertEqual(function_sync, result["functionSyncResult"])
+        self.assertEqual([rule.rule_id], [item.rule_id for item in sync.call_args.args[0]])
+        match.assert_not_called()
 
     def test_typedb_rulebox_accepts_scoped_source_generations_through_one_worldview_manifest(self):
         repository = TypeDBOntologyGraphRepository("127.0.0.1:1729")

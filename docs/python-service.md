@@ -50,6 +50,8 @@ npm run python:service:status
 
 Expected healthy metadata includes `reasoningMode=typedb-native-rule-materialized`, `materializationSource=typedb-abox-native-rule`, `typedbSchemaFunctionUsed=true`, `typedbNativeRuleSkippedCount=0`, non-zero relation/trace counts for meaningful account data, and `pythonCompatibilityReasonerUsed=false`.
 
+After a cold TypeDB restart, a seed can report `schemaFunctionSync.status=deferred` while the static TBox and RuleBox are already current. The first eligible native executions compile only their selected RuleBox functions in `TYPEDB_SCHEMA_FUNCTION_PROVISION_BATCH_SIZE` groups (default `3`) with the separate `TYPEDB_SCHEMA_FUNCTION_PROVISION_TIMEOUT_SECONDS` request limit (default `30`). A `deferred-schema-function-provisioning` result preserves the prior verified ABox/InferenceBox and retries; it must never publish a partial investment judgement.
+
 ## DDD Boundaries
 
 The Python service now follows a conservative DDD layout:

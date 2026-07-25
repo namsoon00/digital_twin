@@ -641,6 +641,8 @@ def settings_status_payload() -> Dict[str, object]:
         "typedbRetryCount",
         "typedbProcessSchemaFunctionCacheEnabled",
         "typedbSchemaFunctionProbeIntervalSeconds",
+        "typedbSchemaFunctionProvisionBatchSize",
+        "typedbSchemaFunctionProvisionTimeoutSeconds",
         "symbolUniverseMaxAgeHours",
         "typedbInferenceGenerationKeepCount",
         "typedbAutoResetEnabled",

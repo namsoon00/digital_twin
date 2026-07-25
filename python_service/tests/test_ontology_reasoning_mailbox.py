@@ -276,7 +276,7 @@ def realtime_request(event_id, symbols, occurred_at, review_level="normal", fact
 
 
 class OntologyReasoningMailboxTests(unittest.TestCase):
-    def build_runner(self, events, now=None, settings=None):
+    def build_runner(self, events, now=None, settings=None, event_publisher=None):
         self.cursor = MemoryCursor()
         self.mailbox = MemoryMailbox()
         self.monitor = Monitor()
@@ -294,6 +294,7 @@ class OntologyReasoningMailboxTests(unittest.TestCase):
             event_reader=Reader(events),
             cursor_store=self.cursor,
             monitor_runner_factory=lambda: self.monitor,
+            event_publisher=event_publisher,
             settings=runtime_settings,
             mailbox_store=self.mailbox,
             now_provider=now or (lambda: datetime(2026, 7, 24, 0, 5, tzinfo=timezone.utc)),
@@ -379,6 +380,43 @@ class OntologyReasoningMailboxTests(unittest.TestCase):
         self.assertEqual([["AAPL"], ["MSFT"]], self.monitor.calls)
         self.assertIn("two-symbols", self.cursor.ids)
         self.assertEqual(0, second["mailbox"]["pendingEntryCount"])
+
+    def test_completion_telemetry_includes_only_the_request_scheduled_this_cycle(self):
+        class Publisher:
+            def __init__(self):
+                self.events = []
+
+            def publish(self, event):
+                self.events.append(event)
+
+        publisher = Publisher()
+        first = realtime_request("first", ["AAPL"], "2026-07-24T00:00:00Z")
+        second = realtime_request("second", ["MSFT"], "2026-07-24T00:01:00Z")
+        runner = self.build_runner([first, second], event_publisher=publisher)
+
+        result = runner.run_once(force=True)
+
+        self.assertEqual(1, result["scheduledRequestCount"])
+        self.assertEqual(1, result["processedCount"])
+        self.assertEqual(1, len(self.monitor.calls))
+        self.assertEqual(1, len(publisher.events))
+        self.assertEqual(1, len(publisher.events[0].payload["triggerEventIds"]))
+        self.assertEqual(1, len(self.cursor.ids))
+
+    def test_pending_mailbox_slot_without_a_due_symbol_does_not_run_the_whole_portfolio(self):
+        event = realtime_request("waiting", ["AAPL"], "2026-07-24T00:04:00Z")
+        runner = self.build_runner(
+            [event],
+            settings={"ontologyReasoningMinIntervalSeconds": "180"},
+        )
+        self.cursor.payload["lastReasonedAtBySymbol"] = {"AAPL": "2026-07-24T00:04:00Z"}
+
+        result = runner.run_once(force=True)
+
+        self.assertEqual("cooldown", result["status"])
+        self.assertEqual(0, result["scheduledRequestCount"])
+        self.assertEqual([], self.monitor.calls)
+        self.assertEqual(1, result["mailbox"]["pendingEntryCount"])
 
     def test_stale_realtime_input_is_expired_before_projection(self):
         stale = realtime_request("stale", ["AAPL"], "2026-07-23T00:00:00Z")

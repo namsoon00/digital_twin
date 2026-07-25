@@ -2099,6 +2099,35 @@ class OntologyReasoningRunner:
                 **queue_metadata,
             }
         symbol_batches, symbols, omitted_symbol_count = self.request_symbol_batches(requests)
+        selected_request_ids = {
+            str(event_id or "").strip()
+            for event_id in symbol_batches
+            if str(event_id or "").strip()
+        }
+        selected_requests = [
+            event for event in requests
+            if str(getattr(event, "event_id", "") or "").strip() in selected_request_ids
+        ]
+        # A pending mailbox slot can be temporarily ineligible because its
+        # symbol-level interval or retry protection has not elapsed.  Never
+        # invoke the monitor with an empty subject filter in that case: older
+        # runners interpret it as a whole-portfolio projection.
+        if not selected_requests:
+            return {
+                "status": "cooldown",
+                "processedCount": 0,
+                "scheduledRequestCount": 0,
+                "alertCount": 0,
+                "symbols": [],
+                "maxSymbolsPerRun": self.effective_max_symbols_per_run(),
+                "configuredMaxSymbolsPerRun": self.max_symbols_per_run(),
+                "nativeTypeDbTargetSymbolLimit": self.native_typedb_target_symbol_limit() if self.native_typedb_rule_execution_enabled() else None,
+                "omittedSymbolCount": omitted_symbol_count,
+                "retryAfterSeconds": self.projection_retry_seconds(),
+                "deferredReason": "대기 중인 요청은 있으나 이번 주기에 실행 가능한 종목이 없습니다.",
+                "coalescedEventCount": len(durable_superseded_ids),
+                **queue_metadata,
+            }
         cursor_payload = self.cursor_payload()
         circuit_remaining = self.projection_circuit_remaining_seconds(cursor_payload)
         if circuit_remaining > 0 and not force:
@@ -2189,18 +2218,18 @@ class OntologyReasoningRunner:
         self.mark_successful_projection(runner)
         account_ids = [getattr(account, "account_id", "") for account in getattr(runner, "accounts", [])]
         trigger_event_ids = []
-        for event in requests:
+        for event in selected_requests:
             source_event_id = self.mailbox_source_event_id(event)
             if source_event_id and source_event_id not in trigger_event_ids:
                 trigger_event_ids.append(source_event_id)
         research_refresh = self.research_generation_refresh_results(
-            requests,
+            selected_requests,
             getattr(runner, "last_ontology_projection_results", {}),
         )
         projection_outcomes = self.projection_alert_outcomes(runner)
         blocked_request_ids = set(research_refresh.get("blockedRequestEventIds") or [])
         cursor_requests = [
-            event for event in requests
+            event for event in selected_requests
             if str(getattr(event, "event_id", "") or "") not in blocked_request_ids
         ]
         direct_cursor_requests = [
@@ -2224,7 +2253,7 @@ class OntologyReasoningRunner:
             research_generation_refreshes=research_refresh,
             projection_outcomes=projection_outcomes,
         )
-        rule_candidate_result = self.propose_rule_candidates(symbols, requests, alerts, force=False)
+        rule_candidate_result = self.propose_rule_candidates(symbols, selected_requests, alerts, force=False)
         self.publish(completed)
         progress_result = self.mark_requests_processed(
             direct_cursor_requests,
@@ -2270,6 +2299,7 @@ class OntologyReasoningRunner:
         return {
             "status": status,
             "processedCount": len(trigger_event_ids),
+            "scheduledRequestCount": len(selected_requests),
             "completedEventCount": len(progress_result.get("completedEventIds") or []) + len(mailbox_completion.get("completed") or []),
             "partialEventCount": len(progress_result.get("partialEventIds") or []) + max(0, len(mailbox_entries) - len(mailbox_completion.get("completed") or [])),
             "coalescedEventCount": len(

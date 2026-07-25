@@ -254,6 +254,41 @@ class OntologyChangeImpactTests(unittest.TestCase):
         self.assertEqual(["005930"], plan["inferenceTargetSymbols"])
         self.assertEqual(["005930"], plan["relationContextSymbols"])
 
+    def test_explicit_target_does_not_expand_to_other_symbol_storage_dependencies(self):
+        before = [
+            {
+                "scopeId": "symbol:PLTR:link",
+                "generationId": "link-a",
+                "semanticFingerprints": {"exposure": "unchanged"},
+                "dependencyScopeIds": ["symbol:NVDA:market"],
+            },
+            {
+                "scopeId": "symbol:NVDA:market",
+                "generationId": "market-a",
+                "semanticFingerprints": {"market": "before"},
+            },
+        ]
+        after = [
+            before[0],
+            {
+                **before[1],
+                "generationId": "market-b",
+                "semanticFingerprints": {"market": "after"},
+            },
+        ]
+
+        plan = build_inference_impact_plan(
+            before,
+            after,
+            ["PLTR", "NVDA"],
+            explicit_target_symbols=["PLTR"],
+            rules=[],
+        )
+
+        self.assertEqual(["PLTR"], plan["inferenceTargetSymbols"])
+        self.assertEqual(["NVDA"], plan["scopeDelta"]["directChangedSymbols"])
+        self.assertIn("PLTR", plan["scopeDelta"]["dependencyAffectedSymbols"])
+
     def test_change_impact_uses_semantic_family_from_a_relation_only_link_scope(self):
         before = [
             {

@@ -643,17 +643,22 @@ def build_inference_impact_plan(
         set(delta.get("directChangedSymbols") or delta.get("changedSymbols") or [])
         | set(delta.get("dependencyAffectedSymbols") or [])
         | set(delta.get("relationContextSymbols") or [])
-        | set(explicit_symbols)
     )
-    # A worker can intentionally schedule one target while a shared macro or
-    # portfolio fact changes. The TypeDB query still sees the complete ABox,
-    # but it must not expand the requested subject back to every holding.
-    # Whole-world callers keep the conservative expansion below.
-    if global_impact and not explicit_symbols:
-        impacted_symbols.update(available_symbols)
-    target_symbols = [symbol for symbol in available_symbols if symbol in impacted_symbols]
-    if not target_symbols and explicit_symbols:
+    # A realtime worker intentionally chooses one target at a time.  Link
+    # scopes retain endpoint generations for immutable storage rebinding, so
+    # their dependency closure can contain unrelated holdings even though the
+    # requested subject is the only one being evaluated in this cycle.  The
+    # complete ABox remains available to TypeDB as context; do not turn those
+    # storage dependencies into additional native-rule subjects.  Each other
+    # symbol keeps its own durable mailbox/event turn.
+    if explicit_symbols:
         target_symbols = [symbol for symbol in available_symbols if symbol in explicit_symbols]
+    else:
+        # Whole-world callers keep the conservative expansion for a global
+        # fact because no scheduler has already chosen the next subject.
+        if global_impact:
+            impacted_symbols.update(available_symbols)
+        target_symbols = [symbol for symbol in available_symbols if symbol in impacted_symbols]
     if not target_symbols and not changed_scope_ids:
         target_symbols = list(available_symbols)
     profiles = rule_dependency_profiles(rules or [])

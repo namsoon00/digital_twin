@@ -187,6 +187,12 @@ class OntologyRuntimeOperationsTests(unittest.TestCase):
         result["inferenceBox"]["targetSymbols"] = ["005930"]
         result["ruleboxExecution"].update({
             "typedbNativeRuleExecutedCount": 4,
+            "typedbNativeRuleExecutedWorkCount": 6,
+            "typedbNativeRuleTargetParallelism": 2,
+            "typedbNativeRuleTargetWorkShardingUsed": True,
+            "typedbNativeRuleTargetWorkShardCount": 2,
+            "typedbNativeRuleWorkItemCount": 6,
+            "typedbNativeRuleCommitMode": "single-inferencebox-generation",
             "nativeRuleSelectionApplied": True,
             "nativeRuleSelectionDeferredCount": 12,
         })
@@ -200,6 +206,12 @@ class OntologyRuntimeOperationsTests(unittest.TestCase):
         self.assertEqual("partial", observation["inference"]["targetCoverageStatus"])
         self.assertEqual(["000660"], observation["inference"]["notEvaluatedSymbols"])
         self.assertEqual(4, observation["inference"]["executedRuleCount"])
+        self.assertEqual(6, observation["inference"]["executedRuleWorkCount"])
+        self.assertEqual(2, observation["inference"]["targetParallelism"])
+        self.assertTrue(observation["inference"]["targetWorkShardingUsed"])
+        self.assertEqual(2, observation["inference"]["targetWorkShardCount"])
+        self.assertEqual(6, observation["inference"]["targetWorkItemCount"])
+        self.assertEqual("single-inferencebox-generation", observation["inference"]["commitMode"])
         self.assertTrue(observation["inference"]["nativeRuleSelectionApplied"])
         self.assertEqual(6200, observation["stages"]["nativeInferenceMs"])
 

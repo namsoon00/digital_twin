@@ -85,6 +85,12 @@ class OntologyDiagnosticsService:
                 "enabledRuleCount",
                 "candidateRuleRatioPct",
                 "executedRuleCount",
+                "executedRuleWorkCount",
+                "targetParallelism",
+                "targetWorkShardingUsed",
+                "targetWorkShardCount",
+                "targetWorkItemCount",
+                "commitMode",
                 "deferredRuleCount",
                 "nativeRuleSelectionApplied",
                 "nativeRuleSelectionEligibilityReason",
@@ -107,13 +113,18 @@ class OntologyDiagnosticsService:
                 runtime_execution["nativeRuleTiming"] = self.pick(timing, [
                     "wallClockMs",
                     "executedRuleCount",
+                    "executedRuleWorkCount",
                     "incompleteRuleCount",
                     "notApplicableRuleCount",
                     "aggregateRuleElapsedMs",
                     "aggregateQueryDurationMs",
                 ])
                 runtime_execution["nativeRuleTiming"]["slowestRules"] = [
-                    self.pick(item, ["ruleId", "status", "queryComplexity", "queryCount", "elapsedMs", "queryDurationMs"])
+                    self.pick(item, [
+                        "ruleId", "status", "candidateSymbolCount", "targetWorkShardIndex",
+                        "targetWorkShardCount", "targetWorkShardingUsed", "queryComplexity",
+                        "queryCount", "elapsedMs", "queryDurationMs",
+                    ])
                     for item in (timing.get("slowestRules") or [])[:3]
                     if isinstance(item, dict)
                 ]

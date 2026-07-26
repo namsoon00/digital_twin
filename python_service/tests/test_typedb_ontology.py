@@ -65,6 +65,7 @@ from digital_twin.infrastructure.typedb_ontology import (
     typedb_native_rule_function_sync_plan,
     typedb_native_rule_runtime_query_plan,
     typedb_native_rule_execution_plan,
+    typedb_native_rule_target_work_plan,
     typedb_native_rule_evidence_read_index_for_execution,
     typedb_native_rule_planner_topology_for_execution,
     typedb_projection_preflight_graph_for_execution,
@@ -85,6 +86,40 @@ class TypeDBOntologyRepositoryTests(unittest.TestCase):
 
         self.assertEqual(4, repository.native_rule_parallelism())
         self.assertEqual(4, repository.native_rule_any_condition_parallelism())
+
+    def test_target_parallelism_is_bounded_by_total_native_rule_parallelism(self):
+        repository = TypeDBOntologyGraphRepository(
+            "127.0.0.1:1729",
+            native_rule_parallelism=2,
+            native_rule_target_parallelism=9,
+        )
+
+        self.assertEqual(2, repository.native_rule_parallelism())
+        self.assertEqual(2, repository.native_rule_target_parallelism())
+
+    def test_target_work_plan_preserves_every_candidate_symbol(self):
+        work_plan = typedb_native_rule_target_work_plan(
+            [
+                {
+                    "ruleId": "graph.target.work.v1",
+                    "candidateSymbols": ["005930", "000660", "AAPL"],
+                }
+            ],
+            target_parallelism=2,
+        )
+
+        self.assertTrue(work_plan["targetWorkShardingUsed"])
+        self.assertEqual(2, work_plan["effectiveTargetParallelism"])
+        self.assertEqual(2, work_plan["targetWorkShardCount"])
+        self.assertEqual(2, work_plan["targetWorkItemCount"])
+        self.assertEqual(
+            ["000660", "005930", "AAPL"],
+            sorted({
+                symbol
+                for item in work_plan["workItems"]
+                for symbol in item["candidateSymbols"]
+            }),
+        )
 
     def test_projection_recorder_exposes_scoped_abox_write_substage_timings(self):
         stages = {}
@@ -1787,6 +1822,168 @@ class TypeDBOntologyRepositoryTests(unittest.TestCase):
         self.assertEqual(2, len(result["executedRules"]))
         self.assertTrue(all(int(item["elapsedMs"]) > 0 for item in result["executedRules"]))
         self.assertTrue(all(int(item["queryDurationMs"]) > 0 for item in result["executedRules"]))
+
+    def test_typedb_native_rule_match_shards_targets_in_parallel_under_abox_lease(self):
+        repository = TypeDBOntologyGraphRepository(
+            "127.0.0.1:1729",
+            retry_count=0,
+            native_rule_parallelism=2,
+            native_rule_target_parallelism=2,
+        )
+        rule = GraphInferenceRule(
+            rule_id="graph.target.parallel.v1",
+            label="target parallel",
+            version="v1",
+            source_kind="stock",
+            conditions=[
+                GraphRuleCondition(
+                    "holding-source",
+                    "subject_property",
+                    "보유 종목입니다.",
+                    field="source",
+                    value="holding",
+                ),
+            ],
+            derivations=[
+                GraphRuleDerivation(
+                    relation_type="REQUIRES_NEXT_CHECK",
+                    target_kind="next-check",
+                    target_key="{symbol}:check",
+                    target_label="다음 확인",
+                    tbox_class="NextCheck",
+                ),
+            ],
+            action_group="watch",
+            action_level="review",
+            prompt_hint="대상 병렬 실행 검증",
+        )
+        active = {"value": 0, "maximum": 0}
+        active_lock = Lock()
+        transactions = []
+
+        class FakePromise:
+            def resolve(self):
+                with active_lock:
+                    active["value"] += 1
+                    active["maximum"] = max(active["maximum"], active["value"])
+                try:
+                    time.sleep(0.03)
+                    return []
+                finally:
+                    with active_lock:
+                        active["value"] -= 1
+
+        class FakeTransaction:
+            def __enter__(self):
+                return self
+
+            def __exit__(self, _exc_type, _exc, _traceback):
+                return False
+
+            def query(self, query):
+                transactions.append(query)
+                return FakePromise()
+
+        class FakeDriver:
+            def transaction(self, *_args, **_kwargs):
+                return FakeTransaction()
+
+        imported = (object, object, object, object, SimpleNamespace(READ="read"))
+        with patch.object(repository, "driver_imports", return_value=(imported, None)), \
+                patch.object(repository, "open_driver", side_effect=lambda *_args, **_kwargs: FakeDriver()), \
+                patch.object(repository, "ensure_database"), \
+                patch.object(repository, "close_driver"), \
+                patch.object(repository, "read_transaction_options", return_value=None), \
+                patch.object(repository, "active_abox_rule_context", return_value={
+                    "status": "ok",
+                    "relationTypesBySymbol": {"005930": [], "000660": []},
+                    "sourceIdsBySymbol": {
+                        "005930": ["stock:005930"],
+                        "000660": ["stock:000660"],
+                    },
+                }):
+            result = repository.match_typedb_native_rules(
+                [rule],
+                target_symbols=["005930", "000660"],
+                native_rule_parallelism=2,
+                native_rule_target_parallelism=2,
+                stable_abox_write_lease_held=True,
+            )
+
+        self.assertEqual("ok", result["status"])
+        self.assertTrue(result["parallelRuleExecution"])
+        self.assertTrue(result["targetWorkShardingUsed"])
+        self.assertEqual(2, result["nativeRuleTargetParallelism"])
+        self.assertEqual(2, result["targetWorkShardCount"])
+        self.assertEqual(2, result["targetWorkItemCount"])
+        self.assertEqual(1, result["executedRuleCount"])
+        self.assertEqual(2, result["executedRuleWorkCount"])
+        self.assertEqual(2, result["readTransactionCount"])
+        self.assertEqual(2, result["readQueryCount"])
+        self.assertEqual(2, len(transactions))
+        self.assertGreaterEqual(active["maximum"], 2)
+        self.assertEqual(
+            {"005930", "000660"},
+            {
+                symbol
+                for item in result["executedRules"]
+                for symbol in item["candidateSymbols"]
+            },
+        )
+
+    def test_typedb_native_target_sharding_requires_the_abox_write_lease(self):
+        repository = TypeDBOntologyGraphRepository("127.0.0.1:1729")
+        rule = GraphInferenceRule(
+            rule_id="graph.target.no-lease.v1",
+            label="target no lease",
+            version="v1",
+            source_kind="stock",
+            conditions=[
+                GraphRuleCondition(
+                    "holding-source",
+                    "subject_property",
+                    "보유 종목입니다.",
+                    field="source",
+                    value="holding",
+                ),
+            ],
+            derivations=[
+                GraphRuleDerivation(
+                    relation_type="REQUIRES_NEXT_CHECK",
+                    target_kind="next-check",
+                    target_key="{symbol}:check",
+                    target_label="다음 확인",
+                    tbox_class="NextCheck",
+                ),
+            ],
+            action_group="watch",
+            action_level="review",
+            prompt_hint="ABox lease guard",
+        )
+
+        with patch.object(repository, "active_abox_rule_context", return_value={
+            "status": "ok",
+            "relationTypesBySymbol": {"005930": [], "000660": []},
+            "sourceIdsBySymbol": {
+                "005930": ["stock:005930"],
+                "000660": ["stock:000660"],
+            },
+        }), patch.object(repository, "driver_imports", return_value=(None, "disabled for test")), \
+                patch(
+                    "digital_twin.infrastructure.typedb_ontology.typedb_native_rule_target_work_plan",
+                    wraps=typedb_native_rule_target_work_plan,
+                ) as target_plan:
+            result = repository.match_typedb_native_rules(
+                [rule],
+                target_symbols=["005930", "000660"],
+                native_rule_target_parallelism=2,
+                stable_abox_write_lease_held=False,
+            )
+
+        self.assertEqual("error", result["status"])
+        self.assertEqual(1, target_plan.call_args.kwargs["target_parallelism"])
+        self.assertFalse(result["targetWorkShardingUsed"])
+        self.assertEqual(1, result["targetWorkItemCount"])
 
     def test_native_rule_planner_uses_only_a_topology_verified_on_the_active_manifest(self):
         graph = PortfolioOntology("planner-topology")
@@ -3635,6 +3832,12 @@ class TypeDBOntologyRepositoryTests(unittest.TestCase):
             "typedbAddress": "127.0.0.1:1729",
             "typedbInferenceWriteLeaseEnabled": "0",
         })
+        factory_target_parallel = typedb_repository_from_settings({
+            "ontologyTypeDbEnabled": "1",
+            "typedbAddress": "127.0.0.1:1729",
+            "typedbNativeRuleParallelism": "2",
+            "typedbNativeRuleTargetParallelism": "9",
+        })
 
         self.assertTrue(direct.native_rule_execution_enabled())
         self.assertTrue(factory_default.native_rule_execution_enabled())
@@ -3646,6 +3849,8 @@ class TypeDBOntologyRepositoryTests(unittest.TestCase):
         self.assertEqual(10.0, factory_default.native_rule_query_timeout_seconds())
         self.assertEqual(105.0, factory_default.native_rule_execution_budget_seconds())
         self.assertEqual(4, factory_default.native_rule_parallelism())
+        self.assertEqual(1, factory_default.native_rule_target_parallelism())
+        self.assertEqual(2, factory_target_parallel.native_rule_target_parallelism())
         self.assertFalse(direct._inference_write_lease_enabled)
         self.assertTrue(factory_default._inference_write_lease_enabled)
         self.assertFalse(factory_inference_lease_disabled._inference_write_lease_enabled)

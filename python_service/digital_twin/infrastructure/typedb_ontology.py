@@ -1193,6 +1193,10 @@ DEFAULT_TYPEDB_NATIVE_RULE_EXECUTION_BUDGET_SECONDS = 105.0
 # write lease is held. Four workers keep local TypeDB planner pressure bounded
 # while removing the serial wait across the small applicable-rule set.
 DEFAULT_TYPEDB_NATIVE_RULE_PARALLELISM = 4
+# Target work is deliberately opt-in. A generation still has exactly one ABox
+# activation and one InferenceBox publication; this value only controls how a
+# verified target set is split into read-only TypeDB work items in between.
+DEFAULT_TYPEDB_NATIVE_RULE_TARGET_PARALLELISM = 1
 # TypeDB recompiles the schema function graph at each deployment transaction.
 # A full RuleBox has dozens of generated functions, so a restart must never
 # submit that entire catalogue as one uninterruptible schema operation.  Three
@@ -5427,6 +5431,7 @@ class TypeDBOntologyGraphRepository(GraphStoreOntologyRowMapperMixin, ScopedABox
         native_rule_query_timeout_seconds: float = DEFAULT_TYPEDB_NATIVE_RULE_QUERY_TIMEOUT_SECONDS,
         native_rule_execution_budget_seconds: float = DEFAULT_TYPEDB_NATIVE_RULE_EXECUTION_BUDGET_SECONDS,
         native_rule_parallelism: int = DEFAULT_TYPEDB_NATIVE_RULE_PARALLELISM,
+        native_rule_target_parallelism: int = DEFAULT_TYPEDB_NATIVE_RULE_TARGET_PARALLELISM,
         native_rule_any_condition_parallelism: int = 1,
         inference_write_lease_enabled: bool = False,
         process_schema_function_cache_enabled: bool = False,
@@ -5477,6 +5482,16 @@ class TypeDBOntologyGraphRepository(GraphStoreOntologyRowMapperMixin, ScopedABox
         self._native_rule_parallelism = max(
             1,
             min(8, int(number_or_none(native_rule_parallelism) or DEFAULT_TYPEDB_NATIVE_RULE_PARALLELISM)),
+        )
+        self._native_rule_target_parallelism = max(
+            1,
+            min(
+                self._native_rule_parallelism,
+                int(
+                    number_or_none(native_rule_target_parallelism)
+                    or DEFAULT_TYPEDB_NATIVE_RULE_TARGET_PARALLELISM
+                ),
+            ),
         )
         self._native_rule_any_condition_parallelism = max(
             1,
@@ -5608,6 +5623,9 @@ class TypeDBOntologyGraphRepository(GraphStoreOntologyRowMapperMixin, ScopedABox
 
     def native_rule_parallelism(self) -> int:
         return self._native_rule_parallelism
+
+    def native_rule_target_parallelism(self) -> int:
+        return self._native_rule_target_parallelism
 
     def native_rule_any_condition_parallelism(self) -> int:
         return self._native_rule_any_condition_parallelism
@@ -12423,6 +12441,11 @@ relation ontology-assertion,
             })
         rule_payload = rule.to_dict() if hasattr(rule, "to_dict") else dict(rule or {})
         candidate_symbols = clean_symbols_from_payload(planned.get("candidateSymbols") or clean_symbols)
+        target_work_metadata = {
+            "targetWorkShardIndex": int(number_or_none(planned.get("targetWorkShardIndex")) or 0),
+            "targetWorkShardCount": max(1, int(number_or_none(planned.get("targetWorkShardCount")) or 1)),
+            "targetWorkShardingUsed": bool(planned.get("targetWorkShardingUsed")),
+        }
         function_name = typedb_native_rule_function_name(rule.rule_id, world_id)
         has_any_conditions = any(
             normalized_condition_role(
@@ -12565,6 +12588,7 @@ relation ontology-assertion,
                         "indexedEvidenceQueryUsed": uses_indexed_evidence_query,
                         "rowCount": len(rows),
                         "candidateSymbols": candidate_symbols,
+                        **target_work_metadata,
                         "queryComplexity": int(planned.get("queryComplexity") or 0),
                         "queryCount": read_call_count,
                         "anyConditionQueryCount": any_condition_query_count,
@@ -12600,6 +12624,7 @@ relation ontology-assertion,
         preflight_graph: PortfolioOntology = None,
         preflight_incoming_relations_complete: bool = False,
         native_rule_parallelism: int = 1,
+        native_rule_target_parallelism: int = 1,
         stable_abox_write_lease_held: bool = False,
         evidence_read_index: Dict[str, object] = None,
     ) -> Dict[str, object]:
@@ -12637,6 +12662,22 @@ relation ontology-assertion,
         schema_function_match_used = False
         indexed_evidence_query_used = False
         evidence_index_hydration: Dict[str, object] = {}
+        requested_target_parallelism = max(
+            1,
+            min(8, int(number_or_none(native_rule_target_parallelism) or 1)),
+        )
+        target_work_plan: Dict[str, object] = {
+            "requestedTargetParallelism": requested_target_parallelism,
+            "effectiveTargetParallelism": 1,
+            "targetSymbols": list(clean_symbols),
+            "targetSymbolCount": len(clean_symbols),
+            "targetWorkShardingUsed": False,
+            "targetWorkShardCount": 1 if clean_symbols else 0,
+            "targetWorkItemCount": 0,
+            "targetWorkOriginalEntryCount": 0,
+            "targetWorkShardedRuleCount": 0,
+            "workItems": [],
+        }
         try:
             relation_types_by_symbol: Dict[str, Iterable[str]] = {}
             rule_context: Dict[str, object] = {}
@@ -12761,6 +12802,20 @@ relation ontology-assertion,
                     })
                     continue
                 selected_entries.append(planned)
+            # The ABox pointer is stable only while the projection-owned write
+            # lease is held. Split an already verified target set at this point
+            # so each worker performs read-only TypeDB work, then merge every
+            # result before a single InferenceBox generation is materialized.
+            # Without that lease, retain the historical serial work shape.
+            target_work_plan = typedb_native_rule_target_work_plan(
+                selected_entries,
+                target_parallelism=(
+                    requested_target_parallelism
+                    if stable_abox_write_lease_held
+                    else 1
+                ),
+            )
+            selected_entries = list(target_work_plan.get("workItems") or [])
             imported = self.driver_imports()
             if imported[0] is None:
                 raise RuntimeError("typedb-driver Python package is not installed: " + str(imported[1])[:160])
@@ -13197,13 +13252,29 @@ relation ontology-assertion,
                     "indexedEvidenceQueryUsed": indexed_evidence_query_used,
                     "nativeExecutionMode": execution_mode,
                     "nativeRuleParallelism": effective_parallelism,
+                    "nativeRuleTargetParallelism": int(target_work_plan.get("effectiveTargetParallelism") or 1),
+                    "targetWorkShardingUsed": bool(target_work_plan.get("targetWorkShardingUsed")),
+                    "targetWorkShardCount": int(target_work_plan.get("targetWorkShardCount") or 0),
+                    "targetWorkItemCount": int(target_work_plan.get("targetWorkItemCount") or 0),
+                    "targetWorkOriginalEntryCount": int(target_work_plan.get("targetWorkOriginalEntryCount") or 0),
+                    "targetWorkShardedRuleCount": int(target_work_plan.get("targetWorkShardedRuleCount") or 0),
                     "nativeRuleAnyConditionParallelismCap": any_condition_parallelism_cap,
                     "nativeRuleAnyConditionRuleCount": any_condition_rule_count,
                     "nativeRuleExecutionPhases": native_rule_execution_phases,
                     "parallelRuleExecution": parallel_rule_execution,
                     "matchedCount": len(matches),
-                    "executedRuleCount": len(executed_rules),
-                    "skippedRuleCount": len(skipped_rules),
+                    "executedRuleCount": len({
+                        str(item.get("ruleId") or "").strip()
+                        for item in executed_rules
+                        if str(item.get("ruleId") or "").strip()
+                    }),
+                    "executedRuleWorkCount": len(executed_rules),
+                    "skippedRuleCount": len({
+                        str(item.get("ruleId") or "").strip()
+                        for item in skipped_rules
+                        if str(item.get("ruleId") or "").strip()
+                    }),
+                    "skippedRuleWorkCount": len(skipped_rules),
                     "matches": matches,
                     "reasonCode": str(incomplete_diagnostic.get("reasonCode") or "typedbNativeRuleExecutionPartial"),
                     "reason": str(incomplete_diagnostic.get("reason") or "TypeDB native rule execution did not complete for every applicable rule."),
@@ -13226,12 +13297,28 @@ relation ontology-assertion,
                 "indexedEvidenceQueryUsed": indexed_evidence_query_used,
                 "nativeExecutionMode": execution_mode,
                 "nativeRuleParallelism": effective_parallelism,
+                "nativeRuleTargetParallelism": int(target_work_plan.get("effectiveTargetParallelism") or 1),
+                "targetWorkShardingUsed": bool(target_work_plan.get("targetWorkShardingUsed")),
+                "targetWorkShardCount": int(target_work_plan.get("targetWorkShardCount") or 0),
+                "targetWorkItemCount": int(target_work_plan.get("targetWorkItemCount") or 0),
+                "targetWorkOriginalEntryCount": int(target_work_plan.get("targetWorkOriginalEntryCount") or 0),
+                "targetWorkShardedRuleCount": int(target_work_plan.get("targetWorkShardedRuleCount") or 0),
                 "nativeRuleAnyConditionParallelismCap": any_condition_parallelism_cap,
                 "nativeRuleAnyConditionRuleCount": any_condition_rule_count,
                 "nativeRuleExecutionPhases": native_rule_execution_phases,
                 "parallelRuleExecution": parallel_rule_execution,
-                "executedRuleCount": len(executed_rules),
-                "skippedRuleCount": len(skipped_rules),
+                "executedRuleCount": len({
+                    str(item.get("ruleId") or "").strip()
+                    for item in executed_rules
+                    if str(item.get("ruleId") or "").strip()
+                }),
+                "executedRuleWorkCount": len(executed_rules),
+                "skippedRuleCount": len({
+                    str(item.get("ruleId") or "").strip()
+                    for item in skipped_rules
+                    if str(item.get("ruleId") or "").strip()
+                }),
+                "skippedRuleWorkCount": len(skipped_rules),
                 "matchedCount": len(matches),
                 "readTransactionCount": read_transaction_count,
                 "readQueryCount": read_call_count,
@@ -13254,6 +13341,12 @@ relation ontology-assertion,
                 "schemaFunctionUsed": False,
                 "nativeExecutionMode": execution_mode,
                 "nativeRuleParallelism": effective_parallelism,
+                "nativeRuleTargetParallelism": int(target_work_plan.get("effectiveTargetParallelism") or 1),
+                "targetWorkShardingUsed": bool(target_work_plan.get("targetWorkShardingUsed")),
+                "targetWorkShardCount": int(target_work_plan.get("targetWorkShardCount") or 0),
+                "targetWorkItemCount": int(target_work_plan.get("targetWorkItemCount") or 0),
+                "targetWorkOriginalEntryCount": int(target_work_plan.get("targetWorkOriginalEntryCount") or 0),
+                "targetWorkShardedRuleCount": int(target_work_plan.get("targetWorkShardedRuleCount") or 0),
                 "nativeRuleAnyConditionParallelismCap": any_condition_parallelism_cap,
                 "nativeRuleAnyConditionRuleCount": any_condition_rule_count,
                 "nativeRuleExecutionPhases": native_rule_execution_phases,
@@ -15168,6 +15261,11 @@ relation ontology-assertion,
                 preflight_graph=preflight_graph,
                 preflight_incoming_relations_complete=preflight_incoming_relations_complete,
                 native_rule_parallelism=self.native_rule_parallelism() if stable_abox_write_lease_held else 1,
+                native_rule_target_parallelism=(
+                    self.native_rule_target_parallelism()
+                    if stable_abox_write_lease_held
+                    else 1
+                ),
                 stable_abox_write_lease_held=stable_abox_write_lease_held,
                 evidence_read_index=evidence_read_index,
             )
@@ -15195,9 +15293,17 @@ relation ontology-assertion,
                     if isinstance(item, dict) and str(item.get("ruleId") or "").strip()
                 })[:160],
                 "typedbNativeRuleExecutedCount": int(number_or_none(native_match_result.get("executedRuleCount")) or 0),
+                "typedbNativeRuleExecutedWorkCount": int(number_or_none(native_match_result.get("executedRuleWorkCount")) or 0),
                 "typedbNativeRuleSkippedCount": int(number_or_none(native_match_result.get("skippedRuleCount")) or 0),
                 "typedbNativeRuleParallelism": int(number_or_none(native_match_result.get("nativeRuleParallelism")) or 1),
                 "typedbNativeRuleParallelUsed": bool(native_match_result.get("parallelRuleExecution")),
+                "typedbNativeRuleTargetParallelism": int(number_or_none(native_match_result.get("nativeRuleTargetParallelism")) or 1),
+                "typedbNativeRuleTargetWorkShardingUsed": bool(native_match_result.get("targetWorkShardingUsed")),
+                "typedbNativeRuleTargetWorkShardCount": int(number_or_none(native_match_result.get("targetWorkShardCount")) or 0),
+                "typedbNativeRuleWorkItemCount": int(number_or_none(native_match_result.get("targetWorkItemCount")) or 0),
+                # All target shards are merged before this one generation is
+                # written, so no partial target result can become active.
+                "typedbNativeRuleCommitMode": "single-inferencebox-generation",
                 "typedbNativeRuleTimingProfile": native_rule_timing,
                 "pythonCompatibilityReasonerUsed": False,
                 "typedbNativeStageTimings": dict(native_stage_timings),
@@ -15619,7 +15725,13 @@ relation ontology-assertion,
             "typedbNativeRuleQueryStatus": str(native_match_result.get("status") or ""),
             "typedbNativeRuleMatchedCount": int(number_or_none(native_match_result.get("matchedCount")) or 0),
             "typedbNativeRuleExecutedCount": int(number_or_none(native_match_result.get("executedRuleCount")) or 0),
+            "typedbNativeRuleExecutedWorkCount": int(number_or_none(native_match_result.get("executedRuleWorkCount")) or 0),
             "typedbNativeRuleSkippedCount": int(number_or_none(native_match_result.get("skippedRuleCount")) or 0),
+            "typedbNativeRuleTargetParallelism": int(number_or_none(native_match_result.get("nativeRuleTargetParallelism")) or 1),
+            "typedbNativeRuleTargetWorkShardingUsed": bool(native_match_result.get("targetWorkShardingUsed")),
+            "typedbNativeRuleTargetWorkShardCount": int(number_or_none(native_match_result.get("targetWorkShardCount")) or 0),
+            "typedbNativeRuleWorkItemCount": int(number_or_none(native_match_result.get("targetWorkItemCount")) or 0),
+            "typedbNativeRuleCommitMode": "single-inferencebox-generation",
             "typedbSchemaFunctionUsed": schema_function_sync_used,
             "typedbSchemaFunctionSyncedCount": int(number_or_none(function_sync_result.get("syncedCount")) or 0),
             "pythonCompatibilityReasonerUsed": False,
@@ -17642,6 +17754,70 @@ def typedb_native_rule_execution_plan(
             symbol: sorted(values)
             for symbol, values in type_index.items()
         },
+    }
+
+
+def typedb_native_rule_target_work_plan(
+    entries: Iterable[Dict[str, object]],
+    target_parallelism: int = 1,
+) -> Dict[str, object]:
+    """Split one verified target set into bounded, read-only TypeDB work.
+
+    A RuleBox generation is committed as one InferenceBox generation, so this
+    helper must never change the target set or accept a partial result. It only
+    turns an already selected ``rule x candidate-symbols`` entry into stable
+    shards. The caller keeps one global worker cap and treats any failed shard
+    as a failure of the complete generation.
+    """
+    selected_entries = [dict(item) for item in (entries or []) if isinstance(item, dict)]
+    requested_parallelism = max(
+        1,
+        min(8, int(number_or_none(target_parallelism) or 1)),
+    )
+    all_candidate_symbols = clean_symbols_from_payload([
+        symbol
+        for entry in selected_entries
+        for symbol in clean_symbols_from_payload(entry.get("candidateSymbols") or [])
+    ])
+    effective_parallelism = (
+        min(requested_parallelism, len(all_candidate_symbols))
+        if len(all_candidate_symbols) > 1
+        else 1
+    )
+    work_items: List[Dict[str, object]] = []
+    max_shard_count = 0
+    sharded_rule_ids = set()
+
+    for entry in selected_entries:
+        candidate_symbols = clean_symbols_from_payload(entry.get("candidateSymbols") or [])
+        shard_count = min(effective_parallelism, len(candidate_symbols)) if candidate_symbols else 1
+        max_shard_count = max(max_shard_count, shard_count)
+        if shard_count > 1:
+            sharded_rule_ids.add(str(entry.get("ruleId") or ""))
+        shards = (
+            [candidate_symbols[index::shard_count] for index in range(shard_count)]
+            if candidate_symbols
+            else [[]]
+        )
+        for shard_index, shard_symbols in enumerate(shards):
+            work_item = dict(entry)
+            work_item["candidateSymbols"] = list(shard_symbols)
+            work_item["targetWorkShardIndex"] = shard_index
+            work_item["targetWorkShardCount"] = shard_count
+            work_item["targetWorkShardingUsed"] = shard_count > 1
+            work_items.append(work_item)
+
+    return {
+        "requestedTargetParallelism": requested_parallelism,
+        "effectiveTargetParallelism": effective_parallelism,
+        "targetSymbols": all_candidate_symbols,
+        "targetSymbolCount": len(all_candidate_symbols),
+        "targetWorkShardingUsed": bool(sharded_rule_ids),
+        "targetWorkShardCount": max_shard_count,
+        "targetWorkItemCount": len(work_items),
+        "targetWorkOriginalEntryCount": len(selected_entries),
+        "targetWorkShardedRuleCount": len([rule_id for rule_id in sharded_rule_ids if rule_id]),
+        "workItems": work_items,
     }
 
 
@@ -19944,6 +20120,9 @@ def typedb_repository_from_settings(settings: Dict[str, str] = None):
         or DEFAULT_TYPEDB_NATIVE_RULE_EXECUTION_BUDGET_SECONDS,
         native_rule_parallelism=int(number_or_none(settings.get("typedbNativeRuleParallelism"))
         or DEFAULT_TYPEDB_NATIVE_RULE_PARALLELISM),
+        native_rule_target_parallelism=int(number_or_none(
+            settings.get("typedbNativeRuleTargetParallelism")
+        ) or DEFAULT_TYPEDB_NATIVE_RULE_TARGET_PARALLELISM),
         native_rule_any_condition_parallelism=int(number_or_none(
             settings.get("typedbNativeRuleAnyConditionParallelism")
         ) or 1),

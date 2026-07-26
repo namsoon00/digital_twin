@@ -271,6 +271,10 @@ def native_rule_timing_profile(
             "version": _text(existing.get("version")) or NATIVE_RULE_TIMING_PROFILE_VERSION,
             "wallClockMs": max(0, _integer(existing.get("wallClockMs"))),
             "executedRuleCount": max(0, _integer(existing.get("executedRuleCount"))),
+            "executedRuleWorkCount": max(
+                0,
+                _integer(existing.get("executedRuleWorkCount") or existing.get("executedRuleCount")),
+            ),
             "incompleteRuleCount": max(0, _integer(existing.get("incompleteRuleCount"))),
             "notApplicableRuleCount": max(0, _integer(existing.get("notApplicableRuleCount"))),
             "aggregateRuleElapsedMs": max(0, _integer(existing.get("aggregateRuleElapsedMs"))),
@@ -311,6 +315,9 @@ def native_rule_timing_profile(
             "status": status,
             "rowCount": max(0, _integer(item.get("rowCount"))),
             "candidateSymbolCount": len([symbol for symbol in symbols if _text(symbol)]),
+            "targetWorkShardIndex": max(0, _integer(item.get("targetWorkShardIndex"))),
+            "targetWorkShardCount": max(1, _integer(item.get("targetWorkShardCount") or 1)),
+            "targetWorkShardingUsed": bool(item.get("targetWorkShardingUsed")),
             "queryComplexity": max(0, _integer(item.get("queryComplexity"))),
             "queryCount": max(0, _integer(item.get("queryCount"))),
             "anyConditionQueryCount": max(0, _integer(item.get("anyConditionQueryCount"))),
@@ -328,7 +335,19 @@ def native_rule_timing_profile(
     return {
         "version": NATIVE_RULE_TIMING_PROFILE_VERSION,
         "wallClockMs": max(0, _integer(values.get("wallClockMs"))),
-        "executedRuleCount": len(executed),
+        "executedRuleCount": max(
+            0,
+            _integer(values.get("executedRuleCount"))
+            or len({
+                _text(item.get("ruleId"))
+                for item in executed
+                if _text(item.get("ruleId"))
+            }),
+        ),
+        "executedRuleWorkCount": max(
+            0,
+            _integer(values.get("executedRuleWorkCount")) or len(executed),
+        ),
         "incompleteRuleCount": len(incomplete),
         "notApplicableRuleCount": len(not_applicable),
         # Parallel rule durations overlap; this is a diagnostic total only.
@@ -504,6 +523,12 @@ def build_projection_runtime_observation(
                 execution.get("typedbNativeRuleExecutedCount")
                 or execution.get("nativeRuleSelectionExecutedCount")
             ),
+            "executedRuleWorkCount": _integer(execution.get("typedbNativeRuleExecutedWorkCount")),
+            "targetParallelism": _integer(execution.get("typedbNativeRuleTargetParallelism")),
+            "targetWorkShardingUsed": bool(execution.get("typedbNativeRuleTargetWorkShardingUsed")),
+            "targetWorkShardCount": _integer(execution.get("typedbNativeRuleTargetWorkShardCount")),
+            "targetWorkItemCount": _integer(execution.get("typedbNativeRuleWorkItemCount")),
+            "commitMode": _text(execution.get("typedbNativeRuleCommitMode")),
             "deferredRuleCount": _integer(execution.get("nativeRuleSelectionDeferredCount")),
             "nativeRuleSelectionApplied": bool(execution.get("nativeRuleSelectionApplied")),
             "nativeRuleSelectionFallbackReason": _text(execution.get("nativeRuleSelectionFallbackReason")),

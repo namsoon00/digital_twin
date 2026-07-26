@@ -495,6 +495,7 @@ def admin_preview_config() -> Dict[str, object]:
                     {"key": "ontologyReasoningResearchEventMaxAgeMinutes", "label": "리서치 입력 최대 경과", "type": "number", "default": "360", "unit": "minutes"},
                     {"key": "ontologyReasoningTelemetryHistoryLimit", "label": "추론 실행 이력 보관 수", "type": "number", "default": "80"},
                     {"key": "typedbNativeRuleTargetSymbolLimit", "label": "TypeDB 네이티브 추론 대상 종목 상한", "type": "number", "default": "1"},
+                    {"key": "typedbNativeRuleTargetParallelism", "label": "TypeDB 대상 종목 읽기 병렬 수", "type": "number", "default": "1"},
                     {"key": "typedbNativeRuleSelectionEnabled", "label": "변경 범위 기반 RuleBox 선택", "type": "toggle", "default": "1"},
                     {"key": "typedbNativeRuleParallelism", "label": "TypeDB 규칙 병렬 실행 수", "type": "number", "default": "4"},
                     {"key": "ontologyReasoningMinIntervalSeconds", "label": "종목별 추론 병합 간격", "type": "number", "default": "180", "unit": "seconds"},

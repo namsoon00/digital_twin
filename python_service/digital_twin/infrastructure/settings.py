@@ -147,6 +147,7 @@ TEXT_SETTING_KEYS = [
     "ontologyReasoningProcessedEventLimit",
     "ontologyReasoningTypeDbNativeRuleExecutionEnabled",
     "typedbNativeRuleTargetSymbolLimit",
+    "typedbNativeRuleTargetParallelism",
     "typedbNativeRuleSelectionEnabled",
     "kisRealtimeWebSocketIncludeConfiguredInReasoning",
     "typedbABoxNodeBatchSize",
@@ -908,6 +909,11 @@ def runtime_settings() -> Dict[str, str]:
         "typedbNativeRuleTargetSymbolLimit": value(
             "typedbNativeRuleTargetSymbolLimit",
             "TYPEDB_NATIVE_RULE_TARGET_SYMBOL_LIMIT",
+            "1",
+        ),
+        "typedbNativeRuleTargetParallelism": value(
+            "typedbNativeRuleTargetParallelism",
+            "TYPEDB_NATIVE_RULE_TARGET_PARALLELISM",
             "1",
         ),
         "typedbNativeRuleSelectionEnabled": value("typedbNativeRuleSelectionEnabled", "TYPEDB_NATIVE_RULE_SELECTION_ENABLED", "1"),

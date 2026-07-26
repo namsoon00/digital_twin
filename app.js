@@ -10277,10 +10277,11 @@
     var key = feedEvidenceKey(item, index);
     var impact = researchEvidenceImpactMeta(item);
     var symbol = String(item.symbol || "").toUpperCase();
+    var translation = researchEvidenceTranslationMeta(item);
     return [
       '<button class="oa-news-row" type="button" data-console-row-key="' + escapeHtml(key) + '" data-work-detail="research-evidence" data-work-detail-key="' + escapeHtml(key) + '">',
       '<span class="tone-chip ' + escapeHtml(impact.tone || "hold") + '">' + escapeHtml(impact.label || "중립") + '</span>',
-      '<span><strong>' + escapeHtml(item.title || "제목 없음") + '</strong><em>' + escapeHtml(researchEvidenceKoreanSummary(item)) + '</em></span>',
+      '<span><strong>' + escapeHtml(translation.displayTitle || "제목 없음") + '</strong><em>' + escapeHtml(researchEvidenceKoreanSummary(item)) + '</em></span>',
       '<small>' + escapeHtml([stockDisplayName(symbol, item), item.source, formatFeedTime(item.publishedAt || item.observedAt)].filter(Boolean).join(" · ")) + '</small>',
       '</button>'
     ].join("");
@@ -10563,7 +10564,8 @@
         '<section class="work-detail-section"><strong>관련 뉴스</strong>',
         evidence.length ? '<div class="work-detail-list">' + evidence.slice(0, 3).map(function (item) {
           var impact = researchEvidenceImpactMeta(item);
-          return '<div class="work-detail-row"><span class="tone-chip ' + escapeHtml(impact.tone) + '">' + escapeHtml(impact.label) + '</span><div><strong>' + escapeHtml(item.title || "제목 없음") + '</strong><span>' + escapeHtml(researchEvidenceKoreanSummary(item)) + '</span></div>' + renderWorkDetailButton("research-evidence", item.consoleKey, "기사 분석", "mini-button") + '</div>';
+          var translation = researchEvidenceTranslationMeta(item);
+          return '<div class="work-detail-row"><span class="tone-chip ' + escapeHtml(impact.tone) + '">' + escapeHtml(impact.label) + '</span><div><strong>' + escapeHtml(translation.displayTitle || "제목 없음") + '</strong><span>' + escapeHtml(researchEvidenceKoreanSummary(item)) + '</span></div>' + renderWorkDetailButton("research-evidence", item.consoleKey, "기사 분석", "mini-button") + '</div>';
         }).join("") + '</div>' + (evidence.length > 3 ? renderWorkDetailButton("feed-impact-board", "", "뉴스 전체", "text-button compact") : "") : '<p>연결된 뉴스 근거가 없습니다.</p>',
         '</section>'
       ].join("")
@@ -18784,10 +18786,11 @@
         var item = entry.item || {};
         var impact = researchEvidenceImpactMeta(item);
         var source = feedEvidenceDataMeta(item);
+        var translation = researchEvidenceTranslationMeta(item);
         return [
           '<div class="work-detail-row">',
           '<span class="tone-chip ' + escapeHtml(impact.tone || "hold") + '">' + escapeHtml(impact.label || "중립") + '</span>',
-          '<div><strong>' + escapeHtml(item.title || "제목 없음") + '</strong><span>' + escapeHtml(researchEvidenceKoreanSummary(item)) + '</span><em>' + escapeHtml([source.source, formatFeedTime(item.publishedAt || item.observedAt)].filter(Boolean).join(" · ")) + '</em></div>',
+          '<div><strong>' + escapeHtml(translation.displayTitle || "제목 없음") + '</strong><span>' + escapeHtml(researchEvidenceKoreanSummary(item)) + '</span><em>' + escapeHtml([source.source, formatFeedTime(item.publishedAt || item.observedAt)].filter(Boolean).join(" · ")) + '</em></div>',
           renderWorkDetailButton("research-evidence", entry.key, "기사 분석", "mini-button"),
           '</div>'
         ].join("");
@@ -22901,6 +22904,16 @@
 
   function feedSourceChannels() {
     var newsArchiveEnabled = settingEnabled("newsCollectionEnabled");
+    var internationalProviders = String(settingValue("newsCollectionInternationalProviders") || settingValue("newsCollectionProviders") || defaultSettings.newsCollectionInternationalProviders || defaultSettings.newsCollectionProviders || "google_rss_us,yahoo_search,yahoo_finance,gdelt").split(",").map(function (value) {
+      return String(value || "").trim().toLowerCase();
+    });
+    var koreanProviders = String(settingValue("newsCollectionKoreanProviders") || defaultSettings.newsCollectionKoreanProviders || "google_rss_kr,yahoo_search,yahoo_finance,gdelt").split(",").map(function (value) {
+      return String(value || "").trim().toLowerCase();
+    });
+    var selectedNewsProviders = internationalProviders.concat(koreanProviders);
+    function usesNewsProvider(names) {
+      return names.some(function (name) { return selectedNewsProviders.indexOf(name) >= 0; });
+    }
     return [
       {
         label: "KIS 장중 수급",
@@ -22922,6 +22935,48 @@
         ready: true,
         route: "관심·보유 종목 -> Evidence DB",
         cadence: (settingValue("newsCollectionIntervalSeconds") || defaultSettings.newsCollectionIntervalSeconds || "60") + "초 주기"
+      },
+      {
+        label: "Google News KR",
+        enabled: newsArchiveEnabled && settingEnabled("newsCollectionGoogleKrEnabled") && usesNewsProvider(["google_rss_kr", "google_news_kr", "rss_kr", "kr"]),
+        ready: true,
+        route: "국내 종목 RSS -> 원문 확인 -> Evidence DB",
+        cadence: "무키 RSS"
+      },
+      {
+        label: "Google News US",
+        enabled: newsArchiveEnabled && settingEnabled("newsCollectionGoogleUsEnabled") && usesNewsProvider(["google_rss_us", "google_news_us", "rss_us", "us"]),
+        ready: true,
+        route: "해외 종목 RSS -> 원문 확인 -> Evidence DB",
+        cadence: "무키 RSS"
+      },
+      {
+        label: "Yahoo Finance Search",
+        enabled: newsArchiveEnabled && settingEnabled("newsCollectionYahooSearchEnabled") && usesNewsProvider(["yahoo_search", "yahoo_finance_search"]),
+        ready: true,
+        route: "종목 검색 -> 직접 기사 본문 -> Evidence DB",
+        cadence: "무키 검색"
+      },
+      {
+        label: "Yahoo Finance RSS",
+        enabled: newsArchiveEnabled && settingEnabled("newsCollectionYahooRssEnabled") && usesNewsProvider(["yahoo_finance", "yahoo_finance_rss", "yahoo_rss"]),
+        ready: true,
+        route: "종목 RSS -> 원문 확인 -> Evidence DB",
+        cadence: "무키 RSS"
+      },
+      {
+        label: "GDELT News",
+        enabled: newsArchiveEnabled && settingEnabled("newsCollectionGdeltSyncEnabled") && usesNewsProvider(["gdelt"]),
+        ready: true,
+        route: "글로벌 기사 검색 -> 교차 근거 -> Evidence DB",
+        cadence: "무키 API"
+      },
+      {
+        label: "뉴스 AI 분석",
+        enabled: newsArchiveEnabled && settingEnabled("newsAiAnalysisAsyncEnabled"),
+        ready: settingEnabled("newsAiAnalysisEnabled"),
+        route: "저장 기사 -> 한글 요약·번역·품질 점검",
+        cadence: (settingValue("newsAiAnalysisWorkerIntervalSeconds") || defaultSettings.newsAiAnalysisWorkerIntervalSeconds || "60") + "초 주기"
       },
       {
         label: "OpenDART 공시",
@@ -22974,6 +23029,7 @@
   function feedPipelineStages() {
     var evidence = currentResearchEvidence();
     var summary = evidence.summary || {};
+    var articleAnalysis = evidence.articleAnalysis || {};
     var latest = feedFreshness(summary.latestSeenAt);
     var channels = feedSourceChannels();
     var activeChannels = channels.filter(function (channel) { return channel.enabled; }).length;
@@ -22981,9 +23037,10 @@
     return [
       { step: "01", title: "원천 수집", tone: activeChannels ? "watch" : "hold", value: activeChannels + "/" + channels.length, detail: "사용 중인 수집 채널" },
       { step: "02", title: "준비도 확인", tone: readyChannels === activeChannels ? "watch" : "caution", value: readyChannels + "/" + Math.max(activeChannels, 1), detail: "키·연결·무키 채널 확인" },
-      { step: "03", title: "근거 저장", tone: Number(summary.total || 0) ? latest.tone : "caution", value: Number(summary.total || 0) + "건", detail: "최근 저장 " + latest.label },
-      { step: "04", title: "관계 추론", tone: settingEnabled("ontologyReasoningEnabled") ? "watch" : "hold", value: "TypeDB", detail: "배치 " + (settingValue("ontologyReasoningBatchSize") || defaultSettings.ontologyReasoningBatchSize || "20") },
-      { step: "05", title: "알림 후보", tone: settingEnabled("materialityGateEnabled") ? "watch" : "hold", value: settingEnabled("materialityGateEnabled") ? "조건 기반" : "꺼짐", detail: "실제 변화와 상태 전이 확인" }
+      { step: "03", title: "본문·요약", tone: Number(articleAnalysis.summaryBlockedCount || 0) ? "danger" : (Number(articleAnalysis.summaryNeedsReviewCount || 0) || Number(articleAnalysis.translationPendingCount || 0) ? "caution" : "watch"), value: Number(articleAnalysis.summaryReadyCount || 0) + "건", detail: "번역 완료 " + Number(articleAnalysis.translationCompleteCount || 0) + "건 · 대기 " + Number(articleAnalysis.translationPendingCount || 0) + "건" },
+      { step: "04", title: "근거 저장", tone: Number(summary.total || 0) ? latest.tone : "caution", value: Number(summary.total || 0) + "건", detail: "최근 저장 " + latest.label },
+      { step: "05", title: "관계 추론", tone: settingEnabled("ontologyReasoningEnabled") ? "watch" : "hold", value: "TypeDB", detail: "배치 " + (settingValue("ontologyReasoningBatchSize") || defaultSettings.ontologyReasoningBatchSize || "20") },
+      { step: "06", title: "알림 후보", tone: settingEnabled("materialityGateEnabled") ? "watch" : "hold", value: settingEnabled("materialityGateEnabled") ? "조건 기반" : "꺼짐", detail: "실제 변화와 상태 전이 확인" }
     ];
   }
 
@@ -23912,9 +23969,10 @@
   function feedQualitySignals() {
     var evidence = currentResearchEvidence();
     var summary = evidence.summary || {};
+    var articleAnalysis = evidence.articleAnalysis || {};
     var latest = feedFreshness(summary.latestSeenAt);
     var kisEnabled = settingEnabled("kisMarketSignalsEnabled");
-    var newsEnabled = settingEnabled("externalNewsEnabled");
+    var newsEnabled = settingEnabled("newsCollectionEnabled");
     var dartEnabled = settingEnabled("externalDartEnabled");
     var secEnabled = settingEnabled("externalSecEnabled");
     var alphaEnabled = settingEnabled("externalAlphaEnabled");
@@ -23935,9 +23993,15 @@
       },
       {
         label: "뉴스 수집",
-        value: newsEnabled ? newsProviderLabel(settingValue("externalNewsProvider") || defaultSettings.externalNewsProvider) : "중지",
+        value: newsEnabled ? String((settingValue("newsCollectionInternationalProviders") || settingValue("newsCollectionProviders") || defaultSettings.newsCollectionInternationalProviders || defaultSettings.newsCollectionProviders || "").split(",").filter(Boolean).length + (settingValue("newsCollectionKoreanProviders") || defaultSettings.newsCollectionKoreanProviders ? 1 : 0)) + "개 채널" : "중지",
         tone: newsEnabled ? "watch" : "hold",
-        description: "관심·보유 종목별 외부 헤드라인을 수집해 research_evidence에 저장합니다."
+        description: "Google News, Yahoo Finance, GDELT를 종목별로 수집해 research_evidence에 저장합니다."
+      },
+      {
+        label: "기사 요약·번역",
+        value: Number(articleAnalysis.summaryReadyCount || 0) + "건",
+        tone: Number(articleAnalysis.summaryBlockedCount || 0) ? "danger" : (Number(articleAnalysis.summaryNeedsReviewCount || 0) || Number(articleAnalysis.translationPendingCount || 0) ? "caution" : "watch"),
+        description: "한글 요약 통과 " + Number(articleAnalysis.summaryReadyCount || 0) + "건, 영문 제목 번역 완료 " + Number(articleAnalysis.translationCompleteCount || 0) + "건, 대기 " + Number(articleAnalysis.translationPendingCount || 0) + "건입니다."
       },
       {
         label: "공시 수집",
@@ -24161,10 +24225,71 @@
     var summary = item.articleSummaryKo || item.analysisSummary || item.summaryKo || item.bodySummary || item.summary || item.description
       || payload.articleSummaryKo || payload.analysisSummary || payload.summaryKo || payload.bodySummary || payload.summary || payload.description
       || item.title || payload.title || "기사 분석이 아직 준비되지 않았습니다.";
+    if (hasCorruptNewsText(summary)) return "원문 인코딩 점검으로 요약을 보류했습니다.";
     var koreanLetters = (String(summary).match(/[가-힣]/g) || []).length;
     var latinLetters = (String(summary).match(/[A-Za-z]/g) || []).length;
     if (latinLetters > Math.max(24, koreanLetters * 2)) return "기사 분석을 준비 중입니다. 원문과 분석 결과는 상세에서 확인하세요.";
     return summary;
+  }
+
+  function hasCorruptNewsText(value) {
+    var text = String(value || "");
+    return text.indexOf("\uFFFD") >= 0 || /(?:Ã.|Â.|â..){2,}/.test(text);
+  }
+
+  function researchEvidenceTranslationMeta(item) {
+    item = item || {};
+    var payload = item.payload && typeof item.payload === "object" ? item.payload : {};
+    var original = String(item.originalTitle || payload.originalTitle || item.title || payload.title || "").trim();
+    var language = String(item.sourceLanguage || payload.sourceLanguage || "").trim().toLowerCase();
+    if (!language && original) {
+      var koreanLetters = (original.match(/[가-힣]/g) || []).length;
+      var latinLetters = (original.match(/[A-Za-z]/g) || []).length;
+      language = koreanLetters >= Math.max(2, Math.floor(latinLetters / 3)) ? "ko" : (latinLetters >= 12 ? "en" : "unknown");
+    }
+    var translated = String(item.translatedTitleKo || payload.translatedTitleKo || "").trim();
+    var status = String(item.translationStatus || payload.translationStatus || "").trim().toLowerCase();
+    var translatedKorean = (translated.match(/[가-힣]/g) || []).length >= 2;
+    var complete = language === "en" && translatedKorean;
+    if (complete) status = "complete";
+    if (!status) status = language === "en" ? "pending" : "not-required";
+    var labels = {
+      complete: "번역 완료",
+      pending: "번역 대기",
+      unavailable: "번역 불가",
+      "not-required": "원문 한국어"
+    };
+    return {
+      original: original,
+      translated: complete ? translated : "",
+      displayTitle: complete ? translated : original,
+      language: language,
+      status: status,
+      label: labels[status] || "번역 점검",
+      tone: status === "complete" || status === "not-required" ? "watch" : (status === "unavailable" ? "danger" : "caution"),
+      showOriginal: complete && Boolean(original) && original !== translated
+    };
+  }
+
+  function researchEvidenceSummaryQualityMeta(item) {
+    item = item || {};
+    var payload = item.payload && typeof item.payload === "object" ? item.payload : {};
+    var quality = item.articleSummaryQuality && typeof item.articleSummaryQuality === "object" ? item.articleSummaryQuality
+      : (payload.articleSummaryQuality && typeof payload.articleSummaryQuality === "object" ? payload.articleSummaryQuality : {});
+    var state = String(item.summaryQualityState || payload.summaryQualityState || quality.state || "needs-review").trim().toLowerCase();
+    var rawSummary = item.articleSummaryKo || item.summary || payload.articleSummaryKo || payload.summary || "";
+    if (hasCorruptNewsText(rawSummary)) state = "blocked";
+    var labels = {
+      ready: "요약 검증 통과",
+      "needs-review": "요약 점검 필요",
+      blocked: "요약 보류"
+    };
+    return {
+      state: state,
+      label: labels[state] || "요약 점검 필요",
+      tone: state === "ready" ? "watch" : (state === "blocked" ? "danger" : "caution"),
+      issues: Array.isArray(quality.issues) ? quality.issues : []
+    };
   }
 
   function researchEvidenceImpactMeta(item) {
@@ -24316,6 +24441,8 @@
     var sourceMeta = feedEvidenceDataMeta(item);
     var summary = researchEvidenceKoreanSummary(item);
     var claimMeta = researchClaimVerificationMeta(item);
+    var translation = researchEvidenceTranslationMeta(item);
+    var summaryQuality = researchEvidenceSummaryQualityMeta(item);
     var key = feedEvidenceKey(item, index);
     var expanded = state.expandedResearchEvidenceKey === key;
     return [
@@ -24335,6 +24462,8 @@
       '<span>' + escapeHtml(impact.sourceTrustLabel) + '</span>',
       '<span>' + escapeHtml(impact.relevanceLabel) + '</span>',
       '<span class="' + escapeHtml(claimMeta.tone) + '">' + escapeHtml(claimMeta.label) + '</span>',
+      '<span class="' + escapeHtml(translation.tone) + '">' + escapeHtml(translation.label) + '</span>',
+      '<span class="' + escapeHtml(summaryQuality.tone) + '">' + escapeHtml(summaryQuality.label) + '</span>',
       '<span>' + escapeHtml(sourceMeta.source || "-") + '</span>',
       '<span class="' + escapeHtml(sourceMeta.tone || "hold") + '">' + escapeHtml(sourceMeta.dataLabel) + '</span>',
       '<span>' + escapeHtml(formatFeedTime(time) || "-") + '</span>',
@@ -24342,7 +24471,8 @@
       '</div>',
       '<footer class="feed-impact-article">',
       '<span>기사</span>',
-      '<strong>' + escapeHtml(item.title || "제목 없음") + '</strong>',
+      '<strong>' + escapeHtml(translation.displayTitle || "제목 없음") + '</strong>',
+      translation.showOriginal ? '<em>원제 ' + escapeHtml(translation.original) + '</em>' : '',
       '<button class="mini-button" type="button" data-research-evidence-toggle="' + escapeHtml(key) + '">' + escapeHtml(expanded ? "상세 표시 중" : "상세") + '</button>',
       item.url ? '<a class="open-link" href="' + escapeHtml(item.url) + '" target="_blank" rel="noreferrer" title="원문 열기">↗</a>' : '',
       '</footer>',
@@ -24379,6 +24509,8 @@
     var sourceMeta = feedEvidenceDataMeta(item);
     var summary = researchEvidenceKoreanSummary(item);
     var claimMeta = researchClaimVerificationMeta(item);
+    var translation = researchEvidenceTranslationMeta(item);
+    var summaryQuality = researchEvidenceSummaryQualityMeta(item);
     var canDelete = Boolean(item.evidenceId) && item.evidenceId !== "preview:005930:news";
     var deleting = state.researchEvidenceDeleting === item.evidenceId;
     return [
@@ -24391,6 +24523,8 @@
       renderNotificationDetailMetric("출처 신뢰", impact.sourceTrustLabel, "muted"),
       renderNotificationDetailMetric("데이터", sourceMeta.dataLabel, sourceMeta.tone),
       renderNotificationDetailMetric("주장 검증", claimMeta.label, claimMeta.tone),
+      renderNotificationDetailMetric("번역", translation.label, translation.tone),
+      renderNotificationDetailMetric("요약", summaryQuality.label, summaryQuality.tone),
       '</div>',
       '<section class="inline-detail-block primary">',
       '<strong>기사 요약</strong>',
@@ -24402,7 +24536,8 @@
       '</section>',
       '<section class="inline-detail-block">',
       '<strong>기사</strong>',
-      '<p>' + escapeHtml(item.title || "제목 없음") + '</p>',
+      '<p>' + escapeHtml(translation.displayTitle || "제목 없음") + '</p>',
+      translation.showOriginal ? '<p class="subtle">원제 ' + escapeHtml(translation.original) + '</p>' : '',
       '<div class="inline-detail-tags">',
       '<span>종목 ' + escapeHtml(displayName || symbol || "-") + '</span>',
       '<span>출처 ' + escapeHtml(sourceMeta.source || "-") + '</span>',
@@ -24410,6 +24545,8 @@
       '<span>방향 ' + escapeHtml(researchEvidencePolarityLabel(item.polarity)) + '</span>',
       '<span>독립 출처 ' + escapeHtml(String(claimMeta.independentSources || 1)) + '곳</span>',
       '<span>공식 근거 ' + escapeHtml(String(claimMeta.officialCount)) + '건</span>',
+      '<span class="' + escapeHtml(translation.tone) + '">' + escapeHtml(translation.label) + '</span>',
+      '<span class="' + escapeHtml(summaryQuality.tone) + '">' + escapeHtml(summaryQuality.label) + '</span>',
       '</div>',
       '</section>',
       '<div class="settings-actions">',
@@ -24430,9 +24567,11 @@
     var sourceMeta = feedEvidenceDataMeta(item);
     var summary = researchEvidenceKoreanSummary(item);
     var claimMeta = researchClaimVerificationMeta(item);
+    var translation = researchEvidenceTranslationMeta(item);
+    var summaryQuality = researchEvidenceSummaryQualityMeta(item);
     return {
       kicker: "Research Evidence",
-      title: item.title || displayName || symbol || "뉴스·근거 상세",
+      title: translation.displayTitle || displayName || symbol || "뉴스·근거 상세",
       meta: [displayName || symbol, item.source || "-", formatFeedTime(time) || "-"].filter(Boolean).join(" · "),
       body: [
         '<section class="work-detail-section">',
@@ -24443,6 +24582,8 @@
         renderNotificationDetailMetric("근거 종류", researchEvidenceKindLabel(item.kind), "muted"),
         renderNotificationDetailMetric("출처 신뢰", impact.sourceTrustLabel, "muted"),
         renderNotificationDetailMetric("데이터", sourceMeta.dataLabel, sourceMeta.tone),
+        renderNotificationDetailMetric("번역", translation.label, translation.tone),
+        renderNotificationDetailMetric("요약", summaryQuality.label, summaryQuality.tone),
         '</div>',
         '</section>',
         '<section class="work-detail-section primary">',
@@ -24455,11 +24596,14 @@
         '</section>',
         '<section class="work-detail-section">',
         '<strong>기사</strong>',
-        '<p>' + escapeHtml(item.title || "제목 없음") + '</p>',
+        '<p>' + escapeHtml(translation.displayTitle || "제목 없음") + '</p>',
+        translation.showOriginal ? '<p class="subtle">원제 ' + escapeHtml(translation.original) + '</p>' : '',
         '<div class="notification-detail-tags">',
         '<span>출처 ' + escapeHtml(sourceMeta.source || "-") + '</span>',
         '<span>시간 ' + escapeHtml(formatFeedTime(time) || "-") + '</span>',
         '<span>방향 ' + escapeHtml(researchEvidencePolarityLabel(item.polarity)) + '</span>',
+        '<span class="' + escapeHtml(translation.tone) + '">' + escapeHtml(translation.label) + '</span>',
+        '<span class="' + escapeHtml(summaryQuality.tone) + '">' + escapeHtml(summaryQuality.label) + '</span>',
         '</div>',
         '</section>',
         item.url ? '<a class="text-button primary" href="' + escapeHtml(item.url) + '" target="_blank" rel="noreferrer">원문 열기</a>' : '',
@@ -24593,10 +24737,12 @@
     var sourceMeta = feedEvidenceDataMeta(item);
     var summary = researchEvidenceKoreanSummary(item);
     var claimMeta = researchClaimVerificationMeta(item);
+    var translation = researchEvidenceTranslationMeta(item);
+    var summaryQuality = researchEvidenceSummaryQualityMeta(item);
     var key = feedEvidenceKey(item, index);
     var expanded = state.expandedResearchEvidenceKey === key;
     return [
-      '<div class="research-evidence-item compact ' + escapeHtml(impact.tone) + (expanded ? " active" : "") + '"' + cardTypeAttrs("evidence-card", impact.tone) + cardFormatAttrs("document-card", "compact") + ' role="button" tabindex="0" data-research-evidence-toggle="' + escapeHtml(key) + '" aria-label="' + escapeHtml((item.title || "저장 근거") + " 상세 보기") + '">',
+      '<div class="research-evidence-item compact ' + escapeHtml(impact.tone) + (expanded ? " active" : "") + '"' + cardTypeAttrs("evidence-card", impact.tone) + cardFormatAttrs("document-card", "compact") + ' role="button" tabindex="0" data-research-evidence-toggle="' + escapeHtml(key) + '" aria-label="' + escapeHtml((translation.displayTitle || "저장 근거") + " 상세 보기") + '">',
       '<div class="research-evidence-main">',
       '<div class="research-evidence-meta">',
       '<span class="tone-chip ' + escapeHtml(impact.tone) + '">' + escapeHtml(impact.label) + '</span>',
@@ -24611,10 +24757,13 @@
       '<span>관련성 <strong>' + escapeHtml(impact.relevanceLabel) + '</strong></span>',
       '<span>출처 <strong>' + escapeHtml(impact.sourceTrustLabel) + '</strong></span>',
       '<span>검증 <strong>' + escapeHtml(claimMeta.label) + '</strong></span>',
+      '<span>번역 <strong class="' + escapeHtml(translation.tone) + '">' + escapeHtml(translation.label) + '</strong></span>',
+      '<span>요약 <strong class="' + escapeHtml(summaryQuality.tone) + '">' + escapeHtml(summaryQuality.label) + '</strong></span>',
       '</div>',
       '<footer class="research-evidence-article">',
       '<span>기사</span>',
-      '<strong>' + escapeHtml(item.title || "제목 없음") + '</strong>',
+      '<strong>' + escapeHtml(translation.displayTitle || "제목 없음") + '</strong>',
+      translation.showOriginal ? '<em>원제 ' + escapeHtml(translation.original) + '</em>' : '',
       '<em>' + escapeHtml([sourceMeta.source || "-", sourceMeta.dataLabel, formatFeedTime(time) || "-"].join(" · ")) + '</em>',
       '</footer>',
       '</div>',

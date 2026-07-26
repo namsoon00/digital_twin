@@ -2265,6 +2265,14 @@ class OntologyReasoningRunner:
         }
         if error is not None:
             summary["error"] = str(error)[:240]
+        stage_timing = result.get("stageTiming")
+        if isinstance(stage_timing, dict):
+            summary["stageTiming"] = {
+                key: int(float_value(value, 0.0))
+                for key, value in stage_timing.items()
+                if key in {"monitorAndProjectionMs", "postProjectionMs", "maintenanceMs"}
+                and float_value(value, 0.0) >= 0
+            }
         projection_runtime = result.get("lastProjectionRuntime")
         if isinstance(projection_runtime, dict):
             summary["projectionRuntime"] = {
@@ -2504,6 +2512,8 @@ class OntologyReasoningRunner:
                 "coalescedEventCount": len(durable_superseded_ids),
                 **queue_metadata,
             }
+        stage_timing: Dict[str, int] = {}
+        monitor_started = time.perf_counter()
         runner = self.monitor_runner_factory()
         runner_parameters = inspect.signature(runner.run_once).parameters
         runner_accepts_kwargs = any(
@@ -2516,6 +2526,7 @@ class OntologyReasoningRunner:
         if "reasoning_context" in runner_parameters or runner_accepts_kwargs:
             runner_kwargs["reasoning_context"] = reasoning_context
         alerts = runner.run_once(**runner_kwargs)
+        stage_timing["monitorAndProjectionMs"] = int((time.perf_counter() - monitor_started) * 1000)
         projection_gate = self.projection_gate(runner)
         if not projection_gate.get("ready"):
             self.mark_projection_attempt(symbols)
@@ -2559,6 +2570,7 @@ class OntologyReasoningRunner:
                 **queue_metadata,
             }
         self.mark_successful_projection(runner)
+        post_projection_started = time.perf_counter()
         account_ids = [getattr(account, "account_id", "") for account in getattr(runner, "accounts", [])]
         trigger_event_ids = []
         for event in selected_requests:
@@ -2634,13 +2646,24 @@ class OntologyReasoningRunner:
                 if symbol not in processed_symbols:
                     processed_symbols.append(symbol)
         self.mark_symbols_reasoned(processed_symbols)
-        # A busy realtime queue may never reach the idle-only maintenance
-        # branch. The TypeDB projection gate above has already verified that
-        # this cycle activated its ABox and finished native inference, so a
-        # separately leased, bounded retention pass is now safe. Failure or
-        # writer contention is operational metadata and never changes the
-        # completed investment inference.
-        maintenance = self.run_maintenance_if_due()
+        stage_timing["postProjectionMs"] = int((time.perf_counter() - post_projection_started) * 1000)
+        maintenance_started = time.perf_counter()
+        # Retention owns the same TypeDB writer lease as ABox activation. It
+        # must not consume a live inference cycle while the bounded target
+        # queue is still draining: a timeout after a valid InferenceBox has
+        # been created would otherwise delay every remaining symbol. The idle
+        # branch continues to perform the deferred cleanup once the queue is
+        # caught up.
+        if omitted_symbol_count or fairness_drain.get("active"):
+            maintenance = {
+                "status": "deferred",
+                "reason": "대기열이 남아 있어 TypeDB 세대 정리를 유휴 주기로 이월했습니다.",
+                "omittedSymbolCount": omitted_symbol_count,
+                "fairnessDrainActive": bool(fairness_drain.get("active")),
+            }
+        else:
+            maintenance = self.run_maintenance_if_due()
+        stage_timing["maintenanceMs"] = int((time.perf_counter() - maintenance_started) * 1000)
         status = "partial" if blocked_request_ids or mailbox_ack_error else "ok"
         queue_metadata["mailbox"] = self.mailbox_summary()
         queue_metadata["mailboxPendingEntryCount"] = int(
@@ -2676,6 +2699,7 @@ class OntologyReasoningRunner:
             "reasoningContext": reasoning_context,
             "mailboxAcknowledgeError": mailbox_ack_error,
             "maintenance": maintenance,
+            "stageTiming": stage_timing,
             "deferredReason": (
                 "검증 근거가 같은 계정 월드의 새 ABox/InferenceBox 세대에 정렬될 때까지 해당 리서치 요청을 유지합니다."
                 if blocked_request_ids

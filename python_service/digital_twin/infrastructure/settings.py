@@ -894,7 +894,7 @@ def runtime_settings() -> Dict[str, str]:
         "ontologyReasoningQueueAlertReminderMinutes": value("ontologyReasoningQueueAlertReminderMinutes", "ONTOLOGY_REASONING_QUEUE_ALERT_REMINDER_MINUTES", "60"),
         "ontologyProjectionAuditStaleAfterSeconds": value("ontologyProjectionAuditStaleAfterSeconds", "ONTOLOGY_PROJECTION_AUDIT_STALE_AFTER_SECONDS", "0"),
         "ontologyReasoningMaintenanceEnabled": value("ontologyReasoningMaintenanceEnabled", "ONTOLOGY_REASONING_MAINTENANCE_ENABLED", "1"),
-        "ontologyReasoningMaintenanceIntervalSeconds": value("ontologyReasoningMaintenanceIntervalSeconds", "ONTOLOGY_REASONING_MAINTENANCE_INTERVAL_SECONDS", "60"),
+        "ontologyReasoningMaintenanceIntervalSeconds": value("ontologyReasoningMaintenanceIntervalSeconds", "ONTOLOGY_REASONING_MAINTENANCE_INTERVAL_SECONDS", "300"),
         "ontologyProjectionCircuitFailureThreshold": value("ontologyProjectionCircuitFailureThreshold", "ONTOLOGY_PROJECTION_CIRCUIT_FAILURE_THRESHOLD", "3"),
         "ontologyProjectionCircuitCooldownSeconds": value("ontologyProjectionCircuitCooldownSeconds", "ONTOLOGY_PROJECTION_CIRCUIT_COOLDOWN_SECONDS", "300"),
         "ontologyRuntimeProjectionSloSeconds": value("ontologyRuntimeProjectionSloSeconds", "ONTOLOGY_RUNTIME_PROJECTION_SLO_SECONDS", "120"),

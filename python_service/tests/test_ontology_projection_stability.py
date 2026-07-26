@@ -152,6 +152,53 @@ class OntologyProjectionStabilityTests(unittest.TestCase):
         self.assertEqual("ok", result["maintenance"]["status"])
         self.assertEqual(["maintenance"], calls)
 
+    def test_live_projection_defers_maintenance_while_native_targets_remain_queued(self):
+        calls = []
+
+        class Monitor:
+            accounts = []
+
+            def run_once(self, force=False, symbol_filter=None):
+                self.symbol_filter = list(symbol_filter or [])
+                return []
+
+        cursor = CursorStore()
+        monitor = Monitor()
+        event = SimpleNamespace(
+            event_id="queued-live-projection",
+            occurred_at="2026-07-22T00:00:00Z",
+            payload={
+                "changedCount": 2,
+                "symbols": ["AAPL", "MSFT"],
+                "trigger": "market-data-update",
+                "factTypes": ["MarketQuote"],
+            },
+        )
+        runner = OntologyReasoningRunner(
+            event_reader=EventReader([event]),
+            cursor_store=cursor,
+            monitor_runner_factory=lambda: monitor,
+            settings={
+                "ontologyReasoningEnabled": "1",
+                "ontologyReasoningMaxSymbolsPerRun": "1",
+                "ontologyReasoningMaintenanceEnabled": "1",
+                "ontologyReasoningMaintenanceIntervalSeconds": "60",
+                "ontologyRuleCandidateAiEnabled": "0",
+            },
+            maintenance_runner=lambda: calls.append("maintenance") or {"status": "ok"},
+            now_provider=lambda: datetime(2026, 7, 22, tzinfo=timezone.utc),
+        )
+
+        result = runner.run_once(force=True)
+
+        self.assertEqual("ok", result["status"])
+        self.assertEqual(["AAPL"], monitor.symbol_filter)
+        self.assertEqual(1, result["omittedSymbolCount"])
+        self.assertEqual("deferred", result["maintenance"]["status"])
+        self.assertEqual([], calls)
+        self.assertGreaterEqual(result["stageTiming"]["monitorAndProjectionMs"], 0)
+        self.assertGreaterEqual(result["stageTiming"]["postProjectionMs"], 0)
+
     def test_execution_timeout_guard_blocks_a_new_projection_until_backoff_expires(self):
         cursor = CursorStore()
         runner = self.runner(cursor)

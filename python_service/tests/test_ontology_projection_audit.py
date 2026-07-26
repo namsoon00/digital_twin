@@ -314,10 +314,16 @@ class OntologyProjectionAuditTests(unittest.TestCase):
         class ReuseRepository:
             store_key = "typedb"
 
+            def __init__(self):
+                self.active_read_count = 0
+                self.inference_read_count = 0
+
             def active_abox_metadata(self):
+                self.active_read_count += 1
                 return {"status": "ok", "aboxSnapshotId": "abox:current"}
 
             def inferencebox_snapshot(self, _symbols=None, _limit=0):
+                self.inference_read_count += 1
                 return {"status": "stale-generation"}
 
         prior_scope_plan = [
@@ -399,7 +405,8 @@ class OntologyProjectionAuditTests(unittest.TestCase):
                 },
             },
         }])
-        recorder = PortfolioOntologyProjectionRecorder(ReuseRepository(), projection_run_store=audit_store)
+        repository = ReuseRepository()
+        recorder = PortfolioOntologyProjectionRecorder(repository, projection_run_store=audit_store)
         recorder._rulebox_impact_rules = [
             {
                 "ruleId": "market-rule",
@@ -432,6 +439,8 @@ class OntologyProjectionAuditTests(unittest.TestCase):
         self.assertEqual(["flow-rule"], context["matchedRuleIds"])
         self.assertEqual(["market-rule"], context["inferenceImpactPlan"]["candidateRuleIds"])
         self.assertEqual(1, context["recomputedChangedScopeCount"])
+        self.assertEqual(0, repository.active_read_count)
+        self.assertEqual(0, repository.inference_read_count)
 
     def test_recorder_rejects_audited_proof_when_rulebox_version_changed(self):
         class ReuseRepository:

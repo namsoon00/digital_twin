@@ -71,6 +71,16 @@ class Position:
     source_as_of: str = ""
     source_fetched_at: str = ""
     source_timestamp_state: str = ""
+    freshness_status: str = ""
+    freshness_reason: str = ""
+    freshness_age_minutes: Optional[float] = None
+    freshness_max_age_minutes: Optional[float] = None
+    latency_status: str = ""
+    latency_reason: str = ""
+    market_session: str = ""
+    market_session_label: str = ""
+    source_transport: str = ""
+    real_time: bool = False
     indicator_as_of: str = ""
     indicator_fetched_at: str = ""
     market_value: float = 0.0

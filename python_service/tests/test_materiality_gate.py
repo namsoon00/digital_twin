@@ -1,8 +1,10 @@
+import socket
 import sys
 import unittest
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from types import SimpleNamespace
+from unittest.mock import patch
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
@@ -412,6 +414,108 @@ class MaterialityGateTests(unittest.TestCase):
         self.assertTrue(assessment.passed)
         self.assertEqual("check", assessment.grade)
         self.assertIn("ma20-distance-cleared", assessment.matched_conditions)
+
+    def test_market_materiality_requeues_a_source_validity_state_change(self):
+        previous = {
+            "symbol": "005930",
+            "currentPrice": 70000,
+            "quoteStatus": "KIS 실시간 체결·호가 반영",
+            "dataQuality": "actual",
+            "freshnessStatus": "realtime",
+            "sourceTimestampState": "websocket-received",
+            "latencyStatus": "live-transport",
+            "realTime": True,
+        }
+        current = {
+            **previous,
+            "quoteStatus": "토스 prices 마지막 종가 기준",
+            "dataQuality": "reference",
+            "freshnessStatus": "no-tick",
+            "sourceTimestampState": "no-observation",
+            "latencyStatus": "transport-idle",
+            "realTime": False,
+        }
+
+        change = market_fact_change(previous, current)
+        assessment = market_change_materiality("005930", previous, current, change, {})
+
+        self.assertTrue(change["changed"])
+        self.assertIn("freshnessStatus", change["fields"])
+        self.assertTrue(assessment.passed)
+        self.assertEqual("check", assessment.grade)
+        self.assertEqual("partial", assessment.data_state)
+        self.assertIn("source-validity-state-change", assessment.matched_conditions)
+
+    def test_market_materiality_does_not_queue_last_close_transition_for_every_holding(self):
+        previous = {
+            "symbol": "005930",
+            "currentPrice": 70000,
+            "dataQuality": "actual",
+            "freshnessStatus": "realtime",
+            "sourceTimestampState": "websocket-received",
+            "latencyStatus": "live-transport",
+            "marketSession": "open",
+            "marketSessionLabel": "국장 정규장",
+            "realTime": True,
+        }
+        current = {
+            **previous,
+            "dataQuality": "reference",
+            "freshnessStatus": "last-close",
+            "sourceTimestampState": "provider-last-close",
+            "latencyStatus": "last-close",
+            "marketSession": "closed",
+            "marketSessionLabel": "국장 휴장",
+            "realTime": False,
+        }
+
+        change = market_fact_change(previous, current)
+        assessment = market_change_materiality("005930", previous, current, change, {})
+
+        self.assertTrue(change["changed"])
+        self.assertIn("marketSession", change["fields"])
+        self.assertFalse(assessment.passed)
+        self.assertEqual("normal", assessment.grade)
+        self.assertEqual("reference-transition", assessment.change_state)
+        self.assertIn("source-validity-state-change", assessment.matched_conditions)
+
+    def test_reasoning_worker_discards_legacy_off_session_reference_request_before_projection(self):
+        source = DomainEvent(name="market_data.collected", aggregate_id="market:005930", payload={})
+        request = ontology_reasoning_requested_event(
+            source,
+            "market-data-update",
+            ["005930"],
+            changed_count=1,
+            fact_types=["MarketQuote", "TechnicalIndicator"],
+            materiality_assessments=[{
+                "subject": "005930",
+                "reviewLevel": "check",
+                "dataState": "partial",
+                "matchedConditions": ["data-state-change", "source-validity-state-change"],
+            }],
+            changed_fields_by_symbol={
+                "005930": ["quoteStatus", "dataQuality", "freshnessStatus", "sourceTimestampState", "latencyStatus"],
+            },
+        )
+        runner = OntologyReasoningRunner(
+            event_reader=None,
+            cursor_store=None,
+            monitor_runner_factory=lambda: None,
+            settings={"ontologyReasoningSourceFreshnessEnabled": "1"},
+        )
+        closed = SimpleNamespace(
+            status="closed",
+            label="국장",
+            reason="국장 닫힘",
+            local_time="2026-07-26T09:00:00+09:00",
+            timezone="Asia/Seoul",
+        )
+
+        with patch("digital_twin.application.ontology_reasoning_service.evaluate_market_hours", return_value=closed):
+            freshness = runner.event_freshness(request)
+
+        self.assertEqual("off-session-reference", freshness["status"])
+        self.assertFalse(freshness["shouldProcess"])
 
     def test_evidence_materiality_requires_direct_reliable_material_news(self):
         weak = ResearchEvidence(
@@ -1484,6 +1588,95 @@ class MaterialityGateTests(unittest.TestCase):
         self.assertTrue(result["reconnectRecommended"])
         self.assertEqual([True], closed)
 
+    def test_kis_websocket_no_tick_is_reference_transport_not_actual_quote(self):
+        class QuoteCache:
+            def load(self, *_args):
+                return {}
+
+            def save(self, *_args):
+                return None
+
+        class SilentWebSocket:
+            def __init__(self, *_args):
+                self.closed = False
+
+            def connect(self):
+                return None
+
+            def send_text(self, _text):
+                return None
+
+            def recv_text(self, timeout=None):
+                raise socket.timeout()
+
+            def close(self):
+                self.closed = True
+
+        client = KISRealtimeWebSocketClient(
+            {
+                "kisBaseUrl": "https://kis.example.test",
+                "kisWebSocketUrl": "ws://kis.example.test:21000",
+                "kisAppKey": "app",
+                "kisAppSecret": "secret",
+            },
+            quote_cache=QuoteCache(),
+            http_json=lambda *_args: {"approval_key": "approval"},
+            websocket_factory=SilentWebSocket,
+        )
+
+        with patch(
+            "digital_twin.infrastructure.kis_realtime_ws.time.monotonic",
+            side_effect=[0, 0, 2, 3],
+        ):
+            result = client.collect(["005930"], 1)
+
+        self.assertEqual("no-tick", result["status"])
+        self.assertEqual(0, result["savedCount"])
+        self.assertEqual("reference", result["dataQuality"])
+        self.assertEqual("no-tick", result["freshnessStatus"])
+        self.assertEqual("no-observation", result["sourceTimestampState"])
+        self.assertFalse(result["realTime"])
+
+    def test_kis_runner_persists_no_tick_as_transport_telemetry_only(self):
+        class QuoteCache:
+            def __init__(self):
+                self.rows = {}
+
+            def load(self, provider, account_id, symbol):
+                return dict(self.rows.get((provider, account_id, symbol), {}))
+
+            def save(self, provider, account_id, symbol, payload):
+                self.rows[(provider, account_id, symbol)] = dict(payload)
+
+        class NoTickClient:
+            def enabled(self):
+                return True
+
+            def configured(self):
+                return True
+
+            def collect(self, _symbols, _duration, on_update):
+                return {"status": "ok", "savedCount": 0}
+
+        cache = QuoteCache()
+        events = EventBus()
+        runner = KISRealtimeWebSocketRunner(
+            client=NoTickClient(),
+            symbol_selector=SimpleNamespace(symbols=lambda: ["005930"]),
+            quote_cache=cache,
+            settings={},
+            event_publisher=events,
+        )
+
+        result = runner.run_once(duration_seconds=1, force=True)
+        telemetry = result["transportStatus"]
+
+        self.assertEqual("no-tick", result["status"])
+        self.assertEqual("reference", telemetry["dataQuality"])
+        self.assertFalse(telemetry["realTime"])
+        self.assertEqual("empty", result["eventFlush"]["status"])
+        self.assertEqual([], events.published)
+
     def test_kis_runner_flushes_received_ticks_after_an_unexpected_client_error(self):
         events = EventBus()
 
@@ -1507,12 +1700,58 @@ class MaterialityGateTests(unittest.TestCase):
             event_publisher=events,
         )
 
-        result = runner.run_once(duration_seconds=3)
+        result = runner.run_once(duration_seconds=3, force=True)
 
         self.assertEqual("connection-error", result["status"])
         self.assertEqual("ok", result["eventFlush"]["status"])
         self.assertEqual(1, result["eventFlush"]["changedCount"])
         self.assertTrue(events.published)
+
+    def test_kis_runner_skips_transport_when_korean_market_is_closed(self):
+        class QuoteCache:
+            def __init__(self):
+                self.rows = {}
+
+            def load(self, provider, account_id, symbol):
+                return dict(self.rows.get((provider, account_id, symbol), {}))
+
+            def save(self, provider, account_id, symbol, payload):
+                self.rows[(provider, account_id, symbol)] = dict(payload)
+
+        class Client:
+            def enabled(self):
+                return True
+
+            def configured(self):
+                return True
+
+            def collect(self, *_args, **_kwargs):
+                raise AssertionError("closed market must not open a WebSocket")
+
+        cache = QuoteCache()
+        runner = KISRealtimeWebSocketRunner(
+            client=Client(),
+            symbol_selector=SimpleNamespace(symbols=lambda: ["005930"]),
+            quote_cache=cache,
+            settings={},
+        )
+        closed = SimpleNamespace(
+            status="closed",
+            label="국장",
+            reason="국장 닫힘",
+            local_time="2026-07-26T09:00:00+09:00",
+            timezone="Asia/Seoul",
+        )
+
+        with patch("digital_twin.application.kis_realtime_service.evaluate_market_hours", return_value=closed):
+            result = runner.run_once(duration_seconds=1)
+
+        self.assertEqual("market-closed", result["status"])
+        self.assertEqual("reference", result["dataQuality"])
+        self.assertEqual("last-close", result["freshnessStatus"])
+        self.assertEqual("market-closed", result["sourceTimestampState"])
+        self.assertFalse(result["realTime"])
+        self.assertEqual("market-closed", result["transportStatus"]["status"])
 
     def test_ontology_reasoning_prioritizes_an_overdue_symbol_over_a_fresh_higher_priority_symbol(self):
         higher_priority = ontology_reasoning_requested_event(

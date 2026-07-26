@@ -854,6 +854,9 @@ class PortfolioOntologyProjectionRecorder:
                         "deferredScopeCount": len(
                             applied_target_patch.get("deferredScopeIds") or []
                         ),
+                        "retiredScopeIds": list(
+                            applied_target_patch.get("retiredScopeIds") or []
+                        ),
                         "fullReconcileMinutes": self.scoped_full_reconcile_minutes(),
                     }
                     persistence_graph.worldview["targetScopedManifestPatch"] = dict(target_scoped_patch)
@@ -2966,17 +2969,28 @@ class PortfolioOntologyProjectionRecorder:
     ) -> Dict[str, object]:
         """Prove which unaffected native rules must be re-materialized.
 
-        This is a reuse proof, not a Python rule evaluation. The fast path
-        reads an InferenceBox aligned to the active immutable ABox. When
-        another symbol has moved the active Manifest meanwhile, a verified
-        projection audit can still prove the prior target's complete native
-        outcome. In that case we compare its saved scope identities with the
-        candidate Manifest and ask TypeDB to re-run every rule affected since
-        that target was last evaluated, plus every prior match.
+        This is a reuse proof, not a Python rule evaluation. A verified,
+        target-scoped projection audit is checked first because it is a local
+        MySQL read and can prove that another symbol's manifest update did not
+        invalidate this target. If no such proof exists, the fallback reads an
+        InferenceBox aligned to the active immutable ABox. In either case we
+        compare saved scope identities with the candidate Manifest and ask
+        TypeDB to re-run every rule affected since that target was last
+        evaluated, plus every prior match.
 
         Missing provenance, a RuleBox/TBox change, or an opaque old scope
         deliberately falls back to a complete RuleBox slice.
         """
+        audited = self.audited_prior_rule_selection_context(
+            snapshot,
+            inference_symbols,
+            candidate_scope_plan=candidate_scope_plan,
+            rulebox_rules_hash=rulebox_rules_hash,
+            tbox_fingerprint=tbox_fingerprint,
+            world_id=world_id,
+        )
+        if audited:
+            return audited
         active_abox = self.active_abox_metadata(world_id)
         inferencebox = self.existing_inference_result(snapshot, inference_symbols, world_id=world_id)
         reusable = self.inference_result_is_reusable(
@@ -2996,16 +3010,6 @@ class PortfolioOntologyProjectionRecorder:
                 "sourceAboxSnapshotId": str(inferencebox.get("sourceAboxSnapshotId") or ""),
                 "fallbackReason": "",
             }
-        audited = self.audited_prior_rule_selection_context(
-            snapshot,
-            inference_symbols,
-            candidate_scope_plan=candidate_scope_plan,
-            rulebox_rules_hash=rulebox_rules_hash,
-            tbox_fingerprint=tbox_fingerprint,
-            world_id=world_id,
-        )
-        if audited:
-            return audited
         return {
             "reusable": False,
             "proofSource": "",

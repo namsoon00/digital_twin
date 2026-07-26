@@ -7,21 +7,89 @@ from types import SimpleNamespace
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from digital_twin.application.notification_ai_gate_message import execution_telegram_message
+from digital_twin.domain.accounts import AccountConfig
 from digital_twin.domain.external_api_sources import external_api_source_metadata
 from digital_twin.domain.investment_research import research_evidence_from_external_signals
 from digital_twin.domain.investor_flow_psychology import investor_flow_psychology
 from digital_twin.domain.market_data import normalize_position
 from digital_twin.domain.notification_ai_gate_contracts import NotificationAIValidatedResponse
 from digital_twin.domain.notification_templates import NotificationTemplate, alert_context, render_notification
+from digital_twin.domain.ontology_observation_quality import position_observation_profiles
 from digital_twin.domain.portfolio import AccountSnapshot, AlertEvent, Position
 from digital_twin.domain.portfolio_calculations import portfolio_summary
 from digital_twin.domain.monitoring import RealtimeMonitor
 from digital_twin.infrastructure.external_signals import ExternalSignalProvider
 from digital_twin.infrastructure.external_signal_utils import sanitize_sensitive_text
 from digital_twin.infrastructure.kis_market_signals import KISMarketSignalProvider, stage_coverage
+from digital_twin.infrastructure.toss_snapshots import TossProvider, normalize_price_payload
 
 
 class ExternalApiSourceTests(unittest.TestCase):
+    def test_toss_price_outside_market_session_is_labeled_last_close_reference(self):
+        quote = normalize_price_payload(
+            {
+                "symbol": "005930",
+                "name": "삼성전자",
+                "market": "KR",
+                "currency": "KRW",
+                "lastPrice": "70000",
+                "timestamp": "2026-07-24T06:30:00Z",
+            },
+            now=datetime(2026, 7, 26, 8, 0, tzinfo=timezone.utc),
+        )
+
+        self.assertEqual("reference", quote["dataQuality"])
+        self.assertEqual("last-close", quote["freshnessStatus"])
+        self.assertEqual("provider-last-close", quote["sourceTimestampState"])
+        self.assertEqual("closed", quote["marketSession"])
+        self.assertFalse(quote["realTime"])
+
+    def test_toss_merge_keeps_last_close_as_reference_when_candles_are_available(self):
+        quote = normalize_price_payload(
+            {
+                "symbol": "005930",
+                "name": "삼성전자",
+                "market": "KR",
+                "currency": "KRW",
+                "lastPrice": "70000",
+                "timestamp": "2026-07-24T06:30:00Z",
+            },
+            now=datetime(2026, 7, 26, 8, 0, tzinfo=timezone.utc),
+        )
+        position = normalize_position({
+            "symbol": "005930",
+            "name": "삼성전자",
+            "market": "KR",
+            "currency": "KRW",
+            "quantity": 1,
+            "currentPrice": 70000,
+            "dataQuality": "actual",
+        })
+        provider = TossProvider(
+            AccountConfig("test", "test", "toss", "https://example.test", "id", "secret", "1", []),
+            quote_cache=SimpleNamespace(),
+            settings={},
+        )
+
+        merged = provider.merge_market_data(
+            position,
+            quote,
+            {"ma20": 69000, "ma60": 68000},
+            {},
+            quote_live=True,
+            indicators_live=True,
+        )
+        profiles = position_observation_profiles(
+            merged,
+            {"asOf": "2026-07-26T08:00:00Z", "settings": {}},
+        )
+
+        self.assertEqual("reference", merged.data_quality)
+        self.assertEqual("last-close", merged.freshness_status)
+        self.assertIn("장 마감 기준값", merged.quote_message)
+        self.assertEqual("last-close", profiles["quote"]["freshnessStatus"])
+        self.assertEqual("limited", profiles["quote"]["sourceTrustState"])
+
     def test_kis_rest_price_outside_regular_session_is_labeled_last_close(self):
         coverage = stage_coverage(
             "price",

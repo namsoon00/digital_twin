@@ -177,7 +177,10 @@ def websocket_stage_coverage(stage: str, fields: Iterable[str], fetched_at: str,
         "nonZeroFields": clean_fields,
         "fetchedAt": fetched_at,
         "sourceAsOf": fetched_at,
-        "sourceTimestampState": "exchange-tick",
+        # The protocol frame does not always carry an exchange timestamp.
+        # Record the receipt clock honestly instead of presenting it as an
+        # exchange-issued tick time.
+        "sourceTimestampState": "websocket-received",
         "realTime": True,
         "freshnessStatus": "realtime",
         "aiUsableAsStrongEvidence": True,
@@ -206,6 +209,16 @@ def merge_realtime_signal(previous: Dict[str, object], update: Dict[str, object]
     merged["quoteMessage"] = "KIS WebSocket 체결·호가를 실시간 모델링 데이터에 반영했습니다. 투자자별 수급은 KIS REST live-poll 근거와 분리해서 봅니다."
     merged["dataQuality"] = "actual"
     merged["updatedAt"] = fetched_at
+    merged["sourceAsOf"] = fetched_at
+    merged["sourceFetchedAt"] = fetched_at
+    merged["sourceTimestampState"] = "websocket-received"
+    merged["freshnessStatus"] = "realtime"
+    merged["freshnessReason"] = "KIS WebSocket에서 실제 체결 또는 호가 프레임을 수신했습니다."
+    merged["freshnessAgeMinutes"] = 0
+    merged["latencyStatus"] = "live-transport"
+    merged["latencyReason"] = "WebSocket 수신 시각 기준의 장중 체결·호가 관측값입니다."
+    merged["transport"] = "websocket"
+    merged["realTime"] = True
     merged["marketSession"] = "regular"
     merged["marketSessionLabel"] = "정규장"
     coverage = dict(merged.get("marketSignalCoverage") or {}) if isinstance(merged.get("marketSignalCoverage"), dict) else {}
@@ -457,6 +470,8 @@ class KISRealtimeWebSocketClient:
         saved_count = 0
         stage_counts: Dict[str, int] = {}
         subscribed_symbols: List[str] = []
+        last_received_at = ""
+        last_tick_at = ""
         ws = None
         stage = "connect"
         started = time.monotonic()
@@ -475,9 +490,11 @@ class KISRealtimeWebSocketClient:
                     text = ws.recv_text(timeout=1.0)
                 except socket.timeout:
                     continue
+                last_received_at = str(self.now_provider() or "")
                 updates = self.apply_message(text)
                 if not updates:
                     continue
+                last_tick_at = last_received_at
                 saved_count += len(updates)
                 for update in updates:
                     update_stage = str(update.get("stage") or "")
@@ -496,6 +513,11 @@ class KISRealtimeWebSocketClient:
                 "savedCount": saved_count,
                 "stageCounts": stage_counts,
                 "dataQuality": "partial" if saved_count else "unavailable",
+                "freshnessStatus": "realtime" if saved_count else "unavailable",
+                "sourceTimestampState": "websocket-received" if saved_count else "no-observation",
+                "lastReceivedAt": last_received_at,
+                "lastTickAt": last_tick_at,
+                "realTime": bool(saved_count),
                 "transport": "websocket",
                 "errorStage": stage,
                 "reason": ("KIS WebSocket " + stage + " 단계 연결이 끊겼습니다: " + str(error))[:360],
@@ -508,8 +530,9 @@ class KISRealtimeWebSocketClient:
                     ws.close()
                 except Exception:
                     pass
+        has_tick = bool(saved_count)
         return {
-            "status": "ok",
+            "status": "ok" if has_tick else "no-tick",
             "provider": "kis-websocket",
             "symbols": clean_symbols,
             "selectedCount": len(clean_symbols),
@@ -517,7 +540,12 @@ class KISRealtimeWebSocketClient:
             "subscribedCount": len(subscribed_symbols),
             "savedCount": saved_count,
             "stageCounts": stage_counts,
-            "dataQuality": "actual",
+            "dataQuality": "actual" if has_tick else "reference",
+            "freshnessStatus": "realtime" if has_tick else "no-tick",
+            "sourceTimestampState": "websocket-received" if has_tick else "no-observation",
+            "lastReceivedAt": last_received_at,
+            "lastTickAt": last_tick_at,
+            "realTime": has_tick,
             "transport": "websocket",
             "elapsedSeconds": round(time.monotonic() - started, 3),
         }

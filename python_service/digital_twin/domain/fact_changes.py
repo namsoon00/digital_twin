@@ -1,8 +1,8 @@
 import hashlib
 import json
-from typing import Dict, Iterable, List
+import math
+from typing import Dict, Iterable, List, Optional
 
-from .market_data import number
 
 
 VOLATILE_FACT_KEYS = {
@@ -42,6 +42,15 @@ MARKET_FACT_FIELDS = (
     "ma60Distance",
     "quoteStatus",
     "dataQuality",
+    # A source-validity state is evidence, unlike an ingestion timestamp.
+    # It lets the ABox distinguish an actual tick from a last-close or
+    # unavailable reference without treating every poll as a new fact.
+    "freshnessStatus",
+    "sourceTimestampState",
+    "latencyStatus",
+    "marketSession",
+    "marketSessionLabel",
+    "realTime",
 )
 
 
@@ -89,13 +98,32 @@ def fact_revision_id(
     return "fact-revision:" + digest
 
 
+def _numeric_value(value: object) -> Optional[float]:
+    """Return a finite numeric value without coercing semantic strings to zero."""
+    if isinstance(value, bool) or value is None:
+        return None
+    if isinstance(value, (int, float)):
+        parsed = float(value)
+    elif isinstance(value, str):
+        text = value.strip().replace(",", "")
+        if not text:
+            return None
+        try:
+            parsed = float(text)
+        except ValueError:
+            return None
+    else:
+        return None
+    return parsed if math.isfinite(parsed) else None
+
+
 def _values_equal(previous: object, current: object, numeric_tolerance: float = 0.0001) -> bool:
-    previous_number = number(previous)
-    current_number = number(current)
+    previous_number = _numeric_value(previous)
+    current_number = _numeric_value(current)
     if previous_number is not None or current_number is not None:
         if previous_number is None or current_number is None:
             return False
-        return abs(float(previous_number) - float(current_number)) <= numeric_tolerance
+        return abs(previous_number - current_number) <= numeric_tolerance
     return str(previous or "").strip() == str(current or "").strip()
 
 

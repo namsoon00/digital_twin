@@ -7,6 +7,9 @@ from typing import Callable, Dict, Iterable, List, Tuple
 from ..domain.events import DomainEvent, ONTOLOGY_REASONING_REQUESTED, ontology_reasoning_completed_event
 from ..domain.ontology_change_impact import requested_scope_families_for_event_fact_types
 from ..domain.ontology_runtime_operations import native_replay_validation
+from ..domain.market_data import known_stock
+from ..domain.market_hours import evaluate_market_hours
+from ..domain.message_types import INVESTMENT_INSIGHT
 from ..domain.investment_evidence_governance import (
     ReasoningGeneration,
     ResearchReasoningHandoff,
@@ -194,12 +197,31 @@ COALESCIBLE_RESEARCH_TRIGGERS = {
     "research-evidence-update",
 }
 
+OFF_SESSION_REFERENCE_FIELDS = {
+    "quoteStatus",
+    "dataQuality",
+    "freshnessStatus",
+    "sourceTimestampState",
+    "latencyStatus",
+    "marketSession",
+    "marketSessionLabel",
+    "realTime",
+}
+
 
 def materiality_assessments(event: object) -> List[Dict[str, object]]:
     raw = event_payload(event).get("materialityAssessments") or []
     if isinstance(raw, dict):
         raw = list(raw.values())
     return [dict(item) for item in raw if isinstance(item, dict)]
+
+
+def materiality_assessment_for_symbol(event: object, symbol: object) -> Dict[str, object]:
+    clean = str(symbol or "").upper().strip()
+    for item in materiality_assessments(event):
+        if str(item.get("subject") or "").upper().strip() == clean:
+            return item
+    return {}
 
 
 def event_review_level(event: object) -> str:
@@ -1236,7 +1258,67 @@ class OntologyReasoningRunner:
                 return value
         return str(getattr(event, "occurred_at", "") or "").strip()
 
+    def is_off_session_reference_transition(self, event: object) -> bool:
+        """Discard an old close-transition request before it occupies TypeDB.
+
+        MarketSession is re-evaluated from the current clock inside the ABox,
+        so an event containing only the expected switch to last-close data
+        does not need one native inference run per holding. The source event
+        remains in the audit log and receives an expired mailbox state.
+        """
+        payload = event_payload(event)
+        if str(payload.get("trigger") or "").strip() not in COALESCIBLE_REALTIME_TRIGGERS:
+            return False
+        symbols = event_symbols(event)
+        fields_by_symbol = payload.get("changedFieldsBySymbol")
+        if not symbols or not isinstance(fields_by_symbol, dict):
+            return False
+        for symbol in symbols:
+            fields = fields_by_symbol.get(symbol)
+            if fields is None:
+                fields = fields_by_symbol.get(symbol.upper())
+            field_set = {
+                str(field or "").strip()
+                for field in fields or []
+                if str(field or "").strip()
+            }
+            assessment = materiality_assessment_for_symbol(event, symbol)
+            matched = {
+                str(item or "").strip()
+                for item in assessment.get("matchedConditions") or []
+                if str(item or "").strip()
+            }
+            allowed_matches = {"source-validity-state-change", "data-state-change"}
+            if (
+                not field_set
+                or not field_set.issubset(OFF_SESSION_REFERENCE_FIELDS)
+                or "source-validity-state-change" not in matched
+                or not matched.issubset(allowed_matches)
+                or str(assessment.get("dataState") or "").strip() != "partial"
+            ):
+                return False
+            instrument = known_stock(symbol)
+            session = evaluate_market_hours(
+                INVESTMENT_INSIGHT,
+                {
+                    "symbol": symbol,
+                    "market": instrument.get("market"),
+                    "currency": instrument.get("currency"),
+                },
+                True,
+                ["KR", "US"],
+            )
+            if str(session.status or "") not in {"closed", "closed_exception"}:
+                return False
+        return True
+
     def event_freshness(self, event: object) -> Dict[str, object]:
+        if self.is_off_session_reference_transition(event):
+            return {
+                "status": "off-session-reference",
+                "reason": "장 마감 기준 시세 전환만 포함되어 시장 세션 게이트에 맡기고 TypeDB 재추론은 생략합니다.",
+                "shouldProcess": False,
+            }
         if not self.source_freshness_enabled():
             return {"status": "bypass", "reason": "추론 입력 신선도 정책이 꺼져 있습니다.", "shouldProcess": True}
         trigger = str(event_payload(event).get("trigger") or "").strip()
@@ -1281,7 +1363,12 @@ class OntologyReasoningRunner:
         terminal: Dict[str, str] = {}
         mailbox_entries = []
         direct_ids = []
-        for event, _freshness in stale_requests or []:
+        discard_reasons = []
+        for event, freshness in stale_requests or []:
+            if str((freshness or {}).get("status") or "") == "off-session-reference":
+                discard_reasons.append("off-session last-close reference transition")
+            else:
+                discard_reasons.append("stale source observation before TypeDB projection")
             metadata = self.mailbox_metadata(event)
             key = str(metadata.get("mailboxKey") or "").strip()
             if key:
@@ -1298,7 +1385,7 @@ class OntologyReasoningRunner:
                 terminal.update(self.mailbox_store.acknowledge(
                     mailbox_entries,
                     state="expired",
-                    reason="stale source observation before TypeDB projection",
+                    reason=(discard_reasons[0] if len(set(discard_reasons)) == 1 else "stale or non-actionable source observation before TypeDB projection"),
                 ) or {})
             except Exception:
                 pass

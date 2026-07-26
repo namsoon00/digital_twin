@@ -33,6 +33,14 @@ def position_observation_profiles(
         max_age_minutes=int_setting(settings, "dataFreshnessQuoteMaxAgeMinutes", 10),
         require_source_as_of=True,
     )
+    # A closed-market quote is a known last-close reference, not a failed
+    # feed. Preserve the adapter's explicit state for ABox and RuleBox use.
+    if position.freshness_status:
+        quote["status"] = position.freshness_status
+    if position.freshness_reason:
+        quote["reason"] = position.freshness_reason
+    if position.source_timestamp_state:
+        quote["sourceTimestampState"] = position.source_timestamp_state
     indicator_as_of = position.indicator_as_of or position.source_as_of
     indicator_fetched_at = position.indicator_fetched_at or position.source_fetched_at
     trend = freshness_record(
@@ -198,7 +206,7 @@ def source_trust_state(record: Dict[str, object]) -> str:
         return "trusted"
     if quality in {"mixed", "partial"}:
         return "standard"
-    if quality in {"cached", "stale", "unavailable"}:
+    if quality in {"cached", "stale", "unavailable", "reference"}:
         return "limited"
     return "unknown"
 

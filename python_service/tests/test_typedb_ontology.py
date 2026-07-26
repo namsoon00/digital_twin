@@ -614,6 +614,66 @@ class TypeDBOntologyRepositoryTests(unittest.TestCase):
         self.assertNotIn(samsung_state_scope, patch["selectedIncomingScopeIds"])
         self.assertIn(samsung_state_scope, patch["reusedActiveScopeIds"])
 
+    def test_target_scoped_manifest_patch_retires_removed_target_local_scopes(self):
+        graph = PortfolioOntology(
+            "main",
+            entities=[
+                OntologyEntity("stock:005930", "삼성전자", "stock", {
+                    "ontologyBox": "ABox", "symbol": "005930",
+                }),
+                OntologyEntity("price:005930", "삼성전자 현재가", "price-metric", {
+                    "ontologyBox": "ABox", "symbol": "005930", "currentPrice": 70000,
+                }),
+                OntologyEntity("stock:MSTR", "Strategy", "stock", {
+                    "ontologyBox": "ABox", "symbol": "MSTR",
+                }),
+                OntologyEntity("price:MSTR", "Strategy 현재가", "price-metric", {
+                    "ontologyBox": "ABox", "symbol": "MSTR", "currentPrice": 100,
+                }),
+            ],
+            relations=[
+                OntologyRelation("stock:005930", "price:005930", "HAS_PRICE", properties={
+                    "ontologyBox": "ABox",
+                }),
+                OntologyRelation("stock:MSTR", "price:MSTR", "HAS_PRICE", properties={
+                    "ontologyBox": "ABox",
+                }),
+            ],
+        )
+        first = apply_scoped_abox_identity(graph, world_id="portfolio:local:main")
+        active = {
+            "status": "ok",
+            "scopedAboxManifestVersion": SCOPED_ABOX_MANIFEST_VERSION,
+            "scopeTopologyVersion": SCOPED_ABOX_SCOPE_TOPOLOGY_VERSION,
+            "scopePlan": [dict(item) for item in first["scopePlan"]],
+            "scopeGenerationIds": dict(first["scopeGenerationIds"]),
+            "scopeFingerprints": dict(first["scopeFingerprints"]),
+        }
+        retired_market_scope = next(
+            scope_id for scope_id in first["scopeGenerationIds"]
+            if scope_id.startswith("symbol:005930:market:")
+        )
+
+        graph.entities = [
+            item for item in graph.entities
+            if item.entity_id != "price:005930"
+        ]
+        graph.relations = [
+            item for item in graph.relations
+            if not (item.source == "stock:005930" and item.target == "price:005930")
+        ]
+        apply_scoped_abox_identity(graph, world_id="portfolio:local:main")
+
+        patch = merge_target_scoped_abox_manifest(graph, active, ["005930"])
+
+        self.assertTrue(patch["applied"])
+        self.assertIn(retired_market_scope, patch["retiredScopeIds"])
+        self.assertNotIn(retired_market_scope, patch["scopeGenerationIds"])
+        self.assertTrue(any(
+            scope_id.startswith("symbol:MSTR:market:")
+            for scope_id in patch["scopeGenerationIds"]
+        ))
+
     def test_explicit_target_can_patch_shared_context_without_rewriting_every_symbol(self):
         graph = PortfolioOntology(
             "main",

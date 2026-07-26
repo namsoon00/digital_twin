@@ -211,6 +211,41 @@ def market_change_materiality(
             matched.append("orderbook-imbalance-cleared")
     if current.get("dataQuality") and previous.get("dataQuality") and current.get("dataQuality") != previous.get("dataQuality"):
         matched.append("data-state-change")
+    if field_changed(changed_fields, "freshnessStatus", "sourceTimestampState", "latencyStatus", "realTime"):
+        matched.append("source-validity-state-change")
+
+    # Moving from an intraday observation to a known last-close reference is
+    # expected when the exchange closes. The runtime MarketSession fact already
+    # blocks action evidence then, so one TypeDB cycle per holding would only
+    # create a non-actionable backlog. Live recovery, transport failure, and
+    # any price/trend move still use the normal path below.
+    source_validity_fields = {
+        "quoteStatus",
+        "dataQuality",
+        "freshnessStatus",
+        "sourceTimestampState",
+        "latencyStatus",
+        "marketSession",
+        "marketSessionLabel",
+        "realTime",
+    }
+    closed_reference = (
+        str(current.get("freshnessStatus") or "").strip().lower() == "last-close"
+        or str(current.get("marketSession") or "").strip().lower() in {"closed", "closed_exception"}
+    )
+    if changed_fields and set(changed_fields).issubset(source_validity_fields) and closed_reference:
+        return MaterialityAssessment(
+            symbol,
+            "market-data-update",
+            "normal",
+            False,
+            "장 마감 기준 시세 전환은 시장 세션 게이트로 반영하며 종목별 투자 재추론 요청은 만들지 않습니다.",
+            changed_fields,
+            matched,
+            data_state="partial",
+            change_state="reference-transition",
+            evidence_role="context",
+        )
 
     directional = {
         "price-move",
@@ -233,7 +268,7 @@ def market_change_materiality(
     } & set(matched)
     if "ma60-cross" in matched or (directional and confirmation):
         review_level = "act"
-    elif directional or "data-state-change" in matched:
+    elif directional or "data-state-change" in matched or "source-validity-state-change" in matched:
         review_level = "check"
     else:
         review_level = "normal"
@@ -247,7 +282,11 @@ def market_change_materiality(
     else:
         change_state = "new-condition" if matched else "unchanged"
         evidence_role = "context"
-    data_state = "partial" if str(current.get("dataQuality") or "").lower() in {"poor", "stale", "partial"} else "sufficient"
+    source_state = str(current.get("freshnessStatus") or "").lower()
+    data_state = "partial" if (
+        str(current.get("dataQuality") or "").lower() in {"poor", "stale", "partial", "reference", "unavailable"}
+        or source_state in {"stale", "last-close", "reference-only", "unavailable", "no-tick"}
+    ) else "sufficient"
     reason = (
         "가격·추세 또는 수급 상태가 새 기준을 넘거나 해제되어 다시 확인합니다."
         if passed

@@ -1131,6 +1131,8 @@ def select_target_scoped_manifest_patch(
         "selectedIncomingScopePlan": [],
         "reusedActiveScopeIds": [],
         "deferredScopeIds": [],
+        "retiredScopeIds": [],
+        "removedRelevantScopeIds": [],
     }
     if not requested_symbols:
         return {
@@ -1196,13 +1198,60 @@ def select_target_scoped_manifest_patch(
         for scope_id in active_by_scope
         if scope_id not in incoming and is_requested_or_shared(scope_id)
     )
-    if removed_relevant_scopes:
+    retired_scope_ids = sorted(
+        scope_id
+        for scope_id in removed_relevant_scopes
+        if _symbol(scope_symbol(scope_id)) in requested_symbols
+    )
+    shared_removed_scope_ids = sorted(
+        set(removed_relevant_scopes) - set(retired_scope_ids)
+    )
+    # A shared scope can affect every active subject, so its absence remains
+    # a conservative whole-manifest reconciliation. A target-local scope is
+    # different: its pointer can be retired incrementally when no retained
+    # scope still declares a dependency on it.
+    if shared_removed_scope_ids:
         return {
             **base,
             "status": "skipped-removed-scope-requires-full-refresh",
             "applied": False,
-            "fallbackReason": "target-or-shared-scope-removed",
+            "fallbackReason": "shared-scope-removed",
             "removedRelevantScopeIds": removed_relevant_scopes,
+            "retiredScopeIds": retired_scope_ids,
+            "sharedRemovedScopeIds": shared_removed_scope_ids,
+        }
+    retired_scope_set = set(retired_scope_ids)
+    retained_active_by_scope = {
+        scope_id: item
+        for scope_id, item in active_by_scope.items()
+        if scope_id not in retired_scope_set
+    }
+    retained_dependency_references = sorted(
+        scope_id
+        for scope_id, item in retained_active_by_scope.items()
+        if any(
+            _clean(dependency) in retired_scope_set
+            for dependency in item.get("dependencyScopeIds") or []
+        )
+    )
+    selected_dependency_references = sorted(
+        scope_id
+        for scope_id in selected
+        if any(
+            _clean(dependency) in retired_scope_set
+            for dependency in (incoming.get(scope_id) or {}).get("dependencyScopeIds") or []
+        )
+    )
+    if retained_dependency_references or selected_dependency_references:
+        return {
+            **base,
+            "status": "skipped-retired-scope-still-referenced",
+            "applied": False,
+            "fallbackReason": "retired-target-scope-still-referenced",
+            "removedRelevantScopeIds": removed_relevant_scopes,
+            "retiredScopeIds": retired_scope_ids,
+            "retainedDependencyScopeIds": retained_dependency_references,
+            "selectedDependencyScopeIds": selected_dependency_references,
         }
 
     # A relation can point to a brand new endpoint that has never been active.
@@ -1227,7 +1276,7 @@ def select_target_scoped_manifest_patch(
             row = incoming.get(scope_id) or {}
             for dependency in row.get("dependencyScopeIds") or []:
                 dependency_id = _clean(dependency)
-                if dependency_id and dependency_id not in active_by_scope:
+                if dependency_id and dependency_id not in retained_active_by_scope:
                     include_missing_dependency(dependency_id, missing_endpoints)
         for relation in graph.relations:
             properties = dict(relation.properties or {})
@@ -1236,7 +1285,7 @@ def select_target_scoped_manifest_patch(
                 continue
             for endpoint in (_clean(relation.source), _clean(relation.target)):
                 endpoint_scope = node_scopes.get(endpoint, "")
-                if endpoint_scope and endpoint_scope not in active_by_scope:
+                if endpoint_scope and endpoint_scope not in retained_active_by_scope:
                     include_missing_dependency(endpoint_scope, missing_endpoints)
         support_scopes = dict(worldview.get("supportRelationScopes") or {})
         for evidence in graph.evidence:
@@ -1246,7 +1295,7 @@ def select_target_scoped_manifest_patch(
                 continue
             for endpoint in (_clean(evidence.subject), _clean(evidence.evidence_id)):
                 endpoint_scope = node_scopes.get(endpoint, "")
-                if endpoint_scope and endpoint_scope not in active_by_scope:
+                if endpoint_scope and endpoint_scope not in retained_active_by_scope:
                     include_missing_dependency(endpoint_scope, missing_endpoints)
         changed = len(selected) != before
 
@@ -1276,8 +1325,10 @@ def select_target_scoped_manifest_patch(
         "applied": True,
         "selectedIncomingScopeIds": sorted(selected),
         "selectedIncomingScopePlan": selected_plan,
-        "reusedActiveScopeIds": sorted(set(active_by_scope) - selected),
+        "reusedActiveScopeIds": sorted(set(retained_active_by_scope) - selected),
         "deferredScopeIds": sorted(deferred),
+        "retiredScopeIds": retired_scope_ids,
+        "removedRelevantScopeIds": removed_relevant_scopes,
     }
 
 
@@ -1387,6 +1438,8 @@ def merge_target_scoped_abox_manifest(
         active.get("scopeGenerationIds") or {},
         active.get("scopeFingerprints") or {},
     )
+    for scope_id in selection.get("retiredScopeIds") or []:
+        active_by_scope.pop(_clean(scope_id), None)
     for item in selection.get("selectedIncomingScopePlan") or []:
         scope_id = _clean(item.get("scopeId"))
         if scope_id:
@@ -1404,6 +1457,7 @@ def merge_target_scoped_abox_manifest(
         "selectedIncomingScopeIds": list(selection.get("selectedIncomingScopeIds") or []),
         "reusedActiveScopeIds": list(selection.get("reusedActiveScopeIds") or []),
         "deferredScopeIds": list(selection.get("deferredScopeIds") or []),
+        "retiredScopeIds": list(selection.get("retiredScopeIds") or []),
     }
     graph.worldview["targetScopedManifestPatch"] = patch_metadata
     return {

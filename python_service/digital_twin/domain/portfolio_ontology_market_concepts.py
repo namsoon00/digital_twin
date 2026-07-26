@@ -441,6 +441,7 @@ def add_data_source_concept(
     symbol = symbol_key(position)
     label = str(position.quote_source or position.data_quality or source or "runtime-data")
     quality = data_quality_state(position)
+    quote_observation = profile_for_domain(observation_profiles or {}, "quote")
     source_id = add_entity(graph, "data-source", label + ":" + symbol, label, {
         "tboxClass": "DataSource",
         "tboxClasses": ["DataSource", "Provenance"],
@@ -451,6 +452,9 @@ def add_data_source_concept(
         "sourceAsOf": position.source_as_of,
         "sourceFetchedAt": position.source_fetched_at,
         "sourceTimestampState": position.source_timestamp_state,
+        "transport": position.source_transport,
+        "realTime": bool(position.real_time),
+        **quote_observation,
     })
     add_relation(graph, stock_id, source_id, "OBSERVED_FROM", weight=1.0, properties={"source": source, "basis": "quote-source"})
     add_relation(graph, stock_id, source_id, "HAS_PROVENANCE", weight=1.0, properties={"source": source, "basis": "quote-source"})
@@ -461,6 +465,9 @@ def add_data_source_concept(
         **quality,
         "quoteStatus": position.quote_status,
         "quoteMessage": position.quote_message,
+        "transport": position.source_transport,
+        "realTime": bool(position.real_time),
+        **quote_observation,
     })
     props = {"source": source, "aiInfluenceLabel": label + " 자료 상태", **quality}
     add_relation(graph, source_id, reliability_id, "HAS_SOURCE_DATA_STATE", weight=1.0, properties=props)

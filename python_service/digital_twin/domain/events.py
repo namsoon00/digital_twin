@@ -291,6 +291,8 @@ def market_data_collected_event(payload: Dict[str, object]) -> DomainEvent:
             "materialityAssessments": dict(payload.get("materialityAssessments") or {}),
             "status": str(payload.get("status") or ""),
             "dataQuality": str(payload.get("dataQuality") or "actual"),
+            "quoteQualityCounts": dict(payload.get("quoteQualityCounts") or {}),
+            "marketSessionCounts": dict(payload.get("marketSessionCounts") or {}),
         },
     )
 

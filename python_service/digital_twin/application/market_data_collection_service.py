@@ -17,6 +17,29 @@ from ..domain.symbol_universe import SUPPORTED_MARKETS, normalize_market
 MARKET_DATA_ACCOUNT_ID = "__market_data__"
 
 
+def collection_quote_quality(positions: Iterable[Position]) -> Dict[str, object]:
+    """Summarize quote validity without confusing a successful poll with live data."""
+    quality_counts: Dict[str, int] = {}
+    session_counts: Dict[str, int] = {}
+    for position in positions or []:
+        quality = str(getattr(position, "data_quality", "") or "unknown").strip().lower() or "unknown"
+        session = str(getattr(position, "market_session", "") or "unknown").strip().lower() or "unknown"
+        quality_counts[quality] = quality_counts.get(quality, 0) + 1
+        session_counts[session] = session_counts.get(session, 0) + 1
+    values = set(quality_counts)
+    if not values:
+        data_quality = "unknown"
+    elif len(values) == 1:
+        data_quality = next(iter(values))
+    else:
+        data_quality = "mixed"
+    return {
+        "dataQuality": data_quality,
+        "quoteQualityCounts": dict(sorted(quality_counts.items())),
+        "marketSessionCounts": dict(sorted(session_counts.items())),
+    }
+
+
 def truthy(value: str, default: bool = True) -> bool:
     text = str(value if value is not None else "").strip().lower()
     if not text:
@@ -57,6 +80,29 @@ def position_payload(position: Position, base: Dict[str, object], collection_pur
         "quoteMessage": position.quote_message,
         "dataQuality": position.data_quality or "actual",
         "updatedAt": position.updated_at or utc_now_iso(),
+        # ``updatedAt`` is our collection clock.  These fields retain the
+        # vendor observation clock and its validity state for ABox/AI use.
+        "sourceAsOf": position.source_as_of or str(base.get("sourceAsOf") or ""),
+        "sourceFetchedAt": position.source_fetched_at or str(base.get("sourceFetchedAt") or base.get("fetchedAt") or ""),
+        "sourceTimestampState": position.source_timestamp_state or str(base.get("sourceTimestampState") or ""),
+        "freshnessStatus": position.freshness_status or str(base.get("freshnessStatus") or ""),
+        "freshnessReason": position.freshness_reason or str(base.get("freshnessReason") or ""),
+        "freshnessAgeMinutes": (
+            position.freshness_age_minutes
+            if position.freshness_age_minutes is not None
+            else base.get("freshnessAgeMinutes")
+        ),
+        "freshnessMaxAgeMinutes": (
+            position.freshness_max_age_minutes
+            if position.freshness_max_age_minutes is not None
+            else base.get("freshnessMaxAgeMinutes") or base.get("maxAgeMinutes")
+        ),
+        "latencyStatus": position.latency_status or str(base.get("latencyStatus") or ""),
+        "latencyReason": position.latency_reason or str(base.get("latencyReason") or ""),
+        "marketSession": position.market_session or str(base.get("marketSession") or ""),
+        "marketSessionLabel": position.market_session_label or str(base.get("marketSessionLabel") or ""),
+        "transport": position.source_transport or str(base.get("transport") or ""),
+        "realTime": bool(position.real_time or base.get("realTime")),
         "collectionSource": "market-data-collector",
         "collectionPurpose": collection_purpose,
         "collectionTarget": position.source or "holding",
@@ -531,6 +577,13 @@ class MarketDataCollectionRunner:
             focused_by_account,
             auxiliary_targets,
         )
+        quote_quality = collection_quote_quality(
+            [
+                position
+                for entry in focused_by_account
+                for position in (entry.get("positions") or [])
+            ] + [position for position, _base in auxiliary_targets]
+        )
         outcome_time_series = self.record_outcome_time_series(auxiliary_targets)
         if not merge_summary.get("symbols"):
             return self.attach_pipeline_health({
@@ -663,7 +716,9 @@ class MarketDataCollectionRunner:
             "bootstrapReasoningSymbols": bootstrap_symbols,
             "immaterialChangedSymbolCount": len([symbol for symbol in changed_symbols if symbol not in material_symbol_set and symbol not in bootstrap_symbol_set]),
             "materialityAssessments": materiality_assessments,
-            "dataQuality": "actual",
+            "dataQuality": quote_quality["dataQuality"],
+            "quoteQualityCounts": quote_quality["quoteQualityCounts"],
+            "marketSessionCounts": quote_quality["marketSessionCounts"],
             "universeRefresh": universe_refresh,
             "cache": self.quote_cache.summary("toss", MARKET_DATA_ACCOUNT_ID),
         }

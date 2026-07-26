@@ -1,11 +1,14 @@
+import os
 import sys
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from digital_twin.application.ontology_diagnostics_service import OntologyDiagnosticsService
+from digital_twin.infrastructure import settings as runtime_settings_module
 from digital_twin.infrastructure.runtime_identity import runtime_identity
 
 
@@ -33,6 +36,16 @@ class RuntimeIdentityTests(unittest.TestCase):
         )
 
         self.assertEqual(identity, service.status()["runtimeIdentity"])
+
+    def test_runtime_secret_environment_overrides_legacy_database_value(self):
+        with patch.object(runtime_settings_module, "load_local_env"), patch.object(
+            runtime_settings_module,
+            "read_settings_store",
+            return_value={"kisAppKey": "legacy-database-secret"},
+        ), patch.dict(os.environ, {"KIS_APP_KEY": "environment-secret"}, clear=False):
+            settings = runtime_settings_module.runtime_settings()
+
+        self.assertEqual("environment-secret", settings["kisAppKey"])
 
 
 if __name__ == "__main__":

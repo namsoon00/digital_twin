@@ -689,10 +689,15 @@ def runtime_settings() -> Dict[str, str]:
     store = read_settings_store()
 
     def value(key: str, env_name: str, fallback: str = "") -> str:
+        # Runtime secrets are deployment credentials, not editable business
+        # configuration. Prefer the process environment so a rotated secret
+        # can take effect without leaving an older database value authoritative.
+        env_value = configured(os.environ.get(env_name))
+        if key in SECRET_SETTING_KEYS and env_value:
+            return env_value
         stored = configured(store.get(key))
         if stored:
             return stored
-        env_value = configured(os.environ.get(env_name))
         if env_value:
             return env_value
         return fallback

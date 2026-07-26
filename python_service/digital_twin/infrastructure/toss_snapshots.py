@@ -12,6 +12,7 @@ from ..domain.accounts import AccountConfig
 from ..domain.data_freshness import combine_quality, freshness_record, int_setting, parse_datetime
 from ..domain.instrument_profiles import market_signal_symbols
 from ..domain.market_data import known_stock, normalize_position, number, pct_distance, technical_indicators_from_candles
+from ..domain.market_hours import evaluate_market_hours
 from ..domain.message_types import INVESTMENT_INSIGHT
 from ..domain.position_identity import position_with_symbol_identity
 from ..domain.portfolio import AccountSnapshot, Position, utc_now_iso
@@ -84,6 +85,17 @@ def market_proxy_quote_context(
                     "updatedAt",
                     "sourceAsOf",
                     "sourceFetchedAt",
+                    "sourceTimestampState",
+                    "freshnessStatus",
+                    "freshnessReason",
+                    "freshnessAgeMinutes",
+                    "freshnessMaxAgeMinutes",
+                    "latencyStatus",
+                    "latencyReason",
+                    "marketSession",
+                    "marketSessionLabel",
+                    "transport",
+                    "realTime",
                     "indicatorAsOf",
                     "indicatorFetchedAt",
                     "collectionPurpose",
@@ -105,15 +117,26 @@ def market_proxy_quote_context(
             max_age_minutes=int_setting(settings or {}, "dataFreshnessExternalMaxAgeMinutes", 10),
             require_source_as_of=True,
         )
+        market_closed_reference = str(payload.get("marketSession") or "").strip().lower() in {
+            "closed",
+            "closed_exception",
+        }
         payload.update({
             "sourceAsOf": freshness.get("sourceAsOf") or "",
             "sourceFetchedAt": freshness.get("sourceFetchedAt") or "",
-            "freshnessStatus": freshness.get("status") or "unknown",
-            "freshnessReason": freshness.get("reason") or "",
+            "freshnessStatus": "last-close" if market_closed_reference else (freshness.get("status") or "unknown"),
+            "freshnessReason": (
+                payload.get("freshnessReason")
+                if market_closed_reference
+                else (freshness.get("reason") or "")
+            ),
             "freshnessAgeMinutes": freshness.get("ageMinutes"),
             "maxAgeMinutes": freshness.get("maxAgeMinutes"),
             "sourceTimestampPresent": bool(freshness.get("sourceTimestampPresent")),
-            "judgementEvidenceUsable": str(freshness.get("status") or "") == "fresh",
+            "judgementEvidenceUsable": (
+                not market_closed_reference
+                and str(freshness.get("status") or "") == "fresh"
+            ),
         })
     return rows
 
@@ -347,9 +370,11 @@ def price_symbol(item: Dict[str, object]) -> str:
     return str(item.get("symbol") or item.get("stockCode") or item.get("code") or "").upper().strip()
 
 
-def normalize_price_payload(item: Dict[str, object]) -> Dict[str, object]:
+def normalize_price_payload(item: Dict[str, object], now=None) -> Dict[str, object]:
     symbol = price_symbol(item)
     info = known_stock(symbol)
+    market = str(item.get("marketCountry") or item.get("market") or info["market"])
+    currency = str(item.get("currency") or info["currency"])
     price = number(first_present(item, ["lastPrice", "currentPrice", "price", "closePrice"]))
     volume = number(first_present(item, ["volume", "tradingVolume", "accumulatedVolume", "accTradeVolume"]))
     trading_value = number(first_present(item, ["tradingValue", "tradeValue", "tradingAmount", "accumulatedTradeAmount", "accTradeAmount"]))
@@ -366,25 +391,78 @@ def normalize_price_payload(item: Dict[str, object]) -> Dict[str, object]:
         or ""
     )
     fetched_at = utc_now_iso()
+    market_session = evaluate_market_hours(
+        INVESTMENT_INSIGHT,
+        {"symbol": symbol, "market": market, "currency": currency},
+        True,
+        [market],
+        now=now,
+    )
+    closed_market_reference = market_session.status in {"closed", "closed_exception"}
+    freshness = freshness_record(
+        "Toss /api/v1/prices",
+        INVESTMENT_INSIGHT,
+        source_fetched_at=fetched_at,
+        source_as_of=timestamp,
+        data_quality="actual",
+        now=now,
+        require_source_as_of=True,
+    )
+    data_quality = "reference" if closed_market_reference else "actual"
+    freshness_status = "last-close" if closed_market_reference else (freshness.get("status") or "unknown")
+    freshness_reason = (
+        market_session.reason
+        if closed_market_reference
+        else (freshness.get("reason") or "")
+    )
+    source_timestamp_state = (
+        "provider-last-close"
+        if closed_market_reference and timestamp
+        else "provider" if timestamp else "missing"
+    )
+    quote_status = "토스 prices 마지막 종가 기준" if closed_market_reference else "토스 prices 반영"
+    quote_message = (
+        "현재가는 토스 prices의 장 마감 기준값이며 실시간 체결 근거로 사용하지 않습니다."
+        if closed_market_reference
+        else "현재가는 토스 prices, 이동평균은 토스 candles 기준입니다."
+    )
+    latency_status = "last-close" if closed_market_reference else ("provider-observation" if timestamp else "timestamp-missing")
+    latency_reason = (
+        market_session.reason
+        if closed_market_reference
+        else "토스 가격 원천이 제공한 기준시각을 사용합니다."
+        if timestamp
+        else "토스 가격 원천 기준시각이 제공되지 않았습니다."
+    )
     return {
         "symbol": symbol or info["symbol"],
         "name": str(item.get("name") or item.get("stockName") or info["name"]),
-        "market": str(item.get("marketCountry") or item.get("market") or info["market"]),
-        "currency": str(item.get("currency") or info["currency"]),
+        "market": market,
+        "currency": currency,
         "currentPrice": price,
         "lastPrice": price,
         "changeRate": optional_rate(item),
         "volume": volume,
         "tradingValue": trading_value,
         "quoteSource": "Toss /api/v1/prices",
-        "quoteStatus": "토스 prices 반영",
-        "quoteMessage": "현재가는 토스 prices, 이동평균은 토스 candles 기준입니다.",
-        "dataQuality": "actual",
+        "quoteStatus": quote_status,
+        "quoteMessage": quote_message,
+        "dataQuality": data_quality,
         "provider": "Toss Open API",
         "updatedAt": timestamp or fetched_at,
         "sourceAsOf": timestamp,
         "sourceFetchedAt": fetched_at,
-        "sourceTimestampState": "provider" if timestamp else "missing",
+        "sourceTimestampState": source_timestamp_state,
+        "freshnessStatus": freshness_status,
+        "freshnessReason": freshness_reason,
+        "freshnessAgeMinutes": freshness.get("ageMinutes"),
+        "freshnessMaxAgeMinutes": freshness.get("maxAgeMinutes"),
+        "latencyStatus": latency_status,
+        "latencyReason": latency_reason,
+        "marketSession": market_session.status,
+        "marketSessionLabel": market_session.label,
+        "transport": "rest",
+        "realTime": False,
     }
 
 
@@ -806,6 +884,16 @@ class TossProvider:
             "sourceAsOf": position.source_as_of,
             "sourceFetchedAt": position.source_fetched_at,
             "sourceTimestampState": position.source_timestamp_state,
+            "freshnessStatus": position.freshness_status,
+            "freshnessReason": position.freshness_reason,
+            "freshnessAgeMinutes": position.freshness_age_minutes,
+            "freshnessMaxAgeMinutes": position.freshness_max_age_minutes,
+            "latencyStatus": position.latency_status,
+            "latencyReason": position.latency_reason,
+            "marketSession": position.market_session,
+            "marketSessionLabel": position.market_session_label,
+            "transport": position.source_transport,
+            "realTime": bool(position.real_time),
             "indicatorAsOf": position.indicator_as_of,
             "indicatorFetchedAt": position.indicator_fetched_at,
             "tradingValue": position.trading_value,
@@ -888,14 +976,28 @@ class TossProvider:
             or number(cached.get("tradingValue"))
         )
         trading_value = number(trading_value_snapshot(current_price, volume, raw_trading_value).get("tradingValue"))
-        quote_message = "현재가는 토스 prices, 이동평균은 토스 candles 기준입니다."
-        quote_status = "토스 prices 반영" if live_price else ""
+        quote_message = str(quote.get("quoteMessage") or "현재가는 토스 prices, 이동평균은 토스 candles 기준입니다.")
+        quote_status = str(quote.get("quoteStatus") or ("토스 prices 반영" if live_price else ""))
         quote_source = str(quote.get("quoteSource") or "")
-        data_quality = "actual" if live_price and indicators_live else position.data_quality
+        # A successful REST response outside the exchange session is still a
+        # last-close reference. Daily candle availability must not promote
+        # that quote into an actual intraday observation.
+        quote_quality = str(quote.get("dataQuality") or "").strip()
+        data_quality = quote_quality or ("actual" if live_price and indicators_live else position.data_quality)
         updated_at = str(quote.get("updatedAt") or "")
         source_as_of = str(quote.get("sourceAsOf") or "")
         source_fetched_at = str(quote.get("sourceFetchedAt") or "")
         source_timestamp_state = str(quote.get("sourceTimestampState") or "")
+        freshness_status = str(quote.get("freshnessStatus") or "")
+        freshness_reason = str(quote.get("freshnessReason") or "")
+        freshness_age_minutes = quote.get("freshnessAgeMinutes")
+        freshness_max_age_minutes = quote.get("freshnessMaxAgeMinutes") or quote.get("maxAgeMinutes")
+        latency_status = str(quote.get("latencyStatus") or "")
+        latency_reason = str(quote.get("latencyReason") or "")
+        market_session = str(quote.get("marketSession") or "")
+        market_session_label = str(quote.get("marketSessionLabel") or "")
+        source_transport = str(quote.get("transport") or "")
+        real_time = bool(quote.get("realTime"))
         indicator_as_of = str(indicator_source.get("sourceAsOf") or indicator_source.get("latestCandleAt") or "")
         indicator_fetched_at = str(indicator_source.get("sourceFetchedAt") or "")
         if used_cached_price:
@@ -907,11 +1009,22 @@ class TossProvider:
             source_as_of = str(cached.get("sourceAsOf") or "")
             source_fetched_at = str(cached.get("sourceFetchedAt") or cached.get("fetchedAt") or "")
             source_timestamp_state = str(cached.get("sourceTimestampState") or "cached")
+            freshness_status = str(cached.get("freshnessStatus") or "cached")
+            freshness_reason = str(cached.get("freshnessReason") or "마지막 저장 시세를 사용합니다.")
+            freshness_age_minutes = cached.get("freshnessAgeMinutes")
+            freshness_max_age_minutes = cached.get("freshnessMaxAgeMinutes") or cached.get("maxAgeMinutes")
+            latency_status = str(cached.get("latencyStatus") or "cached")
+            latency_reason = str(cached.get("latencyReason") or "원천 호출 실패로 마지막 저장 시세를 사용합니다.")
+            market_session = str(cached.get("marketSession") or "")
+            market_session_label = str(cached.get("marketSessionLabel") or "")
+            source_transport = str(cached.get("transport") or "cache")
+            real_time = False
             indicator_as_of = str(cached.get("indicatorAsOf") or indicator_as_of)
             indicator_fetched_at = str(cached.get("indicatorFetchedAt") or indicator_fetched_at)
         elif live_price and not indicators_live and cached:
             quote_message = "현재가는 토스 prices, 이동평균은 마지막 저장 candles 기준입니다."
-            data_quality = combine_quality("actual", str(cached.get("dataQuality") or "cached"))
+            if quote_quality not in {"reference", "stale", "cached", "unavailable"}:
+                data_quality = combine_quality(quote_quality or "actual", str(cached.get("dataQuality") or "cached"))
         elif not live_price and indicators_live and not position.current_price:
             quote_status = "토스 candles 지표 반영"
             quote_message = "토스 prices 현재가 없이 candles 지표만 반영했습니다."
@@ -925,6 +1038,16 @@ class TossProvider:
             source_as_of = position.source_as_of
             source_fetched_at = position.source_fetched_at
             source_timestamp_state = position.source_timestamp_state
+            freshness_status = position.freshness_status
+            freshness_reason = position.freshness_reason
+            freshness_age_minutes = position.freshness_age_minutes
+            freshness_max_age_minutes = position.freshness_max_age_minutes
+            latency_status = position.latency_status
+            latency_reason = position.latency_reason
+            market_session = position.market_session
+            market_session_label = position.market_session_label
+            source_transport = position.source_transport
+            real_time = bool(position.real_time)
             indicator_as_of = position.indicator_as_of or indicator_as_of
             indicator_fetched_at = position.indicator_fetched_at or indicator_fetched_at
         selected_updated_at = updated_at
@@ -969,6 +1092,16 @@ class TossProvider:
             source_as_of=source_as_of,
             source_fetched_at=source_fetched_at,
             source_timestamp_state=source_timestamp_state,
+            freshness_status=freshness_status,
+            freshness_reason=freshness_reason,
+            freshness_age_minutes=freshness_age_minutes,
+            freshness_max_age_minutes=freshness_max_age_minutes,
+            latency_status=latency_status,
+            latency_reason=latency_reason,
+            market_session=market_session,
+            market_session_label=market_session_label,
+            source_transport=source_transport,
+            real_time=real_time,
             indicator_as_of=indicator_as_of,
             indicator_fetched_at=indicator_fetched_at,
             currency=str(quote.get("currency") or position.currency or cached.get("currency") or ""),

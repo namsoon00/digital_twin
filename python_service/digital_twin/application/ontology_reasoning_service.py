@@ -288,6 +288,149 @@ def event_time_key(event: object) -> Tuple[str, str]:
     )
 
 
+def lightweight_ontology_reasoning_queue_state(
+    event_reader,
+    cursor_store,
+    mailbox_store=None,
+    settings: Dict[str, object] = None,
+    scan_limit: int = 0,
+) -> Dict[str, object]:
+    """Read a bounded scheduler signal without constructing a full runner.
+
+    Lower-priority workers only need to know whether live reasoning is waiting.
+    Keeping this helper independent of ``OntologyReasoningRunner`` avoids
+    registry, monitor, TypeDB, and rule-advisor construction on every shared
+    world or maintenance scheduler tick.
+    """
+    started = time.perf_counter()
+    configured = dict(settings or {})
+    enabled = truthy(configured.get("ontologyReasoningEnabled"), True)
+    try:
+        default_limit = int_setting(configured, "ontologyReasoningBatchSize", 200, 1, 200)
+        bounded = int(scan_limit or default_limit)
+    except (TypeError, ValueError):
+        bounded = 50
+    bounded = max(1, min(500, bounded))
+    result = {
+        "enabled": enabled,
+        "probeMode": "lightweight-event-mailbox",
+        "rawRequestCount": 0,
+        "effectivePendingCount": 0,
+        "mailboxPendingEntryCount": 0,
+        "pendingSymbolCount": 0,
+        "pendingSymbols": [],
+        "oldestRequestAt": "",
+        "queueDispatch": {
+            "mode": "lightweight-observation",
+            "oldestRequestAt": "",
+            "pendingSymbolCount": 0,
+            "overduePendingSymbolCount": 0,
+        },
+        "queueHealth": {"status": "healthy", "reason": ""},
+        "mailbox": {"enabled": bool(mailbox_store)},
+    }
+    if not enabled:
+        result.update({"status": "disabled", "probeDurationMs": 0})
+        return result
+
+    errors = []
+    processed = set()
+    try:
+        processed_reader = getattr(cursor_store, "processed_event_ids", None)
+        if callable(processed_reader):
+            processed = {
+                str(event_id or "").strip()
+                for event_id in processed_reader() or []
+                if str(event_id or "").strip()
+            }
+    except Exception as error:  # noqa: BLE001 - mailbox remains a safe fallback signal.
+        errors.append("처리 완료 커서 조회 실패: " + str(error)[:120])
+
+    source_events = []
+    try:
+        reader = getattr(event_reader, "recent_events", None)
+        if callable(reader):
+            source_events = reader(name=ONTOLOGY_REASONING_REQUESTED, limit=bounded)
+        elif event_reader and hasattr(event_reader, "events"):
+            source_events = event_reader.events(name=ONTOLOGY_REASONING_REQUESTED, limit=bounded)
+    except Exception as error:  # noqa: BLE001 - a probe must not delay a live TypeDB writer.
+        errors.append("추론 요청 조회 실패: " + str(error)[:120])
+        source_events = []
+
+    pending = []
+    for event in source_events or []:
+        event_id = str(getattr(event, "event_id", "") or "").strip()
+        if not event_id or event_id in processed or event_changed_count(event) <= 0:
+            continue
+        pending.append(event)
+    pending.sort(key=event_time_key)
+
+    mailbox_enabled = bool(mailbox_store) and truthy(
+        configured.get("ontologyReasoningMailboxEnabled"),
+        True,
+    )
+    mailbox = {"enabled": mailbox_enabled}
+    if mailbox_enabled:
+        summary = getattr(mailbox_store, "summary", None)
+        if callable(summary):
+            try:
+                payload = summary()
+                mailbox = dict(payload or {}) if isinstance(payload, dict) else {}
+                mailbox["enabled"] = True
+            except Exception as error:  # noqa: BLE001 - direct event observations remain usable.
+                mailbox = {"enabled": True, "status": "error", "reason": str(error)[:180]}
+        else:
+            mailbox["status"] = "not-supported"
+    try:
+        mailbox_pending = max(0, int(float(mailbox.get("pendingEntryCount") or 0)))
+    except (TypeError, ValueError):
+        mailbox_pending = 0
+    if str(mailbox.get("status") or "") == "error":
+        errors.append(str(mailbox.get("reason") or "영속 추론 메일박스 상태를 읽지 못했습니다.")[:160])
+
+    symbols = []
+    for event in pending:
+        for symbol in event_symbols(event):
+            if symbol not in symbols:
+                symbols.append(symbol)
+    timestamps = [
+        str(getattr(event, "occurred_at", "") or "").strip()
+        for event in pending
+        if str(getattr(event, "occurred_at", "") or "").strip()
+    ]
+    mailbox_oldest = str(mailbox.get("oldestPendingAt") or "").strip()
+    if mailbox_oldest:
+        timestamps.append(mailbox_oldest)
+    oldest = min(timestamps) if timestamps else ""
+    source_pending = len(pending)
+    # Mailbox entries and source events may represent the same realtime
+    # observation.  Use the larger count as a pressure signal rather than
+    # double counting it.
+    effective_pending = max(source_pending, mailbox_pending)
+    result.update({
+        "status": "pending" if effective_pending else ("degraded" if errors else "idle"),
+        "rawRequestCount": source_pending,
+        "effectivePendingCount": effective_pending,
+        "mailboxPendingEntryCount": mailbox_pending,
+        "pendingSymbolCount": len(symbols),
+        "pendingSymbols": symbols,
+        "oldestRequestAt": oldest,
+        "queueDispatch": {
+            "mode": "lightweight-observation",
+            "oldestRequestAt": oldest,
+            "pendingSymbolCount": len(symbols),
+            "overduePendingSymbolCount": 0,
+        },
+        "queueHealth": {
+            "status": "degraded" if errors else "healthy",
+            "reason": " · ".join(errors),
+        },
+        "mailbox": mailbox,
+        "probeDurationMs": max(0, int((time.perf_counter() - started) * 1000)),
+    })
+    return result
+
+
 def realtime_coalescing_key(event: object) -> Tuple[str, str, Tuple[str, ...]]:
     """Return a conservative replacement key for fungible source observations."""
     payload = event_payload(event)
@@ -2441,89 +2584,13 @@ class OntologyReasoningRunner:
         yield to.  This path deliberately reads only the event cursor, a
         bounded event window, and the durable mailbox summary.
         """
-        try:
-            bounded = int(scan_limit or self.batch_size())
-        except (TypeError, ValueError):
-            bounded = 50
-        bounded = max(1, min(500, bounded))
-        errors = []
-        processed = set()
-        try:
-            processed_reader = getattr(self.cursor_store, "processed_event_ids", None)
-            if callable(processed_reader):
-                processed = {
-                    str(event_id or "").strip()
-                    for event_id in processed_reader() or []
-                    if str(event_id or "").strip()
-                }
-        except Exception as error:  # noqa: BLE001 - mailbox remains a safe fallback signal.
-            errors.append("처리 완료 커서 조회 실패: " + str(error)[:120])
-
-        source_events = []
-        try:
-            reader = getattr(self.event_reader, "recent_events", None)
-            if callable(reader):
-                source_events = reader(name=ONTOLOGY_REASONING_REQUESTED, limit=bounded)
-            elif self.event_reader and hasattr(self.event_reader, "events"):
-                source_events = self.event_reader.events(name=ONTOLOGY_REASONING_REQUESTED, limit=bounded)
-        except Exception as error:  # noqa: BLE001 - a probe must not delay a live TypeDB writer.
-            errors.append("추론 요청 조회 실패: " + str(error)[:120])
-            source_events = []
-
-        pending = []
-        for event in source_events or []:
-            event_id = str(getattr(event, "event_id", "") or "").strip()
-            if not event_id or event_id in processed or event_changed_count(event) <= 0:
-                continue
-            pending.append(event)
-        pending.sort(key=event_time_key)
-
-        mailbox = self.mailbox_summary()
-        try:
-            mailbox_pending = max(0, int(float(mailbox.get("pendingEntryCount") or 0)))
-        except (TypeError, ValueError):
-            mailbox_pending = 0
-        if str(mailbox.get("status") or "") == "error":
-            errors.append(str(mailbox.get("reason") or "영속 추론 메일박스 상태를 읽지 못했습니다.")[:160])
-
-        source_pending = len(pending)
-        # Mailbox entries and source events may represent the same realtime
-        # observation.  Use the larger count as a pressure signal rather than
-        # double counting it.
-        effective_pending = max(source_pending, mailbox_pending)
-        symbols = self.request_symbols(pending)
-        timestamps = [
-            str(getattr(event, "occurred_at", "") or "").strip()
-            for event in pending
-            if str(getattr(event, "occurred_at", "") or "").strip()
-        ]
-        mailbox_oldest = str(mailbox.get("oldestPendingAt") or "").strip()
-        if mailbox_oldest:
-            timestamps.append(mailbox_oldest)
-        oldest = min(timestamps) if timestamps else ""
-        queue_status = "pending" if effective_pending else ("degraded" if errors else "idle")
-        return {
-            "status": queue_status,
-            "enabled": self.enabled(),
-            "probeMode": "lightweight-event-mailbox",
-            "rawRequestCount": source_pending,
-            "effectivePendingCount": effective_pending,
-            "mailboxPendingEntryCount": mailbox_pending,
-            "pendingSymbolCount": len(symbols),
-            "pendingSymbols": symbols,
-            "oldestRequestAt": oldest,
-            "queueDispatch": {
-                "mode": "lightweight-observation",
-                "oldestRequestAt": oldest,
-                "pendingSymbolCount": len(symbols),
-                "overduePendingSymbolCount": 0,
-            },
-            "queueHealth": {
-                "status": "degraded" if errors else "healthy",
-                "reason": " · ".join(errors),
-            },
-            "mailbox": mailbox,
-        }
+        return lightweight_ontology_reasoning_queue_state(
+            self.event_reader,
+            self.cursor_store,
+            mailbox_store=self.mailbox_store,
+            settings=self.settings,
+            scan_limit=scan_limit,
+        )
 
     def execution_telemetry(self, payload: Dict[str, object] = None) -> Dict[str, object]:
         source = self.cursor_payload() if payload is None else dict(payload or {})

@@ -43,7 +43,10 @@ from ..application.notification_service import (
     NotificationQueueRunner,
 )
 from ..application.official_calendar_sync_service import OfficialCalendarSyncService
-from ..application.ontology_reasoning_service import OntologyReasoningRunner
+from ..application.ontology_reasoning_service import (
+    OntologyReasoningRunner,
+    lightweight_ontology_reasoning_queue_state,
+)
 from ..application.ontology_maintenance_service import OntologyMaintenanceRunner
 from ..application.ontology_world_projection_service import OntologyWorldProjectionRunner
 from ..application.ontology_lab_service import OntologyLabService
@@ -617,18 +620,22 @@ def build_ontology_reasoning_queue_probe(settings=None):
     shared-world projection, ABox retention, or notification dispatch.
     """
     configured_settings = settings or runtime_settings()
-    runner_cache = {}
+    store_settings = dict(configured_settings)
+    # This probe is called by isolated low-priority workers.  Do not let its
+    # construction run operational-history retention before it can yield.
+    store_settings["_skipOperationalHistoryRetention"] = "1"
+    event_reader = stores.event_log(store_settings)
+    cursor_store = stores.ontology_reasoning_cursor_store(store_settings)
+    mailbox_store = stores.ontology_reasoning_mailbox_store(store_settings)
 
     def probe():
-        runner = runner_cache.get("runner")
-        if runner is None:
-            runner = build_ontology_reasoning_runner(configured_settings)
-            runner_cache["runner"] = runner
-        reader = getattr(runner, "lightweight_queue_state", None)
-        if not callable(reader):
-            return {"status": "not-supported", "effectivePendingCount": 0}
         try:
-            return dict(reader() or {})
+            return lightweight_ontology_reasoning_queue_state(
+                event_reader,
+                cursor_store,
+                mailbox_store=mailbox_store,
+                settings=configured_settings,
+            )
         except Exception as error:  # noqa: BLE001 - the global TypeDB lease remains the final safety boundary.
             return {
                 "status": "error",

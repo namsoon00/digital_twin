@@ -8,8 +8,8 @@ from .investment_research import NewsCollectionTarget, ResearchEvidence
 from . import news_analysis as news_domain
 
 
-NEWS_AI_ANALYSIS_VERSION = "news-ai-analysis-v8-stable-source-hash"
-NEWS_AI_PROMPT_VERSION = "news-ai-prompt-v8-stable-source-hash"
+NEWS_AI_ANALYSIS_VERSION = "news-ai-analysis-v9-target-scoped-signals"
+NEWS_AI_PROMPT_VERSION = "news-ai-prompt-v9-target-scoped-signals"
 
 IMPACT_LABELS = {
     "support": "호재",
@@ -510,6 +510,32 @@ def article_text_parts(evidence: ResearchEvidence) -> Tuple[str, str, str, str]:
     return title, body, feed_summary, read_scope
 
 
+def has_navigation_contamination(value: object) -> bool:
+    text = str(value or "")
+    return text.count("…") + text.count("...") >= 3
+
+
+def target_scoped_article_text(
+    target: NewsCollectionTarget,
+    title: object,
+    body: object,
+    feed_summary: object,
+    event_type: object = "",
+) -> str:
+    """Keep navigation snippets from becoming stock-impact signals or AI input."""
+    primary_text = compact_text(body or feed_summary, 5000)
+    if not primary_text or not has_navigation_contamination(primary_text):
+        return primary_text
+    candidates = news_domain.article_sentence_candidates(
+        primary_text,
+        target,
+        {"eventType": str(event_type or "")},
+        4,
+        headline=title,
+    )
+    return compact_text(" ".join(candidates), 1200) or primary_text
+
+
 @dataclass(frozen=True)
 class NewsAiAnalysis:
     status: str = "ok"
@@ -776,9 +802,25 @@ def local_news_ai_analysis(target: NewsCollectionTarget, evidence: ResearchEvide
     payload = analysis_payload_from_evidence(evidence)
     facts = article_facts(payload)
     title, body, feed_summary, read_scope = article_text_parts(evidence)
-    source_text = " ".join(part for part in [title, body or feed_summary] if part)
+    raw_source_text = " ".join(part for part in [title, body or feed_summary] if part)
+    existing_event_type = str(
+        payload.get("eventType")
+        or facts.get("eventType")
+        or news_domain.classify_news_event_type(title, raw_source_text)
+        or "general"
+    )
+    scoped_article_text = target_scoped_article_text(
+        target,
+        title,
+        body,
+        feed_summary,
+        existing_event_type,
+    )
+    source_text = " ".join(part for part in [title, scoped_article_text] if part)
+    event_type = existing_event_type
+    if has_navigation_contamination(body or feed_summary):
+        event_type = str(news_domain.classify_news_event_type(title, source_text) or existing_event_type)
     polarity, risk_hits, support_hits, contrast_hits = infer_impact_polarity(source_text)
-    event_type = str(payload.get("eventType") or facts.get("eventType") or news_domain.classify_news_event_type(title, source_text) or "general")
     relation_scope = str(payload.get("relationScope") or facts.get("relationScope") or "").strip()
     state_source = {
         **payload,
@@ -810,7 +852,7 @@ def local_news_ai_analysis(target: NewsCollectionTarget, evidence: ResearchEvide
         **states,
     }
     article_summary = news_domain.korean_article_summary(target, title, body, feed_summary, analysis_context)
-    article_takeaway = news_domain.article_event_takeaway(target, title, body, feed_summary)
+    article_takeaway = news_domain.article_event_takeaway(target, title, scoped_article_text)
     signal_text = signal_summary_text(risk_hits, support_hits, contrast_hits)
     impact_reason = impact_reason_text(target_name, polarity, event_type, risk_hits, support_hits, contrast_hits, key_numbers)
     portfolio_implication = portfolio_implication_text(target_name, polarity, event_type)
@@ -1115,6 +1157,25 @@ def build_news_ai_analysis_prompt(target: NewsCollectionTarget, evidence: Resear
     payload = analysis_payload_from_evidence(evidence)
     facts = article_facts(payload)
     title, body, feed_summary, read_scope = article_text_parts(evidence)
+    navigation_heavy = has_navigation_contamination(body or feed_summary)
+    scoped_article_text = target_scoped_article_text(
+        target,
+        title,
+        body,
+        feed_summary,
+        payload.get("eventType") or facts.get("eventType"),
+    )
+    prompt_body = body
+    prompt_feed_summary = feed_summary
+    prompt_facts = dict(facts)
+    if navigation_heavy:
+        if body:
+            prompt_body = scoped_article_text
+            prompt_feed_summary = ""
+        else:
+            prompt_feed_summary = scoped_article_text
+        prompt_facts["bodyPreview"] = prompt_body
+        prompt_facts["feedSummaryPreview"] = prompt_feed_summary
     prompt_payload = {
         "task": "Analyze a collected investment news article as metadata, not as a buy/sell recommendation.",
         "outputLanguage": "ko",
@@ -1177,13 +1238,13 @@ def build_news_ai_analysis_prompt(target: NewsCollectionTarget, evidence: Resear
         },
         "article": {
             "title": title,
-            "feedSummary": feed_summary,
-            "bodyPreview": body,
+            "feedSummary": prompt_feed_summary,
+            "bodyPreview": prompt_body,
             "readScope": read_scope,
             "source": evidence.source,
             "url": evidence.url,
             "publishedAt": evidence.published_at,
-            "articleFacts": facts,
+            "articleFacts": prompt_facts,
             "existingAnalysis": {
                 "relationScope": payload.get("relationScope"),
                 "eventType": payload.get("eventType"),

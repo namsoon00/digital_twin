@@ -1,3 +1,4 @@
+import json
 import sys
 import unittest
 from pathlib import Path
@@ -23,6 +24,7 @@ from digital_twin.domain.news_analysis import (
 from digital_twin.domain.news_ai_analysis import (
     NewsAiAnalysis,
     apply_news_ai_analysis,
+    build_news_ai_analysis_prompt,
     local_news_ai_analysis,
     normalize_ai_analysis,
     summary_quality_payload,
@@ -75,6 +77,47 @@ class NewsAnalysisDomainTests(unittest.TestCase):
         values = numeric_highlights("B2B 시장 1위는 26일 $700 billion 투자와 731조원 수주를 발표했다.")
 
         self.assertEqual(["$700 billion", "731조"], values)
+
+    def test_navigation_contamination_is_excluded_from_impact_signals_and_ai_prompt(self):
+        target = NewsCollectionTarget("066570", "LG전자", "KOSPI", "KRW", "가전/전자")
+        evidence = ResearchEvidence(
+            "research:066570:news:target-scoped-signals",
+            "066570",
+            "news",
+            "Example News",
+            "LG전자, 미국 주방가전 신뢰도 1위",
+            "LG전자가 미국 주방가전 시장 공략을 강화합니다.",
+            "https://example.test/lg-kitchen",
+            "2026-07-26T01:00:00Z",
+            "context",
+            published_at="2026-07-26T01:00:00Z",
+            raw_payload={
+                "relationScope": "direct",
+                "articleReadStatus": "body",
+                "articleText": (
+                    "LG전자가 미국 소비자 평가에서 가장 신뢰할 수 있는 주방가전 브랜드로 선정돼 "
+                    "현지 빌트인 시장 공략을 강화한다. "
+                    "LG전자, 美 신뢰 주방가전 1위…빌더시장 3위권 정조준 "
+                    "한화오션, 64조 수주…남미 방산 영토확장 "
+                    "엔비디아, 75% 급락…AI 메모리 공급 확대 "
+                    "다른 기업, 7500억 투자…최대 수주"
+                ),
+                "articleFacts": {"bodyAvailable": True, "bodyQualityPassed": True},
+            },
+        )
+
+        analysis = local_news_ai_analysis(target, evidence).to_dict()
+        updated = apply_news_ai_analysis(evidence, analysis)
+        prompt = json.loads(build_news_ai_analysis_prompt(target, evidence))
+
+        self.assertEqual("neutral", analysis["impactPolarity"])
+        self.assertEqual([], analysis["keyNumbers"])
+        self.assertNotIn("급락", analysis["impactReasonKo"])
+        self.assertNotIn("64조", analysis["impactReasonKo"])
+        self.assertNotIn("75%", analysis["impactReasonKo"])
+        self.assertNotIn("한화오션", updated.raw_payload["stockImpactReasonKo"])
+        self.assertNotIn("엔비디아", json.dumps(prompt, ensure_ascii=False))
+        self.assertNotIn("64조", json.dumps(prompt, ensure_ascii=False))
 
     def test_news_analysis_setting_accepts_numeric_text(self):
         self.assertEqual(12, int_setting({"newsAiAnalysisLimit": "12"}, "newsAiAnalysisLimit", 5))

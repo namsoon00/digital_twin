@@ -419,6 +419,12 @@ class OntologyWorldProjectionScheduler:
         return max(1, int(configured() if callable(configured) else 10))
 
     def run_once(self, limit: int = 0):
+        preflight = getattr(self.runner, "reasoning_queue_deferral", None)
+        if callable(preflight):
+            result = dict(preflight() or {})
+            if result:
+                result.setdefault("durationMs", 0)
+                return result
         if not self.process_isolation_enabled():
             return self.runner.run_once(limit=limit)
         return self.isolated_cycle.run_once(
@@ -488,6 +494,12 @@ class OntologyMaintenanceScheduler:
         return max(1, int(configured() if callable(configured) else 10))
 
     def run_once(self):
+        preflight = getattr(self.runner, "reasoning_queue_deferral", None)
+        if callable(preflight):
+            result = dict(preflight() or {})
+            if result:
+                result.setdefault("durationMs", 0)
+                return result
         if not self.process_isolation_enabled():
             return self.runner.run_once()
         return self.isolated_cycle.run_once(

@@ -108,6 +108,26 @@ class OntologyWorldProjectionRunner:
                 return value
         return 0
 
+    def reasoning_queue_deferral(self) -> Dict[str, object]:
+        """Return a no-write preflight result while live reasoning is pending."""
+        reasoning_queue = self.reasoning_queue_state()
+        reasoning_pending = self.reasoning_pending_count(reasoning_queue)
+        if not self.defer_while_reasoning_pending() or reasoning_pending <= 0:
+            return {}
+        return {
+            "status": "deferred-reasoning-queue",
+            "workerId": self.worker_id,
+            "claimedCount": 0,
+            "completedCount": 0,
+            "retryCount": 0,
+            "reasoningQueue": reasoning_queue,
+            "reason": (
+                "투자 판단을 위한 라이브 TypeDB 추론 요청이 "
+                + str(reasoning_pending)
+                + "건 남아 있어 공유 MarketWorld/KnowledgeWorld 투영을 양보합니다."
+            ),
+        }
+
     def status(self) -> Dict[str, object]:
         summary = dict(self.outbox.summary() or {})
         return {
@@ -155,6 +175,15 @@ class OntologyWorldProjectionRunner:
 
     def run_once(self, limit: int = 0) -> Dict[str, object]:
         started = time.monotonic()
+        deferred = self.reasoning_queue_deferral()
+        if deferred:
+            self.last_run_details = ["deferred-reasoning-queue"]
+            return {
+                **deferred,
+                "supersededOversizedPendingCount": 0,
+                "purgedOversizedSupersededCount": 0,
+                "durationMs": int((time.monotonic() - started) * 1000),
+            }
         bounded = int(limit or self.batch_size())
         superseded_oversized = 0
         supersede = getattr(self.outbox, "supersede_oversized_pending", None)
@@ -165,25 +194,6 @@ class OntologyWorldProjectionRunner:
         if callable(purge):
             purged_oversized = int(purge() or 0)
         reasoning_queue = self.reasoning_queue_state()
-        reasoning_pending = self.reasoning_pending_count(reasoning_queue)
-        if self.defer_while_reasoning_pending() and reasoning_pending > 0:
-            self.last_run_details = ["deferred-reasoning-queue"]
-            return {
-                "status": "deferred-reasoning-queue",
-                "workerId": self.worker_id,
-                "claimedCount": 0,
-                "completedCount": 0,
-                "retryCount": 0,
-                "reasoningQueue": reasoning_queue,
-                "reason": (
-                    "투자 판단을 위한 라이브 TypeDB 추론 요청이 "
-                    + str(reasoning_pending)
-                    + "건 남아 있어 공유 MarketWorld/KnowledgeWorld 투영을 양보합니다."
-                ),
-                "supersededOversizedPendingCount": superseded_oversized,
-                "purgedOversizedSupersededCount": purged_oversized,
-                "durationMs": int((time.monotonic() - started) * 1000),
-            }
         jobs = list(self.outbox.claim(self.worker_id, bounded, self.lease_seconds()) or [])
         completed, retried = [], []
         details = []

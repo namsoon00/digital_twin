@@ -3,7 +3,9 @@ import unittest
 
 from digital_twin.infrastructure.schedulers import (
     IsolatedOntologyReasoningCycle,
+    OntologyMaintenanceScheduler,
     OntologyReasoningScheduler,
+    OntologyWorldProjectionScheduler,
 )
 
 
@@ -86,6 +88,32 @@ class FakeRunner:
         }
 
 
+class DeferredLowPriorityRunner:
+    def __init__(self):
+        self.preflight_calls = 0
+        self.run_calls = 0
+
+    def reasoning_queue_deferral(self):
+        self.preflight_calls += 1
+        return {
+            "status": "deferred-reasoning-queue",
+            "reasoningQueue": {"effectivePendingCount": 2},
+        }
+
+    def run_once(self, *_args, **_kwargs):
+        self.run_calls += 1
+        raise AssertionError("low-priority TypeDB child must not start while reasoning is pending")
+
+
+class CountingIsolatedCycle:
+    def __init__(self):
+        self.calls = 0
+
+    def run_once(self, *_args, **_kwargs):
+        self.calls += 1
+        raise AssertionError("isolated child must not start while reasoning is pending")
+
+
 class OntologyReasoningSchedulerTests(unittest.TestCase):
     def test_isolated_cycle_parses_the_one_shot_json_result(self):
         cycle = IsolatedOntologyReasoningCycle(
@@ -130,6 +158,30 @@ class OntologyReasoningSchedulerTests(unittest.TestCase):
         self.assertTrue(result["stopRequested"])
         self.assertEqual(1, process.calls)
         self.assertIn(signal_value("SIGTERM"), process.signals)
+
+    def test_shared_world_scheduler_skips_isolated_child_when_live_reasoning_is_pending(self):
+        runner = DeferredLowPriorityRunner()
+        child = CountingIsolatedCycle()
+        scheduler = OntologyWorldProjectionScheduler(runner, 10, isolated_cycle=child)
+
+        result = scheduler.run_once(limit=1)
+
+        self.assertEqual("deferred-reasoning-queue", result["status"])
+        self.assertEqual(1, runner.preflight_calls)
+        self.assertEqual(0, runner.run_calls)
+        self.assertEqual(0, child.calls)
+
+    def test_maintenance_scheduler_skips_isolated_child_when_live_reasoning_is_pending(self):
+        runner = DeferredLowPriorityRunner()
+        child = CountingIsolatedCycle()
+        scheduler = OntologyMaintenanceScheduler(runner, 60, isolated_cycle=child)
+
+        result = scheduler.run_once()
+
+        self.assertEqual("deferred-reasoning-queue", result["status"])
+        self.assertEqual(1, runner.preflight_calls)
+        self.assertEqual(0, runner.run_calls)
+        self.assertEqual(0, child.calls)
 
 
 def signal_value(name):

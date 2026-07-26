@@ -102,6 +102,20 @@ class OntologyMaintenanceRunner:
                 return value
         return 0
 
+    def reasoning_queue_deferral(self, policy: Dict[str, object] = None) -> Dict[str, object]:
+        """Return a no-write preflight result while investment reasoning runs."""
+        queue_state = self.reasoning_queue_state()
+        if not self.defer_while_reasoning_pending() or self.queue_pending_count(queue_state) <= 0:
+            return {}
+        return {
+            "status": "deferred-reasoning-queue",
+            "contract": self.state_contract,
+            "policy": dict(policy or self.policy()),
+            "reason": "활성 추론 요청이 남아 있어 ABox 정리를 유휴 시간으로 미룹니다.",
+            "reasoningQueue": queue_state,
+            "retryAfterSeconds": self.interval_seconds(),
+        }
+
     def projection_coordinator_summary(self, lease: Dict[str, object]) -> Dict[str, object]:
         allowed = {
             "acquired", "status", "coordinator", "coordinatorVersion",
@@ -309,16 +323,9 @@ class OntologyMaintenanceRunner:
                 "policy": policy,
                 "reason": "Graph store has no scoped ABox maintenance adapter.",
             }
-        queue_state = self.reasoning_queue_state()
-        if self.defer_while_reasoning_pending() and self.queue_pending_count(queue_state) > 0:
-            result = {
-                "status": "deferred-reasoning-queue",
-                "contract": self.state_contract,
-                "policy": policy,
-                "reason": "활성 추론 요청이 남아 있어 ABox 정리를 유휴 시간으로 미룹니다.",
-                "reasoningQueue": queue_state,
-                "retryAfterSeconds": self.interval_seconds(),
-            }
+        deferred = self.reasoning_queue_deferral(policy)
+        if deferred:
+            result = dict(deferred)
             previous = self.state()
             self.save_state({
                 **previous,

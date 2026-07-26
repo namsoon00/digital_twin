@@ -426,6 +426,10 @@ def build_projection_runtime_observation(
     inference = dict(inference or {}) if isinstance(inference, Mapping) else {}
     execution = values.get("ruleboxExecution")
     execution = dict(execution or {}) if isinstance(execution, Mapping) else {}
+    runtime_identity = values.get("runtimeIdentity")
+    runtime_identity = dict(runtime_identity or {}) if isinstance(runtime_identity, Mapping) else {}
+    target_patch = projection_scope.get("targetScopedManifestPatch")
+    target_patch = dict(target_patch or {}) if isinstance(target_patch, Mapping) else {}
     stages = _stage_timings(values)
     native_rule_timing = native_rule_timing_profile(execution)
     delta = _scope_delta(plan)
@@ -482,6 +486,13 @@ def build_projection_runtime_observation(
         "observedAt": _text(getattr(projection_run, "completed_at", "")),
         "status": _text(values.get("status")),
         "graphStore": _text(values.get("graphStore") or getattr(projection_run, "graph_store", "")),
+        "runtimeIdentity": {
+            "contract": _text(runtime_identity.get("contract")),
+            "version": _text(runtime_identity.get("version")),
+            "revision": _text(runtime_identity.get("revision")),
+            "source": _text(runtime_identity.get("source")),
+            "python": _text(runtime_identity.get("python")),
+        },
         "durationMs": duration_ms,
         "materialChangeDetected": bool(values.get("materialChangeDetected")),
         "preservedActiveGeneration": bool(values.get("preservedActiveGeneration")),
@@ -499,6 +510,21 @@ def build_projection_runtime_observation(
             "dependencyAffectedFamilies": list(delta.get("dependencyAffectedScopeFamilies") or []),
             "globalImpact": bool(plan.get("globalImpact")),
             "impactDiagnostics": impact_diagnostics,
+            "targetScopedManifestPatch": {
+                "status": _text(target_patch.get("status")),
+                "mode": _text(target_patch.get("mode")),
+                "fallbackReason": _text(target_patch.get("fallbackReason")),
+                "targetSymbolCount": len(target_patch.get("targetSymbols") or []),
+                "targetSymbols": [
+                    _text(symbol).upper()
+                    for symbol in (target_patch.get("targetSymbols") or [])[:20]
+                    if _text(symbol)
+                ],
+                "selectedIncomingScopeCount": _integer(target_patch.get("selectedIncomingScopeCount")),
+                "reusedActiveScopeCount": _integer(target_patch.get("reusedActiveScopeCount")),
+                "deferredScopeCount": _integer(target_patch.get("deferredScopeCount")),
+                "fullReconcileMinutes": _number(target_patch.get("fullReconcileMinutes")),
+            },
         },
         "inference": {
             "status": _text(inference.get("status")),

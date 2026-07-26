@@ -12,10 +12,10 @@ from collections import defaultdict
 from typing import Dict, Iterable, List, Mapping, Optional, Sequence, Set
 
 
-# v5 retains the typed fact-family change contract and adds an operational
-# explanation of broad/global impact. The explanation is routing telemetry;
-# it never evaluates a RuleBox condition or derives an investment result.
-CHANGE_IMPACT_VERSION = "abox-change-impact-v5"
+# v6 separates a global factual-value mutation from a global data-quality
+# mutation. The distinction is routing telemetry only; TypeDB still evaluates
+# the selected RuleBox functions against the complete active ABox.
+CHANGE_IMPACT_VERSION = "abox-change-impact-v6"
 
 SYMBOL_SCOPE_FAMILIES = {
     "state",
@@ -59,6 +59,7 @@ _EVENT_FACT_TYPE_SCOPE_FAMILIES = {
     "executionflow": {"flow"},
     "orderbook": {"flow"},
     "researchevidence": {"evidence"},
+    "evidencelifecycle": {"evidence"},
     "newsevent": {"evidence"},
     "verifiedclaim": {"evidence"},
     "verificationrun": {"evidence"},
@@ -709,12 +710,49 @@ def _expanded_family_values(values: Iterable[object]) -> Set[str]:
     return expanded
 
 
+def global_scope_impact_partition(
+    delta: Mapping[str, object],
+    global_scope_ids: Iterable[object],
+) -> Dict[str, List[str]]:
+    """Classify global scopes without turning their values into a Python rule.
+
+    A semantic fingerprint limited to ``quality`` means source freshness,
+    coverage, or validation metadata changed while the represented market /
+    portfolio value did not. Older manifests, additions, removals, and mixed
+    changes remain value-impacting conservatively.
+    """
+    semantic_by_scope = delta.get("semanticChangedFamiliesByScope")
+    semantic_by_scope = semantic_by_scope if isinstance(semantic_by_scope, Mapping) else {}
+    quality_only: List[str] = []
+    value: List[str] = []
+    for raw_scope_id in global_scope_ids or []:
+        scope_id = _clean(raw_scope_id)
+        if not scope_id:
+            continue
+        semantic = {
+            _lower(family)
+            for family in semantic_by_scope.get(scope_id, [])
+            if _clean(family)
+        }
+        if semantic and semantic <= {"quality"}:
+            quality_only.append(scope_id)
+        else:
+            value.append(scope_id)
+    return {
+        "qualityOnlyGlobalScopeIds": sorted(set(quality_only)),
+        "globalValueScopeIds": sorted(set(value)),
+    }
+
+
 def inference_impact_diagnostics(
     *,
     delta: Mapping[str, object],
     global_scope_ids: Iterable[object],
     global_impact: bool,
     bounded_global_context: bool,
+    quality_scoped_global_context: bool = False,
+    quality_only_global_scope_ids: Iterable[object] = None,
+    global_value_scope_ids: Iterable[object] = None,
     target_symbols: Iterable[object],
     changed_families: Iterable[object],
     requested_fact_families: Iterable[object],
@@ -743,8 +781,12 @@ def inference_impact_diagnostics(
     unexpected = sorted(changed_expanded - requested_expanded) if requested else []
     candidate_ratio = round((max(0, int(candidate_rule_count or 0)) / max(1, int(enabled_rule_count or 0))) * 100, 1)
     reason_codes: List[str] = []
+    quality_scope_ids = [_clean(scope_id) for scope_id in quality_only_global_scope_ids or [] if _clean(scope_id)]
+    value_scope_ids = [_clean(scope_id) for scope_id in global_value_scope_ids or [] if _clean(scope_id)]
     if global_impact:
         reason_codes.append("global-context-changed")
+    if quality_scoped_global_context:
+        reason_codes.append("quality-scoped-global-context")
     if bounded_global_context:
         reason_codes.append("target-scoped-global-context")
     if len(changed) >= 8:
@@ -764,6 +806,8 @@ def inference_impact_diagnostics(
     classification = (
         "target-scoped-global-context"
         if bounded_global_context
+        else "quality-scoped-global-context"
+        if quality_scoped_global_context
         else "global-reconciliation"
         if global_impact
         else "dependency-selected"
@@ -772,6 +816,8 @@ def inference_impact_diagnostics(
         "classification": classification,
         "reasonCodes": reason_codes,
         "globalScopeCount": len(scope_ids),
+        "qualityOnlyGlobalScopeCount": len(quality_scope_ids),
+        "globalValueScopeCount": len(value_scope_ids),
         "globalScopeTypes": [
             {
                 "type": value,
@@ -823,7 +869,14 @@ def build_inference_impact_plan(
         for scope_id in changed_scope_ids
         if scope_type(scope_id) in GLOBAL_SCOPE_TYPES and not scope_symbol(scope_id)
     } | set(delta.get("unresolvedRelationScopeIds") or []))
-    global_impact = bool(global_scope_ids)
+    global_partition = global_scope_impact_partition(delta, global_scope_ids)
+    quality_only_global_scope_ids = list(global_partition["qualityOnlyGlobalScopeIds"])
+    global_value_scope_ids = list(global_partition["globalValueScopeIds"])
+    # A quality-only change can invalidate data-confidence conclusions but
+    # cannot by itself represent a changed macro/portfolio value. It stays
+    # global ABox context while allowing the quality-dependent RuleBox subset.
+    global_impact = bool(global_value_scope_ids)
+    quality_scoped_global_context = bool(quality_only_global_scope_ids)
     bounded_global_context = bool(global_impact and explicit_symbols)
     impacted_symbols = (
         set(delta.get("directChangedSymbols") or delta.get("changedSymbols") or [])
@@ -842,7 +895,7 @@ def build_inference_impact_plan(
     else:
         # Whole-world callers keep the conservative expansion for a global
         # fact because no scheduler has already chosen the next subject.
-        if global_impact:
+        if global_impact or quality_scoped_global_context:
             impacted_symbols.update(available_symbols)
         target_symbols = [symbol for symbol in available_symbols if symbol in impacted_symbols]
     if not target_symbols and not changed_scope_ids:
@@ -873,6 +926,9 @@ def build_inference_impact_plan(
         global_scope_ids=global_scope_ids,
         global_impact=global_impact,
         bounded_global_context=bounded_global_context,
+        quality_scoped_global_context=quality_scoped_global_context,
+        quality_only_global_scope_ids=quality_only_global_scope_ids,
+        global_value_scope_ids=global_value_scope_ids,
         target_symbols=target_symbols,
         changed_families=changed_families,
         requested_fact_families=requested_fact_families,
@@ -884,8 +940,11 @@ def build_inference_impact_plan(
         "version": CHANGE_IMPACT_VERSION,
         "scopeDelta": delta,
         "globalImpact": global_impact,
+        "qualityScopedGlobalContext": quality_scoped_global_context,
         "boundedGlobalContext": bounded_global_context,
         "globalImpactScopeIds": global_scope_ids,
+        "qualityOnlyGlobalScopeIds": quality_only_global_scope_ids,
+        "globalValueScopeIds": global_value_scope_ids,
         "explicitTargetSymbols": explicit_symbols,
         "inferenceTargetSymbols": target_symbols,
         "candidateRuleIds": [str(profile.get("ruleId") or "") for profile in candidate_profiles],
@@ -900,6 +959,8 @@ def build_inference_impact_plan(
         "ruleExecutionScope": (
             "target-scoped-global-context-native-evaluation"
             if bounded_global_context
+            else "quality-scoped-global-context-native-evaluation"
+            if quality_scoped_global_context
             else "global-native-reconciliation"
             if global_impact
             else "dependency-selected-native-evaluation"
@@ -915,6 +976,8 @@ def build_inference_impact_plan(
         "reason": (
             "전역 사실은 바뀌었지만 요청된 종목 범위에서 관련 규칙과 기존 성립 규칙만 다시 확인합니다."
             if bounded_global_context
+            else "전역 데이터 품질·신선도 사실만 바뀌어 품질 의존 RuleBox와 기존 성립 규칙만 TypeDB에서 재확인합니다."
+            if quality_scoped_global_context
             else "전역 범위 변경이 감지되어 전체 투자 대상을 재검토합니다."
             if global_impact
             else "직접 변경된 ABox 사실군으로 후보 RuleBox를 계산하고, 이전에 성립한 비변경 규칙을 함께 TypeDB에서 재확인합니다."
@@ -934,8 +997,11 @@ def compact_inference_impact_plan(plan: Mapping[str, object], limit: int = 80) -
     return {
         "version": str(values.get("version") or CHANGE_IMPACT_VERSION),
         "globalImpact": bool(values.get("globalImpact")),
+        "qualityScopedGlobalContext": bool(values.get("qualityScopedGlobalContext")),
         "boundedGlobalContext": bool(values.get("boundedGlobalContext")),
         "globalImpactScopeIds": list(values.get("globalImpactScopeIds") or [])[:bounded],
+        "qualityOnlyGlobalScopeIds": list(values.get("qualityOnlyGlobalScopeIds") or [])[:bounded],
+        "globalValueScopeIds": list(values.get("globalValueScopeIds") or [])[:bounded],
         "explicitTargetSymbols": list(values.get("explicitTargetSymbols") or [])[:bounded],
         "inferenceTargetSymbols": list(values.get("inferenceTargetSymbols") or [])[:bounded],
         "candidateRuleIds": list(values.get("candidateRuleIds") or [])[:bounded],
@@ -955,6 +1021,8 @@ def compact_inference_impact_plan(plan: Mapping[str, object], limit: int = 80) -
             "classification": str(diagnostics.get("classification") or ""),
             "reasonCodes": list(diagnostics.get("reasonCodes") or [])[:bounded],
             "globalScopeCount": int(diagnostics.get("globalScopeCount") or 0),
+            "qualityOnlyGlobalScopeCount": int(diagnostics.get("qualityOnlyGlobalScopeCount") or 0),
+            "globalValueScopeCount": int(diagnostics.get("globalValueScopeCount") or 0),
             "globalScopeTypes": [
                 {
                     "type": str(item.get("type") or ""),

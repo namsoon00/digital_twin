@@ -46,6 +46,7 @@ from ..domain.events import (
     SETTINGS_UPDATED,
     SYMBOL_UNIVERSE_REFRESHED,
     DomainEvent,
+    research_evidence_lifecycle_events,
 )
 from ..domain.message_types import (
     DEFAULT_ALERT_RULES,
@@ -84,6 +85,7 @@ from ..infrastructure.external_signal_utils import ExternalCircuitOpen, External
 from ..infrastructure.mock_market import mock_market_payload, mock_market_scenario_list
 from ..infrastructure.ontology_graph_store import ontology_repository_from_settings
 from ..infrastructure.ontology_projection import PortfolioOntologyProjectionRecorder
+from ..infrastructure.runtime_identity import runtime_identity
 from ..infrastructure import operational_store as stores
 from ..infrastructure.operational_error_reporting import operational_error_reporter, report_runtime_error
 from ..infrastructure.service_factory import (
@@ -278,6 +280,11 @@ class RealtimeEventBridge:
 
     def publish(self, event: DomainEvent) -> None:
         self.inner.publish(event)
+        REALTIME_HUB.broadcast_event(event)
+
+    def dispatch_recorded(self, event: DomainEvent) -> None:
+        """Fan out an event already written in the source transaction."""
+        self.inner.dispatch_recorded(event)
         REALTIME_HUB.broadcast_event(event)
 
 
@@ -610,6 +617,7 @@ def settings_status_payload() -> Dict[str, object]:
         "ontologyRuntimeInferenceSloSeconds",
         "ontologyRuntimeSloConsecutiveBreachCount",
         "ontologyRuntimeAuditWindowRuns",
+        "ontologyScopedFullReconcileMinutes",
         "ontologyReasoningUrgentReviewLevels",
         "temporalWindowPeriods",
         "temporalWindowHistoryLimit",
@@ -723,6 +731,10 @@ def settings_status_payload() -> Dict[str, object]:
         "newsEvidenceKeepUndated",
         "newsArticleBodyFailureWarnRate",
         "newsArticleBodyFailureMinimumCount",
+        "dataPipelineHealthDeteriorationConsecutiveRuns",
+        "dataPipelineHealthRecoveryConsecutiveRuns",
+        "dataPipelineHealthFailureConsecutiveRuns",
+        "dataPipelineHealthNormalConsecutiveRuns",
         "newsAiAnalysisEnabled",
         "newsAiAnalysisUseCodex",
         "newsAiAnalysisCommand",
@@ -988,6 +1000,7 @@ def ontology_diagnostics_payload(query: Dict[str, List[str]]) -> Dict[str, objec
         decision_episode_store=stores.investment_decision_episode_store(settings),
         projection_run_store=stores.ontology_projection_run_store(settings),
         world_projection_outbox=stores.ontology_world_projection_outbox_store(settings),
+        runtime_identity_provider=runtime_identity,
     ).status(symbols=symbols, limit=limit, world_id=world_id)
 
 
@@ -1435,6 +1448,7 @@ def ontology_audit_payload(query: Dict[str, List[str]], requested_section: str =
                 decision_episode_store=stores.investment_decision_episode_store(settings),
                 projection_run_store=stores.ontology_projection_run_store(settings),
                 world_projection_outbox=stores.ontology_world_projection_outbox_store(settings),
+                runtime_identity_provider=runtime_identity,
             ).status(
                 symbols=symbols,
                 limit=min(300, max(80, limit)),
@@ -2153,7 +2167,23 @@ def delete_research_evidence_payload(evidence_id: str, query: Dict[str, List[str
     if not normalized_id:
         raise ValueError("삭제할 근거 ID가 필요합니다.")
     store = stores.research_evidence_store()
-    removed = store.delete(normalized_id)
+    removed = False
+    if hasattr(store, "retract_many_with_events"):
+        mutation, recorded_events = store.retract_many_with_events(
+            [normalized_id],
+            "manual-evidence-retraction",
+            lambda value: research_evidence_lifecycle_events({
+                **(value.to_dict() if hasattr(value, "to_dict") else dict(value or {})),
+                "status": "ok",
+                "reason": "manual-evidence-retraction",
+            }),
+        )
+        removed = bool(getattr(mutation, "retracted_count", 0) or 0)
+        bridge = RealtimeEventBridge()
+        for event in recorded_events:
+            bridge.dispatch_recorded(event)
+    else:
+        removed = store.delete(normalized_id)
     if removed:
         new_domain_event(
             APP_ITEM_REMOVED,

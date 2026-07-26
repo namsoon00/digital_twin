@@ -1,6 +1,10 @@
 from typing import Dict
 
-from ..domain.data_pipeline_health import evaluate_market_data_collection_health, evaluate_news_collection_health
+from ..domain.data_pipeline_health import (
+    evaluate_market_data_collection_health,
+    evaluate_news_collection_health,
+    stabilize_pipeline_health,
+)
 from ..domain.events import DATA_PIPELINE_HEALTH_CHANGED, DomainEvent, data_pipeline_health_changed_event
 from ..domain.message_types import EXTERNAL_DATA_CONNECTION
 from ..domain.notifications import NotificationJob
@@ -42,6 +46,7 @@ class DataPipelineHealthService:
                 10080,
             ),
         )
+        health = self.stabilize(health, previous)
         self.save(health.to_dict())
         event = data_pipeline_health_changed_event(health.to_dict()) if health.state_changed else None
         return health, event
@@ -49,9 +54,44 @@ class DataPipelineHealthService:
     def record_market_data_collection(self, result: Dict[str, object]):
         previous = self.pipeline_state("marketSnapshot")
         health = evaluate_market_data_collection_health(result, previous)
+        health = self.stabilize(health, previous)
         self.save(health.to_dict())
         event = data_pipeline_health_changed_event(health.to_dict()) if health.state_changed else None
         return health, event
+
+    def stabilize(self, health, previous: Dict[str, object]):
+        return stabilize_pipeline_health(
+            health,
+            previous,
+            deterioration_consecutive_runs=int_setting(
+                self.settings,
+                "dataPipelineHealthDeteriorationConsecutiveRuns",
+                2,
+                1,
+                20,
+            ),
+            recovery_consecutive_runs=int_setting(
+                self.settings,
+                "dataPipelineHealthRecoveryConsecutiveRuns",
+                2,
+                1,
+                20,
+            ),
+            failure_consecutive_runs=int_setting(
+                self.settings,
+                "dataPipelineHealthFailureConsecutiveRuns",
+                1,
+                1,
+                20,
+            ),
+            normal_consecutive_runs=int_setting(
+                self.settings,
+                "dataPipelineHealthNormalConsecutiveRuns",
+                2,
+                1,
+                20,
+            ),
+        )
 
     def pipeline_state(self, pipeline: str) -> Dict[str, object]:
         if not self.store or not hasattr(self.store, "load"):

@@ -67,6 +67,7 @@ from ..domain.ontology_native_rule_planning import (
 from ..domain.portfolio_ontology_temporal_concepts import parse_temporal_windows
 from ..domain.portfolio import AccountSnapshot
 from .graph_store_rulebox import rulebox_rules_to_payload
+from .runtime_identity import runtime_identity
 
 
 DEPRECATED_TYPEDB_RULE_IDS = {"shadow.market_psychology.state.v1"}
@@ -861,7 +862,21 @@ class PortfolioOntologyProjectionRecorder:
                         "status": str(applied_target_patch.get("status") or "skipped"),
                         "mode": "full-manifest-fallback",
                         "targetSymbols": list(target_scoped_patch.get("targetSymbols") or []),
+                        "fallbackReason": str(
+                            applied_target_patch.get("fallbackReason")
+                            or applied_target_patch.get("status")
+                            or "target-scoped-manifest-patch-not-applied"
+                        ),
+                        "selectedIncomingScopeCount": len(
+                            applied_target_patch.get("selectedIncomingScopeIds") or []
+                        ),
+                        "deferredScopeCount": len(
+                            applied_target_patch.get("deferredScopeIds") or []
+                        ),
                     }
+            # Preserve the exact incremental path or safe fallback in the
+            # manifest, so operational diagnostics do not infer it later.
+            persistence_graph.worldview["targetScopedManifestPatch"] = dict(target_scoped_patch)
             if str(target_scoped_patch.get("status") or "") == "applied":
                 full_reconcile_at = str(
                     active_abox.get("lastFullScopeReconcileAt")
@@ -3268,13 +3283,17 @@ class PortfolioOntologyProjectionRecorder:
             preliminary.get("inferenceTargetSymbols") or requested_symbols,
         )
         inferred = self.bounded_native_inference_symbols(snapshot, inferred, requested_symbols)
-        explicit = self.inference_symbols(snapshot, requested_symbols)
+        # ``inference_symbols`` falls back to the full snapshot when its
+        # argument is empty. This branch needs the literal scheduler request
+        # to distinguish a chosen subject from a whole-world cycle.
+        explicit = self.inference_symbols(snapshot, requested_symbols) if requested_symbols else []
         base = {
             "preliminaryImpactPlan": compact_inference_impact_plan(preliminary),
             "targetSymbols": list(inferred),
             "explicitTargetSymbols": list(explicit),
             "availableSymbolCount": len(available),
             "fullReconcileMinutes": self.scoped_full_reconcile_minutes(),
+            "fallbackReason": "",
         }
         # A reasoning worker can intentionally schedule one subject even when
         # a shared macro or portfolio fact also changed. Persist that subject
@@ -3283,16 +3302,40 @@ class PortfolioOntologyProjectionRecorder:
         # reconciliation. Without an explicit worker target, preserve the
         # conservative whole-portfolio path for a global change.
         if preliminary.get("globalImpact") and not explicit:
-            return {**base, "status": "full-global-impact", "eligible": False}
+            return {
+                **base,
+                "status": "full-global-impact",
+                "eligible": False,
+                "fallbackReason": "global-value-context-without-explicit-subject",
+            }
         if self.scoped_full_reconcile_due(active_metadata):
-            return {**base, "status": "full-reconciliation-due", "eligible": False}
-        if not inferred or len(inferred) >= len(available):
-            return {**base, "status": "full-target-set", "eligible": False}
+            return {
+                **base,
+                "status": "full-reconciliation-due",
+                "eligible": False,
+                "fallbackReason": "periodic-full-scope-reconciliation-due",
+            }
+        if not inferred:
+            return {
+                **base,
+                "status": "full-target-set",
+                "eligible": False,
+                "fallbackReason": "no-inference-target-symbol",
+            }
+        if len(inferred) >= len(available):
+            return {
+                **base,
+                "status": "full-target-set",
+                "eligible": False,
+                "fallbackReason": "target-set-covers-active-portfolio",
+            }
         return {
             **base,
             "status": (
                 "target-scoped-explicit-global-context"
                 if preliminary.get("globalImpact")
+                else "target-scoped-quality-global-context"
+                if preliminary.get("qualityScopedGlobalContext")
                 else "target-scoped"
             ),
             "eligible": True,
@@ -3397,6 +3440,9 @@ class PortfolioOntologyProjectionRecorder:
         projection_run: OntologyProjectionRun = None,
     ) -> None:
         ontology = snapshot.metadata.setdefault("ontology", {})
+        # Runtime identity is audit metadata only. It never becomes an ABox
+        # fact and therefore cannot influence an investment inference.
+        result.setdefault("runtimeIdentity", runtime_identity())
         active_key = self.active_graph_store_key(result)
         result.setdefault("graphStore", active_key)
         result.setdefault("activeGraphStore", active_key)

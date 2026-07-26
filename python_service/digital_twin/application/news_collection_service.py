@@ -5,7 +5,12 @@ from typing import Callable, Dict, Iterable, List, Tuple
 
 from ..domain.accounts import AccountConfig
 from ..domain.data_freshness import age_minutes, parse_datetime, utc_iso
-from ..domain.events import DomainEvent, ontology_reasoning_requested_event, research_evidence_collected_event
+from ..domain.events import (
+    DomainEvent,
+    ontology_reasoning_requested_event,
+    research_evidence_collected_event,
+    research_evidence_lifecycle_events,
+)
 from ..domain.investment_research import NewsCollectionTarget, ResearchEvidence
 from ..domain.investment_evidence_governance import claim_policy, claim_quality_summary, governed_evidence
 from ..domain.market_data import known_stock, number
@@ -202,6 +207,26 @@ class NewsCollectionRunner:
             return {"enabled": self.cleanup_enabled(), "deleted": 0, "cutoffIso": self.stale_cutoff_iso()}
         cutoff = self.stale_cutoff_iso()
         try:
+            if (
+                self.event_publisher
+                and hasattr(self.event_publisher, "dispatch_recorded")
+                and hasattr(self.evidence_store, "expire_stale_news_with_events")
+            ):
+                mutation, events = self.evidence_store.expire_stale_news_with_events(
+                    cutoff,
+                    self.cleanup_batch_size(),
+                    lambda value: self.lifecycle_events(value, "news-age-expired"),
+                )
+                for event in events:
+                    self.event_publisher.dispatch_recorded(event)
+                return {
+                    "enabled": True,
+                    "deleted": int(getattr(mutation, "expired_count", 0) or 0),
+                    "cutoffIso": cutoff,
+                    "maxAgeMinutes": self.max_news_age_minutes(),
+                    "evidenceDeltas": list(getattr(mutation, "to_dict", lambda: {})().get("evidenceDeltas") or []),
+                    "inferenceChangedSymbols": list(getattr(mutation, "inference_changed_symbols", []) or []),
+                }
             deleted = int(self.evidence_store.delete_stale_news(cutoff, self.cleanup_batch_size()) or 0)
             return {"enabled": True, "deleted": deleted, "cutoffIso": cutoff, "maxAgeMinutes": self.max_news_age_minutes()}
         except Exception as error:  # noqa: BLE001 - cleanup failure should not stop fresh collection.
@@ -214,6 +239,27 @@ class NewsCollectionRunner:
         try:
             items = self.evidence_store.latest(kind="news", limit=self.cleanup_batch_size())
             targets = [item for item in items if evidence_is_feed_only_rss(item)]
+            if (
+                targets
+                and self.event_publisher
+                and hasattr(self.event_publisher, "dispatch_recorded")
+                and hasattr(self.evidence_store, "retract_many_with_events")
+            ):
+                mutation, events = self.evidence_store.retract_many_with_events(
+                    [item.evidence_id for item in targets],
+                    "rssFeedOnlyWithoutArticleBody",
+                    lambda value: self.lifecycle_events(value, "rssFeedOnlyWithoutArticleBody"),
+                )
+                for event in events:
+                    self.event_publisher.dispatch_recorded(event)
+                return {
+                    "enabled": True,
+                    "deleted": int(getattr(mutation, "retracted_count", 0) or 0),
+                    "scanned": len(items),
+                    "reason": "rssFeedOnlyWithoutArticleBody",
+                    "evidenceDeltas": list(getattr(mutation, "to_dict", lambda: {})().get("evidenceDeltas") or []),
+                    "inferenceChangedSymbols": list(getattr(mutation, "inference_changed_symbols", []) or []),
+                }
             deleted = 0
             for item in targets:
                 if self.evidence_store.delete(item.evidence_id):
@@ -221,6 +267,18 @@ class NewsCollectionRunner:
             return {"enabled": True, "deleted": deleted, "scanned": len(items), "reason": "rssFeedOnlyWithoutArticleBody"}
         except Exception as error:  # noqa: BLE001 - cleanup failure should not stop fresh collection.
             return {"enabled": True, "deleted": 0, "status": "error", "message": str(error)[:180]}
+
+    def lifecycle_events(self, mutation, reason: str) -> List[DomainEvent]:
+        """Build one atomic audit + reasoning handoff for facts leaving ABox."""
+        payload = mutation.to_dict() if hasattr(mutation, "to_dict") else dict(mutation or {})
+        payload.update({
+            "status": "ok",
+            "reason": str(reason or ""),
+            "lifecycleChangedCount": int(
+                payload.get("expiredCount") or 0
+            ) + int(payload.get("retractedCount") or 0),
+        })
+        return research_evidence_lifecycle_events(payload)
 
     def fresh_news_items(self, items: Iterable[ResearchEvidence]) -> Tuple[List[ResearchEvidence], List[ResearchEvidence]]:
         now = datetime.now(timezone.utc)
@@ -480,7 +538,12 @@ class NewsCollectionRunner:
                 }
                 target_failures.append(failure)
                 statuses.append({"source": "news-collection-runner", "symbol": target.symbol, "ok": False, "message": failure["reason"]})
-        def build_collection_result(saved: int, changed_symbols: List[str], changed_items: List[ResearchEvidence]) -> Dict[str, object]:
+        def build_collection_result(
+            saved: int,
+            changed_symbols: List[str],
+            changed_items: List[ResearchEvidence],
+            mutation=None,
+        ) -> Dict[str, object]:
             symbols = list(changed_symbols or [])
             if saved and not symbols:
                 symbols = sorted(set(str(item.symbol or "").upper().strip() for item in collected if str(item.symbol or "").strip()))
@@ -495,6 +558,24 @@ class NewsCollectionRunner:
                 if assessment.get("passed")
             ]
             material_symbols = sorted(set(str(item.symbol or "").upper().strip() for item in material_items if str(item.symbol or "").strip()))
+            mutation_payload = mutation.to_dict() if hasattr(mutation, "to_dict") else {}
+            tracks_eligible_set = mutation is not None or hasattr(self.evidence_store, "last_evidence_deltas")
+            evidence_deltas = list(
+                (mutation_payload.get("evidenceDeltas") or [])
+                if mutation is not None
+                else (getattr(self.evidence_store, "last_evidence_deltas", []) or [])
+            )
+            fact_revisions = dict(
+                (mutation_payload.get("factRevisionsBySymbol") or {})
+                if mutation is not None
+                else (getattr(self.evidence_store, "last_eligible_evidence_revisions", {}) or {})
+            )
+            inference_source_symbols = list(fact_revisions) if tracks_eligible_set else material_symbols
+            inference_changed_symbols = sorted({
+                str(symbol or "").upper().strip()
+                for symbol in inference_source_symbols
+                if str(symbol or "").strip()
+            })
             return {
                 "status": "ok",
                 "targetCount": len(targets),
@@ -517,9 +598,12 @@ class NewsCollectionRunner:
                 "changedSymbols": symbols,
                 "materialChangedCount": len(material_items),
                 "materialChangedSymbols": material_symbols,
+                "inferenceChangedSymbols": inference_changed_symbols,
                 "changedItems": [item.to_dict() for item in items[:50]],
                 "materialChangedItems": [item.to_dict() for item in material_items[:50]],
                 "materialityAssessments": materiality_assessments,
+                "evidenceDeltas": evidence_deltas[:200],
+                "factRevisionsBySymbol": fact_revisions,
                 "symbols": [target.symbol for target in targets],
                 "providers": self.gateway.providers(),
                 "statuses": statuses[-50:],
@@ -534,7 +618,7 @@ class NewsCollectionRunner:
                 return []
             event = research_evidence_collected_event(result)
             events = [event]
-            ontology_symbols = list(result.get("changedSymbols") or [])
+            ontology_symbols = list(result.get("inferenceChangedSymbols") or [])
             if ontology_symbols:
                 events.append(ontology_reasoning_requested_event(
                     event,
@@ -545,6 +629,8 @@ class NewsCollectionRunner:
                     fact_types=["ResearchEvidence", "NewsEvent"],
                     reason="뉴스/리서치 근거 변경을 TypeDB ABox에 반영하고 네이티브 규칙 추론을 갱신합니다. 알림은 중요 변경 게이트를 별도로 통과해야 합니다.",
                     materiality_assessments=list(result.get("materialityAssessments") or []),
+                    fact_revisions_by_symbol=dict(result.get("factRevisionsBySymbol") or {}),
+                    evidence_deltas=list(result.get("evidenceDeltas") or []),
                 ))
             return events
 
@@ -555,8 +641,14 @@ class NewsCollectionRunner:
             and hasattr(self.evidence_store, "upsert_many_with_events")
             and hasattr(self.event_publisher, "dispatch_recorded")
         ):
-            def event_builder(saved: int, changed_symbols: List[str], changed_items: List[ResearchEvidence]) -> List[DomainEvent]:
-                built = build_collection_result(saved, changed_symbols, changed_items)
+            def event_builder(mutation) -> List[DomainEvent]:
+                payload = mutation.to_dict() if hasattr(mutation, "to_dict") else {}
+                built = build_collection_result(
+                    int(payload.get("writtenCount") or getattr(mutation, "written_count", 0) or 0),
+                    list(payload.get("changedSymbols") or getattr(mutation, "changed_symbols", []) or []),
+                    list(getattr(mutation, "changed_items", []) or []),
+                    mutation=mutation,
+                )
                 events = collection_events(built)
                 event_state["result"] = built
                 event_state["events"] = events

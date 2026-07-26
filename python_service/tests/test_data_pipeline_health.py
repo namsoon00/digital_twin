@@ -131,11 +131,54 @@ class DataPipelineHealthTests(unittest.TestCase):
             "statuses": [{"source": "yahoo", "ok": True, "count": 0, "candidateCount": 1, "bodyMissingCount": 1}],
         }
         first, _ = service.record_news_collection(dict(result))
-        second, event = service.record_news_collection(dict(result))
+        second, pending_event = service.record_news_collection(dict(result))
+        third, event = service.record_news_collection(dict(result))
         self.assertEqual(first.state, "idle")
-        self.assertEqual(second.state, "degraded")
-        self.assertEqual(second.consecutive_zero_runs, 2)
+        self.assertEqual(second.state, "idle")
+        self.assertEqual("degraded", second.observed_state)
+        self.assertEqual("degraded", second.transition_candidate_state)
+        self.assertEqual(1, second.transition_candidate_count)
+        self.assertIsNone(pending_event)
+        self.assertEqual(third.state, "degraded")
+        self.assertEqual(third.consecutive_zero_runs, 3)
+        self.assertTrue(third.transition_confirmed)
         self.assertIsNotNone(event)
+
+    def test_service_requires_confirmed_recovery_before_notifying(self):
+        store = MemoryStore()
+        store.payload = {
+            "pipelines": {
+                "marketSnapshot": {
+                    "state": "failed",
+                    "reasonCode": "market-collection-unavailable",
+                    "reason": "시장 데이터 수집이 실패했습니다.",
+                    "stateSince": "2026-07-20T00:00:00Z",
+                },
+            },
+        }
+        service = DataPipelineHealthService(store)
+        healthy_result = {
+            "status": "ok",
+            "provider": "toss",
+            "selectedCount": 1,
+            "priceCount": 1,
+            "candleCount": 1,
+            "savedCount": 1,
+            "timeSeries": {"enabled": True, "savedCount": 1},
+        }
+
+        pending, pending_event = service.record_market_data_collection(dict(healthy_result))
+        confirmed, event = service.record_market_data_collection(dict(healthy_result))
+
+        self.assertEqual("failed", pending.state)
+        self.assertEqual("healthy", pending.observed_state)
+        self.assertEqual(1, pending.transition_candidate_count)
+        self.assertIsNone(pending_event)
+        self.assertEqual("healthy", confirmed.state)
+        self.assertTrue(confirmed.alert_required)
+        self.assertTrue(confirmed.transition_confirmed)
+        self.assertIsNotNone(event)
+        self.assertEqual("healthy", event.payload["observedState"])
 
     def test_relevance_filtering_only_remains_idle_after_repeated_empty_cycles(self):
         health = evaluate_news_collection_health({

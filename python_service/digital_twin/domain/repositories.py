@@ -469,17 +469,39 @@ class ResearchEvidenceRepository(Protocol):
     def upsert_many_with_events(
         self,
         items: Iterable[ResearchEvidence],
-        event_builder: Callable[[int, List[str], List[ResearchEvidence]], Iterable[DomainEvent]],
+        event_builder: Callable[[object], Iterable[DomainEvent]],
     ) -> Tuple[int, List[DomainEvent]]:
         ...
 
-    def latest(self, symbol: str = "", kind: str = "", limit: int = 50) -> List[ResearchEvidence]:
+    def latest(
+        self,
+        symbol: str = "",
+        kind: str = "",
+        limit: int = 50,
+        include_inactive: bool = False,
+    ) -> List[ResearchEvidence]:
         ...
 
     def delete(self, evidence_id: str) -> bool:
         ...
 
     def delete_stale_news(self, cutoff_iso: str, limit: int = 500) -> int:
+        ...
+
+    def expire_stale_news_with_events(
+        self,
+        cutoff_iso: str,
+        limit: int,
+        event_builder: Callable[[object], Iterable[DomainEvent]],
+    ) -> Tuple[object, List[DomainEvent]]:
+        ...
+
+    def retract_many_with_events(
+        self,
+        evidence_ids: Iterable[str],
+        reason: str,
+        event_builder: Callable[[object], Iterable[DomainEvent]],
+    ) -> Tuple[object, List[DomainEvent]]:
         ...
 
     def summary(self) -> Dict[str, object]:

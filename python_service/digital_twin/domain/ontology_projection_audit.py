@@ -235,6 +235,8 @@ def projection_result_summary(result: Dict[str, object]) -> Dict[str, object]:
     retired_cleanup = dict(verification.get("retiredActiveCleanup") or {})
     impact_plan = compact_inference_impact_plan(values.get("inferenceImpactPlan") or {})
     projection_scope = dict(values.get("projectionScope") or {})
+    target_patch = dict(projection_scope.get("targetScopedManifestPatch") or {})
+    runtime_identity = dict(values.get("runtimeIdentity") or {})
     ontology_world = dict(values.get("ontologyWorld") or {})
     market_world = dict(values.get("marketWorld") or {})
     inference_reuse_proof = inference_reuse_proof_summary(
@@ -249,6 +251,13 @@ def projection_result_summary(result: Dict[str, object]) -> Dict[str, object]:
         "status": str(values.get("status") or ""),
         "reason": str(values.get("reason") or "")[:500],
         "graphStore": str(values.get("graphStore") or ""),
+        "runtimeIdentity": {
+            "contract": str(runtime_identity.get("contract") or ""),
+            "version": str(runtime_identity.get("version") or ""),
+            "revision": str(runtime_identity.get("revision") or ""),
+            "source": str(runtime_identity.get("source") or ""),
+            "python": str(runtime_identity.get("python") or ""),
+        },
         "projectionMode": str(values.get("projectionMode") or ""),
         "materialChangeDetected": bool(values.get("materialChangeDetected")),
         "materialFingerprint": str(values.get("materialFingerprint") or ""),
@@ -261,6 +270,16 @@ def projection_result_summary(result: Dict[str, object]) -> Dict[str, object]:
         },
         "scopeTopologyVersion": str(projection_scope.get("scopeTopologyVersion") or ""),
         "scopeFamilyCounts": dict(projection_scope.get("scopeFamilyCounts") or {}),
+        "targetScopedManifestPatch": {
+            "status": str(target_patch.get("status") or ""),
+            "mode": str(target_patch.get("mode") or ""),
+            "fallbackReason": str(target_patch.get("fallbackReason") or "")[:220],
+            "targetSymbols": _clean_symbols(target_patch.get("targetSymbols") or []),
+            "selectedIncomingScopeCount": int(target_patch.get("selectedIncomingScopeCount") or 0),
+            "reusedActiveScopeCount": int(target_patch.get("reusedActiveScopeCount") or 0),
+            "deferredScopeCount": int(target_patch.get("deferredScopeCount") or 0),
+            "fullReconcileMinutes": float(target_patch.get("fullReconcileMinutes") or 0),
+        },
         "inferenceImpactPlan": impact_plan,
         "priorInferenceReuse": {
             "reusable": bool(prior_inference_reuse.get("reusable")),

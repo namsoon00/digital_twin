@@ -285,6 +285,15 @@ def stage_coverage(
             payload["freshnessStatus"] = "reference-only"
         elif real_time:
             payload["freshnessStatus"] = "realtime"
+        elif session and session.get("regular") is False:
+            # A REST response can be freshly fetched after the close while its
+            # economic value is still the prior regular-session close. Never
+            # present that distinction as a near-live intraday observation.
+            payload["freshnessStatus"] = "last-close"
+            payload["cadence"] = "market-close-reference"
+            payload["latencyStatus"] = "market-closed-reference"
+            payload["latencyLabel"] = "장 마감 기준값"
+            payload["latencyReason"] = "KIS REST 응답은 방금 조회했지만 정규장 외 시간이라 장중 실시간 시세가 아닌 최근 마감 기준값입니다."
         else:
             payload["freshnessStatus"] = "near-live"
     if session:

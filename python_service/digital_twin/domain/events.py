@@ -26,6 +26,7 @@ CHAT_MESSAGE_APPENDED = "chat.message_appended"
 SYMBOL_UNIVERSE_REFRESHED = "symbol_universe.refreshed"
 MARKET_DATA_COLLECTED = "market_data.collected"
 RESEARCH_EVIDENCE_COLLECTED = "research_evidence.collected"
+RESEARCH_EVIDENCE_LIFECYCLE_CHANGED = "research_evidence.lifecycle_changed"
 DATA_PIPELINE_HEALTH_CHANGED = "data_pipeline.health_changed"
 HYPOTHESIS_RESEARCH_COMPLETED = "investment_hypothesis.research_completed"
 HYPOTHESIS_PROPOSED = "investment_hypothesis.proposed"
@@ -314,7 +315,53 @@ def research_evidence_collected_event(payload: Dict[str, object]) -> DomainEvent
             "changedItems": list(payload.get("changedItems") or [])[:100],
             "materialChangedItems": list(payload.get("materialChangedItems") or [])[:100],
             "materialityAssessments": list(payload.get("materialityAssessments") or [])[:100],
+            "evidenceDeltas": list(payload.get("evidenceDeltas") or [])[:200],
+            "inferenceChangedSymbols": list(payload.get("inferenceChangedSymbols") or [])[:100],
+            "factRevisionsBySymbol": dict(payload.get("factRevisionsBySymbol") or {}),
+            "lifecycleChangedCount": int(payload.get("lifecycleChangedCount") or 0),
             "providers": list(payload.get("providers") or [])[:20],
+        },
+    )
+
+
+def research_evidence_lifecycle_changed_event(payload: Dict[str, object]) -> DomainEvent:
+    """Record expiry/retraction as an auditable source fact change.
+
+    The event is deliberately separate from collection because a previously
+    eligible fact leaving the world can invalidate an inference even when no
+    provider returned a new article in this run.
+    """
+    raw_inference_symbols = (
+        payload.get("inferenceChangedSymbols")
+        if "inferenceChangedSymbols" in payload
+        else payload.get("changedSymbols")
+    )
+    inference_symbols = [
+        str(symbol or "").upper().strip()
+        for symbol in (raw_inference_symbols or [])
+        if str(symbol or "").strip()
+    ]
+    changed_symbols = [
+        str(symbol or "").upper().strip()
+        for symbol in (payload.get("changedSymbols") or inference_symbols)
+        if str(symbol or "").strip()
+    ]
+    audit_symbols = sorted(set(changed_symbols or inference_symbols))
+    return DomainEvent(
+        name=RESEARCH_EVIDENCE_LIFECYCLE_CHANGED,
+        aggregate_id="research-evidence-lifecycle:" + (",".join(audit_symbols) or "all")[:160],
+        payload={
+            "source": "research-evidence-lifecycle",
+            "status": str(payload.get("status") or "ok"),
+            "symbols": audit_symbols[:100],
+            "changedSymbols": audit_symbols[:100],
+            "inferenceChangedSymbols": sorted(set(inference_symbols))[:100],
+            "expiredCount": int(payload.get("expiredCount") or 0),
+            "retractedCount": int(payload.get("retractedCount") or 0),
+            "lifecycleChangedCount": int(payload.get("lifecycleChangedCount") or 0),
+            "evidenceDeltas": list(payload.get("evidenceDeltas") or [])[:200],
+            "factRevisionsBySymbol": dict(payload.get("factRevisionsBySymbol") or {}),
+            "reason": str(payload.get("reason") or ""),
         },
     )
 
@@ -342,6 +389,11 @@ def data_pipeline_health_changed_event(payload: Dict[str, object]) -> DomainEven
             "providers": list(payload.get("providers") or [])[:20],
             "stateChanged": bool(payload.get("stateChanged")),
             "alertRequired": bool(payload.get("alertRequired")),
+            "observedState": str(payload.get("observedState") or payload.get("state") or ""),
+            "observedReasonCode": str(payload.get("observedReasonCode") or payload.get("reasonCode") or ""),
+            "transitionCandidateState": str(payload.get("transitionCandidateState") or ""),
+            "transitionCandidateCount": int(payload.get("transitionCandidateCount") or 0),
+            "transitionConfirmed": bool(payload.get("transitionConfirmed")),
         },
     )
 
@@ -353,6 +405,11 @@ def hypothesis_research_completed_event(payload: Dict[str, object]) -> DomainEve
     changed_evidence_ids = [
         str(item or "").strip()
         for item in (payload.get("changedEvidenceIds") or payload.get("verifiedClaims") or [])
+        if str(item or "").strip()
+    ]
+    inference_symbols = [
+        str(item or "").upper().strip()
+        for item in (payload.get("inferenceChangedSymbols") or [])
         if str(item or "").strip()
     ]
     return DomainEvent(
@@ -370,6 +427,13 @@ def hypothesis_research_completed_event(payload: Dict[str, object]) -> DomainEve
             "verifiedClaimCount": len(payload.get("verifiedClaims") or []),
             "rejectedClaimCount": len(payload.get("rejectedClaims") or []),
             "factTypes": ["ResearchEvidence", "VerifiedClaim", "VerificationRun"],
+            "inferenceChangedSymbols": sorted(set(inference_symbols))[:100],
+            "evidenceDeltas": [
+                dict(item)
+                for item in (payload.get("evidenceDeltas") or [])
+                if isinstance(item, dict)
+            ][:200],
+            "factRevisionsBySymbol": dict(payload.get("factRevisionsBySymbol") or {}),
             "source": "investment-brain-on-demand-research",
             "reasoningHandoff": handoff,
             "hypothesisResearchBrief": research_brief,
@@ -430,6 +494,7 @@ def ontology_reasoning_requested_event(
     materiality_assessments=None,
     fact_revisions_by_symbol: Dict[str, object] = None,
     changed_fields_by_symbol: Dict[str, Iterable[str]] = None,
+    evidence_deltas: Iterable[Dict[str, object]] = None,
 ) -> DomainEvent:
     clean_symbols = sorted(set(str(symbol or "").upper().strip() for symbol in (symbols or []) if str(symbol or "").strip()))
     clean_fact_types = sorted(set(str(item or "").strip() for item in (fact_types or []) if str(item or "").strip()))
@@ -461,6 +526,8 @@ def ontology_reasoning_requested_event(
         for item in (source_payload.get("changedEvidenceIds") or source_payload.get("verifiedClaims") or [])
         if str(item or "").strip()
     ]
+    raw_deltas = evidence_deltas if evidence_deltas is not None else source_payload.get("evidenceDeltas")
+    deltas = [dict(item) for item in (raw_deltas or []) if isinstance(item, dict)]
     return DomainEvent(
         name=ONTOLOGY_REASONING_REQUESTED,
         aggregate_id="ontology:" + (",".join(clean_symbols) or str(trigger or "all"))[:180],
@@ -490,10 +557,35 @@ def ontology_reasoning_requested_event(
             "researchRunId": str(source_payload.get("runId") or ""),
             "accountId": str(source_payload.get("accountId") or ""),
             "changedEvidenceIds": changed_evidence_ids[:200],
+            "evidenceDeltas": deltas[:200],
             "reasoningHandoff": handoff,
             "hypothesisResearchBrief": research_brief,
         },
     )
+
+
+def research_evidence_lifecycle_events(payload: Dict[str, object]) -> List[DomainEvent]:
+    """Create the durable audit event and its ABox refresh handoff together."""
+    values = dict(payload or {})
+    values["lifecycleChangedCount"] = int(values.get("lifecycleChangedCount") or 0) or (
+        int(values.get("expiredCount") or 0) + int(values.get("retractedCount") or 0)
+    )
+    source_event = research_evidence_lifecycle_changed_event(values)
+    symbols = list(source_event.payload.get("inferenceChangedSymbols") or [])
+    events = [source_event]
+    if symbols:
+        events.append(ontology_reasoning_requested_event(
+            source_event,
+            "research-evidence-lifecycle",
+            symbols,
+            changed_count=len(symbols),
+            observed_count=int(values.get("lifecycleChangedCount") or 0),
+            fact_types=["ResearchEvidence", "EvidenceLifecycle"],
+            reason="유효 리서치 근거가 만료 또는 철회되어 TypeDB ABox와 네이티브 규칙 추론을 갱신합니다.",
+            fact_revisions_by_symbol=dict(values.get("factRevisionsBySymbol") or {}),
+            evidence_deltas=list(values.get("evidenceDeltas") or []),
+        ))
+    return events
 
 
 def ontology_reasoning_completed_event(

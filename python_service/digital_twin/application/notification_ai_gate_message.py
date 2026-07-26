@@ -142,6 +142,7 @@ DATA_COLLECTION_FIELD_LABELS = {
 DATA_COLLECTION_FRESHNESS_LABELS = {
     "realtime": "실시간",
     "near-live": "준실시간",
+    "last-close": "최근 마감 기준",
     "reference-only": "참고용",
     "reference-repeat": "반복 참고값",
     "stale-repeat": "반복 지연",

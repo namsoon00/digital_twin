@@ -18,10 +18,26 @@ from digital_twin.domain.portfolio_calculations import portfolio_summary
 from digital_twin.domain.monitoring import RealtimeMonitor
 from digital_twin.infrastructure.external_signals import ExternalSignalProvider
 from digital_twin.infrastructure.external_signal_utils import sanitize_sensitive_text
-from digital_twin.infrastructure.kis_market_signals import KISMarketSignalProvider
+from digital_twin.infrastructure.kis_market_signals import KISMarketSignalProvider, stage_coverage
 
 
 class ExternalApiSourceTests(unittest.TestCase):
+    def test_kis_rest_price_outside_regular_session_is_labeled_last_close(self):
+        coverage = stage_coverage(
+            "price",
+            {"stck_prpr": "70000"},
+            {"currentPrice": 70000},
+            ["currentPrice"],
+            fetched_at="2026-07-26T08:00:00Z",
+            session={"key": "post_close", "regular": False},
+            transport="rest",
+        )
+
+        self.assertEqual("available", coverage["status"])
+        self.assertEqual("last-close", coverage["freshnessStatus"])
+        self.assertEqual("market-close-reference", coverage["cadence"])
+        self.assertEqual("market-closed-reference", coverage["latencyStatus"])
+
     def test_repeated_kis_investor_totals_remain_important_reference_evidence(self):
         provider = KISMarketSignalProvider(
             settings={"kisMarketSignalUnchangedStaleCount": "3"},

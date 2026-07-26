@@ -153,6 +153,78 @@ class ResearchEvidenceStoreTests(unittest.TestCase):
             self.assertIn("research:005930:news:fresh", remaining)
             self.assertIn("research:005930:dart:old", remaining)
 
+    def test_expiration_keeps_audit_row_and_emits_an_eligible_set_revision(self):
+        with tempfile.TemporaryDirectory() as temp:
+            reset_mysql_test_database(temp)
+            store = TestResearchEvidenceStore(test_store_seed(temp))
+            evidence = ResearchEvidence(
+                "research:005930:news:lifecycle",
+                "005930",
+                "news",
+                "Reuters",
+                "삼성전자 실적 전망 상향",
+                "본문이 확인된 실적 전망 기사",
+                "https://example.test/news/lifecycle",
+                "2026-07-08T01:00:00Z",
+                "support",
+                published_at="2026-07-08T01:00:00Z",
+                raw_payload={
+                    "relationScope": "direct",
+                    "articleReadStatus": "body",
+                    "articleFacts": {"bodyAvailable": True, "bodyQualityPassed": True},
+                    "evidenceGovernance": {"investmentJudgmentEligible": True, "dataState": "sufficient"},
+                },
+            )
+
+            self.assertEqual(1, store.upsert_many([evidence]))
+            self.assertEqual(["005930"], sorted(store.last_eligible_evidence_revisions))
+
+    def test_transaction_event_builder_receives_its_own_evidence_mutation(self):
+        with tempfile.TemporaryDirectory() as temp:
+            reset_mysql_test_database(temp)
+            store = TestResearchEvidenceStore(test_store_seed(temp))
+            evidence = ResearchEvidence(
+                "research:005930:news:atomic-event",
+                "005930",
+                "news",
+                "Reuters",
+                "원자적 근거 변경",
+                "본문이 확인된 실적 전망 기사",
+                "https://example.test/news/atomic-event",
+                "2026-07-08T01:00:00Z",
+                "support",
+                published_at="2026-07-08T01:00:00Z",
+                raw_payload={
+                    "relationScope": "direct",
+                    "articleReadStatus": "body",
+                    "articleFacts": {"bodyAvailable": True, "bodyQualityPassed": True},
+                    "evidenceGovernance": {"investmentJudgmentEligible": True, "dataState": "sufficient"},
+                },
+            )
+            captured = []
+
+            saved, events = store.upsert_many_with_events(
+                [evidence],
+                lambda mutation: captured.append(mutation) or [],
+            )
+
+            self.assertEqual(1, saved)
+            self.assertEqual([], events)
+            self.assertEqual(["005930"], captured[0].inference_changed_symbols)
+            self.assertIn("005930", captured[0].eligible_set_revisions)
+            self.assertTrue(captured[0].deltas[0].changes_inference_eligible_set)
+            self.assertTrue(store.last_evidence_deltas[0]["changesInferenceEligibleSet"])
+
+            self.assertEqual(1, store.delete_stale_news("2026-07-10T00:00:00Z", limit=10))
+            archived = store.get(evidence.evidence_id)
+
+            self.assertEqual([], store.latest(symbol="005930"))
+            self.assertEqual("expired", archived.lifecycle_state)
+            self.assertEqual(1, store.summary()["auditTotal"])
+            self.assertEqual("expiration", store.last_evidence_deltas[0]["transition"])
+            self.assertTrue(store.last_evidence_deltas[0]["changesInferenceEligibleSet"])
+            self.assertEqual(["005930"], sorted(store.last_eligible_evidence_revisions))
+
     def test_external_signal_provider_records_evidence_from_fresh_cache(self):
         fetched_at = utc_now_iso()
         signals = {

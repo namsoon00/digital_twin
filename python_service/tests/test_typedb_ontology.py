@@ -671,6 +671,19 @@ class TypeDBOntologyRepositoryTests(unittest.TestCase):
         self.assertEqual("target-scoped-explicit-global-context", target["status"])
         self.assertEqual(["005930"], target["targetSymbols"])
 
+        whole_world = recorder.target_scoped_patch_targets(
+            snapshot,
+            active,
+            second,
+            None,
+        )
+        self.assertFalse(whole_world["eligible"])
+        self.assertEqual("full-global-impact", whole_world["status"])
+        self.assertEqual(
+            "global-value-context-without-explicit-subject",
+            whole_world["fallbackReason"],
+        )
+
     def test_scoped_abox_batch_count_verification_groups_scope_and_generation(self):
         repository = TypeDBOntologyGraphRepository("127.0.0.1:1729")
         calls = []

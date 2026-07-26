@@ -397,12 +397,29 @@ class InvestmentResearchOrchestrationService:
 
         persisted_handoff = handoff
 
-        def events(saved: int, changed_symbols: List[str], changed_items: List[ResearchEvidence]):
+        def events(
+            saved: int,
+            changed_symbols: List[str],
+            changed_items: List[ResearchEvidence],
+            evidence_deltas=None,
+            fact_revisions=None,
+            tracks_eligible_set: bool = False,
+        ):
             nonlocal persisted_handoff
             if not saved:
                 return []
             changed_evidence_ids = [item.evidence_id for item in changed_items if item.evidence_id]
-            persisted_handoff = handoff.requested(changed_evidence_ids)
+            # A lifecycle-aware repository supplies this exact transaction's
+            # eligible fact-set revisions. Compatibility repositories retain
+            # their established changed-symbol scheduling behavior.
+            evidence_deltas = list(evidence_deltas or [])
+            fact_revisions = dict(fact_revisions or {})
+            inference_symbols = sorted({
+                str(symbol or "").upper().strip()
+                for symbol in fact_revisions
+                if str(symbol or "").strip()
+            }) if tracks_eligible_set else list(changed_symbols or [target.normalized_symbol()])
+            persisted_handoff = handoff.requested(changed_evidence_ids) if inference_symbols else handoff
             materiality = [evidence_materiality(item, self.settings).to_dict() for item in changed_items]
             completed = hypothesis_research_completed_event({
                 "runId": run_id,
@@ -413,27 +430,45 @@ class InvestmentResearchOrchestrationService:
                 "changedEvidenceCount": saved,
                 "verifiedClaims": changed_evidence_ids,
                 "changedEvidenceIds": changed_evidence_ids,
+                "evidenceDeltas": evidence_deltas,
+                "factRevisionsBySymbol": fact_revisions,
+                "inferenceChangedSymbols": inference_symbols,
                 "reasoningHandoff": persisted_handoff.to_dict(),
                 "hypothesisResearchBrief": (hypothesis_research_brief or HypothesisResearchBrief()).to_dict(),
             })
+            if not inference_symbols:
+                return [completed]
             reasoning = ontology_reasoning_requested_event(
                 completed,
                 "hypothesis-research-update",
-                symbols=changed_symbols or [target.normalized_symbol()],
-                changed_count=saved,
+                symbols=inference_symbols,
+                changed_count=len(inference_symbols),
                 observed_count=len(items),
                 fact_types=["ResearchEvidence", "VerifiedClaim", "VerificationRun"],
                 reason="가설 검증에서 확보한 근거를 전체 ABox 스냅샷에 반영하고 TypeDB 네이티브 추론을 다시 실행합니다.",
                 materiality_assessments=materiality,
+                fact_revisions_by_symbol=fact_revisions,
+                evidence_deltas=evidence_deltas,
             )
             return [completed, reasoning]
+
+        def mutation_events(mutation):
+            payload = mutation.to_dict() if hasattr(mutation, "to_dict") else {}
+            return events(
+                int(payload.get("writtenCount") or getattr(mutation, "written_count", 0) or 0),
+                list(payload.get("changedSymbols") or getattr(mutation, "changed_symbols", []) or []),
+                list(getattr(mutation, "changed_items", []) or []),
+                evidence_deltas=list(payload.get("evidenceDeltas") or []),
+                fact_revisions=dict(payload.get("factRevisionsBySymbol") or {}),
+                tracks_eligible_set=True,
+            )
 
         if (
             hasattr(self.evidence_repository, "upsert_many_with_events")
             and self.event_publisher
             and hasattr(self.event_publisher, "dispatch_recorded")
         ):
-            saved, recorded = self.evidence_repository.upsert_many_with_events(items, events)
+            saved, recorded = self.evidence_repository.upsert_many_with_events(items, mutation_events)
             for event in recorded:
                 self.event_publisher.dispatch_recorded(event)
             return int(saved or 0), persisted_handoff

@@ -1834,7 +1834,9 @@ class OntologyReasoningRunner:
         inference = observation.get("inference") if isinstance(observation.get("inference"), dict) else {}
         scope = observation.get("scope") if isinstance(observation.get("scope"), dict) else {}
         impact = scope.get("impactDiagnostics") if isinstance(scope.get("impactDiagnostics"), dict) else {}
+        target_patch = scope.get("targetScopedManifestPatch") if isinstance(scope.get("targetScopedManifestPatch"), dict) else {}
         replay = inference.get("replayValidation") if isinstance(inference.get("replayValidation"), dict) else {}
+        runtime_identity = observation.get("runtimeIdentity") if isinstance(observation.get("runtimeIdentity"), dict) else {}
         return {
             "durationMs": int(float_value(observation.get("durationMs"), 0.0)),
             "nativeInferenceMs": int(float_value(
@@ -1863,6 +1865,12 @@ class OntologyReasoningRunner:
             )),
             "observedAt": str(observation.get("observedAt") or ""),
             "status": str(observation.get("status") or ""),
+            "runtimeIdentity": {
+                "contract": str(runtime_identity.get("contract") or ""),
+                "version": str(runtime_identity.get("version") or ""),
+                "revision": str(runtime_identity.get("revision") or ""),
+                "source": str(runtime_identity.get("source") or ""),
+            },
             "targetSymbolCount": int(float_value(
                 inference.get("targetSymbolCount"),
                 0.0,
@@ -1887,6 +1895,15 @@ class OntologyReasoningRunner:
                 "globalScopeCount": int(float_value(impact.get("globalScopeCount"), 0.0)),
                 "globalScopeTypes": list(impact.get("globalScopeTypes") or [])[:8],
                 "eventScopeAgreement": str(impact.get("eventScopeAgreement") or ""),
+            },
+            "targetScopedManifestPatch": {
+                "status": str(target_patch.get("status") or ""),
+                "mode": str(target_patch.get("mode") or ""),
+                "fallbackReason": str(target_patch.get("fallbackReason") or ""),
+                "targetSymbolCount": int(float_value(target_patch.get("targetSymbolCount"), 0.0)),
+                "selectedIncomingScopeCount": int(float_value(target_patch.get("selectedIncomingScopeCount"), 0.0)),
+                "reusedActiveScopeCount": int(float_value(target_patch.get("reusedActiveScopeCount"), 0.0)),
+                "deferredScopeCount": int(float_value(target_patch.get("deferredScopeCount"), 0.0)),
             },
             "replayValidation": {
                 "status": str(replay.get("status") or ""),
@@ -2286,7 +2303,7 @@ class OntologyReasoningRunner:
                     "targetParallelism", "targetWorkShardingUsed", "targetWorkShardCount",
                     "targetWorkItemCount", "commitMode", "affectedScopeCount",
                     "directChangedScopeCount", "globalImpact", "globalImpactDiagnostics",
-                    "replayValidation",
+                    "targetScopedManifestPatch", "runtimeIdentity", "replayValidation",
                 ]
                 if key in projection_runtime
             }

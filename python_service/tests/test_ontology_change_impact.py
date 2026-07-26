@@ -406,6 +406,57 @@ class OntologyChangeImpactTests(unittest.TestCase):
         self.assertIn("graph.price.reclaim.thesis_support.v1", plan["candidateRuleIds"])
         self.assertNotIn("graph.liquidity.execution_guard.v1", plan["candidateRuleIds"])
 
+    def test_quality_only_macro_scope_change_uses_the_quality_rule_subset(self):
+        before = [{
+            "scopeId": "macro:market",
+            "generationId": "market-a",
+            "semanticFingerprints": {
+                "macro-market": "market-value-stable",
+                "quality": "freshness-before",
+            },
+        }]
+        after = [{
+            **before[0],
+            "generationId": "market-b",
+            "semanticFingerprints": {
+                "macro-market": "market-value-stable",
+                "quality": "freshness-after",
+            },
+        }]
+        rules = [
+            {
+                "ruleId": "graph.test.quality.v1",
+                "conditions": [{
+                    "conditionId": "quality",
+                    "kind": "relation",
+                    "relationType": "HAS_DATA_QUALITY",
+                    "targetKind": "data-quality",
+                }],
+            },
+            {
+                "ruleId": "graph.test.macro-value.v1",
+                "conditions": [{
+                    "conditionId": "market",
+                    "kind": "relation",
+                    "relationType": "HAS_PRICE",
+                    "targetKind": "market-proxy-observation",
+                }],
+            },
+        ]
+
+        plan = build_inference_impact_plan(before, after, ["005930", "000660"], rules=rules)
+
+        self.assertFalse(plan["globalImpact"])
+        self.assertTrue(plan["qualityScopedGlobalContext"])
+        self.assertEqual(["macro:market"], plan["qualityOnlyGlobalScopeIds"])
+        self.assertEqual([], plan["globalValueScopeIds"])
+        self.assertEqual(["graph.test.quality.v1"], plan["candidateRuleIds"])
+        self.assertTrue(plan["nativeRuleSelectionEligible"])
+        self.assertEqual(
+            "quality-scoped-global-context-native-evaluation",
+            plan["ruleExecutionScope"],
+        )
+
     def test_complete_candidate_catalog_skips_unnecessary_reuse_read_and_explains_global_context(self):
         before = [
             {"scopeId": "macro:rates", "generationId": "rates-a"},
@@ -735,7 +786,7 @@ class OntologyChangeImpactTests(unittest.TestCase):
 
         trace = inference.entities[0]
         self.assertEqual("inference:test", trace.properties["inferenceGenerationId"])
-        self.assertEqual("abox-change-impact-v5", trace.properties["impactPlanVersion"])
+        self.assertEqual("abox-change-impact-v6", trace.properties["impactPlanVersion"])
         self.assertEqual(["005930"], trace.properties["inferenceImpactPlan"]["inferenceTargetSymbols"])
         self.assertEqual("dependency-selected-native-evaluation", trace.properties["ruleExecutionScope"])
         self.assertFalse(trace.properties["nativeRuleSelectionApplied"])

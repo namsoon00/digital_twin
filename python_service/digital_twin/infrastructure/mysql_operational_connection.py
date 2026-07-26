@@ -451,10 +451,13 @@ MYSQL_SCHEMA = [
         materiality_state VARCHAR(32) NOT NULL DEFAULT 'context',
         data_state VARCHAR(32) NOT NULL DEFAULT 'partial',
         validation_state VARCHAR(32) NOT NULL DEFAULT 'conditional',
+        lifecycle_state VARCHAR(32) NOT NULL DEFAULT 'active',
+        lifecycle_changed_at VARCHAR(40) NOT NULL DEFAULT '',
         dedupe_key VARCHAR(191) NOT NULL DEFAULT '',
         payload_json LONGTEXT NOT NULL,
         KEY idx_research_evidence_symbol_last_seen (symbol, last_seen_at, evidence_id),
-        KEY idx_research_evidence_kind_time (kind, last_seen_at)
+        KEY idx_research_evidence_kind_time (kind, last_seen_at),
+        KEY idx_research_evidence_lifecycle_kind_time (lifecycle_state, kind, published_at, evidence_id)
     ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
     """,
     """

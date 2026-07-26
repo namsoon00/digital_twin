@@ -615,6 +615,41 @@ class OntologyProjectionAuditTests(unittest.TestCase):
         self.assertEqual("ok", completed.status)
         self.assertEqual("generation:1", completed.inference_generation_id)
 
+    def test_projection_audit_keeps_runtime_identity_and_patch_fallback(self):
+        _snapshot, _graph, _fingerprint, run = self.build_run()
+        completed = complete_ontology_projection_run(run, {
+            "saved": True,
+            "status": "ok",
+            "graphStore": "typedb",
+            "runtimeIdentity": {
+                "contract": "orbit-runtime-identity-v1",
+                "version": "release-1",
+                "revision": "abc123",
+                "source": "test",
+                "python": "3.test",
+            },
+            "projectionScope": {
+                "targetScopedManifestPatch": {
+                    "status": "full-global-impact",
+                    "mode": "full-manifest-fallback",
+                    "fallbackReason": "global-value-context-without-explicit-subject",
+                    "targetSymbols": ["005930"],
+                    "selectedIncomingScopeCount": 0,
+                    "reusedActiveScopeCount": 0,
+                    "deferredScopeCount": 3,
+                    "fullReconcileMinutes": 30,
+                },
+            },
+        }, completed_at="2026-07-20T00:01:10Z")
+
+        self.assertEqual("abc123", completed.result_payload["runtimeIdentity"]["revision"])
+        patch = completed.result_payload["targetScopedManifestPatch"]
+        self.assertEqual("full-global-impact", patch["status"])
+        self.assertEqual(
+            "global-value-context-without-explicit-subject",
+            patch["fallbackReason"],
+        )
+
     def test_projection_audit_prefers_aligned_native_inference_source_when_pointer_is_absent(self):
         _snapshot, _graph, _fingerprint, run = self.build_run()
         completed = complete_ontology_projection_run(run, {

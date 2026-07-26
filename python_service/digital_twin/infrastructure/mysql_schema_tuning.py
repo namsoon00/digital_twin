@@ -146,6 +146,11 @@ MYSQL_OPERATIONAL_INDEXES: Dict[str, Sequence[MySQLIndexDefinition]] = {
         ),
         MySQLIndexDefinition("research_evidence", "idx_research_evidence_source_latest", "`source`, `last_seen_at`"),
         MySQLIndexDefinition("research_evidence", "idx_research_evidence_polarity_latest", "`polarity`, `last_seen_at`"),
+        MySQLIndexDefinition(
+            "research_evidence",
+            "idx_research_evidence_lifecycle_kind_time",
+            "`lifecycle_state`, `kind`, `published_at`, `evidence_id`",
+        ),
     ),
     "ontology_ai_opinion_samples": (
         MySQLIndexDefinition("ontology_ai_opinion_samples", "idx_ontology_quality_created", "`created_at`, `sample_id`"),
@@ -311,6 +316,16 @@ MYSQL_OPERATIONAL_COLUMNS: Dict[str, Sequence[MySQLColumnDefinition]] = {
             "research_evidence",
             "validation_state",
             "VARCHAR(32) NOT NULL DEFAULT 'conditional'",
+        ),
+        MySQLColumnDefinition(
+            "research_evidence",
+            "lifecycle_state",
+            "VARCHAR(32) NOT NULL DEFAULT 'active'",
+        ),
+        MySQLColumnDefinition(
+            "research_evidence",
+            "lifecycle_changed_at",
+            "VARCHAR(40) NOT NULL DEFAULT ''",
         ),
     ),
     "ontology_ai_opinion_samples": (

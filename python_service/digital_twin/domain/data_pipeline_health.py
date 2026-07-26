@@ -1,4 +1,4 @@
-from dataclasses import asdict, dataclass, field
+from dataclasses import asdict, dataclass, field, replace
 from datetime import datetime, timezone
 from typing import Dict, Iterable, List
 
@@ -100,6 +100,11 @@ class DataPipelineHealth:
     previous_state: str = ""
     state_changed: bool = False
     alert_required: bool = False
+    observed_state: str = ""
+    observed_reason_code: str = ""
+    transition_candidate_state: str = ""
+    transition_candidate_count: int = 0
+    transition_confirmed: bool = False
 
     def to_dict(self) -> Dict[str, object]:
         payload = asdict(self)
@@ -122,7 +127,94 @@ class DataPipelineHealth:
             "previousState": payload["previous_state"],
             "stateChanged": payload["state_changed"],
             "alertRequired": payload["alert_required"],
+            "observedState": payload["observed_state"] or payload["state"],
+            "observedReasonCode": payload["observed_reason_code"] or payload["reason_code"],
+            "transitionCandidateState": payload["transition_candidate_state"],
+            "transitionCandidateCount": payload["transition_candidate_count"],
+            "transitionConfirmed": payload["transition_confirmed"],
         }
+
+
+def stabilize_pipeline_health(
+    health: DataPipelineHealth,
+    previous: Dict[str, object] = None,
+    deterioration_consecutive_runs: int = 2,
+    recovery_consecutive_runs: int = 2,
+    failure_consecutive_runs: int = 1,
+    normal_consecutive_runs: int = 2,
+) -> DataPipelineHealth:
+    """Confirm operational state transitions before emitting a health event.
+
+    The raw evaluator remains transparent in ``observedState``.  The persisted
+    ``state`` changes only after a repeated observation, except a complete
+    collection failure which is intentionally immediate.  This is operational
+    hysteresis, not an investment judgement.
+    """
+    previous = dict(previous or {})
+    previous_state = str(previous.get("state") or "").strip()
+    observed_state = str(health.state or "unknown").strip()
+    observed_reason_code = str(health.reason_code or "").strip()
+    if not previous_state:
+        return replace(
+            health,
+            observed_state=observed_state,
+            observed_reason_code=observed_reason_code,
+            transition_candidate_state=observed_state,
+            transition_candidate_count=1,
+            transition_confirmed=True,
+        )
+    if observed_state == previous_state:
+        return replace(
+            health,
+            previous_state=previous_state,
+            state_changed=False,
+            alert_required=False,
+            observed_state=observed_state,
+            observed_reason_code=observed_reason_code,
+            transition_candidate_state="",
+            transition_candidate_count=0,
+            transition_confirmed=False,
+        )
+
+    previous_candidate = str(previous.get("transitionCandidateState") or "").strip()
+    previous_candidate_count = integer(previous.get("transitionCandidateCount"))
+    candidate_count = previous_candidate_count + 1 if previous_candidate == observed_state else 1
+    if observed_state in {"failed", "disabled"}:
+        threshold = max(1, int(failure_consecutive_runs or 1))
+    elif observed_state in ALERT_STATES:
+        threshold = max(1, int(deterioration_consecutive_runs or 1))
+    elif previous_state in ALERT_STATES:
+        threshold = max(1, int(recovery_consecutive_runs or 1))
+    else:
+        threshold = max(1, int(normal_consecutive_runs or 1))
+    if candidate_count < threshold:
+        return replace(
+            health,
+            state=previous_state,
+            reason_code=str(previous.get("reasonCode") or health.reason_code),
+            reason=str(previous.get("reason") or health.reason),
+            state_since=str(previous.get("stateSince") or health.state_since),
+            previous_state=previous_state,
+            state_changed=False,
+            alert_required=False,
+            observed_state=observed_state,
+            observed_reason_code=observed_reason_code,
+            transition_candidate_state=observed_state,
+            transition_candidate_count=candidate_count,
+            transition_confirmed=False,
+        )
+    return replace(
+        health,
+        previous_state=previous_state,
+        state_since=health.checked_at,
+        state_changed=True,
+        alert_required=bool(observed_state in ALERT_STATES or previous_state in ALERT_STATES),
+        observed_state=observed_state,
+        observed_reason_code=observed_reason_code,
+        transition_candidate_state=observed_state,
+        transition_candidate_count=candidate_count,
+        transition_confirmed=True,
+    )
 
 
 def evaluate_news_collection_health(

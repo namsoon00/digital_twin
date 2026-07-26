@@ -115,6 +115,8 @@ def research_evidence_from_row(row) -> ResearchEvidence:
         materiality_state=(row["materiality_state"] if "materiality_state" in keys else ""),
         data_state=(row["data_state"] if "data_state" in keys else ""),
         validation_state=(row["validation_state"] if "validation_state" in keys else ""),
+        lifecycle_state=(row["lifecycle_state"] if "lifecycle_state" in keys else "active"),
+        lifecycle_changed_at=(row["lifecycle_changed_at"] if "lifecycle_changed_at" in keys else ""),
         # Read legacy columns only while older local rows remain.  The
         # ResearchEvidence constructor converts them into categorical states.
         impact_score=(row["impact_score"] if "impact_score" in keys else None),

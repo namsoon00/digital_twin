@@ -129,6 +129,15 @@ class OntologyRuntimeOperationsTests(unittest.TestCase):
             "projectionScope": {
                 "scopeCount": 12,
                 "targetSymbols": ["005930"],
+                "targetScopedManifestPatch": {
+                    "status": "applied",
+                    "mode": "incremental-target-scoped-manifest-patch",
+                    "targetSymbols": ["005930"],
+                    "selectedIncomingScopeCount": 2,
+                    "reusedActiveScopeCount": 10,
+                    "deferredScopeCount": 0,
+                    "fullReconcileMinutes": 30,
+                },
             },
             "inferenceImpactPlan": {
                 "globalImpact": False,
@@ -179,7 +188,24 @@ class OntologyRuntimeOperationsTests(unittest.TestCase):
         self.assertEqual(2, observation["inference"]["matchedRuleCount"])
         self.assertTrue(observation["inference"]["generationAligned"])
         self.assertEqual(1, observation["abox"]["cleanup"]["removedManifestCount"])
+        self.assertEqual("applied", observation["scope"]["targetScopedManifestPatch"]["status"])
+        self.assertEqual(10, observation["scope"]["targetScopedManifestPatch"]["reusedActiveScopeCount"])
         self.assertEqual("warning", observation["slo"]["state"])
+
+    def test_projection_observation_keeps_runtime_identity_outside_inference(self):
+        result = self.sample_result()
+        result["runtimeIdentity"] = {
+            "contract": "orbit-runtime-identity-v1",
+            "version": "release-1",
+            "revision": "abc123",
+            "source": "test",
+            "python": "3.test",
+        }
+
+        observation = build_projection_runtime_observation(self.sample_run(), result)
+
+        self.assertEqual("abc123", observation["runtimeIdentity"]["revision"])
+        self.assertNotIn("runtimeIdentity", observation["inference"])
 
     def test_projection_observation_separates_planned_and_actual_native_scope(self):
         result = self.sample_result()

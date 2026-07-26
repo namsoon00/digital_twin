@@ -125,6 +125,40 @@ class OntologyReasoningQueueHealthTests(unittest.TestCase):
         self.assertEqual("queue-blocked", health.reason_code)
         self.assertTrue(health.alert_required)
 
+    def test_projection_runtime_summary_keeps_deployment_and_patch_provenance(self):
+        runner = OntologyReasoningRunner.__new__(OntologyReasoningRunner)
+        monitor = type("Monitor", (), {
+            "last_ontology_projection_results": {
+                "main": {
+                    "runtimeObservation": {
+                        "durationMs": 1234,
+                        "status": "ok",
+                        "runtimeIdentity": {
+                            "contract": "orbit-runtime-identity-v1",
+                            "version": "release-1",
+                            "revision": "abc123",
+                            "source": "test",
+                        },
+                        "scope": {
+                            "targetScopedManifestPatch": {
+                                "status": "full-global-impact",
+                                "mode": "full-manifest-fallback",
+                                "fallbackReason": "global-value-context-without-explicit-subject",
+                                "targetSymbolCount": 2,
+                                "deferredScopeCount": 4,
+                            },
+                        },
+                    },
+                },
+            },
+        })()
+
+        summary = runner.projection_runtime_summary(monitor)
+
+        self.assertEqual("abc123", summary["runtimeIdentity"]["revision"])
+        self.assertEqual("full-global-impact", summary["targetScopedManifestPatch"]["status"])
+        self.assertEqual(4, summary["targetScopedManifestPatch"]["deferredScopeCount"])
+
     def test_critical_request_age_escalates_immediately(self):
         health = evaluate_ontology_reasoning_queue_health(
             queue_snapshot("2026-07-24T20:00:00Z"),

@@ -1133,15 +1133,40 @@ def select_target_scoped_manifest_patch(
         "deferredScopeIds": [],
     }
     if not requested_symbols:
-        return {**base, "status": "skipped-no-target-symbols", "applied": False}
+        return {
+            **base,
+            "status": "skipped-no-target-symbols",
+            "applied": False,
+            "fallbackReason": "no-target-symbols",
+        }
     if not incoming:
-        return {**base, "status": "skipped-empty-incoming-plan", "applied": False}
+        return {
+            **base,
+            "status": "skipped-empty-incoming-plan",
+            "applied": False,
+            "fallbackReason": "empty-incoming-scope-plan",
+        }
     if str(active.get("status") or "").lower() != "ok" or not active_by_scope:
-        return {**base, "status": "skipped-active-manifest-unavailable", "applied": False}
+        return {
+            **base,
+            "status": "skipped-active-manifest-unavailable",
+            "applied": False,
+            "fallbackReason": "active-scoped-manifest-unavailable",
+        }
     if str(active.get("scopedAboxManifestVersion") or "") != SCOPED_ABOX_MANIFEST_VERSION:
-        return {**base, "status": "skipped-active-manifest-legacy", "applied": False}
+        return {
+            **base,
+            "status": "skipped-active-manifest-legacy",
+            "applied": False,
+            "fallbackReason": "active-scoped-manifest-version-mismatch",
+        }
     if str(active.get("scopeTopologyVersion") or "") != SCOPED_ABOX_SCOPE_TOPOLOGY_VERSION:
-        return {**base, "status": "skipped-active-topology-migration", "applied": False}
+        return {
+            **base,
+            "status": "skipped-active-topology-migration",
+            "applied": False,
+            "fallbackReason": "active-scope-topology-version-mismatch",
+        }
 
     def is_requested_or_shared(scope_id: str) -> bool:
         symbol = scope_symbol(scope_id)
@@ -1176,6 +1201,7 @@ def select_target_scoped_manifest_patch(
             **base,
             "status": "skipped-removed-scope-requires-full-refresh",
             "applied": False,
+            "fallbackReason": "target-or-shared-scope-removed",
             "removedRelevantScopeIds": removed_relevant_scopes,
         }
 
@@ -1229,6 +1255,7 @@ def select_target_scoped_manifest_patch(
             **base,
             "status": "skipped-missing-link-endpoint-scope",
             "applied": False,
+            "fallbackReason": "new-link-endpoint-has-no-active-scope",
             "missingEndpointScopeIds": sorted(set(missing_endpoints)),
         }
 

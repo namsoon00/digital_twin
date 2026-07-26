@@ -23,6 +23,7 @@ class OntologyDiagnosticsService:
         decision_episode_store=None,
         projection_run_store=None,
         world_projection_outbox=None,
+        runtime_identity_provider=None,
     ):
         self.ontology_repository = ontology_repository
         self.settings = settings or {}
@@ -33,6 +34,7 @@ class OntologyDiagnosticsService:
         self.decision_episode_store = decision_episode_store
         self.projection_run_store = projection_run_store
         self.world_projection_outbox = world_projection_outbox
+        self.runtime_identity_provider = runtime_identity_provider
 
     def status(
         self,
@@ -143,6 +145,19 @@ class OntologyDiagnosticsService:
                 "families",
                 "dependencyAffectedFamilies",
             ])
+            target_patch = latest_runtime_scope.get("targetScopedManifestPatch")
+            if isinstance(target_patch, dict):
+                runtime_scope["targetScopedManifestPatch"] = self.pick(target_patch, [
+                    "status",
+                    "mode",
+                    "fallbackReason",
+                    "targetSymbolCount",
+                    "targetSymbols",
+                    "selectedIncomingScopeCount",
+                    "reusedActiveScopeCount",
+                    "deferredScopeCount",
+                    "fullReconcileMinutes",
+                ])
             impact_diagnostics = latest_runtime_scope.get("impactDiagnostics")
             if isinstance(impact_diagnostics, dict):
                 runtime_scope["impactDiagnostics"] = self.pick(impact_diagnostics, [
@@ -162,6 +177,7 @@ class OntologyDiagnosticsService:
         return {
             "contract": "typedb-ontology-diagnostics-v1",
             "generatedAt": utc_now_iso(),
+            "runtimeIdentity": self.runtime_identity(),
             "activeGraphStore": "typedb",
             "worldId": clean_world_id,
             "worlds": self.safe_list_call("list_ontology_worlds"),
@@ -182,6 +198,15 @@ class OntologyDiagnosticsService:
             "decisionPerformanceBoundary": decision_performance,
             "serviceStatus": self.service_status(),
         }
+
+    def runtime_identity(self) -> Dict[str, object]:
+        if not self.runtime_identity_provider:
+            return {"status": "unavailable"}
+        try:
+            value = self.runtime_identity_provider()
+            return dict(value) if isinstance(value, dict) else {"status": "unavailable"}
+        except Exception as error:  # noqa: BLE001 - diagnostics must survive identity lookup failures.
+            return {"status": "error", "reason": str(error)[:180]}
 
     def decision_performance_boundary(self, symbols: Iterable[str]) -> Dict[str, object]:
         if not self.decision_episode_store or not hasattr(self.decision_episode_store, "performance"):

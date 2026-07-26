@@ -153,6 +153,8 @@ class ResearchEvidence:
     materiality_state: str = "context"
     data_state: str = "partial"
     validation_state: str = "conditional"
+    lifecycle_state: str = "active"
+    lifecycle_changed_at: str = ""
 
     def __init__(
         self,
@@ -172,6 +174,8 @@ class ResearchEvidence:
         materiality_state: str = "",
         data_state: str = "",
         validation_state: str = "",
+        lifecycle_state: str = "",
+        lifecycle_changed_at: str = "",
         **deprecated_values: object,
     ):
         """Create categorical evidence while accepting one legacy row shape.
@@ -206,6 +210,10 @@ class ResearchEvidence:
             payload["dataState"] = data_state
         if validation_state:
             payload["validationState"] = validation_state
+        if lifecycle_state:
+            payload["evidenceLifecycleState"] = lifecycle_state
+        if lifecycle_changed_at:
+            payload["evidenceLifecycleChangedAt"] = lifecycle_changed_at
         if not payload.get("sourceTrustState"):
             payload["sourceTrustState"] = (
                 news_domain.news_source_trust_state(legacy_confidence)
@@ -237,6 +245,8 @@ class ResearchEvidence:
         self.materiality_state = states["materialityState"]
         self.data_state = states["dataState"]
         self.validation_state = states["validationState"]
+        self.lifecycle_state = str(payload.get("evidenceLifecycleState") or lifecycle_state or "active").strip().lower() or "active"
+        self.lifecycle_changed_at = str(payload.get("evidenceLifecycleChangedAt") or lifecycle_changed_at or "").strip()
 
     def state_payload(self) -> Dict[str, str]:
         payload = dict(self.raw_payload or {})
@@ -274,6 +284,8 @@ class ResearchEvidence:
             "analysisSummary": str(payload.get("analysisSummary") or ""),
             "articleSummaryKo": str(payload.get("articleSummaryKo") or ""),
             "articleReadStatus": str(payload.get("articleReadStatus") or ""),
+            "lifecycleState": self.lifecycle_state,
+            "lifecycleChangedAt": self.lifecycle_changed_at,
             "articleFacts": dict(payload.get("articleFacts") or {}),
             "stockImpact": str(payload.get("stockImpact") or ""),
             "stockImpactLabel": str(payload.get("stockImpactLabel") or ""),
